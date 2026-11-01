@@ -366,7 +366,8 @@ fn check_one(
             ("flake_rerun", fields)
         }
         Verdict::Real => {
-            let Some(cancelled) = crate::pr_status::wait::cancel_in_flight("gh", cwd, &push.sha)
+            let Some(cancelled) =
+                crate::pr_status::wait::cancel_in_flight("gh", cwd, pr, &push.sha)
             else {
                 return ("stale_red", fields);
             };

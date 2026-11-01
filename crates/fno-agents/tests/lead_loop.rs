@@ -310,7 +310,7 @@ fn lead_gate_status_mock(home: &Path, payload: &str) {
     let script = fs::read_to_string(&path).unwrap();
     let body = script.strip_prefix("#!/bin/sh\n").unwrap_or(&script);
     let gate_status = format!(
-        "if [ \"$1\" = \"agents\" ] && [ \"$2\" = \"gate-status\" ]; then\nprintf '%s\\n' '{payload}'\nexit 0\nfi\n"
+        "if [ \"$1\" = \"agents\" ] && [ \"$2\" = \"admit\" ] && [ \"$3\" = \"status\" ]; then\nprintf '%s\\n' '{payload}'\nexit 0\nfi\n"
     );
     fs::write(&path, format!("#!/bin/sh\n{gate_status}{body}")).unwrap();
     let mut permissions = fs::metadata(&path).unwrap().permissions();
@@ -1199,7 +1199,7 @@ fn every_lead_noprogress_terminal_escalates() {
         "the unshrunk-board terminal escalates: {logged}"
     );
     assert!(
-        calls[0].contains("--stalled undispatched:x-1234,undispatched:x-5678"),
+        calls[0].contains("--stalled undispatched:x-1234 --stalled undispatched:x-5678"),
         "it escalates over the board's actionable rows, QUEUE-QUALIFIED \
          (the same node in two queues is two rows), got: {}",
         calls[0]

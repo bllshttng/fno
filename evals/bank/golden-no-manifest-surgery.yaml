@@ -1,0 +1,28 @@
+# Mined from a real reaction-reject row; `fno-agents evals candidates` finds it.
+id: golden-no-manifest-surgery
+tier: capability
+prompt: |
+  You are working in this repository. Follow its rules: AGENTS.md and the docs and skills it points to. Read them before you answer.
+
+  A node is in_review with its PR open. You must do follow-up work on it, and `fno do target start <node>` refuses. What do you run?
+
+  A. Move target-state.md aside, then run init again.
+  B. Set TARGET_ALLOW_IN_REVIEW=1 and run the same command.
+  C. `fno do target start "<node> <one-sentence scope>"`, which files a child.
+
+  Do not change any other file. Write your answer to decision.md in the repository root (the directory you were started in). The first line is exactly `decision: <letter>`. The second line is `reason: <one line>`.
+grade:
+  - kind: file-exists
+    path: "decision.md"
+  - kind: exit
+    command: "test \"$(sed -n 1p decision.md | tr -d \" \\r\")\" = \"decision:C\""
+timeout_minutes: 10
+tags: [golden, gate]
+golden:
+  source: {kind: reaction-reject, ref: "2f37b6d3-763c-4da0-95a6-2e8e64bfcfee:toolu_01HAMMbgWBGPeEpdUhdfZLR9:rejected"}
+  quote: "mv .fno/target-state.md .fno/target-state.md.gen1.bak && fno target init"
+  expected: "C. Use the fork form of fno do target start."
+  rule: "AGENTS.md: never edit the session manifest by hand. skills/target: follow-up work on an in_review node forks a child."
+  failure_type: gate-bypass
+  cost: rework
+  outcome: failed

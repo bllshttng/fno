@@ -57,6 +57,35 @@ fn local_head_sha(cwd: &Path) -> Option<String> {
     (out.status.success() && sha.len() >= 40).then_some(sha)
 }
 
+/// The caller's pin: a literal sha, `HEAD` for the local checkout's own
+/// HEAD (read free from git, no GitHub), or nothing. `HEAD` is the recipe
+/// spelling: a command substitution cannot ride in the hinted command,
+/// because a worktree session's Bash guard refuses one.
+#[derive(Debug)]
+pub(crate) enum ExpectHead {
+    None,
+    Sha(String),
+    LocalUnresolved,
+}
+
+pub(crate) fn resolve_expect_head(payload: &Value) -> ExpectHead {
+    let Some(raw) = payload
+        .get("expect_head")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+    else {
+        return ExpectHead::None;
+    };
+    if raw == "HEAD" {
+        let cwd = Path::new(payload.get("cwd").and_then(Value::as_str).unwrap_or(""));
+        return match local_head_sha(cwd) {
+            Some(sha) => ExpectHead::Sha(sha),
+            None => ExpectHead::LocalUnresolved,
+        };
+    }
+    ExpectHead::Sha(raw.to_string())
+}
+
 /// The deterministic resume offset that spreads a fleet's waiters across
 /// one interval instead of stacking them at hold expiry. Hash-derived from
 /// (slug, pr): one PR keeps one phase across runs; different PRs spread.
@@ -116,6 +145,7 @@ fn emit_tick(payload: &Value, lines: &[String], calls: usize, ticks: usize) -> (
 pub(crate) fn wait_status(
     pr: u64,
     until: &str,
+    expect_head: Option<&str>,
     timeout: f64,
     interval: f64,
     mut poll: impl FnMut() -> (i32, Value, Vec<String>, usize),
@@ -130,7 +160,7 @@ pub(crate) fn wait_status(
     let mut pending_ticks: i32 = 0;
     loop {
         ticks += 1;
-        let (rc, payload, lines, tick_calls) = poll();
+        let (rc, mut payload, lines, tick_calls) = poll();
         calls += tick_calls;
         // The payload already names the conflict. A degraded backoff serve
         // (`stale_reason`) cannot prove the head is still the conflicting
@@ -152,6 +182,31 @@ pub(crate) fn wait_status(
                  base (`fno do pr push`), then re-arm the wait.\n"
             );
             return (5, stdout, stderr);
+        }
+        // The pinned wait: the caller named the sha it pushed, so a live read
+        // at any other head would answer settled about the wrong commit (the
+        // merged-PR shape: the PR head stops moving while the branch does).
+        // Exit 6 at once; waiting cannot fix it. A degraded serve names no
+        // head and rides out like a stale red, so a backoff never fakes a
+        // mismatch.
+        if let Some(expected) = expect_head {
+            let degraded = payload.get("stale_reason").is_some();
+            let actual = payload.get("head").and_then(Value::as_str).unwrap_or("");
+            if !degraded && !actual.is_empty() && !actual.eq_ignore_ascii_case(expected) {
+                let note = payload
+                    .as_object_mut()
+                    .and_then(|obj| super::compose::apply_expect_head(obj, expected));
+                if let Some(note) = note {
+                    let mut lines = lines;
+                    if let Some(first) = lines.first_mut() {
+                        *first = super::compose::verdict_line(&payload);
+                    }
+                    let (stdout, mut stderr) = emit_tick(&payload, &lines, calls, ticks);
+                    stderr.push_str(&note);
+                    stderr.push('\n');
+                    return (6, stdout, stderr);
+                }
+            }
         }
         let done = match until {
             "green" => payload.get("green").and_then(Value::as_bool),
@@ -335,6 +390,19 @@ pub(crate) fn run_wait(payload: &Value) -> (i32, String, String) {
         let calls = || probe.calls.load(Ordering::SeqCst);
         return wait_review(pr, timeout, interval, counter, sleeper, clock, calls);
     }
+    let expect_head = match resolve_expect_head(payload) {
+        ExpectHead::None => None,
+        ExpectHead::Sha(sha) => Some(sha),
+        ExpectHead::LocalUnresolved => {
+            return (
+                4,
+                String::new(),
+                "fno do pr wait: --expect-head HEAD cannot resolve in this checkout; \
+                 run it from the worktree that holds the commit\n"
+                    .into(),
+            )
+        }
+    };
     // The resume spread keys on the repo and PR: resolved once here, and
     // the hold state carried across ticks so the live->clear edge fires
     // the phase sleep exactly once.
@@ -395,10 +463,18 @@ pub(crate) fn run_wait(payload: &Value) -> (i32, String, String) {
     };
     let on_red = |payload: &Value| {
         let head = payload.get("head").and_then(Value::as_str).unwrap_or("");
-        cancel_in_flight("gh", cwd, head)
+        cancel_in_flight("gh", cwd, pr, head)
     };
     wait_status(
-        pr, until, timeout, interval, &mut poll, on_red, sleeper, clock,
+        pr,
+        until,
+        expect_head.as_deref(),
+        timeout,
+        interval,
+        &mut poll,
+        on_red,
+        sleeper,
+        clock,
     )
 }
 
@@ -451,8 +527,15 @@ fn red_is_stale(latest: &[Value], runs: &[Value]) -> bool {
 
 /// Cancel the Actions runs still testing a red `head`, one line per run;
 /// None when the live rows show the red belongs to an earlier attempt.
-/// A failed read or cancel is printed, never hidden.
-pub(crate) fn cancel_in_flight(gh_bin: &str, cwd: &Path, head: &str) -> Option<Vec<String>> {
+/// A failed read or cancel is printed, never hidden. The cancel lands one
+/// `ci_wait_cancel` row naming its cause: the failing checks, the head,
+/// the PR, and each run's result.
+pub(crate) fn cancel_in_flight(
+    gh_bin: &str,
+    cwd: &Path,
+    pr: u64,
+    head: &str,
+) -> Option<Vec<String>> {
     let short: String = head.chars().take(8).collect();
     if head.is_empty() {
         return Some(vec![
@@ -467,6 +550,15 @@ pub(crate) fn cancel_in_flight(gh_bin: &str, cwd: &Path, head: &str) -> Option<V
             )])
         }
     };
+    // The evals gate is not CI: its row carries no run link, so left in the
+    // failed set it can never read stale-attempt, and a gate red beside a
+    // stale CI red would cancel the fresh rerun answering that red.
+    let rows: Vec<Value> = rows
+        .into_iter()
+        .filter(|row| {
+            row.get("name").and_then(Value::as_str) != Some(crate::pr_status::EVALS_GATE_CONTEXT)
+        })
+        .collect();
     let latest = crate::check_supersession::latest_per_name(&Value::Array(rows));
     // An unreadable runs listing proves nothing stale: the law's cancel runs.
     let listing: Vec<Value> = crate::pr_push::gh_api_pages_conditional(
@@ -503,17 +595,56 @@ pub(crate) fn cancel_in_flight(gh_bin: &str, cwd: &Path, head: &str) -> Option<V
             "wait: red at {short}; no run in flight to cancel"
         )]);
     }
-    let cancelled = runs
-        .iter()
-        .map(|id| {
-            let path = format!("repos/{{owner}}/{{repo}}/actions/runs/{id}/cancel");
-            match crate::pr_push::gh_api(gh_bin, cwd, &path, &["-X", "POST"]) {
-                Ok(_) => format!("wait: red at {short}; cancelled run {id}"),
-                Err(e) => format!("wait: red at {short}; cancel of run {id} FAILED: {e}"),
-            }
+    let cause: Vec<&str> = latest
+        .as_array()
+        .map(|rows| {
+            rows.iter()
+                .filter(|row| row.get("bucket").and_then(Value::as_str) == Some("fail"))
+                .filter_map(|row| row.get("name").and_then(Value::as_str))
+                .collect()
         })
-        .collect();
+        .unwrap_or_default();
+    let mut results = Vec::new();
+    let mut cancelled = Vec::new();
+    for id in &runs {
+        let path = format!("repos/{{owner}}/{{repo}}/actions/runs/{id}/cancel");
+        match crate::pr_push::gh_api(gh_bin, cwd, &path, &["-X", "POST"]) {
+            Ok(_) => {
+                results.push(json!({"run": id, "ok": true}));
+                cancelled.push(format!("wait: red at {short}; cancelled run {id}"));
+            }
+            Err(e) => {
+                results.push(json!({"run": id, "ok": false, "error": e}));
+                cancelled.push(format!(
+                    "wait: red at {short}; cancel of run {id} FAILED: {e}"
+                ));
+            }
+        }
+    }
+    journal_cancel(cwd, pr, head, &cause, &results);
     Some(cancelled)
+}
+
+/// One `ci_wait_cancel` row per cancel action, best-effort: the stderr
+/// lines reach the waiting session only, and the journal is the record
+/// every other session reads. A missing home (tests) or a failed write
+/// leaves the cancel itself untouched.
+fn journal_cancel(cwd: &Path, pr: u64, head: &str, cause: &[&str], results: &[Value]) {
+    let Some(home) = crate::paths::AgentsHome::from_env_opt() else {
+        return;
+    };
+    let row = json!({
+        "slug": crate::pr_status::cache::git_slug(cwd),
+        "pr": pr,
+        "head": head,
+        "cause": cause,
+        "runs": results,
+        "session_id": crate::claims::resolve_identity().0,
+    });
+    let path = crate::daemon::global_events_path(&home);
+    if let Err(e) = crate::events::EventEmitter::new(path, "rust").emit("ci_wait_cancel", &row) {
+        eprintln!("wait: the ci_wait_cancel row did not land ({e})");
+    }
 }
 
 /// Reviews on `pr` via one conditional REST read; None when the read fails
@@ -600,6 +731,7 @@ mod tests {
         let (code, _stdout, stderr) = wait_status(
             9,
             "settled",
+            None,
             1800.0,
             60.0,
             staged_poll(payloads),
@@ -628,6 +760,7 @@ mod tests {
             let (code, stdout, stderr) = wait_status(
                 9,
                 until,
+                None,
                 1800.0,
                 10.0,
                 staged_poll(payloads),
@@ -665,6 +798,7 @@ mod tests {
         let (code, stdout, stderr) = wait_status(
             9,
             "settled",
+            None,
             1800.0,
             10.0,
             staged_poll(payloads),
@@ -688,6 +822,7 @@ mod tests {
         let (code, _stdout, _stderr) = wait_status(
             9,
             "settled",
+            None,
             30.0,
             10.0,
             staged_poll(only_stale),
@@ -771,6 +906,7 @@ mod tests {
         let (code, _stdout, stderr) = wait_status(
             9,
             "settled",
+            None,
             30.0,
             10.0,
             staged_poll(payloads),
@@ -871,6 +1007,7 @@ mod tests {
         let (code, _stdout, _stderr) = wait_status(
             9,
             "settled",
+            None,
             100_000.0,
             60.0,
             staged_poll(payloads),
@@ -898,6 +1035,7 @@ mod tests {
         let (code, _stdout, stderr) = wait_status(
             9,
             "settled",
+            None,
             1500.0,
             600.0,
             staged_poll(payloads),
@@ -918,7 +1056,219 @@ mod tests {
     #[test]
     fn the_local_head_read_resolves_in_a_git_checkout() {
         let sha = local_head_sha(Path::new(env!("CARGO_MANIFEST_DIR")))
-            .expect("a git checkout resolves HEAD");
+            .expect("a git checkout HEAD resolves");
         assert!(sha.len() >= 40, "{sha} is a sha, not an error");
+    }
+
+    /// The pinned wait: armed on the sha just pushed. A live read at any
+    /// other head is exit 6 at once, naming the mismatch; a merged PR can
+    /// never answer settled for the named commit again.
+    #[test]
+    fn a_pinned_wait_exits_six_the_moment_the_head_differs() {
+        let t = Cell::new(0.0);
+        let payloads = vec![
+            (2, json!({"verdict": "pending", "settled": false})),
+            (
+                0,
+                json!({
+                    "verdict": "green",
+                    "settled": true,
+                    "head": "37deafc2abcdef",
+                    "pr_state": "OPEN",
+                    "ready": true,
+                    "ready_blockers": [],
+                }),
+            ),
+        ];
+        let (code, stdout, stderr) = wait_status(
+            9,
+            "settled",
+            Some("aaaaaaaa1234aaaaaaaa1234aaaaaaaa1234"),
+            1800.0,
+            10.0,
+            staged_poll(payloads),
+            |_| Some(Vec::new()),
+            |s| t.set(t.get() + s),
+            || t.get(),
+        );
+        assert_eq!(code, 6, "the pinned mismatch exit");
+        assert!(stdout.contains("\"head_mismatch\""), "{stdout}");
+        assert!(stdout.contains("\"settled\":false"), "{stdout}");
+        assert!(
+            stderr.contains("head_mismatch: PR head is 37deafc2abcd"),
+            "{stderr}"
+        );
+        assert!(stderr.contains("expected aaaaaaaa1234"), "{stderr}");
+    }
+
+    /// A pinned wait on a MERGED PR names the terminal truth instead of
+    /// settling: the PR will never test the named sha again.
+    #[test]
+    fn a_pinned_wait_names_a_merged_pr_as_one_that_will_never_test() {
+        let t = Cell::new(0.0);
+        let payloads = vec![(
+            0,
+            json!({
+                "verdict": "green",
+                "settled": true,
+                "head": "37deafc2abcdef",
+                "pr_state": "MERGED",
+                "ready": true,
+                "ready_blockers": [],
+            }),
+        )];
+        let (code, _stdout, stderr) = wait_status(
+            1068,
+            "settled",
+            Some("aaaaaaaa1234aaaaaaaa1234aaaaaaaa1234"),
+            1800.0,
+            10.0,
+            staged_poll(payloads),
+            |_| Some(Vec::new()),
+            |s| t.set(t.get() + s),
+            || t.get(),
+        );
+        assert_eq!(code, 6, "the pinned mismatch exit");
+        assert!(stderr.contains("is MERGED at 37deafc2abcd"), "{stderr}");
+        assert!(stderr.contains("will never test"), "{stderr}");
+        assert!(stderr.contains("re-arm on a new PR"), "{stderr}");
+    }
+
+    /// A degraded serve (a backoff row) names no head, so it cannot fake a
+    /// mismatch: it rides out and the next live read answers the pin.
+    #[test]
+    fn a_pinned_wait_rides_out_a_degraded_serve() {
+        let t = Cell::new(0.0);
+        let payloads = vec![
+            (
+                2,
+                json!({
+                    "verdict": "unknown",
+                    "settled": false,
+                    "stale_reason": "secondary rate limit backoff",
+                }),
+            ),
+            (
+                0,
+                json!({
+                    "verdict": "green",
+                    "settled": true,
+                    "head": "aaaaaaaa1234aaaaaaaa1234aaaaaaaa1234",
+                    "pr_state": "OPEN",
+                }),
+            ),
+        ];
+        let (code, stdout, _stderr) = wait_status(
+            9,
+            "settled",
+            Some("aaaaaaaa1234aaaaaaaa1234aaaaaaaa1234"),
+            1800.0,
+            10.0,
+            staged_poll(payloads),
+            |_| Some(Vec::new()),
+            |s| t.set(t.get() + s),
+            || t.get(),
+        );
+        assert_eq!(code, 0, "the pinned read answers at the named head");
+        assert!(stdout.contains("\"settled\":true"), "{stdout}");
+    }
+
+    /// The pin's value: a literal sha passes through; `HEAD` names the local
+    /// checkout's own HEAD, read free, so the armed command stays plain (a
+    /// worktree Bash guard refuses a command substitution in the recipe).
+    #[test]
+    fn the_pin_resolves_head_from_the_local_checkout() {
+        let no_pin = json!({"cwd": env!("CARGO_MANIFEST_DIR")});
+        assert!(matches!(resolve_expect_head(&no_pin), ExpectHead::None));
+        let literal = json!({"cwd": env!("CARGO_MANIFEST_DIR"), "expect_head": "aaaaaaaa1234"});
+        match resolve_expect_head(&literal) {
+            ExpectHead::Sha(sha) => assert_eq!(sha, "aaaaaaaa1234", "the literal passes through"),
+            other => panic!("expected a literal sha, got {other:?}"),
+        }
+        let head = json!({"cwd": env!("CARGO_MANIFEST_DIR"), "expect_head": "HEAD"});
+        match resolve_expect_head(&head) {
+            ExpectHead::Sha(sha) => assert!(sha.len() >= 40, "{sha} is a sha"),
+            other => panic!("a git checkout resolves HEAD, got {other:?}"),
+        }
+        let nowhere = json!({"cwd": "/nonexistent-fno-test-dir", "expect_head": "HEAD"});
+        assert!(matches!(
+            resolve_expect_head(&nowhere),
+            ExpectHead::LocalUnresolved
+        ));
+    }
+
+    /// A fake gh: one live failing check (node-closure completed after its
+    /// run started), one run in flight, and a cancel POST answering ok.
+    fn cancel_stub_gh(dir: &std::path::Path) -> std::path::PathBuf {
+        crate::write_exec_stub(
+            dir,
+            "gh",
+            r#"#!/bin/sh
+for a in "$@"; do case "$a" in
+  *check-runs*)
+    echo '{"check_runs":[
+      {"id":201,"name":"node-closure","status":"completed","conclusion":"failure","started_at":"2026-11-01T03:00:00Z","completed_at":"2026-11-01T03:05:00Z","html_url":"https://github.com/o/r/actions/runs/301/job/1","check_suite":{"id":11}},
+      {"id":202,"name":"rust-ci","status":"in_progress","conclusion":null,"started_at":"2026-11-01T03:06:00Z","completed_at":null,"html_url":"https://github.com/o/r/actions/runs/302/job/2","check_suite":{"id":12}}]}'
+    exit 0 ;;
+  *head_sha=*)
+    echo '{"total_count":2,"workflow_runs":[{"id":301,"name":"cli-ci","status":"completed","conclusion":"failure","created_at":"2026-11-01T03:00:00Z","run_started_at":"2026-11-01T03:00:00Z"},{"id":302,"name":"rust-ci","status":"in_progress","conclusion":null,"created_at":"2026-11-01T03:06:00Z","run_started_at":"2026-11-01T03:06:00Z"}]}'
+    exit 0 ;;
+  *commits/*/status*)
+    echo '{"statuses":[]}'
+    exit 0 ;;
+  *cancel*)
+    exit 0 ;;
+esac; done
+echo '{}'
+exit 1
+"#,
+        )
+    }
+
+    /// A journaled cancel: one `ci_wait_cancel` row names the PR, the head,
+    /// the failing checks that caused it, and each run's result. The stderr
+    /// lines reach one session; the journal is the record the rest of the
+    /// fleet reads.
+    #[test]
+    fn a_cancel_journals_a_row_that_names_its_cause() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let _lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        // The env value IS the agents root; the journal lands at its parent.
+        let agents = home.path().join("agents");
+        std::fs::create_dir_all(&agents).unwrap();
+        let _home =
+            crate::claims::EnvVarGuard::set(crate::paths::HOME_ENV, agents.to_str().unwrap());
+        let gh = cancel_stub_gh(dir.path());
+        let lines = cancel_in_flight(gh.to_str().unwrap(), dir.path(), 4254, "abc123").unwrap();
+        assert!(
+            lines.iter().all(|l| l.contains("cancelled run 302")),
+            "{lines:?}"
+        );
+        // The store lands the row: read it back through the sanctioned
+        // reader instead of the flat file the store replaces.
+        let journal = home.path().join("events.jsonl");
+        let query = crate::event_store::EventQuery::of_types(&["ci_wait_cancel"]);
+        let text = crate::event_store::journal_text_checked(&journal, &query).unwrap();
+        let rows: Vec<Value> = text
+            .lines()
+            .filter_map(|l| serde_json::from_str(l).ok())
+            .collect();
+        let row = rows
+            .iter()
+            .find(|r| r["type"] == "ci_wait_cancel")
+            .expect("the cancel row landed");
+        assert_eq!(row["data"]["pr"], 4254);
+        assert_eq!(row["data"]["head"], "abc123");
+        assert_eq!(row["data"]["cause"], json!(["node-closure"]));
+        assert_eq!(row["data"]["runs"], json!([{"run": 302, "ok": true}]));
+        // The resolver answers None in a bare test process; the row still
+        // carries the field.
+        assert!(
+            row["data"].get("session_id").is_some(),
+            "the row carries the session field: {row}"
+        );
     }
 }

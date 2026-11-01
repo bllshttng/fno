@@ -268,6 +268,19 @@ fn staged(
 /// the scope's missions on a grant.
 fn record(payload: &Value, events: &Path) -> Vec<String> {
     let answer = journal(payload);
+    for vacated in payload["vacated"].as_array().into_iter().flatten() {
+        if let ("succession", Some(session)) = (
+            vacated[1].as_str().unwrap_or(""),
+            vacated[0]["harness_session_id"].as_str(),
+        ) {
+            crate::retired_lead::write(
+                &AgentsHome::from_env(),
+                session,
+                payload["scope"].as_str().unwrap_or(""),
+                "succession",
+            );
+        }
+    }
     for event in answer["events"].as_array().into_iter().flatten() {
         let fields: Vec<(&str, Value)> = event["data"]
             .as_object()

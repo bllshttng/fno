@@ -94,7 +94,7 @@ pub(crate) const HARNESS_FLAGS: &[&str] = &["--harness", "-H"];
 const MODEL_FLAGS: &[&str] = &["--model", "-m"];
 const EFFORT_FLAGS: &[&str] = &["--effort"];
 
-fn is_value_flag(tok: &str) -> bool {
+pub(crate) fn is_value_flag(tok: &str) -> bool {
     VALUE_FLAGS.contains(&tok) || SPAWN_VALUE_FLAGS_EXTRA.contains(&tok)
 }
 
@@ -372,7 +372,13 @@ pub fn scan_projection(tail: &[String]) -> Value {
         "explicit_vendor": flag_value(tail, &["--provider", "-P"]),
         "explicit_route": explicit_route,
         "route_value": if explicit_route { flag_value(tail, &["--route"]) } else { None },
-        "model_value": if has_model { flag_value(tail, MODEL_FLAGS) } else { None },
+        // Normalization moves a typed --model behind the fence, so the value
+        // is read there too: the slot walk pins on this value, not on has_model.
+        "model_value": if has_model {
+            flag_value(tail, MODEL_FLAGS).or_else(|| fenced_flag_value(tail, "--model", "-m"))
+        } else {
+            None
+        },
         "role": role_of(tail),
         "explicit_substrate": has_explicit_substrate(tail),
         "permission_value": permission_value,
@@ -1171,7 +1177,7 @@ fn pass_through(args: &[String]) -> Admission {
 /// `--role` or `--route`/`--provider`, one carrying `--dispatch-account`, one
 /// carrying `--resume`, and one pinned to a non-claude harness. Advisory in
 /// every direction: a failure never blocks the spawn.
-fn pick_account_arg(args: &[String], cwd: &Path) -> Vec<String> {
+pub(crate) fn pick_account_arg(args: &[String], cwd: &Path) -> Vec<String> {
     // The provenance carrier: drop any previous spawn's decision first, so a
     // stale "config" never outlives its pick.
     std::env::remove_var(crate::state::LAUNCH_ACCOUNT_SOURCE_ENV_KEY);
@@ -1195,11 +1201,22 @@ fn pick_account_arg(args: &[String], cwd: &Path) -> Vec<String> {
     }
     let verdict = match crate::accounts::pick::pick_live(cwd, None, &[], true) {
         Ok(v) => v,
-        Err(_) => return args.to_vec(),
+        Err(exc) => {
+            eprintln!("account: default (pick unavailable: {exc})");
+            return args.to_vec();
+        }
     };
+    if verdict.exit_code == crate::accounts::pick::EXIT_NOT_ARMED {
+        return args.to_vec();
+    }
     let Some(account) = verdict.account else {
+        eprintln!("account: default (pick unavailable: {})", verdict.reason);
         return args.to_vec();
     };
+    eprintln!(
+        "account: {account} (picked by accounts.quota.pick_on_launch, {})",
+        picked_headroom_note(&account, cwd)
+    );
     // The mint tells an injected pick from a flag the operator typed.
     std::env::set_var(crate::state::LAUNCH_ACCOUNT_SOURCE_ENV_KEY, "config");
     let boundary = args
@@ -1212,6 +1229,28 @@ fn pick_account_arg(args: &[String], cwd: &Path) -> Vec<String> {
     out.push(account);
     out.extend_from_slice(&args[boundary..]);
     out
+}
+
+/// The picked account's worst window, for the receipt.
+fn picked_headroom_note(account: &str, cwd: &Path) -> String {
+    use crate::accounts::state;
+    let path = crate::provider_cap::runtime_state_path(cwd);
+    let snapshot = state::read_usage(
+        &path,
+        account,
+        state::DEFAULT_USAGE_TTL_SECONDS,
+        state::wall_now(),
+    );
+    let mut worst: Option<state::Window> = None;
+    for window in snapshot.map(|s| s.windows).unwrap_or_default() {
+        if worst.as_ref().is_none_or(|w| window.used_pct > w.used_pct) {
+            worst = Some(window);
+        }
+    }
+    match worst {
+        Some(w) => format!("{} {:.0}%", w.label, w.used_pct),
+        None => "headroom unknown".to_string(),
+    }
 }
 
 #[cfg(test)]

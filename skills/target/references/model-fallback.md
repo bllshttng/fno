@@ -19,4 +19,4 @@ Record the user's choice as a line in the session's progress notes. It is not a 
 
 A phase transition never changes the model on its own. The user sets the model interactively. The resolved lane sets it unattended, via `fno agents spawn`'s grid. It stays whichever one set it, until that same actor changes it again.
 
-In autonomous (unattended) mode there is no AskUserQuestion path. A worker spawned via `fno agents spawn` already resolved its lane through the grid at spawn time. A mid-run outage there is `run_outage_handoff`'s job (`fno.agents.outage_handoff`, invoked by `fno.recovery` on a positively proved outage), not this reference's.
+In autonomous (unattended) mode there is no AskUserQuestion path. A worker spawned via `fno agents spawn` already resolved its lane through the grid at spawn time. A mid-run outage there is `run_outage_handoff`'s job (invoked by the recovery sweep on a positively proved outage), not this reference's.

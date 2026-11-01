@@ -6,6 +6,7 @@ import json
 import os
 import re
 import shlex
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -15,9 +16,43 @@ HOOKS_JSON = REPO_ROOT / "hooks" / "hooks.json"
 CODEX_HOOKS_JSON = REPO_ROOT / "hooks" / "codex-hooks.json"
 
 
+CODEX_EXIT_127_TAIL = " || { rc=$?; [ $rc -eq 127 ] || exit $rc; echo '"
+
+
 def _command(command: str) -> str:
     command = command.removeprefix("PYTHONDONTWRITEBYTECODE=1 ").removeprefix("FNO_HOOK_CONTEXT=1 ")
-    return " ".join(shlex.split(command))
+    return " ".join(shlex.split(command.split(CODEX_EXIT_127_TAIL)[0]))
+
+
+def test_codex_hook_names_itself_when_its_file_is_gone(tmp_path: Path) -> None:
+    # Codex pins a session to one plugin version folder, and an update deletes
+    # that folder. The command text in memory is then the only code that can run.
+    data = json.loads(CODEX_HOOKS_JSON.read_text(encoding="utf-8"))
+    commands = [
+        hook["command"]
+        for registrations in data["hooks"].values()
+        for registration in registrations
+        for hook in registration["hooks"]
+    ]
+    assert commands
+    env = {**os.environ, "PLUGIN_ROOT": str(tmp_path / "deleted-version")}
+    for command in commands:
+        assert CODEX_EXIT_127_TAIL in command, command
+        run = subprocess.run(
+            ["bash", "-c", command], env=env, input="{}", capture_output=True, text=True
+        )
+        message = json.loads(run.stdout)["systemMessage"]
+        script = re.findall(r"([\w.-]+\.(?:sh|py))\"", command)[-1]
+        assert run.returncode == 0, command
+        assert f"fno hook {script}" in message, command
+
+    # Any other exit stays the hook's own answer: 2 is a block in Codex.
+    tail = commands[0].split(CODEX_EXIT_127_TAIL)[1]
+    blocked = subprocess.run(
+        ["bash", "-c", "(exit 2)" + CODEX_EXIT_127_TAIL + tail], capture_output=True, text=True
+    )
+    assert blocked.returncode == 2
+    assert blocked.stdout == ""
 
 
 def test_every_hook_command_runs_in_hook_context() -> None:

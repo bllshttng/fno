@@ -470,7 +470,7 @@ def _credit_longest(combo: tuple[str, ...], leaves: set[str], counts: Counter) -
 #
 # The separation is free, and it is worth stating why rather than trusting it:
 # a DEFINITION names only the leaf's own last token (``@capture_cli.command(
-# "promote")``), while a CALL must spell the whole path (``[*fno_py_cmd(),
+# "promote")``), while a CALL must spell the whole path (``[*fno_cmd(),
 # "backlog", "capture", "promote"]``). Matching only on multi-token paths that
 # resolve against the baseline therefore cannot see a definition at all. The
 # probe is one-directional and that is deliberate.
@@ -484,7 +484,7 @@ def _leading_consts(elts) -> list[str]:
     """The run of leading string constants in a list literal.
 
     A leading non-constant is SKIPPED rather than terminating the scan, because
-    the canonical self-shellout is ``[*fno_py_cmd(), "backlog", "get", node]``:
+    the canonical self-shellout is ``[*fno_cmd(), "backlog", "get", node]``:
     the binary arrives as a starred call and the command path follows it. Once a
     constant run has begun, a non-constant ends it (that is an argument, not
     more command path).
@@ -516,7 +516,7 @@ def _leading_consts(elts) -> list[str]:
 def _dynamic_after_binary(elts) -> bool:
     """True when a binary-prefixed argv reaches a non-constant in command position.
 
-    ``[*fno_py_cmd(), group, "get"]`` can invoke ANY command under ``group``, so the
+    ``[*fno_cmd(), group, "get"]`` can invoke ANY command under ``group``, so the
     site cannot be resolved statically and must not be read as evidence that the
     commands it could reach are dead. These sites are reported, never silently
     dropped: an unresolvable call site is the one thing that can turn a correct
@@ -546,10 +546,10 @@ def _dynamic_after_binary(elts) -> bool:
 
 # Helpers whose return value IS an fno argv prefix, so `[*helper(), "pr", ...]`
 # is an invocation. Found by searching cli/src for functions returning a bare
-# binary list; ``fno_py_cmd`` is the only one today, and a new one that is not
+# binary list; ``fno_cmd`` is the only one today, and a new one that is not
 # listed here degrades to "not flagged as dynamic", never to a wrong deletion
 # (the AST and text sweeps still credit its constant command tokens).
-ARGV_PREFIX_HELPERS = {"fno_py_cmd"}
+ARGV_PREFIX_HELPERS = {"fno_cmd"}
 
 
 def _is_argv_prefix_call(node) -> bool:
@@ -567,7 +567,7 @@ def sweep_internal(root: Path, leaves: set[str]) -> tuple[Counter, Counter, list
     never be pushed INTO the dead set by a miss here):
 
       1. AST: a list/tuple literal whose leading string constants resolve to a
-         leaf path. Catches ``subprocess.run([*fno_py_cmd(), "pr", "merge", n])``
+         leaf path. Catches ``subprocess.run([*fno_cmd(), "pr", "merge", n])``
          and its bare-``"fno"`` variants.
       2. Text: the same ``fno <leaf>`` token sweep the external corpus gets,
          which catches a shellout written as one string, a help line, or an

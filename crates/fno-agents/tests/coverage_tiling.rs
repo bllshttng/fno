@@ -1947,7 +1947,36 @@ fn xaecc_rows() {
                 && v.verdict == CoverageVerdict::Reviewed),
         "an unanswered fail must not count as a review"
     );
-    assert_eq!(rep.review_state(), Some(ReviewState::Unreviewed));
+    // A failed review is a review: the word says findings stay open.
+    assert_eq!(rep.review_state(), Some(ReviewState::FindingsOpen));
+    // A fail at an older head that no chain carries no longer describes this
+    // head; a tiled chain that links it does.
+    let moved = |_: &str| Freshness::Stale;
+    let chain = RangeTiling {
+        tiled: true,
+        chain_heads: vec![head.clone()],
+        ..Default::default()
+    };
+    for (tiling, word) in [
+        (None, ReviewState::Unreviewed),
+        (Some(&chain), ReviewState::FindingsOpen),
+    ] {
+        let rep = classify_coverage_tiled(
+            &[],
+            &[],
+            &events,
+            &[],
+            true,
+            None,
+            &moved,
+            BRANCH,
+            &head,
+            tiling,
+            None,
+            false,
+        );
+        assert_eq!(rep.review_state(), Some(word));
+    }
     let blockers = disposition_blockers(&events, BRANCH, &head);
     assert_eq!(blockers.len(), 1, "the refusal names exactly one finding");
     assert_eq!(blockers[0].finding_key, k2);

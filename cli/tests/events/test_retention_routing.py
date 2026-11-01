@@ -10,7 +10,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from fno.events import EPHEMERAL_SUFFIX, _build, append_event
+from fno.paths import EPHEMERAL_EVENTS_SUFFIX as EPHEMERAL_SUFFIX
+from fno.events.store_client import build_event as _build, append_event
 from fno.events.store_client import read_committed_lines, store_db_path
 
 

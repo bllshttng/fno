@@ -39,11 +39,12 @@ pub const DEFERRED_KINDS: &[&str] = &[
     "junk",
 ];
 
-/// Exact-string classifier (`_constants.DEFERRED_KIND_BY_REASON`): the
-/// machine-stamped reasons only, byte for byte. THE Rust table - the keeper's
-/// op and the door both classify through here.
+/// Exact-string classifier: the machine-stamped reasons only, byte for byte.
+/// THE table - the keeper's op and the door both classify through here. The
+/// 30d row stays for rows stamped before the drain moved to 60 days.
 pub fn classify_deferred_reason(reason: &str) -> Option<&'static str> {
     match reason {
+        "stale >60d, drained by maintain" => Some("expired"),
         "stale >30d, drained by maintain" => Some("expired"),
         "stale-quarantine (guard)" => Some("expired"),
         _ => None,
@@ -653,6 +654,25 @@ fn apply_sets(
             }
         };
         let obj = entry.as_object_mut().unwrap();
+        // The clobber guard, door form: `--set details=` refuses a
+        // replace dropping more than half the stored details. The door has no
+        // --force in one call (the relay refuses the mix), so the refusal
+        // names the native operator call that replaces deliberately.
+        if field == "details" {
+            if let Value::String(next) = &value {
+                let before = crate::backlog::node_state::count_prose(
+                    obj.get("details").and_then(Value::as_str).unwrap_or(""),
+                );
+                let after = crate::backlog::node_state::count_prose(next);
+                if before > 0 && after * 2 < before {
+                    return Err(PatchRefusal::refused(format!(
+                        "refused: {id} details= would replace {before} chars with {after}: a \
+                         shrink past half of the stored details. Replace deliberately with \
+                         `fno backlog update {id} details=<text> --force`."
+                    )));
+                }
+            }
+        }
         put_key(obj, changes, id, field, value);
     }
     Ok(())
@@ -1254,6 +1274,22 @@ mod tests {
     use super::*;
     use crate::graph_store::CANONICAL_FIELD_ORDER;
     use std::io::Write;
+
+    #[test]
+    fn the_drain_stamps_classify_by_exact_match() {
+        assert_eq!(
+            classify_deferred_reason("stale >60d, drained by maintain"),
+            Some("expired")
+        );
+        assert_eq!(
+            classify_deferred_reason("stale >30d, drained by maintain"),
+            Some("expired")
+        );
+        assert_eq!(
+            classify_deferred_reason("stale >45d, drained by maintain"),
+            None
+        );
+    }
 
     fn write_graph(entries: &[Value]) -> (tempfile::TempDir, PathBuf) {
         let dir = tempfile::tempdir().expect("tempdir");

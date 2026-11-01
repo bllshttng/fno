@@ -107,8 +107,7 @@ def test_hook_output_commands_resolve() -> None:
     # them apart (assert-a-positive-marker).
     emitted = "\n".join(lines)
     assert "fno agents mail send" in emitted, "expected the /compact front door in output"
-    assert "agents" in prescribed, "collapsed agents dispatcher was not resolved"
-    assert "agents spawn" in prescribed, "expected the spawn --promote path in output"
+    assert "backlog" in prescribed, "collapsed backlog dispatcher was not resolved"
 
     bad = [v for v in prescribed if v not in leaves]
     assert not bad, f"hook output prescribes non-resolving fno commands: {bad}"

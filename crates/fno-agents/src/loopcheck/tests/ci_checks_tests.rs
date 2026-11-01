@@ -71,6 +71,24 @@ fn coverage_statuses_are_not_generic_ci_checks() {
     assert!(!ci_has_pending_checks(&filtered));
 }
 
+/// The evals gate is an eval fact, not CI: a red gate row must vanish from
+/// the loop's CI payload, or a waiting worker fix-loops a green PR instead
+/// of surfacing the gate hold at finalize.
+#[test]
+fn the_evals_gate_is_not_a_ci_check() {
+    let checks = serde_json::json!([
+        {"name": "ci", "bucket": "pass"},
+        {"name": "evals/gate", "bucket": "fail"}
+    ]);
+    let filtered = without_coverage_statuses(&checks);
+    assert_eq!(filtered.as_array().unwrap().len(), 1);
+    assert_eq!(
+        compute_ci_conclusion(&filtered).unwrap(),
+        CiConclusion::Success
+    );
+    assert!(failing_check_names(&filtered).is_empty());
+}
+
 #[test]
 fn ci_has_pending_gates_partial_ci() {
     // One check failed while another still runs -> pending (must hold, not

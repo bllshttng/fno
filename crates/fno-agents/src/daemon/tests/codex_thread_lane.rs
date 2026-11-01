@@ -1527,14 +1527,14 @@ async fn codex_thread_spawn_carries_harness_args_config_add_dir_and_effort() {
 // ---------------------------------------------------------------------------
 // Node-backed hosted Codex target threads start in their node worktree
 // (x-ecf4). The fixture gives the lane a REAL canonical checkout (its git
-// common dir lives inside it) plus a fake `fno-py` whose worktree ensure
-// answers `answer` and exits `exit`; FNO_PY is what the ensure resolves, so
+// common dir lives inside it) plus a fake `fno` whose worktree ensure
+// answers `answer` and exits `exit`; FNO_BIN is what the ensure resolves, so
 // the fake IS the ensure.
 // ---------------------------------------------------------------------------
 
-/// A canonical-checkout fixture: a real git repo plus a fake `fno-py`. The
+/// A canonical-checkout fixture: a real git repo plus a fake `fno`. The
 /// tempdir must stay bound for the fixture's lifetime; the returned path is
-/// the binary to publish on FNO_PY under the crate's env lock.
+/// the binary to publish on FNO_BIN under the crate's env lock.
 fn codex_target_launch_cwd_fixture(answer: &str, exit: i32) -> (tempfile::TempDir, PathBuf) {
     let repo = tempfile::tempdir().unwrap();
     std::process::Command::new("git")
@@ -1544,7 +1544,7 @@ fn codex_target_launch_cwd_fixture(answer: &str, exit: i32) -> (tempfile::TempDi
         .unwrap();
     let bin = crate::write_exec_stub(
         repo.path(),
-        "fno-py",
+        "fno",
         &format!(
             "#!/bin/sh\ncat >/dev/null\necho '{answer}'\necho 'worktree ensure: reusing ... created=false' >&2\nexit {exit}\n"
         ),
@@ -1630,7 +1630,7 @@ async fn codex_target_launch_cwd_binds_a_canonical_node_target_to_its_worktree()
             ),
         )
         .unwrap();
-        std::env::set_var("FNO_PY", &bin);
+        let _fno_bin = crate::claims::EnvVarGuard::set("FNO_BIN", bin.to_str().unwrap());
 
         let req = Request::new(
             1,
@@ -1686,7 +1686,7 @@ async fn codex_target_launch_cwd_refusal_starts_nothing() {
         let home = tmp_home("codex-target-cwd-refusal");
         let ctx = test_ctx(home.clone(), PathBuf::from("/nonexistent"));
         let (repo, bin) = codex_target_launch_cwd_fixture("", 1);
-        std::env::set_var("FNO_PY", &bin);
+        let _fno_bin = crate::claims::EnvVarGuard::set("FNO_BIN", bin.to_str().unwrap());
 
         let req = Request::new(
             1,
@@ -1747,7 +1747,7 @@ async fn codex_target_launch_cwd_refuses_a_worktree_removed_after_ensure() {
             format!("#!/bin/sh\ncat >/dev/null\necho '{worktree}'\nrmdir '{worktree}'\nexit 0\n"),
         )
         .unwrap();
-        std::env::set_var("FNO_PY", &bin);
+        let _fno_bin = crate::claims::EnvVarGuard::set("FNO_BIN", bin.to_str().unwrap());
 
         let req = Request::new(
             1,

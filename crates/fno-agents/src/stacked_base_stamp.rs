@@ -13,7 +13,7 @@ use std::process::Command;
 
 pub(crate) const CONTEXT: &str = "stacked-base-guard";
 
-fn origin_slug(cwd: &Path, run: RunProbe) -> Option<String> {
+pub(crate) fn origin_slug(cwd: &Path, run: RunProbe) -> Option<String> {
     run(&["git", "remote", "get-url", "origin"], cwd)
         .filter(|r| r.ok)
         .and_then(|r| parse_origin_slug(r.stdout.trim()))

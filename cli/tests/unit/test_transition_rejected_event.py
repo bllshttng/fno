@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from fno.events import ValidationError, validate
+from fno.events.store_client import ValidationError, validate
 
 
 def test_transition_rejected_rejects_unknown_enum_values() -> None:

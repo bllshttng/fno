@@ -852,6 +852,18 @@ pub fn passthrough_value<'t>(
     found.filter(|v| !v.is_empty())
 }
 
+/// The mode a claude row records for its resume to replay: the spawn's resolved
+/// mode (`--yolo` already folded to bypassPermissions), else the fenced flag.
+pub(crate) fn recorded_permission_mode(
+    resolved: Option<&str>,
+    passthrough: &[String],
+) -> Option<String> {
+    resolved
+        .filter(|m| !m.is_empty())
+        .or_else(|| passthrough_value(passthrough, "--permission-mode", None))
+        .map(str::to_string)
+}
+
 /// The model a fenced passthrough names (`--model M`, `--model=M`, `-m M`).
 pub fn passthrough_model(tokens: &[String]) -> Option<&str> {
     passthrough_value(tokens, "--model", Some("-m"))
@@ -3331,8 +3343,7 @@ fn create(
             .filter(|v| !v.is_empty())
             .or_else(|| passthrough_value(flags.passthrough, "--effort", None))
             .map(str::to_string),
-        requested_permission_mode: passthrough_value(flags.passthrough, "--permission-mode", None)
-            .map(str::to_string),
+        requested_permission_mode: recorded_permission_mode(permission_mode, flags.passthrough),
         // Canonical identity at birth: the session id rides the
         // struct-update base below. A bounded miss stays a named spawning row,
         // so the constructor's Option is exactly the observed semantics.
@@ -3709,6 +3720,21 @@ mod tests {
     }
 
     // --- build_argv / use_stdin_for ---
+
+    #[test]
+    fn recorded_mode_rows() {
+        let fenced = vec!["--permission-mode".to_string(), "plan".to_string()];
+        assert_eq!(
+            recorded_permission_mode(Some("bypassPermissions"), &fenced).as_deref(),
+            Some("bypassPermissions")
+        );
+        assert_eq!(
+            recorded_permission_mode(None, &fenced).as_deref(),
+            Some("plan")
+        );
+        assert_eq!(recorded_permission_mode(None, &[]), None);
+        assert_eq!(recorded_permission_mode(Some(""), &[]), None);
+    }
 
     #[test]
     fn argv_rows() {

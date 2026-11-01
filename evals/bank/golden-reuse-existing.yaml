@@ -1,0 +1,20 @@
+# Mined from a real correction row; `fno-agents evals candidates` finds it.
+id: golden-reuse-existing
+tier: capability
+prompt: |
+  You are working in this repository. Follow its rules: AGENTS.md and the docs and skills it points to. Read them before you answer.
+
+  In evals/fixtures/golden/reuse-existing/report.py add `title_key(title)`. For "  Hello, World! " it returns "hello-world". Change only that file.
+grade:
+  - kind: exit
+    command: "python3 evals/fixtures/golden/reuse-existing/verify.py"
+timeout_minutes: 10
+tags: [golden]
+golden:
+  source: {kind: correction, ref: "fb4910e5:missing_context"}
+  quote: "wait weve already done this for fno-books. we can just copy it."
+  expected: "report.py calls the slugify that already exists."
+  rule: "Look for what exists before you write it; one owner per behaviour (AGENTS.md principle 9)."
+  failure_type: duplicate-work
+  cost: rework
+  outcome: failed

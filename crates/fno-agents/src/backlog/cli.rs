@@ -349,11 +349,14 @@ pub fn run(args: &[String]) -> i32 {
         "decompose" => super::decompose::run_decompose(resolved.tail),
         "lanes" => super::finale::run_lanes(resolved.tail),
         "stuck-epics" => super::finale::run_stuck_epics(resolved.tail),
+        "wave-notes" => super::wave_notes::run_list(resolved.tail),
+        "wave-dispose" => super::wave_notes::run_dispose(resolved.tail),
         "reprioritize" => super::finale::run_reprioritize(resolved.tail),
         "discover" => super::finale::run_discover(resolved.tail),
         "pick" => super::finale::run_pick(resolved.tail),
         "requeue" => super::finale::run_requeue(resolved.tail),
         "retro" => crate::retro::run(resolved.tail),
+        "carveout" => super::carveout::run_carveout(resolved.tail),
         _ => forward_python(&resolved),
     }
 }

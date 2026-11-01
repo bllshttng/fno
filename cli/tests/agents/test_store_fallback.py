@@ -318,31 +318,6 @@ def test_registration_identity_collision_is_never_degraded_to_a_synthesized_row(
 # --- command wiring: the heal must reach every resolution surface --------------
 
 
-def test_resume_heals_an_unregistered_session(_registry_home):
-    """US2: resume loads its own entries, so it needs the seam explicitly."""
-    from fno.agents.resume_cli import resume_logic
-
-    _write_codex_session(_registry_home, CODEX_UUID)
-
-    # path_checker: the resolution is what is under test, not whether this host
-    # happens to have the codex CLI installed (CI does not).
-    result = resume_logic(
-        name=CODEX_UUID, print_command=True, path_checker=lambda _b: True
-    )
-
-    assert result.exit_code == 0
-    assert result.exec_argv[0] == "codex"
-    # The unregistered session healed and rendered ITS uuid, as the second-
-    # to-last positional before the daemon-attach flag the resume_strategy
-    # form always appends: codex's globals all precede the subcommand, so
-    # the positional stays right after "resume".
-    assert result.exec_argv[-4:] == ["resume", CODEX_UUID, "--remote", "unix://"]
-    # codex 0.156.1 refuses the writable_roots override on the form's
-    # --remote lane, so the grant is absent; the roots ride the turn carrier.
-    assert not any("writable_roots=" in arg for arg in result.exec_argv)
-    assert result.exec_cwd == "/repo/two"
-
-
 # --- review fixes: ambiguity must not fall through, healed rows must survive --
 
 
@@ -530,5 +505,3 @@ def test_recently_removed_codex_session_is_not_readopted(tmp_path):
     # The refusal left no row behind: no adopted duplicate blocks a later
     # resume of the session the operator removed.
     assert load_registry() == []
-
-

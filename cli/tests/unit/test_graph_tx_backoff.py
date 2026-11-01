@@ -15,7 +15,7 @@ import time
 
 import pytest
 
-from fno.events import validate as validate_event
+from fno.events.store_client import validate as validate_event
 from fno.graph import store
 
 
@@ -63,9 +63,9 @@ def journal(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
         validate_event(event)
         rows.append(event)
 
-    import fno.events
+    import fno.events.store_client
 
-    monkeypatch.setattr(fno.events, "append_event", _capture)
+    monkeypatch.setattr(fno.events.store_client, "append_event", _capture)
     return rows
 
 
@@ -141,9 +141,9 @@ def test_an_unwritable_journal_never_changes_the_outcome(
     def _boom(event: dict[str, Any], events_path: Any = None) -> None:
         raise OSError("read-only file system")
 
-    import fno.events
+    import fno.events.store_client
 
-    monkeypatch.setattr(fno.events, "append_event", _boom)
+    monkeypatch.setattr(fno.events.store_client, "append_event", _boom)
     monkeypatch.setattr(store.time, "sleep", lambda _s: None)
     g = _graph(tmp_path)
     monkeypatch.setattr(

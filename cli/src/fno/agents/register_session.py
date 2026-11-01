@@ -404,10 +404,19 @@ def _emit_transition_events(
 _BRANCH_QUESTION_MARKER = "session-transition-branch"
 
 
-def _branch_question_open(root, key: str) -> bool:
-    from fno.agents.stale_escalate import already_asked
+def _branch_question_open(key: str) -> bool:
+    """Is the marker key already asked? A listing that cannot run reads as un-asked,
+    and the ask door's own dedup refusal catches the duplicate."""
+    from fno.rust_binary import call_binary_json
 
-    return already_asked(root, key, marker=_BRANCH_QUESTION_MARKER) is not None
+    err, payload = call_binary_json("compaction", ["outstanding", "--json"], timeout=30)
+    if err is not None or not isinstance(payload, dict):
+        return False
+    needle = f"[{_BRANCH_QUESTION_MARKER}:{key}]"
+    return any(
+        question.get("id") and needle in (question.get("question") or "")
+        for question in payload.get("questions") or ()
+    )
 
 
 def _record_branch_question(
@@ -422,7 +431,7 @@ def _record_branch_question(
     import secrets
 
     from fno import paths
-    from fno.events import operator_question
+    from fno.events.store_client import build_event
     from fno.rust_binary import command_call
 
     # The hook cds to the repo root before invoking this module, so the
@@ -430,29 +439,28 @@ def _record_branch_question(
     # index gets the same event and is what the dedupe read folds.
     root = Path(os.getcwd())
     key = f"{name}:{predecessor}:{successor}"
-    if _branch_question_open(root, key):
+    if _branch_question_open(key):
         return
     answer = command_call(
         "question-intake",
         {
             "op": "append",
-            "event": operator_question(
-                question_id=f"q-{secrets.token_hex(4)}",
-                question=(
+            "event": build_event("operator_question", "hook", {
+                "question_id": f"q-{secrets.token_hex(4)}",
+                "question": (
                     f"[{_BRANCH_QUESTION_MARKER}:{key}] "
                     f"Branch {branch_name} ({harness}) forked live session "
                     f"{predecessor} into {successor}. Should it inherit the node "
                     f"and claim, or start clean?"
                 ),
-                session_id=successor,
-                ask=(
+                "session_id": successor,
+                "ask": (
                     "answer inherit or clean; inherit proceeds only through the "
                     "voluntary claim-handover path and never force-releases the "
                     "live predecessor"
                 ),
-                options=["inherit node and claim", "start clean"],
-                source="hook",
-            ),
+                "options": ["inherit node and claim", "start clean"],
+            }, builder="operator_question"),
             "storage_root": str(root),
             "journal_path": str(paths.project_log("events.jsonl")),
             "index_path": str(paths.questions_jsonl()),

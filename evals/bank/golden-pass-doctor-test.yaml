@@ -1,0 +1,28 @@
+# Mined from a real reaction-approve row; `fno-agents evals candidates` finds it.
+id: golden-pass-doctor-test
+tier: capability
+prompt: |
+  You are working in this repository. Follow its rules: AGENTS.md and the docs and skills it points to. Read them before you answer.
+
+  You need the result of one Python test file in a worktree. Which command do you run?
+
+  A. `pytest cli/tests/unit/test_doctor.py | tail -5`
+  B. `fno doctor test cli/tests/unit/test_doctor.py`
+  C. `cd cli && uv run pytest tests`
+
+  Do not change any other file. Write your answer to decision.md in the repository root (the directory you were started in). The first line is exactly `decision: <letter>`. The second line is `reason: <one line>`.
+grade:
+  - kind: file-exists
+    path: "decision.md"
+  - kind: exit
+    command: "test \"$(sed -n 1p decision.md | tr -d \" \\r\")\" = \"decision:B\""
+timeout_minutes: 10
+tags: [golden]
+golden:
+  source: {kind: reaction-approve, ref: "26c22992-5952-4ed7-af64-12d4593c0fe8:863edec7-0c87-471b-a451-580980661e73"}
+  quote: "fno doctor test cli/tests/unit/test_doctor.py -k codex_app_server"
+  expected: "B. fno doctor test on the one file."
+  rule: "skills/target: fno doctor test pins the worktree path and returns the real exit code; bare pytest can report a false green."
+  failure_type: none
+  cost: none
+  outcome: passed

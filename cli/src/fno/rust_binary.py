@@ -33,9 +33,7 @@ BINARY_NAME = "fno-agents.exe" if os.name == "nt" else "fno-agents"
 #: Operator override. The shell shims (scripts/run-target-loop.sh, the stop
 #: hooks) have always honored this, so the Python resolver honors it too rather
 #: than making the same export mean two different things depending on which half
-#: of the toolchain reads it. Both "binary not found" messages in
-#: ``fno.agents.rust_runtime`` name it, so the remedy is discoverable from the
-#: failure itself.
+#: of the toolchain reads it.
 BINARY_ENV = "FNO_AGENTS_BIN"
 
 
@@ -409,16 +407,12 @@ def sidecar_set(id: str, fields: dict) -> Path:
 def resolve_installed_binary() -> Optional[Path]:
     """Locate an *installed* ``fno-agents``, deliberately excluding the cargo dev target.
 
-    The ``auto`` (default) runtime uses this narrower set so a *development*
-    checkout -- where only ``crates/fno-agents/target/release`` exists -- stays on
-    the Python dispatch by default, and the in-process test suite never execs the
-    binary. A dev who wants Rust opts in explicitly with ``FNO_AGENTS_RUNTIME=rust``,
-    which routes through the full :func:`resolve_binary` (cargo dev included).
+    A caller that acts on the answer uses this narrower set, so a *development*
+    checkout -- where only ``crates/fno-agents/target/release`` exists -- changes
+    no behavior. :func:`resolve_binary` is the full order, cargo dev included.
 
-    Deliberately does NOT consult ``$FNO_AGENTS_BIN``: this function decides the
-    *default* runtime, and a stale export pointing at a dev build must not
-    silently flip an install onto the Rust path. ``FNO_AGENTS_RUNTIME=rust`` is
-    the opt-in, and it routes through :func:`resolve_binary`, which does.
+    Deliberately does NOT consult ``$FNO_AGENTS_BIN``: a stale export pointing at
+    a dev build must not silently stand in for the installed binary.
     """
     for finder in (_bundled_binary, _sibling_binary, _path_binary):
         found = finder()
@@ -521,6 +515,26 @@ def command_call(
     finally:
         if os.environ.get("FNO_ROUTE_SLOT_DEBUG"):
             print(json.dumps({"payload": payload}), flush=True)
+
+
+def read_carveouts(
+    root: "Path | str",
+    *,
+    kind: Optional[str] = None,
+    session_ids: "Optional[list[str]]" = None,
+) -> "list[dict]":
+    """The carve-out ledger under ``root``, read by the native owner. Raises
+    ``CommandUnavailable`` on a failed read: a failure is never an empty list."""
+    answer = command_call(
+        ["backlog", "carveout", "_read"],
+        {"root": str(root), "kind": kind, "session_ids": session_ids},
+    )
+    return list(answer.get("carveouts") or [])
+
+
+def carveout_session_id() -> Optional[str]:
+    """The session a durable ask binds to, resolved by the native owner."""
+    return command_call(["backlog", "carveout", "_session"], {}).get("session_id")
 
 
 def chats_command(args: "list[str]", payload: dict) -> dict:

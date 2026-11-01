@@ -65,7 +65,7 @@ def _hermetic_worked_authority(monkeypatch):
     read fails, and CI has no harness binaries, so dispatch tests passed on a
     developer machine (real fleet answers) and failed in CI (read raises).
     Patching the authority itself keeps the layers beneath it real: roster
-    join tests bind the function directly, fleet fakes at ``fleet_rows`` and
+    join tests bind the function directly, fleet fakes at the census door and
     identity pins between the claims modules all stay untouched. A test that
     installs its own map, or raises to exercise the degrade, patches after
     this one and wins.
@@ -577,23 +577,6 @@ def _block_live_provider_exec(request, monkeypatch, tmp_path_factory):
     monkeypatch.setattr(_cursor, "_subprocess_popen", _GuardedPopen)
 
 
-@pytest.fixture(autouse=True)
-def _stable_fno_py_cmd(monkeypatch):
-    """Pin source self-shellouts to a bare ``["fno-py"]`` prefix (x-69b3).
-
-    Source modules resolve the Python CLI via
-    ``_subprocess_util.fno_py_cmd()``, which returns an ABSOLUTE path in most
-    runner envs (the console script on PATH / beside the interpreter). Command
-    assertions across the suite assert the bare ``["fno-py", <command>, ...]``, so
-    stub the resolver here to keep them stable regardless of how it resolves
-    locally. The resolver's own unit tests bind the real function at import time
-    and are unaffected by this module-attribute patch.
-    """
-    from fno import _subprocess_util
-
-    monkeypatch.setattr(_subprocess_util, "fno_py_cmd", lambda: ["fno-py"])
-
-
 @pytest.fixture(autouse=True, scope="session")
 def _pinned_native_fno():
     """Resolve the native fno binary once, before any test narrows PATH.
@@ -604,7 +587,6 @@ def _pinned_native_fno():
     resolve as before.
     """
     from fno.events import store_client
-    import fno.events as events_pkg
 
     try:
         pinned = store_client.resolve_native_bin()
@@ -615,9 +597,6 @@ def _pinned_native_fno():
         def _pinned():
             return os.environ.get("FNO_BIN") or pinned
         mp.setattr(store_client, "resolve_native_bin", _pinned)
-        # events/__init__ re-exports the name at import; emit paths call that
-        # copy, so patching store_client alone leaves them on the real resolver.
-        mp.setattr(events_pkg, "resolve_native_bin", _pinned)
         yield
 
 
@@ -862,7 +841,6 @@ def _hermetic_worker_add_dirs(monkeypatch):
 # on the test-file side; keep the two lists in step.
 _PLAN_JOURNAL_PINNED_MODULES = frozenset(
     {
-        "test_rust_runtime",
         "test_epic_status",
     }
 )

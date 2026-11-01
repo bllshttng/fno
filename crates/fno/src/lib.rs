@@ -11,6 +11,8 @@
 #[cfg(feature = "full")]
 pub mod accounts_route;
 #[cfg(feature = "full")]
+pub mod agents_client_route;
+#[cfg(feature = "full")]
 pub mod agents_history;
 #[cfg(feature = "full")]
 pub mod agents_mcp_route;
@@ -47,6 +49,8 @@ pub mod build_drift;
 #[cfg(feature = "full")]
 pub mod chrome;
 #[cfg(feature = "full")]
+pub mod claude_fallback;
+#[cfg(feature = "full")]
 pub mod cli_args;
 #[cfg(feature = "full")]
 pub mod cli_hooks;
@@ -82,6 +86,7 @@ mod doctor_update_tests;
 pub mod effect_map;
 #[cfg(feature = "full")]
 pub mod event_cli;
+mod event_corrections;
 #[cfg(feature = "full")]
 mod event_signals;
 #[cfg(feature = "full")]
@@ -320,3 +325,7 @@ pub mod doctor_cost;
 pub mod otel_read;
 #[cfg(feature = "full")]
 pub mod whoami_seam;
+
+mod json_compat;
+
+mod repo_identity;

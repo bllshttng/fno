@@ -19,13 +19,13 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional, Tuple
 
-from fno.agents.keeper_lane import KEEPER_BIN_NAME, REAP
 from fno.agents.session_truth import STALLED_AFTER_S
 
 HOLDS = "holds"
@@ -33,6 +33,10 @@ INERT = "inert"
 KEEP = "keep"
 TERMINATE = "terminate"
 RETIRE = "retire"
+
+KEEPER_BIN_NAME = "fno-agents-worker"
+REAP = "reap"
+_KEEPER_LANE_TIMEOUT_S = 30
 
 _TERMINAL_JOB_STATES = frozenset({"done", "stopped", "failed"})
 _SHELL_NAMES = frozenset({"zsh", "bash", "sh"})
@@ -125,7 +129,7 @@ def _direct_verdict(pid: int, row: dict, *, keeper_verdicts, job_of_pid, job_sta
         # registry rows and 17 of 17 live bg jobs read the canonical checkout
         # while working inside worktrees); a hold detector built on that field
         # named its own live worktree free. The row dicts from
-        # orphans.iter_processes() carry a cwd key; it stays unread here.
+        # the process table carry no cwd key on purpose.
         if job_of_pid is None:
             return Hit(pid, HOLDS, KEEP, reason="claude session: rv socket map unreadable", cmd=cmd)
         job_id = job_of_pid.get(pid)
@@ -222,26 +226,34 @@ def _descendant_verdict(row, procs, *, keeper_verdicts, job_of_pid, job_state, h
 # --- live reader -------------------------------------------------------------
 
 
-def _keeper_rows(procs: Dict[int, dict], pids: List[int]) -> List[dict]:
-    """The keeper rows among the hits and their ancestors, for a bounded lane run."""
-    want: List[dict] = []
-    seen = set()
-    stack = list(pids)
-    while stack:
-        pid = stack.pop()
-        if pid in seen:
-            continue
-        seen.add(pid)
-        row = procs.get(pid)
-        if row is None:
-            continue
-        argv = _argv(row)
-        if argv and argv[0].rsplit("/", 1)[-1] == KEEPER_BIN_NAME:
-            want.append(row)
-        ppid = row.get("ppid")
-        if isinstance(ppid, int):
-            stack.append(ppid)
-    return want
+def _iter_processes() -> Iterable[dict]:
+    """Every process this uid can read, as plain dicts."""
+    import psutil
+
+    for proc in psutil.process_iter(["pid", "ppid", "name", "cmdline"]):
+        yield dict(proc.info)
+
+
+def _keeper_verdicts() -> Optional[Dict[int, Tuple[str, str]]]:
+    """The native keeper lane's verdict per keeper pid. None when it cannot answer."""
+    from fno import rust_binary
+
+    binary = rust_binary.resolve_binary()
+    if binary is None:
+        return None
+    proc = subprocess.run(
+        [str(binary), "census", "watchdog", "--only", "keeper", "--json"],
+        capture_output=True,
+        text=True,
+        timeout=_KEEPER_LANE_TIMEOUT_S,
+    )
+    # Exit 3 is a broken lane, whose partial verdicts must not reap.
+    if proc.returncode != 0:
+        return None
+    return {
+        int(row["pid"]): (str(row["verdict"]), str(row["reason"]))
+        for row in json.loads(proc.stdout)["keepers"]
+    }
 
 
 def _job_state_reader(home: str, now: float) -> Callable[[str], Optional[Tuple[str, Optional[float]]]]:
@@ -272,28 +284,20 @@ def main(argv: List[str]) -> int:
     One tab-separated row per pid: ``pid verdict action job reason cmd``.
     Any failure exits 2 with nothing on stdout, so the bridge fails closed."""
     try:
-        from fno.agents.keeper_lane import iter_processes
-    except Exception:  # noqa: BLE001
-        return 2
-    try:
         worktree = argv[0]
         pids = [int(a) for a in argv[1:]]
         home = os.path.expanduser("~")
         now = time.time()
 
         procs: Dict[int, dict] = {}
-        for info in iter_processes():
+        for info in _iter_processes():
             pid = info.get("pid")
             if isinstance(pid, int):
                 procs[pid] = info
 
-        from fno.agents import keeper_lane
         from fno.agents.session_procs import bg_socket_pid_map
 
-        keeper_verdicts = None
-        if pids:
-            rows = _keeper_rows(procs, pids)
-            keeper_verdicts = keeper_lane.discover(iter_fn=lambda: iter(rows)).verdicts
+        keeper_verdicts = _keeper_verdicts() if pids else None
 
         socket_map = bg_socket_pid_map()
         job_of_pid: Optional[Dict[int, str]] = None

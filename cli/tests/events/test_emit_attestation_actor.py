@@ -13,7 +13,7 @@ import os
 import subprocess
 from pathlib import Path
 
-from fno.events.store_client import read_committed_lines
+from fno.events.store_client import read_committed_lines, resolve_native_bin as _native_fno
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _SCRIPT = _REPO_ROOT / "skills" / "review" / "scripts" / "emit-attestation.sh"
@@ -73,7 +73,7 @@ def test_attestation_records_session_and_harness(tmp_path: Path) -> None:
         "harness: claude\n"
     )
     repo = _temp_git_repo(tmp_path, manifest)
-    env = {**os.environ, "FNO": "fno-py"}
+    env = {**os.environ, "FNO": _native_fno()}
     r = subprocess.run(
         ["bash", str(_SCRIPT), "sigma", "pass"],
         cwd=repo, env=env, capture_output=True, text=True,
@@ -101,7 +101,7 @@ def test_attestation_adopts_sidecar_by_harness_session_id(tmp_path: Path) -> Non
         json.dumps({"invocation_id": expected, "target_session_id": "harness-run"}),
         encoding="utf-8",
     )
-    env = {**os.environ, "FNO": "fno-py", "FNO_HOME": str(home)}
+    env = {**os.environ, "FNO": _native_fno(), "FNO_HOME": str(home)}
     r = subprocess.run(
         ["bash", str(_SCRIPT), "code-review", "pass"],
         cwd=repo, env=env, capture_output=True, text=True,
@@ -141,7 +141,7 @@ def _env_without_ambient_identity(**extra: str) -> dict:
         k: v for k, v in os.environ.items()
         if k not in ("ANTHROPIC_MODEL", "ANTHROPIC_BASE_URL") + markers
     }
-    env["FNO"] = "fno-py"
+    env["FNO"] = _native_fno()
     env.update(extra)
     return env
 
@@ -181,7 +181,7 @@ def test_a_flag_shaped_reviewer_emits_nothing(tmp_path: Path) -> None:
     refused rather than the one spelling.
     """
     repo = _temp_git_repo(tmp_path, "session_id: s\nharness: claude\n")
-    env = {**os.environ, "FNO": "fno-py"}
+    env = {**os.environ, "FNO": _native_fno()}
 
     helped = subprocess.run(
         ["bash", str(_SCRIPT), "--help"],

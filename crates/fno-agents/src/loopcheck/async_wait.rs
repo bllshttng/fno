@@ -209,7 +209,7 @@ pub(super) fn arm_watch_hint(pr_number: i64, blocker: &str) -> String {
         )
     } else {
         format!(
-            "background Bash `fno do pr wait {pr_number} --until settled --timeout=15m` (wakes when CI settles - green or red - or after ~15m)"
+            "background Bash `fno do pr wait {pr_number} --until settled --expect-head HEAD --timeout=15m` (wakes when CI settles - green or red - or after ~15m; --expect-head HEAD pins the wait to this checkout's own HEAD, exit 6 names a PR head that is not it)"
         )
     };
     format!(
@@ -315,6 +315,7 @@ mod tests {
             malformed_attestations: 0,
             posture: None,
             coverage: CoverageReport {
+                fail_at_head: false,
                 github_approval_satisfies: false,
                 coverage: Coverage::Covered(0),
                 verdicts: vec![],

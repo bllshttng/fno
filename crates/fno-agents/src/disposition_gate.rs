@@ -41,6 +41,40 @@ fn gate_finding_blocks(primitive: &Value) -> bool {
     !crate::review_findings::DEFAULT_NONBLOCKING_CATEGORIES.contains(&lowered.as_str())
 }
 
+/// Why the gate still refuses a finding whose disposition row EXISTS: the
+/// post itself is the defect, and the refusal names the fix so one retry is
+/// enough.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Diagnosis {
+    /// The disposition was posted under a key missing the raised key's
+    /// final `:category` segment, so the lookup missed and the finding
+    /// still reads open. `posted` is the key the row actually carries.
+    KeyMissingCategory { posted: String },
+    /// A later unstamped row's disposition entry replaced an earlier
+    /// `verify_fixes`-stamped one for this key, so a fixed disposition
+    /// lost its scoped-verification witness.
+    UnstampedOverwroteStamped,
+}
+
+impl Diagnosis {
+    /// The refusal clause that names the exact fix. Rendered by the
+    /// coverage gate's composer; kept beside the derivation it diagnoses.
+    pub fn clause(&self, finding_key: &str) -> String {
+        match self {
+            Diagnosis::KeyMissingCategory { posted } => format!(
+                "the disposition for {finding_key} was posted as '{posted}', \
+                 missing the ':category' suffix; re-post it under the exact \
+                 raised key"
+            ),
+            Diagnosis::UnstampedOverwroteStamped => format!(
+                "the fixed disposition for {finding_key} rides an unstamped \
+                 row that overwrote the stamped one; re-run the review pass \
+                 with --verify-fixes so the disposing row carries the stamp"
+            ),
+        }
+    }
+}
+
 /// One non-terminal blocking finding, named by its finding_key plus the axis
 /// that failed, for the block message and the emitted row.
 #[derive(Debug, Clone, PartialEq)]
@@ -54,6 +88,10 @@ pub struct DispositionBlocker {
     /// gates nothing: at the configured rounds the budget discharges every
     /// open finding, hard included.
     pub hard: bool,
+    /// Set when the disposition row for this key is itself the defect;
+    /// `None` on the plain open finding, which the standing fix-delta
+    /// remedy already covers.
+    pub diagnosis: Option<Diagnosis>,
 }
 
 /// The two categories a finding the reviewer CONFIRMED as a correctness or
@@ -126,8 +164,12 @@ pub fn disposition_blockers_on_chain(
     }
 
     let mut findings: Vec<(String, &Value, usize, String)> = Vec::new(); // key, primitive, raised round, raised head
-    let mut dispositions: std::collections::HashMap<String, (&str, &str, Option<&str>, bool)> =
-        std::collections::HashMap::new(); // key -> (disposition, reason, disposing row's invocation_id, row stamped verify_fixes)
+                                                                         // key -> (disposition, reason, disposing row's invocation_id, row stamped
+                                                                         // verify_fixes, an unstamped row replaced a stamped entry for this key)
+    let mut dispositions: std::collections::HashMap<
+        String,
+        (&str, &str, Option<&str>, bool, bool),
+    > = std::collections::HashMap::new();
     let mut truncated = false;
     for (index, val) in chain.iter().enumerate() {
         if val
@@ -177,9 +219,15 @@ pub fn disposition_blockers_on_chain(
                 .and_then(|v| v.as_str())
                 .filter(|id| !id.is_empty() && *id != "UNJOINED");
             if !key.is_empty() {
+                let overwrote = match dispositions.get(key) {
+                    Some((_, _, _, prev_stamped, prev_overwrote)) => {
+                        !row_stamped && (*prev_stamped || *prev_overwrote)
+                    }
+                    None => false,
+                };
                 dispositions.insert(
                     key.to_string(),
-                    (disposition, reason, invocation, row_stamped),
+                    (disposition, reason, invocation, row_stamped, overwrote),
                 );
             }
         }
@@ -191,6 +239,7 @@ pub fn disposition_blockers_on_chain(
             finding_key: "(truncated remainder)".to_string(),
             axis: "truncated-remainder",
             hard: true,
+            diagnosis: None,
         });
     }
     for (key, primitive, raised, raised_head) in &findings {
@@ -198,12 +247,25 @@ pub fn disposition_blockers_on_chain(
             continue; // non-blocking by class: no action clears the gate
         }
         match dispositions.get(key) {
-            None => blockers.push(DispositionBlocker {
-                finding_key: key.clone(),
-                axis: "open",
-                hard: hard_finding(primitive),
-            }),
-            Some(("fixed", _, disposed_by, row_stamped)) => {
+            None => {
+                // A row posted under a key that misses only the raised key's
+                // final ':category' segment is the retry-loop defect: the
+                // worker's fix landed but the gate can never match it.
+                let diagnosis = key.rsplit_once(':').and_then(|(prefix, _)| {
+                    dispositions
+                        .contains_key(prefix)
+                        .then(|| Diagnosis::KeyMissingCategory {
+                            posted: prefix.to_string(),
+                        })
+                });
+                blockers.push(DispositionBlocker {
+                    finding_key: key.clone(),
+                    axis: "open",
+                    hard: hard_finding(primitive),
+                    diagnosis,
+                })
+            }
+            Some(("fixed", _, disposed_by, row_stamped, overwrote)) => {
                 // Terminal when a LATER round reviewed the fix delta, or the
                 // disposing round itself carried --verify-fixes: the scoped
                 // fix-verification re-read the finding's site at the head it
@@ -234,15 +296,18 @@ pub fn disposition_blockers_on_chain(
                         finding_key: key.clone(),
                         axis: "fixed-unreviewed",
                         hard: hard_finding(primitive),
+                        diagnosis: (!row_stamped && *overwrote)
+                            .then_some(Diagnosis::UnstampedOverwroteStamped),
                     });
                 }
             }
-            Some(("declined", reason, _, _)) => {
+            Some(("declined", reason, _, _, _)) => {
                 if reason.trim().is_empty() {
                     blockers.push(DispositionBlocker {
                         finding_key: key.clone(),
                         axis: "declined-without-reason",
                         hard: hard_finding(primitive),
+                        diagnosis: None,
                     });
                 }
             }
@@ -252,6 +317,7 @@ pub fn disposition_blockers_on_chain(
                 finding_key: key.clone(),
                 axis: "open",
                 hard: hard_finding(primitive),
+                diagnosis: None,
             }),
         }
     }
@@ -260,7 +326,7 @@ pub fn disposition_blockers_on_chain(
 
 #[cfg(test)]
 mod tests {
-    use super::{blockers_withhold, disposition_blockers_on_chain};
+    use super::{blockers_withhold, disposition_blockers_on_chain, Diagnosis};
     use std::collections::HashSet;
 
     #[test]
@@ -464,9 +530,141 @@ mod tests {
             finding_key: "f.py:1:correctness".to_string(),
             axis: "open",
             hard: true,
+            diagnosis: None,
         }];
         assert!(blockers_withhold(&open_hard, false));
         assert!(!blockers_withhold(&open_hard, true));
         assert!(!blockers_withhold(&[], false));
+    }
+
+    #[test]
+    fn a_suffix_less_key_names_the_exact_repost_fix() {
+        // The disposition was posted under the raised key minus its
+        // ':category' segment: the fix landed, but the map can never match,
+        // so the blocker names the posted key instead of reading open.
+        use serde_json::json;
+        let finding = json!({
+            "finding_key": "f.py:1:correctness",
+            "category": "correctness",
+            "verdict": "CONFIRMED",
+            "has_required_fields": true,
+        });
+        let row =
+            |head: &str, findings: Vec<serde_json::Value>, dispositions: Vec<serde_json::Value>| {
+                json!({
+                    "type": "review_attestation",
+                    "data": {
+                        "head_sha": head,
+                        "verdict": "fail",
+                        "branch": "feature/x",
+                        "invocation_id": "v1",
+                        "findings": findings,
+                        "dispositions": dispositions,
+                    }
+                })
+            };
+        let suffix_less = json!({
+            "finding_key": "f.py:1",
+            "disposition": "fixed",
+            "reason": "the guard is gone",
+        });
+        let blockers = disposition_blockers_on_chain(
+            &vec![row("h1", vec![finding], vec![suffix_less])],
+            &HashSet::new(),
+        );
+        assert_eq!(blockers.len(), 1);
+        assert_eq!(blockers[0].axis, "open");
+        assert_eq!(
+            blockers[0].diagnosis,
+            Some(Diagnosis::KeyMissingCategory {
+                posted: "f.py:1".to_string(),
+            })
+        );
+        // An unrelated posted key is no near-miss: the blocker stays plain.
+        let wrong = json!({
+            "finding_key": "g.rs:9:security",
+            "disposition": "fixed",
+            "reason": "not this finding",
+        });
+        let plain = disposition_blockers_on_chain(
+            &vec![
+                row("h1", vec![], vec![wrong]),
+                row(
+                    "h1",
+                    vec![json!({
+                        "finding_key": "f.py:1:correctness",
+                        "category": "correctness",
+                        "verdict": "CONFIRMED",
+                        "has_required_fields": true,
+                    })],
+                    vec![],
+                ),
+            ],
+            &HashSet::new(),
+        );
+        assert_eq!(plain.len(), 1);
+        assert_eq!(plain[0].diagnosis, None);
+    }
+
+    #[test]
+    fn an_unstamped_overwrite_names_the_restamped_fix() {
+        // The stamped row's disposition was last-wins-replaced by an
+        // unstamped re-attest: the finding keeps its fixed-unreviewed axis
+        // and the diagnosis names the stamp as the fix, not the code.
+        use serde_json::json;
+        let finding = json!({
+            "finding_key": "f.py:1:correctness",
+            "category": "correctness",
+            "verdict": "CONFIRMED",
+            "has_required_fields": true,
+        });
+        let row = |stamped: bool,
+                   findings: Vec<serde_json::Value>,
+                   dispositions: Vec<serde_json::Value>| {
+            let mut data = json!({
+                "head_sha": "h1",
+                "verdict": "fail",
+                "branch": "feature/x",
+                "invocation_id": "UNJOINED",
+                "findings": findings,
+                "dispositions": dispositions,
+            });
+            if stamped {
+                data.as_object_mut()
+                    .unwrap()
+                    .insert("verify_fixes".into(), json!(true));
+            }
+            json!({"type": "review_attestation", "data": data})
+        };
+        let fixed_disp = json!({
+            "finding_key": "f.py:1:correctness",
+            "disposition": "fixed",
+            "reason": "verified in place by the scoped pass",
+        });
+        // The fix predates the first attested head, so no later row can
+        // move the head: the stamp (or the invocation join) is the only
+        // witness. Last-wins: the stamped row clears the gate, and an
+        // unstamped re-attest at the same head overwrites the stamped
+        // entry and loses the witness.
+        let chain = vec![
+            row(false, vec![finding.clone()], vec![fixed_disp.clone()]),
+            row(true, vec![], vec![fixed_disp.clone()]),
+        ];
+        assert!(
+            disposition_blockers_on_chain(&chain, &HashSet::new()).is_empty(),
+            "the stamped row wins the map: the witness survives"
+        );
+        let overwritten = vec![
+            row(false, vec![finding], vec![]),
+            row(true, vec![], vec![fixed_disp.clone()]),
+            row(false, vec![], vec![fixed_disp]),
+        ];
+        let blockers = disposition_blockers_on_chain(&overwritten, &HashSet::new());
+        assert_eq!(blockers.len(), 1);
+        assert_eq!(blockers[0].axis, "fixed-unreviewed");
+        assert_eq!(
+            blockers[0].diagnosis,
+            Some(Diagnosis::UnstampedOverwroteStamped)
+        );
     }
 }

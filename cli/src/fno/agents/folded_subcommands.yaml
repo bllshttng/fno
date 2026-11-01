@@ -1,7 +1,0 @@
-# Agent subcommands folded under `fno agents` as lazy subcommands.
-# Each entry: import_path, short_help, typer options. Loaded by
-# rust_runtime.FOLDED_AGENT_SUBCOMMANDS.
-claim:
-  - fno.claims.cli:cli
-  - Work-claim coordination primitive
-  - hidden: true

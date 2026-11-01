@@ -36,6 +36,17 @@ runs:
       shell: bash
       run: python3 -m pip install --upgrade pyyaml
 
+    - name: Create the cli venv (the doctor test leg's interpreter)
+      # `fno doctor test` resolves its pytest interpreter worktree venv ->
+      # canonical venv -> PATH python3 (crates/fno-agents/src/test_command.rs
+      # resolve_interpreter). These runners have neither venv, so the leg fell
+      # to setup-python's python3, which has no pytest, and the schedule-only
+      # slow-e2e job died at import. uv sync creates cli/.venv from the pinned
+      # lock - the same interpreter the smoke shards' `uv run pytest` steps
+      # use, so local/CI parity holds.
+      shell: bash
+      run: uv sync --project cli --frozen
+
     - name: Assert yq (dotted-key config reads)
       # scripts/lib/config.sh reads dotted keys (auto_merge.*) through yq and
       # has NO fallback: without it every nested lookup returns the default

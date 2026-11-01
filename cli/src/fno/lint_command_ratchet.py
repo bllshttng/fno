@@ -53,24 +53,6 @@ COLLAPSE_FLAGS_REL = Path("scripts") / "ci" / "command-collapse-flags.txt"
 # The map row stays: the mux menu binds the leaf and the Rust command-baseline
 # ratchet reads the same row.
 NATIVE_SERVED_LEAVES = {
-    "agents mail show",
-    "agents mail ack",
-    "agents mail drain",
-    "agents mail drain-self",
-    "agents mail hold",
-    "agents mail hold-release",
-    "agents mail list",
-    "agents mail pane-prepare",
-    "agents mail reply",
-    "agents mail seed-provenance",
-    "agents mail send",
-    "agents mail sent",
-    "agents mail status",
-    "agents mail team",
-    "agents mail triage",
-    "agents mail unread",
-    "agents mail withdraw",
-    "agents roles ls",
     "backlog advance",
     "backlog album",
     "backlog archive",
@@ -106,6 +88,10 @@ NATIVE_SERVED_LEAVES = {
     "backlog retro drain-postmortems",
     "backlog retro run",
     "backlog retro sweep-carveouts",
+    "backlog carveout add",
+    "backlog carveout list",
+    "backlog carveout resolve",
+    "backlog carveout update",
     "backlog roadmap",
     "backlog unarchive",
     "backlog view",
@@ -189,7 +175,7 @@ NATIVE_SERVED_LEAVES = {
 # raises it, which a doc can.
 COLLAPSE_MAP_ROW_HELP = (
     "Append one tab-separated row per new action, e.g.\n"
-    "  agents orphans\tT1\tagents orphans\t10\t\n"
+    "  backlog rank\tT1\tbacklog rank\t10\t\n"
     "  current-leaf          the action exactly as a user types it after `fno`\n"
     "  tier                  T1 collapses to an argument of its group, KEEP stays "
     "a distinct subcommand (T2 and T3 are legal and currently unused)\n"
@@ -202,7 +188,7 @@ COLLAPSE_MAP_ROW_HELP = (
 )
 COLLAPSE_FLAGS_ROW_HELP = (
     "One line per hidden option on an argument-dispatched action, e.g.\n"
-    "  agents discovered-json !--provider\n"
+    "  backlog list !--provider\n"
     "  <action> !<option>    the action as a user types it after `fno`, then `!`, "
     "then the long option\n"
     "code-only means the option exists and the file omits it: add that line. "

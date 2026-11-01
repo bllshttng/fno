@@ -625,8 +625,9 @@ fn prepare_start(_node_id: &str, domain: &str, repo: &str, root: &Path) -> Value
     // The launcher's own command builder resolves the ensure door the same
     // way every native caller does; the explicit --branch means a `never`
     // project refuses and degrades to solo below, never launches on canonical.
-    let mut cmd = crate::org_board::budget::fno_py_cmd();
+    let mut cmd = vec![crate::scrape::fno_bin().to_string_lossy().into_owned()];
     cmd.extend([
+        "agents".to_string(),
         "workspace".to_string(),
         "worktree".to_string(),
         "ensure".to_string(),

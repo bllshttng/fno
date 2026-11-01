@@ -24,10 +24,8 @@ echo "$out" | grep -qE '[0-9]+\.[0-9]+\.[0-9]+'
 echo "PASS: uv build produces installable wheel"
 
 # The events schema must SHIP inside the wheel as `fno/events/schema.yaml`
-# (ordinary package data under src/fno; no force-include), so the Python
-# validator reads its sibling from an installed artifact with no `docs/` tree
-# and no env var. Regression: a clean build that ships no schema makes
-# `import fno.events` raise from a foreign cwd.
+# (ordinary package data under src/fno; no force-include). The native build
+# and schema gate consume the same data, including from an installed wheel.
 PKG_SCHEMA=$("$TMPDIR_INSTALL/venv/bin/python" -c \
   "import fno.events as e, os; print(os.path.join(os.path.dirname(e.__file__), 'schema.yaml'))")
 test -f "$PKG_SCHEMA" || { echo "FAIL: wheel did not ship fno/events/schema.yaml"; exit 1; }
@@ -54,11 +52,11 @@ EMPTY_CWD=$(mktemp -d)
 if ( cd "$EMPTY_CWD"
      env -u FNO_REPO_ROOT -u CLAUDE_PLUGIN_ROOT -u EVENTS_SCHEMA_PATH \
        "$TMPDIR_INSTALL/venv/bin/python" -c \
-       "import fno.events as e; assert e.SCHEMA is not None, e._schema_load_error; assert e.SCHEMA.get('event_types'), 'empty schema'" ); then
+       "import fno.events as e, pathlib, yaml; schema = yaml.safe_load((pathlib.Path(e.__file__).parent / 'schema.yaml').read_text()); assert schema.get('event_types'), 'empty schema'" ); then
   rm -rf "$EMPTY_CWD"
-  echo "PASS: fno.events loads in-package schema from empty cwd"
+  echo "PASS: packaged event schema loads from empty cwd"
 else
   rm -rf "$EMPTY_CWD"
-  echo "FAIL: import fno.events did not load schema from empty cwd"
+  echo "FAIL: packaged event schema did not load from empty cwd"
   exit 1
 fi

@@ -165,7 +165,7 @@ pub(crate) fn place_note(receipt: Option<&Value>) -> String {
 /// The one slot-refusal sentence both print paths share, so a display can
 /// never quote a count the gate did not measure. Pure text; the caller adds
 /// its own tail (`refusing (--no-wait).`, or the queue line's advice). The
-/// rows are named by the probe's `slot_rows` field (`fno agents gate-status`),
+/// rows are named by the probe's `slot_rows` field (`fno agents admit status`),
 /// never by a second walk. When a reservation is counted, the sentence names
 /// the release command for the first suspect one; all-live saturation names none.
 pub(crate) fn slot_refusal_line(
@@ -195,7 +195,7 @@ pub(crate) fn slot_refusal_line(
     format!(
         "{slots} live worker slots >= {cap_clause} ({rows} registry rows, {n} headless \
          reservations{waiting_note}); leads take no slot; every counted row: fno agents \
-         gate-status, field slot_rows{remedy}; {tail}",
+         admit status, field slot_rows{remedy}; {tail}",
         cap_clause = learned.clause(),
         n = claims.len()
     )
@@ -220,7 +220,7 @@ mod tests {
     #[test]
     fn slot_refusal_line_names_the_probe_and_marks_waiting_rows() {
         let line = slot_refusal_line(3, &no_state(), 3, &[], 1, "refusing (--no-wait).");
-        assert!(line.contains("fno agents gate-status"), "{line}");
+        assert!(line.contains("fno agents admit status"), "{line}");
         assert!(line.contains("slot_rows"), "{line}");
         assert!(
             line.contains("1 of the rows wait on an operator question"),

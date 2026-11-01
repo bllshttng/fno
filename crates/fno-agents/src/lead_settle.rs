@@ -54,7 +54,7 @@ struct SettleView {
 fn settle_view(row: &Value) -> Option<SettleView> {
     let rollup = row.get("statusCheckRollup")?.as_array()?;
     let (verdict, _, counts) =
-        crate::pr_status::verdict_for(&crate::pr_status::without_coverage_statuses(rollup));
+        crate::pr_status::verdict_for(&crate::pr_status::generic_ci_rollup(rollup));
     let unsettled = counts.get("unsettled").and_then(Value::as_i64).unwrap_or(0);
     let total = counts.get("total").and_then(Value::as_i64).unwrap_or(0);
     let head = row

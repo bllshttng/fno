@@ -4,8 +4,7 @@
 //! Characterization for `spawn_bare`: the bare spawn's thread seat and fence
 //! refusal, the `--wait` grammar, the gate's waitable reasons and the sandbox
 //! write policy refusal. Each `tests/golden/bare_spawn/*.json` case holds what
-//! `cmd_spawn`'s leg answered, captured by `bare_spawn_golden_driver.py` before
-//! the seam delete removed `cmd_spawn`. The driver cannot run again.
+//! `cmd_spawn`'s leg answered, captured before the seam delete removed it.
 
 use fno_agents::duration::parse_wait_secs;
 use fno_agents::harness_capabilities::HarnessContract;

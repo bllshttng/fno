@@ -184,7 +184,7 @@ Priority is bounded to four values, so two agents disagreeing about a node produ
 
 ## Lifecycle
 
-`fno backlog ready` accepts `--created-before`, `--created-after`, `--touched-before`, and `--touched-after` with values such as `30d` or an ISO date, plus `--sort created|touched` (oldest first); touched uses `touched_at`, falling back to `created_at`. Preview the 60-day stale-idea sweep with `fno backlog ready --ideas --touched-before 60d --sort touched --json`.
+`fno backlog ready` accepts `--created-before`, `--created-after`, `--touched-before`, and `--touched-after`. Their values are forms such as `30d` or an ISO date. `--sort created|touched` lists the oldest first. Touched uses `touched_at`, then `created_at`. Preview the 60-day stale-idea sweep with `fno backlog ready --ideas --touched-before 60d --sort touched --json`. The sweep skips p0 and p1 rows, so ignore those in the preview.
 
 `intake -> triage -> ready/next -> done`, with two reversible side states:
 
@@ -250,7 +250,7 @@ Two hidden commands serve the migration and the operator:
 
 ### Epic child cap
 
-`backlog.epic_max_open_children` bounds how many open direct children one epic can hold. The graph store reads it from the config.toml beside graph.json, which is the global config on a default install. Unset means no cap.
+`backlog.epic_max_open_children` bounds how many open direct children one epic can hold. The graph store reads the global config first, then a config.toml beside the store. Unset means no cap.
 
 A child is open: not done, not superseded, not deferred. Children are direct. A sub-epic counts as one child of its parent and carries its own cap.
 
@@ -263,6 +263,8 @@ The same count reads before any write, on the `epics:` line of `fno agents org c
 ### Unplanned idea cap
 
 Machine-filed, unplanned idea rows use `backlog.max_open_ideas` in each nearest-epic scope. Rows without an epic use `project:<project>`. The default is 25. Every measured epic scope held nine or fewer ideas. A fresh install can accept a readable first batch. `0` turns the cap off. Rows with a plan, epic type, decompose group, or `source_kind = operator_request` are not capped. A refusal reports the count, cap, oldest rows, and fold path (`--wave-of`). It suggests an epic parent or closing stale ideas. Setting this key prints the Python loader's unknown-key warning until the config model carries it. Rust still reads the key at the publication seams.
+
+A wave note (`fno backlog idea --wave-of <node>`) folds a finding onto a live node and mints no id. Nothing acts on it, so it stays open until someone records where it went. `fno backlog find` searches its text. `fno backlog list wave-notes` lists the undisposed notes on closed hosts, with each note's `ts`. `--all` adds notes on hosts that closed before 2026-11-01. Nobody triaged those older notes, so they stay out of the working list. `fno backlog note dispose <host> <note-ts> --absorbed <pr>` or `--refiled <node>` records the outcome, and the note stays on its host. `fno backlog done` and `fno backlog reconcile` name a closing host's undisposed notes on stderr. They never refuse a close over them, because a merged PR has nothing left to stop. A `done` with completion flags (`--pr`, `--note`) and a `supersede` print no line. `find --fts` does not read wave text. The list still holds every such note.
 
 ## Finding work by meaning: find --fts
 
@@ -491,6 +493,8 @@ fno backlog triage health          # idea pile, stale ready, collisions, dupes
 fno backlog maintain --apply       # recurring sweep: re-scope, prune, pr_url backfill, auto-defer
 fno backlog reconcile              # close nodes whose PR merged outside the gate
 ```
+
+`reconcile` also moves a node off `in_review` when every PR on it closed without a merge. The closed PR stays on the node as an additional PR stamped `closed`, so a later reopen and merge still closes the node. The node returns to the queue, its thread gets the recovery command, and the sweep sends one notice. A live worker claim holds the node until the claim ends. To stop the work, defer the node.
 
 ### Abandoned do rows
 

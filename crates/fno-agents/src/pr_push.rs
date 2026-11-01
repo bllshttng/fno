@@ -1857,7 +1857,7 @@ exit 1
             .collect();
         assert_eq!(buckets, ["pending"], "{latest}");
         assert_eq!(
-            crate::pr_status::wait::cancel_in_flight(gh.to_str().unwrap(), dir.path(), "abc123"),
+            crate::pr_status::wait::cancel_in_flight(gh.to_str().unwrap(), dir.path(), 9, "abc123"),
             None
         );
     }

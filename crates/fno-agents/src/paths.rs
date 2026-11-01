@@ -328,19 +328,6 @@ impl AgentsHome {
         self.root.join("test-pause.json")
     }
 
-    /// Durable roster-progress sidecar (SECOND HALF): per-row git
-    /// evidence (last commit sha/age, branch-ahead, PR number) keyed by row
-    /// name, refreshed by the reconcile sweep alongside `registry.json`. A
-    /// sidecar, not new `RegistryEntry` fields, deliberately: ~20 existing
-    /// literal constructions of that struct across the crate would each need
-    /// a matching field, for data no reader needs schema-version protection
-    /// on (a stale reader simply sees no progress row, same as today). Keyed
-    /// by `name` so a future reader (t-x9de7's `agents_view.rs` render pass)
-    /// joins it the same way the registry itself is joined.
-    pub fn roster_progress_json(&self) -> PathBuf {
-        self.root.join("roster-progress.json")
-    }
-
     /// Per-scope refusal-rate trend baseline (`refusal-trend/`), beside
     /// `registry.json`. One file per scope, so concurrent beats of different
     /// teams share no document. The `lead_checkin` journal is the diff

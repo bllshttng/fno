@@ -86,14 +86,12 @@ cli.command("worked", hidden=True)(_cmd_worked)
 
 
 # Node-lifecycle sub-apps folded under backlog (unit 6 of the  reorg):
-# annotate findings and carve-out records are node metadata operations. The
-# retro harvest is native (`fno backlog retro`). The old top-level spellings stay one-release shims
+# annotate findings are node metadata operations. Carve-out records and the
+# retro harvest are native (`fno backlog carveout`, `fno backlog retro`). The old top-level spellings stay one-release shims
 # retired at the front door (command-names.tsv); the mounts below are the canonical homes.
 from fno.annotate.cli import annotate_app as _annotate_app  # noqa: E402
-from fno.carveout.cli import carveout_app as _carveout_app  # noqa: E402
 
 cli.add_typer(_annotate_app, name="annotate", hidden=True)
-cli.add_typer(_carveout_app, name="carveout", hidden=True)
 
 
 # Selection-time enforcement (): a node another session is actively
@@ -703,7 +701,7 @@ def cmd_next(
             for row in missed:
                 try:
                     from fno import paths
-                    from fno.events import append_event
+                    from fno.events.store_client import append_event
 
                     append_event(
                         build_selection_divergence_event(
@@ -1830,14 +1828,11 @@ def _done_gate_pipeline(
                 )
             # Emit refusal event (best-effort)
             try:
-                from fno import events as _evts
+                from fno.events.store_client import append_event, build_event
 
-                event = _evts.backlog_done_refused(
-                    node_id=task_id,
-                    pr_number=first_pr_number,
-                    reason=msg,
-                )
-                _evts.append_event(event)
+                append_event(build_event("backlog_done_refused", "backlog", {
+                    "node_id": task_id, "pr_number": first_pr_number, "reason": msg,
+                }))
             except Exception:
                 pass
             raise typer.Exit(code=evidence.exit_code)
@@ -1863,15 +1858,12 @@ def _done_gate_pipeline(
         )
         # Emit forced-close event (best-effort)
         try:
-            from fno import events as _evts
+            from fno.events.store_client import append_event, build_event
 
-            event = _evts.backlog_done_forced(
-                node_id=task_id,
-                force_reason=reason,
-                pr_number=first_pr_number,
-                pr_state=force_pr_state,
-            )
-            _evts.append_event(event)
+            append_event(build_event("backlog_done_forced", "backlog", {
+                "node_id": task_id, "force_reason": reason,
+                "pr_number": first_pr_number, "pr_state": force_pr_state,
+            }))
         except Exception:
             pass
     elif force:

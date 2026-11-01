@@ -61,21 +61,19 @@ pub fn admit_spawn(args: Vec<String>) -> Result<Vec<String>, i32> {
     export_worker_dirs(&cwd);
     refuse_codex_unreachable_tools(&argv, &cwd)?;
     pin_worktree_policy(&argv, &here);
-    // The scrub below removes the markers the harness is inferred from, so
-    // the inferred harness rides the argv first, as the Python leg passed it.
+    // The harness inference reads the live environment, which loses the markers
+    // below, so the inferred harness rides the argv first.
     let mut argv = argv;
     if flag_value(&argv[1..], HARNESS_FLAGS).is_none() {
         let harness = spawn_harness(&argv);
         argv.splice(1..1, ["--harness".to_string(), harness]);
     }
-    for name in crate::pane_spawn::env_wrap::AMBIENT_IDENTITY_ENV {
-        std::env::remove_var(name);
-    }
+    crate::claims::take_caller_identity(&crate::pane_spawn::env_wrap::AMBIENT_IDENTITY_ENV);
     Ok(argv)
 }
 
 /// The spawn's effective working directory: `--cwd`/`-c`, else the caller's.
-fn spawn_cwd(args: &[String], here: &Path) -> PathBuf {
+pub(crate) fn spawn_cwd(args: &[String], here: &Path) -> PathBuf {
     flag_value(&args[1..], &["--cwd", "-c"])
         .filter(|c| !c.is_empty())
         .map(PathBuf::from)
@@ -256,7 +254,7 @@ pub fn worker_writable_dirs(cwd: &Path) -> Vec<String> {
 /// Publish the grants for the worker argv builders. An empty set CLEARS the
 /// carrier: a spawn made from inside a worker inherits its parent's value,
 /// another project's directories, which must never ride as this one's grant.
-fn export_worker_dirs(cwd: &Path) {
+pub(crate) fn export_worker_dirs(cwd: &Path) {
     let dirs = worker_writable_dirs(cwd);
     if dirs.is_empty() {
         std::env::remove_var(WORKER_ADD_DIRS_ENV);
@@ -268,7 +266,7 @@ fn export_worker_dirs(cwd: &Path) {
 
 /// A `--cwd` naming a repo no project declares pins the worktree policy to
 /// `never` for this spawn and prints the receipt. An operator-set policy wins.
-fn pin_worktree_policy(args: &[String], here: &Path) {
+pub(crate) fn pin_worktree_policy(args: &[String], here: &Path) {
     if std::env::var_os("FNO_WORKTREE_POLICY").is_some_and(|v| !v.is_empty()) {
         return;
     }

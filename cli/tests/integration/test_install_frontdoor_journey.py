@@ -177,6 +177,15 @@ def clean_machine(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path
         'if [ "${1:-}" = "backlog" ] && [ -n "${FNO_AGENTS_FRONT:-}" ]; then\n'
         '  exec "$FNO_AGENTS_FRONT" "$@"\n'
         "fi\n"
+        # Mirrors `agents_client_route.rs`: the compiled front strips the
+        # leading `agents` word before handing `claim ...` to its Python or
+        # native leg (fno's own `claim` group is flat, never nested under
+        # `agents`). This shim stands in for `fno` on PATH for the init
+        # flow's own internal subprocess call, so it must strip it too.
+        'if [ "${1:-}" = "agents" ] && [ "${2:-}" = "claim" ] && [ -n "${FNO_AGENTS_FRONT:-}" ]; then\n'
+        "  shift\n"
+        '  exec "$FNO_AGENTS_FRONT" "$@"\n'
+        "fi\n"
         + shlex.quote(sys.executable)
         + " -c 'from fno.cli import app; app()' \"$@\"\n"
     )
@@ -251,13 +260,16 @@ def test_authorized_target_init_journey(clean_machine):
 
     # 4. The manifest readback: written under the ISOLATED state root and
     #    preserving this input. A proven harness identity adds the node claim.
-    #    Three candidate roots: repo-local (<repo>/.fno/, where a default
-    #    resolve writes it - the CI runner's case), the isolated HOME's spaces
-    #    dir, and the conftest autouse sandbox's tmp/spaces pin (which of the
-    #    three wins is fixture-ordering and config dependent). The
+    #    Candidate roots: repo-local flat (<repo>/.fno/target-state.md), the
+    #    repo-local state dir's OWN spaces nesting (FNO_STATE_DIR=<repo>/.fno
+    #    resolves to <repo>/.fno/spaces/<slug>/target-state.md, which is what
+    #    this test's explicit FNO_STATE_DIR actually produces), the isolated
+    #    HOME's spaces dir, and the conftest autouse sandbox's tmp/spaces pin
+    #    (which of these wins is fixture-ordering and config dependent). The
     #    node-matching manifest is the assertion, not the path.
     manifests = (
         [repo / ".fno" / "target-state.md"]
+        + list(repo.glob(".fno/spaces/*/target-state.md"))
         + list(home.glob(".fno/spaces/*/target-state.md"))
         + list(home.parent.glob("spaces/*/target-state.md"))
         # A state root that resolves from the process CWD lands one .fno
@@ -281,7 +293,7 @@ def test_authorized_target_init_journey(clean_machine):
     # 5. The claim readback: the claims store answers for this exact key. When
     #    the run carries a provable harness session, the claim is still live;
     #    from a bare shell it correctly died with the init that made it.
-    claim = _run_fno(repo, home, "agents", "claim", "status", f"node:{node}")
+    claim = _run_fno(repo, home, "claim", "status", f"node:{node}")
     assert claim.returncode == 0, claim.stderr
     if _HARNESS_SESSION_ID:
         assert '"state": "live"' in claim.stdout, claim.stdout

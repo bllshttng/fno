@@ -21,7 +21,9 @@ pub mod birth;
 pub mod calibration;
 pub mod calibration_cli;
 pub mod capture;
+pub mod carveout;
 pub mod cli;
+pub(crate) mod closed_unmerged;
 pub(crate) mod closures;
 pub mod collision;
 pub mod commands;
@@ -102,6 +104,7 @@ pub mod triage_health;
 pub mod undispatched;
 pub mod update_cli;
 pub mod update_ops;
+pub mod wave_notes;
 pub mod worked;
 pub mod workflows;
 

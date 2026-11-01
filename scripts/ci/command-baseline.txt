@@ -35,16 +35,6 @@
 # read from its dispatchers and cross-checked against the live binary, but its
 # FLAGS are not enumerated, so a hidden flag on a mux command is invisible to this
 # gate. The lint output names that boundary on every green run.
-agents
-agents ask !--provider
-agents list !--provider
-agents logs
-agents loop
-agents loop-check
-agents needs
-agents resume !--cross-project
-agents rm !--audit-actor !--audit-reason !--audit-reclaimed-bytes !--audit-request-id !--audit-worktree-touched
-agents spawn
 annotate
 annotate list
 approvals
@@ -55,7 +45,6 @@ backlog get
 backlog next
 backlog queued
 bundle
-carveout
 claim
 claim release
 config
@@ -68,8 +57,6 @@ do
 doctor
 done
 evals
-event
-event emit
 fno-agents
 help
 inbox approvals decide

@@ -24,7 +24,7 @@ def test_help_root_matches_dashdash_help():
     assert via_dashdash.exit_code == 0
     # Advertised commands appear in both curated catalogs (x-71b6 tiering).
     # `setup` moved under `config` (unit 6, x-9d6c) and left the menu.
-    for needle in ("backlog", "agents", "config", "doctor"):
+    for needle in ("backlog", "config", "doctor"):
         assert needle in via_help.output, f"missing {needle} in `fno help` output"
         assert needle in via_dashdash.output, f"missing {needle} in `fno --help` output"
     # Hidden commands are reachable only through the full-surface door.

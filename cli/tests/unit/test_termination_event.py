@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from fno.events import ValidationError, validate
+from fno.events.store_client import ValidationError, validate
 
 
 def test_unknown_termination_reason_fails_loud() -> None:

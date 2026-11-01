@@ -1073,7 +1073,7 @@ def _unharvested_deferred_carveouts(cwd: Optional[str]) -> list[dict]:
     """
     root = _carveout_ledger_root(cwd)
     try:
-        from fno.carveout.core import read_carveouts
+        from fno.rust_binary import read_carveouts
 
         return read_carveouts(root, kind="deferred")
     except Exception:
@@ -1097,9 +1097,9 @@ def _carveout_ledger_root(cwd: Optional[str]) -> Path:
         except Exception:
             pass
     try:
-        from fno.carveout.core import resolve_carveout_root
+        from fno.paths import resolve_canonical_repo_root
 
-        return resolve_carveout_root()
+        return resolve_canonical_repo_root()
     except Exception:
         return Path(cwd) if cwd else Path.cwd()
 
@@ -1519,17 +1519,12 @@ def emit_session_satisfied_for_record(
 
     events_path = state_path.parent / "events.jsonl"
     try:
-        from fno import events
+        from fno.events.store_client import build_event, emit_envelope
 
-        event = events.session_satisfied(
-            trigger="pr_merge",
-            reason=reason,
-            session_id=session_id,
-            gate_state_hash=gate_state_hash,
-            evidence_url=record.pr_url,
-            source="backlog",
-        )
-        from fno.events.store_client import emit_envelope
+        event = build_event("session_satisfied", "backlog", {
+            "source": "pr_merge", "reason": reason, "session_id": session_id,
+            "gate_state_hash": gate_state_hash, "evidence_url": record.pr_url,
+        }, builder="session_satisfied")
 
         emit_envelope(event, events_path)
     except Exception as exc:  # best-effort: never abort the close on emit failure
@@ -1553,7 +1548,7 @@ def emit_human_touch_for_record(record: MergeDriftRecord) -> Optional[Path]:
     diagnostic and never aborts the close.
     """
     try:
-        from fno.events import _build
+        from fno.events.store_client import build_event as _build
 
         event = _build(
             "human_touch",

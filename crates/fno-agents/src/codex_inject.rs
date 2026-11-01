@@ -781,9 +781,7 @@ fn review_start_audit_fields_with_origin_and_self(
         .get("payload")
         .and_then(|value| value.as_str())
         .unwrap_or_default();
-    let command = payload
-        .strip_prefix('/')
-        .and_then(|_| payload.split_whitespace().next());
+    let command = crate::mail_inject::raw_inject_command(payload);
     fields.insert("verb".into(), command.map(str::to_string).into());
     fields.insert("self_send".into(), self_send.into());
     if let Some(sender) = audit_sender {
@@ -2288,6 +2286,16 @@ mod tests {
         assert_eq!(fields["lane"], "codex-review-start");
         assert_eq!(fields["confirmed"], true);
         assert_eq!(fields["verb"], "/review");
+        let dollar = review_start_audit_fields(
+            "thread-1",
+            "baseBranch:origin/main",
+            ReviewDelivery::Inline,
+            Some("$fno:review medium"),
+            None,
+            None,
+            None,
+        );
+        assert_eq!(dollar["verb"], "$fno:review");
         assert_eq!(fields["self_send"], false);
         assert!(!fields.contains_key("reason"));
 

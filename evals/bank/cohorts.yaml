@@ -35,7 +35,12 @@
 # Re-pinned for the first stored climb: a renamed hello task and a
 # lane-blueprint edit had moved the bank since the slice-5 pin, so runs
 # were refused until the pin named current main.
-bank_rev: 98955860bcee6fd542eaeeb8cb5ccf3999047805
+#
+# Re-pinned for the goldens: the pin had gone stale when PR 4256 edited bank
+# files, which refused every `run`, the regression tier included. Goldens sit
+# outside the split. This sha is the branch commit that added them, which stays
+# reachable because this repo merges with merge commits.
+bank_rev: 113c991673a9d559e560ef76d7c43c19a8e41393
 
 train:
   - capability-lane-blueprint

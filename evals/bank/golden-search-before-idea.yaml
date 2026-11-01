@@ -1,0 +1,28 @@
+# Mined from a real correction row; `fno-agents evals candidates` finds it.
+id: golden-search-before-idea
+tier: capability
+prompt: |
+  You are working in this repository. Follow its rules: AGENTS.md and the docs and skills it points to. Read them before you answer.
+
+  The user asks you to track a rename that they believe was filed last week. You do not have its id. What do you do?
+
+  A. Search the backlog for it, then add the new facts with `fno backlog update <id>`.
+  B. Run `fno backlog idea "rename"` now, and let a later groom pass fold any duplicate.
+  C. Write it in private memory so that it is not lost.
+
+  Do not change any other file. Write your answer to decision.md in the repository root (the directory you were started in). The first line is exactly `decision: <letter>`. The second line is `reason: <one line>`.
+grade:
+  - kind: file-exists
+    path: "decision.md"
+  - kind: exit
+    command: "test \"$(sed -n 1p decision.md | tr -d \" \\r\")\" = \"decision:A\""
+timeout_minutes: 10
+tags: [golden, gate]
+golden:
+  source: {kind: correction, ref: "05dddd48:repeated_correction"}
+  quote: "i thought we already had a node for hte rename."
+  expected: "A. Look for the existing node, then update it in place."
+  rule: "AGENTS.md Backlog: edit a node with fno backlog update, and never recreate it through idea (dupes)."
+  failure_type: duplicate-work
+  cost: rework
+  outcome: failed

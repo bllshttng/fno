@@ -1017,11 +1017,17 @@ fn generated_section(p: &Payload, _cwd: &Path) -> Sec {
         return Sec::Allow;
     }
     for t in &targets {
-        if let Some(reason) = generated_target(t, &p.cwd) {
+        if let Some(reason) = generated_target(t, &p.cwd, &p.command) {
             return Sec::Block(reason);
         }
     }
     Sec::Allow
+}
+
+/// A row whose regen redirects into its own target reads as a write. Only the
+/// row's whole command passes, so nothing can chain behind it.
+fn runs_the_regen(command: &str, regen: &str) -> bool {
+    command.trim() == regen.trim()
 }
 
 fn trace_gen(msg: &str) {
@@ -1030,7 +1036,7 @@ fn trace_gen(msg: &str) {
     }
 }
 
-fn generated_target(t: &str, payload_cwd: &str) -> Option<String> {
+fn generated_target(t: &str, payload_cwd: &str, command: &str) -> Option<String> {
     let abs = if t.starts_with('/') {
         PathBuf::from(t)
     } else {
@@ -1120,6 +1126,9 @@ fn generated_target(t: &str, payload_cwd: &str) -> Option<String> {
                 }
                 if bash_glob_match(fields[0], &rel) {
                     let (source, regen) = (fields[1], fields[2]);
+                    if runs_the_regen(command, regen) {
+                        return None;
+                    }
                     let mut message = format!(
                         "{rel} is generated from {source}. The next `{regen}` run overwrites an edit here. Edit {source}, then run `{regen}`."
                     );
@@ -1409,5 +1418,13 @@ mod tests {
         ));
         assert!(matches!(r2, Sec::Block(_)), "a second redirect must refuse");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn only_the_whole_regen_command_passes_the_generated_guard() {
+        let regen = "cargo run --bin x -- table > docs/loops.md";
+        assert!(runs_the_regen(&format!(" {regen}\n"), regen));
+        assert!(!runs_the_regen(&format!("{regen}; rm -rf docs"), regen));
+        assert!(!runs_the_regen("echo hand edit > docs/loops.md", regen));
     }
 }

@@ -30,11 +30,12 @@ pub fn run_registry_json(rest: &[String], home: &AgentsHome) -> i32 {
 /// its output. One row per registry row: the eight stored keys Python's
 /// `cmd_registry_json` emitted, plus the two SERVED liveness fields derived
 /// here by the vendored freshness rule (`served_liveness.rs`), never passed
-/// through raw -- past the window the word is withheld and the basis says
-/// why. A stored row's own `liveness` field is the measurement INPUT, not
-/// the served word; both served keys shadow it. Keys serialize in the
-/// `json!{}` macro's literal field order (`preserve_order` is on for this
-/// crate); consumers read by key, never by position.
+/// through raw -- past the window (or with no measurement at all) the word
+/// reads `unknown` and the basis says why. A stored row's own `liveness`
+/// field is the measurement INPUT, not the served word; both served keys
+/// shadow it. Keys serialize in the `json!{}` macro's literal field order
+/// (`preserve_order` is on for this crate); consumers read by key, never by
+/// position.
 pub(crate) fn registry_json_logic(rows: &[Value]) -> Value {
     let agents: Vec<Value> = rows
         .iter()
@@ -104,15 +105,16 @@ mod tests {
     }
 
     #[test]
-    fn stale_stamps_withhold_the_word_and_say_so() {
+    fn stale_stamps_serve_unknown_and_say_so() {
         // The republished-word trap (served_liveness.rs): an old `alive`
-        // must never read as current.
+        // must never read as current - and a null made a payload whose own
+        // basis read `stale` count a full fleet as zero alive.
         let out = registry_json_logic(&[row(json!({
             "harness_session_id": "s-1",
             "liveness": "alive", "liveness_measured_at": z_stamp(121),
         }))]);
         let a = &out["agents"][0];
-        assert_eq!(a["liveness"], Value::Null);
+        assert_eq!(a["liveness"], "unknown");
         assert_eq!(a["liveness_basis"], "stale");
     }
 

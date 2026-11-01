@@ -55,6 +55,7 @@ mod agent_lock;
 pub mod agent_ref;
 pub mod agents_config;
 pub(crate) mod agents_event;
+pub mod agents_seam;
 pub mod agents_top;
 pub mod agy_ask;
 pub mod agy_hooks;
@@ -79,6 +80,7 @@ pub mod attention_reply;
 pub mod attention_route;
 pub mod attest;
 pub mod authorized_merge;
+pub mod autonomy_policy;
 pub mod autonomy_status;
 pub mod backlog;
 pub mod backlog_ready;
@@ -102,6 +104,7 @@ pub mod cargo_build_dirs;
 pub(crate) mod cargo_builds;
 pub(crate) mod cargo_orphans;
 pub mod census;
+pub mod census_reads;
 pub mod chats;
 pub mod check_supersession;
 pub mod ci_cadence;
@@ -161,7 +164,11 @@ pub mod context_audit;
 pub mod context_run;
 pub mod context_window;
 pub mod convert;
+pub mod correction_detect;
+pub mod correction_fold;
 pub mod correction_meter;
+pub mod correction_outcome;
+pub mod correction_readings;
 pub mod corrections_verify;
 pub mod cursor_agent;
 pub mod cutover;
@@ -173,6 +180,7 @@ pub mod decision_trace;
 pub mod delivery_completion;
 pub mod delivery_eval;
 pub mod digest;
+pub mod discovered_sessions;
 pub mod dispatch_credit;
 pub mod dispatch_harness;
 pub mod disposition_gate;
@@ -190,7 +198,11 @@ pub mod eval_part4;
 pub mod eval_reap;
 pub mod evals;
 pub mod evals_arm;
+pub mod evals_candidates;
 pub mod evals_climb;
+pub mod evals_compare;
+pub mod evals_drafts;
+pub mod evals_gate;
 pub mod evals_macro;
 pub mod evals_qualification;
 pub mod evals_trend;
@@ -269,6 +281,7 @@ pub mod intel_corpus;
 pub mod intel_html;
 pub mod intel_insights;
 pub mod intel_lens;
+pub mod intel_plans;
 pub mod intel_rollup;
 pub mod intel_rules_lens;
 pub mod intel_scorecard;
@@ -485,6 +498,7 @@ pub mod quarantine;
 pub mod question_bus;
 pub mod question_clear;
 pub mod question_intake;
+pub mod question_judge;
 pub mod question_ladder;
 pub mod question_sweep;
 pub mod quiet_retire;
@@ -496,6 +510,7 @@ pub mod reap_render;
 pub mod receipt;
 pub mod receipt_policy;
 pub mod reclaim;
+pub mod recovery_sweep;
 pub mod reentry;
 pub mod refusal_rate;
 pub mod refusal_trend;
@@ -523,6 +538,7 @@ pub mod resume_receipt;
 pub(crate) mod resume_route;
 pub mod resume_wake;
 pub mod retask;
+pub(crate) mod retired_lead;
 pub mod retro;
 pub mod review_capability;
 pub mod review_doors;
@@ -541,7 +557,6 @@ pub mod role_cwd;
 pub mod role_grant;
 pub mod role_migration;
 pub mod roles;
-pub mod roster_progress;
 pub mod roster_reap;
 pub mod route_capacity;
 pub mod route_gather;
@@ -555,6 +570,7 @@ pub mod row_verdict;
 pub mod rules;
 pub mod rules_check;
 pub mod rules_source;
+pub mod run_import;
 pub mod run_outcome;
 pub mod run_state;
 pub mod rundown;
@@ -578,6 +594,7 @@ pub(crate) mod session_receipt;
 pub mod session_report;
 pub mod session_start_bytes;
 pub mod session_truth;
+pub mod silence_sweep;
 pub mod single_flight;
 pub mod skill_diff;
 pub mod skill_drift;
@@ -615,6 +632,7 @@ pub mod spawn_transaction;
 pub(crate) mod spawn_watch;
 pub mod stability_report;
 pub(crate) mod stacked_base_stamp;
+pub mod stale_lane;
 pub mod stale_spaces;
 pub mod stalls;
 pub mod state;
@@ -706,6 +724,7 @@ pub mod wake_name;
 pub mod wake_read;
 pub mod watch;
 pub mod watch_expiry;
+pub mod watchdog;
 pub mod wave;
 pub mod whoami;
 pub mod worked_nodes;
@@ -1917,6 +1936,9 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     "lead_wake_refused",
     "lead_spawned_successor",
     "worker_wake",
+    // The first read that finds a worker past its silence deadline
+    // (silence_sweep.rs).
+    "worker_silent",
     // A landed push and the ci_cadence arm's read of it (ci_cadence.rs).
     "pr_push_landed",
     "ci_cadence_check",
@@ -1931,6 +1953,9 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // user's look clears (look_hold.rs).
     "look_hold_cancel",
     "look_hold_release",
+    // A wait or cadence red-cancel of a head's runs in flight
+    // (pr_status/wait.rs), with the failing checks that caused it.
+    "ci_wait_cancel",
     // A PR queued in place of a merge, and the merge queue arm's acts
     // (merge_queue.rs).
     "merge_queue_entry",
@@ -2372,3 +2397,9 @@ fn boot_ms_from(sec: i64, usec: i64) -> Option<i64> {
     }
     Some(sec * 1000 + usec / 1000)
 }
+
+#[cfg(test)]
+#[path = "../codegen/event_retention.rs"]
+mod event_retention_tests;
+
+mod repo_identity;

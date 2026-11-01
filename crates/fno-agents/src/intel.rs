@@ -952,9 +952,12 @@ pub fn run_intel(args: &[String]) -> i32 {
     if args.iter().any(|a| a == "--receipt") {
         return crate::session_receipt::run(args);
     }
+    if args.iter().any(|a| a == "--plans" || a == "--plans-ladder") {
+        return crate::intel_plans::run(args);
+    }
     if args
         .iter()
-        .any(|a| a == "--corpus" || a == "--corpus-ingest")
+        .any(|a| a == "--corpus" || a == "--corpus-ingest" || a == "--corrections-sample")
     {
         return crate::intel_corpus::run(args);
     }
@@ -1003,6 +1006,10 @@ pub fn run_intel(args: &[String]) -> i32 {
              pages to check by hand, and manifest.json (counts, scrub drops, leaks).\n\
              It refuses while the pages hold ticked items. --corpus-ingest <dir> reads\n\
              the ticked items and writes eval.jsonl. Nothing leaves the machine.\n\n\
+             --plans-ladder scores the fixed set in ~/.fno/evals/plan-labels/ladder-set.jsonl\n\
+             on fnod, then --teacher-url, then --hosted NAME=COMMAND, and stops at the\n\
+             first pass. --plans [--limit N] [--dry-run] labels plan premises with the\n\
+             winner and refuses, printing each score, when no rung passed.\n\n\
              --lens decisions traces every ruling in the window through four questions\n\
              from records, never model judgment: who issued it, where its authority\n\
              came from (witnessed_operator, law_citation, succession_event, relayed, or\n\

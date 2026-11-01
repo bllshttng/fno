@@ -42,7 +42,7 @@ def test_emit_event_writes_real_event_to_events_jsonl(tmp_path: Path) -> None:
     silently dropped.
     """
     from fno.pr_watch.cli import _emit_event
-    from fno.events import validate
+    from fno.events.store_client import validate
 
     events_path = tmp_path / "events.jsonl"
     _emit_event(
@@ -302,8 +302,8 @@ def test_master_switch_off_also_stops_the_recovery_sweep(monkeypatch) -> None:
     """x-aaaf wave 3: config.recovery.enabled=True alone used to be enough to
     fire the respawn sweep even with the master switch off -- a guard checked
     independently of the panic switch it was supposed to obey. Assert the
-    sweep function is never called when autonomy.enabled is False, even
-    though recovery's own gate is armed."""
+    sweep door is never called when autonomy.enabled is False, even though
+    recovery's own gate is armed."""
     import typer
     from typer.testing import CliRunner
 
@@ -327,16 +327,19 @@ def test_master_switch_off_also_stops_the_recovery_sweep(monkeypatch) -> None:
     monkeypatch.setattr(prcli, "load_settings", lambda: settings, raising=True)
 
     called = []
-    monkeypatch.setattr(
-        "fno.recovery.run_recovery_sweep", lambda *a, **kw: called.append(1), raising=True
-    )
+
+    def _door(_command, args=(), **_kw):
+        called.extend(args)
+        return None, {}
+
+    monkeypatch.setattr("fno.rust_binary.call_binary_json", _door, raising=True)
 
     app = typer.Typer()
     app.command()(prcli.tick)
     res = CliRunner().invoke(app, [])
 
     assert res.exit_code == 0, res.output
-    assert not called, "recovery sweep must not fire when the master switch is off"
+    assert "recovery-sweep" not in called, "recovery sweep must not fire when the master switch is off"
 
 
 def test_cli_passes_the_resolved_enabled_flag_to_dispatch_tick(monkeypatch) -> None:
@@ -510,8 +513,10 @@ def _run_merge_tick_with_counts(monkeypatch, counts, *, queue_call=None, load_pe
     monkeypatch.setattr(prcli, "load_settings", lambda: settings)
     monkeypatch.setattr(
         "fno.pr_watch._dispatch.tick", lambda **_kw: TickResult(open_prs=1, acted=0))
-    monkeypatch.setattr("fno.agents.watchdog.lane_armed", lambda _s: False)
-    monkeypatch.setattr("fno.agents.watchdog.lane_off_detail", lambda _s: "off")
+    monkeypatch.setattr(
+        "fno.rust_binary.call_binary_json",
+        lambda *_a, **_kw: (None, {"armed": False, "off_detail": "off"}),
+    )
     monkeypatch.setattr(prcli.os, "getloadavg", lambda: (load_per_core,) * 3)
     monkeypatch.setattr(prcli.os, "cpu_count", lambda: 1)
     monkeypatch.setattr(prcli, "_catchup_roots", lambda: [])
@@ -601,9 +606,10 @@ def test_fleet_tail_phases_stagger_across_three_ticks(monkeypatch, _no_global_ti
         "fno.pr_watch._dispatch.tick",
         lambda **_k: TickResult(open_prs=0, acted=0),
     )
-    monkeypatch.setattr("fno.agents.watchdog.lane_armed", lambda _s: False)
     monkeypatch.setattr(
-        "fno.agents.watchdog.lane_off_detail", lambda _s: "off for the test")
+        "fno.rust_binary.call_binary_json",
+        lambda *_a, **_kw: (None, {"armed": False, "off_detail": "off for the test"}),
+    )
     monkeypatch.setattr(prcli, "_catchup_roots", lambda: [])
 
     app = typer.Typer()
@@ -693,9 +699,8 @@ def test_armed_breaker_completes_the_tick(monkeypatch, _no_global_tick_events, t
     monkeypatch.setattr(prcli, "_run_notify_watch_phase",
                         lambda _roots=None, timeout_s=None, **_kw: None, raising=True)
     monkeypatch.setattr(prcli, "_catchup_roots", lambda: [], raising=True)
-    monkeypatch.setattr(prcli, "_watchdog_recovery_roots", lambda: [], raising=True)
     monkeypatch.setattr(prcli, "_STRANDED_FLOOR_S", 10_000.0, raising=True)
-    monkeypatch.setattr(prcli, "_ROSTER_FLOOR_S", 10_000.0, raising=True)
+    monkeypatch.setattr("fno.rust_binary.call_binary_json", lambda *_a, **_kw: (None, {}))
 
     app = typer.Typer()
     app.command()(prcli.tick)

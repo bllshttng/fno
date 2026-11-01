@@ -50,7 +50,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 pub(crate) use crate::territory::compile_scope_ids;
-pub(crate) use budget::{fno_py_cmd, now_secs_board, run_json, Budget, HAND_RUN_BUDGET_MS};
+pub(crate) use budget::{now_secs_board, Budget, HAND_RUN_BUDGET_MS};
 pub(crate) use claims::read_claims;
 pub(crate) use classify::{entry_by_id, node_has_pr, read_claimed_nodes};
 pub(crate) use prs::{read_pr_gates, read_prs};
@@ -871,9 +871,7 @@ pub fn read_board(opts: &BoardOpts) -> Value {
                     all: true,
                     repo_root: crate::paths::canonical_repo_root(&cwd)
                         .map(|p| p.display().to_string()),
-                    staleness_days: crate::backlog_ready::configured_staleness_days(
-                        &cwd.join(".fno"),
-                    ),
+                    staleness_days: crate::backlog_ready::store_staleness_days(),
                     claimed,
                     now_ms: crate::claims::now_ms(),
                     ..Default::default()
@@ -1059,19 +1057,21 @@ pub fn read_board(opts: &BoardOpts) -> Value {
                                     }
                                 }
                             }
-                            let mut cmd = fno_py_cmd();
-                            cmd.extend([
-                                "agents".to_string(),
-                                "distress-verdicts".to_string(),
-                                "--sessions".to_string(),
-                                serde_json::to_string(&sessions)
-                                    .unwrap_or_else(|_| "[]".to_string()),
-                            ]);
                             let verdict_bound = Budget::spawn_bound(dl);
                             let verdict_payload = if verdict_bound.is_zero() {
                                 SourceRead::err(spent_err.clone())
                             } else {
-                                run_json(cmd, &cwd, verdict_bound)
+                                // The sweep can outlast the board's budget, so it
+                                // reads on its own thread and a late answer drops.
+                                let (tx, rx) = std::sync::mpsc::channel();
+                                std::thread::spawn(move || {
+                                    let _ =
+                                        tx.send(crate::watchdog::cli::distress_verdicts(&sessions));
+                                });
+                                match rx.recv_timeout(verdict_bound) {
+                                    Ok(payload) => SourceRead::ok(payload),
+                                    Err(_) => SourceRead::err(spent_err.clone()),
+                                }
                             };
                             let verdicts: HashMap<String, String> = mail_candidates
                                 .iter()

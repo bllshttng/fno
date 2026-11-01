@@ -13,6 +13,7 @@ crates/fno/src/live_store_fence.rs	crates/fno-agents/src/live_store_fence.rs	car
 crates/fno/src/store_conn.rs	crates/fno-agents/src/store_conn.rs	cargo build --manifest-path crates/fno-agents/Cargo.toml
 crates/fno/src/provider_key.rs	crates/fno-agents/src/provider_key.rs	cargo build --manifest-path crates/fno-agents/Cargo.toml
 crates/fno/src/effect_map.rs	crates/fno-agents/src/effect_map.rs	cargo build --manifest-path crates/fno-agents/Cargo.toml
+crates/fno/src/repo_identity.rs	crates/fno-agents/src/repo_identity.rs	cargo build --manifest-path crates/fno-agents/Cargo.toml
 crates/fno/src/footnote_transcript.rs	crates/fno-agents/src/footnote_transcript.rs	cargo build --manifest-path crates/fno-agents/Cargo.toml
 cli/src/fno/agents/merge_posture.toml	crates/fno-agents/src/merge_posture.toml	cargo build --manifest-path crates/fno-agents/Cargo.toml
 cli/src/fno/ambient_vocab.toml	crates/fno-agents/src/ambient_vocab.toml	cargo build --manifest-path crates/fno-agents/Cargo.toml

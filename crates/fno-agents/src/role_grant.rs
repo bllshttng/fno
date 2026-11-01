@@ -448,6 +448,9 @@ pub fn promote(home: &AgentsHome, handle: &str, scopes: &[String]) -> Result<Val
         Ok(reg.entries.clone())
     })
     .map_err(|e| format!("the registry write failed: {e}"))??;
+    if let Some(session) = resolved_target.harness_session_id.as_deref() {
+        crate::retired_lead::clear(home, session);
+    }
 
     // Clear the vacated manifest BEFORE arming missions: a role killed between
     // the commit and a slow arm would otherwise leave a phantom role on disk.
@@ -642,6 +645,7 @@ pub fn reclaim_role(home: &AgentsHome, handle: Option<&str>) -> Result<Value, St
     let projects = projects();
     let holder_name = holder.name.clone();
     let holder_key = holder_session(&holder).unwrap_or_else(|| holder_name.clone());
+    let mut reclaimed_session: Option<String> = None;
     let receipt = crate::state::update_registry(&home.registry_json(), |reg| {
         let live = locked(&mut reg.entries, &holder).map(|r| r.clone());
         let Some(live) = live.filter(|r| !terminal(r)) else {
@@ -722,6 +726,7 @@ pub fn reclaim_role(home: &AgentsHome, handle: Option<&str>) -> Result<Value, St
         }
         let returned_by = holder_session(&live).unwrap_or_else(|| live.name.clone());
         let armed = arm_manifest(&target, &scope, level, &returned_by);
+        reclaimed_session = target.harness_session_id.clone();
         for row in reg.entries.iter_mut() {
             if row.name == holder_name {
                 row.role_level = None;
@@ -744,6 +749,9 @@ pub fn reclaim_role(home: &AgentsHome, handle: Option<&str>) -> Result<Value, St
         Ok(receipt)
     })
     .map_err(|e| format!("the registry write failed: {e}"))??;
+    if let Some(session) = reclaimed_session.as_deref() {
+        crate::retired_lead::clear(home, session);
+    }
     remove_manifest(&scope, &holder.cwd, &holder_key);
     Ok(receipt)
 }

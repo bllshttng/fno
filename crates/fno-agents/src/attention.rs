@@ -372,7 +372,7 @@ fn project_of(cwd: &str) -> String {
 /// machine-internal dedupe bracket dropped (`[watchdog-stale:key] prose` ->
 /// `prose`); a marker-only first line yields the next prose line. The stored
 /// body keeps the full text - the bracket is the `already_asked` dedupe key
-/// (`fno.agents.stale_escalate.already_asked` folds it), so it never leaves
+/// (the stale-escalate fold reads it), so it never leaves
 /// the body, only the title.
 pub(crate) fn display_title(question: &str) -> String {
     let mut lines = question.lines().map(str::trim).filter(|l| !l.is_empty());

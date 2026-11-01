@@ -21,7 +21,6 @@ from typing import Any, Callable, Literal, Optional
 
 from fno import _subprocess_util
 from fno.agents.naming import dispatch_agent_name
-from fno.events import MAX_DATA_BYTES as _EVENT_MAX_DATA_BYTES
 
 log = logging.getLogger(__name__)
 
@@ -83,10 +82,6 @@ class TickResult:
     # an absent instrument rather than reading the absence as a low budget.
     quota_unknown: bool = False
 
-
-# Receipts chunk below the authoritative event ceiling (fno.events reads it
-# from schema.yaml), leaving envelope headroom, so the two budgets move together.
-_INLINE_RECEIPT_MAX_BYTES = _EVENT_MAX_DATA_BYTES - _EVENT_MAX_DATA_BYTES // 4
 
 # The durable-grant merge queue's receipt surface, ported with the residue
 # when the pr/_merge module died (pr port 7): the terminal-exemption reason
@@ -236,14 +231,14 @@ def _receipt_detail_items(receipt: dict[str, Any]) -> list[dict[str, str]]:
     return items
 
 
-def _chunk_receipt_items(items: list[dict[str, str]]) -> list[list[dict[str, str]]]:
+def _chunk_receipt_items(items: list[dict[str, str]], limit: int) -> list[list[dict[str, str]]]:
     """Pack exact facts below the event payload ceiling with ample envelope room."""
     chunks: list[list[dict[str, str]]] = []
     current: list[dict[str, str]] = []
     current_bytes = 256
     for item in items:
         item_bytes = len(json.dumps(item, separators=(",", ":")).encode("utf-8")) + 1
-        if current and current_bytes + item_bytes > _INLINE_RECEIPT_MAX_BYTES:
+        if current and current_bytes + item_bytes > limit:
             chunks.append(current)
             current = []
             current_bytes = 256
@@ -258,14 +253,18 @@ def _emit_tick_receipt(
     emit: Callable[[str, dict], Optional[bool]], receipt: dict[str, Any]
 ) -> None:
     """Emit one inline receipt or bounded exact-detail chunks plus a summary."""
+    from fno.events.store_client import _native_json
+
+    maximum = _native_json(["schema"], "schema")["max_data_bytes"]
+    limit = maximum - maximum // 4
     encoded = json.dumps(receipt, separators=(",", ":")).encode("utf-8")
-    if len(encoded) <= _INLINE_RECEIPT_MAX_BYTES:
+    if len(encoded) <= limit:
         if emit("pr_watch_tick", receipt) is False:
             raise RuntimeError("pr-watch tick receipt emission failed")
         return
 
     receipt_id = uuid.uuid4().hex
-    chunks = _chunk_receipt_items(_receipt_detail_items(receipt))
+    chunks = _chunk_receipt_items(_receipt_detail_items(receipt), limit)
     for index, items in enumerate(chunks, start=1):
         emitted = emit(
             "pr_watch_sweep_chunk",
@@ -400,7 +399,7 @@ def fire_skill(
         cmd = [seam_cmd]
     else:
         cmd = [
-            *_subprocess_util.fno_py_cmd(),
+            *_subprocess_util.fno_cmd(),
             "agents",
             "spawn",
             "--once",

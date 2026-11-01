@@ -1,0 +1,438 @@
+{
+ "now": 1789400000.0,
+ "session": [
+  {
+   "label": "empty",
+   "text": "",
+   "tz": null,
+   "expect": null
+  },
+  {
+   "label": "connection drop",
+   "text": "API Error: Connection closed mid-response",
+   "tz": null,
+   "expect": {
+    "error_class": "unknown",
+    "raw_status": null,
+    "raw_exit_code": null,
+    "body_excerpt": "API Error: Connection closed mid-response",
+    "triggers_swap": false,
+    "model": null,
+    "resets_at": null,
+    "reset_stamp_unparsed": null,
+    "reset_is_derived": false
+   }
+  },
+  {
+   "label": "rate limit",
+   "text": "API Error: rate limit exceeded",
+   "tz": null,
+   "expect": {
+    "error_class": "provider_4xx_quota",
+    "raw_status": null,
+    "raw_exit_code": null,
+    "body_excerpt": "API Error: rate limit exceeded",
+    "triggers_swap": true,
+    "model": null,
+    "resets_at": null,
+    "reset_stamp_unparsed": null,
+    "reset_is_derived": false
+   }
+  },
+  {
+   "label": "quota",
+   "text": "quota exceeded for this org",
+   "tz": null,
+   "expect": {
+    "error_class": "provider_4xx_quota",
+    "raw_status": null,
+    "raw_exit_code": null,
+    "body_excerpt": "quota exceeded for this org",
+    "triggers_swap": true,
+    "model": null,
+    "resets_at": null,
+    "reset_stamp_unparsed": null,
+    "reset_is_derived": false
+   }
+  },
+  {
+   "label": "usage limit window",
+   "text": "Claude usage limit reached for 5 hour",
+   "tz": null,
+   "expect": {
+    "error_class": "provider_4xx_quota",
+    "raw_status": null,
+    "raw_exit_code": null,
+    "body_excerpt": "Claude usage limit reached for 5 hour",
+    "triggers_swap": true,
+    "model": null,
+    "resets_at": 1789418000.0,
+    "reset_stamp_unparsed": null,
+    "reset_is_derived": true
+   }
+  },
+  {
+   "label": "offset stamp",
+   "text": "rate limit, resets at 2026-09-14T15:00:00+00:00",
+   "tz": null,
+   "expect": {
+    "error_class": "provider_4xx_quota",
+    "raw_status": null,
+    "raw_exit_code": null,
+    "body_excerpt": "rate limit, resets at 2026-09-14T15:00:00+00:00",
+    "triggers_swap": true,
+    "model": null,
+    "resets_at": 1789398000.0,
+    "reset_stamp_unparsed": null,
+    "reset_is_derived": false
+   }
+  },
+  {
+   "label": "naive no zone",
+   "text": "usage limit reached, reset 2026-09-14 15:00",
+   "tz": null,
+   "expect": {
+    "error_class": "provider_4xx_quota",
+    "raw_status": null,
+    "raw_exit_code": null,
+    "body_excerpt": "usage limit reached, reset 2026-09-14 15:00",
+    "triggers_swap": true,
+    "model": null,
+    "resets_at": null,
+    "reset_stamp_unparsed": "2026-09-14 15:00",
+    "reset_is_derived": false
+   }
+  },
+  {
+   "label": "naive in zone",
+   "text": "usage limit reached, reset 2026-09-14 15:00",
+   "tz": "Asia/Shanghai",
+   "expect": {
+    "error_class": "provider_4xx_quota",
+    "raw_status": null,
+    "raw_exit_code": null,
+    "body_excerpt": "usage limit reached, reset 2026-09-14 15:00",
+    "triggers_swap": true,
+    "model": null,
+    "resets_at": 1789369200.0,
+    "reset_stamp_unparsed": null,
+    "reset_is_derived": false
+   }
+  },
+  {
+   "label": "long body",
+   "text": "rate limit xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+   "tz": null,
+   "expect": {
+    "error_class": "provider_4xx_quota",
+    "raw_status": null,
+    "raw_exit_code": null,
+    "body_excerpt": "rate limit xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "triggers_swap": true,
+    "model": null,
+    "resets_at": null,
+    "reset_stamp_unparsed": null,
+    "reset_is_derived": false
+   }
+  }
+ ],
+ "refusal": [
+  {
+   "label": "neither",
+   "output_result": null,
+   "last_message": null,
+   "tz": null,
+   "expect": null
+  },
+  {
+   "label": "dead session wins",
+   "output_result": "API Error: rate limit",
+   "last_message": "usage limit reached",
+   "tz": null,
+   "expect": {
+    "source": "output_result",
+    "err": {
+     "error_class": "provider_4xx_quota",
+     "raw_status": null,
+     "raw_exit_code": null,
+     "body_excerpt": "API Error: rate limit",
+     "triggers_swap": true,
+     "model": null,
+     "resets_at": null,
+     "reset_stamp_unparsed": null,
+     "reset_is_derived": false
+    }
+   }
+  },
+  {
+   "label": "clean death, live refusal",
+   "output_result": "all done",
+   "last_message": "Claude usage limit reached",
+   "tz": null,
+   "expect": {
+    "source": "transcript",
+    "err": {
+     "error_class": "provider_4xx_quota",
+     "raw_status": null,
+     "raw_exit_code": null,
+     "body_excerpt": "Claude usage limit reached",
+     "triggers_swap": true,
+     "model": null,
+     "resets_at": null,
+     "reset_stamp_unparsed": null,
+     "reset_is_derived": false
+    }
+   }
+  },
+  {
+   "label": "live prose buries it",
+   "output_result": null,
+   "last_message": "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy rate limit",
+   "tz": null,
+   "expect": null
+  },
+  {
+   "label": "live marker straddles the lead",
+   "output_result": null,
+   "last_message": "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy rate limit",
+   "tz": null,
+   "expect": null
+  },
+  {
+   "label": "live marker inside the lead",
+   "output_result": null,
+   "last_message": "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy rate limit",
+   "tz": null,
+   "expect": {
+    "source": "transcript",
+    "err": {
+     "error_class": "provider_4xx_quota",
+     "raw_status": null,
+     "raw_exit_code": null,
+     "body_excerpt": "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy rate limit",
+     "triggers_swap": true,
+     "model": null,
+     "resets_at": null,
+     "reset_stamp_unparsed": null,
+     "reset_is_derived": false
+    }
+   }
+  },
+  {
+   "label": "dead body read whole",
+   "output_result": "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy rate limit",
+   "last_message": null,
+   "tz": null,
+   "expect": {
+    "source": "output_result",
+    "err": {
+     "error_class": "provider_4xx_quota",
+     "raw_status": null,
+     "raw_exit_code": null,
+     "body_excerpt": "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy",
+     "triggers_swap": true,
+     "model": null,
+     "resets_at": null,
+     "reset_stamp_unparsed": null,
+     "reset_is_derived": false
+    }
+   }
+  },
+  {
+   "label": "naive stamp in zone",
+   "output_result": null,
+   "last_message": "usage limit, reset 2026-09-14 15:00",
+   "tz": "UTC",
+   "expect": {
+    "source": "transcript",
+    "err": {
+     "error_class": "provider_4xx_quota",
+     "raw_status": null,
+     "raw_exit_code": null,
+     "body_excerpt": "usage limit, reset 2026-09-14 15:00",
+     "triggers_swap": true,
+     "model": null,
+     "resets_at": 1789398000.0,
+     "reset_stamp_unparsed": null,
+     "reset_is_derived": false
+    }
+   }
+  }
+ ],
+ "verdicts": [
+  {
+   "state": "needs-input",
+   "truth_state": "working",
+   "truth_age_s": 9999,
+   "mission_complete": null,
+   "expect": "skip-needs-input"
+  },
+  {
+   "state": "",
+   "truth_state": "your-move",
+   "truth_age_s": 9999,
+   "mission_complete": null,
+   "expect": "skip-needs-input"
+  },
+  {
+   "state": "",
+   "truth_state": "done",
+   "truth_age_s": 9999,
+   "mission_complete": null,
+   "expect": "skip-terminal"
+  },
+  {
+   "state": "",
+   "truth_state": "done",
+   "truth_age_s": 9999,
+   "mission_complete": false,
+   "expect": "nudge"
+  },
+  {
+   "state": "",
+   "truth_state": "done",
+   "truth_age_s": 10,
+   "mission_complete": false,
+   "expect": "not-stale"
+  },
+  {
+   "state": "",
+   "truth_state": "done",
+   "truth_age_s": 9999,
+   "mission_complete": true,
+   "expect": "nudge-close"
+  },
+  {
+   "state": "",
+   "truth_state": "done",
+   "truth_age_s": 10,
+   "mission_complete": true,
+   "expect": "not-stale"
+  },
+  {
+   "state": "",
+   "truth_state": "done",
+   "truth_age_s": null,
+   "mission_complete": true,
+   "expect": "not-stale"
+  },
+  {
+   "state": "",
+   "truth_state": "unknown",
+   "truth_age_s": 9999,
+   "mission_complete": null,
+   "expect": "not-stale"
+  },
+  {
+   "state": "",
+   "truth_state": "watching",
+   "truth_age_s": 9999,
+   "mission_complete": null,
+   "expect": "not-stale"
+  },
+  {
+   "state": "",
+   "truth_state": "stalled",
+   "truth_age_s": 1,
+   "mission_complete": null,
+   "expect": "nudge"
+  },
+  {
+   "state": "",
+   "truth_state": "working",
+   "truth_age_s": 10,
+   "mission_complete": null,
+   "expect": "not-stale"
+  },
+  {
+   "state": "",
+   "truth_state": "working",
+   "truth_age_s": 900,
+   "mission_complete": null,
+   "expect": "nudge"
+  },
+  {
+   "state": "",
+   "truth_state": "working",
+   "truth_age_s": null,
+   "mission_complete": null,
+   "expect": "not-stale"
+  }
+ ],
+ "prune_keep": [
+  {
+   "key": "aaaa1111",
+   "expect": true
+  },
+  {
+   "key": "bbbb2222",
+   "expect": false
+  },
+  {
+   "key": "capped:aaaa1111",
+   "expect": true
+  },
+  {
+   "key": "capped:bbbb2222",
+   "expect": false
+  },
+  {
+   "key": "close:aaaa1111",
+   "expect": true
+  },
+  {
+   "key": "close:bbbb2222",
+   "expect": false
+  },
+  {
+   "key": "quota-locked:aaaa1111",
+   "expect": true
+  },
+  {
+   "key": "quota-locked:bbbb2222",
+   "expect": false
+  },
+  {
+   "key": "refused:aaaa1111:provider_4xx_quota",
+   "expect": true
+  },
+  {
+   "key": "refused:bbbb2222:provider_4xx_quota",
+   "expect": false
+  }
+ ],
+ "node_ids": [
+  {
+   "manifest": null,
+   "expect": null
+  },
+  {
+   "manifest": "graph_node_id: x-1\n",
+   "expect": "x-1"
+  },
+  {
+   "manifest": "  graph_node_id: \"x-2\"\n",
+   "expect": "x-2"
+  },
+  {
+   "manifest": "graph_node_id: 'x-3'\nother: 1\n",
+   "expect": "x-3"
+  },
+  {
+   "manifest": "graph_node_id: null\n",
+   "expect": null
+  },
+  {
+   "manifest": "graph_node_id:\n",
+   "expect": null
+  },
+  {
+   "manifest": "graph_node_id: None\n",
+   "expect": null
+  },
+  {
+   "manifest": "title: x\n",
+   "expect": null
+  }
+ ]
+}

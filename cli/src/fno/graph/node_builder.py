@@ -38,7 +38,7 @@ TAG_HELP = "Tag (repeatable, lowercase-kebab)."
 def _scan_md_field(text: str, key: str) -> Optional[str]:
     """First ``<key>: <value>`` value in a target-state.md, matched-quote-stripped.
 
-    Local mirror of ``fno.agents.whoami._scan_field`` so ``graph`` does not import
+    Plain manifest field scan so ``graph`` does not import
     ``agents`` (avoids an import cycle). ``None`` if the key is absent.
     """
     import re
@@ -78,7 +78,7 @@ def _session_provenance(
     ``source_cwd`` is the originating SESSION's cwd - the key claude
     transcript dirs are slugged by - kept distinct from the node's durable
     ``cwd`` (the canonical root) because the read-back resolver needs it.
-    Manifest ownership is proven as ``whoami.find_held_node`` does: the
+    Manifest ownership is proven as the native carve-out stamp does: the
     manifest's claude session id must equal this process's, so a stale or
     foreign worktree manifest never leaks a node this session does not hold.
     Node + plan resolution is claude-only; other harnesses stamp session +

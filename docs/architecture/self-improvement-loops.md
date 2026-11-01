@@ -7,15 +7,17 @@ The three loops that turn what the fleet did into what the fleet does better. Ea
 | Loop | Trigger | Config key | Default | Output lands in | Read command |
 |------|---------|-----------|---------|-----------------|-----------|
 | autocorrect | Weekly review (Mondays 09:00) + a 15-minute S0 watcher (`com.user.autocorrect`, `com.user.autocorrect-watcher`; install with `scripts/install-autocorrect-cron.sh`) | (launchd labels, not config) | not installed | Postmortems to `~/.fno/postmortems/`, lessons to agent memory, backlog nodes via `cli/src/fno/retro/` | `fno backlog find` / the weekly review pack |
+| Golden drafts | Daily daemon arm, `crates/fno-agents/src/evals_drafts.rs` | (none; watermark in `~/.fno/evals/golden-drafts/.watermark`) | always available | One draft per new typed correction in `~/.fno/evals/golden-drafts/`, reviewed by a person into `evals/bank` | `fno-agents evals drafts` |
 | S2 corrections (the intel path) | Runs when `/fno:intel` writes its report; the writer is `scripts/corrections-insights-tag.sh` | (none; watermark in `~/.fno/logs/corrections.log.wm`) | always available | S2 rows in `~/.fno/logs/corrections.log`, one per `#agent-correction` line, carrying `signal=<friction category>` | `fno outstanding` scoring via the `verifyDecisions` lane |
 | evals | The daemon's evals phase on the pr-watch tick | `evals.n` (days between regression runs; `0` disables) | `7` | Run receipts + trend rows (`fno-agents evals-arm`, `evals-trend`) | `fno doctor evals` |
+| question judge | The daemon's `question_judge` arm, hourly | `questions.judge.enabled` | `false` | Shadow verdicts in `~/.fno/state/judge/verdicts.jsonl`; a user answer that differs feeds the next prompt | `fno inbox outstanding judge --report` |
 | pr-watch heal | The pr-watch tick over every red open PR | `auto_heal.enabled` | `false` | Heal attempts + reports per PR (`fno do pr heal` applies the mechanical fix) | `fno do pr heal <n>` |
 
 ## What feeds what
 
 - The transcript fold (`fno-agents intel`, report via `/fno:intel`) is the S2 writer's only report source. Before intel, no writer produced a file with `#agent-correction` lines. The S2 path had been starving since it shipped. The fold classifies turns by provenance first, so only operator-typed turns reach the corrections the skill quotes.
 - The S0 watcher and the S2 rows share `~/.fno/logs/corrections.log`. S0 rows come from postmortems, S2 rows from intel reports. The `verifyDecisions` lane scores the `signal=` field across both.
-- Evals and heal are daemon-tick loops: both read what the other loops wrote. A healed PR re-runs evals banks, and a regression bank failure files a node the autocorrect review can pick up.
+- Evals and heal are daemon-tick loops: both read what the other loops wrote. A healed PR re-runs evals banks. A graded failure in a scheduled regression run files one bug node per task. An open node holds the next filing, and a plumbing failure files no node.
 
 ## Tuning
 

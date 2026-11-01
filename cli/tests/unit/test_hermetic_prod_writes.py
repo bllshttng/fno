@@ -24,7 +24,8 @@ from pathlib import Path
 
 import pytest
 
-from fno.events import HermeticEscapeError, _build, append_event
+from fno.hermetic import HermeticEscapeError
+from fno.events.store_client import build_event as _build, append_event
 
 _DATA = {
     "node_id": "x-2222aaaa",
@@ -94,7 +95,8 @@ def test_gate_escape_failure_log_respects_the_sandbox(monkeypatch, tmp_path):
     """A refused journal must not be followed by its failure log recreating the
     directory. Measured before the fix: events.jsonl absent, and
     ``<outside>/.fno/gate_escape_emit_failures.jsonl`` present."""
-    from fno.events.gate_escape import failure_log_path, record_emit_failure
+    import subprocess
+    from fno.events.store_client import resolve_native_bin
 
     sandbox = tmp_path / "sandbox"
     sandbox.mkdir()
@@ -103,9 +105,12 @@ def test_gate_escape_failure_log_respects_the_sandbox(monkeypatch, tmp_path):
     monkeypatch.delenv("FNO_EVENTS_PATH", raising=False)
 
     outside = tmp_path / "checkout" / ".fno" / "events.jsonl"
-    record_emit_failure(
-        failure_log_path(outside), "n-1", "reason", HermeticEscapeError("refused")
+    proc = subprocess.run(
+        [resolve_native_bin(), "doctor", "event", "gate-escape", "flake", "--events", str(outside)],
+        capture_output=True, text=True, timeout=30,
     )
+    assert proc.returncode == 0
+    assert "failed" in proc.stderr
     assert not outside.parent.exists()
 
 

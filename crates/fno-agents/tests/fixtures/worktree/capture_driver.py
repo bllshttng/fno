@@ -148,7 +148,6 @@ def base_env(root, home):
         "HOME": str(home),
         "FNO_STATE_DIR": str(root / "state"),
         "FNO_GLOBAL_SETTINGS_PATH": str(home / "absent-global-settings.yaml"),
-        "FNO_AGENTS_RUNTIME": "python",
     }
     env["FNO_GLOBAL_SETTINGS_PATH"] = str(home / "absent-global-settings.yaml")
     (root / "state").mkdir(parents=True, exist_ok=True)
@@ -917,7 +916,6 @@ _ENV_KEYS = (
     "FNO_GLOBAL_SETTINGS_PATH",
     "FNO_WORKTREE_POLICY",
     "WORKTREE_STATUS_REGISTRY",
-    "FNO_AGENTS_RUNTIME",
 )
 
 

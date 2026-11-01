@@ -17,6 +17,8 @@ fno backlog decide-reindex                 # backfill records written before the
 
 The old `fno decide` spelling remains as a one-release compatibility shim. It prints the new `fno inbox decide` spelling to stderr and is removed next release.
 
+A question judge verdict is no decision. It carries no authority and no index row. See [the judge](attention-items.md#the-judge).
+
 ## Two producers, both explicit
 
 `fno inbox decide` records a ruling that has no question on file. `fno inbox outstanding clear --answer` records the answer to an open `operator_question`, because an answered question IS a decision.

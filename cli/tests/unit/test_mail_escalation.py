@@ -28,24 +28,6 @@ def mailbox(tmp_path, monkeypatch):
     return tmp_path
 
 
-@pytest.fixture
-def emitted_events(monkeypatch):
-    """Capture the mail_escalation events the escalation helper emits.
-
-    Replaces the project events.jsonl write with an in-memory capture so the
-    test asserts emission + schema-validity without depending on the
-    cwd-relative events.jsonl path. The builder still runs real (it validates
-    via _build), so a captured event is exactly what would have been appended.
-    """
-    events: list[dict] = []
-
-    def capture(event: dict) -> None:
-        events.append(event)
-
-    monkeypatch.setattr("fno.events.append_event", capture)
-    return events
-
-
 def _unread_count(runner, name: str) -> int:
     # A plain parse of the seeded log, the same read the deleted Python
     # helpers made: no binary, no cursor, so the count holds in any shard.

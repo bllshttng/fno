@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # check-import-paths.sh - fail on imports that name a module no longer at its path.
 #
-# When a module moves down a layer (e.g. fno.agents.rust_runtime -> fno.rust_binary),
+# When a module moves down a layer (e.g. fno.agents.provider_resolve -> fno.dispatch_flags),
 # production callers get repointed because they fail loudly. TEST-only callers
 # can keep the old `from fno.agents import moved_module` spelling and fail at
 # collection time - but changed-smoke selects tests from CHANGED files, and a

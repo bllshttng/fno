@@ -1234,27 +1234,36 @@ pub fn worker_qos_enabled(cwd: &Path) -> bool {
 /// must move both readers and the git-protection hook, or the gates split on
 /// exactly that spelling.
 pub fn auto_merge_enabled(cwd: &Path) -> bool {
+    crate::autonomy_policy::merge_value(merge_disposition(cwd), auto_merge_configured(cwd))
+}
+
+fn merge_disposition(cwd: &Path) -> crate::autonomy_policy::Disposition {
+    crate::autonomy_policy::resolve(cwd).disposition(crate::autonomy_policy::Action::Merge)
+}
+
+/// The standing `auto_merge.enabled` value; `None` when no config sets it.
+fn auto_merge_configured(cwd: &Path) -> Option<bool> {
     for path in config_candidates(cwd) {
         let content = match std::fs::read_to_string(&path) {
             Ok(content) => content,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(_) => return false,
+            Err(_) => return Some(false),
         };
         let Some(table) = parse_config(&content) else {
-            return false;
+            return Some(false);
         };
         let Some(auto_merge) = table.get("auto_merge") else {
             continue;
         };
         let Some(auto_merge) = auto_merge.as_table() else {
-            return false;
+            return Some(false);
         };
         let Some(enabled) = auto_merge.get("enabled") else {
             continue;
         };
-        return affirmative(enabled);
+        return Some(affirmative(enabled));
     }
-    false
+    None
 }
 
 /// Whether the live config grants merge authority to a dispatch lane: an
@@ -1270,31 +1279,36 @@ pub fn auto_merge_enabled(cwd: &Path) -> bool {
 /// candidate. Only the trimmed string `dispatch` grants; anything else, and
 /// every malformed value, fails safe toward withheld.
 pub fn auto_merge_grant_dispatches(cwd: &Path) -> bool {
+    crate::autonomy_policy::merge_value(merge_disposition(cwd), auto_merge_grant_configured(cwd))
+}
+
+/// The standing dispatch grant; `None` when no config sets it.
+fn auto_merge_grant_configured(cwd: &Path) -> Option<bool> {
     for path in config_candidates(cwd) {
         let content = match std::fs::read_to_string(&path) {
             Ok(content) => content,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(_) => return false,
+            Err(_) => return Some(false),
         };
         let Some(table) = parse_config(&content) else {
-            return false;
+            return Some(false);
         };
         if let Some(grant) = table
             .get("auto_merge")
             .and_then(|am| am.as_table())
             .and_then(|am| am.get("grant"))
         {
-            return grant.as_str().map(str::trim) == Some("dispatch");
+            return Some(grant.as_str().map(str::trim) == Some("dispatch"));
         }
         if let Some(flag) = table
             .get("dispatch")
             .and_then(|d| d.as_table())
             .and_then(|d| d.get("auto_merge"))
         {
-            return flag.as_bool() == Some(true);
+            return Some(flag.as_bool() == Some(true));
         }
     }
-    false
+    None
 }
 
 /// The Python coercer's affirmative set, in Rust. Anything else is false, so a
@@ -2521,6 +2535,43 @@ mod tests {
             let got = auto_merge_enabled(&cwd);
             clear_config_env();
             assert!(!got, "{literal} must read as disabled");
+        }
+    }
+
+    #[test]
+    fn autonomy_mode_decides_the_merge_readers_over_standing_config() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        for (name, body, want) in [
+            ("default-unset", "", false),
+            ("balanced-yes", "[auto_merge]\nenabled = true\ngrant = \"dispatch\"\n", true),
+            ("yolo-unset", "[autonomy]\nmode = \"yolo\"\n", true),
+            (
+                "yolo-explicit-no",
+                "[autonomy]\nmode = \"yolo\"\n[auto_merge]\nenabled = false\ngrant = \"none\"\n",
+                false,
+            ),
+            (
+                "ask-yes",
+                "[autonomy]\nmode = \"ask\"\n[auto_merge]\nenabled = true\ngrant = \"dispatch\"\n",
+                false,
+            ),
+            (
+                "ask-allowed",
+                "[autonomy]\nmode = \"ask\"\nallow = [\"merge\"]\n[auto_merge]\nenabled = true\ngrant = \"dispatch\"\n",
+                true,
+            ),
+            (
+                "bad-mode",
+                "[autonomy]\nmode = \"banana\"\n[auto_merge]\nenabled = true\ngrant = \"dispatch\"\n",
+                false,
+            ),
+        ] {
+            clear_config_env();
+            let cwd = write_project_settings(&format!("autonomy-{name}"), body);
+            std::env::set_var("FNO_CONFIG", cwd.join(".fno/config.toml"));
+            let got = (auto_merge_enabled(&cwd), auto_merge_grant_dispatches(&cwd));
+            clear_config_env();
+            assert_eq!(got, (want, want), "{name}");
         }
     }
 

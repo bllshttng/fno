@@ -176,6 +176,7 @@ fn row_identity(queue: &str, row: &Value) -> String {
         .get("id")
         .or_else(|| row.get("key"))
         .or_else(|| row.get("number"))
+        .or_else(|| row.get("node").filter(|v| !v.is_null()))
         .map(|v| v.to_string())
         .unwrap_or_else(|| row.to_string());
     format!("{queue}:{}", id.trim_matches('"'))
@@ -410,7 +411,7 @@ pub(crate) fn read_org_board(
     })
 }
 
-/// The spawn gate's read-only verdict (`fno agents gate-status --json`):
+/// The spawn gate's read-only verdict (`fno agents admit status --json`):
 /// whether a dispatch would be admitted right now, and which constraint binds.
 pub(crate) struct GateProbe {
     pub(crate) verdict: String,
@@ -450,15 +451,15 @@ impl GateProbe {
                 "fno agents incident status; fno agents incident clear --reason <text>".into()
             }
             Some("max_live" | "lead_share") => {
-                "live workers exiting (`fno agents gate-status` slot_rows)".into()
+                "live workers exiting (`fno agents admit status` slot_rows)".into()
             }
             Some("machine-runaway") => {
-                "machine runaway brake (`fno agents gate-status`); it expires on its own".into()
+                "machine runaway brake (`fno agents admit status`); it expires on its own".into()
             }
             Some("provider_cap" | "provider_quota_lock") => {
                 "provider lanes (`fno-agents provider-cap status`)".into()
             }
-            _ => "fno agents gate-status".into(),
+            _ => "fno agents admit status".into(),
         }
     }
 }
@@ -468,7 +469,7 @@ impl GateProbe {
 pub(crate) fn probe_dispatch_capacity(fno_bin: &str, cwd: &Path) -> Result<GateProbe, String> {
     let out = crate::loopcheck::bounded_read(
         std::ffi::OsStr::new(fno_bin),
-        &["agents", "gate-status"],
+        &["agents", "admit", "status"],
         cwd,
         "spawn gate status",
         crate::loopcheck::stopgate_read_timeout(),
@@ -759,6 +760,20 @@ mod tests {
             "actionable": 0,
             "queues": queues,
         })
+    }
+
+    #[test]
+    fn a_verdict_row_is_named_by_its_node() {
+        let board = board_with_queues(json!([
+            {"name": "failed_verdict", "status": "ok", "actionable": true,
+             "rows": [{"node": "x-aaaa", "verdict": "FAIL", "report": "r.md", "claim": "a, b"}]},
+        ]));
+        let parsed = parse_org_board_value(&board).unwrap();
+        assert_eq!(parsed.actionable_ids, vec!["failed_verdict:x-aaaa"]);
+        assert_eq!(
+            row_identity("q", &json!({"id": "x-id", "node": "x-node"})),
+            "q:x-id"
+        );
     }
 
     #[test]

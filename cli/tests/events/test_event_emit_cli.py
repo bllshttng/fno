@@ -1,472 +1,235 @@
-"""Tests for `fno doctor event emit` CLI - canonical envelope path.
-
-Covers AC1-HP, AC1-ERR, AC1-UI, AC1-EDGE, AC1-FR from the
-events + test hygiene cleanup spec (ab-a1118224).
-
-Routes through fno.events.__init__._build() + append_event() so
-the emitted envelope is {ts, type, source, data} (canonical) rather
-than the legacy {type, campaign_id, session_id, nonce, ts, payload}
-envelope written by events/log.py:emit_event().
-"""
+"""Native event emit contracts at the public command boundary."""
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 import pytest
 
 from fno.events.store_client import read_committed_lines
-from typer.testing import CliRunner
-
-from fno.events.cli import cli as event_cli
+from tests._native_event_cli import EventRunner
 
 
 @pytest.fixture
-def runner() -> CliRunner:
-    # Click 8.2+ separates stderr by default; mix_stderr kwarg was removed.
-    return CliRunner()
-
-
-def _write_state(tmp_path: Path, session_id: str = "ses-test-001") -> Path:
-    """Write a minimal target-state.md so source auto-detection sees 'target'."""
-    state = tmp_path / ".fno" / "target-state.md"
-    state.parent.mkdir(parents=True, exist_ok=True)
-    state.write_text(
-        f"---\nsession_id: {session_id}\nstatus: IN_PROGRESS\n"
-        f"provenance_nonce: aaaa1111bbbb2222\n---\n"
+def runtime(tmp_path, monkeypatch):
+    binary = tmp_path / "fake-agents"
+    binary.write_text(
+        f"#!{sys.executable}\n"
+        "import json, os, sys\n"
+        "args = sys.argv[1:]\n"
+        "if args[:2] == ['attest', 'event-context']:\n"
+        "    print(os.environ['EVENT_TEST_CONTEXT'])\n"
+        "elif args[:1] == ['publish-review']:\n"
+        "    with open(os.environ['EVENT_TEST_REVIEW'], 'a') as out: out.write(json.dumps(json.load(sys.stdin)) + '\\n')\n"
+        "    print(json.dumps({'receipt': 'bot-review: skipped'}))\n"
+        "elif args[:1] == ['machine-mail-send']:\n"
+        "    with open(os.environ['EVENT_TEST_MAIL'], 'a') as out: out.write(json.dumps(args) + '\\n')\n"
+        "    sys.exit(int(os.environ.get('EVENT_TEST_MAIL_EXIT', '0')))\n"
+        "else:\n"
+        "    sys.exit(2)\n"
     )
-    return state
+    binary.chmod(0o755)
+    context = {
+        "session_id": None, "handle": None, "harness": None, "model": None,
+        "parent": None, "attester_session_id": "sess-true", "attester_witness": "process",
+        "attester_conflict": None, "observed_model": {"kind": "no-transcript"},
+        "repo": "github.com/example/repo",
+    }
+    monkeypatch.setenv("FNO_AGENTS_BIN", str(binary))
+    monkeypatch.setenv("FNO_STATE_DIR", str(tmp_path / "global"))
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    import subprocess
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(["git", "-C", str(repo), "remote", "add", "origin", "git@github.com:example/repo.git"], check=True)
+    monkeypatch.setenv("FNO_REPO_ROOT", str(repo))
+    monkeypatch.setenv("EVENT_TEST_MAIL", str(tmp_path / "mail.jsonl"))
+    monkeypatch.setenv("EVENT_TEST_REVIEW", str(tmp_path / "reviews.jsonl"))
+
+    def set_context(**updates):
+        monkeypatch.setenv("EVENT_TEST_CONTEXT", json.dumps({**context, **updates}))
+
+    set_context()
+    return set_context
 
 
-def _events_path(tmp_path: Path) -> Path:
-    return tmp_path / ".fno" / "events.jsonl"
+def emit(path: Path, *args: str):
+    return EventRunner().invoke(None, ["emit", "--events", str(path), *args])
 
 
-# ---------------------------------------------------------------------------
-# AC1-HP: Canonical envelope with auto-detected source=target
-# ---------------------------------------------------------------------------
+def rows(path: Path):
+    return [json.loads(line) for line in read_committed_lines(path)]
 
 
-def test_ac1_hp_canonical_envelope_target_source(runner: CliRunner, tmp_path: Path) -> None:
-    """AC1-HP: state file present -> source auto-detects to 'target'; envelope is canonical."""
-    state = _write_state(tmp_path)
-    events = _events_path(tmp_path)
-
-    result = runner.invoke(
-        event_cli,
-        [
-            "emit",
-            "--type", "phase_transition",
-            "--data", json.dumps({
-                "gate_bearing": True,
-                "gate": "ledger_updated",
-                "phase": "register",
-                "nonce": "deadbeef" * 4,
-                "session_id": "ses-test-001",
-            }),
-            "--state", str(state),
-            "--events", str(events),
-        ],
-    )
-
-    assert result.exit_code == 0, f"stderr={result.stderr!r} stdout={result.stdout!r}"
-    assert read_committed_lines(events)
-    lines = read_committed_lines(events)
-    assert len(lines) == 1
-    event = json.loads(lines[0])
-
-    # Canonical envelope keys (NOT legacy {type, campaign_id, session_id, nonce, ts, payload})
-    assert set(event.keys()) == {"ts", "type", "source", "data"}
-    assert event["type"] == "phase_transition"
-    assert event["source"] == "target"  # auto-detected from state file
-    assert event["data"]["gate"] == "ledger_updated"
-    assert event["data"]["phase"] == "register"
-    assert event["data"]["nonce"] == "deadbeef" * 4
-    assert event["data"]["session_id"] == "ses-test-001"
+def attestation(**extra):
+    return {"reviewer": "code-review", "head_sha": "a" * 40, "verdict": "pass", "session_id": "session", **extra}
 
 
-def test_ac1_hp_no_state_file_and_no_source_is_refused(runner: CliRunner, tmp_path: Path) -> None:
-    """AC1-HP: missing state file and no --source -> refused, no row written.
-
-    The old behavior silently defaulted to 'test'; the fix requires the
-    caller to name a producer instead of guessing one.
-    """
-    events = _events_path(tmp_path)
-    nonexistent_state = tmp_path / ".fno" / "target-state.md"
-    # parent dir is created by events.jsonl write, but state file itself must not exist
-    events.parent.mkdir(parents=True, exist_ok=True)
-
-    result = runner.invoke(
-        event_cli,
-        [
-            "emit",
-            "--type", "lead_checkin",
-            "--data", json.dumps({"scope": "x-a792", "change": "no source"}),
-            "--state", str(nonexistent_state),
-            "--events", str(events),
-        ],
-    )
-
-    assert result.exit_code != 0
-    assert not read_committed_lines(events)
-    assert "lead_checkin declares: daemon, hook, loop" in result.stderr
+def test_canonical_envelope_detects_source_and_prints_nonce(tmp_path, runtime):
+    state = tmp_path / "state.md"
+    state.write_text("---\nsession_id: ses-test\n---\n")
+    journal = tmp_path / "events.jsonl"
+    nonce = "ab" * 16
+    result = emit(journal, "-t", "child_promise", "--state", str(state), "-d", json.dumps({"session_id": "ses-test", "nonce": nonce}))
+    assert result.exit_code == 0, result.stderr
+    assert result.stdout.strip() == nonce
+    row = rows(journal)[0]
+    assert set(row) == {"ts", "type", "source", "data"}
+    assert row["source"] == "target" and row["data"]["nonce"] == nonce
 
 
-# ---------------------------------------------------------------------------
-# AC1-ERR: Unknown event type rejected; no line appended
-# ---------------------------------------------------------------------------
+def test_refusals_leave_no_event(tmp_path, runtime):
+    journal = tmp_path / "events.jsonl"
+    missing = tmp_path / "missing"
+    for args, diagnostic in [
+        (["-t", "lead_checkin", "--state", str(missing)], "no target session"),
+        (["-t", "unknown-kind", "-s", "test"], "unknown event type"),
+        (["-t", "verification_receipt", "-s", "target"], "preflight-owned"),
+        (["-t", "child_promise", "-s", "test", "-d", "{"], "invalid JSON"),
+        (["-t", "child_promise", "-s", "test", "-d", "{}", "--payload", "{}"], "not both"),
+    ]:
+        result = emit(journal, *args)
+        assert result.exit_code == 1 and diagnostic in result.stderr
+        assert not rows(journal)
 
 
-def test_ac1_err_unknown_event_type_rejected(runner: CliRunner, tmp_path: Path) -> None:
-    """AC1-ERR: unknown --type is non-zero exit; events.jsonl unchanged."""
-    state = _write_state(tmp_path)
-    events = _events_path(tmp_path)
-
-    result = runner.invoke(
-        event_cli,
-        [
-            "emit",
-            "--type", "not_a_real_event",
-            "--data", "{}",
-            "--state", str(state),
-            "--events", str(events),
-        ],
-    )
-
-    assert result.exit_code != 0
-    assert "unknown event type" in result.stderr.lower() or "not_a_real_event" in result.stderr
-    assert not read_committed_lines(events)
-
-
-# ---------------------------------------------------------------------------
-# PR #270 Codex P2: non-JSON success path must print a non-empty token
-# ---------------------------------------------------------------------------
-
-
-def test_pr270_codex_non_json_success_prints_nonce_when_present(
-    runner: CliRunner, tmp_path: Path
-) -> None:
-    """Codex P2 (PR #270): shell callers using `$(fno doctor event emit ...)` must not
-    receive an empty string on success. When the event type carries a nonce
-    (phase_transition, child_promise), the nonce is the token (matches the
-    legacy ``emit_event`` contract that shell scripts may depend on)."""
-    state = _write_state(tmp_path)
-    events = _events_path(tmp_path)
-    nonce = "deadbeef" * 4
-
-    result = runner.invoke(
-        event_cli,
-        [
-            "emit",
-            "--type", "child_promise",
-            "--data", json.dumps({"session_id": "ses-x", "nonce": nonce}),
-            "--state", str(state),
-            "--events", str(events),
-        ],
-    )
+def test_protocol_fields_follow_manifest_and_reject_bad_outcome(tmp_path, runtime):
+    state = tmp_path / "state.md"
+    state.write_text("---\nsession_id: run-1\ngraph_node_id: node-1\n---\n")
+    journal = tmp_path / "events.jsonl"
+    result = emit(journal, "-t", "task_started", "-s", "test", "--state", str(state))
+    assert result.exit_code == 0, result.stderr
+    row = rows(journal)[0]
+    assert row["run"] == "run-1" and row["node"] == "node-1" and "from" not in row
+    result = emit(journal, "-t", "task_started", "-s", "test", "--state", str(state), "--run", "", "--node", "")
     assert result.exit_code == 0
-    # stdout carries the nonce, not an empty string.
-    assert result.output.strip() == nonce
+    assert rows(journal)[-1]["run"] == "run-1" and rows(journal)[-1]["node"] == "node-1"
+    other = tmp_path / "other.jsonl"
+    result = emit(other, "-t", "task_done", "-s", "test", "--run", "run-1", "--outcome", "PARTIAL")
+    assert result.exit_code == 1 and not rows(other)
 
 
-def test_pr270_gemini_default_paths_anchor_to_repo_root(
-    runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Gemini MEDIUM (PR #270): when --events / --state are not passed, the
-    defaults must anchor to the repo root, not to the current working
-    directory. Otherwise running `fno doctor event emit` from a subdirectory writes
-    events to a per-subdir ``.fno/events.jsonl`` instead of the
-    repository's central log."""
-    # Stage a fake repo root with a state file at <root>/.fno/.
-    repo_root = tmp_path / "repo"
-    state = repo_root / ".fno" / "target-state.md"
-    state.parent.mkdir(parents=True, exist_ok=True)
-    state.write_text(
-        "---\nsession_id: ses-anchored\nstatus: IN_PROGRESS\n---\n"
-    )
+def test_attester_is_stamped_and_forgery_is_refused(tmp_path, runtime):
+    journal = tmp_path / "events.jsonl"
+    result = emit(journal, "-t", "review_attestation", "-s", "test", "-d", json.dumps(attestation()))
+    assert result.exit_code == 0, result.stderr
+    data = rows(journal)[0]["data"]
+    assert data["attester_session_id"] == "sess-true" and data["attester_witness"] == "process"
+    review = json.loads((tmp_path / "reviews.jsonl").read_text())
+    assert review["head_sha"] == "a" * 40 and review["reviewer"] == "code-review"
+    assert review["verdict"] == "pass" and review["pr_number"] is None
+    other = tmp_path / "forged.jsonl"
+    result = emit(other, "-t", "review_attestation", "-s", "test", "-d", json.dumps(attestation(attester_session_id="forged")))
+    assert result.exit_code == 1 and "forged" in result.stderr and "sess-true" in result.stderr
+    assert not rows(other)
+    result = emit(other, "-t", "review_attestation", "-s", "test", "-d", json.dumps(attestation(attester_session_id=123)))
+    assert result.exit_code == 1 and "123" in result.stderr and not rows(other)
+    runtime(attester_conflict="identity conflict between true and forged")
+    result = emit(other, "-t", "review_attestation", "-s", "test", "-d", json.dumps(attestation()))
+    assert result.exit_code == 1 and "identity conflict" in result.stderr and not rows(other)
 
-    # Pin resolve_repo_root() to our staged root so the CLI uses the
-    # anchored defaults rather than the test runner's actual CWD.
-    monkeypatch.setattr(
-        "fno.paths.resolve_repo_root",
-        lambda: repo_root,
-    )
 
-    # Invoke from a subdirectory; do NOT pass --state or --events.
-    subdir = repo_root / "deep" / "subdir"
-    subdir.mkdir(parents=True, exist_ok=True)
+def test_model_is_only_stamped_from_observed_transcript(tmp_path, runtime):
+    journal = tmp_path / "events.jsonl"
+    result = emit(journal, "-t", "review_attestation", "-s", "test", "-d", json.dumps(attestation(model="claimed")))
+    assert result.exit_code == 0 and "model" not in rows(journal)[0]["data"]
+    runtime(observed_model={"kind": "observed", "model": "actual", "samples": 1})
+    other = tmp_path / "other.jsonl"
+    result = emit(other, "-t", "review_attestation", "-s", "test", "-d", json.dumps(attestation(model="claimed")))
+    assert result.exit_code == 1 and "claimed" in result.stderr and "actual" in result.stderr
+    assert not rows(other)
+
+
+def test_global_mirror_is_repo_scoped_and_ordinary_event_is_not_mirrored(tmp_path, runtime):
+    journal = tmp_path / "project" / "events.jsonl"
+    data = {"path": "/tmp/removed", "caller": "test", "claim": "none", "reason": "done"}
+    result = emit(journal, "-t", "worktree_removed", "-s", "bash", "-d", json.dumps(data))
+    assert result.exit_code == 0, result.stderr
+    global_journal = tmp_path / "global" / "events.jsonl"
+    assert "repo" not in rows(journal)[0]["data"]
+    assert rows(global_journal)[0]["data"]["repo"] == "github.com/example/repo"
+    result = emit(journal, "-t", "daemon_started", "-s", "daemon")
+    assert result.exit_code == 0 and len(rows(global_journal)) == 1
+
+
+def test_blocked_push_is_after_commit_and_failure_is_nonfatal(tmp_path, runtime, monkeypatch):
+    runtime(parent="parent-1")
+    monkeypatch.setenv("EVENT_TEST_MAIL_EXIT", "1")
+    journal = tmp_path / "events.jsonl"
+    result = emit(journal, "-t", "blocked", "-s", "test", "--run", "run-1", "-d", json.dumps({"reason": "stuck"}))
+    assert result.exit_code == 0 and rows(journal)[0]["parent"] == "parent-1"
+    mail = json.loads((tmp_path / "mail.jsonl").read_text())
+    assert mail[mail.index("--to") + 1] == "parent-1" and "run-1" in mail[-1]
+    assert "parent push failed" in result.stderr
+    monkeypatch.setenv("EVENT_TEST_MAIL_EXIT", "0")
+    success = emit(tmp_path / "success.jsonl", "-t", "blocked", "-s", "test", "--run", "run-2", "-d", json.dumps({"reason": "stuck"}))
+    assert success.exit_code == 0
+    sent = (tmp_path / "mail.jsonl").read_text().splitlines()
+    assert len(sent) == 2 and "run-2" in json.loads(sent[-1])[-1]
+
+
+def test_defaults_anchor_to_the_declared_repo_from_a_subdirectory(tmp_path, runtime, monkeypatch):
+    repo = tmp_path / "repo"
+    state = repo / ".fno" / "target-state.md"
+    state.parent.mkdir(parents=True)
+    state.write_text("---\nsession_id: anchor\n---\n")
+    subdir = repo / "deep" / "subdir"
+    subdir.mkdir(parents=True)
     monkeypatch.chdir(subdir)
-
-    result = runner.invoke(
-        event_cli,
-        [
-            "emit",
-            "--type", "child_promise",
-            "--data", json.dumps({"session_id": "ses-anchored", "nonce": "a" * 32}),
-        ],
-    )
-    assert result.exit_code == 0, f"stderr={result.stderr!r} stdout={result.output!r}"
-
-    # The event must land in the REPO's one journal (the space journal, keyed
-    # on the canonical root), NOT in the subdir's own .fno/.
-    from fno.paths import project_log
-
-    anchored_events = project_log("events.jsonl", project_root=repo_root)
-    subdir_events = subdir / ".fno" / "events.jsonl"
-    assert read_committed_lines(anchored_events), (
-        f"event should land in the repo's journal, not a subdir's; "
-        f"anchored={anchored_events!r} subdir={subdir_events!r}"
-    )
-    assert not read_committed_lines(subdir_events), (
-        "event leaked to subdir .fno; defaults are not anchored"
-    )
-    # And source auto-detection found the repo-root state file -> "target".
-    event = json.loads(read_committed_lines(anchored_events)[0])
-    assert event["source"] == "target"
-
-
-# ---------------------------------------------------------------------------
-# AC1-FR: Schema validation failure surfaces (no event written)
-# ---------------------------------------------------------------------------
-
-
-def test_verification_receipt_is_refused_by_generic_emitter(
-    runner: CliRunner, tmp_path: Path
-) -> None:
-    result = runner.invoke(
-        event_cli,
-        [
-            "emit",
-            "--type",
-            "verification_receipt",
-            "--source",
-            "target",
-            "--events",
-            str(tmp_path / "events.jsonl"),
-            "--data",
-            "{}",
-        ],
-    )
-
-    assert result.exit_code == 1
-    assert "preflight-owned" in result.output
-    assert not read_committed_lines(tmp_path / "events.jsonl")
-
-
-# ---------------------------------------------------------------------------
-# attester stamping: the caller gets no vote on review_attestation identity
-# ---------------------------------------------------------------------------
-
-
-def _attestation_data() -> dict:
-    return {
-        "reviewer": "code-review",
-        "head_sha": "a" * 40,
-        "verdict": "pass",
-        "session_id": "20260825T000000Z-cl00000-000000",
-    }
-
-
-def test_attestation_stamps_attester_and_witness_from_the_emitting_process(
-    runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """No caller-supplied attester -> the emit chokepoint stamps the resolved
-    identity and its witness. Both directions of the witness are legal values
-    on the event; gating on witness is a later operator decision."""
-    import fno.harness_identity as hi
-
-    monkeypatch.setattr(hi, "resolve_attester_identity", lambda: ("sess-A", "process"))
-    events = _events_path(tmp_path)
-
-    result = runner.invoke(
-        event_cli,
-        [
-            "emit", "--type", "review_attestation",
-            "--data", json.dumps(_attestation_data()),
-            "--source", "test",
-            "--events", str(events),
-        ],
-    )
+    monkeypatch.setenv("FNO_SPACES_DIR", str(tmp_path / "spaces"))
+    result = EventRunner().invoke(None, ["emit", "-t", "child_promise", "-d", json.dumps({"session_id": "anchor", "nonce": "a" * 32})])
     assert result.exit_code == 0, result.stderr
-    data = json.loads(read_committed_lines(events)[0])["data"]
-    assert data["attester_session_id"] == "sess-A"
-    assert data["attester_witness"] == "process"
+    journal = tmp_path / "spaces" / str(repo.resolve()).replace("/", "-") / "events.jsonl"
+    assert rows(journal)[0]["source"] == "target"
+    assert not rows(subdir / ".fno" / "events.jsonl")
 
 
-def test_attestation_refuses_a_supplied_attester_that_disagrees(
-    runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A --data attester_session_id that disagrees with the resolved identity is
-    REFUSED naming both, never silently dropped: the caller gets no vote."""
-    import fno.harness_identity as hi
-
-    monkeypatch.setattr(hi, "resolve_attester_identity", lambda: ("sess-true", "process"))
-    events = _events_path(tmp_path)
-    payload = {**_attestation_data(), "attester_session_id": "sess-forged"}
-
-    result = runner.invoke(
-        event_cli,
-        [
-            "emit", "--type", "review_attestation",
-            "--data", json.dumps(payload),
-            "--events", str(events),
-        ],
-    )
-    assert result.exit_code == 1
-    assert "sess-forged" in result.stderr and "sess-true" in result.stderr
-    assert not read_committed_lines(events)
-
-
-def test_attestation_refuses_the_ancestry_override_shape(
-    runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The command-line override: an ancestor carries a DIFFERENT value for the
-    winning marker. The whole emit is refused naming both ids, and no event is
-    written - this is the refusal that stops one env assignment from
-    refreshing another session's stale verdict onto a head it never saw."""
-    import fno.harness_identity as hi
-
-    def boom():
-        raise hi.AttesterIdentityConflict(
-            "CODEX_THREAD_ID", "sess-true", "sess-forged"
-        )
-
-    monkeypatch.setattr(hi, "resolve_attester_identity", boom)
-    events = _events_path(tmp_path)
-
-    result = runner.invoke(
-        event_cli,
-        [
-            "emit", "--type", "review_attestation",
-            "--data", json.dumps(_attestation_data()),
-            "--events", str(events),
-        ],
-    )
-    assert result.exit_code == 1
-    assert "sess-true" in result.stderr and "sess-forged" in result.stderr
-    assert not read_committed_lines(events)
-
-
-# ---------------------------------------------------------------------------
-# model stamping: the caller gets no vote on review_attestation model either
-# ---------------------------------------------------------------------------
-
-
-def test_review_attestation_unknown_model_drops_the_callers_claim(
-    runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """An unresolvable transcript means NOT OBSERVABLE: the caller's env claim
-    is dropped, never laundered into the record. Empty is the schema's contract
-    for that, so the event carries NO model key."""
-    import fno.provenance.observed as observed
-
-    monkeypatch.setattr(
-        observed,
-        "observed_model_for_session",
-        lambda harness, session_id, cwd: {"kind": "no-transcript"},
-    )
-    events = _events_path(tmp_path)
-    payload = {**_attestation_data(), "model": "glm-5.2[1m]"}
-
-    result = runner.invoke(
-        event_cli,
-        [
-            "emit", "--type", "review_attestation",
-            "--data", json.dumps(payload),
-            "--source", "test",
-            "--events", str(events),
-        ],
-    )
+def test_relative_state_config_mirrors_under_home(tmp_path, runtime, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    config = tmp_path / "config.toml"
+    config.write_text('state_dir = ".fno-relative/"\n')
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("FNO_CONFIG", str(config))
+    monkeypatch.delenv("FNO_STATE_DIR", raising=False)
+    journal = tmp_path / "project" / "events.jsonl"
+    data = {"path": "/tmp/removed", "caller": "test", "claim": "none", "reason": "done"}
+    result = emit(journal, "-t", "worktree_removed", "-s", "bash", "-d", json.dumps(data))
     assert result.exit_code == 0, result.stderr
-    data = json.loads(read_committed_lines(events)[0])["data"]
-    assert "model" not in data
+    assert rows(home / ".fno" / "events.jsonl")[0]["type"] == "worktree_removed"
 
 
-def test_review_attestation_refuses_a_supplied_model_that_disagrees(
-    runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A --data model that disagrees with the transcript is REFUSED naming both,
-    never silently dropped - the positive marker that the caller gets no vote.
-    Assert the non-zero exit AND that no event line was appended, not merely
-    that stderr matched."""
-    import fno.provenance.observed as observed
+def test_worktree_removal_uses_native_front_for_both_destinations(tmp_path, monkeypatch):
+    import subprocess
 
-    monkeypatch.setattr(
-        observed,
-        "observed_model_for_session",
-        lambda harness, session_id, cwd: {
-            "kind": "observed", "model": "claude-opus-5", "samples": 3,
-        },
+    log = tmp_path / "calls.jsonl"
+    front = tmp_path / "fake-front"
+    front.write_text(
+        f"#!{sys.executable}\nimport json, os, sys\n"
+        "with open(os.environ['EVENT_TEST_CALLS'], 'a') as out: out.write(json.dumps(sys.argv[1:]) + '\\n')\n"
     )
-    events = _events_path(tmp_path)
-    payload = {**_attestation_data(), "model": "glm-5.2[1m]"}
-
-    result = runner.invoke(
-        event_cli,
-        [
-            "emit", "--type", "review_attestation",
-            "--data", json.dumps(payload),
-            "--events", str(events),
-        ],
+    front.chmod(0o755)
+    monkeypatch.setenv("FNO_BIN", str(front))
+    monkeypatch.setenv("FNO_AGENTS_HOME", str(tmp_path / "agents"))
+    monkeypatch.setenv("EVENT_TEST_CALLS", str(log))
+    script = Path(__file__).resolve().parents[3] / "scripts/lib/worktree-removal-event.sh"
+    result = subprocess.run(
+        ["bash", "-c", 'source "$1"; _wt_emit_removal_event "$2" "$3" test free done',
+         "test", str(script), str(tmp_path), str(tmp_path / "worktree")],
+        capture_output=True, text=True, timeout=30,
     )
-    assert result.exit_code == 1
-    assert "glm-5.2[1m]" in result.stderr and "claude-opus-5" in result.stderr
-    assert not read_committed_lines(events)
+    assert result.returncode == 0 and not result.stderr
+    calls = [json.loads(line) for line in log.read_text().splitlines()]
+    assert len(calls) == 2 and all(call[:3] == ["doctor", "event", "emit"] for call in calls)
+    assert "--events" not in calls[0]
+    assert calls[1][calls[1].index("--events") + 1] == str(tmp_path / "agents/events.jsonl")
 
 
-# ---------------------------------------------------------------------------
-# review_coverage rides the global mirror: a hand emit reaches every reader
-# ---------------------------------------------------------------------------
-
-
-def _coverage_payload() -> dict:
-    return {
-        "pr": 4242,
-        "coverage": "covered",
-        "review_state": "reviewed",
-        "reviewed_count": 1,
-        "verdicts": [
-            {
-                "name": "code-review",
-                "producer": "local_attestation",
-                "verdict": "reviewed",
-            }
-        ],
-        "head_sha": "b" * 40,
-    }
-
-
-def test_hand_emitted_review_coverage_reaches_both_logs(
-    runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A manual coverage emit from a worktree whose journal is not the global
-    one lands in BOTH: the project log it named and the machine-global log a
-    canonical merge reads. The mirror adds a destination; it moves nothing."""
-    global_journal = tmp_path / "global-events.jsonl"
-    import fno.paths
-
-    monkeypatch.setattr(fno.paths, "global_events_json", lambda: global_journal)
-    worktree_log = tmp_path / "worktree" / ".fno" / "events.jsonl"
-    worktree_log.parent.mkdir(parents=True)
-
-    result = runner.invoke(
-        event_cli,
-        [
-            "emit",
-            "--type", "review_coverage",
-            "--data", json.dumps(_coverage_payload()),
-            "--source", "hook",
-            "--events", str(worktree_log),
-        ],
-    )
+def test_global_mirror_keeps_repo_identity_without_agent_binary(tmp_path, runtime, monkeypatch):
+    monkeypatch.setenv("FNO_AGENTS_BIN", str(tmp_path / "missing-agent"))
+    journal = tmp_path / "project" / "events.jsonl"
+    data = {"path": "/tmp/removed", "caller": "test", "claim": "none", "reason": "done"}
+    result = emit(journal, "-t", "worktree_removed", "-s", "bash", "-d", json.dumps(data))
     assert result.exit_code == 0, result.stderr
-
-    project_rows = [json.loads(ln) for ln in read_committed_lines(worktree_log)]
-    assert len(project_rows) == 1
-    assert project_rows[0]["type"] == "review_coverage"
-    global_rows = [json.loads(ln) for ln in read_committed_lines(global_journal)]
-    assert len(global_rows) == 1
-    # The mirrored copy carries the repo scoping a cross-project reader needs;
-    # the project copy needs none.
-    assert "repo" in global_rows[0]["data"]
-    assert "repo" not in project_rows[0]["data"]
+    assert rows(tmp_path / "global" / "events.jsonl")[0]["data"]["repo"] == "github.com/example/repo"

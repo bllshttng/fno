@@ -1,0 +1,724 @@
+{
+  "oracle": "fno.agents.discover",
+  "pure": {
+    "accreted": [
+      [
+        "etl-dup-dup",
+        true
+      ],
+      [
+        "etl-handoff-siera-lm-handoff-siera-lm",
+        true
+      ],
+      [
+        "fno-01a034f3",
+        false
+      ],
+      [
+        "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        false
+      ],
+      [
+        "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        true
+      ],
+      [
+        "a-b-c",
+        false
+      ],
+      [
+        "",
+        false
+      ],
+      [
+        "a--",
+        true
+      ],
+      [
+        "fno-01a034f3-01a034f3",
+        true
+      ]
+    ],
+    "legacy": [
+      [
+        "claude-abcdef",
+        true
+      ],
+      [
+        "claude-abcde",
+        false
+      ],
+      [
+        "cursor-agent-abcdef",
+        true
+      ],
+      [
+        "zcode-ABCDEF12",
+        true
+      ],
+      [
+        "project-claude-abcdef",
+        false
+      ],
+      [
+        "notharness-abcdef",
+        false
+      ],
+      [
+        "codex-abcdeg",
+        false
+      ]
+    ],
+    "dir_names": [
+      [
+        "/Users/a_b/.claude/p",
+        [
+          "-Users-a-b--claude-p",
+          "-Users-a_b--claude-p"
+        ]
+      ],
+      [
+        "/w/plain",
+        [
+          "-w-plain"
+        ]
+      ],
+      [
+        "/w/caf\u00e9",
+        [
+          "-w-caf-"
+        ]
+      ]
+    ],
+    "default_alias": [
+      [
+        "/r/fno",
+        "01a034f3",
+        "fno-01a034f3"
+      ],
+      [
+        null,
+        "abcd",
+        "session-abcd"
+      ],
+      [
+        "",
+        "abcd",
+        "session-abcd"
+      ],
+      [
+        "/r/claude",
+        "abcdef",
+        "project-claude-abcdef"
+      ],
+      [
+        "/r/trail/",
+        "abcd",
+        "-abcd"
+      ]
+    ],
+    "fit": [
+      [
+        "short-111111111111111111111111111111111111",
+        "111111111111111111111111111111111111",
+        "short-111111111111111111111111111111111111"
+      ],
+      [
+        "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy-111111111111111111111111111111111111",
+        "111111111111111111111111111111111111",
+        "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy-111111111111111111111111111111111111"
+      ],
+      [
+        "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz-111111111111111111111111111111111111",
+        "111111111111111111111111111111111111",
+        "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz-111111111111111111111111111111111111"
+      ]
+    ],
+    "pid_files": [
+      [
+        "1.json",
+        true
+      ],
+      [
+        "abc.json",
+        false
+      ],
+      [
+        ".sync-conflict-1.json",
+        false
+      ],
+      [
+        "12.json.bak",
+        false
+      ],
+      [
+        ".json",
+        false
+      ]
+    ],
+    "disambiguate": [
+      {
+        "aliases": {
+          "a-sid": "same",
+          "b-sid": "same",
+          "c-sid": "same-c-sid"
+        },
+        "live": [
+          {
+            "session_id": "a-sid",
+            "short_id": "aaaa",
+            "project": null
+          },
+          {
+            "session_id": "b-sid",
+            "short_id": "bbbb",
+            "project": null
+          },
+          {
+            "session_id": "c-sid",
+            "short_id": "cccc",
+            "project": null
+          }
+        ],
+        "out": {
+          "a-sid": "same",
+          "b-sid": "same-b-sid",
+          "c-sid": "same-c-sid"
+        }
+      },
+      {
+        "aliases": {
+          "a-sid": "fno-dup",
+          "b-sid": "fno-dup"
+        },
+        "live": [
+          {
+            "session_id": "a-sid",
+            "short_id": "dup",
+            "project": "/r/fno"
+          },
+          {
+            "session_id": "b-sid",
+            "short_id": "dup",
+            "project": "/r/fno"
+          }
+        ],
+        "out": {
+          "a-sid": "fno-dup",
+          "b-sid": "fno-b-sid"
+        }
+      },
+      {
+        "aliases": {
+          "a": "one",
+          "b": "one",
+          "c": "one-c"
+        },
+        "live": [],
+        "out": {
+          "a": "one",
+          "b": "one-b",
+          "c": "one-c"
+        }
+      },
+      {
+        "aliases": {
+          "a": "x",
+          "b": "x",
+          "c": "x",
+          "d": "x-c"
+        },
+        "live": [],
+        "out": {
+          "a": "x",
+          "b": "x-b",
+          "c": "x-c",
+          "d": "x-c-d"
+        }
+      }
+    ]
+  },
+  "tree": {
+    "files": {
+      "sessions/101.json": "{\"sessionId\": \"11111111-aaaa-4aaa-8aaa-000000000001\", \"pid\": 4194000, \"cwd\": \"/w/alpha\", \"status\": \"busy\", \"jobId\": \"aaaaaaaa\"}",
+      "sessions/4194102.json": "{\"sessionId\": \"22222222-aaaa-4aaa-8aaa-000000000002\", \"cwd\": \"/w/beta\", \"agent\": \"claude\"}",
+      "sessions/103.json": "{torn",
+      "sessions/104.json": "[\"not\", \"a\", \"dict\"]",
+      "sessions/105.json": "{\"sessionId\": \"77777777-aaaa-4aaa-8aaa-000000000007\", \"pid\": \"bad\", \"cwd\": \"/w/excluded\", \"jobId\": \"excl0001\"}",
+      "sessions/.sync-conflict-9.json": "{\"sessionId\": \"nope\"}",
+      "sessions/abc.json": "{\"sessionId\": \"nope2\"}",
+      "projects/-w-gamma/old.jsonl": "{}\n",
+      "projects/-w-gamma/33333333-aaaa-4aaa-8aaa-000000000003.jsonl": "{}\n",
+      "projects/-w-gamma/44444444-aaaa-4aaa-8aaa-000000000004.sync-conflict-1.jsonl": "{}\n",
+      "projects/-w-under_score/44444444-aaaa-4aaa-8aaa-000000000004.jsonl": "{}\n",
+      "projects/-w-adopted/55555555-aaaa-4aaa-8aaa-000000000005.jsonl": "{}\n",
+      "codex/2026/10/30/rollout-a-01a00000-0000-7000-8000-000000000001.jsonl": "{\"type\": \"session_meta\", \"payload\": {\"id\": \"01a00000-0000-7000-8000-000000000001\", \"cwd\": \"/w/delta\"}}\n",
+      "codex/2026/10/30/rollout-b-01a00000-0000-7000-8000-000000000002.jsonl": "{\"type\": \"session_meta\", \"payload\": {\"id\": \"01a00000-0000-7000-8000-000000000002\", \"cwd\": \"/w/old\"}}\n",
+      "codex/2026/10/30/rollout-c.jsonl": "not json\n",
+      "codex/2026/10/30/rollout-d-01a00000-0000-7000-8000-000000000003.jsonl": "{\"type\": \"session_meta\", \"payload\": {\"id\": \"01a00000-0000-7000-8000-000000000003\", \"cwd\": \"/w/delta-two\"}}\n",
+      "opencode/storage/session/proj/ses_AAAAbbbbCCCC.json": "{\"id\": \"ses_AAAAbbbbCCCC\", \"directory\": \"/w/oc\"}",
+      "opencode/storage/session/proj/bad.json": "{",
+      "opencode/storage/message/ses_AAAAbbbbCCCC/msg_1.json": "{}",
+      "daemon/roster.json": "{\"workers\": {\"66666666\": {\"sessionId\": \"66666666-aaaa-4aaa-8aaa-000000000006\", \"pid\": 500, \"cwd\": \"/w/roster\"}, \"dup\": {\"sessionId\": \"66666666-aaaa-4aaa-8aaa-000000000006\", \"pid\": 501, \"cwd\": \"/w/dup\"}, \"skip\": {\"pid\": 5}}}",
+      "agents/registry.json": "{\"schema_version\": 43, \"agents\": [{\"name\": \"excluded-row\", \"cwd\": \"/w/excluded\", \"log_path\": \"\", \"harness\": \"claude\", \"short_id\": \"excl0001\", \"harness_session_id\": \"77777777-aaaa-4aaa-8aaa-000000000007\", \"status\": \"idle\"}, {\"name\": \"codex-exited\", \"cwd\": \"/w/exited\", \"log_path\": \"\", \"harness\": \"codex\", \"harness_session_id\": \"01a00000-0000-7000-8000-000000000004\", \"status\": \"exited\", \"aliases\": [\"friendly-exit\"]}, {\"name\": \"codex-live\", \"cwd\": \"\", \"log_path\": \"\", \"harness\": \"codex\", \"harness_session_id\": \"01a00000-0000-7000-8000-000000000003\", \"status\": \"idle\"}, {\"name\": \"alien\", \"cwd\": \"/w/alien\", \"log_path\": \"\", \"harness\": \"hermes\", \"harness_session_id\": \"01a00000-0000-7000-8000-000000000005\", \"status\": \"idle\"}, {\"name\": \"legacy-claude\", \"cwd\": \"/w/legacy\", \"log_path\": \"\", \"harness\": \"claude\", \"short_id\": \"bbbb0001\", \"status\": \"idle\"}]}",
+      "state/mux/session-names.json": "{\"22222222-aaaa-4aaa-8aaa-000000000002\": \"hand-edited\", \"dead-session\": \"retire-me\", \"33333333-aaaa-4aaa-8aaa-000000000003\": \"gamma-dup-dup\", \"66666666-aaaa-4aaa-8aaa-000000000006\": \"claude-abcdef\"}"
+    },
+    "ages": {
+      "codex/2026/10/30/rollout-a-01a00000-0000-7000-8000-000000000001.jsonl": 30,
+      "codex/2026/10/30/rollout-b-01a00000-0000-7000-8000-000000000002.jsonl": 100000,
+      "codex/2026/10/30/rollout-c.jsonl": 30,
+      "codex/2026/10/30/rollout-d-01a00000-0000-7000-8000-000000000003.jsonl": 60,
+      "projects/-w-gamma/old.jsonl": 5000,
+      "projects/-w-gamma/33333333-aaaa-4aaa-8aaa-000000000003.jsonl": 10
+    },
+    "truth": {
+      "11111111-aaaa-4aaa-8aaa-000000000001": {
+        "state": "working",
+        "last_activity_age_s": 5,
+        "observed_model": {
+          "kind": "observed",
+          "model": "claude-opus-5-5",
+          "samples": 3
+        },
+        "provider_refusal": null
+      },
+      "22222222-aaaa-4aaa-8aaa-000000000002": {
+        "state": "your-move",
+        "last_activity_age_s": 700,
+        "observed_model": {
+          "kind": "no-transcript"
+        },
+        "provider_refusal": null
+      },
+      "33333333-aaaa-4aaa-8aaa-000000000003": {
+        "state": "watching",
+        "last_activity_age_s": 1300,
+        "observed_model": {
+          "kind": "observed",
+          "model": "claude-opus-5-5",
+          "samples": 1
+        },
+        "provider_refusal": null
+      },
+      "44444444-aaaa-4aaa-8aaa-000000000004": {
+        "state": "working",
+        "last_activity_age_s": 20,
+        "observed_model": {
+          "kind": "observed",
+          "model": "glm-5",
+          "samples": 1
+        },
+        "provider_refusal": null
+      },
+      "66666666-aaaa-4aaa-8aaa-000000000006": {
+        "state": "working",
+        "last_activity_age_s": 2,
+        "observed_model": {
+          "kind": "no-model-yet"
+        },
+        "provider_refusal": null
+      },
+      "01a00000-0000-7000-8000-000000000001": {
+        "state": "working",
+        "last_activity_age_s": 30,
+        "observed_model": {
+          "kind": "no-transcript"
+        },
+        "provider_refusal": "provider_4xx_quota"
+      },
+      "01a00000-0000-7000-8000-000000000003": {
+        "state": "done",
+        "last_activity_age_s": 9,
+        "observed_model": {
+          "kind": "no-transcript"
+        },
+        "provider_refusal": null
+      },
+      "01a00000-0000-7000-8000-000000000004": {
+        "state": "working",
+        "last_activity_age_s": 3,
+        "observed_model": {
+          "kind": "no-transcript"
+        },
+        "provider_refusal": null
+      },
+      "ses_AAAAbbbbCCCC": {
+        "state": "working",
+        "last_activity_age_s": null,
+        "observed_model": {
+          "kind": "no-transcript"
+        },
+        "provider_refusal": null
+      },
+      "bbbb0001": {
+        "state": "stalled",
+        "last_activity_age_s": 90000,
+        "observed_model": {
+          "kind": "no-transcript"
+        },
+        "provider_refusal": null
+      },
+      "00000000-loaded": {
+        "state": "your-move",
+        "last_activity_age_s": 1,
+        "observed_model": {
+          "kind": "no-transcript"
+        },
+        "provider_refusal": null
+      },
+      "ses_DDDDeeeeFFFF": {
+        "state": "working",
+        "last_activity_age_s": 1,
+        "observed_model": {
+          "kind": "no-transcript"
+        },
+        "provider_refusal": null
+      },
+      "ses_ZZ": {
+        "state": "working",
+        "last_activity_age_s": 1,
+        "observed_model": {
+          "kind": "no-transcript"
+        },
+        "provider_refusal": null
+      }
+    },
+    "live_procs": [
+      [
+        4194001,
+        "/w/gamma"
+      ],
+      [
+        4194002,
+        "/w/gamma"
+      ],
+      [
+        4194003,
+        "/w/under_score"
+      ],
+      [
+        4194004,
+        "/w/adopted"
+      ],
+      [
+        4194005,
+        "/w/none"
+      ]
+    ],
+    "loaded_threads": [
+      [
+        "00000000-loaded",
+        "/w/loaded"
+      ],
+      [
+        "00000000-loaded",
+        "/w/loaded-dup"
+      ],
+      [
+        "01a00000-0000-7000-8000-000000000005",
+        "/w/x5"
+      ]
+    ],
+    "bg_socket_pids": {
+      "66666666": 4194006
+    },
+    "projects": {
+      "/w/alpha": "/repos/alpha",
+      "/w/gamma": "/repos/gamma",
+      "/w/delta": "claude"
+    },
+    "exclude_short": [
+      "excl0001"
+    ],
+    "exclude_ids": [
+      "55555555-aaaa-4aaa-8aaa-000000000005"
+    ],
+    "expected": {
+      "handles": [
+        [
+          "11111111-aaaa-4aaa-8aaa-000000000001",
+          "alpha-aaaaaaaa"
+        ],
+        [
+          "01a00000-0000-7000-8000-000000000004",
+          "friendly-exit"
+        ],
+        [
+          "33333333-aaaa-4aaa-8aaa-000000000003",
+          "gamma-33333333"
+        ],
+        [
+          "22222222-aaaa-4aaa-8aaa-000000000002",
+          "hand-edited"
+        ],
+        [
+          "01a00000-0000-7000-8000-000000000001",
+          "project-claude-01a00000"
+        ],
+        [
+          "00000000-loaded",
+          "session-00000000"
+        ],
+        [
+          "01a00000-0000-7000-8000-000000000003",
+          "session-01a00000"
+        ],
+        [
+          "01a00000-0000-7000-8000-000000000005",
+          "session-01a00000-0000-7000-8000-000000000005"
+        ],
+        [
+          "44444444-aaaa-4aaa-8aaa-000000000004",
+          "session-44444444"
+        ],
+        [
+          "66666666-aaaa-4aaa-8aaa-000000000006",
+          "session-66666666"
+        ],
+        [
+          "bbbb0001",
+          "session-bbbb0001"
+        ],
+        [
+          "ses_AAAAbbbbCCCC",
+          "session-ses_AAAA"
+        ]
+      ],
+      "rows": [
+        {
+          "handle": "alpha-aaaaaaaa",
+          "short_id": "aaaaaaaa",
+          "session_id": "11111111-aaaa-4aaa-8aaa-000000000001",
+          "address": "11111111",
+          "pid": 4194000,
+          "cwd": "/w/alpha",
+          "project": "/repos/alpha",
+          "status": "orphaned",
+          "reachability": "unreachable",
+          "basis": "process-gone",
+          "progress": "unknown",
+          "progress_basis": "no-evidence",
+          "last_activity_age_s": 5,
+          "agent": "claude"
+        },
+        {
+          "handle": "friendly-exit",
+          "short_id": "01a00000",
+          "session_id": "01a00000-0000-7000-8000-000000000004",
+          "address": "01a00000",
+          "pid": 0,
+          "cwd": "/w/exited",
+          "project": null,
+          "status": "orphaned",
+          "reachability": "unreachable",
+          "basis": "exit-recorded",
+          "progress": "unknown",
+          "progress_basis": "no-evidence",
+          "last_activity_age_s": 3,
+          "agent": "codex"
+        },
+        {
+          "handle": "gamma-33333333",
+          "short_id": "33333333",
+          "session_id": "33333333-aaaa-4aaa-8aaa-000000000003",
+          "address": "33333333",
+          "pid": 4194001,
+          "cwd": "/w/gamma",
+          "project": "/repos/gamma",
+          "status": "orphaned",
+          "reachability": "unreachable",
+          "basis": "process-gone",
+          "progress": "unknown",
+          "progress_basis": "no-evidence",
+          "last_activity_age_s": 1300,
+          "agent": "claude"
+        },
+        {
+          "handle": "hand-edited",
+          "short_id": "22222222",
+          "session_id": "22222222-aaaa-4aaa-8aaa-000000000002",
+          "address": "22222222",
+          "pid": 4194102,
+          "cwd": "/w/beta",
+          "project": null,
+          "status": "orphaned",
+          "reachability": "unreachable",
+          "basis": "process-gone",
+          "progress": "unknown",
+          "progress_basis": "no-evidence",
+          "last_activity_age_s": 700,
+          "agent": "claude"
+        },
+        {
+          "handle": "project-claude-01a00000",
+          "short_id": "01a00000",
+          "session_id": "01a00000-0000-7000-8000-000000000001",
+          "address": "01a00000",
+          "pid": 0,
+          "cwd": "/w/delta",
+          "project": "claude",
+          "status": "refused",
+          "reachability": "reachable",
+          "basis": "transcript",
+          "progress": "refused",
+          "progress_basis": "provider-refused",
+          "last_activity_age_s": 30,
+          "agent": "codex"
+        },
+        {
+          "handle": "session-00000000",
+          "short_id": "00000000",
+          "session_id": "00000000-loaded",
+          "address": "00000000",
+          "pid": 0,
+          "cwd": "/w/loaded",
+          "project": null,
+          "status": "writing",
+          "reachability": "reachable",
+          "basis": "transcript",
+          "progress": "awaiting-operator",
+          "progress_basis": "operator-turn",
+          "last_activity_age_s": 1,
+          "agent": "codex"
+        },
+        {
+          "handle": "session-44444444",
+          "short_id": "44444444",
+          "session_id": "44444444-aaaa-4aaa-8aaa-000000000004",
+          "address": "44444444",
+          "pid": 4194003,
+          "cwd": "/w/under_score",
+          "project": null,
+          "status": "orphaned",
+          "reachability": "unreachable",
+          "basis": "process-gone",
+          "progress": "unknown",
+          "progress_basis": "no-evidence",
+          "last_activity_age_s": 20,
+          "agent": "claude"
+        },
+        {
+          "handle": "session-66666666",
+          "short_id": "66666666",
+          "session_id": "66666666-aaaa-4aaa-8aaa-000000000006",
+          "address": "66666666",
+          "pid": 4194006,
+          "cwd": "/w/roster",
+          "project": null,
+          "status": "orphaned",
+          "reachability": "unreachable",
+          "basis": "process-gone",
+          "progress": "unknown",
+          "progress_basis": "no-evidence",
+          "last_activity_age_s": 2,
+          "agent": "claude"
+        },
+        {
+          "handle": "session-ses_AAAA",
+          "short_id": "ses_AAAA",
+          "session_id": "ses_AAAAbbbbCCCC",
+          "address": "ses_AAAA",
+          "pid": 0,
+          "cwd": "/w/oc",
+          "project": null,
+          "status": "unknown",
+          "reachability": "reachable",
+          "basis": "transcript",
+          "progress": "unknown",
+          "progress_basis": "no-evidence",
+          "last_activity_age_s": null,
+          "agent": "opencode"
+        }
+      ],
+      "name_map": "{\n  \"00000000-loaded\": \"session-00000000\",\n  \"01a00000-0000-7000-8000-000000000001\": \"project-claude-01a00000\",\n  \"01a00000-0000-7000-8000-000000000003\": \"session-01a00000\",\n  \"01a00000-0000-7000-8000-000000000004\": \"friendly-exit\",\n  \"01a00000-0000-7000-8000-000000000005\": \"session-01a00000-0000-7000-8000-000000000005\",\n  \"11111111-aaaa-4aaa-8aaa-000000000001\": \"alpha-aaaaaaaa\",\n  \"22222222-aaaa-4aaa-8aaa-000000000002\": \"hand-edited\",\n  \"33333333-aaaa-4aaa-8aaa-000000000003\": \"gamma-33333333\",\n  \"44444444-aaaa-4aaa-8aaa-000000000004\": \"session-44444444\",\n  \"66666666-aaaa-4aaa-8aaa-000000000006\": \"session-66666666\",\n  \"bbbb0001\": \"session-bbbb0001\",\n  \"ses_AAAAbbbbCCCC\": \"session-ses_AAAA\"\n}"
+    }
+  },
+  "db": {
+    "files": {
+      "opencode/storage/session/proj/ses_AAAAbbbbCCCC.json": "{\"id\": \"ses_AAAAbbbbCCCC\", \"directory\": \"/w/oc\"}",
+      "opencode/storage/session/proj/bad.json": "{",
+      "opencode/storage/message/ses_AAAAbbbbCCCC/msg_1.json": "{}",
+      "agents/registry.json": "{\"schema_version\": 43, \"agents\": []}",
+      "daemon/roster.json": "{\"workers\": {\"66666666\": {\"sessionId\": \"66666666-aaaa-4aaa-8aaa-000000000006\", \"pid\": 500, \"cwd\": \"/w/roster\"}, \"dup\": {\"sessionId\": \"66666666-aaaa-4aaa-8aaa-000000000006\", \"pid\": 501, \"cwd\": \"/w/dup\"}, \"skip\": {\"pid\": 5}}}"
+    },
+    "db_rows": [
+      [
+        "ses_DDDDeeeeFFFF",
+        "/w/oc-new",
+        200
+      ],
+      [
+        "ses_ZZ",
+        5,
+        100
+      ]
+    ],
+    "expected": {
+      "handles": [
+        [
+          "66666666-aaaa-4aaa-8aaa-000000000006",
+          "session-66666666"
+        ],
+        [
+          "ses_DDDDeeeeFFFF",
+          "session-ses_DDDD"
+        ],
+        [
+          "ses_ZZ",
+          "session-ses_ZZ"
+        ]
+      ],
+      "rows": [
+        {
+          "handle": "session-66666666",
+          "short_id": "66666666",
+          "session_id": "66666666-aaaa-4aaa-8aaa-000000000006",
+          "address": "66666666",
+          "pid": 4194006,
+          "cwd": "/w/roster",
+          "project": null,
+          "status": "orphaned",
+          "reachability": "unreachable",
+          "basis": "process-gone",
+          "progress": "unknown",
+          "progress_basis": "no-evidence",
+          "last_activity_age_s": 2,
+          "agent": "claude"
+        },
+        {
+          "handle": "session-ses_DDDD",
+          "short_id": "ses_DDDD",
+          "session_id": "ses_DDDDeeeeFFFF",
+          "address": "ses_DDDD",
+          "pid": 0,
+          "cwd": "/w/oc-new",
+          "project": null,
+          "status": "writing",
+          "reachability": "reachable",
+          "basis": "transcript",
+          "progress": "advancing",
+          "progress_basis": "transcript-turn",
+          "last_activity_age_s": 1,
+          "agent": "opencode"
+        },
+        {
+          "handle": "session-ses_ZZ",
+          "short_id": "ses_ZZ",
+          "session_id": "ses_ZZ",
+          "address": "ses_ZZ",
+          "pid": 0,
+          "cwd": "",
+          "project": null,
+          "status": "writing",
+          "reachability": "reachable",
+          "basis": "transcript",
+          "progress": "advancing",
+          "progress_basis": "transcript-turn",
+          "last_activity_age_s": 1,
+          "agent": "opencode"
+        }
+      ],
+      "name_map": "{\n  \"66666666-aaaa-4aaa-8aaa-000000000006\": \"session-66666666\",\n  \"ses_DDDDeeeeFFFF\": \"session-ses_DDDD\",\n  \"ses_ZZ\": \"session-ses_ZZ\"\n}"
+    }
+  }
+}

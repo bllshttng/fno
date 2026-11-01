@@ -47,7 +47,7 @@ happens when that misses, and it is recovery, not delivery.**
 - `msg-<id> accepted-new-turn` or `accepted-steer` - the recipient's own turn record holds the envelope id. It does not prove the recipient acted on it.
 - `msg-<id> parked` or `injected` - the bytes reached the recipient, but no turn took them yet. Peek before you resend: a resend reaches it twice.
 - `msg-<id> queued (durable)` - live delivery was not confirmed. This is durable fallback, not delivery.
-- the receipt ends `landed (...)` or a `NOT LANDED` block - the send command re-checked the recipient after a settle window, and NOT LANDED names the recovery and verify commands for that substrate and exits non-zero (14).
+- the send command re-checks the recipient after a settle window. The receipt then ends `landed (...)`, `queued, not landed yet`, or a `NOT LANDED` block. `queued, not landed yet` means a live recipient drains it at its next turn boundary. That send exits 0, so do not re-send. NOT LANDED names the recovery and verify commands for that substrate and exits non-zero (14).
 
 The recipient's own `unread` / `ack` / `drain-self` commands exist to consume that
 fallback queue, which is why they read like a mailbox. They are the recovery

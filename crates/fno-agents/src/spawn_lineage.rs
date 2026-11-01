@@ -4,8 +4,8 @@
 //! identity disposition as its `lineage_reason`.
 
 use crate::claims::{
-    ambient_parent_edge, canonical_identity_from, CanonicalDisposition, HARNESS_SESSION_MARKERS,
-    LEGACY_HARNESS_SESSION_MARKERS,
+    ambient_parent_edge, caller_env, canonical_identity_from, CanonicalDisposition,
+    HARNESS_SESSION_MARKERS, LEGACY_HARNESS_SESSION_MARKERS,
 };
 use crate::state::Lineage;
 
@@ -25,7 +25,7 @@ pub fn ambient_lineage() -> Lineage {
 /// mirroring Python's `spawn_lineage._lineage_reason`: the identity's
 /// disposition plus the markers it saw, so a null parent says why.
 fn ambient_lineage_reason() -> String {
-    let word = match canonical_identity_from(|k| std::env::var(k).ok()).2 {
+    let word = match canonical_identity_from(caller_env).2 {
         CanonicalDisposition::Absent => "absent",
         CanonicalDisposition::Invalid => "invalid",
         CanonicalDisposition::NameOnly => "name_only",
@@ -35,7 +35,7 @@ fn ambient_lineage_reason() -> String {
         .iter()
         .chain(LEGACY_HARNESS_SESSION_MARKERS.iter())
         .map(|(marker, _harness)| *marker)
-        .filter(|marker| std::env::var(marker).is_ok_and(|v| !v.trim().is_empty()))
+        .filter(|marker| caller_env(marker).is_some_and(|v| !v.trim().is_empty()))
         .collect();
     format!(
         "identity disposition={word}, markers={}",

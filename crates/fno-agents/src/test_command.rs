@@ -843,11 +843,28 @@ pub fn run_test_command(args: &[String]) -> i32 {
         "smoke" => crate::test_smoke::run(&rest[1..], flags.stream),
         "--census-deferred" => crate::test_census::run(&rest[1..]),
         _ => run_pytest(
-            &rest,
+            &drop_first_separator(&rest),
             flags.stream,
             flags.log.as_deref().map(Path::new),
             AmbientMode::Clean,
         ),
+    }
+}
+
+/// Strip the FIRST bare `--` from a pytest passthrough. The separator is the
+/// shell's, and parse_command_flags keeps it only so the rust arm can hand it
+/// to cargo (cargo reads `--` as its own test-binary boundary). pytest's own
+/// `--` starts paths-only collection, so a leaked one turns `-m slow_e2e`
+/// into a file pytest tries to open ("file or directory not found: -m").
+/// A later `--` is pytest's and stays.
+fn drop_first_separator(args: &[String]) -> Vec<String> {
+    match args.iter().position(|a| a == "--") {
+        Some(i) => {
+            let mut out = args[..i].to_vec();
+            out.extend_from_slice(&args[i + 1..]);
+            out
+        }
+        None => args.to_vec(),
     }
 }
 
@@ -896,6 +913,27 @@ mod tests {
         assert!(f.stream);
         assert_eq!(f.log.as_deref(), Some("/tmp/x.log"));
         assert_eq!(f.rest, vec!["-k", "expr", "--", "--log"]);
+    }
+
+    #[test]
+    fn the_shell_separator_never_reaches_pytest() {
+        let s = |xs: &[&str]| -> Vec<String> { xs.iter().map(|x| x.to_string()).collect() };
+        // The slow pane lane's shape: target file, separator, marker.
+        assert_eq!(
+            drop_first_separator(&s(&["t.py", "--", "-m", "slow_e2e"])),
+            s(&["t.py", "-m", "slow_e2e"])
+        );
+        // Separator leading the passthrough.
+        assert_eq!(
+            drop_first_separator(&s(&["--", "-k", "x"])),
+            s(&["-k", "x"])
+        );
+        // No separator, and pytest's own later separator stays.
+        assert_eq!(drop_first_separator(&s(&["t.py"])), s(&["t.py"]));
+        assert_eq!(
+            drop_first_separator(&s(&["t.py", "--", "-m", "m", "--", "d"])),
+            s(&["t.py", "-m", "m", "--", "d"])
+        );
     }
 
     #[test]

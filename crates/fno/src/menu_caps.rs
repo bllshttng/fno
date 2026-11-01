@@ -15,9 +15,9 @@
 //! - `accounts_route::NATIVE_ACCOUNTS_COMMANDS`, the `config accounts` door;
 //! - `crates/fno-agents/src/bin/client.rs`: the fno-agents binary's own
 //!   top-level commands, which count the same as fno's;
-//! - and, in-process, the `agents` table in `agents_menu`. Its group is
-//!   counted from the table, and the flat Python registrations it forwards
-//!   to are the `(python compat)` leg.
+//! - and, in-process, the `agents` table in `agents_menu`. The group is
+//!   counted from the table alone; the map's `agents` rows are the spellings
+//!   the table's own test places, and no Python registers them.
 //!
 //! `scripts/ci/menu-caps-debt.tsv` names the groups that are over today. It
 //! is shrink-only: a group over the cap needs a row, may not pass its row's
@@ -37,7 +37,6 @@ const BASELINE_REL: &str = "scripts/ci/command-baseline.txt";
 const NATIVE_REL: &str = "scripts/ci/native-command-tree.txt";
 const AGENTS_SOURCE_REL: &str = "crates/fno-agents/src/bin/client.rs";
 pub const DEBT_REL: &str = "scripts/ci/menu-caps-debt.tsv";
-const COMPAT: &str = "(python compat)";
 
 /// The committed files the guard reads, as text.
 pub struct Inputs {
@@ -222,7 +221,6 @@ pub fn counts(inputs: &Inputs) -> Result<BTreeMap<String, usize>, String> {
             parent.join(" ")
         }
     };
-    let compat = |parent: &[String]| format!("{} {COMPAT}", parent.join(" "));
     let menu = menu_paths();
     for path in &menu {
         add(path, 0, &plain);
@@ -237,9 +235,7 @@ pub fn counts(inputs: &Inputs) -> Result<BTreeMap<String, usize>, String> {
         add(&path, 0, &plain);
     }
     for path in python_paths(inputs, &live) {
-        if path[0] == "agents" {
-            add(&path, 1, &compat);
-        } else {
+        if path[0] != "agents" {
             add(&path, 0, &plain);
         }
     }

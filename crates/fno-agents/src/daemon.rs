@@ -5383,27 +5383,6 @@ pub(crate) fn apply_session_transition(
     Ok(classification)
 }
 
-/// Shell `fno agents codex-session-for-pid <pid>` -- the pane-tree rollout
-/// walk (`_codex_session_id_for_pid`), reused rather than reimplemented in
-/// Rust (Codex's rollout discovery needs a process-tree + open-fd walk this
-/// crate has no dependency for; see `worktree_clean_probe` for the same
-/// shell-and-parse-a-marker pattern). Fails closed to `None` on anything but
-/// a clean exit with a non-empty `session_id=` line.
-fn codex_session_for_pid_shellout(pid: u32) -> Option<String> {
-    let out = std::process::Command::new(crate::scrape::fno_bin())
-        .args(["agents", "codex-session-for-pid", &pid.to_string()])
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .find_map(|l| l.strip_prefix("session_id="))
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
-}
-
 // ---------------------------------------------------------------------------
 // Registry-side keeper sweep.
 // ---------------------------------------------------------------------------
@@ -5791,7 +5770,11 @@ pub(crate) fn run_reconcile_sweep(
     // tick is already visible to the probe pass that follows; serve-only
     // skips it (the tick re-measures, it does not re-bind identities).
     if matches!(mode, SweepMode::Full) {
-        late_bind_codex_sessions(home, emitter, &codex_session_for_pid_shellout)?;
+        late_bind_codex_sessions(
+            home,
+            emitter,
+            &crate::pane_spawn::codex::rollout_session_id_for_tree,
+        )?;
     }
 
     // a broken registry is a failed sweep, never a successful zero-row
@@ -5875,8 +5858,7 @@ pub(crate) fn run_reconcile_sweep(
     );
     // The sweep budget starts HERE, after the truth batch and roster load:
     // charging them to the probe loop's 5s window is why 79 rows went
-    // unprobed every sweep. The probe loop and the roster-progress loop
-    // below share this one clock.
+    // unprobed every sweep.
     let start = Instant::now();
     // The reboot arm plans FIRST, before `prober` moves into plan_reconcile:
     // its changes append after the main plan's, so a revived row's Live is
@@ -5884,7 +5866,7 @@ pub(crate) fn run_reconcile_sweep(
     // tick writes no probe inference, so planning revivals there is waste.
     let (mut revivals, revived) = if matches!(mode, SweepMode::Full) {
         crate::liveness_sweep::plan_team_revivals(
-            &entries,
+            &crate::retired_lead::unretired(&entries, home),
             roster_readable,
             |e| witness.team_running(e),
             &prober,
@@ -5961,40 +5943,6 @@ pub(crate) fn run_reconcile_sweep(
                 "to": to,
             }),
         );
-    }
-
-    // Roster-progress refresh (SECOND HALF): the same per-tick set the
-    // reconcile sweep just probed. These git/gh subprocesses are not covered
-    // by the probe loop's budget, so re-check the SAME
-    // `start`/`RECONCILE_SWEEP_BUDGET` clock: a large changed-row set must
-    // not extend a sweep that runs synchronously at daemon startup. Deferred
-    // rows land on the next tick; an I/O failure here never fails the sweep
-    // that already wrote the registry. Full-only: the serve-only tick runs
-    // every 60s and does not serve this stamp.
-    if matches!(mode, SweepMode::Full) {
-        let progress_path = home.roster_progress_json();
-        for ch in &changes {
-            if start.elapsed() >= RECONCILE_SWEEP_BUDGET {
-                break;
-            }
-            let Some(e) = entries.iter().find(|e| e.name == ch.name) else {
-                continue;
-            };
-            if e.cwd.is_empty() {
-                continue;
-            }
-            if let Err(err) = crate::roster_progress::refresh_row(
-                &progress_path,
-                &e.name,
-                Path::new(&e.cwd),
-                &now,
-            ) {
-                eprintln!(
-                    "reconcile: roster-progress refresh failed for {}: {err}",
-                    e.name
-                );
-            }
-        }
     }
 
     // The outcome events stay on the full sweeps: the tick's product is the

@@ -13,6 +13,8 @@
   "expect": {
     "argv": [
       "spawn",
+      "--harness",
+      "codex",
       "--name",
       "w6",
       "-m",
@@ -47,6 +49,11 @@
             "routing"
           ],
           [
+            "harness",
+            "codex",
+            "routing"
+          ],
+          [
             "grid",
             "codex/gpt-pin-x",
             "routing.models.pin-x"
@@ -58,7 +65,7 @@
       "source": "agents"
     },
     "stderr": [
-      "fno agents spawn: applied slot=operator-pin-override row=pin-x harness=codex (the typed model's declared row names its harness) (routing), grid=codex/gpt-pin-x (routing.models.pin-x)"
+      "fno agents spawn: applied slot=operator-pin-override row=pin-x harness=codex (the typed model's declared row names its harness) (routing), harness=codex (routing), grid=codex/gpt-pin-x (routing.models.pin-x)"
     ],
     "stdout": null
   },

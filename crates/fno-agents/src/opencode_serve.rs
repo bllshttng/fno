@@ -1645,7 +1645,15 @@ mod tests {
             *requests
         );
         drop(requests);
-        let launched = std::fs::read_to_string(cwd.join("argv.txt")).unwrap();
+        // The launch is detached, so the stub may not have written its file yet.
+        let argv_path = cwd.join("argv.txt");
+        for _ in 0..100 {
+            if std::fs::metadata(&argv_path).is_ok_and(|m| m.len() > 0) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let launched = std::fs::read_to_string(&argv_path).unwrap();
         let lines: Vec<&str> = launched.lines().collect();
         // `$@` holds the arguments only: argv[0] (the stub) is not printed.
         assert_eq!(

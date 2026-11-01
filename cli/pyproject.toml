@@ -51,11 +51,9 @@ path = "src/fno/__init__.py"
 [tool.hatch.build.targets.wheel]
 packages = ["src/fno"]
 
-# The canonical events schema ships INSIDE the wheel as `fno/events/schema.yaml`
-# - ordinary package data under `src/fno`, so both the wheel and the sdist carry
-# it with no force-include machinery. The Python validator reads the sibling
-# `schema.yaml` directly (events/__init__.py:_resolve_manifest_path). (x-122a
-# follow-up: colocate the schema with its loader.)
+# The canonical events schema ships inside the wheel as fno/events/schema.yaml.
+# It is ordinary package data under src/fno, so both wheel and sdist carry it.
+# Native schema projections are generated from this same source.
 [tool.hatch.build.targets.wheel.hooks.custom]
 path = "hatch_build.py"
 

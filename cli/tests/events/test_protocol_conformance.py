@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from fno.events import ValidationError, validate
+from fno.events.store_client import ValidationError, validate
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 FIXTURES = REPO_ROOT / "schemas" / "fixtures" / "events-protocol-v1"

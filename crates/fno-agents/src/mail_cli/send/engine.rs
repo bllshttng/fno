@@ -764,18 +764,19 @@ fn a2a_marker() -> PathBuf {
 /// Classify a registered recipient without
 /// trusting its stored lifecycle.
 pub(super) fn registered_family1_state(row: &Value) -> String {
+    registered_family1_probe(row).map_or_else(|| "unknown".to_string(), |probe| probe.state)
+}
+
+fn registered_family1_probe(row: &Value) -> Option<crate::truth_probe::TruthProbe> {
     let session_id = opt_str_field(row, "harness_session_id")
         .or_else(|| opt_str_field(row, "cc_session_id"))
         .or_else(|| opt_str_field(row, "session_id"))
         .or_else(|| opt_str_field(row, "short_id"))
         .unwrap_or_default();
     if session_id.is_empty() {
-        return "unknown".to_string();
+        return None;
     }
-    match crate::truth_probe::family1_truth_probe(&session_id) {
-        Some(probe) => probe.state,
-        None => "unknown".to_string(),
-    }
+    crate::truth_probe::family1_truth_probe(&session_id)
 }
 
 /// One fire-and-forget live attempt over the row's
@@ -1394,10 +1395,20 @@ pub(super) fn dispatch_send_locked(
     }
     let reservation = reservation.expect("checked above");
 
-    let family1_state = registered_family1_state(&existing);
+    let family1_probe = registered_family1_probe(&existing);
+    let family1_state = family1_probe
+        .as_ref()
+        .map_or("unknown", |probe| probe.state.as_str());
     let family1_live =
         family1_state == "working" || family1_state == "watching" || family1_state == "your-move";
-    let durable_owner = classify_durable_owner(false, family1_live, !family1_live);
+    // A dead process keeps its transcript state, so the owner also needs the
+    // verdict. The live attempt stays on: a `silent` row may still be alive.
+    let owner_live = family1_live
+        && family1_probe
+            .as_ref()
+            .and_then(|p| p.reachability.as_deref())
+            != Some("unreachable");
+    let durable_owner = classify_durable_owner(false, owner_live, !owner_live);
     let family1_attemptable = family1_live
         || family1_state == "unknown"
         || (str_field(&existing, "harness") == "claude" && existing.get("mux").is_none());

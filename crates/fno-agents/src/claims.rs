@@ -1389,6 +1389,38 @@ fn vendor_identity_from(get: &impl Fn(&str) -> Option<String>) -> (Option<(Strin
     )
 }
 
+/// Every nonblank ambient session id a claim holder may be anchored on. An
+/// invalid or contradicting canonical identity proves nothing, so it yields
+/// none, apart from the id init stamps for the run itself.
+pub(crate) fn ambient_session_candidates() -> Vec<String> {
+    let get = |name: &str| std::env::var(name).ok();
+    let (_, _, disposition) = canonical_identity_from(&get);
+    let refused = !matches!(disposition, CanonicalDisposition::Absent)
+        && resolve_identity_from(&get) == (None, None);
+    let markers: &[&str] = if refused {
+        &["TARGET_SESSION_ID"]
+    } else {
+        &[
+            FNO_HARNESS_SESSION_ID,
+            "CODEX_THREAD_ID",
+            "CLAUDE_CODE_SESSION_ID",
+            "CODEX_SESSION_ID",
+            "GEMINI_SESSION_ID",
+            "OPENCODE_SESSION_ID",
+            "CLAUDE_SESSION_ID",
+            "CLAUDECODE_SESSION_ID",
+            "HERMES_SESSION_ID",
+            "TARGET_SESSION_ID",
+        ]
+    };
+    markers
+        .iter()
+        .filter_map(|m| get(m))
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .collect()
+}
+
 fn resolve_identity_from(get: impl Fn(&str) -> Option<String>) -> (Option<String>, Option<String>) {
     let (canonical_session, canonical_harness, disposition) = canonical_identity_from(&get);
     let (vendor, vendor_ambiguous) = vendor_identity_from(&get);
@@ -1523,7 +1555,33 @@ pub fn resolve_harness_from(get: impl Fn(&str) -> Option<String>) -> Option<Stri
 /// ids legitimately differ and the thread id names this process, so a codex
 /// worker's own spawn names its parent instead of minting with no edge.
 pub fn ambient_parent_edge() -> (Option<String>, Option<String>, Option<String>) {
-    ambient_parent_edge_from(|k| std::env::var(k).ok())
+    ambient_parent_edge_from(caller_env)
+}
+
+/// The spawning caller's identity markers, held for this process's parent edge
+/// after the spawn seam clears them so no child inherits them.
+static CALLER_IDENTITY: std::sync::OnceLock<std::collections::HashMap<String, String>> =
+    std::sync::OnceLock::new();
+
+/// Hold the `names` this process has set, then clear them from its environment.
+/// The edge readers keep the caller; every child launched from here loses it.
+pub fn take_caller_identity(names: &[&str]) {
+    let held = names
+        .iter()
+        .filter_map(|name| Some((name.to_string(), std::env::var(name).ok()?)))
+        .collect();
+    let _ = CALLER_IDENTITY.set(held);
+    for name in names {
+        std::env::remove_var(name);
+    }
+}
+
+/// One marker as the caller set it: the held value, else the live environment.
+pub(crate) fn caller_env(key: &str) -> Option<String> {
+    CALLER_IDENTITY
+        .get()
+        .and_then(|held| held.get(key).cloned())
+        .or_else(|| std::env::var(key).ok())
 }
 
 /// Testable core of [`ambient_parent_edge`]: `get` supplies each marker's
@@ -1563,7 +1621,7 @@ pub fn ambient_parent_edge_from(
 /// dispatcher path three times across two builds with no way to tell which
 /// of the strict vendor rules zeroed the session.
 pub fn ambient_edge_reason() -> String {
-    ambient_edge_reason_from(|k| std::env::var(k).ok())
+    ambient_edge_reason_from(caller_env)
 }
 
 fn ambient_edge_reason_from(get: impl Fn(&str) -> Option<String>) -> String {

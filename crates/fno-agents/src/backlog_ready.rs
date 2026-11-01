@@ -52,10 +52,35 @@ const MAX_ANCESTOR_WALK: usize = 64;
 /// One `[backlog]` integer read from the `config.toml` in `config_dir`
 /// (the graph's own `.fno` directory). `None` on a missing file, a missing
 /// key, or a non-integer value.
+///
+/// The store lives in `<state>/db/`, so the file beside it is not the global
+/// config `fno config get` reports. For that layout the global config answers
+/// first: a `FNO_CONFIG` pin, else `<state>/config.toml`. The file beside the
+/// store fills only a key the global config leaves unset.
 pub fn backlog_config_int(config_dir: &std::path::Path, key: &str) -> Option<i64> {
-    let raw = std::fs::read_to_string(config_dir.join("config.toml")).ok()?;
-    let table = raw.parse::<toml::Table>().ok()?;
-    table.get("backlog")?.as_table()?.get(key)?.as_integer()
+    let pin = std::env::var_os("FNO_CONFIG").filter(|value| !value.is_empty());
+    backlog_config_int_pinned(config_dir, key, pin.as_deref().map(std::path::Path::new))
+}
+
+fn backlog_config_int_pinned(
+    config_dir: &std::path::Path,
+    key: &str,
+    pin: Option<&std::path::Path>,
+) -> Option<i64> {
+    let read = |file: &std::path::Path| -> Option<toml::Value> {
+        let raw = std::fs::read_to_string(file).ok()?;
+        let table = raw.parse::<toml::Table>().ok()?;
+        table.get("backlog")?.as_table()?.get(key).cloned()
+    };
+    let beside = config_dir.join("config.toml");
+    let global = if config_dir.file_name() == Some(std::ffi::OsStr::new("db")) {
+        pin.map(std::path::Path::to_path_buf)
+            .or_else(|| config_dir.parent().map(|root| root.join("config.toml")))
+            .and_then(|file| read(&file))
+    } else {
+        None
+    };
+    global.or_else(|| read(&beside))?.as_integer()
 }
 
 /// `config.backlog.staleness_days`, read from the `config.toml` in
@@ -65,6 +90,12 @@ pub fn backlog_config_int(config_dir: &std::path::Path, key: &str) -> Option<i64
 pub fn configured_staleness_days(config_dir: &std::path::Path) -> Option<i64> {
     let days = backlog_config_int(config_dir, "staleness_days")?;
     (days > 0).then_some(days)
+}
+
+/// [`configured_staleness_days`] for this machine's graph store.
+pub fn store_staleness_days() -> Option<i64> {
+    let graph = crate::backlog::settings::graph_path();
+    configured_staleness_days(graph.parent()?)
 }
 
 // ---------------------------------------------------------------------------
@@ -2131,6 +2162,27 @@ mod tests {
 
     /// The ranking-and-drain rule for outside votes: one voter set, one
     /// movement read, with and without the external records.
+    #[test]
+    fn the_global_config_answers_first_for_a_store_in_db() {
+        let root = tempfile::tempdir().unwrap();
+        let db = root.path().join("db");
+        std::fs::create_dir_all(&db).unwrap();
+        let global = root.path().join("config.toml");
+        let read = |pin| backlog_config_int_pinned(&db, "max_open_ideas", pin);
+        std::fs::write(&global, "[backlog]\nmax_open_ideas = 400\n").unwrap();
+        assert_eq!(read(None), Some(400));
+
+        std::fs::write(db.join("config.toml"), "[backlog]\nmax_open_ideas = 50\n").unwrap();
+        assert_eq!(read(None), Some(400));
+
+        let pin = root.path().join("pinned.toml");
+        std::fs::write(&pin, "[backlog]\nmax_open_ideas = 7\n").unwrap();
+        assert_eq!(read(Some(pin.as_path())), Some(7));
+
+        std::fs::write(&global, "[backlog]\n").unwrap();
+        assert_eq!(read(None), Some(50));
+    }
+
     #[test]
     fn an_outside_vote_counts_nowhere_in_ranking_or_the_stale_drain() {
         let row = |encs: serde_json::Value| {

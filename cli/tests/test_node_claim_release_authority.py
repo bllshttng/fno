@@ -67,6 +67,10 @@ ALLOWLIST = {
     # between the two calls. Not releasing would strand a bogus 2h claim on a
     # node no one is building.
     "hooks/helpers/init-target-state.sh",
+    # The failover respawn: it releases the dead worker's node claim only after
+    # that worker's stop succeeded, so the replacement spawn can acquire it. A
+    # failed stop returns before this line, and a live holder is never in play.
+    "crates/fno-agents/src/recovery_sweep/redispatch.rs",
     # graph/store.py release_node_claim_at_closure: the node-CLOSURE release.
     # Fired at the one choke point every closure path funnels through (the
     # terminal-rung transition inside commit_rows_via_store, plus the tracker

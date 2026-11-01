@@ -439,7 +439,6 @@ def _private_environment(root: Path, repo: Path) -> dict[str, str]:
         "FNO_EVENTS_PATH",
         "GLOBAL_EVENTS_PATH",
         "FNO_AGENTS_BIN",
-        "FNO_AGENTS_RUNTIME",
         "FNO_LOOPCHECK_FNO_BIN",
         "FNO_DRIVER_LIB_DIR",
         "FNO_HARNESS_SESSION_ID",

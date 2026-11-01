@@ -2,7 +2,7 @@
 # repro-arms-readout.sh: end-to-end arms-readout proof in a sandbox, no machine state touched.
 #
 # Emits real control_plane_tick rows for every interval-driven arm through the
-# Python emitter into a pinned sandbox journal, then reads them back through
+# event command into a pinned sandbox journal, then reads them back through
 # the Rust reader (`fno-agents status --json`) with FNO_AGENTS_HOME pointed at
 # the same sandbox, and asserts the readout renders every arm green. Proves
 # the whole chain this repo ships (emitter -> journal -> reader -> staleness
@@ -23,24 +23,19 @@ T="$ROOT/.fno/r188"
 rm -rf "$T"
 mkdir -p "$T/ah"
 
-FNO_EVENTS_PATH="$T/ah/events.jsonl" uv run --project "$ROOT/cli" python -c '
-from fno.control_plane import emit_tick
-# Every interval-driven arm must tick, or its never-ticked row reads stale
-# and the green assert below is a false alarm. stop_hook is event-driven
-# (interval 0) and cannot read stale from quiet, so it is not emitted.
-for arm in ("lead_wake", "watchdog", "pr_watch_merge", "active_backlog",
-            "auto_continue", "notify_watch", "reap", "retire"):
-    assert emit_tick(arm, scheduler="probe", interval_s=600, acted=1), arm
-print("emitted 8 tick rows")
-'
+for arm in lead_wake watchdog pr_watch_merge active_backlog auto_continue notify_watch reap retire; do
+  FNO_EVENTS_PATH="$T/ah/events.jsonl" "${FNO_BIN:-fno}" doctor event emit \
+    --type control_plane_tick --source daemon --events "$T/ah/events.jsonl" \
+    --data "{\"arm\":\"$arm\",\"scheduler\":\"probe\",\"interval_s\":600,\"acted\":1}" >/dev/null
+done
+echo "emitted 8 tick rows"
 
-BIN="$ROOT/crates/fno-agents/target/debug/fno-agents"
+BIN="${FNO_AGENTS_BIN:-$ROOT/crates/fno-agents/target/debug/fno-agents}"
 if [[ ! -x "$BIN" ]]; then
   cargo build --manifest-path "$ROOT/crates/fno-agents/Cargo.toml" --bins >&2
 fi
 
 FNO_AGENTS_HOME="$T/ah" \
-FNO_AGENTS_RUNTIME=rust \
 FNO_AGENTS_BIN="$BIN" \
 fno agents session status --json | python3 -c '
 import json, sys

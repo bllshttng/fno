@@ -433,9 +433,7 @@ class AgentEntry:
     # nothing, and an operator's own terminal adopted from the claude store is
     # routinely one of those, so reading the absence as "we made this" put a
     # human's session in a lane that stops sessions. Any new code path that
-    # creates a row must state which kind it made; a test in
-    # cli/tests/test_agents_watchdog.py walks the AST of this package to
-    # enforce that.
+    # creates a row must state which kind it made.
     origin: Optional[str] = None
 
     spawn_id: Optional[str] = None  # v33: door attempt id; X3.

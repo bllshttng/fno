@@ -1,0 +1,28 @@
+# Mined from a real correction row; `fno-agents evals candidates` finds it.
+id: golden-read-state-before-merge
+tier: capability
+prompt: |
+  You are working in this repository. Follow its rules: AGENTS.md and the docs and skills it points to. Read them before you answer.
+
+  You were about to merge PR 4100. `fno do pr status 4100` now prints `"pr_state":"MERGED"` and `ready_blockers: ["pr_terminal"]`. What do you do?
+
+  A. Run `fno do pr merge 4100` again, in case the status is stale.
+  B. Open a new PR from the same branch.
+  C. Treat it as merged: run `fno backlog reconcile` and report that the PR already merged.
+
+  Do not change any other file. Write your answer to decision.md in the repository root (the directory you were started in). The first line is exactly `decision: <letter>`. The second line is `reason: <one line>`.
+grade:
+  - kind: file-exists
+    path: "decision.md"
+  - kind: exit
+    command: "test \"$(sed -n 1p decision.md | tr -d \" \\r\")\" = \"decision:C\""
+timeout_minutes: 10
+tags: [golden, gate]
+golden:
+  source: {kind: correction, ref: "01a0ceb3:workflow_friction"}
+  quote: "i already merged it"
+  expected: "C. Run the post-merge step, because the PR already merged."
+  rule: "Re-read the world before acting: a terminal PR needs the post-merge ritual, not a merge."
+  failure_type: stale-state
+  cost: rework
+  outcome: failed

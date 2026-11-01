@@ -253,7 +253,7 @@ class MaintainBlock(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
-    staleness_days: int = 30
+    staleness_days: int = 60
     max_failed_attempts: int = 3
     abandoned_do_row_hours: int = 24  # transcript-quiet hours before the do-row leg reaps
     # Wall-clock budget for one pass (checked between legs); a short pass exits 4.
@@ -412,7 +412,7 @@ class BacklogBlock(BaseModel):
     # Ready-node quarantine threshold (G1 stale-ready guard). A ready node with
     # no movement signal for this many days is skipped by selection and offered
     # to `maintain --apply` for a reversible defer. Distinct from
-    # maintain.staleness_days (30, for idea-stage rows) - ready work goes stale
+    # maintain.staleness_days (60, for idea-stage rows) - ready work goes stale
     # faster than an untriaged idea, so it defaults tighter (21).
     staleness_days: int = 21
     epic_max_open_children: Optional[int] = Field(default=None, ge=1)
@@ -629,7 +629,7 @@ class PostMergeBlock(BaseModel):
     @field_validator("model", mode="before")
     @classmethod
     def _coerce_model(cls, v: object) -> str:
-        """Fail-safe to the sonnet default on empty/whitespace/non-str.
+        """Fail-safe to the field's tier default on empty/whitespace/non-str.
 
         A blank ``model = ""`` must never reach ``--model ""`` (an empty flag
         value), so coerce it back to the tier default rather than passing it
@@ -637,7 +637,7 @@ class PostMergeBlock(BaseModel):
         """
         if isinstance(v, str) and v.strip():
             return v.strip()
-        return "claude-opus-5"
+        return str(cls.model_fields["model"].default)
 
 
 class ResearchBlock(BaseModel):
@@ -2074,6 +2074,11 @@ def _positive_int(v: object) -> bool:
     return isinstance(v, int) and not isinstance(v, bool) and v >= 1
 
 
+def _lane_count(v: object) -> bool:
+    """A lane cap is a count where `0` closes the lane; `True` and `-1` stay malformed."""
+    return isinstance(v, int) and not isinstance(v, bool) and v >= 0
+
+
 # The per-provider budgets footnote ships. A provider absent from this table is
 # unbounded in every dimension, which is today's behavior for a dedicated
 # account. zai is here because the account is SHARED: `subagents = 1` is what
@@ -2102,6 +2107,7 @@ class ProviderBudget(BaseModel):
 
     `None` on either field means unbounded in that dimension, which is what an
     unlisted provider gets: today's behavior for every dedicated account.
+    `lanes = 0` is not unset: it closes the lane, so the gate refuses every spawn.
     """
 
     #: concurrent spawned workers on this provider; None = uncapped.
@@ -2111,7 +2117,7 @@ class ProviderBudget(BaseModel):
 
     @field_validator("lanes", "subagents", mode="before")
     @classmethod
-    def _coerce_positive(cls, v: object) -> object:
+    def _coerce_positive(cls, v: object, info: ValidationInfo) -> object:
         """A malformed dimension reads as unbounded IN THAT DIMENSION only.
 
         Never raises: the whole-table validator (`_coerce_max_lanes`) is the
@@ -2119,16 +2125,17 @@ class ProviderBudget(BaseModel):
         raise here would turn a typo in one field into a load failure for the
         entire settings model.
         """
+        floor = 0 if info.field_name == "lanes" else 1
         if isinstance(v, bool):
             return None
-        if isinstance(v, int) and v >= 1:
+        if isinstance(v, int) and v >= floor:
             return v
         if isinstance(v, str):
             try:
                 n = int(v.strip())
             except ValueError:
                 return None
-            return n if n >= 1 else None
+            return n if n >= floor else None
         return None
 
 
@@ -2350,6 +2357,7 @@ class AgentsBlock(SweepKeys):
 
             [agents.provider_limits]
             zai = 5                 # legacy scalar -> lanes = 5
+            openai = 0              # 0 closes the lane
 
             [agents.provider_limits.zai]
             lanes = 5
@@ -2373,10 +2381,14 @@ class AgentsBlock(SweepKeys):
                 and re.fullmatch(r"[a-z][a-z0-9_-]*", provider)
             ):
                 return dict(_BUILTIN_PROVIDER_BUDGETS)
-            if _positive_int(budget):
+            if _lane_count(budget):
                 fields: dict[str, object] = {"lanes": budget}
             elif isinstance(budget, dict) and not (set(budget) - {"lanes", "subagents"}):
-                fields = {k: v for k, v in budget.items() if _positive_int(v)}
+                fields = {
+                    k: v
+                    for k, v in budget.items()
+                    if (_lane_count(v) if k == "lanes" else _positive_int(v))
+                }
                 if len(fields) != len(budget):
                     return dict(_BUILTIN_PROVIDER_BUDGETS)
             else:
@@ -2500,16 +2512,14 @@ class AutonomyBlock(BaseModel):
     every spawner's own gate still governs exactly as before until an
     operator explicitly arms the panic switch.
 
-    Explicitly NOT a per-dispatcher lever (Alternative A in the design doc,
-    rejected): nine levers multiply the state an operator must hold and
-    guarantee some subset goes stale, which is the same failure with more
-    surface. This is the ONE switch; detail belongs in ``fno agents autonomy
-    status``, not in a second layer of configuration.
+    ``mode`` and ``allow`` are read by ``crates/fno-agents/src/autonomy_policy.rs``.
     """
 
     model_config = ConfigDict(extra="ignore")
 
     enabled: bool = True
+    mode: Literal["ask", "balanced", "yolo"] = "balanced"
+    allow: list[Literal["restart", "merge", "law"]] = Field(default_factory=list)
 
     @field_validator("enabled", mode="before")
     @classmethod
@@ -3840,6 +3850,24 @@ class PreflightBlock(BaseModel):
     required: bool = False
 
 
+class CiTierBlock(BaseModel):
+    """The CI tier (nested under 'config.ci_tier').
+
+    ``enabled`` turns on the daemon arm that keeps at most six merge-queue
+    runs in flight per repo across every clone on this machine: it ranks the
+    open PRs, cancels the overflow, and reruns a run it cancelled once a
+    slot frees (a cancelled run has no failed job to select, so the rerun is
+    full). Default false: the tier is opt-in per MACHINE, never per repo.
+    Two clones of one repo are one tier; two machines are two arms that
+    would cancel and rerun each other's work. Enable it on exactly one
+    machine per repo.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    enabled: bool = False
+
+
 class ConfigBlock(BaseModel):
     """Top-level config block (nested under 'config:' in settings.yaml)."""
 
@@ -3891,6 +3919,7 @@ class ConfigBlock(BaseModel):
     auto_merge: AutoMergeBlock = Field(default_factory=AutoMergeBlock)
     auto_heal: AutoHealBlock = Field(default_factory=AutoHealBlock)
     pr_watch: PrWatchBlock = Field(default_factory=PrWatchBlock)
+    ci_tier: CiTierBlock = Field(default_factory=CiTierBlock)
     groom: GroomBlock = Field(default_factory=GroomBlock)
     evals: EvalsBlock = Field(default_factory=EvalsBlock)
     recovery: RecoveryBlock = Field(default_factory=RecoveryBlock)

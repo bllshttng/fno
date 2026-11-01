@@ -153,7 +153,7 @@ done < <(
 while IFS= read -r hit; do
     [[ -z "$hit" ]] && continue
     echo "stdlib events append at $hit: production code must not open an event journal for append" >&2
-    remediation "commit through the native store (fno.events.append_event / EventEmitter / _append_bounded_event) instead"
+    remediation "commit through the native store (fno.events.store_client.append_event / EventEmitter / _append_bounded_event) instead"
     violations=$((violations + 1))
 done < <(
     grep -rEn 'open\([^)]*events\.jsonl[^)]*"[aA]"|OpenOptions::new\(\)[^;]*events\.jsonl|\.append\(true\)[^;]*events\.jsonl|events\.jsonl[^;]*\.append\(true\)' \

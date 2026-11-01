@@ -2,8 +2,7 @@
 //! parity-oracle: fno.agents.cli._truth_line
 //!
 //! The truth CLI's human line and `--json` bytes, frozen against goldens
-//! captured from the Python leg (tests/golden/truth/capture.py) before it was
-//! deleted. Each golden renders one session_truth fixture payload with no
+//! captured from the Python leg before it was deleted. Each golden renders one session_truth fixture payload with no
 //! falsifier, or with each falsifier and with and without a session id. The
 //! reader itself is held by session_truth_parity.rs.
 

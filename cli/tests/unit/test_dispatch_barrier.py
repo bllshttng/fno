@@ -1,15 +1,9 @@
-"""Claim-visibility barrier at the spawn-guard choke point (x-a7ab 1.2 / x-b44e).
+"""The spawn-handover claim: the worker inherits it, and a wrong name cannot.
 
-spawn-guard is the single source of truth for the dispatch:<id> reservation,
-called by both spawn.sh and dispatch-node.sh. After acquiring the reservation it
-re-reads the claims dir to confirm THIS holder is the one on disk before
-returning dispatchable; a peer that won a visibility-lagged race surfaces as a
-different holder and this dispatcher skips with duplicate-claim so exactly one
-worker launches.
+The guard that takes the handover claim is native; its verdicts are pinned by
+the Rust suite. What stays here is the Python claims command that a booting
+worker calls to inherit the claim.
 """
-import json
-
-import pytest
 from typer.testing import CliRunner
 
 # Import the claims CLI module BEFORE any test patches fno.claims.core. Its
@@ -19,17 +13,7 @@ from typer.testing import CliRunner
 # handover test in the same worker calls the stub instead of the real acquire.
 import fno.claims.cli  # noqa: F401
 
-from fno.agents.cli import _spawn_guard_decision, agents_app
-
 runner = CliRunner()
-
-
-def _last_json(out: str) -> dict:
-    for line in reversed(out.strip().splitlines()):
-        line = line.strip()
-        if line.startswith("{"):
-            return json.loads(line)
-    raise AssertionError(f"no JSON verdict in output: {out!r}")
 
 
 def _route_to(monkeypatch, root):
@@ -48,55 +32,6 @@ def _route_to(monkeypatch, root):
         monkeypatch.delenv(name, raising=False)
 
 
-@pytest.mark.dev_build
-def test_spawn_guard_serializes_two_callers(monkeypatch, tmp_path):
-    # AC2-HP: two dispatch attempts for one node -> exactly one dispatchable.
-    _route_to(monkeypatch, tmp_path)
-    r1 = runner.invoke(agents_app, ["spawn-guard", "N", "--holder", "A", "--ttl", "3m", "--json"])
-    assert r1.exit_code == 0, r1.output
-    assert _last_json(r1.output)["verdict"] == "dispatchable"
-    r2 = runner.invoke(agents_app, ["spawn-guard", "N", "--holder", "B", "--ttl", "3m", "--json"])
-    v2 = _last_json(r2.output)
-    assert v2["verdict"] == "already-running"
-    assert v2["reason"] in ("reservation-held", "duplicate-claim")
-
-
-# ---------------------------------------------------------------------------
-# the guard clears what it can prove, and refuses loudly otherwise (x-05be)
-# ---------------------------------------------------------------------------
-
-
-def _dead_pid():
-    import psutil
-
-    dead = 999_999
-    while psutil.pid_exists(dead):
-        dead += 1
-    return dead
-
-
-# ---------------------------------------------------------------------------
-# spawn --node takes THE node claim, and the worker inherits it (x-cd1e)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.dev_build
-def test_the_guard_claims_the_node_key_not_just_the_reservation(monkeypatch, tmp_path):
-    """The measured defect: five workers spawned with an explicit --node and
-    `fno agents claim status node:<id>` read free for every one of them."""
-    _route_to(monkeypatch, tmp_path)
-    from fno.claims.core import claim_status
-
-    verdict, _exit = _spawn_guard_decision(
-        "N", "spawn-cli:1", ttl="3m", handover_holder="spawn-handover:t-N"
-    )
-    assert verdict["verdict"] == "dispatchable"
-    info = claim_status("node:N", root=tmp_path)
-    assert info["state"] in ("live", "suspect"), info
-    assert info["holder"] == "spawn-handover:t-N"
-
-
-@pytest.mark.dev_build
 def test_the_worker_inherits_the_claim_without_a_refusal(monkeypatch, tmp_path):
     """x-cd1e case 6. The handover must not abort the worker, and the key must
     never read free in between - the gap is the whole point of claiming early."""
@@ -104,10 +39,13 @@ def test_the_worker_inherits_the_claim_without_a_refusal(monkeypatch, tmp_path):
     import os
 
     from fno.claims.cli import cli as claims_cli
-    from fno.claims.core import claim_status
+    from fno.claims.core import acquire_claim, claim_status
 
-    _spawn_guard_decision(
-        "N", "spawn-cli:1", ttl="3m", handover_holder="spawn-handover:t-N"
+    # The spawner's pid is not the worker's, so the acquire below can only win
+    # through the handover, never as a same-pid reacquire.
+    acquire_claim(
+        "node:N", "spawn-handover:t-N", ttl_ms=180_000,
+        pid=os.getppid(), root=tmp_path,
     )
     r = runner.invoke(
         claims_cli,
@@ -203,80 +141,3 @@ def _barrier_diag(tmp_path) -> str:
             )
         )
     )
-
-
-@pytest.mark.dev_build
-def test_the_bare_guard_command_never_clears_a_barrier_it_cannot_replace(
-    monkeypatch, tmp_path
-):
-    """`fno agents spawn-guard` takes no handover holder, so it never takes the
-    node claim. Clearing a dead spawner's reservation there removed a booting
-    worker's only barrier and put nothing in its place. The clear is legitimate
-    only for the caller that replaces it."""
-    _route_to(monkeypatch, tmp_path)
-    from fno.claims.core import acquire_claim, claim_status
-
-    acquire_claim(
-        "dispatch:N", "spawn-cli:99", ttl_ms=180_000, pid=_dead_pid(), root=tmp_path
-    )
-    verdict, exit_code = _spawn_guard_decision("N", "spawn-cli:me", ttl="3m")
-    assert verdict["verdict"] == "already-running"
-    assert verdict["reason"] == "reservation-held"
-    # The positive marker: the reservation is still on disk, holder unchanged.
-    assert claim_status("dispatch:N", root=tmp_path)["holder"] == "spawn-cli:99"
-    assert exit_code == 0
-
-
-def test_a_guard_timeout_names_its_cause(monkeypatch):
-    """A guard that never answered under a slow shared primary printed
-    reason=error, which named nothing an operator could check."""
-    import subprocess
-
-    from fno import rust_binary
-
-    def _times_out(*_args, **_kwargs):
-        try:
-            raise subprocess.TimeoutExpired(["fno-agents"], 30)
-        except subprocess.TimeoutExpired as exc:
-            raise rust_binary.CommandUnavailable(f"fno-agents failed: {exc}") from exc
-
-    monkeypatch.setattr(rust_binary, "command_call", _times_out)
-    verdict, exit_code = _spawn_guard_decision("N", "spawn-cli:me")
-    assert exit_code == 3
-    assert " reason=guard-timeout; " in verdict["refusal_line"]
-    assert "store.remote_url" in verdict["detail"]
-
-
-@pytest.mark.dev_build
-def test_a_held_node_refuses_and_hands_back_its_own_reservation(monkeypatch, tmp_path):
-    """A session that claimed the node through its own `fno do target init` is
-    invisible to the reservation, which only dedups other DISPATCHERS. Swallowing
-    that as a best-effort hiccup put a second worker on a live session's node.
-
-    And the refusal must not keep the reservation it just took: nothing
-    downstream releases it, and a `dispatch:` key is unreapable inside its TTL,
-    so it would block every dispatcher for the full three minutes."""
-    _route_to(monkeypatch, tmp_path)
-    import os
-
-    from fno.claims.core import acquire_claim, claim_status
-
-    acquire_claim(
-        "node:N", "target-session:someone-else", ttl_ms=3_600_000,
-        pid=os.getpid(), root=tmp_path,
-    )
-    verdict, exit_code = _spawn_guard_decision(
-        "N", "spawn-cli:me", ttl="3m", handover_holder="spawn-handover:t-N"
-    )
-    assert verdict["verdict"] == "already-running"
-    assert verdict["reason"] == "live-claim"
-    assert exit_code == 0
-    assert (
-        claim_status("node:N", root=tmp_path)["holder"] == "target-session:someone-else"
-    )
-    assert claim_status("dispatch:N", root=tmp_path)["state"] == "free"
-
-
-# --- x-2fe6: the reservation is taken after the launch is proven, and released
-# --- on an observation every substrate reaches ----------------------------
-

@@ -21,6 +21,20 @@ pub struct GradeCheck {
     pub max_tool_calls: Option<i64>,
 }
 
+/// Why a task exists: the real case it came from and the rule it holds. A
+/// golden states its rule, so a failure names what broke and not only a task.
+#[derive(Clone, Debug)]
+pub struct Golden {
+    pub source_kind: String,
+    pub source_ref: String,
+    pub expected: String,
+    pub rule: String,
+    pub failure_type: String,
+    pub cost: Option<String>,
+    /// `failed` or `passed`: what the source case did. Not a current result.
+    pub outcome: String,
+}
+
 /// A loaded, validated bank task. A task with no prompt is grade-only:
 /// the runner skips the worker spawn and grades the fixture directly.
 #[derive(Clone, Debug)]
@@ -32,6 +46,7 @@ pub struct TaskSpec {
     pub repo_fixture: String,
     pub timeout_minutes: i64,
     pub tags: Vec<String>,
+    pub golden: Option<Golden>,
     pub source_path: std::path::PathBuf,
 }
 
@@ -131,8 +146,13 @@ pub fn load_task(path: &std::path::Path) -> Result<TaskSpec, BankError> {
                 .collect()
         })
         .unwrap_or_default();
+    let golden = match map.get(serde_yaml_ng::Value::String("golden".into())) {
+        Some(raw) => Some(parse_golden(raw, &id, path)?),
+        None => None,
+    };
     Ok(TaskSpec {
         id,
+        golden,
         tier: tier.to_string(),
         prompt,
         grade: checks,
@@ -144,6 +164,49 @@ pub fn load_task(path: &std::path::Path) -> Result<TaskSpec, BankError> {
         timeout_minutes: timeout,
         tags,
         source_path: path.to_path_buf(),
+    })
+}
+
+fn parse_golden(
+    raw: &serde_yaml_ng::Value,
+    task_id: &str,
+    path: &std::path::Path,
+) -> Result<Golden, BankError> {
+    let prefix = format!("task '{task_id}' ({}) golden", path.display());
+    let Some(map) = raw.as_mapping() else {
+        return Err(BankError(format!("{prefix}: must be a mapping")));
+    };
+    let text = |m: &serde_yaml_ng::Mapping, key: &str| -> Option<String> {
+        m.get(serde_yaml_ng::Value::String(key.into()))
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+    };
+    let need = |key: &str| {
+        text(map, key).ok_or_else(|| BankError(format!("{prefix}: requires a non-empty '{key}'")))
+    };
+    let source = map
+        .get(serde_yaml_ng::Value::String("source".into()))
+        .and_then(|v| v.as_mapping());
+    let source_field = |key: &str| {
+        source
+            .and_then(|m| text(m, key))
+            .ok_or_else(|| BankError(format!("{prefix}: requires a non-empty 'source.{key}'")))
+    };
+    let outcome = need("outcome")?;
+    require(
+        outcome == "failed" || outcome == "passed",
+        format!("{prefix}: outcome must be 'failed' or 'passed', got '{outcome}'"),
+    )?;
+    Ok(Golden {
+        source_kind: source_field("kind")?,
+        source_ref: source_field("ref")?,
+        expected: need("expected")?,
+        rule: need("rule")?,
+        failure_type: need("failure_type")?,
+        cost: text(map, "cost"),
+        outcome,
     })
 }
 
@@ -276,11 +339,10 @@ pub fn discover_bank(bank_dir: &std::path::Path) -> Result<Vec<TaskSpec>, BankEr
         .collect();
     paths.sort();
     for yaml_path in paths {
-        if yaml_path
-            .file_name()
-            .map(|n| n == std::ffi::OsStr::new(COHORTS_FILENAME))
-            .unwrap_or(false)
-        {
+        if yaml_path.file_name().is_some_and(|n| {
+            n == std::ffi::OsStr::new(COHORTS_FILENAME)
+                || n == std::ffi::OsStr::new(super::failure_types::FILENAME)
+        }) {
             continue;
         }
         let task = load_task(&yaml_path)?;
@@ -370,6 +432,46 @@ mod tests {
             "id: budget-ok\ntier: capability\ngrade:\n  - kind: tool-budget\n    max_tool_calls: 40\n",
         );
         assert_eq!(load_task(&p).unwrap().grade[0].max_tool_calls, Some(40));
+    }
+
+    #[test]
+    fn a_golden_without_a_rule_refuses_naming_id_and_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let grade = "grade:\n  - kind: file-exists\n    path: x\n";
+        let block = |rule: &str| {
+            format!(
+                "golden:\n  source: {{kind: correction, ref: abc}}\n  expected: e\n{rule}  failure_type: f\n  outcome: failed\n"
+            )
+        };
+        let no_rule = format!("id: g\ntier: capability\n{grade}{}", block(""));
+        let p = write_task(dir.path(), "no-rule.yaml", &no_rule);
+        let err = load_task(&p).unwrap_err();
+        assert!(err.0.contains("task 'g'"), "{0}", err.0);
+        assert!(err.0.contains("no-rule.yaml"), "{0}", err.0);
+        assert!(err.0.contains("'rule'"), "{0}", err.0);
+
+        let whole = format!("id: g\ntier: capability\n{grade}{}", block("  rule: r\n"));
+        let p = write_task(dir.path(), "whole.yaml", &whole);
+        let golden = load_task(&p).unwrap().golden.unwrap();
+        assert_eq!(
+            (golden.rule.as_str(), golden.outcome.as_str()),
+            ("r", "failed")
+        );
+    }
+
+    #[test]
+    fn the_repo_bank_holds_the_labelled_goldens() {
+        let bank = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../evals/bank");
+        let tasks = discover_bank(&bank).unwrap();
+        let count = |outcome: &str| {
+            tasks
+                .iter()
+                .filter_map(|t| t.golden.as_ref())
+                .filter(|g| g.outcome == outcome)
+                .count()
+        };
+        assert!(count("failed") >= 20, "failed goldens: {}", count("failed"));
+        assert!(count("passed") >= 5, "passed goldens: {}", count("passed"));
     }
 
     #[test]

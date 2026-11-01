@@ -1233,6 +1233,17 @@ fn render_list_rows() {
             "pid": 4242,
             "last_reconciled_at": "2026-05-25T00:30:00Z",
             "log_path": null,
+        }, {
+            "name": "worker-dark",
+            "harness": "claude",
+            "short_id": "cl-dark999",
+            "session_id": "cl-dark999",
+            "cwd": "/home/user/project",
+            "created_at": "2026-05-25T00:00:00Z",
+            "status": "unknown",
+            "liveness": "unknown",
+            "liveness_basis": "stale",
+            "liveness_measured_at": "2026-05-25T00:20:00Z",
         }],
         "fields_omitted": ["model", "model_basis"],
         "filters_applied": {"cwd": null, "provider": null, "status": null},
@@ -1258,8 +1269,12 @@ fn render_list_rows() {
         "missing 'discovered_sessions' key"
     );
     assert_eq!(parsed["discovered_count"], 0);
-    assert_eq!(parsed["schema_version"], 7);
-    assert_eq!(parsed["count"], 1);
+    assert_eq!(parsed["schema_version"], 8);
+    assert_eq!(parsed["count"], 2);
+    // The unknown count rides `count`, so a stale probe is visible
+    // in the shape of the answer - one unknown row of two, and a zero alive
+    // count beside it names the probe, not the fleet.
+    assert_eq!(parsed["liveness_unknown"], 1);
     assert_eq!(
         parsed["fields_omitted"], result["fields_omitted"],
         "outward envelope must preserve the daemon's exact sorted omission contract"
@@ -1322,9 +1337,12 @@ fn render_list_rows() {
     let parsed: Value = serde_json::from_str(&out).expect("valid JSON");
     assert_eq!(parsed["discovered_count"], 1);
     assert_eq!(parsed["discovered_sessions"][0]["handle"], "fno-aaaa1111");
-    assert_eq!(parsed["schema_version"], 7);
+    assert_eq!(parsed["schema_version"], 8);
     // Without a codex probe the key is absent, not null.
     assert!(parsed.get("codex_loaded").is_none());
+    // An empty roster reads zero unknown - the key is present on every
+    // payload, never blank beside count.
+    assert_eq!(parsed["liveness_unknown"], 0);
 
     let table = fno_agents::list_render::render_list_table(
         &agents,

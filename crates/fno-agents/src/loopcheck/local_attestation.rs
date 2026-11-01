@@ -600,6 +600,11 @@ pub(super) fn author_is_bot(author: &str, github_app_logins: &[String]) -> bool 
     author.ends_with("[bot]") || author_is_known_bot(author, github_app_logins)
 }
 
+/// Whether a head is a link of a chain that tiles base..head.
+pub(super) fn in_tiled_chain(tiling: Option<&RangeTiling>, head: &str) -> bool {
+    tiling.is_some_and(|t| t.tiled && t.chain_heads.iter().any(|h| h == head))
+}
+
 /// One local-attestation verdict from a pair's latest attestation, shared by
 /// the pass arm and 's answered-fail arm so the two can never drift.
 /// Counts (`Reviewed`) when the attestation's head is fresh OR a member of a
@@ -611,9 +616,7 @@ pub(super) fn local_attestation_verdict(
     author_session: Option<&str>,
 ) -> ReviewerVerdict {
     let fresh = freshness(&lp.head);
-    let chain_member = tiling
-        .map(|t| t.tiled && t.chain_heads.iter().any(|h| h == &lp.head))
-        .unwrap_or(false);
+    let chain_member = in_tiled_chain(tiling, &lp.head);
     ReviewerVerdict {
         producer: CoverageProducer::LocalAttestation,
         name: lp.reviewer.clone(),

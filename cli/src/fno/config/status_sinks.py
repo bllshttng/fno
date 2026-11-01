@@ -31,9 +31,10 @@ _MATCH_KEYS_FALLBACK = frozenset(
 
 def _status_sink_match_keys() -> frozenset[str]:
     try:
-        from fno.events import PROTOCOL_ENVELOPE_ALLOWED
+        from fno.events.store_client import _native_json
 
-        allowed = set(PROTOCOL_ENVELOPE_ALLOWED)
+        schema = _native_json(["schema"], "schema")
+        allowed = set(schema["protocol_family"]["envelope_allowed"])
         if allowed:
             return frozenset(allowed - {"data"})
     except Exception:

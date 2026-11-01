@@ -260,7 +260,18 @@ function openQuestion(q) {
   // A row with a link offers Open, which opens it, and Copy, which copies
   // that same link minus the bridge token, never a command. A row with no
   // link reads as plain text with no buttons.
-  const row = (title, code, href) => {
+  const copyTo = (value, t) => {
+    const write = navigator.clipboard && navigator.clipboard.writeText ? navigator.clipboard.writeText(value) : Promise.reject(new Error("no clipboard"));
+    write.then(() => toast("Link copied"), () => {
+      const code = t.querySelector("code"), range = document.createRange();
+      code.textContent = value;
+      range.selectNodeContents(code);
+      getSelection().removeAllRanges();
+      getSelection().addRange(range);
+      toast("Copy failed");
+    });
+  };
+  const row = (title, code, href, cmd) => {
     const d = el("div", "lk"), t = el("span", "lt");
     t.append(el("b", null, title), el("code", null, code));
     d.append(t);
@@ -270,18 +281,12 @@ function openQuestion(q) {
       if (u.protocol.startsWith("http")) u.searchParams.delete("t");
       const shared = u.href;
       if (/^https?:/.test(url)) { open.target = "_blank"; open.rel = "noopener"; }
-      copy.onclick = () => {
-        const write = navigator.clipboard && navigator.clipboard.writeText ? navigator.clipboard.writeText(shared) : Promise.reject(new Error("no clipboard"));
-        write.then(() => toast("Link copied"), () => {
-          const code = t.querySelector("code"), range = document.createRange();
-          code.textContent = shared;
-          range.selectNodeContents(code);
-          getSelection().removeAllRanges();
-          getSelection().addRange(range);
-          toast("Copy failed");
-        });
-      };
+      copy.onclick = () => copyTo(shared, t);
       d.append(open, copy);
+    } else if (cmd) {
+      const copy = el("button", "lkb", "Copy");
+      copy.onclick = () => copyTo(cmd, t);
+      d.append(copy);
     }
     links.append(d);
   };
@@ -289,6 +294,14 @@ function openQuestion(q) {
   // pane here the row says so, and the attach command still shows.
   if (q.watch_pane != null) row("Watch the session", "pane " + q.watch_pane, (nav ? nav.dataset.base : "./") + "?t=" + encodeURIComponent(token) + "&pane=" + q.watch_pane);
   else row("Watch the session", "session not on this bridge");
+  // The session the node came from, apart from the asker above: the live
+  // pane when this bridge serves it, else the copyable command or the reason.
+  const no = q.node_origin;
+  if (no) {
+    const what = "came from " + (no.harness || "session") + " " + no.session_id.slice(0, 8);
+    if (no.pane != null) row("Node origin session", what, (nav ? nav.dataset.base : "./") + "?t=" + encodeURIComponent(token) + "&pane=" + no.pane);
+    else row("Node origin session", no.command || (what + (no.reason ? " · " + no.reason : "")), null, no.command);
+  }
   const asker = o.name || o.handle;
   if (asker) row("Attach" + (q.host == null ? "" : " on " + q.host), "fno agents session attach " + asker);
   if (q.node) row("Trace", "trace · " + q.node, (nav ? nav.dataset.base : "./") + "trace?t=" + encodeURIComponent(token) + "&node=" + encodeURIComponent(q.node));

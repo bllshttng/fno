@@ -22,6 +22,13 @@
 //! key + cwd and closes on evidence: a bank that records rows, or one that
 //! next reads fresh.
 //!
+//! A graded failure in a scheduled run files one backlog node per task, keyed
+//! by `origin_evidence`, and files nothing while that task's node stays open.
+//! Plumbing rows file nothing: they carry no grade.
+//!
+//! Every tick first runs the change gate's pass (`evals_gate`), which owns its
+//! own runs and state and reads none of the above.
+//!
 //! Behavior spec is the deleted Python phase (`git show
 //! 2cf4d6297^:cli/src/fno/pr_watch/_evals_phase.py`): graded fails are data,
 //! plumbing failures are `evals_stale`, the journal is the notice dedup, and
@@ -48,7 +55,7 @@ use crate::spawn_gate;
 
 const CLAIM_KEY: &str = "evals:scheduled-run";
 const EXIT_USAGE: i32 = 2;
-const USAGE: &str = "usage: fno-agents evals-arm --history <jsonl> --events <jsonl> --fno-bin <path> --schedule-days N --stale-days N [--summary-json <json|null>] [--questions-store <jsonl>] [--repo DIR] [--run --started <rfc3339>] [--run-timeout-s S] [--claims-root DIR]";
+const USAGE: &str = "usage: fno-agents evals-arm --history <jsonl> --events <jsonl> --fno-bin <path> --schedule-days N --stale-days N [--summary-json <json|null>] [--questions-store <jsonl>] [--repo DIR] [--graph <path>] [--run --started <rfc3339>] [--run-timeout-s S] [--claims-root DIR]";
 
 /// One JSON receipt line on stdout; the tick phase parses acted/skip_reason/detail.
 fn receipt(acted: u8, skip_reason: Option<&str>, detail: &str) -> i32 {
@@ -74,6 +81,7 @@ struct Opts {
     run_timeout_s: u64,
     claims_root: Option<PathBuf>,
     repo: Option<PathBuf>,
+    graph: Option<PathBuf>,
 }
 
 fn parse_args(args: &[String]) -> Result<Opts, String> {
@@ -90,6 +98,7 @@ fn parse_args(args: &[String]) -> Result<Opts, String> {
         run_timeout_s: 3600,
         claims_root: None,
         repo: None,
+        graph: None,
     };
     let mut i = 0usize;
     while i < args.len() {
@@ -138,6 +147,7 @@ fn parse_args(args: &[String]) -> Result<Opts, String> {
             }
             "--claims-root" => o.claims_root = Some(PathBuf::from(value("--claims-root")?)),
             "--repo" => o.repo = Some(PathBuf::from(value("--repo")?)),
+            "--graph" => o.graph = Some(PathBuf::from(value("--graph")?)),
             _ => return Err(format!("evals-arm: unknown flag {name}")),
         }
     }
@@ -420,6 +430,10 @@ fn run_argv(o: &Opts, repo: &Path, started_rfc3339: &str) -> Vec<String> {
         argv.push("--questions-store".into());
         argv.push(store.to_string_lossy().into_owned());
     }
+    if let Some(graph) = &o.graph {
+        argv.push("--graph".into());
+        argv.push(graph.to_string_lossy().into_owned());
+    }
     if let Some(root) = &o.claims_root {
         argv.push("--claims-root".into());
         argv.push(root.to_string_lossy().into_owned());
@@ -625,6 +639,128 @@ fn rows_since(history: &Path, started: DateTime<Utc>) -> Vec<Value> {
         .collect()
 }
 
+const NODE_KEY_PREFIX: &str = "evals-regression:";
+
+/// task_id -> reason of its first graded failure in these rows.
+fn graded_failures(rows: &[Value]) -> std::collections::BTreeMap<String, String> {
+    let mut out = std::collections::BTreeMap::new();
+    for r in rows {
+        let failed = r.get("pass") == Some(&Value::Bool(false))
+            && crate::eval_attempt::classify(r, None).status == "graded";
+        if let (true, Some(task)) = (failed, r.get("task_id").and_then(Value::as_str)) {
+            let reason = r.get("reason").and_then(Value::as_str).unwrap_or_default();
+            out.entry(task.to_string())
+                .or_insert_with(|| reason.to_string());
+        }
+    }
+    out
+}
+
+/// Origin keys of the open regression nodes. None on an unreadable graph: the
+/// caller then files nothing, because a duplicate per run is the worse error
+/// and a task still failing gets its node on the next run.
+fn open_regression_keys(graph: &Path) -> Option<std::collections::BTreeSet<String>> {
+    let rows = crate::graph_store::read_rows_where(
+        graph,
+        &crate::backlog::RowQuery {
+            fields: Some(
+                ["id", "status", "origin_evidence"]
+                    .into_iter()
+                    .map(str::to_string)
+                    .collect(),
+            ),
+            with_blockers: true,
+            ..Default::default()
+        },
+    )
+    .ok()?;
+    Some(
+        rows.iter()
+            .filter(|n| {
+                !matches!(
+                    n.get("status").and_then(Value::as_str),
+                    Some("done" | "superseded")
+                )
+            })
+            .filter_map(|n| n.get("origin_evidence").and_then(Value::as_str))
+            .filter(|k| k.starts_with(NODE_KEY_PREFIX))
+            .map(str::to_string)
+            .collect(),
+    )
+}
+
+/// File one node per failing task with no open node. Returns (filed, refused).
+fn file_regression_nodes(o: &Opts, rows: &[Value]) -> (Vec<String>, Vec<String>) {
+    let repo = bank_repo(o);
+    file_failure_nodes(
+        &o.fno_bin,
+        repo.as_deref(),
+        o.graph.as_deref(),
+        graded_failures(rows),
+        "The scheduled regression bank",
+    )
+}
+
+/// One node per task, keyed by origin, so every eval leg shares one dedup.
+pub(crate) fn file_failure_nodes(
+    fno_bin: &str,
+    repo: Option<&Path>,
+    graph: Option<&Path>,
+    failures: std::collections::BTreeMap<String, String>,
+    source: &str,
+) -> (Vec<String>, Vec<String>) {
+    if failures.is_empty() {
+        return (Vec::new(), Vec::new());
+    }
+    let graph = graph
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| crate::backlog::settings::graph_path_at(repo));
+    let Some(open) = open_regression_keys(&graph) else {
+        return (Vec::new(), failures.into_keys().collect());
+    };
+    let (mut filed, mut refused) = (Vec::new(), Vec::new());
+    for (task, reason) in failures {
+        let key = format!("{NODE_KEY_PREFIX}{task}");
+        if open.contains(&key) {
+            continue;
+        }
+        let title = format!("Eval regression: {task} failed its grade");
+        let details = format!(
+            "{source} graded {task} as failed: {}. Read history with: fno doctor evals report.",
+            truncate(&reason, 300)
+        );
+        let mut cmd = Command::new(fno_bin);
+        if let Some(repo) = repo {
+            cmd.current_dir(repo);
+        }
+        cmd.args([
+            "backlog",
+            "idea",
+            &title,
+            "--type",
+            "bug",
+            "--difficulty",
+            "low",
+            "--source-kind",
+            "from_observation",
+            "--origin-evidence",
+            &key,
+            // A daemon cannot answer the fold-or-separate prompt, and the
+            // origin key decides which node a task owns.
+            "--separate",
+            "-J",
+            "--details",
+            &details,
+        ])
+        .stdin(Stdio::null());
+        match crate::bounded_cmd::output_with_timeout_result(cmd, 30) {
+            Ok(out) if out.status.success() => filed.push(task),
+            _ => refused.push(task),
+        }
+    }
+    (filed, refused)
+}
+
 /// Drain a piped stderr on a reader thread so a chatty child can never fill
 /// the pipe and deadlock the bounded wait.
 fn spawn_stderr_drain(child: &mut std::process::Child) -> Option<std::thread::JoinHandle<Vec<u8>>> {
@@ -648,7 +784,7 @@ fn stderr_tail(buf: &[u8]) -> String {
 
 /// Set a setsid pre-exec hook so the child leads its own process group: a
 /// signal aimed at the group can never boomerang onto this process.
-fn setsid_hook(cmd: &mut Command) {
+pub(crate) fn setsid_hook(cmd: &mut Command) {
     // SAFETY: setsid() is async-signal-safe and takes no arguments; called
     // here it runs in the child after fork, before exec, single-threaded.
     unsafe {
@@ -778,6 +914,7 @@ fn run_run_mode(o: &Opts) -> i32 {
         Ok((task_count, passes)) => {
             close_bank_task(o, "bank-ran");
             let summary = parse_summary(o.summary_json.as_deref());
+            let (filed, refused) = file_regression_nodes(o, &rows_since(&o.history, started));
             let _ = EventEmitter::new(&o.events, "daemon").emit(
                 "evals_scheduled_run",
                 &json!({
@@ -786,6 +923,8 @@ fn run_run_mode(o: &Opts) -> i32 {
                     "duration_s": (duration_s * 1000.0).round() / 1000.0,
                     "age_days_before": summary.age_days,
                     "window_days": o.schedule_days,
+                    "regression_nodes_filed": filed,
+                    "regression_nodes_refused": refused,
                 }),
             );
             receipt(
@@ -817,6 +956,18 @@ pub fn run_evals_arm(args: &[String]) -> i32 {
     if o.run {
         run_run_mode(&o)
     } else {
+        if let Some(repo) = bank_repo(&o) {
+            let g = read_gate();
+            let hold = crate::loops_pause::dispatch_pause();
+            let can_launch = !hold.is_paused() && g.ram_gb.map_or(true, |r| r >= g.min_free_gb);
+            crate::evals_gate::tick(
+                &o.history,
+                &o.fno_bin,
+                &repo,
+                o.graph.as_deref(),
+                can_launch,
+            );
+        }
         run_tick_mode(
             &o,
             &read_gate,

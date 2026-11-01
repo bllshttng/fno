@@ -153,10 +153,17 @@ impl super::Core {
         // must not read as a live restore candidate, or restore resurrects a
         // session the fleet deliberately retired.
         let retired = crate::restore_gate::retired_receipt_session_ids().unwrap_or_default();
+        let retired_leads = crate::restore_gate::retired_lead_refusals();
         let mut rows = Vec::with_capacity(candidates.len());
         for (name, member) in candidates {
             if let Some(reason) =
                 crate::restore_gate::retired_refusal(member.harness_session_id.as_deref(), &retired)
+                    .or_else(|| {
+                        member
+                            .harness_session_id
+                            .as_deref()
+                            .and_then(|session| retired_leads.get(session).cloned())
+                    })
             {
                 rows.push(restore_route_gate::refused_row(
                     name,

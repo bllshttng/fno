@@ -118,7 +118,7 @@ FIELD_META: dict[str, Meta] = {
     "plan.default_diff_budget": Meta("advanced", "Added lines a target session's branch may carry before the commit-time diff-budget guard (hooks/diff-budget-commit.sh) names the overrun; the bound plan's frontmatter diff_budget key overrides it per plan (default 300; 0 is off)."),
     # --- config.backlog.* ---
     "backlog.page_reload_s": Meta("advanced", "Seconds an open local board or lead.html tab waits, visible and untouched, before it reloads itself (default 60; 0 is off)."),
-    "backlog.maintain.staleness_days": Meta("advanced", "Age (days) before an idea is flagged stale."),
+    "backlog.maintain.staleness_days": Meta("advanced", "Age (days) before a p2 or p3 idea is flagged stale."),
     "backlog.maintain.max_failed_attempts": Meta("advanced", "Consecutive failures before a node auto-defers."),
     "backlog.maintain.validity_days": Meta("advanced", "Age (days) before a stale idea enters the validity sweep."),
     "backlog.maintain.validity_batch_size": Meta("advanced", "Oldest-first validity-sweep batch size (clamped to 100)."),
@@ -128,8 +128,8 @@ FIELD_META: dict[str, Meta] = {
         "advanced",
         "Age (days) before an unmoved ready node is quarantined from selection.",
     ),
-    "backlog.epic_max_open_children": Meta("advanced", "Most open children an epic may hold. A write that would parent one more open child under a full epic is refused and names the new-epic command. Unset means no cap. The graph store reads it from the config.toml beside graph.json, the global config on a default install."),
-    "backlog.max_open_ideas": Meta("advanced", "Most unplanned, machine-filed ideas one nearest-epic or project scope may hold (default 25; 0 is off). Operator asks are never capped. The graph store reads it from the config.toml beside graph.json."),
+    "backlog.epic_max_open_children": Meta("advanced", "Most open children an epic may hold. A write that would parent one more open child under a full epic is refused and names the new-epic command. Unset means no cap. The graph store reads the global config first, then a config.toml beside the store."),
+    "backlog.max_open_ideas": Meta("advanced", "Most unplanned, machine-filed ideas one nearest-epic or project scope may hold (default 25; 0 is off). Operator asks are never capped. The graph store reads the global config first, then a config.toml beside the store."),
     "backlog.id_prefix": Meta(
         "always", "Prefix for minted node IDs (<=7 chars; not cv-/fu-/tgt-).",
         question="Backlog node-ID prefix?", default_source="repo-slug",
@@ -308,6 +308,10 @@ FIELD_META: dict[str, Meta] = {
     "preflight.required": Meta(
         "advanced", "Require a full local preflight receipt before opening a PR. Default false: CI is the merge gate and preflight is an opt-in rehearsal.",
     ),
+    # --- config.ci_tier.* ---
+    "ci_tier.enabled": Meta(
+        "advanced", "Run the CI tier on this machine: the daemon keeps at most six merge-queue runs in flight per repo, ranking the open PRs, cancelling the overflow, and rerunning a run it cancelled once a slot frees (a cancelled run cannot rerun failed jobs, so the rerun is full). Default false. Opt in on ONE machine per repo: two clones of a repo are one tier, two machines are two arms that would cancel and rerun each other's work.",
+    ),
     # --- config.target.* ---
     "target.dedupe_dead_duplicates": Meta("never", "Opt-in cleanup of provably-dead duplicate state files."),
     "target.handoff.enabled": Meta("advanced", "Enable explicit target capability escalation."),
@@ -356,7 +360,7 @@ FIELD_META: dict[str, Meta] = {
     "agents.max_live": Meta("advanced", "Backstop cap on concurrent live worker processes (fno registry + claude roster union); spawn queues at cap (default 3). Sized from RAM, because every live row holds RAM whether or not it works: floor((RAM_GB - 4 GB OS reserve - your desktop apps) / 1 GB per worker). The 1 GB planning figure is generous on purpose (a build or a test suite bursts past the measured 430 MB a quiet worker holds); the CPU axis (max_fleet_cpu_share) binds first on any machine with real headroom, so raise this instead of tuning it.", default_source="default"),
     "agents.max_live_per_territory": Meta("advanced", "Per-territory team cap: the max live workers whose node is contained in one role scope, enforced in the spawn gate beside agents.max_live (the machine ceiling, which stays independent and authoritative). Rows that work no node (leads, blueprinters, ad-hoc panes) never count. Unknown territory attribution refuses; other-territory headroom is untouched (default 4).", default_source="default"),
     "process_admission.max_processes": Meta("advanced", "Maximum fno-attributed OS processes admitted by the native pre-spawn gate; counts processes, not agents or panes (default 400).", default_source="default"),
-    "agents.provider_limits": Meta("advanced", "Per-provider budget record keyed by model provider: `lanes` is the immediate-refusal cap on concurrent live workers. A claude worker with an open operator question and a transcript quiet for 900 s or more is left out of that count until it writes again or its question closes; the lanes probe lists it under `parked`. `subagents` is the in-session fan-out width review route resolution reads (1 means a panel is never dispatched there). A bare integer is still legal and reads as `lanes`. Unlisted providers are uncapped in both dimensions; the built-in zai budget is lanes 5, subagents 1, because that account is shared. Renamed from `agents.max_lanes` so no two leaves share that name with `parallel.max_lanes`; the legacy spelling still parses with one deprecation line.", default_source="default"),
+    "agents.provider_limits": Meta("advanced", "Per-provider budget record keyed by model provider: `lanes` is the immediate-refusal cap on concurrent live workers. A claude worker with an open operator question and a transcript quiet for 900 s or more is left out of that count until it writes again or its question closes; the lanes probe lists it under `parked`. `subagents` is the in-session fan-out width review route resolution reads (1 means a panel is never dispatched there). A bare integer is still legal and reads as `lanes`. `lanes = 0` closes the lane: the gate refuses every spawn on it except `--force`. Unlisted providers are uncapped in both dimensions; the built-in zai budget is lanes 5, subagents 1, because that account is shared. Renamed from `agents.max_lanes` so no two leaves share that name with `parallel.max_lanes`; the legacy spelling still parses with one deprecation line.", default_source="default"),
     "agents.min_free_gb": Meta("advanced", "Available-RAM floor in GB for spawn preflight; spawn refuses below it (<= 0 disables; default 4). Set it to what the OS needs to stay out of swap: 2 on an 8 GB box, 3 on 16 GB, 4 above.", default_source="default"),
     "agents.max_swap_pct": Meta("advanced", "Swap-pressure ceiling in percent used for spawn preflight, checked beside agents.min_free_gb on EVERY spawn; spawn refuses when swap used is at or above the cap AND the machine swaps in at 1 MiB/s or more over a 1 s sample (<= 0 disables; default 90). macOS keeps swap allocated after pressure ends, so allocation alone refused every spawn with 69 percent of RAM free and no paging. The receipt names the failing term; raising min_free_gb does not fix a swap refusal.", default_source="default"),
     "agents.max_load_per_cpu": Meta("advanced", "DEPRECATED and ignored since 2026-09-09: admission decides on the fleet's CPU share (agents.max_fleet_cpu_share) on every spawn, never on a load trigger - the 1-minute load moved 101 points in three minutes with no change in real work. The key parses for one release and prints one deprecation line when set; delete it.", default_source="default"),
@@ -379,6 +383,8 @@ FIELD_META: dict[str, Meta] = {
     "dispatch.blueprint_floor": Meta("advanced", "The blueprint floor for a plan-less node (lean dispatch). 'high' (the default) routes a plan-less node to /blueprint only when its difficulty is high, its size is L, or an open premise question blocks it (the premise-question tag); every other plan-less node goes straight to /target, which states its own scope. 'medium' restores the pre-lean table (blueprint for medium and up). 'low' blueprints every plan-less node; 'never' targets everything. The lead check-in routes each unplanned row through the same table: blueprint candidates against the one-per-lead ceiling, the rest print as target-ready. Any unknown value degrades to 'high'.", default_source="default"),
     # --- config.autonomy.* ---
     "autonomy.enabled": Meta("never", "The one master switch over every autonomous session-starting spawner. Defaults true; shipping this changes nothing until explicitly disabled."),
+    "autonomy.mode": Meta("never","One choice over unattended restarts, merges and law writes: ask, balanced (default) or yolo. Yolo keeps CI, review, holds and run refusals."),
+    "autonomy.allow": Meta("never","In ask mode, the action classes that run unasked: restart, merge, law."),
     # --- config.auto_continue.* ---
     "auto_continue.enabled": Meta("advanced", "Auto-dispatch the next ready node after a PR merges."),
     # --- config.keep_going.* ---
@@ -544,6 +550,8 @@ FIELD_META: dict[str, Meta] = {
     "evals.stale_days": Meta("never", "Age in days at which the newest regression-tier run reads STALE in doctor and triage health."),
     "evals.scratch_threshold": Meta("never", "Distinct jobs inside the window at which a recurring scratch shape files one p1 node."),
     "evals.scratch_window_days": Meta("never", "Window in days the scratch-shape sweep reads job tmp dirs over."),
+    "evals.gate.daily_usd": Meta("never", "Daily USD cap on the daemon's evals change gate, at 0.04 an attempt. 0 turns the gate off."),
+    "evals.gate.lane": Meta("never", "Lane the gate's golden runs use. Defaults zai-flash."),
     # --- config.recovery.* ---
     "recovery.enabled": Meta("advanced", "Enable the bg-session recovery sweep: provider failover on swap-class deaths plus close-surfacing for finished-but-lingering sessions (rides the pr_watch tick). Assumes bypass workers (the config.agents.defaults.permission_mode built-in for autonomous dispatch); a non-bypass worker cannot run autonomously and is not resumed."),
     "recovery.idle_threshold_seconds": Meta("never", "How stale a bg session must be (seconds) before recovery acts on it."),

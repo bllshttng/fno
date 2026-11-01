@@ -24,6 +24,7 @@
 //! row to train, holdout or unlabelled; the manifest's `leaks` re-reads the
 //! written files to prove it. Nothing leaves the machine.
 
+use crate::correction_detect::{email_rx, reaction_rule, scrub_row, sensitive_rx, ScrubCounts};
 use crate::provenance::TranscriptSource;
 use crate::provenance::{BusIndex, ClaudeSource, CodexSource, HarnessKind, Provenance, RelayKind};
 use regex::Regex;
@@ -78,24 +79,6 @@ fn rx(cell: &'static OnceLock<Regex>, pattern: &str) -> &'static Regex {
     cell.get_or_init(|| Regex::new(pattern).expect("static regex"))
 }
 
-fn email_rx() -> &'static Regex {
-    static RX: OnceLock<Regex> = OnceLock::new();
-    rx(
-        &RX,
-        r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}",
-    )
-}
-
-fn sensitive_rx() -> &'static Regex {
-    static RX: OnceLock<Regex> = OnceLock::new();
-    rx(
-        &RX,
-        r#"(?i)(?:^|[\s/'"=:(])\.env(?:\.[\w-]+)?\b|credentials|\.pem\b|keychain|security\s+find-(?:generic|internet)-password|\.netrc\b|\bid_(?:rsa|ed25519)\b"#,
-    )
-}
-
-/// A conditional, negated, or future sentence is not a claim that something
-/// happened.
 fn hedge_rx() -> &'static Regex {
     static RX: OnceLock<Regex> = OnceLock::new();
     rx(
@@ -318,110 +301,13 @@ fn sentences(text: &str) -> Vec<String> {
     out
 }
 
-/// The rule label of a typed reply, `None` when no rule is sure.
-fn reaction_rule(text: &str) -> Option<&'static str> {
-    static APPROVE: OnceLock<Regex> = OnceLock::new();
-    static REJECT: OnceLock<Regex> = OnceLock::new();
-    static CORRECT: OnceLock<Regex> = OnceLock::new();
-    let t = text.trim().to_lowercase();
-    if t.is_empty() || t.ends_with('?') {
-        return None;
-    }
-    if rx(
-        &REJECT,
-        r"^(?:no|nope|nah|stop|don't|do not|cancel|abort|never ?mind)[\s.!]*$",
-    )
-    .is_match(&t)
-    {
-        return Some("reject");
-    }
-    if rx(
-        &CORRECT,
-        r"^(?:no|nope|actually|wait|instead|rather|not quite|that's not|thats not|that is not|wrong|incorrect)\b[\s,.:!-]+\S",
-    )
-    .is_match(&t)
-    {
-        return Some("correct");
-    }
-    if t.chars().count() <= 60
-        && !t.contains(" but ")
-        && !t.contains("instead")
-        && rx(
-            &APPROVE,
-            r"^(?:y|yes|yep|yeah|yup|ok|okay|k|sure|go|go ahead|go for it|do it|ship it|lgtm|sounds good|looks good|perfect|great|nice|proceed|continue|keep going|approved?|merge it|please do|👍)\b",
-        )
-        .is_match(&t)
-    {
-        return Some("approve");
-    }
-    None
-}
-
-// --------------------------------------------------------------- scrubbing
-
-#[derive(Default)]
-struct ScrubCounts {
-    secrets_masked: u64,
-    paths_masked: u64,
-    emails_masked: u64,
-    residual_drops: u64,
-    sensitive_drops: u64,
-}
-
-fn scrub_string(s: &str, counts: &mut ScrubCounts) -> String {
-    let secret = crate::intel_html::secret_rx();
-    let mut out = s.to_string();
-    let n = secret.find_iter(&out).count();
-    if n > 0 {
-        out = secret
-            .replace_all(&out, |caps: &regex::Captures| match caps.get(2) {
-                Some(key) => format!("{}[redacted]", key.as_str()),
-                None => "[redacted]".to_string(),
-            })
-            .into_owned();
-        counts.secrets_masked += n as u64;
-    }
-    let paths = crate::intel_html::path_rx();
-    let n = paths.find_iter(&out).count();
-    if n > 0 {
-        out = paths.replace_all(&out, "~").into_owned();
-        counts.paths_masked += n as u64;
-    }
-    let n = email_rx().find_iter(&out).count();
-    if n > 0 {
-        out = email_rx().replace_all(&out, "[email]").into_owned();
-        counts.emails_masked += n as u64;
-    }
-    out
-}
-
-fn scrub_value(v: &mut Value, counts: &mut ScrubCounts) {
-    match v {
-        Value::String(s) => *s = scrub_string(s, counts),
-        Value::Array(items) => items.iter_mut().for_each(|i| scrub_value(i, counts)),
-        Value::Object(map) => map.values_mut().for_each(|i| scrub_value(i, counts)),
-        _ => {}
-    }
-}
-
-/// Mask every string, then rescan the serialized row: any secret shape left
-/// that is not a mask is a residual, and the row is dropped.
-fn scrub_row(mut row: Value, counts: &mut ScrubCounts) -> Option<Value> {
-    scrub_value(&mut row, counts);
-    let text = row.to_string();
-    let residual = crate::intel_html::secret_rx()
-        .find_iter(&text)
-        .any(|m| !m.as_str().contains("[redacted]"))
-        || email_rx().is_match(&text);
-    if residual {
-        counts.residual_drops += 1;
-        return None;
-    }
-    Some(row)
+/// The corpus scrub for one quote read outside an export.
+pub(crate) fn scrub_quote(s: &str) -> String {
+    crate::correction_detect::scrub_string(s, &mut ScrubCounts::default())
 }
 
 /// The Kev question each row kind asks, without its label.
-fn question(kind: &str) -> Value {
+pub(crate) fn question(kind: &str) -> Value {
     match kind {
         "claim_support" => json!({"type": "choice",
         "instructions": "Does the record support the claim?",
@@ -529,7 +415,7 @@ fn rfc3339(ts: Option<f64>) -> Value {
         .unwrap_or(Value::Null)
 }
 
-fn row_id(session: &str, turn: &str, kind: &str, sub: &str) -> String {
+pub(crate) fn row_id(session: &str, turn: &str, kind: &str, sub: &str) -> String {
     let key = format!("{session}\0{turn}\0{kind}\0{sub}");
     blake3::hash(key.as_bytes()).to_hex()[..16].to_string()
 }
@@ -1641,6 +1527,20 @@ pub fn run(args: &[String]) -> i32 {
     while i < args.len() {
         let value = args.get(i + 1);
         match args[i].as_str() {
+            "--corrections-sample" => {
+                let Some(v) = value else {
+                    eprintln!("fno-agents intel: --corrections-sample needs a directory");
+                    return 2;
+                };
+                let dir = crate::cargo_build_dirs::expand_home(Path::new(v));
+                if let Err(e) = std::fs::create_dir_all(&dir) {
+                    eprintln!("fno-agents intel: {}: {e}", dir.display());
+                    return 1;
+                }
+                let receipt = crate::correction_fold::sample_pass(&dir, 512, 2000);
+                println!("{}", serde_json::to_string(&receipt).unwrap_or_default());
+                return 0;
+            }
             "--corpus" | "--corpus-ingest" => {
                 let Some(v) = value else {
                     eprintln!("fno-agents intel: {} needs a directory", args[i]);

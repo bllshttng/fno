@@ -189,7 +189,51 @@ fn status_read(payload: &Value) -> (i32, String, String) {
         .unwrap_or(false);
     // The command's readers act on `ready` and the local gates, so it composes
     // here and never serves a peer's row.
-    let (code, out, stderr_lines, calls) = cached_status_via(cwd_str, pr, refresh, None, false);
+    let (mut code, mut out, mut stderr_lines, calls) =
+        cached_status_via(cwd_str, pr, refresh, None, false);
+    // The pinned read: `--expect-head SHA` (or `HEAD`, the checkout's own
+    // sha, read free from git) refuses any answer about another head
+    // (exit 6) instead of settling the question against whatever commit the
+    // PR happens to point at. A failed read answered nothing, so the error
+    // exit and its reason line stand; the pin has nothing to refuse.
+    let pin = match super::wait::resolve_expect_head(payload) {
+        super::wait::ExpectHead::None => None,
+        super::wait::ExpectHead::Sha(sha) => Some(sha),
+        super::wait::ExpectHead::LocalUnresolved => {
+            // The machine contract is one JSON line on stdout at every exit;
+            // the error shape is the payload a refused read prints.
+            let payload = super::compose::error_payload(
+                &pr.to_string(),
+                &super::RestReason::new(
+                    "--expect-head HEAD cannot resolve in this checkout; \
+                     run it from the worktree that holds the commit",
+                    "",
+                ),
+            );
+            let stdout = format!(
+                "{}\n",
+                serde_json::to_string(&payload.1).unwrap_or_default()
+            );
+            return (4, stdout, format!("{}\n", payload.2.join("\n")));
+        }
+    };
+    let mut mismatch = None;
+    if let Some(expected) = pin {
+        if out.get("verdict").and_then(Value::as_str) != Some("error") {
+            if let Some(obj) = out.as_object_mut() {
+                mismatch = super::compose::apply_expect_head(obj, &expected);
+            }
+        }
+    }
+    if let Some(note) = &mismatch {
+        code = 6;
+        // The verdict line was composed before the pin: re-emit it from the
+        // mutated payload so the stderr grep reads the pinned answer.
+        if let Some(first) = stderr_lines.first_mut() {
+            *first = super::compose::verdict_line(&out);
+        }
+        stderr_lines.push(note.clone());
+    }
     let snap = crate::gh_budget::snapshot(&crate::gh_budget::ledger_path(), now_ms());
     let mut stderr = stderr_lines.join("\n");
     if !stderr.is_empty() {

@@ -1,20 +1,5 @@
 # Hidden options on argument-dispatched actions, one per line.
-agents ask !--provider
-agents discovered-json !--provider
-agents rm !--audit-actor
-agents rm !--audit-reason
-agents rm !--audit-reclaimed-bytes
-agents rm !--audit-request-id
-agents rm !--audit-worktree-touched
-agents heal-token !--all-sources
-agents heal-token !--cross-project
-agents resume !--cross-project
-agents list !--provider
 do resume receipt validate !--session
 do resume receipt write !--session
-doctor event find !--session
-event find !--session
 resume receipt validate !--session
 resume receipt write !--session
-agents pane-identity !--session
-agents pane-identity !--session-id

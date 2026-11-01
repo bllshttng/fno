@@ -1,7 +1,6 @@
 """`fno agents spawn --route provider,model` explicit fail-closed override (x-b0b4).
 
 Layers:
-- rust_runtime detector keeps --route Python-only (parity with --role).
 - cmd_spawn resolves + fails CLOSED before the gate (AC3-ERR).
 - dispatch_spawn threads route_env to the claude create path.
 - bg_create applies route_env, winning over --role.
@@ -49,11 +48,6 @@ def _full_route_env(token: str = "t") -> dict[str, str]:
         "ANTHROPIC_AUTH_TOKEN": token,
         **{k: "glm-5.2" for k in MODEL_ENV_KEYS},
     }
-
-
-# ---------------------------------------------------------------------------
-# rust_runtime: --route is Python-only, exactly like --role
-# ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------

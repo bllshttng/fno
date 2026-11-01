@@ -1225,6 +1225,10 @@ pub fn write_pane_row(
         requested_model: None,
         requested_provider: None,
         requested_effort: None,
+        // Claude only: another harness reads this column in its own vocabulary.
+        requested_permission_mode: (ctx.provider == "claude")
+            .then(|| crate::claude_ask::recorded_permission_mode(None, &ctx.passthrough))
+            .flatten(),
         spawn_payload: (!ctx.message.is_empty()).then(|| ctx.message.clone()),
         cwd: ctx.cwd.to_string_lossy().into_owned(),
         log_path: entry_log_path,

@@ -1,0 +1,1393 @@
+{
+ "now_s": 1790000000.5,
+ "cases": [
+  {
+   "name": "fup_quorum_manual",
+   "records": [
+    {
+     "source": "transcript",
+     "observed_at": 1789999970.5,
+     "row_id": "r1",
+     "harness": "claude",
+     "provider": "anthropic",
+     "account": "a1",
+     "role": "assistant",
+     "raw_status": 429,
+     "raw_kind": "api_error",
+     "content": "API Error: 429 {\"message\":\"Fair Usage Policy\"}",
+     "content_fingerprint": "e053411983c1d836b7a432d2bcdd5629f78218a6b67e751eb7cf3cba42175e14",
+     "pane_id": null,
+     "persisted": true,
+     "snapshot_at": null,
+     "reset_at": null
+    },
+    {
+     "source": "transcript",
+     "observed_at": 1789999990.5,
+     "row_id": "r2",
+     "harness": "claude",
+     "provider": "anthropic",
+     "account": "a1",
+     "role": "assistant",
+     "raw_status": 429,
+     "raw_kind": "api_error",
+     "content": "API Error: 429 {\"message\":\"Fair Usage Policy\"}",
+     "content_fingerprint": "ea02a9f3bc0afa9b707f7b447fa59ba590bf09e6d95029bff106906e581067f0",
+     "pane_id": null,
+     "persisted": true,
+     "snapshot_at": null,
+     "reset_at": null
+    }
+   ],
+   "prior": null,
+   "report": {
+    "instrument": "measured",
+    "breakers": [
+     {
+      "provider": "anthropic",
+      "account": "a1",
+      "kind": "fair_usage_policy",
+      "outage_epoch": 1789999970.5,
+      "opened_at": 1790000000.5,
+      "row_ids": [
+       "r1",
+       "r2"
+      ],
+      "fingerprints": [
+       "e053411983c1d836b7a432d2bcdd5629f78218a6b67e751eb7cf3cba42175e14",
+       "ea02a9f3bc0afa9b707f7b447fa59ba590bf09e6d95029bff106906e581067f0"
+      ],
+      "reset_at": null,
+      "manual_restoration": true,
+      "basis": "positive quorum=2 across 2 distinct rows"
+     }
+    ],
+    "counts": {
+     "accepted": 2,
+     "terminal": 2,
+     "open": 1
+    },
+    "refusals": [],
+    "sessions": {
+     "r1": {
+      "state": "terminal",
+      "kind": "fair_usage_policy",
+      "consecutive": 1,
+      "reset_at": null,
+      "manual_restoration": true
+     },
+     "r2": {
+      "state": "terminal",
+      "kind": "fair_usage_policy",
+      "consecutive": 1,
+      "reset_at": null,
+      "manual_restoration": true
+     }
+    }
+   },
+   "state": {
+    "version": 1,
+    "fingerprints": [
+     "e053411983c1d836b7a432d2bcdd5629f78218a6b67e751eb7cf3cba42175e14",
+     "ea02a9f3bc0afa9b707f7b447fa59ba590bf09e6d95029bff106906e581067f0"
+    ],
+    "evidence": [
+     {
+      "source": "transcript",
+      "observed_at": 1789999970.5,
+      "row_id": "r1",
+      "harness": "claude",
+      "provider": "anthropic",
+      "account": "a1",
+      "role": "assistant",
+      "raw_status": 429,
+      "raw_kind": "api_error",
+      "content": "API Error: 429 {\"message\":\"Fair Usage Policy\"}",
+      "content_fingerprint": "e053411983c1d836b7a432d2bcdd5629f78218a6b67e751eb7cf3cba42175e14",
+      "pane_id": null,
+      "persisted": true,
+      "snapshot_at": null,
+      "reset_at": null
+     },
+     {
+      "source": "transcript",
+      "observed_at": 1789999990.5,
+      "row_id": "r2",
+      "harness": "claude",
+      "provider": "anthropic",
+      "account": "a1",
+      "role": "assistant",
+      "raw_status": 429,
+      "raw_kind": "api_error",
+      "content": "API Error: 429 {\"message\":\"Fair Usage Policy\"}",
+      "content_fingerprint": "ea02a9f3bc0afa9b707f7b447fa59ba590bf09e6d95029bff106906e581067f0",
+      "pane_id": null,
+      "persisted": true,
+      "snapshot_at": null,
+      "reset_at": null
+     }
+    ],
+    "breakers": [
+     {
+      "provider": "anthropic",
+      "account": "a1",
+      "kind": "fair_usage_policy",
+      "outage_epoch": 1789999970.5,
+      "opened_at": 1790000000.5,
+      "row_ids": [
+       "r1",
+       "r2"
+      ],
+      "fingerprints": [
+       "e053411983c1d836b7a432d2bcdd5629f78218a6b67e751eb7cf3cba42175e14",
+       "ea02a9f3bc0afa9b707f7b447fa59ba590bf09e6d95029bff106906e581067f0"
+      ],
+      "reset_at": null,
+      "manual_restoration": true,
+      "basis": "positive quorum=2 across 2 distinct rows"
+     }
+    ],
+    "pane_snapshots": []
+   }
+  },
+  {
+   "name": "fup_live_cap_spread",
+   "records": [
+    {
+     "source": "transcript",
+     "observed_at": 1789999500.5,
+     "row_id": "r1",
+     "harness": "claude",
+     "provider": "anthropic",
+     "account": "a1",
+     "role": "assistant",
+     "raw_status": 429,
+     "raw_kind": "api_error",
+     "content": "API Error: 429 {\"message\":\"Fair Usage Policy\"}",
+     "content_fingerprint": "7a47cba18277846522176b9dda1061efc8a65eac2dd4d1aeb22d0b97c1e8eed5",
+     "pane_id": null,
+     "persisted": true,
+     "snapshot_at": null,
+     "reset_at": 1790003600.5
+    },
+    {
+     "source": "transcript",
+     "observed_at": 1789999995.5,
+     "row_id": "r2",
+     "harness": "claude",
+     "provider": "anthropic",
+     "account": "a1",
+     "role": "assistant",
+     "raw_status": 429,
+     "raw_kind": "api_error",
+     "content": "API Error: 429 {\"message\":\"Fair Usage Policy\"}",
+     "content_fingerprint": "c4186539387d1017a430db87eeccbfc52a20a0d1991018ae7752d95873ef2716",
+     "pane_id": null,
+     "persisted": true,
+     "snapshot_at": null,
+     "reset_at": 1790003660.5
+    }
+   ],
+   "prior": null,
+   "report": {
+    "instrument": "measured",
+    "breakers": [
+     {
+      "provider": "anthropic",
+      "account": "a1",
+      "kind": "fair_usage_policy",
+      "outage_epoch": 1789999500.5,
+      "opened_at": 1790000000.5,
+      "row_ids": [
+       "r1",
+       "r2"
+      ],
+      "fingerprints": [
+       "7a47cba18277846522176b9dda1061efc8a65eac2dd4d1aeb22d0b97c1e8eed5",
+       "c4186539387d1017a430db87eeccbfc52a20a0d1991018ae7752d95873ef2716"
+      ],
+      "reset_at": 1790003660.5,
+      "manual_restoration": false,
+      "basis": "positive quorum=2 across 2 distinct rows"
+     }
+    ],
+    "counts": {
+     "accepted": 2,
+     "terminal": 2,
+     "open": 1
+    },
+    "refusals": [],
+    "sessions": {
+     "r1": {
+      "state": "terminal",
+      "kind": "fair_usage_policy",
+      "consecutive": 1,
+      "reset_at": 1790003600.5,
+      "manual_restoration": false
+     },
+     "r2": {
+      "state": "terminal",
+      "kind": "fair_usage_policy",
+      "consecutive": 1,
+      "reset_at": 1790003660.5,
+      "manual_restoration": false
+     }
+    }
+   },
+   "state": {
+    "version": 1,
+    "fingerprints": [
+     "7a47cba18277846522176b9dda1061efc8a65eac2dd4d1aeb22d0b97c1e8eed5",
+     "c4186539387d1017a430db87eeccbfc52a20a0d1991018ae7752d95873ef2716"
+    ],
+    "evidence": [
+     {
+      "source": "transcript",
+      "observed_at": 1789999500.5,
+      "row_id": "r1",
+      "harness": "claude",
+      "provider": "anthropic",
+      "account": "a1",
+      "role": "assistant",
+      "raw_status": 429,
+      "raw_kind": "api_error",
+      "content": "API Error: 429 {\"message\":\"Fair Usage Policy\"}",
+      "content_fingerprint": "7a47cba18277846522176b9dda1061efc8a65eac2dd4d1aeb22d0b97c1e8eed5",
+      "pane_id": null,
+      "persisted": true,
+      "snapshot_at": null,
+      "reset_at": 1790003600.5
+     },
+     {
+      "source": "transcript",
+      "observed_at": 1789999995.5,
+      "row_id": "r2",
+      "harness": "claude",
+      "provider": "anthropic",
+      "account": "a1",
+      "role": "assistant",
+      "raw_status": 429,
+      "raw_kind": "api_error",
+      "content": "API Error: 429 {\"message\":\"Fair Usage Policy\"}",
+      "content_fingerprint": "c4186539387d1017a430db87eeccbfc52a20a0d1991018ae7752d95873ef2716",
+      "pane_id": null,
+      "persisted": true,
+      "snapshot_at": null,
+      "reset_at": 1790003660.5
+     }
+    ],
+    "breakers": [
+     {
+      "provider": "anthropic",
+      "account": "a1",
+      "kind": "fair_usage_policy",
+      "outage_epoch": 1789999500.5,
+      "opened_at": 1790000000.5,
+      "row_ids": [
+       "r1",
+       "r2"
+      ],
+      "fingerprints": [
+       "7a47cba18277846522176b9dda1061efc8a65eac2dd4d1aeb22d0b97c1e8eed5",
+       "c4186539387d1017a430db87eeccbfc52a20a0d1991018ae7752d95873ef2716"
+      ],
+      "reset_at": 1790003660.5,
+      "manual_restoration": false,
+      "basis": "positive quorum=2 across 2 distinct rows"
+     }
+    ],
+    "pane_snapshots": []
+   }
+  },
+  {
+   "name": "fup_lone_vote",
+   "records": [
+    {
+     "source": "transcript",
+     "observed_at": 1789999970.5,
+     "row_id": "r1",
+     "harness": "claude",
+     "provider": "anthropic",
+     "account": "a1",
+     "role": "assistant",
+     "raw_status": 429,
+     "raw_kind": "api_error",
+     "content": "API Error: 429 {\"message\":\"Fair Usage Policy\"}",
+     "content_fingerprint": "e053411983c1d836b7a432d2bcdd5629f78218a6b67e751eb7cf3cba42175e14",
+     "pane_id": null,
+     "persisted": true,
+     "snapshot_at": null,
+     "reset_at": null
+    }
+   ],
+   "prior": null,
+   "report": {
+    "instrument": "measured",
+    "breakers": [],
+    "counts": {
+     "accepted": 1,
+     "terminal": 1
+    },
+    "refusals": [],
+    "sessions": {
+     "r1": {
+      "state": "terminal",
+      "kind": "fair_usage_policy",
+      "consecutive": 1,
+      "reset_at": null,
+      "manual_restoration": true
+     }
+    }
+   },
+   "state": {
+    "version": 1,
+    "fingerprints": [
+     "e053411983c1d836b7a432d2bcdd5629f78218a6b67e751eb7cf3cba42175e14"
+    ],
+    "evidence": [
+     {
+      "source": "transcript",
+      "observed_at": 1789999970.5,
+      "row_id": "r1",
+      "harness": "claude",
+      "provider": "anthropic",
+      "account": "a1",
+      "role": "assistant",
+      "raw_status": 429,
+      "raw_kind": "api_error",
+      "content": "API Error: 429 {\"message\":\"Fair Usage Policy\"}",
+      "content_fingerprint": "e053411983c1d836b7a432d2bcdd5629f78218a6b67e751eb7cf3cba42175e14",
+      "pane_id": null,
+      "persisted": true,
+      "snapshot_at": null,
+      "reset_at": null
+     }
+    ],
+    "breakers": [],
+    "pane_snapshots": []
+   }
+  },
+  {
+   "name": "overload_persistent_and_retrying",
+   "records": [
+    {
+     "source": "transcript",
+     "observed_at": 1789999800.5,
+     "row_id": "r1",
+     "harness": "claude",
+     "provider": "anthropic",
+     "account": "a1",
+     "role": "assistant",
+     "raw_status": 529,
+     "raw_kind": "api_error",
+     "content": "API Error: 529 overloaded",
+     "content_fingerprint": "bd05541635bc0823c22dfcaec73f797b8059cd20ba2b66d6544700c2d42bb961",
+     "pane_id": null,
+     "persisted": true,
+     "snapshot_at": null,
+     "reset_at": null
+    },
+    {
+     "source": "transcript",
+     "observed_at": 1789999880.5,
+     "row_id": "r1",
+     "harness": "claude",
+     "provider": "anthropic",
+     "account": "a1",
+     "role": "assistant",
+     "raw_status": 529,
+     "raw_kind": "api_error",
+     "content": "API Error: 529 overloaded",
+     "content_fingerprint": "3b36f93f0c68d3ff7f61713af81283d3392697255bb752aa4911c7592736c8ff",
+     "pane_id": null,
+     "persisted": true,
+     "snapshot_at": null,
+     "reset_at": null
+    },
+    {
+     "source": "transcript",
+     "observed_at": 1789999960.5,
+     "row_id": "r1",
+     "harness": "claude",
+     "provider": "anthropic",
+     "account": "a1",
+     "role": "assistant",
+     "raw_status": 529,
+     "raw_kind": "api_error",
+     "content": "API Error: 529 overloaded",
+     "content_fingerprint": "3949cda2d8eaa33184e4fc6497efcdd45af1fcc42de57ffc2070b5e0241e50c6",
+     "pane_id": null,
+     "persisted": true,
+     "snapshot_at": null,
+     "reset_at": null
+    },
+    {
+     "source": "transcript",
+     "observed_at": 1789999810.5,
+     "row_id": "r2",
+     "harness": "claude",
+     "provider": "anthropic",
+     "account": "a1",
+     "role": "assistant",
+     "raw_status": 529,
+     "raw_kind": "api_error",
+     "content": "API Error: 529 overloaded",
+     "content_fingerprint": "e2189d3278678ce910ecbdad559b3c0b050955f5a2fe643e0e524fc263251193",
+     "pane_id": null,
+     "persisted": true,
+     "snapshot_at": null,
+     "reset_at": null
+    },
+    {
+     "source": "transcript",
+     "observed_at": 1789999890.5,
+     "row_id": "r2",
+     "harness": "claude",
+     "provider": "anthropic",
+     "account": "a1",
+     "role": "assistant",
+     "raw_status": 529,
+     "raw_kind": "api_error",
+     "content": "API Error: 529 overloaded",
+     "content_fingerprint": "416e0315b2afec02f8d241b9b12af2a6bb753ed339b7f3f1f80770713421f3ea",
+     "pane_id": null,
+     "persisted": true,
+     "snapshot_at": null,
+     "reset_at": null
+    },
+    {
+     "source": "transcript",
+     "observed_at": 1789999970.5,
+     "row_id": "r2",
+     "harness": "claude",
+     "provider": "anthropic",
+     "account": "a1",
+     "role": "assistant",
+     "raw_status": 529,
+     "raw_kind": "api_error",
+     "content": "API Error: 529 overloaded",
+     "content_fingerprint": "bf68adc250133fadc30a09d5ead7623fcd82f147bbb9da55fc38df13464c3874",
+     "pane_id": null,
+     "persisted": true,
+     "snapshot_at": null,
+     "reset_at": null
+    },
+    {
+     "source": "transcript",
+     "observed_at": 1789999980.5,
+     "row_id": "r3",
+     "harness": "claude",
+     "provider": "anthropic",
+     "account": "a1",
+     "role": "assistant",
+     "raw_status": 529,
+     "raw_kind": "api_error",
+     "content": "API Error: 529 overloaded",
+     "content_fingerprint": "6a2edfdc1b8e4637013b1b7803c228f11c5dec216cce6a88c4a1a4452199c3c4",
+     "pane_id": null,
+     "persisted": true,
+     "snapshot_at": null,
+     "reset_at": null
+    },
+    {
+     "source": "transcript",
+     "observed_at": 1789999960.5,
+     "row_id": "r4",
+     "harness": "claude",
+     "provider": "anthropic",
+     "account": "a1",
+     "role": "assistant",
+     "raw_status": 529,
+     "raw_kind": "api_error",
+     "content": "API Error: 529 overloaded",
+     "content_fingerprint": "ce04cf1d2a9f16a20a06fcd8b63a01e057f29b3b5290878c4bb8f490c650035b",
+     "pane_id": null,
+     "persisted": true,
+     "snapshot_at": null,
+     "reset_at": null
+    },
+    {
+     "source": "transcript",
+     "observed_at": 1789999990.5,
+     "row_id": "r4",
+     "harness": "claude",
+     "provider": "anthropic",
+     "account": "a1",
+     "role": "assistant",
+     "raw_status": null,
+     "raw_kind": "content",
+     "content": "fine again",
+     "content_fingerprint": "208ca8feaca6399f8fe1e475fc454f2f0dcacdf73b195e46d158ab08aa7f4eab",
+     "pane_id": null,
+     "persisted": true,
+     "snapshot_at": null,
+     "reset_at": null
+    }
+   ],
+   "prior": null,
+   "report": {
+    "instrument": "measured",
+    "breakers": [
+     {
+      "provider": "anthropic",
+      "account": "a1",
+      "kind": "overloaded_529",
+      "outage_epoch": 1789999960.5,
+      "opened_at": 1790000000.5,
+      "row_ids": [
+       "r1",
+       "r2"
+      ],
+      "fingerprints": [
+       "3949cda2d8eaa33184e4fc6497efcdd45af1fcc42de57ffc2070b5e0241e50c6",
+       "bf68adc250133fadc30a09d5ead7623fcd82f147bbb9da55fc38df13464c3874"
+      ],
+      "reset_at": null,
+      "manual_restoration": false,
+      "basis": "positive quorum=2 across 2 distinct rows"
+     }
+    ],
+    "counts": {
+     "accepted": 9,
+     "retrying": 1,
+     "session_persistent": 2,
+     "open": 1
+    },
+    "refusals": [],
+    "sessions": {
+     "r1": {
+      "state": "session_persistent",
+      "kind": "overloaded_529",
+      "consecutive": 3,
+      "reset_at": null,
+      "manual_restoration": false
+     },
+     "r2": {
+      "state": "session_persistent",
+      "kind": "overloaded_529",
+      "consecutive": 3,
+      "reset_at": null,
+      "manual_restoration": false
+     },
+     "r3": {
+      "state": "retrying",
+      "kind": "overloaded_529",
+      "consecutive": 1,
+      "reset_at": null,
+      "manual_restoration": false
+     }
+    }
+   },
+   "state": {
+    "version": 1,
+    "fingerprints": [
+     "208ca8feaca6399f8fe1e475fc454f2f0dcacdf73b195e46d158ab08aa7f4eab",
+     "3949cda2d8eaa33184e4fc6497efcdd45af1fcc42de57ffc2070b5e0241e50c6",
+     "3b36f93f0c68d3ff7f61713af81283d3392697255bb752aa4911c7592736c8ff",
+     "416e0315b2afec02f8d241b9b12af2a6bb753ed339b7f3f1f80770713421f3ea",
+     "6a2edfdc1b8e4637013b1b7803c228f11c5dec216cce6a88c4a1a4452199c3c4",
+     "bd05541635bc0823c22dfcaec73f797b8059cd20ba2b66d6544700c2d42bb961",
+     "bf68adc250133fadc30a09d5ead7623fcd82f147bbb9da55fc38df13464c3874",
+     "ce04cf1d2a9f16a20a06fcd8b63a01e057f29b3b5290878c4bb8f490c650035b",
+     "e2189d3278678ce910ecbdad559b3c0b050955f5a2fe643e0e524fc263251193"
+    ],
+    "evidence": [
+     {
+      "source": "transcript",
+      "observed_at": 1789999800.5,
+      "row_id": "r1",
+      "harness": "claude",
+      "provider": "anthropic",
+      "account": "a1",
+      "role": "assistant",
+      "raw_status": 529,
+      "raw_kind": "api_error",
+      "content": "API Error: 529 overloaded",
+      "content_fingerprint": "bd05541635bc0823c22dfcaec73f797b8059cd20ba2b66d6544700c2d42bb961",
+      "pane_id": null,
+      "persisted": true,
+      "snapshot_at": null,
+      "reset_at": null
+     },
+     {
+      "source": "transcript",
+      "observed_at": 1789999810.5,
+      "row_id": "r2",
+      "harness": "claude",
+      "provider": "anthropic",
+      "account": "a1",
+      "role": "assistant",
+      "raw_status": 529,
+      "raw_kind": "api_error",
+      "content": "API Error: 529 overloaded",
+      "content_fingerprint": "e2189d3278678ce910ecbdad559b3c0b050955f5a2fe643e0e524fc263251193",
+      "pane_id": null,
+      "persisted": true,
+      "snapshot_at": null,
+      "reset_at": null
+     },
+     {
+      "source": "transcript",
+      "observed_at": 1789999880.5,
+      "row_id": "r1",
+      "harness": "claude",
+      "provider": "anthropic",
+      "account": "a1",
+      "role": "assistant",
+      "raw_status": 529,
+      "raw_kind": "api_error",
+      "content": "API Error: 529 overloaded",
+      "content_fingerprint": "3b36f93f0c68d3ff7f61713af81283d3392697255bb752aa4911c7592736c8ff",
+      "pane_id": null,
+      "persisted": true,
+      "snapshot_at": null,
+      "reset_at": null
+     },
+     {
+      "source": "transcript",
+      "observed_at": 1789999890.5,
+      "row_id": "r2",
+      "harness": "claude",
+      "provider": "anthropic",
+      "account": "a1",
+      "role": "assistant",
+      "raw_status": 529,
+      "raw_kind": "api_error",
+      "content": "API Error: 529 overloaded",
+      "content_fingerprint": "416e0315b2afec02f8d241b9b12af2a6bb753ed339b7f3f1f80770713421f3ea",
+      "pane_id": null,
+      "persisted": true,
+      "snapshot_at": null,
+      "reset_at": null
+     },
+     {
+      "source": "transcript",
+      "observed_at": 1789999960.5,
+      "row_id": "r1",
+      "harness": "claude",
+      "provider": "anthropic",
+      "account": "a1",
+      "role": "assistant",
+      "raw_status": 529,
+      "raw_kind": "api_error",
+      "content": "API Error: 529 overloaded",
+      "content_fingerprint": "3949cda2d8eaa33184e4fc6497efcdd45af1fcc42de57ffc2070b5e0241e50c6",
+      "pane_id": null,
+      "persisted": true,
+      "snapshot_at": null,
+      "reset_at": null
+     },
+     {
+      "source": "transcript",
+      "observed_at": 1789999960.5,
+      "row_id": "r4",
+      "harness": "claude",
+      "provider": "anthropic",
+      "account": "a1",
+      "role": "assistant",
+      "raw_status": 529,
+      "raw_kind": "api_error",
+      "content": "API Error: 529 overloaded",
+      "content_fingerprint": "ce04cf1d2a9f16a20a06fcd8b63a01e057f29b3b5290878c4bb8f490c650035b",
+      "pane_id": null,
+      "persisted": true,
+      "snapshot_at": null,
+      "reset_at": null
+     },
+     {
+      "source": "transcript",
+      "observed_at": 1789999970.5,
+      "row_id": "r2",
+      "harness": "claude",
+      "provider": "anthropic",
+      "account": "a1",
+      "role": "assistant",
+      "raw_status": 529,
+      "raw_kind": "api_error",
+      "content": "API Error: 529 overloaded",
+      "content_fingerprint": "bf68adc250133fadc30a09d5ead7623fcd82f147bbb9da55fc38df13464c3874",
+      "pane_id": null,
+      "persisted": true,
+      "snapshot_at": null,
+      "reset_at": null
+     },
+     {
+      "source": "transcript",
+      "observed_at": 1789999980.5,
+      "row_id": "r3",
+      "harness": "claude",
+      "provider": "anthropic",
+      "account": "a1",
+      "role": "assistant",
+      "raw_status": 529,
+      "raw_kind": "api_error",
+      "content": "API Error: 529 overloaded",
+      "content_fingerprint": "6a2edfdc1b8e4637013b1b7803c228f11c5dec216cce6a88c4a1a4452199c3c4",
+      "pane_id": null,
+      "persisted": true,
+      "snapshot_at": null,
+      "reset_at": null
+     },
+     {
+      "source": "transcript",
+      "observed_at": 1789999990.5,
+      "row_id": "r4",
+      "harness": "claude",
+      "provider": "anthropic",
+      "account": "a1",
+      "role": "assistant",
+      "raw_status": null,
+      "raw_kind": "content",
+      "content": "fine again",
+      "content_fingerprint": "208ca8feaca6399f8fe1e475fc454f2f0dcacdf73b195e46d158ab08aa7f4eab",
+      "pane_id": null,
+      "persisted": true,
+      "snapshot_at": null,
+      "reset_at": null
+     }
+    ],
+    "breakers": [
+     {
+      "provider": "anthropic",
+      "account": "a1",
+      "kind": "overloaded_529",
+      "outage_epoch": 1789999960.5,
+      "opened_at": 1790000000.5,
+      "row_ids": [
+       "r1",
+       "r2"
+      ],
+      "fingerprints": [
+       "3949cda2d8eaa33184e4fc6497efcdd45af1fcc42de57ffc2070b5e0241e50c6",
+       "bf68adc250133fadc30a09d5ead7623fcd82f147bbb9da55fc38df13464c3874"
+      ],
+      "reset_at": null,
+      "manual_restoration": false,
+      "basis": "positive quorum=2 across 2 distinct rows"
+     }
+    ],
+    "pane_snapshots": []
+   }
+  },
+  {
+   "name": "refusals",
+   "records": [
+    {
+     "source": "transcript",
+     "observed_at": 1789995000.5,
+     "row_id": "r1",
+     "harness": "claude",
+     "provider": "anthropic",
+     "account": "a1",
+     "role": "assistant",
+     "raw_status": 429,
+     "raw_kind": "api_error",
+     "content": "API Error: 429 {\"message\":\"Fair Usage Policy\"}",
+     "content_fingerprint": "100591e9ecc8f3100463a027931b1c033c86314fc82d620633bbe667b6b779fa",
+     "pane_id": null,
+     "persisted": true,
+     "snapshot_at": null,
+     "reset_at": null
+    },
+    {
+     "source": "transcript",
+     "observed_at": 1790000050.5,
+     "row_id": "r2",
+     "harness": "claude",
+     "provider": "anthropic",
+     "account": "a1",
+     "role": "assistant",
+     "raw_status": 429,
+     "raw_kind": "api_error",
+     "content": "API Error: 429 {\"message\":\"Fair Usage Policy\"}",
+     "content_fingerprint": "3982c6f24d803b92e369ce99efdbf4109e6d6c0ca01deb27c9093cc1f7f51287",
+     "pane_id": null,
+     "persisted": true,
+     "snapshot_at": null,
+     "reset_at": null
+    },
+    {
+     "source": "transcript",
+     "observed_at": 1789999999.5,
+     "row_id": "",
+     "harness": "claude",
+     "provider": "anthropic",
+     "account": "a1",
+     "role": "assistant",
+     "raw_status": 429,
+     "raw_kind": "api_error",
+     "content": "API Error: 429 {\"message\":\"Fair Usage Policy\"}",
+     "content_fingerprint": "996721dc6b5e2b446833959958906a88293d0996234df0d74edcbe95f030e69f",
+     "pane_id": null,
+     "persisted": true,
+     "snapshot_at": null,
+     "reset_at": null
+    },
+    {
+     "source": "transcript",
+     "observed_at": 1789999999.5,
+     "row_id": "r3",
+     "harness": "claude",
+     "provider": null,
+     "account": "a1",
+     "role": "assistant",
+     "raw_status": 429,
+     "raw_kind": "api_error",
+     "content": "API Error: 429 {\"message\":\"Fair Usage Policy\"}",
+     "content_fingerprint": "9345869ebefad75ae219c7b2107f1f0fc2877d4c7137fe48eda97160a8f8e835",
+     "pane_id": null,
+     "persisted": true,
+     "snapshot_at": null,
+     "reset_at": null
+    },
+    {
+     "source": "pane",
+     "observed_at": 1789999999.5,
+     "row_id": "r4",
+     "harness": "claude",
+     "provider": "anthropic",
+     "account": "a1",
+     "role": "assistant",
+     "raw_status": 429,
+     "raw_kind": "api_error",
+     "content": "API Error: 429 {\"message\":\"Fair Usage Policy\"}",
+     "content_fingerprint": "9cf47571c560af0162a15e862c42ef51c5e8e2165fd3b6f63f5cd952a4abfb4f",
+     "pane_id": null,
+     "persisted": true,
+     "snapshot_at": null,
+     "reset_at": null
+    },
+    {
+     "source": "pane",
+     "observed_at": 1789999999.5,
+     "row_id": "r5",
+     "harness": "claude",
+     "provider": "anthropic",
+     "account": "a1",
+     "role": "assistant",
+     "raw_status": 429,
+     "raw_kind": "api_error",
+     "content": "API Error: 429 {\"message\":\"Fair Usage Policy\"}",
+     "content_fingerprint": "833c604cc200cf46d186c8211f0ed40310e0f14c2d7762f18951ff05ed556eff",
+     "pane_id": "3",
+     "persisted": true,
+     "snapshot_at": 1789999500.5,
+     "reset_at": null
+    },
+    {
+     "source": "pane",
+     "observed_at": 1789999999.5,
+     "row_id": "r6",
+     "harness": "claude",
+     "provider": "anthropic",
+     "account": "a1",
+     "role": "assistant",
+     "raw_status": 429,
+     "raw_kind": "api_error",
+     "content": "API Error: 429 {\"message\":\"Fair Usage Policy\"}",
+     "content_fingerprint": "3476ed0b2a793a351baabf7aec53538171ae61ded6731ee6b456a280604299a2",
+     "pane_id": "3",
+     "persisted": true,
+     "snapshot_at": null,
+     "reset_at": null
+    },
+    {
+     "source": "transcript",
+     "observed_at": 1789999999.5,
+     "row_id": "r7",
+     "harness": "claude",
+     "provider": "anthropic",
+     "account": "a1",
+     "role": "assistant",
+     "raw_status": 200,
+     "raw_kind": "content",
+     "content": "odd",
+     "content_fingerprint": "4cb7549ab524decace7c38307862980aa4c38060abde2a358be808b682f3379b",
+     "pane_id": null,
+     "persisted": true,
+     "snapshot_at": null,
+     "reset_at": null
+    },
+    {
+     "source": "transcript",
+     "observed_at": 1789999999.5,
+     "row_id": "r8",
+     "harness": "claude",
+     "provider": "anthropic",
+     "account": "a1",
+     "role": "assistant",
+     "raw_status": null,
+     "raw_kind": "content",
+     "content": "café ok",
+     "content_fingerprint": "e05e0aadf3c6eeb973941d03264c4df2e971e6d0cfb9f7e5e9a59bcf7437a8e4",
+     "pane_id": null,
+     "persisted": true,
+     "snapshot_at": null,
+     "reset_at": null
+    },
+    {
+     "source": "other",
+     "observed_at": 1789999999.5,
+     "row_id": "r9",
+     "harness": "claude",
+     "provider": "anthropic",
+     "account": "a1",
+     "role": "assistant",
+     "raw_status": 429,
+     "raw_kind": "api_error",
+     "content": "API Error: 429 {\"message\":\"Fair Usage Policy\"}",
+     "content_fingerprint": "77fedd3c81934e9535993fc54085714f44f9518c4b2eb212419b69817f10619a",
+     "pane_id": null,
+     "persisted": true,
+     "snapshot_at": null,
+     "reset_at": null
+    }
+   ],
+   "prior": null,
+   "report": {
+    "instrument": "measured",
+    "breakers": [],
+    "counts": {
+     "accepted": 1,
+     "refused": 9
+    },
+    "refusals": [
+     {
+      "row_id": "r1",
+      "source": "transcript",
+      "fingerprint": "100591e9ecc8f3100463a027931b1c033c86314fc82d620633bbe667b6b779fa",
+      "reason": "evidence_stale"
+     },
+     {
+      "row_id": "r2",
+      "source": "transcript",
+      "fingerprint": "3982c6f24d803b92e369ce99efdbf4109e6d6c0ca01deb27c9093cc1f7f51287",
+      "reason": "evidence_stale"
+     },
+     {
+      "row_id": "",
+      "source": "transcript",
+      "fingerprint": "996721dc6b5e2b446833959958906a88293d0996234df0d74edcbe95f030e69f",
+      "reason": "unknown_record_identity"
+     },
+     {
+      "row_id": "r3",
+      "source": "transcript",
+      "fingerprint": "9345869ebefad75ae219c7b2107f1f0fc2877d4c7137fe48eda97160a8f8e835",
+      "reason": "unknown_route_identity"
+     },
+     {
+      "row_id": "r4",
+      "source": "pane",
+      "fingerprint": "9cf47571c560af0162a15e862c42ef51c5e8e2165fd3b6f63f5cd952a4abfb4f",
+      "reason": "unknown_pane_identity"
+     },
+     {
+      "row_id": "r5",
+      "source": "pane",
+      "fingerprint": "833c604cc200cf46d186c8211f0ed40310e0f14c2d7762f18951ff05ed556eff",
+      "reason": "pane_snapshot_stale"
+     },
+     {
+      "row_id": "r6",
+      "source": "pane",
+      "fingerprint": "3476ed0b2a793a351baabf7aec53538171ae61ded6731ee6b456a280604299a2",
+      "reason": "pane_not_persisted"
+     },
+     {
+      "row_id": "r7",
+      "source": "transcript",
+      "fingerprint": "4cb7549ab524decace7c38307862980aa4c38060abde2a358be808b682f3379b",
+      "reason": "not_assistant_api_record"
+     },
+     {
+      "row_id": "r9",
+      "source": "other",
+      "fingerprint": "77fedd3c81934e9535993fc54085714f44f9518c4b2eb212419b69817f10619a",
+      "reason": "unknown_source"
+     }
+    ],
+    "sessions": {}
+   },
+   "state": {
+    "version": 1,
+    "fingerprints": [
+     "e05e0aadf3c6eeb973941d03264c4df2e971e6d0cfb9f7e5e9a59bcf7437a8e4"
+    ],
+    "evidence": [
+     {
+      "source": "transcript",
+      "observed_at": 1789999999.5,
+      "row_id": "r8",
+      "harness": "claude",
+      "provider": "anthropic",
+      "account": "a1",
+      "role": "assistant",
+      "raw_status": null,
+      "raw_kind": "content",
+      "content": "café ok",
+      "content_fingerprint": "e05e0aadf3c6eeb973941d03264c4df2e971e6d0cfb9f7e5e9a59bcf7437a8e4",
+      "pane_id": null,
+      "persisted": true,
+      "snapshot_at": null,
+      "reset_at": null
+     }
+    ],
+    "breakers": [],
+    "pane_snapshots": []
+   }
+  },
+  {
+   "name": "pane_vote",
+   "records": [
+    {
+     "source": "pane",
+     "observed_at": 1789999999.5,
+     "row_id": "r1",
+     "harness": "claude",
+     "provider": "anthropic",
+     "account": "a1",
+     "role": "assistant",
+     "raw_status": 429,
+     "raw_kind": "api_error",
+     "content": "API Error: 429 {\"message\":\"Fair Usage Policy\"}",
+     "content_fingerprint": "6ba13eeef6dcd36f17919e2b937ff851b4571f36fa199e6e5aeedea323207609",
+     "pane_id": "3",
+     "persisted": true,
+     "snapshot_at": 1789999999.5,
+     "reset_at": null
+    }
+   ],
+   "prior": {
+    "pane_snapshots": [
+     {
+      "fingerprint": "old",
+      "snapshot_at": 1789999100.5,
+      "content": "x"
+     },
+     {
+      "fingerprint": "keep",
+      "observed_at": 1789999990.5,
+      "content": "y"
+     }
+    ]
+   },
+   "report": {
+    "instrument": "measured",
+    "breakers": [],
+    "counts": {
+     "accepted": 1,
+     "terminal": 1
+    },
+    "refusals": [],
+    "sessions": {
+     "r1": {
+      "state": "terminal",
+      "kind": "fair_usage_policy",
+      "consecutive": 1,
+      "reset_at": null,
+      "manual_restoration": true
+     }
+    }
+   },
+   "state": {
+    "version": 1,
+    "fingerprints": [
+     "6ba13eeef6dcd36f17919e2b937ff851b4571f36fa199e6e5aeedea323207609"
+    ],
+    "evidence": [
+     {
+      "source": "pane",
+      "observed_at": 1789999999.5,
+      "row_id": "r1",
+      "harness": "claude",
+      "provider": "anthropic",
+      "account": "a1",
+      "role": "assistant",
+      "raw_status": 429,
+      "raw_kind": "api_error",
+      "content": "API Error: 429 {\"message\":\"Fair Usage Policy\"}",
+      "content_fingerprint": "6ba13eeef6dcd36f17919e2b937ff851b4571f36fa199e6e5aeedea323207609",
+      "pane_id": "3",
+      "persisted": true,
+      "snapshot_at": 1789999999.5,
+      "reset_at": null
+     }
+    ],
+    "breakers": [],
+    "pane_snapshots": [
+     {
+      "fingerprint": "6ba13eeef6dcd36f17919e2b937ff851b4571f36fa199e6e5aeedea323207609",
+      "pane_id": "3",
+      "observed_at": 1789999999.5,
+      "snapshot_at": 1789999999.5,
+      "raw_status": 429,
+      "raw_kind": "api_error",
+      "content": "API Error: 429 {\"message\":\"Fair Usage Policy\"}"
+     },
+     {
+      "fingerprint": "keep",
+      "observed_at": 1789999990.5,
+      "content": "y"
+     }
+    ]
+   }
+  },
+  {
+   "name": "prior_retained_and_epoch_kept",
+   "records": [
+    {
+     "source": "transcript",
+     "observed_at": 1789999970.5,
+     "row_id": "r1",
+     "harness": "claude",
+     "provider": "anthropic",
+     "account": "a1",
+     "role": "assistant",
+     "raw_status": 429,
+     "raw_kind": "api_error",
+     "content": "API Error: 429 {\"message\":\"Fair Usage Policy\"}",
+     "content_fingerprint": "e053411983c1d836b7a432d2bcdd5629f78218a6b67e751eb7cf3cba42175e14",
+     "pane_id": null,
+     "persisted": true,
+     "snapshot_at": null,
+     "reset_at": null
+    },
+    {
+     "source": "transcript",
+     "observed_at": 1789999990.5,
+     "row_id": "r2",
+     "harness": "claude",
+     "provider": "anthropic",
+     "account": "a1",
+     "role": "assistant",
+     "raw_status": 429,
+     "raw_kind": "api_error",
+     "content": "API Error: 429 {\"message\":\"Fair Usage Policy\"}",
+     "content_fingerprint": "ea02a9f3bc0afa9b707f7b447fa59ba590bf09e6d95029bff106906e581067f0",
+     "pane_id": null,
+     "persisted": true,
+     "snapshot_at": null,
+     "reset_at": null
+    }
+   ],
+   "prior": {
+    "evidence": [
+     {
+      "bogus": 1
+     },
+     {
+      "source": "transcript",
+      "observed_at": 1789999960.5,
+      "row_id": "r9",
+      "harness": "claude",
+      "provider": "anthropic",
+      "account": "a1",
+      "role": "assistant",
+      "raw_status": 529,
+      "raw_kind": "api_error",
+      "content": "API Error: 529 overloaded",
+      "content_fingerprint": "8e7b5f5d22ab1e4e2eae136a70397508d344f037275401de0bb761c0529e00ad",
+      "pane_id": null,
+      "persisted": true,
+      "snapshot_at": null,
+      "reset_at": null
+     }
+    ],
+    "breakers": [
+     {
+      "provider": "anthropic",
+      "account": "a1",
+      "kind": "fair_usage_policy",
+      "outage_epoch": 111.5,
+      "opened_at": 222.5
+     },
+     {
+      "provider": "zai",
+      "account": "z",
+      "kind": "fair_usage_policy",
+      "manual_restoration": true,
+      "basis": "kept"
+     },
+     {
+      "provider": "oa",
+      "account": "o",
+      "kind": "overloaded_529",
+      "reset_at": 1789999990.5,
+      "manual_restoration": false
+     },
+     {
+      "provider": "oa",
+      "account": "p",
+      "kind": "overloaded_529",
+      "reset_at": 1789999500.5,
+      "manual_restoration": false
+     }
+    ]
+   },
+   "report": {
+    "instrument": "measured",
+    "breakers": [
+     {
+      "provider": "anthropic",
+      "account": "a1",
+      "kind": "fair_usage_policy",
+      "outage_epoch": 111.5,
+      "opened_at": 222.5,
+      "row_ids": [
+       "r1",
+       "r2"
+      ],
+      "fingerprints": [
+       "e053411983c1d836b7a432d2bcdd5629f78218a6b67e751eb7cf3cba42175e14",
+       "ea02a9f3bc0afa9b707f7b447fa59ba590bf09e6d95029bff106906e581067f0"
+      ],
+      "reset_at": null,
+      "manual_restoration": true,
+      "basis": "positive quorum=2 across 2 distinct rows"
+     },
+     {
+      "provider": "oa",
+      "account": "o",
+      "kind": "overloaded_529",
+      "reset_at": 1789999990.5,
+      "manual_restoration": false
+     },
+     {
+      "provider": "zai",
+      "account": "z",
+      "kind": "fair_usage_policy",
+      "manual_restoration": true,
+      "basis": "kept"
+     }
+    ],
+    "counts": {
+     "accepted": 3,
+     "terminal": 2,
+     "retrying": 1,
+     "open": 3
+    },
+    "refusals": [],
+    "sessions": {
+     "r9": {
+      "state": "retrying",
+      "kind": "overloaded_529",
+      "consecutive": 1,
+      "reset_at": null,
+      "manual_restoration": false
+     },
+     "r1": {
+      "state": "terminal",
+      "kind": "fair_usage_policy",
+      "consecutive": 1,
+      "reset_at": null,
+      "manual_restoration": true
+     },
+     "r2": {
+      "state": "terminal",
+      "kind": "fair_usage_policy",
+      "consecutive": 1,
+      "reset_at": null,
+      "manual_restoration": true
+     }
+    }
+   },
+   "state": {
+    "version": 1,
+    "fingerprints": [
+     "8e7b5f5d22ab1e4e2eae136a70397508d344f037275401de0bb761c0529e00ad",
+     "e053411983c1d836b7a432d2bcdd5629f78218a6b67e751eb7cf3cba42175e14",
+     "ea02a9f3bc0afa9b707f7b447fa59ba590bf09e6d95029bff106906e581067f0"
+    ],
+    "evidence": [
+     {
+      "source": "transcript",
+      "observed_at": 1789999960.5,
+      "row_id": "r9",
+      "harness": "claude",
+      "provider": "anthropic",
+      "account": "a1",
+      "role": "assistant",
+      "raw_status": 529,
+      "raw_kind": "api_error",
+      "content": "API Error: 529 overloaded",
+      "content_fingerprint": "8e7b5f5d22ab1e4e2eae136a70397508d344f037275401de0bb761c0529e00ad",
+      "pane_id": null,
+      "persisted": true,
+      "snapshot_at": null,
+      "reset_at": null
+     },
+     {
+      "source": "transcript",
+      "observed_at": 1789999970.5,
+      "row_id": "r1",
+      "harness": "claude",
+      "provider": "anthropic",
+      "account": "a1",
+      "role": "assistant",
+      "raw_status": 429,
+      "raw_kind": "api_error",
+      "content": "API Error: 429 {\"message\":\"Fair Usage Policy\"}",
+      "content_fingerprint": "e053411983c1d836b7a432d2bcdd5629f78218a6b67e751eb7cf3cba42175e14",
+      "pane_id": null,
+      "persisted": true,
+      "snapshot_at": null,
+      "reset_at": null
+     },
+     {
+      "source": "transcript",
+      "observed_at": 1789999990.5,
+      "row_id": "r2",
+      "harness": "claude",
+      "provider": "anthropic",
+      "account": "a1",
+      "role": "assistant",
+      "raw_status": 429,
+      "raw_kind": "api_error",
+      "content": "API Error: 429 {\"message\":\"Fair Usage Policy\"}",
+      "content_fingerprint": "ea02a9f3bc0afa9b707f7b447fa59ba590bf09e6d95029bff106906e581067f0",
+      "pane_id": null,
+      "persisted": true,
+      "snapshot_at": null,
+      "reset_at": null
+     }
+    ],
+    "breakers": [
+     {
+      "provider": "anthropic",
+      "account": "a1",
+      "kind": "fair_usage_policy",
+      "outage_epoch": 111.5,
+      "opened_at": 222.5,
+      "row_ids": [
+       "r1",
+       "r2"
+      ],
+      "fingerprints": [
+       "e053411983c1d836b7a432d2bcdd5629f78218a6b67e751eb7cf3cba42175e14",
+       "ea02a9f3bc0afa9b707f7b447fa59ba590bf09e6d95029bff106906e581067f0"
+      ],
+      "reset_at": null,
+      "manual_restoration": true,
+      "basis": "positive quorum=2 across 2 distinct rows"
+     },
+     {
+      "provider": "oa",
+      "account": "o",
+      "kind": "overloaded_529",
+      "reset_at": 1789999990.5,
+      "manual_restoration": false
+     },
+     {
+      "provider": "zai",
+      "account": "z",
+      "kind": "fair_usage_policy",
+      "manual_restoration": true,
+      "basis": "kept"
+     }
+    ],
+    "pane_snapshots": []
+   }
+  }
+ ]
+}

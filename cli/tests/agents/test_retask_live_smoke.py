@@ -9,12 +9,12 @@ import subprocess
 import time
 import uuid
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
 from fno.agents.mux_spawn import dispatch_spawn_pane
 from fno.agents.registry import load_registry
+from fno.rust_binary import find_dev_binary, resolve_binary
 
 
 pytestmark = [
@@ -32,7 +32,7 @@ def test_real_spawned_idle_pane_retasks_with_live_readiness(monkeypatch) -> None
         pytest.skip("set RETASK_SMOKE_HOME to the real authenticated home directory")
 
     repo = Path(__file__).resolve().parents[3]
-    cli = ["uv", "run", "--project", str(repo / "cli"), "fno-py"]
+    cli = [str(find_dev_binary() or resolve_binary())]
     env = os.environ.copy()
     env.update(
         HOME=real_home,
@@ -184,12 +184,11 @@ def test_real_spawned_idle_pane_retasks_with_live_readiness(monkeypatch) -> None
         )
         monkeypatch.delenv("FNO_CONFIG_SEARCH_ROOT", raising=False)
         monkeypatch.delenv("FNO_NO_CANONICAL_CONFIG", raising=False)
-        # The native front runs the whole transaction inside fno-agents;
-        # the smoke drives the public shim spelling, not a library entry.
+        # The whole transaction runs inside fno-agents; the smoke drives the
+        # binary's command, not a library entry.
         out = run(
             [
                 *cli,
-                "agents",
                 "retask",
                 worker,
                 "--node",
@@ -211,7 +210,7 @@ def test_real_spawned_idle_pane_retasks_with_live_readiness(monkeypatch) -> None
     finally:
         cleanup_receipts = []
         for name in cleanup_names:
-            cleaned = run([*cli, "agents", "rm", name, "--force"], timeout=60)
+            cleaned = run([*cli, "rm", name, "--force"], timeout=60)
             cleanup_receipts.append(
                 {"name": name, "returncode": cleaned.returncode, "stderr": cleaned.stderr}
             )

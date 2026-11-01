@@ -6,8 +6,8 @@
 //! `get`, `find`, and `undispatched` arms make.
 
 use crate::backlog_ready::{
-    configured_staleness_days, descendants_of, detect_project, dispatch_node_summary,
-    find_node_index, select, selection_guards, truthy, NoSuchParent, ReadyOpts,
+    descendants_of, detect_project, dispatch_node_summary, find_node_index, select,
+    selection_guards, truthy, NoSuchParent, ReadyOpts,
 };
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
@@ -151,7 +151,7 @@ fn has_unmerged_open_pr(entry: &Value) -> bool {
     truthy(entry.get("pr_number"))
 }
 
-fn container_ids(entries: &[Value]) -> BTreeSet<String> {
+pub(crate) fn container_ids(entries: &[Value]) -> BTreeSet<String> {
     let mut out = BTreeSet::new();
     for e in entries {
         if let (Some(p), Some(parent)) = (
@@ -459,8 +459,9 @@ pub fn run(args: &[String]) -> i32 {
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let repo_root = crate::backlog::create_cli::repo_root(&cwd);
     let now_ms = crate::claims::now_ms();
-    let config_dir = crate::claude_roster::config_dir();
-    let staleness_days = configured_staleness_days(&config_dir).unwrap_or(21).max(1);
+    let staleness_days = crate::backlog_ready::store_staleness_days()
+        .unwrap_or(21)
+        .max(1);
     let fno_dir = super::settings::graph_path()
         .parent()
         .map(std::path::Path::to_path_buf)

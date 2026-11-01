@@ -19,12 +19,18 @@ use std::path::PathBuf;
 /// ([`crate::agents_config::within_search_ceiling`]); the FNO_CONFIG and
 /// FNO_GLOBAL_SETTINGS_PATH entries are explicit and read as-is.
 pub(crate) fn candidates() -> Vec<PathBuf> {
+    candidates_at(std::env::current_dir().ok().as_deref())
+}
+
+/// The same walk with the repo-local candidate seeded at an explicit cwd: the
+/// cwd a launch runs the child under, not the spawner's.
+pub(crate) fn candidates_at(cwd: Option<&std::path::Path>) -> Vec<PathBuf> {
     let mut out = Vec::new();
     let mut push_dir = |dir: PathBuf| {
         out.push(dir.join("config.toml"));
         out.push(dir.join("settings.yaml"));
     };
-    if let Ok(cwd) = std::env::current_dir() {
+    if let Some(cwd) = cwd {
         let dir = cwd.join(".fno");
         if crate::agents_config::within_search_ceiling(&dir.join("config.toml")) {
             push_dir(dir);
@@ -195,7 +201,7 @@ pub fn node_id_hex_width() -> usize {
 /// Lexical `normpath`: drop `.` components and resolve `..` against the
 /// buffer, never touching the filesystem. The Python readers compared paths
 /// in this form (os.path.normpath), so a `dir/./x/..` entry still matches.
-fn normalize(path: &std::path::Path) -> PathBuf {
+pub(crate) fn normalize(path: &std::path::Path) -> PathBuf {
     let mut out = PathBuf::new();
     for comp in path.components() {
         match comp {
@@ -272,23 +278,38 @@ fn state_dir_value(doc: &Value) -> Option<&str> {
 /// does not move the backlog. Python's `state_dir()` always answers
 /// absolute: a relative value anchors at the cwd and collapses `.`/`..`.
 pub fn state_dir() -> Option<PathBuf> {
-    let cwd = std::env::current_dir().ok();
+    state_dir_at(std::env::current_dir().ok().as_deref())
+}
+
+/// The state directory walk anchored at an explicit cwd: the cwd a launch
+/// runs the child under, so a relative value anchors where the child reads.
+pub fn state_dir_at(cwd: Option<&std::path::Path>) -> Option<PathBuf> {
+    state_dir_configured(cwd).or_else(|| {
+        std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .map(|h| h.join(".fno"))
+    })
+}
+
+/// The configured state root only: the env pins and the settings candidates,
+/// anchored at the cwd. `None` when nothing is configured, so a caller can
+/// fall back its own way (the `$HOME/.fno` default stays with
+/// [`state_dir_at`]).
+pub fn state_dir_configured(cwd: Option<&std::path::Path>) -> Option<PathBuf> {
     if let Some(v) = std::env::var_os("FNO_STATE_DIR").filter(|v| !v.is_empty()) {
-        return Some(anchored(expand_home(&v.to_string_lossy()), cwd.as_deref()));
+        return Some(anchored(expand_home(&v.to_string_lossy()), cwd));
     }
     if let Some(cfg) = std::env::var_os("FNO_CONFIG").filter(|v| !v.is_empty()) {
         if let Some(sd) = state_dir_value(&read_flat(&PathBuf::from(cfg))) {
-            return Some(anchored(expand_home(sd), cwd.as_deref()));
+            return Some(anchored(expand_home(sd), cwd));
         }
     }
-    for path in candidates() {
+    for path in candidates_at(cwd) {
         if let Some(sd) = state_dir_value(&read_flat(&path)) {
-            return Some(anchored(expand_home(sd), cwd.as_deref()));
+            return Some(anchored(expand_home(sd), cwd));
         }
     }
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .map(|h| h.join(".fno"))
+    None
 }
 
 /// Anchor at `cwd` through the shared lexical walk; with no cwd (it cannot
@@ -303,7 +324,14 @@ fn anchored(p: PathBuf, cwd: Option<&std::path::Path>) -> PathBuf {
 /// The graph file the porcelain reads serve: `<state_dir>/graph.json`,
 /// resolved through the layout table so a migrated root reads the `db/` twin.
 pub fn graph_path() -> PathBuf {
-    match state_dir() {
+    graph_path_at(std::env::current_dir().ok().as_deref())
+}
+
+/// The same answer anchored at the cwd a launch runs the child under. This is
+/// the resolver a footnote launch names in `FNO_GRAPH_JSON`: it never reads
+/// an inherited value, so a declared sandbox beats one.
+pub fn graph_path_at(cwd: Option<&std::path::Path>) -> PathBuf {
+    match state_dir_at(cwd) {
         Some(d) => crate::state_layout::graph_anchor(&d),
         None => crate::state_layout::place(&PathBuf::from(".fno"), "graph.json"),
     }

@@ -18,9 +18,15 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 /// The rollup contexts that project review coverage, not generic CI; the
-/// verdict drops them before classifying (`_status.without_coverage_statuses`).
+/// verdict drops them before classifying (the Python `_status` filter).
 pub(crate) const COVERAGE_STATUS_CONTEXTS: [&str; 2] =
     ["fno/review-coverage", "fno/review-coverage-unavailable"];
+
+/// The evals gate posts this StatusContext at a head. A red gate is an eval
+/// fact, not a CI failure: it rides beside the verdict (`evals_gate_fact`)
+/// and the merge gate reads it there, never through the CI verdict, so a
+/// waiting worker's fail-fast cannot cancel the head's CI runs over it.
+pub(crate) const EVALS_GATE_CONTEXT: &str = "evals/gate";
 
 /// Conclusions that prove a result EXISTS: pass states plus fail states minus
 /// the two taken-away conclusions (CANCELLED, STALE). A cancelled run is red
@@ -79,18 +85,40 @@ pub(crate) fn has_settled_marker(check: &Value) -> bool {
     SETTLED_STATES.contains(&alt_conclusion(check).as_str())
 }
 
-/// Drop the review-coverage projections before classifying generic CI.
-pub(crate) fn without_coverage_statuses(rollup: &[Value]) -> Vec<Value> {
+/// Drop the projections that are not generic CI (review coverage, the evals
+/// gate) before classifying. The evals gate is a commit status like coverage,
+/// so the same shape drops it.
+pub(crate) fn generic_ci_rollup(rollup: &[Value]) -> Vec<Value> {
     rollup
         .iter()
         .filter(|check| {
             let context = s_str(check, "context");
             let name = s_str(check, "name");
-            !COVERAGE_STATUS_CONTEXTS.contains(&context)
-                && !COVERAGE_STATUS_CONTEXTS.contains(&name)
+            let excluded = |value: &str| {
+                COVERAGE_STATUS_CONTEXTS.contains(&value) || value == EVALS_GATE_CONTEXT
+            };
+            !excluded(context) && !excluded(name)
         })
         .cloned()
         .collect()
+}
+
+/// The evals gate's fact at this head, read from the WHOLE rollup (the call
+/// sites that classify generic CI have already dropped it). Supersession is
+/// the shared rule (`latest_per_name` keys statuses by context); `None` when
+/// the daemon never posted one. The description rides: each red names its
+/// cause and its clearing command (evals_gate.rs).
+pub(crate) fn evals_gate_fact(rollup: &[Value]) -> Option<Value> {
+    let deduped = crate::check_supersession::latest_per_name(&Value::Array(rollup.to_vec()));
+    let row = deduped
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|row| s_str(row, "context") == EVALS_GATE_CONTEXT)?;
+    Some(json!({
+        "state": s_str(row, "state"),
+        "description": s_str(row, "description"),
+    }))
 }
 
 /// Conclusions that prove a check genuinely failed: the settled fail states
@@ -473,6 +501,9 @@ pub(crate) fn read_pr<P: GhProbe>(
             "state": s_str(sc, "state").to_uppercase(),
             "createdAt": sc.get("created_at").cloned().unwrap_or(json!("")),
             "targetUrl": sc.get("target_url").cloned().unwrap_or(json!("")),
+            // The evals gate fact quotes it: a red names cause and clearing
+            // command here.
+            "description": sc.get("description").cloned().unwrap_or(json!("")),
         }));
     }
 
@@ -863,7 +894,7 @@ pub(crate) fn status_payload<P: GhProbe>(
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
-    let generic_rollup = without_coverage_statuses(&rollup);
+    let generic_rollup = generic_ci_rollup(&rollup);
     let (verdict, _code, counts) = verdict_for(&generic_rollup);
     let green = verdict == "green";
     let head_sha = pr_json
@@ -1144,7 +1175,7 @@ pub(crate) fn status_payload<P: GhProbe>(
             .and_then(Value::as_array)
             .cloned()
             .unwrap_or_default();
-        if cancelled_only(&without_coverage_statuses(&rollup)) {
+        if cancelled_only(&generic_ci_rollup(&rollup)) {
             seams::platform_incident()
         } else {
             Value::Null
@@ -1283,7 +1314,7 @@ pub(crate) fn status_ci_rows<P: GhProbe>(
         .cloned()
         .unwrap_or_default();
     let rollup = if drop_coverage {
-        without_coverage_statuses(&rollup)
+        generic_ci_rollup(&rollup)
     } else {
         rollup
     };
