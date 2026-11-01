@@ -131,6 +131,10 @@ pub(crate) fn carried_checks(
                         .collect()
                 })
             }),
+            // The carry overrides the CI verdict only. The eval fact stays
+            // the live read's: a gate red at this head holds the merge even
+            // when a prior green carries the CI verdict.
+            evals_gate_red: checks.evals_gate_red,
         };
     }
     checks

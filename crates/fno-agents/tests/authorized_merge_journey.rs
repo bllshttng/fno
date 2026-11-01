@@ -106,6 +106,7 @@ impl Probes for FakeGitHub {
             optional_unresolved: Some(Some(0)),
             rerun_recovered: None,
             rerun_failures: None,
+            evals_gate_red: None,
         }
     }
     fn fno_shell(

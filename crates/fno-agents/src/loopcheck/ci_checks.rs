@@ -15,7 +15,12 @@ pub(super) fn without_coverage_statuses(checks: &Value) -> Value {
                     value == Some(COVERAGE_STATUS_CONTEXT)
                         || value == Some(COVERAGE_UNAVAILABLE_STATUS_CONTEXT)
                 };
-                !is_coverage(name) && !is_coverage(context)
+                // The evals gate is an eval fact, not CI: a red gate must
+                // not read as a red CI conclusion here, or a waiting worker
+                // fix-loops a green PR instead of surfacing the gate hold.
+                let is_evals =
+                    |value: Option<&str>| value == Some(crate::pr_status::EVALS_GATE_CONTEXT);
+                !is_coverage(name) && !is_coverage(context) && !is_evals(name) && !is_evals(context)
             })
             .cloned()
             .collect(),

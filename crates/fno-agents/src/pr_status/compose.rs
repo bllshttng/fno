@@ -7,7 +7,7 @@
 //! review coverage, optional reviews, the preview receipt) lands with the
 //! door; the golden contract never sees it.
 
-use super::{has_settled_marker, verdict_for, without_coverage_statuses};
+use super::{generic_ci_rollup, has_settled_marker, verdict_for};
 use serde_json::{json, Map, Value};
 
 /// The pure composer: every input arrives resolved, the payload and its
@@ -40,7 +40,7 @@ pub(crate) fn compose_payload(inputs: &ComposeInputs) -> (i32, Value, Vec<String
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
-    let generic_rollup = without_coverage_statuses(&rollup);
+    let generic_rollup = generic_ci_rollup(&rollup);
     let (verdict, code, counts) = verdict_for(&generic_rollup);
     let green = verdict == "green";
     let is_terminal = matches!(
@@ -276,6 +276,14 @@ pub(crate) fn compose_payload(inputs: &ComposeInputs) -> (i32, Value, Vec<String
     payload.insert("merge_decision".into(), receipt.clone());
     payload.insert("ready".into(), json!(blocker_words.is_empty()));
     payload.insert("ready_blockers".into(), json!(blocker_words));
+    // The evals gate rides beside the verdict, the way platform_incident
+    // does: present only when the daemon posted the status, so the golden
+    // payloads without a gate row stay untouched. A red gate is not a red
+    // CI verdict and must never cancel the head's runs through one.
+    let evals_gate = super::evals_gate_fact(&rollup);
+    if let Some(fact) = &evals_gate {
+        payload.insert("evals_gate".into(), fact.clone());
+    }
     if let Some(waiver) = receipt.get("coverage_waiver") {
         if !waiver.is_null() {
             payload.insert("coverage_waiver".into(), waiver.clone());
@@ -295,6 +303,7 @@ pub(crate) fn compose_payload(inputs: &ComposeInputs) -> (i32, Value, Vec<String
     );
     push_coverage_notes(&coverage, &payload, &mut stderr);
     failures_note(&payload, &mut stderr);
+    evals_gate_note(&evals_gate, &mut stderr);
     push_lander_note(&payload, &mut stderr);
     if let Some(incident) = payload.get("platform_incident") {
         if !incident.is_null() {
@@ -728,6 +737,24 @@ pub(crate) fn error_payload(pr: &str, reason: &super::RestReason) -> (i32, Value
     (4, value, stderr)
 }
 
+fn evals_gate_note(fact: &Option<Value>, out: &mut Vec<String>) {
+    let Some(fact) = fact else {
+        return;
+    };
+    let state = fact.get("state").and_then(Value::as_str).unwrap_or("");
+    if !matches!(state, "FAILURE" | "ERROR") {
+        return;
+    }
+    let description = fact
+        .get("description")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    out.push(format!(
+        "note: evals gate red at this head ({state}): {description} \
+         The CI verdict is judged separately and its runs keep going."
+    ));
+}
+
 /// The stderr notes a cache serve replays, in the Python `_serve` order:
 /// coverage recompute, failure detail, rerun recovery, platform incident.
 pub(crate) fn serve_notes(payload: &Value) -> Vec<String> {
@@ -742,6 +769,11 @@ pub(crate) fn serve_notes(payload: &Value) -> Vec<String> {
     if let Some(obj) = payload.as_object() {
         failures_note(obj, &mut out);
         rerun_recovery_note(obj, &mut out);
+    }
+    if let Some(fact) = payload.get("evals_gate") {
+        if !fact.is_null() {
+            evals_gate_note(&Some(fact.clone()), &mut out);
+        }
     }
     if let Some(incident) = payload.get("platform_incident") {
         if !incident.is_null() {
