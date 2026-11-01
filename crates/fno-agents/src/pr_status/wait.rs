@@ -1227,8 +1227,11 @@ exit 1
         let _lock = crate::claims::test_env_lock()
             .lock()
             .unwrap_or_else(|e| e.into_inner());
+        // The env value IS the agents root; the journal lands at its parent.
+        let agents = home.path().join("agents");
+        std::fs::create_dir_all(&agents).unwrap();
         let _home =
-            crate::claims::EnvVarGuard::set(crate::paths::HOME_ENV, home.path().to_str().unwrap());
+            crate::claims::EnvVarGuard::set(crate::paths::HOME_ENV, agents.to_str().unwrap());
         let gh = cancel_stub_gh(dir.path());
         let lines = cancel_in_flight(gh.to_str().unwrap(), dir.path(), 4254, "abc123").unwrap();
         assert!(
