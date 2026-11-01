@@ -1204,7 +1204,12 @@ mod tests {
         let dir = state_dir(&w.history());
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join(MAIN_LOG), "Error: unknown lane\n\n").unwrap();
-        let now = Utc::now();
+        // The cohort name holds the date, so the retries must not cross midnight.
+        let now = Utc::now()
+            .date_naive()
+            .and_hms_opt(12, 0, 0)
+            .unwrap()
+            .and_utc();
         let hour = chrono::Duration::seconds(MAIN_RETRY_S + 1);
         let at = |tries: i32| now + hour * tries;
 
