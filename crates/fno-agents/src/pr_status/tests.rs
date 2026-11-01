@@ -179,7 +179,7 @@ fn pr_json_from(name: &str) -> Value {
 fn red_fixture_collects_the_golden_failures() {
     let fake = FakeGh::from_fixture("red_detailed_capped");
     let pr_json = read_pr(&fake, Path::new("/tmp"), "Owner/Repo", 42, None).unwrap();
-    let rollup = without_coverage_statuses(pr_json["statusCheckRollup"].as_array().unwrap());
+    let rollup = generic_ci_rollup(pr_json["statusCheckRollup"].as_array().unwrap());
     let failing: Vec<Value> = crate::check_supersession::latest_per_name(&Value::Array(rollup))
         .as_array()
         .unwrap()
@@ -205,6 +205,42 @@ fn red_fixture_collects_the_golden_failures() {
         expected["failures"],
         "failure detail"
     );
+}
+
+/// A red evals/gate status is an eval fact, not a CI failure: the generic
+/// rollup drops it, so the verdict stays green over green check runs, and
+/// the fact extractor reads the newest row for the context.
+#[test]
+fn evals_gate_red_never_reds_the_ci_verdict() {
+    let rollup = vec![
+        json!({"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}),
+        json!({
+            "context": "evals/gate",
+            "state": "FAILURE",
+            "createdAt": "2026-09-25T00:05:00Z",
+            "description": "no result. Clear: fno-agents evals gate-retry abc. Cause: limit",
+        }),
+    ];
+    let (verdict, code, _) = verdict_for(&generic_ci_rollup(&rollup));
+    assert_eq!(verdict, "green", "the gate red stays out of the CI verdict");
+    assert_eq!(code, 0);
+    let fact = evals_gate_fact(&rollup).expect("the gate row is readable");
+    assert_eq!(fact["state"], "FAILURE");
+    assert_eq!(
+        fact["description"],
+        "no result. Clear: fno-agents evals gate-retry abc. Cause: limit"
+    );
+    // Supersession: the newest row for the context wins.
+    let two_rows = vec![
+        json!({"context": "evals/gate", "state": "FAILURE", "createdAt": "2026-09-25T00:05:00Z", "description": "old"}),
+        json!({"context": "evals/gate", "state": "SUCCESS", "createdAt": "2026-09-25T00:06:00Z", "description": "new"}),
+    ];
+    let fact = evals_gate_fact(&two_rows).expect("newest row");
+    assert_eq!(fact["state"], "SUCCESS");
+    assert!(evals_gate_fact(&[
+        json!({"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"})
+    ])
+    .is_none());
 }
 
 /// A log read lands in the job cache and the second read never spends a gh
@@ -325,6 +361,7 @@ fn composer_replays_the_goldens() {
         "all_status_contexts",
         "zero_job_runs",
         "terminal_merged",
+        "evals_gate_red_ci_green",
     ] {
         let fixture = load_fixture(name);
         let expected: Value =

@@ -543,6 +543,15 @@ pub(crate) fn cancel_in_flight(gh_bin: &str, cwd: &Path, head: &str) -> Option<V
             )])
         }
     };
+    // The evals gate is not CI: its row carries no run link, so left in the
+    // failed set it can never read stale-attempt, and a gate red beside a
+    // stale CI red would cancel the fresh rerun answering that red.
+    let rows: Vec<Value> = rows
+        .into_iter()
+        .filter(|row| {
+            row.get("name").and_then(Value::as_str) != Some(crate::pr_status::EVALS_GATE_CONTEXT)
+        })
+        .collect();
     let latest = crate::check_supersession::latest_per_name(&Value::Array(rows));
     // An unreadable runs listing proves nothing stale: the law's cancel runs.
     let listing: Vec<Value> = crate::pr_push::gh_api_pages_conditional(
