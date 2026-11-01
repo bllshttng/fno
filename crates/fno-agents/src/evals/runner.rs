@@ -224,14 +224,45 @@ fn remove_worktree(repo_root: &std::path::Path, path: &std::path::Path) {
 /// per trial and they pile up in its session list; the history row is the
 /// record. Best-effort: the cleanup never masks the run's verdict.
 fn forget_trial_transcript(workdir: &std::path::Path) {
-    let slug = crate::claude_ask::claude_cwd_slug(workdir);
-    let root = crate::claude_drive::claude_projects_dir();
-    let _ = std::fs::remove_dir_all(root.join(slug));
+    let _ = std::fs::remove_dir_all(trial_transcript_dir(workdir));
+}
+
+fn trial_transcript_dir(workdir: &std::path::Path) -> std::path::PathBuf {
+    crate::claude_drive::claude_projects_dir().join(crate::claude_ask::claude_cwd_slug(workdir))
+}
+
+/// A failed trial keeps its transcript, the only record of why it failed.
+const KEPT_TRANSCRIPT_DAYS: u64 = 14;
+
+/// Drop kept trial transcripts past their age. The evals base slug prefixes a
+/// trial's dir, so a real session's transcripts never match.
+fn prune_kept_transcripts(projects: &std::path::Path, base_slug: &str, max_age_days: u64) {
+    let Ok(entries) = std::fs::read_dir(projects) else {
+        return;
+    };
+    let max_age = std::time::Duration::from_secs(max_age_days * 86_400);
+    let prefix = format!("{base_slug}-");
+    for entry in entries.flatten() {
+        let old = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|m| m.elapsed().ok())
+            .is_some_and(|age| age > max_age);
+        if old && entry.file_name().to_string_lossy().starts_with(&prefix) {
+            let _ = std::fs::remove_dir_all(entry.path());
+        }
+    }
 }
 
 /// Prune leftover eval worktrees whose owning run is gone. Best-effort; a
 /// sweep failure never blocks a fresh run.
 pub fn sweep_orphans(repo_root: &std::path::Path) -> usize {
+    prune_kept_transcripts(
+        &crate::claude_drive::claude_projects_dir(),
+        &crate::claude_ask::claude_cwd_slug(&evals_worktree_base()),
+        KEPT_TRANSCRIPT_DAYS,
+    );
     let Ok(out) = std::process::Command::new("git")
         .args(["worktree", "list", "--porcelain"])
         .current_dir(repo_root)
@@ -257,9 +288,31 @@ pub fn sweep_orphans(repo_root: &std::path::Path) -> usize {
     removed
 }
 
+/// A claude worker's flags that make the tree under test its only source of
+/// rules. Without them it loads the installed plugin, the user's settings and
+/// their MCP servers, so a cohort measures today's machine and not the tree.
+/// The tree's own plugin stays off too: its hooks read the live fleet, and the
+/// worker then acts on that state. Only claude has these flags, so any other
+/// harness runs with today's plugin context.
+fn tree_only_flags(harness: Option<&str>) -> Vec<String> {
+    if harness != Some("claude") {
+        return Vec::new();
+    }
+    vec![
+        "--setting-sources".into(),
+        "project".into(),
+        "--strict-mcp-config".into(),
+    ]
+}
+
+/// Claude keys auto memory on the git root, and a trial worktree shares the
+/// real repo's root, so the worker would read that repo's memory files.
+const NO_AUTO_MEMORY_ENV: &str = "CLAUDE_CODE_DISABLE_AUTO_MEMORY";
+
 /// The spawn argv: the substrate's own --timeout is the first guard; a
 /// lane is a complete coordinate (its harness wins over the provider
-/// default, and its route/account ride along). `--` fences the prompt.
+/// default, and its route/account ride along). `--` fences the prompt, or
+/// with `harness_flags` fences those and the prompt sits before it.
 fn spawn_argv(
     name: &str,
     workdir: &str,
@@ -267,6 +320,7 @@ fn spawn_argv(
     harness: Option<&str>,
     lane: Option<&LaneRow>,
     prompt: &str,
+    harness_flags: &[String],
 ) -> Vec<String> {
     let mut argv: Vec<String> = ["agents", "spawn"].iter().map(|s| s.to_string()).collect();
     argv.push("--name".into());
@@ -290,8 +344,14 @@ fn spawn_argv(
             argv.push(l.account.clone());
         }
     }
-    argv.push("--".into());
-    argv.push(prompt.into());
+    if harness_flags.is_empty() {
+        argv.push("--".into());
+        argv.push(prompt.into());
+    } else {
+        argv.push(prompt.into());
+        argv.push("--".into());
+        argv.extend_from_slice(harness_flags);
+    }
     argv
 }
 
@@ -338,6 +398,7 @@ fn default_spawn(
     timeout_s: i64,
     provider: Option<&str>,
     lane: Option<&LaneRow>,
+    harness_flags: &[String],
 ) -> SpawnResult {
     let tag = format!(
         "{}-{}",
@@ -359,8 +420,12 @@ fn default_spawn(
         harness,
         lane,
         prompt,
+        harness_flags,
     );
     let mut cmd = std::process::Command::new(crate::scrape::fno_bin());
+    if !harness_flags.is_empty() {
+        cmd.env(NO_AUTO_MEMORY_ENV, "1");
+    }
     cmd.args(&argv)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
@@ -538,6 +603,8 @@ pub fn run_task(
         let mut workdir: Option<std::path::PathBuf> = None;
         let mut worker_name: Option<String> = None;
         let mut tree: Option<String> = None;
+        let mut tree_only = false;
+        let mut kept_transcript: Option<std::path::PathBuf> = None;
         let mut grade_base = checkout_ref.clone();
         match make_disposable_worktree(repo_root, &checkout_ref, &task.id) {
             Err(e) => {
@@ -580,7 +647,19 @@ pub fn run_task(
                 reason = "config.evals.enabled is false".into();
                 gate_blocked = true;
             } else if let Some(prompt) = &task.prompt {
-                let res = default_spawn(prompt, dir, timeout_s, worker_provider, lane);
+                let harness = lane
+                    .map(|l| l.harness.as_str())
+                    .filter(|h| !h.is_empty())
+                    .or(worker_provider);
+                // Other bank tasks invoke plugin skills, so only a golden drops them.
+                // A leading dash needs the fence, so that prompt also keeps them.
+                let flags = if task.golden.is_some() && !prompt.starts_with('-') {
+                    tree_only_flags(harness)
+                } else {
+                    Vec::new()
+                };
+                tree_only = !flags.is_empty();
+                let res = default_spawn(prompt, dir, timeout_s, worker_provider, lane, &flags);
                 if !res.ok {
                     reason = res.reason.clone();
                     worker_timed_out = res.timed_out;
@@ -601,7 +680,11 @@ pub fn run_task(
                 outcome = Some(o);
             }
             remove_worktree(repo_root, dir);
-            forget_trial_transcript(dir);
+            if outcome.as_ref().is_some_and(|o| o.passed) {
+                forget_trial_transcript(dir);
+            } else {
+                kept_transcript = Some(trial_transcript_dir(dir));
+            }
         }
         let duration = started.elapsed().as_secs_f64().round_ties_even();
         let _ = started_wall;
@@ -614,6 +697,12 @@ pub fn run_task(
         }
         if task.prompt.is_some() && worker_timed_out {
             obs.insert("worker_timed_out".into(), json!(true));
+        }
+        if task.prompt.is_some() {
+            obs.insert("worker_tree_only".into(), json!(tree_only));
+        }
+        if let Some(dir) = kept_transcript.as_ref().filter(|d| d.is_dir()) {
+            obs.insert("kept_transcript".into(), json!(dir.display().to_string()));
         }
         if gate_blocked {
             obs.insert("gate_blocked".into(), json!(true));
@@ -798,6 +887,7 @@ mod tests {
             Some("codex"),
             Some(&lane),
             "do the thing",
+            &[],
         );
         let joined = argv.join(" ");
         assert!(
@@ -811,12 +901,45 @@ mod tests {
 
     #[test]
     fn the_provider_default_rides_when_no_lane_names_a_harness() {
-        let argv = spawn_argv("n", "/tmp/wt", 60, Some("codex"), None, "p");
+        let argv = spawn_argv("n", "/tmp/wt", 60, Some("codex"), None, "p", &[]);
         assert!(argv
             .windows(2)
             .any(|w| w[0] == "--harness" && w[1] == "codex"));
-        let bare = spawn_argv("n", "/tmp/wt", 60, None, None, "p");
+        let bare = spawn_argv("n", "/tmp/wt", 60, None, None, "p", &[]);
         assert!(!bare.contains(&"--harness".to_string()));
+    }
+
+    #[test]
+    fn a_claude_worker_loads_only_the_tree() {
+        let bare = tree_only_flags(Some("claude"));
+        assert_eq!(
+            bare,
+            ["--setting-sources", "project", "--strict-mcp-config"]
+        );
+        assert!(tree_only_flags(Some("codex")).is_empty());
+        assert!(tree_only_flags(None).is_empty());
+
+        let argv = spawn_argv("n", "/tmp/wt", 60, Some("claude"), None, "go", &bare);
+        let fence = argv.iter().position(|a| a == "--").unwrap();
+        assert_eq!(argv[fence - 1], "go", "the prompt sits before the fence");
+        assert_eq!(argv[fence + 1..], bare[..]);
+    }
+
+    #[test]
+    fn only_an_old_trial_transcript_dir_is_pruned() {
+        let d = tempfile::tempdir().unwrap();
+        let trial = d.path().join("-h-evals-golden-1-2");
+        let session = d.path().join("-h-code-repo");
+        std::fs::create_dir(&trial).unwrap();
+        std::fs::create_dir(&session).unwrap();
+
+        prune_kept_transcripts(d.path(), "-h-evals", 1);
+        assert!(trial.exists(), "a young trial stays");
+
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        prune_kept_transcripts(d.path(), "-h-evals", 0);
+        assert!(!trial.exists());
+        assert!(session.exists(), "a real session never matches");
     }
 
     #[test]
@@ -871,7 +994,7 @@ mod tests {
             route: "zai/glm".into(),
             account: "a".into(),
         };
-        let argv = spawn_argv("n", "/tmp/wt", 60, Some("claude"), Some(&lane), "p");
+        let argv = spawn_argv("n", "/tmp/wt", 60, Some("claude"), Some(&lane), "p", &[]);
         let i = argv.iter().position(|a| a == "--harness").unwrap();
         assert_eq!(argv[i + 1], "claude");
         assert!(argv.contains(&"--route".to_string()));
