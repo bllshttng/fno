@@ -234,7 +234,7 @@ pub struct SweepResult {
     /// Already canonical, no frontmatter, unparseable, or locked.
     pub skipped: u32,
     /// Drift token left alone: no node status was available tier2-blind, or
-    /// the node is live and a terminal write would be a guess.
+    /// the doc has no closed node and a terminal write would be a guess.
     pub stood_down: u32,
     /// An unparseable file whose status line was rebuilt from the linked
     /// node's status (the corrupt-line repair arm).
