@@ -1,5 +1,13 @@
 # Autonomy mode
 
+## Is this page for you?
+
+Read this page to choose how much the fleet may do without asking you.
+
+Not for: stopping every spawner at once. That is `autonomy.enabled`, and `fno agents admit autonomy status` lists each spawner.
+
+## What the key does
+
 `autonomy.mode` is one choice over three action classes: unattended restarts, merges and law writes. The default is `balanced`, and a fresh install behaves as the fleet did before the key existed. One thing is new: a session's law write records the user's words.
 
 ```toml
