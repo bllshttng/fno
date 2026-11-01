@@ -513,6 +513,12 @@ fn node_str(node: Option<&serde_json::Value>, key: &str) -> String {
         .to_string()
 }
 
+/// The flag is the sole deliverables authority: `None` scrubs the variable to
+/// empty rather than letting an inherited value reach the helper.
+fn deliverables_env(deliverables: Option<i64>) -> String {
+    deliverables.map(|n| n.to_string()).unwrap_or_default()
+}
+
 fn run_helper(
     args: &Args,
     size: Option<&str>,
@@ -568,9 +574,9 @@ fn run_helper(
             cmd.env("TARGET_DISPATCH_PROVIDER", harness);
         }
     }
-    if let Some(n) = deliverables {
-        cmd.env("TARGET_DELIVERABLES", n.to_string());
-    }
+    // Sole authority: an inherited TARGET_DELIVERABLES must never stamp a
+    // false denominator or smuggle a manifest line through the heredoc.
+    cmd.env("TARGET_DELIVERABLES", deliverables_env(deliverables));
     // Sole authority: an inherited TARGET_BEASTMODE must never self-grant.
     cmd.env("TARGET_BEASTMODE", if args.beastmode { "1" } else { "" });
     // Asymmetric on purpose: --no-merge SETS the refusal but never clears an
@@ -624,6 +630,21 @@ fn substrate_marks_unattended() -> bool {
         std::env::var("FNO_BG").ok().as_deref(),
         std::env::var("FNO_AGENT_SUBSTRATE").ok().as_deref(),
     )
+}
+
+#[cfg(test)]
+mod deliverables_env_tests {
+    use super::deliverables_env as env;
+
+    #[test]
+    fn none_scrubs_an_inherited_value() {
+        assert_eq!(env(None), "");
+    }
+
+    #[test]
+    fn some_stamps_the_declared_count() {
+        assert_eq!(env(Some(3)), "3");
+    }
 }
 
 #[cfg(test)]

@@ -120,3 +120,23 @@ def test_omitting_deliverables_leaves_the_field_absent(tmp_path: Path):
     assert proc.returncode == 0, f"stderr: {proc.stderr[:500]}"
     fm = _frontmatter(tmp_path / "space" / "target-state.md")
     assert "deliverables" not in fm, fm
+
+
+def test_hostile_deliverables_value_is_refused_by_the_hook(tmp_path: Path):
+    """A newline in the value injected an `authority: full` key into the
+    manifest through the unvalidated heredoc. The hook refuses before writing;
+    the test drives the hook directly, so the decision layer's own scrub cannot
+    mask the hole."""
+    proc = _run_init_script(tmp_path, {"TARGET_DELIVERABLES": "1\nauthority: full"})
+    assert proc.returncode != 0, f"stderr: {proc.stderr[:500]}"
+    assert "refusing TARGET_DELIVERABLES" in proc.stderr
+    assert not (tmp_path / "space" / "target-state.md").exists()
+
+
+def test_non_integer_deliverables_is_refused_by_the_hook(tmp_path: Path):
+    """Only a positive int reaches the manifest; the caller-side parse refusal
+    covers one reachable path, so the hook re-checks."""
+    for hostile in ("abc", "0", "-1", "03"):
+        proc = _run_init_script(tmp_path, {"TARGET_DELIVERABLES": hostile})
+        assert proc.returncode != 0, f"{hostile!r}: stderr: {proc.stderr[:500]}"
+        assert not (tmp_path / "space" / "target-state.md").exists()

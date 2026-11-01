@@ -1225,12 +1225,21 @@ if [[ ! -f "$STATE_FILE" ]]; then
   # Scope denominator: a declared deliverable count for a plan-less
   # code run. Omitted unless --deliverables was passed, so absence (not 0) is
   # the unmeasurable state the denominator gate and the deliverables-1 ratio
-  # measurement key on - a stamped 0 would invert the gate, so the Python side
-  # refuses <=0 before this runs and only a positive int reaches the manifest.
+  # measurement key on - a stamped 0 would invert the gate. The caller-side
+  # refusal holds on only the path where the decision layer parsed the flag;
+  # an inherited value reaches here unvalidated (a newline in the value once
+  # injected an extra manifest key through this heredoc), so the
+  # manifest writer validates: a non-empty value must be a positive int.
   _deliverables_line=""
-  if [[ -n "${TARGET_DELIVERABLES:-}" ]]; then
-    _deliverables_line="deliverables: ${TARGET_DELIVERABLES}"$'\n'
-  fi
+  case "${TARGET_DELIVERABLES:-}" in
+    "") ;;
+    *[!0-9]* | 0 | 0[0-9]*)
+      rm -f "$local_temp"
+      echo "init-target-state: refusing TARGET_DELIVERABLES='${TARGET_DELIVERABLES}': expected a positive integer." >&2
+      exit 1
+      ;;
+    *) _deliverables_line="deliverables: ${TARGET_DELIVERABLES}"$'\n' ;;
+  esac
   # Turn mode (`TARGET_TURN_MODE=steps`): a non-looping target run. Omitted
   # unless set, so absence is the looping default the stop gate already serves;
   # ordinary|regular are input synonyms for steps, never stamped values.
