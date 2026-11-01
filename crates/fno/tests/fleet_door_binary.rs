@@ -1,4 +1,4 @@
-//! The fleet spellings exec `fno-agents`, never `fno-agents-worker`. The worker
+//! The fleet spellings exec `fno-agents`, never the worker binary. The worker
 //! answers any of these argvs with its "pass a lane" usage and exit 2, and a
 //! caller that fails closed on that exit reads it as a real state: the eval
 //! sweep read it as "paused" and stopped running.
@@ -24,7 +24,7 @@ fn fleet_doors_exec_fno_agents_with_their_action_words() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let agents = dir.join("fno-agents-stub");
-    let worker = dir.join("fno-agents-worker");
+    let worker = dir.join("worker-stub");
     let record = dir.join("argv");
     stub(&agents, "#!/bin/sh\nprintf '%s' \"$*\" > \"$RECORD\"\n");
     stub(&worker, "#!/bin/sh\necho 'pass a lane' >&2\nexit 2\n");
