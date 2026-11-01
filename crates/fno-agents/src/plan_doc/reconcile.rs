@@ -430,10 +430,11 @@ pub fn sweep(plans_dir: &Path, apply: bool, status_map: &HashMap<String, String>
         }
         res.changes.push((
             path.to_string_lossy().into_owned(),
-            if s.is_empty() {
-                "(none)".to_string()
-            } else {
-                s
+            // Verbatim, not `s`: a receipt line is how the word gets restored.
+            match raw {
+                Some(Value::Scalar(word)) if !word.trim().is_empty() => word.trim().to_string(),
+                Some(Value::Scalar(_)) | None => "(none)".to_string(),
+                Some(other) => format!("{other:?}"),
             },
             new.clone(),
         ));

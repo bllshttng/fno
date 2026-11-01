@@ -361,7 +361,7 @@ mod tests {
         let state = reconcile_state(graph);
         std::fs::create_dir_all(dir.path().join("plans")).unwrap();
         let doc_path = dir.path().join("plans/a.md");
-        let doc = "---\nnode: x-gone\nstatus: open\n---\n# T\n\nbody\n";
+        let doc = "---\nnode: x-gone\nstatus: OPEN\n---\n# T\n\nbody\n";
         std::fs::write(&doc_path, doc).unwrap();
         let receipt = dir.path().join("state/plan-sweep/terminal-writes.jsonl");
         let params = |apply: bool, path: &std::path::Path| {
@@ -395,7 +395,7 @@ mod tests {
         let body = std::fs::read_to_string(&receipt).unwrap();
         let line: Value = serde_json::from_str(body.trim()).unwrap();
         assert_eq!(line["path"], json!(doc_path.to_string_lossy()));
-        assert_eq!(line["old"], json!("open"));
+        assert_eq!(line["old"], json!("OPEN"));
         assert_eq!(line["new"], json!("superseded"));
     }
 
