@@ -7,6 +7,9 @@
 //! {status}`, `moot: ...` for a user-only ask, `pr-merged: PR {n} merged`,
 //! `superseded: {id} re-asks at head {head}`), and one `question_sweep`
 //! event logs the count. Graph unreadable closes nothing.
+//!
+//! A closed node does not settle a question that names a live PR. The sweep
+//! moves that question to the node's lead once and leaves it open.
 use crate::paths::AgentsHome;
 use serde_json::json;
 use std::path::{Path, PathBuf};
@@ -40,8 +43,21 @@ pub fn daemon_tick(home: &AgentsHome, now: i64) {
 
 /// Sweep the question journals against the graph on a fixed cadence.
 pub fn question_sweep(home: &AgentsHome, emitter: &crate::events::EventEmitter, now: i64) -> usize {
-    question_sweep_in(home, emitter, now, &read_closed_rung_facts)
+    question_sweep_in(home, emitter, now, &read_facts_with_prs, &LIVE_LADDER)
 }
+
+/// The ladder doors the sweep uses, so a test never wakes a live lead.
+pub(crate) struct LadderDoors {
+    pub on: fn(&Path) -> bool,
+    pub place: fn(&Path, Option<&str>, Option<&str>) -> Option<serde_json::Value>,
+    pub wake: fn(&serde_json::Value, &str, Option<&str>, &str),
+}
+
+const LIVE_LADDER: LadderDoors = LadderDoors {
+    on: crate::question_ladder::ladder_on,
+    place: crate::question_ladder::place,
+    wake: crate::question_ladder::wake_holder,
+};
 
 /// A head-scoped subject names one commit: its last token, split at the
 /// last space or `@`, is 7 to 40 lowercase hex characters with at least one
@@ -82,6 +98,9 @@ pub(crate) struct RungFacts {
     /// node id -> every merged PR number, primary and additional_prs alike,
     /// only when its merge_status reads merged.
     pub merged_prs: std::collections::BTreeMap<String, Vec<u64>>,
+    /// (asker cwd, PR) -> open, for the PRs a closing door read. The hot
+    /// attention read leaves this empty: an unread PR only keeps a row open.
+    pub pr_open: std::collections::BTreeMap<(String, u64), bool>,
     pub raw: String,
 }
 
@@ -93,6 +112,18 @@ pub(crate) fn read_closed_rung_facts(cwd: &Path, home: &AgentsHome) -> RungFacts
     let store = crate::backlog::api::Store::new(&graph);
     let mut facts = statuses_of(&store);
     facts.raw = journals_raw(&fno_dir_of(home), cwd);
+    facts
+}
+
+/// The closing doors' reading: [`read_closed_rung_facts`] plus one REST read
+/// for each PR the node-closed rule needs. An unreadable PR stays unread.
+pub(crate) fn read_facts_with_prs(cwd: &Path, home: &AgentsHome) -> RungFacts {
+    let mut facts = read_closed_rung_facts(cwd, home);
+    for (asker_cwd, pr) in crate::needs::prs_to_read(&facts.raw, &facts) {
+        if let Some(open) = crate::gc_sweep::gh_pr_is_open(pr, &asker_cwd) {
+            facts.pr_open.insert((asker_cwd, pr), open);
+        }
+    }
     facts
 }
 
@@ -221,6 +252,49 @@ fn journals_raw(fno_dir: &Path, cwd: &Path) -> String {
     }
     crate::event_store::activity_text(&raw)
 }
+/// Move each held question to its node's lead and wake that lead. A row whose
+/// repo turns the ladder off stays where it sits.
+fn move_held_questions(
+    held: Vec<crate::needs::HeldQuestion>,
+    index: &Path,
+    now: i64,
+    ladder: &LadderDoors,
+) -> (Vec<String>, Vec<String>) {
+    let mut moved = Vec::new();
+    let mut errors = Vec::new();
+    let ts = crate::provider_cap::epoch_to_rfc3339(now);
+    for mut q in held {
+        let cwd = PathBuf::from(q.data["cwd"].as_str().unwrap_or("").trim());
+        if !(ladder.on)(&cwd) {
+            continue;
+        }
+        if let Some(data) = q.data.as_object_mut() {
+            data.remove("ts");
+        }
+        let next = (ladder.place)(&cwd, Some(q.node.as_str()), None);
+        let row = crate::question_ladder::moved_for_open_pr(
+            &json!({"type": "operator_question", "source": "daemon", "data": q.data}),
+            next.clone(),
+            &format!(
+                "node {} reads {}; PR {} is still open",
+                q.node, q.status, q.pr
+            ),
+            &ts,
+        );
+        match crate::provider_cap::append_questions_row(index, &row) {
+            Ok(()) => {
+                if let Some(rung) = &next {
+                    let question = row["data"]["question"].as_str().unwrap_or("");
+                    (ladder.wake)(rung, &q.id, Some(q.node.as_str()), question);
+                }
+                moved.push(q.id);
+            }
+            Err(error) => errors.push(format!("move {}: {error}", q.id)),
+        }
+    }
+    (moved, errors)
+}
+
 /// [`question_sweep`] with the reading injected, so tests drive the stamp,
 /// the fold, and the writes against fixtures instead of the live graph.
 /// `pub(crate)`: the reading type is crate-private, so the crate's public
@@ -230,6 +304,7 @@ pub(crate) fn question_sweep_in(
     emitter: &crate::events::EventEmitter,
     now: i64,
     read: &dyn Fn(&Path, &AgentsHome) -> RungFacts,
+    ladder: &LadderDoors,
 ) -> usize {
     let stamp = home.root().join("question-sweep.stamp");
     let last = std::fs::read_to_string(&stamp)
@@ -250,7 +325,15 @@ pub(crate) fn question_sweep_in(
     // question and says so; this writer only records it.
     let index = crate::provider_cap::questions_path(home);
     let (closed, mut errors) = close_questions(&index, &settled, now, "question-sweep");
-    if settled.is_empty() && task_ids.is_empty() && legacy_ids.is_empty() {
+    let held = crate::needs::questions_for_the_lead(&facts.raw, &facts, &settled);
+    let (moved, move_errors) = move_held_questions(held, &index, now, ladder);
+    errors.extend(move_errors);
+    if settled.is_empty()
+        && task_ids.is_empty()
+        && legacy_ids.is_empty()
+        && moved.is_empty()
+        && errors.is_empty()
+    {
         let _ = emitter.emit(
             "question_sweep",
             &json!({"closed": 0, "tasks_closed": 0, "legacy_moved": 0, "outcome": "none"}),
@@ -301,6 +384,7 @@ pub(crate) fn question_sweep_in(
                 "closed": closed.len(),
                 "tasks_closed": tasks_closed.len(),
                 "legacy_moved": legacy_moved.len(),
+                "moved_to_lead": moved,
                 "outcome": if errors.is_empty() { "closed" } else { "partial" },
                 "ids": closed,
                 "task_ids": tasks_closed,
@@ -312,7 +396,7 @@ pub(crate) fn question_sweep_in(
     if errors.is_empty() {
         let _ = std::fs::write(&stamp, now.to_string());
     }
-    if closed.is_empty() && tasks_closed.is_empty() && legacy_moved.is_empty() {
+    if closed.is_empty() && tasks_closed.is_empty() && legacy_moved.is_empty() && moved.is_empty() {
         0
     } else {
         1
@@ -323,6 +407,14 @@ pub(crate) fn question_sweep_in(
 mod tests {
     use super::*;
     use std::path::Path;
+
+    const TEST_LADDER: LadderDoors = LadderDoors {
+        on: |_| true,
+        place: |_, _, _| {
+            Some(json!({"level": "lead", "holder_session": "lead-sid", "holder_name": "muriel"}))
+        },
+        wake: |_, _, _, _| {},
+    };
 
     fn tmp_home(tag: &str) -> AgentsHome {
         let mut p = std::env::temp_dir();
@@ -392,14 +484,20 @@ mod tests {
             open_row("q-done", "x-done"),
         );
 
-        assert_eq!(question_sweep_in(&home, &emitter, 1_000_000, &read), 0);
+        assert_eq!(
+            question_sweep_in(&home, &emitter, 1_000_000, &read, &TEST_LADDER),
+            0
+        );
         assert!(!home.root().join("question-sweep.stamp").exists());
         let events = crate::events::committed_journal_text(&home.events_jsonl());
         assert!(events.contains(r#""outcome":"partial""#), "{events}");
         assert!(events.contains("question q-done:"), "{events}");
 
         std::fs::remove_dir_all(blocked_store).unwrap();
-        assert_eq!(question_sweep_in(&home, &emitter, 1_000_001, &read), 1);
+        assert_eq!(
+            question_sweep_in(&home, &emitter, 1_000_001, &read, &TEST_LADDER),
+            1
+        );
         assert_eq!(
             crate::event_store::journal_text(&index, &["operator_question_closed"])
                 .matches("q-done")
@@ -416,7 +514,10 @@ mod tests {
             vec![("x-live".to_string(), "in_progress".to_string())],
             open_row("q-live", "x-live"),
         );
-        assert_eq!(question_sweep_in(&home, &emitter, 1_000_000, &read), 0);
+        assert_eq!(
+            question_sweep_in(&home, &emitter, 1_000_000, &read, &TEST_LADDER),
+            0
+        );
         let questions = crate::event_store::journal_text(
             &crate::provider_cap::questions_path(&home),
             &["operator_question_closed"],
@@ -442,7 +543,10 @@ mod tests {
             vec![("x-done".to_string(), 7)],
             format!("{user_row}\n{paint_row}\n{}", open_row("q-mach", "x-done")),
         );
-        assert_eq!(question_sweep_in(&home, &emitter, 1_000_000, &read), 1);
+        assert_eq!(
+            question_sweep_in(&home, &emitter, 1_000_000, &read, &TEST_LADDER),
+            1
+        );
         let questions = crate::event_store::journal_text(
             &crate::provider_cap::questions_path(&home),
             &["operator_question_closed"],
@@ -465,6 +569,38 @@ mod tests {
     }
 
     #[test]
+    fn a_done_node_with_a_live_pr_moves_its_question_to_the_lead_and_keeps_it_open() {
+        let home = tmp_home("open-pr");
+        let emitter = crate::events::EventEmitter::new(home.events_jsonl(), "daemon");
+        let raw = r#"{"ts":"2026-10-18T21:33:38Z","type":"operator_question","source":"target","data":{"question_id":"q-land","question":"Close PR 3212 (x-gone)?","cwd":"/repo","node":"x-gone"}}"#;
+        let read = |_: &Path, _: &AgentsHome| {
+            let mut facts = RungFacts {
+                raw: raw.to_string(),
+                ..Default::default()
+            };
+            facts.statuses.insert("x-gone".into(), "done".into());
+            facts.pr_open.insert(("/repo".into(), 3212), true);
+            facts
+        };
+        assert_eq!(
+            question_sweep_in(&home, &emitter, 1_000_000, &read, &TEST_LADDER),
+            1
+        );
+        let index = crate::provider_cap::questions_path(&home);
+        assert!(
+            !crate::event_store::journal_text(&index, &["operator_question_closed"])
+                .contains("q-land")
+        );
+        let rows = crate::event_store::journal_text(&index, &["operator_question"]);
+        assert!(rows.contains(r#""holder_name":"muriel""#), "{rows}");
+        assert!(rows.contains(r#""action":"open-pr""#), "{rows}");
+        assert!(
+            rows.contains("node x-gone reads done; PR 3212 is still open"),
+            "{rows}"
+        );
+    }
+
+    #[test]
     fn retires_legacy_machine_questions_and_leaves_agent_asks_open() {
         // AC12-HP + AC13-EDGE + AC14-EDGE: each legacy-marker row closes
         // with an empty answer, reason moved-to-fleet-task; an agent ask
@@ -480,7 +616,10 @@ mod tests {
         ]
         .join("\n");
         let read = fixture_read(vec![], raw);
-        assert_eq!(question_sweep_in(&home, &emitter, 1_000_000, &read), 1);
+        assert_eq!(
+            question_sweep_in(&home, &emitter, 1_000_000, &read, &TEST_LADDER),
+            1
+        );
         let questions = crate::event_store::journal_text(
             &crate::provider_cap::questions_path(&home),
             &["operator_question_closed"],
