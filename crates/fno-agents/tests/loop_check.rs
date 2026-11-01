@@ -7079,6 +7079,7 @@ fn coverage_receipt_zero_prescribes_the_command_when_the_only_reviewer_refused()
 #[test]
 fn coverage_receipt_unknown_says_unknown() {
     let rep = CoverageReport {
+        fail_at_head: false,
         github_approval_satisfies: false,
         coverage: Coverage::Unknown,
         verdicts: vec![],

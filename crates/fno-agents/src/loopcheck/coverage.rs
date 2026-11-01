@@ -349,6 +349,10 @@ pub struct CoverageReport {
     /// the bare `classify_coverage` spelling (today's semantics, for the
     /// unit-test corpus); the production call sites pass the resolved flag.
     pub github_approval_satisfies: bool,
+    /// A reviewer's latest attestation concluded fail, and it still describes
+    /// this head: fresh, carried, or a link of a tiled chain. A fail with open
+    /// findings pushes no verdict, so `verdicts` alone cannot show the round.
+    pub fail_at_head: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -356,6 +360,7 @@ pub struct CoverageReport {
 pub enum ReviewState {
     Reviewed,
     ReviewerRefused,
+    FindingsOpen,
     Unreviewed,
 }
 

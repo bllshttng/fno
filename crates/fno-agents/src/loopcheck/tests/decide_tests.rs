@@ -174,6 +174,7 @@ fn unknown_coverage_names_the_read_remedy_not_a_ci_failure() {
     pr.ci_conclusion = CiConclusion::Success;
     pr.ci_has_pending = false;
     pr.coverage = CoverageReport {
+        fail_at_head: false,
         github_approval_satisfies: false,
         coverage: Coverage::Unknown,
         verdicts: vec![],
@@ -222,6 +223,7 @@ fn awaiting_review_only_requires_every_other_conjunct() {
     let bounced = || {
         let mut pr = watch_pr();
         pr.coverage = CoverageReport {
+            fail_at_head: false,
             github_approval_satisfies: false,
             coverage: Coverage::Covered(0),
             verdicts: vec![ReviewerVerdict {
@@ -852,6 +854,7 @@ fn optional_only_refusal_is_not_awaiting_review() {
     };
     let mut pr = watch_pr();
     pr.coverage = CoverageReport {
+        fail_at_head: false,
         github_approval_satisfies: false,
         coverage: Coverage::Covered(0),
         verdicts: vec![owed(false)],

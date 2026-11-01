@@ -359,11 +359,14 @@ fn derive_review_state(
     chain: &[String],
     approval_satisfies: bool,
     rounds_exhausted: bool,
+    fail_at_head: bool,
 ) -> Option<&'static str> {
     if coverage == "unknown" {
         return None;
     }
-    if verdicts.is_empty() || verdicts.iter().any(|v| !verdict_row_ok(v)) {
+    // A fail with open findings stores no verdict, so only its flag can vouch
+    // for an empty list. Any other empty list names no state.
+    if (verdicts.is_empty() && !fail_at_head) || verdicts.iter().any(|v| !verdict_row_ok(v)) {
         return None;
     }
     if rounds_exhausted && coverage == "covered" {
@@ -377,23 +380,19 @@ fn derive_review_state(
             || (approval_satisfies
                 && v.get("author_approval").and_then(Value::as_bool) == Some(false))
     };
-    if verdicts.iter().any(|v| {
+    let reviewed = verdicts.iter().any(|v| {
         v.get("verdict").and_then(Value::as_str) == Some("reviewed")
             && human_counts(v)
             && (counted_freshness(v.get("freshness").unwrap_or(&Value::Null))
                 || v.get("reviewed_sha")
                     .and_then(Value::as_str)
                     .is_some_and(|sha| chain.iter().any(|c| c.as_str() == sha)))
-    }) {
-        return Some("reviewed");
-    }
-    if verdicts.iter().any(|v| {
+    });
+    let refusal_owed = verdicts.iter().any(|v| {
         v.get("verdict").and_then(Value::as_str) == Some("refused")
             && v.get("required").and_then(Value::as_bool) != Some(false)
-    }) {
-        return Some("reviewer_refused");
-    }
-    Some("unreviewed")
+    });
+    Some(crate::loopcheck::ReviewState::from_evidence(reviewed, refusal_owed, fail_at_head).word())
 }
 
 /// Shape one event and invalidate any unproven covered verdict.
@@ -404,7 +403,15 @@ fn shape_review_coverage(data: &Value, head: Option<&str>, approval_satisfies: b
     let chain = tiling_chain(data);
     let spent = data.get("rounds_exhausted").and_then(Value::as_bool) == Some(true);
     let coverage_word = data.get("coverage").and_then(Value::as_str).unwrap_or("");
-    let state = derive_review_state(coverage_word, &verdicts, &chain, approval_satisfies, spent);
+    let fail_at_head = data.get("fail_at_head").and_then(Value::as_bool) == Some(true);
+    let state = derive_review_state(
+        coverage_word,
+        &verdicts,
+        &chain,
+        approval_satisfies,
+        spent,
+        fail_at_head,
+    );
     let obj = shaped.as_object_mut().expect("row is an object");
     obj.insert("verdicts".into(), Value::Array(verdicts.clone()));
     obj.insert("stale_verdicts".into(), Value::Array(stale));
@@ -734,7 +741,7 @@ fn finish(data: Option<Value>, note: &str, pin: &str) -> Value {
     if let Some(state) = latest.get("review_state").filter(|s| {
         matches!(
             s.as_str(),
-            Some("reviewed" | "unreviewed" | "reviewer_refused")
+            Some("reviewed" | "unreviewed" | "reviewer_refused" | "findings_open")
         )
     }) {
         obj.insert("review_state".into(), state.clone());
@@ -1259,6 +1266,29 @@ mod shape_review_coverage_tests {
         assert_eq!(shaped["coverage"], "uncovered");
         assert_eq!(shaped["review_state"], "unreviewed");
         assert_eq!(shaped["reviewed_count"], 1);
+    }
+
+    #[test]
+    fn every_golden_table_row_derives_its_expected_word() {
+        let table: Value = serde_json::from_str(include_str!(
+            "../../../../cli/tests/config/review_state_table.json"
+        ))
+        .unwrap();
+        for row in table["rows"].as_array().unwrap() {
+            let spent = row["rounds_exhausted"] == true;
+            let data = json!({
+                "coverage": if spent { "covered" } else { "uncovered" },
+                "verdicts": row["verdicts"],
+                "rounds_exhausted": spent,
+                "fail_at_head": row["fail_at_head"],
+            });
+            let shaped = shape_review_coverage(&data, None, false);
+            // No verdict and no fail: the stored row fails closed, the one
+            // place this leg stays silent where the report answers.
+            let silent = row["verdicts"] == json!([]) && row["fail_at_head"] != true;
+            let expected = if silent { &Value::Null } else { &row["expected_state"] };
+            assert_eq!(shaped["review_state"], *expected, "{}", row["name"]);
+        }
     }
 
     #[test]

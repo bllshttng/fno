@@ -298,6 +298,11 @@ pub fn classify_coverage_tiled(
     // exactly as a second session's. Below the cap the disposition scan still
     // withholds on any open finding; at the cap the budget discharges it.
     let rounds_exhausted = tiling.map(|t| t.rounds_exhausted).unwrap_or(false);
+    let fail_at_head = local_passes.iter().any(|lp| {
+        !lp.is_pass
+            && !lp.is_retraction
+            && (local_attestation::in_tiled_chain(tiling, &lp.head) || freshness(&lp.head).counts())
+    });
     let answered_fail = |lp: &LocalPass| {
         !lp.is_pass
             && !lp.is_retraction
@@ -530,6 +535,7 @@ pub fn classify_coverage_tiled(
         coverage,
         verdicts,
         github_approval_satisfies,
+        fail_at_head,
     }
 }
 
@@ -600,6 +606,11 @@ pub(super) fn coverage_event_data_full(
     });
     if let Some(review_state) = rep.review_state_at(tiling.is_some_and(|t| t.rounds_exhausted)) {
         data["review_state"] = serde_json::json!(review_state);
+    }
+    // The stored row's evidence for that word: `pr_status` derives it again,
+    // and a fail with open findings leaves no verdict to read it from.
+    if rep.fail_at_head {
+        data["fail_at_head"] = serde_json::json!(true);
     }
     // One counting rule for every row: a round is a review whatever it
     // concluded, so the count never reads below the rounds the chain already
