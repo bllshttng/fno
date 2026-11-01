@@ -142,20 +142,21 @@ const OVERLAY_PATH: &str = "evals/fixtures/golden";
 /// Commit `overlay_ref`'s fixtures on top of the checkout, so the worker sees a
 /// clean tree. Returns the new head, the base a grader diffs against.
 fn apply_overlay(dir: &std::path::Path, overlay_ref: &str) -> Result<String, String> {
-    let git = |args: &[&str]| -> Result<String, String> {
-        let out = std::process::Command::new("git")
-            .args(args)
-            .current_dir(dir)
-            .output()
-            .map_err(|e| e.to_string())?;
-        if out.status.success() {
-            Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
-        } else {
-            Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
-        }
-    };
-    git(&["checkout", overlay_ref, "--", OVERLAY_PATH])?;
+    git_in(dir, &["checkout", overlay_ref, "--", OVERLAY_PATH])?;
     commit_all(dir, "evals: overlay golden fixtures")
+}
+
+fn git_in(dir: &std::path::Path, args: &[&str]) -> Result<String, String> {
+    let out = std::process::Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .map_err(|e| e.to_string())?;
+    if out.status.success() {
+        Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    } else {
+        Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+    }
 }
 
 /// Each path holds a golden's answer. Workers told to read the repo did read
@@ -261,20 +262,8 @@ fn fill_sealed_tree(
     for key in ANSWER_KEY_PATHS {
         let _ = std::fs::remove_dir_all(dir.join(key));
     }
-    let git = |args: &[&str]| -> Result<(), String> {
-        let out = std::process::Command::new("git")
-            .args(args)
-            .current_dir(dir)
-            .output()
-            .map_err(|e| e.to_string())?;
-        if out.status.success() {
-            Ok(())
-        } else {
-            Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
-        }
-    };
     // An empty template: a user's template can carry hooks that name real paths.
-    git(&["init", "-q", "--template="])?;
+    git_in(dir, &["init", "-q", "--template="])?;
     // The fence denies the user's git config, so the worker's git reads these.
     for (key, value) in [
         ("user.name", "fno-evals"),
@@ -284,41 +273,32 @@ fn fill_sealed_tree(
         ("core.attributesFile", "/dev/null"),
         ("commit.gpgsign", "false"),
     ] {
-        git(&["config", key, value])?;
+        git_in(dir, &["config", key, value])?;
     }
-    git(&["add", "-A", "-f"])?;
+    git_in(dir, &["add", "-A", "-f"])?;
     commit_all(dir, "evals: golden tree")
 }
 
 fn commit_all(dir: &std::path::Path, message: &str) -> Result<String, String> {
-    let git = |args: &[&str]| -> Result<String, String> {
-        let out = std::process::Command::new("git")
-            .args(args)
-            .current_dir(dir)
-            .output()
-            .map_err(|e| e.to_string())?;
-        if out.status.success() {
-            Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
-        } else {
-            Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
-        }
-    };
-    git(&[
-        "-c",
-        "user.name=fno-evals",
-        "-c",
-        "user.email=evals@fno.invalid",
-        "-c",
-        "core.hooksPath=/dev/null",
-        "-c",
-        "commit.gpgsign=false",
-        "commit",
-        "--quiet",
-        "--allow-empty",
-        "-m",
-        message,
-    ])?;
-    git(&["rev-parse", "HEAD"])
+    git_in(
+        dir,
+        &[
+            "-c",
+            "user.name=fno-evals",
+            "-c",
+            "user.email=evals@fno.invalid",
+            "-c",
+            "core.hooksPath=/dev/null",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "--quiet",
+            "--allow-empty",
+            "-m",
+            message,
+        ],
+    )?;
+    git_in(dir, &["rev-parse", "HEAD"])
 }
 
 fn remove_worktree(repo_root: &std::path::Path, path: &std::path::Path) {
@@ -455,15 +435,16 @@ fn tree_only_flags(
 }
 
 /// The file tools stop at the block and the deny rules, and Bash stops at the
-/// OS sandbox. The block alone leaves `cat` and `git` free, and it exempts
-/// `~/.claude`. The sealed base is denied because a sibling trial's tree holds
-/// its `decision.md`.
+/// OS sandbox. The block alone leaves `cat` and `git` free, and a canary read
+/// `~/.claude` and `~/.fno` past it, so the deny rules take all of home. The
+/// sealed base is denied because a sibling trial's tree holds its
+/// `decision.md`.
 fn read_fence(tree: &std::path::Path, home: &std::path::Path) -> serde_json::Value {
     let base = tree.parent().unwrap_or(tree);
     json!({
         "permissions": {
             "blockReadsOutsideWorkingDirectories": true,
-            "deny": ["WebFetch", "WebSearch", "Read(~/.claude/**)"],
+            "deny": ["WebFetch", "WebSearch", "Read(~/**)", "Edit(~/**)"],
         },
         "sandbox": {
             "enabled": true,
