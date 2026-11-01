@@ -430,7 +430,7 @@ mod tests {
             &events,
             &json!({"ts": "2026-11-01T00:00:00Z", "type": "agent_corrected", "source": "daemon",
                     "session_id": "s1", "data": {"correction_id": "corr:9", "corrected_by": "user",
-                    "kind": "correct", "quote": "no, the other lane", "quote_status": "kept"}})
+                    "kind": "correct", "quote": "no, the other lane", "quote_status": "kept", "session_id": "s1", "rule_version": "v1"}})
             .to_string(),
             Some("corr:9"),
         )

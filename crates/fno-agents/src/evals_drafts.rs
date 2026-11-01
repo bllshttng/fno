@@ -235,7 +235,7 @@ mod tests {
             "ts": "2026-11-01T00:00:00Z", "type": "agent_corrected",
             "source": "daemon", "session_id": "s1",
             "data": {"correction_id": id, "corrected_by": by, "kind": kind,
-                     "quote": quote, "quote_status": "kept", "session_id": "s1"},
+                     "quote": quote, "quote_status": "kept", "session_id": "s1", "rule_version": "v1"},
         })
     }
 
