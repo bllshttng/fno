@@ -5,9 +5,12 @@
 //!
 //! **Main leg.** Once a day, and at once when the route config hash changes,
 //! it runs the golden tier at `origin/main` as cohort
-//! `gate-main-<date>-<hash>`. Each finished cohort becomes the baseline, and
-//! it is compared to the one before. A regression files a node, so a route
-//! change that breaks a golden reaches the backlog.
+//! `gate-main-<date>-<hash>`. The golden set is read at the fetched sha
+//! through a detached worktree, never from this repo's working tree: the
+//! checkout the daemon runs from can sit behind the ref, and a tag read
+//! there misses a golden main added. Each finished cohort becomes the
+//! baseline, and it is compared to the one before. A regression files a
+//! node, so a route change that breaks a golden reaches the backlog.
 //!
 //! **Head leg.** An open same-repo PR whose head touches a gated path gets a
 //! pending `evals/gate` status, then one run of the `gate` goldens at that
@@ -225,11 +228,18 @@ fn slow_tasks(rows: &[Value], baseline: &str) -> BTreeSet<String> {
         .collect()
 }
 
-/// The `gate` goldens this head can run. A golden added to main after the head
-/// branched has no fixture there, and would read as a regression.
-fn gate_tasks(p: &Paths, d: &Deps, sha: &str, slow: &BTreeSet<String>) -> Vec<String> {
-    let bank = p.repo.join("evals").join("bank");
-    let tasks = crate::evals::bank::discover_bank(&bank).unwrap_or_default();
+/// The `gate` goldens this head can run, read from `bank_dir`: the tested
+/// ref's bank when one is materialized, else the checkout's. A golden added
+/// to main after the head branched has no fixture there, and would read as a
+/// regression.
+fn gate_tasks(
+    p: &Paths,
+    d: &Deps,
+    bank_dir: &Path,
+    sha: &str,
+    slow: &BTreeSet<String>,
+) -> Vec<String> {
+    let tasks = crate::evals::bank::discover_bank(bank_dir).unwrap_or_default();
     tasks
         .iter()
         .filter(|t| t.tags.iter().any(|tag| tag == GATE_TAG))
@@ -356,6 +366,32 @@ fn fetch(p: &Paths, d: &Deps, refspec: &str) -> bool {
     (d.run)(&["git", "fetch", "--quiet", "origin", refspec], p.repo).is_some_and(|r| r.ok)
 }
 
+/// The checkout of `sha` the gate reads the bank at: a detached worktree
+/// under the state dir, one fixed slot per leg, reused when the slot already
+/// sits at that sha. The repo the daemon runs from can sit behind the ref,
+/// and a tag read from its working tree misses a golden the ref added. None
+/// on any plumbing failure; callers then read the checkout's own bank, which
+/// is the behavior this replaces.
+fn ref_checkout(p: &Paths, d: &Deps, slot: &str, sha: &str) -> Option<PathBuf> {
+    let dir = p.state_dir.join(format!("ref-{slot}"));
+    let bank = dir.join("evals").join("bank");
+    let dir_str = dir.to_string_lossy().into_owned();
+    if bank.is_dir()
+        && (d.run)(&["git", "-C", &dir_str, "rev-parse", "HEAD"], p.repo)
+            .is_some_and(|r| r.ok && r.stdout.trim() == sha)
+    {
+        return Some(dir);
+    }
+    let _ = (d.run)(&["git", "worktree", "remove", "--force", &dir_str], p.repo);
+    (d.run)(&["git", "worktree", "prune"], p.repo);
+    (d.run)(
+        &["git", "worktree", "add", "--detach", &dir_str, sha],
+        p.repo,
+    )
+    .filter(|r| r.ok)
+    .map(|_| dir)
+}
+
 fn run_argv(
     p: &Paths,
     selector: (&str, &str),
@@ -363,6 +399,7 @@ fn run_argv(
     lane: &str,
     cohort: &str,
     sha: &str,
+    bank: Option<&PathBuf>,
 ) -> Vec<String> {
     let mut argv: Vec<String> = vec![
         p.fno_bin.into(),
@@ -381,6 +418,10 @@ fn run_argv(
     ] {
         argv.push(flag.into());
         argv.push(value.into());
+    }
+    if let Some(bank) = bank {
+        argv.push("--bank".into());
+        argv.push(bank.to_string_lossy().into_owned());
     }
     argv.push("-y".into());
     argv
@@ -401,7 +442,7 @@ fn config_lane(repo: &Path) -> String {
 /// Compare a run to the baseline, over `tasks` when named. A head run covers
 /// only the gate goldens, and a golden it did not select is no missing result.
 fn compare(
-    repo: &Path,
+    bank: &Path,
     history: &Path,
     a: &str,
     b: &str,
@@ -412,9 +453,23 @@ fn compare(
         rows.retain(|r| tasks.contains(&r.task_id));
     }
     // An unreadable catalog proves nothing unproved, so a regression stays red.
-    let bank = repo.join("evals").join("bank");
-    let unproved = crate::evals::failure_types::unproved_tasks(&bank).unwrap_or_default();
+    let unproved = crate::evals::failure_types::unproved_tasks(bank).unwrap_or_default();
     crate::evals_compare::fold(&rows, a, b, REPEATS, &unproved)
+}
+
+/// The bank the compares read: the ref slot's copy when the launch
+/// materialized one, else the checkout's.
+fn ref_bank(p: &Paths, slot: &str) -> PathBuf {
+    let bank = p
+        .state_dir
+        .join(format!("ref-{slot}"))
+        .join("evals")
+        .join("bank");
+    if bank.is_dir() {
+        bank
+    } else {
+        p.repo.join("evals").join("bank")
+    }
 }
 
 fn main_leg(p: &Paths, d: &Deps, state: &mut State, can_launch: bool, daily_usd: f64) -> String {
@@ -450,16 +505,6 @@ fn main_leg(p: &Paths, d: &Deps, state: &mut State, can_launch: bool, daily_usd:
     if !can_launch {
         return "main held by the spawn gate".into();
     }
-    let bank = p.repo.join("evals").join("bank");
-    let goldens = crate::evals::bank::discover_bank(&bank)
-        .unwrap_or_default()
-        .iter()
-        .filter(|t| t.tags.iter().any(|tag| tag == GOLDEN_TAG))
-        .count();
-    let cost = (goldens * REPEATS) as f64 * ATTEMPT_USD;
-    if spent_today(&history_rows(p.history), d.now) + cost > daily_usd {
-        return format!("main held: {cost:.2} USD over the daily budget");
-    }
     if !fetch(p, d, "main") {
         return "main fetch failed".into();
     }
@@ -469,8 +514,31 @@ fn main_leg(p: &Paths, d: &Deps, state: &mut State, can_launch: bool, daily_usd:
     else {
         return "main rev unread".into();
     };
+    // The golden set is read at the sha the run grades, not at the daemon
+    // checkout, which can sit behind it.
+    let arg_bank = ref_checkout(p, d, "main", &sha).map(|root| root.join("evals").join("bank"));
+    let bank_dir = arg_bank
+        .clone()
+        .unwrap_or_else(|| p.repo.join("evals").join("bank"));
+    let goldens = crate::evals::bank::discover_bank(&bank_dir)
+        .unwrap_or_default()
+        .iter()
+        .filter(|t| t.tags.iter().any(|tag| tag == GOLDEN_TAG))
+        .count();
+    let cost = (goldens * REPEATS) as f64 * ATTEMPT_USD;
+    if spent_today(&history_rows(p.history), d.now) + cost > daily_usd {
+        return format!("main held: {cost:.2} USD over the daily budget");
+    }
     let lane = config_lane(p.repo);
-    let argv = run_argv(p, ("--tag", GOLDEN_TAG), MAIN_WORKERS, &lane, &cohort, &sha);
+    let argv = run_argv(
+        p,
+        ("--tag", GOLDEN_TAG),
+        MAIN_WORKERS,
+        &lane,
+        &cohort,
+        &sha,
+        arg_bank.as_ref(),
+    );
     state.main_tried = Some(cohort.clone());
     match (d.spawn)(&argv, p.repo, &p.state_dir.join(MAIN_LOG)) {
         Ok(pid) => {
@@ -528,7 +596,7 @@ fn finish_main(p: &Paths, d: &Deps, state: &mut State, cohort: &str) -> String {
     let Some(previous) = previous else {
         return format!("main {cohort} is the first baseline");
     };
-    let Ok(view) = compare(p.repo, p.history, &previous, cohort, None) else {
+    let Ok(view) = compare(&ref_bank(p, "main"), p.history, &previous, cohort, None) else {
         return format!("main {cohort} compare failed");
     };
     let _ = std::fs::create_dir_all(&p.state_dir);
@@ -657,7 +725,13 @@ fn settle_head_run(p: &Paths, d: &Deps, state: &mut State, slug: &str, prs: &[Pr
             ),
         ),
         (Some(baseline), false) => {
-            match compare(p.repo, p.history, baseline, &run.cohort, Some(&run.tasks)) {
+            match compare(
+                &ref_bank(p, "head"),
+                p.history,
+                baseline,
+                &run.cohort,
+                Some(&run.tasks),
+            ) {
                 Ok(view) => verdict(&view, &run.sha),
                 Err(e) => ("failure", no_result(&run.sha, &e)),
             }
@@ -687,8 +761,15 @@ fn launch_head(
     if !fetch(p, d, &refspec) {
         return format!("head {} fetch failed", short(&pr.sha));
     }
+    // The gate-tagged set is read at the head sha, not at the daemon
+    // checkout, which can sit behind it: a golden the head adds runs at
+    // once, before the checkout moves.
+    let arg_bank = ref_checkout(p, d, "head", &pr.sha).map(|root| root.join("evals").join("bank"));
+    let bank_dir = arg_bank
+        .clone()
+        .unwrap_or_else(|| p.repo.join("evals").join("bank"));
     let rows = history_rows(p.history);
-    let tasks = gate_tasks(p, d, &pr.sha, &slow_tasks(&rows, baseline));
+    let tasks = gate_tasks(p, d, &bank_dir, &pr.sha, &slow_tasks(&rows, baseline));
     let mut finish = |status: &str, text: &str, disposition: String| {
         if post_status(p, d, slug, &pr.sha, status, text) {
             state.heads.insert(pr.sha.clone(), disposition);
@@ -722,6 +803,7 @@ fn launch_head(
         &lane,
         &cohort,
         &pr.sha,
+        arg_bank.as_ref(),
     );
     match (d.spawn)(&argv, p.repo, &p.state_dir.join(HEAD_LOG)) {
         Ok(pid) => {
@@ -862,6 +944,8 @@ mod tests {
         posts: RefCell<Vec<String>>,
         spawns: RefCell<Vec<Vec<String>>>,
         kills: RefCell<Vec<u32>>,
+        adds: RefCell<Vec<String>>,
+        real_git: bool,
         files: String,
     }
 
@@ -882,8 +966,49 @@ mod tests {
                 posts: RefCell::default(),
                 spawns: RefCell::default(),
                 kills: RefCell::default(),
+                adds: RefCell::default(),
+                real_git: false,
                 files: files.into(),
             }
+        }
+
+        /// A world whose git plumbing really runs: the checkout detached at
+        /// X while main sits ahead at Y, which is the stale-checkout shape
+        /// the ref-faithful bank read exists for.
+        fn new_git(files: &str) -> World {
+            let mut w = World::new(files);
+            w.real_git = true;
+            let git = |args: &[&str]| -> std::process::Output {
+                let out = std::process::Command::new("git")
+                    .args(args)
+                    .current_dir(w.dir.path())
+                    .output()
+                    .expect("git runs in the test repo");
+                assert!(
+                    out.status.success(),
+                    "git {args:?} failed: {} {}",
+                    String::from_utf8_lossy(&out.stdout),
+                    String::from_utf8_lossy(&out.stderr)
+                );
+                out
+            };
+            git(&["init", "-b", "main"]);
+            git(&["config", "user.email", "t@t"]);
+            git(&["config", "user.name", "t"]);
+            git(&["add", "evals"]);
+            git(&["commit", "-m", "x"]);
+            let x = String::from_utf8_lossy(&git(&["rev-parse", "HEAD"]).stdout)
+                .trim()
+                .to_string();
+            std::fs::write(
+                w.dir.path().join("evals/bank/g3.yaml"),
+                "id: g3\ntier: capability\nprompt: p\ngrade:\n  - kind: file-exists\n    path: x\ntags: [gate]\n",
+            )
+            .unwrap();
+            git(&["add", "evals"]);
+            git(&["commit", "-m", "y"]);
+            git(&["checkout", "--detach", &x]);
+            w
         }
 
         fn history(&self) -> PathBuf {
@@ -915,6 +1040,48 @@ mod tests {
             let run = |args: &[&str], _: &Path| -> Option<Run> {
                 match args {
                     ["git", "remote", ..] => ok("git@github.com:o/r.git\n"),
+                    ["git", "worktree", ..] if self.real_git => {
+                        let out = std::process::Command::new("git")
+                            .args(&args[1..])
+                            .current_dir(self.dir.path())
+                            .output()
+                            .expect("git runs in the test repo");
+                        if args.get(1) == Some(&"add") {
+                            self.adds
+                                .borrow_mut()
+                                .push(args.get(4).map(|s| s.to_string()).unwrap_or_default());
+                        }
+                        Some(Run {
+                            ok: out.status.success(),
+                            code: out.status.code(),
+                            stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
+                            stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+                        })
+                    }
+                    ["git", "rev-parse", "FETCH_HEAD"] if self.real_git => {
+                        let out = std::process::Command::new("git")
+                            .args(["rev-parse", "main"])
+                            .current_dir(self.dir.path())
+                            .output()
+                            .expect("git runs in the test repo");
+                        Some(Run {
+                            ok: out.status.success(),
+                            code: out.status.code(),
+                            stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
+                            stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+                        })
+                    }
+                    ["git", "worktree", ..] => {
+                        // Fallback mode: materialization fails, so the gate
+                        // reads the checkout bank, the behavior before the
+                        // ref-faithful read existed.
+                        Some(Run {
+                            ok: false,
+                            code: Some(1),
+                            stdout: String::new(),
+                            stderr: String::new(),
+                        })
+                    }
                     ["gh", "api", "--method", "POST", _, "-f", state, _, _, _, desc] => {
                         self.posts.borrow_mut().push(format!("{state} {desc}"));
                         ok("{}")
@@ -962,6 +1129,32 @@ mod tests {
                 s.main_tried = Some(tried);
             });
         }
+    }
+
+    #[test]
+    fn the_head_leg_reads_the_bank_at_the_head_sha_not_the_checkout() {
+        let w = World::new_git("skills/x/SKILL.md\n");
+        let y = String::from_utf8_lossy(
+            &std::process::Command::new("git")
+                .args(["rev-parse", "main"])
+                .current_dir(w.dir.path())
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .trim()
+        .to_string();
+        w.with_baseline();
+        w.tick(true, Utc::now());
+        let spawns = w.spawns.borrow();
+        assert_eq!(spawns.len(), 1, "one head launch");
+        let argv = spawns[0].join(" ");
+        // A checkout behind main misses g3 in its bank; the ref-faithful
+        // read runs it. The fallback path lists only g1.
+        assert!(argv.contains("--task g1,g3"), "{argv}");
+        assert!(argv.contains("--bank"), "{argv}");
+        assert!(argv.contains(&format!("--ref {y}")), "{argv}");
+        assert_eq!(w.adds.borrow().len(), 1, "one worktree add");
     }
 
     #[test]
