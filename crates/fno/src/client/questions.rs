@@ -875,7 +875,8 @@ fn one_row_per_question(
         .collect();
     items
         .into_iter()
-        .filter(|q| q.host.is_none() || !here.contains(&key(q)))
+        // A fixed id with a host is a different question on that machine.
+        .filter(|q| q.host.is_none() || bare_id(&q.id) == q.id || !here.contains(&key(q)))
         .collect()
 }
 
@@ -888,11 +889,11 @@ fn bare_id(id: &str) -> &str {
     }
 }
 
-/// Split the index's `Q87 title` into the number and the title.
+/// Split the index's `Q87: title` into the number and the title.
 fn split_number(text: &str) -> (Option<String>, &str) {
-    if let Some((head, rest)) = text.split_once(' ') {
-        let head_number = head.split('@').next().unwrap_or(head);
-        let digits = head_number.strip_prefix('Q').unwrap_or("");
+    if let Some((head, rest)) = text.split_once(": ") {
+        let number = head.split('@').next().unwrap_or(head);
+        let digits = number.strip_prefix('Q').unwrap_or("");
         if !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()) {
             return (Some(head.to_string()), rest);
         }
@@ -2026,7 +2027,7 @@ mod tests {
         // the index's bare id, a Done copy beside an open row, and one question
         // filed under two ids.
         let index = parse_questions_index(
-            "## Open (1)\n\n- [[20261101-q-dddddddd-t-x-a|Q87 shared title]] \u{b7} question \u{b7} l\n\n## Done\n\n- [[q-dddddddd-26|Q87 shared title]] \u{b7} closed 2026-10-22 \u{b7} \n",
+            "## Open (1)\n\n- [[20261101-q-dddddddd-t-x-a|Q87: shared title]] \u{b7} question \u{b7} l\n\n## Done\n\n- [[q-dddddddd-26|Q87: shared title]] \u{b7} closed 2026-10-22 \u{b7} \n",
         )
         .unwrap();
         assert_eq!(index.items.len(), 1, "a Done copy adds no row");

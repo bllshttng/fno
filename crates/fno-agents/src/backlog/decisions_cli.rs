@@ -1070,7 +1070,9 @@ pub fn run(argv: &[String]) -> i32 {
 
     let matched: Vec<&str> = match &subject {
         Some(s) => {
-            let want = s.trim().to_lowercase();
+            let want = crate::numbers::resolve('d', s)
+                .unwrap_or_else(|| s.trim().to_string())
+                .to_lowercase();
             let mut matched = Vec::new();
             if found.rows.iter().any(|d| id_of(d).to_lowercase() == want) {
                 matched.push("decision_id");

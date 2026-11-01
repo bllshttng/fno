@@ -141,7 +141,7 @@ A decision reads `D142` and a question reads `Q87` beside its hash. The hash sta
 
 The store mints the number. With `store.remote_url` set, the primary mints every number, so two machines read one number for one question. A machine with a primary never mints locally. Its local table only caches the primary's rows. With no primary, the machine counts in its own graph.db under the store name `local`. A number never comes from `decisions.seq`: that rowid is per machine, and two machines can write the same value.
 
-A daemon arm does the work every 15 seconds. It reads every decision and question, mints the ones with no number, oldest first, then caches the new rows. The first beat is the backfill. A primary that does not answer ends the beat, and the next beat finds the same ids, so no outbox exists. A new id prints its hash alone until a beat numbers it. After the backfill, numbers follow arrival order at the primary. A number never changes once it is minted.
+A daemon arm does the work every 60 seconds. It reads every decision and question, mints the ones with no number, oldest first and at most 200 per beat with a primary, then caches the new rows. The first beats are the backfill. A primary that does not answer ends the beat, and the next beat finds the same ids, so no outbox exists. A new id prints its hash alone until a beat numbers it. After the backfill, numbers follow arrival order at the primary. A number never changes once it is minted.
 
 A copy `q-1234abcd@host` holds the number of `q-1234abcd`. A fixed id such as `provider-cap:<lane>@<host>` is its own question and holds its own number. A retraction has no number. A machine that leaves a store keeps its cached rows. They print qualified (`D142@r2d2`), and resolve only in that form.
 

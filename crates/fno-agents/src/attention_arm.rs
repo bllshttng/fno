@@ -184,7 +184,7 @@ pub fn tick_pages(
         .collect();
     let numbers = crate::numbers::labels();
     let numbered = |id: &str, title: String| match numbers.get(id) {
-        Some(number) => format!("{number} {title}"),
+        Some(number) => format!("{number}: {title}"),
         None => title,
     };
     let mut tick = SinkTick::default();

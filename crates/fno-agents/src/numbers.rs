@@ -35,7 +35,8 @@ SELECT ?1, COALESCE(MAX(num), 0) + 1, ?2, ?3, ?4, strftime('%s','now') \
 FROM fno_numbers WHERE kind = ?1 AND store = ?3";
 
 const LOCAL_STORE: &str = "local";
-const TICK: Duration = Duration::from_secs(15);
+const TICK: Duration = Duration::from_secs(60);
+const MINT_BATCH: usize = 200;
 
 /// The bare id of a question copy: `q-1234abcd@imac2d2` is `q-1234abcd`. A
 /// copy and its original hold one number and one board row.
@@ -395,11 +396,17 @@ pub fn sweep(
         return Ok(missing.len());
     };
     let outcome = (|| {
-        static SCHEMA: std::sync::OnceLock<Result<(), String>> = std::sync::OnceLock::new();
-        SCHEMA.get_or_init(|| remote.script(DDL)).clone()?;
+        // Only a success is remembered: a primary that was down on the first
+        // beat must get the create again when it returns.
+        static SCHEMA: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+        if SCHEMA.get().is_none() {
+            remote.script(DDL)?;
+            let _ = SCHEMA.set(());
+        }
         let missing = unnumbered(&conn, keys, remote.host());
         if !missing.is_empty() {
-            mint_remote(remote, &missing, host)?;
+            // A bound per beat keeps the backfill under the reply wait.
+            mint_remote(remote, &missing[..missing.len().min(MINT_BATCH)], host)?;
         }
         pull(remote, &conn)
     })();
@@ -432,7 +439,7 @@ pub struct Arm {
     in_flight: Arc<AtomicBool>,
 }
 
-/// The daemon's numbering beat: every 15 seconds, one in flight, off the
+/// The daemon's numbering beat: every 60 seconds, one in flight, off the
 /// loop. The first beat is the backfill, so history reads D1..DN in time
 /// order.
 pub fn maybe_tick(arm: &Arm, cwd: &Path) {

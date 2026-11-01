@@ -1334,7 +1334,10 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
     let mut refused = 0usize;
 
     for typed in &req.ids {
-        let Some(resolved) = crate::numbers::resolve('q', typed) else {
+        // An id this machine holds wins over a number with the same spelling.
+        let exact =
+            (asked.contains_key(typed) || closed_ids.contains(typed)).then(|| typed.clone());
+        let Some(resolved) = exact.or_else(|| crate::numbers::resolve('q', typed)) else {
             unknown += 1;
             answer.lines.push(format!(
                 "outstanding: {}",
