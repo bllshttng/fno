@@ -46,16 +46,18 @@ pub fn served_liveness(
 }
 
 /// The same gate at the word level, for a reader that passes the stored
-/// string through verbatim (the daemon's list projection).
+/// string through verbatim (the daemon's list projection). Fresh and
+/// measured serves the stored word; every other case reads `unknown` - a
+/// probe that did not answer NOW is neither alive nor dead, and a null
+/// made any alive filter count a full fleet as zero.
 pub fn served_liveness_word<'a>(
     word: Option<&'a str>,
     measured_at_secs: Option<u64>,
     now_secs: u64,
-) -> Option<&'a str> {
-    if fresh(measured_at_secs, now_secs) {
-        word
-    } else {
-        None
+) -> &'a str {
+    match (fresh(measured_at_secs, now_secs), word) {
+        (true, Some(w)) => w,
+        _ => "unknown",
     }
 }
 
@@ -91,11 +93,32 @@ mod tests {
     }
 
     #[test]
-    fn a_word_past_the_window_is_withheld() {
+    fn a_word_past_the_window_never_serves_the_stored_verdict() {
         assert_eq!(served_liveness(Some("alive"), Some(NOW - 121), NOW), None);
         assert_eq!(
             served_liveness_word(Some("alive"), Some(NOW - 121), NOW),
-            None
+            "unknown",
+            "a stale probe reads unknown, never the old word and never null"
+        );
+        assert_eq!(
+            served_liveness_word(Some("dead"), Some(NOW - 121), NOW),
+            "unknown",
+            "a stale probe cannot condemn a row either"
+        );
+        assert_eq!(
+            served_liveness_word(Some("alive"), None, NOW),
+            "unknown",
+            "no stamp is no answer"
+        );
+        assert_eq!(
+            served_liveness_word(None, Some(NOW - 10), NOW),
+            "unknown",
+            "a fresh stamp with no word is still no word"
+        );
+        assert_eq!(
+            served_liveness_word(Some("alive"), Some(NOW - 90), NOW),
+            "alive",
+            "a fresh measurement serves its word"
         );
     }
 

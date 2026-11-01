@@ -4438,11 +4438,15 @@ fn format_success(
 /// Render agents list as Python-matching JSON (Task 3.1; discovered lane
 ///; provider key restored).
 ///
-/// Shape (schema_version 6): `{"agents": [...], "count": N,
-/// "discovered_sessions": [...], "discovered_count": M, "fields_omitted":
-/// [...], "filters_applied": {...}, "schema_version": 6}`. Stays
-/// byte-shape-aligned with Python's `format.render_json`.
-const LIST_JSON_SCHEMA_VERSION: u32 = 7;
+/// Shape (schema_version 8): `{"agents": [...], "count": N,
+/// "liveness_unknown": K, "discovered_sessions": [...], "discovered_count":
+/// M, "fields_omitted": [...], "filters_applied": {...}, "schema_version":
+/// 8}`. Stays byte-shape-aligned with Python's `format.render_json`.
+/// `liveness_unknown` (v8, additive) counts rows whose served liveness
+/// reads `unknown` - a stale or never-run probe: a zero alive
+/// count beside a nonzero unknown count says the PROBE went dark, not the
+/// fleet.
+const LIST_JSON_SCHEMA_VERSION: u32 = 8;
 
 fn render_list_json(
     agents: &Value,
@@ -4454,12 +4458,18 @@ fn render_list_json(
     codex_loaded: Option<&Value>,
     retired: &Value,
 ) -> String {
-    let count = agents.as_array().map(|a| a.len()).unwrap_or(0);
+    let rows = agents.as_array().cloned().unwrap_or_default();
+    let count = rows.len();
+    let liveness_unknown = rows
+        .iter()
+        .filter(|r| r.get("liveness").and_then(Value::as_str) == Some("unknown"))
+        .count();
     // `codex_loaded` is additive and present only when the caller probed the
     // codex daemon (`--harness codex`); the key is omitted otherwise.
     let mut payload = json!({
         "agents": agents,
         "count": count,
+        "liveness_unknown": liveness_unknown,
         "discovered_sessions": discovered,
         "discovered_count": discovered.len(),
         "fields_omitted": fields_omitted,
