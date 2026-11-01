@@ -12,6 +12,7 @@
 #   T4  a .rs OUTSIDE crates/             -> exit 0, silent, file untouched
 #   T5  a .rs with a syntax error         -> exit 0, never fails the edit, and
 #                                           the parse break rides additionalContext
+#   T5b/c/d JSON shape, codex payload, and mixed-payload stdout purity
 #   T6  a missing file / empty payload    -> exit 0, silent
 
 set -uo pipefail
@@ -48,16 +49,18 @@ print(json.dumps({"tool_name": "Edit", "tool_input": {"file_path": sys.argv[1]}}
 
 UGLY='fn  main( ) {let x=1;println!("{}",x);}'
 
-# T1: an unformatted .rs under crates/ is rewritten and the line is printed.
+# T1: an unformatted .rs under crates/ is rewritten and the line is printed
+# on stderr. Stdout stays empty: it belongs to the additionalContext JSON,
+# which a harness reads only when the whole stream is the object.
 F="${REPO}/crates/demo/src/lib.rs"
 printf '%s\n' "$UGLY" > "$F"
-OUT="$(run_hook "$F")"; RC=$?
-if [[ $RC -eq 0 && "$OUT" == *"format-on-edit: rewrote crates/demo/src/lib.rs"* ]] \
-   && [[ "$OUT" != *"hookSpecificOutput"* ]] \
+OUT="$(run_hook "$F" 2>"$TMP_DIR/t1.err")"; RC=$?
+ERR="$(cat "$TMP_DIR/t1.err")"
+if [[ $RC -eq 0 && -z "$OUT" && "$ERR" == *"format-on-edit: rewrote crates/demo/src/lib.rs"* ]] \
    && ! grep -q 'fn  main' "$F"; then
-  pass "T1 an unformatted .rs under crates/ is rewritten and announced"
+  pass "T1 an unformatted .rs under crates/ is rewritten and announced on stderr"
 else
-  fail "T1 rc=$RC out='$OUT' file=$(cat "$F")"
+  fail "T1 rc=$RC out='$OUT' err='$ERR' file=$(cat "$F")"
 fi
 
 # T2: running again changes nothing, so the hook stays silent.
@@ -136,6 +139,35 @@ else
   fail "T5c rc=$RC out='$OUT'"
 fi
 
+# T5d: a payload with one clean file and one broken file still leaves stdout
+# as pure JSON. The rewrote notice moves to stderr so the harness can parse
+# the additionalContext object instead of meeting mixed output.
+GOOD_FILE="${REPO}/crates/demo/src/mixed-good.rs"
+BAD_FILE="${REPO}/crates/demo/src/mixed-broken.rs"
+printf '%s\n' "$UGLY" > "$GOOD_FILE"
+printf 'fn mixed( {\n' > "$BAD_FILE"
+MIXED_PAYLOAD="$(cd "${REPO}" && python3 -c '
+import json, sys
+print(json.dumps({
+    "tool_name": "apply_patch",
+    "cwd": sys.argv[1],
+    "tool_input": {"command": "*** Begin Patch\n*** Update File: crates/demo/src/mixed-good.rs\n@@\n*** Update File: crates/demo/src/mixed-broken.rs\n@@\n"},
+}))' "$REPO")"
+OUT="$(printf '%s' "$MIXED_PAYLOAD" | bash "$HOOK" 2>"$TMP_DIR/t5d.err")"; RC=$?
+JSON_OK="$(OUT_ENV="$OUT" python3 -c '
+import json, os, sys
+d = json.loads(os.environ["OUT_ENV"])
+ctx = d["hookSpecificOutput"]["additionalContext"]
+assert "mixed-broken.rs" in ctx
+sys.stdout.write("ok")
+' 2>/dev/null)"
+if [[ $RC -eq 0 && "$JSON_OK" == "ok" ]] \
+   && [[ "$(cat "$TMP_DIR/t5d.err")" == *"format-on-edit: rewrote crates/demo/src/mixed-good.rs"* ]]; then
+  pass "T5d a mixed clean+broken payload keeps stdout pure JSON and moves the notice to stderr"
+else
+  fail "T5d rc=$RC out='$OUT' err='$(cat "$TMP_DIR/t5d.err")'"
+fi
+
 # T6: a payload naming a file that does not exist.
 OUT="$(run_hook "${REPO}/crates/demo/src/gone.rs")"; RC=$?
 if [[ $RC -eq 0 && -z "$OUT" ]]; then
@@ -170,12 +202,13 @@ print(json.dumps({
     "cwd": sys.argv[1],
     "tool_input": {"command": "*** Begin Patch\n*** Update File: crates/demo/src/patched.rs\n@@\n"},
 }))' "$REPO")"
-OUT="$(printf '%s' "$CODEX_PAYLOAD" | bash "$HOOK")"; RC=$?
-if [[ $RC -eq 0 && "$OUT" == *"format-on-edit: rewrote crates/demo/src/patched.rs"* ]] \
+OUT="$(printf '%s' "$CODEX_PAYLOAD" | bash "$HOOK" 2>"$TMP_DIR/t8.err")"; RC=$?
+ERR="$(cat "$TMP_DIR/t8.err")"
+if [[ $RC -eq 0 && -z "$OUT" && "$ERR" == *"format-on-edit: rewrote crates/demo/src/patched.rs"* ]] \
    && ! grep -q 'fn  main' "$C"; then
   pass "T8 a codex apply_patch payload formats the header path"
 else
-  fail "T8 rc=$RC out='$OUT' file=$(cat "$C")"
+  fail "T8 rc=$RC out='$OUT' err='$ERR' file=$(cat "$C")"
 fi
 
 # T9: a payload with neither file_path nor a patch header does nothing.

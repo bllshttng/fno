@@ -88,14 +88,16 @@ format_one() {
                 *) return 0 ;;
             esac
             command -v rustfmt >/dev/null 2>&1 || return 0
-            local FMT_ERR
+            local FMT_ERR ERR_FIRST
             FMT_ERR="$(rustfmt "+$PINNED_FMT" --edition 2021 "$ABS" 2>&1 >/dev/null || true)"
+            ERR_FIRST="${FMT_ERR%%$'\n'*}"
             # A refusal that names a `-->` location is a parse break the next
             # cargo build would only find later; a refusal without one is the
             # environment (missing pinned toolchain, non-rustup rustfmt) and
-            # says nothing about this file.
-            if printf '%s' "$FMT_ERR" | grep -q '^error:' \
-                && printf '%s' "$FMT_ERR" | grep -q -- ' --> '; then
+            # says nothing about this file. Pattern match, not grep -q in a
+            # pipeline: under pipefail an early-exit grep can turn a match
+            # into a nonzero pipeline via SIGPIPE on the writer.
+            if [[ "$ERR_FIRST" == error:* && "$FMT_ERR" == *' --> '* ]]; then
                 PARSE_FINDINGS="${PARSE_FINDINGS}parse-check: ${REL} did not parse (rustfmt); fix it now, cargo will refuse it later.
 $(printf '%s' "$FMT_ERR" | sed -n '1,30p')
 "
@@ -107,7 +109,9 @@ $(printf '%s' "$FMT_ERR" | sed -n '1,30p')
     esac
     AFTER="$(_sum "$ABS")"
     if [ -n "$BEFORE" ] && [ -n "$AFTER" ] && [ "$BEFORE" != "$AFTER" ]; then
-        echo "format-on-edit: rewrote $REL"
+        # stderr on purpose: stdout belongs to the additionalContext JSON,
+        # and a harness reads that only when the whole stream is the object.
+        echo "format-on-edit: rewrote $REL" >&2
     fi
     return 0
 }
