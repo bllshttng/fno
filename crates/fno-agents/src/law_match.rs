@@ -865,7 +865,11 @@ fn validate_answer(req: &ValidateRequest) -> Value {
             Some("the statement is coordination, not durable law".to_string())
         } else if let Some(sup) = req.supersedes.as_deref() {
             if !is_decision_id(sup) {
-                Some("supersedes must be a decision id".to_string())
+                Some(if crate::numbers::resolve('d', sup).is_none() {
+                    crate::numbers::unresolved(sup)
+                } else {
+                    "supersedes must be a decision id".to_string()
+                })
             } else if matches_node_id_shape(req.subject.trim().to_lowercase().as_str())
                 || is_pr_subject(req.subject.trim().to_lowercase().as_str())
             {
@@ -1282,7 +1286,10 @@ fn parse_record_door(args: &[String]) -> Result<RecordDoor, String> {
             "--decision-file" => door.decision_file = Some(take(&mut i)?),
             "--rationale" => door.rationale = Some(take(&mut i)?),
             "--option" => door.options.push(take(&mut i)?),
-            "--supersedes" => door.supersedes = Some(take(&mut i)?),
+            "--supersedes" => {
+                let typed = take(&mut i)?;
+                door.supersedes = Some(crate::numbers::resolve('d', &typed).unwrap_or(typed));
+            }
             "--graduation" => door.graduation = Some(take(&mut i)?),
             "--graduation-ref" => door.graduation_ref = Some(take(&mut i)?),
             "--read" => door.reads.push(take(&mut i)?),
@@ -2180,6 +2187,8 @@ fn retract_target(
     stated_authority: Option<&str>,
     near_misses: impl Fn(&str, &[Value], bool) -> Vec<String>,
 ) -> Result<Value, String> {
+    let token =
+        &crate::numbers::resolve('d', token).ok_or_else(|| crate::numbers::unresolved(token))?;
     if is_decision_id(token) {
         let want = token.to_lowercase();
         let row = rows
@@ -2488,7 +2497,9 @@ fn run_history_read(argv: &[String]) -> i32 {
         }
     };
     let rows = scope_filtered_rows(rows);
-    let answer = history_answer(door.token.trim(), &rows);
+    let token = crate::numbers::resolve('d', door.token.trim())
+        .unwrap_or_else(|| door.token.trim().to_string());
+    let answer = history_answer(&token, &rows);
     if answer
         .get("chain")
         .and_then(Value::as_array)

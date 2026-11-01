@@ -740,6 +740,26 @@ for a lead ruling inside its own scope; omit the flag to resolve it from this se
         eprintln!("decide: --overturns requires --authority operator. Nothing was recorded.");
         return 2;
     }
+    // A number names its hash before any check below reads the token.
+    for token in [&mut door.supersedes, &mut door.overturns] {
+        if let Some(typed) = token.clone() {
+            match crate::numbers::resolve('d', &typed) {
+                Some(hash) => *token = Some(hash),
+                None => {
+                    eprintln!(
+                        "decide: {}. Nothing was recorded.",
+                        crate::numbers::unresolved(&typed)
+                    );
+                    return 2;
+                }
+            }
+        }
+    }
+    let overturns = door
+        .overturns
+        .as_deref()
+        .map(str::trim)
+        .filter(|t| !t.is_empty());
     // --overturns extends --supersedes when the target has a decision id; the
     // recoverability gate below covers the derived link the same way.
     if let (None, Some(t)) = (&door.supersedes, overturns) {
