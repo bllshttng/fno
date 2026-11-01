@@ -14,6 +14,8 @@
 use chrono::{DateTime, Local, NaiveDate, NaiveDateTime};
 use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 
 use crate::loopcheck::TerminationReason;
 
@@ -311,11 +313,17 @@ fn is_uuid(session_id: &str) -> bool {
 
 /// `_skills_from_transcript` (scoreboard/fold.py:596): scan transcript JSONL
 /// lines for Skill tool_use blocks; return the `input.skill` id of each.
+/// A transcript line that names no Skill tool_use cannot yield a skill run:
+/// the match below needs a tool_use block whose `name` is this literal, and
+/// the literal itself is the line-level pre-filter. Transcript lines are the
+/// sweep's dominant input, so the parse only runs on candidate lines.
+pub(crate) const SKILL_USE_MARKER: &str = "Skill";
+
 fn skills_from_transcript(lines: &[&str]) -> Vec<String> {
     let mut found = Vec::new();
     for line in lines {
         let line = line.trim();
-        if line.is_empty() {
+        if line.is_empty() || !line.contains(SKILL_USE_MARKER) {
             continue;
         }
         let Ok(obj) = serde_json::from_str::<Value>(line) else {
@@ -330,7 +338,7 @@ fn skills_from_transcript(lines: &[&str]) -> Vec<String> {
         };
         for block in content {
             let is_skill = block.get("type").and_then(Value::as_str) == Some("tool_use")
-                && block.get("name").and_then(Value::as_str) == Some("Skill");
+                && block.get("name").and_then(Value::as_str) == Some(SKILL_USE_MARKER);
             if !is_skill {
                 continue;
             }
@@ -1290,10 +1298,12 @@ fn fenced_yaml_block(text: &str) -> Option<String> {
     None
 }
 
-/// Best-effort transcript lines for one session id
-/// (`cost/_session_cost.find_transcript` + read): walk every Claude projects
-/// dir for `<sid>.jsonl`. None when the id is not a UUID, the base dir is
-/// missing, or the read fails (GC'd / per-machine).
+/// Best-effort transcript candidate lines for one session id
+/// (`cost/_session_cost.find_transcript` + read): resolve `<sid>.jsonl`
+/// through [`build_transcript_index`]'s memo, read it, and keep only
+/// [`SKILL_USE_MARKER`] lines (the sole consumer is
+/// [`skills_from_transcript`]). None when the id is not a UUID, the index
+/// has no entry, or the read fails (GC'd / per-machine).
 pub(crate) fn default_read_transcript(session_id: &str) -> Option<Vec<String>> {
     if !is_uuid(session_id) {
         return None;
@@ -1302,16 +1312,57 @@ pub(crate) fn default_read_transcript(session_id: &str) -> Option<Vec<String>> {
     if !base.is_dir() {
         return None;
     }
-    for entry in std::fs::read_dir(&base).ok()? {
-        let Ok(entry) = entry else { continue };
-        let candidate = entry.path().join(format!("{session_id}.jsonl"));
-        if candidate.is_file() {
-            return std::fs::read_to_string(&candidate)
-                .ok()
-                .map(|text| text.lines().map(str::to_string).collect());
+    static INDEX: OnceLock<HashMap<String, PathBuf>> = OnceLock::new();
+    let path = match INDEX.get() {
+        Some(index) => index.get(session_id),
+        None => {
+            let built = build_transcript_index(&base);
+            if built.is_empty() {
+                // A failed or empty listing is never pinned: pinning one
+                // would answer every later lookup in the run with None, so
+                // this call pays the walk again instead.
+                return None;
+            }
+            let _ = INDEX.set(built);
+            INDEX.get().and_then(|index| index.get(session_id))
+        }
+    }?;
+    std::fs::read_to_string(path).ok().map(|text| {
+        text.lines()
+            .filter(|line| line.contains(SKILL_USE_MARKER))
+            .map(str::to_string)
+            .collect()
+    })
+}
+
+/// Session id -> transcript path, built in one pass over the projects dir.
+/// The sweep resolves hundreds of session ids; a read_dir walk per id is
+/// O(ids * project dirs) stats on a store that grows into thousands of
+/// project dirs, and that walk alone can outlive the sweep's stage bound.
+fn build_transcript_index(base: &Path) -> HashMap<String, PathBuf> {
+    let mut map = HashMap::new();
+    let Ok(projects) = std::fs::read_dir(base) else {
+        return map;
+    };
+    for project in projects.flatten() {
+        let Ok(sessions) = std::fs::read_dir(project.path()) else {
+            continue;
+        };
+        for file in sessions.flatten() {
+            let path = file.path();
+            let is_jsonl = path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .is_some_and(|ext| ext == "jsonl");
+            if !is_jsonl {
+                continue;
+            }
+            if let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) {
+                map.insert(stem.to_string(), path);
+            }
         }
     }
-    None
+    map
 }
 
 fn home_dir() -> Option<std::path::PathBuf> {
@@ -1326,8 +1377,46 @@ fn home_dir() -> Option<std::path::PathBuf> {
 pub(crate) fn default_skill_version(
     skill_id: &str,
     ts_raw: Option<&str>,
-    repo_root: &std::path::Path,
+    repo_root: &Path,
 ) -> String {
+    let until = ts_raw
+        .and_then(|ts| parse_ts(&json!(ts)))
+        .unwrap_or_else(|| Local::now().naive_local());
+    pick_skill_version(&skill_version_history(skill_id, repo_root), until)
+}
+
+/// [`default_skill_version`] with the git history read once per repo root
+/// and skill. The sweep resolves the same skill id for every corpus item,
+/// and each uncached read is a `git log --follow` subprocess, so per-item
+/// resolution is a second stage-bound cost on a large corpus.
+pub(crate) fn cached_skill_version(
+    skill_id: &str,
+    ts_raw: Option<&str>,
+    repo_root: &Path,
+) -> String {
+    static HISTORY: OnceLock<Mutex<HashMap<String, Vec<(NaiveDateTime, String)>>>> =
+        OnceLock::new();
+    let cache = HISTORY.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut cache = cache
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let key = format!("{}\u{1}{skill_id}", repo_root.display());
+    let history = cache
+        .entry(key)
+        .or_insert_with(|| skill_version_history(skill_id, repo_root));
+    let until = ts_raw
+        .and_then(|ts| parse_ts(&json!(ts)))
+        .unwrap_or_else(|| Local::now().naive_local());
+    pick_skill_version(history, until)
+}
+
+/// The sorted (commit time, hash) history of the skill's SKILL.md; empty
+/// when the file is absent or git fails, which [`pick_skill_version`] reads
+/// as the "unknown" contract.
+pub(crate) fn skill_version_history(
+    skill_id: &str,
+    repo_root: &Path,
+) -> Vec<(NaiveDateTime, String)> {
     /// `_PHASE_TO_SKILL_DIR` (scoreboard/fold.py:644): the ledger phase and
     /// skill directory are separate vocabularies; old phase rows point at
     /// the renamed skill until the compatibility shim retires.
@@ -1340,20 +1429,17 @@ pub(crate) fn default_skill_version(
     let name = phase_to_skill_dir(skill_id.split(':').nth(1).unwrap_or(skill_id));
     let rel = format!("skills/{name}/SKILL.md");
     if !repo_root.join(&rel).exists() {
-        return "unknown".to_string();
+        return Vec::new();
     }
-    let until = ts_raw
-        .and_then(|ts| parse_ts(&json!(ts)))
-        .unwrap_or_else(|| Local::now().naive_local());
     let Ok(out) = std::process::Command::new("git")
         .args(["log", "--follow", "--format=%h %aI", "--", &rel])
         .current_dir(repo_root)
         .output()
     else {
-        return "unknown".to_string();
+        return Vec::new();
     };
     if !out.status.success() {
-        return "unknown".to_string();
+        return Vec::new();
     }
     let mut history: Vec<(NaiveDateTime, String)> = Vec::new();
     for line in String::from_utf8_lossy(&out.stdout).lines() {
@@ -1365,12 +1451,139 @@ pub(crate) fn default_skill_version(
         }
     }
     history.sort_by(|a, b| a.0.cmp(&b.0));
+    history
+}
+
+/// The newest hash at or before `until`; "unknown" for an empty history.
+pub(crate) fn pick_skill_version(
+    history: &[(NaiveDateTime, String)],
+    until: NaiveDateTime,
+) -> String {
     let mut best = "unknown".to_string();
     for (dt, h) in history {
-        if dt > until {
+        if *dt > until {
             break;
         }
-        best = h;
+        best = h.clone();
     }
     best
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The index maps every `.jsonl` under any project dir, by stem, and
+    /// skips everything else.
+    #[test]
+    fn transcript_index_maps_sessions_across_project_dirs() {
+        let base = std::env::temp_dir().join(format!("fno-fold-idx-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let p1 = base.join("proj-one");
+        let p2 = base.join("proj-two");
+        std::fs::create_dir_all(&p1).unwrap();
+        std::fs::create_dir_all(&p2).unwrap();
+        std::fs::write(p1.join("11111111-1111-4111-8111-111111111111.jsonl"), "{}").unwrap();
+        std::fs::write(p2.join("22222222-2222-4222-8222-222222222222.jsonl"), "{}").unwrap();
+        std::fs::write(p2.join("notes.txt"), "not a transcript").unwrap();
+
+        let index = build_transcript_index(&base);
+        assert!(index.contains_key("11111111-1111-4111-8111-111111111111"));
+        assert!(index.contains_key("22222222-2222-4222-8222-222222222222"));
+        assert_eq!(index.len(), 2);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// The candidate-line guard changes the parse input, not the verdicts:
+    /// a real Skill tool_use is found, prose that merely names Skill is not
+    /// a run, and a malformed candidate line is skipped.
+    #[test]
+    fn skill_use_extraction_unchanged_by_candidate_guard() {
+        let use_line = r#"{"message":{"content":[{"type":"tool_use","name":"Skill","input":{"skill":"fno:blueprint"}}]}}"#;
+        let prose_line =
+            r#"{"message":{"content":[{"type":"text","text":"the Skill tool gates delivery"}]}}"#;
+        let found = skills_from_transcript(&[use_line, prose_line]);
+        assert_eq!(found, vec!["fno:blueprint".to_string()]);
+        assert!(skills_from_transcript(&["not json at all but says Skill"]).is_empty());
+    }
+
+    /// The pick reads the newest commit at or before `until`; an empty
+    /// history is the "unknown" contract, never a fabricated hash.
+    #[test]
+    fn skill_version_pick_reads_newest_commit_at_or_before_until() {
+        let history = vec![
+            (
+                "2026-01-01T00:00:00".parse::<NaiveDateTime>().unwrap(),
+                "aaa1111".to_string(),
+            ),
+            (
+                "2026-02-01T00:00:00".parse::<NaiveDateTime>().unwrap(),
+                "bbb2222".to_string(),
+            ),
+        ];
+        assert_eq!(
+            pick_skill_version(
+                &history,
+                "2026-01-15T00:00:00".parse::<NaiveDateTime>().unwrap()
+            ),
+            "aaa1111"
+        );
+        assert_eq!(
+            pick_skill_version(
+                &history,
+                "2026-03-01T00:00:00".parse::<NaiveDateTime>().unwrap()
+            ),
+            "bbb2222"
+        );
+        assert_eq!(
+            pick_skill_version(
+                &history,
+                "2025-06-01T00:00:00".parse::<NaiveDateTime>().unwrap()
+            ),
+            "unknown"
+        );
+        assert_eq!(
+            pick_skill_version(&[], "2026-03-01T00:00:00".parse::<NaiveDateTime>().unwrap()),
+            "unknown"
+        );
+    }
+
+    /// The cache answers identically to the uncached read and never leaks
+    /// one skill's history into another skill's answer.
+    #[test]
+    fn cached_skill_version_matches_uncached_per_skill() {
+        let repo = std::env::temp_dir().join(format!("fno-fold-git-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&repo);
+        std::fs::create_dir_all(repo.join("skills/blueprint")).unwrap();
+        std::fs::create_dir_all(repo.join("skills/review")).unwrap();
+        std::fs::write(repo.join("skills/blueprint/SKILL.md"), "b\n").unwrap();
+        std::fs::write(repo.join("skills/review/SKILL.md"), "r\n").unwrap();
+        let run = |args: &[&str]| {
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(&repo)
+                .output()
+                .unwrap()
+        };
+        run(&["init", "-q"]);
+        run(&["config", "user.email", "t@t"]);
+        run(&["config", "user.name", "t"]);
+        run(&["add", "."]);
+        run(&["commit", "-q", "-m", "seed"]);
+
+        let bp_uncached = default_skill_version("fno:blueprint", None, &repo);
+        let bp_cached = cached_skill_version("fno:blueprint", None, &repo);
+        let rv_cached = cached_skill_version("fno:review", None, &repo);
+        let rv_uncached = default_skill_version("fno:review", None, &repo);
+        assert_eq!(
+            bp_cached, bp_uncached,
+            "cached answer diverged from the uncached read"
+        );
+        assert_eq!(
+            rv_cached, rv_uncached,
+            "one skill's cached history leaked into the other"
+        );
+        assert_ne!(bp_cached, rv_cached, "distinct skills resolved to one hash");
+        let _ = std::fs::remove_dir_all(&repo);
+    }
 }
