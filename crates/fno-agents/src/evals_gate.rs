@@ -457,8 +457,7 @@ fn compare(
     crate::evals_compare::fold(&rows, a, b, REPEATS, &unproved)
 }
 
-/// The bank the compares read: the ref slot's copy when the launch
-/// materialized one, else the checkout's.
+/// The bank the compares read: the ref slot's copy when one exists, else the checkout's.
 fn ref_bank(p: &Paths, slot: &str) -> PathBuf {
     let bank = p
         .state_dir
