@@ -22,7 +22,8 @@
     - it is per-selected-pane; switching panes clears it
     - ONLY a whole-screen scroll is detectable. A pane with a fixed header, or
       one driving its own scrolling region, retains nothing at all
-    - a burst larger than one screenful between two frames is lost
+    - a burst larger than one screenful between two painted frames is lost, and
+      the page paints at most one frame per pane per display frame
     - any full-screen repaint (alternate screen, clear, resize) breaks continuity
   The last three are made VISIBLE rather than hidden: a frame we cannot prove
   continuity across retains nothing, and the next rows that ARE retained get a
@@ -570,6 +571,53 @@
   let wanted = new URLSearchParams(location.search).get("pane");
   let wantedSince = 0;
   if (wanted != null) { wanted = parseInt(wanted, 10); if (Number.isNaN(wanted)) wanted = null; if (wanted != null) wantedSince = Date.now(); }
+  // A wire frame costs a parse and a full grid write. Under load that is more
+  // than one display frame, so messages queue in the browser and the screen
+  // falls seconds behind while every stale frame still gets painted.
+  //
+  // Idle, a frame goes through at once, so a keystroke's echo does not wait for
+  // an animation frame. Inside the window that opens, each pane keeps only its
+  // newest unparsed frame. A dropped frame is safe because each one is a whole
+  // grid. Any other message flushes first: a Layout that reaps a pane must not
+  // run ahead of an older frame, which would bring the dead pane back.
+  //
+  // The window closes only after QUIET_TICKS empty animation frames. The browser
+  // hands over one message per task, so a saturated page sees an empty animation
+  // frame between any two messages, and closing on the first one paints every
+  // frame again with nothing dropped.
+  //
+  // A hidden tab gets no animation frames, so the cap bounds what it holds.
+  const FRAME_HEAD = /^\{"Frame":\{"pane_id":(\d+),/;
+  const QUIET_TICKS = 3;
+  function framePacer(deliver, schedule, maxPanes) {
+    const pending = new Map(); // pane_id -> newest raw frame (oldest update first)
+    let open = false;
+    let quiet = 0;
+    function flush() {
+      const burst = [...pending.values()];
+      pending.clear();
+      burst.forEach(deliver);
+    }
+    function tick() {
+      if (!pending.size && ++quiet >= QUIET_TICKS) { open = false; return; }
+      schedule(tick); // first, so a throw in deliver cannot stop the page painting
+      if (pending.size) { quiet = 0; flush(); }
+    }
+    return (raw) => {
+      const head = FRAME_HEAD.exec(raw);
+      if (!head) { flush(); deliver(raw); return; }
+      if (!open) { open = true; quiet = 0; schedule(tick); deliver(raw); return; }
+      pending.delete(head[1]);
+      pending.set(head[1], raw);
+      if (pending.size >= maxPanes) flush();
+    };
+  }
+  const onWire = framePacer((raw) => {
+    let msg;
+    try { msg = JSON.parse(raw); }
+    catch (e) { setBar("disconnected", "stale", "a frame did not parse: " + e.message + "; showing last frame"); return; }
+    onMsg(msg);
+  }, (fn) => requestAnimationFrame(fn), MAX_PANES);
   function connect() {
     const proto = location.protocol === "https:" ? "wss" : "ws";
     const base = document.querySelector("nav.fno-nav").dataset.base;
@@ -581,12 +629,7 @@
       setBar("connecting", "connecting…", "waiting for first frame");
       if (SHARE) ws.send(JSON.stringify({ knock: { k: shareKey, name: shareName } }));
     };
-    ws.onmessage = (ev) => {
-      let msg;
-      try { msg = JSON.parse(ev.data); }
-      catch (e) { setBar("disconnected", "stale", "a frame did not parse: " + e.message + "; showing last frame"); return; }
-      onMsg(msg);
-    };
+    ws.onmessage = (ev) => onWire(ev.data);
     ws.onclose = (ev) => {
       if (SHARE && (ev.code === 1008 || ev.code === 1001)) {
         // A refusal (wrong link, declined, too many waiting) or the end of the
