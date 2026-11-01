@@ -24,6 +24,7 @@
 //! row to train, holdout or unlabelled; the manifest's `leaks` re-reads the
 //! written files to prove it. Nothing leaves the machine.
 
+use crate::correction_detect::{email_rx, reaction_rule, scrub_row, sensitive_rx, ScrubCounts};
 use crate::provenance::TranscriptSource;
 use crate::provenance::{BusIndex, ClaudeSource, CodexSource, HarnessKind, Provenance, RelayKind};
 use regex::Regex;
@@ -78,24 +79,6 @@ fn rx(cell: &'static OnceLock<Regex>, pattern: &str) -> &'static Regex {
     cell.get_or_init(|| Regex::new(pattern).expect("static regex"))
 }
 
-fn email_rx() -> &'static Regex {
-    static RX: OnceLock<Regex> = OnceLock::new();
-    rx(
-        &RX,
-        r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}",
-    )
-}
-
-fn sensitive_rx() -> &'static Regex {
-    static RX: OnceLock<Regex> = OnceLock::new();
-    rx(
-        &RX,
-        r#"(?i)(?:^|[\s/'"=:(])\.env(?:\.[\w-]+)?\b|credentials|\.pem\b|keychain|security\s+find-(?:generic|internet)-password|\.netrc\b|\bid_(?:rsa|ed25519)\b"#,
-    )
-}
-
-/// A conditional, negated, or future sentence is not a claim that something
-/// happened.
 fn hedge_rx() -> &'static Regex {
     static RX: OnceLock<Regex> = OnceLock::new();
     rx(
@@ -316,108 +299,6 @@ fn sentences(text: &str) -> Vec<String> {
         out.push(cur.trim().to_string());
     }
     out
-}
-
-/// The rule label of a typed reply, `None` when no rule is sure.
-fn reaction_rule(text: &str) -> Option<&'static str> {
-    static APPROVE: OnceLock<Regex> = OnceLock::new();
-    static REJECT: OnceLock<Regex> = OnceLock::new();
-    static CORRECT: OnceLock<Regex> = OnceLock::new();
-    let t = text.trim().to_lowercase();
-    if t.is_empty() || t.ends_with('?') {
-        return None;
-    }
-    if rx(
-        &REJECT,
-        r"^(?:no|nope|nah|stop|don't|do not|cancel|abort|never ?mind)[\s.!]*$",
-    )
-    .is_match(&t)
-    {
-        return Some("reject");
-    }
-    if rx(
-        &CORRECT,
-        r"^(?:no|nope|actually|wait|instead|rather|not quite|that's not|thats not|that is not|wrong|incorrect)\b[\s,.:!-]+\S",
-    )
-    .is_match(&t)
-    {
-        return Some("correct");
-    }
-    if t.chars().count() <= 60
-        && !t.contains(" but ")
-        && !t.contains("instead")
-        && rx(
-            &APPROVE,
-            r"^(?:y|yes|yep|yeah|yup|ok|okay|k|sure|go|go ahead|go for it|do it|ship it|lgtm|sounds good|looks good|perfect|great|nice|proceed|continue|keep going|approved?|merge it|please do|👍)\b",
-        )
-        .is_match(&t)
-    {
-        return Some("approve");
-    }
-    None
-}
-
-// --------------------------------------------------------------- scrubbing
-
-#[derive(Default)]
-struct ScrubCounts {
-    secrets_masked: u64,
-    paths_masked: u64,
-    emails_masked: u64,
-    residual_drops: u64,
-    sensitive_drops: u64,
-}
-
-fn scrub_string(s: &str, counts: &mut ScrubCounts) -> String {
-    let secret = crate::intel_html::secret_rx();
-    let mut out = s.to_string();
-    let n = secret.find_iter(&out).count();
-    if n > 0 {
-        out = secret
-            .replace_all(&out, |caps: &regex::Captures| match caps.get(2) {
-                Some(key) => format!("{}[redacted]", key.as_str()),
-                None => "[redacted]".to_string(),
-            })
-            .into_owned();
-        counts.secrets_masked += n as u64;
-    }
-    let paths = crate::intel_html::path_rx();
-    let n = paths.find_iter(&out).count();
-    if n > 0 {
-        out = paths.replace_all(&out, "~").into_owned();
-        counts.paths_masked += n as u64;
-    }
-    let n = email_rx().find_iter(&out).count();
-    if n > 0 {
-        out = email_rx().replace_all(&out, "[email]").into_owned();
-        counts.emails_masked += n as u64;
-    }
-    out
-}
-
-fn scrub_value(v: &mut Value, counts: &mut ScrubCounts) {
-    match v {
-        Value::String(s) => *s = scrub_string(s, counts),
-        Value::Array(items) => items.iter_mut().for_each(|i| scrub_value(i, counts)),
-        Value::Object(map) => map.values_mut().for_each(|i| scrub_value(i, counts)),
-        _ => {}
-    }
-}
-
-/// Mask every string, then rescan the serialized row: any secret shape left
-/// that is not a mask is a residual, and the row is dropped.
-fn scrub_row(mut row: Value, counts: &mut ScrubCounts) -> Option<Value> {
-    scrub_value(&mut row, counts);
-    let text = row.to_string();
-    let residual = crate::intel_html::secret_rx()
-        .find_iter(&text)
-        .any(|m| !m.as_str().contains("[redacted]"))
-        || email_rx().is_match(&text);
-    if residual {
-        counts.residual_drops += 1;
-        return None;
-    }
-    Some(row)
 }
 
 /// The Kev question each row kind asks, without its label.
