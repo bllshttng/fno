@@ -542,10 +542,12 @@ def _scan_projection(tail: Sequence[str]) -> dict:
     decision over the result."""
     has_harness, explicit_harness, has_model, has_effort = _scan(tail)
     # A fenced --model (the -m shorthand lands there) occupies the model axis.
+    fenced_model = None
     if "--" in tail and not has_model:
         from fno.agents.mux_spawn import passthrough_model
 
-        has_model = passthrough_model(list(tail)[list(tail).index("--") + 1 :]) is not None
+        fenced_model = passthrough_model(list(tail)[list(tail).index("--") + 1 :])
+        has_model = fenced_model is not None
     # The head spelling of --effort lands behind the fence too, so a fenced
     # one is the operator's choice and a config default must not stack on it.
     if "--" in tail and not has_effort:
@@ -568,7 +570,7 @@ def _scan_projection(tail: Sequence[str]) -> dict:
         "explicit_vendor": explicit_vendor,
         "explicit_route": explicit_route,
         "route_value": _flag_value(tail, "--route") if explicit_route else None,
-        "model_value": _flag_value(tail, "--model", "-m") if has_model else None,
+        "model_value": (_flag_value(tail, "--model", "-m") or fenced_model) if has_model else None,
         "role": role,
         "explicit_substrate": _has_explicit_substrate(tail),
         "permission_value": permission_value,

@@ -1915,6 +1915,70 @@ mod tests {
         );
     }
 
+    /// A typed --model reaches the scan behind the fence. Whatever vendor the
+    /// profile's first lane bills, the pin stands and no lane leaks in.
+    #[test]
+    fn a_fenced_typed_model_beats_a_routed_lane_of_any_vendor() {
+        let (guard, root, saved) = hermetic();
+        std::fs::write(
+            root.join("config.toml"),
+            "[agents.profiles.blueprint]\nlanes = [\"acme-lane\"]\n\n\
+             [[routing.models]]\nname = \"acme-lane\"\nharness = \"claude\"\n\
+             model = \"acme-1\"\nroute = \"acme/acme-1\"\nband = \"high\"\n",
+        )
+        .unwrap();
+        let argv: Vec<String> = [
+            "spawn",
+            "--name",
+            "w",
+            "--harness",
+            "claude",
+            "/fno:blueprint x-1",
+            "--",
+            "--model",
+            "opus",
+        ]
+        .map(str::to_string)
+        .to_vec();
+        let inputs = Inputs {
+            scan: crate::spawn_admission::scan_projection(&argv[1..]),
+            argv,
+            defaults: toml::Value::Table(toml::map::Map::new()),
+            profiles: "blueprint = { lanes = [\"acme-lane\"] }".parse().unwrap(),
+            dispatch_commands: toml::Value::Table(toml::map::Map::new()),
+            roster: vec!["blueprint".to_string()],
+            node_command: None,
+            env_node: None,
+            ambient_harness: "claude".to_string(),
+            apply_permission_builtin: true,
+            facts: serde_json::json!({"role_resolves": null}),
+            node: None,
+            node_row: None,
+            verbose: true,
+        };
+        let answer = compose(&inputs);
+        drop(guard);
+        clear_hermetic(&root, saved);
+        assert_eq!(answer.exit, 0, "{:?}", answer.stderr);
+        assert!(
+            !answer.argv.iter().any(|t| t == "--route"),
+            "{:?}",
+            answer.argv
+        );
+        assert!(
+            !answer.argv.iter().any(|t| t.contains("acme")),
+            "{:?}",
+            answer.argv
+        );
+        assert!(
+            !answer.stderr.iter().any(|l| l.contains("acme")),
+            "{:?}",
+            answer.stderr
+        );
+        let at = answer.argv.iter().position(|t| t == "--model").unwrap();
+        assert_eq!(answer.argv[at + 1], "opus");
+    }
+
     /// A take-over reason in the environment is a forgery or a stale
     /// leak: nothing sets it, so any spawn under one refuses.
     #[test]

@@ -372,7 +372,13 @@ pub fn scan_projection(tail: &[String]) -> Value {
         "explicit_vendor": flag_value(tail, &["--provider", "-P"]),
         "explicit_route": explicit_route,
         "route_value": if explicit_route { flag_value(tail, &["--route"]) } else { None },
-        "model_value": if has_model { flag_value(tail, MODEL_FLAGS) } else { None },
+        // Normalization moves a typed --model behind the fence, so the value
+        // is read there too: the slot walk pins on this value, not on has_model.
+        "model_value": if has_model {
+            flag_value(tail, MODEL_FLAGS).or_else(|| fenced_flag_value(tail, "--model", "-m"))
+        } else {
+            None
+        },
         "role": role_of(tail),
         "explicit_substrate": has_explicit_substrate(tail),
         "permission_value": permission_value,
