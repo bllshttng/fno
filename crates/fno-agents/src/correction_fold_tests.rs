@@ -77,7 +77,7 @@ fn rows(fx: &Fx) -> Vec<Value> {
 }
 
 #[test]
-fn ac3_a_twice_folded_transcript_holds_one_row_per_correction() {
+fn ac3_ac5_a_refold_holds_one_row_and_an_old_turn_reads_backfilled() {
     let fx = fixture(&[
         assistant("a1", NOW + 1, "I will use main."),
         user("u1", NOW + 2, "no, use the other branch"),
@@ -105,15 +105,39 @@ fn ac3_a_twice_folded_transcript_holds_one_row_per_correction() {
             crate::intel_corpus::row_id("sess", "u1", "reaction", "0")
         )
     );
-    // The typed-turn tally is the rate's denominator, and a replay after a
-    // wiped cursor is the one path allowed to count again.
+    // The typed-turn tally is the rate's denominator.
     let cache: CacheFile =
         serde_json::from_str(&std::fs::read_to_string(&fx.cache).unwrap()).unwrap();
     assert_eq!(cache.typed_turns.values().sum::<u64>(), 2);
+
+    // AC5: a turn older than first run.
+    {
+        let fx = fixture(&[
+            assistant("a1", NOW - 100, "Done."),
+            user("u1", NOW - 99, "actually, keep the old name"),
+            assistant("a2", NOW + 1, "Done."),
+            user("u2", NOW + 2, "no, keep the new name"),
+        ]);
+        pass(&fx, MAX_ROWS_PER_TICK, NOW);
+        let got = rows(&fx);
+        let old = got.iter().find(|r| r["turn"] == "u1").unwrap();
+        assert_eq!(old["backfilled"], true);
+        for fact in ["account", "head_sha", "fno_version", "pr"] {
+            assert_eq!(old[fact]["basis"], "unmeasured", "{fact}");
+        }
+        assert_eq!(old["model"]["value"], "claude-opus-5-5");
+        let new = got.iter().find(|r| r["turn"] == "u2").unwrap();
+        assert_eq!(new["backfilled"], false);
+        assert_eq!(new["account"]["basis"], "unmeasured");
+        assert!(new["account"]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("registry"));
+    }
 }
 
 #[test]
-fn ac4_a_held_lock_skips_and_past_the_cap_the_rest_lands_later() {
+fn ac4_ac9_a_held_lock_skips_the_cap_defers_and_each_corrector_names_itself() {
     let mut lines = Vec::new();
     for i in 0..3u64 {
         lines.push(assistant(&format!("a{i}"), NOW + 10 * i, "Working."));
@@ -137,46 +161,20 @@ fn ac4_a_held_lock_skips_and_past_the_cap_the_rest_lands_later() {
     assert_eq!(rows(&fx).len(), 2);
     pass(&fx, 2, NOW);
     assert_eq!(rows(&fx).len(), 3);
-}
 
-#[test]
-fn ac5_a_turn_older_than_first_run_reads_backfilled_and_detect_facts_unmeasured() {
-    let fx = fixture(&[
-        assistant("a1", NOW - 100, "Done."),
-        user("u1", NOW - 99, "actually, keep the old name"),
-        assistant("a2", NOW + 1, "Done."),
-        user("u2", NOW + 2, "no, keep the new name"),
-    ]);
-    pass(&fx, MAX_ROWS_PER_TICK, NOW);
-    let got = rows(&fx);
-    let old = got.iter().find(|r| r["turn"] == "u1").unwrap();
-    assert_eq!(old["backfilled"], true);
-    for fact in ["account", "head_sha", "fno_version", "pr"] {
-        assert_eq!(old[fact]["basis"], "unmeasured", "{fact}");
-    }
-    assert_eq!(old["model"]["value"], "claude-opus-5-5");
-    let new = got.iter().find(|r| r["turn"] == "u2").unwrap();
-    assert_eq!(new["backfilled"], false);
-    assert_eq!(new["account"]["basis"], "unmeasured");
-    assert!(new["account"]["reason"]
-        .as_str()
-        .unwrap()
-        .contains("registry"));
-}
-
-#[test]
-fn ac9_a_typed_turn_a_mail_and_a_hook_refusal_each_name_their_corrector() {
-    let refusal = json!({"type": "user", "uuid": "r1", "timestamp": stamp(NOW + 5),
+    // AC9: each corrector names itself.
+    {
+        let refusal = json!({"type": "user", "uuid": "r1", "timestamp": stamp(NOW + 5),
         "message": {"role": "user", "content": [{"type": "tool_result",
             "tool_use_id": "tool9", "is_error": true,
             "content": "PreToolUse:Bash hook error: blocked by a gate\nmore"}]}})
-    .to_string();
-    let rejected = json!({"type": "user", "uuid": "r2", "timestamp": stamp(NOW + 7),
+        .to_string();
+        let rejected = json!({"type": "user", "uuid": "r2", "timestamp": stamp(NOW + 7),
         "message": {"role": "user", "content": [{"type": "tool_result",
             "tool_use_id": "tool10", "is_error": true,
             "content": "The user doesn't want to proceed with this tool use."}]}})
-    .to_string();
-    let fx = fixture(&[
+        .to_string();
+        let fx = fixture(&[
         assistant("a1", NOW + 1, "Ready."),
         user(
             "m1",
@@ -190,23 +188,24 @@ fn ac9_a_typed_turn_a_mail_and_a_hook_refusal_each_name_their_corrector() {
         assistant("a4", NOW + 8, "Ok."),
         user("u1", NOW + 9, "no, use the other branch"),
     ]);
-    pass(&fx, MAX_ROWS_PER_TICK, NOW);
-    let got = rows(&fx);
-    let by = |who: &str, kind: &str| {
-        got.iter()
-            .find(|r| r["corrected_by"] == who && r["kind"] == kind)
-            .unwrap_or_else(|| panic!("no {who}/{kind} in {got:?}"))
-    };
-    let agent = by("agent", "correct");
-    assert_eq!(agent["verified"], false);
-    assert_eq!(agent["corrected_by_model"]["value"], "gpt-6.1-sol");
-    assert_eq!(agent["corrected_by_harness"]["value"], "codex");
-    let machine = by("machine", "refused");
-    assert_eq!(machine["refusal_class"], "hook_blocked");
-    assert_eq!(
-        machine["reason"],
-        "PreToolUse:Bash hook error: blocked by a gate"
-    );
-    by("user", "reject");
-    by("user", "correct");
+        pass(&fx, MAX_ROWS_PER_TICK, NOW);
+        let got = rows(&fx);
+        let by = |who: &str, kind: &str| {
+            got.iter()
+                .find(|r| r["corrected_by"] == who && r["kind"] == kind)
+                .unwrap_or_else(|| panic!("no {who}/{kind} in {got:?}"))
+        };
+        let agent = by("agent", "correct");
+        assert_eq!(agent["verified"], false);
+        assert_eq!(agent["corrected_by_model"]["value"], "gpt-6.1-sol");
+        assert_eq!(agent["corrected_by_harness"]["value"], "codex");
+        let machine = by("machine", "refused");
+        assert_eq!(machine["refusal_class"], "hook_blocked");
+        assert_eq!(
+            machine["reason"],
+            "PreToolUse:Bash hook error: blocked by a gate"
+        );
+        by("user", "reject");
+        by("user", "correct");
+    }
 }

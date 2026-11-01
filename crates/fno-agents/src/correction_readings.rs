@@ -364,7 +364,7 @@ mod tests {
     }
 
     #[test]
-    fn ac6_every_harness_serves_a_stamped_value_or_unmeasured_with_a_reason() {
+    fn ac6_every_harness_serves_a_stamped_value_and_a_routed_label_reads_unmeasured() {
         let claude = read(
             "claude",
             concat!(
@@ -374,7 +374,10 @@ mod tests {
             ),
         );
         assert_eq!(claude.model.value.as_deref(), Some("claude-opus-5-5"));
-        assert_eq!(claude.model.measured_at.as_deref(), Some("2026-11-01T05:00:00Z"));
+        assert_eq!(
+            claude.model.measured_at.as_deref(),
+            Some("2026-11-01T05:00:00Z")
+        );
         assert_eq!(claude.effort.value.as_deref(), Some("high"));
         assert_eq!(claude.provider.to_json()["basis"], json!("unmeasured"));
         assert!(claude.provider.to_json()["reason"].is_string());
@@ -424,10 +427,7 @@ mod tests {
             assert_eq!(f.basis, "unmeasured");
             assert!(f.reason.is_some());
         }
-    }
 
-    #[test]
-    fn a_routed_row_never_serves_the_claude_label_it_echoes() {
         // Worker 29ccd06b's real shape: a GLM route echoing the claude name.
         let lied = read(
             "claude",

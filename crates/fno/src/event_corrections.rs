@@ -400,7 +400,7 @@ mod tests {
     }
 
     #[test]
-    fn ac7_ac8_three_blocks_no_total_no_interrupt_and_unmeasured_stays_apart() {
+    fn ac7_ac8_ac11_three_blocks_no_total_unmeasured_apart_and_precision_names_the_floor() {
         let dir = tempfile::tempdir().unwrap();
         let journal = dir.path().join("events.jsonl");
         let opus = json!({"value": "claude-opus-5-5", "basis": "observed"});
@@ -430,11 +430,8 @@ mod tests {
         assert_eq!(named["typed_turns"], 10);
         let unmeasured = user.iter().find(|g| g["group"] == "unmeasured").unwrap();
         assert_eq!(unmeasured["count"], 1, "never folded into a named model");
-    }
 
-    #[test]
-    fn ac11_precision_prints_wilson_per_source_and_names_those_under_the_floor() {
-        let dir = tempfile::tempdir().unwrap();
+        // AC11: the precision read.
         let file = dir.path().join("labels.jsonl");
         let mut lines = Vec::new();
         for i in 0..100 {

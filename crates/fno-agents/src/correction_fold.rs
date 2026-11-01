@@ -552,7 +552,7 @@ fn scan_tool_results(
                         corrected_by: "user",
                         kind: "reject",
                         quote: output.lines().next().unwrap_or(""),
-                        extra: json!({"after_question": st.ended_question, "typed": "witnessed"}),
+                        extra: json!({"after_question": st.ended_question}),
                     },
                     id,
                 ));
@@ -644,7 +644,10 @@ fn scan_user_turn(
     let relay = matches!(
         p,
         Provenance::Relay(
-            RelayKind::FnoMail | RelayKind::BusRow | RelayKind::NativePeer | RelayKind::CrossSession
+            RelayKind::FnoMail
+                | RelayKind::BusRow
+                | RelayKind::NativePeer
+                | RelayKind::CrossSession
         )
     );
     let boundary = typed
@@ -775,6 +778,7 @@ fn scan_row(
     let text = assistant_text(obj, ctx.harness);
     if !text.trim().is_empty() {
         st.turn_open = true;
+        st.reacted = false;
         st.ended_question = text.trim_end().ends_with('?');
     }
     if obj.get("type").and_then(Value::as_str) == Some("assistant") {

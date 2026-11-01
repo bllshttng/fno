@@ -240,7 +240,11 @@ pub(crate) fn scrub_row(mut row: Value, counts: &mut ScrubCounts) -> Option<Valu
 /// with `quote: null, quote_status: dropped`.
 pub(crate) fn scrub_quote(quote: &str, counts: &mut ScrubCounts) -> (Option<String>, &'static str) {
     // A pasted block is someone else's words, not the correction.
-    let own = quote.split("<pasted_content").next().unwrap_or(quote).trim_end();
+    let own = quote
+        .split("<pasted_content")
+        .next()
+        .unwrap_or(quote)
+        .trim_end();
     let capped: String = own.chars().take(280).collect();
     if sensitive_rx().is_match(&capped) {
         counts.sensitive_drops += 1;
@@ -263,26 +267,37 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ac1_questions_and_bare_answers_stay_out_and_the_corpus_rule_stays_exact() {
+    fn ac1_ac2_questions_stay_out_the_corpus_rule_stays_exact_and_no_secret_lands() {
         assert!(detect_user("wait, did you run it?", false).is_none());
         assert!(detect_user("actually, why not the other branch?", false).is_none());
         assert!(detect_user("no", true).is_none());
-        assert_eq!(detect_user("no, use the other branch", false).unwrap().kind, "correct");
-        assert!(detect_user("no, use the other branch", true).unwrap().after_question);
+        assert_eq!(
+            detect_user("no, use the other branch", false).unwrap().kind,
+            "correct"
+        );
+        assert!(
+            detect_user("no, use the other branch", true)
+                .unwrap()
+                .after_question
+        );
         assert_eq!(detect_user("stop", false).unwrap().kind, "reject");
         assert_eq!(reaction_rule("yes go"), Some("approve"));
         assert_eq!(reaction_rule("nope"), Some("reject"));
         assert_eq!(reaction_rule("what about the tests?"), None);
 
-        assert_eq!(detect_agent("<fno_mail from=\"p\">No change: ask open</fno_mail>"), None);
+        assert_eq!(
+            detect_agent("<fno_mail from=\"p\">No change: ask open</fno_mail>"),
+            None
+        );
         assert_eq!(detect_agent("No new findings this round."), None);
         assert_eq!(detect_agent("no, the PR is still red"), Some("correct"));
-        assert_eq!(detect_agent("`@m · id`\nYour fix does not cover pi."), Some("correct"));
+        assert_eq!(
+            detect_agent("`@m · id`\nYour fix does not cover pi."),
+            Some("correct")
+        );
         assert_eq!(detect_agent("Did your fix cover pi? Please check."), None);
-    }
 
-    #[test]
-    fn ac2_a_secret_never_reaches_the_quote_and_a_residual_keeps_the_row() {
+        // AC2: the scrub.
         for secret in [
             "sk-abcdefghijklmnopqrstuvwxyz012345",
             "ghp_abcdefghijklmnopqrstuvwxyz0123456789",
@@ -296,13 +311,22 @@ mod tests {
             assert_eq!(status, "kept", "{secret}");
             let quote = quote.unwrap();
             assert!(quote.contains("[redacted]"), "{secret}: {quote}");
-            assert!(!quote.contains(&secret[secret.len() - 10..]), "{secret}: {quote}");
+            assert!(
+                !quote.contains(&secret[secret.len() - 10..]),
+                "{secret}: {quote}"
+            );
         }
         let mut counts = ScrubCounts::default();
-        assert_eq!(scrub_quote("no, read ~/.netrc first", &mut counts), (None, "dropped"));
+        assert_eq!(
+            scrub_quote("no, read ~/.netrc first", &mut counts),
+            (None, "dropped")
+        );
         assert_eq!(counts.sensitive_drops, 1);
         // A pasted block stays out of the quote.
-        let (quote, _) = scrub_quote("no, this:\n<pasted_content>bank</pasted_content>", &mut counts);
+        let (quote, _) = scrub_quote(
+            "no, this:\n<pasted_content>bank</pasted_content>",
+            &mut counts,
+        );
         assert_eq!(quote.as_deref(), Some("no, this:"));
     }
 }

@@ -8,7 +8,7 @@ Each time someone corrects a working agent, the daemon writes one `agent_correct
 
 - `user`: a typed turn the rule reads as `correct`, a tool call refused (`reject`), or an `interrupt`. Reports exclude interrupts unless asked, since they are noisy as a sign the agent was wrong.
 - `agent`: a delivered mail body that disputes the recipient. `verified` is always false: the corrector can be wrong.
-- `machine`: a gate refused the act (`refused`). A wrong gate is still a true row.
+- `machine`: a gate refused the act (`refused`). A wrong gate is still a true row. Machine rows and tool-refusal rejects read claude transcripts only today: the other harnesses write no comparable tool-error class.
 
 ## How rows get made
 
