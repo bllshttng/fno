@@ -137,7 +137,7 @@ pub(crate) fn parse_brew_outdated(json: &str) -> Result<Option<(String, String)>
         .get("formulae")
         .and_then(serde_json::Value::as_array)
         .ok_or_else(|| "missing formulae array".to_string())?;
-    if let Some(formula) = formulae.first() {
+    for formula in formulae {
         let name = formula
             .get("name")
             .and_then(serde_json::Value::as_str)
