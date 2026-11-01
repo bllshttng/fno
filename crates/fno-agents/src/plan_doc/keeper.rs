@@ -349,6 +349,57 @@ mod tests {
     }
 
     #[test]
+    fn terminal_writes_leave_a_receipt() {
+        let dir = tempfile::tempdir().unwrap();
+        let graph = dir.path().join("graph.json");
+        seed_entries(
+            &graph,
+            json!({"entries": [
+                {"id": "x-gone", "slug": "x-gone", "title": "t", "type": "feature", "status": "superseded", "priority": "p2"},
+            ]}),
+        );
+        let state = reconcile_state(graph);
+        std::fs::create_dir_all(dir.path().join("plans")).unwrap();
+        let doc_path = dir.path().join("plans/a.md");
+        let doc = "---\nnode: x-gone\nstatus: open\n---\n# T\n\nbody\n";
+        std::fs::write(&doc_path, doc).unwrap();
+        let receipt = dir.path().join("state/plan-sweep/terminal-writes.jsonl");
+        let params = |apply: bool, path: &std::path::Path| {
+            let mut p = reconcile_params(dir.path(), apply, false);
+            p["receipt_path"] = json!(path.to_string_lossy());
+            p
+        };
+
+        // Dry run: the reply names the change, no receipt exists.
+        super::handle_plan_docs(&state, &params(false, &receipt)).unwrap();
+        assert!(!receipt.exists());
+
+        // An unwritable location: the doc write stands, a warning names it.
+        let blocker = dir.path().join("blocker");
+        std::fs::write(&blocker, "").unwrap();
+        let bad = blocker.join("receipt.jsonl");
+        let reply = super::handle_plan_docs(&state, &params(true, &bad)).unwrap();
+        assert_eq!(reply["superseded"], 1);
+        assert!(std::fs::read_to_string(&doc_path)
+            .unwrap()
+            .contains("status: \"superseded\""));
+        assert!(reply["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|w| w.as_str().unwrap().contains("terminal receipt not written")));
+
+        // Apply: the receipt names the path and both words.
+        std::fs::write(&doc_path, doc).unwrap();
+        super::handle_plan_docs(&state, &params(true, &receipt)).unwrap();
+        let body = std::fs::read_to_string(&receipt).unwrap();
+        let line: Value = serde_json::from_str(body.trim()).unwrap();
+        assert_eq!(line["path"], json!(doc_path.to_string_lossy()));
+        assert_eq!(line["old"], json!("open"));
+        assert_eq!(line["new"], json!("superseded"));
+    }
+
+    #[test]
     fn a_corrupt_store_stands_down_not_archive_only_truth() {
         // The stand-down keys on an empty map: a corrupt working store must
         // not be topped up by the archive into a map that covers no live node.

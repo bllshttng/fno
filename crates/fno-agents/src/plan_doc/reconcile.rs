@@ -5,7 +5,8 @@
 //! derived status (forward-only). Dry-run unless `apply`. Only a closed node
 //! writes a terminal in Tier 2: a doc with no node evidence holds its word.
 //! The keeper builds the status map and hands it in as data, so an empty map
-//! IS absent evidence.
+//! IS absent evidence. Each applied terminal write leaves one receipt line, the
+//! only way back: plan docs are untracked, so no history can restore the word.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -446,6 +447,50 @@ pub fn sweep(plans_dir: &Path, apply: bool, status_map: &HashMap<String, String>
     res
 }
 
+/// Append one JSON line per terminal entry in *changes* to *receipt*. A sweep
+/// with no terminal write creates no file.
+fn append_terminal_receipts(
+    receipt: &Path,
+    changes: &[(String, String, String)],
+    at: &str,
+) -> std::io::Result<()> {
+    let lines: String = changes
+        .iter()
+        .filter(|(_, _, new)| new == "done" || new == "superseded")
+        .map(|(path, old, new)| {
+            format!(
+                "{}\n",
+                serde_json::json!({"at": at, "path": path, "old": old, "new": new})
+            )
+        })
+        .collect();
+    if lines.is_empty() {
+        return Ok(());
+    }
+    if let Some(parent) = receipt.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(receipt)?;
+    std::io::Write::write_all(&mut file, lines.as_bytes())
+}
+
+/// The caller's receipt path when it names one, else
+/// `<state root>/state/plan-sweep/terminal-writes.jsonl`.
+fn receipt_path(params: &serde_json::Value) -> Option<PathBuf> {
+    if let Some(raw) = params
+        .get("receipt_path")
+        .and_then(serde_json::Value::as_str)
+    {
+        return Some(super::keeper::caller_path(params, raw));
+    }
+    let cwd = params.get("cwd").and_then(serde_json::Value::as_str);
+    let root = crate::backlog::settings::state_dir_at(cwd.map(Path::new))?;
+    Some(root.join("state/plan-sweep/terminal-writes.jsonl"))
+}
+
 /// The keeper's `plan_docs op=reconcile_status` handler: builds the status map
 /// from the keeper's strict entries plus an optional archive read-through,
 /// then runs the sweep. Served by `plan_doc::keeper`'s dispatch.
@@ -487,11 +532,24 @@ pub(crate) fn handle_reconcile_status_op(
             Some((id, status))
         })
         .collect();
-    let res = sweep(
+    let mut res = sweep(
         &super::keeper::caller_path(params, plans_dir),
         apply,
         &status_map,
     );
+    if apply {
+        let written = match receipt_path(params) {
+            Some(receipt) => append_terminal_receipts(&receipt, &res.changes, &super::now_stamp())
+                .map_err(|e| format!("{}: {e}", receipt.display())),
+            None => Err("no state root".to_string()),
+        };
+        // The doc writes already stand; a lost receipt must not read as a
+        // failed sweep.
+        if let Err(e) = written {
+            res.warnings
+                .push(format!("terminal receipt not written: {e}"));
+        }
+    }
     Ok(serde_json::json!({
         "normalized": res.normalized,
         "superseded": res.superseded,
