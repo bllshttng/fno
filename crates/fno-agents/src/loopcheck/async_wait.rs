@@ -315,6 +315,7 @@ mod tests {
             malformed_attestations: 0,
             posture: None,
             coverage: CoverageReport {
+                fail_at_head: false,
                 github_approval_satisfies: false,
                 coverage: Coverage::Covered(0),
                 verdicts: vec![],

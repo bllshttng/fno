@@ -1224,3 +1224,14 @@ merge"
         assert!(posture_refusal(&row, true).is_some());
     }
 }
+
+#[cfg(test)]
+mod findings_open_tests {
+    use super::*;
+
+    #[test]
+    fn the_findings_open_word_alone_keeps_a_row_uncovered() {
+        let row = serde_json::json!({"coverage": "covered", "review_state": "findings_open"});
+        assert_eq!(covered_conjuncts(&row, "", false), (false, "uncovered"));
+    }
+}
