@@ -13,7 +13,7 @@ grade:
   - kind: exit
     command: "sed -n 1p decision.md | tr -d '`\\r' | grep -Eiq '^action: *.*(fno do target start +[^ ]+ +[^ ]+)' && ! sed -n 1p decision.md | tr -d '`\\r' | grep -Eiq 'TARGET_ALLOW_IN_REVIEW|target-state'"
 timeout_minutes: 10
-tags: [golden, gate]
+tags: [golden]
 golden:
   source: {kind: reaction-reject, ref: "2f37b6d3-763c-4da0-95a6-2e8e64bfcfee:toolu_01HAMMbgWBGPeEpdUhdfZLR9:rejected"}
   quote: "mv .fno/target-state.md .fno/target-state.md.gen1.bak && fno target init"

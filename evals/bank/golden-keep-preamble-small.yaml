@@ -4,7 +4,7 @@ tier: capability
 prompt: |
   You are working in this repository. Follow its rules: AGENTS.md and the docs and skills it points to. Read them before you answer.
 
-  A new CI gate refuses a change unless the author has read a 40-line inventory. Where do the 40 lines live, and how does an agent find them?
+  You are designing a new CI gate. It will refuse a change unless the author has read a new 40-line inventory that you write. Where do you put the 40 lines, and how does an agent find them?
 
   Do not change any other file. Write your answer to decision.md in the repository root (the directory you were started in). The first line is exactly `action: <one line>`. The second line is `reason: <one line>`.
 grade:

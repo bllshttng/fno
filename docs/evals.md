@@ -87,7 +87,7 @@ A past session never answered a golden prompt, so it cannot grade one. Two hones
 
 `fno doctor event corrections --by day --since 28d` prints correction rates per day from real transcripts. It costs no model call. A day with typed turns and no correction reads a rate of 0.
 
-`fno doctor evals run --tag golden --variant v1 --ref <sha> --overlay-fixtures <newer ref> --lane <lane> --cohort gate-backdate-<date>-<sha8> --repeat 1` runs today's goldens on an older tree. An older tree has no golden fixtures, so the flag commits `evals/fixtures/golden` from the newer ref on top of the checkout. Pass `--bank` to read today's tasks. The bank itself stays out of the tree. Each golden states its expected answer, and a worker told to read the repo can read it. Each row records `overlay_rev`.
+`fno doctor evals run --tag golden --variant v1 --ref <sha> --overlay-fixtures <newer ref> --lane <lane> --cohort gate-backdate-<date>-<sha8> --repeat 1` runs today's goldens on an older tree. An older tree has no golden fixtures, so the flag commits `evals/fixtures/golden` from the newer ref on top of the checkout. Pass `--bank` to read today's tasks. The bank itself stays out of the tree. Each golden states its expected answer, and a worker told to read the repo can read it. Each row records `overlay_rev`. A row without `overlay_rev` ran with no overlay: an older `fno-agents` ignores the flag, and a fixture golden then fails on its missing fixture.
 
 The cohort names a tree, never a past result. The model is today's, so the cohort says what today's model does with that day's repo. Plugin hooks and any harness-level skill also stay today's. Only the files the worker reads from its checkout go back in time, and project settings tracked in that tree. The `gate-` prefix counts the run against `evals.gate.daily_usd`.
 
@@ -112,7 +112,11 @@ A block with no `source`, `expected`, `rule`, `failure_type` or `outcome` refuse
 
 A daily daemon pass turns each new typed correction into one draft in `~/.fno/evals/golden-drafts/`. It reads `agent_corrected` events after a watermark and skips interrupts, which carry no words. Two corrections with the same words are one case. A draft has empty `prompt`, `grade`, `expected`, `rule` and `failure_type` fields. A person fills them and moves the file to `evals/bank`, because an auto-committed bad answer holds merges with nobody having read it. A correction with no fixture shape stays a draft. A draft expires after 30 days, the pass counts it, and its case never returns. `fno-agents evals drafts` prints the counts.
 
-A golden's rule must be findable in the repo, because a worker reads only the repo and the prompt. It must have a mechanical grade: a choice the grader reads from a decision file, or the work product itself. A failure that needs long session state or fleet state cannot reduce to this shape. It stays out of the bank, and the scorecard holds that ground.
+A golden's rule must be findable in the repo, because a worker reads only the repo and the prompt. It must have a mechanical grade: an answer the grader reads from a decision file, or the work product itself.
+
+A golden asks for recall, never a choice among listed options. On a tree with no AGENTS.md, the old bank passed 25 of 25. In 17 of those runs the worker read no answer key, and each one still passed. So the prompt asks for the exact command or action, and the grader rejects the lure from the source case. The same worker still has today's plugin context, so a recall golden can pass on a tree with no rules. Read a cohort's rate with that limit in mind.
+
+The runner removes `evals/bank` and `evals/fixtures/metrics` from a golden's checkout, and commits the removal before the worker starts. Workers did read these answer keys: 20 of 101 kept transcripts touched one. The removal does not cover an absolute path to another checkout, and one worker read the bank that way. A failure that needs long session state or fleet state cannot reduce to this shape. It stays out of the bank, and the scorecard holds that ground.
 
 ## The change gate
 
