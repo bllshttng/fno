@@ -1009,6 +1009,12 @@ fn close_node(tail: &[String], args: &DoneArgs, task_id: &str) -> i32 {
     if !moved.is_empty() {
         println!("{}", reparent_receipt(&moved));
     }
+    let closed: Vec<&str> = std::iter::once(task_id)
+        .chain(cascade_closed.iter().map(String::as_str))
+        .collect();
+    for line in super::wave_notes::close_lines_at(&graph, &closed) {
+        eprintln!("{line}");
+    }
     drive_audit(task_id);
     canonical_post_close(
         &graph,

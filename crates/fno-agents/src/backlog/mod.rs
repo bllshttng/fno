@@ -104,6 +104,7 @@ pub mod triage_health;
 pub mod undispatched;
 pub mod update_cli;
 pub mod update_ops;
+pub mod wave_notes;
 pub mod worked;
 pub mod workflows;
 

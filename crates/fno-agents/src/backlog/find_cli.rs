@@ -81,10 +81,11 @@ impl FindArgs<'_> {
     }
 }
 
-const FIND_HELP: &str = "Search graph entries: exact id/slug/bare-hex, else high-recall over title+slug+details\n\nUsage: fno backlog find [OPTIONS] <QUERY>\n\nArguments:\n  <QUERY>  ab-id / id-prefix / slug / bare-hex / free-text description\n\nOptions:\n  -d, --domain <DOMAIN>     Filter by domain\n  -p, --project <PROJECT>   Filter by project\n  -s, --status <STATUS>     Filter by status\n      --source-kind <KIND>  Filter by origin: organic|from_inbox|from_observation|from_supervisor|operator_request\n      --fts                 Full-text search; the native find degrades to substring search\n  -L, --limit <LIMIT>       Max results for the --fts lane [default: 20]\n  -J, --json                Emit JSON array\n  -h, --help                Print help";
+const FIND_HELP: &str = "Search graph entries: exact id/slug/bare-hex, else high-recall over title+slug+details+wave notes\n\nUsage: fno backlog find [OPTIONS] <QUERY>\n\nArguments:\n  <QUERY>  ab-id / id-prefix / slug / bare-hex / free-text description\n\nOptions:\n  -d, --domain <DOMAIN>     Filter by domain\n  -p, --project <PROJECT>   Filter by project\n  -s, --status <STATUS>     Filter by status\n      --source-kind <KIND>  Filter by origin: organic|from_inbox|from_observation|from_supervisor|operator_request\n      --fts                 Full-text search; the native find degrades to substring search\n  -L, --limit <LIMIT>       Max results for the --fts lane [default: 20]\n  -J, --json                Emit JSON array\n  -h, --help                Print help";
 
 /// The describe-it search: every query token must appear in the
-/// concatenated title+slug+details text, case-insensitive, non-done first.
+/// concatenated title+slug+details+wave-note text, case-insensitive,
+/// non-done first.
 fn search_entries(entries: &[Value], query: &str) -> Vec<Value> {
     let tokens: Vec<String> = query
         .to_lowercase()
@@ -100,6 +101,14 @@ fn search_entries(entries: &[Value], query: &str) -> Vec<Value> {
             if let Some(s) = e.get(field).and_then(Value::as_str) {
                 text.push_str(&s.to_lowercase());
                 text.push(' ');
+            }
+        }
+        for note in super::wave_notes::wave_rows(e) {
+            for field in ["title", "details", "text"] {
+                if let Some(s) = note.get(field).and_then(Value::as_str) {
+                    text.push_str(&s.to_lowercase());
+                    text.push(' ');
+                }
             }
         }
         tokens.iter().all(|t| text.contains(t.as_str()))
@@ -563,6 +572,21 @@ mod tests {
         assert!(!search_entries(&pool, "alpha live").is_empty());
         let no = search_entries(&pool, "");
         assert!(no.is_empty());
+    }
+
+    #[test]
+    fn the_search_reads_wave_notes_and_no_other_note_kind() {
+        let pool = vec![
+            json!({"id": "x-1", "status": "done", "progress_notes": [
+                {"kind": "wave", "title": "alpha beta", "text": "alpha beta"}
+            ]}),
+            json!({"id": "x-2", "status": "done", "progress_notes": [
+                {"kind": "progress", "title": "alpha beta", "text": "alpha beta"}
+            ]}),
+        ];
+        let hits = search_entries(&pool, "alpha beta");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0]["id"], json!("x-1"));
     }
 
     #[test]

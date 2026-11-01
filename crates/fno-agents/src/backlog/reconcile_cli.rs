@@ -1375,6 +1375,14 @@ fn close_leg(
     for record in &result.actually_closed {
         emit_outside_merge_label(record);
     }
+    let closed: Vec<&str> = result
+        .actually_closed
+        .iter()
+        .map(|record| record.node_id.as_str())
+        .chain(result.contained_closed.iter().map(String::as_str))
+        .chain(result.cascade_closed.iter().map(String::as_str))
+        .collect();
+    stderr_log.extend(super::wave_notes::close_lines_at(graph_path, &closed));
     Some(result)
 }
 
