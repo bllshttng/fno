@@ -1,1 +1,1 @@
-each disposition needs finding_key, a disposition in ['fixed', 'declined', 'nonblocking'], and a non-empty reason
+disposition entry 1 (x): disposition is "vibes"; use one of fixed, declined, nonblocking
