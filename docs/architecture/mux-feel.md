@@ -25,7 +25,7 @@ The table uses 2,000 samples per scenario with the deployed release `fno` 0.4.5,
 | C, mux, 200x50 | 3.70 | 18.75 | 41.51 |
 | D, as C plus a `yes` sibling pane | 24.02 | 219.62 | 781.75 |
 
-A second run of the same build, at higher load, read 17.71 p95 for C and 601.70 p95 for D, with 8 lost samples in D. The flood's cost is large in every run, and its size moves with the load.
+A second run of the same build read 17.71 p95 for C and 601.70 p95 for D, at higher load. D lost 8 samples. The flood's cost is large in every run, and its size moves with the load.
 
 Footprint at the start of the table's run: fleet CPU 0.533 cores, load 40.1 (5 minutes). At the end: fleet CPU 4.823 cores, load 50.0.
 
@@ -60,7 +60,7 @@ Moving frame bytes is not what a user feels here. The cost is the wait behind a 
 
 D's p50 is 6.5 times C's, and its tail reaches past a second. We have not found the cause. What we measured:
 
-- A smaller pane-output queue showed no gain. The shared queue in `server/serve.rs` holds 256 chunks, and a full queue takes about 330 ms to feed, which looked like the answer. With 16 chunks, D read 752.99 ms at p95. The deployed build read 601.70 ms in the next run. We reverted the change. Load moved between those runs, so this result is weak evidence, and a quiet run can overturn it.
+- A smaller pane-output queue showed no gain. The shared queue in `server/serve.rs` holds 256 chunks. A full queue takes about 330 ms to feed, which looked like the answer. With 16 chunks, D read 752.99 ms at p95. The deployed build read 601.70 ms in the next run. We reverted the change. Load moved between those runs, so this result is weak evidence, and a quiet run can overturn it.
 - No single process is pegged during D. A 400-sample run read CPU every 5 seconds at load 87, in percent of one core:
   - server: 37 to 84
   - client: 36 to 70
