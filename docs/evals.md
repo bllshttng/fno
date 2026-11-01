@@ -49,6 +49,9 @@ Success criteria must be **mechanical** (develop-tests discipline): a task with 
 | `fno doctor evals report --by-failure-type [--repeats N] [--json]` | Rank the named failure types by cost, then by failing goldens. See Failure types. |
 | `fno doctor evals report --check-metrics [--json]` | Run each golden's grader on its labelled cases. Exit 1 when a type is not proved. No model spend. See Failure types. |
 | `fno-agents evals candidates [--limit N] [--source KIND] [--json]` | Rank real failures to label as goldens. See Goldens. Read-only. |
+| `fno-agents evals drafts` | Run the correction-to-draft pass now and print new, open and expired counts. The daemon runs it daily. See Goldens. |
+| `fno-agents intel --plans-ladder [--teacher-url URL] [--hosted NAME=COMMAND]` | Score the fixed labelled set rung by rung and stop at the first pass. See Plan premise labels. |
+| `fno-agents intel --plans [--limit N] [--dry-run]` | Label plan premises with the winning rung, or refuse and print each score. See Plan premise labels. |
 | `fno doctor evals report --climb --baseline C --trial C [--cohorts-yaml P] [--stage V --trial-lane L] [--prices JSON] [--json]` | The climb verdict over two cohorts against the declared split: `underpowered`, `regression`, `overfit`, `unmeasured_cost`, `propose`, `hold`. On `propose` with `--stage`/`--trial-lane` it prints a one-step accept line (`fno config set` for the lanes list plus `on_exhausted degrade`); without them the verdict alone. See the Climb round recipe in [lane-qualification](architecture/lane-qualification.md#climb-round). |
 | `fno doctor evals trend` | Score the recent window against the prior one, per task (exit 4 when a regression-tier task dropped). See Trend. |
 | `fno doctor evals macro [--since 30d] [--topic TYPE:LABEL] [--window 20] [--all] [--json] [--events PATH]` | Fold existing event journals into a recurring failure-pattern leaderboard, or drill into one pattern. |
@@ -95,7 +98,9 @@ golden:
 
 A block with no `source`, `expected`, `rule`, `failure_type` or `outcome` refuses at load and names the task and file. `outcome` says what the source case did (`failed` or `passed`). It is history, not a current result. The current result comes from a run.
 
-`fno-agents evals candidates` ranks the pool to label from. Its sources are the rule-labelled reactions in `~/.fno/evals/decision/v1`, the S2 rows in `corrections.log`, `Revert` commits, and plans by superseded status and caused plan commits. It prints a score, kind, reference, and one scrubbed quote. It writes nothing and calls no model. Every row is a candidate for a person to read. A rejected reaction is often a refused permission prompt, so the S2 rows are the stronger source.
+`fno-agents evals candidates` ranks the pool to label from. It reads the rule-labelled reactions in `~/.fno/evals/decision/v1`, typed `agent_corrected` events, S2 rows in `corrections.log`, and `Revert` commits. It also reads plans by superseded status and caused commits, and plan premises that a later record contradicts. It prints a score, kind, reference, and one scrubbed quote. It writes nothing and calls no model. Every row is a candidate for a person to read. A rejected reaction is often a refused permission prompt, so the S2 rows are the stronger source.
+
+A daily daemon pass turns each new typed correction into one draft in `~/.fno/evals/golden-drafts/`. It reads `agent_corrected` events after a watermark and skips interrupts, which carry no words. Two corrections with the same words are one case. A draft has empty `prompt`, `grade`, `expected`, `rule` and `failure_type` fields. A person fills them and moves the file to `evals/bank`, because an auto-committed bad answer holds merges with nobody having read it. A correction with no fixture shape stays a draft. A draft expires after 30 days, the pass counts it, and its case never returns. `fno-agents evals drafts` prints the counts.
 
 A golden's rule must be findable in the repo, because a worker reads only the repo and the prompt. It must have a mechanical grade: a choice the grader reads from a decision file, or the work product itself. A failure that needs long session state or fleet state cannot reduce to this shape. It stays out of the bank, and the scorecard holds that ground.
 
@@ -173,6 +178,20 @@ Treat `unverified` as "probably ran as requested but not independently checked",
 ## The cohort comparison report
 
 `fno doctor evals report --by-cohort [--prices <manifest.json's table>]` folds the history by `experiment_id`. One row per cohort lists attempts, graded, scored (the rows the rate reads), accepted (scored and passed), the pass rate, its 95% Wilson interval, and the `lane_status` counts. Exclusions count by reason: substituted, unavailable, infrastructure, ungraded, contaminated via the row's `excluded_reason`. The row also carries median wall time, tokens, and dollars per accepted change. Cost reads `unmeasured` unless every scored row carries usage and a complete price line (input and output rates, plus a cache rate for any cache tokens the row carries) for its model. A price line missing a rate the usage needs reads as no price line. It never prints a partial sum. `--json` prints the same fold. Rows without lane evidence count under `(no cohort)` and can never join a scored cohort.
+
+## Comparing two lanes
+
+`fno doctor evals report --compare <glm> --to <opus> --prices <table>` runs the compare on the rows both lanes hold for the same goldens. Each side names its excluded rows by task, and `substituted` and `account-dropped` rows stay unscored. Each side prints dollars per accepted result, or `unmeasured` under the cohort report's cost rule. `evals/harness-fit/manifest.json` holds the price table.
+
+## Plan premise labels
+
+A checkable plan sentence is a Context, Why or audit line that names a path or symbol in backticks. `fno-agents intel --plans` pairs each one with the later records on its node: rulings, notes and the closing note. A ruling counts only from the plan's day on. It keeps the newest 10 records per plan. A classifier labels each pair as supports, contradicts or unrelated. Rows land in `~/.fno/evals/plan-labels/rows.jsonl`, and a contradicted premise becomes a candidate, never a golden by itself. A row's `overruled_by` reads only a mechanical fact: a later ruling on the node, a revert, or a supersede.
+
+No rung labels plans until it passes a fixed set of 60 hand-labelled pairs in `~/.fno/evals/plan-labels/ladder-set.jsonl`, 20 per label. `--dry-run` prints candidate pairs for that set, and calls no model. A rung passes at 0.80 balanced with contradicts recall of 0.70 or more. `--plans-ladder` scores fnod first, then tuned kev-9b at `--teacher-url`, and stops at the first pass. The set never trains a model.
+
+Data leaving the machine: fnod and kev-9b stay on loopback, and any other address refuses. A hosted rung sends plan text to a vendor, and a treg route adds treg as a second party. A `--hosted NAME=COMMAND` rung needs two local failed scores, a clean scrub on each pair and `person_read: true` on each pair. Without all three, the run refuses before any call. The command takes a pair's JSON file as its last argument and prints `{"label": ..., "dollars": ...}`. A regex scrub misses third-party and customer names, which is why a person reads each pair. A hosted winner still refuses `--plans`, because the full pass sends far more text. That pass needs its own user ruling, with the per-pair price and the text count stated.
+
+State: these files sit in the `evals/` folder the corpus already uses, and they add no top-level folder. Drafts expire after 30 days. `.seen` and the label files stay.
 
 ## Legacy attribution note
 

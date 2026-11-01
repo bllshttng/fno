@@ -2,9 +2,11 @@
 //! goldens. Read-only: it writes no file and calls no model.
 //!
 //! Sources: rule-labelled reactions in the decision corpus (whose export
-//! already kept typed turns only, through `provenance::classify_turn`), S2
-//! rows in corrections.log, `Revert` commits, and plans by superseded status
-//! and caused plan commits. Every row is a candidate, never a label.
+//! already kept typed turns only, through `provenance::classify_turn`), typed
+//! `agent_corrected` events, S2 rows in corrections.log, `Revert` commits,
+//! plans by superseded status and caused plan commits, and classifier rows
+//! that say a later record contradicts a plan premise. Every row is a
+//! candidate, never a label.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::BufRead as _;
@@ -14,7 +16,7 @@ use regex::Regex;
 use serde_json::{json, Value};
 
 const USAGE: &str =
-    "usage: fno-agents evals candidates [--limit N] [--source KIND] [--json] (KIND: reaction-correct | reaction-reject | reaction-approve | correction | revert | plan)";
+    "usage: fno-agents evals candidates [--limit N] [--source KIND] [--json] (KIND: reaction-correct | reaction-reject | reaction-approve | correction | revert | plan | plan-label)";
 const DEFAULT_LIMIT: usize = 50;
 const QUOTE_CHARS: usize = 240;
 
@@ -112,6 +114,45 @@ fn read_corrections(log: &Path, out: &mut Vec<Candidate>) {
     }
 }
 
+/// A person's typed corrections from the event store. The daemon's fold writes
+/// them, so this source needs no `/fno:intel` report.
+fn read_correction_events(journal: &Path, out: &mut Vec<Candidate>) {
+    let query = crate::event_store::EventQuery::of_types(&["agent_corrected"]);
+    for event in crate::event_store::query_events(journal, &query).unwrap_or_default() {
+        let Ok(line) = serde_json::from_str::<Value>(&event.line) else {
+            continue;
+        };
+        if let Some((id, quote)) = crate::evals_drafts::typed_correction(&line["data"]) {
+            out.push(Candidate {
+                kind: "correction".into(),
+                source_ref: id.to_string(),
+                quote: clip_tail(quote),
+                score: 5,
+            });
+        }
+    }
+}
+
+/// Premise rows a later record contradicts. A mechanical overrule ranks first.
+fn read_plan_labels(rows: &Path, out: &mut Vec<Candidate>) {
+    let Ok(file) = std::fs::File::open(rows) else {
+        return;
+    };
+    for line in std::io::BufReader::new(file).lines().map_while(Result::ok) {
+        let Ok(row) = serde_json::from_str::<crate::intel_plans::Pair>(&line) else {
+            continue;
+        };
+        if row.label.as_deref() == Some("contradicts") {
+            out.push(Candidate {
+                kind: "plan-label".into(),
+                source_ref: format!("{} node={}", row.plan, row.node),
+                quote: clip_tail(&row.claim),
+                score: if row.overruled_by.is_some() { 4 } else { 2 },
+            });
+        }
+    }
+}
+
 fn read_reverts(repo: &Path, out: &mut Vec<Candidate>) {
     let mut cmd = std::process::Command::new("git");
     cmd.arg("-C")
@@ -154,6 +195,33 @@ fn caused_commits(plans: &Path) -> BTreeMap<String, u32> {
     counts
 }
 
+/// The plan's node: `claims:` in its front matter, then the filename.
+pub(crate) fn plan_node(name: &str, text: &str) -> Option<String> {
+    let front = text
+        .strip_prefix("---\n")
+        .and_then(|b| b.split_once("\n---"))
+        .map_or("", |(front, _)| front);
+    front
+        .lines()
+        .find_map(|l| l.strip_prefix("claims:"))
+        .map(|v| v.trim().trim_matches('"').to_string())
+        .filter(|c| !c.is_empty())
+        .or_else(|| {
+            Regex::new(r"[a-z]{1,3}-[0-9a-f]{4,8}")
+                .expect("static regex")
+                .find(name)
+                .map(|m| m.as_str().to_string())
+        })
+}
+
+/// The state root: `FNO_HOME`, else `~/.fno`.
+pub(crate) fn state_root() -> PathBuf {
+    std::env::var_os("FNO_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".fno")))
+        .unwrap_or_else(|| PathBuf::from(".fno"))
+}
+
 /// The join a plan carries: its node from `claims:`, then the filename, and
 /// its PRs from `urls:`.
 fn plan_candidate(
@@ -161,7 +229,6 @@ fn plan_candidate(
     text: &str,
     caused: &BTreeMap<String, u32>,
     superseded_nodes: &BTreeSet<String>,
-    node_rx: &Regex,
     pull_rx: &Regex,
 ) -> Option<Candidate> {
     let body = text.strip_prefix("---\n")?;
@@ -173,9 +240,7 @@ fn plan_candidate(
                 .map(|v| v.trim().trim_matches('"').to_string())
         })
     };
-    let node = field("claims")
-        .filter(|c| !c.is_empty())
-        .or_else(|| node_rx.find(name).map(|m| m.as_str().to_string()));
+    let node = plan_node(name, text);
     let superseded = node.as_ref().is_some_and(|n| superseded_nodes.contains(n));
     let causes = node
         .as_ref()
@@ -215,7 +280,6 @@ fn read_plans(plans: &Path, superseded: &BTreeSet<String>, out: &mut Vec<Candida
         return;
     };
     let caused = caused_commits(plans);
-    let node_rx = Regex::new(r"[a-z]{1,3}-[0-9a-f]{4,8}").expect("static regex");
     let pull_rx = Regex::new(r"/pull/(\d+)").expect("static regex");
     for path in entries.flatten().map(|e| e.path()) {
         if path.extension().map_or(true, |e| e != "md") {
@@ -226,9 +290,7 @@ fn read_plans(plans: &Path, superseded: &BTreeSet<String>, out: &mut Vec<Candida
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
         if let Ok(text) = std::fs::read_to_string(&path) {
-            out.extend(plan_candidate(
-                &name, &text, &caused, superseded, &node_rx, &pull_rx,
-            ));
+            out.extend(plan_candidate(&name, &text, &caused, superseded, &pull_rx));
         }
     }
 }
@@ -252,6 +314,8 @@ pub(crate) fn rank(mut rows: Vec<Candidate>) -> Vec<Candidate> {
 struct Sources {
     corpus: PathBuf,
     corrections: Option<PathBuf>,
+    events: PathBuf,
+    plan_labels: PathBuf,
     repo: PathBuf,
     plans: Option<PathBuf>,
     superseded: BTreeSet<String>,
@@ -263,6 +327,8 @@ fn mine(sources: &Sources) -> Vec<Candidate> {
     if let Some(log) = &sources.corrections {
         read_corrections(log, &mut rows);
     }
+    read_correction_events(&sources.events, &mut rows);
+    read_plan_labels(&sources.plan_labels, &mut rows);
     read_reverts(&sources.repo, &mut rows);
     if let Some(plans) = &sources.plans {
         read_plans(plans, &sources.superseded, &mut rows);
@@ -284,13 +350,12 @@ pub fn run(args: &[String]) -> i32 {
     let source = crate::evals::flag_lookup(args, "--source");
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let home = std::env::var_os("HOME").map(PathBuf::from);
-    let state = std::env::var_os("FNO_HOME")
-        .map(PathBuf::from)
-        .or_else(|| home.as_ref().map(|h| h.join(".fno")))
-        .unwrap_or_else(|| PathBuf::from(".fno"));
+    let state = state_root();
     let rows = mine(&Sources {
         corpus: state.join("evals").join("decision").join("v1"),
         corrections: crate::finalize::corrections_log_path(home.as_deref()),
+        events: state.join("events.jsonl"),
+        plan_labels: state.join("evals").join("plan-labels").join("rows.jsonl"),
         repo: crate::evals::canonical_repo_root(),
         plans: crate::paths_cli::plans_dir_for(&cwd),
         superseded: crate::evals::superseded_nodes(&crate::backlog::settings::graph_path_at(Some(
@@ -359,6 +424,25 @@ mod tests {
              2026-10-13T09:02:42Z | S2 | insights-tag | r.md:1 | - \"mail me at a@b.co\" (x1, 01a0, signal=repeated_correction) #agent-correction\n",
         )
         .unwrap();
+        let store = tempfile::tempdir().unwrap();
+        let events = store.path().join("events.jsonl");
+        crate::event_store::append_envelope(
+            &events,
+            &json!({"ts": "2026-11-01T00:00:00Z", "type": "agent_corrected", "source": "daemon",
+                    "session_id": "s1", "data": {"correction_id": "corr:9", "corrected_by": "user",
+                    "kind": "correct", "quote": "no, the other lane", "quote_status": "kept", "session_id": "s1", "rule_version": "v1"}})
+            .to_string(),
+            Some("corr:9"),
+        )
+        .unwrap();
+        let labels = tmp.path().join("rows.jsonl");
+        std::fs::write(
+            &labels,
+            json!({"id": "p1", "claim": "the writer runs daily", "record": "r", "plan": "p.md",
+                   "node": "n-1", "label": "contradicts", "overruled_by": "revert"})
+            .to_string(),
+        )
+        .unwrap();
         let plan = "---\ntitle: \"Old idea\"\nclaims: n-1\nurls:\n  - https://github.com/o/r/pull/77\n---\nbody\n";
         std::fs::write(tmp.path().join("20261001-n-1.md"), plan).unwrap();
         std::fs::write(
@@ -371,6 +455,8 @@ mod tests {
         let rows = mine(&Sources {
             corpus: tmp.path().to_path_buf(),
             corrections: Some(log),
+            events,
+            plan_labels: labels,
             repo: tmp.path().to_path_buf(),
             plans: Some(tmp.path().to_path_buf()),
             superseded: BTreeSet::from(["n-1".to_string()]),
@@ -380,10 +466,18 @@ mod tests {
         let kinds: Vec<&str> = rows.iter().map(|r| r.kind.as_str()).collect();
         assert_eq!(
             kinds,
-            ["correction", "plan", "reaction-reject", "reaction-approve"],
+            [
+                "correction",
+                "correction",
+                "plan",
+                "plan-label",
+                "reaction-reject",
+                "reaction-approve"
+            ],
             "ranked by score, the duplicate reject and the interrupt gone"
         );
         assert!(rows[0].quote.contains("[email]"), "{}", rows[0].quote);
-        assert_eq!(rows[1].source_ref, "20261001-n-1.md node=n-1 pr=77");
+        assert_eq!(rows[1].source_ref, "corr:9");
+        assert_eq!(rows[2].source_ref, "20261001-n-1.md node=n-1 pr=77");
     }
 }
