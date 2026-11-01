@@ -11,7 +11,7 @@ verdict: stop
 
 ## Read this first: the machine was busy
 
-These numbers come from a machine that never went calm. The 5 minute load average stayed between 27 and 111 on 12 CPUs, during an active fleet, and the lead ordered the numbers after the incident cleared. The 10 ms control held in every full run: it read 9.9 to 10.9 ms above bare. So the clock is sound, but p95 and p99 carry scheduler delay from other work. Treat the p50 column as the steadier read. Run the harness again on a quiet machine before you trust a p95 to the millisecond.
+These numbers come from a machine that never went calm. The 5 minute load average stayed between 27 and 111 on 12 CPUs, with the fleet active. The lead ordered the numbers after the incident cleared. The 10 ms control held in every full run: it read 9.9 to 10.9 ms above bare. So the clock is sound, but p95 and p99 carry scheduler delay from other work. Treat the p50 column as the steadier read. Run the harness again on a quiet machine before you trust a p95 to the millisecond.
 
 ## Numbers
 
