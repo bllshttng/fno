@@ -582,7 +582,11 @@ pub(super) async fn serve(
     let cause;
 
     let flow = loop {
+        let sync_deadline = pane_output::next_sync_deadline(&core);
         tokio::select! {
+            _ = async { tokio::time::sleep_until(sync_deadline.unwrap().into()).await }, if sync_deadline.is_some() => {
+                pane_output::expire_sync_updates(&mut core, Instant::now());
+            }
             chunk = out_rx.recv() => {
                 // out_tx lives in Core, so recv never yields None.
                 let Some((pid, item)) = chunk else { cause = "channel-closed"; break Flow::Shutdown };
