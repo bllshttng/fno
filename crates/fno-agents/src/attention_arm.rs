@@ -1448,7 +1448,7 @@ pub(crate) fn read_items(cwd: &Path) -> (Vec<AttentionItem>, Vec<String>, Vec<St
 
 /// Join each item's short number. A fresh read each beat: the projection cache
 /// outlives a mint.
-fn attach_numbers(items: &mut [AttentionItem]) {
+pub(crate) fn attach_numbers(items: &mut [AttentionItem]) {
     let held = crate::numbers::labels();
     for item in items.iter_mut() {
         item.number = held.get(crate::numbers::canonical(&item.id)).cloned();

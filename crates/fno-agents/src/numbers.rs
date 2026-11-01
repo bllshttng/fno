@@ -89,7 +89,13 @@ pub fn current_store() -> String {
 /// A read-only connection on the local table. A missing file or table reads
 /// as no numbers, so every printer falls back to the hash.
 fn open_read() -> Option<Connection> {
-    open_read_at(&crate::graph_get::default_graph_path())
+    open_read_at(&db_path())
+}
+
+/// The graph store's SQLite file. `default_graph_path` names the `graph.json`
+/// anchor, which is not the database.
+fn db_path() -> std::path::PathBuf {
+    crate::backlog::database_path(&crate::graph_get::default_graph_path())
 }
 
 fn open_read_at(graph: &Path) -> Option<Connection> {
@@ -426,7 +432,7 @@ fn beat(cwd: &Path) -> Result<usize, String> {
     let (items, _, _) = crate::attention_arm::read_items(cwd);
     let extra: Vec<String> = items.into_iter().map(|item| item.id).collect();
     sweep(
-        &crate::graph_get::default_graph_path(),
+        &db_path(),
         remote.as_ref(),
         wanted(&decisions.rows, &asked, &extra),
         &crate::mail_bus::normalize_host(&crate::claims::hostname()),
