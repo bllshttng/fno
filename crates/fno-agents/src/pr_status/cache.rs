@@ -200,13 +200,21 @@ fn status_read(payload: &Value) -> (i32, String, String) {
         super::wait::ExpectHead::None => None,
         super::wait::ExpectHead::Sha(sha) => Some(sha),
         super::wait::ExpectHead::LocalUnresolved => {
-            return (
-                2,
-                String::new(),
-                "fno do pr status: --expect-head HEAD cannot resolve in this checkout; \
-                 run it from the worktree that holds the commit\n"
-                    .into(),
-            )
+            // The machine contract is one JSON line on stdout at every exit;
+            // the error shape is the payload a refused read prints.
+            let payload = super::compose::error_payload(
+                &pr.to_string(),
+                &super::RestReason::new(
+                    "--expect-head HEAD cannot resolve in this checkout; \
+                     run it from the worktree that holds the commit",
+                    "",
+                ),
+            );
+            let stdout = format!(
+                "{}\n",
+                serde_json::to_string(&payload.1).unwrap_or_default()
+            );
+            return (4, stdout, format!("{}\n", payload.2.join("\n")));
         }
     };
     let mut mismatch = None;

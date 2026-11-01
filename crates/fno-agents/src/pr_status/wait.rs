@@ -76,7 +76,7 @@ pub(crate) fn resolve_expect_head(payload: &Value) -> ExpectHead {
     else {
         return ExpectHead::None;
     };
-    if raw == "HEAD" || raw == "@" {
+    if raw == "HEAD" {
         let cwd = Path::new(payload.get("cwd").and_then(Value::as_str).unwrap_or(""));
         return match local_head_sha(cwd) {
             Some(sha) => ExpectHead::Sha(sha),
@@ -395,7 +395,7 @@ pub(crate) fn run_wait(payload: &Value) -> (i32, String, String) {
         ExpectHead::Sha(sha) => Some(sha),
         ExpectHead::LocalUnresolved => {
             return (
-                2,
+                4,
                 String::new(),
                 "fno do pr wait: --expect-head HEAD cannot resolve in this checkout; \
                  run it from the worktree that holds the commit\n"
