@@ -73,6 +73,7 @@ mod agent_rows_join;
 mod attach_argv;
 mod client_input;
 mod client_read;
+mod client_writer;
 mod drift_retire;
 mod first_attach;
 mod fresh_attach;
@@ -12418,7 +12419,13 @@ async fn handle_client(
         return;
     }
     let (read_half, write_half) = stream.into_split();
-    tokio::spawn(client_writer(write_half, reliable_rx, dirty, notify, stats));
+    tokio::spawn(client_writer::client_writer(
+        write_half,
+        reliable_rx,
+        dirty,
+        notify,
+        stats,
+    ));
     client_read::client_reader(read_half, core_tx, id).await;
 }
 
@@ -12455,64 +12462,6 @@ where
         count_frame_emitted(stats, *pane_id);
     }
     Ok(is_bye)
-}
-
-/// The per-client writer: reliable messages FIRST (biased select - a Layout
-/// is never stuck behind a frame burst), then the droppable dirty map. `Bye`
-/// is the exception: it flushes the final dirty frames before ending the
-/// stream. A write failure exits this half; the reader owns deregistration so
-/// commands already on the socket stay ordered before its `Gone` message.
-async fn client_writer(
-    mut w: OwnedWriteHalf,
-    mut reliable_rx: mpsc::Receiver<ServerMsg>,
-    dirty: DirtyMap,
-    notify: Arc<Notify>,
-    stats: PaneStats,
-) {
-    loop {
-        tokio::select! {
-            biased;
-            msg = reliable_rx.recv() => {
-                let Some(msg) = msg else { break }; // deregistered by the core
-                match write_reliable(&mut w, &msg, &dirty, &stats).await {
-                    Ok(true) => break,
-                    Ok(false) => {}
-                    Err(_) => break,
-                }
-            }
-            _ = notify.notified() => {
-                // Drain the whole map; every frame is self-contained, and a
-                // frame inserted mid-drain re-notifies, so nothing is lost.
-                loop {
-                    // Reliable messages queued mid-flood jump ahead of the
-                    // frame stream (codex P2): continuous re-insertion could
-                    // otherwise pin the writer inside this arm, and the
-                    // biased select only prioritizes at the select point -
-                    // not while an arm is running.
-                    while let Ok(msg) = reliable_rx.try_recv() {
-                        match write_reliable(&mut w, &msg, &dirty, &stats).await {
-                            Ok(true) => return,
-                            Ok(false) => {}
-                            Err(_) => return,
-                        }
-                    }
-                    let next = {
-                        let mut d = dirty.lock().unwrap();
-                        let key = d.keys().next().copied();
-                        key.map(|k| (k, d.remove(&k).expect("key just seen")))
-                    };
-                    let Some((pane_id, frame)) = next else { break };
-                    if write_msg(&mut w, &ServerMsg::Frame { pane_id, frame })
-                        .await
-                        .is_err()
-                    {
-                        return;
-                    }
-                    count_frame_emitted(&stats, pane_id);
-                }
-            }
-        }
-    }
 }
 
 #[cfg(test)]
