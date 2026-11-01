@@ -11,7 +11,7 @@ grade:
   - kind: file-exists
     path: "decision.md"
   - kind: exit
-    command: "sed -n 1p decision.md | tr -d '`\\r' | grep -Eiq '^action: *.*(evals_trend)' && ! sed -n 1p decision.md | tr -d '`\\r' | grep -Eiq '--workspace'"
+    command: "sed -n 1p decision.md | tr -d '`\\r' | grep -Eiq '^action: *.*(evals_trend)' && ! sed -n 1p decision.md | tr -d '`\\r' | grep -Eiq '^action: *(--workspace)'"
 timeout_minutes: 10
 tags: [golden, gate]
 golden:

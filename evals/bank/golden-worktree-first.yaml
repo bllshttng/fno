@@ -11,7 +11,7 @@ grade:
   - kind: file-exists
     path: "decision.md"
   - kind: exit
-    command: "sed -n 1p decision.md | tr -d '`\\r' | grep -Eiq '^action: *.*(fno do target start +x-1234)' && ! sed -n 1p decision.md | tr -d '`\\r' | grep -Eiq 'checkout -b'"
+    command: "sed -n 1p decision.md | tr -d '`\\r' | grep -Eiq '^action: *.*(fno do target start +x-1234)' && ! sed -n 1p decision.md | tr -d '`\\r' | grep -Eiq '^action: *(checkout -b)'"
 timeout_minutes: 10
 tags: [golden, gate]
 golden:

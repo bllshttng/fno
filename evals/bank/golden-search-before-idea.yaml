@@ -11,7 +11,7 @@ grade:
   - kind: file-exists
     path: "decision.md"
   - kind: exit
-    command: "sed -n 1p decision.md | tr -d '`\\r' | grep -Eiq '^action: *.*(fno backlog (search|list|find|get|query))' && ! sed -n 1p decision.md | tr -d '`\\r' | grep -Eiq 'backlog idea'"
+    command: "sed -n 1p decision.md | tr -d '`\\r' | grep -Eiq '^action: *.*(fno backlog (search|list|find|get|query))' && ! sed -n 1p decision.md | tr -d '`\\r' | grep -Eiq '^action: *(backlog idea)'"
 timeout_minutes: 10
 tags: [golden, gate]
 golden:

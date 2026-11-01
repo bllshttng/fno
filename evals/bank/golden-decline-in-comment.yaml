@@ -11,7 +11,7 @@ grade:
   - kind: file-exists
     path: "decision.md"
   - kind: exit
-    command: "sed -n 1p decision.md | tr -d '`\\r' | grep -Eiq '^action: *.*((repl|comment|respond).*(declin|reject|wrong|disagree|reason|why)|(declin|reject).*(repl|comment|thread))' && ! sed -n 1p decision.md | tr -d '`\\r' | grep -Eiq '^action: *(resolve|ignore|change)'"
+    command: "sed -n 1p decision.md | tr -d '`\\r' | grep -Eiq '^action: *.*((repl|comment|respond).*(declin|reject|wrong|disagree|reason|why)|(declin|reject).*(repl|comment|thread))' && ! sed -n 1p decision.md | tr -d '`\\r' | grep -Eiq '^action: *(^action: *(resolve|ignore|change))'"
 timeout_minutes: 10
 tags: [golden]
 golden:
