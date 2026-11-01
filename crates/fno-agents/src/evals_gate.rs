@@ -401,10 +401,11 @@ fn compare(
 fn main_leg(p: &Paths, d: &Deps, state: &mut State, can_launch: bool, daily_usd: f64) -> String {
     if let Some(run) = state.main_run.clone() {
         let over = d.now.timestamp() - run.started > MAIN_LIMIT_S;
-        if (d.alive)(run.pid) && !over {
+        let alive = (d.alive)(run.pid);
+        if alive && !over {
             return format!("main {} running", run.cohort);
         }
-        if over {
+        if alive {
             (d.kill)(run.pid);
         }
         state.main_run = None;
@@ -450,6 +451,8 @@ fn main_leg(p: &Paths, d: &Deps, state: &mut State, can_launch: bool, daily_usd:
                 pid,
                 started: d.now.timestamp(),
             });
+            // Saved at once: a tick killed here must not launch a second run.
+            save_state(&p.state_dir, state);
             format!("main {cohort} launched")
         }
         Err(e) => format!("main launch failed: {e}"),
@@ -573,16 +576,20 @@ fn settle_head_run(p: &Paths, d: &Deps, state: &mut State, slug: &str, prs: &[Pr
     let current = prs
         .iter()
         .any(|pr| pr.number == run.pr && pr.sha == run.sha);
+    let alive = (d.alive)(run.pid);
     if !current {
-        (d.kill)(run.pid);
+        if alive {
+            (d.kill)(run.pid);
+        }
         state.head_run = None;
+        save_state(&p.state_dir, state);
         return;
     }
     let over = d.now.timestamp() - run.started > HEAD_LIMIT_S;
-    if (d.alive)(run.pid) && !over {
+    if alive && !over {
         return;
     }
-    if over {
+    if alive {
         (d.kill)(run.pid);
     }
     let (status, text) = match (&state.baseline, over) {
@@ -670,6 +677,7 @@ fn launch_head(
                 started: d.now.timestamp(),
                 tasks,
             });
+            save_state(&p.state_dir, state);
             format!("head {} launched", short(&pr.sha))
         }
         Err(e) => {
