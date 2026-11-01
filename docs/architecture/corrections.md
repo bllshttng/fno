@@ -49,6 +49,7 @@ The store is append-only, so outcome is its own `correction_outcome` row, from a
 ```bash
 fno doctor event corrections --by model --since 7d
 fno doctor event corrections --by harness --source user
+fno doctor event corrections --by day --since 28d
 fno doctor event corrections --precision ~/.fno/evals/corrections/v1/labels.jsonl
 fno agents fleet feed --kind agent_corrected
 ```

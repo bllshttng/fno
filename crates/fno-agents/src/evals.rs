@@ -215,6 +215,11 @@ fn agents_home() -> std::path::PathBuf {
 /// per-task loop. The exit codes are the leaf's: 0 graded, 1 refusal, 2 a
 /// load-time discipline violation.
 fn run_command(rest: &[String]) -> i32 {
+    // Selection falls through to live runs, so help must return first.
+    if rest.iter().any(|a| a == "--help" || a == "-h") {
+        println!("Usage: fno-agents evals run [flags]. See docs/evals.md.");
+        return 0;
+    }
     let repeat: u32 = match flag_lookup(rest, "--repeat")
         .or_else(|| flag_lookup(rest, "-k"))
         .and_then(|v| v.parse().ok())
@@ -234,6 +239,11 @@ fn run_command(rest: &[String]) -> i32 {
     }
     if (variant == "baseline") != ref_arg.is_none() {
         eprintln!("Error: --variant v<N> and --ref REF must be used together");
+        return 1;
+    }
+    let overlay_ref = flag_lookup(rest, "--overlay-fixtures");
+    if overlay_ref.is_some() && ref_arg.is_none() {
+        eprintln!("Error: --overlay-fixtures needs --variant v<N> --ref REF");
         return 1;
     }
     let lane_coord = match flag_lookup(rest, "--lane") {
@@ -347,6 +357,7 @@ fn run_command(rest: &[String]) -> i32 {
                 ref_arg.as_deref().unwrap_or(&task.repo_fixture),
                 lane_coord.as_ref(),
                 cohort.as_deref(),
+                overlay_ref.as_deref(),
             );
             let passes = results.iter().filter(|r| r.passed).count();
             let passk = if passes == repeat as usize {

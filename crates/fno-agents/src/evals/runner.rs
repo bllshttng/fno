@@ -134,6 +134,45 @@ fn make_disposable_worktree(
     Ok(path)
 }
 
+/// The fixture tree a golden prompt names, carried onto an older checkout. Only
+/// this tree moves: `evals/bank` holds each golden's expected answer, and a
+/// worker told to read the repo would read it.
+const OVERLAY_PATH: &str = "evals/fixtures/golden";
+
+/// Commit `overlay_ref`'s fixtures on top of the checkout, so the worker sees a
+/// clean tree. Returns the new head, the base a grader diffs against.
+fn apply_overlay(dir: &std::path::Path, overlay_ref: &str) -> Result<String, String> {
+    let git = |args: &[&str]| -> Result<String, String> {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .map_err(|e| e.to_string())?;
+        if out.status.success() {
+            Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+        } else {
+            Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+        }
+    };
+    git(&["checkout", overlay_ref, "--", OVERLAY_PATH])?;
+    git(&[
+        "-c",
+        "user.name=fno-evals",
+        "-c",
+        "user.email=evals@fno.invalid",
+        "-c",
+        "core.hooksPath=/dev/null",
+        "-c",
+        "commit.gpgsign=false",
+        "commit",
+        "--quiet",
+        "--allow-empty",
+        "-m",
+        "evals: overlay golden fixtures",
+    ])?;
+    git(&["rev-parse", "HEAD"])
+}
+
 fn remove_worktree(repo_root: &std::path::Path, path: &std::path::Path) {
     let _ = std::process::Command::new("git")
         .args(["worktree", "remove", "--force"])
@@ -442,9 +481,11 @@ pub fn run_task(
     variant_ref: &str,
     lane: Option<&LaneRow>,
     experiment_id: Option<&str>,
+    overlay_ref: Option<&str>,
 ) -> Vec<RunResult> {
     let checkout_ref = variant_ref.to_string();
     let bank_rev = git_rev(repo_root, &checkout_ref);
+    let overlay_rev = overlay_ref.and_then(|r| git_rev(repo_root, r));
     let timeout_s = std::cmp::max(1, task.timeout_minutes.saturating_mul(60));
     let mut results: Vec<RunResult> = Vec::new();
     let run_id = uuid_v4();
@@ -462,13 +503,26 @@ pub fn run_task(
         let mut workdir: Option<std::path::PathBuf> = None;
         let mut worker_name: Option<String> = None;
         let mut tree: Option<String> = None;
+        let mut grade_base = checkout_ref.clone();
         match make_disposable_worktree(repo_root, &checkout_ref, &task.id) {
             Err(e) => {
                 reason = format!("fixture checkout failed ({checkout_ref}); fixture drift? {e}");
             }
-            Ok(dir) => {
-                workdir = Some(dir);
-            }
+            Ok(dir) => match overlay_rev
+                .as_deref()
+                .or(overlay_ref)
+                .map(|r| apply_overlay(&dir, r))
+            {
+                Some(Err(e)) => {
+                    reason = format!("fixture overlay failed on {checkout_ref}: {e}");
+                    remove_worktree(repo_root, &dir);
+                }
+                Some(Ok(head)) => {
+                    grade_base = head;
+                    workdir = Some(dir);
+                }
+                None => workdir = Some(dir),
+            },
         }
         if let Some(dir) = &workdir {
             if task.prompt.is_some() && !evals_enabled() {
@@ -491,7 +545,7 @@ pub fn run_task(
                 tree = tree_hash(dir);
             }
             if reason.is_empty() {
-                let o = super::grading::grade(task, dir, Some(&checkout_ref));
+                let o = super::grading::grade(task, dir, Some(&grade_base));
                 if !o.passed {
                     reason = o.reason();
                 }
@@ -546,6 +600,9 @@ pub fn run_task(
             "variant": variant,
             "experiment_id": experiment_id,
         });
+        if let Some(rev) = &overlay_rev {
+            row["overlay_rev"] = json!(rev);
+        }
         if !status.is_empty() {
             row["status"] = json!(status);
         }
@@ -711,6 +768,43 @@ mod tests {
             .any(|w| w[0] == "--harness" && w[1] == "codex"));
         let bare = spawn_argv("n", "/tmp/wt", 60, None, None, "p");
         assert!(!bare.contains(&"--harness".to_string()));
+    }
+
+    #[test]
+    fn overlay_carries_golden_fixtures_and_never_the_bank() {
+        let d = tempfile::tempdir().unwrap();
+        let git = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+                .args(args)
+                .current_dir(d.path())
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "{args:?}");
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        };
+        git(&["init", "-q"]);
+        git(&["commit", "-q", "--allow-empty", "-m", "old"]);
+        let old = git(&["rev-parse", "HEAD"]);
+        std::fs::create_dir_all(d.path().join(OVERLAY_PATH)).unwrap();
+        std::fs::create_dir_all(d.path().join("evals/bank")).unwrap();
+        std::fs::write(d.path().join(OVERLAY_PATH).join("f.py"), "x").unwrap();
+        std::fs::write(d.path().join("evals/bank/g.yaml"), "expected: x").unwrap();
+        git(&["add", "evals"]);
+        git(&["commit", "-q", "-m", "new"]);
+        let new = git(&["rev-parse", "HEAD"]);
+        git(&["checkout", "-q", "--detach", &old]);
+
+        let head = apply_overlay(d.path(), &new).unwrap();
+
+        assert_eq!(head, git(&["rev-parse", "HEAD"]));
+        assert!(d.path().join(OVERLAY_PATH).join("f.py").exists());
+        assert!(!d.path().join("evals/bank/g.yaml").exists());
+        assert_eq!(
+            git(&["status", "--porcelain"]),
+            "",
+            "the worker sees a clean tree"
+        );
     }
 
     #[test]
