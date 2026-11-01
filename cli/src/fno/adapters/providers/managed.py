@@ -348,7 +348,6 @@ def _read_claude_blob(cfg: Path, *, shared: bool) -> Optional[str]:
     property of which slot we asked for, not of the environment.
     """
     if sys.platform == "darwin":
-        acct = _claude_keychain_account()
         # The unscoped Keychain item belongs to the default ~/.claude account
         # (the overlay's login check reads the scoped item ONLY, never the
         # unscoped fallback, for exactly this reason). Fall back to it only when
@@ -359,17 +358,11 @@ def _read_claude_blob(cfg: Path, *, shared: bool) -> Optional[str]:
         if shared:
             services.append(_CLAUDE_KEYCHAIN_SERVICE)
         for service in services:
-            out = _run_security(["find-generic-password", "-s", service, "-a", acct, "-w"])
-            if out.returncode == 0 and out.stdout.strip():
-                blob = out.stdout.strip()
-                # A logged-out residue is non-empty JSON (scopes/subscriptionType/
-                # rateLimitTier survive while accessToken/refreshToken clear to ''),
-                # so a presence check alone returns it as a live login. Require a
-                # real credential and fall through to the next service - the scoped
-                # item may hold the residue while the unscoped fallback holds the
-                # live token - else None, so register refuses rather than stores it.
-                if _token_present(blob):
-                    return blob
+            # None is absence (44) or a logged-out residue: fall through to the
+            # next item. A read that FAILS raises, it never shrinks the set.
+            blob = _read_claude_keychain_item(service)
+            if blob:
+                return blob
         return None
     try:
         blob = (cfg / ".credentials.json").read_text(encoding="utf-8")
