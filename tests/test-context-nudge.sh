@@ -346,7 +346,13 @@ run_hook "$(payload "$SBX/low.jsonl")"
 assert_eq     "AC7: below trigger exits 0" "$RC" "0"
 assert_absent "AC7: below trigger no block" "$OUT" '"decision":"block"'
 
-# next band up (60%) blocks again after the 50% latch
+# next band up (60%) blocks again after the 50% latch. The 600k rewrite is the
+# SAME LENGTH as AC5's 500k write above (only the digits differ), so when both
+# land in one stat second the probe cache's size+mtime fingerprint does NOT
+# change and this fire is served the 50% copy (measured '60% used' absent; red
+# on main 2026-11-01). sleep 1 forces a later mtime, as in the AC17 rewrite
+# below.
+sleep 1
 write_transcript "$SBX/t.jsonl" 600000
 run_hook "$(payload "$SBX/t.jsonl")"
 assert_contains "AC7: next band blocks again" "$OUT" '60% used'
