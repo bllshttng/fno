@@ -265,7 +265,9 @@ fn bank_cargo_graders_name_a_manifest_and_require_tests_ran() {
                 "{}: {line}",
                 path.display()
             );
-            if !line.contains("--example") {
+            // A named `--test` or `--example` target is its own proof of
+            // existence; a `--lib` name filter is not.
+            if line.contains("--lib") {
                 assert!(
                     line.contains("test result: ok"),
                     "{}: {line}",

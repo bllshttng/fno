@@ -43,7 +43,7 @@ id: capability-lead-term-hygiene
 tier: capability
 grade:
   - kind: exit
-    command: "cargo test --manifest-path crates/fno-agents/Cargo.toml --lib term_hygiene"
+    command: "cargo test --manifest-path crates/fno-agents/Cargo.toml --lib term_hygiene 2>&1 | grep -q 'test result: ok\\. [1-9]'"
     expect: 0
 timeout_minutes: 5
 tags: [term, hygiene, transcript]
