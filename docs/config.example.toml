@@ -487,6 +487,10 @@ opens = "pane"
 [autonomy]
 # The one master switch over every autonomous session-starting spawner. Defaults true; shipping this changes nothing until explicitly disabled.
 enabled = true
+# One choice over unattended restarts, merges and law writes: ask, balanced (default) or yolo. Yolo keeps CI, review, holds and run refusals.
+mode = "balanced"
+# In ask mode, the action classes that run unasked: restart, merge, law.
+allow = []
 
 [auto_continue]
 # Auto-dispatch the next ready node after a PR merges.

@@ -95,7 +95,7 @@ fn gate_reason(mode: Option<&str>) -> Option<String> {
 }
 
 pub(crate) fn wake_armed() -> bool {
-    gate_reason(Some("wake")).is_none()
+    gate_reason(Some("wake")).is_none() && crate::autonomy_policy::restart_allowed(&cwd())
 }
 
 /// `census watchdog-arming`: one condition, every reader. A freshness reader that

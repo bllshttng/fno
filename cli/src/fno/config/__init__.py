@@ -2512,16 +2512,14 @@ class AutonomyBlock(BaseModel):
     every spawner's own gate still governs exactly as before until an
     operator explicitly arms the panic switch.
 
-    Explicitly NOT a per-dispatcher lever (Alternative A in the design doc,
-    rejected): nine levers multiply the state an operator must hold and
-    guarantee some subset goes stale, which is the same failure with more
-    surface. This is the ONE switch; detail belongs in ``fno agents autonomy
-    status``, not in a second layer of configuration.
+    ``mode`` and ``allow`` are read by ``crates/fno-agents/src/autonomy_policy.rs``.
     """
 
     model_config = ConfigDict(extra="ignore")
 
     enabled: bool = True
+    mode: Literal["ask", "balanced", "yolo"] = "balanced"
+    allow: list[Literal["restart", "merge", "law"]] = Field(default_factory=list)
 
     @field_validator("enabled", mode="before")
     @classmethod
