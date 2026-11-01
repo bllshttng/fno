@@ -385,6 +385,7 @@ crates/fno-agents/src/backlog/update_cli.rs
 crates/fno-agents/src/blueprint_judge.rs
 crates/fno-agents/src/delivery_completion.rs
 crates/fno-agents/src/delivery_eval.rs
+crates/fno-agents/src/evals_candidates.rs
 crates/fno-agents/src/hook/diff_budget.rs
 crates/fno-agents/src/kill_criteria.rs
 crates/fno-agents/src/merge_hold.rs
@@ -395,6 +396,9 @@ crates/fno-agents/src/scoreboard/plan_join.rs
 crates/fno-agents/src/surface_check.rs
 crates/fno-agents/src/verify_advise.rs
 crates/fno-agents/src/wave.rs"
+# evals_candidates.rs reads only the plan frontmatter `title`, `claims` and
+# PR urls to rank golden candidates; superseded comes from the graph, so it
+# never extracts a plan status and the shelling rule does not apply to it.
 # wave.rs reads a plan's Execution Strategy and `## Changes` headings for its
 # task list; it never extracts a plan status, so the shelling rule does not
 # apply to it.

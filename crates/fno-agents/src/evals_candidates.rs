@@ -160,6 +160,7 @@ fn plan_candidate(
     name: &str,
     text: &str,
     caused: &BTreeMap<String, u32>,
+    superseded_nodes: &BTreeSet<String>,
     node_rx: &Regex,
     pull_rx: &Regex,
 ) -> Option<Candidate> {
@@ -175,7 +176,7 @@ fn plan_candidate(
     let node = field("claims")
         .filter(|c| !c.is_empty())
         .or_else(|| node_rx.find(name).map(|m| m.as_str().to_string()));
-    let superseded = field("status").as_deref() == Some("superseded");
+    let superseded = node.as_ref().is_some_and(|n| superseded_nodes.contains(n));
     let causes = node
         .as_ref()
         .and_then(|n| caused.get(n))
@@ -209,7 +210,7 @@ fn plan_candidate(
     })
 }
 
-fn read_plans(plans: &Path, out: &mut Vec<Candidate>) {
+fn read_plans(plans: &Path, superseded: &BTreeSet<String>, out: &mut Vec<Candidate>) {
     let Ok(entries) = std::fs::read_dir(plans) else {
         return;
     };
@@ -225,7 +226,9 @@ fn read_plans(plans: &Path, out: &mut Vec<Candidate>) {
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
         if let Ok(text) = std::fs::read_to_string(&path) {
-            out.extend(plan_candidate(&name, &text, &caused, &node_rx, &pull_rx));
+            out.extend(plan_candidate(
+                &name, &text, &caused, superseded, &node_rx, &pull_rx,
+            ));
         }
     }
 }
@@ -251,6 +254,7 @@ struct Sources {
     corrections: Option<PathBuf>,
     repo: PathBuf,
     plans: Option<PathBuf>,
+    superseded: BTreeSet<String>,
 }
 
 fn mine(sources: &Sources) -> Vec<Candidate> {
@@ -261,7 +265,7 @@ fn mine(sources: &Sources) -> Vec<Candidate> {
     }
     read_reverts(&sources.repo, &mut rows);
     if let Some(plans) = &sources.plans {
-        read_plans(plans, &mut rows);
+        read_plans(plans, &sources.superseded, &mut rows);
     }
     rank(rows)
 }
@@ -289,6 +293,9 @@ pub fn run(args: &[String]) -> i32 {
         corrections: crate::finalize::corrections_log_path(home.as_deref()),
         repo: crate::evals::canonical_repo_root(),
         plans: crate::paths_cli::plans_dir_for(&cwd),
+        superseded: crate::evals::superseded_nodes(&crate::backlog::settings::graph_path_at(Some(
+            &cwd,
+        ))),
     });
     let rows: Vec<&Candidate> = rows
         .iter()
@@ -352,7 +359,7 @@ mod tests {
              2026-10-13T09:02:42Z | S2 | insights-tag | r.md:1 | - \"mail me at a@b.co\" (x1, 01a0, signal=repeated_correction) #agent-correction\n",
         )
         .unwrap();
-        let plan = "---\ntitle: \"Old idea\"\nstatus: superseded\nclaims: x-1234\nurls:\n  - https://github.com/o/r/pull/77\n---\nbody\n";
+        let plan = "---\ntitle: \"Old idea\"\nclaims: x-1234\nurls:\n  - https://github.com/o/r/pull/77\n---\nbody\n";
         std::fs::write(tmp.path().join("20261001-x-1234.md"), plan).unwrap();
         std::fs::write(
             tmp.path().join("20261002-x-5678.md"),
@@ -366,6 +373,7 @@ mod tests {
             corrections: Some(log),
             repo: tmp.path().to_path_buf(),
             plans: Some(tmp.path().to_path_buf()),
+            superseded: BTreeSet::from(["x-1234".to_string()]),
         });
         assert_eq!(before, snapshot(tmp.path()), "the miner writes nothing");
 
