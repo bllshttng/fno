@@ -455,17 +455,22 @@ fn build_record(payload: &Value, allow: &[String]) -> Result<Record, String> {
                 let Some(rows) = raw.as_array() else {
                     return Err("dispositions must be an array".to_string());
                 };
-                for entry in rows {
+                for (index, entry) in rows.iter().enumerate() {
                     let Some(entry) = entry.as_object() else {
                         return Err("each disposition must be an object".to_string());
                     };
+                    let nth = format!("disposition entry {}", index + 1);
                     let key = entry.get("finding_key");
                     let key = match key {
                         Some(Value::String(k)) if !py_trim(k).is_empty() => k.clone(),
+                        // The raised key's shape is file:line:category; a
+                        // key without the ':category' suffix can never
+                        // match, so the shape is taught here.
                         _ => {
                             return Err(format!(
-                                "each disposition needs finding_key, a disposition in \
-                                 ['fixed', 'declined', 'nonblocking'], and a non-empty reason"
+                                "{nth}: finding_key is missing or empty; re-post with the \
+                                 raised finding's exact finding_key (the shape is \
+                                 file:line:category)"
                             ))
                         }
                     };
@@ -475,8 +480,8 @@ fn build_record(payload: &Value, allow: &[String]) -> Result<Record, String> {
                         .unwrap_or_default();
                     if !DISPOSITIONS.contains(&disposition) {
                         return Err(format!(
-                            "each disposition needs finding_key, a disposition in \
-                             ['fixed', 'declined', 'nonblocking'], and a non-empty reason"
+                            "{nth} ({key}): disposition is {disposition:?}; use one of \
+                             fixed, declined, nonblocking"
                         ));
                     }
                     let reason = entry.get("reason");
@@ -484,8 +489,8 @@ fn build_record(payload: &Value, allow: &[String]) -> Result<Record, String> {
                         Some(Value::String(r)) if !py_trim(r).is_empty() => r.clone(),
                         _ => {
                             return Err(format!(
-                                "each disposition needs finding_key, a disposition in \
-                                 ['fixed', 'declined', 'nonblocking'], and a non-empty reason"
+                                "{nth} ({key}): reason is missing or empty; re-post with a \
+                                 non-empty reason"
                             ))
                         }
                     };

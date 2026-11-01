@@ -76,6 +76,43 @@ fixing it and letting the next review cover the fix delta";
 
 const TRUNCATED_KEY: &str = "(truncated remainder)";
 
+/// The disposition refusal sentence: the key list and the standing
+/// fix-delta remedy, with one exact-fix clause appended per diagnosed
+/// blocker. A diagnosed blocker's own row is the defect (a suffix-less
+/// key, a stamped row overwritten by an unstamped one), so the standing
+/// "fix it and re-review" remedy alone would send the worker into the
+/// retry loop this sentence exists to end. Empty on zero blockers. Pure;
+/// the no-diagnosis shape is byte-stable and the coverage-gate goldens
+/// pin it.
+pub(crate) fn disposition_refusal_text(blockers: &[DispositionBlocker]) -> String {
+    if blockers.iter().any(|b| b.axis == "truncated-remainder") {
+        return TRUNCATED_SENTENCE.to_string();
+    }
+    let mut keys: Vec<String> = blockers.iter().map(|b| b.finding_key.clone()).collect();
+    keys.sort();
+    if keys.is_empty() {
+        return String::new();
+    }
+    let mut text = format!(
+        "blocking finding(s) not terminal: {}{BLOCKING_SENTENCE_TAIL}",
+        keys.join(", ")
+    );
+    let mut clauses: Vec<(String, String)> = blockers
+        .iter()
+        .filter_map(|b| {
+            b.diagnosis
+                .as_ref()
+                .map(|d| (b.finding_key.clone(), d.clause(&b.finding_key)))
+        })
+        .collect();
+    clauses.sort_by(|a, b| a.0.cmp(&b.0));
+    for (_, clause) in clauses {
+        text.push_str("; ");
+        text.push_str(&clause);
+    }
+    text
+}
+
 /// The one refusal sentence: the reason with the note bracket-appended.
 /// Bracket append, never paren-splice surgery: a reason whose trailing paren
 /// closes an inner clause (a searched list, a truncated sha) would swallow
@@ -641,7 +678,8 @@ fn ordinary_verdict<P: Probes>(
     let blockers = disposition_blockers(&events_text, &head_branch, &head);
     // Python's disposition refusal, rebuilt from the blocker rows: a
     // truncated chain keeps its own sentence and names the remainder; open
-    // findings name their keys and teach the fix-delta remedy.
+    // findings name their keys and teach the fix-delta remedy, and a
+    // diagnosed blocker appends the clause that names the exact fix.
     let truncated = blockers.iter().any(|b| b.axis == "truncated-remainder");
     let disposition_named: Vec<String> = if truncated {
         vec![TRUNCATED_KEY.to_string()]
@@ -650,16 +688,7 @@ fn ordinary_verdict<P: Probes>(
         keys.sort();
         keys
     };
-    let disposition_text = if truncated {
-        TRUNCATED_SENTENCE.to_string()
-    } else if !disposition_named.is_empty() {
-        format!(
-            "blocking finding(s) not terminal: {}{BLOCKING_SENTENCE_TAIL}",
-            disposition_named.join(", ")
-        )
-    } else {
-        String::new()
-    };
+    let disposition_text = disposition_refusal_text(&blockers);
     // The standing operator waiver never clears a CONFIRMED correctness or
     // security finding, so the overlay's input carries the hard subset. A
     // truncated chain counts every key hard: the gate cannot re-derive what
@@ -1233,5 +1262,53 @@ mod findings_open_tests {
     fn the_findings_open_word_alone_keeps_a_row_uncovered() {
         let row = serde_json::json!({"coverage": "covered", "review_state": "findings_open"});
         assert_eq!(covered_conjuncts(&row, "", false), (false, "uncovered"));
+    }
+}
+
+#[cfg(test)]
+mod disposition_text_tests {
+    use super::*;
+    use crate::disposition_gate::Diagnosis;
+
+    #[test]
+    fn a_diagnosed_blocker_appends_its_clause_to_the_standing_remedy() {
+        let blockers = vec![DispositionBlocker {
+            finding_key: "f.py:1:correctness".to_string(),
+            axis: "open",
+            hard: true,
+            diagnosis: Some(Diagnosis::KeyMissingCategory {
+                posted: "f.py:1".to_string(),
+            }),
+        }];
+        let text = disposition_refusal_text(&blockers);
+        assert!(
+            text.starts_with(
+                "blocking finding(s) not terminal: f.py:1:correctness; a blocking \
+finding is cleared by fixing it and letting the next review cover the fix delta"
+            ),
+            "base sentence changed: {text}"
+        );
+        assert!(
+            text.ends_with(
+                "the disposition for f.py:1:correctness was posted as 'f.py:1', \
+missing the ':category' suffix; re-post it under the exact raised key"
+            ),
+            "diagnosis clause changed: {text}"
+        );
+    }
+
+    #[test]
+    fn the_plain_open_shape_is_byte_stable() {
+        let blockers = vec![DispositionBlocker {
+            finding_key: "F1".to_string(),
+            axis: "open",
+            hard: false,
+            diagnosis: None,
+        }];
+        assert_eq!(
+            disposition_refusal_text(&blockers),
+            "blocking finding(s) not terminal: F1; a blocking finding is cleared \
+by fixing it and letting the next review cover the fix delta"
+        );
     }
 }
