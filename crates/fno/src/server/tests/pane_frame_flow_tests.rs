@@ -27,7 +27,8 @@ fn counter_core(bytes: &[u8]) -> (Core, u64) {
 
 #[test]
 fn a_pane_dirty_again_after_its_write_does_not_starve_its_neighbour() {
-    for flooding in [1u64, 2, 3] {
+    // Each map draws a new hash seed, and one lucky seed hides hash order.
+    for flooding in [1u64, 2, 3].repeat(64) {
         let mut dirty: HashMap<u64, ()> = HashMap::from([(1, ()), (2, ()), (3, ())]);
         let mut last = None;
         let mut written = Vec::new();
