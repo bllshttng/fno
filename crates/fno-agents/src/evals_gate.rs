@@ -1061,7 +1061,7 @@ mod tests {
                             .current_dir(self.dir.path())
                             .output()
                             .expect("git runs in the test repo");
-                        if args.get(1) == Some(&"add") {
+                        if args.get(2) == Some(&"add") {
                             self.adds
                                 .borrow_mut()
                                 .push(args.get(4).map(|s| s.to_string()).unwrap_or_default());
