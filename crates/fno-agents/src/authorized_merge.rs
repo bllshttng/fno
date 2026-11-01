@@ -1474,8 +1474,8 @@ fn authority_refusal<P: Probes>(
     if !env_grant && !probes.auto_merge_enabled(cwd) {
         return Some((
             "auto_merge_disabled",
-            "auto_merge disabled (live config resolves auto_merge.enabled=false); sanctioned \
-             override (operator levers): `fno config set auto_merge.enabled true`, or start the \
+            "auto_merge disabled (live config resolves auto_merge.enabled=false, or autonomy.mode holds merge); sanctioned \
+             override (operator levers): `fno config set auto_merge.enabled true` plus an autonomy.mode that allows merge, or start the \
              run with TARGET_AUTO_MERGE=1 from the operator's shell"
                 .to_string(),
         ));

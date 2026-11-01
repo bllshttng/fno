@@ -1,6 +1,6 @@
 # Autonomy mode
 
-`autonomy.mode` is one choice over three action classes: unattended restarts, merges and law writes. The default is `balanced`, so a fresh install behaves as the fleet did before the key existed, with one addition: a session's law write records the user's words.
+`autonomy.mode` is one choice over three action classes: unattended restarts, merges and law writes. The default is `balanced`, and a fresh install behaves as the fleet did before the key existed. One thing is new: a session's law write records the user's words.
 
 ```toml
 [autonomy]
@@ -14,7 +14,7 @@ allow = ["restart"]
 
 | Mode | restart | merge | law |
 |---|---|---|---|
-| `ask`, class not in `allow` | hold and report | held | needs `--quote` |
+| `ask`, class not in `allow` | hold and report to the lead | held | needs `--quote` |
 | `ask`, class in `allow` | auto | `auto_merge` config decides | auto |
 | `balanced` | auto | `auto_merge` config decides | needs `--quote` |
 | `yolo` | auto | authorized unless config sets an explicit no | auto |

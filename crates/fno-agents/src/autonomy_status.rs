@@ -114,8 +114,13 @@ fn collect_status(root: Option<&Path>) -> Vec<SpawnerStatus> {
         gate_with_master(root, |s| block_enabled(s, "post_merge", true));
     let (pr_watch_armed, pr_watch_rank) =
         gate_with_master(root, |s| block_enabled(s, "pr_watch", false));
-    let (recovery_armed, recovery_rank) =
-        gate_with_master(root, |s| block_enabled(s, "recovery", true));
+    let (recovery_armed, recovery_rank) = gate_with_master(root, |s| {
+        block_enabled(s, "recovery", true)
+            && root
+                .map(Path::to_path_buf)
+                .or_else(|| std::env::current_dir().ok())
+                .is_none_or(|cwd| crate::autonomy_policy::restart_allowed(&cwd))
+    });
     let (keep_going_armed, keep_going_rank) = keep_going_resolve(root);
     let (groom_armed, groom_rank) = gate_with_master(root, |s| block_enabled(s, "groom", true));
     let (evals_armed, evals_rank) = gate_with_master(root, |s| block_enabled(s, "evals", true));
