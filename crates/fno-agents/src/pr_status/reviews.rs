@@ -1286,7 +1286,11 @@ mod shape_review_coverage_tests {
             // No verdict and no fail: the stored row fails closed, the one
             // place this leg stays silent where the report answers.
             let silent = row["verdicts"] == json!([]) && row["fail_at_head"] != true;
-            let expected = if silent { &Value::Null } else { &row["expected_state"] };
+            let expected = if silent {
+                &Value::Null
+            } else {
+                &row["expected_state"]
+            };
             assert_eq!(shaped["review_state"], *expected, "{}", row["name"]);
         }
     }

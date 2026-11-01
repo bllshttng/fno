@@ -1,7 +1,7 @@
 //! The coverage row's one-word answer: reviewed, refused, findings open, or
-//! unreviewed. A module named by its question: `loopcheck.rs` is far over the file budget
-//! and shrink-only, so the state deriver lives here with the tests that pin
-//! it.
+//! unreviewed. A module named by its question: `loopcheck.rs` is far over the
+//! file budget and shrink-only, so the state deriver lives here with the tests
+//! that pin it.
 //!
 //! The predicate that gives the answer its politics: a refusal names the
 //! state only when the verdict was OWED. An optional GitHub App is honored
