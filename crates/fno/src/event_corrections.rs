@@ -24,10 +24,10 @@ const PRECISION_SOURCES: [&str; 5] = [
 
 const HELP: &str = "Usage: fno doctor event corrections [OPTIONS]
 
-  Correction rates per model or harness: user, agent and machine apart.
+  Correction rates per model, harness or day: user, agent and machine apart.
 
 Options:
-  --by <model|harness>        Group the rows. [default: model]
+  --by <model|harness|day>    Group the rows. [default: model]
   --since <7d|ISO-8601>       Lower timestamp bound. [default: 7d]
   --source <user|agent|machine>  Print one source.
   --include-interrupt         Count interrupts, which reports exclude by default.
@@ -81,8 +81,11 @@ fn parse(args: &[OsString]) -> Result<Option<Args>, String> {
             other => return Err(format!("unknown flag {other}")),
         }
     }
-    if !matches!(out.by.as_str(), "model" | "harness") {
-        return Err(format!("--by must be model or harness, not {}", out.by));
+    if !matches!(out.by.as_str(), "model" | "harness" | "day") {
+        return Err(format!(
+            "--by must be model, harness or day, not {}",
+            out.by
+        ));
     }
     if let Some(source) = out.source.as_deref().filter(|s| !SOURCES.contains(s)) {
         return Err(format!(
@@ -160,7 +163,11 @@ fn typed_turns(cache: &Path, by: &str, since_day: &str) -> BTreeMap<String, u64>
         if day < since_day {
             continue;
         }
-        let group = if by == "harness" { harness } else { model };
+        let group = match by {
+            "harness" => harness,
+            "day" => day,
+            _ => model,
+        };
         *out.entry(group.to_string()).or_default() += n.as_u64().unwrap_or(0);
     }
     out
@@ -193,7 +200,15 @@ fn report(args: &Args, journal: &Path, cache: &Path) -> Result<Value, String> {
         let entry = blocks
             .entry(source.to_string())
             .or_default()
-            .entry(group_of(data, &args.by))
+            .entry(if args.by == "day" {
+                envelope["ts"]
+                    .as_str()
+                    .and_then(|t| t.get(..10))
+                    .unwrap_or("unmeasured")
+                    .to_string()
+            } else {
+                group_of(data, &args.by)
+            })
             .or_default();
         match data.get("kind").and_then(Value::as_str) {
             Some("correct") => entry.correct += 1,
@@ -207,6 +222,14 @@ fn report(args: &Args, journal: &Path, cache: &Path) -> Result<Value, String> {
         .map(|d| d.format("%Y-%m-%d").to_string())
         .unwrap_or_default();
     let turns = typed_turns(cache, &args.by, &since_day);
+    // A day with typed turns and no correction is a rate of zero, not a gap.
+    let by_day = args.by == "day";
+    if by_day {
+        let user = blocks.entry("user".to_string()).or_default();
+        for day in turns.keys() {
+            user.entry(day.clone()).or_default();
+        }
+    }
     let mut out = serde_json::Map::new();
     for source in SOURCES {
         if args.source.as_deref().is_some_and(|s| s != source) {
@@ -216,7 +239,7 @@ fn report(args: &Args, journal: &Path, cache: &Path) -> Result<Value, String> {
         if let Some(block) = blocks.get(source) {
             for (group, t) in block {
                 let count = t.total(args.include_interrupt);
-                if count == 0 {
+                if count == 0 && !(by_day && source == "user") {
                     continue;
                 }
                 let mut row = json!({
@@ -397,6 +420,31 @@ mod tests {
             "data": {"correction_id": id, "corrected_by": by, "kind": kind,
                 "session_id": "s", "rule_version": "v1", "harness": "claude", "model": model}});
         crate::event_store::append_envelope(journal, &envelope.to_string(), Some(id)).unwrap();
+    }
+
+    #[test]
+    fn by_day_groups_rows_and_turns_under_the_row_date() {
+        let dir = tempfile::tempdir().unwrap();
+        let journal = dir.path().join("events.jsonl");
+        let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        append(&journal, "a", "user", "correct", json!({}));
+        append(&journal, "b", "user", "reject", json!({}));
+        let cache = dir.path().join("cursors.json");
+        let key = format!("{today}|claude|m");
+        std::fs::write(
+            &cache,
+            json!({"typed_turns": {key: 8, "2999-01-01|claude|m": 4}}).to_string(),
+        )
+        .unwrap();
+        let args = parse(&["--by".into(), "day".into()]).unwrap().unwrap();
+        let value = report(&args, &journal, &cache).unwrap();
+        let row = &value["blocks"]["user"][0];
+        assert_eq!(row["group"], today.as_str());
+        assert_eq!(row["count"], 2);
+        assert_eq!(row["rate"], 0.25);
+        let quiet = &value["blocks"]["user"][1];
+        assert_eq!(quiet["group"], "2999-01-01");
+        assert_eq!(quiet["rate"], 0.0);
     }
 
     #[test]

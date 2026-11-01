@@ -236,6 +236,11 @@ fn run_command(rest: &[String]) -> i32 {
         eprintln!("Error: --variant v<N> and --ref REF must be used together");
         return 1;
     }
+    let overlay_ref = flag_lookup(rest, "--overlay-fixtures");
+    if overlay_ref.is_some() && ref_arg.is_none() {
+        eprintln!("Error: --overlay-fixtures needs --variant v<N> --ref REF");
+        return 1;
+    }
     let lane_coord = match flag_lookup(rest, "--lane") {
         Some(name) => match crate::evals::runner::resolve_lane(&name) {
             Ok(row) => Some(row),
@@ -347,6 +352,7 @@ fn run_command(rest: &[String]) -> i32 {
                 ref_arg.as_deref().unwrap_or(&task.repo_fixture),
                 lane_coord.as_ref(),
                 cohort.as_deref(),
+                overlay_ref.as_deref(),
             );
             let passes = results.iter().filter(|r| r.passed).count();
             let passk = if passes == repeat as usize {

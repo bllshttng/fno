@@ -43,7 +43,7 @@ Success criteria must be **mechanical** (develop-tests discipline): a task with 
 
 | Command | What it does |
 |---|---|
-| `fno doctor evals run [--task ID[,ID]] [--tier T] [--tag TAG] [--repeat K] [--workers N] [--provider P] [--variant NAME] [--ref REF] [--lane NAME] [--cohort ID]` | Run bank tasks in disposable worktrees, grade mechanically, append one history line per task-run. Confirms above 20 total runs (`--yes` skips). `--variant v1 --ref REF` scores a change (see Variants). `--lane NAME --cohort ID` qualifies a model lane (see Lanes). `--workers N` runs N tasks at once. |
+| `fno doctor evals run [--task ID[,ID]] [--tier T] [--tag TAG] [--repeat K] [--workers N] [--provider P] [--variant NAME] [--ref REF] [--lane NAME] [--cohort ID] [--overlay-fixtures REF]` | Run bank tasks in disposable worktrees, grade mechanically, append one history line per task-run. Confirms above 20 total runs (`--yes` skips). `--variant v1 --ref REF` scores a change (see Variants). `--lane NAME --cohort ID` qualifies a model lane (see Lanes). `--workers N` runs N tasks at once. |
 | `fno doctor evals report [--since N] [--graduate] [--json]` | Fold history: per-tier pass rates, pass@1, pass^k, flake list, regression alarm (exit 4 on alarm). `--graduate` lists eligible capability tasks. |
 | `fno doctor evals report --compare A --to B [--repeats N] [--json]` | Compare two runs, task by task. See Variants. |
 | `fno doctor evals report --by-failure-type [--repeats N] [--json]` | Rank the named failure types by cost, then by failing goldens. See Failure types. |
@@ -80,6 +80,16 @@ A variant is a **git ref of this repository**. Every prompt, skill, and project 
 - **The default report is baseline-only.** A failing `v1` never drags the baseline pass rate down. It never fires the regression alarm in doctor and triage health. Rows written before the variant axis carry no `variant` key and read as baseline.
 - **Compare.** `fno doctor evals report --compare baseline --to v1` compares two sides. A side names a cohort, else a variant. A name that no row carries refuses with exit 2. Each task gets one status per side from its newest `--repeats` grades (default 3). The statuses are `always_pass`, `always_fail` and `flaky`. With fewer grades than repeats, a task reads `error`. Only a scored grade counts, so a plumbing row is never a pass. The report prints Fixed, Regressions (always pass to always fail), Now flaky (always pass to flaky), Still failing, and Errors. Counts and the pass rate come last, because a rate hides which behaviour moved. It exits 1 on a regression, or on an error for a task that had grades on side A. A move to flaky exits 0 and is listed. `--json` emits the same fold. Each side's line names the revs it read, so `git diff` of those revs shows the change.
 - **Flake sort.** Each attempt records `tree_hash`, the git tree of what the worker left. The runner reads it before grading, on a temporary index. Compare marks a flaky status with its noise. `grader_noise` means one tree got both grades, so read the grader. `agent_noise` means the trees differ, so the agent did different work. `unknown` means a row has no hash and no tree shows both grades. Two different trees that are both right still read `agent_noise`. That blocks nothing. Ignored files are not in the hash.
+
+## Backdated cohorts
+
+A past session never answered a golden prompt, so it cannot grade one. Two honest reads cover the past instead.
+
+`fno doctor event corrections --by day --since 28d` prints correction rates per day from real transcripts. It costs no model call. A day with typed turns and no correction reads a rate of 0.
+
+`fno doctor evals run --tag golden --variant v1 --ref <sha> --overlay-fixtures <newer ref> --lane <lane> --cohort gate-backdate-<date>-<sha8> --repeat 1` runs today's goldens on an older tree. An older tree has no golden fixtures, so the flag commits `evals/fixtures/golden` from the newer ref on top of the checkout. Pass `--bank` to read today's tasks. The bank itself stays out of the tree. Each golden states its expected answer, and a worker told to read the repo can read it. Each row records `overlay_rev`.
+
+The cohort names a tree, never a past result. The model is today's, so the cohort says what today's model does with that day's repo. Plugin hooks and any harness-level skill also stay today's. Only the files the worker reads from its checkout go back in time, and project settings tracked in that tree. The `gate-` prefix counts the run against `evals.gate.daily_usd`.
 
 ## Goldens
 
