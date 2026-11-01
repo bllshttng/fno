@@ -1557,7 +1557,6 @@ mod tests {
         std::fs::create_dir_all(repo.join("skills/blueprint")).unwrap();
         std::fs::create_dir_all(repo.join("skills/review")).unwrap();
         std::fs::write(repo.join("skills/blueprint/SKILL.md"), "b\n").unwrap();
-        std::fs::write(repo.join("skills/review/SKILL.md"), "r\n").unwrap();
         let run = |args: &[&str]| {
             std::process::Command::new("git")
                 .args(args)
@@ -1568,8 +1567,14 @@ mod tests {
         run(&["init", "-q"]);
         run(&["config", "user.email", "t@t"]);
         run(&["config", "user.name", "t"]);
-        run(&["add", "."]);
-        run(&["commit", "-q", "-m", "seed"]);
+        run(&["add", "skills/blueprint"]);
+        run(&["commit", "-q", "-m", "blueprint"]);
+        // The second skill lands in its own commit: one seed commit would
+        // hand both skills the same latest hash, and the no-leak assertion
+        // below could not tell a per-skill answer from a shared one.
+        std::fs::write(repo.join("skills/review/SKILL.md"), "r\n").unwrap();
+        run(&["add", "skills/review"]);
+        run(&["commit", "-q", "-m", "review"]);
 
         let bp_uncached = default_skill_version("fno:blueprint", None, &repo);
         let bp_cached = cached_skill_version("fno:blueprint", None, &repo);
