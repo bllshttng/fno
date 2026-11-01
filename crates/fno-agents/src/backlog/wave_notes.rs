@@ -169,7 +169,10 @@ fn dispose(rows: &mut [Value], host: &str, ts: &str, taken: &Taken) -> Result<()
         .and_then(Value::as_array_mut)
         .into_iter()
         .flatten()
-        .find(|note| text(note, "kind") == "wave" && text(note, "ts") == ts)
+        .filter(|note| text(note, "kind") == "wave" && text(note, "ts") == ts)
+        // Older notes stamp whole seconds, so two can share a ts. An undisposed
+        // one goes first, or the second could never be reached.
+        .min_by_key(|note| note.get("disposition").is_some_and(|d| !d.is_null()))
         .ok_or_else(|| format!("{host} holds no wave note with ts '{ts}'"))?;
     note.as_object_mut()
         .ok_or_else(|| format!("{host} holds a malformed wave note at '{ts}'"))?
