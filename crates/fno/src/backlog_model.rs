@@ -1788,7 +1788,7 @@ fn session_reach(
         SessionAction::Dim(why) => ("none", Some(why.clone())),
     };
     let command = match &act {
-        SessionAction::Attach => joined.map(|a| format!("fno agents attach {}", a.name)),
+        SessionAction::Attach => joined.map(|a| format!("fno agents session attach {}", a.name)),
         SessionAction::Resume => sid.map(|sid| session_command("resume", sid, cwd)),
         SessionAction::Dim(_) if joined.is_none() => {
             sid.map(|sid| session_command("adopt", sid, None))
@@ -1851,7 +1851,12 @@ pub(crate) enum OpenSession {
 /// pinned to `cwd` when the caller knows one. The ONE
 /// spelling both [`SessionView`] and [`open_session`] print.
 fn session_command(command: &str, sid: &str, cwd: Option<&str>) -> String {
-    let mut cmd = format!("fno agents {command} {sid}");
+    let group = if command == "adopt" {
+        "registry"
+    } else {
+        "session"
+    };
+    let mut cmd = format!("fno agents {group} {command} {sid}");
     if let Some(cwd) = cwd.filter(|c| !c.is_empty()) {
         cmd.push_str(&format!(" --cwd {}", sh_quote(cwd)));
     }
