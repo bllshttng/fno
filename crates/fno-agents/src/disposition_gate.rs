@@ -43,7 +43,7 @@ fn gate_finding_blocks(primitive: &Value) -> bool {
 
 /// Why the gate still refuses a finding whose disposition row EXISTS: the
 /// post itself is the defect, and the refusal names the fix so one retry is
-/// enough (PR 4260 burned verify-fixes retries on each of these).
+/// enough.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Diagnosis {
     /// The disposition was posted under a key missing the raised key's
