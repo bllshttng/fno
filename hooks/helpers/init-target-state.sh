@@ -1187,6 +1187,45 @@ if [[ ! -f "$STATE_FILE" ]]; then
     echo "[init-target-state] no live row holds the candidate id and no harness session was proven (disposition='ambiguous'): this session cannot see itself, so no identity was attributed" >&2
   fi
 
+  # ── Manifest injection guard ─────────────────────────────────────
+  # The heredoc below is unquoted: every interpolated value lands on its
+  # own YAML line, and most arrive through the inherited environment. A
+  # CR or LF inside one forges an extra manifest key (authority: full is
+  # exactly the grant the beastmode scrub gates), so structural scalars
+  # refuse at the writer and free-text fields flatten. No legit value in
+  # either set contains a line break.
+  _refuse_linebreak() {
+    case "$2" in
+      *$'\n'* | *$'\r'*)
+        echo "init-target-state: refusing $1: a line break would forge a manifest key." >&2
+        return 1
+        ;;
+    esac
+  }
+  _flatten_breaks() {
+    local v="$1"
+    v="${v//$'\r'/ }"
+    printf '%s' "${v//$'\n'/ }"
+  }
+  INITIAL_INPUT="$(_flatten_breaks "${INITIAL_INPUT:-}")"
+  INITIAL_PLAN_PATH="$(_flatten_breaks "${INITIAL_PLAN_PATH:-}")"
+  TARGET_MISSION_ID="$(_flatten_breaks "${TARGET_MISSION_ID:-}")"
+  TARGET_MISSION_SLUG="$(_flatten_breaks "${TARGET_MISSION_SLUG:-}")"
+  TARGET_MISSION_FROM_MSG_ID="$(_flatten_breaks "${TARGET_MISSION_FROM_MSG_ID:-}")"
+  case "${TARGET_MISSION_WAVE:-}" in
+    "") ;;
+    *[!0-9]* | 0 | 0[0-9]*)
+      echo "init-target-state: refusing TARGET_MISSION_WAVE='${TARGET_MISSION_WAVE}': expected a positive integer." >&2
+      exit 1
+      ;;
+  esac
+  _refuse_linebreak _HARNESS_SESSION "$_HARNESS_SESSION" || exit 1
+  _refuse_linebreak harness_model "$_HARNESS_MODEL" || exit 1
+  _refuse_linebreak harness_effort "$_HARNESS_EFFORT" || exit 1
+  _refuse_linebreak TARGET_SIZE "${TARGET_SIZE:-}" || exit 1
+  _refuse_linebreak TARGET_DISPATCH_MODEL "${TARGET_DISPATCH_MODEL:-}" || exit 1
+  _refuse_linebreak TARGET_DISPATCH_PROVIDER "${TARGET_DISPATCH_PROVIDER:-}" || exit 1
+
   # ── Mission context ───────────────────────────────────────────────
   _fmt_mission_str() {
     local v="$1"

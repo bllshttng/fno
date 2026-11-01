@@ -559,21 +559,21 @@ fn run_helper(
     if let Some(plan) = &args.plan_path {
         cmd.env("TARGET_PLAN_PATH", plan);
     }
-    if let Some(size) = size {
-        cmd.env("TARGET_SIZE", size);
-    }
-    if let Some(model) = &args.model {
-        if !model.is_empty() {
-            cmd.env("TARGET_DISPATCH_MODEL", model);
-        }
-    }
+    // Sole authority, like the scrub rows below: an inherited value must
+    // never reach the helper when the flag did not set it. The hook's
+    // manifest writer validates these against line injection; scrubbing at
+    // the decision layer keeps the same contract one hop earlier.
+    cmd.env("TARGET_SIZE", size.unwrap_or_default());
+    cmd.env(
+        "TARGET_DISPATCH_MODEL",
+        args.model.as_deref().unwrap_or_default(),
+    );
     // The env var and the manifest field keep their spelling: both are read
     // by other processes and are a later wave's to move.
-    if let Some(harness) = &args.harness {
-        if !harness.is_empty() {
-            cmd.env("TARGET_DISPATCH_PROVIDER", harness);
-        }
-    }
+    cmd.env(
+        "TARGET_DISPATCH_PROVIDER",
+        args.harness.as_deref().unwrap_or_default(),
+    );
     // Sole authority: an inherited TARGET_DELIVERABLES must never stamp a
     // false denominator or smuggle a manifest line through the heredoc.
     cmd.env("TARGET_DELIVERABLES", deliverables_env(deliverables));
