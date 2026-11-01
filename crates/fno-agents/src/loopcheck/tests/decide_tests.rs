@@ -705,18 +705,24 @@ fn watch_idle_window_defaults_clamps_and_slacks() {
     );
     // Honored within range.
     assert_eq!(
+        watch_window_ms(Some("10m")),
+        10 * 60_000 + watch_lease::WATCH_SLACK_MS
+    );
+    // Above the 15m ceiling clamps down: the ci-push-cadence law wakes a
+    // parked session every 15 minutes, so a 30m tag reads as 15m.
+    assert_eq!(
         watch_window_ms(Some("30m")),
-        30 * 60_000 + watch_lease::WATCH_SLACK_MS
+        15 * 60_000 + watch_lease::WATCH_SLACK_MS
     );
     // Below the 5m floor clamps up.
     assert_eq!(
         watch_window_ms(Some("1m")),
         5 * 60_000 + watch_lease::WATCH_SLACK_MS
     );
-    // Above the 2h ceiling clamps down.
+    // The same ceiling holds for hours-long tags.
     assert_eq!(
         watch_window_ms(Some("5h")),
-        2 * 3_600_000 + watch_lease::WATCH_SLACK_MS
+        15 * 60_000 + watch_lease::WATCH_SLACK_MS
     );
     // Garbage falls back to the default.
     assert_eq!(
@@ -724,7 +730,7 @@ fn watch_idle_window_defaults_clamps_and_slacks() {
         15 * 60_000 + watch_lease::WATCH_SLACK_MS
     );
     // The event deadline uses the normalized watch duration, not claim slack.
-    assert_eq!(watch_lease::watch_expiry_ms(Some("30m"), 1_000), 1_801_000);
+    assert_eq!(watch_lease::watch_expiry_ms(Some("30m"), 1_000), 901_000);
     assert_eq!(watch_lease::watch_expiry_ms(Some("1m"), 1_000), 301_000);
 }
 

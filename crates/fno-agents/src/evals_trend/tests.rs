@@ -138,14 +138,6 @@ fn trend_regressed_ac1_err() {
     assert_eq!(view["regression_alarm"], json!(["r"]));
 }
 
-#[test]
-fn compare_flag_refuses_bad_variant() {
-    let tmp = TempDir::new().unwrap();
-    let h = write_history(&tmp, &[]);
-    let out = run_evals_trend(&["--history".into(), h, "--compare".into(), "vX".into()]);
-    assert_eq!(out, 1);
-}
-
 // The documented bare --graduate form and --graduate followed by another
 // flag both work again (the round-1 finding; the old CLI's shapes).
 #[test]
@@ -232,6 +224,26 @@ fn report_infra_attempt_never_dilutes_the_pass_rate() {
     assert_eq!(t["attempts"]["infrastructure"], 1);
     assert_eq!(t["legacy_fold"], false);
     assert!(report["regression_alarm"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn plumbing_only_window_fires_no_alarm_and_no_regressed_verdict() {
+    let now = now_pinned();
+    let tmp = TempDir::new().unwrap();
+    let h = write_history(
+        &tmp,
+        &[
+            modern_row_json("t", "regression", true, &ts_rfc(10.0, now), 0),
+            infra_row_json("t", "regression", &ts_rfc(1.0, now)),
+        ],
+    );
+    let rows = read_rows(&h, Some("baseline"), None);
+    let report = report_fold(&rows, 7, now, None, None);
+    assert!(report["regression_alarm"].as_array().unwrap().is_empty());
+    assert_eq!(report["tiers"]["regression"]["plumbing"], 1);
+    assert_eq!(report["tiers"]["regression"]["grade_den"], 1);
+    let (_, regressed) = trend_fold(&rows, 7, now);
+    assert!(regressed.is_empty(), "an outage is not a regression");
 }
 
 #[test]

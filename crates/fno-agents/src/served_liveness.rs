@@ -27,24 +27,24 @@ pub(crate) fn fresh(measured_at_secs: Option<u64>, now_secs: u64) -> bool {
         .is_some_and(|age| age <= SERVED_LIVENESS_MAX_AGE_SECS)
 }
 
-/// The stored liveness word, served only while its stamp is fresh. An
-/// absent/stale measurement answers `None` and the reader falls back to
-/// the status ladder exactly as before.
+/// The stored liveness word, served only while its stamp is fresh. Fresh
+/// and measured serves the stored word; every other case reads `unknown` -
+/// a probe that did not answer NOW is neither alive nor dead, and a null
+/// made any alive filter count a full fleet as zero.
 pub(crate) fn served_liveness_word<'a>(
     word: Option<&'a str>,
     measured_at_secs: Option<u64>,
     now_secs: u64,
-) -> Option<&'a str> {
-    if fresh(measured_at_secs, now_secs) {
-        word
-    } else {
-        None
+) -> &'a str {
+    match (fresh(measured_at_secs, now_secs), word) {
+        (true, Some(w)) => w,
+        _ => "unknown",
     }
 }
 
 /// Why the row's served `liveness` reads the way it does: `fresh` inside
 /// the window, `stale` once a word and stamp exist but the window has
-/// passed (the word is withheld), `never-measured` with no word or no
+/// passed (the word reads `unknown`), `never-measured` with no word or no
 /// stamp. A served field carries its basis; a null with no reason beside
 /// it answers nothing.
 pub(crate) fn served_liveness_basis(
@@ -90,6 +90,21 @@ mod tests {
                 served_liveness_basis(word, measured, NOW),
                 fno::served_liveness::served_liveness_basis(word, measured, NOW),
                 "basis disagrees at {measured:?}"
+            );
+        }
+        // No measured input, however broken, reads null or
+        // the stale verdict - both mirrors answer `unknown`.
+        for (word, measured) in [
+            (Some("alive"), Some(NOW - 121)),
+            (Some("dead"), Some(NOW - 121)),
+            (Some("alive"), None),
+            (None, Some(NOW - 10)),
+            (None, None),
+        ] {
+            assert_eq!(
+                served_liveness_word(word, measured, NOW),
+                "unknown",
+                "word={word:?} measured={measured:?}"
             );
         }
     }

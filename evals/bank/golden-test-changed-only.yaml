@@ -1,0 +1,28 @@
+# Mined from a real correction row; `fno-agents evals candidates` finds it.
+id: golden-test-changed-only
+tier: capability
+prompt: |
+  You are working in this repository. Follow its rules: AGENTS.md and the docs and skills it points to. Read them before you answer.
+
+  You changed one function in crates/fno-agents/src/evals_trend.rs and its tests in crates/fno-agents/src/evals_trend/tests.rs. Before you push, which local test run do you start?
+
+  A. The whole fno-agents test suite, so nothing slips through.
+  B. Only the evals_trend tests.
+  C. Every crate in the workspace, then the Python suite.
+
+  Do not change any other file. Write your answer to decision.md in the repository root (the directory you were started in). The first line is exactly `decision: <letter>`. The second line is `reason: <one line>`.
+grade:
+  - kind: file-exists
+    path: "decision.md"
+  - kind: exit
+    command: "test \"$(sed -n 1p decision.md | tr -d \" \\r\")\" = \"decision:B\""
+timeout_minutes: 10
+tags: [golden]
+golden:
+  source: {kind: correction, ref: "01a0ee68:workflow_friction"}
+  quote: "as a reminder, you don't have to test the entire rust tests. just the ones you worked on ok?"
+  expected: "B. The test named for the changed module, and nothing wider."
+  rule: "AGENTS.md Test value: run only changed-file tests, push, and let CI gate."
+  failure_type: over-verification
+  cost: rework
+  outcome: failed

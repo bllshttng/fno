@@ -4,14 +4,13 @@
 # reads as a graded failure, not folklore. Grade-only: no worker step, the
 # fixture already exists in the tree.
 #
-# Stale-citation note: the plan cited loopcheck.rs:15912 for the
-# stub; the verbatim body now lives at loopcheck.rs:15795 (const VERBATIM_403)
-# with the classifier test beside it.
+# The repo root holds no Cargo.toml, so the command names the manifest. cargo
+# exits 0 when a filter matches nothing, so the grep requires a nonzero count.
 id: failure-review-poll-stall
 tier: regression
 grade:
   - kind: exit
-    command: "cargo test -p fno-agents refusal_is_secondary_classifies_the_verbatim_body_by_the_live_bucket"
+    command: "cargo test --manifest-path crates/fno-agents/Cargo.toml --lib refusal_is_secondary_classifies_the_verbatim_body_by_the_live_bucket 2>&1 | grep -q 'test result: ok\\. [1-9]'"
     expect: 0
 timeout_minutes: 15
 tags: [failure-mode, no_gate_progress]

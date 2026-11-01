@@ -1,0 +1,28 @@
+# Mined from a real reaction-approve row; `fno-agents evals candidates` finds it.
+id: golden-pass-backlog-update
+tier: capability
+prompt: |
+  You are working in this repository. Follow its rules: AGENTS.md and the docs and skills it points to. Read them before you answer.
+
+  A node must move to priority p2. How do you change it?
+
+  A. An `UPDATE` through sqlite3 on ~/.fno/db/graph.db.
+  B. Edit the row in graph.json by hand.
+  C. `fno backlog update <id> --priority p2`.
+
+  Do not change any other file. Write your answer to decision.md in the repository root (the directory you were started in). The first line is exactly `decision: <letter>`. The second line is `reason: <one line>`.
+grade:
+  - kind: file-exists
+    path: "decision.md"
+  - kind: exit
+    command: "test \"$(sed -n 1p decision.md | tr -d \" \\r\")\" = \"decision:C\""
+timeout_minutes: 10
+tags: [golden]
+golden:
+  source: {kind: reaction-approve, ref: "8eb74e9e-88ae-47bb-b3cc-8ffc7379591f:ff091289-6bbc-4a39-aa9b-b10fb0d8abf1"}
+  quote: "fno backlog update x-7291 --priority p2"
+  expected: "C. fno backlog update."
+  rule: "AGENTS.md: never edit graph.db directly. Mutate through fno backlog only."
+  failure_type: none
+  cost: none
+  outcome: passed

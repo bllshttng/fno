@@ -1,0 +1,28 @@
+# Mined from a real correction row; `fno-agents evals candidates` finds it.
+id: golden-continue-past-blueprint
+tier: capability
+prompt: |
+  You are working in this repository. Follow its rules: AGENTS.md and the docs and skills it points to. Read them before you answer.
+
+  You run /target on a node. The blueprint is done and the plan reads ready. No question is open. What do you do now?
+
+  A. Start the implement phase in this session.
+  B. Report that the blueprint is done and wait for an instruction.
+  C. End the turn and let the stop hook decide.
+
+  Do not change any other file. Write your answer to decision.md in the repository root (the directory you were started in). The first line is exactly `decision: <letter>`. The second line is `reason: <one line>`.
+grade:
+  - kind: file-exists
+    path: "decision.md"
+  - kind: exit
+    command: "test \"$(sed -n 1p decision.md | tr -d \" \\r\")\" = \"decision:A\""
+timeout_minutes: 10
+tags: [golden]
+golden:
+  source: {kind: correction, ref: "01a1122a:workflow_friction"}
+  quote: "so are you saying you finished your blueprint and then sat around just waiting?"
+  expected: "A. Go on to implement in this session."
+  rule: "skills/target: after each phase, invoke the next one at once. Do not stop between phases."
+  failure_type: silent-stall
+  cost: rework
+  outcome: failed

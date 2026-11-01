@@ -195,6 +195,90 @@ fn fires_past_window_journals_run_and_frees_claim() {
     );
 }
 
+// A graded failure files one node; plumbing files none; an open node holds
+// the next run's filing. The fake `fno` logs each filing.
+#[test]
+fn graded_failure_files_one_node_and_an_open_node_holds_the_next() {
+    let tmp = TempDir::new().unwrap();
+    let log = tmp.path().join("idea.log");
+    let script = format!(
+        "#!/bin/sh\ncase \"$1/$2\" in\n  backlog/idea)\n    echo \"$*\" >> '{}'\n    ;;\nesac\n",
+        log.to_string_lossy()
+    );
+    crate::write_exec_stub(tmp.path(), "fno-bin.sh", &script);
+    let graph = tmp.path().join("graph.json");
+    crate::graph_store::seed_rows(&graph, &[]).unwrap();
+    let args = base_args(
+        &tmp,
+        &[
+            "--run",
+            "--started",
+            &Utc::now().to_rfc3339(),
+            "--graph",
+            &graph.to_string_lossy(),
+        ],
+    );
+    let o = parse_args(&args).unwrap();
+    let grade = |task: &str, ran: bool| {
+        serde_json::json!({
+            "task_id": task, "pass": false, "reason": "exit 1",
+            "obs": {
+                "fixture_prepared": ran, "worker_required": false,
+                "grader_ran": ran, "grader_passed": false,
+            },
+        })
+    };
+    let rows = vec![grade("real-fail", true), grade("plumbing-fail", false)];
+
+    let (filed, refused) = file_regression_nodes(&o, &rows);
+    assert_eq!(filed, vec!["real-fail".to_string()], "refused: {refused:?}");
+    let logged = std::fs::read_to_string(&log).unwrap();
+    assert_eq!(logged.lines().count(), 1);
+    assert!(logged.contains("--origin-evidence evals-regression:real-fail"));
+
+    let open = serde_json::json!({
+        "id": "x-open", "title": "t", "type": "bug", "status": "idea", "priority": "p2",
+        "origin_evidence": "evals-regression:real-fail",
+    });
+    crate::graph_store::seed_rows(&graph, &[open]).unwrap();
+    let (filed, _) = file_regression_nodes(&o, &rows);
+    assert!(filed.is_empty(), "an open node holds the filing");
+}
+
+// A `cargo test` grader must name its manifest (the repo root has none, so a
+// bare one exits 101 in seconds) and must require a nonzero count (a filter
+// that matches nothing exits 0).
+#[test]
+fn bank_cargo_graders_name_a_manifest_and_require_tests_ran() {
+    let bank = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../evals/bank");
+    let mut seen = 0;
+    for entry in std::fs::read_dir(bank).unwrap() {
+        let path = entry.unwrap().path();
+        let text = std::fs::read_to_string(&path).unwrap();
+        for line in text
+            .lines()
+            .filter(|l| l.contains("command:") && l.contains("cargo test"))
+        {
+            seen += 1;
+            assert!(
+                line.contains("--manifest-path"),
+                "{}: {line}",
+                path.display()
+            );
+            // A named `--test` or `--example` target is its own proof of
+            // existence; a `--lib` name filter is not.
+            if line.contains("--lib") {
+                assert!(
+                    line.contains("test result: ok"),
+                    "{}: {line}",
+                    path.display()
+                );
+            }
+        }
+    }
+    assert!(seen >= 2, "the sweep read the bank");
+}
+
 // No checkout carries a bank: the tick names `no_bank` and launches
 // nothing, and an escalation-grade bank journals that reason.
 #[test]

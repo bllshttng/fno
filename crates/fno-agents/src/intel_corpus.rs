@@ -301,6 +301,11 @@ fn sentences(text: &str) -> Vec<String> {
     out
 }
 
+/// The corpus scrub for one quote read outside an export.
+pub(crate) fn scrub_quote(s: &str) -> String {
+    crate::correction_detect::scrub_string(s, &mut ScrubCounts::default())
+}
+
 /// The Kev question each row kind asks, without its label.
 fn question(kind: &str) -> Value {
     match kind {

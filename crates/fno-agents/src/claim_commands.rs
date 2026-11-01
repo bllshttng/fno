@@ -1168,8 +1168,9 @@ fn load_session_registry_index(index: &std::cell::RefCell<Option<SessionRegistry
 
 /// Registry evidence that `session` is alive, or None. The row's own pid
 /// proof wins; a pid-less thread row answers from the served `liveness`
-/// word, fresh only. A dead or stale word answers None, never Absent: the
-/// cached word can predate a resume, and Absent reaps a same-machine claim.
+/// word, fresh only. A dead, stale or unknown word answers None, never
+/// Absent: the cached word can predate a resume, and Absent reaps a
+/// same-machine claim.
 fn registry_session_live(registry: &SessionRegistryIndex, session: &str) -> Option<&'static str> {
     if registry
         .by_session
@@ -1187,9 +1188,7 @@ fn registry_session_live(registry: &SessionRegistryIndex, session: &str) -> Opti
     registry
         .served
         .get(session)
-        .and_then(|(word, at)| {
-            crate::row_truth::served_fresh_liveness(word.as_deref(), at.as_deref())
-        })
+        .map(|(word, at)| crate::row_truth::served_fresh_liveness(word.as_deref(), at.as_deref()))
         .filter(|word| *word == "alive")
         .map(|_| REGISTRY_SERVED_LIVE)
 }
