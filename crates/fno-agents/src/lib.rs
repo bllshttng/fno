@@ -202,6 +202,7 @@ pub mod evals_candidates;
 pub mod evals_climb;
 pub mod evals_compare;
 pub mod evals_drafts;
+pub mod evals_gate;
 pub mod evals_macro;
 pub mod evals_qualification;
 pub mod evals_trend;

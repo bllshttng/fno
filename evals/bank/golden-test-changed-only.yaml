@@ -17,7 +17,7 @@ grade:
   - kind: exit
     command: "test \"$(sed -n 1p decision.md | tr -d \" \\r\")\" = \"decision:B\""
 timeout_minutes: 10
-tags: [golden]
+tags: [golden, gate]
 golden:
   source: {kind: correction, ref: "01a0ee68:workflow_friction"}
   quote: "as a reminder, you don't have to test the entire rust tests. just the ones you worked on ok?"

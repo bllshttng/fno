@@ -19,7 +19,7 @@ pub mod runner;
 pub fn run(args: &[String]) -> i32 {
     let Some(sub) = args.first() else {
         eprintln!(
-            "usage: fno-agents evals <command> [options] (run | trend | report | macro | export | qualify | graduate | grade | candidates | drafts)"
+            "usage: fno-agents evals <command> [options] (run | trend | report | macro | export | qualify | graduate | grade | candidates | drafts | gate-retry)"
         );
         return 2;
     };
@@ -35,11 +35,12 @@ pub fn run(args: &[String]) -> i32 {
         "qualify" => qualify_command(rest),
         "candidates" => crate::evals_candidates::run(rest),
         "drafts" => crate::evals_drafts::run(rest),
+        "gate-retry" => crate::evals_gate::retry(rest),
         // The remainder lands with the port's later commits; the skeleton
         // answers every spelling so the dispatch shape compiles first.
         _ => {
             eprintln!(
-                "usage: fno-agents evals <command> [options] (run | trend | report | macro | export | qualify | graduate | grade | candidates | drafts)"
+                "usage: fno-agents evals <command> [options] (run | trend | report | macro | export | qualify | graduate | grade | candidates | drafts | gate-retry)"
             );
             return 2;
         }
@@ -262,10 +263,26 @@ fn run_command(rest: &[String]) -> i32 {
     };
     let task_filter = flag_lookup(rest, "--task");
     let tier_filter = flag_lookup(rest, "--tier");
+    let tag_filter = flag_lookup(rest, "--tag");
+    let workers: usize = flag_lookup(rest, "--workers")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1)
+        .max(1);
     let selected: Vec<_> = tasks
         .iter()
-        .filter(|t| task_filter.as_deref().map(|f| t.id == f).unwrap_or(true))
+        .filter(|t| {
+            task_filter
+                .as_deref()
+                .map(|f| f.split(',').any(|id| t.id == id))
+                .unwrap_or(true)
+        })
         .filter(|t| tier_filter.as_deref().map(|f| t.tier == f).unwrap_or(true))
+        .filter(|t| {
+            tag_filter
+                .as_deref()
+                .map(|f| t.tags.iter().any(|tag| tag == f))
+                .unwrap_or(true)
+        })
         .collect();
     if selected.is_empty() {
         eprintln!("Error: selection matched no bank tasks.");
@@ -296,7 +313,10 @@ fn run_command(rest: &[String]) -> i32 {
     // The cohort split validates BEFORE any worker call: one native door
     // call (membership, overlap, duplicates, bank rev).
     let cohorts_yaml = bank_dir.join("cohorts.yaml");
-    if cohorts_yaml.exists() {
+    let gate_run = flag_lookup(rest, "--cohort").is_some_and(|c| c.get(..5) == Some("gate-"));
+    // The split guards a held-out claim. A run picked by cohort name makes
+    // none, and a bank edit on main must not refuse every gate run.
+    if cohorts_yaml.exists() && !gate_run {
         match cohort_gate(&bank_dir, &tasks, &repo_root) {
             Ok(line) => println!("{line}"),
             // The refusal already carries the leg's full line shape.
@@ -312,38 +332,48 @@ fn run_command(rest: &[String]) -> i32 {
     }
     let history = history_path();
     let cohort = flag_lookup(rest, "--cohort");
-    let mut all_passed = true;
-    for task in &selected {
-        let results = crate::evals::runner::run_task(
-            task,
-            &repo_root,
-            repeat,
-            &history,
-            provider.as_deref(),
-            &variant,
-            ref_arg.as_deref().unwrap_or(&task.repo_fixture),
-            lane_coord.as_ref(),
-            cohort.as_deref(),
-        );
-        let passes = results.iter().filter(|r| r.passed).count();
-        let passk = if passes == repeat as usize {
-            "PASS"
-        } else {
-            "FAIL"
-        };
-        println!(
-            "  {:<11} {} [{}]: {}/{} pass  (pass^{}={})",
-            task.tier, task.id, variant, passes, repeat, repeat, passk
-        );
-        for r in &results {
-            if !r.passed {
-                println!("      run {}: {}", r.repeat_index, r.reason);
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let failed = std::sync::atomic::AtomicBool::new(false);
+    let run_next = || {
+        use std::sync::atomic::Ordering::Relaxed;
+        while let Some(task) = selected.get(next.fetch_add(1, Relaxed)) {
+            let results = crate::evals::runner::run_task(
+                task,
+                &repo_root,
+                repeat,
+                &history,
+                provider.as_deref(),
+                &variant,
+                ref_arg.as_deref().unwrap_or(&task.repo_fixture),
+                lane_coord.as_ref(),
+                cohort.as_deref(),
+            );
+            let passes = results.iter().filter(|r| r.passed).count();
+            let passk = if passes == repeat as usize {
+                "PASS"
+            } else {
+                "FAIL"
+            };
+            println!(
+                "  {:<11} {} [{}]: {}/{} pass  (pass^{}={})",
+                task.tier, task.id, variant, passes, repeat, repeat, passk
+            );
+            for r in &results {
+                if !r.passed {
+                    println!("      run {}: {}", r.repeat_index, r.reason);
+                }
+            }
+            if passes < repeat as usize {
+                failed.store(true, Relaxed);
             }
         }
-        if passes < repeat as usize {
-            all_passed = false;
+    };
+    std::thread::scope(|scope| {
+        for _ in 0..workers {
+            scope.spawn(run_next);
         }
-    }
+    });
+    let all_passed = !failed.load(std::sync::atomic::Ordering::Relaxed);
     println!(
         "{}",
         if all_passed {
