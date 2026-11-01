@@ -76,7 +76,12 @@ fn note_title(note: &Value) -> &str {
 /// A note filed earlier on a host that closes after the start date still
 /// counts: its host's close is the moment it can be lost.
 fn in_working_list(host: &Value, note: &Value) -> bool {
-    text(note, "ts") >= WATCH_FROM || text(host, "completed_at") >= WATCH_FROM
+    // A superseded host often has no completed_at; touched_at is its nearest close time.
+    let closed = match text(host, "completed_at") {
+        "" => text(host, "touched_at"),
+        at => at,
+    };
+    text(note, "ts") >= WATCH_FROM || closed >= WATCH_FROM
 }
 
 /// The undisposed notes on closed hosts: the rows to show, and how many older
@@ -341,6 +346,11 @@ mod tests {
         let mut late = closed_host(OLD);
         late["completed_at"] = json!(NEW);
         assert_eq!(read_set(&[late], false).0.len(), 1);
+        let mut superseded = closed_host(OLD);
+        superseded["status"] = json!("superseded");
+        superseded["completed_at"] = Value::Null;
+        superseded["touched_at"] = json!(NEW);
+        assert_eq!(read_set(&[superseded], false).0.len(), 1);
 
         // A live host's note is not in the set: nothing lost it yet.
         let live = json!({"id": "x-live", "status": "ready", "progress_notes": [
