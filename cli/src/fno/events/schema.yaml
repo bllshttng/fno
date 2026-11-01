@@ -9129,35 +9129,41 @@ event_types:
           type: [string, "null"]
           description: "The corrected agent's harness axis (claude, codex, opencode, pi, footnote, agy)."
         model:
-          type: [string, "null"]
+          type: object
           description: "The corrected agent's model, as a served reading beside measured_at and basis."
         effort:
-          type: [string, "null"]
+          type: object
           description: "The corrected agent's effort axis; unmeasured on footnote and agy."
         provider:
-          type: [string, "null"]
+          type: object
           description: "The corrected agent's provider axis; derived from the model where the transcript names none."
         account:
-          type: [string, "null"]
+          type: object
           description: "Registry launch account at detect time."
         harness_version:
-          type: [string, "null"]
+          type: object
           description: "The harness binary's version, where the transcript names one."
         fno_version:
-          type: [string, "null"]
+          type: object
           description: "The fno binary version at detect time."
         node:
-          type: [string, "null"]
+          type: object
           description: "Node the session worked; branch-name fallback carries basis: branch."
         pr:
-          type: integer
-          description: "PR the session had open, from the graph (optional)."
+          type: object
+          description: "PR the session had open, from the graph, as a served reading."
         head_sha:
-          type: string
-          description: "Transcript cwd's head at detect time (optional)."
-        lane:
+          type: object
+          description: "Transcript cwd's head at detect time, as a served reading."
+        active_skill:
           type: [string, "null"]
-          description: "Provider plus account lane label; absent when the registry row is missing (unmeasured, never inferred)."
+          description: "The last skill the session invoked before this turn."
+        corrected_by_session:
+          type: [string, "null"]
+          description: "agent rows: the sender session from the bus row, when the bus row names one."
+        refusal_class:
+          type: string
+          description: "machine rows: the error class (hook_blocked, permission_denied)."
         skills_loaded:
           type: array
           description: "Skills the session loaded: Skill tool calls and command invocations, in order, newest last."
@@ -9188,10 +9194,10 @@ event_types:
           type: boolean
           description: "The corrected assistant turn ended in a question; a bare `no` after one is an answer, not a correction."
         corrected_by_model:
-          type: [string, "null"]
+          type: object
           description: "agent rows: the corrector's own model, as a served reading."
         corrected_by_harness:
-          type: [string, "null"]
+          type: object
           description: "agent rows: the corrector's harness."
         reason:
           type: string

@@ -135,6 +135,43 @@ pub(crate) fn agent_status_lead(body: &str) -> bool {
     .is_match(body.trim_start())
 }
 
+/// The mail body inside an `<fno_mail>` tag, else the text after the first
+/// line of a bus or peer envelope, else the text itself.
+fn mail_body(text: &str) -> &str {
+    if let Some((_, tail)) = text.split_once("<fno_mail") {
+        if let Some((_, body)) = tail.split_once('>') {
+            return body.split("</fno_mail>").next().unwrap_or(body).trim();
+        }
+    }
+    if text.trim_start().starts_with("`@") {
+        if let Some((_, body)) = text.trim_start().split_once('\n') {
+            return body.trim();
+        }
+    }
+    text.trim()
+}
+
+/// One agent's correction of another, on a delivered mail body: the corpus
+/// rule, or a wider lead disputing the recipient's claim. A status lead is a
+/// report. Precision on this rule is measured under `rule_version`, and a
+/// source under the floor reads `below_floor`.
+pub(crate) fn detect_agent(text: &str) -> Option<&'static str> {
+    static DISPUTE: OnceLock<Regex> = OnceLock::new();
+    let body = mail_body(text);
+    if body.is_empty() || agent_status_lead(body) || first_sentence_asks(body) {
+        return None;
+    }
+    if let Some(label @ ("reject" | "correct")) = reaction_rule(body) {
+        return Some(label);
+    }
+    rx(
+        &DISPUTE,
+        r"(?i)^(?:your (?:claim|fix|diff|reading|report|test|pr|commit)\b.{0,60}\b(?:is wrong|is false|is incorrect|does not|doesn't|did not|didn't|misses|fails|breaks)|that (?:claim|fix|reading|report) is (?:wrong|false|incorrect)|you (?:are wrong|misread|missed|broke|did not|didn't)\b|this is wrong\b|re-?read\b)",
+    )
+    .is_match(body)
+    .then_some("correct")
+}
+
 // --------------------------------------------------------------- scrubbing
 
 #[derive(Default)]
@@ -280,8 +317,10 @@ mod tests {
 
     #[test]
     fn agent_status_leads_never_read_as_corrections() {
-        assert!(agent_status_lead("No change: ask open"));
-        assert!(agent_status_lead("No new findings this round."));
-        assert!(!agent_status_lead("no, the PR is still red"));
+        assert_eq!(detect_agent("<fno_mail from=\"p\">No change: ask open</fno_mail>"), None);
+        assert_eq!(detect_agent("No new findings this round."), None);
+        assert_eq!(detect_agent("no, the PR is still red"), Some("correct"));
+        assert_eq!(detect_agent("`@m · id`\nYour fix does not cover pi."), Some("correct"));
+        assert_eq!(detect_agent("Did your fix cover pi? Please check."), None);
     }
 }

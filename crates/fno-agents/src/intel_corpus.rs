@@ -410,7 +410,7 @@ fn rfc3339(ts: Option<f64>) -> Value {
         .unwrap_or(Value::Null)
 }
 
-fn row_id(session: &str, turn: &str, kind: &str, sub: &str) -> String {
+pub(crate) fn row_id(session: &str, turn: &str, kind: &str, sub: &str) -> String {
     let key = format!("{session}\0{turn}\0{kind}\0{sub}");
     blake3::hash(key.as_bytes()).to_hex()[..16].to_string()
 }
