@@ -546,6 +546,8 @@ FIELD_META: dict[str, Meta] = {
     "evals.stale_days": Meta("never", "Age in days at which the newest regression-tier run reads STALE in doctor and triage health."),
     "evals.scratch_threshold": Meta("never", "Distinct jobs inside the window at which a recurring scratch shape files one p1 node."),
     "evals.scratch_window_days": Meta("never", "Window in days the scratch-shape sweep reads job tmp dirs over."),
+    "evals.gate.daily_usd": Meta("never", "Daily USD cap on the daemon's evals change gate, at 0.04 an attempt. 0 turns the gate off."),
+    "evals.gate.lane": Meta("never", "Lane the gate's golden runs use. Defaults zai-flash."),
     # --- config.recovery.* ---
     "recovery.enabled": Meta("advanced", "Enable the bg-session recovery sweep: provider failover on swap-class deaths plus close-surfacing for finished-but-lingering sessions (rides the pr_watch tick). Assumes bypass workers (the config.agents.defaults.permission_mode built-in for autonomous dispatch); a non-bypass worker cannot run autonomously and is not resumed."),
     "recovery.idle_threshold_seconds": Meta("never", "How stale a bg session must be (seconds) before recovery acts on it."),
