@@ -1951,6 +1951,9 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // user's look clears (look_hold.rs).
     "look_hold_cancel",
     "look_hold_release",
+    // A wait or cadence red-cancel of a head's runs in flight
+    // (pr_status/wait.rs), with the failing checks that caused it.
+    "ci_wait_cancel",
     // A PR queued in place of a merge, and the merge queue arm's acts
     // (merge_queue.rs).
     "merge_queue_entry",

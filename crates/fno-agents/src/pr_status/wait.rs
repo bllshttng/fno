@@ -1188,18 +1188,10 @@ mod tests {
         ));
     }
 
-    fn write_exec(dir: &std::path::Path, name: &str, body: &str) -> std::path::PathBuf {
-        let path = dir.join(name);
-        std::fs::write(&path, body).unwrap();
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
-        path
-    }
-
     /// A fake gh: one live failing check (node-closure completed after its
     /// run started), one run in flight, and a cancel POST answering ok.
     fn cancel_stub_gh(dir: &std::path::Path) -> std::path::PathBuf {
-        write_exec(
+        crate::write_exec_stub(
             dir,
             "gh",
             r#"#!/bin/sh
@@ -1214,7 +1206,7 @@ for a in "$@"; do case "$a" in
     exit 0 ;;
   *cancel*)
     exit 0 ;;
-esac
+esac; done
 echo '{}'
 exit 1
 "#,
