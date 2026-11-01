@@ -398,6 +398,7 @@ fn default_spawn(
     timeout_s: i64,
     provider: Option<&str>,
     lane: Option<&LaneRow>,
+    harness_flags: &[String],
 ) -> SpawnResult {
     let tag = format!(
         "{}-{}",
@@ -419,11 +420,13 @@ fn default_spawn(
         harness,
         lane,
         prompt,
-        &tree_only_flags(harness),
+        harness_flags,
     );
     let mut cmd = std::process::Command::new(crate::scrape::fno_bin());
+    if !harness_flags.is_empty() {
+        cmd.env(NO_AUTO_MEMORY_ENV, "1");
+    }
     cmd.args(&argv)
-        .env(NO_AUTO_MEMORY_ENV, "1")
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
     let deadline =
@@ -648,8 +651,14 @@ pub fn run_task(
                     .map(|l| l.harness.as_str())
                     .filter(|h| !h.is_empty())
                     .or(worker_provider);
-                tree_only = !tree_only_flags(harness).is_empty();
-                let res = default_spawn(prompt, dir, timeout_s, worker_provider, lane);
+                // Other bank tasks invoke plugin skills, so only a golden drops them.
+                let flags = if task.golden.is_some() {
+                    tree_only_flags(harness)
+                } else {
+                    Vec::new()
+                };
+                tree_only = !flags.is_empty();
+                let res = default_spawn(prompt, dir, timeout_s, worker_provider, lane, &flags);
                 if !res.ok {
                     reason = res.reason.clone();
                     worker_timed_out = res.timed_out;
