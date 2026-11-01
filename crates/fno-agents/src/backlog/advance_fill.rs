@@ -284,8 +284,7 @@ pub fn select_lane_fill(
         return Ok((Vec::new(), report));
     }
     let now_ms = claims::now_ms();
-    let config_dir = crate::claude_roster::config_dir();
-    let staleness_days = crate::backlog_ready::configured_staleness_days(&config_dir)
+    let staleness_days = crate::backlog_ready::store_staleness_days()
         .unwrap_or(21)
         .max(1);
     let fno_dir = super::settings::graph_path()
@@ -476,8 +475,7 @@ pub fn schedule_shadow(
 ) -> Value {
     let effective_cap = max_lanes.max(1).min(INITIAL_LIVE_CAP);
     let now_ms = claims::now_ms();
-    let config_dir = crate::claude_roster::config_dir();
-    let staleness_days = crate::backlog_ready::configured_staleness_days(&config_dir)
+    let staleness_days = crate::backlog_ready::store_staleness_days()
         .unwrap_or(21)
         .max(1);
     let fno_dir = super::settings::graph_path()

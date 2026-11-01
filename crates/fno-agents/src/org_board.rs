@@ -871,9 +871,7 @@ pub fn read_board(opts: &BoardOpts) -> Value {
                     all: true,
                     repo_root: crate::paths::canonical_repo_root(&cwd)
                         .map(|p| p.display().to_string()),
-                    staleness_days: crate::backlog_ready::configured_staleness_days(
-                        &cwd.join(".fno"),
-                    ),
+                    staleness_days: crate::backlog_ready::store_staleness_days(),
                     claimed,
                     now_ms: crate::claims::now_ms(),
                     ..Default::default()

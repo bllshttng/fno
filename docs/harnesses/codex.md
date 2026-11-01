@@ -43,6 +43,8 @@ hooks when prompted. `SessionStart` injects project vision, `fno whoami`, worktr
 hygiene, and setup nudges through `hookSpecificOutput.additionalContext`; the other
 packaged hooks provide the supported target-loop and safety lifecycle described below.
 
+At start, a Codex session pins its hooks to one plugin version folder. An fno update deletes the old folder, so each hook in a session that was already open then exits 127. Each command in `hooks/codex-hooks.json` carries a tail that turns exit 127 into a warning. The warning names the hook and says to start a new session. That hook did not run, so a gate among them is off until you do. Every other exit code passes through unchanged.
+
 ## Codex App Worktrees
 
 Codex app worktrees are managed under `$CODEX_HOME/worktrees` and start from tracked files in the selected Git branch.

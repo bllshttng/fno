@@ -13,7 +13,7 @@
 
 use serde_json::json;
 
-/// The NOT LANDED exit: the local send wrote its durable copy and could not confirm the live inject. The copy exists,
+/// The NOT LANDED exit: the local send wrote its durable copy for a recipient that is not live, and could not confirm the live inject. The copy exists,
 /// so the receiver's mail owns the body and a retry would duplicate it -
 /// the daemon's pull arm reads this exit as delivered for that reason.
 pub(crate) const NOT_LANDED_EXIT: i32 = 14;
@@ -171,6 +171,15 @@ pub(crate) fn not_landed(
         ));
     }
     lines.join("\n")
+}
+
+/// The landing verdict for a `live-drain` owner: a live recipient drains at
+/// its turn boundary, which the settle window cannot wait for. Nothing failed,
+/// so this carries no recovery ladder and the send exits 0.
+pub(crate) fn held_for_turn(msg_id: &str, target: &str) -> String {
+    format!(
+        "{msg_id} queued, not landed yet - the recipient is live and drains at its next turn boundary\n  verify later:           fno agents peek {target} --grep {msg_id}"
+    )
 }
 
 const PROJECT_ARM: &str = concat!(

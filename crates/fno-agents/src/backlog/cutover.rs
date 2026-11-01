@@ -2110,8 +2110,7 @@ pub fn run_ready(tail: &[String]) -> i32 {
     }
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let repo_root = super::create_cli::repo_root(&cwd);
-    let config_dir = crate::claude_roster::config_dir();
-    let staleness_days = crate::backlog_ready::configured_staleness_days(&config_dir);
+    let staleness_days = crate::backlog_ready::store_staleness_days();
     let fno_dir = settings::graph_path()
         .parent()
         .map(std::path::Path::to_path_buf)

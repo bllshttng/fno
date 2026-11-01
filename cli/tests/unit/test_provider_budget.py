@@ -28,7 +28,7 @@ def test_legacy_scalar_reads_as_lanes_and_keeps_the_builtin_subagents():
     assert _budget(max_lanes={"zai": 5}) == (5, 1)  # legacy kwarg: exercises the alias
 
 
-@pytest.mark.parametrize("written", [{"zai": 0}, "broken"])
+@pytest.mark.parametrize("written", [{"zai": -1}, "broken"])
 def test_a_malformed_table_restores_the_safe_builtin(written):
     # Restoring the whole built-in table, rather than dropping one entry, is
     # what keeps a typo from making a shared provider unlimited.
