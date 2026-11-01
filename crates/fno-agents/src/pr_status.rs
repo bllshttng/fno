@@ -104,30 +104,21 @@ pub(crate) fn generic_ci_rollup(rollup: &[Value]) -> Vec<Value> {
 }
 
 /// The evals gate's fact at this head, read from the WHOLE rollup (the call
-/// sites that classify generic CI have already dropped it). The newest row
-/// for the context wins, matching `latest_per_name`'s supersession; `None`
-/// when the daemon never posted one. The description rides: each red names
-/// its cause and its clearing command (evals_gate.rs).
+/// sites that classify generic CI have already dropped it). Supersession is
+/// the shared rule (`latest_per_name` keys statuses by context); `None` when
+/// the daemon never posted one. The description rides: each red names its
+/// cause and its clearing command (evals_gate.rs).
 pub(crate) fn evals_gate_fact(rollup: &[Value]) -> Option<Value> {
-    let mut latest: Option<&Value> = None;
-    for check in rollup {
-        if s_str(check, "context") != EVALS_GATE_CONTEXT {
-            continue;
-        }
-        let newer = match (latest, s_str(check, "createdAt")) {
-            (None, _) => true,
-            (Some(prev), created) => s_str(prev, "createdAt") < created,
-        };
-        if newer {
-            latest = Some(check);
-        }
-    }
-    latest.map(|row| {
-        json!({
-            "state": s_str(row, "state"),
-            "description": s_str(row, "description"),
-        })
-    })
+    let deduped = crate::check_supersession::latest_per_name(&Value::Array(rollup.to_vec()));
+    let row = deduped
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|row| s_str(row, "context") == EVALS_GATE_CONTEXT)?;
+    Some(json!({
+        "state": s_str(row, "state"),
+        "description": s_str(row, "description"),
+    }))
 }
 
 /// Conclusions that prove a check genuinely failed: the settled fail states
