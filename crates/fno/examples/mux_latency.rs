@@ -474,7 +474,29 @@ fn stages() -> Result<(), String> {
             percentile(samples, 0.95)
         );
     }
+    flood_stage();
     Ok(())
+}
+
+/// What one full pane-output queue costs the core loop when a sibling floods.
+/// The queue holds 256 chunks of 8 KB at most, shared by every pane, so a key's
+/// echo can wait behind all of them. The first chunks also grow the scrollback.
+fn flood_stage() {
+    const QUEUE_CHUNKS: usize = 256;
+    let chunk = b"y\n".repeat(4096);
+    let mut pane = Pane::new(50, 100);
+    for pass in 0..40 {
+        let start = Instant::now();
+        for _ in 0..QUEUE_CHUNKS {
+            pane.feed(&chunk);
+        }
+        if pass == 0 || pass == 39 {
+            println!(
+                "stage flood_queue pass {pass}: feed_ms={:.2} chunks={QUEUE_CHUNKS}",
+                start.elapsed().as_secs_f64() * 1e3
+            );
+        }
+    }
 }
 
 /// The control's echo program: raw stdin to stdout, a spun delay in between.
