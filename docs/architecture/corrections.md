@@ -53,7 +53,9 @@ fno doctor event corrections --precision ~/.fno/evals/corrections/v1/labels.json
 fno agents fleet feed --kind agent_corrected
 ```
 
-The feed shows user rows by default. An explicit `--kind agent_corrected` adds the agent and machine rows, as `agent_corrected_agent` and `agent_corrected_machine`.
+The feed shows user rows by default. An explicit `--kind agent_corrected` adds the agent and machine rows, as `agent_corrected_agent` and `agent_corrected_machine`. The feed reads the last 7 days of corrections; the report reads any window.
+
+To draw a precision sample, `fno-agents intel --corrections-sample <dir>` runs one 512 MiB pass over real transcripts into that directory's own store. The live store stays untouched.
 
 ## Precision and limits
 

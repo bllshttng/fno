@@ -14,8 +14,9 @@ use std::path::Path;
 const UNRESOLVED_AFTER_S: i64 = 14 * 86_400;
 /// A later user correction in this window overrules an agent or machine row.
 const OVERRULE_WINDOW_S: i64 = 30 * 60;
-/// Every row settles by 14 days, so the pass never reads further back.
-const READ_WINDOW_S: i64 = 30 * 86_400;
+/// A backfilled row keeps its turn's own stamp, so the read reaches past the
+/// corpus span: an old row still settles, as `unresolved`.
+const READ_WINDOW_S: i64 = 400 * 86_400;
 const MAX_ROWS_PER_PASS: usize = 200;
 
 /// One node's merge fact, from the graph.

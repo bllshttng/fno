@@ -1711,6 +1711,32 @@ fn team_journals(home: &AgentsHome) -> String {
     raw
 }
 
+/// How far back the feed reads corrections. Machine rows run about 640 a day
+/// and the default view drops them, so an unbounded read would parse months of
+/// rows on every foreground call to show a few.
+const CORRECTION_WINDOW_S: u64 = 7 * 86_400;
+
+fn corrections_text(
+    path: &std::path::Path,
+    since_epoch: Option<u64>,
+    until_epoch: Option<u64>,
+) -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let floor = now.saturating_sub(CORRECTION_WINDOW_S);
+    crate::event_store::journal_text_checked(
+        path,
+        &crate::event_store::EventQuery {
+            since_ms: Some(since_epoch.unwrap_or(floor).max(floor) as i64 * 1000),
+            until_ms: until_epoch.map(|u| u as i64 * 1000),
+            ..crate::event_store::EventQuery::of_types(&["agent_corrected"])
+        },
+    )
+    .unwrap_or_default()
+}
+
 /// The main store's typed read for the coverage kinds. `events.jsonl` routes
 /// to db/events.db, the durable store; a store neither present nor readable
 /// notes its skip once and yields no rows (AC7-EDGE).
@@ -1744,11 +1770,16 @@ fn main_store_journal(
                 "fno_update_installed",
                 "fno_update_failed",
                 "main_ci_changed",
-                "agent_corrected",
             ])
         },
     ) {
-        Ok(text) => (format!("{text}\n{mail}"), None),
+        Ok(text) => (
+            format!(
+                "{text}\n{mail}\n{}",
+                corrections_text(&path, since_epoch, until_epoch)
+            ),
+            None,
+        ),
         Err(e) => (mail, Some(format!("main store skipped ({e})"))),
     }
 }

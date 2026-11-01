@@ -93,6 +93,10 @@ struct Cursor {
     head: String,
     #[serde(default)]
     head_len: u64,
+    /// The row count, kept past a state drop: `L<n>` is a codex turn's key, so
+    /// a resumed session must never reuse a number.
+    #[serde(default)]
+    line: u64,
     /// Dropped once a session goes quiet, so the one cache file stays small.
     /// A session that resumes rebuilds its readings from its next rows.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -710,7 +714,7 @@ fn scan_user_turn(
                     id_kind: "agent_mail",
                     corrected_by: "agent",
                     kind: c,
-                    quote: &text,
+                    quote: crate::correction_detect::mail_body(&text),
                     extra: corrector_facts(&text, sender.as_deref(), &stamp),
                 }
             })
@@ -1050,6 +1054,7 @@ pub(crate) fn fold_once(mut inputs: FoldInputs) -> FoldReceipt {
                     mtime: 0,
                     head,
                     head_len,
+                    line: 0,
                     state: None,
                 }
             }
@@ -1075,6 +1080,7 @@ pub(crate) fn fold_once(mut inputs: FoldInputs) -> FoldReceipt {
             .state
             .take()
             .unwrap_or_else(|| SessionState::new(harness));
+        state.line = cur.line;
         let mut out = ScanOut::default();
         let room = inputs
             .row_cap
@@ -1113,6 +1119,7 @@ pub(crate) fn fold_once(mut inputs: FoldInputs) -> FoldReceipt {
             receipt.append_error = Some(e);
             break;
         }
+        cur.line = state.line;
         cur.state = Some(state);
         merge_tally(&mut cache.typed_turns, out.typed);
         receipt.files_read += 1;

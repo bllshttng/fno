@@ -146,7 +146,7 @@ pub(crate) fn agent_status_lead(body: &str) -> bool {
 
 /// The mail body inside an `<fno_mail>` tag, else the text after the first
 /// line of a bus or peer envelope, else the text itself.
-fn mail_body(text: &str) -> &str {
+pub(crate) fn mail_body(text: &str) -> &str {
     if let Some((_, tail)) = text.split_once("<fno_mail") {
         if let Some((_, body)) = tail.split_once('>') {
             return body.split("</fno_mail>").next().unwrap_or(body).trim();
