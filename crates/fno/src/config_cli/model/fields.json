@@ -480,6 +480,12 @@
      }
     },
     {
+     "name": "ci_tier",
+     "default": {
+      "enabled": false
+     }
+    },
+    {
      "name": "groom",
      "default": {
       "enabled": true
@@ -488,6 +494,10 @@
     {
      "name": "evals",
      "default": {
+      "gate": {
+       "daily_usd": 15.0,
+       "lane": "zai-flash"
+      },
       "enabled": true,
       "schedule_days": 7,
       "stale_days": 7,
@@ -1721,6 +1731,15 @@
     }
    ]
   },
+  "CiTierBlock": {
+   "extra": "ignore",
+   "fields": [
+    {
+     "name": "enabled",
+     "default": false
+    }
+   ]
+  },
   "GroomBlock": {
    "extra": "ignore",
    "fields": [
@@ -1733,6 +1752,13 @@
   "EvalsBlock": {
    "extra": "ignore",
    "fields": [
+    {
+     "name": "gate",
+     "default": {
+      "daily_usd": 15.0,
+      "lane": "zai-flash"
+     }
+    },
     {
      "name": "enabled",
      "default": true
@@ -2630,6 +2656,19 @@
     }
    ]
   },
+  "GateBlock": {
+   "extra": "ignore",
+   "fields": [
+    {
+     "name": "daily_usd",
+     "default": 15.0
+    },
+    {
+     "name": "lane",
+     "default": "zai-flash"
+    }
+   ]
+  },
   "WatchdogBlock": {
    "extra": "ignore",
    "fields": [
@@ -3036,6 +3075,7 @@
   "style.word_cap.mail",
   "style.word_cap.encounter",
   "preflight.required",
+  "ci_tier.enabled",
   "target.dedupe_dead_duplicates",
   "target.handoff.enabled",
   "target.handoff.used_pct_trigger",
@@ -3167,6 +3207,8 @@
   "evals.stale_days",
   "evals.scratch_threshold",
   "evals.scratch_window_days",
+  "evals.gate.daily_usd",
+  "evals.gate.lane",
   "recovery.enabled",
   "recovery.idle_threshold_seconds",
   "recovery.max_nudges",

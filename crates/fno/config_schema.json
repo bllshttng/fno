@@ -658,6 +658,18 @@
     "title": "BuildBlock",
     "type": "object"
    },
+   "CiTierBlock": {
+    "description": "The CI tier (nested under 'config.ci_tier').\n\n``enabled`` turns on the daemon arm that keeps at most six merge-queue\nruns in flight per repo across every clone on this machine: it ranks the\nopen PRs, cancels the overflow, and reruns a run it cancelled once a\nslot frees (a cancelled run has no failed job to select, so the rerun is\nfull). Default false: the tier is opt-in per MACHINE, never per repo.\nTwo clones of one repo are one tier; two machines are two arms that\nwould cancel and rerun each other's work. Enable it on exactly one\nmachine per repo.",
+    "properties": {
+     "enabled": {
+      "default": false,
+      "title": "Enabled",
+      "type": "boolean"
+     }
+    },
+    "title": "CiTierBlock",
+    "type": "object"
+   },
    "CodexAgentBlock": {
     "description": "The codex block: the provider settings plus its lead beat.",
     "properties": {
@@ -3672,6 +3684,9 @@
    "pr_watch": {
     "$ref": "#/$defs/PrWatchBlock"
    },
+   "ci_tier": {
+    "$ref": "#/$defs/CiTierBlock"
+   },
    "groom": {
     "$ref": "#/$defs/GroomBlock"
    },
@@ -5738,6 +5753,15 @@
    "question": "",
    "default_source": "",
    "doc": "Consecutive broken tick ends (timeout/error) at a fresh watermark before the watcher reads `wedged` and auto-heal re-renders its plist via `fno do pr watch refresh`."
+  },
+  {
+   "path": "ci_tier.enabled",
+   "type": "bool",
+   "default": false,
+   "wizard": "advanced",
+   "question": "",
+   "default_source": "",
+   "doc": "Run the CI tier on this machine: the daemon keeps at most six merge-queue runs in flight per repo, ranking the open PRs, cancelling the overflow, and rerunning a run it cancelled once a slot frees (a cancelled run cannot rerun failed jobs, so the rerun is full). Default false. Opt in on ONE machine per repo: two clones of a repo are one tier, two machines are two arms that would cancel and rerun each other's work."
   },
   {
    "path": "groom.enabled",
