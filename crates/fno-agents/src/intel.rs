@@ -954,7 +954,7 @@ pub fn run_intel(args: &[String]) -> i32 {
     }
     if args
         .iter()
-        .any(|a| a == "--corpus" || a == "--corpus-ingest")
+        .any(|a| a == "--corpus" || a == "--corpus-ingest" || a == "--corrections-sample")
     {
         return crate::intel_corpus::run(args);
     }

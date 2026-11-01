@@ -86,6 +86,7 @@ mod doctor_update_tests;
 pub mod effect_map;
 #[cfg(feature = "full")]
 pub mod event_cli;
+mod event_corrections;
 #[cfg(feature = "full")]
 mod event_signals;
 #[cfg(feature = "full")]

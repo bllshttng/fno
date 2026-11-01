@@ -165,6 +165,7 @@ pub const FOLD_CANDIDATES: &[&str] = &[
     "chats",
     "claim-aux",
     "context-cache",
+    "corrections",
     "fleet",
     "flight",
     "handoffs",
