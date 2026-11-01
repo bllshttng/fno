@@ -268,12 +268,13 @@ mod tests {
 
     #[test]
     fn a_reopened_pr_returns_from_additional_to_primary() {
+        let url = "https://github.com/o/r/pull/7";
         let mut entries = vec![json!({
             "id": "x-aaaa", "pr_number": null,
-            "additional_prs": [{"number": 7, "url": null, "merge_status": "closed"}],
+            "additional_prs": [{"number": 7, "url": url, "merge_status": "closed"}],
         })];
         let claimed = vec!["x-aaaa".to_string()];
-        let result = bind_pr_rows(&mut entries, &claimed, 7, None, None, true);
+        let result = bind_pr_rows(&mut entries, &claimed, 7, Some(url), None, true);
         assert_eq!(result.bindings[0].action, "filled_primary");
         assert_eq!(entries[0]["pr_number"], 7);
         assert_eq!(entries[0]["additional_prs"], json!([]));
