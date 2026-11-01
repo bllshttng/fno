@@ -235,11 +235,43 @@ fn spawn_argv(
     argv
 }
 
+/// True when a spawn exit means the worker ran out its budget. 124 is the
+/// claude one-shot's timeout. Exit 12 is opencode's timeout and also the code
+/// for a registry failure before launch, so 12 counts only with its message.
+fn spawn_exit_timed_out(code: i32, message: &str) -> bool {
+    code == 124 || (code == 12 && message.contains("timed out"))
+}
+
+/// The content the worker left, as a git tree id. The temporary index keeps
+/// the real one untouched, and starting from a copy of it spares rehashing
+/// the whole checkout. None when git cannot say, which compare reads as
+/// unknown.
+fn tree_hash(workdir: &std::path::Path) -> Option<String> {
+    let git = |args: &[&str], index: Option<&std::path::Path>| {
+        let mut cmd = std::process::Command::new("git");
+        cmd.args(args).current_dir(workdir);
+        if let Some(i) = index {
+            cmd.env("GIT_INDEX_FILE", i);
+        }
+        cmd.output().ok().filter(|o| o.status.success())
+    };
+    let real = git(&["rev-parse", "--git-path", "index"], None)?;
+    let real = workdir.join(String::from_utf8_lossy(&real.stdout).trim());
+    let scratch = tempfile::tempdir().ok()?;
+    let index = scratch.path().join("index");
+    std::fs::copy(real, &index).ok()?;
+    git(&["add", "-A"], Some(&index))?;
+    let tree = git(&["write-tree"], Some(&index))?;
+    Some(String::from_utf8_lossy(&tree.stdout).trim().to_string())
+}
+
 /// The worker spawn: `fno agents spawn --once` in the workdir. A non-zero
 /// exit, missing binary, or timeout is a graded failure, never a sweep
 /// crash. The deadline is the backstop the Python leg kept: a wedged
 /// spawner fails the leg instead of hanging the run. The worker name is the
-/// typed non-node identity `ev-th-evals-<pid>-<secs>`.
+/// typed non-node identity `ev-th-evals-<pid>-<secs>`. The pipes drain on
+/// their own threads, because a worker that fills one would otherwise block
+/// until the deadline and read as a stall.
 fn default_spawn(
     prompt: &str,
     workdir: &std::path::Path,
@@ -295,6 +327,17 @@ fn default_spawn(
         }
         Ok(child) => child,
     };
+    fn drain(pipe: Option<impl std::io::Read + Send + 'static>) -> std::thread::JoinHandle<String> {
+        std::thread::spawn(move || {
+            let mut text = String::new();
+            if let Some(mut p) = pipe {
+                let _ = p.read_to_string(&mut text);
+            }
+            text
+        })
+    }
+    let out_reader = drain(child.stdout.take());
+    let err_reader = drain(child.stderr.take());
     loop {
         match child.try_wait() {
             Err(e) => {
@@ -307,15 +350,8 @@ fn default_spawn(
                 };
             }
             Ok(Some(status)) => {
-                use std::io::Read as _;
-                let mut out_text = String::new();
-                if let Some(mut s) = child.stdout.take() {
-                    let _ = s.read_to_string(&mut out_text);
-                }
-                let mut err_text = String::new();
-                if let Some(mut s) = child.stderr.take() {
-                    let _ = s.read_to_string(&mut err_text);
-                }
+                let out_text = out_reader.join().unwrap_or_default();
+                let err_text = err_reader.join().unwrap_or_default();
                 let code = status.code().unwrap_or(-1);
                 if code == 0 {
                     return SpawnResult {
@@ -336,7 +372,7 @@ fn default_spawn(
                     ok: false,
                     reason: format!("spawn exit {code}: {last}"),
                     worker_name: name,
-                    timed_out: false,
+                    timed_out: spawn_exit_timed_out(code, &last),
                     lane_note: String::new(),
                 };
             }
@@ -441,6 +477,7 @@ pub fn run_task(
         let mut outcome: Option<super::grading::GradeOutcome> = None;
         let mut workdir: Option<std::path::PathBuf> = None;
         let mut worker_name: Option<String> = None;
+        let mut tree: Option<String> = None;
         match make_disposable_worktree(repo_root, &checkout_ref, &task.id) {
             Err(e) => {
                 reason = format!("fixture checkout failed ({checkout_ref}); fixture drift? {e}");
@@ -460,10 +497,14 @@ pub fn run_task(
                 if !res.ok {
                     reason = res.reason.clone();
                     worker_timed_out = res.timed_out;
-                } else {
+                }
+                if res.ok || res.timed_out {
                     spawned = true;
                     worker_name = Some(res.worker_name.clone());
                 }
+            }
+            if !gate_blocked && (spawned || task.prompt.is_none()) {
+                tree = tree_hash(dir);
             }
             if reason.is_empty() {
                 let o = super::grading::grade(task, dir, Some(&checkout_ref));
@@ -516,6 +557,7 @@ pub fn run_task(
             "run_id": run_id,
             "obs": obs,
             "bank_rev": bank_rev,
+            "tree_hash": tree,
             "worker_provider": worker_provider,
             "variant": variant,
             "experiment_id": experiment_id,
@@ -571,6 +613,66 @@ fn now_iso() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_timeout_exit_reads_started_and_scores_a_failed_grade() {
+        assert!(spawn_exit_timed_out(124, "claude -p timed out after 60.0s"));
+        assert!(spawn_exit_timed_out(12, "opencode run timed out after 60s"));
+        assert!(!spawn_exit_timed_out(12, "registry read failed: gone"));
+        assert!(!spawn_exit_timed_out(1, "timed out"));
+
+        let stall = json!({"obs": {
+            "fixture_prepared": true, "worker_required": true, "worker_started": true,
+            "worker_timed_out": true, "grader_ran": false,
+        }});
+        let verdict = crate::eval_attempt::classify(&stall, None);
+        assert_eq!((verdict.status, verdict.graded), ("graded", Some(false)));
+        assert!(!verdict.retryable);
+
+        let refused = json!({"obs": {
+            "fixture_prepared": true, "worker_required": true, "worker_started": false,
+            "worker_timed_out": true, "grader_ran": false,
+        }});
+        assert_eq!(
+            crate::eval_attempt::classify(&refused, None).status,
+            "unavailable",
+            "an old row with no started worker keeps its verdict"
+        );
+    }
+
+    #[test]
+    fn the_tree_hash_follows_content_and_leaves_the_real_index_alone() {
+        let d = tempfile::tempdir().unwrap();
+        let git = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .args(args)
+                .current_dir(d.path())
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "{out:?}");
+            String::from_utf8_lossy(&out.stdout).to_string()
+        };
+        git(&["init", "-q"]);
+        std::fs::write(d.path().join("a"), "one\n").unwrap();
+        git(&["add", "a"]);
+        git(&[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "commit",
+            "-qm",
+            "c",
+        ]);
+        let base = tree_hash(d.path()).unwrap();
+
+        std::fs::write(d.path().join("decision.md"), "decision: A\n").unwrap();
+        let answered = tree_hash(d.path()).unwrap();
+        assert_ne!(base, answered);
+        assert_eq!(answered, tree_hash(d.path()).unwrap());
+        assert_eq!(git(&["diff", "--cached", "--name-only"]), "");
+        assert!(git(&["status", "--porcelain"]).contains("?? decision.md"));
+    }
 
     #[test]
     fn the_spawn_carries_the_lane_coordinate() {

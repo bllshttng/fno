@@ -1,0 +1,9 @@
+# Labelled cases for the golden-no-gnu-timeout grader. Read by report --check-metrics.
+cases:
+  - {id: while-loop, label: good, files: {"wait-for-file.sh": "i=0\nwhile [ \"$i\" -lt \"$2\" ]; do\n  [ -e \"$1\" ] && exit 0\n  sleep 1\n  i=$((i + 1))\ndone\n[ -e \"$1\" ]\n"}}
+  - {id: until-loop, label: good, files: {"wait-for-file.sh": "n=$2\nuntil [ -e \"$1\" ]; do\n  [ \"$n\" -le 0 ] && exit 1\n  sleep 1\n  n=$((n - 1))\ndone\n"}}
+  - {id: names-the-word-in-a-comment, label: good, files: {"wait-for-file.sh": "# no timeout(1) on macOS\nn=$2\nuntil [ -e \"$1\" ]; do\n  [ \"$n\" -le 0 ] && exit 1\n  sleep 1\n  n=$((n - 1))\ndone\n"}}
+  - {id: gnu-timeout, label: bad, files: {"wait-for-file.sh": "timeout \"$2\" sh -c \"until [ -e $1 ]; do sleep 1; done\"\n"}}
+  - {id: gtimeout, label: bad, files: {"wait-for-file.sh": "gtimeout \"$2\" sh -c \"until [ -e $1 ]; do sleep 1; done\"\n"}}
+  - {id: never-fails, label: bad, files: {"wait-for-file.sh": "exit 0\n"}}
+  - {id: no-file, label: bad, files: {}}

@@ -381,12 +381,21 @@ fn config_lane(repo: &Path) -> String {
 
 /// Compare a run to the baseline, over `tasks` when named. A head run covers
 /// only the gate goldens, and a golden it did not select is no missing result.
-fn compare(history: &Path, a: &str, b: &str, tasks: Option<&[String]>) -> Result<Value, String> {
+fn compare(
+    repo: &Path,
+    history: &Path,
+    a: &str,
+    b: &str,
+    tasks: Option<&[String]>,
+) -> Result<Value, String> {
     let mut rows = read_rows(&history.to_string_lossy(), None, None);
     if let Some(tasks) = tasks {
         rows.retain(|r| tasks.contains(&r.task_id));
     }
-    crate::evals_compare::fold(&rows, a, b, REPEATS)
+    // An unreadable catalog proves nothing unproved, so a regression stays red.
+    let bank = repo.join("evals").join("bank");
+    let unproved = crate::evals::failure_types::unproved_tasks(&bank).unwrap_or_default();
+    crate::evals_compare::fold(&rows, a, b, REPEATS, &unproved)
 }
 
 fn main_leg(p: &Paths, d: &Deps, state: &mut State, can_launch: bool, daily_usd: f64) -> String {
@@ -460,7 +469,7 @@ fn finish_main(p: &Paths, state: &mut State, cohort: &str) -> String {
     let Some(previous) = previous else {
         return format!("main {cohort} is the first baseline");
     };
-    let Ok(view) = compare(p.history, &previous, cohort, None) else {
+    let Ok(view) = compare(p.repo, p.history, &previous, cohort, None) else {
         return format!("main {cohort} compare failed");
     };
     let _ = std::fs::create_dir_all(&p.state_dir);
@@ -585,7 +594,7 @@ fn settle_head_run(p: &Paths, d: &Deps, state: &mut State, slug: &str, prs: &[Pr
             ),
         ),
         (Some(baseline), false) => {
-            match compare(p.history, baseline, &run.cohort, Some(&run.tasks)) {
+            match compare(p.repo, p.history, baseline, &run.cohort, Some(&run.tasks)) {
                 Ok(view) => verdict(&view, &run.sha),
                 Err(e) => ("failure", no_result(&run.sha, &e)),
             }

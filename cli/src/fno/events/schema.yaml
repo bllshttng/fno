@@ -9094,8 +9094,145 @@ event_types:
           type: string
           description: "Refusal or failure reason, one line; present when outcome is not ok."
     consumers: [operator]
-# Size cap per Failure Modes (Boundaries): the system rejects events whose
-# data payload exceeds 64KB. Validators enforce this at validate() time.
+
+  - name: agent_corrected
+    retention: durable
+    description: "One correction of a working agent, detected off-loop from the transcripts and written by the daemon's correction arm. corrected_by names the corrector: user (a typed turn), agent (another agent's mail or bus row, verified always false: the corrector can be wrong), or machine (a gate refusal). Reports keep the three apart and never print a total across them. Every harness fact rides as a served reading {value, measured_at, basis} or {value: null, basis: unmeasured, reason}; a missing fact reads unmeasured, never a guess. The quote is scrubbed (secret shapes masked) and dropped whole on a residual match."
+    sources: [daemon, test]
+    data:
+      required: [correction_id, corrected_by, kind, session_id, rule_version]
+      properties:
+        correction_id:
+          type: string
+          description: "Stable id: `corr:` plus the corpus row_id keyed on session, turn and kind. A replay is ignored by the store's idempotent append."
+        corrected_by:
+          type: string
+          enum: [user, agent, machine]
+          description: "Who corrected. Kept apart in every report; interrupts are their own kind, not a separate source."
+        kind:
+          type: string
+          enum: [correct, reject, interrupt, refused]
+          description: "correct = the corrector redirected or disagreed; reject = a tool call refused by the user; interrupt = the user stopped the agent mid-action; refused = a gate refused the act (machine only)."
+        session_id:
+          type: string
+          description: "The corrected agent's harness session id."
+        rule_version:
+          type: string
+          description: "Detector rule version; rates compare only within one version."
+        confidence:
+          type: string
+          enum: [above_floor, below_floor]
+          description: "This source's measured precision against the floor. A reader that needs trusted rows skips below_floor."
+        turn:
+          type: string
+          description: "Turn identifier in the transcript (uuid or line key)."
+        ts_turn:
+          type: string
+          description: "RFC3339 stamp of the corrected turn itself, so a backfilled detection still carries the true moment."
+        harness:
+          type: [string, "null"]
+          description: "The corrected agent's harness axis (claude, codex, opencode, pi, footnote, agy)."
+        model:
+          type: object
+          description: "The corrected agent's model, as a served reading beside measured_at and basis."
+        effort:
+          type: object
+          description: "The corrected agent's effort axis; unmeasured on footnote and agy."
+        provider:
+          type: object
+          description: "The corrected agent's provider axis; derived from the model where the transcript names none."
+        account:
+          type: object
+          description: "Registry launch account at detect time."
+        harness_version:
+          type: object
+          description: "The harness binary's version, where the transcript names one."
+        fno_version:
+          type: object
+          description: "The fno binary version at detect time."
+        node:
+          type: object
+          description: "Node the session worked; branch-name fallback carries basis: branch."
+        pr:
+          type: object
+          description: "PR the session had open, from the graph, as a served reading."
+        head_sha:
+          type: object
+          description: "Transcript cwd's head at detect time, as a served reading."
+        active_skill:
+          type: [string, "null"]
+          description: "The last skill the session invoked before this turn."
+        corrected_by_session:
+          type: [string, "null"]
+          description: "agent rows: the sender session from the bus row, when the bus row names one."
+        refusal_class:
+          type: string
+          description: "machine rows: the error class (hook_blocked, permission_denied)."
+        skills_loaded:
+          type: array
+          description: "Skills the session loaded: Skill tool calls and command invocations, in order, newest last."
+          items: { type: string }
+        skills_referenced:
+          type: array
+          description: "Skill references opened past SKILL.md: Read/Grep calls into a loaded skill's references/."
+          items: { type: string }
+        subagents:
+          type: array
+          description: "Child sessions the corrected agent spawned (names when the registry knows them)."
+          items: { type: string }
+        quote:
+          type: [string, "null"]
+          description: "The correcting text, scrubbed, capped at 280 chars; null when a secret shape survived the scrub."
+        quote_status:
+          type: string
+          enum: [kept, dropped]
+          description: "dropped = the scrub found a residual secret shape and removed the quote; the row still lands."
+        typed:
+          type: string
+          enum: [witnessed, unwitnessed]
+          description: "user rows only: whether a submit witness bound the typed turn."
+        verified:
+          type: boolean
+          description: "agent rows only, always false: the corrector can be wrong."
+        after_question:
+          type: boolean
+          description: "The corrected assistant turn ended in a question; a bare `no` after one is an answer, not a correction."
+        corrected_by_model:
+          type: object
+          description: "agent rows: the corrector's own model, as a served reading."
+        corrected_by_harness:
+          type: object
+          description: "agent rows: the corrector's harness."
+        reason:
+          type: string
+          description: "machine rows: the guard's first line, scrubbed."
+        backfilled:
+          type: boolean
+          description: "The turn predates the arm's first run; registry and detect-time facts read unmeasured."
+        source_file:
+          type: string
+          description: "Transcript path the fold read (store-qualified for sqlite-backed sources)."
+    consumers: [fno doctor event corrections, fno agents fleet feed]
+
+  - name: correction_outcome
+    retention: durable
+    description: "The settled outcome of one agent_corrected row, appended at most once per settled row by the daemon's hourly outcome pass. The store is append-only, so outcome is its own event keyed by correction_id. held is weak evidence: a merge shows nothing broke, never that the corrector was right."
+    sources: [daemon, test]
+    data:
+      required: [correction_id, outcome, basis]
+      properties:
+        correction_id:
+          type: string
+          description: "The agent_corrected row this outcome settles."
+        outcome:
+          type: string
+          enum: [held, overruled, unresolved]
+          description: "held = the node merged after the correction with no overrule; overruled = a later correction, a retraction, or a decision_span names the same window; unresolved = no merge after 14 days."
+        basis:
+          type: string
+          description: "What decided the outcome (merged, retraction, decision_span, age)."
+    consumers: [fno doctor event corrections]
+
 limits:
   max_data_bytes: 65536
   data_size_encoding: compact-json-ascii-v1

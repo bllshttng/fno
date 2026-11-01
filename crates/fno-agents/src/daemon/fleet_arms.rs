@@ -35,6 +35,7 @@ pub(super) struct FleetArms {
     machine_watch: crate::machine_watch::Arm,
     merge_close: crate::merge_close::Arm,
     symptom_recheck: crate::symptom_recheck::Arm,
+    correction_fold: crate::correction_fold::Arm,
     team_ledger: crate::rundown::Arm,
     lead_eval: crate::lead_eval::Arm,
     fleet_beacon: crate::fleet_beacon::Arm,
@@ -131,6 +132,7 @@ impl FleetArms {
             machine_watch: crate::machine_watch::Arm::default(),
             merge_close: crate::merge_close::Arm::default(),
             symptom_recheck: crate::symptom_recheck::Arm::default(),
+            correction_fold: crate::correction_fold::Arm::default(),
             team_ledger: crate::rundown::Arm::default(),
             lead_eval: crate::lead_eval::Arm::default(),
             fleet_beacon: crate::fleet_beacon::Arm::default(),
@@ -337,6 +339,8 @@ impl FleetArms {
         crate::machine_watch::maybe_tick(&self.machine_watch, ctx.home.clone());
         crate::merge_close::maybe_tick(&self.merge_close, ctx.home.clone());
         crate::symptom_recheck::maybe_tick(&self.symptom_recheck, ctx.home.clone());
+        // Corrections become events: off-loop, byte-budgeted, one in flight.
+        crate::correction_fold::maybe_tick(&self.correction_fold, ctx.home.clone());
         // The board render: graph.md plus every configured board target,
         // once per moved version, off every caller's write path.
         crate::board_render_arm::maybe_tick(&self.board_render, ctx.home.clone());

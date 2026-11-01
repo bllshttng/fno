@@ -339,11 +339,10 @@ pub fn discover_bank(bank_dir: &std::path::Path) -> Result<Vec<TaskSpec>, BankEr
         .collect();
     paths.sort();
     for yaml_path in paths {
-        if yaml_path
-            .file_name()
-            .map(|n| n == std::ffi::OsStr::new(COHORTS_FILENAME))
-            .unwrap_or(false)
-        {
+        if yaml_path.file_name().is_some_and(|n| {
+            n == std::ffi::OsStr::new(COHORTS_FILENAME)
+                || n == std::ffi::OsStr::new(super::failure_types::FILENAME)
+        }) {
             continue;
         }
         let task = load_task(&yaml_path)?;

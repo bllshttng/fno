@@ -9,6 +9,7 @@
 use serde_json::json;
 
 pub mod bank;
+pub mod failure_types;
 pub mod grading;
 pub mod graduate;
 pub mod history;
@@ -492,7 +493,7 @@ pub(super) fn flag_lookup(args: &[String], name: &str) -> Option<String> {
 }
 
 /// The bank dir: explicit --bank, else <canonical-root>/evals/bank.
-pub(super) fn resolve_bank_dir(explicit: Option<String>) -> std::path::PathBuf {
+pub(crate) fn resolve_bank_dir(explicit: Option<String>) -> std::path::PathBuf {
     if let Some(b) = explicit {
         return std::path::PathBuf::from(b);
     }

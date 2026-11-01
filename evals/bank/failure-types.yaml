@@ -1,0 +1,57 @@
+# The named failure types. `fno doctor evals report --by-failure-type` ranks
+# them by cost_order, then by failing goldens. Each golden names its type in
+# golden.failure_type and its proof lives at evals/fixtures/metrics/<id>.yaml.
+# `none` marks a golden with a passing source case, so it is not a type here.
+cost_order: [trust, rework]
+types:
+  - id: evasive-answer
+    cost: trust
+    description: The reply avoids the direct question the user asked.
+  - id: comment-noise
+    cost: rework
+    description: The edit adds comments the file's density does not support.
+  - id: context-bloat
+    cost: rework
+    description: The change grows text loaded at every session start.
+  - id: duplicate-work
+    cost: rework
+    description: The work rebuilds or refiles something that already exists.
+  - id: gate-bypass
+    cost: rework
+    description: The agent edits around a gate in place of satisfying it.
+  - id: non-portable-tool
+    cost: rework
+    description: A script depends on a tool a stock machine does not ship.
+  - id: over-verification
+    cost: rework
+    description: The agent runs more local checks than the repo's test rule asks.
+  - id: silent-disposition
+    cost: rework
+    description: A finding is declined with no written reason where readers look.
+  - id: silent-stall
+    cost: rework
+    description: The agent stops or waits and tells no one who can unblock it.
+  - id: skipped-step
+    cost: rework
+    description: A required pipeline step is left out.
+  - id: stale-state
+    cost: rework
+    description: The agent acts on state it did not read again first.
+  - id: unverified-claim
+    cost: rework
+    description: The agent reports a result it did not check.
+  - id: wrong-assumption
+    cost: rework
+    description: The agent infers a fact it should read or ask for.
+  - id: wrong-language
+    cost: rework
+    description: New code lands in the language the repo bars there.
+  - id: wrong-location
+    cost: rework
+    description: The work happens in the wrong checkout or directory.
+  - id: wrong-source
+    cost: rework
+    description: The agent answers from an outside source when ours holds the fact.
+  - id: wrong-surface
+    cost: rework
+    description: The change reaches for the wrong interface to carry a setting.
