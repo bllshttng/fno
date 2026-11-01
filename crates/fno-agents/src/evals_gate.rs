@@ -514,8 +514,7 @@ fn main_leg(p: &Paths, d: &Deps, state: &mut State, can_launch: bool, daily_usd:
     else {
         return "main rev unread".into();
     };
-    // The golden set is read at the sha the run grades, not at the daemon
-    // checkout, which can sit behind it.
+    // The golden set is read at the sha the run grades, not at the checkout.
     let arg_bank = ref_checkout(p, d, "main", &sha).map(|root| root.join("evals").join("bank"));
     let bank_dir = arg_bank
         .clone()
@@ -761,9 +760,7 @@ fn launch_head(
     if !fetch(p, d, &refspec) {
         return format!("head {} fetch failed", short(&pr.sha));
     }
-    // The gate-tagged set is read at the head sha, not at the daemon
-    // checkout, which can sit behind it: a golden the head adds runs at
-    // once, before the checkout moves.
+    // The gate-tagged set is read at the head sha: the checkout can sit behind it.
     let arg_bank = ref_checkout(p, d, "head", &pr.sha).map(|root| root.join("evals").join("bank"));
     let bank_dir = arg_bank
         .clone()
@@ -972,9 +969,8 @@ mod tests {
             }
         }
 
-        /// A world whose git plumbing really runs: the checkout detached at
-        /// X while main sits ahead at Y, which is the stale-checkout shape
-        /// the ref-faithful bank read exists for.
+        /// A world with real git: the checkout detached at X while main sits
+        /// ahead at Y, the stale-checkout shape this fix serves.
         fn new_git(files: &str) -> World {
             let mut w = World::new(files);
             w.real_git = true;
