@@ -2032,7 +2032,7 @@ function laneKeyOf(card, lanesBy, parents, byId) {
         const cb = document.createElement("button");
         cb.type = "button";
         cb.className = "copybtn";
-        cb.textContent = "copy " + os.action + " command";
+        cb.textContent = "copy " + (os.action === "none" ? "adopt" : os.action) + " command";
         cb.addEventListener("click", () => copyText(os.command, cb));
         sline.appendChild(cb);
       } else if (os.reason) {
