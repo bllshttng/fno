@@ -99,21 +99,7 @@ fn owner_alive(worktree: &str) -> bool {
 /// The disposable eval worktree base, honoring the worktree-base override.
 fn evals_worktree_base() -> std::path::PathBuf {
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-    let base = crate::paths_cli::cfg_str(&cwd, &["paths", "worktrees_base"])
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| {
-            let mut p = dirs_home();
-            p.push(".fno");
-            p.push("worktrees");
-            p
-        });
-    base.join("evals")
-}
-
-fn dirs_home() -> std::path::PathBuf {
-    std::env::var_os("HOME")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
+    crate::paths_cli::worktrees_base(&cwd).join("evals")
 }
 
 /// One fresh disposable worktree: clean detached checkout at *ref* under
