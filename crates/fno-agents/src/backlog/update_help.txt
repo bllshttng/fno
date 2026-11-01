@@ -8,6 +8,8 @@ Field operators (the argument carries the operator):
   Fields (the kind fixes which operators a field takes):
     text     details, dispatch_brief, completion_note
              = sets ('null' clears), += appends a paragraph
+             details= refuses a replace that would drop more than
+             half of the stored details; --force replaces anyway.
     list     tags, blocked_by, related
              = replaces, += adds, -= removes
     records  additional_prs
@@ -48,5 +50,7 @@ Options:
                                   plan_path=: bind this node to a plan
                                   another node already owns (a deliberate
                                   repoint). The other holder is still named on
-                                  stderr.
+                                  stderr. Also acknowledges a details= replace
+                                  that drops more than half of the stored
+                                  details.
   --help                          Show this message and exit.
