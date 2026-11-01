@@ -6,7 +6,9 @@
 //!
 //! Run a release build against a release `fno` when the machine is calm:
 //! `cargo run --release -p fno --example mux_latency -- --fno <release fno>`
-//! Flags: `--samples N` (default 2000), `--stages` (per-stage cost only).
+//! Flags: `--samples N` (default 2000), `--stages` (per-stage cost only),
+//! `--scenario B,C,D,E` (default all). A and the control always run: they prove
+//! the clock.
 //!
 //! Exit codes: 0 measured, 1 harness failure, 2 the 10 ms control missed, so
 //! the run is void and prints no mux numbers.
@@ -29,6 +31,16 @@ const READY_TIMEOUT: Duration = Duration::from_secs(30);
 /// Clear often enough that the echo never scrolls: a scroll repaints every row
 /// and would measure a redraw, not a keypress.
 const CLEAR_EVERY: usize = 150;
+
+/// Where a scenario's `yes` runs. A hidden flood costs no frames, because the
+/// server builds none for a pane nobody views, so it isolates the core's feed
+/// and drain from the frame path.
+#[derive(Clone, Copy)]
+enum Flood {
+    None,
+    Sibling,
+    HiddenTab,
+}
 
 /// What the reader thread looks for, and when it first saw it.
 #[derive(Default)]
@@ -249,8 +261,11 @@ impl IsolatedMux {
         Host::spawn(cmd, rows, cols)
     }
 
-    /// The first pane's id, then a sibling running `yes` in the same tab.
-    fn start_flooding_sibling(&self) -> Result<(), String> {
+    /// Start `yes` beside the first pane, or in a new tab nobody views.
+    fn start_flood(&self, flood: Flood) -> Result<(), String> {
+        if matches!(flood, Flood::None) {
+            return Ok(());
+        }
         let listed = self.output(&["mux", "pane", "ls", "--json"])?;
         let panes: serde_json::Value =
             serde_json::from_str(&listed).map_err(|e| format!("pane ls: {e}: {listed}"))?;
@@ -261,8 +276,11 @@ impl IsolatedMux {
             .and_then(serde_json::Value::as_u64)
             .ok_or_else(|| format!("pane ls names no pane: {listed}"))?
             .to_string();
-        let sibling = self.output(&["mux", "pane", "split", &first, "--direction", "right"])?;
-        self.output(&["mux", "pane", "send", &sibling, "--text", "yes\r", "--raw"])?;
+        let flooding = match flood {
+            Flood::HiddenTab => self.output(&["mux", "tab", "create"])?,
+            _ => self.output(&["mux", "pane", "split", &first, "--direction", "right"])?,
+        };
+        self.output(&["mux", "pane", "send", &flooding, "--text", "yes\r", "--raw"])?;
         Ok(())
     }
 }
@@ -356,6 +374,17 @@ fn report(name: &str, s: &Stats) {
     );
 }
 
+fn report_over_alone(name: &str, flood: &Stats, alone: Option<&Stats>) {
+    if let Some(c) = alone {
+        println!(
+            "{name}: p50_ms={:.2} p95_ms={:.2} p99_ms={:.2}",
+            flood.p50 - c.p50,
+            flood.p95 - c.p95,
+            flood.p99 - c.p99
+        );
+    }
+}
+
 fn bare_echo(argv: &str, rows: u16, cols: u16, samples: usize) -> Result<Stats, String> {
     let mut cmd = CommandBuilder::new("/bin/sh");
     cmd.arg("-c");
@@ -372,7 +401,7 @@ fn through_mux(
     bin: &str,
     rows: u16,
     cols: u16,
-    flood: bool,
+    flood: Flood,
     samples: usize,
 ) -> Result<Stats, String> {
     let mux = IsolatedMux::new(tag, bin)?;
@@ -391,9 +420,7 @@ fn through_mux(
         }
         std::thread::sleep(Duration::from_millis(200));
     }
-    if flood {
-        mux.start_flooding_sibling()?;
-    }
+    mux.start_flood(flood)?;
     // The printed word differs from the typed one, so the shell's echo of this
     // line cannot satisfy the wait.
     let setup = b"printf 'lat-%s\\n' ready; stty raw -echo; exec cat\r";
@@ -532,6 +559,21 @@ fn run() -> Result<i32, String> {
         Some(at) => args.get(at + 1).ok_or("--fno needs a path")?.clone(),
         None => "fno".to_string(),
     };
+    let scenarios: Vec<String> = match args.iter().position(|a| a == "--scenario") {
+        Some(at) => args
+            .get(at + 1)
+            .ok_or("--scenario needs a list")?
+            .split(',')
+            .map(str::to_string)
+            .collect(),
+        None => ["B", "C", "D", "E"].map(str::to_string).to_vec(),
+    };
+    if let Some(bad) = scenarios
+        .iter()
+        .find(|s| !["A", "B", "C", "D", "E"].contains(&s.as_str()))
+    {
+        return Err(format!("unknown scenario {bad}: want A, B, C, D or E"));
+    }
     println!("binary: {bin}");
 
     let bare = "stty raw -echo; printf 'lat-%s\\n' ready; exec cat";
@@ -553,14 +595,30 @@ fn run() -> Result<i32, String> {
         return Ok(2);
     }
 
-    let b = through_mux("b", &bin, 24, 80, false, samples)?;
-    report("B mux 80x24", &b);
-    let mux_c = through_mux("c", &bin, 50, 200, false, samples)?;
-    report("C mux 200x50", &mux_c);
-    let d = through_mux("d", &bin, 50, 200, true, samples)?;
-    report("D mux 200x50 + yes sibling", &d);
-    println!("mux_added_p95_ms: {:.2}", mux_c.p95 - a.p95);
-    println!("flood_added_p95_ms: {:.2}", d.p95 - a.p95);
+    let wanted = |name: &str| scenarios.iter().any(|s| s == name);
+    if wanted("B") {
+        let b = through_mux("b", &bin, 24, 80, Flood::None, samples)?;
+        report("B mux 80x24", &b);
+    }
+    let mux_c = if wanted("C") {
+        let s = through_mux("c", &bin, 50, 200, Flood::None, samples)?;
+        report("C mux 200x50", &s);
+        println!("mux_added_p95_ms: {:.2}", s.p95 - a.p95);
+        Some(s)
+    } else {
+        None
+    };
+    if wanted("D") {
+        let d = through_mux("d", &bin, 50, 200, Flood::Sibling, samples)?;
+        report("D mux 200x50 + yes sibling", &d);
+        println!("flood_added_p95_ms: {:.2}", d.p95 - a.p95);
+        report_over_alone("D-C", &d, mux_c.as_ref());
+    }
+    if wanted("E") {
+        let e = through_mux("e", &bin, 50, 200, Flood::HiddenTab, samples)?;
+        report("E mux 200x50 + yes in a hidden tab", &e);
+        report_over_alone("E-C", &e, mux_c.as_ref());
+    }
     Ok(0)
 }
 
