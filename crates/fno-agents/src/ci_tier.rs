@@ -221,30 +221,36 @@ fn ours(passes: &[Value]) -> HashSet<u64> {
     landed.filter_map(|p| p["run"].as_u64()).collect()
 }
 
-/// The runs a look hold cancelled at this slug: that gate owns their rerun
-/// when the user's look clears, so the tier never fights it.
-fn look_held(path: &Path, slug: &str, since_ms: i64) -> Result<HashSet<u64>, String> {
-    let rows = rows_of(path, "look_hold_cancel", slug, since_ms)?;
-    Ok(rows
-        .iter()
-        .flat_map(|r| {
-            r.pointer("/data/runs")
+/// The runs another row names as cancelled at this slug: a look hold owns
+/// its rerun, and a wait cancel answered a red the head already carries.
+fn named_cancels(path: &Path, slug: &str, since_ms: i64) -> Result<HashSet<u64>, String> {
+    let mut named = HashSet::new();
+    for kind in ["look_hold_cancel", "ci_wait_cancel"] {
+        for row in rows_of(path, kind, slug, since_ms)? {
+            for post in row
+                .pointer("/data/runs")
                 .and_then(Value::as_array)
                 .cloned()
                 .unwrap_or_default()
-        })
-        .filter(|p| p.get("ok").and_then(Value::as_bool) == Some(true))
-        .filter_map(|p| p.get("run").and_then(Value::as_u64))
-        .collect())
+            {
+                if post.get("ok").and_then(Value::as_bool) == Some(true) {
+                    if let Some(run) = post.get("run").and_then(Value::as_u64) {
+                        named.insert(run);
+                    }
+                }
+            }
+        }
+    }
+    Ok(named)
 }
 
-/// Whether a cancelled run stays on the rerun ledger: the tier cancelled it,
-/// or no row names its cancel. A foreign cancel with no verdict strands the
-/// head otherwise: the tier skips it, heal's digest calls it unchanged, and
-/// the push's cadence series has ended. Only a look hold's cancel drops off
-/// here; that gate reruns its own when the look clears.
-fn rerunnable(run: u64, ours: &HashSet<u64>, held: &HashSet<u64>) -> bool {
-    ours.contains(&run) || !held.contains(&run)
+/// Whether a cancelled run stays on the rerun ledger: only a run the tier
+/// cancelled itself, and never one another row names. A hand cancel stays
+/// cancelled. A wait cancel answered a red the head already carries, so a
+/// rerun would burn a slot on a known red. A look hold reruns its own when
+/// the look clears.
+fn rerunnable(run: u64, ours: &HashSet<u64>, named: &HashSet<u64>) -> bool {
+    ours.contains(&run) && !named.contains(&run)
 }
 
 /// The PR a push of `branch` must wait for, and the refusal sentence. A
@@ -393,9 +399,9 @@ fn pass_repo(root: &Path, slug: &str, path: &Path) -> Result<(), String> {
     let now = crate::ci_cadence::millis_now();
     let passes = rows_of(path, PASS_EVENT, slug, now - DAY_MS)?;
     let ours = ours(&passes);
-    let held = look_held(path, slug, now - DAY_MS)?;
+    let named = named_cancels(path, slug, now - DAY_MS)?;
     for (_, head) in &mut ranked {
-        head.cancelled.retain(|run| rerunnable(*run, &ours, &held));
+        head.cancelled.retain(|run| rerunnable(*run, &ours, &named));
     }
     // Each merge-queue-gate run in flight holds one slot.
     let slots = SIZE.saturating_sub(gates);
@@ -482,14 +488,16 @@ mod tests {
     }
 
     #[test]
-    fn a_cancelled_run_reruns_unless_a_look_hold_named_it() {
-        let own: HashSet<u64> = [10].into();
-        let held: HashSet<u64> = [30].into();
-        // The tier's own cancel reruns; an unnamed foreign cancel reruns; a
-        // look hold's cancel drops off, that gate owns it.
-        assert!(rerunnable(10, &own, &held));
-        assert!(rerunnable(20, &own, &held));
-        assert!(!rerunnable(30, &own, &held));
+    fn only_a_tier_own_cancel_reruns_and_a_named_one_never_does() {
+        let own: HashSet<u64> = [10, 11].into();
+        let named: HashSet<u64> = [11, 30].into();
+        // The tier's own unnamed cancel reruns. A wait cancel on a red head
+        // and a look hold's cancel never do, and neither does a hand cancel:
+        // no row names it, so it is not the tier's own.
+        assert!(rerunnable(10, &own, &named));
+        assert!(!rerunnable(11, &own, &named));
+        assert!(!rerunnable(30, &own, &named));
+        assert!(!rerunnable(20, &own, &named));
     }
 
     #[test]
