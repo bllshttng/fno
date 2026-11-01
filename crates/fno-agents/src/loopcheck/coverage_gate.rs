@@ -1230,8 +1230,8 @@ mod findings_open_tests {
     use super::*;
 
     #[test]
-    fn a_findings_open_row_stays_uncovered() {
-        let row = serde_json::json!({"coverage": "uncovered", "review_state": "findings_open"});
+    fn the_findings_open_word_alone_keeps_a_row_uncovered() {
+        let row = serde_json::json!({"coverage": "covered", "review_state": "findings_open"});
         assert_eq!(covered_conjuncts(&row, "", false), (false, "uncovered"));
     }
 }
