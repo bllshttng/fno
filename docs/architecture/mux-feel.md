@@ -61,7 +61,11 @@ Moving frame bytes is not what a user feels here. The cost is the wait behind a 
 D's p50 is 6.5 times C's, and its tail reaches past a second. We have not found the cause. What we measured:
 
 - Pane-output queue depth is not the cause. The shared queue in `server/serve.rs` holds 256 chunks, and a full queue takes about 330 ms to feed, which looked like the answer. We built with 16 chunks and measured: D read 752.99 ms at p95 against 601.70 ms for the deployed build in the next run. It did not help, so we reverted it.
-- No single process is pegged during D. Sampled every 5 seconds at load 87, the server read 37 to 84 percent of a core, the client 36 to 70 percent, the flooding pane's keeper 25 to 62 percent, and `yes` 6 to 17 percent.
+- No single process is pegged during D. We sampled CPU every 5 seconds at load 87, in percent of one core:
+  - server: 37 to 84
+  - client: 36 to 70
+  - the flooding pane's keeper: 25 to 62
+  - `yes`: 6 to 17
 
 Two things remain untested. Nothing paces frames: each drain of the output channel builds a frame, and `broadcast_pane` has no timer. The client also queues up to 16 whole frames at `client.rs` and composes and draws each one in turn.
 
