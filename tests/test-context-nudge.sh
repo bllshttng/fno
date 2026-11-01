@@ -471,7 +471,9 @@ assert_absent "AC19: small window no quality block" "$OUT" '"decision":"block"'
 # both writes land in the same stat second the probe cache's size+mtime
 # fingerprint does NOT change and AC20's fire is served AC19's 55% copy (the
 # refire trace named it: measured 110000 at the 140000 case). sleep 1 forces
-# a later mtime; the production-granularity gap is filed for the hook.
+# a later mtime. Production transcripts append, so the size half of the
+# fingerprint moves; the equal-length rewrite is a fixture shape, and the
+# sleeps are the accepted fix at this granularity.
 sleep 1
 rm -f "$LATCHES"/.context-nudge-* 2>/dev/null
 write_transcript "$SBX/small.jsonl" 140000 "gpt-5-codex"   # 200k window, 70%, 60k left
