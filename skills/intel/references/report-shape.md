@@ -23,7 +23,7 @@ populations: {scanned: <n>, substantive: <n>, sampled: <n>, judged: <n>}
 (3 to 6 lines. Every share is a category or subcategory share_pct.)
 
 ## Scorecard
-One line per prior suggestion, from the JSON's `scorecard.verdicts[]`: `<node> <metric> prior <n>, current <n>: <verdict>`. Verdicts: `moved` (the count fell), `unchanged`, `worse` (it rose), `unmeasured`. A first run writes `not written: first run, no prior report`.
+One line per prior suggestion, from the JSON's `scorecard.verdicts[]`: `<node> <metric> prior <n> of <pj> (<rp>%), current <n> of <cj> (<rc>%): <verdict>`, where the judged populations and rates print when the fold carries them. A `friction:<word>` metric judges per judged session: samples of different sizes make raw counts incomparable, so the verdict compares the rates, and the raw counts print beside them. Verdicts: `moved` (the rate fell), `unchanged`, `worse` (the rate rose), `unmeasured`. A fold without judged populations falls back to the raw-count comparison. A first run writes `not written: first run, no prior report`.
 
 ## By model and by lead
 Two tables the fold's `scorecard` block carries when the run asked for it (`fno-agents intel --scorecard`). The word names two artifacts: the fold's per-model/per-lead block in the sidecar JSON, and the suggestion-verdict block the judgment summary stamps. This section reads the fold's one.
