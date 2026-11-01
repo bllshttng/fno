@@ -34,8 +34,19 @@ pub fn grade(
     base_ref: Option<&str>,
 ) -> GradeOutcome {
     let timeout_s = std::cmp::max(1, task.timeout_minutes.saturating_mul(60));
+    grade_checks(&task.grade, workdir, timeout_s, base_ref)
+}
+
+/// Grade a check list against a directory. A metric case calls this with the
+/// golden's own checks, so the proof covers the grader the golden runs.
+pub fn grade_checks(
+    checks: &[super::bank::GradeCheck],
+    workdir: &std::path::Path,
+    timeout_s: i64,
+    base_ref: Option<&str>,
+) -> GradeOutcome {
     let mut results: Vec<CheckResult> = Vec::new();
-    for check in &task.grade {
+    for check in checks {
         match check.kind.as_str() {
             "exit" => results.push(grade_exit(check, workdir, timeout_s, base_ref)),
             "file-exists" => results.push(grade_file_exists(check, workdir)),
@@ -65,7 +76,12 @@ fn grade_exit(
 ) -> CheckResult {
     let command = check.command.clone().unwrap_or_default();
     let mut cmd = std::process::Command::new("sh");
-    cmd.arg("-c").arg(&command).current_dir(workdir);
+    // The verdict is the exit code; a grader's output must not reach a report.
+    cmd.arg("-c")
+        .arg(&command)
+        .current_dir(workdir)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
     if let Some(r) = base_ref {
         cmd.env("FNO_EVALS_BASE_REF", r);
     }
