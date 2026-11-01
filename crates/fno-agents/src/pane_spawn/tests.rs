@@ -331,6 +331,25 @@ fn write_and_load(
 }
 
 #[test]
+fn write_pane_row_records_only_a_claude_mode() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = AgentsHome::at(tmp.path().join("agents"));
+    let fenced = vec!["--permission-mode".to_string(), "acceptEdits".to_string()];
+    for (name, provider, passthrough, want) in [
+        ("a", "claude", fenced.clone(), Some("acceptEdits")),
+        ("b", "claude", Vec::new(), None),
+        ("c", "codex", fenced.clone(), None),
+    ] {
+        let mut ctx = PaneContext::simple(provider, "/repo");
+        ctx.passthrough = passthrough;
+        let registry =
+            write_and_load(&home, name, &ctx, &pane(), &ArmBind::NotApplicable, false).unwrap();
+        let row = registry.entries.iter().find(|e| e.name == name).unwrap();
+        assert_eq!(row.requested_permission_mode.as_deref(), want, "{name}");
+    }
+}
+
+#[test]
 fn write_pane_row_statuses_match_the_bind() {
     let tmp = tempfile::tempdir().unwrap();
     let home = AgentsHome::at(tmp.path().join("agents"));
