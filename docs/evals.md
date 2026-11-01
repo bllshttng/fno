@@ -93,7 +93,7 @@ A block with no `source`, `expected`, `rule`, `failure_type` or `outcome` refuse
 
 `fno-agents evals candidates` ranks the pool to label from. Its sources are the rule-labelled reactions in `~/.fno/evals/decision/v1`, the S2 rows in `corrections.log`, `Revert` commits, and plans by superseded status and caused plan commits. It prints a score, kind, reference, and one scrubbed quote. It writes nothing and calls no model. Every row is a candidate for a person to read. A rejected reaction is often a refused permission prompt, so the S2 rows are the stronger source.
 
-A golden's rule must be findable in the repo, because a worker reads only the repo and the prompt. It must have a mechanical grade: a choice the grader reads from a decision file, or the work product itself. A failure that needs long session state or fleet state cannot reduce to this shape. It stays out of the bank, and the reign evals and the scorecard hold that ground.
+A golden's rule must be findable in the repo, because a worker reads only the repo and the prompt. It must have a mechanical grade: a choice the grader reads from a decision file, or the work product itself. A failure that needs long session state or fleet state cannot reduce to this shape. It stays out of the bank, and the scorecard holds that ground.
 
 ## Trend
 
