@@ -99,21 +99,7 @@ fn owner_alive(worktree: &str) -> bool {
 /// The disposable eval worktree base, honoring the worktree-base override.
 fn evals_worktree_base() -> std::path::PathBuf {
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-    let base = crate::paths_cli::cfg_str(&cwd, &["paths", "worktrees_base"])
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| {
-            let mut p = dirs_home();
-            p.push(".fno");
-            p.push("worktrees");
-            p
-        });
-    base.join("evals")
-}
-
-fn dirs_home() -> std::path::PathBuf {
-    std::env::var_os("HOME")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
+    crate::paths_cli::worktrees_base(&cwd).join("evals")
 }
 
 /// One fresh disposable worktree: clean detached checkout at *ref* under
@@ -408,13 +394,23 @@ pub struct LaneRow {
 /// declared lanes (the Python repr shape, single quotes).
 pub fn resolve_lane(name: &str) -> Result<LaneRow, String> {
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-    let inv = crate::route_gather::inventory(&cwd);
-    let rows = inv.get("rows").and_then(serde_json::Value::as_object);
-    let row = rows.and_then(|r| r.get(name)).cloned();
-    let Some(row) = row else {
-        let mut names: Vec<String> = rows
-            .map(|r| r.keys().cloned().collect())
-            .unwrap_or_default();
+    lane_from_inventory(&crate::route_gather::inventory(&cwd), name)
+}
+
+fn lane_from_inventory(inv: &serde_json::Value, name: &str) -> Result<LaneRow, String> {
+    let rows = inv
+        .get("rows")
+        .and_then(serde_json::Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    let field = |row: &serde_json::Value, key: &str| {
+        row.get(key)
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+            .to_string()
+    };
+    let Some(row) = rows.iter().find(|r| field(r, "name") == name) else {
+        let mut names: Vec<String> = rows.iter().map(|r| field(r, "name")).collect();
         names.sort();
         let joined: Vec<String> = names.iter().map(|n| format!("'{n}'")).collect();
         let declared = joined.join(", ");
@@ -424,21 +420,9 @@ pub fn resolve_lane(name: &str) -> Result<LaneRow, String> {
     };
     Ok(LaneRow {
         name: name.to_string(),
-        harness: row
-            .get("harness")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("")
-            .to_string(),
-        route: row
-            .get("route")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("")
-            .to_string(),
-        account: row
-            .get("account")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("")
-            .to_string(),
+        harness: field(row, "harness"),
+        route: field(row, "route"),
+        account: field(row, "account"),
     })
 }
 
@@ -672,6 +656,25 @@ mod tests {
         assert_eq!(answered, tree_hash(d.path()).unwrap());
         assert_eq!(git(&["diff", "--cached", "--name-only"]), "");
         assert!(git(&["status", "--porcelain"]).contains("?? decision.md"));
+    }
+
+    #[test]
+    fn a_lane_resolves_from_the_inventory_rows_and_a_miss_names_the_declared_ones() {
+        let inv = serde_json::json!({"rows": [
+            {"name": "zai-flash", "harness": "claude", "route": "zai/glm", "account": "zai"},
+            {"name": "codex-luna", "harness": "codex", "route": "", "account": "codex-main"},
+        ]});
+        let lane = lane_from_inventory(&inv, "zai-flash").unwrap();
+        assert_eq!(
+            (
+                lane.harness.as_str(),
+                lane.route.as_str(),
+                lane.account.as_str()
+            ),
+            ("claude", "zai/glm", "zai")
+        );
+        let miss = lane_from_inventory(&inv, "nope").err().unwrap();
+        assert!(miss.contains("['codex-luna', 'zai-flash']"), "{miss}");
     }
 
     #[test]
