@@ -193,12 +193,14 @@ fn status_read(payload: &Value) -> (i32, String, String) {
         cached_status_via(cwd_str, pr, refresh, None, false);
     // The pinned read: `--expect-head SHA` refuses any answer about another
     // head (exit 6) instead of settling the question against whatever commit
-    // the PR happens to point at.
+    // the PR happens to point at. A failed read answered nothing, so the
+    // error exit and its reason line stand; the pin has nothing to refuse.
     let mut mismatch = None;
     if let Some(expected) = payload
         .get("expect_head")
         .and_then(Value::as_str)
         .filter(|s| !s.is_empty())
+        .filter(|_| out.get("verdict").and_then(Value::as_str) != Some("error"))
     {
         if let Some(obj) = out.as_object_mut() {
             mismatch = super::compose::apply_expect_head(obj, expected);
