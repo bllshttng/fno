@@ -175,7 +175,18 @@ pub fn tick_pages(
         // is never closed as gone.
         .filter(|i| i.host.is_none())
         .collect();
-    let all_open: std::collections::HashSet<&str> = items.iter().map(|i| i.id.as_str()).collect();
+    // A copy's id reads `q-1234abcd@host` and its page names `q-1234abcd`:
+    // both spellings are open, so both arms on one synced vault write one
+    // index and neither lists the other's question twice.
+    let all_open: std::collections::HashSet<&str> = items
+        .iter()
+        .flat_map(|i| [i.id.as_str(), crate::numbers::canonical(&i.id)])
+        .collect();
+    let numbers = crate::numbers::labels();
+    let numbered = |id: &str, title: String| match numbers.get(id) {
+        Some(number) => format!("{number} {title}"),
+        None => title,
+    };
     let mut tick = SinkTick::default();
 
     // 2. Read the folder. A page is a .md file whose frontmatter question_id
@@ -328,7 +339,8 @@ pub fn tick_pages(
     // 7. The index and the done listing are rebuilt after the settle pass:
     // a page this beat closed must not linger under Open (AC5-HP).
     let (done_ids_now, done_pages) = list_done(dir, io);
-    let done_pages = drain_duplicate_lost(done_pages, io, &mut tick);
+    let done_pages = drain_duplicate_lost(done_pages, &all_open, io, &mut tick);
+    stamp_number_aliases(&pages, &numbers, io);
     let mut open_entries: Vec<IndexEntry> = Vec::new();
     for page in &pages {
         if page.front.status == "open"
@@ -347,7 +359,7 @@ pub fn tick_pages(
             open_entries.push(IndexEntry {
                 stem: page.stem.clone(),
                 id: page.front.question_id.clone(),
-                title,
+                title: numbered(&page.front.question_id, title),
                 kind: page.front.kind.clone(),
                 blocks: page.front.blocks.clone(),
                 lead: page.front.lead.clone(),
@@ -361,7 +373,7 @@ pub fn tick_pages(
         open_entries.push(IndexEntry {
             stem: stem.clone(),
             id: item.id.clone(),
-            title: attention_file::page_title(&item.title),
+            title: numbered(&item.id, attention_file::page_title(&item.title)),
             kind: item.kind.clone(),
             blocks: item.blocks.clone(),
             lead: routing.lead.clone().unwrap_or_else(|| "none".to_string()),
@@ -377,7 +389,10 @@ pub fn tick_pages(
                 .unwrap_or("")
                 .to_string(),
             id: front.question_id.clone(),
-            title: attention_file::unescape_text(&front.title),
+            title: numbered(
+                &front.question_id,
+                attention_file::unescape_text(&front.title),
+            ),
             status: front.status.clone(),
             answered_at: front.answered_at.clone().unwrap_or_default(),
             answer: front.answer.clone().unwrap_or_default(),
@@ -773,12 +788,42 @@ fn move_to_done(
 /// short.
 pub const DRAIN_DUPLICATE_LOST_CAP: usize = 200;
 
+/// Add the short number to an open page's aliases, so a vault search by
+/// number lands on the page. Only the arm that delivered the page writes it.
+/// `settle_key` ignores the aliases, so no settle window restarts.
+fn stamp_number_aliases(
+    pages: &[FoundPage],
+    numbers: &HashMap<String, String>,
+    io: &mut dyn SinkIo,
+) {
+    let mine = io.arm_id();
+    for page in pages {
+        let Some(number) = numbers.get(page.front.question_id.as_str()) else {
+            continue;
+        };
+        if page.front.status != "open"
+            || page.front.arm != mine
+            || page.front.aliases.contains(number)
+        {
+            continue;
+        }
+        let stamped = attention_file::add_alias(&page.text, number);
+        // A page that moved or changed this beat waits for the next one.
+        if stamped != page.text && io.read(&page.path).is_ok_and(|cur| cur == page.text) {
+            let _ = io.write_atomic(&page.path, &stamped);
+        }
+    }
+}
+
 /// Step 7's drain: one lost copy per question id stays, the newest by
 /// `answered_at` (ties keep one deterministically); an answered or
-/// closed-elsewhere copy is never touched. Returns the surviving pages so
-/// the index lists what is actually on disk.
+/// closed-elsewhere copy is never touched. A lost copy of a question that
+/// reads open is a false close, so it goes too: that copy made the question
+/// read both open and closed. Returns the surviving pages so the index lists
+/// what is actually on disk.
 fn drain_duplicate_lost(
     pages: Vec<(PathBuf, PageFront)>,
+    open: &HashSet<&str>,
     io: &mut dyn SinkIo,
     tick: &mut SinkTick,
 ) -> Vec<(PathBuf, PageFront)> {
@@ -791,6 +836,10 @@ fn drain_duplicate_lost(
         }
         let mut victims: Vec<usize> = Vec::new();
         for idxs in by_id.values() {
+            if open.contains(idxs_id(&pages, idxs)) {
+                victims.extend_from_slice(idxs);
+                continue;
+            }
             if idxs.len() < 2 {
                 continue;
             }
@@ -825,6 +874,10 @@ fn drain_duplicate_lost(
     tick.detail
         .push(format!("done: removed {removed} duplicate lost copies"));
     kept
+}
+
+fn idxs_id<'a>(pages: &'a [(PathBuf, PageFront)], idxs: &[usize]) -> &'a str {
+    pages[idxs[0]].1.question_id.as_str()
 }
 
 fn short_answer(answer: &str) -> String {
@@ -1365,7 +1418,7 @@ fn now_secs() -> u64 {
 /// the names of stores that exist but could not be read (an unreadable store
 /// means an INCOMPLETE projection, and the caller must not treat its absent
 /// ids as closed), and the raw journal text the `closes` fold reads.
-fn read_items(cwd: &Path) -> (Vec<AttentionItem>, Vec<String>, Vec<String>) {
+pub(crate) fn read_items(cwd: &Path) -> (Vec<AttentionItem>, Vec<String>, Vec<String>) {
     let fno_dir = crate::paths::AgentsHome::from_env()
         .root()
         .parent()
@@ -1389,7 +1442,17 @@ fn read_items(cwd: &Path) -> (Vec<AttentionItem>, Vec<String>, Vec<String>) {
     };
     drop(cache);
     attach_registry_reach(&mut items);
+    attach_numbers(&mut items);
     (items, unreadable, stores)
+}
+
+/// Join each item's short number. A fresh read each beat: the projection cache
+/// outlives a mint.
+fn attach_numbers(items: &mut [AttentionItem]) {
+    let held = crate::numbers::labels();
+    for item in items.iter_mut() {
+        item.number = held.get(crate::numbers::canonical(&item.id)).cloned();
+    }
 }
 
 /// The last complete projection and the input mark it was read at. The
@@ -1458,6 +1521,7 @@ pub(crate) fn read_items_at(
 ) -> (Vec<AttentionItem>, Vec<String>, Vec<String>) {
     let (mut items, unreadable, stores) = project_items(fno_dir, cwd);
     attach_registry_reach(&mut items);
+    attach_numbers(&mut items);
     (items, unreadable, stores)
 }
 
@@ -2197,6 +2261,50 @@ mod tests {
             .filter(|p| p.to_string_lossy().contains("done/q-lost"))
             .count();
         assert_eq!(lost_copies, 1, "still one lost copy per id");
+    }
+
+    #[test]
+    fn a_lost_copy_of_an_open_question_is_a_false_close_and_goes() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut io = MemIo::default();
+        let done = dir.path().join("done");
+        let lost = |id: &str| {
+            close_page(
+                &render_page(&ready_item(id, "question"), &Routing::default()),
+                "closed",
+                "",
+                "2026-10-22T05:00:00Z",
+                LOST_BY,
+                "Recorded: lost",
+            )
+        };
+        io.files.insert(done.join("q-open-26.md"), lost("q-open"));
+        io.files.insert(done.join("q-gone.md"), lost("q-gone"));
+        // A copy from another machine keeps its bare id open too.
+        let mut copy = ready_item("q-peer@imac2d2", "question");
+        copy.host = Some("imac2d2".to_string());
+        io.files.insert(done.join("q-peer-3.md"), lost("q-peer"));
+        let items = [ready_item("q-open", "question"), copy];
+        let closes = HashMap::new();
+        let mut state = HashMap::new();
+        tick_pages(
+            &items,
+            &closes,
+            &HashSet::new(),
+            dir.path(),
+            &mut state,
+            1000,
+            DEFAULT_SETTLE_SECS,
+            &mut io,
+        );
+        assert!(!io.files.contains_key(&done.join("q-open-26.md")));
+        assert!(!io.files.contains_key(&done.join("q-peer-3.md")));
+        assert!(
+            io.files.contains_key(&done.join("q-gone.md")),
+            "a closed id keeps its copy"
+        );
+        let index = io.files.get(&dir.path().join("questions.md")).unwrap();
+        assert!(!index.contains("q-open-26"), "{index}");
     }
 
     #[test]
