@@ -1204,10 +1204,11 @@ mod tests {
         let dir = state_dir(&w.history());
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join(MAIN_LOG), "Error: unknown lane\n\n").unwrap();
-        // The cohort name holds the date, so the retries must not cross midnight.
+        // Early in the day: the cohort names the date, so a clock past 21:00 UTC
+        // crosses midnight here and the tries count starts over.
         let now = Utc::now()
             .date_naive()
-            .and_hms_opt(12, 0, 0)
+            .and_hms_opt(1, 0, 0)
             .unwrap()
             .and_utc();
         let hour = chrono::Duration::seconds(MAIN_RETRY_S + 1);
@@ -1244,7 +1245,11 @@ mod tests {
     #[test]
     fn a_main_run_with_a_grade_is_the_baseline_and_ends_the_day() {
         let w = World::new("crates/x.rs\n");
-        let now = Utc::now();
+        let now = Utc::now()
+            .date_naive()
+            .and_hms_opt(1, 0, 0)
+            .unwrap()
+            .and_utc();
         w.tick(true, now);
         let cohort = load_state(&state_dir(&w.history())).main_tried.unwrap();
         w.rows(&cohort, "g2", [true, true, true]);

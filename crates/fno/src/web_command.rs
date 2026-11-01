@@ -86,6 +86,7 @@ impl CommandCache {
                         });
                     json!({
                         "id": q.id,
+                        "number": q.number,
                         "kind": q.kind,
                         "title": q.title,
                         "node": q.node,

@@ -837,6 +837,7 @@ fn run_items(home: &AgentsHome, cwd: &Path) -> i32 {
     if let Ok(registry) = crate::state::load_registry(&home.registry_json()) {
         crate::attention::attach_reach(&mut items, &registry);
     }
+    crate::attention_arm::attach_numbers(&mut items);
     // The settled flag shares the sweep's question fold, rules and all. An
     // unreadable graph closes nothing.
     let facts = crate::question_sweep::read_closed_rung_facts(cwd, home);

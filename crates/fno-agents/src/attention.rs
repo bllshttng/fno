@@ -208,6 +208,9 @@ pub struct AttentionItem {
     /// store; `None` for a question asked here.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub host: Option<String>,
+    /// The short number (`Q87`), joined at read time from `fno_numbers`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub number: Option<String>,
     /// Absolute paths of the screenshots the ask copied into the vault.
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub images: Vec<String>,
@@ -548,6 +551,7 @@ fn item_from_question_row(row: &Value, ts: &str) -> Option<AttentionItem> {
         .unwrap_or_default();
     let mut item = AttentionItem {
         images,
+        number: None,
         host: crate::question_bus::peer_origin(row).map(|_| {
             str_field(row, "host")
                 .unwrap_or("another machine")
@@ -638,6 +642,7 @@ fn item_from_note(slug: &str, text: &str) -> Option<AttentionItem> {
     };
     let mut item = AttentionItem {
         host: None,
+        number: None,
         recovery_batch: None,
         id: format!("note-{slug}"),
         kind: "question".to_string(),
@@ -709,6 +714,7 @@ fn mine_items(lane_text: &str) -> Vec<AttentionItem> {
         }
         out.push(AttentionItem {
             host: None,
+            number: None,
             recovery_batch: None,
             id: format!("mine-{:016x}", fnv1a(rest)),
             kind: "mine".to_string(),

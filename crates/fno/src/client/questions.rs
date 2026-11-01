@@ -451,7 +451,10 @@ pub(super) fn draw_detail(
         Some(d.scroll.min(page.len().saturating_sub(1)))
     };
     let chrome = chrome::Chrome::new(
-        format!("question \u{b7} {}", d.item().id),
+        match d.item().number.as_deref() {
+            Some(number) => format!("question \u{b7} {number} ({})", d.item().id),
+            None => format!("question \u{b7} {}", d.item().id),
+        },
         crate::popup::Anchor::Center,
     )
     .flat();
@@ -829,10 +832,17 @@ fn parse_questions_index(text: &str) -> Option<crate::needs_overlay::QuestionsFo
             .unwrap_or("question");
         let kind = if kind == "pin" { "pin" } else { "question" };
         let created_at = stem_date(stem);
+        // One row per id: the Open section comes first, so a stale Done copy
+        // never adds a second row for an open question.
+        if items.iter().any(|q| q.id == id) {
+            continue;
+        }
+        let (number, title) = split_number(title.trim());
         items.push(crate::needs_overlay::QuestionItem {
             id: id.into(),
+            number,
             kind: kind.into(),
-            title: title.trim().into(),
+            title: title.into(),
             state: state.into(),
             ready: true,
             missing: vec![],
@@ -850,6 +860,45 @@ fn parse_questions_index(text: &str) -> Option<crate::needs_overlay::QuestionsFo
         items,
         ..Default::default()
     })
+}
+
+/// One question filed on two machines holds two ids: the row asked here stays
+/// and the other machine's copy with the same title and node leaves the board.
+fn one_row_per_question(
+    items: Vec<crate::needs_overlay::QuestionItem>,
+) -> Vec<crate::needs_overlay::QuestionItem> {
+    let key = |q: &crate::needs_overlay::QuestionItem| (q.title.trim().to_string(), q.node.clone());
+    let here: std::collections::HashSet<_> = items
+        .iter()
+        .filter(|q| q.host.is_none() && !q.title.trim().is_empty())
+        .map(key)
+        .collect();
+    items
+        .into_iter()
+        // A fixed id with a host is a different question on that machine.
+        .filter(|q| q.host.is_none() || bare_id(&q.id) == q.id || !here.contains(&key(q)))
+        .collect()
+}
+
+/// A copy's question hash. A fixed id with a host stays whole: two machines
+/// use `provider-cap:<lane>` for two different questions.
+fn bare_id(id: &str) -> &str {
+    match id.split_once('@') {
+        Some((bare, _)) if stem_id(bare).is_some() => bare,
+        _ => id,
+    }
+}
+
+/// Split the index's `Q87: title` into the number and the title.
+fn split_number(text: &str) -> (Option<String>, &str) {
+    if let Some((head, rest)) = text.split_once(": ") {
+        let number = head.split('@').next().unwrap_or(head);
+        let digits = number.strip_prefix('Q').unwrap_or("");
+        if !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()) {
+            return (Some(head.to_string()), rest);
+        }
+    }
+    (None, text)
 }
 
 /// The stem's question id: the `q` segment followed by an 8-hex segment.
@@ -1286,11 +1335,17 @@ impl View {
                 let healthy = !self.questions_degraded;
                 let primary = if healthy { fold } else { index };
                 let secondary = if healthy { index } else { fold };
+                // A copy from another machine reads `q-1234abcd@host` in the
+                // projection and `q-1234abcd` in the index: one question, one
+                // row.
                 let mut items: Vec<_> = primary.items.clone();
-                let held: std::collections::HashSet<&str> =
-                    primary.items.iter().map(|q| q.id.as_str()).collect();
+                let mut held: std::collections::HashSet<String> = primary
+                    .items
+                    .iter()
+                    .map(|q| bare_id(&q.id).to_string())
+                    .collect();
                 for q in &secondary.items {
-                    if !held.contains(q.id.as_str()) {
+                    if held.insert(bare_id(&q.id).to_string()) {
                         items.push(q.clone());
                     }
                 }
@@ -1298,7 +1353,7 @@ impl View {
             }
         };
         Some(crate::needs_overlay::QuestionsFold {
-            items,
+            items: one_row_per_question(items),
             ..Default::default()
         })
     }
@@ -1967,6 +2022,37 @@ mod tests {
             "index-only ids survive"
         );
         assert!(!by_id("q-ffff0000").settled, "projection-only ids survive");
+
+        // The same question from two machines holds one row: a copy id against
+        // the index's bare id, a Done copy beside an open row, and one question
+        // filed under two ids.
+        let index = parse_questions_index(
+            "## Open (1)\n\n- [[20261101-q-dddddddd-t-x-a|Q87: shared title]] \u{b7} question \u{b7} l\n\n## Done\n\n- [[q-dddddddd-26|Q87: shared title]] \u{b7} closed 2026-10-22 \u{b7} \n",
+        )
+        .unwrap();
+        assert_eq!(index.items.len(), 1, "a Done copy adds no row");
+        assert_eq!(index.items[0].number.as_deref(), Some("Q87"));
+        assert_eq!(index.items[0].title, "shared title");
+        let mut copy = item("q-dddddddd@imac2d2", true);
+        copy.host = Some("imac2d2".into());
+        let mut filed_here = item("note-hold-cap", true);
+        filed_here.title = "same ask".into();
+        filed_here.node = Some("x-1".into());
+        let mut filed_there = item("q-eeeeeeee@imac2d2", true);
+        filed_there.title = "same ask".into();
+        filed_there.node = Some("x-1".into());
+        filed_there.host = Some("imac2d2".into());
+        let mut two = view_with_agents(vec![]);
+        two.apply_questions_index(index);
+        two.apply_questions_fold(Ok(fold_with(vec![copy, filed_here, filed_there])));
+        let ids: Vec<String> = two
+            .questions_merged()
+            .unwrap()
+            .items
+            .iter()
+            .map(|q| q.id.clone())
+            .collect();
+        assert_eq!(ids, ["q-dddddddd@imac2d2", "note-hold-cap"]);
 
         // A degraded projection yields to the index on shared ids: the
         // timed-out read never outvotes the fresh list.

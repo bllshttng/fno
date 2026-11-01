@@ -1,5 +1,7 @@
 # The decision record
 
+Every door that takes a decision id also takes its short number: `D142`, `d142` or `d-142`. A question takes `Q87` the same way. See [Short numbers](multiplayer.md#short-numbers).
+
 A ruling stated in chat dies with the context. Weeks later, the operator asks, "there was this thing we discussed, what happened with that?" This page explains recording, storage, and current-law queries.
 
 ## The command

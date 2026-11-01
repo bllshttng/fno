@@ -443,7 +443,7 @@ fn render(payload: &Value) -> String {
                 } else {
                     format!(": {ask}")
                 };
-                format!("Start: answer {id}{ask}")
+                format!("Start: answer {}{ask}", crate::numbers::display(id))
             }
             (Some("end"), Some(id)) => {
                 let ask = questions["first_ask"].as_str().unwrap_or("");

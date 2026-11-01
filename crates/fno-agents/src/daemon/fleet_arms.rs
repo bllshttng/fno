@@ -68,6 +68,7 @@ pub(super) struct FleetArms {
     lease_heartbeat: crate::lease_heartbeat::Arm,
     backlog_share: crate::backlog_share::Arm,
     mail: crate::mail_arm::Arm,
+    numbers: crate::numbers::Arm,
     // The board render: off the Python write path (law d-bad5a42f), the
     // daemon ticks it every interval and stamps rendered_version.
     board_render: crate::board_render_arm::Arm,
@@ -166,6 +167,7 @@ impl FleetArms {
             lease_heartbeat: crate::lease_heartbeat::Arm::default(),
             backlog_share: crate::backlog_share::Arm::default(),
             mail: crate::mail_arm::Arm::default(),
+            numbers: crate::numbers::Arm::default(),
             board_render: crate::board_render_arm::Arm::default(),
             last_gc_sweep: Instant::now(),
             retire_interval_next: crate::gc::seed_retire_interval_cell(&opts.agents_config_cwd),
@@ -411,6 +413,8 @@ impl FleetArms {
         // With a shared primary set, pull cross-host mail rows, drain the
         // send-side outbox, and expire rows past their TTL.
         crate::mail_arm::maybe_tick(&self.mail);
+        // Mint and cache the short numbers for decisions and questions.
+        crate::numbers::maybe_tick(&self.numbers, &ctx.opts.agents_config_cwd);
         // Serve-only liveness tick: the served pair is the sweep's measurement,
         // refreshed every SERVED_LIVENESS_CADENCE; off-loop, one-in-flight.
         let codex_threads_for_liveness = Arc::clone(&ctx.codex_threads);
