@@ -228,18 +228,15 @@ fn slow_tasks(rows: &[Value], baseline: &str) -> BTreeSet<String> {
         .collect()
 }
 
-/// The `gate` goldens this head can run, read from `bank_dir`: the tested
-/// ref's bank when one is materialized, else the checkout's. A golden added
-/// to main after the head branched has no fixture there, and would read as a
-/// regression.
+/// The `gate` goldens among `tasks`. A golden added to main after the head
+/// branched has no fixture there, and would read as a regression.
 fn gate_tasks(
-    p: &Paths,
-    d: &Deps,
-    bank_dir: &Path,
+    tasks: &[crate::evals::bank::TaskSpec],
     sha: &str,
     slow: &BTreeSet<String>,
+    d: &Deps,
+    p: &Paths,
 ) -> Vec<String> {
-    let tasks = crate::evals::bank::discover_bank(bank_dir).unwrap_or_default();
     tasks
         .iter()
         .filter(|t| t.tags.iter().any(|tag| tag == GATE_TAG))
@@ -518,11 +515,21 @@ fn main_leg(p: &Paths, d: &Deps, state: &mut State, can_launch: bool, daily_usd:
     let bank_dir = arg_bank
         .clone()
         .unwrap_or_else(|| p.repo.join("evals").join("bank"));
-    let goldens = crate::evals::bank::discover_bank(&bank_dir)
-        .unwrap_or_default()
-        .iter()
-        .filter(|t| t.tags.iter().any(|tag| tag == GOLDEN_TAG))
-        .count();
+    let goldens = match crate::evals::bank::discover_bank(&bank_dir) {
+        Ok(tasks) => tasks
+            .iter()
+            .filter(|t| t.tags.iter().any(|tag| tag == GOLDEN_TAG))
+            .count(),
+        // No launch on an unread bank: the retry loop carries the cause.
+        Err(e) => {
+            return main_failed(
+                d,
+                state,
+                &cohort,
+                format!("bank unread at the ref: {}", e.0),
+            )
+        }
+    };
     let cost = (goldens * REPEATS) as f64 * ATTEMPT_USD;
     if spent_today(&history_rows(p.history), d.now) + cost > daily_usd {
         return format!("main held: {cost:.2} USD over the daily budget");
@@ -765,10 +772,23 @@ fn launch_head(
         .clone()
         .unwrap_or_else(|| p.repo.join("evals").join("bank"));
     let rows = history_rows(p.history);
-    let tasks = gate_tasks(p, d, &bank_dir, &pr.sha, &slow_tasks(&rows, baseline));
+    let slow = slow_tasks(&rows, baseline);
     let mut finish = |status: &str, text: &str, disposition: String| {
         if post_status(p, d, slug, &pr.sha, status, text) {
             state.heads.insert(pr.sha.clone(), disposition);
+        }
+    };
+    // An unreadable bank at the head is red, never green: a PR that broke
+    // its bank file must not pass for want of tasks.
+    let tasks = match crate::evals::bank::discover_bank(&bank_dir) {
+        Ok(tasks) => gate_tasks(&tasks, &pr.sha, &slow, d, p),
+        Err(e) => {
+            finish(
+                "failure",
+                &no_result(&pr.sha, &format!("bank unread at the head: {}", e.0)),
+                DONE.into(),
+            );
+            return format!("head {} bank unread", short(&pr.sha));
         }
     };
     if tasks.is_empty() {
@@ -1067,9 +1087,7 @@ mod tests {
                         })
                     }
                     ["git", "worktree", ..] => {
-                        // Fallback mode: materialization fails, so the gate
-                        // reads the checkout bank, the behavior before the
-                        // ref-faithful read existed.
+                        // Fallback mode: the gate reads the checkout bank.
                         Some(Run {
                             ok: false,
                             code: Some(1),
@@ -1144,8 +1162,6 @@ mod tests {
         let spawns = w.spawns.borrow();
         assert_eq!(spawns.len(), 1, "one head launch");
         let argv = spawns[0].join(" ");
-        // A checkout behind main misses g3 in its bank; the ref-faithful
-        // read runs it. The fallback path lists only g1.
         assert!(argv.contains("--task g1,g3"), "{argv}");
         assert!(argv.contains("--bank"), "{argv}");
         assert!(argv.contains(&format!("--ref {y}")), "{argv}");
