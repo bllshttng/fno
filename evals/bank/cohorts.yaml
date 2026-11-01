@@ -42,7 +42,7 @@
 # reachable because this repo merges with merge commits.
 #
 # Re-pinned for the recall rewrite of the goldens.
-bank_rev: 365aa6a167ed0b48de0cd9ae0e5c2ef064825ba2
+bank_rev: 7524346fbe760abf66898f84eb10faf0eab32d1e
 
 train:
   - capability-lane-blueprint
