@@ -18,7 +18,7 @@ use serde_json::Map;
 use serde_json::Value;
 
 const EXIT_USAGE: i32 = 2;
-const USAGE: &str = "usage: fno-agents evals-trend --history <jsonl> (--mode report [--since K] [--graduate N] [--json] [--compare A --to B [--repeats N] [--bank DIR]] [--by-failure-type [--repeats N] [--bank DIR]] [--check-metrics [--bank DIR]] [--planned <json>] [--qualification <manifest.json>] [--by-cohort [--prices <json>]] [--climb --baseline C --trial C [--cohorts-yaml P] [--stage V --trial-lane L]] | --mode trend | --mode summary) [--stale-days N] [--now <rfc3339>]";
+const USAGE: &str = "usage: fno-agents evals-trend --history <jsonl> (--mode report [--since K] [--graduate N] [--json] [--compare A --to B [--repeats N] [--bank DIR] [--prices JSON]] [--by-failure-type [--repeats N] [--bank DIR]] [--check-metrics [--bank DIR]] [--planned <json>] [--qualification <manifest.json>] [--by-cohort [--prices <json>]] [--climb --baseline C --trial C [--cohorts-yaml P] [--stage V --trial-lane L]] | --mode trend | --mode summary) [--stale-days N] [--now <rfc3339>]";
 
 /// One history row: the fields the folds read. Absent keys read as the
 /// Python fold read them (missing `variant` is baseline, missing `ts` is
@@ -40,6 +40,10 @@ impl Row {
     /// The content id of the tree this attempt left, when the row recorded it.
     pub(crate) fn tree_hash(&self) -> Option<&str> {
         self.raw.get("tree_hash").and_then(Value::as_str)
+    }
+
+    pub(crate) fn lane_status(&self) -> Option<&str> {
+        self.raw.get("lane_status").and_then(Value::as_str)
     }
 }
 
@@ -457,11 +461,17 @@ fn report_fold(
     report
 }
 
+/// Lane evidence that says the row is no sample of the requested lane. The
+/// 2026-10-23 climb's rows read `account-dropped`, so their account is unknown.
+pub(crate) fn lane_excludes(lane_status: Option<&str>) -> bool {
+    matches!(lane_status, Some("substituted" | "account-dropped"))
+}
+
 /// A valid grade the lane evidence does not exclude. Everything else is
 /// counted by reason and never scored.
 pub(crate) fn is_scored(r: &Row) -> bool {
     r.raw.get("status").and_then(Value::as_str) == Some("graded")
-        && r.raw.get("lane_status").and_then(Value::as_str) != Some("substituted")
+        && !lane_excludes(r.raw.get("lane_status").and_then(Value::as_str))
         && r.raw
             .get("excluded_reason")
             .and_then(Value::as_str)
@@ -519,7 +529,7 @@ pub(crate) fn cohort_score(rows: &[&Row], prices: Option<&Value>) -> Value {
             excluded += 1;
             let why = match reason {
                 Some(reason) => reason,
-                None if lane_status == "substituted" => "substituted",
+                None if lane_excludes(Some(lane_status)) => lane_status,
                 None => status,
             };
             *by_reason.entry(why.to_string()).or_default() += 1;
@@ -1228,6 +1238,7 @@ pub fn run_evals_trend(args: &[String]) -> i32 {
             since,
             json_out,
             bank: &bank_dir,
+            prices: prices.as_ref(),
         });
     }
 

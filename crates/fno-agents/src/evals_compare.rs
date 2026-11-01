@@ -6,7 +6,9 @@
 //! plumbing row can never read as a pass. A task needs `repeats` grades for a
 //! status; with fewer it reads `error`. A flaky status names its noise from
 //! the tree hashes. A golden whose failure type is not proved lists as
-//! unproved, and it cannot fail the compare.
+//! unproved, and it cannot fail the compare. Each side also names the rows
+//! its lane evidence excludes and prints tokens and dollars per accepted
+//! result, or `unmeasured`.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -15,7 +17,7 @@ use serde_json::{json, Value};
 
 use crate::evals::bank::TaskSpec;
 use crate::evals::failure_types::{prove, Catalog, Proof};
-use crate::evals_trend::{is_scored, read_rows, Row};
+use crate::evals_trend::{cohort_score, is_scored, lane_excludes, read_rows, Row};
 
 const EXIT_REGRESSED: i32 = 1;
 const EXIT_USAGE: i32 = 2;
@@ -28,6 +30,7 @@ pub(crate) struct CompareArgs<'a> {
     pub since: Option<usize>,
     pub json_out: bool,
     pub bank: &'a Path,
+    pub prices: Option<&'a Value>,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -223,6 +226,57 @@ pub(crate) fn fold(
     }))
 }
 
+/// One side's excluded rows by task, and its cost from the cohort fold's rule:
+/// every scored row has usage and a complete price line, or `unmeasured`.
+fn lane_fold(rows: &[&Row], prices: Option<&Value>) -> Value {
+    let mut excluded: BTreeMap<(&str, &str), u64> = BTreeMap::new();
+    for row in rows {
+        if let Some(lane) = row.lane_status().filter(|l| lane_excludes(Some(*l))) {
+            *excluded.entry((row.task_id.as_str(), lane)).or_default() += 1;
+        }
+    }
+    let excluded: Vec<Value> = excluded
+        .into_iter()
+        .map(|((task, lane), rows)| json!({"task": task, "lane_status": lane, "rows": rows}))
+        .collect();
+    let score = cohort_score(rows, prices);
+    json!({
+        "excluded": excluded,
+        "scored": score["scored"],
+        "accepted": score["accepted"],
+        "tokens": score["tokens"],
+        "dollars_per_accepted": score["cost"]["dollars_per_accepted"],
+    })
+}
+
+fn add_lanes(view: &mut Value, rows: &[Row], a: &str, b: &str, prices: Option<&Value>) {
+    view["a"]["lane"] = lane_fold(&side_rows(rows, a), prices);
+    view["b"]["lane"] = lane_fold(&side_rows(rows, b), prices);
+}
+
+fn lane_lines(view: &Value) -> Vec<String> {
+    let mut out = Vec::new();
+    for key in ["a", "b"] {
+        let lane = &view[key]["lane"];
+        for row in lane["excluded"].as_array().into_iter().flatten() {
+            out.push(format!(
+                "Excluded {key}: {} {} ({} rows, unscored)",
+                row["task"].as_str().unwrap_or_default(),
+                row["lane_status"].as_str().unwrap_or_default(),
+                row["rows"],
+            ));
+        }
+        let dollars = lane["dollars_per_accepted"]
+            .as_f64()
+            .map_or("unmeasured".to_string(), |d| format!("${d:.4}"));
+        out.push(format!(
+            "Cost {key}: {dollars} per accepted result ({} accepted of {} scored, tokens in={} out={})",
+            lane["accepted"], lane["scored"], lane["tokens"]["input"], lane["tokens"]["output"],
+        ));
+    }
+    out
+}
+
 fn render(view: &Value) -> String {
     let side_line = |key: &str| {
         let side = &view[key];
@@ -294,6 +348,7 @@ fn render(view: &Value) -> String {
         };
         out.push(format!("Pass rate {key}: {p}/{d} ({pct})"));
     }
+    out.extend(lane_lines(view));
     out.join("\n")
 }
 
@@ -308,13 +363,14 @@ pub(crate) fn run(args: &CompareArgs) -> i32 {
         eprintln!("evals compare: no metric proofs read: {e}");
         BTreeSet::new()
     });
-    let view = match fold(&rows, args.a, args.b, args.repeats, &unproved) {
+    let mut view = match fold(&rows, args.a, args.b, args.repeats, &unproved) {
         Ok(v) => v,
         Err(e) => {
             eprintln!("{e}");
             return EXIT_USAGE;
         }
     };
+    add_lanes(&mut view, &rows, args.a, args.b, args.prices);
     if args.json_out {
         println!(
             "{}",
@@ -572,6 +628,45 @@ mod tests {
         let parsed = read_rows(h.path().to_str().unwrap(), None, None);
         let err = fold(&parsed, "a", "typo", 3, &BTreeSet::new()).unwrap_err();
         assert!(err.contains("'typo'"), "{err}");
+    }
+
+    #[test]
+    fn excluded_lanes_are_named_and_unscored_and_cost_prints_dollars_or_unmeasured() {
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        for (side, lane, model, pass) in [
+            ("glm", "ok", "glm", true),
+            ("glm", "substituted", "other", true),
+            ("opus", "ok", "opus", true),
+            ("opus", "account-dropped", "opus", true),
+        ] {
+            let row = json!({
+                "task_id": "t", "tier": "capability", "pass": pass, "status": "graded",
+                "experiment_id": side, "lane_status": lane, "observed_model": model,
+                "usage": {"input": 1_000_000, "output": 0},
+            });
+            writeln!(f, "{row}").unwrap();
+        }
+        let rows = read_rows(f.path().to_str().unwrap(), None, None);
+        let mut view = fold(&rows, "glm", "opus", 1, &BTreeSet::new()).unwrap();
+        let prices = json!({"glm": {"input_per_m": 2.0, "output_per_m": 1.0}});
+        add_lanes(&mut view, &rows, "glm", "opus", Some(&prices));
+        let text = render(&view);
+        assert!(
+            text.contains("Excluded a: t substituted (1 rows, unscored)"),
+            "{text}"
+        );
+        assert!(
+            text.contains("Excluded b: t account-dropped (1 rows, unscored)"),
+            "{text}"
+        );
+        assert!(
+            text.contains("Cost a: $2.0000 per accepted result (1 accepted of 1 scored"),
+            "{text}"
+        );
+        assert!(
+            text.contains("Cost b: unmeasured per accepted result"),
+            "{text}"
+        );
     }
 
     #[test]
