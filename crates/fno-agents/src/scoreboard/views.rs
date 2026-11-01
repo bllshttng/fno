@@ -576,7 +576,7 @@ pub(crate) fn skills_from_transcript(lines: &[&str]) -> Vec<String> {
     let mut found = Vec::new();
     for line in lines {
         let line = line.trim();
-        if line.is_empty() {
+        if line.is_empty() || !line.contains(crate::observer::SKILL_USE_MARKER) {
             continue;
         }
         let Ok(obj) = serde_json::from_str::<Value>(line) else {
