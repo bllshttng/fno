@@ -18,7 +18,7 @@ pub mod runner;
 pub fn run(args: &[String]) -> i32 {
     let Some(sub) = args.first() else {
         eprintln!(
-            "usage: fno-agents evals <command> [options] (run | trend | report | macro | export | qualify | graduate | grade)"
+            "usage: fno-agents evals <command> [options] (run | trend | report | macro | export | qualify | graduate | grade | candidates)"
         );
         return 2;
     };
@@ -32,11 +32,12 @@ pub fn run(args: &[String]) -> i32 {
         "run" => run_command(rest),
         "export" => export_command(rest),
         "qualify" => qualify_command(rest),
+        "candidates" => crate::evals_candidates::run(rest),
         // The remainder lands with the port's later commits; the skeleton
         // answers every spelling so the dispatch shape compiles first.
         _ => {
             eprintln!(
-                "usage: fno-agents evals <command> [options] (run | trend | report | macro | export | qualify | graduate | grade)"
+                "usage: fno-agents evals <command> [options] (run | trend | report | macro | export | qualify | graduate | grade | candidates)"
             );
             return 2;
         }
@@ -350,6 +351,27 @@ fn run_command(rest: &[String]) -> i32 {
         }
     );
     0
+}
+
+/// Superseded nodes, from the graph: the plan's own status line is the rung
+/// authority's to read, and the node's status is the fact wanted here.
+pub(crate) fn superseded_nodes(graph: &std::path::Path) -> std::collections::BTreeSet<String> {
+    let query = crate::backlog::RowQuery {
+        fields: Some(["id", "status"].into_iter().map(str::to_string).collect()),
+        with_blockers: true,
+        ..Default::default()
+    };
+    crate::graph_store::read_rows_where(graph, &query)
+        .map(|rows| {
+            rows.iter()
+                .filter(|n| {
+                    n.get("status").and_then(serde_json::Value::as_str) == Some("superseded")
+                })
+                .filter_map(|n| n.get("id").and_then(serde_json::Value::as_str))
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// The cohort split gate: one native door call, the same argv the Python

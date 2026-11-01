@@ -138,14 +138,6 @@ fn trend_regressed_ac1_err() {
     assert_eq!(view["regression_alarm"], json!(["r"]));
 }
 
-#[test]
-fn compare_flag_refuses_bad_variant() {
-    let tmp = TempDir::new().unwrap();
-    let h = write_history(&tmp, &[]);
-    let out = run_evals_trend(&["--history".into(), h, "--compare".into(), "vX".into()]);
-    assert_eq!(out, 1);
-}
-
 // The documented bare --graduate form and --graduate followed by another
 // flag both work again (the round-1 finding; the old CLI's shapes).
 #[test]

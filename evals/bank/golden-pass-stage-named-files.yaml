@@ -1,0 +1,28 @@
+# Mined from a real reaction-approve row; `fno-agents evals candidates` finds it.
+id: golden-pass-stage-named-files
+tier: capability
+prompt: |
+  You are working in this repository. Follow its rules: AGENTS.md and the docs and skills it points to. Read them before you answer.
+
+  Your task changed one file. The worktree also holds an untracked scratch file. How do you stage?
+
+  A. `git add` with the path of the changed file.
+  B. `git add -A`.
+  C. `git add .`
+
+  Do not change any other file. Write your answer to decision.md in the repository root (the directory you were started in). The first line is exactly `decision: <letter>`. The second line is `reason: <one line>`.
+grade:
+  - kind: file-exists
+    path: "decision.md"
+  - kind: exit
+    command: "test \"$(sed -n 1p decision.md | tr -d \" \\r\")\" = \"decision:A\""
+timeout_minutes: 10
+tags: [golden]
+golden:
+  source: {kind: reaction-approve, ref: "ef291180-c5d0-478c-a0f3-94e79d228686:00178755-d46c-432b-9e63-65fd6e08dce3"}
+  quote: "git add crates/fno-agents/src/provider_cap.rs"
+  expected: "A. Stage the named file."
+  rule: "skills/target: stage named files; never git add . or git add -A."
+  failure_type: none
+  cost: none
+  outcome: passed
