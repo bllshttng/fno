@@ -37,7 +37,6 @@ struct Watch {
     seen: Vec<u8>,
     hit: Option<Instant>,
     closed: bool,
-    host_bytes: u64,
 }
 
 struct Host {
@@ -76,7 +75,6 @@ impl Host {
                 let now = Instant::now();
                 let (lock, cv) = &*shared;
                 let mut w = lock.lock().unwrap();
-                w.host_bytes += n as u64;
                 if w.hit.is_some() {
                     continue;
                 }
@@ -304,10 +302,6 @@ struct Stats {
     p99: f64,
     lost: usize,
     taken: usize,
-    /// The first keys alone: a flood's cost can sit in its opening seconds.
-    first_100_p95: f64,
-    /// Proof of load: a flood that died would read as a fast scenario.
-    host_kb_per_sec: f64,
 }
 
 fn percentile(sorted: &[f64], fraction: f64) -> f64 {
@@ -322,8 +316,6 @@ fn measure(host: &mut Host, samples: usize) -> Result<Stats, String> {
     let mut gaps = Gaps::new();
     let mut taken = Vec::with_capacity(samples);
     let mut lost = 0;
-    let started = Instant::now();
-    let bytes_at_start = host.watch.0.lock().unwrap().host_bytes;
     for i in 0..samples {
         if i > 0 && i % CLEAR_EVERY == 0 {
             host.writer
@@ -347,13 +339,8 @@ fn measure(host: &mut Host, samples: usize) -> Result<Stats, String> {
     if lost_fraction > MAX_LOST_FRACTION {
         return Err(format!("{lost} of {samples} samples lost"));
     }
-    let host_bytes = host.watch.0.lock().unwrap().host_bytes - bytes_at_start;
-    let mut first_100: Vec<f64> = taken.iter().take(100).copied().collect();
-    first_100.sort_by(f64::total_cmp);
     taken.sort_by(f64::total_cmp);
     Ok(Stats {
-        first_100_p95: percentile(&first_100, 0.95),
-        host_kb_per_sec: host_bytes as f64 / 1024.0 / started.elapsed().as_secs_f64(),
         p50: percentile(&taken, 0.50),
         p95: percentile(&taken, 0.95),
         p99: percentile(&taken, 0.99),
@@ -364,9 +351,8 @@ fn measure(host: &mut Host, samples: usize) -> Result<Stats, String> {
 
 fn report(name: &str, s: &Stats) {
     println!(
-        "{name}: p50_ms={:.2} p95_ms={:.2} p99_ms={:.2} first_100_p95_ms={:.2} \
-         host_kb_per_sec={:.0} samples={} lost={}",
-        s.p50, s.p95, s.p99, s.first_100_p95, s.host_kb_per_sec, s.taken, s.lost
+        "{name}: p50_ms={:.2} p95_ms={:.2} p99_ms={:.2} samples={} lost={}",
+        s.p50, s.p95, s.p99, s.taken, s.lost
     );
 }
 
@@ -480,7 +466,7 @@ fn stages() -> Result<(), String> {
 
 /// What one full pane-output queue costs the core loop when a sibling floods.
 /// The queue holds 256 chunks of 8 KB at most, shared by every pane, so a key's
-/// echo can wait behind all of them. The first chunks also grow the scrollback.
+/// echo can wait behind all of them.
 fn flood_stage() {
     const QUEUE_CHUNKS: usize = 256;
     let chunk = b"y\n".repeat(4096);

@@ -15,7 +15,7 @@ These numbers come from a machine that never went calm. The 5 minute load averag
 
 ## Numbers
 
-All runs use 2,000 samples per scenario with the deployed release `fno` 0.4.5, and panes run through a keeper, as a user's pane does. Times are in milliseconds.
+The table uses 2,000 samples per scenario with the deployed release `fno` 0.4.5, and panes run through a keeper, as a user's pane does. Times are in milliseconds.
 
 | Scenario | p50 | p95 | p99 |
 |---|---|---|---|
@@ -60,14 +60,18 @@ Moving frame bytes is not what a user feels here. The cost is the wait behind a 
 
 D's p50 is 6.5 times C's, and its tail reaches past a second. We have not found the cause. What we measured:
 
-- Pane-output queue depth is not the cause. The shared queue in `server/serve.rs` holds 256 chunks, and a full queue takes about 330 ms to feed, which looked like the answer. We built with 16 chunks and measured: D read 752.99 ms at p95 against 601.70 ms for the deployed build in the next run. It did not help, so we reverted it.
-- No single process is pegged during D. We sampled CPU every 5 seconds at load 87, in percent of one core:
+- A smaller pane-output queue showed no gain. The shared queue in `server/serve.rs` holds 256 chunks, and a full queue takes about 330 ms to feed, which looked like the answer. With 16 chunks, D read 752.99 ms at p95. The deployed build read 601.70 ms in the next run. We reverted the change. Load moved between those runs, so this result is weak evidence, and a quiet run can overturn it.
+- No single process is pegged during D. A 400-sample run read CPU every 5 seconds at load 87, in percent of one core:
   - server: 37 to 84
   - client: 36 to 70
   - the flooding pane's keeper: 25 to 62
   - `yes`: 6 to 17
 
 Two things remain untested. Nothing paces frames: each drain of the output channel builds a frame, and `broadcast_pane` has no timer. The client also queues up to 16 whole frames at `client.rs` and composes and draws each one in turn.
+
+## Known noise in the harness
+
+The isolated server also runs its Python helper from the scratch home. One CPU sample caught it at 66 percent of a core. A user's server runs the same helper, but its timing can differ.
 
 ## Repeat the run
 
