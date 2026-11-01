@@ -80,6 +80,7 @@ pub mod attention_reply;
 pub mod attention_route;
 pub mod attest;
 pub mod authorized_merge;
+pub mod autonomy_policy;
 pub mod autonomy_status;
 pub mod backlog;
 pub mod backlog_ready;

@@ -281,7 +281,8 @@ pub fn recovery_settings(cwd: &Path) -> (bool, RecoveryCfg) {
         .and_then(|b| b.get("enabled"))
         .and_then(Value::as_bool)
         .unwrap_or(true)
-        && crate::backlog::advance_settings::autonomy_master_enabled(Some(cwd));
+        && crate::backlog::advance_settings::autonomy_master_enabled(Some(cwd))
+        && crate::autonomy_policy::restart_allowed(cwd);
     let cfg = RecoveryCfg {
         idle_threshold_seconds: int("idle_threshold_seconds")
             .filter(|v| *v > 0)

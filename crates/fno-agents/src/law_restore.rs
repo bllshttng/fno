@@ -6,20 +6,24 @@ use serde_json::{json, Value};
 
 use crate::decision_index;
 use crate::law_match::{
-    all_decision_rows, append_decision, chat_may_retire, door_refuse, is_decision_id,
-    is_retraction_row, mint_decision_id, now_iso, resolve_caller, row_id, row_subject,
-    scope_filtered_rows, Caller,
+    all_decision_rows, append_decision, autonomy_ask_gate, chat_may_retire, door_refuse,
+    is_decision_id, is_retraction_row, mint_decision_id, now_iso, resolve_caller, row_id,
+    row_subject, scope_filtered_rows, Caller,
 };
 
-const RESTORE_USAGE: &str = "usage: fno inbox law restore <decision-id>";
+const RESTORE_USAGE: &str =
+    "usage: fno inbox law restore <decision-id> [--quote <the user's words>]";
 
 /// The fields a restore copies from the retracted row, verbatim.
 const COPIED: &str =
     "decision subject scope paths graduation graduation_ref rationale reads options";
 
 pub fn run_restore(argv: &[String]) -> i32 {
-    let token = match argv {
-        [one] if is_decision_id(one.trim()) => one.trim().to_string(),
+    let (token, quote) = match argv {
+        [one] if is_decision_id(one.trim()) => (one.trim().to_string(), None),
+        [one, flag, quote] if flag == "--quote" && is_decision_id(one.trim()) => {
+            (one.trim().to_string(), Some(quote.as_str()))
+        }
         _ => {
             eprintln!("fno inbox law restore: restore takes one decision id\n{RESTORE_USAGE}");
             return 2;
@@ -29,6 +33,10 @@ pub fn run_restore(argv: &[String]) -> i32 {
         Ok(c) => c,
         Err(message) => return door_refuse(&message),
     };
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    if let Err(message) = autonomy_ask_gate(&caller, quote, &cwd) {
+        return door_refuse(&message);
+    }
     let (rows, damaged) = match all_decision_rows() {
         Ok(pair) => pair,
         Err(reason) => {

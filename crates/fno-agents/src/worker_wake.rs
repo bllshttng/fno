@@ -195,7 +195,7 @@ fn run_pass_with(
         {
             continue;
         }
-        let disabled: Vec<String> = [
+        let mut disabled: Vec<String> = [
             ["recovery", "enabled"].as_slice(),
             ["autonomy", "enabled"].as_slice(),
         ]
@@ -206,6 +206,9 @@ fn run_pass_with(
         })
         .map(|keys| keys.join("."))
         .collect();
+        if !crate::autonomy_policy::restart_allowed(Path::new(&row.cwd)) {
+            disabled.push("autonomy.mode".to_string());
+        }
         if !disabled.is_empty() && !dry_run {
             continue;
         }

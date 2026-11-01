@@ -96,7 +96,7 @@ pub(crate) fn start(home: &AgentsHome) {
             &leads,
             &workers,
             |plan| crate::claude_supervisor::guard_birth_for_plan(&plan.env),
-            |home, name| revive(home, name),
+            |home, name| revive_unattended(home, name),
             |home, name| {
                 crate::reentry::resolve_reentry(
                     &home.registry_json(),
@@ -497,6 +497,21 @@ pub(crate) fn plan(
 
 /// One revival through the canonical re-entry plan: the listing lists the
 /// job, so the plan is `claude respawn <job id>`.
+/// A revive no user asked for: `autonomy.mode` may hold it. The row's own cwd
+/// picks the project config, and the skipped row reports the hold.
+pub(crate) fn revive_unattended(home: &AgentsHome, name: &str) -> ReceiptRow {
+    let cwd = crate::state::load_registry(&home.registry_json())
+        .ok()
+        .and_then(|r| r.entries.into_iter().find(|e| e.name == name))
+        .map(|e| e.cwd);
+    match cwd {
+        Some(cwd) if !crate::autonomy_policy::restart_allowed(std::path::Path::new(&cwd)) => {
+            ReceiptRow::new(name, "skipped", "autonomy.mode holds unattended restart")
+        }
+        _ => revive(home, name),
+    }
+}
+
 pub(crate) fn revive(home: &AgentsHome, name: &str) -> ReceiptRow {
     match crate::reentry::resolve_reentry(
         &home.registry_json(),

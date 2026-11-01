@@ -457,12 +457,34 @@
     "type": "object"
    },
    "AutonomyBlock": {
-    "description": "The one master switch over every autonomous session-starting spawner\n(nested under 'config.autonomy'). wave 3.\n\n``enabled=False`` stops EVERY spawner - the merge-triggered ones\n(advance, dispatch_lanes, epic converge, reconcile_dispatch), spawn_think,\npost-merge ritual, pr_watch, keep_going, and the\nwave-2 ones (groom, restart, evals) - regardless of that spawner's own\ngate. It is checked BEFORE any other precedence rank, even an explicit env\noverride: the whole point of a panic switch is that nothing overrides it.\nA skip caused by this switch stamps rank ``\"autonomy\"`` on its decision\nevent (distinct from env/config/default) so the log names the master\nswitch as the reason, never leaving it to inference (AC4-HP).\n\nDefault ``True``: shipping this changes nothing for an existing user -\nevery spawner's own gate still governs exactly as before until an\noperator explicitly arms the panic switch.\n\nExplicitly NOT a per-dispatcher lever (Alternative A in the design doc,\nrejected): nine levers multiply the state an operator must hold and\nguarantee some subset goes stale, which is the same failure with more\nsurface. This is the ONE switch; detail belongs in ``fno agents autonomy\nstatus``, not in a second layer of configuration.",
+    "description": "The one master switch over every autonomous session-starting spawner\n(nested under 'config.autonomy'). wave 3.\n\n``enabled=False`` stops EVERY spawner - the merge-triggered ones\n(advance, dispatch_lanes, epic converge, reconcile_dispatch), spawn_think,\npost-merge ritual, pr_watch, keep_going, and the\nwave-2 ones (groom, restart, evals) - regardless of that spawner's own\ngate. It is checked BEFORE any other precedence rank, even an explicit env\noverride: the whole point of a panic switch is that nothing overrides it.\nA skip caused by this switch stamps rank ``\"autonomy\"`` on its decision\nevent (distinct from env/config/default) so the log names the master\nswitch as the reason, never leaving it to inference (AC4-HP).\n\nDefault ``True``: shipping this changes nothing for an existing user -\nevery spawner's own gate still governs exactly as before until an\noperator explicitly arms the panic switch.\n\n``mode`` and ``allow`` are read by ``crates/fno-agents/src/autonomy_policy.rs``.",
     "properties": {
      "enabled": {
       "default": true,
       "title": "Enabled",
       "type": "boolean"
+     },
+     "mode": {
+      "default": "balanced",
+      "enum": [
+       "ask",
+       "balanced",
+       "yolo"
+      ],
+      "title": "Mode",
+      "type": "string"
+     },
+     "allow": {
+      "items": {
+       "enum": [
+        "restart",
+        "merge",
+        "law"
+       ],
+       "type": "string"
+      },
+      "title": "Allow",
+      "type": "array"
      }
     },
     "title": "AutonomyBlock",
@@ -5377,6 +5399,24 @@
    "question": "",
    "default_source": "",
    "doc": "The one master switch over every autonomous session-starting spawner. Defaults true; shipping this changes nothing until explicitly disabled."
+  },
+  {
+   "path": "autonomy.mode",
+   "type": "typing.Literal['ask', 'balanced', 'yolo']",
+   "default": "balanced",
+   "wizard": "never",
+   "question": "",
+   "default_source": "",
+   "doc": "One choice over unattended restarts, merges and law writes: ask, balanced (default) or yolo. Yolo keeps CI, review, holds and run refusals."
+  },
+  {
+   "path": "autonomy.allow",
+   "type": "list[typing.Literal['restart', 'merge', 'law']]",
+   "default": [],
+   "wizard": "never",
+   "question": "",
+   "default_source": "",
+   "doc": "In ask mode, the action classes that run unasked: restart, merge, law."
   },
   {
    "path": "auto_continue.enabled",

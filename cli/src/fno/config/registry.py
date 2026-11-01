@@ -379,6 +379,8 @@ FIELD_META: dict[str, Meta] = {
     "dispatch.blueprint_floor": Meta("advanced", "The blueprint floor for a plan-less node (lean dispatch). 'high' (the default) routes a plan-less node to /blueprint only when its difficulty is high, its size is L, or an open premise question blocks it (the premise-question tag); every other plan-less node goes straight to /target, which states its own scope. 'medium' restores the pre-lean table (blueprint for medium and up). 'low' blueprints every plan-less node; 'never' targets everything. The lead check-in routes each unplanned row through the same table: blueprint candidates against the one-per-lead ceiling, the rest print as target-ready. Any unknown value degrades to 'high'.", default_source="default"),
     # --- config.autonomy.* ---
     "autonomy.enabled": Meta("never", "The one master switch over every autonomous session-starting spawner. Defaults true; shipping this changes nothing until explicitly disabled."),
+    "autonomy.mode": Meta("never","One choice over unattended restarts, merges and law writes: ask, balanced (default) or yolo. Yolo keeps CI, review, holds and run refusals."),
+    "autonomy.allow": Meta("never","In ask mode, the action classes that run unasked: restart, merge, law."),
     # --- config.auto_continue.* ---
     "auto_continue.enabled": Meta("advanced", "Auto-dispatch the next ready node after a PR merges."),
     # --- config.keep_going.* ---

@@ -418,6 +418,12 @@ if declare -F get_auto_merge_enabled >/dev/null 2>&1; then
     AUTO_MERGE_ENABLED="false"
   }
 fi
+# autonomy.mode has one owner in Rust. An older binary answers nothing here and
+# the config read above stands; the merge door rechecks live either way.
+case "$(fno agents admit autonomy status --json 2>/dev/null || true)" in
+  *'"merge_enabled":true'*) AUTO_MERGE_ENABLED="true" ;;
+  *'"merge_enabled":false'*) AUTO_MERGE_ENABLED="false" ;;
+esac
 # The env grant is the OPERATOR's lever (codex P1 on PR 1131):
 # TARGET_AUTO_MERGE reaches a child only by inheritance, and a mesh-spawned
 # worker can export it before init to mint merge authority no config

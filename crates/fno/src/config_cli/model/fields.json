@@ -401,7 +401,9 @@
     {
      "name": "autonomy",
      "default": {
-      "enabled": true
+      "enabled": true,
+      "mode": "balanced",
+      "allow": []
      }
     },
     {
@@ -1536,6 +1538,14 @@
     {
      "name": "enabled",
      "default": true
+    },
+    {
+     "name": "mode",
+     "default": "balanced"
+    },
+    {
+     "name": "allow",
+     "default": []
     }
    ]
   },
@@ -3093,6 +3103,8 @@
   "dispatch.cutover_low_after_minutes",
   "dispatch.blueprint_floor",
   "autonomy.enabled",
+  "autonomy.mode",
+  "autonomy.allow",
   "auto_continue.enabled",
   "keep_going.enabled",
   "think_spawn.enabled",

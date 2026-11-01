@@ -192,6 +192,8 @@ Keys live in a flat `config.toml` (`.fno/config.toml` project-local, `~/.fno/con
 | `sideline.layout` | typing.Literal['card', 'list'] | `card` | advanced | The sideline's row shape: "card" renders each session as a padded two-line card (state glyph, name, PR, then harness, lead, message, age); "list" (default) keeps the one-row table. An unknown value reads as list; a change takes effect on the next attach. |
 | `split.opens` | typing.Literal['pane', 'portal'] | `pane` | advanced | Where the mux row menu's Split Direction toggle starts: pane (default) \| portal. The t key flips it inside the open menu, and the flip lands here. |
 | `autonomy.enabled` | bool | `true` | never | The one master switch over every autonomous session-starting spawner. Defaults true; shipping this changes nothing until explicitly disabled. |
+| `autonomy.mode` | typing.Literal['ask', 'balanced', 'yolo'] | `balanced` | never | One choice over unattended restarts, merges and law writes: ask, balanced (default) or yolo. Yolo keeps CI, review, holds and run refusals. |
+| `autonomy.allow` | list[typing.Literal['restart', 'merge', 'law']] | `[]` | never | In ask mode, the action classes that run unasked: restart, merge, law. |
 | `auto_continue.enabled` | bool | `false` | advanced | Auto-dispatch the next ready node after a PR merges. |
 | `keep_going.enabled` | bool | `false` | advanced | Autonomous keep-going: the merged-PR ritual classifies surviving carve-outs and dispatches follow-up /think or /target work (firehose-capped via think_spawn.daily_cap). |
 | `think_spawn.enabled` | bool | `false` | advanced | Born-with-why: spawn/offer a context-carrying /think for a generated idea node; actual launches use the shared config.dispatch harness and substrate. |

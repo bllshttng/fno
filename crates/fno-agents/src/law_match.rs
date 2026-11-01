@@ -1240,9 +1240,10 @@ pub(crate) struct RecordDoor {
     reads: Vec<String>,
     is_global: bool,
     raw_paths: Vec<String>,
+    quote: Option<String>,
 }
 
-const RECORD_USAGE: &str = "usage: fno inbox law set <subject> [decision] [--decision-file f|-] [--rationale s] [--option s]... [--supersedes d-x] [--graduation k] [--graduation-ref r] [--read cmd]... [--global] [--paths glob,glob]";
+const RECORD_USAGE: &str = "usage: fno inbox law set <subject> [decision] [--decision-file f|-] [--rationale s] [--option s]... [--supersedes d-x] [--graduation k] [--graduation-ref r] [--read cmd]... [--global] [--paths glob,glob] [--quote <the user's words>]";
 const RETRACT_USAGE: &str = "usage: fno inbox law retract <subject-or-decision-id> --reason <why> [--authority operator|chat_attested] [--quote <the user's words>]";
 const HISTORY_USAGE: &str = "usage: fno inbox law history <subject-or-decision-id>";
 
@@ -1259,6 +1260,7 @@ fn parse_record_door(args: &[String]) -> Result<RecordDoor, String> {
         reads: Vec::new(),
         is_global: false,
         raw_paths: Vec::new(),
+        quote: None,
     };
     let mut positional = 0usize;
     let mut i = 0usize;
@@ -1285,6 +1287,7 @@ fn parse_record_door(args: &[String]) -> Result<RecordDoor, String> {
             "--graduation-ref" => door.graduation_ref = Some(take(&mut i)?),
             "--read" => door.reads.push(take(&mut i)?),
             "--paths" => door.raw_paths.push(take(&mut i)?),
+            "--quote" => door.quote = Some(take(&mut i)?),
             "--global" => {
                 // An inline value parses like a bool flag should: --global=false
                 // must never widen because the value was ignored.
@@ -1618,7 +1621,35 @@ fn run_record_door(args: &[String], stdin_text: &str) -> i32 {
         Ok(c) => c,
         Err(message) => return door_refuse(&message),
     };
+    if let Err(message) = autonomy_ask_gate(&caller, door.quote.as_deref(), &policy_cwd()) {
+        return door_refuse(&message);
+    }
     record_door_write(door, decision, &caller)
+}
+
+fn policy_cwd() -> std::path::PathBuf {
+    std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+}
+
+/// Process ancestry cannot tell a user's `/fno:law` from an agent's own Bash
+/// call, so where `autonomy.mode` asks, the user's words are the recorded ask.
+/// They never change the row's authority: it stays `chat_attested`.
+pub(crate) fn autonomy_ask_gate(
+    caller: &Caller,
+    quote: Option<&str>,
+    cwd: &std::path::Path,
+) -> Result<(), String> {
+    if caller.authority != "chat_attested"
+        || quote.is_some_and(|q| !q.trim().is_empty())
+        || !crate::autonomy_policy::law_needs_quote(cwd)
+    {
+        return Ok(());
+    }
+    Err(
+        "autonomy.mode asks the user before a session writes law: ask the user, \
+then pass --quote \"<the user's words>\""
+            .to_string(),
+    )
 }
 
 /// The argv parse, the decision text, and the statement validator: the gates
@@ -1833,6 +1864,9 @@ pub(crate) fn record_door_write(door: RecordDoor, decision: String, caller: &Cal
         if !rationale.trim().is_empty() {
             data["rationale"] = json!(text_cap(rationale, 2000));
         }
+    }
+    if let Some(quote) = door.quote.as_deref().filter(|q| !q.trim().is_empty()) {
+        data["quote"] = json!(text_cap(quote, 2000));
     }
     if let Some(sup) = &supersedes {
         data["supersedes"] = json!(sup);
@@ -3228,7 +3262,35 @@ pub(crate) mod scope_tests {
             reads: Vec::new(),
             is_global: false,
             raw_paths: Vec::new(),
+            quote: None,
         }
+    }
+
+    #[test]
+    fn autonomy_ask_gate_needs_the_users_words_only_from_a_session() {
+        let _guard = DOOR_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".fno")).unwrap();
+        let config = dir.path().join(".fno/config.toml");
+        std::env::set_var("FNO_CONFIG", &config);
+        let chat = Caller::as_authority("chat_attested");
+        let operator = Caller::as_authority("operator");
+        let outcomes = |body: &str| {
+            std::fs::write(&config, body).unwrap();
+            (
+                autonomy_ask_gate(&chat, None, dir.path()).is_ok(),
+                autonomy_ask_gate(&chat, Some("  "), dir.path()).is_ok(),
+                autonomy_ask_gate(&chat, Some("record it"), dir.path()).is_ok(),
+                autonomy_ask_gate(&operator, None, dir.path()).is_ok(),
+            )
+        };
+        let balanced = outcomes("");
+        let yolo = outcomes("[autonomy]\nmode = \"yolo\"\n");
+        let ask_allowed = outcomes("[autonomy]\nmode = \"ask\"\nallow = [\"law\"]\n");
+        std::env::remove_var("FNO_CONFIG");
+        assert_eq!(balanced, (false, false, true, true));
+        assert_eq!(yolo, (true, true, true, true));
+        assert_eq!(ask_allowed, (true, true, true, true));
     }
 
     /// Hermetic state for a door write: tmp FNO_HOME (index, questions,
