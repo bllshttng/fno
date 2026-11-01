@@ -38,6 +38,18 @@ if [[ -z "${PLUGIN_ROOT}" ]]; then
     PLUGIN_ROOT="$(cd "${HOOK_DIR}/.." && pwd)"
 fi
 
+# Prime the machine plugin-root pointer before any early exit below: this hook
+# noops when the join preamble is not due, and a prime behind that gate would
+# run once per machine instead of every session start. The claude, opencode,
+# pi, agy, cursor and copilot carriers all start through here and none of them
+# runs session-start.sh, so without this the env-less init resolves whatever
+# copy the last codex or gemini session primed (measured 2026-10-30: a stale
+# copy refused a worker's own spawn handover). Library mode sources the
+# function out of session-start.sh and runs none of that hook's body.
+FNO_SESSION_START_LIB=1 source "$HOOK_DIR/session-start.sh" 2>/dev/null || true
+unset FNO_SESSION_START_LIB
+prime_plugin_root_pointer || true
+
 noop() { echo '{}'; exit 0; }
 
 SKILL_PATH="${PLUGIN_ROOT}/skills/using-fno/SKILL.md"
