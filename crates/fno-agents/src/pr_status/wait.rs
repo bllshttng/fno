@@ -463,7 +463,7 @@ pub(crate) fn run_wait(payload: &Value) -> (i32, String, String) {
     };
     let on_red = |payload: &Value| {
         let head = payload.get("head").and_then(Value::as_str).unwrap_or("");
-        cancel_in_flight("gh", cwd, head)
+        cancel_in_flight("gh", cwd, pr, head)
     };
     wait_status(
         pr,
@@ -527,8 +527,15 @@ fn red_is_stale(latest: &[Value], runs: &[Value]) -> bool {
 
 /// Cancel the Actions runs still testing a red `head`, one line per run;
 /// None when the live rows show the red belongs to an earlier attempt.
-/// A failed read or cancel is printed, never hidden.
-pub(crate) fn cancel_in_flight(gh_bin: &str, cwd: &Path, head: &str) -> Option<Vec<String>> {
+/// A failed read or cancel is printed, never hidden. The cancel lands one
+/// `ci_wait_cancel` row naming its cause: the failing checks, the head,
+/// the PR, and each run's result.
+pub(crate) fn cancel_in_flight(
+    gh_bin: &str,
+    cwd: &Path,
+    pr: u64,
+    head: &str,
+) -> Option<Vec<String>> {
     let short: String = head.chars().take(8).collect();
     if head.is_empty() {
         return Some(vec![
@@ -579,17 +586,56 @@ pub(crate) fn cancel_in_flight(gh_bin: &str, cwd: &Path, head: &str) -> Option<V
             "wait: red at {short}; no run in flight to cancel"
         )]);
     }
-    let cancelled = runs
-        .iter()
-        .map(|id| {
-            let path = format!("repos/{{owner}}/{{repo}}/actions/runs/{id}/cancel");
-            match crate::pr_push::gh_api(gh_bin, cwd, &path, &["-X", "POST"]) {
-                Ok(_) => format!("wait: red at {short}; cancelled run {id}"),
-                Err(e) => format!("wait: red at {short}; cancel of run {id} FAILED: {e}"),
-            }
+    let cause: Vec<&str> = latest
+        .as_array()
+        .map(|rows| {
+            rows.iter()
+                .filter(|row| row.get("bucket").and_then(Value::as_str) == Some("fail"))
+                .filter_map(|row| row.get("name").and_then(Value::as_str))
+                .collect()
         })
-        .collect();
+        .unwrap_or_default();
+    let mut results = Vec::new();
+    let mut cancelled = Vec::new();
+    for id in &runs {
+        let path = format!("repos/{{owner}}/{{repo}}/actions/runs/{id}/cancel");
+        match crate::pr_push::gh_api(gh_bin, cwd, &path, &["-X", "POST"]) {
+            Ok(_) => {
+                results.push(json!({"run": id, "ok": true}));
+                cancelled.push(format!("wait: red at {short}; cancelled run {id}"));
+            }
+            Err(e) => {
+                results.push(json!({"run": id, "ok": false, "error": e}));
+                cancelled.push(format!(
+                    "wait: red at {short}; cancel of run {id} FAILED: {e}"
+                ));
+            }
+        }
+    }
+    journal_cancel(cwd, pr, head, &cause, &results);
     Some(cancelled)
+}
+
+/// One `ci_wait_cancel` row per cancel action, best-effort: the stderr
+/// lines reach the waiting session only, and the journal is the record
+/// every other session reads. A missing home (tests) or a failed write
+/// leaves the cancel itself untouched.
+fn journal_cancel(cwd: &Path, pr: u64, head: &str, cause: &[&str], results: &[Value]) {
+    let Some(home) = crate::paths::AgentsHome::from_env_opt() else {
+        return;
+    };
+    let row = json!({
+        "slug": crate::pr_status::cache::git_slug(cwd),
+        "pr": pr,
+        "head": head,
+        "cause": cause,
+        "runs": results,
+        "session_id": crate::claims::resolve_identity().0,
+    });
+    let path = crate::daemon::global_events_path(&home);
+    if let Err(e) = crate::events::EventEmitter::new(path, "rust").emit("ci_wait_cancel", &row) {
+        eprintln!("wait: the ci_wait_cancel row did not land ({e})");
+    }
 }
 
 /// Reviews on `pr` via one conditional REST read; None when the read fails
@@ -1140,5 +1186,76 @@ mod tests {
             resolve_expect_head(&nowhere),
             ExpectHead::LocalUnresolved
         ));
+    }
+
+    fn write_exec(dir: &std::path::Path, name: &str, body: &str) -> std::path::PathBuf {
+        let path = dir.join(name);
+        std::fs::write(&path, body).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        path
+    }
+
+    /// A fake gh: one live failing check (node-closure completed after its
+    /// run started), one run in flight, and a cancel POST answering ok.
+    fn cancel_stub_gh(dir: &std::path::Path) -> std::path::PathBuf {
+        write_exec(
+            dir,
+            "gh",
+            r#"#!/bin/sh
+for a in "$@"; do case "$a" in
+  *check-runs*)
+    echo '{"check_runs":[
+      {"id":201,"name":"node-closure","status":"completed","conclusion":"failure","started_at":"2026-11-01T03:00:00Z","completed_at":"2026-11-01T03:05:00Z","html_url":"https://github.com/o/r/actions/runs/301/job/1","check_suite":{"id":11}},
+      {"id":202,"name":"rust-ci","status":"in_progress","conclusion":null,"started_at":"2026-11-01T03:06:00Z","completed_at":null,"html_url":"https://github.com/o/r/actions/runs/302/job/2","check_suite":{"id":12}}]}'
+    exit 0 ;;
+  *head_sha=*)
+    echo '{"total_count":2,"workflow_runs":[{"id":301,"name":"cli-ci","status":"completed","conclusion":"failure","created_at":"2026-11-01T03:00:00Z","run_started_at":"2026-11-01T03:00:00Z"},{"id":302,"name":"rust-ci","status":"in_progress","conclusion":null,"created_at":"2026-11-01T03:06:00Z","run_started_at":"2026-11-01T03:06:00Z"}]}'
+    exit 0 ;;
+  *cancel*)
+    exit 0 ;;
+esac
+echo '{}'
+exit 1
+"#,
+        )
+    }
+
+    /// A journaled cancel: one `ci_wait_cancel` row names the PR, the head,
+    /// the failing checks that caused it, and each run's result. The stderr
+    /// lines reach one session; the journal is the record the rest of the
+    /// fleet reads.
+    #[test]
+    fn a_cancel_journals_a_row_that_names_its_cause() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let _lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _home =
+            crate::claims::EnvVarGuard::set(crate::paths::HOME_ENV, home.path().to_str().unwrap());
+        let gh = cancel_stub_gh(dir.path());
+        let lines = cancel_in_flight(gh.to_str().unwrap(), dir.path(), 4254, "abc123").unwrap();
+        assert!(
+            lines.iter().all(|l| l.contains("cancelled run 302")),
+            "{lines:?}"
+        );
+        let text = std::fs::read_to_string(home.path().join("events.jsonl")).unwrap();
+        let rows: Vec<Value> = text
+            .lines()
+            .filter_map(|l| serde_json::from_str(l).ok())
+            .collect();
+        let row = rows
+            .iter()
+            .find(|r| r["type"] == "ci_wait_cancel")
+            .expect("the cancel row landed");
+        assert_eq!(row["data"]["pr"], 4254);
+        assert_eq!(row["data"]["head"], "abc123");
+        assert_eq!(row["data"]["cause"], json!(["node-closure"]));
+        assert_eq!(row["data"]["runs"], json!([{"run": 302, "ok": true}]));
+        assert!(
+            row["data"]["session_id"].is_string(),
+            "the row names its session: {row}"
+        );
     }
 }
