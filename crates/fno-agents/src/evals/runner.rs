@@ -160,9 +160,12 @@ fn apply_overlay(dir: &std::path::Path, overlay_ref: &str) -> Result<String, Str
         "user.name=fno-evals",
         "-c",
         "user.email=evals@fno.invalid",
+        "-c",
+        "core.hooksPath=/dev/null",
+        "-c",
+        "commit.gpgsign=false",
         "commit",
         "--quiet",
-        "--no-verify",
         "--allow-empty",
         "-m",
         "evals: overlay golden fixtures",
@@ -505,7 +508,11 @@ pub fn run_task(
             Err(e) => {
                 reason = format!("fixture checkout failed ({checkout_ref}); fixture drift? {e}");
             }
-            Ok(dir) => match overlay_ref.map(|r| apply_overlay(&dir, r)) {
+            Ok(dir) => match overlay_rev
+                .as_deref()
+                .or(overlay_ref)
+                .map(|r| apply_overlay(&dir, r))
+            {
                 Some(Err(e)) => {
                     reason = format!("fixture overlay failed on {checkout_ref}: {e}");
                     remove_worktree(repo_root, &dir);
