@@ -315,7 +315,11 @@ pub(crate) fn apply_expect_head(
     payload: &mut Map<String, Value>,
     expected: &str,
 ) -> Option<String> {
-    let actual = payload.get("head").and_then(Value::as_str).unwrap_or("");
+    let actual = payload
+        .get("head")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
     if actual.eq_ignore_ascii_case(expected) {
         return None;
     }
@@ -343,12 +347,13 @@ pub(crate) fn apply_expect_head(
     let state = payload
         .get("pr_state")
         .and_then(Value::as_str)
-        .unwrap_or("");
-    let note = match state {
+        .unwrap_or("")
+        .to_string();
+    let note = match state.as_str() {
         "MERGED" | "CLOSED" if !actual.is_empty() => format!(
             "head_mismatch: PR {pr} is {state} at {}; it will never test {}. \
              A watcher waiting on a push to this PR must re-arm on a new PR.",
-            short(actual),
+            short(&actual),
             short(expected)
         ),
         _ if actual.is_empty() => format!(
@@ -357,7 +362,7 @@ pub(crate) fn apply_expect_head(
         ),
         _ => format!(
             "head_mismatch: PR head is {}, expected {}; the pinned read is not settled.",
-            short(actual),
+            short(&actual),
             short(expected)
         ),
     };

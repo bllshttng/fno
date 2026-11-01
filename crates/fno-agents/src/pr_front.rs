@@ -6,7 +6,7 @@
 //! bare `pr` spelling lands here too, so the muscle-memory form survives
 //! the wheel's pr_app deletion.
 
-use serde_json::json;
+use serde_json::{json, Value};
 use std::path::PathBuf;
 
 /// The subcommands that stay Python mounts (the watcher's own surface, outside

@@ -131,7 +131,7 @@ pub(crate) fn wait_status(
     let mut pending_ticks: i32 = 0;
     loop {
         ticks += 1;
-        let (rc, payload, lines, tick_calls) = poll();
+        let (rc, mut payload, lines, tick_calls) = poll();
         calls += tick_calls;
         // The payload already names the conflict. A degraded backoff serve
         // (`stale_reason`) cannot prove the head is still the conflicting
