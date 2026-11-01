@@ -926,6 +926,13 @@
    "EvalsBlock": {
     "description": "Eval-suite settings: the grading-worker gate plus the demand keys.\nFull key docs live in the generated reference and docs/evals.md.",
     "properties": {
+     "gate": {
+      "$ref": "#/$defs/GateBlock",
+      "default": {
+       "daily_usd": 15.0,
+       "lane": "zai-flash"
+      }
+     },
      "enabled": {
       "default": true,
       "title": "Enabled",
@@ -966,6 +973,23 @@
      }
     },
     "title": "FailoverBlock",
+    "type": "object"
+   },
+   "GateBlock": {
+    "description": "The daemon's change gate (``evals.gate.*``): the daily spend cap and\nthe lane its goldens run on. The Rust gate reads both keys from raw TOML;\nthis block is what lets ``fno config get``/``set`` name them.",
+    "properties": {
+     "daily_usd": {
+      "default": 15.0,
+      "title": "Daily Usd",
+      "type": "number"
+     },
+     "lane": {
+      "default": "zai-flash",
+      "title": "Lane",
+      "type": "string"
+     }
+    },
+    "title": "GateBlock",
     "type": "object"
    },
    "GroomBlock": {
@@ -5723,6 +5747,24 @@
    "question": "",
    "default_source": "",
    "doc": "Enable the daily backlog-grooming worker spawn (fno backlog groom). Defaults true."
+  },
+  {
+   "path": "evals.gate.daily_usd",
+   "type": "float",
+   "default": 15.0,
+   "wizard": "never",
+   "question": "",
+   "default_source": "",
+   "doc": "Daily USD cap on the daemon's evals change gate, at 0.04 an attempt. 0 turns the gate off."
+  },
+  {
+   "path": "evals.gate.lane",
+   "type": "str",
+   "default": "zai-flash",
+   "wizard": "never",
+   "question": "",
+   "default_source": "",
+   "doc": "Lane the gate's golden runs use. Defaults zai-flash."
   },
   {
    "path": "evals.enabled",

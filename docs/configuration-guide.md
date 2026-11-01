@@ -228,6 +228,8 @@ Keys live in a flat `config.toml` (`.fno/config.toml` project-local, `~/.fno/con
 | `pr_watch.graphql_min_remaining` | int | `200` | never | Skip the PR-watcher's per-PR dispatch pass when the shared GraphQL budget falls below this floor. |
 | `pr_watch.wedged_after_ticks` | int | `3` | never | Consecutive broken tick ends (timeout/error) at a fresh watermark before the watcher reads `wedged` and auto-heal re-renders its plist via `fno do pr watch refresh`. |
 | `groom.enabled` | bool | `true` | never | Enable the daily backlog-grooming worker spawn (fno backlog groom). Defaults true. |
+| `evals.gate.daily_usd` | float | `15.0` | never | Daily USD cap on the daemon's evals change gate, at 0.04 an attempt. 0 turns the gate off. |
+| `evals.gate.lane` | str | `zai-flash` | never | Lane the gate's golden runs use. Defaults zai-flash. |
 | `evals.enabled` | bool | `true` | never | Enable the headless eval-suite grading-worker spawn. Defaults true. |
 | `evals.schedule_days` | int | `7` | never | Days between scheduled regression-tier runs on the pr-watch tick (0 disables). |
 | `evals.stale_days` | int | `7` | never | Age in days at which the newest regression-tier run reads STALE in doctor and triage health. |

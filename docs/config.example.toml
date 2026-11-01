@@ -590,6 +590,12 @@ scratch_threshold = 3
 # Window in days the scratch-shape sweep reads job tmp dirs over.
 scratch_window_days = 28
 
+[evals.gate]
+# Daily USD cap on the daemon's evals change gate, at 0.04 an attempt. 0 turns the gate off.
+daily_usd = 15.0
+# Lane the gate's golden runs use. Defaults zai-flash.
+lane = "zai-flash"
+
 [recovery]
 # Enable the bg-session recovery sweep: provider failover on swap-class deaths plus close-surfacing for finished-but-lingering sessions (rides the pr_watch tick). Assumes bypass workers (the config.agents.defaults.permission_mode built-in for autonomous dispatch); a non-bypass worker cannot run autonomously and is not resumed.
 enabled = true
