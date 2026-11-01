@@ -304,6 +304,66 @@ pub(crate) fn compose_payload(inputs: &ComposeInputs) -> (i32, Value, Vec<String
     (code, Value::Object(payload), stderr)
 }
 
+/// The pinned read: the caller named the sha the answer must be about, so a
+/// payload at any other head answers the pinned question honestly. `settled`
+/// flips false (the named commit is not even being tested), a `head_mismatch`
+/// record and blocker name why, and the returned stderr note spells the
+/// terminal truth when the PR is MERGED or CLOSED: it will never test the
+/// named sha, so a watcher must re-arm on a new PR. None, payload untouched,
+/// when the heads match.
+pub(crate) fn apply_expect_head(
+    payload: &mut Map<String, Value>,
+    expected: &str,
+) -> Option<String> {
+    let actual = payload.get("head").and_then(Value::as_str).unwrap_or("");
+    if actual.eq_ignore_ascii_case(expected) {
+        return None;
+    }
+    let pr = payload
+        .get("pr")
+        .map(|v| match v {
+            Value::String(s) => s.clone(),
+            other => other.to_string(),
+        })
+        .unwrap_or_else(|| "?".into());
+    payload.insert("settled".into(), json!(false));
+    payload.insert(
+        "head_mismatch".into(),
+        json!({"expected": expected, "actual": actual}),
+    );
+    let mut blockers = payload
+        .get("ready_blockers")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    blockers.push(json!("head_mismatch"));
+    payload.insert("ready_blockers".into(), json!(blockers));
+    payload.insert("ready".into(), json!(false));
+    let short = |s: &str| -> String { s.chars().take(12).collect() };
+    let state = payload
+        .get("pr_state")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let note = match state {
+        "MERGED" | "CLOSED" if !actual.is_empty() => format!(
+            "head_mismatch: PR {pr} is {state} at {}; it will never test {}. \
+             A watcher waiting on a push to this PR must re-arm on a new PR.",
+            short(actual),
+            short(expected)
+        ),
+        _ if actual.is_empty() => format!(
+            "head_mismatch: the read names no head, expected {}; the pinned question is unanswerable here.",
+            short(expected)
+        ),
+        _ => format!(
+            "head_mismatch: PR head is {}, expected {}; the pinned read is not settled.",
+            short(actual),
+            short(expected)
+        ),
+    };
+    Some(note)
+}
+
 /// One human line for the payload; the fleet greps stderr for
 /// `"settled": true` on this command, so stdout stays the machine contract.
 pub(crate) fn verdict_line(payload: &Value) -> String {

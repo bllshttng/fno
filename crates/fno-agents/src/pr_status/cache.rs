@@ -189,7 +189,30 @@ fn status_read(payload: &Value) -> (i32, String, String) {
         .unwrap_or(false);
     // The command's readers act on `ready` and the local gates, so it composes
     // here and never serves a peer's row.
-    let (code, out, stderr_lines, calls) = cached_status_via(cwd_str, pr, refresh, None, false);
+    let (mut code, mut out, mut stderr_lines, calls) =
+        cached_status_via(cwd_str, pr, refresh, None, false);
+    // The pinned read: `--expect-head SHA` refuses any answer about another
+    // head (exit 6) instead of settling the question against whatever commit
+    // the PR happens to point at.
+    let mut mismatch = None;
+    if let Some(expected) = payload
+        .get("expect_head")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+    {
+        if let Some(obj) = out.as_object_mut() {
+            mismatch = super::compose::apply_expect_head(obj, expected);
+        }
+    }
+    if let Some(note) = &mismatch {
+        code = 6;
+        // The verdict line was composed before the pin: re-emit it from the
+        // mutated payload so the stderr grep reads the pinned answer.
+        if let Some(first) = stderr_lines.first_mut() {
+            *first = super::compose::verdict_line(&out);
+        }
+        stderr_lines.push(note.clone());
+    }
     let snap = crate::gh_budget::snapshot(&crate::gh_budget::ledger_path(), now_ms());
     let mut stderr = stderr_lines.join("\n");
     if !stderr.is_empty() {

@@ -116,6 +116,7 @@ fn emit_tick(payload: &Value, lines: &[String], calls: usize, ticks: usize) -> (
 pub(crate) fn wait_status(
     pr: u64,
     until: &str,
+    expect_head: Option<&str>,
     timeout: f64,
     interval: f64,
     mut poll: impl FnMut() -> (i32, Value, Vec<String>, usize),
@@ -152,6 +153,31 @@ pub(crate) fn wait_status(
                  base (`fno do pr push`), then re-arm the wait.\n"
             );
             return (5, stdout, stderr);
+        }
+        // The pinned wait: the caller named the sha it pushed, so a live read
+        // at any other head would answer settled about the wrong commit (the
+        // merged-PR shape: the PR head stops moving while the branch does).
+        // Exit 6 at once; waiting cannot fix it. A degraded serve names no
+        // head and rides out like a stale red, so a backoff never fakes a
+        // mismatch.
+        if let Some(expected) = expect_head {
+            let degraded = payload.get("stale_reason").is_some();
+            let actual = payload.get("head").and_then(Value::as_str).unwrap_or("");
+            if !degraded && !actual.is_empty() && !actual.eq_ignore_ascii_case(expected) {
+                let note = payload
+                    .as_object_mut()
+                    .and_then(|obj| super::compose::apply_expect_head(obj, expected));
+                if let Some(note) = note {
+                    let mut lines = lines;
+                    if let Some(first) = lines.first_mut() {
+                        *first = super::compose::verdict_line(&payload);
+                    }
+                    let (stdout, mut stderr) = emit_tick(&payload, &lines, calls, ticks);
+                    stderr.push_str(&note);
+                    stderr.push('\n');
+                    return (6, stdout, stderr);
+                }
+            }
         }
         let done = match until {
             "green" => payload.get("green").and_then(Value::as_bool),
@@ -397,8 +423,21 @@ pub(crate) fn run_wait(payload: &Value) -> (i32, String, String) {
         let head = payload.get("head").and_then(Value::as_str).unwrap_or("");
         cancel_in_flight("gh", cwd, head)
     };
+    let expect_head = payload
+        .get("expect_head")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
     wait_status(
-        pr, until, timeout, interval, &mut poll, on_red, sleeper, clock,
+        pr,
+        until,
+        expect_head.as_deref(),
+        timeout,
+        interval,
+        &mut poll,
+        on_red,
+        sleeper,
+        clock,
     )
 }
 
@@ -600,6 +639,7 @@ mod tests {
         let (code, _stdout, stderr) = wait_status(
             9,
             "settled",
+            None,
             1800.0,
             60.0,
             staged_poll(payloads),
@@ -628,6 +668,7 @@ mod tests {
             let (code, stdout, stderr) = wait_status(
                 9,
                 until,
+                None,
                 1800.0,
                 10.0,
                 staged_poll(payloads),
@@ -665,6 +706,7 @@ mod tests {
         let (code, stdout, stderr) = wait_status(
             9,
             "settled",
+            None,
             1800.0,
             10.0,
             staged_poll(payloads),
@@ -688,6 +730,7 @@ mod tests {
         let (code, _stdout, _stderr) = wait_status(
             9,
             "settled",
+            None,
             30.0,
             10.0,
             staged_poll(only_stale),
@@ -771,6 +814,7 @@ mod tests {
         let (code, _stdout, stderr) = wait_status(
             9,
             "settled",
+            None,
             30.0,
             10.0,
             staged_poll(payloads),
@@ -871,6 +915,7 @@ mod tests {
         let (code, _stdout, _stderr) = wait_status(
             9,
             "settled",
+            None,
             100_000.0,
             60.0,
             staged_poll(payloads),
@@ -898,6 +943,7 @@ mod tests {
         let (code, _stdout, stderr) = wait_status(
             9,
             "settled",
+            None,
             1500.0,
             600.0,
             staged_poll(payloads),
@@ -918,7 +964,120 @@ mod tests {
     #[test]
     fn the_local_head_read_resolves_in_a_git_checkout() {
         let sha = local_head_sha(Path::new(env!("CARGO_MANIFEST_DIR")))
-            .expect("a git checkout resolves HEAD");
+            .expect("a git checkout HEAD resolves");
         assert!(sha.len() >= 40, "{sha} is a sha, not an error");
+    }
+
+    /// The pinned wait: armed on the sha just pushed. A live read at any
+    /// other head is exit 6 at once, naming the mismatch; a merged PR can
+    /// never answer settled for the named commit again.
+    #[test]
+    fn a_pinned_wait_exits_six_the_moment_the_head_differs() {
+        let t = Cell::new(0.0);
+        let payloads = vec![
+            (2, json!({"verdict": "pending", "settled": false})),
+            (
+                0,
+                json!({
+                    "verdict": "green",
+                    "settled": true,
+                    "head": "37deafc2abcdef",
+                    "pr_state": "OPEN",
+                    "ready": true,
+                    "ready_blockers": [],
+                }),
+            ),
+        ];
+        let (code, stdout, stderr) = wait_status(
+            9,
+            "settled",
+            Some("aaaaaaaa1234aaaaaaaa1234aaaaaaaa1234"),
+            1800.0,
+            10.0,
+            staged_poll(payloads),
+            |_| Some(Vec::new()),
+            |s| t.set(t.get() + s),
+            || t.get(),
+        );
+        assert_eq!(code, 6, "the pinned mismatch exit");
+        assert!(stdout.contains("\"head_mismatch\""), "{stdout}");
+        assert!(stdout.contains("\"settled\":false"), "{stdout}");
+        assert!(
+            stderr.contains("head_mismatch: PR head is 37deafc2abcd"),
+            "{stderr}"
+        );
+        assert!(stderr.contains("expected aaaaaaaa1234"), "{stderr}");
+    }
+
+    /// A pinned wait on a MERGED PR names the terminal truth instead of
+    /// settling: the PR will never test the named sha again.
+    #[test]
+    fn a_pinned_wait_names_a_merged_pr_as_one_that_will_never_test() {
+        let t = Cell::new(0.0);
+        let payloads = vec![(
+            0,
+            json!({
+                "verdict": "green",
+                "settled": true,
+                "head": "37deafc2abcdef",
+                "pr_state": "MERGED",
+                "ready": true,
+                "ready_blockers": [],
+            }),
+        )];
+        let (code, _stdout, stderr) = wait_status(
+            1068,
+            "settled",
+            Some("aaaaaaaa1234aaaaaaaa1234aaaaaaaa1234"),
+            1800.0,
+            10.0,
+            staged_poll(payloads),
+            |_| Some(Vec::new()),
+            |s| t.set(t.get() + s),
+            || t.get(),
+        );
+        assert_eq!(code, 6, "the pinned mismatch exit");
+        assert!(stderr.contains("is MERGED at 37deafc2abcd"), "{stderr}");
+        assert!(stderr.contains("will never test"), "{stderr}");
+        assert!(stderr.contains("re-arm on a new PR"), "{stderr}");
+    }
+
+    /// A degraded serve (a backoff row) names no head, so it cannot fake a
+    /// mismatch: it rides out and the next live read answers the pin.
+    #[test]
+    fn a_pinned_wait_rides_out_a_degraded_serve() {
+        let t = Cell::new(0.0);
+        let payloads = vec![
+            (
+                2,
+                json!({
+                    "verdict": "unknown",
+                    "settled": false,
+                    "stale_reason": "secondary rate limit backoff",
+                }),
+            ),
+            (
+                0,
+                json!({
+                    "verdict": "green",
+                    "settled": true,
+                    "head": "aaaaaaaa1234aaaaaaaa1234aaaaaaaa1234",
+                    "pr_state": "OPEN",
+                }),
+            ),
+        ];
+        let (code, stdout, _stderr) = wait_status(
+            9,
+            "settled",
+            Some("aaaaaaaa1234aaaaaaaa1234aaaaaaaa1234"),
+            1800.0,
+            10.0,
+            staged_poll(payloads),
+            |_| Some(Vec::new()),
+            |s| t.set(t.get() + s),
+            || t.get(),
+        );
+        assert_eq!(code, 0, "the pinned read answers at the named head");
+        assert!(stdout.contains("\"settled\":true"), "{stdout}");
     }
 }
