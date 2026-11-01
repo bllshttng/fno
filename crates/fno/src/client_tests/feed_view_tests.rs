@@ -484,7 +484,9 @@ fn click_rows() {
             if line == "fno agents registry adopt s-3")
     ));
     assert!(
-        m.values.iter().any(|v| v == "fno agents registry adopt s-3"),
+        m.values
+            .iter()
+            .any(|v| v == "fno agents registry adopt s-3"),
         "y copies the adopt command: {:?}",
         m.values
     );
