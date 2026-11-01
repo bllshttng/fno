@@ -360,11 +360,12 @@ fn dated_note(note: &Value) -> Option<(String, String)> {
 /// A note before the plan's day cannot speak to the plan. An undated note
 /// reads as older, so it never counts.
 fn apply_notes(facts: &mut NodeFacts, notes: &[(String, String)], plan_day: &str) {
-    for (day, text) in notes {
-        if day.as_str() >= plan_day {
-            facts.records.push(("note".to_string(), text.clone()));
-        }
-    }
+    // Before the closing note: the per-plan cap keeps the tail of this list.
+    let later = notes
+        .iter()
+        .filter(|(day, _)| day.as_str() >= plan_day)
+        .map(|(_, text)| ("note".to_string(), text.clone()));
+    facts.records.splice(0..0, later);
 }
 
 /// Only a ruling from the plan's day or later is a later record. A ruling on
@@ -822,9 +823,16 @@ mod tests {
         assert_eq!(dated_note(&row("wave", "2026-10-02T00:00:00Z")), None);
         let later = dated_note(&row("progress", "2026-10-02T00:00:00Z")).unwrap();
         let older = dated_note(&row("progress", "2026-09-30T00:00:00Z")).unwrap();
-        let mut noted = NodeFacts::default();
+        let closing = ("completion".to_string(), "c".to_string());
+        let mut noted = NodeFacts {
+            records: vec![closing.clone()],
+            ..Default::default()
+        };
         apply_notes(&mut noted, &[older, later], "20261001");
-        assert_eq!(noted.records, [("note".to_string(), "t".to_string())]);
+        assert_eq!(
+            noted.records,
+            [("note".to_string(), "t".to_string()), closing]
+        );
         assert_eq!(overruled_by(&noted), None, "a note is no mechanical fact");
         let rulings = [
             ("20260901".to_string(), "older".to_string()),
