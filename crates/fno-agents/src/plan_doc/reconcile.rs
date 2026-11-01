@@ -2,9 +2,10 @@
 //! Tier 1 rewrites drift
 //! synonyms, Tier 2 classifies blank/unknown tokens by the linked node's
 //! closed-ness, Tier 3 recomputes a canonical-but-stale status from the node's
-//! derived status (forward-only). Dry-run unless `apply`. The Python sweep's
-//! injectable `signal_for`/`status_map` test seams are gone: the keeper builds
-//! the status map and hands it in as data, so an empty map IS absent evidence.
+//! derived status (forward-only). Dry-run unless `apply`. Only a closed node
+//! writes a terminal in Tier 2: a doc with no node evidence holds its word.
+//! The keeper builds the status map and hands it in as data, so an empty map
+//! IS absent evidence.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -132,9 +133,9 @@ fn repair_target(text: &str, status_map: &HashMap<String, String>) -> Option<Str
 /// Canonical status a drifted `raw` should become, or None to leave it alone.
 /// `node_status` is the linked node's status when the map knows it; None means
 /// absent evidence (no link, or the link resolves to nothing). Tier 1 runs
-/// before the signal and ignores it. Tier 2 on a LIVE node (a status that is
-/// neither `done` nor `superseded`) returns None: a terminal stamp over a live
-/// doc is how a freshly written brief read dead.
+/// before the signal and ignores it. Tier 2 writes only a closed node's status.
+/// A live node or absent evidence returns None: a terminal stamp with neither
+/// behind it is how a freshly written brief read dead.
 pub fn target_status(raw: Option<&Value>, node_status: Option<&str>) -> Option<String> {
     let s = norm(raw);
     if is_known(&s) {
@@ -146,8 +147,7 @@ pub fn target_status(raw: Option<&Value>, node_status: Option<&str>) -> Option<S
     // Tier 2: blank or any unrecognized token.
     match node_status {
         Some(st @ ("done" | "superseded")) => Some(st.to_string()),
-        Some(_) => None, // live node: the drift holds, never a terminal guess
-        None => Some("superseded".to_string()), // orphaned link: honest terminal
+        _ => None, // live node or no evidence: the drift holds, never a guess
     }
 }
 
@@ -274,11 +274,9 @@ pub fn sweep(plans_dir: &Path, apply: bool, status_map: &HashMap<String, String>
         return res;
     }
 
-    // An empty map is absent evidence: Tier 2 treats "not closed" as a terminal
-    // write, so an unreadable graph would stamp `superseded` onto every live
-    // drift-token plan - unattended, since both --apply callers discard output.
-    // Tier 3 already refuses on the empty map; this gives Tier 2 the same
-    // stance. Tier 1 is a pure synonym rewrite and still runs.
+    // An empty map is absent evidence for every doc, so one warning stands in
+    // for a hold line per drift-token plan. Tier 1 is a pure synonym rewrite
+    // and still runs.
     let tier2_blind = status_map.is_empty();
     if tier2_blind {
         res.warnings
@@ -378,14 +376,17 @@ pub fn sweep(plans_dir: &Path, apply: bool, status_map: &HashMap<String, String>
                 .as_deref()
                 .and_then(|l| status_map.get(l))
                 .map(String::as_str);
-            // Live node + unknown word: reported apart from `skipped`, which
-            // would read as a healthy idempotent run.
+            // Unknown word with no closed node: reported apart from `skipped`,
+            // which would read as a healthy idempotent run.
             let Some(n) = target_status(raw, node_status) else {
                 res.stood_down += 1;
+                let evidence = match (link.as_deref(), node_status) {
+                    (Some(l), Some(st)) => format!("node {l} is {st}"),
+                    (Some(l), None) => format!("link {l} not in graph or archive"),
+                    (None, _) => "no node link".to_string(),
+                };
                 res.warnings.push(format!(
-                    "tier2 hold (node {} is {}, status word '{s}' unknown): {name}",
-                    link.as_deref().unwrap_or("?"),
-                    node_status.unwrap_or("?"),
+                    "tier2 hold ({evidence}, status word '{s}' unknown): {name}"
                 ));
                 continue;
             };
@@ -632,24 +633,6 @@ mod tests {
         }
     }
 
-    /// An unknown word over a LIVE node holds - it never writes a terminal,
-    /// because that is how a fresh think doc read dead.
-    #[test]
-    fn tier2_holds_on_a_live_node() {
-        assert_eq!(
-            target_status(Some(&Value::Scalar("wip".into())), Some("idea")),
-            None
-        );
-        assert_eq!(
-            target_status(Some(&Value::Scalar("wip".into())), Some("in_progress")),
-            None
-        );
-        assert_eq!(
-            target_status(Some(&Value::Scalar("".into())), Some("ready")),
-            None
-        );
-    }
-
     #[test]
     fn tier2_terminals_still_write() {
         assert_eq!(
@@ -660,11 +643,35 @@ mod tests {
             target_status(Some(&Value::Scalar("wip".into())), Some("superseded")),
             Some("superseded".into())
         );
-        // Orphaned link (no node evidence) keeps the honest terminal.
-        assert_eq!(
-            target_status(Some(&Value::Scalar("wip".into())), None),
-            Some("superseded".into())
-        );
+    }
+
+    /// Neither an unlinked doc nor a link to no node row is evidence of
+    /// abandonment, in a map that does hold rows. A superseded node still is.
+    #[test]
+    fn tier2_holds_without_node_evidence() {
+        let dir = tmp_dir("no-evidence");
+        let held = [
+            write_doc(&dir, "open.md", "---\nstatus: open\n---\n# T\n"),
+            write_doc(&dir, "nokey.md", "---\nkind: note\n---\n# T\n"),
+            write_doc(&dir, "orphan.md", &linked_plan("open", "x-gone")),
+        ];
+        let before = held.each_ref().map(|p| read_doc(p));
+        let closed = write_doc(&dir, "closed.md", &linked_plan("open", "x-closed"));
+
+        let res = sweep(&dir, true, &map(&[("x-closed", "superseded")]));
+
+        assert_eq!(held.each_ref().map(|p| read_doc(p)), before);
+        assert_eq!(res.stood_down, 3);
+        assert_eq!(res.superseded, 1);
+        assert!(read_doc(&closed).contains("status: \"superseded\""));
+        assert!(res
+            .warnings
+            .iter()
+            .any(|w| w.contains("no node link") && w.contains("open.md")));
+        assert!(res
+            .warnings
+            .iter()
+            .any(|w| w.contains("link x-gone not in graph") && w.contains("orphan.md")));
     }
 
     // ------------------------------------------------------------------
@@ -702,11 +709,14 @@ mod tests {
         write_doc(&dir, "a.md", &plan_doc("status: PENDING"));
         write_doc(&dir, "b.md", &plan_doc(""));
         write_doc(&dir, "c.md", &plan_doc("status: in_review"));
-        // x-1 absent from the map: b takes the honest superseded, c warns.
+        // x-1 absent from the map: b holds, c warns.
         let res = sweep(&dir, true, &map(&[("x-other", "ready")]));
-        assert_eq!(res.summary(), "1 normalized, 1 superseded, 1 skipped");
+        assert_eq!(
+            res.summary(),
+            "1 normalized, 0 superseded, 1 skipped, 1 stood down"
+        );
         assert!(read_doc(&dir.join("a.md")).contains("status: \"design\""));
-        assert!(read_doc(&dir.join("b.md")).contains("status: \"superseded\""));
+        assert_eq!(read_doc(&dir.join("b.md")), plan_doc(""));
     }
 
     #[test]
@@ -727,7 +737,7 @@ mod tests {
     #[test]
     fn sweep_idempotent_and_non_regressing() {
         let dir = tmp_dir("idempotent");
-        let p = write_doc(&dir, "a.md", &plan_doc(""));
+        let p = write_doc(&dir, "a.md", &plan_doc("status: \"superseded\""));
         sweep(&dir, true, &map(&[("x-other", "ready")]));
         assert!(read_doc(&p).contains("status: \"superseded\""));
         // Human re-activates it.
