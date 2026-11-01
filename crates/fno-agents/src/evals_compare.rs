@@ -20,6 +20,7 @@ pub(crate) struct CompareArgs<'a> {
     pub a: &'a str,
     pub b: &'a str,
     pub repeats: usize,
+    pub since: Option<usize>,
     pub json_out: bool,
 }
 
@@ -242,7 +243,7 @@ pub(crate) fn run(args: &CompareArgs) -> i32 {
         eprintln!("evals compare: --repeats must be at least 1");
         return EXIT_USAGE;
     }
-    let rows = read_rows(args.history, None, None);
+    let rows = read_rows(args.history, None, args.since);
     let view = match fold(&rows, args.a, args.b, args.repeats) {
         Ok(v) => v,
         Err(e) => {

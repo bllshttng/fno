@@ -101,7 +101,7 @@ The variant axis answers "did this change help?". The trend axis answers "are we
 
 Where the history lives: `~/.fno/history/evals-history.jsonl` (`config.paths.evals_history`), one append-only line per task-run, one writer. It is not a git artifact: a bank run needs a spawn-capable machine, and rows are per machine. It is not a second journal either. The `evals_scheduled_run` event is the receipt that a run happened. The history rows are what it graded.
 
-A window is `evals.stale_days` days (default 7) - the same length every health surface already calls "recent". `fno doctor evals trend` scores the recent window `(now - W, now]` against the prior window `(now - 2W, now - W]`, per task, with the same improved/regressed/unchanged verdicts the variant compare prints. Tasks present in only one window land in the missing lists with no verdict. `regressed` names regression-tier tasks whose verdict is `regressed`, and drives exit 4.
+A window is `evals.stale_days` days (default 7) - the same length every health surface already calls "recent". `fno doctor evals trend` scores the recent window `(now - W, now]` against the prior window `(now - 2W, now - W]`, per task, with `improved`, `regressed` or `unchanged` verdicts. Tasks present in only one window land in the missing lists with no verdict. `regressed` names regression-tier tasks whose verdict is `regressed`, and drives exit 4.
 
 The default report's regression alarm reads the recent window too. A 50-day-old flake fixed three minutes later no longer holds exit 4 open. `tiers`, `tasks` and `flakes` stay the all-rows long view. `fno doctor` prints `evals REGRESSING - <ids> dropped against the prior <W>d window`, and `fno backlog triage health` appends ` REGRESSED <n>` to its evals line.
 

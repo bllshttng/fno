@@ -1200,6 +1200,7 @@ pub fn run_evals_trend(args: &[String]) -> i32 {
             a,
             b,
             repeats,
+            since,
             json_out,
         });
     }
