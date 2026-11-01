@@ -41,7 +41,7 @@ The quote is capped at 280 characters and passes `scrub_quote`. Secret shapes ar
 The store is append-only, so outcome is its own `correction_outcome` row, from an hourly pass.
 
 - `held`: the node merged after the correction, with no overrule. This is weak evidence: a merge shows nothing broke, never that the corrector was right.
-- `overruled`: something later took the correction back. An agent or machine row reads this after a user correction within 30 minutes in the same session. An agent row reads it after the corrector's own retraction on the bus. Any row reads it when a `decision_span` names it.
+- `overruled`: something later took the correction back. An agent or machine row reads this after a user correction within 30 minutes in the same session. An agent row reads it after the corrector's own retraction on the bus. A `decision_span` that names a row overrules that row too.
 - `unresolved`: no merge after 14 days.
 
 ## Read it
