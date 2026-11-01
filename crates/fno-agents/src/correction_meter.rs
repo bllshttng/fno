@@ -16,7 +16,7 @@
 use serde_json::{json, Map, Value};
 use std::collections::BTreeSet;
 
-fn retraction_re() -> &'static regex::Regex {
+pub(crate) fn retraction_re() -> &'static regex::Regex {
     static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     RE.get_or_init(|| {
         regex::Regex::new(concat!(

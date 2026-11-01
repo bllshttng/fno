@@ -1522,6 +1522,20 @@ pub fn run(args: &[String]) -> i32 {
     while i < args.len() {
         let value = args.get(i + 1);
         match args[i].as_str() {
+            "--corrections-sample" => {
+                let Some(v) = value else {
+                    eprintln!("fno-agents intel: --corrections-sample needs a directory");
+                    return 2;
+                };
+                let dir = crate::cargo_build_dirs::expand_home(Path::new(v));
+                if let Err(e) = std::fs::create_dir_all(&dir) {
+                    eprintln!("fno-agents intel: {}: {e}", dir.display());
+                    return 1;
+                }
+                let receipt = crate::correction_fold::sample_pass(&dir, 512, 2000);
+                println!("{}", serde_json::to_string(&receipt).unwrap_or_default());
+                return 0;
+            }
             "--corpus" | "--corpus-ingest" => {
                 let Some(v) = value else {
                     eprintln!("fno-agents intel: {} needs a directory", args[i]);

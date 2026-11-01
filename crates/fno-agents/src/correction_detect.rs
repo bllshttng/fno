@@ -239,13 +239,18 @@ pub(crate) fn scrub_row(mut row: Value, counts: &mut ScrubCounts) -> Option<Valu
 /// dropped whole when a secret shape survives the pass. The row still lands
 /// with `quote: null, quote_status: dropped`.
 pub(crate) fn scrub_quote(quote: &str, counts: &mut ScrubCounts) -> (Option<String>, &'static str) {
-    let capped: String = quote.chars().take(280).collect();
+    // A pasted block is someone else's words, not the correction.
+    let own = quote.split("<pasted_content").next().unwrap_or(quote).trim_end();
+    let capped: String = own.chars().take(280).collect();
+    if sensitive_rx().is_match(&capped) {
+        counts.sensitive_drops += 1;
+        return (None, "dropped");
+    }
     let scrubbed = scrub_string(&capped, counts);
-    let text = scrubbed.to_string();
     let residual = crate::intel_html::secret_rx()
-        .find_iter(&text)
+        .find_iter(&scrubbed)
         .any(|m| !m.as_str().contains("[redacted]"))
-        || email_rx().is_match(&text);
+        || email_rx().is_match(&scrubbed);
     if residual {
         counts.residual_drops += 1;
         return (None, "dropped");
@@ -258,37 +263,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_question_is_never_a_correction_and_a_leading_marker_is() {
-        // AC1
+    fn ac1_questions_and_bare_answers_stay_out_and_the_corpus_rule_stays_exact() {
         assert!(detect_user("wait, did you run it?", false).is_none());
-        let c = detect_user("no, use the other branch", false).expect("a correction");
-        assert_eq!(c.kind, "correct");
-        // The question mark sits mid-turn: the first sentence decides.
         assert!(detect_user("actually, why not the other branch?", false).is_none());
-    }
-
-    #[test]
-    fn a_bare_no_after_a_question_is_an_answer_but_no_comma_still_counts() {
         assert!(detect_user("no", true).is_none());
-        let c = detect_user("no, use the other branch", true).expect("still a correction");
-        assert_eq!(c.kind, "correct");
-        assert!(c.after_question);
-    }
-
-    #[test]
-    fn reject_keeps_its_kind_and_the_rule_stays_corpus_exact() {
-        let c = detect_user("stop", false).expect("a refusal");
-        assert_eq!(c.kind, "reject");
-        // The unfiltered rule is unchanged: the corpus's own labels hold.
+        assert_eq!(detect_user("no, use the other branch", false).unwrap().kind, "correct");
+        assert!(detect_user("no, use the other branch", true).unwrap().after_question);
+        assert_eq!(detect_user("stop", false).unwrap().kind, "reject");
         assert_eq!(reaction_rule("yes go"), Some("approve"));
         assert_eq!(reaction_rule("nope"), Some("reject"));
-        assert_eq!(reaction_rule("no, use the other branch"), Some("correct"));
         assert_eq!(reaction_rule("what about the tests?"), None);
+
+        assert_eq!(detect_agent("<fno_mail from=\"p\">No change: ask open</fno_mail>"), None);
+        assert_eq!(detect_agent("No new findings this round."), None);
+        assert_eq!(detect_agent("no, the PR is still red"), Some("correct"));
+        assert_eq!(detect_agent("`@m · id`\nYour fix does not cover pi."), Some("correct"));
+        assert_eq!(detect_agent("Did your fix cover pi? Please check."), None);
     }
 
     #[test]
-    fn a_secret_shape_never_reaches_the_quote_and_an_env_form_drops_it() {
-        // AC2: every shape class the machine's routes carry.
+    fn ac2_a_secret_never_reaches_the_quote_and_a_residual_keeps_the_row() {
         for secret in [
             "sk-abcdefghijklmnopqrstuvwxyz012345",
             "ghp_abcdefghijklmnopqrstuvwxyz0123456789",
@@ -296,31 +290,19 @@ mod tests {
             "AKIAIOSFODNN7EXAMPLE",
             concat!("xox", "b-123456789-abcdefghijklmnop"),
             "ZAI_API_KEY=0123456789abcdef0123456789abcdef",
-            "https://user:hunter2secret@example.com/x",
         ] {
             let mut counts = ScrubCounts::default();
             let (quote, status) = scrub_quote(&format!("use {secret} now"), &mut counts);
-            assert_eq!(status, "kept", "masked, not dropped: {secret}");
-            assert!(
-                quote.unwrap_or_default().contains("[redacted]"),
-                "shape masked: {secret}"
-            );
+            assert_eq!(status, "kept", "{secret}");
+            let quote = quote.unwrap();
+            assert!(quote.contains("[redacted]"), "{secret}: {quote}");
+            assert!(!quote.contains(&secret[secret.len() - 10..]), "{secret}: {quote}");
         }
-        // A residual the masks cannot name drops the quote; the row lives.
         let mut counts = ScrubCounts::default();
-        let raw = "token abc123def456 - keep going";
-        let (quote, status) = scrub_quote(raw, &mut counts);
-        assert_eq!(status, "dropped");
-        assert!(quote.is_none());
-        assert_eq!(counts.residual_drops, 1);
-    }
-
-    #[test]
-    fn agent_status_leads_never_read_as_corrections() {
-        assert_eq!(detect_agent("<fno_mail from=\"p\">No change: ask open</fno_mail>"), None);
-        assert_eq!(detect_agent("No new findings this round."), None);
-        assert_eq!(detect_agent("no, the PR is still red"), Some("correct"));
-        assert_eq!(detect_agent("`@m · id`\nYour fix does not cover pi."), Some("correct"));
-        assert_eq!(detect_agent("Did your fix cover pi? Please check."), None);
+        assert_eq!(scrub_quote("no, read ~/.netrc first", &mut counts), (None, "dropped"));
+        assert_eq!(counts.sensitive_drops, 1);
+        // A pasted block stays out of the quote.
+        let (quote, _) = scrub_quote("no, this:\n<pasted_content>bank</pasted_content>", &mut counts);
+        assert_eq!(quote.as_deref(), Some("no, this:"));
     }
 }

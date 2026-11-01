@@ -48,6 +48,7 @@ pub const NATIVE_EVENT_SUBCOMMANDS: &[&str] = &[
     "find",
     "gate-escape",
     "audit",
+    "corrections",
     "recover",
     "signals",
     "fanout",
@@ -91,6 +92,11 @@ pub fn classify_doctor_event(args: &[OsString]) -> Option<Vec<OsString>> {
             }
             Some("audit") => {
                 return Some(args[3..].to_vec());
+            }
+            Some("corrections") => {
+                let mut rest = args[3..].to_vec();
+                rest.push(OsString::from("--json"));
+                return Some(rest);
             }
             Some("--help") => return Some(vec![OsString::from("group-help")]),
             None => return Some(vec![OsString::from("group-help-error")]),
@@ -178,6 +184,7 @@ pub fn run(args: &[OsString]) -> i32 {
         "gate-escape" => gate::run(rest, false),
         "gate-json" => gate::run(rest, true),
         "audit" => audit::run(rest),
+        "corrections" => crate::event_corrections::run(rest),
         "find" => run_find(rest),
         "recover" if rest.first().and_then(|arg| arg.to_str()) == Some("--copy-store") => {
             copy_recovery::run(&rest[1..])

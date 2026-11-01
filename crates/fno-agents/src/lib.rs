@@ -167,6 +167,7 @@ pub mod convert;
 pub mod correction_meter;
 pub mod correction_detect;
 pub mod correction_fold;
+pub mod correction_outcome;
 pub mod correction_readings;
 pub mod corrections_verify;
 pub mod cursor_agent;

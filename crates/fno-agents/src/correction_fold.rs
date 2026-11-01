@@ -38,9 +38,11 @@ use std::time::{Duration, Instant};
 pub(crate) const TICK_READ_BUDGET: u64 = 64 * 1024 * 1024;
 pub(crate) const MAX_ROWS_PER_TICK: usize = 200;
 pub(crate) const TICK_INTERVAL_S: u64 = 60;
+const OUTCOME_INTERVAL_S: u64 = 3_600;
 /// A session's skill, reference and subagent lists stop growing here, so the
 /// one cache file stays small and a row stays under the event size limit.
 const FACT_LIST_CAP: usize = 40;
+const QUIET_STATE_DROP_S: u64 = 2 * 86_400;
 
 /// The session state a tail read cannot rebuild: the open assistant turn's
 /// shape, the latest readings, and the ruling's session facts.
@@ -91,7 +93,10 @@ struct Cursor {
     head: String,
     #[serde(default)]
     head_len: u64,
-    state: SessionState,
+    /// Dropped once a session goes quiet, so the one cache file stays small.
+    /// A session that resumes rebuilds its readings from its next rows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    state: Option<SessionState>,
 }
 
 /// Typed turns per day, harness and model: the rate's denominator.
@@ -896,6 +901,7 @@ fn load_cache(path: &Path, now_epoch: u64, receipt: &mut FoldReceipt) -> CacheFi
 fn fold_file(
     file: &SessionFile,
     cur: &mut Cursor,
+    state: &mut SessionState,
     budget: u64,
     row_cap: usize,
     bus: &BusIndex,
@@ -922,7 +928,7 @@ fn fold_file(
             break;
         }
         let line = String::from_utf8_lossy(&buf);
-        scan_line(&mut cur.state, line.trim_end(), bus, witness, ctx, out);
+        scan_line(state, line.trim_end(), bus, witness, ctx, out);
         cur.offset += n as u64;
         *bytes += n as u64;
     }
@@ -935,6 +941,7 @@ fn fold_rendered(
     source: &dyn TranscriptSource,
     file: &SessionFile,
     cur: &mut Cursor,
+    state: &mut SessionState,
     budget: u64,
     row_cap: usize,
     bus: &BusIndex,
@@ -951,7 +958,7 @@ fn fold_rendered(
             done = false;
             break;
         }
-        scan_line(&mut cur.state, line.trim_end(), bus, witness, ctx, out);
+        scan_line(state, line.trim_end(), bus, witness, ctx, out);
         cur.offset += line.len() as u64;
         *bytes += line.len() as u64;
     }
@@ -985,6 +992,28 @@ pub(crate) fn fold_once(mut inputs: FoldInputs) -> FoldReceipt {
         let harness = source.harness();
         let rendered = matches!(harness, "opencode" | "agy");
         let key = file.path.display().to_string();
+        // Nothing to read in a file already at its end: no head sample, no
+        // clone. With the corpus listed every tick, this is the common path.
+        if let Some(c) = cache.cursors.get_mut(&key) {
+            let idle = if rendered {
+                c.mtime == file.mtime
+            } else {
+                c.offset == file.size
+            };
+            if idle {
+                let quiet = inputs.now_epoch.saturating_sub(file.mtime) > QUIET_STATE_DROP_S;
+                if quiet && c.state.take().is_some() {
+                    changed = true;
+                }
+                continue;
+            }
+        }
+        // A spent tick leaves the file for later: an unread file gets no
+        // cursor, because a cursor is only worth its bytes once it has moved.
+        if bytes >= inputs.budget || receipt.rows_capped {
+            receipt.pending_files += 1;
+            continue;
+        }
         let mut cur = match cache.cursors.get(&key) {
             Some(c) if rendered => c.clone(),
             Some(c) => {
@@ -1016,26 +1045,10 @@ pub(crate) fn fold_once(mut inputs: FoldInputs) -> FoldReceipt {
                     mtime: 0,
                     head,
                     head_len,
-                    state: SessionState::new(harness),
+                    state: None,
                 }
             }
         };
-        let has_work = if rendered {
-            cur.mtime != file.mtime
-        } else {
-            cur.offset < file.size
-        };
-        let spent = bytes >= inputs.budget || receipt.rows_capped;
-        if !has_work || spent {
-            if has_work {
-                receipt.pending_files += 1;
-            }
-            if !cache.cursors.contains_key(&key) {
-                cache.cursors.insert(key, cur);
-                changed = true;
-            }
-            continue;
-        }
         let fixed = (harness == "opencode")
             .then(|| {
                 let display = file.path.to_string_lossy().into_owned();
@@ -1053,6 +1066,10 @@ pub(crate) fn fold_once(mut inputs: FoldInputs) -> FoldReceipt {
             detect: &inputs.detect,
             fixed_readings: fixed.as_ref(),
         };
+        let mut state = cur
+            .state
+            .take()
+            .unwrap_or_else(|| SessionState::new(harness));
         let mut out = ScanOut::default();
         let room = inputs
             .row_cap
@@ -1062,6 +1079,7 @@ pub(crate) fn fold_once(mut inputs: FoldInputs) -> FoldReceipt {
                 source,
                 file,
                 &mut cur,
+                &mut state,
                 inputs.budget,
                 room,
                 &inputs.bus,
@@ -1074,6 +1092,7 @@ pub(crate) fn fold_once(mut inputs: FoldInputs) -> FoldReceipt {
             fold_file(
                 file,
                 &mut cur,
+                &mut state,
                 inputs.budget,
                 room,
                 &inputs.bus,
@@ -1089,6 +1108,7 @@ pub(crate) fn fold_once(mut inputs: FoldInputs) -> FoldReceipt {
             receipt.append_error = Some(e);
             break;
         }
+        cur.state = Some(state);
         merge_tally(&mut cache.typed_turns, out.typed);
         receipt.files_read += 1;
         receipt.rows_capped = receipt.rows_appended as usize >= inputs.row_cap;
@@ -1152,6 +1172,28 @@ fn all_sources() -> Vec<Box<dyn TranscriptSource>> {
     ]
 }
 
+/// One pass into a chosen directory, for a precision sample: real transcripts,
+/// a separate store and cursor file, and the live store untouched.
+pub(crate) fn sample_pass(dir: &Path, budget_mib: u64, rows: usize) -> FoldReceipt {
+    let home = AgentsHome::from_env();
+    let fno_dir = home
+        .root()
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from(".fno"));
+    fold_once(FoldInputs {
+        cache: dir.join("cursors.json"),
+        journal: dir.join("events.jsonl"),
+        sources: all_sources(),
+        bus: BusIndex::load(&crate::intel::bus_log_path(&fno_dir)),
+        witness: SubmitIndex::load(&home.events_jsonl()),
+        detect: load_detect_facts(&home),
+        now_epoch: chrono::Utc::now().timestamp().max(0) as u64,
+        budget: budget_mib * 1024 * 1024,
+        row_cap: rows,
+    })
+}
+
 /// The cache path under the state root, and the tally the report reads.
 pub(crate) fn cache_path(state_dir: &Path) -> PathBuf {
     crate::state_layout::place_in(state_dir, "corrections", "cursors.json")
@@ -1174,9 +1216,28 @@ fn run_pass(home: &AgentsHome) -> Option<FoldReceipt> {
     Some(fold_once(inputs))
 }
 
+/// The outcome pass, at most hourly, on the fold's own off-loop thread.
+fn run_outcome_pass(home: &AgentsHome) {
+    let Some(journal) = global_journal(home) else {
+        return;
+    };
+    let Some(fno_dir) = home.root().parent() else {
+        return;
+    };
+    let graph = crate::backlog::settings::graph_path();
+    let rows = crate::graph_store::read_rows(&graph).unwrap_or_default();
+    let merges = crate::correction_outcome::node_merges(&rows);
+    let bus = BusIndex::load(&crate::intel::bus_log_path(fno_dir));
+    let now = chrono::Utc::now().timestamp();
+    if let Err(error) = crate::correction_outcome::outcome_pass(&journal, &bus, &merges, now) {
+        eprintln!("correction outcome: append failed: {error}");
+    }
+}
+
 #[derive(Default)]
 pub struct Arm {
     last_tick: Mutex<Option<Instant>>,
+    last_outcome: Arc<Mutex<Option<Instant>>>,
     in_flight: Arc<AtomicBool>,
 }
 
@@ -1192,12 +1253,24 @@ pub fn maybe_tick(arm: &Arm, home: AgentsHome) {
         *last = Some(Instant::now());
     }
     let flag = Arc::clone(&arm.in_flight);
+    let last_outcome = Arc::clone(&arm.last_outcome);
     tokio::task::spawn_blocking(move || {
         let _gate = crate::daemon::SweepGate(flag);
         if let Some(receipt) = run_pass(&home) {
             if let Some(error) = receipt.append_error {
                 eprintln!("correction fold: append failed: {error}");
             }
+        }
+        let due = {
+            let mut last = last_outcome.lock().unwrap_or_else(|e| e.into_inner());
+            let due = last.is_none_or(|t| t.elapsed() >= Duration::from_secs(OUTCOME_INTERVAL_S));
+            if due {
+                *last = Some(Instant::now());
+            }
+            due
+        };
+        if due {
+            run_outcome_pass(&home);
         }
     });
 }

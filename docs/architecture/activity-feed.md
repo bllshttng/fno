@@ -31,7 +31,7 @@ Every row carries an `area`: a pure function of the kind. The column renders in 
 | `mail` | `question_asked`, `question_closed`, `decision_recorded`, `mail_to_user` |
 | `backlog` | `node_created`, `node_started`, `node_ended` |
 | `ship` | `node_shipped`, `pr_merged` |
-| `agents` | `session_spawned`, `session_spawn_refused`, `session_reaped`, `worker_stalled`, `help_emitted`, `team_granted`, `team_vacated` |
+| `agents` | `session_spawned`, `session_spawn_refused`, `session_reaped`, `worker_stalled`, `help_emitted`, `team_granted`, `team_vacated`, `agent_corrected`, `agent_corrected_agent`, `agent_corrected_machine` |
 | `mux` | `pane_closed`, `server_stopped`, `composer_shell_ran`, `composer_shell_refused` |
 | `fleet` | `day_boundary`, `daemon_restarted`, `update_started`, `update_finished` |
 | `ci` | `main_ci_changed` |
