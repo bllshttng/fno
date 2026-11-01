@@ -315,7 +315,7 @@ fn format_table(rows: &[SpawnerStatus]) -> String {
 /// all prints every spawner's fail-safe default rather than raising.
 pub fn run(args: &[String]) -> i32 {
     if args.is_empty() || args[0] != "status" {
-        eprintln!("usage: fno-agents autonomy status [--project-root P] [--json]");
+        eprintln!("usage: fno-agents autonomy status [--project-root P] [--json|-J]");
         return 2;
     }
     let mut root: Option<PathBuf> = None;
@@ -327,7 +327,7 @@ pub fn run(args: &[String]) -> i32 {
                 root = Some(PathBuf::from(&args[i + 1]));
                 i += 2;
             }
-            "--json" => {
+            "--json" | "-J" => {
                 as_json = true;
                 i += 1;
             }
