@@ -66,7 +66,7 @@ pub fn live_child_of<'a>(
             && crate::row_truth::served_fresh_liveness(
                 child.liveness.as_deref(),
                 child.liveness_measured_at.as_deref(),
-            ) != Some("dead")
+            ) != "dead"
     })
 }
 
