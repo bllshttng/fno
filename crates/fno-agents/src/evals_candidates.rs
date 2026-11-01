@@ -424,7 +424,8 @@ mod tests {
              2026-10-13T09:02:42Z | S2 | insights-tag | r.md:1 | - \"mail me at a@b.co\" (x1, 01a0, signal=repeated_correction) #agent-correction\n",
         )
         .unwrap();
-        let events = tmp.path().join("events.jsonl");
+        let store = tempfile::tempdir().unwrap();
+        let events = store.path().join("events.jsonl");
         crate::event_store::append_envelope(
             &events,
             &json!({"ts": "2026-11-01T00:00:00Z", "type": "agent_corrected", "source": "daemon",

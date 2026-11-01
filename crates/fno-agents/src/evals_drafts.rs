@@ -175,7 +175,11 @@ fn drafts_dir(state: &Path) -> PathBuf {
 }
 
 /// `fno-agents evals drafts`: run the pass now and print its counts.
-pub fn run(_args: &[String]) -> i32 {
+pub fn run(args: &[String]) -> i32 {
+    if !args.is_empty() {
+        eprintln!("usage: fno-agents evals drafts");
+        return 2;
+    }
     let state = crate::evals_candidates::state_root();
     match pass(
         &state.join("events.jsonl"),

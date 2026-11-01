@@ -20,6 +20,7 @@ use serde_json::{json, Value};
 const PASS_BALANCED: f64 = 0.80;
 const PASS_CONTRADICTS: f64 = 0.70;
 const LABELS: [&str; 3] = ["supports", "contradicts", "unrelated"];
+const SET_PER_LABEL: usize = 20;
 const MAX_RECORDS_PER_PLAN: usize = 10;
 const PREMISE_CHARS: usize = 600;
 const RECORD_CHARS: usize = 2_000;
@@ -286,7 +287,7 @@ pub(crate) fn plan_pairs(name: &str, text: &str, node: &str, facts: &NodeFacts) 
 }
 
 /// Later records per node from the graph: rulings, notes and the closing note.
-fn graph_facts(graph: &Path) -> BTreeMap<String, (NodeFacts, Vec<String>)> {
+fn graph_facts(graph: &Path) -> BTreeMap<String, (NodeFacts, Vec<(String, String)>)> {
     let query = crate::backlog::RowQuery {
         with_blockers: true,
         ..Default::default()
@@ -301,7 +302,7 @@ fn graph_facts(graph: &Path) -> BTreeMap<String, (NodeFacts, Vec<String>)> {
             superseded: row.get("status").and_then(Value::as_str) == Some("superseded"),
             ..Default::default()
         };
-        let mut ruling_dates = Vec::new();
+        let mut rulings = Vec::new();
         for ruling in row
             .get("decisions")
             .and_then(Value::as_array)
@@ -312,15 +313,13 @@ fn graph_facts(graph: &Path) -> BTreeMap<String, (NodeFacts, Vec<String>)> {
                 .get("decision")
                 .or_else(|| ruling.get("text"))
                 .and_then(Value::as_str);
-            if let Some(text) = text {
-                facts.records.push(("ruling".to_string(), text.to_string()));
-            }
-            if let Some(ts) = ruling
+            let ts = ruling
                 .get("created_at")
                 .or_else(|| ruling.get("ts"))
-                .and_then(Value::as_str)
-            {
-                ruling_dates.push(ts.to_string());
+                .and_then(Value::as_str);
+            if let (Some(ts), Some(text)) = (ts, text) {
+                let day = ts.get(..10).unwrap_or_default().replace('-', "");
+                rulings.push((day, text.to_string()));
             }
         }
         for note in row
@@ -346,9 +345,20 @@ fn graph_facts(graph: &Path) -> BTreeMap<String, (NodeFacts, Vec<String>)> {
                 .records
                 .push(("completion".to_string(), note.to_string()));
         }
-        out.insert(id.to_string(), (facts, ruling_dates));
+        out.insert(id.to_string(), (facts, rulings));
     }
     out
+}
+
+/// Only a ruling from the plan's day or later is a later record. A ruling on
+/// the plan's own day may predate it, so only a later day overrules.
+pub(crate) fn apply_rulings(facts: &mut NodeFacts, rulings: &[(String, String)], plan_day: &str) {
+    for (day, text) in rulings {
+        if day.as_str() >= plan_day {
+            facts.records.push(("ruling".to_string(), text.clone()));
+        }
+        facts.ruled_after_plan |= day.as_str() > plan_day;
+    }
 }
 
 /// Nodes with a reverted merge, from the merge subjects that name the branch.
@@ -392,15 +402,13 @@ fn all_pairs(plans: &Path, graph: &Path, repo: &Path) -> Vec<Pair> {
         let Some(node) = crate::evals_candidates::plan_node(&name, &text) else {
             continue;
         };
-        let Some((node_facts, dates)) = facts.get(&node) else {
+        let Some((node_facts, rulings)) = facts.get(&node) else {
             continue;
         };
         let mut node_facts = node_facts.clone();
         node_facts.reverted = reverted.contains(&node);
-        let plan_day = name.get(..8).unwrap_or_default().to_string();
-        node_facts.ruled_after_plan = dates
-            .iter()
-            .any(|d| d.get(..10).unwrap_or_default().replace('-', "") > plan_day);
+        let plan_day = name.get(..8).unwrap_or_default();
+        apply_rulings(&mut node_facts, rulings, plan_day);
         out.extend(plan_pairs(&name, &text, &node, &node_facts));
     }
     out
@@ -484,6 +492,18 @@ fn read_set(path: &Path) -> Result<Vec<Pair>, String> {
             continue;
         }
         set.push(serde_json::from_str::<Pair>(&line).map_err(|e| format!("set row: {e}"))?);
+    }
+    let per_label = |label: &str| {
+        set.iter()
+            .filter(|p| p.label.as_deref() == Some(label))
+            .count()
+    };
+    if LABELS.iter().any(|l| per_label(l) != SET_PER_LABEL) {
+        return Err(format!(
+            "the set needs {SET_PER_LABEL} pairs per label, and {} holds {} pairs",
+            path.display(),
+            set.len()
+        ));
     }
     if set
         .iter()
@@ -635,7 +655,26 @@ fn plans_command(args: &[String], dir: &Path) -> i32 {
     0
 }
 
+/// A mistyped `--dry-run` must not start a real pass.
+fn unknown_flag(args: &[String]) -> Option<&str> {
+    let mut rest = args.iter();
+    while let Some(arg) = rest.next() {
+        match arg.as_str() {
+            "--plans" | "--plans-ladder" | "--dry-run" => {}
+            "--limit" | "--teacher-url" | "--hosted" => {
+                rest.next();
+            }
+            other => return Some(other),
+        }
+    }
+    None
+}
+
 pub fn run(args: &[String]) -> i32 {
+    if let Some(flag) = unknown_flag(args) {
+        eprintln!("fno-agents intel: unknown flag {flag}\n{USAGE}");
+        return 2;
+    }
     let dir = labels_dir();
     if let Err(e) = std::fs::create_dir_all(&dir) {
         eprintln!("fno-agents intel: {}: {e}", dir.display());
@@ -761,8 +800,20 @@ mod tests {
         let pair = &plan_pairs("20261001-n-1.md", plan, "n-1", &facts)[0];
         assert!(pair.record.contains("[email]"), "{}", pair.record);
         assert_eq!(pair.overruled_by, None);
-        facts.ruled_after_plan = true;
+        let rulings = [
+            ("20260901".to_string(), "older".to_string()),
+            ("20261002".to_string(), "newer".to_string()),
+        ];
+        apply_rulings(&mut facts, &rulings[..1], "20261001");
+        assert_eq!(facts.records.len(), 1, "an older ruling is no later record");
+        assert_eq!(overruled_by(&facts), None);
+        apply_rulings(&mut facts, &rulings[1..], "20261001");
+        assert_eq!(facts.records[1].1, "newer");
         assert_eq!(overruled_by(&facts), Some("ruling"));
+        assert_eq!(
+            unknown_flag(&["--plans".to_string(), "--dryrun".to_string()]),
+            Some("--dryrun")
+        );
         facts.reverted = true;
         assert_eq!(overruled_by(&facts), Some("revert"));
         facts.superseded = true;
