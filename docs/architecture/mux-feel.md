@@ -77,7 +77,7 @@ The isolated server also runs its Python helper from the scratch home. One CPU s
 
 ```bash
 cargo build --release --manifest-path crates/fno/Cargo.toml --example mux_latency
-FNO_BIN=<release fno> crates/fno/target/release/examples/mux_latency
+crates/fno/target/release/examples/mux_latency --fno <release fno>
 crates/fno/target/release/examples/mux_latency --stages
 fno doctor footprint
 ```

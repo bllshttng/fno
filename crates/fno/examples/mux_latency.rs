@@ -5,7 +5,7 @@
 //! comparison, so the difference between scenarios is what the mux adds.
 //!
 //! Run a release build against a release `fno` when the machine is calm:
-//! `FNO_BIN=<release fno> cargo run --release -p fno --example mux_latency`
+//! `cargo run --release -p fno --example mux_latency -- --fno <release fno>`
 //! Flags: `--samples N` (default 2000), `--stages` (per-stage cost only).
 //!
 //! Exit codes: 0 measured, 1 harness failure, 2 the 10 ms control missed, so
@@ -528,7 +528,10 @@ fn run() -> Result<i32, String> {
             .ok_or("--samples needs a number")?,
         None => 2000,
     };
-    let bin = std::env::var("FNO_BIN").unwrap_or_else(|_| "fno".into());
+    let bin = match args.iter().position(|a| a == "--fno") {
+        Some(at) => args.get(at + 1).ok_or("--fno needs a path")?.clone(),
+        None => "fno".to_string(),
+    };
     println!("binary: {bin}");
 
     let bare = "stty raw -echo; printf 'lat-%s\\n' ready; exec cat";
