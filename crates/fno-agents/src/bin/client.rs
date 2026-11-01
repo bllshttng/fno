@@ -4458,12 +4458,13 @@ fn render_list_json(
     codex_loaded: Option<&Value>,
     retired: &Value,
 ) -> String {
-    let rows = agents.as_array().cloned().unwrap_or_default();
-    let count = rows.len();
-    let liveness_unknown = rows
-        .iter()
-        .filter(|r| r.get("liveness").and_then(Value::as_str) == Some("unknown"))
-        .count();
+    let rows = agents.as_array();
+    let count = rows.map_or(0, |a| a.len());
+    let liveness_unknown = rows.map_or(0, |a| {
+        a.iter()
+            .filter(|r| r.get("liveness").and_then(Value::as_str) == Some("unknown"))
+            .count()
+    });
     // `codex_loaded` is additive and present only when the caller probed the
     // codex daemon (`--harness codex`); the key is omitted otherwise.
     let mut payload = json!({

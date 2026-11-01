@@ -63,7 +63,7 @@ pub fn served_liveness_word<'a>(
 
 /// Why the row's `liveness` reads the way it does: `fresh` inside the
 /// window, `stale` once a word and stamp exist but the window has passed
-/// (the word is withheld), `never-measured` with no word or no stamp. A
+/// (the word reads `unknown`), `never-measured` with no word or no stamp. A
 /// served field carries its basis; a null with no reason beside it
 /// answers nothing.
 pub fn served_liveness_basis(
