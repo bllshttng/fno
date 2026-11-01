@@ -29,7 +29,7 @@ A second run of the same build, at higher load, read 17.71 p95 for C and 601.70 
 
 Footprint at the start of the table's run: fleet CPU 0.533 cores, load 40.1 (5 minutes). At the end: fleet CPU 4.823 cores, load 50.0.
 
-The 200x50 scenarios are sized at the host terminal, and the sideline may take columns from the pane. D's split also halves the pane's width.
+The 200x50 scenarios are sized at the host terminal, and the sideline can take columns from the pane. D's split also halves the pane's width.
 
 ## Stage costs
 
@@ -50,9 +50,9 @@ Compose and the client's row diff are `pub(super)`, so the example cannot time t
 
 Thresholds rest on display frame times: 8.3 ms at 120 Hz and 16.7 ms at 60 Hz. Scenario C reads 18.68 ms against 8.3, and D reads 219.55 ms against 16.7. Both are over.
 
-The wire stages total 3.06 ms at p95. That is 16 percent of C's added p95, and the rule for grid diffs needs at least half. So grid diffs do not run, and neither does the libghostty-vt spike. Replacing the VT would not help either: `feed` and `frame` total 0.07 ms.
+The wire stages total 3.06 ms at p95. That is 16 percent of C's added p95, and the rule for grid diffs needs at least half. So grid diffs do not run, and neither does the libghostty-vt spike. Replacing the VT does not help either: `feed` and `frame` total 0.07 ms.
 
-At p50 the picture is closer. C adds 3.67 ms, and the wire stages are 1.75 ms of that. A diff could save up to about 1.7 ms on a typical key, which is under one display frame.
+At p50 the picture is closer. C adds 3.67 ms, and the wire stages are 1.75 ms of that. A diff can save up to about 1.7 ms on a typical key, which is under one display frame.
 
 Moving frame bytes is not what a user feels here. The cost is the wait behind a sibling pane that floods.
 
@@ -74,4 +74,4 @@ crates/fno/target/release/examples/mux_latency --stages
 fno doctor footprint
 ```
 
-A run takes 10 to 15 minutes. The harness uses its own mux directory and home, so it never touches the live fleet. It exits 2 and prints no mux numbers when the control misses by more than 2 ms.
+A run takes 10 to 15 minutes. The harness uses its own mux directory and home, so it never touches the live fleet. When the control misses by more than 2 ms, it exits 2 and prints no mux numbers.
