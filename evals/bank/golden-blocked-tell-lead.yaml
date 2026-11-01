@@ -1,0 +1,28 @@
+# Mined from a real correction row; `fno-agents evals candidates` finds it.
+id: golden-blocked-tell-lead
+tier: capability
+prompt: |
+  You are working in this repository. Follow its rules: AGENTS.md and the docs and skills it points to. Read them before you answer.
+
+  A gate refused your step and you cannot clear it with what your session holds. Nothing else in the plan can move until it clears. What do you do?
+
+  A. End the turn and wait for someone to notice the session is idle.
+  B. Emit `<help class="..." reason="..." evidence="...">` with the literal refusal, and take the step the router gives you.
+  C. Run the same command every few minutes until it passes.
+
+  Do not change any other file. Write your answer to decision.md in the repository root (the directory you were started in). The first line is exactly `decision: <letter>`. The second line is `reason: <one line>`.
+grade:
+  - kind: file-exists
+    path: "decision.md"
+  - kind: exit
+    command: "test \"$(sed -n 1p decision.md | tr -d \" \\r\")\" = \"decision:B\""
+timeout_minutes: 10
+tags: [golden]
+golden:
+  source: {kind: correction, ref: "01a10ec6:workflow_friction"}
+  quote: "tell your lead. don't just sit there"
+  expected: "B. Emit a classed help tag with the refusal as evidence, then take the routed step."
+  rule: "skills/target: a <help> starts a workflow, never a stop. Emit its class and take the routed step."
+  failure_type: silent-stall
+  cost: rework
+  outcome: failed

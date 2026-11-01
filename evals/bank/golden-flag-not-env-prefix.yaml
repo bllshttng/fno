@@ -1,0 +1,28 @@
+# Mined from a real correction row; `fno-agents evals candidates` finds it.
+id: golden-flag-not-env-prefix
+tier: capability
+prompt: |
+  You are working in this repository. Follow its rules: AGENTS.md and the docs and skills it points to. Read them before you answer.
+
+  You must start a target run in steps mode from inside a worktree. Which command is right?
+
+  A. `TARGET_TURN_MODE=steps fno do target init --input "<node>"`
+  B. `fno do target init --input "<node>" --steps`
+  C. Run init, then edit `turn_mode: steps` into target-state.md.
+
+  Do not change any other file. Write your answer to decision.md in the repository root (the directory you were started in). The first line is exactly `decision: <letter>`. The second line is `reason: <one line>`.
+grade:
+  - kind: file-exists
+    path: "decision.md"
+  - kind: exit
+    command: "test \"$(sed -n 1p decision.md | tr -d \" \\r\")\" = \"decision:B\""
+timeout_minutes: 10
+tags: [golden]
+golden:
+  source: {kind: correction, ref: "529679ba:misunderstood_instruction"}
+  quote: "I want --steps. i don't want ENV vars ahead of it."
+  expected: "B. The --steps flag."
+  rule: "skills/target: the steps posture rides the --steps flag on fno do target init."
+  failure_type: wrong-surface
+  cost: rework
+  outcome: failed
