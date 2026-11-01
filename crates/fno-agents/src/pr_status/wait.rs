@@ -1238,7 +1238,11 @@ exit 1
             lines.iter().all(|l| l.contains("cancelled run 302")),
             "{lines:?}"
         );
-        let text = std::fs::read_to_string(home.path().join("events.jsonl")).unwrap();
+        // The store lands the row: read it back through the sanctioned
+        // reader instead of the flat file the store replaces.
+        let journal = home.path().join("events.jsonl");
+        let query = crate::event_store::EventQuery::of_types(&["ci_wait_cancel"]);
+        let text = crate::event_store::journal_text_checked(&journal, &query).unwrap();
         let rows: Vec<Value> = text
             .lines()
             .filter_map(|l| serde_json::from_str(l).ok())
