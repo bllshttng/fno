@@ -652,7 +652,8 @@ pub fn run_task(
                     .filter(|h| !h.is_empty())
                     .or(worker_provider);
                 // Other bank tasks invoke plugin skills, so only a golden drops them.
-                let flags = if task.golden.is_some() {
+                // A leading dash needs the fence, so that prompt also keeps them.
+                let flags = if task.golden.is_some() && !prompt.starts_with('-') {
                     tree_only_flags(harness)
                 } else {
                     Vec::new()
