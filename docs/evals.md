@@ -178,6 +178,8 @@ No rung labels plans until it passes a fixed set of 60 hand-labelled pairs in `~
 
 Data leaving the machine: fnod and kev-9b stay on loopback, and any other address refuses. A hosted rung sends plan text to a vendor, and a treg route adds treg as a second party. A `--hosted NAME=COMMAND` rung needs two local failed scores, a clean scrub on each pair and `person_read: true` on each pair. Without all three, the run refuses before any call. The command takes a pair's JSON file as its last argument and prints `{"label": ..., "dollars": ...}`. A regex scrub misses third-party and customer names, which is why a person reads each pair. A hosted winner still refuses `--plans`, because the full pass sends far more text. That pass needs its own user ruling, with the per-pair price and the text count stated.
 
+State: these files sit in the `evals/` folder the corpus already uses, and they add no top-level folder. Drafts expire after 30 days. `.seen` and the label files stay.
+
 ## Legacy attribution note
 
 A row missing `experiment_id` or `requested_lane` is legacy/unattributed. It folds under `(no cohort)` in the cohort report, never into a scored cohort.
