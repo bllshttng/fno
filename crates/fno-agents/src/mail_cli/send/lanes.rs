@@ -759,6 +759,7 @@ pub(crate) fn name_lane_send(args: NameLaneArgs) -> Result<NameLane, i32> {
             Some(recipient.as_str()),
             to_harness.as_deref().or(provider.as_deref()),
             to_session.as_deref(),
+            Some(owner),
         ) {
             return Err(NOT_LANDED_EXIT);
         }
@@ -1760,6 +1761,7 @@ pub(super) fn run_dispatch_then_name_lane(
                     result.to.as_deref(),
                     result.to_harness.as_deref(),
                     result.to_session.as_deref(),
+                    result.durable_owner.as_deref(),
                 )
             {
                 return NOT_LANDED_EXIT;
