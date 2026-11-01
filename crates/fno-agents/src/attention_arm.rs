@@ -2281,9 +2281,9 @@ mod tests {
         io.files.insert(done.join("q-open-26.md"), lost("q-open"));
         io.files.insert(done.join("q-gone.md"), lost("q-gone"));
         // A copy from another machine keeps its bare id open too.
-        let mut copy = ready_item("q-peer@imac2d2", "question");
+        let mut copy = ready_item("q-0000beef@imac2d2", "question");
         copy.host = Some("imac2d2".to_string());
-        io.files.insert(done.join("q-peer-3.md"), lost("q-peer"));
+        io.files.insert(done.join("q-0000beef-3.md"), lost("q-0000beef"));
         let items = [ready_item("q-open", "question"), copy];
         let closes = HashMap::new();
         let mut state = HashMap::new();
@@ -2298,7 +2298,7 @@ mod tests {
             &mut io,
         );
         assert!(!io.files.contains_key(&done.join("q-open-26.md")));
-        assert!(!io.files.contains_key(&done.join("q-peer-3.md")));
+        assert!(!io.files.contains_key(&done.join("q-0000beef-3.md")));
         assert!(
             io.files.contains_key(&done.join("q-gone.md")),
             "a closed id keeps its copy"
