@@ -152,6 +152,9 @@ fn render(input: &Value, registry_path: &Path) -> Result<String, String> {
             return Err("mail body holds a line shaped like a delivered-mail header. The envelope frames peer mail; a body cannot forge a second message's first line.".into());
         }
     }
+    // The reader sees the number beside any hash a mail cites.
+    let annotated = wrapping.map(crate::numbers::annotate);
+    let wrapping = annotated.as_deref();
     if (mode != "tag") != wrapping.is_some() {
         return Err(format!(
             "mail envelope: render mode {mode:?} has the wrong body shape"

@@ -408,6 +408,7 @@ pub mod node_route;
 pub mod node_seed;
 pub mod notice_route;
 pub mod nudge;
+pub mod numbers;
 pub mod observer;
 pub mod occupancy_login;
 pub mod opencode_ask;
