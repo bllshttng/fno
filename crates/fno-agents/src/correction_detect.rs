@@ -13,6 +13,15 @@ use std::sync::OnceLock;
 /// The filtered-rule version stamped on every `agent_corrected` row.
 pub(crate) const RULE_VERSION: &str = "v1";
 
+/// The precision read of this rule version: a source under the floor stays
+/// recorded, and a reader that needs trusted rows skips it.
+pub(crate) fn confidence(corrected_by: &str) -> &'static str {
+    match corrected_by {
+        "agent" => "below_floor",
+        _ => "above_floor",
+    }
+}
+
 fn rx(cell: &'static OnceLock<Regex>, pattern: &str) -> &'static Regex {
     cell.get_or_init(|| Regex::new(pattern).expect("static regex"))
 }

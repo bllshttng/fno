@@ -41,7 +41,7 @@ The quote is capped at 280 characters and passes `scrub_quote`. Secret shapes ar
 The store is append-only, so outcome is its own `correction_outcome` row, from an hourly pass.
 
 - `held`: the node merged after the correction, with no overrule. This is weak evidence: a merge shows nothing broke, never that the corrector was right.
-- `overruled`: a later user correction within 30 minutes in the same session (agent and machine rows only), the corrector's own retraction on the bus, or a `decision_span` that names the row.
+- `overruled`: something later took the correction back. An agent or machine row reads this after a user correction within 30 minutes in the same session. An agent row reads it after the corrector's own retraction on the bus. Any row reads it when a `decision_span` names it.
 - `unresolved`: no merge after 14 days.
 
 ## Read it
@@ -58,5 +58,17 @@ The feed shows user rows by default. An explicit `--kind agent_corrected` adds t
 ## Precision and limits
 
 Rates compare only within one `rule_version`. The floor for a source is precision at 0.80 with a Wilson lower bound at 0.70. Labels stay outside the repo, as they hold user words, at `~/.fno/evals/corrections/v1/labels.jsonl`, one `{"source": "user/correct", "correct": true}` per line.
+
+The read of `v1`, from 213 rows of real transcripts, labelled blind by two models. A disagreement counts as a miss. The samples are smaller than the plan's 350 because 12 GiB of transcripts held no more of the rare kinds.
+
+| Source | Hits | Precision | Wilson 95% | Confidence |
+|---|---|---|---|---|
+| `user/correct` | 46 of 52 | 0.885 | 0.770 to 0.946 | above floor |
+| `user/reject` | 38 of 38 | 1.000 | 0.908 to 1.000 | above floor |
+| `user/interrupt` | 47 of 47 | 1.000 | 0.924 to 1.000 | above floor, as a fact |
+| `agent/correct` | 4 of 26 | 0.154 | 0.061 to 0.335 | below floor |
+| `machine/refused` | 50 of 50 | 1.000 | 0.929 to 1.000 | above floor |
+
+The agent rule misses by a wide margin, and the labellers disagreed on 19 of its 26 rows. Its rows carry `confidence: below_floor`. Do not mine them until a stricter rule clears the floor.
 
 Recall is low: a correction with no leading marker, such as "use the other branch", misses. So never read a rate as an absolute count. On pi and agy a turn the mux typed reads `unwitnessed`, because their rows carry no witness.

@@ -332,6 +332,7 @@ fn build_row(
         "kind": det.kind,
         "session_id": ctx.session,
         "rule_version": RULE_VERSION,
+        "confidence": crate::correction_detect::confidence(det.corrected_by),
         "turn": turn,
         "harness": ctx.harness,
         "model": readings.model.to_json(),

@@ -9119,6 +9119,10 @@ event_types:
         rule_version:
           type: string
           description: "Detector rule version; rates compare only within one version."
+        confidence:
+          type: string
+          enum: [above_floor, below_floor]
+          description: "This source's measured precision against the floor. A reader that needs trusted rows skips below_floor."
         turn:
           type: string
           description: "Turn identifier in the transcript (uuid or line key)."
