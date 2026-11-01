@@ -286,8 +286,10 @@ pub(crate) fn plan_pairs(name: &str, text: &str, node: &str, facts: &NodeFacts) 
     out
 }
 
-/// Later records per node from the graph: rulings, notes and the closing note.
-fn graph_facts(graph: &Path) -> BTreeMap<String, (NodeFacts, Vec<(String, String)>)> {
+type DatedTexts = Vec<(String, String)>;
+
+/// Records per node from the graph: rulings, notes and the closing note.
+fn graph_facts(graph: &Path) -> BTreeMap<String, (NodeFacts, DatedTexts, DatedTexts)> {
     let query = crate::backlog::RowQuery {
         with_blockers: true,
         ..Default::default()
@@ -322,19 +324,13 @@ fn graph_facts(graph: &Path) -> BTreeMap<String, (NodeFacts, Vec<(String, String
                 rulings.push((day, text.to_string()));
             }
         }
-        for note in row
+        let notes: DatedTexts = row
             .get("progress_notes")
             .and_then(Value::as_array)
             .into_iter()
             .flatten()
-        {
-            let text = note
-                .as_str()
-                .or_else(|| note.get("note").and_then(Value::as_str));
-            if let Some(text) = text {
-                facts.records.push(("note".to_string(), text.to_string()));
-            }
-        }
+            .filter_map(dated_note)
+            .collect();
         // A closing note the graph wrote says nothing about a premise.
         if let Some(note) = row
             .get("completion_note")
@@ -345,9 +341,31 @@ fn graph_facts(graph: &Path) -> BTreeMap<String, (NodeFacts, Vec<(String, String
                 .records
                 .push(("completion".to_string(), note.to_string()));
         }
-        out.insert(id.to_string(), (facts, rulings));
+        out.insert(id.to_string(), (facts, notes, rulings));
     }
     out
+}
+
+/// A note row's day and text. A wave row is plan scaffolding, not a record.
+fn dated_note(note: &Value) -> Option<(String, String)> {
+    if note.get("kind").and_then(Value::as_str) == Some("wave") {
+        return None;
+    }
+    let text = note.get("text").and_then(Value::as_str)?;
+    let ts = note.get("ts").and_then(Value::as_str).unwrap_or_default();
+    let day = ts.get(..10).unwrap_or_default().replace('-', "");
+    Some((day, text.to_string()))
+}
+
+/// A note before the plan's day cannot speak to the plan. An undated note
+/// reads as older, so it never counts.
+fn apply_notes(facts: &mut NodeFacts, notes: &[(String, String)], plan_day: &str) {
+    // Before the closing note: the per-plan cap keeps the tail of this list.
+    let later = notes
+        .iter()
+        .filter(|(day, _)| day.as_str() >= plan_day)
+        .map(|(_, text)| ("note".to_string(), text.clone()));
+    facts.records.splice(0..0, later);
 }
 
 /// Only a ruling from the plan's day or later is a later record. A ruling on
@@ -402,12 +420,13 @@ fn all_pairs(plans: &Path, graph: &Path, repo: &Path) -> Vec<Pair> {
         let Some(node) = crate::evals_candidates::plan_node(&name, &text) else {
             continue;
         };
-        let Some((node_facts, rulings)) = facts.get(&node) else {
+        let Some((node_facts, notes, rulings)) = facts.get(&node) else {
             continue;
         };
         let mut node_facts = node_facts.clone();
         node_facts.reverted = reverted.contains(&node);
         let plan_day = name.get(..8).unwrap_or_default();
+        apply_notes(&mut node_facts, notes, plan_day);
         apply_rulings(&mut node_facts, rulings, plan_day);
         out.extend(plan_pairs(&name, &text, &node, &node_facts));
     }
@@ -800,6 +819,21 @@ mod tests {
         let pair = &plan_pairs("20261001-n-1.md", plan, "n-1", &facts)[0];
         assert!(pair.record.contains("[email]"), "{}", pair.record);
         assert_eq!(pair.overruled_by, None);
+        let row = |kind: &str, ts: &str| json!({"kind": kind, "ts": ts, "text": "t"});
+        assert_eq!(dated_note(&row("wave", "2026-10-02T00:00:00Z")), None);
+        let later = dated_note(&row("progress", "2026-10-02T00:00:00Z")).unwrap();
+        let older = dated_note(&row("progress", "2026-09-30T00:00:00Z")).unwrap();
+        let closing = ("completion".to_string(), "c".to_string());
+        let mut noted = NodeFacts {
+            records: vec![closing.clone()],
+            ..Default::default()
+        };
+        apply_notes(&mut noted, &[older, later], "20261001");
+        assert_eq!(
+            noted.records,
+            [("note".to_string(), "t".to_string()), closing]
+        );
+        assert_eq!(overruled_by(&noted), None, "a note is no mechanical fact");
         let rulings = [
             ("20260901".to_string(), "older".to_string()),
             ("20261002".to_string(), "newer".to_string()),
