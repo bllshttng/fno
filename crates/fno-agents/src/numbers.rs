@@ -515,12 +515,8 @@ mod tests {
         );
         assert_eq!(resolve_in(Some(&conn), 'd', "D142", "local"), None);
         assert_eq!(resolve_in(None, 'd', "D1", "local"), None);
-    }
 
-    #[test]
-    fn another_stores_number_prints_qualified_and_resolves_with_its_store() {
-        let (_dir, _graph, conn) = conn();
-        mint_local(&conn, "d-cafe0001", "local", "h").unwrap();
+        // Another store's number prints qualified and resolves with its store.
         assert_eq!(label_in(&conn, "d-cafe0001", "r2d2").unwrap(), "D1@local");
         assert_eq!(resolve_in(Some(&conn), 'd', "D1", "r2d2"), None);
         assert_eq!(
