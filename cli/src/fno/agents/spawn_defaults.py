@@ -536,6 +536,57 @@ def resolve_lane_vendor(
         return None
 
 
+def _scan_projection(tail: Sequence[str]) -> dict:
+    """The scan projection the transport sends, one scanner call each. The
+    scanners answer what the OPERATOR typed; the command owns every config
+    decision over the result."""
+    has_harness, explicit_harness, has_model, has_effort = _scan(tail)
+    # A fenced --model (the -m shorthand lands there) occupies the model axis.
+    fenced_model = None
+    if "--" in tail and not has_model:
+        from fno.agents.mux_spawn import passthrough_model
+
+        fenced_model = passthrough_model(list(tail)[list(tail).index("--") + 1 :])
+        has_model = fenced_model is not None
+    # The head spelling of --effort lands behind the fence too, so a fenced
+    # one is the operator's choice and a config default must not stack on it.
+    if "--" in tail and not has_effort:
+        has_effort = _flag_value(list(tail)[list(tail).index("--") + 1 :], "--effort") is not None
+    explicit_vendor = _flag_value(tail, "--provider", "-P")
+    explicit_route = _flag_present(tail, "--route")
+    role = _role_of(tail)
+    has_permission = _has_permission_mode(tail)
+    permission_value = _flag_value(tail, "--permission-mode")
+    if not permission_value and has_permission:
+        # --yolo/-Y are the same knob as --permission-mode; the command must see
+        # them or it can hand a yolo spawn a harness the gate refuses.
+        permission_value = "yolo"
+    slot = _seed_slot(tail)
+    return {
+        "has_harness": has_harness,
+        "explicit_harness": explicit_harness,
+        "has_model": has_model,
+        "has_effort": has_effort,
+        "explicit_vendor": explicit_vendor,
+        "explicit_route": explicit_route,
+        "route_value": _flag_value(tail, "--route") if explicit_route else None,
+        "model_value": (_flag_value(tail, "--model", "-m") or fenced_model) if has_model else None,
+        "role": role,
+        "explicit_substrate": _has_explicit_substrate(tail),
+        "permission_value": permission_value,
+        "has_permission": has_permission,
+        "flag_node": _flag_value(tail, "--node"),
+        "seed": _seed_of(tail),
+        "seed_index": (slot[0] + 1) if slot else None,
+        "seed_form": slot[1] if slot else None,
+        "account_flag_present": _flag_present(tail, "--account"),
+        "tab_flag_present": _flag_present(tail, "--tab"),
+        "name": _flag_value(tail, "--name"),
+        "positional_present": bool(_positional_indices(tail)),
+        "spawn_tokens": [str(t) for t in tail],
+    }
+
+
 # --------------------------------------------------------------------------- #
 # The CLI's substrate posture gates, moved here from cmd_spawn (file budget):
 # the value gate + bg alias, and the monitor gate.
