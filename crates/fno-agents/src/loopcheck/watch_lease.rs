@@ -61,9 +61,10 @@ pub(super) fn record_build_park(parsed: &super::LoopCheckArgs) {
     }
 }
 
-/// Lease window for an idle watch: the declared timeout clamped to [5m, 2h]
-/// (never trust the tag for an unbounded hold) plus slack. Defaults to 15m when
-/// the tag omits or mangles `timeout`, giving the ~27m default lease.
+/// Lease window for an idle watch: the declared timeout clamped to [5m, 15m]
+/// (the ci-push-cadence law checks every 15 minutes; never trust the tag for
+/// an unbounded hold) plus slack. Defaults to 15m when the tag omits or
+/// mangles `timeout`, giving the ~27m default lease.
 pub(super) fn watch_window_ms(timeout: Option<&str>) -> i64 {
     watch_timeout_ms(timeout) + WATCH_SLACK_MS
 }
@@ -73,7 +74,7 @@ pub(super) fn watch_timeout_ms(timeout: Option<&str>) -> i64 {
     timeout
         .and_then(crate::claims::parse_ttl_ms)
         .unwrap_or(15 * 60_000)
-        .clamp(5 * 60_000, 2 * 3_600_000)
+        .clamp(5 * 60_000, 15 * 60_000)
 }
 
 pub(super) fn watch_expiry_ms(timeout: Option<&str>, now_ms: i64) -> i64 {
