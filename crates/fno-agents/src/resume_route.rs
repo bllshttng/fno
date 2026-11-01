@@ -211,6 +211,7 @@ pub(crate) fn print_resume_command(
         ) {
             Ok(plan) => {
                 let plan = plan.carry_pins(&mut argv);
+                carry_recorded_mode(&mut argv, entry);
                 if let Some(path) = plan.route_settings_path.as_deref() {
                     if !path.is_empty() && !argv.iter().any(|token| token == "--settings") {
                         argv.splice(1..1, ["--settings".to_string(), path.to_string()]);
@@ -273,9 +274,40 @@ pub(crate) fn print_resume_command(
     0
 }
 
+/// A respawn plan's argv holds no mode to copy, yet the printed line is a
+/// `claude --resume` that starts on the ambient mode, so read the row itself.
+fn carry_recorded_mode(argv: &mut Vec<String>, entry: &Value) {
+    if argv.iter().any(|token| token == "--permission-mode") {
+        return;
+    }
+    let mode = entry
+        .get("requested_permission_mode")
+        .and_then(Value::as_str)
+        .filter(|mode| !mode.is_empty());
+    if let Some(mode) = mode {
+        argv.push("--permission-mode".to_string());
+        argv.push(mode.to_string());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn printed_resume_carries_only_the_recorded_mode() {
+        let flag = "--permission-mode";
+        let row = serde_json::json!({"requested_permission_mode": "acceptEdits"});
+        let mut argv = vec!["claude".to_string()];
+        carry_recorded_mode(&mut argv, &row);
+        assert_eq!(argv, ["claude", flag, "acceptEdits"]);
+        carry_recorded_mode(&mut argv, &row);
+        assert_eq!(argv.len(), 3);
+
+        let mut bare = vec!["claude".to_string()];
+        carry_recorded_mode(&mut bare, &serde_json::json!({}));
+        assert_eq!(bare, ["claude"]);
+    }
 
     fn contract() -> HarnessContract {
         HarnessContract::packaged().expect("packaged harness contract")
