@@ -18,10 +18,18 @@
 # Add the Python leg the day the repo adopts `ruff format` repo-wide.
 #
 # The one invariant: a formatter must NEVER fail the edit. Every failure path
-# here exits 0 silently - a missing toolchain, a syntax error the formatter
-# rejects, a path outside the repo. Type checks (mypy) and lints (clippy) stay
-# in scripts/ci/preflight.sh; they are slow and they have opinions an edit
+# here exits 0 - a missing toolchain, a syntax error the formatter rejects, a
+# path outside the repo. Type checks (mypy) and lints (clippy) stay in
+# scripts/ci/preflight.sh; they are slow and they have opinions an edit
 # mid-refactor should not have to satisfy.
+#
+# The same rustfmt run doubles as the parse check: corrupted generation used
+# to surface only at the next cargo build, minutes later on a slow worker. A
+# rustfmt refusal whose stderr names a `-->` location is a parse break, and it
+# rides PostToolUse additionalContext back to the model in the same turn.
+# Zero added cost: no second process, no second parse. Refusals without a
+# location (a missing pinned toolchain, a non-rustup rustfmt that rejects the
+# +channel) stay silent exactly as before.
 
 set -uo pipefail
 
@@ -80,7 +88,18 @@ format_one() {
                 *) return 0 ;;
             esac
             command -v rustfmt >/dev/null 2>&1 || return 0
-            rustfmt "+$PINNED_FMT" --edition 2021 "$ABS" >/dev/null 2>&1 || return 0
+            local FMT_ERR
+            FMT_ERR="$(rustfmt "+$PINNED_FMT" --edition 2021 "$ABS" 2>&1 >/dev/null || true)"
+            # A refusal that names a `-->` location is a parse break the next
+            # cargo build would only find later; a refusal without one is the
+            # environment (missing pinned toolchain, non-rustup rustfmt) and
+            # says nothing about this file.
+            if printf '%s' "$FMT_ERR" | grep -q '^error:' \
+                && printf '%s' "$FMT_ERR" | grep -q -- ' --> '; then
+                PARSE_FINDINGS="${PARSE_FINDINGS}parse-check: ${REL} did not parse (rustfmt); fix it now, cargo will refuse it later.
+$(printf '%s' "$FMT_ERR" | sed -n '1,30p')
+"
+            fi
             ;;
         *)
             return 0
@@ -93,8 +112,27 @@ format_one() {
     return 0
 }
 
+PARSE_FINDINGS=""
 while IFS= read -r TARGET; do
     [ -n "$TARGET" ] || continue
     format_one "$TARGET"
 done < <(payload_write_targets "$PAYLOAD")
+
+# Parse findings leave as additionalContext JSON, the same shape
+# edit-integrity.sh emits, so the model reads the break in the same turn.
+# Still exit 0: reporting never fails the edit.
+if [ -n "$PARSE_FINDINGS" ]; then
+    CONTEXT=""
+    if command -v jq >/dev/null 2>&1; then
+        CONTEXT="$(printf '%s' "$PARSE_FINDINGS" | jq -Rs .)"
+    elif command -v python3 >/dev/null 2>&1; then
+        CONTEXT="$(PARSE_FINDINGS_ENV="$PARSE_FINDINGS" python3 -c '
+import json, os, sys
+sys.stdout.write(json.dumps(os.environ["PARSE_FINDINGS_ENV"]))
+' 2>/dev/null || true)"
+    fi
+    if [ -n "$CONTEXT" ]; then
+        printf '{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":%s}}\n' "$CONTEXT"
+    fi
+fi
 exit 0

@@ -10,7 +10,8 @@
 #   T2  an already-formatted .rs          -> exit 0, silent (no needless line)
 #   T3  a .md path                        -> exit 0, silent
 #   T4  a .rs OUTSIDE crates/             -> exit 0, silent, file untouched
-#   T5  a .rs with a syntax error         -> exit 0, silent (never fails the edit)
+#   T5  a .rs with a syntax error         -> exit 0, never fails the edit, and
+#                                           the parse break rides additionalContext
 #   T6  a missing file / empty payload    -> exit 0, silent
 
 set -uo pipefail
@@ -52,6 +53,7 @@ F="${REPO}/crates/demo/src/lib.rs"
 printf '%s\n' "$UGLY" > "$F"
 OUT="$(run_hook "$F")"; RC=$?
 if [[ $RC -eq 0 && "$OUT" == *"format-on-edit: rewrote crates/demo/src/lib.rs"* ]] \
+   && [[ "$OUT" != *"hookSpecificOutput"* ]] \
    && ! grep -q 'fn  main' "$F"; then
   pass "T1 an unformatted .rs under crates/ is rewritten and announced"
 else
@@ -86,14 +88,52 @@ else
   fail "T4 rc=$RC out='$OUT'"
 fi
 
-# T5: rustfmt refuses a file it cannot parse. The edit must still succeed.
+# T5: rustfmt refuses a file it cannot parse. The edit still succeeds, the
+# file is left unrewritten, and the break rides additionalContext in the same
+# turn instead of waiting for the next cargo build.
 B="${REPO}/crates/demo/src/broken.rs"
 printf 'fn main( { unbalanced\n' > "$B"
 OUT="$(run_hook "$B")"; RC=$?
-if [[ $RC -eq 0 && -z "$OUT" ]]; then
-  pass "T5 a file rustfmt rejects exits 0 silently"
+if [[ $RC -eq 0 && "$OUT" == *'hookSpecificOutput'* ]] \
+   && [[ "$OUT" == *"parse-check: crates/demo/src/broken.rs did not parse"* ]] \
+   && grep -q 'fn main( { unbalanced' "$B"; then
+  pass "T5 a parse break exits 0, is reported as additionalContext, file unrewritten"
 else
   fail "T5 rc=$RC out='$OUT'"
+fi
+
+# T5b: the finding is machine-readable JSON whose additionalContext is a
+# string carrying the rustfmt diagnostic, so a harness can rely on the shape.
+B2="${REPO}/crates/demo/src/broken2.rs"
+printf 'fn second( {\n' > "$B2"
+OUT="$(run_hook "$B2")"; RC=$?
+CTX="$(OUT_ENV="$OUT" python3 -c '
+import json, os, sys
+sys.stdout.write(json.loads(os.environ["OUT_ENV"])["hookSpecificOutput"]["additionalContext"])
+' 2>/dev/null)"
+if [[ $RC -eq 0 && -n "$CTX" && "$CTX" == *"crates/demo/src/broken2.rs"* ]] \
+   && [[ "$CTX" == *"error:"* ]]; then
+  pass "T5b the parse finding is valid additionalContext JSON with the rustfmt error"
+else
+  fail "T5b rc=$RC ctx='$CTX'"
+fi
+
+# T5c: a codex apply_patch payload gets the same parse finding for its
+# header path, resolving the relative path against the payload cwd.
+CB="${REPO}/crates/demo/src/patched-broken.rs"
+printf 'fn patched( {\n' > "$CB"
+CODEX_BROKEN="$(cd "${REPO}" && python3 -c '
+import json, sys
+print(json.dumps({
+    "tool_name": "apply_patch",
+    "cwd": sys.argv[1],
+    "tool_input": {"command": "*** Begin Patch\n*** Update File: crates/demo/src/patched-broken.rs\n@@\n"},
+}))' "$REPO")"
+OUT="$(printf '%s' "$CODEX_BROKEN" | bash "$HOOK")"; RC=$?
+if [[ $RC -eq 0 && "$OUT" == *"parse-check: crates/demo/src/patched-broken.rs did not parse"* ]]; then
+  pass "T5c a codex apply_patch payload reports its header path's parse break"
+else
+  fail "T5c rc=$RC out='$OUT'"
 fi
 
 # T6: a payload naming a file that does not exist.
