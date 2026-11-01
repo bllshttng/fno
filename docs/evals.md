@@ -43,7 +43,7 @@ Success criteria must be **mechanical** (develop-tests discipline): a task with 
 
 | Command | What it does |
 |---|---|
-| `fno doctor evals run [--task ID] [--tier T] [--repeat K] [--provider P] [--variant NAME] [--ref REF] [--lane NAME] [--cohort ID]` | Run bank tasks in disposable worktrees, grade mechanically, append one history line per task-run. Confirms above 20 total runs (`--yes` skips). `--variant v1 --ref REF` scores a change (see Variants). `--lane NAME --cohort ID` qualifies a model lane (see Lanes). |
+| `fno doctor evals run [--task ID[,ID]] [--tier T] [--tag TAG] [--repeat K] [--workers N] [--provider P] [--variant NAME] [--ref REF] [--lane NAME] [--cohort ID]` | Run bank tasks in disposable worktrees, grade mechanically, append one history line per task-run. Confirms above 20 total runs (`--yes` skips). `--variant v1 --ref REF` scores a change (see Variants). `--lane NAME --cohort ID` qualifies a model lane (see Lanes). `--workers N` runs N tasks at once. |
 | `fno doctor evals report [--since N] [--graduate] [--json]` | Fold history: per-tier pass rates, pass@1, pass^k, flake list, regression alarm (exit 4 on alarm). `--graduate` lists eligible capability tasks. |
 | `fno doctor evals report --compare A --to B [--repeats N] [--json]` | Compare two runs, task by task. See Variants. |
 | `fno doctor evals report --by-failure-type [--repeats N] [--json]` | Rank the named failure types by cost, then by failing goldens. See Failure types. |
@@ -52,6 +52,7 @@ Success criteria must be **mechanical** (develop-tests discipline): a task with 
 | `fno doctor evals report --climb --baseline C --trial C [--cohorts-yaml P] [--stage V --trial-lane L] [--prices JSON] [--json]` | The climb verdict over two cohorts against the declared split: `underpowered`, `regression`, `overfit`, `unmeasured_cost`, `propose`, `hold`. On `propose` with `--stage`/`--trial-lane` it prints a one-step accept line (`fno config set` for the lanes list plus `on_exhausted degrade`); without them the verdict alone. See the Climb round recipe in [lane-qualification](architecture/lane-qualification.md#climb-round). |
 | `fno doctor evals trend` | Score the recent window against the prior one, per task (exit 4 when a regression-tier task dropped). See Trend. |
 | `fno doctor evals macro [--since 30d] [--topic TYPE:LABEL] [--window 20] [--all] [--json] [--events PATH]` | Fold existing event journals into a recurring failure-pattern leaderboard, or drill into one pattern. |
+| `fno-agents evals gate-retry <sha>` | Queue a head again for the change gate. See The change gate. |
 | `fno doctor evals graduate <id>` | Retag a capability task's YAML to regression. |
 | `fno doctor evals grade --brief B --golden G` | Grade a research brief against a golden doc (three mechanical assertions); exit 0 green. |
 
@@ -98,6 +99,18 @@ A block with no `source`, `expected`, `rule`, `failure_type` or `outcome` refuse
 
 A golden's rule must be findable in the repo, because a worker reads only the repo and the prompt. It must have a mechanical grade: a choice the grader reads from a decision file, or the work product itself. A failure that needs long session state or fleet state cannot reduce to this shape. It stays out of the bank, and the scorecard holds that ground.
 
+## The change gate
+
+The daemon checks every open PR that changes behaviour, and posts one commit status, `evals/gate`. CI does not run this: CI has no worker lanes, and a bank run needs a spawn-capable machine. Each `evals-arm` tick runs one pass. The tick waits on no run, and a later tick reads the history rows, so a daemon restart loses nothing.
+
+- **The main run.** Once a day, the tick runs every `golden` task at `origin/main`. It uses 3 repeats and 2 workers, as cohort `gate-main-<date>-<hash>`. The hash covers `routing.models` and `agents.profiles`, so a route change starts a new run at once. Each finished cohort with a grade becomes the baseline, and it is compared to the one before. A regression files one node, keyed like the scheduled bank's. The compare lands in `<history dir>/evals-gate/compare-<cohort>.json`. Read it again with `fno doctor evals report --compare <older> --to <newer>`. No person starts these runs. Two nights after install, the first compare exists.
+- **The head run.** This covers an open PR from this repository. Its diff must touch `skills/`, `agents/`, `hooks/`, `commands/` or `evals/bank/`. It gets a pending status. Then the daemon runs its `gate` goldens at that head, as cohort `gate-head-<sha>`. It uses 3 repeats and 4 workers, one PR at a time. A newer head kills the older run. A PR from a fork never runs, because its hooks and skills run on this machine.
+- **The task set.** A head runs the tasks tagged `gate`, with two exceptions. A task with no file at that head stays out, because the head branched before it landed. A task whose baseline median is over 180 s stays out too.
+- **The fail rule.** Red means one of two things. A task went from always pass to always fail over 3 runs. Or a task with baseline grades has no result. A move to flaky is green and lists the task. A task with no baseline is green and counted. A golden whose failure type is unproved cannot turn the gate red.
+- **The limit.** A head run has 20 minutes. Past that, the daemon kills the run, and the status is red. It names the cause and the clearing command, `fno-agents evals gate-retry <sha>`. That command also clears any other no-result status.
+- **The budget.** `evals.gate.daily_usd` (default 15) caps the day's estimated spend, at 0.04 USD an attempt. Over the cap, a head is red and names the key. It runs again on the next UTC day. Set the key to 0 to turn the gate off. `evals.gate.lane` (default `zai-flash`) names the lane. Both keys live in `config.toml`.
+- **The merge door.** A red status turns `fno do pr status` red, so `fno do pr merge` holds. Pending holds it too. The ruleset does not require the context, because that holds every PR on one machine. So a daemon that never saw a head posts nothing, and that head can merge. `<history dir>/evals-gate/state.json` holds the last pass's note.
+- **First install.** Until the first main run gives a baseline, the head run posts nothing. A fresh install holds no PR on a check it cannot do yet.
 ## Failure types
 
 `evals/bank/failure-types.yaml` names each type and its cost tag, and `cost_order` ranks the tags. A golden names its type in `failure_type`. The label `none` marks a golden with a passing source case. It is not a type, and it can always fail a gate.

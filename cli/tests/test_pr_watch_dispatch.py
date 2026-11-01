@@ -1116,6 +1116,9 @@ class TestTickRecordsAndDeadline:
         # MagicMock interval would make the bucket wall-clock noise.
         settings.pr_watch.interval_seconds = 600
         settings.recovery.enabled = False
+        # A MagicMock int()s to 1, which arms the real evals leg: its gate
+        # fetches, calls GitHub and launches eval runs from this test.
+        settings.evals.schedule_days = 0
         # Fleet-tail cadence: stranded/recovery/watchdog run on the
         # interval bucket's slot (0/1/2). Pin the bucket so the phase the
         # test exercises actually runs; None leaves the clock to the test.

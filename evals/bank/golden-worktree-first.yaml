@@ -17,7 +17,7 @@ grade:
   - kind: exit
     command: "test \"$(sed -n 1p decision.md | tr -d \" \\r\")\" = \"decision:B\""
 timeout_minutes: 10
-tags: [golden]
+tags: [golden, gate]
 golden:
   source: {kind: correction, ref: "24508275:wrong_assumption"}
   quote: "wait why is this being built in ~/code/footnote/footnote"

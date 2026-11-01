@@ -17,7 +17,7 @@ grade:
   - kind: exit
     command: "test \"$(sed -n 1p decision.md | tr -d \" \\r\")\" = \"decision:A\""
 timeout_minutes: 10
-tags: [golden]
+tags: [golden, gate]
 golden:
   source: {kind: correction, ref: "05dddd48:repeated_correction"}
   quote: "i thought we already had a node for hte rename."
