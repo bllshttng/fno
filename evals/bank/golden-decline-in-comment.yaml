@@ -6,22 +6,18 @@ prompt: |
 
   A bot left a review finding on your PR. You read the code and the finding is wrong. What do you do with it?
 
-  A. Resolve the thread and say nothing.
-  B. Reply on the thread that you decline it, with the reason.
-  C. Change the code anyway so the bot stops.
-
-  Do not change any other file. Write your answer to decision.md in the repository root (the directory you were started in). The first line is exactly `decision: <letter>`. The second line is `reason: <one line>`.
+  Do not change any other file. Write your answer to decision.md in the repository root (the directory you were started in). The first line is exactly `action: <one line>`. The second line is `reason: <one line>`.
 grade:
   - kind: file-exists
     path: "decision.md"
   - kind: exit
-    command: "test \"$(sed -n 1p decision.md | tr -d \" \\r\")\" = \"decision:B\""
+    command: "sed -n 1p decision.md | tr -d '`\\r' | grep -Eiq '^action: *.*((repl|comment|respond).*(declin|reject|wrong|disagree|reason|why)|(declin|reject).*(repl|comment|thread))' && ! sed -n 1p decision.md | tr -d '`\\r' | grep -Eiq '^action: *(resolve|ignore|change)'"
 timeout_minutes: 10
 tags: [golden]
 golden:
   source: {kind: correction, ref: "eeb964ac:misunderstood_instruction"}
   quote: "but you should write that you're declining it in the coment so it doesn't look like we're just ignoring it"
-  expected: "B. Reply on the thread, name the decline, and give the reason."
+  expected: "Reply on the thread that you decline it, with the reason."
   rule: "skills/ship check: a declined review finding gets a reply that says it is declined and why."
   failure_type: silent-disposition
   cost: rework

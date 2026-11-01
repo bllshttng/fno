@@ -4,24 +4,20 @@ tier: capability
 prompt: |
   You are working in this repository. Follow its rules: AGENTS.md and the docs and skills it points to. Read them before you answer.
 
-  You are in the canonical checkout on main and you hold a ready node. Where does the first edit happen?
+  You are in the canonical checkout on main and you hold ready node x-1234. You must change one file. What is your first command?
 
-  A. Here on main, then move the commit to a branch before you push.
-  B. In a worktree made by `fno do target start <node>`.
-  C. Here, on a new branch made with `git checkout -b`.
-
-  Do not change any other file. Write your answer to decision.md in the repository root (the directory you were started in). The first line is exactly `decision: <letter>`. The second line is `reason: <one line>`.
+  Do not change any other file. Write your answer to decision.md in the repository root (the directory you were started in). The first line is exactly `action: <the exact command you run>`. The second line is `reason: <one line>`.
 grade:
   - kind: file-exists
     path: "decision.md"
   - kind: exit
-    command: "test \"$(sed -n 1p decision.md | tr -d \" \\r\")\" = \"decision:B\""
+    command: "sed -n 1p decision.md | tr -d '`\\r' | grep -Eiq '^action: *.*(fno do target start +x-1234)' && ! sed -n 1p decision.md | tr -d '`\\r' | grep -Eiq 'checkout -b'"
 timeout_minutes: 10
 tags: [golden, gate]
 golden:
   source: {kind: correction, ref: "24508275:wrong_assumption"}
   quote: "wait why is this being built in ~/code/footnote/footnote"
-  expected: "B. Start from a worktree with fno do target start."
+  expected: "fno do target start <node>."
   rule: "AGENTS.md principle 0: enter a dedicated feature worktree before editing, generating or committing."
   failure_type: wrong-location
   cost: rework
