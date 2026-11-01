@@ -1116,6 +1116,7 @@ fn write_update(
                 warnings,
                 ship_stamp,
                 repaint_old_parent,
+                details_counts,
             } => {
                 match graph_store::locked_mutate(
                     graph,
@@ -1177,6 +1178,14 @@ fn write_update(
                             );
                         }
                         println!("Updated {node_id}");
+                        // The receipt line the node asked for: every details
+                        // change is visible in the transcript, clobber or
+                        // not. Printed only when the count moved.
+                        if let Some((before, after)) = details_counts {
+                            if before != after {
+                                println!("details: {before} -> {after} chars");
+                            }
+                        }
                         // The link just committed (lock released), so the ship
                         // stamp runs here: the session row takes its own lock,
                         // and stamping inside the mutator would deadlock.
@@ -1217,8 +1226,10 @@ enum MutationPlan {
         rungs: BTreeMap<String, String>,
         node_id: String,
         warnings: Vec<String>,
+
         ship_stamp: Option<String>,
         repaint_old_parent: Option<String>,
+        details_counts: Option<(usize, usize)>,
     },
 }
 
@@ -1257,7 +1268,7 @@ fn plan_mutation(
         .iter()
         .position(|r| entry_id(r) == Some(node_id.as_str()))
         .ok_or_else(|| refused(format!("Error: graph node {} not found", args.task_id), 1))?;
-    let (warnings, ship_stamp, repaint_old_parent) = apply_mutators(
+    let (warnings, ship_stamp, repaint_old_parent, details_counts) = apply_mutators(
         &mut rows,
         idx,
         args,
@@ -1291,6 +1302,7 @@ fn plan_mutation(
         warnings,
         ship_stamp,
         repaint_old_parent,
+        details_counts,
     })
 }
 
@@ -1366,7 +1378,15 @@ fn apply_mutators(
     derived_cwd: Option<&str>,
     linked_size: Option<&str>,
     pr: &DerivedPr,
-) -> Result<(Vec<String>, Option<String>, Option<String>), Refusal> {
+) -> Result<
+    (
+        Vec<String>,
+        Option<String>,
+        Option<String>,
+        Option<(usize, usize)>,
+    ),
+    Refusal,
+> {
     let node_id = rows[idx]
         .get("id")
         .and_then(Value::as_str)
@@ -1668,6 +1688,7 @@ fn apply_mutators(
             obj.insert("pr_url".into(), json!(u));
         }
     }
+    let mut details_counts: Option<(usize, usize)> = None;
     let warnings: Vec<String> = {
         let obj = rows[idx].as_object_mut().expect("row is an object");
         if let Some(v) = &args.batch {
@@ -1755,16 +1776,54 @@ fn apply_mutators(
         }
         if let Some(details) = details {
             let cleared = !details_from_file && details.to_lowercase() == "null";
-            obj.insert(
-                "details".into(),
-                if cleared { Value::Null } else { json!(details) },
-            );
+            if cleared {
+                let before = super::node_state::count_prose(
+                    obj.get("details").and_then(Value::as_str).unwrap_or(""),
+                );
+                details_counts = Some((before, 0));
+                obj.insert("details".into(), Value::Null);
+            } else {
+                // The clobber guard: a replace dropping more than half the
+                // stored details is almost never intended. The store
+                // prose policy caps GROWTH past the budget; the silent SHRINK
+                // is refused here, and --force acknowledges it loudly.
+                let before = super::node_state::count_prose(
+                    obj.get("details").and_then(Value::as_str).unwrap_or(""),
+                );
+                let after = super::node_state::count_prose(details);
+                if before > 0 && after * 2 < before {
+                    if !args.force {
+                        return Err(refused(
+                            format!(
+                                "Error: details= would replace {before} chars with {after}: a \
+                                 shrink past half of the stored details. Append with \
+                                 details+=<text>, or pass --force to replace deliberately."
+                            ),
+                            2,
+                        ));
+                    }
+                    warnings.push(format!(
+                        "note: details= replaced {before} chars with {after} (--force)"
+                    ));
+                }
+                details_counts = Some((before, after));
+                obj.insert("details".into(), json!(details));
+            }
         }
         for add in &args.details_append {
             // Reads the CURRENT row, so a replace in the same call joins the
             // replaced text and plan_mutation re-runs per attempt on retry.
             let merged = update_ops::append_text(obj.get("details").and_then(Value::as_str), add);
             if let Some(text) = merged {
+                // Net counts across the whole call: the first write captures
+                // the pre-write before, later ones move only the after.
+                let before = match details_counts {
+                    Some((before, _)) => before,
+                    None => super::node_state::count_prose(
+                        obj.get("details").and_then(Value::as_str).unwrap_or(""),
+                    ),
+                };
+                details_counts = Some((before, super::node_state::count_prose(&text)));
                 obj.insert("details".into(), json!(text));
             }
         }
@@ -2120,7 +2179,7 @@ fn apply_mutators(
         .map(str::to_string);
     let repaint_old_parent =
         old_parent.filter(|old| Some(old.as_str()) != new_parent_id.as_deref());
-    Ok((warnings, ship_stamp, repaint_old_parent))
+    Ok((warnings, ship_stamp, repaint_old_parent, details_counts))
 }
 
 /// The `_parse_blocker_list` twin: comma-split, trim, skip empties.

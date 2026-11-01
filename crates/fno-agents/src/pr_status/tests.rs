@@ -469,3 +469,63 @@ fn optional_reviews_list_reads_rest_pages_and_keys_on_user_login() {
     let out = reviews::optional_reviews(&failed, cwd, 7, "octocat/wordplay");
     assert_eq!(out["optional_reviews"], json!("unknown"));
 }
+
+/// The pinned read: `--expect-head` turns a settled answer about another
+/// head into a refusal that names the mismatch. A merged PR kept answering
+/// settled for a watcher armed on a later push; the pin is the refusal.
+#[test]
+fn the_pinned_read_refuses_any_answer_about_another_head() {
+    let mut merged = json!({
+        "pr": "1068",
+        "head": "37deafc2abcdef",
+        "pr_state": "MERGED",
+        "settled": true,
+        "verdict": "green",
+        "ready": true,
+        "ready_blockers": [],
+    });
+    let note = crate::pr_status::compose::apply_expect_head(
+        merged.as_object_mut().unwrap(),
+        "aaaaaaaaaaaa1234",
+    )
+    .expect("the heads differ, so the pin applies");
+    assert_eq!(
+        merged["settled"],
+        json!(false),
+        "the named sha is not tested"
+    );
+    assert_eq!(
+        merged["head_mismatch"]["expected"],
+        json!("aaaaaaaaaaaa1234")
+    );
+    assert_eq!(merged["head_mismatch"]["actual"], json!("37deafc2abcdef"));
+    assert_eq!(merged["ready"], json!(false));
+    assert_eq!(merged["ready_blockers"], json!(["head_mismatch"]));
+    assert!(note.contains("PR 1068 is MERGED at 37deafc2abcd"), "{note}");
+    assert!(note.contains("will never test aaaaaaaaaaaa"), "{note}");
+
+    // A matching pin mutates nothing; the compare is case-insensitive.
+    let mut open = json!({
+        "pr": "9",
+        "head": "37deafc2abcdef",
+        "pr_state": "OPEN",
+        "settled": true,
+        "ready": true,
+        "ready_blockers": [],
+    });
+    let matched = crate::pr_status::compose::apply_expect_head(
+        open.as_object_mut().unwrap(),
+        "37DEAFC2ABCDEF",
+    );
+    assert!(matched.is_none(), "a match is a pass");
+    assert_eq!(open["settled"], json!(true), "a match mutates nothing");
+
+    // An unreadable head (a degraded serve) cannot verify the pin: refused.
+    let mut degraded = json!({"pr": "9", "head": Value::Null, "settled": false});
+    let note = crate::pr_status::compose::apply_expect_head(
+        degraded.as_object_mut().unwrap(),
+        "aaaaaaaaaaaa1234",
+    )
+    .expect("no head provable, so the pin cannot pass");
+    assert!(note.contains("names no head"), "{note}");
+}

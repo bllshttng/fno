@@ -6,7 +6,7 @@
 //! bare `pr` spelling lands here too, so the muscle-memory form survives
 //! the wheel's pr_app deletion.
 
-use serde_json::json;
+use serde_json::{json, Value};
 use std::path::PathBuf;
 
 /// The subcommands that stay Python mounts (the watcher's own surface, outside
@@ -23,8 +23,8 @@ const HELP_ROWS: &[(&str, &str)] = &[
     ("attestation retract <args>...", "Revoke a passing review_attestation by naming the pair that passed (--reviewer, --attester, --head, --reason/-R); refused when no matching pass exists."),
     ("merge <pr_number> [flags]", "Merge a PR with the fno-canonical guards. Emits a JSON line {pr, outcome, reason, strategy[, cleanup]}; exit 0 merged, 1 failed, 2 skipped|held, 3 merge-landed-cleanup-failed, 127 gh-missing."),
     ("verify --kind merged|reviews --pr-number <n> --state-file <f>", "Verify an external PR gate: merged audits GitHub merge state (one bounded remediation); reviews flips the external-review gate when a reviewer has no qualifying reply. Exit 0 clean/degrade, 1 blocked/flipped, 2 substrate failure."),
-    ("status <pr>|main [--refresh]", "One authoritative CI verdict from statusCheckRollup; prints a JSON line {pr, verdict, settled, green, checks}. exit 0 green, 1 red, 2 pending, 3 unknown, 4 read failed, 127 gh-missing. `main` reads every workflow run at main's head sha instead: red if any one failed, pending while any one runs. --refresh bypasses the coalescing cache for one live read (manual use only)."),
-    ("wait <pr> [--until settled|red|green|review] [--timeout 15m] [--interval 60]", "The sanctioned watcher through the coalescing cache; exits the status command's own code. Red cancels the head's runs; a red made only of cancelled runs, left by the attempt before a rerun, or superseded by a newer run of its workflow waits for that run; CONFLICTING exits 5 with a rebase receipt."),
+    ("status <pr>|main [--refresh] [--expect-head SHA|HEAD]", "One authoritative CI verdict from statusCheckRollup; prints a JSON line {pr, verdict, settled, green, checks}. exit 0 green, 1 red, 2 pending, 3 unknown, 4 read failed, 6 head_mismatch, 127 gh-missing. `main` reads every workflow run at main's head sha instead: red if any one failed, pending while any one runs. --refresh bypasses the coalescing cache for one live read (manual use only). --expect-head SHA pins the read: when the PR head is not SHA the answer is settled false plus a head_mismatch blocker at exit 6; a MERGED or CLOSED PR names itself as one that will never test SHA. HEAD spells the local checkout's own sha, read free from git."),
+    ("wait <pr> [--until settled|red|green|review] [--timeout 15m] [--interval 60] [--expect-head SHA|HEAD]", "The sanctioned watcher through the coalescing cache; exits the status command's own code. Red cancels the head's runs; a red made only of cancelled runs, left by the attempt before a rerun, or superseded by a newer run of its workflow waits for that run; CONFLICTING exits 5 with a rebase receipt. --expect-head SHA (or HEAD for the checkout's own sha) exits 6 the moment a live read shows the PR head is not it (a degraded backoff serve names no head and rides out)."),
     ("coverage-publish <pr> [--head H] [--repo R]", "Publish the review-coverage verdict for a PR head as the commit status fno/review-coverage. Never recomputes. exit 0 posted, 1 not posted."),
     ("info [<pr>] [--repo R]", "Read PR state, URL, head SHA, refs, and mergeability; the read runs in the Rust op door. Prints JSON; exit 4 when the read cannot answer."),
     ("list [--state open] [--repo R] [--since YYYY-MM-DD]", "List PR number, state, title, head ref, URL, and created, closed and merged stamps through REST. --since keeps PRs created on or after that UTC day."),
@@ -216,6 +216,15 @@ fn pr_operand(tail: &[String]) -> Option<u64> {
         .and_then(|arg| arg.parse().ok())
 }
 
+/// `--expect-head SHA` pins the read: the payload carries the sha the door
+/// ops answer against, so a settled verdict about another head is a refusal
+/// (exit 6), never a pass.
+fn pin_expect_head(payload: &mut Value, tail: &[String]) {
+    if let Some(sha) = option_value(tail, "--expect-head") {
+        payload["expect_head"] = json!(sha);
+    }
+}
+
 /// `--name value` / `--name=value` off the tail. Shared with ci_front, so
 /// two front modules never drift on flag parsing.
 pub(crate) fn option_value(tail: &[String], name: &str) -> Option<String> {
@@ -250,16 +259,17 @@ fn dispatch(sub: &str, tail: &[String]) -> i32 {
             tail.iter().any(|a| a == "--refresh" || a == "--no-cache"),
         ),
         "status" => {
-            let payload = json!({
+            let mut payload = json!({
                 "op": "status-read",
                 "cwd": current_cwd_string(),
                 "pr": pr_operand(tail).unwrap_or(0),
                 "refresh": tail.iter().any(|a| a == "--refresh" || a == "--no-cache"),
             });
+            pin_expect_head(&mut payload, tail);
             crate::authorized_merge::run_authorized_merge(&[payload.to_string()])
         }
         "wait" => {
-            let payload = json!({
+            let mut payload = json!({
                 "op": "status-wait",
                 "cwd": current_cwd_string(),
                 "pr": pr_operand(tail).unwrap_or(0),
@@ -270,6 +280,7 @@ fn dispatch(sub: &str, tail: &[String]) -> i32 {
                 "interval": option_value(tail, "--interval")
                     .unwrap_or_else(|| "60".to_string()),
             });
+            pin_expect_head(&mut payload, tail);
             crate::authorized_merge::run_authorized_merge(&[payload.to_string()])
         }
         "coverage-publish" => {

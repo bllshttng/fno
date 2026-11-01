@@ -346,10 +346,23 @@ fn read_claude_blob(
                 &account,
                 "-w",
             ]))?;
+            // A failed read stops the caller, it is not a smaller candidate
+            // set: a denial here would silently drop this item's account
+            // while the next item still proves another one.
+            if out.code == crate::claude_vault::SECURITY_ITEM_NOT_FOUND {
+                continue;
+            }
+            if out.code != 0 {
+                return Err(StoreError::Keychain(format!(
+                    "`security find-generic-password -s {service}` exited {}: {}",
+                    out.code,
+                    out.stderr.trim()
+                )));
+            }
             let blob = out.stdout.trim();
             // A logged-out residue keeps scopes but clears the tokens; fall
             // through to the next item rather than return it as a login.
-            if out.code == 0 && !blob.is_empty() && token_present(blob) {
+            if !blob.is_empty() && token_present(blob) {
                 return Ok(Some(blob.to_string()));
             }
         }

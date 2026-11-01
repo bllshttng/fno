@@ -163,6 +163,11 @@ CASES = {
         platform="darwin", op="read_slot_blob", args={"cli": "claude"},
         env={"CLAUDE_CONFIG_DIR": "{TMP}/alt"}, keychain={"scoped:alt": blob("t-alt")},
     ),
+    "read_slot_keychain_denial_is_an_error": dict(
+        platform="darwin", op="read_slot_blob", args={"cli": "claude"},
+        keychain={"unscoped": blob("t-shared")},
+        keychain_fail={"scoped:slot": {"code": 45, "stderr": "denied\n"}},
+    ),
     "verify_slot_match": dict(platform="darwin", op="verify_slot", args={"record": CLAUDE_REC, "expected": blob("t-1") + "\n"}, keychain={"unscoped": blob("t-1")}),
     "verify_slot_mismatch": dict(platform="darwin", op="verify_slot", args={"record": CLAUDE_REC, "expected": blob("t-2")}, keychain={"unscoped": blob("t-1")}),
     "verify_slot_codex_needs_auth": dict(
@@ -296,9 +301,9 @@ def run_case(case: dict, tmp: Path) -> dict:
         value = keychain.get(role)
         if value == "TIMEOUT":
             raise managed.KeychainError(f"`security {args[0]}` timed out after 5s")
+        if role in fail:
+            return subprocess.CompletedProcess(args, fail[role]["code"], "", fail[role]["stderr"])
         if args[0] == "add-generic-password":
-            if role in fail:
-                return subprocess.CompletedProcess(args, fail[role]["code"], "", fail[role]["stderr"])
             new = args[args.index("-w") + 1]
             writes.append([role, new])
             keychain[role] = new
@@ -418,12 +423,22 @@ def run_case(case: dict, tmp: Path) -> dict:
     }
 
 
+# Ops the Python leg lost to the Rust port can no longer regenerate; their
+# frozen goldens stay as the parity oracle (the register-command port removed
+# the clear helper from the Python oracle).
+DEAD_OPS = {"clear_principal"}
+
+
 def main() -> int:
     GOLDEN.mkdir(parents=True, exist_ok=True)
     for stale in GOLDEN.glob("*.json"):
-        stale.unlink()
+        if stale.stem not in CASES:
+            stale.unlink()
     platform = sys.platform
     for name, case in CASES.items():
+        if case.get("op") in DEAD_OPS:
+            continue
+        (GOLDEN / f"{name}.json").unlink(missing_ok=True)
         tmp = Path(os.path.realpath(tempfile.mkdtemp(prefix="acct-store-")))
         try:
             expect = json.loads(json.dumps(run_case(case, tmp)).replace(str(tmp), "<TMP>"))

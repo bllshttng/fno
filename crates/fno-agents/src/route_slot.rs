@@ -625,6 +625,11 @@ pub(crate) fn grid_leg(payload: &Value, _rung_base: &str, chain: &mut Vec<Value>
     if let Some(h) = constrain {
         chain.push(json!(format!("grid constrained to harness({h})")));
     }
+    let command = payload
+        .get("work_command")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    rows.retain(|r| !crate::capability_leaves::lane_cannot_loop(&r.harness, command));
     let before_filters = rows.len();
     let thread_seatable = payload.get("thread_seatable").cloned().unwrap_or(json!({}));
     rows.retain(|r| candidate_supported(&r.harness, substrate, permission_mode, &thread_seatable));
@@ -1712,6 +1717,17 @@ fn resolve_slot_walk(payload: &Value, judged: &mut Option<Value>) -> Value {
                 lane_label(rung, row_name),
                 substrate.unwrap_or("-"),
                 permission_mode.unwrap_or("-"),
+            )));
+            continue;
+        }
+        let command = payload
+            .get("work_command")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        if crate::capability_leaves::lane_cannot_loop(&harness, command) {
+            chain.push(json!(format!(
+                "slot skip {} harness {harness:?} cannot close the {command} loop",
+                lane_label(rung, row_name),
             )));
             continue;
         }

@@ -654,6 +654,25 @@ fn apply_sets(
             }
         };
         let obj = entry.as_object_mut().unwrap();
+        // The clobber guard, door form: `--set details=` refuses a
+        // replace dropping more than half the stored details. The door has no
+        // --force in one call (the relay refuses the mix), so the refusal
+        // names the native operator call that replaces deliberately.
+        if field == "details" {
+            if let Value::String(next) = &value {
+                let before = crate::backlog::node_state::count_prose(
+                    obj.get("details").and_then(Value::as_str).unwrap_or(""),
+                );
+                let after = crate::backlog::node_state::count_prose(next);
+                if before > 0 && after * 2 < before {
+                    return Err(PatchRefusal::refused(format!(
+                        "refused: {id} details= would replace {before} chars with {after}: a \
+                         shrink past half of the stored details. Replace deliberately with \
+                         `fno backlog update {id} details=<text> --force`."
+                    )));
+                }
+            }
+        }
         put_key(obj, changes, id, field, value);
     }
     Ok(())

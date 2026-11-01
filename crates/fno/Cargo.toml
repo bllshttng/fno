@@ -26,6 +26,10 @@ name = "fno"
 path = "src/main.rs"
 required-features = ["full"]
 
+[[example]]
+name = "mux_latency"
+required-features = ["full"]
+
 [features]
 # The contract build is `--no-default-features`: only the eight modules an
 # external harness links (footnote_transcript, effect_map, version,

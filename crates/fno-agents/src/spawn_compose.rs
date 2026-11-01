@@ -626,6 +626,7 @@ fn compose_body(inputs: &Inputs, scan: Axes, seam: &mut Seam) {
             return;
         }
     }
+    harness_inject(&stage, seam);
     grid_inject(&mut stage, seam);
     lane_model_pin(&stage, seam);
     billing_axes(&mut stage, seam);
@@ -977,16 +978,49 @@ fn grid_candidate(stage: &Stage) -> Option<Value> {
     Some(candidate.clone())
 }
 
-/// The resolved-target harness: the explicit spelling, else the ambient
-/// inference (builtin claude). The config-provider rung died with the
-/// harness axis; the lane owns the choice now.
+/// The harness the walk's pick names. An inline lane carries it as `provider`
+/// in its fields, not on a row.
+fn picked_harness(stage: &Stage) -> Option<String> {
+    let candidate = stage.slot_candidate.as_ref()?;
+    [
+        candidate.get("harness"),
+        candidate.get("lane_fields").and_then(|f| f.get("provider")),
+    ]
+    .into_iter()
+    .flatten()
+    .filter_map(Value::as_str)
+    .find(|h| !h.trim().is_empty())
+    .map(str::to_string)
+}
+
+/// The resolved-target harness: the explicit spelling, else the walk's pick,
+/// else the ambient inference (builtin claude).
 fn resolved_harness(stage: &Stage) -> Option<String> {
     stage
         .scan
         .explicit_harness
         .clone()
         .filter(|h| !h.trim().is_empty())
+        .or_else(|| picked_harness(stage))
         .or_else(|| Some(stage.inputs.ambient_harness.clone()))
+}
+
+/// A pick is atomic: the worker launches on the harness the pick names. The
+/// seam infers the ambient harness for a bare argv, so only a pick that
+/// differs from it needs the flag.
+fn harness_inject(stage: &Stage, seam: &mut Seam) {
+    if stage.scan.has_harness {
+        return;
+    }
+    let Some(harness) = picked_harness(stage) else {
+        return;
+    };
+    if harness == stage.inputs.ambient_harness {
+        return;
+    }
+    seam.inject
+        .extend(["--harness".to_string(), harness.clone()]);
+    seam.applied.push(json!(["harness", harness, "routing"]));
 }
 
 fn fields_of<'a>(stage: &'a Stage<'a>) -> &'a Fields {
@@ -1818,6 +1852,67 @@ mod tests {
         // the sibling test rewrites the moment the lock frees.
         drop(guard);
         clear_hermetic(&root, saved);
+    }
+
+    /// A bare spawn from a claude lead picks a codex lane whose row names a
+    /// codex account. The worker launches on codex, and the account stays off
+    /// the claude-only --account overlay, which refuses a codex record.
+    #[test]
+    fn a_codex_lane_launches_codex_and_keeps_its_account_off_the_overlay() {
+        let (guard, root, saved) = hermetic();
+        std::fs::write(
+            root.join("config.toml"),
+            "[agents.profiles.blueprint]\nlanes = [\"codex-sol\"]\n\n\
+             [[routing.models]]\nname = \"codex-sol\"\nharness = \"codex\"\n\
+             model = \"sol-x\"\naccount = \"codex-main\"\nband = \"high\"\n",
+        )
+        .unwrap();
+        let inputs = Inputs {
+            argv: ["spawn", "--name", "w", "/fno:blueprint x-1"]
+                .map(str::to_string)
+                .to_vec(),
+            defaults: toml::Value::Table(toml::map::Map::new()),
+            profiles: "blueprint = { lanes = [\"codex-sol\"] }".parse().unwrap(),
+            dispatch_commands: toml::Value::Table(toml::map::Map::new()),
+            roster: vec!["blueprint".to_string()],
+            node_command: None,
+            env_node: None,
+            ambient_harness: "claude".to_string(),
+            apply_permission_builtin: true,
+            scan: serde_json::json!({
+                "has_harness": false, "explicit_harness": null,
+                "has_model": false, "has_effort": false,
+                "explicit_route": false, "role": null,
+                "has_permission": false, "seed": "/fno:blueprint x-1",
+                "name": "w", "positional_present": true
+            }),
+            facts: serde_json::json!({"role_resolves": null}),
+            node: None,
+            node_row: None,
+            verbose: false,
+        };
+        let answer = compose(&inputs);
+        drop(guard);
+        clear_hermetic(&root, saved);
+        assert_eq!(answer.exit, 0, "{:?}", answer.stderr);
+        let at = answer.argv.iter().position(|t| t == "--harness");
+        assert_eq!(
+            at.and_then(|i| answer.argv.get(i + 1)).map(String::as_str),
+            Some("codex"),
+            "{:?} {:?}",
+            answer.argv,
+            answer.stderr
+        );
+        assert!(
+            !answer.argv.iter().any(|t| t == "--account"),
+            "{:?}",
+            answer.argv
+        );
+        assert!(
+            answer.argv.iter().any(|t| t == "sol-x"),
+            "{:?}",
+            answer.argv
+        );
     }
 
     /// A take-over reason in the environment is a forgery or a stale
