@@ -492,6 +492,8 @@ fno backlog maintain --apply       # recurring sweep: re-scope, prune, pr_url ba
 fno backlog reconcile              # close nodes whose PR merged outside the gate
 ```
 
+`reconcile` also moves a node off `in_review` when every PR on it closed without a merge. The closed PR stays on the node as an additional PR stamped `closed`, so a later reopen and merge still closes the node. The node returns to the queue, its thread gets the recovery command, and the sweep sends one notice. A live worker claim holds the node until the claim ends. To stop the work, defer the node.
+
 ### Abandoned do rows
 
 An open do row wedges its node `in_progress`. The in-progress status hides the row from the Rust settle's done+merged gate. A session that died mid-do strands its node forever. `fno backlog maintain` carries the leg that watches this population. Read mode reports every candidate with its verdict (`gone` or `held`) and the reason. `--apply` reaps a `gone` row. The row's own idle clock decides, never the liveness of its session. A live session proves only that it lives, and a dead session's row goes idle too. Idle counts from the row's `started_at` or the newest progress note its own session wrote. A row idle past `config.backlog.maintain.abandoned_do_row_hours` (default 24) is `gone`. A live claim holds the row. A reachable roster worker on the node holds the row at any age. An unread roster reaps nothing. `fno backlog requeue` asks the same question for a session that still reads reachable. A held row can still be reaped by hand. Run `fno backlog session reap-open` after you have proven the session dead yourself.
