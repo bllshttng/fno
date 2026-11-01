@@ -36,7 +36,10 @@ def test_provider_limits_is_per_provider_and_invalid_shape_keeps_safe_default():
     }
     assert lanes == {"zai": (2, 1), "openai": (7, None)}
     assert AgentsBlock(provider_limits={}).provider_limits == {}
-    for broken in ({"zai": 0}, "broken", {"zai": True}, {"zai": {"bogus": 1}}):
+    closed = AgentsBlock(provider_limits={"zai": 0, "anthropic": {"lanes": 0}}).provider_limits
+    assert (closed["zai"].lanes, closed["zai"].subagents) == (0, 1)
+    assert closed["anthropic"].lanes == 0
+    for broken in ({"zai": -1}, {"zai": {"subagents": 0}}, "broken", {"zai": True}, {"zai": {"bogus": 1}}):
         restored = AgentsBlock(provider_limits=broken).provider_limits["zai"]
         assert (restored.lanes, restored.subagents) == (5, 1), broken
 

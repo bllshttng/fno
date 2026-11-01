@@ -2074,6 +2074,11 @@ def _positive_int(v: object) -> bool:
     return isinstance(v, int) and not isinstance(v, bool) and v >= 1
 
 
+def _lane_count(v: object) -> bool:
+    """A lane cap is a count where `0` closes the lane; `True` and `-1` stay malformed."""
+    return isinstance(v, int) and not isinstance(v, bool) and v >= 0
+
+
 # The per-provider budgets footnote ships. A provider absent from this table is
 # unbounded in every dimension, which is today's behavior for a dedicated
 # account. zai is here because the account is SHARED: `subagents = 1` is what
@@ -2102,6 +2107,7 @@ class ProviderBudget(BaseModel):
 
     `None` on either field means unbounded in that dimension, which is what an
     unlisted provider gets: today's behavior for every dedicated account.
+    `lanes = 0` is not unset: it closes the lane, so the gate refuses every spawn.
     """
 
     #: concurrent spawned workers on this provider; None = uncapped.
@@ -2111,7 +2117,7 @@ class ProviderBudget(BaseModel):
 
     @field_validator("lanes", "subagents", mode="before")
     @classmethod
-    def _coerce_positive(cls, v: object) -> object:
+    def _coerce_positive(cls, v: object, info: ValidationInfo) -> object:
         """A malformed dimension reads as unbounded IN THAT DIMENSION only.
 
         Never raises: the whole-table validator (`_coerce_max_lanes`) is the
@@ -2119,16 +2125,17 @@ class ProviderBudget(BaseModel):
         raise here would turn a typo in one field into a load failure for the
         entire settings model.
         """
+        floor = 0 if info.field_name == "lanes" else 1
         if isinstance(v, bool):
             return None
-        if isinstance(v, int) and v >= 1:
+        if isinstance(v, int) and v >= floor:
             return v
         if isinstance(v, str):
             try:
                 n = int(v.strip())
             except ValueError:
                 return None
-            return n if n >= 1 else None
+            return n if n >= floor else None
         return None
 
 
@@ -2350,6 +2357,7 @@ class AgentsBlock(SweepKeys):
 
             [agents.provider_limits]
             zai = 5                 # legacy scalar -> lanes = 5
+            openai = 0              # 0 closes the lane
 
             [agents.provider_limits.zai]
             lanes = 5
@@ -2373,10 +2381,14 @@ class AgentsBlock(SweepKeys):
                 and re.fullmatch(r"[a-z][a-z0-9_-]*", provider)
             ):
                 return dict(_BUILTIN_PROVIDER_BUDGETS)
-            if _positive_int(budget):
+            if _lane_count(budget):
                 fields: dict[str, object] = {"lanes": budget}
             elif isinstance(budget, dict) and not (set(budget) - {"lanes", "subagents"}):
-                fields = {k: v for k, v in budget.items() if _positive_int(v)}
+                fields = {
+                    k: v
+                    for k, v in budget.items()
+                    if (_lane_count(v) if k == "lanes" else _positive_int(v))
+                }
                 if len(fields) != len(budget):
                     return dict(_BUILTIN_PROVIDER_BUDGETS)
             else:
