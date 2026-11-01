@@ -359,10 +359,10 @@ mod tests {
              2026-10-13T09:02:42Z | S2 | insights-tag | r.md:1 | - \"mail me at a@b.co\" (x1, 01a0, signal=repeated_correction) #agent-correction\n",
         )
         .unwrap();
-        let plan = "---\ntitle: \"Old idea\"\nclaims: x-1234\nurls:\n  - https://github.com/o/r/pull/77\n---\nbody\n";
-        std::fs::write(tmp.path().join("20261001-x-1234.md"), plan).unwrap();
+        let plan = "---\ntitle: \"Old idea\"\nclaims: n-1\nurls:\n  - https://github.com/o/r/pull/77\n---\nbody\n";
+        std::fs::write(tmp.path().join("20261001-n-1.md"), plan).unwrap();
         std::fs::write(
-            tmp.path().join("20261002-x-5678.md"),
+            tmp.path().join("20261002-n-2.md"),
             "---\nstatus: ready\n---\n",
         )
         .unwrap();
@@ -373,7 +373,7 @@ mod tests {
             corrections: Some(log),
             repo: tmp.path().to_path_buf(),
             plans: Some(tmp.path().to_path_buf()),
-            superseded: BTreeSet::from(["x-1234".to_string()]),
+            superseded: BTreeSet::from(["n-1".to_string()]),
         });
         assert_eq!(before, snapshot(tmp.path()), "the miner writes nothing");
 
@@ -384,6 +384,6 @@ mod tests {
             "ranked by score, the duplicate reject and the interrupt gone"
         );
         assert!(rows[0].quote.contains("[email]"), "{}", rows[0].quote);
-        assert_eq!(rows[1].source_ref, "20261001-x-1234.md node=x-1234 pr=77");
+        assert_eq!(rows[1].source_ref, "20261001-n-1.md node=n-1 pr=77");
     }
 }
