@@ -889,6 +889,13 @@ fn send(remote: &Remote, db: &Path, connection: &mut Connection) -> Result<Optio
                 renumber(remote, connection, &changes, i, last)?;
                 return Ok(None);
             }
+            let appended = refusal
+                .change
+                .filter(|&i| position_clash(reader, &refusal.message, &changes[i]));
+            if let Some(i) = appended {
+                reappend(remote, connection, &changes, i, last)?;
+                return Ok(None);
+            }
             repair(
                 remote,
                 connection,
@@ -1009,6 +1016,157 @@ fn renumber(
     let was = change.new[at].integer().unwrap_or_default();
     eprintln!(
         "backlog-share: a peer holds {table}.{key} {was} on the primary; this machine's row moved to {key} {next} and the batch is sent again."
+    );
+    Ok(())
+}
+
+/// The primary refused `change`, an insert, because its per-node list
+/// position is taken: a composite key led by `node_id` (`PRIMARY KEY
+/// (node_id, seq)`, `comments`, `pull_requests`). Each replica counts its
+/// own rows per node between syncs, so two machines that append to one
+/// node before they sync mint the same position. Unlike a rowid key the
+/// position orders a list the owner reads whole, so the rows re-append
+/// past the primary's highest position instead of taking a fresh
+/// surrogate: the position shifts, the row survives.
+fn position_clash(connection: &Connection, error: &str, change: &Change) -> bool {
+    let Some(rest) = error.split("UNIQUE constraint failed: ").nth(1) else {
+        return false;
+    };
+    let mut names = rest.split(['.', ',', ' ']).filter(|t| !t.is_empty());
+    let (Some(table), Some(first), Some(second_table), Some(second)) =
+        (names.next(), names.next(), names.next(), names.next())
+    else {
+        return false;
+    };
+    if change.op != Op::Insert || change.table != table || table != second_table {
+        return false;
+    }
+    // The refused pair is the table's whole composite key, led by
+    // node_id. The two-column check keeps rowid_clash's single-key case,
+    // and a three-column key, out of this path.
+    let Ok(columns) = column_info(connection, table) else {
+        return false;
+    };
+    let mut pk: Vec<(i64, &str)> = columns
+        .iter()
+        .filter_map(|(c, n)| (*n > 0).then(|| (*n, c.as_str())))
+        .collect();
+    pk.sort_by_key(|&(n, _)| n);
+    let names: Vec<&str> = pk.into_iter().map(|(_, c)| c).collect();
+    names.len() == 2 && names == [first, second] && names[0] == "node_id"
+}
+
+/// Re-append the node's queued inserts past the primary's highest
+/// position, keep each local row with its new position, and re-queue the
+/// whole batch, in one local transaction. Same as [`renumber`], nothing is
+/// taken back and the batch goes again in the same flush; the machine's
+/// rows keep their relative order, and a peer's rows land below them once
+/// synced.
+fn reappend(
+    remote: &Remote,
+    connection: &mut Connection,
+    changes: &[Change],
+    refused: usize,
+    last: i64,
+) -> Result<(), String> {
+    let change = &changes[refused];
+    let table = &change.table;
+    let mut pk: Vec<(String, i64)> = column_info(connection, table)?
+        .into_iter()
+        .filter(|(_, n)| *n > 0)
+        .collect();
+    pk.sort_by_key(|&(_, n)| n);
+    let node_col = pk[0].0.clone();
+    let position_col = pk[1].0.clone();
+    let node_at = change
+        .columns
+        .iter()
+        .position(|c| *c == node_col)
+        .ok_or_else(|| format!("the {table} insert carries no {node_col}"))?;
+    let position_at = change
+        .columns
+        .iter()
+        .position(|c| *c == position_col)
+        .ok_or_else(|| format!("the {table} insert carries no {position_col}"))?;
+    let node = change.new[node_at].clone();
+    // The node's queued inserts, in batch order: the order the writer
+    // appended them.
+    let group: Vec<usize> = changes
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| {
+            c.table == *table
+                && c.op == Op::Insert
+                && c.columns.get(node_at) == Some(&node_col)
+                && c.new.get(node_at) == Some(&node)
+        })
+        .map(|(i, _)| i)
+        .collect();
+    let max_sql = format!(
+        "SELECT COALESCE(MAX(\"{position_col}\"), 0) FROM \"{table}\" WHERE \"{node_col}\" = ?1"
+    );
+    let on_primary = remote
+        .execute(&max_sql, &[node.clone()])?
+        .rows
+        .first()
+        .and_then(|r| r[0].integer())
+        .unwrap_or(0);
+    let local: i64 = connection
+        .query_row(&max_sql, rusqlite::params_from_iter([&node]), |r| r.get(0))
+        .map_err(|e| e.to_string())?;
+    let queued = group
+        .iter()
+        .filter_map(|&i| changes[i].new.get(position_at).and_then(SqlValue::integer))
+        .max()
+        .unwrap_or(0);
+    let base = on_primary.max(local).max(queued) + 1;
+    let mut moved: Vec<(usize, Change)> = Vec::new();
+    for (offset, &i) in group.iter().enumerate() {
+        let mut m = changes[i].clone();
+        m.new[position_at] = SqlValue::Integer(base + offset as i64);
+        moved.push((i, m));
+    }
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(|e| e.to_string())?;
+    // A sync may already have replaced a local row with the peer's row
+    // that holds the position; matching every column leaves that row
+    // alone.
+    for (i, m) in &moved {
+        remove(
+            &transaction,
+            table,
+            &match_all(&changes[*i].columns, 1),
+            &changes[*i].new,
+        )?;
+        replace(&transaction, table, &m.columns, &m.new)?;
+    }
+    transaction
+        .execute_batch(&format!(
+            "DELETE FROM backlog_outbox WHERE id <= {last};
+             DELETE FROM graph_meta WHERE key = '{SENDING}';"
+        ))
+        .map_err(|e| e.to_string())?;
+    for (i, c) in changes.iter().enumerate() {
+        let c = moved
+            .iter()
+            .find(|(j, _)| *j == i)
+            .map(|(_, m)| m)
+            .unwrap_or(c);
+        transaction
+            .execute(
+                "INSERT INTO backlog_outbox (change) VALUES (?1)",
+                [&c.to_json().to_string()],
+            )
+            .map_err(|e| e.to_string())?;
+    }
+    stamp_fresh(&transaction, "reappend")?;
+    transaction.commit().map_err(|e| e.to_string())?;
+    let was = change.new[position_at].integer().unwrap_or_default();
+    let held = node.text().unwrap_or("?");
+    eprintln!(
+        "backlog-share: a peer holds {table}.{node_col} {held} at {position_col} {was} on the primary; this machine's {n} row(s) re-append at {position_col} {base}.. and the batch is sent again.",
+        n = moved.len()
     );
     Ok(())
 }
@@ -2256,6 +2414,37 @@ mod tests {
         crate::backlog::nodes::save(&connection, &node).unwrap();
     }
 
+    /// A comments row appended the way any writer appends: through the
+    /// owning module's save, over the list the node already holds.
+    fn add_comment(m: &Machine, body: &str) {
+        let connection = crate::backlog::open(&m.graph).unwrap();
+        let mut list = crate::backlog::comments::load(&connection, "x-1").unwrap();
+        list.push(crate::backlog::model::Comment {
+            created_at: Some("2026-11-01T00:00:00Z".to_string()),
+            body: Some(body.to_string()),
+            kind: Some("progress".to_string()),
+            title: None,
+            details: None,
+            difficulty: None,
+            source: None,
+            source_session_id: None,
+            source_harness: None,
+            extras: serde_json::Map::new(),
+        });
+        crate::backlog::comments::save(&connection, "x-1", &list).unwrap();
+    }
+
+    /// The comment bodies of one node's list, in position order.
+    fn comment_bodies(connection: &Connection) -> Vec<String> {
+        let mut statement = connection
+            .prepare("SELECT body FROM comments WHERE node_id = 'x-1' ORDER BY seq")
+            .unwrap();
+        let rows = statement
+            .query_map([], |r| r.get::<_, Option<String>>(0))
+            .unwrap();
+        rows.map(|row| row.unwrap().unwrap_or_default()).collect()
+    }
+
     #[test]
     fn a_flushed_write_lands_on_the_primary_and_a_peer_syncs_it() {
         let primary = test_primary::start();
@@ -2500,6 +2689,108 @@ mod tests {
         sync(&a.graph).unwrap();
         let synced = crate::backlog::open(&a.graph).unwrap();
         assert_eq!(seq_of(&synced, "d-b"), on_b);
+        route_to_primary(None);
+    }
+
+    /// A comment list keys its rows PRIMARY KEY (node_id, seq), and each
+    /// replica counts its own rows per node between syncs. Two machines that
+    /// append to one node before they sync mint the same position, and
+    /// before the re-append the primary refused the second insert and the
+    /// take-back kept only the local row: the primary never got the note.
+    #[test]
+    fn two_writers_appending_one_comment_position_both_land() {
+        let primary = test_primary::start();
+        let (a, b) = (machine(), machine());
+        on(&primary, &a);
+        seed(&a.graph).unwrap();
+        add_node(&a, "x-1", "first");
+        flush(&a.graph).unwrap();
+        on(&primary, &b);
+        sync(&b.graph).unwrap();
+
+        on(&primary, &a);
+        add_comment(&a, "from a");
+        flush(&a.graph).unwrap();
+        on(&primary, &b);
+        add_comment(&b, "from b");
+        retitle(&b, "x-1", "from b");
+        flush(&b.graph).unwrap();
+
+        assert_eq!(outbox(&b), 0);
+        let held = primary.db.lock().unwrap();
+        assert_eq!(
+            comment_bodies(&held),
+            ["from a".to_string(), "from b".to_string()],
+            "both notes land, b's re-appended past the peer's"
+        );
+        let retitled: String = held
+            .query_row("SELECT title FROM nodes WHERE id = 'x-1'", [], |r| r.get(0))
+            .unwrap();
+        drop(held);
+        assert_eq!(retitled, "from b", "the batch's other write landed");
+
+        on(&primary, &b);
+        sync(&b.graph).unwrap();
+        let local = crate::backlog::open(&b.graph).unwrap();
+        assert_eq!(
+            comment_bodies(&local),
+            ["from a".to_string(), "from b".to_string()],
+            "the replica row moved with its new position"
+        );
+        drop(local);
+
+        // The next local note appends past the moved position.
+        add_comment(&b, "from b again");
+        flush(&b.graph).unwrap();
+        assert_eq!(outbox(&b), 0);
+        let held = primary.db.lock().unwrap();
+        assert_eq!(
+            comment_bodies(&held),
+            [
+                "from a".to_string(),
+                "from b".to_string(),
+                "from b again".to_string()
+            ]
+        );
+        drop(held);
+        route_to_primary(None);
+    }
+
+    /// The batch carries several of this node's queued appends. They
+    /// re-append past the primary's highest position in the order the
+    /// writer appended them, so the list the primary holds reads the same
+    /// order the writer wrote.
+    #[test]
+    fn a_group_of_queued_appends_reappends_in_list_order() {
+        let primary = test_primary::start();
+        let (a, b) = (machine(), machine());
+        on(&primary, &a);
+        seed(&a.graph).unwrap();
+        add_node(&a, "x-1", "first");
+        flush(&a.graph).unwrap();
+        on(&primary, &b);
+        sync(&b.graph).unwrap();
+
+        on(&primary, &a);
+        add_comment(&a, "from a");
+        flush(&a.graph).unwrap();
+        on(&primary, &b);
+        add_comment(&b, "first from b");
+        add_comment(&b, "second from b");
+        flush(&b.graph).unwrap();
+
+        assert_eq!(outbox(&b), 0);
+        let held = primary.db.lock().unwrap();
+        assert_eq!(
+            comment_bodies(&held),
+            [
+                "from a".to_string(),
+                "first from b".to_string(),
+                "second from b".to_string()
+            ],
+            "the group keeps the writer's order past the peer's row"
+        );
+        drop(held);
         route_to_primary(None);
     }
 
