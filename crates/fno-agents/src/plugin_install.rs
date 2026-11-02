@@ -3876,7 +3876,11 @@ mod tests {
         // and an unparseable registry fails open.
         let registry = base.join("installed_plugins.json");
         assert_eq!(claude_pack_status(&registry).as_deref(), Some("missing"));
-        fs::write(&registry, r#"{"plugins":{"fno":[{"installPath":"/x"}]}}"#).unwrap();
+        fs::write(
+            &registry,
+            r#"{"plugins":{"fno@fno":[{"installPath":"/x"}]}}"#,
+        )
+        .unwrap();
         assert_eq!(claude_pack_status(&registry).as_deref(), Some("ok"));
         fs::write(&registry, "{not json").unwrap();
         assert_eq!(claude_pack_status(&registry), None);
