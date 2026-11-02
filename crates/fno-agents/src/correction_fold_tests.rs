@@ -137,6 +137,24 @@ fn ac3_ac5_a_refold_holds_one_row_and_an_old_turn_reads_backfilled() {
 }
 
 #[test]
+fn a_replay_with_new_stamps_keeps_the_first_row_and_moves_the_cursor() {
+    let fx = fixture(&[
+        assistant("a1", NOW + 1, "Done."),
+        user("u1", NOW + 2, "no, use the other branch"),
+    ]);
+    assert_eq!(pass(&fx, MAX_ROWS_PER_TICK, NOW).rows_appended, 1);
+    let first = rows(&fx);
+    std::fs::remove_file(&fx.cache).unwrap();
+    let replay = pass(&fx, MAX_ROWS_PER_TICK, NOW + 3_600);
+    assert_eq!(replay.append_error, None);
+    assert_eq!(replay.rows_replayed, 1);
+    assert_eq!(rows(&fx), first);
+    let cache: CacheFile =
+        serde_json::from_str(&std::fs::read_to_string(&fx.cache).unwrap()).unwrap();
+    assert_eq!(cache.cursors.len(), 1);
+}
+
+#[test]
 fn ac4_ac9_a_held_lock_skips_the_cap_defers_and_each_corrector_names_itself() {
     let mut lines = Vec::new();
     for i in 0..3u64 {
