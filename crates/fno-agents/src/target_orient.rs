@@ -1340,15 +1340,7 @@ mod boundary_flow_tests {
     #[test]
     fn stale_when_the_doc_predates_the_blocker() {
         let entry = done_entry(141);
-        let v = evaluate_blocker(
-            Some(&entry),
-            false,
-            "x-blk",
-            "# plan\n",
-            epoch(),
-            false,
-        )
-        .unwrap();
+        let v = evaluate_blocker(Some(&entry), false, "x-blk", "# plan\n", epoch(), false).unwrap();
         assert_eq!(v.verdict, "stale");
         assert_eq!(v.pr_number, Some(141));
         assert_eq!(v.blocker_id, "x-blk");
@@ -1405,20 +1397,32 @@ mod boundary_flow_tests {
     #[test]
     fn open_and_prless_blockers_skip_on_graph_walks() {
         let ready = serde_json::json!({"id": "x-open", "status": "ready"});
-        assert!(evaluate_blocker(Some(&ready), false, "x-open", "# plan\n", epoch(), false).is_none());
+        assert!(
+            evaluate_blocker(Some(&ready), false, "x-open", "# plan\n", epoch(), false).is_none()
+        );
         let prless = serde_json::json!({"id": "x-doc", "status": "done"});
-        assert!(evaluate_blocker(Some(&prless), false, "x-doc", "# plan\n", epoch(), false).is_none());
+        assert!(
+            evaluate_blocker(Some(&prless), false, "x-doc", "# plan\n", epoch(), false).is_none()
+        );
         // An explicit reconcile_against entry surfaces instead of skipping.
         let v = evaluate_blocker(Some(&prless), true, "x-doc", "# plan\n", epoch(), false).unwrap();
         assert_eq!(v.verdict, "unknown");
-        assert!(v.reason.as_deref().unwrap_or_default().contains("without PR"));
+        assert!(v
+            .reason
+            .as_deref()
+            .unwrap_or_default()
+            .contains("without PR"));
     }
 
     #[test]
     fn explicit_entries_not_in_the_graph_read_unknown() {
         let v = evaluate_blocker(None, true, "x-ghost", "# plan\n", epoch(), false).unwrap();
         assert_eq!(v.verdict, "unknown");
-        assert!(v.reason.as_deref().unwrap_or_default().contains("not in graph"));
+        assert!(v
+            .reason
+            .as_deref()
+            .unwrap_or_default()
+            .contains("not in graph"));
         assert!(evaluate_blocker(None, false, "x-ghost", "# plan\n", epoch(), false).is_none());
     }
 

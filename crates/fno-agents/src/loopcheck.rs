@@ -1804,7 +1804,6 @@ pub(crate) fn decide_with_payload(
                     fidelity_block = read.block;
                     merge_owner = read.merge_owner;
                 }
-                }
 
                 let (reviewed, probes_passed) = (
                     pr_info.reviewed,

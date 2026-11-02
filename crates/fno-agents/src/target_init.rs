@@ -479,11 +479,7 @@ fn ladder_root(
                     .map(|root| PathBuf::from(root.trim()))
             })
         })
-        .or_else(|| {
-            toplevel
-                .filter(|s| !s.is_empty())
-                .map(PathBuf::from)
-        })
+        .or_else(|| toplevel.filter(|s| !s.is_empty()).map(PathBuf::from))
 }
 
 /// The env-hint ladder `resolve_plugin_script` documents, generalized over
@@ -492,9 +488,7 @@ fn ladder_root(
 /// cwd repo's toplevel. The env hints are authoritative: when set
 /// (non-empty), the script is expected there and we do NOT fall through.
 pub(crate) fn plugin_rel_path(rel: &str, cwd: &Path) -> PathBuf {
-    let hint = |key: &str| -> Option<String> {
-        std::env::var(key).ok().filter(|v| !v.is_empty())
-    };
+    let hint = |key: &str| -> Option<String> { std::env::var(key).ok().filter(|v| !v.is_empty()) };
     let plugin_hint = hint("CLAUDE_PLUGIN_ROOT").or_else(|| hint("CODEX_PLUGIN_ROOT"));
     let toplevel = || -> Option<String> {
         let out = std::process::Command::new("git")
