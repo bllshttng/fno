@@ -509,7 +509,10 @@ fn deliver_pointer(
             let why = stderr.lines().rev().find(|l| !l.trim().is_empty());
             not_reached(why.unwrap_or(&format!("mail send exit {:?}", status.code())))
         }
-        None => format!("pointer to {holder} still sending after {}s", bound.as_secs()),
+        None => format!(
+            "pointer to {holder} still sending after {}s",
+            bound.as_secs()
+        ),
     }
 }
 

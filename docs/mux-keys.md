@@ -27,7 +27,7 @@ Emulators: iTerm2, Ghostty, kitty and WezTerm emit the xterm CSI form. Verify yo
 
 ## Inside the PR review
 
-`d` on a backlog node's detail opens the diff of the node's newest unmerged PR, full screen. `r` opens the same review from a seat page in the org view when the seat's node has a PR, and Esc goes back to that page.
+`d` on a backlog node's detail opens the diff of the node's newest unmerged PR, full screen. If a seat's node has a PR, `r` on its org page opens the same review. `Esc` goes back to that page.
 
 - `j`/`k` or arrows: move one row. `PageUp`/`PageDown`: move one screen. `n`/`p`: next or previous file.
 - `c`: comment on the row, or edit its comment. `Enter` stages the comment, and `Esc` drops the input. `x`: remove the row's comment.

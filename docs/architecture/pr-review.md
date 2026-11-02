@@ -38,7 +38,7 @@ The receipt says what the door did: `pointer sent to <holder>`, `holder <holder>
 
 ## Why a finding and not mail
 
-Mail cannot carry a review. The mux mail door caps text at 400 chars on one line, the mail style gate caps a body at 80 words, and a mail does not hold the worker. The stop gate refuses a promise while a finding is open.
+Mail cannot carry a review. The mux mail door caps text at 400 chars on one line. The mail style gate caps a body at 80 words. A mail also does not hold the worker. The stop gate refuses a promise while a finding is open.
 
 ## What it does not do
 
