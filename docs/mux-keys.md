@@ -25,6 +25,15 @@ A bare `Esc` is the first byte of the chord, so the mux holds it briefly to see 
 
 Emulators: iTerm2, Ghostty, kitty and WezTerm emit the xterm CSI form. Verify yours before relying on it: run `cat -v`, press `Ctrl+Opt+Left`, expect `^[[1;7D`. If your emulator sends something else, bind what it sends.
 
+## Inside the PR review
+
+`d` on a backlog node's detail opens the diff of the node's newest unmerged PR, full screen. `r` opens the same review from a seat page in the org view when the seat's node has a PR, and Esc goes back to that page.
+
+- `j`/`k` or arrows: move one row. `PageUp`/`PageDown`: move one screen. `n`/`p`: next or previous file.
+- `c`: comment on the row, or edit its comment. `Enter` stages the comment, and `Esc` drops the input. `x`: remove the row's comment.
+- `S`: send every staged comment as one blocking finding on the node. A success clears the drafts, and the notice is the engine's receipt.
+- `Esc`: close. With unsent comments, the first `Esc` warns and the second closes and drops them.
+
 ## Inside the navigator
 
 The overlay owns every keystroke, so bare arrows are free there.

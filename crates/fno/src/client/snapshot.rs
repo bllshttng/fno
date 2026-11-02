@@ -23,7 +23,7 @@ const USAGE: &str =
     "usage: fno mux serve --snapshot --server <name> --out <path> [--squad <name>] \
 [--theme dark|light|macchiato] [--format html|svg|png] [--size <cols>x<rows> [--fit]] [--peer <cols>x<rows>] \
 [--font <family>] [--message <fmail-id>] \
-[--view bell|bell-wide|bell-full|feed|row-menu|hover|cursor|tab-menu|sideline-menu|composer|split-menu|settings|keys|org-block|org-table|org-recent|org-overview|org-graph|org-health|org-seat|org-feed|org-system|messages-tree|messages-chats|messages-thread|messages-system|messages-archive|backlog-list|backlog-kanban|navigator-pr|navigator-model|navigator-menu|feed-detail|question-detail|connections|yard|needs]";
+[--view bell|bell-wide|bell-full|feed|row-menu|hover|cursor|tab-menu|sideline-menu|composer|split-menu|settings|keys|org-block|org-table|org-recent|org-overview|org-graph|org-health|org-seat|org-feed|org-system|messages-tree|messages-chats|messages-thread|messages-system|messages-archive|backlog-list|backlog-kanban|review-diff|navigator-pr|navigator-model|navigator-menu|feed-detail|question-detail|connections|yard|needs]";
 
 #[derive(Debug, PartialEq)]
 pub enum Format {
@@ -96,6 +96,8 @@ pub enum ViewKind {
     MessagesYou,
     /// The board on the newest You thread's detail, pairs right and left.
     MessagesYouThread,
+    /// The PR review overlay over the fixture diff, with two staged comments.
+    ReviewDiff,
     /// The backlog board full screen in list view, details pane beside it.
     BacklogList,
     /// The backlog board full screen in kanban view, details pane beside it.
@@ -184,6 +186,7 @@ fn parse_view(v: &str) -> Option<ViewKind> {
         "messages-archive" => Some(ViewKind::MessagesArchive),
         "messages-you" => Some(ViewKind::MessagesYou),
         "messages-you-thread" => Some(ViewKind::MessagesYouThread),
+        "review-diff" => Some(ViewKind::ReviewDiff),
         "backlog-list" => Some(ViewKind::BacklogList),
         "backlog-kanban" => Some(ViewKind::BacklogKanban),
         "navigator-pr" => Some(ViewKind::NavigatorPr),
@@ -270,7 +273,7 @@ pub fn parse(tail: &[OsString]) -> Result<SnapshotArgs, String> {
             "--view" => {
                 let v = value()?;
                 view = Some(parse_view(&v).ok_or_else(|| {
-                    format!("fno mux serve --snapshot: unknown view {v:?}; use bell, bell-wide, bell-full, feed, row-menu, tab-menu, sideline-menu, composer, split-menu, settings, keys, org-block, org-table, org-recent, org-overview, org-graph, org-health, org-seat, org-feed, org-system, messages-tree, messages-chats, messages-thread, messages-system, messages-archive, messages-you, messages-you-thread, backlog-list, backlog-kanban, navigator-pr, navigator-menu, navigator-model, feed-detail, question-detail or connections")
+                    format!("fno mux serve --snapshot: unknown view {v:?}; use bell, bell-wide, bell-full, feed, row-menu, tab-menu, sideline-menu, composer, split-menu, settings, keys, org-block, org-table, org-recent, org-overview, org-graph, org-health, org-seat, org-feed, org-system, messages-tree, messages-chats, messages-thread, messages-system, messages-archive, messages-you, messages-you-thread, backlog-list, backlog-kanban, review-diff, navigator-pr, navigator-menu, navigator-model, feed-detail, question-detail or connections")
                 })?)
             }
             tok @ ("--server" | "--session") => {
@@ -973,6 +976,13 @@ shoot a root whose fleet map has seats \
                 _ => {}
             }
         }
+        Some(ViewKind::ReviewDiff) => {
+            View::open(&mut view);
+            super::backlog_board::pr_review::open_fixture(
+                &mut view,
+                include_str!("tests/fixtures/pr_review.diff"),
+            )?;
+        }
         Some(ViewKind::BacklogList) | Some(ViewKind::BacklogKanban) => {
             // The V-cycle backlog board, full screen so the board and
             // details panes lay out side by side. Set the sideline field
@@ -1224,6 +1234,7 @@ mod tests {
             ("messages-archive", ViewKind::MessagesArchive),
             ("messages-you", ViewKind::MessagesYou),
             ("messages-you-thread", ViewKind::MessagesYouThread),
+            ("review-diff", ViewKind::ReviewDiff),
             ("backlog-list", ViewKind::BacklogList),
             ("backlog-kanban", ViewKind::BacklogKanban),
             ("navigator-pr", ViewKind::NavigatorPr),

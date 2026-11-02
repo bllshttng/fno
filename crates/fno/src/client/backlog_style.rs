@@ -22,6 +22,9 @@ pub(crate) enum BRole {
     Tab,
     /// A line that needs the reader, such as a failed delivery.
     Warn,
+    /// A diff's added and removed lines.
+    Added,
+    Removed,
 }
 
 /// One styled segment.
@@ -260,6 +263,8 @@ pub(crate) fn role_of(role: BRole) -> Role {
         BRole::Pill => Role::PanelPill,
         BRole::Tab => Role::PanelTab,
         BRole::Warn => Role::PanelWarn,
+        BRole::Added => Role::Swatch(crate::proto::Color::Indexed(2)),
+        BRole::Removed => Role::Swatch(crate::proto::Color::Indexed(1)),
     }
 }
 

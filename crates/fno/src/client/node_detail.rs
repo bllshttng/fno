@@ -580,7 +580,8 @@ fn note_age(ts: &Option<String>) -> String {
 /// drills in, a session launches through the hit cascade, a dim row
 /// answers with its reason), `b` plans, `t` launches the node as a target
 /// through the prefilled launcher, and `A` asks the lead (the board's own
-/// sends). `c` posts a user comment on the node's thread.
+/// sends). `c` posts a user comment on the node's thread, and `d` opens the
+/// review of the node's PR diff.
 pub(crate) async fn detail_keys(
     view: &mut View,
     bytes: &[u8],
@@ -636,6 +637,7 @@ pub(crate) async fn detail_keys(
             ModalKey::Byte(b'y') => copy_sel(view, false),
             ModalKey::Byte(b'Y') => copy_sel(view, true),
             ModalKey::Byte(b'c') => backlog_board::begin_comment(view),
+            ModalKey::Byte(b'd') => backlog_board::pr_review::open_from_detail(view),
             ModalKey::Byte(b'?') => {
                 if let Some(b) = view.backlog_board.as_mut() {
                     b.keys_overlay = !b.keys_overlay;
