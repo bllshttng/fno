@@ -918,6 +918,14 @@ pub fn run_task(
         if let Some(rev) = &overlay_rev {
             row["overlay_rev"] = json!(rev);
         }
+        if let Some(golden) = &task.golden {
+            row["failure_type"] = json!(golden.failure_type);
+        }
+        row["seat"] = json!(if task.tags.iter().any(|t| t == "lead") {
+            "lead"
+        } else {
+            "worker"
+        });
         if !status.is_empty() {
             row["status"] = json!(status);
         }
