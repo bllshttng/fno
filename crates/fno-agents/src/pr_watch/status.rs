@@ -97,7 +97,7 @@ pub(crate) struct EndRec {
 }
 
 impl EndRec {
-    pub(crate) fn from_value(ts: Option<&str>, data: &Value) -> EndRec {
+    fn from_value(ts: Option<&str>, data: &Value) -> EndRec {
         EndRec {
             ts: ts.map(str::to_string),
             outcome: str_field(data, "outcome"),

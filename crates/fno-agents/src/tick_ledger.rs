@@ -27,7 +27,7 @@ use crate::paths::AgentsHome;
 pub const EVENT_TYPE: &str = "control_plane_tick";
 
 /// The launchd scheduler label the pr-watch-hosted arms write in their tick
-/// rows; the same string `cli/src/fno/pr_watch/cli.py` emits.
+/// rows; the same string `pr_watch/tick.rs` emits.
 pub const SCHED_LAUNCHD: &str = "launchd:sh.fno.pr-watcher";
 /// The daemon scheduler label the in-daemon arms write.
 pub const SCHED_DAEMON: &str = "daemon";

@@ -13,7 +13,7 @@ use super::dispatch::{
     self, Fire, QueueCounts, QueueRow, RitualAnswer, Seams, SweepOpts, TickResult,
 };
 use super::state;
-use super::status::{as_bool, cfg_lookup, EndRec};
+use super::status::{as_bool, cfg_lookup};
 
 /// EX_TEMPFAIL: launchd logs the exit but never respawns a StartInterval job
 /// early, so a timed-out tick surfaces without suppressing its successor.
