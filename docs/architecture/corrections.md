@@ -34,6 +34,26 @@ Each harness fact is `{value, measured_at, basis}` or `{value: null, basis: "unm
 
 **The claude label can lie.** On a routed endpoint, `message.model` echoes the name that was requested. We measured 150 transcripts on 2026-11-01. A GLM route wrote `msg_20` ids with no request id, including 420 rows labelled `claude-opus-5-5`. Anthropic rows carry `msg_01` and `req_`. So a claude label on a foreign shape reads unmeasured, and any other label there reads `basis: label`, a claim the row cannot confirm. A registry `route_provider_id` outranks a derived provider.
 
+## Seat
+
+`seat` says which seat the corrected session sat in, as a served reading: `lead:L0`, `lead:L1`, `lead:L2`, `lead` with no rung known, or `worker`. The first fact that answers wins, in this order.
+
+| Order | Fact | Value | Basis |
+|---|---|---|---|
+| 1 | registry `role_level` | `lead:L<n>` | `registry` |
+| 2 | newest `agent_role_vacated` row | `lead:L<n>` | `role_vacated` |
+| 3 | `fno:lead` skill loaded | `lead` | `skill` |
+| 4 | node session row in `execute`, `ship` or `review` | `worker` | `roster` |
+| 5 | `fno:target` skill loaded | `worker` | `skill` |
+
+A `think` or `blueprint` row does not count, because it can name the lead that filed the node. A session with no fact reads unmeasured. Most of those are attended sessions with no skill, and the report never folds them into a seat.
+
+A seat belongs to the session, never the turn. A worker promoted later reads as a lead on its earlier rows too.
+
+A row written before the stamp has no `seat`. The store is append-only, so the hourly pass appends a `correction_seat` row for it, up to 5,000 a pass. An unmeasured session gets no row. The report reads the seat from either row.
+
+No subagent seat exists yet. The fold reads no subagent transcript, and its scan skips `isSidechain` rows. Those 11,951 files and 6.8 GiB can double its cursor file. A user never types to a subagent, so user rows lose nothing. Refusals inside a subagent stay uncounted.
+
 ## Scrub
 
 The quote is capped at 280 characters and passes `scrub_quote`. Secret shapes are masked. A residual shape drops the quote and keeps the row: `quote: null, quote_status: dropped`.
@@ -51,10 +71,13 @@ The store is append-only, so outcome is its own `correction_outcome` row, from a
 ```bash
 fno doctor event corrections --by model --since 7d
 fno doctor event corrections --by harness --source user
+fno doctor event corrections --by role --source user --since 30d
 fno doctor event corrections --by day --since 28d
 fno doctor event corrections --precision ~/.fno/evals/corrections/v1/labels.jsonl
 fno agents fleet feed --kind agent_corrected
 ```
+
+A `--by role` rate counts only rows the fold stamped as it read them. Its denominator is the typed turns that same fold tallied per seat. A backfilled row adds to the count and never to the rate, because no tally covers its turns.
 
 The feed shows user rows by default. An explicit `--kind agent_corrected` adds the agent and machine rows, as `agent_corrected_agent` and `agent_corrected_machine`. The feed reads the last 7 days of corrections. The report reads any window.
 
