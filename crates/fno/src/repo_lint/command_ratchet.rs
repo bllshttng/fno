@@ -111,15 +111,23 @@ fn manifest_drift(root: &Path, baseline: &[String]) -> Vec<String> {
         }
     }
     let flags = std::fs::read_to_string(root.join(FLAGS_REL)).unwrap_or_default();
+    let map_leaves: BTreeSet<String> = map
+        .lines()
+        .skip(1)
+        .filter_map(|l| l.split('\t').next().map(str::trim).map(str::to_string))
+        .collect();
     for line in flags.lines() {
         let row = line.trim();
         if row.is_empty() || row.starts_with('#') {
             continue;
         }
-        if !baseline.iter().any(|b| b == row) {
+        // The flag rides a T1-dispatched action, so the contract is the map
+        // allocation, not a baseline row: the baseline holds the group head.
+        let action = row.split(" !").next().unwrap_or(row).trim().to_string();
+        if !map_leaves.contains(&action) {
             drift.push(format!(
-                "command-ratchet: collapse-flags row `{row}` is missing from {BASELINE_REL}. \
-             Add the line to the baseline in the same PR."
+                "command-ratchet: collapse-flags row `{row}` has no allocated action in {MAP_REL}. \
+             Allocate the action in the map and regenerate the baseline in the same PR."
             ));
         }
     }

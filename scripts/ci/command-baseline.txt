@@ -54,14 +54,11 @@ config set
 cost
 delivery evaluate
 do
-do resume receipt validate !--session
-do resume receipt write !--session
 doctor
 done
 evals
 fno-agents
 help
-lint
 inbox approvals decide
 inbox approvals ls
 inbox approvals show
@@ -76,8 +73,6 @@ paths
 plan
 pr-watch
 resume
-resume receipt validate !--session
-resume receipt write !--session
 uninstall
 update
 version

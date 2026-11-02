@@ -273,7 +273,6 @@ doctor evals trend	T1	doctor evals trend	0
 doctor event	T1	doctor event	50
 doctor harness	T1	doctor harness	0
 doctor harness-matrix	T1	doctor harness-matrix	3
-doctor lint	T1	doctor lint	39
 doctor observer replay	T1	doctor observer replay	2
 doctor observer judge	T1	doctor observer judge	2
 doctor observer sweep	T1	doctor observer sweep	4
@@ -292,7 +291,6 @@ evals qualify	T1	evals qualify	0
 evals report	T1	evals report	1
 evals run	T1	evals run	3
 help	KEEP	help	37	single-leaf group
-lint	KEEP	lint	29	single-leaf group
 paths handoff	T1	paths handoff	9
 plan brief	T1	plan brief	4
 plan folder-audit	T1	plan folder-audit	0
