@@ -42,7 +42,7 @@ def test_handoff_sets_marker_for_the_child(monkeypatch, tmp_path):
 
 
 def test_old_binary_cannot_recurse_through_the_backlog_forward(tmp_path):
-    """A stub plays a binary that execs every backlog verb back into fno-py."""
+    """A stub plays a binary that execs every backlog command back into fno-py."""
     hops = tmp_path / "hops"
     driver = tmp_path / "driver.py"
     stub = tmp_path / "fno-agents"

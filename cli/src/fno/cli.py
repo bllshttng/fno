@@ -572,7 +572,7 @@ def backlog(
 ) -> None:
     """Forward to the native `backlog`, which the fno-agents binary serves.
 
-    A binary older than this forward sends a verb it lacks straight back here
+    A binary older than this forward sends a command it lacks straight back here
     by exec, so each level spawns another (2026-11-02: over 5,300 `fno-py
     backlog script-door` processes). The marker holds the forwarded argv, not a
     flag: a worker spawned under a backlog command inherits it and must still
