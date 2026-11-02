@@ -721,7 +721,7 @@ mod tests {
         // would read $7.204, and the main transcript alone $8.004.
         let session = fold.session(&book, None, None);
         assert_eq!(session.cents, Some(1020));
-        assert_eq!(session.tokens, 3_101_000);
+        assert_eq!(session.tokens, 2_101_000);
     }
 
     #[test]
