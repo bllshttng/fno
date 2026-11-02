@@ -37,6 +37,8 @@ pub mod backlog_view;
 #[cfg(feature = "full")]
 pub mod backlog_write;
 #[cfg(feature = "full")]
+pub mod pr_diff;
+#[cfg(feature = "full")]
 pub(crate) mod band_remap;
 #[cfg(feature = "full")]
 pub mod blocked_rung;
