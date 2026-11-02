@@ -314,8 +314,9 @@ pub fn maybe_tick(arm: &Arm, home: AgentsHome) {
         let install_off_main = crate::arm_repair::RepairFacts::live(&[]).install_off_main;
         // The org read runs ONCE and feeds both readers: the team alarm's
         // judge and the settle pass. A second read doubles the seconds the
-        // beat already spends.
-        let org = crate::team_alarm::read_org_payload(&config_cwd);
+        // beat already spends. In process now; the Ok wrap keeps the
+        // settle branch's shape, since the read has no failure mode left.
+        let org = Ok(crate::team_alarm::read_org_payload(&config_cwd));
         let outcome = tick_with_heal(
             &mut rows,
             install_off_main,
