@@ -93,10 +93,6 @@ impl Review {
         }
     }
 
-    pub(crate) fn fetch_pending(&self) -> bool {
-        self.fetch_wanted
-    }
-
     /// Install a read diff; the cursor lands on the first changed row.
     pub(crate) fn load(&mut self, diff: PrDiff, head: String) {
         self.flat = diff
@@ -398,10 +394,7 @@ pub(crate) fn land(view: &mut View, landed: Landed) {
     review.recipient = recipient_line(&landed.claim, review.seat.as_ref(), |session| {
         agents
             .iter()
-            .find(|a| {
-                a.session_id.as_deref() == Some(session)
-                    || a.harness_session_id.as_deref() == Some(session)
-            })
+            .find(|a| a.harness_session_id.as_deref() == Some(session))
             .map(|a| a.name.clone())
     });
     match landed.read {
@@ -673,7 +666,17 @@ pub(crate) fn paint(review: &Review, cells: &mut [Cell], rows: usize, cols: usiz
     };
     let to = [BLine::meta(to).trunc(cols)];
     backlog_style::paint_panel(cells, rows, cols, 1, cols, 1, &to, None, theme);
-    backlog_style::paint_panel(cells, rows, cols, HEADER_ROWS, cols, h, &body, follow, theme);
+    backlog_style::paint_panel(
+        cells,
+        rows,
+        cols,
+        HEADER_ROWS,
+        cols,
+        h,
+        &body,
+        follow,
+        theme,
+    );
     let foot = match &review.input {
         Some((_, field)) => BLine::plain(format!("comment: {}", field.display())),
         None if review.sending => BLine::meta("sending the review"),
@@ -741,12 +744,22 @@ mod tests {
         let mut view = crate::client::tests::two_pane_view();
         view.term = (24, 100);
         view.backlog_board = Some(BoardView::new(0));
-        open(&mut view, "x-1".into(), "https://github.com/o/r/pull/7", None);
+        open(
+            &mut view,
+            "x-1".into(),
+            "https://github.com/o/r/pull/7",
+            None,
+        );
         view
     }
 
     fn review(view: &View) -> &Review {
-        view.backlog_board.as_ref().unwrap().review.as_ref().unwrap()
+        view.backlog_board
+            .as_ref()
+            .unwrap()
+            .review
+            .as_ref()
+            .unwrap()
     }
 
     fn landed(read: Result<(PrDiff, String), String>) -> Landed {
@@ -765,7 +778,10 @@ mod tests {
         assert_eq!(review(&view).phase, Phase::Failed("HTTP 404".into()));
         assert_eq!(review(&view).recipient, "holder not read: no claim read");
         keys(&mut view, b"\x1b");
-        assert!(view.backlog_board.as_ref().unwrap().review.is_none(), "Esc closes");
+        assert!(
+            view.backlog_board.as_ref().unwrap().review.is_none(),
+            "Esc closes"
+        );
 
         let mut view = review_view();
         land(&mut view, landed(Ok((pr_diff::parse(DIFF), "abc".into()))));
@@ -777,7 +793,10 @@ mod tests {
     #[test]
     fn one_send_queues_one_finding_and_esc_warns_before_dropping() {
         let mut view = review_view();
-        land(&mut view, landed(Ok((pr_diff::parse(DIFF), "abcdef012".into()))));
+        land(
+            &mut view,
+            landed(Ok((pr_diff::parse(DIFF), "abcdef012".into()))),
+        );
         keys(&mut view, b"c");
         keys(&mut view, b"first\r");
         keys(&mut view, b"j");
@@ -786,15 +805,26 @@ mod tests {
         assert_eq!(review(&view).drafts.len(), 2);
 
         keys(&mut view, b"\x1b");
-        assert!(view.notice.as_ref().unwrap().0.contains("2 unsent comments"));
-        assert!(view.backlog_board.as_ref().unwrap().review.is_some(), "the first Esc warns");
+        assert!(view
+            .notice
+            .as_ref()
+            .unwrap()
+            .0
+            .contains("2 unsent comments"));
+        assert!(
+            view.backlog_board.as_ref().unwrap().review.is_some(),
+            "the first Esc warns"
+        );
 
         keys(&mut view, b"S");
         let (argv, body) = review(&view).send.clone().expect("one write queued");
         assert!(argv.iter().any(|a| a == "--blocking"));
         assert!(argv.iter().any(|a| a == "--stdin"));
         assert!(argv.iter().any(|a| a == "x-1"));
-        assert!(body.starts_with("review of PR #7 (o/r) at abcdef01: 2 comments."), "{body}");
+        assert!(
+            body.starts_with("review of PR #7 (o/r) at abcdef01: 2 comments."),
+            "{body}"
+        );
         keys(&mut view, b"S");
         assert!(
             view.notice.as_ref().unwrap().0.contains("already sending"),
@@ -802,7 +832,10 @@ mod tests {
         );
 
         sent(view.backlog_board.as_mut().unwrap(), true);
-        assert!(review(&view).drafts.is_empty(), "a landed send clears the drafts");
+        assert!(
+            review(&view).drafts.is_empty(),
+            "a landed send clears the drafts"
+        );
         keys(&mut view, b"\x1b");
         assert!(view.backlog_board.as_ref().unwrap().review.is_none());
     }
@@ -815,13 +848,21 @@ mod tests {
         };
         let mut view = review_view();
         close(&mut view);
-        open(&mut view, "x-1".into(), "https://github.com/o/r/pull/7", Some(seat.clone()));
+        open(
+            &mut view,
+            "x-1".into(),
+            "https://github.com/o/r/pull/7",
+            Some(seat.clone()),
+        );
         land(&mut view, landed(Err("no read".into())));
         assert_eq!(review(&view).recipient, "mercedes on r2d2");
         assert!(view.board_full, "the review paints full screen");
 
         let dead = Ok(serde_json::json!({"state": "stale", "holder": "x"}));
-        assert_eq!(recipient_line(&dead, Some(&seat), |_| None), "mercedes on r2d2");
+        assert_eq!(
+            recipient_line(&dead, Some(&seat), |_| None),
+            "mercedes on r2d2"
+        );
         assert_eq!(recipient_line(&dead, None, |_| None), NO_HOLDER);
         let live = Ok(serde_json::json!({"state": "live", "session_id": "s-1", "host": "bb16"}));
         assert_eq!(
