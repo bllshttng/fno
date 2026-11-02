@@ -19,6 +19,11 @@ pub fn run(args: &[String]) -> i32 {
                 None => return 2,
             },
             "--json" | "-J" => json = true,
+            // A separate read: the --json shape is a frozen contract.
+            "--no-harness-ancestor" => {
+                println!("{}", crate::spawn_context::walk_finds_no_harness_ambient());
+                return 0;
+            }
             other => {
                 eprintln!("fno-agents: claim session-pid: unknown flag {other}");
                 return 2;
@@ -30,11 +35,7 @@ pub fn run(args: &[String]) -> i32 {
     if json {
         println!(
             "{}",
-            serde_json::json!({
-                "session_pid": pid,
-                "harness": harness,
-                "no_harness_ancestor": crate::spawn_context::walk_finds_no_harness_ambient(),
-            })
+            serde_json::json!({"session_pid": pid, "harness": harness})
         );
     } else if let Some(pid) = pid {
         println!("{pid}");
