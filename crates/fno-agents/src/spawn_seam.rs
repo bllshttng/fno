@@ -13,6 +13,8 @@ use crate::spawn_admission::{flag_value, has_flag, seed_of, HARNESS_FLAGS};
 
 /// The env carrier the worker argv builders read the write grants from.
 pub const WORKER_ADD_DIRS_ENV: &str = "FNO_WORKER_ADD_DIRS";
+/// Set on a sealed eval worker's spawn, so it carries no state grant.
+pub const EVALS_SEALED_ENV: &str = "FNO_EVALS_SEALED";
 
 /// The spawn gate's exit for a sandbox that blocks a tool the worker needs.
 pub const EXIT_SANDBOX_UNREACHABLE: i32 = 85;
@@ -254,13 +256,25 @@ pub fn worker_writable_dirs(cwd: &Path) -> Vec<String> {
 /// Publish the grants for the worker argv builders. An empty set CLEARS the
 /// carrier: a spawn made from inside a worker inherits its parent's value,
 /// another project's directories, which must never ride as this one's grant.
+///
+/// A sealed eval worker gets no grant. An `--add-dir` joins the working
+/// directories, so a grant would pass the read fence the worker runs behind.
 pub(crate) fn export_worker_dirs(cwd: &Path) {
-    let dirs = worker_writable_dirs(cwd);
+    let sealed = std::env::var_os(EVALS_SEALED_ENV).is_some_and(|v| v == "1");
+    let dirs = granted_dirs(cwd, sealed);
     if dirs.is_empty() {
         std::env::remove_var(WORKER_ADD_DIRS_ENV);
     } else {
         let sep = if cfg!(windows) { ";" } else { ":" };
         std::env::set_var(WORKER_ADD_DIRS_ENV, dirs.join(sep));
+    }
+}
+
+fn granted_dirs(cwd: &Path, sealed: bool) -> Vec<String> {
+    if sealed {
+        Vec::new()
+    } else {
+        worker_writable_dirs(cwd)
     }
 }
 
@@ -289,6 +303,13 @@ mod tests {
 
     fn argv(tokens: &[&str]) -> Vec<String> {
         tokens.iter().map(|t| t.to_string()).collect()
+    }
+
+    #[test]
+    fn a_sealed_spawn_carries_no_grant_and_any_other_keeps_them() {
+        let cwd = Path::new(".");
+        assert!(granted_dirs(cwd, true).is_empty());
+        assert_eq!(granted_dirs(cwd, false), worker_writable_dirs(cwd));
     }
 
     #[test]
