@@ -210,7 +210,7 @@ class TestSweepBoundedByPhaseClock:
 
     def test_failed_read_cursor_yields_to_unpolled_candidates(self, tmp_path, monkeypatch):
         """A rich-read failure advances the next tick past untouched candidates."""
-        from fno.graph._reconcile import ReconcileError
+        from fno.pr_watch._discover import ReconcileError
 
         candidates = [_make_candidate(pr_number=n, repo_dir=tmp_path) for n in (1, 2, 3)]
         deps = _make_tick_deps(tmp_path, candidates=candidates)

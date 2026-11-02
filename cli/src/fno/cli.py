@@ -61,7 +61,6 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
         "Delivery work: plans, targets, reviews, PRs, state, and supporting operations.",
         {"hidden": True},
     ),
-    "backlog": ("fno.graph.cli:cli", "Feature graph management"),
     "inbox": (
         "fno.inbox.cli:inbox_app",
         "What is waiting on a human: approvals, notify, outstanding, lead board, decisions, law.",
@@ -96,11 +95,6 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
     "resume": (
         "fno.resume_receipt_cli:cli",
         "Durable typed resume receipts (evidence, never write authority)",
-        {"hidden": True},
-    ),
-    "annotate": (
-        "fno.annotate:annotate_app",
-        "Record an operator review finding against a node (add/list/resolve); gates loop-check.",
         {"hidden": True},
     ),
     "config": ("fno.config_writer_cli:app", "Configuration management"),
@@ -138,11 +132,6 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
     "cost": (
         "fno.whoami_leaves:cost_command",
         "Cost + usage metrics from session transcripts and ledger.json.",
-        {"hidden": True},
-    ),
-    "done": (
-        "fno.done.cli:done_command",
-        "Deprecated done shim; use `fno backlog done` (its flag surface is now identical).",
         {"hidden": True},
     ),
     "doctor": (

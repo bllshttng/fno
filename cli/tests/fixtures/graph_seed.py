@@ -75,19 +75,35 @@ def seed_graph(path: Path, entries: Iterable[dict] | str | bytes | dict) -> list
                 )
         connection.commit()
         connection.close()
-        from fno.graph.store import read_graph_strict
+        from fno.rust_binary import backlog_rows
 
-        read_graph_strict(path)
+        backlog_rows(include_archived=True, path=path)
         return rows
     connection.close()
-    from fno.graph.store import _client_for, _commit_rows, _read_snapshot
+    from fno.rust_binary import store_request
 
-    client = _client_for(path)
-    version, current, digests = _read_snapshot(client)
-    # plan_rungs stays absent: a supplied rung map, even empty, makes the
-    # keeper re-derive status and demote every pending seed to idea. The
-    # fixture seeds stored statuses verbatim.
-    _commit_rows(client, version, digests, current, rows, None, 1)
+    snap = store_request("begin", {}, path=path)
+    current = {row["id"]: row for row in snap.get("entries", [])}
+    wanted = {row["id"] for row in rows}
+    changed = [row for row in rows if current.get(row["id"]) != row]
+    removed = [node_id for node_id in current if node_id not in wanted]
+    digests = snap.get("base_digests", {})
+    touched = [row["id"] for row in changed] + removed
+    # plan_rungs stays null: a supplied rung map, even empty, makes the keeper
+    # re-derive status and demote every pending seed to idea. The fixture seeds
+    # stored statuses verbatim.
+    store_request(
+        "commit_rows",
+        {
+            "base_version": snap["version"],
+            "base_digests": {i: digests[i] for i in touched if i in digests},
+            "changed": changed,
+            "removed": removed,
+            "plan_rungs": None,
+            "attempt": 1,
+        },
+        path=path,
+    )
     return rows
 
 

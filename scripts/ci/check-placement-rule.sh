@@ -362,7 +362,6 @@ crates/fno-agents/src/backlog/maintenance_tests.rs
 crates/fno-agents/src/review_capability.rs
 cli/src/fno/claims/session_pid.py
 crates/fno-agents/src/context_audit.rs
-cli/src/fno/graph/cli.py
 crates/fno-agents/src/observer/fold.rs
 crates/fno-agents/src/footprint_cause.rs
 cli/src/fno/paths.py

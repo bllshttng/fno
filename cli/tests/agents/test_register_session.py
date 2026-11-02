@@ -614,10 +614,10 @@ def _seed_deferred_node() -> None:
 
 def _deferred_sessions() -> list[dict]:
     from fno import paths
-    from fno.graph.store import read_graph
+    from fno.rust_binary import backlog_rows
 
     return next(
-        e for e in read_graph(paths.graph_json()) if e["id"] == DEFER_NODE
+        e for e in backlog_rows(path=paths.graph_json()) if e["id"] == DEFER_NODE
     ).get("sessions", [])
 
 

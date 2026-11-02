@@ -21,7 +21,7 @@ from fno.pr_watch._discover import (
     discover_open_prs,
     read_pr_state,
 )
-from fno.graph._reconcile import ReconcileError
+from fno.pr_watch._discover import ReconcileError
 
 
 # ---------------------------------------------------------------------------

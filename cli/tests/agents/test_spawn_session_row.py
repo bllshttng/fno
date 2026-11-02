@@ -44,10 +44,6 @@ def _readable_node_row(monkeypatch):
     re-stub with a medium row so the derived command agrees with their seed)."""
     row = {"id": NODE, "slug": "sess", "dispatch_command": "/target", "difficulty": "low"}
 
-    def _load_graph(path, tokens):
-        return {"entries": [dict(row)], "missing": []}
-
-    monkeypatch.setattr("fno.graph.store.read_nodes_by_ids", _load_graph)
     yield row
 
 
@@ -89,34 +85,13 @@ def _seed_graph() -> None:
 
 def _node_rows() -> list[dict]:
     from fno import paths
-    from fno.graph.store import read_graph_strict
+    from fno.rust_binary import backlog_rows
 
-    return next(e for e in read_graph_strict(paths.graph_json()) if e["id"] == NODE).get(
+    return next(e for e in backlog_rows(path=paths.graph_json()) if e["id"] == NODE).get(
         "sessions", []
     )
 
 
-@pytest.fixture
-def graph_cli_home(tmp_path: Path, monkeypatch) -> Path:
-    """Graph-side CLI tests: tmp home, seeded node, and the CLI graph path
-    pinned to that tmp graph.
-
-    The pin matters: sibling suites setattr the lazy GRAPH_JSON module attr,
-    whose monkeypatch teardown plants a concrete value in the module dict and
-    silences __getattr__ for the rest of the process - without the pin, these
-    tests read whatever graph the previous file pinned (changed-smoke runs
-    its whole changed subset in one process).
-    """
-    import fno.graph.cli as graph_cli
-    from fno import paths
-
-    use_tmpdir(monkeypatch, tmp_path)
-    _seed_graph()
-    monkeypatch.setattr(graph_cli, "_graph_path", lambda: paths.graph_json())
-    # The native door reads FNO_STATE_DIR first; name the same tmp root the
-    # settings file serves python, so door-driving tests see the same graph.
-    monkeypatch.setenv("FNO_STATE_DIR", str(tmp_path / ".fno"))
-    return tmp_path
 
 
 @pytest.fixture
@@ -143,29 +118,6 @@ def workdir_claude(tmp_path: Path, monkeypatch) -> Path:
 # ---------------------------------------------------------------------------
 
 
-def test_roster_renders_review_between_do_and_ship(graph_cli_home) -> None:
-    """The lifecycle roster gains a review slot between do and ship."""
-    for phase, harness, sid, start, end in [
-        ("do", "codex", "c" * 32, "2026-08-23T09:00:00Z", "2026-08-23T10:00:00Z"),
-        ("review", "claude", FULL_UUID, "2026-08-23T10:00:00Z", "2026-08-23T11:00:00Z"),
-        ("ship", "codex", "d" * 32, "2026-08-23T11:00:00Z", "2026-08-23T12:00:00Z"),
-    ]:
-        code, out, err = run_native(
-            "backlog", "session", "add", NODE, "--phase", phase,
-            "--harness", harness, "--session-id", sid,
-            "--started-at", start, "--ended-at", end,
-        )
-        assert code == 0, f"{out}{err}"
-
-    import fno.graph.cli as graph_cli
-
-    lines, summary = graph_cli._lifecycle_roster(_node_rows())
-    text = "\n".join(lines)
-    assert "review" in text and "claude" in text
-    assert text.index("execute") < text.index("review") < text.index("ship")
-    phases = [p["phase"] for p in summary["phases"] if isinstance(p, dict)] if isinstance(
-        summary.get("phases"), list) else []
-    assert "review" in phases
 
 
 # ---------------------------------------------------------------------------
@@ -173,27 +125,6 @@ def test_roster_renders_review_between_do_and_ship(graph_cli_home) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_reap_open_all_closes_every_open_row(graph_cli_home) -> None:
-    """The death-cascade spelling: one session holding a do window AND a review
-    window settles both - each row filled and kept."""
-    for phase in ("execute", "review"):
-        run_native(
-            "backlog", "session", "add", NODE, "--phase", phase,
-            "--harness", "claude", "--session-id", FULL_UUID,
-            "--started-at", "2026-08-23T10:00:00Z",
-        )
-
-    code, out, err = run_native(
-        "backlog", "session", "reap-open", NODE, "--harness", "claude",
-        "--session-id", FULL_UUID, "--phase", "all", "--json",
-    )
-    assert code == 0, f"{out}{err}"
-    receipt = json.loads(out)
-    assert receipt["row_removed"] is False and receipt["row_closed"] is True
-
-    rows = _node_rows()
-    assert len(rows) == 2, f"both rows survive filled, got {rows!r}"
-    assert all(row["ended_at"] for row in rows)
 
 
 # ---------------------------------------------------------------------------

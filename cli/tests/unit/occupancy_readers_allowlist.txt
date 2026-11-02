@@ -7,7 +7,6 @@
 # (the fix that makes the default read the global root for node: keys).
 
 # --- the three sites the plan corrects; each has its own regression ---
-cli/src/fno/backlog/note_notify.py:status = claim_status(f"node:{node_id}")
 # control: core routing + four-way control (rootless read reaches the global root)
 cli/src/fno/pr_watch/cli.py:info = claim_status(f"node:{node_id}")
 # control: test_pr_watch_config_coupling.py::test_is_node_live_sees_global_claim
@@ -23,6 +22,5 @@ cli/src/fno/agents/unfinished_work.py:key = f"node:{node_id}"
 cli/src/fno/agents/watchdog.py:key = f"node:{node}"
 # control: core routing
 # control: core routing
-cli/src/fno/graph/cli.py:key = f"node:{node_id}"
 # control: core routing
 # control: core routing

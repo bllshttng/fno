@@ -375,7 +375,7 @@ def sidecar_get(id: str) -> dict:
     the list defaults) - the "no sidecar yet" case, never an error. A file
     that fails the sidecar validation raises, the way the old model's
     ValidationError did. The backend is the door's own resolution; the
-    guard helper lives in ``fno.graph.api``.
+    guard helper lives in this module.
     """
     out = command_call(["backlog", "get"], {"tracker": "sidecar-get", "id": id})
     if out.get("error"):
@@ -753,9 +753,12 @@ def open_execute_row(
     return proc.returncode == 0
 
 
-def store_request(method: str, params: dict) -> Any:
+def store_request(method: str, params: dict, *, path: "Optional[Path]" = None) -> Any:
     """One store method. A refusal raises RuntimeError with the store's message."""
-    reply = _script_door_json("store-request", method, stdin=_json.dumps(params))
+    args = ["store-request", method]
+    if path is not None:
+        args += ["--graph", str(path)]
+    reply = _script_door_json(*args, stdin=_json.dumps(params))
     if reply.get("ok"):
         return reply.get("result")
     error = reply.get("error") or {}

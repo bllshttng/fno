@@ -926,7 +926,7 @@ class TestReadPrStateBudget:
         """A floor, not a zero check. A remaining budget under what the leg
         costs would start a read certain to time out, spending the deadline
         to learn nothing."""
-        from fno.graph._reconcile import ReconcileError
+        from fno.pr_watch._discover import ReconcileError
         from fno.pr_watch import _discover
         from fno.pr_watch._discover import REVIEWS_LEG_FLOOR_S, read_pr_state
 

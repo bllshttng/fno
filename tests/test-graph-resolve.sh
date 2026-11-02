@@ -4,7 +4,7 @@
 #  node: ab-7651a2c6)
 #
 # Exercises the shell resolver after it has been rewired to call into
-# fno.graph.fuzzy.resolve_id. Each case isolates a behavior:
+# the native node matcher. Each case isolates a behavior:
 #   - non-ab passthrough
 #   - ab-id full-length resolution (regression)
 #   - ab-id prefix unique resolution
@@ -199,11 +199,11 @@ else
 fi
 
 # 9. Package absent: the resolver has one degradation, not a second
-# resolver leg. When fno.graph is unimportable the heredoc exits rc=5
+# resolver leg. When the script door is unreachable the resolver exits rc=5
 # and the arg echoes unchanged, exactly like any other unresolved query
 # before the `fno backlog get` fallback runs. FNO_RESOLVE_PLUGIN_ROOT
-# points the import at the empty directory, so the import of
-# fno.graph.fuzzy fails the same way a host without the package would.
+# points at the empty directory, so the door fails the same way a host without
+# the binary would.
 echo "test 9: package import failure passes the arg through (rc=5)"
 EMPTY_DIR=$(mktemp -d -t graph-resolve-empty.XXXXXX)
 trap 'rm -rf "$STDERR_CAPTURE" "$EMPTY_DIR" "$FIXTURE_HOME"' EXIT

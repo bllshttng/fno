@@ -283,17 +283,6 @@ def test_redispatch_design_rung_declared_target_wins_naming_lifecycle_answer():
     )
 
 
-def _stub_door(monkeypatch, impl):
-    """Stub the keeper client: ``impl(method, params)`` answers or raises."""
-    import fno.graph.store as store
-
-    class _FakeClient:
-        @staticmethod
-        def request(method, params):
-            assert method == "effective_command"
-            return impl(method, params)
-
-    monkeypatch.setattr(store, "_client_for", lambda path: _FakeClient())
 
 
 def _refusal_text(rung):

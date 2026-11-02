@@ -101,7 +101,7 @@ cat > "$WORK/bin/fno" <<'STUB'
 if [[ "${1:-}" == "backlog" && "${2:-}" == "get" ]]; then
   for h in ${FNO_STUB_HANG:-}; do [[ "${3:-}" == "$h" ]] && { sleep 5; exit 0; }; done
   for p in ${FNO_STUB_PHANTOM:-}; do [[ "${3:-}" == "$p" ]] && exit 1; done
-  # GRAPH_UNREADABLE_EXIT (cli/src/fno/graph/cli.py): a wedged graph, NOT an
+  # GRAPH_UNREADABLE_EXIT (crates/fno-agents/src/backlog/get_cli.rs): a wedged graph, NOT an
   # authoritative not-found. Must degrade to surfacing like the 124 timeout.
   for u in ${FNO_STUB_UNREADABLE:-}; do [[ "${3:-}" == "$u" ]] && exit 3; done
   for w in ${FNO_STUB_INPROGRESS:-}; do

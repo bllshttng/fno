@@ -77,7 +77,7 @@ _GLOB_CHARS = frozenset("*?[")
 # Reserved sibling ID families that are NOT node IDs and must never be chosen as
 # a node prefix: carveouts (``cv-``), follow-ups (``fu-``), and target agent
 # names (``tgt-``). The BacklogBlock validator below and the setup wizard reject
-# them. Defined here, not in fno.graph, because the validator is the only reader
+# them. Defined here because the validator is the only reader
 # and config must not depend upward on the graph package.
 RESERVED_PREFIXES = frozenset({"cv-", "fu-", "tgt-"})
 
@@ -2541,7 +2541,7 @@ class AutoContinueBlock(BaseModel):
     block degrades to disabled (fail-safe) rather than failing the settings
     load, so one operator typo can never break every CLI invocation. The
     enable-resolution chain (env override > campaign-arm marker > this block)
-    lives in :func:`fno.backlog.advance.auto_continue_enabled`.
+    lives in the native backlog advance.
     """
 
     model_config = ConfigDict(extra="ignore")

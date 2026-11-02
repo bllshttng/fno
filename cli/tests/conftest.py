@@ -57,22 +57,6 @@ def _operator_shell_identity(monkeypatch):
     monkeypatch.delenv("FNO_CLAUDE_THEME", raising=False)
 
 
-@pytest.fixture(autouse=True)
-def _hermetic_worked_authority(monkeypatch):
-    """Answer the worked authority available-but-empty in every test.
-
-    The strict worked-authority gate refuses every dispatch when the roster
-    read fails, and CI has no harness binaries, so dispatch tests passed on a
-    developer machine (real fleet answers) and failed in CI (read raises).
-    Patching the authority itself keeps the layers beneath it real: roster
-    join tests bind the function directly, fleet fakes at the census door and
-    identity pins between the claims modules all stay untouched. A test that
-    installs its own map, or raises to exercise the degrade, patches after
-    this one and wins.
-    """
-    monkeypatch.setattr(
-        "fno.graph.statuses.live_worked_node_ids", lambda *a, **kw: {}
-    )
 
 
 @pytest.fixture(autouse=True)
@@ -203,11 +187,13 @@ def _store_keeper_absent() -> bool:
     in the one job that can actually run them.
     """
     try:
-        from fno.graph.store import _worker_binary
+        from fno.rust_binary import find_dev_binary
     except Exception:  # noqa: BLE001 - an unreadable probe never skips
         return False
     try:
-        return _worker_binary() is None
+        import shutil
+
+        return find_dev_binary() is None and shutil.which("fno-agents") is None
     except Exception:  # noqa: BLE001 - same
         return False
 
@@ -616,20 +602,6 @@ def _neutral_host_harness(monkeypatch):
     )
 
 
-@pytest.fixture(autouse=True)
-def _hermetic_promise_carveout_gate(monkeypatch):
-    """Default condition D of the promise gate to an empty carve-out ledger.
-
-    ``resolve_promise_evidence`` (consulted by every close command) reads
-    ``.fno/carveouts.jsonl`` off the canonical repo root; in the test process
-    that resolves to the real checkout, so it would read the real ledger and
-    refuse every close. Default the reader to empty so unrelated close tests
-    stay hermetic; tests that exercise condition D override it (``carveout_reader``
-    on the unit gate, or re-patch this attribute for the close commands).
-    """
-    import fno.graph._reconcile as rec
-
-    monkeypatch.setattr(rec, "_unharvested_deferred_carveouts", lambda cwd: [])
 
 
 @pytest.fixture(autouse=True)
@@ -684,7 +656,7 @@ def _hermetic_authorized_merge(monkeypatch):
 # ---------------------------------------------------------------------------
 # Hermetic state isolation
 # ---------------------------------------------------------------------------
-# Applied at MODULE LOAD, not as a fixture. The fno.graph package freezes its
+# Applied at MODULE LOAD, not as a fixture. A Python graph client froze its
 # path constants at IMPORT time - store.py does ``from _constants import
 # GRAPH_JSON`` at module top and ``read_graph_strict(path: Path = GRAPH_JSON)`` as a
 # default arg - so the graph/ledger paths bind to ``~/.fno`` before any per-test
@@ -692,7 +664,7 @@ def _hermetic_authorized_merge(monkeypatch):
 # fail-open (``Path.home() / ".fno"``) then leaked test nodes into the
 # developer's REAL graph.json. A fixture runs too late; the only cure that beats
 # a frozen constant is to move the state location BEFORE the import, and
-# conftest.py is imported before the test modules that pull in fno.graph.
+# conftest.py is imported before the test modules.
 #
 # WHAT gets neutralised lives in the shared vocabulary (crates/fno-agents/
 # src/ambient_vocab.toml, byte-copied to cli/src/fno/ by build.rs), deny-by-
@@ -759,38 +731,6 @@ def harness_session_id() -> str:
 
 
 
-@pytest.fixture(autouse=True)
-def _in_memory_hold_verdict(tmp_path, monkeypatch):
-    """The hold verdict answers from the graph on disk (one fno-agents
-    receipt). These tests build in-memory graphs; the adapter ships each
-    call's rows IN the payload so the reader answers from them. A test that
-    stubs the verdict itself overrides this."""
-
-    import json as _json
-
-    from fno.graph import ladder
-    from fno.rust_binary import call_binary_json as _real_call
-
-    real = ladder.dispatch_hold_verdict
-
-    def patched(entry, by_id):
-        rows = list(by_id.values())
-        if isinstance(entry, dict) and entry not in rows:
-            rows = rows + [entry]
-        rows = [e for e in rows if isinstance(e, dict) and e.get("id")]
-
-        def seeded_call(command, args, *, timeout=None):
-            payload = _json.loads(args[0])
-            payload["entries"] = rows
-            return _real_call(command, [_json.dumps(payload)], timeout=15)
-
-        monkeypatch.setattr("fno.rust_binary.call_binary_json", seeded_call)
-        if not isinstance(entry, dict) or not entry.get("id"):
-            # A row the graph cannot carry: read as unheld, as before.
-            return None
-        return real(entry, by_id)
-
-    monkeypatch.setattr(ladder, "dispatch_hold_verdict", patched)
 
 
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
@@ -1031,7 +971,7 @@ def _closure_leg_hermetic(monkeypatch):
     `fno.rust_binary.command_call` themselves.
     """
     import fno.rust_binary as rb
-    from fno.graph._constants import is_wellformed_node_id
+    from fno.rust_binary import is_wellformed_node_id
 
     real_command_call = rb.command_call
 
@@ -1077,7 +1017,7 @@ def _closure_leg_hermetic(monkeypatch):
 def _no_live_evidence_gate(monkeypatch):
     """Hermetic default for the evidence gate.
 
-    The note gate (`fno.graph.note_cli.note_evidence`) transports to the
+    The note gate (`backlog note`) transports to the
     `fno-agents evidence-gate` command through `fno.rust_binary.command_call`. In
     the test environment that resolver can find a real installed binary, so
     an unstubbed gate would run a foreign implementation of the claim
@@ -1190,33 +1130,8 @@ def _warn_no_local_door_binary() -> None:
 _door_binary_pin_warned = False
 
 
-_FACADE_NAMES = (
-    "GRAPH_JSON",
-    "GRAPH_MD",
-    "GRAPH_HTML",
-    "GRAPH_ARCHIVE_JSON",
-    "LEDGER_JSON",
-    "BRIEFS_DIR",
-)
 
 
-@pytest.fixture(autouse=True)
-def _unbake_constants_facade():
-    """Undo the baked-facade trap fno.graph._constants documents.
-
-    ``monkeypatch.setattr(gc, "GRAPH_JSON", g)`` reads the current value
-    through the module ``__getattr__`` (which RESOLVES a real path) and
-    restores that resolved path as a concrete attribute on teardown, so
-    every later test in the process reads a dead tmp graph. The module doc
-    begs for ``setitem(vars(module), ...)``; dozens of sites use setattr
-    anyway. Cleanup runs at SETUP: the previous test's monkeypatch undo is
-    the last writer by then, so the delete cannot race it.
-    """
-    import fno.graph._constants as gc
-
-    for name in _FACADE_NAMES:
-        if name in vars(gc):
-            delattr(gc, name)
 
 
 @pytest.fixture(autouse=True)

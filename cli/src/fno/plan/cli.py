@@ -542,7 +542,7 @@ def folder_audit(
 def rung(
     plan_path: str = typer.Argument(..., help="Path to the plan .md file."),
 ) -> None:
-    """The shell-facing face of ``fno.graph.ladder``.
+    """The shell-facing face of the native plan rung.
 
     Hidden from the menu, though it still counts: `fno do plan` sits at the
     12-command menu-caps ceiling. Its audience is three shell scripts, not the

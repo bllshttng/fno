@@ -154,7 +154,7 @@ ok()    { echo "  OK:    $*"; }
 
 # Echo a plan's readiness rung, or `!<reason>` when the command could not answer.
 # Never classifies statuses itself; the single authority is `fno do plan rung`
-# (fno.graph.ladder).
+# (backlog_ready::plan_rung).
 #
 # The reason rides in the return VALUE rather than a global, because every
 # caller reads this through `$(...)` - a global set inside that subshell dies
@@ -2643,7 +2643,7 @@ fi
 # frontmatter names a node, print the exact bind command. No graph read:
 # this stays a check, and re-running the bind is idempotent. The id is read
 # with the same node-else-claims rule mutate_doc.py binds by (ported from
-# plan_claims, cli/src/fno/graph/_intake.py:736).
+# plan_claims, crates/fno-agents/src/backlog/session_cli.rs).
 _fm_node_id() {
     awk '
         /^---/{c++; if(c==2) exit; next}

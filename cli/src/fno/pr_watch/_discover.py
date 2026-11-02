@@ -1,6 +1,6 @@
 """Open-PR discovery and per-PR gh state reading for the PR-state watcher.
 
-Reuses ``fno.graph._reconcile`` primitives for node traversal and gh queries
+Reuses its PR-state read for node traversal and gh queries
 so the discovery and state logic stays close to its existing sibling
 (``query_pr_merge_state``) without duplicating it.
 

@@ -27,10 +27,10 @@ def _graphless(monkeypatch):
     """Default the seed-word resolver to a graphless machine: the marker and
     gate cases below pin shape, not resolution. Resolution tests stub their
     own rows via `graph_rows`."""
-    def _unreadable(path=None, **_):
+    def _unreadable(*_a, **_k):
         raise ValueError("graph store unreadable")
 
-    monkeypatch.setattr("fno.graph.load.load_graph", _unreadable)
+    monkeypatch.setattr("fno.rust_binary.backlog_match", _unreadable)
 
 
 @pytest.fixture
@@ -38,9 +38,13 @@ def graph_rows(monkeypatch):
     """Install the graph rows the seed-word resolver reads."""
 
     def _install(rows):
-        monkeypatch.setattr(
-            "fno.graph.load.load_graph", lambda path=None, **_: list(rows)
-        )
+        def _match(query):
+            hits = [r for r in rows if query in (r.get("id"), r.get("slug"))]
+            near = hits or [r for r in rows if query in str(r.get("title", ""))]
+            kind = "exact" if hits else ("fuzzy" if len(near) == 1 else "none")
+            return {"id": near[0]["id"] if len(near) == 1 else None, "kind": kind, "candidates": near}
+
+        monkeypatch.setattr("fno.rust_binary.backlog_match", _match)
 
     return _install
 

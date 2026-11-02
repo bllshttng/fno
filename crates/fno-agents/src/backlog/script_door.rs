@@ -26,7 +26,7 @@ const USAGE: &str = "usage: fno backlog script-door <op>
   terminal-ids                               every closed node id, as a JSON array
   execute-open <node> <harness> <session> <started> [effort]
                                              open an execute row; exit 5 when the node is absent
-  store-request <method>                     stdin params to the store; the JSON reply on stdout";
+  store-request <method> [--graph PATH]      stdin params to the store; the JSON reply on stdout";
 
 fn flag_value<'a>(tail: &'a [String], flag: &str) -> Option<&'a str> {
     let at = tail.iter().position(|a| a == flag)?;
@@ -218,8 +218,8 @@ fn run_store_request(rest: &[String]) -> i32 {
     };
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let cfg = crate::store_exec::ExecConfig {
-        graph: super::settings::graph_path(),
-        canonical: true,
+        graph: graph_of(rest),
+        canonical: flag_value(rest, "--graph").is_none(),
         lock_timeout: graph_store::DEFAULT_LOCK_TIMEOUT,
         events: Some(crate::paths::events_path(&cwd)),
     };
