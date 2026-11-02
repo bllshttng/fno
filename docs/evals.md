@@ -56,7 +56,8 @@ Success criteria must be **mechanical** (develop-tests discipline): a task with 
 | `fno doctor evals trend` | Score the recent window against the prior one, per task (exit 4 when a regression-tier task dropped). See Trend. |
 | `fno doctor evals macro [--since 30d] [--topic TYPE:LABEL] [--window 20] [--all] [--json] [--events PATH]` | Fold existing event journals into a recurring failure-pattern leaderboard, or drill into one pattern. |
 | `fno-agents evals gate-retry <sha>` | Queue a head again for the change gate. See The change gate. |
-| `fno doctor evals graduate <id>` | Retag a capability task's YAML to regression. |
+| `fno doctor evals graduate <id> [--demote]` | Retag a capability task's YAML to regression. `--demote` adds the `demoted` tag instead. See Do scores predict outcomes. |
+| `fno doctor evals report --predict [--json]` | Join each sealed golden's score per tree to the user corrections, reverts and failed reviews that follow it, and print one verdict per task. Read-only. See Do scores predict outcomes. |
 | `fno doctor evals grade --brief B --golden G` | Grade a research brief against a golden doc (three mechanical assertions); exit 0 green. |
 
 Each run executes the task in a disposable worktree via the one-shot spawn lane (`fno agents spawn --once`, never bare `claude -p`). The spawn cap and provider rotation stay in play. The run removes the worktree after grading. A bank task never runs in your working copy. History appends to `~/.fno/history/evals-history.jsonl` (override via `config.paths.evals_history`).

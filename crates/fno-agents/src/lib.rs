@@ -205,6 +205,7 @@ pub mod evals_compare;
 pub mod evals_drafts;
 pub mod evals_gate;
 pub mod evals_macro;
+pub mod evals_predict;
 pub mod evals_qualification;
 pub mod evals_trend;
 pub mod event_rules;
