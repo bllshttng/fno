@@ -203,7 +203,7 @@ try:
 
     nodes = json.loads(
         subprocess.run(
-            ["fno", "backlog", "script-door", "rows", "--include-archived",
+            [os.environ.get("FNO_AGENTS_FRONT") or "fno", "backlog", "script-door", "rows", "--include-archived",
              "--graph", os.environ["GRAPH_TARGET"]],
             capture_output=True, text=True, check=True,
         ).stdout

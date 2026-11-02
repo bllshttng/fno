@@ -1399,13 +1399,14 @@ except OSError:
     sys.exit(0)
 try:
     import json
+    import os
     import subprocess
 
     # The total fold: a minimal row the typed model would drop can still be
     # the plan's delivery unit.
     entries = json.loads(
         subprocess.run(
-            ["fno", "backlog", "script-door", "rows"],
+            [os.environ.get("FNO_AGENTS_FRONT") or "fno", "backlog", "script-door", "rows"],
             capture_output=True, text=True, check=True,
         ).stdout
     )

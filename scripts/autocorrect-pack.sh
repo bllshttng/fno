@@ -259,7 +259,7 @@ import sys
 
 try:
     proc = subprocess.run(
-        ["fno", "backlog", "script-door", "rows", "--graph", os.environ["GRAPH_TARGET"]],
+        [os.environ.get("FNO_AGENTS_FRONT") or "fno", "backlog", "script-door", "rows", "--graph", os.environ["GRAPH_TARGET"]],
         capture_output=True, text=True, check=True,
     )
     rows = json.loads(proc.stdout)

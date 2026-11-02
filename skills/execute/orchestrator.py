@@ -389,7 +389,7 @@ def _collision_partition(items: List[tuple[str, set[str]]]) -> Dict:
     be partitioned must not read as free of collisions."""
     payload = {"items": [[task_id, sorted(paths)] for task_id, paths in items]}
     proc = subprocess.run(
-        ["fno", "backlog", "script-door", "partition"],
+        [os.environ.get("FNO_AGENTS_FRONT") or "fno", "backlog", "script-door", "partition"],
         input=json.dumps(payload),
         capture_output=True,
         text=True,

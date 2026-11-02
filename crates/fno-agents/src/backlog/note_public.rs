@@ -689,8 +689,8 @@ mod tests {
     #[test]
     fn the_author_is_named_and_never_mailed() {
         let rows = vec![
-            json!({"name": "me", "status": "running", "harness_session_id": "sess-1"}),
-            json!({"name": "peer", "status": "running", "node": "x-1", "harness_session_id": "sess-2"}),
+            json!({"name": "me", "status": "busy", "harness_session_id": "sess-1"}),
+            json!({"name": "peer", "status": "busy", "node": "x-1", "harness_session_id": "sess-2"}),
         ];
         let entry = json!({"id": "x-1", "session_id": "sess-1"});
         let found = note_readers(&entry, None, &rows, &free, &no_lead, Some("sess-1"));
