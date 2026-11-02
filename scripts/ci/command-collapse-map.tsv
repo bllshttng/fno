@@ -208,7 +208,6 @@ delivery evaluate	KEEP	delivery evaluate	7	single-leaf group
 do ci status	T1	do ci status	0
 do delivery evaluate	T1	do delivery evaluate	7
 do plan brief	T1	do plan brief	4
-do plan fidelity	T1	do plan fidelity	5
 do plan folder-audit	T1	do plan folder-audit	0
 do plan graduate	T1	do plan graduate	2
 do plan migrate-keys	T1	do plan migrate-keys	1
@@ -296,7 +295,6 @@ help	KEEP	help	37	single-leaf group
 lint	KEEP	lint	29	single-leaf group
 paths handoff	T1	paths handoff	9
 plan brief	T1	plan brief	4
-plan fidelity	T1	plan fidelity	5
 plan folder-audit	T1	plan folder-audit	0
 plan graduate	T1	plan graduate	2
 plan migrate-keys	T1	plan migrate-keys	1

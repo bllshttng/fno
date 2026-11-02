@@ -1538,7 +1538,7 @@ def _project_plans_from_graph(
         # Vault mirror projection is default-backend machinery (same class as
         # plan sync): guarded metadata read, degrades to a no-op under an
         # external selection rather than painting stale local rows.
-        from fno.plan._project import project_graph_nodes
+        from fno.graph.store import project_graph_nodes_request as project_graph_nodes
         from fno.graph.api import read_entries
 
         entries = read_entries("plan.project")
@@ -1713,7 +1713,7 @@ def _stamp_and_graduate_plan(
     """Best-effort: stamp a plan ``shipped`` (when a ship URL is known) then graduate.
     Full contract: docs/architecture/backlog-graph-command-contracts.md
     """
-    from fno.plan._project import plan_docs
+    from fno.graph.store import plan_docs_request as plan_docs
 
     stamped_shipped = False
     if url:
@@ -1740,7 +1740,7 @@ def _set_expected_count(plan_path: str, count: int) -> tuple[SetExpectedStatus, 
     """Authoritatively write expected_url_count=count onto a plan's frontmatter.
     Full contract: docs/architecture/backlog-graph-command-contracts.md
     """
-    from fno.plan._project import plan_docs
+    from fno.graph.store import plan_docs_request as plan_docs
 
     res = plan_docs("set_expected", plan_path=plan_path, count=count)
     return (res["status"], res["message"].strip()) if res else ("failed", "graph store unavailable")

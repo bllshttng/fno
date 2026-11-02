@@ -3,18 +3,24 @@
 Commands:
     stamp             - mark a plan's frontmatter with ship metadata (status:in_review)
     graduate          - flip a stamped plan from status:in_review to status:done
+    set-expected      - authoritatively set a plan's expected_url_count
     brief             - generate a scoped task brief from a single-doc plan
     validate          - validate plan frontmatter or executable semantics (read-only)
     reconcile-status  - normalize drifted plan frontmatter status in place
     folder-audit      - count folder plans owned by a non-terminal graph node
+    rung              - print a plan's readiness rung and dispatch verdict (hidden)
+    migrate-keys      - collapse synonym frontmatter keys to the canonical set
+    sync              - converge every plan doc's graph->doc mirror fields
     path              - print the save path for a NEW plan/design doc (config.plans_filename)
+
+(fidelity moved native in the plan-residue port: the decision lives in
+crates/fno-agents/src/loopcheck/plan_fidelity.rs and there is no command.)
 """
 from __future__ import annotations
 
 import json
 import os
 import subprocess
-import sys
 from enum import Enum
 from pathlib import Path
 from typing import List, Optional
@@ -34,7 +40,7 @@ plan_app = typer.Typer(
 
 def _forward(command: str, extra_args: List[str]) -> int:
     """Send command + extra_args to the keeper-served plan-doc writer; return its exit code."""
-    from fno.plan._project import plan_docs
+    from fno.graph.store import plan_docs_request as plan_docs
 
     return (plan_docs("argv", verb=command, args=extra_args) or {"exit": 1})["exit"]  # verb-wording: allow (keeper wire key)
 
@@ -228,48 +234,6 @@ def brief(
         typer.echo(json.dumps(result.to_json_dict(), indent=2))
     else:
         typer.echo(result.to_markdown())
-
-
-@plan_app.command(
-    "fidelity",
-    help=(
-        "Gate decision: did this plan ship every planned deliverable? Refuses "
-        "(exit 1) when a planned deliverable is unjoined and uncovered by a "
-        "carveout. The same join as the scoreboard, inverted on the ownership "
-        "axis - telemetry marks an unjoined plan n/a, the gate refuses it. "
-        "--json emits the decision object both gate readers consume."
-    ),
-)
-def fidelity(
-    plan_path: str = typer.Argument(..., help="Path to the plan markdown file"),
-    json_out: bool = typer.Option(False, "--json", "-J", help="Emit the decision as JSON."),
-    since_days: int = typer.Option(
-        180, "--since-days", help="Ledger lookback window in days."
-    ),
-) -> None:
-    """The plan-fidelity gate decision for one plan."""
-    from fno.plan.fidelity import compute_plan_fidelity
-
-    decision = compute_plan_fidelity(plan_path=plan_path, since_days=since_days)
-    if json_out:
-        typer.echo(json.dumps(decision, indent=2))
-        return
-    _render_fidelity(decision)
-    if decision.get("refused"):
-        raise typer.Exit(code=1)
-
-
-def _render_fidelity(decision: dict) -> None:
-    out = (sys.stderr if decision.get("refused") else sys.stdout).write
-    if decision.get("refused"):
-        out(f"REFUSED: {decision.get('reason', 'uncovered shortfall')}\n")
-    else:
-        out("pass: every planned deliverable shipped or is covered by a carveout\n")
-    out(
-        f"  planned={decision.get('planned', 0)} "
-        f"delivered={decision.get('delivered', 0)} "
-        f"carveouts={decision.get('carveouts', 0)}\n"
-    )
 
 
 @plan_app.command(
@@ -704,7 +668,7 @@ def sync(
 ) -> None:
     """Idempotent whole-vault mirror-field sweep."""
     from fno.graph import api as graph_api
-    from fno.plan._project import project_graph_nodes
+    from fno.graph.store import project_graph_nodes_request as project_graph_nodes
     from fno.graph.api import ExternalMetadataUnavailable, read_entries
 
     watermark = _plan_sync_watermark()

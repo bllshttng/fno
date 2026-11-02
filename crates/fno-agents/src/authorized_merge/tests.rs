@@ -42,8 +42,6 @@ struct Fake {
     /// The coverage verdict's exit for the PR under decision, armed into
     /// `coverage_verdict`; None reads 0.
     coverage_exit: Option<i32>,
-    /// The plan-fidelity gate's verdict for a test-armable refusal.
-    plan_fidelity_refused: bool,
     /// The `fno backlog decisions` exit and stdout the head-grant read
     /// gets. `None` exit reads 0; `None` stdout reads empty (malformed).
     decisions_exit: Option<i32>,
@@ -445,14 +443,10 @@ impl Probes for Fake {
                 Vec::new(),
             ));
         }
-        // The only other fno-shell ask in these tests is the plan-fidelity
-        // probe: the verdict answer reads `refused` from the test arm.
-        let covered = if self.plan_fidelity_refused {
-            br#"{"refused": true, "reason": "test"}"#.to_vec()
-        } else {
-            br#"{"refused": false}"#.to_vec()
-        };
-        Ok((Some(0), covered, Vec::new()))
+        // The plan-fidelity gate computes in process now (its Python leg
+        // retired), so no fidelity ask reaches this shell any more. Whatever
+        // else arrives is a done probe: answer clean.
+        Ok((Some(0), br#"{}"#.to_vec(), Vec::new()))
     }
 
     fn coverage_verdict(

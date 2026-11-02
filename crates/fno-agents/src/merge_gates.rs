@@ -253,38 +253,21 @@ pub(crate) fn plan_fidelity_blocker<P: Probes>(probes: &P, cwd: &Path, pr: u64) 
     if !pr_payload_is_code(probes, cwd, pr) {
         return None;
     }
-    let args = vec![
-        "plan".to_string(),
-        "fidelity".to_string(),
-        plan_path.to_string(),
-        "--json".to_string(),
-    ];
-    match probes.fno_shell(cwd, &args) {
-        Ok((Some(0), stdout, _)) => {
-            let verdict: Value = serde_json::from_slice(&stdout).ok()?;
-            if verdict.get("refused").and_then(Value::as_bool) == Some(true) {
-                let reason = verdict
-                    .get("reason")
-                    .and_then(Value::as_str)
-                    .unwrap_or("uncovered shortfall");
-                Some(Blocker::refused(
-                    "plan_fidelity_refused",
-                    format!("plan fidelity refused: {reason}"),
-                ))
-            } else {
-                None
-            }
-        }
-        Ok(_) => {
-            breadcrumb("plan fidelity probe answered nonzero; proceeding (fail-open)");
-            None
-        }
-        Err(error) => {
-            breadcrumb(&format!(
-                "plan fidelity probe unavailable ({error}); proceeding (fail-open)"
-            ));
-            None
-        }
+    // The gate computes in process now (the `fno do plan fidelity` shell hop
+    // is retired with its Python leg). Fail-open polarity unchanged: only an
+    // explicit refused decision blocks.
+    let decision = crate::loopcheck::plan_fidelity::compute_plan_fidelity(plan_path, cwd, 180);
+    if decision.get("refused").and_then(Value::as_bool) == Some(true) {
+        let reason = decision
+            .get("reason")
+            .and_then(Value::as_str)
+            .unwrap_or("uncovered shortfall");
+        Some(Blocker::refused(
+            "plan_fidelity_refused",
+            format!("plan fidelity refused: {reason}"),
+        ))
+    } else {
+        None
     }
 }
 

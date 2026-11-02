@@ -923,6 +923,55 @@ def request_scoreboard_plan_fidelity(
     )
 
 
+def plan_docs_request(op: str, **params: Any) -> "dict | None":
+    """One keeper plan_docs call. Never raises: an unreachable keeper warns and returns None.
+
+    (The cli/src/fno/plan/_project.py body, moved whole when that wrapper
+    deleted; its callers are unchanged.)
+    """
+    for key in ("mirror_keys_for", "clear_keys_for"):
+        if params.get(key):
+            params[key] = {"id": params[key][0], "keys": sorted(params[key][1])}
+    from fno import paths as _paths
+
+    params.update(op=op, cwd=str(Path.cwd()), events_path=str(_paths.project_events_json()))
+    try:
+        result = _client_for(GRAPH_JSON).request("plan_docs", params)
+    except (StoreUnavailable, RuntimeError) as exc:
+        sys.stderr.write(f"warning: plan-doc writer unreachable ({exc}); run `fno doctor`\n")
+        return None
+    for line in result.get("warnings") or []:
+        sys.stderr.write(f"{line}\n")
+    return result
+
+def project_graph_nodes_request(
+    entries: "list[dict[str, Any]]",
+    node_ids: "list[str]",
+    root: "str | None" = None,
+    *,
+    mirror_keys_for: "tuple[str, frozenset[str]] | None" = None,
+    force_status_off_terminal_for: "str | None" = None,
+    clear_keys_for: "tuple[str, frozenset[str]] | None" = None,
+) -> int:
+    """Project each named node's mirror fields onto its linked plan; returns docs rewritten.
+
+    (The cli/src/fno/plan/_project.py body, moved whole when that wrapper
+    deleted; the params shape is the keeper's project op.)
+    """
+    ids = [i for i in dict.fromkeys(node_ids) if i]
+    if not ids:
+        return 0
+    result = plan_docs_request(
+        "project",
+        ids=ids,
+        root=root,
+        mirror_keys_for=mirror_keys_for,
+        force_status_off_terminal_for=force_status_off_terminal_for,
+        clear_keys_for=clear_keys_for,
+    )
+    return int(result["rewritten"]) if result else 0
+
+
 def _plan_rung_map(entries: list[dict]) -> "dict[str, str]":
     """Node id -> the rung of the node's linked plan, computed client-side.
 

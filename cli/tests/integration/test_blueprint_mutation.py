@@ -238,7 +238,7 @@ class TestProjectableFrontmatter:
     def test_project_graph_nodes_succeeds(self, tmp_path, capsys, monkeypatch):
         """AC2: a freshly blueprint-mutated plan projects (rewritten 1) with no
         'plan projection skipped' warning on stderr."""
-        from fno.plan._project import project_graph_nodes
+        from fno.graph.store import project_graph_nodes_request as project_graph_nodes
         from tests.fixtures.graph_seed import seed_graph
 
         doc = self._mutate(tmp_path)

@@ -122,7 +122,7 @@ def _project_is_noop(tmp_path, monkeypatch, node) -> bool:
     mirror fields may legitimately change; the ladder guards only status.
     """
     import fno.graph.store as gs
-    from fno.plan._project import project_graph_nodes
+    from fno.graph.store import project_graph_nodes_request as project_graph_nodes
     from tests.fixtures.graph_seed import seed_graph
 
     g = tmp_path / "graph.json"
