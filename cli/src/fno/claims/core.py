@@ -557,7 +557,7 @@ def _unrouted_key_verdict(key: str) -> Optional[dict[str, Any]]:
     safe-to-dispatch. Both legs answer the same unknown."""
     if not key or ":" in key:
         return None
-    from fno.graph._constants import is_wellformed_node_id
+    from fno.rust_binary import is_wellformed_node_id
 
     if not is_wellformed_node_id(key):
         return None

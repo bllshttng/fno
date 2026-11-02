@@ -24,7 +24,7 @@
 # every plugin-script call site uses). A command that roots a shell-out via a
 # private `git rev-parse` helper instead is invisible to the guard; the correct
 # fix is to re-root it on the shared resolver and add a degrade branch + an
-# allowlist entry below (as `fno doctor lint flock-pattern` now does), not to leave it
+# allowlist entry below, not to leave it
 # private and unlisted.
 
 
@@ -37,7 +37,6 @@
 # for the Python tree the same way the pr-*.sh entries below were.
 
 
-# degrades with an actionable error when the script is unavailable.
 
 # fno do pr {merge,verify,rebase} - INTERNALIZED. The four pr-*.sh
 # were ported to in-package Python (fno/pr/_merge.py, _verify.py, _rebase.py)

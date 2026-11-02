@@ -24,7 +24,6 @@ Usage (via the factory)
 
     LAZY = {
         "inbox":   ("fno.inbox.cli:cli",    "operator inbox"),
-        "backlog": ("fno.graph.cli:cli",     "feature graph"),
     }
 
     app = typer.Typer(cls=make_lazy_group_cls(LAZY), ...)

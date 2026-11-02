@@ -11,7 +11,6 @@ from pathlib import Path
 from fno.agents.registry import (
     REGISTRY_LEGACY_SESSION_KEYS,
     SCHEMA_VERSION,
-    AgentEntry,
     load_registry,
 )
 from fno.harness_identity import sync_harness_aliases
@@ -81,16 +80,3 @@ def test_alien_harness_row_loads_without_bricking(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_whoami_does_not_cross_match_another_harness():
-    """A codex id must NOT resolve a claude row that happens to share the id:
-    session ids are provider-local, so matching is scoped to the row's harness."""
-    from fno.agents import whoami
-
-    claude_row = AgentEntry(
-        name="cl",
-        cwd="/x",
-        log_path="/x/l",
-        harness="claude",
-        harness_session_id="SHARED",
-    )
-    assert whoami._find_by_session([claude_row], "SHARED", "codex") is None

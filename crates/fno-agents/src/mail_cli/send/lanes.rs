@@ -774,7 +774,7 @@ pub(crate) fn name_lane_send(args: NameLaneArgs) -> Result<NameLane, i32> {
 /// Every live row holding the role right now,
 /// by name, sorted. Territory equality; the alias widening is a documented
 /// simplification in this port.
-pub(super) fn resolve_to_lead(scope: &str) -> Result<Vec<String>, (String, i32)> {
+pub(crate) fn resolve_to_lead(scope: &str) -> Result<Vec<String>, (String, i32)> {
     let registry = AgentsHome::shared_registry_json();
     let rows = crate::client_commands::load_registry_entries(&registry).map_err(|exc| {
         (

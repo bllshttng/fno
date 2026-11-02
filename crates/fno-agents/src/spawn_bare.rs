@@ -553,7 +553,29 @@ pub fn native_lane(params: &Value, name: &str, route: Option<&Route>, cwd: &Path
     if has("promote") || has("harness_args") || has("monitor") {
         return None;
     }
-    let (session, harness, launcher_cwd) = crate::claims::ambient_parent_edge();
+    // The request seam's explicit edge wins (the cross-host relay carries the
+    // parent session across the ssh hop the caller env cannot cross); the
+    // ambient capture answers only when no edge rode the request.
+    let carried = params
+        .get("spawned_by_session")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let (session, harness, launcher_cwd) = if let Some(s) = carried {
+        (
+            Some(s.to_string()),
+            params
+                .get("spawned_by_harness")
+                .and_then(Value::as_str)
+                .map(String::from),
+            params
+                .get("spawned_by_cwd")
+                .and_then(Value::as_str)
+                .map(String::from),
+        )
+    } else {
+        crate::claims::ambient_parent_edge()
+    };
     let Some(session) = session else {
         eprintln!("spawn: the native lane needs this session's own identity (the launch record names the parent); a spawn from outside any session keeps the dispatcher path.");
         eprintln!(

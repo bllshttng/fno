@@ -1453,6 +1453,20 @@ fn violations_json(violations: &[Violation]) -> serde_json::Value {
     )
 }
 
+/// The configured encounter cap, or the model's default.
+pub(crate) fn configured_word_cap() -> usize {
+    super::settings::config_candidates()
+        .iter()
+        .find_map(|doc| {
+            doc.get("style")?
+                .get("word_cap")?
+                .get("encounter")?
+                .as_u64()
+        })
+        .map(|n| n as usize)
+        .unwrap_or(MESSAGE_WORD_CAP)
+}
+
 /// Run one style check and print the JSON door receipt: always exit 0.
 fn run_json(text: &str, surface: &str, word_cap: Option<usize>) -> i32 {
     let exception = has_exception(text);
@@ -1462,16 +1476,7 @@ fn run_json(text: &str, surface: &str, word_cap: Option<usize>) -> i32 {
     // The configured encounter cap (or the model's 80 default) rides the
     // receipt, so the long-note advisory learns cap and count in this one
     // spawn instead of its own in-process config read.
-    let configured_cap = super::settings::config_candidates()
-        .iter()
-        .find_map(|doc| {
-            doc.get("style")?
-                .get("word_cap")?
-                .get("encounter")?
-                .as_u64()
-        })
-        .map(|n| n as usize)
-        .unwrap_or(MESSAGE_WORD_CAP);
+    let configured_cap = configured_word_cap();
     let payload = serde_json::json!({
         "exception": exception,
         "word_count": count,

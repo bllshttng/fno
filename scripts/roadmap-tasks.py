@@ -3,7 +3,7 @@
 
 Everything forwards through the ``fno`` front door's backlog compat
 spelling, which rides the same graph surface the retired direct import
-used; the in-repo ``fno.graph.cli`` import leg is gone with the consumers
+used; the in-repo Python import leg is gone with the consumers
 repoint.
 """
 import os

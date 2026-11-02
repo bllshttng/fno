@@ -132,19 +132,19 @@ fi
 
 # Build a cycle: add blocker edge A -> B, then propose B -> A
 node_a=$(uv run --project "$REPO_ROOT/cli" python -c "
-from fno.graph.store import read_graph_strict
+import sys; sys.path.insert(0, '$REPO_ROOT/cli/tests/fixtures'); from graph_seed import read_graph_strict
 d = {'entries': read_graph_strict(__import__('pathlib').Path('$GRAPH_JSON'))}
 print(d['entries'][0]['id'])
 ")
 node_b=$(uv run --project "$REPO_ROOT/cli" python -c "
-from fno.graph.store import read_graph_strict
+import sys; sys.path.insert(0, '$REPO_ROOT/cli/tests/fixtures'); from graph_seed import read_graph_strict
 d = {'entries': read_graph_strict(__import__('pathlib').Path('$GRAPH_JSON'))}
 print(d['entries'][1]['id'])
 ")
 # Seed a direct blocked_by on B so any edge from A already traverses back
 uv run --project "$REPO_ROOT/cli" python -c "
 from pathlib import Path
-from fno.graph.store import commit_rows_via_store
+import sys; sys.path.insert(0, '$REPO_ROOT/cli/tests/fixtures'); from graph_seed import commit_rows_via_store
 commit_rows_via_store(Path('$GRAPH_JSON'), lambda rows: [
     dict(row, blocked_by=['$node_a']) if row['id'] == '$node_b' else row
     for row in rows
@@ -178,7 +178,7 @@ fi
 # Reset blocked_by so a fresh apply has somewhere to go.
 uv run --project "$REPO_ROOT/cli" python -c "
 from pathlib import Path
-from fno.graph.store import commit_rows_via_store
+import sys; sys.path.insert(0, '$REPO_ROOT/cli/tests/fixtures'); from graph_seed import commit_rows_via_store
 commit_rows_via_store(Path('$GRAPH_JSON'), lambda rows: [dict(row, blocked_by=[]) for row in rows])
 "
 
@@ -210,7 +210,7 @@ fi
 # Check graph.db now has the blocker and priority
 applied_check=$(uv run --project "$REPO_ROOT/cli" python -c "
 from pathlib import Path
-from fno.graph.store import read_graph_strict
+import sys; sys.path.insert(0, '$REPO_ROOT/cli/tests/fixtures'); from graph_seed import read_graph_strict
 entries = read_graph_strict(Path('$GRAPH_JSON'))
 by_id = {e['id']: e for e in entries}
 a = by_id.get('$node_a', {})
@@ -255,7 +255,7 @@ fi
 # Seed two projects manually so the list is non-trivial.
 uv run --project "$REPO_ROOT/cli" python -c "
 from pathlib import Path
-from fno.graph.store import commit_rows_via_store
+import sys; sys.path.insert(0, '$REPO_ROOT/cli/tests/fixtures'); from graph_seed import commit_rows_via_store
 def assign_projects(rows):
     return [dict(row, project=('zeta' if i == 0 else 'alpha')) for i, row in enumerate(rows)]
 commit_rows_via_store(Path('$GRAPH_JSON'), assign_projects)

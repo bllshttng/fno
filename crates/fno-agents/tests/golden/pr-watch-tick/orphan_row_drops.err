@@ -1,0 +1,8 @@
+{"type":"pr_watch_tick_attempt","source":"daemon","data":{"pid":"<MASK>","phase":"entry"}}
+{"type":"control_plane_tick","source":"daemon","data":{"arm":"pr_watch_merge","scheduler":"launchd:sh.fno.pr-watcher","acted":0,"interval_s":600,"detail":"merge ok candidates=0 granted=0 executed=0 held=0 failed=0 skipped=0 budget=0 read_ms=<MS>"}}
+{"type":"pr_watch_tick","source":"daemon","data":{"open_prs":1,"acted":0,"swept_count":2,"swept":{"o/r":[7,99]},"dropped_count":1,"dropped":{"not_open":{"o/r":[99]}},"normalized_count":0,"normalized":[],"failed_count":0,"failed":[],"sweep_failures":0,"listing_api":"rest","merge_scan":{"completed":true,"scanned":0}}}
+{"type":"control_plane_tick","source":"daemon","data":{"arm":"pr_watch_sweep","scheduler":"launchd:sh.fno.pr-watcher","acted":0,"interval_s":600,"detail":"open_prs=1 acted=0 skipped=0"}}
+{"type":"control_plane_tick","source":"daemon","data":{"arm":"notify_watch","scheduler":"launchd:sh.fno.pr-watcher","acted":0,"interval_s":600,"skip_reason":"notify_off","detail":"[notify] signals empty"}}
+{"type":"control_plane_tick","source":"daemon","data":{"arm":"heal","scheduler":"launchd:sh.fno.pr-watcher","acted":0,"interval_s":600,"skip_reason":"unarmed","detail":"auto_heal gate: unarmed"}}
+{"type":"control_plane_tick","source":"daemon","data":{"arm":"evals","scheduler":"launchd:sh.fno.pr-watcher","acted":0,"interval_s":0,"skip_reason":"evals_off","detail":"evals.schedule_days 0"}}
+{"type":"pr_watch_tick_end","source":"daemon","data":{"outcome":"ok","duration_s":"<MASK>","phase":"<MASK>","pid":"<MASK>","phase_s":"<MASK>","saturated":[],"sweep_failures":0}}

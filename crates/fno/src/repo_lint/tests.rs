@@ -143,10 +143,12 @@ fn plan_filenames_flags_a_filename_that_disagrees_with_its_claim() {
     let dir = fixture("plan-filenames");
     write(
         &dir,
-        "internal/fno/plan-x-aaaa.md",
+        "plans/plan-x-aaaa.md",
         "---\nnode: x-bbbb\n---\nbody\n",
     );
-    let scan = plan_filenames::scan(&dir);
+    let plans_dir = dir.join("plans");
+    let prefixes = ["x".to_string(), "ab".to_string()].into_iter().collect();
+    let scan = plan_filenames::scan_dir(&plans_dir, &dir, &prefixes);
     match scan {
         plan_filenames::Scan::Mismatched(rows) => {
             assert_eq!(rows.len(), 1, "{rows:?}");

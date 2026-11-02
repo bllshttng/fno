@@ -600,10 +600,8 @@ K4	crates/fno-agents/src/provider_key.rs	rs	3
 K4	crates/fno-agents/src/team_identity.rs	rs	7
 K4	crates/fno-agents/src/zcode.rs	rs	6
 K4	crates/fno-agents/src/zcode_ask.rs	rs	2
-K4	crates/fno-agents/tests/claude_ask_parity.rs	rs	4
 K4	crates/fno-agents/tests/claude_bg_create.rs	rs	8
 K4	crates/fno-agents/tests/claude_supervisor_birth.rs	rs	5
-K4	crates/fno-agents/tests/codex_ask_parity.rs	rs	5
 K4	crates/fno-agents/tests/codex_ask_sigint.rs	rs	2
 K4	crates/fno-agents/tests/codex_ask_unit.rs	rs	41
 K4	crates/fno-agents/tests/codex_config_survival.rs	rs	3

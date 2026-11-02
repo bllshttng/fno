@@ -81,10 +81,3 @@ def pytest_sessionfinish(session, exitstatus) -> None:  # noqa: ANN001
         binary = shutil.which("fno-agents")
     if binary is not None:
         subprocess.run([binary, "test-run", "sweep", "15.0"], check=False)
-
-
-@pytest.fixture(autouse=True)
-def _in_memory_hold_verdict(tmp_path, monkeypatch):
-    from fno.tests.hold_verdict_adapter import install
-
-    install(tmp_path, monkeypatch)

@@ -76,6 +76,8 @@ crossing	crates/fno-agents/src/post_merge/ritual.rs	let mut cmd = Command::new(c
 crossing	crates/fno-agents/src/pr_admission.rs	let out = std::process::Command::new(crate::scrape::fno_bin())
 crossing	crates/fno-agents/src/pr_base_check.rs	let _ = Command::new(crate::scrape::fno_bin())
 crossing	crates/fno-agents/src/pr_status/reviews.rs	let out = std::process::Command::new(crate::scrape::fno_bin())
+crossing	crates/fno-agents/src/pr_watch/dispatch.rs	crate::scrape::fno_bin().to_string_lossy().into_owned(),
+crossing	crates/fno-agents/src/pr_watch/tick.rs	let program = crate::scrape::fno_bin();
 crossing	crates/fno-agents/src/prove_it_verdicts.rs	let mut cmd = Command::new(crate::scrape::fno_bin());
 crossing	crates/fno-agents/src/provider.rs	let out = match std::process::Command::new(crate::scrape::fno_bin())
 crossing	crates/fno-agents/src/provider_cap_commands.rs	let fno = crate::scrape::fno_bin();
@@ -101,7 +103,6 @@ crossing	crates/fno-agents/src/spawn_gate_lanes.rs	Command::new(crate::scrape::f
 crossing	crates/fno-agents/src/spawn_gate_lanes.rs	let mut cmd = Command::new(crate::scrape::fno_bin());
 crossing	crates/fno-agents/src/stale_lane.rs	let out = std::process::Command::new(crate::scrape::fno_bin())
 crossing	crates/fno-agents/src/target_start.rs	let mut ensure_cmd = Command::new("fno");
-crossing	crates/fno-agents/src/team_alarm.rs	let fno = crate::scrape::fno_bin();
 crossing	crates/fno-agents/src/watchdog/apply.rs	let mut command = Command::new(crate::scrape::fno_bin());
 crossing	crates/fno-agents/src/watchdog/outage.rs	let mut command = std::process::Command::new(crate::scrape::fno_bin());
 crossing	crates/fno-agents/src/watchdog/sweep.rs	let mut command = std::process::Command::new(crate::scrape::fno_bin());

@@ -1,7 +1,7 @@
 """Unit tests for `fno do plan stamp`, `graduate`, and `set-expected`.
 
 The wrappers are clients of the keeper-served plan-doc writer (via
-``fno.graph.store``): args reach the writer unchanged and its exit code
+``fno.plan._project``): args reach the writer unchanged and its exit code
 propagates.
 """
 from __future__ import annotations
@@ -62,7 +62,7 @@ def test_plan_validate_execution_refuses_post_gate_no_difficulty(tmp_path):
 
 def _stub_plan_docs(monkeypatch, exit_code=0):
     """Capture what the command hands the keeper client, without a keeper."""
-    import fno.graph.store as project_client
+    import fno.plan._project as project_client
 
     captured: list = []
 
@@ -70,7 +70,7 @@ def _stub_plan_docs(monkeypatch, exit_code=0):
         captured.append((op, params))
         return {"exit": exit_code}
 
-    monkeypatch.setattr(project_client, "plan_docs_request", _stub)
+    monkeypatch.setattr(project_client, "plan_docs", _stub)
     return captured
 
 

@@ -48,7 +48,7 @@ button, select, input { font: inherit; }
 .controls input[type=checkbox] { accent-color: var(--text); min-height: 0; }
 .controls kbd { margin-left: 4px; }
 kbd { font: inherit; font-size: 10.5px; color: var(--overlay1); border: 1px solid var(--surface1); padding: 1px 5px; line-height: 14px; white-space: nowrap; }
-.copybtn { font-size: 10px; cursor: pointer; flex: 0 0 auto; background: var(--base); color: var(--subtext0); border: 1px solid var(--surface1); border-radius: 0; padding: 2px 7px; min-height: 22px; }
+.copybtn { font-size: 10px; cursor: pointer; flex: 0 0 auto; background: var(--base); color: var(--subtext0); border: 1px solid var(--surface1); border-radius: 0; padding: 2px 7px; min-height: 22px; margin: 0 6px; }
 .copybtn:hover { color: var(--text); border-color: var(--text); }
 #toast { position: fixed; left: 50%; bottom: 30px; transform: translateX(-50%); background: var(--text); color: var(--base); padding: 6px 14px; font-size: 12px; z-index: 1500; opacity: 0; transition: opacity .15s; pointer-events: none; }
 #toast.show { opacity: 1; }

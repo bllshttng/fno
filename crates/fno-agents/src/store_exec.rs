@@ -156,7 +156,7 @@ pub(crate) fn handle_keeper_scan(
 /// which wedges under the test sandbox. The resident trigger's remaining
 /// job (native mux writes rendering the views) rides with the resident
 /// keeper itself.
-fn exec_reply(cfg: &ExecConfig, payload: &[u8]) -> Value {
+pub(crate) fn exec_reply(cfg: &ExecConfig, payload: &[u8]) -> Value {
     if payload.len() > MAX_FRAME_BYTES {
         return err_reply(
             0,

@@ -2130,6 +2130,18 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     "pr_heal_flake",
     "pr_heal_pr",
     "pr_heal_hold",
+    // The pr-watch tick: its attempt bracket, the sweep receipt, one row per
+    // PR verdict, and the durable-grant merge queue (pr_watch/dispatch.rs).
+    "pr_watch_tick_attempt",
+    "pr_watch_tick_end",
+    "pr_watch_tick",
+    "pr_watch_sweep_chunk",
+    "pr_watch_skipped",
+    "pr_watch_parked",
+    "pr_watch_dispatched",
+    "pr_watch_dispatch_failed",
+    "pr_watch_cleanup_failed",
+    "merge_grant_execution",
     // Daemon startup scope declaration: sandbox home vs the operator's
     // shared home. Fleet gating and board routing key off it.
     "daemon_fleet_scope",

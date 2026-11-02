@@ -450,27 +450,21 @@ def _stamp_do_on_acquire(key: str, claim, holder: str) -> None:
         # no claim object (free/stale claim, nothing to stamp yet). Skipping
         # is correct there - there is no row to open.
         return
-    from fno.graph.store import append_session_record
-    from fno.paths import graph_json
+    from fno.rust_binary import open_execute_row
 
     coords = _do_row_coordinates(key, claim, holder, "acquire")
     if coords is None:
         return
     node_id, harness, session_id, started, effort = coords
     try:
-        found, _added = append_session_record(
-            graph_json(), node_id, phase="execute",
-            harness=harness, session_id=session_id,
-            started_at=started, effort=effort,
-        )
+        found = open_execute_row(node_id, harness, session_id, started, effort)
     except (Exception, SystemExit) as exc:
         typer.echo(
             f"claim acquire: execute provenance open skipped for {node_id}: {exc}",
             err=True,
         )
         return
-    # append_session_record returns (found=False, added=False) without raising
-    # when the node id is absent from the graph (a superseded node whose claim
+    # A false answer without raising means the node id is absent from the graph (a superseded node whose claim
     # file lingers). The named-skip contract requires an explicit stderr line so
     # the operator knows provenance was not opened, not silently dropped.
     if not found:
@@ -735,7 +729,7 @@ def _node_settlement(reading: Optional[RosterReading] = None):
     def _terminal_ids():
         if "terminal" not in cache:
             try:
-                from fno.graph.api import active_backend_name
+                from fno.rust_binary import active_backend_name, terminal_node_ids
 
                 if active_backend_name() != "graph":
                     # graph.json is not the store under an external tracker
@@ -743,22 +737,7 @@ def _node_settlement(reading: Optional[RosterReading] = None):
                     # wrong answer, and unknown keeps.
                     cache["terminal"] = None
                     return None
-                from fno.graph.statuses import is_terminal_entry
-                from fno.graph import api as graph_api
-                from fno.paths import graph_json
-
-                # is_terminal_entry, not a bare completed_at test: read_graph
-                # does not run the recompute migration, so a legacy
-                # "deferred:<ts>" row still carries deferral inside
-                # completed_at, and deferral is a returnable rung.
-                cache["terminal"] = frozenset(
-                    e.get("id")
-                    for e in (
-                        n.model_dump(by_alias=True)
-                        for n in graph_api.nodes(include_archived=True, path=graph_json()).nodes
-                    )
-                    if is_terminal_entry(e)
-                )
+                cache["terminal"] = terminal_node_ids()
             except Exception:  # noqa: BLE001 - an unreadable graph proves nothing
                 cache["terminal"] = None
         return cache["terminal"]
@@ -1277,7 +1256,7 @@ __all__ = ["cli"]
 
 
 def _normalize_status_key(key: str) -> str:
-    from fno.graph._constants import is_wellformed_node_id
+    from fno.rust_binary import is_wellformed_node_id
 
     return f"node:{key}" if is_wellformed_node_id(key) else key
 

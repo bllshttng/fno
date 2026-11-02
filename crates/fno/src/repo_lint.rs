@@ -27,7 +27,6 @@ use std::process::Command;
 pub const CHECKS: &[&str] = &[
     "command-ratchet",
     "field-coverage",
-    "flock-pattern",
     "hook-tombstones",
     "internal-refs",
     "plan-filenames",
@@ -48,7 +47,6 @@ fn accepts(check: &str, flag: &str) -> bool {
     match check {
         "command-ratchet" | "seam-crossings" => flag == "--update",
         "shellout-drift" => flag == "--no-degrade",
-        "flock-pattern" => flag == "--dispatch-path",
         "provider-stderr-merge" => flag == "--providers-dir",
         "registry" => flag == "--json" || flag == "-J",
         "field-coverage" => flag == "--json" || flag == "-J" || flag == "--live",
@@ -64,7 +62,6 @@ pub struct Invocation {
     pub root: PathBuf,
     pub update: bool,
     pub no_degrade: bool,
-    pub dispatch_path: Option<String>,
     pub providers_dir: Option<String>,
     pub json: bool,
     pub live: bool,
@@ -124,7 +121,6 @@ pub fn parse(args: &[String]) -> Result<Invocation, String> {
         root: repo_root(root_override.as_deref())?,
         update: false,
         no_degrade: false,
-        dispatch_path: None,
         providers_dir: None,
         json: false,
         live: false,
@@ -152,7 +148,6 @@ pub fn parse(args: &[String]) -> Result<Invocation, String> {
         match (canonical, value) {
             ("--update", _) => out.update = true,
             ("--no-degrade", _) => out.no_degrade = true,
-            ("--dispatch-path", v) => out.dispatch_path = v,
             ("--providers-dir", v) => out.providers_dir = v,
             ("--json", _) => out.json = true,
             ("--live", _) => out.live = true,
@@ -175,7 +170,6 @@ pub fn run(args: &[String]) -> i32 {
     match inv.check.as_str() {
         "command-ratchet" => command_ratchet::run(&inv),
         "field-coverage" => forward_registry_family(&inv),
-        "flock-pattern" => flock_pattern(&inv),
         "hook-tombstones" => hook_tombstones(&inv),
         "internal-refs" => run_ci_gate(&inv.root, "scripts/ci/check-no-internal-refs.sh"),
         "plan-filenames" => plan_filenames(&inv),
@@ -262,33 +256,6 @@ fn forward_registry_family(inv: &Invocation) -> ! {
         argv.push("--json".into());
     }
     crate::bootstrap::forward_agents(&argv, &format!("fno doctor lint {}", inv.check))
-}
-
-/// `flock-pattern`: run `scripts/lint-flock-pattern.sh`, optionally narrowed
-/// to one dispatch file. The clone-only refusal names the checkout, like the
-/// Python leg's message.
-fn flock_pattern(inv: &Invocation) -> i32 {
-    let script = inv.root.join("scripts").join("lint-flock-pattern.sh");
-    if !script.is_file() {
-        eprintln!(
-            "fno doctor lint flock-pattern: this command lints the repo's own source and \
-             needs the footnote checkout's lint scripts, which a bare `pip install fno` \
-             does not ship. Run it from a clone (or install the plugin)."
-        );
-        return 2;
-    }
-    let mut cmd = Command::new("bash");
-    cmd.arg(&script);
-    if let Some(path) = &inv.dispatch_path {
-        cmd.arg(path);
-    }
-    match cmd.status() {
-        Ok(status) => status.code().unwrap_or(1),
-        Err(e) => {
-            eprintln!("failed to run gate script: {e}");
-            2
-        }
-    }
 }
 
 /// `spawn-paths`: reject new single-line hand-assembled Claude/Codex session
@@ -676,6 +643,25 @@ pub mod plan_filenames {
                 std::process::exit(1);
             }
         };
+        let prefixes = door_prefixes();
+        scan_dir(&plans_dir, root, &prefixes)
+    }
+
+    /// The filename-prefix allowlist: the configured node prefix plus the
+    /// legacy `ab`, exactly the set the Python leg passed as
+    /// `{LEGACY_PREFIX, node_id_prefix()}`.
+    fn door_prefixes() -> std::collections::BTreeSet<String> {
+        let mut set = std::collections::BTreeSet::new();
+        set.insert(super::door_node_prefix());
+        set.insert("ab".to_string());
+        set
+    }
+
+    pub fn scan_dir(
+        plans_dir: &Path,
+        root: &Path,
+        prefixes: &std::collections::BTreeSet<String>,
+    ) -> Scan {
         if !plans_dir.is_dir() {
             eprintln!(
                 "plan-filenames: plans dir not found: {}",
@@ -686,11 +672,11 @@ pub mod plan_filenames {
         let wellformed =
             regex::Regex::new(r"^[a-z][a-z0-9]{0,7}-?[0-9a-f]{4,8}$").expect("static regex");
         let filename_node =
-            regex::Regex::new(r"-(?P<prefix>[a-z][a-z0-9]{0,6})-(?P<hex>[0-9a-f]{4,8})\.md$")
+            regex::Regex::new(r"-(?P<prefix>[a-z][a-z0-9]{0,7})-(?P<hex>[0-9a-f]{4,8})\.md$")
                 .expect("static regex");
         let mut mismatches: Vec<Mismatch> = Vec::new();
         let mut plans: Vec<PathBuf> = Vec::new();
-        let mut stack = vec![plans_dir.clone()];
+        let mut stack = vec![plans_dir.to_path_buf()];
         while let Some(dir) = stack.pop() {
             let entries = match std::fs::read_dir(&dir) {
                 Ok(entries) => entries,
@@ -716,7 +702,11 @@ pub mod plan_filenames {
             let Some(caps) = filename_node.captures(&base) else {
                 continue;
             };
-            let filename_node_id = format!("{}-{}", &caps["prefix"], &caps["hex"]);
+            let prefix = caps["prefix"].to_string();
+            if !prefixes.contains(&prefix) {
+                continue;
+            }
+            let filename_node_id = format!("{}-{}", prefix, &caps["hex"]);
             let body = match std::fs::read_to_string(&path) {
                 Ok(body) => body,
                 Err(_) => continue,
@@ -724,13 +714,11 @@ pub mod plan_filenames {
             let claims = frontmatter_claims(&body, &wellformed);
             if claims.len() == 1 && !claims.contains(&filename_node_id) {
                 let claim = claims.into_iter().next().expect("len 1");
-                let rel = path
-                    .strip_prefix(root)
-                    .unwrap_or(&path)
-                    .to_string_lossy()
-                    .replace('\\', "/");
+                // The Python leg printed the rglob path as it walked it, so
+                // the row shows the resolved plans dir's own spelling.
+                let shown = path.to_string_lossy().replace('\\', "/");
                 mismatches.push(Mismatch {
-                    line: format!("{rel}: filename names {filename_node_id}, claims {claim}"),
+                    line: format!("{shown}: filename names {filename_node_id}, claims {claim}"),
                 });
             }
         }
@@ -797,16 +785,59 @@ pub mod plan_filenames {
     }
 }
 
-/// The plans content dir this check scans, from the `fno.plan path` anchor:
-/// `$FNO_PLANS_DIR`, then the vault (`internal/fno/`) at the repo root. The
-/// Python leg read `fno.paths.plans_content_dir()`; the vault layout is the
-/// one layout this checkout has.
+/// The plans content dir this check scans: `$FNO_PLANS_DIR`, then the sibling
+/// door that owns the chain (`fno-agents state path plan-dir`, the same door
+/// the Python leg's `plans_content_dir()` resolved through), then the vault
+/// plans dir as the offline fallback.
 pub fn plans_content_dir_from(root: &Path) -> Option<PathBuf> {
     if let Some(dir) = std::env::var_os("FNO_PLANS_DIR").filter(|v| !v.is_empty()) {
         return Some(PathBuf::from(dir));
     }
-    let vault = root.join("internal").join("fno");
+    if let Some(dir) = door_path(&["state", "path", "plan-dir"], root) {
+        return Some(dir);
+    }
+    let vault = root.join("internal").join("fno").join("plans");
     vault.is_dir().then_some(vault)
+}
+
+/// The configured node-id prefix, rstripped of its dash, from the sibling
+/// settings door; the legacy `ab` fallback matches the deleted
+/// `fno.graph._constants.node_id_prefix` fail-open.
+fn door_node_prefix() -> String {
+    door_fact(&["state", "path", "settings-read"])
+        .and_then(|out| {
+            serde_json::from_str::<serde_json::Value>(&out)
+                .ok()?
+                .get("prefix")?
+                .as_str()
+                .map(str::to_string)
+        })
+        .map(|p| p.trim_end_matches('-').to_string())
+        .unwrap_or_else(|| "ab".to_string())
+}
+
+/// One stdout fact from the sibling fno-agents binary; None when the sibling
+/// is missing or the door fails.
+fn door_fact<I, S>(args: I) -> Option<String>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<std::ffi::OsStr>,
+{
+    let bin = crate::digest_overlay::fno_agents_bin();
+    let out = Command::new(bin).args(args).output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+fn door_path(args: &[&str], root: &Path) -> Option<PathBuf> {
+    let mut argv: Vec<std::ffi::OsString> = args.iter().map(std::ffi::OsString::from).collect();
+    argv.push(root.as_os_str().to_os_string());
+    door_fact(argv)
+        .filter(|p| !p.is_empty())
+        .map(PathBuf::from)
+        .filter(|p| p.is_dir())
 }
 
 #[cfg(test)]

@@ -65,7 +65,6 @@ pub(super) const STRUCTURAL_STEPS: &[(&str, &str, &str)] = &[
     ("Marketplace-readiness lint (no Skill calls, no path escapes, fno declared)", ".", "bash scripts/lint/no-cross-skill-runtime-calls.sh"),
     ("No unwrapped lib scripts", ".", "bash scripts/lint/no-unwrapped-lib-scripts.sh"),
     ("pin-skill generator self-test", ".", "bash tests/test-pin-skill.sh"),
-    ("Agent flock-pattern lint", ".", "crates/fno/target/debug/fno doctor lint flock-pattern"),
     ("Provider stderr-merge lint", ".", "crates/fno/target/debug/fno doctor lint provider-stderr-merge"),
     ("Repo-root shell-out drift guard (clone-only allowlist)", ".", "crates/fno/target/debug/fno doctor lint shellout-drift"),
     ("Spawn-shape lint (single-line argv guard)", ".", "crates/fno/target/debug/fno doctor lint spawn-paths"),

@@ -2,8 +2,7 @@
 // newest render. Form values, pressed chips, expanded sections and the scroll
 // position survive the reload through sessionStorage. The renderer stamps the
 // interval in seconds on data-fno-reload; 0, or a value that is not a number,
-// turns the reload off. build.rs copies this file to
-// cli/src/fno/graph/page_reload.js for the Python board renderer.
+// turns the reload off.
 (function () {
   var tag = document.currentScript;
   var secs = Number(tag && tag.dataset.fnoReload);

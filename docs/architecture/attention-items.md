@@ -205,6 +205,16 @@ Every path requires a bearer token that matches a configured sink's `token_env` 
 
 An accepted answer appends the same `attention_answer` row the arm writes. The authority stays `sink`. The idempotency key and any Tailscale Serve identity header ride the row as provenance. The endpoint then runs the same `fno inbox outstanding clear` the mux overlay runs. First answer wins. A retry under the same `idempotency_key` replays the receipt and lands no second row. A different key lands a superseded marker that changes nothing. When a clear fails, the row stays durable. The question then needs a terminal close, and the arm retries its own lane.
 
+## The command page answer
+
+The question drawer on `/command` answers in place. `POST /command/answer/{id}?t=<token>` takes one of `{"option": n}`, `{"words": "..."}` or `{"done": true}`. A page cannot delegate: that key is refused. The route never writes a row itself. It starts the same door the mux uses, `fno-agents needs --answer <id> --sink command_page --email <login>`, so the writer stays `append_answer_row` and first answer wins.
+
+The row carries `sink: command_page`, `authority: sink`, `email`, `person` and `machine_id`. An invite has no name beyond the login, so `person` is the login. The reply ladder reads every unsuperseded row whatever its sink, so the arm clears the question and delivers on its next beat.
+
+The refusals come in this order, and none starts a process. A bridge not bound to loopback gets 403. A bad token gets 401. An Origin that differs from Host gets 403. A bad body gets 400, an unknown question 404, and a failed invite check 403. The door refuses the rest with exit 2, and the route returns that line with 409. A second click on an answered question gets that 409, because the question is no longer open. It lands no second row.
+
+Identity comes from `Tailscale-User-Login` and counts only on a loopback bind behind `tailscale serve`. On a wide bind any client can send the header, so the bridge treats a wide bind as having no identity. `[[web.invites]]` rows in config.toml (`email`, `scope`, `role`) name who can do what. Roles rank viewer, commenter, editor, owner. Answering needs editor. A scope is `*` or a node id, and a node id covers that node and every node under it. When the list is set, a layer on the router checks every route for at least viewer. With no list, reads keep the token rule, the user on the local machine still answers, and a tailnet answer gets 403 naming `web.invites`.
+
 ## The ntfy and webhook sinks
 
 Sinks are `[[attention.sinks]]` rows in config.toml, read by the arm's beat beside the pages. An ntfy row carries `name`, `type = "ntfy"`, `url`, `topic`, `token_env`, and optionally `answer_base_url` and `body`. The `url` is the server root. The body mode is `"title-only"` by default, because anyone who knows a public topic reads it. `"full"` adds the recommendation and the downside. A webhook row carries the same shape with `type = "webhook"` and the adapter's URL.
