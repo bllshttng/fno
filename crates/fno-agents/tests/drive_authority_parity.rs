@@ -236,9 +236,20 @@ print(json.dumps({'active': bool(s), 'sessions': s}))
         .unwrap_or_else(|e| {
             panic!("capture needs the Python leg's interpreter (FNO_PYTHON or python3): {e}")
         });
+    if !out.status.success() {
+        panic!(
+            "capture: the Python leg failed to run: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    // The frozen exit is the binary's contract derived from the OLD leg's
+    // answer: 0 when a window is active, else 1. The interpreter's own status
+    // says nothing about that contract.
+    let text = String::from_utf8_lossy(&out.stdout).into_owned();
+    let active = text.contains("\"active\": true");
     Golden {
-        exit: Some(if out.status.success() { 0 } else { 1 }),
-        streams: vec![String::from_utf8_lossy(&out.stdout).into_owned()],
+        exit: Some(if active { 0 } else { 1 }),
+        streams: vec![text],
     }
 }
 

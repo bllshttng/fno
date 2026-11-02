@@ -304,22 +304,19 @@ def test_queue_batch_is_atomic_on_unknown_id(tmp_graph):
 def test_done_audit_tags_operator_when_driving(tmp_graph, tmp_path, monkeypatch):
     """cv-9def52a7: `done` during a drive window emits backlog_done_operator_initiated.
 
-    The wheel tail reads the binary's `drive-authority` door (exit 0 = an open
-    window anywhere on the machine), so the test stubs the binary and captures
-    the append at the store client."""
-    from pathlib import Path as _Path
-
-    from fno import rust_binary
+    The wheel tail runs the real binary's `drive-authority` door, so the test
+    pins an agents home holding an open window via FNO_AGENTS_HOME (the door's
+    only home input) and captures the append at the store client. Nothing else
+    in the done path resolves the binary differently, so no resolver patching."""
     from fno.events import store_client
 
-    stub = tmp_path / "stub-fno-agents"
-    stub.write_text(
-        "#!/bin/sh\n"
-        "echo '{\"active\": true, \"sessions\": [{\"short_id\": \"s\", "
-        "\"session_id\": null, \"mode\": \"interactive\"}]}'\n"
+    home = tmp_path / "agents"
+    (home / "ag1").mkdir(parents=True)
+    (home / "ag1" / "state.json").write_text(
+        '{"short_id": "ag1", "pty": {"drive_active": true, '
+        '"drive_mode": "interactive", "drive_session_id": "sess-1"}}'
     )
-    stub.chmod(0o755)
-    monkeypatch.setattr(rust_binary, "resolve_binary", lambda: _Path(stub))
+    monkeypatch.setenv("FNO_AGENTS_HOME", str(home))
 
     events: list = []
     monkeypatch.setattr(store_client, "append_event", lambda event, **kw: events.append(event))
@@ -333,12 +330,10 @@ def test_done_audit_tags_operator_when_driving(tmp_graph, tmp_path, monkeypatch)
     assert event["data"]["action_type"] == "backlog_done_operator_initiated"
     assert event["data"]["task_id"] == nid
 
-    # No window (exit 1) emits nothing.
-    stub.write_text(
-        "#!/bin/sh\n"
-        "echo '{\"active\": false, \"sessions\": []}'\n"
-        "exit 1\n"
-    )
+    # No window (an empty agents home, exit 1) emits nothing.
+    empty = tmp_path / "agents-empty"
+    empty.mkdir()
+    monkeypatch.setenv("FNO_AGENTS_HOME", str(empty))
     quiet = json.loads(_native_command("add", "DriveQuiet").output)["id"]
     _invoke("backlog", "done", quiet, "--note", "quiet fixture")
     assert len(events) == 1
