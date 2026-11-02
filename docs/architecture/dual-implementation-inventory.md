@@ -46,7 +46,6 @@ Measured by reading each file's header, then testing whether its oracle still ex
 
 | Parity file | Oracle | On disk | Verdict |
 |---|---|---|---|
-| `crates/fno-agents/tests/claude_ask_parity.rs` | `fno.agents.harnesses.claude._build_envelope` | absent (symbol) | characterization, port complete |
 | `crates/fno-agents/tests/codex_ask_parity.rs` | `fno.agents.harnesses.codex.resume` | absent (symbol) | characterization, port complete |
 | `crates/fno-agents/tests/graph_store_parity.rs` | `fno.graph.store._acquire_flock` | absent (symbol) | characterization, port complete |
 | `crates/fno-agents/tests/kill_criteria_parity.rs` | `scripts/lib/kill-criteria.sh` | absent | characterization, port complete |
@@ -239,7 +238,7 @@ CLOSED (2026-09-14, operator ruling). The pair is now single. The keystroke's le
 
 **fno doctor update is Rust only (`crates/fno/src/doctor_update.rs`).** The Python leg retired 2026-10-02. `cli/src/fno/update.py` (1687 lines) answered `fno doctor update` and root `fno update`. The front door now claims both spellings lexically and runs the command native. doctor.py reads the machine facts the native `--check` payload (`probes`) reports, and `--fix` delegates to one `fno doctor update` subprocess. arm_repair's install arm runs the front door. A Python-only install with no front door can no longer self-update. postinstall.sh names the cargo command for that shape.
 
-**The ask adapters.** `fno.agents.harnesses.claude` and `fno.agents.harnesses.codex`, pinned by the two differential harnesses until their port completed (2026-09-02). The Rust runtime already owned production `ask` end to end. The port deleted the Python ask functions. The last Python-only caller duty, `--to-project` anycast resolution, then moved into the client too. It resolves the one live peer through the `mail send` resolver, peer hint included. The surviving Python surface is spawn substrate, not ask: `parse_short_id` for bg receipts, the registry reply readers, and `codex.create` for one-shot spawns.
+**The ask adapters.** RETIRED. The Python `fno.agents.harnesses` ask functions had no production caller and are deleted, with the two differential harnesses that pinned them. Rust owns ask: `crates/fno-agents/src/claude_ask.rs` and `crates/fno-agents/src/codex_ask.rs`.
 
 **node_seed.rs** is NOT a dual. It takes the lifecycle table's answer as projected input, so the ported table stays the one table. The lifecycle command table and the doc-kind classifier live once in `backlog_ready.rs` (`effective_command` / `is_blueprint_doc`), served over the keeper's `effective_command` command. The Python leg (`harness_map.resolve_effective_command` and its constant maps) is deleted. `node_dispatch` is a keeper client (`store.request_effective_command`) and carries no decision of its own. It takes the seed slot from `_seed_slot`, so the argv scan is not copied either. The Rust side decides pass/profile/compose/refuse over facts Python already owns.
 

@@ -10,18 +10,6 @@ rows, which the four-axis ruling deliberately leaves in place. Renaming the
 package fixed the container; the field is a separate, ruled-out surface.
 """
 
-# Harnesses Python can DISPATCH (select_provider + availability checks).
-# THE dispatch gate: enforced only at the spawn/ask seam (dispatch.py
-# _check_known_provider, spawn_defaults, mux_spawn), never at registry LOAD --
-# the load gate is a shape check now, so an alien harness reads fine and is
-# refused only where a dispatchable provider is actually required.
-KNOWN_PROVIDERS: tuple[str, ...]  # annotation only; __getattr__ serves it
-
-# Harnesses the thread/headless spawn seam accepts: the roster's spawn set.
-SPAWN_HARNESSES: tuple[str, ...]  # annotation only; __getattr__ serves it
-
-READABLE_PROVIDERS: tuple[str, ...]  # annotation only; __getattr__ serves it
-
 
 def __getattr__(name: str) -> tuple[str, ...]:
     """PEP 562: the roster-backed names resolve on first access, never at import."""

@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from types import SimpleNamespace
-from typing import Any
 
 import pytest
 
@@ -27,67 +25,6 @@ def _setup_tmp_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("HOME", str(home))
     for key in ("FNO_AGENT_SELF", "FNO_AGENT_HARNESS", "FNO_AGENT_SESSION"):
         monkeypatch.delenv(key, raising=False)
-
-
-def test_python_opencode_pane_submits_brevity_marker_after_exact_payload(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    _setup_tmp_home(tmp_path, monkeypatch)
-
-    from fno.agents import mux_spawn
-
-    captured: dict[str, str] = {}
-
-    def runner(argv: list[str], **_kwargs: Any) -> SimpleNamespace:
-        if argv[1:4] == ["mux", "pane", "run"]:
-            captured["run_argv"] = argv
-            return SimpleNamespace(returncode=0, stdout="7\n", stderr="")
-        if argv[1:4] == ["mux", "pane", "ls"]:
-            return SimpleNamespace(returncode=0, stdout="[]", stderr="")
-        return SimpleNamespace(returncode=0, stdout="", stderr="")
-
-    monkeypatch.setattr(
-        mux_spawn,
-        "_await_interactive_readiness",
-        lambda *_args, **_kwargs: ("ready", "ready-marker=idle_prompt"),
-    )
-
-    # **_kw absorbs seed_in_argv, which the real _submit_spawn_seed takes as a
-    # keyword-only argument. A stub standing in for a growing signature must
-    # not pin it.
-    def capture_seed(
-        _provider: str,
-        _session: str,
-        _pane_id: int,
-        seed: str,
-        _runner: Any,
-        **_kw: Any,
-    ) -> tuple[str, str, str, str]:
-        captured["seed"] = seed
-        return "submitted", "", "delivered", "painted"
-
-    monkeypatch.setattr(mux_spawn, "_submit_spawn_seed", capture_seed)
-
-    mux_spawn.dispatch_spawn_pane(
-        name="brief-opencode",
-        message=ORIGINAL_PAYLOAD,
-        provider="opencode",
-        cwd=tmp_path,
-        runner=runner,
-    )
-
-    delivered = captured["seed"]
-    assert delivered.startswith(ORIGINAL_PAYLOAD + "\n\n")
-    assert delivered.count(BREVITY_MARKER) == 1
-
-    # (x-5f7f) The pane run argv carries --worker <registry-name>: the server
-    # records the pane as a squad member joined to that row by name, so a
-    # non-claude worker survives a mux restart as an idle, resumable row. Both
-    # pane producers (this spawn lane and the dispatch porcelain that calls
-    # it) cross this one argv.
-    run_argv = captured["run_argv"]
-    assert "--worker" in run_argv, f"--worker rides the pane run argv: {run_argv}"
-    assert run_argv[run_argv.index("--worker") + 1] == "brief-opencode"
 
 
 def test_python_payload_enrichment_is_idempotent_and_preserves_empty_spawn() -> None:

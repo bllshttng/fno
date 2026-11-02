@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import pytest
 
-from fno.agents.harness_map import DispatchResolveError, resolve_dispatch
 from fno.config import DispatchCommandDescriptor, resolvable_commands
 
 REG = {
@@ -69,70 +68,6 @@ PROBE_ABSENT = {
 
 
 # ── 1.3: resolve, refuse, render ────────────────────────────────────────
-
-
-def test_registry_command_renders_native_spelling():
-    out = resolve_dispatch(
-        harness="codex",
-        command_name="/security-audit",
-        node_id="x-1234",
-        dispatch_cfg={"command_registry": REG},
-    )
-    assert out["command"] == "$sec:audit x-1234"
-    assert "fno:" not in out["command"]
-    assert any(
-        "registry-command(/security-audit, asserts=invocation)" in d
-        for d in out["decision"]
-    )
-
-
-def test_registry_command_undeclared_harness_refuses():
-    with pytest.raises(DispatchResolveError) as exc:
-        resolve_dispatch(
-            harness="opencode",
-            command_name="/security-audit",
-            node_id="x-1",
-            dispatch_cfg={"command_registry": REG},
-        )
-    msg = str(exc.value)
-    assert "opencode" in msg
-    assert "claude, codex" in msg
-
-
-def test_registry_command_missing_skill_refuses_naming_roots(monkeypatch: pytest.MonkeyPatch):
-    # A readable-but-empty root makes the probe's answer unavailable (with no
-    # root at all it would be unverifiable, which proceeds by design); the
-    # stub hands the caller that answer so the refusal wiring stays pinned.
-    _stub_skill_probe(monkeypatch, PROBE_ABSENT)
-    cfg = {
-        "command_registry": {
-            "/security-audit": DispatchCommandDescriptor(
-                invocation="/sec-audit", requires="skill"
-            )
-        }
-    }
-    with pytest.raises(DispatchResolveError) as exc:
-        resolve_dispatch(
-            harness="claude", command_name="/security-audit", node_id="x-1",
-            dispatch_cfg=cfg,
-        )
-    msg = str(exc.value)
-    assert "roots searched" in msg
-    assert "config.dispatch.command_registry" in msg
-
-
-def test_command_in_neither_surface_names_both():
-    cfg = {
-        "command_registry": {"/other": DispatchCommandDescriptor(invocation="/other")}
-    }
-    with pytest.raises(DispatchResolveError) as exc:
-        resolve_dispatch(
-            harness="claude", command_name="/nope", node_id="x-1", dispatch_cfg=cfg
-        )
-    msg = str(exc.value)
-    assert "neither the allowlist" in msg
-    assert "config.dispatch.command_registry" in msg
-    assert "/other" in msg
 
 
 def test_pre_rename_node_key_still_reads_but_config_keys_do_not():

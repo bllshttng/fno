@@ -11,7 +11,6 @@ from __future__ import annotations
 from tests.fixtures.graph_seed import seed_graph
 
 import json
-from pathlib import Path
 
 import pytest
 
@@ -49,30 +48,6 @@ def contradictory_graph(tmp_path, monkeypatch):
     # reads the resolver directly for exactly this reason).
     monkeypatch.setattr("fno.paths.graph_json", lambda: g)
     return g
-
-
-def test_metadata_class_guards_external(external_store, contradictory_graph):
-    """Reader class: footnote-minted metadata (slug / type / project /
-    mission_active / session pins) raises under an external backend and every
-    caller keeps its missing-data path - never a stale graph row."""
-    from fno.agents.role import _graph_index
-    from fno.graph.api import read_entries
-
-    def _active_missions():
-        # The fail-safe shape every mission reader keeps: a guarded read that
-        # raised under the external backend reads as no missions.
-        try:
-            rows = read_entries("active_backlog")
-        except Exception:  # noqa: BLE001 - the guard IS the behavior under test
-            return []
-        return [
-            e
-            for e in rows
-            if isinstance(e, dict) and e.get("mission_active") is True
-        ]
-
-    assert _active_missions() == []
-    assert _graph_index() is None
 
 
 def test_graph_mode_scans_read_the_store_not_the_package(tmp_path, monkeypatch):

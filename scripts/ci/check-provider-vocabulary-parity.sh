@@ -12,7 +12,6 @@ ADOPT_IDENTITY_RUST="$ROOT/crates/fno-agents/src/adopt_identity.rs"
 CODEX_RUST="$ROOT/crates/fno-agents/src/codex_ask.rs"
 RUST_GATE="$ROOT/crates/fno-agents/src/spawn_gate.rs"
 OVERLAY_RUST="$ROOT/crates/fno-agents/src/spawn_overlay.rs"
-PYTHON_GATE="$ROOT/cli/src/fno/agents/spawn_gate.py"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -23,13 +22,12 @@ while [[ $# -gt 0 ]]; do
     --codex-rust) CODEX_RUST="$2"; shift 2 ;;
     --rust-gate) RUST_GATE="$2"; shift 2 ;;
     --overlay-rust) OVERLAY_RUST="$2"; shift 2 ;;
-    --python-gate) PYTHON_GATE="$2"; shift 2 ;;
     -h|--help) sed -n '1,12p' "$0"; exit 0 ;;
     *) echo "ERROR: unknown argument: $1" >&2; exit 2 ;;
   esac
 done
 
-for file in "$CLAUDE_RUST" "$ADOPT_RUST" "$CLIENT_RUST" "$ADOPT_IDENTITY_RUST" "$CODEX_RUST" "$RUST_GATE" "$OVERLAY_RUST" "$PYTHON_GATE"; do
+for file in "$CLAUDE_RUST" "$ADOPT_RUST" "$CLIENT_RUST" "$ADOPT_IDENTITY_RUST" "$CODEX_RUST" "$RUST_GATE" "$OVERLAY_RUST"; do
   if [[ ! -f "$file" ]]; then
     echo "ERROR: provider vocabulary source not found: $file" >&2
     exit 1
@@ -71,7 +69,6 @@ rust_unrouted=$(extract_constant "$RUST_GATE" 'const[[:space:]]+KNOWN_UNROUTED_P
 # from the lane table in a different file.
 overlay_claude=$(extract_rust_lane_vendor "$OVERLAY_RUST" claude)
 overlay_codex=$(extract_rust_lane_vendor "$OVERLAY_RUST" codex)
-python_unrouted=$(extract_constant "$PYTHON_GATE" '_KNOWN_UNROUTED_PROVIDER')
 
 failed=0
 require_value() {
@@ -108,7 +105,6 @@ fi
 require_value 'Rust unrouted sentinel' "$rust_unrouted"
 require_value 'Rust lane table claude vendor' "$overlay_claude"
 require_value 'Rust lane table codex vendor' "$overlay_codex"
-require_value 'Python unrouted sentinel' "$python_unrouted"
 
 compare() {
   local left_label="$1" left="$2" right_label="$3" right="$4"
@@ -123,10 +119,9 @@ compare 'Rust Claude spawn' "$rust_claude" 'Rust lane table claude vendor' "$ove
 # match at adopt), not against the claude default: adoption observes no route,
 # so no vendor literal may stand in for one.
 compare 'Rust Codex create' "$rust_codex" 'Rust lane table codex vendor' "$overlay_codex"
-compare 'Rust unrouted claim' "$rust_unrouted" 'Python unrouted claim reader' "$python_unrouted"
 
 if [[ "$failed" -ne 0 ]]; then
   exit 1
 fi
 
-echo "provider vocabulary parity OK: claude=$overlay_claude codex=$overlay_codex unrouted=$python_unrouted"
+echo "provider vocabulary parity OK: claude=$overlay_claude codex=$overlay_codex unrouted=$rust_unrouted"

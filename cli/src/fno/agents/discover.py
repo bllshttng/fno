@@ -20,15 +20,12 @@ a 7000+ entry directory.
 
 from __future__ import annotations
 
-import datetime as _dt
 import json
 import os
 import re
-import stat
 import subprocess
 import sys
 import time
-import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable, Iterator, Optional
@@ -329,259 +326,6 @@ def _safe_rollout_mtime(path: Path) -> float:
         return path.stat().st_mtime
     except OSError:
         return 0.0
-
-
-@dataclass(frozen=True)
-class RecoverableCodexRollout:
-    """One recent Codex rollout absent from the canonical registry snapshot."""
-
-    session_id: str
-    cwd: str
-    rollout_path: Path
-    mtime: float
-    transcript_usable: bool = False
-    last_event_at: Optional[str] = None
-    last_turn_marker: Optional[str] = None
-    unusable_reason: Optional[str] = None
-
-
-@dataclass(frozen=True)
-class CodexRecoveryScan:
-    """Strict recovery candidates plus evidence that the scan covered its inputs."""
-
-    recoverable: tuple[RecoverableCodexRollout, ...]
-    complete: bool
-    scanned_count: int
-    malformed_count: int
-    unreadable_count: int
-    failures: tuple[str, ...]
-
-    @property
-    def usable_recoverable(self) -> tuple[RecoverableCodexRollout, ...]:
-        return tuple(row for row in self.recoverable if row.transcript_usable)
-
-    @property
-    def usable_recoverable_count(self) -> int:
-        return len(self.usable_recoverable)
-
-
-def _is_canonical_full_uuid(value: str) -> bool:
-    try:
-        return str(uuid.UUID(value)) == value
-    except (ValueError, AttributeError):
-        return False
-
-
-def _codex_rollout_usability(
-    rollout_path: Path,
-    *,
-    session_id: str,
-    cwd: str,
-    sessions_dir: Path,
-) -> tuple[bool, Optional[str], Optional[str], Optional[str]]:
-    from fno.agents.peek import recent_records
-
-    try:
-        records = recent_records(
-            "codex",
-            session_id,
-            cwd,
-            1,
-            codex_sessions_dir=sessions_dir,
-            transcript_path=rollout_path,
-        )
-    except (OSError, UnicodeError, ValueError):
-        return False, None, None, "transcript_unreadable"
-    if not records:
-        return False, None, None, "no_readable_transcript_turn"
-    marker = " ".join((records[-1].text or "").split())[:200] or None
-    if marker is None:
-        return False, None, None, "no_readable_transcript_turn"
-    timestamp = records[-1].timestamp
-    if not timestamp:
-        return False, None, None, "transcript_timestamp_unreadable"
-    try:
-        parsed_timestamp = _dt.datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
-        if parsed_timestamp.tzinfo is None:
-            raise ValueError("transcript timestamp lacks a timezone")
-        last_event_at = parsed_timestamp.astimezone(_dt.timezone.utc).strftime(
-            "%Y-%m-%dT%H:%M:%SZ"
-        )
-    except ValueError:
-        return False, None, None, "transcript_timestamp_unreadable"
-    return True, last_event_at, marker, None
-
-
-def scan_recoverable_codex_rollouts(
-    cwd: Path,
-    recency_seconds: float,
-    *,
-    sessions_dir: Optional[Path] = None,
-    registry_path: Optional[Path] = None,
-    now: Optional[float] = None,
-) -> CodexRecoveryScan:
-    """Return recent exact-cwd Codex rollouts missing from one registry snapshot.
-
-    Unlike live discovery, this scanner never collapses damaged evidence into a
-    clean zero. Readable candidates remain available on an incomplete result so
-    dry output can identify them, while a writing caller can refuse the batch.
-    """
-    from fno.agents.registry import RegistryVersionError, load_registry
-
-    root = sessions_dir if sessions_dir is not None else default_codex_sessions_dir()
-    target_cwd = str(cwd)
-    cutoff = (now if now is not None else time.time()) - recency_seconds
-    failures: list[str] = []
-    malformed_count = 0
-    unreadable_count = 0
-
-    registered_ids: set[str] = set()
-    try:
-        entries = load_registry(registry_path)
-    except (OSError, RegistryVersionError) as exc:
-        registry = registry_path if registry_path is not None else paths.agents_registry_path()
-        failures.append(f"registry load failed: {registry}: {exc}")
-    else:
-        if getattr(entries, "complete", True) is not True:
-            registry = registry_path if registry_path is not None else paths.agents_registry_path()
-            failures.append(f"registry load incomplete: {registry}")
-        registered_ids = {
-            entry.harness_session_id
-            for entry in entries
-            if entry.harness == "codex"
-            and isinstance(entry.harness_session_id, str)
-            and entry.harness_session_id
-        }
-
-    try:
-        root_mode = root.stat().st_mode
-    except OSError:
-        failures.append(f"sessions root unreadable: {root}")
-        unreadable_count += 1
-        return CodexRecoveryScan(
-            recoverable=(),
-            complete=False,
-            scanned_count=0,
-            malformed_count=malformed_count,
-            unreadable_count=unreadable_count,
-            failures=tuple(failures),
-        )
-    if not stat.S_ISDIR(root_mode):
-        failures.append(f"sessions root unreadable: {root}")
-        unreadable_count += 1
-        return CodexRecoveryScan(
-            recoverable=(),
-            complete=False,
-            scanned_count=0,
-            malformed_count=malformed_count,
-            unreadable_count=unreadable_count,
-            failures=tuple(failures),
-        )
-
-    try:
-        rollout_paths = list(root.rglob("rollout-*.jsonl"))
-    except OSError as exc:
-        failures.append(f"sessions root enumeration failed: {root}: {exc}")
-        unreadable_count += 1
-        return CodexRecoveryScan(
-            recoverable=(),
-            complete=False,
-            scanned_count=0,
-            malformed_count=malformed_count,
-            unreadable_count=unreadable_count,
-            failures=tuple(failures),
-        )
-
-    dated: list[tuple[float, Path]] = []
-    for rollout_path in rollout_paths:
-        try:
-            mtime = rollout_path.stat().st_mtime
-        except OSError as exc:
-            failures.append(f"rollout stat failed: {rollout_path}: {exc}")
-            unreadable_count += 1
-            continue
-        if mtime >= cutoff:
-            dated.append((mtime, rollout_path))
-
-    recoverable: list[RecoverableCodexRollout] = []
-    seen: set[str] = set()
-    for mtime, rollout_path in sorted(dated, key=lambda item: item[0], reverse=True):
-        try:
-            with open(rollout_path, encoding="utf-8") as fh:
-                first_line = fh.readline()
-        except UnicodeDecodeError as exc:
-            failures.append(f"rollout decode failed: {rollout_path}: {exc}")
-            malformed_count += 1
-            continue
-        except OSError as exc:
-            failures.append(f"rollout read failed: {rollout_path}: {exc}")
-            unreadable_count += 1
-            continue
-        try:
-            record = json.loads(first_line)
-        except ValueError as exc:
-            failures.append(f"rollout JSON failed: {rollout_path}: {exc}")
-            malformed_count += 1
-            continue
-        if not isinstance(record, dict) or record.get("type") != "session_meta":
-            failures.append(f"rollout schema failed: {rollout_path}: missing session_meta")
-            malformed_count += 1
-            continue
-        payload = record.get("payload")
-        if not isinstance(payload, dict):
-            failures.append(f"rollout schema failed: {rollout_path}: payload is not an object")
-            malformed_count += 1
-            continue
-        session_id = payload.get("id")
-        rollout_cwd = payload.get("cwd")
-        if not isinstance(session_id, str) or not session_id:
-            failures.append(f"rollout schema failed: {rollout_path}: id is not a string")
-            malformed_count += 1
-            continue
-        if not _is_canonical_full_uuid(session_id):
-            failures.append(
-                f"rollout schema failed: {rollout_path}: id is not a canonical full UUID"
-            )
-            malformed_count += 1
-            continue
-        if not isinstance(rollout_cwd, str):
-            failures.append(f"rollout schema failed: {rollout_path}: cwd is not a string")
-            malformed_count += 1
-            continue
-        if session_id in seen:
-            continue
-        seen.add(session_id)
-        if rollout_cwd != target_cwd or session_id in registered_ids:
-            continue
-        usable, last_event_at, last_turn_marker, unusable_reason = (
-            _codex_rollout_usability(
-                rollout_path,
-                session_id=session_id,
-                cwd=rollout_cwd,
-                sessions_dir=root,
-            )
-        )
-        recoverable.append(
-            RecoverableCodexRollout(
-                session_id=session_id,
-                cwd=rollout_cwd,
-                rollout_path=rollout_path,
-                mtime=mtime,
-                transcript_usable=usable,
-                last_event_at=last_event_at,
-                last_turn_marker=last_turn_marker,
-                unusable_reason=unusable_reason,
-            )
-        )
-
-    return CodexRecoveryScan(
-        recoverable=tuple(recoverable),
-        complete=not failures,
-        scanned_count=len(rollout_paths),
-        malformed_count=malformed_count,
-        unreadable_count=unreadable_count,
-        failures=tuple(failures),
-    )
 
 
 def _discover_from_codex(
@@ -1167,29 +911,6 @@ def _exact_address_matches(
     )
 
 
-def discovery_address_matches(
-    token: str, *, registry_path: Optional[Path] = None
-) -> list[DiscoveredSession]:
-    """Exact discovery owners of one address, independent of liveness truth.
-
-    ``unknown`` is unproven, not absent, and an asleep session remains
-    resumable. Address uniqueness therefore unions every enumerated identity;
-    liveness decides the transport only after one recipient is selected.
-    The sweep takes the resolver-only lane: matching reads identity fields
-    alone, so per-session truth classification here is discarded cost.
-    """
-    # Identity only: no falsifier probe per claude row, no project per cwd.
-    sessions = discover_live_sessions(
-        registry_path=registry_path, classify_truth=False, identity_only=True
-    )
-    return _exact_address_matches(token, sessions)
-
-
-# --------------------------------------------------------------------------
-# Registry file iteration + liveness
-# --------------------------------------------------------------------------
-
-
 def _iter_pid_files(sessions_dir: Path) -> Iterator[Path]:
     """Yield only strict ``<pid>.json`` files, skipping sync-conflicts.
 
@@ -1225,11 +946,6 @@ def _read_registry_file(path: Path) -> Optional[dict]:
     except (ValueError, UnicodeDecodeError):
         return None
     return data if isinstance(data, dict) else None
-
-
-# --------------------------------------------------------------------------
-# Canonical transcript-store discovery
-# --------------------------------------------------------------------------
 
 
 # CC encodes a session's cwd into its projects subdir name by replacing
@@ -1366,11 +1082,6 @@ def _discover_from_projects(
     return rows
 
 
-# --------------------------------------------------------------------------
-# Project resolution (cwd -> settings project, worktree-aware)
-# --------------------------------------------------------------------------
-
-
 def _iter_settings_projects() -> Iterator[tuple[str, str]]:
     """Yield ``(project_name, abs_path)`` from the settings work-map.
 
@@ -1440,11 +1151,6 @@ def resolve_project_for_cwd(cwd: str) -> Optional[str]:
                 return proj
 
     return _detect_project(p)
-
-
-# --------------------------------------------------------------------------
-# Friendly-name overlay (~/.fno/mux/session-names.json)
-# --------------------------------------------------------------------------
 
 
 def _default_alias(project: Optional[str], short_id: str) -> str:
@@ -1670,11 +1376,6 @@ def _atomic_write_json(target: Path, data: dict) -> None:
         except OSError:
             pass
         raise
-
-
-# --------------------------------------------------------------------------
-# Public entry point
-# --------------------------------------------------------------------------
 
 
 def _import_psutil():

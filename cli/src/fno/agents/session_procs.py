@@ -14,16 +14,13 @@ disagree about which process a row owns.
 """
 from __future__ import annotations
 
-import json
 import os
 import re
 import subprocess
-import time
 from pathlib import Path
 from typing import Optional
 
 from fno.harness_identity import claude_transport_short_id
-
 
 
 def transport_join_key(short_id: Optional[str], session_id: Optional[str]) -> str:
@@ -88,73 +85,6 @@ def bg_socket_pid_map(
     # lsof exits 1 when no listed file has a holder; its stdout is then empty
     # and parses to {}, which is the correct answer for "no live bg sessions".
     return _pid_map_from_lsof(proc.stdout)
-
-
-def roster_pid_map() -> Optional[dict[str, Optional[int]]]:
-    """The claude daemon roster as ``{8-hex jobId: host pid}``, or None when unreadable.
-
-    The SECOND daemon-side oracle for a bg row the rv farm missed: a short_id in
-    neither map is a dead session ; a roster pid is the PTY HOST hosting
-    it. Missing file: {}; other failure: None. A held worker with no usable pid
-    maps to None - the session exists, its key is not absence.
-    """
-    from fno.agents.spawn_gate import _roster_path
-
-    try:
-        raw = json.loads(_roster_path().read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        return {}
-    except Exception:  # noqa: BLE001 - an unreadable roster proves nothing
-        return None
-    workers = raw.get("workers") if isinstance(raw, dict) else None
-    if not isinstance(workers, dict):
-        return None
-    out: dict[str, Optional[int]] = {}
-    for w in workers.values():
-        if not isinstance(w, dict) or not isinstance(w.get("sessionId"), str):
-            continue
-        pid = w.get("pid")
-        key = claude_transport_short_id(w["sessionId"])
-        out[key] = pid if isinstance(pid, int) and not isinstance(pid, bool) else None
-    return out
-
-
-def codex_rollout_pid_map(session_ids: set[str], *, timeout: float = 5.0) -> dict[str, int]:
-    """codex session id -> pid of the process holding that thread's rollout.
-
-    Codex threads have no claude-style roster, so the rollout fd IS the identity; the id is read from each rollout's own session_meta record, never the filename UUID, which is not always the session id. The walk stays inside codex-named processes because a whole-machine open-file scan prices every caller. Best-effort by design: psutil missing, a spent timeout, or an unreadable rollout all mean ``{}``, which undercounts - callers read that as unknown, never as no sessions.
-    """
-    wanted = {sid for sid in session_ids if sid}
-    if not wanted:
-        return {}
-    try:
-        import psutil
-    except ImportError:
-        return {}
-    from fno.agents.discover import _codex_session_meta
-
-    out: dict[str, int] = {}
-    deadline = time.monotonic() + max(float(timeout), 0.0)
-    for proc in psutil.process_iter(["name"]):
-        try:
-            if "codex" not in str(proc.info.get("name") or "").lower():
-                continue
-            files = proc.open_files()
-        except Exception:  # noqa: BLE001 - one unreadable process is not a state
-            continue
-        for file in files or []:
-            base = os.path.basename(getattr(file, "path", ""))
-            if not (base.startswith("rollout-") and base.endswith(".jsonl")):
-                continue
-            try:
-                sid = (_codex_session_meta(Path(file.path)) or {}).get("id")
-            except Exception:  # noqa: BLE001 - a rotated/deleted rollout proves nothing
-                continue
-            if isinstance(sid, str) and sid in wanted and sid not in out:
-                out[sid] = proc.pid
-        if time.monotonic() >= deadline:
-            break
-    return out
 
 
 def resolve_session_pid(

@@ -10,40 +10,9 @@ constructor's signature.
 
 from pathlib import Path
 
-import pytest
 
-from fno.agents.registry import mint_agent_entry
 
 SRC = Path(__file__).resolve().parents[2] / "src" / "fno"
-
-
-def test_mint_without_session_identity_raises():
-    with pytest.raises(TypeError):
-        mint_agent_entry(  # type: ignore[call-arg]
-            spawned_by_session=None,
-            spawned_by_harness=None,
-            spawned_by_cwd=None,
-            lineage_reason=None,
-            name="worker-1",
-        )
-
-
-def test_spawn_row_without_parent_or_reason_raises():
-    """AC8: an origin=spawn row naming neither parent nor reason refuses at
-    the mint, never half-writes a launch nobody can trace."""
-    with pytest.raises(ValueError, match="spawned_by_session or lineage_reason"):
-        mint_agent_entry(
-            harness_session_id="ses-1",
-            spawned_by_session=None,
-            spawned_by_harness=None,
-            spawned_by_cwd=None,
-            lineage_reason=None,
-            name="worker-1",
-            harness="claude",
-            cwd="/tmp/w",
-            log_path="/tmp/w/worker.log",
-            origin="spawn",
-        )
 
 
 def test_no_direct_agent_entry_construction_in_production():

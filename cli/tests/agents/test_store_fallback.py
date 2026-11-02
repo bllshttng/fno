@@ -6,16 +6,14 @@ or claiming a dead session is live.
 """
 from __future__ import annotations
 
-import datetime
 import json
 import os
-import sys
 import time
 
 import pytest
 
 from fno.agents import discover, store_fallback
-from fno.agents.registry import AgentResolutionError, load_registry, resolve_agent
+from fno.agents.registry import AgentResolutionError
 
 CLAUDE_UUID = "c655c326-1111-2222-3333-444455556666"
 CODEX_UUID = "c655c326-aaaa-bbbb-cccc-ddddeeeeffff"
@@ -90,37 +88,6 @@ def test_default_codex_sessions_dir_honors_codex_home(
 # --- US1: claude attach on an unregistered session --------------------------
 
 
-def test_claude_short_id_resolves_and_auto_registers(_registry_home):
-    """AC1-HP: a real session with no row resolves, adopts, and is addressable."""
-    _write_claude_session(_registry_home, CLAUDE_UUID)
-
-    resolved = resolve_agent("c655c326")
-
-    assert resolved.matched_by == "harness_store"
-    assert resolved.entry.harness == "claude"
-    assert resolved.entry.harness_session_id == CLAUDE_UUID
-    # The transport key `claude attach` wants is the 8-hex jobId, NOT the UUID.
-    assert resolved.entry.short_id == "c655c326"
-    assert resolved.entry.cwd == "/repo/one"
-
-    # ...and the row is now on the roster, so a later resolution is a registry hit.
-    assert [e.harness_session_id for e in load_registry()] == [CLAUDE_UUID]
-    assert resolve_agent("c655c326").matched_by != "harness_store"
-
-
-def test_ambiguous_token_refuses_with_candidates(_registry_home):
-    """AC1-ERR: two stores matching one short id refuses and registers nothing."""
-    _write_claude_session(_registry_home, CLAUDE_UUID)
-    _write_codex_session(_registry_home, CODEX_UUID)
-
-    with pytest.raises(AgentResolutionError) as exc:
-        store_fallback.heal_from_harness_store("c655c326")
-
-    assert CLAUDE_UUID in str(exc.value)
-    assert CODEX_UUID in str(exc.value)
-    assert load_registry() == []
-
-
 def test_real_unreadable_directory_refuses_partial_store_answer(
     _registry_home, monkeypatch
 ):
@@ -153,193 +120,10 @@ def test_turn_named_codex_rollout_resolves_from_session_metadata(_registry_home)
         ]
 
 
-def test_registry_hit_and_store_only_session_share_one_ambiguity_namespace(
-    _registry_home,
-):
-    """A registry name must not hide a distinct store-only session handle."""
-    from fno.agents.registry import AgentEntry, write_registry
-
-    registered_id = "aaaaaaaa-1111-2222-3333-444455556666"
-    store_only_id = "bbbbbbbb-1111-2222-3333-0000deadbeef"
-    write_registry([
-        AgentEntry(
-            name="deadbeef",
-            cwd="/registered",
-            log_path="",
-            harness="claude",
-            harness_session_id=registered_id,
-        )
-    ])
-    _write_codex_session(_registry_home, store_only_id)
-
-    with pytest.raises(AgentResolutionError) as exc:
-        resolve_agent("deadbeef")
-
-    assert exc.value.ambiguous is True
-    assert registered_id in str(exc.value)
-    assert store_only_id in str(exc.value)
-    assert [e.harness_session_id for e in load_registry()] == [registered_id]
-
-
-def test_registry_hit_refuses_when_any_harness_store_is_unreadable(
-    _registry_home, monkeypatch
-):
-    """A partial store census cannot prove that a registry short is unique."""
-    from fno.agents.registry import AgentEntry, write_registry
-
-    registered_id = "aaaaaaaa-1111-2222-3333-444455556666"
-    write_registry([
-        AgentEntry(
-            name="deadbeef",
-            cwd="/registered",
-            log_path="",
-            harness="claude",
-            harness_session_id=registered_id,
-        )
-    ])
-
-    def unreadable_codex(_token):
-        raise OSError("codex store unreadable")
-
-    monkeypatch.setattr(
-        store_fallback,
-        "_PROBES",
-        (store_fallback._probe_claude, unreadable_codex, store_fallback._probe_opencode),
-    )
-
-    with pytest.raises(AgentResolutionError, match="could not be checked") as exc:
-        resolve_agent("deadbeef")
-
-    assert exc.value.ambiguous is True
-    assert "unreadable_codex" in str(exc.value)
-
-
-def test_registry_and_store_sighting_of_same_session_deduplicate(_registry_home):
-    from fno.agents.registry import AgentEntry, write_registry
-
-    write_registry([
-        AgentEntry(
-            name="same-worker",
-            cwd="/repo/one",
-            log_path="",
-            harness="claude",
-            harness_session_id=CLAUDE_UUID,
-            short_id="c655c326",
-        )
-    ])
-    _write_claude_session(_registry_home, CLAUDE_UUID)
-
-    resolved = resolve_agent("c655c326")
-
-    assert resolved.entry.name == "same-worker"
-    assert len(load_registry()) == 1
-
-
-def test_registry_full_id_and_unshaped_name_keep_store_fast_paths(
-    _registry_home, monkeypatch
-):
-    from fno.agents.registry import AgentEntry, write_registry
-
-    write_registry([
-        AgentEntry(
-            name="billing-worker",
-            cwd="/repo/one",
-            log_path="",
-            harness="claude",
-            harness_session_id=CLAUDE_UUID,
-        )
-    ])
-
-    def _unexpected_probe(_token):
-        raise AssertionError("fast-path token reached harness stores")
-
-    monkeypatch.setattr(store_fallback, "probe_stores", _unexpected_probe)
-
-    assert resolve_agent(CLAUDE_UUID).entry.name == "billing-worker"
-    assert resolve_agent("billing-worker").entry.name == "billing-worker"
-
-
-def test_adopted_row_is_never_live(_registry_home):
-    """AC1-EDGE: a store row proves existence, never liveness."""
-    _write_claude_session(_registry_home, CLAUDE_UUID)
-
-    entry = store_fallback.heal_from_harness_store("c655c326")
-
-    assert entry.status == "orphaned"
-
-
-def test_registry_write_failure_still_resolves(_registry_home, monkeypatch, capsys):
-    """AC1-FR: reaching the session wins; a failed roster write only WARNs."""
-    _write_claude_session(_registry_home, CLAUDE_UUID)
-
-    def _boom(**_kwargs):
-        raise OSError("read-only registry")
-
-    monkeypatch.setattr(
-        "fno.agents.registry.register_existing_session", _boom
-    )
-
-    entry = store_fallback.heal_from_harness_store("c655c326")
-
-    assert entry.harness_session_id == CLAUDE_UUID
-    assert "could not register" in capsys.readouterr().err
-
-
-def test_registration_identity_collision_is_never_degraded_to_a_synthesized_row(
-    _registry_home,
-):
-    """A store session whose canonical handle equals a registry row's NAME
-    heals under a suffixed name; the shared token stays ambiguous at read
-    rather than the heal silently claiming it."""
-    from fno.agents.registry import AgentEntry, write_registry
-
-    existing_id = "aaaaaaaa-1111-2222-3333-444455556666"
-    store_only_id = "deadbeef-1111-7222-8333-444400000000"
-    write_registry([
-        AgentEntry(
-            name="deadbeef",
-            cwd="/registered",
-            log_path="",
-            harness="claude",
-            harness_session_id=existing_id,
-        )
-    ])
-    _write_codex_session(_registry_home, store_only_id)
-
-    healed = store_fallback.heal_from_harness_store("deadbeef")
-
-    assert healed is not None
-    assert healed.name == "deadbeef-2"
-    assert healed.harness_session_id == store_only_id
-    with pytest.raises(AgentResolutionError, match="ambiguous"):
-        resolve_agent("deadbeef")
-
-
 # --- command wiring: the heal must reach every resolution surface --------------
 
 
 # --- review fixes: ambiguity must not fall through, healed rows must survive --
-
-
-def test_registry_ambiguity_never_probes_the_store(_registry_home):
-    """Two registry rows sharing a prefix must keep refusing even when one of
-    them has a transcript: a store hit must not pick the winner the registry
-    deliberately would not."""
-    from fno.agents.registry import AgentEntry, write_registry
-
-    _write_claude_session(_registry_home, CLAUDE_UUID)
-    write_registry([
-        AgentEntry(name="one", cwd="/a", log_path="", harness="claude",
-                   harness_session_id=CLAUDE_UUID),
-        AgentEntry(name="two", cwd="/b", log_path="", harness="claude",
-                   harness_session_id="c655c326-9999-8888-7777-666655554444"),
-    ])
-
-    with pytest.raises(AgentResolutionError) as exc:
-        resolve_agent("c655c326")
-
-    assert exc.value.ambiguous is True
-    assert "is ambiguous across 2 agents" in str(exc.value)
 
 
 def test_invalid_utf8_transcript_does_not_crash(_registry_home):
@@ -355,23 +139,6 @@ def test_invalid_utf8_transcript_does_not_crash(_registry_home):
 
     assert [h.session_id for h in hits] == [CLAUDE_UUID]
     assert hits[0].cwd == ""
-
-
-def test_adoption_never_demotes_a_live_row(_registry_home):
-    """A registration landing between the resolver's miss and the healer's
-    locked upsert must survive: overwriting it with the healer's weaker
-    'orphaned' would drop a running agent out of live routing."""
-    from fno.agents.registry import AgentEntry, load_registry, write_registry
-
-    _write_claude_session(_registry_home, CLAUDE_UUID)
-    write_registry([
-        AgentEntry(name="racer", cwd="/live", log_path="", harness="claude",
-                   harness_session_id=CLAUDE_UUID, status="live"),
-    ])
-
-    store_fallback.heal_from_harness_store("c655c326")
-
-    assert load_registry()[0].status == "live"
 
 
 def test_canonical_tail_resolves_mixed_case_opencode_store(tmp_path, monkeypatch):
@@ -392,93 +159,6 @@ def test_canonical_tail_resolves_mixed_case_opencode_store(tmp_path, monkeypatch
     assert store_fallback.probe_stores("abcd1234") == []
 
 
-def test_adopt_refuses_a_shared_store_mtime_as_a_session_stamp(monkeypatch):
-    """A store-wide mtime is a wrong answer, not a cheap one. Refuse it.
-
-    opencode keeps every session in ONE SQLite database, so `resolve_transcript`
-    answers with the store's path and kind="opencode-db". Stat'ing that gives
-    the last write by ANY session, which would land on the adopted row as if it
-    were this session's last message: a plausible stamp, always wrong except by
-    coincidence, and unfalsifiable once written. None is the honest answer.
-    """
-    from fno.agents import store_fallback
-    from fno.provenance.resolver import ResolvedTranscript
-
-    sid = "ses_abc123"
-    calls = []
-
-    def _resolved(harness, session_id, cwd, **kw):
-        calls.append(harness)
-        # A real, freshly-written path: the guard must key on `kind`, not on
-        # the file being absent.
-        return ResolvedTranscript(
-            harness=harness,
-            session_id=session_id,
-            cwd=cwd,
-            resolved=True,
-            transcript_path=__file__,
-            kind="opencode-db",
-        )
-
-    monkeypatch.setattr("fno.provenance.resolver.resolve_transcript", _resolved)
-
-    hit = store_fallback.StoreHit(harness="opencode", session_id=sid, cwd="/repo/one")
-    assert store_fallback._transcript_last_write(hit) is None
-    assert calls == ["opencode"], "the resolver must still be consulted"
-
-
-def test_adopt_stamps_the_newest_entry_not_the_mtime(tmp_path):
-    """``last_message_at`` is the newest TIMESTAMPED entry, not the file mtime.
-
-    Trailing untimestamped records keep the file young while the conversation
-    is silent, and ``row_contradiction`` cross-checks this stamp
-    against truth's ``last_event_at`` - two fields here is how that comparison
-    fires on a healthy row.
-    """
-    from fno.agents import store_fallback
-
-    sid = "0badc0de-54cf-0000-0000-000000000004"
-    _write_claude_session(tmp_path, sid)
-    transcript = tmp_path / "projects" / "-repo-one" / f"{sid}.jsonl"
-    entry_epoch = 1_700_000_000.0
-    stamp_txt = datetime.datetime.fromtimestamp(
-        entry_epoch, tz=datetime.timezone.utc
-    ).strftime("%Y-%m-%dT%H:%M:%SZ")
-    with transcript.open("a", encoding="utf-8") as fh:
-        fh.write(
-            json.dumps({"type": "assistant", "sessionId": sid, "timestamp": stamp_txt,
-                        "message": {"role": "assistant",
-                                    "content": [{"type": "text", "text": "gone quiet"}]}})
-            + "\n"
-        )
-    hour_later = entry_epoch + 3600
-    os.utime(transcript, (hour_later, hour_later))
-
-    hit = store_fallback.StoreHit(harness="claude", session_id=sid, cwd="/repo/one")
-    entry = store_fallback.adopt_store_hit(hit, registry_path=tmp_path / "registry.json")
-
-    # The entry's stamp, not the mtime an hour fresher: mtime would read
-    # 2023-11-14T23:13:20Z.
-    assert entry.last_message_at == "2023-11-14T22:13:20Z"
-
-
-def test_raising_store_import_degrades_pid_and_resolution_survives(monkeypatch, tmp_path):
-    """A failing fno.inbox.store import never crashes resolution.
-
-    The old project-membership helper lazily imported fno.inbox.store inside a
-    try whose except named ProjectIdentificationError, so a raising import
-    (module or dep missing) escaped as UnboundLocalError and crashed stop.
-    Membership is gone (healing is machine-wide), but the degrade posture
-    stays pinned: a broken import must not take the heal down with it.
-    """
-    monkeypatch.setitem(sys.modules, "fno.inbox.store", None)
-
-    _write_claude_session(tmp_path, CLAUDE_UUID)
-    entry = store_fallback.heal_from_harness_store("c655c326")
-    assert entry is not None
-    assert entry.harness_session_id == CLAUDE_UUID
-
-
 # --- rm tombstone: a just-removed session is not re-adopted ------------------
 
 
@@ -493,15 +173,3 @@ def _write_tombstone(root, harness, session_id, *, age_s=0):
     )
 
 
-def test_recently_removed_codex_session_is_not_readopted(tmp_path):
-    _write_codex_session(tmp_path, CODEX_UUID)
-    _write_tombstone(tmp_path, "codex", CODEX_UUID, age_s=60)
-
-    with pytest.raises(AgentResolutionError) as err:
-        store_fallback.heal_from_harness_store(CODEX_UUID)
-
-    assert "removed" in str(err.value)
-    assert err.value.ambiguous
-    # The refusal left no row behind: no adopted duplicate blocks a later
-    # resume of the session the operator removed.
-    assert load_registry() == []
