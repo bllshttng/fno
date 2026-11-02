@@ -147,6 +147,10 @@ Press `u` on a row in the Connections view, then press Enter. The prompt names t
 
 The pointer is one value across all harnesses, so `u` on a codex row also moves it off a claude row. A project `active` key wins over the global pointer. If that hides the move, the result line warns. A stored login that is spent refuses the switch, and the result line sends you to `r`, which opens a login pane.
 
+The Connections view groups accounts by provider: Anthropic, OpenAI, zai, Amazon Bedrock, DeepSeek, OpenCode and Llama. A route, a Bedrock key, or a base URL names a record's provider. A record with none of these groups under its harness's own vendor. A provider with no saved account still shows, with an add hint. The `[ACTIVE]` badge marks the record new spawns use. When no record is active, it marks the System default row, the plain harness login. Enter does what `u` does. Emails are masked.
+
+On a claude row, `r` re-authenticates. After a confirm it opens a pane that runs `fno config accounts use <id> --scope global --login`. `--login` forces the vault login even when the stored copy still works: two browser logins, one per Keychain item, and each proves its principal before the store write. The account then takes the shared slot. On a codex row with a spent login, `r` opens `codex login` and a second `r` saves it. On any other row, `r` saves the current login again.
+
 ---
 
 ## Auth strategies

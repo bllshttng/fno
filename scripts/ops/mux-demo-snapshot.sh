@@ -123,7 +123,14 @@ mkdir -p "$ROOT/mux" "$ROOT/agents" "$ROOT/code/checkout" "$ROOT/text" "$ROOT/.f
     'harness = "codex"' \
     'auth = "oauth_dir"' \
     'credentials_source = "~/.codex-lab"' \
-    'priority = 30'
+    'priority = 30' \
+    '[[accounts.records]]' \
+    'id = "glm-key"' \
+    'name = "GLM key"' \
+    'harness = "claude"' \
+    'auth = "api_key"' \
+    'env = { ANTHROPIC_BASE_URL = "https://api.z.ai/api/anthropic", ANTHROPIC_API_KEY = "demo-placeholder" }' \
+    'priority = 40'
   if [ -n "${FNO_DEMO_PY_SOURCE:-}" ]; then
     printf '[dev]\nsource = "%s"\n' "$FNO_DEMO_PY_SOURCE"
   fi
@@ -194,6 +201,8 @@ usage = {
                     "windows": [win("5h", 4.0, 15800), win("weekly", 22.0, 475200)]},
     "codex-lab": {"probed_at": now - 120, "source": "session-log",
                   "windows": [win("5h", 12.0, 9600), win("weekly", 9.0, 518400)]},
+    "glm-key": {"probed_at": now - 600, "source": "api-quota",
+                "windows": [win("5h", 71.0, 3600)]},
 }
 with open(f"{root}/.fno/state/provider-runtime-state.json", "w") as f:
     json.dump({"schema_version": 2, "usage": usage}, f)
