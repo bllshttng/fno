@@ -272,7 +272,10 @@ pub fn py_repr(s: &str) -> String {
 /// the resume path resolves cwd by trying candidates and slug-checking
 /// rather than decoding a slug back to a path.
 pub(crate) fn claude_cwd_slug(path: &Path) -> String {
-    path.to_string_lossy().replace('/', "-").replace('.', "-")
+    path.to_string_lossy()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect()
 }
 
 /// Mirrors `_claude_session_registry._claude_roots` / `session_dirs` /
