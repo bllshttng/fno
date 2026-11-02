@@ -1,20 +1,22 @@
 //! One GitHub poller per account across machines. With `store.remote_url`
-//! set, the host that holds the `gh-budget:poller` lease on the claims
-//! primary publishes each composed status row to `gh_status_rows`, and every
-//! other host serves that row with zero gh calls. GitHub's secondary limit
-//! counts requests per account, so two hosts reading one PR inside one TTL
-//! spend twice what one needs.
+//! set, the host that holds the `gh-budget:poller:<login>` lease on the
+//! claims primary publishes each composed status row to
+//! `gh_status_by_login`, and every other host on that login serves that row
+//! with zero gh calls. GitHub's secondary limit counts requests per
+//! account, so two hosts reading one PR inside one TTL spend twice what one
+//! needs.
 //!
 //! The lease is renewed only by a publish: a poller that stops reading
 //! GitHub goes quiet and loses the lease after two status TTLs, and the next
 //! live read on another host takes it. Every expiry and row age is computed
-//! in SQL on the store clock, never on a host clock. The lease assumes one
-//! GitHub account behind a primary, as the `gh-budget:fleet` hold does. An unset
-//! `store.remote_url`, or a primary that errors, keeps today's per-machine
-//! polling: a failed call writes a `poller-down` marker and the module skips
-//! the primary for a minute.
+//! in SQL on the store clock, never on a host clock. Leases and rows key by
+//! the machine's GitHub login (gh_login), exactly as the
+//! `gh-budget:fleet:<login>` hold does; a host whose login is unreadable
+//! polls per machine. An unset `store.remote_url`, or a primary that
+//! errors, keeps today's per-machine polling: a failed call writes a
+//! `poller-down` marker and the module skips the primary for a minute.
 
-use crate::claim_store::{self, CLOCK, POLLER_KEY};
+use crate::claim_store::{self, CLOCK};
 use crate::claims;
 use crate::store_remote::{Remote, SqlValue};
 use serde_json::{json, Value};
@@ -26,14 +28,15 @@ use std::time::Duration;
 const DOWN_MARKER: &str = "poller-down";
 const DOWN_FOR: Duration = Duration::from_secs(60);
 
-const TABLE: &str = "CREATE TABLE IF NOT EXISTS gh_status_rows (
+const TABLE: &str = "CREATE TABLE IF NOT EXISTS gh_status_by_login (
+  login TEXT NOT NULL,
   slug TEXT NOT NULL,
   pr INTEGER NOT NULL,
   key TEXT NOT NULL,
   exit INTEGER NOT NULL,
   output TEXT NOT NULL,
   ts INTEGER NOT NULL,
-  PRIMARY KEY (slug, pr)
+  PRIMARY KEY (login, slug, pr)
 )";
 
 /// Rows this process published, and rows it served from the poller; the
@@ -44,13 +47,14 @@ static HOLDER: Mutex<Option<String>> = Mutex::new(None);
 
 #[cfg(test)]
 thread_local! {
-    static TEST_PRIMARY: std::cell::RefCell<Option<(Remote, String)>> =
+    static TEST_PRIMARY: std::cell::RefCell<Option<(Remote, String, String)>> =
         const { std::cell::RefCell::new(None) };
 }
 
-/// Route this thread's poller calls to a test primary as `machine`.
+/// Route this thread's poller calls to a test primary as `machine` on
+/// `login`.
 #[cfg(test)]
-pub(crate) fn route_to(primary: Option<(Remote, String)>) {
+pub(crate) fn route_to(primary: Option<(Remote, String, String)>) {
     TEST_PRIMARY.with(|p| *p.borrow_mut() = primary);
 }
 
@@ -73,10 +77,11 @@ fn mark_down(marker_dir: &Path) {
     let _ = std::fs::write(marker_dir.join(DOWN_MARKER), b"");
 }
 
-/// The primary and this machine's id, or None when polling stays per-machine:
-/// the key is unset, the machine has no stable id, or the primary failed in
-/// the last minute.
-fn primary(marker_dir: &Path) -> Option<(Remote, String)> {
+/// The primary, this machine's id and the machine's GitHub login, or None
+/// when polling stays per-machine: the key is unset, the machine has no
+/// stable id, the login is unreadable (nothing to key a shared row by), or
+/// the primary failed in the last minute.
+fn primary(marker_dir: &Path) -> Option<(Remote, String, String)> {
     if down(marker_dir) {
         return None;
     }
@@ -85,10 +90,15 @@ fn primary(marker_dir: &Path) -> Option<(Remote, String)> {
         return Some(routed);
     }
     // The key check comes first: a stock install must not pay the machine
-    // id read, which shells out on macOS.
+    // id read, which shells out on macOS, nor the login read, which spawns
+    // gh behind the login cache.
     let remote = crate::store_remote::configured().ok().flatten()?;
     let machine = claims::machine_id();
-    (!machine.is_empty()).then_some((remote, machine))
+    if machine.is_empty() {
+        return None;
+    }
+    let login = crate::gh_login::current()?;
+    Some((remote, machine, login))
 }
 
 /// One statement against the shared-row table, made on first use.
@@ -110,22 +120,24 @@ fn on_table(
 /// this machine holds it, share the row. A machine that does not hold the
 /// lease publishes nothing.
 pub(crate) fn publish(marker_dir: &Path, slug: &str, pr: u64, key: &str, row: &Value) {
-    let Some((remote, machine)) = primary(marker_dir) else {
+    let Some((remote, machine, login)) = primary(marker_dir) else {
         return;
     };
+    let lease_key = claim_store::poller_key(&login);
     let shared = || -> Result<bool, String> {
-        if !claim_store::poller_lease_take(&remote, &machine, lease_ms())? {
+        if !claim_store::poller_lease_take(&remote, &lease_key, &machine, lease_ms())? {
             return Ok(false);
         }
         on_table(
             &remote,
             &format!(
-                "INSERT INTO gh_status_rows (slug, pr, key, exit, output, ts) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, {CLOCK}) \
-                 ON CONFLICT(slug, pr) DO UPDATE SET key = excluded.key, \
+                "INSERT INTO gh_status_by_login (login, slug, pr, key, exit, output, ts) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, {CLOCK}) \
+                 ON CONFLICT(login, slug, pr) DO UPDATE SET key = excluded.key, \
                  exit = excluded.exit, output = excluded.output, ts = excluded.ts"
             ),
             &[
+                SqlValue::Text(login.to_string()),
                 SqlValue::Text(slug.to_string()),
                 SqlValue::Integer(pr as i64),
                 SqlValue::Text(key.to_string()),
@@ -144,23 +156,25 @@ pub(crate) fn publish(marker_dir: &Path, slug: &str, pr: u64, key: &str, row: &V
     }
 }
 
-/// One SELECT before any network read: the shared row for (slug, pr) when a
-/// peer holds a live lease and the row is under two TTLs old on the store
-/// clock. The row's `ts` is rewritten to its true age on this host's clock,
-/// so a cache hit never reports a stale row as fresh.
+/// One SELECT before any network read: the shared row for (login, slug, pr)
+/// when a peer holds a live lease on this login and the row is under two
+/// TTLs old on the store clock. The row's `ts` is rewritten to its true age
+/// on this host's clock, so a cache hit never reports a stale row as fresh.
 pub(crate) fn follow(marker_dir: &Path, slug: &str, pr: u64) -> Option<(String, Value)> {
-    let (remote, machine) = primary(marker_dir)?;
+    let (remote, machine, login) = primary(marker_dir)?;
     let reply = match on_table(
         &remote,
         &format!(
             "SELECT (SELECT host FROM claims WHERE key = ?1 AND expires_at > {CLOCK} \
                        AND machine_id <> ?2), \
                     r.key, r.exit, r.output, {CLOCK} - r.ts \
-             FROM (SELECT 1) LEFT JOIN gh_status_rows r ON r.slug = ?3 AND r.pr = ?4"
+             FROM (SELECT 1) LEFT JOIN gh_status_by_login r \
+                 ON r.login = ?3 AND r.slug = ?4 AND r.pr = ?5"
         ),
         &[
-            SqlValue::Text(POLLER_KEY.to_string()),
+            SqlValue::Text(claim_store::poller_key(&login)),
             SqlValue::Text(machine),
+            SqlValue::Text(login),
             SqlValue::Text(slug.to_string()),
             SqlValue::Integer(pr as i64),
         ],
@@ -222,43 +236,97 @@ mod tests {
     use super::*;
     use crate::store_remote::test_primary;
 
-    fn expire(primary: &test_primary::Primary) {
+    fn expire(primary: &test_primary::Primary, key: &str) {
         primary
             .db
             .lock()
             .unwrap()
             .execute(
                 &format!("UPDATE claims SET expires_at = {CLOCK} - 1 WHERE key = ?1"),
-                [POLLER_KEY],
+                [key],
             )
             .unwrap();
     }
 
-    fn lease_holder(primary: &test_primary::Primary) -> String {
+    fn lease_holder(primary: &test_primary::Primary, key: &str) -> String {
         primary
             .db
             .lock()
             .unwrap()
-            .query_row(
-                "SELECT machine_id FROM claims WHERE key = ?1",
-                [POLLER_KEY],
-                |r| r.get(0),
-            )
+            .query_row("SELECT machine_id FROM claims WHERE key = ?1", [key], |r| {
+                r.get(0)
+            })
             .unwrap()
     }
 
-    /// The lease is one row: a peer is refused until the row runs out on the
-    /// store clock.
+    /// The lease is one row per key: a peer is refused until the row runs out
+    /// on the store clock; another login's key never collides.
     #[test]
     fn the_poller_lease_has_one_holder_until_it_runs_out_on_the_store_clock() {
         let primary = test_primary::start();
         let remote = &primary.remote;
-        assert!(claim_store::poller_lease_take(remote, "mac-a", 120_000).unwrap());
-        assert!(!claim_store::poller_lease_take(remote, "mac-b", 120_000).unwrap());
-        assert!(claim_store::poller_lease_take(remote, "mac-a", 120_000).unwrap());
-        expire(&primary);
-        assert!(claim_store::poller_lease_take(remote, "mac-b", 120_000).unwrap());
-        assert_eq!(lease_holder(&primary), "mac-b");
+        let alice_key = claim_store::poller_key("alice");
+        assert!(claim_store::poller_lease_take(remote, &alice_key, "mac-a", 120_000).unwrap());
+        assert!(!claim_store::poller_lease_take(remote, &alice_key, "mac-b", 120_000).unwrap());
+        assert!(claim_store::poller_lease_take(remote, &alice_key, "mac-a", 120_000).unwrap());
+        expire(&primary, &alice_key);
+        assert!(claim_store::poller_lease_take(remote, &alice_key, "mac-b", 120_000).unwrap());
+        assert_eq!(lease_holder(&primary, &alice_key), "mac-b");
+    }
+
+    /// Two logins on one primary hold two leases and never read each other's
+    /// rows: bob's follow finds nothing while only alice has published, and
+    /// the two rows for one PR live under their own logins.
+    #[test]
+    fn two_accounts_hold_two_leases_and_never_read_each_others_rows() {
+        let primary = test_primary::start();
+        let remote = &primary.remote;
+        route_to(Some((remote.clone(), "mac-a".into(), "alice".into())));
+        let dir_a = tempfile::tempdir().unwrap();
+        publish(
+            dir_a.path(),
+            "o/r",
+            7,
+            "k1",
+            &json!({"exit": 0, "output": {"head": "h1"}}),
+        );
+        route_to(Some((remote.clone(), "mac-b".into(), "bob".into())));
+        let dir_b = tempfile::tempdir().unwrap();
+        assert!(
+            follow(dir_b.path(), "o/r", 7).is_none(),
+            "bob never serves alice's row"
+        );
+        publish(
+            dir_b.path(),
+            "o/r",
+            7,
+            "k2",
+            &json!({"exit": 0, "output": {"head": "h2"}}),
+        );
+        assert_eq!(
+            lease_holder(&primary, &claim_store::poller_key("alice")),
+            "mac-a",
+            "each login holds its own lease"
+        );
+        assert_eq!(
+            lease_holder(&primary, &claim_store::poller_key("bob")),
+            "mac-b"
+        );
+        let (alice_rows, bob_rows) = {
+            let db = primary.db.lock().unwrap();
+            let count = |login: &str| {
+                db.query_row(
+                    "SELECT COUNT(*) FROM gh_status_by_login WHERE login = ?1",
+                    [login],
+                    |r| r.get::<_, i64>(0),
+                )
+                .unwrap()
+            };
+            (count("alice"), count("bob"))
+        };
+        assert_eq!(alice_rows, 1, "alice owns her row for the PR");
+        assert_eq!(bob_rows, 1, "bob owns his row for the same PR");
+        route_to(None);
     }
 
     /// A failing primary stands the host down: follow returns None, writes the
@@ -266,13 +334,13 @@ mod tests {
     #[test]
     fn a_dead_primary_writes_the_marker_and_skips_the_primary_for_a_minute() {
         let dir = tempfile::tempdir().unwrap();
-        route_to(Some((test_primary::dead(), "mac-a".into())));
+        route_to(Some((test_primary::dead(), "mac-a".into(), "alice".into())));
         assert!(follow(dir.path(), "o/r", 7).is_none());
         assert!(dir.path().join(DOWN_MARKER).exists());
 
         let live = test_primary::start();
         let peer_dir = tempfile::tempdir().unwrap();
-        route_to(Some((live.remote.clone(), "mac-b".into())));
+        route_to(Some((live.remote.clone(), "mac-b".into(), "alice".into())));
         publish(
             peer_dir.path(),
             "o/r",
@@ -280,7 +348,7 @@ mod tests {
             "k1",
             &json!({"exit": 0, "output": {"head": "h1"}}),
         );
-        route_to(Some((live.remote.clone(), "mac-a".into())));
+        route_to(Some((live.remote.clone(), "mac-a".into(), "alice".into())));
         assert!(follow(dir.path(), "o/r", 7).is_none(), "the marker holds");
         std::fs::remove_file(dir.path().join(DOWN_MARKER)).unwrap();
         assert!(follow(dir.path(), "o/r", 7).is_some());
