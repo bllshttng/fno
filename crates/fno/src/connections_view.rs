@@ -2617,7 +2617,10 @@ mod tests {
         assert!(v.confirm.is_none());
         let row = v.render().join("\n");
         let row = row.lines().find(|l| l.contains("  ccr  ")).unwrap();
-        assert!(row.contains("s: spawn-acct") && !row.contains("r: re-authenticate"), "{row}");
+        assert!(
+            row.contains("s: spawn-acct") && !row.contains("r: re-authenticate"),
+            "{row}"
+        );
     }
 
     // AC1-ERR path: remove stages a confirm; Enter runs remove, other key cancels.
