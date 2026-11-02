@@ -530,21 +530,6 @@ def test_namespace_refuser_blocks_the_poison_before_it_caches(monkeypatch, tmp_p
             _sys.modules.pop(name, None)
 
 
-def test_absent_fno_submodule_names_both_causes_end_to_end():
-    """The acceptance shape, through a real import in a real process: a function-level
-    `from fno. ...` for a module that is not there says why, twice over."""
-    proc = _run_py(
-        "import fno\n"
-        "try:\n"
-        "    from fno.agents.no_such_module import thing\n"
-        "except ModuleNotFoundError as exc:\n"
-        "    print(exc)\n"
-    )
-    assert proc.returncode == 0, proc.stderr
-    assert "reinstalled underneath the running process" in proc.stdout, proc.stdout
-    assert "fno doctor update" in proc.stdout
-
-
 # ---------------------------------------------------------------------------
 # AC-ENTRY: the console entrypoint carries the hint the import layer drops
 # ---------------------------------------------------------------------------

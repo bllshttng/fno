@@ -107,6 +107,16 @@ def seed_graph(path: Path, entries: Iterable[dict] | str | bytes | dict) -> list
     return rows
 
 
+def read_graph_strict(path: Path) -> list[dict]:
+    from fno.rust_binary import backlog_rows
+
+    return backlog_rows(include_archived=True, path=Path(path))
+
+
+def commit_rows_via_store(path: Path, mutate) -> list[dict]:
+    return seed_graph(Path(path), mutate(read_graph_strict(path)))
+
+
 if __name__ == "__main__":
     if len(sys.argv) != 2:
         raise SystemExit("usage: graph_seed.py <graph.json anchor>")

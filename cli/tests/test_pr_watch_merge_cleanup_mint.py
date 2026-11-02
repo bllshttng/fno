@@ -128,7 +128,6 @@ class TestDefaultEnsureMergeCleanup:
     def test_an_unmerged_gh_row_skips_with_a_journal_row(self, tmp_path, monkeypatch):
         """A request or a skip, never silence: the journal contract requires
         the skip row so the next tick's gate reads a decided state."""
-        from fno.agents.events import daemon_lifecycle_log
 
         from fno.pr_watch._dispatch import _default_ensure_merge_cleanup
 

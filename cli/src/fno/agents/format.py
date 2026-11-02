@@ -12,44 +12,6 @@ from typing import Optional
 
 from fno.agents.registry import AgentEntry
 from fno.agents.row_contradiction import project_row
-from fno.agents.session_truth import STALE_ATTENTION_S
-
-# Basis values that are falsifiers rather than evidence: a positive
-# measurement that the worker is gone, which no other reading outranks.
-_FALSIFIER_BASES = {"process-gone", "pane-gone"}
-
-
-def attention_rank(row: dict) -> int:
-    """Evidence tier for one serialized row: 0 needs the operator most.
-
-    Built only from fields that carry their evidence with them (``basis``,
-    ``last_activity_age_s``) - never from ``status`` or a bare verdict word,
-    both of which read healthy for a worker dead under two hours. Mirrors the
-    daemon's ``attention_sort_key`` tier set; the shared fixture in
-    ``schemas/agents-attention-order.json`` is what pins the two together.
-    """
-    basis = row.get("basis")
-    if basis in _FALSIFIER_BASES or row.get("reachability") == "unreachable":
-        return 5
-    age = row.get("last_activity_age_s") or 0
-    if basis == "transcript" and age >= STALE_ATTENTION_S:
-        return 0
-    if basis == "silent":
-        return 1
-    if basis == "no-evidence":
-        return 2
-    return 4
-
-
-def attention_sort_key(row: dict) -> tuple:
-    """Attention order: evidence tier, then longest-silent first, then name.
-
-    An absent age counts as 0 (youngest): an absent reading has two
-    explanations and a sort cannot tell them apart, so it must never float a
-    row to the top.
-    """
-    age = row.get("last_activity_age_s") or 0
-    return (attention_rank(row), -age, str(row.get("name") or ""))
 
 
 def row_address(

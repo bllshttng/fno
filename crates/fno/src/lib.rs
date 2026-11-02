@@ -299,7 +299,11 @@ pub mod vt;
 #[cfg(feature = "full")]
 pub mod web;
 #[cfg(feature = "full")]
+pub(crate) mod web_answer;
+#[cfg(feature = "full")]
 pub(crate) mod web_command;
+#[cfg(feature = "full")]
+pub(crate) mod web_invites;
 #[cfg(feature = "full")]
 pub(crate) mod web_trace;
 #[cfg(feature = "full")]

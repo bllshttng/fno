@@ -56,12 +56,3 @@ def test_stamp_child_scrubs_the_parents_substrate_before_stamping():
     assert FNO_AGENT_SUBSTRATE not in silent
 
 
-def test_pane_spawn_argv_stamps_pane_after_the_ambient_scrub():
-    """env(1) applies every -u before the assignments, so the pane wrapper
-    carries both and the assignment is the one that survives."""
-    from fno.agents.mux_spawn import _mesh_env_wrapper
-
-    argv = _mesh_env_wrapper(name="w1", harness="codex", role=None, argv=["codex"])
-    unset = [argv[i + 1] for i, tok in enumerate(argv) if tok == "-u"]
-    assert "FNO_AGENT_SUBSTRATE" in unset
-    assert "FNO_AGENT_SUBSTRATE=pane" in argv

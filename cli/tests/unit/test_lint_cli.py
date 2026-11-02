@@ -136,17 +136,6 @@ def test_spawn_paths_lint_rejects_spawn_flag_after_other_options(tmp_path: Path)
 # --------------------------------------------------------------------------- #
 # flock-pattern: conform + degrade (ab-fd017698)
 # --------------------------------------------------------------------------- #
-def test_flock_pattern_degrades_when_script_absent(tmp_path: Path, monkeypatch) -> None:
-    """US1 (AC1-HP/ERR/UI/EDGE/FR): with the lint script absent (a no-script env),
-    the command exits 2 with an actionable stderr message - never bash's 127 and
-    never a Python traceback."""
-    monkeypatch.setenv("FNO_REPO_ROOT", str(tmp_path))  # empty dir -> no script
-    result = runner.invoke(app, ["flock-pattern"])
-
-    assert result.exit_code == 2  # exit 2, not 127, not 0
-    assert "flock-pattern" in result.stderr
-    assert "lint scripts" in result.stderr  # names what is missing
-    assert "Traceback" not in (result.stderr + result.stdout)
 
 
 def test_every_check_parameter_is_declared_on_the_dispatcher() -> None:

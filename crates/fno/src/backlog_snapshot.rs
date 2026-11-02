@@ -939,7 +939,7 @@ mod tests {
         let inputs = inputs_from_rows(&selected);
         let (private, _) = render_one(&inputs, None, None, None, false, None).unwrap();
         assert!(
-            private.contains("fno agents adopt 9b1c2d3e-0000-4000-8000-00000000leak"),
+            private.contains("fno agents registry adopt 9b1c2d3e-0000-4000-8000-00000000leak"),
             "the private page carries the recovery command"
         );
         let (page, count) = render_one(&inputs, None, None, None, true, None).unwrap();
