@@ -10,6 +10,7 @@ leaf in the claims-forward shape: option signatures unchanged, transport only.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import typer
 
@@ -33,7 +34,7 @@ do_pr_app = typer.Typer(
     add_completion=False,
 )
 
-_WATCH_LEAF = {
+_WATCH_LEAF: dict[str, Any] = {
     "name": "watch",
     "add_help_option": False,
     "context_settings": {"allow_extra_args": True, "ignore_unknown_options": True},

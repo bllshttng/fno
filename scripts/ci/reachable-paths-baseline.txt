@@ -174,7 +174,7 @@ A	keeper closed the connection mid-frame	py=cli/src/fno/graph/store.py;rs=crates
 A	kept_suspect_unprobed_by	py=cli/src/fno/claims/events.py;rs=crates/fno-agents/src/claim_cli/reap.rs	# CLASSIFY protocol|msg-twin|data
 A	key and holder must be non-empty	py=cli/src/fno/claims/core.py;rs=crates/fno-agents/src/claims.rs	# CLASSIFY protocol|msg-twin|data
 A	lane cap full (max_lanes={max_lanes})	py=cli/src/fno/claims/cli.py;rs=crates/fno-agents/src/claim_lanes_cli.rs	# CLASSIFY protocol|msg-twin|data
-A	launchd:sh.fno.pr-watcher	py=cli/src/fno/pr_watch/cli.py;rs=crates/fno-agents/src/tick_ledger.rs	# CLASSIFY protocol|msg-twin|data
+A	launchd:sh.fno.pr-watcher	py=cli/src/fno/pr_watch/cli.py;rs=crates/fno-agents/src/pr_watch/tick.rs|crates/fno-agents/src/tick_ledger.rs	# CLASSIFY protocol|msg-twin|data
 A	lead check-in. run fno agents org checkin: it gathers the check-in	py=cli/src/fno/config/_lead.py;rs=crates/fno/src/config_cli/model/validators_blocks.rs	# CLASSIFY protocol|msg-twin|data
 A	let method = match command	py=cli/src/fno/lint_command_ratchet.py;rs=crates/fno/src/menu_caps.rs	# CLASSIFY protocol|msg-twin|data
 A	live claim state is unavailable	py=cli/src/fno/graph/selection_evidence.py;rs=crates/fno-agents/src/backlog/maintenance_tests.rs	# CLASSIFY protocol|msg-twin|data
@@ -306,3 +306,16 @@ A	{label} must be a non-empty string	py=cli/src/fno/graph/store.py;rs=crates/fno
 A	{lane} drops its attach id	py=cli/src/fno/agents/harness_map.py;rs=crates/fno-agents/src/harness_capabilities.rs	# CLASSIFY protocol|msg-twin|data
 A	{name} {unmeasurable_label_mark} no positive liveness evidence)	py=cli/src/fno/graph/statuses.py;rs=crates/fno-agents/src/backlog/worked.rs	# CLASSIFY protocol|msg-twin|data
 A	{task_id} is already done	py=cli/src/fno/graph/cli.py;rs=crates/fno-agents/src/backlog/workflows.rs	# CLASSIFY protocol|msg-twin|data
+A	.fno/branch-provenance.json	py=cli/src/fno/branch_provenance_cache.py;rs=crates/fno-agents/src/pr_watch/state.rs	# CLASSIFY protocol|msg-twin|data
+A	auto_heal gate: {answer}	py=cli/src/fno/pr_watch/cli.py;rs=crates/fno-agents/src/pr_watch/tick.rs	# CLASSIFY protocol|msg-twin|data
+A	config.autonomy.enabled is false	py=cli/src/fno/pr_watch/cli.py;rs=crates/fno-agents/src/pr_watch/tick.rs	# CLASSIFY protocol|msg-twin|data
+A	deadline exceeded before phase {name}	py=cli/src/fno/pr_watch/cli.py;rs=crates/fno-agents/src/pr_watch/tick.rs	# CLASSIFY protocol|msg-twin|data
+A	fno_pr_watch_tick_timeout	py=cli/src/fno/pr_watch/cli.py;rs=crates/fno-agents/src/pr_watch/tick.rs	# CLASSIFY protocol|msg-twin|data
+A	merge-already-dispatched	py=cli/src/fno/pr_watch/__init__.py|cli/src/fno/pr_watch/_dispatch.py;rs=crates/fno-agents/src/pr_watch/discover.rs|crates/fno-agents/src/pr_watch/dispatch.rs	# CLASSIFY protocol|msg-twin|data
+A	pr #{pr} ({slug}) parked after {retries} failed {why} attempts	py=cli/src/fno/pr_watch/_dispatch.py;rs=crates/fno-agents/src/pr_watch/dispatch.rs	# CLASSIFY protocol|msg-twin|data
+A	pr-watch tick receipt emission failed	py=cli/src/fno/pr_watch/_dispatch.py;rs=crates/fno-agents/src/pr_watch/dispatch.rs	# CLASSIFY protocol|msg-twin|data
+A	pr-watch tick receipt summary emission failed	py=cli/src/fno/pr_watch/_dispatch.py;rs=crates/fno-agents/src/pr_watch/dispatch.rs	# CLASSIFY protocol|msg-twin|data
+A	pr-watch tick: {reason} is false - skipped	py=cli/src/fno/pr_watch/cli.py;rs=crates/fno-agents/src/pr_watch/tick.rs	# CLASSIFY protocol|msg-twin|data
+A	pr_watch_dispatch_failed	py=cli/src/fno/pr_watch/_dispatch.py;rs=crates/fno-agents/src/pr_watch/dispatch.rs	# CLASSIFY protocol|msg-twin|data
+A	state,headrefname,url,mergedat	py=cli/src/fno/pr_watch/_dispatch.py;rs=crates/fno-agents/src/pr_watch/tick.rs	# CLASSIFY protocol|msg-twin|data
+A	{head} pr_watch disabled	py=cli/src/fno/pr_watch/cli.py;rs=crates/fno-agents/src/pr_watch/tick.rs	# CLASSIFY protocol|msg-twin|data
