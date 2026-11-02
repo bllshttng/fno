@@ -70,6 +70,12 @@ pub struct Account {
     /// route or a base URL). None reads as the harness default.
     #[serde(default)]
     pub provider: Option<String>,
+    /// The email the saved login proved at sign-in. The row masks it.
+    #[serde(default)]
+    pub email: Option<String>,
+    /// The plan the account is on (`Max 20x`, `Pro`, a record's own `plan`).
+    #[serde(default)]
+    pub plan: Option<String>,
     /// The identity cell parsed from plain `list`'s own last column (the
     /// phase-2 read), taken verbatim, problems and all. None until it lands.
     #[serde(skip)]
@@ -1388,7 +1394,7 @@ impl ConnectionsView {
                 ));
             }
             if rows.is_empty() {
-                out.push("            no saved account - a: add one".to_string());
+                out.push("            no saved account".to_string());
             }
             for (i, a) in rows {
                 if i == self.acct_sel {
@@ -1436,9 +1442,16 @@ impl ConnectionsView {
             other => other,
         };
         let mut parts = vec![kind.to_string(), a.harness.clone()];
-        let identity = mask_emails(&self.identity_cell(a));
-        if identity != "-" {
-            parts.push(identity);
+        // Only a warning from the identity cell reaches the row: a login that
+        // serves someone else or is shared. An unproved token says nothing the
+        // user can act on here.
+        let cell = self.identity_cell(a);
+        let kept: Vec<&str> = cell
+            .split_whitespace()
+            .filter(|t| !t.starts_with('?'))
+            .collect();
+        if kept.iter().any(|t| t.starts_with('!')) {
+            parts.push(mask_emails(&kept.join(" ")));
         }
         match workers_on(a, agents) {
             0 => {}
@@ -1452,7 +1465,16 @@ impl ConnectionsView {
         if let Some(snap) = a.snapshot.as_deref().filter(|s| !s.is_empty()) {
             parts.push(format!("login saved {snap} ago"));
         }
-        let line = format!(" {spawn}{badge}  {}  {}", a.id, parts.join(" · "));
+        // The account's own name: its plan and masked email, as a provider's
+        // account page names it.
+        let mut title = a.id.clone();
+        match (a.plan.as_deref(), a.email.as_deref()) {
+            (Some(plan), Some(email)) => title.push_str(&format!("  {plan} ({})", mask_emails(email))),
+            (Some(plan), None) => title.push_str(&format!("  {plan}")),
+            (None, Some(email)) => title.push_str(&format!("  ({})", mask_emails(email))),
+            (None, None) => {}
+        }
+        let line = format!(" {spawn}{badge}  {title}  {}", parts.join(" · "));
         // Each key names only what it does on this row.
         let mut keys = Vec::new();
         if a.spawn_only {
@@ -2255,7 +2277,16 @@ mod tests {
         assert!(at("zai") < at("Amazon Bedrock") && at("DeepSeek") < at("Llama"));
         let default = out.lines().find(|l| l.contains("System default")).unwrap();
         assert!(!default.contains("[ACTIVE]"), "{default}");
-        assert!(out.contains("no saved account - a: add one"));
+        assert!(out.contains("no saved account") && !out.contains("a: add one"));
+        // A row names its plan and masked email, and an unproved identity
+        // token never reaches it.
+        let mut v = ready_view();
+        v.accounts[0].plan = Some("Max 20x".into());
+        v.accounts[0].email = Some("jn@makersof.xyz".into());
+        let out = v.render().join("\n");
+        let ccm = out.lines().find(|l| l.contains("  ccm  ")).unwrap();
+        assert!(ccm.contains("ccm  Max 20x (j•••@m•••.xyz)"), "{ccm}");
+        assert!(!out.contains("?unbound"), "{out}");
         assert_eq!(
             mask_emails("!serves jason@readyrule.com"),
             "!serves j•••@r•••.com"
@@ -2274,8 +2305,14 @@ mod tests {
                          "glm": {"state": "unknown", "reason": "auth-unsupported"}}"#;
         v.apply_read(ReadOutcome::Usage(parse_usage(usage).expect("usage json")));
         let out = v.render().join("\n");
-        assert!(out.contains(&format!("5h      {}{}  26%", "━".repeat(5), "─".repeat(15))), "{out}");
-        assert!(out.contains(&format!("weekly  {}  99%", "━".repeat(20))), "{out}");
+        assert!(
+            out.contains(&format!("5h      {}{}  26%", "━".repeat(5), "─".repeat(15))),
+            "{out}"
+        );
+        assert!(
+            out.contains(&format!("weekly  {}  99%", "━".repeat(20))),
+            "{out}"
+        );
         assert!(
             out.contains("no proven login for this account: r to log in"),
             "{out}"
@@ -3069,7 +3106,8 @@ mod tests {
             .lines()
             .find(|l| l.contains("subscription login") && l.contains("ccm"))
             .expect("ccm row");
-        assert!(ccm_row.contains('?'), "missing id reads ?: {ccm_row}");
+        // An unproved identity stays off the row; only a warning reaches it.
+        assert!(!ccm_row.contains('?'), "missing id stays off the row: {ccm_row}");
         let ccr_row = out
             .lines()
             .find(|l| l.contains("subscription login") && l.contains("ccr"))
@@ -3105,7 +3143,7 @@ mod tests {
         assert_eq!(v.state, ModalState::Ready);
         let out = v.render().join("\n");
         for line in out.lines().filter(|l| l.contains("subscription login")) {
-            assert!(line.contains('?'), "cell must read ?: {line}");
+            assert!(!line.contains('?'), "an unproved cell stays off the row: {line}");
         }
         assert!(!out.contains("!serves"));
 
