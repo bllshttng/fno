@@ -9,11 +9,10 @@
 use serde_json::{json, Value};
 use std::path::PathBuf;
 
-/// The subcommands that stay Python mounts (the watcher's own surface, outside
-/// this port's scope): decide_role leaves them unclaimed, and the
-/// dispatcher refuses them by name so a hand-typed `fno-agents do pr watch`
-/// cannot shadow the mount.
-const PYTHON_MOUNTS: [&str; 2] = ["watch", "stub-manifest"];
+/// The subcommands the family door answers, not this dispatcher: decide_role
+/// routes them elsewhere, and this refusal names the door for a hand-typed
+/// `fno-agents do pr stub-manifest`.
+const PYTHON_MOUNTS: [&str; 1] = ["stub-manifest"];
 
 /// One spelling's row: (spelling, usage tail). The grouped help lists every
 /// registered name with its usage line; a spelling's own --help prints the
@@ -148,6 +147,9 @@ pub fn run(args: &[String]) -> i32 {
         print_help();
         return 0;
     };
+    if sub == "watch" {
+        return crate::pr_watch::run(&args[1..]);
+    }
     if PYTHON_MOUNTS.contains(&sub.as_str()) {
         eprintln!(
             "fno do pr {sub}: the Python mount answers this spelling; run it \
