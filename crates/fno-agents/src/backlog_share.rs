@@ -2299,9 +2299,35 @@ pub fn maybe_tick(arm: &Arm) {
             if let Err(error) = report_and_prune(&graph) {
                 eprintln!("backlog-share: prune: {error}");
             }
+            replay_decisions(&graph);
         }
         flag.store(false, Ordering::SeqCst);
     });
+}
+
+/// The most rulings one beat replays into the graph table.
+const REPLAY_CAP: usize = 50;
+
+/// The retry for a ruling whose graph write a door's local transaction
+/// refused: the journal and the index hold it, the table and so every peer
+/// do not. It rides the prune cadence because the 5 s tick must not read the
+/// index. The next flush ships what it wrote.
+fn replay_decisions(graph: &Path) {
+    let index = crate::decision_index::graph_journal(graph);
+    match crate::decide_door::replay_unstored_decisions(graph, &index, Some(REPLAY_CAP)) {
+        Ok(counts) if counts.refused > 0 => {
+            static WARNED: std::sync::Once = std::sync::Once::new();
+            WARNED.call_once(|| {
+                eprintln!(
+                    "backlog-share: the graph store refused {} replayed ruling(s); \
+                     `fno backlog decide-reindex` retries now and prints the count",
+                    counts.refused
+                )
+            });
+        }
+        Ok(_) => {}
+        Err(error) => eprintln!("backlog-share: decision replay: {error}"),
+    }
 }
 
 #[cfg(test)]
@@ -2689,6 +2715,85 @@ mod tests {
         sync(&a.graph).unwrap();
         let synced = crate::backlog::open(&a.graph).unwrap();
         assert_eq!(seq_of(&synced, "d-b"), on_b);
+        route_to_primary(None);
+    }
+
+    /// A ruling whose graph write was refused sits in the index alone. The
+    /// replay lands it under its own id and ts, a second pass writes nothing,
+    /// and the peer reads it after one flush and one sync. A row the store
+    /// refuses again stays counted, and the rows after it still land.
+    #[test]
+    fn a_refused_ruling_replays_from_the_index_and_reaches_the_peer() {
+        use crate::decide_door::{replay_unstored_decisions, ReplayCounts};
+        let ruling = |id: &str, ts: &str| {
+            json!({"ts": ts, "type": "operator_decision", "source": "test",
+                   "data": {"decision_id": id, "decision": id}})
+            .to_string()
+        };
+        let created = |m: &Machine, id: &str| -> Option<String> {
+            crate::backlog::open(&m.graph)
+                .unwrap()
+                .query_row(
+                    "SELECT created_at FROM decisions WHERE event_id = ?1",
+                    [id],
+                    |r| r.get(0),
+                )
+                .optional()
+                .unwrap()
+        };
+        let primary = test_primary::start();
+        let (a, b) = (machine(), machine());
+        on(&primary, &a);
+        seed(&a.graph).unwrap();
+        on(&primary, &b);
+        sync(&b.graph).unwrap();
+
+        on(&primary, &a);
+        // The store refuses one row, the way a failed local transaction did.
+        crate::backlog::open(&a.graph)
+            .unwrap()
+            .execute_batch(
+                "CREATE TRIGGER refuse_fixture BEFORE INSERT ON decisions \
+                 WHEN NEW.event_id = 'd-refused' BEGIN SELECT RAISE(ABORT, 'refused'); END;",
+            )
+            .unwrap();
+        let index = crate::decision_index::graph_journal(&a.graph);
+        let lines = [
+            ruling("d-refused", "2026-10-17T00:00:00Z"),
+            ruling("d-lost", "2026-10-17T16:31:35Z"),
+        ];
+        std::fs::write(&index, lines.join("\n") + "\n").unwrap();
+        let first = replay_unstored_decisions(&a.graph, &index, Some(50)).unwrap();
+        assert_eq!(
+            first,
+            ReplayCounts {
+                replayed: 1,
+                refused: 1
+            }
+        );
+        assert_eq!(
+            created(&a, "d-lost").as_deref(),
+            Some("2026-10-17T16:31:35Z")
+        );
+        assert_eq!(created(&a, "d-refused"), None);
+        let second = replay_unstored_decisions(&a.graph, &index, Some(50)).unwrap();
+        assert_eq!(
+            second,
+            ReplayCounts {
+                replayed: 0,
+                refused: 1
+            }
+        );
+        let held = crate::event_store::journal_text(&index, &["operator_decision"]);
+        assert!(held.contains("d-refused"), "the refused row stays: {held}");
+
+        flush(&a.graph).unwrap();
+        on(&primary, &b);
+        sync(&b.graph).unwrap();
+        assert_eq!(
+            created(&b, "d-lost").as_deref(),
+            Some("2026-10-17T16:31:35Z")
+        );
         route_to_primary(None);
     }
 
