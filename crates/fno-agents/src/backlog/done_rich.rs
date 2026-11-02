@@ -781,8 +781,7 @@ fn door(payload: Value) -> Result<Value, String> {
 /// once, open items only. Selection fails closed: the message names the backend
 /// and nothing falls back to the local graph.
 pub(super) fn external_open_entries() -> Result<Vec<Value>, String> {
-    let failed =
-        |e: String| format!("tracker '{}' snapshot failed: {e}", active_backend_name());
+    let failed = |e: String| format!("tracker '{}' snapshot failed: {e}", active_backend_name());
     let out = door(json!({"tracker": "snapshot"})).map_err(failed)?;
     let entries = out
         .get("entries")

@@ -2,7 +2,7 @@
 //! keys removed command paths, longest prefix wins, so one entry covers a whole
 //! removed subtree. A name nobody removed is a plain unknown command.
 
-const TABLE: &str = include_str!("../../../../cli/src/fno/tombstones.toml");
+const TABLE: &str = include_str!("../tombstones.toml");
 
 /// `annotate` retired leaf by leaf: each names its own replacement.
 const ANNOTATE_RETIRED: [(&str, &str); 3] = [

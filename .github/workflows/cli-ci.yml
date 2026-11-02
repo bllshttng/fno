@@ -1025,6 +1025,7 @@ jobs:
             cli/src/fno/agents/harness_capabilities.toml \
             crates/fno/src/harness_capabilities.toml \
             cli/src/fno/agents/merge_posture.toml \
+            cli/src/fno/tombstones.toml \
             cli/src/fno/agents/slot_lanes.toml \
             crates/fno-agents/src/events_limits.toml \
             cli/src/fno/agents/registry_schema.toml \
