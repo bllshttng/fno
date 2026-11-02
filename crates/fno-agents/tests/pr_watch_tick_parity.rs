@@ -137,6 +137,7 @@ fn command(home: &Home, program: &Path) -> Command {
     let mut cmd = Command::new(program);
     let path = format!("{}:/usr/bin:/bin", home.bin.display());
     cmd.env_clear()
+        .envs(fno_agents::test_run::self_owner_env())
         .env("HOME", &home.dir)
         .env("PATH", path)
         .env("FNO_STATE_DIR", &home.state)
