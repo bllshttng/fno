@@ -144,6 +144,35 @@ fn shared_identity_ids(identities: &BTreeMap<String, AccountBinding>) -> BTreeSe
         .collect()
 }
 
+/// The vendor a record bills when it is not its harness's own: a route's
+/// first segment, a Bedrock switch in the env, or the vendor that owns the
+/// env's base URL. None means the harness default, so a plain record's row
+/// stays as it was.
+fn record_provider(
+    route: Option<&str>,
+    env: Option<&BTreeMap<String, String>>,
+    vendor: &dyn Fn(&str) -> Option<String>,
+) -> Option<String> {
+    let head = route
+        .map(|r| r.replace(',', "/"))
+        .and_then(|r| r.split('/').next().map(|v| v.trim().to_string()))
+        .filter(|v| !v.is_empty());
+    if head.is_some() {
+        return head;
+    }
+    let env = env?;
+    if ["CLAUDE_CODE_USE_BEDROCK", "AWS_BEARER_TOKEN_BEDROCK"]
+        .iter()
+        .any(|k| env.contains_key(*k))
+    {
+        return Some("bedrock".to_string());
+    }
+    ["ANTHROPIC_BASE_URL", "OPENAI_BASE_URL"]
+        .iter()
+        .find_map(|k| env.get(*k).filter(|u| !u.is_empty()))
+        .and_then(|url| vendor(url))
+}
+
 fn rows(
     accounts: &Accounts,
     cwd: &Path,
@@ -173,6 +202,12 @@ fn rows(
             });
             if record.config_dir.is_some() {
                 row["spawn_only"] = json!(true);
+            }
+            let vendor = |url: &str| crate::accounts::credentials::vendor_for_endpoint(cwd, url);
+            if let Some(provider) =
+                record_provider(record.route.as_deref(), record.env.as_ref(), &vendor)
+            {
+                row["provider"] = json!(provider);
             }
             row
         })
@@ -329,5 +364,30 @@ pub fn run(args: &[String]) -> i32 {
             eprintln!("error: {e}");
             1
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_route_or_a_base_url_names_the_provider_and_a_plain_key_names_none() {
+        let env = |pairs: &[(&str, &str)]| -> BTreeMap<String, String> {
+            pairs
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect()
+        };
+        let vendor = |url: &str| url.contains("z.ai").then(|| "zai".to_string());
+        let got = |route, env| record_provider(route, env, &vendor);
+        assert_eq!(got(Some("deepseek/v3"), None).as_deref(), Some("deepseek"));
+        let zai = env(&[("ANTHROPIC_BASE_URL", "https://api.z.ai/api/anthropic")]);
+        assert_eq!(got(None, Some(&zai)).as_deref(), Some("zai"));
+        let bedrock = env(&[("CLAUDE_CODE_USE_BEDROCK", "1")]);
+        assert_eq!(got(None, Some(&bedrock)).as_deref(), Some("bedrock"));
+        let plain = env(&[("ANTHROPIC_API_KEY", "k")]);
+        assert_eq!(got(None, Some(&plain)), None);
+        assert_eq!(got(Some(" "), None), None);
     }
 }
