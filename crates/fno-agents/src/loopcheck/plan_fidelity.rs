@@ -603,7 +603,7 @@ fn truncate_tail(buf: &[u8]) -> String {
     String::from_utf8_lossy(&buf[start..]).into_owned()
 }
 
-fn body_guard_verdict(out: &GuardOutput) -> Option<String> {
+pub(crate) fn body_guard_verdict(out: &GuardOutput) -> Option<String> {
     match out.status {
         Some(0) => None,
         Some(1) => {

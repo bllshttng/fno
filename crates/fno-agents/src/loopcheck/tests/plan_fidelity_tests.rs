@@ -24,6 +24,11 @@ fn pinned_now() -> chrono::DateTime<chrono::Local> {
 
 struct Fixture {
     dir: tempfile::TempDir,
+    // The joined paths the GateInputs borrows, so the borrows outlive
+    // `inputs()` instead of pointing at temporaries it created.
+    repo: std::path::PathBuf,
+    ledger: std::path::PathBuf,
+    graph: std::path::PathBuf,
 }
 
 const LEDGER_ROWS: &str = r#"{"entries": [
@@ -68,7 +73,12 @@ impl Fixture {
             "---\ncarveouts: forbidden\nnode: x-forb\n---\n# plan forbid\n",
         )
         .unwrap();
-        Fixture { dir }
+        Fixture {
+            repo: dir.path().join("repo"),
+            ledger: dir.path().join("state/ledger.json"),
+            graph: dir.path().join("state/graph.json"),
+            dir,
+        }
     }
 
     fn root(&self) -> std::path::PathBuf {
@@ -83,9 +93,9 @@ impl Fixture {
     ) -> GateInputs<'a> {
         GateInputs {
             plan_path: plan,
-            cwd: &self.dir.path().join("repo"),
-            ledger_path: &self.dir.path().join("state/ledger.json"),
-            graph_path: &self.dir.path().join("state/graph.json"),
+            cwd: &self.repo,
+            ledger_path: &self.ledger,
+            graph_path: &self.graph,
             since_days: 180,
             now: pinned_now(),
             read_body,
@@ -259,14 +269,9 @@ fn body_guard_exit_zero_passes_and_other_exits_are_unreadable() {
 fn body_guard_timeout_is_named_not_silent() {
     let fix = Fixture::new();
     let slow = stub_script(&fix.root(), "slow.sh", "#!/bin/bash\nsleep 5\n");
-    let cmd = std::process::Command::new("bash");
-    let out = bounded_spawn(
-        cmd.arg(&slow)
-            .current_dir(fix.root().join("repo"))
-            .to_owned(),
-        std::time::Duration::from_millis(200),
-    )
-    .unwrap();
+    let mut cmd = std::process::Command::new("bash");
+    cmd.arg(&slow).current_dir(fix.root().join("repo"));
+    let out = bounded_spawn(cmd, std::time::Duration::from_millis(200)).unwrap();
     let reason = body_guard_verdict(&out).unwrap();
     assert!(
         reason.contains("carve-out check unreadable (timeout)"),

@@ -1034,6 +1034,7 @@ mod tests {
             &[claude_turn(
                 "user",
                 "<fno_mail from=\"peer\" id=\"m1\">relay body</fno_mail>",
+                "2026-01-01T00:00:00Z",
             )],
         );
         let brief = resolve_dispatch_brief(&node(&[

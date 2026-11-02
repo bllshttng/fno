@@ -644,7 +644,7 @@ pub mod plan_filenames {
             }
         };
         let prefixes = door_prefixes();
-        scan_dir(&plans_dir, root, &prefixes)
+        scan_dir(&plans_dir, &prefixes)
     }
 
     /// The filename-prefix allowlist: the configured node prefix plus the
@@ -657,11 +657,7 @@ pub mod plan_filenames {
         set
     }
 
-    pub fn scan_dir(
-        plans_dir: &Path,
-        root: &Path,
-        prefixes: &std::collections::BTreeSet<String>,
-    ) -> Scan {
+    pub fn scan_dir(plans_dir: &Path, prefixes: &std::collections::BTreeSet<String>) -> Scan {
         if !plans_dir.is_dir() {
             eprintln!(
                 "plan-filenames: plans dir not found: {}",

@@ -1322,7 +1322,7 @@ mod marker_tests {
 /// The verdict-flow contracts the deleted Python suite (`test_boundary.py`)
 /// pinned, re-homed beside the live port.
 mod boundary_flow_tests {
-    use super::{evaluate_blocker, reconcile_against, resolve_target, BlockerVerdict};
+    use super::{evaluate_blocker, reconcile_against, resolve_target};
 
     fn done_entry(pr: i64) -> serde_json::Value {
         serde_json::json!({

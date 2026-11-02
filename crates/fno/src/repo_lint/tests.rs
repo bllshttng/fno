@@ -48,7 +48,6 @@ fn state_roots_rule_a_fires_on_a_hand_built_path_and_both_directions_hold() {
         root: dir.clone(),
         update: false,
         no_degrade: false,
-        dispatch_path: None,
         providers_dir: None,
         json: false,
         live: false,
@@ -85,7 +84,6 @@ fn spawn_paths_fires_on_a_hand_assembled_session_argv() {
         root: dir.clone(),
         update: false,
         no_degrade: false,
-        dispatch_path: None,
         providers_dir: None,
         json: false,
         live: false,
@@ -118,7 +116,6 @@ fn provider_stderr_merge_fires_without_a_justification_window() {
         root: dir.clone(),
         update: false,
         no_degrade: false,
-        dispatch_path: None,
         providers_dir: None,
         json: false,
         live: false,
@@ -148,7 +145,7 @@ fn plan_filenames_flags_a_filename_that_disagrees_with_its_claim() {
     );
     let plans_dir = dir.join("plans");
     let prefixes = ["x".to_string(), "ab".to_string()].into_iter().collect();
-    let scan = plan_filenames::scan_dir(&plans_dir, &dir, &prefixes);
+    let scan = plan_filenames::scan_dir(&plans_dir, &prefixes);
     match scan {
         plan_filenames::Scan::Mismatched(rows) => {
             assert_eq!(rows.len(), 1, "{rows:?}");
@@ -180,7 +177,6 @@ fn command_ratchet_refuses_a_rust_leaf_the_baseline_lacks() {
         root: dir.clone(),
         update: false,
         no_degrade: false,
-        dispatch_path: None,
         providers_dir: None,
         json: false,
         live: false,
