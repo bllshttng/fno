@@ -24,10 +24,10 @@ const PRECISION_SOURCES: [&str; 5] = [
 
 const HELP: &str = "Usage: fno doctor event corrections [OPTIONS]
 
-  Correction rates per model, harness or day: user, agent and machine apart.
+  Correction rates per model, harness, seat or day: user, agent and machine apart.
 
 Options:
-  --by <model|harness|day>    Group the rows. [default: model]
+  --by <model|harness|role|day>  Group the rows. role is the corrected seat. [default: model]
   --since <7d|ISO-8601>       Lower timestamp bound. [default: 7d, or 30d with --by day]
   --source <user|agent|machine>  Print one source.
   --include-interrupt         Count interrupts, which reports exclude by default.
@@ -82,9 +82,9 @@ fn parse(args: &[OsString]) -> Result<Option<Args>, String> {
             other => return Err(format!("unknown flag {other}")),
         }
     }
-    if !matches!(out.by.as_str(), "model" | "harness" | "day") {
+    if !matches!(out.by.as_str(), "model" | "harness" | "role" | "day") {
         return Err(format!(
-            "--by must be model, harness or day, not {}",
+            "--by must be model, harness, role or day, not {}",
             out.by
         ));
     }
@@ -135,6 +135,9 @@ struct Tally {
     interrupt: u64,
     refused: u64,
     unwitnessed: u64,
+    /// Correct and reject rows that carry their own seat: the only rows the
+    /// seat tally's turns also cover.
+    stamped: u64,
     rule_versions: BTreeSet<String>,
 }
 
@@ -177,6 +180,49 @@ fn typed_turns(cache: &Path, by: &str, since_day: &str) -> BTreeMap<String, u64>
     out
 }
 
+/// Typed turns per seat since a day. Keys read `day|seat`.
+fn seat_turns(cache: &Path, since_day: &str) -> BTreeMap<String, u64> {
+    let mut out = BTreeMap::new();
+    let parsed = std::fs::read_to_string(cache)
+        .ok()
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok());
+    let rows = parsed
+        .as_ref()
+        .and_then(|p| p.get("seat_turns"))
+        .and_then(Value::as_object);
+    for (key, n) in rows.into_iter().flatten() {
+        let Some((day, seat)) = key.split_once('|') else {
+            continue;
+        };
+        if day >= since_day {
+            *out.entry(seat.to_string()).or_default() += n.as_u64().unwrap_or(0);
+        }
+    }
+    out
+}
+
+/// Each backfilled row's seat, by correction id. These rows read whatever the
+/// report's window, because a seat row's stamp is its pass, not its turn.
+fn backfilled_seats(journal: &Path) -> Result<BTreeMap<String, String>, String> {
+    let query = crate::event_store::EventQuery {
+        types: vec!["correction_seat".into()],
+        ..Default::default()
+    };
+    let mut out = BTreeMap::new();
+    for row in crate::event_store::query_events(journal, &query)? {
+        let Ok(envelope) = serde_json::from_str::<Value>(&row.line) else {
+            continue;
+        };
+        let data = &envelope["data"];
+        let id = data.get("correction_id").and_then(Value::as_str);
+        let seat = data.pointer("/seat/value").and_then(Value::as_str);
+        if let (Some(id), Some(seat)) = (id, seat) {
+            out.insert(id.to_string(), seat.to_string());
+        }
+    }
+    Ok(out)
+}
+
 /// The UTC day of the fold's first run, from its cache.
 fn first_run_day(cache: &Path) -> Option<String> {
     let text = std::fs::read_to_string(cache).ok()?;
@@ -210,6 +256,12 @@ fn report(args: &Args, journal: &Path, cache: &Path) -> Result<Value, String> {
         ..Default::default()
     };
     let rows = crate::event_store::query_events(journal, &query)?;
+    let by_role = args.by == "role";
+    let backfilled = if by_role {
+        backfilled_seats(journal)?
+    } else {
+        BTreeMap::new()
+    };
     let mut blocks: BTreeMap<String, BTreeMap<String, Tally>> = BTreeMap::new();
     for row in &rows {
         let Ok(envelope) = serde_json::from_str::<Value>(&row.line) else {
@@ -229,6 +281,15 @@ fn report(args: &Args, journal: &Path, cache: &Path) -> Result<Value, String> {
                     .and_then(|t| t.get(..10))
                     .unwrap_or("unmeasured")
                     .to_string()
+            } else if by_role {
+                data.pointer("/seat/value")
+                    .and_then(Value::as_str)
+                    .or_else(|| {
+                        let id = data.get("correction_id").and_then(Value::as_str)?;
+                        backfilled.get(id).map(String::as_str)
+                    })
+                    .unwrap_or("unmeasured")
+                    .to_string()
             } else {
                 group_of(data, &args.by)
             })
@@ -239,7 +300,11 @@ fn report(args: &Args, journal: &Path, cache: &Path) -> Result<Value, String> {
         if data.get("typed").and_then(Value::as_str) == Some("unwitnessed") {
             entry.unwitnessed += 1;
         }
-        match data.get("kind").and_then(Value::as_str) {
+        let kind = data.get("kind").and_then(Value::as_str);
+        if data.get("seat").is_some() && matches!(kind, Some("correct" | "reject")) {
+            entry.stamped += 1;
+        }
+        match kind {
             Some("correct") => entry.correct += 1,
             Some("reject") => entry.reject += 1,
             Some("interrupt") => entry.interrupt += 1,
@@ -250,7 +315,11 @@ fn report(args: &Args, journal: &Path, cache: &Path) -> Result<Value, String> {
     let since_day = chrono::DateTime::from_timestamp_millis(since)
         .map(|d| d.format("%Y-%m-%d").to_string())
         .unwrap_or_default();
-    let turns = typed_turns(cache, &args.by, &since_day);
+    let turns = if by_role {
+        seat_turns(cache, &since_day)
+    } else {
+        typed_turns(cache, &args.by, &since_day)
+    };
     // A day with typed turns and no correction is a rate of zero, not a gap.
     let by_day = args.by == "day";
     let first_day = if by_day { first_run_day(cache) } else { None };
@@ -289,8 +358,13 @@ fn report(args: &Args, journal: &Path, cache: &Path) -> Result<Value, String> {
                     let typed = turns.get(bare_group(group)).copied().unwrap_or(0);
                     row["typed_turns"] = json!(typed);
                     row["unwitnessed"] = json!(t.unwitnessed);
+                    let hits = if by_role {
+                        t.stamped
+                    } else {
+                        t.correct.saturating_add(t.reject)
+                    };
                     row["rate"] = if typed > 0 {
-                        json!(t.correct.saturating_add(t.reject) as f64 / typed as f64)
+                        json!(hits as f64 / typed as f64)
                     } else {
                         Value::Null
                     };
@@ -301,7 +375,11 @@ fn report(args: &Args, journal: &Path, cache: &Path) -> Result<Value, String> {
         out.insert(source.to_string(), Value::Array(groups));
     }
     Ok(json!({"by": args.by, "since": args.since, "blocks": out,
-        "note": "held is weak evidence: a merge shows nothing broke, never that the corrector was right. Compare rates only within one rule_version."}))
+    "note": if by_role {
+        "A seat's rate counts only rows stamped when the fold read them, so a backfilled row adds to count and never to rate. Compare rates only within one rule_version."
+    } else {
+        "held is weak evidence: a merge shows nothing broke, never that the corrector was right. Compare rates only within one rule_version."
+    }}))
 }
 
 fn print_report(value: &Value) {
@@ -476,6 +554,44 @@ mod tests {
             "data": {"correction_id": id, "corrected_by": by, "kind": kind,
                 "session_id": "s", "rule_version": "v1", "harness": "claude", "model": model}});
         crate::event_store::append_envelope(journal, &envelope.to_string(), Some(id)).unwrap();
+    }
+
+    #[test]
+    fn by_role_splits_seats_and_a_backfilled_row_adds_to_count_never_to_rate() {
+        let dir = tempfile::tempdir().unwrap();
+        let journal = dir.path().join("events.jsonl");
+        let stamp = chrono::Utc::now().to_rfc3339();
+        let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        let add = |id: &str, seat: Option<&str>| {
+            let mut data = json!({"correction_id": id, "corrected_by": "user", "kind": "correct",
+                "session_id": "s", "rule_version": "v1"});
+            if let Some(seat) = seat {
+                data["seat"] = json!({"value": seat, "basis": "roster"});
+            }
+            let row =
+                json!({"ts": stamp, "type": "agent_corrected", "source": "daemon", "data": data});
+            crate::event_store::append_envelope(&journal, &row.to_string(), Some(id)).unwrap();
+        };
+        add("a", Some("lead:L0"));
+        add("b", Some("worker"));
+        add("c", None);
+        add("d", None);
+        let seat_row = json!({"ts": "2020-01-01T00:00:00Z", "type": "correction_seat",
+            "source": "daemon",
+            "data": {"correction_id": "c", "seat": {"value": "lead:L0", "basis": "role_vacated"}}});
+        crate::event_store::append_envelope(&journal, &seat_row.to_string(), Some("sc")).unwrap();
+        let cache = dir.path().join("cursors.json");
+        let key = format!("{today}|lead:L0");
+        std::fs::write(&cache, json!({"seat_turns": {key: 4}}).to_string()).unwrap();
+        let args = parse(&["--by=role".into()]).unwrap().unwrap();
+        let value = report(&args, &journal, &cache).unwrap();
+        let user = value["blocks"]["user"].as_array().unwrap();
+        let of = |g: &str| user.iter().find(|r| r["group"] == g).unwrap();
+        assert_eq!(of("lead:L0")["count"], 2);
+        assert_eq!(of("lead:L0")["rate"], 0.25, "the seat row adds no rate");
+        assert_eq!(of("worker")["count"], 1);
+        assert!(of("worker")["rate"].is_null());
+        assert_eq!(of("unmeasured")["count"], 1, "never folded into a seat");
     }
 
     #[test]
