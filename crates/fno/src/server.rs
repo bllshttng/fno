@@ -8807,7 +8807,7 @@ impl Core {
             .clients
             .iter()
             .map(|c| {
-                let focus = self.links.pane(c.id).or(self.viewed_tab(c.view).map(|t| t.focus))?;
+                let focus = self.modes_pane(c.id, c.view)?;
                 self.panes.get(&focus).map(|e| e.vt.modes())
             })
             .collect();

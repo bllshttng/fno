@@ -144,6 +144,8 @@ pub mod mouse;
 #[cfg(feature = "full")]
 pub mod mux_cli;
 #[cfg(feature = "full")]
+pub mod mux_link;
+#[cfg(feature = "full")]
 pub mod mux_rows;
 #[cfg(feature = "full")]
 pub mod needs_overlay;
@@ -154,8 +156,6 @@ pub mod notify;
 pub mod notify_command;
 #[cfg(feature = "full")]
 pub mod notify_dispatch;
-#[cfg(feature = "full")]
-pub mod mux_link;
 #[cfg(feature = "full")]
 pub mod observe;
 #[cfg(feature = "full")]

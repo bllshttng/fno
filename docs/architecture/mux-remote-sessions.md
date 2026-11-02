@@ -4,7 +4,7 @@ The sideline can show every machine on the fleet map. A session on another machi
 
 ## Group by machine
 
-`prefix+W` cycles the agent group, and `machine` is one of its values. The sideline then paints a band for each machine, a band for each project inside it, then the rows. This machine comes first. Each machine band reads `host · ready · 23s`, or `offline` when the fleet map calls the machine stale. The number is the age of its newest beat.
+`prefix+W` cycles the agent group, and `machine` is one of its values. The sideline then paints a band for each machine, a band for each project inside it, then the rows. This machine comes first. Each machine band reads `host · ready · 23s`. A machine the fleet map calls stale reads `offline`. The number is the age of its newest beat.
 
 This machine's rows come from the server's layout. Other machines' rows come from `fno agents fleet top --machines`, read off the UI loop every 15 seconds while the axis is on. A failed read keeps the last good bands, so a row does not vanish because the primary blinked. With fewer than two machines the axis paints the workspace tree, and nothing connects to another machine until you open a row.
 
@@ -27,11 +27,11 @@ The far door, `fno mux serve --link <key>`, resolves the key on the host: sessio
 | Hosted in a pane | A passive client tagged to that one pane | None. It births no workspace and is not counted in the tab's size |
 | A paneless thread | `fno-agents attach --inline <name>` in the ssh terminal | None. The host's portals stay as they were |
 
-The server gate is `crates/fno/src/server/links.rs`. A tagged client may send input, mouse and scroll for its own pane and nothing else. The hello carries the pane's child pid, so a pane id reused between the read and the hello is refused. An untagged passive client stays read-only.
+The server gate is `crates/fno/src/server/links.rs`. A tagged client can send input, mouse and scroll for its own pane and nothing else. The hello carries the pane's child pid, so a pane id reused between the read and the hello is refused. An untagged passive client stays read-only.
 
 Keys carry no author on the wire. Both ends are the same person, so the far door does not redact the pane.
 
-## When the connection drops
+## A dropped connection
 
 `fno-agents attach --dial <host> <key>` supervises ssh on the pane's own terminal. It copies no bytes. It reads the far door's exit code.
 

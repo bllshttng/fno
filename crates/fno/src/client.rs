@@ -10225,9 +10225,9 @@ mod agent_sort;
 #[path = "client/agent_group.rs"]
 mod agent_group;
 use agent_group::agent_hit;
+mod hold;
 #[path = "client/machine_tree.rs"]
 mod machine_tree;
-mod hold;
 
 #[path = "client/header_band.rs"]
 mod header_band;

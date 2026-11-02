@@ -508,7 +508,9 @@ pub(crate) fn parse_attach_args(rest: &[String]) -> Result<AttachArgs, (i32, Str
             "--cross-project" => {}
             "--inline" => inline = true,
             "--dial" => {
-                let host = words.next().ok_or((2, "fno-agents: --dial needs a host".to_string()))?;
+                let host = words
+                    .next()
+                    .ok_or((2, "fno-agents: --dial needs a host".to_string()))?;
                 dial = Some(host.clone());
             }
             other if other.starts_with("--") => {

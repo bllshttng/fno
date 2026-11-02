@@ -39,6 +39,13 @@ impl Links {
 }
 
 impl Core {
+    /// The pane whose terminal modes this client's terminal follows: a link
+    /// client's own pane, which its view's focus says nothing about.
+    pub(super) fn modes_pane(&self, id: u64, view: (u64, super::TabId)) -> Option<u64> {
+        let focus = self.viewed_tab(view).map(|tab| tab.focus);
+        self.links.pane(id).or(focus)
+    }
+
     /// Tag passive client `id` as the driver of one pane, after checking the
     /// pane still holds the child the far door read. A refused hello leaves the
     /// client an untagged observer that can write nothing, so the far door
