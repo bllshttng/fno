@@ -68,16 +68,16 @@ def _shorts_on(path: str) -> set[str]:
 def test_backlog_done_row_matches_the_command() -> None:
     """The legend row must match the unified close surface.
 
-    `fno backlog done` carries both faces after the close-depth union: the
-    canonical close flags (-F --force / -R --reason) and the PR-metadata
-    surface (-p pr-number, -l link, -m note) that used to belong only to the
-    deprecated root `fno done`. That root spelling is now a forwarding shim
-    over the same command, so one legend row covers both.
+    `fno backlog done` carries the canonical close flags (-F --force / -R
+    --reason) and the PR-metadata surface (-p pr-number, -l link, -m note).
     """
     from fno.cli import SHORTHAND_LEGEND
+    from tests._native_door import run_native
 
-    assert _shorts_on("backlog done") >= {"-F", "-R", "-p", "-l", "-m"}
-    assert _shorts_on("done") >= {"-p", "-l", "-m"}
+    code, out, _err = run_native("backlog", "done", "--help")
+    assert code == 0
+    shorts = {s for pair in _SHORT_BESIDE_LONG.findall(_clean(out)) for s in pair if s}
+    assert shorts >= {"-F", "-R", "-p", "-l", "-m"}
     assert "fno backlog done  " in SHORTHAND_LEGEND
 
 

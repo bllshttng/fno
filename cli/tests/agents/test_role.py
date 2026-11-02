@@ -207,10 +207,10 @@ def _seed_role_graph(monkeypatch, tmp_path: Path, epics: list[dict]) -> None:
 
 
 def _graph_entries() -> list[dict]:
-    from fno.graph.store import read_graph_strict
     from fno.paths import graph_json
+    from fno.rust_binary import backlog_rows
 
-    return read_graph_strict(graph_json())
+    return backlog_rows(include_archived=True, path=graph_json())
 
 
 def _mission_events() -> list[dict]:

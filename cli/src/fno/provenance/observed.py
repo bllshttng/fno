@@ -40,7 +40,7 @@ def resolve_transcript_path(
 
     Public because :func:`observed_model` takes a path rather than finding one,
     so every caller outside this module needs this to reach it -- see
-    ``fno.graph.store._observe_model``. Never raises; an unresolvable pointer is
+    the native store's observed-model read. Never raises; an unresolvable pointer is
     ``None``, which ``observed_model`` reports as ``no-transcript``.
     """
     if agent not in FILE_BACKED_HARNESSES:

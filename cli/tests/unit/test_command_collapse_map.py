@@ -54,7 +54,11 @@ def test_map_matches_the_uncollapsed_click_action_inventory():
         live.update(path for path, _sub in _iter_group_leaves(command, context, group))
     live.update(NATIVE_SERVED_LEAVES)
 
-    mapped = {leaf for leaf in _mapped_leaves() if leaf.split()[0] in COLLAPSE_KEEP}
+    mapped = {
+        leaf
+        for leaf in _mapped_leaves()
+        if leaf.split()[0] in COLLAPSE_KEEP or leaf in NATIVE_SERVED_LEAVES
+    }
     assert live == mapped
 
 
@@ -78,7 +82,7 @@ def test_runtime_keep_registry_matches_the_checked_in_allocation():
     group_sizes = Counter(row["current-leaf"].split()[0] for row in _python_rows())
     for row in _python_rows():
         tokens = row["current-leaf"].split()
-        if row["tier"] == "KEEP" and group_sizes[tokens[0]] > 1:
+        if tokens[0] in COLLAPSE_KEEP and row["tier"] == "KEEP" and group_sizes[tokens[0]] > 1:
             expected[tokens[0]].add(tokens[1])
     assert COLLAPSE_KEEP == expected
 

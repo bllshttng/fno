@@ -5,7 +5,7 @@
 #
 # "Is this plan ready?" used to be answered in seven places across three
 # languages over four vocabularies, with two of the answers using opposite
-# failure policies and no file referencing another. `fno.graph.ladder.plan_rung`
+# failure policies and no file referencing another. `backlog_ready::plan_rung`
 # is now the sole classifier; Bash reaches it through `fno do plan rung` and Rust
 # reaches it by shelling out or by reading Python-derived JSON.
 #
@@ -623,32 +623,18 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 3. Python keeps one rung table.
+# 3. Python keeps no rung table.
 # ---------------------------------------------------------------------------
-echo "--- Python: one rung table ---"
+echo "--- Python: no rung table ---"
 tables=$(
     git ls-files -z -- 'cli/src/**/*.py' 2>/dev/null \
         | xargs -0 grep -l '_STATUS_TO_RUNG' 2>/dev/null | LC_ALL=C sort || true
 )
-if [ "$tables" != "cli/src/fno/graph/ladder.py" ]; then
-    violation "the rung table must live only in cli/src/fno/graph/ladder.py" \
-        "found in: ${tables:-(nowhere - was plan_rung deleted?)}"
+if [ -n "$tables" ]; then
+    violation "the rung table lives only in crates/fno-agents/src/backlog_ready.rs" \
+        "found in: $tables"
 else
-    note "OK: the rung table lives only in ladder.py"
-fi
-
-# Dispatch policy stays explicit for both plan-bearing and plan-less nodes.
-# Autonomous selection reads plan_rung directly through selection_guards; a
-# second is_selectable predicate would be decorative because no selector calls it.
-if grep -q 'def is_selectable' cli/src/fno/graph/ladder.py 2>/dev/null; then
-    violation "is_selectable must not return as a decorative policy" \
-        "Autonomous selectors read plan_rung through selection_guards."
-elif ! grep -q 'def is_dispatchable' cli/src/fno/graph/ladder.py 2>/dev/null \
-    || ! grep -q 'def is_cold_dispatchable' cli/src/fno/graph/ladder.py 2>/dev/null; then
-    violation "both real dispatch policies must exist in ladder.py" \
-        "Expected is_dispatchable and is_cold_dispatchable."
-else
-    note "OK: real dispatch policies are present and is_selectable is absent"
+    note "OK: Python holds no rung table"
 fi
 
 echo ""

@@ -195,9 +195,9 @@ def write_pr_stub(root: Path, states: dict[int, str] | None = None, *, fail_stde
 
 
 def graph_rows(root: Path) -> list[dict]:
-    from fno.graph.api import wire_rows
+    from fno.rust_binary import backlog_rows
 
-    return wire_rows(path=root / "graph.json")
+    return backlog_rows(path=root / "graph.json")
 
 
 def native_backlog(*argv: str, env_override: dict[str, str] | None = None) -> DoorResult:

@@ -70,17 +70,13 @@ PROBE_ABSENT = {
 # ── 1.3: resolve, refuse, render ────────────────────────────────────────
 
 
-def test_pre_rename_node_key_still_reads_but_config_keys_do_not():
+def test_pre_rename_config_keys_do_not_read():
     from fno.config import DispatchBlock
-    from fno.graph.types import Node
 
     block = DispatchBlock.model_validate(
         {"allowed_verbs": ["/x"], "verb_registry": {"/x": {"invocation": "/x"}}}  # verb-wording: allow
     )
     assert block.allowed_commands == ["/target", "/think", "/blueprint"]
     assert block.command_registry == {}
-    node = Node.model_validate({"id": "x-1", "dispatch_verb": "/think"})  # verb-wording: allow
-    assert node.dispatch_command == "/think"
-    assert "dispatch_verb" not in node.model_dump()  # verb-wording: allow
 
 

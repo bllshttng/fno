@@ -35,54 +35,7 @@ def _patch_get_binary(monkeypatch, binary=_FAKE_GET_BIN):
     )
 
 
-def test_get_two_ids_forwards_graph_get_argv(monkeypatch):
-    import subprocess
-
-    captured = {}
-
-    def _stub_run(cmd, check=False, **kwargs):
-        captured["cmd"] = list(cmd)
-        return _StubGetResult(returncode=0)
-
-    _patch_get_binary(monkeypatch)
-    monkeypatch.setattr(subprocess, "run", _stub_run)
-
-    result = runner.invoke(app, ["backlog", "get", "x-997a", "x-374b"], env=_ENV)
-    assert result.exit_code == 0
-    assert captured["cmd"] == [_FAKE_GET_BIN, "backlog", "get", "x-997a", "x-374b", "--json"]
 
 
-def test_get_one_id_execs_the_binary_without_the_batch_flag(monkeypatch):
-    """A single graph-mode id is the native binary's read now; it execs
-    without the batch --json flag the multi-id dispatch appends."""
-    import subprocess
-
-    captured = {}
-
-    def _stub_run(cmd, check=False, **kwargs):
-        captured["cmd"] = list(cmd)
-        return _StubGetResult(returncode=1)
-
-    _patch_get_binary(monkeypatch)
-    monkeypatch.setattr(subprocess, "run", _stub_run)
-
-    result = runner.invoke(app, ["backlog", "get", "x-nonexistent-abc"], env=_ENV)
-    assert captured["cmd"] == [_FAKE_GET_BIN, "backlog", "get", "x-nonexistent-abc"]
-    assert result.exit_code == 1
 
 
-def test_get_several_ids_with_field_refuses_before_touching_the_binary(monkeypatch):
-    """--field/--grouped/--strict project a SINGLE row; several ids with one of
-    these is a usage error, not a silent per-row projection nobody asked for."""
-    import fno.rust_binary
-
-    def _fail_resolve():
-        raise AssertionError("resolve_binary() called despite the flag refusal")
-
-    monkeypatch.setattr(fno.rust_binary, "resolve_binary", _fail_resolve)
-
-    result = runner.invoke(
-        app, ["backlog", "get", "x-997a", "x-374b", "--field", "title"], env=_ENV
-    )
-    assert result.exit_code == 2
-    assert "one id at a time" in result.output

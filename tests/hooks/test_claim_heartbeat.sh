@@ -667,7 +667,7 @@ if [[ -x "$REAL_AGENTS" ]]; then
   payload="$(jq -cn --arg cwd "$REAL_REPO" '{cwd:$cwd,session_id:"owner-session",tool_name:"Bash",tool_input:{command:"gh pr create --fill"},tool_response:{stdout:"https://github.com/acme/widgets/pull/42"}}')"
   err="$(printf '%s' "$payload" | FNO_AGENTS_BIN="$REAL_AGENTS" FNO_CONFIG="$REAL_CONFIG" CODEX_THREAD_ID= CLAUDE_PLUGIN_ROOT="$REPO_ROOT" bash "$HOOK" 2>&1 >/dev/null)"; rc=$?
   # The bind lands in graph.db and the read comes back through the keeper.
-  row_json="$(uv run --project "$REPO_ROOT/cli" python -c "import json; from pathlib import Path; from fno.graph.store import read_graph_strict; print(json.dumps(read_graph_strict(Path('$REAL_GRAPH'))[0]))")"
+  row_json="$("$REAL_AGENTS" backlog script-door rows --graph "$REAL_GRAPH" | jq -c '.[0]')"
   if [[ "$rc" -eq 0 && "$(jq -r '.status' <<<"$row_json")" == in_review \
         && "$(jq -r '.pr_number' <<<"$row_json")" == 42 ]]; then
     # Ownership reads through the claim store now, so the bind stamps no

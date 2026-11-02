@@ -768,10 +768,8 @@ def _append_sections_to_body(body: str, new_sections: dict[str, str]) -> str:
 # rc 7 = the plan states no file surface, matching _VALIDATE_SNIPPET's "the
 # thing we warn about happened" code. Any other rc means no verdict was earned.
 _SURFACE_SNIPPET = r"""
-import sys
-from pathlib import Path
-from fno.graph.collision import has_file_surface
-sys.exit(0 if has_file_surface(Path(sys.argv[1])) else 7)
+import os, subprocess, sys
+sys.exit(subprocess.run([os.environ.get("FNO_AGENTS_FRONT") or "fno", "backlog", "script-door", "has-file-surface", sys.argv[1]]).returncode)
 """
 
 
@@ -1249,7 +1247,7 @@ def _bind_node_id(frontmatter: dict) -> tuple[str | None, str | None]:
     """Resolve the node id a plan binds, reading ``node`` and ``claims`` as one
     fact under two spellings.
 
-    Ported from ``plan_claims`` (``cli/src/fno/graph/_intake.py:736``), the
+    Ported from ``plan_claims`` (``crates/fno-agents/src/backlog/session_cli.rs``), the
     parser authority for this fact: 330 of 807 plans carry ``node:`` instead of
     ``claims:``, so a writer keyed on ``node:`` alone goes blind on roughly 41%
     of plans - authored ``claims:`` and its bind never ran. This script

@@ -47,7 +47,7 @@ the ledger sit at that same level - see the paragraph below.
 It cannot be narrowed to subdirectories. ``graph.json`` and ``ledger.json`` sit
 directly at the state root, and both are written with
 ``tempfile.mkstemp(dir=path.parent)`` followed by ``os.replace``
-(``fno/graph/store.py``). An atomic replace needs write access to the
+(``graph_store.rs``). An atomic replace needs write access to the
 DIRECTORY, not the file, so a worker that mutates the graph needs the root
 itself. Granting the children instead would leave every graph write refused.
 

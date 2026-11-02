@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Compile the merge result of one rev pair and run the repo-wide static and
 # preamble-budget steps on it. Specimen: 3334b826a133 merged two green parents into a red main -
-# F821 Undefined name _TAG_SHUTDOWN at cli/src/fno/graph/store.py:525 - and
+# F821 Undefined name _TAG_SHUTDOWN at a store module - and
 # the combination compiled on no machine that ran CI. The caller resolves the
 # PR's base/head and the already-contains shortcut; this script owns the
 # merge-tree, the extraction, and the static step.

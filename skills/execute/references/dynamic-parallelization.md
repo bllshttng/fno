@@ -24,7 +24,7 @@ Build mapping: task_id -> set of file paths
 
 ## The Partition Rule
 
-`collision.partition` (cli/src/fno/graph/collision.py) groups a wave's tasks by shared normalized path. Two tasks writing under one hidden shared output root (`.fno/`, `docs/`, ...) land in one group too. A task with no parseable file list is `unevaluated`: its own verdict, never a silent pass.
+`collision.partition` (crates/fno-agents/src/backlog/collision.rs) groups a wave's tasks by shared normalized path. Two tasks writing under one hidden shared output root (`.fno/`, `docs/`, ...) land in one group too. A task with no parseable file list is `unevaluated`: its own verdict, never a silent pass.
 
 A wave's tasks run as soon as their blockers are complete, whether those blockers are declared in `blocked_by` or derived from file overlap:
 

@@ -1897,17 +1897,13 @@ def _reachable_from_graph(token: str) -> tuple[_Hits, bool]:
     once existed for some phase of some node, which is enough to attempt a wake
     but never enough to claim liveness.
     """
+    from fno.rust_binary import backlog_rows
+
     try:
-        from fno.graph.load import load_graph
-    except ImportError:
-        return [], False
-    try:
-        # The one caller that WANTS malformed rows: the loop below counts them
-        # to report "graph unreadable" rather than "this token names nothing".
-        # Every other load_graph caller takes the filtered default, so no other
-        # consumer has to guard against a row it cannot index.
-        entries = load_graph(keep_malformed=True)
-    except (OSError, ValueError):
+        # The loop below still counts a malformed row, to report "graph
+        # unreadable" rather than "this token names nothing".
+        entries = backlog_rows()
+    except (OSError, ValueError, RuntimeError):
         # Unparseable or unreadable: NOT empty. Reporting empty here would let
         # a graph problem masquerade as "this token names nothing" and drop
         # the mail.

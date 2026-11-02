@@ -43,10 +43,8 @@ def env(tmp_path, monkeypatch):
     the sync command and its watermark both resolve under tmp_path."""
     g = tmp_path / "graph.json"
     g.write_text('{"entries": []}\n')
-    import fno.graph.store as gs
     import fno.paths as paths
     monkeypatch.setattr(paths, "graph_json", lambda: g)
-    monkeypatch.setattr(gs, "GRAPH_JSON", g)
     return tmp_path, g
 
 
@@ -102,10 +100,10 @@ def test_graph_unreadable_degrades(env, monkeypatch):
     _seed(g, [{"id": "x-0001", "slug": "s", "plan_path": str(g), "priority": "p1"}])
 
 
-    def _boom(_path):
+    def _boom(**_):
         raise OSError("transient")
 
-    monkeypatch.setattr("fno.graph.api.wire_rows", _boom)
+    monkeypatch.setattr("fno.rust_binary.backlog_rows", _boom)
     res = runner.invoke(app, ["do", "plan", "sync"])
     assert res.exit_code == 0, res.output
     assert "unreadable" in res.output

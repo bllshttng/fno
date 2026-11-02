@@ -1359,10 +1359,8 @@ def test_resolve_reachable_reads_the_roster_without_an_env_override(tmp_path, mo
 def test_resolve_reachable_reads_backlog_session_stamps(tmp_path, monkeypatch):
     """The graph source must actually import and parse.
 
-    Regression pin: it imported ``fno.graph.io`` (no such module) and indexed
-    the result as a dict-with-nodes, while ``load_graph`` lives in
-    ``fno.graph.load`` and returns a flat ``list[dict]``. Both failures were
-    swallowed, so the source returned [] forever.
+    Regression pin: a wrong import and a wrong row shape were both swallowed,
+    so the source returned [] forever.
     """
     from fno.agents import discover
 
@@ -1378,7 +1376,10 @@ def test_resolve_reachable_reads_backlog_session_stamps(tmp_path, monkeypatch):
                 ]
             }
         ))
-    monkeypatch.setattr("fno.graph.load.GRAPH_JSON", graph)
+    from fno import rust_binary
+
+    real_rows = rust_binary.backlog_rows
+    monkeypatch.setattr(rust_binary, "backlog_rows", lambda **_: real_rows(path=graph))
 
     empty_projects = tmp_path / "no-projects"
     empty_projects.mkdir()

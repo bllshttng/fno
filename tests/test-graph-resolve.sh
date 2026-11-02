@@ -4,7 +4,7 @@
 #  node: ab-7651a2c6)
 #
 # Exercises the shell resolver after it has been rewired to call into
-# fno.graph.fuzzy.resolve_id. Each case isolates a behavior:
+# the native node matcher. Each case isolates a behavior:
 #   - non-ab passthrough
 #   - ab-id full-length resolution (regression)
 #   - ab-id prefix unique resolution
@@ -199,11 +199,11 @@ else
 fi
 
 # 9. Package absent: the resolver has one degradation, not a second
-# resolver leg. When fno.graph is unimportable the heredoc exits rc=5
+# resolver leg. When the script door is unreachable the resolver exits rc=5
 # and the arg echoes unchanged, exactly like any other unresolved query
 # before the `fno backlog get` fallback runs. FNO_RESOLVE_PLUGIN_ROOT
-# points the import at the empty directory, so the import of
-# fno.graph.fuzzy fails the same way a host without the package would.
+# points at the empty directory, so the door fails the same way a host without
+# the binary would.
 echo "test 9: package import failure passes the arg through (rc=5)"
 EMPTY_DIR=$(mktemp -d -t graph-resolve-empty.XXXXXX)
 trap 'rm -rf "$STDERR_CAPTURE" "$EMPTY_DIR" "$FIXTURE_HOME"' EXIT
@@ -212,6 +212,7 @@ trap 'rm -rf "$STDERR_CAPTURE" "$EMPTY_DIR" "$FIXTURE_HOME"' EXIT
 : > "$STDERR_CAPTURE"
 result=$(
     export GRAPH_JSON="$FIXTURE" PYTHONPATH="$EMPTY_DIR" FNO_RESOLVE_PLUGIN_ROOT="$EMPTY_DIR"
+    unset FNO_AGENTS_FRONT
     export PATH="/usr/bin:/bin"   # no `fno` on PATH either: both legs dead
     bash -c "source '$RESOLVER' && resolve_arg 'ab-9728b70b'" 2>"$STDERR_CAPTURE"
 )
@@ -223,6 +224,7 @@ fi
 if [[ "${RESOLVE_STRICT:-}" != "1" ]]; then
     rc_probe=$(
         export GRAPH_JSON="$FIXTURE" PYTHONPATH="$EMPTY_DIR" FNO_RESOLVE_PLUGIN_ROOT="$EMPTY_DIR" RESOLVE_STRICT=1
+        unset FNO_AGENTS_FRONT
         export PATH="/usr/bin:/bin"
         bash -c "source '$RESOLVER' && resolve_arg 'ab-9728b70b' >/dev/null" 2>/dev/null
     )
@@ -238,6 +240,7 @@ fi
 : > "$STDERR_CAPTURE"
 result=$(
     export GRAPH_JSON="$FIXTURE" PYTHONPATH="$EMPTY_DIR" FNO_RESOLVE_PLUGIN_ROOT="$EMPTY_DIR"
+    unset FNO_AGENTS_FRONT
     export PATH="/usr/bin:/bin"   # no `fno` either: both legs dead
     bash -c "source '$RESOLVER' && resolve_arg 'ab-9728'" 2>"$STDERR_CAPTURE"
 )

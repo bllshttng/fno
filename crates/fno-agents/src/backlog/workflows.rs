@@ -1,21 +1,17 @@
 //! The lifecycle close and its inverse: `backlog done` (the canonical
 //! close-flag surface) and `backlog reopen`, the door-side port of
-//! cmd_done/cmd_reopen. The rich completion flags keep their Python surface
-//! (done_command rides the forward); the close-flag surface answers here,
-//! with the same gates (gh merge evidence, promise), the same receipts, and
-//! the same cascade semantics.
+//! cmd_done/cmd_reopen. The completion flags answer in `done_rich`; the
+//! close-flag surface answers here, with the same gates, the same receipts,
+//! and the same cascade semantics.
 
 use serde_json::{json, Value};
 use std::cell::RefCell;
 use std::path::Path;
 
-use super::cli::forward_to_python;
 use super::merge_evidence::{
-    node_pr_refs, query_pr_state, render_merge_evidence_failure, repo_slug_from_url,
-    resolve_merge_evidence, Outcome,
+    node_pr_refs, render_merge_evidence_failure, resolve_merge_evidence, Outcome,
 };
 use super::node_ref::has_node_id_prefix;
-use super::promise::resolve_promise_evidence;
 use super::settings;
 use super::supersession::{coverage_clause, normalize_surface};
 use crate::backlog::mutate_single_row;
@@ -26,21 +22,21 @@ use crate::graph_store::{has_own_plan_work, reopen_holds_epic, reopen_outranks_s
 // argv parsing
 // ---------------------------------------------------------------------------
 
-/// The parsed `done` argv. Unknown flags set `unknown`, which keeps Python
-/// (the owner of every usage error and help text) on the path.
-struct DoneArgs {
-    id: Option<String>,
-    force: bool,
-    reason: Option<String>,
-    skip_stamp: bool,
-    pr: Option<i64>,
-    pr_url: Option<String>,
-    repo: Option<String>,
-    link: Option<String>,
-    note: Option<String>,
-    backfill: bool,
-    force_overwrite: bool,
-    unknown: bool,
+/// The parsed `done` argv. An unknown flag, a second positional, or a PR
+/// number that does not parse sets `unknown`: a usage error.
+pub(super) struct DoneArgs {
+    pub(super) id: Option<String>,
+    pub(super) force: bool,
+    pub(super) reason: Option<String>,
+    pub(super) skip_stamp: bool,
+    pub(super) pr: Option<i64>,
+    pub(super) pr_url: Option<String>,
+    pub(super) repo: Option<String>,
+    pub(super) link: Option<String>,
+    pub(super) note: Option<String>,
+    pub(super) backfill: bool,
+    pub(super) force_overwrite: bool,
+    pub(super) unknown: bool,
 }
 
 impl DoneArgs {
@@ -64,7 +60,7 @@ fn take_value(args: &[String], i: &mut usize) -> Option<String> {
     args.get(*i).cloned()
 }
 
-fn parse_done_args(tail: &[String]) -> DoneArgs {
+pub(super) fn parse_done_args(tail: &[String]) -> DoneArgs {
     let mut a = DoneArgs {
         id: None,
         force: false,
@@ -89,14 +85,18 @@ fn parse_done_args(tail: &[String]) -> DoneArgs {
             "--force-overwrite" => a.force_overwrite = true,
             "--reason" | "-R" => a.reason = take_value(tail, &mut i),
             "--pr-number" | "--pr" | "-p" => {
-                a.pr = take_value(tail, &mut i).and_then(|v| v.parse().ok())
+                a.pr = take_value(tail, &mut i).and_then(|v| v.parse().ok());
+                a.unknown |= a.pr.is_none();
             }
             "--pr-url" => a.pr_url = take_value(tail, &mut i),
             "--repo" => a.repo = take_value(tail, &mut i),
             "--link" | "--url" | "-l" => a.link = take_value(tail, &mut i),
             "--note" | "-m" => a.note = take_value(tail, &mut i),
             t if t.starts_with("--reason=") => a.reason = t.split('=').nth(1).map(String::from),
-            t if t.starts_with("--pr=") => a.pr = t.split('=').nth(1).and_then(|v| v.parse().ok()),
+            t if t.starts_with("--pr=") => {
+                a.pr = t.split('=').nth(1).and_then(|v| v.parse().ok());
+                a.unknown |= a.pr.is_none();
+            }
             t if t.starts_with("--note=") => a.note = t.split('=').nth(1).map(String::from),
             t if t.starts_with("--link=") => a.link = t.split('=').nth(1).map(String::from),
             t if t.starts_with("--pr-url=") => a.pr_url = t.split('=').nth(1).map(String::from),
@@ -557,7 +557,7 @@ pub(crate) fn emit_event(name: &str, data: Value) {
 
 /// Best-effort operator audit during a drive window: an informational action
 /// (`backlog done`) is allowed but attributed (the active_drive_sessions twin).
-fn drive_audit(task_id: &str) {
+pub(super) fn drive_audit(task_id: &str) {
     let base = match settings::state_dir() {
         Some(dir) => dir.join("agents"),
         None => return,
@@ -598,7 +598,7 @@ fn drive_audit(task_id: &str) {
 /// Holder-agnostic release of the `node:<id>` claim a closure just made
 /// moot: the closer is usually not the worker holding it, the terminal rung
 /// is the authority, and the reaper is the backstop. Best-effort and loud.
-fn release_claim_at_closure(node_id: &str) {
+pub(super) fn release_claim_at_closure(node_id: &str) {
     let key = format!("node:{node_id}");
     let mut roots: Vec<Option<std::path::PathBuf>> =
         vec![crate::claims::claims_root_for(&key), None];
@@ -640,7 +640,7 @@ fn project_plans(graph: &Path, node_ids: &[String]) {
 /// The shared post-close tail: plan stamp and projection. The A2 retro
 /// think-spawn trigger retired with the Python backlog runtime it rode; the
 /// config leaf is registered in scripts/ci/retired-config-leaves.txt.
-fn canonical_post_close(
+pub(super) fn canonical_post_close(
     graph: &Path,
     task_id: &str,
     plan_path: Option<&str>,
@@ -665,13 +665,18 @@ fn canonical_post_close(
 // the close command
 // ---------------------------------------------------------------------------
 
-/// `fno backlog done` — the close-flag surface. Rich completion shapes ride
-/// the Python forward; so does `--help` and every parse error.
+/// `fno backlog done`: the close-flag surface here, the completion flags and
+/// the loose queries in `done_rich`.
 pub fn run_done(tail: &[String]) -> i32 {
-    if tail.is_empty() || tail.iter().any(|a| a == "--help" || a == "-h") {
-        return forward_to_python("done", tail);
+    if tail.iter().any(|a| a == "--help" || a == "-h") {
+        print!("{}", super::done_rich::DONE_HELP);
+        return 0;
     }
-    let args = parse_done_args(tail);
+    let mut args = parse_done_args(tail);
+    if args.unknown {
+        eprint!("{}", super::done_rich::DONE_HELP);
+        return 2;
+    }
     let close_flags = args.close_flags();
     let rich_flags = args.rich_flags();
     if close_flags && rich_flags {
@@ -683,12 +688,33 @@ pub fn run_done(tail: &[String]) -> i32 {
         );
         return 2;
     }
+    // A plain title query that resolves keeps the canonical close; a query
+    // that does not resolve answers from the completion surface.
+    if !close_flags
+        && !rich_flags
+        && active_backend_name() == "graph"
+        && args.id.as_deref().is_some_and(|q| !has_node_id_prefix(q))
+    {
+        if let Ok(rows) = graph_store::read_rows(&settings::graph_path()) {
+            let live: Vec<Value> = rows
+                .into_iter()
+                .filter(|r| !truthy_field(r, "archived_at"))
+                .collect();
+            let found = super::node_match::resolve_id(args.id.as_deref(), &live, None);
+            if !matches!(
+                found.kind,
+                super::node_match::MatchKind::None | super::node_match::MatchKind::Ambiguous
+            ) {
+                args.id = found.id;
+            }
+        }
+    }
     let delegate = !close_flags
         && (rich_flags
             || args.id.is_none()
             || args.id.as_deref().map(has_node_id_prefix) != Some(true));
-    if delegate || args.unknown {
-        return forward_to_python("done", tail);
+    if delegate {
+        return super::done_rich::run_rich(&args);
     }
     let Some(task_id) = args.id.clone() else {
         eprintln!(
@@ -698,14 +724,19 @@ pub fn run_done(tail: &[String]) -> i32 {
         );
         return 2;
     };
-    close_node(tail, &args, &task_id)
+    close_node(&args, &task_id)
 }
 
-fn close_node(tail: &[String], args: &DoneArgs, task_id: &str) -> i32 {
-    // External backend: the shared gates then exactly one tracker.close are
-    // the seam's job (still Python-owned).
+fn close_node(args: &DoneArgs, task_id: &str) -> i32 {
+    // An opaque external id skips the local id grammar: the tracker's exact
+    // read is the resolution.
     if crate::graph_get::external_backend_selected() {
-        return forward_to_python("done", tail);
+        return super::done_rich::done_via_seam(
+            task_id,
+            args.skip_stamp,
+            args.force,
+            args.reason.as_deref(),
+        );
     }
     if !has_node_id_prefix(task_id) {
         eprintln!("Error: task_id must be a <prefix>-<4..8 hex> node id, got '{task_id}'");
@@ -750,135 +781,25 @@ fn close_node(tail: &[String], args: &DoneArgs, task_id: &str) -> i32 {
 
     let cwd = text_at(&node, "cwd").map(String::from);
     let refs = node_pr_refs(&node);
-    let mut evidence_pr_url: Option<String> = None;
-    if !refs.is_empty() && !args.force {
-        let evidence = resolve_merge_evidence(&refs, cwd.as_deref());
-        match evidence.outcome {
-            Outcome::Merged => evidence_pr_url = evidence.pr_url.clone(),
-            Outcome::AwaitingMerge => {
-                let note = evidence
-                    .error
-                    .as_ref()
-                    .map(|e| format!(" (note: {e})"))
-                    .unwrap_or_default();
-                eprintln!(
-                    "awaiting merge: PR #{} is OPEN, not merged. {task_id} stays in_review \
-                     and closes on merge (reconcile / merge-triggered advance). \
-                     Use --force --reason TEXT for an early close.{note}",
-                    evidence.open_pr_number.unwrap_or_default(),
-                );
-                return 5;
-            }
-            Outcome::Outage => {
-                eprintln!(
-                    "{}",
-                    render_merge_evidence_failure(task_id, &evidence, "open")
-                );
-                return evidence.exit_code();
-            }
-            Outcome::Refused => {
-                let msg = evidence
-                    .reason
-                    .clone()
-                    .unwrap_or_else(|| format!("PR #{}: no merged evidence", refs[0].0));
-                if evidence.remedy.is_some() {
-                    eprintln!(
-                        "{}",
-                        render_merge_evidence_failure(task_id, &evidence, "open")
-                    );
-                } else {
-                    eprintln!(
-                        "Refused: {task_id} cross-check failed: {msg}\nUse --force --reason TEXT to bypass."
-                    );
-                }
-                emit_event(
-                    "backlog_done_refused",
-                    json!({"node_id": task_id, "pr_number": refs[0].0, "reason": msg}),
-                );
-                if let Some(space) = std::env::current_dir()
-                    .ok()
-                    .and_then(|cwd| crate::paths::space_dir_opt(&cwd))
-                {
-                    crate::friction::record_gate_refusal(
-                        &space.join("events.jsonl"),
-                        "done",
-                        Some(task_id),
-                        &msg,
-                        &msg,
-                    );
-                }
-                return evidence.exit_code();
-            }
-        }
-    }
-    if args.force && !refs.is_empty() {
-        let (first_number, first_url) = &refs[0];
-        evidence_pr_url = first_url.clone();
-        let pr_repo = repo_slug_from_url(first_url.as_deref());
-        let state = query_pr_state(*first_number, pr_repo.as_deref(), cwd.as_deref())
-            .map(|(s, _)| s)
-            .unwrap_or_else(|_| "UNKNOWN".into());
-        let reason = args.reason.clone().unwrap_or_default();
-        eprintln!(
-            "Warning: force-closing {task_id} (reason: {reason}). PR #{first_number} state={state}."
-        );
-        emit_event(
-            "backlog_done_forced",
-            json!({
-                "node_id": task_id,
-                "force_reason": reason,
-                "pr_number": first_number,
-                "pr_state": state,
-            }),
-        );
-    } else if args.force {
-        let reason = args.reason.clone().unwrap_or_default();
-        eprintln!(
-            "Warning: force flag set on advisory node {task_id} (reason: {reason}); no PR refs to check."
-        );
-    }
-    if !args.force {
-        let promise = resolve_promise_evidence(&node, cwd.as_deref(), &[]);
-        if !promise.satisfied() {
-            if let Some(reason) = &promise.reason {
-                eprintln!("{reason}");
-            }
-            return promise.exit_code();
-        }
-        if let Some(warning) = &promise.warning {
-            eprintln!("warning: {warning}");
-        }
-    }
+    let evidence_pr_url = match super::done_rich::gate_pipeline(
+        task_id,
+        node,
+        &refs,
+        args.force,
+        args.reason.as_deref(),
+        cwd.as_deref(),
+    ) {
+        Ok(url) => url,
+        Err(code) => return code,
+    };
 
-    // The parent cascade runs inside the mutation, where gh I/O must not:
-    // judge the direct parent pre-lock. Its parent (if any) closes one pass
-    // later, when it is the direct parent of a just-closed child; a parent
-    // the warm never judged holds (fail closed). An ancestor whose plan
-    // promises more than has merged stays open.
-    let mut promise_held_parents = super::promise::RollupVerdicts::new();
-    if !args.force {
-        let candidates: Vec<Value> = rows
-            .iter()
-            .find(|e| text_at(e, "id") == Some(task_id))
-            .and_then(|trigger| text_at(trigger, "parent"))
-            .and_then(|pid| {
-                rows.iter()
-                    .find(|e| text_at(e, "id") == Some(pid) && super::promise::rollup_holds_plan(e))
-            })
-            .cloned()
-            .into_iter()
-            .collect();
-        let verdicts = super::promise::rollup_hold_set(&candidates, &mut |parent| {
-            resolve_promise_evidence(parent, super::promise::gate_cwd_for(parent).as_deref(), &[])
-        });
-        for (pid, verdict) in verdicts {
-            if let Some(reason) = &verdict.reason {
-                let first = reason.lines().next().unwrap_or("");
-                eprintln!("warning: parent {pid} stays open: {first}");
-            }
-            promise_held_parents.insert(pid, verdict);
-        }
-    }
+    // The parent cascade runs inside the mutation, where gh I/O must not, so
+    // its parent's promise is judged pre-lock. A forced close warms nothing.
+    let promise_held_parents = if args.force {
+        super::promise::RollupVerdicts::new()
+    } else {
+        super::done_rich::warm_parent_promises(&rows, task_id)
+    };
 
     // Cost stamp: the ledger's per-plan cost the node never captured.
     let rollup = rollup_from_ledger(&node);
@@ -1532,7 +1453,7 @@ fn reopen_statuses(rows: &[Value], node_id: &str) -> std::collections::HashMap<S
     rungs
 }
 
-fn archived_entry(node_id: &str) -> Option<Value> {
+pub(super) fn archived_entry(node_id: &str) -> Option<Value> {
     let archive = settings::graph_path().parent()?.join("graph-archive.json");
     let read = graph_store::read_archive_raw(&archive).ok()?;
     let rows = match read {
@@ -1796,11 +1717,46 @@ pub(crate) fn refuse_non_graph_backend(command: &str) -> Option<i32> {
     Some(1)
 }
 
+const QUEUE_HELP: &str = "Usage: fno backlog queue TASK_IDS... [--reason TEXT]
+
+Queue nodes for action. Sets queued_at and queued_reason. Atomic across the
+batch. Ids take spaces or commas. `fno backlog unqueue <id>...` reverses this.
+
+Options:
+  -R, --reason TEXT  Why these nodes are queued.
+  -h, --help         Print help.
+";
+const UNQUEUE_HELP: &str = "Usage: fno backlog unqueue TASK_IDS...
+
+Clear queued state. Idempotent, and atomic across the batch.
+";
+const QUEUED_HELP: &str = "Usage: fno backlog queued [--project NAME] [--all]
+
+List queued nodes as JSON, sorted by priority.
+
+Options:
+      --project NAME  Filter by project.
+  -A, --all           Show all projects.
+  -h, --help          Print help.
+";
+const CONTAIN_USAGE: &str =
+    "Usage: fno backlog contain <owner> <task_id>... [--surface <repo-relative-path>]...\n";
+
+/// A help tail prints on stdout and exits 0; anything else is a usage error.
+fn usage_answer(tail: &[String], help: &str) -> i32 {
+    if tail.iter().any(|a| a == "--help" || a == "-h") {
+        print!("{help}");
+        return 0;
+    }
+    eprint!("{help}");
+    2
+}
+
 /// `fno backlog queue <ids> [--reason TEXT]`: stamps queued_at + queued_reason
 /// on every id in one locked mutation. Atomic across the batch.
 pub fn run_queue(tail: &[String]) -> i32 {
     if tail.is_empty() || tail.iter().any(|a| a == "--help" || a == "-h") {
-        return forward_to_python("queue", tail);
+        return usage_answer(tail, QUEUE_HELP);
     }
     let tail = &split_flag_values(tail);
     let mut ids_raw: Vec<String> = Vec::new();
@@ -1810,7 +1766,7 @@ pub fn run_queue(tail: &[String]) -> i32 {
         match arg.as_str() {
             "--reason" | "-R" => match iter.next() {
                 Some(v) => reason = Some(v.clone()),
-                None => return forward_to_python("queue", tail),
+                None => return usage_answer(&[], QUEUE_HELP),
             },
             other => ids_raw.push(other.to_string()),
         }
@@ -1891,13 +1847,10 @@ pub fn run_queue(tail: &[String]) -> i32 {
 /// ids that were not queued still clear (idempotent) and warn non-fatally.
 pub fn run_unqueue(tail: &[String]) -> i32 {
     if tail.is_empty() || tail.iter().any(|a| a == "--help" || a == "-h") {
-        return forward_to_python("unqueue", tail);
+        return usage_answer(tail, UNQUEUE_HELP);
     }
     let mut ids_raw: Vec<String> = Vec::new();
     for arg in tail {
-        if arg == "--help" || arg == "-h" {
-            return forward_to_python("unqueue", tail);
-        }
         ids_raw.push(arg.clone());
     }
     if let Some(code) = refuse_non_graph_backend("unqueue") {
@@ -1974,16 +1927,13 @@ pub fn run_queued(tail: &[String]) -> i32 {
     let mut iter = tail.iter().peekable();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
-            "--help" | "-h" => return forward_to_python("queued", tail),
+            "--help" | "-h" => return usage_answer(&[arg.clone()], QUEUED_HELP),
             "--project" => match iter.next() {
                 Some(v) => project = Some(v.clone()),
-                None => return forward_to_python("queued", tail),
+                None => return usage_answer(&[], QUEUED_HELP),
             },
             "--all" | "-A" => show_all = true,
-            other => {
-                let _ = other;
-                return forward_to_python("queued", tail);
-            }
+            _ => return usage_answer(&[], QUEUED_HELP),
         }
     }
     // Queue state is footnote-minted, so no external item can be queued:
@@ -2187,7 +2137,7 @@ pub fn run_contain(tail: &[String]) -> i32 {
         return 0;
     }
     if tail.is_empty() {
-        return forward_to_python("contain", tail);
+        return usage_answer(&[], CONTAIN_USAGE);
     }
     let mut positionals: Vec<&String> = Vec::new();
     let mut surfaces: Vec<String> = Vec::new();
@@ -2217,7 +2167,7 @@ pub fn run_contain(tail: &[String]) -> i32 {
             eprintln!("Error: --surface needs an owner and at least one task_id");
             return 2;
         }
-        return forward_to_python("contain", tail);
+        return usage_answer(&[], CONTAIN_USAGE);
     }
     let owner_arg = positionals[0].clone();
     let ids_raw: Vec<String> = positionals[1..].iter().map(|s| s.to_string()).collect();
@@ -2600,7 +2550,10 @@ pub fn run_supersede(tail: &[String]) -> i32 {
     }
     let parsed = match parse_supersede_args(&split_flag_values(tail)) {
         Some(p) => p,
-        None => return forward_to_python("supersede", tail),
+        None => {
+            eprintln!("{SUPERSEDE_HELP}");
+            return 2;
+        }
     };
     if let Some(code) = refuse_non_graph_backend("supersede") {
         return code;

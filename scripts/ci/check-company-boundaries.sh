@@ -159,7 +159,6 @@ LAYERS = (
         (
             "fno.company",
             "fno.company.contracts",
-            "fno.graph",
             "fno.claims",
             "fno.plan",
         ),

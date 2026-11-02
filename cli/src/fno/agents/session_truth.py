@@ -282,7 +282,7 @@ def observed_title(agent: str, transcript_path: Optional[Path]) -> Optional[str]
 
 
 # Transcript location and the observed-model read live in fno.provenance:
-# fno.graph (core) needs them too, and a core module may not import from the
+# core code needed them too, and a core module may not import from the
 # agents runtime. Re-exported so this module's own callers are unaffected.
 from fno.provenance.observed import (  # noqa: E402
     observed_model,

@@ -44,17 +44,6 @@ def test_normalize_command_is_command_agnostic_for_codex():
 # ---------------------------------------------------------------------------
 
 
-def _stub_door(monkeypatch, impl):
-    """Stub the keeper client: ``impl(method, params)`` answers or raises."""
-    import fno.graph.store as store
-
-    class _FakeClient:
-        @staticmethod
-        def request(method, params):
-            assert method == "effective_command"
-            return impl(method, params)
-
-    monkeypatch.setattr(store, "_client_for", lambda path: _FakeClient())
 
 
 def _refusal_text(rung):

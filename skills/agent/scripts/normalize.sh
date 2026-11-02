@@ -526,11 +526,9 @@ if proc.returncode != 0:
         print("error\t%s" % (err or "resolve exited %d" % proc.returncode))
     sys.exit(0)
 canon = proc.stdout.strip()
-try:
-    from fno.graph._intake import project_root_from_settings
-except Exception as e:
-    print("error\tproject root resolver import failed: %s" % e); sys.exit(0)
-path = project_root_from_settings(canon)
+root = subprocess.run([str(binary), "backlog", "project-root", canon],
+                      capture_output=True, text=True)
+path = root.stdout.strip() if root.returncode == 0 else ""
 if not path:
     print("error\tproject %r resolved to no path in settings" % canon); sys.exit(0)
 print("ok\t%s\t%s" % (canon, path))' "$_proj" 2>/dev/null || { printf 'error\tproject resolver crashed\n'; return 0; }

@@ -606,6 +606,10 @@ pub fn schedule_shadow(
 /// The `lane-fill` door: parse the wheel's flag spellings, run the fill,
 /// print the selected rows (preview) or the report envelope (--json).
 pub fn run_lane_fill(args: &[String]) -> i32 {
+    if args.iter().any(|a| a == "--help" || a == "-h") {
+        println!("{FILL_USAGE}");
+        return 0;
+    }
     let opts = match parse_fill_args(args) {
         Some(opts) => opts,
         None => {
@@ -613,8 +617,8 @@ pub fn run_lane_fill(args: &[String]) -> i32 {
             return 2;
         }
     };
-    if crate::backlog::workflows::active_backend_name() != "graph" {
-        return crate::backlog::cli::forward_to_python("lane-fill", args);
+    if let Some(code) = crate::backlog::workflows::refuse_non_graph_backend("lane-fill") {
+        return code;
     }
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let repo_root = crate::backlog::create_cli::repo_root(&cwd);
@@ -657,8 +661,8 @@ pub fn run_schedule_shadow(args: &[String]) -> i32 {
             return 2;
         }
     };
-    if crate::backlog::workflows::active_backend_name() != "graph" {
-        return crate::backlog::cli::forward_to_python("schedule-shadow", args);
+    if let Some(code) = crate::backlog::workflows::refuse_non_graph_backend("schedule-shadow") {
+        return code;
     }
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let repo_root = crate::backlog::create_cli::repo_root(&cwd);

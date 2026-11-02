@@ -22,9 +22,7 @@ from fno import lint_command_ratchet as vr
 def test_python_surface_recurses_to_real_leaves():
     py = vr.enumerate_python_leaves()
     # a nested group leaf (recursion works, not just top-level names)
-    assert "backlog done" in py
-    # a leaf one group deep
-    assert "annotate list" in py
+    assert "claim release" in py
     # a top-level single command
     assert "update" in py
     # eager inline commands are counted
