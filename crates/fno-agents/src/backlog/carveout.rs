@@ -640,7 +640,11 @@ fn cmd_resolve(args: &[String]) -> i32 {
 /// A session filter over the ledger. An ownerless row belongs to no session,
 /// so an equality filter would hide it from every reader; only the default
 /// scope keeps it, since an explicit filter asks a precise ownership question.
-fn scope_rows(rows: Vec<Value>, sessions: Option<&[String]>, include_unscoped: bool) -> Vec<Value> {
+pub(crate) fn scope_rows(
+    rows: Vec<Value>,
+    sessions: Option<&[String]>,
+    include_unscoped: bool,
+) -> Vec<Value> {
     let Some(sessions) = sessions else {
         return rows;
     };

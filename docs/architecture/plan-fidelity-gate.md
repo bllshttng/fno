@@ -22,25 +22,22 @@ A non-fire asserts nothing. The pinned miss does not fire, and that is correct. 
 
 ## The fidelity gate: one join, two dispositions
 
-`build_plan_fidelity` lives in `cli/src/fno/scoreboard/fold.py`. It joins each planned ledger row to its delivery. For telemetry, an unjoined planned row is `unmeasurable`. It reports as `status: unjoined`, never as 0%. That is exactly wrong for a gate.
+`build_plan_fidelity` lives in `crates/fno-agents/src/scoreboard/plan_join.rs`, served by the keeper's `scoreboard_plan_fidelity` op and callable in process. It joins each planned ledger row to its delivery. For telemetry, an unjoined planned row is `unmeasurable`. It reports as `status: unjoined`, never as 0%. That is exactly wrong for a gate.
 
 The inversion is one parameter on the same join, not a second implementation:
 
-```python
-build_plan_fidelity(..., unmeasurable="unjoined")  # telemetry: never punish the unmeasurable
-build_plan_fidelity(..., unmeasurable="refuse")    # gate: an unjoined row is a refusal
-```
+One parameter on the same fold carries the disposition: `unmeasurable="unjoined"` (telemetry: never punish the unmeasurable) and `unmeasurable="refuse"` (gate: an unjoined row is a refusal).
 
 `unmeasurable="unjoined"` is the default. It is byte-identical to the prior scoreboard output. `unmeasurable="refuse"` adds a top-level `gate` key. That key marks the unjoined rows as a would-be refusal. The join itself never changes. The scoreboard and the gate cannot disagree about the same PR.
 
-The carveout waiver lives in `cli/src/fno/plan/fidelity.py`. The fold does not do it. Each unjoined planned row needs a covering carveout or the gate refuses. A PR-body sentence is not a carveout. `fno do plan fidelity --json <plan>` is the single entry point.
+The carveout waiver lives in the native gate, `crates/fno-agents/src/loopcheck/plan_fidelity.rs`. The fold does not do it. Each unjoined planned row needs a covering carveout or the gate refuses. A PR-body sentence is not a carveout. The gate has no command surface: the two readers below compute it in process. Its decision is characterized by the goldens under `crates/fno-agents/tests/golden/plan_fidelity/`, captured from the deleted Python leg before it went.
 
 ### Both readers are required
 
 A guard on one of N reachable paths is decorative. The two readers enforce independently:
 
-- **Stop gate** (`crates/fno-agents/src/loopcheck.rs`): `evaluate_plan_fidelity` shells `fno do plan fidelity --json`. It mirrors `evaluate_done_probes`. It blocks `DonePRGreen` until each shortfall carries a carveout. It fails open on a missing or stale `fno` so a stale install cannot wedge every run. The merge gate is the backstop. `fno doctor` flags the staleness.
-- **Merge gate** (`cli/src/fno/pr/_merge.py`): it imports `compute_plan_fidelity` in-process. It refuses the merge on an uncovered shortfall. It fails open on a probe crash so a broken gate cannot wedge a green merge.
+- **Stop gate** (`crates/fno-agents/src/loopcheck/plan_fidelity.rs`): `evaluate_plan_fidelity` computes the decision in process and blocks `DonePRGreen` until each shortfall carries a carveout. It fails open on a broken read so a degraded gate cannot wedge every run. The merge gate is the backstop.
+- **Merge gate** (`crates/fno-agents/src/merge_gates.rs`): `plan_fidelity_blocker` computes the same decision in process. It refuses the merge on an uncovered shortfall. It fails open on a broken read so a broken gate cannot wedge a green merge.
 
 A stop-gate-only check is skipped by a direct `fno do pr merge`. A merge-gate-only check is skipped by every autonomous loop that terminates without merging. The join is plan-grain. An inline run with no separate planning thread has zero planned rows and passes. The gate catches an orphan plan that never shipped.
 

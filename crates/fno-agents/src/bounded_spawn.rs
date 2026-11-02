@@ -44,13 +44,24 @@ pub(crate) fn spawn_bounded(
     args: &[&str],
     cwd: &Path,
 ) -> Result<std::process::Child, std::io::ErrorKind> {
+    let mut cmd = crate::pr_status::quota::helper_command(bin);
+    cmd.args(args);
+    cmd.current_dir(cwd);
+    spawn_bounded_command(cmd)
+}
+
+/// Spawn a fully built `Command` under the same contract: null stdin, piped
+/// stdout/stderr, own process group, transient spawn failures retried. A
+/// caller that needs env or a non-quota binary builds the Command itself and
+/// lands here, so the retry and group rules keep one home.
+pub(crate) fn spawn_bounded_command(
+    mut cmd: std::process::Command,
+) -> Result<std::process::Child, std::io::ErrorKind> {
     use std::os::unix::process::CommandExt;
 
     let mut attempt = 0;
     loop {
-        let spawned = crate::pr_status::quota::helper_command(bin)
-            .args(args)
-            .current_dir(cwd)
+        let spawned = cmd
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

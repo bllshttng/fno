@@ -211,6 +211,10 @@ enum Role {
     DoctorLintStyle(Vec<OsString>),
     /// `fno doctor lint menu-caps`: the cap guard, in-process.
     DoctorLintMenuCaps(Vec<OsString>),
+    /// `fno doctor lint <check> ...` for the ported repository checks: the
+    /// dispatcher runs in-process (crate::repo_lint); registry and
+    /// field-coverage forward to the fno-agents registry door.
+    DoctorLintRepo(Vec<OsString>),
     /// `fno doctor update` and root `fno update`: the native updater (the
     /// Python leg is deleted in the same change). Args from the command name
     /// onward.
@@ -1283,6 +1287,10 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     match fno::lint_cli::classify_doctor_lint(args) {
         Some(fno::lint_cli::NativeLint::Style(rest)) => return Role::DoctorLintStyle(rest),
         Some(fno::lint_cli::NativeLint::MenuCaps(rest)) => return Role::DoctorLintMenuCaps(rest),
+        Some(fno::lint_cli::NativeLint::RegistryFamily(rest)) => {
+            return Role::DoctorLintRepo(rest);
+        }
+        Some(fno::lint_cli::NativeLint::RepoLint(rest)) => return Role::DoctorLintRepo(rest),
         None => {}
     }
     if let Some(rest) = fno::paths_route::classify(args) {
@@ -1848,6 +1856,13 @@ fn main() {
         Role::DoctorEvent(rest) => std::process::exit(fno::event_cli::run(&rest)),
         Role::DoctorCost(rest) => std::process::exit(fno::doctor_cost::run(&rest)),
         Role::DoctorLintMenuCaps(rest) => std::process::exit(fno::menu_caps::run(&rest)),
+        Role::DoctorLintRepo(rest) => {
+            let flat: Vec<String> = rest
+                .iter()
+                .map(|a| a.to_string_lossy().into_owned())
+                .collect();
+            std::process::exit(fno::repo_lint::run(&flat));
+        }
         Role::DoctorLintStyle(rest) => {
             // The argv the sibling answers is the command name plus the tail
             // the classifier sliced: `style-check --stdin ...`.

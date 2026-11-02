@@ -388,6 +388,7 @@ crates/fno-agents/src/delivery_eval.rs
 crates/fno-agents/src/evals_candidates.rs
 crates/fno-agents/src/hook/diff_budget.rs
 crates/fno-agents/src/kill_criteria.rs
+crates/fno-agents/src/loopcheck/plan_fidelity.rs
 crates/fno-agents/src/merge_hold.rs
 crates/fno-agents/src/observer/fold.rs
 crates/fno-agents/src/observer/mod.rs
@@ -428,6 +429,9 @@ crates/fno-agents/src/wave.rs"
 # session_cli.rs reads only the plan frontmatter `claims:`/`node:` names
 # (the blueprint-session plan-claims join); it never extracts a plan
 # status, so the shelling rule does not apply to it.
+# loopcheck/plan_fidelity.rs reads the plan's deliverable headings and
+# carveout frontmatter to replay the fidelity gate's join; it never
+# extracts a plan status, so the shelling rule does not apply to it.
 # merge_hold.rs reads only the dispatch_hold block (the hold the merge gate
 # refuses on); it never extracts a plan status, so the shelling rule does not
 # apply to it.
@@ -595,6 +599,17 @@ while IFS= read -r reader; do
                 | grep -vE '\.get\("status"\)' \
                 | grep -vE '"status":[[:space:]]*"unjoined",' \
                 | grep -vE '"status"\.to_string\(\)' \
+                || true
+        )"
+    fi
+    if [ "$reader" = "crates/fno-agents/src/loopcheck/plan_fidelity.rs" ]; then
+        # plan_fidelity's "status" literal is the LEDGER row's delivery
+        # status in the fold join (the unjoined rows), the plan_join
+        # row-vocabulary precedent; its plan read walks deliverable
+        # headings and carveout frontmatter, never a `status:` key.
+        matches="$(
+            printf '%s\n' "$matches" \
+                | grep -vE '\.get\("status"\)' \
                 || true
         )"
     fi
