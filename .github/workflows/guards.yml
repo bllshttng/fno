@@ -213,7 +213,7 @@ jobs:
         if: ${{ !cancelled() }}
         env:
           FNO_BIN: ${{ github.workspace }}/crates/fno/target/debug/fno
-        run: "$FNO_BIN" doctor lint state-roots
+        run: '"$FNO_BIN" doctor lint state-roots'
 
       # The Rust/Python seam ratchet, positive-controlled by
       # tests/ci/test_seam_crossings.sh: the selftest must fail on injected
@@ -241,7 +241,7 @@ jobs:
         timeout-minutes: 5
         env:
           FNO_BIN: ${{ github.workspace }}/crates/fno/target/debug/fno
-        run: "$FNO_BIN" doctor lint hook-tombstones
+        run: '"$FNO_BIN" doctor lint hook-tombstones'
 
 
       # The JSON-stdout house contract: a -J command prints exactly one JSON
