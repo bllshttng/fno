@@ -751,7 +751,11 @@ fn lane_evidence(
     started_epoch: f64,
     projects_root: Option<&std::path::Path>,
 ) -> serde_json::Value {
-    let model = if lane.model.is_empty() { &lane.route } else { &lane.model };
+    let model = if lane.model.is_empty() {
+        &lane.route
+    } else {
+        &lane.model
+    };
     let mut payload = json!({
         "lane": {"name": lane.name, "harness": harness, "model": model, "effort": lane.effort},
         "attempted": attempted,
@@ -859,7 +863,11 @@ pub fn run_task(
                 // Other bank tasks invoke plugin skills, so only a golden drops them.
                 // A leading dash needs the fence, so that prompt also keeps them.
                 let flags = if golden && !prompt.starts_with('-') {
-                    tree_only_flags(spawn_harness, dir, &home_dir().canonicalize().unwrap_or_default())
+                    tree_only_flags(
+                        spawn_harness,
+                        dir,
+                        &home_dir().canonicalize().unwrap_or_default(),
+                    )
                 } else {
                     Vec::new()
                 };
@@ -886,7 +894,15 @@ pub fn run_task(
             }
             // Before the cleanup: a pass forgets the transcript this reads.
             lane_fields = lane.map(|l| {
-                lane_evidence(l, spawn_harness.unwrap_or_default(), task.prompt.is_some(), spawned, dir, started_wall, None)
+                lane_evidence(
+                    l,
+                    spawn_harness.unwrap_or_default(),
+                    task.prompt.is_some(),
+                    spawned,
+                    dir,
+                    started_wall,
+                    None,
+                )
             });
             if golden {
                 let _ = std::fs::remove_dir_all(dir);
@@ -959,7 +975,15 @@ pub fn run_task(
         if let Some(l) = lane {
             let fields = lane_fields.unwrap_or_else(|| {
                 let none = std::path::Path::new("");
-                lane_evidence(l, spawn_harness.unwrap_or_default(), task.prompt.is_some(), false, none, started_wall, None)
+                lane_evidence(
+                    l,
+                    spawn_harness.unwrap_or_default(),
+                    task.prompt.is_some(),
+                    false,
+                    none,
+                    started_wall,
+                    None,
+                )
             });
             if let serde_json::Value::Object(fields) = fields {
                 for (k, v) in fields {
@@ -1313,7 +1337,15 @@ mod tests {
             ..Default::default()
         };
         let root = tempfile::tempdir().unwrap();
-        let f = lane_evidence(&lane, "claude", true, true, root.path(), 0.0, Some(root.path()));
+        let f = lane_evidence(
+            &lane,
+            "claude",
+            true,
+            true,
+            root.path(),
+            0.0,
+            Some(root.path()),
+        );
         assert_eq!(f["requested_lane"], "claude-opus-5-5");
         assert_eq!(f["lane_status"], "unverified");
         assert!(f["usage"].is_null(), "{f}");
