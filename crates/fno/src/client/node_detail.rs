@@ -99,9 +99,19 @@ thread_local! {
 }
 
 /// Park where the painted session rows sit. `lines` is the scrolled window
-/// painted from `top` for `h` rows, or `None` when no detail is open.
-pub(crate) fn record_session_rows(lines: Option<&[BLine]>, (top, h): (usize, usize)) {
+/// painted from `top` for `h` rows, or `None` when no detail is open. The
+/// painter shifts a long window up to keep `follow` in view; the rows shift
+/// with it.
+pub(crate) fn record_session_rows(
+    lines: Option<&[BLine]>,
+    follow: Option<usize>,
+    (top, h): (usize, usize),
+) {
     let at = lines.and_then(|lines| {
+        let shift = match follow {
+            Some(f) if lines.len() > h && h > 0 => f.saturating_sub(h - 1).min(lines.len() - h),
+            _ => 0,
+        };
         let head = lines.iter().position(|l| l.text == "sessions")?;
         // The head, its rule and the column header come before the rows.
         let first = head + 3;
@@ -111,7 +121,8 @@ pub(crate) fn record_session_rows(lines: Option<&[BLine]>, (top, h): (usize, usi
             .take_while(|l| l.text.starts_with("  "));
         Some(
             rows.enumerate()
-                .map(|(j, _)| (top + first + j, j))
+                .filter(|(j, _)| first + j >= shift)
+                .map(|(j, _)| (top + first + j - shift, j))
                 .filter(|(row, _)| *row < top + h)
                 .collect::<Vec<_>>(),
         )

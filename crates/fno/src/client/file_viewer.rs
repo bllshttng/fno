@@ -761,6 +761,14 @@ pub(super) async fn open(
     loaded: Loaded,
     sock_w: &mut (impl tokio::io::AsyncWrite + Unpin),
 ) -> Result<(), String> {
+    // Staged review comments are never dropped by a file open.
+    let unsent = view.viewer.review.as_ref().map_or(0, |r| r.drafts.len());
+    if unsent > 0 {
+        view.set_notice(format!(
+            "{unsent} unsent comments in the review: send or close it first"
+        ));
+        return Ok(());
+    }
     let was_panel = view.viewer_panel_w() > 0;
     view.viewer.review = None;
     // A rendered markdown doc has no source rows, so a `path:line` hint on a

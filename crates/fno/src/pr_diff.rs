@@ -93,6 +93,8 @@ pub fn parse(text: &str) -> PrDiff {
         while !text.is_char_boundary(end) {
             end -= 1;
         }
+        // Cut at a line end, so the last row is never half a line.
+        let end = text[..end].rfind('\n').map_or(end, |nl| nl + 1);
         &text[..end]
     } else {
         text
@@ -190,7 +192,12 @@ pub fn parse_pr_url(url: &str) -> Result<PrRef, String> {
             Ok(PrRef {
                 owner: owner.to_string(),
                 repo: repo.to_string(),
-                number: number.parse().map_err(|_| refuse())?,
+                number: number
+                    .split(['#', '?'])
+                    .next()
+                    .unwrap_or_default()
+                    .parse()
+                    .map_err(|_| refuse())?,
             })
         }
         _ => Err(refuse()),

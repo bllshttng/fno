@@ -314,7 +314,7 @@ pub(crate) fn review_mut(view: &mut View) -> Option<&mut Review> {
         .as_ref()
         .is_some_and(|b| b.review.is_some())
     {
-        return review_mut(view);
+        return view.backlog_board.as_mut().and_then(|b| b.review.as_mut());
     }
     view.viewer.review.as_mut()
 }
@@ -325,7 +325,17 @@ pub(crate) async fn toggle_split(
     view: &mut View,
     sock_w: &mut (impl tokio::io::AsyncWrite + Unpin),
 ) -> Result<(), String> {
-    if view.viewer.review.is_some() {
+    if let Some(review) = view.viewer.review.as_mut() {
+        // The chord closes as Esc does: unsent drafts warn first.
+        review.input = None;
+        let unsent = review.drafts.len();
+        if unsent > 0 && !review.warned {
+            review.warned = true;
+            view.set_notice(format!(
+                "{unsent} unsent comments: S sends, prefix+I again drops them"
+            ));
+            return Ok(());
+        }
         return crate::client::file_viewer::close(view, sock_w).await;
     }
     let focus = view.layout.focus;
@@ -389,7 +399,12 @@ pub(crate) fn split_fold(view: &mut View, gen: u64, msg: BoardMsg) -> Option<Boa
         return Some(msg);
     }
     match msg {
-        BoardMsg::ReviewLoaded(landed) => land(view, *landed),
+        BoardMsg::ReviewLoaded(landed) => {
+            let agents = view.layout.agents.clone();
+            if let Some(review) = view.viewer.review.as_mut() {
+                land(review, *landed, |session| local_name(&agents, session));
+            }
+        }
         BoardMsg::ReviewSent { ok, notice } => {
             if let Some(review) = view.viewer.review.as_mut() {
                 sent(review, ok);
@@ -459,45 +474,55 @@ async fn fetch(node: String, pr: Option<PrRef>) -> Landed {
         claim_args,
         CLAIM_BOUND,
     );
-    let pr = match pr {
-        Some(pr) => Some(pr),
-        None => resolve_pr(&node).await,
-    };
-    let Some(pr) = pr else {
-        let claim = claim.await;
-        return Landed {
-            node,
-            pr: None,
-            read: Err(NO_PR.into()),
-            claim: claim.and_then(|text| serde_json::from_str(&text).map_err(|e| e.to_string())),
+    let reads = async {
+        let pr = match pr {
+            Some(pr) => Some(pr),
+            None => resolve_pr(&node).await,
         };
+        let Some(pr) = pr else {
+            return (None, Err(NO_PR.to_string()));
+        };
+        let gh = std::path::PathBuf::from("gh");
+        let (diff, head) = tokio::join!(
+            read_command(gh.clone(), pr_diff::diff_argv(&pr), FETCH_BOUND),
+            read_command(gh, pr_diff::head_argv(&pr), FETCH_BOUND),
+        );
+        let read = diff.and_then(|text| {
+            let head = head?;
+            Ok((pr_diff::parse(&text), head.trim().to_string()))
+        });
+        (Some(pr), read)
     };
-    let gh = std::path::PathBuf::from("gh");
-    let (diff, head, claim) = tokio::join!(
-        read_command(gh.clone(), pr_diff::diff_argv(&pr), FETCH_BOUND),
-        read_command(gh, pr_diff::head_argv(&pr), FETCH_BOUND),
-        claim,
-    );
-    let read = diff.and_then(|text| {
-        let head = head?;
-        let parsed = pr_diff::parse(&text);
-        Ok((parsed, head.trim().to_string()))
-    });
+    let (claim, (pr, read)) = tokio::join!(claim, reads);
     let claim = claim.and_then(|text| serde_json::from_str(&text).map_err(|e| e.to_string()));
     Landed {
         node,
-        pr: Some(pr),
+        pr,
         read,
         claim,
     }
 }
 
-/// A fetch landed: apply it to the review it was read for.
-pub(crate) fn land(view: &mut View, landed: Landed) {
+/// The local roster name of a full harness session id.
+fn local_name(agents: &[AgentRow], session: &str) -> Option<String> {
+    agents
+        .iter()
+        .find(|a| a.harness_session_id.as_deref() == Some(session))
+        .map(|a| a.name.clone())
+}
+
+/// A fetch landed: apply it to the board's review, the one its generation
+/// names. The split's fetch lands through [`split_fold`].
+pub(crate) fn land_board(view: &mut View, landed: Landed) {
     let agents = view.layout.agents.clone();
-    let Some(review) = review_mut(view) else {
+    let Some(review) = view.backlog_board.as_mut().and_then(|b| b.review.as_mut()) else {
         return;
     };
+    land(review, landed, |session| local_name(&agents, session));
+}
+
+/// Apply a landed fetch to the review it was read for.
+fn land(review: &mut Review, landed: Landed, local_name: impl Fn(&str) -> Option<String>) {
     let other_pr = matches!((&review.pr, &landed.pr), (Some(a), Some(b)) if a.number != b.number);
     if review.node != landed.node || other_pr {
         return;
@@ -505,12 +530,7 @@ pub(crate) fn land(view: &mut View, landed: Landed) {
     if review.pr.is_none() {
         review.pr = landed.pr.clone();
     }
-    review.recipient = recipient_line(&landed.claim, review.seat.as_ref(), |session| {
-        agents
-            .iter()
-            .find(|a| a.harness_session_id.as_deref() == Some(session))
-            .map(|a| a.name.clone())
-    });
+    review.recipient = recipient_line(&landed.claim, review.seat.as_ref(), local_name);
     match landed.read {
         Ok((diff, head)) => review.load(diff, head),
         Err(_) if landed.pr.is_none() => review.phase = Phase::NoPr(NO_PR.into()),
@@ -908,7 +928,7 @@ mod tests {
     #[test]
     fn a_landed_fetch_paints_rows_or_says_why_it_did_not() {
         let mut view = review_view();
-        land(&mut view, landed(Err("HTTP 404\nmore".into())));
+        land_board(&mut view, landed(Err("HTTP 404\nmore".into())));
         assert_eq!(review(&view).phase, Phase::Failed("HTTP 404".into()));
         assert_eq!(review(&view).recipient, "holder not read: no claim read");
         keys(&mut view, b"\x1b");
@@ -918,7 +938,7 @@ mod tests {
         );
 
         let mut view = review_view();
-        land(&mut view, landed(Ok((pr_diff::parse(DIFF), "abc".into()))));
+        land_board(&mut view, landed(Ok((pr_diff::parse(DIFF), "abc".into()))));
         let r = review(&view);
         let (_, row) = r.row_at(r.cursor).expect("the cursor sits on a row");
         assert!(matches!(row.kind, RowKind::Added | RowKind::Removed));
@@ -942,7 +962,7 @@ mod tests {
     #[test]
     fn one_send_queues_one_finding_and_esc_warns_before_dropping() {
         let mut view = review_view();
-        land(
+        land_board(
             &mut view,
             landed(Ok((pr_diff::parse(DIFF), "abcdef012".into()))),
         );
@@ -1003,7 +1023,7 @@ mod tests {
             "https://github.com/o/r/pull/7",
             Some(seat.clone()),
         );
-        land(&mut view, landed(Err("no read".into())));
+        land_board(&mut view, landed(Err("no read".into())));
         assert_eq!(review(&view).recipient, "mercedes on r2d2");
         assert_eq!(
             view.input_owner(),

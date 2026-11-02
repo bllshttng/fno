@@ -64,11 +64,12 @@ pub fn review_body(
 ) -> Result<String, String> {
     let head8: String = head.chars().take(8).collect();
     let mut body = format!(
-        "review of PR #{} ({}/{}) at {head8}: {} comments. Fix each, then resolve this finding.\n",
+        "review of PR #{} ({}/{}) at {head8}: {} comment{}. Fix each, then resolve this finding.\n",
         pr.number,
         pr.owner,
         pr.repo,
-        comments.len()
+        comments.len(),
+        if comments.len() == 1 { "" } else { "s" }
     );
     for (i, c) in comments.iter().enumerate() {
         let mark = if c.removed { " (removed)" } else { "" };

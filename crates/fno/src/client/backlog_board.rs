@@ -514,7 +514,7 @@ pub(crate) fn apply_fold(view: &mut View, gen: u64, msg: BoardMsg) {
     }
     let mut notice: Option<String> = None;
     match msg {
-        BoardMsg::ReviewLoaded(landed) => return pr_review::land(view, *landed),
+        BoardMsg::ReviewLoaded(landed) => return pr_review::land_board(view, *landed),
         BoardMsg::ReviewSent { ok, notice: n } => {
             if let Some(review) = b.review.as_mut() {
                 pr_review::sent(review, ok);
