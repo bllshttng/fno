@@ -66,6 +66,10 @@ pub struct Account {
     /// omits the field, and that CLI refusal still blocks the swap.
     #[serde(default)]
     pub spawn_only: bool,
+    /// The vendor the record bills, when it is not its harness's own (a
+    /// route or a base URL). None reads as the harness default.
+    #[serde(default)]
+    pub provider: Option<String>,
     /// The identity cell parsed from plain `list`'s own last column (the
     /// phase-2 read), taken verbatim, problems and all. None until it lands.
     #[serde(skip)]
@@ -87,8 +91,19 @@ fn unknown_headroom() -> String {
 pub struct UsageCell {
     pub text: String,
     pub relogin: bool,
-    /// When the reading was taken (epoch secs), for the AGE column.
+    /// When the reading was taken (epoch secs), for the read age.
     pub probed_at: Option<u64>,
+    /// Each measured window, for the usage bars. Empty on an unknown.
+    pub windows: Vec<UsageWindow>,
+}
+
+/// One measured usage window: its label (`5h`, `weekly`, a model), the
+/// rounded used percent, and when it resets.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UsageWindow {
+    pub label: String,
+    pub used_pct: u32,
+    pub resets_at: Option<u64>,
 }
 
 /// Budget for the live usage read. Each claude account costs a profile
@@ -318,6 +333,8 @@ const LOGIN_HINT: &str = "press r to log in";
 pub struct PendingConfirm {
     pub label: String,
     pub argv: Vec<String>,
+    /// Enter opens `argv` in a pane, for a login that needs a terminal.
+    pub pane: bool,
 }
 
 /// The Connections modal state. Owned by `View::connections` while open.
@@ -373,8 +390,6 @@ pub struct ConnectionsView {
     /// The rendered line the cursor fill covers, set while rendering. A row
     /// carries no cursor glyph: the fill is the cursor.
     cursor_row: std::cell::Cell<Option<usize>>,
-    /// The cursor's offset inside the accounts table rows, before they join `out`.
-    cursor_rel: std::cell::Cell<Option<usize>>,
     /// Live workers per harness slot, set while rendering: the key reducer has
     /// no agent rows, and the `u` prompt names this count.
     slot_workers: std::cell::RefCell<std::collections::BTreeMap<String, usize>>,
@@ -415,7 +430,6 @@ impl ConnectionsView {
             relogin: Default::default(),
             last_read: std::time::Instant::now(),
             cursor_row: Default::default(),
-            cursor_rel: Default::default(),
             slot_workers: Default::default(),
         }
     }
@@ -501,6 +515,12 @@ impl ConnectionsView {
                         .find(|old| old.id == a.id)
                         .and_then(|old| old.usage.clone());
                 }
+                // The tab groups rows by provider, and the cursor walks rows
+                // in screen order, so the list takes that order.
+                accounts.sort_by_key(|a| {
+                    let key = provider_key(a);
+                    (provider_rank(&key), key)
+                });
                 self.accounts = accounts;
                 self.combos = combos;
                 self.state = ModalState::Ready;
@@ -570,8 +590,11 @@ impl ConnectionsView {
         // cancels (no destructive action without an explicit confirm).
         if let Some(pending) = self.confirm.take() {
             if key == b'\r' || key == b'\n' {
-                self.acting = true;
                 self.notice = None;
+                if pending.pane {
+                    return ConnIntent::SpawnLogin(pending.argv);
+                }
+                self.acting = true;
                 return ConnIntent::Run(pending.argv);
             }
             self.notice = Some("cancelled".to_string());
@@ -611,14 +634,17 @@ impl ConnectionsView {
         match key {
             b'j' => self.move_sel(1),
             b'k' => self.move_sel(-1),
-            b'u' => self.act_use(),
+            b'u' | b'\r' | b'\n' => self.act_use(),
             b's' => self.act_set_active(),
             b'd' => self.act_remove(),
             b'a' => {
+                let kind = self
+                    .selected_account()
+                    .map_or(AddKind::Claude, |a| add_kind_for(&provider_key(a)));
                 self.wizard = Some(Wizard {
                     step: WizardStep::Id,
                     id: String::new(),
-                    kind: AddKind::Claude,
+                    kind,
                     dir: String::new(),
                     api_key: String::new(),
                 });
@@ -772,6 +798,7 @@ impl ConnectionsView {
         };
         let name = combo.name.clone();
         self.confirm = Some(PendingConfirm {
+            pane: false,
             label: format!("remove combo {name}? (Enter=yes, any key=no)"),
             argv: vec![
                 "config".into(),
@@ -881,6 +908,7 @@ impl ConnectionsView {
         let id = acct.id.clone();
         self.notice = None;
         self.confirm = Some(PendingConfirm {
+            pane: false,
             label,
             argv: vec![
                 "config".into(),
@@ -937,6 +965,7 @@ impl ConnectionsView {
         };
         let id = acct.id.clone();
         self.confirm = Some(PendingConfirm {
+            pane: false,
             label: format!("remove account {id}? (Enter=yes, any key=no)"),
             argv: vec!["config".into(), "accounts".into(), "remove".into(), id],
         });
@@ -990,9 +1019,30 @@ impl ConnectionsView {
         // `use` refusal on this row also counts.
         let needs_login = refused || acct.usage.as_ref().is_some_and(|u| u.relogin);
         let (id, harness) = (acct.id.clone(), acct.harness.clone());
+        // Re-authenticate a claude login: the two-step vault login, one browser
+        // login per Keychain item, each proven before the store write. It puts
+        // the account on the shared slot, so it asks first.
+        if harness == "claude" {
+            let argv: Vec<String> = [
+                "mux", "pane", "run", "fno", "config", "accounts", "use", &id, "--scope", "global",
+                "--login",
+            ]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+            self.confirm = Some(PendingConfirm {
+                label: format!(
+                    "re-authenticate {id}? two browser logins in a pane, and {id} takes the \
+                     shared claude login (Enter=yes, any key=no)"
+                ),
+                argv,
+                pane: true,
+            });
+            self.notice = None;
+            return ConnIntent::Redraw;
+        }
         if needs_login && !self.relogin.contains(&id) {
             let login: Vec<String> = match harness.as_str() {
-                "claude" => vec!["claude".into(), "/login".into()],
                 "codex" => vec!["codex".into(), "login".into()],
                 _ => {
                     self.notice = Some(format!("{id}: no login flow for {harness}"));
@@ -1230,7 +1280,6 @@ impl ConnectionsView {
         max_cols: usize,
     ) -> (Vec<String>, Option<usize>) {
         self.cursor_row.set(None);
-        self.cursor_rel.set(None);
         let mut out: Vec<String> = Vec::new();
         out.push(self.tab_bar());
         out.push(String::new());
@@ -1275,6 +1324,10 @@ impl ConnectionsView {
         format!("connections   {a}{o}")
     }
 
+    /// The Accounts tab: one card per provider, in [`PROVIDERS`] order, then
+    /// any other provider a record names. Each card carries the plain harness
+    /// login where one exists, one row per saved credential with its usage
+    /// bars under it, or an add hint when it holds none.
     fn render_accounts(
         &self,
         out: &mut Vec<String>,
@@ -1293,152 +1346,137 @@ impl ConnectionsView {
             .collect();
         if self.accounts.is_empty() && self.pending.is_empty() {
             out.push("no accounts registered - press a to add".to_string());
-            return;
+            out.push(String::new());
         }
-        // The name column is as wide as the longest name.
-        let name_w = |id: &str| crate::chrome::str_cols(id);
-        let w_name = self
-            .accounts
-            .iter()
-            .map(|a| name_w(&a.id))
-            .chain(self.pending.iter().map(|p| name_w(&p.id)))
-            .max()
-            .unwrap_or(0)
-            .max("ACCOUNT".len());
-        let names: Vec<String> = self
-            .accounts
-            .iter()
-            .map(|a| a.id.clone())
-            .chain(self.pending.iter().map(|p| p.id.clone()))
-            .collect();
-        let clis: Vec<String> = self
-            .accounts
-            .iter()
-            .map(|a| a.harness.clone())
-            .chain(self.pending.iter().map(|p| p.cli.clone()))
-            .collect();
-        let auths: Vec<String> = self.accounts.iter().map(|a| a.auth.clone()).collect();
-        let headrooms: Vec<String> = self.accounts.iter().map(|a| self.usage_text(a)).collect();
         let now = epoch_now();
-        let ages: Vec<String> = self.accounts.iter().map(|a| usage_age(a, now)).collect();
-        let riders: Vec<String> = self
-            .accounts
-            .iter()
-            .map(|a| workers_on(a, agents).to_string())
-            .collect();
-        let snaps: Vec<String> = self
-            .accounts
-            .iter()
-            .map(|a| a.snapshot.clone().unwrap_or_default())
-            .collect();
-        let idents: Vec<String> = self
-            .accounts
-            .iter()
-            .map(|a| self.identity_cell(a))
-            .collect();
-        let w_cli = clis
-            .iter()
-            .map(|c| crate::chrome::str_cols(c))
-            .max()
-            .unwrap_or(0);
-        // LOGIN is the stored credential's age (`cred-snapshot`), never the
-        // usage reading's: AGE is that one.
-        let mut cols: Vec<(&str, Vec<String>, usize)> = vec![
-            ("CLI", clis[..self.accounts.len()].to_vec(), w_cli),
-            ("AUTH", auths, 0),
-            ("USAGE", headrooms, 0),
-            ("AGE", ages, 0),
-            ("LOGIN", snaps, 0),
-            ("WORKERS", riders, 0),
-            ("IDENTITY", idents, 0),
-        ];
-        // A row wider than the overlay wraps and loses its alignment, so the
-        // table drops the columns read least, in this order, until it fits.
-        for drop in ["AUTH", "IDENTITY", "LOGIN", "AGE", ""] {
-            let rows = self.account_rows(&names, w_name, &cols);
-            if drop.is_empty() || rows.iter().all(|r| crate::chrome::str_cols(r) <= max_cols) {
-                let base = out.len();
-                out.extend(rows);
-                if let Some(rel) = self.cursor_rel.get() {
-                    self.cursor_row.set(Some(base + rel));
-                }
-                break;
+        let mut keys: Vec<String> = PROVIDERS.iter().map(|(k, _)| k.to_string()).collect();
+        for a in &self.accounts {
+            let key = provider_key(a);
+            if !keys.contains(&key) {
+                keys.push(key);
             }
-            cols.retain(|(label, _, _)| *label != drop);
         }
-        let w_cli = w_cli.max("CLI".len());
+        for (n, key) in keys.iter().enumerate() {
+            if n > 0 {
+                out.push(String::new());
+            }
+            out.push(format!("{}   a: add account", provider_title(key)));
+            let rows: Vec<(usize, &Account)> = self
+                .accounts
+                .iter()
+                .enumerate()
+                .filter(|(_, a)| provider_key(a) == *key)
+                .collect();
+            if let Some(harness) = system_default_harness(key) {
+                // The plain login the harness has with no saved account named.
+                let badge = if rows.iter().any(|(_, a)| a.active) {
+                    "        "
+                } else {
+                    "[ACTIVE]"
+                };
+                out.push(format!(
+                    "  {badge}  System default   your own {harness} login on this machine"
+                ));
+            }
+            if rows.is_empty() {
+                out.push("            no saved account - a: add one".to_string());
+            }
+            for (i, a) in rows {
+                if i == self.acct_sel {
+                    self.cursor_row.set(Some(out.len()));
+                }
+                out.push(self.account_line(a, agents, now, i == self.acct_sel, max_cols));
+                out.extend(self.usage_lines(a, now));
+            }
+        }
         // Session-local pending logins render after the real records; `r`
         // registers the selected one into a managed account.
-        for (j, _p) in self.pending.iter().enumerate() {
-            let idx = self.accounts.len() + j;
-            if idx == self.acct_sel {
+        for (j, p) in self.pending.iter().enumerate() {
+            if self.accounts.len() + j == self.acct_sel {
                 self.cursor_row.set(Some(out.len()));
             }
             out.push(format!(
-                "    {name:<wname$}  {cli:<wcli$}  …login pending  (r: register)",
-                name = crate::client::pad_to(&names[self.accounts.len() + j], w_name),
-                wname = w_name,
-                cli = clis[self.accounts.len() + j],
-                wcli = w_cli,
+                "            {}  {}  …login pending  (r: register)",
+                p.id, p.cli
             ));
         }
     }
 
-    /// The accounts table's header and one line per record, over the shown
-    /// columns. One width per column, shared by the header and every row, so
-    /// the body reads as a table; a column with no values still gets its
-    /// header's width (AC4-EDGE).
-    fn account_rows(
+    /// One credential's line: the ACTIVE badge (the one new spawns use) or
+    /// room for it, the id, its kind, the harness that runs it, the masked
+    /// identity, live workers and the read age, then its keys. Rows that do
+    /// not fit drop their keys; the selected row always keeps them.
+    fn account_line(
         &self,
-        names: &[String],
-        w_name: usize,
-        cols: &[(&str, Vec<String>, usize)],
-    ) -> Vec<String> {
-        use crate::chrome::str_cols;
-        let widths: Vec<usize> = cols
-            .iter()
-            .map(|(label, cells, min)| {
-                cells
-                    .iter()
-                    .map(|c| str_cols(c))
-                    .fold((*min).max(label.len()), usize::max)
-            })
-            .collect();
-        let line = |lead: String, name: &str, cell: &dyn Fn(usize) -> String| {
-            let mut s = lead + &crate::client::pad_to(name, w_name);
-            for (k, w) in widths.iter().enumerate() {
-                s.push_str("  ");
-                s.push_str(&crate::client::pad_to(&cell(k), *w));
-            }
-            s.trim_end().to_string()
+        a: &Account,
+        agents: &[crate::proto::AgentRow],
+        now: u64,
+        selected: bool,
+        max_cols: usize,
+    ) -> String {
+        let badge = if a.active { "[ACTIVE]" } else { "        " };
+        // The session-local spawn account keeps its own `$` marker.
+        let spawn = if self.active_account.as_deref() == Some(a.id.as_str()) {
+            "$"
+        } else {
+            " "
         };
-        // Header is inert: no cursor row ever points at it (selection clamps
-        // to data rows), so nothing routes a keypress here.
-        let mut rows = vec![line("    ".into(), "ACCOUNT", &|k| cols[k].0.to_string())];
-        for (i, a) in self.accounts.iter().enumerate() {
-            if i == self.acct_sel {
-                self.cursor_rel.set(Some(rows.len()));
-            }
-            let badge = if a.active { "●" } else { " " };
-            // A distinct billing marker for the active-for-spawns
-            // account, kept separate from the global-active `●` (Locked
-            // Decision 1). Always a column so alignment never shifts.
-            let spawn = if self.active_account.as_deref() == Some(a.id.as_str()) {
-                "$"
-            } else {
-                " "
-            };
-            rows.push(line(format!(" {badge}{spawn} "), &names[i], &|k| {
-                cols[k].1[i].clone()
-            }));
+        let kind = match a.auth.as_str() {
+            "api_key" => "API key",
+            "managed" | "oauth" | "oauth_dir" => "subscription login",
+            other => other,
+        };
+        let mut parts = vec![kind.to_string(), a.harness.clone()];
+        let identity = mask_emails(&self.identity_cell(a));
+        if identity != "-" {
+            parts.push(identity);
         }
-        rows
+        match workers_on(a, agents) {
+            0 => {}
+            1 => parts.push("1 worker".to_string()),
+            w => parts.push(format!("{w} workers")),
+        }
+        let age = usage_age(a, now);
+        if !age.is_empty() {
+            parts.push(format!("read {age} ago"));
+        }
+        if let Some(snap) = a.snapshot.as_deref().filter(|s| !s.is_empty()) {
+            parts.push(format!("login saved {snap} ago"));
+        }
+        let line = format!(" {spawn}{badge}  {}  {}", a.id, parts.join(" · "));
+        let keys = if a.active {
+            "r: re-authenticate  d: remove"
+        } else {
+            "u: make active  r: re-authenticate  d: remove"
+        };
+        let full = format!("{line}   {keys}");
+        if selected || crate::chrome::str_cols(&full) <= max_cols {
+            full
+        } else {
+            line
+        }
+    }
+
+    /// The lines under a credential: one bar per measured window, or the
+    /// plain-words reason there is no reading.
+    fn usage_lines(&self, a: &Account, now: u64) -> Vec<String> {
+        let mut lines: Vec<String> = match &a.usage {
+            Some(u) if !u.windows.is_empty() => {
+                u.windows.iter().map(|w| window_line(w, now)).collect()
+            }
+            _ => vec![format!("              {}", self.usage_text(a))],
+        };
+        if self.relogin.contains(&a.id) && a.usage.as_ref().is_some_and(|u| !u.windows.is_empty()) {
+            lines.push("              login open, r saves it".to_string());
+        }
+        lines
     }
 
     /// The usage cell for one row: the latest reading, or the list's headroom
     /// word until one lands. A row whose login pane is open says what `r` does.
     fn usage_text(&self, a: &Account) -> String {
-        let text = a.usage.as_ref().map_or(&a.headroom, |u| &u.text);
+        let headroom = format!("headroom {}", a.headroom);
+        let text = a.usage.as_ref().map_or(&headroom, |u| &u.text);
         if self.relogin.contains(&a.id) {
             format!("{text}; login open, r saves it")
         } else {
@@ -1561,7 +1599,7 @@ impl ConnectionsView {
     fn footer(&self) -> String {
         match self.tab {
             Tab::Accounts => {
-                "Tab: order  j/k: move  u: use  s: spawn-acct  d: remove  a: add  r: register  R: refresh  Esc: close"
+                "Tab: order  j/k: move  u/Enter: make active  r: re-authenticate  d: remove  a: add  s: spawn-acct  R: refresh  Esc: close"
                     .to_string()
             }
             Tab::Order => {
@@ -1586,6 +1624,145 @@ fn pad_block(mut lines: Vec<String>) -> Vec<String> {
         line.push_str(&" ".repeat(pad));
     }
     lines
+}
+
+/// The providers the Accounts tab always lists, in this order, as
+/// `(key, title)`. A provider with no saved credential still shows.
+const PROVIDERS: [(&str, &str); 7] = [
+    ("anthropic", "Anthropic"),
+    ("openai", "OpenAI"),
+    ("zai", "zai"),
+    ("bedrock", "Amazon Bedrock"),
+    ("deepseek", "DeepSeek"),
+    ("opencode", "OpenCode"),
+    ("llama", "Llama"),
+];
+
+/// The provider key a row groups under: the vendor `list -J` names, else
+/// its harness's own. A URL host the list fell back to maps to its key.
+fn provider_key(a: &Account) -> String {
+    let raw = a
+        .provider
+        .clone()
+        .unwrap_or_else(|| match a.harness.as_str() {
+            "claude" => "anthropic".to_string(),
+            "codex" => "openai".to_string(),
+            other => other.to_string(),
+        })
+        .to_ascii_lowercase();
+    [
+        ("z.ai", "zai"),
+        ("bigmodel", "zai"),
+        ("deepseek", "deepseek"),
+        ("bedrock", "bedrock"),
+        ("amazonaws", "bedrock"),
+        ("llama", "llama"),
+        ("opencode", "opencode"),
+        ("openai", "openai"),
+        ("anthropic", "anthropic"),
+    ]
+    .iter()
+    .find(|(needle, _)| raw.contains(needle))
+    .map_or(raw.clone(), |(_, key)| key.to_string())
+}
+
+fn provider_rank(key: &str) -> usize {
+    PROVIDERS
+        .iter()
+        .position(|(k, _)| *k == key)
+        .unwrap_or(PROVIDERS.len())
+}
+
+fn provider_title(key: &str) -> String {
+    PROVIDERS
+        .iter()
+        .find(|(k, _)| *k == key)
+        .map_or(key.to_string(), |(_, title)| title.to_string())
+}
+
+/// The harness whose plain login serves `key` with no saved account named.
+fn system_default_harness(key: &str) -> Option<&'static str> {
+    match key {
+        "anthropic" => Some("claude"),
+        "openai" => Some("codex"),
+        _ => None,
+    }
+}
+
+/// The add wizard's first kind for a provider's card.
+fn add_kind_for(key: &str) -> AddKind {
+    match key {
+        "openai" => AddKind::Codex,
+        "zai" => AddKind::ApiKeyGlm,
+        _ => AddKind::Claude,
+    }
+}
+
+/// `jason@readyrule.com` reads `j•••@r•••.com`: the first letter of the
+/// name and of the domain, and the top-level domain.
+fn mask_emails(text: &str) -> String {
+    let mask = |word: &str| -> String {
+        let Some((local, domain)) = word.split_once('@') else {
+            return word.to_string();
+        };
+        let Some((host, tld)) = domain.rsplit_once('.') else {
+            return word.to_string();
+        };
+        // Keep a leading mark such as `(`: only the address masks.
+        let lead: String = local.chars().take_while(|c| !c.is_alphanumeric()).collect();
+        let (Some(first), Some(h)) = (local[lead.len()..].chars().next(), host.chars().next())
+        else {
+            return word.to_string();
+        };
+        format!("{lead}{first}•••@{h}•••.{tld}")
+    };
+    text.split(' ').map(mask).collect::<Vec<_>>().join(" ")
+}
+
+/// Cells in a usage bar.
+const BAR_CELLS: usize = 12;
+
+/// How long a window runs, for its pace: `5h`, `7d`, `weekly`.
+fn window_seconds(label: &str) -> Option<u64> {
+    if label == "weekly" {
+        return Some(7 * 86_400);
+    }
+    if !label.is_ascii() {
+        return None;
+    }
+    let (num, unit) = label.split_at(label.len().checked_sub(1)?);
+    let n: u64 = num.parse().ok()?;
+    match unit {
+        "h" => Some(n * 3600),
+        "d" => Some(n * 86_400),
+        _ => None,
+    }
+}
+
+/// One usage window as a bar: label, fill, percent, time to reset, and
+/// pace (ahead of or behind an even spend across the window).
+fn window_line(w: &UsageWindow, now: u64) -> String {
+    let fill = (w.used_pct.min(100) as usize * BAR_CELLS + 50) / 100;
+    let bar = format!("{}{}", "█".repeat(fill), "░".repeat(BAR_CELLS - fill));
+    let mut line = format!("              {:<7} {bar} {:>3}%", w.label, w.used_pct);
+    let Some(at) = w.resets_at.filter(|at| *at > now) else {
+        return line;
+    };
+    line.push_str(&format!(
+        "  resets in {}",
+        crate::client::humanize_ago(at - now)
+    ));
+    if let Some(span) = window_seconds(&w.label).filter(|span| at - now <= *span) {
+        let even = (span - (at - now)) * 100 / span;
+        let pace = match u64::from(w.used_pct) {
+            p if p + 5 < even => "pace slower",
+            p if p > even + 5 => "pace faster",
+            _ => "on pace",
+        };
+        line.push_str("  ");
+        line.push_str(pace);
+    }
+    line
 }
 
 // ── async reads (fail-open shell-outs, the needs_overlay idiom) ─────────────
@@ -1643,27 +1820,37 @@ fn parse_usage_at(stdout: &[u8], now: u64) -> Option<Vec<(String, UsageCell)>> {
     let cells = map
         .into_iter()
         .map(|(id, row)| {
-            let windows: Vec<String> = row["windows"]
+            let windows: Vec<UsageWindow> = row["windows"]
                 .as_array()
                 .into_iter()
                 .flatten()
                 .filter_map(|w| {
-                    let mut cell =
-                        format!("{} {:.0}%", w["label"].as_str()?, w["used_pct"].as_f64()?);
-                    if let Some(at) = w["resets_at"].as_f64().filter(|at| *at as u64 > now) {
+                    Some(UsageWindow {
+                        label: w["label"].as_str()?.to_string(),
+                        used_pct: w["used_pct"].as_f64()?.round().clamp(0.0, 999.0) as u32,
+                        resets_at: w["resets_at"].as_f64().map(|at| at as u64),
+                    })
+                })
+                .collect();
+            let text: Vec<String> = windows
+                .iter()
+                .map(|w| {
+                    let mut cell = format!("{} {}%", w.label, w.used_pct);
+                    if let Some(at) = w.resets_at.filter(|at| *at > now) {
                         cell.push_str(" ↻");
-                        cell.push_str(&crate::client::humanize_ago(at as u64 - now));
+                        cell.push_str(&crate::client::humanize_ago(at - now));
                     }
-                    Some(cell)
+                    cell
                 })
                 .collect();
             let mut cell = if windows.is_empty() {
                 unknown_usage(row["reason"].as_str().unwrap_or("no reading"))
             } else {
                 UsageCell {
-                    text: windows.join(" "),
+                    text: text.join(" "),
                     relogin: false,
                     probed_at: None,
+                    windows,
                 }
             };
             cell.probed_at = row["probed_at"].as_f64().map(|at| at as u64);
@@ -1745,6 +1932,7 @@ fn unknown_usage(reason: &str) -> UsageCell {
                 text: format!("no reading ({other})"),
                 relogin: false,
                 probed_at: None,
+                windows: Vec::new(),
             }
         }
     };
@@ -1752,6 +1940,7 @@ fn unknown_usage(reason: &str) -> UsageCell {
         text: text.to_string(),
         relogin,
         probed_at: None,
+        windows: Vec::new(),
     }
 }
 
@@ -1958,7 +2147,7 @@ mod tests {
             br#"[
               {"id":"ccm","name":"CCM","cli":"claude","auth":"managed","priority":10,"active":true,"headroom":"ok","snapshot":"2h"},
               {"id":"ccr","name":"CCR","cli":"claude","auth":"managed","priority":20,"active":false,"headroom":"low","snapshot":"5d"},
-              {"id":"glm","name":"GLM","cli":"claude","auth":"api_key","priority":30,"active":false,"headroom":"unknown","snapshot":null}
+              {"id":"glm","name":"GLM","cli":"claude","auth":"api_key","priority":30,"active":false,"headroom":"unknown","snapshot":null,"provider":"zai"}
             ]"#,
         )
         .expect("valid accounts json")
@@ -2025,11 +2214,38 @@ mod tests {
     fn renders_accounts_with_active_badge_and_unknown_headroom() {
         let v = ready_view();
         let out = v.render().join("\n");
-        assert!(out.contains("ccm"));
-        assert!(out.contains("managed"));
-        assert!(out.contains("●")); // active badge on ccm
-        assert!(out.contains("unknown")); // glm headroom shown, not hidden
-        assert!(out.contains("2h")); // snap age cell, no snap= prefix
+        let line = |id: &str| -> String {
+            out.lines()
+                .find(|l| l.contains(&format!("  {id}  ")))
+                .unwrap_or_else(|| panic!("no {id} row: {out}"))
+                .to_string()
+        };
+        // ACTIVE marks the one credential new spawns use; the others offer u.
+        assert!(line("ccm").contains("[ACTIVE]") && line("ccm").contains("subscription login"));
+        assert!(!line("ccr").contains("[ACTIVE]"));
+        assert!(line("glm").contains("API key"));
+        assert!(out.contains("headroom unknown")); // glm headroom shown, not hidden
+        assert!(line("ccm").contains("login saved 2h ago"));
+        // Cards in provider order; glm sits under zai, and an empty provider
+        // still shows with its add hint. Anthropic's own login is not active.
+        let at = |needle: &str| {
+            out.find(needle)
+                .unwrap_or_else(|| panic!("{needle}: {out}"))
+        };
+        assert!(
+            at("Anthropic") < at("  ccm  ")
+                && at("  ccr  ") < at("zai")
+                && at("zai") < at("  glm  ")
+        );
+        assert!(at("zai") < at("Amazon Bedrock") && at("DeepSeek") < at("Llama"));
+        let default = out.lines().find(|l| l.contains("System default")).unwrap();
+        assert!(!default.contains("[ACTIVE]"), "{default}");
+        assert!(out.contains("no saved account - a: add one"));
+        assert_eq!(
+            mask_emails("!serves jason@readyrule.com"),
+            "!serves j•••@r•••.com"
+        );
+        assert_eq!(mask_emails("(jn@makersof.xyz) ok"), "(j•••@m•••.xyz) ok");
     }
 
     /// Every row shows its percent, or says in plain words why it cannot; a
@@ -2043,10 +2259,8 @@ mod tests {
                          "glm": {"state": "unknown", "reason": "auth-unsupported"}}"#;
         v.apply_read(ReadOutcome::Usage(parse_usage(usage).expect("usage json")));
         let out = v.render().join("\n");
-        assert!(
-            out.contains("USAGE") && out.contains("5h 26% weekly 99%"),
-            "{out}"
-        );
+        assert!(out.contains("5h      ███░░░░░░░░░  26%"), "{out}");
+        assert!(out.contains("weekly  ████████████  99%"), "{out}");
         assert!(
             out.contains("no proven login for this account: r to log in"),
             "{out}"
@@ -2065,6 +2279,11 @@ mod tests {
         .expect("usage json");
         assert_eq!(at[0].1.text, "5h 10% ↻2h weekly 13%");
         assert_eq!(at[0].1.probed_at, Some(1000));
+        // 5h with 2h left is 60% through: 10% used is behind an even spend.
+        let bar = window_line(&at[0].1.windows[0], 1000);
+        assert!(bar.ends_with("10%  resets in 2h  pace slower"), "{bar}");
+        // A past reset says nothing.
+        assert!(window_line(&at[0].1.windows[1], 1000).ends_with("13%"));
 
         // Workers: a row naming ccr, plus two default-login claude rows that
         // bill the active claude account (ccm); an exited row counts nowhere.
@@ -2084,29 +2303,20 @@ mod tests {
         assert_eq!(workers, vec![2, 1, 0]);
         let out = v.render_with(&rows, usize::MAX).join("\n");
         assert!(
-            out.contains("WORKERS") && out.contains("LOGIN") && out.contains("AGE"),
+            out.contains("2 workers") && out.contains("1 worker "),
             "{out}"
         );
-        // An overlay one column narrower than the table drops AUTH first and
-        // keeps every table row on one line, so the overlay never wraps it.
-        let cols = |l: &str| crate::chrome::str_cols(l.trim_end());
-        let table = |lines: &[String]| -> Vec<String> {
-            lines
-                .iter()
-                .filter(|l| {
-                    l.contains("ACCOUNT") || v.accounts.iter().any(|a| l.contains(a.id.as_str()))
-                })
-                .cloned()
-                .collect()
+        // A narrow overlay drops the keys of rows the cursor is not on; the
+        // selected row keeps them.
+        let narrow = v.render_with(&rows, 60).join("\n");
+        let row = |id: &str| {
+            narrow
+                .lines()
+                .find(|l| l.contains(&format!("  {id}  ")))
+                .unwrap()
         };
-        let full = table(&v.render_with(&rows, usize::MAX));
-        let fit = full.iter().map(|l| cols(l)).max().unwrap() - 1;
-        let narrow = table(&v.render_with(&rows, fit));
-        assert!(
-            !narrow[0].contains("AUTH") && narrow[0].contains("WORKERS"),
-            "{narrow:?}"
-        );
-        assert!(narrow.iter().all(|l| cols(l) <= fit), "{narrow:?}");
+        assert!(row("ccm").contains("r: re-authenticate"), "{narrow}");
+        assert!(!row("ccr").contains("u: make active"), "{narrow}");
 
         v.apply_read(ReadOutcome::Ok {
             accounts: sample_accounts(),
@@ -2120,18 +2330,22 @@ mod tests {
         assert!(v.render().join("\n").contains("5h 26%"));
         assert_eq!(v.notice.as_deref(), Some("usage refresh failed: timed out"));
 
-        v.acct_sel = 1; // ccr: its stored login serves another account
+        // r re-authenticates a claude login with both Keychain logins, the
+        // vault login `use --login` runs, after a confirm.
+        v.acct_sel = 1;
         let argv = |s: &str| s.split(' ').map(String::from).collect::<Vec<_>>();
-        let login = v.on_key(b'r');
+        assert_eq!(v.on_key(b'r'), ConnIntent::Redraw);
+        assert!(v
+            .render()
+            .join("\n")
+            .contains("? re-authenticate ccr? two browser logins"));
         assert_eq!(
-            login,
-            ConnIntent::SpawnLogin(argv("mux pane run claude /login"))
+            v.on_key(b'\r'),
+            ConnIntent::SpawnLogin(argv(
+                "mux pane run fno config accounts use ccr --scope global --login"
+            ))
         );
-        assert!(v.render().join("\n").contains("login open, r saves it"));
-        let save = v.on_key(b'r');
-        let register = argv("config accounts register ccr --harness claude");
-        assert_eq!(save, ConnIntent::Run(register));
-        assert!(v.relogin.is_empty());
+        assert!(!v.acting && v.relogin.is_empty());
     }
 
     // piece 1: set-active-account (`s`) is a session-local spawn-routing
@@ -2369,16 +2583,10 @@ mod tests {
         let mut v = ready_view();
         v.acct_sel = 1;
         v.notice = Some(msg);
-        // The usage cell here never set `relogin`, so only the refusal opens it.
-        assert!(matches!(v.on_key(b'r'), ConnIntent::SpawnLogin(_)));
-
-        // A refusal about another row leaves this row's re-snapshot alone.
-        let mut other = ready_view();
-        other.acct_sel = 0;
-        other.notice = Some(format!(
-            "stored credential for 'ccr' is spent: {LOGIN_HINT}"
-        ));
-        assert!(matches!(other.on_key(b'r'), ConnIntent::Run(_)));
+        v.on_key(b'r');
+        assert!(
+            matches!(v.on_key(b'\r'), ConnIntent::SpawnLogin(argv) if argv.contains(&"--login".to_string()))
+        );
     }
 
     #[test]
@@ -2816,8 +3024,14 @@ mod tests {
         assert!(out.contains("!expired-credential"));
         // The api_key row has nothing to state: the list printed `-` and the
         // modal takes it verbatim, not `?reason`.
-        let glm_row = out.lines().find(|l| l.contains("glm")).expect("glm row");
-        assert!(glm_row.trim_end().ends_with('-'), "dash cell: {glm_row}");
+        let glm_row = out
+            .lines()
+            .find(|l| l.contains("  glm  "))
+            .expect("glm row");
+        assert!(
+            !glm_row.contains(" · - ") && !glm_row.contains('?'),
+            "dash cell: {glm_row}"
+        );
         assert!(!out.contains("?api-key-route"));
 
         let mut v = ready_view();
@@ -2829,12 +3043,12 @@ mod tests {
         let out = v.render().join("\n");
         let ccm_row = out
             .lines()
-            .find(|l| l.contains(" managed") && l.contains("ccm"))
+            .find(|l| l.contains("subscription login") && l.contains("ccm"))
             .expect("ccm row");
         assert!(ccm_row.contains('?'), "missing id reads ?: {ccm_row}");
         let ccr_row = out
             .lines()
-            .find(|l| l.contains(" managed") && l.contains("ccr"))
+            .find(|l| l.contains("subscription login") && l.contains("ccr"))
             .expect("ccr row");
         assert!(ccr_row.contains("ccr"));
     }
@@ -2866,7 +3080,7 @@ mod tests {
         v.apply_read(ReadOutcome::IdentityFailed("identity: timed out".into()));
         assert_eq!(v.state, ModalState::Ready);
         let out = v.render().join("\n");
-        for line in out.lines().filter(|l| l.contains("managed")) {
+        for line in out.lines().filter(|l| l.contains("subscription login")) {
             assert!(line.contains('?'), "cell must read ?: {line}");
         }
         assert!(!out.contains("!serves"));
@@ -2882,22 +3096,16 @@ mod tests {
         // body/footer seam: exactly one blank line before the footer
         let footer_pos = out.iter().position(|l| l.contains("Tab: order")).unwrap();
         assert!(out[footer_pos - 1].trim().is_empty());
-        // header is present and inert (no cursor on it)
-        let header = out.iter().find(|l| l.contains("IDENTITY")).expect("header");
-        assert!(header.starts_with(' '));
-        assert!(!header.contains('>'));
-        // name clamped with an ellipsis, never truncated silently
-        assert!(out
-            .iter()
-            .any(|l| l.contains('…') && l.contains("a-very-long")));
+        // a long id renders whole, never cut
+        assert!(out.iter().any(|l| l.contains("a-very-long-account-name")));
 
         let mut v = ConnectionsView::new();
         v.apply_read(ReadOutcome::Ok {
             accounts: vec![],
             combos: vec![],
         });
-        assert!(!v.render().join("\n").contains("IDENTITY"));
-        // glm is the only snapshot-less row if alone: every snap cell empty.
+        assert!(v.render().join("\n").contains("Amazon Bedrock"));
+        // A key with no provider named groups under its harness's vendor.
         let mut v = ConnectionsView::new();
         v.apply_read(ReadOutcome::Ok {
             accounts: parse_accounts(br#"[{"id":"glm","harness":"claude","auth":"api_key"}]"#)
@@ -2905,7 +3113,7 @@ mod tests {
             combos: sample_combos(),
         });
         let out = v.render().join("\n");
-        // renders at all and the LOGIN header exists even with no values
-        assert!(out.contains("LOGIN"));
+        assert!(out.find("Anthropic").unwrap() < out.find("  glm  ").unwrap());
+        assert!(out.find("  glm  ").unwrap() < out.find("OpenAI").unwrap());
     }
 }
