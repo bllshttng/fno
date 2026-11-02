@@ -92,6 +92,7 @@ pub(super) fn watch_target(reason: &str, pr: Option<&str>) -> (&'static str, Opt
         "review" => "review",
         "merge_slot" => "merge_slot",
         "merge_hold" => "merge_hold",
+        "outside_hold" => "outside_hold",
         "local" => "local",
         _ => "unknown",
     };
@@ -753,6 +754,10 @@ mod tests {
             ("merge_hold", Some(1))
         );
         assert_eq!(watch_target("local", None), ("local", None));
+        assert_eq!(
+            watch_target("outside_hold", Some("1")),
+            ("outside_hold", Some(1))
+        );
         assert_eq!(watch_target("cargo-test", None), ("unknown", None));
         // Padding never eats a real number.
         assert_eq!(watch_target("ci", Some(" 2206 ")), ("ci", Some(2206)));

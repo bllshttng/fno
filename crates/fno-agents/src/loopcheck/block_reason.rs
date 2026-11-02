@@ -223,6 +223,29 @@ pub(super) fn build_block_reason(
             }
             return format!("CI still running on PR #{}.{}", pr.number, hint("ci"));
         }
+        // An outside hold: every failed check names a row whose fix lands
+        // outside this PR, so "read the failing log" prescribes debugging a
+        // failure no commit heals. The hint derives from the classifier by
+        // construction (idlable), so the ritual appears only when the hold
+        // is the sole blocker; a real failing check beside the hold keeps
+        // the generic red render below - that log is this PR's to read.
+        if idlable == Some("outside_hold") {
+            let holds: Vec<&str> = pr
+                .failing_checks
+                .iter()
+                .filter(|n| crate::outside_holds::is_outside_hold(n))
+                .map(String::as_str)
+                .collect();
+            return format!(
+                "PR #{}: CI is red only on an outside hold ({}): the fix lands \
+                 outside this PR, so there is no log to read and no commit \
+                 that heals it. This is a legal wait until the external \
+                 deploy clears the row.{}",
+                pr.number,
+                holds.join(", "),
+                hint("outside_hold")
+            );
+        }
         let check_name = match &pr.ci_conclusion {
             CiConclusion::Failure(Some(name)) => name.as_str(),
             _ => "CI",
