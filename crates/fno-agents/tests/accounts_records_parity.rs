@@ -58,6 +58,10 @@ fn lay_down(case: &Value, tmp: &Path) {
     std::env::set_var("PWD", tmp.join("repo"));
     std::env::set_var("FNO_REPO_ROOT", tmp.join("repo"));
     std::env::set_var("FNO_STATE_DIR", tmp.join("state"));
+    if let Some(layer) = case.get("fno_config").and_then(Value::as_str) {
+        let (_, rel) = LAYERS.iter().find(|(name, _)| *name == layer).unwrap();
+        std::env::set_var("FNO_CONFIG", tmp.join(rel));
+    }
 }
 
 fn accounts(r: Result<records::Accounts, records::LoadError>) -> Value {
