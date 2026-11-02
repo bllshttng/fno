@@ -267,11 +267,11 @@ fn resolve_scope_in(
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_string);
-    let team = match stamped {
+    let team = match stamped.filter(|_| row.role_level.is_some()) {
         Some(team) => team,
         None => heal_role(registry_path, grants, &session, row).ok_or_else(|| {
             format!(
-                "the registry row for {session} carries no role_scope, and no live lead \
+                "the registry row for {session} carries no complete role, and no live lead \
                  manifest or chat grant holds a grant the user made: the row is \
                  unstamped, so no team proves this session's authority. Ask your lead \
                  to grant the team. {}",
@@ -303,6 +303,13 @@ fn heal_role(
     stamp_role(registry_path, session, scope, level)
 }
 
+/// A law may name a row by handle, by short id, or by the 8-character session
+/// prefix a user reads off a status line.
+fn law_names_session(decision: &str, names: &[&str], session: &str) -> bool {
+    !decision.is_empty()
+        && (names.contains(&decision) || (decision.len() >= 8 && session.starts_with(decision)))
+}
+
 /// A user-ruling law row at `role-grant:<scope>` whose decision names this
 /// row's handle, short id or session. The scope resolves to its level.
 /// The user's words are stored, not checked against a transcript: the same
@@ -324,7 +331,7 @@ fn chat_grant(
             r.get("decision")
                 .and_then(Value::as_str)
                 .map(str::trim)
-                .is_some_and(|d| !d.is_empty() && names.contains(&d))
+                .is_some_and(|d| law_names_session(d, &names, session))
         })
         .filter(|r| {
             r.get("subject")
@@ -398,10 +405,12 @@ fn stamp_role(registry_path: &Path, session: &str, scope: String, level: u32) ->
             ]
             .contains(&Some(session))
         })?;
-        if row
-            .role_scope
-            .as_deref()
-            .is_some_and(|s| !s.trim().is_empty())
+        // Half a role is no role: the grant completes it.
+        if row.role_level.is_some()
+            && row
+                .role_scope
+                .as_deref()
+                .is_some_and(|s| !s.trim().is_empty())
         {
             return None;
         }
@@ -1188,6 +1197,35 @@ mod tests {
         with_teamed_identity(|| {
             resolve_scope_in(None, &spent, &after_done).expect_err("a vacated role stays vacated");
         });
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A law recorded against a session prefix counts, and a half role heals
+    /// from it: the row ends with a level and the granted scope.
+    #[test]
+    fn half_a_role_heals_from_a_law_naming_the_session_prefix() {
+        let id = "41f999e9-d3ba-41cb-9647-501a0b77551d";
+        assert!(law_names_session("41f999e9", &[], id));
+        assert!(!law_names_session("41f9", &[], id));
+        assert!(!law_names_session("", &[""], id));
+
+        let _guard = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = tmp("half-role");
+        let mut row = teamed_row(serde_json::json!({"role_scope": "fno-books"}));
+        row.as_object_mut().unwrap().remove("role_level");
+        let path = write_registry(&dir, serde_json::json!([row]));
+        let law = serde_json::json!({
+            "decision_id": "d-1", "subject": "role-grant:fno-books", "decision": "ses-team",
+            "authority_source": "chat_attested", "rationale": "user in chat: lead fno-books",
+            "ts": "2026-10-28T12:00:00Z",
+        });
+        with_teamed_identity(|| {
+            resolve_scope_in(None, &path, &grants(&dir, vec![law])).expect("heals");
+        });
+        let healed = crate::state::load_registry(&path).unwrap();
+        assert_eq!(healed.entries[0].role_level, Some(2));
         fs::remove_dir_all(&dir).ok();
     }
 
