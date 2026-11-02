@@ -44,4 +44,22 @@ fno agents fleet top --machines --takes-work on
 
 ## Parent edges
 
-A session row carries its spawner's session prefix. When that prefix matches a session on any machine, the JSON adds `parent_at` as `<name>@<host>`. An ssh spawn records no edge yet, so a cross-machine child shows no parent.
+A session row carries its spawner's session prefix. When that prefix matches a session on any machine, the JSON adds `parent_at` as `<name>@<host>`. An ssh spawn carries the spawner's session id across the hop as `--spawned-by`, so a cross-machine child shows its parent too.
+
+## Keys
+
+The mux's Fleet tab (the org board) acts on a seat or a machine that this mux does not host. Each key runs the public `fno` command, so the ssh relay stays the only path to another machine.
+
+| Key | Row | Runs |
+|---|---|---|
+| space | a seat on another machine | `fno agents session peek <short>@<host> -n 40`, shown on a page that esc closes |
+| `P` | a seat on another machine | `fno mux pane run fno agents session peek <short>@<host> --follow`, a local pane that follows the seat read-only |
+| `s` | a machine, lead or seat | a prompt line, then `fno agents spawn --name @<host> --cwd <dir> "<prompt>"` |
+
+`P` opens a viewer pane, not a portal. A portal needs a registry row on this mux, and a seat on another machine has none. `x` stops a seat on this machine only, and on another machine's seat it names the stop command to run there.
+
+`s` starts the seat in the selected seat's directory. With no seat selected, it uses the directory of the first seat on that machine that reports one. A machine with no such seat refuses and names the row. On this machine the relay strips the host and spawns here. When the machine takes no work, the prompt line says so, and a spawn you type still runs.
+
+Every action refuses when the machine's beat is stale. One action runs at a time, and a second key names the first. A failed ssh hop shows ssh's own message, and the board stays open.
+
+`s` refuses on a machine whose owner differs from this machine's owner, and names that owner. Work on another person's machine needs team mode, which fno does not have yet. The owner is the stated `fleet.owner`, not proof, so the refusal is a courtesy and protects nothing. Plain ssh still reaches the machine.
