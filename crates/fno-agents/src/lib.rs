@@ -333,6 +333,7 @@ mod lifecycle_child;
 pub mod list_render;
 pub mod list_row;
 pub mod live_store_fence;
+pub mod lint_registry;
 pub mod liveness_cmd;
 pub mod liveness_sweep;
 pub mod lock_queue;

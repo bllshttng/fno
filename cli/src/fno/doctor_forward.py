@@ -13,7 +13,7 @@ import typer
 
 doctor_app = typer.Typer(
     name="doctor",
-    help="Foreign doctor leaves: test, event, evals, lint, harness and friends.",
+    help="Foreign doctor leaves: test, event, evals, harness and friends.",
     invoke_without_command=True,
     no_args_is_help=False,
     add_completion=False,
@@ -40,10 +40,8 @@ def _signpost(spelling: str) -> None:
 # Sub-apps (foreign families) ----------------------------------------------
 
 from fno.evals_cli import evals_app  # noqa: E402
-from fno.lint_cli import lint  # noqa: E402
 
 doctor_app.add_typer(evals_app, name="evals")
-doctor_app.command("lint")(lint)
 
 
 # The family's own leaves: registered so the teaching, not a generic

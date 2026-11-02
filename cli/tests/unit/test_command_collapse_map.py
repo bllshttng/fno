@@ -42,7 +42,7 @@ def test_map_matches_the_uncollapsed_click_action_inventory():
 
     from fno._lazy_group import typer_group_shape
     from fno.cli import COLLAPSE_KEEP, LAZY_SUBCOMMANDS
-    from fno.lint_command_ratchet import _iter_group_leaves, NATIVE_SERVED_LEAVES
+    from fno._lazy_group import iter_group_leaves, NATIVE_SERVED_LEAVES
 
     live: set[str] = set()
     for group in COLLAPSE_KEEP:
@@ -51,7 +51,7 @@ def test_map_matches_the_uncollapsed_click_action_inventory():
         obj = getattr(importlib.import_module(module_name), attr_name)
         command = typer_group_shape(obj)
         context = click.Context(command, info_name=group)
-        live.update(path for path, _sub in _iter_group_leaves(command, context, group))
+        live.update(path for path, _sub in iter_group_leaves(command, context, group))
     live.update(NATIVE_SERVED_LEAVES)
 
     mapped = {leaf for leaf in _mapped_leaves() if leaf.split()[0] in COLLAPSE_KEEP}
