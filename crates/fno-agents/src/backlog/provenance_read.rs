@@ -321,10 +321,7 @@ fn spawned_walk(entries: &[Value], root_id: &str) -> SpawnedWalk {
 
 /// `key: value` scalars, frontmatter first, first value wins. Never fails.
 fn read_manifest(root: &Path) -> Option<Map<String, Value>> {
-    let space = crate::paths::worktree_space_dir_opt(root)
-        .map(|dir| dir.join("target-state.md"))
-        .filter(|p| p.exists());
-    let path = space.unwrap_or_else(|| root.join(".fno").join("target-state.md"));
+    let path = crate::paths::worktree_space_dir_opt(root)?.join("target-state.md");
     let text = std::fs::read_to_string(path).ok()?;
     let mut raw = Map::new();
     for line in text.lines() {

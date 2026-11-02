@@ -29,12 +29,12 @@ struct Render {
     grouped: bool,
     strict: bool,
     /// `--trace`: the node's history as JSON instead of its row. `--json`
-    /// is accepted beside it and changes nothing.
+    /// changes nothing, because every default render is already JSON.
     trace: bool,
     json: bool,
 }
 
-/// The parsed single-get invocation. `None` is the forward shape: an unknown
+/// The parsed single-get invocation. `None` is the usage refusal: an unknown
 /// flag or a second positional.
 struct GetArgs<'a> {
     id: &'a str,
@@ -67,10 +67,6 @@ impl GetArgs<'_> {
                 }
             }
             i += 1;
-        }
-        // `--json` only shapes a trace; alone it stays the unknown-flag forward.
-        if render.json && !render.trace {
-            return None;
         }
         id.map(|id| GetArgs { id, render })
     }
@@ -111,7 +107,7 @@ Options:
       --grouped     Group the fields by section.
       --strict      Read the live graph only, never the archive.
       --trace       Print the node's history as JSON.
-  -J, --json        With --trace, accepted and unchanged.
+  -J, --json        Accepted and unchanged: the output is already JSON.
   -h, --help        Print help.
 
 Exit codes: 1 no such node, 3 the graph could not be read.
@@ -595,7 +591,7 @@ mod tests {
         let ok = vec!["x-1".to_string(), "--grouped".to_string()];
         assert!(GetArgs::parse(&ok).is_some());
         let bare_json = vec!["x-1".to_string(), "--json".to_string()];
-        assert!(GetArgs::parse(&bare_json).is_none());
+        assert!(GetArgs::parse(&bare_json).is_some_and(|a| a.render.json));
         let trace = vec![
             "x-1".to_string(),
             "--trace".to_string(),
