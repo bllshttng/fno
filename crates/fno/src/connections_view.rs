@@ -1476,7 +1476,6 @@ impl ConnectionsView {
             (None, Some(email)) => title.push_str(&format!("  ({})", mask_emails(email))),
             (None, None) => {}
         }
-        let line = format!(" {spawn}{badge}  {title}  {}", parts.join(" · "));
         // Each key names only what it does on this row.
         let mut keys = Vec::new();
         if a.spawn_only {
@@ -1488,12 +1487,39 @@ impl ConnectionsView {
             keys.push("r: re-authenticate");
         }
         keys.push("d: remove");
-        let full = format!("{line}   {}", keys.join("  "));
-        if selected || crate::chrome::str_cols(&full) <= max_cols {
-            full
-        } else {
-            line
+        let keys = keys.join("  ");
+        // A row wider than the overlay wraps and pushes the footer off, so a
+        // wide row sheds the fields read least: the login age, then the read
+        // age, then the kind. Only the selected row is sure to keep its keys.
+        let shed = |p: &String| -> usize {
+            if p.starts_with("login saved") {
+                1
+            } else if p.starts_with("read ") {
+                2
+            } else if *p == kind {
+                3
+            } else {
+                usize::MAX
+            }
+        };
+        let mut last = String::new();
+        for level in 0..=3 {
+            let kept: Vec<&str> = parts
+                .iter()
+                .filter(|p| shed(p) > level)
+                .map(String::as_str)
+                .collect();
+            let line = format!(" {spawn}{badge}  {title}  {}", kept.join(" · "));
+            let full = format!("{line}   {keys}");
+            if crate::chrome::str_cols(&full) <= max_cols {
+                return full;
+            }
+            if !selected && crate::chrome::str_cols(&line) <= max_cols {
+                return line;
+            }
+            last = if selected { full } else { line };
         }
+        last
     }
 
     /// The lines under a credential: one bar per measured window, or the
@@ -2371,6 +2397,9 @@ mod tests {
         };
         assert!(row("ccm").contains("r: re-authenticate"), "{narrow}");
         assert!(!row("ccr").contains("u: make active"), "{narrow}");
+        // A row the cursor is not on sheds its least-read fields to fit, so
+        // the overlay never wraps it.
+        assert!(crate::chrome::str_cols(row("ccr")) <= 60, "{narrow}");
 
         v.apply_read(ReadOutcome::Ok {
             accounts: sample_accounts(),

@@ -225,9 +225,12 @@ for rid, (harness, email, tier) in logins.items():
             "principal": {"account_uuid": f"acc-{rid}", "organization_uuid": "org-demo", "email": email}}
     with open(f"{d}/meta.json", "w") as f:
         json.dump(meta, f)
-    blob = {"claudeAiOauth": dict({"accessToken": "demo", "refreshToken": "demo"}, **tier)} if tier else {"tokens": {}}
+    blob = {"claudeAiOauth": dict({"accessToken": f"demo-{rid}", "refreshToken": f"demo-{rid}"}, **tier)} if tier else {"tokens": {}}
     with open(f"{d}/blob", "w") as f:
         json.dump(blob, f)
+# A managed record reads as active from the slot stamp, not the pointer.
+with open(f"{root}/.fno/providers/.active-claude", "w") as f:
+    f.write("studio")
 stamp = lambda t: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t))
 if hold:
     with open(f"{root}/.fno/agents/fleet-stop.json", "w") as f:
