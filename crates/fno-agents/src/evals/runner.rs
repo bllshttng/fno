@@ -147,8 +147,13 @@ fn apply_overlay(dir: &std::path::Path, overlay_ref: &str) -> Result<String, Str
 }
 
 fn git_in(dir: &std::path::Path, args: &[&str]) -> Result<String, String> {
+    // A run started from a git hook inherits these, and they would turn this
+    // `git add` and commit on the real repo.
     let out = std::process::Command::new("git")
         .args(args)
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
         .current_dir(dir)
         .output()
         .map_err(|e| e.to_string())?;
@@ -1167,6 +1172,14 @@ mod tests {
         );
         let config = std::fs::read_to_string(tree.join(".git/config")).unwrap();
         assert!(!config.contains(repo.to_str().unwrap()), "{config}");
+    }
+
+    #[test]
+    fn a_trial_transcript_dir_follows_claudes_slug_for_a_temp_path() {
+        assert_eq!(
+            crate::claude_ask::claude_cwd_slug(std::path::Path::new("/var/a_b/fno.evals/g-1")),
+            "-var-a-b-fno-evals-g-1"
+        );
     }
 
     #[test]
