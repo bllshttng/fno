@@ -60,6 +60,6 @@ The mux's Fleet tab (the org board) acts on a seat or a machine that this mux do
 
 `s` starts the seat in the selected seat's directory. With no seat selected, it uses the directory of the first seat on that machine that reports one. A machine with no such seat refuses and names the row. On this machine the relay strips the host and spawns here. When the machine takes no work, the prompt line says so, and a spawn you type still runs.
 
-Every action refuses when the machine's beat is stale. One action runs at a time, and a second key names the first. A failed ssh hop shows ssh's own message, and the board stays open.
+When the machine's beat is stale, every action refuses. One action runs at a time, and a second key names the first. A failed ssh hop shows ssh's own message, and the board stays open.
 
 `s` refuses on a machine whose owner differs from this machine's owner, and names that owner. Work on another person's machine needs team mode, which fno does not have yet. The owner is the stated `fleet.owner`, not proof, so the refusal is a courtesy and protects nothing. Plain ssh still reaches the machine.
