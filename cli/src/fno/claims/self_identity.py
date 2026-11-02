@@ -230,8 +230,7 @@ def _fill_spawn_record(owned):
     """
     if owned.session_id or owned.disposition in {"invalid", "contradiction"}:
         return owned
-    # A terminal in a worker's cwd is not that worker: with no marker, no spawn
-    # name and a full walk that found no harness, the cwd is the only link.
+    # No marker, no spawn name, and a full walk with no harness: only the cwd links this to a row.
     spawned = (os.environ.get("FNO_AGENT_SELF") or "").strip()
     if not (owned.harness or owned.markers_present or spawned) and no_harness_ancestor():
         return owned
