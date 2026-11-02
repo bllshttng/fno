@@ -42,7 +42,9 @@
 # reachable because this repo merges with merge commits.
 #
 # Re-pinned for the recall rewrite of the goldens.
-bank_rev: 7524346fbe760abf66898f84eb10faf0eab32d1e
+#
+# Re-pinned for the demote of the two goldens that fail on every tree.
+bank_rev: 9dbdf35b5a93ba04e098896c7733edddc279a0cb
 
 train:
   - capability-lane-blueprint
