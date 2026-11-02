@@ -757,22 +757,26 @@ pub fn lost_command_refusal(message: &str) -> Option<String> {
     None
 }
 
-/// The refusal for a command-shaped seed whose command cannot expand, or
-/// None. `plugin_status` is the `fno plugin-install --status --json codex`
-/// verdict's `status` field, resolved by the caller (in-process at the
+/// The refusal for a command-shaped seed whose command cannot fire, or
+/// None. `plugin_status` is the harness's pack presence verdict from
+/// `plugin_install::pack_status`, resolved by the caller (in-process at the
 /// client); None or any other value fails open, because the spawn fails on
-/// its own there.
+/// its own there. The check covers the stage arms of `install_harness`; a
+/// harness with no arm has no install command to name and never refuses.
 pub fn cannot_fire_refusal(
     message: &str,
     harness: &str,
     plugin_status: Option<&str>,
 ) -> Option<String> {
-    if harness != "codex" || !is_command_seed(Some(message)) {
+    if !is_command_seed(Some(message)) {
+        return None;
+    }
+    if !matches!(harness, "claude" | "codex" | "grok" | "zcode" | "footnote") {
         return None;
     }
     if matches!(plugin_status, Some("missing") | Some("wrong-channel")) {
         return Some(format!(
-            "the seed invokes {} but the footnote plugin is not enabled for codex on this machine, so the command would not fire and the worker would read the seed as prose. Install it with 'fno config plugin install codex' and spawn again.",
+            "the seed invokes {} but the footnote plugin is not enabled for {harness} on this machine, so the command would not fire and the worker would read the seed as prose. Install it with 'fno config plugin install {harness}' and spawn again.",
             py_repr(message.split_whitespace().next().unwrap_or("")),
         ));
     }
@@ -879,8 +883,8 @@ fn resume_bearing(args: &[String]) -> bool {
 
 /// The seed refusals on the RAW argv, in the deleted seam's order: a check
 /// after normalization would read a minted name as the seed.
-/// `plugin_status` is read only for a command seed bound for codex.
-fn seed_refusals(tail: &[String], plugin_status: &dyn Fn() -> Option<String>) -> Option<String> {
+/// `pack_status` is read only for a command seed.
+fn seed_refusals(tail: &[String], pack_status: &dyn Fn(&str) -> Option<String>) -> Option<String> {
     if let Some(substrate) = has_explicit_substrate(tail) {
         if let Some(harness) = dispatch_harness(tail) {
             let refusal = seedless_thread_refusal(
@@ -907,22 +911,7 @@ fn seed_refusals(tail: &[String], plugin_status: &dyn Fn() -> Option<String>) ->
         return None;
     }
     let harness = dispatch_harness(tail)?;
-    if harness != "codex" {
-        return None;
-    }
-    cannot_fire_refusal(&seed, &harness, plugin_status().as_deref())
-}
-
-/// The codex plugin verdict's `status`, the `plugin-install --status` read.
-fn codex_plugin_status() -> Option<String> {
-    let verdict = crate::codex_converge::inspect(
-        &mut crate::codex_converge::codex_runner,
-        &crate::codex_converge::codex_home(),
-    );
-    verdict
-        .get("status")
-        .and_then(Value::as_str)
-        .map(str::to_string)
+    cannot_fire_refusal(&seed, &harness, pack_status(&harness).as_deref())
 }
 
 fn argv_of(answer: &Value) -> Option<Vec<String>> {
@@ -1055,7 +1044,7 @@ pub fn admit(args: &[String], cwd: &Path, existing_names: &HashSet<String>) -> A
     let tail: Vec<String> = args[1..].to_vec();
 
     // 1. The seed refusals, on the raw argv (pre-normalization).
-    if let Some(text) = seed_refusals(&tail, &codex_plugin_status) {
+    if let Some(text) = seed_refusals(&tail, &crate::plugin_install::pack_status) {
         return Admission::refused(stderr, text);
     }
 
