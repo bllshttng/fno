@@ -457,13 +457,10 @@ pub fn read(ctx: &Ctx<'_>, now: f64) -> Vec<Login> {
 /// The claude config dirs to read: `CLAUDE_CONFIG_DIR` or `~/.claude`, then
 /// each configured claude account's own dir.
 fn claude_dirs(records: &[Record]) -> Vec<(PathBuf, Option<String>)> {
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_default();
     let default = std::env::var_os("CLAUDE_CONFIG_DIR")
         .filter(|v| !v.is_empty())
         .map(PathBuf::from)
-        .unwrap_or_else(|| home.join(".claude"));
+        .unwrap_or_else(crate::accounts::binding::home_slot);
     let mut dirs = vec![(default, None)];
     for record in records.iter().filter(|r| r.harness == "claude") {
         let Some(dir) = record.config_dir.clone() else {
@@ -603,7 +600,7 @@ mod tests {
             Ok(answer(config))
         };
         let env_fn = |name: &str| env.get(name).map(|v| v.to_string());
-        let dir = PathBuf::from("/nonexistent-fno-test/.claude");
+        let dir = PathBuf::from("/nonexistent-fno-test/cfg");
         let ctx = Ctx {
             slot,
             http: &http,
@@ -617,7 +614,7 @@ mod tests {
 
     #[test]
     fn claude_rows_read_live_token_and_dedupe_items() {
-        let scoped = keychain_service(Path::new("/nonexistent-fno-test/.claude")).unwrap();
+        let scoped = keychain_service(Path::new("/nonexistent-fno-test/cfg")).unwrap();
         let live = claude_blob("tok-live", (NOW + 3600.0) * 1000.0);
         let mut items = BTreeMap::new();
         items.insert(UNSCOPED_SERVICE.to_string(), live.clone());
