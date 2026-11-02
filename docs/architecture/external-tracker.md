@@ -86,10 +86,7 @@ It is also the field most likely to be missed.
 No tracker models a local checkout.
 It is the authority for multi-repo dispatch and backs `docs/architecture/node-cwd-authority.md`.
 
-The claim pointer is not in the sidecar.
-`locked_by` and `session_id` are live coordination state owned by the claims subsystem, `fno-agents claim`.
-That subsystem keys on the opaque id and never opens the graph.
-Mirroring it here must not happen, because it makes the sidecar a second writer for claim state.
+The claim pointer is not in the sidecar. `locked_by` and `session_id` are live coordination state owned by the claims subsystem, `fno-agents claim`. That subsystem keys on the opaque id and never opens the graph. Mirroring it here must not happen, because it makes the sidecar a second writer for claim state.
 
 These fields live only in the tracker and never enter the sidecar.
 They are `title`, `state`, `priority`, `parent`, `blocked_by`, `size`, `domain`, and `details`.

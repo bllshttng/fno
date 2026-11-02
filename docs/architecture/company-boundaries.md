@@ -4,7 +4,7 @@
 
 The sole layer map lives in `scripts/ci/check-company-boundaries.sh`, and this document intentionally does not duplicate it. Dependencies can point within a layer or to a lower-numbered layer, never upward. The whole `fno.company` package is core vocabulary. It held a composition layer for its topology and execution modules until the topology port deleted them. The Rust `TOPOLOGIES` list in `crates/fno-agents/src/plugins/verify.rs` now owns the topology words.
 
-The check scans Python imports with a known-present downward edge out of the runtime layer as its positive control and reports the importing file, line, layers, and statement for every prohibited dependency.
+The check scans Python imports. Its positive control is a known-present downward edge out of the runtime layer. It reports the importing file, line, layers, and statement for every prohibited dependency.
 The current repository does not satisfy the declared map: the check reports two imports from the platform events CLI into the agents runtime, and a platform-to-runtime-to-platform layer cycle those two imports keep alive.
 
 ### Map coverage is 35%, so a cleared finding is not automatically a removed dependency
