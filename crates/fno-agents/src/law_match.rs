@@ -2152,13 +2152,18 @@ pub(crate) fn all_decision_rows() -> Result<(Vec<Value>, usize), String> {
     )
 }
 
-/// The rows this caller may address: global, the current project, and this
-/// machine and person, the stage view. `decision_index::row_visible` is the
-/// filter, so an unresolvable project fails open the same way.
+/// The rows the retract, restore and history doors may address: global, the
+/// current project, and every machine or person law. Those doors manage law
+/// rather than apply it, so the owner reaches a law bound to another machine,
+/// or to a mistyped id that binds nowhere, from any machine. An unresolvable
+/// project fails open, as every reader does.
 pub(crate) fn scope_filtered_rows(rows: Vec<Value>) -> Vec<Value> {
     let project = resolve_project(None, &settings_sources()).ok();
     rows.into_iter()
-        .filter(|r| decision_index::row_visible(r, project.as_deref()))
+        .filter(|r| {
+            decision_index::binds_here(decision_index::row_scope(r)).is_some()
+                || decision_index::row_visible(r, project.as_deref())
+        })
         .collect()
 }
 
@@ -3527,6 +3532,12 @@ pub(crate) mod scope_tests {
         .expect("writes");
         assert_eq!(record("wide-two", Some(Widen::Global)), 0);
         assert!(env.index_text().contains("\"scope\":\"global\""));
+        // A law bound to a person nobody resolves stays addressable here.
+        let typo = Some(Widen::Person(Some("nobody-zz9".into())));
+        assert_eq!(record("typo-one", typo), 0);
+        let (rows, _) = all_decision_rows().expect("the store reads");
+        let addressable = scope_filtered_rows(rows);
+        assert!(addressable.iter().any(|r| r["subject"] == "typo-one"));
     }
 
     #[test]
