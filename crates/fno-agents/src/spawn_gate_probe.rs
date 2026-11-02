@@ -11,15 +11,17 @@
 //!
 //! The cache keys on the caller's cwd because the probe's config reads
 //! (`agents.max_live`, thresholds, provider lane caps) resolve per cwd: one
-//! machine serving two spaces keeps two answers. One compute mutex caps
-//! concurrent computes at one across every cwd; a caller that overtakes
-//! re-checks the cache after the wait and serves what landed.
+//! machine serving two spaces keeps two answers. One compute lock caps
+//! concurrent computes at one across every cwd; a caller that arrives while
+//! one computes never queues behind it - it serves its stale entry, the same
+//! never-queue shape the truth probe's latch uses, so a hung compute
+//! degrades one request instead of wedging every glance on the machine.
 
 use crate::protocol::{ErrorCode, Request, Response};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 
 /// How long one cwd's answer stays fresh. Matches the truth probe's 60s
@@ -27,9 +29,10 @@ use std::time::{Duration, Instant};
 /// every client of the daemon.
 pub(crate) const GATE_PROBE_CACHE_TTL: Duration = Duration::from_secs(60);
 
-/// The payload the mux client sends, as the daemon-side default. The gate
-/// mode is unreachable through this command: [`serve`] refuses any other.
-pub(crate) const PROBE_PAYLOAD_DEFAULT: &str = r#"{"mode":"probe","only":["lanes"],"tests":true}"#;
+/// The payload the mux client sends, as the daemon-side default.
+fn default_probe_payload() -> Value {
+    json!({"mode": "probe", "only": ["lanes"], "tests": true})
+}
 
 /// The daemon's `agent.gate-probe` handler. Params: `cwd` (required - the
 /// probe's config root), `payload` (optional, defaults to the probe
@@ -55,7 +58,7 @@ pub(crate) fn gate_probe_rpc<C>(_ctx: &C, req: &Request) -> Response {
                 "`payload` must be the probe's JSON object",
             )
         }
-        None => serde_json::from_str(PROBE_PAYLOAD_DEFAULT).expect("the default payload parses"),
+        None => default_probe_payload(),
     };
     if payload.get("mode").and_then(Value::as_str) != Some("probe") {
         // The gate mode holds the spawn mutex and mints reservations; this
@@ -66,7 +69,18 @@ pub(crate) fn gate_probe_rpc<C>(_ctx: &C, req: &Request) -> Response {
             "only `mode: \"probe\"` answers over the socket",
         );
     }
-    let (answer, cached_s) = cache().serve(cwd, &payload);
+    let (answer, cached_s) = match cache().serve(cwd, &payload) {
+        Ok(served) => served,
+        // A compute is in flight for this cwd's first read: one error sends
+        // the client to its spawn fallback for this TTL, never a queue.
+        Err(()) => {
+            return Response::err(
+                req.id,
+                ErrorCode::Internal,
+                "a compute is in flight and no cached answer exists yet",
+            )
+        }
+    };
     Response::ok(req.id, json!({"answer": answer, "cached_s": cached_s}))
 }
 
@@ -76,7 +90,10 @@ pub(crate) struct GateProbeCache {
     entries: Mutex<HashMap<String, (Instant, Value)>>,
     /// Caps concurrent computes at one across every cwd: the probe reads
     /// the whole registry and process table, so two computes racing would
-    /// both pay the whole cost for answers one would serve.
+    /// both pay the whole cost for answers one would serve. Taken with
+    /// `try_lock`, never a blocking lock - the probe's own child reads
+    /// (`vm_stat`, `sysctl`) carry no timeout, so a queued caller could
+    /// wait unbounded behind one stuck compute.
     compute: Mutex<()>,
 }
 
@@ -91,35 +108,48 @@ impl GateProbeCache {
     /// A fresh entry's `(answer, age_s)`, else `None`. Poison recovery
     /// takes the inner map: a panicked reader must not wedge the glance.
     fn fresh(&self, key: &str) -> Option<(Value, u64)> {
+        self.entry(key, true)
+    }
+
+    /// Any entry regardless of age - the contended path serves stale rather
+    /// than queues, and the age word renders the honesty.
+    fn stale(&self, key: &str) -> Option<(Value, u64)> {
+        self.entry(key, false)
+    }
+
+    fn entry(&self, key: &str, fresh_only: bool) -> Option<(Value, u64)> {
         let map = self
             .entries
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let (at, answer) = map.get(key)?;
         let age = at.elapsed();
-        (age < GATE_PROBE_CACHE_TTL).then(|| (answer.clone(), age.as_secs()))
+        if fresh_only && age >= GATE_PROBE_CACHE_TTL {
+            return None;
+        }
+        Some((answer.clone(), age.as_secs()))
     }
 
-    pub(crate) fn serve(&self, cwd: &str, payload: &Value) -> (Value, u64) {
+    pub(crate) fn serve(&self, cwd: &str, payload: &Value) -> Result<(Value, u64), ()> {
         if let Some(hit) = self.fresh(cwd) {
-            return hit;
+            return Ok(hit);
         }
-        let _gate = self
-            .compute
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        // A caller that waited behind another cwd's compute re-checks: the
-        // entry that landed while it waited is fresher than its own would be.
-        if let Some(hit) = self.fresh(cwd) {
-            return hit;
-        }
+        let _gate: MutexGuard<'_, ()> = match self.compute.try_lock() {
+            Ok(gate) => gate,
+            // Another cwd is computing (or one panicked): serve this cwd's
+            // stale answer rather than queue. With no entry at all the
+            // caller errors and its client falls back to the spawn for one
+            // TTL - the rare case of two first-ever computes racing across
+            // cwds, never a wedged glance.
+            Err(_contended) => return self.stale(cwd).ok_or(()),
+        };
         let answer = crate::spawn_gate_command::probe_answer_at(Some(Path::new(cwd)), payload);
-        let map = self
+        let mut map = self
             .entries
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         map.insert(cwd.to_string(), (Instant::now(), answer.clone()));
-        (answer, 0)
+        Ok((answer, 0))
     }
 }
 
@@ -138,34 +168,55 @@ mod tests {
         serde_json::json!({"mode": "probe", "only": ["lanes"], "tests": true})
     }
 
+    /// The stamp of one cwd's cached entry, so a test can prove whether a
+    /// serve recomputed (the stamp moves) or read the cache (it does not).
+    fn stamp_of(cache: &GateProbeCache, cwd: &str) -> Option<Instant> {
+        cache
+            .entries
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(cwd)
+            .map(|(at, _)| *at)
+    }
+
     #[test]
     fn a_fresh_entry_serves_cached_and_a_compute_is_one_per_ttl() {
         let cache = GateProbeCache::new();
-        let (first, age) = cache.serve("/tmp/cwd-a", &fixture_payload());
+        let (_, age) = cache.serve("/tmp/cwd-a", &fixture_payload()).unwrap();
         assert_eq!(age, 0, "the first serve computes");
-        let (second, age) = cache.serve("/tmp/cwd-a", &fixture_payload());
-        assert_eq!(second, first, "the second serve reads the cache");
-        assert!(age > 0, "a served entry carries its age");
+        let stamp = stamp_of(&cache, "/tmp/cwd-a");
+        cache.serve("/tmp/cwd-a", &fixture_payload()).unwrap();
+        assert_eq!(
+            stamp_of(&cache, "/tmp/cwd-a"),
+            stamp,
+            "the second serve reads the cache, it did not recompute"
+        );
     }
 
     #[test]
     fn a_second_cwd_keeps_its_own_entry() {
         let cache = GateProbeCache::new();
-        let (first_a, _) = cache.serve("/tmp/cwd-a", &fixture_payload());
-        let (_, age_b) = cache.serve("/tmp/cwd-b", &fixture_payload());
+        cache.serve("/tmp/cwd-a", &fixture_payload()).unwrap();
+        let stamp_a = stamp_of(&cache, "/tmp/cwd-a");
+        let (_, age_b) = cache.serve("/tmp/cwd-b", &fixture_payload()).unwrap();
         assert_eq!(age_b, 0, "the other cwd computes its own");
-        let (second_a, age_a) = cache.serve("/tmp/cwd-a", &fixture_payload());
+        assert_ne!(
+            stamp_of(&cache, "/tmp/cwd-b"),
+            stamp_a,
+            "cwd-b's stamp is its own compute, not a copy of cwd-a's"
+        );
+        cache.serve("/tmp/cwd-a", &fixture_payload()).unwrap();
         assert_eq!(
-            second_a, first_a,
+            stamp_of(&cache, "/tmp/cwd-a"),
+            stamp_a,
             "the first cwd's entry survived the other cwd's compute"
         );
-        assert!(age_a > 0, "the first cwd serves cached, not recomputed");
     }
 
     #[test]
     fn an_expired_entry_recomputes() {
         let cache = GateProbeCache::new();
-        let (first, _) = cache.serve("/tmp/cwd-a", &fixture_payload());
+        let (first, _) = cache.serve("/tmp/cwd-a", &fixture_payload()).unwrap();
         // Expire by hand: the TTL is 60s and the test must not wait it out.
         let map = cache
             .entries
@@ -174,8 +225,22 @@ mod tests {
         let old = Instant::now() - GATE_PROBE_CACHE_TTL - Duration::from_secs(1);
         map.insert("/tmp/cwd-a".into(), (old, first.clone()));
         drop(map);
-        let (_, age) = cache.serve("/tmp/cwd-a", &fixture_payload());
+        let (_, age) = cache.serve("/tmp/cwd-a", &fixture_payload()).unwrap();
         assert_eq!(age, 0, "an entry past the TTL computes again");
+    }
+
+    #[test]
+    fn a_contended_first_read_refuses_rather_than_queue() {
+        // Hold the compute lock the way an in-flight compute does, then ask
+        // for a cwd with no entry: the serve must refuse, not queue behind
+        // the lock and not fabricate an answer.
+        let cache = GateProbeCache::new();
+        let gate = cache.compute.lock().unwrap();
+        let served = cache.serve("/tmp/cwd-first", &fixture_payload());
+        assert!(served.is_err(), "a contended first read refuses");
+        drop(gate);
+        let served = cache.serve("/tmp/cwd-first", &fixture_payload());
+        assert!(served.is_ok(), "a cleared compute computes normally");
     }
 
     #[test]
