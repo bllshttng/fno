@@ -1981,7 +1981,7 @@ impl View {
             sideline_width,
             agent_sort,
             agent_group,
-            machine_tree: Default::default(),
+            machine_tree: machine_tree::MachineTree::load(),
             show_card_head,
             manual_order,
             status_on: true,
@@ -5696,11 +5696,11 @@ impl View {
     // free: folded rows are absent from this list, so selector navigation only
     // ever lands on rendered rows. Overflow is reached by the fold row's own
     // Enter/click toggle, which persists in `idle_expanded`.
-    /// The tree rows with the per-row lineage depth beside it (see
-    /// [`Self::display_rows_with_depths`]). The depth is computed over the
-    /// EMITTED set after every display filter, never re-derived in the painter.
-    fn tree_rows_with_depths(&self) -> (Vec<DisplayRow<'_>>, Vec<usize>) {
-        if self.agent_group != AgentGroup::Workspace && !machine_tree::paints_workspace_tree(self) {
+    /// This machine's tree rows with the per-row lineage depth beside it, computed over
+    /// the EMITTED set after every display filter, never re-derived in the painter.
+    /// [`Self::tree_rows_with_depths`] wraps them in the machine layer.
+    fn local_rows_with_depths(&self) -> (Vec<DisplayRow<'_>>, Vec<usize>) {
+        if self.agent_group != AgentGroup::Workspace {
             return agent_group::grouped_rows_with_depths(self);
         }
         let mut out = Vec::new();

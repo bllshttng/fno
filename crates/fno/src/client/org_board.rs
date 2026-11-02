@@ -14,7 +14,7 @@ pub(crate) type OrgTx = tokio::sync::mpsc::UnboundedSender<(u64, OrgMsg)>;
 
 pub(crate) enum OrgMsg {
     Gather(FleetInputs),
-    /// The sideline Machine axis's own fleet read.
+    /// The sideline machine layer's own fleet read.
     Machines(Result<serde_json::Value, String>),
 }
 

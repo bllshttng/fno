@@ -13,6 +13,9 @@ pub struct RemoteRow {
     pub key: String,
     /// The `name@host` this row paints as, which its link pane also carries.
     pub name: String,
+    /// What the card says the far session is doing, as of the last fleet
+    /// read: `working`, `idle 3m`, or `offline 2m` once its machine's beat is stale.
+    pub state: String,
 }
 
 /// Sent by a passive client right after its `Attach`: drive this one pane.

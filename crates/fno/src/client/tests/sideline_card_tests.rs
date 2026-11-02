@@ -402,8 +402,20 @@ fn card_slug_drops_node_and_model_and_the_node_taps_open() {
         host: "bb16".into(),
         key: "k".into(),
         name: far.name.clone(),
+        state: "idle 3m".into(),
     });
     assert_eq!(card_line::slug(&far, &[]), "t-turn-control");
+    // Its metrics line says where it runs and what it does: nothing local
+    // would land for the transcript fields, so they never pulse.
+    far.harness = Some("claude".into());
+    far.context_used_pct = Some(19);
+    let line = card_line::metrics(&far, card_line::CardGraph::Activity, 0, Some("tail"), 40);
+    assert!(!card_line::has_loading(
+        &far,
+        card_line::CardGraph::Activity,
+        0
+    ));
+    assert_eq!(line, "remote · bb16 · idle 3m · 19%");
     // Identity fields share a right-aligned line and remain whole tap fields.
     a.context_used_pct = Some(28);
     assert_eq!(card_line::node_span(&a, 30), Some(24..30));

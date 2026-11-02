@@ -1,5 +1,5 @@
 //! The sideline agents view's group-by axes (workspace / team / cwd /
-//! status / harness / machine) and the manual-reorder editor behind the Manual sort column.
+//! status / harness) and the manual-reorder editor behind the Manual sort column.
 //! Split from client.rs under the file-budget gate; everything here reaches
 //! the client's private items through `super::*`.
 
@@ -47,7 +47,6 @@ fn group_key_of(view: &View, name: &str) -> String {
             .map(|s| s.name.clone())
             .unwrap_or_else(|| "~ elsewhere".into()),
         AgentGroup::Team | AgentGroup::Cwd | AgentGroup::Harness => keyed_label(view, a),
-        AgentGroup::Machine => a.cwd_base.clone().unwrap_or_default(),
         AgentGroup::Status => match agent_lattice_state(a) {
             LatticeState::Blocked | LatticeState::DoneUnseen => "Needs input".into(),
             LatticeState::Working | LatticeState::Unmeasured | LatticeState::Empty => {
@@ -163,7 +162,6 @@ fn push<'a>(buckets: &mut Vec<Bucket<'a>>, key: String, a: &'a AgentRow) {
 pub(super) fn grouped_rows_with_depths(view: &View) -> (Vec<DisplayRow<'_>>, Vec<usize>) {
     let buckets: Vec<Bucket<'_>> = match view.agent_group {
         AgentGroup::Workspace => Vec::new(), // unreachable: the caller guards
-        AgentGroup::Machine => return super::machine_tree::rows_with_depths(view),
         AgentGroup::Team | AgentGroup::Cwd | AgentGroup::Harness => {
             let mut buckets: Vec<Bucket<'_>> = Vec::new();
             for a in &view.layout.agents {
@@ -242,6 +240,10 @@ pub(super) fn reorder_agent_rows(view: &mut View, cur: usize, delta: isize) {
     // full-screen mode, where the two catalogs diverge.
     let rows = view.display_rows();
     let name = match rows.get(cur) {
+        Some(DisplayRow::Agent(a)) if a.remote.is_some() => {
+            view.set_notice("reorder works on this machine's rows".into());
+            return;
+        }
         Some(DisplayRow::Agent(a)) => a.name.clone(),
         _ => {
             view.set_notice("shift+arrow reorders an agent row".into());

@@ -781,6 +781,43 @@ fn group_by_axes_build_labelled_bands_with_rollups() {
         None
     );
     assert_eq!(AgentGroup::Harness.next(), AgentGroup::Workspace);
+
+    // The machine layer wraps the active axis only while its toggle is on.
+    let fleet = serde_json::json!({"machines": [{"host": "far", "fresh": true, "age_s": 9,
+        "sessions": [{"name": "boss", "role": "L1", "session_id": "aaaa1111-x"},
+                     {"name": "w", "parent": "aaaa1111", "status": "writing"}]}]});
+    let headers = |v: &View| -> Vec<String> {
+        let rows = v.display_rows();
+        let labels = rows.iter().filter_map(|r| match r {
+            DisplayRow::Header { label, .. } => Some(label.clone()),
+            _ => None,
+        });
+        labels.collect()
+    };
+    v.agent_group = AgentGroup::Status;
+    crate::client::machine_tree::apply(&mut v, Ok(fleet.clone()));
+    assert_eq!(
+        headers(&v),
+        ["Needs input", "Working"],
+        "toggle off drops the read"
+    );
+    v.machine_tree.on = true;
+    crate::client::machine_tree::apply(&mut v, Ok(fleet));
+    let here = format!("{} · offline · 0s", crate::agents_view::hostname());
+    let far = ["far · ready · 9s", "  Working", "  Completed"];
+    assert_eq!(
+        headers(&v),
+        [here.as_str(), "  Needs input", "  Working"]
+            .into_iter()
+            .chain(far)
+            .collect::<Vec<_>>()
+    );
+    v.agent_group = AgentGroup::Team;
+    assert_eq!(
+        headers(&v)[3..],
+        ["far · ready · 9s", "  boss"],
+        "a far worker joins its lead"
+    );
 }
 
 #[test]

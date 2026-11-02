@@ -2,13 +2,27 @@
 
 The sideline can show every machine on the fleet map. A session on another machine opens in your mux as a local pane, live and with input. No client merges two servers. The pane runs ssh, and the host's own build talks to the host's own server. Ssh carries only terminal bytes, so the two machines never share a wire protocol.
 
-## Group by machine
+## The machine layer
 
-`prefix+W` cycles the agent group, and `machine` is one of its values. The sideline then paints a band for each machine, a band for each project inside it, then the rows. This machine comes first. Each machine band reads `host · ready · 23s`. A machine the fleet map calls stale reads `offline`. The number is the age of its newest beat.
+The layer is an experimental feature. Turn it on in menu > settings > experimental > `other machines`. It is off by default. While it is off, the mux reads no fleet map, and the sideline paints exactly as before.
 
-This machine's rows come from the server's layout. Other machines' rows come from `fno agents fleet top --machines`, read off the UI loop every 15 seconds while the axis is on. A failed read keeps the last good bands, so a row does not vanish because the primary blinked. A machine with no beat yet still gets its own band, which reads `offline`. With fewer than two machines the axis paints the workspace tree, and nothing connects to another machine until you open a row.
+While it is on, each machine gets a band at the top of the tree, and the active agent group paints inside each band. `prefix+W` still cycles workspace, lead, cwd, status and harness. It now picks the grouping under every machine. This machine comes first. Each machine band reads `host · ready · 23s`. A machine the fleet map calls stale reads `offline`. The number is the age of its newest beat.
 
-A remote row is named `name@host`. Peek and mail already route that address.
+This machine's band holds the ordinary tree from the server's layout. Other machines' rows come from `fno agents fleet top --machines`. The mux reads it off the UI loop every 15 seconds while the toggle is on. A failed read keeps the last good bands, so a row does not vanish because the primary blinked. A machine with no beat yet still gets its own band, which reads `offline`. With fewer than two machines there is no layer. Nothing connects to another machine until you open a row.
+
+The fleet map carries less than the layout, so a far row joins its band by the nearest fact it has:
+
+| Group | A far row joins |
+|---|---|
+| workspace | its project. The fleet map carries no workspace |
+| lead | the first seat up its parent chain that holds a role |
+| cwd | the last part of its cwd |
+| status | Working while it writes, else Completed. The fleet map has no needs-input state |
+| harness | its harness |
+
+The Created and Modified sorts read a far row's start and last-message times, so recency orders far rows too. A pin is a keep mark on the machine that runs the session. The fleet map does not carry it, so a far row never sorts as pinned, and `ctrl+t` on a far row refuses.
+
+A remote row is named `name@host`. Peek and mail already route that address. Its card paints the bare name, and its third line reads `remote · host · state` with the context percent after it. The state is `working` while the seat writes, `idle 3m` with the time since its last message, or `offline 2m` once its machine's beat is stale.
 
 ## Open a row
 
@@ -16,7 +30,7 @@ Click a remote row or press Enter on it. A new tab opens a local pane named `nam
 
 The menu on a remote row offers Open here, Peek and Mail. Stop, kill and retire stay hidden. To stop a session on another machine, open it and act inside it. Stopping the local pane closes the link and leaves the session running on its host.
 
-The link pane is an ordinary pane, so the keeper holds it across a client quit and a server restart. See [pane keeper](pane-keeper.md). It has no registry row, so the fleet map does not publish it as a session on this machine.
+The link pane is an ordinary pane, so the keeper holds it across a client quit and a server restart. See [pane keeper](pane-keeper.md). It has no registry row, so the fleet map does not publish it as a session on this machine. It still lists in this machine's band as a pane named `name@host`.
 
 ## The two kinds of row
 

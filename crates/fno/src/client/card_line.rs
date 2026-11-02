@@ -137,7 +137,8 @@ pub enum CardGraph {
 /// a dash for the activity cell - never a fabricated flat line - and a
 /// bare pane or an exited row's unserved fields hide instead of pulsing.
 pub(super) fn metric_cells(a: &AgentRow, mode: CardGraph) -> [MetricCell; 4] {
-    let reportable = !a.exited && matches!(a.harness.as_deref(), Some("claude" | "codex"));
+    let reportable =
+        !a.exited && a.remote.is_none() && matches!(a.harness.as_deref(), Some("claude" | "codex"));
     let codex = a.harness.as_deref() == Some("codex");
     let field = |value: Option<String>, hidden: bool| {
         if hidden {
@@ -264,6 +265,15 @@ pub(super) fn metrics(
     message: Option<&str>,
     width: usize,
 ) -> String {
+    // A far row: no transcript of it reaches this machine, so the line names
+    // its host and its state from the fleet map instead.
+    if let Some(remote) = &a.remote {
+        let mut line = format!("remote · {} · {}", remote.host, remote.state);
+        if let Some(pct) = a.context_used_pct {
+            line.push_str(&format!(" · {pct}%"));
+        }
+        return crate::chrome::clip(&line, width);
+    }
     let phase = crate::lattice::spin_epoch().map(|t0| t0.elapsed().as_millis() as u64);
     let gave_up = loading_gave_up(a, now);
     let fields: Vec<String> = metric_cells(a, mode)
