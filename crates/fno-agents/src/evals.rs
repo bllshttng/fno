@@ -214,6 +214,26 @@ fn agents_home() -> std::path::PathBuf {
 /// above 20 total runs, the cohort split validation, the sweep, and the
 /// per-task loop. The exit codes are the leaf's: 0 graded, 1 refusal, 2 a
 /// load-time discipline violation.
+/// The run's selection. A demoted task leaves every selection except one
+/// that names it with `--task`, so a person can test it again.
+fn select_tasks<'a>(
+    tasks: &'a [crate::evals::bank::TaskSpec],
+    task: Option<&str>,
+    tier: Option<&str>,
+    tag: Option<&str>,
+) -> Vec<&'a crate::evals::bank::TaskSpec> {
+    tasks
+        .iter()
+        .filter(|t| {
+            task.map(|f| f.split(',').any(|id| t.id == id))
+                .unwrap_or(true)
+        })
+        .filter(|t| tier.map(|f| t.tier == f).unwrap_or(true))
+        .filter(|t| tag.map(|f| t.tags.iter().any(|g| g == f)).unwrap_or(true))
+        .filter(|t| task.is_some() || !t.is_demoted())
+        .collect()
+}
+
 fn run_command(rest: &[String]) -> i32 {
     // Selection falls through to live runs, so help must return first.
     if rest.iter().any(|a| a == "--help" || a == "-h") {
@@ -278,22 +298,12 @@ fn run_command(rest: &[String]) -> i32 {
         .and_then(|v| v.parse().ok())
         .unwrap_or(1)
         .max(1);
-    let selected: Vec<_> = tasks
-        .iter()
-        .filter(|t| {
-            task_filter
-                .as_deref()
-                .map(|f| f.split(',').any(|id| t.id == id))
-                .unwrap_or(true)
-        })
-        .filter(|t| tier_filter.as_deref().map(|f| t.tier == f).unwrap_or(true))
-        .filter(|t| {
-            tag_filter
-                .as_deref()
-                .map(|f| t.tags.iter().any(|tag| tag == f))
-                .unwrap_or(true)
-        })
-        .collect();
+    let selected = select_tasks(
+        &tasks,
+        task_filter.as_deref(),
+        tier_filter.as_deref(),
+        tag_filter.as_deref(),
+    );
     if selected.is_empty() {
         eprintln!("Error: selection matched no bank tasks.");
         return 1;
@@ -712,5 +722,22 @@ fn py_compact(v: &serde_json::Value) -> String {
                 .collect();
             format!("{{{}}}", items.join(", "))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_demoted_task_leaves_tag_selection_and_a_named_run_keeps_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("g.yaml");
+        std::fs::write(
+            &path,
+            "id: g\ntier: capability\nprompt: p\ngrade:\n  - kind: file-exists\n    path: x\ntags: [golden, demoted]\n",
+        )
+        .unwrap();
+        let tasks = vec![crate::evals::bank::load_task(&path).unwrap()];
+        assert!(super::select_tasks(&tasks, None, None, Some("golden")).is_empty());
+        assert_eq!(super::select_tasks(&tasks, Some("g"), None, None).len(), 1);
     }
 }

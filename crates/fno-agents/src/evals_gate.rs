@@ -239,7 +239,7 @@ fn gate_tasks(
 ) -> Vec<String> {
     tasks
         .iter()
-        .filter(|t| t.tags.iter().any(|tag| tag == GATE_TAG))
+        .filter(|t| t.tags.iter().any(|tag| tag == GATE_TAG) && !t.is_demoted())
         .filter(|t| !slow.contains(&t.id))
         .filter(|t| {
             let spec = format!("{sha}:evals/bank/{}.yaml", t.id);
@@ -518,7 +518,7 @@ fn main_leg(p: &Paths, d: &Deps, state: &mut State, can_launch: bool, daily_usd:
     let goldens = match crate::evals::bank::discover_bank(&bank_dir) {
         Ok(tasks) => tasks
             .iter()
-            .filter(|t| t.tags.iter().any(|tag| tag == GOLDEN_TAG))
+            .filter(|t| t.tags.iter().any(|tag| tag == GOLDEN_TAG) && !t.is_demoted())
             .count(),
         // No launch on an unread bank: the retry loop carries the cause.
         Err(e) => {
@@ -970,7 +970,13 @@ mod tests {
             let dir = tempfile::tempdir().unwrap();
             let bank = dir.path().join("evals/bank");
             std::fs::create_dir_all(&bank).unwrap();
-            for (id, tag) in [("g1", GATE_TAG), ("g2", GOLDEN_TAG)] {
+            // g4 is a demoted gate golden with baseline grades: every head
+            // run must leave it out, and its baseline must not turn a head red.
+            for (id, tag) in [
+                ("g1", GATE_TAG),
+                ("g2", GOLDEN_TAG),
+                ("g4", "gate, demoted"),
+            ] {
                 std::fs::write(
                     bank.join(format!("{id}.yaml")),
                     format!("id: {id}\ntier: capability\nprompt: p\ngrade:\n  - kind: file-exists\n    path: x\ntags: [{tag}]\n"),
@@ -1150,6 +1156,7 @@ mod tests {
         /// A finished main run, so the head leg has its baseline.
         fn with_baseline(&self) {
             self.rows("base", "g1", [true, true, true]);
+            self.rows("base", "g4", [true, true, true]);
             let tried = format!(
                 "gate-main-{}-{}",
                 Utc::now().format("%Y-%m-%d"),
