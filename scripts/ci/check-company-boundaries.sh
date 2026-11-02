@@ -144,9 +144,9 @@ LAYERS = (
             # Asked by the agents runtime (`fno agents fleet truth`) and by the graph
             # writer that stamps a node's session rows - opposite sides of the
             # runtime boundary, which is what makes it a platform leaf.
-            # The MODULE, not the fno.provenance package: its siblings
-            # (autobrief, runtime_attempts) are orchestration that legitimately
-            # reaches up, and declaring the package would map them too. Its one
+            # The MODULE, not the fno.provenance package: its sibling
+            # runtime_attempts is orchestration that legitimately
+            # reaches up, and declaring the package would map it too. Its one
             # sibling import, provenance.resolver, stays unmapped and reaches
             # fno.agents.discover only on the opencode branch, which
             # resolve_transcript_path cannot reach (it returns None for any

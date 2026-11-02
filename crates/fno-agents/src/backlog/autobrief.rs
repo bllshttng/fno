@@ -747,3 +747,305 @@ fn parse_ts(value: &str) -> Option<f64> {
     }
     crate::event_store::parse_rfc3339_ms(v).map(|ms| ms as f64 / 1000.0)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    /// Redirect every store the resolver reads into a temp root and restore
+    /// the process env on drop, mirroring the birth.rs guard.
+    struct StoreGuard {
+        home: PathBuf,
+        state: PathBuf,
+    }
+
+    impl StoreGuard {
+        fn new() -> StoreGuard {
+            let tmp = TempDir::new().expect("temp dir");
+            let home = tmp.path().join("home");
+            let state = tmp.path().join("state");
+            fs::create_dir_all(home.join(".claude").join("projects")).expect("projects root");
+            fs::create_dir_all(&state).expect("state root");
+            std::env::set_var("HOME", &home);
+            std::env::set_var("FNO_STATE_DIR", &state);
+            std::env::remove_var("FNO_CONFIG");
+            std::env::remove_var("FNO_AGENT_SELF");
+            std::env::remove_var("FNO_CODEX_SESSIONS_DIR");
+            std::env::remove_var("CODEX_HOME");
+            std::env::remove_var("FNO_OPENCODE_STORAGE_DIR");
+            StoreGuard { home, state }
+        }
+
+        fn write_brief(&self, node_id: &str, body: &str) {
+            let dir = self.state.join("briefs");
+            fs::create_dir_all(&dir).expect("briefs dir");
+            fs::write(dir.join(format!("{node_id}.md")), body).expect("brief");
+        }
+
+        fn write_claude_transcript(&self, sid: &str, records: &[Value]) {
+            self.write_claude_transcript_named(sid, records)
+        }
+
+        fn write_claude_transcript_named(&self, stem: &str, records: &[Value]) {
+            let proj = self
+                .home
+                .join(".claude")
+                .join("projects")
+                .join("-tmp-workspace");
+            fs::create_dir_all(&proj).expect("project dir");
+            let lines: Vec<String> = records
+                .iter()
+                .map(|r| serde_json::to_string(r).expect("record"))
+                .collect();
+            fs::write(proj.join(format!("{stem}.jsonl")), lines.join("\n")).expect("transcript");
+        }
+    }
+
+    impl Drop for StoreGuard {
+        fn drop(&mut self) {
+            // TempDir removes the tree; only the env vars need restoring.
+            std::env::remove_var("FNO_STATE_DIR");
+        }
+    }
+
+    fn node(fields: &[(&str, Value)]) -> Value {
+        let mut m = serde_json::Map::new();
+        m.insert("id".into(), Value::from("x-1"));
+        for (k, v) in fields {
+            m.insert((*k).into(), v.clone());
+        }
+        Value::Object(m)
+    }
+
+    fn claude_turn(role: &str, text: &str, ts: &str) -> Value {
+        serde_json::json!({
+            "type": role,
+            "timestamp": ts,
+            "message": {"role": role, "content": [{"type": "text", "text": text}]}
+        })
+    }
+
+    #[test]
+    fn explicit_rung_wins_verbatim_and_unclamped() {
+        let _g = StoreGuard::new();
+        let big = "路".repeat(4000); // 12000 bytes, over the 8192 budget
+        let brief = resolve_dispatch_brief(&node(&[("dispatch_brief", Value::from(big.clone()))]));
+        assert_eq!(brief.tag, "explicit");
+        assert_eq!(brief.text.as_deref(), Some(big.as_str()));
+    }
+
+    #[test]
+    fn sidecar_rides_and_clamps_on_a_codepoint_boundary() {
+        let g = StoreGuard::new();
+        let big = "γ".repeat(6000); // 12000 bytes
+        g.write_brief("x-1", &big);
+        let brief = resolve_dispatch_brief(&node(&[
+            ("has_brief", Value::from(true)),
+            (
+                "details",
+                Value::from("unused: the sidecar outranks synthesis"),
+            ),
+        ]));
+        assert_eq!(brief.tag, "sidecar");
+        let text = brief.text.expect("sidecar text");
+        assert!(text.ends_with(TRUNC_MARKER));
+        assert!(text.as_bytes().len() <= BRIEF_MAX_BYTES);
+        // The last kept codepoint is whole, never a split multibyte char.
+        text.chars().next_back().expect("non-empty");
+    }
+
+    #[test]
+    fn sidecar_file_missing_falls_through_to_synthesis() {
+        let _g = StoreGuard::new();
+        let brief = resolve_dispatch_brief(&node(&[
+            ("has_brief", Value::from(true)),
+            ("details", Value::from("the only material present")),
+            ("source_harness", Value::from("claude")),
+            ("source_session_id", Value::from("sess-abcd1234")),
+            ("source_cwd", Value::from("/tmp/wk")),
+        ]));
+        assert_eq!(brief.tag, "synth-details");
+    }
+
+    #[test]
+    fn synth_envelope_names_provenance_and_never_fabricates() {
+        let g = StoreGuard::new();
+        let brief = resolve_dispatch_brief(&node(&[
+            ("title", Value::from("Ship the thing")),
+            ("details", Value::from("short details")),
+            ("source_harness", Value::from("claude")),
+            ("source_session_id", Value::from("sess-abcd1234")),
+            ("source_cwd", Value::from("/tmp/wk")),
+            ("slug", Value::from("ship-the-thing")),
+        ]));
+        assert_eq!(brief.tag, "synth-details");
+        let text = brief.text.expect("synth text");
+        assert!(text.starts_with("<fno_spawn "));
+        assert!(text.contains("from=\"sess-abcd1234\""));
+        assert!(text.contains("harness=\"claude\""));
+        assert!(text.contains("node=\"x-1 ship-the-thing\""));
+        assert!(text.contains("source=\"synth-details\""));
+        assert!(text.contains("title: Ship the thing"));
+        assert!(text.contains("details:\nshort details"));
+        assert!(text.ends_with("</fno_spawn>"));
+        // The live dispatcher handle outranks the historical filer.
+        std::env::set_var("FNO_AGENT_SELF", "live-lead-99");
+        let live = resolve_dispatch_brief(&node(&[
+            ("details", Value::from("short details")),
+            ("source_session_id", Value::from("sess-abcd1234")),
+        ]))
+        .text
+        .expect("live synth text");
+        assert!(live.contains("from=\"live-lead-99\""));
+        std::env::remove_var("FNO_AGENT_SELF");
+        drop(g);
+    }
+
+    #[test]
+    fn synth_none_without_material() {
+        let _g = StoreGuard::new();
+        let brief = resolve_dispatch_brief(&node(&[("title", Value::from("bare node"))]));
+        assert_eq!(brief.tag, "none");
+        assert_eq!(brief.text, None);
+    }
+
+    #[test]
+    fn clamp_bytes_never_splits_a_multibyte_char() {
+        let s = "γ".repeat(30); // 60 bytes
+        let out = clamp_bytes(&s, 30);
+        assert!(out.as_bytes().len() <= 30);
+        assert!(out.ends_with(TRUNC_MARKER));
+        // Decoding the kept head must not yield U+FFFD: the boundary is whole.
+        assert!(!out.contains('\u{FFFD}'));
+        assert_eq!(clamp_bytes("short", 100), "short");
+    }
+
+    #[test]
+    fn window_keeps_only_records_near_created_at() {
+        let g = StoreGuard::new();
+        g.write_claude_transcript(
+            "11111111-2222-3333-4444-555555555555",
+            &[
+                claude_turn("user", "birth the node", "2026-01-01T00:00:00Z"),
+                claude_turn("assistant", "node born", "2026-01-01T00:01:30Z"),
+                claude_turn("user", "much later chatter", "2026-01-01T00:10:00Z"),
+            ],
+        );
+        let brief = resolve_dispatch_brief(&node(&[
+            ("details", Value::from("thin")),
+            ("source_harness", Value::from("claude")),
+            (
+                "source_session_id",
+                Value::from("11111111-2222-3333-4444-555555555555"),
+            ),
+            ("source_cwd", Value::from("/tmp/wk")),
+            ("created_at", Value::from("2026-01-01T00:00:20Z")),
+        ]));
+        assert_eq!(brief.tag, "synth-details+tail");
+        let text = brief.text.expect("tail text");
+        assert!(text.contains("birth the node"));
+        assert!(text.contains("node born"));
+        assert!(!text.contains("much later chatter"));
+    }
+
+    #[test]
+    fn fully_windowed_out_tail_is_omitted_not_injected() {
+        let g = StoreGuard::new();
+        g.write_claude_transcript(
+            "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+            &[claude_turn(
+                "user",
+                "later conversation",
+                "2026-06-01T00:00:00Z",
+            )],
+        );
+        let brief = resolve_dispatch_brief(&node(&[
+            ("details", Value::from("thin")),
+            ("source_harness", Value::from("claude")),
+            (
+                "source_session_id",
+                Value::from("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"),
+            ),
+            ("source_cwd", Value::from("/tmp/wk")),
+            ("created_at", Value::from("2026-01-01T00:00:00Z")),
+        ]));
+        // Timestamped records all after the cutoff: the tail is OMITTED.
+        assert_eq!(brief.tag, "synth-details");
+        let text = brief.text.expect("details-only text");
+        assert!(!text.contains("later conversation"));
+    }
+
+    #[test]
+    fn ambiguous_claude_resolution_skips_tail() {
+        let g = StoreGuard::new();
+        // Two DISTINCT stems matching the short prefix read as ambiguous.
+        g.write_claude_transcript_named(
+            "11111111aaaa",
+            &[claude_turn("user", "one session", "2026-01-01T00:00:00Z")],
+        );
+        g.write_claude_transcript_named(
+            "11111111bbbb",
+            &[claude_turn("user", "other session", "2026-01-01T00:00:00Z")],
+        );
+        let brief = resolve_dispatch_brief(&node(&[
+            ("details", Value::from("thin")),
+            ("source_harness", Value::from("claude")),
+            ("source_session_id", Value::from("11111111")),
+            ("source_cwd", Value::from("/tmp/wk")),
+        ]));
+        assert_eq!(brief.tag, "synth-details");
+    }
+
+    #[test]
+    fn codex_rollout_tail_read() {
+        let g = StoreGuard::new();
+        let root = g.home.join("codex-sessions");
+        std::fs::create_dir_all(&root).expect("codex root");
+        std::env::set_var("FNO_CODEX_SESSIONS_DIR", &root);
+        let rollout = serde_json::json!({
+            "type": "response_item",
+            "timestamp": "2026-01-01T00:00:00Z",
+            "payload": {"type": "message", "role": "user",
+                        "content": [{"type": "input_text", "text": "codex turn"}]}
+        });
+        let sid = "11111111-2222-3333-4444-555555555555";
+        let path = root.join(format!("rollout-{sid}.jsonl"));
+        std::fs::write(&path, serde_json::to_string(&rollout).expect("record")).expect("rollout");
+        let brief = resolve_dispatch_brief(&node(&[
+            ("details", Value::from("thin")),
+            ("source_harness", Value::from("codex")),
+            ("source_session_id", Value::from(sid)),
+            ("source_cwd", Value::from("/tmp/wk")),
+        ]));
+        assert_eq!(brief.tag, "synth-details+tail");
+        let text = brief.text.expect("codex tail text");
+        assert!(text.contains("codex turn"));
+        std::env::remove_var("FNO_CODEX_SESSIONS_DIR");
+        drop(g);
+    }
+
+    #[test]
+    fn mail_framed_turns_omitted_from_tail() {
+        let g = StoreGuard::new();
+        g.write_claude_transcript_named(
+            "cccccccc-dddd-eeee-ffff-000000000000",
+            &[claude_turn(
+                "user",
+                "<fno_mail from=\"peer\" id=\"m1\">relay body</fno_mail>",
+            )],
+        );
+        let brief = resolve_dispatch_brief(&node(&[
+            ("details", Value::from("thin")),
+            ("source_harness", Value::from("claude")),
+            (
+                "source_session_id",
+                Value::from("cccccccc-dddd-eeee-ffff-000000000000"),
+            ),
+            ("source_cwd", Value::from("/tmp/wk")),
+        ]));
+        // The relay shape is not a conversational pair; the tail is empty.
+        assert_eq!(brief.tag, "synth-details");
+    }
+}
