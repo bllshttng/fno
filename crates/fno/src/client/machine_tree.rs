@@ -143,7 +143,8 @@ fn remote_row(seat: &Value, name: &str, host: &str) -> AgentRow {
         name: address.clone(),
         harness: text(seat, "harness"),
         node: text(seat, "node"),
-        cwd_base: text(seat, "project"),
+        // No `cwd_base`: the project band names it, and a card would repeat
+        // it after the name.
         model: text(seat, "model"),
         context_used_pct: seat["context_pct"].as_u64().map(|pct| pct.min(100) as u8),
         badge: (text(seat, "status").as_deref() == Some("writing")).then_some(AgentBadge::Working),
