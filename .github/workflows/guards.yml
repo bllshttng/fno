@@ -201,21 +201,43 @@ jobs:
       # pin, guard or refusal can reach it. The ratchet fails in BOTH
       # directions - a new hand-built path, and a baselined line whose site was
       # fixed and not removed.
+      # The repository lint checks answer from the native front door now
+      # (the Python lint legs deleted); the binary this job built above
+      # serves them through the status read-leaf door.
       - name: State-roots ratchet (declared root)
         if: ${{ !cancelled() }}
-        working-directory: cli
-        run: uv run fno-py doctor lint state-roots
+        env:
+          FNO_AGENTS_BIN: ${{ github.workspace }}/crates/fno-agents/target/debug/fno-agents
+        run: "$FNO_AGENTS_BIN" status --lint-check state-roots
 
       # The Rust/Python seam ratchet, positive-controlled by
       # tests/ci/test_seam_crossings.sh: the selftest must fail on injected
-      # drift before the check is trusted on the real tree.
+      # drift before the check is trusted on the real tree. Both halves run
+      # the native binary door.
       - name: Seam-crossings ratchet (selftest, then check)
         if: ${{ !cancelled() }}
         timeout-minutes: 5
+        env:
+          FNO_AGENTS_BIN: ${{ github.workspace }}/crates/fno-agents/target/debug/fno-agents
         run: |
           set -euo pipefail
           bash tests/ci/test_seam_crossings.sh
-          (cd cli && uv run fno-py doctor lint seam-crossings)
+          "$FNO_AGENTS_BIN" status --lint-check seam-crossings
+
+      # A hook script the base revision's config referenced cannot be deleted
+      # in the same commit that unregisters it: running sessions cache hook
+      # config for their lifetime and a PreToolUse hook that cannot launch
+      # fails the whole Bash call, so one stubless deletion bricks every
+      # pre-merge session's shell. One release of no-op stub, then delete.
+      # Moved here from the guards job: the check is native now and reads
+      # the binary this job builds.
+      - name: Hook script tombstone gate (no stubless deletion)
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        env:
+          FNO_AGENTS_BIN: ${{ github.workspace }}/crates/fno-agents/target/debug/fno-agents
+        run: "$FNO_AGENTS_BIN" status --lint-check hook-tombstones
+
 
       # The JSON-stdout house contract: a -J command prints exactly one JSON
       # document on stdout ([] on empty, {ok:false} on a refused read), so an
@@ -399,17 +421,6 @@ jobs:
         if: ${{ !cancelled() }}
         timeout-minutes: 5
         run: bash tests/ci/test_check_workflow_manifest.sh
-
-      # A hook script the base revision's config referenced cannot be deleted
-      # in the same commit that unregisters it: running sessions cache hook
-      # config for their lifetime and a PreToolUse hook that cannot launch
-      # fails the whole Bash call, so one stubless deletion bricks every
-      # pre-merge session's shell. One release of no-op stub, then delete.
-      - name: Hook script tombstone gate (no stubless deletion)
-        if: ${{ !cancelled() }}
-        timeout-minutes: 5
-        working-directory: cli
-        run: uv run fno-py doctor lint hook-tombstones
 
       # The shipped harness evidence as a subset of the one Rust roster
       # (provider.rs KNOWN_HARNESSES, parsed from source): setup docs, the

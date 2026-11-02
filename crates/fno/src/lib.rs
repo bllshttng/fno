@@ -133,6 +133,7 @@ pub mod lint_cli;
 #[cfg(feature = "full")]
 pub mod live_store_fence;
 #[cfg(feature = "full")]
+pub mod repo_lint;
 pub mod menu_caps;
 #[cfg(feature = "full")]
 pub mod messages_model;

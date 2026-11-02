@@ -12,6 +12,8 @@ use std::ffi::OsString;
 pub enum NativeLint {
     Style(Vec<OsString>),
     MenuCaps(Vec<OsString>),
+    RegistryFamily(Vec<OsString>),
+    RepoLint(Vec<OsString>),
 }
 
 /// Classify `fno doctor lint <check> ...`: `Some` for a native check,
@@ -27,6 +29,8 @@ pub fn classify_doctor_lint(args: &[OsString]) -> Option<NativeLint> {
     match args[2].to_str()? {
         "style" => Some(NativeLint::Style(rest)),
         "menu-caps" => Some(NativeLint::MenuCaps(rest)),
+        "registry" | "field-coverage" => Some(NativeLint::RegistryFamily(rest)),
+        name if crate::repo_lint::CHECKS.contains(&name) => Some(NativeLint::RepoLint(rest)),
         _ => None,
     }
 }
@@ -49,8 +53,9 @@ mod tests {
             classify_doctor_lint(&mk(&["doctor", "lint", "menu-caps"])),
             Some(NativeLint::MenuCaps(mk(&[])))
         );
-        // Every other check keeps forwarding to the Python CLI.
-        assert!(classify_doctor_lint(&mk(&["doctor", "lint", "command-ratchet"])).is_none());
+        // Every other check answers natively or forwards to the registry door.
+        assert!(classify_doctor_lint(&mk(&["doctor", "lint", "command-ratchet"])).is_some());
+        assert!(classify_doctor_lint(&mk(&["doctor", "lint", "registry"])).is_some());
         assert!(classify_doctor_lint(&mk(&["doctor", "lint"])).is_none());
         // A different tree keeps forwarding.
         assert!(classify_doctor_lint(&mk(&["doctor", "event", "rows"])).is_none());
