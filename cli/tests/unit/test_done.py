@@ -482,8 +482,7 @@ def test_ac4_err_gh_fails_no_explicit_args_prints_stderr(tmp_graph, monkeypatch)
     assert entry.get("pr_number") is None
 
 
-# The superuser-authority audit tag moved into the binary with the close
-# (backlog/workflows.rs drive_audit): a wheel-level monkeypatch of
-# fno.drive_authority can no longer observe it, and a sandbox has no space
-# dir for the event journal, so the family's receipts have no testable
-# surface at this level.
+# The superuser-authority audit tail reads the binary's drive-authority door
+# (backlog/workflows.rs drive_audit carries the native close's own copy): this
+# suite's sandbox has no space dir for the event journal, so the wheel emit is
+# pinned in the graph CLI suite, where a stub binary feeds the door.

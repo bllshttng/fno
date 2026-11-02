@@ -913,27 +913,40 @@ def done_command(
 
     # Superuser-authority matrix (LD3/LD29): the top-level `fno done` command is an
     # allowed action during a drive window, but audit-tag it so the trail
-    # attributes the completion to the operator rather than the LLM. Mirrors
-    # `graph/cli.py::cmd_done` exactly so both done commands emit the identical
-    # event kind, source, and envelope -- the audit trail must not fork by command.
-    # Reached only on a fresh completion: the collision path returns above and
-    # `--backfill` returns before the normal flow, so no guard on
-    # `collision_state["detected"]` is needed here. Best-effort: a write failure
-    # warns to stderr inside the helper and never breaks `fno done`.
+    # attributes the completion to the operator rather than the LLM. The native
+    # close carries the same audit natively (backlog/workflows.rs drive_audit),
+    # so this tail reads the same binary door the write gate reads. Reached only
+    # on a fresh completion: the collision path returns above and `--backfill`
+    # returns before the normal flow, so no guard on
+    # `collision_state["detected"]` is needed here. Best-effort: a failure is
+    # warned and never breaks `fno done`. Without the binary there is no daemon
+    # to write a drive window, so there is nothing to detect.
     try:
-        from fno.drive_authority import (
-            emit_operator_initiated,
-            is_drive_authority_active,
-        )
+        from fno.rust_binary import resolve_binary
 
-        if is_drive_authority_active():
-            emit_operator_initiated(
-                "backlog_done_operator_initiated",
-                source="backlog",
-                task_id=node_id,
+        binary = resolve_binary()
+        if binary is not None:
+            probe = subprocess.run(
+                [str(binary), "drive-authority"],
+                capture_output=True,
+                text=True,
+                check=False,
             )
-    except Exception:
-        pass
+            if probe.returncode == 0:
+                from fno.events.store_client import append_event, build_event
+
+                append_event(
+                    build_event(
+                        "operator_initiated",
+                        "backlog",
+                        {
+                            "action_type": "backlog_done_operator_initiated",
+                            "task_id": node_id,
+                        },
+                    )
+                )
+    except Exception as exc:
+        typer.echo(f"fno done: warning: drive audit emit failed: {exc}", err=True)
 
 
 # Back-compat: some tests and older imports may reach for `cli` attribute.

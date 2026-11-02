@@ -301,22 +301,42 @@ def test_queue_batch_is_atomic_on_unknown_id(tmp_graph):
     assert data.get("queued_at") is None
 
 
-def test_done_audit_tags_operator_when_driving(tmp_graph, monkeypatch):
-    """cv-9def52a7: `done` during a drive window emits backlog_done_operator_initiated."""
-    from fno import drive_authority as da
+def test_done_audit_tags_operator_when_driving(tmp_graph, tmp_path, monkeypatch):
+    """cv-9def52a7: `done` during a drive window emits backlog_done_operator_initiated.
 
-    captured: dict = {}
-    monkeypatch.setattr(da, "is_drive_authority_active", lambda *a, **k: True)
-    monkeypatch.setattr(
-        da,
-        "emit_operator_initiated",
-        lambda action_type, **kw: captured.update(type=action_type, kw=kw),
+    The wheel tail runs the real binary's `drive-authority` door, so the test
+    pins an agents home holding an open window via FNO_AGENTS_HOME (the door's
+    only home input) and captures the append at the store client. Nothing else
+    in the done path resolves the binary differently, so no resolver patching."""
+    from fno.events import store_client
+
+    home = tmp_path / "agents"
+    (home / "ag1").mkdir(parents=True)
+    (home / "ag1" / "state.json").write_text(
+        '{"short_id": "ag1", "pty": {"drive_active": true, '
+        '"drive_mode": "interactive", "drive_session_id": "sess-1"}}'
     )
+    monkeypatch.setenv("FNO_AGENTS_HOME", str(home))
+
+    events: list = []
+    monkeypatch.setattr(store_client, "append_event", lambda event, **kw: events.append(event))
+
     nid = json.loads(_native_command("add", "DriveDone").output)["id"]
     _invoke("backlog", "done", nid, "--note", "drive fixture")
-    assert captured.get("type") == "backlog_done_operator_initiated"
-    assert captured["kw"]["task_id"] == nid
-    assert captured["kw"]["source"] == "backlog"
+    assert len(events) == 1
+    event = events[0]
+    assert event["type"] == "operator_initiated"
+    assert event["source"] == "backlog"
+    assert event["data"]["action_type"] == "backlog_done_operator_initiated"
+    assert event["data"]["task_id"] == nid
+
+    # No window (an empty agents home, exit 1) emits nothing.
+    empty = tmp_path / "agents-empty"
+    empty.mkdir()
+    monkeypatch.setenv("FNO_AGENTS_HOME", str(empty))
+    quiet = json.loads(_native_command("add", "DriveQuiet").output)["id"]
+    _invoke("backlog", "done", quiet, "--note", "quiet fixture")
+    assert len(events) == 1
 
 
 class _GetFakeTracker:
