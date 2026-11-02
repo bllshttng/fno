@@ -193,7 +193,7 @@ Delivery is at-least-once. The attempt id is the event uuid, so PostHog merges a
 
 `fno-agents evals events` prints the next batch with the token redacted and never sends. The posture goes to stderr.
 
-`evals/posthog-views.json` defines the views: two trends (pass rate by seat, failures by failure type) and one alert that fires when a regression tier task fails. Create each with the `insight-create` and `alert-create` tools of `posthog-cli api`, after the first event lands. An alert also needs `subscribed_users`, so the file leaves that field to the person who applies it.
+`evals/posthog-views.json` defines the views: two trends (pass rate by seat, failures by failure type) and one alert on failed regression tier tasks. After the first event lands, create each with the `insight-create` and `alert-create` tools of `posthog-cli api`. An alert also needs `subscribed_users`, so the file leaves that field to the person who applies it.
 
 ## Attempts, grades, and declared cohorts
 
