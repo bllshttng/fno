@@ -1469,7 +1469,9 @@ impl ConnectionsView {
         // account page names it.
         let mut title = a.id.clone();
         match (a.plan.as_deref(), a.email.as_deref()) {
-            (Some(plan), Some(email)) => title.push_str(&format!("  {plan} ({})", mask_emails(email))),
+            (Some(plan), Some(email)) => {
+                title.push_str(&format!("  {plan} ({})", mask_emails(email)))
+            }
             (Some(plan), None) => title.push_str(&format!("  {plan}")),
             (None, Some(email)) => title.push_str(&format!("  ({})", mask_emails(email))),
             (None, None) => {}
@@ -3107,7 +3109,10 @@ mod tests {
             .find(|l| l.contains("subscription login") && l.contains("ccm"))
             .expect("ccm row");
         // An unproved identity stays off the row; only a warning reaches it.
-        assert!(!ccm_row.contains('?'), "missing id stays off the row: {ccm_row}");
+        assert!(
+            !ccm_row.contains('?'),
+            "missing id stays off the row: {ccm_row}"
+        );
         let ccr_row = out
             .lines()
             .find(|l| l.contains("subscription login") && l.contains("ccr"))
@@ -3143,7 +3148,10 @@ mod tests {
         assert_eq!(v.state, ModalState::Ready);
         let out = v.render().join("\n");
         for line in out.lines().filter(|l| l.contains("subscription login")) {
-            assert!(!line.contains('?'), "an unproved cell stays off the row: {line}");
+            assert!(
+                !line.contains('?'),
+                "an unproved cell stays off the row: {line}"
+            );
         }
         assert!(!out.contains("!serves"));
 

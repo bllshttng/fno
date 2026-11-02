@@ -439,13 +439,14 @@ mod tests {
 
     #[test]
     fn a_saved_claude_login_names_its_plan_and_tier() {
-        let blob = |sub: &str, tier: &str| {
-            json!({"claudeAiOauth": {"subscriptionType": sub, "rateLimitTier": tier}})
-        };
+        let blob = |sub: &str, tier: &str| json!({"claudeAiOauth": {"subscriptionType": sub, "rateLimitTier": tier}});
         let max = blob("max", "default_claude_max_20x");
         assert_eq!(claude_plan(&max).as_deref(), Some("Max 20x"));
         let pro = blob("pro", "default_claude_ai");
         assert_eq!(claude_plan(&pro).as_deref(), Some("Pro"));
-        assert_eq!(claude_plan(&json!({"claudeAiOauth": {"accessToken": "t"}})), None);
+        assert_eq!(
+            claude_plan(&json!({"claudeAiOauth": {"accessToken": "t"}})),
+            None
+        );
     }
 }
