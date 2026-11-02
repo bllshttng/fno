@@ -92,6 +92,7 @@ fn ac3_ac5_a_refold_holds_one_row_and_an_old_turn_reads_backfilled() {
     let replay = pass(&fx, MAX_ROWS_PER_TICK, NOW);
     assert_eq!(replay.rows_appended, 0);
     let got = rows(&fx);
+    assert_eq!(got[0]["seat"]["basis"], "unmeasured");
     assert_eq!(got.len(), 1);
     assert_eq!(got[0]["corrected_by"], "user");
     assert_eq!(got[0]["kind"], "correct");
