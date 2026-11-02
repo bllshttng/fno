@@ -85,7 +85,7 @@ fn keys_walk_the_tabs_and_go_up_from_a_lead() {
 }
 
 #[test]
-fn a_remote_seat_names_its_attach_command_and_no_action_key() {
+fn a_remote_seat_names_its_attach_command_and_only_its_relay_keys() {
     let mut map = fleet_json();
     // im-0's machine runs a daemon that publishes no seat facts.
     for key in [
@@ -104,12 +104,16 @@ fn a_remote_seat_names_its_attach_command_and_no_action_key() {
     let b = view.org_board.as_mut().unwrap();
     b.select("seat/m-imac/mb-00/im-0");
     let footer = b.footer(true, 200, now());
-    for key in ["enter", "space", "x stop", "P portal"] {
+    for key in ["enter", "x stop", "P portal"] {
         assert!(
             !footer.contains(key),
             "a remote seat offers {key}: {footer}"
         );
     }
+    assert!(
+        footer.contains("space peek \u{b7} P view \u{b7} s spawn"),
+        "{footer}"
+    );
     let page = text(&b.frame(None, 200, 80, now()).right);
     assert!(
         page.contains("fno agents session attach 00000064 on iMac2D2"),
@@ -270,4 +274,117 @@ fn a_tap_selects_and_a_second_tap_on_a_joined_seat_attaches() {
         mouse(&mut view, tap(seat_row, 5), &mut sock).await.unwrap();
     });
     assert!(view.org_board.is_none(), "a second tap attaches");
+}
+
+fn notice(view: &View) -> String {
+    view.notice
+        .as_ref()
+        .map(|(t, _)| t.clone())
+        .unwrap_or_default()
+}
+
+/// Each key on another machine's row runs the public front door; each
+/// refusal names why nothing ran.
+#[test]
+fn fleet_board_actions() {
+    let mut view = opened(fleet_json(), vec![local_row()]);
+    let b = view.org_board.as_mut().unwrap();
+    b.select("seat/m-imac/mb-00/im-0");
+    let at = "00000064@iMac2D2";
+    assert_eq!(
+        b.plan(Act::View, "").unwrap().argv,
+        ["mux", "pane", "run", "fno", "agents", "session", "peek", at, "--follow"]
+    );
+    press(&mut view, b" ");
+    let b = view.org_board.as_ref().unwrap();
+    let q = b.queued.as_ref().expect("space queues a peek");
+    assert_eq!(q.argv, ["agents", "session", "peek", at, "-n", "40"]);
+    press(&mut view, b"P");
+    assert_eq!(
+        notice(&view),
+        format!("peek {at} is still running: one action at a time")
+    );
+    press(&mut view, b"x");
+    assert!(notice(&view).contains("x stops a seat on this machine only"));
+    let b = view.org_board.as_mut().unwrap();
+    b.queued = None;
+    b.select("host/m-imac");
+    press(&mut view, b"sfix it\r");
+    let q = view.org_board.as_ref().unwrap().queued.clone().unwrap();
+    assert_eq!(
+        q.argv,
+        [
+            "agents",
+            "spawn",
+            "--name",
+            "@iMac2D2",
+            "--cwd",
+            "/code/footnote",
+            "fix it"
+        ]
+    );
+    // Refusals: a stale beat, a machine with no known cwd, another owner.
+    let refused = |edit: &dyn Fn(&mut Value), want: &str| {
+        let mut map = fleet_json();
+        map["machines"][1]["owner"] = json!("bb16");
+        edit(&mut map);
+        let mut view = opened(map, Vec::new());
+        view.org_board.as_mut().unwrap().select("host/m-imac");
+        press(&mut view, b"s");
+        let b = view.org_board.as_ref().unwrap();
+        assert!(b.prompt.is_none() && b.queued.is_none(), "{want}");
+        assert!(notice(&view).contains(want), "{}", notice(&view));
+    };
+    refused(
+        &|m| {
+            m["machines"][0]["fresh"] = json!(false);
+            m["machines"][0]["age_s"] = json!(900);
+        },
+        "iMac2D2 last beat 15m ago",
+    );
+    refused(
+        &|m| {
+            for s in m["machines"][0]["sessions"].as_array_mut().unwrap() {
+                s["cwd"] = Value::Null;
+            }
+        },
+        "no seat on iMac2D2 reports a cwd",
+    );
+    refused(
+        &|m| m["machines"][0]["owner"] = json!("ellery"),
+        "iMac2D2 belongs to ellery: work on another person's machine needs team mode",
+    );
+}
+
+/// A peek lands as a page esc closes; a failed hop names ssh's own error
+/// and the board stays open.
+#[test]
+fn fleet_board_action_results_land_on_the_board() {
+    let mut view = opened(fleet_json(), Vec::new());
+    let gen = view.org_generation;
+    let key = "seat/m-imac/mb-00/im-0";
+    view.org_board.as_mut().unwrap().select(key);
+    let done = |result| Done {
+        act: Act::Peek,
+        label: "peek 00000064@iMac2D2".into(),
+        key: key.into(),
+        result,
+    };
+    view.org_board.as_mut().unwrap().acting = Some("peek 00000064@iMac2D2".into());
+    apply_action(
+        &mut view,
+        gen,
+        done(Ok(vec!["assistant: Sweep done.".into()])),
+    );
+    let b = view.org_board.as_ref().unwrap();
+    assert!(b.acting.is_none());
+    let page = text(&b.frame(None, 200, 80, now()).right);
+    assert!(page.contains("peek 00000064@iMac2D2"), "{page}");
+    assert!(page.contains("assistant: Sweep done."), "{page}");
+    press(&mut view, &[27]);
+    assert!(view.org_board.as_ref().unwrap().page.is_none());
+    let ssh = "peek 00000064@iMac2D2 failed: ssh: connect to host imac2d2 port 22: timed out";
+    apply_action(&mut view, gen, done(Err(ssh.into())));
+    assert!(view.org_board.is_some());
+    assert_eq!(notice(&view), ssh);
 }

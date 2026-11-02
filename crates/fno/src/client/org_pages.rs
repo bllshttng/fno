@@ -182,7 +182,7 @@ pub(crate) fn seat(m: &Machine, p: &Lead, s: &Seat, width: usize, now: u64) -> V
             "   no pane here carries this session: run the terminal command \u{b7} u goes up to the lead"
         }
         (None, false) => {
-            "   this seat runs on another machine: attach there \u{b7} u goes up to the lead"
+            "   this seat runs on another machine: space peeks \u{b7} P opens a viewer pane \u{b7} u goes up to the lead"
         }
     }));
     out
@@ -320,6 +320,17 @@ pub(crate) fn system(fleet: &Fleet, width: usize) -> Vec<Line> {
     out
 }
 
+/// A peek's transcript lines, already stripped of control bytes.
+pub(crate) fn peek_page(lines: &[String]) -> Vec<Line> {
+    let mut out = vec![meta(" read-only \u{b7} esc closes"), blank()];
+    out.extend(
+        lines
+            .iter()
+            .map(|l| Lb::default().s(format!(" {l}"), BRole::Body).done()),
+    );
+    out
+}
+
 pub(crate) fn keys_help() -> Vec<Line> {
     [
         " Org keys",
@@ -330,6 +341,8 @@ pub(crate) fn keys_help() -> Vec<Line> {
         "   PageUp/PageDown  scroll the right pane",
         "   enter            open a lead \u{b7} attach a seat on this machine",
         "   space x P        peek, stop or portal a seat on this machine",
+        "   space P          peek or view a seat on another machine, over ssh",
+        "   s                start a seat on the selected machine \u{b7} esc cancels the prompt",
         "   W opens the web command page \u{b7} F full screen \u{b7} V cycle views \u{b7} ? keys \u{b7} esc close",
     ]
     .into_iter()
