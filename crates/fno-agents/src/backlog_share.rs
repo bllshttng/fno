@@ -2763,7 +2763,8 @@ mod tests {
             ruling("d-lost", "2026-10-17T16:31:35Z"),
         ];
         std::fs::write(&index, lines.join("\n") + "\n").unwrap();
-        let first = replay_unstored_decisions(&a.graph, &index, Some(50)).unwrap();
+        // A cap of one still lands d-lost: the refusal costs no slot.
+        let first = replay_unstored_decisions(&a.graph, &index, Some(1)).unwrap();
         assert_eq!(
             first,
             ReplayCounts {

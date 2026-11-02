@@ -1229,34 +1229,33 @@ fn scope_split_answer_in(
     sources: &[std::path::PathBuf],
     req: ScopeSplitRequest,
 ) -> Value {
-    let project = resolve_project(cwd, sources);
+    let project = match resolve_project(cwd, sources) {
+        Ok(slug) => Some(slug),
+        // Fail open on the project with a named reason: losing a law is
+        // worse than seeing one that does not apply (d-0fa92eb9's posture).
+        // The reason rides stderr, not the note, so a caller's labels stay
+        // byte-stable.
+        Err(reason) => {
+            eprintln!("fno inbox law: project unresolvable ({reason}); no project law hidden");
+            None
+        }
+    };
     let mut kept = Vec::new();
     let mut hidden = 0usize;
-    match project {
-        Ok(slug) => {
-            for row in req.rows {
-                let is_law = row.get("lane").and_then(Value::as_str) == Some("law");
-                if is_law && !decision_index::row_in_scope(&row, &slug) {
-                    hidden += 1;
-                } else {
-                    kept.push(row);
-                }
-            }
-            let note = if hidden > 0 {
-                format!(" (hid {hidden} out-of-scope)")
-            } else {
-                String::new()
-            };
-            json!({"ok": true, "kept": kept, "hidden": hidden, "note": note})
-        }
-        // Fail open with a named reason: losing a law is worse than seeing
-        // one that does not apply (d-0fa92eb9's posture). The reason rides
-        // stderr, not the note, so a caller's labels stay byte-stable.
-        Err(reason) => {
-            eprintln!("fno inbox law: project unresolvable ({reason}); nothing hidden");
-            json!({"ok": true, "kept": req.rows, "hidden": 0, "note": ""})
+    for row in req.rows {
+        let is_law = row.get("lane").and_then(Value::as_str) == Some("law");
+        if is_law && !decision_index::row_visible(&row, project.as_deref()) {
+            hidden += 1;
+        } else {
+            kept.push(row);
         }
     }
+    let note = if hidden > 0 {
+        format!(" (hid {hidden} out-of-scope)")
+    } else {
+        String::new()
+    };
+    json!({"ok": true, "kept": kept, "hidden": hidden, "note": note})
 }
 
 // ---------------------------------------------------------------------------
@@ -2153,19 +2152,14 @@ pub(crate) fn all_decision_rows() -> Result<(Vec<Value>, usize), String> {
     )
 }
 
-/// The rows this caller's project may address: global plus the current
-/// project, the stage view. Unresolvable fails open, matching
-/// `retain_in_scope` semantics.
+/// The rows this caller may address: global, the current project, and this
+/// machine and person, the stage view. `decision_index::row_visible` is the
+/// filter, so an unresolvable project fails open the same way.
 pub(crate) fn scope_filtered_rows(rows: Vec<Value>) -> Vec<Value> {
-    match resolve_project(None, &settings_sources()) {
-        Ok(slug) => rows
-            .into_iter()
-            .filter(|r| decision_index::row_in_scope(r, &slug))
-            .collect(),
-        // Unresolvable fails open: nothing hidden, matching
-        // `retain_in_scope`.
-        Err(_) => rows,
-    }
+    let project = resolve_project(None, &settings_sources()).ok();
+    rows.into_iter()
+        .filter(|r| decision_index::row_visible(r, project.as_deref()))
+        .collect()
 }
 
 fn run_retract_door(argv: &[String]) -> i32 {
@@ -2764,10 +2758,8 @@ fn graduated_retraction_lines_in(
     // open, matching `retain_in_scope`.
     let mut lines = Vec::new();
     for row in &index.rows {
-        if let Some(slug) = scope_project {
-            if !decision_index::row_in_scope(row, slug) {
-                continue;
-            }
+        if !decision_index::row_visible(row, scope_project) {
+            continue;
         }
         let Some(grad) = row.get("graduation") else {
             continue;

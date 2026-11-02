@@ -453,17 +453,20 @@ fn binds(
     scope.strip_prefix("person:").map(|name| name == person())
 }
 
+/// The one visibility test every scope filter shares. `None` fails open on
+/// the project: it hides no project row. A row bound to another machine or
+/// person still hides, because identity needs no project.
+pub fn row_visible(row: &Value, project: Option<&str>) -> bool {
+    match project {
+        Some(project) => row_in_scope(row, project),
+        None => binds_here(row_scope(row)) != Some(false),
+    }
+}
+
 /// Keep only the rows the session may see, returning the withheld count.
-/// `None` fails open on the project: it hides no project row. A row bound to
-/// another machine or person still hides, because identity needs no project.
 pub fn retain_in_scope(index: &mut Index, project: Option<&str>) -> usize {
     let before = index.rows.len();
-    match project {
-        Some(project) => index.rows.retain(|row| row_in_scope(row, project)),
-        None => index
-            .rows
-            .retain(|row| binds_here(row_scope(row)) != Some(false)),
-    }
+    index.rows.retain(|row| row_visible(row, project));
     before - index.rows.len()
 }
 

@@ -586,14 +586,12 @@ pub fn run_decide_reindex(_argv: &[String]) -> i32 {
     }
     // The graph leg last, so a journal-only row the loop above just indexed
     // lands in the table in the same run.
-    let replay = match replay_unstored_decisions(&graph_path, &decisions_jsonl_path(), None) {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("backlog decide-reindex: the graph replay failed: {e}");
-            return 1;
-        }
-    };
-    let counts = json!({
+    let (replay, graph_error) =
+        match replay_unstored_decisions(&graph_path, &decisions_jsonl_path(), None) {
+            Ok(r) => (r, None),
+            Err(e) => (ReplayCounts::default(), Some(e)),
+        };
+    let mut counts = json!({
         "added": added,
         "already": already,
         "repaired": repaired,
@@ -603,7 +601,16 @@ pub fn run_decide_reindex(_argv: &[String]) -> i32 {
         "graph_replayed": replay.replayed,
         "graph_refused": replay.refused,
     });
+    // The index leg already ran, so its counts print either way; an
+    // unreadable graph still fails the command.
+    if let Some(e) = &graph_error {
+        counts["graph_error"] = json!(e);
+    }
     println!("{counts}");
+    if let Some(e) = graph_error {
+        eprintln!("backlog decide-reindex: the graph replay failed: {e}");
+        return 1;
+    }
     0
 }
 
@@ -622,7 +629,9 @@ pub struct ReplayCounts {
 /// Write each index row the graph decisions table lacks, in index order,
 /// with its own id and ts. A door that refused the graph write left the row
 /// in the journal and the index only; this is its retry. `cap` bounds the
-/// writes one pass attempts. The table read is the db alone, because
+/// rows one pass writes; a refused row costs no slot, so rows the store
+/// keeps refusing never starve the rows behind them. The table read is the
+/// db alone, because
 /// `read_store_rows` unions the index and would hide the gap. A replayed
 /// write is harmless: the insert is `ON CONFLICT(event_id) DO NOTHING`.
 pub fn replay_unstored_decisions(
@@ -669,7 +678,7 @@ pub fn replay_unstored_decisions(
         if key.is_empty() || stored.contains(&key) {
             continue;
         }
-        if cap.is_some_and(|cap| counts.replayed + counts.refused >= cap) {
+        if cap.is_some_and(|cap| counts.replayed >= cap) {
             break;
         }
         let write = if ty == "operator_decision" {
