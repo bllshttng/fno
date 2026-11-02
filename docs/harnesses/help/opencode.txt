@@ -1,5 +1,5 @@
 $ opencode --help
-version: opencode v2.0.20
+version: opencode v2.2.5
 
 DESCRIPTION
   OpenCode command line interface
@@ -22,13 +22,13 @@ GLOBAL FLAGS
   --help, -h                                                          Show help information
   --version, -v                                                       Show version information
   --wizard                                                            Start wizard mode for a command
-  --completions <bash|zsh|fish|sh>                                    Print shell completion script (choices: bash, zsh, fish, sh)
+  --completions <bash|zsh|fish|powershell|sh|pwsh>                    Print shell completion script (choices: bash, zsh, fish, powershell, sh, pwsh)
   --log-level <all|trace|debug|info|warn|warning|error|fatal|none>    Sets the minimum log level (choices: all, trace, debug, info, warn, warning, error, fatal, none)
   --print-logs                                                        Print logs to stderr (server logs require --standalone)
 
 SUBCOMMANDS
   upgrade, update    Upgrade OpenCode to the latest or a specific version
-  uninstall          Uninstall OpenCode and remove all related files
+  uninstall          Uninstall OpenCode, keeping session data, configuration, and state
   acp                Start an Agent Client Protocol server
   api                Make a request to the running server
   debug              Debugging and troubleshooting tools
