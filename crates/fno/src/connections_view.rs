@@ -1008,6 +1008,15 @@ impl ConnectionsView {
             self.notice = Some(format!("{} is not a managed account", acct.id));
             return ConnIntent::Redraw;
         }
+        // A config-dir account keeps its own login, away from the shared slot
+        // that `use --login` writes.
+        if acct.spawn_only {
+            self.notice = Some(format!(
+                "{} keeps its own login: sign in under its config dir",
+                acct.id
+            ));
+            return ConnIntent::Redraw;
+        }
         // The stored login is someone else's, or dead: a re-snapshot would
         // save the wrong login again, so open a real login pane first. The
         // next `r` on the row saves whatever that pane signed in.
@@ -1444,12 +1453,18 @@ impl ConnectionsView {
             parts.push(format!("login saved {snap} ago"));
         }
         let line = format!(" {spawn}{badge}  {}  {}", a.id, parts.join(" · "));
-        let keys = if a.active {
-            "r: re-authenticate  d: remove"
-        } else {
-            "u: make active  r: re-authenticate  d: remove"
-        };
-        let full = format!("{line}   {keys}");
+        // Each key names only what it does on this row.
+        let mut keys = Vec::new();
+        if a.spawn_only {
+            keys.push("s: spawn-acct");
+        } else if !a.active {
+            keys.push("u: make active");
+        }
+        if a.auth == "managed" && !a.spawn_only {
+            keys.push("r: re-authenticate");
+        }
+        keys.push("d: remove");
+        let full = format!("{line}   {}", keys.join("  "));
         if selected || crate::chrome::str_cols(&full) <= max_cols {
             full
         } else {
@@ -2223,7 +2238,7 @@ mod tests {
         // ACTIVE marks the one credential new spawns use; the others offer u.
         assert!(line("ccm").contains("[ACTIVE]") && line("ccm").contains("subscription login"));
         assert!(!line("ccr").contains("[ACTIVE]"));
-        assert!(line("glm").contains("API key"));
+        assert!(line("glm").contains("API key") && !line("glm").contains("r: re-authenticate"));
         assert!(out.contains("headroom unknown")); // glm headroom shown, not hidden
         assert!(line("ccm").contains("login saved 2h ago"));
         // Cards in provider order; glm sits under zai, and an empty provider
@@ -2597,6 +2612,12 @@ mod tests {
         assert_eq!(v.on_key(b'u'), ConnIntent::Redraw);
         assert!(v.confirm.is_none() && !v.acting);
         assert!(v.notice.as_deref().unwrap().contains("s: spawn-acct"));
+        // r opens no pane: the shared-slot login is not this row's login.
+        assert_eq!(v.on_key(b'r'), ConnIntent::Redraw);
+        assert!(v.confirm.is_none());
+        let row = v.render().join("\n");
+        let row = row.lines().find(|l| l.contains("  ccr  ")).unwrap();
+        assert!(row.contains("s: spawn-acct") && !row.contains("r: re-authenticate"), "{row}");
     }
 
     // AC1-ERR path: remove stages a confirm; Enter runs remove, other key cancels.
