@@ -2837,7 +2837,10 @@ fn resolve_missing_team_inputs(
                             && row
                                 .role_scope
                                 .as_deref()
-                                .map(|s| crate::territory::canonical_scope(s.trim()) == *scope)
+                                .map(|s| {
+                                    crate::territory::canonical_scope(s.trim())
+                                        == crate::territory::canonical_scope(scope.trim())
+                                })
                                 .unwrap_or(false)
                     })
                     .and_then(|row| row.role_level)

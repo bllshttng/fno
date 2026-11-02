@@ -1046,11 +1046,13 @@ fn fill_spawn_record(owned: OwnedIdentity, cwd: &str, home: &AgentsHome) -> Owne
     {
         return owned;
     }
-    // A terminal in a worker's cwd is not that worker: with no marker and a
-    // full walk that found no harness, the cwd is the only link, and bystanders
-    // share a cwd.
+    // A terminal in a worker's cwd is not that worker: with no marker, no spawn
+    // name and a full walk that found no harness, the cwd is the only link, and
+    // bystanders share a cwd. A spawned worker whose harness the walk cannot name
+    // (pi) keeps its row.
     if owned.harness.is_none()
         && owned.markers_present.is_empty()
+        && std::env::var("FNO_AGENT_SELF").map_or(true, |v| v.trim().is_empty())
         && walk_finds_no_harness_ambient()
     {
         return owned;

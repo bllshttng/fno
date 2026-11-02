@@ -71,6 +71,7 @@ def test_a_plain_terminal_in_a_workers_cwd_stays_a_human(tmp_path, monkeypatch):
     rows, cwd_a, _cwd_b, _sid_a, _sid_b = _two_worker_rows(tmp_path)
     _write_registry(tmp_path, monkeypatch, rows)
     _scrub_env(monkeypatch)
+    monkeypatch.delenv("FNO_AGENT_SELF", raising=False)
     monkeypatch.setattr("fno.claims.self_identity.no_harness_ancestor", lambda: True)
 
     monkeypatch.chdir(cwd_a)
@@ -78,6 +79,10 @@ def test_a_plain_terminal_in_a_workers_cwd_stays_a_human(tmp_path, monkeypatch):
 
     assert ident.session_id is None
     assert ident.disposition != "spawn_record"
+
+    # A spawned worker whose harness the walk cannot name keeps its own row.
+    monkeypatch.setenv("FNO_AGENT_SELF", "worker-a")
+    assert resolve_self_identity().session_id is not None
 
 
 def test_duplicate_cwd_refuses_rather_than_picks(tmp_path, monkeypatch):

@@ -215,7 +215,6 @@ def _own_cwd() -> str:
 
 
 def no_harness_ancestor() -> bool:
-    """True only when the native walk read every ancestor and found no harness."""
     from fno.claims.session_pid import resolve_no_harness_ancestor
 
     return resolve_no_harness_ancestor()
@@ -231,9 +230,10 @@ def _fill_spawn_record(owned):
     """
     if owned.session_id or owned.disposition in {"invalid", "contradiction"}:
         return owned
-    # A terminal in a worker's cwd is not that worker: with no marker and a full
-    # walk that found no harness, the cwd is the only link.
-    if not owned.harness and not owned.markers_present and no_harness_ancestor():
+    # A terminal in a worker's cwd is not that worker: with no marker, no spawn
+    # name and a full walk that found no harness, the cwd is the only link.
+    spawned = (os.environ.get("FNO_AGENT_SELF") or "").strip()
+    if not (owned.harness or owned.markers_present or spawned) and no_harness_ancestor():
         return owned
     row = live_thread_row_for_cwd(_own_cwd())
     if row is None:
