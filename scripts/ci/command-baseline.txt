@@ -68,7 +68,6 @@ inbox operator status
 inbox user ack
 inbox user list
 inbox user status
-lint
 mux
 paths
 plan
