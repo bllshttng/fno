@@ -5,6 +5,50 @@
 
 use super::*;
 
+/// The sweep's narrow read answers `row_has_open_pr` with the same verdicts
+/// the full read gives: the guard is generic over the lookup surface, so the
+/// `PrGuardRead` the reconcile sweep builds must satisfy the same holds a
+/// staged `GraphRead` does.
+#[test]
+fn row_has_open_pr_answers_over_the_narrow_pr_guard_read() {
+    let mut g = crate::gc_sweep::PrGuardRead {
+        index: std::collections::HashMap::new(),
+        pr_number: std::collections::HashMap::new(),
+        pr_state: std::collections::HashMap::new(),
+    };
+    g.index.insert(
+        crate::graph_store::work_state_key("sess-narrow"),
+        vec![("N1".to_string(), String::new())],
+    );
+    g.pr_number.insert("N1".into(), Some(4242));
+    let e = RegistryEntry::new(
+        Some("sess-narrow".into()),
+        crate::state::Lineage::unproven("row-has-open-pr"),
+    );
+    assert!(
+        crate::gc_open_pr_guard::row_has_open_pr(&g, &e),
+        "a recorded pr_number with no recorded merge holds the narrow read too"
+    );
+    g.pr_state
+        .insert("N1".into(), (Some("merged".into()), 0, 0));
+    assert!(
+        !crate::gc_open_pr_guard::row_has_open_pr(&g, &e),
+        "a recorded merge releases the row on the narrow read"
+    );
+    g.pr_state
+        .insert("N1".into(), (Some("closed".into()), 0, 0));
+    assert!(
+        !crate::gc_open_pr_guard::row_has_open_pr(&g, &e),
+        "a recorded closed PR is terminal on the narrow read"
+    );
+    g.pr_state.insert("N1".into(), (None, 0, 0));
+    g.pr_number.insert("N1".into(), None);
+    assert!(
+        !crate::gc_open_pr_guard::row_has_open_pr(&g, &e),
+        "a node with no recorded PR never holds on the narrow read"
+    );
+}
+
 /// The guard, two-row marker: the quiet driver with no termination event
 /// survives with `reap-keep` filed and `worker_reap_refused` emitted, while
 /// the terminated session on an open-PR node still reaps with `reap-alert`
