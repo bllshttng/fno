@@ -396,6 +396,14 @@ fn card_slug_drops_node_and_model_and_the_node_taps_open() {
     a.model = Some("claude-opus-5-5".into());
     a.harness = Some("claude".into());
     assert_eq!(card_line::slug(&a, &[]), "t-cards-org");
+    // A row from another machine paints its bare name under the machine band.
+    let mut far = agent_row("t-turn-control@bb16", 6, None, false);
+    far.remote = Some(crate::proto::RemoteRow {
+        host: "bb16".into(),
+        key: "k".into(),
+        name: far.name.clone(),
+    });
+    assert_eq!(card_line::slug(&far, &[]), "t-turn-control");
     // Identity fields share a right-aligned line and remain whole tap fields.
     a.context_used_pct = Some(28);
     assert_eq!(card_line::node_span(&a, 30), Some(24..30));
