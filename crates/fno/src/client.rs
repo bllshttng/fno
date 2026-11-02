@@ -5204,11 +5204,13 @@ impl View {
     ) -> OverlayLayout {
         let (origin, dims) = self.overlay_viewport();
         let chrome = chrome::Chrome::new("connections", Anchor::Center).footer("esc close");
-        layout_lines_overlay(
+        overlay_paint::layout_body_overlay(
             origin,
             dims,
             &chrome,
-            &conn.render_with(&self.layout.agents, overlay_text_cols(dims.1)),
+            &conn
+                .render_body(&self.layout.agents, overlay_text_cols(dims.1))
+                .0,
             None,
             OverlayAnchor::Center,
         )

@@ -11,6 +11,7 @@
 //! (`needs_overlay::fold_now` idiom); a failed read degrades the modal, never
 //! crashes it.
 
+use crate::theme::type_scale;
 use serde::Deserialize;
 use std::time::Duration;
 
@@ -396,6 +397,9 @@ pub struct ConnectionsView {
     /// The rendered line the cursor fill covers, set while rendering. A row
     /// carries no cursor glyph: the fill is the cursor.
     cursor_row: std::cell::Cell<Option<usize>>,
+    /// Per rendered line, the type-level spans it was drawn with, set while
+    /// rendering. A line with no entry paints as plain body text.
+    line_segs: std::cell::RefCell<std::collections::BTreeMap<usize, Vec<Seg>>>,
     /// Live workers per harness slot, set while rendering: the key reducer has
     /// no agent rows, and the `u` prompt names this count.
     slot_workers: std::cell::RefCell<std::collections::BTreeMap<String, usize>>,
@@ -436,6 +440,7 @@ impl ConnectionsView {
             relogin: Default::default(),
             last_read: std::time::Instant::now(),
             cursor_row: Default::default(),
+            line_segs: Default::default(),
             slot_workers: Default::default(),
         }
     }
@@ -1295,6 +1300,7 @@ impl ConnectionsView {
         max_cols: usize,
     ) -> (Vec<String>, Option<usize>) {
         self.cursor_row.set(None);
+        self.line_segs.borrow_mut().clear();
         let mut out: Vec<String> = Vec::new();
         out.push(self.tab_bar());
         out.push(String::new());
@@ -1323,12 +1329,47 @@ impl ConnectionsView {
         } else if self.acting {
             out.push("running…".to_string());
         } else {
-            out.push(self.footer());
+            let mut footer = Spans::default();
+            footer.add(&self.footer(), type_scale::META);
+            self.push_spans(&mut out, footer);
         }
         if let Some(notice) = &self.notice {
             out.push(format!("! {notice}"));
         }
         (pad_block(out), self.cursor_row.get())
+    }
+
+    /// The rendered lines as framed body lines: each carries the type-level
+    /// spans it was drawn with, and the cursor line its fill.
+    pub fn render_body(
+        &self,
+        agents: &[crate::proto::AgentRow],
+        max_cols: usize,
+    ) -> (Vec<crate::chrome::BodyLine>, Option<usize>) {
+        let (lines, cursor) = self.render_cursor(agents, max_cols);
+        let segs = self.line_segs.borrow();
+        let body = lines
+            .into_iter()
+            .enumerate()
+            .map(|(i, text)| {
+                // The two side-pad columns the string overlay adds itself.
+                let mut line = crate::chrome::BodyLine::plain(text + "  ");
+                if let Some(spans) = segs.get(&i) {
+                    line.segs = spans.clone();
+                }
+                if cursor == Some(i) {
+                    line.sel_span = Some((0, line.text.chars().count()));
+                }
+                line
+            })
+            .collect();
+        (body, cursor)
+    }
+
+    /// Push a styled line, keeping its spans for [`Self::render_body`].
+    fn push_spans(&self, out: &mut Vec<String>, line: Spans) {
+        self.line_segs.borrow_mut().insert(out.len(), line.segs);
+        out.push(line.text);
     }
 
     fn tab_bar(&self) -> String {
@@ -1375,7 +1416,11 @@ impl ConnectionsView {
             if n > 0 {
                 out.push(String::new());
             }
-            out.push(format!("{}   a: add account", provider_title(key)));
+            let mut title = Spans::default();
+            title
+                .add(&provider_title(key), type_scale::HEADING)
+                .add("   a: add account", type_scale::META);
+            self.push_spans(out, title);
             let rows: Vec<(usize, &Account)> = self
                 .accounts
                 .iter()
@@ -1384,24 +1429,35 @@ impl ConnectionsView {
                 .collect();
             if let Some(harness) = system_default_harness(key) {
                 // The plain login the harness has with no saved account named.
-                let badge = if rows.iter().any(|(_, a)| a.active) {
-                    "        "
+                let mut line = Spans::default();
+                line.add("  ", type_scale::BODY);
+                if rows.iter().any(|(_, a)| a.active) {
+                    line.add("        ", type_scale::BODY);
                 } else {
-                    "[ACTIVE]"
-                };
-                out.push(format!(
-                    "  {badge}  System default   your own {harness} login on this machine"
-                ));
+                    line.add("[ACTIVE]", type_scale::BADGE);
+                }
+                line.add("  ", type_scale::BODY)
+                    .add("System default", type_scale::NAME)
+                    .add(
+                        &format!("   your own {harness} login on this machine"),
+                        type_scale::META,
+                    );
+                self.push_spans(out, line);
             }
             if rows.is_empty() {
-                out.push("            no saved account".to_string());
+                let mut line = Spans::default();
+                line.add("            no saved account", type_scale::META);
+                self.push_spans(out, line);
             }
             for (i, a) in rows {
                 if i == self.acct_sel {
                     self.cursor_row.set(Some(out.len()));
                 }
-                out.push(self.account_line(a, agents, now, i == self.acct_sel, max_cols));
-                out.extend(self.usage_lines(a, now));
+                let line = self.account_line(a, agents, now, i == self.acct_sel, max_cols);
+                self.push_spans(out, line);
+                for line in self.usage_lines(a, now) {
+                    self.push_spans(out, line);
+                }
             }
         }
         // Session-local pending logins render after the real records; `r`
@@ -1428,7 +1484,7 @@ impl ConnectionsView {
         now: u64,
         selected: bool,
         max_cols: usize,
-    ) -> String {
+    ) -> Spans {
         let badge = if a.active { "[ACTIVE]" } else { "        " };
         // The session-local spawn account keeps its own `$` marker.
         let spawn = if self.active_account.as_deref() == Some(a.id.as_str()) {
@@ -1442,6 +1498,7 @@ impl ConnectionsView {
             other => other,
         };
         let mut parts = vec![kind.to_string(), a.harness.clone()];
+        let mut warning = None;
         // Only a warning from the identity cell reaches the row: a login that
         // serves someone else or is shared. An unproved token says nothing the
         // user can act on here.
@@ -1451,7 +1508,9 @@ impl ConnectionsView {
             .filter(|t| !t.starts_with('?'))
             .collect();
         if kept.iter().any(|t| t.starts_with('!')) {
-            parts.push(mask_emails(&kept.join(" ")));
+            let text = mask_emails(&kept.join(" "));
+            warning = Some(text.clone());
+            parts.push(text);
         }
         match workers_on(a, agents) {
             0 => {}
@@ -1467,15 +1526,12 @@ impl ConnectionsView {
         }
         // The account's own name: its plan and masked email, as a provider's
         // account page names it.
-        let mut title = a.id.clone();
-        match (a.plan.as_deref(), a.email.as_deref()) {
-            (Some(plan), Some(email)) => {
-                title.push_str(&format!("  {plan} ({})", mask_emails(email)))
-            }
-            (Some(plan), None) => title.push_str(&format!("  {plan}")),
-            (None, Some(email)) => title.push_str(&format!("  ({})", mask_emails(email))),
-            (None, None) => {}
-        }
+        let plan = match (a.plan.as_deref(), a.email.as_deref()) {
+            (Some(plan), Some(email)) => format!("  {plan} ({})", mask_emails(email)),
+            (Some(plan), None) => format!("  {plan}"),
+            (None, Some(email)) => format!("  ({})", mask_emails(email)),
+            (None, None) => String::new(),
+        };
         // Each key names only what it does on this row.
         let mut keys = Vec::new();
         if a.spawn_only {
@@ -1506,38 +1562,63 @@ impl ConnectionsView {
                 usize::MAX
             }
         };
-        let line_at = |level: usize| -> String {
-            let kept: Vec<&str> = parts
-                .iter()
-                .filter(|p| shed(p) > level)
-                .map(String::as_str)
-                .collect();
-            format!(" {spawn}{badge}  {title}  {}", kept.join(" · "))
+        let line_at = |level: usize, keys: &str| -> Spans {
+            let mut line = Spans::default();
+            line.add(" ", type_scale::BODY).add(spawn, type_scale::BODY);
+            if a.active {
+                line.add(badge, type_scale::BADGE);
+            } else {
+                line.add(badge, type_scale::BODY);
+            }
+            line.add("  ", type_scale::BODY)
+                .add(&a.id, type_scale::NAME)
+                .add(&plan, type_scale::BODY)
+                .add("  ", type_scale::BODY);
+            let kept: Vec<&String> = parts.iter().filter(|p| shed(p) > level).collect();
+            for (n, part) in kept.iter().enumerate() {
+                if n > 0 {
+                    line.add(" · ", type_scale::META);
+                }
+                let role = if warning.as_ref() == Some(*part) {
+                    type_scale::WARN
+                } else {
+                    type_scale::META
+                };
+                line.add(part, role);
+            }
+            line.add("   ", type_scale::BODY)
+                .add(keys, type_scale::META);
+            line
         };
         for level in 0..=3 {
-            let full = format!("{}   {keys}", line_at(level));
-            if crate::chrome::str_cols(&full) <= max_cols {
+            let full = line_at(level, &keys);
+            if crate::chrome::str_cols(&full.text) <= max_cols {
                 return full;
             }
         }
         if selected {
-            format!("{}   {keys}", line_at(3))
+            line_at(3, &keys)
         } else {
-            format!("{}   {main_key}", line_at(3))
+            line_at(3, main_key)
         }
     }
 
     /// The lines under a credential: one bar per measured window, or the
     /// plain-words reason there is no reading.
-    fn usage_lines(&self, a: &Account, now: u64) -> Vec<String> {
-        let mut lines: Vec<String> = match &a.usage {
+    fn usage_lines(&self, a: &Account, now: u64) -> Vec<Spans> {
+        let meta = |text: String| {
+            let mut line = Spans::default();
+            line.add(&text, type_scale::META);
+            line
+        };
+        let mut lines: Vec<Spans> = match &a.usage {
             Some(u) if !u.windows.is_empty() => {
-                u.windows.iter().map(|w| window_line(w, now)).collect()
+                u.windows.iter().map(|w| window_spans(w, now)).collect()
             }
-            _ => vec![format!("              {}", self.usage_text(a))],
+            _ => vec![meta(format!("              {}", self.usage_text(a)))],
         };
         if self.relogin.contains(&a.id) && a.usage.as_ref().is_some_and(|u| !u.windows.is_empty()) {
-            lines.push("              login open, r saves it".to_string());
+            lines.push(meta("              login open, r saves it".to_string()));
         }
         lines
     }
@@ -1811,17 +1892,30 @@ fn window_seconds(label: &str) -> Option<u64> {
 
 /// One usage window as a bar: label, fill, percent, time to reset, and
 /// pace (ahead of or behind an even spend across the window).
+#[cfg(test)]
 fn window_line(w: &UsageWindow, now: u64) -> String {
+    window_spans(w, now).text
+}
+
+/// [`window_line`] with its type levels: the label and the times dim, the
+/// fill colored by how full it is, the percent bold.
+fn window_spans(w: &UsageWindow, now: u64) -> Spans {
     let fill = (w.used_pct.min(100) as usize * BAR_CELLS + 50) / 100;
-    let bar = format!("{}{}", "━".repeat(fill), "─".repeat(BAR_CELLS - fill));
-    let mut line = format!("              {:<7} {bar} {:>3}%", w.label, w.used_pct);
+    let mut line = Spans::default();
+    line.add("              ", type_scale::BODY)
+        .add(&format!("{:<7}", w.label), type_scale::META)
+        .add(" ", type_scale::BODY)
+        .add(&"━".repeat(fill), type_scale::level(w.used_pct))
+        .add(&"─".repeat(BAR_CELLS - fill), type_scale::META)
+        .add(" ", type_scale::BODY)
+        .add(&format!("{:>3}%", w.used_pct), type_scale::STRONG);
     let Some(at) = w.resets_at.filter(|at| *at > now) else {
         return line;
     };
-    line.push_str(&format!(
-        "  resets in {}",
-        crate::client::humanize_ago(at - now)
-    ));
+    line.add(
+        &format!("  resets in {}", crate::client::humanize_ago(at - now)),
+        type_scale::META,
+    );
     if let Some(span) = window_seconds(&w.label).filter(|span| at - now <= *span) {
         let even = (span - (at - now)) * 100 / span;
         let pace = match u64::from(w.used_pct) {
@@ -1829,10 +1923,32 @@ fn window_line(w: &UsageWindow, now: u64) -> String {
             p if p > even + 5 => "pace faster",
             _ => "on pace",
         };
-        line.push_str("  ");
-        line.push_str(pace);
+        line.add(&format!("  {pace}"), type_scale::META);
     }
     line
+}
+
+/// One `(offset, len, role)` type-level span, char-indexed.
+type Seg = (usize, usize, crate::theme::Role);
+
+/// A line built span by span, each span at one type level.
+#[derive(Debug, Default)]
+struct Spans {
+    text: String,
+    segs: Vec<Seg>,
+    chars: usize,
+}
+
+impl Spans {
+    fn add(&mut self, text: &str, role: crate::theme::Role) -> &mut Self {
+        let n = text.chars().count();
+        if n > 0 && role != type_scale::BODY {
+            self.segs.push((self.chars, n, role));
+        }
+        self.text.push_str(text);
+        self.chars += n;
+        self
+    }
 }
 
 // ── async reads (fail-open shell-outs, the needs_overlay idiom) ─────────────
@@ -2325,6 +2441,24 @@ mod tests {
             "!serves j•••@r•••.com"
         );
         assert_eq!(mask_emails("(jn@makersof.xyz) ok"), "(j•••@m•••.xyz) ok");
+        // Type levels: the provider title is a heading, ACTIVE a badge, the
+        // account name bold, and its details dim.
+        use crate::theme::Role;
+        let (body, _) = v.render_body(&[], usize::MAX);
+        let role_at = |needle: &str| -> Role {
+            let line = body.iter().find(|l| l.text.contains(needle)).unwrap();
+            let at = line.text[..line.text.find(needle).unwrap()].chars().count();
+            line.segs
+                .iter()
+                .find(|(o, n, _)| at >= *o && at < o + n)
+                .map_or(Role::PanelBody, |s| s.2)
+        };
+        assert_eq!(role_at("Anthropic"), type_scale::HEADING);
+        assert_eq!(role_at("[ACTIVE]  ccm"), type_scale::BADGE);
+        assert_eq!(role_at("ccr  "), type_scale::NAME);
+        assert_eq!(role_at("API key"), type_scale::META);
+        assert_eq!(type_scale::level(71), Role::LevelWarn);
+        assert_eq!(type_scale::level(95), Role::LevelHigh);
     }
 
     /// Every row shows its percent, or says in plain words why it cannot; a
