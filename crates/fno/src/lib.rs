@@ -155,6 +155,8 @@ pub mod notify_command;
 #[cfg(feature = "full")]
 pub mod notify_dispatch;
 #[cfg(feature = "full")]
+pub mod mux_link;
+#[cfg(feature = "full")]
 pub mod observe;
 #[cfg(feature = "full")]
 pub mod open_router;

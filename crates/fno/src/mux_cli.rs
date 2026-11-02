@@ -2974,7 +2974,7 @@ fn layout_graft_cli(
 /// the operator needs to disambiguate - the name to retype, the pane it
 /// hosts, and how stale the row is.
 #[derive(Debug, PartialEq, Eq)]
-struct Candidate {
+pub(crate) struct Candidate {
     name: String,
     pane: Option<(String, u64)>,
     /// Seconds since the row's freshest activity stamp; `None` = unstamped.
@@ -2983,7 +2983,7 @@ struct Candidate {
 
 /// What shared selector resolution decided.
 #[derive(Debug, PartialEq, Eq)]
-enum Resolution {
+pub(crate) enum Resolution {
     Found(Box<crate::agents_view::RegistryAgent>),
     Ambiguous(Vec<Candidate>),
     NotFound,
@@ -3033,7 +3033,7 @@ fn ambiguity_candidates(
 /// 3. Substring over the name, case-insensitive - the tier that makes a node
 ///    id or slug resolve, because the name is the only node carrier the
 ///    registry row has.
-fn resolve_selector(
+pub(crate) fn resolve_selector(
     rows: &[crate::agents_view::RegistryAgent],
     selector: &str,
     now: u64,
@@ -3133,7 +3133,9 @@ fn print_candidates(command: &str, selector: &str, candidates: &[Candidate]) {
 /// Read the agent registry into derived rows. The shared head of
 /// every selector door; a read failure is EXIT_REGISTRY_UNAVAILABLE, never a
 /// silent "not found" (the rule `where` already shipped with).
-fn registry_rows_or(command: &str) -> Result<(Vec<crate::agents_view::RegistryAgent>, u64), i32> {
+pub(crate) fn registry_rows_or(
+    command: &str,
+) -> Result<(Vec<crate::agents_view::RegistryAgent>, u64), i32> {
     let raw = match crate::registry_read::registry_text(&crate::agents_view::registry_path()) {
         Ok(r) => r,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {

@@ -399,7 +399,9 @@ fn default_true() -> bool {
 /// sideline's pin star and pin-first order; floor stays 58.
 /// v120: `SessionBinding.pr_url` + `pr_count` (serde default), so the PR
 /// chip opens the node's own repo and counts every PR; floor stays 58.
-pub const PROTO_VERSION: u32 = 120;
+/// v121: `ClientMsg::Link`, the link role a far `mux serve --link` takes;
+/// floor stays 58, because both ends of that message sit on the host.
+pub const PROTO_VERSION: u32 = 121;
 
 /// The oldest wire version this build can speak. Bumps that only add commands or
 /// `#[serde(default)]` fields move `PROTO_VERSION`; a change to an existing
@@ -429,6 +431,8 @@ pub mod err_code;
 pub mod agent_launch;
 pub use agent_launch::{AgentLaunchRequest, AgentLaunchUpdate, LaunchState};
 
+pub mod link;
+pub use link::{LinkHello, RemoteRow, LINK_MIN_PROTO};
 pub mod observer;
 pub use observer::{ObserverHello, ObserverRow, ObserverVia};
 
@@ -1081,6 +1085,10 @@ fn is_zero(n: &u32) -> bool {
 /// under; `None` is the catch-all for rows whose cwd matches no squad.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AgentRow {
+    /// A row from another machine's fleet entry. Client-side only: the server
+    /// never sends one, so this adds nothing to the wire.
+    #[serde(skip)]
+    pub remote: Option<RemoteRow>,
     pub squad: Option<u64>,
     pub name: String,
     /// (v63) The harness axis, verbatim from the registry row

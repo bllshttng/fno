@@ -70,6 +70,7 @@ pub mod arm_repair;
 pub mod arm_watch;
 pub mod ask_project;
 pub mod attach;
+pub mod link_dial;
 pub(crate) mod attended;
 pub mod attention;
 pub mod attention_arm;
