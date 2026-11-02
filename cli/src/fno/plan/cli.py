@@ -692,6 +692,7 @@ def sync(
 ) -> None:
     """Idempotent whole-vault mirror-field sweep."""
     from fno.plan._project import project_graph_nodes
+    from fno.paths import graph_json
     from fno.rust_binary import active_backend_name, backlog_rows, store_request
 
     watermark = _plan_sync_watermark()
@@ -722,7 +723,7 @@ def sync(
         typer.echo("plan sync: external tracker backend selected; 0 docs repainted", err=True)
         return
     try:
-        entries = backlog_rows()
+        entries = backlog_rows(path=graph_json())
     except Exception as e:  # noqa: BLE001
         typer.echo(f"plan sync: graph unreadable ({e}); 0 docs repainted", err=True)
         return

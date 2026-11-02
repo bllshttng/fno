@@ -219,7 +219,7 @@ fn run_store_request(rest: &[String]) -> i32 {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let cfg = crate::store_exec::ExecConfig {
         graph: graph_of(rest),
-        canonical: flag_value(rest, "--graph").is_none(),
+        canonical: graph_of(rest) == super::settings::graph_path(),
         lock_timeout: graph_store::DEFAULT_LOCK_TIMEOUT,
         events: Some(crate::paths::events_path(&cwd)),
     };

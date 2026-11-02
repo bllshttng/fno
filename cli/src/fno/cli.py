@@ -151,9 +151,7 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
 # slack; the checked-in allocation and its reference costs live in
 # scripts/ci/command-collapse-map.tsv.
 COLLAPSE_KEEP: dict[str, set[str]] = {
-    "annotate": {"list"},
     "approvals": set(),
-    "backlog": {"advance", "done", "get", "next", "queued"},
     "claim": {"release"},
     "config": {"accounts", "get", "set"},
     "do": set(),
@@ -244,7 +242,7 @@ class _HonestMenuGroup(make_lazy_group_cls(LAZY_SUBCOMMANDS)):  # type: ignore[m
         formatter.write_paragraph()
         formatter.write_text(
             f"Showing {visible} top-level commands. "
-            f"`mux` and `version` forward to the Rust front binary; `restart`, "
+            f"`backlog`, `mux` and `version` forward to the Rust front binary; `restart`, "
             f"`uninstall` and `update` answer there too. Run `fno <command> --help` "
             f"for one command."
         )
@@ -350,6 +348,7 @@ SHORTHAND_POINTER = (
 # Short help for the eager inline commands (defined in this module, so listing
 # them never imports anything). `help --all` merges these with LAZY_SUBCOMMANDS.
 _EAGER_COMMAND_HELP: dict[str, str] = {
+    "backlog": "Feature graph management (forwards to the Rust front).",
     "help": "Show help for the root command or any subcommand.",
     "mux": "Mux pane control and the web console (forwards to the Rust front).",
     "version": "Show the installed fno version(s) (forwards to the Rust front).",
@@ -562,6 +561,18 @@ def mux(
 ) -> None:
     """Forward to the Rust front's `mux` (the operator's pane driver)."""
     _run_rust_front(["mux", *ctx.args])
+
+
+@app.command(
+    context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
+    add_help_option=False,
+    help="Feature graph management (the Rust front's command).",
+)
+def backlog(
+    ctx: typer.Context,
+) -> None:
+    """Forward to the Rust front's `backlog`."""
+    _run_rust_front(["backlog", *ctx.args])
 
 
 @app.command(

@@ -709,11 +709,11 @@ def _script_door_json(*args: str, stdin: Optional[str] = None) -> Any:
 
 
 def backlog_rows(*, include_archived: bool = False, path: "Optional[Path]" = None) -> list:
-    args = ["rows"]
+    from fno.paths import graph_json
+
+    args = ["rows", "--graph", str(path if path is not None else graph_json())]
     if include_archived:
         args.append("--include-archived")
-    if path is not None:
-        args += ["--graph", str(path)]
     return _script_door_json(*args)
 
 
@@ -755,9 +755,9 @@ def open_execute_row(
 
 def store_request(method: str, params: dict, *, path: "Optional[Path]" = None) -> Any:
     """One store method. A refusal raises RuntimeError with the store's message."""
-    args = ["store-request", method]
-    if path is not None:
-        args += ["--graph", str(path)]
+    from fno.paths import graph_json
+
+    args = ["store-request", method, "--graph", str(path if path is not None else graph_json())]
     reply = _script_door_json(*args, stdin=_json.dumps(params))
     if reply.get("ok"):
         return reply.get("result")

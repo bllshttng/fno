@@ -64,6 +64,10 @@ pub fn run(args: &[String]) -> i32 {
             "--graph" => graph = it.next().map(PathBuf::from),
             "--apply" => apply = true,
             "--json" | "-J" => as_json = true,
+            "--help" | "-h" => {
+                println!("usage: fno backlog session backfill [--graph PATH] [--apply] [--json]");
+                return 0;
+            }
             other => {
                 eprintln!("session-backfill: unknown argument {other:?}");
                 return 2;

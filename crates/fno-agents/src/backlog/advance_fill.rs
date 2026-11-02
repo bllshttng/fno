@@ -606,6 +606,10 @@ pub fn schedule_shadow(
 /// The `lane-fill` door: parse the wheel's flag spellings, run the fill,
 /// print the selected rows (preview) or the report envelope (--json).
 pub fn run_lane_fill(args: &[String]) -> i32 {
+    if args.iter().any(|a| a == "--help" || a == "-h") {
+        println!("{FILL_USAGE}");
+        return 0;
+    }
     let opts = match parse_fill_args(args) {
         Some(opts) => opts,
         None => {

@@ -12,7 +12,7 @@ A	.agents/context/product.md	py=skills/execute/orchestrator.py;rs=crates/fno-age
 A	/var/lib/dbus/machine-id	py=cli/src/fno/claims/hostid.py;rs=crates/fno-agents/src/claims.rs|crates/fno/src/agents_view.rs	# CLASSIFY protocol|msg-twin|data
 A	</fno_relay_compression>	py=cli/src/fno/agents/spawn_payload.py;rs=crates/fno-agents/src/spawn_payload.rs	# CLASSIFY protocol|msg-twin|data
 A	[(](?:[yy]/[nn]|+(?:/+)+)[)]*$	py=cli/src/fno/agents/session_truth.py;rs=crates/fno-agents/src/session_truth.rs	# CLASSIFY protocol|msg-twin|data
-A	[a-z][a-z0-9]{0,7}-?[0-9a-f]{4,8}	py=hooks/git_protection_impl.py;rs=crates/fno-agents/src/org_board/queues.rs	# CLASSIFY protocol|msg-twin|data
+A	[a-z][a-z0-9]{0,7}-?[0-9a-f]{4,8}	py=cli/src/fno/rust_binary.py|hooks/git_protection_impl.py;rs=crates/fno-agents/src/org_board/queues.rs	# CLASSIFY protocol|msg-twin|data
 A	^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$	py=cli/src/fno/agents/spawn_defaults.py|cli/src/fno/agents/store_fallback.py|scripts/diagnostics/codex-lead-continuation-smoke.py;rs=crates/fno/src/doctor/bind_canary.rs|crates/fno/src/doctor/report/ops.rs	# CLASSIFY protocol|msg-twin|data
 A	^backgrounded · ([0-9a-f]{8}) ·	py=cli/src/fno/agents/harnesses/claude.py;rs=crates/fno-agents/src/claude_ask.rs	# CLASSIFY protocol|msg-twin|data
 A	`([^`]+/[^`]+[a-za-z0-9_]+)`	py=cli/src/fno/plan/reconcile.py;rs=crates/fno-agents/src/target_orient.rs	# CLASSIFY protocol|msg-twin|data
@@ -84,10 +84,12 @@ A	config.paths.ledger_json, else config.state_dir	py=cli/src/fno/paths.py;rs=cra
 A	config.post_merge.parking_lot_path	py=cli/src/fno/config/__init__.py;rs=crates/fno/src/config_cli/model/validators_core.rs	# CLASSIFY protocol|msg-twin|data
 A	config.research.output_dir	py=cli/src/fno/config/__init__.py;rs=crates/fno/src/config_cli/model/validators_core.rs	# CLASSIFY protocol|msg-twin|data
 A	config.style.word_cap.<surface> must be >= 1	py=cli/src/fno/config/__init__.py;rs=crates/fno/src/config_cli/model/validators_core.rs	# CLASSIFY protocol|msg-twin|data
+A	could not resolve owner/repo	py=cli/src/fno/pr_watch/_discover.py;rs=crates/fno-agents/src/backlog/merge_evidence.rs|crates/fno-agents/src/pr_list.rs	# CLASSIFY protocol|msg-twin|data
+A	could not resolve to a pullrequest	py=cli/src/fno/pr_watch/_discover.py;rs=crates/fno-agents/src/backlog/merge_evidence.rs	# CLASSIFY protocol|msg-twin|data
+A	could not resolve to a repository	py=cli/src/fno/pr_watch/_discover.py;rs=crates/fno-agents/src/backlog/merge_evidence.rs	# CLASSIFY protocol|msg-twin|data
 A	coverage is full, print 'no change' and stop. this beat is a heartbeat.	py=cli/src/fno/config/_lead.py;rs=crates/fno/src/config_cli/model/validators_blocks.rs	# CLASSIFY protocol|msg-twin|data
 A	crates/fno-agents/src/harness_capabilities.toml	py=scripts/regen-generated-copies.py;rs=crates/fno-agents/src/harness_matrix.rs	# CLASSIFY protocol|msg-twin|data
 A	crates/fno-agents/src/paths.rs	py=cli/src/fno/paths.py;rs=crates/fno-agents/src/bin/pr-affected.rs	# CLASSIFY protocol|msg-twin|data
-A	crates/fno/src/state_layout.rs	rs=crates/fno-agents/src/bin/pr-affected.rs	# CLASSIFY protocol|msg-twin|data
 A	cursor-agent create-chat returned no stdout; no chat id was captured	py=cli/src/fno/agents/harnesses/cursor_agent.py;rs=crates/fno-agents/src/cursor_agent.rs	# CLASSIFY protocol|msg-twin|data
 A	cutover_low_after_minutes	py=cli/src/fno/config/_dispatch_commands.py;rs=crates/fno-agents/src/backlog/quota_route.rs|crates/fno/src/config_cli/model/validators_blocks.rs	# CLASSIFY protocol|msg-twin|data
 A	daemon: no pre-spawn baseline, oracle disabled for this spawn	py=cli/src/fno/agents/codex_pane.py;rs=crates/fno-agents/src/pane_spawn/codex.rs|crates/fno-agents/src/pane_spawn/codex_tests.rs	# CLASSIFY protocol|msg-twin|data
@@ -141,6 +143,7 @@ A	https://api.anthropic.com/api/oauth/profile	py=cli/src/fno/adapters/providers/
 A	https://api.z.ai/api/anthropic	py=evals/harness-fit/run/footnote_agent.py|evals/harness-fit/run/launch.py;rs=crates/fno-agents/src/footnote_harness/tests.rs|crates/fno-agents/src/model_env_scrub.rs|crates/fno-agents/src/pane_spawn/row8_tests.rs|crates/fno-agents/src/route_settings.rs|crates/fno-agents/src/spawn_overlay.rs|crates/fno/src/model_catalog.rs	# CLASSIFY protocol|msg-twin|data
 A	https://api.z.ai/api/coding/paas/v4	py=evals/harness-fit/run/launch.py;rs=crates/fno-agents/src/codex_route.rs|crates/fno/src/model_catalog.rs	# CLASSIFY protocol|msg-twin|data
 A	improperly formed request	py=cli/src/fno/adapters/providers/error_taxonomy.py;rs=crates/fno-agents/src/accounts/error_class.rs	# CLASSIFY protocol|msg-twin|data
+A	inspect the malformed github response and fix the reader; this is not retryable.	py=cli/src/fno/pr_watch/_discover.py;rs=crates/fno-agents/src/backlog/merge_evidence.rs	# CLASSIFY protocol|msg-twin|data
 A	invalid providers config	py=cli/src/fno/adapters/providers/loader.py;rs=crates/fno-agents/src/accounts/records.rs	# CLASSIFY protocol|msg-twin|data
 A	kept_suspect_unprobed_by	py=cli/src/fno/claims/events.py;rs=crates/fno-agents/src/claim_cli/reap.rs	# CLASSIFY protocol|msg-twin|data
 A	key and holder must be non-empty	py=cli/src/fno/claims/core.py;rs=crates/fno-agents/src/claims.rs	# CLASSIFY protocol|msg-twin|data
@@ -202,6 +205,9 @@ A	resolve which projects the status-fanout supervisor should tick.	py=cli/src/fn
 A	resolved command is empty	py=cli/src/fno/agents/harness_map.py;rs=crates/fno-agents/src/backlog/dispatch_resolve.rs	# CLASSIFY protocol|msg-twin|data
 A	resource_meter.notifications.throttle_minutes	py=cli/src/fno/config/registry.py;rs=crates/fno-agents/src/machine_watch.rs	# CLASSIFY protocol|msg-twin|data
 A	resource_meter.thresholds.cpu_busy_fraction	py=cli/src/fno/config/registry.py;rs=crates/fno-agents/src/machine_watch.rs	# CLASSIFY protocol|msg-twin|data
+A	rest pr info reader omitted required pr number or state	py=cli/src/fno/pr_watch/_discover.py;rs=crates/fno-agents/src/backlog/merge_evidence.rs|crates/fno-agents/src/backlog/merge_state.rs	# CLASSIFY protocol|msg-twin|data
+A	rest pr info reader returned a malformed pr number	py=cli/src/fno/pr_watch/_discover.py;rs=crates/fno-agents/src/backlog/merge_state.rs	# CLASSIFY protocol|msg-twin|data
+A	rest pr info reader returned a value that is not an object	py=cli/src/fno/pr_watch/_discover.py;rs=crates/fno-agents/src/backlog/merge_state.rs	# CLASSIFY protocol|msg-twin|data
 A	review.cross_model.enabled	py=cli/src/fno/config/registry.py;rs=crates/fno/src/config_doctor/checks.rs	# CLASSIFY protocol|msg-twin|data
 A	review.reviewer_registry	py=cli/src/fno/config/registry.py;rs=crates/fno/src/config_doctor/reporters.rs	# CLASSIFY protocol|msg-twin|data
 A	review.self_review_required	py=cli/src/fno/config/optouts.py|cli/src/fno/config/registry.py;rs=crates/fno-agents/src/claims.rs|crates/fno-agents/src/finalize.rs|crates/fno-agents/src/loopcheck/settings.rs|crates/fno/src/config_cli/model/mod.rs|crates/fno/src/config_cli/write/mod.rs|crates/fno/src/doctor/report/advisors.rs	# CLASSIFY protocol|msg-twin|data
@@ -210,10 +216,12 @@ A	roster-live-inject-failed	py=cli/src/fno/agents/harnesses/claude.py;rs=crates/
 A	route requires auth=api_key	py=cli/src/fno/adapters/providers/model.py;rs=crates/fno-agents/src/accounts/records.rs	# CLASSIFY protocol|msg-twin|data
 A	route=config({route_value})	py=cli/src/fno/agents/harness_map.py;rs=crates/fno-agents/src/backlog/dispatch_resolve.rs	# CLASSIFY protocol|msg-twin|data
 A	route_provider,route_model	py=cli/src/fno/config/__init__.py;rs=crates/fno-agents/src/loopcheck/posture.rs|crates/fno-agents/src/loopcheck/settings.rs	# CLASSIFY protocol|msg-twin|data
+A	run `gh auth login`; authentication failures are not retryable.	py=cli/src/fno/pr_watch/_discover.py;rs=crates/fno-agents/src/backlog/merge_evidence.rs	# CLASSIFY protocol|msg-twin|data
 A	sandbox write policy {path} carries no enabled sandbox block	py=cli/src/fno/agents/model_routing.py;rs=crates/fno-agents/src/spawn_bare.rs	# CLASSIFY protocol|msg-twin|data
 A	sandbox_mode=workspace-write	py=cli/src/fno/agents/harnesses/codex.py;rs=crates/fno-agents/src/provider.rs	# CLASSIFY protocol|msg-twin|data
 A	sandbox_workspace_write.network_access=true	py=cli/src/fno/agents/harnesses/codex.py;rs=crates/fno-agents/src/codex_posture.rs|crates/fno-agents/src/codex_thread.rs	# CLASSIFY protocol|msg-twin|data
 A	schema_version=2 requires pid_unavailable: true	py=cli/src/fno/claims/types.py;rs=crates/fno-agents/src/claims.rs	# CLASSIFY protocol|msg-twin|data
+A	scoreboard_plan_fidelity	py=cli/src/fno/plan/fidelity.py;rs=crates/fno-agents/src/graph_keeper.rs	# CLASSIFY protocol|msg-twin|data
 A	scripts/ci/check-oos-tracked.sh	py=cli/src/fno/plan/fidelity.py;rs=crates/fno-agents/src/pr_body_check.rs	# CLASSIFY protocol|msg-twin|data
 A	scripts/ci/check-preamble-budget.sh	py=cli/src/fno/lint_cli.py;rs=crates/fno/src/doctor/report/collectors.rs	# CLASSIFY protocol|msg-twin|data
 A	scripts/ci/native-command-tree.txt	py=cli/src/fno/lint_command_ratchet.py;rs=crates/fno/src/menu_caps.rs	# CLASSIFY protocol|msg-twin|data
@@ -231,6 +239,7 @@ A	task {task_id} of node {node_id}	py=cli/src/fno/claims/tasks.py;rs=crates/fno-
 A	task:{node_id}:{task_id}	py=skills/execute/orchestrator.py;rs=crates/fno-agents/src/backlog/task.rs	# CLASSIFY protocol|msg-twin|data
 A	the child falls back to its account's own default.	py=cli/src/fno/agents/model_routing.py;rs=crates/fno-agents/src/model_env_scrub.rs	# CLASSIFY protocol|msg-twin|data
 A	the child receives that route's own model instead.	py=cli/src/fno/agents/model_routing.py;rs=crates/fno-agents/src/model_env_scrub.rs	# CLASSIFY protocol|msg-twin|data
+A	the rest reader raised an unexpected error; inspect the reader before retrying.	py=cli/src/fno/pr_watch/_discover.py;rs=crates/fno-agents/src/backlog/merge_evidence.rs	# CLASSIFY protocol|msg-twin|data
 A	the shared ~/.claude slot	py=cli/src/fno/adapters/providers/binding.py;rs=crates/fno-agents/src/accounts/binding.rs	# CLASSIFY protocol|msg-twin|data
 A	then act on the printout per the lead skill. when nothing changed and	py=cli/src/fno/config/_lead.py;rs=crates/fno/src/config_cli/model/validators_blocks.rs	# CLASSIFY protocol|msg-twin|data
 A	tick in flight (pid {pid}); bounce deferred	py=cli/src/fno/pr_watch/_install.py;rs=crates/fno-agents/src/pr_watch/refresh.rs	# CLASSIFY protocol|msg-twin|data

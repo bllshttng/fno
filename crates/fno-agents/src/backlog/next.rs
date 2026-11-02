@@ -2,8 +2,7 @@
 //! prelude, occupancy, the keeper's select in-process, the observer merge
 //! with its guard re-filter, the claims-store reservation, and the
 //! zero-silent-starvation receipts. The external-backend shape (the joined
-//! tracker candidates) still rides the python wheel, the same split the
-//! `get`, `find`, and `undispatched` arms make.
+//! tracker candidates) answers through the tracker door.
 
 use crate::backlog_ready::{
     descendants_of, detect_project, dispatch_node_summary, find_node_index, select,
@@ -449,6 +448,10 @@ fn stranded_next_receipts(receipts: &[(String, String)]) -> Vec<String> {
 }
 
 pub fn run(args: &[String]) -> i32 {
+    if args.iter().any(|a| a == "--help" || a == "-h") {
+        println!("{USAGE}");
+        return 0;
+    }
     let Some(o) = parse_opts(args) else {
         eprintln!("{USAGE}");
         return 2;

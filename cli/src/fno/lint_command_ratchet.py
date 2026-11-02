@@ -53,6 +53,25 @@ COLLAPSE_FLAGS_REL = Path("scripts") / "ci" / "command-collapse-flags.txt"
 # The map row stays: the mux menu binds the leaf and the Rust command-baseline
 # ratchet reads the same row.
 NATIVE_SERVED_LEAVES = {
+    "backlog annotate add",
+    "backlog annotate list",
+    "backlog annotate resolve",
+    "backlog contain",
+    "backlog decompose",
+    "backlog done",
+    "backlog get",
+    "backlog intake",
+    "backlog lane-fill",
+    "backlog next",
+    "backlog note",
+    "backlog provenance",
+    "backlog queue",
+    "backlog queued",
+    "backlog supersede",
+    "backlog triage",
+    "backlog undispatched",
+    "backlog unqueue",
+    "backlog worked",
     "backlog advance",
     "backlog album",
     "backlog archive",
@@ -381,7 +400,7 @@ def iter_python_leaves():
         for line in (_repo_root() / COLLAPSE_MAP_REL).read_text().splitlines()[1:]
         if line.strip()
         for action in [line.split("\t", 1)[0]]
-        if action.split()[0] in collapsed_groups
+        if action.split()[0] in collapsed_groups or action in NATIVE_SERVED_LEAVES
     }
     live_actions: set[str] = set()
     live_action_flags: set[str] = set()

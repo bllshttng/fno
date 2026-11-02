@@ -11,7 +11,7 @@
 # refused, removed = banked. Regenerate the baseline in the same PR as a
 # removal to bank it for good.
 #
-# The extractor is the native top_level_patterns behind `fno backlog
+# The extractor is the native top_level_patterns behind `fno-agents backlog
 # script-door root-patterns` - the same parser the drift report uses, so one
 # dialect decides everywhere.
 #
@@ -43,7 +43,7 @@ check_rows() {
         echo "check-state-root-rows: $1 is unreadable" >&2
         return 2
     fi
-    patterns="$(fno backlog script-door root-patterns "$1")" || return 2
+    patterns="$("${FNO_AGENTS_BIN:-fno-agents}" backlog script-door root-patterns "$1")" || return 2
     (PATTERNS="$patterns" python3 - "$1" "$2" "$3" <<'PY'
 import os
 import sys

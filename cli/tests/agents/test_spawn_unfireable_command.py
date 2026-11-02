@@ -40,7 +40,7 @@ def graph_rows(monkeypatch):
     def _install(rows):
         def _match(query):
             hits = [r for r in rows if query in (r.get("id"), r.get("slug"))]
-            near = hits or [r for r in rows if query in str(r.get("title", ""))]
+            near = hits or [r for r in rows if query.lower() in str(r.get("title", "")).lower()]
             kind = "exact" if hits else ("fuzzy" if len(near) == 1 else "none")
             return {"id": near[0]["id"] if len(near) == 1 else None, "kind": kind, "candidates": near}
 

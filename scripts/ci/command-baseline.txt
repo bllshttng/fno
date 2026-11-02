@@ -35,8 +35,6 @@
 # read from its dispatchers and cross-checked against the live binary, but its
 # FLAGS are not enumerated, so a hidden flag on a mux command is invisible to this
 # gate. The lint output names that boundary on every green run.
-annotate
-annotate list
 approvals
 backlog
 backlog advance
@@ -55,7 +53,6 @@ cost
 delivery evaluate
 do
 doctor
-done
 evals
 fno-agents
 help
