@@ -515,6 +515,8 @@ fn spawn_argv(
         argv.push("--".into());
         argv.push(prompt.into());
     } else {
+        // argv-fence: exempt - the fence here holds the harness flags, so the
+        // prompt sits before it. run_task sends no flags with a dash-led prompt.
         argv.push(prompt.into());
         argv.push("--".into());
         argv.extend_from_slice(harness_flags);
