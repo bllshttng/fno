@@ -177,7 +177,7 @@ A failed test alone never reads `no_signal`. At 28 trees the interval half width
 
 The first read, 2026-11-02, over 28 main trees from 2026-10-05 to 2026-11-01:
 
-- Noise: same-tree sd 6.11 points. `gate-seal-head` read 68, 76, 64, and `gate-seal-free` read 44, 40, 52. Between-tree sd 5.27, week means 68.7, 73.1, 74.3, 70.6. Not separable.
+- Noise: same-tree sd 6.11 points. `gate-seal-head` read 68, 76, 64, and `gate-seal-free` read 44, 40, 52. Between-tree sd 5.27 over 29 main trees (the 28 days and the `gate-seal-head` tree), week means 68.7, 73.1, 74.3, 70.6. Not separable.
 - The mean score per tree against corrections: rho 0.05, q 0.93. Against reverts: rho -0.46, p 0.013, q 0.29. Against review fails: rho 0.14, q 0.93.
 - Outcomes joined: 78 of 81 corrections, 28 of 29 reverts and 660 of 678 review fails. 20 reverts named the commit they revert.
 - Verdicts over 25 goldens: 2 `constant_fail`, 7 `constant_pass`, 16 `underpowered`, 0 `predicts`, 0 `no_signal`. Both `constant_fail` tasks are demoted.

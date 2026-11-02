@@ -310,12 +310,13 @@ fn outcome_series(
     let mut counts = vec![0u64; trees.len()];
     let (mut before, mut in_short) = (0u64, 0u64);
     for t in times {
-        if trees.first().is_none_or(|f| *t < f.time) {
-            before += 1;
-            continue;
-        }
+        // A short window can sit before the first joined tree, so it reads first.
         if short.iter().any(|(s, e)| t >= s && t < e) {
             in_short += 1;
+            continue;
+        }
+        if trees.first().is_none_or(|f| *t < f.time) {
+            before += 1;
             continue;
         }
         if let Some(i) = trees.iter().rposition(|tr| tr.time <= *t) {
