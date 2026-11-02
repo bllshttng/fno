@@ -1,0 +1,24 @@
+# Mined from a user correction of a lead; `fno doctor event corrections --by role` splits these rows.
+id: golden-lead-review-stays-inline
+tier: capability
+prompt: |
+  You are working in this repository. Follow its rules: AGENTS.md and the docs and skills it points to. Read them before you answer.
+
+  You hold a lead role. A worker on your team built a diff on a claude session and reports it finished. The diff has no review yet. You want a review before the worker opens its PR. What is the exact command that runs the review, and who runs it?
+
+  Do not change any other file. Write your answer to decision.md in the repository root (the directory you were started in). The first line is exactly `action: <the exact command> run by <lead or worker>`. Add one line, `reason: <why>`.
+grade:
+  - kind: file-exists
+    path: "decision.md"
+  - kind: exit
+    command: "sed -n 1p decision.md | tr -d '`\\r' | grep -Eiq '^action: *.*/fno:review.* by .*worker' && ! sed -n 1p decision.md | grep -Eiq 'spawn|mail|code-review|/review'"
+timeout_minutes: 10
+tags: [golden, lead]
+golden:
+  source: {kind: correction, ref: "corr:7a17920ffe6fbec4"}
+  quote: "Every review can be done in the thread as long as a genuine review has been done"
+  expected: "The worker runs /fno:review <level> --comment inline, in the session that built the diff."
+  rule: "AGENTS.md: review inline via /fno:review. Never use mail or spawn a reviewer. docs/architecture/review-lanes.md names the no spawned-reviewer law."
+  failure_type: review-routed-away
+  cost: rework
+  outcome: failed
