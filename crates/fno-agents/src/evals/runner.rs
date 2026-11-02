@@ -749,23 +749,19 @@ fn lane_evidence(
     spawned: bool,
     workdir: &std::path::Path,
     started_epoch: f64,
-    projects_root: Option<&std::path::Path>,
 ) -> serde_json::Value {
     let model = if lane.model.is_empty() {
         &lane.route
     } else {
         &lane.model
     };
-    let mut payload = json!({
+    let payload = json!({
         "lane": {"name": lane.name, "harness": harness, "model": model, "effort": lane.effort},
         "attempted": attempted,
         "spawned": spawned,
         "workdir": workdir.to_string_lossy(),
         "started_epoch": started_epoch,
     });
-    if let Some(root) = projects_root {
-        payload["projects_root"] = json!(root.to_string_lossy());
-    }
     crate::eval_attempt::observe(&payload)
 }
 
@@ -901,7 +897,6 @@ pub fn run_task(
                     spawned,
                     dir,
                     started_wall,
-                    None,
                 )
             });
             if golden {
@@ -982,7 +977,6 @@ pub fn run_task(
                     false,
                     none,
                     started_wall,
-                    None,
                 )
             });
             if let serde_json::Value::Object(fields) = fields {
@@ -1326,30 +1320,6 @@ mod tests {
             "",
             "the worker sees a clean tree"
         );
-    }
-
-    #[test]
-    fn a_lane_row_states_its_seat_and_an_unread_transcript_stays_unverified() {
-        let lane = LaneRow {
-            name: "claude-opus-5-5".into(),
-            harness: "claude".into(),
-            model: "claude-opus-5-5".into(),
-            ..Default::default()
-        };
-        let root = tempfile::tempdir().unwrap();
-        let f = lane_evidence(
-            &lane,
-            "claude",
-            true,
-            true,
-            root.path(),
-            0.0,
-            Some(root.path()),
-        );
-        assert_eq!(f["requested_lane"], "claude-opus-5-5");
-        assert_eq!(f["lane_status"], "unverified");
-        assert!(f["usage"].is_null(), "{f}");
-        assert!(f["observed_model"].is_null(), "{f}");
     }
 
     #[test]
