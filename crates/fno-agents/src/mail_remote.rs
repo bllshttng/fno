@@ -269,9 +269,19 @@ pub fn resolve_from_name_with(
         };
     }
     if let Some(given) = &tail.from_name {
-        let is_handle = given.len() == 8 && given.chars().all(|c| c.is_ascii_hexdigit());
+        // A canonical handle is the id's first eight: 8-hex for the uuid
+        // harnesses, `ses_` + 4 alphanumerics for opencode (case-exact).
+        let is_hex_handle = given.len() == 8 && given.chars().all(|c| c.is_ascii_hexdigit());
+        let is_ses_handle = given.len() == 8
+            && given.starts_with("ses_")
+            && given[4..].bytes().all(|b| b.is_ascii_alphanumeric());
         if let Some(own) = &own {
-            if is_handle && !given.eq_ignore_ascii_case(own) {
+            let foreign = if is_ses_handle {
+                given != own
+            } else {
+                is_hex_handle && !given.eq_ignore_ascii_case(own)
+            };
+            if foreign {
                 return Err(format!(
                     "--from-name {given} names another session; this session is {own}. \
 Omit --from-name to self-stamp."
@@ -1567,6 +1577,35 @@ mod tests {
             resolve_from_name_with(Some(own), &role),
             Ok(FromName::Given("Quinlan".to_string())),
             "a role name still passes verbatim"
+        );
+    }
+
+    #[test]
+    fn specimen_x50cc_opencode_neighbour_handle_refuses() {
+        let own_session = "ses_9f2ca1b2c3d4";
+        let neighbour = SendTail {
+            from_name: Some("ses_4ab1".to_string()),
+            ..SendTail::default()
+        };
+        let err = resolve_from_name_with(Some(own_session), &neighbour)
+            .expect_err("a copied opencode handle refuses");
+        assert!(err.contains("ses_9f2c"), "the refusal names the own handle");
+        let cased = SendTail {
+            from_name: Some("ses_9F2C".to_string()),
+            ..SendTail::default()
+        };
+        assert!(
+            resolve_from_name_with(Some(own_session), &cased).is_err(),
+            "opencode handles compare case-exact, so a case-variant is foreign"
+        );
+        let self_handle = SendTail {
+            from_name: Some("ses_9f2c".to_string()),
+            ..SendTail::default()
+        };
+        assert_eq!(
+            resolve_from_name_with(Some(own_session), &self_handle),
+            Ok(FromName::Given("ses_9f2c".to_string())),
+            "the session's own ses_ handle still passes"
         );
     }
 
