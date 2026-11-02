@@ -74,46 +74,6 @@ def test_a_sole_codex_marker_survives_an_inherited_claude_marker(monkeypatch):
 # --- the grantor derivation -------------------------------------------------
 
 
-def test_grantor_is_the_claude_session_never_the_inherited_codex_thread(
-    poisoned_env, monkeypatch
-):
-    """The measured defect, inverted into an assertion.
-
-    ``_capture_parent_edge`` is what the spawn path stamps as ``role_grantor``
-    (``spawned_by_session or "human"``), so the session id it returns IS the
-    recorded grantor.
-    """
-    from fno.agents.spawn_lineage import _capture_parent_edge
-
-    _walk(monkeypatch, "claude")
-    session_id, harness, _cwd = _capture_parent_edge()
-
-    assert session_id == CLAUDE_SID
-    assert session_id != CODEX_TID
-    assert harness == "claude"
-
-    grantor = session_id or "human"
-    assert grantor == CLAUDE_SID
-
-
-def test_no_walk_refuses_to_guess_rather_than_stamping_a_stranger(
-    poisoned_env, monkeypatch
-):
-    """psutil denied, no harness ancestor, a container hiding the parent chain.
-
-    Two families and nothing proven, so no lineage is stamped. The grant records
-    "human" and `fno whoami` names the family to clear; that is the honest
-    answer, because the environment alone cannot say which session this is.
-    """
-    from fno.agents.spawn_lineage import _capture_parent_edge
-
-    _walk(monkeypatch, None)
-    session_id, harness, _cwd = _capture_parent_edge()
-
-    assert session_id is None
-    assert harness is None
-
-
 # --- the names fno cannot unexport ------------------------------------------
 
 

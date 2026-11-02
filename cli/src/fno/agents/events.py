@@ -25,7 +25,6 @@ Phase 5 (MCP channel + streaming) additions are grouped at the bottom.
 from __future__ import annotations
 
 import sys
-from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
@@ -33,7 +32,7 @@ from typing import TYPE_CHECKING, Any, Optional
 from fno import paths
 
 if TYPE_CHECKING:
-    from fno.agents.context import EventContext
+    pass
 
 
 def _utc_now_iso() -> str:
@@ -127,92 +126,6 @@ def emit(kind: str, *, path: Optional[Path] = None, **data: Any) -> None:
             )
 
 
-def emit_with_context(
-    ctx: "EventContext",
-    kind: str,
-    *,
-    path: Optional[Path] = None,
-    **data: Any,
-) -> None:
-    """Append a JSONL record carrying every ``EventContext`` field.
-
-    Flattens the 13 fields of ``ctx`` onto the record, then layers open
-    ``**data`` kwargs on top (caller-overrides; Locked Decision #1), then
-    delegates to ``emit()`` which pins ``ts``/``kind`` last.
-
-    Delegating to ``emit`` (rather than writing the JSONL directly) means
-    a test that monkeypatches ``events.emit`` to observe records will
-    pick up emits routed through this function too — no per-test fork
-    of the assertion strategy for migrated vs. legacy emit sites.
-
-    Telemetry emission is best-effort: the underlying ``emit()`` swallows
-    ``OSError`` and warns to stderr.
-
-    Args:
-        ctx: Per-dispatch sender + recipient + correlation envelope built
-            via ``fno.agents.context.build_context``.
-        kind: Event kind constant (e.g. ``agent_ask_started``).
-        path: Override the events file path. Defaults to
-            ``paths.state_dir() / "events.jsonl"``.
-        **data: Arbitrary keyword fields. Overrides ctx fields when keys
-            collide; ``ts`` and ``kind`` are still pinned last by emit().
-    """
-    ctx_dict = asdict(ctx)
-    merged: dict[str, Any] = {**ctx_dict, **data}
-    emit(kind, path=path, **merged)
-
-
-# Harness identity resolution. Emitted when resolution was NOT a plain single-
-# marker win, so a disagreement or refused collision is reconstructable from
-# the event record alone: every marker present, the disposition chosen, the
-# resolved harness, and the owning row when a candidate id was refused. The
-# originating ambient-leak incident was unrecoverable (the process was gone
-# before anyone looked); this record exists so the next one is not.
-KIND_HARNESS_IDENTITY_RESOLVED = "harness_identity_resolved"
-
-
-def emit_identity_resolution(owned: Any, *, path: Optional[Path] = None) -> None:
-    """Record a non-trivial harness identity resolution (AC5-CON).
-
-    ``owned`` is an ``OwnedHarnessIdentity`` whose resolution was not a plain
-    single-marker win. Carries the resolved session id and every marker's value
-    so the resolution (and a leak path) is reconstructable from this one record.
-    Best-effort: the underlying ``emit()`` swallows OSError.
-    """
-    emit(
-        KIND_HARNESS_IDENTITY_RESOLVED,
-        path=path,
-        disposition=owned.disposition,
-        harness=owned.harness,
-        session_id=owned.session_id,
-        markers_present=[
-            {"marker": marker, "harness": harness, "session_id": value}
-            for marker, harness, value in owned.markers_present
-        ],
-        rejected=[dict(entry) for entry in owned.rejected],
-    )
-
-
-# ---------------------------------------------------------------------
-# Spawn-lifecycle births (Wave 6): deaths already land in the daemon's
-# agent-lifecycle log (~/.fno/agents/events.jsonl) — agent_orphan_reaped,
-# agent_row_reaped, agent_stopped, agent_removed. A birth that lands anywhere
-# else splits the lineage tree across two files, so it is unreconstructible:
-# the daemon records every way an agent can END and nothing about how it began.
-# These helpers write the birth to the SAME log the daemon writes deaths to, so
-# a parent->child->death tree is joinable from one file.
-#
-# Co-writing the daemon's log from Python is safe: single-line JSONL appends
-# are atomic below PIPE_BUF, so concurrent writers (this process and the
-# daemon) interleave only at line boundaries. The daemon's advisory flock is
-# not held across writes, so not taking it here cannot deadlock or corrupt a
-# line.
-KIND_AGENT_SPAWNED = "agent_spawned"
-KIND_AGENT_SPAWN_FAILED = "agent_spawn_failed"
-# durable accepted record, pre-launch; correlated by spawn_id.
-KIND_AGENT_SPAWN_ACCEPTED = "agent_spawn_accepted"
-
-
 def daemon_lifecycle_log() -> Path:
     """The daemon's agent-lifecycle log: where births and deaths are joinable."""
     return paths.agents_home_dir() / "events.jsonl"
@@ -244,98 +157,6 @@ def _emit_daemon_envelope(
         emit_envelope(record, daemon_lifecycle_log())
     except Exception as exc:  # noqa: BLE001 - a failed log write must not break spawn
         print(f"fno agents: warning: daemon envelope {kind}: {exc}", file=sys.stderr)
-
-
-def emit_spawned(
-    *,
-    name: str,
-    short_id: Optional[str],
-    provider: str,
-    pid: Optional[int] = None,
-    spawned_by_session: Optional[str] = None,
-    spawned_by_harness: Optional[str] = None,
-    spawned_by_cwd: Optional[str] = None,
-    lineage_reason: Optional[str] = None,
-    harness_session_id: Optional[str] = None,
-    cwd: Optional[str] = None,
-    model: Optional[str] = None,
-    substrate: Optional[str] = None,
-) -> None:
-    """Record one agent birth in the daemon lifecycle log (envelope format).
-
-    Carries the parent edge the registry row already captures
-    (spawned_by_session/harness/cwd), plus the child ``pid`` where the caller
-    has it. The pane path in particular leaves the registry row's short_id
-    empty (mux is its one live transport ref) and keys the row on pid, so the
-    daemon death that reads that row carries pid, not the mux pane_id. A birth
-    that recorded the pane_id as short_id could not join that death; recording
-    pid (and leaving short_id empty to match the row) makes the birth join the
-    death on ``data.name`` and, for the pane path, on ``data.pid``.
-    Exactly one per successful create.
-    """
-    data: dict[str, object] = {
-        "name": name,
-        "short_id": short_id,
-        "provider": provider,
-        "spawned_by_session": spawned_by_session,
-        "spawned_by_harness": spawned_by_harness,
-        "spawned_by_cwd": spawned_by_cwd,
-        # a birth names its parent or why it could not.
-        "lineage_reason": lineage_reason,
-    }
-    if pid is not None:
-        data["pid"] = pid
-    if harness_session_id:
-        data["harness_session_id"] = harness_session_id
-    if cwd:
-        data["cwd"] = cwd
-    if model:
-        data["model"] = model
-    if substrate:
-        data["substrate"] = substrate
-    _emit_daemon_envelope(KIND_AGENT_SPAWNED, data)
-
-
-def emit_spawn_failed(
-    *,
-    name: str,
-    provider: Optional[str] = None,
-    short_id: Optional[str] = None,
-    reason: str = "",
-) -> None:
-    """Record a spawn attempt that did not produce a live row.
-
-    The birth's failure counterpart: a spawn that exits via an error path still
-    leaves a trace in the daemon log, so a name with a death but no birth is
-    distinguishable from a name whose only event is a failed start.
-    """
-    _emit_daemon_envelope(
-        KIND_AGENT_SPAWN_FAILED,
-        {"name": name, "provider": provider, "short_id": short_id, "reason": reason},
-    )
-
-
-def emit_spawn_accepted(
-    *,
-    spawn_id: str,
-    name: str,
-    origin: dict,
-    owner: dict,
-    substrate: Optional[str] = None,
-    harness: Optional[str] = None,
-) -> None:
-    # pre-launch accepted record; settled by birth/failure, same id.
-    _emit_daemon_envelope(
-        KIND_AGENT_SPAWN_ACCEPTED,
-        {
-            "spawn_id": spawn_id,
-            "name": name,
-            "origin": origin,
-            "owner": owner,
-            "substrate": substrate,
-            "harness": harness,
-        },
-    )
 
 
 # ---------------------------------------------------------------------
@@ -429,31 +250,3 @@ def emit_merge_cleanup_skipped(
             "harness": harness,
         },
     )
-
-
-# ---------------------------------------------------------------------
-# Phase 5 — MCP channel + streaming event kinds
-# ---------------------------------------------------------------------
-
-# MCP channel lifecycle.
-KIND_MCP_CHANNEL_UNREACHABLE = "mcp_channel_unreachable"
-KIND_MCP_CHANNEL_DEMOTED_TO_SOCKET = "mcp_channel_demoted_to_socket"
-KIND_MCP_CHANNEL_ENVELOPE_DRIFT = "mcp_channel_envelope_drift"
-KIND_MCP_SERVER_UNREACHABLE = "mcp_server_unreachable"
-KIND_AGENT_ASK_DONE = "agent_ask_done"  # extended in Phase 5 with backend=...
-
-# Streaming surface.
-KIND_AGENT_ASK_STREAMING_STARTED = "agent_ask_streaming_started"
-KIND_AGENT_ASK_STREAMING_CHUNK = "agent_ask_streaming_chunk"
-KIND_AGENT_ASK_STREAMING_COMPLETED = "agent_ask_streaming_completed"
-KIND_AGENT_ASK_STREAMING_CANCELLED = "agent_ask_streaming_cancelled"
-KIND_STREAMING_VIA_POLLING = "streaming_via_polling"
-
-# Autonomous switchboard continuation lifecycle.
-KIND_AGENT_RELAY_STOPPED = "agent_relay_stopped"
-
-# Drain receipt (W1.1). Emitted by the drain-self leaf (the Rust mail front)
-# at the ack point (the cursor advance), one record per drained message id, so
-# a sender can join events.jsonl on msg_id to a terminal 'drained' state and
-# the dead-letter sweep can prefer a positive marker over cursor inference.
-KIND_AGENT_MAIL_DRAINED = "agent_mail_drained"

@@ -108,35 +108,6 @@ def _stub_command(monkeypatch, answer=None, error=None):
 # lineage questions debugged through `agents list -J` measure something.
 
 
-class TestParentEdgeNotice:
-    def test_parent_edge_notice_names_reason_and_orphan_check(
-        self, monkeypatch, capsys
-    ):
-        from fno.agents.spawn_lineage import _report_unlinked_parent
-        from fno.harness_identity import OwnedHarnessIdentity
-
-        monkeypatch.setattr(
-            "fno.claims.self_identity.resolve_self_identity",
-            lambda: OwnedHarnessIdentity(
-                session_id=None,
-                harness=None,
-                markers_present=(
-                    ("CLAUDE_CODE_SESSION_ID", "claude", "x"),
-                    ("CODEX_THREAD_ID", "codex", "y"),
-                ),
-                disposition="ambiguous",
-            ),
-        )
-        _report_unlinked_parent(None)
-        err = capsys.readouterr().err
-        assert "parent edge NOT recorded" in err
-        assert "disposition=ambiguous" in err
-        assert "CLAUDE_CODE_SESSION_ID" in err
-        # The consequence, not just the cause: the spawner learns the child is
-        # invisible to its orphan check.
-        assert "will not appear in its spawner's orphan check" in err
-
-
 # ---------------------------------------------------------------------------
 # AC3-HP/EDGE: the durable fleet incident gate (x-77db)
 # ---------------------------------------------------------------------------

@@ -22,7 +22,7 @@ def _answer_or_raise(answer: dict[str, Any], field: str) -> Any:
     """One ask's answer, a named refusal, or unavailable when the binary
     predates the field (a stale answer must never read as empty)."""
     if answer.get("refused"):
-        from fno.agents.dispatch import DispatchAskError
+        from fno.agents.dispatch_errors import DispatchAskError
 
         raise DispatchAskError(answer["refused"], exit_code=2)
     value = answer.get(field)
@@ -53,7 +53,3 @@ def footnote_pane_spec(cwd: str, model: str | None, permission_mode: str | None,
     """The launch spec file a footnote pane's TUI reads, from the Rust owner."""
     ask = {"cwd": cwd, "model": model or "", "permission_mode": permission_mode or "", "fno_id": fno_id or ""}
     return str(_answer_or_raise(spawn_axes_call({"footnote_pane_spec": ask}), "path"))
-
-
-
-

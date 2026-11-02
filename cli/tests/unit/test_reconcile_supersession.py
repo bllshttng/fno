@@ -6,7 +6,6 @@ reconcile-side defs these tests cover live on in fno.graph._reconcile.
 """
 from __future__ import annotations
 
-import json
 
 import pytest
 

@@ -106,13 +106,6 @@ AUTO_LOADED = ["AGENTS.md", "CLAUDE.md", "skills/using-fno/SKILL.md"]
 #   json-projection-keys, claim-release-on-closure.
 REGISTRY = [
     {
-        "name": "harness-env-scrub",
-        "glob": "cli/src/fno/agents/harnesses/*.py",
-        "site": r"dict\(os\.environ\)",
-        "required": r"worker_environment|scrub_ambient_identity",
-        "why": "every child-env build on a spawn path crosses the harness_identity.worker_environment scrub floor (or scrubs directly)",
-    },
-    {
         "name": "status-derivation-helper",
         "glob": "cli/src/fno/graph/*.py",
         "site": r"def _(?:effective_)?status",

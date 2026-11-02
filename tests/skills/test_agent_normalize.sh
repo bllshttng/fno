@@ -8,7 +8,7 @@
 #              that the raw shell command would have split succeeds.
 #   AC2-ERR    invalid --provider -> status=error (no spawn), valid list shown.
 #   Boundaries empty / whitespace-only task -> status=error.
-#   Locked #4  explicit -> config (resolve_dispatch_target stub) -> claude.
+#   Locked #4  explicit -> DISPATCH_PROVIDER_RESOLVER stub -> claude.
 #   plus: node detection, free-form slug naming, no-merge default + --allow-merge,
 #         explicit /command passthrough, explicit --name sanitization.
 

@@ -46,33 +46,6 @@ def _collector() -> tuple[list[str], "object"]:
 
 # --- routed roles ---------------------------------------------------------------
 
-def test_resolve_route_sends_the_role_payload_and_returns_the_answer(monkeypatch) -> None:
-    captured: dict = {}
-
-    def stub(payload):
-        captured.update(payload)
-        return _claude_route_answer(
-            route={
-                "ANTHROPIC_BASE_URL": "https://route.example/api",
-                "ANTHROPIC_AUTH_TOKEN": "t",
-                "ANTHROPIC_MODEL": "m",
-            }
-        )
-
-    monkeypatch.setattr(soc, "spawn_overlay_call", stub)
-    route = mr.resolve_route("Tidy", settings=_settings(), env={"ZAI_API_KEY": "zk"})
-    assert route == {
-        "ANTHROPIC_BASE_URL": "https://route.example/api",
-        "ANTHROPIC_AUTH_TOKEN": "t",
-        "ANTHROPIC_MODEL": "m",
-    }
-    # The role lane normalizes the role, picks the default routed target and
-    # hands the env-under-construction to the binary.
-    assert captured["provider"] == "zai"
-    assert captured["model"] == "glm-5.3"
-    assert captured["ctx"] == {"kind": "role", "name": "tidy"}
-    assert captured["env"] == {"ZAI_API_KEY": "zk"}
-
 
 # --- resolve_explicit_route --------------------------------------------------------
 
@@ -134,24 +107,6 @@ def test_refuses_bare_tier_alias_on_foreign_endpoint() -> None:
 
 # --- protected roles ------------------------------------------------------------------
 
-def test_protected_roles_never_route_rows(monkeypatch) -> None:
-    assert "implement" in mr.PROTECTED_ROLES
-    assert "review-verdict" in mr.PROTECTED_ROLES
-    assert mr.PROTECTED_ROLE_FLOOR == "high"
-    assert mr.resolve_route(
-        "implement",
-        settings=_settings(roles={"implement": "zai,glm-5.2"}),
-        env={"ZAI_API_KEY": "k"},
-    ) is None
-    notices: list[str] = []
-    assert mr.resolve_route(
-        "implement",
-        settings=_settings(roles={"implement": "zai,glm-5.2"}),
-        env={"ZAI_API_KEY": "k"},
-        notice=notices.append,
-    ) is None
-    assert any("protected-role(implement) floor=high" in n for n in notices)
-
 
 def _pin_codex_config(
     tmp_path, monkeypatch, provider: str, body: str, *, role: str = "tidy"
@@ -167,51 +122,6 @@ def _pin_codex_config(
 
 
 requires_rust = pytest.mark.dev_build
-
-
-@requires_rust
-def test_codex_route_returns_config_and_env_for_openai_provider(tmp_path, monkeypatch) -> None:
-    _pin_codex_config(
-        tmp_path,
-        monkeypatch,
-        "zai-openai",
-        'protocol = "openai"\n'
-        'base_url = "https://api.z.ai/api/coding/paas/v4"\n'
-        'api_key_env = "OPENAI_API_KEY"\n',
-    )
-    monkeypatch.setenv("OPENAI_API_KEY", "oai-key")
-    route = mr.resolve_codex_route("tidy")
-    assert route is not None
-    assert route.provider == "zai-openai" and route.model == "glm-5.2"
-    # The stamp rides with the codex lane too (x-c703): without it a routed
-    # codex worker resolves provider "unknown" and ignores its subagent budget.
-    assert route.env == {
-        "OPENAI_API_KEY": "oai-key",
-        "FNO_ROUTE_PROVIDER": "zai-openai",
-    }
-    joined = " ".join(route.config_args)
-    assert route.config_args[0] == "-c"
-    assert "model_providers.zai-openai=" in joined
-    assert "base_url = 'https://api.z.ai/api/coding/paas/v4'" in joined
-    assert "env_key = 'OPENAI_API_KEY'" in joined
-    assert "wire_api = 'chat'" in joined  # default for a third-party endpoint
-    assert "model_provider='zai-openai'" in joined
-    assert "model='glm-5.2'" in joined
-
-    # A configured wire_api passes through.
-    _pin_codex_config(
-        tmp_path,
-        monkeypatch,
-        "zai-openai",
-        'protocol = "openai"\n'
-        'base_url = "https://api.z.ai/api/coding/paas/v4"\n'
-        'api_key_env = "OPENAI_API_KEY"\n'
-        'wire_api = "responses"\n',
-    )
-    monkeypatch.setenv("OPENAI_API_KEY", "k")
-    route = mr.resolve_codex_route("tidy")
-    assert route is not None
-    assert "wire_api = 'responses'" in " ".join(route.config_args)
 
 
 # --- x-5cc5: a recorded overlay's provider-DEFAULT tier re-resolves on resume -----

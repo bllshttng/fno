@@ -115,22 +115,6 @@ def _codex_module(root: Path, defines_create: bool) -> None:
     module.write_text(body, encoding="utf-8")
 
 
-def test_symbol_still_defined_fails_a_characterization(tmp_path: Path) -> None:
-    root = _tree(tmp_path)
-    _codex_module(root, defines_create=True)
-    _parity(
-        root,
-        "early",
-        CHARACTERIZATION.format(oracle="fno.agents.harnesses.codex.create"),
-    )
-
-    result = _run(root)
-    assert result.returncode != 0
-    combined = result.stdout + result.stderr
-    assert "early_parity.rs" in combined
-    assert "codex.py:create" in combined
-
-
 # --- degenerate trees -------------------------------------------------------
 
 

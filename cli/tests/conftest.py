@@ -12,7 +12,6 @@ from pathlib import Path
 import pytest
 
 
-
 @pytest.fixture(autouse=True)
 def _no_send_settle_wait(monkeypatch):
     """The post-send landed verify reads immediately under test.
@@ -461,14 +460,11 @@ def _block_live_provider_exec(request, monkeypatch, tmp_path_factory):
     where nothing guarded at all. This root copy covers every cli test; the
     agents copy is gone, never kept beside it.
 
-    Two layers, because seams differ. One guarded ``Popen`` subclass is set
-    on the ``subprocess`` module: ``subprocess.run`` and ``check_output``
-    read ``Popen`` from that module global at call time, so one patch covers
-    them plus every direct ``Popen(...)`` call (the bare calls in ``agy`` and
-    ``pi`` included). The three harness aliases that captured
-    the original class at import time (``claude``, ``codex``,
-    ``cursor_agent``) are repointed to the guarded class. A subclass keeps
-    ``isinstance`` checks and ``Popen[bytes]`` working.
+    One guarded ``Popen`` subclass is set on the ``subprocess`` module:
+    ``subprocess.run`` and ``check_output`` read ``Popen`` from that module
+    global at call time, so one patch covers them plus every direct
+    ``Popen(...)`` call. A subclass keeps ``isinstance`` checks and
+    ``Popen[bytes]`` working.
 
     The discriminator is *which* binary runs, not whether a subprocess runs
     at all: the safe pattern installs a fake provider on a tmp-isolated PATH
@@ -496,22 +492,15 @@ def _block_live_provider_exec(request, monkeypatch, tmp_path_factory):
     import subprocess
     from pathlib import Path
 
-    from fno.agents.harnesses import agy as _agy
-    from fno.agents.harnesses import claude as _claude
-    from fno.agents.harnesses import codex as _codex
-    from fno.agents.harnesses import cursor_agent as _cursor
-
     # Use pytest's session basetemp (which honors a custom --basetemp) rather
     # than tempfile.gettempdir(), so the "is this a tmp-isolated fake?" check
     # stays correct under a non-default temp root.
     tmp_root = str(tmp_path_factory.getbasetemp().resolve())
     # claude + codex are the historical leakers; the rest are the launched
-    # name of every other harness module: agy.AGY_BINARY, and argv[0] of
-    # cursor_agent (module constant) / pi.rpc_argv / grok.acp_argv / kimi
-    # (inline argv, no constant to import).
+    # name of every other harness.
     provider_bins = {
         "claude", "codex", "pi", "grok", "kimi", "dsh",
-        _agy.AGY_BINARY, _cursor.CURSOR_AGENT_BINARY,
+        "agy", "cursor-agent",
     }
 
     def _is_real_provider_exec(cmd) -> bool:
@@ -569,12 +558,6 @@ def _block_live_provider_exec(request, monkeypatch, tmp_path_factory):
             super().__init__(args, *popenargs, **kwargs)
 
     monkeypatch.setattr(subprocess, "Popen", _GuardedPopen)
-    # Module aliases hold the ORIGINAL class from import time; repoint them.
-    # The claude alias is gone with its Popen-based logs seam (ported to the
-    # Rust client), so repoint it only when a later seam reintroduces it.
-    monkeypatch.setattr(_claude, "_subprocess_popen", _GuardedPopen, raising=False)
-    monkeypatch.setattr(_codex, "_subprocess_popen", _GuardedPopen)
-    monkeypatch.setattr(_cursor, "_subprocess_popen", _GuardedPopen)
 
 
 @pytest.fixture(autouse=True, scope="session")
@@ -755,8 +738,6 @@ def harness_session_id() -> str:
     the name unset.
     """
     return _HARNESS_SESSION_ID
-
-
 
 
 @pytest.fixture(autouse=True)

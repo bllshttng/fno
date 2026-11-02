@@ -27,67 +27,6 @@ def _invoke(monkeypatch, repo: Path, *args: str):
     return runner.invoke(app, ["field-coverage", *args])
 
 
-def _write_source_fixture(repo: Path, *, required: list[str], extra: list[str]) -> None:
-    registry = repo / "cli" / "src" / "fno" / "agents" / "registry.py"
-    registry.parent.mkdir(parents=True)
-    fields = "\n".join(f"    {name}: str | None = None" for name in required + extra)
-    registry.write_text(
-        "from dataclasses import dataclass\n\n@dataclass\nclass AgentEntry:\n" + fields + "\n",
-        encoding="utf-8",
-    )
-    schema = repo / "schemas" / "agents-list-row.json"
-    schema.parent.mkdir(parents=True)
-    schema.write_text(
-        json.dumps(
-            {
-                "required": required,
-                "projection_omissions": [],
-                "removed": {},
-                "stored": {},
-                "derived": {},
-                "rust_only": {"keys": []},
-                "python_only": {"keys": []},
-                "storage_only": [],
-                "known_gaps": {},
-            }
-        ),
-        encoding="utf-8",
-    )
-
-
-def test_source_coverage_rediscovers_node_projection_omission_and_choices(
-    monkeypatch, tmp_path: Path
-) -> None:
-    required = [f"field_{index}" for index in range(40)]
-    _write_source_fixture(tmp_path, required=required, extra=["node"])
-    schema_path = tmp_path / "schemas" / "agents-list-row.json"
-    schema = json.loads(schema_path.read_text(encoding="utf-8"))
-    schema["stored"] = {"node": "Descriptive metadata is not a disposition."}
-    schema_path.write_text(json.dumps(schema), encoding="utf-8")
-
-    result = _invoke(monkeypatch, tmp_path)
-
-    assert result.exit_code == 1
-    assert "unaccounted field: node" in result.output
-    assert "required and project it" in result.output
-    assert "storage_only" in result.output
-    assert "known_gaps" in result.output
-
-
-def test_source_coverage_refuses_empty_accounting(monkeypatch, tmp_path: Path) -> None:
-    _write_source_fixture(
-        tmp_path,
-        required=[],
-        extra=[f"field_{index}" for index in range(40)],
-    )
-
-    result = _invoke(monkeypatch, tmp_path, "--live")
-
-    assert result.exit_code == 2
-    assert "UNMEASURED" in result.output
-    assert "clean" not in result.output.lower()
-
-
 def test_live_coverage_classifies_contract_zeroes_and_keeps_real_dead(
     monkeypatch,
 ) -> None:
