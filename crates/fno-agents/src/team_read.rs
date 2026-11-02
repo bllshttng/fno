@@ -9,7 +9,9 @@
 //! names its manifest limb (path, session, `role_source`): the manifest is
 //! the durable role record, the row its cache. Every reader it composes is
 //! already native (rivals, the lead term op, the vacancy sweep, the scope
-//! fold, the spawn gate probe) and runs in this process.
+//! fold, the spawn gate probe) and runs in this process. The daemon's team
+//! alarm reads the `--nodes` payload in process (`team_nodes_payload_at`)
+//! instead of spawning the front binary.
 
 use crate::client_commands::py_repr_str;
 use crate::state::RegistryEntry;
@@ -54,19 +56,46 @@ pub fn run_team(args: &[String]) -> i32 {
         }
     }
     let team = gather_team();
-    let statuses = registry_rows().ok().map(|rows| {
+    println!(
+        "{}",
+        render_team_with(
+            team,
+            read_fold,
+            registry_statuses(),
+            gate_read,
+            as_json,
+            nodes
+        )
+    );
+    0
+}
+
+/// The registry rows' session-status map, the render's live/dead judgement
+/// input. Extracted so the in-process org read shares it.
+fn registry_statuses() -> Option<HashMap<String, String>> {
+    registry_rows().ok().map(|rows| {
         rows.iter()
             .filter_map(|r| {
                 let sid = r.harness_session_id.clone().filter(|s| !s.is_empty())?;
                 Some((sid, status_of(r)))
             })
             .collect::<HashMap<_, _>>()
-    });
-    println!(
-        "{}",
-        render_team_with(team, read_fold, statuses, gate_read, as_json, nodes)
-    );
-    0
+    })
+}
+
+/// The in-process org read behind `fno agents org --nodes`: the `--nodes`
+/// JSON payload as a Value, built in this process and anchored at `cwd`.
+/// The daemon's team alarm and the settle pass read this instead of
+/// spawning the front binary; the child's stdout was the old transport.
+pub fn team_nodes_payload_at(cwd: Option<&std::path::Path>) -> Value {
+    let team = gather_team_at(cwd);
+    team_payload(
+        team,
+        |p| read_fold_at(cwd, p),
+        registry_statuses(),
+        || gate_read_at(cwd),
+        true,
+    )
 }
 
 fn registry_rows() -> Result<Vec<RegistryEntry>, String> {
@@ -115,8 +144,8 @@ fn split_scope(scope: Option<&str>) -> Vec<String> {
         .collect()
 }
 
-fn graph_index() -> Option<HashMap<String, Value>> {
-    let rows = crate::graph_store::read_rows(&crate::backlog::settings::graph_path()).ok()?;
+fn graph_index_at(cwd: Option<&std::path::Path>) -> Option<HashMap<String, Value>> {
+    let rows = crate::graph_store::read_rows(&crate::backlog::settings::graph_path_at(cwd)).ok()?;
     Some(
         rows.into_iter()
             .filter_map(|row| {
@@ -236,9 +265,9 @@ fn manifest_limb(scope: Option<&str>, row: &RegistryEntry) -> Map<String, Value>
 
 /// Roles whose row is gone but whose manifest holds them, swept over the
 /// spaces ROOT because a vanished row names no cwd.
-fn manifest_only_roles(held: &[String]) -> Vec<Value> {
-    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let window = 3 * crate::lead_verdict_inputs::checkin_interval_secs(&cwd);
+fn manifest_only_roles_at(cwd: Option<&std::path::Path>, held: &[String]) -> Vec<Value> {
+    let anchor = cwd.map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."));
+    let window = 3 * crate::lead_verdict_inputs::checkin_interval_secs(&anchor);
     crate::lead_state::org_vacancies(
         &crate::paths::spaces_root(),
         held,
@@ -300,6 +329,13 @@ fn conflicts(live: &[&RegistryEntry]) -> Vec<Value> {
 /// unreadable REGISTRY nulls `roles` and every summary count rather than
 /// reporting an empty team.
 pub fn gather_team() -> Value {
+    gather_team_at(std::env::current_dir().ok().as_deref())
+}
+
+/// The same gather anchored at an explicit cwd, for in-process callers whose
+/// config root is not the process cwd. `None` is what a failed
+/// `current_dir` meant before this split: no anchor.
+pub fn gather_team_at(cwd: Option<&std::path::Path>) -> Value {
     let rows = match registry_rows() {
         Ok(rows) => rows,
         Err(e) => {
@@ -322,7 +358,7 @@ pub fn gather_team() -> Value {
         .iter()
         .filter(|r| !TERMINAL_ROW.contains(&status_of(r).as_str()))
         .collect();
-    let by_id = graph_index();
+    let by_id = graph_index_at(cwd);
     let mut roles: Vec<Value> = Vec::new();
     let mut held: Vec<String> = Vec::new();
     for row in &live {
@@ -355,7 +391,7 @@ pub fn gather_team() -> Value {
             held.push(s.to_string());
         }
     }
-    let orphans = manifest_only_roles(&held);
+    let orphans = manifest_only_roles_at(cwd, &held);
     let manifest_only = orphans.len();
     roles.extend(orphans);
     let count = |pred: &dyn Fn(&Value) -> bool| roles.iter().filter(|r| pred(r)).count();
@@ -381,10 +417,16 @@ pub fn gather_team() -> Value {
 
 /// The scope fold over `payload`, read in this process.
 fn read_fold(payload: &[Value]) -> Result<Value, String> {
-    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    read_fold_at(std::env::current_dir().ok().as_deref(), payload)
+}
+
+/// The same fold anchored at an explicit cwd, for in-process callers whose
+/// config root is not the process cwd.
+fn read_fold_at(cwd: Option<&std::path::Path>, payload: &[Value]) -> Result<Value, String> {
+    let anchor = cwd.map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."));
     crate::org_fold::org_fold(
-        &crate::backlog::settings::graph_path(),
-        &cwd,
+        &crate::backlog::settings::graph_path_at(cwd),
+        &anchor,
         None,
         &crate::paths::AgentsHome::from_env().registry_json(),
         payload,
@@ -490,7 +532,14 @@ fn annotate_sessions(roles: &mut [Value], statuses: Option<&HashMap<String, Stri
 
 /// The spawn gate's verdict: `unknown` with a reason, never a healthy default.
 fn gate_read() -> Value {
-    let verdict = crate::spawn_gate_command::probe_answer(
+    gate_read_at(std::env::current_dir().ok().as_deref())
+}
+
+/// The same gate verdict anchored at an explicit cwd, for in-process callers
+/// whose config root is not the process cwd.
+fn gate_read_at(cwd: Option<&std::path::Path>) -> Value {
+    let verdict = crate::spawn_gate_command::probe_answer_at(
+        cwd,
         &json!({"mode": "probe", "caller_session": crate::claims::resolve_identity().1}),
     );
     if !truthy(verdict.get("verdict")) {
@@ -581,16 +630,18 @@ fn plural(n: &Value) -> &'static str {
     }
 }
 
-/// The full render over a gathered team: the fold, the session judgement and
-/// the gate are injected so the render is testable without live state.
-pub fn render_team_with(
+/// The mutation half of [`render_team_with`]: the fold, the session
+/// judgement and the gate over a gathered team, returning the final payload.
+/// Split out so the in-process org read ([`team_nodes_payload_at`]) answers
+/// the same Value the rendered JSON prints - one computation, not a string
+/// round trip through the old child's stdout.
+fn team_payload(
     mut team: Value,
     fold: impl FnOnce(&[Value]) -> Result<Value, String>,
     statuses: Option<HashMap<String, String>>,
     gate: impl FnOnce() -> Value,
-    as_json: bool,
     nodes: bool,
-) -> String {
+) -> Value {
     if team["roles"].as_array().is_some_and(|r| !r.is_empty()) {
         let roles = team["roles"].as_array_mut().expect("checked above");
         let folded = fold_scope_nodes(roles, fold);
@@ -630,6 +681,20 @@ pub fn render_team_with(
             }
         }
     }
+    team
+}
+
+/// The full render over a gathered team: the fold, the session judgement and
+/// the gate are injected so the render is testable without live state.
+pub fn render_team_with(
+    team: Value,
+    fold: impl FnOnce(&[Value]) -> Result<Value, String>,
+    statuses: Option<HashMap<String, String>>,
+    gate: impl FnOnce() -> Value,
+    as_json: bool,
+    nodes: bool,
+) -> String {
+    let team = team_payload(team, fold, statuses, gate, nodes);
     if as_json || nodes {
         return sorted_json(&team);
     }
@@ -699,6 +764,38 @@ pub fn render_team_with(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn team_payload_matches_the_rendered_nodes_bytes() {
+        // The in-process org read must answer exactly what the `--nodes`
+        // render prints: one computation, two shapes. The spawned child's
+        // stdout was the old transport; this pins the new one to the same
+        // bytes.
+        let rendered = render_team_with(
+            json!({
+                "roles": [{"scope": "fno", "level": 1, "holder": "a"}],
+                "conflicts": [],
+                "summary": {},
+            }),
+            |_p: &[Value]| -> Result<Value, String> { Ok(json!({})) },
+            Some(HashMap::new()),
+            || json!({"verdict": "probe-ok"}),
+            true,
+            true,
+        );
+        let payload = team_payload(
+            json!({
+                "roles": [{"scope": "fno", "level": 1, "holder": "a"}],
+                "conflicts": [],
+                "summary": {},
+            }),
+            |_p: &[Value]| -> Result<Value, String> { Ok(json!({})) },
+            Some(HashMap::new()),
+            || json!({"verdict": "probe-ok"}),
+            true,
+        );
+        assert_eq!(rendered, sorted_json(&payload));
+    }
 
     #[test]
     fn a_scope_less_level_is_half_a_role() {

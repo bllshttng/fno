@@ -82,7 +82,6 @@ ALLOWLIST = {
     # reaper could not settle (measured 2026-08-21: 16h past the node's own
     # completion). Scratch-graph closures are gated out; only the process's
     # configured graph releases.
-    "cli/src/fno/graph/store.py",
     # crates/fno-agents/src/backlog/session_cli.rs run_close: the
     # BLUEPRINT-CLOSE terminal release. A spawn dispatch acquires
     # node:<id> under spawn-handover:<worker> and a blueprint session never

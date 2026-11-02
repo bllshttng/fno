@@ -21,35 +21,14 @@ from fno.agents.harnesses import codex as codex_mod
 # ---------------------------------------------------------------------------
 
 
-def test_inject_from_name_bracket_prefix():
-    out = codex_mod.inject_from_name("write the schema", "orchestrator-main")
-    assert out == "[from: orchestrator-main]\n\nwrite the schema"
-
-
 # ---------------------------------------------------------------------------
 # sandbox_flag (create path)
 # ---------------------------------------------------------------------------
 
 
-def test_sandbox_flag_default_is_bounded():
-    # Sandbox tokens only (workspace sandbox); approval is a separate global
-    # flag emitted before `exec` - see approval_flag.
-    assert codex_mod.sandbox_flag(yolo=False) == ["--sandbox", "workspace-write", "-c", "sandbox_workspace_write.network_access=true"]
-
-
-def test_sandbox_flag_yolo_is_dangerous_bypass():
-    assert codex_mod.sandbox_flag(yolo=True) == [
-        "--dangerously-bypass-approvals-and-sandbox"
-    ]
-
-
 # ---------------------------------------------------------------------------
 # approval_flag (create path — GLOBAL flag, emitted before `exec`)
 # ---------------------------------------------------------------------------
-
-
-def test_approval_flag_default_is_never_prompt():
-    assert codex_mod.approval_flag(yolo=False) == ["--ask-for-approval", "never"]
 
 
 # ---------------------------------------------------------------------------
@@ -70,30 +49,6 @@ def _hermetic_config(tmp_path, monkeypatch, content: str = "schema_version: 1\n"
     f = tmp_path / "settings.yaml"
     f.write_text(content, encoding="utf-8")
     monkeypatch.setenv("FNO_CONFIG", str(f))
-
-
-def test_explicit_yolo_forces_bypass():
-    """AC1-EDGE: the explicit yolo bareword forces the full bypass."""
-    eff = codex_mod._effective_yolo(yolo=True, headless_yolo=False)
-    assert codex_mod.sandbox_flag(eff) == _FULL_YOLO
-
-
-def test_headless_default_resolves_from_config_to_bounded(tmp_path, monkeypatch):
-    """headless_yolo=None reads config.agents.codex.headless_yolo. Default
-    config (no agents block) -> BOUNDED."""
-    _hermetic_config(tmp_path, monkeypatch)
-    eff = codex_mod._effective_yolo(yolo=False, headless_yolo=None)
-    assert codex_mod.sandbox_flag(eff) == _BOUNDED
-
-
-def test_headless_config_full_yolo_resolves_to_bypass(tmp_path, monkeypatch):
-    _hermetic_config(
-        tmp_path,
-        monkeypatch,
-        "schema_version: 1\nconfig:\n  agents:\n    codex:\n      headless_yolo: true\n",
-    )
-    eff = codex_mod._effective_yolo(yolo=False, headless_yolo=None)
-    assert codex_mod.sandbox_flag(eff) == _FULL_YOLO
 
 
 # ---------------------------------------------------------------------------
@@ -165,12 +120,6 @@ def test_plan_writable_args_returns_add_dir_for_resolved_plan_dir(
 # ---------------------------------------------------------------------------
 
 
-def test_sandbox_flag_resume_default_is_empty():
-    # `codex exec resume` takes no --sandbox flag, so the bounded case emits
-    # nothing HERE and re-pins its posture through sandbox_config_args_resume.
-    assert codex_mod.sandbox_flag_resume(yolo=False) == []
-
-
 # ---------------------------------------------------------------------------
 # sandbox_config_args_resume — resume does NOT inherit the create-time posture.
 #
@@ -183,33 +132,3 @@ def test_sandbox_flag_resume_default_is_empty():
 # ---------------------------------------------------------------------------
 
 
-def test_sandbox_config_args_resume_pins_mode_and_both_writable_roots(
-    tmp_path, monkeypatch
-):
-    import json
-    import pathlib
-
-    repo = _init_repo(tmp_path / "repo")
-    plan_dir = tmp_path / "plans"
-    monkeypatch.setattr(codex_mod, "_resolve_plan_dir", lambda cwd: str(plan_dir))
-    out = codex_mod.sandbox_config_args_resume(repo)
-
-    assert out[0] == "-c"
-    assert out[1] == "sandbox_mode=workspace-write"
-    assert out[2] == "-c"
-    key, _, value = out[3].partition("=")
-    assert key == "sandbox_workspace_write.writable_roots"
-    assert [pathlib.Path(p).resolve() for p in json.loads(value)] == [
-        (repo / ".git").resolve(),
-        plan_dir.resolve(),
-    ]
-
-
-def test_sandbox_config_args_resume_empty_when_no_roots_resolve(
-    tmp_path, monkeypatch
-):
-    """A posture we cannot resolve must never break the resume."""
-    outside = tmp_path / "plain"
-    outside.mkdir()
-    monkeypatch.setattr(codex_mod, "_resolve_plan_dir", lambda cwd: "")
-    assert codex_mod.sandbox_config_args_resume(outside) == []

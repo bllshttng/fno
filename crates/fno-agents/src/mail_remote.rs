@@ -176,21 +176,27 @@ pub fn sh_quote(word: &str) -> String {
     format!("'{}'", word.replace('\'', r"'\''"))
 }
 
+/// The fail-fast ssh posture every relay leg carries: BatchMode refuses
+/// instead of hanging on a prompt, and the connect bound keeps a dead
+/// MagicDNS host short.
+pub const SSH_FAST_OPTIONS: [&str; 4] = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=5"];
+
 /// The ssh relay command: the remote login shell resolves `fno` via its
 /// profile (the cargo bin dir), then execs the command with the words as
 /// positional arguments. `$0` is `sh`, so `"$@"` is the command tail. Every
 /// element rides sh-quoted, including the script itself: ssh joins argv
 /// with spaces and the remote shell parses the joined line.
 pub fn ssh_argv(host: &str, words: &[String]) -> Vec<String> {
-    let mut argv = vec![
-        "ssh".to_string(),
+    let mut argv = vec!["ssh".to_string()];
+    argv.extend(SSH_FAST_OPTIONS.map(String::from));
+    argv.extend([
         host.to_string(),
         "--".to_string(),
         "sh".to_string(),
         "-lc".to_string(),
         sh_quote("exec fno \"$@\""),
         "sh".to_string(),
-    ];
+    ]);
     argv.extend(words.iter().map(|w| sh_quote(w)));
     argv
 }
@@ -263,9 +269,19 @@ pub fn resolve_from_name_with(
         };
     }
     if let Some(given) = &tail.from_name {
-        let is_handle = given.len() == 8 && given.chars().all(|c| c.is_ascii_hexdigit());
+        // A canonical handle is the id's first eight: 8-hex for the uuid
+        // harnesses, `ses_` + 4 alphanumerics for opencode (case-exact).
+        let is_hex_handle = given.len() == 8 && given.chars().all(|c| c.is_ascii_hexdigit());
+        let is_ses_handle = given.len() == 8
+            && given.starts_with("ses_")
+            && given[4..].bytes().all(|b| b.is_ascii_alphanumeric());
         if let Some(own) = &own {
-            if is_handle && !given.eq_ignore_ascii_case(own) {
+            let foreign = if is_ses_handle {
+                given != own
+            } else {
+                is_hex_handle && !given.eq_ignore_ascii_case(own)
+            };
+            if foreign {
                 return Err(format!(
                     "--from-name {given} names another session; this session is {own}. \
 Omit --from-name to self-stamp."
@@ -1067,14 +1083,18 @@ mod tests {
             ],
         );
         assert_eq!(argv[0], "ssh");
-        assert_eq!(argv[1], "mbp3");
-        assert_eq!(argv[2], "--");
-        assert_eq!(argv[3], "sh");
-        assert_eq!(argv[4], "-lc");
-        assert_eq!(argv[5], "'exec fno \"$@\"'");
-        assert_eq!(argv[6], "sh");
-        assert_eq!(argv[7], "'agents'");
-        assert_eq!(argv[9], "'nemo'");
+        assert_eq!(argv[1], "-o");
+        assert_eq!(argv[2], "BatchMode=yes");
+        assert_eq!(argv[3], "-o");
+        assert_eq!(argv[4], "ConnectTimeout=5");
+        assert_eq!(argv[5], "mbp3");
+        assert_eq!(argv[6], "--");
+        assert_eq!(argv[7], "sh");
+        assert_eq!(argv[8], "-lc");
+        assert_eq!(argv[9], "'exec fno \"$@\"'");
+        assert_eq!(argv[10], "sh");
+        assert_eq!(argv[11], "'agents'");
+        assert_eq!(argv[13], "'nemo'");
         // The send tail lifts identity flags and keeps the rest in order.
         let tail = parse_send_tail(&[
             "--from-name".into(),
@@ -1557,6 +1577,35 @@ mod tests {
             resolve_from_name_with(Some(own), &role),
             Ok(FromName::Given("Quinlan".to_string())),
             "a role name still passes verbatim"
+        );
+    }
+
+    #[test]
+    fn specimen_x50cc_opencode_neighbour_handle_refuses() {
+        let own_session = "ses_9f2ca1b2c3d4";
+        let neighbour = SendTail {
+            from_name: Some("ses_4ab1".to_string()),
+            ..SendTail::default()
+        };
+        let err = resolve_from_name_with(Some(own_session), &neighbour)
+            .expect_err("a copied opencode handle refuses");
+        assert!(err.contains("ses_9f2c"), "the refusal names the own handle");
+        let cased = SendTail {
+            from_name: Some("ses_9F2C".to_string()),
+            ..SendTail::default()
+        };
+        assert!(
+            resolve_from_name_with(Some(own_session), &cased).is_err(),
+            "opencode handles compare case-exact, so a case-variant is foreign"
+        );
+        let self_handle = SendTail {
+            from_name: Some("ses_9f2c".to_string()),
+            ..SendTail::default()
+        };
+        assert_eq!(
+            resolve_from_name_with(Some(own_session), &self_handle),
+            Ok(FromName::Given("ses_9f2c".to_string())),
+            "the session's own ses_ handle still passes"
         );
     }
 

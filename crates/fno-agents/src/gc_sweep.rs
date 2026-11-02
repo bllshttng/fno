@@ -958,7 +958,7 @@ pub(crate) fn settle_stale_do_rows_with(
 }
 
 /// The whole-graph tx retry policy, one contract with the Python tx loop
-/// (`_TX_ATTEMPTS`, `_tx_backoff_secs` in `cli/src/fno/graph/store.py`):
+/// (the store client's transaction loop):
 /// sweepers are correlated by construction, so a flat delay re-lines every
 /// loser up at the same instant. Full-jitter exponential delay before retry
 /// attempt `attempt + 1`, uniform in [0, min(cap, base << attempt)]. A test
@@ -4342,28 +4342,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn tx_retry_policy_matches_the_python_tx_loop() {
-        let store = std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../cli/src/fno/graph/store.py"),
-        )
-        .expect("python store source");
-        let value = |name: &str| -> f64 {
-            let line = store
-                .lines()
-                .find(|l| l.starts_with(&format!("{name} = ")))
-                .unwrap_or_else(|| panic!("{name} missing from store.py"));
-            line.split('=').nth(1).unwrap().trim().parse().unwrap()
-        };
-        assert_eq!(value("_TX_ATTEMPTS") as usize, TX_ATTEMPTS);
-        assert_eq!(
-            (value("_TX_BACKOFF_BASE_S") * 1000.0).round() as u64,
-            TX_BACKOFF_BASE_MS
-        );
-        assert_eq!(
-            (value("_TX_BACKOFF_CAP_S") * 1000.0).round() as u64,
-            TX_BACKOFF_CAP_MS
-        );
+    fn tx_backoff_stays_under_the_cap() {
         for attempt in 0..TX_ATTEMPTS {
             let bound = TX_BACKOFF_CAP_MS.min(TX_BACKOFF_BASE_MS << attempt);
             assert!(tx_backoff_ms(attempt) <= bound);

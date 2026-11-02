@@ -230,11 +230,6 @@ cat > "$FIX/scripts/ci/check-tracker-partition.sh" <<'EOF'
 case " $* " in *" --self-test "*) echo "check-tracker-partition: self-test OK (stub)";; esac
 echo "check-tracker-partition: OK (stub)"
 EOF
-cat > "$FIX/scripts/ci/check-tracker-consumers.sh" <<'EOF'
-#!/usr/bin/env bash
-[[ -f POISON ]] && { echo "check-tracker-consumers: POISON step failed"; exit 1; }
-echo "check-tracker-consumers: OK - commands classified, reads attributed, self-test green (stub)"
-EOF
 # File-budget gate stub: the leg runs the CANONICAL tree's copy, and this
 # fixture repo IS its own canonical root - without a stub the leg exits 127
 # and every green AC reds (the bootstrap window the leg exists to close).
@@ -252,7 +247,7 @@ cat > "$FIX/scripts/ci/check-lead-arm-signals.sh" <<'EOF'
 [[ -f POISON ]] && { echo "check-term-arm-signals: POISON step failed"; exit 1; }
 echo "check-term-arm-signals: OK (stub)"
 EOF
-chmod +x "$FIX/scripts/ci/check-tracker-partition.sh" "$FIX/scripts/ci/check-tracker-consumers.sh" "$FIX/scripts/ci/check-file-budget.sh" "$FIX/scripts/ci/check-lead-arm-signals.sh"
+chmod +x "$FIX/scripts/ci/check-tracker-partition.sh" "$FIX/scripts/ci/check-file-budget.sh" "$FIX/scripts/ci/check-lead-arm-signals.sh"
 echo '.fno/' > "$FIX/.gitignore"
 # crate dirs so preflight's `cd crates/fno*` legs run (cargo is stubbed).
 mkdir -p "$FIX/crates/fno-agents" "$FIX/crates/fno"

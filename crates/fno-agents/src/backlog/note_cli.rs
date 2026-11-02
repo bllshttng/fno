@@ -1,10 +1,7 @@
-//! `fno-agents backlog-note` (wave 2): the native note action the
-//! Python `fno backlog note` bridge calls. The Rust side owns the note
-//! feed (every note appends a comment row to the node's thread,
-//! stamped with the writer's identity), the `--clear` state route, and
-//! history routing (machine, wave); the bridge keeps the shipped recipient
-//! walk (`note_notify`, its test contract), evidence checks, identity,
-//! archived refusal, and the mail transport.
+//! The note engine door: the note feed (every note appends a comment row to
+//! the node's thread, stamped with the writer's identity), the `--clear` state
+//! route, and history routing (machine, wave). `note_public` is the public
+//! face: the reader walk, the evidence gate, and the mail transport.
 use crate::backlog::model::Node;
 use crate::backlog::node_state::{self, StateError};
 use crate::backlog::note_history;
@@ -899,6 +896,23 @@ read the feed: fno backlog note comment {node_id} --list"
             1
         }
     }
+}
+
+/// The public face's append: the same human path, reached with the body and
+/// the evidence rows the public gates already settled.
+pub(super) fn write_public(
+    graph: &Path,
+    entry: &Value,
+    body: String,
+    kind: Option<String>,
+    reads: Option<String>,
+    json_out: bool,
+) -> i32 {
+    let mut parsed = parse_args(&[]).expect("an empty argv parses");
+    parsed.kind = kind;
+    parsed.reads = reads;
+    parsed.json_out = json_out;
+    write_human(&parsed, graph, entry, Some(body))
 }
 
 /// The writer identity a thread row stamps: what this process can

@@ -15,6 +15,7 @@ shells ``fno do plan fidelity --json``.
 """
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any, Optional
 
@@ -121,7 +122,7 @@ def compute_plan_fidelity(
     from datetime import datetime
 
     from fno import paths as _paths
-    from fno.graph.store import request_scoreboard_plan_fidelity
+    from fno.rust_binary import store_request
 
     now = now or datetime.now()
 
@@ -161,8 +162,15 @@ def compute_plan_fidelity(
     # Any declared value but `allowed` is forbidden, so a typo fails closed.
     forbidden = fm.get("carveouts") is not None and str(fm["carveouts"]).strip().lower() != "allowed"
     node_id = fm.get("node") or fm.get("claims")
-    pf = request_scoreboard_plan_fidelity(
-        rows, graph_nodes, since_days=since_days, now=now, unmeasurable="refuse"
+    pf = store_request(
+        "scoreboard_plan_fidelity",
+        {
+            "rows": rows,
+            "entries": graph_nodes,
+            "since_days": since_days,
+            "now": now.isoformat(),
+            "unmeasurable": "refuse",
+        },
     )
     if pf.get("state") != "ok":
         # No planned rows in window: nothing to measure, nothing to refuse.
@@ -228,9 +236,9 @@ def _passthrough(*, planned: int, delivered: int) -> dict:
 
 def _load_graph_nodes() -> list[dict]:
     try:
-        from fno.graph.load import load_graph
+        from fno.rust_binary import backlog_rows
 
-        graph = load_graph(_graph_json_path())
+        graph = backlog_rows(path=_graph_json_path())
         return graph if isinstance(graph, list) else []
     except Exception:  # noqa: BLE001 - graph optional; the join tolerates empty
         return []
@@ -260,17 +268,26 @@ def _plan_frontmatter(plan_file: Path) -> dict:
         return {}
 
 
+def _current_repo_slug(cwd: str) -> str:
+    import subprocess
+
+    remote = subprocess.run(
+        ["git", "remote", "get-url", "origin"], cwd=cwd, capture_output=True, text=True
+    ).stdout.strip()
+    match = re.search(r"github\.com[:/]([^/]+/[^/]+?)(?:\.git)?$", remote)
+    return match.group(1) if match else ""
+
+
 def _read_pr_body(pr_number: int, repo_root: Optional[str]) -> Optional[str]:
     """REST read, never `gh pr view` (the GraphQL reserve refuses it)."""
     import json
 
     from fno import paths as _paths
-    from fno.graph._reconcile import resolve_current_repo_slug
     from fno.rust_binary import call_binary_json
 
     try:
         cwd = repo_root or str(_paths.resolve_repo_root())
-        slug = resolve_current_repo_slug(cwd) or ""
+        slug = _current_repo_slug(cwd)
         error, row = call_binary_json(
             "authorized-merge",
             [

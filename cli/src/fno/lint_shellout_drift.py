@@ -29,9 +29,8 @@ Scope boundaries (deliberate, documented so they are not silent gaps):
 * A command that roots a shell-out via a PRIVATE ``git rev-parse`` helper instead of
   the shared resolver is invisible to this guard (the ``(b)`` SIGNAL above fails).
   That is a hiding place, not a sanctioned exemption: the fix is to re-root the
-  command on the shared resolver and add a degrade branch + an allowlist entry, which
-  is what ``fno doctor lint flock-pattern`` (-> ``scripts/lint-flock-pattern.sh``) now does
- - so it is in scope, listed, and degrade-proven.
+  command on the shared resolver and add a degrade branch + an allowlist entry, so it
+  is in scope, listed, and degrade-proven.
 * SCAN_EXCLUDE: ``evals/runner.py`` is the in-repo-only efficacy-eval harness; it
   shells out to ``run-target-loop.sh`` + fixture asserts that exist only inside a
   clone by construction. It is never reachable on a bare install.

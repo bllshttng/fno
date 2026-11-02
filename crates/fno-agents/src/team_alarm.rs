@@ -19,20 +19,6 @@ use std::path::Path;
 // that only when a restart-correlated miss is measured.
 pub const TEAM_EMPTY_GRACE_S: u64 = 1800;
 
-/// The org read's wall budget. The live read measured 5.80s over a
-/// 2518-node scope, and a busy fleet stretches past 30s of wall clock.
-const ORG_READ_BUDGET_S: u64 = 30;
-
-/// The org read's ceiling: half the arm_watch beat (300s), so the longest
-/// read still answers inside the tick that paid for it.
-const ORG_READ_MAX_S: u64 = 150;
-
-/// The load-scaled budget, `bounded_cmd::load_scaled_budget_s` with this
-/// read's floor and ceiling.
-fn org_read_budget() -> u64 {
-    crate::bounded_cmd::load_scaled_budget_s(ORG_READ_BUDGET_S, ORG_READ_MAX_S)
-}
-
 fn s_str<'a>(v: &'a Value, key: &str) -> Option<&'a str> {
     v.get(key).and_then(|x| x.as_str())
 }
@@ -173,10 +159,9 @@ fn empty_team_finding(
     }
 }
 
-/// The daemon-facing read: shell the Python org command, then judge its
-/// payload. The Python command is the one decider for the held list; a native
-/// second builder of the held list would be the dual implementation the
-/// port law refuses.
+/// The daemon-facing read: the team read runs in process
+/// (`team_read::team_nodes_payload_at`), anchored at the config root the
+/// caller serves, then judges its payload.
 pub fn collect(config_cwd: &Path) -> Result<(Vec<Finding>, String), String> {
     let payload = read_org_payload(config_cwd);
     let now = std::time::SystemTime::now()
@@ -184,7 +169,7 @@ pub fn collect(config_cwd: &Path) -> Result<(Vec<Finding>, String), String> {
         .map(|d| d.as_secs())
         .unwrap_or(0);
     collect_from(
-        &payload,
+        &Ok(payload),
         &crate::operator_notice::notify_signals_path(),
         now,
     )
@@ -204,48 +189,16 @@ pub(crate) fn collect_from(
     }
 }
 
-pub(crate) fn read_org_payload(config_cwd: &Path) -> Result<Value, String> {
-    let budget = org_read_budget();
-    let fno = crate::scrape::fno_bin();
-    let mut cmd = std::process::Command::new(&fno);
-    cmd.args(["agents", "org", "--nodes"])
-        .current_dir(config_cwd)
-        .stdin(std::process::Stdio::null());
-    let out = crate::bounded_cmd::output_with_timeout(cmd, budget)
-        .ok_or_else(|| format!("the org read timed out after {budget}s"))?;
-    org_payload_from(
-        budget,
-        out.status.code().is_none(),
-        out.status.success(),
-        &out.stdout,
-        &out.stderr,
-    )
-}
-
-/// The read's verdict over one child's output: the parsed payload, or the
-/// fault that says why the board is unknown - never an empty, clear board.
-/// `killed` (signal death) is the bound's own kill, so the verdict names the
-/// bound instead of quoting whatever stderr fragment a SIGKILLed child left.
-fn org_payload_from(
-    budget: u64,
-    killed: bool,
-    success: bool,
-    stdout: &[u8],
-    stderr: &[u8],
-) -> Result<Value, String> {
-    if !success {
-        if killed {
-            return Err(format!(
-                "the org read was killed at its {budget}s load-scaled bound"
-            ));
-        }
-        let stderr = String::from_utf8_lossy(stderr);
-        return Err(format!(
-            "the org read failed: {}",
-            crate::lead_checkin::stderr_cause(&stderr)
-        ));
-    }
-    serde_json::from_slice(stdout).map_err(|e| format!("the org payload did not parse: {e}"))
+/// The daemon-facing org read, in process: the team read's `--nodes` payload
+/// builder (`team_read::team_nodes_payload_at`) anchored at the config root
+/// the caller serves - the anchor the spawned child inherited via its own
+/// cwd before this port. The old child's wall budget bounded a hung spawn;
+/// an in-process read has no child to kill, so a slow read delays the beat
+/// instead of failing it. The answer is always a payload, the way the old
+/// child's exit-0 stdout was: a registry-unreadable board rides its own
+/// flags (`registry_readable`, `summary.reason`) and the judge refuses it.
+pub(crate) fn read_org_payload(config_cwd: &Path) -> Value {
+    crate::team_read::team_nodes_payload_at(Some(config_cwd))
 }
 
 #[cfg(test)]
@@ -350,35 +303,11 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_org_read_names_the_last_non_config_line() {
-        let err = org_payload_from(
-            30,
-            false,
-            false,
-            b"",
-            b"fno config: x is not modeled\nError: org store locked",
-        )
-        .unwrap_err();
-        assert_eq!(err, "the org read failed: Error: org store locked");
-        // 2026-10-05 shape: the bound SIGKILLed the read on a fork-starved
-        // machine and the only stderr left was the harmless config warning,
-        // so the verdict quoted the warning as the failure cause. A signal
-        // death names the bound instead.
-        let err = org_payload_from(
-            150,
-            true,
-            false,
-            b"",
-            b"fno config: merge.visual_paint_paths is not a modeled config key; ignored",
-        )
-        .unwrap_err();
-        assert!(
-            err.contains("killed at its 150s load-scaled bound"),
-            "{err}"
-        );
-        assert!(!err.contains("fno config:"), "{err}");
+    fn the_load_scaled_budget_ladder_floors_doubles_and_caps() {
         // The load-scaled budget: the floor idle, doubling per 2 jobs per
-        // core, capped at half the 300s beat.
+        // core, capped at the ceiling. The arm callers (merge_close,
+        // lead_settle, and the org read before it went in process) share the
+        // one ladder.
         assert_eq!(
             crate::bounded_cmd::load_scaled_budget_for_s(None, 30, 150),
             30

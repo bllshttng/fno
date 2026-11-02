@@ -77,11 +77,9 @@ def test_cli_folder_audit_unreadable_graph_exits_1(tmp_path: Path, monkeypatch) 
 
 
 def test_cli_folder_audit_unscannable_plans_dir_exits_1(tmp_path: Path, monkeypatch) -> None:
-    from fno.graph import _constants
-
     good_graph = tmp_path / "graph.json"
     good_graph.write_text('{"entries": []}', encoding="utf-8")
-    monkeypatch.setattr(_constants, "GRAPH_JSON", good_graph)
+    monkeypatch.setenv("FNO_GRAPH_JSON", str(good_graph))
 
     missing_plans_dir = tmp_path / "does-not-exist"
     result = runner.invoke(
@@ -93,11 +91,9 @@ def test_cli_folder_audit_unscannable_plans_dir_exits_1(tmp_path: Path, monkeypa
 
 
 def test_cli_folder_audit_clean_vault_exits_0(tmp_path: Path, monkeypatch) -> None:
-    from fno.graph import _constants
-
     good_graph = tmp_path / "graph.json"
     good_graph.write_text('{"entries": []}', encoding="utf-8")
-    monkeypatch.setattr(_constants, "GRAPH_JSON", good_graph)
+    monkeypatch.setenv("FNO_GRAPH_JSON", str(good_graph))
 
     plans_dir = tmp_path / "plans"
     plans_dir.mkdir()

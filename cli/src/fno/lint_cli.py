@@ -12,7 +12,6 @@ from typing import Any, Optional
 import typer
 
 
-
 # Eight subcommands became one command taking the check NAME as an argument, so
 # `fno doctor lint command-ratchet` still reads and types exactly the same while costing
 # one leaf instead of eight. Six of the eight only ever ran in CI, where a
@@ -30,7 +29,6 @@ import typer
 # comparing the two sets directly.
 CHECKS: dict[str, str] = {
     "spawn-paths": "spawn_paths",
-    "flock-pattern": "flock_pattern",
     "provider-stderr-merge": "provider_stderr_merge",
     "shellout-drift": "shellout_drift",
     "command-ratchet": "command_ratchet",
@@ -54,8 +52,6 @@ CHECKS: dict[str, str] = {
 # an AST claim: multi-line assembly is documented coverage debt.
 SPAWN_SHAPE_ALLOWLIST = frozenset(
     {
-        "cli/src/fno/agents/dispatch.py",
-        "cli/src/fno/agents/harnesses/claude.py",
         "cli/src/fno/agents/harnesses/codex.py",
         # Canonical tool-less one-shot judgment seam; consolidated the
         # former inbox/graph/review call-site shapes here.
@@ -131,8 +127,8 @@ def spawn_paths() -> None:
 
 def _repo_root() -> Path:
     # The canonical cached, FNO_REPO_ROOT-aware resolver. This used to be a
-    # third bare git-rev-parse copy (flock-pattern and shellout-drift already
-    # call resolve_repo_root directly); the duplicate drifted without the env
+    # third bare git-rev-parse copy (shellout-drift already calls
+    # resolve_repo_root directly); the duplicate drifted without the env
     # hook and the worktree fallback, so spawn-paths/provider-stderr-merge got
     # different answers from their siblings. One resolver, same answer.
     from fno.paths import resolve_repo_root
@@ -142,8 +138,7 @@ def _repo_root() -> Path:
 
 def plan_filenames() -> None:
     """Report node-bearing plan filenames that disagree with one claim."""
-    from fno.graph._constants import LEGACY_PREFIX, is_wellformed_node_id, node_id_prefix
-    from fno.graph._intake import plan_claims
+    from fno.rust_binary import is_wellformed_node_id, plan_claims, settings_read
     from fno.paths import plans_content_dir
     from fno.paths import plan_filename_node_id
 
@@ -152,7 +147,7 @@ def plan_filenames() -> None:
         typer.echo(f"plan-filenames: plans dir not found: {plans_dir}", err=True)
         raise typer.Exit(code=1)
 
-    prefixes = {LEGACY_PREFIX, node_id_prefix()}
+    prefixes = {"ab-", (settings_read() or {}).get("prefix") or "ab-"}
     mismatches: list[tuple[Path, str, str]] = []
     for path in sorted(plans_dir.rglob("*.md")):
         filename_node = plan_filename_node_id(path, prefixes=prefixes)
@@ -640,28 +635,6 @@ def hook_tombstones(base: Optional[str] = None) -> None:
         f"hook-tombstones: ok ({len(refs)} referenced script(s) at {resolved}, "
         "0 deleted)"
     )
-
-
-
-def flock_pattern(dispatch_path: Optional[Path] = None) -> None:
-    """Forbid open-coded agent flock + registry re-read patterns."""
-    from fno.paths import resolve_repo_root
-
-    script = resolve_repo_root() / "scripts" / "lint-flock-pattern.sh"
-    if not script.is_file():
-        typer.echo(
-            "fno doctor lint flock-pattern: this command lints the repo's own source and "
-            "needs the footnote checkout's lint scripts, which a bare "
-            "`pip install fno` does not ship. Run it from a clone (or install "
-            "the plugin).",
-            err=True,
-        )
-        raise typer.Exit(2)
-    argv = ["bash", str(script)]
-    if dispatch_path is not None:
-        argv.append(str(dispatch_path))
-    result = subprocess.run(argv)
-    raise typer.Exit(result.returncode)
 
 
 def _is_subprocess_stdout(value: ast.AST) -> bool:
@@ -1295,9 +1268,6 @@ def lint(
     no_degrade: bool = typer.Option(
         False, "--no-degrade", help="shellout-drift: fail instead of degrading."
     ),
-    dispatch_path: Optional[Path] = typer.Option(
-        None, "--dispatch-path", help="flock-pattern: scan this file instead of the default."
-    ),
     providers_dir: Optional[Path] = typer.Option(
         None, "--providers-dir", help="provider-stderr-merge: scan this dir instead of the default."
     ),
@@ -1331,7 +1301,6 @@ def lint(
     supplied = {
         "update": update,
         "no_degrade": no_degrade,
-        "dispatch_path": dispatch_path,
         "providers_dir": providers_dir,
         "as_json": as_json,
         "live": live,

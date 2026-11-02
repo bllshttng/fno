@@ -1,17 +1,12 @@
 """Pure config file-reader leaf for the ``fno.config`` package's internals.
 
-This module exists to break the ``fno.config`` <-> ``fno.graph`` import cycle.
 The config package needs the low-level config *readers* one hop away from its
-own god module; importing ``fno.config`` from a graph module at top level closed a
-load-time loop (config's ``id_prefix`` validator imports ``graph._constants``),
-so graph pushed the import into function bodies. The graph leftovers retired
-their config reads onto the binary door (2026-10), and the leaf now serves the
-config package and a few CLI readers (agents, setup).
+own god module. The leaf serves the config package and a few CLI readers
+(agents, setup).
 
 It MUST live outside the ``config/`` package: a module at ``config/_io.py`` would
 re-run ``config/__init__.py`` on import and reintroduce the half-init cycle. This
-module imports only stdlib + pydantic + yaml; it never imports ``fno.config`` or
-``fno.graph``. ``fno.config`` re-exports these names for back-compat, so existing
+module imports only stdlib + pydantic + yaml; it never imports ``fno.config``. ``fno.config`` re-exports these names for back-compat, so existing
 ``from fno.config import read_config_flat`` callers keep working unchanged.
 """
 from __future__ import annotations

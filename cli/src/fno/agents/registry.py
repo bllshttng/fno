@@ -32,7 +32,6 @@ from __future__ import annotations
 
 import contextlib
 import fcntl
-import json
 import os
 import random
 import re
@@ -43,7 +42,7 @@ from dataclasses import asdict, dataclass, field, fields, replace
 from importlib import resources
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Iterator, Literal, Optional, Tuple
+from typing import Callable, Iterator, Literal, Optional
 
 from fno import paths
 from fno.harness_identity import (
@@ -52,12 +51,10 @@ from fno.harness_identity import (
     claude_transport_short_id,
     legacy_suffix_handle,
     session_handle_tier,
-    session_identity_key,
     sync_harness_aliases,
 )
 from fno.state_fence import refuse_source_ahead_write, running_from_source
 from fno.time_budget import validate_timeout_budget
-from fno.harness_names import known_providers
 
 # registry.status is a projection of state.status (LD10), so it can be ANY
 # AgentStatus variant. The daemon writes "live" on spawn and "exited" on child
@@ -103,9 +100,6 @@ KNOWN_STATUSES = frozenset(
 # so a set that forgets a status mints a second role over one scope.
 TERMINAL_STATUSES = frozenset({"exited", "orphaned", "failed", "permanent_dead"})
 
-# The role's MEANING (the ladder, scope encoding, derivation, validation) lives
-# in fno.agents.role, not here: this module owns the three fields on the row and
-# nothing about what they signify. Storage does not get to define authority.
 
 # Valid host_mode values (interactive-drive node). A missing/null key coerces to
 # "exec" in load_registry; any other concrete value is rejected like an alien
@@ -236,7 +230,6 @@ def _read_schema_version() -> int:
 SCHEMA_VERSION = _read_schema_version()
 
 
-
 class RegistryVersionError(RuntimeError):
     """Raised when a registry file's schema_version != SCHEMA_VERSION."""
 
@@ -265,11 +258,6 @@ def classify_session_transition(
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-# Indirection so AC2-ERR can monkeypatch this symbol to simulate kill -9.
-# Looked up via module attribute at call time, NOT closed over.
-_json_dumps = json.dumps
 
 
 @dataclass
@@ -717,53 +705,9 @@ class AgentEntry:
         return f"L{self.role_level} {self.role_scope or '?'}"
 
 
-def mint_agent_entry(
-    *,
-    harness_session_id: Optional[str],
-    spawned_by_session: Optional[str],
-    spawned_by_harness: Optional[str],
-    spawned_by_cwd: Optional[str],
-    lineage_reason: Optional[str],
-    **kwargs: Any,
-) -> AgentEntry:
-    """The one Python mint constructor: birth writers build rows through this.
-
-    The canonical session identity and the parent edge are keyword-only with
-    no defaults, so a mint site that omits either gets a TypeError instead of
-    a silently-None row. An ``origin=spawn`` row must name its parent session
-    OR a non-empty ``lineage_reason``; "neither" raises rather than writing
-    the 13-of-39 defect a second time. This is the Python twin of Rust's
-    ``RegistryEntry::new`` and the replacement for the retired session-identity
-    and spawn-lineage parity scripts. Reads stay tolerant: ``AgentEntry``
-    itself keeps field defaults so legacy rows without these keys still load.
-    """
-    if kwargs.get("origin") == "spawn" and not spawned_by_session and not lineage_reason:
-        raise ValueError("origin=spawn row needs spawned_by_session or lineage_reason")
-    if not kwargs.get("fno_id"):
-        from fno.rust_binary import mint_fno_id
-
-        kwargs["fno_id"] = mint_fno_id()
-    return AgentEntry(
-        harness_session_id=harness_session_id,
-        spawned_by_session=spawned_by_session,
-        spawned_by_harness=spawned_by_harness,
-        spawned_by_cwd=spawned_by_cwd,
-        lineage_reason=lineage_reason,
-        **kwargs,
-    )
-
-
-# ---------------------------------------------------------------------------
-# Shared identifier resolver: every session-connecting `fno agents`
-# command accepts the registry name, full harness session id, explicit transport
-# short id, canonical handle, or legacy prefix. This function is the single
-# lookup choke point so no command re-implements a name-only `.find`.
-# ---------------------------------------------------------------------------
-
 # Exactly eight lowercase hex characters, used only when deciding whether a
 # Claude restamp may safely refresh a derived transport short id.
 _DERIVED_SHORT_RE = re.compile(r"^[0-9a-f]{8}$")
-_ACCEPTED_FORMS = "accepted forms: name, canonical handle, transport short id, or full session id"
 
 
 class AgentResolutionError(RuntimeError):
@@ -795,32 +739,6 @@ class AgentResolutionError(RuntimeError):
         self.exit_code = exit_code
         self.ambiguous = ambiguous
         self.unavailable = unavailable
-
-
-@dataclass
-class ResolvedAgent:
-    """The entry a token resolved to, plus which rule matched.
-
-    ``worker_short_id`` is the transport handle a session-connecting command
-    shells out with (``claude attach/logs <short>`` etc.); ``None`` when the
-    row recorded no short (a pre-heal claude row) so the command can raise its own
-    explicit "no short id on file" error instead of shelling an empty arg.
-
-    ``matched_session_id`` is the exact id on the winning row the token named,
-    set only for a full-session-id match. It separates the two jobs one row's
-    ids serve: delivery consumes the row's CURRENT address regardless of which
-    historical id was named, while exact-id resume keeps the id the caller
-    actually spelled. ``None`` for every name/short/handle match, which by
-    contract selects the current session.
-    """
-
-    entry: AgentEntry
-    matched_by: str  # "name" | "full_session_id" | "short_id" | handle compatibility
-    matched_session_id: Optional[str] = None
-
-    @property
-    def worker_short_id(self) -> Optional[str]:
-        return self.entry.short_id or None
 
 
 def _session_tier_matched(entry: object, token: str) -> Optional[tuple[int, str]]:
@@ -856,255 +774,10 @@ def _session_tier(entry: object, token: str) -> Optional[int]:
     return matched[0] if matched else None
 
 
-def _one_or_ambiguous(hits: list, matched_by: str, token: str) -> ResolvedAgent:
-    """Return the single matched entry, or raise on a real ambiguity.
-
-    Dedup only repeated references to the same loaded row. A corrupt or legacy
-    registry can contain two rows with one name but different sessions; treating
-    the intended primary key as proof of identity would silently pick one.
-    """
-    distinct: list[Any] = []
-    for entry in hits:
-        if not any(entry is existing for existing in distinct):
-            distinct.append(entry)
-    if len(distinct) > 1:
-        cands = ", ".join(
-            f"{getattr(e, 'name', '?')} "
-            f"(session_id={getattr(e, 'harness_session_id', '') or '-'}, "
-            f"short={getattr(e, 'short_id', '') or '-'}, "
-            f"{getattr(e, 'harness', '?')})"
-            for e in distinct
-        )
-        raise AgentResolutionError(
-            f"token {token!r} is ambiguous across {len(distinct)} agents: "
-            f"{cands}. Disambiguate with the name or full session id.",
-            ambiguous=True,
-        )
-    return ResolvedAgent(entry=distinct[0], matched_by=matched_by)
-
-
-def resolve_agent_in(entries: list, token: str) -> ResolvedAgent:
-    """The matching core over an already-loaded entry list (the Rust mirror).
-
-    A full session id is explicit and resolves first. Every shorter address form
-    shares one namespace: exact name, the row's own ``fno_id``, stored transport
-    short id, canonical handle, and legacy prefix matches are unioned before
-    uniqueness is decided.
-    UUID-family identity matching is case-insensitive; OpenCode identity matching
-    preserves case.
-
-    ``getattr``-based, so both real ``AgentEntry`` rows and duck-typed rows (a
-    command that injects its own registry loader) resolve identically. Raises
-    :class:`AgentResolutionError` (exit 2) on empty/unknown/ambiguous."""
-    token = (token or "").strip()
-    if not token:
-        raise AgentResolutionError(f"empty agent token; {_ACCEPTED_FORMS}")
-    by_full = [e for e in entries if _session_tier(e, token) == 0]
-    if by_full:
-        resolved = _one_or_ambiguous(by_full, "full_session_id", token)
-        matched = _session_tier_matched(resolved.entry, token)
-        resolved.matched_session_id = matched[1] if matched else None
-        return resolved
-
-    categories = (
-        ("name", [e for e in entries if getattr(e, "name", None) == token]),
-        ("fno_id", [e for e in entries if getattr(e, "fno_id", None) == token]),
-        ("alias", [e for e in entries if token in (getattr(e, "aliases", None) or [])]),
-        ("short_id", [e for e in entries if getattr(e, "short_id", None) == token]),
-        ("canonical_handle", [e for e in entries if _session_tier(e, token) == 1]),
-        ("legacy_suffix", [e for e in entries if _session_tier(e, token) == 2]),
-    )
-    hits = [entry for _matched_by, category in categories for entry in category]
-    if hits:
-        matched_by = next(matched_by for matched_by, category in categories if category)
-        return _one_or_ambiguous(hits, matched_by, token)
-
-    raise AgentResolutionError(f"no agent matching {token!r}; {_ACCEPTED_FORMS}")
-
-
-def resolve_agent(
-    token: str,
-    *,
-    path: Optional[Path] = None,
-) -> ResolvedAgent:
-    """Resolve ``token`` to one registry entry, loading the registry first.
-
-    Wraps :func:`resolve_agent_in`; a malformed/unreadable registry becomes a
-    typed unavailable :class:`AgentResolutionError`, never a traceback leaking
-    to the command. See ``resolve_agent_in`` for the matching rules.
-
-    A full session id and an ordinary name resolve from the registry directly.
-    Every session-shaped short token is checked against the harness stores too:
-    the registry is a cache of reality, so a store-only session must participate
-    in the same ambiguity decision. A registry miss may then adopt one unique
-    store hit.
-    """
-    try:
-        entries = load_registry(path=path)
-    except RegistryVersionError as exc:
-        raise AgentResolutionError(
-            f"registry unreadable ({exc}); cannot resolve {token!r}",
-            unavailable=True,
-        ) from exc
-    return resolve_agent_across_sources(entries, token, path=path)
-
-
-def resolve_agent_across_sources(
-    entries: list,
-    token: str,
-    *,
-    path: Optional[Path] = None,
-) -> ResolvedAgent:
-    """Resolve one token against a registry snapshot and every harness store.
-
-    Resolution is machine-wide: a store hit adopts from any project (the
-    retired ``--cross-project`` flag had authorized exactly that), so the
-    single store-healing owner takes no selection inputs.
-    """
-    try:
-        return resolve_registered_agent_across_sources(entries, token)
-    except AgentResolutionError as exc:
-        # A MISS may fall through; a registry the caller must disambiguate must
-        # not. Otherwise a store hit on one of several matching rows would pick
-        # the winner the registry deliberately refused to pick.
-        if exc.ambiguous or exc.unavailable:
-            raise
-        entry = resolve_from_harness_store(
-            token,
-            registry_path=path,
-        )
-        if entry is None:
-            raise
-        return ResolvedAgent(entry=entry, matched_by="harness_store")
-
-
-def resolve_registered_agent_across_sources(entries: list, token: str) -> ResolvedAgent:
-    """Resolve a registry row while checking store-only collision candidates.
-
-    A registry miss stays a miss and never adopts a store-only session. Registry-
-    gated read and delivery commands use this to share the all-source ambiguity rule
-    without changing their established miss contract.
-    """
-    resolved = resolve_agent_in(entries, token)
-    resolved = _ensure_unique_across_aliases(resolved, token)
-    return _ensure_unique_across_stores(resolved, token)
-
-
-def _ensure_unique_across_aliases(
-    resolved: ResolvedAgent, token: str
-) -> ResolvedAgent:
-    """Union a registry hit with persisted friendly aliases before selecting."""
-    if resolved.matched_by == "full_session_id":
-        return resolved
-
-    from fno.agents.discover import _alias_to_session_ids
-
-    alias_ids, read_ok = _alias_to_session_ids(token, None)
-    if not read_ok:
-        raise AgentResolutionError(
-            f"persisted alias map unreadable; cannot resolve {token!r} uniquely",
-            unavailable=True,
-        )
-
-    entry = resolved.entry
-    registry_id = getattr(entry, "harness_session_id", None)
-    registry_identity = session_identity_key(registry_id) if registry_id else None
-    foreign = sorted(
-        sid
-        for sid in set(alias_ids)
-        if registry_identity is None or session_identity_key(sid) != registry_identity
-    )
-    if not foreign:
-        return resolved
-
-    candidates = [
-        f"{registry_id or entry.name} ({entry.harness}, registry name={entry.name})",
-        *(f"{sid} (persisted alias)" for sid in foreign),
-    ]
-    raise AgentResolutionError(
-        f"token {token!r} is ambiguous across {len(candidates)} sessions: "
-        f"{', '.join(candidates)}. Disambiguate with the full session id.",
-        ambiguous=True,
-    )
-
-
-def _ensure_unique_across_stores(
-    resolved: ResolvedAgent, token: str
-) -> ResolvedAgent:
-    """Union one registry hit with store-only candidates before selecting it."""
-    from fno.agents.store_fallback import complete_store_hits, is_session_shaped
-
-    if resolved.matched_by == "full_session_id" or not is_session_shaped(token):
-        return resolved
-
-    entry = resolved.entry
-    registry_id = getattr(entry, "harness_session_id", None)
-    registry_key = (
-        entry.harness,
-        session_identity_key(registry_id) if registry_id else None,
-    )
-    foreign = {
-        (hit.harness, session_identity_key(hit.session_id)): hit
-        for hit in complete_store_hits(token)
-        if (hit.harness, session_identity_key(hit.session_id)) != registry_key
-    }
-    if not foreign:
-        return resolved
-
-    registry_id = registry_id or entry.name
-    candidates = [
-        f"{registry_id} ({entry.harness}, registry name={entry.name})",
-        *(
-            f"{hit.session_id} ({hit.harness}, harness store)"
-            for hit in sorted(foreign.values(), key=lambda h: (h.harness, h.session_id))
-        ),
-    ]
-    raise AgentResolutionError(
-        f"token {token!r} is ambiguous across {len(candidates)} sessions: "
-        f"{', '.join(candidates)}. Disambiguate with the full session id.",
-        ambiguous=True,
-    )
-
-
-def resolve_from_harness_store(
-    token: str, *, registry_path: Optional[Path] = None,
-) -> Optional[AgentEntry]:
-    """The registry-miss healer, isolated so every resolution surface
-    reaches it identically -- including ``resume``, which loads its own entries
-    and so calls :func:`resolve_agent_in` rather than :func:`resolve_agent`.
-
-    Returns ``None`` when no store knows the token, so the caller raises its own
-    unchanged error. Propagates :class:`AgentResolutionError` on an ambiguous
-    token: refusing to guess is the designed outcome, not a miss.
-
-    Healing is machine-wide: adoption resolves from any project. ``resume``
-    bypasses this healer entirely, so it is uncovered by design."""
-    from fno.agents.store_fallback import heal_from_harness_store
-
-    return heal_from_harness_store(
-        token, registry_path=registry_path,
-    )
-
-
 def _registry_path(path: Optional[Path]) -> Path:
     if path is not None:
         return path
     return paths.agents_registry_path()
-
-
-def _agent_lock_path(name: str, registry_path: Path) -> Path:
-    """Return the flock file for a given agent name under registry's directory.
-
-    Lock files live under ``<registry-dir>/locks/<name>.lock``. Caller is
-    responsible for opening the file and calling ``fcntl.flock``; this
-    function only computes the path. Name is rejected if it contains
-    path separators or ``..``.
-    """
-    if "/" in name or "\\" in name or ".." in name:
-        raise ValueError(
-            f"agent name must not contain path separators or '..': {name!r}"
-        )
-    return registry_path.parent / "locks" / f"{name}.lock"
 
 
 def _registry_lock_path(registry_path: Path) -> Path:
@@ -1185,21 +858,6 @@ def _validate_single_live_ref(entry: AgentEntry) -> None:
             f"registry row {entry.name!r} carries a mux ref alongside a "
             f"worker/bg ref; a row holds exactly one live ref (mux XOR worker XOR bg)"
         )
-
-
-def _read_raw_registry(target: Path) -> Optional[dict]:
-    """Best-effort parse of the on-disk registry, or ``None`` when it is
-    missing, unreadable, or not a JSON object.
-
-    Read once by ``write_registry`` and shared by its schema, row-loss, and
-    existing-name checks.
-    """
-    from fno.registry_door import RegistryDoorError, read_registry_document
-
-    try:
-        return read_registry_document(target)[0]
-    except RegistryDoorError:
-        return None
 
 
 # Re-exported under the registry's own name so a caller (and a test that
@@ -1407,93 +1065,6 @@ def live_row_holding_session_id(
         if candidate and session_identity_key(candidate) == needle:
             return entry
     return None
-
-
-def row_owning_session_id(
-    session_id: str,
-    registry_path: Optional[Path] = None,
-    *,
-    self_binding: Optional[Tuple[str, str]],
-    walk_harness: Optional[str] = None,
-) -> Optional[str]:
-    """Name of an active registry row whose ``harness_session_id`` is
-    ``session_id``, or None.
-
-    The cause-agnostic ambient-leak backstop: a live row already owning an id
-    makes that id contention for any session that cannot prove the row is its
-    own. ``self_binding`` is the caller's own ``(harness, session_id)`` pair
-    as proven upstream (a process-tree match or a spawn-minted stamp), and a
-    live row agreeing with it on both halves is the caller's OWN row, which
-    is never reported: self is not contention (three workers were refused
-    their own node by their own row in one evening before this parameter
-    existed). A caller that cannot prove any binding passes ``None`` - a
-    written self-blind decision, not an omission; the parameter is required
-    so no call site can skip the question, and mypy under guards.yml turns an
-    omission into a type error.
-
-    Two live sessions cannot share a harness session id, so when the binding
-    names the id under test the matching row is the caller's own by that
-    premise alone; the binding's harness half must still agree with the row,
-    or the id belongs to a different session and is reported. Only rows in
-    an ownership-live status count; an exited row's id is free.
-
-    ``walk_harness`` is the process-tree walk's harness answer. A restart
-    re-registers the row in place leaving its spawn-time pid dead, so a
-    walk-proven family row whose pid is dead (or names this process's own
-    harness ancestor, the revival re-mint) is self, never contention. A live
-    foreign pid, silent or foreign walk, or unresolved pid keeps the refusal.
-
-    Degrade-safe by contract (AC4-ERR): an absent, unreadable, or alien-shape
-    registry returns None (cannot prove a collision) rather than raising, so an
-    unreadable registry never blocks init. Callers that must know whether the
-    check ran inspect the returned owner against None after a successful read.
-    """
-    if not session_id:
-        return None
-    from fno.harness_identity import session_identity_key
-
-    needle = session_identity_key(session_id)
-    own: Optional[Tuple[str, str]] = None
-    if self_binding is not None:
-        own = (
-            (self_binding[0] or "").strip().lower(),
-            session_identity_key(self_binding[1] or ""),
-        )
-    entry = live_row_holding_session_id(session_id, registry_path)
-    if entry is None:
-        return None
-    row_harness = (getattr(entry, "harness", "") or "").strip().lower()
-    if own and own[1] == needle and own[0] == row_harness:
-        return None
-    walked = (walk_harness or "").strip().lower()
-    row_pid = getattr(entry, "pid", None)
-    if walked and walked == row_harness and row_pid:
-        from fno.agents.lock import _pid_is_alive
-        from fno.claims.session_pid import resolve_session_pid
-
-        if not _pid_is_alive(row_pid) or row_pid == resolve_session_pid():
-            return None
-    return entry.name
-
-
-def spawn_row_session_ids(harness: str, registry_path: Optional[Path] = None) -> frozenset[str]:
-    """The caller's own spawn row's session id, keyed by its spawn-minted name (FNO_AGENT_SELF, then FNO_WORKER_NAME): the spawner writes the id in the spawn flow, never from the marker under test, so this is the non-circular ground the claim handover trusts. Empty on any miss; never raises."""
-    name = (os.environ.get("FNO_AGENT_SELF") or os.environ.get("FNO_WORKER_NAME") or "").strip()
-    if not name or not harness:
-        return frozenset()
-    try:
-        entries = load_registry(registry_path)
-    except Exception:  # noqa: BLE001 - a witness degrades, never crashes
-        return frozenset()
-    wanted = harness.strip().lower()
-    for entry in entries:
-        live_harness = (entry.harness or "").strip().lower()
-        if entry.status not in _OWNERSHIP_LIVE_STATUSES or live_harness != wanted:
-            continue
-        if entry.name == name or name in (entry.aliases or []):
-            sid = (getattr(entry, "harness_session_id", "") or "").strip()
-            return frozenset({sid}) if sid else frozenset()
-    return frozenset()
 
 
 class LoadedRegistry(list[AgentEntry]):
@@ -1778,341 +1349,6 @@ def load_registry(path: Optional[Path] = None) -> list[AgentEntry]:
     )
 
 
-def register_existing_session(
-    *,
-    session_id: str,
-    cwd: str,
-    harness: Optional[str] = None,
-    provider: Optional[str] = None,
-    name: Optional[str] = None,
-    log_path: str = "",
-    short_id: str = "",
-    status: Optional[AgentStatus] = None,
-    origin: Optional[str] = None,
-    delivery_policy: Optional[str] = None,
-    model: Optional[str] = None,
-    effort: Optional[str] = None,
-    last_message_at: Optional[str] = None,
-    node: Optional[str] = None,
-    registry_path: Optional[Path] = None,
-) -> AgentEntry:
-    """Register an operator-started session so peers can address it by name.
-
-    The bus epic's spawn/host paths create registry rows; this is the
-    missing seam for a session a human started by hand (e.g. a ``claude``
-    SessionStart hook). After registration a peer can ``fno agents mail send``
-    to the row's name; with no live transport the send demotes to the
-    durable queue, which the session's own inbox-wake hook surfaces (US7).
-
-    Idempotent on ``(harness, session_id)``: re-registering the same
-    session (the hook re-fires after a resume/compaction) refreshes the
-    row in place rather than appending a duplicate. A genuinely new session
-    whose generated canonical handle names the SAME session as another row is
-    refused rather than assigned an order-dependent numeric address; a
-    first-eight overlap with a different session is the time-prefixed codex
-    same-window shape and registers (the generated name suffixes when the name
-    itself is already taken). Explicitly supplied friendly names retain their
-    existing suffix behavior.
-
-    Raises on registry I/O failure or bad input; the SessionStart caller
-    (``register_session.main``) fails open and emits a warning event
-    (AC7-ERR), so a locked/unwritable registry never blocks session start.
-    """
-    # ``provider`` was the old spelling for the harness. Keep that call shape
-    # working, but when both axes are supplied treat it as the model vendor.
-    if harness is None and provider in known_providers():
-        harness, provider = provider, None
-    if harness not in known_providers():
-        raise ValueError(
-            f"unknown harness for registration: {harness or provider!r}; "
-            f"known: {sorted(known_providers())}"
-        )
-    if not session_id:
-        raise ValueError("session_id must be non-empty")
-
-    # refusal IS the docs; see the raise message below.
-    self_name = os.environ.get("FNO_AGENT_SELF", "")
-    if self_name and (
-        os.environ.get("FNO_AGENT_ROW_PENDING") == self_name
-        or any(row.name == self_name for row in load_registry(path=registry_path))
-    ):
-        raise ValueError(
-            f"this session already IS mesh worker {self_name!r} (FNO_AGENT_SELF); "
-            "registering would mint a duplicate row for one worker - the "
-            "session-start restamp keeps the existing row pointed at this session"
-        )
-
-    session_field = "short_id" if harness == "claude" else "harness_session_id"
-
-    # A hand-started session has NO live messaging transport (no daemon PTY,
-    # no bg jobId/socket): a peer cannot inject into it. Registering it "live"
-    # would make `resolve_to_project` pick it as an anycast target, and the
-    # default-send live path would then dead-letter the durable fallback under
-    # inbox/<agent-name>/ - which the session's own inbox-wake hook never reads
-    # (it scans inbox/<project>/). So register as "idle": discoverable in
-    # `fno agents list`, excluded from live anycast, so `send --to-project`
-    # queues durable to the PROJECT inbox the session actually drains. Reliable
-    # by-name live delivery to operator sessions waits on the deferred transport
-    # (cv-d54ddd45).
-    #
-    # ``status`` overrides that default for a caller with better information:
-    # the harness-store fallback adopts a row it only knows EXISTS, so
-    # it registers "orphaned". Neither value is live, so neither reaches live
-    # anycast or a lane cap.
-    _REGISTERED_STATUS: AgentStatus = status or "idle"
-
-    # A restore can strip a row's stamp; a manifest naming this session re-stamps it when bare.
-    from fno.agents.role import lead_manifest_call
-
-    manifest_role = lead_manifest_call(
-        "for-session", session_id=session_id, owner_cwd=str(cwd or "")
-    ).get("fields")
-
-    def _apply_manifest_role(entry: AgentEntry) -> None:
-        # A manifest with no level (a pass manifest) holds no grant. Stamping
-        # its scope alone would make half a role.
-        digits = (manifest_role or {}).get("role_level") or ""
-        if manifest_role and not entry.role_scope and digits.isdecimal():
-            entry.role_level = int(digits)
-            entry.role_scope = manifest_role["role_scope"]
-            entry.role_grantor = manifest_role.get("role_grantor") or None
-
-    def _updater(entries: list[AgentEntry]) -> list[AgentEntry]:
-        def _address_is_taken(
-            token: str,
-            *,
-            exclude: Optional[AgentEntry] = None,
-            same_session_only: bool = False,
-        ) -> bool:
-            # same_session_only: the token is MINTED from the session id (the
-            # generated canonical handle), so it is taken only by the SAME
-            # session (tier 0). A first-eight overlap with a different session
-            # is the time-prefixed codex same-window shape - read-side
-            # ambiguity, not a registration wall.
-            def _row_takes(entry: AgentEntry) -> bool:
-                if entry is exclude:
-                    return False
-                if not same_session_only and (
-                    getattr(entry, "name", None) == token
-                    or getattr(entry, "short_id", None) == token
-                ):
-                    return True
-                tier = _session_tier(entry, token)
-                return tier is not None and (not same_session_only or tier == 0)
-
-            return any(_row_takes(entry) for entry in entries)
-
-        for entry in entries:
-            # Keyed on harness_session_id, the canonical id every row carries --
-            # `session_field` is `short_id` for claude, which a caller may set to
-            # the 8-hex transport key rather than the session id we match on.
-            if entry.harness == harness and entry.harness_session_id == session_id:
-                # Same session re-registering: refresh, do not duplicate.
-                #
-                # An EXPLICIT status never demotes a live row. The harness-store
-                # healer resolves against a miss, then upserts under the lock; a
-                # registration landing in that window (a `/fno-me`, a spawn) would
-                # otherwise be overwritten with the healer's weaker "orphaned" and
-                # dropped from live routing. A caller passing no status keeps the
-                # old unconditional refresh, so `/fno-me` behaves exactly as before.
-                if status is None or entry.status != "live":
-                    entry.status = _REGISTERED_STATUS
-                entry.cwd = cwd
-                if log_path:
-                    entry.log_path = log_path
-                if short_id:
-                    if short_id != entry.short_id and _address_is_taken(
-                        short_id, exclude=entry
-                    ):
-                        raise AgentResolutionError(
-                            f"transport short id {short_id!r} collision while "
-                            f"refreshing session {session_id!r}; use the full session id",
-                            ambiguous=True,
-                        )
-                    entry.short_id = short_id
-                # WRITE-ONCE. A refresh may FILL an empty origin and may never
-                # change one, because this field is a birth fact and nothing on
-                # this path can observe a birth. Every weaker rule tried here
-                # lost a row to a later refresh, and none of the losses is
-                # recoverable because nothing ever clears the field:
-                #
-                #  - blind assignment let the healer, which refreshes without an
-                #    origin, erase an operator stamp with None;
-                #  - excluding only `adopted` still let `operator` land on a
-                #    worker row. An operator resuming a spawned worker in a
-                #    fresh terminal fires the SessionStart register branch, and
-                #    that row leaves the retire lane for good while joining the
-                #    attended mail escalation.
-                #
-                # Filling an empty one is safe and is what the healer needs: a
-                # row that never stated its origin gains the only claim anyone
-                # has made about it.
-                #
-                # `adopted` -> `operator` is the one CHANGE allowed, because it
-                # is the only transition with no downside. The healer stamps
-                # `adopted` on store rows that its own comment says are
-                # routinely an operator's terminal no SessionStart hook had
-                # registered yet. Refusing the later hook froze those rows at
-                # `adopted`, and `_recipient_is_attended` requires exactly
-                # `operator`, so `fno agents mail send` stopped escalating questions to
-                # that human permanently and said nothing. The upgrade also
-                # makes the retire lane STRICTER, since `operator` answers
-                # `spawned=False` where `adopted` answers unknown, and both
-                # already refuse to retire. Neither failure this rule was
-                # written against involves it: a blind `None` never lands here,
-                # and `operator` still cannot touch a `spawned` row.
-                upgradeable = entry.origin is None or (
-                    entry.origin == "adopted" and origin == "operator"
-                )
-                if origin is not None and upgradeable:
-                    entry.origin = origin
-                # same fill-empty discipline as origin. `node` is a
-                # birth fact, but the session's own exported FNO_NODE is
-                # evidence the birth path could have read too, so a refresh
-                # may FILL an empty node and may never change one - otherwise
-                # every row registered before the field existed stays
-                # name-less no matter how often its session re-registers.
-                if node and not entry.node:
-                    entry.node = node
-                # Same preserve-when-silent discipline for the delivery policy:
-                # the SessionStart hook re-fires register without this kwarg
-                # after every resume/compaction, and a blind overwrite would
-                # silently revert a bus-only recipient to injectable. "off" is
-                # the explicit clear (None means the caller said nothing).
-                if delivery_policy is not None:
-                    entry.delivery_policy = (
-                        None if delivery_policy == "off" else delivery_policy
-                    )
-                if provider is not None:
-                    entry.provider = provider
-                if model:
-                    # Only a CHANGED model re-bases. The SessionStart hook
-                    # re-fires register after every resume, and restamping the
-                    # SAME model would downgrade a `verified` basis (read back
-                    # off a pane status) to this call's mere intent. An EMPTY
-                    # model is no model: the Rust twin filters on non-empty,
-                    # so `--model ''` must stamp neither side here either.
-                    if entry.model != model:
-                        entry.model_basis = "requested"
-                    entry.model = model
-                if effort is not None:
-                    entry.effort = effort
-                # A None never erases: a refresh reads a transcript mtime, and a
-                # store pruned since would otherwise blank a real stamp. A
-                # non-None DOES overwrite, including backwards - re-adopting a
-                # row whose store was replaced by an older copy moves the stamp
-                # back. That is deliberate: the field means "the newest activity
-                # anything has OBSERVED", and a stale observation that outranks
-                # the current one is the wrong answer to keep.
-                if last_message_at is not None:
-                    entry.last_message_at = last_message_at
-                _apply_manifest_role(entry)
-                return entries
-        generated = canonical_handle(session_id)
-        if _address_is_taken(generated, same_session_only=True):
-            raise AgentResolutionError(
-                f"canonical handle {generated!r} collision while registering session "
-                f"{session_id!r}; use the full session id directly",
-                ambiguous=True,
-            )
-        if short_id and _address_is_taken(short_id):
-            raise AgentResolutionError(
-                f"transport short id {short_id!r} collision while registering session "
-                f"{session_id!r}; use the full session id",
-                ambiguous=True,
-            )
-
-        base = name or generated
-        chosen, suffix = base, 2
-        while _address_is_taken(chosen):
-            chosen = f"{base}-{suffix}"
-            suffix += 1
-        # Parent edge, captured for every NON-operator birth: a row
-        # an operator's SessionStart registered has no spawner, and stamping
-        # the operator's own session env would record a self-edge. ADOPTED
-        # rows are different (LD3): adoption is vouching, not
-        # spawning, so the captured session lands on adopted_by_session and
-        # the spawned_by_* edge stays empty. The identity guard covers every
-        # OTHER self-registration caller: a row never stamps itself as its
-        # own parent.
-        _sb_session = _sb_harness = _sb_cwd = None
-        _sb_reason = None
-        _adopted_by = None
-        if origin != "operator":
-            from fno.agents.spawn_lineage import _capture_parent_edge
-            from fno.agents.spawn_lineage import _lineage_reason
-
-            _sb_session, _sb_harness, _sb_cwd = _capture_parent_edge()
-            if _sb_session is not None and _sb_session == session_id:
-                _sb_session = _sb_harness = _sb_cwd = None
-            if origin == "adopted":
-                _adopted_by = _sb_session
-                _sb_session = _sb_harness = _sb_cwd = None
-            else:
-                # An adopted row's parent edge is empty by the vouch split
-                # (adopted_by_session carries the grantor), not because
-                # identity could not be read - no reason text for those.
-                _sb_reason = _lineage_reason(_sb_session)
-        fresh = mint_agent_entry(
-            harness_session_id=session_id,
-            spawned_by_session=_sb_session,
-            spawned_by_harness=_sb_harness,
-            spawned_by_cwd=_sb_cwd,
-            lineage_reason=_sb_reason,
-            name=chosen,
-            harness=harness,
-            provider=provider,
-            model=model,
-            model_basis="requested" if model else None,
-            effort=effort,
-            cwd=cwd,
-            log_path=log_path,
-            status=_REGISTERED_STATUS,
-            origin=origin,
-            last_message_at=last_message_at,
-            # the SessionStart caller passes the session's own exported
-            # FNO_NODE; a caller that cannot know leaves None.
-            node=node,
-            # Registration observes a session that already exists; the lane it
-            # runs on is unobserved, so the substrate stays unknown (never
-            # "pane").
-            substrate=None,
-            adopted_by_session=_adopted_by,
-            delivery_policy=(
-                None if delivery_policy in (None, "off") else delivery_policy
-            ),
-        )
-        setattr(fresh, session_field, session_id)
-        if short_id:
-            # After the setattr: for claude, session_field IS short_id, and the
-            # caller's transport key (the 8-hex jobId `claude attach` wants) must
-            # win over the full UUID that setattr just wrote there.
-            fresh.short_id = short_id
-        elif harness == "claude":
-            # No caller transport key: derive the 8-hex jobId the harness's own
-            # attach form addresses, as a restamp and a branch row do. Writing
-            # the full UUID here left a registered row unattachable. A derived
-            # key that collides with an existing address is skipped, not
-            # raised: the session-start hook fails open, and the full UUID
-            # still resolves the row by session id.
-            derived = claude_transport_short_id(session_id)
-            if _DERIVED_SHORT_RE.match(derived) and not _address_is_taken(derived):
-                fresh.short_id = derived
-        entries.append(fresh)
-        _apply_manifest_role(fresh)
-        return entries
-
-    persisted = update_registry(_updater, path=registry_path)
-    for entry in persisted:
-        if entry.harness == harness and entry.harness_session_id == session_id:
-            return entry
-    # update_registry returns the persisted entries list (the updater's
-    # output), so the row must be present; a miss means the upsert dropped it.
-    raise RuntimeError(
-        f"registration for {harness} session {session_id!r} did not persist"
-    )
-
-
 def _mint_branch_row(
     entry: AgentEntry, entries: list[AgentEntry], *, session_id: str, stale: str
 ) -> AgentEntry:
@@ -2335,8 +1571,6 @@ def restamp_harness_session_id(
     return restamped[0] if restamped else None
 
 
-
-
 def heal_own_cwd(
     *,
     name: str,
@@ -2378,51 +1612,6 @@ the row moved, else None; the idempotent no-op never rewrites the file.
     if healed is None or healed.cwd != cwd:
         return None
     return before, cwd
-
-
-def registry_rows_by_cwd(
-    path: Optional[Path] = None,
-) -> tuple[dict[str, list[dict]], bool]:
-    """Raw registry rows indexed by each row's own ``cwd``, plus an ok flag.
-
-    The ONE occupancy join for every reader that asks "which worker holds
-    this tree" (task 0.2, folding); three copies used to live
-    in unfinished_work and the worktree status legs. A missing registry is a
-    legitimate empty fleet (ok); one that exists and fails to parse reads
-    every candidate unmeasurable.
-    """
-    import os
-
-    from fno.paths import agents_registry_path
-
-    override = os.environ.get("WORKTREE_STATUS_REGISTRY")
-    target = Path(override) if override else (path or agents_registry_path())
-    from fno.registry_door import RegistryDoorError, read_registry_document
-
-    try:
-        data = read_registry_document(target)[0]
-    except RegistryDoorError:
-        return {}, False
-    if not isinstance(data, dict):
-        return {}, False
-    by_cwd: dict[str, list[dict]] = {}
-    for row in data.get("agents", []):
-        if isinstance(row, dict) and row.get("cwd"):
-            by_cwd.setdefault(str(Path(row["cwd"])), []).append(row)
-    return by_cwd, True
-
-
-#: Outcome of one SessionStart id observation (see
-#: :func:`record_session_observation`).
-SESSION_OBSERVATION_OUTCOMES = (
-    "primary",  # an empty primary field accepted its first id
-    "no-op",  # the id already occupies a field: no write, no event
-    "related",  # a second valid id filled the one optional related slot
-    "refused-cap",  # a third distinct id: nothing written, ids named
-    "no-row",  # no row under that name for this harness
-    "succession",  # a dead predecessor retired; the primary advanced to B
-    "branch",  # a live predecessor kept its row; B minted its own
-)
 
 
 def _flush_pending_session_row(entry: AgentEntry, session_id: str) -> None:
@@ -2711,50 +1900,6 @@ def update_registry(
                 pass
         return new_entries
 
-
-def append_row_alias(
-    token: str,
-    alias: str,
-    *,
-    registry_path: Optional[Path] = None,
-) -> bool:
-    """Append ``alias`` to the resolved row's ``aliases``; REFUSE when
-    another row answers to it. Best-effort: a miss is False, never a raise.
-    """
-    alias = alias.strip()
-    if not alias:
-        return False
-    try:
-        resolved = resolve_agent(token, path=registry_path)
-    except AgentResolutionError:
-        return False
-    identity = (resolved.entry.harness, resolved.entry.harness_session_id)
-    appended: list[bool] = []
-
-    def _updater(entries: list[AgentEntry]) -> list[AgentEntry]:
-        target = next(
-            (
-                entry
-                for entry in entries
-                if (entry.harness, entry.harness_session_id) == identity
-                and entry.name == resolved.entry.name
-            ),
-            None,
-        )
-        if target is None:
-            return entries
-        if target.name != alias and alias not in (target.aliases or []):
-            taken = any(
-                other is not target and (alias in (other.aliases or []) or other.name == alias)
-                for other in entries
-            )
-            if not taken:
-                target.aliases.append(alias)
-                appended.append(True)
-        return entries
-
-    update_registry(_updater, path=registry_path)
-    return bool(appended)
 
 def _identity_signature(entry: AgentEntry) -> tuple[str, str, str, str]:
     """Fields whose mutation can change what token addresses a registry row."""

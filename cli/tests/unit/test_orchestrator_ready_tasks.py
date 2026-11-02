@@ -96,6 +96,10 @@ def _run_cli(args, env_path, cwd):
     )
 
 
+# The fake `fno` answers the collision door, which every --ready run asks.
+DOOR_ARM = 'if [ "$2" = script-door ]; then echo \'{"groups": [], "unevaluated": [], "shared_roots": {}}\'; exit 0; fi\n'
+
+
 def _write_fixture(tmp_path: Path, plan_md: str = PLAN_MD):
     plan = tmp_path / "plan.md"
     plan.write_text(plan_md)
@@ -209,7 +213,7 @@ class TestReadyCli:
         bin_dir.mkdir()
         fake_fno = bin_dir / "fno"
         fake_fno.write_text(
-            "#!/bin/sh\ncat <<'EOF'\n"
+            "#!/bin/sh\n" + DOOR_ARM + "cat <<'EOF'\n"
             '{"node": "x-demo", "tasks": ['
             '{"id": "1.2", "status": "in_progress", "owner": "peer"},'
             '{"id": "2.1", "status": "pending", "owner": null}'
@@ -232,7 +236,7 @@ class TestReadyCli:
         bin_dir.mkdir()
         fake_fno = bin_dir / "fno"
         fake_fno.write_text(
-            "#!/bin/sh\n"
+            "#!/bin/sh\n" + DOOR_ARM +
             "if [ \"$1\" = backlog ]; then\n"
             "  cat <<'EOF'\n"
             '{"node": "x-demo", "tasks": ['
@@ -259,7 +263,7 @@ class TestReadyCli:
         bin_dir = tmp_path / "bin"
         bin_dir.mkdir()
         failing = bin_dir / "fno"
-        failing.write_text("#!/bin/sh\necho boom >&2\nexit 1\n")
+        failing.write_text("#!/bin/sh\n" + DOOR_ARM + "echo boom >&2\nexit 1\n")
         failing.chmod(failing.stat().st_mode | stat.S_IEXEC)
         proc = _run_cli([str(plan), "--ready", "--state", str(state),
                          "--node", "x-demo"],

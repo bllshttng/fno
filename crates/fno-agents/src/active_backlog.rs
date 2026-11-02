@@ -1586,17 +1586,18 @@ struct FanoutTarget {
     pub interval_seconds: u64,
 }
 
-/// Shell `fno config status-sinks --json` to discover fanout targets. Best-effort:
-/// any failure (missing fno, non-zero exit, unparseable output) yields an empty
-/// list, so a broken config never crashes the daemon - it just runs no fanout.
-fn resolve_fanout_targets(fno_bin: &str) -> Vec<FanoutTarget> {
-    match fno_cmd(fno_bin)
-        .args(["config", "status-sinks", "--json"])
-        .output()
-    {
-        Ok(o) if o.status.success() => serde_json::from_slice(&o.stdout).unwrap_or_default(),
-        _ => Vec::new(),
-    }
+/// Read the fanout targets in process from the one resolver
+/// (`status_sinks::fanout_targets_as_dicts`, the owner behind `fno config
+/// status-sinks`). Best-effort: any malformed row yields an empty list, so a
+/// broken config never crashes the daemon - it just runs no fanout.
+fn resolve_fanout_targets() -> Vec<FanoutTarget> {
+    fanout_targets_from_dicts(crate::status_sinks::fanout_targets_as_dicts())
+}
+
+/// The supervisor's fold over the one resolver's dicts. All-or-nothing, the
+/// way the old child's stdout parse was: one malformed row empties the list.
+fn fanout_targets_from_dicts(dicts: Value) -> Vec<FanoutTarget> {
+    serde_json::from_value(dicts).unwrap_or_default()
 }
 
 /// One project's status-fanout loop: shell `fno doctor event fanout tick` in the
@@ -1896,7 +1897,7 @@ pub async fn run_supervisor(
         // names the pause at this loop's real 60s recheck cadence.
         let pause = crate::loops_pause::dispatch_pause();
         if pause.is_paused() {
-            let fanout_targets = resolve_fanout_targets(&fno_bin);
+            let fanout_targets = resolve_fanout_targets();
             live.store(
                 !tasks.is_empty() || !fanout_targets.is_empty(),
                 Ordering::SeqCst,
@@ -1936,7 +1937,7 @@ pub async fn run_supervisor(
         if let Some(cap) = targets.iter().map(|t| t.max_concurrent).max() {
             gate.resize(cap);
         }
-        let fanout_targets = resolve_fanout_targets(&fno_bin);
+        let fanout_targets = resolve_fanout_targets();
         // `live` keeps the daemon out of idle-exit while ANY supervised work
         // exists - drain OR fanout. A sink-only project (no active_backlog) must
         // keep the daemon alive, else the daemon idle-exits and kills its fanout
@@ -2200,6 +2201,26 @@ async fn mission_drain_loop(
 mod tests {
     use super::*;
     use crate::territory::Territory;
+
+    #[test]
+    fn fanout_dicts_parse_all_or_nothing() {
+        let good = serde_json::json!([
+            {"project": "fno", "cwd": "/repo", "interval_seconds": 5}
+        ]);
+        let parsed = fanout_targets_from_dicts(good);
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].project, "fno");
+        assert_eq!(parsed[0].cwd, "/repo");
+        assert_eq!(parsed[0].interval_seconds, 5);
+        // The old child's stdout parse was all-or-nothing, and the posture
+        // keeps it: one malformed row (a negative interval fails the u64
+        // field) empties the list, so the daemon runs no fanout.
+        let malformed = serde_json::json!([
+            {"project": "fno", "cwd": "/repo", "interval_seconds": 5},
+            {"project": "bad", "cwd": "/x", "interval_seconds": -1}
+        ]);
+        assert!(fanout_targets_from_dicts(malformed).is_empty());
+    }
 
     fn held_facts() -> territory::ActiveBacklogFacts {
         territory::ActiveBacklogFacts {

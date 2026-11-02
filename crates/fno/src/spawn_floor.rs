@@ -4,9 +4,7 @@
 //! spawn --floor N`. Alone it writes `[agents.capacity] floor` to the user
 //! config and prints the old and new values; with a name and payload it sets
 //! the floor and then spawns. The Rust door peels the flag before any
-//! forwarding, so the Python CLI never sees it and the spawn flag ratchet
-//! (`cli/src/fno/agents/spawn_flag_owners.py`) never counts it - the cap test
-//! below pays the front door's slot against that file's cap instead.
+//! forwarding, so the Python CLI never sees it.
 //!
 //! The same locked, atomic `[agents]` writer backs the mux settings toggle
 //! for `agents.reserve_auto` ([`set_agents_bool`]).
@@ -712,32 +710,7 @@ mod tests {
     }
 
     #[test]
-    fn front_door_flags_fit_the_spawn_flag_cap() {
-        let owners = include_str!("../../../cli/src/fno/agents/spawn_flag_owners.py");
-        let rows = owners
-            .lines()
-            .filter(|l| l.starts_with("    \"--") && l.contains("\": FlagOwner("))
-            .count();
-        let cap = owners
-            .lines()
-            .find_map(|l| {
-                l.trim()
-                    .strip_prefix("SPAWN_FLAG_CAP = ")
-                    .and_then(|v| v.parse::<usize>().ok())
-            })
-            .expect("SPAWN_FLAG_CAP is in the file");
-        assert!(
-            rows + FRONT_DOOR_SPAWN_FLAGS.len() <= cap,
-            "spawn carries {rows} Python flags and {} front-door flags (cap {cap}): \
-             pay for a new flag by deleting one",
-            FRONT_DOOR_SPAWN_FLAGS.len()
-        );
-        for flag in FRONT_DOOR_SPAWN_FLAGS {
-            assert!(
-                !owners.contains(&format!("    \"{flag}\":")),
-                "{flag} is both a Python flag and a front-door flag"
-            );
-        }
+    fn floor_defaults_match_the_gate() {
         // The printed default is pinned to the gate's own spelling, so the
         // two crates cannot drift apart.
         assert!(

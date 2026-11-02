@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from fno import paths
-from fno.graph import store
+from fno.rust_binary import store_request
 
 
 def plan_docs(op: str, **params: Any) -> "dict | None":
@@ -23,8 +23,8 @@ def plan_docs(op: str, **params: Any) -> "dict | None":
             params[key] = {"id": params[key][0], "keys": sorted(params[key][1])}
     params.update(op=op, cwd=str(Path.cwd()), events_path=str(paths.project_events_json()))
     try:
-        result = store._client_for(store.GRAPH_JSON).request("plan_docs", params)
-    except (store.StoreUnavailable, RuntimeError) as exc:
+        result = store_request("plan_docs", params)
+    except (OSError, ValueError, RuntimeError) as exc:
         sys.stderr.write(f"warning: plan-doc writer unreachable ({exc}); run `fno doctor`\n")
         return None
     for line in result.get("warnings") or []:

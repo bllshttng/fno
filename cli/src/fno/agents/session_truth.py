@@ -90,16 +90,6 @@ STALE_ATTENTION_S = 600
 _TAIL_N = 40
 
 
-def fmt_age(seconds: float) -> str:
-    """Compact floored age: 45s / 12m / 3h."""
-    s = int(seconds)
-    if s < 60:
-        return f"{s}s"
-    if s < 3600:
-        return f"{s // 60}m"
-    return f"{s // 3600}h"
-
-
 def classify_tail(
     last_role: Optional[str],
     last_text: Optional[str],
@@ -227,43 +217,6 @@ def _record_stamp_epoch(ts: str) -> Optional[float]:
         return None
 
 
-#: Tail depth for :func:`newest_entry_epoch`; the newest entry is near the end.
-_ENTRY_TAIL_BYTES = 256 * 1024
-
-
-def newest_entry_epoch(path: Path, tail_bytes: Optional[int] = _ENTRY_TAIL_BYTES) -> Optional[float]:
-    """Newest top-level ``timestamp`` in a jsonl transcript, in epoch SECONDS.
-
-    The age primitive the file stat must not be: trailing untimestamped
-    records keep the file young while the conversation is silent.
-    ``tail_bytes=None`` reads the whole file (the adopt stamp), so its window
-    is never narrower than truth's own read. None when unreadable or
-    stamp-free; the caller falls back and names it."""
-    try:
-        size = path.stat().st_size
-        with path.open("rb") as fh:
-            if tail_bytes is not None:
-                fh.seek(max(0, size - tail_bytes))
-            chunk = fh.read()
-        lines = chunk.decode("utf-8").splitlines()
-    except (OSError, UnicodeDecodeError):
-        return None
-    if tail_bytes is not None and size > tail_bytes and lines:
-        lines = lines[1:]  # a mid-file seek lands inside a line; drop it
-    newest: Optional[float] = None
-    for line in lines:
-        try:
-            ts = json.loads(line).get("timestamp")
-        except Exception:  # noqa: BLE001 - a torn/foreign line is not data
-            continue
-        if not ts:
-            continue
-        epoch = _record_stamp_epoch(ts)
-        if epoch is not None and (newest is None or epoch > newest):
-            newest = epoch
-    return newest
-
-
 def _opencode_activity_epoch(session_id: str, db_path: Path) -> Optional[float]:
     """Newest message time for an opencode session, in epoch SECONDS, or None.
 
@@ -329,7 +282,7 @@ def observed_title(agent: str, transcript_path: Optional[Path]) -> Optional[str]
 
 
 # Transcript location and the observed-model read live in fno.provenance:
-# fno.graph (core) needs them too, and a core module may not import from the
+# core code needed them too, and a core module may not import from the
 # agents runtime. Re-exported so this module's own callers are unaffected.
 from fno.provenance.observed import (  # noqa: E402
     observed_model,
@@ -580,6 +533,3 @@ def _humanize_age(seconds: Optional[int]) -> str:
         # fixed-width-4 invariant once a row is silent for 1000+ days).
         unit, n = "d", min(seconds // 86400, 999)
     return f"{n}{unit}".rjust(4)
-
-
-

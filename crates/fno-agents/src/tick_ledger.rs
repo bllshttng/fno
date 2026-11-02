@@ -27,7 +27,7 @@ use crate::paths::AgentsHome;
 pub const EVENT_TYPE: &str = "control_plane_tick";
 
 /// The launchd scheduler label the pr-watch-hosted arms write in their tick
-/// rows; the same string `cli/src/fno/pr_watch/cli.py` emits.
+/// rows; the same string `pr_watch/tick.rs` emits.
 pub const SCHED_LAUNCHD: &str = "launchd:sh.fno.pr-watcher";
 /// The daemon scheduler label the in-daemon arms write.
 pub const SCHED_DAEMON: &str = "daemon";
@@ -471,8 +471,10 @@ pub fn journals(home: &AgentsHome) -> Vec<PathBuf> {
     vec![home.events_jsonl(), global]
 }
 
+/// The healer's receipt type, folded into `heal`-arm rows by the reads.
+const HEAL_TICK_TYPE: &str = "pr_heal_tick";
 /// The row types the arms folds read: arm ticks and the healer's receipts.
-const ARM_ROW_TYPES: &[&str] = &[EVENT_TYPE, "pr_heal_tick"];
+const ARM_ROW_TYPES: &[&str] = &[EVENT_TYPE, HEAL_TICK_TYPE];
 /// The row types the pr-watch tick trace reads.
 const TICK_TRACE_TYPES: &[&str] = &["pr_watch_tick_attempt", "pr_watch_tick_end"];
 
@@ -534,7 +536,82 @@ fn journal_rows(journals: &[PathBuf], types: &[&str], since_unix: u64) -> Vec<Va
 /// bounded read answers in place of the whole-history fold.
 pub fn read_arms(journals: &[PathBuf], now_unix: u64) -> Vec<ArmStatus> {
     let since = now_unix.saturating_sub(ARM_WINDOW_FLOOR_S);
+    if let Some((values, _, _)) = reduced_arm_read(journals, since, since) {
+        return arms_from_rows(&values, now_unix);
+    }
     arms_from_rows(&journal_rows(journals, ARM_ROW_TYPES, since), now_unix)
+}
+
+/// The arms window every fold reads, reduced in the stores when every
+/// journal answers from one: the fold rows (each arm's newest and newest-ok
+/// tie sets, the healer's receipts, the retry candidates, the un-ingested
+/// tails) plus the starvation sets the mark needs. `None` when any journal
+/// still holds raw rows the stores never ingested, so the caller folds the
+/// text and stays exact.
+fn reduced_arm_read(
+    journals: &[PathBuf],
+    since_unix: u64,
+    active_since_unix: u64,
+) -> Option<(Vec<Value>, Vec<(String, i64)>, Vec<String>)> {
+    let since_ms = i64::try_from(since_unix).ok()?.saturating_mul(1000);
+    let active_ms = i64::try_from(active_since_unix).ok()?.saturating_mul(1000);
+    let needles: Vec<String> = ARM_ROW_TYPES.iter().map(|t| format!("\"{t}\"")).collect();
+    let mut values = Vec::new();
+    let mut max_ts: HashMap<String, i64> = HashMap::new();
+    let mut active: HashSet<String> = HashSet::new();
+    for j in journals {
+        match crate::event_store::reduce_arm_ticks(
+            j,
+            EVENT_TYPE,
+            HEAL_TICK_TYPE,
+            since_ms,
+            active_ms,
+            FAILURE_SKIPS,
+            SELECT_UNMEASURED_GLOB,
+        ) {
+            Some(red) => {
+                for (_, line) in red.rows {
+                    if let Ok(v) = serde_json::from_str::<Value>(&line) {
+                        values.push(v);
+                    }
+                }
+                for (arm, ts) in red.max_ts {
+                    let seen = max_ts.entry(arm).or_insert(ts);
+                    if ts > *seen {
+                        *seen = ts;
+                    }
+                }
+                active.extend(red.active_arms);
+            }
+            None => {
+                // No store here. A raw journal with rows the folds read means
+                // the exact fold is the text path; an empty answer (the
+                // absent global journal, say) contributes nothing.
+                let query = crate::event_store::EventQuery {
+                    types: ARM_ROW_TYPES.iter().map(|t| t.to_string()).collect(),
+                    include_rejected: true,
+                    since_ms: Some(since_ms),
+                    ..Default::default()
+                };
+                let text =
+                    crate::event_store::journal_text_checked(j, &query).unwrap_or_else(|_| {
+                        std::fs::read_to_string(crate::event_store::live_journal(j))
+                            .unwrap_or_default()
+                    });
+                if text
+                    .lines()
+                    .any(|l| needles.iter().any(|n| l.contains(n.as_str())))
+                {
+                    return None;
+                }
+            }
+        }
+    }
+    let mut max_pairs: Vec<(String, i64)> = max_ts.into_iter().collect();
+    max_pairs.sort();
+    let mut active: Vec<String> = active.into_iter().collect();
+    active.sort();
+    Some((values, max_pairs, active))
 }
 
 /// The arms fold over rows already collected, so [`read_arms_starved`]
@@ -618,7 +695,7 @@ fn fold_arm_row(
     // The healer's receipt type folds into the `heal` arm semantics, so
     // both journal folds agree on what a heal receipt looks like.
     let healed;
-    let value = if value.get("type").and_then(Value::as_str) == Some("pr_heal_tick") {
+    let value = if value.get("type").and_then(Value::as_str) == Some(HEAL_TICK_TYPE) {
         healed = heal_tick_as_arm_row(value);
         &healed
     } else {
@@ -662,7 +739,7 @@ fn fold_arm_row(
     // newest attempt per project, so a later project's healthy tick never
     // masks an earlier project's timeout (read_arms windows the survivors).
     let skip_reason = data.get("skip_reason").and_then(Value::as_str);
-    if arm == "auto_continue" && skip_reason == Some("select-unmeasured") {
+    if arm == "auto_continue" && skip_reason == Some(SELECT_UNMEASURED) {
         let project = data
             .get("detail")
             .and_then(Value::as_str)
@@ -733,8 +810,46 @@ fn heal_tick_as_arm_row(value: &Value) -> Value {
 /// than the lookback it judges.
 pub fn mark_starved(journals: &[PathBuf], rows: &mut [ArmStatus], now_unix: u64, threshold_s: u64) {
     let since = now_unix.saturating_sub(ARM_WINDOW_FLOOR_S.max(threshold_s));
+    let active_since = now_unix.saturating_sub(threshold_s);
+    if let Some((_, max_ts, active)) = reduced_arm_read(journals, since, active_since) {
+        let active_ms = i64::try_from(active_since)
+            .unwrap_or(i64::MAX)
+            .saturating_mul(1000);
+        mark_starved_reduced(rows, &max_ts, &active, active_ms);
+        return;
+    }
     let values = journal_rows(journals, ARM_ROW_TYPES, since);
     mark_starved_rows(&values, rows, now_unix, threshold_s);
+}
+
+/// The starvation mark from the reduction's reads: an armed, observed,
+/// non-stale, non-failing row whose newest tick sits inside the threshold
+/// window, with no acted or explaining row inside it. The newest-tick test
+/// reads the walk maxima, so neither verdict needs a per-row scan. The
+/// text-path mark reads the same verdict off the full history, so the two
+/// stay one predicate.
+fn mark_starved_reduced(
+    rows: &mut [ArmStatus],
+    max_ts: &[(String, i64)],
+    active: &[String],
+    active_since_ms: i64,
+) {
+    for row in rows.iter_mut() {
+        if row_is_unarmed(row)
+            || row.producer_evidence == ProducerEvidence::Unobserved
+            || row.stale
+            || row.failing
+        {
+            continue;
+        }
+        let ticked = max_ts
+            .iter()
+            .any(|(arm, ts)| arm == &row.arm && *ts >= active_since_ms);
+        let explained = active.iter().any(|a| a == &row.arm);
+        if ticked && !explained {
+            row.starved = true;
+        }
+    }
 }
 
 /// The starvation mark over rows already collected, so
@@ -803,6 +918,16 @@ pub fn read_arms_starved(journals: &[PathBuf], now_unix: u64) -> Vec<ArmStatus> 
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let threshold = crate::agents_config::notify_arm_starved_after_s(&cwd);
     let since = now_unix.saturating_sub(ARM_WINDOW_FLOOR_S.max(threshold));
+    let active_since = now_unix.saturating_sub(threshold);
+    if let Some((values, max_ts, active)) = reduced_arm_read(journals, since, active_since) {
+        let mut rows = arms_from_rows(&values, now_unix);
+        fill_arm_values(&mut rows, &cwd);
+        let active_ms = i64::try_from(active_since)
+            .unwrap_or(i64::MAX)
+            .saturating_mul(1000);
+        mark_starved_reduced(&mut rows, &max_ts, &active, active_ms);
+        return rows;
+    }
     let values = journal_rows(journals, ARM_ROW_TYPES, since);
     let mut rows = arms_from_rows(&values, now_unix);
     fill_arm_values(&mut rows, &cwd);
@@ -815,7 +940,7 @@ pub fn read_arms_starved(journals: &[PathBuf], now_unix: u64) -> Vec<ArmStatus> 
 fn collect_tick_history(rows: &[Value], history: &mut HashMap<String, Vec<(u64, u64, bool)>>) {
     for value in rows {
         let healed;
-        let value = if value.get("type").and_then(Value::as_str) == Some("pr_heal_tick") {
+        let value = if value.get("type").and_then(Value::as_str) == Some(HEAL_TICK_TYPE) {
             healed = heal_tick_as_arm_row(value);
             &healed
         } else {
@@ -987,6 +1112,13 @@ const FAILURE_SKIPS: &[&str] = &[
     "notify_failed",
     "registry_unreadable",
 ];
+
+/// The bounded selection a timed-out read reports; the arm_watch heal lane
+/// retries it, so the fold keeps the newest attempt per project.
+const SELECT_UNMEASURED: &str = "select-unmeasured";
+/// The line GLOB that finds retry-candidate rows byte-cheaply: every
+/// `select-unmeasured` row carries exactly this substring.
+const SELECT_UNMEASURED_GLOB: &str = "*\"skip_reason\":\"select-unmeasured\"*";
 
 /// Skip reasons that mean the arm is OFF by configuration. Its silence is the
 /// config speaking, not a scheduler that died - no restart helps an arm whose
@@ -3515,5 +3647,171 @@ mod tests {
             assert_eq!(row.cause, None);
         }
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    fn append_envelopes(path: &Path, rows: &[Value]) {
+        for row in rows {
+            crate::event_store::append_envelope(path, &serde_json::to_string(row).unwrap(), None)
+                .unwrap();
+        }
+    }
+
+    /// One control-plane tick row the store writer accepts (schema-required
+    /// fields present) and the folds read.
+    fn store_tick(ts: &str, arm: &str, acted: u64, skip: Value, detail: Value) -> Value {
+        json!({
+            "ts": ts,
+            "type": EVENT_TYPE,
+            "source": "loop",
+            "data": {
+                "arm": arm,
+                "scheduler": SCHED_LAUNCHD,
+                "acted": acted,
+                "skip_reason": skip,
+                "detail": detail,
+                "interval_s": 21_600u64,
+            }
+        })
+    }
+
+    fn arm_row<'a>(rows: &'a [ArmStatus], name: &str) -> &'a ArmStatus {
+        rows.iter()
+            .find(|r| r.arm == name)
+            .unwrap_or_else(|| panic!("no {name} row"))
+    }
+
+    /// The store reduction must fold to the exact verdicts the raw-text fold
+    /// produces: same newest, same newest-ok, same tie winner, same starved
+    /// mark, same retry set. This is the contract that lets `fno agents
+    /// status` answer from the store index instead of parsing seven days of
+    /// tick rows.
+    #[test]
+    fn store_reduced_fold_matches_raw_journal_fold() {
+        let dir = temp_dir();
+        let store = dir.join("events.jsonl");
+        let raw = dir.join("raw-events.jsonl");
+        let rows = vec![
+            store_tick("2026-11-01T09:00:00Z", "alpha", 0, json!(null), json!(null)),
+            store_tick(
+                "2026-11-01T11:00:00Z",
+                "alpha",
+                0,
+                json!("error"),
+                json!(null),
+            ),
+            store_tick("2026-11-01T10:00:00Z", "beta", 0, json!(null), json!(null)),
+            store_tick("2026-11-01T10:00:00Z", "beta", 1, json!(null), json!(null)),
+            store_tick("2026-11-01T02:00:00Z", "gamma", 0, json!(null), json!(null)),
+            store_tick("2026-11-01T03:00:00Z", "gamma", 0, json!(null), json!(null)),
+            store_tick("2026-11-01T09:30:00Z", "heal", 0, json!(null), json!(null)),
+            store_tick(
+                "2026-11-01T10:30:00Z",
+                "auto_continue",
+                0,
+                json!(SELECT_UNMEASURED),
+                json!("project=beacon bound=30s: selection timed out"),
+            ),
+            json!({
+                "ts": "2026-11-01T11:30:00Z",
+                "type": HEAL_TICK_TYPE,
+                "source": "pr-heal",
+                "data": {"seen": 3, "unknown": 0, "dry_run": 0, "rebased": 1},
+            }),
+        ];
+        append_envelopes(&store, &rows);
+        write_rows(&raw, &rows);
+        let now = parse_rfc3339_unix("2026-11-01T12:00:00Z").unwrap();
+
+        let reduced = read_arms_starved(&[store.clone()], now);
+        let raw_fold = read_arms_starved(&[raw.clone()], now);
+        let reduced_lines: Vec<String> = reduced.iter().map(render_row).collect();
+        let raw_lines: Vec<String> = raw_fold.iter().map(render_row).collect();
+        assert_eq!(reduced_lines, raw_lines, "store and raw folds disagree");
+
+        // The verdicts the parity must actually exercise, not just echo:
+        let alpha = arm_row(&reduced, "alpha");
+        assert_eq!(alpha.acted, Some(0), "newest tick's acted wins");
+        assert_eq!(alpha.skip_reason.as_deref(), Some("error"));
+        assert!(!alpha.starved, "an explaining skip keeps the arm unstarved");
+        let beta = arm_row(&reduced, "beta");
+        assert_eq!(beta.acted, Some(1), "the later tie row wins");
+        let gamma = arm_row(&reduced, "gamma");
+        assert!(gamma.starved, "silent zero ticks starve the arm");
+        let heal = arm_row(&reduced, "heal");
+        assert_eq!(heal.last_ts.as_deref(), Some("2026-11-01T11:30:00Z"));
+        let cont = arm_row(&reduced, "auto_continue");
+        assert!(
+            !cont.retries.is_empty(),
+            "select-unmeasured keeps its retry set"
+        );
+    }
+
+    /// A journal with no store must not force the text fold when it holds
+    /// nothing the folds read: the absent global journal is the live case.
+    #[test]
+    fn absent_journal_contributes_nothing_to_reduced_fold() {
+        let dir = temp_dir();
+        let store = dir.join("events.jsonl");
+        append_envelopes(
+            &store,
+            &[store_tick(
+                "2026-11-01T11:00:00Z",
+                "alpha",
+                0,
+                json!(null),
+                json!(null),
+            )],
+        );
+        let now = parse_rfc3339_unix("2026-11-01T12:00:00Z").unwrap();
+        let absent = dir.join("missing-dir").join("events.jsonl");
+        let alone = read_arms_starved(&[store.clone()], now);
+        let with_absent = read_arms_starved(&[store.clone(), absent], now);
+        let a: Vec<String> = alone.iter().map(render_row).collect();
+        let b: Vec<String> = with_absent.iter().map(render_row).collect();
+        assert_eq!(
+            a, b,
+            "an empty no-store journal must not block the reduction"
+        );
+    }
+
+    /// A legacy raw journal with real rows forces the all-or-nothing text
+    /// fallback, and the fallback must fold exactly like one raw journal
+    /// holding every row: store rows first, then the raw journal, ties
+    /// resolved the same way.
+    #[test]
+    fn legacy_raw_journal_forces_the_exact_text_fold() {
+        let dir = temp_dir();
+        let store = dir.join("events.jsonl");
+        let legacy = dir.join("legacy").join("events.jsonl");
+        let store_rows = vec![
+            store_tick("2026-11-01T09:00:00Z", "alpha", 0, json!(null), json!(null)),
+            store_tick("2026-11-01T11:00:00Z", "alpha", 1, json!(null), json!(null)),
+        ];
+        let legacy_rows = vec![
+            store_tick("2026-11-01T11:00:00Z", "alpha", 2, json!(null), json!(null)),
+            store_tick("2026-11-01T10:00:00Z", "beta", 0, json!(null), json!(null)),
+        ];
+        append_envelopes(&store, &store_rows);
+        write_rows(&legacy, &legacy_rows);
+        let combined = dir.join("combined.jsonl");
+        let mut every_row = store_rows.clone();
+        every_row.extend(legacy_rows.clone());
+        write_rows(&combined, &every_row);
+        let now = parse_rfc3339_unix("2026-11-01T12:00:00Z").unwrap();
+
+        let mixed = read_arms_starved(&[store.clone(), legacy.clone()], now);
+        let raw_fold = read_arms_starved(&[combined.clone()], now);
+        let a: Vec<String> = mixed.iter().map(render_row).collect();
+        let b: Vec<String> = raw_fold.iter().map(render_row).collect();
+        assert_eq!(
+            a, b,
+            "mixed store and raw journals fold differently than raw"
+        );
+        let alpha = arm_row(&mixed, "alpha");
+        assert_eq!(alpha.acted, Some(2), "the raw journal's later tie row wins");
+        assert!(
+            mixed.iter().any(|r| r.arm == "beta"),
+            "legacy rows are folded"
+        );
     }
 }

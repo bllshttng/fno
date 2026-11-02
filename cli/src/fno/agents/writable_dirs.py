@@ -47,7 +47,7 @@ the ledger sit at that same level - see the paragraph below.
 It cannot be narrowed to subdirectories. ``graph.json`` and ``ledger.json`` sit
 directly at the state root, and both are written with
 ``tempfile.mkstemp(dir=path.parent)`` followed by ``os.replace``
-(``fno/graph/store.py``). An atomic replace needs write access to the
+(``graph_store.rs``). An atomic replace needs write access to the
 DIRECTORY, not the file, so a worker that mutates the graph needs the root
 itself. Granting the children instead would leave every graph write refused.
 
@@ -60,33 +60,14 @@ shipped shape.
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 import sys
-from typing import Callable, Iterable, Mapping, MutableMapping, Optional, Sequence
+from typing import Callable, Iterable, Optional, Sequence
 
 __all__ = [
-    "WORKER_ADD_DIRS_ENV",
     "add_dir_tokens",
-    "export_worker_writable_dirs",
-    "published_worker_writable_dirs",
     "worker_writable_dirs",
 ]
-
-#: Channel the Python spawn seam uses to hand the computed set to the Rust
-#: client. `--substrate bg|headless` does NOT stay in Python: `rust_runtime`
-#: carves out only the pane substrate, and every other spawn `os.execv`s the
-#: `fno-agents` binary, which builds the harness argv itself and forwards only
-#: the OPERATOR's `--add-dir`. So the three Python token builders cover exactly
-#: one reachable lane, and a bg claude worker - the substrate the shipped stage
-#: table uses for its own delivery lane - still could not write the claim store.
-#:
-#: An env var rather than a new flag: `--add-dir` is scalar in both runtimes
-#: (typer `str | None`, and `params.insert` in the Rust arg parser overwrites),
-#: so a repeated token cannot carry N directories without widening the flag on
-#: both sides plus its parity mirror. `os.execv` inherits the environment, so
-#: this reaches the binary with no parser change and keeps ONE resolver.
-WORKER_ADD_DIRS_ENV = "FNO_WORKER_ADD_DIRS"
 
 
 ADD_DIR_PROVIDERS = ("claude", "codex", "agy", "cursor-agent")
@@ -268,42 +249,3 @@ def worker_writable_dirs(
         seen.add(token)
         out.append(token)
     return out
-
-
-def export_worker_writable_dirs(cwd: "Path", env: "MutableMapping[str, str]") -> list[str]:
-    """Compute the set for ``cwd`` and publish it on ``env`` for the Rust client.
-
-    Called at the spawn seam, before the route/fork, so it covers the lanes the
-    Python token builders never see. Returns what it published so a caller can
-    log or assert on it. Publishes nothing when the set is empty, so an argv that
-    would gain no grant is byte-identical to today's.
-    """
-    dirs = worker_writable_dirs(cwd)
-    if dirs:
-        env[WORKER_ADD_DIRS_ENV] = os.pathsep.join(dirs)
-    else:
-        # CLEAR rather than leave alone. The pane lane publishes on os.environ,
-        # and a pane shell inherits it, so a spawn made from inside a worker
-        # starts with the PARENT's value already set. Without this the empty
-        # branch would hand the Rust builders another project's directories as
-        # write grants, which is both wrong and wider than anything computed
-        # here. It is also what makes this function's own "publishes nothing"
-        # claim true rather than only true from a clean environment.
-        env.pop(WORKER_ADD_DIRS_ENV, None)
-    return dirs
-
-
-def published_worker_writable_dirs(env: "Mapping[str, str] | None" = None) -> list[str]:
-    """Read back what the seam published, WITHOUT recomputing.
-
-    The resume lane must read this rather than call :func:`worker_writable_dirs`
-    itself. `codex exec resume` is built by both runtimes, and Rust cannot run
-    the resolver, so it reads the env. A Python side that computed instead would
-    emit a different roots list from the same inputs whenever the variable is
-    unset, which is exactly the divergence the rust/py argv-parity tests exist to
-    catch. One published value, two readers.
-    """
-    import os as _os
-
-    raw = (env if env is not None else _os.environ).get(WORKER_ADD_DIRS_ENV, "")
-    return [p for p in raw.split(_os.pathsep) if p]

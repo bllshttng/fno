@@ -133,7 +133,6 @@ LAYERS = (
             # the scan skips unmapped modules entirely, so relocating code
             # without adding it here would clear a finding while leaving the
             # dependency in place.
-            "fno.drive_authority",
             "fno.harness_identity",
             "fno.harness_names",
             "fno.rust_binary",
@@ -160,7 +159,6 @@ LAYERS = (
         (
             "fno.company",
             "fno.company.contracts",
-            "fno.graph",
             "fno.claims",
             "fno.plan",
         ),

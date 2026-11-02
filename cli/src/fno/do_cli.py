@@ -10,11 +10,11 @@ leaf in the claims-forward shape: option signatures unchanged, transport only.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import typer
 
 from fno.plan import plan_app
-from fno.pr_watch.cli import cli as pr_watch_app
 from fno.resume_receipt_cli import cli as resume_app
 
 
@@ -24,16 +24,40 @@ do_app = typer.Typer(
     no_args_is_help=True,
 )
 
-# The pr namespace's 29 spellings answer natively now (the fno front door
-# claims `do pr` and the fno-agents pr dispatcher routes them); the wheel
-# keeps only the watch mount under the same group.
+# The pr namespace answers natively (the fno front door claims `do pr`). The
+# wheel keeps this one leaf because installed LaunchAgents run
+# `fno-py do pr watch tick`.
 do_pr_app = typer.Typer(
     name="pr",
-    help="PR lifecycle operations (native commands; watch stays here).",
+    help="PR lifecycle operations (native commands).",
     no_args_is_help=True,
     add_completion=False,
 )
-do_pr_app.add_typer(pr_watch_app, name="watch")
+
+_WATCH_LEAF: dict[str, Any] = {
+    "name": "watch",
+    "add_help_option": False,
+    "context_settings": {"allow_extra_args": True, "ignore_unknown_options": True},
+}
+
+
+def _forward_watch(ctx: typer.Context) -> None:
+    """Exec, not spawn: launchd signals this pid, and the tick's SIGTERM record needs it."""
+    import os
+
+    from fno.rust_binary import find_dev_binary, resolve_binary
+
+    binary = find_dev_binary() or resolve_binary()
+    if binary is None:
+        typer.echo("fno do pr watch: fno-agents not found; set FNO_AGENTS_BIN.", err=True)
+        raise typer.Exit(code=127)
+    os.execv(str(binary), [str(binary), "pr-watch", *ctx.args])
+
+
+do_pr_app.command(**_WATCH_LEAF)(_forward_watch)
+pr_watch_app = typer.Typer(add_completion=False)
+pr_watch_app.command(**_WATCH_LEAF)(_forward_watch)
+pr_watch_command = typer.main.get_command(pr_watch_app)
 
 
 delivery_app = typer.Typer(
