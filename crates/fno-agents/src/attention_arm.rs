@@ -1790,7 +1790,14 @@ impl SinkIo for RealIo {
         if out.status.success() {
             Ok(last_line(&String::from_utf8_lossy(&out.stderr)))
         } else {
-            Err(format!("clear exited {}", out.status.code().unwrap_or(-1)))
+            // The door prints its refusal first, its count line last.
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            let said = stdout.lines().map(str::trim).find(|l| !l.is_empty());
+            let code = out.status.code().unwrap_or(-1);
+            Err(format!(
+                "clear exited {code}: {}",
+                said.unwrap_or("no output")
+            ))
         }
     }
 
