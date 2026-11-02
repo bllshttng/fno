@@ -32,8 +32,11 @@ pub fn run(args: &[String]) -> i32 {
     match rewrite {
         Ok(()) => {
             let source = task.source_path.display().to_string();
-            let to = if demote { "demoted" } else { "regression" };
-            println!("graduated '{task_id}' -> {to} ({source})");
+            if demote {
+                println!("demoted '{task_id}' ({source})");
+            } else {
+                println!("graduated '{task_id}' -> regression ({source})");
+            }
             0
         }
         Err(text) => {

@@ -214,8 +214,10 @@ impl Tree {
     }
 }
 
-/// The noise block over every tree in the series, joined or not.
-fn noise(rows: &[&Row], tree_time: &BTreeMap<String, i64>) -> Value {
+/// The noise block. Same-tree noise reads every cohort run three or more
+/// times. The between-tree spread and the week means read main trees only:
+/// an experiment tree off main is not a day the join can tell apart.
+fn noise(rows: &[&Row], tree_time: &BTreeMap<String, i64>, on_main: &BTreeSet<String>) -> Value {
     // Same tree: a cohort run three or more times, one score per repeat.
     let mut by_cohort: BTreeMap<String, BTreeMap<i64, (usize, usize)>> = BTreeMap::new();
     for r in rows {
@@ -250,7 +252,7 @@ fn noise(rows: &[&Row], tree_time: &BTreeMap<String, i64>) -> Value {
     // Between trees: one mean score per tree.
     let mut by_tree: BTreeMap<String, (usize, usize)> = BTreeMap::new();
     for r in rows {
-        if let Some(sha) = &r.bank_rev {
+        if let Some(sha) = r.bank_rev.as_ref().filter(|s| on_main.contains(*s)) {
             let e = by_tree.entry(sha.clone()).or_default();
             e.0 += 1;
             e.1 += r.pass as usize;
@@ -460,7 +462,7 @@ pub(crate) fn fold(history_rows: &[Row], inputs: &Inputs) -> Value {
         return json!({"series": Value::Null, "series_index": index, "excluded": excluded,
             "noise": {"same_tree_sd_points": Value::Null}, "tasks": []});
     };
-    let noise_block = noise(rows, &inputs.tree_time);
+    let noise_block = noise(rows, &inputs.tree_time, &inputs.on_main);
 
     // The join's trees: timed, on main, in time order.
     let mut grades: BTreeMap<String, BTreeMap<String, (usize, usize)>> = BTreeMap::new();
