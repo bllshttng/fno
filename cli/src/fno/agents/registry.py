@@ -1869,9 +1869,11 @@ def register_existing_session(
     ).get("fields")
 
     def _apply_manifest_role(entry: AgentEntry) -> None:
-        if manifest_role and not entry.role_scope:
-            digits = manifest_role.get("role_level") or ""
-            entry.role_level = int(digits) if digits.isdecimal() else None
+        # A manifest with no level (a pass manifest) holds no grant. Stamping
+        # its scope alone would make half a role.
+        digits = (manifest_role or {}).get("role_level") or ""
+        if manifest_role and not entry.role_scope and digits.isdecimal():
+            entry.role_level = int(digits)
             entry.role_scope = manifest_role["role_scope"]
             entry.role_grantor = manifest_role.get("role_grantor") or None
 

@@ -111,16 +111,14 @@ fn a_terminal_target_names_the_stale_snapshot() {
 }
 
 #[test]
-fn half_a_role_is_refused_not_overwritten() {
+fn a_grant_completes_half_a_role() {
     let mut half = row("t", "idle", "aaaa1111-0000");
     half["role_scope"] = json!("beta");
     let w = World::new("half", json!([half]));
-    let (code, _, err) = w.run(&["t", "--scope", "alpha"]);
-    assert_eq!(code, 2);
-    assert!(
-        err.contains("it holds half a role (level=None, scope='beta')"),
-        "{err}"
-    );
+    let (code, out, err) = w.run(&["t", "--scope", "alpha"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(out.contains("alpha"), "{out}");
+    assert!(!out.contains("beta"), "half a role vacates nothing: {out}");
 }
 
 #[test]

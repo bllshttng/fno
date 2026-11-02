@@ -304,6 +304,17 @@ fn grant_refusal<'a>(
     let caller = payload.get("caller").cloned().unwrap_or(Value::Null);
     let field = |key: &str| caller.get(key).and_then(Value::as_str).unwrap_or("");
     let requested = text("requested");
+    let as_user = || {
+        let way = match field("user_strip") {
+            "" => "open a terminal outside any harness session and run:".to_string(),
+            strip => format!("rerun with no inherited identity: {strip}"),
+        };
+        let sep = if way.ends_with(' ') { "" } else { " " };
+        format!(
+            " If you are the user at this terminal, {way}{sep}fno agents org promote <handle> \
+             --scope {requested}"
+        )
+    };
     match field("kind") {
         "human" => None,
         "unreadable" => Some(match text("stray_agent_self") {
@@ -321,14 +332,17 @@ fn grant_refusal<'a>(
                  env -u FNO_AGENT_SELF fno agents org promote <args>."
             ),
         }),
-        "unregistered" => Some(
-            "cannot verify the grantor's authority: this session carries an agent \
-             identity but has no registry row (it spawned before its row landed, \
-             or has not run /fno-me), so it is an agent with no verified authority, \
-             not an attended human. Run /fno-me to join or wait for the row, then \
-             retry; or ask your lead to grant it."
-                .to_string(),
-        ),
+        "unregistered" => Some(format!(
+            "cannot verify the grantor's authority: this shell resolved to {} but it has \
+             no registry row (it spawned before its row landed, or has not run /fno-me), \
+             so it is an agent with no verified authority, not an attended human. Run \
+             /fno-me to join or wait for the row, then retry; or ask your lead to grant it.{}",
+            match field("identity") {
+                "" => "an agent identity",
+                identity => identity,
+            },
+            as_user()
+        )),
         "agent" => {
             let status = field("status");
             let held = field("role_scope");
@@ -344,9 +358,14 @@ fn grant_refusal<'a>(
             }
             if held.is_empty() {
                 return Some(format!(
-                    "a role is handed DOWN, and this session holds none: an unpromoted \
-                     agent cannot grant one. Ask a lead whose scope contains \
-                     '{requested}' to grant it."
+                    "a role is handed DOWN, and this session holds none: this shell \
+                     resolved to {}, and an unpromoted agent cannot grant one. Ask a lead \
+                     whose scope contains '{requested}' to grant it.{}",
+                    match field("identity") {
+                        "" => "an agent",
+                        identity => identity,
+                    },
+                    as_user()
                 ));
             }
             if same_territory(held, requested, projects) {
@@ -1661,6 +1680,22 @@ mod grant_tests {
         assert_eq!(check(agent("busy", "a"), "alpha", true), None);
         let unpromoted = check(agent("idle", ""), "e-1", false).unwrap();
         assert!(unpromoted.contains("holds none"), "{unpromoted}");
+        let named = check(
+            json!({"kind": "agent", "status": "idle", "role_scope": "",
+                "identity": "registry row w (codex session 01a19918)",
+                "user_strip": "env -u CODEX_THREAD_ID "}),
+            "e-1",
+            false,
+        )
+        .unwrap();
+        assert!(
+            named.contains("registry row w (codex session 01a19918)"),
+            "{named}"
+        );
+        assert!(
+            named.contains("env -u CODEX_THREAD_ID fno agents org promote <handle> --scope e-1"),
+            "{named}"
+        );
         let dead = check(agent("exited", "alpha"), "e-1", false).unwrap();
         assert!(dead.contains("'exited', which is terminal"), "{dead}");
         for kind in ["unreadable", "unregistered", "bogus"] {

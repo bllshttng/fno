@@ -3013,6 +3013,15 @@ pub fn run_lead_checkin(args: &[String]) -> i32 {
         eprintln!("lead: {msg}");
         return 2;
     }
+    if ctx.level.is_none() {
+        eprintln!(
+            "lead: no team holds {} at any level, so a check-in has nothing to report. A role \
+             needs a level and a scope. Have a lead or the user grant it: fno agents org promote \
+             <handle> --scope {}",
+            ctx.scope, ctx.scope
+        );
+        return 2;
+    }
     // The canon doc lives in the scope's project, not the lead's cwd: a lead
     // whose shell sat elsewhere read an empty dir while `config paths handoff
     // --scope` found the doc. The cwd default stays only for an unknown scope.
