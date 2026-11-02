@@ -8856,11 +8856,12 @@ fn gone_decrements_the_published_client_count() {
 #[test]
 fn link_gate_opens_one_pane_for_a_tagged_passive_client() {
     let (mut core, pane) = template_core();
+    let scrollback = "line\r\n".repeat(200);
     core.panes
         .get_mut(&pane)
         .unwrap()
         .vt
-        .feed("line\r\n".repeat(200).as_bytes());
+        .feed(scrollback.as_bytes());
     core.clients.push(client(2, 5, (0, 0), true));
     let tick = |pane| CoreMsg::PaneScroll {
         id: 2,
@@ -8882,10 +8883,7 @@ fn link_gate_opens_one_pane_for_a_tagged_passive_client() {
     core.handle(CoreMsg::Link(2, hello(format!("pid:{child}"))));
     core.handle(tick(pane));
     assert_ne!(offset(&core), 0, "the link drives its own pane");
-    assert!(
-        !core.links.may_send(2, &tick(pane + 1)),
-        "and only that pane"
-    );
+    assert!(!core.links.may_send(2, &tick(pane + 1)), "only that pane");
     core.reap_pane(pane);
 }
 
