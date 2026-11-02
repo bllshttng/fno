@@ -134,6 +134,53 @@ pub(crate) fn cost(t: Tokens, r: &Rates) -> Option<f64> {
     Some(dollars / 1_000_000.0)
 }
 
+/// `cost`, with `one_hour` of the cache writes priced at the 1h TTL rate.
+/// models.dev carries only the 5m write rate; Anthropic bills a 1h write at
+/// twice the base input rate. Claude Code writes its prompt cache with the
+/// 1h TTL, so the flat rate under-reads a session by about an eighth.
+pub(crate) fn cost_with_1h(t: Tokens, one_hour: u64, r: &Rates) -> Option<f64> {
+    let one_hour = one_hour.min(t.cache_write);
+    let rest = Tokens {
+        cache_write: t.cache_write - one_hour,
+        ..t
+    };
+    let extra = if one_hour == 0 {
+        0.0
+    } else {
+        one_hour as f64 * r.input? * 2.0 / 1_000_000.0
+    };
+    Some(cost(rest, r)? + extra)
+}
+
+/// The OTel store's exact dollars for a session when they read higher than
+/// the transcript estimate. OTel sees harness calls no transcript records;
+/// the transcript sees calls made before the receiver started or while it
+/// was down. Each is a floor, so the larger one is the honest reading.
+pub(crate) fn with_otel_floor(sid: &str, estimate: Option<f64>) -> Option<f64> {
+    let db = crate::paths::AgentsHome::from_env()
+        .otel_dir()
+        .join("otel.db");
+    let exact = crate::otel_read::session_cost_usd(&db, sid);
+    match (exact, estimate) {
+        (Some(a), Some(b)) => Some(a.max(b)),
+        (a, b) => a.or(b),
+    }
+}
+
+/// The `subagents/*.jsonl` transcripts beside a claude session transcript.
+pub(crate) fn subagent_transcripts(transcript: &Path) -> Vec<PathBuf> {
+    let dir = transcript.with_extension("").join("subagents");
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut paths: Vec<PathBuf> = entries
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().is_some_and(|x| x == "jsonl"))
+        .collect();
+    paths.sort();
+    paths
+}
+
 /// The state root: `FNO_STATE_DIR` when set, else `$HOME/.fno` -- the same
 /// resolution `model_catalog::state_dir` (crate `fno`) applies.
 pub(crate) fn state_dir() -> PathBuf {
@@ -188,8 +235,14 @@ pub(crate) struct SessionCost {
 #[derive(Default)]
 pub(crate) struct RunningCost {
     offset: u64,
+    /// Byte offsets into the session's `subagents/*.jsonl` transcripts.
+    /// Their tokens bill to the parent session; their compaction rows do not
+    /// count as the parent's.
+    subagent_offsets: HashMap<PathBuf, u64>,
     seen_ids: HashSet<String>,
     per_model: HashMap<String, Tokens>,
+    /// The share of each model's `cache_write` written with the 1h TTL.
+    per_model_1h: HashMap<String, u64>,
     codex_total: Option<Tokens>,
     compaction_count: u64,
     compaction_readable: bool,
@@ -253,6 +306,37 @@ impl RunningCost {
         self.compaction_readable = read_ok && !self.compaction_parse_error;
     }
 
+    /// Absorb the appended whole lines of one subagent transcript. Only the
+    /// usage rows count; an unreadable file keeps its offset for next time.
+    pub(crate) fn absorb_subagent(&mut self, path: &Path) {
+        let Ok(len) = std::fs::metadata(path).map(|m| m.len()) else {
+            return;
+        };
+        let mut offset = self.subagent_offsets.get(path).copied().unwrap_or(0);
+        if len < offset {
+            offset = 0;
+        }
+        let Ok(file) = std::fs::File::open(path) else {
+            return;
+        };
+        let mut reader = std::io::BufReader::new(file);
+        if reader.seek(SeekFrom::Start(offset)).is_err() {
+            return;
+        }
+        let mut line = Vec::new();
+        while let Ok(n) = reader.read_until(b'\n', &mut line) {
+            if n == 0 || line.last() != Some(&b'\n') {
+                break;
+            }
+            offset += n as u64;
+            if let Ok(row) = serde_json::from_slice::<serde_json::Value>(&line) {
+                self.usage_row(&row);
+            }
+            line.clear();
+        }
+        self.subagent_offsets.insert(path.to_path_buf(), offset);
+    }
+
     fn row_line(&mut self, line: &str) {
         let Ok(row) = serde_json::from_str::<serde_json::Value>(line) else {
             self.compaction_parse_error = true;
@@ -261,7 +345,11 @@ impl RunningCost {
         if crate::compaction::boundary_ts(&row).is_some() {
             self.compaction_count += 1;
         }
-        if let Some(total) = crate::session_activity::codex_token_total(&row) {
+        self.usage_row(&row);
+    }
+
+    fn usage_row(&mut self, row: &serde_json::Value) {
+        if let Some(total) = crate::session_activity::codex_token_total(row) {
             self.codex_total = Some(total);
             return;
         }
@@ -297,11 +385,29 @@ impl RunningCost {
             .and_then(|v| v.as_str())
             .unwrap_or("?")
             .to_string();
+        let one_hour = usage
+            .get("cache_creation")
+            .and_then(|c| c.get("ephemeral_1h_input_tokens"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        *self.per_model_1h.entry(model.clone()).or_default() += one_hour;
         let tokens = self.per_model.entry(model).or_default();
         tokens.input += f("input_tokens");
         tokens.output += f("output_tokens");
         tokens.cache_read += f("cache_read_input_tokens");
         tokens.cache_write += f("cache_creation_input_tokens");
+    }
+
+    /// The dollars of everything seen so far, or `None` when any model that
+    /// holds tokens is unpriced.
+    pub(crate) fn dollars(
+        &self,
+        book: &PriceBook,
+        codex_model: Option<&str>,
+        route: Option<&str>,
+    ) -> Option<f64> {
+        let cents = self.session(book, codex_model, route).cents?;
+        Some(cents as f64 / 100.0)
     }
 
     /// Price everything seen so far. Codex totals count cached tokens inside
@@ -319,7 +425,11 @@ impl RunningCost {
         let mut tokens = 0u64;
         for (model, t) in &self.per_model {
             tokens += t.input + t.output + t.cache_read + t.cache_write;
-            match book.rates(model, route).and_then(|r| cost(*t, &r)) {
+            let one_hour = self.per_model_1h.get(model).copied().unwrap_or(0);
+            match book
+                .rates(model, route)
+                .and_then(|r| cost_with_1h(*t, one_hour, &r))
+            {
                 Some(c) => dollars += c,
                 None => priced = false,
             }
@@ -382,6 +492,9 @@ pub(crate) fn measure_session_cost(
             .unwrap_or_else(|| (RunningCost::new(), None))
     };
     fold.absorb(transcript);
+    for sub in subagent_transcripts(transcript) {
+        fold.absorb_subagent(&sub);
+    }
     if fold.compaction_readable {
         fold.last_measured_at = Some(now.to_string());
     }
@@ -393,6 +506,8 @@ pub(crate) fn measure_session_cost(
         return;
     };
     let mut cost = fold.session(&book, codex_model, route);
+    cost.cents = with_otel_floor(sid, cost.cents.map(|c| c as f64 / 100.0))
+        .map(|dollars| (dollars * 100.0).round() as u64);
     cost.measured_at = now.to_string();
     if let Ok(mut folds) = cell.lock() {
         folds.insert(sid.to_string(), (fold, Some(cost)));
@@ -573,6 +688,40 @@ mod tests {
         let priced = fold.session(&book, None, None);
         let expected: f64 = (147_000.0 * 4.0 + 17_000.0 * 20.0) / 1_000_000.0 * 100.0;
         assert_eq!(priced.cents, Some(expected.round() as u64));
+    }
+
+    #[test]
+    fn fold_bills_subagents_and_prices_1h_cache_writes() {
+        let dir = tmpdir("subagents");
+        fixture_book(&dir);
+        let book = price_book(&dir).unwrap();
+        let main = dir.join("sess.jsonl");
+        std::fs::write(
+            &main,
+            "{\"type\":\"assistant\",\"message\":{\"id\":\"m1\",\"model\":\"claude-opus-5-5\",\"usage\":{\"input_tokens\":1000,\"output_tokens\":0,\"cache_creation_input_tokens\":1000000,\"cache_creation\":{\"ephemeral_1h_input_tokens\":1000000}}}}\n",
+        )
+        .unwrap();
+        let subs = dir.join("sess").join("subagents");
+        std::fs::create_dir_all(&subs).unwrap();
+        let sub = subs.join("agent-a.jsonl");
+        std::fs::write(
+            &sub,
+            "{\"type\":\"assistant\",\"message\":{\"id\":\"s1\",\"model\":\"claude-opus-5-5\",\"usage\":{\"input_tokens\":0,\"output_tokens\":100000,\"cache_read_input_tokens\":1000000}}}\n",
+        )
+        .unwrap();
+        assert_eq!(subagent_transcripts(&main), vec![sub.clone()]);
+        let mut fold = RunningCost::new();
+        fold.absorb(&main);
+        for path in subagent_transcripts(&main) {
+            fold.absorb_subagent(&path);
+            fold.absorb_subagent(&path);
+        }
+        // 1000 input at $4, 1M 1h writes at 2x input ($8), 100k output at
+        // $20, 1M cache reads at $0.2: $10.204. The flat $5 write rate
+        // would read $7.204, and the main transcript alone $8.004.
+        let session = fold.session(&book, None, None);
+        assert_eq!(session.cents, Some(1020));
+        assert_eq!(session.tokens, 3_101_000);
     }
 
     #[test]
