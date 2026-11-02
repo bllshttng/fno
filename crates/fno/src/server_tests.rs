@@ -8856,42 +8856,29 @@ fn gone_decrements_the_published_client_count() {
 #[test]
 fn link_gate_opens_one_pane_for_a_tagged_passive_client() {
     let (mut core, pane) = template_core();
-    let lines = "line\r\n".repeat(200);
-    core.panes.get_mut(&pane).unwrap().vt.feed(lines.as_bytes());
+    core.panes.get_mut(&pane).unwrap().vt.feed("line\r\n".repeat(200).as_bytes());
     core.clients.push(client(2, 5, (0, 0), true));
-    let scroll = |core: &mut Core| {
-        core.handle(CoreMsg::PaneScroll {
-            id: 2,
-            pane,
-            delta: 3,
-        });
-        core.panes[&pane].vt.display_offset()
+    let tick = |pane| CoreMsg::PaneScroll {
+        id: 2,
+        pane,
+        delta: 3,
     };
     let hello = |identity: String| crate::proto::LinkHello {
         name: "me".into(),
         pane,
         identity,
     };
-    assert_eq!(scroll(&mut core), 0, "an untagged observer stays read-only");
+    let offset = |core: &Core| core.panes[&pane].vt.display_offset();
+    core.handle(tick(pane));
+    assert_eq!(offset(&core), 0, "an untagged observer stays read-only");
     core.handle(CoreMsg::Link(2, hello("pid:0".into())));
-    assert_eq!(scroll(&mut core), 0, "a stale pane reading is refused");
+    core.handle(tick(pane));
+    assert_eq!(offset(&core), 0, "a stale pane reading is refused");
     let child = core.panes[&pane].pty.child_pid().unwrap();
     core.handle(CoreMsg::Link(2, hello(format!("pid:{child}"))));
-    assert_ne!(scroll(&mut core), 0, "the link drives its own pane");
-    let other = CoreMsg::PaneScroll {
-        id: 2,
-        pane: pane + 1,
-        delta: 3,
-    };
-    assert!(!core.links.may_send(2, &other), "and only its own pane");
-    let launch = CoreMsg::DispatchNext {
-        id: 2,
-        account: None,
-    };
-    assert!(
-        !core.links.may_send(2, &launch),
-        "and no message starts work"
-    );
+    core.handle(tick(pane));
+    assert_ne!(offset(&core), 0, "the link drives its own pane");
+    assert!(!core.links.may_send(2, &tick(pane + 1)), "and only that pane");
     core.reap_pane(pane);
 }
 

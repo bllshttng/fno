@@ -187,7 +187,7 @@ fn text(v: &Value, key: &str) -> Option<String> {
 }
 
 /// A pane with no harness, or a shell, is not a seat.
-fn is_shell(harness: Option<&str>) -> bool {
+pub(super) fn is_shell(harness: Option<&str>) -> bool {
     harness.is_none_or(|h| matches!(h, "zsh" | "bash" | "sh" | "fish" | "shell"))
 }
 

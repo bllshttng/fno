@@ -786,6 +786,7 @@ pub(crate) struct View {
     agent_sort: AgentSort,
     /// The agents view's group-by axis (prefix+G), persisted like the density.
     agent_group: AgentGroup,
+    machine_tree: machine_tree::MachineTree,
     /// The card's `node · PR` header row switch (prefix+Y), persisted.
     show_card_head: bool,
     /// The manual reorder sequence (agent names in display order) behind the
@@ -1980,6 +1981,7 @@ impl View {
             sideline_width,
             agent_sort,
             agent_group,
+            machine_tree: Default::default(),
             show_card_head,
             manual_order,
             status_on: true,
@@ -5698,7 +5700,7 @@ impl View {
     /// [`Self::display_rows_with_depths`]). The depth is computed over the
     /// EMITTED set after every display filter, never re-derived in the painter.
     fn tree_rows_with_depths(&self) -> (Vec<DisplayRow<'_>>, Vec<usize>) {
-        if self.agent_group != AgentGroup::Workspace {
+        if self.agent_group != AgentGroup::Workspace && !machine_tree::paints_workspace_tree(self) {
             return agent_group::grouped_rows_with_depths(self);
         }
         let mut out = Vec::new();
@@ -6257,6 +6259,8 @@ enum TabHit {
 #[derive(Debug, Clone)]
 enum ChromeHit {
     Cmds(Vec<Command>),
+    /// A row on another machine: open or focus its link pane.
+    OpenRemote(crate::proto::RemoteRow),
     /// The strip row's view word (`Agents  Messages`, R15): switch the
     /// sideline to that view.
     TopRow(crate::view_store::SidelineView),
@@ -6295,52 +6299,6 @@ enum ChromeHit {
     /// A card's node tap: the plan in Obsidian, else the node details pane.
     OpenNode(String),
     OpenPr(String),
-}
-
-/// The [`ChromeHit`] for an agent row: focus its pane, else reach a paneless
-/// live row through the ONE dedicated thread pane, else resume a resumable row
-/// through its harness, else say it has no pane here. Shared by a sideline
-/// click ([`View::row_action`]) and the navigator's goto ([`View::nav_rows`])
-/// so the two inputs resolve the same entity identically. Pure - the
-/// agent's own fields decide, so no `&self` needed.
-fn agent_hit(a: &AgentRow, _active_squad: u64) -> ChromeHit {
-    match a.pane_id {
-        Some(pid) => ChromeHit::Cmds(vec![Command::FocusPane(pid)]),
-        None if !a.exited => {
-            // Every paneless live row reaches a portal: Drive
-            // attaches, Follow tails the transcript, Locate renders the
-            // explanation screen. One command, no placement dialog - the
-            // server owns the tier (the row set lives there). The command's id
-            // is the attach id for a claude row and the row NAME for every
-            // other harness (Follow/Locate rows carry no attach id); the
-            // refusal invariant holds by construction because the
-            // client never chooses between attach and focus.
-            //
-            // The default gesture names portal 0, which is exactly
-            // where the single thread pane always landed. `P` opens the next
-            // free portal beside it; nothing about this path changed.
-            ChromeHit::Cmds(vec![Command::AttachAgent {
-                id: a.reach_key(),
-                placement: PanePlacement {
-                    portal: Some(0),
-                    ..PanePlacement::default()
-                },
-            }])
-        }
-        None => {
-            // A paneless row whose harness owns a resume form resumes
-            // through that form: the server spawns `claude --resume <sid>` /
-            // `codex resume <sid>` as a pane in the recorded cwd. The
-            // operator's explicit gesture - restore never sends this.
-            if a.resumable {
-                ChromeHit::Cmds(vec![Command::ResumeAgent {
-                    name: a.name.clone(),
-                }])
-            } else {
-                ChromeHit::Notice(no_pane_notice(a))
-            }
-        }
-    }
 }
 
 /// The rollup state of a pane/agent, worst-first. The navigator's state filter
@@ -9049,6 +9007,7 @@ async fn apply_hit(
             }
         }
         ChromeHit::Notice(msg) => view.set_notice(msg.to_string()),
+        ChromeHit::OpenRemote(remote) => machine_tree::open(view, remote, sock_w).await?,
         // The `+` footer opens the name-input overlay; the next keys
         // route to create_keys (Enter sends NewSquad, Esc cancels).
         ChromeHit::OpenCreate => view.open_create(),
@@ -10265,6 +10224,9 @@ mod agent_sort;
 
 #[path = "client/agent_group.rs"]
 mod agent_group;
+use agent_group::agent_hit;
+#[path = "client/machine_tree.rs"]
+mod machine_tree;
 mod hold;
 
 #[path = "client/header_band.rs"]

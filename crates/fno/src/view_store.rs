@@ -282,6 +282,8 @@ pub enum AgentGroup {
     Status,
     /// One section per harness (claude, codex, ...), its spend in the header.
     Harness,
+    /// One section per machine, then per project, from the fleet map.
+    Machine,
 }
 
 impl AgentGroup {
@@ -292,7 +294,8 @@ impl AgentGroup {
             Self::Team => Self::Cwd,
             Self::Cwd => Self::Status,
             Self::Status => Self::Harness,
-            Self::Harness => Self::Workspace,
+            Self::Harness => Self::Machine,
+            Self::Machine => Self::Workspace,
         }
     }
 
@@ -304,6 +307,7 @@ impl AgentGroup {
             Self::Cwd => "cwd",
             Self::Status => "status",
             Self::Harness => "harness",
+            Self::Machine => "machine",
         }
     }
 }

@@ -3775,10 +3775,9 @@ pub fn where_(args: &[OsString], env_session: Option<&str>) -> i32 {
         Ok(r) => r,
         Err(code) => return code,
     };
-    // Shared selector resolution - the exact/prefix tiers `where`
-    // shipped with, plus the name tier. `where` keeps its own exit codes for
-    // not-found and not-pane-hosted; an ambiguous family is now its own code
-    // so a script can tell a typo from a family (Locked Decision 3).
+    // Shared selector resolution. `where` keeps its own exit codes for not-found
+    // and not-pane-hosted; an ambiguous family is its own code, so a script can
+    // tell a typo from a family (Locked Decision 3).
     let row = match resolve_selector(&rows, &fno_id, now) {
         Resolution::Found(row) => *row,
         Resolution::Ambiguous(candidates) => {
@@ -3824,7 +3823,6 @@ pub fn where_(args: &[OsString], env_session: Option<&str>) -> i32 {
         eprintln!("{}", paneless_route_hint("fno mux where", &row));
         return EXIT_NOT_PANE_HOSTED;
     };
-    // Prefer the explicit --session only if the caller gave one; else the host.
     let session = resolve_session(session_flag.as_deref(), Some(&host_session));
     let sock = match proto::socket_path(&session) {
         Ok(p) => p,

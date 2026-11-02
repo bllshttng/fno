@@ -1391,7 +1391,7 @@ fn default_bindings() -> Vec<KeyBinding> {
             "cycle-agent-group",
             CycleAgentGroup,
             Global,
-            "group agents by workspace, lead, cwd, status, or harness",
+            "group agents by workspace, lead, cwd, status, harness, or machine",
         ),
         b(
             b'Y',

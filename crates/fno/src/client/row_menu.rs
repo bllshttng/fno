@@ -141,6 +141,18 @@ pub(super) fn build_row_menu_with(
     };
     add(PopupRow::Header(agent.name.clone()), &[]);
     add(PopupRow::Rule, &[]);
+    if agent.remote.is_some() {
+        // A row on another machine opens, peeks and takes mail. Everything that
+        // ends or moves a session needs that machine's own grant.
+        add(entry("→", "Open here"), &[MenuAction::Focus]);
+        add(entry("◉", "Peek"), &[MenuAction::Peek]);
+        add(entry("✉", "Mail"), &[MenuAction::Mail]);
+        return RowMenu {
+            popup: Popup::new(rows, anchor),
+            target: MenuTarget::Agent(AgentIdent::of(agent)),
+            actions,
+        };
+    }
     if agent.exited {
         add(entry("✕", "Remove"), &[MenuAction::Remove]);
         add(entry("◉", "Peek"), &[MenuAction::Peek]);
@@ -866,13 +878,17 @@ pub(super) async fn execute_row_menu_action(
     };
     // Fail closed unless the identity resolves to EXACTLY one live row: two rows
     // sharing a name must never let a menu act on the wrong one (codex P1).
-    let mut hits = view.layout.agents.iter().filter(|a| target.matches(a));
-    let a = match (hits.next(), hits.next()) {
-        (Some(a), None) => a.clone(),
-        _ => {
-            view.set_notice(format!("agent {} is no longer uniquely here", target.name));
-            return Ok(());
+    let hit = {
+        let rows = view.layout.agents.iter().chain(view.machine_tree.rows());
+        let mut hits = rows.filter(|a| target.matches(a));
+        match (hits.next(), hits.next()) {
+            (Some(a), None) => Some(a.clone()),
+            _ => None,
         }
+    };
+    let Some(a) = hit else {
+        view.set_notice(format!("agent {} is no longer uniquely here", target.name));
+        return Ok(());
     };
     // The chooser refuses an exited row at open, but the row can die between
     // open and pick, and every one of its six arms would place a dead
@@ -1067,11 +1083,12 @@ pub(super) async fn execute_row_menu_action(
                 None => view.set_notice("this row has no session id to pin".into()),
             }
         }
-        MenuAction::Focus => match a.pane_id {
-            Some(pid) => write_msg(sock_w, &ClientMsg::Command(Command::FocusPane(pid)))
+        MenuAction::Focus => match (a.pane_id, a.remote.clone()) {
+            (Some(pid), _) => write_msg(sock_w, &ClientMsg::Command(Command::FocusPane(pid)))
                 .await
                 .map_err(|e| format!("focus send failed: {e}"))?,
-            None => view.set_notice("agent has no pane here".into()),
+            (None, Some(remote)) => super::machine_tree::open(view, remote, sock_w).await?,
+            (None, None) => view.set_notice("agent has no pane here".into()),
         },
         MenuAction::Diff => {
             // Send the pane too: the server prefers it, which keeps the diff on
@@ -1555,7 +1572,7 @@ impl View {
         // to nowhere. Built here (where the layout is) rather than in
         // build_row_menu so the per-state builder stays layout-free and
         // its direct tests stay untouched.
-        if !self.move_dst_squads(a.squad).is_empty() {
+        if a.remote.is_none() && !self.move_dst_squads(a.squad).is_empty() {
             menu.popup.rows.push(PopupRow::Rule);
             menu.popup.rows.push(PopupRow::Entry {
                 glyph: "↪".into(),

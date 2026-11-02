@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 use crate::mail_remote::ssh_tty_argv;
 
-/// The far door's exits (`fno::link`). Ssh answers 255 for a lost connection.
+/// The far door's exits (`fno::mux_link`). Ssh answers 255 for a lost connection.
 const FAR_LEFT: i32 = 0;
 const FAR_USAGE: i32 = 2;
 const FAR_GONE: i32 = 3;

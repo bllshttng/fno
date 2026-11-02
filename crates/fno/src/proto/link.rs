@@ -11,6 +11,8 @@ pub const LINK_MIN_PROTO: u32 = 121;
 pub struct RemoteRow {
     pub host: String,
     pub key: String,
+    /// The `name@host` this row paints as, which its link pane also carries.
+    pub name: String,
 }
 
 /// Sent by a passive client right after its `Attach`: drive this one pane.
