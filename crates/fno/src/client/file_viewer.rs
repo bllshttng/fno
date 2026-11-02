@@ -289,6 +289,8 @@ pub(crate) struct ViewerState {
     /// Panel width as a percent of the terminal; 0 reads as the default. It
     /// outlives a close, so a resize sticks for the session.
     pct: u16,
+    /// The PR review split beside the chat pane. It takes the panel's place.
+    pub(super) review: Option<super::backlog_board::pr_review::Review>,
 }
 
 impl ViewerState {
@@ -359,10 +361,8 @@ impl View {
     /// when it is a modal, or when the terminal cannot spare the columns (the
     /// viewer then shows as a modal).
     pub(super) fn viewer_panel_w(&self) -> u16 {
-        let Some(v) = &self.viewer.open else {
-            return 0;
-        };
-        if v.shape != ViewerShape::Panel {
+        let file = self.viewer.open.as_ref();
+        if self.viewer.review.is_none() && file.is_none_or(|v| v.shape != ViewerShape::Panel) {
             return 0;
         }
         let cols = self.term.1;
@@ -376,11 +376,24 @@ impl View {
 
     /// Whether the viewer is open and holds the keyboard.
     pub(super) fn viewer_focused(&self) -> bool {
-        self.viewer.open.as_ref().is_some_and(|v| v.focused)
+        let review = self.viewer.review.as_ref().is_some_and(|r| r.focused);
+        review || self.viewer.open.as_ref().is_some_and(|v| v.focused)
     }
 
     pub(super) fn viewer_open(&self) -> bool {
-        self.viewer.open.is_some()
+        self.viewer.open.is_some() || self.viewer.review.is_some()
+    }
+
+    /// The review split's rect (top, left, h, w) and whether it sits beside
+    /// the panes. A terminal too narrow for a split gets the whole content.
+    fn review_rect(&self) -> (usize, usize, usize, usize, bool) {
+        let panel = self.viewer_panel_w() as usize;
+        let rows = self.content_dims().0 as usize;
+        let cols = self.term.1 as usize;
+        match panel {
+            0 => (TAB_BAR_ROWS as usize, 0, rows, cols, false),
+            w => (TAB_BAR_ROWS as usize, cols - w, rows, w, true),
+        }
     }
 }
 
@@ -618,6 +631,21 @@ fn layout(plan: &Plan, v: &FileViewer, md: Option<&[BLine]>) -> OverlayLayout {
 /// Paint the viewer into the frame: after the panes, before the modals.
 pub(super) fn draw(view: &View, cells: &mut [Cell], rows: usize, cols: usize) {
     image_layer::clear();
+    if let Some(review) = &view.viewer.review {
+        let (top, left, h, w, beside) = view.review_rect();
+        let rect = (top, left, h, w);
+        super::backlog_board::pr_review::paint(
+            review,
+            None,
+            cells,
+            rows,
+            cols,
+            rect,
+            beside,
+            &view.theme,
+        );
+        return;
+    }
     let Some(v) = &view.viewer.open else {
         return;
     };
@@ -701,6 +729,31 @@ async fn send_resize(
         .map_err(|e| format!("resize send failed: {e}"))
 }
 
+/// Open the PR review split. It replaces an open file and takes the keys.
+pub(super) async fn open_review(
+    view: &mut View,
+    review: super::backlog_board::pr_review::Review,
+    sock_w: &mut (impl tokio::io::AsyncWrite + Unpin),
+) -> Result<(), String> {
+    view.viewer.open = None;
+    view.viewer.review = Some(review);
+    view.region_owner = region_focus::RegionOwner::Pane;
+    send_resize(view, sock_w).await
+}
+
+/// The split's keys go to the review. A close gives the columns back.
+async fn review_keys(
+    view: &mut View,
+    bytes: &[u8],
+    sock_w: &mut (impl tokio::io::AsyncWrite + Unpin),
+) -> Result<StdinFlow, String> {
+    super::backlog_board::pr_review::keys(view, bytes);
+    if view.viewer.review.is_none() {
+        send_resize(view, sock_w).await?;
+    }
+    Ok(StdinFlow::Continue)
+}
+
 /// Open a loaded file, replacing any viewer already open. A panel takes
 /// columns from the panes, so the new content area travels to the server.
 pub(super) async fn open(
@@ -709,6 +762,7 @@ pub(super) async fn open(
     sock_w: &mut (impl tokio::io::AsyncWrite + Unpin),
 ) -> Result<(), String> {
     let was_panel = view.viewer_panel_w() > 0;
+    view.viewer.review = None;
     // A rendered markdown doc has no source rows, so a `path:line` hint on a
     // `.md` click cannot name a row to highlight.
     let target = match &loaded.body {
@@ -749,6 +803,7 @@ pub(super) async fn close(
 ) -> Result<(), String> {
     let was_panel = view.viewer_panel_w() > 0;
     view.viewer.open = None;
+    view.viewer.review = None;
     if was_panel {
         send_resize(view, sock_w).await?;
     }
@@ -863,6 +918,9 @@ pub(super) async fn keys(
     bytes: &[u8],
     sock_w: &mut (impl tokio::io::AsyncWrite + Unpin),
 ) -> Result<StdinFlow, String> {
+    if view.viewer.review.is_some() {
+        return review_keys(view, bytes, sock_w).await;
+    }
     let Some(v) = view.viewer.open.as_mut() else {
         return Ok(StdinFlow::Continue);
     };
@@ -902,6 +960,17 @@ pub(super) async fn keys(
 /// a click inside focuses it, a click anywhere else hands the keyboard back
 /// and falls through to what is under the pointer.
 pub(super) fn mouse(view: &mut View, rep: crate::mouse::MouseReport) -> bool {
+    if view.viewer.review.is_some() {
+        let (top, left, h, w, _) = view.review_rect();
+        let (row, col) = (rep.row as usize, rep.col as usize);
+        let inside = row >= top && row < top + h && col >= left && col < left + w;
+        if matches!(rep.kind, MouseKind::Press(MouseButton::Left)) {
+            if let Some(review) = view.viewer.review.as_mut() {
+                review.focused = inside;
+            }
+        }
+        return inside;
+    }
     let Some(v) = &view.viewer.open else {
         return false;
     };

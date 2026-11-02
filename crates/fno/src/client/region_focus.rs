@@ -331,6 +331,9 @@ pub(super) async fn mouse_pre_pass(
                 && view.active_overlay_layout().is_none()
                 && !view.backlog_board.as_ref().is_none_or(|b| b.popup_open())
             {
+                if super::node_detail::click_session(view, rep.row, sock_w).await? {
+                    continue;
+                }
                 if let Some(id) = node_link::span_at(rep.row, rep.col) {
                     node_link::open(view, id).await;
                 }

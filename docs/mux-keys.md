@@ -8,6 +8,7 @@ The three sideline-adjacent actions sit on three different keys, and their names
 | `prefix+w` | `selector` | OpenSelector | The sideline row selector: cursor over the sideline's own rows. |
 | `prefix+b` | `toggle-sideline` | TogglePanel | Sideline panel visibility. |
 | `prefix+q` | `notifications-bell` | ToggleBell | Questions and fleet announcements in the notifications panel. |
+| `prefix+I` | `review-pr` | OpenReview | The PR review as a right split beside the focused chat pane. The chat stays live. |
 
 ## Inside the notifications panel
 
@@ -29,10 +30,12 @@ Emulators: iTerm2, Ghostty, kitty and WezTerm emit the xterm CSI form. Verify yo
 
 `d` on a backlog node's detail opens the diff of the node's newest unmerged PR, full screen. If a seat's node has a PR, `r` on its org page opens the same review. `Esc` goes back to that page.
 
+`prefix+I` on a focused chat pane opens the same review as a right split. It shows that session's node and PR, or `no PR yet`. `prefix+I` again closes it. Inside the split, `I` closes it too. A click on the chat pane gives the keyboard back, and a click on the split takes it again.
+
 - `j`/`k` or arrows: move one row. `PageUp`/`PageDown`: move one screen. `n`/`p`: next or previous file.
 - `c`: comment on the row, or edit its comment. `Enter` stages the comment, and `Esc` drops the input. `x`: remove the row's comment.
 - `S`: send every staged comment as one blocking finding on the node. A success clears the drafts, and the notice is the engine's receipt.
-- `Esc`: close. With unsent comments, the first `Esc` warns and the second closes and drops them.
+- `Esc` (or `I` in the split): close. With unsent comments, the first `Esc` warns and the second closes and drops them.
 
 ## Inside the navigator
 

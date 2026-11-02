@@ -423,6 +423,7 @@ pub(crate) fn maybe_kick(view: &mut View, tx: &BoardTx) {
     if let Some(b) = view.backlog_board.as_ref() {
         b.flush_paint_stats();
     }
+    pr_review::kick_split(view, tx);
     let Some(b) = view.backlog_board.as_mut() else {
         return;
     };
@@ -502,6 +503,9 @@ pub(crate) async fn fold_once(view: &mut View) {
 /// A fold landed: apply only to the still-open, same-generation board
 /// (the feed fold's contract, one consumer in the run loop).
 pub(crate) fn apply_fold(view: &mut View, gen: u64, msg: BoardMsg) {
+    let Some(msg) = pr_review::split_fold(view, gen, msg) else {
+        return;
+    };
     let Some(b) = view.backlog_board.as_mut() else {
         return;
     };
@@ -512,7 +516,9 @@ pub(crate) fn apply_fold(view: &mut View, gen: u64, msg: BoardMsg) {
     match msg {
         BoardMsg::ReviewLoaded(landed) => return pr_review::land(view, *landed),
         BoardMsg::ReviewSent { ok, notice: n } => {
-            pr_review::sent(b, ok);
+            if let Some(review) = b.review.as_mut() {
+                pr_review::sent(review, ok);
+            }
             b.force = true;
             b.want = true;
             notice = Some(n);
@@ -1177,7 +1183,17 @@ impl View {
         };
         if let Some(review) = &b.review {
             let notice = self.notice.as_ref().map(|(text, _)| text.as_str());
-            pr_review::paint(review, notice, cells, rows, cols, &self.theme);
+            let screen = (0, 0, rows, cols);
+            pr_review::paint(
+                review,
+                notice,
+                cells,
+                rows,
+                cols,
+                screen,
+                false,
+                &self.theme,
+            );
         } else if b.keys_overlay {
             // Checked before the drill-down: `?` opens this from the detail
             // too, so it must paint over it, and its Esc must land here.

@@ -1,6 +1,7 @@
-//! The PR review overlay on the backlog board: a node's PR diff, line comments
-//! staged on its rows, and one send that writes them as one blocking finding on
-//! the node. See docs/architecture/pr-review.md.
+//! The PR review: a node's PR diff, line comments staged on its rows, and one
+//! send that writes them as one blocking finding on the node. It shows full
+//! screen on the backlog board, or as a right split beside the focused chat
+//! pane. See docs/architecture/pr-review.md.
 
 use super::*;
 use crate::backlog_write::{self, ReviewComment};
@@ -17,6 +18,10 @@ const WIDE_GUTTER_AT: usize = 80;
 /// The header rows above the diff and the hint row under it.
 const HEADER_ROWS: usize = 2;
 const NO_HOLDER: &str = "no live holder: the finding waits for the next worker";
+const NO_PR: &str = "no PR yet";
+/// The fold generation of the split's fetch and send, so the board's
+/// generation check never drops them.
+const PANEL_GEN: u64 = u64::MAX;
 
 /// One selectable row of the flattened diff.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29,7 +34,12 @@ enum Flat {
 pub(crate) enum Phase {
     Loading,
     Failed(String),
-    Loaded { diff: PrDiff, head: String },
+    /// The session or its node has no PR to show.
+    NoPr(String),
+    Loaded {
+        diff: PrDiff,
+        head: String,
+    },
 }
 
 /// Where the fleet says the recipient sits, when the review opened from a seat.
@@ -41,7 +51,8 @@ pub(crate) struct SeatName {
 
 pub(crate) struct Review {
     pub(crate) node: String,
-    pub(crate) pr: PrRef,
+    /// `None` until the split reads the node's PR from the store.
+    pub(crate) pr: Option<PrRef>,
     pub(crate) phase: Phase,
     /// Who a send reaches, never blank.
     pub(crate) recipient: String,
@@ -60,18 +71,20 @@ pub(crate) struct Review {
     sending: bool,
     /// Esc goes back to the org view that opened it.
     from_org: bool,
+    /// The split holds the keyboard; a click on the chat pane takes it back.
+    pub(crate) focused: bool,
 }
 
 /// A fetch landing on the board channel.
 pub(crate) struct Landed {
     node: String,
-    number: u64,
+    pr: Option<PrRef>,
     read: Result<(PrDiff, String), String>,
     claim: Result<serde_json::Value, String>,
 }
 
 impl Review {
-    fn new(node: String, pr: PrRef, seat: Option<SeatName>) -> Review {
+    fn new(node: String, pr: Option<PrRef>, seat: Option<SeatName>) -> Review {
         Review {
             node,
             pr,
@@ -88,6 +101,7 @@ impl Review {
             send: None,
             sending: false,
             from_org: false,
+            focused: true,
         }
     }
 
@@ -191,18 +205,15 @@ impl Review {
         if self.sending || self.send.is_some() {
             return Err("the review is already sending".into());
         }
-        let Phase::Loaded { head, .. } = &self.phase else {
+        let (Phase::Loaded { head, .. }, Some(pr)) = (&self.phase, &self.pr) else {
             return Err("no diff to review yet".into());
         };
         let comments = self.comments();
         if comments.is_empty() {
             return Err("no comments to send: c comments on a row".into());
         }
-        let body = backlog_write::review_body(&self.pr, head, &comments)?;
-        self.send = Some((
-            backlog_write::review_argv(&self.node, graph, &self.pr),
-            body,
-        ));
+        let body = backlog_write::review_body(pr, head, &comments)?;
+        self.send = Some((backlog_write::review_argv(&self.node, graph, pr), body));
         self.sending = true;
         Ok(())
     }
@@ -280,28 +291,81 @@ pub(crate) fn open(view: &mut View, node: String, url: &str, seat: Option<SeatNa
     let Some(b) = view.backlog_board.as_mut() else {
         return;
     };
-    let mut review = Review::new(node, pr, seat);
+    let mut review = Review::new(node, Some(pr), seat);
     review.from_org = review.seat.is_some();
     b.review = Some(review);
 }
 
 fn close(view: &mut View) {
-    let Some(review) = view.backlog_board.as_mut().and_then(|b| b.review.take()) else {
+    if let Some(review) = view.backlog_board.as_mut().and_then(|b| b.review.take()) {
+        if review.from_org {
+            view.backlog_board = None;
+            crate::client::org_board::open(view);
+        }
         return;
+    }
+    view.viewer.review = None;
+}
+
+/// The open review: the board's when it holds one, else the split's.
+pub(crate) fn review_mut(view: &mut View) -> Option<&mut Review> {
+    if view
+        .backlog_board
+        .as_ref()
+        .is_some_and(|b| b.review.is_some())
+    {
+        return review_mut(view);
+    }
+    view.viewer.review.as_mut()
+}
+
+/// The chord on a focused chat pane: open that session's PR review as a right
+/// split, or close the split when it is open. The chat stays live on the left.
+pub(crate) async fn toggle_split(
+    view: &mut View,
+    sock_w: &mut (impl tokio::io::AsyncWrite + Unpin),
+) -> Result<(), String> {
+    if view.viewer.review.is_some() {
+        return crate::client::file_viewer::close(view, sock_w).await;
+    }
+    let focus = view.layout.focus;
+    let agent = view
+        .layout
+        .agents
+        .iter()
+        .find(|a| a.pane_id == Some(focus) && !a.exited)
+        .cloned();
+    let review = match agent.as_ref().and_then(|a| a.node.clone()) {
+        Some(node) => Review::new(node, None, None),
+        None => {
+            let label = agent.map_or_else(|| "this pane".to_string(), |a| a.name);
+            let mut review = Review::new(label, None, None);
+            review.fetch_wanted = false;
+            review.recipient = "no node".into();
+            review.phase = Phase::NoPr(NO_PR.into());
+            review
+        }
     };
-    if review.from_org {
-        view.backlog_board = None;
-        crate::client::org_board::open(view);
+    crate::client::file_viewer::open_review(view, review, sock_w).await
+}
+
+/// Spawn the board review's queued work off the UI loop: the one fetch and the
+/// one send. Runs each run-loop turn from the board kick.
+pub(crate) fn kick(b: &mut BoardView, tx: &BoardTx) {
+    let gen = b.gen;
+    if let Some(review) = b.review.as_mut() {
+        kick_one(review, gen, tx);
     }
 }
 
-/// Spawn the review's queued work off the UI loop: the one fetch and the one
-/// send. Runs each run-loop turn from the board kick.
-pub(crate) fn kick(b: &mut BoardView, tx: &BoardTx) {
-    let gen = b.gen;
-    let Some(review) = b.review.as_mut() else {
-        return;
-    };
+/// The split's queued work, on the same channel at its own generation.
+pub(crate) fn kick_split(view: &mut View, tx: &BoardTx) {
+    if let Some(review) = view.viewer.review.as_mut() {
+        kick_one(review, PANEL_GEN, tx);
+    }
+}
+
+fn kick_one(review: &mut Review, gen: u64, tx: &BoardTx) {
     if std::mem::take(&mut review.fetch_wanted) {
         let (node, pr, tx) = (review.node.clone(), review.pr.clone(), tx.clone());
         tokio::spawn(async move {
@@ -317,6 +381,24 @@ pub(crate) fn kick(b: &mut BoardView, tx: &BoardTx) {
             let _ = tx.send((gen, BoardMsg::ReviewSent { ok, notice }));
         });
     }
+}
+
+/// A fold for the split lands here and returns `None`; any other passes on.
+pub(crate) fn split_fold(view: &mut View, gen: u64, msg: BoardMsg) -> Option<BoardMsg> {
+    if gen != PANEL_GEN {
+        return Some(msg);
+    }
+    match msg {
+        BoardMsg::ReviewLoaded(landed) => land(view, *landed),
+        BoardMsg::ReviewSent { ok, notice } => {
+            if let Some(review) = view.viewer.review.as_mut() {
+                sent(review, ok);
+            }
+            view.set_notice(notice);
+        }
+        _ => {}
+    }
+    None
 }
 
 /// The first line of a failed read's stderr, or a fallback.
@@ -354,21 +436,47 @@ async fn read_command(
     }
 }
 
-async fn fetch(node: String, pr: PrRef) -> Landed {
-    let gh = std::path::PathBuf::from("gh");
+/// The node's PR from the store, for a split opened on a session's node.
+async fn resolve_pr(node: &str) -> Option<PrRef> {
+    let node = node.to_string();
+    let row = tokio::task::spawn_blocking(move || {
+        crate::store_client::node(&crate::backlog_view::graph_path(), &node)
+    })
+    .await
+    .ok()?
+    .ok()??;
+    pr_diff::parse_pr_url(row.get("pr_url")?.as_str()?).ok()
+}
+
+async fn fetch(node: String, pr: Option<PrRef>) -> Landed {
     let claim_args = vec![
         "claim".to_string(),
         "status".to_string(),
         format!("node:{node}"),
     ];
+    let claim = read_command(
+        crate::digest_overlay::fno_agents_bin(),
+        claim_args,
+        CLAIM_BOUND,
+    );
+    let pr = match pr {
+        Some(pr) => Some(pr),
+        None => resolve_pr(&node).await,
+    };
+    let Some(pr) = pr else {
+        let claim = claim.await;
+        return Landed {
+            node,
+            pr: None,
+            read: Err(NO_PR.into()),
+            claim: claim.and_then(|text| serde_json::from_str(&text).map_err(|e| e.to_string())),
+        };
+    };
+    let gh = std::path::PathBuf::from("gh");
     let (diff, head, claim) = tokio::join!(
         read_command(gh.clone(), pr_diff::diff_argv(&pr), FETCH_BOUND),
         read_command(gh, pr_diff::head_argv(&pr), FETCH_BOUND),
-        read_command(
-            crate::digest_overlay::fno_agents_bin(),
-            claim_args,
-            CLAIM_BOUND
-        ),
+        claim,
     );
     let read = diff.and_then(|text| {
         let head = head?;
@@ -378,7 +486,7 @@ async fn fetch(node: String, pr: PrRef) -> Landed {
     let claim = claim.and_then(|text| serde_json::from_str(&text).map_err(|e| e.to_string()));
     Landed {
         node,
-        number: pr.number,
+        pr: Some(pr),
         read,
         claim,
     }
@@ -387,11 +495,15 @@ async fn fetch(node: String, pr: PrRef) -> Landed {
 /// A fetch landed: apply it to the review it was read for.
 pub(crate) fn land(view: &mut View, landed: Landed) {
     let agents = view.layout.agents.clone();
-    let Some(review) = view.backlog_board.as_mut().and_then(|b| b.review.as_mut()) else {
+    let Some(review) = review_mut(view) else {
         return;
     };
-    if review.node != landed.node || review.pr.number != landed.number {
+    let other_pr = matches!((&review.pr, &landed.pr), (Some(a), Some(b)) if a.number != b.number);
+    if review.node != landed.node || other_pr {
         return;
+    }
+    if review.pr.is_none() {
+        review.pr = landed.pr.clone();
     }
     review.recipient = recipient_line(&landed.claim, review.seat.as_ref(), |session| {
         agents
@@ -401,6 +513,7 @@ pub(crate) fn land(view: &mut View, landed: Landed) {
     });
     match landed.read {
         Ok((diff, head)) => review.load(diff, head),
+        Err(_) if landed.pr.is_none() => review.phase = Phase::NoPr(NO_PR.into()),
         Err(e) => {
             review.phase = Phase::Failed(first_line(&e, "the read returned nothing"));
         }
@@ -408,19 +521,17 @@ pub(crate) fn land(view: &mut View, landed: Landed) {
 }
 
 /// A send finished. Success clears the drafts; a refusal keeps them.
-pub(crate) fn sent(b: &mut BoardView, ok: bool) {
-    if let Some(review) = b.review.as_mut() {
-        review.sending = false;
-        if ok {
-            review.drafts.clear();
-            review.warned = false;
-        }
+pub(crate) fn sent(review: &mut Review, ok: bool) {
+    review.sending = false;
+    if ok {
+        review.drafts.clear();
+        review.warned = false;
     }
 }
 
 /// Esc or `q` with no input open: warn once over unsent drafts, else close.
 fn esc_pressed(view: &mut View) {
-    let Some(review) = view.backlog_board.as_mut().and_then(|b| b.review.as_mut()) else {
+    let Some(review) = review_mut(view) else {
         return;
     };
     let unsent = review.drafts.len();
@@ -435,7 +546,7 @@ fn esc_pressed(view: &mut View) {
 }
 
 fn input_keys(view: &mut View, bytes: &[u8]) {
-    let Some(review) = view.backlog_board.as_mut().and_then(|b| b.review.as_mut()) else {
+    let Some(review) = review_mut(view) else {
         return;
     };
     let Some((at, field)) = review.input.as_mut() else {
@@ -466,7 +577,7 @@ fn input_keys(view: &mut View, bytes: &[u8]) {
 
 /// The review's keys. Everything lands here while the review is open.
 pub(crate) fn keys(view: &mut View, bytes: &[u8]) {
-    let Some(review) = view.backlog_board.as_mut().and_then(|b| b.review.as_mut()) else {
+    let Some(review) = review_mut(view) else {
         return;
     };
     if review.input.is_some() {
@@ -486,11 +597,12 @@ pub(crate) fn keys(view: &mut View, bytes: &[u8]) {
         .to_string_lossy()
         .into_owned();
     for token in tokens {
-        if matches!(token, ModalKey::Esc | ModalKey::Byte(b'q')) {
+        // `I` is the split's own chord: prefix+I typed inside it closes it too.
+        if matches!(token, ModalKey::Esc | ModalKey::Byte(b'q' | b'I')) {
             esc_pressed(view);
             continue;
         }
-        let Some(review) = view.backlog_board.as_mut().and_then(|b| b.review.as_mut()) else {
+        let Some(review) = review_mut(view) else {
             return;
         };
         review.warned = false;
@@ -577,11 +689,13 @@ fn row_line(row: &DiffRow, marked: bool, cols: usize) -> BLine {
 
 /// The header's two lines: what the diff is, and who a send reaches.
 fn header(review: &Review) -> (String, String) {
-    let pr = &review.pr;
-    let head = format!(
-        "review \u{b7} {} \u{b7} {}/{}#{}",
-        review.node, pr.owner, pr.repo, pr.number
-    );
+    let head = match &review.pr {
+        Some(pr) => format!(
+            "review \u{b7} {} \u{b7} {}/{}#{}",
+            review.node, pr.owner, pr.repo, pr.number
+        ),
+        None => format!("review \u{b7} {}", review.node),
+    };
     let first = match &review.phase {
         Phase::Loaded { diff, head: sha } => {
             let (added, removed) = diff.totals();
@@ -657,76 +771,83 @@ fn window(review: &Review, h: usize, cols: usize) -> (Vec<BLine>, Option<usize>)
     (lines, cursor_line)
 }
 
-/// Paint the whole screen: the header, the diff window, and the foot row. The
-/// foot carries the notice, because this paint covers the tab bar that shows it.
+/// Paint into `rect` (top, left, h, w): the header, the diff window and the foot
+/// row. The board passes the whole screen and its notice, because it covers the
+/// tab bar that shows one; the split passes no notice and draws a divider.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn paint(
     review: &Review,
     notice: Option<&str>,
     cells: &mut [Cell],
     rows: usize,
     cols: usize,
+    rect: (usize, usize, usize, usize),
+    divider: bool,
     theme: &Theme,
 ) {
-    if rows < HEADER_ROWS + 2 || cols == 0 {
+    let (top, mut left, h, mut w) = rect;
+    if h < HEADER_ROWS + 2 || w < 2 || top + h > rows || left + w > cols {
         return;
     }
+    if divider {
+        for r in top..top + h {
+            cells[r * cols + left] = Cell {
+                c: '\u{2502}',
+                fg: crate::proto::Color::Indexed(8),
+                bg: crate::proto::Color::Default,
+                flags: 0,
+            };
+        }
+        left += 1;
+        w -= 1;
+    }
     let (title, to) = header(review);
-    backlog_style::paint_title_row(cells, rows, cols, 0, 0, cols, &title, true, theme);
-    let h = rows - HEADER_ROWS - 1;
-    let (body, follow) = match &review.phase {
-        Phase::Loading => (vec![BLine::meta("reading the diff")], None),
-        Phase::Failed(why) => (vec![BLine::plain(format!("diff not read: {why}"))], None),
-        Phase::Loaded { .. } => window(review, h, cols),
-    };
-    let to = [BLine::meta(to).trunc(cols)];
-    backlog_style::paint_panel(cells, rows, cols, 1, cols, 1, &to, None, theme);
-    backlog_style::paint_panel(
+    backlog_style::paint_title_row(
         cells,
         rows,
         cols,
-        HEADER_ROWS,
-        cols,
-        h,
-        &body,
-        follow,
+        top,
+        left,
+        w,
+        &title,
+        review.focused,
         theme,
     );
+    let body_h = h - HEADER_ROWS - 1;
+    let (body, follow) = match &review.phase {
+        Phase::Loading => (vec![BLine::meta("reading the diff")], None),
+        Phase::Failed(why) => (vec![BLine::plain(format!("diff not read: {why}"))], None),
+        Phase::NoPr(why) => (vec![BLine::plain(why.clone())], None),
+        Phase::Loaded { .. } => window(review, body_h, w),
+    };
+    let to = [BLine::meta(to).trunc(w)];
+    let panel = |cells: &mut [Cell], at: usize, lines: &[BLine], height, follow| {
+        backlog_style::paint_panel_at(cells, rows, cols, left, at, w, height, lines, follow, theme)
+    };
+    panel(cells, top + 1, &to, 1, None);
+    panel(cells, top + HEADER_ROWS, &body, body_h, follow);
     let foot = match &review.input {
         Some((_, field)) => BLine::plain(format!("comment: {}", field.display())),
         None if notice.is_some() => BLine::plain(notice.unwrap_or_default()),
         None if review.sending => BLine::meta("sending the review"),
         None => BLine::meta(format!("{} staged - {HINT}", review.drafts.len())),
     };
-    backlog_style::paint_panel(
-        cells,
-        rows,
-        cols,
-        rows - 1,
-        cols,
-        1,
-        &[foot.trunc(cols)],
-        None,
-        theme,
-    );
+    panel(cells, top + h - 1, &[foot.trunc(w)], 1, None);
 }
 
 /// The `review-diff` snapshot: the fixture diff with two staged comments and no
 /// network. An empty parse refuses the shot.
-pub(crate) fn open_fixture(view: &mut View, text: &str) -> Result<(), String> {
+pub(crate) fn fixture(text: &str) -> Result<Review, String> {
     let diff = pr_diff::parse(text);
     if diff.files.is_empty() {
         return Err("review-diff rendered empty: the fixture diff parsed no file".into());
     }
-    let b = view
-        .backlog_board
-        .as_mut()
-        .ok_or("the backlog board did not open")?;
     let pr = PrRef {
         owner: "bllshttng".into(),
         repo: "footnote".into(),
         number: 42,
     };
-    let mut review = Review::new("x-demo".into(), pr, None);
+    let mut review = Review::new("x-demo".into(), Some(pr), None);
     review.fetch_wanted = false;
     review.recipient = "seat-one on host-a".into();
     review.load(diff, "0f80621dea0a1592".into());
@@ -744,8 +865,7 @@ pub(crate) fn open_fixture(view: &mut View, text: &str) -> Result<(), String> {
             .insert(one, "name this after what it holds".into());
         review.drafts.insert(two, "this branch has no test".into());
     }
-    b.review = Some(review);
-    Ok(())
+    Ok(review)
 }
 
 #[cfg(test)]
@@ -779,7 +899,7 @@ mod tests {
     fn landed(read: Result<(PrDiff, String), String>) -> Landed {
         Landed {
             node: "x-1".into(),
-            number: 7,
+            pr: pr_diff::parse_pr_url("https://github.com/o/r/pull/7").ok(),
             read,
             claim: Err("no claim read".into()),
         }
@@ -802,6 +922,21 @@ mod tests {
         let r = review(&view);
         let (_, row) = r.row_at(r.cursor).expect("the cursor sits on a row");
         assert!(matches!(row.kind, RowKind::Added | RowKind::Removed));
+
+        // The split beside a chat pane: a node with no PR lands through the
+        // split's own fold and says so.
+        let mut view = crate::client::tests::two_pane_view();
+        view.viewer.review = Some(Review::new("x-1".into(), None, None));
+        let none = Landed {
+            pr: None,
+            ..landed(Err(NO_PR.into()))
+        };
+        let msg = BoardMsg::ReviewLoaded(Box::new(none));
+        assert!(split_fold(&mut view, PANEL_GEN, msg).is_none());
+        let split = view.viewer.review.as_ref().expect("the split stays open");
+        assert_eq!(split.phase, Phase::NoPr(NO_PR.into()));
+        keys(&mut view, b"I");
+        assert!(view.viewer.review.is_none(), "I closes the split");
     }
 
     #[test]
@@ -845,7 +980,7 @@ mod tests {
             "a second press queues nothing"
         );
 
-        sent(view.backlog_board.as_mut().unwrap(), true);
+        sent(review_mut(&mut view).unwrap(), true);
         assert!(
             review(&view).drafts.is_empty(),
             "a landed send clears the drafts"

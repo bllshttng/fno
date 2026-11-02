@@ -90,6 +90,68 @@ pub(crate) async fn press_session(
 }
 #[path = "backlog_md.rs"]
 pub(crate) mod backlog_md;
+
+thread_local! {
+    /// The open detail's session rows the last compose painted: (screen row,
+    /// session index). A click reads them; the client holds one view.
+    static SESSION_ROWS: std::cell::RefCell<Vec<(usize, usize)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Park where the painted session rows sit. `lines` is the scrolled window
+/// painted from `top` for `h` rows, or `None` when no detail is open.
+pub(crate) fn record_session_rows(lines: Option<&[BLine]>, (top, h): (usize, usize)) {
+    let at = lines.and_then(|lines| {
+        let head = lines.iter().position(|l| l.text == "sessions")?;
+        // The head, its rule and the column header come before the rows.
+        let first = head + 3;
+        let rows = lines
+            .get(first..)?
+            .iter()
+            .take_while(|l| l.text.starts_with("  "));
+        Some(
+            rows.enumerate()
+                .map(|(j, _)| (top + first + j, j))
+                .filter(|(row, _)| *row < top + h)
+                .collect::<Vec<_>>(),
+        )
+    });
+    SESSION_ROWS.with(|r| *r.borrow_mut() = at.unwrap_or_default());
+}
+
+/// A click on a painted session row: select it and open it, as Enter does.
+pub(crate) async fn click_session(
+    view: &mut View,
+    row: u16,
+    sock_w: &mut (impl tokio::io::AsyncWrite + Unpin),
+) -> Result<bool, String> {
+    let hit = SESSION_ROWS.with(|r| {
+        let rows = r.borrow();
+        rows.iter()
+            .find(|(at, _)| *at == row as usize)
+            .map(|(_, j)| *j)
+    });
+    let Some(j) = hit else {
+        return Ok(false);
+    };
+    let Some(b) = view.backlog_board.as_mut().filter(|b| b.review.is_none()) else {
+        return Ok(false);
+    };
+    let at = b
+        .detail
+        .as_ref()
+        .zip(b.inputs.as_ref())
+        .and_then(|(o, inputs)| {
+            let nv = crate::backlog_model::node(inputs, &o.node_id)?;
+            sel_list(&nv).iter().position(|s| *s == Sel::Session(j))
+        });
+    let (Some(at), Some(o)) = (at, b.detail.as_mut()) else {
+        return Ok(false);
+    };
+    o.sel = at;
+    activate(view, sock_w).await?;
+    Ok(true)
+}
 /// One selectable row of the drill-down: a link to another node, or a
 /// session row.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -353,39 +415,53 @@ pub(crate) fn pane_lines(
     }
     lines.push(BLine::plain(String::new()));
 
-    // Session section: bold header + thin rule, then the phase table.
+    // Session section: bold header + thin rule, then one row per session,
+    // cut to one screen row so a click maps to it. Enter or a click opens
+    // the row; a dead row revives in place.
     lines.push(BLine::head("sessions"));
     lines.push(BLine::meta(rule(w)));
-    lines.push(BLine::meta(format!(
-        "{:<9} {:<7} {:<9} {}",
-        "phase", "harness", "model", "action"
-    )));
+    lines.push(
+        BLine::meta(format!(
+            "  {:<8} {:<14} {:<10} {:<16} {:<11} {}",
+            "phase", "model", "machine", "name", "started", "action"
+        ))
+        .trunc(w),
+    );
+    // Only a session the local roster joins has a known machine: this one.
+    let here = crate::agents_view::hostname();
+    let here = here.split('.').next().unwrap_or("-").to_string();
     for s in view.sessions.iter() {
-        let marker = if k == sel {
+        if k == sel {
             follow = Some(lines.len());
-            k += 1;
-            " "
-        } else {
-            k += 1;
-            " "
-        };
+        }
+        k += 1;
         let action = match s.action.as_str() {
             "none" => s.reason.clone().unwrap_or_else(|| "none".into()),
             other => other.to_string(),
         };
-        lines.push(BLine::plain(format!(
-            "{marker} {:<8} {:<7} {:<9} {}",
-            s.phase.as_deref().unwrap_or("-"),
-            s.harness.as_deref().unwrap_or("-"),
-            s.model.as_deref().unwrap_or("-"),
-            action
-        )));
-        if let Some(sid) = s.session_id.as_deref() {
-            lines.push(BLine::meta(sid.to_string()));
-        }
-        if let Some(cmd) = s.command.as_deref() {
-            lines.push(BLine::meta(format!("$ {cmd}")));
-        }
+        let cut = |text: Option<&str>, n: usize| -> String {
+            text.unwrap_or("-").chars().take(n).collect()
+        };
+        let model = s.model.as_deref().or(s.harness.as_deref());
+        let machine = s.agent.as_ref().map(|_| here.as_str());
+        let name = s.agent.as_deref().or(s.session_id.as_deref());
+        // `2026-11-02T14:19:00Z` reads `11-02 14:19`.
+        let started = s
+            .started_at
+            .as_deref()
+            .and_then(|t| Some(format!("{} {}", t.get(5..10)?, t.get(11..16)?)));
+        lines.push(
+            BLine::plain(format!(
+                "  {:<8} {:<14} {:<10} {:<16} {:<11} {}",
+                cut(s.phase.as_deref(), 8),
+                cut(model, 14),
+                cut(machine, 10),
+                cut(name, 16),
+                started.as_deref().unwrap_or("-"),
+                action
+            ))
+            .trunc(w),
+        );
     }
     if view.sessions.is_empty() {
         lines.push(BLine::meta("sessions: none"));
