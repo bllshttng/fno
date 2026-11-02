@@ -423,22 +423,47 @@ pub fn row_scope(row: &Value) -> &str {
 }
 
 /// The session-scope test: `global` always governs; a
-/// `project:<slug>` row governs only the matching slug.
+/// `project:<slug>` row governs only the matching slug; a `machine:<id>` or
+/// `person:<name>` row governs only the session that resolves that identity.
 pub fn row_in_scope(row: &Value, project: &str) -> bool {
     match row_scope(row) {
         "global" => true,
-        scoped => scoped == format!("project:{project}"),
+        scoped => binds_here(scoped).unwrap_or_else(|| scoped == format!("project:{project}")),
     }
 }
 
-/// Keep only the rows the session's project may see, returning the withheld
-/// count. `None` fails open: a project that cannot be resolved hides nothing.
+/// The identity arms of the scope test: `Some` for a `machine:` or `person:`
+/// scope, `None` for every other scope.
+pub fn binds_here(scope: &str) -> Option<bool> {
+    binds(scope, crate::claims::machine_id, crate::identity::person)
+}
+
+/// Identity is read lazily, inside its own arm: `machine_id` can shell out,
+/// and most rows are global or project. A session that reads no machine id
+/// fails open, the posture every law reader keeps.
+fn binds(
+    scope: &str,
+    machine: impl FnOnce() -> String,
+    person: impl FnOnce() -> String,
+) -> Option<bool> {
+    if let Some(id) = scope.strip_prefix("machine:") {
+        let mine = machine();
+        return Some(mine.is_empty() || mine == id);
+    }
+    scope.strip_prefix("person:").map(|name| name == person())
+}
+
+/// Keep only the rows the session may see, returning the withheld count.
+/// `None` fails open on the project: it hides no project row. A row bound to
+/// another machine or person still hides, because identity needs no project.
 pub fn retain_in_scope(index: &mut Index, project: Option<&str>) -> usize {
-    let Some(project) = project else {
-        return 0;
-    };
     let before = index.rows.len();
-    index.rows.retain(|row| row_in_scope(row, project));
+    match project {
+        Some(project) => index.rows.retain(|row| row_in_scope(row, project)),
+        None => index
+            .rows
+            .retain(|row| binds_here(row_scope(row)) != Some(false)),
+    }
     before - index.rows.len()
 }
 
@@ -723,5 +748,38 @@ mod scope_tests {
         // d-4 carries no scope, so it reads project:fno and hides here too.
         assert_eq!(kept, vec!["d-1", "d-2"]);
         assert_eq!(hidden, 2);
+    }
+
+    #[test]
+    fn an_identity_scope_binds_only_the_session_it_names() {
+        let here = |scope: &str| binds(scope, || "mac-a".into(), || "jason".into());
+        assert_eq!(here("machine:mac-a"), Some(true));
+        assert_eq!(here("machine:mac-b"), Some(false));
+        assert_eq!(here("person:jason"), Some(true));
+        assert_eq!(here("person:anouk"), Some(false));
+        assert_eq!(here("project:demo"), None);
+        assert_eq!(here("global"), None);
+        let unread = binds("machine:mac-b", String::new, || "jason".into());
+        assert_eq!(unread, Some(true), "an unreadable machine id fails open");
+
+        // A foreign identity row hides with or without a resolved project.
+        // The lock keeps a test that moves USER or the config off person().
+        let _lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let mine = format!("person:{}", crate::identity::person());
+        let rows = vec![
+            law("d-1", Some("global")),
+            law("d-2", Some(mine.as_str())),
+            law("d-3", Some("person:nobody-zz9")),
+        ];
+        for project in [Some("demo"), None] {
+            let mut index = Index {
+                rows: rows.clone(),
+                damaged: 0,
+            };
+            assert_eq!(retain_in_scope(&mut index, project), 1, "{project:?}");
+            assert_eq!(index.rows.len(), 2, "{project:?}");
+        }
     }
 }

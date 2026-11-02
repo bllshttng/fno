@@ -108,6 +108,13 @@ pub fn assemble(
         let Some(id) = row.get("decision_id").and_then(Value::as_str) else {
             continue;
         };
+        // A machine or person scope is judged here, at build, because no
+        // event carries an identity and `rules.rs` refuses those scopes.
+        let scope = decision_index::row_scope(row);
+        let identity = decision_index::binds_here(scope);
+        if identity == Some(false) {
+            continue;
+        }
         let subject = row.get("subject").and_then(Value::as_str).unwrap_or("");
         if let Some(tr) = triggers.get(id) {
             match tr.get("trigger_kind").and_then(Value::as_str) {
@@ -127,8 +134,7 @@ pub fn assemble(
             continue;
         }
         let paths = law_paths(row);
-        let scope = decision_index::row_scope(row);
-        let scope_line = if scope == "global" {
+        let scope_line = if scope == "global" || identity.is_some() {
             String::new()
         } else {
             format!("\nscope = \"{}\"", toml_escape(scope))
@@ -868,6 +874,39 @@ mod tests {
             Some(v) => std::env::set_var("FNO_HOME", v),
             None => std::env::remove_var("FNO_HOME"),
         }
+    }
+
+    #[test]
+    fn an_identity_scoped_law_rules_only_where_it_binds() {
+        let lock = crate::claims::test_env_lock();
+        let _held = lock.lock().unwrap_or_else(|e| e.into_inner());
+        let law = |id: &str, scope: String| {
+            json!({"decision_id": id, "subject": "s", "decision": "d",
+                   "authority_source": "operator", "scope": scope, "paths": ["crates/**"]})
+        };
+        let laws = decision_index::Index {
+            rows: vec![
+                law("d-0000aaaa", "machine:not-this-machine-zz9".into()),
+                law("d-0000bbbb", "person:nobody-zz9".into()),
+                law(
+                    "d-0000cccc",
+                    format!("person:{}", crate::identity::person()),
+                ),
+            ],
+            damaged: 0,
+        };
+        let set =
+            assemble(Path::new("/"), laws, &BTreeMap::new(), Vec::new()).expect("the set builds");
+        assert!(set.unread.is_empty(), "{:?}", set.unread);
+        let rule = |id: &str| set.rules.iter().find(|r| r.law.as_deref() == Some(id));
+        let foreign_machine = rule("d-0000aaaa").is_some();
+        assert_eq!(foreign_machine, crate::claims::machine_id().is_empty());
+        assert!(
+            rule("d-0000bbbb").is_none(),
+            "another person's law rules nothing"
+        );
+        let own = rule("d-0000cccc").expect("this person's law rules here");
+        assert_eq!(own.scope, None, "the bound scope is stripped for rules.rs");
     }
 
     /// A named graph serves its own store: the journal derives from the
