@@ -29,7 +29,7 @@ def store_url(explicit):
     if explicit:
         return explicit
     config = Path.home() / ".fno" / "config.toml"
-    match = re.search(r"^\[store\]\s*\n(?:^[^\[]*\n)*?^\s*remote_url\s*=\s*\"([^\"]+)\"",
+    match = re.search(r"^\[store\]\s*\n(?:^[^\[]*\n)*?^\s*remote_url\s*=\s*[\"']([^\"']+)[\"']",
                       config.read_text(), re.M)
     if not match:
         sys.exit(f"no [store] remote_url in {config}; pass --url")
