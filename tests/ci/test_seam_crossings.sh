@@ -12,21 +12,21 @@ set -uo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 
-BIN="${FNO_AGENTS_BIN:-$ROOT/crates/fno-agents/target/debug/fno-agents}"
+BIN="${FNO_BIN:-$ROOT/crates/fno/target/debug/fno}"
 if [ ! -x "$BIN" ]; then
-  BIN="$(command -v fno-agents || true)"
+  BIN="$(command -v fno || true)"
 fi
 if [ -z "${BIN:-}" ] || [ ! -x "$BIN" ]; then
-  echo "seam crossings test: no fno-agents binary (build crates/fno-agents or set FNO_AGENTS_BIN)" >&2
+  echo "seam crossings test: no fno binary (build crates/fno or set FNO_BIN)" >&2
   exit 2
 fi
 
 check_clean() {
-  "$BIN" status --lint-check seam-crossings --root "$tmp" 2>&1
+  "$BIN" doctor lint seam-crossings --root "$tmp" 2>&1
 }
 
 seed_baseline() {
-  "$BIN" status --lint-check seam-crossings --root "$tmp" --update
+  "$BIN" doctor lint seam-crossings --root "$tmp" --update
 }
 
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/seam-crossings.XXXXXX")
@@ -146,10 +146,16 @@ fi
 
 # The call line is invisible to the crossing rule (no literal), proving the
 # previous failure came from the resolver SHAPE, not a crossing-count rise:
-# the failure line must read `crossing 1/1` on the injected tree.
-echo "$out" | grep -q 'crossing 1/1' \
-  && note "PASS: helper case failed on shape with no crossing-count rise" \
-  || { printf '%s\n' "$out" >&2; fail "crossing count rose with the helper injection"; }
+# on the injected tree every crossing site is still baselined, so the counts
+# line reads measured == baselined for the crossing rule.
+counts=$(printf '%s\n' "$out" | grep -om1 'crossing [0-9]*/[0-9]*')
+mb=${counts#crossing }
+if [ "${mb%%/*}" = "${mb##*/}" ]; then
+  note "PASS: helper case failed on shape with no crossing-count rise"
+else
+  printf '%s\n' "$out" >&2
+  fail "crossing count rose with the helper injection"
+fi
 cp "$tmp/lib.rs.clean" "$tmp/crates/probe/src/lib.rs"
 
 # case 3b: a resolver whose env-key argument rustfmt wrapped onto its own

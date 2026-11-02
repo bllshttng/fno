@@ -66,23 +66,26 @@ const ROOT_READS: &[&str] = &[
     "cwd",
 ];
 
-/// Production Python and Rust sources in scope, tests dirs excluded.
+/// Production Python and Rust sources in scope, tests dirs excluded. The
+/// Python leg's table: `cli/src/fno` for `.py`, `crates/` for `.rs`.
 fn scan_files(root: &Path) -> Vec<(String, PathBuf, String)> {
     let mut out: Vec<(String, PathBuf, String)> = Vec::new();
-    let py = root.join("cli/src/fno");
-    let mut stack = Vec::new();
-    stack.push(py);
-    while let Some(dir) = stack.pop() {
-        for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
-            let path = entry.path();
-            let name = entry.file_name().to_string_lossy().into_owned();
-            if path.is_dir() {
-                if name == "target" || name.starts_with('.') {
-                    continue;
+    let bases = [root.join("cli/src/fno"), root.join("crates")];
+    for base in bases {
+        let mut stack = Vec::new();
+        stack.push(base);
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+                let path = entry.path();
+                let name = entry.file_name().to_string_lossy().into_owned();
+                if path.is_dir() {
+                    if name == "target" || name.starts_with('.') {
+                        continue;
+                    }
+                    stack.push(path);
+                } else if name.ends_with(".py") || name.ends_with(".rs") {
+                    push_scannable(&mut out, root, path);
                 }
-                stack.push(path);
-            } else if name.ends_with(".py") || name.ends_with(".rs") {
-                push_scannable(&mut out, root, path);
             }
         }
     }
@@ -108,7 +111,8 @@ fn push_scannable(out: &mut Vec<(String, PathBuf, String)>, root: &Path, path: P
     if name.starts_with("test_") || name == "paths_testing.py" {
         return;
     }
-    out.push((rel, path, suffix_guess(root, &path)));
+    let suffix = suffix_guess(root, &path);
+    out.push((rel, path, suffix));
 }
 
 fn suffix_guess(root: &Path, path: &Path) -> String {
@@ -126,7 +130,7 @@ fn suffix_guess(root: &Path, path: &Path) -> String {
 }
 
 /// Repo-relative path with forward slashes.
-fn rel_path(root: &Path, path: &Path) -> String {
+pub(crate) fn rel_path(root: &Path, path: &Path) -> String {
     path.strip_prefix(root)
         .unwrap_or(path)
         .to_string_lossy()
@@ -172,8 +176,13 @@ fn rule_a_violations(root: &Path) -> Vec<(String, String, String)> {
                 if owning.contains(&rel.as_str()) {
                     continue;
                 }
-                let name_re =
-                    regex::Regex::new(&format!(r"(?<![\w.\-]){filename}(?![\w.\-])")).unwrap();
+                // The regex crate has no look-around; the boundary is a
+                // consumed non-word char (or an edge) instead.
+                let name_re = regex::Regex::new(&format!(
+                    r"(^|[^\w.\-]){}($|[^\w.\-])",
+                    regex::escape(filename)
+                ))
+                .unwrap();
                 if !name_re.is_match(&window) {
                     continue;
                 }
@@ -272,7 +281,12 @@ fn next_zero_def<'a>(
         if trimmed.is_empty() || trimmed.starts_with('@') {
             continue;
         }
-        return zero_def.captures(line).map(|c| (i, c[1].trim()));
+        // Index the source line through the match bounds; the Captures value
+        // itself dies here, so the returned slice must borrow the text.
+        return zero_def.captures(line).and_then(|c| {
+            let m = c.get(1)?;
+            Some((i, line[m.start()..m.end()].trim()))
+        });
     }
     None
 }
@@ -282,7 +296,8 @@ fn next_zero_def<'a>(
 fn body_calls(lines: &[&str], def_idx: usize, name: &str) -> bool {
     let def_line = lines[def_idx];
     let indent = def_line.len() - def_line.trim_start().len();
-    let call = regex::Regex::new(&format!(r"(?<![A-Za-z0-9_]){name}\s*\(")).unwrap();
+    let call =
+        regex::Regex::new(&format!(r"(^|[^A-Za-z0-9_]){}\s*\(", regex::escape(name))).unwrap();
     for line in lines.iter().skip(def_idx + 1) {
         if line.trim().is_empty() {
             continue;
@@ -324,7 +339,7 @@ fn read_baseline_keys(path: &Path) -> Baseline {
 /// Both rules' findings: (rule, rel, key, message).
 fn find_all(root: &Path) -> Vec<(String, String, String, String)> {
     let mut out: Vec<(String, String, String, String)> = Vec::new();
-    for (rel, filename, msg) in rule_a_violations(root) {
+    for (filename, rel, msg) in rule_a_violations(root) {
         out.push(("A".into(), rel, filename, msg));
     }
     for (rel, name, msg) in rule_b_violations(root) {

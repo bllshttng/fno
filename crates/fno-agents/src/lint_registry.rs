@@ -33,7 +33,9 @@ pub fn run(op: &str, rest: &[String], home: &AgentsHome) -> i32 {
 fn run_registry(rest: &[String], home: &AgentsHome, json: bool) -> i32 {
     let _ = rest;
     let path = home.registry_json();
-    let entries = crate::state::load_registry(&path).unwrap_or_default();
+    let entries = crate::state::load_registry(&path)
+        .unwrap_or_default()
+        .entries;
     let stores = Stores::ambient();
     let mut no_handle: Vec<String> = Vec::new();
     let mut unresolvable: Vec<(String, Vec<&str>)> = Vec::new();
@@ -147,11 +149,6 @@ fn run_field_coverage(rest: &[String], home: &AgentsHome, json: bool, live: bool
     let schema = read_schema(&root);
     let contract = population_contract(schema.as_ref());
     let live_result = live_field_coverage(home, &schema, &contract);
-    let exit_live = match live_result.status.as_str() {
-        "unmeasured" => 2,
-        "findings" => 1,
-        _ => 0,
-    };
     emit_both(&source, &live_result, json)
 }
 
@@ -251,12 +248,16 @@ struct SourceReport {
 }
 
 /// `class AgentEntry` block's annotated names, scanned off the lines.
+/// Docstring regions are skipped: a prose line at class-body indent can
+/// otherwise read as an annotation (the registry docstring carries
+/// "only the first is monotone:" mid-sentence).
 fn declared_entry_fields(body: &str) -> Vec<String> {
     let mut fields: Vec<String> = Vec::new();
     let mut inside = false;
+    let mut in_docstring = false;
     for line in body.lines() {
         let trimmed = line.trim_start();
-        if trimmed.starts_with("class AgentEntry") {
+        if !in_docstring && trimmed.starts_with("class AgentEntry") {
             inside = true;
             continue;
         }
@@ -265,6 +266,14 @@ fn declared_entry_fields(body: &str) -> Vec<String> {
         }
         if trimmed.starts_with("class ") && !trimmed.starts_with("class AgentEntry") {
             break;
+        }
+        let quote_count = trimmed.matches("\"\"\"").count();
+        if quote_count % 2 == 1 {
+            in_docstring = !in_docstring;
+            continue;
+        }
+        if in_docstring {
+            continue;
         }
         let plain = line.trim_end();
         if plain.starts_with("    ") && !plain.starts_with("        ") {
@@ -379,7 +388,8 @@ fn live_field_coverage(
     schema: &Option<Value>,
     contract: &(Vec<(String, String, String)>, Vec<String>),
 ) -> LiveReport {
-    let rows = crate::state::load_registry(&home.registry_json()).unwrap_or_default();
+    let registry = crate::state::load_registry(&home.registry_json()).unwrap_or_default();
+    let rows = &registry.entries;
     if rows.is_empty() {
         return LiveReport {
             status: "unmeasured".into(),
@@ -429,11 +439,11 @@ fn live_field_coverage(
     let projected_keys: Vec<String> = projected_row_keys(schema);
     let persisted_dead: Vec<String> = persisted_names
         .into_iter()
-        .filter(|name| dead_field(&rows, name))
+        .filter(|name| dead_field(rows, name))
         .collect();
     let projected_dead: Vec<String> = projected_keys
         .into_iter()
-        .filter(|name| dead_field(&rows, name))
+        .filter(|name| dead_field(rows, name))
         .collect();
     let findings =
         !persisted_dead.is_empty() || !projected_dead.is_empty() || !contract.1.is_empty();

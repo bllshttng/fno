@@ -36,8 +36,6 @@ import ast
 import re
 from pathlib import Path
 
-from fno.lint_cli import _rust_cfg_test_lines
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 # crates/ is in scope because the megawalk walker (the legitimate node-claim
@@ -218,6 +216,45 @@ _RS_RELEASE = re.compile(
 )
 _RS_DIRECT_RELEASE = re.compile(r"\brelease\s*\(\s*(&?\s*[^,\]\)]+)")
 _RS_BIND = re.compile(r"\blet\s+(?:mut\s+)?([A-Za-z_]\w*)\s*(?::[^=]+)?=\s*(.+)$")
+
+
+def _rust_cfg_test_lines(lines: list[str]) -> set[int]:
+    """1-indexed line numbers inside an inline ``#[cfg(test)] mod`` block.
+
+    Inlined from the deleted lint_cli.py so the scanner survives its
+    deletion; the native twin is repo_lint::seam_crossings::rust_cfg_test_lines.
+    """
+    inside: set[int] = set()
+    i = 0
+    while i < len(lines):
+        stripped = lines[i].strip()
+        if stripped != "#[cfg(test)]":
+            i += 1
+            continue
+        head = lines[i + 1].strip() if i + 1 < len(lines) else ""
+        if not head.startswith(("mod ", "pub mod ", "pub(crate) mod ")):
+            i += 1
+            continue
+        # `#[cfg(test)] pub mod frame_html;` declares an EXTERNAL module and
+        # opens no block. A declaration excludes nothing.
+        if head.endswith(";"):
+            i += 1
+            continue
+        j = i + 1
+        while j < len(lines) and "{" not in lines[j]:
+            j += 1
+        if j >= len(lines):
+            break
+        depth = 0
+        while j < len(lines):
+            depth += lines[j].count("{") - lines[j].count("}")
+            if depth <= 0:
+                break
+            j += 1
+        for k in range(i, min(j, len(lines) - 1) + 1):
+            inside.add(k + 1)
+        i = j + 1
+    return inside
 
 
 def _rust_node_release_lines(text: str) -> list[int]:

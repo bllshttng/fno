@@ -2882,10 +2882,9 @@ mod read_bounds;
 
 pub(crate) use read_bounds::stopgate_pre_drain_spent;
 pub(crate) use read_bounds::{
-    clamp_to_fire_deadline, drain_reserve_half_spent, stopgate_drain_timeout,
-    stopgate_fire_remaining_ms, stopgate_harness_margin_remaining_ms, stopgate_hold_drain_reserve,
-    stopgate_pr_meta_timeout, stopgate_read_timeout, stopgate_stamp_fire, STOPGATE_DRAIN_FLOOR,
-    STOPGATE_FIRE_BUDGET,
+    drain_reserve_half_spent, stopgate_drain_timeout, stopgate_fire_remaining_ms,
+    stopgate_harness_margin_remaining_ms, stopgate_hold_drain_reserve, stopgate_pr_meta_timeout,
+    stopgate_read_timeout, stopgate_stamp_fire, STOPGATE_DRAIN_FLOOR, STOPGATE_FIRE_BUDGET,
 };
 
 // ── lead driver arm ───────────────────────────────────────────────────────────

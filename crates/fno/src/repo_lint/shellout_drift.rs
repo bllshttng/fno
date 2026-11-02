@@ -14,6 +14,33 @@ use std::path::Path;
 const SCAN_REL: &str = "cli/src/fno";
 const ALLOWLIST_REL: &str = "scripts/lint/.clone-only-scripts.txt";
 const DEGRADE_TIMEOUT_SECS: u64 = 30;
+
+/// The Python leg's subprocess timeout, ported: spawn, poll, kill at the
+/// deadline and read that as a hung probe. None is a timeout, never a pass.
+fn bounded_output(
+    cmd: &mut std::process::Command,
+    timeout: std::time::Duration,
+) -> Option<std::io::Result<std::process::Output>> {
+    let mut child = match cmd.spawn() {
+        Ok(child) => child,
+        Err(e) => return Some(Err(e)),
+    };
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return Some(child.wait_with_output()),
+            Ok(None) => {
+                if std::time::Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return None;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            Err(e) => return Some(Err(e)),
+        }
+    }
+}
 const SCAN_EXCLUDE: &[&str] = &["cli/src/fno/evals/runner.py"];
 
 pub fn run(inv: &Invocation) -> i32 {
@@ -139,9 +166,9 @@ fn scan_tree(
         regex::Regex::new(r#"^\s*(?:\w+:\s*list\[str\]\s*=\s*)?\w+\s*=\s*\[\s*["'](bash|sh)["']"#)
             .unwrap();
     let resolver =
-        regex::Regex::new(r"(?<![A-Za-z0-9_])(?:resolve_repo_root|resolve_plugin_script)\s*\(")
+        regex::Regex::new(r"(^|[^A-Za-z0-9_])(?:resolve_repo_root|resolve_plugin_script)\s*\(")
             .unwrap();
-    let sh_literal = regex::Regex::new(r#"["'](?:scripts|hooks)/[^"']*\.sh["']"#).unwrap();
+    let sh_literal = regex::Regex::new(r#"["']((?:scripts|hooks)/[^"']*\.sh)["']"#).unwrap();
     let resolver_arg = regex::Regex::new(
         r#"resolve_plugin_script\(\s*(?:["'](?:scripts|hooks)/[^"']*\.sh["']|\w+)\s*\)"#,
     )
@@ -150,7 +177,7 @@ fn scan_tree(
     let mut files = super::walkdir_py_sh(scan_root);
     files.sort();
     for path in files {
-        let rel = super::rel_path(root, &path);
+        let rel = super::state_roots::rel_path(root, &path);
         if SCAN_EXCLUDE.contains(&rel.as_str()) {
             continue;
         }
@@ -226,7 +253,7 @@ fn degrade_proof(entries: &BTreeMap<String, Vec<String>>) -> Vec<(String, String
     let empty = std::env::temp_dir().join(format!("fno-shellout-drift-{}", std::process::id()));
     let _ = std::fs::create_dir_all(&empty);
     for (relpath, command) in entries {
-        let mut envs: Vec<(String, String)> = vec![
+        let envs: Vec<(String, String)> = vec![
             (
                 "FNO_REPO_ROOT".to_string(),
                 empty.to_string_lossy().into_owned(),
@@ -243,14 +270,22 @@ fn degrade_proof(entries: &BTreeMap<String, Vec<String>>) -> Vec<(String, String
             .current_dir(&empty)
             .env_remove("CLAUDE_PLUGIN_ROOT")
             .envs(envs);
-        let outcome = cmd.output();
+        let outcome = bounded_output(
+            &mut cmd,
+            std::time::Duration::from_secs(DEGRADE_TIMEOUT_SECS),
+        );
         match outcome {
-            Err(e) => failures.push((
+            None => failures.push((
+                relpath.clone(),
+                command.join(" "),
+                "timed out (hung instead of degrading)".into(),
+            )),
+            Some(Err(e)) => failures.push((
                 relpath.clone(),
                 command.join(" "),
                 format!("could not run command: {e}"),
             )),
-            Ok(out) => {
+            Some(Ok(out)) => {
                 let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
                 let combined = format!(
                     "{}{}",

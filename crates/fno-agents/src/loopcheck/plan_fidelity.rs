@@ -11,7 +11,9 @@
 
 use super::*;
 use crate::backlog::api::{self as backlog_api, Store as GraphStore};
+use crate::merge_gates::breadcrumb;
 use crate::plan_doc::codec as fm_codec;
+use serde_json::json;
 
 /// Plan-fidelity stop gate. The stop-gate half of AC5; the merge gate
 /// (`merge_gates::plan_fidelity_blocker`, which computes the same decision
@@ -543,7 +545,7 @@ pub(crate) fn run_body_guard(body: String, script: Option<&Path>, cwd: &Path) ->
 /// the shared bounded runner gives the other probes, with the env parameter
 /// that runner lacks.
 pub(crate) fn bounded_spawn(
-    cmd: std::process::Command,
+    mut cmd: std::process::Command,
     timeout: std::time::Duration,
 ) -> Option<GuardOutput> {
     use std::io::Read;

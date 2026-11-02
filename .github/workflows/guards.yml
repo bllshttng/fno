@@ -202,27 +202,32 @@ jobs:
       # directions - a new hand-built path, and a baselined line whose site was
       # fixed and not removed.
       # The repository lint checks answer from the native front door now
-      # (the Python lint legs deleted); the binary this job built above
-      # serves them through the status read-leaf door.
+      # (the Python lint legs deleted); the binary built below serves them
+      # in-process.
+      - name: Build fno (repo-lint door)
+        if: ${{ !cancelled() }}
+        working-directory: crates/fno
+        run: cargo build --bin fno
+
       - name: State-roots ratchet (declared root)
         if: ${{ !cancelled() }}
         env:
-          FNO_AGENTS_BIN: ${{ github.workspace }}/crates/fno-agents/target/debug/fno-agents
-        run: "$FNO_AGENTS_BIN" status --lint-check state-roots
+          FNO_BIN: ${{ github.workspace }}/crates/fno/target/debug/fno
+        run: "$FNO_BIN" doctor lint state-roots
 
       # The Rust/Python seam ratchet, positive-controlled by
       # tests/ci/test_seam_crossings.sh: the selftest must fail on injected
       # drift before the check is trusted on the real tree. Both halves run
-      # the native binary door.
+      # the native front door.
       - name: Seam-crossings ratchet (selftest, then check)
         if: ${{ !cancelled() }}
         timeout-minutes: 5
         env:
-          FNO_AGENTS_BIN: ${{ github.workspace }}/crates/fno-agents/target/debug/fno-agents
+          FNO_BIN: ${{ github.workspace }}/crates/fno/target/debug/fno
         run: |
           set -euo pipefail
           bash tests/ci/test_seam_crossings.sh
-          "$FNO_AGENTS_BIN" status --lint-check seam-crossings
+          "$FNO_BIN" doctor lint seam-crossings
 
       # A hook script the base revision's config referenced cannot be deleted
       # in the same commit that unregisters it: running sessions cache hook
@@ -230,13 +235,13 @@ jobs:
       # fails the whole Bash call, so one stubless deletion bricks every
       # pre-merge session's shell. One release of no-op stub, then delete.
       # Moved here from the guards job: the check is native now and reads
-      # the binary this job builds.
+      # the front door built above.
       - name: Hook script tombstone gate (no stubless deletion)
         if: ${{ !cancelled() }}
         timeout-minutes: 5
         env:
-          FNO_AGENTS_BIN: ${{ github.workspace }}/crates/fno-agents/target/debug/fno-agents
-        run: "$FNO_AGENTS_BIN" status --lint-check hook-tombstones
+          FNO_BIN: ${{ github.workspace }}/crates/fno/target/debug/fno
+        run: "$FNO_BIN" doctor lint hook-tombstones
 
 
       # The JSON-stdout house contract: a -J command prints exactly one JSON

@@ -70,22 +70,41 @@ pub struct Invocation {
     pub base: Option<String>,
 }
 
-/// Parse `--lint-check`'s tail: `--root <dir>`, the check name, then the
-/// check's flags. Refusals name what is missing, like the Python surface.
+/// Parse the check tail: the check name, then the check's flags. `--root`
+/// is a door-level flag and is accepted before or after the check name.
+/// Refusals name what is missing, like the Python surface.
 pub fn parse(args: &[String]) -> Result<Invocation, String> {
     let mut root_override: Option<String> = None;
     let mut rest: &[String] = args;
-    if rest.first().map(String::as_str) == Some("--root") {
-        match rest.get(1) {
-            Some(dir) => {
-                root_override = Some(dir.clone());
-                rest = &rest[2..];
+    let mut check: Option<String> = None;
+    let mut flags: Vec<String> = Vec::new();
+    for (i, token) in rest.iter().enumerate() {
+        if token == "--root" {
+            match rest.get(i + 1) {
+                Some(dir) => {
+                    root_override = Some(dir.clone());
+                }
+                None => return Err("--root needs a directory".into()),
             }
-            None => return Err("--root needs a directory".into()),
+            continue;
         }
+        if i > 0 && rest[i - 1] == "--root" {
+            continue;
+        }
+        if check.is_none() && token.starts_with('-') {
+            return Err(format!(
+                "fno doctor lint: unknown check {token:?}. Known: {}",
+                CHECKS.join(", ")
+            ));
+        }
+        if check.is_none() {
+            check = Some(token.clone());
+            continue;
+        }
+        flags.push(token.clone());
     }
-    let check = match rest.first() {
-        Some(name) => name.clone(),
+    let check = match check {
+        Some(name) => name,
         None => {
             return Err(format!(
                 "fno doctor lint: unknown check ''. Known: {}",
@@ -110,7 +129,7 @@ pub fn parse(args: &[String]) -> Result<Invocation, String> {
         live: false,
         base: None,
     };
-    let mut it = rest[1..].iter();
+    let mut it = flags.iter();
     while let Some(flag) = it.next() {
         let name = flag.as_str();
         let takes_value =
@@ -175,11 +194,10 @@ pub fn run(args: &[String]) -> i32 {
 /// The repo root: `FNO_REPO_ROOT`, then `git rev-parse --show-toplevel` from
 /// the cwd, then the cwd - the order `fno.paths.resolve_repo_root` held.
 pub fn repo_root(override_dir: Option<&str>) -> Result<PathBuf, String> {
-    if let Some(pin) = override_dir.or_else(|| {
-        std::env::var_os("FNO_REPO_ROOT")
-            .filter(|v| !v.is_empty())
-            .map(|v| v.to_string_lossy().into_owned())
-    }) {
+    let env_pin = std::env::var_os("FNO_REPO_ROOT")
+        .filter(|v| !v.is_empty())
+        .map(|v| v.to_string_lossy().into_owned());
+    if let Some(pin) = override_dir.or(env_pin.as_deref()) {
         return Ok(PathBuf::from(pin));
     }
     let cwd = std::env::current_dir().map_err(|e| format!("cwd unreadable: {e}"))?;
@@ -228,12 +246,16 @@ fn run_ci_gate(root: &Path, rel_path: &str) -> i32 {
 /// liveness legs and row projection live in the fno-agents binary. Forward
 /// as the style-check door does; output and exit codes pass through.
 fn forward_registry_family(inv: &Invocation) -> ! {
-    let mut argv: Vec<std::ffi::OsString> = vec!["status".into(), "--lint-registry".into()];
-    if inv.check == "field-coverage" {
-        argv.push("--lint-field-coverage".into());
-        if inv.live {
-            argv.push("--live".into());
-        }
+    // One flag per family member: the client's status door reads the FIRST
+    // rest token as the op.
+    let op = if inv.check == "field-coverage" {
+        "--lint-field-coverage"
+    } else {
+        "--lint-registry"
+    };
+    let mut argv: Vec<std::ffi::OsString> = vec!["status".into(), op.into()];
+    if inv.check == "field-coverage" && inv.live {
+        argv.push("--live".into());
     }
     if inv.json {
         argv.push("--json".into());
@@ -631,7 +653,6 @@ fn walkdir_py_sh(base: &Path) -> Vec<PathBuf> {
 /// The plan-filename mismatch row: the plan path, the filename's node, the
 /// claim, rendered exactly as the Python leg printed them.
 pub mod plan_filenames {
-    use super::git_capture;
     use std::path::{Path, PathBuf};
 
     pub struct Mismatch {

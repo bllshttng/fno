@@ -352,7 +352,7 @@ fn pr_payload_is_code<P: Probes>(probes: &P, cwd: &Path, pr: u64) -> bool {
     })
 }
 
-fn breadcrumb(message: &str) {
+pub(crate) fn breadcrumb(message: &str) {
     let mut err = std::io::stderr();
     let _ = writeln!(err, "pr-merge: {message}");
 }

@@ -72,34 +72,40 @@ fn row_path(row: &str) -> String {
         .join(" ")
 }
 
-/// The manifest contracts over the Python half: every collapse-map row and
-/// every collapse-flags row must appear in the baseline, and the map's
-/// projection of a group must equal the baseline rows in that group.
-fn manifest_drift(root: &Path, baseline: &[String], rust: &BTreeSet<String>) -> Vec<String> {
+/// The manifest contracts over the Python half: each collapse-map row's
+/// projection (the leaf verbatim on a KEEP tier, else the group head) and
+/// every collapse-flags row must appear in the baseline.
+fn manifest_drift(root: &Path, baseline: &[String]) -> Vec<String> {
     let mut drift: Vec<String> = Vec::new();
     let baseline_paths: BTreeSet<String> = baseline.iter().map(|r| row_path(r)).collect();
     let map = std::fs::read_to_string(root.join(MAP_REL)).unwrap_or_default();
-    let mut map_rows: Vec<String> = Vec::new();
     for (n, line) in map.lines().enumerate() {
         if n == 0 || line.trim().is_empty() {
             continue;
         }
-        if let Some(leaf) = line.split('\t').next() {
-            if !leaf.trim().is_empty() {
-                map_rows.push(leaf.trim().to_string());
-            }
+        let fields: Vec<&str> = line.split('\t').collect();
+        if fields.len() < 2 {
+            continue;
         }
-    }
-    let map_groups: BTreeSet<String> = map_rows
-        .iter()
-        .filter_map(|r| r.split_whitespace().next().map(str::to_string))
-        .filter(|head| rust.contains(head) || !head.is_empty())
-        .collect();
-    for row in &map_rows {
-        let path = row_path(row);
-        if !baseline_paths.contains(&path) {
+        let leaf = fields[0].trim();
+        if leaf.is_empty() {
+            continue;
+        }
+        // The agents rows are the native binary's old-spelling contract
+        // (rust_half enumerates the fno-agents surface); no baseline line
+        // backs them, the same exclusion the Python inventory test held.
+        if leaf.split_whitespace().next() == Some("agents") {
+            continue;
+        }
+        let projected = if fields[1].trim() == "KEEP" {
+            leaf.to_string()
+        } else {
+            leaf.split_whitespace().next().unwrap_or(leaf).to_string()
+        };
+        if !baseline_paths.contains(&projected) {
             drift.push(format!(
-                "command-ratchet: collapse-map row `{row}` is missing from {BASELINE_REL}. \
+                "command-ratchet: collapse-map row `{leaf}` projects to `{projected}`, \
+             which is missing from {BASELINE_REL}. \
              Allocate the action in the map and regenerate the baseline in the same PR."
             ));
         }
@@ -181,20 +187,23 @@ fn update_baseline(root: &Path) -> i32 {
 }
 pub fn run(inv: &Invocation) -> i32 {
     if inv.update {
-        return update_baseline(root);
+        return update_baseline(&inv.root);
     }
-    let declared = crate::command_names::live_roots()
-        .into_iter()
-        .map(str::to_string)
-        .collect::<BTreeSet<_>>();
-    let declared: BTreeSet<String> = declared
-        .union(&BTreeSet::from([
-            "mux".to_string(),
-            "version".to_string(),
-            "fno-agents".to_string(),
-        ]))
-        .cloned()
-        .collect();
+    let rust = match rust_half(&inv.root) {
+        Ok(r) => r,
+        Err(message) => {
+            eprintln!("{message}");
+            return 1;
+        }
+    };
+    let baseline = match baseline_rows(&inv.root) {
+        Ok(b) => b,
+        Err(message) => {
+            eprintln!("{message}");
+            return 1;
+        }
+    };
+    let drift = manifest_drift(&inv.root, &baseline);
     let baseline_paths: BTreeSet<String> = baseline.iter().map(|r| row_path(r)).collect();
     let mut added: Vec<String> = Vec::new();
     for leaf in &rust {
@@ -203,13 +212,10 @@ pub fn run(inv: &Invocation) -> i32 {
         }
     }
     added.sort();
-    let mut removed: Vec<String> = Vec::new();
-    for root_name in &declared {
-        if !rust.contains(root_name) {
-            removed.push(root_name.clone());
-        }
-    }
-    removed.sort();
+    // The removed-side ratchet lives in the freshness unit test
+    // (inventory_artifact_is_fresh pins the committed tree to the typed
+    // tree); the manifest contracts hold the Python-forward roots, which
+    // live_roots() legitimately declares without a typed arm.
     let mut lines: Vec<String> = Vec::new();
     let mut failed = false;
     if !drift.is_empty() {
@@ -228,22 +234,6 @@ pub fn run(inv: &Invocation) -> i32 {
         lines.push(
             "    A command cannot be added silently. Regenerate the baseline in the same PR \
              and add a PR-body line:  command-exception: <rationale>"
-                .to_string(),
-        );
-    }
-    if !removed.is_empty() {
-        failed = true;
-        if lines.is_empty() {
-            lines.push(format!(
-                "command-ratchet: FAIL - the typed tree dropped declared roots"
-            ));
-        }
-        lines.push(format!(
-            "  Removed from the typed tree but still declared: {}",
-            removed.join(", ")
-        ));
-        lines.push(
-            "    Regenerate scripts/ci/native-command-tree.txt and commit it in the same PR."
                 .to_string(),
         );
     }

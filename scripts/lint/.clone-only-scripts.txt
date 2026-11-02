@@ -37,9 +37,7 @@
 # for the Python tree the same way the pr-*.sh entries below were.
 
 
-# fno doctor lint flock-pattern - repository linting script remains clone-only and
 # degrades with an actionable error when the script is unavailable.
-scripts/lint-flock-pattern.sh :: lint flock-pattern
 
 # fno do pr {merge,verify,rebase} - INTERNALIZED. The four pr-*.sh
 # were ported to in-package Python (fno/pr/_merge.py, _verify.py, _rebase.py)
@@ -49,24 +47,11 @@ scripts/lint-flock-pattern.sh :: lint flock-pattern
 
 # fno doctor lint stale-skill-refs - the stale-skill-reference audit gate; operates on
 # the repo's skills/ source tree (re-homed from `fno consolidation audit`).
-scripts/ci/check-no-stale-skill-refs.sh :: lint stale-skill-refs
 
-# fno doctor lint flock-pattern - lints the repo's own source for open-coded agent
-# flock + registry re-read patterns; only meaningful in a clone.
-scripts/lint-flock-pattern.sh :: lint flock-pattern
-
-# fno doctor lint retired-commands - fails a caller-facing string that shows a
-# ruling-retired command; scans the repo's own source tree, so it is only
-# meaningful in a clone.
-scripts/ci/check-retired-command-strings.sh :: lint retired-commands
-scripts/ci/check-preamble-budget.sh :: lint preamble-budget
-
-# fno doctor lint internal-refs - the node-id leak guard ; scans the
-# repo's tracked prose via the same _run_ci_gate wrapper as its siblings.
-scripts/ci/check-no-internal-refs.sh :: lint internal-refs
-
-# fno do plan fidelity - a plan with `carveouts: forbidden` runs the PR body through
-# the one body parser. The probe command refuses on its missing plan. The absent-script
-# refusal ("carve-out check unreadable") is proven by a unit test in
-# cli/tests/scoreboard/test_plan_fidelity.py.
-scripts/ci/check-oos-tracked.sh :: plan fidelity drift-probe.md
+# The six lint-family entries (flock-pattern x2, stale-skill-refs,
+# retired-commands, preamble-budget, internal-refs) and the plan-fidelity
+# entry dropped in the PR that deleted the Python lint legs and folded the
+# fidelity body guard native: the guard scans cli/src/fno for repo-root
+# shell-outs, and every caller there is gone. The checks now run behind
+# `fno doctor lint <check>` (native front door) and the body guard runs the
+# oos script from crates/fno-agents, both outside this guard's scan scope.

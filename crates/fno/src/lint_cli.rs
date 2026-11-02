@@ -25,12 +25,15 @@ pub fn classify_doctor_lint(args: &[OsString]) -> Option<NativeLint> {
     if args[0].to_str()? != "doctor" || args[1].to_str()? != "lint" {
         return None;
     }
-    let rest = args[3..].to_vec();
+    // `style` and `menu-caps` take flags only; the repo checks need the check
+    // name in the tail so repo_lint::parse can name what it runs.
+    let flags = args[3..].to_vec();
+    let with_check = args[2..].to_vec();
     match args[2].to_str()? {
-        "style" => Some(NativeLint::Style(rest)),
-        "menu-caps" => Some(NativeLint::MenuCaps(rest)),
-        "registry" | "field-coverage" => Some(NativeLint::RegistryFamily(rest)),
-        name if crate::repo_lint::CHECKS.contains(&name) => Some(NativeLint::RepoLint(rest)),
+        "style" => Some(NativeLint::Style(flags)),
+        "menu-caps" => Some(NativeLint::MenuCaps(flags)),
+        "registry" | "field-coverage" => Some(NativeLint::RegistryFamily(with_check)),
+        name if crate::repo_lint::CHECKS.contains(&name) => Some(NativeLint::RepoLint(with_check)),
         _ => None,
     }
 }
@@ -53,9 +56,16 @@ mod tests {
             classify_doctor_lint(&mk(&["doctor", "lint", "menu-caps"])),
             Some(NativeLint::MenuCaps(mk(&[])))
         );
-        // Every other check answers natively or forwards to the registry door.
-        assert!(classify_doctor_lint(&mk(&["doctor", "lint", "command-ratchet"])).is_some());
-        assert!(classify_doctor_lint(&mk(&["doctor", "lint", "registry"])).is_some());
+        // Every other check answers natively or forwards to the registry door,
+        // and its tail carries the check name for repo_lint::parse.
+        assert_eq!(
+            classify_doctor_lint(&mk(&["doctor", "lint", "command-ratchet"])),
+            Some(NativeLint::RepoLint(mk(&["command-ratchet"])))
+        );
+        assert_eq!(
+            classify_doctor_lint(&mk(&["doctor", "lint", "registry"])),
+            Some(NativeLint::RegistryFamily(mk(&["registry"])))
+        );
         assert!(classify_doctor_lint(&mk(&["doctor", "lint"])).is_none());
         // A different tree keeps forwarding.
         assert!(classify_doctor_lint(&mk(&["doctor", "event", "rows"])).is_none());
