@@ -208,9 +208,17 @@ fn rust_leg(home: &Home) -> Golden {
 #[test]
 fn the_tick_matches_its_frozen_goldens() {
     let root = tempfile::tempdir().unwrap();
+    // TEMPORARY CI capture: dumps both legs, removed before merge.
+    let mut dump = Vec::new();
     for case in cases() {
         let rust = rust_leg(&write_case(root.path(), &case, "rust"));
-        let oracle = capture_mode().then(|| python_leg(&write_case(root.path(), &case, "python")));
-        assert_golden("pr-watch-tick", case.label, &rust, oracle);
+        let py = python_leg(&write_case(root.path(), &case, "python"));
+        dump.push(json!({"case": slug(case.label), "same": rust.exit == py.exit && rust.streams == py.streams,
+                         "rust": [rust.exit, rust.streams], "python": [py.exit, py.streams]}));
     }
+    let _ = (
+        capture_mode as fn() -> bool,
+        assert_golden as fn(&str, &str, &Golden, Option<Golden>),
+    );
+    panic!("CAPTURE-DUMP {}", Value::Array(dump));
 }
