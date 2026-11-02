@@ -218,7 +218,7 @@ mod tests {
         let cache = GateProbeCache::new();
         let (first, _) = cache.serve("/tmp/cwd-a", &fixture_payload()).unwrap();
         // Expire by hand: the TTL is 60s and the test must not wait it out.
-        let map = cache
+        let mut map = cache
             .entries
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
