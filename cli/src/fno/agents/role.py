@@ -137,15 +137,16 @@ def _graph_index() -> Optional[dict[str, dict]]:
     """Return the readable role graph as an id index, or ``None``.
 
     ONE parse serves the availability probe and every per-row node lookup its
-    callers make. ``read_entries`` raises ``ExternalMetadataUnavailable`` under
-    an external tracker backend, so ``None`` is a distinct answer from an empty
+    callers make. An external tracker backend answers ``None``, so ``None`` is a distinct answer from an empty
     index: without it a containment or agreement check would silently degrade to
     "not contained" / "not in the graph" on a machine it never read.
     """
-    from fno.graph.api import read_entries
+    from fno.rust_binary import active_backend_name, backlog_rows
 
     try:
-        entries = read_entries("agents.role")
+        if active_backend_name() != "graph":
+            return None
+        entries = backlog_rows()
     except Exception:
         return None
     by_id: dict[str, dict] = {}

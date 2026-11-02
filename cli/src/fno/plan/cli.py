@@ -497,9 +497,8 @@ def folder_audit(
         None, "--plans-dir", help="Plans dir to scan (default: resolved plans-content dir)."
     ),
 ) -> None:
-    from fno.graph.statuses import recompute_statuses
-    from fno.graph.store import GraphCorruptError, GraphUnreadableError, read_graph_strict
     from fno.paths import graph_json, plans_content_dir
+    from fno.rust_binary import backlog_rows
     from fno.plan._folder_audit import scan
 
     plans_root = Path(plans_dir_opt) if plans_dir_opt else plans_content_dir()
@@ -507,8 +506,8 @@ def folder_audit(
     try:
         # Strict through the configured path: healed bytes must not read as
         # "no folder owners" - an unreadable graph refuses toward defer.
-        entries = recompute_statuses(read_graph_strict(graph_json()))
-    except (GraphCorruptError, GraphUnreadableError, OSError) as exc:
+        entries = backlog_rows(path=graph_json())
+    except (RuntimeError, ValueError, OSError) as exc:
         typer.echo(
             f"fno do plan folder-audit: graph unreadable ({exc}) - failing toward defer",
             err=True,
@@ -557,28 +556,24 @@ def rung(
     dependency; the exit code carries the dispatchable verdict so the common
     case stays a one-liner with no parsing at all.
     """
-    from fno.graph.ladder import Rung, is_dispatchable, plan_rung
+    from fno.rust_binary import plan_rung
 
     if not plan_path:
         typer.echo("fno do plan rung: a plan path is required", err=True)
         raise typer.Exit(code=2)
 
-    # `plan_rung` resolves a relative path against the ENTRY's cwd, not the
-    # process's, because the daemon probes foreign nodes. A path typed at a
-    # shell means the shell's cwd, so say so explicitly rather than letting the
-    # resolver refuse to guess and report UNREADABLE.
-    entry = {"id": "-", "plan_path": plan_path, "cwd": os.getcwd()}
-
-    r = plan_rung(entry)
-    typer.echo(f"rung={r.value}")
-    typer.echo(f"dispatchable={'true' if is_dispatchable(entry) else 'false'}")
-    if r is Rung.UNREADABLE:
+    # The door resolves a relative path against the shell's cwd.
+    r = plan_rung(plan_path)
+    dispatchable = r in ("ready", "in_progress", "in_review")
+    typer.echo(f"rung={r}")
+    typer.echo(f"dispatchable={'true' if dispatchable else 'false'}")
+    if r == "unreadable":
         typer.echo(
             f"fno do plan rung: cannot classify {plan_path} (missing, undecodable, "
             "malformed frontmatter, or a status this binary does not know)",
             err=True,
         )
-    raise typer.Exit(code=0 if is_dispatchable(entry) else 1)
+    raise typer.Exit(code=0 if dispatchable else 1)
 
 
 @plan_app.command(
@@ -599,8 +594,8 @@ def reconcile_status(
 ) -> None:
     """Sweep the plans dir, normalizing off-vocabulary/blank statuses."""
     from fno import paths
-    from fno.graph import store
     from fno.paths import plans_content_dir
+    from fno.rust_binary import store_request
 
     target = Path(plans_dir) if plans_dir else plans_content_dir()
     params = {
@@ -611,16 +606,10 @@ def reconcile_status(
         "archive_path": str(paths.graph_archive_json()),
     }
     try:
-        result = store._client_for(store.GRAPH_JSON).request("plan_docs", params)
-    except store.StoreUnavailable as exc:
-        typer.echo(f"  ! plan-doc writer unreachable ({exc}); run `fno doctor`", err=True)
-        raise typer.Exit(code=1) from exc
-    except RuntimeError as exc:
-        # A stale keeper predates the op (the plan-doc stamp clients'
-        # stale-keeper pattern): a skipped sweep must not read as a clean run.
-        if "unknown store method" not in str(exc) and "unknown plan_docs op" not in str(exc):
-            raise
-        typer.echo(f"  ! {exc} - run `fno doctor update`", err=True)
+        result = store_request("plan_docs", params)
+    except (OSError, ValueError, RuntimeError) as exc:
+        # A skipped sweep must not read as a clean run.
+        typer.echo(f"  ! plan-doc writer failed ({exc}); run `fno doctor`", err=True)
         raise typer.Exit(code=1) from exc
 
     for path, old, new in result.get("changes") or []:
@@ -703,13 +692,14 @@ def sync(
     ),
 ) -> None:
     """Idempotent whole-vault mirror-field sweep."""
-    from fno.graph import api as graph_api
     from fno.plan._project import project_graph_nodes
-    from fno.graph.api import ExternalMetadataUnavailable, read_entries
+    from fno.rust_binary import active_backend_name, backlog_rows, store_request
 
     watermark = _plan_sync_watermark()
     try:
-        store_version: Optional[float] = float(graph_api.version())
+        store_version: Optional[float] = float(
+            store_request("api", {"op": "version"})["version"]
+        )
     except Exception:  # noqa: BLE001 - an absent store must not block the sweep
         store_version = None
 
@@ -726,14 +716,14 @@ def sync(
 
     # A transient graph read failure degrades to a 0-doc no-op and does NOT
     # advance the watermark, so the next sweep re-converges (AC1-FR).
-    try:
-        entries = read_entries("plan.sync")
-    except ExternalMetadataUnavailable:
-        # The vault mirror is default-backend machinery (its watermark is the
-        # local store's version); an external selection must not repaint docs
-        # from stale local rows.
+    # The vault mirror is default-backend machinery (its watermark is the local
+    # store's version); an external selection must not repaint docs from stale
+    # local rows.
+    if active_backend_name() != "graph":
         typer.echo("plan sync: external tracker backend selected; 0 docs repainted", err=True)
         return
+    try:
+        entries = backlog_rows()
     except Exception as e:  # noqa: BLE001
         typer.echo(f"plan sync: graph unreadable ({e}); 0 docs repainted", err=True)
         return

@@ -648,17 +648,15 @@ def resolve_seed_node(message: str) -> tuple[Optional[str], Optional[str]]:
         return None, None
     if parse_command_token(first[0]) != ("target", True):
         return None, None
-    from fno.graph.fuzzy import resolve_id, resolve_node, search_entries
-    from fno.graph.load import load_graph
+    from fno.rust_binary import backlog_match
+
     try:
-        entries = [e for e in load_graph() if not e.get("archived_at")]
+        m = backlog_match(first[1])
     except Exception:  # noqa: BLE001 - an unreadable graph cannot prove a miss
         return None, None
-    m = resolve_node(first[1], entries)
-    m = m if m.kind == "exact" and m.id else resolve_id(first[1], entries)
-    if m.id and m.kind in ("exact", "fuzzy") and len(m.candidates) <= 1:
-        return m.id, None
-    near = list(m.candidates) or search_entries(first[1], entries)
+    near = m.get("candidates") or []
+    if m.get("id") and m.get("kind") in ("exact", "fuzzy") and len(near) <= 1:
+        return m["id"], None
     nearest = "; ".join(f"{e.get('id')} ({e.get('title', '')})" for e in near[:5]) or "none"
     return None, ("refused: the /target word %r names no backlog node; the worker would carry a"
                   " prose node and its PR lands on no card. Nearest nodes: %s. Spawn with a node"

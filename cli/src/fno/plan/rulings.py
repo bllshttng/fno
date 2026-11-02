@@ -85,7 +85,7 @@ def plan_rulings(node_id: str, plans_dir: Path) -> dict[str, Any]:
         ]
         if not hits:
             continue
-        from fno.graph._intake import plan_claims
+        from fno.rust_binary import plan_claims
 
         claims = plan_claims(str(path))
         for entry in hits:

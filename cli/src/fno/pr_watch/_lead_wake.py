@@ -19,9 +19,8 @@ def graph_entries(path: Optional[Path] = None) -> list:
     graph is byte-identical, so the memo is not staleness. Sweep discovery is
     the tick's only reader now that the wake phase moved into the daemon,
     and the memo keeps the 15 MB store at one real read per tick."""
-    from fno.graph.api import wire_rows
     from fno.paths import graph_json
-    from fno.graph.api import active_backend_name
+    from fno.rust_binary import active_backend_name, backlog_rows
 
     try:
         if active_backend_name() != "graph":
@@ -30,7 +29,7 @@ def graph_entries(path: Optional[Path] = None) -> list:
         ident = _lead_op("graph-ident", path=str(gpath)).get("ident")
         if ident is not None and _GRAPH_ENTRIES_MEMO["ident"] == ident:
             return _GRAPH_ENTRIES_MEMO["entries"]
-        entries = wire_rows(path=gpath)
+        entries = backlog_rows(path=gpath)
         if ident is not None:
             _GRAPH_ENTRIES_MEMO.update(ident=ident, entries=entries)
         return entries

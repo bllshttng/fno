@@ -144,9 +144,9 @@ def _graph_hex_map(graph_path: str):
     state root. One read per file per process; a hex with no unique
     `<prefix>-<hex>` id maps to "" and stays bare (never an invented id)."""
     try:
-        from fno.graph.load import load_graph
+        from fno.rust_binary import backlog_rows
 
-        rows_all = load_graph()
+        rows_all = backlog_rows()
     except Exception:  # noqa: BLE001 - a graph read failure leaves hex bare
         return {}
     hex_map: dict = {}

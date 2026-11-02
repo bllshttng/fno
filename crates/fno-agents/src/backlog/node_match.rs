@@ -239,7 +239,17 @@ pub fn run(tail: &[String]) -> i32 {
         .into_iter()
         .filter(|r| r.get("archived_at").is_none_or(Value::is_null))
         .collect();
-    let found = resolve_id(query, &live, branch);
+    // The deterministic tiers answer first: slug, alias and bare hex are exact.
+    let exact = query.and_then(|q| super::node_ref::resolve_tiers(&live, q));
+    let found = match exact {
+        Some(hit) => NodeMatch {
+            kind: MatchKind::Exact,
+            id: id_of(hit),
+            candidates: vec![hit.clone()],
+            note: String::new(),
+        },
+        None => resolve_id(query, &live, branch),
+    };
     println!(
         "{}",
         json!({

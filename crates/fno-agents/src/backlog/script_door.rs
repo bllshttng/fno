@@ -20,7 +20,13 @@ const USAGE: &str = "usage: fno backlog script-door <op>
   match <query> [--branch B]                 one loose-match answer as JSON
   has-file-surface <plan>                    exit 0 when the plan names files, else 7
   partition                                  stdin {items:[[id,[path...]]]} to the collision partition
-  root-patterns <doc>                        the state-root inventory patterns, one per line";
+  root-patterns <doc>                        the state-root inventory patterns, one per line
+  plan-claims <plan>                         the plan's claimed node ids, as a JSON array
+  plan-rung <plan>                           the plan's rung, one word
+  terminal-ids                               every closed node id, as a JSON array
+  execute-open <node> <harness> <session> <started> [effort]
+                                             open an execute row; exit 5 when the node is absent
+  store-request <method>                     stdin params to the store; the JSON reply on stdout";
 
 fn flag_value<'a>(tail: &'a [String], flag: &str) -> Option<&'a str> {
     let at = tail.iter().position(|a| a == flag)?;
@@ -133,6 +139,98 @@ fn run_partition() -> i32 {
     0
 }
 
+fn run_terminal_ids() -> i32 {
+    match graph_store::read_rows(&super::settings::graph_path()) {
+        Ok(rows) => {
+            let ids: Vec<&str> = rows
+                .iter()
+                .filter(|r| graph_store::is_terminal_entry(r))
+                .filter_map(|r| text_at(r, "id"))
+                .collect();
+            println!("{}", json!(ids));
+            0
+        }
+        Err(e) => {
+            eprintln!("fno backlog script-door terminal-ids: the graph could not be read: {e}");
+            1
+        }
+    }
+}
+
+fn run_execute_open(rest: &[String]) -> i32 {
+    let [node, harness, session, started, tail @ ..] = rest else {
+        eprintln!("{USAGE}");
+        return 2;
+    };
+    let row = match crate::graph_keeper::session_row(
+        "execute",
+        harness,
+        session,
+        tail.first().map(String::as_str),
+        Some(started),
+        None,
+        None,
+        None,
+    ) {
+        Ok(row) => row,
+        Err(e) => {
+            eprintln!("{e}");
+            return 1;
+        }
+    };
+    let found = std::cell::Cell::new(false);
+    let graph = super::settings::graph_path();
+    let wrote = crate::backlog::mutate_single_row(&graph, "session_append", |rows| {
+        let (hit, _added) = crate::graph_keeper::session_append(rows, node, row.clone())
+            .map_err(|e| e.to_string())?;
+        found.set(hit);
+        Ok(hit)
+    });
+    match wrote {
+        Err(e) => {
+            eprintln!("{e}");
+            1
+        }
+        Ok(_) if found.get() => 0,
+        Ok(_) => 5,
+    }
+}
+
+/// One store method through the one-shot exec lane, the same state and handlers
+/// the resident keeper serves. A refusal rides the reply, so exit 0 means only
+/// that the store answered.
+fn run_store_request(rest: &[String]) -> i32 {
+    let Some(method) = rest.first() else {
+        eprintln!("{USAGE}");
+        return 2;
+    };
+    let mut raw = String::new();
+    if let Err(e) = std::io::Read::read_to_string(&mut std::io::stdin(), &mut raw) {
+        eprintln!("fno backlog script-door store-request: stdin read failed: {e}");
+        return 1;
+    }
+    let params: Value = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("fno backlog script-door store-request: bad JSON: {e}");
+            return 2;
+        }
+    };
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let cfg = crate::store_exec::ExecConfig {
+        graph: super::settings::graph_path(),
+        canonical: true,
+        lock_timeout: graph_store::DEFAULT_LOCK_TIMEOUT,
+        events: Some(crate::paths::events_path(&cwd)),
+    };
+    let payload = json!({"id": 1, "method": method, "params": params}).to_string();
+    println!(
+        "{}",
+        crate::store_exec::exec_reply(&cfg, payload.as_bytes())
+    );
+    0
+}
+
 pub fn run(tail: &[String]) -> i32 {
     let Some((op, rest)) = tail.split_first() else {
         eprintln!("{USAGE}");
@@ -151,6 +249,29 @@ pub fn run(tail: &[String]) -> i32 {
             }
         },
         "partition" => run_partition(),
+        "plan-claims" => {
+            let claims = rest
+                .first()
+                .and_then(|plan| super::session_cli::plan_claims(plan))
+                .unwrap_or_default();
+            println!("{}", json!(claims));
+            0
+        }
+        "plan-rung" => match rest.first() {
+            Some(plan) => {
+                let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+                let entry = json!({"id": "-", "plan_path": plan, "cwd": cwd});
+                println!("{}", crate::backlog_ready::plan_rung(&entry));
+                0
+            }
+            None => {
+                eprintln!("{USAGE}");
+                2
+            }
+        },
+        "terminal-ids" => run_terminal_ids(),
+        "execute-open" => run_execute_open(rest),
+        "store-request" => run_store_request(rest),
         "root-patterns" => {
             let Some(doc) = rest.first() else {
                 eprintln!("{USAGE}");

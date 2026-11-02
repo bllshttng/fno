@@ -739,7 +739,7 @@ def _run_tick(
     holder,
 ) -> TickResult:
     """Inner tick body (called once tick lock is held)."""
-    from fno.graph._reconcile import ReconcileError
+    from fno.pr_watch._discover import ReconcileError
     from fno.paths import graph_json as default_graph_json
     from fno.pr_watch import decide
     from fno.pr_watch._lead_wake import graph_entries
@@ -1525,7 +1525,7 @@ def _default_graphql_remaining() -> tuple[Optional[int], Optional[str]]:  # prag
 
 def _tracked_states_from_reader(keys: set[str], reader: Callable) -> tuple[dict[str, str], int]:
     """Adapt an injected per-candidate reader into the batch seam for tests."""
-    from fno.graph._reconcile import ReconcileError
+    from fno.pr_watch._discover import ReconcileError
     from fno.pr_watch._discover import PrCandidate
     from fno.pr_watch._state import parse_watermark_key
 
