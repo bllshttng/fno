@@ -230,12 +230,12 @@ def _fill_spawn_record(owned):
     """
     if owned.session_id or owned.disposition in {"invalid", "contradiction"}:
         return owned
+    row = live_thread_row_for_cwd(_own_cwd())
+    if row is None:
+        return owned
     # No marker, no spawn name, and a full walk with no harness: only the cwd links this to a row.
     spawned = (os.environ.get("FNO_AGENT_SELF") or "").strip()
     if not (owned.harness or owned.markers_present or spawned) and no_harness_ancestor():
-        return owned
-    row = live_thread_row_for_cwd(_own_cwd())
-    if row is None:
         return owned
     harness, session_id = row
     if owned.harness and owned.harness != harness:
