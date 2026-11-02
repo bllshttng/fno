@@ -1039,8 +1039,23 @@ fn restage_stage(source_dir: &Path, stage_parent: &Path) -> Result<RestageOutcom
         Some(&root),
     )?;
     let mut files = 0;
+    let mut full_stage: Option<std::path::PathBuf> = None;
     for profile in present {
-        files += build_stage_as(&root, stage_parent, profile)?.1;
+        let (stage, count) = build_stage_as(&root, stage_parent, profile)?;
+        files += count;
+        if profile == Profile::Full {
+            full_stage = Some(stage);
+        }
+    }
+    // A restage rewrites the full stage in place with no install attached, so
+    // without this the pointer keeps naming whatever copy primed last and an
+    // env-less reader resolves a stage one deploy older than the machine's
+    // newest (measured 2026-10-30: the stage moved a day ahead of the pointer
+    // and a worker's init resolved the stale copy). Same rule as
+    // install_harness: a pack restage never moves the pointer off a full
+    // stage, and a manifest-less stage writes nothing (the prime checks).
+    if let Some(stage) = full_stage {
+        prime_plugin_root_pointer(&stage);
     }
     Ok(RestageOutcome::Restaged {
         files,
@@ -3252,6 +3267,60 @@ mod tests {
         assert_eq!(fs::read(stage.join("hooks/live.sh")).unwrap(), before);
         assert!(!stage.join("README.md").exists());
         let _ = fs::remove_dir_all(&base);
+    }
+
+    /// A restage rewrites the full stage in place, so it must move the
+    /// plugin-root pointer to the fresh stage: the deploy path once left the
+    /// pointer a day behind the stage and a worker's env-less init resolved
+    /// the stale copy. A pack-only restage never moves the pointer.
+    #[test]
+    fn restage_primes_pointer_from_full_stage() {
+        let base = std::env::temp_dir().join(format!("pi-restage-ptr-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let (source, stage) = fresh_stage(&base);
+        // new_repo already commits .claude-plugin/plugin.json naming fno,
+        // which both the prime's marker check and restage's source check
+        // require; the restaged stage keeps it.
+        let stage_parent = stage.parent().unwrap().to_path_buf();
+        let home = base.join("home");
+        fs::create_dir_all(home.join("install")).unwrap();
+        let ptr = home.join("install").join("plugin-root");
+        fs::write(&ptr, "/some/stale/copy\n").unwrap();
+        let previous_home = std::env::var_os("FNO_HOME");
+        std::env::set_var("FNO_HOME", &home);
+        restage_stage(&source, &stage_parent).unwrap();
+        assert_eq!(
+            fs::read_to_string(&ptr).unwrap().trim(),
+            stage.to_str().unwrap(),
+            "the restage moves the pointer to the fresh full stage"
+        );
+        // A pack-only restage (no full stage present) leaves the pointer.
+        let pack_base =
+            std::env::temp_dir().join(format!("pi-restage-ptr2-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&pack_base);
+        let pack_source = pack_base.join("source");
+        new_repo(&pack_source);
+        fs::write(
+            pack_source.join(crate::pack_profile::MANIFEST),
+            r#"{"mux":[]}"#,
+        )
+        .unwrap();
+        let pack_parent = pack_base.join("stage-parent");
+        fs::create_dir_all(&pack_parent).unwrap();
+        let (pack_stage, _) = build_stage_as(&pack_source, &pack_parent, Profile::Pack).unwrap();
+        restage_stage(&pack_source, &pack_parent).unwrap();
+        assert_eq!(
+            fs::read_to_string(&ptr).unwrap().trim(),
+            stage.to_str().unwrap(),
+            "a pack restage never moves the pointer off the full stage"
+        );
+        let _ = pack_stage;
+        match previous_home {
+            Some(v) => std::env::set_var("FNO_HOME", v),
+            None => std::env::remove_var("FNO_HOME"),
+        }
+        let _ = fs::remove_dir_all(&base);
+        let _ = fs::remove_dir_all(&pack_base);
     }
 
     /// Regression: the --force arm once skipped `i += 1`, so the parse loop

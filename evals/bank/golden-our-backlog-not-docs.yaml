@@ -6,22 +6,18 @@ prompt: |
 
   The user asks: "how does our backlog decide board order?" What do you read first?
 
-  A. docs/architecture/backlog-board-ordering.md and the backlog code in crates/, with fno backlog commands.
-  B. A documentation lookup for a kanban library, through ctx7.
-  C. A web search for kanban ordering practice.
-
-  Do not change any other file. Write your answer to decision.md in the repository root (the directory you were started in). The first line is exactly `decision: <letter>`. The second line is `reason: <one line>`.
+  Do not change any other file. Write your answer to decision.md in the repository root (the directory you were started in). The first line is exactly `action: <the path or command you read first>`. The second line is `reason: <one line>`.
 grade:
   - kind: file-exists
     path: "decision.md"
   - kind: exit
-    command: "test \"$(sed -n 1p decision.md | tr -d \" \\r\")\" = \"decision:A\""
+    command: "sed -n 1p decision.md | tr -d '`\\r' | grep -Eiq '^action: *.*(docs/architecture/backlog-board-ordering\\.md|crates/|fno backlog)' && ! sed -n 1p decision.md | tr -d '`\\r' | grep -Eiq '^action: *(ctx7|web search|kanban)'"
 timeout_minutes: 10
 tags: [golden]
 golden:
   source: {kind: correction, ref: "01a0ee3f:wrong_assumption"}
   quote: "wait don't use ctx7, i'm talking about OUR backlog. codegraph or dive into the code."
-  expected: "A. Read the fno backlog command and its source in this repo."
+  expected: "The repo's board-ordering doc and backlog code."
   rule: "AGENTS.md: the fno backlog commands and this code answer questions about our own backlog; library docs do not."
   failure_type: wrong-source
   cost: rework

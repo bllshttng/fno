@@ -144,9 +144,10 @@ pub(crate) fn millis_now() -> i64 {
 
 /// The wait blockers whose watch parks a provider seat: the session has
 /// pushed and the remaining blocker is external (CI pending, an outstanding
-/// review, the merge slot, a recorded merge freeze), so the seat sits idle
-/// until the settle arm's or expiry arm's wake resumes the session.
-const SEAT_WAIT_BLOCKERS: &[&str] = &["ci", "review", "merge_slot", "merge_hold"];
+/// review, the merge slot, a recorded merge freeze, an outside hold freed
+/// by an external deploy), so the seat sits idle until the settle arm's or
+/// expiry arm's wake resumes the session.
+const SEAT_WAIT_BLOCKERS: &[&str] = &["ci", "review", "merge_slot", "merge_hold", "outside_hold"];
 
 /// Registry-row identity -> the blocker of the session's CURRENT watch, for
 /// the seat-wait blockers. Two identities per watch: the manifest session id

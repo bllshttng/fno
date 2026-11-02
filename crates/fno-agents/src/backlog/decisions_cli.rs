@@ -610,10 +610,13 @@ fn list_core_over(
         .filter(|s| !s.is_empty())
         .map(|s| Matcher::new(ent, s));
     let want_id = subject
-        .filter(|s| looks_like_decision_id(s))
-        .map(|s| s.trim().to_lowercase())
+        .and_then(|s| {
+            let hash = crate::numbers::resolve('d', s)?;
+            looks_like_decision_id(&hash).then_some(hash)
+        })
         .unwrap_or_default();
 
+    let numbers = crate::numbers::labels();
     let mut out: Vec<Value> = Vec::new();
     let mut emitted: std::collections::HashSet<String> = std::collections::HashSet::new();
     for row in &decisions {
@@ -687,6 +690,8 @@ fn list_core_over(
         }
         if let Some(obj) = row.as_object_mut() {
             obj.remove("_event_type");
+            let number = numbers.get(&key).cloned();
+            obj.insert("number".to_string(), json!(number));
         }
         out.push(row);
     }
@@ -1065,7 +1070,9 @@ pub fn run(argv: &[String]) -> i32 {
 
     let matched: Vec<&str> = match &subject {
         Some(s) => {
-            let want = s.trim().to_lowercase();
+            let want = crate::numbers::resolve('d', s)
+                .unwrap_or_else(|| s.trim().to_string())
+                .to_lowercase();
             let mut matched = Vec::new();
             if found.rows.iter().any(|d| id_of(d).to_lowercase() == want) {
                 matched.push("decision_id");
@@ -1821,7 +1828,10 @@ fn render_human(
             "{}  {}  {}  {}  {}{}{}{}  {}{}",
             lifecycle,
             lane_marker,
-            rows_str(d, "decision_id"),
+            match d.get("number").and_then(Value::as_str) {
+                Some(number) => format!("{number} ({})", rows_str(d, "decision_id")),
+                None => rows_str(d, "decision_id").to_string(),
+            },
             rows_str(d, "ts"),
             scope_prefix,
             rows_str(d, "decided_by"),

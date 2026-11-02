@@ -579,6 +579,15 @@ pub fn stamp_arm(text: &str, arm: &str) -> String {
     page_with_front(&front, &body).unwrap_or_else(|| text.to_string())
 }
 
+/// The page with one more alias, the rest unchanged.
+pub fn add_alias(text: &str, alias: &str) -> String {
+    let Some((mut front, body)) = parse_page(text) else {
+        return text.to_string();
+    };
+    front.aliases.push(alias.to_string());
+    page_with_front(&front, &body).unwrap_or_else(|| text.to_string())
+}
+
 /// One open row for the index.
 #[derive(Debug, Clone, PartialEq)]
 pub struct IndexEntry {

@@ -988,7 +988,10 @@ fn render_questions(o: &Outstanding, ctx: &RenderCtx, lines: &mut Vec<String>) {
             {
                 body_trimmed = true;
             }
-            lines.push(format!("  {label}{}  {body}{suffix}", q.id));
+            lines.push(format!(
+                "  {label}{}  {body}{suffix}",
+                crate::numbers::display(&q.id)
+            ));
             if let Some(action) = action.filter(|a| !a.is_empty()) {
                 lines.push(format!("    Action: {action}"));
             }

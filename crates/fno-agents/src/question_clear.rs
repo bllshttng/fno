@@ -1333,7 +1333,29 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
     let mut unknown = 0usize;
     let mut refused = 0usize;
 
-    for qid in &req.ids {
+    for typed in &req.ids {
+        // An id this machine holds wins over a number with the same spelling.
+        let exact =
+            (asked.contains_key(typed) || closed_ids.contains(typed)).then(|| typed.clone());
+        let Some(resolved) = exact.or_else(|| crate::numbers::resolve('q', typed)) else {
+            unknown += 1;
+            answer.lines.push(format!(
+                "outstanding: {}",
+                crate::numbers::unresolved(typed)
+            ));
+            continue;
+        };
+        // A copy from another machine is stored under `q-1234abcd@host`.
+        let copy = (!asked.contains_key(&resolved))
+            .then(|| {
+                asked
+                    .keys()
+                    .find(|id| crate::numbers::canonical(id) == resolved)
+                    .cloned()
+            })
+            .flatten();
+        let qid = &copy.unwrap_or(resolved);
+        let shown = crate::numbers::display(qid);
         if closed_ids.contains(qid) {
             already_closed += 1;
             answer.lines.push(format!(
@@ -1597,7 +1619,7 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
             }
             let label = if was_resumed { "resumed" } else { "recorded" };
             answer.lines.push(format!(
-                "outstanding: closed {qid} (decision {decision_id} {label})"
+                "outstanding: closed {shown} (decision {decision_id} {label})"
             ));
             if let Some(subject) = merge_grant_subject(question_event) {
                 if !operator_can_grant(req)
@@ -1718,7 +1740,7 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
                 break;
             }
             answer.lines.push(format!(
-                "outstanding: closed {qid} (answered by recorded decision {decision_id})"
+                "outstanding: closed {shown} (answered by recorded decision {decision_id})"
             ));
             answer.closed.push(ClosedQuestion {
                 qid: qid.clone(),
@@ -1759,7 +1781,7 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
             }
             answer
                 .lines
-                .push(format!("outstanding: closed {qid} ({withdrawn_reason})"));
+                .push(format!("outstanding: closed {shown} ({withdrawn_reason})"));
             answer.closed.push(ClosedQuestion {
                 qid: qid.clone(),
                 decision_id: None,

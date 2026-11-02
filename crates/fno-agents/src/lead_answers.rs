@@ -622,16 +622,17 @@ pub(crate) fn held_lines(readings: &[crate::lead_checkin::Reading]) -> Vec<Strin
     lines.push(format!("held: {} question(s) for this team", rows.len()));
     for row in rows.iter().take(crate::lead_checkin::MAX_ORG_ROWS) {
         let qid = crate::lead_checkin::dash(row.get("question_id"));
+        let shown = crate::numbers::display(&qid);
         let node = row
             .get("node")
             .and_then(Value::as_str)
             .filter(|n| !n.is_empty() && *n != "none");
         match node {
             Some(n) => lines.push(format!(
-                "  {n} on question {qid}; answer with: fno backlog decide {n} \"<ruling>\" --question-id {qid}"
+                "  {n} on question {shown}; answer with: fno backlog decide {n} \"<ruling>\" --question-id {qid}"
             )),
             None => lines.push(format!(
-                "  question {qid}: {} If this team asked it: fno inbox outstanding clear {qid} --answer \"<answer>\" --authority role",
+                "  question {shown}: {} If this team asked it: fno inbox outstanding clear {qid} --answer \"<answer>\" --authority role",
                 crate::question_clear::chat_answer_line(&qid)
             )),
         }

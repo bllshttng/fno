@@ -43,7 +43,7 @@ Success criteria must be **mechanical** (develop-tests discipline): a task with 
 
 | Command | What it does |
 |---|---|
-| `fno doctor evals run [--task ID[,ID]] [--tier T] [--tag TAG] [--repeat K] [--workers N] [--provider P] [--variant NAME] [--ref REF] [--lane NAME] [--cohort ID]` | Run bank tasks in disposable worktrees, grade mechanically, append one history line per task-run. Confirms above 20 total runs (`--yes` skips). `--variant v1 --ref REF` scores a change (see Variants). `--lane NAME --cohort ID` qualifies a model lane (see Lanes). `--workers N` runs N tasks at once. |
+| `fno doctor evals run [--task ID[,ID]] [--tier T] [--tag TAG] [--repeat K] [--workers N] [--provider P] [--variant NAME] [--ref REF] [--lane NAME] [--cohort ID] [--overlay-fixtures REF]` | Run bank tasks in disposable worktrees, grade mechanically, append one history line per task-run. Confirms above 20 total runs (`--yes` skips). `--variant v1 --ref REF` scores a change (see Variants). `--lane NAME --cohort ID` qualifies a model lane (see Lanes). `--workers N` runs N tasks at once. |
 | `fno doctor evals report [--since N] [--graduate] [--json]` | Fold history: per-tier pass rates, pass@1, pass^k, flake list, regression alarm (exit 4 on alarm). `--graduate` lists eligible capability tasks. |
 | `fno doctor evals report --compare A --to B [--repeats N] [--json]` | Compare two runs, task by task. See Variants. |
 | `fno doctor evals report --by-failure-type [--repeats N] [--json]` | Rank the named failure types by cost, then by failing goldens. See Failure types. |
@@ -81,6 +81,16 @@ A variant is a **git ref of this repository**. Every prompt, skill, and project 
 - **Compare.** `fno doctor evals report --compare baseline --to v1` compares two sides. A side names a cohort, else a variant. A name that no row carries refuses with exit 2. Each task gets one status per side from its newest `--repeats` grades (default 3). The statuses are `always_pass`, `always_fail` and `flaky`. With fewer grades than repeats, a task reads `error`. Only a scored grade counts, so a plumbing row is never a pass. The report prints Fixed, Regressions (always pass to always fail), Now flaky (always pass to flaky), Still failing, and Errors. Counts and the pass rate come last, because a rate hides which behaviour moved. It exits 1 on a regression, or on an error for a task that had grades on side A. A move to flaky exits 0 and is listed. `--json` emits the same fold. Each side's line names the revs it read, so `git diff` of those revs shows the change.
 - **Flake sort.** Each attempt records `tree_hash`, the git tree of what the worker left. The runner reads it before grading, on a temporary index. Compare marks a flaky status with its noise. `grader_noise` means one tree got both grades, so read the grader. `agent_noise` means the trees differ, so the agent did different work. `unknown` means a row has no hash and no tree shows both grades. Two different trees that are both right still read `agent_noise`. That blocks nothing. Ignored files are not in the hash.
 
+## Backdated cohorts
+
+A past session never answered a golden prompt, so it cannot grade one. Two honest reads cover the past instead.
+
+`fno doctor event corrections --by day --since 28d` prints correction rates per day from real transcripts. It costs no model call. A day with typed turns and no correction reads a rate of 0.
+
+`fno doctor evals run --tag golden --variant v1 --ref <sha> --overlay-fixtures <newer ref> --lane <lane> --cohort gate-backdate-<date>-<sha8> --repeat 1` runs today's goldens on an older tree. An older tree has no golden fixtures, so the flag commits `evals/fixtures/golden` from the newer ref on top of the checkout. Pass `--bank` to read today's tasks. The bank itself stays out of the tree. Each golden states its expected answer, and a worker told to read the repo can read it. Each row records `overlay_rev`. A row without `overlay_rev` ran with no overlay: an older `fno-agents` ignores the flag, and a fixture golden then fails on its missing fixture.
+
+The cohort names a tree, never a past result. The model is today's, so the cohort says what today's model does with that day's repo. A claude golden worker loads no plugin (see [Goldens](#goldens)). The installed `fno` stays today's. The `gate-` prefix counts the run against `evals.gate.daily_usd`.
+
 ## Goldens
 
 A golden is a bank task with a `golden:` block that states the real case it came from and the rule it holds. A failure then names what broke, not only a task id.
@@ -102,7 +112,21 @@ A block with no `source`, `expected`, `rule`, `failure_type` or `outcome` refuse
 
 A daily daemon pass turns each new typed correction into one draft in `~/.fno/evals/golden-drafts/`. It reads `agent_corrected` events after a watermark and skips interrupts, which carry no words. Two corrections with the same words are one case. A draft has empty `prompt`, `grade`, `expected`, `rule` and `failure_type` fields. A person fills them and moves the file to `evals/bank`, because an auto-committed bad answer holds merges with nobody having read it. A correction with no fixture shape stays a draft. A draft expires after 30 days, the pass counts it, and its case never returns. `fno-agents evals drafts` prints the counts.
 
-A golden's rule must be findable in the repo, because a worker reads only the repo and the prompt. It must have a mechanical grade: a choice the grader reads from a decision file, or the work product itself. A failure that needs long session state or fleet state cannot reduce to this shape. It stays out of the bank, and the scorecard holds that ground.
+A golden's rule must be findable in the repo, because a worker reads only the repo and the prompt. It must have a mechanical grade: an answer the grader reads from a decision file, or the work product itself.
+
+A golden asks for recall, never a choice among listed options. On a tree with no AGENTS.md, the old bank passed 25 of 25. In 17 of those runs the worker read no answer key, and each one still passed. So the prompt asks for the exact command or action, and the grader rejects the lure from the source case.
+
+A claude golden worker reads its rules from the tree under test, and from nowhere else. Other bank tasks keep the plugin and a linked worktree, because some invoke its skills.
+
+The tree is a new git repo with one commit, built from `git archive` of the ref under `$TMPDIR/fno-evals`. It has no link to the real repo. It has no parent commit, because a parent holds the rules and the answer keys one `git show` away. It sits outside `$HOME`, so no `~/.claude/CLAUDE.md` loads from an ancestor path. A `TMPDIR` inside `$HOME` refuses as a fixture failure before any worker starts. It leaves out `evals/bank` and `evals/fixtures/metrics`, which hold the answers. Workers did read these: 20 of 101 kept transcripts touched one.
+
+The runner passes `--setting-sources project --strict-mcp-config` and a `--settings` read fence, and sets `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`, `GIT_CONFIG_GLOBAL=/dev/null` and `FNO_EVALS_SEALED=1`. The last one drops the spawn's state grants. The fence blocks file-tool reads outside the working directory, denies the file tools all of `$HOME`, and denies `WebFetch` and `WebSearch`. It runs Bash in the OS sandbox with `$HOME` and the sibling trees unreadable and no network. A canary confirmed each door. `git`, `cat` and writes work in the tree. The real checkout, `~/.fno`, `~/.claude`, a sibling tree and `github.com` all fail. A setting in the tree's own `.claude/settings.json` did not lift the block. `RIPGREP_CONFIG_PATH` is empty, because ripgrep exits on an unreadable config. `gh` fails inside the fence, so a golden cannot ask for a live GitHub read. No plugin loads, not even the tree's, so a worker must open a skill's file to read it. The spawn still adds its relay-compression block to the prompt.
+
+Each row records `obs.worker_sealed`. It reads true only with both the sealed tree and the fence. `obs.worker_sealed` is the divider between cohorts. A row without it ran with the real checkout in reach, so it is not comparable to a sealed row. On 2026-11-01, before the seal, a fixtures-only tree beat head in 2 of 3 pairs at repeat 1. Other harnesses have no such flags. They get the sealed tree, no fence and today's plugin, so their rows read false.
+
+A failed trial keeps its claude transcript for 14 days, and `obs.kept_transcript` names the directory. A passed trial's transcript is deleted.
+
+A failure that needs long session state or fleet state cannot reduce to this shape. It stays out of the bank, and the scorecard holds that ground.
 
 ## The change gate
 
@@ -185,9 +209,9 @@ Treat `unverified` as "probably ran as requested but not independently checked",
 
 ## Plan premise labels
 
-A checkable plan sentence is a Context, Why or audit line that names a path or symbol in backticks. `fno-agents intel --plans` pairs each one with the later records on its node: rulings, notes and the closing note. A ruling counts only from the plan's day on. It keeps the newest 10 records per plan. A classifier labels each pair as supports, contradicts or unrelated. Rows land in `~/.fno/evals/plan-labels/rows.jsonl`, and a contradicted premise becomes a candidate, never a golden by itself. A row's `overruled_by` reads only a mechanical fact: a later ruling on the node, a revert, or a supersede.
+A checkable plan sentence is a Context, Why or audit line that names a path or symbol in backticks. `fno-agents intel --plans` pairs each one with the later records on its node: rulings, notes and the closing note. A ruling or note counts only from the plan's day on, and a wave row is never a record. It keeps the newest 10 records per plan. A classifier labels each pair as supports, contradicts or unrelated. Rows land in `~/.fno/evals/plan-labels/rows.jsonl`, and a contradicted premise becomes a candidate, never a golden by itself. A row's `overruled_by` reads only a mechanical fact: a later ruling on the node, a revert, or a supersede.
 
-No rung labels plans until it passes a fixed set of 60 hand-labelled pairs in `~/.fno/evals/plan-labels/ladder-set.jsonl`, 20 per label. `--dry-run` prints candidate pairs for that set, and calls no model. A rung passes at 0.80 balanced with contradicts recall of 0.70 or more. `--plans-ladder` scores fnod first, then tuned kev-9b at `--teacher-url`, and stops at the first pass. The set never trains a model.
+No rung labels plans until it passes a fixed set of 60 labelled pairs in `~/.fno/evals/plan-labels/ladder-set.jsonl`, 20 per label. Two models label blind, and the set keeps only pairs they agree on. Each row reads `person_read: false` until the user checks it, so a model-labelled set never opens a hosted rung. Agreed labels can share an error, so the user also reads a sample of agreed pairs. Contradicts is rare: 28 agreed pairs of 1,340 labelled, most from pools picked for correction words, so a random sample cannot fill that label. `--dry-run` prints candidate pairs for that set, and calls no model. A rung passes at 0.80 balanced with contradicts recall of 0.70 or more. `--plans-ladder` scores fnod first, then tuned kev-9b at `--teacher-url`, and stops at the first pass. The set never trains a model.
 
 Data leaving the machine: fnod and kev-9b stay on loopback, and any other address refuses. A hosted rung sends plan text to a vendor, and a treg route adds treg as a second party. A `--hosted NAME=COMMAND` rung needs two local failed scores, a clean scrub on each pair and `person_read: true` on each pair. Without all three, the run refuses before any call. The command takes a pair's JSON file as its last argument and prints `{"label": ..., "dollars": ...}`. A regex scrub misses third-party and customer names, which is why a person reads each pair. A hosted winner still refuses `--plans`, because the full pass sends far more text. That pass needs its own user ruling, with the per-pair price and the text count stated.
 

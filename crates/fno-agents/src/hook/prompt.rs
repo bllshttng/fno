@@ -111,6 +111,11 @@ fn render_block(items: &[Value]) -> String {
         .iter()
         .take(MAX_ITEMS)
         .map(|i| {
+            let number = i
+                .get("number")
+                .and_then(Value::as_str)
+                .map(|n| format!("{n} "))
+                .unwrap_or_default();
             let kind = i.get("kind").and_then(Value::as_str).unwrap_or("?");
             let title = i.get("title").and_then(Value::as_str).unwrap_or("");
             let asker = i
@@ -124,9 +129,9 @@ fn render_block(items: &[Value]) -> String {
                 .map(|h| format!(" on {h}"))
                 .unwrap_or_default();
             if asker.is_empty() {
-                format!("- {kind}: {title}{host}")
+                format!("- {number}{kind}: {title}{host}")
             } else {
-                format!("- {kind}: {title} (from {asker}{host})")
+                format!("- {number}{kind}: {title} (from {asker}{host})")
             }
         })
         .collect();
@@ -164,6 +169,10 @@ mod tests {
         assert!(text.contains("- question: Which reading? (from lead-fno-g6)"));
         assert!(text.contains("- pin: Publish the crate (from worker-2)"));
         assert!(text.contains("- mine: ship tonight"));
+        let numbered = render_block(&[serde_json::json!(
+            {"kind": "question", "title": "Pick", "number": "Q87"}
+        )]);
+        assert!(numbered.contains("- Q87 question: Pick"), "{numbered}");
     }
 
     /// A mail-tagged payload returns before the arm call (the skip lives in

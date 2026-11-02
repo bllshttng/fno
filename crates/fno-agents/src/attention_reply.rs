@@ -421,7 +421,8 @@ fn run_resume(
 fn resume_message(state: &ReplyState) -> String {
     format!(
         "Answer to your question {}: {}. If you already have this answer, ignore this copy.",
-        state.item_id, state.answer
+        crate::numbers::display(&state.item_id),
+        state.answer
     )
 }
 

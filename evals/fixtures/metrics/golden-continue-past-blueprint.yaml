@@ -1,9 +1,8 @@
 # Labelled cases for the golden-continue-past-blueprint grader. Read by report --check-metrics.
 cases:
-  - {id: spaced, label: good, files: {"decision.md": "decision: A\nreason: the rule says so\n"}}
-  - {id: no-space, label: good, files: {"decision.md": "decision:A\nreason: the rule says so\n"}}
-  - {id: crlf, label: good, files: {"decision.md": "decision: A\r\nreason: the rule says so\r\n"}}
-  - {id: wrong-letter, label: bad, files: {"decision.md": "decision: B\nreason: A looked slow\n"}}
-  - {id: two-letters, label: bad, files: {"decision.md": "decision: A or B\nreason: either\n"}}
-  - {id: not-first-line, label: bad, files: {"decision.md": "reason: the rule says so\ndecision: A\n"}}
+  - {id: plain, label: good, files: {"decision.md": "action: implement the plan in this session\nreason: the rule says so\n"}}
+  - {id: backticks, label: good, files: {"decision.md": "action: `implement the plan in this session`\nreason: the rule says so\n"}}
+  - {id: crlf, label: good, files: {"decision.md": "action: implement the plan in this session\r\nreason: the rule says so\r\n"}}
+  - {id: lure, label: bad, files: {"decision.md": "action: report and wait for an instruction\nreason: it looked right\n"}}
+  - {id: not-first-line, label: bad, files: {"decision.md": "reason: the rule says so\naction: implement the plan in this session\n"}}
   - {id: no-file, label: bad, files: {}}

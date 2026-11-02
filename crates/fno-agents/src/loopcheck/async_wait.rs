@@ -66,6 +66,22 @@ pub(super) fn async_wait_class(
     // CI still pending AND nothing has concluded red yet: idle on CI. If a
     // check has ALREADY failed while others run, do NOT idle - the agent should
     // start debugging the failure now rather than wait out the rest (gemini).
+    // An outside hold sits above that rule: every FAILED check names a row
+    // whose fix lands outside this PR (outside_holds::CHECKS - e.g. the
+    // install-channel fno-sh-fresh row, freed only by an fno-web Worker
+    // deploy). Nothing on the head is debuggable, the hold frees by external
+    // action, and the PR's own runs are not the problem - the same external
+    // truth a merge hold is. The hold still keeps the PR red: done() must not
+    // complete on it, the wait must not cancel over it, and the daemon must
+    // not wake the pusher with fix advice. An unattested LOCAL reviewer
+    // refuses the idle: that attestation is work the session can do now, and
+    // no external action will post it.
+    if matches!(pr.ci_conclusion, CiConclusion::Failure(_))
+        && pr.outside_hold_only
+        && pr.unattested_reviewers.is_empty()
+    {
+        return Some("outside_hold");
+    }
     if pr.ci_has_pending && !matches!(pr.ci_conclusion, CiConclusion::Failure(_)) {
         return Some("ci");
     }
@@ -196,6 +212,16 @@ pub(super) fn arm_watch_hint(pr_number: i64, blocker: &str) -> String {
         format!(
             "background Bash `fno do pr wait {pr_number} --until review --timeout=15m` (wakes when a new review posts, or after ~15m)"
         )
+    } else if blocker == "outside_hold" {
+        // The hold frees outside this PR, like a merge slot or a freeze,
+        // but the settled watcher is still the right ritual: the wait-side
+        // outside-hold filter (pr_status::wait) keeps a held red from
+        // firing settled or cancelling, so the watcher sleeps until the
+        // deploy clears the row (exit 0) and the bound is the heartbeat
+        // (exit 2) meanwhile.
+        format!(
+            "background Bash `fno do pr wait {pr_number} --until settled --expect-head HEAD --timeout=15m` (wakes when the hold clears and CI settles green, or after ~15m; the hold frees outside this PR, so the bound is the heartbeat)"
+        )
     } else if blocker == "merge_slot" || blocker == "merge_hold" {
         // No checks are pending on THIS PR, so a settled watcher would exit
         // instantly and the session would just re-block (codex P2, the same
@@ -299,6 +325,7 @@ mod tests {
             head_oid: "abc".to_string(),
             ci_conclusion: CiConclusion::Pending,
             failing_checks: vec![],
+            outside_hold_only: false,
             ci_has_pending: true,
             mergeable: "CONFLICTING".to_string(),
             merge_slot_holder: None,
@@ -421,6 +448,39 @@ mod tests {
         assert!(reason.contains("merge freeze holds"), "got: {reason}");
         assert!(reason.contains("a legal wait"), "got: {reason}");
         assert!(reason.contains("reason=\"merge_hold\""), "got: {reason}");
+    }
+
+    #[test]
+    fn an_outside_hold_red_idles_and_renders_the_legal_wait() {
+        let mut pr = conflicting_pr();
+        pr.mergeable = "MERGEABLE".to_string();
+        pr.ci_conclusion = CiConclusion::Failure(Some("channel (fno-sh-fresh)".to_string()));
+        pr.failing_checks = vec!["channel (fno-sh-fresh)".to_string()];
+        pr.outside_hold_only = true;
+        assert_eq!(async_wait_class(&pr, true, true), Some("outside_hold"));
+        let reason = build_block_reason(&pr, "abc", true, true);
+        assert!(reason.contains("outside hold"), "got: {reason}");
+        assert!(
+            !reason.contains("Read the failing log"),
+            "the generic red render must not teach a log read here: {reason}"
+        );
+        assert!(reason.contains("reason=\"outside_hold\""), "got: {reason}");
+    }
+
+    #[test]
+    fn a_real_check_beside_the_hold_refuses_the_idle() {
+        // One failing name off the hold list keeps the idle refused and the
+        // generic red render: that log is this PR's to read.
+        let mut pr = conflicting_pr();
+        pr.mergeable = "MERGEABLE".to_string();
+        pr.ci_conclusion = CiConclusion::Failure(Some("cargo-test".to_string()));
+        pr.failing_checks = vec![
+            "channel (fno-sh-fresh)".to_string(),
+            "cargo-test".to_string(),
+        ];
+        assert_eq!(async_wait_class(&pr, true, true), None);
+        let reason = build_block_reason(&pr, "abc", true, true);
+        assert!(reason.contains("CI red"), "got: {reason}");
     }
 
     #[test]

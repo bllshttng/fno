@@ -338,7 +338,10 @@ fn deliver_answer(
             "outstanding: {qid} answered; asker {asker} is not live, so nobody was woken. {recovery}"
         );
     }
-    let body = format!("Answer to your question {qid} \"{question}\": {answer}.");
+    let body = format!(
+        "Answer to your question {} \"{question}\": {answer}.",
+        crate::numbers::display(qid)
+    );
     let argv = vec![
         crate::mail_cli::send_raw::agents_binary(),
         "mail".to_string(),

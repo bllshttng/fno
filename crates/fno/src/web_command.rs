@@ -90,6 +90,7 @@ impl CommandCache {
                         .and_then(|n| crate::backlog_model::origin_session_for(backlog, n));
                     json!({
                         "id": q.id,
+                        "number": q.number,
                         "kind": q.kind,
                         "title": q.title,
                         "node": q.node,

@@ -86,6 +86,15 @@ pub(super) struct PrInfo {
     /// the block render. Empty when CI is green, or pending with no
     /// cancelled row.
     pub(super) failing_checks: Vec<String>,
+    /// Every FAILED check on the head names an outside hold
+    /// (`outside_holds::CHECKS`): the red is external truth (an
+    /// install-channel row freed only by an fno-web Worker deploy), so
+    /// nothing on this head is debuggable and the hold frees by external
+    /// action. False when a real failing check rides along, when CI is not
+    /// red, or when the CI read was skipped. Cancel-named rows are not
+    /// failures and never set this; `failing_checks` mixes the two buckets,
+    /// which is why the read layer computes this beside the conclusion.
+    pub(super) outside_hold_only: bool,
     /// True iff any check on the PR head is still pending (a non-terminal
     /// bucket). `ci_conclusion` reports `Failure` as soon as ONE check fails even
     /// while others run, so the DoneAwaitingMerge terminal must consult this to
@@ -537,8 +546,8 @@ pub(super) fn read_pr_info(
     // it never fires on partial CI).
     let no_hosted_ci =
         crate::verify_evidence::hosted_ci_not_configured(ci_declared_none, cwd, head_sha);
-    let (ci_conclusion, failing_checks, ci_has_pending) = if no_hosted_ci {
-        (CiConclusion::Skipped, Vec::new(), false)
+    let (ci_conclusion, failing_checks, ci_has_pending, outside_hold_only) = if no_hosted_ci {
+        (CiConclusion::Skipped, Vec::new(), false, false)
     } else {
         let mut checks_args = vec!["pr", "checks"];
         checks_args.extend(sel.iter().copied());
@@ -562,8 +571,17 @@ pub(super) fn read_pr_info(
             .map_err(|_| GhReadError::parse_failed(checks_parse))?;
         // One truth table for the payload (classify_checks_payload): the
         // conclusion, the failing-name set, and the pending flag can never
-        // answer off different rollups.
-        classify_checks_payload(&checks).map_err(|e| GhReadError::parse_failed(&e))?
+        // answer off different rollups. The outside-hold read dedups the
+        // same payload the same way, so it cannot either.
+        let (ci_conclusion, failing_checks, ci_has_pending) =
+            classify_checks_payload(&checks).map_err(|e| GhReadError::parse_failed(&e))?;
+        let outside_hold_only = outside_hold_only(&checks);
+        (
+            ci_conclusion,
+            failing_checks,
+            ci_has_pending,
+            outside_hold_only,
+        )
     };
 
     // Reads 3+4: reviews + inline findings. Skipped when the session declares
@@ -1082,6 +1100,7 @@ pub(super) fn read_pr_info(
         head_oid,
         ci_conclusion,
         failing_checks,
+        outside_hold_only,
         ci_has_pending,
         mergeable,
         merge_slot_holder,

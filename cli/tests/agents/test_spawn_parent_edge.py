@@ -204,10 +204,10 @@ def test_ac5_hp_marker_less_spawn_still_names_the_harness(monkeypatch):
 
 
 def test_a_present_marker_that_resolves_to_nothing_stays_nothing(monkeypatch):
-    """The fallback is gated on an EMPTY marker set, not on a missing harness.
-    A marker that IS present and resolved to nothing is the contradiction
-    x-b57a / x-0992 rule must attribute nothing, and the walk must not
-    overturn it."""
+    """A contradiction across TWO families attributes nothing, and the walk's
+    verdict is not overturned. A marker that IS present and resolved to
+    nothing is the x-b57a / x-0992 rule for mixed families; the one-family
+    fallback resolves only single-family refusals, never this one."""
     import fno.claims.self_identity as self_identity
     import fno.claims.session_pid as session_pid
     from fno.agents.spawn_lineage import _capture_parent_edge
@@ -216,10 +216,85 @@ def test_a_present_marker_that_resolves_to_nothing_stays_nothing(monkeypatch):
         harness = None
         session_id = None
         disposition = "contradiction"
-        markers_present = (("CODEX_THREAD_ID", "codex", "t-1"),)
+        markers_present = (
+            ("CODEX_THREAD_ID", "codex", "t-1"),
+            ("CLAUDE_CODE_SESSION_ID", "claude", "cl-1"),
+        )
 
     monkeypatch.setattr(self_identity, "resolve_self_identity", lambda: _Contradicted())
     monkeypatch.setattr(session_pid, "resolve_session_harness", lambda: "claude")
     monkeypatch.setenv("PWD", "/parent/working/dir")
+    monkeypatch.setenv("CODEX_THREAD_ID", "t-1")
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "cl-1")
 
     assert _capture_parent_edge() == (None, None, "/parent/working/dir")
+
+
+def test_capture_falls_back_to_one_family_edge(monkeypatch):
+    """The measured amber-vale shape: a refused identity whose env still
+    carries one harness family. The capture layer resolves the edge from the
+    family's own stamp (fno's record of this session); claims stay strict."""
+    import fno.claims.self_identity as self_identity
+    from fno.agents.spawn_lineage import _capture_parent_edge
+
+    class _Refused:
+        harness = None
+        session_id = None
+        disposition = "contradiction"
+        markers_present = (("CODEX_THREAD_ID", "codex", "t-9"),)
+
+    monkeypatch.setattr(self_identity, "resolve_self_identity", lambda: _Refused())
+    monkeypatch.setenv("PWD", "/parent/working/dir")
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+    monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
+    monkeypatch.setenv("FNO_HARNESS_NAME", "codex")
+    monkeypatch.setenv("FNO_HARNESS_SESSION_ID", "a-stamp")
+    monkeypatch.setenv("CODEX_THREAD_ID", "t-9")
+
+    assert _capture_parent_edge() == ("a-stamp", "codex", "/parent/working/dir")
+
+
+def test_same_family_parent_edge_marker_only(monkeypatch):
+    """No stamp: the first marker in precedence order (the durable one)
+    carries the edge."""
+    from fno.agents.spawn_lineage import _same_family_parent_edge
+
+    for _m in (
+        "CODEX_THREAD_ID",
+        "CODEX_SESSION_ID",
+        "CLAUDE_CODE_SESSION_ID",
+        "CLAUDE_SESSION_ID",
+        "GEMINI_SESSION_ID",
+        "OPENCODE_SESSION_ID",
+        "FNO_HARNESS_NAME",
+        "FNO_HARNESS_SESSION_ID",
+    ):
+        monkeypatch.delenv(_m, raising=False)
+    monkeypatch.setenv("CODEX_THREAD_ID", "t-9")
+    monkeypatch.setenv("CODEX_SESSION_ID", "root-1")
+
+    assert _same_family_parent_edge() == ("t-9", "codex")
+
+
+def test_same_family_parent_edge_refuses_cross_family_and_no_markers(monkeypatch):
+    """Two families, or none: no edge, mirroring the Rust writer."""
+    from fno.agents.spawn_lineage import _same_family_parent_edge
+
+    for _m in (
+        "CODEX_THREAD_ID",
+        "CODEX_SESSION_ID",
+        "CLAUDE_CODE_SESSION_ID",
+        "CLAUDE_SESSION_ID",
+        "GEMINI_SESSION_ID",
+        "OPENCODE_SESSION_ID",
+        "FNO_HARNESS_NAME",
+        "FNO_HARNESS_SESSION_ID",
+    ):
+        monkeypatch.delenv(_m, raising=False)
+    monkeypatch.setenv("CODEX_THREAD_ID", "t-9")
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "cl-9")
+    assert _same_family_parent_edge() is None
+
+    monkeypatch.delenv("CODEX_THREAD_ID")
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID")
+    assert _same_family_parent_edge() is None

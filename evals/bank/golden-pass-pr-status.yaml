@@ -4,24 +4,20 @@ tier: capability
 prompt: |
   You are working in this repository. Follow its rules: AGENTS.md and the docs and skills it points to. Read them before you answer.
 
-  You need one answer: is PR 1522 green? Which command do you run?
+  You need one answer: is PR 1522 green?
 
-  A. `gh pr view 1522 --json statusCheckRollup` with your own jq filter.
-  B. `fno do pr status 1522`.
-  C. Open the Actions page and count the runs.
-
-  Do not change any other file. Write your answer to decision.md in the repository root (the directory you were started in). The first line is exactly `decision: <letter>`. The second line is `reason: <one line>`.
+  Do not change any other file. Write your answer to decision.md in the repository root (the directory you were started in). The first line is exactly `action: <the exact command you run>`. The second line is `reason: <one line>`.
 grade:
   - kind: file-exists
     path: "decision.md"
   - kind: exit
-    command: "test \"$(sed -n 1p decision.md | tr -d \" \\r\")\" = \"decision:B\""
+    command: "sed -n 1p decision.md | tr -d '`\\r' | grep -Eiq '^action: *.*(fno do pr status 1522)'"
 timeout_minutes: 10
 tags: [golden]
 golden:
   source: {kind: reaction-approve, ref: "0aea1458-811f-4ad3-89c9-93a957d7d556:d5d5d014-ceee-486b-8623-e1cb924cf0b8"}
   quote: "fno do pr status 1522"
-  expected: "B. fno do pr status."
+  expected: "fno do pr status 1522."
   rule: "skills/target: read a PR's CI with fno do pr status, one verdict; not hand-rolled jq."
   failure_type: none
   cost: none

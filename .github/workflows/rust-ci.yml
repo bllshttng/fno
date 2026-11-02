@@ -199,7 +199,7 @@ jobs:
             bash scripts/ops/mux-demo-snapshot.sh --out "shots/${view}.png" --format png --view "$view" --size 200x56 --fit
           done
           # The selection paints with the theme's sel surface: shoot it light too.
-          for view in feed-detail question-detail; do
+          for view in bell-wide feed-detail question-detail; do
             bash scripts/ops/mux-demo-snapshot.sh --out "shots/${view}-light.png" --format png --view "$view" --theme light --size 200x56 --fit
           done
           # The whole mux with no view open: the card sideline at two widths.

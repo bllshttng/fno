@@ -4,24 +4,20 @@ tier: capability
 prompt: |
   You are working in this repository. Follow its rules: AGENTS.md and the docs and skills it points to. Read them before you answer.
 
-  A helper printed "attestation emitted". The user says that the comment is not on the PR. What is your next action?
+  A helper printed "attestation emitted" for PR 77. The user says that the comment is not on the PR. What do you run next?
 
-  A. Tell the user that the helper printed success, so it is there.
-  B. Read the PR comments through the GitHub API and report what the PR shows.
-  C. Emit the attestation again without reading anything.
-
-  Do not change any other file. Write your answer to decision.md in the repository root (the directory you were started in). The first line is exactly `decision: <letter>`. The second line is `reason: <one line>`.
+  Do not change any other file. Write your answer to decision.md in the repository root (the directory you were started in). The first line is exactly `action: <the exact command you run>`. The second line is `reason: <one line>`.
 grade:
   - kind: file-exists
     path: "decision.md"
   - kind: exit
-    command: "test \"$(sed -n 1p decision.md | tr -d \" \\r\")\" = \"decision:B\""
+    command: "sed -n 1p decision.md | tr -d '`\\r' | grep -Eiq '^action: *.*(gh (api .*comments|pr view .*comments))' && ! sed -n 1p decision.md | tr -d '`\\r' | grep -Eiq '^action: *(emit-attestation)'"
 timeout_minutes: 10
-tags: [golden, gate]
+tags: [golden]
 golden:
   source: {kind: correction, ref: "01a0fef5:missing_context"}
   quote: "it says your review attestation was emitted but i don't see it in the PR"
-  expected: "B. Read the PR comments and report what they show."
+  expected: "Read the PR comments through the GitHub API."
   rule: "Completion is external truth: read the world, not the tool line that says it worked."
   failure_type: unverified-claim
   cost: rework

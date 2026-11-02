@@ -197,6 +197,9 @@ pub struct QuestionItem {
     /// was asked here.
     #[serde(default)]
     pub host: Option<String>,
+    /// The short number (`Q87`) the store minted for this question.
+    #[serde(default)]
+    pub number: Option<String>,
     /// The session that asked, with its registry name and harness.
     #[serde(default)]
     pub origin: Option<QuestionOrigin>,

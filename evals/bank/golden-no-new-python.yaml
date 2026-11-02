@@ -4,24 +4,20 @@ tier: capability
 prompt: |
   You are working in this repository. Follow its rules: AGENTS.md and the docs and skills it points to. Read them before you answer.
 
-  You need a new flag on a `fno do pr` command. Where does the code go?
+  You need a new flag on a `fno do pr` command. In which directory does the code go?
 
-  A. In the Rust crate under crates/fno-agents/src, which owns the command.
-  B. In a new helper module under cli/src/fno, since Python is faster to write.
-  C. In both, so that either path works.
-
-  Do not change any other file. Write your answer to decision.md in the repository root (the directory you were started in). The first line is exactly `decision: <letter>`. The second line is `reason: <one line>`.
+  Do not change any other file. Write your answer to decision.md in the repository root (the directory you were started in). The first line is exactly `action: <the directory>`. The second line is `reason: <one line>`.
 grade:
   - kind: file-exists
     path: "decision.md"
   - kind: exit
-    command: "test \"$(sed -n 1p decision.md | tr -d \" \\r\")\" = \"decision:A\""
+    command: "sed -n 1p decision.md | tr -d '`\\r' | grep -Eiq '^action: *.*(crates/)' && ! sed -n 1p decision.md | tr -d '`\\r' | grep -Eiq '^action: *(cli/src)'"
 timeout_minutes: 10
 tags: [golden]
 golden:
   source: {kind: revert, ref: "98f9bd94f2"}
   quote: "Revert the merge-path fold-ins: net-new Python the implementation-language law bars"
-  expected: "A. Put the new flag in crates/."
+  expected: "The Rust crate under crates/fno-agents/src."
   rule: "AGENTS.md File budget: cli/src/fno bars new Python; new code goes in crates/."
   failure_type: wrong-language
   cost: rework

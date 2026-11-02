@@ -1228,6 +1228,10 @@ pub(crate) fn build_board(inputs: &BoardInputs) -> Value {
                 .map(|r| {
                     json!({
                         "id": r.get("id"),
+                        "number": r
+                            .get("id")
+                            .and_then(Value::as_str)
+                            .and_then(crate::numbers::label),
                         "question": r.get("question"),
                         "ts": r.get("ts"),
                         "session_id": r.get("session_id")

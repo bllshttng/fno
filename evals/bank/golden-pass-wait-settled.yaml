@@ -4,24 +4,20 @@ tier: capability
 prompt: |
   You are working in this repository. Follow its rules: AGENTS.md and the docs and skills it points to. Read them before you answer.
 
-  CI is running on PR 2079 and you have nothing else to do. Which watcher do you arm?
+  CI is running on PR 2079 and you have nothing else to do. You arm one background watcher.
 
-  A. A background `fno do pr wait 2079 --until settled --timeout 15m`.
-  B. A background `gh pr checks 2079 --watch`.
-  C. A `while` loop over `gh pr view 2079` with a sleep.
-
-  Do not change any other file. Write your answer to decision.md in the repository root (the directory you were started in). The first line is exactly `decision: <letter>`. The second line is `reason: <one line>`.
+  Do not change any other file. Write your answer to decision.md in the repository root (the directory you were started in). The first line is exactly `action: <the exact watcher command>`. The second line is `reason: <one line>`.
 grade:
   - kind: file-exists
     path: "decision.md"
   - kind: exit
-    command: "test \"$(sed -n 1p decision.md | tr -d \" \\r\")\" = \"decision:A\""
+    command: "sed -n 1p decision.md | tr -d '`\\r' | grep -Eiq '^action: *.*(fno do pr wait 2079 .*--until settled)' && ! sed -n 1p decision.md | tr -d '`\\r' | grep -Eiq '^action: *(--watch|while )'"
 timeout_minutes: 10
 tags: [golden]
 golden:
   source: {kind: reaction-approve, ref: "15d4a0e8-9bc0-43e7-872c-5ffba998f1dc:03d508c1-1b8e-4da2-9de7-98f47125f6d8"}
   quote: "fno do pr wait 2079 --until settled --timeout 30m"
-  expected: "A. fno do pr wait, in a tracked background task."
+  expected: "fno do pr wait with --until settled."
   rule: "skills/target: the CI watcher is fno do pr wait; never gh pr checks --watch."
   failure_type: none
   cost: none
