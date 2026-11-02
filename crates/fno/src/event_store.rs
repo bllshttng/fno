@@ -2377,12 +2377,13 @@ pub struct ArmTickReduction {
 }
 
 /// The `ok` predicate for a tick row's skip reason, as one SQL boolean: no
-/// skip reason, or one outside the caller's failure set. Single quotes are
+/// skip reason, or one outside the caller's failure set. An empty set says
+/// every row is ok, matching the fold's `is_none_or` read. Single quotes are
 /// escaped, though the set is compile-time today.
 fn skip_ok_sql(failure_skips: &[&str]) -> String {
     let skip = "json_extract(line, '$.data.skip_reason')";
     if failure_skips.is_empty() {
-        return format!("{skip} IS NULL");
+        return "1".to_string();
     }
     let list = failure_skips
         .iter()
@@ -2422,7 +2423,7 @@ pub fn reduce_arm_ticks(
     // in the window, so a walk that stops once the arms seen so far each hold
     // both maxima (true after the first ok row) drops every older arm, and the
     // readout calls exactly those arms UNOBSERVED. The scalar aggregate keeps
-    // the pass cheap: two json_extracts per row, no line materialized.
+    // the pass cheap: three json_extracts per row, no line materialized.
     let maxima_sql = format!(
         "SELECT json_extract(line, '$.data.arm') AS arm, MAX(ts_ms), \
          MAX(CASE WHEN {} THEN ts_ms END) \
