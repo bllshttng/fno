@@ -508,8 +508,11 @@ pub(crate) fn parse_attach_args(rest: &[String]) -> Result<AttachArgs, (i32, Str
             "--cross-project" => {}
             "--inline" => inline = true,
             "--dial" => {
+                // The host comes off the fleet map, and ssh reads a leading dash
+                // as an option.
                 let host = words
                     .next()
+                    .filter(|host| !host.starts_with('-'))
                     .ok_or((2, "fno-agents: --dial needs a host".to_string()))?;
                 dial = Some(host.clone());
             }
@@ -938,6 +941,9 @@ mod tests {
         );
         let err = parse_attach_args(&[]).unwrap_err();
         assert_eq!(err, (2, "fno-agents: attach needs a <name>".to_string()));
+        let dash = ["--dial", "-oProxyCommand=x", "cx"].map(String::from);
+        let err = parse_attach_args(&dash).unwrap_err();
+        assert_eq!(err, (2, "fno-agents: --dial needs a host".to_string()));
         let err = parse_attach_args(&["a".to_string(), "b".to_string()]).unwrap_err();
         assert!(err.1.contains("attach takes one NAME"), "{err:?}");
     }

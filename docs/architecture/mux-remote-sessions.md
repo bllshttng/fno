@@ -6,7 +6,7 @@ The sideline can show every machine on the fleet map. A session on another machi
 
 `prefix+W` cycles the agent group, and `machine` is one of its values. The sideline then paints a band for each machine, a band for each project inside it, then the rows. This machine comes first. Each machine band reads `host · ready · 23s`. A machine the fleet map calls stale reads `offline`. The number is the age of its newest beat.
 
-This machine's rows come from the server's layout. Other machines' rows come from `fno agents fleet top --machines`, read off the UI loop every 15 seconds while the axis is on. A failed read keeps the last good bands, so a row does not vanish because the primary blinked. With fewer than two machines the axis paints the workspace tree, and nothing connects to another machine until you open a row.
+This machine's rows come from the server's layout. Other machines' rows come from `fno agents fleet top --machines`, read off the UI loop every 15 seconds while the axis is on. A failed read keeps the last good bands, so a row does not vanish because the primary blinked. A machine with no beat yet still gets its own band, which reads `offline`. With fewer than two machines the axis paints the workspace tree, and nothing connects to another machine until you open a row.
 
 A remote row is named `name@host`. Peek and mail already route that address.
 
@@ -48,7 +48,7 @@ While it redials, the top row reads `[reconnecting to host: retry in 3s, typed k
 
 ## Build requirements
 
-Both machines need a build with the link. A host without it answers exit 2, and the pane names the update command. A host server older than the link build refuses the attach and names `fno mux kill-server`. The far door checks this before it sends the hello, so an old server does not read as a network drop.
+Both machines need a build with the link. A host without it answers exit 2, and the pane names the update command. A host server older than the link build cannot take the role, and the far door names `fno mux kill-server`. The far door checks this before it sends the hello, so an old server does not read as a network drop.
 
 ## Size
 

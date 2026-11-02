@@ -94,6 +94,14 @@ fn text(value: &Value, key: &str) -> Option<String> {
 fn fold(map: &Value) -> Vec<Band> {
     let machines = map["machines"].as_array().into_iter().flatten();
     let mut bands: Vec<Band> = machines.map(fold_machine).collect();
+    // With no beat from this machine yet, its rows still paint from the Layout.
+    if !bands.iter().any(|band| band.local) {
+        bands.push(Band {
+            host: crate::agents_view::hostname(),
+            local: true,
+            ..Band::default()
+        });
+    }
     bands.sort_by(|a, b| (!a.local, &a.host).cmp(&(!b.local, &b.host)));
     bands
 }
@@ -258,7 +266,7 @@ fn panes_with_args(panes: &[crate::proto::PaneInfo]) -> Vec<(u64, String)> {
         return Vec::new();
     }
     let listing = std::process::Command::new("ps")
-        .args(["-o", "pid=,args=", "-p", &pids.join(",")])
+        .args(["-ww", "-o", "pid=,args=", "-p", &pids.join(",")])
         .output()
         .map(|out| String::from_utf8_lossy(&out.stdout).into_owned())
         .unwrap_or_default();
@@ -277,7 +285,9 @@ fn panes_with_args(panes: &[crate::proto::PaneInfo]) -> Vec<(u64, String)> {
         .collect()
 }
 
-/// What Enter on a remote row found or opened, off the UI loop.
+/// What Enter on a remote row found or opened. It blocks, so [`open`] runs it on
+/// a blocking thread; the input handler still waits for it, at most two control
+/// timeouts.
 fn open_blocking(
     session: &str,
     sock: &Path,
@@ -384,6 +394,12 @@ mod tests {
             ("bb16", "133a419b")
         );
         assert_eq!(bands[1].rows[1].remote.as_ref().unwrap().key, "ines");
+
+        let others = json!({"machines": [{"host": "bb16"}, {"host": "mbp3"}]});
+        let bands = fold(&others);
+        assert!(bands[0].local, "this machine keeps a band with no beat");
+        assert!(!bands[0].fresh);
+        assert_eq!(bands.len(), 3);
     }
 
     #[test]

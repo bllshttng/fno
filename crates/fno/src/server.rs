@@ -10443,7 +10443,7 @@ impl Core {
                 // (mail to an EXITED row is legal - it queues durable; an external
                 // row is refused), sanitize the text (blank/over-cap refused,
                 // never truncated), then shell `fno agents mail send` off-loop.
-                match self.resolve_lifecycle_target(&name, None) {
+                match self.mail_target(&name) {
                     Err(msg) => self.notice(client_id, msg),
                     Ok(_) => match sanitize_mail_text(&text) {
                         Err(msg) => self.notice(client_id, msg),

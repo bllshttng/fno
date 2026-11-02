@@ -28,6 +28,9 @@ const BUDGET: Duration = Duration::from_secs(180);
 /// A session that ran this long proves the path works, so the next drop starts
 /// a fresh budget.
 const PROVEN_SESSION: Duration = Duration::from_secs(30);
+/// A far door lost with its ssh never undid its mouse modes. Left on, a click to
+/// focus the stopped pane reads as the key that closes it.
+const MODES_RESET: &str = "\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?25h";
 
 /// What the supervisor does after one ssh run.
 #[derive(Debug, PartialEq, Eq)]
@@ -135,7 +138,7 @@ pub fn run(host: &str, key: &str) -> i32 {
             Next::Done => break 0,
             Next::Stop(reason) => {
                 write_tty(&format!(
-                    "\r\n{reason}\r\npress a key to close this pane\r\n"
+                    "{MODES_RESET}\r\n{reason}\r\npress a key to close this pane\r\n"
                 ));
                 flush_typed_keys();
                 let _ = std::io::stdin().read(&mut [0u8; 1]);

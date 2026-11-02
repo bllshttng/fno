@@ -784,7 +784,7 @@ pub(crate) struct View {
     /// Extended-table row order, persisted alongside the density.
     /// Inert in the other two densities (they render no table).
     agent_sort: AgentSort,
-    /// The agents view's group-by axis (prefix+G), persisted like the density.
+    /// The agents view's group-by axis (prefix+W), persisted like the density.
     agent_group: AgentGroup,
     machine_tree: machine_tree::MachineTree,
     /// The card's `node · PR` header row switch (prefix+Y), persisted.

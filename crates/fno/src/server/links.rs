@@ -46,6 +46,16 @@ impl Core {
         self.links.pane(id).or(focus)
     }
 
+    /// Mail's fail-closed target check. A `name@host` address is another
+    /// machine's row: this registry cannot answer for it, and the mail command
+    /// routes it.
+    pub(super) fn mail_target(&self, name: &str) -> Result<(), String> {
+        if name.contains('@') {
+            return Ok(());
+        }
+        self.resolve_lifecycle_target(name, None).map(|_| ())
+    }
+
     /// Tag passive client `id` as the driver of one pane, after checking the
     /// pane still holds the child the far door read. A refused hello leaves the
     /// client an untagged observer that can write nothing, so the far door
@@ -71,5 +81,17 @@ impl Core {
                 frames: true,
             },
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::tests::empty_core;
+
+    #[test]
+    fn mail_target_passes_a_remote_address_and_refuses_an_unknown_local_name() {
+        let core = empty_core();
+        assert_eq!(core.mail_target("ines@bb16"), Ok(()));
+        assert!(core.mail_target("ines").is_err());
     }
 }
