@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 use serde_json::Value;
 
 const POLL: Duration = Duration::from_millis(50);
+const DRAIN_GRACE: Duration = Duration::from_secs(5);
 
 static PHASE: Mutex<String> = Mutex::new(String::new());
 static DEADLINE: Mutex<Option<Instant>> = Mutex::new(None);
@@ -138,13 +139,15 @@ pub(crate) fn run(call: Call<'_>) -> Result<Output, DoorError> {
         });
     }
     let drain = |pipe: Option<Box<dyn Read + Send>>| {
+        let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let mut out = Vec::new();
             if let Some(mut pipe) = pipe {
                 let _ = pipe.read_to_end(&mut out);
             }
-            String::from_utf8_lossy(&out).into_owned()
-        })
+            let _ = tx.send(String::from_utf8_lossy(&out).into_owned());
+        });
+        rx
     };
     let out = drain(
         child
@@ -186,8 +189,10 @@ pub(crate) fn run(call: Call<'_>) -> Result<Output, DoorError> {
         code: status
             .code()
             .unwrap_or_else(|| 128 + status.signal().unwrap_or(0)),
-        stdout: out.join().unwrap_or_default(),
-        stderr: err.join().unwrap_or_default(),
+        // A process the child left behind can hold these pipes open past its
+        // exit; no phase cut fires here, so the read needs its own bound.
+        stdout: out.recv_timeout(DRAIN_GRACE).unwrap_or_default(),
+        stderr: err.recv_timeout(DRAIN_GRACE).unwrap_or_default(),
     })
 }
 

@@ -903,7 +903,7 @@ fn one_candidate(
                             }
                         }
                     };
-                    ok = ok || fire.ok;
+                    ok = fire.ok;
                     refused = !fire.ok && !fire.is_error;
                 }
                 let kind = if is_merge { "merge" } else { "review" };

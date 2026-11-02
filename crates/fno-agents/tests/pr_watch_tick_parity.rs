@@ -169,6 +169,10 @@ fn masked_journal(home: &Home) -> String {
                 data[key] = json!("<MASK>");
             }
         }
+        // With no cut this names the last phase that ran, which the time slot picks.
+        if row["type"] == "pr_watch_tick_end" {
+            row["data"]["phase"] = json!("<MASK>");
+        }
         rows.push(
             json!({"type": row["type"], "source": row["source"], "data": row["data"]}).to_string(),
         );
