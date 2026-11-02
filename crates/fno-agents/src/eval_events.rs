@@ -199,7 +199,8 @@ fn run_beat(
         };
     }
     let count = pending.len();
-    let result = poster.post(&cfg.url, &[], &batch_body(&cfg.token, &pending));
+    let headers = [("Content-Type".to_string(), "application/json".to_string())];
+    let result = poster.post(&cfg.url, &headers, &batch_body(&cfg.token, &pending));
     let mut report = otlp_export::BeatReport {
         acted: count as u64,
         skip: None,

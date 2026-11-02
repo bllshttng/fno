@@ -1093,7 +1093,7 @@ pub fn run_loops_table(json_out: bool, markdown: bool) -> i32 {
             })
         );
     } else if markdown {
-        print!("{}", markdown_doc(&launchd));
+        print!("{}", markdown_doc());
         return 0;
     } else {
         println!("control-plane loops, one row per scheduled loop (regenerate the doc: fno agents loops table --markdown):");
@@ -1139,8 +1139,9 @@ pub fn run_loops_table(json_out: bool, markdown: bool) -> i32 {
 /// regenerated file is byte-identical while the loops sit still. One row per
 /// loop, then one paragraph per loop: where it starts (the trigger), where
 /// it ends (the receipt event), and what to run when it looks wrong (the
-/// reader command).
-fn markdown_doc(launchd: &Option<crate::tick_ledger::LaunchdFold>) -> String {
+/// reader command). It reads no host state, so a regen on macOS and on CI
+/// writes the same bytes.
+fn markdown_doc() -> String {
     let mut out = String::from(
         "# Scheduled loops\n\nThe control plane runs every scheduled loop below. One row names its scheduler, its arming key, its journal receipt, and the command that reads it in detail. This file is generated. Regenerate it with `fno agents loops table --markdown` after changing `KNOWN_ARMS` in `crates/fno-agents/src/tick_ledger.rs`. When a row reads STALE or FAIL, `fno agents loops table` exits 1. Its plain form prints the same rows against the live journals.\n\n",
     );
@@ -1190,9 +1191,6 @@ fn markdown_doc(launchd: &Option<crate::tick_ledger::LaunchdFold>) -> String {
                 None => "If the row reads red, its `cause=` suffix names the next read".to_string(),
             }
         ));
-    }
-    if launchd.is_none() {
-        out.push_str("\nThe launchd fold is not applicable on this host, and the table fabricates no alarm for it.\n");
     }
     out
 }
