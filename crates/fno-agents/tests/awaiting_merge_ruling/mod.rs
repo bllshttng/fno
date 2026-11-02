@@ -133,25 +133,16 @@ fn invalid_ruling_hold_falls_through_to_the_ordinary_block() {
     assert!(d.termination_reason.is_none());
 }
 
-/// A stub `fno` whose `do plan fidelity` answer is always REFUSED - the
-/// shape a `carveouts: forbidden` plan shows while any deliverable is
-/// unjoined (fidelity.py:39: forbidden plans never cover before merge).
-/// Every other argv is also refused, so a fire that consults the stub for
-/// anything else fails loudly in the assertions below.
-fn refusing_fidelity_stub(dir: &Path) -> PathBuf {
-    make_script(
-        dir,
-        "fno",
-        r#"echo '{"refused": true, "reason": "unjoined deliverables, carveouts forbidden"}' ; exit 0"#,
-    )
-}
-
+/// The fidelity gate is native since the port, so its refusing state is
+/// built, not stubbed: one planned row inside the 180-day window with no
+/// termination reason is an unjoined deliverable, and the config pins the
+/// ledger read at this cwd so the gate sees exactly that row.
 fn delegated_fixture(
     session: &str,
     node_id: &str,
     hold_frontmatter: &str,
     manifest_extra: &str,
-) -> (TempDir, PathBuf, PathBuf, TempDir, TempDir) {
+) -> (TempDir, PathBuf, PathBuf, TempDir) {
     let tmp = TempDir::new().unwrap();
     let cwd = tmp.path().to_path_buf();
     fs::create_dir_all(cwd.join(".fno")).unwrap();
@@ -160,6 +151,22 @@ fn delegated_fixture(
     let fno_home = TempDir::new().unwrap();
     let plan_path = write_hold_plan(fno_home.path(), hold_frontmatter);
     write_graph_with_hold_node(fno_home.path(), node_id, &plan_path);
+
+    let cfg_path = cwd.join(".fno/config.toml");
+    let mut cfg = fs::read_to_string(&cfg_path).unwrap();
+    cfg.push_str(&format!(
+        "\n[paths]\nledger_json = \"{}\"\n",
+        cwd.join("ledger.json").display()
+    ));
+    fs::write(&cfg_path, cfg).unwrap();
+    let completed = (chrono::Local::now() - chrono::Duration::days(1)).to_rfc3339();
+    let ledger = serde_json::json!({"entries": [{
+        "type": "plan",
+        "plan_path": plan_path,
+        "session_id": session,
+        "completed": completed,
+    }]});
+    fs::write(cwd.join("ledger.json"), ledger.to_string()).unwrap();
 
     let manifest = format!(
         "---\nsession_id: {session}\ncreated_at: 2026-06-05T00:00:00Z\nattended: true\nplan_path: {plan}\n---\ngraph_node_id: {node_id}\n{extra}",
@@ -171,12 +178,10 @@ fn delegated_fixture(
     let manifest_path = cwd.join("target-state.md");
     fs::write(&manifest_path, &manifest).unwrap();
     fs::write(cwd.join("transcript.jsonl"), transcript_with_promise()).unwrap();
-    let stub_dir = TempDir::new().unwrap();
-    (tmp, manifest_path, cwd, fno_home, stub_dir)
+    (tmp, manifest_path, cwd, fno_home)
 }
 
-fn fire_with_fno_stub(cwd: &Path, manifest: &Path, mock: &MockBins, stub: &Path) -> Decision {
-    std::env::set_var("FNO_LOOPCHECK_FNO_BIN", stub);
+fn fire_green(cwd: &Path, manifest: &Path, mock: &MockBins) -> Decision {
     let (_code, d) = fire(&[
         "loop-check",
         "--state",
@@ -190,7 +195,6 @@ fn fire_with_fno_stub(cwd: &Path, manifest: &Path, mock: &MockBins, stub: &Path)
         &format!("--gh-bin={}", mock.gh.display()),
         &format!("--git-bin={}", mock.git.display()),
     ]);
-    std::env::remove_var("FNO_LOOPCHECK_FNO_BIN");
     d
 }
 
@@ -201,17 +205,16 @@ fn fire_with_fno_stub(cwd: &Path, manifest: &Path, mock: &MockBins, stub: &Path)
 /// at merge time anyway.
 #[test]
 fn a_green_pr_under_per_run_no_merge_parks_on_doneprgreen_naming_the_owner() {
-    let (_tmp, manifest_path, cwd, fno_home, stub_dir) = delegated_fixture(
+    let (_tmp, manifest_path, cwd, fno_home) = delegated_fixture(
         "sess-delegated",
         "x-delegated",
         "",
         "auto_merge_approved: false\nauto_merge_source: flag-no-merge\n",
     );
     let mock = MockBins::green();
-    let stub = refusing_fidelity_stub(stub_dir.path());
     let _lock = env_lock();
     std::env::set_var("FNO_HOME", fno_home.path());
-    let d = fire_with_fno_stub(&cwd, &manifest_path, &mock, &stub);
+    let d = fire_green(&cwd, &manifest_path, &mock);
     std::env::remove_var("FNO_HOME");
 
     assert_eq!(
@@ -244,18 +247,17 @@ fn a_green_pr_under_per_run_no_merge_parks_on_doneprgreen_naming_the_owner() {
 /// delegated park is the only terminal. Two fires on one head agree.
 #[test]
 fn a_green_pr_under_a_team_hold_parks_on_doneprgreen_naming_the_ruling() {
-    let (_tmp, manifest_path, cwd, fno_home, stub_dir) = delegated_fixture(
+    let (_tmp, manifest_path, cwd, fno_home) = delegated_fixture(
         "sess-held-green",
         "x-held-green",
         "dispatch_hold:\n  reason: waiting on legal\n  release_when: legal clears\n  review_on: 2099-01-01\n  set_by: operator\n",
         "",
     );
     let mock = MockBins::green();
-    let stub = refusing_fidelity_stub(stub_dir.path());
     let _lock = env_lock();
     std::env::set_var("FNO_HOME", fno_home.path());
-    let d1 = fire_with_fno_stub(&cwd, &manifest_path, &mock, &stub);
-    let d2 = fire_with_fno_stub(&cwd, &manifest_path, &mock, &stub);
+    let d1 = fire_green(&cwd, &manifest_path, &mock);
+    let d2 = fire_green(&cwd, &manifest_path, &mock);
     std::env::remove_var("FNO_HOME");
 
     for (n, d) in [("first", &d1), ("second", &d2)] {
@@ -285,17 +287,16 @@ fn a_green_pr_under_a_team_hold_parks_on_doneprgreen_naming_the_ruling() {
 }
 
 /// AC1-EDGE: a SELF-merging run (auto_merge_approved not false, no hold)
-/// with the same refusing fidelity stub still BLOCKS - the stop-time gate is
+/// with a refusing fidelity gate still BLOCKS - the stop-time gate is
 /// unchanged for runs that own their merge.
 #[test]
 fn a_self_merging_run_still_blocks_on_the_refusing_fidelity_gate() {
-    let (_tmp, manifest_path, cwd, fno_home, stub_dir) =
+    let (_tmp, manifest_path, cwd, fno_home) =
         delegated_fixture("sess-self-merge", "x-self-merge", "", "");
     let mock = MockBins::green();
-    let stub = refusing_fidelity_stub(stub_dir.path());
     let _lock = env_lock();
     std::env::set_var("FNO_HOME", fno_home.path());
-    let d = fire_with_fno_stub(&cwd, &manifest_path, &mock, &stub);
+    let d = fire_green(&cwd, &manifest_path, &mock);
     std::env::remove_var("FNO_HOME");
 
     assert_eq!(
@@ -305,7 +306,7 @@ fn a_self_merging_run_still_blocks_on_the_refusing_fidelity_gate() {
     );
     assert!(d.termination_reason.is_none());
     assert!(
-        d.message.contains("carveouts forbidden"),
+        d.message.contains("unjoined"),
         "the block must name the fidelity reason: {}",
         d.message
     );
