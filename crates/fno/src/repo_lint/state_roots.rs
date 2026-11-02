@@ -146,6 +146,20 @@ pub(crate) fn rule_a_violations(root: &Path) -> Vec<(String, String, String)> {
     let mut violations: Vec<(String, String, String)> = Vec::new();
     let py_join = regex::Regex::new(r#"(?:/\s*["']\.fno["']|["']\.fno/)"#).unwrap();
     let rs_join = regex::Regex::new(r#"join\(\s*["']\.fno"#).unwrap();
+    // One compile per state file, not per scanned line.
+    let rules: Vec<(&str, Option<&str>, &[&str], regex::Regex)> = STATE_FILES
+        .iter()
+        .map(|(filename, resolver, owning)| {
+            // The regex crate has no look-around; the boundary is a consumed
+            // non-word char (or an edge) instead.
+            let name_re = regex::Regex::new(&format!(
+                r"(^|[^\w.\-]){}($|[^\w.\-])",
+                regex::escape(filename)
+            ))
+            .unwrap();
+            (*filename, *resolver, *owning, name_re)
+        })
+        .collect();
     for (rel, path, suffix) in scan_files(root) {
         let body = match std::fs::read_to_string(&path) {
             Ok(b) => b,
@@ -172,17 +186,10 @@ pub(crate) fn rule_a_violations(root: &Path) -> Vec<(String, String, String)> {
             }
             let lnum = no + 1;
             let window: String = lines[no..(no + 3).min(lines.len())].join("\n");
-            for (filename, resolver, owning) in STATE_FILES {
+            for (filename, resolver, owning, name_re) in &rules {
                 if owning.contains(&rel.as_str()) {
                     continue;
                 }
-                // The regex crate has no look-around; the boundary is a
-                // consumed non-word char (or an edge) instead.
-                let name_re = regex::Regex::new(&format!(
-                    r"(^|[^\w.\-]){}($|[^\w.\-])",
-                    regex::escape(filename)
-                ))
-                .unwrap();
                 if !name_re.is_match(&window) {
                     continue;
                 }

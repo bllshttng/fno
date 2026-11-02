@@ -13,11 +13,11 @@
 # is why it is written here rather than learned twice.
 #
 # To regenerate after an intentional change:
-#   uv run --project cli fno-py doctor lint command-ratchet --update
-# then commit this file in that PR. Run it that way, not as a bare `fno`: a bare
-# `fno` enumerates the INSTALLED package while writing this checkout's file, and
-# a command that exists only in source is missed. The lint refuses that combination
-# rather than emitting a byte-identical file plus a success line.
+#   cargo build --manifest-path crates/fno/Cargo.toml --bin fno
+#   crates/fno/target/debug/fno doctor lint command-ratchet --update
+# then commit this file in that PR. Run the checkout's own binary: the update
+# logic lives in the same build CI gates, and a stale installed `fno` can
+# regenerate from a differently shaped inventory.
 # A deliberate addition carries a PR-body line:
 #   command-exception: <rationale>
 # (an explicit rationale keeps the exception reviewable).
