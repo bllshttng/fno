@@ -336,13 +336,21 @@ pub fn run(args: &[String]) -> i32 {
         }
         index += 2;
     }
-    if crate::backlog::workflows::active_backend_name() != "graph" {
-        return crate::backlog::cli::forward_to_python("undispatched", args);
-    }
-
     let graph = super::settings::graph_path();
-    let entries = match crate::graph_store::read_rows_where_strict(
-        &graph,
+    let external = crate::backlog::workflows::active_backend_name() != "graph";
+    let joined = if external {
+        match super::done_rich::external_open_entries() {
+            Ok(rows) => Some(rows),
+            Err(error) => {
+                eprintln!("Error: tracker unreadable: {error}");
+                return 1;
+            }
+        }
+    } else {
+        None
+    };
+    let local = |graph: &std::path::Path| crate::graph_store::read_rows_where_strict(
+        graph,
         &crate::backlog::RowQuery {
             fields: Some(
                 crate::graph_store::SLIM_FIELDS
@@ -384,12 +392,16 @@ pub fn run(args: &[String]) -> i32 {
             with_blockers: true,
             ..Default::default()
         },
-    ) {
-        Ok(rows) => rows,
-        Err(error) => {
-            eprintln!("Error: tracker unreadable: graph unreadable: {error}");
-            return 1;
-        }
+    );
+    let entries = match joined {
+        Some(rows) => rows,
+        None => match local(&graph) {
+            Ok(rows) => rows,
+            Err(error) => {
+                eprintln!("Error: tracker unreadable: graph unreadable: {error}");
+                return 1;
+            }
+        },
     };
     // The claim snapshot is keys-only on the real path, so every state reads
     // unknown; the worked overlay rides in as live-worker synthetic claims.

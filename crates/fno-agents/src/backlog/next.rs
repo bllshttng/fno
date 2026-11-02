@@ -453,9 +453,7 @@ pub fn run(args: &[String]) -> i32 {
         eprintln!("{USAGE}");
         return 2;
     };
-    if crate::backlog::workflows::active_backend_name() != "graph" {
-        return crate::backlog::cli::forward_to_python("next", args);
-    }
+    let external = crate::backlog::workflows::active_backend_name() != "graph";
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let repo_root = crate::backlog::create_cli::repo_root(&cwd);
     let now_ms = crate::claims::now_ms();
@@ -511,13 +509,20 @@ pub fn run(args: &[String]) -> i32 {
         with_blockers: true,
         ..Default::default()
     };
+    let read_selection = || -> Result<Vec<Value>, String> {
+        if external {
+            return super::done_rich::external_open_entries();
+        }
+        let graph = super::settings::graph_path();
+        crate::graph_store::read_rows_where_strict(&graph, &query)
+            .map_err(|error| format!("graph unreadable: {error}"))
+    };
     let need_prelude = (o.project.is_none() && !o.all) || o.parent.is_some() || o.claim.is_some();
     let pre_entries = if need_prelude {
-        let graph = super::settings::graph_path();
-        match crate::graph_store::read_rows_where_strict(&graph, &query) {
+        match read_selection() {
             Ok(rows) => Some(rows),
             Err(error) => {
-                eprintln!("Error: graph unreadable: {error}; selection refused");
+                eprintln!("Error: {error}; selection refused");
                 return 1;
             }
         }
@@ -641,22 +646,22 @@ pub fn run(args: &[String]) -> i32 {
                 }
             }
         }
-        let graph = super::settings::graph_path();
-        entries_for_receipts =
-            crate::graph_store::read_rows_where(&graph, &query).unwrap_or_default();
+        entries_for_receipts = if external {
+            pre.clone()
+        } else {
+            let graph = super::settings::graph_path();
+            crate::graph_store::read_rows_where(&graph, &query).unwrap_or_default()
+        };
     } else {
         let entries = match pre_entries {
             Some(entries) => entries,
-            None => {
-                let graph = super::settings::graph_path();
-                match crate::graph_store::read_rows_where_strict(&graph, &query) {
-                    Ok(rows) => rows,
-                    Err(error) => {
-                        eprintln!("Error: graph unreadable: {error}; selection refused");
-                        return 1;
-                    }
+            None => match read_selection() {
+                Ok(rows) => rows,
+                Err(error) => {
+                    eprintln!("Error: {error}; selection refused");
+                    return 1;
                 }
-            }
+            },
         };
         let (occupied, observer) = match prepare(&entries) {
             Ok(v) => v,

@@ -102,17 +102,109 @@ fn resolved_cwd(row: &Value) -> Value {
     row.get("cwd").cloned().unwrap_or(Value::Null)
 }
 
+const GET_HELP: &str = "Usage: fno backlog get <id> [OPTIONS]
+
+Read one node as JSON. The id is a node id, slug, or bare hex.
+
+Options:
+      --field NAME  Print one field. A missing field prints null.
+      --grouped     Group the fields by section.
+      --strict      Read the live graph only, never the archive.
+      --trace       Print the node's history as JSON.
+  -J, --json        With --trace, accepted and unchanged.
+  -h, --help        Print help.
+
+Exit codes: 1 no such node, 3 the graph could not be read.
+";
+
+/// Open items derive their rung at read time: never stored.
+fn external_status(state: &str, sidecar: &Value) -> &'static str {
+    if state == "closed" {
+        "done"
+    } else if sidecar.get("pr_number").is_some_and(|n| !n.is_null()) {
+        "in_review"
+    } else if sidecar.get("plan_path").is_some_and(|p| !p.is_null()) {
+        "ready"
+    } else {
+        "idea"
+    }
+}
+
+/// The tracker's exact-id read plus the sidecar, joined for display only.
+fn run_external(tail: &[String]) -> i32 {
+    let (mut id, mut field, mut json_out) = (None, None, false);
+    let mut it = tail.iter();
+    while let Some(arg) = it.next() {
+        match arg.as_str() {
+            "--field" => field = it.next().cloned(),
+            flag if crate::json_output::is_flag(flag) => json_out = true,
+            other if other.starts_with('-') || id.is_some() => {
+                eprint!("{GET_HELP}");
+                return 2;
+            }
+            other => id = Some(other.to_string()),
+        }
+    }
+    let Some(id) = id else {
+        eprint!("{GET_HELP}");
+        return 2;
+    };
+    let (node, sidecar) = match super::done_rich::read_external(&id) {
+        Ok(Some(pair)) => pair,
+        Ok(None) => {
+            let message = format!(
+                "fno backlog get: no node matches '{id}' (an external backend resolves \
+                 exact ids; slug/bare-hex are footnote-minted)"
+            );
+            if json_out {
+                println!("{}", json!({"ok": false, "error": message}));
+            } else {
+                eprintln!("{message}");
+            }
+            return 1;
+        }
+        Err(e) => {
+            eprintln!("fno backlog get: the tracker read for {id} failed: {e}");
+            return 1;
+        }
+    };
+    let state = node.get("state").and_then(Value::as_str).unwrap_or("open");
+    let mut joined = json!({
+        "id": node.get("id"),
+        "title": node.get("title"),
+        "state": state,
+        "status": external_status(state, &sidecar),
+        "parent": node.get("parent"),
+        "blocked_by": node.get("blocked_by").cloned().unwrap_or_else(|| json!([])),
+    });
+    if let Some(fields) = sidecar.as_object() {
+        for (key, value) in fields.iter().filter(|(k, _)| *k != "id") {
+            joined[key] = value.clone();
+        }
+    }
+    joined["_resolved_cwd"] = sidecar.get("cwd").cloned().unwrap_or(Value::Null);
+    match field {
+        Some(name) => println!("{}", render_field(&joined, &name)),
+        None => println!("{}", py_json_pretty(&joined)),
+    }
+    0
+}
+
 /// The whole ladder. `run` returns the process exit code.
 pub fn run(tail: &[String]) -> i32 {
-    let Some(args) = GetArgs::parse(tail) else {
-        return super::cli::forward_to_python("get", tail);
-    };
-    // The external backend selection leaves the local store non
-    // authoritative; that branch's tracker read is Python's client, so the
-    // shape forwards with the original argv.
-    if crate::graph_get::external_backend_selected() {
-        return super::cli::forward_to_python("get", tail);
+    if tail.iter().any(|a| a == "--help" || a == "-h") {
+        print!("{GET_HELP}");
+        return 0;
     }
+    // The external backend selection leaves the local store non
+    // authoritative: the answer is the tracker's exact-id read.
+    if crate::graph_get::external_backend_selected() {
+        return run_external(tail);
+    }
+    let Some(args) = GetArgs::parse(tail) else {
+        eprint!("{GET_HELP}");
+        return 2;
+    };
     let graph_path = super::settings::graph_path();
     // The light index answers the resolution tiers without assembling any
     // node body: id, slug, archived flag, in store order.
