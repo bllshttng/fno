@@ -6,22 +6,6 @@ protective infrastructure and a settings typo must never brick spawning.
 from fno.config import AgentsBlock
 
 
-def test_accounts_reserved_keys_match_agents_schema():
-    # The Rust records loader owns the list now; the schema it must track is
-    # still this Python model, so the test reads the Rust const from source.
-    import re
-    from pathlib import Path
-
-    records = Path(__file__).resolve().parents[3] / "crates/fno-agents/src/accounts/records.rs"
-    body = re.search(
-        r"pub const AGENTS_RESERVED_KEYS: &\[&str\] = &\[(.*?)\];", records.read_text(), re.S
-    ).group(1)
-    # `max_lanes` is the one tolerated legacy spelling (renamed provider_limits):
-    # still parsed by the block's before-validator, so it stays reserved
-    # against provider pins.
-    assert set(re.findall(r'"([^"]+)"', body)) == set(AgentsBlock.model_fields) | {"max_lanes"}
-
-
 def test_max_live_below_one_coerces_to_default():
     assert AgentsBlock(max_live=0).max_live == 3
     assert AgentsBlock(max_live=-2).max_live == 3

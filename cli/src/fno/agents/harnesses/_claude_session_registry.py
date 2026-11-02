@@ -49,7 +49,7 @@ def _claude_roots() -> list[Path]:
     roots += [Path(v) for v in [os.environ.get("CLAUDE_CONFIG_DIR")] if v]
     try:
         from fno.rust_binary import command_call
-        roots += [Path(d) for d in command_call(["spawn-overlay", "accounts", "claude-dirs"], {})["dirs"]]
+        roots += [Path(d) for d in command_call(["spawn-overlay", "accounts", "claude-dirs"], {}, timeout=5)["dirs"]]
     except Exception:  # noqa: BLE001 - no binary or an unreadable config leaves the ambient roots
         pass
     return roots

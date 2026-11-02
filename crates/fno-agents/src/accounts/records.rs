@@ -38,8 +38,8 @@ const RECOGNIZED_API_KEY_NAMES: [&str; 4] = [
 const VALID_STRATEGIES: [&str; 2] = ["fallback", "round_robin"];
 
 /// Settings blocks that share the `config.agents` namespace with per-agent
-/// pins and are never read as one. `cli/tests/unit/test_config_agents_gate.py`
-/// holds this list to the Python `AgentsBlock` schema.
+/// pins and are never read as one. `tests/accounts_records_parity.rs` holds
+/// this list to the generated `AgentsBlock` schema.
 pub const AGENTS_RESERVED_KEYS: &[&str] = &[
     "a2a",
     "auto_register_sessions",

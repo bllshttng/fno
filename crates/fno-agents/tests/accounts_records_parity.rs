@@ -159,3 +159,24 @@ fn accounts_records_match_the_python_leg() {
         failures.join("\n")
     );
 }
+
+/// The reserved keys track the `config.agents` schema: every `AgentsBlock`
+/// field, plus `max_lanes`, the one tolerated legacy spelling the block's
+/// before-validator still parses. The schema is the generated
+/// `crates/fno/config_schema.json`, so a new agents field reserves itself.
+#[test]
+fn reserved_agent_keys_track_the_agents_schema() {
+    let schema = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../fno/config_schema.json");
+    let schema: Value = serde_json::from_str(&std::fs::read_to_string(schema).unwrap()).unwrap();
+    let mut want: Vec<String> = schema["json_schema"]["$defs"]["AgentsBlock"]["properties"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .cloned()
+        .chain(["max_lanes".to_string()])
+        .collect();
+    want.sort();
+    let mut got: Vec<String> = records::AGENTS_RESERVED_KEYS.iter().map(|k| k.to_string()).collect();
+    got.sort();
+    assert_eq!(got, want);
+}
