@@ -113,7 +113,7 @@
   "argv": [],
   "exit": 2,
   "out": "",
-  "err": "usage: fno agents peek <handle>  (or --all)\n"
+  "err": "usage: fno agents session peek <handle>  (or --all)\n"
  },
  "usage-all-and-handle": {
   "argv": [

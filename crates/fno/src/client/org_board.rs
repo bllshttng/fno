@@ -197,6 +197,8 @@ impl OrgBoard {
         self.key = key.to_string();
         self.scroll = 0;
         self.page = None;
+        // A spawn prompt belongs to the row it opened on.
+        self.prompt = None;
     }
 
     fn step(&mut self, delta: isize) {
@@ -423,19 +425,24 @@ impl OrgBoard {
         }
     }
 
-    /// The spawn prompt as the key bar shows it while it is open.
+    /// The spawn prompt as the key bar shows it while it is open. It shows
+    /// even when the row left the map, because every key still feeds it.
     fn prompt_line(&self) -> Option<String> {
         let text = String::from_utf8_lossy(self.prompt.as_ref()?).into_owned();
-        let (m, seat) = self.target()?;
-        let cwd = actions::spawn_cwd(m, seat).unwrap_or_default();
-        let off = if m.takes_work {
-            ""
-        } else {
-            " (takes work is off; a typed spawn still runs)"
+        let at = match self.target() {
+            Some((m, seat)) => {
+                let cwd = actions::spawn_cwd(m, seat).unwrap_or_default();
+                let off = if m.takes_work {
+                    ""
+                } else {
+                    " (takes work is off; a typed spawn still runs)"
+                };
+                format!(" on {} in {cwd}{off}", m.host)
+            }
+            None => " (the row left the map)".into(),
         };
         Some(format!(
-            "spawn on {} in {cwd}{off}: {text}_ \u{b7} enter run \u{b7} esc cancel",
-            m.host
+            "spawn{at}: {text}_ \u{b7} enter run \u{b7} esc cancel"
         ))
     }
 
@@ -598,23 +605,29 @@ pub(crate) fn apply_fold(view: &mut View, gen: u64, inputs: FleetInputs) {
 /// A finished action: a peek lands as a page, anything else as a notice. A
 /// failure names the command's own error and the board stays open.
 pub(crate) fn apply_action(view: &mut View, gen: u64, done: Done) {
-    let Some(b) = view.org_board.as_mut().filter(|b| b.gen == gen) else {
-        return;
-    };
-    b.acting = None;
+    // The board may have closed while the action ran. A spawn still ran, so
+    // its notice still shows; only a peek page needs the board.
+    let mut board = view.org_board.as_mut().filter(|b| b.gen == gen);
+    if let Some(b) = board.as_deref_mut() {
+        b.acting = None;
+    }
     let notice = match (done.act, done.result) {
         (Act::Peek, Ok(lines)) => {
-            b.page = Some(Page {
-                key: done.key,
-                title: done.label,
-                lines,
-            });
-            b.scroll = 0;
+            if let Some(b) = board {
+                b.page = Some(Page {
+                    key: done.key,
+                    title: done.label,
+                    lines,
+                });
+                b.scroll = 0;
+            }
             return;
         }
         (Act::Spawn, Ok(lines)) => {
             // Read the map again now, so the new seat shows on the next beat.
-            b.last_read = None;
+            if let Some(b) = board {
+                b.last_read = None;
+            }
             // The receipt is the spawn's last line, a JSON row naming the seat.
             let receipt = lines.iter().rev().find(|l| !l.trim().is_empty());
             let seat = receipt.and_then(|l| {

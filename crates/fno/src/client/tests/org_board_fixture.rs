@@ -323,6 +323,14 @@ fn fleet_board_actions() {
             "fix it"
         ]
     );
+    // A dash-led prompt would read as a flag, and a new selection closes an
+    // open prompt rather than retarget it.
+    view.org_board.as_mut().unwrap().queued = None;
+    press(&mut view, b"s- fix it\r");
+    assert!(notice(&view).contains("a prompt that starts with - reads as a flag"));
+    press(&mut view, b"s");
+    view.org_board.as_mut().unwrap().select("host/m-bb16");
+    assert!(view.org_board.as_ref().unwrap().prompt.is_none());
     // Refusals: a stale beat, a machine with no known cwd, another owner.
     let refused = |edit: &dyn Fn(&mut Value), want: &str| {
         let mut map = fleet_json();
@@ -387,7 +395,9 @@ fn fleet_board_action_results_land_on_the_board() {
     apply_action(&mut view, gen, done(Err(ssh.into())));
     assert!(view.org_board.is_some());
     assert_eq!(notice(&view), ssh);
-    // A spawn names the seat its receipt row made.
+    // A spawn names the seat its receipt row made, even after the board
+    // closed while the spawn ran.
+    view.org_board = None;
     let receipt = r#"{"name":"t-fix-it","short_id":"e7372e60","status":"spawning"}"#;
     let spawned = Done {
         act: Act::Spawn,

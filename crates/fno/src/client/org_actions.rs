@@ -93,6 +93,10 @@ pub(crate) fn action_argv(
         if prompt.is_empty() {
             return Err(NO_PROMPT.into());
         }
+        // The spawn seam reads any word that starts with a dash as a flag.
+        if prompt.starts_with('-') {
+            return Err("a prompt that starts with - reads as a flag: start it with a word".into());
+        }
         let name = format!("@{}", m.host);
         return Ok(words(&[
             "agents",

@@ -127,7 +127,7 @@ fn parse(args: &[String]) -> Result<Args, i32> {
         return Err(2);
     }
     if !out.all && out.handle.is_none() {
-        eprintln!("usage: fno agents peek <handle>  (or --all)");
+        eprintln!("usage: fno agents session peek <handle>  (or --all)");
         return Err(2);
     }
     if out.follow && (out.all || out.grep.is_some()) {
