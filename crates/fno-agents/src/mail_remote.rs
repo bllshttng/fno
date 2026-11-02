@@ -176,21 +176,27 @@ pub fn sh_quote(word: &str) -> String {
     format!("'{}'", word.replace('\'', r"'\''"))
 }
 
+/// The fail-fast ssh posture every relay leg carries: BatchMode refuses
+/// instead of hanging on a prompt, and the connect bound keeps a dead
+/// MagicDNS host short.
+pub const SSH_FAST_OPTIONS: [&str; 4] = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=5"];
+
 /// The ssh relay command: the remote login shell resolves `fno` via its
 /// profile (the cargo bin dir), then execs the command with the words as
 /// positional arguments. `$0` is `sh`, so `"$@"` is the command tail. Every
 /// element rides sh-quoted, including the script itself: ssh joins argv
 /// with spaces and the remote shell parses the joined line.
 pub fn ssh_argv(host: &str, words: &[String]) -> Vec<String> {
-    let mut argv = vec![
-        "ssh".to_string(),
+    let mut argv = vec!["ssh".to_string()];
+    argv.extend(SSH_FAST_OPTIONS.map(String::from));
+    argv.extend([
         host.to_string(),
         "--".to_string(),
         "sh".to_string(),
         "-lc".to_string(),
         sh_quote("exec fno \"$@\""),
         "sh".to_string(),
-    ];
+    ]);
     argv.extend(words.iter().map(|w| sh_quote(w)));
     argv
 }
@@ -1067,14 +1073,18 @@ mod tests {
             ],
         );
         assert_eq!(argv[0], "ssh");
-        assert_eq!(argv[1], "mbp3");
-        assert_eq!(argv[2], "--");
-        assert_eq!(argv[3], "sh");
-        assert_eq!(argv[4], "-lc");
-        assert_eq!(argv[5], "'exec fno \"$@\"'");
-        assert_eq!(argv[6], "sh");
-        assert_eq!(argv[7], "'agents'");
-        assert_eq!(argv[9], "'nemo'");
+        assert_eq!(argv[1], "-o");
+        assert_eq!(argv[2], "BatchMode=yes");
+        assert_eq!(argv[3], "-o");
+        assert_eq!(argv[4], "ConnectTimeout=5");
+        assert_eq!(argv[5], "mbp3");
+        assert_eq!(argv[6], "--");
+        assert_eq!(argv[7], "sh");
+        assert_eq!(argv[8], "-lc");
+        assert_eq!(argv[9], "'exec fno \"$@\"'");
+        assert_eq!(argv[10], "sh");
+        assert_eq!(argv[11], "'agents'");
+        assert_eq!(argv[13], "'nemo'");
         // The send tail lifts identity flags and keeps the rest in order.
         let tail = parse_send_tail(&[
             "--from-name".into(),

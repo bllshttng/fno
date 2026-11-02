@@ -30,8 +30,6 @@ def _isolate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[None,
     # and a polluted real home would cause the default path to leak into the
     # assertion comparison).
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    from fno import config as config_mod
-    import fno.paths as paths_mod
     # Flush any stale real-attribute values that other tests may have pinned
     # onto the _constants module via monkeypatch.setattr. When monkeypatch
     # undoes a setattr on a previously-__getattr__-resolved attribute it
@@ -69,8 +67,6 @@ def test_graph_json_constant_uses_state_dir_even_with_retired_override(
         f"schema_version: 1\nconfig:\n  state_dir: '{state}'\n  paths:\n    graph_json: '{custom_graph}'\n",
     )
     monkeypatch.setenv("FNO_CONFIG", str(settings_file))
-    from fno import config as config_mod
-    import fno.paths as paths_mod
 
     from fno.graph import _constants
     result = _constants.GRAPH_JSON
@@ -90,8 +86,6 @@ def test_ledger_json_constant_respects_paths_override(
         f"schema_version: 1\nconfig:\n  paths:\n    ledger_json: '{custom_ledger}'\n",
     )
     monkeypatch.setenv("FNO_CONFIG", str(settings_file))
-    from fno import config as config_mod
-    import fno.paths as paths_mod
 
     from fno.graph import _constants
     result = _constants.LEDGER_JSON

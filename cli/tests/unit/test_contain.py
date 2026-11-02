@@ -14,7 +14,6 @@ from tests.fixtures.graph_seed import seed_graph
 from pathlib import Path
 
 import pytest
-import typer
 
 from fno.graph.store import commit_rows_via_store, read_graph_strict
 from tests.conftest import run_native_create

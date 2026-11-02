@@ -1790,7 +1790,14 @@ impl SinkIo for RealIo {
         if out.status.success() {
             Ok(last_line(&String::from_utf8_lossy(&out.stderr)))
         } else {
-            Err(format!("clear exited {}", out.status.code().unwrap_or(-1)))
+            // The door prints its refusal first, its count line last.
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            let said = stdout.lines().map(str::trim).find(|l| !l.is_empty());
+            let code = out.status.code().unwrap_or(-1);
+            Err(format!(
+                "clear exited {code}: {}",
+                said.unwrap_or("no output")
+            ))
         }
     }
 
@@ -1825,6 +1832,31 @@ pub(crate) fn append_answer_row(
     authority: &str,
     mapped_by: &str,
     attested_by: &str,
+) -> Result<(String, bool), String> {
+    append_answer_row_stamped(
+        home,
+        item_id,
+        sink,
+        answer,
+        authority,
+        mapped_by,
+        attested_by,
+        None,
+    )
+}
+
+/// [`append_answer_row`] with the answering login. A row from the command
+/// page carries `email`, and `person` is that login, since an invite has no
+/// other name. Without a login the row keeps the machine's own person.
+pub(crate) fn append_answer_row_stamped(
+    home: &crate::paths::AgentsHome,
+    item_id: &str,
+    sink: &str,
+    answer: &crate::attention_file::FileAnswer,
+    authority: &str,
+    mapped_by: &str,
+    attested_by: &str,
+    email: Option<&str>,
 ) -> Result<(String, bool), String> {
     let (option, words, done) = match answer {
         crate::attention_file::FileAnswer::Option(n) => (Some(*n as i64), String::new(), false),
@@ -1905,6 +1937,11 @@ pub(crate) fn append_answer_row(
         )),
     );
     fields.insert("decision_id".into(), serde_json::Value::Null);
+    if let Some(login) = email {
+        fields.insert("email".into(), serde_json::Value::from(login));
+        fields.insert("person".into(), serde_json::Value::from(login));
+    }
+    crate::identity::stamp_person(&mut fields);
     // The row is the durable half of the contract: a commit that fails must
     // fail the record so the settle state never marks it recorded.
     crate::events::EventEmitter::new(&path, "daemon")

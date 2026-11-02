@@ -85,3 +85,6 @@
 "agents team-fold" = "`fno agents org chart fold` - the same role scope fold"
 "agents team-orphans" = "`fno agents org chart vacancies` - the same unfilled-seat read"
 "agents term-ledger" = "`fno agents org chart rundown` - the term ledger page; the raw renderer is `fno agents org chart rundown-raw`"
+
+# The lint scanned agents/dispatch.py, which left with the dead-code sweep.
+"doctor lint flock-pattern" = "nothing - its one scan target, the Python dispatch module, was deleted"

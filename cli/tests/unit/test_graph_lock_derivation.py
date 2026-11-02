@@ -9,7 +9,6 @@ from tests.fixtures.graph_seed import seed_graph
 
 import threading
 import time
-from pathlib import Path
 
 
 from fno.graph.store import commit_rows_via_store

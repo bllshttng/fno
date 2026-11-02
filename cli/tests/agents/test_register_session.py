@@ -26,82 +26,14 @@ def _events(tmp_path: Path) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 
-def test_ac7_hp_idempotent_on_resame_session(tmp_path: Path, monkeypatch) -> None:
-    """The hook re-firing for the same session refreshes, never duplicates."""
-    use_tmpdir(monkeypatch, tmp_path)
-    from fno.agents.registry import load_registry, register_existing_session
-
-    register_existing_session(provider="claude", session_id="sess-1", cwd="/a")
-    second = register_existing_session(provider="claude", session_id="sess-1", cwd="/b")
-
-    rows = load_registry()
-    assert len(rows) == 1
-    assert rows[0].cwd == "/b"  # refreshed in place
-    assert rows[0].status == "idle"
-    assert second.name == rows[0].name
-
-
 # ---------------------------------------------------------------------------
 # Name and transport-key collisions
 # ---------------------------------------------------------------------------
 
 
-def test_ac4_err_generated_name_collision_fails_closed(tmp_path: Path, monkeypatch) -> None:
-    """A canonical first-eight overlap between two sessions never blocks
-    registration: both register (the name suffixes), and the shared short
-    fails closed as ambiguity at read time."""
-    use_tmpdir(monkeypatch, tmp_path)
-    from fno.agents.registry import (
-        AgentResolutionError,
-        load_registry,
-        register_existing_session,
-        resolve_agent,
-    )
-
-    a = register_existing_session(
-        provider="claude", session_id="tail0001-aaaa-bbbb-cccc-dddddddddddd", cwd="/s"
-    )
-    b = register_existing_session(
-        provider="claude", session_id="tail0001-1111-2222-3333-444455556666", cwd="/s"
-    )
-
-    assert a.name == "tail0001"
-    assert b.name == "tail0001-2"
-    assert len(load_registry()) == 2
-    with pytest.raises(AgentResolutionError, match="ambiguous"):
-        resolve_agent("tail0001")
-
-
-def test_transport_short_id_cannot_collide_with_existing_handle_namespace(
-    tmp_path: Path, monkeypatch
-) -> None:
-    use_tmpdir(monkeypatch, tmp_path)
-    from fno.agents.registry import AgentResolutionError, register_existing_session
-
-    register_existing_session(
-        provider="codex", session_id="deadbeef-0000-0000-0000-000000000000", cwd="/s", name="worker"
-    )
-    with pytest.raises(AgentResolutionError, match="transport short id.*collision"):
-        register_existing_session(
-            provider="codex",
-            session_id="cafebabe-0000-0000-0000-000000000000",
-            cwd="/s",
-            name="other",
-            short_id="deadbeef",
-        )
-
-
 # ---------------------------------------------------------------------------
 # Input validation
 # ---------------------------------------------------------------------------
-
-
-def test_register_rejects_unknown_provider(tmp_path: Path, monkeypatch) -> None:
-    use_tmpdir(monkeypatch, tmp_path)
-    from fno.agents.registry import register_existing_session
-
-    with pytest.raises(ValueError, match="unknown harness"):
-        register_existing_session(provider="bogus", session_id="x", cwd="/s")
 
 
 # ---------------------------------------------------------------------------

@@ -28,11 +28,6 @@ class ObserveUnsupported(Exception):
         self.agent = agent
 
 
-# --------------------------------------------------------------------------
-# Record extraction (harness-agnostic where the block shape allows)
-# --------------------------------------------------------------------------
-
-
 def _extract_text(content: object) -> str:
     """Flatten a message ``content`` to legible text.
 

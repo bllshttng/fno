@@ -30,7 +30,7 @@
 #   message=<final message to pass verbatim to the spawn/host command>
 #
 # Locked decisions honored:
-#   4. provider = explicit -> config.accounts (resolve_dispatch_target) -> claude
+#   4. provider = explicit -> DISPATCH_PROVIDER_RESOLVER -> claude
 #   8. the message is one unit; the SKILL builds `fno agents spawn <name> "<msg>"`
 #      with name POSITIONAL.
 
@@ -700,57 +700,19 @@ else
 fi
 
 # ---- 4. provider resolution (defer to config; never reinvent routing) --------
-# explicit --provider (validated) wins; else defer to the shipped
-# resolve_dispatch_target via fno's own interpreter; else default claude. A
-# combo (rotation list) does NOT map to a single --provider, so we only adopt a
-# concrete provider_id and otherwise fall back - combo/per-task routing is a
-# documented deferred fast-follow that belongs in the provider layer.
+# explicit --provider (validated) wins; else the injected resolver; else
+# default claude.
 is_valid_provider() {
   case " $VALID_PROVIDERS " in *" $1 "*) return 0 ;; *) return 1 ;; esac
 }
 
 resolve_from_config() {
   # Test-injectable: DISPATCH_PROVIDER_RESOLVER is a command taking the agent
-  # name and printing a provider (or empty). Default = the real resolver.
+  # name and printing a provider (or empty). With none set this prints nothing.
   if [[ -n "${DISPATCH_PROVIDER_RESOLVER:-}" ]]; then
     "$DISPATCH_PROVIDER_RESOLVER" "$1" 2>/dev/null || true
     return 0
   fi
-  local fno_bin shebang
-  fno_bin="$(command -v fno 2>/dev/null)" || return 0
-  shebang="$(head -1 "$fno_bin" 2>/dev/null | sed 's/^#![[:space:]]*//')"
-  # Only a python interpreter can import the fno package. A shell-wrapper
-  # fno (e.g. shebang "/bin/bash") or an empty shebang means the resolver is
-  # unreachable from here - fall back to claude rather than running the Python
-  # under the wrong interpreter.
-  [[ -n "$shebang" && "$shebang" == *python* ]] || return 0
-  # Split the shebang into an argv array so "/usr/bin/env python3" (interpreter
-  # + arg) runs correctly; a bare quoted "$shebang" would be treated as one path
-  # and both -x and exec would fail. read -r -a is bash 3.2 safe.
-  local py_cmd=()
-  read -r -a py_cmd <<< "$shebang"
-  { [[ -x "${py_cmd[0]}" ]] || command -v "${py_cmd[0]}" >/dev/null 2>&1; } || return 0
-  # resolve_dispatch_target returns an account RECORD id (e.g. "claude-anthropic"),
-  # not a harness name; the harness lives at ProviderRecord.harness. Map
-  # id -> .harness so a configured non-claude account resolves correctly instead
-  # of silently defaulting to claude. A combo / unresolved target prints nothing
-  # (-> claude).
-  #
-  # The `or getattr(rec, "cli", "")` fallback is NOT dead: this file is bundled
-  # into skills and can run against an older deployed `fno` whose records still
-  # expose `.cli`. Without it the read yields "" and this silently routes every
-  # configured codex/gemini account back to claude - the exact failure the line
-  # above exists to prevent, and one no test would have caught.
-  "${py_cmd[@]}" -c 'import sys
-try:
-    from fno.agents.dispatch_target import resolve_dispatch_target as r
-    from fno.adapters.providers.loader import load_providers
-    pid = getattr(r(sys.argv[1]), "provider_id", None)
-    if pid:
-        rec = load_providers().by_id.get(pid)
-        print(getattr(rec, "harness", "") or getattr(rec, "cli", "") or "")
-except Exception:
-    pass' "$1" 2>/dev/null || true
 }
 
 if [[ "$HANDOFF_MODE" -eq 1 ]]; then
