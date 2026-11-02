@@ -1184,16 +1184,7 @@ impl View {
         if let Some(review) = &b.review {
             let notice = self.notice.as_ref().map(|(text, _)| text.as_str());
             let screen = (0, 0, rows, cols);
-            pr_review::paint(
-                review,
-                notice,
-                cells,
-                rows,
-                cols,
-                screen,
-                false,
-                &self.theme,
-            );
+            pr_review::paint(review, notice, cells, rows, cols, screen, None, &self.theme);
         } else if b.keys_overlay {
             // Checked before the drill-down: `?` opens this from the detail
             // too, so it must paint over it, and its Esc must land here.

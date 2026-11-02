@@ -23,7 +23,7 @@ const USAGE: &str =
     "usage: fno mux serve --snapshot --server <name> --out <path> [--squad <name>] \
 [--theme dark|light|macchiato] [--format html|svg|png] [--size <cols>x<rows> [--fit]] [--peer <cols>x<rows>] \
 [--font <family>] [--message <fmail-id>] \
-[--view bell|bell-wide|bell-full|feed|row-menu|hover|cursor|tab-menu|sideline-menu|composer|split-menu|settings|keys|org-block|org-table|org-recent|org-overview|org-graph|org-health|org-seat|org-feed|org-system|messages-tree|messages-chats|messages-thread|messages-system|messages-archive|backlog-list|backlog-kanban|review-diff|review-panel|navigator-pr|navigator-model|navigator-menu|feed-detail|question-detail|connections|yard|needs]";
+[--view bell|bell-wide|bell-full|feed|row-menu|hover|cursor|tab-menu|sideline-menu|composer|split-menu|settings|keys|org-block|org-table|org-recent|org-overview|org-graph|org-health|org-seat|org-feed|org-system|messages-tree|messages-chats|messages-thread|messages-system|messages-archive|backlog-list|backlog-kanban|review-diff|review-panel|review-panel-drag|navigator-pr|navigator-model|navigator-menu|feed-detail|question-detail|connections|yard|needs]";
 
 #[derive(Debug, PartialEq)]
 pub enum Format {
@@ -100,6 +100,8 @@ pub enum ViewKind {
     ReviewDiff,
     /// The PR review as a right split beside the chat panes.
     ReviewPanel,
+    /// The review split mid-drag at 60 percent, its edge in the accent.
+    ReviewPanelDrag,
     /// The backlog board full screen in list view, details pane beside it.
     BacklogList,
     /// The backlog board full screen in kanban view, details pane beside it.
@@ -190,6 +192,7 @@ fn parse_view(v: &str) -> Option<ViewKind> {
         "messages-you-thread" => Some(ViewKind::MessagesYouThread),
         "review-diff" => Some(ViewKind::ReviewDiff),
         "review-panel" => Some(ViewKind::ReviewPanel),
+        "review-panel-drag" => Some(ViewKind::ReviewPanelDrag),
         "backlog-list" => Some(ViewKind::BacklogList),
         "backlog-kanban" => Some(ViewKind::BacklogKanban),
         "navigator-pr" => Some(ViewKind::NavigatorPr),
@@ -276,7 +279,7 @@ pub fn parse(tail: &[OsString]) -> Result<SnapshotArgs, String> {
             "--view" => {
                 let v = value()?;
                 view = Some(parse_view(&v).ok_or_else(|| {
-                    format!("fno mux serve --snapshot: unknown view {v:?}; use bell, bell-wide, bell-full, feed, row-menu, tab-menu, sideline-menu, composer, split-menu, settings, keys, org-block, org-table, org-recent, org-overview, org-graph, org-health, org-seat, org-feed, org-system, messages-tree, messages-chats, messages-thread, messages-system, messages-archive, messages-you, messages-you-thread, backlog-list, backlog-kanban, review-diff, review-panel, navigator-pr, navigator-menu, navigator-model, feed-detail, question-detail or connections")
+                    format!("fno mux serve --snapshot: unknown view {v:?}; use bell, bell-wide, bell-full, feed, row-menu, tab-menu, sideline-menu, composer, split-menu, settings, keys, org-block, org-table, org-recent, org-overview, org-graph, org-health, org-seat, org-feed, org-system, messages-tree, messages-chats, messages-thread, messages-system, messages-archive, messages-you, messages-you-thread, backlog-list, backlog-kanban, review-diff, review-panel, review-panel-drag, navigator-pr, navigator-menu, navigator-model, feed-detail, question-detail or connections")
                 })?)
             }
             tok @ ("--server" | "--session") => {
@@ -565,6 +568,20 @@ fn find_chrome() -> Option<PathBuf> {
         .find(|p| p.is_file())
 }
 
+/// The split views open the fixture review beside the panes; the drag view
+/// holds its edge mid-drag at 60 percent.
+fn split_fixture(view: &mut View, kind: Option<&ViewKind>) {
+    if matches!(
+        kind,
+        Some(ViewKind::ReviewPanel | ViewKind::ReviewPanelDrag)
+    ) {
+        view.viewer.review = review_fixture().ok();
+    }
+    if matches!(kind, Some(ViewKind::ReviewPanelDrag)) {
+        view.viewer.dragging_at(60);
+    }
+}
+
 fn review_fixture() -> Result<super::backlog_board::pr_review::Review, String> {
     super::backlog_board::pr_review::fixture(include_str!("tests/fixtures/pr_review.diff"))
 }
@@ -594,9 +611,7 @@ fn live_frame(
     // review split takes its columns before the server sizes the panes.
     let dims = size.filter(|_| fit).map(|t| {
         let mut sizing = View::new(t, server.into(), LayoutView::default());
-        if matches!(kind, Some(ViewKind::ReviewPanel)) {
-            sizing.viewer.review = review_fixture().ok();
-        }
+        split_fixture(&mut sizing, kind);
         sizing.content_dims()
     });
     // The peer attaches first and stays until the shot is composed.
@@ -996,7 +1011,10 @@ shoot a root whose fleet map has seats \
                 .ok_or("the backlog board did not open")?
                 .review = Some(review);
         }
-        Some(ViewKind::ReviewPanel) => view.viewer.review = Some(review_fixture()?),
+        Some(ViewKind::ReviewPanel | ViewKind::ReviewPanelDrag) => {
+            review_fixture()?;
+            split_fixture(&mut view, kind);
+        }
         Some(ViewKind::BacklogList) | Some(ViewKind::BacklogKanban) => {
             // The V-cycle backlog board, full screen so the board and
             // details panes lay out side by side. Set the sideline field
@@ -1250,6 +1268,7 @@ mod tests {
             ("messages-you-thread", ViewKind::MessagesYouThread),
             ("review-diff", ViewKind::ReviewDiff),
             ("review-panel", ViewKind::ReviewPanel),
+            ("review-panel-drag", ViewKind::ReviewPanelDrag),
             ("backlog-list", ViewKind::BacklogList),
             ("backlog-kanban", ViewKind::BacklogKanban),
             ("navigator-pr", ViewKind::NavigatorPr),

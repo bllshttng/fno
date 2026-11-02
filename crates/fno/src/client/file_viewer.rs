@@ -291,9 +291,17 @@ pub(crate) struct ViewerState {
     pct: u16,
     /// The PR review split beside the chat pane. It takes the panel's place.
     pub(super) review: Option<super::backlog_board::pr_review::Review>,
+    /// A press on the panel's left edge is dragging it.
+    drag: bool,
 }
 
 impl ViewerState {
+    /// The `review-panel-drag` snapshot: the split mid-drag at `pct`.
+    pub(super) fn dragging_at(&mut self, pct: u16) {
+        self.pct = pct;
+        self.drag = true;
+    }
+
     fn pct(&self) -> u16 {
         if self.pct == 0 {
             DEFAULT_PCT
@@ -641,7 +649,7 @@ pub(super) fn draw(view: &View, cells: &mut [Cell], rows: usize, cols: usize) {
             rows,
             cols,
             rect,
-            beside,
+            beside.then_some(view.viewer.drag),
             &view.theme,
         );
         return;
@@ -747,7 +755,24 @@ async fn review_keys(
     bytes: &[u8],
     sock_w: &mut (impl tokio::io::AsyncWrite + Unpin),
 ) -> Result<StdinFlow, String> {
-    super::backlog_board::pr_review::keys(view, bytes);
+    let typing = view
+        .viewer
+        .review
+        .as_ref()
+        .is_some_and(|r| r.input.is_some());
+    match bytes {
+        b"-" if !typing => {
+            return resize(view, -STEP_PCT, sock_w)
+                .await
+                .map(|_| StdinFlow::Continue)
+        }
+        b"+" | b"=" if !typing => {
+            return resize(view, STEP_PCT, sock_w)
+                .await
+                .map(|_| StdinFlow::Continue)
+        }
+        _ => super::backlog_board::pr_review::keys(view, bytes),
+    }
     if view.viewer.review.is_none() {
         send_resize(view, sock_w).await?;
     }
@@ -961,6 +986,37 @@ pub(super) async fn keys(
         }
     }
     Ok(StdinFlow::Continue)
+}
+
+/// The panel edge drag: a press on the panel's left edge grabs it, a drag
+/// report sets the width in percent (clamped as `-` and `+` clamp), and any
+/// other report ends it. The width holds for the session. `Ok(true)` means
+/// the drag took the report.
+pub(super) async fn drag_mouse(
+    view: &mut View,
+    rep: crate::mouse::MouseReport,
+    sock_w: &mut (impl tokio::io::AsyncWrite + Unpin),
+) -> Result<bool, String> {
+    let panel = view.viewer_panel_w();
+    if !view.viewer.drag {
+        let edge = panel > 0 && rep.row >= TAB_BAR_ROWS && rep.col == view.term.1 - panel;
+        let grab = edge && matches!(rep.kind, MouseKind::Press(MouseButton::Left));
+        view.viewer.drag = grab;
+        return Ok(grab);
+    }
+    let MouseKind::Drag(MouseButton::Left) = rep.kind else {
+        view.viewer.drag = false;
+        return Ok(true);
+    };
+    let cols = u32::from(view.term.1.max(1));
+    let want = cols.saturating_sub(u32::from(rep.col)) * 100 / cols;
+    let pct = (want as i16).clamp(MIN_PCT, MAX_PCT) as u16;
+    if pct != view.viewer.pct() {
+        view.viewer.pct = pct;
+        scroll_by(view, 0);
+        send_resize(view, sock_w).await?;
+    }
+    Ok(true)
 }
 
 /// One mouse report while the viewer is open. `true` means the viewer took
@@ -1230,6 +1286,28 @@ mod tests {
         assert!(!v.viewer_focused(), "and hands the keyboard back");
         assert!(mouse(&mut v, press(5, 100)) && v.viewer_focused());
         assert!(!mouse(&mut v, press(5, 2)));
+        // The edge drags: a press grabs it, column 30 of 120 reads 75 percent,
+        // a drag past the edge holds the 80 percent clamp, a release ends it.
+        let mut sock = Vec::new();
+        let edge = v.term.1 - v.viewer_panel_w();
+        let to = |col| crate::mouse::MouseReport {
+            kind: MouseKind::Drag(MouseButton::Left),
+            ..press(5, col)
+        };
+        assert!(drag_mouse(&mut v, press(5, edge), &mut sock).await.unwrap());
+        assert!(drag_mouse(&mut v, to(30), &mut sock).await.unwrap());
+        assert_eq!(v.viewer.pct(), 75);
+        assert!(drag_mouse(&mut v, to(0), &mut sock).await.unwrap());
+        assert_eq!(v.viewer.pct(), 80);
+        let up = crate::mouse::MouseReport {
+            kind: MouseKind::Release(MouseButton::Left),
+            ..press(5, 0)
+        };
+        assert!(drag_mouse(&mut v, up, &mut sock).await.unwrap());
+        assert!(
+            !v.viewer.drag && !sock.is_empty(),
+            "the panes got the new width"
+        );
         // A panel's close sends the new content area, so the chip tap that
         // `tap_chip` asserts silent is called directly here.
         let (mut scanner, mut sock) = (Scanner::default(), Vec::new());

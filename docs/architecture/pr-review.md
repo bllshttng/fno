@@ -4,7 +4,7 @@ The review view shows a node's PR diff and lets you comment on its lines. One se
 
 Open it with `d` on a backlog node's detail, or `r` on a seat page in the org view. Those two show it full screen.
 
-From a chat pane, `prefix+I` opens it as a right split for the focused pane's session. The chat stays live on the left. The split reads the session's node, then that node's PR from the store. A session with no node, or a node with no PR, shows `no PR yet`. `prefix+I` again, `I` inside the split, or Esc closes it. A click on the chat pane hands the keyboard back with the split still open.
+From a chat pane, `prefix+I` opens it as a right split for the focused pane's session. The chat stays live on the left. The split reads the session's node, then that node's PR from the store. A session with no node, or a node with no PR, shows `no PR yet`. `prefix+I` again, `I` inside the split, or Esc closes it. A click on the chat pane hands the keyboard back with the split still open. The split's left edge drags, and `-` and `+` resize it, from 20 to 80 percent of the terminal. The width holds for the session and is shared with the file viewer panel.
 
 The keys are in [mux-keys](../mux-keys.md#inside-the-pr-review).
 

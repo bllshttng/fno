@@ -61,7 +61,7 @@ pub(crate) struct Review {
     pub(crate) cursor: usize,
     /// Staged comments by flat row, so a send lists them in diff order.
     pub(crate) drafts: BTreeMap<usize, String>,
-    input: Option<(usize, InputField)>,
+    pub(crate) input: Option<(usize, InputField)>,
     esc: Vec<u8>,
     /// The first Esc over unsent drafts warned; the second closes.
     warned: bool,
@@ -793,7 +793,8 @@ fn window(review: &Review, h: usize, cols: usize) -> (Vec<BLine>, Option<usize>)
 
 /// Paint into `rect` (top, left, h, w): the header, the diff window and the foot
 /// row. The board passes the whole screen and its notice, because it covers the
-/// tab bar that shows one; the split passes no notice and draws a divider.
+/// tab bar that shows one; the split passes no notice and draws a divider,
+/// `Some(true)` in the accent while its edge is dragged.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn paint(
     review: &Review,
@@ -802,20 +803,24 @@ pub(crate) fn paint(
     rows: usize,
     cols: usize,
     rect: (usize, usize, usize, usize),
-    divider: bool,
+    divider: Option<bool>,
     theme: &Theme,
 ) {
     let (top, mut left, h, mut w) = rect;
     if h < HEADER_ROWS + 2 || w < 2 || top + h > rows || left + w > cols {
         return;
     }
-    if divider {
+    if let Some(active) = divider {
+        let (fg, flags) = match active {
+            true => (theme.brand, crate::proto::cell_flags::BOLD),
+            false => (crate::proto::Color::Indexed(8), 0),
+        };
         for r in top..top + h {
             cells[r * cols + left] = Cell {
                 c: '\u{2502}',
-                fg: crate::proto::Color::Indexed(8),
+                fg,
                 bg: crate::proto::Color::Default,
-                flags: 0,
+                flags,
             };
         }
         left += 1;

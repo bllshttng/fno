@@ -30,7 +30,7 @@ Emulators: iTerm2, Ghostty, kitty and WezTerm emit the xterm CSI form. Verify yo
 
 `d` on a backlog node's detail opens the diff of the node's newest unmerged PR, full screen. If a seat's node has a PR, `r` on its org page opens the same review. `Esc` goes back to that page.
 
-`prefix+I` on a focused chat pane opens the same review as a right split. It shows that session's node and PR, or `no PR yet`. `prefix+I` again closes it. Inside the split, `I` closes it too. A click on the chat pane gives the keyboard back, and a click on the split takes it again.
+`prefix+I` on a focused chat pane opens the same review as a right split. It shows that session's node and PR, or `no PR yet`. `prefix+I` again closes it. Inside the split, `I` closes it too. A click on the chat pane gives the keyboard back, and a click on the split takes it again. Drag the split's left edge to resize it, or press `-` and `+` inside it. The width stays between 20 and 80 percent and holds for the session. The file viewer panel drags the same way.
 
 - `j`/`k` or arrows: move one row. `PageUp`/`PageDown`: move one screen. `n`/`p`: next or previous file.
 - `c`: comment on the row, or edit its comment. `Enter` stages the comment, and `Esc` drops the input. `x`: remove the row's comment.

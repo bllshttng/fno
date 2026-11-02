@@ -227,7 +227,9 @@ pub(super) async fn mouse_pre_pass(
             super::questions::mouse(view, rep);
             continue;
         }
-        if super::file_viewer::mouse(view, rep) {
+        if super::file_viewer::drag_mouse(view, rep, sock_w).await?
+            || super::file_viewer::mouse(view, rep)
+        {
             continue;
         }
         if view.bell.open {
