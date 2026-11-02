@@ -51,7 +51,7 @@ resolve_arg() {
         echo "$arg"
         return 0
     fi
-    if ! command -v fno >/dev/null 2>&1; then
+    if ! command -v "${FNO_AGENTS_FRONT:-fno}" >/dev/null 2>&1; then
         echo "[graph-resolve] fno CLI unavailable; using '$arg' as-is" >&2
         [[ "${RESOLVE_STRICT:-}" == "1" ]] && return 1
         echo "$arg"

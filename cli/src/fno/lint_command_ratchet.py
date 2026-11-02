@@ -52,6 +52,14 @@ COLLAPSE_FLAGS_REL = Path("scripts") / "ci" / "command-collapse-flags.txt"
 # sizing leaf, the disposition-comment leaf, and the findings classifier).
 # The map row stays: the mux menu binds the leaf and the Rust command-baseline
 # ratchet reads the same row.
+BACKLOG_KEPT_LEAVES = (
+    "backlog advance",
+    "backlog done",
+    "backlog get",
+    "backlog next",
+    "backlog queued",
+)
+
 NATIVE_SERVED_LEAVES = {
     "backlog annotate add",
     "backlog annotate list",
@@ -419,6 +427,11 @@ def iter_python_leaves():
     _root_ctx = click.Context(_root_cmd)
     for n in _EAGER_COMMAND_HELP:
         yield n, _root_cmd.get_command(_root_ctx, n)
+
+    # The backlog group has no LAZY_SUBCOMMANDS entry, so nothing above yields
+    # the leaves it kept on its menu. The binary serves them.
+    for native in BACKLOG_KEPT_LEAVES:
+        yield native, None
 
     seen_groups: set[str] = set()
     for name, entry in LAZY_SUBCOMMANDS.items():
