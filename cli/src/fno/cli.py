@@ -570,7 +570,16 @@ def mux(
 def backlog(
     ctx: typer.Context,
 ) -> None:
-    """Forward to the native `backlog`, which the fno-agents binary serves."""
+    """Forward to the native `backlog`, which the fno-agents binary serves.
+
+    A binary older than this forward sends a command it lacks straight back here
+    by exec, so each level spawns another (2026-11-02: over 5,300 `fno-py
+    backlog script-door` processes). The marker holds the forwarded argv, not a
+    flag: a worker spawned under a backlog command inherits it and must still
+    run a different backlog command.
+    """
+    import json
+    import os
     import subprocess
 
     from fno.rust_binary import find_dev_binary, resolve_binary
@@ -579,7 +588,17 @@ def backlog(
     if binary is None:
         typer.echo("fno: the fno-agents binary was not found; run `fno doctor update --rust`", err=True)
         raise typer.Exit(code=127)
-    raise typer.Exit(code=subprocess.run([str(binary), "backlog", *ctx.args]).returncode)
+    forwarded = json.dumps(ctx.args)
+    if os.environ.get("FNO_PY_BACKLOG_FORWARD") == forwarded:
+        typer.echo(
+            f"fno-py: recursive backlog forward refused: {binary} sent "
+            f"`backlog {' '.join(ctx.args)}` back to fno-py, so it is older than "
+            "this fno-py. Run `fno doctor update --rust`.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    env = dict(os.environ, FNO_PY_BACKLOG_FORWARD=forwarded)
+    raise typer.Exit(code=subprocess.run([str(binary), "backlog", *ctx.args], env=env).returncode)
 
 
 @app.command(
