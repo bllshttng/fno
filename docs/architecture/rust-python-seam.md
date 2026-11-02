@@ -82,6 +82,7 @@ The table classifies the crossing sites, one line of reason each. The pass that 
 | `scrape.rs:276` | conforming | pane title sweep read through the pane owner |
 | `spawn_gate.rs:378` | conforming | gate-escape telemetry through the event emit path |
 | `backlog_view.rs:69` | conforming | snapshot read through the only writer, schema owned by the source |
+| `team_alarm.rs read_org_payload` | retired | the team read runs in process (`team_read::team_nodes_payload_at`); the front-binary spawn for the `--nodes` payload is gone, and the ledger arm's inner crossing retired with it |
 | `client.rs:2470` | conforming | update probe through the update policy owner, bounded |
 | `client.rs:2649` | conforming | workspace prune through the front door, counts owned by the command; an applied run sends `SquadReload` to every live server so the file and memory agree; an orphaned worker tab (its stored member judged Dead) closes by default, used shells stay opt-in |
 | `client.rs:14413` | conforming | config write through the CLI, the same monopoly as the graph |

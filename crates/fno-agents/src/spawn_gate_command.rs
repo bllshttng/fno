@@ -348,7 +348,13 @@ fn opt_str_of(payload: &Value, key: &str) -> Option<String> {
 }
 
 pub(crate) fn probe_answer(_payload: &Value) -> Value {
-    probe::answer(_payload)
+    probe::answer(None, _payload)
+}
+
+/// The same probe anchored at an explicit cwd, for in-process callers whose
+/// config root is not the process cwd.
+pub(crate) fn probe_answer_at(cwd: Option<&std::path::Path>, _payload: &Value) -> Value {
+    probe::answer(cwd, _payload)
 }
 
 /// The probe's pieces, namespaced so the payload parsing and the row
@@ -356,8 +362,10 @@ pub(crate) fn probe_answer(_payload: &Value) -> Value {
 mod probe {
     use super::*;
 
-    pub(super) fn answer(payload: &Value) -> Value {
-        let config_cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    pub(super) fn answer(cwd: Option<&std::path::Path>, payload: &Value) -> Value {
+        let config_cwd = cwd
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
         let home = crate::paths::AgentsHome::from_env();
         let registry_path = home.registry_json();
         let caller = opt_str_of(payload, "caller_session");

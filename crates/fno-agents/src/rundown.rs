@@ -1172,14 +1172,9 @@ fn run_ledger_command(args: &[String]) -> i32 {
         }
     };
     let cwd = std::env::current_dir().unwrap_or_default();
-    // The team alarm's bounded read: one reader of the team for both.
-    let org = match crate::team_alarm::read_org_payload(&cwd) {
-        Ok(org) => org,
-        Err(e) => {
-            eprintln!("lead: {e}");
-            return 2;
-        }
-    };
+    // The team read runs in process now: one reader of the team for both the
+    // ledger page and the alarm, with no child spawn in the read.
+    let org = crate::team_alarm::read_org_payload(&cwd);
     let out_path = out.unwrap_or_else(default_page);
     let generated = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
     let graph = crate::org_board::scope::graph_json_path(&cwd);
