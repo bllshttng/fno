@@ -67,7 +67,8 @@ fn state_roots_rule_b_fires_on_a_zero_arg_cache_over_a_resolver() {
     );
     let hits = state_roots::rule_b_violations(&dir);
     assert_eq!(hits.len(), 1, "{hits:?}");
-    assert_eq!(hits[0].1, "cli/src/fno/cached.py");
+    assert_eq!(hits[0].0, "cli/src/fno/cached.py");
+    assert_eq!(hits[0].1, "settings");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
