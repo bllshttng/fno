@@ -33,7 +33,7 @@ const STATUS_KINDS: [&str; 4] = ["task_started", "task_done", "blocked", "run_su
 const LIVE_STATUSES: [&str; 6] = ["spawning", "ready", "idle", "busy", "live", "restarting"];
 
 const HELP: &str = "\
-Usage: fno agents peek [OPTIONS] [HANDLE]
+Usage: fno agents session peek [OPTIONS] [HANDLE]
 
   Observe a peer read-only.
 

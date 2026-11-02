@@ -673,29 +673,37 @@ fn relay(host: &str, words: &[String]) -> i32 {
     }
 }
 
+/// The words a peek runs on the machine that holds the seat: the current
+/// spelling, so the far side prints no rename notice and keeps working once
+/// the old spelling goes.
+fn peek_words(name: String, rest: &[String]) -> Vec<String> {
+    let mut words = vec![
+        "agents".to_string(),
+        "session".to_string(),
+        "peek".to_string(),
+        name,
+    ];
+    words.extend(rest.iter().cloned());
+    words
+}
+
 fn cmd_peek(args: &[String]) -> i32 {
     let words: Vec<String> = args.to_vec();
     let Some(target) = words.first() else {
-        eprintln!("usage: fno agents peek <handle>@<host> [flags]");
+        eprintln!("usage: fno agents session peek <handle>@<host> [flags]");
         return 2;
     };
     let Ok((name, host)) = split_target(target) else {
         eprintln!("{}", target_error(target));
         return 2;
     };
+    let relay_words = peek_words(name, &words[1..]);
     let local_host = mail_bus::normalize_host(&crate::claims::hostname());
     if mail_bus::normalize_host(&host) == local_host {
         let mut argv = vec![fno_binary()];
-        argv.push(OsString::from("agents"));
-        argv.push(OsString::from("peek"));
-        argv.push(OsString::from(name));
-        for word in &words[1..] {
-            argv.push(OsString::from(word));
-        }
+        argv.extend(relay_words.iter().map(OsString::from));
         return exec_forward(&argv, "fno agents mail", true);
     }
-    let mut relay_words = vec!["agents".to_string(), "peek".to_string(), name];
-    relay_words.extend(words[1..].iter().cloned());
     relay(&host, &relay_words)
 }
 
@@ -1072,16 +1080,10 @@ mod tests {
         assert_eq!(sh_quote("hello"), "'hello'");
         assert_eq!(sh_quote("it's"), r"'it'\''s'");
         assert_eq!(sh_quote("two words"), "'two words'");
-        let argv = ssh_argv(
-            "mbp3",
-            &[
-                "agents".into(),
-                "peek".into(),
-                "nemo".into(),
-                "-n".into(),
-                "5".into(),
-            ],
-        );
+        // A peek runs the current spelling on the far side.
+        let words = peek_words("nemo".into(), &["-n".into(), "5".into()]);
+        assert_eq!(words, ["agents", "session", "peek", "nemo", "-n", "5"]);
+        let argv = ssh_argv("mbp3", &words);
         assert_eq!(argv[0], "ssh");
         assert_eq!(argv[1], "-o");
         assert_eq!(argv[2], "BatchMode=yes");
@@ -1094,7 +1096,7 @@ mod tests {
         assert_eq!(argv[9], "'exec fno \"$@\"'");
         assert_eq!(argv[10], "sh");
         assert_eq!(argv[11], "'agents'");
-        assert_eq!(argv[13], "'nemo'");
+        assert_eq!(argv[14], "'nemo'");
         // The send tail lifts identity flags and keeps the rest in order.
         let tail = parse_send_tail(&[
             "--from-name".into(),

@@ -144,5 +144,13 @@
   "exit": 2,
   "out": "",
   "err": "--lines must be >= 0 (got -1)\n"
+ },
+ "usage-help": {
+  "argv": [
+   "--help"
+  ],
+  "exit": 0,
+  "out": "Usage: fno agents session peek [OPTIONS] [HANDLE]\n\n  Observe a peer read-only.\n\n  Tails the transcript (claude/codex), preferring normalized status events; a\n  pane worker resolves through the registry's mux ref. Never writes anything\n  the peer reads. Exit 13 unknown peer, 1 no reader, 0 observed (or \"no\n  activity yet\").\n\nOptions:\n  -n, --lines INTEGER  Show the last N transcript records (default 15; 0 for\n                       none).\n  -f, --follow         Stream new records as the peer emits them (read-only).\n  --grep TEXT          Only records carrying this token, within the --lines\n                       window.\n  -A, --all            Search every registry session with a transcript instead\n                       of one handle.\n  -J, --json           Emit JSON-Lines rows instead of human lines.\n  --help               Show this message and exit.\n",
+  "err": ""
  }
 }
