@@ -289,8 +289,9 @@ pub(crate) fn scope_contains<'a>(
 
 /// Why this caller may not grant a team over `requested`, or `None`: you
 /// cannot hand down authority you do not hold. An attended human may grant
-/// anything. An agent must hold a live team that strictly contains the
-/// request; an equal scope is a transfer, legal only with succession intent. A
+/// anything, and so may a live level 0 lead. Any other agent must hold a live
+/// team that strictly contains the request. An equal scope is a transfer, legal
+/// only with succession intent, at every level. A
 /// caller this check cannot place (unreadable registry, unregistered agent,
 /// terminal grantor) fails closed. `allow_terminal_recovery` admits only the
 /// same territory a terminal holder already holds.
@@ -378,11 +379,15 @@ fn grant_refusal<'a>(
                      `--hand-off`, or choose a different scope so this session keeps its role."
                 ));
             }
+            // A level 0 lead grants over any scope, inside or outside its own.
+            if caller.get("role_level").and_then(Value::as_u64) == Some(0) {
+                return None;
+            }
             if !scope_contains(held, requested, entry_of, projects) {
                 return Some(format!(
                     "this session's role over '{held}' neither contains nor equals \
-                     '{requested}', so it cannot grant it. A grant must be a \
-                     strict subset of what the grantor holds; an equal scope is allowed \
+                     '{requested}', so it cannot grant it. Below level 0, a grant must be \
+                     a strict subset of what the grantor holds; an equal scope is allowed \
                      only as succession, which hands YOUR scope to a successor."
                 ));
             }
@@ -1680,6 +1685,12 @@ mod grant_tests {
         assert_eq!(check(agent("busy", "a"), "alpha", true), None);
         let unpromoted = check(agent("idle", ""), "e-1", false).unwrap();
         assert!(unpromoted.contains("holds none"), "{unpromoted}");
+        // Level 0 grants outside its own scope; level 1 on the same facts does not.
+        let at = |level: u32| json!({"kind": "agent", "status": "busy", "role_scope": "beta", "role_level": level});
+        assert_eq!(check(at(0), "e-1", false), None);
+        assert!(check(at(1), "e-1", false)
+            .unwrap()
+            .contains("neither contains nor equals"));
         let named = check(
             json!({"kind": "agent", "status": "idle", "role_scope": "",
                 "identity": "registry row w (codex session 01a19918)",
