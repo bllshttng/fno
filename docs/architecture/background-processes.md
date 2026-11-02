@@ -22,7 +22,7 @@ Beyond the five kinds, two other long-lived fno processes exist: the mux server 
 
 ## What is pr_watch_merge?
 
-It is the merge phase of the `sh.fno.pr-watcher` tick: `cli/src/fno/pr_watch/cli.py`, function `tick`, calls `_run_phase("merge", _phase_merge, arm="pr_watch_merge")`. Launchd fires the tick every 600 seconds, and the same invocation also drives the other launchd arms in the table below.
+It is the merge phase of the `sh.fno.pr-watcher` tick: `crates/fno-agents/src/pr_watch/tick.rs`, function `run`, calls `run_phase("merge", Some("pr_watch_merge"), 1, 0, phase_merge)`. Launchd fires the tick every 600 seconds, and the same invocation also drives the other launchd arms in the table below.
 
 Read it with `fno agents session status` (the `via=launchd:sh.fno.pr-watcher` column says which scheduler owns the row) and `fno do pr watch status`. See [pr-watch-merge-phase.md](pr-watch-merge-phase.md) for why the merge phase fails and what each failure means.
 
@@ -32,7 +32,7 @@ The gated table: every `sh.fno.*` label an installer in this repo writes. Column
 
 | label | installed by | runs | cadence | arms it hosts | health read | safe stop |
 |---|---|---|---|---|---|---|
-| `sh.fno.pr-watcher` | `fno do pr watch install` (`cli/src/fno/pr_watch/_install.py`, constant `_LABEL`) | `fno-py do pr watch tick` | `StartInterval` 600 s | every arm stamped `launchd:sh.fno.pr-watcher` | `fno do pr watch status`, `fno agents session status`, `~/.fno/logs/pr-watcher.out.log` | `fno do pr watch uninstall`; rebind to a new binary with `fno do pr watch refresh` |
+| `sh.fno.pr-watcher` | `fno do pr watch install` (`crates/fno-agents/src/pr_watch/install.rs`, constant `LABEL`) | `fno-py do pr watch tick` | `StartInterval` 600 s | every arm stamped `launchd:sh.fno.pr-watcher` | `fno do pr watch status`, `fno agents session status`, `~/.fno/logs/pr-watcher.out.log` | `fno do pr watch uninstall`; rebind to a new binary with `fno do pr watch refresh` |
 | `sh.fno.groom` | `fno backlog groom --install-agent` (`crates/fno-agents/src/backlog/groom.rs`, `install_agent`) | `fno backlog groom` | daily at `--hour` (default 2) | none: it writes no `control_plane_tick` row | `launchctl list sh.fno.groom` last exit, `fno doctor`, `~/.fno/logs/groom.out.log` | `launchctl bootout gui/$(id -u)/sh.fno.groom` (no uninstall command exists) |
 
 Below the table: other `sh.fno.*` labels can appear in `launchctl list` that footnote does not install. Today those are `sh.fno.autocontinue`, `sh.fno.board-server` and `sh.fno.sync-backlog`, an operator's own agents, and `fno agents loop control table` lists every label it folds, including them. The `auto_continue` arm's 1800 s heartbeat needs some scheduler that runs `fno backlog advance` with `FNO_CONTROL_PLANE_SCHEDULER` set (`cli/src/fno/control_plane.py`, `scheduler_from_env`). Without one the arm reads `session`.
