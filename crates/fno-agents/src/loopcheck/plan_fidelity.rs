@@ -540,21 +540,15 @@ pub(crate) fn run_body_guard(body: String, script: Option<&Path>, cwd: &Path) ->
     }
 }
 
-/// Bounded child run with child-only env stamping: spawn, drain pipes on
-/// reader threads, poll to the deadline, kill at the bound. The same shape
-/// the shared bounded runner gives the other probes, with the env parameter
-/// that runner lacks.
+/// Bounded child run with child-only env stamping: spawn through the
+/// crate's one bounded spawner (retry and process-group rules included),
+/// drain pipes on reader threads, poll to the deadline, kill at the bound.
 pub(crate) fn bounded_spawn(
-    mut cmd: std::process::Command,
+    cmd: std::process::Command,
     timeout: std::time::Duration,
 ) -> Option<GuardOutput> {
     use std::io::Read;
-    use std::process::Stdio;
-    let mut child = cmd
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .ok()?;
+    let mut child = crate::bounded_spawn::spawn_bounded_command(cmd).ok()?;
     let Some(mut stdout) = child.stdout.take() else {
         unreachable!("stdout was just piped")
     };
