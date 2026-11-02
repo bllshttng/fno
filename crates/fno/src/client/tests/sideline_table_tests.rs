@@ -780,7 +780,14 @@ fn group_by_axes_build_labelled_bands_with_rollups() {
         crate::client::agent_group::band_spend(&v, "(no harness)"),
         None
     );
-    assert_eq!(AgentGroup::Harness.next(), AgentGroup::Workspace);
+    assert_eq!(AgentGroup::Harness.next(), AgentGroup::Flat);
+    assert_eq!(AgentGroup::Flat.next(), AgentGroup::Workspace);
+    // Flat: one headerless run of every live row.
+    v.agent_group = AgentGroup::Flat;
+    let rows = v.display_rows();
+    assert!(!rows.iter().any(|r| matches!(r, DisplayRow::Header { .. })));
+    let live = rows.iter().filter(|r| matches!(r, DisplayRow::Agent(_)));
+    assert_eq!(live.count(), 3, "flat keeps every live row");
 
     // The machine layer wraps the active axis only while its toggle is on.
     let fleet = serde_json::json!({"machines": [{"host": "far", "fresh": true, "age_s": 9,
@@ -818,6 +825,19 @@ fn group_by_axes_build_labelled_bands_with_rollups() {
         ["far · ready · 9s", "  boss"],
         "a far worker joins its lead"
     );
+    // Under workspace a far worker nests under its parent; flat keeps only
+    // the machine bands.
+    v.agent_group = AgentGroup::Workspace;
+    let (rows, depths) = v.tree_rows_with_depths();
+    let far: Vec<(&str, usize)> = (rows.iter().zip(&depths))
+        .filter_map(|(r, d)| match r {
+            DisplayRow::Agent(a) if a.remote.is_some() => Some((a.name.as_str(), *d)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(far, [("boss@far", 0), ("w@far", 1)]);
+    v.agent_group = AgentGroup::Flat;
+    assert_eq!(headers(&v), [here.as_str(), "far · ready · 9s"]);
 }
 
 #[test]

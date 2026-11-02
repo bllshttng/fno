@@ -33,6 +33,9 @@ struct Seat {
     /// The fleet map says `writing`. Its status words carry no needs-input
     /// state, so a far row never lands in that band.
     working: bool,
+    /// Its session id, and its parent seat's, for nesting under workspace.
+    id: Option<String>,
+    parent: Option<String>,
 }
 
 /// One machine from the newest fleet read.
@@ -175,29 +178,31 @@ fn fold_seat(seat: &Value, all: &[&Value], host: &str, band: &Band) -> Seat {
             .filter(|c| !c.is_empty())
             .unwrap_or_else(|| "(no cwd)".into()),
         working: text(seat, "status").as_deref() == Some("writing"),
+        id: text(seat, "session_id"),
+        parent: parent_seat(seat, all).and_then(|p| text(p, "session_id")),
     }
 }
 
+/// The seat a seat's `parent` names. The fleet map writes the head of the
+/// parent's session id.
+fn parent_seat<'a>(seat: &Value, all: &[&'a Value]) -> Option<&'a Value> {
+    let head: String = text(seat, "parent")?.chars().take(8).collect();
+    let mut seats = all.iter().copied();
+    seats.find(|s| text(s, "session_id").is_some_and(|id| id.starts_with(&head)))
+}
+
 /// The far twin of `team_lead_name`: the seat itself when it holds a role,
-/// else the first ancestor that does. A parent names its seat by the head of
-/// its session id.
-fn lead_of(seat: &Value, all: &[&Value]) -> String {
+/// else the first ancestor that does.
+fn lead_of<'a>(seat: &'a Value, all: &[&'a Value]) -> String {
     let mut at = seat;
     for _ in 0..=all.len() {
         if text(at, "role").is_some() {
             return text(at, "name").unwrap_or_default();
         }
-        let Some(parent) = text(at, "parent") else {
-            break;
-        };
-        let head = &parent[..parent.len().min(8)];
-        let found = all
-            .iter()
-            .find(|s| text(s, "session_id").is_some_and(|id| id.starts_with(head)));
-        let Some(next) = found else {
-            break;
-        };
-        at = next;
+        match parent_seat(at, all) {
+            Some(next) => at = next,
+            None => break,
+        }
     }
     "~ unteamed".into()
 }
@@ -261,6 +266,7 @@ fn seat_label(group: AgentGroup, seat: &Seat) -> String {
         AgentGroup::Status if seat.working => "Working".into(),
         AgentGroup::Status => "Completed".into(),
         AgentGroup::Harness => (seat.row.harness.clone()).unwrap_or_else(|| "(no harness)".into()),
+        AgentGroup::Flat => String::new(),
     }
 }
 
@@ -271,41 +277,51 @@ fn band_label(band: &Band) -> String {
 
 /// Another machine's rows on the active axis: a header per band, keyed by
 /// host so folding one machine's band leaves the same band elsewhere open.
-fn remote_rows<'a>(view: &'a View, band: &'a Band) -> Vec<DisplayRow<'a>> {
-    let mut buckets: Vec<(String, Vec<&AgentRow>)> = Vec::new();
+/// Under workspace, workers nest under their parent as this machine's
+/// workspace tree nests them. Flat paints no header at all.
+fn remote_rows<'a>(view: &'a View, band: &'a Band) -> (Vec<DisplayRow<'a>>, Vec<usize>) {
+    let group = view.agent_group;
+    let mut buckets: Vec<(String, Vec<&Seat>)> = Vec::new();
     for seat in &band.seats {
-        let label = seat_label(view.agent_group, seat);
+        let label = seat_label(group, seat);
         match buckets.iter_mut().find(|(k, _)| *k == label) {
-            Some((_, rows)) => rows.push(&seat.row),
-            None => buckets.push((label, vec![&seat.row])),
+            Some((_, seats)) => seats.push(seat),
+            None => buckets.push((label, vec![seat])),
         }
     }
     // Status keeps its fixed order, Working before Completed; the rest read
     // alphabetically.
-    buckets.sort_by(|a, b| match view.agent_group {
+    buckets.sort_by(|a, b| match group {
         AgentGroup::Status => b.0.cmp(&a.0),
         _ => a.0.cmp(&b.0),
     });
-    let mut out = Vec::new();
-    for (label, rows) in buckets {
-        let key = SectionKey::Group(format!("@{}/{label}", band.host));
-        let sview = view.section_view(&key);
-        out.push(DisplayRow::Header {
-            label: format!("  {label}"),
-            rollup: section_rollup(rows.iter().map(|a| agent_lattice_state(a))),
-            key,
-            view: sview,
-        });
-        if sview != SectionView::Collapsed {
-            let shown = rows.into_iter();
-            out.extend(
-                shown
-                    .filter(|a| sview == SectionView::Expanded || !a.exited)
-                    .map(DisplayRow::Agent),
-            );
+    let (mut out, mut depths) = (Vec::new(), Vec::new());
+    for (label, seats) in buckets {
+        if group != AgentGroup::Flat {
+            let key = SectionKey::Group(format!("@{}/{label}", band.host));
+            let sview = view.section_view(&key);
+            out.push(DisplayRow::Header {
+                label: format!("  {label}"),
+                rollup: section_rollup(seats.iter().map(|s| agent_lattice_state(&s.row))),
+                key,
+                view: sview,
+            });
+            depths.push(0);
+            if sview == SectionView::Collapsed {
+                continue;
+            }
+        }
+        let (order, nest) = if group == AgentGroup::Workspace {
+            lineage_layout(&seats, |s| s.id.as_deref(), |s| s.parent.as_deref())
+        } else {
+            ((0..seats.len()).collect(), vec![0; seats.len()])
+        };
+        for i in order {
+            out.push(DisplayRow::Agent(&seats[i].row));
+            depths.push(nest[i]);
         }
     }
-    out
+    (out, depths)
 }
 
 impl View {
@@ -341,8 +357,7 @@ impl View {
                 let states = self.layout.agents.iter().map(agent_lattice_state).collect();
                 (rows.collect(), d, states)
             } else {
-                let rows = remote_rows(self, band);
-                let d = vec![0; rows.len()];
+                let (rows, d) = remote_rows(self, band);
                 let states = band
                     .seats
                     .iter()

@@ -282,6 +282,8 @@ pub enum AgentGroup {
     Status,
     /// One section per harness (claude, codex, ...), its spend in the header.
     Harness,
+    /// No sections: one run of live rows in the sort column's order.
+    Flat,
 }
 
 impl AgentGroup {
@@ -292,7 +294,8 @@ impl AgentGroup {
             Self::Team => Self::Cwd,
             Self::Cwd => Self::Status,
             Self::Status => Self::Harness,
-            Self::Harness => Self::Workspace,
+            Self::Harness => Self::Flat,
+            Self::Flat => Self::Workspace,
         }
     }
 
@@ -304,6 +307,7 @@ impl AgentGroup {
             Self::Cwd => "cwd",
             Self::Status => "status",
             Self::Harness => "harness",
+            Self::Flat => "none",
         }
     }
 }

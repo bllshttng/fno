@@ -47,6 +47,7 @@ fn group_key_of(view: &View, name: &str) -> String {
             .map(|s| s.name.clone())
             .unwrap_or_else(|| "~ elsewhere".into()),
         AgentGroup::Team | AgentGroup::Cwd | AgentGroup::Harness => keyed_label(view, a),
+        AgentGroup::Flat => String::new(),
         AgentGroup::Status => match agent_lattice_state(a) {
             LatticeState::Blocked | LatticeState::DoneUnseen => "Needs input".into(),
             LatticeState::Working | LatticeState::Unmeasured | LatticeState::Empty => {
@@ -162,6 +163,15 @@ fn push<'a>(buckets: &mut Vec<Bucket<'a>>, key: String, a: &'a AgentRow) {
 pub(super) fn grouped_rows_with_depths(view: &View) -> (Vec<DisplayRow<'_>>, Vec<usize>) {
     let buckets: Vec<Bucket<'_>> = match view.agent_group {
         AgentGroup::Workspace => Vec::new(), // unreachable: the caller guards
+        // No header to fold, so exited rows stay hidden, as a fresh band hides them.
+        AgentGroup::Flat => {
+            let rows: Vec<_> = (view.layout.agents.iter())
+                .filter(|a| !a.exited)
+                .map(DisplayRow::Agent)
+                .collect();
+            let depths = vec![0; rows.len()];
+            return (rows, depths);
+        }
         AgentGroup::Team | AgentGroup::Cwd | AgentGroup::Harness => {
             let mut buckets: Vec<Bucket<'_>> = Vec::new();
             for a in &view.layout.agents {

@@ -6,7 +6,7 @@ The sideline can show every machine on the fleet map. A session on another machi
 
 The layer is an experimental feature. Turn it on in menu > settings > experimental > `other machines`. It is off by default. While it is off, the mux reads no fleet map, and the sideline paints exactly as before.
 
-While it is on, each machine gets a band at the top of the tree, and the active agent group paints inside each band. `prefix+W` still cycles workspace, lead, cwd, status and harness. It now picks the grouping under every machine. This machine comes first. Each machine band reads `host · ready · 23s`. A machine the fleet map calls stale reads `offline`. The number is the age of its newest beat.
+While it is on, each machine gets a band at the top of the tree, and the active agent group paints inside each band. `prefix+W` cycles workspace, lead, cwd, status, harness and none. It picks the grouping under every machine, and the sort column orders the rows inside each band. `none` gives one run of rows per machine, so the sort alone orders them. This machine comes first. Each machine band reads `host · ready · 23s`. A machine the fleet map calls stale reads `offline`. The number is the age of its newest beat.
 
 This machine's band holds the ordinary tree from the server's layout. Other machines' rows come from `fno agents fleet top --machines`. The mux reads it off the UI loop every 15 seconds while the toggle is on. A failed read keeps the last good bands, so a row does not vanish because the primary blinked. A machine with no beat yet still gets its own band, which reads `offline`. With fewer than two machines there is no layer. Nothing connects to another machine until you open a row.
 
@@ -14,11 +14,12 @@ The fleet map carries less than the layout, so a far row joins its band by the n
 
 | Group | A far row joins |
 |---|---|
-| workspace | its project. The fleet map carries no workspace |
+| workspace | its project, nested under its parent seat. The fleet map carries no workspace |
 | lead | the first seat up its parent chain that holds a role |
 | cwd | the last part of its cwd |
 | status | Working while it writes, else Completed. The fleet map has no needs-input state |
 | harness | its harness |
+| none | its machine band, with no band below it |
 
 The Created and Modified sorts read a far row's start and last-message times, so recency orders far rows too. A pin is a keep mark on the machine that runs the session. The fleet map does not carry it, so a far row never sorts as pinned, and `ctrl+t` on a far row refuses.
 
