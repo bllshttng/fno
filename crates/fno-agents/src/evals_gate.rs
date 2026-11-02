@@ -8,8 +8,8 @@
 //! golden tier on `evals.gate.lane` as cohort `gate-main-<date>-<hash>`. The
 //! lead seat runs the `lead` goldens on the first lane of
 //! `agents.profiles.role.lanes` as `gate-main-<date>-<hash>-lead`. One seat
-//! runs at a time, and the worker goes first. The golden set is read at the fetched sha
-//! through a detached worktree, never from this repo's working tree: the
+//! runs at a time, and the worker goes first. The golden set is read at the
+//! fetched sha through a detached worktree, never from this repo's working tree: the
 //! checkout the daemon runs from can sit behind the ref, and a tag read
 //! there misses a golden main added. Each finished cohort becomes the
 //! baseline of its seat, and it is compared to that seat's one before. A
@@ -19,7 +19,8 @@
 //! **Head leg.** An open same-repo PR whose head touches a gated path gets a
 //! pending `evals/gate` status, then one run of the `gate` goldens at that
 //! head, one PR at a time. A newer head kills the older run. The head runs on
-//! the worker seat and pays one side only: it compares to the worker baseline. Until a first baseline exists the
+//! the worker seat and pays one side only: it compares to the worker
+//! baseline. Until a first baseline exists the
 //! leg posts nothing, so a fresh install holds no PR on a check it cannot do.
 //!
 //! The runs are detached, and the tick never waits on one. A later tick reads
