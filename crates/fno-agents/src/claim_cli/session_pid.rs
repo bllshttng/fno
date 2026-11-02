@@ -30,7 +30,11 @@ pub fn run(args: &[String]) -> i32 {
     if json {
         println!(
             "{}",
-            serde_json::json!({"session_pid": pid, "harness": harness})
+            serde_json::json!({
+                "session_pid": pid,
+                "harness": harness,
+                "no_harness_ancestor": crate::spawn_context::walk_finds_no_harness_ambient(),
+            })
         );
     } else if let Some(pid) = pid {
         println!("{pid}");

@@ -10,6 +10,8 @@ ambient identity is never overwritten.
 
 import json
 
+import pytest
+
 from fno.harness_identity import live_thread_row_for_cwd
 from fno.paths import agents_registry_path
 from fno.paths_testing import use_tmpdir
@@ -54,6 +56,28 @@ def _two_worker_rows(tmp_path):
         _thread_row("worker-b", str(cwd_b), sid_b),
     ]
     return rows, str(cwd_a), str(cwd_b), sid_a, sid_b
+
+
+@pytest.fixture(autouse=True)
+def _walk_cannot_prove_a_terminal(monkeypatch):
+    """Host-independent default: a CI runner's walk finds no harness, a thread
+    worker's sandboxed walk cannot tell. The terminal test opts in."""
+    monkeypatch.setattr("fno.claims.self_identity.no_harness_ancestor", lambda: False)
+
+
+def test_a_plain_terminal_in_a_workers_cwd_stays_a_human(tmp_path, monkeypatch):
+    """The user's own shell in a repo with one live codex thread row: no marker,
+    and a full walk that found no harness. The cwd alone never names it."""
+    rows, cwd_a, _cwd_b, _sid_a, _sid_b = _two_worker_rows(tmp_path)
+    _write_registry(tmp_path, monkeypatch, rows)
+    _scrub_env(monkeypatch)
+    monkeypatch.setattr("fno.claims.self_identity.no_harness_ancestor", lambda: True)
+
+    monkeypatch.chdir(cwd_a)
+    ident = resolve_self_identity()
+
+    assert ident.session_id is None
+    assert ident.disposition != "spawn_record"
 
 
 def test_duplicate_cwd_refuses_rather_than_picks(tmp_path, monkeypatch):

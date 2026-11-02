@@ -214,6 +214,13 @@ def _own_cwd() -> str:
         return ""
 
 
+def no_harness_ancestor() -> bool:
+    """True only when the native walk read every ancestor and found no harness."""
+    from fno.claims.session_pid import resolve_no_harness_ancestor
+
+    return resolve_no_harness_ancestor()
+
+
 def _fill_spawn_record(owned):
     """Fill a session id the walk could not supply from the cwd-keyed spawn
     record.
@@ -223,6 +230,10 @@ def _fill_spawn_record(owned):
     other family's marker never adopts - cwd is shared by bystanders.
     """
     if owned.session_id or owned.disposition in {"invalid", "contradiction"}:
+        return owned
+    # A terminal in a worker's cwd is not that worker: with no marker and a full
+    # walk that found no harness, the cwd is the only link.
+    if not owned.harness and not owned.markers_present and no_harness_ancestor():
         return owned
     row = live_thread_row_for_cwd(_own_cwd())
     if row is None:

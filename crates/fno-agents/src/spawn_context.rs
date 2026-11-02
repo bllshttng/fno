@@ -519,6 +519,44 @@ pub fn resolve_session_harness_from_table(
     None
 }
 
+/// Whether the walk from `start_pid` read every ancestor up to the root and
+/// found no harness. Only that full read proves a plain terminal. A sandboxed
+/// walk stops at a row it cannot read, and it answers false.
+pub fn walk_finds_no_harness_from_table(
+    table: &BTreeMap<u32, ProcRow>,
+    hidden: &dyn Fn(u32) -> Option<(u32, String)>,
+    start_pid: u32,
+) -> bool {
+    let mut pid = start_pid;
+    for _ in 0..MAX_ANCESTRY_DEPTH {
+        let (ppid, command) = match table.get(&pid) {
+            Some(row) => (row.ppid, row.command.clone()),
+            None => match hidden(pid) {
+                Some(found) => found,
+                None => return false,
+            },
+        };
+        if harness_name_of_command(&command).is_some() {
+            return false;
+        }
+        if ppid == 0 || ppid == pid {
+            return true;
+        }
+        pid = ppid;
+    }
+    false
+}
+
+/// The ambient form of [`walk_finds_no_harness_from_table`]. A live launcher
+/// stamp pair names a harness session, so it is never a plain terminal.
+pub fn walk_finds_no_harness_ambient() -> bool {
+    stamp_pair_harness().is_none()
+        && walk_finds_no_harness_from_table(&ancestry_table(), &census::hidden_process, unsafe {
+            libc::getppid()
+        }
+            as u32)
+}
+
 /// True when COMMAND is Claude Code pool machinery rather than a session:
 /// the daemon's spare pool (`claude bg-spare ...`), its pty host
 /// (`claude bg-pty-host ...`), or the daemon itself (`.../claude daemon
@@ -1005,6 +1043,15 @@ fn fill_spawn_record(owned: OwnedIdentity, cwd: &str, home: &AgentsHome) -> Owne
             owned.disposition,
             OwnedDisposition::Invalid | OwnedDisposition::Contradiction
         )
+    {
+        return owned;
+    }
+    // A terminal in a worker's cwd is not that worker: with no marker and a
+    // full walk that found no harness, the cwd is the only link, and bystanders
+    // share a cwd.
+    if owned.harness.is_none()
+        && owned.markers_present.is_empty()
+        && walk_finds_no_harness_ambient()
     {
         return owned;
     }
@@ -1697,6 +1744,46 @@ mod tests {
             None,
             Some("footnote"),
             Some("s")
+        ));
+    }
+
+    #[test]
+    fn only_a_full_walk_with_no_harness_proves_a_plain_terminal() {
+        let row = |pid: u32, ppid: u32, command: &str| {
+            let proc_row = ProcRow {
+                pid,
+                ppid,
+                state: 'S',
+                elapsed_s: 0,
+                cpu_pct: 0.0,
+                rss_kb: 0,
+                command: command.to_string(),
+            };
+            (pid, proc_row)
+        };
+        // The table skips root's rows: a real terminal's login and launchd.
+        let root_rows = |pid: u32| match pid {
+            70 => Some((1, "login".to_string())),
+            1 => Some((0, "launchd".to_string())),
+            _ => None,
+        };
+        let sandboxed = |_: u32| None;
+        let terminal = BTreeMap::from([
+            row(50, 70, "/Applications/Ghostty.app/Contents/MacOS/ghostty"),
+            row(60, 50, "-zsh"),
+        ]);
+        assert!(walk_finds_no_harness_from_table(&terminal, &root_rows, 60));
+        // A sandboxed walk loses a row: it cannot tell, so it proves nothing.
+        assert!(!walk_finds_no_harness_from_table(&terminal, &sandboxed, 60));
+        // A thread worker's shell walks through the shared codex daemon.
+        let thread_worker = BTreeMap::from([
+            row(50, 1, "/opt/bin/codex app-server --listen unix"),
+            row(60, 50, "/bin/zsh -c fno whoami"),
+        ]);
+        assert!(!walk_finds_no_harness_from_table(
+            &thread_worker,
+            &root_rows,
+            60
         ));
     }
 
