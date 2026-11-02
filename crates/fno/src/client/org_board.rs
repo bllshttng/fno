@@ -71,19 +71,19 @@ pub(crate) struct OrgBoard {
     pub(crate) keys_help: bool,
     esc: Vec<u8>,
     /// The action a key queued; the loop's kick runs it off the UI loop.
-    pub(crate) queued: Option<Queued>,
+    queued: Option<Queued>,
     /// The label of the action running now. One runs at a time.
-    pub(crate) acting: Option<String>,
+    acting: Option<String>,
     /// A peek's result, shown while its seat stays selected.
-    pub(crate) page: Option<Page>,
+    page: Option<Page>,
     /// The spawn prompt being typed, as raw bytes so UTF-8 survives.
-    pub(crate) prompt: Option<Vec<u8>>,
+    prompt: Option<Vec<u8>>,
 }
 
-pub(crate) struct Page {
-    pub(crate) key: String,
-    pub(crate) title: String,
-    pub(crate) lines: Vec<String>,
+struct Page {
+    key: String,
+    title: String,
+    lines: Vec<String>,
 }
 
 /// One frame's lines: the explorer windowed to the body height, and the
@@ -254,7 +254,7 @@ impl OrgBoard {
 
     /// `act` on the selection, ready to queue, or the refusal that names why
     /// nothing runs.
-    pub(crate) fn plan(&self, act: Act, input: &str) -> Result<Queued, String> {
+    fn plan(&self, act: Act, input: &str) -> Result<Queued, String> {
         let running = self
             .acting
             .as_ref()
