@@ -1046,7 +1046,7 @@ fn origin_session_names_where_the_node_came_from_and_how_to_reach_it() {
     assert_eq!(park.action, "resume");
     assert_eq!(park.parent_session.as_deref(), Some("s-top"));
     assert!(
-        park.command.as_deref().unwrap().ends_with("--cwd /src"),
+        park.command.as_deref().unwrap().ends_with("--cwd '/src'"),
         "resume pins the source cwd: {:?}",
         park.command
     );

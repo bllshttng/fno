@@ -189,7 +189,7 @@ function answerSection(q) {
     } catch (e) { text = String(e.message || e); }
     if (res && res.ok) {
       let receipt = {};
-      try { receipt = JSON.parse(text); } catch (e) { /* the 200 is the fact */ }
+      try { receipt = JSON.parse(text); } catch (e) { receipt = {}; }
       note.textContent = receipt.superseded ? "An earlier answer stands" : "Recorded. The row leaves Waiting on you.";
       note.className = "note ok";
       toast("Recorded");
