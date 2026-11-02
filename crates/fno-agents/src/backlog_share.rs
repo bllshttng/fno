@@ -1071,13 +1071,13 @@ fn reappend(
 ) -> Result<(), String> {
     let change = &changes[refused];
     let table = &change.table;
-    let mut pk: Vec<(i64, String)> = column_info(connection, table)?
+    let mut pk: Vec<(String, i64)> = column_info(connection, table)?
         .into_iter()
         .filter(|(_, n)| *n > 0)
         .collect();
-    pk.sort_by_key(|&(n, _)| n);
-    let node_col = pk[0].1.clone();
-    let position_col = pk[1].1.clone();
+    pk.sort_by_key(|&(_, n)| n);
+    let node_col = pk[0].0.clone();
+    let position_col = pk[1].0.clone();
     let node_at = change
         .columns
         .iter()
@@ -1163,8 +1163,9 @@ fn reappend(
     stamp_fresh(&transaction, "reappend")?;
     transaction.commit().map_err(|e| e.to_string())?;
     let was = change.new[position_at].integer().unwrap_or_default();
+    let held = node.text().unwrap_or("?");
     eprintln!(
-        "backlog-share: a peer holds {table}.{node_col} {node} at {position_col} {was} on the primary; this machine's {n} row(s) re-append at {position_col} {base}.. and the batch is sent again.",
+        "backlog-share: a peer holds {table}.{node_col} {held} at {position_col} {was} on the primary; this machine's {n} row(s) re-append at {position_col} {base}.. and the batch is sent again.",
         n = moved.len()
     );
     Ok(())
