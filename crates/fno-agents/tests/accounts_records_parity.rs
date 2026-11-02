@@ -1,12 +1,12 @@
-//! parity-stage: differential
+//! parity-stage: characterization
 //! parity-oracle: fno.adapters.providers.loader.load_providers
 //!
-//! Differential parity for `accounts::records`, the port of `model.py` and
+//! Characterization for `accounts::records`, the port of `model.py` and
 //! the read side of `loader.py`. Each `tests/golden/accounts_records/*.json`
 //! case names an op, the config layers and slot stamps to lay down, and the
 //! Python leg's answer under `expect`, captured by
-//! `accounts_records_golden_driver.py` (the case table lives there; re-run it
-//! to add a case or re-freeze). This test builds the same fixture from the
+//! `accounts_records_golden_driver.py`, the capture record now that the
+//! Python leg is gone. This test builds the same fixture from the
 //! same file, runs the Rust op, and asserts equal JSON. A refusal compares
 //! the Python headline, which the Rust `LoadError::headline` reproduces.
 
