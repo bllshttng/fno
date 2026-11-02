@@ -158,14 +158,14 @@ pub fn answer(op: &str, rest: &[String]) -> Option<i32> {
         print!("{text}");
         return Some(0);
     }
-    let table: toml::Table = TABLE.parse().unwrap_or_default();
-    let removed = format!("claim {op}");
-    let replacement = table.get(&removed)?.as_str()?;
     // Lane doors share the `claim lane-` names with retired leaves and
-    // still run.
-    if op.starts_with("lane-") {
+    // still run. The substring test keeps the per-second sweep off the parse.
+    let removed = format!("claim {op}");
+    if op.starts_with("lane-") || !TABLE.contains(&format!("\"{removed}\"")) {
         return None;
     }
+    let table: toml::Table = TABLE.parse().unwrap_or_default();
+    let replacement = table.get(&removed)?.as_str()?;
     eprintln!("Error: `fno {removed}` was removed. Use {replacement}.");
     Some(2)
 }
