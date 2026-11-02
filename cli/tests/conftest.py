@@ -202,7 +202,13 @@ def _store_keeper_absent() -> bool:
 #: listed class is covered without a second edit here.
 _NEEDS_STORE_KEEPER = (
     "tests/test_pr_watch_dispatch.py::TestDurableGrantExecution",
-    "tests/unit/test_cli_wrappers.py::test_get_one_id_never_invokes_the_binary",
+    "tests/integration/test_graph_cli.py",
+    "tests/lint/test_check_pitfalls.py::test_graduates_to_resolving_to_no_node_fails",
+    "tests/unit/plan/test_blueprint_surface_warning.py",
+    "tests/unit/plan/test_plan_sync.py",
+    "tests/unit/test_orchestrator_ready_tasks.py::TestPartitionEdgesReady",
+    "tests/unit/test_orchestrator_ready_tasks.py::TestReadyBandFilter",
+    "tests/unit/test_orchestrator_ready_tasks.py::TestReadyCli",
     "tests/unit/test_pr_closure_producer.py::test_supersede_keeps_the_human_reason",
 )
 
