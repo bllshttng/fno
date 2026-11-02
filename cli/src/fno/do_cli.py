@@ -33,35 +33,27 @@ do_pr_app = typer.Typer(
     add_completion=False,
 )
 
-
 _WATCH_LEAF = {
     "name": "watch",
     "add_help_option": False,
     "context_settings": {"allow_extra_args": True, "ignore_unknown_options": True},
-    "help": "PR-state watcher: status, install, refresh, uninstall, heal, tick.",
 }
 
 
 def _forward_watch(ctx: typer.Context) -> None:
-    """Exec, not spawn: launchd signals this pid, and the tick's SIGTERM record
-    and the in-flight read of the launchd pid both need the tick to hold it."""
+    """Exec, not spawn: launchd signals this pid, and the tick's SIGTERM record needs it."""
     import os
 
     from fno.rust_binary import find_dev_binary, resolve_binary
 
     binary = find_dev_binary() or resolve_binary()
     if binary is None:
-        typer.echo(
-            "fno do pr watch: the fno-agents binary was not found; reinstall fno, "
-            "run `fno doctor update --rust`, or set FNO_AGENTS_BIN.",
-            err=True,
-        )
+        typer.echo("fno do pr watch: fno-agents not found; set FNO_AGENTS_BIN.", err=True)
         raise typer.Exit(code=127)
     os.execv(str(binary), [str(binary), "pr-watch", *ctx.args])
 
 
 do_pr_app.command(**_WATCH_LEAF)(_forward_watch)
-# The hidden root `pr-watch` spelling: one command, so no `watch` word lands.
 pr_watch_app = typer.Typer(add_completion=False)
 pr_watch_app.command(**_WATCH_LEAF)(_forward_watch)
 
