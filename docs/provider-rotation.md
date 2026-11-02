@@ -466,9 +466,7 @@ Plain strings (no `${` prefix) pass through unchanged.
     (empty marker dir - api_key auth, no symlink)
 ```
 
-For `oauth_dir` auth, the symlink target is `credentials_source`. You create the
-symlink (see the recipes below); `staging::verify_staged` in
-`crates/fno-agents/src/accounts/staging.rs` checks it before every launch.
+For `oauth_dir` auth, the symlink target is `credentials_source`. You create the symlink, as the recipes below show. `staging::verify_staged` in `crates/fno-agents/src/accounts/staging.rs` checks it before every launch.
 
 ---
 
@@ -603,10 +601,7 @@ happened, so that question is read from the session transcript instead.
 
 - `ProviderNotFoundError` (subclass of `KeyError`) - `provider_id` not present
   in `config.accounts.records`. The record was never configured.
-- `ProviderUnavailableError` (subclass of `RuntimeError`) - the record exists
-  but cannot be used right now. For `oauth_dir`: provider is not staged (run
-  `fno config accounts register`). For `api_key`: an env reference cannot be
-  resolved (missing env var, keychain item, or file).
+- `ProviderUnavailableError` (subclass of `RuntimeError`) - the record exists but cannot be used right now. For `oauth_dir`: provider is not staged (run `fno config accounts register`). For `api_key`: an env reference cannot be resolved (missing env var, keychain item, or file).
 
 The distinction matters for callers: `ProviderNotFoundError` is a configuration
 error (stop, ask user to run `fno config accounts add`); `ProviderUnavailableError` is
@@ -741,14 +736,9 @@ intent.
 
 **dispatch_env returns wrong env for the `claude` CLI kind**
 
-For `auth: oauth_dir` + `harness: claude`, the launch env is
-`{"CLAUDE_CONFIG_DIR": "..."}`. If the returned dict contains `HOME` instead,
-the record was added with a non-`claude` CLI value. Remove and re-add with
-`--harness claude`.
+For `auth: oauth_dir` + `harness: claude`, the launch env is `{"CLAUDE_CONFIG_DIR": "..."}`. If the returned map contains `HOME` instead, the record was added with a non-`claude` CLI value. Remove and re-add with `--harness claude`.
 
-For `auth: api_key`, the launch env is the resolved `env` map.
-If `CLAUDE_CONFIG_DIR` is expected but absent, the record is using `oauth_dir`
-auth but is not staged. Run `fno config accounts register` first.
+For `auth: api_key`, the launch env is the resolved `env` map. If `CLAUDE_CONFIG_DIR` is expected but absent, the record is using `oauth_dir` auth but is not staged. Run `fno config accounts register` first.
 
 ---
 
@@ -1203,12 +1193,7 @@ is absent or stale, behavior is byte-for-byte the reactive baseline.
 
 ### Layers
 
-- **Probe** (`crates/fno-agents/src/accounts/usage_probe.rs`): `probe_detail` returns a
-  snapshot (per-window `used_pct` clamped to [0,100] + `resets_at` epoch)
-  or `None`. Claude reads its OAuth usage endpoint; codex reads the `rate_limits`
-  payload in its most recent session events. Both are `[VERIFY-AT-IMPL]` and
-  fail-open - any failure (endpoint drift, 401, timeout, missing files) is
-  `None`, never a raise, and never logs a token. Other CLIs are `None` in v1.
+- **Probe** (`crates/fno-agents/src/accounts/usage_probe.rs`): `probe_detail` returns a snapshot or nothing. A snapshot holds each window's `used_pct`, clamped to [0,100], and its `resets_at` epoch. Claude reads its OAuth usage endpoint. Codex reads the `rate_limits` payload in its most recent session events. Both fail open. Any failure (endpoint drift, 401, timeout, missing files) reads as no snapshot, never a raise, and never logs a token. Other CLIs read as no snapshot.
 - **Snapshot cache**: an additive `usage` field on `provider-runtime-state.json`
   under the existing `.update.lock` (no schema bump - the `model_locks`
   precedent). Every existing writer carries it through so a health/cursor write
