@@ -132,6 +132,11 @@ const REFUSED_DDL: &str = "CREATE TABLE IF NOT EXISTS main.backlog_refused (
   ops TEXT NOT NULL
 );";
 
+/// How many dead-letter batches the cap keeps: the newest, the only one any
+/// reader reads. One name feeds the trim's SELECT and the event's kept field,
+/// so the two cannot drift.
+const REFUSED_CAP: i64 = 1;
+
 /// The primary-side bookkeeping. `backlog_cas.n` takes only 1, so a
 /// conditional statement that matched no row fails its batch. A batch id
 /// lands once, so a resent outbox never applies twice. The seed marker exists
@@ -1310,10 +1315,10 @@ fn repair(
     // and a `backlog_refused_trimmed` event below.
     let dropped_refused: Vec<(i64, String)> = {
         let mut statement = transaction
-            .prepare(
+            .prepare(&format!(
                 "SELECT id, batch FROM backlog_refused WHERE id NOT IN
-                 (SELECT id FROM backlog_refused ORDER BY id DESC LIMIT 1)",
-            )
+                 (SELECT id FROM backlog_refused ORDER BY id DESC LIMIT {REFUSED_CAP})"
+            ))
             .map_err(|e| e.to_string())?;
         let rows = statement
             .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
@@ -1474,7 +1479,7 @@ fn announce_refused_trim(dropped: &[(i64, String)]) {
         &json!({
             "dropped_ids": dropped.iter().map(|(id, _)| id).collect::<Vec<_>>(),
             "dropped_batches": named,
-            "kept": 1,
+            "kept": REFUSED_CAP,
         }),
     );
 }
