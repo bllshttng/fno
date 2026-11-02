@@ -200,6 +200,7 @@ pub(crate) use bounded_run::{
 use bounded_run::{probe_gh_bin, run_bounded, BoundedRun, GhProbeOutcome, ReadErrorKind};
 use budget::{check_budget, BudgetTrip};
 pub(crate) use ci_checks::classify_checks_payload;
+pub(super) use ci_checks::outside_hold_only;
 use ci_checks::{awaiting_review_only, local_recovery_from_refusal};
 #[cfg(test)]
 use ci_checks::{

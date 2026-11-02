@@ -553,10 +553,18 @@ pub(crate) fn cancel_in_flight(
     // The evals gate is not CI: its row carries no run link, so left in the
     // failed set it can never read stale-attempt, and a gate red beside a
     // stale CI red would cancel the fresh rerun answering that red.
+    // An outside hold is the same class: its red is external truth the PR
+    // cannot heal, so left in the failed set it would cancel the PR's own
+    // fresh runs over a defect no commit fixes. An outside-hold-only red
+    // then reads stale (failed empty -> red_is_stale), and the wait keeps
+    // polling until the deploy clears it. A real failing check beside the
+    // hold still cancels as today.
     let rows: Vec<Value> = rows
         .into_iter()
         .filter(|row| {
-            row.get("name").and_then(Value::as_str) != Some(crate::pr_status::EVALS_GATE_CONTEXT)
+            let name = row.get("name").and_then(Value::as_str).unwrap_or("");
+            name != crate::pr_status::EVALS_GATE_CONTEXT
+                && !crate::outside_holds::is_outside_hold(name)
         })
         .collect();
     let latest = crate::check_supersession::latest_per_name(&Value::Array(rows));
@@ -1270,5 +1278,42 @@ exit 1
             row["data"].get("session_id").is_some(),
             "the row carries the session field: {row}"
         );
+    }
+
+    #[test]
+    fn an_outside_hold_red_cancels_nothing_and_reads_stale() {
+        // The filter keeps the hold row out of the failed set, so
+        // red_is_stale answers true and the wait keeps polling: no cancel
+        // POST, no journal row, no wake.
+        let dir = tempfile::tempdir().unwrap();
+        let gh = hold_stub_gh(dir.path());
+        let answer = cancel_in_flight(gh.to_str().unwrap(), dir.path(), 4254, "abc123");
+        assert!(answer.is_none(), "{answer:?}");
+    }
+
+    /// A fake gh whose only failed check names the outside hold: the wait
+    /// must read the red stale and cancel nothing.
+    fn hold_stub_gh(dir: &std::path::Path) -> std::path::PathBuf {
+        crate::write_exec_stub(
+            dir,
+            "gh",
+            r#"#!/bin/sh
+for a in "$@"; do case "$a" in
+  *check-runs*)
+    echo '{"check_runs":[
+      {"id":201,"name":"channel (fno-sh-fresh)","status":"completed","conclusion":"failure","started_at":"2026-11-01T03:00:00Z","completed_at":"2026-11-01T03:05:00Z","html_url":"https://github.com/o/r/actions/runs/301/job/1","check_suite":{"id":11}},
+      {"id":202,"name":"rust-ci","status":"in_progress","conclusion":null,"started_at":"2026-11-01T03:06:00Z","completed_at":null,"html_url":"https://github.com/o/r/actions/runs/302/job/2","check_suite":{"id":12}}]}'
+    exit 0 ;;
+  *head_sha=*)
+    echo '{"total_count":2,"workflow_runs":[{"id":301,"name":"cli-ci","status":"completed","conclusion":"failure","created_at":"2026-11-01T03:00:00Z","run_started_at":"2026-11-01T03:00:00Z"},{"id":302,"name":"rust-ci","status":"in_progress","conclusion":null,"created_at":"2026-11-01T03:06:00Z","run_started_at":"2026-11-01T03:06:00Z"}]}'
+    exit 0 ;;
+  *commits/*/status*)
+    echo '{"statuses":[]}'
+    exit 0 ;;
+esac; done
+echo '{}'
+exit 1
+"#,
+        )
     }
 }
