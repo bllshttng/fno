@@ -80,6 +80,7 @@ fn grade_exit(
     cmd.arg("-c")
         .arg(&command)
         .current_dir(workdir)
+        .env("FNO_EVALS_GRADER", "1")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
     if let Some(r) = base_ref {
