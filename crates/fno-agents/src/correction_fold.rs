@@ -122,6 +122,7 @@ pub(crate) struct FoldReceipt {
     pub(crate) files_read: u64,
     pub(crate) bytes_read: u64,
     pub(crate) rows_appended: u64,
+    pub(crate) rows_replayed: u64,
     pub(crate) rows_capped: bool,
     pub(crate) pending_files: u64,
     pub(crate) replaced: u64,
@@ -863,9 +864,14 @@ fn append_rows(
 ) -> Result<(), String> {
     for (id, envelope) in rows {
         let line = envelope.to_string();
-        let got = crate::event_store::append_envelope(journal, &line, Some(id))?;
-        if got.inserted {
-            receipt.rows_appended += 1;
+        match crate::event_store::append_envelope(journal, &line, Some(id)) {
+            Ok(got) if got.inserted => receipt.rows_appended += 1,
+            Ok(_) => {}
+            // A replayed turn re-stamps its detect-time facts, so its envelope
+            // differs from the stored one. The first write stands. Stopping
+            // here would hold this file and every older file forever.
+            Err(e) if e.contains("identity collision") => receipt.rows_replayed += 1,
+            Err(e) => return Err(e),
         }
     }
     Ok(())

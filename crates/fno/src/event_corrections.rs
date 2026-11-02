@@ -5,7 +5,7 @@
 //! about 17 to 1, so a sum would bury the signal this report exists to show.
 
 use serde_json::{json, Value};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
@@ -28,7 +28,7 @@ const HELP: &str = "Usage: fno doctor event corrections [OPTIONS]
 
 Options:
   --by <model|harness|day>    Group the rows. [default: model]
-  --since <7d|ISO-8601>       Lower timestamp bound. [default: 7d]
+  --since <7d|ISO-8601>       Lower timestamp bound. [default: 7d, or 30d with --by day]
   --source <user|agent|machine>  Print one source.
   --include-interrupt         Count interrupts, which reports exclude by default.
   --precision <file>          Print precision and a Wilson interval from a labels file.
@@ -48,9 +48,10 @@ struct Args {
 }
 
 fn parse(args: &[OsString]) -> Result<Option<Args>, String> {
+    let mut since = None;
     let mut out = Args {
         by: "model".into(),
-        since: "7d".into(),
+        since: String::new(),
         source: None,
         include_interrupt: false,
         precision: None,
@@ -72,7 +73,7 @@ fn parse(args: &[OsString]) -> Result<Option<Args>, String> {
         match flag.as_str() {
             "--help" => return Ok(None),
             "--by" => out.by = value("--by")?,
-            "--since" => out.since = value("--since")?,
+            "--since" => since = Some(value("--since")?),
             "--source" => out.source = Some(value("--source")?),
             "--precision" => out.precision = Some(PathBuf::from(value("--precision")?)),
             "--events" => out.journal = Some(PathBuf::from(value("--events")?)),
@@ -87,6 +88,7 @@ fn parse(args: &[OsString]) -> Result<Option<Args>, String> {
             out.by
         ));
     }
+    out.since = since.unwrap_or_else(|| if out.by == "day" { "30d" } else { "7d" }.to_string());
     if let Some(source) = out.source.as_deref().filter(|s| !SOURCES.contains(s)) {
         return Err(format!(
             "--source must be user, agent or machine, not {source}"
@@ -132,6 +134,8 @@ struct Tally {
     reject: u64,
     interrupt: u64,
     refused: u64,
+    unwitnessed: u64,
+    rule_versions: BTreeSet<String>,
 }
 
 impl Tally {
@@ -173,6 +177,25 @@ fn typed_turns(cache: &Path, by: &str, since_day: &str) -> BTreeMap<String, u64>
     out
 }
 
+/// The UTC day of the fold's first run, from its cache.
+fn first_run_day(cache: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(cache).ok()?;
+    let parsed = serde_json::from_str::<Value>(&text).ok()?;
+    let first_run = parsed.get("first_run_epoch").and_then(Value::as_i64)?;
+    let day = chrono::DateTime::from_timestamp(first_run, 0)?;
+    Some(day.format("%Y-%m-%d").to_string())
+}
+
+/// How much of a day the fold read after the fact. A turn older than the fold's
+/// first run is backfilled, so that run's own day is part of each.
+fn day_backfill(day: &str, first_day: &str) -> Option<&'static str> {
+    match day.cmp(first_day) {
+        std::cmp::Ordering::Less => Some("backfilled"),
+        std::cmp::Ordering::Equal => Some("part backfilled"),
+        std::cmp::Ordering::Greater => None,
+    }
+}
+
 /// The tally key names the bare model; the report names it with its basis.
 fn bare_group(group: &str) -> &str {
     group.split(" (").next().unwrap_or(group)
@@ -210,6 +233,12 @@ fn report(args: &Args, journal: &Path, cache: &Path) -> Result<Value, String> {
                 group_of(data, &args.by)
             })
             .or_default();
+        if let Some(version) = data.get("rule_version").and_then(Value::as_str) {
+            entry.rule_versions.insert(version.to_string());
+        }
+        if data.get("typed").and_then(Value::as_str) == Some("unwitnessed") {
+            entry.unwitnessed += 1;
+        }
         match data.get("kind").and_then(Value::as_str) {
             Some("correct") => entry.correct += 1,
             Some("reject") => entry.reject += 1,
@@ -224,6 +253,7 @@ fn report(args: &Args, journal: &Path, cache: &Path) -> Result<Value, String> {
     let turns = typed_turns(cache, &args.by, &since_day);
     // A day with typed turns and no correction is a rate of zero, not a gap.
     let by_day = args.by == "day";
+    let first_day = if by_day { first_run_day(cache) } else { None };
     if by_day {
         let user = blocks.entry("user".to_string()).or_default();
         for day in turns.keys() {
@@ -245,7 +275,12 @@ fn report(args: &Args, journal: &Path, cache: &Path) -> Result<Value, String> {
                 let mut row = json!({
                     "group": group, "count": count, "correct": t.correct,
                     "reject": t.reject, "refused": t.refused,
+                    "rule_versions": t.rule_versions,
                 });
+                if by_day {
+                    row["backfill"] =
+                        json!(first_day.as_deref().and_then(|d| day_backfill(group, d)));
+                }
                 if args.include_interrupt {
                     row["interrupt"] = json!(t.interrupt);
                 }
@@ -253,6 +288,7 @@ fn report(args: &Args, journal: &Path, cache: &Path) -> Result<Value, String> {
                 if source == "user" {
                     let typed = turns.get(bare_group(group)).copied().unwrap_or(0);
                     row["typed_turns"] = json!(typed);
+                    row["unwitnessed"] = json!(t.unwitnessed);
                     row["rate"] = if typed > 0 {
                         json!(t.correct.saturating_add(t.reject) as f64 / typed as f64)
                     } else {
@@ -284,8 +320,28 @@ fn print_report(value: &Value) {
                 .and_then(Value::as_f64)
                 .map(|r| format!(" rate {r:.3} over {} typed turns", g["typed_turns"]))
                 .unwrap_or_default();
+            let unwitnessed = match g.get("unwitnessed").and_then(Value::as_u64) {
+                Some(n) if n > 0 => format!(" {n} unwitnessed"),
+                _ => String::new(),
+            };
+            let versions: Vec<&str> = g["rule_versions"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .collect();
+            let versions = if versions.is_empty() {
+                String::new()
+            } else {
+                format!(" rule {}", versions.join(","))
+            };
+            let backfill = g
+                .get("backfill")
+                .and_then(Value::as_str)
+                .map(|b| format!(" [{b}]"))
+                .unwrap_or_default();
             println!(
-                "  {:<40} {:>6}{rate}",
+                "  {:<40} {:>6}{rate}{unwitnessed}{versions}{backfill}",
                 g["group"].as_str().unwrap_or(""),
                 g["count"]
             );
@@ -433,18 +489,31 @@ mod tests {
         let key = format!("{today}|claude|m");
         std::fs::write(
             &cache,
-            json!({"typed_turns": {key: 8, "2999-01-01|claude|m": 4}}).to_string(),
+            json!({"first_run_epoch": chrono::Utc::now().timestamp(),
+                "typed_turns": {key: 8, "2999-01-01|claude|m": 4, "2000-01-01|claude|m": 3}})
+            .to_string(),
         )
         .unwrap();
         let args = parse(&["--by".into(), "day".into()]).unwrap().unwrap();
+        assert_eq!(args.since, "30d");
         let value = report(&args, &journal, &cache).unwrap();
         let row = &value["blocks"]["user"][0];
         assert_eq!(row["group"], today.as_str());
         assert_eq!(row["count"], 2);
         assert_eq!(row["rate"], 0.25);
+        assert_eq!(row["backfill"], "part backfilled");
+        assert_eq!(row["rule_versions"], json!(["v1"]));
         let quiet = &value["blocks"]["user"][1];
         assert_eq!(quiet["group"], "2999-01-01");
         assert_eq!(quiet["rate"], 0.0);
+        assert!(quiet["backfill"].is_null());
+        let args = parse(&["--by=day".into(), "--since=999999d".into()])
+            .unwrap()
+            .unwrap();
+        let value = report(&args, &journal, &cache).unwrap();
+        let old = &value["blocks"]["user"][0];
+        assert_eq!(old["group"], "2000-01-01");
+        assert_eq!(old["backfill"], "backfilled");
     }
 
     #[test]

@@ -14,9 +14,11 @@ Each time someone corrects a working agent, the daemon writes one `agent_correct
 
 `correction_fold.rs` is one daemon arm with a 60 s floor, off the core loop. It reads every harness through its `TranscriptSource`, at most 64 MiB and 200 rows a tick, newest files first. Cursors live in `<state>/cache/corrections/cursors.json`, beside the typed-turn tally that is the user rate's denominator. A held lock skips the tick, and a down daemon catches up from its cursor. A row's `ts` is the turn's own time.
 
-The event id is `corr:` plus the corpus `row_id` for the same turn. The store ignores a replay, and a reader can join an event to its corpus row.
+The event id is `corr:` plus the corpus `row_id` for the same turn, so a reader can join an event to its corpus row. A replay can carry newer detect-time stamps than the stored row. The first write stands, and the fold reads on.
 
-A turn older than the arm's first run reads `backfilled: true`, with its detect-time facts unmeasured. The backfill is the same path, spread over ticks.
+A turn older than the arm's first run reads `backfilled: true`, with its detect-time facts unmeasured. The backfill is the same path, spread over ticks: at 64 MiB a tick, a month of transcripts takes hours. The arm reads newest files first, so the report's history grows backward. `--by day` labels each day `[backfilled]` or `[part backfilled]`, and it defaults to 30 days.
+
+Old typed turns can predate the witness rows. Such a turn reads `typed: unwitnessed`, and the report prints that count for the day. The denominator includes those turns, so a mux-typed turn can inflate an old day's typed count. Read a backfilled day as a trend beside other backfilled days, within one printed rule version.
 
 ## Served readings
 
