@@ -825,7 +825,7 @@ fn one_candidate(
                 );
                 *skipped += 1;
             } else {
-                let mut ok = false;
+                let ok;
                 let mut refused = false;
                 let mut route = None;
                 if is_merge {
