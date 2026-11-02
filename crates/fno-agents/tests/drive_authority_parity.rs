@@ -204,6 +204,7 @@ fn run_binary(home: &Path, args: &[&str]) -> (i32, String, String) {
     let out = Command::new(env!("CARGO_BIN_EXE_fno-agents"))
         .args(["drive-authority"].iter().chain(args.iter()))
         .env("FNO_AGENTS_HOME", home)
+        .envs(fno_agents::test_run::self_owner_env())
         .output()
         .expect("fno-agents binary runs");
     (
