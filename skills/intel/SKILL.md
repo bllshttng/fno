@@ -34,17 +34,20 @@ The fold names its populations, and the report keeps them apart. Every number sa
    ```json
    {
      "key": {"session": "...", "mtime": 0, "size": 0},
+     "question_key": "<the fold's question_key>",
+     "friction": "<category>",
      "node": "x-...",
      "goal": "one line: what the operator was driving at",
      "outcome": "shipped | blocked | abandoned | research",
      "satisfaction": "satisfied | mixed | frustrated",
-     "friction": "<category>",
      "corrections": ["verbatim operator correction", "..."],
      "summaries": {"<question key>": "one line, at most 30 words, that answers the question for this session"}
    }
    ```
 
    Friction categories (keep to this set so downstream scorers can key on it): `misunderstood_instruction`, `repeated_correction`, `wrong_assumption`, `missing_context`, `workflow_friction`, `tool_failure`.
+
+   A cached facet needs both the key and the question to match. A judgment given under one question never judges another question's sample. A facet from another question (or a pre-question facet) reads `stale question` under `categories.unjudged`. Re-judge the session's friction for the current question and update the facet. Keep the other questions' summary lines.
 
 3. Cluster the sampled sessions' summary lines into 3 to 8 categories that answer the question. Each category carries a name, a one-line description, and at most 5 optional subcategories. Every judged session goes into exactly one category. Use `Other` for a session that fit none. Write `~/.fno/intel/runs/<date>-<question key>.json`, mode 0600, in this schema:
 

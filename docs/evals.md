@@ -43,11 +43,19 @@ Success criteria must be **mechanical** (develop-tests discipline): a task with 
 
 | Command | What it does |
 |---|---|
-| `fno doctor evals run [--task ID] [--tier T] [--repeat K] [--provider P] [--variant NAME] [--ref REF] [--lane NAME] [--cohort ID]` | Run bank tasks in disposable worktrees, grade mechanically, append one history line per task-run. Confirms above 20 total runs (`--yes` skips). `--variant v1 --ref REF` scores a change (see Variants). `--lane NAME --cohort ID` qualifies a model lane (see Lanes). |
-| `fno doctor evals report [--since N] [--graduate] [--json] [--compare vN]` | Fold history: per-tier pass rates, pass@1, pass^k, flake list, regression alarm (exit 4 on alarm). `--graduate` lists eligible capability tasks. `--compare vN` scores a variant against baseline. |
+| `fno doctor evals run [--task ID[,ID]] [--tier T] [--tag TAG] [--repeat K] [--workers N] [--provider P] [--variant NAME] [--ref REF] [--lane NAME] [--cohort ID] [--overlay-fixtures REF]` | Run bank tasks in disposable worktrees, grade mechanically, append one history line per task-run. Confirms above 20 total runs (`--yes` skips). `--variant v1 --ref REF` scores a change (see Variants). `--lane NAME --cohort ID` qualifies a model lane (see Lanes). `--workers N` runs N tasks at once. |
+| `fno doctor evals report [--since N] [--graduate] [--json]` | Fold history: per-tier pass rates, pass@1, pass^k, flake list, regression alarm (exit 4 on alarm). `--graduate` lists eligible capability tasks. |
+| `fno doctor evals report --compare A --to B [--repeats N] [--json]` | Compare two runs, task by task. See Variants. |
+| `fno doctor evals report --by-failure-type [--repeats N] [--json]` | Rank the named failure types by cost, then by failing goldens. See Failure types. |
+| `fno doctor evals report --check-metrics [--json]` | Run each golden's grader on its labelled cases. Exit 1 when a type is not proved. No model spend. See Failure types. |
+| `fno-agents evals candidates [--limit N] [--source KIND] [--json]` | Rank real failures to label as goldens. See Goldens. Read-only. |
+| `fno-agents evals drafts` | Run the correction-to-draft pass now and print new, open and expired counts. The daemon runs it daily. See Goldens. |
+| `fno-agents intel --plans-ladder [--teacher-url URL] [--hosted NAME=COMMAND]` | Score the fixed labelled set rung by rung and stop at the first pass. See Plan premise labels. |
+| `fno-agents intel --plans [--limit N] [--dry-run]` | Label plan premises with the winning rung, or refuse and print each score. See Plan premise labels. |
 | `fno doctor evals report --climb --baseline C --trial C [--cohorts-yaml P] [--stage V --trial-lane L] [--prices JSON] [--json]` | The climb verdict over two cohorts against the declared split: `underpowered`, `regression`, `overfit`, `unmeasured_cost`, `propose`, `hold`. On `propose` with `--stage`/`--trial-lane` it prints a one-step accept line (`fno config set` for the lanes list plus `on_exhausted degrade`); without them the verdict alone. See the Climb round recipe in [lane-qualification](architecture/lane-qualification.md#climb-round). |
 | `fno doctor evals trend` | Score the recent window against the prior one, per task (exit 4 when a regression-tier task dropped). See Trend. |
 | `fno doctor evals macro [--since 30d] [--topic TYPE:LABEL] [--window 20] [--all] [--json] [--events PATH]` | Fold existing event journals into a recurring failure-pattern leaderboard, or drill into one pattern. |
+| `fno-agents evals gate-retry <sha>` | Queue a head again for the change gate. See The change gate. |
 | `fno doctor evals graduate <id>` | Retag a capability task's YAML to regression. |
 | `fno doctor evals grade --brief B --golden G` | Grade a research brief against a golden doc (three mechanical assertions); exit 0 green. |
 
@@ -68,9 +76,81 @@ The bank scores whether the pipeline passes. The variant axis scores whether a C
 A variant is a **git ref of this repository**. Every prompt, skill, and project config fno controls is a tracked file. So "the pipeline with change Y" is "this repo at ref Y". `fno doctor evals run --variant v1 --ref my-branch` checks the disposable worktree out at `my-branch` instead of the fixture ref. The diff lives in git. The history row stores the resolved sha in `bank_rev`. Run `git diff <baseline_rev> <variant_rev>` to see the change a score move belongs to. Global config under `~/.fno` is not part of a variant. A config experiment commits to the ref or it is not a variant.
 
 - **Names.** A variant is named exactly `baseline` or `v<N>` (`v1`, `v2`, ...). Anything else is refused before the run starts, on both the runner and the CLI. `--ref` without a non-baseline `--variant`, or the reverse, is also refused. Each history row carries a `variant` column naming its round.
-- **Every variant runs every case.** Comparability needs the shared denominator. A variant that skipped a task lands in the compare view's `missing in vN` list. It cannot silently shrink the scored set.
+- **Every variant runs every case.** Comparability needs the shared denominator. A variant that skipped a task reads `error` in the compare view. It cannot silently shrink the scored set.
 - **The default report is baseline-only.** A failing `v1` never drags the baseline pass rate down. It never fires the regression alarm in doctor and triage health. Rows written before the variant axis carry no `variant` key and read as baseline.
-- **Compare.** `fno doctor evals report --compare v1` prints one line per task: baseline p@1 (n), the variant's p@1 (n), the delta, and a verdict. The verdict is `improved`, `regressed`, or `unchanged`. Then come the missing-task lists and the `git diff` line. `--json` emits the same as a dict.
+- **Compare.** `fno doctor evals report --compare baseline --to v1` compares two sides. A side names a cohort, else a variant. A name that no row carries refuses with exit 2. Each task gets one status per side from its newest `--repeats` grades (default 3). The statuses are `always_pass`, `always_fail` and `flaky`. With fewer grades than repeats, a task reads `error`. Only a scored grade counts, so a plumbing row is never a pass. The report prints Fixed, Regressions (always pass to always fail), Now flaky (always pass to flaky), Still failing, and Errors. Counts and the pass rate come last, because a rate hides which behaviour moved. It exits 1 on a regression, or on an error for a task that had grades on side A. A move to flaky exits 0 and is listed. `--json` emits the same fold. Each side's line names the revs it read, so `git diff` of those revs shows the change.
+- **Flake sort.** Each attempt records `tree_hash`, the git tree of what the worker left. The runner reads it before grading, on a temporary index. Compare marks a flaky status with its noise. `grader_noise` means one tree got both grades, so read the grader. `agent_noise` means the trees differ, so the agent did different work. `unknown` means a row has no hash and no tree shows both grades. Two different trees that are both right still read `agent_noise`. That blocks nothing. Ignored files are not in the hash.
+
+## Backdated cohorts
+
+A past session never answered a golden prompt, so it cannot grade one. Two honest reads cover the past instead.
+
+`fno doctor event corrections --by day --since 28d` prints correction rates per day from real transcripts. It costs no model call. A day with typed turns and no correction reads a rate of 0.
+
+`fno doctor evals run --tag golden --variant v1 --ref <sha> --overlay-fixtures <newer ref> --lane <lane> --cohort gate-backdate-<date>-<sha8> --repeat 1` runs today's goldens on an older tree. An older tree has no golden fixtures, so the flag commits `evals/fixtures/golden` from the newer ref on top of the checkout. Pass `--bank` to read today's tasks. The bank itself stays out of the tree. Each golden states its expected answer, and a worker told to read the repo can read it. Each row records `overlay_rev`. A row without `overlay_rev` ran with no overlay: an older `fno-agents` ignores the flag, and a fixture golden then fails on its missing fixture.
+
+The cohort names a tree, never a past result. The model is today's, so the cohort says what today's model does with that day's repo. A claude golden worker loads no plugin (see [Goldens](#goldens)). The installed `fno` stays today's. The `gate-` prefix counts the run against `evals.gate.daily_usd`.
+
+## Goldens
+
+A golden is a bank task with a `golden:` block that states the real case it came from and the rule it holds. A failure then names what broke, not only a task id.
+
+```yaml
+golden:
+  source: {kind: correction, ref: "e49583f3:repeated_correction"}
+  quote: "MUCH less comments please"
+  expected: "The function, with at most one comment line and no node id."
+  rule: "AGENTS.md principle 6: match the file's comment density."
+  failure_type: comment-noise
+  cost: rework
+  outcome: failed
+```
+
+A block with no `source`, `expected`, `rule`, `failure_type` or `outcome` refuses at load and names the task and file. `outcome` says what the source case did (`failed` or `passed`). It is history, not a current result. The current result comes from a run.
+
+`fno-agents evals candidates` ranks the pool to label from. It reads the rule-labelled reactions in `~/.fno/evals/decision/v1`, typed `agent_corrected` events, S2 rows in `corrections.log`, and `Revert` commits. It also reads plans by superseded status and caused commits, and plan premises that a later record contradicts. It prints a score, kind, reference, and one scrubbed quote. It writes nothing and calls no model. Every row is a candidate for a person to read. A rejected reaction is often a refused permission prompt, so the S2 rows are the stronger source.
+
+A daily daemon pass turns each new typed correction into one draft in `~/.fno/evals/golden-drafts/`. It reads `agent_corrected` events after a watermark and skips interrupts, which carry no words. Two corrections with the same words are one case. A draft has empty `prompt`, `grade`, `expected`, `rule` and `failure_type` fields. A person fills them and moves the file to `evals/bank`, because an auto-committed bad answer holds merges with nobody having read it. A correction with no fixture shape stays a draft. A draft expires after 30 days, the pass counts it, and its case never returns. `fno-agents evals drafts` prints the counts.
+
+A golden's rule must be findable in the repo, because a worker reads only the repo and the prompt. It must have a mechanical grade: an answer the grader reads from a decision file, or the work product itself.
+
+A golden asks for recall, never a choice among listed options. On a tree with no AGENTS.md, the old bank passed 25 of 25. In 17 of those runs the worker read no answer key, and each one still passed. So the prompt asks for the exact command or action, and the grader rejects the lure from the source case.
+
+A claude golden worker reads its rules from the tree under test, and from nowhere else. Other bank tasks keep the plugin and a linked worktree, because some invoke its skills.
+
+The tree is a new git repo with one commit, built from `git archive` of the ref under `$TMPDIR/fno-evals`. It has no link to the real repo. It has no parent commit, because a parent holds the rules and the answer keys one `git show` away. It sits outside `$HOME`, so no `~/.claude/CLAUDE.md` loads from an ancestor path. A `TMPDIR` inside `$HOME` refuses as a fixture failure before any worker starts. It leaves out `evals/bank` and `evals/fixtures/metrics`, which hold the answers. Workers did read these: 20 of 101 kept transcripts touched one.
+
+The runner passes `--setting-sources project --strict-mcp-config` and a `--settings` read fence, and sets `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`, `GIT_CONFIG_GLOBAL=/dev/null` and `FNO_EVALS_SEALED=1`. The last one drops the spawn's state grants. The fence blocks file-tool reads outside the working directory, denies the file tools all of `$HOME`, and denies `WebFetch` and `WebSearch`. It runs Bash in the OS sandbox with `$HOME` and the sibling trees unreadable and no network. A canary confirmed each door. `git`, `cat` and writes work in the tree. The real checkout, `~/.fno`, `~/.claude`, a sibling tree and `github.com` all fail. A setting in the tree's own `.claude/settings.json` did not lift the block. `RIPGREP_CONFIG_PATH` is empty, because ripgrep exits on an unreadable config. `gh` fails inside the fence, so a golden cannot ask for a live GitHub read. No plugin loads, not even the tree's, so a worker must open a skill's file to read it. The spawn still adds its relay-compression block to the prompt.
+
+Each row records `obs.worker_sealed`. It reads true only with both the sealed tree and the fence. `obs.worker_sealed` is the divider between cohorts. A row without it ran with the real checkout in reach, so it is not comparable to a sealed row. On 2026-11-01, before the seal, a fixtures-only tree beat head in 2 of 3 pairs at repeat 1. Other harnesses have no such flags. They get the sealed tree, no fence and today's plugin, so their rows read false.
+
+A failed trial keeps its claude transcript for 14 days, and `obs.kept_transcript` names the directory. A passed trial's transcript is deleted.
+
+A failure that needs long session state or fleet state cannot reduce to this shape. It stays out of the bank, and the scorecard holds that ground.
+
+## The change gate
+
+The daemon checks every open PR that changes behaviour, and posts one commit status, `evals/gate`. CI does not run this: CI has no worker lanes, and a bank run needs a spawn-capable machine. Each `evals-arm` tick runs one pass. The tick waits on no run, and a later tick reads the history rows, so a daemon restart loses nothing.
+
+- **The main run.** Once a day, the tick runs every `golden` task at `origin/main`. It uses 3 repeats and 2 workers, as cohort `gate-main-<date>-<hash>`. The hash covers `routing.models` and `agents.profiles`, so a route change starts a new run at once. Each finished cohort with a grade becomes the baseline, and it is compared to the one before. A regression files one node, keyed like the scheduled bank's. The compare lands in `<history dir>/evals-gate/compare-<cohort>.json`. Read it again with `fno doctor evals report --compare <older> --to <newer>`. No person starts these runs. Two nights after install, the first compare exists. A run that writes no grade does not spend the day. The tick tries again an hour later, up to 3 tries a cohort. `state.json` keeps the cause under `main_failure`. Each leg's output lands in `<history dir>/evals-gate/main.log` or `head.log`, replaced at each launch.
+- **The head run.** This covers an open PR from this repository. Its diff must touch `skills/`, `agents/`, `hooks/`, `commands/` or `evals/bank/`. It gets a pending status. Then the daemon runs its `gate` goldens at that head, as cohort `gate-head-<sha>`. It uses 3 repeats and 4 workers, one PR at a time. A newer head kills the older run. A PR from a fork never runs, because its hooks and skills run on this machine.
+- **The task set.** A head runs the tasks tagged `gate`, with two exceptions. The gate reads the task set at the ref being tested, through a detached worktree. The daemon checkout can sit behind that ref. So a golden the ref adds runs at once, before the checkout moves. A task with no file at that head stays out, because the head branched before it landed. A task whose baseline median is over 180 s stays out too.
+- **The fail rule.** Red means one of two things. A task went from always pass to always fail over 3 runs. Or a task with baseline grades has no result. A move to flaky is green and lists the task. A task with no baseline is green and counted. A golden whose failure type is unproved cannot turn the gate red.
+- **The limit.** A head run has 20 minutes. Past that, the daemon kills the run, and the status is red. It names the cause and the clearing command, `fno-agents evals gate-retry <sha>`. That command also clears any other no-result status.
+- **The budget.** `evals.gate.daily_usd` (default 15) caps the day's estimated spend, at 0.04 USD an attempt. Over the cap, a head is red and names the key. It runs again on the next UTC day. Set the key to 0 to turn the gate off. `evals.gate.lane` (default `zai-flash`) names the lane. Both keys live in `config.toml`.
+- **The merge door.** A red status turns `fno do pr status` red, so `fno do pr merge` holds. Pending holds it too. The ruleset does not require the context, because that holds every PR on one machine. So a daemon that never saw a head posts nothing, and that head can merge. `<history dir>/evals-gate/state.json` holds the last pass's note.
+- **First install.** Until the first main run gives a baseline, the head run posts nothing. A fresh install holds no PR on a check it cannot do yet.
+## Failure types
+
+`evals/bank/failure-types.yaml` names each type and its cost tag, and `cost_order` ranks the tags. A golden names its type in `failure_type`. The label `none` marks a golden with a passing source case. It is not a type, and it can always fail a gate.
+
+`report --by-failure-type` prints each type in cost order, then by failing goldens. If a golden's newest `--repeats` baseline grades read `always_fail` or `flaky`, the golden counts as failing. With too few grades it counts as no result.
+
+A metric proves a grader before anyone trusts it. Each golden has `evals/fixtures/metrics/<id>.yaml`, with `good` and `bad` cases written as file contents. `report --check-metrics` writes each case to a temporary directory and runs the golden's own `grade:` list there. A proved type has at least 3 good and 3 bad cases per golden. Every golden passes its good cases and fails its bad cases. The line for an unproved type names the case that broke it.
+
+A golden whose type is not proved lists under Unproved in a compare, and it cannot make the compare exit 1. With no readable catalog, nothing reads unproved, so a regression still fails.
+
+No type needs a judge grader today, because each golden grades a decision file or a work product. `macro` patterns stay out of this list. They are session and fleet states such as `termination:NoProgress`, which a fixture cannot reach.
 
 ## Trend
 
@@ -78,7 +158,7 @@ The variant axis answers "did this change help?". The trend axis answers "are we
 
 Where the history lives: `~/.fno/history/evals-history.jsonl` (`config.paths.evals_history`), one append-only line per task-run, one writer. It is not a git artifact: a bank run needs a spawn-capable machine, and rows are per machine. It is not a second journal either. The `evals_scheduled_run` event is the receipt that a run happened. The history rows are what it graded.
 
-A window is `evals.stale_days` days (default 7) - the same length every health surface already calls "recent". `fno doctor evals trend` scores the recent window `(now - W, now]` against the prior window `(now - 2W, now - W]`, per task, with the same improved/regressed/unchanged verdicts the variant compare prints. Tasks present in only one window land in the missing lists with no verdict. `regressed` names regression-tier tasks whose verdict is `regressed`, and drives exit 4.
+A window is `evals.stale_days` days (default 7) - the same length every health surface already calls "recent". `fno doctor evals trend` scores the recent window `(now - W, now]` against the prior window `(now - 2W, now - W]`, per task, with `improved`, `regressed` or `unchanged` verdicts. Tasks present in only one window land in the missing lists with no verdict. `regressed` names regression-tier tasks whose verdict is `regressed`, and drives exit 4.
 
 The default report's regression alarm reads the recent window too. A 50-day-old flake fixed three minutes later no longer holds exit 4 open. `tiers`, `tasks` and `flakes` stay the all-rows long view. `fno doctor` prints `evals REGRESSING - <ids> dropped against the prior <W>d window`, and `fno backlog triage health` appends ` REGRESSED <n>` to its evals line.
 
@@ -88,9 +168,9 @@ An **attempt** is one planned execution of a (task, repeat) slot. A **grade** is
 
 Every attempt persists as one history row. The row carries a unique `attempt_id` and an `obs` block of structured observations: fixture prepared, worker started, grader ran, grader result. The `fno-agents evals-attempt` door classifies each row from those observations alone. The verdicts:
 
-- `graded` - a valid task grade, pass or fail
+- `graded` - a valid task grade, pass or fail. A stall is a worker that started and ran out its budget. It grades as a fail with no grader run, and it does not retry. Spawn exit 124 is a stall. If exit 12 says the run timed out, it is a stall too. A registry failure before launch also uses 12.
 - `infrastructure` - the fixture never prepared (retryable)
-- `unavailable` - the worker was lost: spawn refused, timeout, cancellation, or the gate (retryable)
+- `unavailable` - the worker was lost: spawn refused, cancellation, or the gate (retryable)
 - `ungraded` - the worker ran but produced no grader result (retryable)
 - `legacy` - no structured evidence
 
@@ -105,7 +185,7 @@ The report never lets a plumbing failure dilute the headline. A modern task's `p
 - `fno doctor evals export --out FILE` writes ONLY train-cohort rows (tagged `role: train`) for prompt tuning. It refuses without a declared, valid, bank-current split. Held-out prompts and trajectories never enter a tuning view.
 - `fno doctor evals qualify` prints the allowed aggregate projection for the qualification cohort: coverage, passes over valid grades, attempt breakdown, and `wrong_rev`/`legacy` exclusions. A missing split, an empty qualification list, or a stale pin reports `{"qualified": false, "reason": ...}` honestly. It never prints a held-out prompt, trace, or per-attempt row.
 
-## Run cadence and demand
+## Lanes
 
 A **lane** is a NAME joined against the existing `config.routing.models` inventory (harness, model, effort, route, account). `agents.profiles.*.lanes` already references these same rows. This is never a second model/effort enum. An unknown lane name refuses and lists the declared lanes. A lane that config never declared cannot be requested.
 
@@ -122,6 +202,20 @@ Treat `unverified` as "probably ran as requested but not independently checked",
 ## The cohort comparison report
 
 `fno doctor evals report --by-cohort [--prices <manifest.json's table>]` folds the history by `experiment_id`. One row per cohort lists attempts, graded, scored (the rows the rate reads), accepted (scored and passed), the pass rate, its 95% Wilson interval, and the `lane_status` counts. Exclusions count by reason: substituted, unavailable, infrastructure, ungraded, contaminated via the row's `excluded_reason`. The row also carries median wall time, tokens, and dollars per accepted change. Cost reads `unmeasured` unless every scored row carries usage and a complete price line (input and output rates, plus a cache rate for any cache tokens the row carries) for its model. A price line missing a rate the usage needs reads as no price line. It never prints a partial sum. `--json` prints the same fold. Rows without lane evidence count under `(no cohort)` and can never join a scored cohort.
+
+## Comparing two lanes
+
+`fno doctor evals report --compare <glm> --to <opus> --prices <table>` runs the compare on the rows both lanes hold for the same goldens. Each side names its excluded rows by task, and `substituted` and `account-dropped` rows stay unscored. Each side prints dollars per accepted result, or `unmeasured` under the cohort report's cost rule. `evals/harness-fit/manifest.json` holds the price table.
+
+## Plan premise labels
+
+A checkable plan sentence is a Context, Why or audit line that names a path or symbol in backticks. `fno-agents intel --plans` pairs each one with the later records on its node: rulings, notes and the closing note. A ruling or note counts only from the plan's day on, and a wave row is never a record. It keeps the newest 10 records per plan. A classifier labels each pair as supports, contradicts or unrelated. Rows land in `~/.fno/evals/plan-labels/rows.jsonl`, and a contradicted premise becomes a candidate, never a golden by itself. A row's `overruled_by` reads only a mechanical fact: a later ruling on the node, a revert, or a supersede.
+
+No rung labels plans until it passes a fixed set of 60 labelled pairs in `~/.fno/evals/plan-labels/ladder-set.jsonl`, 20 per label. Two models label blind, and the set keeps only pairs they agree on. Each row reads `person_read: false` until the user checks it, so a model-labelled set never opens a hosted rung. Agreed labels can share an error, so the user also reads a sample of agreed pairs. Contradicts is rare: 28 agreed pairs of 1,340 labelled, most from pools picked for correction words, so a random sample cannot fill that label. `--dry-run` prints candidate pairs for that set, and calls no model. A rung passes at 0.80 balanced with contradicts recall of 0.70 or more. `--plans-ladder` scores fnod first, then tuned kev-9b at `--teacher-url`, and stops at the first pass. The set never trains a model.
+
+Data leaving the machine: fnod and kev-9b stay on loopback, and any other address refuses. A hosted rung sends plan text to a vendor, and a treg route adds treg as a second party. A `--hosted NAME=COMMAND` rung needs two local failed scores, a clean scrub on each pair and `person_read: true` on each pair. Without all three, the run refuses before any call. The command takes a pair's JSON file as its last argument and prints `{"label": ..., "dollars": ...}`. A regex scrub misses third-party and customer names, which is why a person reads each pair. A hosted winner still refuses `--plans`, because the full pass sends far more text. That pass needs its own user ruling, with the per-pair price and the text count stated.
+
+State: these files sit in the `evals/` folder the corpus already uses, and they add no top-level folder. Drafts expire after 30 days. `.seen` and the label files stay.
 
 ## Legacy attribution note
 

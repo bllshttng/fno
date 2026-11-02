@@ -6,6 +6,9 @@
 # "Operator corrections" lines end in #agent-correction and carry the
 # correction text in double quotes plus a signal=<category> pair.
 #
+# Golden drafts and evals candidates read the daemon's agent_corrected events,
+# so they do not wait on this path. Only an intel report feeds it.
+#
 # Tracks a watermark via a content hash so re-runs do not double-ingest.
 # Watermark file: ~/.fno/logs/corrections.log.wm (line-delimited, one hash per line).
 #

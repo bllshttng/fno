@@ -121,19 +121,26 @@ _eval_sweep_run_stages() {
     return 0
 }
 
-# _eval_sweep_paused <fno_cmd>
+# _eval_sweep_paused <fno_cmd> <log>
 # True (0) when the loops kill switch is active, so the fire is skipped. The
 # eval sweep IS loop activity, so `fno do loops pause-all` must stop it. Fail
-# CLOSED: any output that does not begin with "not paused" / "expired" (a
-# corrupt or unreadable state included) is treated as paused (Claude's
-# Discretion 2 - single source of truth via the CLI, fail-closed on ambiguity).
+# CLOSED: a failed or unrecognized read also skips the fire, but it writes a
+# line to <log>. A broken read that looks like a pause stops the sweep with
+# no trace, and the stamp never moves to show it.
 _eval_sweep_paused() {
-    local fno_cmd="$1" status
-    status="$("$fno_cmd" do loops status 2>/dev/null)" || return 0
-    case "$status" in
-        "not paused"* | "expired"*) return 1 ;;
-        *) return 0 ;;
-    esac
+    local fno_cmd="$1" log="$2" status rc=0
+    mkdir -p "$(dirname "$log")" 2>/dev/null || true
+    _eval_sweep_trim_log "$log"
+    status="$("$fno_cmd" do loops status 2>>"$log")" || rc=$?
+    if (( rc == 0 )); then
+        case "$status" in
+            "not paused"* | "expired"*) return 1 ;;
+            "paused by"*) return 0 ;;
+        esac
+    fi
+    printf '[eval-sweep] %s pause read broken, sweep skipped: fno do loops status rc=%s output=%q\n' \
+        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$rc" "$status" >> "$log" 2>/dev/null
+    return 0
 }
 
 # _eval_sweep_try_claim <fno_cmd> <key> <holder>
@@ -187,7 +194,8 @@ eval_sweep_maybe_fire() {
 
     # Honor the pause-all kill switch (fail-closed). Do NOT claim the stamp when
     # paused: an unpause should let the next session fire, not wait a full window.
-    _eval_sweep_paused "$fno_cmd" && return 0
+    local log="$canonical/.fno/logs/eval-sweep.log"
+    _eval_sweep_paused "$fno_cmd" "$log" && return 0
 
     # Singleton claim closes the burst race the stamp alone cannot (two sessions
     # starting in the same instant both saw an old stamp). Acquire BEFORE writing
@@ -204,7 +212,6 @@ eval_sweep_maybe_fire() {
     # Claim the throttle window (canonical stamp) so parallel callers see it fresh.
     : > "$stamp" 2>/dev/null || touch "$stamp" 2>/dev/null || true
 
-    local log="$canonical/.fno/logs/eval-sweep.log"
     # Detach fully. All stage logic lives in _eval_sweep_run_stages (bounded,
     # logged, claim-releasing); the wrapper re-sources this lib to reach it.
     nohup bash -c '
