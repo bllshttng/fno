@@ -88,7 +88,7 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
     "plan": ("fno.plan:plan_app", "Plan frontmatter stamping (in-package)", {"hidden": True}),
     "lint": ("fno.lint_cli:lint", "Repository lint checks", {"hidden": True}),
     "bundle": (
-        "fno.doctor_forward:bundle_signpost",
+        "fno.doctor_foreign:bundle_signpost",
         "Skill bundle build + lint; moved to `fno doctor bundle`.",
         {"hidden": True},
     ),
@@ -146,8 +146,8 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
         {"hidden": True},
     ),
     "doctor": (
-        "fno.doctor_forward:doctor_app",
-        "Foreign doctor leaves (test, event, evals, lint, harness); the family's own surfaces are native.",
+        "fno.doctor_foreign:doctor_app",
+        "Foreign doctor leaves (evals, lint); the family's own surfaces are native.",
         {},
     ),
     "update": (
