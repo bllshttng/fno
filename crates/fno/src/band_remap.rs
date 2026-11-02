@@ -38,7 +38,7 @@ const BANDS: [Band; 2] = [
     Band {
         bg: [(0x37, 0x37, 0x37), (0x44, 0x44, 0x44)],
         text: (0xf7, 0xf7, 0xf7),
-        code: (0xb1, 0xb9, 0xf9),
+        code: (0xdd, 0xe1, 0xff),
     },
     // Footnote Superscript: white band on a dark ground; text is
     // Superscript's ground.
