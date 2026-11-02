@@ -836,10 +836,18 @@ mod tests {
     fn a_follower_serves_the_peers_row_until_it_is_two_ttls_old() {
         let primary = crate::store_remote::test_primary::start();
         let (peer_dir, dir) = (temp_cache_dir("peer"), temp_cache_dir("follower"));
-        crate::gh_poller::route_to(Some((primary.remote.clone(), "mac-b".into())));
+        crate::gh_poller::route_to(Some((
+            primary.remote.clone(),
+            "mac-b".into(),
+            "alice".into(),
+        )));
         let row = json!({"exit": 0, "output": {"head": "h1", "verdict": "green", "settled": true}});
         crate::gh_poller::publish(&peer_dir, "Owner/Repo", 7, "Owner--Repo-7-h1", &row);
-        crate::gh_poller::route_to(Some((primary.remote.clone(), "mac-a".into())));
+        crate::gh_poller::route_to(Some((
+            primary.remote.clone(),
+            "mac-a".into(),
+            "alice".into(),
+        )));
 
         let (code, stdout, _) = follower_serve(&dir, "Owner/Repo", "Owner--Repo", 7, None)
             .expect("a live peer lease and a young row serve");
@@ -850,7 +858,7 @@ mod tests {
         assert!(dir.join("Owner--Repo-7-h1.json").exists());
 
         let sql = format!(
-            "UPDATE gh_status_rows SET ts = {} - 121000",
+            "UPDATE gh_status_by_login SET ts = {} - 121000",
             crate::claim_store::CLOCK
         );
         primary.db.lock().unwrap().execute(&sql, []).unwrap();
