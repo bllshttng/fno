@@ -1104,6 +1104,7 @@ fn run_archive(
             provenance: json!({}),
             closed_by: Some("mux".to_string()),
             caller,
+            home: Some(home.clone()),
             journal_path: crate::paths::space_dir(cwd).join("events.jsonl"),
             index_path: fno_dir.join("questions.jsonl"),
             decisions_path: fno_dir.join("decisions.jsonl"),
