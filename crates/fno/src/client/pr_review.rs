@@ -58,8 +58,7 @@ pub(crate) struct Review {
     /// The queued send: argv and stdin. One at a time.
     pub(crate) send: Option<(Vec<String>, String)>,
     sending: bool,
-    /// What Esc goes back to: the windowed or full board, or the org view.
-    prior_full: bool,
+    /// Esc goes back to the org view that opened it.
     from_org: bool,
 }
 
@@ -88,7 +87,6 @@ impl Review {
             fetch_wanted: true,
             send: None,
             sending: false,
-            prior_full: false,
             from_org: false,
         }
     }
@@ -125,7 +123,13 @@ impl Review {
         match self.flat.get(at)? {
             Flat::Row(f, r) => {
                 let file = &diff.files[*f];
-                Some((file.new_path.as_str(), &file.rows[*r]))
+                let row = &file.rows[*r];
+                let path = if row.kind == RowKind::Removed {
+                    &file.old_path
+                } else {
+                    &file.new_path
+                };
+                Some((path.as_str(), row))
             }
             Flat::File(_) => None,
         }
@@ -273,23 +277,18 @@ pub(crate) fn open(view: &mut View, node: String, url: &str, seat: Option<SeatNa
         Ok(pr) => pr,
         Err(e) => return view.set_notice(e),
     };
-    let prior_full = view.board_full;
     let Some(b) = view.backlog_board.as_mut() else {
         return;
     };
     let mut review = Review::new(node, pr, seat);
-    review.prior_full = prior_full;
     review.from_org = review.seat.is_some();
     b.review = Some(review);
-    // Not persisted: the operator's own full-screen choice comes back on close.
-    view.board_full = true;
 }
 
 fn close(view: &mut View) {
     let Some(review) = view.backlog_board.as_mut().and_then(|b| b.review.take()) else {
         return;
     };
-    view.board_full = review.prior_full;
     if review.from_org {
         view.backlog_board = None;
         crate::client::org_board::open(view);
@@ -499,6 +498,9 @@ pub(crate) fn keys(view: &mut View, bytes: &[u8]) {
             ModalKey::PageDown => review.step(page),
             ModalKey::Byte(b'n') => review.step_file(true),
             ModalKey::Byte(b'p') => review.step_file(false),
+            ModalKey::Byte(b'c' | b'x') if review.sending => {
+                view.set_notice("the review is sending: wait for its receipt".to_string());
+            }
             ModalKey::Byte(b'c') if review.commentable(review.cursor) => {
                 let at = review.cursor;
                 let old = review.drafts.get(&at).cloned().unwrap_or_default();
@@ -651,8 +653,16 @@ fn window(review: &Review, h: usize, cols: usize) -> (Vec<BLine>, Option<usize>)
     (lines, cursor_line)
 }
 
-/// Paint the whole screen: the header, the diff window, and the input or hint.
-pub(crate) fn paint(review: &Review, cells: &mut [Cell], rows: usize, cols: usize, theme: &Theme) {
+/// Paint the whole screen: the header, the diff window, and the foot row. The
+/// foot carries the notice, because this paint covers the tab bar that shows it.
+pub(crate) fn paint(
+    review: &Review,
+    notice: Option<&str>,
+    cells: &mut [Cell],
+    rows: usize,
+    cols: usize,
+    theme: &Theme,
+) {
     if rows < HEADER_ROWS + 2 || cols == 0 {
         return;
     }
@@ -679,6 +689,7 @@ pub(crate) fn paint(review: &Review, cells: &mut [Cell], rows: usize, cols: usiz
     );
     let foot = match &review.input {
         Some((_, field)) => BLine::plain(format!("comment: {}", field.display())),
+        None if notice.is_some() => BLine::plain(notice.unwrap_or_default()),
         None if review.sending => BLine::meta("sending the review"),
         None => BLine::meta(format!("{} staged - {HINT}", review.drafts.len())),
     };
@@ -730,7 +741,6 @@ pub(crate) fn open_fixture(view: &mut View, text: &str) -> Result<(), String> {
         review.drafts.insert(two, "this branch has no test".into());
     }
     b.review = Some(review);
-    view.board_full = true;
     Ok(())
 }
 
@@ -856,7 +866,11 @@ mod tests {
         );
         land(&mut view, landed(Err("no read".into())));
         assert_eq!(review(&view).recipient, "mercedes on r2d2");
-        assert!(view.board_full, "the review paints full screen");
+        assert_eq!(
+            view.input_owner(),
+            crate::client::region_focus::RegionOwner::Board,
+            "the review holds the keys"
+        );
 
         let dead = Ok(serde_json::json!({"state": "stale", "holder": "x"}));
         assert_eq!(

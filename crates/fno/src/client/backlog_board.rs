@@ -1176,7 +1176,8 @@ impl View {
             return;
         };
         if let Some(review) = &b.review {
-            pr_review::paint(review, cells, rows, cols, &self.theme);
+            let notice = self.notice.as_ref().map(|(text, _)| text.as_str());
+            pr_review::paint(review, notice, cells, rows, cols, &self.theme);
         } else if b.keys_overlay {
             // Checked before the drill-down: `?` opens this from the detail
             // too, so it must paint over it, and its Esc must land here.

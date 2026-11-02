@@ -32,6 +32,14 @@ impl View {
         if self.board_full && (self.backlog_board.is_some() || self.org_board.is_some()) {
             return RegionOwner::Board;
         }
+        // An open PR review paints the whole screen at any board width.
+        if self
+            .backlog_board
+            .as_ref()
+            .is_some_and(|b| b.review.is_some())
+        {
+            return RegionOwner::Board;
+        }
         match self.region_owner {
             // A viewer panel hides the feed, and a hidden panel takes no keys.
             RegionOwner::Feed if self.feed.is_some() && self.viewer_panel_w() == 0 => {
