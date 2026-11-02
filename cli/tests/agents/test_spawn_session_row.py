@@ -25,7 +25,6 @@ from pathlib import Path
 
 import pytest
 
-from tests._native_door import run_native
 
 from fno.paths_testing import use_tmpdir
 
