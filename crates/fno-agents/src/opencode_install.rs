@@ -1066,6 +1066,11 @@ pub fn status_json() -> serde_json::Value {
     })
 }
 
+/// The spawn-time presence read: the install manifest resolves and parses.
+pub fn pack_present() -> bool {
+    read_manifest(&config_dir()).is_some()
+}
+
 /// The manifest-only verdict the setup adapter's is_installed needs: no
 /// catalog read, so an adapter sweep never pays for two opencode spawns.
 /// With `OPENCODE_CONFIG_DIR` unset it still pays one `<bin> debug paths`

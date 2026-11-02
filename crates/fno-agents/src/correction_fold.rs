@@ -112,6 +112,10 @@ struct CacheFile {
     first_run_epoch: u64,
     cursors: BTreeMap<String, Cursor>,
     typed_turns: Tally,
+    /// Typed turns per day and seat. Only the fold that stamps a seat adds here,
+    /// so this tally and a row's own seat cover the same turns.
+    #[serde(default)]
+    seat_turns: Tally,
 }
 
 #[derive(Debug, Default, Clone, Serialize)]
@@ -159,6 +163,7 @@ pub(crate) struct DetectFacts {
     /// node id -> PR number, from the graph.
     pub(crate) prs: BTreeMap<String, i64>,
     pub(crate) fno_version: String,
+    pub(crate) roster: crate::correction_seat::Roster,
 }
 
 fn nonempty(row: &Value, pointer: &str) -> Option<String> {
@@ -179,6 +184,7 @@ fn load_detect_facts(home: &AgentsHome) -> DetectFacts {
             let Some(sid) = nonempty(row, "/harness_session_id") else {
                 continue;
             };
+            facts.roster.note_registry_row(&sid, row);
             facts.registry.insert(
                 sid,
                 RegistryFacts {
@@ -192,11 +198,17 @@ fn load_detect_facts(home: &AgentsHome) -> DetectFacts {
     }
     if let Ok(rows) = crate::graph_store::read_rows(&crate::backlog::settings::graph_path()) {
         for row in rows {
+            facts.roster.note_node(&row);
             let id = row.get("id").and_then(Value::as_str);
             let pr = row.get("pr_number").and_then(Value::as_i64);
             if let (Some(id), Some(pr)) = (id, pr) {
                 facts.prs.insert(id.to_string(), pr);
             }
+        }
+    }
+    if let Some(journal) = global_journal(home) {
+        if let Err(error) = facts.roster.note_vacated(&journal) {
+            eprintln!("correction seat: role rows unread: {error}");
         }
     }
     facts
@@ -331,6 +343,8 @@ fn build_row(
             pr,
         )
     };
+    let seat =
+        crate::correction_seat::seat_reading(ctx.session, &st.skills, &ctx.detect.roster, &now);
     let mut data = json!({
         "correction_id": id,
         "corrected_by": det.corrected_by,
@@ -340,6 +354,7 @@ fn build_row(
         "confidence": crate::correction_detect::confidence(det.corrected_by),
         "turn": turn,
         "harness": ctx.harness,
+        "seat": seat.to_json(),
         "model": readings.model.to_json(),
         "effort": readings.effort.to_json(),
         "provider": readings.provider.to_json(),
@@ -505,6 +520,7 @@ fn assistant_text(obj: &Value, harness: &str) -> String {
 struct ScanOut {
     rows: Vec<(String, Value)>,
     typed: Tally,
+    seat_typed: Tally,
 }
 
 /// The tally key: UTC day, harness, model. An unmeasured model keeps its own
@@ -676,6 +692,13 @@ fn scan_user_turn(
     if typed {
         if let Some(key) = tally_key(ts, ctx.harness, &readings_now(st, ctx).model) {
             *out.typed.entry(key).or_default() += 1;
+        }
+        let seat =
+            crate::correction_seat::seat_reading(ctx.session, &st.skills, &ctx.detect.roster, "");
+        if let Some(day) = ts.and_then(|t| chrono::DateTime::from_timestamp(t as i64, 0)) {
+            let seat = seat.value.as_deref().unwrap_or("unmeasured");
+            let key = format!("{}|{seat}", day.format("%Y-%m-%d"));
+            *out.seat_typed.entry(key).or_default() += 1;
         }
     }
     if st.turn_open && !st.reacted {
@@ -1128,6 +1151,7 @@ pub(crate) fn fold_once(mut inputs: FoldInputs) -> FoldReceipt {
         cur.line = state.line;
         cur.state = Some(state);
         merge_tally(&mut cache.typed_turns, out.typed);
+        merge_tally(&mut cache.seat_turns, out.seat_typed);
         receipt.files_read += 1;
         receipt.rows_capped = receipt.rows_appended as usize >= inputs.row_cap;
         let unfinished = if rendered {
@@ -1249,6 +1273,10 @@ fn run_outcome_pass(home: &AgentsHome) {
     let now = chrono::Utc::now().timestamp();
     if let Err(error) = crate::correction_outcome::outcome_pass(&journal, &bus, &merges, now) {
         eprintln!("correction outcome: append failed: {error}");
+    }
+    let roster = load_detect_facts(home).roster;
+    if let Err(error) = crate::correction_seat::seat_pass(&journal, &roster, now) {
+        eprintln!("correction seat: append failed: {error}");
     }
 }
 

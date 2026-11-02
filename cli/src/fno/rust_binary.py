@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json as _json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -374,7 +375,7 @@ def sidecar_get(id: str) -> dict:
     the list defaults) - the "no sidecar yet" case, never an error. A file
     that fails the sidecar validation raises, the way the old model's
     ValidationError did. The backend is the door's own resolution; the
-    guard helper lives in ``fno.graph.api``.
+    guard helper lives in this module.
     """
     out = command_call(["backlog", "get"], {"tracker": "sidecar-get", "id": id})
     if out.get("error"):
@@ -671,3 +672,94 @@ def notify_operator(title: str, body: str, pointer: str = "") -> tuple[int, str]
     except OSError as exc:
         return 1, str(exc)[:200]
     return done.returncode, (done.stderr or "").strip()
+
+
+# ---------------------------------------------------------------------------
+# Backlog facts, each from the native script door. Each raises on a failed read:
+# an unreadable store never reads as an empty one.
+# ---------------------------------------------------------------------------
+
+_WELLFORMED_NODE_ID = re.compile(r"[a-z][a-z0-9]{0,7}-?[0-9a-f]{4,8}")
+
+
+def is_wellformed_node_id(value: object) -> bool:
+    """A FORMAT check, not an identity check: the graph decides identity."""
+    return isinstance(value, str) and _WELLFORMED_NODE_ID.fullmatch(value) is not None
+
+
+def active_backend_name() -> str:
+    return os.environ.get("FNO_TRACKER_BACKEND") or "graph"
+
+
+def _script_door(*args: str, stdin: Optional[str] = None) -> "subprocess.CompletedProcess[str]":
+    binary = find_dev_binary() or resolve_binary()
+    if binary is None:
+        raise RuntimeError("the fno-agents binary was not found; run `fno doctor update --rust`")
+    return subprocess.run(
+        [str(binary), "backlog", "script-door", *args],
+        input=stdin, capture_output=True, text=True, timeout=120,
+    )
+
+
+def _script_door_json(*args: str, stdin: Optional[str] = None) -> Any:
+    proc = _script_door(*args, stdin=stdin)
+    if proc.returncode != 0:
+        raise RuntimeError(proc.stderr.strip() or f"script-door {args[0]} exited {proc.returncode}")
+    return _json.loads(proc.stdout)
+
+
+def backlog_rows(*, include_archived: bool = False, path: "Optional[Path]" = None) -> list:
+    from fno.paths import graph_json
+
+    args = ["rows", "--graph", str(path if path is not None else graph_json())]
+    if include_archived:
+        args.append("--include-archived")
+    return _script_door_json(*args)
+
+
+def backlog_match(query: str) -> dict:
+    """One loose node match: exit 1 is the none or ambiguous answer, not a failure."""
+    proc = _script_door("match", query)
+    if proc.returncode not in (0, 1):
+        raise RuntimeError(proc.stderr.strip() or f"script-door match exited {proc.returncode}")
+    return _json.loads(proc.stdout)
+
+
+def plan_claims(plan_path: str) -> "set[str]":
+    return set(_script_door_json("plan-claims", plan_path))
+
+
+def plan_rung(plan_path: str) -> str:
+    proc = _script_door("plan-rung", plan_path)
+    if proc.returncode != 0:
+        raise RuntimeError(proc.stderr.strip() or "script-door plan-rung failed")
+    return proc.stdout.strip()
+
+
+def terminal_node_ids() -> "frozenset[str]":
+    return frozenset(_script_door_json("terminal-ids"))
+
+
+def open_execute_row(
+    node_id: str, harness: str, session_id: str, started: str, effort: Optional[str]
+) -> bool:
+    """True when the row's node exists."""
+    args = ["execute-open", node_id, harness, session_id, started]
+    if effort:
+        args.append(effort)
+    proc = _script_door(*args)
+    if proc.returncode not in (0, 5):
+        raise RuntimeError(proc.stderr.strip() or "script-door execute-open failed")
+    return proc.returncode == 0
+
+
+def store_request(method: str, params: dict, *, path: "Optional[Path]" = None) -> Any:
+    """One store method. A refusal raises RuntimeError with the store's message."""
+    from fno.paths import graph_json
+
+    args = ["store-request", method, "--graph", str(path if path is not None else graph_json())]
+    reply = _script_door_json(*args, stdin=_json.dumps(params))
+    if reply.get("ok"):
+        return reply.get("result")
+    error = reply.get("error") or {}
+    raise RuntimeError(str(error.get("message", error)))

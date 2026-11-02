@@ -55,10 +55,8 @@ GLOBAL_LONG_TO_SHORT: dict[str, str] = {v: k for k, v in GLOBAL_REGISTER.items()
 #: the global register.
 PRE_EXISTING_SHORTS: dict[str, tuple[str, str]] = {
     "-A": ("--all", ""),  # exclusivity enforced by the global-register tests
-    "-I": ("--ideas", "graph/cli.py"),
     # The -b --blocked row moved with the pick port: the native arm owns the
     # surface now, and the wheel-side scan can no longer see a Rust flag decl.
-    "-m": ("--note", "done/cli.py"),
 }
 
 #: Uppercase shorts outside the global register: still exclusive, i.e. the letter
@@ -66,7 +64,6 @@ PRE_EXISTING_SHORTS: dict[str, tuple[str, str]] = {
 #: uppercase because the lowercase letters mean something else there (``-h`` is
 #: help, ``-p`` is headless, mirroring the harnesses' own one-shot short).
 EXCLUSIVE_PRE_EXISTING: dict[str, str] = {
-    "-I": "--ideas",
     "-H": "--harness",
     "-P": "--provider",
 }

@@ -17,7 +17,7 @@ make_repo() {
     mkdir -p "$root/cli/src/fno/company" "$root/cli/src/fno/agents" \
         "$root/cli/src/fno/plan" "$root/agents" "$root/skills" "$root/plugins"
     printf 'class WorkOrderRef:\n    pass\n' > "$root/cli/src/fno/company/contracts.py"
-    printf 'from fno.graph._reconcile import resolve_current_repo_slug\n' \
+    printf 'from fno.claims.core import claim_status\n' \
         > "$root/cli/src/fno/agents/role.py"
 }
 

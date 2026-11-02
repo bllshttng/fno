@@ -114,6 +114,41 @@ struct FanoutTarget {
     interval_seconds: i64,
 }
 
+/// The shape contract the front leaf's twin enforces (`config_cli/leaves.rs
+/// shape_ok`): every sink an object with a boolean-or-absent `enabled`, and a
+/// fanout interval at least one when present. A project that fails the shape
+/// contributes nothing - the Python refusal these twin ports model - so a
+/// typo'd config runs no fanout there instead of a clamped 1-second tick
+/// loop. The daemon reads this crate's resolver, so the refusal has to live
+/// here for the two legs to answer alike.
+fn shape_ok(settings: &Value) -> bool {
+    if let Some(sinks) = settings.get("status_sinks") {
+        let Some(sinks) = sinks.as_array() else {
+            return false;
+        };
+        for sink in sinks {
+            let Some(sink) = sink.as_object() else {
+                return false;
+            };
+            if let Some(enabled) = sink.get("enabled") {
+                if !enabled.is_boolean() {
+                    return false;
+                }
+            }
+        }
+    }
+    if let Some(interval) = settings
+        .get("status_fanout")
+        .and_then(|f| f.get("interval_secs"))
+    {
+        match interval.as_i64() {
+            Some(interval) if interval >= 1 => {}
+            _ => return false,
+        }
+    }
+    true
+}
+
 /// Projects with at least one enabled status sink, each carrying its own
 /// `status_fanout.interval_secs` (default 5, floored at 1). Reuses the same
 /// workspace project->path map as the drain resolver; a project without a
@@ -126,7 +161,7 @@ fn resolve_fanout_targets() -> Vec<FanoutTarget> {
             continue;
         }
         let settings = load_merged(Some(cwd.as_path()));
-        if settings.is_null() {
+        if settings.is_null() || !shape_ok(&settings) {
             continue;
         }
         let has_enabled_sink = settings
@@ -217,6 +252,25 @@ mod tests {
         );
         assert_eq!(expand_tilde("/abs/x"), PathBuf::from("/abs/x"));
         assert_eq!(expand_tilde("a~b"), PathBuf::from("a~b"));
+    }
+
+    #[test]
+    fn shape_refuses_malformed_sinks_and_bad_intervals() {
+        // The refusal posture the front leaf's twin models: a malformed sink
+        // entry or a present-but-sub-one interval skips the whole project,
+        // so a config typo runs no fanout instead of a 1-second tick loop.
+        let ok = json!({"status_sinks": [{"enabled": true}]});
+        assert!(shape_ok(&ok));
+        assert!(shape_ok(&json!({"status_sinks": []})));
+        assert!(shape_ok(&json!({"status_fanout": {"interval_secs": 3}})));
+        // A non-object sink entry refuses the project.
+        assert!(!shape_ok(&json!({"status_sinks": ["sink"]})));
+        // A non-boolean `enabled` refuses the project.
+        assert!(!shape_ok(&json!({"status_sinks": [{"enabled": "yes"}]})));
+        // A present interval below one refuses the project.
+        assert!(!shape_ok(&json!({"status_fanout": {"interval_secs": 0}})));
+        // A non-object status_fanout reads as absent, the twin's posture.
+        assert!(shape_ok(&json!({"status_fanout": "soon"})));
     }
 
     #[test]

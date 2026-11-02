@@ -169,6 +169,7 @@ pub mod correction_fold;
 pub mod correction_meter;
 pub mod correction_outcome;
 pub mod correction_readings;
+pub mod correction_seat;
 pub mod corrections_verify;
 pub mod cursor_agent;
 pub mod cutover;
@@ -246,6 +247,7 @@ pub mod gh_budget;
 pub mod gh_cache;
 pub mod gh_etag;
 pub mod gh_incident;
+pub mod gh_login;
 pub mod gh_poller;
 pub mod gh_spend;
 pub mod git_paths;
@@ -330,6 +332,7 @@ pub mod ledger_axes;
 pub(crate) mod ledger_register;
 pub(crate) mod ledger_workers;
 mod lifecycle_child;
+pub mod lint_registry;
 pub mod list_render;
 pub mod list_row;
 pub mod live_store_fence;
@@ -2129,6 +2132,18 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     "pr_heal_flake",
     "pr_heal_pr",
     "pr_heal_hold",
+    // The pr-watch tick: its attempt bracket, the sweep receipt, one row per
+    // PR verdict, and the durable-grant merge queue (pr_watch/dispatch.rs).
+    "pr_watch_tick_attempt",
+    "pr_watch_tick_end",
+    "pr_watch_tick",
+    "pr_watch_sweep_chunk",
+    "pr_watch_skipped",
+    "pr_watch_parked",
+    "pr_watch_dispatched",
+    "pr_watch_dispatch_failed",
+    "pr_watch_cleanup_failed",
+    "merge_grant_execution",
     // Daemon startup scope declaration: sandbox home vs the operator's
     // shared home. Fleet gating and board routing key off it.
     "daemon_fleet_scope",

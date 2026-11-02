@@ -993,14 +993,19 @@ Do NOT re-run decide; that records it twice."
     // The graph decisions table is the store `fno backlog decisions` reads
     // first; a refusal degrades to the durable capture, never a lost ruling.
     let graph_path = crate::graph_get::default_graph_path();
-    let db_ok = crate::backlog::api::decision_record(
+    let db_result = crate::backlog::api::decision_record(
         &crate::backlog::api::Store::new(&graph_path),
         envelope.clone(),
-    )
-    .is_ok();
-    let (node_id, why) = if !db_ok {
-        eprintln!("decide: recorded {decision_id}, but the graph store refused the ruling.");
-        (None, "the graph store refused the ruling".to_string())
+    );
+    let (node_id, why) = if let Err(e) = &db_result {
+        eprintln!(
+            "decide: recorded {decision_id}, but the graph store refused the ruling: {}.",
+            e.0
+        );
+        (
+            None,
+            format!("the graph store refused the ruling ({})", e.0),
+        )
     } else {
         match crate::backlog::decisions_cli::read_graph_entries() {
             Err(e) => (None, format!("the graph could not be read ({e})")),

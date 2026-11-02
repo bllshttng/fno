@@ -24,6 +24,8 @@
 "log" = "`fno doctor event emit` - the per-worktree progress log had no reader and no caller outside its own test"
 "reality-check" = "nothing - the external-reality probes had no caller. The `gh` probe's job is done by `fno do pr status <n>`"
 "wake" = "nothing - the wake-signal ADMIN commands had no caller. The read survives as the fno-agents binary's hidden `wake-signals` op (scripts/lib/wake-signals.sh reads kind=question signals through it); nothing writes wake signals anymore, so the write path is gone with the port"
+"done" = "`fno backlog done` - the deprecated root shim had the same flags"
+"annotate" = "`fno backlog note <node> \"<text>\" --blocking` for a finding, `fno backlog notes findings` to read, and `fno backlog note --resolve <id>` to clear"
 "backlog inbox" = "`fno backlog capture` - the same command. `inbox` was a second registration of the identical Typer app, so every one of its nine subcommands was a duplicate of a `capture` subcommand"
 
 # --- Leaves with zero callers anywhere a contributor reads, confirmed by a
@@ -85,3 +87,6 @@
 "agents team-fold" = "`fno agents org chart fold` - the same role scope fold"
 "agents team-orphans" = "`fno agents org chart vacancies` - the same unfilled-seat read"
 "agents term-ledger" = "`fno agents org chart rundown` - the term ledger page; the raw renderer is `fno agents org chart rundown-raw`"
+
+# The lint scanned agents/dispatch.py, which left with the dead-code sweep.
+"doctor lint flock-pattern" = "nothing - its one scan target, the Python dispatch module, was deleted"

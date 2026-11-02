@@ -370,7 +370,9 @@ pub(crate) fn apply_session_manifest_role(row: &mut RegistryEntry, session_id: &
 
 fn apply_manifest_role(row: &mut RegistryEntry, role: Option<&ManifestRole>) {
     let Some(role) = role else { return };
-    if row.role_scope.is_none() {
+    // A manifest with no level (a pass manifest) holds no grant. Stamping its
+    // scope alone would make half a role.
+    if row.role_scope.is_none() && role.role_level.is_some() {
         row.role_level = role.role_level;
         row.role_scope = Some(role.role_scope.clone());
         row.role_grantor = role.role_grantor.clone();

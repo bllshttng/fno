@@ -24,7 +24,6 @@ Usage (via the factory)
 
     LAZY = {
         "inbox":   ("fno.inbox.cli:cli",    "operator inbox"),
-        "backlog": ("fno.graph.cli:cli",     "feature graph"),
     }
 
     app = typer.Typer(cls=make_lazy_group_cls(LAZY), ...)
@@ -165,6 +164,161 @@ def collapse_click_group(group: click.Group, *, keep: set[str]) -> click.Group:
     group._fno_collapsed_original_list_commands = original_list_commands  # type: ignore[attr-defined]
     group._fno_collapsed_original_get_command = original_get_command  # type: ignore[attr-defined]
     return group
+
+
+
+# The command-surface walk the collapse map's contract test and the
+# command-callers sweep share. Moved here when cli/src/fno/lint_cli.py and
+# lint_command_ratchet.py deleted (their Rust port owns the checks; the walk
+# itself stays Python because it introspects the live click/typer tree).
+
+NATIVE_SERVED_LEAVES = frozenset({
+    "backlog advance",
+    "backlog album",
+    "backlog archive",
+    "backlog backfill-deferred-kind",
+    "backlog bases",
+    "backlog board",
+    "backlog collisions check",
+    "backlog cost",
+    "backlog defer",
+    "backlog demand",
+    "backlog dispatch-lanes",
+    "backlog encounter",
+    "backlog groom",
+    "backlog join",
+    "backlog maintain",
+    "backlog migrate-difficulty",
+    "backlog migrate-priorities",
+    "backlog migrate-updated-at",
+    "backlog project-root",
+    "backlog ready",
+    "backlog relatedness build",
+    "backlog relatedness get",
+    "backlog remove",
+    "backlog retract",
+    "backlog status",
+    "backlog unclaim",
+    "backlog undefer",
+    "backlog unsupersede",
+    "backlog version",
+    "backlog rank",
+    "backlog render-views",
+    "backlog reopen",
+    "backlog retro drain-postmortems",
+    "backlog retro run",
+    "backlog retro sweep-carveouts",
+    "backlog carveout add",
+    "backlog carveout list",
+    "backlog carveout resolve",
+    "backlog carveout update",
+    "backlog roadmap",
+    "backlog unarchive",
+    "backlog view",
+    "backlog session add",
+    "backlog session backfill",
+    "backlog session close",
+    "backlog session open",
+    "backlog session reap-open",
+    "config route",
+    "config routing",
+    "doctor route",
+    "config schema",
+    "config doctor",
+    "config plugin",
+    "doctor observer judge",
+    "doctor observer replay",
+    "doctor observer sweep",
+    "do ci status",
+    "do review resolve-level",
+    "do review post-dispositions",
+    "do review classify",
+    "do review invocations",
+    "do research",
+    "do think dispatch",
+    "do think inspect",
+    "do pr attestation retract",
+    "do pr base-check",
+    "do pr base-lineage-check",
+    "do pr bind-created",
+    "do pr closure-trailer",
+    "do pr coverage-check",
+    "do pr coverage-publish",
+    "do pr coverage-waive",
+    "do pr create",
+    "do pr evidence-check",
+    "do pr evidence-required",
+    "do pr global-receipt-events-path",
+    "do pr graphql-exec",
+    "do pr heal",
+    "do pr hold-check",
+    "do pr info",
+    "do pr list",
+    "do pr logs",
+    "do pr merge",
+    "do pr merge-result-check",
+    "do pr next-receipt-generation",
+    "do pr publish-review",
+    "do pr push",
+    "do pr rebase",
+    "do pr review-hold",
+    "do pr ritual",
+    "do pr status",
+    "do pr sync-canonical",
+    "do pr verify",
+    "do pr wait",
+    "config project",
+    "doctor test",
+})
+
+
+def hidden_option_tokens(cmd):
+    """Hidden Option names on a leaf command, as `!--flag` tokens."""
+    tokens = []
+    for param in getattr(cmd, "params", []):
+        if getattr(param, "hidden", False):
+            opts = [o for o in getattr(param, "opts", []) if o.startswith("-")]
+            if opts:
+                tokens.append("!" + opts[0])
+    return sorted(tokens)
+
+
+def format_leaf(path, cmd):
+    """A baseline leaf line: the command path plus its hidden options."""
+    toks = hidden_option_tokens(cmd)
+    return f"{path} {' '.join(toks)}" if toks else path
+
+
+def iter_group_leaves(group, ctx, prefix, depth=0):
+    """Yield (path, cmd) for each leaf under a Click group, hidden included.
+
+    A group with no resolvable children collapses to its own path. The depth
+    cap is a safety net; fno groups never nest that deep.
+    """
+    import click as _click
+
+    if depth > 8:
+        yield prefix, None
+        return
+    if getattr(group, "_fno_collapsed_dispatcher", False):
+        yield prefix, group
+    elif " " in prefix and getattr(group, "invoke_without_command", False) and hidden_option_tokens(group):
+        yield prefix, group
+    for name in group.list_commands(ctx):
+        sub = group.get_command(ctx, name)
+        if sub is None:
+            continue
+        path = f"{prefix} {name}"
+        if hasattr(sub, "list_commands"):
+            child_ctx = _click.Context(sub, info_name=name, parent=ctx)
+            yielded = False
+            for leaf_path, leaf_cmd in iter_group_leaves(sub, child_ctx, path, depth + 1):
+                yield leaf_path, leaf_cmd
+                yielded = True
+            if not yielded:
+                yield path, sub
+        else:
+            yield path, sub
 
 
 def _import_failure_hint(exc: ImportError) -> str:

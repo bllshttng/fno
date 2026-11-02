@@ -2,7 +2,7 @@
 # test-backlog-aliases.sh - verify backlog sub-app stability.
 #
 # Covers ab-67de1b86 Phase 05 Task 5.2 scenarios:
-#   1. fno backlog --help succeeds and lists intake/done/next/ready/triage
+#   1. fno backlog --help succeeds and lists add/get/find/triage
 #   2. fno --help lists backlog (the graph top-level alias was removed)
 #   3. fno backlog intake <plan> creates a node
 #   4. fno backlog adopt <plan> creates a node + warns on stderr
@@ -94,12 +94,10 @@ command_in_help() {
 }
 
 # --- Scenario 1: fno backlog --help lists advertised commands ------------------
-# x-71b6 In-N-Out tiering: intake/ready are hidden now (still invocable); probe
-# the advertised menu instead. `find` retired from the python surface; the
-# store serves it natively. `add` went native the same way (the create door
-# moved to the store), so the python help no longer lists it.
+# The native menu lists groups; intake, done and next stay invocable as
+# compatibility spellings, so probe the advertised groups instead.
 out=$(run_fno backlog --help 2>&1)
-for command in done next get triage; do
+for command in add get find triage; do
     if command_in_help "$command" "$out"; then
         pass "backlog --help lists '$command'"
     else

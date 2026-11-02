@@ -1,0 +1,10 @@
+{
+  "refused": true,
+  "reason": "plan unreadable (__CASE_DIR__/plans/nope.md); a gate degrades to refuse, not n/a",
+  "planned": 0,
+  "delivered": 0,
+  "shortfall": 0,
+  "carveouts": 0,
+  "covered": false,
+  "unjoined": []
+}

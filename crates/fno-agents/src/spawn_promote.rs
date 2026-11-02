@@ -67,20 +67,54 @@ pub(crate) fn calling_row(home: &AgentsHome) -> Calling {
     }
 }
 
+/// A grant refusal's words for the row a caller resolved to.
+pub(crate) fn row_identity(row: &crate::state::RegistryEntry, sid: &str) -> String {
+    format!(
+        "registry row {} ({} session {})",
+        row.name,
+        row.harness.as_deref().unwrap_or("unknown"),
+        sid.get(..8).unwrap_or(sid)
+    )
+}
+
+/// Add the facts a grant refusal names: the resolved identity, and the `env -u`
+/// prefix that drops each identity name this shell carries.
+pub(crate) fn with_identity(mut caller: Value, identity: String) -> Value {
+    let strip: String = crate::claims::AMBIENT_IDENTITY_NAMES
+        .iter()
+        .filter(|name| std::env::var(name).is_ok_and(|v| !v.trim().is_empty()))
+        .map(|name| format!(" -u {name}"))
+        .collect();
+    caller["identity"] = json!(identity);
+    caller["user_strip"] = json!(if strip.is_empty() {
+        String::new()
+    } else {
+        format!("env{strip} ")
+    });
+    caller
+}
+
+/// An agent caller as the grant check reads it. `spawn --promote` and
+/// `org promote` both send this shape, so neither can drop a field the check needs.
+pub(crate) fn agent_caller(entry: &crate::state::RegistryEntry, sid: &str) -> Value {
+    let row_json = serde_json::to_value(entry).unwrap_or(Value::Null);
+    let mut out = json!({"kind": "agent"});
+    for key in ["name", "status", "role_scope", "role_level"] {
+        out[key] = row_json[key].clone();
+    }
+    with_identity(out, row_identity(entry, sid))
+}
+
 /// The calling session as the grant check reads it, and its session id.
 fn caller(home: &AgentsHome) -> (Value, Option<String>) {
     match calling_row(home) {
         Calling::Human => (json!({"kind": "human"}), None),
         Calling::Unreadable(sid) => (json!({"kind": "unreadable"}), sid),
-        Calling::Unregistered(sid) => (json!({"kind": "unregistered"}), Some(sid)),
-        Calling::Agent(row, sid) => {
-            let row = serde_json::to_value(&*row).unwrap_or(Value::Null);
-            let mut out = json!({"kind": "agent"});
-            for key in ["name", "status", "role_scope"] {
-                out[key] = row[key].clone();
-            }
-            (out, Some(sid))
-        }
+        Calling::Unregistered(sid) => (
+            with_identity(json!({"kind": "unregistered"}), format!("session {sid}")),
+            Some(sid),
+        ),
+        Calling::Agent(entry, sid) => (agent_caller(&entry, &sid), Some(sid)),
     }
 }
 

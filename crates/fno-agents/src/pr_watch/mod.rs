@@ -1,15 +1,19 @@
 //! The `pr-watch` command family's Rust home. `status`, `install`, `refresh`,
-//! `uninstall` and `heal` live here; tick follows, each one replacing a
-//! Python leaf with a working forward until the Python package is gone.
-//! One command per PR, every spelling kept.
+//! `uninstall`, `heal` and `tick` all live here; the wheel keeps one forward
+//! leaf so every spelling still answers.
 
+mod clock;
+mod discover;
+mod dispatch;
 mod heal;
 mod install;
 mod mint;
 pub(crate) mod refresh;
 mod render;
 mod sessions;
+mod state;
 mod status;
+mod tick;
 
 use std::path::Path;
 
@@ -20,13 +24,20 @@ pub fn run(args: &[String]) -> i32 {
         Some("install") => install::run(&args[1..]),
         Some("uninstall") => install::run_uninstall(&args[1..]),
         Some("heal") => heal::run(&args[1..]),
+        Some("tick") => tick::run(&args[1..]),
         Some("pr-sessions") => sessions::run(&args[1..]),
         Some("merge-cleanup-mint") => mint::run(&args[1..]),
         Some("ritual") => crate::post_merge::ritual::run(&args[1..]),
         Some("post-merge-dispatch") => crate::post_merge::route::run(&args[1..]),
+        Some("--help" | "-h") => {
+            println!(
+                "usage: fno do pr watch <status|install|refresh|uninstall|heal|tick> [--json|-J] [-N]"
+            );
+            0
+        }
         _ => {
             eprintln!(
-                "usage: fno-agents pr-watch <status|install|refresh|uninstall|heal|pr-sessions|merge-cleanup-mint|ritual|post-merge-dispatch> [--json|-J] [-N]"
+                "usage: fno-agents pr-watch <status|install|refresh|uninstall|heal|tick|pr-sessions|merge-cleanup-mint|ritual|post-merge-dispatch> [--json|-J] [-N]"
             );
             2
         }

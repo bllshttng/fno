@@ -112,6 +112,7 @@ pub(crate) fn ago(stamp: Option<&str>, now: u64) -> Option<String> {
 
 pub(crate) fn glyph(status: &str) -> &'static str {
     match status {
+        "blocked" => "\u{2298}",
         "writing" => "\u{25cf}",
         "parked" => "\u{25d0}",
         "quiet" => "\u{25cb}",
@@ -120,6 +121,7 @@ pub(crate) fn glyph(status: &str) -> &'static str {
 }
 pub(crate) fn status_role(status: &str) -> BRole {
     match status {
+        "blocked" => BRole::Head,
         "writing" => BRole::Head,
         "parked" => BRole::Body,
         _ => BRole::Meta,

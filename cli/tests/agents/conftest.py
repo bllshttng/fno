@@ -47,20 +47,6 @@ def _isolate_session_discovery(monkeypatch, tmp_path_factory):
     monkeypatch.setenv(discover.OPENCODE_STORAGE_DIR_ENV, str(empty_opencode))
 
 
-@pytest.fixture(autouse=True)
-def _isolate_session_uuid_resolution(monkeypatch):
-    """Keep full-UUID resolution host-independent.
-
-    The suite stubs the registry reader to ``None`` (no read of the
-    developer's real ``~/.claude/sessions``), so a claude row leaves
-    ``claude_session_uuid`` unresolved. Tests that exercise resolution
-    override it per-test (monkeypatch order: the test-local setattr wins).
-    """
-    from fno.agents.harnesses import claude
-
-    monkeypatch.setattr(claude, "resolve_session_uuid", lambda short_id: None)
-
-
 FAKE_CHILD_PID = 4242
 
 

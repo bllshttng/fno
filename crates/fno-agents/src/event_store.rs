@@ -2346,6 +2346,198 @@ pub fn journal_text_checked(journal: &Path, q: &EventQuery) -> Result<String, St
     Ok(text)
 }
 
+/// The arms-fold reduction for one journal's store, computed inside SQLite so
+/// a fold that consumes a handful of per-arm maxima never parses the window.
+/// `fno agents status` paid a ~95k-row `serde_json::Value` parse per read at
+/// fleet scale (two ordered-map folds over seven days of tick rows) where the
+/// store already holds the `(type, ts_ms)` index the fold rides; this reads
+/// the maxima and the starvation verdict in the store and hands back only the
+/// rows a fold can still need.
+///
+/// The walk goes newest-first along the index and stops once every arm seen
+/// holds both its newest and its newest-ok ts, so a healthy fleet answers
+/// from the newest few hundred rows and only an arm failing since long ago
+/// extends the walk. The starvation verdict rides a separate whole-window
+/// GLOB scan, so the early stop never truncates it.
+pub struct ArmTickReduction {
+    /// `(order, line)` for every row the fold can still need: un-ingested
+    /// rotated-tail lines first (`order` -1, file order), store rows by
+    /// `seq`, un-ingested live-tail lines last (`order` i64::MAX, file
+    /// order). Stable-sorted by `order`, so same-ts ties keep the text
+    /// path's later-line-wins order.
+    pub rows: Vec<(i64, String)>,
+    /// Each tick arm's newest `(arm, ts_ms)` in the window. Sorted by arm.
+    /// An arm with no newest tick inside the active window has no tick there,
+    /// so the caller derives `ticked` from this without a second scan.
+    pub max_ts: Vec<(String, i64)>,
+    /// Arms holding a row in the active window whose `acted` is nonzero or
+    /// whose skip explains. Sorted.
+    pub active_arms: Vec<String>,
+}
+
+/// The `ok` predicate for a tick row's skip reason, as one SQL boolean: no
+/// skip reason, or one outside the caller's failure set. An empty set says
+/// every row is ok, matching the fold's `is_none_or` read. Single quotes are
+/// escaped, though the set is compile-time today.
+fn skip_ok_sql(failure_skips: &[&str]) -> String {
+    let skip = "json_extract(line, '$.data.skip_reason')";
+    if failure_skips.is_empty() {
+        return "1".to_string();
+    }
+    let list = failure_skips
+        .iter()
+        .map(|s| format!("'{}'", s.replace('\'', "''")))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("{skip} IS NULL OR {skip} NOT IN ({list})")
+}
+
+/// Reduce the arms window of one journal. `None` when the journal has no
+/// readable events store (a raw or legacy journal): the caller folds its
+/// text instead.
+pub fn reduce_arm_ticks(
+    journal: &Path,
+    tick_type: &str,
+    heal_type: &str,
+    since_ms: i64,
+    active_since_ms: i64,
+    failure_skips: &[&str],
+    retry_glob: &str,
+) -> Option<ArmTickReduction> {
+    let live = live_journal(journal);
+    let routed = routed_root_journal(&live);
+    let store = store_path(&live);
+    if routed && live.is_file() && stray_has_uningested_bytes(&live, &store) {
+        import_all(&live).ok()?;
+    }
+    if !store.is_file() {
+        return None;
+    }
+    let conn = open_read(&store).ok()?;
+    if !store_has_events(&conn).unwrap_or(false) {
+        return None;
+    }
+    // One GROUP BY pass over the whole window holds every arm's newest and
+    // newest-ok. No early exit is exact: an arm's newest row can sit anywhere
+    // in the window, so a walk that stops once the arms seen so far each hold
+    // both maxima (true after the first ok row) drops every older arm, and the
+    // readout calls exactly those arms UNOBSERVED. The scalar aggregate keeps
+    // the pass cheap: three json_extracts per row, no line materialized.
+    let maxima_sql = format!(
+        "SELECT json_extract(line, '$.data.arm') AS arm, MAX(ts_ms), \
+         MAX(CASE WHEN {} THEN ts_ms END) \
+         FROM events WHERE type = ?1 AND ts_ms >= ?2 GROUP BY arm",
+        skip_ok_sql(failure_skips),
+    );
+    let mut max_ts: std::collections::HashMap<String, i64> = Default::default();
+    let mut max_ok_ts: std::collections::HashMap<String, i64> = Default::default();
+    {
+        let mut stmt = conn.prepare(&maxima_sql).ok()?;
+        let mut walk = stmt.query(params![tick_type, since_ms]).ok()?;
+        while let Some(row) = walk.next().ok()? {
+            let arm: Option<String> = row.get(0).ok()?;
+            let Some(arm) = arm else {
+                continue;
+            };
+            let max: i64 = row.get(1).ok()?;
+            max_ts.insert(arm.clone(), max);
+            if let Some(max_ok) = row.get::<_, Option<i64>>(2).ok()? {
+                max_ok_ts.insert(arm, max_ok);
+            }
+        }
+    }
+    // Arms with an active row in the active window, from one byte-cheap GLOB
+    // scan: a string value quoting `"acted":1` could only false-positive
+    // toward not-starved, the conservative side of the mark. The extract
+    // runs on matching rows only, and the scan covers the whole window, so
+    // the maxima scan above never truncates this verdict.
+    const ACTIVE_SQL: &str = "SELECT DISTINCT json_extract(line, '$.data.arm') FROM events \
+         WHERE type = ?1 AND ts_ms >= ?2 \
+         AND (line GLOB '*\"acted\":[1-9]*' \
+              OR (line GLOB '*\"skip_reason\":\"*\"*' \
+                  AND line NOT GLOB '*\"skip_reason\":\"starved\"*'))";
+    let mut active: std::collections::HashSet<String> = Default::default();
+    {
+        let mut stmt = conn.prepare(ACTIVE_SQL).ok()?;
+        let mut found = stmt.query(params![tick_type, active_since_ms]).ok()?;
+        while let Some(row) = found.next().ok()? {
+            let arm: Option<String> = row.get(0).ok()?;
+            if let Some(arm) = arm {
+                active.insert(arm);
+            }
+        }
+    }
+    let mut rows: Vec<(i64, String)> = Vec::new();
+    {
+        // Every row at an arm's maximum ts, so the caller's fold keeps the
+        // text path's tie semantics (fresher-or-equal wins, seq order).
+        const TIE_SQL: &str = "SELECT seq, line FROM events WHERE type = ?1 \
+             AND ts_ms = ?2 AND json_extract(line, '$.data.arm') = ?3 ORDER BY seq";
+        let mut stmt = conn.prepare(TIE_SQL).ok()?;
+        for arm in max_ts.keys() {
+            let mut targets = vec![max_ts[arm]];
+            if let Some(ok_ts) = max_ok_ts.get(arm) {
+                if !targets.contains(ok_ts) {
+                    targets.push(*ok_ts);
+                }
+            }
+            for ts in targets {
+                let mut tie = stmt.query(params![tick_type, ts, arm]).ok()?;
+                while let Some(row) = tie.next().ok()? {
+                    rows.push((row.get(0).ok()?, row.get(1).ok()?));
+                }
+            }
+        }
+    }
+    {
+        let mut stmt = conn
+            .prepare("SELECT seq, line FROM events WHERE type = ?1 AND ts_ms >= ?2 ORDER BY seq")
+            .ok()?;
+        let mut heal = stmt.query(params![heal_type, since_ms]).ok()?;
+        while let Some(row) = heal.next().ok()? {
+            rows.push((row.get(0).ok()?, row.get(1).ok()?));
+        }
+    }
+    {
+        let mut stmt = conn
+            .prepare(
+                "SELECT seq, line FROM events WHERE type = ?1 AND ts_ms >= ?2 \
+                  AND line GLOB ?3 ORDER BY seq",
+            )
+            .ok()?;
+        let mut retry = stmt.query(params![tick_type, since_ms, retry_glob]).ok()?;
+        while let Some(row) = retry.next().ok()? {
+            rows.push((row.get(0).ok()?, row.get(1).ok()?));
+        }
+    }
+    // The text path's union order: rotated generations' un-ingested bytes,
+    // then the committed rows, then the live tail. Equal order keys keep
+    // their push order (the sort is stable).
+    let tail_types = vec![tick_type.to_string(), heal_type.to_string()];
+    let mut tail_older = String::new();
+    for (_, gen) in generation_files(&live) {
+        append_uningested_lines(&mut tail_older, &conn, &gen, Some(&tail_types), false).ok()?;
+    }
+    for line in tail_older.lines() {
+        rows.push((-1, line.to_string()));
+    }
+    rows.sort_by_key(|(order, _)| *order);
+    let mut tail_newer = String::new();
+    append_uningested_lines(&mut tail_newer, &conn, &live, Some(&tail_types), false).ok()?;
+    for line in tail_newer.lines() {
+        rows.push((i64::MAX, line.to_string()));
+    }
+    let mut max_pairs: Vec<(String, i64)> = max_ts.into_iter().collect();
+    max_pairs.sort();
+    let mut active: Vec<String> = active.into_iter().collect();
+    active.sort();
+    Some(ArmTickReduction {
+        rows,
+        max_ts: max_pairs,
+        active_arms: active,
+    })
+}
+
 /// Every rotated generation of one journal family, oldest first: the
 /// `{stem}.{n}` files beside `live`, numeric suffix DESCENDING - the
 /// logrotate convention the retired Python relay and every sibling segment

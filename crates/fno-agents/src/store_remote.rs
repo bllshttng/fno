@@ -443,7 +443,11 @@ impl Remote {
     fn connect(&self) -> Result<TcpStream, String> {
         let mut failures = Vec::new();
         let resolved = self.resolve().unwrap_or_else(|error| {
-            failures.push(format!("resolve {}: {error}", self.host));
+            failures.push(format!(
+                "resolve {}: {error}. A MagicDNS name resolves only while \
+                 tailscale is up; check `tailscale status`",
+                self.host
+            ));
             Vec::new()
         });
         let fallbacks = self.fallbacks.iter().filter(|a| !resolved.contains(a));

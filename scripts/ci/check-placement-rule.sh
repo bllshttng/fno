@@ -328,15 +328,12 @@ cli/src/fno/adapters/providers/test_staging.py
 cli/src/fno/adapters/providers/test_usage.py
 cli/src/fno/adapters/providers/usage.py
 cli/src/fno/agents/discover.py
-cli/src/fno/agents/dispatch.py
 cli/src/fno/agents/format.py
 cli/src/fno/agents/harnesses/_claude_session_registry.py
 cli/src/fno/agents/harnesses/claude.py
 cli/src/fno/agents/model_routing.py
 cli/src/fno/agents/registry.py
-cli/src/fno/agents/self_stamp.py
 cli/src/fno/agents/spawn_gate.py
-cli/src/fno/agents/whoami.py
 crates/fno/src/config_doctor/checks.rs
 crates/fno/src/doctor/report.rs
 crates/fno/src/doctor/report/advisors.rs
@@ -362,7 +359,6 @@ crates/fno-agents/src/backlog/maintenance_tests.rs
 crates/fno-agents/src/review_capability.rs
 cli/src/fno/claims/session_pid.py
 crates/fno-agents/src/context_audit.rs
-cli/src/fno/graph/cli.py
 crates/fno-agents/src/observer/fold.rs
 crates/fno-agents/src/footprint_cause.rs
 cli/src/fno/paths.py
@@ -418,7 +414,6 @@ crates/fno-agents/src/worktree_reapable.rs
 crates/fno-agents/src/bin/client.rs
 crates/fno/src/worktree_door.rs
 crates/fno-agents/tests/claude_ask_dispatch.rs
-crates/fno-agents/tests/claude_ask_parity.rs
 crates/fno-agents/src/mail_cli/reply.rs
 crates/fno/src/agents_view.rs
 crates/fno/src/connections_view.rs

@@ -289,8 +289,9 @@ pub(crate) fn scope_contains<'a>(
 
 /// Why this caller may not grant a team over `requested`, or `None`: you
 /// cannot hand down authority you do not hold. An attended human may grant
-/// anything. An agent must hold a live team that strictly contains the
-/// request; an equal scope is a transfer, legal only with succession intent. A
+/// anything, and so may a live level 0 lead. Any other agent must hold a live
+/// team that strictly contains the request. An equal scope is a transfer, legal
+/// only with succession intent, at every level. A
 /// caller this check cannot place (unreadable registry, unregistered agent,
 /// terminal grantor) fails closed. `allow_terminal_recovery` admits only the
 /// same territory a terminal holder already holds.
@@ -304,6 +305,17 @@ fn grant_refusal<'a>(
     let caller = payload.get("caller").cloned().unwrap_or(Value::Null);
     let field = |key: &str| caller.get(key).and_then(Value::as_str).unwrap_or("");
     let requested = text("requested");
+    let as_user = || {
+        let way = match field("user_strip") {
+            "" => "open a terminal outside any harness session and run:".to_string(),
+            strip => format!("rerun with no inherited identity: {strip}"),
+        };
+        let sep = if way.ends_with(' ') { "" } else { " " };
+        format!(
+            " If you are the user at this terminal, {way}{sep}fno agents org promote <handle> \
+             --scope {requested}"
+        )
+    };
     match field("kind") {
         "human" => None,
         "unreadable" => Some(match text("stray_agent_self") {
@@ -321,14 +333,17 @@ fn grant_refusal<'a>(
                  env -u FNO_AGENT_SELF fno agents org promote <args>."
             ),
         }),
-        "unregistered" => Some(
-            "cannot verify the grantor's authority: this session carries an agent \
-             identity but has no registry row (it spawned before its row landed, \
-             or has not run /fno-me), so it is an agent with no verified authority, \
-             not an attended human. Run /fno-me to join or wait for the row, then \
-             retry; or ask your lead to grant it."
-                .to_string(),
-        ),
+        "unregistered" => Some(format!(
+            "cannot verify the grantor's authority: this shell resolved to {} but it has \
+             no registry row (it spawned before its row landed, or has not run /fno-me), \
+             so it is an agent with no verified authority, not an attended human. Run \
+             /fno-me to join or wait for the row, then retry; or ask your lead to grant it.{}",
+            match field("identity") {
+                "" => "an agent identity",
+                identity => identity,
+            },
+            as_user()
+        )),
         "agent" => {
             let status = field("status");
             let held = field("role_scope");
@@ -344,9 +359,14 @@ fn grant_refusal<'a>(
             }
             if held.is_empty() {
                 return Some(format!(
-                    "a role is handed DOWN, and this session holds none: an unpromoted \
-                     agent cannot grant one. Ask a lead whose scope contains \
-                     '{requested}' to grant it."
+                    "a role is handed DOWN, and this session holds none: this shell \
+                     resolved to {}, and an unpromoted agent cannot grant one. Ask a lead \
+                     whose scope contains '{requested}' to grant it.{}",
+                    match field("identity") {
+                        "" => "an agent",
+                        identity => identity,
+                    },
+                    as_user()
                 ));
             }
             if same_territory(held, requested, projects) {
@@ -359,11 +379,15 @@ fn grant_refusal<'a>(
                      `--hand-off`, or choose a different scope so this session keeps its role."
                 ));
             }
+            // A level 0 lead grants over any scope, inside or outside its own.
+            if caller.get("role_level").and_then(Value::as_u64) == Some(0) {
+                return None;
+            }
             if !scope_contains(held, requested, entry_of, projects) {
                 return Some(format!(
                     "this session's role over '{held}' neither contains nor equals \
-                     '{requested}', so it cannot grant it. A grant must be a \
-                     strict subset of what the grantor holds; an equal scope is allowed \
+                     '{requested}', so it cannot grant it. Below level 0, a grant must be \
+                     a strict subset of what the grantor holds; an equal scope is allowed \
                      only as succession, which hands YOUR scope to a successor."
                 ));
             }
@@ -1661,6 +1685,28 @@ mod grant_tests {
         assert_eq!(check(agent("busy", "a"), "alpha", true), None);
         let unpromoted = check(agent("idle", ""), "e-1", false).unwrap();
         assert!(unpromoted.contains("holds none"), "{unpromoted}");
+        // Level 0 grants outside its own scope; level 1 on the same facts does not.
+        let at = |level: u32| json!({"kind": "agent", "status": "busy", "role_scope": "beta", "role_level": level});
+        assert_eq!(check(at(0), "e-1", false), None);
+        assert!(check(at(1), "e-1", false)
+            .unwrap()
+            .contains("neither contains nor equals"));
+        let named = check(
+            json!({"kind": "agent", "status": "idle", "role_scope": "",
+                "identity": "registry row w (codex session 01a19918)",
+                "user_strip": "env -u CODEX_THREAD_ID "}),
+            "e-1",
+            false,
+        )
+        .unwrap();
+        assert!(
+            named.contains("registry row w (codex session 01a19918)"),
+            "{named}"
+        );
+        assert!(
+            named.contains("env -u CODEX_THREAD_ID fno agents org promote <handle> --scope e-1"),
+            "{named}"
+        );
         let dead = check(agent("exited", "alpha"), "e-1", false).unwrap();
         assert!(dead.contains("'exited', which is terminal"), "{dead}");
         for kind in ["unreadable", "unregistered", "bogus"] {

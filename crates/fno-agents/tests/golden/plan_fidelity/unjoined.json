@@ -1,0 +1,22 @@
+{
+  "refused": true,
+  "shortfall": 2,
+  "carveouts": 0,
+  "covered": false,
+  "reason": "2 planned deliverable(s) unjoined with only 0 covering carveout(s); a PR-body sentence is not a carveout",
+  "unjoined": [
+    {
+      "session_id": "sess-u1",
+      "plan_path": "/x/plans/unjoined.md",
+      "status": "unjoined"
+    },
+    {
+      "session_id": "sess-u2",
+      "plan_path": "/x/plans/unjoined.md",
+      "status": "unjoined"
+    }
+  ],
+  "planned": 2,
+  "delivered": 0,
+  "plan_path": "__CASE_DIR__/plans/unjoined.md"
+}

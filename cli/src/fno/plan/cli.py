@@ -3,18 +3,23 @@
 Commands:
     stamp             - mark a plan's frontmatter with ship metadata (status:in_review)
     graduate          - flip a stamped plan from status:in_review to status:done
+    set-expected      - authoritatively set a plan's expected_url_count
     brief             - generate a scoped task brief from a single-doc plan
     validate          - validate plan frontmatter or executable semantics (read-only)
     reconcile-status  - normalize drifted plan frontmatter status in place
     folder-audit      - count folder plans owned by a non-terminal graph node
+    rung              - print a plan's readiness rung and dispatch verdict (hidden)
+    migrate-keys      - collapse synonym frontmatter keys to the canonical set
+    sync              - converge every plan doc's graph->doc mirror fields
     path              - print the save path for a NEW plan/design doc (config.plans_filename)
+
+(fidelity moved native in the plan-residue port: the decision lives in
+crates/fno-agents/src/loopcheck/plan_fidelity.rs and there is no command.)
 """
 from __future__ import annotations
 
 import json
-import os
 import subprocess
-import sys
 from enum import Enum
 from pathlib import Path
 from typing import List, Optional
@@ -228,48 +233,6 @@ def brief(
         typer.echo(json.dumps(result.to_json_dict(), indent=2))
     else:
         typer.echo(result.to_markdown())
-
-
-@plan_app.command(
-    "fidelity",
-    help=(
-        "Gate decision: did this plan ship every planned deliverable? Refuses "
-        "(exit 1) when a planned deliverable is unjoined and uncovered by a "
-        "carveout. The same join as the scoreboard, inverted on the ownership "
-        "axis - telemetry marks an unjoined plan n/a, the gate refuses it. "
-        "--json emits the decision object both gate readers consume."
-    ),
-)
-def fidelity(
-    plan_path: str = typer.Argument(..., help="Path to the plan markdown file"),
-    json_out: bool = typer.Option(False, "--json", "-J", help="Emit the decision as JSON."),
-    since_days: int = typer.Option(
-        180, "--since-days", help="Ledger lookback window in days."
-    ),
-) -> None:
-    """The plan-fidelity gate decision for one plan."""
-    from fno.plan.fidelity import compute_plan_fidelity
-
-    decision = compute_plan_fidelity(plan_path=plan_path, since_days=since_days)
-    if json_out:
-        typer.echo(json.dumps(decision, indent=2))
-        return
-    _render_fidelity(decision)
-    if decision.get("refused"):
-        raise typer.Exit(code=1)
-
-
-def _render_fidelity(decision: dict) -> None:
-    out = (sys.stderr if decision.get("refused") else sys.stdout).write
-    if decision.get("refused"):
-        out(f"REFUSED: {decision.get('reason', 'uncovered shortfall')}\n")
-    else:
-        out("pass: every planned deliverable shipped or is covered by a carveout\n")
-    out(
-        f"  planned={decision.get('planned', 0)} "
-        f"delivered={decision.get('delivered', 0)} "
-        f"carveouts={decision.get('carveouts', 0)}\n"
-    )
 
 
 @plan_app.command(
@@ -497,9 +460,8 @@ def folder_audit(
         None, "--plans-dir", help="Plans dir to scan (default: resolved plans-content dir)."
     ),
 ) -> None:
-    from fno.graph.statuses import recompute_statuses
-    from fno.graph.store import GraphCorruptError, GraphUnreadableError, read_graph_strict
     from fno.paths import graph_json, plans_content_dir
+    from fno.rust_binary import backlog_rows
     from fno.plan._folder_audit import scan
 
     plans_root = Path(plans_dir_opt) if plans_dir_opt else plans_content_dir()
@@ -507,8 +469,8 @@ def folder_audit(
     try:
         # Strict through the configured path: healed bytes must not read as
         # "no folder owners" - an unreadable graph refuses toward defer.
-        entries = recompute_statuses(read_graph_strict(graph_json()))
-    except (GraphCorruptError, GraphUnreadableError, OSError) as exc:
+        entries = backlog_rows(path=graph_json())
+    except (RuntimeError, ValueError, OSError) as exc:
         typer.echo(
             f"fno do plan folder-audit: graph unreadable ({exc}) - failing toward defer",
             err=True,
@@ -543,7 +505,7 @@ def folder_audit(
 def rung(
     plan_path: str = typer.Argument(..., help="Path to the plan .md file."),
 ) -> None:
-    """The shell-facing face of ``fno.graph.ladder``.
+    """The shell-facing face of the native plan rung.
 
     Hidden from the menu, though it still counts: `fno do plan` sits at the
     12-command menu-caps ceiling. Its audience is three shell scripts, not the
@@ -557,28 +519,24 @@ def rung(
     dependency; the exit code carries the dispatchable verdict so the common
     case stays a one-liner with no parsing at all.
     """
-    from fno.graph.ladder import Rung, is_dispatchable, plan_rung
+    from fno.rust_binary import plan_rung
 
     if not plan_path:
         typer.echo("fno do plan rung: a plan path is required", err=True)
         raise typer.Exit(code=2)
 
-    # `plan_rung` resolves a relative path against the ENTRY's cwd, not the
-    # process's, because the daemon probes foreign nodes. A path typed at a
-    # shell means the shell's cwd, so say so explicitly rather than letting the
-    # resolver refuse to guess and report UNREADABLE.
-    entry = {"id": "-", "plan_path": plan_path, "cwd": os.getcwd()}
-
-    r = plan_rung(entry)
-    typer.echo(f"rung={r.value}")
-    typer.echo(f"dispatchable={'true' if is_dispatchable(entry) else 'false'}")
-    if r is Rung.UNREADABLE:
+    # The door resolves a relative path against the shell's cwd.
+    r = plan_rung(plan_path)
+    dispatchable = r in ("ready", "in_progress", "in_review")
+    typer.echo(f"rung={r}")
+    typer.echo(f"dispatchable={'true' if dispatchable else 'false'}")
+    if r == "unreadable":
         typer.echo(
             f"fno do plan rung: cannot classify {plan_path} (missing, undecodable, "
             "malformed frontmatter, or a status this binary does not know)",
             err=True,
         )
-    raise typer.Exit(code=0 if is_dispatchable(entry) else 1)
+    raise typer.Exit(code=0 if dispatchable else 1)
 
 
 @plan_app.command(
@@ -599,8 +557,8 @@ def reconcile_status(
 ) -> None:
     """Sweep the plans dir, normalizing off-vocabulary/blank statuses."""
     from fno import paths
-    from fno.graph import store
     from fno.paths import plans_content_dir
+    from fno.rust_binary import store_request
 
     target = Path(plans_dir) if plans_dir else plans_content_dir()
     params = {
@@ -611,16 +569,10 @@ def reconcile_status(
         "archive_path": str(paths.graph_archive_json()),
     }
     try:
-        result = store._client_for(store.GRAPH_JSON).request("plan_docs", params)
-    except store.StoreUnavailable as exc:
-        typer.echo(f"  ! plan-doc writer unreachable ({exc}); run `fno doctor`", err=True)
-        raise typer.Exit(code=1) from exc
-    except RuntimeError as exc:
-        # A stale keeper predates the op (the plan-doc stamp clients'
-        # stale-keeper pattern): a skipped sweep must not read as a clean run.
-        if "unknown store method" not in str(exc) and "unknown plan_docs op" not in str(exc):
-            raise
-        typer.echo(f"  ! {exc} - run `fno doctor update`", err=True)
+        result = store_request("plan_docs", params)
+    except (OSError, ValueError, RuntimeError) as exc:
+        # A skipped sweep must not read as a clean run.
+        typer.echo(f"  ! plan-doc writer failed ({exc}); run `fno doctor`", err=True)
         raise typer.Exit(code=1) from exc
 
     for path, old, new in result.get("changes") or []:
@@ -703,13 +655,15 @@ def sync(
     ),
 ) -> None:
     """Idempotent whole-vault mirror-field sweep."""
-    from fno.graph import api as graph_api
     from fno.plan._project import project_graph_nodes
-    from fno.graph.api import ExternalMetadataUnavailable, read_entries
+    from fno.paths import graph_json
+    from fno.rust_binary import active_backend_name, backlog_rows, store_request
 
     watermark = _plan_sync_watermark()
     try:
-        store_version: Optional[float] = float(graph_api.version())
+        store_version: Optional[float] = float(
+            store_request("api", {"op": "version"})["version"]
+        )
     except Exception:  # noqa: BLE001 - an absent store must not block the sweep
         store_version = None
 
@@ -726,14 +680,14 @@ def sync(
 
     # A transient graph read failure degrades to a 0-doc no-op and does NOT
     # advance the watermark, so the next sweep re-converges (AC1-FR).
-    try:
-        entries = read_entries("plan.sync")
-    except ExternalMetadataUnavailable:
-        # The vault mirror is default-backend machinery (its watermark is the
-        # local store's version); an external selection must not repaint docs
-        # from stale local rows.
+    # The vault mirror is default-backend machinery (its watermark is the local
+    # store's version); an external selection must not repaint docs from stale
+    # local rows.
+    if active_backend_name() != "graph":
         typer.echo("plan sync: external tracker backend selected; 0 docs repainted", err=True)
         return
+    try:
+        entries = backlog_rows(path=graph_json())
     except Exception as e:  # noqa: BLE001
         typer.echo(f"plan sync: graph unreadable ({e}); 0 docs repainted", err=True)
         return

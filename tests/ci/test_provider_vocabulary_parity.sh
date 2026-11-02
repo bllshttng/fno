@@ -37,8 +37,6 @@ write_match() {
     '    ("claude", "anthropic"),' \
     '    ("codex", "openai"),' \
     '];' > "$tmp/overlay.rs"
-  printf '%s\n' \
-    '_KNOWN_UNROUTED_PROVIDER = "__uncapped__"' > "$tmp/python-gate.py"
 }
 
 check() {
@@ -49,8 +47,7 @@ check() {
     --adopt-identity-rust "$tmp/adopt-identity.rs" \
     --codex-rust "$tmp/codex.rs" \
     --rust-gate "$tmp/rust-gate.rs" \
-    --overlay-rust "$tmp/overlay.rs" \
-    --python-gate "$tmp/python-gate.py"
+    --overlay-rust "$tmp/overlay.rs"
 }
 
 write_match
@@ -70,16 +67,6 @@ if check >/dev/null 2>&1; then
   exit 1
 else
   echo "PASS: Codex provider drift rejected"
-fi
-
-write_match
-printf '%s\n' \
-  'const KNOWN_UNROUTED_PROVIDER: &str = "uncapped";' > "$tmp/rust-gate.rs"
-if check >/dev/null 2>&1; then
-  echo "FAIL: unrouted sentinel drift accepted" >&2
-  exit 1
-else
-  echo "PASS: unrouted sentinel drift rejected"
 fi
 
 write_match

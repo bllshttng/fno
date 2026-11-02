@@ -599,24 +599,34 @@ pub(crate) fn read(key: &str, root: Option<&Path>) -> Result<Option<ClaimRecord>
     record_for(&db_in(&dir, key)?, key)
 }
 
-/// The GitHub request budget's shared refusal hold: one row keyed
-/// `gh-budget:fleet` whose `expires_at` IS the backoff deadline, with the
-/// escalation step and the refusal stamp riding `metadata`. GitHub limits
-/// the user, not the machine, so one host's refusal stands every host down.
-/// Monotone: a write replaces the row only when the new hold ends later, so
-/// two machines recording one refusal never shorten each other's hold.
+/// The GitHub request budget's shared refusal hold: one row whose
+/// `expires_at` IS the backoff deadline, with the escalation step and the
+/// refusal stamp riding `metadata`. GitHub limits the user, not the machine,
+/// so one host's refusal stands every host on that login down. Monotone: a
+/// write replaces the row only when the new hold ends later, so two
+/// machines recording one refusal never shorten each other's hold.
+/// A stock install keys the bare `gh-budget:fleet` (machine-local); a
+/// shared primary keys `gh-budget:fleet:<login>` per GitHub account, which
+/// [`budget_hold_key`] builds.
 pub(crate) const BUDGET_HOLD_KEY: &str = "gh-budget:fleet";
 
+/// The per-login shared hold key: account A's refusal never stands account
+/// B down on the same primary.
+pub(crate) fn budget_hold_key(login: &str) -> String {
+    format!("gh-budget:fleet:{login}")
+}
+
 /// `(backoff_until_ms, backoff_step, last_refusal_ms, refusal_kind)` from
-/// the shared row, or None when the row is absent or expired on the
-/// READER's clock - an expired hold reads as no hold, exactly like an
+/// the shared row named by `key`, or None when the row is absent or expired
+/// on the READER's clock - an expired hold reads as no hold, exactly like an
 /// expired lease. `root` is the test seam (None = the global claims dir,
 /// which is what shares).
 pub(crate) fn budget_hold_read(
     root: Option<&Path>,
     now: i64,
+    key: &str,
 ) -> Result<Option<(i64, i64, i64, String)>, String> {
-    match budget_hold_query(root)? {
+    match budget_hold_query(root, key)? {
         Some((until, step, last, kind)) if until > now => Ok(Some((until, step, last, kind))),
         _ => Ok(None),
     }
@@ -626,24 +636,27 @@ pub(crate) fn budget_hold_read(
 /// last refusal stamp and escalation step are what let a refusal that
 /// alternates hosts inside the window keep escalating instead of restarting
 /// at the base cooldown on every host.
-pub(crate) fn budget_hold_history(root: Option<&Path>) -> Result<(i64, i64), String> {
-    Ok(budget_hold_query(root)?
+pub(crate) fn budget_hold_history(root: Option<&Path>, key: &str) -> Result<(i64, i64), String> {
+    Ok(budget_hold_query(root, key)?
         .map(|(_, step, last, _)| (step, last))
         .unwrap_or((0, 0)))
 }
 
-fn budget_hold_query(root: Option<&Path>) -> Result<Option<(i64, i64, i64, String)>, String> {
-    let dir = crate::claims_root::claims_dir(BUDGET_HOLD_KEY, root)?;
-    if !(shared(BUDGET_HOLD_KEY) && primary_for(&dir)?.is_some()) && store_absent(&dir) {
+fn budget_hold_query(
+    root: Option<&Path>,
+    key: &str,
+) -> Result<Option<(i64, i64, i64, String)>, String> {
+    let dir = crate::claims_root::claims_dir(key, root)?;
+    if !(shared(key) && primary_for(&dir)?.is_some()) && store_absent(&dir) {
         return Ok(None);
     }
-    let row = db_in(&dir, BUDGET_HOLD_KEY)?.one(
+    let row = db_in(&dir, key)?.one(
         "SELECT expires_at, \
                 COALESCE(json_extract(metadata, '$.backoff_step'), 0), \
                 COALESCE(json_extract(metadata, '$.last_refusal_ms'), 0), \
                 COALESCE(json_extract(metadata, '$.refusal_kind'), 'unknown') \
          FROM claims WHERE key = ?1",
-        &[SqlValue::Text(BUDGET_HOLD_KEY.to_string())],
+        &[SqlValue::Text(key.to_string())],
     )?;
     let Some(row) = row else {
         return Ok(None);
@@ -665,20 +678,21 @@ fn budget_hold_query(root: Option<&Path>) -> Result<Option<(i64, i64, i64, Strin
     Ok(Some((*until, num(1), num(2), kind)))
 }
 
-/// Write the shared hold. `root` is the same test seam `budget_hold_read`
-/// takes. The WHERE on the upsert makes the hold monotone: a peer's later
-/// deadline wins, an earlier one is a no-op.
+/// Write the shared hold named by `key`. `root` is the same test seam
+/// `budget_hold_read` takes. The WHERE on the upsert makes the hold
+/// monotone: a peer's later deadline wins, an earlier one is a no-op.
 pub(crate) fn budget_hold_write(
     root: Option<&Path>,
+    key: &str,
     holder: &str,
     backoff_until_ms: i64,
     backoff_step: i64,
     last_refusal_ms: i64,
     refusal_kind: &str,
 ) -> Result<(), String> {
-    let dir = crate::claims_root::claims_dir(BUDGET_HOLD_KEY, root)?;
+    let dir = crate::claims_root::claims_dir(key, root)?;
     let now = crate::claims::now_ms();
-    db_in(&dir, BUDGET_HOLD_KEY)?.execute(
+    db_in(&dir, key)?.execute(
         "INSERT INTO claims (key, holder, schema_version, acquired_at, expires_at, \
                              pid_unavailable, host, machine_id, reason, metadata) \
          VALUES (?1, ?2, 1, ?3, ?4, 1, ?2, ?2, 'fleet github refusal backoff', \
@@ -693,7 +707,7 @@ pub(crate) fn budget_hold_write(
              metadata = excluded.metadata \
          WHERE excluded.expires_at > claims.expires_at",
         &[
-            SqlValue::Text(BUDGET_HOLD_KEY.to_string()),
+            SqlValue::Text(key.to_string()),
             SqlValue::Text(holder.to_string()),
             SqlValue::Integer(now),
             SqlValue::Integer(backoff_until_ms),
@@ -705,16 +719,21 @@ pub(crate) fn budget_hold_write(
     Ok(())
 }
 
-/// The GitHub status poller's lease: one `gh-budget:poller` row beside the
-/// fleet hold. The machine that holds it reads GitHub for every host and
-/// publishes the composed rows; the others serve those rows.
-pub(crate) const POLLER_KEY: &str = "gh-budget:poller";
+/// The per-login poller lease key: the row beside the fleet hold. The
+/// machine that holds it reads GitHub for every host on that login and
+/// publishes the composed rows; the others serve those rows. Account A's
+/// poller never answers for account B.
+pub(crate) fn poller_key(login: &str) -> String {
+    format!("gh-budget:poller:{login}")
+}
 
-/// Take or renew the poller lease for `machine`, judged on the store clock.
-/// The upsert applies only when the row is this machine's or has run out, so
-/// two hosts never both hold it. True when `machine` holds the lease after.
+/// Take or renew the poller lease named by `key` for `machine`, judged on
+/// the store clock. The upsert applies only when the row is this machine's
+/// or has run out, so two hosts never both hold it. True when `machine`
+/// holds the lease after.
 pub(crate) fn poller_lease_take(
     remote: &Remote,
+    key: &str,
     machine: &str,
     lease_ms: i64,
 ) -> Result<bool, String> {
@@ -732,11 +751,7 @@ pub(crate) fn poller_lease_take(
          WHERE claims.machine_id = excluded.machine_id OR claims.expires_at <= {CLOCK} \
          RETURNING machine_id"
     );
-    let reply = on_primary(
-        remote,
-        &sql,
-        &[text(POLLER_KEY), text(machine), int(lease_ms)],
-    )?;
+    let reply = on_primary(remote, &sql, &[text(key), text(machine), int(lease_ms)])?;
     Ok(!reply.rows.is_empty())
 }
 
@@ -1491,13 +1506,19 @@ mod tests {
     }
 
     #[test]
-    fn the_shared_budget_hold_reads_back_and_never_moves_backwards() {
+    fn one_accounts_refusal_never_holds_another_account() {
         let root = tempfile::tempdir().unwrap();
         let t0 = 1_760_000_000_000i64;
+        let alice = budget_hold_key("alice");
+        let bob = budget_hold_key("bob");
         // Absent reads as no hold.
-        assert_eq!(budget_hold_read(Some(root.path()), t0).unwrap(), None);
+        assert_eq!(
+            budget_hold_read(Some(root.path()), t0, &alice).unwrap(),
+            None
+        );
         budget_hold_write(
             Some(root.path()),
+            &alice,
             "machine-a",
             t0 + 60_000,
             0,
@@ -1506,13 +1527,20 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            budget_hold_read(Some(root.path()), t0 + 1_000).unwrap(),
+            budget_hold_read(Some(root.path()), t0 + 1_000, &alice).unwrap(),
             Some((t0 + 60_000, 0, t0, "secondary".to_string())),
             "the row's deadline, step, refusal stamp and kind read back"
+        );
+        // Account isolation: B reads no hold while A's stands.
+        assert_eq!(
+            budget_hold_read(Some(root.path()), t0 + 1_000, &bob).unwrap(),
+            None,
+            "a refusal keyed to one login never holds another account"
         );
         // Monotone: an earlier hold (a peer's stale record) replaces nothing.
         budget_hold_write(
             Some(root.path()),
+            &alice,
             "machine-b",
             t0 + 30_000,
             1,
@@ -1521,13 +1549,14 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            budget_hold_read(Some(root.path()), t0 + 2_000).unwrap(),
+            budget_hold_read(Some(root.path()), t0 + 2_000, &alice).unwrap(),
             Some((t0 + 60_000, 0, t0, "secondary".to_string())),
             "a peer's earlier deadline never shortens the hold or restamps the kind"
         );
         // A later hold replaces it.
         budget_hold_write(
             Some(root.path()),
+            &alice,
             "machine-b",
             t0 + 120_000,
             1,
@@ -1536,24 +1565,24 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            budget_hold_read(Some(root.path()), t0 + 3_000).unwrap(),
+            budget_hold_read(Some(root.path()), t0 + 3_000, &alice).unwrap(),
             Some((t0 + 120_000, 1, t0 + 5_000, "abuse".to_string())),
             "a peer's later deadline takes over the hold and its kind"
         );
         // Expired on the READER's clock is no hold - but the history
         // survives, which is what keeps cross-host escalation alive.
         assert_eq!(
-            budget_hold_read(Some(root.path()), t0 + 120_000).unwrap(),
+            budget_hold_read(Some(root.path()), t0 + 120_000, &alice).unwrap(),
             None,
             "an expired hold reads as no hold"
         );
         assert_eq!(
-            budget_hold_history(Some(root.path())).unwrap(),
+            budget_hold_history(Some(root.path()), &alice).unwrap(),
             (1, t0 + 5_000),
             "an expired row still yields its step and refusal stamp"
         );
         assert_eq!(
-            budget_hold_history(Some(tempfile::tempdir().unwrap().path())).unwrap(),
+            budget_hold_history(Some(tempfile::tempdir().unwrap().path()), &alice).unwrap(),
             (0, 0),
             "a store with no row reads as no history"
         );

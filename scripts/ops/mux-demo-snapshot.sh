@@ -509,6 +509,7 @@ def machine(mid, host, local, age, sessions):
     }
 local = [
     seat("rowan", "claude", "opus", "payments", "quiet", 12, sid=MUX_LEAD, role="lead", short="demo-ld1"),
+    seat("sentry", "claude", "haiku", "payments", "blocked", 7, short="demo-bk1", parent=MUX_LEAD),
     seat("scout", "claude", "opus", "payments", "writing", 1, sid=sids[0], node=ids[0], parent=MUX_LEAD),
     seat("pager", "pi", "glm-5", "payments", "parked", 150, node=ids[4], short="demo-pg1", parent=MUX_LEAD),
     seat("wren", "codex", "gpt-6-sol", "search", "quiet", 30, sid=FLEET_LEAD, role="lead", short="demo-ld2"),

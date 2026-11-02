@@ -59,20 +59,6 @@ def test_cargo_dev_lookup_prefers_the_newest_build(tmp_path, monkeypatch):
     assert rust_binary._cargo_dev_binary() == debug
 
 
-def test_worker_binary_lets_path_compete_on_freshness(tmp_path, monkeypatch):
-    """The store's resolver used to answer the first checkout artifact and
-    never reached PATH; a stale debug build beat a fresh installed one."""
-    from fno.graph import store
-
-    root = _fake_checkout(tmp_path, monkeypatch)
-    (root / "crates" / "fno-agents").mkdir()
-    stale = _make_exe(root / "crates" / "fno-agents" / "target" / "debug" / "fno-agents-worker")
-    os.utime(stale, ns=(0, 0))
-    fresh = _make_exe(tmp_path / "onpath" / "fno-agents-worker")
-    monkeypatch.delenv("FNO_AGENTS_WORKER", raising=False)
-    monkeypatch.delenv("FNO_AGENTS_FRONT", raising=False)
-    monkeypatch.setattr(store.shutil, "which", lambda name: str(fresh))
-    assert store._worker_binary() == fresh
 
 
 def test_env_override_outranks_the_search(tmp_path, monkeypatch):

@@ -14,6 +14,9 @@
 //! machine's beat applies each answer through the shared `append_answer_row`
 //! seam (clear, mail, resume) and stamps `applied_at`, so one writer owns
 //! each fact: the answer belongs to the answerer, the close to the origin.
+//! An answer the origin cannot take comes back the same way: the origin
+//! stamps `refused` with its reason, and the answering machine's beat tells
+//! the user once and stamps `reported_at`.
 
 use crate::store_remote::{Remote, SqlValue};
 use serde_json::{json, Value};
@@ -22,6 +25,10 @@ use std::path::{Path, PathBuf};
 
 /// A closed row leaves the primary this long after its close.
 pub const RETAIN_SECS: i64 = 7 * 24 * 3600;
+
+/// How long a carried answer may keep failing its write on the asking machine
+/// before the user hears. A busy answer lock clears in seconds; this does not.
+const APPLY_PATIENCE_SECS: i64 = 600;
 
 const DDL: &str = "CREATE TABLE IF NOT EXISTS fleet_question (\
 machine_id TEXT NOT NULL, \
@@ -41,12 +48,43 @@ answer_host TEXT NOT NULL, \
 record TEXT NOT NULL, \
 created_at INTEGER NOT NULL, \
 applied_at INTEGER, \
+refused TEXT, \
+reported_at INTEGER, \
 PRIMARY KEY (machine_id, question_id))";
+
+const ANSWER_ADDED_COLUMNS: [(&str, &str); 2] = [
+    (
+        "refused",
+        "ALTER TABLE fleet_question_answer ADD COLUMN refused TEXT",
+    ),
+    (
+        "reported_at",
+        "ALTER TABLE fleet_question_answer ADD COLUMN reported_at INTEGER",
+    ),
+];
 
 const NOW: &str = "(SELECT strftime('%s','now'))";
 
 pub fn ensure_schema(remote: &Remote) -> Result<(), String> {
-    remote.script(&format!("{DDL}; {ANSWER_DDL}"))
+    remote.script(&format!("{DDL}; {ANSWER_DDL}"))?;
+    let reply = remote.execute(
+        "SELECT name FROM pragma_table_info('fleet_question_answer')",
+        &[],
+    )?;
+    let present: HashSet<&str> = reply
+        .rows
+        .iter()
+        .filter_map(|r| r.first()?.text())
+        .collect();
+    for (column, alter) in ANSWER_ADDED_COLUMNS {
+        if !present.contains(column) {
+            match remote.execute(alter, &[]) {
+                Err(e) if !e.contains("duplicate column name") => return Err(e),
+                _ => {}
+            }
+        }
+    }
+    Ok(())
 }
 
 /// The origin machine of a copied question, or `None` for a question this
@@ -63,12 +101,13 @@ pub(crate) fn peer_origin(question: &Value) -> Option<&str> {
 /// root). The home is the agents home the store belongs to: the apply half
 /// records an applied peer answer through it, so the row lands in this
 /// machine's journal and the answer lock stays beside it. Tests build one
-/// per fake machine.
+/// per fake machine. `notify` tells the user, and returns whether it landed.
 pub(crate) struct Host {
     pub machine: String,
     pub host: String,
     pub root: PathBuf,
     pub home: crate::paths::AgentsHome,
+    pub notify: Box<dyn Fn(&str, &str) -> bool>,
 }
 
 impl Host {
@@ -83,6 +122,9 @@ impl Host {
                 .map(Path::to_path_buf)
                 .unwrap_or_else(|| PathBuf::from(".fno")),
             home,
+            notify: Box::new(|title, body| {
+                crate::operator_notice::notify_operator_confirmed(title, body, None)
+            }),
         }
     }
 
@@ -92,11 +134,13 @@ impl Host {
 }
 
 /// The local fold: the first asked record and the first close, by id, plus
-/// the unsuperseded answer rows, by item id.
+/// the unsuperseded answer rows, by item id, and the evidence of each ladder
+/// that gave up, by item id.
 struct Fold {
     asked: HashMap<String, Value>,
     closed: HashMap<String, Value>,
     answers: HashMap<String, Value>,
+    failed: HashMap<String, String>,
 }
 
 fn fold(index: &Path) -> Fold {
@@ -104,6 +148,7 @@ fn fold(index: &Path) -> Fold {
         asked: HashMap::new(),
         closed: HashMap::new(),
         answers: HashMap::new(),
+        failed: HashMap::new(),
     };
     let text = crate::event_store::journal_text(
         index,
@@ -111,6 +156,7 @@ fn fold(index: &Path) -> Fold {
             "operator_question",
             "operator_question_closed",
             "attention_answer",
+            "attention_delivery",
         ],
     );
     for event in text
@@ -118,6 +164,14 @@ fn fold(index: &Path) -> Fold {
         .filter_map(|l| serde_json::from_str::<Value>(l).ok())
     {
         let data = &event["data"];
+        if event["type"].as_str() == Some("attention_delivery") {
+            if let (Some("failed"), Some(id)) = (data["outcome"].as_str(), data["item_id"].as_str())
+            {
+                let evidence = data["evidence"].as_str().unwrap_or("its ladder gave up");
+                out.failed.insert(id.to_string(), evidence.to_string());
+            }
+            continue;
+        }
         if event["type"].as_str() == Some("attention_answer") {
             // A superseded row never answers (the seam wrote it as a marker).
             if data["superseded"].as_bool() != Some(true) {
@@ -175,12 +229,15 @@ pub(crate) struct Beat {
     pub closed: usize,
     pub answers_published: usize,
     pub answers_applied: usize,
+    pub answers_refused: usize,
+    pub refusals_reported: usize,
     pub peer_hosts: Vec<String>,
 }
 
 /// One beat: publish this machine's questions and closes, pull the peers',
 /// publish answers this machine recorded for copies, apply answers recorded
-/// for this machine's questions, then drop rows past the retention.
+/// for this machine's questions, tell the user which of this machine's answers
+/// the asking machine refused, then drop rows past the retention.
 pub(crate) fn beat(remote: &Remote, me: &Host) -> Result<Beat, String> {
     if me.machine.is_empty() {
         return Err("no machine id; the question bus needs one".into());
@@ -188,7 +245,9 @@ pub(crate) fn beat(remote: &Remote, me: &Host) -> Result<Beat, String> {
     let published = publish(remote, me)?;
     let (copied, closed, peer_hosts) = pull(remote, me)?;
     let answers_published = publish_answers(remote, me)?;
-    let answers_applied = apply_answers(remote, me)?;
+    let (answers_applied, refused_now) = apply_answers(remote, me)?;
+    let answers_refused = refused_now + refuse_failed_doors(remote, me)?;
+    let refusals_reported = report_refusals(remote, me)?;
     remote.execute(
         &format!("DELETE FROM fleet_question WHERE closed_at < {NOW} - ?"),
         &[SqlValue::Integer(RETAIN_SECS)],
@@ -205,6 +264,8 @@ pub(crate) fn beat(remote: &Remote, me: &Host) -> Result<Beat, String> {
         closed,
         answers_published,
         answers_applied,
+        answers_refused,
+        refusals_reported,
         peer_hosts,
     })
 }
@@ -340,101 +401,215 @@ VALUES (?, ?, ?, ?, ?, {NOW})"
     Ok(steps.len())
 }
 
+/// What the asking machine did with one carried answer.
+enum Applied {
+    /// The row is in this machine's journal, now or from a beat whose stamp
+    /// never reached the primary.
+    Done,
+    /// The answer can never apply; the answering machine hears why.
+    Refused(String),
+    /// The write failed; the row retries next beat.
+    Retry(String),
+}
+
+fn apply_one(me: &Host, local: &Fold, answerer: &str, record: &Value) -> Applied {
+    const EARLIER: &str = "an earlier answer won";
+    let Some(origin_id) = record["data"]["origin_question_id"].as_str() else {
+        return Applied::Refused("the answer row names no question".into());
+    };
+    let own = local.asked.get(origin_id);
+    if !own.is_some_and(|event| is_own(event, &me.machine)) {
+        return Applied::Refused("this machine no longer holds the question".into());
+    }
+    if let Some(won) = local.answers.get(origin_id) {
+        return if won["data"]["attested_by"].as_str() == Some(answerer) {
+            Applied::Done
+        } else {
+            Applied::Refused(EARLIER.into())
+        };
+    }
+    if let Some(close) = local.closed.get(origin_id) {
+        return Applied::Refused(format!("it closed first: {}", close_reason(close)));
+    }
+    let answer = record_to_answer(record);
+    let answerer_host = record["data"]["host"].as_str().unwrap_or(answerer);
+    match crate::attention_arm::append_answer_row(
+        &me.home,
+        origin_id,
+        &format!("peer:{answerer_host}"),
+        &answer,
+        "sink",
+        "question_bus",
+        answerer,
+    ) {
+        Ok((_, false)) => Applied::Done,
+        Ok((_, true)) => Applied::Refused(EARLIER.into()),
+        Err(e) => Applied::Retry(e),
+    }
+}
+
 /// The origin's half: apply each peer answer to its own question through the
 /// same seam a local mux answer takes, then stamp `applied_at` so the row is
-/// applied exactly once. A row whose question closed or vanished before the
-/// answer arrived stays unstamped and ages out with the retention; a lost
-/// race against a local door answer is a no-op and retries next beat.
-fn apply_answers(remote: &Remote, me: &Host) -> Result<usize, String> {
+/// applied exactly once. An answer that can never apply stamps `refused`
+/// instead, so the answering machine can tell the user. A failed write retries
+/// until `APPLY_PATIENCE_SECS`, then refuses. Returns (applied, refused).
+fn apply_answers(remote: &Remote, me: &Host) -> Result<(usize, usize), String> {
     let reply = remote.execute(
-        "SELECT machine_id, question_id FROM fleet_question_answer \
-WHERE origin_machine = ? AND applied_at IS NULL",
+        &format!(
+            "SELECT machine_id, question_id, CAST({NOW} - created_at AS TEXT) \
+FROM fleet_question_answer \
+WHERE origin_machine = ? AND applied_at IS NULL AND refused IS NULL"
+        ),
         &[SqlValue::Text(me.machine.clone())],
     )?;
     if reply.rows.is_empty() {
-        return Ok(0);
+        return Ok((0, 0));
     }
-    let rows: Vec<(String, String)> = reply
-        .rows
-        .iter()
-        .filter_map(|r| {
-            Some((
-                r.first()?.text()?.to_string(),
-                r.get(1)?.text()?.to_string(),
-            ))
-        })
-        .collect();
     let local = fold(&me.index());
-    let mut applied: Vec<(String, String, Vec<SqlValue>)> = Vec::new();
-    let mut count = 0usize;
-    for (answerer, copy_id) in &rows {
+    // A row addressed here means this machine asked, so an empty fold is a
+    // failed read (the journal read degrades to empty), never a lost question.
+    if local.asked.is_empty() {
+        return Ok((0, 0));
+    }
+    let mut steps: Vec<(String, Vec<SqlValue>)> = Vec::new();
+    let (mut applied, mut refused) = (0usize, 0usize);
+    for row in &reply.rows {
+        let text = |i: usize| row.get(i).and_then(SqlValue::text);
+        let (Some(answerer), Some(copy_id)) = (text(0), text(1)) else {
+            continue;
+        };
         // The record rides a second read, one row at a time: a full table of
         // records in one reply crosses the primary's reply limit.
         let Some(record) = fetch_answer_record(remote, answerer, copy_id)? else {
             continue;
         };
-        // The origin's own id rides the copy's data, stamped at copy time.
-        let Some(origin_id) = record["data"]["origin_question_id"]
-            .as_str()
-            .map(str::to_string)
-        else {
-            continue;
-        };
-        let Some(event) = local.asked.get(&origin_id) else {
-            continue;
-        };
-        if local.closed.contains_key(&origin_id) || !is_own(event, &me.machine) {
-            continue;
-        }
-        let answer = record_to_answer(&record);
-        let answerer_host = record["data"]["host"].as_str().unwrap_or(answerer);
-        match crate::attention_arm::append_answer_row(
-            &me.home,
-            &origin_id,
-            &format!("peer:{answerer_host}"),
-            &answer,
-            "sink",
-            "question_bus",
-            answerer,
-        ) {
-            Ok(_) => {
-                count += 1;
-                applied.push((
-                    answerer.clone(),
-                    copy_id.clone(),
-                    vec![
-                        // The carrier row's machine_id is the answerer, not
-                        // the origin: the stamp must match the insert keys.
-                        SqlValue::Text(answerer.clone()),
-                        SqlValue::Text(copy_id.clone()),
-                    ],
-                ));
-            }
-            Err(e) => {
-                // A lost race against a local door answer is a no-op: the
-                // first answer wins, and the row retries next beat.
-                eprintln!("question-bus: apply {copy_id}: {e}");
-            }
-        }
-    }
-    if !applied.is_empty() {
-        let steps: Vec<(String, Vec<SqlValue>)> = applied
-            .iter()
-            .map(|(_, _, params)| {
-                (
+        // The carrier row's machine_id is the answerer, not the origin: a
+        // stamp must match the insert keys.
+        let keys = vec![
+            SqlValue::Text(answerer.to_string()),
+            SqlValue::Text(copy_id.to_string()),
+        ];
+        let why = match apply_one(me, &local, answerer, &record) {
+            Applied::Done => {
+                applied += 1;
+                steps.push((
                     format!(
                         "UPDATE fleet_question_answer SET applied_at = {NOW} \
 WHERE machine_id = ? AND question_id = ?"
                     ),
-                    params.clone(),
-                )
-            })
-            .collect();
+                    keys,
+                ));
+                continue;
+            }
+            Applied::Refused(why) => why,
+            Applied::Retry(error) => {
+                let age: i64 = text(2).and_then(|t| t.parse().ok()).unwrap_or(0);
+                if age < APPLY_PATIENCE_SECS {
+                    eprintln!("question-bus: apply {copy_id}: {error}");
+                    continue;
+                }
+                format!("it could not record the answer: {error}")
+            }
+        };
+        refused += 1;
+        steps.push(refusal_step(why, keys));
+    }
+    if !steps.is_empty() {
         remote
             .transaction(&steps)
             .map_err(|(_, error)| format!("apply_answers: {error}"))?;
     }
-    Ok(count)
+    Ok((applied, refused))
+}
+
+fn refusal_step(why: String, keys: Vec<SqlValue>) -> (String, Vec<SqlValue>) {
+    let mut params = vec![SqlValue::Text(why)];
+    params.extend(keys);
+    (
+        "UPDATE fleet_question_answer SET refused = ? WHERE machine_id = ? AND question_id = ?"
+            .to_string(),
+        params,
+    )
+}
+
+/// An applied answer can still lose at this machine's door: the attention
+/// arm's clear refuses it until its ladder gives up, and the question stays
+/// open. That failed delivery row is the refusal the answering machine never
+/// sees on its own. A failure on a closed question is a failed wake, and the
+/// answer stands. Reads the primary only when such a ladder exists.
+fn refuse_failed_doors(remote: &Remote, me: &Host) -> Result<usize, String> {
+    let local = fold(&me.index());
+    if local.failed.keys().all(|id| local.closed.contains_key(id)) {
+        return Ok(0);
+    }
+    let reply = remote.execute(
+        "SELECT machine_id, question_id FROM fleet_question_answer \
+WHERE origin_machine = ? AND applied_at IS NOT NULL AND refused IS NULL",
+        &[SqlValue::Text(me.machine.clone())],
+    )?;
+    let mut steps: Vec<(String, Vec<SqlValue>)> = Vec::new();
+    for row in &reply.rows {
+        let text = |i: usize| row.get(i).and_then(SqlValue::text);
+        let (Some(answerer), Some(copy)) = (text(0), text(1)) else {
+            continue;
+        };
+        let origin_id = copy.rsplit_once('@').map_or(copy, |(id, _)| id);
+        let Some(evidence) = local.failed.get(origin_id) else {
+            continue;
+        };
+        if !local.closed.contains_key(origin_id) {
+            let keys = vec![
+                SqlValue::Text(answerer.to_string()),
+                SqlValue::Text(copy.to_string()),
+            ];
+            steps.push(refusal_step(evidence.clone(), keys));
+        }
+    }
+    if !steps.is_empty() {
+        remote
+            .transaction(&steps)
+            .map_err(|(_, error)| format!("refuse_failed_doors: {error}"))?;
+    }
+    Ok(steps.len())
+}
+
+/// The answering machine's half: one notice per refused answer, stamped only
+/// after it lands, so a failed notice retries and a landed one never repeats.
+fn report_refusals(remote: &Remote, me: &Host) -> Result<usize, String> {
+    let mine = SqlValue::Text(me.machine.clone());
+    let reply = remote.execute(
+        "SELECT question_id, refused FROM fleet_question_answer \
+WHERE machine_id = ? AND refused IS NOT NULL AND reported_at IS NULL",
+        std::slice::from_ref(&mine),
+    )?;
+    let mut reported = 0;
+    for row in &reply.rows {
+        let text = |i: usize| row.get(i).and_then(SqlValue::text);
+        let (Some(copy), Some(why)) = (text(0), text(1)) else {
+            continue;
+        };
+        let (origin_id, host) = copy
+            .rsplit_once('@')
+            .unwrap_or((copy, "the asking machine"));
+        let title = format!("Your answer to {copy} did not apply");
+        let body = format!(
+            "{host} did not take your answer to {copy}: {why}. If it is still open, answer \
+{origin_id} on {host}."
+        );
+        // A failed notice can hold its 15 s bound, so the rest wait a beat.
+        if !(me.notify)(&title, &body) {
+            break;
+        }
+        remote.execute(
+            &format!(
+                "UPDATE fleet_question_answer SET reported_at = {NOW} \
+WHERE machine_id = ? AND question_id = ?"
+            ),
+            &[mine.clone(), SqlValue::Text(copy.to_string())],
+        )?;
+        reported += 1;
+    }
+    Ok(reported)
 }
 
 /// The answer row's record, one row at a time under the reply limit.
@@ -570,6 +745,7 @@ fn write_status(me: &Host, outcome: &Result<Beat, String>) {
         .unwrap_or(0);
     let body = match outcome {
         Ok(b) => json!({"at": at, "published": b.published, "peer_hosts": b.peer_hosts,
+            "answers_refused": b.answers_refused, "refusals_reported": b.refusals_reported,
             "last_error": null}),
         Err(e) => json!({"at": at, "published": 0, "peer_hosts": [], "last_error": e}),
     };
@@ -596,6 +772,14 @@ pub fn tick(remote: &Remote) {
         Ok(_) => {}
         Err(e) => eprintln!("question-bus: {e}"),
     }
+    if let Ok(b) = &outcome {
+        if b.answers_refused + b.refusals_reported > 0 {
+            eprintln!(
+                "question-bus: refused {} reported {}",
+                b.answers_refused, b.refusals_reported
+            );
+        }
+    }
     write_status(&me, &outcome);
 }
 
@@ -608,6 +792,32 @@ mod tests {
         let event = json!({"ts": "2026-10-27T00:00:00Z", "type": "operator_question",
             "source": "test", "data": {"question_id": qid, "question": "ship it?", "asker": "w1"}});
         crate::provider_cap::append_questions_row(&me.index(), &event).unwrap();
+    }
+
+    type Notices = std::rc::Rc<std::cell::RefCell<Vec<String>>>;
+
+    fn machine(id: &str, host: &str, dir: &tempfile::TempDir, notices: &Notices) -> Host {
+        let notices = notices.clone();
+        Host {
+            machine: id.into(),
+            host: host.into(),
+            root: dir.path().into(),
+            home: crate::paths::AgentsHome::at(dir.path().join("agents")),
+            notify: Box::new(move |_, body| {
+                notices.borrow_mut().push(body.to_string());
+                true
+            }),
+        }
+    }
+
+    /// The row the door writes for an answer on a copy.
+    fn answer_copy(me: &Host, copy_id: &str) {
+        let answer = json!({"ts": "2026-10-27T00:01:00Z", "type": "attention_answer",
+            "source": "test", "data": {"item_id": copy_id, "sink": "mux", "option": 2,
+            "words": "", "done": false, "answered_at": "2026-10-27T00:01:00Z",
+            "authority": "sink", "attested_by": "mux", "mapped_by": "needs_door",
+            "superseded": false, "delegate": false, "decision_id": null}});
+        crate::provider_cap::append_questions_row(&me.index(), &answer).unwrap();
     }
 
     fn reasons(me: &Host) -> Vec<String> {
@@ -625,18 +835,9 @@ mod tests {
         let remote = &primary.remote;
         ensure_schema(remote).unwrap();
         let (ta, tb) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
-        let a = Host {
-            machine: "m-A".into(),
-            host: "hosta".into(),
-            root: ta.path().into(),
-            home: crate::paths::AgentsHome::at(ta.path().join("agents")),
-        };
-        let b = Host {
-            machine: "m-B".into(),
-            host: "hostb".into(),
-            root: tb.path().into(),
-            home: crate::paths::AgentsHome::at(tb.path().join("agents")),
-        };
+        let notices = Notices::default();
+        let a = machine("m-A", "hosta", &ta, &notices);
+        let b = machine("m-B", "hostb", &tb, &notices);
 
         // B asks; A's beat copies it once, stamped with B's host, beside
         // A's own question of the same id.
@@ -702,18 +903,9 @@ mod tests {
         let remote = &primary.remote;
         ensure_schema(remote).unwrap();
         let (ta, tb) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
-        let a = Host {
-            machine: "m-A".into(),
-            host: "hosta".into(),
-            root: ta.path().into(),
-            home: crate::paths::AgentsHome::at(ta.path().join("agents")),
-        };
-        let b = Host {
-            machine: "m-B".into(),
-            host: "hostb".into(),
-            root: tb.path().into(),
-            home: crate::paths::AgentsHome::at(tb.path().join("agents")),
-        };
+        let notices = Notices::default();
+        let mut a = machine("m-A", "hosta", &ta, &notices);
+        let b = machine("m-B", "hostb", &tb, &notices);
 
         // A asks; B copies. The copy carries the origin stamps.
         ask(&a, "q-1");
@@ -727,12 +919,7 @@ mod tests {
 
         // B answers its copy the way the door writes the row, then beats:
         // the answer publishes once to the carrier.
-        let answer = json!({"ts": "2026-10-27T00:01:00Z", "type": "attention_answer",
-            "source": "test", "data": {"item_id": "q-1@hosta", "sink": "mux", "option": 2,
-            "words": "", "done": false, "answered_at": "2026-10-27T00:01:00Z",
-            "authority": "sink", "attested_by": "mux", "mapped_by": "needs_door",
-            "superseded": false, "delegate": false, "decision_id": null}});
-        crate::provider_cap::append_questions_row(&b.index(), &answer).unwrap();
+        answer_copy(&b, "q-1@hosta");
         assert_eq!(beat(remote, &b).unwrap().answers_published, 1);
         assert_eq!(
             beat(remote, &b).unwrap(),
@@ -765,5 +952,145 @@ mod tests {
             reasons(&b),
             vec!["closed on hosta: answered: option 2".to_string()]
         );
+
+        // A lost stamp replays: the row in A's journal is this answer's own,
+        // so A stamps it again and refuses nothing.
+        let unstamp = |id: &str| {
+            let db = primary.db.lock().unwrap();
+            db.execute(
+                "UPDATE fleet_question_answer SET applied_at = NULL WHERE question_id = ?1",
+                [id],
+            )
+            .unwrap();
+        };
+        unstamp("q-1@hosta");
+        let replay = beat(remote, &a).unwrap();
+        assert_eq!((replay.answers_applied, replay.answers_refused), (1, 0));
+        assert!(notices.borrow().is_empty());
+
+        // Carry one more answer to A: asked, copied, answered, published.
+        let carry = |qid: &str, a: &Host| {
+            ask(a, qid);
+            beat(remote, a).unwrap();
+            beat(remote, &b).unwrap();
+            answer_copy(&b, &format!("{qid}@hosta"));
+            assert_eq!(beat(remote, &b).unwrap().answers_published, 1);
+        };
+        let close = |me: &Host, qid: &str| {
+            let close = json!({"ts": "2026-10-27T00:02:00Z", "type": "operator_question_closed",
+                "source": "test", "data": {"question_id": qid, "answer": "local"}});
+            crate::provider_cap::append_questions_row(&me.index(), &close).unwrap();
+        };
+
+        // The question closed before the answer arrived: B hears once, naming
+        // the question and the reason, and a later beat stays quiet.
+        carry("q-2", &a);
+        close(&a, "q-2");
+        assert_eq!(beat(remote, &a).unwrap().answers_refused, 1);
+        assert_eq!(beat(remote, &b).unwrap().refusals_reported, 1);
+        assert_eq!(beat(remote, &b).unwrap().refusals_reported, 0);
+        assert_eq!(
+            notices.borrow().as_slice(),
+            [
+                "hosta did not take your answer to q-2@hosta: it closed first: answered: local. \
+If it is still open, answer q-2 on hosta."
+            ]
+        );
+
+        // Applied, then A's own door refused it until the ladder gave up: the
+        // failed delivery comes back. A failed wake on a closed question does
+        // not.
+        let gave_up = |qid: &str| {
+            json!({"ts": "2026-10-27T00:03:00Z", "type": "attention_delivery", "source": "test",
+                "data": {"item_id": qid, "rung": "none", "outcome": "failed",
+                "evidence": "the clear kept failing: clear exited 3: outstanding: refused: no"}})
+        };
+        carry("q-3", &a);
+        carry("q-4", &a);
+        // The second carry's own beat already applied the first answer.
+        assert_eq!(beat(remote, &a).unwrap().answers_applied, 1);
+        for qid in ["q-3", "q-4"] {
+            crate::provider_cap::append_questions_row(&a.index(), &gave_up(qid)).unwrap();
+        }
+        close(&a, "q-4");
+        assert_eq!(beat(remote, &a).unwrap().answers_refused, 1);
+        beat(remote, &b).unwrap();
+        assert_eq!(notices.borrow().len(), 2);
+        assert!(notices.borrow()[1].contains("q-3@hosta: the clear kept failing"));
+
+        // A failed write keeps the row for the next beat, until the patience
+        // runs out and the answer comes back refused. The home sits under a
+        // plain file, so the answer lock cannot open.
+        carry("q-5", &a);
+        let plain = ta.path().join("plain");
+        std::fs::write(&plain, "").unwrap();
+        let good_home = std::mem::replace(
+            &mut a.home,
+            crate::paths::AgentsHome::at(plain.join("agents")),
+        );
+        let held = beat(remote, &a).unwrap();
+        assert_eq!((held.answers_applied, held.answers_refused), (0, 0));
+        {
+            let db = primary.db.lock().unwrap();
+            db.execute(
+                "UPDATE fleet_question_answer SET created_at = created_at - 3600 \
+WHERE question_id = 'q-5@hosta'",
+                [],
+            )
+            .unwrap();
+        }
+        assert_eq!(beat(remote, &a).unwrap().answers_refused, 1);
+        a.home = good_home;
+
+        // A notice that fails stays owed, and the next beat sends it.
+        let silent = Host {
+            notify: Box::new(|_, _| false),
+            ..machine("m-B", "hostb", &tb, &notices)
+        };
+        assert_eq!(beat(remote, &silent).unwrap().refusals_reported, 0);
+        assert_eq!(beat(remote, &b).unwrap().refusals_reported, 1);
+
+        // A dead primary keeps the answer in the journal; the first beat after
+        // it answers publishes the row.
+        ask(&a, "q-6");
+        beat(remote, &a).unwrap();
+        beat(remote, &b).unwrap();
+        answer_copy(&b, "q-6@hosta");
+        assert!(beat(&test_primary::dead(), &b).is_err());
+        assert_eq!(beat(remote, &b).unwrap().answers_published, 1);
+
+        // An unreadable journal reads as empty: the row waits, unrefused.
+        let tc = tempfile::tempdir().unwrap();
+        let unread = machine("m-A", "hosta", &tc, &notices);
+        assert_eq!(beat(remote, &unread).unwrap().answers_refused, 0);
+        assert_eq!(beat(remote, &a).unwrap().answers_applied, 1);
+    }
+
+    // A primary from before the refusal columns gains them on the next start.
+    #[test]
+    fn ensure_schema_adds_the_refusal_columns_to_an_old_answer_table() {
+        let primary = test_primary::start();
+        primary
+            .db
+            .lock()
+            .unwrap()
+            .execute_batch(
+                "CREATE TABLE fleet_question_answer (machine_id TEXT NOT NULL, \
+question_id TEXT NOT NULL, origin_machine TEXT NOT NULL, answer_host TEXT NOT NULL, \
+record TEXT NOT NULL, created_at INTEGER NOT NULL, applied_at INTEGER, \
+PRIMARY KEY (machine_id, question_id))",
+            )
+            .unwrap();
+        ensure_schema(&primary.remote).unwrap();
+        ensure_schema(&primary.remote).unwrap();
+        let reply = primary
+            .remote
+            .execute(
+                "SELECT COUNT(*) FROM pragma_table_info('fleet_question_answer') \
+WHERE name IN ('refused', 'reported_at')",
+                &[],
+            )
+            .unwrap();
+        assert_eq!(reply.rows[0][0], SqlValue::Integer(2));
     }
 }

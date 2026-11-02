@@ -19,7 +19,6 @@ _MESSAGE_EVENT_SKEW_SECONDS = 2
 SPAWN_TIMEOUT_S = 600.0
 
 
-
 # A start token at or below this reads as clock ticks since boot, not epoch
 # microseconds, so it cannot be compared to created_at. Both languages share
 # the bound; see `row_timestamp` in crates/fno-agents/src/daemon.rs.

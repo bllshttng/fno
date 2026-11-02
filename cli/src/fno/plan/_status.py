@@ -48,7 +48,7 @@ STATUS_PROGRESSION: tuple[str, ...] = (
 TERMINAL_STATUSES: tuple[str, ...] = ("done", "superseded")
 
 # Retired spellings, accepted on read and never written. Mirrors the read-and-
-# write shape of STATUS_MIGRATION in fno.graph.statuses: a doc stamped under the
+# write shape of STATUS_MIGRATION in graph_store.rs: a doc stamped under the
 # old vocabulary keeps parsing at its correct rung, and nothing rewrites it.
 STATUS_ALIASES: dict[str, str] = {
     "shipped": "in_review",

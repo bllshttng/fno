@@ -507,6 +507,52 @@ fn died_receipt_names_the_death_and_the_row_reads_failed() {
     );
 }
 
+/// The mint stamps the parent edge the request carried (`--spawned-by`, the
+/// cross-host relay): the pane child's own adopt ambient-captures nothing
+/// over an ssh hop, so the mint is the only writer that can name the parent.
+#[test]
+fn the_pane_mint_stamps_the_carried_parent_edge() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = AgentsHome::at(tmp.path().join("agents"));
+    let mut ctx = PaneContext::simple("codex", "/repo");
+    ctx.spawned_by_session = Some("s-parent".to_string());
+    write_pane_row(
+        &home,
+        "w",
+        &ctx,
+        &pane(),
+        &ArmBind::Died {
+            reason: "pane-died-before-binding".into(),
+        },
+        false,
+        &None,
+    )
+    .unwrap();
+    let registry = state::load_registry(&home.registry_json())
+        .map_err(|e| e.to_string())
+        .unwrap();
+    let row = registry.entries.iter().find(|e| e.name == "w").unwrap();
+    assert_eq!(row.spawned_by_session.as_deref(), Some("s-parent"));
+    // No carried edge keeps the old silent mint.
+    write_pane_row(
+        &home,
+        "w2",
+        &PaneContext::simple("codex", "/repo"),
+        &pane(),
+        &ArmBind::Died {
+            reason: "pane-died-before-binding".into(),
+        },
+        false,
+        &None,
+    )
+    .unwrap();
+    let registry = state::load_registry(&home.registry_json())
+        .map_err(|e| e.to_string())
+        .unwrap();
+    let row = registry.entries.iter().find(|e| e.name == "w2").unwrap();
+    assert_eq!(row.spawned_by_session, None);
+}
+
 #[test]
 fn stamp_binds_the_matching_idless_row() {
     let tmp = tempfile::tempdir().unwrap();

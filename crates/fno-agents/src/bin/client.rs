@@ -1272,6 +1272,10 @@ async fn run(args: Vec<String>) -> i32 {
             Some("--peek") => return fno_agents::peek::run_peek(&rest[1..]),
             Some("--team") => return fno_agents::team_read::run_team(&rest[1..]),
             Some("--role") => return fno_agents::role_grant::run_role(&rest[1..]),
+            Some("--lint-registry") | Some("--lint-field-coverage") => {
+                let op = rest[0].as_str();
+                return fno_agents::lint_registry::run(op, &rest[1..], &AgentsHome::from_env());
+            }
             _ => {}
         }
         let has_cap = rest.iter().any(|a| a.as_str() == "--capabilities");
@@ -3739,6 +3743,15 @@ fn build_request(command: &str, rest: &[String]) -> Result<(String, Value), Stri
             "--node" | "--slug" | "--plan" | "--session-phase" => {
                 params.insert(a[2..].replace('-', "_"), str_arg(&mut it, &a)?);
             }
+            // The cross-host relay's explicit parent edge (spawn_remote.rs):
+            // an ssh hop forwards no caller env, so the far side's ambient
+            // capture resolves nothing. The daemon mint reads the request.
+            "--spawned-by" => {
+                params.insert(
+                    "spawned_by_session".into(),
+                    str_arg(&mut it, "--spawned-by")?,
+                );
+            }
             // The seam's node-reason receipt, set only when the seed
             // named a node the seam could not resolve. Forwarded so the mint
             // stamps why the row works no node; never read as a decision.
@@ -4078,14 +4091,20 @@ fn build_request(command: &str, rest: &[String]) -> Result<(String, Value), Stri
             // daemon mint reads the parent from HERE, never from its own
             // environment (node-provenance.md: capture is ambient).
             let (session, harness, cwd) = fno_agents::claims::ambient_parent_edge();
-            if let Some(s) = session {
-                params.insert("spawned_by_session".into(), Value::String(s));
-            }
-            if let Some(h) = harness {
-                params.insert("spawned_by_harness".into(), Value::String(h));
-            }
-            if let Some(c) = cwd {
-                params.insert("spawned_by_cwd".into(), Value::String(c));
+            // An explicit `--spawned-by` (the cross-host relay's edge) wins
+            // over the ambient capture; the three ride together, so a
+            // carried session keeps its harness/cwd out too rather than
+            // mixing parentage from two captures.
+            if params.get("spawned_by_session").is_none() {
+                if let Some(s) = session {
+                    params.insert("spawned_by_session".into(), Value::String(s));
+                }
+                if let Some(h) = harness {
+                    params.insert("spawned_by_harness".into(), Value::String(h));
+                }
+                if let Some(c) = cwd {
+                    params.insert("spawned_by_cwd".into(), Value::String(c));
+                }
             }
             // With --name the whole positional tail is the message; without it the
             // first positional is still the name (a direct `fno-agents spawn`

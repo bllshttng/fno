@@ -8,7 +8,6 @@ code with the others, so the file is what keeps the three honest.
 import json
 import pathlib
 
-from fno.agents.format import attention_sort_key
 from fno.agents.session_truth import _humanize_age
 
 FIXTURE = (
@@ -19,12 +18,6 @@ FIXTURE = (
 def _fixture() -> tuple[list[dict], list[str]]:
     data = json.loads(FIXTURE.read_text())
     return data["rows"], data["expected_order"]
-
-
-def test_python_serializer_sorts_rows_in_the_shared_attention_order():
-    rows, expected = _fixture()
-    ordered = sorted(rows, key=attention_sort_key)
-    assert [r["name"] for r in ordered] == expected
 
 
 def test_humanize_age_is_fixed_width_and_covers_days():

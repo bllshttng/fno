@@ -9,9 +9,8 @@ from tests.fixtures.graph_seed import seed_graph
 
 import json
 import subprocess
-from dataclasses import asdict, replace
+from dataclasses import replace
 from pathlib import Path
-from typing import Optional
 
 import pytest
 
@@ -40,17 +39,6 @@ def _write_manifest(path, **fields) -> None:
 # here is the ENCODING: a portfolio has to reduce to one canonical string,
 # because the one-live-role guard compares scopes by equality and would
 # otherwise miss a duplicate spelled in a different order.
-
-
-def test_a_portfolio_canonicalizes_regardless_of_spelling() -> None:
-    from fno.agents.role import canonical_scope, split_scope
-
-    assert canonical_scope(["web", "etl"]) == canonical_scope(["etl", "web"])
-    assert canonical_scope(["etl", "web", "etl"]) == "etl,web"
-    assert canonical_scope([" etl ", "web"]) == "etl,web"
-    assert split_scope(canonical_scope(["web", "etl"])) == ["etl", "web"]
-    # A corrupted row's non-string scope degrades instead of crashing a read.
-    assert split_scope(5) == []  # type: ignore[arg-type]
 
 
 # --- spawn stamps the role, grantor is provenance not self-declared ---------
@@ -88,80 +76,6 @@ class _FakeRunner:
         raise AssertionError(f"unexpected invocation: {argv}")
 
 
-def _spawn_promoted(monkeypatch, tmp_path, *, grantor_env: Optional[str], **role):
-    use_tmpdir(monkeypatch, tmp_path)
-    monkeypatch.delenv("FNO_SESSION", raising=False)
-    for var in ("CODEX_SESSION_ID", "GEMINI_SESSION_ID"):
-        monkeypatch.delenv(var, raising=False)
-    if grantor_env is None:
-        monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
-    else:
-        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", grantor_env)
-    if role.get("succession"):
-        # The machine names successors: seal the pending draw so the typed
-        # name counts as accepting it.
-        from tests.agents._name_draw_seed import seed_pending_draw
-
-        seed_pending_draw("Avery", role["role_scope"])
-
-    from fno.agents.mux_spawn import dispatch_spawn_pane
-
-    return dispatch_spawn_pane(
-        name="Avery",
-        message="term",
-        provider="claude",
-        cwd=tmp_path,
-        runner=_FakeRunner(),
-        **role,
-    )
-
-
-@pytest.mark.dev_build
-def test_role_stamped_grantor_is_the_spawning_session(
-    tmp_path: Path, monkeypatch, native_backlog_door
-) -> None:
-    from fno.agents.registry import AgentEntry, load_registry, update_registry
-    import fno.agents.role as lead_state
-
-    use_tmpdir(monkeypatch, tmp_path)
-    monkeypatch.setattr(lead_state, "lead_loop_enabled", lambda: True)
-    # Seat the grantor as a registered lead over epic-x; the spawn is then a
-    # succession. An agent identity with no registry row is now refused at the
-    # grantor check, so the agent must be seated - the corrected opposite of the
-    # fail-open these tests rode. Reuse _spawn_promoted so the provider axis
-    # binding stays on its baselined line rather than adding a new one inline.
-    update_registry(
-        lambda rows: rows
-        + [
-            AgentEntry(
-                name="parent",
-                cwd="/w",
-                log_path="",
-                harness="claude",
-                harness_session_id="parent-sess-abc",
-                short_id="parent",
-                status="busy",
-                role_level=1,
-                role_scope="epic-x",
-                role_grantor="human",
-            )
-        ]
-    )
-    _spawn_promoted(
-        monkeypatch, tmp_path,
-        grantor_env="parent-sess-abc",
-        role_level=1, role_scope="epic-x", succession=True,
-    )
-    successor = next(e for e in load_registry() if e.name == "Avery")
-    assert successor.role_level == 1
-    assert successor.role_scope == "epic-x"
-    # Provenance, not self-declared: the grantor is who actually spawned it.
-    assert successor.role_grantor == "parent-sess-abc"
-    assert successor.role_label == "L1 epic-x"
-    manifest = _space_manifest(tmp_path, "epic-x")
-    assert _read_manifest(manifest)["harness_session_id"] == successor.harness_session_id
-
-
 def _role_row(name: str, *, status: str = "busy", scope="epic-x"):
     from fno.agents.registry import AgentEntry
 
@@ -176,132 +90,6 @@ def _role_row(name: str, *, status: str = "busy", scope="epic-x"):
         role_scope=scope,
         role_grantor="human" if scope else None,
     )
-
-
-def test_settle_spawn_role_outcomes(tmp_path: Path, monkeypatch, native_backlog_door) -> None:
-    """Exercise the Rust plan and apply stages against planted registry rows."""
-    from dataclasses import replace
-
-    from fno.agents.role import plan_spawn_role, settle_spawn_role
-    from fno.agents.registry import update_registry
-    from fno.paths_testing import use_tmpdir
-
-    use_tmpdir(monkeypatch, tmp_path)
-
-    def plan_for(rows, succession=False):
-        update_registry(lambda _: rows)
-        if succession:
-            from tests.agents._name_draw_seed import seed_pending_draw
-
-            seed_pending_draw("Avery", "epic-x")
-        refusal, plan = plan_spawn_role("epic-x", None, succession, proposed_name="Avery" if succession else None)
-        assert refusal is None
-        assert plan is not None
-        return plan
-
-    unpromoted = _role_row("a", scope=None)
-    granted_plan = plan_for([unpromoted])
-    _, outcome, vacated = settle_spawn_role([unpromoted], scope="epic-x", plan=granted_plan)
-    assert outcome == "granted"
-    assert vacated == []
-
-    caller = _role_row("caller")
-    # The predecessor's live team: one child whose current owner names the
-    # caller's session. Succession re-homes it in the same write that moves
-    # the role; the birth edge stays history.
-    child = replace(
-        _role_row("w5", scope=None),
-        spawned_by_session="caller-sess",
-        spawn_provenance={
-            "origin": {"kind": "session", "parent": {"harness": "claude", "session_id": "caller-sess", "cwd": "/w"}, "invocation": None},
-            "owner": {"kind": "session", "harness": "claude", "session_id": "caller-sess", "cwd": "/w"},
-        },
-    )
-    succeeded_plan = plan_for([caller, child], succession=True)
-    rows, outcome, vacated = settle_spawn_role(
-        [caller, child], scope="epic-x", plan=succeeded_plan,
-        successor="Avery", successor_harness="codex", successor_session="successor-sess", successor_cwd="/w",
-    )
-    assert outcome == "succeeded"
-    assert [r.role_scope for r in rows] == [None, None]
-    assert [(r.name, cause) for r, cause in vacated] == [("caller", "succession"), ("w5", "reowned")]
-    assert rows[1].spawn_provenance["owner"]["session_id"] == "successor-sess"
-    assert rows[1].spawned_by_session == "caller-sess", "the birth edge stays history"
-
-    # The race backstop: the plan was computed against "caller" holding the
-    # scope, but the write sees "stranger" instead - declines rather than
-    # applying a plan for a holder that is no longer there.
-    stranger = _role_row("stranger")
-    race_plan = plan_for([caller, child], succession=True)
-    rows, outcome, vacated = settle_spawn_role(
-        [stranger, child], scope="epic-x", plan=race_plan, successor="Avery", successor_harness="codex", successor_session="successor-sess", successor_cwd="/w",
-    )
-    assert outcome == "declined"
-    assert rows[0].role_scope == "epic-x", "a declined spawn leaves the holder alone"
-
-    # AC8: a take-over ask rides the payload as take_over.reason and the
-    # plan answer carries it back with the acting caller and the old
-    # holder's row fields at the moment of the move.
-    alder = _role_row("alder")
-    update_registry(lambda _: [alder])
-    refusal, plan = plan_spawn_role("epic-x", None, False, proposed_name="Maya", take_over="Alder paused since 10:00")
-    assert refusal is None
-    assert plan is not None
-    assert plan["outcome"] == "succeeded"
-    assert plan["vacate"] == ["alder"]
-    assert plan["take_over"]["by"] == "the user"
-    assert plan["take_over"]["reason"] == "Alder paused since 10:00"
-    assert [p["name"] for p in plan["take_over"]["predecessors"]] == ["alder"]
-    assert plan["take_over"]["predecessors"][0]["harness_session_id"] == "alder-sess"
-    assert rows[1].spawn_provenance["owner"]["session_id"] == "caller-sess", (
-        "a declined succession re-homes nobody"
-    )
-    assert vacated == []
-
-    dead = _role_row("dead", status="exited")
-    granted_plan = plan_for([dead])
-    rows, outcome, vacated = settle_spawn_role([dead], scope="epic-x", plan=granted_plan)
-    assert outcome == "granted"
-    assert [(r.name, cause) for r, cause in vacated] == [("dead", "holder_terminal")]
-    assert rows[0].role_scope is None
-
-    rebound_plan = plan_for([caller, child], succession=True)
-    rebound = replace(caller, harness_session_id="caller-sess-2")
-    rows, outcome, vacated = settle_spawn_role(
-        [rebound, child], scope="epic-x", plan=rebound_plan, successor="Avery", successor_harness="codex", successor_session="successor-sess", successor_cwd="/w",
-    )
-    assert outcome == "declined"
-    assert rows[0].role_scope == "epic-x"
-    assert vacated == []
-
-
-def test_settle_spawn_role_declines_when_rust_is_unavailable(
-    tmp_path: Path, monkeypatch, native_backlog_door,
-) -> None:
-
-    from fno.agents import spawn_overlay_client
-    from fno.agents.role import plan_spawn_role, settle_spawn_role
-    from fno.agents.registry import update_registry
-    from fno.paths_testing import use_tmpdir
-
-    use_tmpdir(monkeypatch, tmp_path)
-    caller = _role_row("caller")
-    update_registry(lambda _: [caller])
-    from tests.agents._name_draw_seed import seed_pending_draw
-
-    seed_pending_draw("Avery", "epic-x")
-    refusal, plan = plan_spawn_role("epic-x", None, True, proposed_name="Avery")
-    assert refusal is None
-    assert plan is not None
-    before = asdict(caller)
-
-    def unavailable(*args, **kwargs):
-        raise spawn_overlay_client.SpawnOverlayUnavailable("not built")
-
-    monkeypatch.setattr(spawn_overlay_client, "spawn_overlay_call", unavailable)
-    rows, outcome, vacated = settle_spawn_role([caller], scope="epic-x", plan=plan)
-    assert (outcome, vacated) == ("declined", [])
-    assert asdict(rows[0]) == before
 
 
 # --- registry round-trip (write -> read preserves the role) -----------------
@@ -390,51 +178,11 @@ def _prepare_role_cli(monkeypatch, tmp_path, rows) -> None:
     monkeypatch.setenv("FNO_AGENTS_BIN", str(stub))
 
 
-
 WIDEN_LEAD_SESSION = "aaaaaaaa-1111-4aaa-8aaa-aaaaaaaaaaaa"
 WIDEN_OTHER_SESSION = "bbbbbbbb-2222-4bbb-8bbb-bbbbbbbbbbbb"
 
 
-
-def test_spawn_role_refuses_before_launch_when_scope_already_occupied(
-    tmp_path: Path, monkeypatch, native_backlog_door
-) -> None:
-    """A role-bearing spawn at an already-occupied scope, with no --succeed,
-    refuses BEFORE launch rather than spawning unpromoted: launching a successor
-    that holds no role is exactly the failure the pre-launch occupancy check
-    exists to prevent."""
-    from fno.agents.dispatch import DispatchAskError
-    from fno.agents.registry import AgentEntry, load_registry, write_registry
-
-    use_tmpdir(monkeypatch, tmp_path)
-    # Pre-seed an existing promoted row over scope "epic-x"
-    write_registry([AgentEntry(
-        name="incumbent", harness="claude", cwd="/w", log_path="",
-        harness_session_id="sess-incumbent",  # x-7bcd: needs a resolvable handle
-        short_id="inc", status="live",
-        role_level=1, role_scope="epic-x", role_grantor="human",
-    )])
-    # Spawn a new worker with --promote level=1,scope=epic-x (same scope). The
-    # caller is an attended human (no agent identity), so it is authorized to
-    # attempt the grant; the pre-launch check still refuses because the
-    # incumbent holds the scope and no --succeed named the transfer.
-    with pytest.raises(DispatchAskError, match="--hand-off"):
-        _spawn_promoted(
-            monkeypatch, tmp_path,
-            grantor_env=None,
-            role_level=1, role_scope="epic-x",
-        )
-    rows = load_registry()
-    assert not [r for r in rows if r.name == "Avery"], "a refused role must launch nothing"
-    # The incumbent's role is untouched
-    inc = next(r for r in rows if r.name == "incumbent")
-    assert inc.role_level == 1
-    assert inc.role_scope == "epic-x"
-    assert not _space_manifest(tmp_path, "epic-x").exists()
-
-
 # --- the role types the command (x-7b36 change 11): raw mail names the delivery
-
 
 
 # --- a role grant arms the epic's mission -----------------------------------
@@ -459,10 +207,10 @@ def _seed_role_graph(monkeypatch, tmp_path: Path, epics: list[dict]) -> None:
 
 
 def _graph_entries() -> list[dict]:
-    from fno.graph.store import read_graph_strict
     from fno.paths import graph_json
+    from fno.rust_binary import backlog_rows
 
-    return read_graph_strict(graph_json())
+    return backlog_rows(include_archived=True, path=graph_json())
 
 
 def _mission_events() -> list[dict]:
@@ -476,34 +224,6 @@ def _mission_events() -> list[dict]:
         e for e in event_rows(project_events_json())
         if e.get("type") == "mission_activated"
     ]
-
-
-def test_a_spawn_grant_over_an_unflagged_epic_arms_its_mission(
-    tmp_path: Path, monkeypatch
-) -> None:
-    from fno.agents.role import journal_spawn_role
-
-    _prepare_role_cli(monkeypatch, tmp_path, [])
-    _seed_role_graph(
-        monkeypatch,
-        tmp_path,
-        [
-            {"id": "e-1", "type": "epic", "project": "alpha", "status": "in_progress"},
-            {"id": "c-1", "type": "task", "parent": "e-1"},
-        ],
-    )
-
-    journal_spawn_role(
-        "granted", [], name="w", level=2, scope="e-1", grantor="human"
-    )
-
-    entry = _graph_entries()[0]
-    assert entry["mission_active"] is True
-    events = [
-        e for e in _mission_events() if e.get("type") == "mission_activated"
-    ]
-    assert len(events) == 1
-    assert events[0]["data"] == {"epic_id": "e-1", "source": "role"}
 
 
 # --- the manifest arms when the successor identifies --------------------------

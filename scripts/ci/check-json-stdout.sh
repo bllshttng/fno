@@ -127,7 +127,15 @@ if [[ "$SELFTEST" == 1 ]]; then
     exit $((status == 0 ? 0 : 2))
 fi
 
+# The lint family answers natively through the front door (the Python leg
+# deleted in the residue port), so the registry row runs the checkout build
+# when it exists; the sibling pin above hands it the registry reader.
+LINT_DOOR=("${CLI[@]}")
+if [[ -x "$ROOT/crates/fno/target/debug/fno" ]]; then
+    LINT_DOOR=("$ROOT/crates/fno/target/debug/fno")
+fi
+
 status=0
-run_row doc "doctor lint registry -J" "${CLI[@]}" doctor lint registry -J || status=1
+run_row doc "doctor lint registry -J" "${LINT_DOOR[@]}" doctor lint registry -J || status=1
 run_row error-doc "backlog -J get <miss>" "${CLI[@]}" backlog -J get x-zzzz9999nope || status=1
 exit "$status"

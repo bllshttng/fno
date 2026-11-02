@@ -241,7 +241,7 @@ _HOLDER_E="$(HOME="${TMP_E}/home" FNO_BOOTSTRAP_WHEEL="${REPO_ROOT}/cli" \
   || fail "(e): claim holder is '${_HOLDER_E}', expected the init acquire to land via the handover fallback"
 pass "(e): init acquire took over the launch-window claim (holder=${_HOLDER_E})"
 
-_LOCKED_BY_E="$(HOME="${TMP_E}/home" uv run --project "${REPO_ROOT}/cli" python -c 'import sys; from pathlib import Path; from fno.graph.store import read_graph_strict; print(read_graph_strict(Path(sys.argv[1]))[0].get("locked_by") or "")' "${TMP_E}/home/.fno/graph.json" 2>/dev/null || true)"
+_LOCKED_BY_E="$(HOME="${TMP_E}/home" uv run --project "${REPO_ROOT}/cli" python -c 'import sys; from pathlib import Path; sys.path.insert(0, "'"${REPO_ROOT}"'/cli/tests/fixtures"); from graph_seed import read_graph_strict; print(read_graph_strict(Path(sys.argv[1]))[0].get("locked_by") or "")' "${TMP_E}/home/.fno/graph.json" 2>/dev/null || true)"
 [[ -n "$_LOCKED_BY_E" ]] \
   || fail "(e): locked_by is empty; the stamp never ran (AC4-HP)"
 pass "(e): locked_by stamped (${_LOCKED_BY_E})"

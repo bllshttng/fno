@@ -89,7 +89,7 @@ A past session never answered a golden prompt, so it cannot grade one. Two hones
 
 `fno doctor evals run --tag golden --variant v1 --ref <sha> --overlay-fixtures <newer ref> --lane <lane> --cohort gate-backdate-<date>-<sha8> --repeat 1` runs today's goldens on an older tree. An older tree has no golden fixtures, so the flag commits `evals/fixtures/golden` from the newer ref on top of the checkout. Pass `--bank` to read today's tasks. The bank itself stays out of the tree. Each golden states its expected answer, and a worker told to read the repo can read it. Each row records `overlay_rev`. A row without `overlay_rev` ran with no overlay: an older `fno-agents` ignores the flag, and a fixture golden then fails on its missing fixture.
 
-The cohort names a tree, never a past result. The model is today's, so the cohort says what today's model does with that day's repo. A claude golden worker loads no plugin (see [Goldens](#goldens)). The installed `fno` stays today's. The `gate-` prefix counts the run against `evals.gate.daily_usd`.
+The cohort names a tree, never a past result. The model is today's, so the cohort says what today's model does with that day's repo. A claude golden worker loads no plugin (see [Goldens](#goldens)). The installed `fno` stays today's. The `gate-` prefix counts the run against `evals.gate.daily_usd`. When a head's run puts the spend over that cap, `evals/gate` fails on that head until 00:00 UTC, unless no gate golden applies. So a fill larger than the day's spare budget uses another prefix, such as `seal-backdate-<date>-<sha8>`. A run without the prefix also validates the cohort split, so it can refuse after a bank edit on main.
 
 ## Goldens
 
@@ -124,9 +124,21 @@ The runner passes `--setting-sources project --strict-mcp-config` and a `--setti
 
 Each row records `obs.worker_sealed`. It reads true only with both the sealed tree and the fence. `obs.worker_sealed` is the divider between cohorts. A row without it ran with the real checkout in reach, so it is not comparable to a sealed row. On 2026-11-01, before the seal, a fixtures-only tree beat head in 2 of 3 pairs at repeat 1. Other harnesses have no such flags. They get the sealed tree, no fence and today's plugin, so their rows read false.
 
+The sealed baseline, measured 2026-11-01 on zai-flash at repeat 3: a fixtures-only tree passed 34 of 75 (`gate-seal-free-20261101`), and head passed 52 of 75 (`gate-seal-head-20261101`). Of the 23 head failures, 5 ran `gh` and saw it fail inside the fence, and 3 of those 5 are `golden-pass-pr-status`. The other 18 ran no failing `gh`.
+
+The sealed fill, run 2026-11-02 on zai-flash at repeat 1, covers the last main commit of each UTC day from 2026-10-05 to 2026-11-01. Its cohorts are named `seal-backdate-<date>-<sha8>`. It passed 503 of 700, and each tree passed 15 to 20 of 25. The first 14 days passed 249 of 350 and the last 14 passed 254 of 350, so the fill shows no trend. Each tree beat the fixtures-only rate of about 11 of 25. So the goldens separate a rule-free tree from a tree with rules, but they did not separate these 28 days. Four goldens fail on nearly every tree: `golden-read-state-before-merge` and `golden-pass-doctor-test` on 28 of 28, and `golden-flag-not-env-prefix` and `golden-pass-pr-status` on 27 of 28. Read a low score on them with that in mind. 19 trials first failed at spawn with `unrecognized_model`, ran no worker and stayed unscored, and a rerun graded each of them.
+
 A failed trial keeps its claude transcript for 14 days, and `obs.kept_transcript` names the directory. A passed trial's transcript is deleted.
 
 A failure that needs long session state or fleet state cannot reduce to this shape. It stays out of the bank, and the scorecard holds that ground.
+
+### Lead goldens
+
+Every golden runs one one-shot worker, so no eval runs a lead or a worker pair. A lead golden tests whether a worker told it holds a lead role can recall the rule a lead broke. It does not test a lead's conduct over a term.
+
+Mine them with `fno doctor event corrections --by role --source user`, then read the rows on a `lead:` seat. On 2026-11-02 the store held 49 typed user corrections on lead sessions. Most reduce to nothing. 'no i pasted it already' states a fact about the moment, and no rule in the repo can answer it. If a row's answer is findable in the repo and the wrong act has a mechanical lure, keep it.
+
+`golden-lead-review-stays-inline` is the first. It comes from an L2 lead who misrouted a review, and AGENTS.md holds the rule. Lead goldens carry the `lead` tag and stay out of `gate` until a main run gives them a baseline.
 
 ## The change gate
 

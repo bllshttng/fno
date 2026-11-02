@@ -1,11 +1,10 @@
-//! parity-stage: differential
+//! parity-stage: characterization
 //! parity-oracle: fno.agents.spawn_defaults._scan_projection
 //!
-//! Differential parity for `spawn_admission`: the scan projection the
+//! Characterization for `spawn_admission`: the scan projection the
 //! compose transport sent, the argv normalization it ran first, and the three
 //! pre-route seed refusals. Each `tests/golden/spawn_seam/*.json` case holds
-//! what the live Python leg answered, captured by `spawn_seam_golden_driver.py`.
-//! The stage flips to characterization when the seam delete removes that leg.
+//! what the deleted Python leg answered, captured by `spawn_seam_golden_driver.py`.
 //! The inputs below mirror that driver's case table.
 //!
 //! A minted name is a wall-clock draw, not parity: a mint case asserts the
@@ -203,4 +202,25 @@ fn seed_refusals_match_the_python_texts() {
         refused.starts_with("the seed invokes '/fno:review' but"),
         "{refused}"
     );
+}
+
+/// The extension past the deleted codex-only leg: a measured-absent verdict
+/// refuses for any harness with a stage arm, naming that harness's install
+/// command, while an arm-less harness and a non-command seed never refuse.
+#[test]
+fn cannot_fire_refusal_covers_every_stage_arm() {
+    let claude =
+        cannot_fire_refusal("/fno:review medium", "claude", Some("missing")).unwrap_or_default();
+    assert!(
+        claude.starts_with("the seed invokes '/fno:review' but"),
+        "{claude}"
+    );
+    assert!(
+        claude.contains("fno config plugin install claude"),
+        "{claude}"
+    );
+    // No install arm, no install command to name.
+    assert!(cannot_fire_refusal("/fno:review medium", "pi", Some("missing")).is_none());
+    // The verdict only decides a command seed.
+    assert!(cannot_fire_refusal("plain prose seed", "claude", Some("missing")).is_none());
 }

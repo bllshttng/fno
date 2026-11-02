@@ -1176,18 +1176,16 @@ fi
 # with its self-test, and the graph-consumer census (commands + reads) with its
 # self-test, on the hermetic candidate tree.
 if retry_run_leg tracker-gates:fno; then
-    echo "preflight: === tracker gates (partition + consumer census) ==="
+    echo "preflight: === tracker gates (partition) ==="
     tg0="$SECONDS"
     run_hermetic bash scripts/ci/check-tracker-partition.sh --self-test
     tgp=$?
     run_hermetic bash scripts/ci/check-tracker-partition.sh
     tgp2=$?
     [[ $tgp2 -gt $tgp ]] && tgp=$tgp2
-    run_hermetic bash scripts/ci/check-tracker-consumers.sh
-    tgc=$?
     REQUIRED_EXECUTED=$((REQUIRED_EXECUTED + 1))
     TG_INCLUDED=1
-    if [[ $tgp -eq 0 && $tgc -eq 0 ]]; then
+    if [[ $tgp -eq 0 ]]; then
         record_leg tracker-gates:fno "tracker gates (fno)" pass $(( SECONDS - tg0 ))
     else
         record_leg tracker-gates:fno "tracker gates (fno)" fail $(( SECONDS - tg0 ))

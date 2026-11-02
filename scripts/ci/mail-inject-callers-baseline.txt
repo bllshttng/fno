@@ -6,4 +6,3 @@
 #
 # Forgetting is refused at runtime. Adding is refused at CI. Neither one passes
 # forever by describing today.
-cli/src/fno/agents/codex_pane.py::deliver_seed  # --seed mode: the spawn's own first turn over the daemon turn/start lane, no composer keystrokes, skips the raw-inject guards by design

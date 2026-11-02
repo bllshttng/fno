@@ -13,7 +13,8 @@ test -f cli/src/fno/cli.py
 # crates/fno-agents/src/worktree/.
 # `state` removed: the target-family port retired the package; the manifest
 # contract is replayed by `crates/fno-agents/tests/target_family_parity.rs`.
-for sub in graph events claims; do
+# `graph` removed: the graph core port moved it into crates/fno-agents.
+for sub in events claims; do
   test -f "cli/src/fno/${sub}/__init__.py"
 done
 echo "PASS: skeleton complete"

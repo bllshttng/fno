@@ -1882,7 +1882,7 @@ event_types:
 
   - name: session_satisfied
     description: "Signals that a target session's work is complete; alternative to <promise> tag emission. The stop hook scans for these and may auto-release the Stop hook when a fresh event matches the current session and the three-factor gates are still satisfied. Data.source is the constrained subsystem that produced the signal (check_pr, pr_merge, ci_watcher, fno_gate_manual, delegated); envelope source is the producer identity."
-    # 'backlog' added: cli/src/fno/graph/_reconcile.py's
+    # 'backlog' added: backlog reconcile's
     # emit_session_satisfied_for_record stamps envelope source "backlog" for
     # the post-merge reconcile path (trigger=pr_merge), a real live producer
     # the earlier declaration missed. 'daemon' added: the native twin
@@ -9136,6 +9136,9 @@ event_types:
         harness:
           type: [string, "null"]
           description: "The corrected agent's harness axis (claude, codex, opencode, pi, footnote, agy)."
+        seat:
+          type: object
+          description: "The corrected session's seat as a served reading: lead:L<n>, lead with no rung known, or worker. Absent on rows older than the stamp; a correction_seat row carries those."
         model:
           type: object
           description: "The corrected agent's model, as a served reading beside measured_at and basis."
@@ -9235,6 +9238,21 @@ event_types:
         basis:
           type: string
           description: "What decided the outcome (merged, retraction, decision_span, age)."
+    consumers: [fno doctor event corrections]
+
+  - name: correction_seat
+    retention: durable
+    description: "The seat of one agent_corrected row written before the fold stamped one, appended at most once per row by the daemon's hourly pass. The store is append-only, so the seat rides as its own row. An unmeasured session writes none."
+    sources: [daemon, test]
+    data:
+      required: [correction_id, seat]
+      properties:
+        correction_id:
+          type: string
+          description: "The agent_corrected row this seat belongs to."
+        seat:
+          type: object
+          description: "The session's seat as a served reading: lead:L<n>, lead with no rung known, or worker."
     consumers: [fno doctor event corrections]
 
 limits:
