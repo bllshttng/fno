@@ -505,6 +505,9 @@ fn cohort_fold(rows: &[Row], prices: Option<&Value>) -> Value {
 pub(crate) fn cohort_score(rows: &[&Row], prices: Option<&Value>) -> Value {
     let mut statuses: BTreeMap<String, usize> = BTreeMap::new();
     let mut lane_statuses: BTreeMap<String, usize> = BTreeMap::new();
+    // A row with no lane folds under the empty seat, never under a lane.
+    let mut lanes: BTreeMap<String, usize> = BTreeMap::new();
+    let mut models: BTreeMap<String, usize> = BTreeMap::new();
     let mut by_reason: BTreeMap<String, usize> = BTreeMap::new();
     let mut scored: Vec<&Row> = Vec::new();
     let mut excluded = 0usize;
@@ -522,6 +525,15 @@ pub(crate) fn cohort_score(rows: &[&Row], prices: Option<&Value>) -> Value {
             .and_then(Value::as_str)
             .unwrap_or("unverified");
         *lane_statuses.entry(lane_status.to_string()).or_default() += 1;
+        let text = |k: &str| {
+            r.raw
+                .get(k)
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string()
+        };
+        *lanes.entry(text("requested_lane")).or_default() += 1;
+        *models.entry(text("observed_model")).or_default() += 1;
         let reason = r.raw.get("excluded_reason").and_then(Value::as_str);
         if is_scored(r) {
             scored.push(r);
@@ -644,6 +656,8 @@ pub(crate) fn cohort_score(rows: &[&Row], prices: Option<&Value>) -> Value {
         },
         "median_wall_s": round4(median_wall_s),
         "lane_status_counts": lane_statuses,
+        "requested_lanes": lanes,
+        "observed_models": models,
         "status_counts": statuses,
         "excluded": {
             "total": excluded,
@@ -1208,8 +1222,15 @@ pub fn run_evals_trend(args: &[String]) -> i32 {
                     let tok_out = c["tokens"]["output"].to_string();
                     let cache_r = c["tokens"]["cache_read"].to_string();
                     let cache_w = c["tokens"]["cache_write"].to_string();
+                    let counts = |key: &str| {
+                        let map = c[key].as_object().cloned().unwrap_or_default();
+                        let parts: Vec<String> =
+                            map.iter().map(|(k, n)| format!("{k}:{n}")).collect();
+                        parts.join(",")
+                    };
+                    let (lane, model) = (counts("requested_lanes"), counts("observed_models"));
                     println!(
-                        "  {id}: attempts={attempts} graded={graded} accepted={accepted} rate={rate_pct:.1}% [{lo_pct:.1},{hi_pct:.1}] median={median}s in={tok_in} out={tok_out} cache_r={cache_r} cache_w={cache_w} {cost}"
+                        "  {id}: lane={lane} model={model} attempts={attempts} graded={graded} accepted={accepted} rate={rate_pct:.1}% [{lo_pct:.1},{hi_pct:.1}] median={median}s in={tok_in} out={tok_out} cache_r={cache_r} cache_w={cache_w} {cost}"
                     );
                 }
             }
