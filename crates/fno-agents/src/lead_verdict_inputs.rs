@@ -429,25 +429,32 @@ fn wider_grant(
 /// stamped row, and `promote` refuses a self-edit. Re-stamp from the newest
 /// wider grant. Answers `(held, wider)` when the role moved.
 pub(crate) fn honor_wider_grant(home: &crate::paths::AgentsHome) -> Option<(String, String)> {
+    // Most callers hold no stamped row: they read no graph and no law store.
+    let (row, session) = stamped_live_row(home)?;
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     // Rung derivation reads this map: a guessed empty one would hide a rival.
     let projects = crate::org_board::project_map(&cwd).ok()?;
     let entries = crate::territory::graph_entries(&cwd).unwrap_or_default();
     let lead_enabled = crate::lead_state::lead_loop_enabled(&cwd);
     let (name, held, scope, level) = with_live_grants(|grants| {
-        widen_stamped_role(home, grants, &projects, &entries, lead_enabled)
+        widen_stamped_role(
+            home,
+            grants,
+            &row,
+            &session,
+            &projects,
+            &entries,
+            lead_enabled,
+        )
     })?;
     crate::role_grant::settle_user_rescope(home, &name, &held, &scope, level);
     Some((held, scope))
 }
 
-fn widen_stamped_role(
+/// This session's registry row, when it is live and holds a whole role.
+fn stamped_live_row(
     home: &crate::paths::AgentsHome,
-    grants: &Grants,
-    projects: &std::collections::HashMap<String, String>,
-    entries: &[Value],
-    lead_enabled: bool,
-) -> Option<(String, String, String, u32)> {
+) -> Option<(crate::state::RegistryEntry, String)> {
     let (session, harness) = crate::claims::resolve_identity();
     let (session, harness) = (session?, harness?);
     let registry = crate::state::load_registry(&home.registry_json()).ok()?;
@@ -461,12 +468,25 @@ fn widen_stamped_role(
         return None;
     }
     row.role_level?;
-    let held = row.role_scope.clone().filter(|s| !s.trim().is_empty())?;
+    row.role_scope.as_deref().filter(|s| !s.trim().is_empty())?;
+    Some((row.clone(), session))
+}
+
+fn widen_stamped_role(
+    home: &crate::paths::AgentsHome,
+    grants: &Grants,
+    row: &crate::state::RegistryEntry,
+    session: &str,
+    projects: &std::collections::HashMap<String, String>,
+    entries: &[Value],
+    lead_enabled: bool,
+) -> Option<(String, String, String, u32)> {
+    let held = row.role_scope.clone()?;
     let entry_of = |id: &str| entries.iter().find(|e| e["id"].as_str() == Some(id));
     let contains = |outer: &str, inner: &str| {
         crate::territory::scope_contains(outer, inner, &entry_of, projects)
     };
-    let (scope, level) = wider_grant(grants, &session, row, &held, &contains)?;
+    let (scope, level) = wider_grant(grants, session, row, &held, &contains)?;
     match crate::role_grant::rescope_from_user_grant(
         home,
         row,
@@ -1295,7 +1315,10 @@ mod tests {
             .map(|k| (*k, std::env::var_os(k)))
             .collect();
         std::env::set_var("FNO_SPACES_DIR", dir.join("spaces"));
-        std::env::set_var(crate::paths::HOME_ENV, &dir);
+        // A nested home keeps the journal beside it inside the test's directory.
+        let agents = dir.join("agents");
+        fs::create_dir_all(&agents).unwrap();
+        std::env::set_var(crate::paths::HOME_ENV, &agents);
         std::env::set_var("FNO_HARNESS_NAME", "claude");
         std::env::set_var("FNO_HARNESS_SESSION_ID", session);
         let cwd = dir.join("repo");
@@ -1326,7 +1349,7 @@ mod tests {
         };
         let wider = "role-grant:fnh,fno,fno-web";
         let holds = |scope: &str| {
-            crate::state::load_registry(&dir.join("registry.json"))
+            crate::state::load_registry(&agents.join("registry.json"))
                 .unwrap()
                 .entries
                 .iter()
@@ -1335,9 +1358,12 @@ mod tests {
                 .as_deref()
                 == Some(scope)
         };
-        let widen = |grants: &Grants| widen_stamped_role(&home, grants, &projects, &[], true);
+        let widen = |grants: &Grants| {
+            let (row, session) = stamped_live_row(&home)?;
+            widen_stamped_role(&home, grants, &row, &session, &projects, &[], true)
+        };
 
-        write_registry(&dir, serde_json::json!([lead.clone()]));
+        write_registry(&agents, serde_json::json!([lead.clone()]));
         assert!(widen(&grants(&dir, vec![law("role-grant:fnh")])).is_none());
         assert!(holds("fnh,fno"), "a narrower grant moves nothing");
 
@@ -1348,14 +1374,14 @@ mod tests {
         assert!(holds("fnh,fno"), "a later promote spends the grant");
 
         write_registry(
-            &dir,
+            &agents,
             serde_json::json!([lead.clone(), other("rival", 0, "fno-web,fno-books")]),
         );
         assert!(widen(&grants(&dir, vec![law(wider)])).is_none());
         assert!(holds("fnh,fno"), "a same-rung rival refuses");
 
         write_registry(
-            &dir,
+            &agents,
             serde_json::json!([lead.clone(), other("rosa", 1, "fno-web")]),
         );
         let space = crate::paths::space_dir(&cwd);
