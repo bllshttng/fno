@@ -833,6 +833,23 @@ fn parse_rows() {
     assert!(!defaults.no_wait);
 }
 
+/// The cross-host relay's explicit parent edge parses onto the request the
+/// daemon mint reads (`Lineage::from_request`); an ssh hop strips the caller
+/// env, so this flag is the only parent the far side can name.
+#[test]
+fn the_relay_carried_parent_edge_parses() {
+    let args = vec![
+        "wk".to_string(),
+        "--spawned-by".to_string(),
+        "s-parent".to_string(),
+    ];
+    let (_m, params) = build_request("spawn", &args).expect("the relay edge must parse");
+    assert_eq!(params["spawned_by_session"], "s-parent");
+    // Missing value refuses by name.
+    let err = build_request("spawn", &["--spawned-by".to_string()]).unwrap_err();
+    assert!(err.contains("--spawned-by"), "got: {err}");
+}
+
 /// The lifecycle commands accept the retired `--cross-project` flag as a
 /// silent no-op (d-460ea8c7: the store heal is machine-wide now), so
 /// `fno agents rm|stop <id> --cross-project` still PARSES (the old surface
