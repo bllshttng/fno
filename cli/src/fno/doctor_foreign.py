@@ -1,15 +1,16 @@
-"""The wheel's foreign doctor leaves: evals and lint.
+"""The wheel's foreign doctor leaves: evals, lint and the matrix regen.
 
 The native front door claims the doctor family: the report, bundle,
 plugin-file, update and test leaves, the event door, and the transport
-leaves (intel, stalls, harness, harness-matrix) whose exec legs died with
-the front-door claims. This module serves the two leaves whose families
-have not ported, so the CI spellings keep answering through the wheel:
-``fno-py doctor lint <check>`` carries the repository checks and
-``fno-py doctor evals`` forwards to the native evals dispatch. Bare
-``doctor``, the family's own leaves, and the retired transports print the
-front-door teaching and exit 2. Each row here dies in the PR whose family
-ports its leaf.
+leaves (intel, stalls, harness) whose exec legs died with the front-door
+claims. This module serves the leaves whose wheel answers still carry a
+caller: ``fno-py doctor lint <check>`` carries the repository checks CI
+runs, ``fno-py doctor evals`` forwards to the native evals dispatch, and
+``fno-py doctor harness-matrix`` execs the installed binary because CI's
+matrix regen and freshness steps read it wheel-direct. Bare ``doctor``,
+the family's own leaves, and the retired transports print the front-door
+teaching and exit 2. Each row here dies in the PR whose family ports its
+leaf.
 """
 
 from __future__ import annotations
@@ -91,8 +92,29 @@ def harness_signpost(ctx: typer.Context) -> None:
     _signpost("fno doctor harness")
 
 
-def harness_matrix_signpost(ctx: typer.Context) -> None:
-    _signpost("fno doctor harness-matrix")
+def _route_installed(argv: list[str]) -> None:
+    """Exec the INSTALLED binary (not the dev build): the matrix regen and the
+    freshness steps read the deployed surface by design (the cli-ci contract)."""
+    import os
+
+    from fno.rust_binary import resolve_installed_binary
+
+    binary = resolve_installed_binary()
+    if binary is None:
+        typer.echo(
+            "fno doctor harness-matrix: fno-agents binary not found; run `fno doctor update --rust`",
+            err=True,
+        )
+        raise typer.Exit(code=127)
+    os.execv(str(binary), [str(binary), *argv])
+
+
+@doctor_app.command("harness-matrix", hidden=True)
+def harness_matrix_command(
+    write: bool = typer.Option(False, "--write"),
+) -> None:
+    """Regenerate the harness capability matrix (CI's wheel-direct regen step)."""
+    _route_installed(["harness-matrix"] + ["--write"] * write)
 
 
 for _word, _fn in [
@@ -104,6 +126,5 @@ for _word, _fn in [
     ("intel", intel_signpost),
     ("stalls", stalls_signpost),
     ("harness", harness_signpost),
-    ("harness-matrix", harness_matrix_signpost),
 ]:
     doctor_app.command(_word, hidden=True, context_settings=_SIGNPOST_SETTINGS)(_fn)

@@ -38,13 +38,13 @@ fn repo_root() -> PathBuf {
 /// a dir.
 struct AgentFixture {
     name: &'static str,
-    body: Option<&'static str>,
+    body: Option<String>,
 }
 
-fn agent(name: &'static str, body: &'static str) -> AgentFixture {
+fn agent(name: &'static str, body: impl Into<String>) -> AgentFixture {
     AgentFixture {
         name,
-        body: Some(body),
+        body: Some(body.into()),
     }
 }
 
@@ -65,22 +65,22 @@ fn cases() -> Vec<Case> {
     vec![
         Case {
             label: "active interactive window",
-            agents: vec![agent("ag1", &active_body("interactive"))],
+            agents: vec![agent("ag1", active_body("interactive"))],
             make_home: true,
         },
         Case {
             label: "active step window",
-            agents: vec![agent("ag1", &active_body("step"))],
+            agents: vec![agent("ag1", active_body("step"))],
             make_home: true,
         },
         Case {
             label: "active paranoid window",
-            agents: vec![agent("ag1", &active_body("paranoid"))],
+            agents: vec![agent("ag1", active_body("paranoid"))],
             make_home: true,
         },
         Case {
             label: "watch window is excluded",
-            agents: vec![agent("ag1", &active_body("watch"))],
+            agents: vec![agent("ag1", active_body("watch"))],
             make_home: true,
         },
         Case {
@@ -148,22 +148,22 @@ fn cases() -> Vec<Case> {
         },
         Case {
             label: "dot dir is skipped",
-            agents: vec![agent(".hidden", &active_body("interactive"))],
+            agents: vec![agent(".hidden", active_body("interactive"))],
             make_home: true,
         },
         Case {
             label: "plain file entry is skipped",
             agents: vec![AgentFixture {
                 name: "loose",
-                body: Some(&active_body("interactive")),
+                body: Some(active_body("interactive")),
             }],
             make_home: true,
         },
         Case {
             label: "agents sort by dir name",
             agents: vec![
-                agent("zeta", &active_body("interactive")),
-                agent("alpha", &active_body("step")),
+                agent("zeta", active_body("interactive")),
+                agent("alpha", active_body("step")),
             ],
             make_home: true,
         },
@@ -189,10 +189,10 @@ fn build_home(root: &Path, case: &Case) -> PathBuf {
         let path = home.join(a.name);
         if a.name == "loose" {
             // The plain-file case: a FILE holding a state body, not a dir.
-            fs::write(&path, a.body.unwrap()).unwrap();
+            fs::write(&path, a.body.as_deref().unwrap_or_default()).unwrap();
         } else {
             fs::create_dir_all(&path).unwrap();
-            if let Some(text) = a.body {
+            if let Some(text) = a.body.as_deref() {
                 fs::write(path.join("state.json"), text).unwrap();
             }
         }
