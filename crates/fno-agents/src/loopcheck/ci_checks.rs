@@ -154,6 +154,32 @@ pub(super) fn failing_check_names(checks: &Value) -> Vec<String> {
         .collect()
 }
 
+/// Whether every FAILED row (bucket fail) on the deduped payload names an
+/// outside hold (`outside_holds::CHECKS`), with at least one failure: the
+/// red is external and nothing on this head is debuggable. Cancels are not
+/// failures, so a cancelled own run beside a hold does not disqualify the
+/// wait - the same rule `compute_ci_conclusion` applies when a cancel reads
+/// Pending. Reads the same payload `classify_checks_payload` reads and
+/// dedups the same way, so the two answers cannot come off different
+/// rollups.
+pub(crate) fn outside_hold_only(checks: &Value) -> bool {
+    let deduped = latest_per_name(checks);
+    let failed: Vec<String> = deduped
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|c| {
+            c.get("bucket")
+                .and_then(|v| v.as_str())
+                .map(|b| b.to_lowercase())
+                .as_deref()
+                == Some("fail")
+        })
+        .filter_map(|c| c.get("name").and_then(|v| v.as_str()).map(str::to_string))
+        .collect();
+    crate::outside_holds::all_outside_holds(&failed)
+}
+
 /// True iff any check is still in a non-terminal bucket (`pending`, `cancel`,
 /// or an unrecognized bucket that is not one of pass|fail|skipping). The
 /// DoneAwaitingMerge terminal must not fire while any check is unresolved: a
@@ -176,4 +202,30 @@ pub(super) fn ci_has_pending_checks(checks: &Value) -> bool {
             .to_lowercase();
         !matches!(bucket.as_str(), "pass" | "fail" | "skipping")
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn outside_hold_only_reads_failed_holds_and_ignores_cancels() {
+        // Two failed holds plus a cancelled own run: still outside-hold-only.
+        let payload = json!([
+            {"name": "channel (fno-sh-fresh)", "bucket": "fail"},
+            {"name": "channel (fno-sh-fresh)", "bucket": "fail"},
+            {"name": "rust-ci", "bucket": "cancel"}
+        ]);
+        assert!(outside_hold_only(&payload));
+        // One real failing check flips it: the red is work.
+        let mixed = json!([
+            {"name": "channel (fno-sh-fresh)", "bucket": "fail"},
+            {"name": "rust-ci", "bucket": "fail"}
+        ]);
+        assert!(!outside_hold_only(&mixed));
+        // A cancelled hold alone is no failure at all.
+        let only_cancel = json!([{"name": "channel (fno-sh-fresh)", "bucket": "cancel"}]);
+        assert!(!outside_hold_only(&only_cancel));
+    }
 }

@@ -6,9 +6,13 @@
 //! keeps the newest push per branch, and reads the cached PR status at the
 //! largest offset not yet journaled. A red whose every failing check sits on
 //! heal's flake ledger is rerun once (or waited on while its runs still
-//! test). Any other red is real: the head's in-flight runs are cancelled to
-//! free the shared runners, and the pushing session is woken with the
-//! failing checks and the `fno do pr logs` line that prints the log. A green,
+//! test). A red whose every failing check names an outside hold
+//! (`outside_holds::CHECKS`) is a hold: nothing is cancelled, nobody is
+//! woken, and the later offsets keep reading - the deploy that clears it
+//! turns the same read green. Any other red is real: the head's in-flight
+//! runs are cancelled to free the shared runners, and the pushing session
+//! is woken with the failing checks and the `fno do pr logs` line that
+//! prints the log. A green,
 //! a newer head, a closed PR or a delivered wake ends the series. Every read,
 //! cancel and wake rides an existing reader: the status cache,
 //! `wait::cancel_in_flight`, and burn-watch's mail/resume lane.
@@ -96,6 +100,10 @@ pub(crate) enum Verdict {
     Superseded,
     FlakeWait,
     FlakeRerun(Vec<u64>),
+    /// A red whose every failing check names an outside hold: no cancel, no
+    /// wake, and the later offsets keep reading - the deploy that clears it
+    /// turns the same read green.
+    OutsideHold,
     Real,
 }
 
@@ -125,6 +133,18 @@ pub(crate) fn decide(
     }
     if payload.get("verdict").and_then(Value::as_str) != Some("red") || failing.is_empty() {
         return Verdict::Pending;
+    }
+    // An outside hold: every failing check names a row whose fix lands
+    // outside this PR. Cancelling the head's own runs would stop the tests
+    // that are not the problem, and waking the pusher to "fix it" is advice
+    // with no object. The hold is journaled as outcome outside_hold and the
+    // later offsets keep reading: the deploy that clears it turns the same
+    // read green and ends the series normally.
+    if failing
+        .iter()
+        .all(|(name, _)| crate::outside_holds::is_outside_hold(name))
+    {
+        return Verdict::OutsideHold;
     }
     if rerun_before || !failing.iter().all(|(name, _)| flakes.contains(name)) {
         return Verdict::Real;
@@ -341,6 +361,7 @@ fn check_one(
         Verdict::Green => ("green", fields),
         Verdict::Superseded => ("superseded", fields),
         Verdict::FlakeWait => ("flake_wait", fields),
+        Verdict::OutsideHold => ("outside_hold", fields),
         Verdict::FlakeRerun(runs) => {
             fields.insert("runs".into(), json!(runs));
             for run in &runs {
@@ -519,6 +540,23 @@ mod tests {
         let mixed = vec![flaky[0].clone(), ("cargo-test".to_string(), Some(8))];
         assert_eq!(
             decide(SHA, &red(), &mixed, true, &flakes, false),
+            Verdict::Real
+        );
+    }
+
+    #[test]
+    fn an_outside_hold_red_never_reads_real() {
+        let none = HashSet::new();
+        let held = vec![("channel (fno-sh-fresh)".to_string(), Some(9))];
+        assert_eq!(
+            decide(SHA, &red(), &held, false, &none, false),
+            Verdict::OutsideHold
+        );
+        // A real failing check beside the hold is work: the red is real,
+        // in flight or not.
+        let mixed = vec![held[0].clone(), ("cargo-test".to_string(), Some(8))];
+        assert_eq!(
+            decide(SHA, &red(), &mixed, true, &none, false),
             Verdict::Real
         );
     }
