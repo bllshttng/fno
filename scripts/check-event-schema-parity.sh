@@ -393,9 +393,8 @@ dual_owner_kinds = {
     # the backlog source, until the Python leg deletes with the closing
     # ship.
     "triage_applied",
-    # Evals demand: the pr-watch tick's evals leg (Python) is the only
-    # emitter; the rows ride the daemon's journal, so the Rust known-kind
-    # table carries them for acceptance without emitting.
+    # Evals demand: the pr-watch tick's evals leg (Rust) is the only emitter;
+    # the Python side carries them in schema.yaml for the validator.
     "evals_scheduled_run",
     "evals_stale",
     # Scratch-shape sweep: the mirror image of the evals pair - the Rust
@@ -418,9 +417,8 @@ dual_owner_kinds = {
     "team_succession_retro_unmeasured",
     "team_succession_taken_over",
     "team_succession_take_over_mail_failed",
-    # merge_cleanup_skipped: the merge mint (Python) is the only emitter; the
-    # Rust known-kind table carries it so the daemon accepts the row, the way
-    # the evals pair above does.
+    # merge_cleanup_skipped: the tick's merge mint (Rust) is the only emitter;
+    # the Python side carries it in schema.yaml for the validator.
     "merge_cleanup_skipped",
     # lead_checkin: the Rust emit_row is the one writer (the command's beat plus
     # the lead stop hook's missed-beat row); the Python hand leg
@@ -441,6 +439,19 @@ dual_owner_kinds = {
     # carries it in schema.yaml for the validator and `doctor event find`,
     # the way pr_watch_unparked above does.
     "pr_watch_draft_flip",
+    # The pr-watch tick family: the Rust tick (pr_watch/) is the one emitter;
+    # the Python side carries them in schema.yaml for the validator and
+    # `doctor event find`, the way pr_watch_unparked above does.
+    "pr_watch_tick_attempt",
+    "pr_watch_tick_end",
+    "pr_watch_tick",
+    "pr_watch_sweep_chunk",
+    "pr_watch_skipped",
+    "pr_watch_parked",
+    "pr_watch_dispatched",
+    "pr_watch_dispatch_failed",
+    "pr_watch_cleanup_failed",
+    "merge_grant_execution",
     # graph_archive_swept: the native archive sweep is the one emitter; the
     # Python side carries it in schema.yaml for the validator and
     # `doctor event find`, the way pr_watch_unparked above does.
