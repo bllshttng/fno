@@ -199,9 +199,11 @@ jobs:
             bash scripts/ops/mux-demo-snapshot.sh --out "shots/${view}.png" --format png --view "$view" --size 200x56 --fit
           done
           # The selection paints with the theme's sel surface: shoot it light too.
-          for view in bell-wide feed-detail question-detail; do
+          for view in bell-wide feed-detail question-detail review-diff; do
             bash scripts/ops/mux-demo-snapshot.sh --out "shots/${view}-light.png" --format png --view "$view" --theme light --size 200x56 --fit
           done
+          # The review's gutter narrows below 80 columns: shoot it at the edge.
+          bash scripts/ops/mux-demo-snapshot.sh --out shots/review-diff-80x24.png --format png --view review-diff --size 80x24 --fit
           # The whole mux with no view open: the card sideline at two widths.
           for size in 200x56 120x40; do
             bash scripts/ops/mux-demo-snapshot.sh --out "shots/sideline-${size}.png" --format png --size "$size" --fit

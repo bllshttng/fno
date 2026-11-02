@@ -589,8 +589,9 @@ fn header(review: &Review) -> (String, String) {
                 ""
             };
             format!(
-                "{head} \u{b7} {short} \u{b7} {} files \u{b7} +{added} -{removed}{cut}",
-                diff.files.len()
+                "{head} \u{b7} {short} \u{b7} {count} file{plural} \u{b7} +{added} -{removed}{cut}",
+                count = diff.files.len(),
+                plural = if diff.files.len() == 1 { "" } else { "s" },
             )
         }
         _ => head,
