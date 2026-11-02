@@ -1379,9 +1379,15 @@ mod boundary_flow_tests {
     #[test]
     fn a_marker_for_one_blocker_false_freshes_no_other() {
         // The doc carries a marker (so its mtime bumped past this blocker's
-        // merge) but names a DIFFERENT blocker: mtime-fresh is untrustworthy,
-        // bias to stale.
-        let entry = done_entry(200);
+        // merge) but names a DIFFERENT blocker: the marker reconciles nothing
+        // but its own id, and mtime-fresh is untrustworthy on a marked doc,
+        // so the verdict biases stale.
+        let entry = serde_json::json!({
+            "id": "x-late",
+            "status": "done",
+            "pr_number": 200,
+            "completed_at": "2026-07-02T09:12:12+00:00",
+        });
         let v = evaluate_blocker(
             Some(&entry),
             false,
