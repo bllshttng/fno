@@ -357,7 +357,6 @@ async fn read_command(
 async fn fetch(node: String, pr: PrRef) -> Landed {
     let gh = std::path::PathBuf::from("gh");
     let claim_args = vec![
-        "agents".to_string(),
         "claim".to_string(),
         "status".to_string(),
         format!("node:{node}"),
@@ -365,7 +364,11 @@ async fn fetch(node: String, pr: PrRef) -> Landed {
     let (diff, head, claim) = tokio::join!(
         read_command(gh.clone(), pr_diff::diff_argv(&pr), FETCH_BOUND),
         read_command(gh, pr_diff::head_argv(&pr), FETCH_BOUND),
-        read_command(crate::server::fno_bin(), claim_args, CLAIM_BOUND),
+        read_command(
+            crate::digest_overlay::fno_agents_bin(),
+            claim_args,
+            CLAIM_BOUND
+        ),
     );
     let read = diff.and_then(|text| {
         let head = head?;

@@ -105,10 +105,21 @@ pub fn review_argv(node: &str, graph: &str, pr: &crate::pr_diff::PrRef) -> Vec<S
     ]
 }
 
-/// [`run_command_in`] with the `fno` binary, the path of every board write but
-/// the review send.
+/// [`run_built`] with the `fno` binary, the path of every board write but the
+/// review send.
 pub(crate) async fn run_command(args: &[String], stdin: Option<String>) -> (bool, String) {
-    run_command_in(crate::server::fno_bin(), args, stdin).await
+    let mut command = crate::process_admission::tokio_command(crate::server::fno_bin());
+    run_built(&mut command, args, stdin).await
+}
+
+/// [`run_built`] with another binary: the review send runs the note engine.
+pub(crate) async fn run_command_in(
+    bin: std::path::PathBuf,
+    args: &[String],
+    stdin: Option<String>,
+) -> (bool, String) {
+    let mut command = crate::process_admission::tokio_command(bin);
+    run_built(&mut command, args, stdin).await
 }
 
 /// The one bounded shell-out for every board write: argv as an array, off
@@ -119,13 +130,12 @@ pub(crate) async fn run_command(args: &[String], stdin: Option<String>) -> (bool
 /// text. Sibling of the foreground restart runner
 /// ([`crate::client::update_menu::run_restart_foreground`]), which instead
 /// inherits stdio so the operator watches the receipts.
-pub(crate) async fn run_command_in(
-    bin: std::path::PathBuf,
+async fn run_built(
+    command: &mut tokio::process::Command,
     args: &[String],
     stdin: Option<String>,
 ) -> (bool, String) {
     use std::process::Stdio;
-    let mut command = crate::process_admission::tokio_command(bin);
     command
         .args(args)
         .stdout(Stdio::piped())

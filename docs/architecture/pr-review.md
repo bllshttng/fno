@@ -8,7 +8,7 @@ Open it with `d` on a backlog node's detail, or `r` on a seat page in the org vi
 
 - The diff: `gh api repos/<o>/<r>/pulls/<n> -H "Accept: application/vnd.github.diff"`. This returns the same bytes as `gh pr diff` and spends no GraphQL request.
 - The head: `gh api repos/<o>/<r>/pulls/<n> --jq .head.sha`.
-- The recipient: `fno agents claim status node:<id>`. A review opened from a seat names that seat and its machine instead.
+- The recipient: `fno-agents claim status node:<id>`. A review opened from a seat names that seat and its machine instead.
 
 Both `gh` reads run off the UI loop, once per open, with a 20 s bound. A failed read shows `diff not read: <first error line>`. A diff over 1 MiB or 20,000 rows shows its first part and says so.
 
