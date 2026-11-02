@@ -33,7 +33,7 @@ The dispatch act is a spawn with `--promote <scope>` (or an in-place `fno agents
 
 Two rules keep the org from growing:
 
-1. **A role's scope must be a strict subset of the grantor's scope.** You cannot grant authority you do not hold, and you cannot grant all of it. This is what actually bounds the depth, because you run out of scope before you run out of levels.
+1. **A role's scope must be a strict subset of the grantor's scope, unless the grantor holds level 0.** The user and a level 0 lead can grant a role over any scope, inside or outside their own. A lower lead cannot grant authority it does not hold, and it cannot grant all of it. This is what actually bounds the depth, because you run out of scope before you run out of levels.
 2. **The ladder is three rungs, and the rung is a fact about the territory, not a number you pick:**
    - **Level 0** - several projects; a portfolio. Its org is project leads.
    - **Level 1** - one project. Its org is epic leads.

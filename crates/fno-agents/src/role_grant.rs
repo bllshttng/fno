@@ -23,9 +23,9 @@ const TERMINAL: [&str; 4] = ["exited", "orphaned", "failed", "permanent_dead"];
 const HELP: &str = "\
 Usage: fno agents role [OPTIONS] [HANDLE]
 
-  Role an existing session from an attended shell, from an agent whose own
-  role strictly contains the requested scope, or add to your own epic-set
-  role an epic your session created.
+  Role an existing session from an attended shell, from a level 0 lead over
+  any scope, from an agent whose own role strictly contains the requested
+  scope, or add to your own epic-set role an epic your session created.
 
   A row already holding a role is re-scoped rather than refused. --reclaim
   returns a transferred role to its recorded grantor and never creates a
@@ -208,10 +208,7 @@ fn caller_payload(calling: &Calling) -> Value {
             json!({"kind": "unregistered"}),
             format!("session {sid}"),
         ),
-        Calling::Agent(row, sid) => crate::spawn_promote::with_identity(
-            json!({"kind": "agent", "status": status_of(row), "role_scope": row.role_scope}),
-            crate::spawn_promote::row_identity(row, sid),
-        ),
+        Calling::Agent(row, sid) => crate::spawn_promote::agent_caller(row, sid),
     }
 }
 
@@ -272,8 +269,9 @@ fn widen_answer(scope: &str, caller: &RegistryEntry, target: &str, entries: &[Va
     .unwrap_or_else(|_| json!({}))
 }
 
-/// Grant a role to one existing row from an attended human shell, or from an
-/// agent whose own role strictly contains the requested scope. A row that
+/// Grant a role to one existing row from an attended human shell, from a level
+/// 0 lead over any scope, or from an agent whose own role strictly contains the
+/// requested scope. A row that
 /// already holds a role is re-scoped in the same registry write, and the
 /// receipt names what was vacated.
 pub fn promote(home: &AgentsHome, handle: &str, scopes: &[String]) -> Result<Value, String> {
@@ -774,6 +772,19 @@ mod tests {
         assert_eq!(holder_session(&r).as_deref(), Some("cc-1"));
         r.harness_session_id = Some("hs-1".into());
         assert_eq!(holder_session(&r).as_deref(), Some("hs-1"));
+    }
+
+    #[test]
+    fn a_callers_stored_level_reaches_the_grant_check() {
+        let verdict = |level: u32| {
+            let mut lead = row("muriel");
+            lead.role_scope = Some("alpha,beta".into());
+            lead.role_level = Some(level);
+            let calling = Calling::Agent(Box::new(lead), "s-1".into());
+            grant_refusal(&calling, "gamma", &HashMap::new(), &[])
+        };
+        assert_eq!(verdict(0), None);
+        assert!(verdict(1).unwrap().contains("neither contains nor equals"));
     }
 
     #[test]
