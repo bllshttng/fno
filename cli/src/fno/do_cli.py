@@ -57,6 +57,7 @@ def _forward_watch(ctx: typer.Context) -> None:
 do_pr_app.command(**_WATCH_LEAF)(_forward_watch)
 pr_watch_app = typer.Typer(add_completion=False)
 pr_watch_app.command(**_WATCH_LEAF)(_forward_watch)
+pr_watch_command = typer.main.get_command(pr_watch_app)
 
 
 delivery_app = typer.Typer(

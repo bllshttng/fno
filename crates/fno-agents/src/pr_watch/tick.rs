@@ -1464,7 +1464,7 @@ pub fn run(args: &[String]) -> i32 {
     let started = Instant::now();
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
     let state_root = super::status::state_root(&cwd);
-    let journal = state_root.join("events.jsonl");
+    let journal = crate::pr_park::Paths::resolve(&cwd).events;
     let emitter = Emitter {
         journal: journal.clone(),
     };

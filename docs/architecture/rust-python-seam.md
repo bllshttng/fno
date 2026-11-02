@@ -212,7 +212,6 @@ The counting rule, in words, so a reader can audit a row without reading the scr
 | 64 | worktree_status (ported to Rust and deleted 2026-10, gone on next regen) | 165 | 2 | 5/- | 0 | 3 |
 | 65 | relay | 1862 | 2 | 5/- | 810 | 9 |
 | 66 | runtime | 415 | 2 | 6/- | 439 | 5 |
-| 67 | branch_provenance_cache | 84 | 2 | 8/- | 0 | 4 |
 | 68 | config_readback | 280 | 2 | 8/- | 0 | 5 |
 | 69 | worktree (ported to Rust and deleted 2026-10, gone on next regen) | 596 | 2 | 9/- | 791 | 6 |
 | 70 | doctor_graph | 86 | 2 | 14/1 | 0 | 4 |

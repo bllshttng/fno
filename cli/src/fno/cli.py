@@ -117,7 +117,7 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
         {"hidden": True},
     ),
     "pr-watch": (
-        "fno.do_cli:pr_watch_app",
+        "fno.do_cli:pr_watch_command",
         "PR-state watcher: auto-fire /fno:ship pr check + /fno:ship pr merged for open-PR backlog nodes",
         {"hidden": True},
     ),
@@ -172,7 +172,6 @@ COLLAPSE_KEEP: dict[str, set[str]] = {
     "evals": set(),
     "paths": set(),
     "plan": set(),
-    "pr-watch": set(),
     "resume": set(),
 }
 

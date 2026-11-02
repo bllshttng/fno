@@ -15,7 +15,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use common::{assert_golden, capture_mode, python_executable, slug, Golden};
+use common::{assert_golden, slug, Golden};
 use serde_json::{json, Value};
 
 mod common;
@@ -23,13 +23,14 @@ mod common;
 const GH_STUB: &str = r#"#!/bin/sh
 # Answers the tick's REST reads for one repo: o/r, PRs 7 (open) and 8 (merged).
 args="$*"
+case " $args " in *" -i "*) printf 'HTTP/2.0 200 OK\r\n\r\n' ;; esac
 case "$args" in
   *rate_limit*) echo '{"resources":{"graphql":{"remaining":4000,"reset":1893456000},"core":{"remaining":4000,"reset":1893456000}}}' ;;
   *repos/o/r/pulls/7/reviews*) echo '[{"user":{"login":"bot[bot]"},"submitted_at":"2026-10-30T00:00:00Z","state":"COMMENTED"}]' ;;
   *repos/o/r/issues/7/comments*) echo '[]' ;;
   *repos/o/r/pulls/8/reviews*|*repos/o/r/issues/8/comments*) echo '[]' ;;
-  *repos/o/r/pulls/7*) echo '{"number":7,"state":"open","merged_at":null,"merged":false,"draft":false,"created_at":"2026-10-29T00:00:00Z","html_url":"https://github.com/o/r/pull/7","merge_commit_sha":null}' ;;
-  *repos/o/r/pulls/8*) echo '{"number":8,"state":"closed","merged_at":"2026-10-30T00:00:00Z","merged":true,"draft":false,"created_at":"2026-10-29T00:00:00Z","html_url":"https://github.com/o/r/pull/8","merge_commit_sha":"abc"}' ;;
+  *repos/o/r/pulls/7*) echo '{"number":7,"state":"open","merged_at":null,"merged":false,"draft":false,"created_at":"2026-10-29T00:00:00Z","head":{"sha":"aaa","ref":"f"},"base":{"ref":"main"},"html_url":"https://github.com/o/r/pull/7","merge_commit_sha":null}' ;;
+  *repos/o/r/pulls/8*) echo '{"number":8,"state":"closed","merged_at":"2026-10-30T00:00:00Z","merged":true,"draft":false,"created_at":"2026-10-29T00:00:00Z","head":{"sha":"aaa","ref":"f"},"base":{"ref":"main"},"html_url":"https://github.com/o/r/pull/8","merge_commit_sha":"abc"}' ;;
   *repos/o/r/pulls*) echo '[{"number":7,"state":"open","draft":false,"created_at":"2026-10-29T00:00:00Z"}]' ;;
   *) echo "{}" ;;
 esac
@@ -150,7 +151,8 @@ fn command(home: &Home, program: &Path) -> Command {
 
 fn masked_journal(home: &Home) -> String {
     let out = home.dir.join("export.jsonl");
-    fno_agents::event_store::export_jsonl(&home.state.join("events.jsonl"), &out).expect("export");
+    fno_agents::event_store::export_jsonl(&home.state.join("db/events.jsonl"), &out)
+        .expect("export");
     let mut rows = Vec::new();
     for line in std::fs::read_to_string(&out).unwrap().lines() {
         let mut row: Value = serde_json::from_str(line).unwrap();
@@ -189,16 +191,6 @@ fn golden_of(home: &Home, output: std::process::Output) -> Golden {
     }
 }
 
-fn python_leg(home: &Home) -> Golden {
-    let cli_src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../cli/src");
-    let mut cmd = command(home, &python_executable());
-    cmd.env("PYTHONPATH", cli_src).args([
-        "-c",
-        "import sys; sys.argv=['fno-py','tick']; from fno.pr_watch.cli import cli; cli()",
-    ]);
-    golden_of(home, cmd.output().expect("python leg"))
-}
-
 fn rust_leg(home: &Home) -> Golden {
     let mut cmd = command(home, Path::new(env!("CARGO_BIN_EXE_fno-agents")));
     cmd.args(["pr-watch", "tick"]);
@@ -208,17 +200,8 @@ fn rust_leg(home: &Home) -> Golden {
 #[test]
 fn the_tick_matches_its_frozen_goldens() {
     let root = tempfile::tempdir().unwrap();
-    // TEMPORARY CI capture: dumps both legs, removed before merge.
-    let mut dump = Vec::new();
     for case in cases() {
         let rust = rust_leg(&write_case(root.path(), &case, "rust"));
-        let py = python_leg(&write_case(root.path(), &case, "python"));
-        dump.push(json!({"case": slug(case.label), "same": rust.exit == py.exit && rust.streams == py.streams,
-                         "rust": [rust.exit, rust.streams], "python": [py.exit, py.streams]}));
+        assert_golden("pr-watch-tick", case.label, &rust, None);
     }
-    let _ = (
-        capture_mode as fn() -> bool,
-        assert_golden as fn(&str, &str, &Golden, Option<Golden>),
-    );
-    panic!("CAPTURE-DUMP {}", Value::Array(dump));
 }
