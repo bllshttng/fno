@@ -172,16 +172,16 @@ mod tests {
                 matches!(at(lost, BUDGET), Next::Stop(reason) if reason.contains("gave up on bb16"))
             );
         }
-    }
-
-    #[test]
-    fn link_dial_stops_on_every_other_exit() {
-        let Next::Stop(reason) = at(Some(FAR_USAGE), SOON) else {
-            panic!("exit 2 must not redial");
-        };
-        assert!(reason.contains("fno doctor update"), "{reason}");
         assert_eq!(at(Some(FAR_LEFT), SOON), Next::Done);
-        assert!(matches!(at(Some(FAR_GONE), SOON), Next::Stop(reason) if reason.contains("gone")));
-        assert!(matches!(at(Some(13), SOON), Next::Stop(reason) if reason.contains("exit 13")));
+        for (code, says) in [
+            (FAR_USAGE, "fno doctor update"),
+            (FAR_GONE, "gone"),
+            (13, "exit 13"),
+        ] {
+            assert!(
+                matches!(at(Some(code), SOON), Next::Stop(reason) if reason.contains(says)),
+                "exit {code} must stop and name {says}"
+            );
+        }
     }
 }
