@@ -466,6 +466,11 @@ WHERE origin_machine = ? AND applied_at IS NULL AND refused IS NULL"
         return Ok((0, 0));
     }
     let local = fold(&me.index());
+    // A row addressed here means this machine asked, so an empty fold is a
+    // failed read (the journal read degrades to empty), never a lost question.
+    if local.asked.is_empty() {
+        return Ok((0, 0));
+    }
     let mut steps: Vec<(String, Vec<SqlValue>)> = Vec::new();
     let (mut applied, mut refused) = (0usize, 0usize);
     for row in &reply.rows {
@@ -588,18 +593,21 @@ WHERE machine_id = ? AND refused IS NOT NULL AND reported_at IS NULL",
             .unwrap_or((copy, "the asking machine"));
         let title = format!("Your answer to {copy} did not apply");
         let body = format!(
-            "{host} did not take your answer to {copy}: {why}. Answer {origin_id} on {host}."
+            "{host} did not take your answer to {copy}: {why}. If it is still open, answer \
+{origin_id} on {host}."
         );
-        if (me.notify)(&title, &body) {
-            remote.execute(
-                &format!(
-                    "UPDATE fleet_question_answer SET reported_at = {NOW} \
-WHERE machine_id = ? AND question_id = ?"
-                ),
-                &[mine.clone(), SqlValue::Text(copy.to_string())],
-            )?;
-            reported += 1;
+        // A failed notice can hold its 15 s bound, so the rest wait a beat.
+        if !(me.notify)(&title, &body) {
+            break;
         }
+        remote.execute(
+            &format!(
+                "UPDATE fleet_question_answer SET reported_at = {NOW} \
+WHERE machine_id = ? AND question_id = ?"
+            ),
+            &[mine.clone(), SqlValue::Text(copy.to_string())],
+        )?;
+        reported += 1;
     }
     Ok(reported)
 }
@@ -985,7 +993,7 @@ mod tests {
             notices.borrow().as_slice(),
             [
                 "hosta did not take your answer to q-2@hosta: it closed first: answered: local. \
-Answer q-2 on hosta."
+If it is still open, answer q-2 on hosta."
             ]
         );
 
@@ -1034,6 +1042,14 @@ WHERE question_id = 'q-5@hosta'",
         assert_eq!(beat(remote, &a).unwrap().answers_refused, 1);
         a.home = good_home;
 
+        // A notice that fails stays owed, and the next beat sends it.
+        let silent = Host {
+            notify: Box::new(|_, _| false),
+            ..machine("m-B", "hostb", &tb, &notices)
+        };
+        assert_eq!(beat(remote, &silent).unwrap().refusals_reported, 0);
+        assert_eq!(beat(remote, &b).unwrap().refusals_reported, 1);
+
         // A dead primary keeps the answer in the journal; the first beat after
         // it answers publishes the row.
         ask(&a, "q-6");
@@ -1042,6 +1058,12 @@ WHERE question_id = 'q-5@hosta'",
         answer_copy(&b, "q-6@hosta");
         assert!(beat(&test_primary::dead(), &b).is_err());
         assert_eq!(beat(remote, &b).unwrap().answers_published, 1);
+
+        // An unreadable journal reads as empty: the row waits, unrefused.
+        let tc = tempfile::tempdir().unwrap();
+        let unread = machine("m-A", "hosta", &tc, &notices);
+        assert_eq!(beat(remote, &unread).unwrap().answers_refused, 0);
+        assert_eq!(beat(remote, &a).unwrap().answers_applied, 1);
     }
 
     // A primary from before the refusal columns gains them on the next start.
