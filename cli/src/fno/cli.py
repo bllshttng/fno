@@ -242,7 +242,7 @@ class _HonestMenuGroup(make_lazy_group_cls(LAZY_SUBCOMMANDS)):  # type: ignore[m
         formatter.write_paragraph()
         formatter.write_text(
             f"Showing {visible} top-level commands. "
-            f"`backlog`, `mux` and `version` forward to the Rust front binary; `restart`, "
+            f"`backlog` forwards to fno-agents; `mux` and `version` forward to the Rust front binary; `restart`, "
             f"`uninstall` and `update` answer there too. Run `fno <command> --help` "
             f"for one command."
         )
@@ -348,7 +348,7 @@ SHORTHAND_POINTER = (
 # Short help for the eager inline commands (defined in this module, so listing
 # them never imports anything). `help --all` merges these with LAZY_SUBCOMMANDS.
 _EAGER_COMMAND_HELP: dict[str, str] = {
-    "backlog": "Feature graph management (forwards to the Rust front).",
+    "backlog": "Feature graph management (forwards to fno-agents).",
     "help": "Show help for the root command or any subcommand.",
     "mux": "Mux pane control and the web console (forwards to the Rust front).",
     "version": "Show the installed fno version(s) (forwards to the Rust front).",
@@ -566,13 +566,21 @@ def mux(
 @app.command(
     context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
     add_help_option=False,
-    help="Feature graph management (the Rust front's command).",
+    help="Feature graph management (the fno-agents binary's command).",
 )
 def backlog(
     ctx: typer.Context,
 ) -> None:
-    """Forward to the Rust front's `backlog`."""
-    _run_rust_front(["backlog", *ctx.args])
+    """Forward to the native `backlog`, which the fno-agents binary serves."""
+    import subprocess
+
+    from fno.rust_binary import find_dev_binary, resolve_binary
+
+    binary = find_dev_binary() or resolve_binary()
+    if binary is None:
+        typer.echo("fno: the fno-agents binary was not found; run `fno doctor update --rust`", err=True)
+        raise typer.Exit(code=127)
+    raise typer.Exit(code=subprocess.run([str(binary), "backlog", *ctx.args]).returncode)
 
 
 @app.command(
