@@ -615,8 +615,15 @@ pub(crate) fn apply_action(view: &mut View, gen: u64, done: Done) {
         (Act::Spawn, Ok(lines)) => {
             // Read the map again now, so the new seat shows on the next beat.
             b.last_read = None;
+            // The receipt is the spawn's last line, a JSON row naming the seat.
             let receipt = lines.iter().rev().find(|l| !l.trim().is_empty());
-            format!("{} ok: {}", done.label, receipt.map_or("", |l| l.trim()))
+            let seat = receipt.and_then(|l| {
+                let row: serde_json::Value = serde_json::from_str(l).ok()?;
+                let (name, short) = (row["name"].as_str()?, row["short_id"].as_str()?);
+                Some(format!("{name} ({short}) shows on the map within one beat"))
+            });
+            let said = seat.or_else(|| receipt.map(|l| l.trim().to_string()));
+            format!("{} ok: {}", done.label, said.unwrap_or_default())
         }
         (Act::View, Ok(_)) => format!("{}: pane opened", done.label),
         (_, Err(e)) => e,

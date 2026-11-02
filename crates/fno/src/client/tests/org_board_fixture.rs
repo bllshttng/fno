@@ -387,4 +387,17 @@ fn fleet_board_action_results_land_on_the_board() {
     apply_action(&mut view, gen, done(Err(ssh.into())));
     assert!(view.org_board.is_some());
     assert_eq!(notice(&view), ssh);
+    // A spawn names the seat its receipt row made.
+    let receipt = r#"{"name":"t-fix-it","short_id":"e7372e60","status":"spawning"}"#;
+    let spawned = Done {
+        act: Act::Spawn,
+        label: "spawn on iMac2D2".into(),
+        key: "host/m-imac".into(),
+        result: Ok(vec!["a slot note".into(), receipt.into()]),
+    };
+    apply_action(&mut view, gen, spawned);
+    assert_eq!(
+        notice(&view),
+        "spawn on iMac2D2 ok: t-fix-it (e7372e60) shows on the map within one beat"
+    );
 }
