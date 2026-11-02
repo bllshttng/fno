@@ -51,9 +51,10 @@ pub(super) fn skeleton_cell(width: usize, elapsed_ms: Option<u64>) -> String {
     BREATHE[frame].to_string().repeat(width)
 }
 
-/// A priced dollar amount. The `~` marks LIST price: cents price the base
-/// catalog rates, so a tiered model's doubled top band and a subscription's
-/// actual bill both read lower.
+/// A priced dollar amount. The `~` marks a floor: the served cents are the
+/// larger of the OTel sum and the transcript estimate, and each misses calls
+/// the other sees. List rates also read a tiered model's top band and a
+/// subscription's actual bill low.
 pub(super) fn cost_cell(cents: u64) -> String {
     if cents >= 100_000 {
         format!("~${:.1}k", cents as f64 / 100_000.0)
