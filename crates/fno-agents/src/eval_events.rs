@@ -453,7 +453,8 @@ mod tests {
     }
 
     /// The token env is separate from the OTLP headers, so an armed feed
-    /// export never carries eval rows. Every gate must open first.
+    /// export never carries eval rows. The kill switches are the shared
+    /// `forced_off`, proved in otlp_export's `resolve_gates`.
     #[test]
     fn resolve_stays_off_until_each_gate_opens() {
         static ENV_LOCK: std::sync::LazyLock<&'static std::sync::Mutex<()>> =
@@ -498,14 +499,6 @@ mod tests {
             Resolved::On(c) => assert_eq!(c.url, "https://us.i.posthog.com/batch/"),
             _ => panic!("every gate open resolves on"),
         }
-
-        std::env::set_var("DO_NOT_TRACK", "1");
-        assert!(matches!(
-            resolve(dir.path()),
-            Resolved::Off {
-                forced_off_by: Some("DO_NOT_TRACK")
-            }
-        ));
 
         for (key, value) in saved {
             match value {
