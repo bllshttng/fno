@@ -271,9 +271,8 @@ fn widen_answer(scope: &str, caller: &RegistryEntry, target: &str, entries: &[Va
 
 /// Grant a role to one existing row from an attended human shell, from a level
 /// 0 lead over any scope, or from an agent whose own role strictly contains the
-/// requested scope. A row that
-/// already holds a role is re-scoped in the same registry write, and the
-/// receipt names what was vacated.
+/// requested scope. A row that already holds a role is re-scoped in the same
+/// registry write, and the receipt names what was vacated.
 pub fn promote(home: &AgentsHome, handle: &str, scopes: &[String]) -> Result<Value, String> {
     let projects = projects();
     let entries = graph_entries();
@@ -304,7 +303,11 @@ pub fn promote(home: &AgentsHome, handle: &str, scopes: &[String]) -> Result<Val
     if !widened && (denial.is_some() || self_edit) {
         let hint = widen["hint"].as_str().filter(|h| !h.is_empty());
         let text: Vec<&str> = [denial.as_deref(), hint].into_iter().flatten().collect();
-        return Err(if text.is_empty() {
+        return Err(if widen.get("widen").is_some() && text.is_empty() {
+            "role self-edit refused: a session cannot role itself. Ask the user or a higher \
+             lead to grant it."
+                .to_string()
+        } else if text.is_empty() {
             "role self-edit refused: the role-widen answer was unavailable".to_string()
         } else {
             text.join(" ")
