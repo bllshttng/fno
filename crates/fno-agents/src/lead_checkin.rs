@@ -2774,6 +2774,21 @@ pub(crate) fn emit_row(path: &Path, source: &str, data: &Map<String, Value>) -> 
         );
         return false;
     }
+    // An overflow substitute is not a lead_checkin row: the emitter would
+    // write the event_payload_too_large meta-event and answer Ok, and every
+    // reader (org history, the daemon wake) filters by type, so the beat
+    // would print and exit 0 with nothing journalled (the 2026-11-02 15:31Z
+    // specimen). Size the row against the cap and refuse, the same contract
+    // as day boundary provenance; finish_checkin turns the false into rc 3.
+    let payload_len = serde_json::to_string(&data).map(|s| s.len()).unwrap_or(0);
+    let cap = crate::events_limits::max_data_bytes();
+    if payload_len > cap {
+        eprintln!(
+            "lead-checkin: WARNING: lead_checkin row not emitted: the beat data is \
+             {payload_len} bytes, over the {cap}-byte event cap; the beat is not journalled"
+        );
+        return false;
+    }
     match crate::events::EventEmitter::new(path, source).emit_fields(LEAD_CHECKIN, data.clone()) {
         Ok(()) => true,
         Err(e) => {
@@ -4637,16 +4652,15 @@ mod tests {
         assert_eq!(rows.lines().count(), 1);
         assert!(rows.contains("\"source\":\"loop\""), "rows: {rows}");
 
-        // An oversized payload journals the meta-event, never a raw row.
+        // An oversized payload refuses the row instead of journaling the
+        // event_payload_too_large substitute: every reader filters by type,
+        // so a substitute would leave the beat exited 0 with nothing
+        // journalled; the false rides finish_checkin into rc 3.
         let huge = json!({"scope": "x-bbbb", "change": "x".repeat(70_000)});
-        assert!(emit_row(&path, "loop", huge.as_object().unwrap()));
+        assert!(!emit_row(&path, "loop", huge.as_object().unwrap()));
         let rows = crate::events::committed_journal_text(&path);
-        assert_eq!(rows.lines().count(), 2, "rows: {rows}");
-        assert!(rows.contains("event_payload_too_large"), "rows: {rows}");
-        assert!(
-            rows.contains("\"intended_kind\":\"lead_checkin\""),
-            "rows: {rows}"
-        );
+        assert_eq!(rows.lines().count(), 1, "rows: {rows}");
+        assert!(!rows.contains("event_payload_too_large"), "rows: {rows}");
 
         let mut data = Map::new();
         let change = finish_change(
