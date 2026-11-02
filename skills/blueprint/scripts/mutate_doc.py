@@ -768,10 +768,8 @@ def _append_sections_to_body(body: str, new_sections: dict[str, str]) -> str:
 # rc 7 = the plan states no file surface, matching _VALIDATE_SNIPPET's "the
 # thing we warn about happened" code. Any other rc means no verdict was earned.
 _SURFACE_SNIPPET = r"""
-import sys
-from pathlib import Path
-from fno.graph.collision import has_file_surface
-sys.exit(0 if has_file_surface(Path(sys.argv[1])) else 7)
+import subprocess, sys
+sys.exit(subprocess.run(["fno", "backlog", "script-door", "has-file-surface", sys.argv[1]]).returncode)
 """
 
 

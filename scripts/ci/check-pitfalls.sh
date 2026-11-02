@@ -198,18 +198,15 @@ def norm(s):
     return " ".join(s.split()).rstrip(".").casefold()
 
 try:
-    # The stdlib-only leg of the api: the keeper client speaks the same
-    # `api` op the typed client wraps, and store.py imports nothing outside
-    # the standard library. The typed layer needs pydantic, which a bare
-    # python3 does not carry.
-    from pathlib import Path
+    import json
+    import subprocess
 
-    from fno.graph.store import _client_for
-
-    graph_path = Path(os.environ["GRAPH_TARGET"])
-
-    reply = _client_for(graph_path).request(
-        "api", {"op": "nodes", "filter": {}, "include_archived": True}
+    nodes = json.loads(
+        subprocess.run(
+            ["fno", "backlog", "script-door", "rows", "--include-archived",
+             "--graph", os.environ["GRAPH_TARGET"]],
+            capture_output=True, text=True, check=True,
+        ).stdout
     )
 except Exception as exc:
     sys.stderr.write(
@@ -220,7 +217,7 @@ except Exception as exc:
     sys.exit(1)
 
 ids, titles = set(), set()
-for n in reply.get("nodes", []):
+for n in nodes:
     if isinstance(n.get("id"), str):
         ids.add(n["id"])
     if isinstance(n.get("title"), str):

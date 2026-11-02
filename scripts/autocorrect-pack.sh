@@ -250,46 +250,25 @@ if [[ -f "${GRAPH_PATH%.json}.db" ]]; then
   # The read goes through the store api. The raw `rows` op keeps fields the
   # typed nodes op drops, so the blocked_count arm stays live.
   if GRAPH_BLOCKED_REPORT="$(
-    GRAPH_TARGET="$GRAPH_PATH" PACK_CLI_SRC="$SCRIPT_DIR/../cli/src" \
+    GRAPH_TARGET="$GRAPH_PATH" \
       python3 <<'PY'
-import importlib.util
 import json
 import os
+import subprocess
 import sys
-import types
-from pathlib import Path
-
-# The keeper client is stdlib-only, but `import fno.graph.store` executes
-# fno/graph/__init__.py first, and that drags in the whole graph package
-# (tomli_w and friends). Stub the two parent packages so store.py and its
-# _constants sibling load alone, exactly the stdlib leg check-pitfalls.sh
-# relies on.
-cli_src = Path(os.environ["PACK_CLI_SRC"]).resolve()
-fno_pkg = types.ModuleType("fno")
-fno_pkg.__path__ = [str(cli_src / "fno")]
-graph_pkg = types.ModuleType("fno.graph")
-graph_pkg.__path__ = [str(cli_src / "fno" / "graph")]
-sys.modules.setdefault("fno", fno_pkg)
-sys.modules.setdefault("fno.graph", graph_pkg)
-
-spec = importlib.util.spec_from_file_location(
-    "fno.graph.store", cli_src / "fno" / "graph" / "store.py"
-)
-store = importlib.util.module_from_spec(spec)
-sys.modules["fno.graph.store"] = store
-spec.loader.exec_module(store)
 
 try:
-    reply = store._client_for(Path(os.environ["GRAPH_TARGET"])).request(
-        "api", {"op": "rows", "filter": {}}
+    proc = subprocess.run(
+        ["fno", "backlog", "script-door", "rows", "--graph", os.environ["GRAPH_TARGET"]],
+        capture_output=True, text=True, check=True,
     )
+    rows = json.loads(proc.stdout)
 except Exception as exc:
     sys.stderr.write(
         "autocorrect-pack: the store cannot be read through the store api (%s)\n" % (exc,)
     )
     sys.exit(1)
 
-rows = reply.get("rows", []) if isinstance(reply, dict) else []
 lines = []
 for row in rows:
     if not isinstance(row, dict):

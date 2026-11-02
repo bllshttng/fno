@@ -94,7 +94,7 @@ A	could not resolve to a repository	py=cli/src/fno/graph/_reconcile.py;rs=crates
 A	coverage is full, print 'no change' and stop. this beat is a heartbeat.	py=cli/src/fno/config/_lead.py;rs=crates/fno/src/config_cli/model/validators_blocks.rs	# CLASSIFY protocol|msg-twin|data
 A	crates/fno-agents/src/harness_capabilities.toml	py=scripts/regen-generated-copies.py;rs=crates/fno-agents/src/harness_matrix.rs	# CLASSIFY protocol|msg-twin|data
 A	crates/fno-agents/src/paths.rs	py=cli/src/fno/paths.py;rs=crates/fno-agents/src/bin/pr-affected.rs	# CLASSIFY protocol|msg-twin|data
-A	crates/fno/src/state_layout.rs	py=scripts/diagnostics/tracker-consumers.py;rs=crates/fno-agents/src/bin/pr-affected.rs	# CLASSIFY protocol|msg-twin|data
+A	crates/fno/src/state_layout.rs	rs=crates/fno-agents/src/bin/pr-affected.rs	# CLASSIFY protocol|msg-twin|data
 A	cursor-agent create-chat returned no stdout; no chat id was captured	py=cli/src/fno/agents/harnesses/cursor_agent.py;rs=crates/fno-agents/src/cursor_agent.rs	# CLASSIFY protocol|msg-twin|data
 A	cutover_low_after_minutes	py=cli/src/fno/config/_dispatch_commands.py;rs=crates/fno-agents/src/backlog/quota_route.rs|crates/fno/src/config_cli/model/validators_blocks.rs	# CLASSIFY protocol|msg-twin|data
 A	daemon: no pre-spawn baseline, oracle disabled for this spawn	py=cli/src/fno/agents/codex_pane.py;rs=crates/fno-agents/src/pane_spawn/codex.rs|crates/fno-agents/src/pane_spawn/codex_tests.rs	# CLASSIFY protocol|msg-twin|data

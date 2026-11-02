@@ -352,12 +352,6 @@ def detect_hidden_output_conflicts(
     ``unevaluated`` ids with no parseable file list) plus the two legacy
     conflict keys the ``--wave-decision`` printer still reports.
     """
-    from fno.graph.collision import (
-        HIDDEN_SHARED_OUTPUT_ROOTS,
-        match_shared_root,
-        partition,
-    )
-
     by_file: Dict[str, List[str]] = {}
     by_root: Dict[str, List[str]] = {}
     file_conflicts: List[str] = []
@@ -365,15 +359,16 @@ def detect_hidden_output_conflicts(
     items: List[tuple[str, set[str]]] = []
 
     for task_id in task_ids:
-        targets = set(_task_targets(plan_path, task_id, surfaces))
-        items.append((task_id, targets))
+        items.append((task_id, set(_task_targets(plan_path, task_id, surfaces))))
+    answer = _collision_partition(items)
+    for task_id, targets in items:
         for target in sorted(targets):
             owners = by_file.setdefault(target, [])
             owners.append(task_id)
             if len(owners) == 2:
                 file_conflicts.append(target)
 
-            shared_root = match_shared_root(target, HIDDEN_SHARED_OUTPUT_ROOTS)
+            shared_root = answer["shared_roots"].get(target)
             if shared_root:
                 root_owners = by_root.setdefault(shared_root, [])
                 if task_id not in root_owners:
@@ -381,13 +376,26 @@ def detect_hidden_output_conflicts(
                 if len(root_owners) == 2:
                     root_conflicts.append(shared_root)
 
-    groups, unevaluated = partition(items, shared_roots=HIDDEN_SHARED_OUTPUT_ROOTS)
     return {
-        "groups": [sorted(group) for group in groups],
-        "unevaluated": sorted(unevaluated),
+        "groups": [sorted(group) for group in answer["groups"]],
+        "unevaluated": sorted(answer["unevaluated"]),
         "file_conflicts": sorted(set(file_conflicts)),
         "shared_output_conflicts": sorted(set(root_conflicts)),
     }
+
+
+def _collision_partition(items: List[tuple[str, set[str]]]) -> Dict:
+    """The native collision partition. A failed door raises: a wave that cannot
+    be partitioned must not read as free of collisions."""
+    payload = {"items": [[task_id, sorted(paths)] for task_id, paths in items]}
+    proc = subprocess.run(
+        ["fno", "backlog", "script-door", "partition"],
+        input=json.dumps(payload),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return json.loads(proc.stdout)
 
 
 def partition_edges(
@@ -402,13 +410,12 @@ def partition_edges(
     ``--ready`` query unions these with the declared ``blocked_by`` edges,
     so the overlapping tasks serialize without flipping the wave's mode.
     """
-    from fno.graph.collision import HIDDEN_SHARED_OUTPUT_ROOTS, partition
-
     items = [
         (task_id, set(_task_targets(plan_path, task_id, surfaces)))
         for task_id in wave.tasks
     ]
-    groups, unevaluated = partition(items, shared_roots=HIDDEN_SHARED_OUTPUT_ROOTS)
+    answer = _collision_partition(items)
+    groups, unevaluated = answer["groups"], answer["unevaluated"]
 
     edges: Dict[str, List[str]] = {}
     for group in groups:

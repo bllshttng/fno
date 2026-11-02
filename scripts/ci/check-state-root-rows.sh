@@ -11,10 +11,9 @@
 # refused, removed = banked. Regenerate the baseline in the same PR as a
 # removal to bank it for good.
 #
-# The extractor is fno.graph._state_root_inventory.top_level_patterns - the
-# same parser the drift report and the Rust reading use, so one dialect
-# decides everywhere. It runs through uv from cli/ because importing the
-# module pulls the fno.graph package (and its yaml dep) with it.
+# The extractor is the native top_level_patterns behind `fno backlog
+# script-door root-patterns` - the same parser the drift report uses, so one
+# dialect decides everywhere.
 #
 # Run: bash scripts/ci/check-state-root-rows.sh [--self-test] [--quiet]
 # Exit: 0 pass, 1 an added row, 2 misuse, a missing baseline, or a doc that
@@ -39,18 +38,22 @@ BASELINE="scripts/ci/state-root-rows.baseline"
 
 # DOC BASELINE QUIET -> subset verdict. Exit 0 subset, 1 added, 2 unreadable.
 check_rows() {
-    (cd "$REPO_ROOT/cli" && uv run --frozen python - "$1" "$2" "$3" <<'PY'
+    local patterns
+    if [[ ! -f "$1" ]]; then
+        echo "check-state-root-rows: $1 is unreadable" >&2
+        return 2
+    fi
+    patterns="$(fno backlog script-door root-patterns "$1")" || return 2
+    (PATTERNS="$patterns" python3 - "$1" "$2" "$3" <<'PY'
+import os
 import sys
 from pathlib import Path
-
-sys.path.insert(0, "src")
-from fno.graph._state_root_inventory import top_level_patterns
 
 doc, baseline, quiet = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3] == "--quiet"
 if not doc.is_file() or not baseline.is_file():
     print(f"check-state-root-rows: {doc} or {baseline} is unreadable", file=sys.stderr)
     sys.exit(2)
-head = set(top_level_patterns(doc))
+head = set(os.environ["PATTERNS"].split())
 base = {
     entry
     for line in baseline.read_text().splitlines()
