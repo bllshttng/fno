@@ -177,16 +177,19 @@ fn typed_turns(cache: &Path, by: &str, since_day: &str) -> BTreeMap<String, u64>
     out
 }
 
-/// How much of a day the fold read after the fact. A turn older than the fold's
-/// first run is backfilled, so that run's own day is part of each.
-fn day_backfill(day: &str, cache: &Path) -> Option<&'static str> {
+/// The UTC day of the fold's first run, from its cache.
+fn first_run_day(cache: &Path) -> Option<String> {
     let text = std::fs::read_to_string(cache).ok()?;
     let parsed = serde_json::from_str::<Value>(&text).ok()?;
     let first_run = parsed.get("first_run_epoch").and_then(Value::as_i64)?;
-    let first_day = chrono::DateTime::from_timestamp(first_run, 0)?
-        .format("%Y-%m-%d")
-        .to_string();
-    match day.cmp(first_day.as_str()) {
+    let day = chrono::DateTime::from_timestamp(first_run, 0)?;
+    Some(day.format("%Y-%m-%d").to_string())
+}
+
+/// How much of a day the fold read after the fact. A turn older than the fold's
+/// first run is backfilled, so that run's own day is part of each.
+fn day_backfill(day: &str, first_day: &str) -> Option<&'static str> {
+    match day.cmp(first_day) {
         std::cmp::Ordering::Less => Some("backfilled"),
         std::cmp::Ordering::Equal => Some("part backfilled"),
         std::cmp::Ordering::Greater => None,
@@ -250,6 +253,7 @@ fn report(args: &Args, journal: &Path, cache: &Path) -> Result<Value, String> {
     let turns = typed_turns(cache, &args.by, &since_day);
     // A day with typed turns and no correction is a rate of zero, not a gap.
     let by_day = args.by == "day";
+    let first_day = if by_day { first_run_day(cache) } else { None };
     if by_day {
         let user = blocks.entry("user".to_string()).or_default();
         for day in turns.keys() {
@@ -274,7 +278,8 @@ fn report(args: &Args, journal: &Path, cache: &Path) -> Result<Value, String> {
                     "rule_versions": t.rule_versions,
                 });
                 if by_day {
-                    row["backfill"] = json!(day_backfill(group, cache));
+                    row["backfill"] =
+                        json!(first_day.as_deref().and_then(|d| day_backfill(group, d)));
                 }
                 if args.include_interrupt {
                     row["interrupt"] = json!(t.interrupt);
