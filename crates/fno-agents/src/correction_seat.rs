@@ -165,12 +165,11 @@ mod tests {
     fn a_lead_fact_outranks_a_worker_fact_and_a_bare_session_reads_unmeasured() {
         let dir = tempfile::tempdir().unwrap();
         let journal = dir.path().join("events.jsonl");
-        // The flat shape and the data shape both name a vacated role.
         for (id, line) in [
             (
                 "v1",
                 json!({"ts": NOW, "type": "agent_role_vacated", "source": "agents",
-                "holder_session": "was-lead", "level": 2, "scope": "x", "cause": "done"}),
+                "data": {"holder_session": "was-lead", "level": 2, "scope": "x", "cause": "done"}}),
             ),
             (
                 "v2",
