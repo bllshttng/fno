@@ -58,6 +58,7 @@ fn accepts(check: &str, flag: &str) -> bool {
 }
 
 /// The parsed invocation: the check, the repo root, and the per-check flags.
+#[derive(Debug)]
 pub struct Invocation {
     pub check: String,
     pub root: PathBuf,
@@ -75,7 +76,7 @@ pub struct Invocation {
 /// Refusals name what is missing, like the Python surface.
 pub fn parse(args: &[String]) -> Result<Invocation, String> {
     let mut root_override: Option<String> = None;
-    let mut rest: &[String] = args;
+    let rest: &[String] = args;
     let mut check: Option<String> = None;
     let mut flags: Vec<String> = Vec::new();
     for (i, token) in rest.iter().enumerate() {
@@ -655,6 +656,7 @@ fn walkdir_py_sh(base: &Path) -> Vec<PathBuf> {
 pub mod plan_filenames {
     use std::path::{Path, PathBuf};
 
+    #[derive(Debug)]
     pub struct Mismatch {
         pub line: String,
     }

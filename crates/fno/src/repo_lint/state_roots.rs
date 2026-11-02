@@ -142,7 +142,7 @@ fn chr_bs() -> char {
     char::from_u32(92).expect("backslash")
 }
 
-fn rule_a_violations(root: &Path) -> Vec<(String, String, String)> {
+pub(crate) fn rule_a_violations(root: &Path) -> Vec<(String, String, String)> {
     let mut violations: Vec<(String, String, String)> = Vec::new();
     let py_join = regex::Regex::new(r#"(?:/\s*["']\.fno["']|["']\.fno/)"#).unwrap();
     let rs_join = regex::Regex::new(r#"join\(\s*["']\.fno"#).unwrap();
@@ -208,7 +208,7 @@ fn rule_a_violations(root: &Path) -> Vec<(String, String, String)> {
 /// cache decorator, a zero-parameter def, and a call in the body to a root
 /// read. Recorded departure: a signature wrapped across lines can hide a
 /// parameter; the both-directions baseline keeps any miss loud.
-fn rule_b_violations(root: &Path) -> Vec<(String, String, String)> {
+pub(crate) fn rule_b_violations(root: &Path) -> Vec<(String, String, String)> {
     let mut violations = Vec::new();
     let mut reads: Vec<&str> = ROOT_READS.to_vec();
     for (_f, resolver, _o) in STATE_FILES {

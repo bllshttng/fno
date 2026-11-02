@@ -143,15 +143,15 @@ fn plan_filenames_flags_a_filename_that_disagrees_with_its_claim() {
     let dir = fixture("plan-filenames");
     write(
         &dir,
-        "internal/fno/plan-x-ab12.md",
-        "---\nnode: x-cd34\n---\nbody\n",
+        "internal/fno/plan-x-aaaa.md",
+        "---\nnode: x-bbbb\n---\nbody\n",
     );
     let scan = plan_filenames::scan(&dir);
     match scan {
         plan_filenames::Scan::Mismatched(rows) => {
             assert_eq!(rows.len(), 1, "{rows:?}");
-            assert!(rows[0].line.contains("x-ab12"), "{rows:?}");
-            assert!(rows[0].line.contains("x-cd34"), "{rows:?}");
+            assert!(rows[0].line.contains("x-aaaa"), "{rows:?}");
+            assert!(rows[0].line.contains("x-bbbb"), "{rows:?}");
         }
         plan_filenames::Scan::Clean => panic!("expected a mismatch"),
     }
