@@ -364,7 +364,7 @@ fn shell_quote(arg: &str) -> String {
     format!("'{}'", arg.replace('\'', r"'\''"))
 }
 
-/// The snapshot path for this process, so two runs on one box never share a
+/// The snapshot path for this process, so two runs on one machine never share a
 /// FILE: plant and verify run in the SAME process, so the pid keys both
 /// halves.
 pub(crate) fn state_canary_snapshot() -> String {

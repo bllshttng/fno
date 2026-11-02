@@ -2389,7 +2389,7 @@ mod tests {
         let path = dir.join("events.jsonl");
         let _ = std::fs::remove_file(&path);
         let emitter = EventEmitter::new(path.clone(), "daemon");
-        // A threshold of zero would reap every orphan on the box; None must
+        // A threshold of zero would reap every orphan on the machine; None must
         // hold it back anyway.
         let reaped = orphan_sweep(&emitter, Duration::from_secs(0), None);
         assert_eq!(reaped, 0);

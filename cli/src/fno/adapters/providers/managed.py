@@ -395,7 +395,7 @@ def _write_slot_blob(cli: str, blob: str, config_dir: Path | None = None) -> Non
         # outgoing creds, never a half-applied target (no corruption on partial).
         for service in (_CLAUDE_KEYCHAIN_SERVICE, _claude_scoped_service(cfg)):
             # -U updates in place if the item exists. Blob rides argv: a known
-            # ponytail ceiling (ps exposure on a single-user box); `security`
+            # ponytail ceiling (ps exposure on a single-user machine); `security`
             # has no stdin password path for add-generic-password.
             out = _run_security(
                 ["add-generic-password", "-U", "-s", service, "-a", acct, "-w", blob]

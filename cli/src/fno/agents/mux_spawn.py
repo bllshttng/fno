@@ -168,7 +168,7 @@ def build_pane_argv(
     (its session DISPLAY name). Parity with the bg lane, which has always
     hardcoded it (``claude_ask.rs`` ``build_argv``). Without it claude falls
     back to a name inherited from the launching session's lineage, so every
-    pane worker on one box shows the SAME string in any session list that reads
+    pane worker on one machine shows the SAME string in any session list that reads
     it - N distinct workers collapse onto one row and the list cannot route.
     Only claude is wired: the other pane arms have no verified equivalent flag,
     and guessing one fails the spawn rather than degrading.

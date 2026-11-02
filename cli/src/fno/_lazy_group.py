@@ -235,7 +235,7 @@ class _LazyStub(click.Group):
         except ImportError as exc:
             # Imports here happen at INVOCATION time, so `uv tool install`
             # (what `fno doctor update` runs) can delete and rewrite this
-            # package between process start and this line. On a box with several
+            # package between process start and this line. On a machine with several
             # launchd agents and live sessions, some `fno` process is nearly
             # always mid-flight during that window, so this is routine rather
             # than exotic.
