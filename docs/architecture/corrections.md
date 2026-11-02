@@ -50,9 +50,9 @@ A `think` or `blueprint` row does not count, because it can name the lead that f
 
 A seat belongs to the session, never the turn. A worker promoted later reads as a lead on its earlier rows too.
 
-A row written before the stamp has no `seat`. The store is append-only, so the hourly pass appends a `correction_seat` row for it, up to 5,000 a pass, and writes nothing for an unmeasured session. The report reads the seat from either row.
+A row written before the stamp has no `seat`. The store is append-only, so the hourly pass appends a `correction_seat` row for it, up to 5,000 a pass. An unmeasured session gets no row. The report reads the seat from either row.
 
-No subagent seat exists yet. The fold reads no subagent transcript, because 11,951 files and 6.8 GiB of them would double its cursor file, and its scan skips `isSidechain` rows. A user never types to a subagent, so user rows lose nothing. Refusals inside a subagent stay uncounted.
+No subagent seat exists yet. The fold reads no subagent transcript, and its scan skips `isSidechain` rows. Those 11,951 files and 6.8 GiB can double its cursor file. A user never types to a subagent, so user rows lose nothing. Refusals inside a subagent stay uncounted.
 
 ## Scrub
 
@@ -77,7 +77,7 @@ fno doctor event corrections --precision ~/.fno/evals/corrections/v1/labels.json
 fno agents fleet feed --kind agent_corrected
 ```
 
-A `--by role` rate counts only rows stamped when the fold read them, over the typed turns that same fold tallied per seat. A backfilled row adds to the count and never to the rate, because no tally covers its turns.
+A `--by role` rate counts only rows the fold stamped as it read them. Its denominator is the typed turns that same fold tallied per seat. A backfilled row adds to the count and never to the rate, because no tally covers its turns.
 
 The feed shows user rows by default. An explicit `--kind agent_corrected` adds the agent and machine rows, as `agent_corrected_agent` and `agent_corrected_machine`. The feed reads the last 7 days of corrections. The report reads any window.
 

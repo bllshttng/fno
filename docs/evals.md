@@ -136,9 +136,9 @@ A failure that needs long session state or fleet state cannot reduce to this sha
 
 Every golden runs one one-shot worker, so no eval runs a lead or a worker pair. A lead golden tests whether a worker told it holds a lead role can recall the rule a lead broke. It does not test a lead's conduct over a term.
 
-Mine them with `fno doctor event corrections --by role --source user`, then read the rows on a `lead:` seat. On 2026-11-02 the store held 49 typed user corrections on lead sessions. Most reduce to nothing: 'no i pasted it already' and 'No on MacBook' state a fact about the moment, and a rule in the repo cannot answer them. Keep a row only when its answer is findable in the repo and the wrong act has a mechanical lure.
+Mine them with `fno doctor event corrections --by role --source user`, then read the rows on a `lead:` seat. On 2026-11-02 the store held 49 typed user corrections on lead sessions. Most reduce to nothing. 'no i pasted it already' states a fact about the moment, and no rule in the repo can answer it. If a row's answer is findable in the repo and the wrong act has a mechanical lure, keep it.
 
-`golden-lead-review-stays-inline` is the first. An L2 lead was told 'Every review can be done in the thread', and AGENTS.md holds that rule. The grader wants `/fno:review` run by the worker and rejects a spawned reviewer, mail, and a native review command. Lead goldens carry the `lead` tag and stay out of `gate` until a main run gives them a baseline.
+`golden-lead-review-stays-inline` is the first. It comes from an L2 lead who misrouted a review, and AGENTS.md holds the rule. Lead goldens carry the `lead` tag and stay out of `gate` until a main run gives them a baseline.
 
 ## The change gate
 

@@ -320,13 +320,14 @@ fn report(args: &Args, journal: &Path, cache: &Path) -> Result<Value, String> {
     } else {
         typed_turns(cache, &args.by, &since_day)
     };
-    // A day with typed turns and no correction is a rate of zero, not a gap.
+    // A day or seat with typed turns and no correction is a rate of zero, not a gap.
     let by_day = args.by == "day";
+    let keep_quiet = by_day || by_role;
     let first_day = if by_day { first_run_day(cache) } else { None };
-    if by_day {
+    if keep_quiet {
         let user = blocks.entry("user".to_string()).or_default();
-        for day in turns.keys() {
-            user.entry(day.clone()).or_default();
+        for group in turns.keys() {
+            user.entry(group.clone()).or_default();
         }
     }
     let mut out = serde_json::Map::new();
@@ -338,7 +339,7 @@ fn report(args: &Args, journal: &Path, cache: &Path) -> Result<Value, String> {
         if let Some(block) = blocks.get(source) {
             for (group, t) in block {
                 let count = t.total(args.include_interrupt);
-                if count == 0 && !(by_day && source == "user") {
+                if count == 0 && !(keep_quiet && source == "user") {
                     continue;
                 }
                 let mut row = json!({
@@ -582,13 +583,23 @@ mod tests {
         crate::event_store::append_envelope(&journal, &seat_row.to_string(), Some("sc")).unwrap();
         let cache = dir.path().join("cursors.json");
         let key = format!("{today}|lead:L0");
-        std::fs::write(&cache, json!({"seat_turns": {key: 4}}).to_string()).unwrap();
+        let quiet = format!("{today}|lead:L1");
+        std::fs::write(
+            &cache,
+            json!({"seat_turns": {key: 4, quiet: 5}}).to_string(),
+        )
+        .unwrap();
         let args = parse(&["--by=role".into()]).unwrap().unwrap();
         let value = report(&args, &journal, &cache).unwrap();
         let user = value["blocks"]["user"].as_array().unwrap();
         let of = |g: &str| user.iter().find(|r| r["group"] == g).unwrap();
         assert_eq!(of("lead:L0")["count"], 2);
         assert_eq!(of("lead:L0")["rate"], 0.25, "the seat row adds no rate");
+        assert_eq!(
+            of("lead:L1")["rate"],
+            0.0,
+            "a quiet seat is a zero, not a gap"
+        );
         assert_eq!(of("worker")["count"], 1);
         assert!(of("worker")["rate"].is_null());
         assert_eq!(of("unmeasured")["count"], 1, "never folded into a seat");
