@@ -62,7 +62,13 @@ Measured by reading each file's header, then testing whether its oracle still ex
 | `crates/fno-agents/src/test_smoke_tests.rs` | `fno.test_cmd` smoke half (`_parse_smoke_args`, `_name_matches`, `_state_both_exit`, `_is_state_control`, `_run_state_canary`, `_shard_selected_indices`) | absent (module) | characterization, port complete (2026-10-25) |
 | `crates/fno-agents/tests/drive_authority_parity.rs` | `fno.drive_authority` | absent (module) | characterization, port complete (2026-11-02) |
 
-All fifteen are finished ports. Their oracle legs are gone. Each converted case now asserts against a golden captured before that deletion, and each file sits at step 4 of the protocol below. None awaits anything. The ask files, the graph store file, and the ready-selection file carry the SYMBOL oracles, and their Python modules survive the port. The claim classifier's, the retro family's, the smoke machinery's, and the test-command family's module oracles are absent because their Python modules were deleted (the test-command case is a half: the state-root fence and the classify service stayed Python beside the events gate that shares them). The spawn surface keeps `parse_short_id`, the session registry keeps the reply readers, and `codex.create` keeps the one-shot lane. Only a symbol or module resolution says which leg is gone.
+All fifteen are finished ports. Their oracle legs are gone. Each converted case now asserts against a golden captured before that deletion, and each file sits at step 4 of the protocol below. None awaits anything.
+
+The ask files, the graph store file, and the ready-selection file carry the SYMBOL oracles, and their Python modules survive the port.
+
+The claim classifier's, the retro family's, the smoke machinery's, and the test-command family's module oracles are absent because their Python modules were deleted. The test-command case is a half. The state-root fence and the classify service stayed Python beside the events gate that shares them.
+
+The spawn surface keeps `parse_short_id`, the session registry keeps the reply readers, and `codex.create` keeps the one-shot lane. Only a symbol or module resolution says which leg is gone.
 
 `kill_criteria` is not a dual implementation. State the reason, because the mistake is easy to repeat. The plan-schema door (Rust) validates the kill-criteria DECLARATION's shape. The Rust `kill-check` command EVALUATES the predicates at a wave boundary. Two functions share a vocabulary. The parity test never pointed at that Python. It points at a bash oracle that is gone.
 
