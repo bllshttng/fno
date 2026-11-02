@@ -16,6 +16,20 @@ use crate::state::{load_registry, Registry, RegistryEntry};
 /// per-territory cap can read the rows' worked NODES without a second
 /// liveness implementation.
 pub(crate) fn live_rows(registry_path: &Path, warnings: &mut Vec<String>) -> Vec<RegistryEntry> {
+    live_rows_with_blocked(
+        registry_path,
+        &crate::claude_roster::read_blocked_short_ids,
+        warnings,
+    )
+}
+
+/// [`live_rows`] with the harness blocked-set read injected: tests pin the
+/// set instead of shelling out to `claude agents`.
+fn live_rows_with_blocked(
+    registry_path: &Path,
+    read_blocked: &dyn Fn() -> std::collections::HashSet<String>,
+    warnings: &mut Vec<String>,
+) -> Vec<RegistryEntry> {
     let live_roster_short_ids: std::collections::HashSet<String> = match ClaudeRoster::load_default(
     ) {
         Ok(roster) => roster
@@ -33,13 +47,15 @@ pub(crate) fn live_rows(registry_path: &Path, warnings: &mut Vec<String>) -> Vec
     };
     let now_secs = crate::daemon::now_epoch_secs();
     let mut rows = Vec::new();
+    let mut blocked: Option<std::collections::HashSet<String>> = None;
+    let mut dropped_blocked: Vec<String> = Vec::new();
     match load_registry(registry_path) {
         Ok(Registry { entries, .. }) => {
             for e in entries {
                 if !crate::spawn_gate::status_is_liveish(&e.status) {
                     continue;
                 }
-                let alive = match e.pid {
+                let mut alive = match e.pid {
                     Some(p) => pid_is_ours(p, e.pid_start_time),
                     None => {
                         let roster_live = e
@@ -61,6 +77,22 @@ pub(crate) fn live_rows(registry_path: &Path, warnings: &mut Vec<String>) -> Vec
                         }
                     }
                 };
+                if alive && e.harness_name() == "claude" {
+                    // A usage-blocked session holds no working slot: the
+                    // harness's own state is the witness transcript recency
+                    // cannot give. Positive readings only - a row absent
+                    // from the agents list, or a root that failed to parse,
+                    // answers nothing here; the roster polices death.
+                    if blocked.is_none() {
+                        blocked = Some(read_blocked());
+                    }
+                    if e.transport_short()
+                        .is_some_and(|sid| blocked.as_ref().unwrap().contains(sid))
+                    {
+                        alive = false;
+                        dropped_blocked.push(e.name.clone());
+                    }
+                }
                 if alive {
                     rows.push(e);
                 }
@@ -69,6 +101,13 @@ pub(crate) fn live_rows(registry_path: &Path, warnings: &mut Vec<String>) -> Vec
         Err(e) => warnings.push(format!(
             "{NOTE} fno registry unreadable ({e}); slot count degraded to 0"
         )),
+    }
+    if !dropped_blocked.is_empty() {
+        warnings.push(format!(
+            "{NOTE} {} claude row(s) usage-blocked per claude agents, slot(s) freed: {}",
+            dropped_blocked.len(),
+            dropped_blocked.join(", ")
+        ))
     }
     rows
 }
@@ -234,6 +273,58 @@ mod tests {
         let mut warnings = Vec::new();
         let rows = live_rows(&reg, &mut warnings);
         assert_eq!(rows.len(), 0, "{warnings:?}");
+        std::env::remove_var("FNO_CLAUDE_DAEMON_DIR");
+        std::env::remove_var("FNO_CLAIMS_ROOT");
+    }
+
+    /// A blocked fleet row frees its slot: the harness's positive blocked
+    /// reading drops a row the roster would keep. The unblocked
+    /// control row keeps its count.
+    #[test]
+    fn a_blocked_fleet_row_does_not_count_toward_max_live() {
+        let _g = claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = empty_roster_dir();
+        // Both workers ride our own live pid, so the roster answers live
+        // for both and the pid-less fleet arm counts them before the join.
+        let start = crate::daemon::process_start_time(std::process::id())
+            .expect("our own start time reads");
+        let worker = |short: &str| {
+            serde_json::json!({
+                "sessionId": format!("{short}-0000-0000-0000-000000000000"),
+                "pid": std::process::id(),
+                "procStart": start,
+            })
+        };
+        std::fs::write(
+            dir.path().join("daemon/roster.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "proto": 1,
+                "workers": {"deadbeef": worker("deadbeef"), "aaaa1111": worker("aaaa1111")}
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let mut fleet_a = pidless_reported_row("bg-a", "spawn", "claude");
+        fleet_a.short_id = "deadbeef".into();
+        fleet_a.last_report_at = Some(stamp_ago(60));
+        let mut fleet_b = pidless_reported_row("bg-b", "spawn", "claude");
+        fleet_b.short_id = "aaaa1111".into();
+        fleet_b.last_report_at = Some(stamp_ago(60));
+        let reg = write_reg(&dir, &[fleet_a, fleet_b]);
+        let mut warnings = Vec::new();
+        let rows = live_rows_with_blocked(
+            &reg,
+            &|| std::collections::HashSet::from(["deadbeef".to_string()]),
+            &mut warnings,
+        );
+        assert_eq!(rows.len(), 1, "{warnings:?}");
+        assert_eq!(rows[0].name, "bg-b");
+        assert!(
+            warnings.iter().any(|w| w.contains("usage-blocked")),
+            "{warnings:?}"
+        );
         std::env::remove_var("FNO_CLAUDE_DAEMON_DIR");
         std::env::remove_var("FNO_CLAIMS_ROOT");
     }
