@@ -248,12 +248,7 @@ do pr status	T1	do pr status	19
 do pr sync-canonical	T1	do pr sync-canonical	2
 do pr verify	T1	do pr verify	13
 do pr wait	T1	do pr wait	0
-do pr watch heal	T1	do pr watch heal	3
-do pr watch install	T1	do pr watch install	3
-do pr watch refresh	T1	do pr watch refresh	1
-do pr watch status	T1	do pr watch status	3
-do pr watch tick	T1	do pr watch tick	2
-do pr watch uninstall	T1	do pr watch uninstall	1
+do pr watch	T1	do pr watch	3
 do research	T1	do research	18
 do resume receipt show	T1	do resume receipt show	1
 do resume receipt validate	T1	do resume receipt validate	3
@@ -308,12 +303,6 @@ plan stamp	T1	plan stamp	5
 plan sync	T1	plan sync	3
 plan validate	T1	plan validate	14
 do pr create	T1	do pr create	3
-pr-watch heal	T1	pr-watch heal	3
-pr-watch install	T1	pr-watch install	3
-pr-watch refresh	T1	pr-watch refresh	1
-pr-watch status	T1	pr-watch status	3
-pr-watch tick	T1	pr-watch tick	2
-pr-watch uninstall	T1	pr-watch uninstall	1
 resume receipt show	T1	resume receipt show	1
 resume receipt validate	T1	resume receipt validate	3
 resume receipt write	T1	resume receipt write	2

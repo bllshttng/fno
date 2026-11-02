@@ -87,33 +87,6 @@ def _sandbox_project_spaces(tmp_path, monkeypatch):
     monkeypatch.setenv("FNO_SPACES_DIR", str(tmp_path / "spaces"))
 
 
-@pytest.fixture
-def _no_global_tick_events(monkeypatch):
-    """Capture pr-watch tick emissions instead of hitting the live events log.
-
-    Tests that drive the real tick command would otherwise append fabricated
-    pr_watch_tick_attempt/end records to ~/.fno/events.jsonl. Opt in per file:
-
-        pytestmark = pytest.mark.usefixtures("_no_global_tick_events")
-
-    An explicit events_path still delegates to the real writer, so direct
-    _emit_event tests keep their tmp files.
-    """
-    from fno.pr_watch import cli as prcli
-
-    real = prcli._emit_event
-    events: list[tuple[str, dict]] = []
-
-    def _capture(event_type, data, *, events_path=None):
-        if events_path is not None:
-            return real(event_type, data, events_path=events_path)
-        events.append((event_type, dict(data)))
-        return True
-
-    monkeypatch.setattr(prcli, "_emit_event", _capture)
-    return events
-
-
 _SERIAL_TEST_SUFFIXES = frozenset(
     {
         (
@@ -215,7 +188,6 @@ def _store_keeper_absent() -> bool:
 #: is a nodeid PREFIX (a file, or a file plus a class), so a new case inside a
 #: listed class is covered without a second edit here.
 _NEEDS_STORE_KEEPER = (
-    "tests/test_pr_watch_dispatch.py::TestDurableGrantExecution",
     "tests/unit/test_cli_wrappers.py::test_get_one_id_never_invokes_the_binary",
     "tests/unit/test_pr_closure_producer.py::test_supersede_keeps_the_human_reason",
 )

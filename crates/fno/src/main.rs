@@ -1462,23 +1462,18 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     }
     // The pr namespace claims itself lexically, like backlog: the sibling
     // dispatcher owns the 29 spellings and the handover stays byte-verbatim
-    // (pr port 7). The one carve-out stays with the Python wheel: `watch` is
-    // the watcher's own surface, and do_cli.py keeps its mount answering
-    // under `fno do pr`. Bare `fno do pr` claims too: the grouped help is
-    // native once the Python pr_app is gone. (`stub-manifest` joined the
-    // native claim now; its commands route through the family door.)
+    // (pr port 7). Bare `fno do pr` claims too: the grouped help is native
+    // once the Python pr_app is gone. (`stub-manifest` joined the native
+    // claim now; its commands route through the family door.)
     if args.first().and_then(|a| a.to_str()) == Some("do")
         && args.get(1).and_then(|a| a.to_str()) == Some("pr")
-        && args.get(2).and_then(|a| a.to_str()) != Some("watch")
     {
         return Role::DoPr;
     }
     // The bare `fno pr` legacy spelling claims natively too: the wheel's
     // hidden lazy entry points at the deleted Python pr_app, so a claim here
     // keeps the muscle-memory spelling answering instead of a traceback.
-    if args.first().and_then(|a| a.to_str()) == Some("pr")
-        && args.get(1).and_then(|a| a.to_str()) != Some("watch")
-    {
+    if args.first().and_then(|a| a.to_str()) == Some("pr") {
         return Role::DoPr;
     }
     // The ci namespace claims itself lexically, the pr namespace's contract:
@@ -2322,9 +2317,8 @@ mod tests {
         // The bare `fno pr` legacy spelling claims natively as well: the
         // wheel's hidden lazy entry died with the Python pr_app.
         assert_eq!(decide_role(&os(&["pr", "status", "41"]), false), Role::DoPr);
-        assert_ne!(decide_role(&os(&["pr", "watch"]), false), Role::DoPr);
-        // The one Python mount stays unclaimed: it forwards to the wheel.
-        assert_ne!(decide_role(&os(&["do", "pr", "watch"]), false), Role::DoPr);
+        assert_eq!(decide_role(&os(&["pr", "watch"]), false), Role::DoPr);
+        assert_eq!(decide_role(&os(&["do", "pr", "watch"]), false), Role::DoPr);
         // `stub-manifest` joined the native claim: the family commands
         // route through the TargetFamily door, no longer the wheel.
         assert_ne!(
