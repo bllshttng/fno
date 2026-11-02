@@ -201,7 +201,7 @@ usage = {
                     "windows": [win("5h", 4.0, 15800), win("weekly", 22.0, 475200)]},
     "codex-lab": {"probed_at": now - 120, "source": "session-log",
                   "windows": [win("5h", 12.0, 9600), win("weekly", 9.0, 518400)]},
-    "glm-key": {"probed_at": now - 600, "source": "api-quota",
+    "glm-key": {"probed_at": now - 180, "source": "api-quota",
                 "windows": [win("5h", 71.0, 3600)]},
 }
 with open(f"{root}/.fno/state/provider-runtime-state.json", "w") as f:

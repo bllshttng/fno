@@ -1735,7 +1735,7 @@ fn mask_emails(text: &str) -> String {
 }
 
 /// Cells in a usage bar.
-const BAR_CELLS: usize = 12;
+const BAR_CELLS: usize = 20;
 
 /// How long a window runs, for its pace: `5h`, `7d`, `weekly`.
 fn window_seconds(label: &str) -> Option<u64> {
@@ -1758,7 +1758,7 @@ fn window_seconds(label: &str) -> Option<u64> {
 /// pace (ahead of or behind an even spend across the window).
 fn window_line(w: &UsageWindow, now: u64) -> String {
     let fill = (w.used_pct.min(100) as usize * BAR_CELLS + 50) / 100;
-    let bar = format!("{}{}", "█".repeat(fill), "░".repeat(BAR_CELLS - fill));
+    let bar = format!("{}{}", "━".repeat(fill), "─".repeat(BAR_CELLS - fill));
     let mut line = format!("              {:<7} {bar} {:>3}%", w.label, w.used_pct);
     let Some(at) = w.resets_at.filter(|at| *at > now) else {
         return line;
@@ -2274,8 +2274,8 @@ mod tests {
                          "glm": {"state": "unknown", "reason": "auth-unsupported"}}"#;
         v.apply_read(ReadOutcome::Usage(parse_usage(usage).expect("usage json")));
         let out = v.render().join("\n");
-        assert!(out.contains("5h      ███░░░░░░░░░  26%"), "{out}");
-        assert!(out.contains("weekly  ████████████  99%"), "{out}");
+        assert!(out.contains(&format!("5h      {}{}  26%", "━".repeat(5), "─".repeat(15))), "{out}");
+        assert!(out.contains(&format!("weekly  {}  99%", "━".repeat(20))), "{out}");
         assert!(
             out.contains("no proven login for this account: r to log in"),
             "{out}"
