@@ -1487,10 +1487,14 @@ impl ConnectionsView {
             keys.push("r: re-authenticate");
         }
         keys.push("d: remove");
+        // The first key is the row's main action (`u: make active` on a row
+        // that is not active), and a row never sheds it.
+        let main_key = keys[0];
         let keys = keys.join("  ");
         // A row wider than the overlay wraps and pushes the footer off, so a
         // wide row sheds the fields read least: the login age, then the read
-        // age, then the kind. Only the selected row is sure to keep its keys.
+        // age, then the kind. Only then does a row the cursor is not on drop
+        // its other keys.
         let shed = |p: &String| -> usize {
             if p.starts_with("login saved") {
                 1
@@ -1502,24 +1506,25 @@ impl ConnectionsView {
                 usize::MAX
             }
         };
-        let mut last = String::new();
-        for level in 0..=3 {
+        let line_at = |level: usize| -> String {
             let kept: Vec<&str> = parts
                 .iter()
                 .filter(|p| shed(p) > level)
                 .map(String::as_str)
                 .collect();
-            let line = format!(" {spawn}{badge}  {title}  {}", kept.join(" · "));
-            let full = format!("{line}   {keys}");
+            format!(" {spawn}{badge}  {title}  {}", kept.join(" · "))
+        };
+        for level in 0..=3 {
+            let full = format!("{}   {keys}", line_at(level));
             if crate::chrome::str_cols(&full) <= max_cols {
                 return full;
             }
-            if !selected && crate::chrome::str_cols(&line) <= max_cols {
-                return line;
-            }
-            last = if selected { full } else { line };
         }
-        last
+        if selected {
+            format!("{}   {keys}", line_at(3))
+        } else {
+            format!("{}   {main_key}", line_at(3))
+        }
     }
 
     /// The lines under a credential: one bar per measured window, or the
@@ -2386,8 +2391,8 @@ mod tests {
             out.contains("2 workers") && out.contains("1 worker "),
             "{out}"
         );
-        // A narrow overlay drops the keys of rows the cursor is not on; the
-        // selected row keeps them.
+        // A narrow overlay sheds fields first; the selected row keeps every
+        // key.
         let narrow = v.render_with(&rows, 60).join("\n");
         let row = |id: &str| {
             narrow
@@ -2396,7 +2401,8 @@ mod tests {
                 .unwrap()
         };
         assert!(row("ccm").contains("r: re-authenticate"), "{narrow}");
-        assert!(!row("ccr").contains("u: make active"), "{narrow}");
+        // A row the cursor is not on keeps its main key, make active.
+        assert!(row("ccr").contains("u: make active"), "{narrow}");
         // A row the cursor is not on sheds its least-read fields to fit, so
         // the overlay never wraps it.
         assert!(crate::chrome::str_cols(row("ccr")) <= 60, "{narrow}");
