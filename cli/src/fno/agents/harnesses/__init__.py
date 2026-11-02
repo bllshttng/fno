@@ -11,6 +11,11 @@ package fixed the container; the field is a separate, ruled-out surface.
 """
 
 
+KNOWN_PROVIDERS: tuple[str, ...]  # annotation only; __getattr__ serves it
+SPAWN_HARNESSES: tuple[str, ...]  # annotation only; __getattr__ serves it
+READABLE_PROVIDERS: tuple[str, ...]  # annotation only; __getattr__ serves it
+
+
 def __getattr__(name: str) -> tuple[str, ...]:
     """PEP 562: the roster-backed names resolve on first access, never at import."""
     if name == "SPAWN_HARNESSES":
