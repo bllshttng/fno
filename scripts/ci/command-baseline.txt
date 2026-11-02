@@ -43,8 +43,6 @@ backlog get
 backlog next
 backlog queued
 bundle
-claim
-claim release
 config
 config accounts
 config get

@@ -652,7 +652,7 @@ _worktree_has_fresh_activity() {
 #      the shared .fno and every new session (even in a fresh worktree, via the
 #      .fno symlink) trips on it and hand-clears it. The reap keys on the CLAIM,
 #      NOT owner_pid: owner_pid is the transient `fno do target init` wrapper pid
-#      (dead ~1s after init returns, per cli/src/fno/claims/session_pid.py), so
+#      (dead ~1s after init returns, per `fno agents claim session-pid`), so
 #      it cannot tell a completed session from a live one. The node claim is
 #      acquired with the DURABLE session pid (nearest claude ancestor) + TTL, so
 #      its liveness is the real signal. A LIVE claim is preserved: a concurrent

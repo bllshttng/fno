@@ -1,9 +1,9 @@
 //! The hidden `fno-agents claim` debug front over the native claims module.
 //!
-//! Extracted from client_commands.rs, which it had outgrown: the Python claims
-//! client (`fno.claims.core`) runs every lockfile operation through these
-//! commands, and the claim-sweep JSON assembly (the serializer the Python claim classifier golden
-//! is byte-checked against) lives here too. Dispatch stays in `bin/client.rs`
+//! Extracted from client_commands.rs, which it had outgrown: the front door
+//! execs `fno agents claim` into these commands, and the claim-sweep JSON
+//! assembly (the serializer the claim classifier golden is byte-checked
+//! against) lives here too. Dispatch stays in `bin/client.rs`
 //! via the `mail-inject` `matches!` pattern, so the command remains hidden from
 //! `CLIENT_COMMAND_USAGE` / `RUST_CLIENT_COMMANDS`; `fno agents claim` is still the
 //! only operator CLI for claims.
@@ -17,9 +17,8 @@ use std::path::PathBuf;
 /// `fno-agents claim <acquire|release|status|list> <key> [flags]` — a thin front
 /// over [`crate::claims`], the native lockfile-protocol implementation.
 ///
-/// Purpose: (a) the Python claims client (`fno.claims.core`) runs every
-/// lockfile operation through it, and (b) an ops escape hatch when the Python
-/// CLI is unavailable. It is deliberately HIDDEN — dispatched via `matches!`
+/// Purpose: (a) the front door runs every `fno agents claim` operation
+/// through it, and (b) callers in other languages shell to it. It is deliberately HIDDEN — dispatched via `matches!`
 /// in `bin/client.rs` (the `mail-inject` pattern) so it stays out of
 /// `CLIENT_COMMAND_USAGE` / `RUST_CLIENT_COMMANDS`; `fno agents claim` remains the only
 /// operator CLI for claims.
@@ -33,6 +32,9 @@ pub fn run_claim(args: &[String]) -> i32 {
         );
         return 2;
     };
+    if let Some(code) = crate::claim_cli::help::answer(op, &args[1..]) {
+        return code;
+    }
     if op == "review-hold" {
         // The ported review-hold command family: a leading sub-token,
         // the same shape as `birth` in client.rs. With no argv the stdin

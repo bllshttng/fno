@@ -17,7 +17,7 @@ make_repo() {
     mkdir -p "$root/cli/src/fno/company" "$root/cli/src/fno/agents" \
         "$root/cli/src/fno/plan" "$root/agents" "$root/skills" "$root/plugins"
     printf 'class WorkOrderRef:\n    pass\n' > "$root/cli/src/fno/company/contracts.py"
-    printf 'from fno.claims.core import claim_status\n' \
+    printf 'from fno.company.contracts import WorkOrderRef\n' \
         > "$root/cli/src/fno/agents/role.py"
 }
 
@@ -180,9 +180,13 @@ grep -q <<<"$out" \
     "agents/orphan.md:3: pack marker 'no-such-pack' names no plugins/no-such-pack/plugin.yaml" \
     && ok "orphan finding names file and marker" || fail "orphan evidence missing: $out"
 
-echo "== checked-in baseline matches shipped findings while strict stays red =="
+echo "== checked-in baseline matches shipped findings; strict is red until it drains =="
 out="$(bash "$CHECK" --strict "$REPO_ROOT" 2>&1)"; rc=$?
-[[ $rc -eq 1 ]] && ok "repository strict audit stays red" || fail "strict audit exit $rc: $out"
+if grep -qE '^(cli/|layer cycle: )' "$REPO_BASELINE"; then
+    [[ $rc -eq 1 ]] && ok "repository strict audit stays red" || fail "strict audit exit $rc: $out"
+else
+    [[ $rc -eq 0 ]] && ok "drained repository strict audit is green" || fail "strict audit exit $rc: $out"
+fi
 # Counts come from the baseline file, not a literal: a burndown PR should not
 # have to edit this test, and a hardcoded number silently rots into a rubber
 # stamp once it stops matching reality. Sourcing both from the baseline also

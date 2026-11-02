@@ -304,7 +304,7 @@ The deleter: a whole space (or a `<space>/worktrees/<name>` slice) whose source 
 |---|---|---|
 | `<space>/events.jsonl` | `paths.project_events_json()`; legacy bytes only since the event-store cutover | import source |
 | `<space>/events.db`, `.db-wal`, `.db-shm` | the `fno-event-store` crate, the authoritative event store beside each journal | durable and gate rows forever, ephemeral 672 h |
-| `<space>/claims/` | `fno.claims` for repo-local keys (`walker:`, `review:`, `reap:`); global-id keys (`node:`, `dispatch:`, ...) stay at the global root | re-acquirable leases |
+| `<space>/claims/` | `fno-agents claim` for repo-local keys (`walker:`, `review:`, `reap:`); global-id keys (`node:`, `dispatch:`, ...) stay at the global root | re-acquirable leases |
 | `<space>/leads/<scope>.md` | `crates/fno-agents/src/lead_state.rs` via promotion or `fno agents org init` | one loop-state file per live role scope; stale files are inert without a live registry role and cleanup is best-effort (`fno agents org done` on departure) |
 | `<space>/leads/<scope>.md.lock`, `.md.tmp` | `lead_state.rs` / `loop_lead.rs` / `lead_ops.rs` over the manifest lock | lock lives only for the critical section; tmp is replaced on every locked write |
 | `<space>/leads/<scope>.wake.json` | `lead_wake_triggers.rs` (the daemon's wake arm) | arm-local trigger cache with no lead meaning: `board_hash` + `board_rows` (the board-change trigger) and `answered_cursor` (the answered-escalation trigger); refreshed only when a wake fires, so it never outlives the manifest beside it |
@@ -333,7 +333,7 @@ Two files stay inside a checkout, each because moving it breaks the thing that w
 | Entry | Writer | Lifetime |
 |---|---|---|
 | `.fno/config.toml` | `fno config project init` / the operator | committed project config, the same class as `.claude/settings.json` |
-| `.fno/state-root-denied.json` | the DENIED worker, through `crates/fno-agents/src/claims.rs::write_state_root_breadcrumb` and its Python twin `cli/src/fno/claims/io.py::_breadcrumb_path` | until the next successful claim on this repo, which deletes it |
+| `.fno/state-root-denied.json` | the DENIED worker, through `crates/fno-agents/src/claims.rs::write_state_root_breadcrumb` | until the next successful claim on this repo, which deletes it |
 | `.fno/branch-provenance.json` | the pr-watch tick's stranded leg, via `crates/fno-agents/src/pr_watch/state.rs::write_provenance_cache` | overwritten every tick, never appended; safe to delete (the next tick rewrites it); the Kanban board's Branch Provenance section reads it |
 
 The breadcrumb is here because it is the only thing a mute worker can still say.

@@ -177,13 +177,6 @@ backlog view	T1	backlog view	3
 backlog worked	T1	backlog worked	2
 bundle check	T1	bundle check	11
 bundle lint	T1	bundle lint	2
-claim acquire	T1	claim acquire	27
-claim list	T1	claim list	9
-claim reap	T1	claim reap	1
-claim refresh	T1	claim refresh	5
-claim release	KEEP	claim release	38	deliberate readability slack for a high-traffic distinct operation
-claim session-pid	T1	claim session-pid	2
-claim status	T1	claim status	32
 config accounts	KEEP	config accounts	71	deliberate readability slack for a high-traffic distinct operation
 config active-backlog	T1	config active-backlog	5
 config assert-subagent-budget	T1	config assert-subagent-budget	6

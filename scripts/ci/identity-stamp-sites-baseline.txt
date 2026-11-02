@@ -4,7 +4,7 @@
 # The discriminator is the primitive's own docstring: does the resolved harness
 # or session id end up WRITTEN to a claim, a mail record, an event, an
 # agent-state row, a registry row, a team grant, a decision record or a graph
-# session record? If yes it must use `fno.claims.self_identity`, which proves
+# session record? If yes it must use the native owned-identity proof, which proves
 # ownership from the process tree, checks the id against live registry rows, and
 # refuses rather than laundering an inherited marker. If it only reads to
 # display or branch, it belongs here.
