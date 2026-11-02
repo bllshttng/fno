@@ -678,9 +678,9 @@ def test_a_raising_refusal_classifier_never_breaks_the_liveness_read(tmp_path, m
     session = SimpleNamespace(agent="claude", session_id=sid, cwd=cwd, short_id=sid[:8])
 
     def boom(*_a, **_k):
-        raise RuntimeError("taxonomy blew up")
+        raise RuntimeError("the fno-agents binary was not found")
 
-    monkeypatch.setattr("fno.adapters.providers.error_taxonomy.normalize", boom)
+    monkeypatch.setattr("fno.rust_binary.command_call", boom)
 
     result = resolve_session_truth(
         "w1", resolve=_resolver(session), projects_root=tmp_path

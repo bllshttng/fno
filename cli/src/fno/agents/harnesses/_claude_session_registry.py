@@ -48,10 +48,9 @@ def _claude_roots() -> list[Path]:
     roots = [Path.home() / ".claude"]
     roots += [Path(v) for v in [os.environ.get("CLAUDE_CONFIG_DIR")] if v]
     try:
-        from fno.adapters.providers.loader import load_providers
-        records = load_providers().records
-        roots += [Path(r.config_dir) for r in records if r.harness == "claude" and r.config_dir]
-    except Exception:  # noqa: BLE001 - an unreadable config leaves the ambient roots
+        from fno.rust_binary import command_call
+        roots += [Path(d) for d in command_call(["spawn-overlay", "accounts", "claude-dirs"], {})["dirs"]]
+    except Exception:  # noqa: BLE001 - no binary or an unreadable config leaves the ambient roots
         pass
     return roots
 
