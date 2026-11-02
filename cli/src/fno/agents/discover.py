@@ -1537,7 +1537,7 @@ def resolve_or_suggest(
         cache.
 
         A NAME handle misses the registry fast path above, so it lands here -
-        and this scan sweeps every process on the box with psutil and globs the
+        and this scan sweeps every process on the machine with psutil and globs the
         transcript stores. Measured at 483 ms, and a batch of twelve ran it
         twelve times for 5.8 of its 8.3 seconds. Cached, the batch pays it once.
 

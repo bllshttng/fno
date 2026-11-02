@@ -1,5 +1,5 @@
 //! The daemon side of the sandbox seam: the `agent.sandbox-plan` op, the
-//! socket directory a box mounts, and the `socket` carrier probe the spawn
+//! socket directory a sandbox mounts, and the `socket` carrier probe the spawn
 //! gate runs. Split out of daemon.rs (shrink-only) so sandbox-side additions
 //! land here, never back in the daemon file. The plan types and the launch
 //! wrap live in `crate::sandbox_launch`, where the spawn client reaches them.
@@ -15,13 +15,13 @@ use crate::sandbox_launch::{launch_for, SandboxProvider};
 pub const SOCKET_CARRIER: &str = "socket";
 
 /// Re-link `<home>/sandbox-sock/supervisor.sock` to the socket the daemon
-/// just bound. A box mounts this directory, never the socket file: the
+/// just bound. A sandbox mounts this directory, never the socket file: the
 /// daemon unlinks and rebinds its socket at every start, and a file mount
 /// keeps the dead inode (ECONNREFUSED after the first restart). A directory
 /// mount sees the fresh link. A socket path cannot be rebound in place, and
 /// the home directory holds the registry and claims, so a hard link in a
 /// directory of its own is the one shape that survives a restart. A failure
-/// logs one line; the gate probe and the in-box probe name the dead path.
+/// logs one line; the gate probe and the in-sandbox probe name the dead path.
 pub(crate) fn publish_sandbox_sock(home: &AgentsHome) {
     use std::os::unix::fs::PermissionsExt as _;
     let dir = home.sandbox_sock_dir();
@@ -166,11 +166,11 @@ mod tests {
         }
     }
 
-    /// The socket door a box uses, end to end.
+    /// The socket door a sandbox uses, end to end.
     /// - The `socket` carrier is probed, never taken on faith: a dead path
     ///   refuses naming the socket, a live listener passes, another stance
     ///   is never probed, and no path fails open like empty roots (AC8).
-    /// - A daemon restart must not strand the box: the stale link refuses,
+    /// - A daemon restart must not strand the sandbox: the stale link refuses,
     ///   and the publish at every bind points it at the new socket (AC1).
     /// - A pinned client never forks a daemon; it fails as not running, and
     ///   the home path serves again once the pin is gone (AC12).

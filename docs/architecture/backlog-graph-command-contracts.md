@@ -19,9 +19,9 @@ Excludes every not-done node that carries a pr_number, regardless of merge_statu
 
 Ids of nodes that are some other node's ``parent`` - i.e. epics/containers.
 
-A container is never directly buildable: its work lives in its decomposed children, and it carries no PR of its own. So every work-SELECTION surface drops it from the candidate pool - `next`/`ready`/`--all-ready` build the leaves, never the box . Shared by `next` (_pick_ready) and `ready` (cmd_ready) so the two surfaces cannot drift; advance_dependents applies the same rule on the merge edge-following path.
+A container is never directly buildable: its work lives in its decomposed children, and it carries no PR of its own. So every work-SELECTION surface drops it from the candidate pool - `next`/`ready`/`--all-ready` build the leaves, never the container . Shared by `next` (_pick_ready) and `ready` (cmd_ready) so the two surfaces cannot drift. Advance_dependents applies the same rule on the merge edge-following path.
 
-A child whose ``contained_in`` is the parent ships INSIDE the parent's PR, so the parent is the delivery unit, not a box: an owner whose only children are its own contained subtasks still drains. Free children make the parent a box exactly as before.
+A child whose ``contained_in`` is the parent ships INSIDE the parent's PR. So the parent is the delivery unit, not a container: an owner whose only children are its own contained subtasks still drains. Free children make the parent a container exactly as before.
 
 No "keep the all-done epic selectable" exception is needed: an epic closes automatically via ``_cascade_close_parents`` on the merge that finishes its last child (uniform across projects), so it is already ``done`` - never a lingering ``ready`` container that selection would have to surface for closure. That replaces the old "walker closes the epic via next" path, which conflicted with never building a container.
 
@@ -167,7 +167,7 @@ Close ancestor epics whose children are now all complete .
 
 Called inside the close mutator right after a node's completion fields are set. An epic is a container with no PR of its own - its work IS its decomposed children - so it is "done" exactly when all of them are. Walking UP the ``parent`` chain, each ancestor that passes ``children_all_closed`` is closed too (and tagged with a completion_note so the PR-less close is self-explaining), continuing to the grandparent. ``children_all_closed`` asks three things: every child terminal (``is_terminal_entry``: done, superseded, or freshly stamped ``completed_at``), no child superseded BY the parent itself, and at least one child that really shipped. A child superseded by its own parent is one the parent absorbed, so the parent's own work is still open and the parent stays up; a parent whose every child was replaced elsewhere stays up too, so nothing closes as done with nothing built.
 
-This is the closure path that lets epics be excluded from build-SELECTION everywhere (`next`/`ready`/advance_dependents never dispatch the box): the box closes itself off the merge event that finishes its last child. It fires on every close path (done + reconcile) since each calls this after ``_apply_completion_fields``, and it is uniform across projects because it follows the parent EDGE, not a project filter - so a cross-project parent closes on the same merge that completes its last child.
+This is the closure path that lets epics be excluded from build-SELECTION everywhere (`next`/`ready`/advance_dependents never dispatch the container). The container closes itself off the merge event that finishes its last child. It fires on every close path (done + reconcile) since each calls this after ``_apply_completion_fields``. It is uniform across projects because it follows the parent EDGE, not a project filter. So a cross-project parent closes on the same merge that completes its last child.
 
 Idempotent: an already-done or missing ancestor stops that branch. The walk is depth-capped against a malformed parent cycle.
 
@@ -992,11 +992,7 @@ migrated.
 Ready PARENTLESS (loose) nodes of one project, in board order.
 
 The rung-1 territory's selection surface, widened to parentless rows: the shipped
-``fno backlog ready -p <project>`` read (claim-filtered, PR-filtered,
-rank-sorted like the epic selection) filtered to rows with no parent and no
-epic box. A loose node is exactly what an epic-territory drain can never
-see, which is why the project territory exists. Raises on a garbled
-response so the caller skips rather than guessing.
+``fno backlog ready -p <project>`` read (claim-filtered, PR-filtered, rank-sorted like the epic selection) filtered to rows with no parent and no epic container. A loose node is exactly what an epic-territory drain can never see, which is why the project territory exists. Raises on a garbled response so the caller skips rather than guessing.
 
 ## advance_project_loose
 
