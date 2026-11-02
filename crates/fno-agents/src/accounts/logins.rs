@@ -9,13 +9,14 @@
 
 use crate::accounts::binding::{bearer_of, keychain_service, SlotProbe};
 use crate::accounts::records::Record;
-use crate::accounts::usage_probe::{label_for_minutes, parse_claude_windows, parse_zai_windows};
+use crate::accounts::usage_probe::{
+    label_for_minutes, parse_claude_windows, parse_zai_windows, ANTHROPIC_API,
+};
 use base64::Engine as _;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
 const UNSCOPED_SERVICE: &str = "Claude Code-credentials";
-const CLAUDE_USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
 const CODEX_USAGE_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
 const USER_AGENT: &str = "fno-provider-usage/1";
 
@@ -203,7 +204,7 @@ fn read_claude(ctx: &Ctx<'_>, blob: &str, row: &mut Login, now: f64) {
         ("anthropic-beta", "oauth-2025-04-20"),
         ("User-Agent", USER_AGENT),
     ];
-    match json_get(ctx, CLAUDE_USAGE_URL, &headers) {
+    match json_get(ctx, &format!("{ANTHROPIC_API}/api/oauth/usage"), &headers) {
         Ok(payload) => {
             row.windows = parse_claude_windows(&payload)
                 .into_iter()
