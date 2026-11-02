@@ -2837,7 +2837,10 @@ fn resolve_missing_team_inputs(
                             && row
                                 .role_scope
                                 .as_deref()
-                                .map(|s| crate::territory::canonical_scope(s.trim()) == *scope)
+                                .map(|s| {
+                                    crate::territory::canonical_scope(s.trim())
+                                        == crate::territory::canonical_scope(scope.trim())
+                                })
                                 .unwrap_or(false)
                     })
                     .and_then(|row| row.role_level)
@@ -3011,6 +3014,15 @@ pub fn run_lead_checkin(args: &[String]) -> i32 {
         &ctx.cwd,
     ) {
         eprintln!("lead: {msg}");
+        return 2;
+    }
+    if ctx.level.is_none() {
+        eprintln!(
+            "lead: no team holds {} at any level, so a check-in has nothing to report. A role \
+             needs a level and a scope. Have a lead or the user grant it: fno agents org promote \
+             <handle> --scope {}",
+            ctx.scope, ctx.scope
+        );
         return 2;
     }
     // The canon doc lives in the scope's project, not the lead's cwd: a lead

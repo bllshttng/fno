@@ -204,10 +204,14 @@ fn caller_payload(calling: &Calling) -> Value {
     match calling {
         Calling::Human => json!({"kind": "human"}),
         Calling::Unreadable(_) => json!({"kind": "unreadable"}),
-        Calling::Unregistered(_) => json!({"kind": "unregistered"}),
-        Calling::Agent(row, _) => json!({
-            "kind": "agent", "status": status_of(row), "role_scope": row.role_scope,
-        }),
+        Calling::Unregistered(sid) => crate::spawn_promote::with_identity(
+            json!({"kind": "unregistered"}),
+            format!("session {sid}"),
+        ),
+        Calling::Agent(row, sid) => crate::spawn_promote::with_identity(
+            json!({"kind": "agent", "status": status_of(row), "role_scope": row.role_scope}),
+            crate::spawn_promote::row_identity(row, sid),
+        ),
     }
 }
 
@@ -385,18 +389,10 @@ pub fn promote(home: &AgentsHome, handle: &str, scopes: &[String]) -> Result<Val
                 py_repr_str(&status_of(&target))
             ));
         }
-        let (vacated_scope, vacated_level) = (target.role_scope.clone(), target.role_level);
+        // Half a role rules no territory, so this grant completes it and vacates nothing.
+        let held = target.role_scope.clone().zip(target.role_level);
+        let (vacated_scope, vacated_level) = held.map_or((None, None), |(s, l)| (Some(s), Some(l)));
         vacated_owner = (holder_session(&target).unwrap_or_default(), target.cwd.clone());
-        if vacated_level.is_none() != vacated_scope.is_none() {
-            return Err(format!(
-                "refusing to role {}: it holds half a role (level={}, scope={}), which no legal \
-                 role produces. fno agents stop the row and fno agents rm it, then role the \
-                 re-registered session.",
-                py_repr_str(&target.name),
-                vacated_level.map_or("None".into(), |l| l.to_string()),
-                vacated_scope.as_deref().map_or("None".into(), py_repr_str)
-            ));
-        }
         // An agent grantor's own row legitimately overlaps the delegated
         // scope; every other RIVAL live row is a second ruler.
         let holder = reg.entries.iter().find(|r| {

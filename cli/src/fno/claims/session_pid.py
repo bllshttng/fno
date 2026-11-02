@@ -153,6 +153,20 @@ def resolve_session_harness(from_pid: Optional[int] = None) -> Optional[str]:
     return _session_identity(from_pid)[1]
 
 
+def resolve_no_harness_ancestor() -> bool:
+    """True only when the native walk proves a plain terminal; no answer reads False."""
+    from fno.rust_binary import resolve_binary
+
+    command = [str(resolve_binary() or "fno-agents"), "claim", "session-pid", "--no-harness-ancestor"]
+    try:
+        proc = subprocess.run(  # noqa: S603 - a fixed command, never user input
+            command, capture_output=True, text=True, timeout=30, check=False
+        )
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return False
+    return proc.stdout.strip() == "true"
+
+
 __all__ = ["pid_dies_with_session", "resolve_session_pid", "resolve_session_harness"]
 
 
