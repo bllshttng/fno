@@ -318,6 +318,8 @@ pub mod wizard_term;
 #[cfg(feature = "full")]
 pub mod wordmark;
 #[cfg(feature = "full")]
+pub mod workspace_sidecar;
+#[cfg(feature = "full")]
 pub mod worktree_door;
 #[cfg(feature = "full")]
 pub mod yard_overlay;

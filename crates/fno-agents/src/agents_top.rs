@@ -311,14 +311,63 @@ fn project_of(dir: &str) -> String {
     name
 }
 
+/// What one beat reads once for every row's sideline marks: the keep marks'
+/// home, the workspace names the mux server filed, and the clock the badge
+/// lattice folds at.
+struct Marks<'a> {
+    home: &'a crate::paths::AgentsHome,
+    workspaces: HashMap<String, String>,
+    now_secs: u64,
+}
+
+impl<'a> Marks<'a> {
+    fn read(home: &'a crate::paths::AgentsHome) -> Self {
+        let now_secs = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+        Self {
+            home,
+            workspaces: crate::fleet_workspace::read(home, now_secs),
+            now_secs,
+        }
+    }
+
+    /// The facts a sideline sorts and groups on. `needs_input` is the badge
+    /// lattice's blocked word, so it needs a registry row; `pinned` answers
+    /// for a bare session id too, because a keep mark outlives its row.
+    fn of(&self, w: &Worker, entry: Option<&RegistryEntry>) -> [(&'static str, Value); 3] {
+        let workspace = [
+            w.session_id.as_deref(),
+            entry.and_then(|e| e.harness_session_id.as_deref()),
+        ]
+        .into_iter()
+        .flatten()
+        .find_map(|id| self.workspaces.get(id));
+        let pinned = match (entry, w.session_id.as_deref()) {
+            (Some(e), _) => Some(crate::keep_mark::for_row(self.home, e).is_some()),
+            (None, Some(id)) => Some(crate::keep_mark::for_session(self.home, id).is_some()),
+            (None, None) => None,
+        };
+        let needs_input = entry.map(|e| {
+            crate::wait::effective_state(e, self.now_secs).0 == crate::wait::EffState::Blocked
+        });
+        [
+            ("workspace", json!(workspace)),
+            ("needs_input", json!(needs_input)),
+            ("pinned", json!(pinned)),
+        ]
+    }
+}
+
 /// The seat facts a fleet page shows beside the status: the full session
 /// id, the model and where it was read, the start, the newest turn and its
-/// stamp, the directory and its project, and the context reading. A fact
-/// no source answers is null.
+/// stamp, the directory and its project, the context reading, and the marks a
+/// sideline sorts on. A fact no source answers is null.
 fn seat_facts(
     w: &Worker,
     entry: Option<&RegistryEntry>,
     probe: Option<&crate::truth_probe::TruthProbe>,
+    marks: &Marks,
 ) -> Map<String, Value> {
     let registry_model = entry
         .and_then(|e| e.model.as_deref())
@@ -357,14 +406,21 @@ fn seat_facts(
         "project": project,
         "context_pct": entry.and_then(|e| e.context_used_pct),
     });
-    match facts {
+    let mut map = match facts {
         Value::Object(map) => map,
         _ => Map::new(),
-    }
+    };
+    map.extend(
+        marks
+            .of(w, entry)
+            .map(|(key, value)| (key.to_string(), value)),
+    );
+    map
 }
 
 /// The worker rows: the census joined to truth, the session-to-node map,
 /// and the process-table RSS. Heaviest first.
+#[allow(clippy::too_many_arguments)]
 fn worker_rows(
     census: &Census,
     rows: &[RegistryEntry],
@@ -373,6 +429,7 @@ fn worker_rows(
     sessions: &Map<String, Value>,
     rss: &BTreeMap<u32, u64>,
     blocked: &HashSet<String>,
+    marks: &Marks,
 ) -> Vec<Value> {
     let by_session: HashMap<&str, &RegistryEntry> = rows
         .iter()
@@ -408,7 +465,7 @@ fn worker_rows(
                 .as_deref()
                 .and_then(|s| sessions.get(&s.trim().to_ascii_lowercase()));
             let pid = w.session_pid.or(w.pid);
-            let seat = seat_facts(w, entry, probe);
+            let seat = seat_facts(w, entry, probe, marks);
             // The supervisor's blocked state outranks the transcript word: a
             // locked-out session retries, the retry's limit error keeps the
             // age fresh, and the activity word alone reads `writing` for a
@@ -881,7 +938,10 @@ pub fn payload(include_subagents: bool, include_pane_stats: bool) -> Value {
         .collect();
     let (table, _) = crate::census::process_table_ps();
     let rss = crate::session_cost::tree_rss(&table, &roots);
-    let mut workers = worker_rows(&c, &rows, &truth, outcome, &sessions, &rss, &blocked);
+    let marks = Marks::read(&home);
+    let mut workers = worker_rows(
+        &c, &rows, &truth, outcome, &sessions, &rss, &blocked, &marks,
+    );
     attach_receipts(&mut workers, &crate::session_receipt::receipt);
 
     let slot_claims = crate::spawn_gate::live_worker_slot_claims(&mut warnings)
