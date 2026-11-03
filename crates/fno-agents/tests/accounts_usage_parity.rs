@@ -1,7 +1,7 @@
-//! parity-stage: differential
+//! parity-stage: characterization
 //! parity-oracle: fno.adapters.providers.cli
 //!
-//! Differential parity for `accounts::usage`, the port of the `usage`
+//! Characterization for `accounts::usage`, the port of the `usage`
 //! command. Each `tests/golden/accounts_usage/*.json` case carries the files
 //! it set up, the probe answer per record, the cache-write result and the
 //! slot principal, and the Python command's stdout under `expect`, frozen at

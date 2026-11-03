@@ -6,15 +6,6 @@ protective infrastructure and a settings typo must never brick spawning.
 from fno.config import AgentsBlock
 
 
-def test_provider_loader_reserved_keys_match_agents_schema():
-    from fno.adapters.providers.loader import _AGENTS_RESERVED_KEYS
-
-    # `max_lanes` is the one tolerated legacy spelling (renamed provider_limits,
-    # x-3f84 W5): still parsed by the block's before-validator, so it stays
-    # reserved against provider pins.
-    assert _AGENTS_RESERVED_KEYS == set(AgentsBlock.model_fields) | {"max_lanes"}
-
-
 def test_max_live_below_one_coerces_to_default():
     assert AgentsBlock(max_live=0).max_live == 3
     assert AgentsBlock(max_live=-2).max_live == 3

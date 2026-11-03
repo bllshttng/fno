@@ -1,7 +1,7 @@
-//! parity-stage: differential
+//! parity-stage: characterization
 //! parity-oracle: fno.adapters.providers.dispatch.dispatch_env
 //!
-//! Differential parity for `accounts::env`, the port of `dispatch.py`
+//! Characterization for `accounts::env`, the port of `dispatch.py`
 //! (`dispatch_env`, `resolve_env_value`), `staging.verify_staged` and
 //! the `--account` overlay, whose Python leg was deleted after its cases
 //! froze. Each

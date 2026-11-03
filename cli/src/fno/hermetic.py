@@ -109,8 +109,7 @@ def _hermetic_allowed_roots() -> list[Path]:
 
     ``HOME`` is deliberately NOT a root, even though neutralise points it at the
     sandbox. It is read at call time, so a test that restores the real ``HOME``
-    (``test_provider_usage_live.py`` and ``test_retask_live_smoke.py``
-    each do) would widen the allowed root to the whole
+    (``test_retask_live_smoke.py`` does) would widen the allowed root to the whole
     home directory - which contains both the checkout and ``~/.fno``, the two
     files this guard exists to protect. Nothing is lost by dropping it: the
     sandbox HOME is created by ``tempfile.mkdtemp`` and so already sits under

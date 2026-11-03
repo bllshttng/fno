@@ -2,8 +2,8 @@
 //! usage snapshots, combo cursors and window opens, the reads the dispatcher
 //! asks of them (cooldown, usage, headroom, the projected window close, the
 //! round-robin cursor) and the one writer of the file. Ported from
-//! `fno.adapters.providers.runtime_state`, whose writers are now transports
-//! over [run]; the parity cases live in `tests/accounts_state_read_parity.rs`
+//! the deleted Python `runtime_state.py`; [run] is the one writer door, and
+//! the parity cases live in `tests/accounts_state_read_parity.rs`
 //! and `tests/accounts_state_write_parity.rs`.
 //!
 //! The file is where `provider_cap::runtime_state_path` resolves it. Every

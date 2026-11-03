@@ -16,22 +16,11 @@ import typer
 from fno._lazy_group import make_lazy_group_cls
 
 
-# Mounted as ``fno config accounts``: accounts ARE config
-# (``config.accounts.records``), so the command path mirrors the config path. This
-# replaced the top-level ``fno providers``, which was hidden and therefore
-# discoverable by nobody; as a `fno config` subcommand it shows up in
-# `fno config --help` and gets its own page.
-#
-# Lazy for the same reason the top-level map is: the sub-app drags in the
-# provider loader (~68ms), and `fno config get` is called from shell dozens of
-# times per phase. `providers` used to be a top-level LAZY_SUBCOMMANDS entry, so
-# mounting it eagerly here would have moved that cost onto every `fno config`.
 _LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] = {
-    "accounts": ("fno.adapters.providers.cli:cli", "Manage account records."),
     # Folded under config (unit 6). The old top-level spellings stay
     # retired at the front door (command-names.tsv); these mounts are the canonical
-    # homes. Lazy for the same reason `accounts` is: `fno config get` runs
-    # from shell dozens of times per phase and must not pay for their imports.
+    # homes. Lazy because `fno config get` runs from shell dozens of times per
+    # phase and must not pay for their imports.
     # Hidden: the menu cap is 12 and config already curates nine visible
     # commands; `fno help config --all` lists these.
     "paths": ("fno.paths_cli:app", "Path resolution helpers", {"hidden": True}),
@@ -190,6 +179,16 @@ def active_backlog() -> None:
     """Print the active-backlog drain reading. Full contract:
     docs/architecture/coordination.md#per-territory-team-cap"""
     _native_leaf("active-backlog", ["config", "active-backlog"])
+
+
+@app.command(
+    "accounts",
+    add_help_option=False,
+    context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
+)
+def accounts(ctx: typer.Context) -> None:
+    """Manage account records."""
+    _native_leaf("accounts", ["config", "accounts", *ctx.args])
 
 
 @app.command("status-sinks")
