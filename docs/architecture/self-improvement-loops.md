@@ -20,7 +20,7 @@ The three loops that turn what the fleet did into what the fleet does better. Ea
 - The S0 watcher and the S2 rows share `~/.fno/logs/corrections.log`. S0 rows come from postmortems, S2 rows from intel reports. The `verifyDecisions` lane scores the `signal=` field across both.
 - Evals and heal are daemon-tick loops: both read what the other loops wrote. A healed PR re-runs evals banks. A graded failure in a scheduled regression run files one bug node per task. An open node holds the next filing, and a plumbing failure files no node.
 
-- A node is the join for the upstream-issue loop. `fno do feedback` masks secrets, paths, emails, session ids, vault paths, project names and the login and host names, then rescans and refuses a draft that still carries one. The user's Submit click on github.com is the only publish step.
+- A node is the join for the upstream-issue loop. `fno do feedback` masks seven classes of private text. They are secrets, paths, emails, session ids, vault paths, project names, and login and host names. It then rescans and refuses a draft that still carries one. The user's Submit click on github.com is the only publish step.
 
 ## Tuning
 
