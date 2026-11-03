@@ -30,6 +30,7 @@ const RELIEF_ABOVE_RSS_KB: u64 = 160 * 1024;
 /// Probes at these sizes, one per libmalloc zone class, so the pass reaches
 /// every zone the daemon allocates in (tiny/nano, small, medium, large) and
 /// not just the default one.
+#[cfg(target_os = "macos")]
 const PROBE_SIZES: [usize; 4] = [16, 4096, 65_536, 1 << 20];
 
 pub struct Arm {
