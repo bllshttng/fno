@@ -56,7 +56,7 @@ const DEFAULT_DAILY_USD: f64 = 15.0;
 const DEFAULT_LANE: &str = "zai-flash";
 /// Runs once when the main lane gives up with no grade, so a capped lane does
 /// not leave the day without graded rows.
-const DEFAULT_FALLBACK_LANE: &str = "claude-sonnet-5";
+const FALLBACK_LANE: &str = "claude-sonnet-5";
 const FALLBACK_SUFFIX: &str = "-fallback";
 
 /// Who does the work a cohort grades. Spend is each gate row of the day at its
@@ -506,12 +506,6 @@ pub(crate) fn config_lane(repo: &Path) -> String {
         .unwrap_or_else(|| DEFAULT_LANE.to_string())
 }
 
-fn fallback_lane(repo: &Path) -> String {
-    crate::paths_cli::cfg_str(repo, &["evals", "gate", "fallback_lane"])
-        .filter(|v| !v.trim().is_empty())
-        .unwrap_or_else(|| DEFAULT_FALLBACK_LANE.to_string())
-}
-
 /// The worker seat keeps `evals.gate.lane`. The lead seat runs the first lane
 /// leads are routed to, so the gate grades the seat the user corrects.
 fn seat_lane(repo: &Path, seat: &Seat) -> Result<String, String> {
@@ -619,6 +613,12 @@ fn main_seat(
                         format!("main {cohort} gave up after {} tries: {}", f.tries, f.cause);
                     return (note, true);
                 }
+                // A config cause (no lead lane, bank unread) is no lane outage.
+                if !f.cause.starts_with("wrote no grade") {
+                    let note =
+                        format!("main {cohort} gave up after {} tries: {}", f.tries, f.cause);
+                    return (note, true);
+                }
                 fallback = true;
             }
             Some(f) if d.now.timestamp() < f.next_try => {
@@ -631,7 +631,7 @@ fn main_seat(
         return ("main held by the spawn gate".into(), false);
     }
     let lane = if fallback {
-        fallback_lane(p.repo)
+        FALLBACK_LANE.to_string()
     } else {
         match seat_lane(p.repo, seat) {
             Ok(lane) => lane,
