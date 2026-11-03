@@ -104,7 +104,9 @@ pub fn assemble(
     // (c) The live laws: an imported trigger wins, a `paths` row becomes a
     // pre-tool path rule, and a law with neither is the implicit tier-1
     // inform rule (the STAGES keyword fallback's replacement).
-    let beaten = conflict_losers(&laws.rows);
+    let here =
+        crate::law_match::resolve_project(Some(cwd), &crate::law_match::settings_sources()).ok();
+    let beaten = conflict_losers(&laws.rows, here.as_deref());
     for row in &laws.rows {
         let Some(id) = row.get("decision_id").and_then(Value::as_str) else {
             continue;
@@ -597,8 +599,10 @@ fn narrowness(row: &Value) -> u8 {
 
 /// The ids that lose a conflict. Two live laws on one subject conflict when
 /// both bind here: the narrower filter wins, then the newer row, and the
-/// loser drops from the set. A loser never fires and never blocks.
-fn conflict_losers(rows: &[Value]) -> BTreeSet<String> {
+/// loser drops from the set. A loser never fires and never blocks. A law
+/// scoped to another project, or to a project this session cannot name,
+/// takes no part: it could not apply here, so it must not beat one that does.
+fn conflict_losers(rows: &[Value], project: Option<&str>) -> BTreeSet<String> {
     let mut best: BTreeMap<String, (u8, String, String)> = BTreeMap::new();
     let mut losers = BTreeSet::new();
     for row in rows {
@@ -607,7 +611,10 @@ fn conflict_losers(rows: &[Value]) -> BTreeSet<String> {
         };
         let subject = row.get("subject").and_then(Value::as_str).unwrap_or("");
         let scope = decision_index::row_scope(row);
-        if subject.is_empty() || decision_index::binds_here(scope) == Some(false) {
+        let other_project = scope
+            .strip_prefix("project:")
+            .is_some_and(|p| Some(p) != project);
+        if subject.is_empty() || other_project || decision_index::binds_here(scope) == Some(false) {
             continue;
         }
         let ts = row
@@ -990,6 +997,26 @@ mod tests {
             ids,
             ["d-0000cccc"],
             "narrower, then newer, wins the subject"
+        );
+        let foreign = decision_index::Index {
+            rows: vec![
+                law("d-0000ffff", "2026-11-01T00:00:00Z", "global", None, false),
+                law(
+                    "d-0000f00d",
+                    "2026-11-02T00:00:00Z",
+                    "project:not-this-one-zz9",
+                    None,
+                    true,
+                ),
+            ],
+            damaged: 0,
+        };
+        let set = assemble(Path::new("/"), foreign, &BTreeMap::new(), Vec::new()).expect("builds");
+        assert!(
+            set.rules
+                .iter()
+                .any(|r| r.law.as_deref() == Some("d-0000ffff")),
+            "another project's law never knocks out a global one"
         );
         let solo = decision_index::Index {
             rows: vec![law(
