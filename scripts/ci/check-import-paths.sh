@@ -42,7 +42,7 @@ def submodule_or_pkg_exists(dotted_after_fno):
     return f.is_file() or d.is_dir()
 
 
-_init_cache: dict[tuple, tuple[set[str], bool] | None] = {}
+_init_cache: "dict[tuple, tuple[set[str], bool] | None]" = {}
 
 
 def init_names(pkg_after_fno):
