@@ -685,14 +685,6 @@ pub fn ledger_json(cwd: &Path) -> PathBuf {
         })
 }
 
-/// Python `paths.questions_jsonl()`: the machine's operator-question index,
-/// resolved through the layout table so a root straggler the daemon has not
-/// folded yet stays readable (the same ladder every moved row answers
-/// through).
-pub fn questions_jsonl(cwd: &Path) -> PathBuf {
-    crate::state_layout::place(&state_root(cwd), "questions.jsonl")
-}
-
 /// Python `paths.worktrees_base()`: the `paths.worktrees_base` override, else
 /// `<state_dir>/worktrees`. A relative state dir falls back to the default
 /// state root, as `ledger_json` does.

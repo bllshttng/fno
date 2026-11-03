@@ -882,6 +882,8 @@ _ROOT_STATE_FILE_ROWS: frozenset[str] = frozenset(
     {
         "config.toml", "config.toml.lock", "config.toml.bak",
         "settings.yaml", "settings.yaml.lock",
+        "decisions.jsonl", "decisions.jsonl.compact", "decisions.jsonl.corrupt",
+        "questions.jsonl",
         "my-priorities.md", "my-priorities.md.lock",
         ".env", ".gitignore", ".path-migration-done",
     }
@@ -907,8 +909,8 @@ def root_state_file(name: str) -> Path:
 
 
 def questions_jsonl() -> Path:
-    """The machine's operator-question index, via the ``history/`` ladder."""
-    return _pinned_state_subfile("questions.jsonl")
+    """Return the permanent machine-wide operator-question index."""
+    return _guard_state_path(_pinned_root() / "questions.jsonl")
 
 
 def project_events_json() -> Path:

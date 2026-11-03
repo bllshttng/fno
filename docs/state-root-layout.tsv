@@ -63,17 +63,15 @@ corrections.log	logs/corrections.log	append	daemon
 corrections.log.wm	logs/corrections.log.wm	overwrite	daemon
 merge-gate-overrides.log	logs/merge-gate-overrides.log	append	daemon
 health-alerts.log	logs/health-alerts.log	append	daemon
-# history/ - append-only jsonl journals, plus the durable journals that
-# moved off the root with the Python-locator slice: the ledger (one JSON
+# history/ - append-only jsonl journals, plus the durable ledger (one JSON
 # doc rewritten per append under /tmp/fno-ledger.lock, so the newer copy
-# wins a both-exist merge and the loser parks) and the question and
-# decision journals (true jsonl, so their merge is a byte concat).
+# wins a both-exist merge and the loser parks). The question and decision
+# journals stay at the root: the routed store keys their family there, the
+# same anchor rule the retired events journal keeps.
 health-history.jsonl	history/health-history.jsonl	append	daemon
 evals-history.jsonl	history/evals-history.jsonl	append	daemon
 lesson-candidates.jsonl	history/lesson-candidates.jsonl	append	daemon
 ledger.json	history/ledger.json	overwrite	daemon
-questions.jsonl	history/questions.jsonl	append	daemon
-decisions.jsonl	history/decisions.jsonl	append	daemon
 # install/ - install markers; new wins.
 installed-rev	install/installed-rev	marker	daemon
 source-path	install/source-path	marker	daemon
@@ -194,7 +192,6 @@ jobs-tmp	-	park	daemon
 hooks	-	park	daemon
 signals	-	park	daemon
 squads.json.tmp.*	-	park	mux
-# Recovery copies ride beside the journal they recover (marker: new wins,
+# Recovery copy rides beside the ledger it recovers (marker: new wins,
 # the legacy root copy parks).
 ledger.json.bak	history/ledger.json.bak	marker	daemon
-decisions.jsonl.corrupt	history/decisions.jsonl.corrupt	marker	daemon

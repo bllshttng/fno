@@ -3,6 +3,10 @@ config.toml
 config.toml.lock
 settings.yaml
 settings.yaml.lock
+decisions.jsonl
+questions.jsonl
+decisions.jsonl.corrupt
+decisions.jsonl.compact
 .canary
 opencode-install-*.json
 recovery

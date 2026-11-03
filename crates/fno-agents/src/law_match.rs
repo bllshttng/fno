@@ -1627,8 +1627,7 @@ pub(crate) fn project_events_journal_in(cwd: &std::path::Path) -> std::path::Pat
 /// the machine questions store, minus the closed rows. Best-effort: a missing
 /// or malformed store reads as no questions, never an error.
 fn read_open_questions() -> Vec<OpenQuestion> {
-    let path =
-        crate::state_layout::place(&decision_index::default_state_path(""), "questions.jsonl");
+    let path = decision_index::default_state_path("questions.jsonl");
     let Ok(text) = std::fs::read_to_string(path) else {
         return Vec::new();
     };

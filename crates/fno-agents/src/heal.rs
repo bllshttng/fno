@@ -1533,20 +1533,9 @@ fn seam_bin(a: &Args, name: &str) -> String {
 }
 
 /// The fleet-task store: `questions.jsonl` beside the events journal, so a
-/// test's `--events-file` moves it with the journal. The default leg goes
-/// through the layout row; an explicit `--events-file` keeps the sibling
-/// rule, so a fixture dir holds both files.
+/// test's `--events-file` moves it with the journal.
 fn questions_store(a: &Args) -> std::path::PathBuf {
-    if a.events_file.is_empty() {
-        let root = crate::paths::AgentsHome::from_env()
-            .root()
-            .parent()
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| std::path::PathBuf::from(".fno"));
-        crate::state_layout::place(&root, "questions.jsonl")
-    } else {
-        journal_path(a).with_file_name("questions.jsonl")
-    }
+    journal_path(a).with_file_name("questions.jsonl")
 }
 
 /// File one heal fleet task, deduplicated on (lane, key, cwd), attributed to

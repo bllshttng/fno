@@ -646,7 +646,7 @@ pub(crate) fn question_journals(fno_dir: &Path, cwd: &Path) -> Vec<PathBuf> {
     vec![
         crate::paths::space_dir(cwd).join("events.jsonl"),
         fno_dir.join("events.jsonl"),
-        crate::state_layout::place(fno_dir, "questions.jsonl"),
+        fno_dir.join("questions.jsonl"),
     ]
 }
 
@@ -1129,8 +1129,8 @@ fn run_archive(
             caller,
             home: Some(home.clone()),
             journal_path: crate::paths::space_dir(cwd).join("events.jsonl"),
-            index_path: crate::state_layout::place(&fno_dir, "questions.jsonl"),
-            decisions_path: crate::state_layout::place(&fno_dir, "decisions.jsonl"),
+            index_path: fno_dir.join("questions.jsonl"),
+            decisions_path: fno_dir.join("decisions.jsonl"),
             graph: crate::backlog::settings::graph_path(),
             repo_root: cwd.to_path_buf(),
         });

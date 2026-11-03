@@ -460,7 +460,7 @@ fn awaiting_operator(
 pub(crate) fn read_questions_journal(registry_path: &Path, warnings: &mut Vec<String>) -> String {
     match registry_path.parent().and_then(Path::parent) {
         Some(fno_dir) => {
-            let path = crate::state_layout::place(fno_dir, "questions.jsonl");
+            let path = fno_dir.join("questions.jsonl");
             match crate::event_store::journal_text_checked(
                 &path,
                 &crate::event_store::EventQuery::of_types(crate::needs::QUESTION_TYPES),

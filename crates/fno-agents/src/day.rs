@@ -633,7 +633,7 @@ pub fn run_day(rest: &[String], home: &crate::paths::AgentsHome) -> i32 {
         .parent()
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(".fno"));
-    let questions_path = crate::state_layout::place(&state_dir, "questions.jsonl");
+    let questions_path = state_dir.join("questions.jsonl");
     let questions_exist =
         questions_path.exists() || crate::event_store::store_path(&questions_path).exists();
     let (questions_raw, questions_state) = if !questions_exist {
@@ -653,7 +653,7 @@ pub fn run_day(rest: &[String], home: &crate::paths::AgentsHome) -> i32 {
             }
         }
     };
-    let decisions_path = crate::state_layout::place(&state_dir, "decisions.jsonl");
+    let decisions_path = state_dir.join("decisions.jsonl");
     let decisions_raw = crate::event_store::journal_text(&decisions_path, &[]);
     let graph_entries = crate::graph_store::read_rows_where(
         &graph_path(home),

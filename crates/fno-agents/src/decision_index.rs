@@ -39,20 +39,18 @@ pub fn default_state_path(name: &str) -> PathBuf {
 }
 
 /// The decisions journal of the store a graph spelling names: at the state
-/// root the anchor lives in (a migrated `db/` twin collapses to its root),
-/// never the home path and never inside `db/`. For the default graph this is
-/// the layout table's `decisions.jsonl` row (`history/decisions.jsonl` after
-/// the fold, the root spelling until the mover runs).
+/// root the anchor lives in (a migrated `db/` twin collapses to its root,
+/// where the journal always sits), never the home path and never inside
+/// `db/`. For the default graph this is
+/// `default_state_path("decisions.jsonl")`.
 pub fn graph_journal(graph: &Path) -> PathBuf {
     let anchor = crate::backlog::anchor_path(graph);
     let root = match anchor.parent() {
         Some(p) if p.file_name().is_some_and(|n| n == "db") => p.parent().unwrap_or(p),
         Some(p) => p,
-        None => {
-            return crate::state_layout::place(&default_state_path(""), "decisions.jsonl");
-        }
+        None => return default_state_path("decisions.jsonl"),
     };
-    crate::state_layout::place(&root, "decisions.jsonl")
+    root.join("decisions.jsonl")
 }
 
 /// The envelope flatten: JSONL text into flattened rows plus the damaged
@@ -292,7 +290,7 @@ pub fn read_store_live(graph: &Path, jsonl: &Path) -> Result<Index, String> {
 pub fn default_store_live() -> Result<Index, String> {
     read_store_live(
         &crate::graph_get::default_graph_path(),
-        &graph_journal(&crate::graph_get::default_graph_path()),
+        &default_state_path("decisions.jsonl"),
     )
 }
 

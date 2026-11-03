@@ -85,19 +85,7 @@ pub fn import_if_needed(connection: &mut Connection, graph: &Path) -> Result<(),
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|error| error.to_string())?;
-    let journal = {
-        // The import probe predates the fold: it read beside the graph
-        // (db/decisions.jsonl once the anchor moved). The journal has only
-        // ever sat at the anchor's state root, so collapse back to the root
-        // and read through the layout row (history/ after the fold, the
-        // legacy root spelling while it exists).
-        let root = graph
-            .parent()
-            .filter(|p| p.file_name().is_some_and(|n| n == "db"))
-            .and_then(|p| p.parent())
-            .unwrap_or_else(|| graph.parent().unwrap_or(Path::new(".")));
-        crate::state_layout::place(root, "decisions.jsonl")
-    };
+    let journal = graph.with_file_name("decisions.jsonl");
     if journal.exists() {
         let text = std::fs::read_to_string(&journal).map_err(|error| {
             format!(
