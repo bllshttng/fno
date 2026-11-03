@@ -2530,5 +2530,13 @@ fn a_chat_attested_law_row_or_a_board_decision_clears_the_paint_hold_at_its_head
     assert!(!clears(&fake, &head));
     fake.decisions_stdout = Some(board("Approve", "coordination"));
     assert!(!clears(&fake, &head));
+    // The asking team closing its own question with a role answer is no look.
+    fake.decisions_stdout = Some(
+        String::from_utf8(board("Approve", "question"))
+            .unwrap()
+            .replace(r#""lifecycle""#, r#""authority_source":"role","lifecycle""#)
+            .into_bytes(),
+    );
+    assert!(!clears(&fake, &head));
     std::fs::remove_dir_all(&tmp).ok();
 }

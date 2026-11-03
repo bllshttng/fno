@@ -1207,7 +1207,19 @@ fn board_approval_text(row: &Value, pr: u64) -> Option<String> {
         && trace.get("recipient_kind").and_then(Value::as_str) == Some("user");
     let question = row.get("question").and_then(Value::as_str)?;
     let answer = row.get("decision").and_then(Value::as_str)?;
+    // The asking team may close its own question with a role, team, agent or
+    // beastmode answer. Only the user's own answer (no authority stamp, or
+    // an operator or quoted chat stamp) is a look.
+    let by_user = match row.get("authority_source").and_then(Value::as_str) {
+        None | Some("operator") => true,
+        Some("chat_attested") => row
+            .get("quote")
+            .and_then(Value::as_str)
+            .is_some_and(|q| !q.trim().is_empty()),
+        Some(_) => false,
+    };
     (from_board
+        && by_user
         && row.get("question_id").is_some()
         && answer_approves(answer)
         && page_names_pr(question, pr))
