@@ -152,6 +152,15 @@ fn pane_run_args_squad_does_not_block_fit() {
 }
 
 #[test]
+fn pane_run_args_from_rides_the_split() {
+    let mut ctx = bounded_ctx();
+    ctx.from = Some("portal 3".to_string());
+    let joined = pane_run_args(&ctx, "main", "w", &bare_plan()).join(" ");
+    assert!(joined.contains("--from portal 3"), "got: {joined}");
+    assert!(!joined.contains("--fit"), "a named cell is geometry: {joined}");
+}
+
+#[test]
 fn pane_run_args_tab_id_rides_json_lane() {
     let mut ctx = bounded_ctx();
     ctx.tab_id = Some("id:12".to_string());
