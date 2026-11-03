@@ -3930,7 +3930,7 @@ console.log("theme store: 9 cases ok");
             );
             async move { raw_request(addr, &head, b"").await }
         };
-        let tailnet = "box.tail1.ts.net".to_string();
+        let tailnet = "machine.tail1.ts.net".to_string();
         let reply = get(Some("eve@example.com"), tailnet.clone()).await;
         assert!(reply.starts_with("HTTP/1.1 403"), "{reply}");
         let reply = get(None, tailnet.clone()).await;
@@ -3948,7 +3948,7 @@ console.log("theme store: 9 cases ok");
         assert!(reply.starts_with("HTTP/1.1 403"), "proxied: {reply}");
         server.abort();
         let (addr, server) = serve_state(answer_state(true, None)).await;
-        let head = "GET /command?t=right HTTP/1.1\r\nHost: box.tail1.ts.net\r\nTailscale-User-Login: eve@example.com\r\nConnection: close\r\n\r\n";
+        let head = "GET /command?t=right HTTP/1.1\r\nHost: machine.tail1.ts.net\r\nTailscale-User-Login: eve@example.com\r\nConnection: close\r\n\r\n";
         let reply = raw_request(addr, head, b"").await;
         assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
         server.abort();

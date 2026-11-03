@@ -440,6 +440,9 @@ enum Role {
     /// `fno do feedback ...`: the redacted upstream-issue draft execs the
     /// sibling binary, the same byte-verbatim handover as DoCi.
     DoFeedback,
+    /// `fno do show|diff ...`: a file at a revision and the diff between two
+    /// revisions exec the sibling binary's rev dispatcher, the DoCi handover.
+    DoRev,
     /// `fno backlog list [<query>]`: the native node-query door (the grammar
     /// and the read model both live in this crate, d-069a9fa1). Args after
     /// `list`.
@@ -1541,6 +1544,13 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     {
         return Role::DoFeedback;
     }
+    // `do show` and `do diff` claim as single words: the dispatcher owns the
+    // spellings and the argv passes through byte-verbatim.
+    if args.first().and_then(|a| a.to_str()) == Some("do")
+        && matches!(args.get(1).and_then(|a| a.to_str()), Some("show" | "diff"))
+    {
+        return Role::DoRev;
+    }
     if let Some(rest) = fno::law_cli::classify_inbox_law(args) {
         return Role::InboxLaw(rest);
     }
@@ -1868,6 +1878,7 @@ fn main() {
         Role::DoPr => bootstrap::forward_agents(&args, "fno do pr"),
         Role::DoCi => bootstrap::forward_agents(&args, "fno do ci"),
         Role::DoFeedback => bootstrap::forward_agents(&args, "fno do feedback"),
+        Role::DoRev => bootstrap::forward_agents(&args, "fno do show"),
         Role::BacklogList(rest) => std::process::exit(fno::backlog_list::run(&rest)),
         Role::NotTty => {
             // AC1-EDGE: piped/CI bare `fno` gets a notice, not a TUI. Exit 0 -
@@ -2490,6 +2501,22 @@ mod tests {
         assert_ne!(
             decide_role(&os(&["do", "review", "--help"]), false),
             Role::DoPr
+        );
+    }
+
+    #[test]
+    fn do_show_and_diff_claim_and_state_show_stays_put() {
+        assert_eq!(
+            decide_role(&os(&["do", "show", "main:f.txt"]), false),
+            Role::DoRev
+        );
+        assert_eq!(
+            decide_role(&os(&["do", "diff", "a", "b", "--", "f"]), false),
+            Role::DoRev
+        );
+        assert_ne!(
+            decide_role(&os(&["do", "state", "show"]), false),
+            Role::DoRev
         );
     }
 

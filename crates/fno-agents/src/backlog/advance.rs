@@ -1160,7 +1160,7 @@ pub fn direct_dependents(
     let entries = crate::graph_store::read_rows(&graph).map_err(|e| e.to_string())?;
     // Containers are never dispatched as workers: a dependent that is itself
     // some other node's parent is an epic, and /target builds its leaves, not
-    // the box. The container id set is the one implementation `next` uses.
+    // the container. The container id set is the one implementation `next` uses.
     let parent_ids = container_ids(&entries);
     let by_id: BTreeMap<String, Value> = entries
         .iter()
@@ -1214,7 +1214,7 @@ pub fn direct_dependents(
             continue;
         };
         if parent_ids.contains(node_id) {
-            continue; // epic/container dependent - build its leaves, not the box
+            continue; // epic/container dependent - build its leaves, not the container
         }
         out.push(json!({
             "id": node_id,
@@ -1234,7 +1234,7 @@ pub fn direct_dependents(
 }
 
 /// Ids of container nodes: an owner of only contained children is a delivery
-/// unit, not a box; a node that is some other node's parent is. Mirrors the
+/// unit, not a container; a node that is some other node's parent is. Mirrors the
 /// container set the next picker applies so this path cannot drift.
 fn container_ids(entries: &[Value]) -> BTreeSet<String> {
     let mut parents: BTreeSet<String> = BTreeSet::new();

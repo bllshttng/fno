@@ -1,6 +1,6 @@
 state_dir=<FIXTURE>/proj/.fno
 graph_json=<FIXTURE>/proj/.fno/db/graph.json
-ledger_json=<FIXTURE>/home/.fno/ledger.json
+ledger_json=<FIXTURE>/home/.fno/db/history/ledger.json
 briefs_dir=<FIXTURE>/proj/.fno/briefs
 fleet_dir=<FIXTURE>/proj/.fno/fleet
 postmortems_dir=<FIXTURE>/proj/.fno/db/postmortems

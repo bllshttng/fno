@@ -1062,7 +1062,7 @@ pub const DEFAULT_MAX_FLEET_CPU_SHARE: f64 = 0.5;
 /// the Pydantic default.
 pub const DEFAULT_SINGLE_FLIGHT_TTL_S: u64 = 60;
 /// Default join budget. Over the 23.2 s worst-measured roster read, so a loaded
-/// box joins instead of timing out. Matches the Pydantic default.
+/// machine joins instead of timing out. Matches the Pydantic default.
 pub const DEFAULT_SINGLE_FLIGHT_JOIN_BUDGET_S: u64 = 30;
 /// Default age at which a child reparented to init is reaped: three times
 /// `do pr wait --timeout 30m`, the longest detached child that is allowed to be

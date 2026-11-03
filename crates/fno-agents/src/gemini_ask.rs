@@ -443,8 +443,8 @@ fn run_gemini(
         cmd.current_dir(cwd);
     }
     crate::claims::stamp_command_env(&mut cmd, agent_self, "gemini", bound_session_id);
-    // A `[sandbox] provider = "devcontainer"` spawn runs this lane in the box.
-    let mut cmd = crate::sandbox_launch::boxed(cmd);
+    // A `[sandbox] provider = "devcontainer"` spawn runs this lane in the sandbox.
+    let mut cmd = crate::sandbox_launch::sandboxed(cmd);
     cmd.stdin(Stdio::null());
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped()); // SEPARATE pipe (divergence from codex LD12)

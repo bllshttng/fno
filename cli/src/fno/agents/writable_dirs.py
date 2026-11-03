@@ -35,21 +35,22 @@ A worker writes its plan, not the operator's notes.
 it. On the default layout that includes ``worktrees_base``
 (``~/.fno/worktrees``), which is every sibling worker's checkout. It also
 includes the files that sit DIRECTLY at that root: ``config.toml`` and
-``settings.yaml`` alongside ``graph.json`` and ``ledger.json``
+``settings.yaml`` alongside ``graph.json``
 (``docs/state-root-inventory.md``). So a worker a config gate refused can, in
 principle, edit the config that refused it. The standing rule is that a gate
 refusal is a message to the operator and never something to synthesize around,
 and on claude a ``PreToolUse`` hook backs that rule; on every other harness this
 grant leaves it unenforced. That is a real cost, recorded here rather than
-discovered later. It is not fixed by narrowing the grant, because the graph and
-the ledger sit at that same level - see the paragraph below.
+discovered later. It is not fixed by narrowing the grant, because the graph
+stores and locks sit at that same level - see the paragraph below.
 
-It cannot be narrowed to subdirectories. ``graph.json`` and ``ledger.json`` sit
-directly at the state root, and both are written with
+It cannot be narrowed to subdirectories. ``graph.json`` (and the runtime
+stores beside it) sit at the state root and are written with
 ``tempfile.mkstemp(dir=path.parent)`` followed by ``os.replace``
 (``graph_store.rs``). An atomic replace needs write access to the
-DIRECTORY, not the file, so a worker that mutates the graph needs the root
-itself. Granting the children instead would leave every graph write refused.
+DIRECTORY, not the file, so a worker that mutates the graph needs the
+root itself. Granting the children instead would leave every graph write
+refused.
 
 A project that does not want the sibling-worktree reach moves them out with
 ``config.paths.worktrees_base``. The harness-native default already places them

@@ -1,6 +1,6 @@
 //! One in flight per identical `fno` invocation.
 //!
-//! Measured on the operator's box: seven concurrent `fno agents truth` children
+//! Measured on the operator's machine: seven concurrent `fno agents truth` children
 //! from five different parents inside fifteen seconds, several carrying the same
 //! handle list. Each one pays a 1-to-2.4 second Python cold start, so a slow
 //! roster read makes the next scheduled read overlap it, which makes the read

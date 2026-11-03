@@ -217,7 +217,7 @@ git -C "$repo_root" init -q
 # the degrade the library documents for a context that cannot ask the resolver.
 # With the real binary present the resolver answers the space journal and this
 # assertion stops being about the root branch at all, which is what a developer
-# box was measuring while CI measured the degrade. Only that one variable is
+# machine was measuring while CI measured the degrade. Only that one variable is
 # isolated: narrowing PATH instead would also hide jq and git, and emit_event
 # swallows a missing jq, so the failure would name the wrong branch.
 stub_dir="$WORK/stub"

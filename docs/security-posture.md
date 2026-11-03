@@ -2,9 +2,9 @@
 
 ## The loop is for plans you trust
 
-footnote's autonomous loop (target) is a delivery harness. When you point it at a plan, it executes the plan with your credentials, on your machine, against your repos. There is no sandbox. There is no isolation beyond standard git worktrees.
+footnote's autonomous loop (target) is a delivery harness. When you point it at a plan, it executes the plan with your credentials, on your machine, against your repos. By default there is no sandbox beyond standard git worktrees. An optional [sandbox](architecture/sandbox-host.md) runs headless workers in a devcontainer, and it is not a security boundary.
 
-This is intentional. Sandboxing solves the wrong problem. The threat model for solo founders running plans they wrote is "my agent might make a mistake," not "my agent might be malicious." Mistake recovery is what git, atomic commits, and human review are for.
+This is intentional. The default stays sandbox-free. A solo founder running plans they wrote fears a mistake, not malice. Mistake recovery is what git, atomic commits, and human review are for.
 
 This is also a constraint when footnote is shared with others.
 
@@ -17,7 +17,7 @@ You must run the loop only against plans you have read or trust the author of. S
 - **Plans from the footnote repository's `examples/` folder:** reviewed and safe.
 - **Plans from random contributors, bug reports, gists, or untrusted sources:** read them carefully before running. The loop will execute them with your credentials.
 
-We do not plan to add sandboxing in the foreseeable future. Container abstractions solve multi-tenant safety problems that solo founders do not have.
+The devcontainer sandbox is shared-state protection, not a security boundary. It keeps a headless worker from writing shared state, and it does not contain a malicious plan. Multi-tenant isolation remains out of scope.
 
 ## What the loop WILL do, given a plan
 

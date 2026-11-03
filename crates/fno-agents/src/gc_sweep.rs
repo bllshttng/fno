@@ -4372,13 +4372,15 @@ pub(crate) fn ledger_entry_in<'a>(rows: &'a [Value], session_id: &str) -> Option
     })
 }
 
-/// `$HOME/.fno/ledger.json`, the ledger's default global path. Tests inject
-/// their own by building receipts with an explicit `ledger` value instead.
+/// The ledger's default global path: the shared default-state resolution
+/// (`$FNO_HOME`, else `$HOME/.fno`) read through the layout row. Tests
+/// inject their own by building receipts with an explicit `ledger` value
+/// instead.
 pub(crate) fn default_ledger_path() -> std::path::PathBuf {
-    let base = std::env::var_os("HOME")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| std::path::PathBuf::from("."));
-    base.join(".fno").join("ledger.json")
+    crate::state_layout::place(
+        &crate::decision_index::default_state_path(""),
+        "ledger.json",
+    )
 }
 
 #[cfg(test)]

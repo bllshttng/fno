@@ -419,8 +419,8 @@ fn run_agy(
     cmd.args(&argv[1..]);
     cmd.current_dir(popen_cwd);
     crate::claims::stamp_command_env(&mut cmd, agent_self, "agy", None);
-    // A `[sandbox] provider = "devcontainer"` spawn runs this lane in the box.
-    let mut cmd = crate::sandbox_launch::boxed(cmd);
+    // A `[sandbox] provider = "devcontainer"` spawn runs this lane in the sandbox.
+    let mut cmd = crate::sandbox_launch::sandboxed(cmd);
     // CRITICAL: detach stdin so agy -p never blocks on a non-TTY waiting for
     // input (the silent-stdout-drop gotcha).
     cmd.stdin(Stdio::null());

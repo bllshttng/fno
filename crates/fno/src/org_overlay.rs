@@ -622,7 +622,7 @@ impl Panel {
                             }
                         }
                         if low > ceiling {
-                            // The over verdict names the axis it read, so a busy box
+                            // The over verdict names the axis it read, so a busy machine
                             // is never mistaken for the fleet being over.
                             l.push_str(&format!(
                                 " · {:.1}x over on fleet_cpu_share",
@@ -877,7 +877,7 @@ impl Panel {
             }
 
             // the machine the lanes compete for, not the fleet alone. The 100%
-            // reading was TRUE and unbelievable, so a saturated box names the
+            // reading was TRUE and unbelievable, so a saturated machine names the
             // place the explanation lives.
             match (
                 org.arm_num("whole-machine cpu", "busy_fraction"),
@@ -957,7 +957,7 @@ impl Panel {
         }
 
         // the lanes payload's own readings, when it landed: the caller's
-        // share, what saturates the box, the advisor's answer, and the
+        // share, what saturates the machine, the advisor's answer, and the
         // attribution gap. The unattributed bucket renders only when it
         // holds someone - a count that sees nobody says so by being absent.
         if let Some(org) = self.fold.as_ref() {
@@ -977,7 +977,7 @@ impl Panel {
                 lines.push(line);
             }
 
-            // what is saturating the box, from the ps read the fold already
+            // what is saturating the machine, from the ps read the fold already
             // performed - never a second instrument.
             match census.top_consumers.as_ref().map(Vec::as_slice) {
                 Some([]) => lines.push(format!(

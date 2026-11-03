@@ -54,7 +54,7 @@ fn run_rust() -> (i32, String) {
 fn run_python() -> (i32, String) {
     // The leg is stdlib-only, so it loads BY FILE PATH: importing the package
     // would drag fno/__init__ and every dependency, and the oracle needs a
-    // bare interpreter to answer on any box.
+    // bare interpreter to answer on any machine.
     let leg = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("..")
         .join("..")

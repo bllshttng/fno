@@ -39,7 +39,7 @@ def _journal_text(path: Path) -> str:
 
     The store commit is the write boundary, so each sibling is read through
     the native rows command (raw fallback built in); the raw bytes only serve a
-    box with no binary at all."""
+    machine with no binary at all."""
     from fno.paths import journal_and_ephemeral_sibling
 
     try:
@@ -103,7 +103,7 @@ def _fail(effect: str, detail: str) -> int:
 
 def main() -> int:
     repo_root = Path(__file__).resolve().parents[2]
-    # Resolve before the dispatch runs: on a box without the binary the run
+    # Resolve before the dispatch runs: on a machine without the binary the run
     # must fail here with the build guidance, not after dispatch has spent
     # its whole budget.
     agents_bin = _fno_agents_bin()

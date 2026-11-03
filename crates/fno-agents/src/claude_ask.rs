@@ -2812,8 +2812,8 @@ pub fn dispatch_claude_headless(
         cmd.env(crate::session_report::NO_ROW_ENV, name);
     }
     cmd.env_remove(SHOW_ROW_ENV);
-    // A `[sandbox] provider = "devcontainer"` spawn runs this lane in the box.
-    let mut cmd = crate::sandbox_launch::boxed(cmd);
+    // A `[sandbox] provider = "devcontainer"` spawn runs this lane in the sandbox.
+    let mut cmd = crate::sandbox_launch::sandboxed(cmd);
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
     cmd.stdin(if use_stdin {
@@ -3632,7 +3632,7 @@ mod tests {
     // to stay green even while a concurrent `cargo build` saturates every core.
     //
     // The rule: NEVER use a fixed `std::thread::sleep(...)` as a "the other side
-    // is ready now" barrier. A sleep sized for an idle box (e.g. 60ms) becomes a
+    // is ready now" barrier. A sleep sized for an idle machine (e.g. 60ms) becomes a
     // coin flip under load because wall-clock stretches relative to scheduled
     // work, so the awaited write/accept/join can miss the budget. That is the
     // exact flake this module was de-flaked to remove.

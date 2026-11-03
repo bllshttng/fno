@@ -557,6 +557,7 @@ pub mod resume_wake;
 pub mod retask;
 pub(crate) mod retired_lead;
 pub mod retro;
+pub mod rev_front;
 pub mod review_capability;
 pub mod review_doors;
 pub mod review_findings;

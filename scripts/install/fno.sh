@@ -66,7 +66,7 @@ strip_ansi() {
 
 # Fetch $1 to stdout over HTTPS, preferring curl, falling back to wget. Used for
 # the Astral uv installer (the outer one-liner is curl by definition, but the
-# inner fetch degrades to wget so a curl-less-but-wget box still works).
+# inner fetch degrades to wget so a curl-less-but-wget machine still works).
 FNO_FETCH_TO_STDOUT=
 fetch_pipe_cmd() {
 	if have curl; then
@@ -629,7 +629,7 @@ main() {
 		if resolve_real; then
 			# Two-dir discriminator, same as run() in bootstrap.rs: the
 			# bootstrap cache dir survives the --force that removes the venv
-			# whole, and the venv bin dir marks a box carrying an install.
+			# whole, and the venv bin dir marks a machine carrying an install.
 			# Both absent means no install ever existed, where a 3s wait is
 			# a first-run tax.
 			_cache_dir="${XDG_CACHE_HOME:-$HOME/.cache}"

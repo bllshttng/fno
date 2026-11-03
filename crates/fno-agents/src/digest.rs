@@ -446,7 +446,7 @@ fn default_sources(home: &AgentsHome) -> (Vec<PathBuf>, PathBuf) {
         .unwrap_or_else(|| PathBuf::from(".fno"));
     let global_events = fno_dir.join("events.jsonl");
     let project_events = PathBuf::from(".fno").join("events.jsonl");
-    let ledger = fno_dir.join("ledger.json");
+    let ledger = crate::state_layout::place(&fno_dir, "ledger.json");
     (vec![project_events, global_events], ledger)
 }
 
