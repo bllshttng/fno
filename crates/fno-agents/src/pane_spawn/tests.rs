@@ -157,7 +157,10 @@ fn pane_run_args_from_rides_the_split() {
     ctx.from = Some("portal 3".to_string());
     let joined = pane_run_args(&ctx, "main", "w", &bare_plan()).join(" ");
     assert!(joined.contains("--from portal 3"), "got: {joined}");
-    assert!(!joined.contains("--fit"), "a named cell is geometry: {joined}");
+    assert!(
+        !joined.contains("--fit"),
+        "a named cell is geometry: {joined}"
+    );
 }
 
 #[test]
