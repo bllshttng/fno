@@ -126,11 +126,17 @@ fn error_class_door() -> i32 {
     }
 }
 
-/// `claude-dirs`: every Claude config dir this machine knows, as
-/// [`crate::claude_config_tmp::claude_config_dirs`] reads them.
+/// `claude-dirs`: the `config_dir` of every claude account record, read
+/// through [`records::load`] so `$FNO_CONFIG` and the layer walk hold. An
+/// unreadable config answers no dirs; the caller keeps its ambient roots.
 fn claude_dirs_door() -> i32 {
-    let dirs: Vec<String> = crate::claude_config_tmp::claude_config_dirs()
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let dirs: Vec<String> = records::load(None, &cwd)
+        .map(|a| a.records)
+        .unwrap_or_default()
         .iter()
+        .filter(|r| r.harness == "claude")
+        .filter_map(|r| r.config_dir.as_ref())
         .map(|d| d.to_string_lossy().into_owned())
         .collect();
     println!("{}", serde_json::json!({ "dirs": dirs }));
