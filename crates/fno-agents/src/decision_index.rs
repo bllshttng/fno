@@ -426,10 +426,11 @@ pub fn row_scope(row: &Value) -> &str {
 /// `project:<slug>` row governs only the matching slug; a `machine:<id>` or
 /// `user:<name>` (legacy `person:<name>`) row governs only the session that resolves that identity.
 pub fn row_in_scope(row: &Value, project: &str) -> bool {
-    match row_scope(row) {
-        "global" => true,
-        scoped => binds_here(scoped).unwrap_or_else(|| scoped == format!("project:{project}")),
-    }
+    filters_match(row)
+        && match row_scope(row) {
+            "global" => true,
+            scoped => binds_here(scoped).unwrap_or_else(|| scoped == format!("project:{project}")),
+        }
 }
 
 /// The identity arms of the scope test: `Some` for a `machine:` or `user:`
@@ -460,7 +461,10 @@ fn binds(
 /// the project: it hides no project row. A row bound to another machine or
 /// user still hides, because identity needs no project.
 pub fn row_visible(row: &Value, project: Option<&str>) -> bool {
-    filters_match(row) && scope_visible(row, project)
+    match project {
+        Some(project) => row_in_scope(row, project),
+        None => filters_match(row) && binds_here(row_scope(row)) != Some(false),
+    }
 }
 
 /// The row's filters beside its scope; every filter must match. `node` binds
@@ -479,13 +483,6 @@ fn filters_match_for(row: &Value, node: Option<&str>) -> bool {
             .and_then(Value::as_str)
     };
     is("node").is_none_or(|n| n == mine) && is("not_node").is_none_or(|n| n != mine)
-}
-
-fn scope_visible(row: &Value, project: Option<&str>) -> bool {
-    match project {
-        Some(project) => row_in_scope(row, project),
-        None => binds_here(row_scope(row)) != Some(false),
-    }
 }
 
 /// Keep only the rows the session may see, returning the withheld count.
