@@ -1,12 +1,13 @@
 //! The graduate command: retag a capability task to regression, in place,
 //! line-level so comments survive (the deleted Python leg's
 //! report.py::graduate_task_file, ported). The goldens pin the bytes.
+//! `--demote` adds the `demoted` tag with the same line-level rewrite.
 
 use regex::Regex;
 
 pub fn run(args: &[String]) -> i32 {
     let Some(task_id) = args.first().map(String::as_str) else {
-        eprintln!("usage: fno-agents evals graduate <task-id> [--bank <dir>]");
+        eprintln!("usage: fno-agents evals graduate <task-id> [--demote] [--bank <dir>]");
         return 2;
     };
     let bank_dir = super::resolve_bank_dir(super::flag_lookup(args, "--bank"));
@@ -22,10 +23,20 @@ pub fn run(args: &[String]) -> i32 {
         eprintln!("Error: no bank task '{task_id}' in {bank}");
         return 1;
     };
-    match graduate_task_file(&task.source_path) {
+    let demote = args.iter().any(|a| a == "--demote");
+    let rewrite = if demote {
+        demote_task_file(&task.source_path)
+    } else {
+        graduate_task_file(&task.source_path)
+    };
+    match rewrite {
         Ok(()) => {
             let source = task.source_path.display().to_string();
-            println!("graduated '{task_id}' -> regression ({source})");
+            if demote {
+                println!("demoted '{task_id}' ({source})");
+            } else {
+                println!("graduated '{task_id}' -> regression ({source})");
+            }
             0
         }
         Err(text) => {
@@ -48,6 +59,36 @@ pub fn graduate_task_file(task_path: &std::path::Path) -> Result<(), String> {
         return Err(format!("{shown}: no `tier: capability` line to graduate (already regression, or non-standard formatting)"));
     }
     let new_text = re.replace_all(&text, "${1}regression${2}").into_owned();
+    std::fs::write(task_path, new_text).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Append `demoted` to the flow-style `tags: [...]` line in place. A task
+/// already demoted refuses by name and the file stays as it was.
+pub fn demote_task_file(task_path: &std::path::Path) -> Result<(), String> {
+    let text = std::fs::read_to_string(task_path).map_err(|e| e.to_string())?;
+    let shown = task_path.display().to_string();
+    let re = Regex::new(r"(?m)^([ \t]*tags:[ \t]*\[)([^\]\n]*)(\][ \t]*(?:#.*)?)$")
+        .expect("static regex");
+    let Some(caps) = re.captures(&text) else {
+        return Err(format!(
+            "{shown}: no flow-style `tags: [...]` line to demote"
+        ));
+    };
+    let tags: Vec<&str> = caps[2]
+        .split(',')
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .collect();
+    if tags.contains(&super::bank::DEMOTED_TAG) {
+        return Err(format!("{shown}: already demoted"));
+    }
+    let mut kept = tags.clone();
+    kept.push(super::bank::DEMOTED_TAG);
+    let line = format!("{}{}{}", &caps[1], kept.join(", "), &caps[3]);
+    let range = caps.get(0).expect("whole match").range();
+    let mut new_text = text.clone();
+    new_text.replace_range(range, &line);
     std::fs::write(task_path, new_text).map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -80,5 +121,21 @@ mod tests {
         std::fs::write(&p, "id: t\ntier: regression\n").unwrap();
         let err = graduate_task_file(&p).unwrap_err();
         assert!(err.contains("no `tier: capability` line"), "{err}");
+    }
+
+    #[test]
+    fn demote_appends_the_tag_once_and_refuses_a_second_time() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("t.yaml");
+        std::fs::write(&p, "id: t\ntags: [golden, gate]   # why\ngrade: []\n").unwrap();
+        demote_task_file(&p).unwrap();
+        let once = std::fs::read_to_string(&p).unwrap();
+        assert!(
+            once.contains("tags: [golden, gate, demoted]   # why"),
+            "{once}"
+        );
+        let err = demote_task_file(&p).unwrap_err();
+        assert!(err.contains("already demoted"), "{err}");
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), once);
     }
 }

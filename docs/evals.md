@@ -56,7 +56,8 @@ Success criteria must be **mechanical** (develop-tests discipline): a task with 
 | `fno doctor evals trend` | Score the recent window against the prior one, per task (exit 4 when a regression-tier task dropped). See Trend. |
 | `fno doctor evals macro [--since 30d] [--topic TYPE:LABEL] [--window 20] [--all] [--json] [--events PATH]` | Fold existing event journals into a recurring failure-pattern leaderboard, or drill into one pattern. |
 | `fno-agents evals gate-retry <sha>` | Queue a head again for the change gate. See The change gate. |
-| `fno doctor evals graduate <id>` | Retag a capability task's YAML to regression. |
+| `fno doctor evals graduate <id> [--demote]` | Retag a capability task's YAML to regression. `--demote` adds the `demoted` tag instead. See Do scores predict outcomes. |
+| `fno doctor evals report --predict [--json]` | Join each sealed golden's score per tree to the user corrections, reverts and failed reviews that follow it, and print one verdict per task. Read-only. See Do scores predict outcomes. |
 | `fno doctor evals grade --brief B --golden G` | Grade a research brief against a golden doc (three mechanical assertions); exit 0 green. |
 
 Each run executes the task in a disposable worktree via the one-shot spawn lane (`fno agents spawn --once`, never bare `claude -p`). The spawn cap and provider rotation stay in play. The run removes the worktree after grading. A bank task never runs in your working copy. History appends to `~/.fno/history/evals-history.jsonl` (override via `config.paths.evals_history`).
@@ -126,7 +127,7 @@ Each row records `obs.worker_sealed`. It reads true only with both the sealed tr
 
 The sealed baseline, measured 2026-11-01 on zai-flash at repeat 3: a fixtures-only tree passed 34 of 75 (`gate-seal-free-20261101`), and head passed 52 of 75 (`gate-seal-head-20261101`). Of the 23 head failures, 5 ran `gh` and saw it fail inside the fence, and 3 of those 5 are `golden-pass-pr-status`. The other 18 ran no failing `gh`.
 
-The sealed fill, run 2026-11-02 on zai-flash at repeat 1, covers the last main commit of each UTC day from 2026-10-05 to 2026-11-01. Its cohorts are named `seal-backdate-<date>-<sha8>`. It passed 503 of 700, and each tree passed 15 to 20 of 25. The first 14 days passed 249 of 350 and the last 14 passed 254 of 350, so the fill shows no trend. Each tree beat the fixtures-only rate of about 11 of 25. So the goldens separate a rule-free tree from a tree with rules, but they did not separate these 28 days. Four goldens fail on nearly every tree: `golden-read-state-before-merge` and `golden-pass-doctor-test` on 28 of 28, and `golden-flag-not-env-prefix` and `golden-pass-pr-status` on 27 of 28. Read a low score on them with that in mind. 19 trials first failed at spawn with `unrecognized_model`, ran no worker and stayed unscored, and a rerun graded each of them.
+The sealed fill, run 2026-11-02 on zai-flash at repeat 1, covers the last main commit of each UTC day from 2026-10-05 to 2026-11-01. Its cohorts are named `seal-backdate-<date>-<sha8>`. It passed 503 of 700, and each tree passed 15 to 20 of 25. The first 14 days passed 249 of 350 and the last 14 passed 254 of 350, so the fill shows no trend. Each tree beat the fixtures-only rate of about 11 of 25. So the goldens separate a rule-free tree from a tree with rules, but they did not separate these 28 days. One tree run three times moves as far as the days do (see Do scores predict outcomes). Four goldens fail on nearly every tree: `golden-read-state-before-merge` and `golden-pass-doctor-test` on 28 of 28 (both now demoted), and `golden-flag-not-env-prefix` and `golden-pass-pr-status` on 27 of 28. Read a low score on them with that in mind. 19 trials first failed at spawn with `unrecognized_model`, ran no worker and stayed unscored, and a rerun graded each of them.
 
 A failed trial keeps its claude transcript for 14 days, and `obs.kept_transcript` names the directory. A passed trial's transcript is deleted.
 
@@ -139,6 +140,49 @@ Every golden runs one one-shot worker, so no eval runs a lead or a worker pair. 
 Mine them with `fno doctor event corrections --by role --source user`, then read the rows on a `lead:` seat. On 2026-11-02 the store held 49 typed user corrections on lead sessions. Most reduce to nothing. 'no i pasted it already' states a fact about the moment, and no rule in the repo can answer it. If a row's answer is findable in the repo and the wrong act has a mechanical lure, keep it.
 
 `golden-lead-review-stays-inline` is the first. It comes from an L2 lead who misrouted a review, and AGENTS.md holds the rule. Lead goldens carry the `lead` tag and stay out of `gate` until a main run gives them a baseline.
+
+## Do scores predict outcomes
+
+`fno doctor evals report --predict [--json]` asks whether a golden's score says anything about the real work that follows it. It reads only sealed, graded rows, one series per lane and seat, and never mixes lanes. A row's seat is its `seat` field, else `lead` for a `lead`-tagged task, else `worker`. A seat with a bank task and no row prints `no_cohort`. The report writes nothing.
+
+The join rule: each outcome counts against the newest tree whose commit time is before the outcome. `bank_rev` names the tree and git gives its time, so an outcome needs no `head_sha` of its own. A tree off main, or in force for under 6 hours, feeds the noise block but joins no outcome. An outcome before the first tree counts under `before_first_tree`.
+
+The outcomes stay apart, each with its count and coverage. An unreadable feed reads `unmeasured`, never 0.
+
+| Outcome | Source | Clock | Rate per tree |
+|---|---|---|---|
+| `corrections` | `agent_corrected` events by the user, `correct` and `reject` only | the turn's time | per typed user turn, from the correction fold's cache |
+| `reverts` | `Revert` commits on main | the time of the commit it reverts, else its own | per day |
+| `review_fails` | each reviewer and head whose latest `review_attestation` is a fail | the verdict's time | per day |
+| `returned_complaints` | none | none | `unmeasured`: the intel scorecard reads one session per lead, so its zero is blind |
+
+No outcome carries a seat yet, so each reads `unattributed`, never `worker`.
+
+The noise block prints first. `same_tree_sd_points` pools every cohort run three or more times. `between_tree_sd_points` and `week_means` read main trees only. If the trees spread wider than one tree run again, `separable` reads true.
+
+Each task gets Spearman's rho against each outcome. A two-sided permutation test gives p (5000 shuffles, seed 20261102). One Benjamini-Hochberg step over every printed pair gives q, and a Fisher 95% interval rides along. A useful task has a negative rho: more passes, fewer bad outcomes. The verdicts, first match wins:
+
+| Verdict | Rule | Action |
+|---|---|---|
+| `constant_fail` | 0 passes over 14 or more trees | demote: it can never turn the gate red and only lowers the score |
+| `constant_pass` | every grade passes | keep: the gate's red rule needs an always-pass task |
+| `underpowered` | fewer than 5 grades in the minority class, fewer than 14 trees, or an interval too wide for the two rules below | keep; `n_to_settle` names the tree count that would settle it |
+| `predicts` | q under 0.10 and rho below 0 on any outcome | keep |
+| `inverted` | q under 0.10 and rho above 0, and none predicting | keep, and a person reads why |
+| `no_signal` | every readable interval inside -0.5 to 0.5 | demote |
+
+A failed test alone never reads `no_signal`. At 28 trees the interval half width is about 0.39, so only a rho near 0 can prove no signal.
+
+`fno doctor evals graduate <id> --demote` adds the `demoted` tag, and a person ships the PR. A demoted task leaves `--tag` selection and the change gate, and `--task <id>` still runs it. The tag edit voids the cohort pin, so the same PR re-pins `bank_rev`.
+
+The first read, 2026-11-02, over 28 main trees from 2026-10-05 to 2026-11-01:
+
+- Noise: same-tree sd 6.11 points. `gate-seal-head` read 68, 76, 64, and `gate-seal-free` read 44, 40, 52. Between-tree sd 5.27 over 29 main trees (the 28 days and the `gate-seal-head` tree), week means 68.7, 73.1, 74.3, 70.6. Not separable.
+- The mean score per tree against corrections: rho 0.05, q 0.93. Against reverts: rho -0.46, p 0.013, q 0.29. Against review fails: rho 0.14, q 0.93.
+- Outcomes joined: 78 of 81 corrections, 28 of 29 reverts and 660 of 678 review fails. 20 reverts named the commit they revert.
+- Verdicts over 25 goldens: 2 `constant_fail`, 7 `constant_pass`, 16 `underpowered`, 0 `predicts`, 0 `no_signal`. Both `constant_fail` tasks are demoted.
+
+The limit, plainly: 28 repeat-1 trees and 81 corrections cannot prove a task useful, and no task reads `predicts` after the BH step. The reverts read on the mean score is the strongest lead, and it does not survive the correction. More trees, more repeats per tree, or a seat on each outcome can settle it.
 
 ## The change gate
 
