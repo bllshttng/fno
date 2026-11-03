@@ -424,7 +424,7 @@ pub fn row_scope(row: &Value) -> &str {
 
 /// The session-scope test: `global` always governs; a
 /// `project:<slug>` row governs only the matching slug; a `machine:<id>` or
-/// `person:<name>` row governs only the session that resolves that identity.
+/// `user:<name>` (legacy `person:<name>`) row governs only the session that resolves that identity.
 pub fn row_in_scope(row: &Value, project: &str) -> bool {
     match row_scope(row) {
         "global" => true,
@@ -432,7 +432,7 @@ pub fn row_in_scope(row: &Value, project: &str) -> bool {
     }
 }
 
-/// The identity arms of the scope test: `Some` for a `machine:` or `person:`
+/// The identity arms of the scope test: `Some` for a `machine:` or `user:`
 /// scope, `None` for every other scope.
 pub fn binds_here(scope: &str) -> Option<bool> {
     binds(scope, crate::claims::machine_id, crate::identity::person)
@@ -450,13 +450,38 @@ fn binds(
         let mine = machine();
         return Some(mine.is_empty() || mine == id);
     }
-    scope.strip_prefix("person:").map(|name| name == person())
+    scope
+        .strip_prefix("user:")
+        .or_else(|| scope.strip_prefix("person:"))
+        .map(|name| name == person())
 }
 
 /// The one visibility test every scope filter shares. `None` fails open on
 /// the project: it hides no project row. A row bound to another machine or
-/// person still hides, because identity needs no project.
+/// user still hides, because identity needs no project.
 pub fn row_visible(row: &Value, project: Option<&str>) -> bool {
+    filters_match(row) && scope_visible(row, project)
+}
+
+/// The row's filters beside its scope; every filter must match. `node` binds
+/// the session whose `FNO_NODE` names that node, and `not_node` excludes it.
+/// A session with no node fails open, the posture every law reader keeps.
+pub fn filters_match(row: &Value) -> bool {
+    filters_match_for(row, std::env::var("FNO_NODE").ok().as_deref())
+}
+
+fn filters_match_for(row: &Value, node: Option<&str>) -> bool {
+    let Some(mine) = node.filter(|n| !n.is_empty()) else {
+        return true;
+    };
+    let is = |key: &str| {
+        row.pointer(&format!("/filters/{key}"))
+            .and_then(Value::as_str)
+    };
+    is("node").is_none_or(|n| n == mine) && is("not_node").is_none_or(|n| n != mine)
+}
+
+fn scope_visible(row: &Value, project: Option<&str>) -> bool {
     match project {
         Some(project) => row_in_scope(row, project),
         None => binds_here(row_scope(row)) != Some(false),
@@ -784,5 +809,42 @@ mod scope_tests {
             assert_eq!(retain_in_scope(&mut index, project), 1, "{project:?}");
             assert_eq!(index.rows.len(), 2, "{project:?}");
         }
+    }
+
+    #[test]
+    fn filters_must_all_match_and_a_nodeless_session_fails_open() {
+        let row = serde_json::json!({"filters": {"node": "x-aaaa", "not_node": "x-bbbb"}});
+        assert!(filters_match_for(&row, Some("x-aaaa")));
+        assert!(
+            !filters_match_for(&row, Some("x-cccc")),
+            "node filter excludes others"
+        );
+        let not_only = serde_json::json!({"filters": {"not_node": "x-bbbb"}});
+        assert!(filters_match_for(&not_only, Some("x-aaaa")));
+        assert!(
+            !filters_match_for(&not_only, Some("x-bbbb")),
+            "the not form excludes"
+        );
+        assert!(filters_match_for(&row, None), "no node fails open");
+        assert!(
+            filters_match_for(&serde_json::json!({}), Some("x-aaaa")),
+            "no filter applies everywhere"
+        );
+    }
+
+    #[test]
+    fn a_user_scope_binds_like_the_legacy_person_scope() {
+        assert_eq!(
+            binds("user:jason", || "m".into(), || "jason".into()),
+            Some(true)
+        );
+        assert_eq!(
+            binds("user:anouk", || "m".into(), || "jason".into()),
+            Some(false)
+        );
+        assert_eq!(
+            binds("person:anouk", || "m".into(), || "jason".into()),
+            Some(false)
+        );
     }
 }
