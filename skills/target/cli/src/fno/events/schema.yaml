@@ -1263,8 +1263,8 @@ event_types:
     consumers: [operator]
 
   - name: backlog_refused_trimmed
+    sources: [daemon]
     description: "The replica's backlog_refused dead-letter cap trimmed older batches. Nothing replayable is lost: a refused batch's statements are the take-back's already-reverted rows and the writes that were still valid re-queued, and no reader re-sends a refused batch. The cap keeps the newest batch. Emitted after the trim commits; stderr names the same ids."
-    sources: [backlog]
     data:
       required: [dropped_ids, dropped_batches, kept]
       properties:
