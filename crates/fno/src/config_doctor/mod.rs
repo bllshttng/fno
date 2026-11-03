@@ -431,7 +431,7 @@ pub(crate) fn graph_json(settings: &Settings) -> PathBuf {
 
 pub(crate) fn ledger_json(settings: &Settings) -> PathBuf {
     if env_nonempty("FNO_STATE_DIR").is_some() {
-        return state_dir(settings).join("ledger.json");
+        return crate::state_layout::place(&state_dir(settings), "ledger.json");
     }
     let home_root = resolve_configured("~/.fno/", None);
     if let Some(Value::String(raw)) = crate::config_cli::raw_get(&settings.raw, "paths.ledger_json")
@@ -445,9 +445,9 @@ pub(crate) fn ledger_json(settings: &Settings) -> PathBuf {
     let raw_state = settings.get("state_dir");
     let expanded = expanduser(&expandvars(raw_state.as_str().unwrap_or("~/.fno/")));
     if Path::new(&expanded).is_absolute() {
-        return state_dir(settings).join("ledger.json");
+        return crate::state_layout::place(&state_dir(settings), "ledger.json");
     }
-    home_root.join("ledger.json")
+    crate::state_layout::place(&home_root, "ledger.json")
 }
 
 /// `resolve_canonical_repo_root`: the `FNO_REPO_ROOT` pin, else the main

@@ -1,6 +1,6 @@
 state_dir=<FIXTURE>/state
 graph_json=<FIXTURE>/state/db/graph.json
-ledger_json=<FIXTURE>/state/ledger.json
+ledger_json=<FIXTURE>/state/db/history/ledger.json
 briefs_dir=<FIXTURE>/state/briefs
 fleet_dir=<FIXTURE>/state/fleet
 postmortems_dir=<FIXTURE>/state/db/postmortems

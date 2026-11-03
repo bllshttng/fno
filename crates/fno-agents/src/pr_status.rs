@@ -1169,6 +1169,7 @@ pub(crate) fn status_payload<P: GhProbe>(
 
     // The infra-kill receipt: only a cancelled-only take-away spends the
     // status-page read, and an unreachable page leaves the field out.
+    let mut ci_tier_keeper = Value::Null;
     let platform_incident = if !is_terminal {
         let rollup = pr_json
             .get("statusCheckRollup")
@@ -1176,6 +1177,12 @@ pub(crate) fn status_payload<P: GhProbe>(
             .cloned()
             .unwrap_or_default();
         if cancelled_only(&generic_ci_rollup(&rollup)) {
+            // The cancelled-only shape is the tier story: a live keeper
+            // reruns the taken-away runs, an absent one strands the head
+            // red forever, so the remedy flips from hold to rerun.
+            if !head_sha.is_empty() {
+                ci_tier_keeper = crate::ci_tier::stranded_fact(cwd, slug, &head_sha);
+            }
             seams::platform_incident()
         } else {
             Value::Null
@@ -1211,6 +1218,7 @@ pub(crate) fn status_payload<P: GhProbe>(
         failures,
         review_lane: lane,
         platform_incident,
+        ci_tier_keeper,
     };
     let (code, payload, stderr) = compose::compose_payload(&inputs);
     // A green verdict at a head is a GitHub fact that never changes once
