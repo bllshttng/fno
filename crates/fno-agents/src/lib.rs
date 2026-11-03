@@ -318,6 +318,7 @@ pub mod lead_checkin_lineup;
 pub mod lead_checkin_machine;
 pub mod lead_escalation;
 pub mod lead_eval;
+pub(crate) mod lead_eval_grade;
 pub mod lead_goal;
 pub mod lead_history;
 pub mod lead_hygiene;

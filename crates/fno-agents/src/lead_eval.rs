@@ -27,6 +27,16 @@ struct Window {
     activity_fold: ActivityFold,
     summary: Option<String>,
     token_base: Option<crate::session_activity::Tokens>,
+    digest: Vec<DigestBlock>,
+}
+
+/// One block of a window's digest: a typed user turn or a lead text block,
+/// whole, in transcript order. The readers read these, not the 200-char
+/// `typed_turns` excerpts.
+struct DigestBlock {
+    who: &'static str,
+    ts: String,
+    text: String,
 }
 
 impl Window {
@@ -43,6 +53,7 @@ impl Window {
             activity_fold: ActivityFold::default(),
             summary: None,
             token_base: None,
+            digest: Vec::new(),
         }
     }
 
@@ -107,6 +118,10 @@ struct Fold {
     subagents: Value,
     first_ts: Option<String>,
     last_ts: Option<String>,
+    /// Merges that landed under a freeze, read from the project journal.
+    freeze_merges: Value,
+    /// Claims the user caught, read from the transcript's correction windows.
+    user_corrections: Value,
 }
 
 fn timestamp_epoch(value: &str) -> Option<f64> {
@@ -125,11 +140,21 @@ fn span_hours(start: Option<&str>, end: Option<&str>) -> f64 {
     }
 }
 
+/// `text` without ANSI escape sequences (`ESC [ ... final-byte`).
+fn strip_ansi(text: &str) -> String {
+    static ANSI: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    ANSI.get_or_init(|| regex::Regex::new("\u{1b}\\[[0-9;?]*[ -/]*[@-~]").expect("ansi matcher"))
+        .replace_all(text, "")
+        .into_owned()
+}
+
 fn normalized_lead(text: &str) -> String {
+    let text = strip_ansi(text);
     let lead: String = text
         .lines()
-        .next()
+        .find(|line| !line.trim().is_empty())
         .unwrap_or("")
+        .trim_start()
         .chars()
         .take(120)
         .collect();
@@ -248,6 +273,8 @@ fn fold_transcript(
         subagents: json!({"files": 0, "tool_calls": 0}),
         first_ts: None,
         last_ts: None,
+        freeze_merges: json!({"unmeasured": "not read"}),
+        user_corrections: json!({"unmeasured": "not read"}),
     };
     let since_epoch = fold.since.as_deref().and_then(timestamp_epoch);
     let until_epoch = fold.until.as_deref().and_then(timestamp_epoch);
@@ -421,6 +448,11 @@ fn fold_transcript(
                     let class = provenance.label();
                     add(&mut fold.windows[window_idx].wakes, class);
                     if !machine {
+                        fold.windows[window_idx].digest.push(DigestBlock {
+                            who: "USER",
+                            ts: ts.to_string(),
+                            text: text.clone(),
+                        });
                         fold.typed_turns.push(TypedTurn {
                             ts: ts.to_string(),
                             class: class.to_string(),
@@ -429,6 +461,13 @@ fn fold_transcript(
                     }
                 }
             }
+        }
+        for text in lead_texts(&row, codex) {
+            fold.windows[window_idx].digest.push(DigestBlock {
+                who: "LEAD",
+                ts: ts.to_string(),
+                text,
+            });
         }
         if codex {
             let ptype = row
@@ -479,6 +518,37 @@ fn fold_transcript(
     Ok(fold)
 }
 
+/// The lead's own text blocks in one transcript row (tool calls and thinking
+/// excluded), under either harness. A sidechain row is a subagent's, not the
+/// lead's.
+fn lead_texts(row: &Value, codex: bool) -> Vec<String> {
+    let parts = if codex {
+        let payload = row.get("payload").unwrap_or(&Value::Null);
+        let is_lead = payload.get("type").and_then(Value::as_str) == Some("message")
+            && payload.get("role").and_then(Value::as_str) == Some("assistant");
+        if !is_lead {
+            return Vec::new();
+        }
+        payload.get("content")
+    } else {
+        let is_lead = row.get("type").and_then(Value::as_str) == Some("assistant")
+            && row.get("isSidechain").and_then(Value::as_bool) != Some(true);
+        if !is_lead {
+            return Vec::new();
+        }
+        row.pointer("/message/content")
+    };
+    parts
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|part| part.get("text").and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
 /// One tool-result text into the window's refusal buckets and the fold's
 /// repeated-refusal table; shared by the claude and codex row shapes. Every
 /// caller already gated this on `refusal_rate::is_refused`, so the text is
@@ -494,6 +564,9 @@ fn note_refusal_text(fold: &mut Fold, window_idx: usize, text: &str) {
         add(&mut fold.windows[window_idx].buckets, bucket);
     }
     let key = normalized_lead(text);
+    if key.trim().is_empty() {
+        return;
+    }
     let refusal = fold
         .repeated_refusals
         .entry(key.clone())
@@ -612,6 +685,141 @@ fn bound_counts<'a>(windows: impl IntoIterator<Item = &'a Window>) -> Value {
     json!({ "errors": errors, "tool_calls": tools })
 }
 
+/// Merges that landed inside a merge freeze during one reign. Reads the
+/// `decision_span` rows of the project journal: each `merge_freeze_set` opens
+/// an interval for its repo, closed by the next `merge_freeze_cleared` or
+/// `merge_freeze_set` for that repo (an unpaired set stays open to the reign
+/// end). A `merge_landed` (row ts) or `merged_outside_fno` (`merged_at`) in
+/// the interval counts unless its PR is on that freeze's `pin_prs`. An
+/// unreadable store answers `{"unmeasured": reason}`, never an empty list.
+fn freeze_merges(journal: &Path, start: &str, end: &str) -> Value {
+    let (Some(start_ms), Some(end_ms)) = (
+        timestamp_epoch(start).map(|s| (s * 1000.0) as i64),
+        timestamp_epoch(end).map(|s| (s * 1000.0) as i64),
+    ) else {
+        return json!({"unmeasured": "the reign has no readable span"});
+    };
+    if !crate::event_store::store_path(journal).exists() {
+        return json!({"unmeasured": "the project journal has no event store"});
+    }
+    // Freezes set before the reign can still cover its merges: read every
+    // freeze row, then only the merges inside the reign.
+    let rows = match crate::event_store::query_events(
+        journal,
+        &crate::event_store::EventQuery::of_types(&["decision_span"]),
+    ) {
+        Ok(rows) => rows,
+        Err(error) => return json!({"unmeasured": format!("event store unreadable: {error}")}),
+    };
+    struct Freeze {
+        repo: String,
+        subject: String,
+        from_ms: i64,
+        to_ms: i64,
+        pin_prs: Vec<u64>,
+    }
+    let mut freezes: Vec<Freeze> = Vec::new();
+    let mut merges: Vec<(i64, u64, String, String)> = Vec::new();
+    let mut events: Vec<(i64, Value)> = rows
+        .iter()
+        .filter_map(|r| serde_json::from_str::<Value>(&r.line).ok())
+        .filter_map(|row| {
+            let ts = row
+                .get("ts")
+                .and_then(Value::as_str)
+                .and_then(timestamp_epoch)?;
+            Some(((ts * 1000.0) as i64, row))
+        })
+        .collect();
+    events.sort_by_key(|(ts, _)| *ts);
+    for (ts_ms, row) in &events {
+        let data = &row["data"];
+        let repo = data["repo"].as_str().unwrap_or("").to_string();
+        match data["span_kind"].as_str() {
+            Some("merge_freeze_set") => {
+                // A new set for the repo closes the prior interval.
+                for open in freezes
+                    .iter_mut()
+                    .filter(|f| f.repo == repo && f.to_ms == i64::MAX)
+                {
+                    open.to_ms = *ts_ms;
+                }
+                freezes.push(Freeze {
+                    repo,
+                    subject: data["subject"].as_str().unwrap_or("").to_string(),
+                    from_ms: *ts_ms,
+                    to_ms: i64::MAX,
+                    pin_prs: data["pin_prs"]
+                        .as_array()
+                        .map(|l| l.iter().filter_map(Value::as_u64).collect())
+                        .unwrap_or_default(),
+                });
+            }
+            Some("merge_freeze_cleared") => {
+                for open in freezes
+                    .iter_mut()
+                    .filter(|f| f.repo == repo && f.to_ms == i64::MAX)
+                {
+                    open.to_ms = *ts_ms;
+                }
+            }
+            Some(kind @ ("merge_landed" | "merged_outside_fno")) => {
+                let at_ms = if kind == "merged_outside_fno" {
+                    data["merged_at"]
+                        .as_str()
+                        .and_then(timestamp_epoch)
+                        .map(|s| (s * 1000.0) as i64)
+                        .unwrap_or(*ts_ms)
+                } else {
+                    *ts_ms
+                };
+                if let Some(pr) = data["pr"].as_u64() {
+                    merges.push((at_ms, pr, repo, kind.to_string()));
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    for (at_ms, pr, repo, kind) in merges {
+        if at_ms < start_ms || at_ms > end_ms {
+            continue;
+        }
+        let under = freezes.iter().find(|f| {
+            f.repo == repo && at_ms >= f.from_ms && at_ms < f.to_ms && !f.pin_prs.contains(&pr)
+        });
+        if let Some(freeze) = under {
+            out.push(json!({
+                "pr": pr,
+                "repo": repo,
+                "ts": chrono::DateTime::from_timestamp_millis(at_ms).map(|d| d.to_rfc3339()),
+                "span_kind": kind,
+                "freeze_subject": freeze.subject,
+            }));
+        }
+    }
+    Value::Array(out)
+}
+
+/// The claims the user caught over a claude transcript: the correction
+/// meter's per-window counts, summed. A codex rollout carries no correction
+/// windows, so it answers `unmeasured`. `aligned` says the meter's windows
+/// match the fold's one for one.
+fn user_corrections(fold: &Fold) -> Value {
+    if fold.harness != "claude" {
+        return json!({"unmeasured": "codex rollouts carry no correction windows"});
+    }
+    match std::fs::read_to_string(&fold.transcript) {
+        Ok(raw) => {
+            let mut value = crate::correction_meter::correction_windows(&raw);
+            value["aligned"] =
+                json!(value["windows"].as_array().map(Vec::len) == Some(fold.windows.len()));
+            value
+        }
+        Err(error) => json!({"unmeasured": format!("transcript unreadable: {error}")}),
+    }
+}
+
 fn fold_json(fold: &Fold) -> Value {
     let hygiene = crate::lead_hygiene::run_checks(&fold.entries, None)
         .into_iter()
@@ -634,6 +842,7 @@ fn fold_json(fold: &Fold) -> Value {
     let repeated = fold
         .repeated_refusals
         .values()
+        .filter(|r| r.count >= 2)
         .map(|r| json!({"lead": r.lead, "count": r.count, "windows": r.windows}))
         .collect::<Vec<_>>();
     let typed = fold
@@ -716,6 +925,8 @@ fn fold_json(fold: &Fold) -> Value {
             "readers_failed": last.pointer("/data/readers_failed"),
         },
         "merges": fold.merges,
+        "freeze_merges": fold.freeze_merges,
+        "user_corrections": fold.user_corrections,
         "spawns": fold.spawns,
         "team_moves": fold.team_moves,
         "verbs": fold.commands,
@@ -739,6 +950,8 @@ struct Args {
     until: Option<String>,
     json: bool,
     write: Option<Option<PathBuf>>,
+    /// Grade parts 3 to 5 with the LLM readers after the write.
+    read: bool,
 }
 
 fn parse_args(args: &[String]) -> Result<Args, String> {
@@ -763,6 +976,7 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
             }
             flag if crate::json_output::is_flag(flag) => parsed.json = true,
             "--windows" => {}
+            "--read" => parsed.read = true,
             "--write" => {
                 let path = args
                     .get(i + 1)
@@ -783,13 +997,16 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
     if parsed.write.is_some() && parsed.session.is_none() {
         return Err("--write requires --session".to_string());
     }
+    if parsed.read && parsed.write.is_none() {
+        return Err("--read requires --write".to_string());
+    }
     Ok(parsed)
 }
 
 pub fn run(args: &[String]) -> i32 {
     if args.iter().any(|arg| arg == "--help" || arg == "-h") {
         println!(
-            "fno-agents intel --windows --session <id>|--team <scope> [--since DATE] [--until DATE] [--json|-J] [--write [dir]]"
+            "fno-agents intel --windows --session <id>|--team <scope> [--since DATE] [--until DATE] [--json|-J] [--write [dir] [--read]]"
         );
         return 0;
     }
@@ -894,9 +1111,18 @@ pub fn run(args: &[String]) -> i32 {
             }
         };
         fold.checkins = checkins;
+        fold.freeze_merges = match (fold.first_ts.as_deref(), fold.last_ts.as_deref()) {
+            (Some(start), Some(end)) => freeze_merges(
+                &crate::law_match::project_events_journal_in(&cwd),
+                start,
+                end,
+            ),
+            _ => json!({"unmeasured": "the transcript has no timestamps"}),
+        };
+        fold.user_corrections = user_corrections(&fold);
         let value = fold_json(&fold);
         if let Some(dir) = &write_dir {
-            if let Err(error) = write_eval(&fold, &value, &dir) {
+            if let Err(error) = write_eval(&fold, &value, dir, parsed.read) {
                 if let Err(index_error) =
                     write_fold_failed_index(&session, &transcript, dir, &error)
                 {
@@ -904,6 +1130,13 @@ pub fn run(args: &[String]) -> i32 {
                 }
                 eprintln!("fno-agents intel --windows: {error}");
                 return 1;
+            }
+            // The mechanical eval is written, so a failed grade never moves
+            // the exit code; grade() stamps the index and stderr names it.
+            if parsed.read {
+                if let Err(error) = crate::lead_eval_grade::grade(dir, &value, &cwd) {
+                    eprintln!("fno-agents intel --windows: grade failed: {error}");
+                }
             }
         }
         reports.push(value);
@@ -1083,9 +1316,12 @@ fn prior_fold(dir: &Path, value: &Value) -> Option<(String, Value)> {
     best.map(|(name, _, prior)| (name, prior))
 }
 
-fn lead_measures(value: &Value) -> [(&'static str, u64); 6] {
-    let len = |key: &str| value[key].as_array().map_or(0, Vec::len) as u64;
-    let num = |ptr: &str| value.pointer(ptr).and_then(Value::as_u64).unwrap_or(0);
+/// The measures the "Against the last lead" table compares. `None` reads
+/// `n/a`: an eval folded before a measure existed, or one that could not
+/// measure it, is no zero.
+fn lead_measures(value: &Value) -> [(&'static str, Option<u64>); 8] {
+    let len = |key: &str| Some(value[key].as_array().map_or(0, Vec::len) as u64);
+    let num = |ptr: &str| Some(value.pointer(ptr).and_then(Value::as_u64).unwrap_or(0));
     [
         ("Tool calls", num("/totals/tool_calls")),
         ("Errors", num("/totals/errors")),
@@ -1093,6 +1329,18 @@ fn lead_measures(value: &Value) -> [(&'static str, u64); 6] {
         ("Repeated refusals", len("repeated_refusals")),
         ("Asks repeated more than twice", len("repeated_asks")),
         ("Merges", len("merges")),
+        (
+            "Merges under a freeze",
+            value["freeze_merges"]
+                .as_array()
+                .map(|merges| merges.len() as u64),
+        ),
+        (
+            "Claims the user corrected",
+            value
+                .pointer("/user_corrections/operator_caught")
+                .and_then(Value::as_u64),
+        ),
     ]
 }
 
@@ -1104,12 +1352,33 @@ fn against_prior(dir: &Path, value: &Value) -> String {
         "\n## Against the last lead\n\nLast lead: [{name}](../{name}.md).\n\n| Measure | Last lead | This lead |\n|---|---:|---:|\n"
     );
     for ((label, then), (_, now)) in lead_measures(&prior).iter().zip(lead_measures(value)) {
-        out.push_str(&format!("| {label} | {then} | {now} |\n"));
+        let show = |n: &Option<u64>| n.map_or("n/a".to_string(), |n| n.to_string());
+        out.push_str(&format!("| {label} | {} | {} |\n", show(then), show(&now)));
     }
     out
 }
 
-fn write_eval(fold: &Fold, value: &Value, dir: &Path) -> Result<(), String> {
+/// `data/out/window-NN.md` for each window that has a digest, in the shape
+/// the hand-graded Vellum eval used: `# Window N`, then `### USER <ts>` and
+/// `### LEAD <ts>` blocks in order.
+fn write_digests(fold: &Fold, dir: &Path) -> Result<(), String> {
+    for window in fold.windows.iter().filter(|w| !w.digest.is_empty()) {
+        let mut md = format!("# Window {}\n\n", window.n);
+        for block in &window.digest {
+            md.push_str(&format!(
+                "### {} {}\n\n{}\n\n",
+                block.who, block.ts, block.text
+            ));
+        }
+        write_if_missing(
+            &dir.join(format!("data/out/window-{:02}.md", window.n)),
+            &md,
+        )?;
+    }
+    Ok(())
+}
+
+fn write_eval(fold: &Fold, value: &Value, dir: &Path, digests: bool) -> Result<(), String> {
     std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let base = dir
         .file_name()
@@ -1203,6 +1472,8 @@ fn write_eval(fold: &Fold, value: &Value, dir: &Path) -> Result<(), String> {
         ("Top fno commands", &value["verbs"]),
         ("Wake economy by class", &value["totals"]["wakes_by_class"]),
         ("Merges", &value["merges"]),
+        ("Merges under a freeze", &value["freeze_merges"]),
+        ("Claims the user corrected", &value["user_corrections"]),
         ("Spawns and subagents", &value["spawns"]),
         ("Check-in journal", &value["lead_checkin"]),
         ("Hygiene", &value["hygiene"]),
@@ -1252,6 +1523,9 @@ fn write_eval(fold: &Fold, value: &Value, dir: &Path) -> Result<(), String> {
         ),
     )?;
     write_if_missing(&dir.join("data/fold.json"), &format!("{}\n", value))?;
+    if digests {
+        write_digests(fold, dir)?;
+    }
     for window in &fold.windows {
         if let Some(summary) = &window.summary {
             write_if_missing(
@@ -1993,5 +2267,46 @@ mod tests {
             table.contains("| Asks repeated more than twice | 1 | 0 |"),
             "{table}"
         );
+    }
+
+    #[test]
+    fn freeze_merges_lists_a_merge_off_the_pin_and_names_an_unreadable_store() {
+        let journal = crate::merge_provenance::TestJournal::opt_in();
+        let emit = |kind: &str, attrs: Value| {
+            let trace = crate::decision_trace::Trace {
+                trace_id: "none".into(),
+                span_id: crate::decision_trace::new_span_id(),
+                parent_span_id: None,
+                actor_session: None,
+                actor_kind: "user",
+                comms: "chat",
+                recipient_session: None,
+                recipient_kind: None,
+            };
+            let attrs = attrs.as_object().cloned().unwrap();
+            crate::decision_trace::emit_span_to(&journal.journal(), kind, &trace, &attrs).unwrap();
+        };
+        emit(
+            "merge_freeze_set",
+            json!({"repo": "o/r", "subject": "freeze", "pin_prs": [7]}),
+        );
+        emit("merge_landed", json!({"pr": 7, "repo": "o/r"}));
+        emit("merge_landed", json!({"pr": 8, "repo": "o/r"}));
+        emit("merge_landed", json!({"pr": 9, "repo": "other/repo"}));
+        let found = freeze_merges(
+            &journal.journal(),
+            "2020-01-01T00:00:00Z",
+            "2999-01-01T00:00:00Z",
+        );
+        let prs: Vec<u64> = found
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|m| m["pr"].as_u64().unwrap())
+            .collect();
+        assert_eq!(prs, vec![8], "{found}");
+        let missing = journal.root().join("no-such-dir/.fno/events.jsonl");
+        let unreadable = freeze_merges(&missing, "2020-01-01T00:00:00Z", "2999-01-01T00:00:00Z");
+        assert!(unreadable["unmeasured"].is_string(), "{unreadable}");
     }
 }

@@ -155,6 +155,19 @@ pub(crate) fn correction_totals(raw: &str) -> Value {
     })
 }
 
+/// Every window's counts plus the transcript-wide sums, for the lead eval
+/// fold: the whole reign, not the open window.
+pub(crate) fn correction_windows(raw: &str) -> Value {
+    let windows = windows_of(raw);
+    let sum = |f: fn(&Window) -> u64| windows.iter().map(f).sum::<u64>();
+    json!({
+        "operator_caught": sum(|w| w.operator_caught),
+        "peer_caught": sum(|w| w.peer_caught),
+        "self_caught": sum(|w| w.self_caught),
+        "windows": windows.iter().enumerate().map(|(i, w)| w.row(i + 1)).collect::<Vec<_>>(),
+    })
+}
+
 fn windows_of(raw: &str) -> Vec<Window> {
     let mut windows: Vec<Window> = Vec::new();
     let mut seen_rows: BTreeSet<String> = BTreeSet::new();
