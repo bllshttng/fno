@@ -458,17 +458,13 @@ fn mail_send_captured(argv: &[String]) -> (u32, String) {
 /// journals into the machine index. A missing project journal degrades to
 /// zero rows; the one fatal read is the machine index itself.
 fn run_reindex(args: &[String]) -> i32 {
-    for a in args {
-        match a.as_str() {
-            "-h" | "--help" => {
-                println!("usage: fno inbox outstanding reindex");
-                return 0;
-            }
-            other => {
-                eprintln!("outstanding: unknown argument {other:?}");
-                return 2;
-            }
-        }
+    if let Some(other) = args.iter().find(|a| !matches!(a.as_str(), "-h" | "--help")) {
+        eprintln!("outstanding: unknown argument {other:?}");
+        return 2;
+    }
+    if args.iter().any(|a| a == "-h" || a == "--help") {
+        println!("usage: fno inbox outstanding reindex");
+        return 0;
     }
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let src = crate::outstanding::sources(&cwd);

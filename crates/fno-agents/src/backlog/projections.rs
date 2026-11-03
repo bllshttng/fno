@@ -539,7 +539,7 @@ fn state_file_collisions(path: &Path) -> Vec<PathBuf> {
         graph.clone(),
         graph_md_path(),
         dir.join("graph-archive.json"),
-        state_dir().join("ledger.json"),
+        crate::state_layout::place(&state_dir(), "ledger.json"),
         dir.join(format!("{name}.bak")),
         dir.join(format!("{name}.lock")),
         dir.join("backups").join(format!("{name}.bak")),

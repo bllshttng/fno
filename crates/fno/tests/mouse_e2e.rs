@@ -57,7 +57,7 @@ fn fill_history(c: &mut FakeClient, pane: u64) {
     c.wait_prompt(pane);
     // 60 lines: comfortably past the 24-row viewport so a wheel-up has real
     // history to scroll into, without the load of a 200-iteration sh loop
-    // (which under a saturated box crawls and blows the timeout).
+    // (which under a saturated machine crawls and blows the timeout).
     c.input(b"i=0; while [ $i -lt 60 ]; do echo hist-$i; i=$((i+1)); done; echo filled#\r");
     // Wait on the loop's OWN output, not "filled#" alone: the echoed command
     // line already carries "filled#" the instant it is typed, so keying on it

@@ -3130,7 +3130,7 @@ mod tests {
         let _guard = crate::claims::test_env_lock()
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        // A pid this test did not spawn (pid 1 on any unix box) will never
+        // A pid this test did not spawn (pid 1 on any unix machine) will never
         // match a birth value this process invents, so the token is refused
         // rather than trusted.
         std::env::set_var("FNO_TEST_OWNER_PID", "1");

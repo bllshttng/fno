@@ -1471,26 +1471,28 @@ fn install_fake_claude_cloud(bin_dir: &std::path::Path) {
 }
 
 /// `[sandbox] provider = "devcontainer"`: a headless spawn asks the daemon for
-/// the plan once, brings the box up with the socket-dir mount, probes the
+/// the plan once, brings the sandbox up with the socket-dir mount, probes the
 /// daemon from inside, and runs the lane under `devcontainer exec` with the
 /// lane env in a file, never the argv (AC3). A failing probe refuses 84
 /// naming the recreate (AC6); a thread spawn refuses 2 naming `--as
 /// headless` (AC4); `none` never calls devcontainer (AC5).
 #[test]
-fn client_spawn_devcontainer_boxes_the_headless_lane() {
+fn client_spawn_devcontainer_sandboxes_the_headless_lane() {
     use std::io::{Read, Write};
     use std::os::unix::fs::PermissionsExt;
     let bin = find_client_bin();
     if !bin.exists() {
-        eprintln!("skipping client_spawn_devcontainer_boxes_the_headless_lane: binary not found");
+        eprintln!(
+            "skipping client_spawn_devcontainer_sandboxes_the_headless_lane: binary not found"
+        );
         return;
     }
-    let fake_path = tmpdir("box-bin");
+    let fake_path = tmpdir("sandbox-bin");
     std::fs::write(
         fake_path.join("devcontainer"),
         "#!/bin/sh\nprintf '%s\\036' \"$*\" >> \"$DEVCONTAINER_LOG\"\n\
          case \"$*\" in *'fno-agents status'*) exit \"${PROBE_EXIT:-0}\" ;; esac\n\
-         echo boxed\n",
+         echo sandboxed\n",
     )
     .unwrap();
     std::fs::set_permissions(
@@ -1499,7 +1501,7 @@ fn client_spawn_devcontainer_boxes_the_headless_lane() {
     )
     .unwrap();
     let run = |provider: &str, extra: &[&str], probe_exit: &str| {
-        let root = tmpdir("box-home");
+        let root = tmpdir("sandbox-home");
         let home = AgentsHome::at(root.clone());
         std::fs::create_dir_all(home.sandbox_sock_dir()).unwrap();
         let listener = std::os::unix::net::UnixListener::bind(home.supervisor_sock()).unwrap();
@@ -1533,15 +1535,22 @@ fn client_spawn_devcontainer_boxes_the_headless_lane() {
                 let _ = conn.write_all(&out);
             }
         });
-        let config = tmpdir("box-config").join("config.toml");
+        let config = tmpdir("sandbox-config").join("config.toml");
         std::fs::write(&config, format!("[sandbox]\nprovider = \"{provider}\"\n")).unwrap();
-        let log = tmpdir("box-log").join("devcontainer.log");
+        let log = tmpdir("sandbox-log").join("devcontainer.log");
         let out = std::process::Command::new(&bin)
             .envs(fno_agents::test_run::self_owner_env())
-            .args(["spawn", "--name", "boxed", "hello", "--harness", "claude"])
+            .args([
+                "spawn",
+                "--name",
+                "sandboxed",
+                "hello",
+                "--harness",
+                "claude",
+            ])
             .args(extra)
             .arg("--cwd")
-            .arg(tmpdir("box-cwd"))
+            .arg(tmpdir("sandbox-cwd"))
             .env("FNO_SPAWN_GATE", "0")
             .env("FNO_E2E", "1")
             .env("FNO_AGENTS_HOME", &root)
@@ -1617,7 +1626,7 @@ fn client_spawn_devcontainer_boxes_the_headless_lane() {
     );
 
     let (_, calls, methods, _) = run("none", &["--once"], "0");
-    assert!(calls.is_empty(), "none never boxes: {calls}");
+    assert!(calls.is_empty(), "none never sandboxes: {calls}");
     assert!(
         !methods.iter().any(|m| m == "agent.sandbox-plan"),
         "{methods:?}"

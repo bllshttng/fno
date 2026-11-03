@@ -55,7 +55,7 @@ The rest of this page is about the other half.
 
 **Layer 1 is fno's own data.** One key moves all of it. A project-local `<repo>/.fno/config.toml` setting `state_dir` deep-merges over the per-user global, winning that key while inheriting every other default. Every `paths.*` derives from `state_dir` (`cli/src/fno/paths.py`). The graph, the ledger, the briefs, the agent registry (`agents_registry_path`, whose fallback is `state_dir() / "agents" / "registry.json"`) and the mail bus all move together.
 
-**Layer 2 is the harness substrate.** One claude daemon namespace for the whole box, plus codex app-servers owned by ChatGPT.app and a VS Code extension. fno never spawned those processes and cannot stop them. There is nothing for `state_dir` to move.
+**Layer 2 is the harness substrate.** One claude daemon namespace for the whole machine, plus codex app-servers owned by ChatGPT.app and a VS Code extension. fno never spawned those processes and cannot stop them. There is nothing for `state_dir` to move.
 
 So an isolated environment is isolated about data and not about identity. A session started inside one shares the machine's daemon namespace with every other session on that machine. An ambient identity marker crosses the boundary untouched.
 
@@ -117,7 +117,7 @@ ls /tmp/cc-daemon-$(id -u)/
 python3 -c 'import hashlib,os,sys; print(hashlib.sha256(os.path.abspath(sys.argv[1]).encode()).hexdigest()[:8])' ~/.claude
 ```
 
-The listed directory is that digest. Point `CLAUDE_CONFIG_DIR` at a second directory and start a background session (`claude --bg '<task>'`). A second directory appears, named for that second path's digest. That is the measurement: on the box this ran on, one entry before and two after, each matching its own digest.
+The listed directory is that digest. Point `CLAUDE_CONFIG_DIR` at a second directory and start a background session (`claude --bg '<task>'`). A second directory appears, named for that second path's digest. That is the measurement: on the machine this ran on, one entry before and two after, each matching its own digest.
 
 So layer-2 isolation is partially achievable for claude. A distinct `CLAUDE_CONFIG_DIR` gets a distinct daemon namespace, distinct `bg-spare` processes, and a distinct control socket.
 

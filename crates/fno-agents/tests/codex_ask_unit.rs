@@ -120,7 +120,7 @@ fn sandbox_flag_resume_yolo_is_bypass() {
 /// the dir is missing: with a real cwd the grant shells out to `fno do plan
 /// path` and returns whatever that install configured. A fixed `/tmp/proj` made
 /// the verdict depend on whether some earlier run had left that path behind on
-/// the machine, and on this box it had.
+/// the machine, and on this machine it had.
 fn absent_project_dir() -> PathBuf {
     let dir = std::env::temp_dir().join(format!("fno-codex-argv-absent-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);

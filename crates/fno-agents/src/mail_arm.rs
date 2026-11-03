@@ -426,12 +426,21 @@ pub(crate) fn style_door_refuses(payload: &str) -> bool {
 /// side does.
 pub(crate) fn style_door_report(payload: &str) -> Option<String> {
     let output = ask_style_door(&style_door_report_argv(mail_word_cap()), payload)?;
-    (output.status.code() == Some(1)).then(|| String::from_utf8_lossy(&output.stdout).into_owned())
+    (output.status.code() == Some(1)).then(|| {
+        // The door prints its human report on stderr; stdout is the
+        // fallback for a door that writes it there.
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        if stderr.trim().is_empty() {
+            String::from_utf8_lossy(&output.stdout).into_owned()
+        } else {
+            stderr
+        }
+    })
 }
 
 /// The report form of the door consult: the same argv without --json, so
-/// exit 1 with the human report is the refusal and stdout rides to the
-/// sender.
+/// exit 1 with the human report (on stderr) is the refusal and rides to
+/// the sender.
 pub(crate) fn style_door_report_argv(word_cap: Option<i64>) -> Vec<String> {
     style_door_argv(word_cap)
         .into_iter()
@@ -448,7 +457,7 @@ fn ask_style_door(argv: &[String], payload: &str) -> Option<std::process::Output
     let mut child = cmd
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
         .spawn()
         .ok()?;
     let payload = payload.to_string();

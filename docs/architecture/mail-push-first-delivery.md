@@ -16,7 +16,8 @@ Before the push boundary existed, `queued (durable)` was the last thing a sender
 ## `fno-agents mail-notify-self` (native hook-output command)
 
 The first implementation shelled from the hook to the Python `fno agents mail notify-self`.
-The interpreter start alone outran the hook budget on a loaded box: 46 of 46 recorded runs were cancelled at the budget and nothing ever delivered.
+
+The interpreter start alone outran the hook budget on a loaded machine: 46 of 46 recorded runs were cancelled at the budget and nothing ever delivered.
 The command is native Rust now (`crates/fno-agents/src/mail_notify_self.rs`), dispatched from `client.rs` before the tokio runtime builds, so a fire answers in microseconds; the shell layer is a cheap gate around it.
 The Python leg is deleted with the boundary it served: `fno agents mail notify-self` is no longer a command, so the Rust command is the only renderer for this payload and the two can no longer drift.
 

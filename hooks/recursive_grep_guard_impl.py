@@ -6,7 +6,7 @@ The fault is specific to this repo layout. Harness-native worktrees live
 inside the checkout, and each carries its own `crates/*/target` build cache.
 `grep -r`/`-R` ignore `.gitignore`, so a search scoped to `crates/` - or with
 no path at all - descends into every nested worktree's object files. On
-2026-09-09 nine concurrent `grep -r` processes ran on one 12-core box, three at
+2026-09-09 nine concurrent `grep -r` processes ran on one 12-core machine, three at
 45-51 percent CPU each, and the worst (`grep -rn ownership_defect cli/src/fno/
 crates/ scripts/ tests/`) ran for 1 hour 56 minutes without returning. The
 AGENTS.md advice to prefer `rg` was already in context for every one of those

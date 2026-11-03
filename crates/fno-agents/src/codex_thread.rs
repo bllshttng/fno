@@ -911,7 +911,7 @@ pub struct CodexThread {
     effort: Option<String>,
     /// The fno state roots this thread is granted, spent on every `turn/start`
     ///. Per THREAD, never per daemon: the daemon is shared and owns
-    /// every thread on the box, so a grant applied at daemon scope would widen
+    /// every thread on the machine, so a grant applied at daemon scope would widen
     /// every other worker's sandbox at once. Empty for a yolo thread, which is
     /// already `danger-full-access` and would be NARROWED by a workspaceWrite
     /// policy, and empty when the seam published nothing.

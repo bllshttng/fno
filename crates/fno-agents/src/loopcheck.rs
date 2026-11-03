@@ -73,6 +73,16 @@ pub enum TerminationReason {
     /// and proceed" behavior that let ~10 PRs (#890-#912) merge unreviewed
     ///.
     DoneAwaitingReview,
+    /// The question gate's second fire on a question that is still genuinely
+    /// open (ask row present, no close row on any substrate the gate folds):
+    /// the work sits complete but the only missing input is the user's
+    /// ruling, so the loop stops clean instead of classifying the wait as a
+    /// stuck abort. Shaped like `DoneAwaitingMerge`: NOT a ship reason, never
+    /// arms auto-merge, never closes the node - the user answers, a later
+    /// run ships. Kept apart from `HeldOnQuestion`, which stays the terminal
+    /// for the held-refusal and gh-auth parks (dispatch cap, unauthenticated
+    /// gh): those are refusals, not ruling waits.
+    DoneAwaitingRuling,
     /// A plan-only thread reached the plan boundary cleanly (manifest `planned`
     /// flag + a promise). It produced planning output, not a delivery, so it is
     /// terminal but deliberately NOT a ship reason (out of finalize.SHIP_REASONS
@@ -84,15 +94,13 @@ pub enum TerminationReason {
     NoWork,
     Budget,
     NoProgress,
-    /// A node held on an open operator question: the first fire blocked once
-    /// naming the question and the user-side clear; this fire is the second on
-    /// the same still-open question, so the loop terminates instead of
-    /// re-asking. The journal (not the fingerprint) carries the held state.
-    /// Terminal, NOT a ship reason: the operator answers, a later run ships.
-    /// The same shape covers the dispatch hold: a run whose every dispatch is
-    /// refused on a cap (lead share, provider) while the node reads
-    /// undispatched blocks once naming the hold, then terminates here instead
-    /// of re-waking into the same refusal until budget.
+    /// A run held by a refusal, not a ruling wait: the dispatch hold (every
+    /// dispatch refused on a cap - lead share, provider - while the node
+    /// reads undispatched blocks once naming the hold, then terminates here
+    /// instead of re-waking into the same refusal until budget) and the
+    /// gh-unauthenticated park. The question gate's ruling wait terminated
+    /// `DoneAwaitingRuling` instead, so a postmortem can tell a wait for the
+    /// user from a hold the fleet refused.
     HeldOnQuestion,
     Interrupted,
     Aborted,

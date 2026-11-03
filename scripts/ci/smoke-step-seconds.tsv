@@ -14,7 +14,7 @@
 211	scripts/tests/check-no-internal-refs-selftest.sh
 203	tests/test-validate-plan.sh
 154	tests/mux-workspace-standalone.sh
-139	Menu-cap guard (cap 13 at three levels, hidden counts)
+139	Menu-cap guard (cap 13 at a root, 12 below, hidden counts)
 101	Target self-handoff harness
 85	tests/test-context-nudge.sh
 75	scripts/tests/check-plan-rung-authority-selftest.sh

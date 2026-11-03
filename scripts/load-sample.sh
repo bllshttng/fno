@@ -5,7 +5,7 @@
 # and the process table ONCE for counts and group names. It never sums
 # `ps %CPU`: that figure is a decaying per-process lifetime average, blind to
 # short-lived churn, and it read 610% while `top` read 0% idle in the
-# 2026-10-03 sample - an undercount of about 600 points on a saturated box.
+# 2026-10-03 sample - an undercount of about 600 points on a saturated machine.
 #
 # Output: one line, stable key=value form:
 #   load_sample cores=12 load1=12.3 load5=11.2 load15=9.1 busy_pct=97.0 \

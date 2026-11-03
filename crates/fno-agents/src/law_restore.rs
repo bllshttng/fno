@@ -8,15 +8,15 @@ use crate::decision_index;
 use crate::law_match::{
     all_decision_rows, append_decision, autonomy_ask_gate, chat_may_retire, door_refuse,
     is_decision_id, is_retraction_row, mint_decision_id, now_iso, resolve_caller, row_id,
-    row_subject, scope_filtered_rows, Caller,
+    row_subject, scope_filtered_rows, wide_scope_refusal, Caller,
 };
 
 const RESTORE_USAGE: &str =
     "usage: fno inbox law restore <decision-id> [--quote <the user's words>]";
 
 /// The fields a restore copies from the retracted row, verbatim.
-const COPIED: &str =
-    "decision subject scope paths graduation graduation_ref rationale reads options";
+const COPIED: &str = "decision subject scope paths filters strength when graduation \
+                      graduation_ref rationale reads options";
 
 pub fn run_restore(argv: &[String]) -> i32 {
     let (token, quote) = match argv {
@@ -52,13 +52,25 @@ pub fn run_restore(argv: &[String]) -> i32 {
         );
     }
     let rows = scope_filtered_rows(rows);
-    let data = match restored_data(&token, &rows, &caller) {
+    let mut data = match restored_data(&token, &rows, &caller) {
         Ok(d) => d,
         Err(message) => return door_refuse(&message),
     };
+    // The record door's user gate: a restored wide law signs like a new one.
+    if let Some(refusal) = data
+        .get("scope")
+        .and_then(Value::as_str)
+        .and_then(wide_scope_refusal)
+    {
+        return door_refuse(&refusal);
+    }
     let new_id = data["decision_id"].as_str().unwrap_or("").to_string();
-    let envelope =
-        json!({"ts": now_iso(), "type": "operator_decision", "source": "target", "data": data});
+    // One ts for the signature and the envelope.
+    let ts = now_iso();
+    if let Some(map) = data.as_object_mut() {
+        crate::identity::sign_law_row(map, "operator_decision", &ts);
+    }
+    let envelope = json!({"ts": ts, "type": "operator_decision", "source": "target", "data": data});
     if let Err(code) = append_decision(&envelope, &new_id) {
         return code;
     }
@@ -171,7 +183,8 @@ mod tests {
         json!({
             "_event_type": "operator_decision", "decision_id": id, "subject": "portal-test",
             "decision": "One pane is never a portal", "authority_source": authority,
-            "scope": "project:demo", "reads": [{"cmd": "head -5 a.py"}], "ts": ts
+            "scope": "project:demo", "reads": [{"cmd": "head -5 a.py"}], "ts": ts,
+            "filters": {"harness": "codex"}
         })
     }
 
@@ -195,6 +208,8 @@ mod tests {
         assert_eq!(data["authority_source"], json!("chat_attested"));
         assert_eq!(data["decision"], json!("One pane is never a portal"));
         assert_eq!(data["reads"], json!([{"cmd": "head -5 a.py"}]));
+        // A dropped filter would widen the restored law.
+        assert_eq!(data["filters"], json!({"harness": "codex"}));
 
         // Once restored, the old id reads superseded by a restore.
         let mut restored = data.clone();

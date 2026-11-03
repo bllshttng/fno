@@ -1,7 +1,7 @@
 """Test-side reference of the Rust delivery classifier (scoreboard.rs).
 
 The decision lives in the keeper; this stub exists so fold tests stay
-hermetic on boxes without the worker binary. It mirrors the decision table:
+hermetic on machines without the worker binary. It mirrors the decision table:
 a merge (status or merged_at) delivers with no ledger row, an explicit
 doc/delivery terminal delivers a known node, a ship-only terminal never
 delivers a known unmerged node, and a terminal on a node the graph lost
@@ -15,7 +15,7 @@ from __future__ import annotations
 def delivered_stub() -> frozenset:
     """The delivered vocabulary as the reference stub knows it. Fixtures pin
     the vocabulary seam with this so the fold stays hermetic on binary-less
-    boxes; a Rust vocabulary change that a fold test needs shows up as a
+    machines; a Rust vocabulary change that a fold test needs shows up as a
     stub disagreement, which is the failure this test-side mirror exists
     to surface."""
     return frozenset({"DonePRGreen", "DoneAdvisory", "DoneDelivery", "DoneBatched"})

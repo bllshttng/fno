@@ -258,7 +258,7 @@ def dump_tree(root: Path) -> tuple[dict, dict]:
                 files[rel] = json.loads(text)
             except ValueError:
                 files[rel] = text
-            # Only the 600 marker: a fixture file's mode is the capture box's umask.
+            # Only the 600 marker: a fixture file's mode is the capture machine's umask.
             modes[rel] = path.stat().st_mode & 0o777 == 0o600
     return files, modes
 
