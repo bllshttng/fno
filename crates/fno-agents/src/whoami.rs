@@ -779,6 +779,13 @@ fn whoami_render(opts: &Options, home: &AgentsHome) -> i32 {
         if let Some(text) = &role {
             payload.insert("role".into(), Value::String(text.clone()));
         }
+        if let Some(found) = session_role_of(&ident, home) {
+            payload.insert("role_kind".into(), found.kind.as_str().into());
+            payload.insert("role_name".into(), Value::String(found.name));
+            if let Some(lead) = found.lead {
+                payload.insert("role_lead".into(), Value::String(lead));
+            }
+        }
         if let Some(reading) = &context_reading {
             payload.insert("context_used_pct".into(), json!(reading.2));
             payload.insert("context_used_tokens".into(), json!(reading.0));
@@ -1768,6 +1775,17 @@ fn manifest_identity_values(project_root: &Path) -> Vec<String> {
         }
     }
     out
+}
+
+/// The filter-facing role read: kind, registry name, covering lead scope.
+fn session_role_of(
+    ident: &crate::spawn_context::OwnedIdentity,
+    home: &AgentsHome,
+) -> Option<crate::session_role::SessionRole> {
+    let (Some(sid), Some(harness)) = (&ident.session_id, &ident.harness) else {
+        return None;
+    };
+    crate::session_role::session_role(&registry_rows(home), sid, harness)
 }
 
 /// The one role rendering, or None: `L{level} {scope}` plus its grantor.

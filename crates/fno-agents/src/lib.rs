@@ -604,6 +604,7 @@ pub mod session_names_fold;
 pub(crate) mod session_origin;
 pub(crate) mod session_receipt;
 pub mod session_report;
+pub mod session_role;
 pub mod session_start_bytes;
 pub mod session_truth;
 pub mod silence_sweep;
