@@ -14,7 +14,9 @@ pub(crate) type OrgTx = tokio::sync::mpsc::UnboundedSender<(u64, OrgMsg)>;
 
 #[path = "org_actions.rs"]
 mod actions;
-use actions::{Act, Done, Queued};
+// The snapshot feeds a finished peek in, so its page shows with no ssh hop.
+use actions::Queued;
+pub(crate) use actions::{Act, Done};
 
 pub(crate) enum OrgMsg {
     Gather(FleetInputs),
