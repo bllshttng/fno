@@ -29,7 +29,7 @@ Two commands stamp the field, both through the shared guards in `cli/src/fno/gra
 
 `contain_into` runs its guards in order. A live worker on the target refuses the fold: a node someone is building is a delivery unit in practice. Then a cycle check. Then the one-level check: a target with children leaves those children dispatchable while their parent closes. Then the mid-flight check: an open PR or accrued cost is independent delivery evidence, and a node carrying either is refused while not done. A done node with a PR or cost is parented but containment is withheld, loudly: it already shipped on its own.
 
-A dead owner, deferred or superseded, is refused outright by `refuse_dead_owner`: containment under a dead unit has no command that ever releases it.
+A dead owner, deferred or superseded, is refused outright by `refuse_dead_owner`: a dead unit's merge never closes its children, so only `contain --release` ever frees them.
 
 ## Contain, not defer
 

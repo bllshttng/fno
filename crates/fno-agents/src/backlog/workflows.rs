@@ -2112,7 +2112,7 @@ fn refuse_dead_owner(owner: &Value, context: &str) -> Option<String> {
     Some(format!(
         "{context} resolves to {id}, which {how}; {containment}, \
          so stamping containment here would leave every adoptee \
-         undispatchable with the no command to free it. {remedy}"
+         undispatchable until `fno backlog contain --release` frees them. {remedy}"
     ))
 }
 
