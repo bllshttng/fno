@@ -341,6 +341,7 @@ def _write_tree(
     skip_roster_const: bool = False,
 ) -> None:
     (root / "docs").mkdir(parents=True, exist_ok=True)
+    (root / "cli/src/fno").mkdir(parents=True, exist_ok=True)
     (root / "crates/fno-agents/src").mkdir(parents=True, exist_ok=True)
     (root / PROVIDER_RS).write_text(
         provider_text
