@@ -760,8 +760,8 @@ def graph_archive_json() -> Path:
 
 def _pinned_root() -> Path:
     """The pinned-global state root: the ``FNO_STATE_DIR`` seal or an
-    absolute ``state_dir`` anchors it; a *relative* ``state_dir`` would land
-    global files inside a repo checkout, so ``~/.fno`` answers instead.
+    absolute ``state_dir`` anchors it; a relative ``state_dir`` answers
+    ``~/.fno`` (global files never land inside a checkout).
     """
     if os.environ.get("FNO_STATE_DIR"):
         return state_dir()
@@ -772,19 +772,15 @@ def _pinned_root() -> Path:
 
 
 def _pinned_root_file(name: str) -> Path:
-    """The pinned-global answer for one state-root file: the pin
-    :func:`_pinned_root` runs, then the leaf under it.
-    """
+    """The pinned-global answer for one state-root file."""
     return _guard_state_path(_pinned_root() / name)
 
 
 def _pinned_state_subfile(name: str) -> Path:
-    """The pinned-global answer for one moved journal: the same pin
-    :func:`_pinned_root` runs, then the move ladder into ``history/``,
-    renaming the root spelling in on first resolve. The resolver is the
-    mover, so no second mechanism can drift; the rename never clobbers a
-    ``history/`` file that is already there (the Rust mover merges by kind
-    instead).
+    """The pinned-global answer for one moved journal: the pin
+    :func:`_pinned_root` runs, then the move ladder into ``history/``
+    renames the root spelling in on first resolve (the resolver is the
+    mover, and the rename never clobbers an existing file).
     """
     return _state_subfile_at(_pinned_root(), "history", name, name)
 
@@ -797,10 +793,8 @@ def ledger_json() -> Path:
     per-repo stray. The ``FNO_STATE_DIR`` seal wins first, before any
     override. An absolute ``config.paths.ledger_json`` override wins next,
     while a relative override is anchored under ``~/.fno``. The default leg
-    answers the layout table's row: ``<root>/history/ledger.json`` once the
-    mover ran, renaming the root spelling into it on first resolve (the same
-    ladder :func:`state_runtime_file` runs, and the mirror of the Rust
-    ``paths_cli::ledger_json`` place() answer).
+    answers the layout table's ``history/`` row, renaming the root spelling
+    in on first resolve (the Python mirror of Rust ``place()``).
     """
     if os.environ.get("FNO_STATE_DIR"):
         return _pinned_state_subfile("ledger.json")
@@ -925,11 +919,8 @@ def root_state_file(name: str) -> Path:
 
 
 def questions_jsonl() -> Path:
-    """Return the permanent machine-wide operator-question index: the move
-    ladder into ``history/`` (the layout table's row), the root spelling
-    renamed in on first resolve. The mirror of the Rust
-    ``paths_cli::questions_jsonl`` place() answer, and the single path
-    authority the intake door's ``index_path`` caller passes through.
+    """Return the permanent machine-wide operator-question index, through
+    the move ladder into ``history/`` (the layout table's row).
     """
     return _pinned_state_subfile("questions.jsonl")
 
