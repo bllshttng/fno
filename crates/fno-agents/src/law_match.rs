@@ -796,6 +796,17 @@ fn stage_answer(req: StageRequest) -> Value {
     unread.extend(set.unread.iter().cloned());
     let today = chrono::Local::now().date_naive();
     let decision = crate::rules::decide(&set.rules, &ev, today);
+    let fired: Vec<&str> = decision
+        .fires
+        .iter()
+        .filter_map(|f| f.law.as_deref())
+        .collect();
+    crate::law_firings::record(
+        &crate::law_firings::default_path(),
+        &fired,
+        stage_name,
+        chrono::Utc::now(),
+    );
     let mut matching: Vec<String> = decision
         .fires
         .iter()

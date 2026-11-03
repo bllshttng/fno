@@ -26,6 +26,7 @@ One file per install. These belong at the root.
 | `config.toml`, `.lock` | `paths.config_toml()` | permanent |
 | `settings.yaml`, `.lock` | `fno/config/__init__.py` loader | permanent |
 | `decisions.jsonl` | `crates/fno-agents/src/backlog/decisions_cli.rs` | permanent |
+| `law-firings.jsonl` | `crates/fno-agents/src/law_firings.rs` | permanent; append-only, one row per law fire |
 | `questions.jsonl` | `paths.questions_jsonl()`, written by `fno inbox outstanding` | permanent; a question does not expire |
 | `decisions.jsonl.corrupt` | `decide/__init__.py::_compact_index` | permanent; the only copy of a row whose source journal is gone |
 | `decisions.jsonl.compact` | `decide/__init__.py::_compact_index` | transient; replaced onto `decisions.jsonl` in the same call |
