@@ -86,6 +86,8 @@ Every 3 minutes the arm ranks the open PRs: a `main-repair` node first, drafts l
 
 `fno do pr push` reads the newest row before it pushes. Three facts hold a push: the row is under 20 minutes old, the tier is full, and the PR ranks below every PR in it. The held push exits 3. A push into a full tier only queues runs that the next pass cancels. The hold writes one `ci_tier_held` row. When a later pass clears the hold, the arm mails the session to run `fno do pr push` again and writes one `ci_tier_wake` row. A main-repair PR ranks first, so only other main-repair PRs can hold it.
 
+A cancelled-only head gets one more fact. `fno do pr status` reads the repo's `ci_tier.enabled` and this machine's journal for a `ci_tier_pass` row of the slug under 20 minutes old. A fresh row means a keeper ran the arm here recently, and the payload's `ci_tier_keeper` fact says hold: the keeper reruns the cancelled runs when the PR's tier slot frees. No fresh row means the arm has not run here lately, so a tier hold never resolves: the fact says rerun, one stderr note names `gh run rerun <run-id>`, and the cancelled run ids ride the fact. A keeper on another machine never writes this journal, so the fact speaks for this machine only. A rerun it causes that another host's keeper cancels again reads back on the next status read.
+
 ## The look hold
 
 A paint PR that waits for the user's look must not spend runners. If the user rejects the look, the PR changes again. On 2026-10-28 two such PRs queued 12 full-suite runs on a look the user then rejected, and a lead cancelled them by hand.

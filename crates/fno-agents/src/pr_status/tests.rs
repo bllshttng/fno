@@ -382,6 +382,7 @@ fn composer_replays_the_goldens() {
             failures: expected.get("failures").cloned().unwrap_or(Value::Null),
             review_lane: fixture["inputs"]["review_lane"].as_bool().unwrap_or(false),
             platform_incident: Value::Null,
+            ci_tier_keeper: Value::Null,
         };
         let (code, payload, stderr) = crate::pr_status::compose::compose_payload(&inputs);
         assert_eq!(
@@ -441,6 +442,51 @@ fn a_traceback_refusal_names_its_cause_line() {
     let probe = FakeGh::from_fixture("rest_refusal_rate_limit");
     let reason = crate::pr_status::rest_reason(&probe, Path::new("/tmp"), stderr);
     assert_eq!(reason.text, "ModuleNotFoundError: No module named 'fno.pr'");
+}
+
+/// The stranded tier fact rides a cancelled-only payload: the field carries
+/// the rerun remedy and one stderr note names it. A null fact adds neither,
+/// so the golden replay stays byte-identical.
+#[test]
+fn a_stranded_tier_fact_names_the_rerun_on_a_cancelled_only_head() {
+    let cancelled_row = json!({"name": "ci", "status": "completed", "conclusion": "cancelled"});
+    let pr_json = json!({"state": "OPEN", "statusCheckRollup": [cancelled_row]});
+    let inputs = |keeper: Value| crate::pr_status::compose::ComposeInputs {
+        pr: "42".to_string(),
+        pr_json: pr_json.clone(),
+        rerun_recovery: Value::Null,
+        branch_history: Value::Null,
+        optional_reviews: Value::Null,
+        coverage_row: Value::Null,
+        hold_reason: Value::Null,
+        review_activity: Value::Null,
+        receipt: Value::Null,
+        github_merge_blockers: Value::Null,
+        merge_authority: Value::Null,
+        merge_execution: Value::Null,
+        failures: Value::Null,
+        review_lane: false,
+        platform_incident: Value::Null,
+        ci_tier_keeper: keeper,
+    };
+    let stranded = crate::ci_tier::stranded_fact_pure(false, false, &[70, 71]);
+    let (code, payload, stderr) = crate::pr_status::compose::compose_payload(&inputs(stranded));
+    assert_eq!(code, 1, "a cancelled-only head reads red");
+    let fact = payload
+        .get("ci_tier_keeper")
+        .expect("the tier fact rides the payload");
+    assert_eq!(fact["remedy"], "rerun");
+    assert_eq!(fact["cancelled_runs"], json!([70, 71]));
+    assert!(
+        stderr.iter().any(|l| l.contains("gh run rerun")),
+        "the stranded note names the remedy: {stderr:?}"
+    );
+    let (_, payload, stderr) = crate::pr_status::compose::compose_payload(&inputs(Value::Null));
+    assert!(payload.get("ci_tier_keeper").is_none());
+    assert!(
+        !stderr.iter().any(|l| l.contains("gh run rerun")),
+        "a null fact stays silent: {stderr:?}"
+    );
 }
 
 /// The optional-reviews read walks REST pages through the probe and composes
