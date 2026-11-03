@@ -96,7 +96,10 @@ reap_stale_demos() {
   for d in /tmp/fno-demo.*; do
     [ -d "$d" ] || continue
     [ "$d" = "$ROOT" ] && continue
-    m=$(stat -f %m "$d" 2>/dev/null || stat -c %Y "$d" 2>/dev/null) || continue
+    # python3, not stat: a BSD-style `stat -f %m` on GNU coreutils exits 1
+    # while still printing the filesystem stanza of the later operand, and
+    # that garbage in the captured value kills the age math.
+    m=$(python3 -c 'import os,sys; print(int(os.stat(sys.argv[1]).st_mtime))' "$d" 2>/dev/null) || continue
     age=$(( $(date +%s) - m ))
     [ "$age" -gt 3600 ] || continue
     pkill -TERM -f -- "$d/" 2>/dev/null || true

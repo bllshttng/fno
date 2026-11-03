@@ -216,6 +216,22 @@ PY
   STALE_PID=""
 }
 
+# The GNU-stat shim: a BSD-style `stat -f %m` probe on GNU coreutils exits 1
+# while still printing the filesystem stanza of the later operand, which once
+# killed the demo script's age math. Put the shim first on PATH so every
+# scenario runs the reap through that failure shape on every platform.
+mkdir -p "$TMP/bin"
+cat >"$TMP/bin/stat" <<'SHIM'
+#!/usr/bin/env bash
+if [ "$1" = "-f" ] && [ "$2" = "%m" ]; then
+  printf '  File: %s\n' "$3" 2>/dev/null
+  exit 1
+fi
+exec /usr/bin/stat "$@"
+SHIM
+chmod +x "$TMP/bin/stat"
+export PATH="$TMP/bin:$PATH"
+
 scenario TERM
 scenario INT
 
