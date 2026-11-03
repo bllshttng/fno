@@ -176,7 +176,10 @@ fn reserved_agent_keys_track_the_agents_schema() {
         .chain(["max_lanes".to_string()])
         .collect();
     want.sort();
-    let mut got: Vec<String> = records::AGENTS_RESERVED_KEYS.iter().map(|k| k.to_string()).collect();
+    let mut got: Vec<String> = records::AGENTS_RESERVED_KEYS
+        .iter()
+        .map(|k| k.to_string())
+        .collect();
     got.sort();
     assert_eq!(got, want);
 }
