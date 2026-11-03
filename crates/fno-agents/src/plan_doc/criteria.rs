@@ -46,7 +46,7 @@ fn bold_ac_line_re() -> &'static Regex {
 
 fn gwt_prefix_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
-    CELL.get_or_init(|| Regex::new(r"^\s*(?:Given|When|Then|And)\b\s+").unwrap())
+    CELL.get_or_init(|| Regex::new(r"(?i)^\s*(?:Given|When|Then|And)\b\s+").unwrap())
 }
 
 fn list_marker_re() -> &'static Regex {
@@ -423,3 +423,7 @@ pub fn compile_criteria(
     }
     Ok(criteria)
 }
+
+#[cfg(test)]
+#[path = "criteria_tests.rs"]
+mod tests;

@@ -45,13 +45,14 @@ fn task_id_re() -> &'static Regex {
     CELL.get_or_init(|| Regex::new(r"^\d+(?:\.\d+)*[A-Za-z]*$").unwrap())
 }
 
-const QUICK_PLACEHOLDERS: [&str; 6] = [
+const QUICK_PLACEHOLDERS: [&str; 7] = [
     "[change name]",
     "[describe the change",
     "[concrete runnable check]",
     "[how to verify",
     "path/to/",
     "replace me",
+    "fill in",
 ];
 
 /// Command names that are also ordinary English commands, so a prose line can
@@ -1147,7 +1148,16 @@ pub fn validate_execution(
 
 /// The `plan_docs validate` op: load the doc, run one scope, return the JSON
 /// report the CLI prints. `json` shapes the payload the caller renders.
-pub fn op_validate_execution(plan_path: &std::path::Path, json_out: bool) -> Result<Value, String> {
+///
+/// A proposed `acceptance_contract` validates the body alone: /blueprint's
+/// finalize stamps the frontmatter it proposes, difficulty band included,
+/// only after the body passes, so the frontmatter gate would refuse a doc
+/// the same call is about to fix.
+pub fn op_validate_execution(
+    plan_path: &std::path::Path,
+    json_out: bool,
+    acceptance_contract: Option<&str>,
+) -> Result<Value, String> {
     let doc = match super::doc::load_plan(plan_path) {
         Ok(d) => d,
         Err(e) => return Err(format!("cannot load plan {}: {e}", plan_path.display())),
@@ -1158,7 +1168,11 @@ pub fn op_validate_execution(plan_path: &std::path::Path, json_out: bool) -> Res
     // undatable plans itself, so an unreadable created defers here rather
     // than refusing; the minting lanes keep the strict default.
     let fm = doc.frontmatter.as_object().cloned().unwrap_or_default();
-    if let Some(gate_error) = crate::plan_schema::difficulty_gate_error(&fm, false) {
+    let gate = match acceptance_contract {
+        Some(_) => None,
+        None => crate::plan_schema::difficulty_gate_error(&fm, false),
+    };
+    if let Some(gate_error) = gate {
         let mut report = json!({
             "valid": false,
             "path": plan_path.display().to_string(),
@@ -1174,7 +1188,7 @@ pub fn op_validate_execution(plan_path: &std::path::Path, json_out: bool) -> Res
         }
         return Ok(report);
     }
-    let result = validate_execution(&doc, None);
+    let result = validate_execution(&doc, acceptance_contract);
     let violations: Vec<Value> = result
         .violations
         .iter()
@@ -1238,3 +1252,7 @@ fn render_text(report: &Value) -> String {
     }
     lines.join("\n")
 }
+
+#[cfg(test)]
+#[path = "exec_validate_tests.rs"]
+mod tests;

@@ -104,3 +104,7 @@ pub fn scan(plans_root: &Path, graph_entries: &[Value]) -> Option<Vec<NonTermina
     }
     Some(owners)
 }
+
+#[cfg(test)]
+#[path = "folder_audit_tests.rs"]
+mod tests;

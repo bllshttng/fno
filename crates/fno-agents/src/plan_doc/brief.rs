@@ -33,7 +33,7 @@ impl std::fmt::Display for BriefParseError {
 
 static FENCE_YAML_RE: OnceLock<Regex> = OnceLock::new();
 fn fence_yaml_re() -> &'static Regex {
-    FENCE_YAML_RE.get_or_init(|| Regex::new(r"```ya?ml\s*\n(.*?)```").unwrap())
+    FENCE_YAML_RE.get_or_init(|| Regex::new(r"(?si)```ya?ml\s*\n(.*?)```").unwrap())
 }
 
 /// Parse the Execution Strategy section's YAML block. Prose around a fenced
@@ -100,7 +100,7 @@ fn normalize_strategy(mut root: Value) -> Result<Value, BriefParseError> {
                 return Err(BriefParseError(msg));
             }
         };
-        let tid = py_string(t.get("id"));
+        let tid = py_field(t.get("id"));
         let surface = match t.get("surface") {
             None | Some(Value::Null) => Vec::new(),
             Some(Value::Array(a)) => a.clone(),
@@ -159,11 +159,11 @@ fn normalize_strategy(mut root: Value) -> Result<Value, BriefParseError> {
         }
         let entry = json!({
             "id": tid,
-            "title": py_string(t.get("title")),
+            "title": py_field(t.get("title")),
             "surface": surface,
-            "verify": py_string(t.get("verify")),
+            "verify": py_field(t.get("verify")),
             "acceptance": acceptance.iter().map(|v| py_string(Some(v))).collect::<Vec<_>>(),
-            "notes": py_string(t.get("notes")).trim().to_string(),
+            "notes": py_field(t.get("notes")).trim().to_string(),
             "blocked_by": blocked.iter().map(|v| py_string(Some(v))).collect::<Vec<_>>(),
             "blocked_by_declared": t.get("blocked_by").is_some(),
         });
@@ -196,12 +196,17 @@ fn py_string(v: Option<&Value>) -> String {
     crate::plan_doc::doc::py_str(v)
 }
 
+/// `str(t.get(key, ""))`: an absent key reads "", an explicit null "None".
+fn py_field(v: Option<&Value>) -> String {
+    v.map(|v| py_string(Some(v))).unwrap_or_default()
+}
+
 /// The task dict for `task_id`, or None.
 pub fn find_task<'a>(parsed: &'a Value, task_id: &str) -> Option<&'a Value> {
     parsed
         .get("tasks")
         .and_then(|t| t.as_array())
-        .and_then(|arr| arr.iter().find(|t| py_string(t.get("id")) == task_id))
+        .and_then(|arr| arr.iter().find(|t| py_field(t.get("id")) == task_id))
 }
 
 /// All task ids from the parsed execution strategy.
@@ -209,7 +214,7 @@ pub fn list_task_ids(parsed: &Value) -> Vec<String> {
     parsed
         .get("tasks")
         .and_then(|t| t.as_array())
-        .map(|arr| arr.iter().map(|t| py_string(t.get("id"))).collect())
+        .map(|arr| arr.iter().map(|t| py_field(t.get("id"))).collect())
         .unwrap_or_default()
 }
 
@@ -340,27 +345,45 @@ pub fn extract_overview_paragraph(overview_text: &str) -> String {
         .to_string()
 }
 
-fn numbered_decisions_re() -> &'static Regex {
+/// One numbered item's start: the regex crate has no lookahead, so items
+/// split at these line starts instead of `(?=^\d+\.\s+\*\*|\Z)`.
+fn item_start_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
-    CELL.get_or_init(|| {
-        Regex::new(r"(?m)^(\d+)\.\s+\*\*(.+?)\*\*\s*(.*?)(?=\n\d+\.\s+\*\*|\z)").unwrap()
-    })
+    CELL.get_or_init(|| Regex::new(r"(?m)^\d+\.\s+\*\*").unwrap())
+}
+
+fn numbered_decision_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| Regex::new(r"(?s)\A(\d+)\.\s+\*\*(.+?)\*\*\s*(.*)").unwrap())
 }
 
 fn why_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
-    CELL.get_or_init(|| Regex::new(r"\*Why:\*\s*(.+?)(?=\*How to apply:\*|\z)").unwrap())
+    CELL.get_or_init(|| Regex::new(r"(?s)\*Why:\*\s*(.+?)(?:\*How to apply:\*|\z)").unwrap())
 }
 
 fn apply_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
-    CELL.get_or_init(|| Regex::new(r"\*How to apply:\*\s*(.+)\z").unwrap())
+    CELL.get_or_init(|| Regex::new(r"(?s)\*How to apply:\*\s*(.+)").unwrap())
+}
+
+/// The numbered items of a section, each from its start to the next start.
+fn numbered_items(text: &str) -> Vec<&str> {
+    let starts: Vec<usize> = item_start_re().find_iter(text).map(|m| m.start()).collect();
+    starts
+        .iter()
+        .enumerate()
+        .map(|(i, &at)| &text[at..starts.get(i + 1).copied().unwrap_or(text.len())])
+        .collect()
 }
 
 /// Parse the Locked Decisions section into structured entries.
 pub fn parse_locked_decisions(text: &str) -> Vec<Value> {
     let mut entries: Vec<Value> = Vec::new();
-    for m in numbered_decisions_re().captures_iter(text) {
+    for item in numbered_items(text) {
+        let Some(m) = numbered_decision_re().captures(item) else {
+            continue;
+        };
         let number: usize = m.get(1).unwrap().as_str().parse().unwrap_or(0);
         let title = m
             .get(2)
@@ -797,9 +820,12 @@ fn build_brief_inner(
     let task = match find_task(&parsed, task_id) {
         Some(t) => t,
         None => {
-            let valid = list_task_ids(&parsed);
+            let repr = crate::client_commands::py_repr_str;
+            let valid: Vec<String> = list_task_ids(&parsed).iter().map(|id| repr(id)).collect();
             return Err(BriefError(format!(
-                "Task {task_id:?} not found in Execution Strategy. Valid task-ids: {valid:?}"
+                "Task {} not found in Execution Strategy. Valid task-ids: [{}]",
+                repr(task_id),
+                valid.join(", ")
             )));
         }
     };
@@ -862,3 +888,7 @@ fn build_brief_inner(
         verify_command: verify,
     })
 }
+
+#[cfg(test)]
+#[path = "brief_tests.rs"]
+mod tests;

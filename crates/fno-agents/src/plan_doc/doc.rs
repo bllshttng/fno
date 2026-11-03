@@ -191,7 +191,12 @@ fn extract_sections(body: &str) -> Vec<(String, String)> {
     let flush = |heading: &Option<String>, lines: &Vec<&str>, out: &mut Vec<(String, String)>| {
         if let Some(h) = heading {
             let trimmed = lines.join("\n").trim().to_string();
-            out.push((h.clone(), trimmed));
+            // A repeated heading keeps its first position and takes the last
+            // body, the dict-assignment answer the Python parser gave.
+            match out.iter_mut().find(|(seen, _)| seen == h) {
+                Some(slot) => slot.1 = trimmed,
+                None => out.push((h.clone(), trimmed)),
+            }
         }
     };
 
@@ -307,3 +312,7 @@ mod tests {
         assert_eq!(doc.get_section("A").unwrap(), "b");
     }
 }
+
+#[cfg(test)]
+#[path = "doc_tests.rs"]
+mod contract_tests;
