@@ -1,6 +1,6 @@
 ---
 name: verify-footnotes
-description: Measure premises before the first edit, and give every claim its footnote: file:line, command output, or source link.
+description: Measure premises before the first edit, and give every claim its footnote (file:line, command output, or source link).
 ---
 
 # verify-footnotes
