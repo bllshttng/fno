@@ -3,7 +3,7 @@
 #
 #   scripts/ops/mux-demo-snapshot.sh --out shot.svg [--theme light] [--format png] [--size 200x60]
 #       [--window-size smallest|latest|largest] [--peer 120x40] [--no-fit]
-#       [--hold] [--group <axis>]
+#       [--hold] [--group <axis>] [--remote-pane]
 #
 # Builds a throwaway server in a temp state root: its own config, graph,
 # agent registry, view prefs and socket dir. It seeds invented backlog nodes,
@@ -27,12 +27,15 @@ PANES=()
 # shoots as a passive observer so the shot crops instead of resizing the tab.
 # --hold arms a daemon reserve on the demo's breaker record, so the status row
 # shows the fleet hold. --group <axis> sets the sideline's group-by axis
-# (workspace, team, cwd, status, harness).
+# (workspace, team, cwd, status, harness). --remote-pane adds a fourth pane to
+# the first tab that shows a session on another machine, so its title wears the
+# remote glyph.
 ARGS=()
 FIT=(--fit)
 PREV=""
 HOLD=""
 GROUP=""
+REMOTE_PANE=""
 for a in "$@"; do
   if [ "$PREV" = "--out" ]; then
     mkdir -p -- "$(dirname -- "$a")"
@@ -45,6 +48,8 @@ for a in "$@"; do
     :
   elif [ "$a" = "--hold" ]; then
     HOLD=1
+  elif [ "$a" = "--remote-pane" ]; then
+    REMOTE_PANE=1
   elif [ "$a" = "--no-fit" ]; then
     FIT=()
   else
@@ -417,8 +422,15 @@ ${E}[1m> document the refund audit log${E}[0m
 
   Drafting docs/refunds.md from the new schema.
 EOF
+cat >"$ROOT/text/remote.txt" <<EOF
+${E}[1m> add a refund endpoint behind the payments flag${E}[0m
+
+  Edited src/payments/refund.ts (+24 -3).
+${E}[32m  1 file changed${E}[0m
+EOF
 : >"$ROOT/text/pi.foot"
 : >"$ROOT/text/docs.foot"
+: >"$ROOT/text/remote.foot"
 
 # Each pane prints its text, hides the cursor, and prints it again on every
 # resize, so the sizing attach below lands on a full screen.
@@ -437,6 +449,12 @@ run --cwd "$ROOT/code/checkout" --tab 1 --at "${PANES[0]}" --split right -- sh -
 run --cwd "$ROOT/code/checkout" --tab 1 --at "${PANES[0]}" --split down -- sh -c "$(show opencode)"
 run --cwd "$ROOT/code/checkout" -- sh -c "$(show pi)"
 run --cwd "$ROOT/code/checkout" -- sh -c "$(show docs)"
+# The seat a remote session opens in: no registry row, and the registered name
+# is the session's name@host address.
+if [ -n "$REMOTE_PANE" ]; then
+  run --cwd "$ROOT/code/checkout" --tab 1 --at "${PANES[2]}" --split right -- \
+    env FNO_AGENT_SELF=kestrel@imac2d2 sh -c "$(show remote)"
+fi
 "$FNO" mux tab rename --server "$SERVER" "${W[@]}" --tab 1 --name agents >/dev/null
 "$FNO" mux tab rename --server "$SERVER" "${W[@]}" --tab 2 --name alerts >/dev/null
 "$FNO" mux tab rename --server "$SERVER" "${W[@]}" --tab 3 --name docs >/dev/null
@@ -593,7 +611,7 @@ local = [
 ]
 remote = [
     seat("kestrel", "claude", "sonnet", "payments", "writing", 3, sid="4a1b2c3d-remote-0001", node=ids[6], parent=MUX_LEAD, workspace="payments-api", needs=False, pinned=True, cost=412, tokens=184000, compactions=1, tail="Edited src/payments/refund.ts +24 -3"),
-    seat("heron", "codex", "gpt-6-sol", "payments", "quiet", 44, sid="5b2c3d4e-remote-0002", node=ids[8], parent=FLEET_LEAD, workspace="payments-api", needs=True, pinned=False, cost=1260, tokens=520000, compactions=3, tail="Keep the legacy webhook, or drop it with the refund rewrite?"),
+    seat("heron", "codex", "gpt-6-sol", "payments", "quiet", 44, sid="5b2c3d4e-remote-0002", node=ids[8], parent=FLEET_LEAD, workspace="payments-api", needs=True, pinned=False, cost=126, tokens=52000, compactions=3, tail="Keep the legacy webhook, or drop it with the refund rewrite?"),
     seat("ibis", "opencode", "zen", "search", "writing", 5, sid="6c3d4e5f-remote-0003", node=ids[3], parent=MUX_LEAD, workspace="search-index", needs=False, pinned=False, cost=88, tokens=41000, tail="Reindexing products: 12,408 of 30,000"),
     {"name": "plover", "session": "7d4e5f60", "harness": "claude", "node": None,
      "status": "unknown", "age_s": None, "rss_mb": None, "parent": None},

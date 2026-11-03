@@ -212,8 +212,8 @@ jobs:
           # under Needs input. The band sits below this machine's, so the
           # frame is taller than the rest.
           for group in workspace status; do
-            bash scripts/ops/mux-demo-snapshot.sh --out "shots/machines-${group}.png" --format png --view machines --group "$group" --size 200x72 --fit
-            bash scripts/ops/mux-demo-snapshot.sh --out "shots/machines-${group}-light.png" --format png --view machines --group "$group" --theme light --size 200x72 --fit
+            bash scripts/ops/mux-demo-snapshot.sh --out "shots/machines-${group}.png" --format png --view machines --group "$group" --remote-pane --size 200x72 --fit
+            bash scripts/ops/mux-demo-snapshot.sh --out "shots/machines-${group}-light.png" --format png --view machines --group "$group" --remote-pane --theme light --size 200x72 --fit
           done
           # Two windows on one tab: the active big window fills, the same
           # window under the smallest policy letterboxes, and a small
