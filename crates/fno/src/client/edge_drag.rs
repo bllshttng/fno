@@ -222,6 +222,8 @@ impl View {
                 None
             };
             if let (false, Some((left, w, h))) = (popup, host) {
+                // A board still loaded behind another sideline view paints
+                // nothing here, so only a hosted board claims the edges.
                 if w >= 100 {
                     let bounds = super::backlog_board::backlog_panes::seam_bounds(w);
                     let cur = self.edge_sizes.resolve(
@@ -234,7 +236,9 @@ impl View {
                     return vec![Self::col_geom(Edge::BacklogSeam, left, cur, bounds, (2, h))];
                 }
             }
-            return Vec::new();
+            if host.is_some() {
+                return Vec::new();
+            }
         }
         if self.peek_is_docked() {
             let Some(layout) = self.active_overlay_layout() else {
