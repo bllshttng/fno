@@ -38,6 +38,8 @@ A number may not carry an adjective nobody measured. The data is usually right; 
 
 A negative claim names the surface searched. "The published files carry no index" is checkable and survives; "it does not exist" is not checkable and invites the attack.
 
+A cannot claim is a negative claim about routes. Before saying a thing cannot be done, try the other routes, and name each one tried in the claim. A refusal from one tool is a fact about that tool, not about the task. The specimen: a pull-request read refused on a rate limit while a plain fetch of the same ref succeeded, so the honest claim reads "that API is rate-limited", never "this cannot be read".
+
 ## 3. Done
 
 No done claim without fresh command output, read in this turn. The command that proves the claim runs now, and its output with the exit code sits beside the claim. A previous run, a partial check, and another agent's success report prove nothing.
