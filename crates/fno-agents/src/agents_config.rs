@@ -817,6 +817,41 @@ pub(crate) fn read_open_work_retire_s(content: &str) -> Option<u64> {
     table_open_work_retire_s(&parse_config(content)?)
 }
 
+/// Default quiet time before a stopped session row with no node, no open PR
+/// and no live claim retires: one day, resolvable from
+/// `agents.reap.stopped_retire_s`.
+pub const DEFAULT_STOPPED_RETIRE_SECS: u64 = 86_400;
+
+/// Resolve `agents.reap.stopped_retire_s`, same precedence and fail-open
+/// degrade as [`open_work_retire_secs`]: a zero or unparseable value falls
+/// back to the default, never to "retire every stopped row now".
+/// `$FNO_AGENTS_STOPPED_RETIRE_SECS` is a test/tuning override.
+pub fn stopped_retire_secs(cwd: &Path) -> u64 {
+    if let Some(v) = non_empty_env("FNO_AGENTS_STOPPED_RETIRE_SECS")
+        .and_then(|s| s.to_str().and_then(|s| s.trim().parse::<u64>().ok()))
+        .filter(|v| *v > 0)
+    {
+        return v;
+    }
+    resolve(cwd, table_stopped_retire_s).unwrap_or(DEFAULT_STOPPED_RETIRE_SECS)
+}
+
+fn table_stopped_retire_s(t: &toml::Table) -> Option<u64> {
+    t.get("agents")?
+        .as_table()?
+        .get("reap")?
+        .as_table()?
+        .get("stopped_retire_s")?
+        .as_integer()
+        .and_then(|i| u64::try_from(i).ok())
+        .filter(|v| *v > 0)
+}
+
+#[cfg(test)]
+pub(crate) fn read_stopped_retire_s(content: &str) -> Option<u64> {
+    table_stopped_retire_s(&parse_config(content)?)
+}
+
 /// Resolve `test.orphan_min_elapsed_seconds` for the orphan-reap sweep, same
 /// precedence + fail-open degrade as [`retire_grace_secs`].
 pub fn orphan_min_elapsed_secs(cwd: &Path) -> u64 {
@@ -2262,6 +2297,18 @@ mod tests {
         assert_eq!(ml, DEFAULT_MAX_LIVE);
         assert_eq!(mf, DEFAULT_MIN_FREE_GB);
         assert!(qos, "unknown worker_qos coerces to utility (enabled)");
+    }
+
+    #[test]
+    fn stopped_retire_s_reads_the_reap_table_and_rejects_zero() {
+        assert_eq!(
+            read_stopped_retire_s("[agents.reap]\nstopped_retire_s = 7200\n"),
+            Some(7200)
+        );
+        assert_eq!(
+            read_stopped_retire_s("[agents.reap]\nstopped_retire_s = 0\n"),
+            None
+        );
     }
 
     #[test]
