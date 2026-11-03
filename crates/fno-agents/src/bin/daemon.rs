@@ -15,6 +15,7 @@ use fno_agents::paths::AgentsHome;
 use std::time::Duration;
 
 fn main() {
+    fno_agents::chokepoint_events::install();
     // `version [--json]`: report the baked-in build rev so `fno doctor update` can
     // verify this bin is the SAME build as its triad siblings, not just present.
     // Execs cheaply and returns without touching a running daemon or the runtime.

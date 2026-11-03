@@ -346,6 +346,8 @@ pub mod list_row;
 pub mod live_store_fence;
 pub mod liveness_cmd;
 pub mod liveness_sweep;
+pub mod chokepoint;
+pub mod chokepoint_events;
 pub mod lock_queue;
 pub mod logs;
 pub mod logs_args;

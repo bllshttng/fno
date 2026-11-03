@@ -131,6 +131,10 @@ pub mod link;
 #[cfg(feature = "full")]
 pub mod lint_cli;
 #[cfg(feature = "full")]
+pub mod chokepoint;
+#[cfg(feature = "full")]
+pub mod chokepoint_events;
+#[cfg(feature = "full")]
 pub mod live_store_fence;
 pub mod menu_caps;
 #[cfg(feature = "full")]

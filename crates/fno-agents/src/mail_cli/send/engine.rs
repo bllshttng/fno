@@ -14,7 +14,7 @@ use crate::mail::lane::{first_applicable, Lane, LaneKind, Target, LADDER};
 /// replacement mid-wait; this port takes the flock at the resolved path once
 /// and holds it, which misses the replace-mid-wait edge only.
 pub(super) struct AgentLock {
-    file: std::fs::File,
+    _held: crate::chokepoint::Held,
 }
 
 impl AgentLock {
@@ -35,20 +35,17 @@ impl AgentLock {
         let start = std::time::Instant::now();
         let mut on_wait_fired = false;
         loop {
-            let handle = std::fs::OpenOptions::new()
-                .append(true)
-                .create(true)
-                .open(&path)
-                .map_err(LockTimeout::io)?;
-            use std::os::unix::io::AsRawFd as _;
-            match unsafe { libc::flock(handle.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } {
-                0 => {
-                    let _ = std::fs::write(&path, holder_json());
-                    return Ok(AgentLock { file: handle });
-                }
-                _ => {
-                    drop(handle);
+            match crate::chokepoint::try_take(&crate::chokepoint::AGENT_ASK, &path, name)
+                .map_err(LockTimeout::io)?
+            {
+                Some(held) => return Ok(AgentLock { _held: held }),
+                None => {
                     if start.elapsed().as_secs_f64() >= timeout {
+                        let _ = crate::chokepoint::report_expiry(
+                            &crate::chokepoint::AGENT_ASK,
+                            &path,
+                            start.elapsed(),
+                        );
                         return Err(LockTimeout {
                             name: name.to_string(),
                             timeout,
@@ -64,15 +61,6 @@ impl AgentLock {
                     std::thread::sleep(std::time::Duration::from_millis(50));
                 }
             }
-        }
-    }
-}
-
-impl Drop for AgentLock {
-    fn drop(&mut self) {
-        use std::os::unix::io::AsRawFd as _;
-        unsafe {
-            libc::flock(self.file.as_raw_fd(), libc::LOCK_UN);
         }
     }
 }
@@ -98,11 +86,6 @@ impl LockTimeout {
         let _ = past;
         format!(" ({})", self.holder)
     }
-}
-
-pub(super) fn holder_json() -> String {
-    let pid = std::process::id();
-    format!("{{\"pid\": {pid}, \"acquired_at\": \"{}\"}}\n", now_iso())
 }
 
 pub(super) fn read_holder(path: &Path) -> String {

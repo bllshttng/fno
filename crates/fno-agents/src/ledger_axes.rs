@@ -12,7 +12,6 @@
 
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
-use std::os::fd::AsRawFd;
 use std::path::Path;
 
 pub(crate) const LOCK_PATH: &str = "/tmp/fno-ledger.lock";
@@ -63,12 +62,8 @@ pub(crate) fn ledger_backstop_core(graph: &[Value], params: &Value) -> Result<Va
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("cannot create {}: {e}", parent.display()))?;
     }
-    let lock = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(LOCK_PATH)
-        .map_err(|e| format!("cannot open {LOCK_PATH}: {e}"))?;
-    unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) };
+    let lock = crate::chokepoint::take(&crate::chokepoint::LEDGER, Path::new(LOCK_PATH))
+        .map_err(|e| e.to_string())?;
     let result = run_locked(
         graph,
         ledger,
@@ -82,7 +77,7 @@ pub(crate) fn ledger_backstop_core(graph: &[Value], params: &Value) -> Result<Va
         &node_sessions,
         dry_run,
     );
-    unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_UN) };
+    drop(lock);
     result
 }
 
@@ -290,14 +285,10 @@ pub(crate) fn upsert_execution(ledger: &Path, row: Value) -> Result<(), String> 
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("cannot create {}: {e}", parent.display()))?;
     }
-    let lock = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(LOCK_PATH)
-        .map_err(|e| format!("cannot open {LOCK_PATH}: {e}"))?;
-    unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) };
+    let lock = crate::chokepoint::take(&crate::chokepoint::LEDGER, Path::new(LOCK_PATH))
+        .map_err(|e| e.to_string())?;
     let result = upsert_locked(ledger, &fno_id, row);
-    unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_UN) };
+    drop(lock);
     result
 }
 
@@ -376,14 +367,13 @@ pub(crate) fn harvest_sessions(
     if !ledger.exists() {
         return Ok((0, 0));
     }
-    let lock = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(LOCK_PATH)
-        .map_err(|e| format!("cannot open {LOCK_PATH}: {e}"))?;
-    unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) };
+    let Ok(lock) =
+        crate::chokepoint::take(&crate::chokepoint::LEDGER_HARVEST, Path::new(LOCK_PATH))
+    else {
+        return Ok((0, 0));
+    };
     let result = harvest_locked(ledger, nodes_by_id, dry_run);
-    unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_UN) };
+    drop(lock);
     result
 }
 

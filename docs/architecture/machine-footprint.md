@@ -142,3 +142,11 @@ Measured over a 1800 second window on 2026-09-27. Load moved 203, down to 87, ba
 ## Daemon child CPU split
 
 `scripts/diagnostics/dsplit.py` splits the daemon's child CPU into fleet work and daemon maintenance beside the slowness gate's daemon-child axis. It samples the process table and closes over the daemon's descendant set. It sums the CPU time each descendant gained inside the window, so the figure is a lower bound. The class of a descendant comes from its nearest ancestor that is a direct child of the daemon. A direct child whose executable is the per-session worker binary roots fleet work. Every other direct child roots maintenance. The gate names the full child figure, so readings report the gate against the child total. The split keeps both figures on one page beside it. The maintenance table carries each command's leading arguments, so an over-budget reading names the largest command on the page.
+
+## Chokepoints
+
+A chokepoint is a lock, a shared server or a queue that more than one process waits on. Background work must never park a foreground command on one without a bound. Each lock is a row in `REGISTRY` in `crates/fno-agents/src/chokepoint.rs`, and `build.rs` copies the module into the `fno` crate. A row names its wait bound (10 seconds for a foreground lock) and what a waiter does at expiry: refuse and name the holder, or skip an append-only write.
+
+`chokepoint::take` polls to the bound and writes one holder stamp: pid, name, row, time. At expiry it probes the stamped pid and journals one `chokepoint_wait_exceeded` event with the row, the holder pid, alive or dead, the hold age and the waiter pid. Read those rows to find which background job to kill.
+
+To add a lock: add a row, call `take` with it, and map the refusal into your error type. A flock released by a crashed holder frees itself, so a dead holder never blocks the next waiter. The background-isolation law states the rule; this registry enforces it. The unit test `wedged_holder_cannot_block_past_the_bound` proves a wedged holder cannot hold a foreground command past its bound.
