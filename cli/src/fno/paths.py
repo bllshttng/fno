@@ -760,8 +760,7 @@ def graph_archive_json() -> Path:
 
 def _pinned_root() -> Path:
     """The pinned-global state root: the ``FNO_STATE_DIR`` seal or an
-    absolute ``state_dir`` anchors it; a relative ``state_dir`` answers
-    ``~/.fno`` (global files never land inside a checkout).
+    absolute ``state_dir`` anchors it; a relative one answers ``~/.fno``.
     """
     if os.environ.get("FNO_STATE_DIR"):
         return state_dir()
@@ -779,8 +778,7 @@ def _pinned_root_file(name: str) -> Path:
 def _pinned_state_subfile(name: str) -> Path:
     """The pinned-global answer for one moved journal: the pin
     :func:`_pinned_root` runs, then the move ladder into ``history/``
-    renames the root spelling in on first resolve (the resolver is the
-    mover, and the rename never clobbers an existing file).
+    renames the root spelling in on first resolve.
     """
     return _state_subfile_at(_pinned_root(), "history", name, name)
 
@@ -788,11 +786,9 @@ def _pinned_state_subfile(name: str) -> Path:
 def ledger_json() -> Path:
     """Return the path to ledger.json.
 
-    Pinned global: the ledger is cross-project by definition (one row per
-    terminal session across every repo), so it must never fork into a
-    per-repo stray. The ``FNO_STATE_DIR`` seal wins first, before any
-    override. An absolute ``config.paths.ledger_json`` override wins next,
-    while a relative override is anchored under ``~/.fno``. The default leg
+    Pinned global (one ledger per person, never a per-repo stray): the
+    ``FNO_STATE_DIR`` seal wins first, then an absolute ``paths.ledger_json``
+    override (a relative one anchors under ``~/.fno``). The default leg
     answers the layout table's ``history/`` row, renaming the root spelling
     in on first resolve (the Python mirror of Rust ``place()``).
     """
