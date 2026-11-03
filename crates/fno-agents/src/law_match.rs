@@ -3470,9 +3470,9 @@ pub(crate) mod scope_tests {
             door.not_filters,
             vec![("model".into(), "glm-5.3-flash".into())]
         );
-        let refused = parse_record_door(&argv(&["s", "--filter", "lead=rowan"]))
+        let refused = parse_record_door(&argv(&["s", "--filter", "lane=paint"]))
             .err()
-            .expect("lead has no source yet");
+            .expect("lane has no source yet");
         assert!(refused.contains("no identity source"), "{refused}");
     }
 
