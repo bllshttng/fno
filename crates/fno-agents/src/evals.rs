@@ -235,6 +235,20 @@ fn select_tasks<'a>(
         .collect()
 }
 
+/// Drop the tasks carrying `tag`; no tag keeps the selection as it was.
+fn without_tag<'a>(
+    selected: Vec<&'a crate::evals::bank::TaskSpec>,
+    tag: Option<&str>,
+) -> Vec<&'a crate::evals::bank::TaskSpec> {
+    match tag {
+        Some(tag) => selected
+            .into_iter()
+            .filter(|t| !t.tags.iter().any(|g| g == tag))
+            .collect(),
+        None => selected,
+    }
+}
+
 fn run_command(rest: &[String]) -> i32 {
     // Selection falls through to live runs, so help must return first.
     if rest.iter().any(|a| a == "--help" || a == "-h") {
@@ -299,11 +313,15 @@ fn run_command(rest: &[String]) -> i32 {
         .and_then(|v| v.parse().ok())
         .unwrap_or(1)
         .max(1);
-    let selected = select_tasks(
-        &tasks,
-        task_filter.as_deref(),
-        tier_filter.as_deref(),
-        tag_filter.as_deref(),
+    let exclude_tag = flag_lookup(rest, "--exclude-tag");
+    let selected = without_tag(
+        select_tasks(
+            &tasks,
+            task_filter.as_deref(),
+            tier_filter.as_deref(),
+            tag_filter.as_deref(),
+        ),
+        exclude_tag.as_deref(),
     );
     if selected.is_empty() {
         eprintln!("Error: selection matched no bank tasks.");
@@ -740,5 +758,24 @@ mod tests {
         let tasks = vec![crate::evals::bank::load_task(&path).unwrap()];
         assert!(super::select_tasks(&tasks, None, None, Some("golden")).is_empty());
         assert_eq!(super::select_tasks(&tasks, Some("g"), None, None).len(), 1);
+    }
+
+    #[test]
+    fn exclude_tag_drops_tagged_tasks_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut tasks = Vec::new();
+        for (id, tags) in [("a", "[golden]"), ("b", "[]")] {
+            let path = dir.path().join(format!("{id}.yaml"));
+            std::fs::write(
+                &path,
+                format!("id: {id}\ntier: capability\nprompt: p\ngrade:\n  - kind: file-exists\n    path: x\ntags: {tags}\n"),
+            )
+            .unwrap();
+            tasks.push(crate::evals::bank::load_task(&path).unwrap());
+        }
+        let all = super::select_tasks(&tasks, None, Some("capability"), None);
+        let kept = super::without_tag(all, Some("golden"));
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].id, "b");
     }
 }

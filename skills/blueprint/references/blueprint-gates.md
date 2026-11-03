@@ -673,7 +673,7 @@ the dedup list:
 
 ```bash
 if [[ "<peer>" not in messaged_peers ]]; then
-  if fno agents mail send --to-project <peer> --kind heads-up \
+  if fno agents mail send --to-project <peer> \
        --body "spec'd: <PLAN-TITLE>; touches surface <SURFACE-NAME>; ETA: <PLAN-TIMESTAMP>; plan: <PLAN-PATH>"; then
     append_peer_to_messaged_peers "<peer>"  # in plan frontmatter
   else

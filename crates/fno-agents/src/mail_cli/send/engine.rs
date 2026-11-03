@@ -1003,7 +1003,6 @@ pub(super) fn queue_durable_fallback(
         subject,
         None,
         None,
-        false,
         None,
     );
     match write {
@@ -1408,7 +1407,7 @@ pub(super) fn dispatch_send_locked(
             .as_ref()
             .and_then(|p| p.reachability.as_deref())
             != Some("unreachable");
-    let durable_owner = classify_durable_owner(false, owner_live, !owner_live);
+    let durable_owner = classify_durable_owner(owner_live, !owner_live);
     let family1_attemptable = family1_live
         || family1_state == "unknown"
         || (str_field(&existing, "harness") == "claude" && existing.get("mux").is_none());
@@ -1795,7 +1794,7 @@ pub(super) fn project_ambiguity_error(project: &str, live_candidates: &[String])
 }
 
 /// Exactly one live peer delivers live, none
-/// queues durable to the project, many refuse unless --any breaks the tie.
+/// has no recipient (the caller refuses), many refuse unless --any breaks the tie.
 pub(super) fn resolve_to_project(
     project: &str,
     any_flag: bool,

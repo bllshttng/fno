@@ -34,6 +34,12 @@ use std::time::{Duration, Instant};
 /// GRAPH_BACKUP_KEEP).
 pub const GRAPH_BACKUP_KEEP: usize = 10;
 
+/// Byte cap on the whole rotation pile (the 2026-10-08 slowness audit's
+/// "backups under 2 GB"): a count cap cannot hold a byte bound, and ten
+/// snapshots of a 1.9 GB store stand at 19 GB by design. The newest copy
+/// always survives, so even a store past the cap keeps one rollback copy.
+pub const GRAPH_BACKUP_MAX_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+
 /// Bounded lock default deadline. A wedged writer must surface as
 /// [`StoreError::LockTimeout`] inside this budget instead of blocking a graph
 /// caller forever (store.py's unbounded `fcntl.flock` was the original defect
@@ -2560,13 +2566,18 @@ impl Drop for BoundedLock {
 // ---------------------------------------------------------------------------
 
 /// Shared backup-rotation prune: keep the newest GRAPH_BACKUP_KEEP files
-/// matching `prefix` in `dir`, and on a collapse (newest at most a tenth of
-/// its predecessor, the state canary's threshold) rename that predecessor to
-/// `pre-shrink.<name>` so the last good copy survives rotation. Returns the
-/// pin path. Pins are never pruned: `pre-shrink.` never starts with a backup
-/// prefix.
+/// matching `prefix` in `dir`, hold the pile under [`GRAPH_BACKUP_MAX_BYTES`]
+/// (the newest copy always survives), and on a collapse (newest at most a
+/// tenth of its predecessor, the state canary's threshold) rename that
+/// predecessor to `pre-shrink.<name>` so the last good copy survives
+/// rotation. Returns the pin path. Pins are never pruned: `pre-shrink.`
+/// never starts with a backup prefix.
 /// ponytail: one pin per collapse, uncapped; cap pre-shrink.* if pins pile up.
 pub(crate) fn rotate_backups(dir: &Path, prefix: &str) -> Option<PathBuf> {
+    rotate_backups_capped(dir, prefix, GRAPH_BACKUP_MAX_BYTES)
+}
+
+fn rotate_backups_capped(dir: &Path, prefix: &str, max_bytes: u64) -> Option<PathBuf> {
     let mut existing: Vec<PathBuf> = std::fs::read_dir(dir)
         .ok()?
         .filter_map(|e| e.ok().map(|e| e.path()))
@@ -2609,6 +2620,24 @@ pub(crate) fn rotate_backups(dir: &Path, prefix: &str) -> Option<PathBuf> {
         for old in &existing[..existing.len() - GRAPH_BACKUP_KEEP] {
             let _ = std::fs::remove_file(old);
         }
+        existing.drain(..existing.len() - GRAPH_BACKUP_KEEP);
+    }
+    // The count cap cannot hold a byte bound: ten copies of a grown store
+    // outscale the cap no matter how few are kept. Oldest first, and the
+    // newest never goes, so an oversized store still holds one rollback copy.
+    let mut total: u64 = existing
+        .iter()
+        .map(|p| std::fs::metadata(p).map(|m| m.len()).unwrap_or(0))
+        .sum();
+    while existing.len() > 1 && total > max_bytes {
+        let bytes = std::fs::metadata(&existing[0])
+            .map(|m| m.len())
+            .unwrap_or(0);
+        if std::fs::remove_file(&existing[0]).is_err() {
+            break;
+        }
+        total = total.saturating_sub(bytes);
+        existing.remove(0);
     }
     pin
 }
@@ -3545,6 +3574,92 @@ mod tests {
         .unwrap();
         assert!(rotate_backups(&dir, "graph.db.").is_some());
         assert_eq!(count_prefixed(&dir, "pre-shrink."), 1);
+    }
+
+    #[test]
+    fn byte_cap_drops_oldest_copies_and_keeps_the_newest() {
+        // Three 1,000-byte copies and a 1,500-byte cap: the two oldest go
+        // until the pile fits, and the newest is what remains.
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("backups");
+        std::fs::create_dir(&dir).unwrap();
+        for i in 0..3 {
+            std::fs::write(
+                dir.join(format!("graph.db.20260914T00000{i}000000")),
+                vec![b'x'; 1_000],
+            )
+            .unwrap();
+        }
+
+        rotate_backups_capped(&dir, "graph.db.", 1_500);
+
+        assert_eq!(count_prefixed(&dir, "graph.db."), 1);
+        assert!(
+            dir.join("graph.db.20260914T000002000000").exists(),
+            "the newest copy survives"
+        );
+    }
+
+    #[test]
+    fn byte_cap_never_takes_the_newest_copy() {
+        // A store past the cap still holds one rollback copy: the newest
+        // never goes, even when it alone exceeds the cap.
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("backups");
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::write(
+            dir.join("graph.db.20260914T000000000000"),
+            vec![b'x'; 2_000],
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("graph.db.20260914T000001000000"),
+            vec![b'x'; 2_000],
+        )
+        .unwrap();
+
+        rotate_backups_capped(&dir, "graph.db.", 1_000);
+
+        assert_eq!(count_prefixed(&dir, "graph.db."), 1);
+        assert!(
+            dir.join("graph.db.20260914T000001000000").exists(),
+            "the newest survives past the cap"
+        );
+    }
+
+    #[test]
+    fn byte_cap_spares_the_collapse_pin() {
+        // The pin holds the last good copy, so a byte-bounded prune that
+        // takes every rotation copy must still leave it standing.
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("backups");
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::write(
+            dir.join("pre-shrink.graph.db.20260913T000000000000"),
+            vec![b'x'; 10_000],
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("graph.db.20260914T000000000000"),
+            vec![b'x'; 2_000],
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("graph.db.20260914T000001000000"),
+            vec![b'x'; 2_000],
+        )
+        .unwrap();
+
+        rotate_backups_capped(&dir, "graph.db.", 1_000);
+
+        assert_eq!(count_prefixed(&dir, "graph.db."), 1, "the pile is bounded");
+        assert_eq!(
+            std::fs::read(dir.join("pre-shrink.graph.db.20260913T000000000000"))
+                .unwrap()
+                .len(),
+            10_000,
+            "the pin is never pruned"
+        );
     }
 
     #[test]
