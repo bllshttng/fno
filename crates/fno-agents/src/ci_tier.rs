@@ -307,9 +307,18 @@ pub(crate) fn hold_reason(pass_row: &Value, branch: &str, now_ms: i64) -> Option
     ))
 }
 
-/// The refusal for a push of `branch` from `cwd`, or None to push. A held
-/// push writes one `ci_tier_held` row, which the arm wakes from.
+fn tier_on(root: &Path) -> bool {
+    crate::agents_config::config_value_deep(root, &["ci_tier", "enabled"]).and_then(|v| v.as_bool())
+        == Some(true)
+}
+
+/// The refusal for a push of `branch` from `cwd`, or None to push. A tier
+/// that is off never holds. A held push writes one `ci_tier_held` row,
+/// which the arm wakes from.
 pub(crate) fn push_hold(cwd: &Path, branch: &str) -> Option<String> {
+    if !tier_on(cwd) {
+        return None;
+    }
     let home = AgentsHome::from_env_opt()?;
     let slug = crate::pr_status::cache::git_slug(cwd)?;
     let path = crate::daemon::global_events_path(&home);
@@ -444,8 +453,15 @@ pub(crate) fn stranded_fact(root: &Path, slug: &str, sha: &str) -> Value {
 }
 
 /// Wake each held push once, when its hold clears against `pass_row`. A
-/// wake covers every older hold of the same branch.
-fn wake_held(path: &Path, slug: &str, pass_row: &Value, now_ms: i64) -> Result<(), String> {
+/// wake covers every older hold of the same branch. With `off` set the tier
+/// is switched off: every hold clears and no pass row is read.
+fn wake_held(
+    path: &Path,
+    slug: &str,
+    pass_row: &Value,
+    now_ms: i64,
+    off: bool,
+) -> Result<(), String> {
     // A hold can outlast a day below a full tier.
     let since = now_ms - 7 * DAY_MS;
     let key = |r: &Value| {
@@ -486,15 +502,19 @@ fn wake_held(path: &Path, slug: &str, pass_row: &Value, now_ms: i64) -> Result<(
     let slots = data["slots"].as_u64().unwrap_or(0) as usize;
     // Every woken session pushes before the next pass, so wake in rank
     // order and only as many as the free slots, at least one.
-    let mut budget = slots.saturating_sub(active).max(1);
+    let mut budget = if off {
+        usize::MAX
+    } else {
+        slots.saturating_sub(active).max(1)
+    };
     let mut order: Vec<_> = due.into_iter().collect();
     order.sort_by_key(|(b, _)| ranked.iter().position(|r| r == b));
     let emitter = crate::events::EventEmitter::new(path.to_path_buf(), "daemon");
     for (branch, (held_ms, held)) in order {
-        if hold_reason(pass_row, &branch, now_ms).is_some() {
+        if !off && hold_reason(pass_row, &branch, now_ms).is_some() {
             continue;
         }
-        let open = ranked.contains(&branch.as_str());
+        let open = off || ranked.contains(&branch.as_str());
         if open && budget == 0 {
             continue;
         }
@@ -505,10 +525,17 @@ fn wake_held(path: &Path, slug: &str, pass_row: &Value, now_ms: i64) -> Result<(
         let sid = held.pointer("/data/session_id").and_then(Value::as_str);
         if let Some(sid) = sid.filter(|_| open) {
             budget -= 1;
-            let text = format!(
-                "The CI tier has a free slot for PR #{pr} ({branch}). Run fno do pr push again \
-                 to push the commits it held."
-            );
+            let text = if off {
+                format!(
+                    "The CI tier is off, so PR #{pr} ({branch}) no longer waits. Run fno do pr \
+                     push again to push the commits it held."
+                )
+            } else {
+                format!(
+                    "The CI tier has a free slot for PR #{pr} ({branch}). Run fno do pr push \
+                     again to push the commits it held."
+                )
+            };
             let mut runner = crate::burn_watch::run_command;
             let (delivered, via) =
                 crate::burn_watch::wake_with_text(sid, false, &text, "ci-tier", &mut runner);
@@ -583,23 +610,39 @@ fn pass_repo(root: &Path, slug: &str, path: &Path) -> Result<(), String> {
             .emit(PASS_EVENT, &data)
             .map_err(|e| format!("{PASS_EVENT} row did not land: {e}"))?;
     }
-    wake_held(path, slug, &pass_row, now)
+    wake_held(path, slug, &pass_row, now, false)
 }
 
 pub(crate) fn run_pass(home: &AgentsHome) -> Result<(), String> {
     let path = crate::daemon::global_events_path(home);
     let mut slugs = HashSet::new();
+    let mut off: Vec<String> = Vec::new();
     for root in crate::daemon::worktree_sweep::registry_repo_roots(home) {
         let root = Path::new(&root);
-        let on = crate::agents_config::config_value_deep(root, &["ci_tier", "enabled"]);
-        if on.and_then(|v| v.as_bool()) != Some(true) {
+        let Some(slug) = crate::pr_status::cache::git_slug(root) else {
+            continue;
+        };
+        if !tier_on(root) {
+            off.push(slug);
             continue;
         }
         // Two clones of one repo are one tier.
-        let slug = crate::pr_status::cache::git_slug(root).filter(|s| slugs.insert(s.clone()));
-        let Some(slug) = slug else { continue };
+        if !slugs.insert(slug.clone()) {
+            continue;
+        }
         if let Err(e) = pass_repo(root, &slug, &path) {
             eprintln!("ci-tier: {slug}: {e}");
+        }
+    }
+    // A push held before the switch went off must not wait on a pass that
+    // will never come. A repo with any clone still on keeps its tier.
+    let now = crate::ci_cadence::millis_now();
+    let mut done = HashSet::new();
+    for slug in off.into_iter().filter(|s| !slugs.contains(s)) {
+        if done.insert(slug.clone()) {
+            if let Err(e) = wake_held(&path, &slug, &Value::Null, now, true) {
+                eprintln!("ci-tier: {slug}: {e}");
+            }
         }
     }
     Ok(())
@@ -640,6 +683,18 @@ mod tests {
             passed,
             total,
         }
+    }
+
+    #[test]
+    fn a_tier_switched_off_never_holds_a_push() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().join(".fno");
+        std::fs::create_dir_all(&cfg).unwrap();
+        std::fs::write(cfg.join("config.toml"), "[ci_tier]\nenabled = false\n").unwrap();
+        assert!(!tier_on(dir.path()));
+        assert_eq!(push_hold(dir.path(), "feature/x"), None);
+        std::fs::write(cfg.join("config.toml"), "[ci_tier]\nenabled = true\n").unwrap();
+        assert!(tier_on(dir.path()));
     }
 
     #[test]
