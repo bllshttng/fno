@@ -52,6 +52,10 @@ enum MatchRequest {
     /// The premise re-check: `argv` is the `fno inbox law recheck` command line.
     #[serde(rename = "recheck")]
     Recheck(RecordDoorRequest),
+    /// The renew door: `argv` is the `fno inbox law renew` command line.
+    /// Same ownership as `restore`: stdout carries the new id.
+    #[serde(rename = "renew")]
+    Renew(RecordDoorRequest),
     #[serde(rename = "scope-split")]
     ScopeSplit(ScopeSplitRequest),
     /// The decisions listing read: `argv` is the `fno backlog decisions`
@@ -799,6 +803,17 @@ fn stage_answer(req: StageRequest) -> Value {
     unread.extend(set.unread.iter().cloned());
     let today = chrono::Local::now().date_naive();
     let decision = crate::rules::decide(&set.rules, &ev, today);
+    let fired: Vec<&str> = decision
+        .fires
+        .iter()
+        .filter_map(|f| f.law.as_deref())
+        .collect();
+    crate::law_firings::record(
+        &crate::law_firings::default_path(),
+        &fired,
+        stage_name,
+        chrono::Utc::now(),
+    );
     let mut matching: Vec<String> = decision
         .fires
         .iter()
@@ -1320,6 +1335,8 @@ pub(crate) struct RecordDoor {
     /// The end condition (`--until`), parsed at record time. Separate from
     /// scope: the guard says when the rule ends, the filters say where it holds.
     guard: Option<Value>,
+    /// Main's date-only `--until` form: the day the rule file expires.
+    until: Option<String>,
 }
 
 /// A law's scope past the recording project, from one door flag. `None` in
@@ -1331,7 +1348,7 @@ pub(crate) enum Widen {
     User(Option<String>),
 }
 
-const RECORD_USAGE: &str = "usage: fno inbox law set <subject> [decision] [--decision-file f|-] [--rationale s] [--option s]... [--supersedes d-x] [--graduation k] [--graduation-ref r] [--read cmd]... [--global | --machine[=<id>] | --user[=<name>]] [--paths glob,glob] [--from date:<when>|event:<node>] [--while <cmd>]... [--between HH:MM-HH:MM] [--strength inform|warn|require-ack|block] [--quote <the user's words>] [--filter <key>=<value>]... [--not <key>=<value>]...";
+const RECORD_USAGE: &str = "usage: fno inbox law set <subject> [decision] [--decision-file f|-] [--rationale s] [--option s]... [--supersedes d-x] [--graduation k] [--graduation-ref r] [--read cmd]... [--global | --machine[=<id>] | --user[=<name>]] [--paths glob,glob] [--from date:<when>|event:<node>] [--while <cmd>]... [--between HH:MM-HH:MM] [--until YYYY-MM-DD|date:<when>|for:<30m|2h|1d>|event:<node>|set:<node>,<node>] [--strength inform|warn|require-ack|block] [--quote <the user's words>] [--filter <key>=<value>]... [--not <key>=<value>]...";
 /// The guard grammar of `--until`. A rule holds until its guard fires.
 /// `date` and `for` resolve to a fixed instant now; `event` waits for one
 /// node to close; `set` freezes the node ids now and drains as they close.
@@ -1415,6 +1432,7 @@ fn parse_record_door(args: &[String]) -> Result<RecordDoor, String> {
         whiles: Vec::new(),
         between: None,
         guard: None,
+        until: None,
     };
     let mut widened_by: Vec<String> = Vec::new();
     let mut positional = 0usize;
@@ -1466,10 +1484,19 @@ fn parse_record_door(args: &[String]) -> Result<RecordDoor, String> {
                 }
                 door.strength = Some(v);
             }
-            "--until" => door.guard = Some(parse_guard(&take(&mut i)?, chrono::Utc::now())?),
             "--from" => door.from = Some(take(&mut i)?),
             "--while" => door.whiles.push(take(&mut i)?),
             "--between" => door.between = Some(take(&mut i)?),
+            "--until" => {
+                let spec = take(&mut i)?;
+                // A bare YYYY-MM-DD is the rule-file expiry day and a date guard.
+                if let Ok(day) = crate::law_renew::parse_until(&spec) {
+                    door.guard = Some(parse_guard(&format!("date:{day}"), chrono::Utc::now())?);
+                    door.until = Some(day);
+                } else {
+                    door.guard = Some(parse_guard(&spec, chrono::Utc::now())?);
+                }
+            }
             "--global" => {
                 // An inline value parses like a bool flag should: --global=false
                 // must never widen because the value was ignored.
@@ -2136,6 +2163,9 @@ pub(crate) fn record_door_write(door: RecordDoor, decision: String, caller: &Cal
     }
     if let Some(when) = &when {
         data["when"] = when.clone();
+    }
+    if let Some(until) = &door.until {
+        data["until"] = json!(until);
     }
     if let Some(map) = data.as_object_mut() {
         crate::identity::stamp_person(map);
@@ -3093,6 +3123,9 @@ pub fn run_law_match_str(input: &str) -> i32 {
         MatchRequest::Restore(r) => {
             return crate::law_restore::run_restore(&r.argv);
         }
+        MatchRequest::Renew(r) => {
+            return crate::law_renew::run_renew(&r.argv);
+        }
         MatchRequest::Ask(r) => serde_json::to_string(&ask_answer(&r)).expect("serializes"),
         MatchRequest::Law(r) => {
             let near = near_law_lines(&r.law);
@@ -3549,6 +3582,7 @@ pub(crate) mod scope_tests {
             whiles: Vec::new(),
             between: None,
             guard: None,
+            until: None,
         }
     }
 

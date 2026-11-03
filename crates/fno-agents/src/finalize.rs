@@ -131,7 +131,7 @@ const HELP: &str = "fno-agents finalize - terminal-only side-effect writer (step
 Usage: fno-agents finalize --state <target-state.md> --cwd <project-root> --reason <TerminationReason> \\\n\
                            [--transcript <transcript.jsonl>] [--events <p>] [--global-events <p>] \\\n\
                            [--settings <p>] [--handoffs-dir <p>] [--postmortems-dir <p>]\n\
-Reason values: DonePRGreen|DoneAdvisory|DoneDelivery|DoneBatched|DoneAwaitingMerge|DoneAwaitingReview|DonePlanned|NoWork|Budget|NoProgress|HeldOnQuestion|Interrupted|Aborted";
+Reason values: DonePRGreen|DoneAdvisory|DoneDelivery|DoneBatched|DoneAwaitingMerge|DoneAwaitingReview|DoneAwaitingRuling|DonePlanned|NoWork|Budget|NoProgress|HeldOnQuestion|Interrupted|Aborted";
 
 // ── manifest fields finalize reads directly ────────────────────────────────
 
@@ -3484,6 +3484,32 @@ mod tests {
         for non_ship in ["Budget", "NoProgress", "Interrupted", "Aborted", "NoWork"] {
             assert!(!classify_legacy(non_ship).unwrap().projection().ship_reason);
         }
+    }
+
+    /// AC3: a ruling-only wait terminal classifies clean - stamped terminal,
+    /// never stuck, the circuit breaker reads it as success - while staying
+    /// out of the ship, merge-arm, node-close, claim-release and delivered
+    /// sets, shaped like DoneAwaitingMerge.
+    #[test]
+    fn done_awaiting_ruling_is_a_clean_terminal() {
+        let record = classify_legacy("DoneAwaitingRuling").expect("the wire reason must parse");
+        let p = record.projection();
+        assert!(!p.stuck, "{p:?}");
+        assert!(p.do_stamp_terminal, "{p:?}");
+        assert!(p.circuit_breaker_success, "{p:?}");
+        assert!(!p.ship_reason, "{p:?}");
+        assert!(!p.merge_armable, "{p:?}");
+        assert!(!p.node_closable, "{p:?}");
+        assert!(!p.graduate, "{p:?}");
+        assert!(p.record_ledger, "{p:?}");
+        let reason = crate::loopcheck::TerminationReason::DoneAwaitingRuling;
+        assert!(!reason.releases_claim());
+        assert!(!reason.is_delivered());
+        assert_eq!(
+            crate::loop_target::exit_code_for_reason(&reason),
+            0,
+            "a clean stop for input exits 0"
+        );
     }
 
     #[test]

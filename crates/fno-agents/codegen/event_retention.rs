@@ -7,7 +7,7 @@ pub fn validate(schema: &Value) -> Result<(), String> {
     let get = |key: &str| {
         retention
             .as_mapping()
-            .and_then(|m| m.get(&Value::String(key.into())))
+            .and_then(|m| m.get(Value::String(key.into())))
     };
     let classes = ["ephemeral", "gate", "telemetry", "durable"];
     let default = match get("default") {
@@ -29,7 +29,7 @@ pub fn validate(schema: &Value) -> Result<(), String> {
         };
         let class = match entry
             .as_mapping()
-            .and_then(|m| m.get(&Value::String("retention".into())))
+            .and_then(|m| m.get(Value::String("retention".into())))
         {
             None => default,
             Some(raw) => raw
