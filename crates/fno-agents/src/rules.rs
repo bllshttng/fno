@@ -852,7 +852,8 @@ mod tests {
             (failed.field, failed.saw.as_deref()),
             ("tools", Some("Edit"))
         );
-        assert_eq!(why[0].clauses[1].saw.as_deref(), Some("cli/src/law.py"));
+        let paths = why[0].clauses.iter().find(|c| c.field == "paths").unwrap();
+        assert_eq!(paths.saw.as_deref(), Some("cli/src/law.py"));
     }
 
     #[test]
