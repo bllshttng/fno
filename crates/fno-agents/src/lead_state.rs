@@ -49,6 +49,21 @@ pub(crate) fn is_terminal(row: &RegistryEntry) -> bool {
     )
 }
 
+/// The served harness fact (law d-10a72d88: a session never ends, and harness
+/// facts are served, never stored): this session's transcript moved inside
+/// the attention window, so the session is live whatever its stored row
+/// says. The stored word is a snapshot a sweep can stamp over a writing
+/// session (measured 2026-11-03: `pid_proven` exited over a lead whose
+/// transcript kept moving), and a lead read that refuses on it locks a live
+/// lead out of its own check-in. Claude-shaped by construction: another
+/// harness has no transcript seam here and keeps the stored-status read. The
+/// age seam arrives injected, the way `org_vacancies` takes it, so a test
+/// reads no machine state; the window is the one the served STATUS word
+/// uses, so the gates refuse on no fresher evidence than the operator sees.
+pub(crate) fn served_live(session: &str, transcript_age_s: &dyn Fn(&str) -> Option<i64>) -> bool {
+    transcript_age_s(session).is_some_and(|age| (age as f64) < crate::daemon::STALE_ATTENTION_S)
+}
+
 /// The one name join `mail_envelope.rs` renders addresses with: filter the
 /// rows by a liveness side first (dead twins must never answer for a live
 /// name), match name or alias, and refuse when the name still matches more

@@ -442,11 +442,10 @@ enum Role {
     /// `list`.
     BacklogList(Vec<String>),
     /// `fno inbox law set|stage|match`: the native law-door commands, classified
-    /// lexically the way `fno doctor event` is, because the Python CLI owns
-    /// the rest of the `inbox` tree.
+    /// lexically the way `fno doctor event` is.
     InboxLaw(Vec<OsString>),
     /// `fno inbox decisions ...`: the native listing read, classified beside
-    /// the law commands; the Python `inbox` tree keeps every other name.
+    /// the law commands; the menu classifier answers every other name.
     InboxDecisions(Vec<OsString>),
     /// `fno inbox decide ...`: the native decide record command, classified
     /// beside the law commands.
@@ -454,6 +453,9 @@ enum Role {
     /// `fno inbox user|operator status`: the native queue read; the carried
     /// tail is the `fno-agents compaction` argv.
     InboxUser(Vec<OsString>),
+    /// Every other `fno inbox ...` argv: the group and command help pages and
+    /// the refusals. The Python `inbox` mount is deleted, so none forwards.
+    InboxMenu(fno::inbox_user::InboxMenu),
     /// `fno inbox outstanding [--json|-J]`: the native listing and its
     /// subcommands; the carried tail is the `fno-agents compaction
     /// outstanding` argv.
@@ -1563,6 +1565,9 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     {
         return Role::InboxUser(argv);
     }
+    if let Some(menu) = fno::inbox_user::classify_inbox_menu(args) {
+        return Role::InboxMenu(menu);
+    }
     if let Some(rest) = fno::setup_run::classify(args) {
         return Role::SetupRun(rest);
     }
@@ -2238,6 +2243,18 @@ fn main() {
         Role::InboxDecide(rest) => std::process::exit(fno::law_cli::run_decide(&rest)),
         Role::InboxUser(argv) => {
             std::process::exit(fno_agents_exec("fno inbox", &["compaction"], &argv))
+        }
+        Role::InboxMenu(fno::inbox_user::InboxMenu::Help { text, bare }) => {
+            if bare {
+                eprint!("{text}");
+                std::process::exit(2);
+            }
+            print!("{text}");
+            std::process::exit(0)
+        }
+        Role::InboxMenu(fno::inbox_user::InboxMenu::Refuse(message)) => {
+            eprintln!("{message}");
+            std::process::exit(2)
         }
         Role::InboxNotify(rest) => std::process::exit(fno::notify_dispatch::run(&rest)),
         Role::NotifyDeprecated(rest) => {

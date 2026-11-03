@@ -28,7 +28,7 @@ pub fn postmortems_dir(cwd: &Path) -> Option<PathBuf> {
         let p = crate::backlog::settings::expand_home(&raw);
         return Some(if p.is_absolute() { p } else { cwd.join(p) });
     }
-    Some(crate::agents_config::state_dir(cwd)?.join("postmortems"))
+    crate::state_layout::place_dir(&crate::agents_config::state_dir(cwd)?, "postmortems")
 }
 
 /// `(frontmatter, body)`. `None` frontmatter when the text opens with no

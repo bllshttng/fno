@@ -4891,6 +4891,9 @@ event_types:
         paths:
           type: array
           description: "Optional. Repo-relative globs. A live law with paths becomes a pre-tool rule on Edit and Write of a matching file, printed once per session (hooks/rules-dispatch.sh)."
+        when:
+          type: object
+          description: "Optional. When the law is on. `from` is `{kind: date, at}` or `{kind: event, node_id}` and keeps the law off until it starts; once started it stays started. `while` is a list of `{cmd}` and the law is on only while every command exits 0. `window` is `{start, end}` in HH:MM machine-local time and may wrap midnight. All three must pass. An unreadable reading keeps the last answer, and with none the law stays on."
         trace:
           type: object
           description: "Optional. The traced-decision envelope (shape: decision_span.trace). The answer row carries span_id = decision_id and parent_span_id = the question_id it answers, so one query on trace_id reads the whole chain."
@@ -8737,6 +8740,10 @@ event_types:
     description: "A wait or cadence red-cancel of a head's runs still in flight: the failing checks that caused the red verdict, the head, the PR, and each run's cancel result."
     sources: [rust, daemon]
     data: {required: [slug, pr, head, cause, runs]}
+  - name: ci_cancel_intent
+    description: "Written before any Actions run cancel POST: the arm that asks (actor), the run, the session, pid and host. A run cancelled by the API with no such row came from a caller that predates this row."
+    sources: [rust, daemon]
+    data: {required: [slug, run, actor, session_id, pid, host]}
   - name: merge_queue_entry
     description: "authorized_merge queued a PR head in place of merging it, because merge_queue.enabled is on. The merge queue arm lands it in a batch tested on main."
     sources: [daemon, rust]

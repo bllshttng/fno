@@ -778,15 +778,31 @@ pub(crate) fn stamp_guard(ctx: &PushCtx, remote_branch: &str) {
 /// failed cancel is said on stderr, never blocks the push.
 fn cancel_runs(ctx: &PushCtx, runs: &[u64]) {
     for id in runs {
-        if let Err(err) = gh_api(
-            &ctx.gh_bin,
-            &ctx.cwd,
-            &format!("repos/{{owner}}/{{repo}}/actions/runs/{id}/cancel"),
-            &["-X", "POST"],
-        ) {
+        if let Err(err) = cancel_run(&ctx.gh_bin, &ctx.cwd, *id, "pr_push") {
             eprintln!("pr-push: cancel of run {id} failed ({err}); pushing anyway");
         }
     }
+}
+
+/// POST one run cancel after a `ci_cancel_intent` row names the caller. The
+/// row lands first: a cancel with no row is a run that dies with no actor on
+/// record. With a journal home and no row, the cancel does not go out.
+pub(crate) fn cancel_run(gh_bin: &str, cwd: &Path, run: u64, actor: &str) -> Result<(), String> {
+    if let Some(home) = crate::paths::AgentsHome::from_env_opt() {
+        let row = json!({
+            "slug": crate::pr_status::cache::git_slug(cwd),
+            "run": run,
+            "actor": actor,
+            "session_id": crate::claims::resolve_identity().0,
+            "pid": std::process::id(),
+            "host": crate::claims::hostname(),
+        });
+        crate::events::EventEmitter::new(crate::daemon::global_events_path(&home), "rust")
+            .emit("ci_cancel_intent", &row)
+            .map_err(|e| format!("the ci_cancel_intent row did not land ({e}); cancel withheld"))?;
+    }
+    let path = format!("repos/{{owner}}/{{repo}}/actions/runs/{run}/cancel");
+    gh_api(gh_bin, cwd, &path, &["-X", "POST"]).map(|_| ())
 }
 
 /// Record the push in the hook's stamp dir, so a hand push that follows

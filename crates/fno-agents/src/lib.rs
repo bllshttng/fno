@@ -308,6 +308,7 @@ pub mod launch_workdir;
 pub mod law_match;
 pub mod law_pr_shape;
 pub mod law_restore;
+pub mod law_when;
 pub mod lead_answers;
 pub mod lead_checkin;
 pub(crate) mod lead_checkin_beat_budget;
@@ -418,6 +419,7 @@ pub mod node_reading;
 pub mod node_route;
 pub mod node_seed;
 pub mod notice_route;
+pub mod notify_dispatch;
 pub mod nudge;
 pub mod numbers;
 pub mod observer;
@@ -630,6 +632,7 @@ pub mod spawn_gate_admission;
 pub mod spawn_gate_command;
 pub mod spawn_gate_forced;
 pub mod spawn_gate_lanes;
+pub(crate) mod spawn_gate_probe;
 pub(crate) mod spawn_gate_queue;
 pub mod spawn_gate_reservations;
 pub(crate) mod spawn_gate_slots;
@@ -652,6 +655,7 @@ pub mod stale_spaces;
 pub mod stalls;
 pub mod state;
 pub mod state_layout;
+mod state_layout_merge;
 pub mod state_layout_sqlite;
 pub mod state_path;
 pub mod state_root_drift;
@@ -1979,6 +1983,7 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // A wait or cadence red-cancel of a head's runs in flight
     // (pr_status/wait.rs), with the failing checks that caused it.
     "ci_wait_cancel",
+    "ci_cancel_intent",
     // A PR queued in place of a merge, and the merge queue arm's acts
     // (merge_queue.rs).
     "merge_queue_entry",

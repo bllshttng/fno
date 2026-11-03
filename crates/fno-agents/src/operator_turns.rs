@@ -400,7 +400,10 @@ pub(crate) fn capture_dir(cwd: &Path) -> Option<PathBuf> {
     std::env::var_os("FNO_OPERATOR_CAPTURE_DIR")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
-        .or_else(|| crate::agents_config::state_dir(cwd).map(|dir| dir.join("operator-capture")))
+        .or_else(|| {
+            crate::agents_config::state_dir(cwd)
+                .and_then(|dir| crate::state_layout::place_dir(&dir, "operator-capture"))
+        })
 }
 
 /// One operator session resolved for a queue read or an ack.
