@@ -23,17 +23,34 @@ pub(crate) struct PaneRegions {
     pub(crate) seam: Option<(usize, usize, usize)>,
 }
 
+/// Narrowest either pane may get when the seam moves.
+const MIN_PANE_W: usize = 20;
+
+/// The board width range the seam may take in a host `w` columns wide.
+pub(crate) fn seam_bounds(w: usize) -> (usize, usize) {
+    (MIN_PANE_W, w.saturating_sub(MIN_PANE_W + 1).max(MIN_PANE_W))
+}
+
 /// The layout `paint` computes for a host rect: the filter bar, the board
 /// and detail panes side by side at w >= 100 (stacked below it). `hint_h`
 /// is the caller's wrapped hint height (see [`hint_lines`]).
-pub(crate) fn regions(rect: (usize, usize, usize, usize), hint_h: usize) -> PaneRegions {
+pub(crate) fn regions(
+    rect: (usize, usize, usize, usize),
+    hint_h: usize,
+    seam_w: Option<usize>,
+) -> PaneRegions {
     let (top, left, h, w) = rect;
     // Region heights: the hint rows the text needs (capped by the caller),
     // the filter bar's two-row body, the rest split between the panes.
     let bar_h = 2.min(h.saturating_sub(hint_h));
     let panes_h = h.saturating_sub(bar_h + hint_h);
     let side_by_side = w >= 100;
-    let board_w = if side_by_side { w * 55 / 100 } else { w };
+    let board_w = if side_by_side {
+        let (lo, hi) = seam_bounds(w);
+        super::edge_drag::clamp(seam_w.unwrap_or(w * 55 / 100), lo, hi)
+    } else {
+        w
+    };
     // Side by side, the seam column holds a rule so board text never runs
     // into detail text; the detail pane starts one column right of it.
     let detail_w = w.saturating_sub(board_w + 1);
@@ -86,6 +103,7 @@ pub(crate) fn paint(
     cols: usize,
     rect: (usize, usize, usize, usize),
     owner: bool,
+    seam_w: Option<usize>,
     theme: &Theme,
 ) {
     let started = std::time::Instant::now();
@@ -107,7 +125,7 @@ pub(crate) fn paint(
         hint.into_iter().map(BLine::dimmed).collect()
     };
     let hint_h = if h >= 6 { hint.len().min(4) } else { 0 };
-    let laid_out = regions(rect, hint_h);
+    let laid_out = regions(rect, hint_h, seam_w);
     let bar_h = laid_out.bar.2;
     // The filter bar: the capped two-row cell wrap, unframed, carrying the
     // board's one esc chip on its top-right (it owned the framed title row
@@ -522,6 +540,7 @@ mod tests {
             cols,
             (0, 0, rows, cols),
             false,
+            None,
             &theme,
         );
         let hint_h = hint_lines(&b, false, cols).len().min(4);
@@ -545,7 +564,16 @@ mod tests {
         }
 
         let mut cells = vec![Cell::default(); rows * cols];
-        paint(&b, &mut cells, rows, cols, (0, 0, rows, cols), true, &theme);
+        paint(
+            &b,
+            &mut cells,
+            rows,
+            cols,
+            (0, 0, rows, cols),
+            true,
+            None,
+            &theme,
+        );
         let bold_found = (hint_row..rows)
             .flat_map(|r| (0..cols).map(move |c| (r, c)))
             .any(|(r, c)| {
@@ -566,9 +594,18 @@ mod tests {
         let theme = crate::theme::Theme::default_theme();
         let (rows, cols) = (24, 120);
         let mut cells = vec![Cell::default(); rows * cols];
-        paint(&b, &mut cells, rows, cols, (0, 0, rows, cols), true, &theme);
+        paint(
+            &b,
+            &mut cells,
+            rows,
+            cols,
+            (0, 0, rows, cols),
+            true,
+            None,
+            &theme,
+        );
         let hint_h = hint_lines(&b, false, cols).len().min(4);
-        let r = regions((0, 0, rows, cols), hint_h);
+        let r = regions((0, 0, rows, cols), hint_h, None);
         let (top, col, h) = r.seam.expect("w >= 100 lays out side by side");
         assert_eq!(col, r.board.1 + r.board.3);
         assert_eq!(r.detail.1, col + 1);
@@ -576,7 +613,21 @@ mod tests {
         for row in top..top + h {
             assert_eq!(cells[row * cols + col].c, '\u{2502}', "row {row}");
         }
-        assert!(regions((0, 0, rows, 80), hint_h).seam.is_none());
+        assert!(regions((0, 0, rows, 80), hint_h, None).seam.is_none());
+    }
+
+    #[test]
+    fn held_seam_width_moves_the_seam_inside_its_bounds() {
+        let hint_h = 1;
+        let default = regions((0, 0, 24, 120), hint_h, None);
+        assert_eq!(default.board.3, 66);
+        let held = regions((0, 0, 24, 120), hint_h, Some(40));
+        assert_eq!(held.seam.map(|s| s.1), Some(40));
+        assert_eq!(held.detail.3, 120 - 40 - 1);
+        let huge = regions((0, 0, 24, 120), hint_h, Some(500));
+        assert_eq!(huge.detail.3, 20, "the detail pane keeps its floor");
+        let tiny = regions((0, 0, 24, 120), hint_h, Some(2));
+        assert_eq!(tiny.board.3, 20, "the board pane keeps its floor");
     }
 
     fn board_with_fixture() -> BoardView {

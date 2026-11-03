@@ -1740,7 +1740,7 @@ Options:
   -h, --help          Print help.
 ";
 const CONTAIN_USAGE: &str =
-    "Usage: fno backlog contain <owner> <task_id>... [--surface <repo-relative-path>]...\n";
+    "Usage: fno backlog contain <owner> <task_id>... [--surface <repo-relative-path>]...\n       fno backlog contain --release <task_id>...\n";
 
 /// A help tail prints on stdout and exits 0; anything else is a usage error.
 fn usage_answer(tail: &[String], help: &str) -> i32 {
@@ -2112,7 +2112,7 @@ fn refuse_dead_owner(owner: &Value, context: &str) -> Option<String> {
     Some(format!(
         "{context} resolves to {id}, which {how}; {containment}, \
          so stamping containment here would leave every adoptee \
-         undispatchable with the no command to free it. {remedy}"
+         undispatchable until `fno backlog contain --release` frees them. {remedy}"
     ))
 }
 
@@ -2134,6 +2134,11 @@ pub fn run_contain(tail: &[String]) -> i32 {
         println!("Pass it once per path.");
         println!("A declared child closes on the owner's merge only when the merged PR touches a declared surface, or the PR body binds the child.");
         println!("With neither, the cascade releases the containment and the child stays open.");
+        println!();
+        println!(
+            "fno backlog contain --release <task_id>... lifts contained nodes out of their owner."
+        );
+        println!("A released node drops the owner's PR refs, clears its parent, and dispatches alone again.");
         return 0;
     }
     if tail.is_empty() {
@@ -2141,10 +2146,13 @@ pub fn run_contain(tail: &[String]) -> i32 {
     }
     let mut positionals: Vec<&String> = Vec::new();
     let mut surfaces: Vec<String> = Vec::new();
+    let mut release = false;
     let mut i = 0usize;
     while i < tail.len() {
         let tok = tail[i].as_str();
-        if tok == "--surface" {
+        if tok == "--release" {
+            release = true;
+        } else if tok == "--surface" {
             match take_value(tail, &mut i) {
                 Some(v) => surfaces.push(v),
                 None => {
@@ -2162,6 +2170,20 @@ pub fn run_contain(tail: &[String]) -> i32 {
         }
         i += 1;
     }
+    if release {
+        if !surfaces.is_empty() {
+            eprintln!("Error: --release cannot be combined with --surface");
+            return 2;
+        }
+        if positionals.is_empty() {
+            return usage_answer(&[], CONTAIN_USAGE);
+        }
+        if let Some(code) = refuse_non_graph_backend("contain") {
+            return code;
+        }
+        let ids_raw: Vec<String> = positionals.iter().map(|s| s.to_string()).collect();
+        return release_write(&settings::graph_path(), &expand_id_args(&ids_raw));
+    }
     if positionals.is_empty() {
         if !surfaces.is_empty() {
             eprintln!("Error: --surface needs an owner and at least one task_id");
@@ -2176,6 +2198,74 @@ pub fn run_contain(tail: &[String]) -> i32 {
     }
     let ids = expand_id_args(&ids_raw);
     contain_write(&settings::graph_path(), &owner_arg, &ids, &surfaces)
+}
+/// `fno backlog contain --release <ids...>`: the inverse of containment, one
+/// locked mutation, atomic across the batch. A node that is not contained
+/// refuses, so a typo never reads as a release.
+fn release_write(graph: &Path, ids: &[String]) -> i32 {
+    let exit_code: RefCell<i32> = RefCell::new(0);
+    let released: RefCell<Vec<(String, String)>> = RefCell::new(Vec::new());
+    let applied = graph_store::mutate_rows(
+        graph,
+        std::time::Duration::from_secs(5),
+        None,
+        None,
+        |working| {
+            let mut seen: Vec<String> = Vec::new();
+            for tid in ids {
+                let Some(target) = find_node(working, tid) else {
+                    exit_code.replace(3);
+                    eprintln!("Error: feature(s) not found: {tid}");
+                    return Ok(false);
+                };
+                let target_id = text_at(target, "id").unwrap_or(tid.as_str()).to_string();
+                if seen.contains(&target_id) {
+                    exit_code.replace(1);
+                    eprintln!("Error: node {target_id} is named twice");
+                    return Ok(false);
+                }
+                if text_at(target, "contained_in").is_none() {
+                    exit_code.replace(2);
+                    eprintln!("Error: {target_id} is not contained in any owner");
+                    return Ok(false);
+                }
+                seen.push(target_id);
+            }
+            for target_id in &seen {
+                let idx = working
+                    .iter()
+                    .position(|e| text_at(e, "id") == Some(target_id.as_str()))
+                    .expect("target resolved above");
+                let owner = text_at(&working[idx], "contained_in")
+                    .unwrap_or_default()
+                    .to_string();
+                if let Err(e) = super::node_ref::release_contained(working, target_id) {
+                    exit_code.replace(1);
+                    eprintln!("Error: {e}");
+                    return Ok(false);
+                }
+                let obj = working[idx].as_object_mut().expect("row");
+                obj.remove("containment_surfaces");
+                if obj.get("parent").and_then(Value::as_str) == Some(owner.as_str()) {
+                    obj.insert("parent".into(), Value::Null);
+                }
+                released.borrow_mut().push((target_id.clone(), owner));
+            }
+            Ok(true)
+        },
+    );
+    if let Err(err) = applied {
+        eprintln!("Error: {err}");
+        return 1;
+    }
+    let code = exit_code.into_inner();
+    if code != 0 {
+        return code;
+    }
+    for (tid, owner) in released.into_inner() {
+        println!("released {tid} from {owner}; it dispatches alone again");
+    }
+    0
 }
 fn contain_write(graph: &Path, owner_arg: &str, ids: &[String], surfaces: &[String]) -> i32 {
     if ids.is_empty() {
@@ -2980,6 +3070,35 @@ mod tests {
             vec!["ab-22222222".to_string(), "ab-33333333".to_string()],
             "every non-done parented child frees; done keeps parent as history"
         );
+    }
+
+    #[test]
+    fn contain_release_lifts_a_child_and_refuses_an_uncontained_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let graph = dir.path().join("graph.json");
+        let rows = vec![
+            json!({"id": "ab-11111111", "title": "owner", "status": "in_progress"}),
+            json!({"id": "ab-22222222", "title": "kid", "status": "ready",
+                   "contained_in": "ab-11111111", "parent": "ab-11111111",
+                   "containment_surfaces": ["a.rs"]}),
+            json!({"id": "ab-33333333", "title": "free", "status": "ready"}),
+        ];
+        graph_store::seed_rows(&graph, &rows).unwrap();
+        assert_eq!(
+            release_write(&graph, &["ab-33333333".into()]),
+            2,
+            "a node that is not contained refuses"
+        );
+        assert_eq!(release_write(&graph, &["ab-22222222".into()]), 0);
+        let rows = graph_store::read_rows(&graph).unwrap();
+        let kid = rows
+            .iter()
+            .find(|e| text_at(e, "id") == Some("ab-22222222"))
+            .unwrap();
+        assert!(kid.get("contained_in").is_none());
+        assert!(kid.get("containment_surfaces").is_none());
+        assert!(text_at(kid, "parent").is_none());
+        assert_eq!(text_at(kid, "released_from"), Some("ab-11111111"));
     }
 
     #[test]

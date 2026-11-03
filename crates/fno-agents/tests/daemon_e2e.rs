@@ -918,6 +918,52 @@ async fn status_client_exits_13_when_daemon_down() {
     std::fs::remove_dir_all(home.root()).ok();
 }
 
+/// x-44e8: the `agent.status` payload carries the arms fold (schema, journal
+/// list, fold rows, per-arm maxima), so a status client replays the
+/// in-memory fold with no store scan of its own.
+#[tokio::test]
+async fn status_payload_carries_the_arms_fold() {
+    let home = short_home();
+    home.ensure_root().unwrap();
+    let daemon_bin = PathBuf::from(DAEMON_BIN);
+    let _daemon = start_daemon_env(&home, &[]);
+    let resp = call(
+        &home,
+        &daemon_bin,
+        &Request::new(1, "agent.status", json!({})),
+    )
+    .await
+    .expect("status served");
+    assert!(!resp.is_err(), "status failed: {:?}", resp.error());
+    let result = resp.result().unwrap();
+    let fold = &result["arms_fold"];
+    assert_eq!(
+        fold["schema_version"], 1,
+        "the served fold names its schema"
+    );
+    let journals = fold["journals"].as_array().expect("journal list");
+    assert_eq!(
+        journals.len(),
+        2,
+        "home journal + global twin, both named in the payload"
+    );
+    // The client half: the served fold parses and assembles into the arms
+    // readout for the serving home.
+    let served: fno_agents::tick_ledger::ArmFoldServed =
+        serde_json::from_value(fold.clone()).expect("served fold parses");
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let (arms, _trace) = fno_agents::tick_ledger::arms_from_served(&served, &home, now)
+        .expect("served fold assembles for the serving home");
+    assert!(
+        arms.iter().any(|r| r.arm == "pr_watch_merge"),
+        "the known arms ride the assembled fold"
+    );
+    std::fs::remove_dir_all(home.root()).ok();
+}
+
 /// Seed a settled exec source row so a promote can resolve it. The daemon reads
 /// the registry file fresh on each handle_spawn, so a directly-seeded row is
 /// visible to admit_promote. short_id empty => Python-style/non-PTY source.

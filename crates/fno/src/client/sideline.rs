@@ -441,6 +441,7 @@ impl View {
                         cols,
                         (0, 1, rows - chrome_rows - 1, text_w),
                         self.input_owner() == super::region_focus::RegionOwner::Board,
+                        self.edge_sizes.get(super::edge_drag::Edge::BacklogSeam),
                         &self.theme,
                     );
                 }

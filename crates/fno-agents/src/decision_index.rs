@@ -424,15 +424,16 @@ pub fn row_scope(row: &Value) -> &str {
 
 /// The session-scope test: `global` always governs; a
 /// `project:<slug>` row governs only the matching slug; a `machine:<id>` or
-/// `person:<name>` row governs only the session that resolves that identity.
+/// `user:<name>` (legacy `person:<name>`) row governs only the session that resolves that identity.
 pub fn row_in_scope(row: &Value, project: &str) -> bool {
-    match row_scope(row) {
-        "global" => true,
-        scoped => binds_here(scoped).unwrap_or_else(|| scoped == format!("project:{project}")),
-    }
+    filters_match(row)
+        && match row_scope(row) {
+            "global" => true,
+            scoped => binds_here(scoped).unwrap_or_else(|| scoped == format!("project:{project}")),
+        }
 }
 
-/// The identity arms of the scope test: `Some` for a `machine:` or `person:`
+/// The identity arms of the scope test: `Some` for a `machine:` or `user:`
 /// scope, `None` for every other scope.
 pub fn binds_here(scope: &str) -> Option<bool> {
     binds(scope, crate::claims::machine_id, crate::identity::person)
@@ -450,17 +451,26 @@ fn binds(
         let mine = machine();
         return Some(mine.is_empty() || mine == id);
     }
-    scope.strip_prefix("person:").map(|name| name == person())
+    scope
+        .strip_prefix("user:")
+        .or_else(|| scope.strip_prefix("person:"))
+        .map(|name| name == person())
 }
 
 /// The one visibility test every scope filter shares. `None` fails open on
 /// the project: it hides no project row. A row bound to another machine or
-/// person still hides, because identity needs no project.
+/// user still hides, because identity needs no project.
 pub fn row_visible(row: &Value, project: Option<&str>) -> bool {
     match project {
         Some(project) => row_in_scope(row, project),
-        None => binds_here(row_scope(row)) != Some(false),
+        None => filters_match(row) && binds_here(row_scope(row)) != Some(false),
     }
+}
+
+/// The row's filters beside its scope; every filter must match. The matcher
+/// and the session facts live in `law_filters`.
+pub fn filters_match(row: &Value) -> bool {
+    crate::law_filters::filters_match(row)
 }
 
 /// Keep only the rows the session may see, returning the withheld count.
@@ -784,5 +794,21 @@ mod scope_tests {
             assert_eq!(retain_in_scope(&mut index, project), 1, "{project:?}");
             assert_eq!(index.rows.len(), 2, "{project:?}");
         }
+    }
+
+    #[test]
+    fn a_user_scope_binds_like_the_legacy_person_scope() {
+        assert_eq!(
+            binds("user:jason", || "m".into(), || "jason".into()),
+            Some(true)
+        );
+        assert_eq!(
+            binds("user:anouk", || "m".into(), || "jason".into()),
+            Some(false)
+        );
+        assert_eq!(
+            binds("person:anouk", || "m".into(), || "jason".into()),
+            Some(false)
+        );
     }
 }

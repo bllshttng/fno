@@ -154,6 +154,168 @@ pub fn classify_inbox_day(args: &[OsString]) -> Option<Vec<OsString>> {
     ])
 }
 
+/// What `fno inbox` prints when no native command claims the words: a help
+/// page, or a refusal. The Python `inbox` mount is deleted, so the front
+/// answers here and nothing forwards.
+#[derive(Debug, PartialEq, Eq)]
+pub enum InboxMenu {
+    /// A help page. `bare` is true when the caller named no command, which
+    /// prints to stderr and exits 2 (the usage convention of a bare group).
+    Help { text: String, bare: bool },
+    /// A refusal line, printed to stderr with exit 2.
+    Refuse(String),
+}
+
+const INBOX_ABOUT: &str = "What is waiting on a human: approvals, notify, outstanding \
+carve-outs and questions, the lead board, decisions, law, and the user conversation queue.";
+
+const INBOX_COMMANDS: &[(&str, &str)] = &[
+    (
+        "approvals",
+        "Inspect and decide pending approvals for consequential effects.",
+    ),
+    ("board", "The lead board."),
+    ("day", "Mark the start or end of the day: day start|end."),
+    ("decide", "Record a decision."),
+    ("decisions", "List recorded decisions."),
+    ("law", "Set, stage and match standing law."),
+    ("notify", "Send the user a notice: notify TITLE MESSAGE."),
+    (
+        "outstanding",
+        "Carve-outs and questions waiting on a human.",
+    ),
+    (
+        "peers",
+        "Peer projects, their surfaces and surface globs: peers [--json].",
+    ),
+    (
+        "user",
+        "Queue of this session's undispositioned user turns, derived from the transcript.",
+    ),
+];
+
+const USER_ABOUT: &str = "Queue of this session's undispositioned user turns, derived from the \
+transcript by the Rust reader and acked to a per-session ledger under ~/.fno/operator-capture/ \
+(the <session>.scan.json scan cursor is a cache; deleting it only forces a full rescan). Machine \
+envelopes are refused and counted by name in that reader. Residual hole: raw mail (send --raw) \
+reads as a user turn; over-counting is the safe direction there.";
+
+const USER_COMMANDS: &[(&str, &str)] = &[
+    (
+        "list",
+        "Undispositioned user turns, oldest first: list [--limit N] [--json].",
+    ),
+    (
+        "ack",
+        "Dispose one user turn, naming what it produced: ack TURN --outcome OUTCOME [--why TEXT].",
+    ),
+    (
+        "status",
+        "Queue depth for this session - the number the capture hook reads: status [--json].",
+    ),
+];
+
+const APPROVALS_ABOUT: &str = "Inspect and decide pending approvals for consequential effects.";
+
+const APPROVALS_COMMANDS: &[(&str, &str)] = &[
+    ("ls", "List approval requests (--pending, --json)."),
+    (
+        "show",
+        "Show every bound field of one request: show DIGEST [--json].",
+    ),
+    (
+        "decide",
+        "Decide one exact request: decide DIGEST --as PRINCIPAL (--approve | --decline).",
+    ),
+];
+
+fn group_page(path: &str, about: &str, commands: &[(&str, &str)]) -> String {
+    let width = commands.iter().map(|(n, _)| n.len()).max().unwrap_or(0);
+    let mut text = format!("Usage: {path} COMMAND [ARGS]...\n\n  {about}\n\nCommands:\n");
+    for (name, line) in commands {
+        text.push_str(&format!("  {name:width$}  {line}\n"));
+    }
+    text
+}
+
+fn no_such_command(path: &str, word: &str) -> InboxMenu {
+    InboxMenu::Refuse(format!(
+        "{path}: no such command '{word}'. `{path} --help` lists the commands."
+    ))
+}
+
+fn is_help(word: &str) -> bool {
+    matches!(word, "-h" | "--help")
+}
+
+/// Answer one two-level group (`user`, `approvals`) from its command table.
+fn group_menu(path: &str, about: &str, commands: &[(&str, &str)], rest: &[&str]) -> InboxMenu {
+    let Some(&first) = rest.first() else {
+        return InboxMenu::Help {
+            text: group_page(path, about, commands),
+            bare: true,
+        };
+    };
+    if is_help(first) {
+        return InboxMenu::Help {
+            text: group_page(path, about, commands),
+            bare: false,
+        };
+    }
+    let Some((name, line)) = commands.iter().find(|(n, _)| *n == first) else {
+        return no_such_command(path, first);
+    };
+    if rest[1..].iter().any(|w| is_help(w)) {
+        return InboxMenu::Help {
+            text: format!("Usage: {path} {name}\n\n  {line}\n"),
+            bare: false,
+        };
+    }
+    InboxMenu::Refuse(format!(
+        "{path} {name}: unrecognized arguments. `{path} {name} --help` shows the usage."
+    ))
+}
+
+/// Answer every `fno inbox ...` argv the native classifiers did not claim.
+/// Reached last: a claimed command never gets here, so each branch is a help
+/// request or a refusal.
+pub fn classify_inbox_menu(args: &[OsString]) -> Option<InboxMenu> {
+    if args.first()?.to_str()? != "inbox" {
+        return None;
+    }
+    let words: Vec<String> = args[1..]
+        .iter()
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect();
+    let words: Vec<&str> = words.iter().map(String::as_str).collect();
+    let Some(&first) = words.first() else {
+        return Some(InboxMenu::Help {
+            text: group_page("fno inbox", INBOX_ABOUT, INBOX_COMMANDS),
+            bare: true,
+        });
+    };
+    if is_help(first) {
+        return Some(InboxMenu::Help {
+            text: group_page("fno inbox", INBOX_ABOUT, INBOX_COMMANDS),
+            bare: false,
+        });
+    }
+    Some(match first {
+        "user" => group_menu("fno inbox user", USER_ABOUT, USER_COMMANDS, &words[1..]),
+        "operator" => group_menu("fno inbox operator", USER_ABOUT, USER_COMMANDS, &words[1..]),
+        "approvals" => group_menu(
+            "fno inbox approvals",
+            APPROVALS_ABOUT,
+            APPROVALS_COMMANDS,
+            &words[1..],
+        ),
+        word if INBOX_COMMANDS.iter().any(|(n, _)| *n == word) => InboxMenu::Refuse(format!(
+            "fno inbox {word}: unrecognized arguments. `fno inbox --help` lists the commands."
+        )),
+        word => no_such_command("fno inbox", word),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -252,6 +414,7 @@ mod tests {
 
     #[test]
     fn approvals_commands_run_native_and_help_forwards() {
+        unclaimed_inbox_words_render_help_or_refuse_and_never_forward();
         assert_eq!(
             classify_inbox_approvals(&mk(&["inbox", "approvals", "ls", "--pending", "-J"])),
             Some(mk(&["approvals", "ls", "--pending", "-J"]))
@@ -263,5 +426,37 @@ mod tests {
         assert!(classify_inbox_approvals(&mk(&["inbox", "approvals", "ls", "--help"])).is_none());
         assert!(classify_inbox_approvals(&mk(&["inbox", "approvals"])).is_none());
         assert!(classify_inbox_approvals(&mk(&["inbox", "approvals", "nope"])).is_none());
+    }
+    fn unclaimed_inbox_words_render_help_or_refuse_and_never_forward() {
+        let help = |a: &[&str]| match classify_inbox_menu(&mk(a)) {
+            Some(InboxMenu::Help { text, bare }) => Some((text, bare)),
+            _ => None,
+        };
+        let refusal = |a: &[&str]| match classify_inbox_menu(&mk(a)) {
+            Some(InboxMenu::Refuse(m)) => Some(m),
+            _ => None,
+        };
+        let (page, bare) = help(&["inbox"]).unwrap();
+        assert!(bare && page.contains("approvals") && page.contains("peers"));
+        assert_eq!(help(&["inbox", "--help"]).map(|h| h.1), Some(false));
+        let (user, bare) = help(&["inbox", "user", "--help"]).unwrap();
+        assert!(!bare && user.contains("ack") && user.contains("status"));
+        assert!(help(&["inbox", "operator"]).unwrap().1);
+        let (cmd, _) = help(&["inbox", "user", "ack", "--help"]).unwrap();
+        assert!(cmd.contains("--outcome"));
+        assert!(help(&["inbox", "approvals", "decide", "-h"]).is_some());
+        assert!(refusal(&["inbox", "bogus"])
+            .unwrap()
+            .contains("no such command 'bogus'"));
+        assert!(refusal(&["inbox", "user", "status", "--bogus"])
+            .unwrap()
+            .contains("unrecognized"));
+        assert!(refusal(&["inbox", "user", "bogus"])
+            .unwrap()
+            .contains("no such command"));
+        assert!(refusal(&["inbox", "law", "nope"])
+            .unwrap()
+            .contains("unrecognized"));
+        assert!(classify_inbox_menu(&mk(&["agents"])).is_none());
     }
 }

@@ -256,8 +256,8 @@ pub struct QuestionsFold {
 }
 
 #[derive(Deserialize)]
-struct QuestionsResponse {
-    items: Vec<QuestionItem>,
+pub(crate) struct QuestionsResponse {
+    pub(crate) items: Vec<QuestionItem>,
     #[serde(default)]
     answered: Vec<AnsweredItem>,
     #[serde(default)]

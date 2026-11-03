@@ -210,10 +210,10 @@ async fn messages_reply_board_contracts() {
     );
     b.col2 = ChatTab::Chats;
     let all_text: String = b
-        .columns(100)
+        .columns(100, split(100, &Default::default()))
         .0
         .into_iter()
-        .chain(b.columns(100).1)
+        .chain(b.columns(100, split(100, &Default::default())).1)
         .map(|l| l.text)
         .collect::<Vec<_>>()
         .join("\n");
@@ -516,7 +516,7 @@ async fn messages_reply_board_contracts() {
     // A title [i] click opens the detail modal; the ... click opens the
     // chat-id popup (AC17-HP). The thread column starts at split(100).0 +
     // split(100).1; the title line paints at screen row 1.
-    let (col1_w, col2_w) = split(100);
+    let (col1_w, col2_w) = split(100, &Default::default());
     let tap = |col: usize| crate::mouse::MouseReport {
         kind: crate::proto::MouseKind::Press(crate::proto::MouseButton::Left),
         row: 1,
