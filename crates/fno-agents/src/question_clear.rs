@@ -236,6 +236,39 @@ mod tests {
         );
     }
 
+    // A plain scope answer from the no-identity board lane records operator
+    // law: the user's surface reaches the clear door without a session, and
+    // the row must carry the user's authority (hold-release accepts only a
+    // superuser-lane ruling).
+    #[test]
+    fn a_board_answer_records_operator_law_without_a_subject_special_case() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut req = request(&tmp, "q-board", Some("Accept the stated owner for now."));
+        req.provenance = json!({"decided_by": "unattributed-caller"});
+        seed_question(
+            &req,
+            &ask("q-board", "who may set this?", None, Some("x-1")),
+        );
+
+        let result = run_clear(&req);
+
+        assert_eq!(result.exit_code, 0, "{:?}", result.lines);
+        let envelope = rows(&req.journal_path, &["operator_decision"])
+            .into_iter()
+            .find(|r| r["data"]["question_id"] == "q-board")
+            .expect("the board answer recorded");
+        let data = &envelope["data"];
+        assert_eq!(data["authority_source"], "operator");
+        assert_eq!(data["decided_by"], "operator");
+        assert_eq!(data["attested_by"], "question-board");
+        assert_eq!(data["subject"], "x-1");
+        let law_row = json!({
+            "ts": envelope["ts"],
+            "authority_source": data["authority_source"],
+        });
+        assert!(crate::decision_index::is_law(&law_row), "{law_row}");
+    }
+
     #[test]
     fn a_different_answer_refuses_unless_it_overrides_a_coordination_row() {
         let tmp = tempfile::tempdir().unwrap();
@@ -2089,14 +2122,20 @@ fn make_decision(
         .unwrap_or("");
     // The board answer carries the operator's authority onto the row: the
     // gate honors only `operator` rows, and the answer came from the
-    // operator's own surface. `decided_by` is set outright: the no-identity
-    // path resolves "unattributed-caller", which must not sit on an operator
-    // law row, and every attended path already resolves "operator".
-    if grant_subject.is_some() || retraction.is_some() {
+    // operator's own surface. Every user-lane answer stamps operator, not
+    // just grants and retractions: a plain scope answer used to keep the
+    // unattributed row, and hold-release refuses anything but a
+    // superuser-lane ruling. `decided_by` is corrected only where the
+    // no-identity path resolved "unattributed-caller", which must not sit
+    // on an operator law row; an attended path already resolves "operator",
+    // and an explicit decider stays.
+    if operator_can_grant(req) {
         decision
             .entry("authority_source")
             .or_insert(json!("operator"));
-        decision.insert("decided_by".into(), json!("operator"));
+        if decision.get("decided_by").and_then(Value::as_str) == Some("unattributed-caller") {
+            decision.insert("decided_by".into(), json!("operator"));
+        }
         decision
             .entry("attested_by")
             .or_insert(json!("question-board"));
