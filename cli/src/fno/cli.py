@@ -141,6 +141,11 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
         "The updater is native: the Rust front door answers `update` and `doctor update`.",
         {"hidden": True},
     ),
+    "hello": (
+        "fno.hello_cli:hello_command",
+        "Print a greeting (install + lazy-registry smoke probe).",
+        {"hidden": True},
+    ),
 }
 
 # T1 actions are parsed by the group dispatcher and keep their existing typing.
