@@ -261,8 +261,7 @@ fn emit_operator_notice(title: &str, message: &str, pointer: &str) -> bool {
 fn project_journal() -> PathBuf {
     // @fno-copy:begin journal_path
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    crate::state_path::resolve("events", &cwd)
-        .unwrap_or_else(|| cwd.join(".fno").join("events.jsonl"))
+    crate::state_path::resolve("events", &cwd).unwrap_or_default()
     // @fno-copy:end journal_path
 }
 
