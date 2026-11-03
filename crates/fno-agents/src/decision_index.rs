@@ -467,22 +467,10 @@ pub fn row_visible(row: &Value, project: Option<&str>) -> bool {
     }
 }
 
-/// The row's filters beside its scope; every filter must match. `node` binds
-/// the session whose `FNO_NODE` names that node, and `not_node` excludes it.
-/// A session with no node fails open, the posture every law reader keeps.
+/// The row's filters beside its scope; every filter must match. The matcher
+/// and the session facts live in `law_filters`.
 pub fn filters_match(row: &Value) -> bool {
-    filters_match_for(row, std::env::var("FNO_NODE").ok().as_deref())
-}
-
-fn filters_match_for(row: &Value, node: Option<&str>) -> bool {
-    let Some(mine) = node.filter(|n| !n.is_empty()) else {
-        return true;
-    };
-    let is = |key: &str| {
-        row.pointer(&format!("/filters/{key}"))
-            .and_then(Value::as_str)
-    };
-    is("node").is_none_or(|n| n == mine) && is("not_node").is_none_or(|n| n != mine)
+    crate::law_filters::filters_match(row)
 }
 
 /// Keep only the rows the session may see, returning the withheld count.
@@ -806,27 +794,6 @@ mod scope_tests {
             assert_eq!(retain_in_scope(&mut index, project), 1, "{project:?}");
             assert_eq!(index.rows.len(), 2, "{project:?}");
         }
-    }
-
-    #[test]
-    fn filters_must_all_match_and_a_nodeless_session_fails_open() {
-        let row = serde_json::json!({"filters": {"node": "x-aaaa", "not_node": "x-bbbb"}});
-        assert!(filters_match_for(&row, Some("x-aaaa")));
-        assert!(
-            !filters_match_for(&row, Some("x-cccc")),
-            "node filter excludes others"
-        );
-        let not_only = serde_json::json!({"filters": {"not_node": "x-bbbb"}});
-        assert!(filters_match_for(&not_only, Some("x-aaaa")));
-        assert!(
-            !filters_match_for(&not_only, Some("x-bbbb")),
-            "the not form excludes"
-        );
-        assert!(filters_match_for(&row, None), "no node fails open");
-        assert!(
-            filters_match_for(&serde_json::json!({}), Some("x-aaaa")),
-            "no filter applies everywhere"
-        );
     }
 
     #[test]

@@ -1287,8 +1287,9 @@ pub(crate) struct RecordDoor {
     raw_paths: Vec<String>,
     quote: Option<String>,
     /// Filters beside the scope: the law applies only where every one matches.
-    node_filter: Option<String>,
-    not_node_filter: Option<String>,
+    /// `(key, value)` pairs; the second list is the `not` form.
+    filters: Vec<(String, String)>,
+    not_filters: Vec<(String, String)>,
 }
 
 /// A law's scope past the recording project, from one door flag. `None` in
@@ -1300,7 +1301,7 @@ pub(crate) enum Widen {
     User(Option<String>),
 }
 
-const RECORD_USAGE: &str = "usage: fno inbox law set <subject> [decision] [--decision-file f|-] [--rationale s] [--option s]... [--supersedes d-x] [--graduation k] [--graduation-ref r] [--read cmd]... [--global | --machine[=<id>] | --user[=<name>]] [--paths glob,glob] [--quote <the user's words>] [--node <id>] [--not-node <id>]";
+const RECORD_USAGE: &str = "usage: fno inbox law set <subject> [decision] [--decision-file f|-] [--rationale s] [--option s]... [--supersedes d-x] [--graduation k] [--graduation-ref r] [--read cmd]... [--global | --machine[=<id>] | --user[=<name>]] [--paths glob,glob] [--quote <the user's words>] [--filter <key>=<value>]... [--not <key>=<value>]...";
 const RETRACT_USAGE: &str = "usage: fno inbox law retract <subject-or-decision-id> --reason <why> [--authority operator|chat_attested] [--quote <the user's words>]";
 const HISTORY_USAGE: &str = "usage: fno inbox law history <subject-or-decision-id>";
 
@@ -1318,8 +1319,8 @@ fn parse_record_door(args: &[String]) -> Result<RecordDoor, String> {
         widen: None,
         raw_paths: Vec::new(),
         quote: None,
-        node_filter: None,
-        not_node_filter: None,
+        filters: Vec::new(),
+        not_filters: Vec::new(),
     };
     let mut widened_by: Vec<String> = Vec::new();
     let mut positional = 0usize;
@@ -1351,8 +1352,16 @@ fn parse_record_door(args: &[String]) -> Result<RecordDoor, String> {
             "--read" => door.reads.push(take(&mut i)?),
             "--paths" => door.raw_paths.push(take(&mut i)?),
             "--quote" => door.quote = Some(take(&mut i)?),
-            "--node" => door.node_filter = Some(take(&mut i)?),
-            "--not-node" => door.not_node_filter = Some(take(&mut i)?),
+            "--filter" | "--not" => {
+                let spec = take(&mut i)?;
+                let pair = crate::law_filters::parse_pair(&spec)
+                    .map_err(|e| format!("{flag} {spec}: {e}\n{RECORD_USAGE}"))?;
+                if flag == "--not" {
+                    door.not_filters.push(pair);
+                } else {
+                    door.filters.push(pair);
+                }
+            }
             "--global" => {
                 // An inline value parses like a bool flag should: --global=false
                 // must never widen because the value was ignored.
@@ -1968,12 +1977,14 @@ pub(crate) fn record_door_write(door: RecordDoor, decision: String, caller: &Cal
         data["reads"] = json!(rows);
     }
     let mut filters = serde_json::Map::new();
-    for (key, value) in [
-        ("node", &door.node_filter),
-        ("not_node", &door.not_node_filter),
-    ] {
-        if let Some(v) = value.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
-            filters.insert(key.into(), json!(v));
+    for (prefix, pairs) in [("", &door.filters), ("not_", &door.not_filters)] {
+        for (key, value) in pairs {
+            let name = format!("{prefix}{key}");
+            let joined = match filters.get(&name).and_then(Value::as_str) {
+                Some(prev) => format!("{prev},{value}"),
+                None => value.clone(),
+            };
+            filters.insert(name, json!(joined));
         }
     }
     if !filters.is_empty() {
@@ -3373,9 +3384,31 @@ pub(crate) mod scope_tests {
             widen: None,
             raw_paths: Vec::new(),
             quote: None,
-            node_filter: None,
-            not_node_filter: None,
+            filters: Vec::new(),
+            not_filters: Vec::new(),
         }
+    }
+
+    #[test]
+    fn the_record_door_takes_filters_and_refuses_a_key_with_no_source() {
+        let argv = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let door = parse_record_door(&argv(&[
+            "s",
+            "--filter",
+            "harness=codex",
+            "--not",
+            "model=glm-5.3-flash",
+        ]))
+        .expect("parses");
+        assert_eq!(door.filters, vec![("harness".into(), "codex".into())]);
+        assert_eq!(
+            door.not_filters,
+            vec![("model".into(), "glm-5.3-flash".into())]
+        );
+        let refused = parse_record_door(&argv(&["s", "--filter", "lead=rowan"]))
+            .err()
+            .expect("lead has no source yet");
+        assert!(refused.contains("x-ffc5"), "{refused}");
     }
 
     #[test]
