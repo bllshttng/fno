@@ -168,3 +168,26 @@ fn a_git_denial_needs_a_real_git_path_segment() {
     assert!(!names_git_dir("a_.git/x"));
     assert!(!names_git_dir(".github/workflows"));
 }
+
+/// The sandbox verdict scans through the SHARED distress parser, so a tag
+/// illustrated inside a fenced code block is blanked there and reads as no
+/// distress - the same rule the stop hook applies (AC5-ERR). A plain tag
+/// still fires (AC5-HP).
+#[test]
+fn a_code_fenced_help_tag_never_fires_the_sandbox_verdict() {
+    let plain = "I hit a wall: <help reason=\"stuck\" evidence=\"touch .git/index: Operation not permitted\">";
+    let mut facts = TailFacts::default();
+    facts.last_role = Some("assistant".to_string());
+    facts.last_text = plain.to_string();
+    let verdict = sandbox_denial_text(Some(&facts));
+    assert!(verdict.is_some(), "a plain git-denial tag still fires");
+    assert!(verdict.unwrap().starts_with("<help"));
+
+    let fenced =
+        format!("the tag looks like this:\n```\n{plain}\n```\nso it is prose, not distress");
+    facts.last_text = fenced;
+    assert!(
+        sandbox_denial_text(Some(&facts)).is_none(),
+        "a code-fenced tag is blanked and must not fire"
+    );
+}
