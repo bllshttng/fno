@@ -2,10 +2,11 @@ use crate::loopcheck::TerminationReason;
 
 impl TerminationReason {
     /// The terminals that free the node: work is FINISHED (a merge, advisory,
-    /// delivery, or NoWork terminal). The four `Done*` that keep the claim
-    /// (DoneBatched, DoneAwaitingMerge, DoneUnreviewed, DonePlanned) return
-    /// false - a stopped-but-resumable session must not hand the node to a
-    /// twin (the shim's hand-maintained shell list, replaced).
+    /// delivery, or NoWork terminal). The six `Done*` that keep the claim
+    /// (DoneBatched, DoneAwaitingMerge, DoneUnreviewed, DoneAwaitingReview,
+    /// DoneAwaitingRuling, DonePlanned) return false - a
+    /// stopped-but-resumable session must not hand the node to a twin (the
+    /// shim's hand-maintained shell list, replaced).
     pub fn releases_claim(&self) -> bool {
         matches!(
             self,
@@ -76,9 +77,16 @@ pub enum Deliverable {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Outstanding {
     Nothing,
-    HumanMerge { cause: HumanMergeCause },
-    Review { cause: ReviewCause },
+    HumanMerge {
+        cause: HumanMergeCause,
+    },
+    Review {
+        cause: ReviewCause,
+    },
     BatchPr,
+    /// A user ruling: the work is complete and the only missing input is an
+    /// answer the session already asked for once.
+    Ruling,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -138,6 +146,7 @@ impl RunOutcome {
                     | Some(Outstanding::Review {
                         cause: ReviewCause::BotRateLimited
                     })
+                    | Some(Outstanding::Ruling)
             ),
             awaiting_review_notify: matches!(
                 outstanding,
@@ -217,6 +226,13 @@ pub fn classify(reason: TerminationReason) -> RunOutcome {
             false,
             false,
             Outstanding::Nothing,
+        )),
+        TerminationReason::DoneAwaitingRuling => Outcome::Committed(commit(
+            Deliverable::Pr,
+            false,
+            false,
+            false,
+            Outstanding::Ruling,
         )),
         TerminationReason::NoWork => {
             return RunOutcome { outcome: None };
@@ -359,6 +375,7 @@ impl From<RunOutcome> for TerminationReason {
                             cause: ReviewCause::BotRateLimited,
                         },
                     ) => Self::DoneAwaitingReview,
+                    (Deliverable::Pr, false, Outstanding::Ruling) => Self::DoneAwaitingRuling,
                     (Deliverable::None, false, Outstanding::Nothing) => Self::DonePlanned,
                     _ => unreachable!("RunOutcome constructors preserve the wire mapping"),
                 }
