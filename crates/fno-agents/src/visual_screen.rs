@@ -440,17 +440,18 @@ const KEYWORDS: &[&str] = &[
     "where", "while",
 ];
 
-/// One changed line with its identifiers masked. String literals, numbers,
-/// keywords, paths (`a::B`), method and field names (`.fg`), macros and
-/// capitalised names stay verbatim, so a string, style or layout edit still
-/// differs after masking. Only a plain lowercase name is a code name.
-fn mask_names(line: &str) -> String {
+/// One changed line with its plain names masked, and those names in order.
+/// String literals, numbers, keywords, paths (`a::B`), method and field names
+/// (`.fg`), macros and capitalised names stay verbatim, so a string, style or
+/// layout edit still differs after masking. Only a plain lowercase name is a
+/// code name.
+fn mask_names(line: &str) -> (String, Vec<String>) {
     use std::sync::OnceLock;
     static RE: OnceLock<regex::Regex> = OnceLock::new();
     let re = RE.get_or_init(|| {
         regex::Regex::new(r#""(?:\\.|[^"\\])*"|[A-Za-z_][A-Za-z0-9_]*|::|\."#).unwrap()
     });
-    let mut out = String::new();
+    let (mut out, mut names) = (String::new(), Vec::new());
     let mut last = 0;
     let mut prev_link = false;
     for m in re.find_iter(line) {
@@ -464,42 +465,82 @@ fn mask_names(line: &str) -> String {
             && !rest.starts_with("::")
             && !rest.starts_with('!');
         prev_link = t == "::" || t == ".";
+        if plain {
+            names.push(t.to_string());
+        }
         out.push_str(if plain { "_" } else { t });
     }
     out.push_str(&line[last..]);
-    out.split_whitespace().collect::<Vec<_>>().join(" ")
+    (out.split_whitespace().collect::<Vec<_>>().join(" "), names)
 }
 
 /// True when a unified-diff patch changes comments, blank lines and code
-/// names only, so no rendered output can move. Removed and added code lines
-/// must match once plain lowercase names are masked. A patch with no changed
-/// line is not code-name-only.
+/// names only, so no rendered output can move. The removed and added code
+/// lines must match in order once plain names are masked, so a reorder holds.
+/// The names must also be a true rename: each old name maps to one new name
+/// and back, the old name is gone from the added lines, and the new name
+/// appears nowhere else in the patch. A swap to a binding that already
+/// exists (`narrow` to `wide`) holds. A patch with no changed line is not
+/// code-name-only.
 pub(crate) fn names_only_patch(patch: &str) -> bool {
+    use std::collections::{HashMap, HashSet};
     let (mut removed, mut added) = (Vec::new(), Vec::new());
+    let mut seen: HashSet<String> = HashSet::new();
     let mut changed = 0;
     for line in patch.lines() {
         if line.starts_with("+++") || line.starts_with("---") {
             continue;
         }
         let (side, body) = if let Some(b) = line.strip_prefix('+') {
-            (&mut added, b)
+            (Some(&mut added), b)
         } else if let Some(b) = line.strip_prefix('-') {
-            (&mut removed, b)
+            (Some(&mut removed), b)
         } else {
-            continue;
+            (None, line.strip_prefix(' ').unwrap_or(line))
         };
         let t = body.trim();
-        if t.is_empty() {
+        if t.is_empty() || t.starts_with("//") {
+            changed += usize::from(side.is_some() && !t.is_empty());
             continue;
         }
-        changed += 1;
-        if !t.starts_with("//") {
-            side.push(mask_names(t));
+        let (masked, names) = mask_names(t);
+        match side {
+            Some(v) => {
+                changed += 1;
+                v.push((masked, names));
+            }
+            None => seen.extend(names),
         }
     }
-    removed.sort();
-    added.sort();
-    changed > 0 && removed == added
+    if changed == 0 || removed.len() != added.len() {
+        return false;
+    }
+    let (mut fwd, mut back): (HashMap<&str, &str>, HashMap<&str, &str>) = Default::default();
+    for ((rm, rn), (am, an)) in removed.iter().zip(&added) {
+        if rm != am {
+            return false;
+        }
+        for (o, n) in rn.iter().zip(an) {
+            if o == n {
+                continue;
+            }
+            if *fwd.entry(o).or_insert(n) != n || *back.entry(n).or_insert(o) != o {
+                return false;
+            }
+        }
+    }
+    let old_names: HashSet<&str> = removed
+        .iter()
+        .flat_map(|(_, n)| n)
+        .map(String::as_str)
+        .collect();
+    let new_names: HashSet<&str> = added
+        .iter()
+        .flat_map(|(_, n)| n)
+        .map(String::as_str)
+        .collect();
+    fwd.iter()
+        .all(|(o, n)| !new_names.contains(o) && !old_names.contains(n) && !seen.contains(*n))
 }
 
 #[cfg(test)]
@@ -548,6 +589,11 @@ mod tests {
             "@@ @@\n-x.fg(Color::Red);\n+x.fg(Color::Blue);\n"
         ));
         assert!(!names_only_patch("@@ @@\n-let w = 4;\n+let w = 5;\n"));
+        // A reorder moves pixels; a swap to an existing binding is not a rename.
+        assert!(!names_only_patch("@@ @@\n-a(1);\n-b(2);\n+b(2);\n+a(1);\n"));
+        assert!(!names_only_patch(
+            "@@ @@\n context(wide);\n-pane(narrow);\n+pane(wide);\n"
+        ));
         assert!(!names_only_patch(""));
     }
 
