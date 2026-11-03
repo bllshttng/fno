@@ -115,7 +115,7 @@ fn run_case(
 }
 
 /// What one golden's fixture proves: the empty list means its grader holds.
-fn golden_failures(golden: &TaskSpec, bank_dir: &Path) -> Vec<String> {
+pub fn golden_failures(golden: &TaskSpec, bank_dir: &Path) -> Vec<String> {
     let id = &golden.id;
     let path = metrics_dir(bank_dir).join(format!("{id}.yaml"));
     let fixture: Fixture = match std::fs::read_to_string(&path)

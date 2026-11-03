@@ -85,6 +85,7 @@ pub mod autonomy_status;
 pub mod backlog;
 pub mod backlog_ready;
 pub mod backlog_share;
+pub mod bank_pr;
 pub mod bash_census;
 #[cfg(test)]
 #[path = "birth_guard_tests.rs"]
@@ -201,6 +202,7 @@ pub mod eval_reap;
 pub mod evals;
 pub mod evals_arm;
 pub mod evals_candidates;
+pub mod evals_capability;
 pub mod evals_climb;
 pub mod evals_compare;
 pub mod evals_drafts;
@@ -256,6 +258,7 @@ pub mod git_paths;
 #[cfg(test)]
 mod git_test_helpers;
 pub mod glob;
+pub mod golden_drafter;
 pub mod graph_get;
 pub mod graph_keeper;
 pub mod graph_store;

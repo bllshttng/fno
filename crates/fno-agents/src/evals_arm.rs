@@ -81,6 +81,8 @@ struct Opts {
     claims_root: Option<PathBuf>,
     repo: Option<PathBuf>,
     graph: Option<PathBuf>,
+    /// The run-mode child's tier: the regression bank, or the capability leg.
+    capability: bool,
 }
 
 fn parse_args(args: &[String]) -> Result<Opts, String> {
@@ -98,6 +100,7 @@ fn parse_args(args: &[String]) -> Result<Opts, String> {
         claims_root: None,
         repo: None,
         graph: None,
+        capability: false,
     };
     let mut i = 0usize;
     while i < args.len() {
@@ -147,6 +150,11 @@ fn parse_args(args: &[String]) -> Result<Opts, String> {
             "--claims-root" => o.claims_root = Some(PathBuf::from(value("--claims-root")?)),
             "--repo" => o.repo = Some(PathBuf::from(value("--repo")?)),
             "--graph" => o.graph = Some(PathBuf::from(value("--graph")?)),
+            "--tier" => match value("--tier")?.as_str() {
+                "capability" => o.capability = true,
+                "regression" => o.capability = false,
+                other => return Err(format!("evals-arm: unknown --tier {other}")),
+            },
             _ => return Err(format!("evals-arm: unknown flag {name}")),
         }
     }
@@ -400,6 +408,10 @@ pub(crate) fn pid_alive(pid: u32) -> bool {
 /// The child argv, shared by the production spawner and the tests that
 /// assert on it.
 fn run_argv(o: &Opts, repo: &Path, started_rfc3339: &str) -> Vec<String> {
+    run_argv_for(o, repo, started_rfc3339, o.capability)
+}
+
+fn run_argv_for(o: &Opts, repo: &Path, started_rfc3339: &str, capability: bool) -> Vec<String> {
     let mut argv = vec![
         self_exe(),
         "evals-arm".into(),
@@ -421,6 +433,10 @@ fn run_argv(o: &Opts, repo: &Path, started_rfc3339: &str) -> Vec<String> {
         "--repo".into(),
         repo.to_string_lossy().into_owned(),
     ];
+    if capability {
+        argv.push("--tier".into());
+        argv.push("capability".into());
+    }
     if let Some(sj) = &o.summary_json {
         argv.push("--summary-json".into());
         argv.push(sj.clone());
@@ -762,7 +778,9 @@ pub(crate) fn file_failure_nodes(
 
 /// Drain a piped stderr on a reader thread so a chatty child can never fill
 /// the pipe and deadlock the bounded wait.
-fn spawn_stderr_drain(child: &mut std::process::Child) -> Option<std::thread::JoinHandle<Vec<u8>>> {
+pub(crate) fn spawn_stderr_drain(
+    child: &mut std::process::Child,
+) -> Option<std::thread::JoinHandle<Vec<u8>>> {
     child.stderr.take().map(|mut pipe| {
         std::thread::spawn(move || {
             let mut buf = Vec::new();
@@ -772,7 +790,7 @@ fn spawn_stderr_drain(child: &mut std::process::Child) -> Option<std::thread::Jo
     })
 }
 
-fn stderr_tail(buf: &[u8]) -> String {
+pub(crate) fn stderr_tail(buf: &[u8]) -> String {
     let text = String::from_utf8_lossy(buf);
     text.trim()
         .lines()
@@ -963,7 +981,9 @@ pub fn run_evals_arm(args: &[String]) -> i32 {
             return EXIT_USAGE;
         }
     };
-    if o.run {
+    if o.run && o.capability {
+        run_capability_mode(&o)
+    } else if o.run {
         run_run_mode(&o)
     } else {
         if let Some(repo) = bank_repo(&o) {
@@ -977,6 +997,13 @@ pub fn run_evals_arm(args: &[String]) -> i32 {
                 o.graph.as_deref(),
                 can_launch,
             );
+            let now = Utc::now();
+            let leg = leg_for(&o, &repo);
+            let argv = run_argv_for(&o, &repo, &now.to_rfc3339(), true);
+            let seen = crate::evals_capability::tick(&leg, now, can_launch, &argv, &spawn_detached);
+            if !matches!(seen, "fresh" | "in_flight") {
+                eprintln!("evals-arm: capability leg: {seen}");
+            }
         }
         run_tick_mode(
             &o,
@@ -985,6 +1012,36 @@ pub fn run_evals_arm(args: &[String]) -> i32 {
             &spawn_detached,
         )
     }
+}
+
+fn leg_for<'a>(o: &'a Opts, repo: &'a Path) -> crate::evals_capability::Leg<'a> {
+    crate::evals_capability::Leg {
+        history: &o.history,
+        repo,
+        window_days: o.schedule_days,
+        run_timeout_s: o.run_timeout_s,
+        claims_root: o.claims_root.as_deref(),
+    }
+}
+
+/// Run mode for `--tier capability`: the weekly leg and its graduation PR.
+fn run_capability_mode(o: &Opts) -> i32 {
+    let started = o
+        .started
+        .as_deref()
+        .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+        .map(|dt| dt.with_timezone(&Utc));
+    let (Some(started), Some(repo)) = (started, bank_repo(o)) else {
+        return receipt(0, Some("capability_args"), "needs --started and a bank");
+    };
+    let r = crate::evals_capability::Run {
+        leg: leg_for(o, &repo),
+        events: &o.events,
+        fno_bin: &o.fno_bin,
+        started,
+    };
+    crate::evals_capability::run(&r);
+    receipt(1, None, "capability leg settled")
 }
 
 /// The production spawner: the run-mode child in a new session, stdio null.

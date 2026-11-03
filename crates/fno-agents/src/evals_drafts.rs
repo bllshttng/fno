@@ -220,8 +220,10 @@ pub fn maybe_tick(arm: &Arm, home: crate::paths::AgentsHome) {
             return;
         };
         let journal = state.join("events.jsonl");
-        if let Err(e) = pass(&journal, &drafts_dir(&state), SystemTime::now()) {
-            eprintln!("golden drafts: {e}");
+        let dir = drafts_dir(&state);
+        match pass(&journal, &dir, SystemTime::now()) {
+            Ok(_) => crate::golden_drafter::daily(&dir),
+            Err(e) => eprintln!("golden drafts: {e}"),
         }
     });
 }

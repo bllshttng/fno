@@ -36,6 +36,7 @@ pub fn run(args: &[String]) -> i32 {
                 println!("demoted '{task_id}' ({source})");
             } else {
                 println!("graduated '{task_id}' -> regression ({source})");
+                println!("the daemon opens this PR after its weekly capability run; with the daemon off, commit the edit yourself");
             }
             0
         }
@@ -51,16 +52,19 @@ pub fn run(args: &[String]) -> i32 {
 /// ^(\s*tier:\s*)capability(\s*(?:#.*)?)$ with (?m).
 pub fn graduate_task_file(task_path: &std::path::Path) -> Result<(), String> {
     let text = std::fs::read_to_string(task_path).map_err(|e| e.to_string())?;
-    let re =
-        Regex::new(r"(?m)^([ \t]*tier:[ \t]*)capability([ \t]*(?:#.*)?)$").expect("static regex");
-    let count = re.find_iter(&text).count();
-    if count == 0 {
-        let shown = task_path.display().to_string();
-        return Err(format!("{shown}: no `tier: capability` line to graduate (already regression, or non-standard formatting)"));
-    }
-    let new_text = re.replace_all(&text, "${1}regression${2}").into_owned();
+    let new_text = graduate_text(&text).map_err(|e| format!("{}: {e}", task_path.display()))?;
     std::fs::write(task_path, new_text).map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// The same retag on the file's text, for a caller that writes elsewhere.
+pub fn graduate_text(text: &str) -> Result<String, String> {
+    let re =
+        Regex::new(r"(?m)^([ \t]*tier:[ \t]*)capability([ \t]*(?:#.*)?)$").expect("static regex");
+    if re.find_iter(text).count() == 0 {
+        return Err("no `tier: capability` line to graduate (already regression, or non-standard formatting)".into());
+    }
+    Ok(re.replace_all(text, "${1}regression${2}").into_owned())
 }
 
 /// Append `demoted` to the flow-style `tags: [...]` line in place. A task
