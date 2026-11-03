@@ -176,6 +176,27 @@ A window needs 3 grades of a task to say anything about it. With fewer on either
 
 The default report's regression alarm reads the recent window too, under the same 3-grade floor. A task below 100% on fewer grades prints in a separate `no alarm` line, so a thin window never reads as a clean one. A 50-day-old flake fixed three minutes later no longer holds exit 4 open. `tiers`, `tasks` and `flakes` stay the all-rows long view. `fno doctor` prints `evals REGRESSING - <ids> dropped against the prior <W>d window`, and `fno backlog triage health` appends ` REGRESSED <n>` to its evals line.
 
+## PostHog events
+
+Each attempt in the history can reach PostHog as one `fno_eval_run` event. A daemon arm posts new attempts every five minutes to the `/batch/` capture route. We use events and not the OTLP export, because PostHog files OTLP records as logs and its trend insights read events.
+
+```toml
+[telemetry.eval_events]
+enabled = true
+host = "https://us.i.posthog.com"
+token_env = "FNO_POSTHOG_PROJECT_TOKEN"
+```
+
+The export is off by default, and `telemetry.otlp.enabled` does not turn it on. The token comes from its own env var, so the daemon must see that var. `OTEL_SDK_DISABLED` and `DO_NOT_TRACK` force it off. An empty token refuses.
+
+The properties are `task`, `tier`, `cohort`, `variant`, `grade`, `failure_type`, `seat`, `lane` and `sha`. `grade` reads `pass` or `fail` for a valid grade. For any other attempt it reads the attempt status, such as `infrastructure`, so plumbing never counts as a failed task. `seat` reads `lead` for a task tagged `lead`, else `worker`. No event carries `reason`, `obs` or a path. A value that is not an identifier stays home, so a worded `--cohort` never leaves. `log_content` does not apply here. Events are personless and share the distinct id `fno-evals`.
+
+Delivery is at-least-once. The attempt id is the event uuid, so PostHog merges a redelivered event. A 2xx marks the batch delivered, a permanent 4xx drops it, and anything else holds it for the next beat. Each beat reads the last 24 hours, so an outage longer than that loses those attempts and the local history keeps them. State lives in `~/.fno/agents/otlp_export/eval_events_state.json`.
+
+`fno-agents evals events` prints the next batch with the token redacted and never sends. The posture goes to stderr.
+
+`evals/posthog-views.json` defines the views: two trends (pass rate by seat, failures by failure type) and one alert on failed regression tier tasks. After the first event lands, create each with the `insight-create` and `alert-create` tools of `posthog-cli api`. An alert also needs `subscribed_users`, so the file leaves that field to the person who applies it.
+
 ## Attempts, grades, and declared cohorts
 
 An **attempt** is one planned execution of a (task, repeat) slot. A **grade** is a valid task verdict: the grader ran and returned a result. They are separate things, and the report keeps them separate.

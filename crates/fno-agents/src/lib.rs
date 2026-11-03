@@ -195,6 +195,7 @@ pub mod effort_surface;
 pub mod envelope;
 pub mod escalation;
 pub mod eval_attempt;
+pub mod eval_events;
 pub mod eval_part4;
 pub mod eval_reap;
 pub mod evals;
