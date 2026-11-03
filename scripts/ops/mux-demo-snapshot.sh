@@ -563,8 +563,9 @@ def ts(mins_ago):
     return (now - datetime.timedelta(minutes=mins_ago)).strftime("%Y-%m-%dT%H:%M:%SZ")
 MUX_LEAD = "a0d1e2f3-demo-mux-lead"
 FLEET_LEAD = "b1e2f3a4-demo-fleet-lead"
-def seat(name, harness, model, project, status, mins, sid=None, node=None, role=None, short=None, parent=None):
+def seat(name, harness, model, project, status, mins, sid=None, node=None, role=None, short=None, parent=None, workspace=None, needs=None, pinned=None):
     return {
+        "workspace": workspace, "needs_input": needs, "pinned": pinned,
         "name": name, "session": short or (sid or name)[:8], "harness": harness, "node": node,
         "status": status, "age_s": mins * 60, "rss_mb": 410.0,
         "parent": parent[:8] if parent else None,
@@ -590,9 +591,9 @@ local = [
     seat("reviewer", "opencode", "zen", "search", "parked", 9, sid=sids[2], node=ids[2], parent=sids[1]),
 ]
 remote = [
-    seat("kestrel", "claude", "sonnet", "payments", "writing", 3, sid="4a1b2c3d-remote-0001", node=ids[6], parent=MUX_LEAD),
-    seat("heron", "codex", "gpt-6-sol", "payments", "quiet", 44, sid="5b2c3d4e-remote-0002", node=ids[8], parent=FLEET_LEAD),
-    seat("ibis", "opencode", "zen", "search", "writing", 5, sid="6c3d4e5f-remote-0003", node=ids[3], parent=MUX_LEAD),
+    seat("kestrel", "claude", "sonnet", "payments", "writing", 3, sid="4a1b2c3d-remote-0001", node=ids[6], parent=MUX_LEAD, workspace="payments-api", needs=False, pinned=True),
+    seat("heron", "codex", "gpt-6-sol", "payments", "quiet", 44, sid="5b2c3d4e-remote-0002", node=ids[8], parent=FLEET_LEAD, workspace="payments-api", needs=True, pinned=False),
+    seat("ibis", "opencode", "zen", "search", "writing", 5, sid="6c3d4e5f-remote-0003", node=ids[3], parent=MUX_LEAD, workspace="search-index", needs=False, pinned=False),
     {"name": "plover", "session": "7d4e5f60", "harness": "claude", "node": None,
      "status": "unknown", "age_s": None, "rss_mb": None, "parent": None},
 ]

@@ -71,6 +71,11 @@ impl MachineTree {
         }
     }
 
+    /// The layer paints only with the toggle on and a second machine reporting.
+    pub(super) fn layered(&self) -> bool {
+        self.on && self.bands.len() >= 2
+    }
+
     /// The rows this tree painted, for a menu action to resolve at execution time.
     pub(super) fn rows(&self) -> impl Iterator<Item = &AgentRow> {
         self.bands
@@ -350,7 +355,7 @@ impl View {
     /// per machine while the toggle is on and a second machine reports.
     pub(super) fn tree_rows_with_depths(&self) -> (Vec<DisplayRow<'_>>, Vec<usize>) {
         let tree = &self.machine_tree;
-        if !tree.on || tree.bands.len() < 2 {
+        if !tree.layered() {
             return self.local_rows_with_depths();
         }
         let (mut out, mut depths) = (Vec::new(), Vec::new());
