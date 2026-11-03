@@ -5876,9 +5876,9 @@ pub(crate) fn run_reconcile_sweep(
     };
     // The PR-busy hold: one graph read per sweep answers whether a node the
     // row is named on still carries an open PR; a hold keeps the settle arms
-    // from flipping the row, so a stalled main neither reaps the session
-    // watching it nor frees its lane. An unreadable graph holds nothing.
-    let pr_graph = crate::gc_sweep::read_graph_entries(home);
+    // from flipping the row. The narrow read answers that one boolean without
+    // the full read's dozen indexes and model round-trip.
+    let pr_graph = crate::gc_sweep::read_pr_guard(home);
     let pr_hold = |e: &RegistryEntry| {
         pr_graph
             .as_ref()

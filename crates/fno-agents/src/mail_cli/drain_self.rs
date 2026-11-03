@@ -22,7 +22,7 @@ use crate::spawn_context::{resolve_self_identity, OwnedDisposition};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::io::Write as _;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// `drain-self`: print this session's unread mail, then ack it per form.
 pub fn run_drain_self(args: &[String]) -> i32 {
@@ -64,7 +64,7 @@ pub fn run_drain_self(args: &[String]) -> i32 {
         crate::identity::legacy_suffix_handle(&sid),
     ]);
 
-    let bus = bus_dir(&home);
+    let bus = crate::mail_paths::state_bus_dir(&home);
     let msgs = read_bus(&bus);
 
     let mut last_by_form: Vec<(String, String)> = Vec::new();
@@ -370,12 +370,6 @@ fn emit_drain_marker(
             "reason": reason,
         }),
     );
-}
-
-fn bus_dir(home: &AgentsHome) -> PathBuf {
-    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let root = crate::agents_config::state_dir(&cwd).unwrap_or_else(|| home.root().to_path_buf());
-    crate::intel::bus_dir_of(&root)
 }
 
 fn str_field(m: &Value, key: &str, blank: &str) -> String {

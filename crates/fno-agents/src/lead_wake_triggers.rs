@@ -677,11 +677,11 @@ pub(crate) fn build_seams(
         // An unreadable bus is no mail for this address, never an aborted
         // pass for every role. The segments reload per address, the same
         // per-address cost the retired Python door paid per shell.
-        let live = crate::chats::bus_append_live_path();
+        let live = crate::mail_paths::live_bus_log();
         let Some(bus_dir) = live.parent().map(Path::to_path_buf) else {
             return false;
         };
-        let (raw, _) = crate::announce::read_bus_segments_reported(&live);
+        let (raw, _) = crate::mail::log::read_bus_segments_reported(&live);
         let msgs: Vec<Value> = raw
             .iter()
             .filter(|m| crate::chats::required_fields_present(&m.row))

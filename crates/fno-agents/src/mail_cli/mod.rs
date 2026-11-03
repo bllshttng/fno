@@ -76,25 +76,22 @@ Options:
                            mismatch check).
   -c, --cwd <str>          Working directory context.
   --from-name <str>        XML-safe sender. Unset: session handle or 'fno' for
-                           agents; project for inbox notes.
+                           agents; project for project sends.
   --from-self              Stamp the sender with this session's own canonical
                            mail handle (the reply handle `fno whoami` shows).
                            Fails loud (exit 2) with no ambient harness
                            identity.
   --to-project <str>       Anycast: deliver to whoever works on this project
-                           (live if exactly one peer, durable queue if none).
+                           (live if exactly one peer; refuses if none).
                            Use instead of <name>.
   --to-lead <str>          Anycast over the role: deliver to whoever holds
                            this scope RIGHT NOW, resolved at send time; no
                            live holder queues nothing.
   --any                    With --to-project, break a multi-live-peer tie
                            (most recent activity wins).
-  -k, --kind <str>         Inbox kind (heads-up | question | fyi); pair with
-                           --to-project. Omit for a plain agent-to-agent send.
-  --reply-to <str>         With --kind: msg-id being replied to (appends to
-                           the existing thread).
-  --persist <str>          With --kind fyi: 'memory' writes a recipient memory
-                           file.
+  -k, --kind <str>         Retired: the note lane is gone. A plain send reaches
+                           a session; `fno inbox outstanding ask` reaches a
+                           human. The flag exits 2 and names both.
   -b, --body <str>         Message body in ANY mode (alternative to the
                            positional arg).
   --body-file <path>       Read the body from a file ('-' = stdin); binds in

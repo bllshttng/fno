@@ -20,7 +20,7 @@
 use serde_json::{json, Value};
 use std::path::PathBuf;
 
-use crate::mail_cli::ack::{bus_dir, load_messages};
+use crate::mail_cli::ack::load_messages;
 use crate::mail_cli::send;
 use crate::mail_cli::send::lanes::{name_lane_send, NameLane, NameLaneArgs};
 use crate::mail_cli::send::resolve::{is_full_session_id, resolve_reachable, ReachResult};
@@ -32,7 +32,7 @@ const VALID_KINDS: [&str; 4] = ["fyi", "heads-up", "question", "send"];
 fn deprecated_kind_replacement(kind: &str) -> Option<&'static str> {
     match kind {
         "notification" => Some("fyi"),
-        "lesson" => Some("fyi --persist memory"),
+        "lesson" => Some("fyi"),
         "answer" => Some("fyi --reply-to <msg-id>  (or any kind with --reply-to)"),
         "complete" => Some("fyi --reply-to <msg-id>"),
         _ => None,
@@ -276,7 +276,7 @@ pub fn run(args: &[String]) -> i32 {
     // Directed-lane routing: look the --to msg-id up on the durable bus and
     // answer name/session/node mail back to its original sender. Anything
     // else falls through to the thread-store reply below.
-    let orig = bus_dir()
+    let orig = crate::mail_paths::state_bus_dir_opt()
         .map(|bus| load_messages(&bus))
         .unwrap_or_default()
         .into_iter()
@@ -803,7 +803,6 @@ fn thread_store_reply(
         None,
         Some(to_msg),
         Some(&thread),
-        false,
         Some(Value::Object(refs)),
     ) {
         send::release_budget(&reservation);

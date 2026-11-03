@@ -124,13 +124,26 @@ check_file_exists() {
   fi
 }
 
+# The fno-agents binary the claim seeds and reads run through.
+fno_agents_bin() {
+  PYTHONPATH="$FNO_SRC" "$FNO_PYTHON" -c \
+    'from fno.rust_binary import resolve_binary; print(resolve_binary() or "")' 2>/dev/null
+}
+
 # The node claim's state in a sandbox home's claim table ("free" when none).
 claim_state() {
-  FNO_CLAIMS_ROOT="$1" PYTHONPATH="$FNO_SRC" "$FNO_PYTHON" -c "
-from fno.claims.core import claim_status
-from pathlib import Path
-print(claim_status('node:${NODE_ID}', root=Path('$1')).get('state') or 'free')
-" 2>/dev/null || echo unreadable
+  local bin out
+  bin="$(fno_agents_bin)"
+  [ -n "$bin" ] || { echo unreadable; return; }
+  out="$(FNO_CLAIMS_ROOT="$1" "$bin" claim status "node:${NODE_ID}" --root "$1" --json --no-roster 2>/dev/null)" \
+    || { echo unreadable; return; }
+  printf '%s' "$out" | jq -r '.state // "free"' 2>/dev/null || echo unreadable
+}
+
+# Seed a node claim held by $2 under the claims root $1.
+seed_node_claim() {
+  FNO_CLAIMS_ROOT="$1" "$(fno_agents_bin)" claim acquire "node:${NODE_ID}" --holder "$2" \
+    --pid-unavailable --ttl 1h --root "$1"
 }
 
 check_claim_held() {
@@ -323,12 +336,7 @@ CONFIGEOF
   # prove custody, so the sandbox seeds the real claim in the claims root the
   # prepare leg reads: run_handoff defaults HOME to $sbx/home and handoff.sh
   # pins FNO_CLAIMS_ROOT to HOME.
-  FNO_CLAIMS_ROOT="$sbx/home" PYTHONPATH="$FNO_SRC" "$FNO_PYTHON" -c "
-from fno.claims.core import acquire_claim
-from pathlib import Path
-acquire_claim('node:${NODE_ID}', holder='${claim_holder}',
-              pid_unavailable=True, ttl_ms=3_600_000, root=Path('${sbx}/home'))
-" >/dev/null 2>&1 || true
+  seed_node_claim "$sbx/home" "$claim_holder" >/dev/null 2>&1 || true
 
   # Default stub responses
   echo "0"  > "$sbx/scenario/fno-ask-rc"
@@ -384,7 +392,8 @@ if [ "$subcmd1 $subcmd2 ${3:-}" = "do plan rung" ]; then
   # gate's entire contract IS the rung vocabulary, so a stub that re-derived
   # it would test the stub - and a second copy of the vocabulary is the exact
   # thing `fno do plan rung` exists to delete.
-  exec env PYTHONPATH="$FNO_SRC" "$FNO_PYTHON" -m fno.cli do plan rung "${4:-}"
+  bin="$(env PYTHONPATH="$FNO_SRC" "$FNO_PYTHON" -c 'from fno import rust_binary; b = rust_binary.find_dev_binary() or rust_binary.resolve_binary(); print(b or "")')"
+  exec "$bin" plan-cli rung "${4:-}"
 fi
 
 if [ "$subcmd1 $subcmd2" = "plan rung" ]; then
@@ -1002,13 +1011,9 @@ echo ""
 echo "=== Scenario 9: claim contended at prepare release ==="
 SBX="$(make_sandbox s9)"
 # Replace the correctly-held seed with a foreign holder's claim.
-FNO_CLAIMS_ROOT="$SBX/home" PYTHONPATH="$FNO_SRC" "$FNO_PYTHON" -c "
-from fno.claims.core import acquire_claim, force_release_claim
-from pathlib import Path
-force_release_claim('node:${NODE_ID}', 'test reseed', root=Path('${SBX}/home'))
-acquire_claim('node:${NODE_ID}', holder='target-session:another-session',
-              pid_unavailable=True, ttl_ms=3_600_000, root=Path('${SBX}/home'))
-" >/dev/null 2>&1
+FNO_CLAIMS_ROOT="$SBX/home" "$(fno_agents_bin)" claim release "node:${NODE_ID}" --force \
+  --reason "test reseed" --root "$SBX/home" >/dev/null 2>&1
+seed_node_claim "$SBX/home" "target-session:another-session" >/dev/null 2>&1
 
 CALL_LOG="$SBX/call-log"
 HANDOFF_VERIFY_TIMEOUT=10 HANDOFF_VERIFY_INTERVAL=1 run_handoff "$SBX" "blueprint-do"

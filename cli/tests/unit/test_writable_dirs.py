@@ -18,6 +18,14 @@ import pytest
 from fno.agents.writable_dirs import worker_writable_dirs
 
 
+def _route_claims_to(monkeypatch: pytest.MonkeyPatch, store: Path) -> None:
+    """Answer the native `claim root` read with ``store`` as the claims dir."""
+    monkeypatch.setattr(
+        "fno.rust_binary.call_binary_json",
+        lambda command, args=(), **_k: (None, {"dir": str(store)}),
+    )
+
+
 @pytest.fixture
 def fake_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Point every state resolver at one existing tmp root."""
@@ -27,8 +35,7 @@ def fake_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     agents_home.mkdir()
     monkeypatch.setenv("FNO_AGENTS_HOME", str(agents_home))
     monkeypatch.setattr("fno.paths.state_dir", lambda: state)
-    monkeypatch.setattr("fno.claims.io.global_claims_root", lambda: state)
-    monkeypatch.setattr("fno.claims.io.claims_dir", lambda root=None: state / "claims")
+    _route_claims_to(monkeypatch, state / "claims")
     # No plan directory unless a test opts in: an unresolvable plans dir grants
     # nothing, which keeps the state-root assertions below about the state root.
     monkeypatch.setattr(
@@ -40,18 +47,14 @@ def fake_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 def test_state_root_and_divergent_claims_root_both_granted(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """``locks_dir``/``global_claims_root`` are deliberately config-free while
-    ``state_dir`` honors ``config.paths.state_dir``. When an override splits
+    """The claims root is deliberately config-free while ``state_dir`` honors ``config.paths.state_dir``. When an override splits
     them, a grant for one leaves the worker unable to write the other."""
     configured = tmp_path / "configured"
     configured.mkdir()
     claims_home = tmp_path / "home" / ".fno"
     (claims_home / "claims").mkdir(parents=True)
     monkeypatch.setattr("fno.paths.state_dir", lambda: configured)
-    monkeypatch.setattr("fno.claims.io.global_claims_root", lambda: tmp_path / "home")
-    monkeypatch.setattr(
-        "fno.claims.io.claims_dir", lambda root=None: claims_home / "claims"
-    )
+    _route_claims_to(monkeypatch, claims_home / "claims")
     monkeypatch.setattr(
         "fno.paths.plans_content_dir", lambda project_root=None: tmp_path / "nope"
     )

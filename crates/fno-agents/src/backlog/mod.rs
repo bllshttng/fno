@@ -1918,7 +1918,8 @@ pub fn export_status(graph: &Path) -> Result<String, String> {
 }
 
 /// At most one `graph.db.<stamp>` snapshot per hour in `backups/`, keeping
-/// the newest [`crate::graph_store::GRAPH_BACKUP_KEEP`]. VACUUM INTO also
+/// the newest [`crate::graph_store::GRAPH_BACKUP_KEEP`] with the whole pile
+/// under [`crate::graph_store::GRAPH_BACKUP_MAX_BYTES`]. VACUUM INTO also
 /// compacts; its target must not
 /// exist, so the microsecond stamp names it. The hour gate lives in
 /// `graph_meta.last_snapshot_ms`, not file mtimes, so a moved or inspected

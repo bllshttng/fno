@@ -46,6 +46,7 @@ pub(super) struct FleetArms {
     slot_cutover: crate::slot_cutover::Arm,
     attention: crate::attention_arm::Arm,
     otlp_export: crate::otlp_export::Arm,
+    eval_events: crate::eval_events::Arm,
     question_judge: crate::question_judge::Arm,
     burn_watch: crate::burn_watch::Arm,
     watch_expiry: crate::watch_expiry::Arm,
@@ -69,6 +70,8 @@ pub(super) struct FleetArms {
     backlog_share: crate::backlog_share::Arm,
     mail: crate::mail_arm::Arm,
     numbers: crate::numbers::Arm,
+    // Freed-page return: keeps RSS near live use after a burst.
+    page_relief: crate::page_relief::Arm,
     // The board render: off the Python write path (law d-bad5a42f), the
     // daemon ticks it every interval and stamps rendered_version.
     board_render: crate::board_render_arm::Arm,
@@ -145,6 +148,7 @@ impl FleetArms {
             slot_cutover: crate::slot_cutover::Arm::new(opts.agents_config_cwd.clone()),
             attention: crate::attention_arm::Arm::new(opts.agents_config_cwd.clone()),
             otlp_export: crate::otlp_export::Arm::new(opts.agents_config_cwd.clone()),
+            eval_events: crate::eval_events::Arm::new(opts.agents_config_cwd.clone()),
             question_judge: crate::question_judge::Arm::new(opts.agents_config_cwd.clone()),
             burn_watch: crate::burn_watch::Arm::default(),
             watch_expiry: crate::watch_expiry::Arm::default(),
@@ -156,6 +160,7 @@ impl FleetArms {
             merge_queue: crate::merge_queue::Arm::default(),
             pr_idle: crate::pr_idle::Arm::default(),
             codex_watch: crate::codex_watch::Arm::default(),
+            page_relief: crate::page_relief::Arm::default(),
             lead_wake: crate::lead_wake::Arm::new(opts.agents_config_cwd.clone()),
             worker_wake: crate::worker_wake::Arm::default(),
             pane_loop: crate::pane_loop::Arm::default(),
@@ -359,6 +364,7 @@ impl FleetArms {
         crate::slot_cutover::maybe_tick(&self.slot_cutover, ctx.home.clone());
         crate::attention_arm::maybe_tick(&self.attention, ctx.home.clone());
         crate::otlp_export::maybe_tick(&self.otlp_export, ctx.home.clone());
+        crate::eval_events::maybe_tick(&self.eval_events, ctx.home.clone());
         crate::question_judge::maybe_tick(&self.question_judge, ctx.home.clone());
         crate::burn_watch::maybe_tick(&self.burn_watch, ctx.home.clone());
         crate::watch_expiry::maybe_tick(&self.watch_expiry, ctx.home.clone());
@@ -415,6 +421,9 @@ impl FleetArms {
         crate::mail_arm::maybe_tick(&self.mail);
         // Mint and cache the short numbers for decisions and questions.
         crate::numbers::maybe_tick(&self.numbers, &ctx.opts.agents_config_cwd);
+        // Return freed pages to the OS once a burst's high-water has been
+        // held past the interval, so RSS tracks live use again.
+        crate::page_relief::maybe_tick(&self.page_relief, ctx.home.clone());
         // Serve-only liveness tick: the served pair is the sweep's measurement,
         // refreshed every SERVED_LIVENESS_CADENCE; off-loop, one-in-flight.
         let codex_threads_for_liveness = Arc::clone(&ctx.codex_threads);

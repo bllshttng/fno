@@ -549,24 +549,6 @@ def _pinned_native_fno():
 
 
 @pytest.fixture(autouse=True)
-def _neutral_host_harness(monkeypatch):
-    """Keep synthetic session markers independent of the pytest host harness.
-
-    Identity tests set their own Claude, Codex, or Gemini markers.  A real
-    harness ancestor belongs to the test runner rather than the synthetic
-    session, so letting the process-tree prover observe it makes local results
-    depend on which harness launched pytest.  Tests of proven ownership pin the
-    resolver explicitly after this fixture runs.
-    """
-    monkeypatch.setattr(
-        "fno.claims.session_pid.resolve_session_harness",
-        lambda from_pid=None: None,
-    )
-
-
-
-
-@pytest.fixture(autouse=True)
 def _hermetic_fleet_incident_home(monkeypatch, tmp_path):
     """Default every test to an empty fleet-incident home.
 
@@ -801,23 +783,11 @@ def _reset_config_state() -> None:
         pass
 
 
-# The per-test clearer registry is retired: every cached state reader keys on
-# its declared root (test_cached_state_surface enforces a root parameter or a
-# recorded reason), so there is nothing left to clear per test.
-HERMETIC_CACHED_STATE_CLEARERS: tuple[tuple[str, str], ...] = (
-    ("fno.claims.session_pid", "_session_identity"),
-)
-
-
 @pytest.fixture
 def cwd_tmp(tmp_path: Path, monkeypatch):
-    """Collapse both claims roots (global + cwd-local) onto one tmp dir.
+    """Run in a disposable tmp dir that is also HOME, with no claims-root pin.
 
-    HOME=cwd means global_claims_root() and the canonical-repo-root
-    claims_dir(None) are the SAME directory, so a test can write with plain
-    acquire_claim(root=tmp_path) and know both of `list`/`reap`'s default
-    roots see it. Shared by test_claim_reap.py and test_claims_cli.py (both
-    exercise the same claims CLI surface against a hermetic HOME).
+    Repo config and the machine's own state cannot leak into the test.
     """
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("FNO_CLAIMS_ROOT", raising=False)

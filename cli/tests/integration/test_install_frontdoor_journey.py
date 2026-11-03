@@ -83,10 +83,10 @@ def _run_fno(repo: Path, home: Path, *args: str) -> subprocess.CompletedProcess[
     env["FNO_STATE_DIR"] = str(repo / ".fno")
     env["FNO_TRACKER_BACKEND"] = "graph"
     argv = [sys.executable, "-c", "from fno.cli import app; app()", *args]
-    if args and args[0] == "backlog":
+    if args and args[0] in ("backlog", "claim"):
         binary = env.get("FNO_AGENTS_FRONT")
         if not binary:
-            pytest.skip("the native backlog front is required for this journey")
+            pytest.skip(f"the native {args[0]} front is required for this journey")
         argv = [binary, *args]
     return subprocess.run(
         argv,
@@ -178,10 +178,9 @@ def clean_machine(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path
         '  exec "$FNO_AGENTS_FRONT" "$@"\n'
         "fi\n"
         # Mirrors `agents_client_route.rs`: the compiled front strips the
-        # leading `agents` word before handing `claim ...` to its Python or
-        # native leg (fno's own `claim` group is flat, never nested under
-        # `agents`). This shim stands in for `fno` on PATH for the init
-        # flow's own internal subprocess call, so it must strip it too.
+        # leading `agents` word before handing `claim ...` to fno-agents.
+        # This shim stands in for `fno` on PATH for the init flow's own
+        # internal subprocess call, so it must strip it too.
         'if [ "${1:-}" = "agents" ] && [ "${2:-}" = "claim" ] && [ -n "${FNO_AGENTS_FRONT:-}" ]; then\n'
         "  shift\n"
         '  exec "$FNO_AGENTS_FRONT" "$@"\n'

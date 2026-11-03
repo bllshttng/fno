@@ -1623,7 +1623,7 @@ pub fn run(args: &[String]) -> i32 {
                 .map(Path::to_path_buf)
                 .unwrap_or_else(|| PathBuf::from(".fno"));
             let mut ctx = ExportCtx {
-                bus: BusIndex::load(&crate::intel::bus_log_path(&fno_dir)),
+                bus: BusIndex::load(&crate::mail_paths::bus_log_path(&fno_dir)),
                 witness: crate::operator_witness::SubmitIndex::load(&home.events_jsonl()),
                 now: std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)

@@ -62,6 +62,7 @@ fn arm_key_value(cwd: &Path, key: &str) -> String {
         "active_backlog.enabled" => crate::agents_config::active_backlog_enabled(cwd),
         "slot_cutover.enabled" => crate::agents_config::slot_cutover_enabled(cwd),
         "telemetry.otlp.enabled" => crate::agents_config::otlp_export_enabled(cwd),
+        "telemetry.eval_events.enabled" => crate::eval_events::enabled(cwd),
         "questions.judge.enabled" => crate::question_judge::enabled(cwd),
         _ => return "unreadable".to_string(),
     };
@@ -317,6 +318,14 @@ pub const KNOWN_ARMS: &[ArmSpec] = &[
         upstream: None,
         arm_key: Some("telemetry.otlp.enabled"),
         reader: Some("fno agents feed --otlp"),
+    },
+    ArmSpec {
+        arm: "eval_events",
+        default_interval_s: crate::eval_events::INTERVAL_S,
+        scheduler: SCHED_DAEMON,
+        upstream: None,
+        arm_key: Some("telemetry.eval_events.enabled"),
+        reader: Some("fno-agents evals events"),
     },
     ArmSpec {
         arm: "pane_loop",

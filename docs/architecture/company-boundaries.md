@@ -4,7 +4,7 @@
 
 The sole layer map lives in `scripts/ci/check-company-boundaries.sh`, and this document intentionally does not duplicate it. Dependencies can point within a layer or to a lower-numbered layer, never upward. The whole `fno.company` package is core vocabulary. It held a composition layer for its topology and execution modules until the topology port deleted them. The Rust `TOPOLOGIES` list in `crates/fno-agents/src/plugins/verify.rs` now owns the topology words.
 
-The check scans Python imports with a known-present roles-to-contracts edge as its positive control and reports the importing file, line, layers, and statement for every prohibited dependency.
+The check scans Python imports. Its positive control is a known-present downward edge out of the runtime layer. It reports the importing file, line, layers, and statement for every prohibited dependency.
 The current repository does not satisfy the declared map: the check reports two imports from the platform events CLI into the agents runtime, and a platform-to-runtime-to-platform layer cycle those two imports keep alive.
 
 ### Map coverage is 35%, so a cleared finding is not automatically a removed dependency
@@ -43,9 +43,9 @@ The runtime capability table (`fno.agents.harness_map`) asserts its keys stay in
 None of the moves left a re-export shim at the old path.
 A shim would keep the upward import spelling available and hide the move from the next reader.
 
-The two survivors form one finding. The `fno doctor event emit` builder stamps the sending session identity through `fno.agents.self_stamp`. It resolves spawn lineage through `fno.agents.registry`. That is platform-layer code reading agent-runtime state, and it is a genuine architectural finding rather than a misplaced file. Neither callee can move down. `self_stamp` imports `fno.claims.session_pid` at L1 core. Moving it to L0 trades one upward edge for another. `agents.registry` is the agents registry. The remaining options are larger than a burndown. One option puts the stamp behind a registered hook, which leaves processes without `fno.agents` unstamped. Another moves envelope construction into the runtime layer and leaves `fno doctor event emit` as a thin caller.
+The two survivors form one finding. The `fno doctor event emit` builder stamps the sending session identity through `fno.agents.self_stamp`. It resolves spawn lineage through `fno.agents.registry`. That is platform-layer code reading agent-runtime state, and it is a genuine architectural finding rather than a misplaced file. Neither callee can move down. `agents.registry` is the agents registry. The remaining options are larger than a burndown. One option puts the stamp behind a registered hook, which leaves processes without `fno.agents` unstamped. Another moves envelope construction into the runtime layer and leaves `fno doctor event emit` as a thin caller.
 
-Two shortcuts were considered and rejected on measurement rather than taste. Hoisting `fno.graph.cli` and `fno.events.cli` to a higher layer clears nothing. Those modules still import L5 `fno.agents`. If CLI modules are declared L5, the check bites. `graph/cli.py` has roughly 10k lines of logic, not a composition root. Declaring it unconstrained empties the check. Reclassifying `fno.events` from platform to runtime fails a harder test. `fno.config`, `fno.claims`, `fno.graph`, and `fno.approvals` all import it. The move creates nine upward violations while erasing three.
+Two shortcuts were considered and rejected on measurement rather than taste. Hoisting `fno.graph.cli` and `fno.events.cli` to a higher layer clears nothing. Those modules still import L5 `fno.agents`. If CLI modules are declared L5, the check bites. `graph/cli.py` has roughly 10k lines of logic, not a composition root. Declaring it unconstrained empties the check. Reclassifying `fno.events` from platform to runtime fails a harder test. `fno.config`, `fno.graph`, and `fno.approvals` all import it. The move creates nine upward violations while erasing three.
 
 ## Audit and CI modes
 

@@ -36,7 +36,7 @@ pub fn run_ack(args: &[String]) -> i32 {
         eprintln!("ack: a message id is required");
         return 2;
     };
-    let Some(bus) = bus_dir() else {
+    let Some(bus) = crate::mail_paths::state_bus_dir_opt() else {
         eprintln!("error: no fno state directory; bus log not found");
         return 2;
     };
@@ -125,23 +125,6 @@ pub fn run_ack(args: &[String]) -> i32 {
         }
     }
     0
-}
-
-/// The bus directory holding messages.jsonl, the shared reader env order
-/// (`intel::bus_log_path`): FNO_BUS_DIR, then FNO_INBOX_ROOT/.bus, then the
-/// state root's bus.
-/// `pub(crate)`: the reply leaf reads the same bus log through it.
-pub(crate) fn bus_dir() -> Option<PathBuf> {
-    if let Some(dir) = std::env::var("FNO_BUS_DIR").ok().filter(|v| !v.is_empty()) {
-        return Some(PathBuf::from(dir));
-    }
-    if let Some(root) = std::env::var("FNO_INBOX_ROOT")
-        .ok()
-        .filter(|v| !v.is_empty())
-    {
-        return Some(PathBuf::from(root).join(".bus"));
-    }
-    crate::agents_config::state_dir(Path::new(".")).map(|dir| dir.join("bus"))
 }
 
 /// The retained bus rows, oldest first: `bus.log.iter_messages` over

@@ -490,6 +490,8 @@ const FOREIGN_SESSION_MARKERS = [
   "CODEX_SHELL",
   "CODEX_COMPANION_SESSION_ID",
   "CODEX_COMPANION_TRANSCRIPT_PATH",
+  "PI_SESSION_ID",
+  "PI_SESSION_FILE",
 ]
 
 /** Resolve the plugin root the hooks.json lives under: env hints first,

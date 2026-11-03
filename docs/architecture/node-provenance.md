@@ -74,10 +74,10 @@ A registry-row drop does not end a session's identity. The registry write's remo
 
 ## Reading it back: the resolver
 
-`cli/src/fno/provenance/resolver.py` turns a stored pointer into a transcript path:
+`crates/fno-agents/src/transcript_resolve.rs` turns a stored pointer into a transcript path. The Python agents runtime reads it through `fno-agents attest resolve-transcript`:
 
 ```
-resolve_transcript(harness, session_id, cwd) -> ResolvedTranscript
+resolve_transcript(harness, session_id, cwd, roots) -> ResolvedTranscript
 ```
 
 For `claude` it resolves `~/.claude/projects/<slug(cwd)>/<session_id>.jsonl`, where `slug(cwd)` replaces both `/` and `.` with `-` (e.g. `/Users/bb16/code/me/fno` -> `-Users-bb16-code-me-fno`). It tries an exact `<session_id>.jsonl` first, then globs `<session_id>*.jsonl` because the id may be an 8-hex prefix; multiple matches return the first deterministically with `ambiguous=True`. A foreign harness (`codex`, `gemini`, anything else) returns `resolved=False` with `reason="harness-not-supported"` rather than guessing. Missing inputs and unexpected OS errors also return `resolved=False`; the function never raises.

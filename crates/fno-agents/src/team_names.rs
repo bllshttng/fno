@@ -634,7 +634,7 @@ fn bus_names(store_path: &Path) -> BTreeSet<String> {
     let Some(fno_dir) = store_path.parent().and_then(|p| p.parent()) else {
         return out;
     };
-    let Ok(bytes) = std::fs::read_to_string(crate::intel::bus_log_path(fno_dir)) else {
+    let Ok(bytes) = std::fs::read_to_string(crate::mail_paths::bus_log_path(fno_dir)) else {
         return out;
     };
     for line in bytes.lines().filter(|l| !l.trim().is_empty()) {
