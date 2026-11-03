@@ -2460,3 +2460,83 @@ fn a_role_chat_approval_clears_the_paint_hold_only_at_its_head() {
     assert!(crate::merge_gates::visual_approval_blocker(&fake, &tmp, 7, &head).is_none());
     std::fs::remove_dir_all(&tmp).ok();
 }
+
+#[test]
+fn a_chat_attested_law_row_or_a_board_decision_clears_the_paint_hold_at_its_head() {
+    let tmp = std::env::temp_dir().join(format!("xf5ec-gate-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(tmp.join(".fno")).unwrap();
+    let head: String = "a".repeat(40);
+    let pushed: String = "b".repeat(40);
+    let mut fake = clean();
+    let law = |authority: &str, decision: &str, rationale: &str| {
+        format!(
+            r#"{{"decisions":[{{"decision_id":"d-xf5ec","subject":"visual approval PR 7","authority_source":"{authority}","lifecycle":"live","decision":"{decision}","rationale":"{rationale}"}}]}}"#
+        )
+        .into_bytes()
+    };
+    let law_clears =
+        |fake: &Fake, head: &str| crate::merge_gates::law_chat_clears_pr(fake, &tmp, 7, head);
+    // The worker the user spoke to recorded the user's words as law.
+    fake.decisions_stdout = Some(law(
+        "chat_attested",
+        &format!("Approved: PR 7 at {head}; merge when green."),
+        "user in chat: Approved",
+    ));
+    assert!(law_clears(&fake, &head));
+    // A push voids it, a bare agent row never counts, and a row with no
+    // user words or a decline holds.
+    assert!(!law_clears(&fake, &pushed));
+    fake.decisions_stdout = Some(law(
+        "agent",
+        &format!("Approved: PR 7 at {head}"),
+        "user in chat: Approved",
+    ));
+    assert!(!law_clears(&fake, &head));
+    fake.decisions_stdout = Some(law(
+        "chat_attested",
+        &format!("Approved: PR 7 at {head}"),
+        "the lead judges it good",
+    ));
+    assert!(!law_clears(&fake, &head));
+    fake.decisions_stdout = Some(law(
+        "chat_attested",
+        &format!("Hold: PR 7 at {head}"),
+        "user in chat: hold it",
+    ));
+    assert!(!law_clears(&fake, &head));
+    fake.decisions_stdout = Some(law(
+        "chat_attested",
+        &format!("Approved: PR 8 at {head}"),
+        "user in chat: Approved",
+    ));
+    assert!(!law_clears(&fake, &head));
+
+    // A board answer lands as a node decision whose question names the PR
+    // and an abbreviated head; the page stayed open.
+    let board = |answer: &str, comms: &str| {
+        format!(
+            r#"{{"decisions":[{{"decision_id":"d-board","subject":"x-paint","lifecycle":"unscoped","question_id":"q-1","trace":{{"comms":"{comms}","recipient_kind":"user"}},"question":"Approve the look of PR 7 (node x-paint, head aaaaaaaaaa)?","decision":"{answer}"}}]}}"#
+        )
+        .into_bytes()
+    };
+    let clears = |fake: &Fake, head: &str| {
+        crate::merge_gates::role_chat_clears_pr(fake, &tmp, 7, head, "x-paint")
+    };
+    fake.decisions_stdout = Some(board("Approve; merge when green.", "question"));
+    assert!(clears(&fake, &head));
+    assert!(!clears(&fake, &pushed));
+    fake.decisions_stdout = Some(board("Hold for changes", "question"));
+    assert!(!clears(&fake, &head));
+    fake.decisions_stdout = Some(board("Approve", "coordination"));
+    assert!(!clears(&fake, &head));
+    // The asking team closing its own question with a role answer is no look.
+    fake.decisions_stdout = Some(
+        String::from_utf8(board("Approve", "question"))
+            .unwrap()
+            .replace(r#""lifecycle""#, r#""authority_source":"role","lifecycle""#)
+            .into_bytes(),
+    );
+    assert!(!clears(&fake, &head));
+    std::fs::remove_dir_all(&tmp).ok();
+}
