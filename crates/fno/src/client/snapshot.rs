@@ -806,12 +806,35 @@ shoot a root seeded with questions, mail or backlog activity \
         Some(ViewKind::QuestionDetail) => {
             // The same gather the bell shots run, then the page the bell
             // opens on a row.
+            // The live bell reads the index first and the projection after, so
+            // a failed projection read leaves the index row on the page.
+            if let Some(index) = runtime.block_on(super::questions::questions_index_now()) {
+                view.apply_questions_index(index);
+            }
             let questions = runtime.block_on(crate::needs_overlay::questions_now());
             view.apply_questions_fold(questions);
-            let id = super::bell::first_question_id(&view).ok_or(
-                "question-detail: no open question to show; shoot a root seeded with \
+            // FNO_SNAPSHOT_QUESTION names the question to open: an id, a bare
+            // id or a number like Q3554. Unset, the first open question opens.
+            let want = std::env::var("FNO_SNAPSHOT_QUESTION").ok();
+            let id = match want.as_deref() {
+                Some(want) => view
+                    .questions_merged()
+                    .and_then(|f| {
+                        f.items
+                            .into_iter()
+                            .find(|q| {
+                                q.id == want
+                                    || q.id.split('@').next() == Some(want)
+                                    || q.number.as_deref() == Some(want)
+                            })
+                            .map(|q| q.id)
+                    })
+                    .ok_or_else(|| format!("question-detail: no question matches {want:?}"))?,
+                None => super::bell::first_question_id(&view).ok_or(
+                    "question-detail: no open question to show; shoot a root seeded with \
 questions (scripts/ops/mux-demo-snapshot.sh seeds one)",
-            )?;
+                )?,
+            };
             view.open_detail_on(&id);
             if let Some(d) = &view.question_detail {
                 d.wait_decoded(Duration::from_secs(10));
