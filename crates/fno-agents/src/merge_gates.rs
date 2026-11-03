@@ -8,8 +8,8 @@ use crate::authorized_merge::{
     node_carries_tag, pr_bound_entry, Blocker, PrFacts, ProbeOutcome, Probes, MAIN_REPAIR_TAG,
 };
 use crate::loopcheck::coverage_gate::{refusal_line, GateState};
-use serde_json::Value;
 use crate::visual_screen;
+use serde_json::Value;
 use std::collections::BTreeSet;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -689,32 +689,40 @@ pub(crate) fn visual_approval_blocker<P: Probes>(
         ),
         (Some(node), shots) => {
             let mux = crate::escalation::vault_dir_with_home(&root, home.as_deref(), "mux");
-            let scratch = std::env::temp_dir();
-            let mut summary = String::new();
-            let mut images: Vec<PathBuf> = shots.iter().map(|s| mux.join(s)).collect();
-            match visual_screen::screen(shots, &mux, &scratch) {
-                visual_screen::Screen::Identical { views } => {
-                    breadcrumb(&format!(
-                        "PR {pr}: all {views} shot pair(s) are pixel-identical to main; visual approval not owed"
+            let doc = std::fs::read_to_string(root.join("docs/architecture/mux-design-system.md"))
+                .unwrap_or_default();
+            let headings = visual_screen::rule_headings(&doc);
+            let remedy = format!(
+                "run `fno-agents visual critique-prep {node}`, then the `fno:design-critic` agent on \
+                 {node}-critique.json, fix every high finding, and re-read status at the new head"
+            );
+            match visual_screen::read_critique(&mux, node, head, &headings) {
+                visual_screen::CritiqueRead::Missing => detail.push_str(&format!(
+                    "; no design critique at this head, so the gate files no page: {remedy}"
+                )),
+                visual_screen::CritiqueRead::Unfilled(why) => detail.push_str(&format!(
+                    "; the design critique is not usable ({why}), so the gate files no page: {remedy}"
+                )),
+                visual_screen::CritiqueRead::High(high) => detail.push_str(&format!(
+                    "; the design critic left {} high finding(s), so the gate files no page: {}; fix \
+                     each, then {remedy}",
+                    high.len(),
+                    high.join("; ")
+                )),
+                visual_screen::CritiqueRead::Ready(c) => {
+                    let mut images: Vec<PathBuf> = shots.iter().map(|s| mux.join(s)).collect();
+                    images.extend(c.views.iter().filter_map(|v| v.boxed.as_ref()).map(|b| mux.join(b)));
+                    detail.push_str(&file_visual_question(
+                        &root,
+                        pr,
+                        head,
+                        node,
+                        &touched.join(", "),
+                        &visual_screen::critique_summary(&c),
+                        &images,
                     ));
-                    return None;
-                }
-                visual_screen::Screen::NeedsLook(changes) => {
-                    for c in changes {
-                        summary.push_str(&format!("- {}\n", c.line));
-                        images.extend(c.boxed);
-                    }
                 }
             }
-            detail.push_str(&file_visual_question(
-                &root,
-                pr,
-                head,
-                node,
-                &touched.join(", "),
-                summary.trim_end(),
-                &images,
-            ));
         }
     }
     Some(Blocker::held("visual_approval", detail))
@@ -885,7 +893,7 @@ fn vault_root(cwd: &Path) -> PathBuf {
 /// The mux captures for one node's PR: `internal/<project>/mux/<node>-*.png`
 /// top level, plus files inside a `<node>-shots/` folder, as vault-relative
 /// embed names. Sorted, so the embedded list is stable.
-fn mux_shots(root: &Path, home: Option<&Path>, node: &str) -> Vec<String> {
+pub(crate) fn mux_shots(root: &Path, home: Option<&Path>, node: &str) -> Vec<String> {
     let dir = crate::escalation::vault_dir_with_home(root, home, "mux");
     let Ok(read) = std::fs::read_dir(&dir) else {
         return Vec::new();
@@ -949,9 +957,9 @@ fn visual_question_markdown(
         String::new()
     } else {
         format!(
-            "## What changed\n\
-             The screen diffed the main shots against this head's. Only these views differ; \
-             a red box frames each changed region under Screens.\n\
+            "## What the critic checked and left\n\
+             The design critic read the main and PR shots against the mux design system. \
+             A red box frames each changed region under Screens.\n\
              {summary}\n\n"
         )
     };

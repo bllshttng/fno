@@ -492,6 +492,12 @@ async fn run(args: Vec<String>) -> i32 {
         return fno_agents::test_delta::run_test_delta(&args[1..]);
     }
 
+    // The design critic's prep door: pairs the node's main and PR shots and
+    // writes the skeleton critique. Hidden, `matches!` like the doors below.
+    if matches!(command, "visual") {
+        return fno_agents::visual_screen::run_critique_prep(&args[1..]);
+    }
+
     // The style gate's hidden binary-direct door (mail, encounters, markdown);
     // matched with `matches!` so the routable-command parity sets never see it.
     if matches!(command, "style-check") {

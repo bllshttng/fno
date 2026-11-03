@@ -1,12 +1,17 @@
-//! Pre-screen for the visual-approval gate: diff the main and PR shots per
-//! view and theme before a look question reaches the user.
+//! Visual-approval support. Two jobs live here.
 //!
-//! Shots pair by name: `<stem>-before-<theme>.png` (main) with
-//! `<stem>-after-<theme>.png` (PR), or the token at the tail
-//! (`<stem>-<theme>-before.png`). A pair with identical pixels needs no look.
-//! A pair that differs becomes a boxed copy of the PR shot plus one plain
-//! line that says where it changed.
+//! 1. The code-diff test: a paint diff that changes comments and code names
+//!    only cannot move a pixel, so the gate clears it from the patch alone.
+//! 2. The design critique: `visual critique-prep <node>` pairs the main and PR
+//!    shots, boxes the changed regions, and writes a skeleton critique. The
+//!    `design-critic` agent fills it. The gate reads it and files a look
+//!    only when no high finding stands.
+//!
+//! Shots pair by name. The main side carries a `before` or `main` token. The
+//! PR side carries `after` or no token, so `x-1-settings-dark.png` pairs with
+//! `x-1-settings-before-dark.png`.
 
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 /// One view at one theme, with the main shot and the PR shot.
@@ -18,7 +23,7 @@ pub(crate) struct ShotPair {
 }
 
 /// The changed rectangle of one pair, in PR-shot pixels.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct Region {
     pub x: u32,
     pub y: u32,
@@ -27,76 +32,54 @@ pub(crate) struct Region {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum PairDiff {
+enum PairDiff {
     Identical,
-    Changed {
-        pixels: u64,
-        region: Region,
-    },
-    SizeChanged {
-        before: (u32, u32),
-        after: (u32, u32),
-    },
+    Changed(Region),
+    SizeChanged,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum Screen {
-    /// Every pair is pixel-identical: no look can judge anything.
-    Identical { views: usize },
-    /// At least one pair differs, or a shot has no partner.
-    NeedsLook(Vec<ViewChange>),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ViewChange {
-    pub view: String,
-    pub line: String,
-    /// The boxed PR shot, when a box could be drawn.
-    pub boxed: Option<PathBuf>,
-}
-
-fn split_token(stem: &str) -> Option<(String, &'static str)> {
+fn split_token(stem: &str) -> (String, bool) {
     let parts: Vec<&str> = stem.split('-').collect();
-    let at = parts.iter().position(|p| *p == "before" || *p == "after")?;
-    let side = if parts[at] == "before" {
-        "before"
-    } else {
-        "after"
-    };
-    let mut rest = parts.clone();
-    rest.remove(at);
-    Some((rest.join("-"), side))
+    match parts
+        .iter()
+        .position(|p| matches!(*p, "before" | "main" | "after"))
+    {
+        Some(at) => {
+            let main_side = parts[at] != "after";
+            let mut rest = parts.clone();
+            rest.remove(at);
+            (rest.join("-"), main_side)
+        }
+        None => (stem.to_string(), false),
+    }
 }
 
-/// Pair the shot names (file names or `folder/name`). Names with no partner
-/// come back second: the screen cannot clear a view it has half of.
+/// Pair the shot names (file names or `folder/name`). A name with no partner
+/// comes back second: the critic cannot compare a view it has half of.
 pub(crate) fn pair_shots(shots: &[String]) -> (Vec<ShotPair>, Vec<String>) {
-    let mut before: Vec<(String, String)> = Vec::new();
-    let mut after: Vec<(String, String)> = Vec::new();
-    let mut loose = Vec::new();
+    let mut main: Vec<(String, String)> = Vec::new();
+    let mut pr: Vec<(String, String)> = Vec::new();
     for name in shots {
-        let stem = name.trim_end_matches(".png");
-        match split_token(stem) {
-            Some((key, "before")) => before.push((key, name.clone())),
-            Some((key, _)) => after.push((key, name.clone())),
-            None => loose.push(name.clone()),
+        let (key, main_side) = split_token(name.trim_end_matches(".png"));
+        if main_side {
+            main.push((key, name.clone()));
+        } else {
+            pr.push((key, name.clone()));
         }
     }
     let mut pairs = Vec::new();
-    for (key, b) in &before {
-        match after.iter().position(|(k, _)| k == key) {
-            Some(i) => {
-                let (_, a) = after.remove(i);
-                pairs.push(ShotPair {
-                    view: key.clone(),
-                    before: b.clone(),
-                    after: a,
-                });
-            }
-            None => loose.push(b.clone()),
+    let mut loose = Vec::new();
+    for (key, b) in main {
+        match pr.iter().position(|(k, _)| *k == key) {
+            Some(i) => pairs.push(ShotPair {
+                view: key,
+                before: b,
+                after: pr.remove(i).1,
+            }),
+            None => loose.push(b),
         }
     }
-    loose.extend(after.into_iter().map(|(_, n)| n));
+    loose.extend(pr.into_iter().map(|(_, n)| n));
     pairs.sort_by(|a, b| a.view.cmp(&b.view));
     loose.sort();
     (pairs, loose)
@@ -142,10 +125,7 @@ fn decode(path: &Path) -> Result<Rgba, String> {
 
 fn compare(a: &Rgba, b: &Rgba) -> PairDiff {
     if (a.w, a.h) != (b.w, b.h) {
-        return PairDiff::SizeChanged {
-            before: (a.w, a.h),
-            after: (b.w, b.h),
-        };
+        return PairDiff::SizeChanged;
     }
     let (mut x0, mut y0, mut x1, mut y1) = (u32::MAX, u32::MAX, 0, 0);
     let mut pixels = 0u64;
@@ -164,15 +144,12 @@ fn compare(a: &Rgba, b: &Rgba) -> PairDiff {
     if pixels == 0 {
         return PairDiff::Identical;
     }
-    PairDiff::Changed {
-        pixels,
-        region: Region {
-            x: x0,
-            y: y0,
-            w: x1 - x0 + 1,
-            h: y1 - y0 + 1,
-        },
-    }
+    PairDiff::Changed(Region {
+        x: x0,
+        y: y0,
+        w: x1 - x0 + 1,
+        h: y1 - y0 + 1,
+    })
 }
 
 /// Write a copy of the PR shot with a red frame around the changed region.
@@ -204,71 +181,256 @@ fn write_boxed(after: &Rgba, region: Region, out: &Path) -> Result<(), String> {
         .map_err(|e| format!("{}: {e}", out.display()))
 }
 
-fn describe(view: &str, diff: &PairDiff) -> String {
-    match diff {
-        PairDiff::Identical => format!("{view}: no change"),
-        PairDiff::Changed { pixels, region } => format!(
-            "{view}: {pixels} pixels changed, inside a {}x{} box at ({}, {})",
-            region.w, region.h, region.x, region.y
-        ),
-        PairDiff::SizeChanged { before, after } => format!(
-            "{view}: the shot size moved from {}x{} to {}x{}",
-            before.0, before.1, after.0, after.1
-        ),
-    }
+/// One paired view in the critique file.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct ViewEntry {
+    pub view: String,
+    pub theme: String,
+    pub before: String,
+    pub after: String,
+    pub identical: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub boxed: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub region: Option<Region>,
 }
 
-/// Screen the shots in `dir`. Boxed copies land in `scratch`. A shot that
-/// cannot be read, or has no partner, keeps the look: the screen only ever
-/// clears on a positive pixel match.
-pub(crate) fn screen(shots: &[String], dir: &Path, scratch: &Path) -> Screen {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct Finding {
+    pub view: String,
+    pub region: String,
+    pub rule: String,
+    pub severity: String,
+    #[serde(default)]
+    pub fix: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct Stamp {
+    pub agent: String,
+    #[serde(default)]
+    pub ran_at: String,
+}
+
+/// `<node>-critique.json`: prep writes the views, the critic fills the rest.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub(crate) struct Critique {
+    pub head: String,
+    #[serde(default)]
+    pub views: Vec<ViewEntry>,
+    #[serde(default)]
+    pub findings: Vec<Finding>,
+    #[serde(default)]
+    pub checked: Vec<String>,
+    #[serde(default)]
+    pub left: Vec<String>,
+    #[serde(default)]
+    pub critic: Option<Stamp>,
+}
+
+fn theme_of(view: &str) -> String {
+    view.rsplit('-')
+        .find(|t| matches!(*t, "dark" | "light"))
+        .unwrap_or("")
+        .to_string()
+}
+
+/// Pair the shots in `dir`, compare each pair, and box the changed PR shots
+/// under `<node>-shots/boxed/`. A shot that cannot be read goes to `left`
+/// and is never `identical`.
+pub(crate) fn prep(node: &str, head: &str, shots: &[String], dir: &Path) -> Critique {
     let (pairs, loose) = pair_shots(shots);
-    let mut changes = Vec::new();
-    for name in &loose {
-        changes.push(ViewChange {
-            view: name.clone(),
-            line: format!("{name}: no main/PR partner, so the screen cannot compare it"),
-            boxed: None,
-        });
+    let mut out = Critique {
+        head: head.to_string(),
+        ..Critique::default()
+    };
+    for name in loose {
+        out.left.push(format!(
+            "{name}: no main or PR partner, so it was not compared"
+        ));
     }
-    for pair in &pairs {
-        let read = decode(&dir.join(&pair.before)).and_then(|b| {
-            let a = decode(&dir.join(&pair.after))?;
-            Ok((b, a))
-        });
+    let boxed_dir = dir.join(format!("{node}-shots/boxed"));
+    for p in pairs {
+        let read = decode(&dir.join(&p.before)).and_then(|b| Ok((b, decode(&dir.join(&p.after))?)));
         let (b, a) = match read {
             Ok(both) => both,
             Err(e) => {
-                changes.push(ViewChange {
-                    view: pair.view.clone(),
-                    line: format!("{}: unreadable shot ({e})", pair.view),
-                    boxed: None,
-                });
+                out.left.push(format!("{}: unreadable shot ({e})", p.view));
                 continue;
             }
         };
         let diff = compare(&b, &a);
-        if diff == PairDiff::Identical {
-            continue;
-        }
-        let boxed = match &diff {
-            PairDiff::Changed { region, .. } => {
-                let out = scratch.join(format!("boxed-{}.png", pair.view.replace('/', "_")));
-                write_boxed(&a, *region, &out).ok().map(|()| out)
+        let (mut boxed, mut region) = (None, None);
+        if let PairDiff::Changed(r) = diff {
+            let name = format!("{}.png", p.view.replace('/', "_"));
+            let path = boxed_dir.join(&name);
+            if std::fs::create_dir_all(&boxed_dir).is_ok() && write_boxed(&a, r, &path).is_ok() {
+                boxed = Some(format!("{node}-shots/boxed/{name}"));
             }
-            _ => None,
-        };
-        changes.push(ViewChange {
-            view: pair.view.clone(),
-            line: describe(&pair.view, &diff),
+            region = Some(r);
+        }
+        out.views.push(ViewEntry {
+            theme: theme_of(&p.view),
+            view: p.view,
+            before: p.before,
+            after: p.after,
+            identical: diff == PairDiff::Identical,
             boxed,
+            region,
         });
     }
-    if changes.is_empty() && !pairs.is_empty() {
-        Screen::Identical { views: pairs.len() }
-    } else {
-        Screen::NeedsLook(changes)
+    out
+}
+
+/// `fno-agents visual critique-prep <node> [--head <sha>]`: write the skeleton
+/// critique for the node's shots and print its path.
+pub fn run_critique_prep(args: &[String]) -> i32 {
+    if args.first().map(String::as_str) != Some("critique-prep") || args.len() < 2 {
+        eprintln!("usage: fno-agents visual critique-prep <node> [--head <sha>]");
+        return 2;
     }
+    let node = &args[1];
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let flag = args
+        .iter()
+        .position(|a| a == "--head")
+        .and_then(|i| args.get(i + 1));
+    let head = match flag {
+        Some(h) => h.clone(),
+        None => match std::process::Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(&cwd)
+            .output()
+        {
+            Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).trim().to_string(),
+            _ => {
+                eprintln!("cannot read HEAD; pass --head <sha>");
+                return 1;
+            }
+        },
+    };
+    let root = crate::paths::canonical_repo_root(&cwd).unwrap_or(cwd);
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let dir = crate::escalation::vault_dir_with_home(&root, home.as_deref(), "mux");
+    let shots = crate::merge_gates::mux_shots(&root, home.as_deref(), node);
+    if shots.is_empty() {
+        eprintln!(
+            "no shots at {}/{node}-*.png: shoot main and the PR first",
+            dir.display()
+        );
+        return 1;
+    }
+    let critique = prep(node, &head, &shots, &dir);
+    let path = dir.join(format!("{node}-critique.json"));
+    match serde_json::to_string_pretty(&critique)
+        .map_err(|e| e.to_string())
+        .and_then(|j| std::fs::write(&path, j).map_err(|e| e.to_string()))
+    {
+        Ok(()) => {
+            println!("{}", path.display());
+            0
+        }
+        Err(e) => {
+            eprintln!("cannot write {}: {e}", path.display());
+            1
+        }
+    }
+}
+
+/// What the gate finds when it reads a node's critique at a PR head.
+#[derive(Debug)]
+pub(crate) enum CritiqueRead {
+    /// No file, or a file for another head.
+    Missing,
+    /// Prep wrote it but the critic has not filled it, or it is malformed.
+    Unfilled(String),
+    /// Findings of severity high stand; each is `view / region / rule`.
+    High(Vec<String>),
+    /// Filled, valid, no high finding.
+    Ready(Critique),
+}
+
+/// The `##` and `###` heading texts of the design doc: the rule names.
+pub(crate) fn rule_headings(doc: &str) -> Vec<String> {
+    doc.lines()
+        .filter_map(|l| l.strip_prefix("### ").or_else(|| l.strip_prefix("## ")))
+        .map(|h| h.trim().to_string())
+        .collect()
+}
+
+pub(crate) fn read_critique(
+    dir: &Path,
+    node: &str,
+    head: &str,
+    headings: &[String],
+) -> CritiqueRead {
+    let Ok(text) = std::fs::read_to_string(dir.join(format!("{node}-critique.json"))) else {
+        return CritiqueRead::Missing;
+    };
+    let c: Critique = match serde_json::from_str(&text) {
+        Ok(c) => c,
+        Err(e) => return CritiqueRead::Unfilled(format!("the critique is not valid JSON ({e})")),
+    };
+    if c.head != head {
+        return CritiqueRead::Missing;
+    }
+    if c.critic.as_ref().is_none_or(|s| s.agent != "design-critic") {
+        return CritiqueRead::Unfilled(
+            "no design-critic stamp: the critic has not filled it".into(),
+        );
+    }
+    if c.checked.is_empty() {
+        return CritiqueRead::Unfilled("`checked` is empty".into());
+    }
+    for (i, f) in c.findings.iter().enumerate() {
+        let bad = if !matches!(f.severity.as_str(), "high" | "medium" | "low") {
+            Some("severity")
+        } else if f.view.trim().is_empty() {
+            Some("view")
+        } else if f.region.trim().is_empty() {
+            Some("region")
+        } else if !headings.is_empty() && !headings.contains(&f.rule) {
+            Some("rule")
+        } else {
+            None
+        };
+        if let Some(field) = bad {
+            return CritiqueRead::Unfilled(format!("finding {} has a bad `{field}`", i + 1));
+        }
+    }
+    let high: Vec<String> = c
+        .findings
+        .iter()
+        .filter(|f| f.severity == "high")
+        .map(|f| format!("{} / {} / {}", f.view, f.region, f.rule))
+        .collect();
+    if high.is_empty() {
+        CritiqueRead::Ready(c)
+    } else {
+        CritiqueRead::High(high)
+    }
+}
+
+/// The page text for a ready critique: what was checked, what was left.
+pub(crate) fn critique_summary(c: &Critique) -> String {
+    let mut s = String::from("Checked:\n");
+    for line in &c.checked {
+        s.push_str(&format!("- {line}\n"));
+    }
+    s.push_str("\nLeft:\n");
+    let left: Vec<String> = c
+        .findings
+        .iter()
+        .map(|f| format!("{} ({}): {} / {}", f.severity, f.view, f.region, f.rule))
+        .chain(c.left.iter().cloned())
+        .collect();
+    if left.is_empty() {
+        s.push_str("- nothing\n");
+    }
+    for line in left {
+        s.push_str(&format!("- {line}\n"));
+    }
+    s.trim_end().to_string()
 }
 
 const KEYWORDS: &[&str] = &[
@@ -359,74 +521,112 @@ mod tests {
     }
 
     #[test]
-    fn pairs_take_the_token_in_the_middle_or_at_the_tail() {
+    fn real_shot_names_pair_whatever_token_the_main_side_wears() {
         let names = [
-            "x-1-before-dark.png",
-            "x-1-after-dark.png",
-            "x-1-base-light-before.png",
-            "x-1-base-light-after.png",
-            "x-1-stray.png",
+            "x-c277-settings-dark.png",
+            "x-c277-settings-before-dark.png",
+            "x-c277-connections-main-dark.png",
+            "x-c277-connections-dark.png",
+            "x-c277-stray.png",
         ]
         .map(String::from);
         let (pairs, loose) = pair_shots(&names);
         let views: Vec<&str> = pairs.iter().map(|p| p.view.as_str()).collect();
-        assert_eq!(views, ["x-1-base-light", "x-1-dark"]);
-        assert_eq!(loose, ["x-1-stray.png"]);
-    }
-
-    #[test]
-    fn screen_clears_identical_pairs_and_boxes_a_changed_one() {
-        let dir = tempfile::tempdir().unwrap();
-        let d = dir.path();
-        write_png(&d.join("v-before-dark.png"), 8, 8, |_, _| [0, 0, 0, 255]);
-        write_png(&d.join("v-after-dark.png"), 8, 8, |_, _| [0, 0, 0, 255]);
-        let same = ["v-before-dark.png", "v-after-dark.png"].map(String::from);
-        assert_eq!(screen(&same, d, d), Screen::Identical { views: 1 });
-
-        write_png(&d.join("v-after-dark.png"), 8, 8, |x, y| {
-            if (3..5).contains(&x) && y == 2 {
-                [255, 255, 255, 255]
-            } else {
-                [0, 0, 0, 255]
-            }
-        });
-        let Screen::NeedsLook(changes) = screen(&same, d, d) else {
-            panic!("a changed pair must keep the look");
-        };
-        assert_eq!(changes.len(), 1);
-        assert!(changes[0]
-            .line
-            .contains("2 pixels changed, inside a 2x1 box at (3, 2)"));
-        assert!(changes[0].boxed.as_ref().is_some_and(|p| p.exists()));
-    }
-
-    #[test]
-    fn a_shot_with_no_partner_or_no_file_never_clears() {
-        let dir = tempfile::tempdir().unwrap();
-        let lone = ["v-before-dark.png".to_string()];
-        assert!(matches!(
-            screen(&lone, dir.path(), dir.path()),
-            Screen::NeedsLook(_)
-        ));
-        let missing = ["v-before-dark.png", "v-after-dark.png"].map(String::from);
-        assert!(matches!(
-            screen(&missing, dir.path(), dir.path()),
-            Screen::NeedsLook(_)
-        ));
+        assert_eq!(views, ["x-c277-connections-dark", "x-c277-settings-dark"]);
+        assert_eq!(loose, ["x-c277-stray.png"]);
     }
 
     #[test]
     fn names_only_patches_read_true_and_rendered_edits_read_false() {
-        let comments = "@@ -1,2 +1,2 @@\n-// box\n+// machine\n context\n";
-        assert!(names_only_patch(comments));
+        assert!(names_only_patch("@@ @@\n-// box\n+// machine\n context\n"));
         let rename = "@@ @@\n-let tab_row = draw(\"Fleet\", Color::Red);\n+let pane_row = draw(\"Fleet\", Color::Red);\n";
         assert!(names_only_patch(rename));
-        let text = "@@ @@\n-let a = draw(\"box\");\n+let a = draw(\"machine\");\n";
-        assert!(!names_only_patch(text));
-        let style = "@@ @@\n-x.fg(Color::Red);\n+x.fg(Color::Blue);\n";
-        assert!(!names_only_patch(style));
-        let layout = "@@ @@\n-let w = 4;\n+let w = 5;\n";
-        assert!(!names_only_patch(layout));
+        assert!(!names_only_patch(
+            "@@ @@\n-let a = draw(\"box\");\n+let a = draw(\"machine\");\n"
+        ));
+        assert!(!names_only_patch(
+            "@@ @@\n-x.fg(Color::Red);\n+x.fg(Color::Blue);\n"
+        ));
+        assert!(!names_only_patch("@@ @@\n-let w = 4;\n+let w = 5;\n"));
         assert!(!names_only_patch(""));
+    }
+
+    #[test]
+    fn prep_boxes_a_changed_pair_and_the_gate_reads_the_critique_by_state() {
+        let tmp = tempfile::tempdir().unwrap();
+        let d = tmp.path();
+        write_png(&d.join("x-1-a-before-dark.png"), 8, 8, |_, _| {
+            [0, 0, 0, 255]
+        });
+        write_png(&d.join("x-1-a-dark.png"), 8, 8, |x, y| {
+            if x == 3 && y == 2 {
+                [255; 4]
+            } else {
+                [0, 0, 0, 255]
+            }
+        });
+        write_png(&d.join("x-1-b-before-light.png"), 4, 4, |_, _| [9; 4]);
+        write_png(&d.join("x-1-b-light.png"), 4, 4, |_, _| [9; 4]);
+        let shots = [
+            "x-1-a-before-dark.png",
+            "x-1-a-dark.png",
+            "x-1-b-before-light.png",
+            "x-1-b-light.png",
+            "x-1-c-dark.png",
+        ]
+        .map(String::from);
+        let mut c = prep("x-1", "h1", &shots, d);
+        assert_eq!(c.views.len(), 2);
+        assert!(!c.views[0].identical && c.views[0].boxed.is_some());
+        assert!(c.views[1].identical && c.views[1].boxed.is_none());
+        assert_eq!(c.left.len(), 1);
+        assert!(d.join("x-1-shots/boxed/x-1-a-dark.png").exists());
+
+        let write = |c: &Critique| {
+            std::fs::write(
+                d.join("x-1-critique.json"),
+                serde_json::to_string(c).unwrap(),
+            )
+            .unwrap()
+        };
+        let rules = vec!["Spacing".to_string()];
+        write(&c);
+        assert!(matches!(
+            read_critique(d, "x-1", "h1", &rules),
+            CritiqueRead::Unfilled(_)
+        ));
+        assert!(matches!(
+            read_critique(d, "x-1", "h2", &rules),
+            CritiqueRead::Missing
+        ));
+        c.critic = Some(Stamp {
+            agent: "design-critic".into(),
+            ran_at: String::new(),
+        });
+        c.checked = vec!["spacing".into()];
+        c.findings = vec![Finding {
+            view: "a".into(),
+            region: "top".into(),
+            rule: "Spacing".into(),
+            severity: "medium".into(),
+            fix: String::new(),
+        }];
+        write(&c);
+        assert!(matches!(
+            read_critique(d, "x-1", "h1", &rules),
+            CritiqueRead::Ready(_)
+        ));
+        c.findings[0].severity = "high".into();
+        write(&c);
+        assert!(matches!(
+            read_critique(d, "x-1", "h1", &rules),
+            CritiqueRead::High(_)
+        ));
+        c.findings[0].rule = "Taste".into();
+        write(&c);
+        assert!(matches!(
+            read_critique(d, "x-1", "h1", &rules),
+            CritiqueRead::Unfilled(_)
+        ));
     }
 }
