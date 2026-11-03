@@ -55,6 +55,34 @@ pub enum Door {
     Attach(String),
 }
 
+/// The child a portal seat runs to show `remote` here: this binary's
+/// supervisor for the far door, under the `env` wrapper that names the pane.
+/// The name stays on this machine: ssh does not forward it. A host or key
+/// with a leading `-` would read as an ssh option, so it is refused.
+pub fn pane_argv(remote: &proto::RemoteRow) -> Result<Vec<String>, String> {
+    let bad = |word: &str| word.is_empty() || word.starts_with('-');
+    if bad(&remote.host) || bad(&remote.key) {
+        return Err(format!("no far row at {}/{}", remote.host, remote.key));
+    }
+    let exe = std::env::current_exe()
+        .map(|path| path.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| "fno".into());
+    let words = [
+        "mux",
+        "serve",
+        "--link",
+        &remote.key,
+        "--host",
+        &remote.host,
+    ];
+    Ok(
+        ["env".into(), format!("FNO_AGENT_SELF={}", remote.name), exe]
+            .into_iter()
+            .chain(words.into_iter().map(String::from))
+            .collect(),
+    )
+}
+
 /// The far door: resolve the row, then link its pane or hand back its name.
 pub fn serve(args: &LinkArgs) -> Door {
     const COMMAND: &str = "fno mux serve --link";

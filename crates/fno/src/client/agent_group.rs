@@ -120,15 +120,9 @@ pub(super) fn agent_hit(a: &AgentRow, _active_squad: u64) -> ChromeHit {
             // refusal invariant holds by construction because the
             // client never chooses between attach and focus.
             //
-            // The default gesture names portal 0, which is exactly
-            // where the single thread pane always landed. `P` opens the next
-            // free portal beside it; nothing about this path changed.
             ChromeHit::Cmds(vec![Command::AttachAgent {
                 id: a.reach_key(),
-                placement: PanePlacement {
-                    portal: Some(0),
-                    ..PanePlacement::default()
-                },
+                placement: enter_placement(),
             }])
         }
         None => {
@@ -144,6 +138,16 @@ pub(super) fn agent_hit(a: &AgentRow, _active_squad: u64) -> ChromeHit {
                 ChromeHit::Notice(no_pane_notice(a))
             }
         }
+    }
+}
+
+/// Where Enter shows a paneless row, local or far: portal 0, which is exactly
+/// where the single thread pane always landed. `P` opens the next free
+/// portal beside it.
+pub(super) fn enter_placement() -> PanePlacement {
+    PanePlacement {
+        portal: Some(0),
+        ..PanePlacement::default()
     }
 }
 

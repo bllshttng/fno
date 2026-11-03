@@ -399,8 +399,8 @@ fn default_true() -> bool {
 /// sideline's pin star and pin-first order; floor stays 58.
 /// v120: `SessionBinding.pr_url` + `pr_count` (serde default), so the PR
 /// chip opens the node's own repo and counts every PR; floor stays 58.
-/// v121: `ClientMsg::Link`, the link role a far `mux serve --link` takes;
-/// floor stays 58, because both ends of that message sit on the host.
+/// v121: `ClientMsg::Link`, the link role a far `mux serve --link` takes, and
+/// `Command::ReachRemote`, a far row opened in a portal; floor stays 58.
 pub const PROTO_VERSION: u32 = 121;
 
 /// The oldest wire version this build can speak. Bumps that only add commands or
@@ -1738,6 +1738,14 @@ pub enum Command {
     /// so the value can only ever be `claude attach`'s positional arg.
     AttachAgent {
         id: String,
+        #[serde(default)]
+        placement: PanePlacement,
+    },
+    /// (v121) Show a row from another machine in a portal, through the
+    /// portal reach a paneless local row takes. The seat runs the link
+    /// (`fno mux serve --link <key> --host <host>`) in place of an attach.
+    ReachRemote {
+        remote: RemoteRow,
         #[serde(default)]
         placement: PanePlacement,
     },

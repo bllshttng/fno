@@ -7,7 +7,7 @@ pub const LINK_MIN_PROTO: u32 = 121;
 
 /// Where a row on another machine lives: the host ssh dials, and the key the far
 /// door resolves there (its session id, else its name).
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RemoteRow {
     pub host: String,
     pub key: String,
@@ -15,6 +15,7 @@ pub struct RemoteRow {
     pub name: String,
     /// What the card says the far session is doing, as of the last fleet
     /// read: `working`, `idle 3m`, or `offline 2m` once its machine's beat is stale.
+    #[serde(default)]
     pub state: String,
 }
 

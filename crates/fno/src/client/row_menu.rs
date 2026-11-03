@@ -143,8 +143,13 @@ pub(super) fn build_row_menu_with(
     add(PopupRow::Rule, &[]);
     if agent.remote.is_some() {
         // A row on another machine opens, peeks and takes mail. Everything that
-        // ends or moves a session needs that machine's own grant.
-        add(entry("→", "Open here"), &[MenuAction::Focus]);
+        // ends or moves a session needs that machine's own grant. Open takes
+        // the portal Enter takes; the second entry keeps that portal's row.
+        add(entry("→", "Open"), &[MenuAction::Focus]);
+        add(
+            entry("◫", "Open in new portal"),
+            &[MenuAction::PortalAt(None)],
+        );
         add(entry("◉", "Peek"), &[MenuAction::Peek]);
         add(entry("✉", "Mail"), &[MenuAction::Mail]);
         return RowMenu {
@@ -1018,6 +1023,9 @@ pub(super) async fn execute_row_menu_action(
                     ..Default::default()
                 },
             };
+            if let Some(remote) = a.remote.clone() {
+                return super::machine_tree::reach(view, remote, placement, sock_w).await;
+            }
             write_msg(
                 sock_w,
                 &ClientMsg::Command(Command::AttachAgent {

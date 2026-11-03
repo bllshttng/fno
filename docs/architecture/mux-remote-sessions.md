@@ -1,6 +1,6 @@
 # Remote sessions in the mux
 
-The sideline can show every machine on the fleet map. A session on another machine opens in your mux as a local pane, live and with input. No client merges two servers. The pane runs ssh, and the host's own build talks to the host's own server. Ssh carries only terminal bytes, so the two machines never share a wire protocol.
+The sideline can show every machine on the fleet map. A session on another machine opens in a portal in your mux, live and with input. No client merges two servers. The pane runs ssh, and the host's own build talks to the host's own server. Ssh carries only terminal bytes, so the two machines never share a wire protocol.
 
 ## The machine layer
 
@@ -27,11 +27,11 @@ A remote row is named `name@host`. Peek and mail already route that address. Its
 
 ## Open a row
 
-Click a remote row or press Enter on it. A new tab opens a local pane named `name@host`, and its child is `fno mux serve --link <key> --host <host>`. Opening the row again focuses that pane. The client finds the pane by reading each pane's child argv, so the answer stays true across a client restart with no stored state.
+A remote row opens the way a paneless local row opens: in a portal. See [portals](portals.md). Click it or press Enter, and it replaces what portal 0 shows, as Enter on a local row does. `P` opens the portal picker with the new-portal row selected, so `P` then Enter opens it in a new portal. A right click or a long press opens the row menu: Open, Open in new portal, Peek and Mail. Stop, kill and retire stay hidden. To stop a session on another machine, open it and act inside it.
 
-The menu on a remote row offers Open here, Peek and Mail. Stop, kill and retire stay hidden. To stop a session on another machine, open it and act inside it. Stopping the local pane closes the link and leaves the session running on its host.
+The client sends `ReachRemote` with the row's host, key and name, and the server takes the same portal reach a local row takes. The reach keeps one viewer per row: opening a row that a portal already shows focuses that portal. Only the seat's child differs: `fno mux serve --link <key> --host <host>` in place of an attach. A host or key that starts with `-` would read as an ssh option, so the server refuses it. A server older than v121 cannot parse the command, so the client refuses first and says to update the mux server.
 
-The link pane is an ordinary pane, so the keeper holds it across a client quit and a server restart. See [pane keeper](pane-keeper.md). It has no registry row, so the fleet map does not publish it as a session on this machine. It still lists in this machine's band as a pane named `name@host`.
+The seat is named `name@host` and its portal stores that name as its key. Closing the portal closes the link and leaves the session running on its host. The seat is an ordinary pane, so the keeper holds it across a client quit and a server restart. See [pane keeper](pane-keeper.md). It has no registry row, so the fleet map does not publish it as a session on this machine. A restored portal whose seat did not survive cannot refill from this machine's registry, so open the row again.
 
 ## The two kinds of row
 

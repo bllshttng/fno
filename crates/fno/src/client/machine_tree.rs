@@ -5,9 +5,9 @@
 //! other machine's rows come from the fleet map, read off the UI loop while the
 //! toggle is on, and paint as ordinary `AgentRow` values with `remote` set,
 //! grouped on the same axis. No connection to the other machine exists until
-//! Enter opens one row: a local pane whose child is
-//! `fno mux serve --link <key> --host <host>`. With the toggle off, or fewer
-//! than two machines, the tree paints with no machine layer.
+//! Enter opens one row in a portal, as a local paneless row opens: the seat's
+//! child is `fno mux serve --link <key> --host <host>`. With the toggle off,
+//! or fewer than two machines, the tree paints with no machine layer.
 
 use std::time::{Duration, Instant};
 
@@ -15,13 +15,9 @@ use serde_json::Value;
 
 use super::org_board::{OrgMsg, OrgTx};
 use super::*;
-use crate::mux_cli::control_roundtrip_with_timeouts;
-use crate::proto::{ControlCommand, RemoteRow};
+use crate::proto::RemoteRow;
 
 const READ_EVERY: Duration = Duration::from_secs(15);
-const CONTROL_TIMEOUT: Duration = Duration::from_secs(5);
-/// `fno`, when this process cannot name its own binary.
-const FNO: &str = "fno";
 
 /// Another machine's session: its row and the band each axis files it under.
 #[derive(Debug)]
@@ -389,137 +385,32 @@ impl View {
     }
 }
 
-/// The pane child that opens this row, under the `env` wrapper that names a
-/// pane. Its argv is also how a later open finds the pane: see
-/// [`find_link_pane`]. The name stays on this machine: ssh does not forward it,
-/// and a pane with no registry row is not published to the fleet map.
-fn link_argv(remote: &RemoteRow) -> Vec<String> {
-    let exe = std::env::current_exe()
-        .map(|path| path.to_string_lossy().into_owned())
-        .unwrap_or_else(|_| FNO.into());
-    let words = [
-        "mux",
-        "serve",
-        "--link",
-        &remote.key,
-        "--host",
-        &remote.host,
-    ];
-    ["env".into(), format!("FNO_AGENT_SELF={}", remote.name), exe]
-        .into_iter()
-        .chain(words.into_iter().map(String::from))
-        .collect()
-}
-
-/// The pane already running this link, from each pane's child argv. Reading the
-/// argv keeps the answer true across a client restart with no stored state.
-fn find_link_pane(panes: &[(u64, String)], remote: &RemoteRow) -> Option<u64> {
-    let tail = format!("--link {} --host {}", remote.key, remote.host);
-    let running = |args: &String| args.ends_with(&tail);
-    panes
-        .iter()
-        .find(|(_, args)| running(args))
-        .map(|(id, _)| *id)
-}
-
-/// Child pid -> full argv from one `ps`, joined onto the pane list.
-fn panes_with_args(panes: &[crate::proto::PaneInfo]) -> Vec<(u64, String)> {
-    let pids: Vec<String> = panes
-        .iter()
-        .filter_map(|p| p.child_pid.map(|pid| pid.to_string()))
-        .collect();
-    if pids.is_empty() {
-        return Vec::new();
-    }
-    let listing = std::process::Command::new("ps")
-        .args(["-ww", "-o", "pid=,args=", "-p", &pids.join(",")])
-        .output()
-        .map(|out| String::from_utf8_lossy(&out.stdout).into_owned())
-        .unwrap_or_default();
-    let mut by_pid = HashMap::new();
-    for line in listing.lines() {
-        if let Some((pid, args)) = line.trim().split_once(char::is_whitespace) {
-            by_pid.insert(pid.to_string(), args.trim().to_string());
-        }
-    }
-    panes
-        .iter()
-        .filter_map(|p| {
-            let args = by_pid.get(&p.child_pid?.to_string())?;
-            Some((p.pane_id, args.clone()))
-        })
-        .collect()
-}
-
-/// What Enter on a remote row found or opened. It blocks, so [`open`] runs it on
-/// a blocking thread; the input handler still waits for it, at most two control
-/// timeouts.
-fn open_blocking(
-    session: &str,
-    sock: &Path,
-    remote: &RemoteRow,
-    cwd: String,
+/// Show a far row in a portal, through the reach a local paneless row takes.
+/// The server runs the link in the seat. A refusal lands as a notice here.
+pub(super) async fn reach(
+    view: &mut View,
+    remote: RemoteRow,
     placement: PanePlacement,
-) -> Result<u64, String> {
-    let control = |command| {
-        control_roundtrip_with_timeouts(sock, session, command, CONTROL_TIMEOUT, CONTROL_TIMEOUT)
-            .map_err(|e| e.to_string())
-    };
-    if let ServerMsg::PaneList { panes } = control(ControlCommand::PaneLs)? {
-        if let Some(pane) = find_link_pane(&panes_with_args(&panes), remote) {
-            return Ok(pane);
-        }
+    sock_w: &mut (impl tokio::io::AsyncWrite + Unpin),
+) -> Result<(), String> {
+    if !super::wire_version::server_has_remote_reach(view.server_proto) {
+        view.set_notice("update the mux server to open a row from another machine".into());
+        return Ok(());
     }
-    let run = ControlCommand::PaneRun {
-        cwd,
-        argv: link_argv(remote),
-        cols: None,
-        rows: None,
-        claim: false,
-        placement,
-        worker: None,
-        fno_id: None,
-    };
-    match control(run)? {
-        ServerMsg::PaneSpawned { pane_id, .. } => Ok(pane_id),
-        ServerMsg::Err { msg, .. } => Err(msg),
-        other => Err(format!("unexpected reply to pane run: {other:?}")),
-    }
+    let command = Command::ReachRemote { remote, placement };
+    view.note_command_sent(&command);
+    write_msg(sock_w, &ClientMsg::Command(command))
+        .await
+        .map_err(|e| format!("open send failed: {e}"))
 }
 
-/// Open a remote row: focus its link pane, opening one first if needed. A
-/// refusal lands as a notice on the row, in this mux.
+/// Enter on a far row: the portal a local row's Enter names.
 pub(super) async fn open(
     view: &mut View,
     remote: RemoteRow,
     sock_w: &mut (impl tokio::io::AsyncWrite + Unpin),
 ) -> Result<(), String> {
-    let session = view.session.clone();
-    let cwd = std::env::current_dir()
-        .map(|dir| dir.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    let label = format!("{}/{}", remote.host, remote.key);
-    let placement = PanePlacement {
-        tab: Some(crate::proto::TabSel::New),
-        target: PaneTarget::SquadId(view.layout.active_squad),
-        ..PanePlacement::default()
-    };
-    let opened = tokio::task::spawn_blocking(move || {
-        let sock = crate::proto::socket_path(&session)?;
-        open_blocking(&session, &sock, &remote, cwd, placement)
-    })
-    .await
-    .map_err(|e| format!("link open task failed: {e}"))?;
-    match opened {
-        Ok(pane) => {
-            view.note_command_sent(&Command::FocusPane(pane));
-            write_msg(sock_w, &ClientMsg::Command(Command::FocusPane(pane)))
-                .await
-                .map_err(|e| format!("focus send failed: {e}"))?;
-        }
-        Err(e) => view.set_notice(format!("{label}: {e}")),
-    }
-    Ok(())
+    reach(view, remote, super::agent_group::enter_placement(), sock_w).await
 }
 
 #[cfg(test)]
@@ -577,25 +468,5 @@ mod tests {
             x.state, "offline 2m",
             "a stale beat outranks the seat's word"
         );
-    }
-
-    #[test]
-    fn machine_tree_finds_an_open_link_by_its_child_argv() {
-        let remote = RemoteRow {
-            host: "bb16".into(),
-            key: "133a419b".into(),
-            name: "muriel@bb16".into(),
-            ..RemoteRow::default()
-        };
-        let panes = [
-            (1, "/bin/zsh -l".to_string()),
-            (2, "fno mux serve --link other --host bb16".to_string()),
-            (3, "fno mux serve --link 133a419b --host bb16".to_string()),
-        ];
-        assert_eq!(find_link_pane(&panes, &remote), Some(3));
-        assert_eq!(find_link_pane(&panes[..2], &remote), None);
-        let argv = link_argv(&remote).join(" ");
-        assert!(argv.starts_with("env FNO_AGENT_SELF=muriel@bb16 "));
-        assert!(argv.ends_with("--link 133a419b --host bb16"));
     }
 }

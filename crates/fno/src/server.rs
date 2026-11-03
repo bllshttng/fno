@@ -9410,6 +9410,9 @@ impl Core {
                 }
                 Flow::Continue
             }
+            Command::ReachRemote { remote, placement } => {
+                self.reach_far(client_id, view, vp, &remote, &placement)
+            }
             Command::AttachAgent { id, placement } => {
                 // The portal reach routes BEFORE the attach-shaped
                 // gates: `id` is an 8-hex attach id for a claude row but a
@@ -9433,37 +9436,21 @@ impl Core {
                     return self.open_transient_view(client_id, view, vp, &id, &placement);
                 }
                 if placement.wants_portal() {
-                    // An explicit index wins over "any". `portal_new` names no
-                    // index BECAUSE the caller must not choose one: allocating
-                    // here, where reaches are handled one at a time, is what
-                    // makes two clients opening a portal at once safe.
-                    let portal = match placement.portal_target() {
-                        Some(idx) => idx,
-                        // A full space refuses visibly. Repointing an
-                        // occupied index is the silent wrong action the other
-                        // placement refusals exist to prevent.
-                        None => match self.next_free_portal() {
-                            Some(idx) => idx,
-                            None => {
-                                self.notice(
-                                    client_id,
-                                    "all 256 portal indices are live; close one first",
-                                );
-                                return Flow::Continue;
-                            }
-                        },
+                    let Some(portal) = self.portal_index_for(client_id, &placement) else {
+                        return Flow::Continue;
                     };
                     // `portal` names an index the CALLER chose;
                     // `thread_pane` folds to 0 without the caller naming any,
                     // and that default reach is allowed to go home to a held
                     // seat that names the row.
                     let portal_explicit = placement.portal.is_some();
+                    let key = portal_reach::ReachKey::Row(&id);
                     return self.reach_portal(
                         client_id,
                         view,
                         vp,
                         portal,
-                        &id,
+                        key,
                         &placement,
                         portal_explicit,
                     );
