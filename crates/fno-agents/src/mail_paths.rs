@@ -14,7 +14,8 @@ pub(crate) fn bus_log_path(fno_dir: &Path) -> PathBuf {
             .filter(|s| !s.trim().is_empty())
             .map(|dir| crate::cargo_build_dirs::expand_home(Path::new(&dir)))
     });
-    crate::mail::log::resolve_log_path(fno_dir, bus_dir_env.as_deref(), configured.as_deref())
+    let default_log = crate::state_layout::place_in(fno_dir, "bus", "messages.jsonl");
+    crate::mail::log::resolve_log_path(&default_log, bus_dir_env.as_deref(), configured.as_deref())
 }
 
 /// The bus DIRECTORY under `fno_dir`: `bus_log_path`'s parent. Callers pass
