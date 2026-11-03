@@ -185,13 +185,103 @@ pub(crate) fn harness_of_session_id(session_id: &str) -> Option<&'static str> {
     None
 }
 
-/// The person behind this machine: `fleet.owner`, else the login name.
+/// The person behind this machine: the proven user, else `fleet.owner`,
+/// else the login name.
 pub(crate) fn person() -> String {
-    stated_person().unwrap_or_else(login_name)
+    proven_user()
+        .map(|p| p.user)
+        .or_else(stated_person)
+        .unwrap_or_else(login_name)
+}
+
+/// The user an installed certificate proves for this machine.
+pub(crate) struct ProvenUser {
+    pub user: String,
+    /// The certificate line, carried on every row this machine signs.
+    pub cert: String,
+}
+
+/// The user this machine's own certificate proves: the user key signed it
+/// and it names this machine's key. Read on every call, never cached, so a
+/// long-lived daemon sees an install at once.
+pub(crate) fn proven_user() -> Option<ProvenUser> {
+    let root = crate::paths::AgentsHome::from_env_opt()?;
+    let (line, cert) = crate::machine_key::installed_cert(root.root())?;
+    let own = crate::machine_key::own().ok()?.public_key();
+    (cert.machine_key == own).then_some(ProvenUser {
+        user: cert.user,
+        cert: line,
+    })
+}
+
+/// The user key whose signature wide law needs to bind here: the installed
+/// certificate's, even one that names a rotated machine key, so a rotation
+/// never reopens this machine to unsigned law.
+pub(crate) fn trusted_user_key() -> Option<String> {
+    let root = crate::paths::AgentsHome::from_env_opt()?;
+    crate::machine_key::installed_cert(root.root()).map(|(_, cert)| cert.user_key)
+}
+
+/// Sign a law-store row with this machine's key under its own certificate:
+/// add `user_cert`, then `user_sig` over the row's canonical bytes. A
+/// machine with no certificate adds nothing. Call it after every other
+/// field is set.
+pub(crate) fn sign_law_row(
+    data: &mut serde_json::Map<String, serde_json::Value>,
+    event_type: &str,
+    ts: &str,
+) {
+    let Some(user) = proven_user() else {
+        return;
+    };
+    let Ok(key) = crate::machine_key::own() else {
+        return;
+    };
+    data.insert("user_cert".into(), user.cert.into());
+    let mut row = data.clone();
+    row.insert("_event_type".into(), event_type.into());
+    row.insert("ts".into(), ts.into());
+    let signature = key.sign(&law_row_bytes(&row));
+    data.insert("user_sig".into(), signature.into());
+}
+
+/// The user key that proves a flattened store row: its certificate verifies
+/// and the machine key that certificate names signed the row.
+pub(crate) fn verify_law_row(row: &serde_json::Value) -> Option<String> {
+    let row = row.as_object()?;
+    let signature = row.get("user_sig")?.as_str()?;
+    let cert = crate::machine_key::read_cert(row.get("user_cert")?.as_str()?)?;
+    crate::machine_key::verify(&cert.machine_key, &law_row_bytes(row), signature)
+        .then_some(cert.user_key)
+}
+
+/// The bytes a row signature covers: the flattened row (its data plus `ts`
+/// and `_event_type`, the two keys both store flattens add) with every
+/// object's keys sorted, because `preserve_order` keeps insertion order.
+/// `subject` stays out, because a node rename rewrites it in place.
+fn law_row_bytes(row: &serde_json::Map<String, serde_json::Value>) -> Vec<u8> {
+    fn sorted(value: &serde_json::Value) -> serde_json::Value {
+        match value {
+            serde_json::Value::Object(map) => {
+                let keys: std::collections::BTreeMap<_, _> = map.iter().collect();
+                keys.into_iter()
+                    .map(|(k, v)| (k.clone(), sorted(v)))
+                    .collect::<serde_json::Map<_, _>>()
+                    .into()
+            }
+            serde_json::Value::Array(items) => items.iter().map(sorted).collect(),
+            other => other.clone(),
+        }
+    }
+    let mut signed = row.clone();
+    signed.remove("subject");
+    signed.remove("user_sig");
+    let body = sorted(&serde_json::Value::Object(signed)).to_string();
+    [b"fno-law-row-v1\n".as_slice(), body.as_bytes()].concat()
 }
 
 /// The nonblank `fleet.owner`, when the owner stated one. A display name,
-/// never proof. The law door's wide-scope gate reads its presence.
+/// never proof: the law door's wide-scope gate reads the certificate.
 pub(crate) fn stated_person() -> Option<String> {
     crate::agents_config::config_lookup_global(&["fleet", "owner"])
         .and_then(|v| v.as_str().map(str::to_string))
