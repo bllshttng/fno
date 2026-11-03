@@ -61,21 +61,6 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
         "Delivery work: plans, targets, reviews, PRs, state, and supporting operations.",
         {"hidden": True},
     ),
-    "inbox": (
-        "fno.inbox.cli:inbox_app",
-        "What is waiting on a human: approvals, notify, outstanding, lead board, decisions, law.",
-        {"hidden": True},
-    ),
-    # Moved to `inbox`; the front door refuses the root word (command-names.tsv). The old registration stays for
-    # one release - unreachable via resolve_command (the move intercepts
-    # first) so it stays a hidden one-release shim, not a phantom root; the
-    # moved-spellings block no longer renders, so the row teaches
-    # nothing and exists only for the release clock.
-    "approvals": (
-        "fno.approvals_cli:approvals_app",
-        "Inspect and decide pending approvals for consequential effects.",
-        {"hidden": True},
-    ),
     "delivery": (
         "fno.do_cli:delivery_app",
         "Evaluate generic delivery evidence.",

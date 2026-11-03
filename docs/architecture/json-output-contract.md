@@ -55,7 +55,6 @@ no-flag: cli/src/fno/graph/triage.py cmd_rank
 no-flag: cli/src/fno/graph/triage.py cmd_validate
 no-flag: cli/src/fno/graph/triage.py cmd_apply
 no-flag: cli/src/fno/graph/triage.py cmd_projects
-no-flag: cli/src/fno/inbox/operator_turns.py cmd_ack
 no-flag: cli/src/fno/pr/cli.py coverage_publish
 no-flag: cli/src/fno/pr/cli.py info
 no-flag: cli/src/fno/pr/cli.py list_cmd
