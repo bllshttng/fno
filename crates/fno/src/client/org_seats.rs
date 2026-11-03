@@ -6,8 +6,9 @@ use crate::proto::AgentRow;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// The status words on the wire, in the order a lead lists its seats.
-pub(crate) const STATUS_ORDER: [&str; 4] = ["writing", "parked", "quiet", "unknown"];
+/// The status words on the wire, in the order a lead lists its seats. A
+/// blocked seat cannot work at all, so it lists first.
+pub(crate) const STATUS_ORDER: [&str; 5] = ["blocked", "writing", "parked", "quiet", "unknown"];
 
 pub(crate) struct FleetInputs {
     pub(crate) fleet: Result<Value, String>,

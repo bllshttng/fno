@@ -2837,7 +2837,16 @@ fn resolve_missing_team_inputs(
     board_state: &mut Option<PathBuf>,
     cwd: &Path,
 ) -> Result<(), String> {
-    let registry_path = crate::paths::AgentsHome::from_env().registry_json();
+    let home = crate::paths::AgentsHome::from_env();
+    let registry_path = home.registry_json();
+    // A beat that names the old territory by flag follows the widened role.
+    if let Some((held, wider)) = crate::lead_verdict_inputs::honor_wider_grant(&home) {
+        if crate::territory::canonical_scope(scope.trim())
+            == crate::territory::canonical_scope(held.trim())
+        {
+            *scope = wider;
+        }
+    }
     if scope.is_empty() {
         *scope = crate::lead_verdict_inputs::resolve_scope(None, &registry_path)?;
     }

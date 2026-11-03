@@ -204,6 +204,9 @@ FIELD_META: dict[str, Meta] = {
     "telemetry.otlp.endpoint": Meta("advanced", "OTLP collector URL, http(s); `/v1/logs` is appended when absent."),
     "telemetry.otlp.headers_env": Meta("advanced", "Env var holding the export auth headers as `name=value,...`."),
     "telemetry.otlp.log_content": Meta("advanced", "Export event titles as log text (default off: only the event kind)."),
+    "telemetry.eval_events.enabled": Meta("advanced", "Send each eval run to PostHog as an event (default off)."),
+    "telemetry.eval_events.host": Meta("advanced", "PostHog ingest host, https only."),
+    "telemetry.eval_events.token_env": Meta("advanced", "Env var holding the PostHog project token."),
     "attention.enabled": Meta("advanced", "Kill switch for the attention arm (question pages and sinks; default on)."),
     "attention.sinks": Meta("advanced", "Push sinks for open questions: a list of tables with name, type (ntfy or webhook), url, topic, token_env, answer_base_url and body (title-only or full)."),
     # --- config.research.* ---

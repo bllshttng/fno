@@ -108,11 +108,13 @@ fn is_test_program(program: &str) -> bool {
 /// Whether the run door refuses this program: a test harness or doctest that
 /// an agent session started. The user's cargo and `fno doctor update`'s
 /// install build run their tests, and a checkout holding a live
-/// `test:priority` grant does too.
+/// `test:priority` grant does too. An eval grader does as well: its refusal
+/// would record a grade for a suite that never ran.
 fn refuses_agent_tests(program: &str, worktree: &Path) -> bool {
     if program.is_empty()
         || !is_test_program(program)
         || install_build()
+        || std::env::var_os("FNO_EVALS_GRADER").is_some_and(|v| v == "1")
         || !crate::spawn_gate_admission::gate_agent_origin()
     {
         return false;

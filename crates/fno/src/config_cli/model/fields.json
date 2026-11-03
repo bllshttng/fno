@@ -149,6 +149,11 @@
        "endpoint": "",
        "headers_env": "FNO_OTLP_HEADERS",
        "log_content": false
+      },
+      "eval_events": {
+       "enabled": false,
+       "host": "https://us.i.posthog.com",
+       "token_env": "FNO_POSTHOG_PROJECT_TOKEN"
       }
      }
     },
@@ -1011,6 +1016,14 @@
       "endpoint": "",
       "headers_env": "FNO_OTLP_HEADERS",
       "log_content": false
+     }
+    },
+    {
+     "name": "eval_events",
+     "default": {
+      "enabled": false,
+      "host": "https://us.i.posthog.com",
+      "token_env": "FNO_POSTHOG_PROJECT_TOKEN"
      }
     }
    ]
@@ -2342,6 +2355,23 @@
     }
    ]
   },
+  "TelemetryEvalEventsBlock": {
+   "extra": "ignore",
+   "fields": [
+    {
+     "name": "enabled",
+     "default": false
+    },
+    {
+     "name": "host",
+     "default": "https://us.i.posthog.com"
+    },
+    {
+     "name": "token_env",
+     "default": "FNO_POSTHOG_PROJECT_TOKEN"
+    }
+   ]
+  },
   "CrossModelBlock": {
    "extra": "ignore",
    "fields": [
@@ -3041,6 +3071,9 @@
   "telemetry.otlp.endpoint",
   "telemetry.otlp.headers_env",
   "telemetry.otlp.log_content",
+  "telemetry.eval_events.enabled",
+  "telemetry.eval_events.host",
+  "telemetry.eval_events.token_env",
   "attention.enabled",
   "attention.sinks",
   "research.output_dir",

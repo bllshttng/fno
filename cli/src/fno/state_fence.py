@@ -15,7 +15,7 @@ disk, so it needs a monotone BUILD version on both sides. Measured on main:
   claims/*.lock    carries a `schema_version` KEY, but it is a per-claim SHAPE
                    discriminator, not a build version: 1 means a pid claim and
                    2 means a pid_unavailable claim, bound to the `pid_unavailable`
-                   field by a model validator in fno.claims.types. The two
+                   field by the claim record's validation in fno-agents. The two
                    coexist by design and neither supersedes the other, so
                    "on-disk is below mine" is not a raise and comparing them the
                    registry's way would refuse an ordinary refresh of a version-1

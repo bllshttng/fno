@@ -53,21 +53,11 @@ def _isolated_claims_root(tmp_path, monkeypatch):
     node:/dispatch: claims root at $FNO_CLAIMS_ROOT regardless of the tmp fno
     home, so without this the spawn guard's reservation lands in the machine's
     live claims store (and a run killed mid-flight leaves it held). Pinned
-    here, both directions stay in tmp; the release sweep below is belt-only.
+    here, both directions stay in tmp.
     """
     claims = tmp_path / "claims"
     claims.mkdir()
     monkeypatch.setenv("FNO_CLAIMS_ROOT", str(claims))
-    yield
-    from fno.claims.core import claim_status, release_claim
-
-    for key in (f"node:{NODE}", f"dispatch:{NODE}"):
-        try:
-            holder = claim_status(key).get("holder")
-            if holder:
-                release_claim(key, holder=holder)
-        except Exception:
-            pass
 
 
 def _seed_graph() -> None:

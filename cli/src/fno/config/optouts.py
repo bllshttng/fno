@@ -1,14 +1,18 @@
 """Merge-gating configuration values that require a live opt-out claim.
 
-This module is platform data: the measured key set and the raw-dict helpers
-its consumers share. The read-time revocation guard lives in
-``fno.claims.optout_lease`` because this package may not import the claims
-layer; the write-time lease is native, in the config writer.
+This module holds the measured key set, the raw-dict helpers its consumers
+share, and the read-time revocation guard. A merge-gating opt-out holds only
+while its ``config-optout:<key>`` claim is live; any other state drops the
+value so the default gate applies. The write-time lease and the reaper's
+restore are native, in the config writer (crates/fno/src/config_cli/write/).
 """
 
 from __future__ import annotations
 
+import logging
 from typing import Any
+
+_LOG = logging.getLogger(__name__)
 
 # A key belongs here only when its opt-out weakens a merge decision. The
 # reader and writer both use this measured set so a new switch cannot silently
@@ -55,3 +59,44 @@ def _drop_raw_leaf(raw: dict[str, Any], key: str) -> None:
             del parent[part]
         else:
             break
+
+
+def _claim_state(key: str) -> str:
+    """Read the opt-out instrument, distinguishing unreadable from absent."""
+    try:
+        from fno.rust_binary import call_binary_json
+
+        _error, payload = call_binary_json(
+            "claim", ["status", f"config-optout:{key}", "--json", "--no-roster"], timeout=10
+        )
+    except Exception:  # noqa: BLE001 - unreadable instrument revokes the opt-out
+        return "unreadable"
+    if not isinstance(payload, dict):
+        return "unreadable"
+    return str(payload.get("state", "unreadable"))
+
+
+def revoke_unbacked_optouts(raw: dict[str, Any]) -> dict[str, Any]:
+    """Drop merge-gating opt-outs unless their global claim is LIVE.
+
+    This is deliberately a read-time guard. A failed or delayed reaper leaves
+    the file value inert, so a fresh process still requires the gate.
+    """
+    for key, optout in MERGE_GATING_OPTOUTS.items():
+        present, value = _raw_leaf(raw, key)
+        # Explicit presence matters for optional_apps: absent means the model's
+        # built-in list, while [] is the actual opt-out.
+        if not present or value != optout:
+            continue
+        state = _claim_state(key)
+        if state == "live":
+            continue
+        _drop_raw_leaf(raw, key)
+        _LOG.warning(
+            "merge-gating opt-out %s revoked: claim instrument is %s; "
+            "resolved default is %r",
+            key,
+            state,
+            MERGE_GATING_OPTOUT_DEFAULTS[key],
+        )
+    return raw

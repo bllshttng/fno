@@ -528,7 +528,7 @@ Config makes this worse rather than better. With no `required_bots`, no `reviewe
 
 The **registered hold** is a TTL claim on `review:branch:<branch>`. A review DISPATCH takes it, never the reviewer itself. A reviewer that crashes still leaves behind the hold its dispatcher took.
 
-It is a claim rather than a new state file. `fno.claims` already owns atomic acquisition, TTL bounds, the LIVE / SUSPECT / STALE / CORRUPTED classification, and a reaper. `review:` is not a global-id prefix. So the key routes to the canonical repo root, and every worktree of the project shares one hold.
+It is a claim rather than a new state file. `fno-agents claim` already owns atomic acquisition, TTL bounds, the LIVE / SUSPECT / STALE / CORRUPTED classification, and a reaper. `review:` is not a global-id prefix. So the key routes to the canonical repo root, and every worktree of the project shares one hold.
 
 The **worktree probe** is derived and needs no cooperation. It reads tracked modifications on the branch, and a local HEAD that differs from what the PR merges. It covers every review footnote never dispatched.
 

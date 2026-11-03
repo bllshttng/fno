@@ -121,6 +121,7 @@ fn census(
     rows: &[RegistryEntry],
     pid_state: &dyn Fn(u32, Option<u64>) -> Option<bool>,
     claim_live: &dyn Fn(&str) -> bool,
+    blocked: &HashSet<String>,
     now: chrono::DateTime<chrono::Utc>,
 ) -> Census {
     let mut out = Census::default();
@@ -135,6 +136,10 @@ fn census(
         };
         let short = w.short_id().to_string();
         counted.insert(short.clone());
+        // A usage-blocked session keeps its pid (the retry loop lives), so
+        // the row stays and its pid is still reaped-exempt; the WORD says
+        // what the harness says instead of scoring the retry as activity.
+        let harness_blocked = blocked.contains(&short);
         out.workers.push(Worker {
             source: "claude",
             name: short,
@@ -147,8 +152,12 @@ fn census(
                 .repl_pid
                 .filter(|r| pid_state(*r, None) == Some(true))
                 .or(Some(pid)),
-            stored_status: "live".into(),
-            status_basis: None,
+            stored_status: if harness_blocked {
+                "blocked".into()
+            } else {
+                "live".into()
+            },
+            status_basis: harness_blocked.then(|| "claude agents state".to_string()),
             session_id: Some(w.session_id.clone()),
             spawned_by: None,
             entry: None,
@@ -255,11 +264,18 @@ pub(crate) fn census_worker_pids() -> HashSet<u32> {
             crate::claims::ClaimState::Live | crate::claims::ClaimState::Suspect
         )
     };
-    census(&roster, &rows, &pid_state, &claim_live, chrono::Utc::now())
-        .workers
-        .iter()
-        .filter_map(|w| w.pid)
-        .collect()
+    census(
+        &roster,
+        &rows,
+        &pid_state,
+        &claim_live,
+        &HashSet::new(),
+        chrono::Utc::now(),
+    )
+    .workers
+    .iter()
+    .filter_map(|w| w.pid)
+    .collect()
 }
 
 fn role_label(entry: &RegistryEntry) -> Option<String> {
@@ -356,6 +372,7 @@ fn worker_rows(
     outcome: crate::truth_probe::BatchOutcome,
     sessions: &Map<String, Value>,
     rss: &BTreeMap<u32, u64>,
+    blocked: &HashSet<String>,
 ) -> Vec<Value> {
     let by_session: HashMap<&str, &RegistryEntry> = rows
         .iter()
@@ -392,6 +409,15 @@ fn worker_rows(
                 .and_then(|s| sessions.get(&s.trim().to_ascii_lowercase()));
             let pid = w.session_pid.or(w.pid);
             let seat = seat_facts(w, entry, probe);
+            // The supervisor's blocked state outranks the transcript word: a
+            // locked-out session retries, the retry's limit error keeps the
+            // age fresh, and the activity word alone reads `writing` for a
+            // worker that cannot run.
+            let harness_blocked = w.stored_status == "blocked"
+                || (w.harness == "claude"
+                    && entry
+                        .and_then(|e| e.transport_short())
+                        .is_some_and(|sid| blocked.contains(sid)));
             let mut row = json!({
                 "source": w.source,
                 "name": display,
@@ -401,7 +427,11 @@ fn worker_rows(
                 "lead": w.spawned_by.as_deref().map(|s| s.chars().take(8).collect::<String>()).filter(|s| !s.is_empty()),
                 "pid": pid,
                 "rss_mb": pid.and_then(|p| rss.get(&p)),
-                "status": crate::daemon::list_rows::rendered_status_from_truth(probe),
+                "status": if harness_blocked {
+                    json!("blocked")
+                } else {
+                    json!(crate::daemon::list_rows::rendered_status_from_truth(probe))
+                },
                 "status_age_s": probe.and_then(|p| p.last_activity_age_s),
                 "stored_status": w.stored_status,
                 "status_basis": w.status_basis,
@@ -812,7 +842,26 @@ pub fn payload(include_subagents: bool, include_pane_stats: bool) -> Value {
             crate::claims::ClaimState::Live | crate::claims::ClaimState::Suspect
         )
     };
-    let mut c = census(&roster, &rows, &pid_state, &claim_live, chrono::Utc::now());
+    // One union shellout per render, and only when a claude worker exists to
+    // resolve: the blocked join answers nothing for a codex-only fleet, and
+    // terminal claude rows (the registry keeps them forever) need no read.
+    let claude_present = !roster.is_empty()
+        || rows.iter().any(|e| {
+            e.harness_name() == "claude" && crate::spawn_gate::status_is_liveish(&e.status)
+        });
+    let blocked = if claude_present {
+        crate::claude_roster::read_blocked_short_ids()
+    } else {
+        HashSet::new()
+    };
+    let mut c = census(
+        &roster,
+        &rows,
+        &pid_state,
+        &claim_live,
+        &blocked,
+        chrono::Utc::now(),
+    );
     warnings.append(&mut c.warnings);
 
     let handles: Vec<String> = c
@@ -832,7 +881,7 @@ pub fn payload(include_subagents: bool, include_pane_stats: bool) -> Value {
         .collect();
     let (table, _) = crate::census::process_table_ps();
     let rss = crate::session_cost::tree_rss(&table, &roots);
-    let mut workers = worker_rows(&c, &rows, &truth, outcome, &sessions, &rss);
+    let mut workers = worker_rows(&c, &rows, &truth, outcome, &sessions, &rss, &blocked);
     attach_receipts(&mut workers, &crate::session_receipt::receipt);
 
     let slot_claims = crate::spawn_gate::live_worker_slot_claims(&mut warnings)

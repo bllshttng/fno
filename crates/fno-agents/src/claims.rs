@@ -111,7 +111,7 @@ pub struct ClaimRecord {
     /// pre-change records (reads as `None` == ambient).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pid_provenance: Option<String>,
-    /// Stable machine identity (mirrors `fno.claims.hostid.machine_id`).
+    /// Stable machine identity (see [`machine_id`]).
     /// Additive for the same reason `harness` is: absent on pre-change records
     /// (reads as `None`, never a parse error). Overwriting `host` instead would
     /// make a still-running pre-change reader compare a machine id against its
@@ -432,8 +432,8 @@ fn platform_machine_id() -> String {
     String::new()
 }
 
-/// A stable identifier for this machine, or "" when there is none (mirrors
-/// `fno.claims.hostid.machine_id`). Never substitutes `hostname()`: readers
+/// A stable identifier for this machine, or "" when there is none. Never
+/// substitutes `hostname()`: readers
 /// treat a present value as authoritative.
 ///
 /// `gethostname(2)` is NOT a stable machine identity: on macOS with
@@ -450,8 +450,7 @@ pub fn machine_id() -> String {
     CACHE.get_or_init(platform_machine_id).clone()
 }
 
-/// Was this claim written on THIS machine? (mirrors
-/// `fno.claims.hostid.is_same_machine`)
+/// Was this claim written on THIS machine?
 ///
 /// `machine` is authoritative whenever present. It is absent only on a claim
 /// written before the field existed; those reproduce the old hostname compare
@@ -1480,9 +1479,6 @@ fn resolve_identity_from(get: impl Fn(&str) -> Option<String>) -> (Option<String
 ///
 /// Every other harness is unmeasured and therefore off the list by default.
 ///
-/// The Python twin is `_SHARED_HOST_HARNESSES` in
-/// `cli/src/fno/claims/session_pid.py`; the classifier parity harness holds the
-/// two to one verdict.
 const SHARED_HOST_HARNESSES: &[&str] = &["codex"];
 
 /// True when `harness` forks a process per session, so its pid's death is the
@@ -1524,17 +1520,17 @@ pub fn resolve_identity() -> (Option<String>, Option<String>) {
 /// precedence must not silently launder an inherited marker - a foreign
 /// CODEX_THREAD_ID lingering in a claude child's env - into the claim's harness
 /// tag. The Rust writer cannot prove which marker this process owns (that needs
-/// a process-tree/transcript check the Python resolver does), so it records
+/// a process-tree/transcript check the owned-caller proof does), so it records
 /// `None` for the ambiguous case rather than guessing; the authoritative proven
 /// harness is stamped on the manifest by the init hook via that resolver.
 ///
-/// That resolver is `resolve_self_identity` in `cli/src/fno/claims/self_identity.py`,
-/// which supplies a process-tree prover to `resolve_owned_identity`. The two writers agree on
-/// direction and differ in reach: Python proves an inherited marker foreign and
-/// stamps the real one, while this side only knows the families disagree. Both
+/// That resolver is the owned-caller proof in `spawn_context.rs`, which walks
+/// the process tree. The two writers agree on direction and differ in reach:
+/// the proof names an inherited marker foreign and stamps the real one, while
+/// this side only knows the families disagree. Both
 /// refuse rather than launder, so a claim written here is never WRONG, only
 /// sometimes untagged. Keep it that way - resolving by precedence here would
-/// reintroduce the leak on the one path the Python gate cannot see.
+/// reintroduce the leak on the one path the proof cannot see.
 pub fn resolve_harness_from(get: impl Fn(&str) -> Option<String>) -> Option<String> {
     resolve_identity_from(get).1
 }

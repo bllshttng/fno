@@ -1,6 +1,5 @@
 //! The last `agents` door: a word no earlier door claims execs the fno-agents
-//! client with its mapped argv. No Python process starts, except the one family
-//! still native there: `agents claim` hands over to the claims CLI.
+//! client with its mapped argv. No Python process starts.
 
 use std::ffi::OsString;
 
@@ -43,8 +42,6 @@ const MAPPED: &[(&str, &[&str])] = &[
 pub enum Route {
     /// The fno-agents argv to exec.
     Client(Vec<OsString>),
-    /// The wheel argv to forward.
-    Python(Vec<OsString>),
 }
 
 /// The route for `agents <word> ...`. A flag-led or bare `agents` is the menu's.
@@ -57,10 +54,6 @@ pub fn classify(args: &[OsString]) -> Option<Route> {
         return None;
     }
     let rest = &args[2..];
-    if word == "claim" {
-        let argv = std::iter::once(OsString::from("claim")).chain(rest.iter().cloned());
-        return Some(Route::Python(argv.collect()));
-    }
     if word == "harness" && matches!(rest.first().and_then(|a| a.to_str()), Some("--help" | "-h")) {
         return Some(Route::Client(prefixed(&["harness-probe", "--help"], &[])));
     }
@@ -118,6 +111,10 @@ mod tests {
                 &["census", "watchdog", "--json"],
             ),
             (&["agents", "list"], &["list"]),
+            (
+                &["agents", "claim", "status", "node:x"],
+                &["claim", "status", "node:x"],
+            ),
             (&["agents", "nope"], &["nope"]),
         ] {
             assert_eq!(classify(&os(public)), Some(Route::Client(os(client))));
@@ -125,11 +122,7 @@ mod tests {
     }
 
     #[test]
-    fn the_claim_family_stays_in_the_wheel_and_the_menu_keeps_flags() {
-        assert_eq!(
-            classify(&os(&["agents", "claim", "reap"])),
-            Some(Route::Python(os(&["claim", "reap"])))
-        );
+    fn the_menu_keeps_flags_and_other_roots() {
         assert_eq!(classify(&os(&["agents", "--help"])), None);
         assert_eq!(classify(&os(&["agents"])), None);
         assert_eq!(classify(&os(&["backlog", "list"])), None);
