@@ -354,18 +354,19 @@ fn assemble_fallback(
                 missing.insert(field.to_string(), json!(missing_reason));
             }
             let mut sources = serde_json::Map::new();
+            let mut info = json!({
+                "pr": pr,
+                "partial": true,
+                "transport": "git",
+            });
             if let Some(sha) = sha {
+                info["head_sha"] = json!(sha);
                 sources.insert(
                     "head_sha".to_string(),
                     json!(format!("git refs/pull/{pr}/head")),
                 );
                 missing.remove("head_sha");
             }
-            let mut info = json!({
-                "pr": pr,
-                "partial": true,
-                "transport": "git",
-            });
             match files {
                 Ok((files, truncated, base)) => {
                     info["files"] = json!(files);
