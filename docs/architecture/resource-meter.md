@@ -20,7 +20,7 @@ Two arms still work, because they read fno's own numbers. The cpu-admission arm 
 
 ## Why whole-machine
 
-`fno doctor footprint` measures fno's own descendants, and that is the right answer to its own question. But the browser, Slack and every other app compete for the same box. A lane answer built on fno-only load will keep advising "room for more" while something else eats the machine. The lane advisor reads the whole machine first and the fleet second.
+`fno doctor footprint` measures fno's own descendants, and that is the right answer to its own question. But the browser, Slack and every other app compete for the same machine. A lane answer built on fno-only load will keep advising "room for more" while something else eats the machine. The lane advisor reads the whole machine first and the fleet second.
 
 ## Which memory signal is authoritative, and which state is dark
 

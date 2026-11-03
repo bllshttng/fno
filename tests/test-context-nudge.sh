@@ -133,7 +133,7 @@ source "$REPO_ROOT/tests/helpers/registry-seed.sh"
 REG_V="$(sed -n 's/^version = //p' "$REPO_ROOT/crates/fno-agents/src/registry_schema.toml" | tr -d ' ')"
 export REG_V
 # Pin the optional-hook budget: this suite tests nudge LOGIC, and the runner's
-# load (four shards, one box) is a property of the shard, not of the code. A
+# load (four shards, one machine) is a property of the shard, not of the code. A
 # busy-tier 1s bound fired twice on AC20's probe (2026-10-05, three runs) and
 # read as probe silence, which is indistinguishable here from a real death.
 # The tiers keep ruling in production; FNO_HOOK_BUDGET_SECS is unset there.

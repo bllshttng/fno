@@ -36,7 +36,7 @@ cd "$tmp" || { echo "FAIL: could not enter tmp"; exit 1; }
 # Shim `fno` to this worktree's source. `mux` never
 # forwards: the Python front execs the `fno` on PATH for that command, which is
 # this shim again, and the recursion runs until the runner kills it. attach
-# reaches the mux through `fno mux thread`, so the shim answers as a box with
+# reaches the mux through `fno mux thread`, so the shim answers as a machine with
 # no live mux server.
 restore_fno() {
   cat > "$tmp/bin/fno" <<EOF

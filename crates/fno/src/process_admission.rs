@@ -148,7 +148,7 @@ pub enum AdmissionReason {
     MeasurementUnavailable,
     LockUnavailable,
     EnvOverrideInvalid,
-    /// The machine arm's runaway brake holds: the box itself is failing.
+    /// The machine arm's runaway brake holds: the machine itself is failing.
     MachineRunaway,
 }
 

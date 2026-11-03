@@ -1133,7 +1133,7 @@ fn holder_gone(pid: i32, sock: &Path, grace: Duration) -> bool {
 // with `Query` and the read-only `PaneLs` control command and never unlinks a
 // socket, kills a server, or scaffolds state (AC6-ERR "touches nothing",
 // AC6-FR no side effects). Exit is `EXIT_ERROR` iff some check FAILs (a version
-// skew); a degraded-but-usable state is a `Warn` and stays exit 0, so a box
+// skew); a degraded-but-usable state is a `Warn` and stays exit 0, so a machine
 // with no mux state exits clean (AC6-FR).
 // ---------------------------------------------------------------------------
 

@@ -310,7 +310,7 @@ pub fn poison(
     // Specimen 2: the config chain.
     out.insert("FNO_CONFIG".into(), fx("config.toml"));
     out.insert("FNO_GLOBAL_SETTINGS_PATH".into(), fx("settings.yaml"));
-    out.remove("FNO_CONFIG_SEARCH_ROOT"); // unbounded, as a real dev box is
+    out.remove("FNO_CONFIG_SEARCH_ROOT"); // unbounded, as a real dev machine is
                                           // Specimen 3: the real state ledger.
     out.insert("HOME".into(), fx("home"));
     out.insert("USERPROFILE".into(), fx("home"));

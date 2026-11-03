@@ -37,7 +37,7 @@ pub struct StoredGroup {
     pub pids: Vec<u32>,
 }
 
-/// Whose load the box is in, from the footprint payload's admission split.
+/// Whose load the machine is in, from the footprint payload's admission split.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LoadSource {
     Fleet,
@@ -437,7 +437,7 @@ fn journals_raw(home: &crate::paths::AgentsHome, cwd: &std::path::Path) -> Strin
     }
     raw
 }
-/// The concurrency budget guess: how many sessions this box holds, from
+/// The concurrency budget guess: how many sessions this machine holds, from
 /// cores, memory, and this tick's own session costs.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Budget {
@@ -462,7 +462,7 @@ fn percentile75(mut values: Vec<f64>) -> Option<f64> {
 
 /// The budget: per-session cost is the p75 of this tick's own session rows
 /// when there are at least three, else the band defaults. Memory headroom
-/// reserves max(8 GB, a quarter of the box) before dividing.
+/// reserves max(8 GB, a quarter of the machine) before dividing.
 pub fn budget(cores: Option<f64>, total_mem_gb: Option<f64>, sessions: Option<&Value>) -> Budget {
     let rows: Vec<(f64, f64)> = sessions
         .and_then(|v| v.as_array())
@@ -523,7 +523,7 @@ pub fn file_budget_question(
         }
     }
     let question = format!(
-        "No concurrency cap is set. This box measures {} cores and {} GB, so the band guess is max_live {} ({} leads + {} workers; {}). Set it as the cap?",
+        "No concurrency cap is set. This machine measures {} cores and {} GB, so the band guess is max_live {} ({} leads + {} workers; {}). Set it as the cap?",
         sample.cores.map(|c| format!("{c:.0}")).unwrap_or_else(|| "?".into()),
         sample
             .total_mem_gb
@@ -630,7 +630,7 @@ mod tests {
     /// fleet-majority as Fleet and a minority share as Outside, the top
     /// groups exclude fleet pids, fno descendants, bundle readers, and the
     /// fno binaries themselves, and the budget guess matches the node's
-    /// example box on band defaults and on measured p75.
+    /// example machine on band defaults and on measured p75.
     #[test]
     fn classify_and_outside_groups_split_the_box_correctly() {
         assert_eq!(classify(None), LoadSource::Fleet);

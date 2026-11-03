@@ -63,7 +63,7 @@ Law is defaulted in state 2 only, and only for the person at the terminal. A `--
 
 State 3 exists because state 2 used to be everything that was not state 1. That made attendance an ABSENCE, and `env -u CLAUDE_CODE_SESSION_ID fno backlog decide --authority operator` was enough to forge an attested row in the law lane.
 
-Say the residual limit out loud, because it is narrower than the rule it satisfies. A tty is OBTAINABLE: `script -q /dev/null <cmd>` reports one from a context with no person in it, measured on this box. So the terminal raises the cost of forging law and does not prevent it. Forging law through this command takes one deliberate act, a wrapped tty, which is also the cost at `fno inbox law set`. It does not happen by accident.
+Say the residual limit out loud, because it is narrower than the rule it satisfies. A tty is OBTAINABLE: `script -q /dev/null <cmd>` reports one from a context with no person in it, measured on this machine. So the terminal raises the cost of forging law and does not prevent it. Forging law through this command takes one deliberate act, a wrapped tty, which is also the cost at `fno inbox law set`. It does not happen by accident.
 
 ### Chat-origin probe
 

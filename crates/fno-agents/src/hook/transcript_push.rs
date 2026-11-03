@@ -150,7 +150,7 @@ fn block_on<F: std::future::Future>(fut: F) -> Option<F::Output> {
 }
 
 /// The hook entry: parse the payload, push the delta, advance the cursor on
-/// ack. Always exit 0. Only a boxed session pushes: an unpinned session's
+/// ack. Always exit 0. Only a sandboxed session pushes: an unpinned session's
 /// transcript file is on the host, where every reader can open it.
 pub fn run(_args: &[String]) -> i32 {
     if !crate::client::sock_pinned() {
