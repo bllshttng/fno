@@ -10754,10 +10754,10 @@ fn mine_renders_before_they_need_you_and_preserves_grouped_file_order() {
     assert_eq!(projection.rows[2].label(), "first done");
     assert_eq!(projection.rows[3].label(), "pile");
     let lines = needs_overlay_lines(&projection, 0, NeedsFooter::AsOf, NeedsFooter::AsOf);
-    let mine = lines.iter().position(|l| l.contains("MINE")).unwrap();
+    let mine = lines.iter().position(|l| l.contains(" Mine")).unwrap();
     let they = lines
         .iter()
-        .position(|l| l.contains("THEY NEED YOU"))
+        .position(|l| l.contains("They need you"))
         .unwrap();
     assert!(mine < they);
     assert!(lines[mine + 1].contains("first open"));

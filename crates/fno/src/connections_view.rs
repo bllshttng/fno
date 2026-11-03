@@ -1240,7 +1240,7 @@ impl ConnectionsView {
             Tab::Accounts => (TextStyle::Section, TextStyle::Meta),
             Tab::Order => (TextStyle::Meta, TextStyle::Section),
         };
-        TLine::parts(&[("connections   ", TextStyle::Title), (a, sa), (o, so)])
+        TLine::parts(&[(a, sa), (o, so)])
     }
 
     fn render_accounts(
@@ -1265,7 +1265,7 @@ impl ConnectionsView {
             .chain(self.pending.iter().map(|p| name_w(&p.id)))
             .max()
             .unwrap_or(0)
-            .max("ACCOUNT".len());
+            .max("Account".len());
         let names: Vec<String> = self
             .accounts
             .iter()
@@ -1305,17 +1305,17 @@ impl ConnectionsView {
         // LOGIN is the stored credential's age (`cred-snapshot`), never the
         // usage reading's: AGE is that one.
         let mut cols: Vec<(&str, Vec<String>, usize)> = vec![
-            ("CLI", clis[..self.accounts.len()].to_vec(), w_cli),
-            ("AUTH", auths, 0),
-            ("USAGE", headrooms, 0),
-            ("AGE", ages, 0),
-            ("LOGIN", snaps, 0),
-            ("WORKERS", riders, 0),
-            ("IDENTITY", idents, 0),
+            ("Harness", clis[..self.accounts.len()].to_vec(), w_cli),
+            ("Auth", auths, 0),
+            ("Usage", headrooms, 0),
+            ("Age", ages, 0),
+            ("Login", snaps, 0),
+            ("Workers", riders, 0),
+            ("Identity", idents, 0),
         ];
         // A row wider than the overlay wraps and loses its alignment, so the
         // table drops the columns read least, in this order, until it fits.
-        for drop in ["AUTH", "IDENTITY", "LOGIN", "AGE", ""] {
+        for drop in ["Auth", "Identity", "Login", "Age", ""] {
             let rows = self.account_rows(&names, w_name, &cols);
             if drop.is_empty()
                 || rows
@@ -1331,7 +1331,7 @@ impl ConnectionsView {
             }
             cols.retain(|(label, _, _)| *label != drop);
         }
-        let w_cli = w_cli.max("CLI".len());
+        let w_cli = w_cli.max("Harness".len());
         // Session-local pending logins render after the real records; `r`
         // registers the selected one into a managed account.
         for (j, _p) in self.pending.iter().enumerate() {
@@ -1389,7 +1389,7 @@ impl ConnectionsView {
         // Header is inert: no cursor row ever points at it (selection clamps
         // to data rows), so nothing routes a keypress here.
         let head = (TextStyle::Section, TextStyle::Section, TextStyle::Section);
-        let mut rows = vec![line("    ".into(), "ACCOUNT", head, &|k| {
+        let mut rows = vec![line("    ".into(), "Account", head, &|k| {
             cols[k].0.to_string()
         })];
         for (i, a) in self.accounts.iter().enumerate() {
@@ -1563,7 +1563,7 @@ impl ConnectionsView {
             TextStyle::Hint,
             match self.tab {
                 Tab::Accounts => {
-                    "Tab: order  j/k: move  u: use  s: spawn-acct  d: remove  a: add  r: register  R: refresh  Esc: close"
+                    "Tab: order  j/k: move  u: use  s: spawn-acct  d: remove  a: add  r: register  R: refresh"
                 }
                 Tab::Order => {
                     "Tab: acct  h/l: combo  j/k: member  J/K: reorder  space: use  d: rm  n: new  Enter: commit"
@@ -2004,7 +2004,7 @@ mod tests {
         v.apply_read(ReadOutcome::Usage(parse_usage(usage).expect("usage json")));
         let out = v.render().join("\n");
         assert!(
-            out.contains("USAGE") && out.contains("5h 26% weekly 99%"),
+            out.contains("Usage") && out.contains("5h 26% weekly 99%"),
             "{out}"
         );
         assert!(
@@ -2044,7 +2044,7 @@ mod tests {
         assert_eq!(workers, vec![2, 1, 0]);
         let out = v.render_with(&rows, usize::MAX).join("\n");
         assert!(
-            out.contains("WORKERS") && out.contains("LOGIN") && out.contains("AGE"),
+            out.contains("Workers") && out.contains("Login") && out.contains("Age"),
             "{out}"
         );
         // An overlay one column narrower than the table drops AUTH first and
@@ -2054,7 +2054,8 @@ mod tests {
             lines
                 .iter()
                 .filter(|l| {
-                    l.contains("ACCOUNT") || v.accounts.iter().any(|a| l.contains(a.id.as_str()))
+                    l.trim_start().starts_with("Account ")
+                        || v.accounts.iter().any(|a| l.contains(a.id.as_str()))
                 })
                 .map(|l| l.text.clone())
                 .collect()
@@ -2063,7 +2064,7 @@ mod tests {
         let fit = full.iter().map(|l| cols(l)).max().unwrap() - 1;
         let narrow = table(&v.render_with(&rows, fit));
         assert!(
-            !narrow[0].contains("AUTH") && narrow[0].contains("WORKERS"),
+            !narrow[0].contains("Auth") && narrow[0].contains("Workers"),
             "{narrow:?}"
         );
         assert!(narrow.iter().all(|l| cols(l) <= fit), "{narrow:?}");
@@ -2749,7 +2750,7 @@ mod tests {
         let footer_pos = out.iter().position(|l| l.contains("Tab: order")).unwrap();
         assert!(out[footer_pos - 1].trim().is_empty());
         // header is present and inert (no cursor on it)
-        let header = out.iter().find(|l| l.contains("IDENTITY")).expect("header");
+        let header = out.iter().find(|l| l.contains("Identity")).expect("header");
         assert!(header.starts_with(' '));
         assert!(!header.contains('>'));
         // name clamped with an ellipsis, never truncated silently
@@ -2762,7 +2763,7 @@ mod tests {
             accounts: vec![],
             combos: vec![],
         });
-        assert!(!v.render().join("\n").contains("IDENTITY"));
+        assert!(!v.render().join("\n").contains("Identity"));
         // glm is the only snapshot-less row if alone: every snap cell empty.
         let mut v = ConnectionsView::new();
         v.apply_read(ReadOutcome::Ok {
@@ -2772,6 +2773,6 @@ mod tests {
         });
         let out = v.render().join("\n");
         // renders at all and the LOGIN header exists even with no values
-        assert!(out.contains("LOGIN"));
+        assert!(out.contains("Login"));
     }
 }

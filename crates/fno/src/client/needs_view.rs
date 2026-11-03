@@ -118,7 +118,7 @@ pub(crate) fn needs_overlay_lines(
         " needs me · digit answers · n/N cycle · ⏎ goto · q close",
     )];
 
-    lines.push(styled(TextStyle::Section, " MINE"));
+    lines.push(styled(TextStyle::Section, " Mine"));
     for row in mine_rows {
         let NeedsOverlayRow::Mine(item) = row else {
             continue;
@@ -140,7 +140,7 @@ pub(crate) fn needs_overlay_lines(
     };
     lines.push(styled(TextStyle::Hint, &mine_footer_line));
 
-    lines.push(styled(TextStyle::Section, " THEY NEED YOU"));
+    lines.push(styled(TextStyle::Section, " They need you"));
     if need_rows.is_empty() {
         lines.push(styled(TextStyle::Hint, "   nothing needs you"));
     } else {
