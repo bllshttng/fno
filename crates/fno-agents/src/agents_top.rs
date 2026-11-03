@@ -312,11 +312,11 @@ fn project_of(dir: &str) -> String {
 }
 
 /// What one beat reads once for every row's sideline marks: the keep marks'
-/// home, the workspace names the mux server filed, and the clock the badge
-/// lattice folds at.
+/// home, the workspace names and card counts the mux server filed, and the
+/// clock the badge lattice folds at.
 struct Marks<'a> {
     home: &'a crate::paths::AgentsHome,
-    workspaces: HashMap<String, String>,
+    filed: crate::fleet_workspace::Filed,
     now_secs: u64,
 }
 
@@ -327,7 +327,7 @@ impl<'a> Marks<'a> {
             .map_or(0, |d| d.as_secs());
         Self {
             home,
-            workspaces: crate::fleet_workspace::read(home, now_secs),
+            filed: crate::fleet_workspace::read(home, now_secs),
             now_secs,
         }
     }
@@ -337,14 +337,19 @@ impl<'a> Marks<'a> {
     /// for a bare session id too, because a keep mark outlives its row. It
     /// reads true wherever the reapers keep the row, an unreadable keep store
     /// included, so the remote sideline never pins less than the sweep keeps.
-    fn of(&self, w: &Worker, entry: Option<&RegistryEntry>) -> [(&'static str, Value); 3] {
-        let workspace = [
+    fn of(&self, w: &Worker, entry: Option<&RegistryEntry>) -> [(&'static str, Value); 6] {
+        let ids = [
             w.session_id.as_deref(),
             entry.and_then(|e| e.harness_session_id.as_deref()),
-        ]
-        .into_iter()
-        .flatten()
-        .find_map(|id| self.workspaces.get(id));
+        ];
+        let workspace = ids
+            .into_iter()
+            .flatten()
+            .find_map(|id| self.filed.workspaces.get(id));
+        let meter = ids
+            .into_iter()
+            .flatten()
+            .find_map(|id| self.filed.meters.get(id));
         let pinned = match (entry, w.session_id.as_deref()) {
             (Some(e), _) => Some(crate::keep_mark::for_row(self.home, e).is_some()),
             (None, Some(id)) => Some(crate::keep_mark::for_session(self.home, id).is_some()),
@@ -357,6 +362,9 @@ impl<'a> Marks<'a> {
             ("workspace", json!(workspace)),
             ("needs_input", json!(needs_input)),
             ("pinned", json!(pinned)),
+            ("cost_cents", json!(meter.and_then(|m| m.cost_cents))),
+            ("tokens", json!(meter.and_then(|m| m.tokens))),
+            ("compactions", json!(meter.and_then(|m| m.compactions))),
         ]
     }
 }
@@ -364,7 +372,7 @@ impl<'a> Marks<'a> {
 /// The seat facts a fleet page shows beside the status: the full session
 /// id, the model and where it was read, the start, the newest turn and its
 /// stamp, the directory and its project, the context reading, and the marks a
-/// sideline sorts on. A fact no source answers is null.
+/// sideline sorts and prices a card on. A fact no source answers is null.
 fn seat_facts(
     w: &Worker,
     entry: Option<&RegistryEntry>,

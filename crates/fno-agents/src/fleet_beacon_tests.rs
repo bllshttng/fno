@@ -85,7 +85,8 @@ fn fleet_beacon_seats_and_turns_join_their_sessions() {
         "model": "opus", "model_basis": "registry", "started_at": "2026-10-23T09:00:00Z",
         "last_message": "private turn text", "last_message_at": "2026-10-23T10:00:00Z",
         "cwd": "/w/fno", "project": "fno", "context_pct": 41, "progress": "advancing",
-        "workspace": "footnote", "needs_input": true, "pinned": false
+        "workspace": "footnote", "needs_input": true, "pinned": false,
+        "cost_cents": 412, "tokens": 90000
     }], "lanes": [
         {"provider": "anthropic", "cap": 4, "count": 6, "full": true, "holders": ["sorrel"]},
         {"provider": null, "unreadable": "gate probe unreadable"}
@@ -126,8 +127,8 @@ fn fleet_beacon_seats_and_turns_join_their_sessions() {
     primary
         .remote
         .execute(
-            "INSERT INTO fleet_mark (machine_id, name, workspace, pinned, beat_at) \
-             VALUES ('mac-b', 'w2', 'stale workspace', 1, 940)",
+            "INSERT INTO fleet_mark (machine_id, name, workspace, pinned, cost_cents, beat_at) \
+             VALUES ('mac-b', 'w2', 'stale workspace', 1, 999, 940)",
             &[],
         )
         .unwrap();
@@ -159,6 +160,9 @@ fn fleet_beacon_seats_and_turns_join_their_sessions() {
         ("workspace", json!("footnote")),
         ("needs_input", json!(true)),
         ("pinned", json!(false)),
+        ("cost_cents", json!(412)),
+        ("tokens", json!(90000)),
+        ("compactions", json!(null)),
     ] {
         assert_eq!(seat[key], want, "{key}");
     }
@@ -171,7 +175,14 @@ fn fleet_beacon_seats_and_turns_join_their_sessions() {
     let old = &map["machines"][1]["sessions"][0];
     assert!(old["model"].is_null() && old["cwd"].is_null(), "{old}");
     assert!(old["last_prompt"].is_null(), "{old}");
-    for key in ["workspace", "needs_input", "pinned"] {
+    for key in [
+        "workspace",
+        "needs_input",
+        "pinned",
+        "cost_cents",
+        "tokens",
+        "compactions",
+    ] {
         assert!(old[key].is_null(), "{key}: {old}");
     }
     assert!(map["machines"][1]["display_name"].is_null());

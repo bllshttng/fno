@@ -1,10 +1,12 @@
-//! The workspace each session sits under, handed to the fleet beat.
+//! What only the mux server knows about each session, handed to the fleet beat.
 //!
-//! Only the mux server resolves a session to a workspace, so it writes the
-//! answer to `fleet/workspaces.json` under the agents home and the daemon's
-//! beat forwards it to the other machines (`fno_agents::fleet_workspace` reads
-//! the same file). A session the server files under no named workspace has no
-//! entry, and its remote row groups by project as before.
+//! Only the mux server resolves a session to a workspace, and only it serves
+//! the cost, token and compaction counts of a card. It writes both to
+//! `fleet/workspaces.json` under the agents home and the daemon's beat forwards
+//! them to the other machines (`fno_agents::fleet_workspace` reads the same
+//! file). A session the server files under no named workspace has no workspace
+//! entry, and its remote row groups by project as before. A count the server has
+//! no reading for is null, and the remote card hides it.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -42,12 +44,41 @@ pub(crate) fn by_session(
         .collect()
 }
 
-fn write(root: &Path, map: &BTreeMap<String, String>, now_secs: u64) -> std::io::Result<()> {
+/// Session id to the counts behind its card. A session with no reading at all
+/// files nothing.
+pub(crate) fn meters(rows: &[AgentRow]) -> BTreeMap<String, serde_json::Value> {
+    rows.iter()
+        .filter_map(|row| {
+            let session = row
+                .harness_session_id
+                .as_deref()
+                .filter(|s| !s.is_empty())?;
+            (row.session_cost_cents.is_some()
+                || row.session_tokens.is_some()
+                || row.compaction_count.is_some())
+            .then(|| {
+                let meter = serde_json::json!({
+                    "cost_cents": row.session_cost_cents,
+                    "tokens": row.session_tokens,
+                    "compactions": row.compaction_count,
+                });
+                (session.to_string(), meter)
+            })
+        })
+        .collect()
+}
+
+fn write(
+    root: &Path,
+    workspaces: &BTreeMap<String, String>,
+    meters: &BTreeMap<String, serde_json::Value>,
+    now_secs: u64,
+) -> std::io::Result<()> {
     let file = path(root);
     if let Some(dir) = file.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    let body = serde_json::json!({"at": now_secs, "by_session": map});
+    let body = serde_json::json!({"at": now_secs, "by_session": workspaces, "meters": meters});
     let tmp = file.with_extension("json.tmp");
     std::fs::write(&tmp, serde_json::to_vec(&body)?)?;
     std::fs::rename(&tmp, &file)
@@ -65,7 +96,7 @@ pub(crate) fn publish(root: &Path, rows: &[AgentRow], name_of: impl Fn(u64) -> O
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs());
-    if let Err(error) = write(root, &by_session(rows, name_of), now) {
+    if let Err(error) = write(root, &by_session(rows, name_of), &meters(rows), now) {
         static WARNED: std::sync::Once = std::sync::Once::new();
         WARNED.call_once(|| eprintln!("workspace sidecar: {}: {error}", path(root).display()));
     }
@@ -80,6 +111,8 @@ mod tests {
         let row = |session: Option<&str>, squad| AgentRow {
             harness_session_id: session.map(str::to_string),
             squad,
+            session_cost_cents: session.filter(|s| *s == "s1").map(|_| 42),
+            session_tokens: session.filter(|s| *s == "s1").map(|_| 9000),
             ..AgentRow::default()
         };
         let rows = [
@@ -95,12 +128,28 @@ mod tests {
         let read = || -> serde_json::Value {
             serde_json::from_slice(&std::fs::read(path(dir.path())).unwrap()).unwrap()
         };
-        write(dir.path(), &got, 1000).unwrap();
+        let counts = meters(&rows);
+        assert_eq!(
+            counts,
+            BTreeMap::from([(
+                "s1".to_string(),
+                serde_json::json!({"cost_cents": 42, "tokens": 9000, "compactions": null}),
+            )]),
+            "only a session with a reading files a meter"
+        );
+        write(dir.path(), &got, &counts, 1000).unwrap();
         assert_eq!(
             read(),
-            serde_json::json!({"at": 1000, "by_session": {"s1": "fno"}})
+            serde_json::json!({
+                "at": 1000,
+                "by_session": {"s1": "fno"},
+                "meters": {"s1": {"cost_cents": 42, "tokens": 9000, "compactions": null}},
+            })
         );
-        write(dir.path(), &BTreeMap::new(), 1060).unwrap();
-        assert_eq!(read(), serde_json::json!({"at": 1060, "by_session": {}}));
+        write(dir.path(), &BTreeMap::new(), &BTreeMap::new(), 1060).unwrap();
+        assert_eq!(
+            read(),
+            serde_json::json!({"at": 1060, "by_session": {}, "meters": {}})
+        );
     }
 }

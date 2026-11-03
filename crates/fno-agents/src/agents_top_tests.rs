@@ -236,15 +236,19 @@ fn worker_rows_carry_seat_facts_and_null_when_unread() {
         "workspace",
         "needs_input",
         "pinned",
+        "cost_cents",
+        "tokens",
+        "compactions",
     ] {
         assert!(stray[key].is_null(), "{key}: {}", stray[key]);
     }
     assert!(serde_json::to_string(stray).is_ok());
 }
 
-/// The marks a sideline sorts and groups on: the workspace the mux server
-/// filed, a blocked badge as needs-input, and a keep mark as the pin. A row
-/// with none of them reads false and null, never a guessed name.
+/// The marks a sideline sorts, groups and prices a card on: the workspace and
+/// the counts the mux server filed, a blocked badge as needs-input, and a keep
+/// mark as the pin. A row with none of them reads false and null, never a
+/// guessed name or a zero.
 #[test]
 fn worker_rows_carry_the_sideline_marks() {
     let dir = tempfile::tempdir().unwrap();
@@ -261,7 +265,12 @@ fn worker_rows_carry_the_sideline_marks() {
     std::fs::create_dir_all(sidecar.parent().unwrap()).unwrap();
     std::fs::write(
         sidecar,
-        json!({"at": now, "by_session": {pinned_sid: "fno"}}).to_string(),
+        json!({
+            "at": now,
+            "by_session": {pinned_sid: "fno"},
+            "meters": {pinned_sid: {"cost_cents": 42, "tokens": 9000, "compactions": null}},
+        })
+        .to_string(),
     )
     .unwrap();
     crate::keep_mark::set(&home, pinned_sid, "sorrel").unwrap();
@@ -309,6 +318,10 @@ fn worker_rows_carry_the_sideline_marks() {
     assert_eq!(asking["workspace"], "fno");
     assert_eq!(asking["needs_input"], true);
     assert_eq!(asking["pinned"], true);
+    assert_eq!(asking["cost_cents"], 42);
+    assert_eq!(asking["tokens"], 9000);
+    assert!(asking["compactions"].is_null(), "no reading is no zero");
+    assert!(idle["cost_cents"].is_null() && idle["tokens"].is_null());
     assert!(idle["workspace"].is_null(), "no workspace was filed");
     assert_eq!(idle["needs_input"], false);
     assert_eq!(idle["pinned"], false);
