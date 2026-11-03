@@ -1,0 +1,19 @@
+# Grade-only: no worker, so a head run of this task costs nothing. The search a
+# rule sends an agent to before it files an idea must still exist.
+id: golden-cli-backlog-find
+tier: capability
+grade:
+  - kind: exit
+    command: "fno backlog --help 2>&1 | grep -Eq '^ +find '"
+    expect: 0
+timeout_minutes: 5
+tags: [golden]
+covers: ["crates/fno-agents/src/backlog/"]
+golden:
+  source: {kind: correction, ref: "05dddd48:repeated_correction"}
+  quote: "i thought we already had a node for hte rename."
+  expected: "fno backlog find is a command the binary lists."
+  rule: "AGENTS.md Backlog: search the backlog before idea; edit with fno backlog update, never recreate."
+  failure_type: dead-command
+  cost: rework
+  outcome: failed
