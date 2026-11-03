@@ -2203,7 +2203,7 @@ mod tests {
             "0197bbbb-1234-7abc-9def-0123456789ab",
             json!({"agent_self": "w1"}),
         );
-        let resp = handle_session_report(&home, &emitter(&home), &req(params));
+        let resp = handle_session_report(&home, &emitter(&home), &req(params.clone()));
         assert_eq!(response_json(&resp)["result"]["stored"], true);
         let rows = read_rows(&home);
         assert_eq!(
