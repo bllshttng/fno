@@ -100,16 +100,13 @@ def test_shared_codex_session_start_reports_the_thread_once(tmp_path: Path) -> N
     assert argv[argv.index("--session-id") + 1] == "shared-thread"
 
 
-def test_spawned_worker_restamps_without_consulting_any_knob(tmp_path: Path) -> None:
-    """A footnote-spawned worker (FNO_AGENT_SELF) takes the restamp path.
+def test_spawned_worker_pane_lane_reports_thin_without_python(tmp_path: Path) -> None:
+    """A footnote-spawned worker (FNO_AGENT_SELF) takes the thin report path.
 
-    The daemon's session-report ingest holds the reported id on every lane;
-    the bounded Python restamp supplements it on the pane lane only
-    (FNO_AGENT_ROW_PENDING), the path that heals the row's mux ref and opens
-    the parked pending graph row. `--agent-self` must reach both the thin
-    report and the entry point (registration keys on the re-mintable session
-    id and would append a second row instead of correcting the first). No
-    opt-in knob exists anymore: the hook consults no config read.
+    The daemon's session-report ingest owns the restamp on every lane since
+    the Python package port; the pane lane's only extra marker is --wait-row
+    (the parked pending graph row opens on the daemon's first fill). The
+    hook runs no Python on any lane and consults no config read.
     """
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -127,7 +124,6 @@ def test_spawned_worker_restamps_without_consulting_any_knob(tmp_path: Path) -> 
         "hooks/register-session-start.sh",
         "hooks/lib/agents-bin.sh",
         "scripts/lib/with-timeout.sh",
-        "scripts/lib/fno-python.sh",
     ):
         target = plugin / relative
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -140,8 +136,8 @@ def test_spawned_worker_restamps_without_consulting_any_knob(tmp_path: Path) -> 
             "CLAUDE_PLUGIN_ROOT": str(ROOT),
             "CLAUDE_CODE_SESSION_ID": "08054b1d-a907-47ab-a3d2-4a1e7a87eb4e",
             "FNO_AGENT_SELF": "target-x-f0c2",
-            # Pane substrate: the only worker lane that still runs the Python
-            # restamp beside the thin report.
+            # Pane substrate: the --wait-row marker, the parked row's only
+            # hook-side trace.
             "FNO_AGENT_ROW_PENDING": "target-x-f0c2",
             "PY_CAPTURE": str(capture),
             "KNOB_READ": str(knob_read),
@@ -151,12 +147,8 @@ def test_spawned_worker_restamps_without_consulting_any_knob(tmp_path: Path) -> 
 
     report = agents_capture.read_text(encoding="utf-8").splitlines()
     assert report[report.index("--agent-self") + 1] == "target-x-f0c2"
-    argv = capture.read_text(encoding="utf-8").splitlines()
-    assert argv[argv.index("--agent-self") + 1] == "target-x-f0c2"
-    assert argv[argv.index("--harness") + 1] == "claude"
-    assert (
-        argv[argv.index("--session-id") + 1] == "08054b1d-a907-47ab-a3d2-4a1e7a87eb4e"
-    )
+    assert "--wait-row" in report
+    assert not capture.exists(), "the hook runs no Python on any lane anymore"
     assert not knob_read.exists(), "no opt-in knob exists for any lane anymore"
 
 
