@@ -469,7 +469,7 @@ fn a_stranded_tier_fact_names_the_rerun_on_a_cancelled_only_head() {
         platform_incident: Value::Null,
         ci_tier_keeper: keeper,
     };
-    let stranded = crate::ci_tier::stranded_fact_pure(false, false, &[70, 71]);
+    let stranded = crate::ci_tier::stranded_fact_pure(false, false, &[70, 71], &[]);
     let (code, payload, stderr) = crate::pr_status::compose::compose_payload(&inputs(stranded));
     assert_eq!(code, 1, "a cancelled-only head reads red");
     let fact = payload

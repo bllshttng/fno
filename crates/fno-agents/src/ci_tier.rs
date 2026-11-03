@@ -324,10 +324,23 @@ pub(crate) fn push_hold(cwd: &Path, branch: &str) -> Option<String> {
 /// `ci_tier_pass` row of this slug under FRESH_MS old: the row is the only
 /// proof a keeper ran on this machine recently, and a keeper on another
 /// machine never writes this journal. A live keeper reruns the cancelled
-/// runs when the PR's tier slot frees, so the remedy is hold; anything else
-/// strands the head red forever, so the remedy is the rerun itself.
-pub(crate) fn stranded_fact_pure(enabled: bool, fresh: bool, cancelled: &[u64]) -> Value {
-    let runs = json!(cancelled);
+/// runs when the PR's tier slot frees, so the remedy is hold. Without one,
+/// the orphaned runs would sit red forever, so the remedy is the rerun
+/// itself; runs a look hold cancelled are not orphaned, because the look
+/// arm reruns its own once the look clears.
+pub(crate) fn stranded_fact_pure(
+    enabled: bool,
+    fresh: bool,
+    cancelled: &[u64],
+    look_named: &[u64],
+) -> Value {
+    let owned: HashSet<u64> = look_named.iter().copied().collect();
+    let orphaned: Vec<u64> = cancelled
+        .iter()
+        .copied()
+        .filter(|run| !owned.contains(run))
+        .collect();
+    let runs = json!(orphaned);
     if fresh {
         return json!({
             "live": true,
@@ -335,6 +348,15 @@ pub(crate) fn stranded_fact_pure(enabled: bool, fresh: bool, cancelled: &[u64]) 
             "enabled": enabled,
             "cancelled_runs": runs,
             "note": "the CI-tier keeper ran on this machine in the last 20 minutes; it reruns the cancelled runs when the PR's tier slot frees",
+        });
+    }
+    if orphaned.is_empty() && !owned.is_empty() {
+        return json!({
+            "live": false,
+            "remedy": "hold",
+            "enabled": enabled,
+            "cancelled_runs": json!([]),
+            "note": "a look hold cancelled the runs at this head, and the look arm reruns its own once the look clears; hold for the look",
         });
     }
     let why = if enabled {
@@ -351,6 +373,37 @@ pub(crate) fn stranded_fact_pure(enabled: bool, fresh: bool, cancelled: &[u64]) 
     })
 }
 
+/// The run ids a look-hold cancel row names at this slug and sha, inside the
+/// 30-day window the look arm reruns within. A wait cancel cannot appear
+/// here: it answers a red the head carries, and a red head never reaches the
+/// cancelled-only caller.
+fn look_named_cancels(
+    path: &Path,
+    slug: &str,
+    sha: &str,
+    since_ms: i64,
+) -> Result<HashSet<u64>, String> {
+    let mut named = HashSet::new();
+    for row in rows_of(path, crate::look_hold::CANCEL_EVENT, slug, since_ms)? {
+        if word(&row, "/data/sha") != sha {
+            continue;
+        }
+        for post in row
+            .pointer("/data/runs")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default()
+        {
+            if post.get("ok").and_then(Value::as_bool) == Some(true) {
+                if let Some(run) = post.get("run").and_then(Value::as_u64) {
+                    named.insert(run);
+                }
+            }
+        }
+    }
+    Ok(named)
+}
+
 /// The live read behind `stranded_fact_pure`: the repo's config, this
 /// machine's journal, and the head's cancelled runs. Every read fails open
 /// to what it can prove; the caller gates on the cancelled-only shape.
@@ -358,19 +411,30 @@ pub(crate) fn stranded_fact(root: &Path, slug: &str, sha: &str) -> Value {
     let enabled = crate::agents_config::config_value_deep(root, &["ci_tier", "enabled"])
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
-    let fresh = AgentsHome::from_env_opt()
-        .map(|home| {
-            let path = crate::daemon::global_events_path(&home);
-            let now = crate::ci_cadence::millis_now();
-            rows_of(&path, PASS_EVENT, slug, now - FRESH_MS)
+    let now = crate::ci_cadence::millis_now();
+    let journal = AgentsHome::from_env_opt().map(|home| crate::daemon::global_events_path(&home));
+    let fresh = journal
+        .as_ref()
+        .map(|path| {
+            rows_of(path, PASS_EVENT, slug, now - FRESH_MS)
                 .map(|rows| !rows.is_empty())
                 .unwrap_or(false)
         })
         .unwrap_or(false);
+    let look_named = journal
+        .as_ref()
+        .and_then(|path| {
+            look_named_cancels(path, slug, sha, now - crate::look_hold::WINDOW_MS).ok()
+        })
+        .unwrap_or_default();
     let cancelled = runs_of(root, &format!("head_sha={sha}"))
         .map(|runs| head_of(&runs).cancelled)
         .unwrap_or_default();
-    stranded_fact_pure(enabled, fresh, &cancelled)
+    // Journal sets iterate in hash order; the fact's id arrays must not flap
+    // between reads.
+    let mut look_named: Vec<u64> = look_named.into_iter().collect();
+    look_named.sort_unstable();
+    stranded_fact_pure(enabled, fresh, &cancelled, &look_named)
 }
 
 /// Wake each held push once, when its hold clears against `pass_row`. A
@@ -658,20 +722,36 @@ mod tests {
 
     #[test]
     fn a_fresh_pass_row_holds_and_an_absent_keeper_names_the_rerun() {
-        let fact = stranded_fact_pure(true, true, &[70]);
+        let fact = stranded_fact_pure(true, true, &[70], &[]);
         assert_eq!(fact["remedy"], "hold");
         assert_eq!(fact["live"], json!(true));
         assert_eq!(fact["cancelled_runs"], json!([70]));
         // The stranded shape carries the config state and the rerun remedy
         // with the concrete command, whatever the config says.
         for enabled in [true, false] {
-            let fact = stranded_fact_pure(enabled, false, &[]);
+            let fact = stranded_fact_pure(enabled, false, &[70, 71], &[]);
             assert_eq!(fact["remedy"], "rerun");
             assert_eq!(fact["live"], json!(false));
             assert_eq!(fact["enabled"], json!(enabled));
+            assert_eq!(fact["cancelled_runs"], json!([70, 71]));
             let note = fact["note"].as_str().unwrap();
             assert!(note.contains("gh run rerun"), "{note}");
             assert!(note.contains("this machine"), "{note}");
         }
+    }
+
+    #[test]
+    fn look_owned_cancels_never_become_a_rerun_remedy() {
+        // Every cancel belongs to the look arm: the remedy stays hold, and
+        // no run id rides as the worker's to rerun.
+        let fact = stranded_fact_pure(false, false, &[70, 71], &[70, 71]);
+        assert_eq!(fact["remedy"], "hold");
+        assert_eq!(fact["cancelled_runs"], json!([]));
+        let note = fact["note"].as_str().unwrap();
+        assert!(note.contains("look hold"), "{note}");
+        // A mixed head reruns only the orphaned ids.
+        let fact = stranded_fact_pure(false, false, &[70, 71], &[70]);
+        assert_eq!(fact["remedy"], "rerun");
+        assert_eq!(fact["cancelled_runs"], json!([71]));
     }
 }
