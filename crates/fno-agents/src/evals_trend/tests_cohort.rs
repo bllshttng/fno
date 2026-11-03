@@ -43,10 +43,15 @@ fn fold_of(tmp: &TempDir, lines: &[String]) -> Value {
 
 fn two_cohorts_kept_apart() {
     let tmp = TempDir::new().unwrap();
+    let laned = |row: String| {
+        let mut v: Value = serde_json::from_str(&row).unwrap();
+        v["requested_lane"] = json!("zai-flash");
+        v.to_string()
+    };
     let fold = fold_of(
         &tmp,
         &[
-            lane_row(
+            laned(lane_row(
                 "t1",
                 true,
                 "cohort-a",
@@ -54,8 +59,8 @@ fn two_cohorts_kept_apart() {
                 "ok",
                 json!({"input": 1, "output": 1}),
                 "glm-5.3-flash",
-            ),
-            lane_row(
+            )),
+            laned(lane_row(
                 "t2",
                 true,
                 "cohort-a",
@@ -63,8 +68,8 @@ fn two_cohorts_kept_apart() {
                 "ok",
                 json!({"input": 1, "output": 1}),
                 "glm-5.3-flash",
-            ),
-            lane_row(
+            )),
+            laned(lane_row(
                 "t3",
                 false,
                 "cohort-a",
@@ -72,7 +77,7 @@ fn two_cohorts_kept_apart() {
                 "ok",
                 json!(null),
                 "glm-5.3-flash",
-            ),
+            )),
             lane_row(
                 "t4",
                 true,
@@ -90,6 +95,10 @@ fn two_cohorts_kept_apart() {
     assert_eq!(a["accepted"], 2);
     assert_eq!(b["attempts"], 1);
     assert_eq!(b["accepted"], 1);
+    // Each cohort reads as a seat; a row with no lane is no lane.
+    assert_eq!(a["requested_lanes"], json!({"zai-flash": 3}));
+    assert_eq!(a["observed_models"], json!({"glm-5.3-flash": 3}));
+    assert_eq!(b["requested_lanes"], json!({"": 1}));
 }
 
 #[test]

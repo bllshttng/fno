@@ -30,6 +30,7 @@ pub mod error_class;
 pub mod launch;
 pub mod launch_check;
 pub mod list;
+pub mod logins;
 pub mod pick;
 pub mod reconcile;
 pub mod records;
@@ -47,7 +48,7 @@ pub mod use_switch;
 pub mod window;
 pub mod writer;
 
-const USAGE: &str = "usage: fno-agents spawn-overlay accounts show <id> [--print-binding]\n       fno-agents spawn-overlay accounts add <id> -H <harness> -a <auth> [OPTIONS]\n       fno-agents spawn-overlay accounts doctor [--json]\n       fno-agents spawn-overlay accounts list [--json]\n       fno-agents spawn-overlay accounts reconcile-slot [<harness>]\n       fno-agents spawn-overlay accounts register <id> [-H <harness>] [--config-dir <path>] [OPTIONS]\n       fno-agents spawn-overlay accounts remove <id> [--force] [--scope global|project]\n       fno-agents spawn-overlay accounts usage [--refresh] [--json]\n       fno-agents spawn-overlay accounts pick [--combo <name>] [--exclude <id>]... [--json] [--print-env] [--if-armed]\n       fno-agents spawn-overlay accounts use <id> [--scope project|global]\n       fno-agents spawn-overlay accounts combos <add|list|remove|test|use|update> [ARGS]\n       fno-agents spawn-overlay accounts window [--json] [--warn-seconds N]\n       fno-agents spawn-overlay accounts required-bot-check [--json]\n       fno-agents spawn-overlay accounts switch  (a JSON payload on stdin)\n       fno-agents spawn-overlay accounts test <id> [--smoke]\n       fno-agents spawn-overlay accounts benchmarks <refresh|show|tiers>\n       fno-agents spawn-overlay accounts state <op>  (a JSON payload on stdin)\n       fno-agents spawn-overlay accounts error-class  (a JSON payload on stdin)\n       fno-agents spawn-overlay accounts claude-dirs";
+const USAGE: &str = "usage: fno-agents spawn-overlay accounts show <id> [--print-binding]\n       fno-agents spawn-overlay accounts add <id> -H <harness> -a <auth> [OPTIONS]\n       fno-agents spawn-overlay accounts doctor [--json]\n       fno-agents spawn-overlay accounts list [--json]\n       fno-agents spawn-overlay accounts reconcile-slot [<harness>]\n       fno-agents spawn-overlay accounts register <id> [-H <harness>] [--config-dir <path>] [OPTIONS]\n       fno-agents spawn-overlay accounts remove <id> [--force] [--scope global|project]\n       fno-agents spawn-overlay accounts usage [--refresh] [--logins] [--json]\n       fno-agents spawn-overlay accounts pick [--combo <name>] [--exclude <id>]... [--json] [--print-env] [--if-armed]\n       fno-agents spawn-overlay accounts use <id> [--scope project|global]\n       fno-agents spawn-overlay accounts combos <add|list|remove|test|use|update> [ARGS]\n       fno-agents spawn-overlay accounts window [--json] [--warn-seconds N]\n       fno-agents spawn-overlay accounts required-bot-check [--json]\n       fno-agents spawn-overlay accounts switch  (a JSON payload on stdin)\n       fno-agents spawn-overlay accounts test <id> [--smoke]\n       fno-agents spawn-overlay accounts benchmarks <refresh|show|tiers>\n       fno-agents spawn-overlay accounts state <op>  (a JSON payload on stdin)\n       fno-agents spawn-overlay accounts error-class  (a JSON payload on stdin)\n       fno-agents spawn-overlay accounts claude-dirs";
 
 pub fn run(args: &[String]) -> i32 {
     match args.first().map(String::as_str) {

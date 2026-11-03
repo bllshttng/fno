@@ -4,13 +4,12 @@
 //! evals leg: when the newest regression-tier run is older than
 //! `evals.schedule_days` it launches **run mode** detached (new session,
 //! stdio on /dev/null) and holds the `evals:scheduled-run` claim across
-//! ticks, so the 480s tick budget never bounds a 50-minute task-timeout
-//! sum. The bank holds one reserved slot: a fleet at `max_live` never
+//! ticks, so the 480s tick budget never bounds the task-timeout sum. The bank holds one reserved slot: a fleet at `max_live` never
 //! blocks the launch (only a fleet incident or low ram does), so a busy
 //! machine cannot starve the bank the way a `fleet_full` skip every tick
 //! did. **Run mode** (`--run`) is the child:
-//! it runs `fno doctor evals run --tier regression -y` as its own process
-//! group, attributes the appended history rows by timestamp, journals
+//! it runs `fno doctor evals run --tier regression --repeat 3 -y` as its own
+//! process group, attributes the appended history rows by timestamp, journals
 //! `evals_scheduled_run` (or `evals_stale` for plumbing failures), and always
 //! releases the claim.
 //!
@@ -95,7 +94,7 @@ fn parse_args(args: &[String]) -> Result<Opts, String> {
         questions_store: None,
         run: false,
         started: None,
-        run_timeout_s: 3600,
+        run_timeout_s: 20_000,
         claims_root: None,
         repo: None,
         graph: None,
@@ -825,10 +824,21 @@ fn run_run_mode(o: &Opts) -> i32 {
     if let Some(repo) = bank_repo(o) {
         cmd.current_dir(repo);
     }
-    cmd.args(["doctor", "evals", "run", "--tier", "regression", "-y"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped());
+    // The trend and the alarm read nothing below this many grades per window.
+    let repeat = crate::evals_trend::MIN_WINDOW_GRADES.to_string();
+    cmd.args([
+        "doctor",
+        "evals",
+        "run",
+        "--tier",
+        "regression",
+        "--repeat",
+        &repeat,
+        "-y",
+    ])
+    .stdin(Stdio::null())
+    .stdout(Stdio::null())
+    .stderr(Stdio::piped());
     setsid_hook(&mut cmd);
     let mut run = match cmd.spawn() {
         Ok(c) => c,
