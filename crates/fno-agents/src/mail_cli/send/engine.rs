@@ -2,7 +2,7 @@
 use super::lanes::*;
 use super::resolve::*;
 use super::*;
-use crate::mail::lane::{first_applicable, Lane, LaneKind, Target};
+use crate::mail::lane::{first_applicable, Lane, LaneKind, Target, LADDER};
 
 // ---------------------------------------------------------------------------
 // The per-agent registry lock (agents/lock.py hold_agent_lock)
@@ -807,13 +807,19 @@ pub(super) fn deliver_live(
         sender_entry,
     };
     let target = live_target(row);
-    let lanes: Vec<Box<dyn Lane + '_>> = vec![
-        Box::new(PaneLane(cx)),
-        Box::new(CodexThreadLane(cx)),
-        Box::new(KeeperLane),
-        Box::new(DaemonDeliverLane(cx)),
-        Box::new(ClaudeSwitchboardLane(cx)),
-    ];
+    // The order is `mail::lane::LADDER`'s; the match gives each kind its adapter.
+    let lanes: Vec<Box<dyn Lane + '_>> = LADDER
+        .iter()
+        .map(|kind| -> Box<dyn Lane + '_> {
+            match kind {
+                LaneKind::Pane => Box::new(PaneLane(cx)),
+                LaneKind::CodexThread => Box::new(CodexThreadLane(cx)),
+                LaneKind::Keeper => Box::new(KeeperLane),
+                LaneKind::DaemonDeliver => Box::new(DaemonDeliverLane(cx)),
+                LaneKind::ClaudeSwitchboard => Box::new(ClaudeSwitchboardLane(cx)),
+            }
+        })
+        .collect();
     match first_applicable(&lanes, &target) {
         Some(lane) => lane.deliver(wrapped, &target, reason_out),
         None => DeliveryState::failed("no-lane"),
