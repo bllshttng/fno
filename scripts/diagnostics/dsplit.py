@@ -4,9 +4,8 @@
 Rebuilt 2026-10-12 from the method notes in the 2026-10-08 slowness audit.
 The work/maintenance split landed after a gate reading showed fleet loop
 workers dominating the child figure. The gate names the full child figure,
-so a reading reports the gate against the child total; the split keeps both
-figures on one page for a ruling on re-basing the gate to maintenance-only,
-and names the largest maintenance command either way.
+so a reading reports the gate against the child total, and the split keeps
+both figures on one page beside it.
 
 Samples `ps` several times a second for SECONDS. A descendant is any process
 whose parent chain reaches the daemon pid; once seen it stays in the set. The
