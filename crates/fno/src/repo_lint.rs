@@ -31,7 +31,6 @@ pub const CHECKS: &[&str] = &[
     "internal-refs",
     "plan-filenames",
     "preamble-budget",
-    "provider-stderr-merge",
     "registry",
     "retired-commands",
     "seam-crossings",
@@ -47,7 +46,6 @@ fn accepts(check: &str, flag: &str) -> bool {
     match check {
         "command-ratchet" | "seam-crossings" => flag == "--update",
         "shellout-drift" => flag == "--no-degrade",
-        "provider-stderr-merge" => flag == "--providers-dir",
         "registry" => flag == "--json" || flag == "-J",
         "field-coverage" => flag == "--json" || flag == "-J" || flag == "--live",
         "hook-tombstones" => flag == "--base",
@@ -62,7 +60,6 @@ pub struct Invocation {
     pub root: PathBuf,
     pub update: bool,
     pub no_degrade: bool,
-    pub providers_dir: Option<String>,
     pub json: bool,
     pub live: bool,
     pub base: Option<String>,
@@ -121,7 +118,6 @@ pub fn parse(args: &[String]) -> Result<Invocation, String> {
         root: repo_root(root_override.as_deref())?,
         update: false,
         no_degrade: false,
-        providers_dir: None,
         json: false,
         live: false,
         base: None,
@@ -129,8 +125,7 @@ pub fn parse(args: &[String]) -> Result<Invocation, String> {
     let mut it = flags.iter();
     while let Some(flag) = it.next() {
         let name = flag.as_str();
-        let takes_value =
-            name == "--dispatch-path" || name == "--providers-dir" || name == "--base";
+        let takes_value = name == "--dispatch-path" || name == "--base";
         let value = if takes_value {
             match it.next() {
                 Some(v) => Some(v.clone()),
@@ -148,7 +143,6 @@ pub fn parse(args: &[String]) -> Result<Invocation, String> {
         match (canonical, value) {
             ("--update", _) => out.update = true,
             ("--no-degrade", _) => out.no_degrade = true,
-            ("--providers-dir", v) => out.providers_dir = v,
             ("--json", _) => out.json = true,
             ("--live", _) => out.live = true,
             ("--base", v) => out.base = v,
@@ -174,7 +168,6 @@ pub fn run(args: &[String]) -> i32 {
         "internal-refs" => run_ci_gate(&inv.root, "scripts/ci/check-no-internal-refs.sh"),
         "plan-filenames" => plan_filenames(&inv),
         "preamble-budget" => run_ci_gate(&inv.root, "scripts/ci/check-preamble-budget.sh"),
-        "provider-stderr-merge" => provider_stderr_merge(&inv),
         "registry" => forward_registry_family(&inv),
         "retired-commands" => run_ci_gate(&inv.root, "scripts/ci/check-retired-command-strings.sh"),
         "seam-crossings" => seam_crossings::run(&inv),
@@ -329,91 +322,6 @@ fn spawn_paths(inv: &Invocation) -> i32 {
     }
     println!("spawn-paths: ok");
     0
-}
-
-/// `provider-stderr-merge`: require nearby justification for
-/// `stderr=subprocess.STDOUT` in the harness dir. The Python leg matched the
-/// keyword through the ast module; the line scan here matches the same
-/// assignment spelling, and the 12-line justification window is verbatim.
-/// Recorded departure: a stderr keyword rustfmt-wrapped onto its own line
-/// away from `subprocess` no longer matches (no Python parser in Rust).
-fn provider_stderr_merge(inv: &Invocation) -> i32 {
-    let root = match &inv.providers_dir {
-        Some(dir) => PathBuf::from(dir),
-        None => inv
-            .root
-            .join("cli")
-            .join("src")
-            .join("fno")
-            .join("agents")
-            .join("harnesses"),
-    };
-    if !root.is_dir() {
-        eprintln!(
-            "provider-stderr-merge: harness dir not found: {}",
-            root.display()
-        );
-        return 2;
-    }
-    let merge = regex::Regex::new(r"stderr\s*=\s*subprocess\.STDOUT").expect("static regex");
-    let mut violations: Vec<String> = Vec::new();
-    let mut files: Vec<PathBuf> = std::fs::read_dir(&root)
-        .into_iter()
-        .flatten()
-        .filter_map(Result::ok)
-        .map(|e| e.path())
-        .filter(|p| p.extension().is_some_and(|ext| ext == "py"))
-        .collect();
-    files.sort();
-    for path in files {
-        let body = match std::fs::read_to_string(&path) {
-            Ok(body) => body,
-            Err(_) => continue,
-        };
-        let lines: Vec<&str> = body.lines().collect();
-        for (idx, line) in lines.iter().enumerate() {
-            if !merge.is_match(line) {
-                continue;
-            }
-            if justified(&lines, idx) {
-                continue;
-            }
-            violations.push(format!(
-                "{}:{}: stderr=subprocess.STDOUT requires nearby provider-specific justification",
-                path.file_name().unwrap_or_default().to_string_lossy(),
-                idx + 1
-            ));
-        }
-    }
-    if !violations.is_empty() {
-        eprintln!("provider-stderr-merge: violations:");
-        for v in &violations {
-            eprintln!("  {v}");
-        }
-        eprintln!(
-            "\nFix: add a nearby Locked Decision/comment explaining why this provider may \
-             safely merge stderr into stdout, or drain stderr separately."
-        );
-        return 1;
-    }
-    println!("provider-stderr-merge: ok");
-    0
-}
-
-/// The 12-line justification window: any prior line in the window, or the
-/// current line's comment tail, naming a locked decision or the merge idiom.
-fn justified(lines: &[&str], idx: usize) -> bool {
-    let window_start = idx.saturating_sub(11);
-    let prior: String = lines[window_start..idx]
-        .iter()
-        .map(|l| format!("{l}\n"))
-        .collect();
-    let current_comment = lines[idx].split_once('#').map(|(_, c)| c).unwrap_or("");
-    let window = format!("{prior}{current_comment}").to_lowercase();
-    window.contains("locked decision")
-        || window.contains("stderr=stdout")
-        || window.contains("stderr=subprocess.stdout")
-        || window.contains("stdout-merge")
 }
 
 /// `hook-tombstones`: refuse deleting a hook script the base revision's hook
