@@ -1845,7 +1845,7 @@ fn questions_leg(
         .parent()
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(".fno"));
-    let questions_path = fno_dir.join("questions.jsonl");
+    let questions_path = crate::state_layout::place(&fno_dir, "questions.jsonl");
     let questions_query = crate::event_store::EventQuery {
         since_ms: since_epoch.map(|s| s as i64 * 1000),
         until_ms: until_epoch.map(|u| u as i64 * 1000),

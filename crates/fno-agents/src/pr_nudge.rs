@@ -875,7 +875,7 @@ fn live_decisions(home: &AgentsHome) -> Option<crate::decision_index::Index> {
         .unwrap_or_else(|| std::path::PathBuf::from(".fno"));
     crate::decision_index::read_store_live(
         &crate::state_layout::graph_anchor(&state_dir),
-        &state_dir.join("decisions.jsonl"),
+        &crate::state_layout::place(&state_dir, "decisions.jsonl"),
     )
     .ok()
 }

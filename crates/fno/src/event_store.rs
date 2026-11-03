@@ -487,7 +487,7 @@ fn refuse_corrupt_store(store: &Path, error: &str) -> String {
     } else {
         parent
     };
-    let attention = root.join("questions.jsonl");
+    let attention = crate::state_layout::place(&root, "questions.jsonl");
     let mut identity = Sha256::new();
     identity.update(store.as_os_str().as_encoded_bytes());
     if let Ok(meta) = store.metadata() {

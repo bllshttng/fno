@@ -646,7 +646,7 @@ pub(crate) fn question_journals(fno_dir: &Path, cwd: &Path) -> Vec<PathBuf> {
     vec![
         crate::paths::space_dir(cwd).join("events.jsonl"),
         fno_dir.join("events.jsonl"),
-        fno_dir.join("questions.jsonl"),
+        crate::state_layout::place(fno_dir, "questions.jsonl"),
     ]
 }
 
@@ -659,7 +659,7 @@ fn default_sources(home: &AgentsHome, cwd: &Path) -> (Vec<PathBuf>, PathBuf) {
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from(".fno"));
     let events = question_journals(&fno_dir, cwd);
-    let ledger = fno_dir.join("ledger.json");
+    let ledger = crate::state_layout::place(&fno_dir, "ledger.json");
     (events, ledger)
 }
 
@@ -1129,8 +1129,8 @@ fn run_archive(
             caller,
             home: Some(home.clone()),
             journal_path: crate::paths::space_dir(cwd).join("events.jsonl"),
-            index_path: fno_dir.join("questions.jsonl"),
-            decisions_path: fno_dir.join("decisions.jsonl"),
+            index_path: crate::state_layout::place(&fno_dir, "questions.jsonl"),
+            decisions_path: crate::state_layout::place(&fno_dir, "decisions.jsonl"),
             graph: crate::backlog::settings::graph_path(),
             repo_root: cwd.to_path_buf(),
         });

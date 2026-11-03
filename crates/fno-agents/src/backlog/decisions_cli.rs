@@ -203,7 +203,7 @@ struct ListOut {
 }
 
 fn decisions_jsonl() -> PathBuf {
-    crate::decision_index::default_state_path("decisions.jsonl")
+    crate::decision_index::graph_journal(&crate::graph_get::default_graph_path())
 }
 
 /// The machine-wide graph, archive included: the same read `_graph_entries`

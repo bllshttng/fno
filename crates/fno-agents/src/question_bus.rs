@@ -129,7 +129,7 @@ impl Host {
     }
 
     fn index(&self) -> PathBuf {
-        self.root.join("questions.jsonl")
+        crate::state_layout::place(&self.root, "questions.jsonl")
     }
 }
 

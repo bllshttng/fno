@@ -758,17 +758,35 @@ def graph_archive_json() -> Path:
     return graph_json().parent / "graph-archive.json"
 
 
-def _pinned_root_file(name: str) -> Path:
-    """The pinned-global answer for one state-root file: the ``FNO_STATE_DIR``
-    seal or an absolute ``state_dir`` anchors it; a *relative* ``state_dir``
-    would land it inside a repo checkout, so ``~/.fno`` answers instead.
+def _pinned_root() -> Path:
+    """The pinned-global state root: the ``FNO_STATE_DIR`` seal or an
+    absolute ``state_dir`` anchors it; a *relative* ``state_dir`` would land
+    global files inside a repo checkout, so ``~/.fno`` answers instead.
     """
     if os.environ.get("FNO_STATE_DIR"):
-        return root_state_file(name)
+        return state_dir()
     raw = os.path.expanduser(os.path.expandvars(_settings().state_dir))
     if os.path.isabs(raw):
-        return root_state_file(name)
-    return _guard_state_path(_resolve("~/.fno/") / name)
+        return _guard_state_path(_resolve(raw))
+    return _guard_state_path(_resolve("~/.fno/"))
+
+
+def _pinned_root_file(name: str) -> Path:
+    """The pinned-global answer for one state-root file: the pin
+    :func:`_pinned_root` runs, then the leaf under it.
+    """
+    return _guard_state_path(_pinned_root() / name)
+
+
+def _pinned_state_subfile(name: str) -> Path:
+    """The pinned-global answer for one moved journal: the same pin
+    :func:`_pinned_root` runs, then the move ladder into ``history/``,
+    renaming the root spelling in on first resolve. The resolver is the
+    mover, so no second mechanism can drift; the rename never clobbers a
+    ``history/`` file that is already there (the Rust mover merges by kind
+    instead).
+    """
+    return _state_subfile_at(_pinned_root(), "history", name, name)
 
 
 def ledger_json() -> Path:
@@ -778,11 +796,14 @@ def ledger_json() -> Path:
     terminal session across every repo), so it must never fork into a
     per-repo stray. The ``FNO_STATE_DIR`` seal wins first, before any
     override. An absolute ``config.paths.ledger_json`` override wins next,
-    while a relative override is anchored under ``~/.fno``; otherwise
-    :func:`_pinned_root_file` answers.
+    while a relative override is anchored under ``~/.fno``. The default leg
+    answers the layout table's row: ``<root>/history/ledger.json`` once the
+    mover ran, renaming the root spelling into it on first resolve (the same
+    ladder :func:`state_runtime_file` runs, and the mirror of the Rust
+    ``paths_cli::ledger_json`` place() answer).
     """
     if os.environ.get("FNO_STATE_DIR"):
-        return root_state_file("ledger.json")
+        return _pinned_state_subfile("ledger.json")
     settings = _settings()
     override = settings.paths.ledger_json
     if override is not None:
@@ -792,7 +813,7 @@ def ledger_json() -> Path:
         return _guard_state_path(
             _resolve(override, project_root=_resolve("~/.fno/"), settings=settings)
         )
-    return _pinned_root_file("ledger.json")
+    return _pinned_state_subfile("ledger.json")
 
 
 def operator_lane() -> Path:
@@ -879,9 +900,6 @@ _ROOT_STATE_FILE_ROWS: frozenset[str] = frozenset(
     {
         "config.toml", "config.toml.lock", "config.toml.bak",
         "settings.yaml", "settings.yaml.lock",
-        "ledger.json",
-        "decisions.jsonl", "decisions.jsonl.compact", "decisions.jsonl.corrupt",
-        "questions.jsonl",
         "my-priorities.md", "my-priorities.md.lock",
         ".env", ".gitignore", ".path-migration-done",
     }
@@ -907,8 +925,13 @@ def root_state_file(name: str) -> Path:
 
 
 def questions_jsonl() -> Path:
-    """Return the permanent machine-wide operator-question index."""
-    return _pinned_root_file("questions.jsonl")
+    """Return the permanent machine-wide operator-question index: the move
+    ladder into ``history/`` (the layout table's row), the root spelling
+    renamed in on first resolve. The mirror of the Rust
+    ``paths_cli::questions_jsonl`` place() answer, and the single path
+    authority the intake door's ``index_path`` caller passes through.
+    """
+    return _pinned_state_subfile("questions.jsonl")
 
 
 def project_events_json() -> Path:

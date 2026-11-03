@@ -126,7 +126,7 @@ pub fn emit_paths_sh_defaults() -> String {
         bash_quote(&home_relative("~/.fno/"))
     ));
     for (name, sub) in [
-        ("LEDGER_JSON_PATH", "ledger.json"),
+        ("LEDGER_JSON_PATH", "history/ledger.json"),
         ("BRIEFS_DIR", "briefs"),
         ("FLEET_DIR", "fleet"),
         ("POSTMORTEMS_DIR", "postmortems"),
@@ -676,8 +676,21 @@ pub fn ledger_json(cwd: &Path) -> PathBuf {
     state_dir_resolved(cwd)
         .ok()
         .filter(|d| d.is_absolute())
-        .map(|d| d.join("ledger.json"))
-        .unwrap_or_else(|| crate::decision_index::default_state_path("").join("ledger.json"))
+        .map(|d| crate::state_layout::place(&d, "ledger.json"))
+        .unwrap_or_else(|| {
+            crate::state_layout::place(
+                &crate::decision_index::default_state_path(""),
+                "ledger.json",
+            )
+        })
+}
+
+/// Python `paths.questions_jsonl()`: the machine's operator-question index,
+/// resolved through the layout table so a root straggler the daemon has not
+/// folded yet stays readable (the same ladder every moved row answers
+/// through).
+pub fn questions_jsonl(cwd: &Path) -> PathBuf {
+    crate::state_layout::place(&state_root(cwd), "questions.jsonl")
 }
 
 /// Python `paths.worktrees_base()`: the `paths.worktrees_base` override, else
@@ -825,7 +838,7 @@ pub fn emit_paths_sh_live(cwd: &Path) -> Result<String, String> {
     lines.push(format!("export STATE_DIR={}", bash_quote(&state_tmpl)));
 
     for (name, key, sub) in [
-        ("LEDGER_JSON_PATH", "ledger_json", "ledger.json"),
+        ("LEDGER_JSON_PATH", "ledger_json", "history/ledger.json"),
         ("BRIEFS_DIR", "briefs_dir", "briefs"),
         ("FLEET_DIR", "fleet_dir", "fleet"),
         ("POSTMORTEMS_DIR", "postmortems_dir", "postmortems"),
@@ -852,9 +865,9 @@ pub fn emit_paths_sh_live(cwd: &Path) -> Result<String, String> {
                     }
                 }
                 None if !sealed && is_project_relative(state_stripped) => {
-                    "$HOME/.fno/ledger.json".to_string()
+                    "$HOME/.fno/history/ledger.json".to_string()
                 }
-                None => "$STATE_DIR/ledger.json".to_string(),
+                None => "$STATE_DIR/history/ledger.json".to_string(),
             }
         } else {
             state_subpath(override_, sub)?

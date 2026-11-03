@@ -1050,13 +1050,16 @@ pub fn append_questions_row(path: &std::path::Path, row: &Value) -> Result<(), S
     crate::event_store::append_envelope(path, &row.to_string(), None).map(|_| ())
 }
 
-/// `questions.jsonl` lives beside the agents home (`~/.fno`).
+/// `questions.jsonl` lives beside the agents home (`~/.fno`), through the
+/// layout table's row: `history/questions.jsonl` after the fold, the root
+/// spelling until the mover runs.
 pub fn questions_path(home: &AgentsHome) -> PathBuf {
-    home.root()
+    let root = home
+        .root()
         .parent()
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(".fno"))
-        .join("questions.jsonl")
+        .unwrap_or_else(|| PathBuf::from(".fno"));
+    crate::state_layout::place(&root, "questions.jsonl")
 }
 
 // ---------------------------------------------------------------------------

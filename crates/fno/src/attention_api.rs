@@ -391,7 +391,7 @@ fn fno_dir() -> PathBuf {
 }
 
 pub(crate) fn journal_path() -> PathBuf {
-    fno_dir().join("questions.jsonl")
+    crate::state_layout::place(&fno_dir(), "questions.jsonl")
 }
 
 /// Sink tokens for the answer door: `[[attention.sinks]]` rows in the cwd
