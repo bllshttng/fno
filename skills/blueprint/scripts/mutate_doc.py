@@ -41,7 +41,7 @@ import yaml
 
 class _IndentDumper(yaml.Dumper):
     """Emit indented block-lists (`  - item`), not PyYAML's default indentless
-    ones (`- item` flush-left). The plan-frontmatter reader `_stamp.parse_frontmatter`
+    ones (`- item` flush-left). The plan-frontmatter reader `plan_doc::codec::parse_frontmatter`
     only consumes block-list children that lead with whitespace, so flush-left
     lists (kill_criteria/waves) read as malformed and skip the graph->doc
     projection. Indenting converges output on the single on-disk shape the
@@ -52,7 +52,7 @@ class _IndentDumper(yaml.Dumper):
 
 
 # ---------------------------------------------------------------------------
-# Add cli/src to sys.path so we can import fno.plan.*
+# Add cli/src to sys.path so we can import fno.rust_binary
 # ---------------------------------------------------------------------------
 _SCRIPT_DIR = Path(__file__).resolve().parent
 _REPO_ROOT = _SCRIPT_DIR.parents[2]  # skills/blueprint/scripts -> madison/
@@ -60,20 +60,151 @@ _CLI_SRC = _REPO_ROOT / "cli" / "src"
 if str(_CLI_SRC) not in sys.path:
     sys.path.insert(0, str(_CLI_SRC))
 
-# E402: these imports intentionally follow the sys.path.insert above so the
-# in-repo `fno.plan.*` package resolves when run as a standalone script.
-from fno.plan._doc import load_plan, load_plan_text, FrontmatterError  # noqa: E402
-from fno.plan._ownership import (  # noqa: E402
-    BLUEPRINT_WRITE_ALLOWLIST,
-    assert_blueprint_can_write,
-    OwnershipViolation,
-)
-from fno.plan._status import (  # noqa: E402
-    validate_transition,
-    coerce_status_from_yaml,
-    StatusTransitionError,
-)
-from fno.plan.execution_validation import validate_execution  # noqa: E402
+# E402: this import intentionally follows the sys.path.insert above so the
+# in-repo package resolves when run as a standalone script.
+from fno.rust_binary import find_dev_binary, resolve_binary  # noqa: E402
+
+# ---------------------------------------------------------------------------
+# The plan doc, read through the native `fno do plan parse` door. The door owns
+# the parse, the status ladder, and the write allowlist; this script only
+# shapes the doc.
+# ---------------------------------------------------------------------------
+
+
+class FrontmatterError(Exception):
+    """The doc's frontmatter is malformed, or the parse door could not run."""
+
+
+class StatusTransitionError(ValueError):
+    """An unknown status, or a backward or identity move on the plan axis."""
+
+
+class OwnershipViolation(ValueError):
+    """/blueprint tried to write a section it does not own."""
+
+
+def _plan_door(args: list[str], text: str | None = None) -> tuple[int, Any]:
+    """One `fno-agents plan-cli` call: (exit code, parsed stdout or None).
+
+    The answer rides stdout on every exit: a malformed doc (3) and an invalid
+    plan (1) still print their receipt.
+    """
+    binary = find_dev_binary() or resolve_binary()
+    if binary is None:
+        return 127, None
+    proc = subprocess.run(
+        [str(binary), "plan-cli", *args], input=text, capture_output=True, text=True, timeout=60
+    )
+    try:
+        return proc.returncode, json.loads(proc.stdout or "null")
+    except ValueError:
+        return proc.returncode, None
+
+
+class _PlanDoc:
+    def __init__(self, receipt: dict, text: str):
+        self.receipt = receipt
+        self.sections = OrderedDict((h, b) for h, b in receipt.get("sections") or [])
+        # YAML-typed, so a rewrite dumps dates and numbers as they were read.
+        self.frontmatter = _typed_frontmatter(text)
+
+    def get_section(self, name: str) -> str | None:
+        return self.sections.get(name)
+
+    def has_section(self, name: str) -> bool:
+        return name in self.sections
+
+
+def _typed_frontmatter(text: str) -> dict:
+    if not text.startswith("---"):
+        return {}
+    first = text.find("\n")
+    close = text.find("\n---", first)
+    if first < 0 or close < 0:
+        return {}
+    loaded = yaml.safe_load(text[first + 1 : close])
+    return loaded if isinstance(loaded, dict) else {}
+
+
+def load_plan_text(text: str) -> _PlanDoc:
+    rc, receipt = _plan_door(["parse", "-"], text)
+    if rc != 0 or not isinstance(receipt, dict):
+        detail = receipt.get("error") if isinstance(receipt, dict) else None
+        raise FrontmatterError(detail or f"plan parse door failed (exit {rc})")
+    return _PlanDoc(receipt, text)
+
+
+def load_plan(path: Path) -> _PlanDoc:
+    return load_plan_text(Path(path).read_text(encoding="utf-8"))
+
+
+_FACTS = load_plan_text("---\nstatus: idea\n---\n").receipt
+BLUEPRINT_WRITE_ALLOWLIST = frozenset(_FACTS["blueprint_write_allowlist"])
+_STATUS_PROGRESSION = tuple(_FACTS["status_progression"])
+_STATUS_ALIASES = dict(_FACTS["status_aliases"])
+
+
+def assert_blueprint_can_write(section_name: str) -> None:
+    if section_name not in BLUEPRINT_WRITE_ALLOWLIST:
+        raise OwnershipViolation(
+            f"/blueprint attempted to write section {section_name!r}, which is not in "
+            f"BLUEPRINT_WRITE_ALLOWLIST. Allowed sections: {sorted(BLUEPRINT_WRITE_ALLOWLIST)}"
+        )
+
+
+def coerce_status_from_yaml(value: Any) -> str:
+    """A YAML status value as a known rung; an unquoted `true` reads as "true"."""
+    if value is None:
+        raise StatusTransitionError(
+            "Status value is None; expected one of: "
+            + ", ".join(repr(s) for s in _STATUS_PROGRESSION)
+        )
+    coerced = str(value).lower() if isinstance(value, bool) else str(value)
+    coerced = _STATUS_ALIASES.get(coerced, coerced)
+    if coerced not in _STATUS_PROGRESSION:
+        raise StatusTransitionError(
+            f"Unknown status {coerced!r} (coerced from {value!r}). "
+            f"Valid statuses: {list(_STATUS_PROGRESSION)}"
+        )
+    return coerced
+
+
+def validate_transition(old: str, new: str) -> None:
+    """Refuse an unknown, identity, or backward move: the axis is monotonic."""
+    old = _STATUS_ALIASES.get(old, old)
+    new = _STATUS_ALIASES.get(new, new)
+    for status in (old, new):
+        if status not in _STATUS_PROGRESSION:
+            raise StatusTransitionError(
+                f"Unknown status {status!r}. Valid statuses: {list(_STATUS_PROGRESSION)}"
+            )
+    old_index, new_index = _STATUS_PROGRESSION.index(old), _STATUS_PROGRESSION.index(new)
+    if new_index == old_index:
+        raise StatusTransitionError(
+            f"Identity transition rejected: status is already {old!r}. "
+            "Provide a different target status."
+        )
+    if new_index < old_index:
+        raise StatusTransitionError(
+            f"Backward transition rejected: cannot move from {old!r} (index {old_index}) "
+            f"to {new!r} (index {new_index}). "
+            f"Status progression is monotonic: {' -> '.join(_STATUS_PROGRESSION)}"
+        )
+
+
+def validate_execution_violations(path: Path, acceptance_contract: str) -> list[dict]:
+    """The body's execution violations through the native validator."""
+    rc, report = _plan_door(
+        ["validate", str(path), "--execution", "--json", "--acceptance-contract", acceptance_contract]
+    )
+    if isinstance(report, dict) and "violations" in report:
+        return report["violations"]
+    return [{"field": "door", "message": f"execution validator unavailable (exit {rc})"}]
+
+
+def _violation_report(violations: list[dict]) -> str:
+    return "\n".join(f"  {v.get('field')}: {v.get('message')}" for v in violations)
+
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -86,8 +217,8 @@ _BLUEPRINT_INPUT_STATUSES = frozenset({"design", "ready"})
 _PAST_BLUEPRINT_STATUSES = frozenset({"in_progress", "in_review", "reviewing", "shipping", "shipped"})
 
 # `in_progress` is LOCK-derived, not PR-derived: `fno do target init` acquiring a node
-# claim projects it onto the plan doc (cli/src/fno/plan/_project.py) along the
-# forward-only axis in cli/src/fno/plan/_status.py. So it is the one past-blueprint
+# claim projects it onto the plan doc (crates/fno-agents/src/plan_doc/project.rs) along the
+# forward-only axis in crates/fno-agents/src/plan_doc/status.rs. So it is the one past-blueprint
 # status that is not evidence blueprint ran - the `## Execution Strategy` section is.
 # Reading it as terminal deadlocked the documented /target design-rung branch, which
 # must hold the claim to work the node and cannot reset the doc (the projector
@@ -1149,23 +1280,15 @@ def finalize(doc_path: Path, no_emit: bool = False) -> tuple[int, str]:
         # violates it, and finalize must surface that, not hide it.
         if str(plan.frontmatter.get("acceptance_contract") or "").strip() != "compiled-v1":
             return 0, resolved.read_text(encoding="utf-8")
-        result = validate_execution(plan, acceptance_contract="compiled-v1")
-        if result.violations:
-            report = "\n".join(
-                f"  {violation.field}: {violation.message}"
-                for violation in result.violations
-            )
-            return 2, "Execution Strategy is not ready:\n" + report
+        violations = validate_execution_violations(resolved, "compiled-v1")
+        if violations:
+            return 2, "Execution Strategy is not ready:\n" + _violation_report(violations)
         return 0, resolved.read_text(encoding="utf-8")
 
     # Validate the proposed ready + compiled-v1 contract before writing.
-    result = validate_execution(plan, acceptance_contract="compiled-v1")
-    if result.violations:
-        report = "\n".join(
-            f"  {violation.field}: {violation.message}"
-            for violation in result.violations
-        )
-        return 2, "Execution Strategy is not ready:\n" + report
+    violations = validate_execution_violations(resolved, "compiled-v1")
+    if violations:
+        return 2, "Execution Strategy is not ready:\n" + _violation_report(violations)
 
     try:
         validate_transition(current_status, "ready")

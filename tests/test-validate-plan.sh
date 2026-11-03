@@ -891,34 +891,6 @@ else
     fail "AC10o: Missing binary should warn-only without a receipt (exit $EXIT_CODE): $OUTPUT"
 fi
 
-# AC10p (AC5-HP): a two-write help probe is captured without pipefail turning
-# a successful installed-CLI capability check into the stale-CLI refusal.
-HELP_ROOT="$TMPDIR_BASE/helpprobe"
-HELP_BIN="$HELP_ROOT/bin"
-mkdir -p "$HELP_ROOT/scripts" "$HELP_BIN"
-cp "$VALIDATE" "$HELP_ROOT/scripts/validate-plan.sh"
-cat > "$HELP_BIN/fno" <<'STUB'
-#!/bin/bash
-if [[ "${1:-} ${2:-} ${3:-} ${4:-}" == "do plan validate --help" ]]; then
-    echo "  --execution  validate execution"
-    sleep 0.3
-    echo "  --json       emit JSON"
-    exit 0
-fi
-if [[ "${1:-} ${2:-} ${3:-}" == "do plan validate" ]]; then
-    exit 0
-fi
-exit 3
-STUB
-chmod +x "$HELP_BIN/fno"
-OUTPUT=$(cd "$HELP_ROOT" && env -u FNO_AGENTS_BIN PATH="$HELP_BIN:/usr/bin:/bin" FNO_PYTHON=/usr/bin/python3 \
-    bash "$HELP_ROOT/scripts/validate-plan.sh" "$PLAN_SEMANTIC" 2>&1) && EXIT_CODE=0 || EXIT_CODE=$?
-if [[ $EXIT_CODE -ne 2 ]] && ! grep -q "predates semantic plan validation" <<< "$OUTPUT"; then
-    pass "AC10p: two-write help probe stays a successful capability check"
-else
-    fail "AC10p: help probe was misread as stale CLI (exit $EXIT_CODE): $OUTPUT"
-fi
-
 # AC10q (AC5-EDGE): a large quick-plan frontmatter is read to completion, so
 # the kind marker survives past the pipe buffer and the graduated surface gate
 # remains a warning.

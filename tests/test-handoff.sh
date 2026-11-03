@@ -384,7 +384,8 @@ if [ "$subcmd1 $subcmd2 ${3:-}" = "do plan rung" ]; then
   # gate's entire contract IS the rung vocabulary, so a stub that re-derived
   # it would test the stub - and a second copy of the vocabulary is the exact
   # thing `fno do plan rung` exists to delete.
-  exec env PYTHONPATH="$FNO_SRC" "$FNO_PYTHON" -m fno.cli do plan rung "${4:-}"
+  bin="$(env PYTHONPATH="$FNO_SRC" "$FNO_PYTHON" -c 'from fno import rust_binary; b = rust_binary.find_dev_binary() or rust_binary.resolve_binary(); print(b or "")')"
+  exec "$bin" plan-cli rung "${4:-}"
 fi
 
 if [ "$subcmd1 $subcmd2" = "plan rung" ]; then
