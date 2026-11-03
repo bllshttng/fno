@@ -2974,7 +2974,7 @@ fn layout_graft_cli(
 /// the operator needs to disambiguate - the name to retype, the pane it
 /// hosts, and how stale the row is.
 #[derive(Debug, PartialEq, Eq)]
-struct Candidate {
+pub(crate) struct Candidate {
     name: String,
     pane: Option<(String, u64)>,
     /// Seconds since the row's freshest activity stamp; `None` = unstamped.
@@ -2983,7 +2983,7 @@ struct Candidate {
 
 /// What shared selector resolution decided.
 #[derive(Debug, PartialEq, Eq)]
-enum Resolution {
+pub(crate) enum Resolution {
     Found(Box<crate::agents_view::RegistryAgent>),
     Ambiguous(Vec<Candidate>),
     NotFound,
@@ -3033,7 +3033,7 @@ fn ambiguity_candidates(
 /// 3. Substring over the name, case-insensitive - the tier that makes a node
 ///    id or slug resolve, because the name is the only node carrier the
 ///    registry row has.
-fn resolve_selector(
+pub(crate) fn resolve_selector(
     rows: &[crate::agents_view::RegistryAgent],
     selector: &str,
     now: u64,
@@ -3133,7 +3133,9 @@ fn print_candidates(command: &str, selector: &str, candidates: &[Candidate]) {
 /// Read the agent registry into derived rows. The shared head of
 /// every selector door; a read failure is EXIT_REGISTRY_UNAVAILABLE, never a
 /// silent "not found" (the rule `where` already shipped with).
-fn registry_rows_or(command: &str) -> Result<(Vec<crate::agents_view::RegistryAgent>, u64), i32> {
+pub(crate) fn registry_rows_or(
+    command: &str,
+) -> Result<(Vec<crate::agents_view::RegistryAgent>, u64), i32> {
     let raw = match crate::registry_read::registry_text(&crate::agents_view::registry_path()) {
         Ok(r) => r,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -3773,10 +3775,9 @@ pub fn where_(args: &[OsString], env_session: Option<&str>) -> i32 {
         Ok(r) => r,
         Err(code) => return code,
     };
-    // Shared selector resolution - the exact/prefix tiers `where`
-    // shipped with, plus the name tier. `where` keeps its own exit codes for
-    // not-found and not-pane-hosted; an ambiguous family is now its own code
-    // so a script can tell a typo from a family (Locked Decision 3).
+    // Shared selector resolution. `where` keeps its own exit codes for not-found
+    // and not-pane-hosted; an ambiguous family is its own code, so a script can
+    // tell a typo from a family (Locked Decision 3).
     let row = match resolve_selector(&rows, &fno_id, now) {
         Resolution::Found(row) => *row,
         Resolution::Ambiguous(candidates) => {
@@ -3822,7 +3823,6 @@ pub fn where_(args: &[OsString], env_session: Option<&str>) -> i32 {
         eprintln!("{}", paneless_route_hint("fno mux where", &row));
         return EXIT_NOT_PANE_HOSTED;
     };
-    // Prefer the explicit --session only if the caller gave one; else the host.
     let session = resolve_session(session_flag.as_deref(), Some(&host_session));
     let sock = match proto::socket_path(&session) {
         Ok(p) => p,

@@ -8012,6 +8012,7 @@ pub(super) fn empty_core() -> Core {
         backlog_stale: false,
         backlog_holders: HashMap::new(),
         observers: Default::default(),
+        links: Default::default(),
         backlog_join: crate::backlog_view::BacklogJoin::default(),
         claim_eligible: HashSet::new(),
         claims: HashMap::new(),
@@ -8853,39 +8854,38 @@ fn gone_decrements_the_published_client_count() {
 }
 
 #[test]
-fn is_passive_flags_only_observer_clients() {
-    let mut core = empty_core();
-    core.clients.push(client(1, 5, (24, 80), false));
+fn link_gate_opens_one_pane_for_a_tagged_passive_client() {
+    let (mut core, pane) = template_core();
+    let vt = &mut core.panes.get_mut(&pane).unwrap().vt;
+    vt.feed("line\r\n".repeat(200).as_bytes());
     core.clients.push(client(2, 5, (0, 0), true));
-    assert!(!core.is_passive(1));
-    assert!(core.is_passive(2));
-    assert!(
-        !core.is_passive(999),
-        "an unknown id is not passive (its message is processed normally)"
-    );
-}
-
-#[test]
-fn handle_drops_mutating_messages_from_a_passive_client() {
-    let mut core = empty_core();
-    core.clients.push(client(2, 5, (0, 0), true));
-    // Read-only at the server: an observer's PTY/tree-mutating messages are
-    // dropped by the guard before their handler body ever runs (x-6a14).
-    assert!(matches!(
-        core.handle(CoreMsg::Input {
-            id: 2,
-            bytes: vec![b'x']
-        }),
-        Flow::Continue
-    ));
-    assert!(matches!(
-        core.handle(CoreMsg::BlockNav {
-            id: 2,
-            pane: 1,
-            op: BlockNavOp::Rerun
-        }),
-        Flow::Continue
-    ));
+    let tick = |pane| CoreMsg::PaneScroll {
+        id: 2,
+        pane,
+        delta: 3,
+    };
+    let hello = |identity: String| crate::proto::LinkHello {
+        name: "me".into(),
+        pane,
+        identity,
+    };
+    let offset = |core: &Core| core.panes[&pane].vt.display_offset();
+    core.handle(tick(pane));
+    assert_eq!(offset(&core), 0, "an untagged observer stays read-only");
+    core.handle(CoreMsg::Link(2, hello("pid:0".into())));
+    core.handle(tick(pane));
+    assert_eq!(offset(&core), 0, "a stale pane reading is refused");
+    let child = core.panes[&pane].pty.child_pid().unwrap();
+    core.handle(CoreMsg::Link(2, hello(format!("pid:{child}"))));
+    core.handle(tick(pane));
+    assert_ne!(offset(&core), 0, "the link drives its own pane");
+    assert!(!core.links.may_send(2, &tick(pane + 1)), "only that pane");
+    let command = CoreMsg::Command {
+        id: 2,
+        cmd: Command::ReapAgents,
+    };
+    assert!(!core.links.may_send(2, &command), "and no command");
+    core.reap_pane(pane);
 }
 
 // -- Answer freshness (x-c929) ---------------------------------------------

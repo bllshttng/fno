@@ -11,6 +11,7 @@
 //! remote machine's own `fno` answers, and its exit code and receipt pass
 //! through byte-verbatim.
 
+use crate::mail::address::{split_target, target_error};
 use crate::mail_bus;
 use crate::store_remote::{self, Remote};
 use std::ffi::OsString;
@@ -31,29 +32,6 @@ pub fn seen_path(root: &std::path::Path) -> std::path::PathBuf {
 /// due time. Persisted so a daemon restart never resets a ladder.
 pub fn retry_path(root: &std::path::Path) -> std::path::PathBuf {
     root.join("mail_retry.jsonl")
-}
-
-/// What `split_target` refused.
-pub fn target_error(target: &str) -> String {
-    format!(
-        "cross-host target {target:?}: the form is <name>@<host>, one @, \
-both sides nonempty; a host alias in ssh_config covers user@host spellings"
-    )
-}
-
-/// Split `<name>@<host>` at its single `@`. Both sides nonempty; two `@`
-/// refuse (an ssh user@host spelling is not carried; an ssh_config Host
-/// alias covers those).
-pub fn split_target(target: &str) -> Result<(String, String), String> {
-    let at_count = target.matches('@').count();
-    if at_count != 1 {
-        return Err(target_error(target));
-    }
-    let (name, host) = target.split_once('@').unwrap_or(("", ""));
-    if name.is_empty() || host.is_empty() {
-        return Err(target_error(target));
-    }
-    Ok((name.to_string(), host.to_string()))
 }
 
 /// Whether a send target without `@` is a plain name this command may resolve:
@@ -181,6 +159,25 @@ pub fn sh_quote(word: &str) -> String {
 /// MagicDNS host short.
 pub const SSH_FAST_OPTIONS: [&str; 4] = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=5"];
 
+/// The long-lived posture for a terminal carried over ssh: `-t` for the far
+/// tty, and a keepalive so a dead link reads as dead in 45 seconds instead of
+/// never. No `ControlMaster`: the first ssh would own the master, so closing
+/// its pane would end every other link to that machine.
+const SSH_TTY_OPTIONS: [&str; 5] = [
+    "-t",
+    "-o",
+    "ServerAliveInterval=15",
+    "-o",
+    "ServerAliveCountMax=3",
+];
+
+/// [`ssh_argv`] for a terminal session that stays open.
+pub fn ssh_tty_argv(host: &str, words: &[String]) -> Vec<String> {
+    let mut argv = ssh_argv(host, words);
+    argv.splice(1..1, SSH_TTY_OPTIONS.map(String::from));
+    argv
+}
+
 /// The ssh relay command: the remote login shell resolves `fno` via its
 /// profile (the cargo bin dir), then execs the command with the words as
 /// positional arguments. `$0` is `sh`, so `"$@"` is the command tail. Every
@@ -307,7 +304,11 @@ pub fn resolve_from_name(tail: &SendTail) -> Result<FromName, String> {
 /// (informational provenance; a reply addresses `<name>@<host>`). The
 /// colon keeps the label to no `@`, so it never reads as a send target.
 pub fn sender_id(user: &str, host: &str, name: &str) -> String {
-    format!("{user}:{}/{}", mail_bus::normalize_host(host), name)
+    format!(
+        "{user}:{}/{}",
+        crate::mail::address::normalize_host(host),
+        name
+    )
 }
 
 /// Resolve the `fno` front door to exec on this machine. The daemon's pull
@@ -381,8 +382,8 @@ fn cmd_send(args: &[String]) -> i32 {
             return 2;
         }
     };
-    let local_host = mail_bus::normalize_host(&crate::claims::hostname());
-    if mail_bus::normalize_host(&host) == local_host {
+    let local_host = crate::name_ledger::local_bus_host();
+    if crate::mail::address::normalize_host(&host) == local_host {
         // A same-host target needs no bus row and no ssh hop: forward the
         // stripped argv to the local command, every flag the caller passed
         // intact.
@@ -606,7 +607,7 @@ pub(crate) fn mirror_sent_row(
     if let Some(s) = subject.filter(|s| !s.is_empty()) {
         row["subject"] = serde_json::json!(s);
     }
-    let live = crate::mail_cli::send::bus_log_path();
+    let live = crate::mail_paths::live_bus_log();
     let chats_dir = crate::chats::chats_dir();
     if let Err(e) = crate::announce::append_line_open(&live, &row, &chats_dir) {
         eprintln!(
@@ -683,8 +684,8 @@ fn cmd_peek(args: &[String]) -> i32 {
         eprintln!("{}", target_error(target));
         return 2;
     };
-    let local_host = mail_bus::normalize_host(&crate::claims::hostname());
-    if mail_bus::normalize_host(&host) == local_host {
+    let local_host = crate::name_ledger::local_bus_host();
+    if crate::mail::address::normalize_host(&host) == local_host {
         let mut argv = vec![fno_binary()];
         argv.push(OsString::from("agents"));
         argv.push(OsString::from("peek"));
@@ -733,8 +734,8 @@ pub(crate) fn reply_route(from: &str) -> ReplyRoute {
     if !crate::identity::is_sender_token(user) {
         return ReplyRoute::Forward;
     }
-    let host = mail_bus::normalize_host(host);
-    let local = mail_bus::normalize_host(&crate::claims::hostname());
+    let host = crate::mail::address::normalize_host(host);
+    let local = crate::mail::address::normalize_host(&crate::claims::hostname());
     if host == local {
         return ReplyRoute::Forward;
     }
@@ -936,7 +937,7 @@ fn cmd_status(_args: &[String]) -> i32 {
                 eprintln!("fno-agents mail-remote status: {e}");
                 return 1;
             }
-            let host = mail_bus::normalize_host(&crate::claims::hostname());
+            let host = crate::mail::address::normalize_host(&crate::claims::hostname());
             match mail_bus::sent_rows(&remote, &host) {
                 Ok(rows) => {
                     for (msg_id, status) in rows {
@@ -1447,7 +1448,7 @@ mod tests {
         // handle or any other shape forwards. The local-host case is built
         // from the test host, so the same asserts hold on any machine.
         use crate::mail_remote::{reply_route, ReplyRoute};
-        let test_host = crate::mail_bus::normalize_host(&crate::claims::hostname());
+        let test_host = crate::mail::address::normalize_host(&crate::claims::hostname());
         assert_eq!(
             reply_route("bb16@some-remote/nemo"),
             ReplyRoute::Send {

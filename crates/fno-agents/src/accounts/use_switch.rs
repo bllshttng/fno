@@ -29,7 +29,9 @@ const HELP: &str = "Usage: fno config accounts use [OPTIONS] PROVIDER_ID
 
   Set the active account (default scope: project).
 
-      --scope TEXT  project|global  [default: project]";
+      --scope TEXT  project|global  [default: project]
+      --login       Sign in again before the switch (managed claude only): the
+                    two-step vault login, one browser login per Keychain item.";
 
 const SWITCH_USAGE: &str =
     "usage: fno-agents spawn-overlay accounts switch  (a JSON payload on stdin: {\"id\", \"repo_root\"})";
@@ -564,6 +566,7 @@ pub fn use_account(
     repo_root: Option<&Path>,
     cwd: &Path,
     policy: PinPolicy,
+    login: bool,
     host: &dyn Host,
     outside: &dyn Outside,
 ) -> Run {
@@ -572,6 +575,12 @@ pub fn use_account(
         Ok(found) => found,
         Err(line) => return run.fail(&line),
     };
+    if login && (record.auth != "managed" || record.harness != "claude") {
+        return run.fail(&format!(
+            "error: --login signs in a managed claude account; '{id}' is {} {}",
+            record.harness, record.auth
+        ));
+    }
     let scope = if scope_word == "project" {
         Scope::Project
     } else {
@@ -593,7 +602,17 @@ pub fn use_account(
     let managed = record.auth == "managed";
     if managed {
         let root = crate::accounts::slot::store_root(cwd).unwrap_or_default();
-        let result = match switch(&record, &merged, &root, policy, host, outside) {
+        // --login skips the stored-login check: a stored login can be live but
+        // serve the wrong account, and only the two-step vault login proves
+        // which account each Keychain item holds.
+        let forced = if login {
+            Err(SwitchError::NeedsLogin(format!(
+                "--login for '{id}' needs a browser login."
+            )))
+        } else {
+            switch(&record, &merged, &root, policy, host, outside)
+        };
+        let result = match forced {
             Ok(result) => result,
             Err(SwitchError::Deferred(msg)) => {
                 run.err(&format!("switch deferred: {msg}"));
@@ -602,8 +621,9 @@ pub fn use_account(
             }
             Err(SwitchError::NeedsLogin(msg)) => {
                 if !outside.terminal() {
+                    let flag = if login { " --login" } else { "" };
                     return run.fail(&format!(
-                        "{msg} Run in a terminal: fno config accounts use {id}"
+                        "{msg} Run in a terminal: fno config accounts use {id}{flag}"
                     ));
                 }
                 if outside.login(&root, id) != 0 {
@@ -653,12 +673,27 @@ pub fn use_account(
     run.out(&format!(
         "Active account set to '{id}' (scope={scope_word})."
     ));
+    // A managed row answers from its slot stamp. Only a pointer row can land
+    // under a project layer that still names another account.
+    let hidden = !managed
+        && scope == Scope::Global
+        && records::load(repo_root, cwd).is_ok_and(|now| now.active.as_deref() != Some(id));
+    if hidden {
+        run.err(&format!(
+            "warning: the project config here still names another active account, so '{id}' is \
+             not active in this directory"
+        ));
+    }
     run
 }
 
-fn parse(args: &[String]) -> Result<Option<(Option<String>, Option<String>)>, String> {
+/// The parsed `use` line: the id, the scope word, and `--login`.
+type UseArgs = (Option<String>, Option<String>, bool);
+
+fn parse(args: &[String]) -> Result<Option<UseArgs>, String> {
     let mut id = None;
     let mut scope = None;
+    let mut login = false;
     let mut it = args.iter();
     while let Some(arg) = it.next() {
         let (flag, inline) = split_flag(arg);
@@ -668,6 +703,7 @@ fn parse(args: &[String]) -> Result<Option<(Option<String>, Option<String>)>, St
                 let value = inline.or_else(|| it.next().cloned());
                 scope = Some(value.ok_or("error: option '--scope' requires an argument")?);
             }
+            "--login" => login = true,
             f if f.starts_with('-') && f.len() > 1 => {
                 return Err(format!("error: no such option: {f}"))
             }
@@ -675,13 +711,13 @@ fn parse(args: &[String]) -> Result<Option<(Option<String>, Option<String>)>, St
             _ => return Err(format!("error: unexpected extra argument ({arg})")),
         }
     }
-    Ok(Some((id, scope)))
+    Ok(Some((id, scope, login)))
 }
 
 /// The `use` command over injected seams: the parity test's entry point.
 pub fn run_with(args: &[String], cwd: &Path, host: &dyn Host, outside: &dyn Outside) -> Run {
     let mut run = Run::default();
-    let (id, scope) = match parse(args) {
+    let (id, scope, login) = match parse(args) {
         Ok(Some(parsed)) => parsed,
         Ok(None) => {
             run.out(HELP);
@@ -705,6 +741,7 @@ pub fn run_with(args: &[String], cwd: &Path, host: &dyn Host, outside: &dyn Outs
         Some(cwd),
         cwd,
         PinPolicy::Warn,
+        login,
         host,
         outside,
     )

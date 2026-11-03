@@ -144,6 +144,8 @@ pub mod mouse;
 #[cfg(feature = "full")]
 pub mod mux_cli;
 #[cfg(feature = "full")]
+pub mod mux_link;
+#[cfg(feature = "full")]
 pub mod mux_rows;
 #[cfg(feature = "full")]
 pub mod needs_overlay;
@@ -183,6 +185,8 @@ mod path_migration_tests;
 pub mod paths_route;
 #[cfg(feature = "full")]
 pub mod popup;
+#[cfg(feature = "full")]
+pub mod pr_diff;
 #[cfg(feature = "full")]
 pub mod process_admission;
 pub mod product_boundary;

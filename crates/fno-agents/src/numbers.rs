@@ -435,7 +435,7 @@ fn beat(cwd: &Path) -> Result<usize, String> {
         &db_path(),
         remote.as_ref(),
         wanted(&decisions.rows, &asked, &extra),
-        &crate::mail_bus::normalize_host(&crate::claims::hostname()),
+        &crate::mail::address::normalize_host(&crate::claims::hostname()),
     )
 }
 

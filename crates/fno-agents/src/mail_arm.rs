@@ -98,7 +98,7 @@ pub struct PullOutcome {
 /// One beat: pull, then flush, then expire. The legs are independent: a
 /// pull failure does not stop the flush from draining the local outbox.
 pub fn beat(remote: &Remote) -> Result<PullOutcome, String> {
-    let host = mail_bus::normalize_host(&crate::claims::hostname());
+    let host = crate::name_ledger::local_bus_host();
     let mut outcome = PullOutcome {
         delivered: 0,
         flushed: 0,
@@ -212,7 +212,7 @@ fn sender_trusted(home: &std::path::Path, row: &BusRow) -> Result<(), Refusal> {
             .split('/')
             .next()
             .and_then(|head| head.rsplit([':', '@']).next())
-            .map(mail_bus::normalize_host);
+            .map(crate::mail::address::normalize_host);
         if claimed.as_deref() != Some(row.from_host.as_str()) {
             return Err(Refusal::Untrusted(format!(
                 "from_id {:?} names a host other than the signing host {:?}",

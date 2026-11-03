@@ -8,6 +8,7 @@ The three sideline-adjacent actions sit on three different keys, and their names
 | `prefix+w` | `selector` | OpenSelector | The sideline row selector: cursor over the sideline's own rows. |
 | `prefix+b` | `toggle-sideline` | TogglePanel | Sideline panel visibility. |
 | `prefix+q` | `notifications-bell` | ToggleBell | Questions and fleet announcements in the notifications panel. |
+| `prefix+I` | `review-pr` | OpenReview | The PR review as a right split beside the focused chat pane. The chat stays live. |
 
 ## Inside the notifications panel
 
@@ -24,6 +25,17 @@ The cost, accepted: the sequence is consumed by the mux and never forwarded to t
 A bare `Esc` is the first byte of the chord, so the mux holds it briefly to see what follows. If nothing follows within 40ms, the Esc forwards to the pane exactly as typed. Esc-to-cancel in vim or fzf never waits on the next keystroke. The chord itself arrives as one read, so the hold never costs a real chord.
 
 Emulators: iTerm2, Ghostty, kitty and WezTerm emit the xterm CSI form. Verify yours before relying on it: run `cat -v`, press `Ctrl+Opt+Left`, expect `^[[1;7D`. If your emulator sends something else, bind what it sends.
+
+## Inside the PR review
+
+`d` on a backlog node's detail opens the diff of the node's newest unmerged PR, full screen. If a seat's node has a PR, `r` on its org page opens the same review. `Esc` goes back to that page.
+
+`prefix+I` on a focused chat pane opens the same review as a right split. It shows that session's node and PR, or `no PR yet`. `prefix+I` again closes it. Inside the split, `I` closes it too. A click on the chat pane gives the keyboard back, and a click on the split takes it again. Drag the split's left edge to resize it, or press `-` and `+` inside it. The width stays between 20 and 80 percent and holds for the session. The file viewer panel drags the same way.
+
+- `j`/`k` or arrows: move one row. `PageUp`/`PageDown`: move one screen. `n`/`p`: next or previous file.
+- `c`: comment on the row, or edit its comment. `Enter` stages the comment, and `Esc` drops the input. `x`: remove the row's comment.
+- `S`: send every staged comment as one blocking finding on the node. A success clears the drafts, and the notice is the engine's receipt.
+- `Esc` (or `I` in the split): close. With unsent comments, the first `Esc` warns and the second closes and drops them.
 
 ## Inside the navigator
 

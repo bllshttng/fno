@@ -39,7 +39,7 @@ pub fn plan_handoff(
     let Some(target) = args.first() else {
         return Err(usage());
     };
-    let (successor, host) = crate::mail_remote::split_target(target)
+    let (successor, host) = crate::mail::address::split_target(target)
         .map_err(|_| format!("the target is <name>@<host>: {target:?} has no @host split"))?;
     let scope = scope.trim().to_string();
     if holder.1.is_none() {

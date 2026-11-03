@@ -11,10 +11,11 @@ pub(crate) struct PaneInputRequest {
 
 impl Core {
     pub(super) fn handle_input(&mut self, id: u64, bytes: Vec<u8>) {
-        let focus = self
-            .client_view(id)
-            .and_then(|view| self.viewed_tab(view))
-            .map(|tab| tab.focus);
+        let focus = self.links.pane(id).or_else(|| {
+            self.client_view(id)
+                .and_then(|view| self.viewed_tab(view))
+                .map(|tab| tab.focus)
+        });
         if let Some(focus) = focus {
             if let Some(&holder) = self.claims.get(&focus) {
                 if pid_alive(holder) {

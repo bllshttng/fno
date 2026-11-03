@@ -50,7 +50,6 @@ crossing	crates/fno-agents/src/lead_wake_triggers.rs	let bin = crate::scrape::fn
 crossing	crates/fno-agents/src/loop_dispatch.rs	return Command::new(crate::scrape::fno_bin());
 crossing	crates/fno-agents/src/loop_target.rs	let fno_bin = crate::loopcheck::loopcheck_fno_bin();
 crossing	crates/fno-agents/src/loopcheck.rs	pub(crate) fn loopcheck_fno_bin() -> String {
-crossing	crates/fno-agents/src/loopcheck.rs	let fno_bin = loopcheck_fno_bin();
 crossing	crates/fno-agents/src/loopcheck.rs	&loopcheck_fno_bin(),
 crossing	crates/fno-agents/src/loopcheck/args.rs	let mut fno_bin = super::loopcheck_fno_bin();
 crossing	crates/fno-agents/src/loopcheck/coverage_gate.rs	let fno_bin = loopcheck_fno_bin();
@@ -63,9 +62,8 @@ crossing	crates/fno-agents/src/mail_inject.rs	let mut cmd = std::process::Comman
 crossing	crates/fno-agents/src/mail_remote.rs	crate::scrape::fno_bin()
 crossing	crates/fno-agents/src/merge_close.rs	let mut cmd = std::process::Command::new(crate::scrape::fno_bin());
 crossing	crates/fno-agents/src/merge_gates.rs	let out = Command::new(crate::scrape::fno_bin())
+crossing	crates/fno-agents/src/notify_dispatch.rs	let bin = crate::scrape::fno_bin();
 crossing	crates/fno-agents/src/observer/mod.rs	let spawned = std::process::Command::new(crate::scrape::fno_bin())
-crossing	crates/fno-agents/src/operator_notice.rs	let fno = crate::scrape::fno_bin();
-crossing	crates/fno-agents/src/operator_notice.rs	let fno = crate::scrape::fno_bin();
 crossing	crates/fno-agents/src/pane_spawn/mod.rs	Command::new(fno_bin())
 crossing	crates/fno-agents/src/pane_spawn/mod.rs	let bin = fno_bin().to_string_lossy().into_owned();
 crossing	crates/fno-agents/src/pane_stop.rs	let output = std::process::Command::new(crate::scrape::fno_bin())
@@ -139,7 +137,6 @@ resolver	crates/fno-agents/src/harness_reader.rs	pub fn establish(harness: &str)
 resolver	crates/fno-agents/src/hook/test_run_guard.rs	fn is_footnote_checkout(root: &Path) -> bool {
 resolver	crates/fno-agents/src/loop_dispatch.rs	pub(crate) fn fno_cmd(fno_bin: &str) -> Command {
 resolver	crates/fno-agents/src/loopcheck.rs	pub(crate) fn loopcheck_fno_bin() -> String {
-resolver	crates/fno-agents/src/loopcheck.rs	fn best_effort_notify(title: &str, body: &str) {
 resolver	crates/fno-agents/src/loops_pause.rs	fn fno_cli_binary() -> PathBuf {
 resolver	crates/fno-agents/src/mail_cli/pane_prepare.rs	fn run_mux_captured(args: &[String], timeout_s: u64) -> Result<Output, String> {
 resolver	crates/fno-agents/src/mcp/client.rs	fn state_log_path() -> PathBuf {
@@ -160,7 +157,7 @@ resolver	crates/fno/src/doctor_update.rs	fn verify_uv_install() -> bool {
 resolver	crates/fno/src/doctor_update.rs	fn has_shipped_pyc(td: &Path) -> bool {
 resolver	crates/fno/src/doctor_update.rs	fn live_tool_env_processes() -> Vec<String> {
 resolver	crates/fno/src/doctor_update.rs	fn read_source_wire(source: &Path) -> Option<u32> {
-resolver	crates/fno/src/repo_lint.rs	pub fn plans_content_dir_from(root: &Path) -> Option<PathBuf> {
 resolver	crates/fno/src/mux_cli/pane_prepare.rs	pub(super) fn prepare_pane_bytes(
+resolver	crates/fno/src/repo_lint.rs	pub fn plans_content_dir_from(root: &Path) -> Option<PathBuf> {
 resolver	crates/fno/src/server.rs	pub(crate) fn fno_bin() -> PathBuf {
 resolver	crates/fno/src/squad_store_tests.rs	fn build_tree_marker_detection_is_pure_over_path() {

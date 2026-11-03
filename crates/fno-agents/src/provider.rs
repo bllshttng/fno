@@ -31,7 +31,7 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use crate::envelope::{Envelope, JsonEnvelope, NoEnvelope};
+use crate::mail::frame::{Envelope, JsonEnvelope, NoEnvelope};
 use crate::readiness::{
     AgyReadinessDetector, CodexReadinessDetector, GeminiReadinessDetector,
     OpencodeReadinessDetector, ReadinessDetector,

@@ -73,9 +73,28 @@ pub fn build_dir_env_value(root: &Path) -> String {
     format!("{}/{{workspace-path-hash}}", fno_build_base(root).display())
 }
 
-/// Set CARGO_BUILD_BUILD_DIR when the process has none. A preset wins.
-/// Env mutation: call only while the process is single-threaded.
+/// `root` is a fleet-cargo checkout: its `.cargo/config.toml` names the
+/// checkout's own rustc wrapper and that wrapper file is present. Only such
+/// a cwd earns the fleet fill; a foreign repo's cargo must keep its own
+/// build-dir defaults, or a fleet pane spawned there inherits the fno base
+/// and puts foreign intermediates under ~/.fno where the reclaim lanes
+/// sweep them. The plugin-source predicate of the same shape answers a
+/// different question and stays private in hook::test_run_guard.
+pub fn is_fleet_cargo_checkout(root: &Path) -> bool {
+    let Ok(text) = std::fs::read_to_string(root.join(".cargo/config.toml")) else {
+        return false;
+    };
+    text.contains("cargo-rustc-wrapper.sh")
+        && root.join("scripts/lib/cargo-rustc-wrapper.sh").is_file()
+}
+
+/// Set CARGO_BUILD_BUILD_DIR when the process has none and `root` is a
+/// footnote checkout. A preset wins. Env mutation: call only while the
+/// process is single-threaded.
 pub fn fill_build_dir_env(root: &Path) {
+    if !is_fleet_cargo_checkout(root) {
+        return;
+    }
     if std::env::var_os("CARGO_BUILD_BUILD_DIR").is_none() {
         std::env::set_var("CARGO_BUILD_BUILD_DIR", build_dir_env_value(root));
     }
@@ -99,9 +118,13 @@ pub fn sccache_bin() -> Option<PathBuf> {
 /// Set SCCACHE_DIR when the process has none and sccache is installed. A
 /// preset wins. SCCACHE_IDLE_TIMEOUT gets the same never-stop default the
 /// rustc wrapper exports: a server that exits on idle mid-build falls compiles
-/// back to local rustc under fleet load. Env mutation: call only while the
-/// process is single-threaded.
+/// back to local rustc under fleet load. Only a footnote-checkout cwd earns
+/// the fill, for the same reason as the build-dir fill. Env mutation: call
+/// only while the process is single-threaded.
 pub fn fill_sccache_env(root: &Path) {
+    if !is_fleet_cargo_checkout(root) {
+        return;
+    }
     if sccache_bin().is_none() {
         return;
     }
@@ -110,6 +133,24 @@ pub fn fill_sccache_env(root: &Path) {
     }
     if std::env::var_os("SCCACHE_IDLE_TIMEOUT").is_none() {
         std::env::set_var("SCCACHE_IDLE_TIMEOUT", "0");
+    }
+}
+
+/// The keeper lane's env posture for the pane it is about to host. A
+/// footnote-checkout pane keeps the fleet fill (both fills above); a foreign
+/// pane gets a scrub instead of a skipped fill: the worker inherits the
+/// daemon's env, where the fill already ran, and preset-wins would otherwise
+/// pass the fno base down to a repo whose cargo must keep its own target
+/// dir. SCCACHE_IDLE_TIMEOUT stays put: a behavior default, not a path under
+/// ~/.fno, and the wrapper re-exports it. Env mutation: call only while the
+/// process is single-threaded.
+pub fn fill_pane_env(root: &Path) {
+    if is_fleet_cargo_checkout(root) {
+        fill_build_dir_env(root);
+        fill_sccache_env(root);
+    } else {
+        std::env::remove_var("CARGO_BUILD_BUILD_DIR");
+        std::env::remove_var("SCCACHE_DIR");
     }
 }
 
@@ -2405,5 +2446,112 @@ mod tests {
             "no row line names a source dir named target: {:?}",
             rep.lines
         );
+    }
+
+    // --- footnote-checkout gate -------------------------------------------
+
+    /// A footnote-shaped fixture: wrapper-naming config plus the wrapper file.
+    fn plant_footnote(root: &Path) {
+        std::fs::create_dir_all(root.join(".cargo")).unwrap();
+        std::fs::write(
+            root.join(".cargo/config.toml"),
+            b"[build]\nrustc-wrapper = \"scripts/lib/cargo-rustc-wrapper.sh\"\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(root.join("scripts/lib")).unwrap();
+        std::fs::write(
+            root.join("scripts/lib/cargo-rustc-wrapper.sh"),
+            b"#!/bin/sh\n",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn is_fleet_cargo_checkout_requires_wrapper_config_and_file() {
+        let root = temp_root("gate-fs");
+        assert!(!is_fleet_cargo_checkout(&root), "no config earns no pass");
+        std::fs::create_dir_all(root.join(".cargo")).unwrap();
+        std::fs::write(
+            root.join(".cargo/config.toml"),
+            b"[build]\nincremental = false\n",
+        )
+        .unwrap();
+        assert!(
+            !is_fleet_cargo_checkout(&root),
+            "config without the wrapper line earns no pass"
+        );
+        plant_footnote(&root);
+        assert!(
+            is_fleet_cargo_checkout(&root),
+            "wrapper-naming config plus wrapper file passes"
+        );
+    }
+
+    #[test]
+    fn fill_pane_env_footnote_fills_and_foreign_scrubs() {
+        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let saved_build = std::env::var_os("CARGO_BUILD_BUILD_DIR");
+        let saved_scc = std::env::var_os("SCCACHE_DIR");
+        let saved_idle = std::env::var_os("SCCACHE_IDLE_TIMEOUT");
+        let saved_base = std::env::var_os("FNO_CARGO_TARGETS_BASE");
+        let root = temp_root("pane-fn");
+        plant_footnote(&root);
+        let foreign = temp_root("pane-for");
+        let base = temp_root("pane-base").join("bd");
+        std::env::remove_var("CARGO_BUILD_BUILD_DIR");
+        std::env::remove_var("SCCACHE_DIR");
+        std::env::set_var("FNO_CARGO_TARGETS_BASE", &base);
+        std::env::set_var("SCCACHE_IDLE_TIMEOUT", "60");
+        fill_pane_env(&root);
+        let v = std::env::var_os("CARGO_BUILD_BUILD_DIR");
+        assert!(
+            v.as_deref()
+                .map(|s| s.to_string_lossy().ends_with("/{workspace-path-hash}"))
+                == Some(true),
+            "a footnote pane earns the fill: {v:?}"
+        );
+        std::env::remove_var("CARGO_BUILD_BUILD_DIR");
+        std::env::set_var("CARGO_BUILD_BUILD_DIR", "/own/base/hash");
+        std::env::set_var("SCCACHE_DIR", "/own/sccache");
+        fill_pane_env(&root);
+        assert_eq!(
+            std::env::var_os("CARGO_BUILD_BUILD_DIR").as_deref(),
+            Some(std::ffi::OsStr::new("/own/base/hash")),
+            "a footnote pane honors a preset"
+        );
+        std::env::set_var("CARGO_BUILD_BUILD_DIR", "/own/base/hash");
+        fill_pane_env(&foreign);
+        assert_eq!(
+            std::env::var_os("CARGO_BUILD_BUILD_DIR").as_deref(),
+            None,
+            "a foreign pane scrubs the inherited fill"
+        );
+        assert_eq!(
+            std::env::var_os("SCCACHE_DIR").as_deref(),
+            None,
+            "a foreign pane scrubs SCCACHE_DIR too"
+        );
+        assert_eq!(
+            std::env::var_os("SCCACHE_IDLE_TIMEOUT").as_deref(),
+            Some(std::ffi::OsStr::new("60")),
+            "the idle timeout default is untouched by the scrub"
+        );
+        for (k, v) in [
+            ("CARGO_BUILD_BUILD_DIR", saved_build),
+            ("SCCACHE_DIR", saved_scc),
+            ("SCCACHE_IDLE_TIMEOUT", saved_idle),
+        ] {
+            match v {
+                Some(v) => std::env::set_var(k, &v),
+                None => std::env::remove_var(k),
+            }
+        }
+        match saved_base {
+            Some(v) => std::env::set_var("FNO_CARGO_TARGETS_BASE", &v),
+            None => std::env::remove_var("FNO_CARGO_TARGETS_BASE"),
+        }
+        std::fs::remove_dir_all(&root).ok();
+        std::fs::remove_dir_all(&foreign).ok();
+        std::fs::remove_dir_all(&base).ok();
     }
 }

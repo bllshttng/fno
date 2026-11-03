@@ -12,7 +12,7 @@ use crate::paths::AgentsHome;
 use crate::spawn_context::resolve_self_identity;
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// An explicit `--from-name`, even the empty string,
 /// wins verbatim; otherwise the resolved self handle, floored to the bare
@@ -46,12 +46,6 @@ fn read_bus(bus: &Path) -> Vec<Value> {
                 .all(|k| m.get(k).and_then(Value::as_str).is_some())
         })
         .collect()
-}
-
-fn bus_dir(home: &AgentsHome) -> PathBuf {
-    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let root = crate::agents_config::state_dir(&cwd).unwrap_or_else(|| home.root().to_path_buf());
-    crate::intel::bus_dir_of(&root)
 }
 
 fn str_field(m: &Value, key: &str, blank: &str) -> String {
@@ -102,7 +96,7 @@ pub fn run(args: &[String]) -> i32 {
     };
 
     let handle = stamp_from(from_name.as_deref());
-    let bus = bus_dir(&AgentsHome::from_env());
+    let bus = crate::mail_paths::state_bus_dir(&AgentsHome::from_env());
     let msgs = read_bus(&bus);
 
     let Some(target) = msgs
@@ -129,8 +123,8 @@ pub fn run(args: &[String]) -> i32 {
     // A tombstone retracts only the bus copy. Once the bytes sit with the
     // recipient's harness (accepted, queued there, or typed at its prompt)
     // a tombstone would print success while retracting nothing.
-    use crate::mail_delivery_state::{DeliveryState, Parked};
-    match crate::mail_delivery_state::newest_state(&msgs, &msg_id) {
+    use crate::mail::state::{DeliveryState, Parked};
+    match crate::mail::state::newest_state(&msgs, &msg_id) {
         state @ (DeliveryState::AcceptedNewTurn { .. } | DeliveryState::AcceptedSteer { .. }) => {
             eprintln!(
                 "{msg_id} is {}: the recipient's harness took it, so it cannot be withdrawn. Send a correction.",

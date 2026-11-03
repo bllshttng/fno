@@ -5,7 +5,8 @@
 //! may be an earlier queued prompt with our message still behind it. Text
 //! in the composer is a draft. The bus keeps the history as append-only
 //! `kind: state` rows (`meta.of` names the message), and a reader folds
-//! them with [`newest_state`].
+//! them with [`newest_state`]. The writers that append those rows sit outside
+//! this module (`mail_receipt`): they need ids, clocks and the chats store.
 
 use serde_json::{json, Value};
 
@@ -191,42 +192,6 @@ impl DeliveryState {
             },
             _ => DeliveryState::Queued,
         }
-    }
-}
-
-/// A `kind: state` bus row recording that message `of` reached `state`.
-pub fn state_row(of: &str, state: &DeliveryState, from: &str, to: &str) -> Value {
-    let id = crate::announce::new_msg_id();
-    let mut meta = state.to_json();
-    meta["of"] = json!(of);
-    json!({
-        "v": 1,
-        "id": id,
-        "thread": id,
-        "ts": crate::graph_store::now_isoformat(),
-        "from": from,
-        "to": to,
-        "kind": STATE_KIND,
-        "body": "",
-        "meta": meta,
-    })
-}
-
-/// Append a [`state_row`] to the live bus segment; a failure only warns,
-/// because the staged message row already holds the body.
-pub fn record_state(bus: &std::path::Path, of: &str, state: &DeliveryState, from: &str, to: &str) {
-    let row = state_row(of, state, from, to);
-    let live = bus.join("messages.jsonl");
-    if let Err(e) = crate::announce::append_line_open(&live, &row, &crate::chats::chats_dir()) {
-        eprintln!("delivery state row failed: {e}");
-    }
-}
-
-/// [`record_state`] on the bus the mail readers use (`FNO_BUS_DIR`, then
-/// the inbox root, then the state root); no resolvable bus records nothing.
-pub fn record(of: &str, state: &DeliveryState, from: &str, to: &str) {
-    if let Some(bus) = crate::mail_cli::ack::bus_dir() {
-        record_state(&bus, of, state, from, to);
     }
 }
 

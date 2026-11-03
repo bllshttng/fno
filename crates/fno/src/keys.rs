@@ -449,6 +449,9 @@ pub enum Event {
     /// chrome and consumes no keys; a click deep-links a row and the border
     /// drags (interpreted by the client's view layer, like OpenAnswers).
     OpenFeed,
+    /// Toggle the PR review split beside the focused chat pane (I): that
+    /// session's PR diff and line comments, with the chat live on the left.
+    OpenReview,
     /// Focus the activity feed panel, opening it first when it is closed.
     /// Distinct from `OpenFeed`: the panel consumes no keys until this fires.
     FocusFeed,
@@ -1296,6 +1299,13 @@ fn default_bindings() -> Vec<KeyBinding> {
         ),
         b(b'e', "feed", OpenFeed, Global, "activity feed"),
         b(
+            b'I',
+            "review-pr",
+            OpenReview,
+            Global,
+            "PR review beside the pane",
+        ),
+        b(
             b'E',
             "feedfocus",
             FocusFeed,
@@ -1391,7 +1401,7 @@ fn default_bindings() -> Vec<KeyBinding> {
             "cycle-agent-group",
             CycleAgentGroup,
             Global,
-            "group agents by workspace, lead, cwd, status, or harness",
+            "group agents by workspace, lead, cwd, status, harness, or none",
         ),
         b(
             b'Y',

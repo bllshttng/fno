@@ -330,6 +330,7 @@ pub(crate) fn keys_help() -> Vec<Line> {
         "   PageUp/PageDown  scroll the right pane",
         "   enter            open a lead \u{b7} attach a seat on this machine",
         "   space x P        peek, stop or portal a seat on this machine",
+        "   r                review the PR diff of a seat whose node has a PR",
         "   W opens the web command page \u{b7} F full screen \u{b7} V cycle views \u{b7} ? keys \u{b7} esc close",
     ]
     .into_iter()

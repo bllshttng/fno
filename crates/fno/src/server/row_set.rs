@@ -387,6 +387,7 @@ impl Core {
                                 a,
                             );
                             AgentRow {
+                                remote: None,
                                 harness: a.harness.clone(),
                                 model: self.row_model(a),
                                 route: a.route.clone(),
@@ -479,6 +480,7 @@ impl Core {
                             // pane labels (v22) so the two agree.
                             let e = pane_entry;
                             AgentRow {
+                                remote: None,
                                 harness: None,
                                 model: None,
                                 route: None,
@@ -603,6 +605,7 @@ impl Core {
                         a,
                     );
                     out.push(AgentRow {
+                        remote: None,
                         harness: a.harness.clone(),
                         model: self.row_model(a),
                         route: a.route.clone(),
@@ -694,6 +697,7 @@ impl Core {
                         a,
                     );
                     out.push(AgentRow {
+                        remote: None,
                         harness: a.harness.clone(),
                         model: self.row_model(a),
                         route: a.route.clone(),
@@ -856,6 +860,7 @@ impl Core {
             // still renders (the "every row" wire contract; codex review).
             let cwd_base = cwd_basename(&r.cwd);
             out.push(AgentRow {
+                remote: None,
                 // squads.json records no lane axes (ExternalLifecycle carries
                 // none), so the row renders default-colored.
                 harness: None,

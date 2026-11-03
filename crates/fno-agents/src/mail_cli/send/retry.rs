@@ -4,12 +4,12 @@
 //! state, never a second copy.
 
 use super::engine::{deliver_live, load_and_resolve_target, registered_family1_state};
-use crate::mail_delivery_state::{newest_state, DeliveryState};
+use crate::mail::state::{newest_state, DeliveryState};
 use serde_json::Value;
 
 /// The retry of message `id`: `Err` names why it did not run at all.
 pub(crate) fn retry_message(id: &str) -> Result<DeliveryState, String> {
-    let bus = crate::mail_cli::ack::bus_dir().ok_or("no mail bus to read")?;
+    let bus = crate::mail_paths::state_bus_dir_opt().ok_or("no mail bus to read")?;
     let text = std::fs::read_to_string(bus.join("messages.jsonl"))
         .map_err(|e| format!("mail bus unreadable: {e}"))?;
     let rows: Vec<Value> = text
@@ -47,7 +47,7 @@ pub(crate) fn retry_message(id: &str) -> Result<DeliveryState, String> {
         }
         other => other,
     };
-    crate::mail_delivery_state::record(id, &state, &from, &to);
+    crate::mail_receipt::record(id, &state, &from, &to);
     if state.reached() {
         let mut hosted = row.clone();
         if let Some(obj) = hosted.as_object_mut() {
