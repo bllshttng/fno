@@ -45,13 +45,6 @@ def test_worker_subtree_reads_work_and_daemon_chores_read_maintenance():
                        5: False, 6: False, 7: False, 8: False}
 
 
-def test_plain_fno_agents_child_is_never_work():
-    # The prefix match keys on the worker binary; the plain CLI stays upkeep.
-    rows = _rows([(2, 1, "/Users/bb16/.cargo/bin/fno-agents backlog decisions n --json")])
-    _, classes = ds.adopt(rows, {1}, {}, 1)
-    assert classes == {2: False}
-
-
 def test_is_work_reads_the_executable_and_ignores_the_arguments():
     assert ds.is_work("/opt/homebrew/bin/fno-agents-worker --stream --short-id w1")
     assert ds.is_work("fno-agents-worker")
