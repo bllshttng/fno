@@ -5,6 +5,7 @@
 //! shell chaining, so a worktree session runs them without a compound-command
 //! refusal.
 
+use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
@@ -51,14 +52,19 @@ fn split_spec(spec: &str) -> Option<(&str, &str)> {
     (rev_is_safe(rev) && !path.is_empty()).then_some((rev, path))
 }
 
-fn git_passthrough(cwd: &Path, args: &[&str], label: &str) -> i32 {
-    let status = Command::new("git")
+fn git_passthrough(cwd: &Path, args: &[&str], label: &str, out: &mut dyn Write) -> i32 {
+    let result = Command::new("git")
         .args(args)
         .current_dir(cwd)
         .stdin(Stdio::null())
-        .status();
-    match status {
-        Ok(s) if s.success() => 0,
+        .stderr(Stdio::inherit())
+        .output();
+    match result {
+        Ok(o) if o.status.success() => {
+            // A closed pipe (`| head`) ends the read quietly, like git itself.
+            let _ = out.write_all(&o.stdout);
+            0
+        }
         Ok(_) => {
             eprintln!("{label}: git could not read that revision or path");
             4
@@ -72,10 +78,10 @@ fn git_passthrough(cwd: &Path, args: &[&str], label: &str) -> i32 {
 
 pub fn run(args: &[String]) -> i32 {
     let cwd = std::env::current_dir().unwrap_or_else(|_| ".".into());
-    run_in(&cwd, args)
+    run_in(&cwd, args, &mut std::io::stdout())
 }
 
-fn run_in(cwd: &Path, args: &[String]) -> i32 {
+fn run_in(cwd: &Path, args: &[String], out: &mut dyn Write) -> i32 {
     let Some(sub) = args.first() else {
         print_help();
         return 0;
@@ -105,7 +111,7 @@ fn run_in(cwd: &Path, args: &[String]) -> i32 {
             eprintln!("fno do show: wants <rev>:<path>, got {spec:?}");
             return 3;
         };
-        return git_passthrough(cwd, &["show", &format!("{rev}:{path}")], "fno do show");
+        return git_passthrough(cwd, &["show", &format!("{rev}:{path}")], "fno do show", out);
     }
     let (revs, paths) = match tail.iter().position(|a| a == "--") {
         Some(at) => (&tail[..at], &tail[at + 1..]),
@@ -121,7 +127,7 @@ fn run_in(cwd: &Path, args: &[String]) -> i32 {
     }
     let mut git_args: Vec<&str> = vec!["diff", rev_a, rev_b, "--"];
     git_args.extend(paths.iter().map(String::as_str));
-    git_passthrough(cwd, &git_args, "fno do diff")
+    git_passthrough(cwd, &git_args, "fno do diff", out)
 }
 
 #[cfg(test)]
@@ -170,23 +176,31 @@ mod tests {
     #[test]
     fn show_and_diff_read_real_history() {
         let repo = repo_with_two_commits();
-        assert_eq!(run_in(repo.path(), &words(&["show", "v1:f.txt"])), 0);
-        assert_eq!(run_in(repo.path(), &words(&["show", "v1:missing"])), 4);
+        let run = |a: &[&str]| {
+            let mut out = Vec::new();
+            let code = run_in(repo.path(), &words(a), &mut out);
+            (code, String::from_utf8(out).unwrap())
+        };
+        assert_eq!(run(&["show", "v1:f.txt"]), (0, "one\n".to_string()));
+        assert_eq!(run(&["show", "v1:missing"]).0, 4);
+        let (code, diff) = run(&["diff", "v1", "HEAD", "--", "f.txt"]);
+        assert_eq!(code, 0);
+        assert!(diff.contains("-one\n+two\n"), "diff body: {diff}");
         assert_eq!(
-            run_in(repo.path(), &words(&["diff", "v1", "HEAD", "--", "f.txt"])),
-            0
+            run(&["diff", "v1", "HEAD", "--", "other.txt"]),
+            (0, String::new())
         );
-        assert_eq!(run_in(repo.path(), &words(&["diff", "v1", "nope"])), 4);
+        assert_eq!(run(&["diff", "v1", "nope"]).0, 4);
     }
 
     #[test]
     fn usage_errors_exit_three_and_unknown_word_exits_two() {
-        let cwd = Path::new(".");
-        assert_eq!(run_in(cwd, &words(&["show"])), 3);
-        assert_eq!(run_in(cwd, &words(&["show", "a", "b"])), 3);
-        assert_eq!(run_in(cwd, &words(&["diff", "only-one"])), 3);
-        assert_eq!(run_in(cwd, &words(&["diff", "-x", "HEAD"])), 3);
-        assert_eq!(run_in(cwd, &words(&["frobnicate"])), 2);
-        assert_eq!(run_in(cwd, &words(&["show", "--help"])), 0);
+        let run = |a: &[&str]| run_in(Path::new("."), &words(a), &mut Vec::new());
+        assert_eq!(run(&["show"]), 3);
+        assert_eq!(run(&["show", "a", "b"]), 3);
+        assert_eq!(run(&["diff", "only-one"]), 3);
+        assert_eq!(run(&["diff", "-x", "HEAD"]), 3);
+        assert_eq!(run(&["frobnicate"]), 2);
+        assert_eq!(run(&["show", "--help"]), 0);
     }
 }
