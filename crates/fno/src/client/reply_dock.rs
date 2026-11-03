@@ -29,7 +29,11 @@ impl View {
     /// Where the peek paints: the bottom half of the sideline column when
     /// docked, else centered in the content viewport. The draw and the hit
     /// test both read this one layout.
-    pub(super) fn peek_layout(&self, chrome: &chrome::Chrome, lines: &[String]) -> OverlayLayout {
+    pub(super) fn peek_layout<S: crate::text_style::ToTLine>(
+        &self,
+        chrome: &chrome::Chrome,
+        lines: &[S],
+    ) -> OverlayLayout {
         if !self.peek_is_docked() {
             let (origin, dims) = self.overlay_viewport();
             return layout_lines_overlay(origin, dims, chrome, lines, None, OverlayAnchor::Center);

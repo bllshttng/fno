@@ -72,7 +72,7 @@ impl TextStyle {
 
 /// One styled segment.
 #[derive(Clone)]
-pub(crate) struct TSeg {
+pub struct TSeg {
     pub(crate) text: String,
     pub(crate) role: TextStyle,
 }
@@ -81,7 +81,7 @@ pub(crate) struct TSeg {
 /// this is the cursor's row - the explicit highlight band pair the
 /// sideline wears (a real fg/bg pair, zero DIM inside the band).
 #[derive(Clone, Debug)]
-pub(crate) struct TLine {
+pub struct TLine {
     pub(crate) text: String,
     pub(crate) roles: Vec<TextStyle>,
     /// The role for chars past the role walk (whole-line constructors).
@@ -101,7 +101,7 @@ fn push_seg(text: &mut String, roles: &mut Vec<TextStyle>, seg: &TSeg) {
 
 /// Anything a lines overlay can show as one styled line. A bare string is a
 /// plain `Item` line; a view that wants levels builds a [`TLine`].
-pub(crate) trait ToTLine {
+pub trait ToTLine {
     fn to_tline(&self) -> TLine;
 }
 
@@ -124,6 +124,33 @@ impl ToTLine for &str {
 }
 
 impl TLine {
+    /// A whole line at one level.
+    pub(crate) fn line(style: TextStyle, s: impl Into<String>) -> TLine {
+        let mut l = TLine::plain(s);
+        l.default_role = style;
+        l
+    }
+
+    /// A line from `(text, level)` parts.
+    pub(crate) fn parts(parts: &[(&str, TextStyle)]) -> TLine {
+        let segs: Vec<TSeg> = parts
+            .iter()
+            .map(|(text, role)| TSeg {
+                text: (*text).to_string(),
+                role: *role,
+            })
+            .collect();
+        TLine::of(&segs)
+    }
+
+    /// Drop trailing spaces and their roles.
+    pub(crate) fn trim_end(mut self) -> TLine {
+        let keep = self.text.trim_end().chars().count();
+        self.text.truncate(self.text.trim_end().len());
+        self.roles.truncate(keep);
+        self
+    }
+
     /// Drop the first `n` chars and their roles.
     pub(crate) fn strip_front(mut self, n: usize) -> TLine {
         let cut = self
@@ -330,5 +357,25 @@ impl TLine {
             band: self.band,
             join: self.join,
         }
+    }
+}
+
+/// A line borrows as its text, so `[TLine]::join` and string-shaped helpers
+/// keep working.
+impl std::borrow::Borrow<str> for TLine {
+    fn borrow(&self) -> &str {
+        &self.text
+    }
+}
+
+impl From<&str> for TLine {
+    fn from(s: &str) -> TLine {
+        TLine::plain(s)
+    }
+}
+
+impl From<String> for TLine {
+    fn from(s: String) -> TLine {
+        TLine::plain(s)
     }
 }

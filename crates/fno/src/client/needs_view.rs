@@ -7,6 +7,7 @@
 //! a session through one deep-link path.
 
 use super::*;
+use crate::text_style::{TLine, TextStyle};
 
 impl View {
     /// The roster row a fold item joins to: a name / node / session-id match
@@ -107,24 +108,25 @@ pub(crate) fn needs_overlay_lines(
     sel: usize,
     mine_footer: NeedsFooter,
     need_footer: NeedsFooter,
-) -> Vec<String> {
+) -> Vec<TLine> {
     let mine_rows = &projection.rows[..projection.mine_shown];
     let need_rows = &projection.rows[projection.mine_shown..];
 
-    let mut lines = vec![pad_to(
+    let styled = |style: TextStyle, text: &str| TLine::line(style, pad_to(text, ANSWER_OVERLAY_W));
+    let mut lines = vec![styled(
+        TextStyle::Title,
         " needs me · digit answers · n/N cycle · ⏎ goto · q close",
-        ANSWER_OVERLAY_W,
     )];
 
-    lines.push(pad_to(" MINE", ANSWER_OVERLAY_W));
+    lines.push(styled(TextStyle::Section, " MINE"));
     for row in mine_rows {
         let NeedsOverlayRow::Mine(item) = row else {
             continue;
         };
         let check = if item.done { '✓' } else { ' ' };
-        lines.push(pad_to(
+        lines.push(styled(
+            TextStyle::Item,
             &format!("   [{check}] {}", item.text),
-            ANSWER_OVERLAY_W,
         ));
     }
     let mine_footer_line = match mine_footer {
@@ -136,11 +138,11 @@ pub(crate) fn needs_overlay_lines(
         ),
         NeedsFooter::AsOf => String::new(),
     };
-    lines.push(pad_to(&mine_footer_line, ANSWER_OVERLAY_W));
+    lines.push(styled(TextStyle::Hint, &mine_footer_line));
 
-    lines.push(pad_to(" THEY NEED YOU", ANSWER_OVERLAY_W));
+    lines.push(styled(TextStyle::Section, " THEY NEED YOU"));
     if need_rows.is_empty() {
-        lines.push(pad_to("   nothing needs you", ANSWER_OVERLAY_W));
+        lines.push(styled(TextStyle::Hint, "   nothing needs you"));
     } else {
         for row in need_rows.iter() {
             match row {
@@ -153,9 +155,10 @@ pub(crate) fn needs_overlay_lines(
                     } else {
                         ""
                     };
-                    lines.push(pad_to(
-                        &format!("   {} {}{stale}", need_glyph(NeedKind::Question), q.title),
-                        ANSWER_OVERLAY_W,
+                    lines.push(tail_styled(
+                        &format!("   {} {}", need_glyph(NeedKind::Question), q.title),
+                        stale,
+                        TextStyle::WARN,
                     ));
                 }
                 NeedsOverlayRow::Need(r) => {
@@ -163,10 +166,14 @@ pub(crate) fn needs_overlay_lines(
                         NeedKind::BlockedFocusOnly => "  ⚠ focus",
                         _ => "",
                     };
-                    lines.push(pad_to(
-                        &format!("   {} {}  {}{tag}", need_glyph(r.kind), r.name, r.reason),
-                        ANSWER_OVERLAY_W,
-                    ));
+                    let mut line = TLine::parts(&[
+                        (&format!("   {} ", need_glyph(r.kind)), TextStyle::Item),
+                        (&r.name, TextStyle::Value),
+                        (&format!("  {}", r.reason), TextStyle::Meta),
+                        (tag, TextStyle::WARN),
+                    ]);
+                    line = line.pad_to(ANSWER_OVERLAY_W);
+                    lines.push(line);
                 }
                 NeedsOverlayRow::Mine(_) => {}
             }
@@ -178,15 +185,15 @@ pub(crate) fn needs_overlay_lines(
             Some(NeedsOverlayRow::Need(r)) => {
                 if let Some(ans) = r.answerable.as_ref() {
                     if !ans.prompt.is_empty() {
-                        lines.push(pad_to(
+                        lines.push(styled(
+                            TextStyle::Item,
                             &format!("   {}", ans.prompt.replace('\n', " ")),
-                            ANSWER_OVERLAY_W,
                         ));
                     }
                     for o in &ans.options {
-                        lines.push(pad_to(
+                        lines.push(styled(
+                            TextStyle::Meta,
                             &format!("     {}. {}", o.idx, o.label),
-                            ANSWER_OVERLAY_W,
                         ));
                     }
                 }
@@ -196,27 +203,27 @@ pub(crate) fn needs_overlay_lines(
                 // with its what-happens-next clause.
                 if let Some(body) = q.body.as_deref() {
                     if !body.is_empty() && q.body.as_deref() != Some(q.title.as_str()) {
-                        lines.push(pad_to(
+                        lines.push(styled(
+                            TextStyle::Item,
                             &format!("   {}", body.replace('\n', " ")),
-                            ANSWER_OVERLAY_W,
                         ));
                     }
                 }
                 for opt in q.options.iter() {
-                    lines.push(pad_to(
+                    lines.push(styled(
+                        TextStyle::Meta,
                         &format!(
                             "     {}. {} -> {}",
                             opt.n,
                             opt.text,
                             opt.next.as_deref().unwrap_or("?")
                         ),
-                        ANSWER_OVERLAY_W,
                     ));
                 }
                 if q.asker.as_ref().and_then(|a| a.live) == Some(false) {
-                    lines.push(pad_to(
+                    lines.push(styled(
+                        TextStyle::WARN,
                         "   the answer is recorded but reaches no session",
-                        ANSWER_OVERLAY_W,
                     ));
                 }
             }
@@ -232,6 +239,11 @@ pub(crate) fn needs_overlay_lines(
         ),
         NeedsFooter::AsOf => "   as of now".to_string(),
     };
-    lines.push(pad_to(&need_footer_line, ANSWER_OVERLAY_W));
+    lines.push(styled(TextStyle::Hint, &need_footer_line));
     lines
+}
+
+/// `head` at item level and `tail` at `style`, padded to the overlay width.
+fn tail_styled(head: &str, tail: &str, style: TextStyle) -> TLine {
+    TLine::parts(&[(head, TextStyle::Item), (tail, style)]).pad_to(ANSWER_OVERLAY_W)
 }

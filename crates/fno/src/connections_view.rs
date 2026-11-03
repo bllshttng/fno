@@ -17,6 +17,7 @@ use std::time::Duration;
 // Reuse the server's `fno` binary resolver ($FNO_BIN, else the running exe) so
 // the modal's shell-outs and the server never drift (PR #421 review).
 use crate::server::fno_bin;
+use crate::text_style::{TLine, TextStyle};
 
 /// Fail-open budget for a phase-1 read shell-out: a read slower than this
 /// degrades the modal with a visible banner (AC2-ERR), never blocks the UI
@@ -1169,14 +1170,14 @@ impl ConnectionsView {
     /// Render the modal to overlay lines, padded to a uniform width so the
     /// inverse-video block is a clean rectangle (draw_lines_overlay does no
     /// padding of its own).
-    pub fn render(&self) -> Vec<String> {
+    pub fn render(&self) -> Vec<TLine> {
         self.render_with(&[], usize::MAX)
     }
 
     /// [`Self::render`] with the live layout rows, so each account names how
     /// many running workers bill it, and the overlay's text width, which the
     /// accounts table fits.
-    pub fn render_with(&self, agents: &[crate::proto::AgentRow], max_cols: usize) -> Vec<String> {
+    pub fn render_with(&self, agents: &[crate::proto::AgentRow], max_cols: usize) -> Vec<TLine> {
         self.render_cursor(agents, max_cols).0
     }
 
@@ -1185,17 +1186,23 @@ impl ConnectionsView {
         &self,
         agents: &[crate::proto::AgentRow],
         max_cols: usize,
-    ) -> (Vec<String>, Option<usize>) {
+    ) -> (Vec<TLine>, Option<usize>) {
         self.cursor_row.set(None);
         self.cursor_rel.set(None);
-        let mut out: Vec<String> = Vec::new();
+        let mut out: Vec<TLine> = Vec::new();
         out.push(self.tab_bar());
-        out.push(String::new());
+        out.push(TLine::plain(""));
         match &self.state {
-            ModalState::Loading => out.push("loading…".to_string()),
+            ModalState::Loading => out.push(TLine::line(TextStyle::Hint, "loading…")),
             ModalState::Degraded(reason) => {
-                out.push(format!("could not read accounts: {reason}"));
-                out.push("actions disabled - press R to retry".to_string());
+                out.push(TLine::line(
+                    TextStyle::ERROR,
+                    format!("could not read accounts: {reason}"),
+                ));
+                out.push(TLine::line(
+                    TextStyle::Hint,
+                    "actions disabled - press R to retry",
+                ));
             }
             ModalState::Ready => {
                 if let Some(w) = &self.wizard {
@@ -1210,36 +1217,43 @@ impl ConnectionsView {
                 }
             }
         }
-        out.push(String::new());
+        out.push(TLine::plain(""));
         if let Some(confirm) = &self.confirm {
-            out.push(format!("? {}", confirm.label));
+            out.push(TLine::line(TextStyle::WARN, format!("? {}", confirm.label)));
         } else if self.acting {
-            out.push("running…".to_string());
+            out.push(TLine::line(TextStyle::Hint, "running…"));
         } else {
             out.push(self.footer());
         }
         if let Some(notice) = &self.notice {
-            out.push(format!("! {notice}"));
+            out.push(TLine::line(TextStyle::WARN, format!("! {notice}")));
         }
         (pad_block(out), self.cursor_row.get())
     }
 
-    fn tab_bar(&self) -> String {
+    fn tab_bar(&self) -> TLine {
         let (a, o) = match self.tab {
             Tab::Accounts => ("[Accounts]", " Order "),
             Tab::Order => (" Accounts ", "[Order]"),
         };
-        format!("connections   {a}{o}")
+        let (sa, so) = match self.tab {
+            Tab::Accounts => (TextStyle::Section, TextStyle::Meta),
+            Tab::Order => (TextStyle::Meta, TextStyle::Section),
+        };
+        TLine::parts(&[("connections   ", TextStyle::Title), (a, sa), (o, so)])
     }
 
     fn render_accounts(
         &self,
-        out: &mut Vec<String>,
+        out: &mut Vec<TLine>,
         agents: &[crate::proto::AgentRow],
         max_cols: usize,
     ) {
         if self.accounts.is_empty() && self.pending.is_empty() {
-            out.push("no accounts registered - press a to add".to_string());
+            out.push(TLine::line(
+                TextStyle::Hint,
+                "no accounts registered - press a to add",
+            ));
             return;
         }
         // The name column is as wide as the longest name.
@@ -1303,7 +1317,11 @@ impl ConnectionsView {
         // table drops the columns read least, in this order, until it fits.
         for drop in ["AUTH", "IDENTITY", "LOGIN", "AGE", ""] {
             let rows = self.account_rows(&names, w_name, &cols);
-            if drop.is_empty() || rows.iter().all(|r| crate::chrome::str_cols(r) <= max_cols) {
+            if drop.is_empty()
+                || rows
+                    .iter()
+                    .all(|r| crate::chrome::str_cols(&r.text) <= max_cols)
+            {
                 let base = out.len();
                 out.extend(rows);
                 if let Some(rel) = self.cursor_rel.get() {
@@ -1321,13 +1339,14 @@ impl ConnectionsView {
             if idx == self.acct_sel {
                 self.cursor_row.set(Some(out.len()));
             }
-            out.push(format!(
-                "    {name:<wname$}  {cli:<wcli$}  …login pending  (r: register)",
-                name = crate::client::pad_to(&names[self.accounts.len() + j], w_name),
-                wname = w_name,
-                cli = clis[self.accounts.len() + j],
-                wcli = w_cli,
-            ));
+            let name = crate::client::pad_to(&names[self.accounts.len() + j], w_name);
+            let cli = &clis[self.accounts.len() + j];
+            out.push(TLine::parts(&[
+                ("    ", TextStyle::Item),
+                (&format!("{name:<w_name$}  "), TextStyle::Item),
+                (&format!("{cli:<w_cli$}  "), TextStyle::Meta),
+                ("…login pending  (r: register)", TextStyle::Hint),
+            ]));
         }
     }
 
@@ -1340,7 +1359,7 @@ impl ConnectionsView {
         names: &[String],
         w_name: usize,
         cols: &[(&str, Vec<String>, usize)],
-    ) -> Vec<String> {
+    ) -> Vec<TLine> {
         use crate::chrome::str_cols;
         let widths: Vec<usize> = cols
             .iter()
@@ -1351,17 +1370,28 @@ impl ConnectionsView {
                     .fold((*min).max(label.len()), usize::max)
             })
             .collect();
-        let line = |lead: String, name: &str, cell: &dyn Fn(usize) -> String| {
-            let mut s = lead + &crate::client::pad_to(name, w_name);
+        let line = |lead: String,
+                    name: &str,
+                    (lead_style, name_style, cell_style): (TextStyle, TextStyle, TextStyle),
+                    cell: &dyn Fn(usize) -> String| {
+            let mut l = TLine::parts(&[
+                (&lead, lead_style),
+                (&crate::client::pad_to(name, w_name), name_style),
+            ]);
             for (k, w) in widths.iter().enumerate() {
-                s.push_str("  ");
-                s.push_str(&crate::client::pad_to(&cell(k), *w));
+                l.push_line(TLine::parts(&[
+                    ("  ", cell_style),
+                    (&crate::client::pad_to(&cell(k), *w), cell_style),
+                ]));
             }
-            s.trim_end().to_string()
+            l.trim_end()
         };
         // Header is inert: no cursor row ever points at it (selection clamps
         // to data rows), so nothing routes a keypress here.
-        let mut rows = vec![line("    ".into(), "ACCOUNT", &|k| cols[k].0.to_string())];
+        let head = (TextStyle::Section, TextStyle::Section, TextStyle::Section);
+        let mut rows = vec![line("    ".into(), "ACCOUNT", head, &|k| {
+            cols[k].0.to_string()
+        })];
         for (i, a) in self.accounts.iter().enumerate() {
             if i == self.acct_sel {
                 self.cursor_rel.set(Some(rows.len()));
@@ -1375,7 +1405,15 @@ impl ConnectionsView {
             } else {
                 " "
             };
-            rows.push(line(format!(" {badge}{spawn} "), &names[i], &|k| {
+            // The active account wears the accent; the rest read as items
+            // with their facts dim.
+            let (lead, name) = if a.active {
+                (TextStyle::Badge, TextStyle::Badge)
+            } else {
+                (TextStyle::Item, TextStyle::Item)
+            };
+            let styles = (lead, name, TextStyle::Meta);
+            rows.push(line(format!(" {badge}{spawn} "), &names[i], styles, &|k| {
                 cols[k].1[i].clone()
             }));
         }
@@ -1406,11 +1444,14 @@ impl ConnectionsView {
     }
 
     /// Render the add-wizard input lines (replaces the list body while open).
-    fn render_wizard(&self, w: &Wizard, out: &mut Vec<String>) {
-        out.push("add account".to_string());
+    fn render_wizard(&self, w: &Wizard, out: &mut Vec<TLine>) {
+        out.push(TLine::line(TextStyle::Title, "add account"));
         let field = |active: bool, label: &str, val: &str| {
             let caret = if active { "_" } else { "" };
-            format!("  {label}: {val}{caret}")
+            TLine::parts(&[
+                (&format!("  {label}: "), TextStyle::Meta),
+                (&format!("{val}{caret}"), TextStyle::Value),
+            ])
         };
         // "id" read as an opaque identifier; "name" + a format hint
         // makes the lowercase/hyphen constraint (valid_account_id) visible
@@ -1423,16 +1464,18 @@ impl ConnectionsView {
         if w.step == WizardStep::Id {
             self.cursor_row.set(Some(out.len()));
         }
-        out.push(format!(
-            "{}{id_hint}",
-            field(w.step == WizardStep::Id, "name", &w.id)
-        ));
+        let mut name_line = field(w.step == WizardStep::Id, "name", &w.id);
+        name_line.push_line(TLine::line(TextStyle::Hint, id_hint));
+        out.push(name_line);
         if w.step != WizardStep::Id {
             if w.step == WizardStep::Kind {
                 self.cursor_row.set(Some(out.len()));
             }
-            let kind_line = format!("  kind: {}  (Tab/Space to change)", w.kind.label(),);
-            out.push(kind_line);
+            out.push(TLine::parts(&[
+                ("  kind: ", TextStyle::Meta),
+                (w.kind.label(), TextStyle::Value),
+                ("  (Tab/Space to change)", TextStyle::Hint),
+            ]));
         }
         if w.step == WizardStep::Dir {
             self.cursor_row.set(Some(out.len()));
@@ -1442,13 +1485,13 @@ impl ConnectionsView {
             self.cursor_row.set(Some(out.len()));
             out.push(field(true, "api key", &w.api_key));
         }
-        out.push(String::new());
-        out.push("Enter: next   Esc: cancel".to_string());
+        out.push(TLine::plain(""));
+        out.push(TLine::line(TextStyle::Hint, "Enter: next   Esc: cancel"));
     }
 
-    fn render_order(&self, out: &mut Vec<String>) {
+    fn render_order(&self, out: &mut Vec<TLine>) {
         if self.combos.is_empty() {
-            out.push("no combos - press n to add".to_string());
+            out.push(TLine::line(TextStyle::Hint, "no combos - press n to add"));
             return;
         }
         let known: std::collections::HashSet<&str> =
@@ -1459,11 +1502,11 @@ impl ConnectionsView {
                 self.cursor_row.set(Some(out.len()));
             }
             let badge = if c.active { "●" } else { " " };
-            out.push(format!(
-                " {badge} {name}  [{strategy}]",
-                name = c.name,
-                strategy = c.strategy,
-            ));
+            out.push(TLine::parts(&[
+                (&format!(" {badge} "), TextStyle::Badge),
+                (&c.name, TextStyle::Value),
+                (&format!("  [{}]", c.strategy), TextStyle::Meta),
+            ]));
             if selected {
                 // The selected combo expands its members in (dirty-or-committed)
                 // order, with the member cursor and dangling flags.
@@ -1477,21 +1520,31 @@ impl ConnectionsView {
                     } else {
                         "  (dangling)"
                     };
-                    out.push(format!("      {n}. {member}{dangling}", n = m + 1));
+                    out.push(TLine::parts(&[
+                        (&format!("      {}. ", m + 1), TextStyle::Meta),
+                        (member, TextStyle::Item),
+                        (dangling, TextStyle::WARN),
+                    ]));
                 }
                 if self.dirty_order.is_some() {
-                    out.push("      Enter: commit   Esc: discard".to_string());
+                    out.push(TLine::line(
+                        TextStyle::Hint,
+                        "      Enter: commit   Esc: discard",
+                    ));
                 }
             }
         }
     }
 
     /// Render the new-combo form (name -> members csv).
-    fn render_combo_input(&self, ci: &ComboInput, out: &mut Vec<String>) {
-        out.push("new combo".to_string());
+    fn render_combo_input(&self, ci: &ComboInput, out: &mut Vec<TLine>) {
+        out.push(TLine::line(TextStyle::Title, "new combo"));
         let field = |active: bool, label: &str, val: &str| {
             let caret = if active { "_" } else { "" };
-            format!("  {label}: {val}{caret}")
+            TLine::parts(&[
+                (&format!("  {label}: "), TextStyle::Meta),
+                (&format!("{val}{caret}"), TextStyle::Value),
+            ])
         };
         if ci.step == ComboInputStep::Name {
             self.cursor_row.set(Some(out.len()));
@@ -1501,21 +1554,22 @@ impl ConnectionsView {
             self.cursor_row.set(Some(out.len()));
             out.push(field(true, "members (comma/space)", &ci.members));
         }
-        out.push(String::new());
-        out.push("Enter: next   Esc: cancel".to_string());
+        out.push(TLine::plain(""));
+        out.push(TLine::line(TextStyle::Hint, "Enter: next   Esc: cancel"));
     }
 
-    fn footer(&self) -> String {
-        match self.tab {
-            Tab::Accounts => {
-                "Tab: order  j/k: move  u: use  s: spawn-acct  d: remove  a: add  r: register  R: refresh  Esc: close"
-                    .to_string()
-            }
-            Tab::Order => {
-                "Tab: acct  h/l: combo  j/k: member  J/K: reorder  space: use  d: rm  n: new  Enter: commit"
-                    .to_string()
-            }
-        }
+    fn footer(&self) -> TLine {
+        TLine::line(
+            TextStyle::Hint,
+            match self.tab {
+                Tab::Accounts => {
+                    "Tab: order  j/k: move  u: use  s: spawn-acct  d: remove  a: add  r: register  R: refresh  Esc: close"
+                }
+                Tab::Order => {
+                    "Tab: acct  h/l: combo  j/k: member  J/K: reorder  space: use  d: rm  n: new  Enter: commit"
+                }
+            },
+        )
     }
 }
 
@@ -1526,13 +1580,13 @@ impl Default for ConnectionsView {
 }
 
 /// Pad every line to the max width so the inverse block is a rectangle.
-fn pad_block(mut lines: Vec<String>) -> Vec<String> {
-    let width = lines.iter().map(|l| l.chars().count()).max().unwrap_or(0);
-    for line in &mut lines {
-        let pad = width - line.chars().count();
-        line.push_str(&" ".repeat(pad));
-    }
-    lines
+fn pad_block(lines: Vec<TLine>) -> Vec<TLine> {
+    let width = lines
+        .iter()
+        .map(|l| l.text.chars().count())
+        .max()
+        .unwrap_or(0);
+    lines.into_iter().map(|l| l.pad_to(width)).collect()
 }
 
 // ── async reads (fail-open shell-outs, the needs_overlay idiom) ─────────────
@@ -1996,13 +2050,13 @@ mod tests {
         // An overlay one column narrower than the table drops AUTH first and
         // keeps every table row on one line, so the overlay never wraps it.
         let cols = |l: &str| crate::chrome::str_cols(l.trim_end());
-        let table = |lines: &[String]| -> Vec<String> {
+        let table = |lines: &[TLine]| -> Vec<String> {
             lines
                 .iter()
                 .filter(|l| {
                     l.contains("ACCOUNT") || v.accounts.iter().any(|a| l.contains(a.id.as_str()))
                 })
-                .cloned()
+                .map(|l| l.text.clone())
                 .collect()
         };
         let full = table(&v.render_with(&rows, usize::MAX));

@@ -725,8 +725,10 @@ impl Popup {
                 } => {
                     if self.plain_body {
                         // The two-column shape: leading pad + fixed key column
-                        // + gap + label; the hint column is dropped.
-                        1 + kw + 1 + chrome::str_cols(label) + 2
+                        // + gap + label, then the hint as a dim right column.
+                        let hint_w = chrome::str_cols(hint);
+                        let hint_w = if hint_w == 0 { 0 } else { 2 + hint_w };
+                        1 + kw + 1 + chrome::str_cols(label) + hint_w + 2
                     } else {
                         // glyph + space + label + gap + hint
                         chrome::str_cols(glyph)
@@ -853,7 +855,10 @@ impl Popup {
                         sel_span: None,
                         hits: vec![],
                         roles: vec![],
-                        segs: vec![(1usize, kw, Role::Text(TextStyle::Section))],
+                        segs: vec![
+                            (1usize, kw, Role::Text(TextStyle::Meta)),
+                            (kw + 2, value.chars().count(), Role::Text(TextStyle::Value)),
+                        ],
                         pad_role: Role::Text(TextStyle::Item),
                     }
                 }
@@ -885,13 +890,30 @@ impl Popup {
                     let disabled = !*enabled;
                     let selected = !disabled && sel == Some((ri, 0));
                     // Plain-body: the two-column shape. The key column is
-                    // fixed-width accent text, the label plain, the hint
-                    // column dropped. The cursor row is the one filled band,
-                    // riding the segs: a sel_span would paint the inverse
-                    // cut-out, invisible on the plain ground.
+                    // fixed-width: a mnemonic key reads as accent, a mark (a
+                    // checkbox, a radio) as the entry's bold value. The label
+                    // is plain and the hint a dim right column. The cursor row
+                    // is the one filled band, riding the segs: a sel_span
+                    // would paint the inverse cut-out, invisible on the plain
+                    // ground. A disabled row paints dim whole.
                     let (text, segs, pad_role, sel_span) = if self.plain_body {
                         let left = format!(" {} {}", pad(glyph, kw), label);
-                        let text = pad(&left, width);
+                        let hint_text = clip_cols(
+                            hint,
+                            width.saturating_sub(chrome::str_cols(&left) + 2 + BODY_RIGHT_GAP_COLS),
+                        );
+                        let text = if hint_text.is_empty() {
+                            pad(&left, width)
+                        } else {
+                            let gap = width
+                                .saturating_sub(
+                                    chrome::str_cols(&left)
+                                        + chrome::str_cols(&hint_text)
+                                        + BODY_RIGHT_GAP_COLS,
+                                )
+                                .max(2);
+                            pad(&format!("{left}{}{hint_text}", " ".repeat(gap)), width)
+                        };
                         let chars = text.chars().count();
                         let segs = if disabled {
                             vec![]
@@ -899,14 +921,28 @@ impl Popup {
                             vec![(0usize, chars, Role::BodyCursor)]
                         } else {
                             // Char 0 is the leading pad; the key chars carry
-                            // the accent span.
-                            vec![(1usize, kw, Role::Text(TextStyle::Section))]
+                            // the glyph span.
+                            let key = if glyph.chars().next().is_some_and(char::is_alphanumeric) {
+                                TextStyle::Section
+                            } else {
+                                TextStyle::Value
+                            };
+                            let mut segs = vec![(1usize, kw, Role::Text(key))];
+                            let hint_w = hint_text.chars().count();
+                            if hint_w > 0 {
+                                let at =
+                                    text.trim_end().chars().count() - hint_text.chars().count();
+                                segs.push((at, hint_w, Role::Text(TextStyle::Hint)));
+                            }
+                            segs
                         };
                         (
                             text,
                             segs,
                             if selected {
                                 Role::BodyCursor
+                            } else if disabled {
+                                Role::Text(TextStyle::Meta)
                             } else {
                                 Role::Text(TextStyle::Item)
                             },

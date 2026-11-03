@@ -51,17 +51,19 @@ impl View {
                     hint: String::new(),
                     enabled: true,
                 };
+                rows.push(PopupRow::Header("display".into()));
                 rows.push(toggle(self.hover_focus, "focus follows mouse"));
                 rows.push(toggle(self.status_on, "status row"));
                 rows.push(toggle(
                     self.resource_meter_on,
                     "resource meter (needs macmon)",
                 ));
-                rows.push(toggle(self.confirm_lifecycle, "confirm before stop/remove"));
                 rows.push(toggle(
                     self.sideline_layout == crate::sideline_color::SidelineLayout::Card,
                     "sideline card layout",
                 ));
+                rows.push(PopupRow::Header("fleet".into()));
+                rows.push(toggle(self.confirm_lifecycle, "confirm before stop/remove"));
                 rows.push(toggle(
                     hold::reserve_auto_on(),
                     "hold the fleet while OBS or an editor runs",
@@ -69,8 +71,8 @@ impl View {
                 actions.push(AuxAction::ToggleHoverFocus);
                 actions.push(AuxAction::ToggleStatus);
                 actions.push(AuxAction::ToggleResourceMeter);
-                actions.push(AuxAction::ToggleConfirmLifecycle);
                 actions.push(AuxAction::ToggleSidelineLayout);
+                actions.push(AuxAction::ToggleConfirmLifecycle);
                 actions.push(AuxAction::ToggleReserveAuto);
             }
             SettingsTab::Theme => {
@@ -87,6 +89,7 @@ impl View {
                         .map(|n| n.to_string())
                         .collect();
                     names.extend(self.user_themes.iter().map(|(n, _)| n.clone()));
+                    rows.push(PopupRow::Header("palette".into()));
                     for name in &names {
                         let active = self.theme.name == name.as_str();
                         rows.push(PopupRow::Entry {
@@ -120,6 +123,7 @@ impl View {
             SettingsTab::Experimental => {
                 // Features still in progress, each off until turned on.
                 let flags = experimental::flags(self);
+                rows.push(PopupRow::Header("in progress".into()));
                 for flag in experimental::Flag::ALL {
                     rows.push(PopupRow::Entry {
                         glyph: if flag.on(flags) { "☑" } else { "☐" }.into(),
