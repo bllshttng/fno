@@ -23,6 +23,9 @@ pub(super) struct Detail {
     /// The opened question; the bell panel tabs are the board, so the old
     /// list pane is gone and a view holds exactly the row it opened on.
     pub(super) item: crate::needs_overlay::QuestionItem,
+    /// Why the projection read is unavailable, while it is. The page names it
+    /// so a bare index row reads as a failed read, not an empty question.
+    pub(super) degraded: Option<String>,
     pub(super) sel: Option<u32>,
     pub(super) notes: Option<String>,
     pub(super) free: Option<String>,
@@ -100,6 +103,7 @@ impl Detail {
         }
         Some(Detail {
             item,
+            degraded: None,
             sel: None,
             notes: None,
             free: None,
@@ -179,6 +183,11 @@ fn question_page(
         &item.title
     };
     s.push_str(&format!("# {title}\n\n"));
+    if let Some(reason) = d.degraded.as_deref() {
+        s.push_str(&format!(
+            "projection unavailable: {reason}; this page shows what the index holds\n\n"
+        ));
+    }
     let asker = item.asker.as_ref();
     let origin = item.origin.as_ref();
     // The card's header line: who asked (registry name, mail tag), the lead
@@ -1244,6 +1253,47 @@ impl View {
         let merged = self.questions_merged();
         let fold = merged.as_ref().unwrap_or(&empty);
         self.question_detail = Detail::open(fold, id);
+        if let Some(d) = &mut self.question_detail {
+            d.degraded = self.questions_degraded_reason.clone();
+        }
+    }
+
+    /// Re-read the open page's question from the merged fold, so a page that
+    /// opened on an index stub fills in when the projection lands. The
+    /// reader's own state (pick, notes, scroll) stays; a changed shot list
+    /// reopens the page so the strip decodes the new files.
+    pub(super) fn refresh_detail(&mut self) {
+        let Some(id) = self.question_detail.as_ref().map(|d| d.item.id.clone()) else {
+            return;
+        };
+        let merged = self.questions_merged();
+        let Some(fresh) = merged
+            .as_ref()
+            .and_then(|f| f.items.iter().find(|q| q.id == id))
+        else {
+            return;
+        };
+        let reason = self.questions_degraded_reason.clone();
+        let Some(d) = &mut self.question_detail else {
+            return;
+        };
+        d.degraded = reason;
+        if d.item.images == fresh.images {
+            d.item = fresh.clone();
+            return;
+        }
+        let Some(mut next) = merged.as_ref().and_then(|f| Detail::open(f, &id)) else {
+            return;
+        };
+        next.degraded = d.degraded.clone();
+        next.sel = d.sel;
+        next.notes = d.notes.take();
+        next.free = d.free.take();
+        next.notice = d.notice.take();
+        next.scroll = d.scroll;
+        next.delegate = d.delegate;
+        next.archive_armed = d.archive_armed;
+        *d = next;
     }
 
     pub(super) fn list_selector(&self) -> Option<usize> {
@@ -1270,6 +1320,7 @@ impl View {
                 self.questions_degraded_reason = Some(reason);
             }
         }
+        self.refresh_detail();
         bell::clamp_selection(self);
     }
 
@@ -1330,6 +1381,7 @@ impl View {
     /// projection answers.
     pub(super) fn apply_questions_index(&mut self, fold: crate::needs_overlay::QuestionsFold) {
         self.questions_index = Some(fold);
+        self.refresh_detail();
         bell::clamp_selection(self);
     }
 
@@ -1444,6 +1496,28 @@ mod tests {
         assert_eq!(q.node.as_deref(), Some("x-d471"));
         assert_eq!(q.options.len(), 2);
         assert!(q.blocked_because.is_some());
+    }
+
+    #[test]
+    fn an_open_page_fills_in_when_the_projection_lands() {
+        let mut v = view_with_agents(vec![]);
+        let mut stub = item("q-b4d63b60", true);
+        stub.options = vec![];
+        stub.blocked_because = None;
+        v.apply_questions_index(fold_with(vec![stub]));
+        v.apply_questions_fold(Err("timed out".into()));
+        v.open_detail_on("q-b4d63b60");
+        let d = v.question_detail.as_ref().unwrap();
+        assert!(d.item.node.is_none());
+        assert_eq!(d.degraded.as_deref(), Some("timed out"));
+        let page = question_page(&d.item, d, 0, 80);
+        assert!(page.contains("projection unavailable: timed out"), "{page}");
+
+        v.apply_questions_fold(Ok(stored_fold()));
+        let d = v.question_detail.as_ref().unwrap();
+        assert_eq!(d.item.node.as_deref(), Some("x-d471"));
+        assert_eq!(d.item.options.len(), 2);
+        assert!(d.degraded.is_none());
     }
 
     #[test]
