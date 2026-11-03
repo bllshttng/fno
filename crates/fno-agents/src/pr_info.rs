@@ -6,6 +6,15 @@
 //! so every consumer reads one shape whichever transport served it. The
 //! Python command is a bare forward to this op: three net lines in cli/src/fno
 //! carrying the ask, the exit codes, and no transport decision.
+//!
+//! On the CORE arm the payload also takes the two zero-REST-quota legs: the
+//! head sha cross-checked (or served whole) from git over
+//! `refs/pull/<n>/head`, and the changed-file list from a git fetch + a
+//! merge-base diff. The field set for the fallback read adds
+//! `statusCheckRollup`, so the ONE brokered GraphQL read also answers check
+//! states (one targeted query, never a second). Every served
+//! field names its source in `sources`, and every unserved field names its
+//! reason in `missing` - no blank field without a reason.
 
 use crate::pr_status::{map_mergeable, map_pr_state, rest_reason, RestReason};
 use crate::pr_status_facts::{GhProbe, RealGhProbe};
@@ -203,11 +212,25 @@ fn resolve_slug(cwd: &Path, repo: Option<&str>) -> Result<String, RestReason> {
         .ok_or_else(|| RestReason::new("could not resolve owner/repo from the origin remote", ""))
 }
 
+/// The fallback read's field set: the info fallback's set plus
+/// `statusCheckRollup`, so the ONE brokered GraphQL read the CORE arm is
+/// allowed also answers check states (one targeted query, never a second).
+/// `concat!` takes literals only, so the superset is spelled out; the drift
+/// test below pins it against [`crate::loopcheck::PR_INFO_FALLBACK_FIELDS`].
+const PR_INFO_SLICE_FIELDS: &str = "state,number,headRefName,headRefOid,mergeable,mergeStateStatus,baseRefName,author,url,body,mergedAt,mergeCommit,autoMergeRequest,statusCheckRollup";
+
+/// The changed-file cap the git leg answers with; a longer list truncates
+/// and the payload says so (`files_truncated`), never silently.
+const FILES_CAP: usize = 500;
+
+/// The per-check-row cap inside `checks.rows`; the count lives in `counts`.
+const CHECK_ROWS_CAP: usize = 20;
+
 /// The fallback: the same selector through `read_pr_view_fields`, whose
 /// brokered GraphQL fallback this op borrows wholesale - the earned checks,
 /// the quota probe, and the bounded spawns are the stop gate's, not a second
-/// impl. The field set is the op's own (the info payload maps four fields
-/// the gate's set never asks for), and the slug the REST legs read pins the
+/// impl. The field set is the op's own plus `statusCheckRollup`
+/// ([`PR_INFO_SLICE_FIELDS`]), and the slug the REST legs read pins the
 /// repository with --repo, so gh's own remote priority cannot pick a
 /// different one. The primary read inside it re-attempts the REST fetch that
 /// just refused; that costs one refused request and buys one owner for the
@@ -224,21 +247,311 @@ fn fallback_payload(
     let gh_bin =
         std::env::var("FNO_LOOPCHECK_GH_BIN").unwrap_or_else(|_| "fno-gh-loopcheck".into());
     let selector = pr.map(|n| n.to_string());
-    match crate::loopcheck::read_pr_view_fields(
+    let read = crate::loopcheck::read_pr_view_fields(
         &gh_bin,
         cwd,
         selector.as_deref(),
-        crate::loopcheck::PR_INFO_FALLBACK_FIELDS,
+        PR_INFO_SLICE_FIELDS,
         repo,
         FALLBACK_READ_TIMEOUT,
-    ) {
-        Ok(Some(gh)) => match graphql_payload(&gh) {
-            Some(info) => Ok(Some(info)),
-            None => Err(Some("the reply carried a malformed body".to_string())),
-        },
+    );
+    assemble_fallback(cwd, pr, read)
+}
+
+/// The CORE arm's payload assembly over the fallback read's outcome, split
+/// from the spawn so a test drives it with a fabricated read. On a served
+/// reply the GraphQL payload takes the checks summary, then the git legs:
+/// the head sha is cross-checked against `refs/pull/<n>/head` (git's answer
+/// wins and names its source), and the changed-file list comes from a git
+/// fetch + merge-base diff. On a refused reply the git legs answer alone -
+/// a partial payload (`partial: true`) with `head_sha` from git when the
+/// ref resolves, `files` when the diff does, and every unserved field named
+/// with its reason in `missing`. `Ok(None)` stays the real "no such PR"
+/// answer; `Err(cause)` means even git answered nothing.
+fn assemble_fallback(
+    cwd: &Path,
+    pr: Option<u64>,
+    read: Result<Option<Value>, crate::loopcheck::GhReadError>,
+) -> Result<Option<Value>, Option<String>> {
+    let urls = remote_urls(cwd);
+    match read {
         Ok(None) => Ok(None),
-        Err(err) => Err(Some(err.cause_line())),
+        Ok(Some(gh)) => {
+            let mut info = match graphql_payload(&gh) {
+                Some(info) => info,
+                None => return Err(Some("the reply carried a malformed body".to_string())),
+            };
+            let mut sources = json!({});
+            let mut missing = serde_json::Map::new();
+            match checks_from_rollup(&gh) {
+                Some(checks) => {
+                    info["checks"] = checks;
+                    sources["checks"] = json!("graphql statusCheckRollup");
+                }
+                None => {
+                    missing.insert(
+                        "checks".to_string(),
+                        json!("the fallback reply carried no statusCheckRollup array"),
+                    );
+                }
+            }
+            if let Some(pr) = pr {
+                if let Some(sha) = git_head_sha(cwd, pr, &urls) {
+                    info["head_sha"] = json!(sha);
+                    sources["head_sha"] = json!(format!("git refs/pull/{pr}/head"));
+                }
+                match git_files(cwd, pr, &urls, info.get("base_ref").and_then(Value::as_str)) {
+                    Ok((files, truncated, base)) => {
+                        info["files"] = json!(files);
+                        if truncated {
+                            info["files_truncated"] = json!(true);
+                        }
+                        sources["files"] = json!(format!("git diff {base}...refs/pull/{pr}/head"));
+                    }
+                    Err(reason) => {
+                        missing.insert("files".to_string(), json!(reason));
+                    }
+                }
+            }
+            if !missing.is_empty() {
+                info["missing"] = Value::Object(missing);
+            }
+            let served_git = !sources
+                .as_object()
+                .map(|map| map.is_empty())
+                .unwrap_or(true);
+            if served_git {
+                info["sources"] = sources;
+            }
+            Ok(Some(info))
+        }
+        Err(err) => {
+            let cause = err.cause_line();
+            let Some(pr) = pr else {
+                return Err(Some(cause));
+            };
+            let sha = git_head_sha(cwd, pr, &urls);
+            let files = git_files(cwd, pr, &urls, None);
+            if sha.is_none() && !matches!(&files, Ok(_)) {
+                return Err(Some(cause));
+            }
+            let missing_reason = format!("graphql fallback failed: {cause}");
+            let mut missing = serde_json::Map::new();
+            for field in [
+                "url",
+                "body",
+                "state",
+                "head_ref",
+                "base_ref",
+                "mergeable",
+                "merge_state_status",
+                "merged_at",
+                "merge_sha",
+                "author",
+                "auto_merge",
+                "checks",
+            ] {
+                missing.insert(field.to_string(), json!(missing_reason));
+            }
+            let mut sources = serde_json::Map::new();
+            if let Some(sha) = sha {
+                sources.insert(
+                    "head_sha".to_string(),
+                    json!(format!("git refs/pull/{pr}/head")),
+                );
+                missing.remove("head_sha");
+            }
+            let mut info = json!({
+                "pr": pr,
+                "partial": true,
+                "transport": "git",
+            });
+            match files {
+                Ok((files, truncated, base)) => {
+                    info["files"] = json!(files);
+                    if truncated {
+                        info["files_truncated"] = json!(true);
+                    }
+                    sources.insert(
+                        "files".to_string(),
+                        json!(format!("git diff {base}...refs/pull/{pr}/head")),
+                    );
+                }
+                Err(reason) => {
+                    missing.insert("files".to_string(), json!(reason));
+                }
+            }
+            info["missing"] = Value::Object(missing);
+            info["sources"] = Value::Object(sources);
+            Ok(Some(info))
+        }
     }
+}
+
+/// The remote URLs the git legs read: origin, then upstream (a fork checkout
+/// convention). A checkout with neither has no git leg.
+fn remote_urls(cwd: &Path) -> Vec<String> {
+    ["origin", "upstream"]
+        .iter()
+        .filter_map(|remote| {
+            Command::new("git")
+                .args(["remote", "get-url", remote])
+                .current_dir(cwd)
+                .output()
+                .ok()
+                .filter(|out| out.status.success())
+                .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_string())
+                .filter(|url| !url.is_empty())
+        })
+        .collect()
+}
+
+/// The PR head sha from git alone: `git ls-remote <url> refs/pull/<n>/head`
+/// costs no REST quota. The first URL whose remote carries the ref wins.
+fn git_head_sha(cwd: &Path, pr: u64, urls: &[String]) -> Option<String> {
+    let want = format!("refs/pull/{pr}/head");
+    for url in urls {
+        let Some(out) = Command::new("git")
+            .args(["ls-remote", url, &want])
+            .current_dir(cwd)
+            .output()
+            .ok()
+        else {
+            continue;
+        };
+        if !out.status.success() {
+            continue;
+        }
+        let line = String::from_utf8_lossy(&out.stdout);
+        if let Some(first) = line.lines().next() {
+            let sha = first.split('\t').next().unwrap_or("").trim().to_string();
+            if sha.len() == 40 && sha.chars().all(|c| c.is_ascii_hexdigit()) {
+                return Some(sha);
+            }
+        }
+    }
+    None
+}
+
+/// The changed-file list from git alone: fetch `refs/pull/<n>/head` into
+/// FETCH_HEAD (a transient scratch file, never a ref), then a three-dot
+/// name-only diff against the PR's base branch - `origin/<base>` when the
+/// checkout has it, else `origin/main`. `Err` names what the leg lacked.
+fn git_files(
+    cwd: &Path,
+    pr: u64,
+    urls: &[String],
+    base_ref: Option<&str>,
+) -> Result<(Vec<String>, bool, String), String> {
+    let url = urls.first().ok_or_else(|| {
+        "no origin or upstream remote, so the git leg cannot read the PR ref".to_string()
+    })?;
+    let spec = format!("refs/pull/{pr}/head");
+    let fetch = Command::new("git")
+        .args(["fetch", "--no-tags", url, &spec])
+        .current_dir(cwd)
+        .output()
+        .map_err(|e| format!("git fetch failed to spawn: {e}"))?;
+    if !fetch.status.success() {
+        return Err(format!(
+            "git fetch of {spec} failed: {}",
+            String::from_utf8_lossy(&fetch.stderr).trim()
+        ));
+    }
+    let base = base_ref
+        .and_then(|name| local_base(cwd, name))
+        .or_else(|| local_base(cwd, "main"))
+        .ok_or_else(|| "no local origin/<base> or origin/main to diff against".to_string())?;
+    let diff = Command::new("git")
+        .args(["diff", "--name-only", &format!("{base}...FETCH_HEAD")])
+        .current_dir(cwd)
+        .output()
+        .map_err(|e| format!("git diff failed to spawn: {e}"))?;
+    if !diff.status.success() {
+        return Err(format!(
+            "git diff against {base} failed: {}",
+            String::from_utf8_lossy(&diff.stderr).trim()
+        ));
+    }
+    let mut files: Vec<String> = String::from_utf8_lossy(&diff.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(str::to_string)
+        .collect();
+    let truncated = files.len() > FILES_CAP;
+    files.truncate(FILES_CAP);
+    Ok((files, truncated, base))
+}
+
+/// `origin/<name>` when the checkout tracks that branch locally.
+fn local_base(cwd: &Path, name: &str) -> Option<String> {
+    let candidate = format!("origin/{name}");
+    let out = Command::new("git")
+        .args(["rev-parse", "--verify", "--quiet", &candidate])
+        .current_dir(cwd)
+        .output()
+        .ok()?;
+    if out.status.success() && !out.stdout.is_empty() {
+        Some(candidate)
+    } else {
+        None
+    }
+}
+
+/// The checks summary from the fallback reply's `statusCheckRollup`: the
+/// status read's own classifiers (generic-CI filter, supersession, verdict)
+/// over the same array, plus per-check rows capped at [`CHECK_ROWS_CAP`].
+/// `None` when the reply carried no rollup array at all - GitHub's own empty
+/// rollup answers with `verdict: "unknown"`, which is a real answer.
+fn checks_from_rollup(gh: &Value) -> Option<Value> {
+    let rollup = gh.get("statusCheckRollup")?.as_array()?;
+    let generic = crate::pr_status::generic_ci_rollup(rollup);
+    let (verdict, _code, counts) = crate::pr_status::verdict_for(&generic);
+    let rows: Vec<Value> = generic
+        .iter()
+        .take(CHECK_ROWS_CAP)
+        .map(|check| {
+            let name = {
+                let n = check.get("name").and_then(Value::as_str).unwrap_or("");
+                if n.is_empty() {
+                    check.get("context").and_then(Value::as_str).unwrap_or("")
+                } else {
+                    n
+                }
+            };
+            let status = check.get("status").and_then(Value::as_str).unwrap_or("");
+            let conclusion = check
+                .get("conclusion")
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
+                .map(str::to_uppercase)
+                .or_else(|| {
+                    Some(
+                        check
+                            .get("state")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .to_uppercase(),
+                    )
+                })
+                .unwrap_or_default();
+            let state = if !conclusion.is_empty() {
+                conclusion
+            } else if !status.is_empty() && !status.eq_ignore_ascii_case("COMPLETED") {
+                "PENDING".to_string()
+            } else {
+                "UNKNOWN".to_string()
+            };
+            json!({"name": name, "state": state})
+        })
+        .collect();
+    Some(json!({
+        "verdict": verdict,
+        "counts": counts,
+        "rows": rows,
+        "rows_truncated": generic.len() > CHECK_ROWS_CAP,
+    }))
 }
 
 /// The REST pulls body mapped onto the command payload's keys, the twin of
@@ -441,8 +754,250 @@ mod tests {
             "the fallback cause follows: {text}"
         );
         assert_eq!(
-            append_fallback_cause("the CORE refusal", None),
-            "the CORE refusal"
+            append_fallback_cause("the CORE arm appended the fallback cause", None),
+            "the CORE arm appended the fallback cause"
+        );
+    }
+
+    /// The slice field set extends the info fallback's set by exactly
+    /// `statusCheckRollup`: the ONE brokered GraphQL read the CORE arm is
+    /// allowed serves checks beside the view fields (one targeted query,
+    /// never a second). Routing still rides `url`, and the rollup field
+    /// itself is broker-only too.
+    #[test]
+    fn slice_fields_extend_the_info_set_by_the_rollup_field() {
+        assert_eq!(
+            PR_INFO_SLICE_FIELDS,
+            format!(
+                "{},statusCheckRollup",
+                crate::loopcheck::PR_INFO_FALLBACK_FIELDS
+            )
+        );
+        use crate::pr_status::adapter::METADATA_FIELDS;
+        assert!(
+            !METADATA_FIELDS.contains(&"statusCheckRollup"),
+            "statusCheckRollup is broker-only"
+        );
+    }
+
+    /// The rollup maps through the status read's own classifiers: the
+    /// generic-CI filter drops the coverage/evals projections, supersession
+    /// keeps the latest row per name, the verdict reads red on one settled
+    /// failure, and rows carry name + state capped at 20.
+    #[test]
+    fn rollup_maps_to_verdict_counts_and_capped_rows() {
+        let gh = serde_json::json!({
+            "number": 7,
+            "headRefOid": "abc",
+            "statusCheckRollup": [
+                {"__typename": "CheckRun", "name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"},
+                {"__typename": "CheckRun", "name": "ci", "status": "COMPLETED", "conclusion": "FAILURE"},
+                {"__typename": "CheckRun", "name": "lint", "status": "IN_PROGRESS"},
+                {"__typename": "CheckRun", "name": "lint", "status": "IN_PROGRESS"},
+                {"__typename": "StatusContext", "context": "fno/review-coverage", "state": "SUCCESS"},
+                {"__typename": "StatusContext", "context": "fno/evals-gate", "state": "SUCCESS"},
+                {"__typename": "StatusContext", "context": "fno/evals-gate", "state": "SUCCESS"}
+            ]
+        });
+        let checks = checks_from_rollup(&gh).expect("a rollup array maps");
+        assert_eq!(checks.get("verdict").and_then(Value::as_str), Some("red"));
+        let counts = checks.get("counts").expect("counts ride");
+        assert_eq!(counts.get("total").and_then(Value::as_i64), Some(2));
+        assert_eq!(counts.get("pass").and_then(Value::as_i64), Some(1));
+        assert_eq!(
+            checks.get("rows").and_then(Value::as_array).map(Vec::len),
+            Some(3)
+        );
+        assert_eq!(counts.get("pending").and_then(Value::as_i64), Some(1));
+        assert_eq!(
+            checks.get("rows_truncated").and_then(Value::as_bool),
+            Some(false)
+        );
+        let dropped = checks_from_rollup(&serde_json::json!({"number": 7}));
+        assert!(dropped.is_none(), "no rollup array, no checks key");
+    }
+
+    /// The git leg answers head sha and files with zero REST quota: a real
+    /// temp repo whose origin carries `refs/pull/7/head`. A missing ref
+    /// refuses with the ref name in the reason.
+    #[test]
+    fn git_leg_reads_head_and_files_over_refs_pull_head() {
+        let dir = tempfile::tempdir().unwrap();
+        let origin = dir.path().join("origin.git");
+        let work = dir.path().join("work");
+        std::fs::create_dir_all(&work).unwrap();
+        let urls = vec![origin.to_string_lossy().into_owned()];
+        let g = |args: &[&str]| {
+            let out = Command::new("git")
+                .args(args)
+                .current_dir(&work)
+                .env("GIT_AUTHOR_NAME", "t")
+                .env("GIT_AUTHOR_EMAIL", "t@t")
+                .env("GIT_COMMITTER_NAME", "t")
+                .env("GIT_COMMITTER_EMAIL", "t@t")
+                .output()
+                .expect("git spawns");
+            assert!(
+                out.status.success(),
+                "git {args:?} failed: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        };
+        // init origin bare
+        let out = Command::new("git")
+            .args(["init", "--bare", "-b", "main"])
+            .arg(&origin)
+            .output()
+            .expect("git init spawns");
+        assert!(out.status.success());
+        g(&["init", "-b", "main"]);
+        g(&["remote", "add", "origin", origin.to_str().unwrap()]);
+        g(&["commit", "--allow-empty", "-m", "base"]);
+        g(&["push", "-q", "origin", "main"]);
+        g(&["checkout", "-b", "feature"]);
+        std::fs::write(work.join("b.txt"), "x").unwrap();
+        g(&["add", "b.txt"]);
+        g(&["commit", "-q", "-m", "feature"]);
+        g(&["push", "-q", "origin", "HEAD:refs/pull/7/head"]);
+        g(&["fetch", "-q", "origin"]);
+
+        let sha = git_head_sha(&work, 7, &urls).expect("the ref resolves");
+        assert_eq!(sha, {
+            let out = Command::new("git")
+                .args(["rev-parse", "HEAD"])
+                .current_dir(&work)
+                .output()
+                .unwrap();
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        });
+        assert_eq!(git_head_sha(&work, 8, &urls), None);
+
+        let (files, truncated, base) =
+            git_files(&work, 7, &urls, Some("main")).expect("the diff answers");
+        assert_eq!(files, vec!["b.txt".to_string()]);
+        assert!(!truncated);
+        assert_eq!(base, "origin/main");
+        let err = git_files(&work, 8, &urls, None).expect_err("a missing ref refuses");
+        assert!(
+            err.contains("refs/pull/8/head"),
+            "the refusal names the ref: {err}"
+        );
+    }
+
+    /// The CORE arm's assembly over a real temp repo: a served GraphQL
+    /// reply takes the checks summary, the git head cross-check overrides
+    /// head_sha and names its source, files stamps source or missing-reason.
+    /// A refused read falls to the git legs alone: a partial payload whose
+    /// served fields carry sources and unserved fields carry reasons.
+    #[test]
+    fn assemble_stamps_sources_and_partial_payload() {
+        let dir = tempfile::tempdir().unwrap();
+        let origin = dir.path().join("origin.git");
+        let work = dir.path().join("work");
+        std::fs::create_dir_all(&work).unwrap();
+        let origin_arg = origin.to_string_lossy().into_owned();
+        let run = |repo: &std::path::Path, args: &[&str]| {
+            let out = Command::new("git")
+                .args(args)
+                .current_dir(repo)
+                .env("GIT_AUTHOR_NAME", "t")
+                .env("GIT_AUTHOR_EMAIL", "t@t")
+                .env("GIT_COMMITTER_NAME", "t")
+                .env("GIT_COMMITTER_EMAIL", "t@t")
+                .output()
+                .expect("git spawns");
+            assert!(
+                out.status.success(),
+                "git {args:?} failed: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        };
+        let out = Command::new("git")
+            .args(["init", "--bare", "-b", "main"])
+            .arg(&origin)
+            .output()
+            .expect("git init spawns");
+        assert!(out.status.success(), "bare init failed");
+        run(&work, &["init", "-b", "main"]);
+        run(&work, &["remote", "add", "origin", &origin_arg]);
+        run(&work, &["commit", "--allow-empty", "-m", "base"]);
+        run(&work, &["push", "-q", "origin", "main"]);
+        run(&work, &["push", "-q", "origin", "HEAD:refs/pull/7/head"]);
+        let git_sha = {
+            let out = Command::new("git")
+                .args(["rev-parse", "HEAD"])
+                .current_dir(&work)
+                .output()
+                .expect("rev-parse spawns");
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        };
+        // Case A: GraphQL served - checks ride, git overrides the head sha,
+        // files come from the git diff, sources name the git legs.
+        let gh = serde_json::json!({
+            "number": 7,
+            "headRefOid": "f".repeat(40),
+            "baseRefName": "main",
+            "statusCheckRollup": [
+                {"__typename": "CheckRun", "name": "ci", "status": "COMPLETED", "conclusion": "FAILURE"}
+            ]
+        });
+        let info = assemble_fallback(&work, Some(7), Ok(Some(gh)))
+            .ok()
+            .flatten()
+            .expect("a served reply assembles");
+        assert_eq!(
+            info.get("head_sha").and_then(Value::as_str),
+            Some(git_sha.as_str())
+        );
+        assert_eq!(
+            info.pointer("/sources/head_sha").and_then(Value::as_str),
+            Some("git refs/pull/7/head")
+        );
+        assert_eq!(
+            info.pointer("/checks/verdict").and_then(Value::as_str),
+            Some("red")
+        );
+        assert_eq!(
+            info.pointer("/sources/files").and_then(Value::as_str),
+            Some("git diff origin/main...refs/pull/7/head")
+        );
+        assert!(
+            info.get("files")
+                .and_then(Value::as_array)
+                .map(Vec::len)
+                .unwrap_or(0)
+                >= 1,
+            "the diff leg serves files: {info}"
+        );
+        // Case B: the read refused - git answers alone.
+        let read: Result<Option<Value>, crate::loopcheck::GhReadError> = Err(
+            crate::loopcheck::GhReadError::for_test("pr_view", "bucket drained"),
+        );
+        let info = assemble_fallback(&work, Some(7), read)
+            .ok()
+            .flatten()
+            .expect("git serves head + files");
+        assert_eq!(info.get("partial").and_then(Value::as_bool), Some(true));
+        assert_eq!(info.get("transport").and_then(Value::as_str), Some("git"));
+        assert_eq!(
+            info.get("head_sha").and_then(Value::as_str),
+            Some(git_sha.as_str())
+        );
+        let missing = info
+            .get("missing")
+            .and_then(Value::as_object)
+            .expect("missing map");
+        assert!(
+            missing
+                .get("url")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .contains("graphql fallback failed"),
+            "unserved fields name the cause: {missing:?}"
+        );
+        assert!(
+            missing.get("head_sha").is_none(),
+            "the served head is not missing"
         );
     }
 }
