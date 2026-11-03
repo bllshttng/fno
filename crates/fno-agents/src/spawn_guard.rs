@@ -124,7 +124,10 @@ pub fn decide(req: &GuardRequest) -> (Value, i32) {
             } else {
                 state
             };
-            return (blocked(req, &seen, common, &node_key, now, record.as_ref()), 0);
+            return (
+                blocked(req, &seen, common, &node_key, now, record.as_ref()),
+                0,
+            );
         }
     }
     if let Some(session_phase) = req.phase {
@@ -1246,81 +1249,86 @@ mod tests {
         crate::claims::status(key, Some(root)).1.map(|r| r.holder)
     }
 
-#[test]
-fn planner_refusal_names_doc_date_host_and_target() {
-    // AC4: the planner-held refusal carries the doc, its date, the holder's
-    // host and the target door, in one line a shell can read.
-    let facts = super::PlanDocFacts {
-        path: "/plans/20261102-somewhere-x-1.md".into(),
-        date: Some("2026-11-02".into()),
-        status: None,
-    };
-    let fields = super::planner_fields(
-        Some(&facts),
-        "x-1",
-        "blueprint-session:s9",
-        Some("other-host"),
-    );
-    let mut verdict = serde_json::Map::new();
-    verdict.insert("verdict".into(), serde_json::json!("already-running"));
-    verdict.insert("reason".into(), serde_json::json!("live-claim"));
-    verdict.insert("holder".into(), serde_json::json!("blueprint-session:s9"));
-    for (k, v) in fields {
-        verdict.insert(k, serde_json::json!(v));
-    }
-    let line = super::refusal_line("x-1", &serde_json::Value::Object(verdict));
-    assert!(line.contains("plan=/plans/20261102-somewhere-x-1.md"), "{line}");
-    assert!(line.contains("plan_date=2026-11-02"), "{line}");
-    assert!(line.contains("host=other-host"), "{line}");
-    assert!(line.contains("/fno:target x-1"), "{line}");
-}
-
-#[test]
-fn planner_refusal_without_a_doc_points_at_the_holder() {
-    let fields = super::planner_fields(None, "x-1", "blueprint-session:s9", None);
-    assert_eq!(
-        fields.iter().find(|(k, _)| k == "next").unwrap().1,
-        "wait for blueprint-session:s9 or peek it"
-    );
-}
-
-#[test]
-fn plan_fresh_gates_think_by_age_and_blueprint_by_status() {
-    // AC5: a think refuses a doc inside the window and warns past it; a
-    // blueprint refuses only a ready doc. A doc with no date gates nothing.
-    let today = chrono::Utc::now().date_naive().to_string();
-    let old = (chrono::Utc::now().date_naive() - chrono::Duration::days(30)).to_string();
-    let facts = |date: Option<&str>, status: Option<&str>| super::PlanDocFacts {
-        path: "/plans/20261101-somewhere-x-1.md".into(),
-        date: date.map(str::to_string),
-        status: status.map(str::to_string),
-    };
-    let refuse = |f: &super::PlanDocFacts| match super::plan_fresh_for_facts("think", f) {
-        Some(super::PlanFresh::Refuse { fields, .. }) => fields,
-        other => panic!("expected refuse, got {other:?}"),
-    };
-    let fresh = facts(Some(&today), None);
-    let fields = refuse(&fresh);
-    assert!(fields.iter().any(|(k, v)| k == "plan" && v.ends_with("somewhere-x-1.md")));
-    assert!(fields.iter().any(|(k, v)| k == "plan_date" && *v == today));
-
-    let stale = facts(Some(&old), None);
-    match super::plan_fresh_for_facts("think", &stale) {
-        Some(super::PlanFresh::Warn(line)) => assert!(line.contains("somewhere-x-1.md")),
-        other => panic!("expected warn, got {other:?}"),
+    #[test]
+    fn planner_refusal_names_doc_date_host_and_target() {
+        // AC4: the planner-held refusal carries the doc, its date, the holder's
+        // host and the target door, in one line a shell can read.
+        let facts = super::PlanDocFacts {
+            path: "/plans/20261102-somewhere-x-1.md".into(),
+            date: Some("2026-11-02".into()),
+            status: None,
+        };
+        let fields = super::planner_fields(
+            Some(&facts),
+            "x-1",
+            "blueprint-session:s9",
+            Some("other-host"),
+        );
+        let mut verdict = serde_json::Map::new();
+        verdict.insert("verdict".into(), serde_json::json!("already-running"));
+        verdict.insert("reason".into(), serde_json::json!("live-claim"));
+        verdict.insert("holder".into(), serde_json::json!("blueprint-session:s9"));
+        for (k, v) in fields {
+            verdict.insert(k, serde_json::json!(v));
+        }
+        let line = super::refusal_line("x-1", &serde_json::Value::Object(verdict));
+        assert!(
+            line.contains("plan=/plans/20261102-somewhere-x-1.md"),
+            "{line}"
+        );
+        assert!(line.contains("plan_date=2026-11-02"), "{line}");
+        assert!(line.contains("host=other-host"), "{line}");
+        assert!(line.contains("/fno:target x-1"), "{line}");
     }
 
-    let ready = facts(Some(&today), Some("ready"));
-    assert!(refuse_bp(&ready).is_some());
-    let design = facts(Some(&today), Some("design"));
-    assert!(super::plan_fresh_for_facts("blueprint", &design).is_none());
-    let undated = facts(None, None);
-    assert!(super::plan_fresh_for_facts("think", &undated).is_none());
-}
+    #[test]
+    fn planner_refusal_without_a_doc_points_at_the_holder() {
+        let fields = super::planner_fields(None, "x-1", "blueprint-session:s9", None);
+        assert_eq!(
+            fields.iter().find(|(k, _)| k == "next").unwrap().1,
+            "wait for blueprint-session:s9 or peek it"
+        );
+    }
 
-fn refuse_bp(f: &super::PlanDocFacts) -> Option<super::PlanFresh> {
-    super::plan_fresh_for_facts("blueprint", f)
-}
+    #[test]
+    fn plan_fresh_gates_think_by_age_and_blueprint_by_status() {
+        // AC5: a think refuses a doc inside the window and warns past it; a
+        // blueprint refuses only a ready doc. A doc with no date gates nothing.
+        let today = chrono::Utc::now().date_naive().to_string();
+        let old = (chrono::Utc::now().date_naive() - chrono::Duration::days(30)).to_string();
+        let facts = |date: Option<&str>, status: Option<&str>| super::PlanDocFacts {
+            path: "/plans/20261101-somewhere-x-1.md".into(),
+            date: date.map(str::to_string),
+            status: status.map(str::to_string),
+        };
+        let refuse = |f: &super::PlanDocFacts| match super::plan_fresh_for_facts("think", f) {
+            Some(super::PlanFresh::Refuse { fields, .. }) => fields,
+            other => panic!("expected refuse, got {other:?}"),
+        };
+        let fresh = facts(Some(&today), None);
+        let fields = refuse(&fresh);
+        assert!(fields
+            .iter()
+            .any(|(k, v)| k == "plan" && v.ends_with("somewhere-x-1.md")));
+        assert!(fields.iter().any(|(k, v)| k == "plan_date" && *v == today));
+
+        let stale = facts(Some(&old), None);
+        match super::plan_fresh_for_facts("think", &stale) {
+            Some(super::PlanFresh::Warn(line)) => assert!(line.contains("somewhere-x-1.md")),
+            other => panic!("expected warn, got {other:?}"),
+        }
+
+        let ready = facts(Some(&today), Some("ready"));
+        assert!(refuse_bp(&ready).is_some());
+        let design = facts(Some(&today), Some("design"));
+        assert!(super::plan_fresh_for_facts("blueprint", &design).is_none());
+        let undated = facts(None, None);
+        assert!(super::plan_fresh_for_facts("think", &undated).is_none());
+    }
+
+    fn refuse_bp(f: &super::PlanDocFacts) -> Option<super::PlanFresh> {
+        super::plan_fresh_for_facts("blueprint", f)
+    }
 
     #[test]
     fn a_free_node_reserves_and_takes_the_handover_claim() {

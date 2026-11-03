@@ -396,8 +396,7 @@ fn run_open(args: &[String]) -> i32 {
                     &other,
                     host,
                 );
-                let flat: Vec<String> =
-                    fields.iter().map(|(k, v)| format!("{k}={v}")).collect();
+                let flat: Vec<String> = fields.iter().map(|(k, v)| format!("{k}={v}")).collect();
                 eprintln!(
                     "session open: node:{node_id} held by {other} (pid={}): no planner started. {}",
                     pid.map(|p| p.to_string()).unwrap_or_else(|| "None".into()),

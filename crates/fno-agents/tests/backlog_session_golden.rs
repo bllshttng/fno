@@ -373,8 +373,14 @@ fn think_open_blocks_a_second_session_naming_the_target() {
         true,
     );
     assert_eq!(code, 1, "{stdout}{stderr}");
-    assert!(stderr.contains("blueprint-session:sess-golden-0001"), "{stderr}");
-    assert!(stderr.contains("plan=/plans/20260901-somewhere-x-think0001.md"), "{stderr}");
+    assert!(
+        stderr.contains("blueprint-session:sess-golden-0001"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("plan=/plans/20260901-somewhere-x-think0001.md"),
+        "{stderr}"
+    );
     assert!(stderr.contains("plan_date=2026-09-01"), "{stderr}");
     assert!(stderr.contains("/fno:target x-think0001"), "{stderr}");
 }
@@ -431,10 +437,7 @@ fn think_close_writes_a_think_row_and_frees_the_claim() {
         .find(|r| r.get("id").and_then(serde_json::Value::as_str) == Some("x-think0002"))
         .unwrap();
     let sessions = node["sessions"].as_array().unwrap();
-    let think_rows: Vec<_> = sessions
-        .iter()
-        .filter(|s| s["phase"] == "think")
-        .collect();
+    let think_rows: Vec<_> = sessions.iter().filter(|s| s["phase"] == "think").collect();
     assert_eq!(think_rows.len(), 1);
     assert!(think_rows[0]["ended_at"].is_string());
 }
