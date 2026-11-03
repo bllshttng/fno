@@ -40,7 +40,7 @@ pub enum OnExpiry {
     SkipAndJournal,
 }
 
-/// One registered chokepoint. A foreground row never waits past 10 seconds.
+/// One registered chokepoint. A plain foreground row waits 10 seconds; a row held across real work (a spawn census, a gh call) gets a longer bound.
 #[derive(Debug)]
 pub struct Chokepoint {
     pub name: &'static str,
@@ -62,14 +62,16 @@ const fn lock(name: &'static str, secs: u64, on_expiry: OnExpiry) -> Chokepoint 
 }
 
 pub static REGISTRY_STATE: Chokepoint = lock("registry-state", 10, OnExpiry::Refuse);
-pub static SPAWN_ADMISSION: Chokepoint = lock("spawn-admission", 10, OnExpiry::Refuse);
+/// Held across a census plus a spawn, so a burst of spawns queues behind it.
+pub static SPAWN_ADMISSION: Chokepoint = lock("spawn-admission", 30, OnExpiry::Refuse);
 pub static LEDGER: Chokepoint = lock("ledger", 10, OnExpiry::Refuse);
 /// The session harvest is idempotent: a skipped pass reruns on the next tick.
 pub static LEDGER_HARVEST: Chokepoint = lock("ledger-harvest", 10, OnExpiry::SkipAndJournal);
 pub static LEAD_STATE: Chokepoint = lock("lead-state", 10, OnExpiry::Refuse);
 pub static ACCOUNTS: Chokepoint = lock("accounts", 10, OnExpiry::Refuse);
 pub static TEAM_REAP: Chokepoint = lock("team-reap", 10, OnExpiry::Refuse);
-pub static GH_QUOTA: Chokepoint = lock("gh-quota", 10, OnExpiry::Refuse);
+/// Held across a whole gh call; many watchers queue on it.
+pub static GH_QUOTA: Chokepoint = lock("gh-quota", 60, OnExpiry::Refuse);
 pub static HARNESS_DAEMON: Chokepoint = lock("harness-daemon", 10, OnExpiry::Refuse);
 pub static FLEET_INCIDENT: Chokepoint = lock("fleet-incident", 10, OnExpiry::Refuse);
 pub static TEST_HOLD: Chokepoint = lock("test-hold", 10, OnExpiry::Refuse);
