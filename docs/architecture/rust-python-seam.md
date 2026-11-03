@@ -16,7 +16,7 @@ The consequence, and it is arithmetic, not preference. A subprocess has no cheap
 
 ## The measurement
 
-Reproduce every number below on a clean checkout with `cd cli && uv run fno-py doctor lint seam-crossings`. It prints, for each baselined set, the measured count beside the baseline count.
+Reproduce every number below on a clean checkout with `crates/fno/target/debug/fno doctor lint seam-crossings` (build the front door first). It prints, for each baselined set, the measured count beside the baseline count.
 
 Rust reaches the `fno` porcelain through **104 baselined crossing sites in both crates**. The lint also ratchets **25 resolver functions**, every function whose body resolves the porcelain path. The Python direction runs through one door. `cli/src/fno/rust_binary.py` is the only production Python file allowed to exec the literal `fno-agents` binary. 15 production files import it.
 
@@ -82,6 +82,7 @@ The table classifies the crossing sites, one line of reason each. The pass that 
 | `scrape.rs:276` | conforming | pane title sweep read through the pane owner |
 | `spawn_gate.rs:378` | conforming | gate-escape telemetry through the event emit path |
 | `backlog_view.rs:69` | conforming | snapshot read through the only writer, schema owned by the source |
+| `team_alarm.rs read_org_payload` | retired | the team read runs in process (`team_read::team_nodes_payload_at`); the front-binary spawn for the `--nodes` payload is gone, and the ledger arm's inner crossing retired with it |
 | `client.rs:2470` | conforming | update probe through the update policy owner, bounded |
 | `client.rs:2649` | conforming | workspace prune through the front door, counts owned by the command; an applied run sends `SquadReload` to every live server so the file and memory agree; an orphaned worker tab (its stored member judged Dead) closes by default, used shells stay opt-in |
 | `client.rs:14413` | conforming | config write through the CLI, the same monopoly as the graph |
@@ -212,7 +213,6 @@ The counting rule, in words, so a reader can audit a row without reading the scr
 | 64 | worktree_status (ported to Rust and deleted 2026-10, gone on next regen) | 165 | 2 | 5/- | 0 | 3 |
 | 65 | relay | 1862 | 2 | 5/- | 810 | 9 |
 | 66 | runtime | 415 | 2 | 6/- | 439 | 5 |
-| 67 | branch_provenance_cache | 84 | 2 | 8/- | 0 | 4 |
 | 68 | config_readback | 280 | 2 | 8/- | 0 | 5 |
 | 69 | worktree (ported to Rust and deleted 2026-10, gone on next regen) | 596 | 2 | 9/- | 791 | 6 |
 | 70 | doctor_graph | 86 | 2 | 14/1 | 0 | 4 |

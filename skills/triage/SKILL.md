@@ -375,7 +375,7 @@ A row with `source_kind: external_request` holds visitor text from the public bo
   the native `fno backlog triage` door
 - `scripts/triage.py` — compatibility shim that forwards to the v2 CLI
   (or falls back to the in-repo module when `fno` is not on PATH)
-- `cli/src/fno/graph/store.py` — `locked_mutate_graph()` entry point
+- `crates/fno-agents/src/graph_store.rs` - `mutate_rows` entry point
 - `~/.fno/cache/pages/graph.md` — the kanban view that reflects applied changes
 - `crates/fno-agents/src/backlog/triage_health.rs` — threshold evaluation,
   notification dispatch, history append/read, trend summary

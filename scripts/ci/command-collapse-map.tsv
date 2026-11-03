@@ -107,9 +107,6 @@ agents wait	T1	agents wait	10
 agents watch	T1	agents watch	5
 agents watchdog	T1	agents watchdog	4
 agents whoami	T1	agents whoami	9
-annotate add	T1	annotate add	8
-annotate list	KEEP	annotate list	0	ruled KEEP: read-back half of the live annotate write path
-annotate resolve	T1	annotate resolve	5
 approvals decide	T1	approvals decide	2
 approvals ls	T1	approvals ls	2
 approvals show	T1	approvals show	3
@@ -180,13 +177,6 @@ backlog view	T1	backlog view	3
 backlog worked	T1	backlog worked	2
 bundle check	T1	bundle check	11
 bundle lint	T1	bundle lint	2
-claim acquire	T1	claim acquire	27
-claim list	T1	claim list	9
-claim reap	T1	claim reap	1
-claim refresh	T1	claim refresh	5
-claim release	KEEP	claim release	38	deliberate readability slack for a high-traffic distinct operation
-claim session-pid	T1	claim session-pid	2
-claim status	T1	claim status	32
 config accounts	KEEP	config accounts	71	deliberate readability slack for a high-traffic distinct operation
 config active-backlog	T1	config active-backlog	5
 config assert-subagent-budget	T1	config assert-subagent-budget	6
@@ -208,7 +198,6 @@ delivery evaluate	KEEP	delivery evaluate	7	single-leaf group
 do ci status	T1	do ci status	0
 do delivery evaluate	T1	do delivery evaluate	7
 do plan brief	T1	do plan brief	4
-do plan fidelity	T1	do plan fidelity	5
 do plan folder-audit	T1	do plan folder-audit	0
 do plan graduate	T1	do plan graduate	2
 do plan migrate-keys	T1	do plan migrate-keys	1
@@ -248,12 +237,7 @@ do pr status	T1	do pr status	19
 do pr sync-canonical	T1	do pr sync-canonical	2
 do pr verify	T1	do pr verify	13
 do pr wait	T1	do pr wait	0
-do pr watch heal	T1	do pr watch heal	3
-do pr watch install	T1	do pr watch install	3
-do pr watch refresh	T1	do pr watch refresh	1
-do pr watch status	T1	do pr watch status	3
-do pr watch tick	T1	do pr watch tick	2
-do pr watch uninstall	T1	do pr watch uninstall	1
+do pr watch	T1	do pr watch	3
 do research	T1	do research	18
 do resume receipt show	T1	do resume receipt show	1
 do resume receipt validate	T1	do resume receipt validate	3
@@ -274,7 +258,6 @@ doctor evals trend	T1	doctor evals trend	0
 doctor event	T1	doctor event	50
 doctor harness	T1	doctor harness	0
 doctor harness-matrix	T1	doctor harness-matrix	3
-doctor lint	T1	doctor lint	39
 doctor observer replay	T1	doctor observer replay	2
 doctor observer judge	T1	doctor observer judge	2
 doctor observer sweep	T1	doctor observer sweep	4
@@ -283,7 +266,6 @@ doctor route	T1	doctor route	6
 doctor stalls	T1	doctor stalls	0
 doctor test	T1	doctor test	107
 doctor update	T1	doctor update	109
-done	KEEP	done	48	single-leaf group
 evals grade	T1	evals grade	11
 evals export	T1	evals export	0
 evals macro	T1	evals macro	0
@@ -293,10 +275,8 @@ evals qualify	T1	evals qualify	0
 evals report	T1	evals report	1
 evals run	T1	evals run	3
 help	KEEP	help	37	single-leaf group
-lint	KEEP	lint	29	single-leaf group
 paths handoff	T1	paths handoff	9
 plan brief	T1	plan brief	4
-plan fidelity	T1	plan fidelity	5
 plan folder-audit	T1	plan folder-audit	0
 plan graduate	T1	plan graduate	2
 plan migrate-keys	T1	plan migrate-keys	1
@@ -308,12 +288,6 @@ plan stamp	T1	plan stamp	5
 plan sync	T1	plan sync	3
 plan validate	T1	plan validate	14
 do pr create	T1	do pr create	3
-pr-watch heal	T1	pr-watch heal	3
-pr-watch install	T1	pr-watch install	3
-pr-watch refresh	T1	pr-watch refresh	1
-pr-watch status	T1	pr-watch status	3
-pr-watch tick	T1	pr-watch tick	2
-pr-watch uninstall	T1	pr-watch uninstall	1
 resume receipt show	T1	resume receipt show	1
 resume receipt validate	T1	resume receipt validate	3
 resume receipt write	T1	resume receipt write	2

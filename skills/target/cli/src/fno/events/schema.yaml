@@ -1243,7 +1243,7 @@ event_types:
     consumers: [operator]
 
   - name: backlog_refused_flush
-    description: "A shared-backlog flush the primary refused. The take-back covers only the nodes the refusal named (the whole batch when the refusal names no node, as with a global table or a failed request): the primary's copy comes back for those nodes' rows, every other change in the batch re-queues for the next flush, and an INSERT the take-back covers keeps its local row. The refused statements are kept in the replica's backlog_refused table for retry or inspection, and the same facts are on stderr. Emitted after the take-back transaction commits, so the event never lands without the retention."
+    description: "A shared-backlog flush the primary refused. The take-back covers only the nodes the refusal named (the whole batch when the refusal names no node, as with a global table or a failed request): the primary's copy comes back for those nodes' rows, every other change in the batch re-queues for the next flush, and an INSERT the take-back covers keeps its local row. The refused statements are kept in the replica's backlog_refused table for inspection; the cap keeps the newest batch and trims older ones, announced on stderr and by backlog_refused_trimmed. The same facts are on stderr. Emitted after the take-back transaction commits, so the event never lands without the retention."
     sources: [daemon]
     data:
       required: [nodes, tables, batch, error]
@@ -1260,6 +1260,40 @@ event_types:
         error:
           type: string
           description: "The primary's refusal text."
+    consumers: [operator]
+
+  - name: backlog_refused_trimmed
+    sources: [daemon]
+    description: "The replica's backlog_refused dead-letter cap trimmed older batches. Nothing replayable is lost: a refused batch's statements are the take-back's already-reverted rows and the writes that were still valid re-queued, and no reader re-sends a refused batch. The cap keeps the newest batch. Emitted after the trim commits; stderr names the same ids."
+    data:
+      required: [dropped_ids, dropped_batches, kept]
+      properties:
+        dropped_ids:
+          type: array
+          description: "The trimmed backlog_refused row ids."
+        dropped_batches:
+          type: array
+          description: "The same rows as '<id> (<batch>)' strings."
+        kept:
+          type: integer
+          description: "Batches the cap keeps (the newest one)."
+    consumers: [operator]
+
+  - name: page_relief_done
+    description: "The daemon's freed-page return arm ran malloc_zone_pressure_relief: resident size the kernel reported before and after, and how many malloc zones the pass relieved. Fires at most once a minute and only above the 160 MB resident threshold, so a quiet daemon never emits it."
+    sources: [daemon]
+    data:
+      required: [rss_kb_before, rss_kb_after, zones]
+      properties:
+        rss_kb_before:
+          type: integer
+          description: "Resident size in KB before the relief pass."
+        rss_kb_after:
+          type: integer
+          description: "Resident size in KB after the relief pass."
+        zones:
+          type: integer
+          description: "Malloc zones the pass relieved."
     consumers: [operator]
 
   - name: backlog_done_forced
@@ -1882,7 +1916,7 @@ event_types:
 
   - name: session_satisfied
     description: "Signals that a target session's work is complete; alternative to <promise> tag emission. The stop hook scans for these and may auto-release the Stop hook when a fresh event matches the current session and the three-factor gates are still satisfied. Data.source is the constrained subsystem that produced the signal (check_pr, pr_merge, ci_watcher, fno_gate_manual, delegated); envelope source is the producer identity."
-    # 'backlog' added: cli/src/fno/graph/_reconcile.py's
+    # 'backlog' added: backlog reconcile's
     # emit_session_satisfied_for_record stamps envelope source "backlog" for
     # the post-merge reconcile path (trigger=pr_merge), a real live producer
     # the earlier declaration missed. 'daemon' added: the native twin
@@ -4853,7 +4887,7 @@ event_types:
           description: "Optional. Executed evidence rows (cmd, exit code, output head) backing a code fact the ruling asserts. Listed by the reader projection before this declaration existed; declared here so the schema and the projection agree."
         scope:
           type: string
-          description: "Optional. Who the law governs: `global`, or `project:<slug>`. A row with no scope reads as project:fno, because every row recorded before this field existed was recorded in fno. The law door stamps the recording session's project by default; widening to global is an explicit --global, because law is never inherited by silence. Readers filter to global plus the session's project and fail open with a named reason when the project cannot be resolved."
+          description: "Optional. Who the law governs: `global`, `project:<slug>`, `machine:<id>` or `person:<name>`. A row with no scope reads as project:fno, because every row recorded before this field existed was recorded in fno. The law door stamps the recording session's project by default; widening is an explicit --global, --machine or --person, because law is never inherited by silence. A global law, or one naming another machine or person, needs a stated fleet.owner. Readers filter to global plus the session's project, machine id and person, and fail open with a named reason when the project cannot be resolved."
         paths:
           type: array
           description: "Optional. Repo-relative globs. A live law with paths becomes a pre-tool rule on Edit and Write of a matching file, printed once per session (hooks/rules-dispatch.sh)."
@@ -9136,6 +9170,9 @@ event_types:
         harness:
           type: [string, "null"]
           description: "The corrected agent's harness axis (claude, codex, opencode, pi, footnote, agy)."
+        seat:
+          type: object
+          description: "The corrected session's seat as a served reading: lead:L<n>, lead with no rung known, or worker. Absent on rows older than the stamp; a correction_seat row carries those."
         model:
           type: object
           description: "The corrected agent's model, as a served reading beside measured_at and basis."
@@ -9235,6 +9272,21 @@ event_types:
         basis:
           type: string
           description: "What decided the outcome (merged, retraction, decision_span, age)."
+    consumers: [fno doctor event corrections]
+
+  - name: correction_seat
+    retention: durable
+    description: "The seat of one agent_corrected row written before the fold stamped one, appended at most once per row by the daemon's hourly pass. The store is append-only, so the seat rides as its own row. An unmeasured session writes none."
+    sources: [daemon, test]
+    data:
+      required: [correction_id, seat]
+      properties:
+        correction_id:
+          type: string
+          description: "The agent_corrected row this seat belongs to."
+        seat:
+          type: object
+          description: "The session's seat as a served reading: lead:L<n>, lead with no rung known, or worker."
     consumers: [fno doctor event corrections]
 
 limits:

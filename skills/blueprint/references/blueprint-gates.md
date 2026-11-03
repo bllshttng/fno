@@ -17,7 +17,7 @@ node ID. `parse-claims-arg.sh` recognizes the config-agnostic node-id shape
 A node id never collides with file paths or raw descriptions, so this check is
 cheap and goes first.
 
-When the argument matches, the rendered plan MUST declare `claims: <node-id>` in its frontmatter so `fno backlog intake` updates the existing node in place, in any state, rather than creating a duplicate (see `cli/src/fno/graph/_intake.py::_resolve_claim`). Without the claim, every adopted spec compounds the dangling-idea-node cleanup debt.
+When the argument matches, the rendered plan MUST declare `claims: <node-id>` in its frontmatter so `fno backlog intake` updates the existing node in place, in any state, rather than creating a duplicate (see `crates/fno-agents/src/backlog/intake.rs`). Without the claim, every adopted spec compounds the dangling-idea-node cleanup debt.
 
 **Classify and resolve.** Run this BEFORE the failure-mode path classifier
 below so an ab-id never falls through to "design-doc path":
@@ -673,7 +673,7 @@ the dedup list:
 
 ```bash
 if [[ "<peer>" not in messaged_peers ]]; then
-  if fno agents mail send --to-project <peer> --kind heads-up \
+  if fno agents mail send --to-project <peer> \
        --body "spec'd: <PLAN-TITLE>; touches surface <SURFACE-NAME>; ETA: <PLAN-TIMESTAMP>; plan: <PLAN-PATH>"; then
     append_peer_to_messaged_peers "<peer>"  # in plan frontmatter
   else

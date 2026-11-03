@@ -58,7 +58,7 @@ print("\n".join(out))
 PY
 
 # Baseline keys: the first token of each non-comment, non-blank line.
-grep -vE '^[[:space:]]*(#|$)' "$BASELINE" | awk '{print $1}' | sort -u > "$BASE"
+{ grep -vE '^[[:space:]]*(#|$)' "$BASELINE" || true; } | awk '{print $1}' | sort -u > "$BASE"
 
 ADDED="$(comm -23 "$FOUND" "$BASE" || true)"
 REMOVED="$(comm -13 "$FOUND" "$BASE" || true)"
