@@ -1886,10 +1886,10 @@ fn project_id_from(path: &Path) -> Option<String> {
 /// would print. Withdrawals, hosted/typed receipts and duplicate ids filter
 /// here, the same choke point every reader of the log shares.
 fn scan_unread_count(name: &str, exclude_from: Option<&[String]>) -> u64 {
-    let Some(base) = std::env::var_os("HOME") else {
-        return 0;
-    };
-    let bus = crate::mail_paths::bus_dir_of(&PathBuf::from(base).join(".fno"));
+    let base = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let bus = crate::mail_paths::bus_dir_of(&base.join(".fno"));
     let rows = match read_bus_rows(&bus) {
         Ok(rows) => rows,
         Err(_) => return 0,
