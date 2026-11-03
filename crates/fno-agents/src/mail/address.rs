@@ -51,14 +51,6 @@ pub fn split_target(target: &str) -> Result<(String, String), String> {
     Ok((name.to_string(), host.to_string()))
 }
 
-/// This machine's bus host: the stable `host_label()` (macOS `LocalHostName`),
-/// normalized. `gethostname(2)` drifts with DHCP, VPN and sleep, which would
-/// strand pending rows addressed to the old spelling. Pull and the sender
-/// stamp both read this one function, so they cannot disagree.
-pub fn local_host() -> String {
-    normalize_host(&crate::name_ledger::host_label())
-}
-
 /// Hosts compare equal across machines that spell themselves differently
 /// (`iMac2D2.local` from gethostname, `imac2d2` from a user typing). One
 /// normalizer runs on write and on pull (operator ruling, 2026-10-10).
@@ -67,17 +59,5 @@ pub fn normalize_host(raw: &str) -> String {
     match lower.strip_suffix(".local") {
         Some(base) if !base.is_empty() => base.to_string(),
         _ => lower,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn local_host_is_the_normalized_stable_label() {
-        let label = crate::name_ledger::host_label();
-        assert_eq!(local_host(), normalize_host(&label));
-        assert!(!local_host().ends_with(".local"));
     }
 }

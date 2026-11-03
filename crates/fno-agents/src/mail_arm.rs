@@ -98,7 +98,7 @@ pub struct PullOutcome {
 /// One beat: pull, then flush, then expire. The legs are independent: a
 /// pull failure does not stop the flush from draining the local outbox.
 pub fn beat(remote: &Remote) -> Result<PullOutcome, String> {
-    let host = crate::mail::address::local_host();
+    let host = crate::name_ledger::local_bus_host();
     let mut outcome = PullOutcome {
         delivered: 0,
         flushed: 0,
