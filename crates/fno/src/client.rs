@@ -96,6 +96,7 @@ pub(crate) use overlay_paint::family_b_origin;
 mod row_stamp;
 // The sideline's density width rules.
 mod density_width;
+mod edge_drag;
 mod name_fit;
 use self::row_stamp::{no_pane_notice, paint_notice_overlay, paint_row_stamp, RowArm, RowStamp};
 use density_width::{
@@ -1079,6 +1080,8 @@ pub(crate) struct View {
     /// wire); the drag sets a free width (reversing snap-only).
     hover_sideline_border: bool,
     sideline_drag: Option<SidelineDrag>,
+    edge_sizes: edge_drag::EdgeSizes,
+    edge_drag: Option<edge_drag::EdgeDrag>,
     /// The pane whose grip the pointer is over, accented so the grip
     /// reads as grabbable before the press - the same "no portable cursor
     /// shape" constraint that makes [`View::hover_seam`] the whole affordance.
@@ -2096,6 +2099,8 @@ impl View {
             seam_drag: None,
             hover_sideline_border: false,
             sideline_drag: None,
+            edge_sizes: edge_drag::EdgeSizes::default(),
+            edge_drag: None,
             hover_grip: None,
             pane_drag: None,
             tab_drag: None,
@@ -3369,27 +3374,17 @@ impl View {
 
     /// Set the sideline to a free width from the dragged border column,
     /// clamped to `[MIN_SLIM_PANEL_W .. `[`sideline_max_width`]`]`. Returns
-    /// whether the width changed, so the caller re-reports the content viewport
-    /// only on a real crossing (the drag reports far more cells than columns).
-    ///
-    /// Reverses snap-only rule: the width is now continuous. The lower
-    /// clamp is the constant `MIN_SLIM_PANEL_W`, NOT the current density's floor,
-    /// so a drag can shrink past a mode's structural floor - crossing it demotes
-    /// the mode (Locked 5) rather than stopping the drag (AC2-EDGE).
+    /// whether the width changed. The floor is `MIN_SLIM_PANEL_W`, not the
+    /// density's, so a drag past a mode's floor demotes the mode.
     fn drag_sideline_to(&mut self, col: u16, now: Instant) -> bool {
-        // Every drag report is motion, even one that clamps to the same width at
-        // a bound: refresh the stuck-drag deadline FIRST, before any early
-        // return, so an actively-held drag pinned against a clamp never expires
-        // under the hand (codex P2). Only a genuinely report-less interval - the
-        // swallowed mouse-up - then lets the timeout fire.
+        // Refresh the stuck-drag deadline before any early return: a held drag
+        // pinned against a clamp must not expire. Only silence lets it fire.
         if let Some(drag) = self.sideline_drag.as_mut() {
             drag.last_at = now;
         }
         let max = sideline_max_width(self.term.1);
-        // A WINCH can shrink the terminal below MIN_SLIM + MIN_CONTENT mid-drag,
-        // making `max < MIN_SLIM_PANEL_W`; a `clamp(MIN_SLIM_PANEL_W, max)` with
-        // min > max panics (codex P2). The rail is hidden at that size, so there
-        // is nothing to set - keep the stored width for when it grows back.
+        // A WINCH can leave `max < MIN_SLIM_PANEL_W`, and clamp panics when
+        // min > max. The rail is hidden then: keep the stored width.
         if max < MIN_SLIM_PANEL_W {
             return false;
         }
@@ -3400,12 +3395,8 @@ impl View {
             return false;
         }
         self.sideline_width = want;
-        // Locked 5: a drag below the current mode's structural floor demotes the
-        // mode to the widest that still renders. Only Extended has a floor above
-        // MIN_SLIM_PANEL_W, so in practice this is Extended -> Regular; Regular
-        // and Slim render down to the slim floor and never trip it. Same
-        // re-anchor ordering as `cycle_density`: the row set changes with the
-        // density, so re-anchor the selector (which re-clamps the scroll) after.
+        // Below the mode's floor, demote it (in practice Extended -> Regular),
+        // then re-anchor the selector after the row set changes, as `cycle_density` does.
         if self.sideline_width < min_render_width(self.density) {
             let held = self.selected_agent_name();
             self.density = Density::Regular;
@@ -8485,6 +8476,9 @@ async fn handle_stdin(
         }
         return Ok(StdinFlow::Continue);
     }
+    if passthrough == [0x1b] && view.revert_edge_drag() {
+        return Ok(StdinFlow::Continue);
+    }
     // A bare Esc during a feed-border drag reverts the width to where
     // the drag began, the sideline revert's mirror.
     if view.feed_drag.is_some()
@@ -8561,6 +8555,9 @@ async fn dispatch_event(
                     view.set_notice(split_skew_notice());
                     return Ok(DispatchFlow::Continue);
                 }
+            }
+            if matches!(cmd, Command::ResizeDir(d) if view.nudge_edge(d)) {
+                return Ok(DispatchFlow::Continue);
             }
             view.note_command_sent(&cmd);
             write_msg(sock_w, &ClientMsg::Command(cmd))
