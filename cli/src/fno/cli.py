@@ -95,6 +95,11 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
         {"hidden": True},
     ),
     "config": ("fno.config_writer_cli:app", "Configuration management"),
+    "hello": (
+        "fno.hello_cli:app",
+        "Print a greeting from fno.",
+        {"hidden": True},
+    ),
     "paths": ("fno.paths_cli:app", "Path resolution helpers", {"hidden": True}),
     # `fno route` (the hidden root spelling of the provider route lanes)
     # answers natively: the front classifies it onto route-slot's
