@@ -44,11 +44,11 @@ grant leaves it unenforced. That is a real cost, recorded here rather than
 discovered later. It is not fixed by narrowing the grant, because the graph
 stores and locks sit at that same level - see the paragraph below.
 
-It cannot be narrowed to subdirectories. The graph store and its lock write
-with ``tempfile.mkstemp(dir=path.parent)`` followed by ``os.replace``
-(``graph_store.rs``), and the store's runtime files moved through the layout
-table rather than out of the root grant. An atomic replace needs write access
-to the DIRECTORY, not the file, so a worker that mutates the graph needs the
+It cannot be narrowed to subdirectories. ``graph.json`` and the runtime
+stores beside it write with
+``tempfile.mkstemp(dir=path.parent)`` followed by ``os.replace``
+(``graph_store.rs``). An atomic replace needs write access to the
+DIRECTORY, not the file, so a worker that mutates the graph needs the
 root itself. Granting the children instead would leave every graph write
 refused.
 
