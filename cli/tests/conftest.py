@@ -78,26 +78,6 @@ _SERIAL_TEST_SUFFIXES = frozenset(
             "test_ac3hp_concurrent_writes_never_surface_corruption"
         ),
         (
-            "tests/agents/test_follow_signal.py::"
-            "test_subprocess_follow_clean_sigint_exit"
-        ),
-        (
-            "tests/agents/test_codex_signal_handling.py::"
-            "test_create_sigint_mid_stream_propagates_and_releases_child"
-        ),
-        (
-            "tests/agents/test_pane_journeys.py::"
-            "test_late_codex_identity_composes_across_every_peer_surface"
-        ),
-        (
-            "tests/agents/test_harness_capability_parity.py::"
-            "test_resolved_rows_match_between_readers"
-        ),
-        (
-            "tests/agents/test_send.py::"
-            "test_dispatch_send_registry_stamp_lock_is_bounded_after_hosted_delivery"
-        ),
-        (
             "tests/unit/test_graph_read_race.py::"
             "test_ac3fr_no_false_negative_under_concurrent_writes"
         ),
@@ -440,11 +420,11 @@ def _block_live_provider_exec(request, monkeypatch, tmp_path_factory):
     launchctl command resolved outside the tmp tree is blocked in EVERY test,
     smoke included - only the provider half stands down for smoke.
     """
-    # Real-provider smoke tests (@pytest.mark.smoke, run nightly by
-    # provider-smoke.yml) intentionally exec the real binary; never guard
-    # those (codex P2 review). Per-PR CI excludes `-m smoke`. The launchctl
-    # check below applies regardless: a smoke test may exec a real provider
-    # but still must not touch the operator's launchd domain.
+    # Real-provider smoke tests (@pytest.mark.smoke) intentionally exec the
+    # real binary; never guard those (codex P2 review). Per-PR CI excludes
+    # `-m smoke`. The launchctl check below applies regardless: a smoke test
+    # may exec a real provider but still must not touch the operator's
+    # launchd domain.
     guard_providers = not request.node.get_closest_marker("smoke")
 
     import shutil
