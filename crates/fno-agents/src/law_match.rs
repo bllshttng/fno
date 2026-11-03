@@ -1846,8 +1846,7 @@ pub(crate) fn record_door_write(door: RecordDoor, decision: String, caller: &Cal
         door.widen.as_ref()
     };
     // The scope stamp with the widening and the globs validated at the door.
-    let scope_answer =
-        record_scope_answer_in(None, &settings_sources(), widen, &door.raw_paths);
+    let scope_answer = record_scope_answer_in(None, &settings_sources(), widen, &door.raw_paths);
     if scope_answer.get("ok") != Some(&json!(true)) {
         let message = scope_answer
             .get("refusal")
