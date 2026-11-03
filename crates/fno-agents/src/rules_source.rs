@@ -8,7 +8,7 @@
 use crate::decision_index;
 use crate::rules::{parse_file, Rule};
 use serde_json::{json, Value};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 /// The shipped default table, beside `event_rules.toml`. Project-neutral
@@ -104,10 +104,16 @@ pub fn assemble(
     // (c) The live laws: an imported trigger wins, a `paths` row becomes a
     // pre-tool path rule, and a law with neither is the implicit tier-1
     // inform rule (the STAGES keyword fallback's replacement).
+    let here =
+        crate::law_match::resolve_project(Some(cwd), &crate::law_match::settings_sources()).ok();
+    let beaten = conflict_losers(&laws.rows, here.as_deref());
     for row in &laws.rows {
         let Some(id) = row.get("decision_id").and_then(Value::as_str) else {
             continue;
         };
+        if beaten.contains(id) {
+            continue;
+        }
         // A machine or person scope is judged here, at build, because no
         // event carries an identity and `rules.rs` refuses those scopes.
         let scope = decision_index::row_scope(row);
@@ -134,6 +140,7 @@ pub fn assemble(
             continue;
         }
         let paths = law_paths(row);
+        let action = law_strength(row);
         let scope_line = if scope == "global" || identity.is_some() {
             String::new()
         } else {
@@ -141,7 +148,7 @@ pub fn assemble(
         };
         let body = if paths.is_empty() {
             format!(
-                "id = \"law-{id}\"\nlaw = \"{id}\"{scope_line}\naction = \"inform\"\n[rule.when]\nretrieval = \"{}\"\nevents = [\"prompt\", \"skill\"]",
+                "id = \"law-{id}\"\nlaw = \"{id}\"{scope_line}\naction = \"{action}\"\n[rule.when]\nretrieval = \"{}\"\nevents = [\"prompt\", \"skill\"]",
                 toml_escape(&format!(
                     "{subject} {}",
                     law_decision(row)
@@ -154,7 +161,7 @@ pub fn assemble(
                 .collect::<Vec<_>>()
                 .join(", ");
             format!(
-                "id = \"law-{id}\"\nlaw = \"{id}\"{scope_line}\naction = \"inform\"\n[rule.when]\nevents = [\"pre-tool\"]\ntools = [\"Edit\", \"Write\"]\npaths = [{globs}]",
+                "id = \"law-{id}\"\nlaw = \"{id}\"{scope_line}\naction = \"{action}\"\n[rule.when]\nevents = [\"pre-tool\"]\ntools = [\"Edit\", \"Write\"]\npaths = [{globs}]",
             )
         };
         match toml_rule(&body) {
@@ -571,6 +578,67 @@ fn law_paths(row: &Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// The strength a law was recorded with; a law that names none informs.
+fn law_strength(row: &Value) -> &str {
+    row.get("strength")
+        .and_then(Value::as_str)
+        .filter(|s| crate::rules::STRENGTHS.contains(s))
+        .unwrap_or("inform")
+}
+
+/// How narrow a law's filter is: a person or machine beats a project, a
+/// project beats global, and a path list narrows any of them.
+fn narrowness(row: &Value) -> u8 {
+    let scope = match decision_index::row_scope(row) {
+        "global" => 0,
+        s if s.starts_with("project:") => 2,
+        _ => 4,
+    };
+    scope + u8::from(!law_paths(row).is_empty())
+}
+
+/// The ids that lose a conflict. Two live laws on one subject conflict when
+/// both bind here: the narrower filter wins, then the newer row, and the
+/// loser drops from the set. A loser never fires and never blocks. A law
+/// scoped to another project, or to a project this session cannot name,
+/// takes no part: it could not apply here, so it must not beat one that does.
+fn conflict_losers(rows: &[Value], project: Option<&str>) -> BTreeSet<String> {
+    let mut best: BTreeMap<String, (u8, String, String)> = BTreeMap::new();
+    let mut losers = BTreeSet::new();
+    for row in rows {
+        let Some(id) = row.get("decision_id").and_then(Value::as_str) else {
+            continue;
+        };
+        let subject = row.get("subject").and_then(Value::as_str).unwrap_or("");
+        let scope = decision_index::row_scope(row);
+        let other_project = scope
+            .strip_prefix("project:")
+            .is_some_and(|p| Some(p) != project);
+        if subject.is_empty() || other_project || decision_index::binds_here(scope) == Some(false) {
+            continue;
+        }
+        let ts = row
+            .get("ts")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        let mine = (narrowness(row), ts, id.to_string());
+        match best.get(subject) {
+            Some(held) if *held >= mine => {
+                losers.insert(id.to_string());
+            }
+            Some(held) => {
+                losers.insert(held.2.clone());
+                best.insert(subject.to_string(), mine);
+            }
+            None => {
+                best.insert(subject.to_string(), mine);
+            }
+        }
+    }
+    losers
+}
+
 fn law_decision(row: &Value) -> &str {
     row.get("decision").and_then(Value::as_str).unwrap_or("")
 }
@@ -874,6 +942,99 @@ mod tests {
             Some(v) => std::env::set_var("FNO_HOME", v),
             None => std::env::remove_var("FNO_HOME"),
         }
+    }
+
+    #[test]
+    fn a_law_binds_at_its_strength_and_the_narrower_newer_law_wins() {
+        let law = |id: &str, ts: &str, scope: &str, strength: Option<&str>, paths: bool| {
+            let mut row = json!({"decision_id": id, "subject": "ci-tiers", "decision": "d",
+                "authority_source": "operator", "scope": scope, "ts": ts});
+            if let Some(s) = strength {
+                row["strength"] = json!(s);
+            }
+            if paths {
+                row["paths"] = json!(["crates/**"]);
+            }
+            row
+        };
+        let mine = format!("person:{}", crate::identity::person());
+        let laws = decision_index::Index {
+            rows: vec![
+                law(
+                    "d-0000aaaa",
+                    "2026-11-01T00:00:00Z",
+                    "global",
+                    Some("block"),
+                    true,
+                ),
+                law(
+                    "d-0000bbbb",
+                    "2026-11-01T00:00:00Z",
+                    &mine,
+                    Some("warn"),
+                    true,
+                ),
+                law("d-0000cccc", "2026-11-02T00:00:00Z", &mine, None, true),
+                law(
+                    "d-0000dddd",
+                    "2026-11-01T00:00:00Z",
+                    "global",
+                    Some("bogus"),
+                    false,
+                ),
+            ],
+            damaged: 0,
+        };
+        let set =
+            assemble(Path::new("/"), laws, &BTreeMap::new(), Vec::new()).expect("the set builds");
+        let ids: Vec<&str> = set.rules.iter().filter_map(|r| r.law.as_deref()).collect();
+        assert_eq!(
+            ids,
+            ["d-0000cccc"],
+            "narrower, then newer, wins the subject"
+        );
+        let foreign = decision_index::Index {
+            rows: vec![
+                law("d-0000ffff", "2026-11-01T00:00:00Z", "global", None, false),
+                law(
+                    "d-0000f00d",
+                    "2026-11-02T00:00:00Z",
+                    "project:not-this-one-zz9",
+                    None,
+                    true,
+                ),
+            ],
+            damaged: 0,
+        };
+        let set = assemble(Path::new("/"), foreign, &BTreeMap::new(), Vec::new()).expect("builds");
+        assert!(
+            set.rules
+                .iter()
+                .any(|r| r.law.as_deref() == Some("d-0000ffff")),
+            "another project's law never knocks out a global one"
+        );
+        let solo = decision_index::Index {
+            rows: vec![law(
+                "d-0000eeee",
+                "2026-11-01T00:00:00Z",
+                "global",
+                Some("block"),
+                true,
+            )],
+            damaged: 0,
+        };
+        let set = assemble(Path::new("/"), solo, &BTreeMap::new(), Vec::new()).expect("builds");
+        let rule = set
+            .rules
+            .iter()
+            .find(|r| r.law.is_some())
+            .expect("law rule");
+        assert_eq!(
+            rule.action, "block",
+            "a path law binds at the strength it names"
+        );
+        assert_eq!(rule.class(), "block");
+        assert_eq!(law_strength(&json!({"strength": "bogus"})), "inform");
     }
 
     #[test]

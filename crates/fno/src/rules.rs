@@ -21,6 +21,8 @@ use serde::Deserialize;
 use std::collections::{BTreeSet, HashMap};
 
 const ACTIONS: &[&str] = &["inform", "warn", "require-ack", "block"];
+/// The strengths a law may carry; the same four words as the actions.
+pub const STRENGTHS: &[&str] = ACTIONS;
 /// The four hook classes: `block` is sync and may deny, `wait` is sync and
 /// adds context, `next-turn` is async and lands at the next turn boundary,
 /// `rewake` is async and wakes or steers the session.
@@ -497,6 +499,29 @@ fn expired(expires: Option<&str>, now: chrono::NaiveDate) -> bool {
         .is_some_and(|d| d < now)
 }
 
+/// Days before an `expires` date that a fire starts saying it is ending.
+const HEADS_UP_DAYS: i64 = 1;
+
+/// The line a fire carries in its last days: when the rule retires and the
+/// one command that renews it. Empty for a rule with no date, or one far off.
+fn heads_up(rule: &Rule, now: chrono::NaiveDate) -> String {
+    let Some(end) = rule
+        .expires
+        .as_deref()
+        .and_then(|e| chrono::NaiveDate::parse_from_str(e, "%Y-%m-%d").ok())
+    else {
+        return String::new();
+    };
+    if (end - now).num_days() > HEADS_UP_DAYS {
+        return String::new();
+    }
+    let renew = match &rule.law {
+        Some(law) => format!("fno inbox law set <subject> --supersedes {law}"),
+        None => "move its expires date".to_string(),
+    };
+    format!(" (ends {end}; renew: {renew})")
+}
+
 fn rank(action: &str) -> u8 {
     match action {
         "block" => 0,
@@ -566,6 +591,7 @@ pub fn decide(rules: &[Rule], ev: &Event, now: chrono::NaiveDate) -> Decision {
                 .cloned()
                 .or_else(|| r.when.retrieval.clone())
                 .unwrap_or_default();
+            let text = format!("{text}{}", heads_up(r, now));
             Fire {
                 rule: r.id.clone(),
                 law: r.law.clone(),
