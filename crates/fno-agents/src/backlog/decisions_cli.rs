@@ -216,6 +216,48 @@ pub(crate) fn read_graph_entries() -> Result<Vec<Value>, String> {
     .map_err(|e| e.0)
 }
 
+/// The whole-graph soft read: the full store on success, None (literal
+/// matching, the note on stderr) on a failed read. The read every subject
+/// query took before the scoped fast path existed.
+fn read_entries_soft() -> Option<Vec<Value>> {
+    match read_graph_entries() {
+        Ok(rows) if !rows.is_empty() => Some(rows),
+        Ok(_) => None,
+        Err(e) => {
+            eprintln!(
+                "decide: the graph could not be read ({e}), so a subject only \
+                 matches the exact string it was recorded under."
+            );
+            None
+        }
+    }
+}
+
+/// The soft graph read a subject query takes up front, exactly once. A
+/// lane-filtered read of a wellformed node id cannot consult entries beyond
+/// that node's own row: every resolve tier (`node_ref::resolve_tiers`) keys
+/// on the node's own id, slug and aliases, and no coord row renders through
+/// a lane that excludes coord, so one store row answers what the whole
+/// graph would (`graph_store::read_one`, the by-id door). A dead or renamed
+/// id keeps the full read: the alias and dash-variant tiers resolve
+/// spellings one id lookup cannot. Any other shape (no lane, the coord
+/// lane) keeps the full read too: coord lifecycle reads target nodes the
+/// subject row cannot answer for.
+fn soft_entries_at(graph: &Path, subject: &str, lane: Option<&str>) -> Option<Vec<Value>> {
+    let subject = subject.trim();
+    if lane.is_some_and(|l| l != "coord") && is_wellformed_node_id(subject) {
+        if let Ok(Some(row)) = crate::graph_store::read_one(graph, subject) {
+            return Some(vec![row]);
+        }
+    }
+    read_entries_soft()
+}
+
+/// `soft_entries_at` over the machine's default store.
+fn soft_entries(subject: &str, lane: Option<&str>) -> Option<Vec<Value>> {
+    soft_entries_at(&crate::graph_get::default_graph_path(), subject, lane)
+}
+
 /// The Python `_resolved_node`: exact tiers only, a single resolution.
 fn resolved_once(entries: &[Value], query: &str) -> Option<String> {
     super::node_ref::resolve_tiers(entries, query)
@@ -960,15 +1002,8 @@ pub fn run(argv: &[String]) -> i32 {
     // failed read leaves it to the core's required attempt, which degrades
     // to unknown lifecycles instead of failing the query.
     let mut entries: Option<Vec<Value>> = None;
-    if subject.is_some() {
-        match read_graph_entries() {
-            Ok(rows) if !rows.is_empty() => entries = Some(rows),
-            Ok(_) => {}
-            Err(e) => eprintln!(
-                "decide: the graph could not be read ({e}), so a subject only \
-                 matches the exact string it was recorded under."
-            ),
-        }
+    if let Some(s) = subject.as_deref() {
+        entries = soft_entries(s, opts.lane.as_deref());
     }
 
     let found = match list_core(
@@ -2421,6 +2456,103 @@ mod tests {
         assert!(
             rows_str(gate_row_out, "lifecycle_evidence").contains("no-such-gate"),
             "the live evidence names the unregistered gate"
+        );
+    }
+
+    fn node_row(id: &str, slug: &str, aliases: &[&str]) -> Value {
+        let mut row = serde_json::json!({"id": id, "slug": slug});
+        if !aliases.is_empty() {
+            row["aliases"] = serde_json::json!(aliases);
+        }
+        row
+    }
+
+    fn seed_two_node_graph(dir: &TempDir) -> std::path::PathBuf {
+        let graph = dir.path().join("graph.json");
+        crate::graph_store::seed_rows(
+            &graph,
+            &[
+                node_row("x-aaaa1111", "topic-slug", &["x-oldname"]),
+                node_row("x-bbbb2222", "other-slug", &[]),
+            ],
+        )
+        .unwrap();
+        graph
+    }
+
+    #[test]
+    fn scoped_lane_read_serves_the_subject_row_alone() {
+        let dir = TempDir::new().unwrap();
+        let graph = seed_two_node_graph(&dir);
+        let entries =
+            soft_entries_at(&graph, "x-aaaa1111", Some("unattributed")).expect("the store read");
+        assert_eq!(entries.len(), 1, "one row, not the whole graph");
+        assert_eq!(rows_str(&entries[0], "id"), "x-aaaa1111");
+    }
+
+    #[test]
+    fn shapes_that_cannot_scope_keep_the_full_read() {
+        let dir = TempDir::new().unwrap();
+        let graph = seed_two_node_graph(&dir);
+        // No lane: coord rows on the subject render lifecycle evidence. The
+        // coord lane: the same reason. A dead id: the alias and dash-variant
+        // tiers resolve spellings one id lookup cannot.
+        let cases = [
+            (None, "x-aaaa1111"),
+            (Some("coord"), "x-aaaa1111"),
+            (Some("unattributed"), "x-dead9999"),
+        ];
+        for (lane, subject) in cases {
+            let entries = soft_entries_at(&graph, subject, lane).expect("the store read");
+            assert_eq!(
+                entries.len(),
+                2,
+                "lane {lane:?} subject {subject} read the full store"
+            );
+        }
+    }
+
+    #[test]
+    fn scoped_entries_match_like_the_full_graph() {
+        let dir = TempDir::new().unwrap();
+        let graph = seed_two_node_graph(&dir);
+        let full = soft_entries_at(&graph, "x-aaaa1111", None).expect("the store read");
+        let scoped =
+            soft_entries_at(&graph, "x-aaaa1111", Some("unattributed")).expect("the store read");
+        assert_eq!(
+            resolved_once(&scoped, "x-aaaa1111"),
+            resolved_once(&full, "x-aaaa1111"),
+            "the subject resolves to the same node both ways"
+        );
+        // Every resolve tier, plus spellings that must stay non-matches:
+        // exact, casefold, alias, slug, bare hex, dash-less variant, the
+        // other node's id, and an unrelated string.
+        for recorded in [
+            "x-aaaa1111",
+            "X-AAAA1111",
+            "x-oldname",
+            "topic-slug",
+            "aaaa1111",
+            "xaaaa1111",
+            "x-bbbb2222",
+            "unrelated",
+        ] {
+            let full_match = Matcher::new(&full, "x-aaaa1111").matches(recorded);
+            let scoped_match = Matcher::new(&scoped, "x-aaaa1111").matches(recorded);
+            assert_eq!(
+                scoped_match, full_match,
+                "recorded subject {recorded:?} answered differently under the scoped read"
+            );
+        }
+    }
+
+    #[test]
+    fn scoped_read_degrades_like_the_soft_read_when_the_store_is_absent() {
+        let dir = TempDir::new().unwrap();
+        let graph = dir.path().join("absent-graph.json");
+        assert!(
+            soft_entries_at(&graph, "x-aaaa1111", Some("unattributed")).is_none(),
+            "an unreadable store is the soft read's None, never an error"
         );
     }
 }
