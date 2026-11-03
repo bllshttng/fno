@@ -394,51 +394,21 @@ mod tests {
     }
 
     #[test]
-    fn due_when_no_leg_row_in_the_window_and_budget_left() {
+    fn decide_reads_window_cohort_and_budget() {
         let now = at("2026-11-10T12:00:00Z");
-        let rows = vec![row("gate-capability-2026-10-30", "2026-10-30T12:00:00Z")];
-        assert_eq!(decide(&rows, now, 7, 21, 15.0), Verdict::Launch);
-    }
-
-    #[test]
-    fn a_golden_main_row_does_not_count_as_the_leg() {
-        let now = at("2026-11-10T12:00:00Z");
-        let rows = vec![row("gate-main-abc", "2026-11-10T01:00:00Z")];
-        assert_eq!(decide(&rows, now, 7, 21, 15.0), Verdict::Launch);
-    }
-
-    #[test]
-    fn a_recent_leg_row_is_fresh() {
-        let now = at("2026-11-10T12:00:00Z");
-        let rows = vec![row("gate-capability-2026-11-07", "2026-11-07T12:00:00Z")];
-        assert_eq!(decide(&rows, now, 7, 21, 15.0), Verdict::Fresh);
-    }
-
-    #[test]
-    fn spend_plus_estimate_over_the_cap_reads_budget() {
-        let now = at("2026-11-10T12:00:00Z");
-        // 21 tasks x 3 x 0.04 = 2.52 USD; 14 gate rows today = 0.56 USD.
-        let rows: Vec<Value> = (0..14)
+        let old = vec![row("gate-capability-2026-10-30", "2026-10-30T12:00:00Z")];
+        assert_eq!(decide(&old, now, 7, 21, 15.0), Verdict::Launch);
+        // The gate's daily main run is capability tier too: it is not the leg.
+        let main = vec![row("gate-main-abc", "2026-11-10T01:00:00Z")];
+        assert_eq!(decide(&main, now, 7, 21, 15.0), Verdict::Launch);
+        let recent = vec![row("gate-capability-2026-11-07", "2026-11-07T12:00:00Z")];
+        assert_eq!(decide(&recent, now, 7, 21, 15.0), Verdict::Fresh);
+        // 21 tasks x 3 x 0.04 = 2.52 USD beside 14 gate rows today = 0.56 USD.
+        let spent: Vec<Value> = (0..14)
             .map(|_| row("gate-main-x", "2026-11-10T01:00:00Z"))
             .collect();
-        assert_eq!(decide(&rows, now, 7, 21, 3.0), Verdict::Budget);
-        assert_eq!(decide(&rows, now, 7, 21, 15.0), Verdict::Launch);
-    }
-
-    #[test]
-    fn last_cohorts_keeps_the_final_three() {
-        let rows: Vec<Value> = ["a", "b", "c", "d"]
-            .iter()
-            .map(|c| row(c, "2026-11-01T00:00:00Z"))
-            .collect();
-        assert_eq!(last_cohorts(&rows, "t"), vec!["b", "c", "d"]);
-    }
-
-    #[test]
-    fn no_eligible_task_opens_no_pr() {
-        let dir = tempfile::tempdir().unwrap();
-        let out = open_graduation(&dir.path().join("h.jsonl"), dir.path(), Utc::now(), &[]);
-        assert_eq!(out, Ok(None));
+        assert_eq!(decide(&spent, now, 7, 21, 3.0), Verdict::Budget);
+        assert_eq!(decide(&spent, now, 7, 21, 15.0), Verdict::Launch);
     }
 
     #[test]

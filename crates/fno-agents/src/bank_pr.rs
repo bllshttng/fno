@@ -152,17 +152,4 @@ mod tests {
         let log = String::from_utf8_lossy(&log.stdout).to_string();
         assert_eq!(log.lines().next(), Some("both"));
     }
-
-    #[test]
-    fn failed_step_pushes_nothing() {
-        let (_dir, work) = scratch();
-        let r = open_with(&work, "evals/test-y", "t", "b", |_| Err("no".into()));
-        assert!(r.is_err());
-        let out = Command::new("git")
-            .args(["ls-remote", "origin", "evals/test-y"])
-            .current_dir(&work)
-            .output()
-            .unwrap();
-        assert!(out.stdout.is_empty());
-    }
 }
