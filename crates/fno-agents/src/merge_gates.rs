@@ -576,6 +576,62 @@ fn overlaps(base_paths: &[String], pr_paths: &[String]) -> Vec<String> {
     base.intersection(&pr).map(|p| (*p).to_string()).collect()
 }
 
+/// True when every changed line of a Rust file's patch is a `//` comment or
+/// blank. Any other file type, or an empty patch (binary, oversized), reads
+/// false: only a positive reading releases the hold. A line inside a
+/// multi-line string literal that starts with `//` would read as a comment;
+/// no paint file holds one.
+fn patch_is_comment_only(file: &str, patch: &str) -> bool {
+    if !file.ends_with(".rs") || patch.is_empty() {
+        return false;
+    }
+    let mut changed = false;
+    for line in patch.lines() {
+        let Some(body) = line
+            .strip_prefix('+')
+            .or_else(|| line.strip_prefix('-'))
+            .filter(|_| !line.starts_with("+++") && !line.starts_with("---"))
+        else {
+            continue;
+        };
+        let body = body.trim();
+        if body.is_empty() {
+            continue;
+        }
+        if !body.starts_with("//") {
+            return false;
+        }
+        changed = true;
+    }
+    changed
+}
+
+/// Whether every touched paint file changed by comment lines only. A rename
+/// or an unreadable patch list reads false, so the hold stays.
+fn comment_only_on<P: Probes>(probes: &P, cwd: &Path, pr: u64, touched: &[&str]) -> bool {
+    let args = vec![
+        "api".to_string(),
+        format!("repos/{{owner}}/{{repo}}/pulls/{pr}/files"),
+        "--paginate".to_string(),
+        "--jq".to_string(),
+        ".[] | {f: .filename, s: .status, p: (.patch // \"\")} | @json".to_string(),
+    ];
+    let Ok((true, stdout)) = probes.run_gh(cwd, &args) else {
+        return false;
+    };
+    let rows: Vec<Value> = stdout
+        .lines()
+        .filter_map(|l| serde_json::from_str(l).ok())
+        .collect();
+    touched.iter().all(|path| {
+        rows.iter().any(|row| {
+            row["f"].as_str() == Some(path)
+                && row["s"].as_str() == Some("modified")
+                && patch_is_comment_only(path, row["p"].as_str().unwrap_or(""))
+        })
+    })
+}
+
 /// The visual-approval gate: a PR whose changed files touch a configured
 /// paint path holds until an ANSWERED question page names the PR, or a
 /// role-recorded decision row transcribes the user's chat or board approval
@@ -611,6 +667,10 @@ pub(crate) fn visual_approval_blocker<P: Probes>(
         .map(String::as_str)
         .collect();
     if touched.is_empty() {
+        return None;
+    }
+    // A diff of comment lines changes no pixel, so a look would judge nothing.
+    if comment_only_on(probes, cwd, pr, &touched) {
         return None;
     }
     // Ruling: a declared main-repair node IS the red-main fix; its lane
@@ -1367,6 +1427,20 @@ pub(crate) fn repo_slug_from_origin(url: &str) -> Option<String> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_paint_diff_of_comments_only_skips_the_look() {
+        let comments = "@@ -1,2 +1,2 @@\n ctx\n-// a busy box\n+// a busy machine\n+\n";
+        assert!(patch_is_comment_only("a.rs", comments));
+        let code = "@@ -1 +1 @@\n-let a = \"box\"; // c\n+let a = \"machine\"; // c\n";
+        assert!(!patch_is_comment_only("a.rs", code));
+        let mixed = "@@ -1 +1 @@\n-// old\n+// new\n+draw();\n";
+        assert!(!patch_is_comment_only("a.rs", mixed));
+        // Only Rust files read as comments; an html `//` is script code.
+        assert!(!patch_is_comment_only("page.html", comments));
+        // An empty patch (binary, oversized) never releases the hold.
+        assert!(!patch_is_comment_only("a.rs", ""));
+    }
 
     #[test]
     fn mux_shots_scans_node_prefix_and_shots_folder() {
