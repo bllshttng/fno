@@ -44,7 +44,7 @@ const GATED_PATHS: [&str; 5] = ["skills/", "agents/", "hooks/", "commands/", "ev
 const GATE_TAG: &str = "gate";
 const GOLDEN_TAG: &str = "golden";
 const LEAD_TAG: &str = "lead";
-const REPEATS: usize = 3;
+pub(crate) const REPEATS: usize = 3;
 const HEAD_WORKERS: u32 = 4;
 const MAIN_WORKERS: u32 = 2;
 const HEAD_LIMIT_S: i64 = 1200;
@@ -72,6 +72,8 @@ const WORKER: Seat = Seat {
     suffix: "",
     attempt_usd: 0.04,
 };
+/// What one worker attempt costs, for a run priced beside the gate.
+pub(crate) const WORKER_ATTEMPT_USD: f64 = WORKER.attempt_usd;
 /// The kept GLM gate transcripts cost a mean 0.67 USD at Opus prices.
 const LEAD: Seat = Seat {
     name: "lead",
@@ -226,7 +228,7 @@ fn route_hash(repo: &Path) -> String {
     format!("{:08x}", hash >> 32)
 }
 
-fn history_rows(history: &Path) -> Vec<Value> {
+pub(crate) fn history_rows(history: &Path) -> Vec<Value> {
     std::fs::read_to_string(history)
         .unwrap_or_default()
         .lines()
@@ -241,7 +243,7 @@ fn row_cohort(row: &Value) -> &str {
 }
 
 /// Estimated dollars the gate spent on this UTC day.
-fn spent_today(rows: &[Value], now: DateTime<Utc>) -> f64 {
+pub(crate) fn spent_today(rows: &[Value], now: DateTime<Utc>) -> f64 {
     let day = now.format("%Y-%m-%d").to_string();
     rows.iter()
         .filter(|r| row_cohort(r).get(..5) == Some("gate-"))
@@ -482,7 +484,7 @@ fn run_argv(
 }
 
 /// TOML writes the budget as a float or an integer; a string read alone missed both.
-fn config_daily_usd(repo: &Path) -> f64 {
+pub(crate) fn config_daily_usd(repo: &Path) -> f64 {
     match crate::agents_config::config_value_deep(repo, &["evals", "gate", "daily_usd"]) {
         Some(toml::Value::Float(f)) => f,
         Some(toml::Value::Integer(i)) => i as f64,
@@ -491,7 +493,7 @@ fn config_daily_usd(repo: &Path) -> f64 {
     }
 }
 
-fn config_lane(repo: &Path) -> String {
+pub(crate) fn config_lane(repo: &Path) -> String {
     crate::paths_cli::cfg_str(repo, &["evals", "gate", "lane"])
         .filter(|v| !v.trim().is_empty())
         .unwrap_or_else(|| DEFAULT_LANE.to_string())
