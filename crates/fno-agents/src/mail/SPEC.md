@@ -64,7 +64,7 @@ A live send ends in one of six states.
 | `accepted-steer` | The same record, folded into the turn that was running. |
 | `failed` | A reason string says why. |
 
-A lane reports an accepted state only if the harness's own turn record holds the envelope id. A started turn is not that proof.
+If the harness's own turn record holds the envelope id, the lane may report an accepted state. A lane never reports one without it. A started turn is not that proof.
 
 The bus keeps state history as append-only rows with `kind: state`. `meta.of` names the message. `newest_state` folds them in log order. An accepted state is terminal: a later row never lowers it. Among the other states the newest wins. With no state row, a `landed` row reads as accepted. A legacy `delivery` field maps as follows: `typed` is `injected`. `hosted` and `cross-session` are `accepted-new-turn`. Anything else is `queued`.
 
