@@ -4,6 +4,7 @@
 use super::tests::{blocked_row, view_with_agents};
 use super::*;
 use crate::chrome::text_hierarchy;
+use crate::client::overlay_paint::layout_body_overlay;
 use crate::text_style::TLine;
 
 const THEMES: [&str; 2] = ["footnote-superscript", "footnote-paper"];
@@ -75,10 +76,18 @@ fn every_mux_view_has_a_text_hierarchy() {
     views.push(("sideline menu".into(), popup_framed(popup, v.term)));
 
     let conn = ready_connections();
-    views.push((
-        "connections".into(),
-        lines_framed("connections", &conn.render()),
-    ));
+    let (body, _) = conn.render_body(&[], usize::MAX);
+    let chrome = chrome::Chrome::new("connections", Anchor::Center);
+    let framed = layout_body_overlay(
+        (0, 0),
+        (60, 120),
+        &chrome,
+        &body,
+        None,
+        OverlayAnchor::Center,
+    )
+    .framed;
+    views.push(("connections".into(), framed));
     let projection = v.needs_projection();
     let needs = needs_overlay_lines(&projection, 0, v.mine_footer(), v.needs_footer());
     views.push(("needs me".into(), lines_framed("needs me", &needs)));
@@ -101,6 +110,7 @@ fn every_mux_view_has_a_text_hierarchy() {
         lines_framed("attach", &v.attach_place_lines(&attach)),
     ));
     let portal = PortalPick {
+        remote: None,
         id: "p".into(),
         cursor: 0,
         esc: vec![],

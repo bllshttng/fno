@@ -12,6 +12,8 @@ fno agents fleet top --machines --since 10m
 
 A machine whose newest beat is older than `--since` (default 5m) shows `offline` with its age. With `store.remote_url` unset, this machine shows alone and the output names the missing key.
 
+The mux sideline reads this map to group rows by machine and open a session on another one: see [remote sessions](mux-remote-sessions.md).
+
 ## How rows get there
 
 Each daemon beats every 60 seconds. One beat writes this machine's `fleet_machine` row and replaces its own `fleet_session` rows, in one transaction on the primary. A session's `age_s` is the whole seconds since its last activity. A row has one writer: the machine it names. The beat reads numbers the daemon already keeps. CPU, verdict and memory pressure come from the newest `machine_sample` journal row. Memory used and the cap come from the capacity state file. The beat samples nothing itself. An unreachable primary logs once and never blocks the tick.

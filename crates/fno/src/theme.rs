@@ -106,6 +106,14 @@ pub enum Role {
     /// above the theme split, palette-following under every theme but
     /// `Section`, which rides the brand accent.
     Text(TextStyle),
+    /// A status badge (`[ACTIVE]`): a filled block in the theme's accent,
+    /// bold, so the one marked row reads before any text on it.
+    Badge,
+    /// A level meter's fill, by how full it is: the emulator's green, amber
+    /// and red slots ([`type_scale::level`]).
+    LevelOk,
+    LevelWarn,
+    LevelHigh,
     /// A literal-color span (the colors tab's swatches). The color IS the
     /// content, so it resolves above the theme split and never shifts with
     /// the theme.
@@ -115,6 +123,37 @@ pub enum Role {
 impl Default for Role {
     fn default() -> Self {
         Role::Text(TextStyle::Item)
+    }
+}
+
+/// The type levels a body view paints with, by meaning, so views that share
+/// a level share its look. Each name is a [`Role`]; the theme resolves it.
+pub mod type_scale {
+    use super::Role;
+    use crate::text_style::TextStyle;
+
+    /// A group's title (a provider, a section): the strongest text.
+    pub const HEADING: Role = Role::Text(TextStyle::Title);
+    /// The name of one item in a group (an account): bold.
+    pub const NAME: Role = Role::Text(TextStyle::Title);
+    /// A value the reader compares across rows (a percent): bold.
+    pub const STRONG: Role = Role::Text(TextStyle::Title);
+    /// Plain text on the ground.
+    pub const BODY: Role = Role::Text(TextStyle::Item);
+    /// Detail and key hints: the dim slot.
+    pub const META: Role = Role::Text(TextStyle::Meta);
+    /// A status badge on the one marked row.
+    pub const BADGE: Role = Role::Badge;
+    /// A warning the reader must act on.
+    pub const WARN: Role = Role::Text(TextStyle::ERROR);
+
+    /// A meter fill's level for `pct` used: amber over 70, red over 90.
+    pub fn level(pct: u32) -> Role {
+        match pct {
+            p if p > 90 => Role::LevelHigh,
+            p if p > 70 => Role::LevelWarn,
+            _ => Role::LevelOk,
+        }
     }
 }
 
@@ -199,6 +238,18 @@ pub fn cell_style(role: Role, t: &Theme) -> (Color, Color, u8) {
     // runs, so the same render reads on dark and light both.
     match role {
         Role::Text(style) => return style.resolve(t),
+        Role::LevelOk => return (Color::Indexed(2), Color::Default, 0),
+        Role::LevelWarn => return (Color::Indexed(3), Color::Default, 0),
+        Role::LevelHigh => return (Color::Indexed(1), Color::Default, 0),
+        // INVERSE over the accent fg: the accent becomes the fill and the
+        // terminal's own bg the text, so the badge reads on dark and light.
+        Role::Badge => {
+            return (
+                t.brand,
+                Color::Default,
+                cell_flags::INVERSE | cell_flags::BOLD,
+            )
+        }
         // The focused composer chip resolves above the theme split too: the
         // terminal's own pair, swapped, is the fill - visible under every
         // theme and every emulator ground.

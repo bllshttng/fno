@@ -14,11 +14,14 @@ pub(crate) type OrgTx = tokio::sync::mpsc::UnboundedSender<(u64, OrgMsg)>;
 
 pub(crate) enum OrgMsg {
     Gather(FleetInputs),
+    /// The sideline machine layer's own fleet read.
+    Machines(Result<serde_json::Value, String>),
 }
 
 pub(crate) fn apply(view: &mut View, gen: u64, msg: OrgMsg) {
     match msg {
         OrgMsg::Gather(inputs) => apply_fold(view, gen, inputs),
+        OrgMsg::Machines(read) => super::machine_tree::apply(view, read),
     }
 }
 
@@ -436,6 +439,7 @@ pub(crate) fn open(view: &mut View) {
     super::backlog_board::set_sideline_view(view, SidelineView::Org);
 }
 pub(crate) fn maybe_kick(view: &mut View, tx: &OrgTx) {
+    super::machine_tree::maybe_kick(view, tx);
     let Some(b) = view.org_board.as_mut() else {
         return;
     };

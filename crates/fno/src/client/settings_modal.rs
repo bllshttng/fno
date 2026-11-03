@@ -127,7 +127,12 @@ impl View {
                 for flag in experimental::Flag::ALL {
                     rows.push(PopupRow::Entry {
                         glyph: if flag.on(flags) { "☑" } else { "☐" }.into(),
-                        label: flag.label().into(),
+                        // The plain body drops the hint column, so a
+                        // flag's cost rides its label.
+                        label: match flag.hint() {
+                            "" => flag.label().into(),
+                            hint => format!("{} · {hint}", flag.label()),
+                        },
                         hint: String::new(),
                         enabled: true,
                     });

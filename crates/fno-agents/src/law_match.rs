@@ -1272,6 +1272,11 @@ fn scope_split_answer_in(
 
 pub(crate) const WAIVER_SUBJECT_PREFIX: &str = "review-coverage-waiver";
 
+/// The caller identity a no-identity, no-terminal run stamps (decide door
+/// state 3). It must never sit on an operator law row; the clear door's
+/// make_decision corrects it over to `operator`.
+pub(crate) const UNATTRIBUTED_CALLER: &str = "unattributed-caller";
+
 /// The law-set argv, parsed natively.
 pub(crate) struct RecordDoor {
     subject: String,

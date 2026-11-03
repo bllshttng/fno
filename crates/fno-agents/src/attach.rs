@@ -489,15 +489,33 @@ then attach again."
 #[derive(Debug)]
 pub(crate) struct AttachArgs {
     pub name: String,
+    /// Skip the daemon-kept lane: this terminal is the viewer. The far side of
+    /// `fno mux serve --link` passes it, because the mux thread door answers
+    /// from the host's mux and paints nothing on an ssh tty.
+    pub inline: bool,
+    /// Dial this machine and open the row there, redialing a lost connection.
+    pub dial: Option<String>,
 }
 
 pub(crate) fn parse_attach_args(rest: &[String]) -> Result<AttachArgs, (i32, String)> {
     let mut name: Option<String> = None;
+    let (mut inline, mut dial) = (false, None);
     // Retired (d-460ea8c7): the store heal is machine-wide; the flag rides
     // along as a silent no-op so the old taught remedy still parses.
-    for a in rest {
+    let mut words = rest.iter();
+    while let Some(a) = words.next() {
         match a.as_str() {
             "--cross-project" => {}
+            "--inline" => inline = true,
+            "--dial" => {
+                // The host comes off the fleet map, and ssh reads a leading dash
+                // as an option.
+                let host = words
+                    .next()
+                    .filter(|host| !host.starts_with('-'))
+                    .ok_or((2, "fno-agents: --dial needs a host".to_string()))?;
+                dial = Some(host.clone());
+            }
             other if other.starts_with("--") => {
                 return Err((2, format!("fno-agents: unknown attach flag: {other}")));
             }
@@ -516,7 +534,7 @@ pub(crate) fn parse_attach_args(rest: &[String]) -> Result<AttachArgs, (i32, Str
         }
     }
     let name = name.ok_or((2, "fno-agents: attach needs a <name>".to_string()))?;
-    Ok(AttachArgs { name })
+    Ok(AttachArgs { name, inline, dial })
 }
 
 pub fn run_attach(rest: &[String], home: &AgentsHome) -> i32 {
@@ -532,6 +550,9 @@ pub fn run_attach(rest: &[String], home: &AgentsHome) -> i32 {
     if let Err((code, msg)) = validate_lifecycle_name(&name) {
         eprintln!("{msg}");
         return code;
+    }
+    if let Some(host) = parsed.dial {
+        return crate::link_dial::run(&host, &name);
     }
 
     let entries = match read_registry_entries(&home.registry_json()) {
@@ -561,8 +582,10 @@ pub fn run_attach(rest: &[String], home: &AgentsHome) -> i32 {
     // drives the one dedicated thread pane and picks attach, follow or
     // locate per row from capability. A working lane outranks the table
     // read below, which governs only the inline refusal.
-    if let Some(code) = attach_via_mux_thread(&name, harness, &events_path) {
-        return code;
+    if !parsed.inline {
+        if let Some(code) = attach_via_mux_thread(&name, harness, &events_path) {
+            return code;
+        }
     }
 
     // A harness whose contract row DECLARES an interactive_attach
@@ -918,6 +941,9 @@ mod tests {
         );
         let err = parse_attach_args(&[]).unwrap_err();
         assert_eq!(err, (2, "fno-agents: attach needs a <name>".to_string()));
+        let dash = ["--dial", "-oProxyCommand=x", "cx"].map(String::from);
+        let err = parse_attach_args(&dash).unwrap_err();
+        assert_eq!(err, (2, "fno-agents: --dial needs a host".to_string()));
         let err = parse_attach_args(&["a".to_string(), "b".to_string()]).unwrap_err();
         assert!(err.1.contains("attach takes one NAME"), "{err:?}");
     }
