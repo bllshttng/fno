@@ -2970,7 +2970,12 @@ mod tests {
             .unwrap_or_else(|e| e.into_inner());
         let td = tempfile::TempDir::new().unwrap();
         let saved = std::env::var_os("FNO_AGENTS_HOME");
+        let saved_state = std::env::var_os("FNO_STATE_DIR");
         std::env::set_var("FNO_AGENTS_HOME", td.path());
+        // self_owner_env carries the hermetic stamp, and the fence it arms
+        // judges the STATE root: pin it beside the agents home, or the run
+        // resolves $HOME/.fno/spaces and the fence refuses the whole test.
+        std::env::set_var("FNO_STATE_DIR", td.path());
         crate::paths::pin_test_claims_root(td.path());
         for (key, value) in self_owner_env() {
             std::env::set_var(key, value);
@@ -2981,12 +2986,20 @@ mod tests {
             "-c".to_string(),
             argv.to_string(),
         ]);
-        for key in ["FNO_TEST_OWNER_PID", "FNO_TEST_OWNER_BIRTH"] {
+        for key in [
+            "FNO_TEST_OWNER_PID",
+            "FNO_TEST_OWNER_BIRTH",
+            "FNO_TEST_HERMETIC",
+        ] {
             std::env::remove_var(key);
         }
         match saved {
             Some(v) => std::env::set_var("FNO_AGENTS_HOME", v),
             None => std::env::remove_var("FNO_AGENTS_HOME"),
+        }
+        match saved_state {
+            Some(v) => std::env::set_var("FNO_STATE_DIR", v),
+            None => std::env::remove_var("FNO_STATE_DIR"),
         }
         code
     }
