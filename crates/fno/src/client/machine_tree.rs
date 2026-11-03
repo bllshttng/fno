@@ -154,7 +154,9 @@ fn fold_machine(machine: &Value) -> Band {
         ..Band::default()
     };
     if !local {
-        let seats = sessions.iter().map(|seat| fold_seat(seat, &sessions, &host, &band));
+        let seats = sessions
+            .iter()
+            .map(|seat| fold_seat(seat, &sessions, &host, &band));
         band.seats = seats.collect();
     }
     band.host = host;
@@ -559,7 +561,10 @@ mod tests {
         );
         assert_eq!(remote.state, "working");
         let ines = bands[1].seats[1].row.remote.as_ref().unwrap();
-        assert_eq!((ines.key.as_str(), ines.state.as_str()), ("ines", "idle 3m"));
+        assert_eq!(
+            (ines.key.as_str(), ines.state.as_str()),
+            ("ines", "idle 3m")
+        );
 
         let stale = json!({"host": "bb16", "age_s": 120, "sessions": [{"name": "x"}]});
         let others = json!({"machines": [stale, {"host": "mbp3"}]});
@@ -568,7 +573,10 @@ mod tests {
         assert!(!bands[0].fresh);
         assert_eq!(bands.len(), 3);
         let x = bands[1].seats[0].row.remote.as_ref().unwrap();
-        assert_eq!(x.state, "offline 2m", "a stale beat outranks the seat's word");
+        assert_eq!(
+            x.state, "offline 2m",
+            "a stale beat outranks the seat's word"
+        );
     }
 
     #[test]
