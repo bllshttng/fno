@@ -8,7 +8,13 @@
 //! fills (and promotes `spawning` to `live`), a second different id fills the
 //! ONE optional related slot, a third distinct id refuses the write - and
 //! records the transcript path + start source the harness itself named, so
-//! mail and liveness stop guessing them from transcripts. The client side
+//! mail and liveness stop guessing them from transcripts. The additive id
+//! contract is claude-only: a non-claude row whose recorded id differs from
+//! the reported one follows the lineage restamp instead (classify against
+//! the recorded id's family-1 reachability, then succession in place or a
+//! branch fork - the retired Python `restamp_harness_session_id`), and the
+//! worker's own report heals the row's cwd (the retired `heal_own_cwd`).
+//! The client side
 //! never lazy-starts a daemon and spools to a capped file when the daemon is
 //! down, so a session start never blocks and never loses its report.
 //!
@@ -291,6 +297,39 @@ pub(crate) fn handle_session_report(
         None
     };
 
+    // The non-claude lineage restamp's liveness evidence (the retired Python
+    // `_predecessor_observation`): the named row's recorded id and its
+    // family-1 reachability, read BEFORE the lock so the probe never runs
+    // under it. `None` reachability classifies as deferred, never as death.
+    // The locked write trusts the verdict only while the row still names the
+    // probed predecessor.
+    let lineage_probe: Option<(String, Option<bool>)> = if harness != "claude" {
+        let stale = state::load_registry(&home.registry_json())
+            .unwrap_or_default()
+            .entries
+            .into_iter()
+            .find(|e| {
+                e.harness_name() == harness
+                    && agent_self
+                        .as_deref()
+                        .is_some_and(|n| e.name == n || e.aliases.iter().any(|a| a == n))
+            })
+            .and_then(|e| e.harness_session_id)
+            .filter(|s| !s.is_empty() && s != &session_id);
+        stale.map(|stale| {
+            let verdict = crate::truth_probe::family1_truth_probe(&stale).and_then(|probe| {
+                match probe.reachability.as_deref() {
+                    Some("reachable") => Some(true),
+                    Some("unreachable") => Some(false),
+                    _ => None,
+                }
+            });
+            (stale, verdict)
+        })
+    } else {
+        None
+    };
+
     let mut outcome = Outcome::Unknown;
     let mut row_name: Option<String> = None;
     // The freshness stamp every report leaves on the row: the capacity
@@ -300,6 +339,19 @@ pub(crate) fn handle_session_report(
     // primary id filled on a promoted row. The manifest arm runs after the
     // registry write commits.
     let mut manifest_arm: Option<(String, String, Option<String>)> = None;
+    // Set when this report fills an empty primary id on the worker's own
+    // row: spawn_guard's parked pending sessions row (the deferred open)
+    // opens here, the same trigger the retired Python
+    // `_flush_pending_session_row` fired on its first fill.
+    let mut first_fill_name: Option<String> = None;
+    // (name, old, new) when the report moved the matched row's cwd; the
+    // event fires after the write commits, off the lock.
+    let mut cwd_healed: Option<(String, String, String)> = None;
+    // (name, predecessor, successor, classification word) for one applied
+    // lineage transition, surfaced as `session_transition_classified` after
+    // the write commits, the way the retired Python `_emit_and_ask_on_branch`
+    // did. A deferred in-place correction stays silent, as in Python.
+    let mut applied_transition: Option<(String, String, String, &'static str)> = None;
     if let Err(e) = state::update_registry(&home.registry_json(), |r| {
         let Some(find) = find_row(&r.entries, &harness, &session_id, agent_self.as_deref()) else {
             if let Some(i) = fork_parent.as_ref().and_then(|(parent, pid)| {
@@ -396,6 +448,7 @@ pub(crate) fn handle_session_report(
                     r.entries[i].claude_session_uuid = Some(session_id.clone());
                 }
                 promoted_first_fill(&r.entries[i], &mut manifest_arm);
+                first_fill_name = Some(r.entries[i].name.clone());
                 // `wait_row` is the pane-worker marker (parity with the
                 // retired Python heal's `FNO_AGENT_ROW_PENDING` gate): only a
                 // pane-substrate worker's row may take a pane bind here.
@@ -410,9 +463,11 @@ pub(crate) fn handle_session_report(
                 let entry = &r.entries[i];
                 let primary = entry.harness_session_id.as_deref().unwrap_or("");
                 let related = entry.related_session_id.as_deref().unwrap_or("");
+                let mut target = i;
                 if primary.is_empty() {
                     r.entries[i].harness_session_id = Some(session_id.clone());
                     promoted_first_fill(&r.entries[i], &mut manifest_arm);
+                    first_fill_name = Some(r.entries[i].name.clone());
                 } else if related == session_id.as_str() {
                     // already held additively; the field stamps below still
                     // land, but session_id names the RELATED id here, not
@@ -429,6 +484,72 @@ pub(crate) fn handle_session_report(
                         .unwrap_or(false);
                     if callee_minted {
                         r.entries[i].harness_session_id = Some(session_id.clone());
+                    } else if harness != "claude" {
+                        // The lineage restamp (the retired Python
+                        // `restamp_harness_session_id`): a non-claude row's
+                        // re-minted id classifies against the recorded one's
+                        // family-1 reachability and either moves the row in
+                        // place (dead or unevidenced predecessor, no role) or
+                        // forks an independently addressable branch (live
+                        // predecessor; also a role row with no evidence,
+                        // whose authority is never overwritten on a guess).
+                        // The additive related slot stays claude-only.
+                        let stale = primary.to_string();
+                        let probed_mismatch = lineage_probe
+                            .as_ref()
+                            .is_some_and(|(probed, _)| probed != &stale);
+                        if !probed_mismatch {
+                            let reachable = lineage_probe
+                                .as_ref()
+                                .and_then(|(probed, verdict)| {
+                                    (probed == &stale).then_some(*verdict)
+                                })
+                                .flatten();
+                            let role_present = r.entries[i].role_level.is_some();
+                            let classification =
+                                state::classify_session_transition(&stale, &session_id, reachable);
+                            let branch_needed =
+                                matches!(classification, state::SessionTransition::Branch)
+                                    || (role_present
+                                        && classification == state::SessionTransition::Deferred);
+                            if branch_needed {
+                                let branch_base = format!(
+                                    "{}-branch-{}",
+                                    r.entries[i].name,
+                                    crate::identity::canonical_handle(&session_id)
+                                );
+                                let mut branch_name = branch_base.clone();
+                                let mut suffix = 2;
+                                while r.entries.iter().any(|e| e.name == branch_name) {
+                                    branch_name = format!("{branch_base}-{suffix}");
+                                    suffix += 1;
+                                }
+                                let branch = r.entries[i].fork_for_session(
+                                    &branch_name,
+                                    &session_id,
+                                    &stale,
+                                );
+                                let branch_name = branch.name.clone();
+                                r.entries.push(branch);
+                                target = r.entries.len() - 1;
+                                applied_transition =
+                                    Some((branch_name, stale, session_id.clone(), "branch"));
+                            } else {
+                                if !r.entries[i].apply_succession(&stale, &session_id) {
+                                    // The row changed under us mid-write; leave
+                                    // it alone rather than corrupt the history.
+                                    return;
+                                }
+                                if classification == state::SessionTransition::Succession {
+                                    applied_transition = Some((
+                                        r.entries[i].name.clone(),
+                                        stale,
+                                        session_id.clone(),
+                                        "succession",
+                                    ));
+                                }
+                            }
+                        }
                     } else {
                         r.entries[i].related_session_id = Some(session_id.clone());
                         outcome = Outcome::Stored {
@@ -448,10 +569,10 @@ pub(crate) fn handle_session_report(
                 // Same pane-worker gate as the backfill arm above.
                 if !wait_row.is_zero() {
                     if let Some(claim) = &effective_claim {
-                        pane_rebind = crate::pane_claim::bind(&mut r.entries, i, claim);
+                        pane_rebind = crate::pane_claim::bind(&mut r.entries, target, claim);
                     }
                 }
-                i
+                target
             }
         };
         // The Stored default only stands for the fills that did not set it.
@@ -471,6 +592,19 @@ pub(crate) fn handle_session_report(
             entry.start_source = Some(src.clone());
         }
         entry.last_report_at = Some(now_stamp.clone());
+        // The worker's cwd heal (the retired Python `heal_own_cwd`): the
+        // spawner mints the row with the spawn directory; the worker's own
+        // report makes the registry's cwd answer "where does this worker
+        // work" for every reader that joins on it. Keyed on --agent-self,
+        // like the Python hook: an operator report never moves a row's cwd
+        // (a daemon-hosted reporter's cwd is the serve daemon's, not the
+        // session's).
+        if let (true, Some(new_cwd)) = (agent_self.is_some(), report_cwd.as_deref()) {
+            if entry.cwd != new_cwd {
+                cwd_healed = Some((entry.name.clone(), entry.cwd.clone(), new_cwd.to_string()));
+                entry.cwd = new_cwd.to_string();
+            }
+        }
         if let Some((short, pid)) = &bg_refresh {
             // A row already past its live lifetime (exited, retired, ...)
             // never gets reanimated by a roster hit on a recycled pid or
@@ -489,6 +623,14 @@ pub(crate) fn handle_session_report(
         }
         row_name = Some(entry.name.clone());
     }) {
+        // The heal's visible half on a failed write, the way the retired
+        // Python `_heal_row_cwd` failed open: name the error, keep going.
+        if let (true, Some(_)) = (agent_self.is_some(), report_cwd.as_deref()) {
+            let _ = emitter.emit(
+                "session_cwd_heal_failed",
+                &json!({"provider": harness, "name": agent_self, "error": e.to_string()}),
+            );
+        }
         return Response::err(
             req.id,
             ErrorCode::Internal,
@@ -525,6 +667,47 @@ pub(crate) fn handle_session_report(
                 "harness": harness,
             }),
         );
+    }
+
+    // The worker's report moved the row's cwd: announce it with old and new,
+    // the same fields the retired Python heal emitted (register_session.py's
+    // `session_cwd_healed`: provider, name, old, new).
+    if let Some((name, old, new)) = cwd_healed {
+        let _ = emitter.emit(
+            "session_cwd_healed",
+            &json!({
+                "provider": harness,
+                "name": name,
+                "old": old,
+                "new": new,
+            }),
+        );
+    }
+
+    // One applied lineage transition, the fields the retired Python
+    // `emit_session_transition` carried (name, harness, predecessor and
+    // successor ids, classification, source).
+    if let Some((name, predecessor, successor, classification)) = applied_transition {
+        let _ = emitter.emit(
+            "session_transition_classified",
+            &json!({
+                "name": name,
+                "harness": harness,
+                "predecessor_session_id": predecessor,
+                "successor_session_id": successor,
+                "classification": classification,
+                "source": source,
+            }),
+        );
+    }
+
+    // The worker's first id observation opens spawn_guard's parked pending
+    // sessions row, the trigger the retired Python `_flush_pending_session_row`
+    // fired. The open touches the graph store, so it runs off the RPC path in
+    // a thread; a provenance miss is never an error and never fails the
+    // report.
+    if let Some(name) = first_fill_name {
+        spawn_pending_open(home, &name, &session_id);
     }
 
     match outcome {
@@ -1121,7 +1304,12 @@ pub async fn run_session_report(rest: &[String], home: &AgentsHome) -> i32 {
     // per-machine serve daemon) can still be bound from the pane side.
     if let Some(claim) = crate::pane_claim::ambient() {
         params["pane"] = json!({"session": claim.session, "pane_id": claim.pane_id});
-    } else if let Ok(cwd) = std::env::current_dir() {
+    }
+    // The report's cwd rides always now: the worker's own heal keys on it
+    // (the retired Python hook passed --cwd on every worker report). An
+    // operator report carrying one is inert: the daemon's heal is keyed on
+    // --agent-self.
+    if let Ok(cwd) = std::env::current_dir() {
         params["cwd"] = Value::String(cwd.display().to_string());
     }
     // --origin-only writes the record and sends nothing - EXCEPT for a child
@@ -1175,6 +1363,25 @@ fn remove_retired_claude_session(session_id: &str) {
     entry.short_id = crate::client_commands::derived_short_id(session_id);
     let _ = std::thread::spawn(move || {
         let _ = crate::gc_native::apply_active_surface_removal(&entry);
+    });
+}
+
+/// The worker's first id observation opens spawn_guard's parked pending
+/// sessions row (the trigger the retired Python `_flush_pending_session_row`
+/// fired). The open touches the graph store, so it runs off the RPC path in
+/// a thread; a provenance miss is never an error and never fails the report.
+/// Tests skip the spawn: the wiring is one call, and the open itself is
+/// unit-tested in `pending_session_row`.
+fn spawn_pending_open(home: &AgentsHome, name: &str, session_id: &str) {
+    if cfg!(test) {
+        return;
+    }
+    let registry = home.registry_json();
+    let graph = crate::backlog::settings::graph_path();
+    let name = name.to_string();
+    let session_id = session_id.to_string();
+    let _ = std::thread::spawn(move || {
+        let _ = crate::pending_session_row::open_parked_for(&registry, &graph, &name, &session_id);
     });
 }
 
@@ -1424,7 +1631,7 @@ mod tests {
     }
 
     #[test]
-    fn resumed_id_fills_the_related_slot_not_the_primary() {
+    fn a_resumed_codex_id_corrects_the_primary_in_place() {
         let (_d, home) = temp_home("related");
         seed_registry(
             &home,
@@ -1443,17 +1650,27 @@ mod tests {
             json!({"agent_self": "w1", "payload": {"source": "resume", "transcript_path": transcript.to_string_lossy()}}),
         );
         let resp = handle_session_report(&home, &emitter(&home), &req(params.clone()));
-        assert_eq!(response_json(&resp)["result"]["related_filled"], true);
+        // A role-less row with no liveness evidence for the predecessor:
+        // the deferred classification corrects the row in place and stays
+        // silent - the Python restamp emitted nothing here either.
+        assert_eq!(response_json(&resp)["result"]["stored"], true);
         let row = &read_rows(&home)[0];
         assert_eq!(
             row.harness_session_id.as_deref(),
-            Some("0197aaaa-1234-7abc-9def-0123456789ab")
-        );
-        assert_eq!(
-            row.related_session_id.as_deref(),
             Some("0197bbbb-1234-7abc-9def-0123456789ab")
         );
+        assert_eq!(
+            row.predecessor_session_ids,
+            vec!["0197aaaa-1234-7abc-9def-0123456789ab".to_string()]
+        );
+        assert_eq!(row.related_session_id, None);
         assert_eq!(row.start_source.as_deref(), Some("resume"));
+        let transitions = crate::event_store::query_events(
+            &home.events_jsonl(),
+            &crate::event_store::EventQuery::of_types(&["session_transition_classified"]),
+        )
+        .unwrap();
+        assert!(transitions.is_empty(), "{transitions:?}");
         // A resume writes no origin record: the record names the machine the
         // session BEGAN on, and the resuming machine is not it (AC2-ERR).
         record_origin(&params);
@@ -1470,13 +1687,13 @@ mod tests {
             &home,
             json!({
                 "name": "w1", "cwd": "/repo", "status": "live",
-                "created_at": "2026-09-26T00:00:00Z", "harness": "codex",
+                "created_at": "2026-09-26T00:00:00Z", "harness": "claude",
                 "harness_session_id": "0197aaaa-1234-7abc-9def-0123456789ab",
                 "related_session_id": "0197bbbb-1234-7abc-9def-0123456789ab"
             }),
         );
         let params = report_params(
-            "codex",
+            "claude",
             "0197cccc-1234-7abc-9def-0123456789ab",
             json!({"agent_self": "w1"}),
         );
@@ -1809,11 +2026,32 @@ mod tests {
         assert!(bound.contains("role_grantor: vellum"), "{bound}");
         assert_eq!(read_rows(&home)[0].status, AgentStatus::Live);
 
-        // A resume fills the related slot and never rewrites the manifest.
+        // A resume of a role row with no liveness evidence forks a branch
+        // instead of filling a related slot: the row's authority stays on
+        // the original session and the manifest is never rewritten.
         let resume = "0197bbbb-1234-7abc-9def-0123456789ab";
         let params = report_params("codex", resume, json!({"agent_self": "lead-wren"}));
         let resp = handle_session_report(&home, &emitter(&home), &req(params));
-        assert_eq!(response_json(&resp)["result"]["related_filled"], true);
+        assert_eq!(response_json(&resp)["result"]["stored"], true);
+        let rows = read_rows(&home);
+        assert_eq!(
+            rows.len(),
+            2,
+            "the deferred branch forks its own row: {:?}",
+            rows.iter().map(|r| &r.name).collect::<Vec<_>>()
+        );
+        let original = rows.iter().find(|r| r.name == "lead-wren").unwrap();
+        assert_eq!(original.harness_session_id.as_deref(), Some(successor));
+        assert_eq!(original.related_session_id, None);
+        let branch = rows.iter().find(|r| r.name != "lead-wren").unwrap();
+        assert!(
+            branch.name.starts_with("lead-wren-branch-"),
+            "{}",
+            branch.name
+        );
+        assert_eq!(branch.harness_session_id.as_deref(), Some(resume));
+        assert_eq!(branch.forked_from_session_id.as_deref(), Some(successor));
+        assert_eq!(branch.role_level, None);
         let bound = std::fs::read_to_string(&manifest).unwrap();
         assert!(
             bound.contains(&format!("harness_session_id: {successor}")),
@@ -1824,5 +2062,106 @@ mod tests {
             None => std::env::remove_var("FNO_SPACES_DIR"),
         }
         drop(lock);
+    }
+
+    /// AC1-HP: a worker's own report heals the row's cwd and emits
+    /// `session_cwd_healed` with old and new; the idempotent no-op never
+    /// rewrites and never re-emits.
+    #[test]
+    fn a_worker_report_heals_the_row_cwd() {
+        let (_d, home) = temp_home("heal");
+        seed_registry(
+            &home,
+            json!({
+                "name": "w1", "cwd": "/spawn/dir", "status": "live",
+                "created_at": "2026-09-26T00:00:00Z", "harness": "codex",
+                "harness_session_id": "0197aaaa-1234-7abc-9def-0123456789ab"
+            }),
+        );
+        let params = || {
+            report_params(
+                "codex",
+                "0197aaaa-1234-7abc-9def-0123456789ab",
+                json!({"agent_self": "w1", "cwd": "/work/dir"}),
+            )
+        };
+        let resp = handle_session_report(&home, &emitter(&home), &req(params()));
+        assert_eq!(response_json(&resp)["result"]["stored"], true);
+        assert_eq!(read_rows(&home)[0].cwd, "/work/dir");
+        let heals = crate::event_store::query_events(
+            &home.events_jsonl(),
+            &crate::event_store::EventQuery::of_types(&["session_cwd_healed"]),
+        )
+        .unwrap();
+        assert_eq!(heals.len(), 1, "{heals:?}");
+        let body = heals[0].line.clone();
+        assert!(body.contains("/spawn/dir"), "{body}");
+        assert!(body.contains("/work/dir"), "{body}");
+        assert!(body.contains("w1"), "{body}");
+        // The idempotent second report neither writes nor re-emits.
+        let resp = handle_session_report(&home, &emitter(&home), &req(params()));
+        assert_eq!(response_json(&resp)["result"]["stored"], true);
+        let heals = crate::event_store::query_events(
+            &home.events_jsonl(),
+            &crate::event_store::EventQuery::of_types(&["session_cwd_healed"]),
+        )
+        .unwrap();
+        assert_eq!(heals.len(), 1, "{heals:?}");
+    }
+
+    /// A role row's re-minted id with no liveness evidence forks a branch:
+    /// the recorded authority is never overwritten on a guess, the branch is
+    /// independently addressable, and one `session_transition_classified`
+    /// names the fork.
+    #[test]
+    fn a_role_rows_re_minted_id_forks_a_branch() {
+        let (_d, home) = temp_home("lineage-branch");
+        seed_registry(
+            &home,
+            json!({
+                "name": "w1", "cwd": "/repo", "status": "live",
+                "created_at": "2026-09-26T00:00:00Z", "harness": "codex",
+                "harness_session_id": "0197aaaa-1234-7abc-9def-0123456789ab",
+                "role_level": 2, "role_scope": "scope-nine", "role_grantor": "lead"
+            }),
+        );
+        let params = report_params(
+            "codex",
+            "0197bbbb-1234-7abc-9def-0123456789ab",
+            json!({"agent_self": "w1"}),
+        );
+        let resp = handle_session_report(&home, &emitter(&home), &req(params));
+        assert_eq!(response_json(&resp)["result"]["stored"], true);
+        let rows = read_rows(&home);
+        assert_eq!(
+            rows.len(),
+            2,
+            "the branch forks its own row: {:?}",
+            rows.iter().map(|r| &r.name).collect::<Vec<_>>()
+        );
+        let original = rows.iter().find(|r| r.name == "w1").unwrap();
+        assert_eq!(
+            original.harness_session_id.as_deref(),
+            Some("0197aaaa-1234-7abc-9def-0123456789ab")
+        );
+        assert_eq!(original.related_session_id, None);
+        let branch = rows.iter().find(|r| r.name != "w1").unwrap();
+        assert!(branch.name.starts_with("w1-branch-"), "{}", branch.name);
+        assert_eq!(
+            branch.harness_session_id.as_deref(),
+            Some("0197bbbb-1234-7abc-9def-0123456789ab")
+        );
+        assert_eq!(
+            branch.forked_from_session_id.as_deref(),
+            Some("0197aaaa-1234-7abc-9def-0123456789ab")
+        );
+        assert_eq!(branch.role_level, None);
+        let transitions = crate::event_store::query_events(
+            &home.events_jsonl(),
+            &crate::event_store::EventQuery::of_types(&["session_transition_classified"]),
+        )
+        .unwrap();
+        assert_eq!(transitions.len(), 1, "{transitions:?}");
+        assert!(transitions[0].line.contains("branch"));
     }
 }
