@@ -1,7 +1,7 @@
-//! parity-stage: differential
+//! parity-stage: characterization
 //! parity-oracle: fno.adapters.providers.usage
 //!
-//! Differential parity for `accounts::usage_probe`, the port of `usage.py`.
+//! Characterization for `accounts::usage_probe`, the port of `usage.py`.
 //! Each `tests/golden/accounts_usage_probe/*.json` case carries one parser
 //! input, or one record plus the Keychain blobs, HTTP answers, route env and
 //! session files its probe reads, and the Python leg's answer under `expect`,

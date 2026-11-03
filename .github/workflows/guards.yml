@@ -639,6 +639,13 @@ jobs:
         timeout-minutes: 5
         run: bash scripts/ci/check-retired-command-strings.sh
 
+      # The mail module imports nothing outside crate::mail:: (law d-6f5b834b
+      # bars a separate crate, so this holds the dependency wall).
+      - name: Mail module dependency check
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: bash scripts/ci/check-mail-module-deps.sh
+
       - name: Role vocabulary check
         if: ${{ !cancelled() }}
         timeout-minutes: 5

@@ -31,7 +31,7 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use crate::envelope::{Envelope, JsonEnvelope, NoEnvelope};
+use crate::mail::frame::{Envelope, JsonEnvelope, NoEnvelope};
 use crate::readiness::{
     AgyReadinessDetector, CodexReadinessDetector, GeminiReadinessDetector,
     OpencodeReadinessDetector, ReadinessDetector,
@@ -1973,6 +1973,7 @@ pub fn infer_dispatch_provider(lookup: impl Fn(&str) -> Option<String>) -> &'sta
         Some("gemini") => "gemini",
         Some("opencode") => "opencode",
         Some("agy") => "agy",
+        Some("pi") => "pi",
         _ => "claude",
     }
 }

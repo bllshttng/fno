@@ -18,7 +18,7 @@ use serde_json::Map;
 use serde_json::Value;
 
 const EXIT_USAGE: i32 = 2;
-const USAGE: &str = "usage: fno-agents evals-trend --history <jsonl> (--mode report [--since K] [--graduate N] [--json] [--compare A --to B [--repeats N] [--bank DIR] [--prices JSON]] [--by-failure-type [--repeats N] [--bank DIR]] [--check-metrics [--bank DIR]] [--planned <json>] [--qualification <manifest.json>] [--by-cohort [--prices <json>]] [--climb --baseline C --trial C [--cohorts-yaml P] [--stage V --trial-lane L]] | --mode trend | --mode summary) [--stale-days N] [--now <rfc3339>]";
+const USAGE: &str = "usage: fno-agents evals-trend --history <jsonl> (--mode report [--since K] [--graduate N] [--json] [--compare A --to B [--repeats N] [--bank DIR] [--prices JSON]] [--by-failure-type [--repeats N] [--bank DIR]] [--check-metrics [--bank DIR]] [--planned <json>] [--qualification <manifest.json>] [--by-cohort [--prices <json>]] [--predict [--bank DIR]] [--climb --baseline C --trial C [--cohorts-yaml P] [--stage V --trial-lane L]] | --mode trend | --mode summary) [--stale-days N] [--now <rfc3339>]";
 
 /// One history row: the fields the folds read. Absent keys read as the
 /// Python fold read them (missing `variant` is baseline, missing `ts` is
@@ -44,6 +44,18 @@ impl Row {
 
     pub(crate) fn lane_status(&self) -> Option<&str> {
         self.raw.get("lane_status").and_then(Value::as_str)
+    }
+
+    pub(crate) fn raw_str(&self, key: &str) -> Option<&str> {
+        self.raw.get(key).and_then(Value::as_str)
+    }
+
+    pub(crate) fn raw_i64(&self, key: &str) -> Option<i64> {
+        self.raw.get(key).and_then(Value::as_i64)
+    }
+
+    pub(crate) fn raw_obs_bool(&self, key: &str) -> Option<bool> {
+        self.raw.get("obs")?.get(key)?.as_bool()
     }
 }
 
@@ -494,6 +506,9 @@ fn cohort_fold(rows: &[Row], prices: Option<&Value>) -> Value {
 pub(crate) fn cohort_score(rows: &[&Row], prices: Option<&Value>) -> Value {
     let mut statuses: BTreeMap<String, usize> = BTreeMap::new();
     let mut lane_statuses: BTreeMap<String, usize> = BTreeMap::new();
+    // A row with no lane folds under the empty seat, never under a lane.
+    let mut lanes: BTreeMap<String, usize> = BTreeMap::new();
+    let mut models: BTreeMap<String, usize> = BTreeMap::new();
     let mut by_reason: BTreeMap<String, usize> = BTreeMap::new();
     let mut scored: Vec<&Row> = Vec::new();
     let mut excluded = 0usize;
@@ -511,6 +526,15 @@ pub(crate) fn cohort_score(rows: &[&Row], prices: Option<&Value>) -> Value {
             .and_then(Value::as_str)
             .unwrap_or("unverified");
         *lane_statuses.entry(lane_status.to_string()).or_default() += 1;
+        let text = |k: &str| {
+            r.raw
+                .get(k)
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string()
+        };
+        *lanes.entry(text("requested_lane")).or_default() += 1;
+        *models.entry(text("observed_model")).or_default() += 1;
         let reason = r.raw.get("excluded_reason").and_then(Value::as_str);
         if is_scored(r) {
             scored.push(r);
@@ -633,6 +657,8 @@ pub(crate) fn cohort_score(rows: &[&Row], prices: Option<&Value>) -> Value {
         },
         "median_wall_s": round4(median_wall_s),
         "lane_status_counts": lane_statuses,
+        "requested_lanes": lanes,
+        "observed_models": models,
         "status_counts": statuses,
         "excluded": {
             "total": excluded,
@@ -882,6 +908,7 @@ pub fn run_evals_trend(args: &[String]) -> i32 {
     let mut planned: Option<BTreeMap<String, usize>> = None;
     let mut qualification: Option<String> = None;
     let mut by_cohort = false;
+    let mut predict = false;
     let mut by_failure_type = false;
     let mut check_metrics = false;
     let mut bank: Option<String> = None;
@@ -995,6 +1022,7 @@ pub fn run_evals_trend(args: &[String]) -> i32 {
                 Err(()) => return EXIT_USAGE,
             },
             "--by-cohort" => by_cohort = true,
+            "--predict" => predict = true,
             "--by-failure-type" => by_failure_type = true,
             "--check-metrics" => check_metrics = true,
             "--bank" => match value("--bank") {
@@ -1146,6 +1174,9 @@ pub fn run_evals_trend(args: &[String]) -> i32 {
     if let Some(qpath) = &qualification {
         return qualification_report(&history, qpath, json_out, since);
     }
+    if predict {
+        return crate::evals_predict::run(&history, bank, json_out);
+    }
     if by_cohort {
         let rows = read_rows(&history, None, since);
         let fold = cohort_fold(&rows, prices.as_ref());
@@ -1193,8 +1224,15 @@ pub fn run_evals_trend(args: &[String]) -> i32 {
                     let tok_out = c["tokens"]["output"].to_string();
                     let cache_r = c["tokens"]["cache_read"].to_string();
                     let cache_w = c["tokens"]["cache_write"].to_string();
+                    let counts = |key: &str| {
+                        let map = c[key].as_object().cloned().unwrap_or_default();
+                        let parts: Vec<String> =
+                            map.iter().map(|(k, n)| format!("{k}:{n}")).collect();
+                        parts.join(",")
+                    };
+                    let (lane, model) = (counts("requested_lanes"), counts("observed_models"));
                     println!(
-                        "  {id}: attempts={attempts} graded={graded} accepted={accepted} rate={rate_pct:.1}% [{lo_pct:.1},{hi_pct:.1}] median={median}s in={tok_in} out={tok_out} cache_r={cache_r} cache_w={cache_w} {cost}"
+                        "  {id}: lane={lane} model={model} attempts={attempts} graded={graded} accepted={accepted} rate={rate_pct:.1}% [{lo_pct:.1},{hi_pct:.1}] median={median}s in={tok_in} out={tok_out} cache_r={cache_r} cache_w={cache_w} {cost}"
                     );
                 }
             }

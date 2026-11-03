@@ -653,6 +653,17 @@ pub(crate) async fn keys(
                 crate::view_store::save_board_full(view.board_full);
             }
             ModalKey::Byte(b'?') => b.keys_help = !b.keys_help,
+            ModalKey::Byte(b'r') => {
+                let target = b.seat().and_then(|(m, _, s)| {
+                    let work = s.work.as_ref()?;
+                    let url = work.pr_url.clone()?;
+                    Some((work.id.clone(), url, s.name.clone(), m.host.clone()))
+                });
+                if let Some((node, url, seat, machine)) = target {
+                    super::node_link::open_review(view, node, &url, seat, machine);
+                    return Ok(StdinFlow::Continue);
+                }
+            }
             ModalKey::Byte(b'W') => {
                 let bridge = crate::web::live_bridge(&view.session);
                 let host = crate::agents_view::hostname();

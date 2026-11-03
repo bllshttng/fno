@@ -24,11 +24,8 @@ const STATE_FILES: &[(&str, Option<&str>, &[&str])] = &[
     ),
     (
         "claims",
-        Some("fno.claims.io.global_claims_dir"),
-        &[
-            "cli/src/fno/claims/io.py",
-            "crates/fno-agents/src/claims.rs",
-        ],
+        Some("fno_agents.claims_root.global_claims_dir"),
+        &["crates/fno-agents/src/claims_root.rs"],
     ),
     (
         "messages.jsonl",

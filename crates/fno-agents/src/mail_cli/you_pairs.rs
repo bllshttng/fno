@@ -25,7 +25,7 @@ pub(crate) fn run(json_out: bool) -> i32 {
         return 2;
     }
     let dot_fno = home.root().parent().unwrap_or_else(|| home.root());
-    let bus = BusIndex::load(&crate::intel::bus_log_path(dot_fno));
+    let bus = BusIndex::load(&crate::mail_paths::bus_log_path(dot_fno));
     let cache = home.root().join("intel").join("you-threads.json");
     let lock = crate::gh_budget::FileLock::try_acquire(&crate::gh_budget::lock_path(&cache));
     let persist = lock.is_ok();

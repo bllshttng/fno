@@ -32,6 +32,14 @@ impl View {
         if self.board_full && (self.backlog_board.is_some() || self.org_board.is_some()) {
             return RegionOwner::Board;
         }
+        // An open PR review paints the whole screen at any board width.
+        if self
+            .backlog_board
+            .as_ref()
+            .is_some_and(|b| b.review.is_some())
+        {
+            return RegionOwner::Board;
+        }
         match self.region_owner {
             // A viewer panel hides the feed, and a hidden panel takes no keys.
             RegionOwner::Feed if self.feed.is_some() && self.viewer_panel_w() == 0 => {
@@ -219,7 +227,9 @@ pub(super) async fn mouse_pre_pass(
             super::questions::mouse(view, rep);
             continue;
         }
-        if super::file_viewer::mouse(view, rep) {
+        if super::file_viewer::drag_mouse(view, rep, sock_w).await?
+            || super::file_viewer::mouse(view, rep)
+        {
             continue;
         }
         if view.bell.open {
@@ -329,6 +339,9 @@ pub(super) async fn mouse_pre_pass(
                 && view.active_overlay_layout().is_none()
                 && !view.backlog_board.as_ref().is_none_or(|b| b.popup_open())
             {
+                if super::node_detail::click_session(view, rep.row, sock_w).await? {
+                    continue;
+                }
                 if let Some(id) = node_link::span_at(rep.row, rep.col) {
                     node_link::open(view, id).await;
                 }

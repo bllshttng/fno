@@ -39,6 +39,90 @@ pub fn rank_argv(id: &str, place: Place, anchor: Option<&str>) -> Result<Vec<Str
     Ok(args)
 }
 
+/// One line comment in a review: where it sits and what it says.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReviewComment {
+    pub path: String,
+    pub line: u32,
+    /// The anchor is an old-side line of a removed row.
+    pub removed: bool,
+    pub source: String,
+    pub text: String,
+}
+
+/// A finding's prose limit in the note engine.
+const REVIEW_BODY_CAP: usize = 5000;
+/// How much of a quoted source line a review keeps.
+const QUOTE_CHARS: usize = 160;
+
+/// The body of one blocking finding: a head line, then each comment numbered.
+/// Over the note engine's limit it refuses with the count and never truncates.
+pub fn review_body(
+    pr: &crate::pr_diff::PrRef,
+    head: &str,
+    comments: &[ReviewComment],
+) -> Result<String, String> {
+    let head8: String = head.chars().take(8).collect();
+    let mut body = format!(
+        "review of PR #{} ({}/{}) at {head8}: {} comment{}. Fix each, then resolve this finding.\n",
+        pr.number,
+        pr.owner,
+        pr.repo,
+        comments.len(),
+        if comments.len() == 1 { "" } else { "s" }
+    );
+    for (i, c) in comments.iter().enumerate() {
+        let mark = if c.removed { " (removed)" } else { "" };
+        let quote: String = c.source.trim().chars().take(QUOTE_CHARS).collect();
+        body.push_str(&format!(
+            "\n{}. {}:{}{mark}\n> {quote}\n{}\n",
+            i + 1,
+            c.path,
+            c.line,
+            c.text
+        ));
+    }
+    let count = body.chars().count();
+    if count > REVIEW_BODY_CAP {
+        return Err(format!(
+            "review is {count} chars (cap {REVIEW_BODY_CAP}): send part of it"
+        ));
+    }
+    Ok(body)
+}
+
+/// The note engine argv for one review send, run with the fno-agents binary.
+pub fn review_argv(node: &str, graph: &str, pr: &crate::pr_diff::PrRef) -> Vec<String> {
+    vec![
+        "backlog".into(),
+        "note".into(),
+        "--graph".into(),
+        graph.into(),
+        node.into(),
+        "--blocking".into(),
+        "--stdin".into(),
+        "--block-cmd".into(),
+        format!("gh api {} (diff)", crate::pr_diff::api_path(pr)),
+    ]
+}
+
+/// [`run_built`] with the `fno` binary, the path of every board write but the
+/// review send.
+pub(crate) async fn run_command(args: &[String], stdin: Option<String>) -> (bool, String) {
+    let mut command = crate::process_admission::tokio_command(crate::server::fno_bin());
+    run_built(&mut command, args, stdin).await
+}
+
+/// [`run_built`] with another binary: the review send runs the note engine.
+pub(crate) async fn run_command_in(
+    bin: std::path::PathBuf,
+    args: &[String],
+    stdin: Option<String>,
+) -> (bool, String) {
+    let mut command = crate::process_admission::tokio_command(bin);
+    run_built(&mut command, args, stdin).await
+}
+
 /// The one bounded shell-out for every board write: argv as an array, off
 /// the UI loop, `kill_on_drop`, a 10 s budget. The notice is the last
 /// stderr line on a non-zero exit (the command's refusal, verbatim), else the
@@ -47,9 +131,12 @@ pub fn rank_argv(id: &str, place: Place, anchor: Option<&str>) -> Result<Vec<Str
 /// text. Sibling of the foreground restart runner
 /// ([`crate::client::update_menu::run_restart_foreground`]), which instead
 /// inherits stdio so the operator watches the receipts.
-pub(crate) async fn run_command(args: &[String], stdin: Option<String>) -> (bool, String) {
+async fn run_built(
+    command: &mut tokio::process::Command,
+    args: &[String],
+    stdin: Option<String>,
+) -> (bool, String) {
     use std::process::Stdio;
-    let mut command = crate::process_admission::tokio_command(crate::server::fno_bin());
     command
         .args(args)
         .stdout(Stdio::piped())
@@ -127,6 +214,43 @@ mod tests {
                 "--operator"
             ]
         );
+    }
+
+    fn review_pr() -> crate::pr_diff::PrRef {
+        crate::pr_diff::parse_pr_url("https://github.com/o/r/pull/7").expect("a pull URL")
+    }
+
+    fn comment(line: u32, removed: bool, text: &str) -> ReviewComment {
+        ReviewComment {
+            path: "src/a.rs".into(),
+            line,
+            removed,
+            source: "  let x = 1;  ".into(),
+            text: text.into(),
+        }
+    }
+
+    #[test]
+    fn review_body_lists_each_anchor_and_refuses_over_the_cap() {
+        let comments = [comment(12, false, "rename"), comment(9, true, "keep this")];
+        let body = review_body(&review_pr(), "abcdef0123456", &comments).expect("under the cap");
+        assert!(
+            body.starts_with("review of PR #7 (o/r) at abcdef01: 2 comments."),
+            "{body}"
+        );
+        assert!(
+            body.contains("1. src/a.rs:12\n> let x = 1;\nrename"),
+            "{body}"
+        );
+        assert!(
+            body.contains("2. src/a.rs:9 (removed)\n> let x = 1;\nkeep this"),
+            "{body}"
+        );
+        let long = "x".repeat(5001);
+        let e = review_body(&review_pr(), "abc", &[comment(1, false, &long)])
+            .expect_err("over the cap refuses");
+        assert!(e.starts_with("review is "), "{e}");
+        assert!(e.ends_with("chars (cap 5000): send part of it"), "{e}");
     }
 
     // AC4/AC8 halves: the shell-out reports the exit fact and the command's own

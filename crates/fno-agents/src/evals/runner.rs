@@ -691,11 +691,14 @@ fn default_spawn(
 /// A resolved lane coordinate from the native inventory (route_gather):
 /// the same fold `agents.profiles.*.lanes` joins against, never a second
 /// model/effort enum.
+#[derive(Default)]
 pub struct LaneRow {
     pub name: String,
     pub harness: String,
     pub route: String,
     pub account: String,
+    pub model: String,
+    pub effort: String,
 }
 
 /// Resolve a named lane through the native inventory; the refusal names the
@@ -731,7 +734,46 @@ fn lane_from_inventory(inv: &serde_json::Value, name: &str) -> Result<LaneRow, S
         harness: field(row, "harness"),
         route: field(row, "route"),
         account: field(row, "account"),
+        model: field(row, "model"),
+        effort: field(row, "effort"),
     })
+}
+
+/// What ran, read from the harness's own transcript store through the
+/// observe door. A transcript nobody can read leaves `lane_status`
+/// `unverified` and `usage` null, never zero.
+fn lane_evidence(
+    lane: &LaneRow,
+    harness: &str,
+    attempted: bool,
+    spawned: bool,
+    workdir: &std::path::Path,
+    started_epoch: f64,
+) -> serde_json::Value {
+    let model = if lane.model.is_empty() {
+        &lane.route
+    } else {
+        &lane.model
+    };
+    let payload = json!({
+        "lane": {"name": lane.name, "harness": harness, "model": model, "effort": lane.effort},
+        "attempted": attempted,
+        "spawned": spawned,
+        "workdir": workdir.to_string_lossy(),
+        "started_epoch": started_epoch,
+    });
+    crate::eval_attempt::observe(&payload)
+}
+
+/// The harness a run spawns on: the lane row's, else the CLI arg. The history
+/// row records this same value, so a lane-driven run is not stamped null.
+fn seat_harness<'a>(
+    lane: Option<&'a LaneRow>,
+    worker_provider: Option<&'a str>,
+) -> Option<&'a str> {
+    lane.map(|l| l.harness.as_str())
+        .filter(|h| !h.is_empty())
+        .or(worker_provider)
 }
 
 /// The run loop: per (repeat, attempt): fresh disposable worktree ->
@@ -758,6 +800,7 @@ pub fn run_task(
     let timeout_s = std::cmp::max(1, task.timeout_minutes.saturating_mul(60));
     let mut results: Vec<RunResult> = Vec::new();
     let run_id = uuid_v4();
+    let spawn_harness = seat_harness(lane, worker_provider);
     for i in 0..repeat {
         let started = std::time::Instant::now();
         let started_wall = std::time::SystemTime::now()
@@ -774,6 +817,7 @@ pub fn run_task(
         let mut tree: Option<String> = None;
         let mut worker_sealed = false;
         let mut kept_transcript: Option<std::path::PathBuf> = None;
+        let mut lane_fields: Option<serde_json::Value> = None;
         let mut grade_base = checkout_ref.clone();
         let golden = task.golden.is_some();
         if golden {
@@ -820,14 +864,14 @@ pub fn run_task(
                 reason = "config.evals.enabled is false".into();
                 gate_blocked = true;
             } else if let Some(prompt) = &task.prompt {
-                let harness = lane
-                    .map(|l| l.harness.as_str())
-                    .filter(|h| !h.is_empty())
-                    .or(worker_provider);
                 // Other bank tasks invoke plugin skills, so only a golden drops them.
                 // A leading dash needs the fence, so that prompt also keeps them.
                 let flags = if golden && !prompt.starts_with('-') {
-                    tree_only_flags(harness, dir, &home_dir().canonicalize().unwrap_or_default())
+                    tree_only_flags(
+                        spawn_harness,
+                        dir,
+                        &home_dir().canonicalize().unwrap_or_default(),
+                    )
                 } else {
                     Vec::new()
                 };
@@ -852,6 +896,17 @@ pub fn run_task(
                 }
                 outcome = Some(o);
             }
+            // Before the cleanup: a pass forgets the transcript this reads.
+            lane_fields = lane.map(|l| {
+                lane_evidence(
+                    l,
+                    spawn_harness.unwrap_or_default(),
+                    task.prompt.is_some(),
+                    spawned,
+                    dir,
+                    started_wall,
+                )
+            });
             if golden {
                 let _ = std::fs::remove_dir_all(dir);
             } else {
@@ -864,7 +919,6 @@ pub fn run_task(
             }
         }
         let duration = started.elapsed().as_secs_f64().round_ties_even();
-        let _ = started_wall;
         let passed = outcome.as_ref().map(|o| o.passed).unwrap_or(false);
         let mut obs = serde_json::Map::new();
         obs.insert("fixture_prepared".into(), json!(workdir.is_some()));
@@ -911,23 +965,44 @@ pub fn run_task(
             "obs": obs,
             "bank_rev": bank_rev,
             "tree_hash": tree,
-            "worker_provider": worker_provider,
+            "worker_provider": spawn_harness,
             "variant": variant,
             "experiment_id": experiment_id,
         });
         if let Some(rev) = &overlay_rev {
             row["overlay_rev"] = json!(rev);
         }
+        if let Some(golden) = &task.golden {
+            row["failure_type"] = json!(golden.failure_type);
+        }
+        row["seat"] = json!(if task.tags.iter().any(|t| t == "lead") {
+            "lead"
+        } else {
+            "worker"
+        });
         if !status.is_empty() {
             row["status"] = json!(status);
         }
-        let _ = super::history::append_attempt(history_path, &row);
-        if lane.is_some() {
-            // Lane evidence rides the observe door as its own arm call; the
-            // row records the requested coordinate so the read side can
-            // re-ask natively over the batch.
-            row["requested_account"] = json!(lane.map(|l| l.account.clone()));
+        if let Some(l) = lane {
+            let fields = lane_fields.unwrap_or_else(|| {
+                let none = std::path::Path::new("");
+                lane_evidence(
+                    l,
+                    spawn_harness.unwrap_or_default(),
+                    task.prompt.is_some(),
+                    false,
+                    none,
+                    started_wall,
+                )
+            });
+            if let serde_json::Value::Object(fields) = fields {
+                for (k, v) in fields {
+                    row[k] = v;
+                }
+            }
+            row["requested_account"] = json!(l.account);
         }
+        let _ = super::history::append_attempt(history_path, &row);
         results.push(RunResult {
             task_id: task.id.clone(),
             tier: task.tier.clone(),
@@ -1050,12 +1125,26 @@ mod tests {
     }
 
     #[test]
+    fn a_lane_run_stamps_the_lane_harness_not_the_cli_arg() {
+        let lane = LaneRow {
+            harness: "claude".into(),
+            ..Default::default()
+        };
+        assert_eq!(seat_harness(Some(&lane), None), Some("claude"));
+        assert_eq!(seat_harness(Some(&lane), Some("codex")), Some("claude"));
+        let bare = LaneRow::default();
+        assert_eq!(seat_harness(Some(&bare), Some("codex")), Some("codex"));
+        assert_eq!(seat_harness(None, None), None);
+    }
+
+    #[test]
     fn the_spawn_carries_the_lane_coordinate() {
         let lane = LaneRow {
             name: "acme".into(),
             harness: "codex".into(),
             route: "openai/gpt-5.6".into(),
             account: "acme".into(),
+            ..Default::default()
         };
         let argv = spawn_argv(
             "ev-th-evals-1-2",
@@ -1269,6 +1358,7 @@ mod tests {
             harness: String::new(),
             route: "zai/glm".into(),
             account: "a".into(),
+            ..Default::default()
         };
         let argv = spawn_argv("n", "/tmp/wt", 60, Some("claude"), Some(&lane), "p", &[]);
         let i = argv.iter().position(|a| a == "--harness").unwrap();

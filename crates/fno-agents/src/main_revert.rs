@@ -170,8 +170,6 @@ fn revert_for(
     let tag = format!("tags+={}", crate::authorized_merge::MAIN_REPAIR_TAG);
     run(root, "fno", &["backlog", "update", node, &tag])?;
     let branch = format!("bugfix/{node}-revert-pr{pr}");
-    let tree = std::env::temp_dir().join(format!("fno-main-revert-{node}"));
-    let tree_s = tree.to_string_lossy().into_owned();
     run(root, "git", &["fetch", "origin", "main"])?;
     // The red verdict is a cached read: a main that moved since may already
     // carry the fix, and a revert on top of it would undo a green main.
@@ -182,17 +180,15 @@ fn revert_for(
             short(&fetched)
         ));
     }
-    let add = ["worktree", "add", "-b", &branch, &tree_s, "origin/main"];
-    run(root, "git", &add)?;
     let body = format!("{why} This reverts that merge so main turns green in one CI run. The author of #{pr} re-lands it with the fix.\n\nFixes {node}");
-    let create = [
-        "pr", "create", "--base", "main", "--head", &branch, "--title", &title, "--body", &body,
-    ];
-    let url = run(&tree, "git", &["revert", "-m", "1", "--no-edit", sha])
-        .and_then(|_| run(&tree, "git", &["push", "-u", "origin", &branch]))
-        .and_then(|_| run(&tree, "gh", &create));
-    let _ = run(root, "git", &["worktree", "remove", "--force", &tree_s]);
-    let url = url?;
+    let url = crate::bank_pr::open_with(root, &branch, title, &body, |tree| {
+        // The helper fetches again; a main that moved since the check above
+        // is not the head read red.
+        if run(tree, "git", &["rev-parse", "HEAD"])? != sha {
+            return Err("main moved before the revert was cut".into());
+        }
+        run(tree, "git", &["revert", "-m", "1", "--no-edit", sha]).map(|_| ())
+    })?;
     let ask = format!("{why} The fno daemon opened a revert: {url}. Please re-land this change with the fix in a new PR.");
     let comments = format!("repos/{{owner}}/{{repo}}/issues/{pr}/comments");
     let _ = run(

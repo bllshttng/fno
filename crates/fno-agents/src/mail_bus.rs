@@ -12,6 +12,7 @@
 //! ([`crate::machine_key::check`]), so a row edited on the primary, or one
 //! that claims a host whose pinned key did not sign it, never lands.
 
+use crate::mail::address::normalize_host;
 use crate::store_remote::{Remote, Reply, SqlValue};
 
 /// How long a pending row waits for its host before the expire leg flips it.
@@ -46,17 +47,6 @@ const ADDED_COLUMNS: [(&str, &str); 2] = [
     ("pubkey", "ALTER TABLE fno_mail_bus ADD COLUMN pubkey TEXT"),
     ("sig", "ALTER TABLE fno_mail_bus ADD COLUMN sig TEXT"),
 ];
-
-/// Hosts compare equal across machines that spell themselves differently
-/// (`iMac2D2.local` from gethostname, `imac2d2` from a user typing). One
-/// normalizer runs on write and on pull (operator ruling, 2026-10-10).
-pub fn normalize_host(raw: &str) -> String {
-    let lower = raw.trim().to_ascii_lowercase();
-    match lower.strip_suffix(".local") {
-        Some(base) if !base.is_empty() => base.to_string(),
-        _ => lower,
-    }
-}
 
 /// A unique bus msg_id. 12 hex like the Python bus ids (`fmail-…`), minted
 /// from clock, pid and a process-lifetime counter, hashed: no rand

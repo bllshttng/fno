@@ -2402,7 +2402,8 @@ fn perform_retraction(
             ));
         }
         crate::law_match::RetractOutcome::GraphRefused(e) => answer.lines.push(format!(
-            "outstanding: {target_id} is retracted, but the graph store refused ({e}); the retraction is durable in the journal and the index"
+            "outstanding: {target_id} is retracted, but the graph store refused ({e}); the retraction is durable in the journal and the index. {}",
+            crate::decide_door::GRAPH_RETRY
         )),
     }
 }

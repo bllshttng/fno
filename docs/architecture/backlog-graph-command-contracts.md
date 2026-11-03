@@ -219,13 +219,13 @@ The completion path (``done``/``reconcile``) closes a node because its PR landed
 
 Returns True when a stamp/graduate actually ran successfully (the relevant command exited 0); False when the run failed. Non-fatal: every failure warns and returns False, never raising, so a node close is never aborted by a stamp problem.
 
-Shared by ``done`` and ``reconcile``. The stamper is the in-package ``fno.plan._stamp`` module, run under the same interpreter as fno, so it resolves whether the package runs from the repo (editable install) or a uv-installed venv.
+Shared by ``done`` and ``reconcile``. The stamper is the native plan-doc writer (``crates/fno-agents/src/plan_doc/stamp.rs``).
 
 ## _set_expected_count
 
 Authoritatively write expected_url_count=count onto a plan's frontmatter.
 
-Used by ``decompose`` so a shared epic-decomposition doc graduates only after all N group PRs ship, not after the first. Runs the in-package ``fno.plan._stamp`` ``set-expected`` command (the same sys.executable pattern as ``_graduate_plan``) to keep plan-frontmatter I/O in its single owner and this graph CLI graph-agnostic about frontmatter format.
+Used by ``decompose`` so a shared epic-decomposition doc graduates only after all N group PRs ship, not after the first. Runs the plan-doc writer's ``set-expected`` command (``fno do plan set-expected``) to keep plan-frontmatter I/O in its single owner and this graph CLI graph-agnostic about frontmatter format.
 
 Returns ``(status, detail)`` where status is a ``SetExpectedStatus``:
 

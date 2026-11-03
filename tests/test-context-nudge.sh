@@ -157,7 +157,7 @@ export FNO_REPO_ROOT="$SBX"
 # parent harness for the compact probe below, where --to-self refuses a
 # contradicted marker as inherited identity.
 _SESSION_HARNESS="$(PYTHONPATH="$FNO_SRC" "$FNO_PYTHON" -c \
-  'from fno.claims.session_pid import resolve_session_harness; print(resolve_session_harness() or "")')"
+  'import json, subprocess; from fno.rust_binary import resolve_binary; b = resolve_binary(); print((json.loads(subprocess.run([str(b), "claim", "session-pid", "--json"], capture_output=True, text=True).stdout or "{}").get("harness") or "") if b else "")')"
 unset CODEX_THREAD_ID CLAUDE_CODE_SESSION_ID CODEX_SESSION_ID GEMINI_SESSION_ID OPENCODE_SESSION_ID CLAUDE_SESSION_ID
 export CLAUDE_CODE_SESSION_ID="$LEAD_SID"
 cd "$SBX"   # isolate: hook latches (.fno/), git root (carveouts), and events all land under $SBX

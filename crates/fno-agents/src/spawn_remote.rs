@@ -11,8 +11,9 @@
 //! `--cwd` or `--add-dir` value names a path ON THE TARGET HOST: the relay
 //! forwards byte-verbatim and the remote command validates.
 
-use crate::mail_bus::normalize_host;
-use crate::mail_remote::{fno_binary, split_target, target_error};
+use crate::mail::address::normalize_host;
+use crate::mail::address::{split_target, target_error};
+use crate::mail_remote::fno_binary;
 use std::ffi::OsString;
 use std::process::Command;
 

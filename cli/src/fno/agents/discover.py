@@ -768,7 +768,7 @@ class DiscoveredSession:
     #: knows about panes, exit tombstones and pids; carried rather than
     #: re-derived so this lane never grows a second copy of those rules.
     registry_falsifier: Optional[str] = None
-    #: The five-variant reading from ``fno.provenance.observed.observed_model``,
+    #: The five-variant reading from ``fno.agents.session_truth.observed_model``,
     #: set alongside ``truth_state`` from the same truth probe. Feeds
     #: ``classify_progress``; ``None`` before that probe has run.
     observed_model: Optional[dict] = None
@@ -1431,7 +1431,7 @@ def resolve_or_suggest(
     def claude_transcript_path(session_id: str, cwd: str) -> Optional[str]:
         if not _CLAUDE_UUID_RE.fullmatch(session_id):
             return None
-        from fno.provenance.resolver import resolve_transcript
+        from fno.rust_binary import resolve_transcript
 
         resolved = resolve_transcript(
             "claude",

@@ -4,18 +4,23 @@
 //! Each `evals-arm` tick runs one pass over two independent legs.
 //!
 //! **Main leg.** Once a day, and at once when the route config hash changes,
-//! it runs the golden tier at `origin/main` as cohort
-//! `gate-main-<date>-<hash>`. The golden set is read at the fetched sha
-//! through a detached worktree, never from this repo's working tree: the
+//! it runs one cohort per seat at `origin/main`. The worker seat runs the
+//! golden tier on `evals.gate.lane` as cohort `gate-main-<date>-<hash>`. The
+//! lead seat runs the `lead` goldens on the first lane of
+//! `agents.profiles.role.lanes` as `gate-main-<date>-<hash>-lead`. One seat
+//! runs at a time, and the worker goes first. The golden set is read at the
+//! fetched sha through a detached worktree, never from this repo's working tree: the
 //! checkout the daemon runs from can sit behind the ref, and a tag read
 //! there misses a golden main added. Each finished cohort becomes the
-//! baseline, and it is compared to the one before. A regression files a
-//! node, so a route change that breaks a golden reaches the backlog.
+//! baseline of its seat, and it is compared to that seat's one before. A
+//! regression files a node, so a route change that breaks a golden reaches
+//! the backlog.
 //!
 //! **Head leg.** An open same-repo PR whose head touches a gated path gets a
 //! pending `evals/gate` status, then one run of the `gate` goldens at that
-//! head, one PR at a time. A newer head kills the older run. The head pays one
-//! side only: it compares to the baseline. Until a first baseline exists the
+//! head, one PR at a time. A newer head kills the older run. The head runs on
+//! the worker seat and pays one side only: it compares to the worker
+//! baseline. Until a first baseline exists the
 //! leg posts nothing, so a fresh install holds no PR on a check it cannot do.
 //!
 //! The runs are detached, and the tick never waits on one. A later tick reads
@@ -38,7 +43,8 @@ const CONTEXT: &str = "evals/gate";
 const GATED_PATHS: [&str; 5] = ["skills/", "agents/", "hooks/", "commands/", "evals/bank/"];
 const GATE_TAG: &str = "gate";
 const GOLDEN_TAG: &str = "golden";
-const REPEATS: usize = 3;
+const LEAD_TAG: &str = "lead";
+pub(crate) const REPEATS: usize = 3;
 const HEAD_WORKERS: u32 = 4;
 const MAIN_WORKERS: u32 = 2;
 const HEAD_LIMIT_S: i64 = 1200;
@@ -48,9 +54,34 @@ const MAX_TASK_WALL_S: f64 = 180.0;
 const NEW_HEADS_PER_TICK: usize = 10;
 const DEFAULT_DAILY_USD: f64 = 15.0;
 const DEFAULT_LANE: &str = "zai-flash";
-/// The plan's measured GLM cost per attempt. Spend is this times the gate rows
-/// of the day, because a row's usage has no price until a manifest names one.
-const ATTEMPT_USD: f64 = 0.04;
+
+/// Who does the work a cohort grades. Spend is each gate row of the day at its
+/// seat's attempt price, because a row's usage has no price until a manifest
+/// names one. The cohort suffix names the seat, so an old row prices as worker.
+struct Seat {
+    name: &'static str,
+    tag: &'static str,
+    suffix: &'static str,
+    attempt_usd: f64,
+}
+
+/// GLM's measured mean is 0.032 USD an attempt.
+const WORKER: Seat = Seat {
+    name: "worker",
+    tag: GOLDEN_TAG,
+    suffix: "",
+    attempt_usd: 0.04,
+};
+/// What one worker attempt costs, for a run priced beside the gate.
+pub(crate) const WORKER_ATTEMPT_USD: f64 = WORKER.attempt_usd;
+/// The kept GLM gate transcripts cost a mean 0.67 USD at Opus prices.
+const LEAD: Seat = Seat {
+    name: "lead",
+    tag: LEAD_TAG,
+    suffix: "-lead",
+    attempt_usd: 0.70,
+};
+const SEATS: [&Seat; 2] = [&WORKER, &LEAD];
 /// GitHub refuses a status description above this length.
 const DESCRIPTION_MAX: usize = 140;
 
@@ -81,6 +112,9 @@ struct MainRun {
     cohort: String,
     pid: u32,
     started: i64,
+    /// Empty on a run an older binary launched: that run was the worker's.
+    #[serde(default)]
+    seat: String,
 }
 
 /// Why the cohort has no grade yet. `last_note` is rewritten every tick, so the
@@ -94,17 +128,36 @@ struct MainFailure {
 }
 
 #[derive(Serialize, Deserialize, Default)]
-struct State {
-    /// Head sha to its disposition. Only open PR heads stay.
-    heads: BTreeMap<String, String>,
-    head_run: Option<HeadRun>,
-    main_run: Option<MainRun>,
+struct SeatState {
     baseline: Option<String>,
     /// The cohort last launched. With no `main_failure` for it, the day is done.
     main_tried: Option<String>,
     #[serde(default)]
     main_failure: Option<MainFailure>,
+}
+
+#[derive(Serialize, Deserialize, Default)]
+struct State {
+    /// Head sha to its disposition. Only open PR heads stay.
+    heads: BTreeMap<String, String>,
+    head_run: Option<HeadRun>,
+    main_run: Option<MainRun>,
+    /// Flattened, so a `state.json` written before seats loads as the worker's.
+    #[serde(flatten)]
+    worker: SeatState,
+    #[serde(default)]
+    lead: SeatState,
     last_note: String,
+}
+
+impl State {
+    fn seat(&mut self, seat: &Seat) -> &mut SeatState {
+        if seat.name == LEAD.name {
+            &mut self.lead
+        } else {
+            &mut self.worker
+        }
+    }
 }
 
 struct Pr {
@@ -175,7 +228,7 @@ fn route_hash(repo: &Path) -> String {
     format!("{:08x}", hash >> 32)
 }
 
-fn history_rows(history: &Path) -> Vec<Value> {
+pub(crate) fn history_rows(history: &Path) -> Vec<Value> {
     std::fs::read_to_string(history)
         .unwrap_or_default()
         .lines()
@@ -190,10 +243,9 @@ fn row_cohort(row: &Value) -> &str {
 }
 
 /// Estimated dollars the gate spent on this UTC day.
-fn spent_today(rows: &[Value], now: DateTime<Utc>) -> f64 {
+pub(crate) fn spent_today(rows: &[Value], now: DateTime<Utc>) -> f64 {
     let day = now.format("%Y-%m-%d").to_string();
-    let attempts = rows
-        .iter()
+    rows.iter()
         .filter(|r| row_cohort(r).get(..5) == Some("gate-"))
         .filter(|r| {
             r.get("ts")
@@ -201,8 +253,15 @@ fn spent_today(rows: &[Value], now: DateTime<Utc>) -> f64 {
                 .and_then(|ts| ts.get(..10))
                 == Some(day.as_str())
         })
-        .count();
-    attempts as f64 * ATTEMPT_USD
+        .map(|r| {
+            let lead = row_cohort(r).ends_with(LEAD.suffix);
+            if lead {
+                LEAD.attempt_usd
+            } else {
+                WORKER.attempt_usd
+            }
+        })
+        .sum()
 }
 
 /// Tasks whose median attempt in the baseline ran over the wall limit. A task
@@ -239,7 +298,7 @@ fn gate_tasks(
 ) -> Vec<String> {
     tasks
         .iter()
-        .filter(|t| t.tags.iter().any(|tag| tag == GATE_TAG))
+        .filter(|t| t.tags.iter().any(|tag| tag == GATE_TAG) && !t.is_demoted())
         .filter(|t| !slow.contains(&t.id))
         .filter(|t| {
             let spec = format!("{sha}:evals/bank/{}.yaml", t.id);
@@ -424,16 +483,37 @@ fn run_argv(
     argv
 }
 
-fn config_daily_usd(repo: &Path) -> f64 {
-    crate::paths_cli::cfg_str(repo, &["evals", "gate", "daily_usd"])
-        .and_then(|v| v.trim().parse().ok())
-        .unwrap_or(DEFAULT_DAILY_USD)
+/// TOML writes the budget as a float or an integer; a string read alone missed both.
+pub(crate) fn config_daily_usd(repo: &Path) -> f64 {
+    match crate::agents_config::config_value_deep(repo, &["evals", "gate", "daily_usd"]) {
+        Some(toml::Value::Float(f)) => f,
+        Some(toml::Value::Integer(i)) => i as f64,
+        Some(toml::Value::String(v)) => v.trim().parse().unwrap_or(DEFAULT_DAILY_USD),
+        _ => DEFAULT_DAILY_USD,
+    }
 }
 
-fn config_lane(repo: &Path) -> String {
+pub(crate) fn config_lane(repo: &Path) -> String {
     crate::paths_cli::cfg_str(repo, &["evals", "gate", "lane"])
         .filter(|v| !v.trim().is_empty())
         .unwrap_or_else(|| DEFAULT_LANE.to_string())
+}
+
+/// The worker seat keeps `evals.gate.lane`. The lead seat runs the first lane
+/// leads are routed to, so the gate grades the seat the user corrects.
+fn seat_lane(repo: &Path, seat: &Seat) -> Result<String, String> {
+    if seat.name != LEAD.name {
+        return Ok(config_lane(repo));
+    }
+    crate::agents_config::config_value_deep(repo, &["agents", "profiles", "role", "lanes"])
+        .as_ref()
+        .and_then(toml::Value::as_array)
+        .and_then(|lanes| lanes.first())
+        .and_then(toml::Value::as_str)
+        .map(str::trim)
+        .filter(|lane| !lane.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| "no lead lane: agents.profiles.role.lanes has no first lane".into())
 }
 
 /// Compare a run to the baseline, over `tasks` when named. A head run covers
@@ -479,95 +559,138 @@ fn main_leg(p: &Paths, d: &Deps, state: &mut State, can_launch: bool, daily_usd:
             (d.kill)(run.pid);
         }
         state.main_run = None;
-        return finish_main(p, d, state, &run.cohort);
+        let seat = if run.seat == LEAD.name {
+            &LEAD
+        } else {
+            &WORKER
+        };
+        return finish_main(p, d, state, seat, &run.cohort);
     }
-    let cohort = format!(
+    let day = format!(
         "gate-main-{}-{}",
         d.now.format("%Y-%m-%d"),
         route_hash(p.repo)
     );
-    if state.main_tried.as_deref() == Some(cohort.as_str()) {
-        match state.main_failure.as_ref().filter(|f| f.cohort == cohort) {
-            None => return format!("main {cohort} tried"),
+    let mut notes = Vec::new();
+    for seat in SEATS {
+        let (note, settled) = main_seat(p, d, state, seat, &day, can_launch, daily_usd);
+        notes.push(note);
+        // The next seat waits until this one is settled for now.
+        if !settled {
+            break;
+        }
+    }
+    notes.join(", ")
+}
+
+/// One seat's main run. The flag reads true when the seat is settled for now,
+/// so the next seat may go.
+fn main_seat(
+    p: &Paths,
+    d: &Deps,
+    state: &mut State,
+    seat: &Seat,
+    day: &str,
+    can_launch: bool,
+    daily_usd: f64,
+) -> (String, bool) {
+    let cohort = format!("{day}{}", seat.suffix);
+    let s = state.seat(seat);
+    if s.main_tried.as_deref() == Some(cohort.as_str()) {
+        match s.main_failure.as_ref().filter(|f| f.cohort == cohort) {
+            None => return (format!("main {cohort} tried"), true),
             Some(f) if f.tries >= MAIN_MAX_TRIES => {
-                return format!("main {cohort} gave up after {} tries: {}", f.tries, f.cause);
+                let note = format!("main {cohort} gave up after {} tries: {}", f.tries, f.cause);
+                return (note, true);
             }
             Some(f) if d.now.timestamp() < f.next_try => {
-                return format!("main {cohort} waits to retry: {}", f.cause);
+                return (format!("main {cohort} waits to retry: {}", f.cause), true);
             }
             Some(_) => {}
         }
     }
     if !can_launch {
-        return "main held by the spawn gate".into();
+        return ("main held by the spawn gate".into(), false);
     }
+    let lane = match seat_lane(p.repo, seat) {
+        Ok(lane) => lane,
+        Err(cause) => return (main_failed(d, state, seat, &cohort, cause), false),
+    };
     if !fetch(p, d, "main") {
-        return "main fetch failed".into();
+        return ("main fetch failed".into(), false);
     }
     let Some(sha) = (d.run)(&["git", "rev-parse", "FETCH_HEAD"], p.repo)
         .filter(|r| r.ok)
         .map(|r| r.stdout.trim().to_string())
     else {
-        return "main rev unread".into();
+        return ("main rev unread".into(), false);
     };
     // The golden set is read at the sha the run grades, not at the checkout.
     let arg_bank = ref_checkout(p, d, "main", &sha).map(|root| root.join("evals").join("bank"));
     let bank_dir = arg_bank
         .clone()
         .unwrap_or_else(|| p.repo.join("evals").join("bank"));
-    let goldens = match crate::evals::bank::discover_bank(&bank_dir) {
+    let tasks = match crate::evals::bank::discover_bank(&bank_dir) {
         Ok(tasks) => tasks
             .iter()
-            .filter(|t| t.tags.iter().any(|tag| tag == GOLDEN_TAG))
+            .filter(|t| t.tags.iter().any(|tag| tag == seat.tag) && !t.is_demoted())
             .count(),
         // No launch on an unread bank: the retry loop carries the cause.
         Err(e) => {
-            return main_failed(
-                d,
-                state,
-                &cohort,
-                format!("bank unread at the ref: {}", e.0),
-            )
+            let cause = format!("bank unread at the ref: {}", e.0);
+            return (main_failed(d, state, seat, &cohort, cause), false);
         }
     };
-    let cost = (goldens * REPEATS) as f64 * ATTEMPT_USD;
-    if spent_today(&history_rows(p.history), d.now) + cost > daily_usd {
-        return format!("main held: {cost:.2} USD over the daily budget");
+    if tasks == 0 {
+        state.seat(seat).main_tried = Some(cohort.clone());
+        return (format!("main {cohort} has no {} task", seat.tag), true);
     }
-    let lane = config_lane(p.repo);
+    let cost = (tasks * REPEATS) as f64 * seat.attempt_usd;
+    if spent_today(&history_rows(p.history), d.now) + cost > daily_usd {
+        let note = format!("main {cohort} held: {cost:.2} USD over the daily budget");
+        return (note, false);
+    }
     let argv = run_argv(
         p,
-        ("--tag", GOLDEN_TAG),
+        ("--tag", seat.tag),
         MAIN_WORKERS,
         &lane,
         &cohort,
         &sha,
         arg_bank.as_ref(),
     );
-    state.main_tried = Some(cohort.clone());
+    state.seat(seat).main_tried = Some(cohort.clone());
     match (d.spawn)(&argv, p.repo, &p.state_dir.join(MAIN_LOG)) {
         Ok(pid) => {
             state.main_run = Some(MainRun {
                 cohort: cohort.clone(),
                 pid,
                 started: d.now.timestamp(),
+                seat: seat.name.into(),
             });
             // Saved at once: a tick killed here must not launch a second run.
             save_state(&p.state_dir, state);
-            format!("main {cohort} launched")
+            (format!("main {cohort} launched"), false)
         }
-        Err(e) => main_failed(d, state, &cohort, format!("launch failed: {e}")),
+        Err(e) => {
+            let cause = format!("launch failed: {e}");
+            (main_failed(d, state, seat, &cohort, cause), false)
+        }
     }
 }
 
-fn main_failed(d: &Deps, state: &mut State, cohort: &str, cause: String) -> String {
-    let earlier = state
+/// Marks the cohort tried too, so the retry wait and the cap also hold for a
+/// failure that came before the launch.
+fn main_failed(d: &Deps, state: &mut State, seat: &Seat, cohort: &str, cause: String) -> String {
+    let s = state.seat(seat);
+    let earlier = s
         .main_failure
         .as_ref()
         .filter(|f| f.cohort == cohort)
         .map_or(0, |f| f.tries);
     let note = format!("main {cohort} {cause}");
-    state.main_failure = Some(MainFailure {
+    s.main_tried = Some(cohort.to_string());
+    s.main_failure = Some(MainFailure {
         cohort: cohort.to_string(),
         tries: earlier + 1,
         next_try: d.now.timestamp() + MAIN_RETRY_S,
@@ -586,21 +709,63 @@ fn log_tail(log: &Path) -> String {
         .collect()
 }
 
+/// True when the evals tree (bank, fixtures, runner) differs between any bank
+/// rev the older cohort ran at and any the newer one did. A compare across such
+/// a change measures the harder bank, not the pipeline. Only a git diff that
+/// exits 1 counts: a rev git cannot read leaves the compare as it was.
+fn bank_moved(p: &Paths, d: &Deps, rows: &[Value], older: &str, newer: &str) -> bool {
+    let revs = |cohort: &str| -> BTreeSet<String> {
+        rows.iter()
+            .filter(|r| row_cohort(r) == cohort)
+            .filter_map(|r| r["bank_rev"].as_str())
+            .map(str::to_string)
+            .collect()
+    };
+    let new_revs = revs(newer);
+    revs(older).iter().any(|old| {
+        new_revs.iter().any(|new| {
+            old != new
+                && (d.run)(
+                    &[
+                        "git",
+                        "diff",
+                        "--quiet",
+                        old,
+                        new,
+                        "--",
+                        "evals",
+                        "crates/fno-agents/src/evals",
+                    ],
+                    p.repo,
+                )
+                .is_some_and(|r| r.code == Some(1))
+        })
+    })
+}
+
 /// A cohort with no grade is no baseline. A real one is compared to the one
-/// before, and that compare is the number the bank exists to print.
-fn finish_main(p: &Paths, d: &Deps, state: &mut State, cohort: &str) -> String {
+/// before, and that compare is the number the bank exists to print. When the
+/// bank changed between the two, the new cohort starts a fresh baseline and no
+/// compare runs: every golden the harder bank fails would file a regression.
+fn finish_main(p: &Paths, d: &Deps, state: &mut State, seat: &Seat, cohort: &str) -> String {
     let graded = read_rows(&p.history.to_string_lossy(), None, None)
         .iter()
         .any(|r| r.experiment_id.as_deref() == Some(cohort) && crate::evals_trend::is_scored(r));
     if !graded {
         let tail = log_tail(&p.state_dir.join(MAIN_LOG));
-        return main_failed(d, state, cohort, format!("wrote no grade: {tail}"));
+        return main_failed(d, state, seat, cohort, format!("wrote no grade: {tail}"));
     }
-    state.main_failure = None;
-    let previous = state.baseline.replace(cohort.to_string());
+    let s = state.seat(seat);
+    s.main_failure = None;
+    let previous = s.baseline.replace(cohort.to_string());
     let Some(previous) = previous else {
         return format!("main {cohort} is the first baseline");
     };
+    if bank_moved(p, d, &history_rows(p.history), &previous, cohort) {
+        return format!(
+            "main {cohort}: the bank changed since {previous}; new baseline, no compare"
+        );
+    }
     let Ok(view) = compare(&ref_bank(p, "main"), p.history, &previous, cohort, None) else {
         return format!("main {cohort} compare failed");
     };
@@ -644,7 +809,7 @@ fn head_leg(
     settle_head_run(p, d, state, slug, prs);
     let open: BTreeSet<&str> = prs.iter().map(|pr| pr.sha.as_str()).collect();
     state.heads.retain(|sha, _| open.contains(sha.as_str()));
-    let Some(baseline) = state.baseline.clone() else {
+    let Some(baseline) = state.worker.baseline.clone() else {
         return "head leg waits for a first baseline".into();
     };
     let mut new_heads = 0;
@@ -721,7 +886,7 @@ fn settle_head_run(p: &Paths, d: &Deps, state: &mut State, slug: &str, prs: &[Pr
     if alive {
         (d.kill)(run.pid);
     }
-    let (status, text) = match (&state.baseline, over) {
+    let (status, text) = match (&state.worker.baseline, over) {
         (_, true) => (
             "failure",
             no_result(
@@ -799,7 +964,7 @@ fn launch_head(
         );
         return format!("head {} has no gate golden", short(&pr.sha));
     }
-    let cost = (tasks.len() * REPEATS) as f64 * ATTEMPT_USD;
+    let cost = (tasks.len() * REPEATS) as f64 * WORKER.attempt_usd;
     if spent_today(&rows, d.now) + cost > daily_usd {
         finish(
             "failure",
@@ -970,13 +1135,20 @@ mod tests {
             let dir = tempfile::tempdir().unwrap();
             let bank = dir.path().join("evals/bank");
             std::fs::create_dir_all(&bank).unwrap();
-            for (id, tag) in [("g1", GATE_TAG), ("g2", GOLDEN_TAG)] {
+            // g4 is a demoted gate golden with baseline grades: every head
+            // run must leave it out, and its baseline must not turn a head red.
+            for (id, tag) in [
+                ("g1", GATE_TAG),
+                ("g2", GOLDEN_TAG),
+                ("g4", "gate, demoted"),
+            ] {
                 std::fs::write(
                     bank.join(format!("{id}.yaml")),
                     format!("id: {id}\ntier: capability\nprompt: p\ngrade:\n  - kind: file-exists\n    path: x\ntags: [{tag}]\n"),
                 )
                 .unwrap();
             }
+            World::config(dir.path(), "[agents.profiles.role]\nlanes = []\n");
             World {
                 dir,
                 posts: RefCell::default(),
@@ -1026,6 +1198,11 @@ mod tests {
             w
         }
 
+        fn config(repo: &Path, text: &str) {
+            std::fs::create_dir_all(repo.join(".fno")).unwrap();
+            std::fs::write(repo.join(".fno/config.toml"), text).unwrap();
+        }
+
         fn history(&self) -> PathBuf {
             self.dir.path().join("h/history.jsonl")
         }
@@ -1051,7 +1228,7 @@ mod tests {
             }
         }
 
-        fn tick(&self, alive: bool, now: DateTime<Utc>) {
+        fn tick(&self, alive: bool, now: DateTime<Utc>) -> String {
             let run = |args: &[&str], _: &Path| -> Option<Run> {
                 match args {
                     ["git", "remote", ..] => ok("git@github.com:o/r.git\n"),
@@ -1086,6 +1263,12 @@ mod tests {
                             stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
                         })
                     }
+                    ["git", "diff", "--quiet", ..] => Some(Run {
+                        ok: false,
+                        code: Some(1),
+                        stdout: String::new(),
+                        stderr: String::new(),
+                    }),
                     ["git", "worktree", ..] => {
                         // Fallback mode: the gate reads the checkout bank.
                         Some(Run {
@@ -1144,20 +1327,21 @@ mod tests {
                 kill: &kill,
                 now,
             };
-            tick_with(&paths, &deps, true);
+            tick_with(&paths, &deps, true)
         }
 
         /// A finished main run, so the head leg has its baseline.
         fn with_baseline(&self) {
             self.rows("base", "g1", [true, true, true]);
+            self.rows("base", "g4", [true, true, true]);
             let tried = format!(
                 "gate-main-{}-{}",
                 Utc::now().format("%Y-%m-%d"),
                 route_hash(self.dir.path())
             );
             self.state(|s| {
-                s.baseline = Some("base".into());
-                s.main_tried = Some(tried);
+                s.worker.baseline = Some("base".into());
+                s.worker.main_tried = Some(tried);
             });
         }
     }
@@ -1219,7 +1403,7 @@ mod tests {
         w.tick(false, now);
         let state = load_state(&dir);
         assert_eq!(w.spawns.borrow().len(), 1, "no retry before the wait ends");
-        let failure = state.main_failure.as_ref().unwrap();
+        let failure = state.worker.main_failure.as_ref().unwrap();
         assert_eq!(failure.cause, "wrote no grade: Error: unknown lane");
         assert!(
             state.last_note.contains("unknown lane"),
@@ -1239,7 +1423,7 @@ mod tests {
             "{}",
             state.last_note
         );
-        assert!(state.baseline.is_none());
+        assert!(state.worker.baseline.is_none());
     }
 
     #[test]
@@ -1251,14 +1435,51 @@ mod tests {
             .unwrap()
             .and_utc();
         w.tick(true, now);
-        let cohort = load_state(&state_dir(&w.history())).main_tried.unwrap();
+        let cohort = load_state(&state_dir(&w.history()))
+            .worker
+            .main_tried
+            .unwrap();
         w.rows(&cohort, "g2", [true, true, true]);
         w.tick(false, now);
         w.tick(false, now + chrono::Duration::seconds(MAIN_RETRY_S + 1));
         let state = load_state(&state_dir(&w.history()));
-        assert_eq!(state.baseline.as_deref(), Some(cohort.as_str()));
-        assert!(state.main_failure.is_none());
+        assert_eq!(state.worker.baseline.as_deref(), Some(cohort.as_str()));
+        assert!(state.worker.main_failure.is_none());
         assert_eq!(w.spawns.borrow().len(), 1);
+    }
+
+    #[test]
+    fn a_main_run_after_a_bank_change_resets_the_baseline_and_compares_nothing() {
+        let w = World::new("crates/x.rs\n");
+        let now = Utc::now()
+            .date_naive()
+            .and_hms_opt(1, 0, 0)
+            .unwrap()
+            .and_utc();
+        w.state(|s| s.worker.baseline = Some("old".into()));
+        w.tick(true, now);
+        let cohort = load_state(&state_dir(&w.history()))
+            .worker
+            .main_tried
+            .unwrap();
+        std::fs::create_dir_all(w.history().parent().unwrap()).unwrap();
+        let mut f = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(w.history())
+            .unwrap();
+        for (cohort, rev, pass) in [("old", "aaa", true), (cohort.as_str(), "bbb", false)] {
+            let row = json!({"task_id": "g2", "tier": "capability", "pass": pass,
+                "status": "graded", "variant": "v1", "experiment_id": cohort, "bank_rev": rev});
+            writeln!(f, "{row}").unwrap();
+        }
+        drop(f);
+        w.tick(false, now);
+        let state = load_state(&state_dir(&w.history()));
+        assert_eq!(state.worker.baseline.as_deref(), Some(cohort.as_str()));
+        assert!(!state_dir(&w.history())
+            .join(format!("compare-{cohort}.json"))
+            .exists());
     }
 
     #[test]
@@ -1355,5 +1576,89 @@ mod tests {
         let post = w.posts.borrow().last().cloned().unwrap();
         assert!(post.contains("state=failure"), "{post}");
         assert!(post.contains("evals.gate.daily_usd"), "{post}");
+    }
+
+    #[test]
+    fn the_budget_key_reads_as_a_number_and_zero_turns_the_gate_off() {
+        let w = World::new("skills/x/SKILL.md\n");
+        World::config(w.dir.path(), "[evals.gate]\ndaily_usd = 2.5\n");
+        assert_eq!(config_daily_usd(w.dir.path()), 2.5);
+        World::config(w.dir.path(), "[evals.gate]\ndaily_usd = 0\n");
+        let note = w.tick(true, Utc::now());
+        assert!(w.spawns.borrow().is_empty());
+        assert_eq!(note, "gate off: evals.gate.daily_usd is 0");
+    }
+
+    #[test]
+    fn a_lead_row_costs_the_lead_price_and_an_old_row_the_worker_price() {
+        let now = Utc::now();
+        let row = |cohort: &str| json!({"experiment_id": cohort, "ts": now.to_rfc3339()});
+        let rows = [
+            row("gate-main-d-h-lead"),
+            row("gate-main-d-h"),
+            row("gate-head-abc"),
+        ];
+        let spent = spent_today(&rows, now);
+        assert!(
+            (spent - (LEAD.attempt_usd + 2.0 * WORKER.attempt_usd)).abs() < 1e-9,
+            "{spent}"
+        );
+    }
+
+    #[test]
+    fn an_old_state_keeps_its_baseline_on_the_worker_seat_and_the_lead_seat_names_its_holds() {
+        let w = World::new("crates/x.rs\n");
+        let now = Utc::now()
+            .date_naive()
+            .and_hms_opt(1, 0, 0)
+            .unwrap()
+            .and_utc();
+        let day = format!(
+            "gate-main-{}-{}",
+            now.format("%Y-%m-%d"),
+            route_hash(w.dir.path())
+        );
+        let dir = state_dir(&w.history());
+        std::fs::create_dir_all(&dir).unwrap();
+        // The shape a binary before seats wrote.
+        let old = json!({"heads": {}, "head_run": null, "main_run": null, "baseline": "base",
+            "main_tried": day, "last_note": ""});
+        std::fs::write(dir.join("state.json"), old.to_string()).unwrap();
+        w.tick(true, now);
+        let state = load_state(&dir);
+        assert_eq!(state.worker.baseline.as_deref(), Some("base"));
+        assert!(state.lead.baseline.is_none());
+        assert!(
+            w.spawns.borrow().is_empty(),
+            "the worker seat already ran today"
+        );
+        let cause = &state.lead.main_failure.as_ref().unwrap().cause;
+        assert!(cause.contains("agents.profiles.role.lanes"), "{cause}");
+
+        let w = World::new("crates/x.rs\n");
+        World::config(
+            w.dir.path(),
+            "[evals.gate]\ndaily_usd = 1\n[agents.profiles.role]\nlanes = [\"opus\"]\n",
+        );
+        std::fs::write(
+            w.dir.path().join("evals/bank/l1.yaml"),
+            "id: l1\ntier: capability\nprompt: p\ngrade:\n  - kind: file-exists\n    path: x\ntags: [golden, lead]\n",
+        )
+        .unwrap();
+        w.tick(true, now);
+        let cohort = load_state(&dir_of(&w)).worker.main_tried.unwrap();
+        w.rows(&cohort, "g2", [true, true, true]);
+        w.tick(false, now);
+        w.tick(false, now);
+        assert_eq!(w.spawns.borrow().len(), 1, "only the worker seat launched");
+        let note = load_state(&dir_of(&w)).last_note;
+        assert!(
+            note.contains("-lead held: 2.10 USD over the daily budget"),
+            "{note}"
+        );
+    }
+
+    fn dir_of(w: &World) -> PathBuf {
+        state_dir(&w.history())
     }
 }

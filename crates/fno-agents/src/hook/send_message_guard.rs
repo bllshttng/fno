@@ -118,7 +118,7 @@ fn mail_unhealthy() -> Option<String> {
     let dot_fno = home.root().parent().map(|p| p.to_path_buf());
     let bus: std::path::PathBuf = dot_fno
         .as_deref()
-        .map(crate::intel::bus_log_path)
+        .map(crate::mail_paths::bus_log_path)
         .unwrap_or_default();
     if bus.exists() {
         match std::fs::OpenOptions::new().append(true).open(&bus) {

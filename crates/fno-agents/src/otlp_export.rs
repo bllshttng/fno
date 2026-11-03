@@ -48,20 +48,27 @@ pub struct OtlpConfig {
     pub host: String,
 }
 
+/// The env kill switch that forces every telemetry export off, if one is set.
+pub(crate) fn forced_off() -> Option<&'static str> {
+    ["OTEL_SDK_DISABLED", "DO_NOT_TRACK"]
+        .into_iter()
+        .find(|var| {
+            let val = std::env::var(var).unwrap_or_default();
+            let val = val.trim().to_ascii_lowercase();
+            val == "true" || val == "1"
+        })
+}
+
 /// Gates in order: env kill switches first (`OTEL_SDK_DISABLED`,
 /// `DO_NOT_TRACK`), because a machine saying "no telemetry" outranks any
 /// config file. Then the opt-in flag, then the endpoint scheme, then the
 /// headers env: an unset or empty value refuses rather than shipping an
 /// unauthenticated export to whatever the endpoint is.
 pub fn resolve(cwd: &Path) -> Resolved {
-    for var in ["OTEL_SDK_DISABLED", "DO_NOT_TRACK"] {
-        let val = std::env::var(var).unwrap_or_default();
-        let val = val.trim().to_ascii_lowercase();
-        if val == "true" || val == "1" {
-            return Resolved::Off {
-                forced_off_by: Some(var),
-            };
-        }
+    if let Some(var) = forced_off() {
+        return Resolved::Off {
+            forced_off_by: Some(var),
+        };
     }
     if !crate::agents_config::otlp_export_enabled(cwd) {
         return Resolved::Off {
@@ -251,15 +258,21 @@ pub(crate) fn body(rows: &[&FeedRow], log_content: bool) -> String {
 /// shipped, and the last held error for `status_line`. The 48h prune keeps
 /// the maps bounded; the collector side dedupes on `fno.row.id`.
 #[derive(Default, Serialize, Deserialize)]
-struct ExportState {
+pub(crate) struct ExportState {
     #[serde(default)]
-    delivered: BTreeMap<String, String>,
+    pub(crate) delivered: BTreeMap<String, String>,
     #[serde(default)]
-    dropped: BTreeMap<String, String>,
+    pub(crate) dropped: BTreeMap<String, String>,
     #[serde(default)]
     last_delivered_ts: Option<String>,
     #[serde(default)]
-    held_error: Option<String>,
+    pub(crate) held_error: Option<String>,
+}
+
+impl ExportState {
+    pub(crate) fn knows(&self, id: &str) -> bool {
+        self.delivered.contains_key(id) || self.dropped.contains_key(id)
+    }
 }
 
 fn state_path(home: &crate::paths::AgentsHome) -> PathBuf {
@@ -271,7 +284,11 @@ fn receipts_path(home: &crate::paths::AgentsHome) -> PathBuf {
 }
 
 fn load_state(home: &crate::paths::AgentsHome) -> ExportState {
-    std::fs::read_to_string(state_path(home))
+    load_state_at(&state_path(home))
+}
+
+pub(crate) fn load_state_at(path: &Path) -> ExportState {
+    std::fs::read_to_string(path)
         .ok()
         .and_then(|text| serde_json::from_str(&text).ok())
         .unwrap_or_default()
@@ -281,15 +298,18 @@ fn load_state(home: &crate::paths::AgentsHome) -> ExportState {
 /// export dir is created on first save; a failed save silently reads as an
 /// empty state next beat, and at-least-once delivery absorbs the re-send.
 fn save_state(home: &crate::paths::AgentsHome, state: &ExportState) {
+    save_state_at(home, &state_path(home), state);
+}
+
+pub(crate) fn save_state_at(home: &crate::paths::AgentsHome, path: &Path, state: &ExportState) {
     let dir = home.otlp_export_dir();
     if std::fs::create_dir_all(&dir).is_err() {
         return;
     }
-    let path = state_path(home);
     let tmp = path.with_extension("json.tmp");
     if let Ok(text) = serde_json::to_string(state) {
         if std::fs::write(&tmp, text).is_ok() {
-            let _ = std::fs::rename(&tmp, &path);
+            let _ = std::fs::rename(&tmp, path);
         }
     }
 }
@@ -309,7 +329,7 @@ fn append_receipt(home: &crate::paths::AgentsHome, row: &Value) {
     }
 }
 
-fn now_ms() -> i64 {
+pub(crate) fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
@@ -320,7 +340,7 @@ fn now_rfc3339() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
 
-fn prune(state: &mut ExportState, now_ms: i64) {
+pub(crate) fn prune(state: &mut ExportState, now_ms: i64) {
     let cutoff = now_ms - STATE_TTL_HOURS * 3600 * 1000;
     let live =
         |ts: &String| crate::event_store::parse_rfc3339_ms(ts).is_some_and(|ms| ms >= cutoff);

@@ -50,6 +50,18 @@ pub struct TaskSpec {
     pub source_path: std::path::PathBuf,
 }
 
+/// The tag `evals graduate --demote` writes on a task whose score predicts
+/// nothing. A person ships it in a PR; nothing demotes at runtime.
+pub const DEMOTED_TAG: &str = "demoted";
+
+impl TaskSpec {
+    /// A demoted task stays in the bank but leaves tag and gate selection.
+    /// `--task <id>` still runs it.
+    pub fn is_demoted(&self) -> bool {
+        self.tags.iter().any(|tag| tag == DEMOTED_TAG)
+    }
+}
+
 /// The load-time discipline refusals name the id and file.
 #[derive(Debug)]
 pub struct BankError(pub String);

@@ -51,8 +51,8 @@ def test_all_plan_validators_use_the_canonical_source_first_root() -> None:
         "skills/execute/scripts/validate-plan.sh",
     ):
         validator = _read(relative)
-        assert "-m fno.cli do plan rung" in validator
-        assert "-m fno.cli plan" not in validator
+        assert '"$_bin" plan-cli rung' in validator
+        assert "-m fno.cli" not in validator
 
 
 def test_every_python_fno_argv_avoids_expiring_roots() -> None:

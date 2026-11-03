@@ -6,7 +6,7 @@
 //! lives here too, so one module answers the whole open-PR question.
 
 use crate::events::EventEmitter;
-use crate::gc_sweep::{GraphRead, RetireOrder};
+use crate::gc_sweep::{GraphRead, PrGuardRead, RetireOrder};
 use crate::node_route;
 use crate::paths::AgentsHome;
 use crate::state;
@@ -105,7 +105,45 @@ pub fn open_pr_verdict(
 /// unmerged, which this path has no live read to override. A headless row
 /// is a one-shot run, not a seated worker: its normal exit must stay
 /// observable, so the hold never covers it.
-pub fn row_has_open_pr(graph: &GraphRead, e: &state::RegistryEntry) -> bool {
+/// The three lookups [`row_has_open_pr`] reads from a graph read. Both the
+/// full [`GraphRead`] and the sweep's narrow [`PrGuardRead`] answer them, so
+/// the predicate carries one implementation over this surface instead of a
+/// second fork drifting beside the first.
+pub trait PrGuardGraph {
+    fn session_nodes(&self, work_key: &str) -> Option<&[(String, String)]>;
+    fn recorded_pr(&self, node: &str) -> Option<Option<u64>>;
+    fn merge_status(&self, node: &str) -> Option<String>;
+}
+
+impl PrGuardGraph for GraphRead {
+    fn session_nodes(&self, work_key: &str) -> Option<&[(String, String)]> {
+        self.index.get(work_key).map(Vec::as_slice)
+    }
+    fn recorded_pr(&self, node: &str) -> Option<Option<u64>> {
+        self.pr_number.get(node).copied()
+    }
+    fn merge_status(&self, node: &str) -> Option<String> {
+        self.pr_state
+            .get(node)
+            .and_then(|(merge, _, _)| merge.clone())
+    }
+}
+
+impl PrGuardGraph for PrGuardRead {
+    fn session_nodes(&self, work_key: &str) -> Option<&[(String, String)]> {
+        self.index.get(work_key).map(Vec::as_slice)
+    }
+    fn recorded_pr(&self, node: &str) -> Option<Option<u64>> {
+        self.pr_number.get(node).copied()
+    }
+    fn merge_status(&self, node: &str) -> Option<String> {
+        self.pr_state
+            .get(node)
+            .and_then(|(merge, _, _)| merge.clone())
+    }
+}
+
+pub fn row_has_open_pr<T: PrGuardGraph>(graph: &T, e: &state::RegistryEntry) -> bool {
     if e.substrate.as_deref() == Some("headless") {
         return false;
     }
@@ -118,13 +156,12 @@ pub fn row_has_open_pr(graph: &GraphRead, e: &state::RegistryEntry) -> bool {
         return false;
     }
     graph
-        .index
-        .get(&crate::graph_store::work_state_key(sid))
+        .session_nodes(&crate::graph_store::work_state_key(sid))
         .is_some_and(|nodes| {
             nodes.iter().any(|(node, _)| {
-                graph.pr_number.get(node).copied().flatten().is_some()
+                graph.recorded_pr(node).flatten().is_some()
                     && !matches!(
-                        graph.pr_state.get(node).and_then(|(m, _, _)| m.as_deref()),
+                        graph.merge_status(node).as_deref(),
                         Some("merged") | Some("closed")
                     )
             })

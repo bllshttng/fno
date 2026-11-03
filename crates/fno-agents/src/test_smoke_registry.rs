@@ -31,7 +31,7 @@ pub(super) const STRUCTURAL_STEPS: &[(&str, &str, &str)] = &[
     ("Build fno-agents debug binary (for journey tests)", "crates/fno-agents", "CARGO_BUILD_BUILD_DIR=\"$PWD/target\" cargo build"),
     ("Build the fno front door (for the hash gate)", "crates/fno", "CARGO_BUILD_BUILD_DIR=\"$PWD/target\" cargo build --quiet --bin fno"),
     ("paths.sh hash gate", ".", "FNO_AGENTS_WORKER=\"$PWD/crates/fno-agents/target/debug/fno-agents-worker\" crates/fno/target/debug/fno config paths verify scripts/lib/paths.sh"),
-    ("Scoped @requires_rust parity suites (binary present; stubbed providers)", "cli", "FAKE_BIN=\"$(mktemp -d)\"\nfor p in codex gemini opencode; do printf \"%s\\n%s\\n\" \"#!/bin/sh\" \"exit 0\" > \"$FAKE_BIN/$p\"; chmod +x \"$FAKE_BIN/$p\"; done\nPATH=\"$FAKE_BIN:$PATH\" uv run pytest --tb=short -q tests/agents/test_rust_command_parity.py tests/unit/test_claims_core.py::TestSessionWitnessVerdicts"),
+    ("Scoped @requires_rust parity suites (binary present; stubbed providers)", "cli", "FAKE_BIN=\"$(mktemp -d)\"\nfor p in codex gemini opencode; do printf \"%s\\n%s\\n\" \"#!/bin/sh\" \"exit 0\" > \"$FAKE_BIN/$p\"; chmod +x \"$FAKE_BIN/$p\"; done\nPATH=\"$FAKE_BIN:$PATH\" uv run pytest --tb=short -q tests/agents/test_rust_command_parity.py"),
     ("Keyless dispatch-to-terminal smoke (binary present)", "cli", "uv run pytest --tb=short -q tests/unit/test_keyless_smoke.py"),
     ("registry-miss heal across the Rust/Python seam", ".", "bash tests/test-agents-heal-token.sh"),
     ("loop-check journey tests (e2e + emission-schema + backstop-subprocess)", ".", "bash tests/hooks/test_loop_check_e2e.sh\nbash tests/events/test-loop-check-emission-schema.sh\nbash tests/hooks/test_loop_check_backstop_subprocess.sh"),
@@ -40,6 +40,7 @@ pub(super) const STRUCTURAL_STEPS: &[(&str, &str, &str)] = &[
     ("bg-dispatch harness", ".", "bash tests/test-bg-dispatch.sh"),
     ("init claim-wait harness", ".", "bash tests/test-init-claim-wait.sh"),
     ("dispatch grant posture harness", ".", "bash tests/target/test_dispatch_grant_posture.sh"),
+    ("demo-snapshot teardown + stale-reap harness", ".", "bash tests/test-demo-snapshot-reap.sh"),
     ("agent skill harness", ".", "bash tests/skills/test_agent_normalize.sh\nbash tests/skills/test_agent_receipt.sh\nbash skills/agent/tests/test_normalize.sh\nbash skills/agent/tests/test_confirm.sh\nbash skills/agent/tests/test_auto_worktree.sh\nbash skills/agent/tests/test_spawn_guard.sh"),
     ("mail skill harness", ".", "bash skills/mail/tests/test_normalize.sh"),
     ("events-discipline lint", ".", "bash scripts/lint/events-discipline.sh"),
@@ -99,7 +100,6 @@ pub(super) const DISCOVERY_DEFERRED: &[&str] = &[
     "tests/test-backlog-triage.sh",
     "tests/test-worktree-inside-checkout-redirect.sh",
     "tests/test_emit_gate_transition.sh",
-    "tests/test_provider_substrate_e2e.sh",
 ];
 
 /// Machine constants the smoke runner pins (from smoke_constants.json).

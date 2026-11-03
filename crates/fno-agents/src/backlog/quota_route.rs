@@ -1,7 +1,7 @@
 //! The quota-aware route policy for one autonomous launch: stay, defer, or
 //! cut over. Ports `fno/agents/autonomous_route.py` and the
 //! `evaluate_quota_signal` / headroom fold from
-//! `fno/adapters/providers/runtime_state.py` over the SHARED persisted
+//! the deleted Python `runtime_state.py`. It reads the shared persisted
 //! runtime-state file (`provider_cap::runtime_state_path`, machine-wide by
 //! design: quota is a property of an account at a vendor).
 //!

@@ -13,7 +13,7 @@
 # This gate is the enforcement. Every remaining caller of the precedence
 # primitive is recorded in the baseline with the reason it is read-only. A NEW
 # caller fails CI until someone either routes it through
-# `fno.claims.self_identity.resolve_self_identity` (a durable stamp) or records it here
+# the native owned-identity proof (crates/fno-agents/src/spawn_context.rs) or records it here
 # with a reason (a read or a branch).
 #
 # Keyed on file::function, not file:line, so a reorder inside an existing caller
@@ -24,14 +24,6 @@
 # so an aliased import (`import resolve_harness_identity as rhi`) is invisible
 # to it. Nothing in the tree does that today, and a rename would be a
 # deliberate act to dodge this gate rather than an accident.
-#
-# The thread lane's identity source lives inside the sanctioned implementation
-# and so has NO baseline entry: a codex thread worker shares one app-server pid
-# with every other thread worker, so its harness/session id comes from the
-# cwd-keyed agents-registry spawn record read by
-# `live_thread_row_for_cwd` (fno.harness_identity) inside
-# `fno.claims.self_identity.resolve_self_identity`. That read calls no
-# precedence primitive, which is why the baseline is unchanged.
 #
 # Run: bash scripts/ci/check-identity-stamp-sites.sh
 # Exit: 0 the caller set matches the baseline, 1 a new or removed site, 2 misuse.
@@ -128,7 +120,7 @@ if [[ -n "$ADDED" ]]; then
   done
   echo "  If the resolved harness or session id is WRITTEN to a claim, a mail record," >&2
   echo "  an event, an agent-state row, a registry row, a team grant, a decision" >&2
-  echo "  record or a graph session record, use fno.claims.self_identity" >&2
+  echo "  record or a graph session record, use the native owned-identity proof" >&2
   echo "  instead - the precedence primitive launders an inherited marker into" >&2
   echo "  ownership. If it only reads to display or branch, add it to" >&2
   echo "  scripts/ci/identity-stamp-sites-baseline.txt with that reason." >&2

@@ -32,6 +32,10 @@ pub(crate) enum BoardMsg {
     Gathered { inputs: backlog_model::Inputs },
     /// A queued write command finished; its last line is the notice.
     CommandDone { notice: String },
+    /// The review overlay's diff read landed.
+    ReviewLoaded(Box<pr_review::Landed>),
+    /// The review overlay's send finished; its last line is the notice.
+    ReviewSent { ok: bool, notice: String },
 }
 
 pub(crate) type BoardTx = tokio::sync::mpsc::UnboundedSender<(u64, BoardMsg)>;
@@ -123,6 +127,9 @@ pub(crate) struct BoardView {
     /// pane holds focus; `None` = the board pane holds it.
     pub(crate) detail: Option<node_detail::NodeDetailOverlay>,
     pub(crate) detail_esc: Vec<u8>,
+    /// The PR review overlay, when open. It paints over and takes keys from
+    /// the board and the drill-down.
+    pub(crate) review: Option<pr_review::Review>,
     /// The shown node's cached markdown document read.
     pub(crate) doc: Option<PaneDoc>,
     /// A card id to focus on the first successful gather, restored from
@@ -291,6 +298,7 @@ impl BoardView {
             board_esc: Vec::new(),
             detail: None,
             detail_esc: Vec::new(),
+            review: None,
             doc: None,
             pending_focus: None,
             write_action: None,
@@ -415,9 +423,11 @@ pub(crate) fn maybe_kick(view: &mut View, tx: &BoardTx) {
     if let Some(b) = view.backlog_board.as_ref() {
         b.flush_paint_stats();
     }
+    pr_review::kick_split(view, tx);
     let Some(b) = view.backlog_board.as_mut() else {
         return;
     };
+    pr_review::kick(b, tx);
     if b.inflight {
         return;
     }
@@ -493,6 +503,9 @@ pub(crate) async fn fold_once(view: &mut View) {
 /// A fold landed: apply only to the still-open, same-generation board
 /// (the feed fold's contract, one consumer in the run loop).
 pub(crate) fn apply_fold(view: &mut View, gen: u64, msg: BoardMsg) {
+    let Some(msg) = pr_review::split_fold(view, gen, msg) else {
+        return;
+    };
     let Some(b) = view.backlog_board.as_mut() else {
         return;
     };
@@ -501,6 +514,15 @@ pub(crate) fn apply_fold(view: &mut View, gen: u64, msg: BoardMsg) {
     }
     let mut notice: Option<String> = None;
     match msg {
+        BoardMsg::ReviewLoaded(landed) => return pr_review::land_board(view, *landed),
+        BoardMsg::ReviewSent { ok, notice: n } => {
+            if let Some(review) = b.review.as_mut() {
+                pr_review::sent(review, ok);
+            }
+            b.force = true;
+            b.want = true;
+            notice = Some(n);
+        }
         BoardMsg::Unchanged => b.inflight = false,
         BoardMsg::CommandDone { notice: n } => {
             notice = Some(n);
@@ -1159,7 +1181,11 @@ impl View {
         let Some(b) = &self.backlog_board else {
             return;
         };
-        if b.keys_overlay {
+        if let Some(review) = &b.review {
+            let notice = self.notice.as_ref().map(|(text, _)| text.as_str());
+            let screen = (0, 0, rows, cols);
+            pr_review::paint(review, notice, cells, rows, cols, screen, None, &self.theme);
+        } else if b.keys_overlay {
             // Checked before the drill-down: `?` opens this from the detail
             // too, so it must paint over it, and its Esc must land here.
             let m = board_keys_popup();
@@ -1313,6 +1339,10 @@ pub(crate) async fn board_keys(
     let Some(b) = view.backlog_board.as_mut() else {
         return Ok(StdinFlow::Continue);
     };
+    if b.review.is_some() {
+        pr_review::keys(view, bytes);
+        return Ok(StdinFlow::Continue);
+    }
     if b.detail.is_some() {
         return node_detail::detail_keys(view, bytes, sock_w).await;
     }
@@ -2292,6 +2322,9 @@ mod tests;
 #[path = "backlog_panes.rs"]
 pub(crate) mod backlog_panes;
 
+#[path = "pr_review.rs"]
+pub(crate) mod pr_review;
+
 /// `c`: the column picker (D4). Which columns show, their order, and the
 /// focus width - persisted through the view store on every change.
 fn open_colpick(view: &mut View) {
@@ -2501,6 +2534,7 @@ fn board_keys_popup() -> Popup {
         pick_row("enter node detail - F full screen"),
         pick_row("y copy id - Y copy session command (in detail)"),
         pick_row("c comment on the detail's node"),
+        pick_row("d review the PR diff (in detail)"),
         PopupRow::Header("layout".into()),
         PopupRow::Rule,
         pick_row("c columns (show, order, focus width)"),

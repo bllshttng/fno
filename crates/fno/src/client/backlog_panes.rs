@@ -260,6 +260,8 @@ pub(crate) fn paint(
         dfollow,
         theme,
     );
+    let rows_at = (detail_rect.0 + 1, detail_rect.2.saturating_sub(1));
+    node_detail::record_session_rows(b.detail.is_some().then_some(dlines), dfollow, rows_at);
     if let Some(seam) = laid_out.seam {
         paint_seam(cells, rows, cols, seam, theme);
     }

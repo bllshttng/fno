@@ -5,7 +5,7 @@
 //! accepted turn - never a transport success, and never paint: draft echo,
 //! fragmented frames and a same-prefix sibling must all stay unconfirmed.
 
-use fno_agents::mail_delivery_state::DeliveryState;
+use fno_agents::mail::state::DeliveryState;
 use fno_agents::mail_inject::deliver_via_keeper_socket_in;
 use fno_agents::pane_keeper::{decode, Decode, Frame};
 use fno_agents::paths::AgentsHome;

@@ -177,13 +177,6 @@ backlog view	T1	backlog view	3
 backlog worked	T1	backlog worked	2
 bundle check	T1	bundle check	11
 bundle lint	T1	bundle lint	2
-claim acquire	T1	claim acquire	27
-claim list	T1	claim list	9
-claim reap	T1	claim reap	1
-claim refresh	T1	claim refresh	5
-claim release	KEEP	claim release	38	deliberate readability slack for a high-traffic distinct operation
-claim session-pid	T1	claim session-pid	2
-claim status	T1	claim status	32
 config accounts	KEEP	config accounts	71	deliberate readability slack for a high-traffic distinct operation
 config active-backlog	T1	config active-backlog	5
 config assert-subagent-budget	T1	config assert-subagent-budget	6
@@ -204,17 +197,6 @@ cost	KEEP	cost	7	single-leaf group
 delivery evaluate	KEEP	delivery evaluate	7	single-leaf group
 do ci status	T1	do ci status	0
 do delivery evaluate	T1	do delivery evaluate	7
-do plan brief	T1	do plan brief	4
-do plan folder-audit	T1	do plan folder-audit	0
-do plan graduate	T1	do plan graduate	2
-do plan migrate-keys	T1	do plan migrate-keys	1
-do plan path	T1	do plan path	28
-do plan reconcile-status	T1	do plan reconcile-status	5
-do plan rung	T1	do plan rung	26
-do plan set-expected	T1	do plan set-expected	1
-do plan stamp	T1	do plan stamp	5
-do plan sync	T1	do plan sync	3
-do plan validate	T1	do plan validate	14
 do pr attestation retract	T1	do pr attestation retract	0
 do pr base-check	T1	do pr base-check	0
 do pr base-lineage-check	T1	do pr base-lineage-check	6

@@ -42,7 +42,7 @@ use crate::claude_drive::{
 };
 use crate::claude_roster::{read_control_key_in, ClaudeRoster};
 use crate::codex_inject::discover_loaded_threads;
-use crate::mail_delivery_state::{DeliveryState, Evidence, Parked};
+use crate::mail::state::{DeliveryState, Evidence, Parked};
 use crate::paths::AgentsHome;
 
 /// Default transcript-growth poll budget: 40 * 250ms = 10s. A live blocked
@@ -571,7 +571,7 @@ pub fn mail_send_receipt(stdout: &str) -> &str {
 /// state (`injected`, `parked`, `accepted-*`) and `queued (durable)`, so only
 /// the receipt says which. Reaching is not reading: see `fno agents mail sent`.
 pub fn mail_send_accepted(code: i32, stdout: &str) -> bool {
-    code == 0 && crate::mail_delivery_state::receipt_reached(mail_send_receipt(stdout))
+    code == 0 && crate::mail::state::receipt_reached(mail_send_receipt(stdout))
 }
 
 /// Print the outcome JSON to stdout and return its exit code.
@@ -2838,7 +2838,7 @@ mod tests {
         // A durable copy never reached the recipient's harness.
         assert!(!mail_send_accepted(0, "msg-1 delivered (durable)\n"));
         // A clear's posture line carries the receipt after its last colon.
-        assert!(crate::mail_delivery_state::receipt_reached(
+        assert!(crate::mail::state::receipt_reached(
             "outstanding: q-1 answered; mail to w1: accepted-new-turn"
         ));
         assert_eq!(mail_send_receipt("  \n"), "");

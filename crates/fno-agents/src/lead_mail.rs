@@ -111,7 +111,7 @@ pub fn send(sender: &str, scope: &str, text: &str) -> Result<Vec<String>, String
         .to_path_buf();
     send_at(
         &home.registry_json(),
-        &dot_fno.join("bus").join("messages.jsonl"),
+        &crate::mail_paths::bus_log_path(&dot_fno),
         &crate::chats::chats_dir(),
         sender,
         scope,
@@ -134,7 +134,7 @@ pub(crate) fn send_to_name(sender: &str, to: &str, text: &str) -> Result<(), Str
         .unwrap_or_else(|| home.root())
         .to_path_buf();
     append_mail(
-        &dot_fno.join("bus").join("messages.jsonl"),
+        &crate::mail_paths::bus_log_path(&dot_fno),
         &crate::chats::chats_dir(),
         sender,
         to,

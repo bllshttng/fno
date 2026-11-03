@@ -54,17 +54,18 @@ GLOBAL_LONG_TO_SHORT: dict[str, str] = {v: k for k, v in GLOBAL_REGISTER.items()
 #: --blocked``). The uppercase pair (``-I``) stays codebase-exclusive like
 #: the global register.
 PRE_EXISTING_SHORTS: dict[str, tuple[str, str]] = {
-    "-A": ("--all", ""),  # exclusivity enforced by the global-register tests
+    # The -A --all row moved with the plan port: `fno do plan sync` is native,
+    # and the global register still pins -A to --all for any Python decl.
     # The -b --blocked row moved with the pick port: the native arm owns the
     # surface now, and the wheel-side scan can no longer see a Rust flag decl.
 }
 
 #: Uppercase shorts outside the global register: still exclusive, i.e. the letter
-#: maps to exactly one long codebase-wide. ``-H``/``-P`` are the spawn axis pair:
-#: uppercase because the lowercase letters mean something else there (``-h`` is
-#: help, ``-p`` is headless, mirroring the harnesses' own one-shot short).
+#: maps to exactly one long codebase-wide. ``-P`` is half of the spawn axis pair:
+#: uppercase because ``-p`` means headless there, mirroring the harnesses' own
+#: one-shot short. Its twin ``-H --harness`` moved with the accounts port: the
+#: native arm owns that surface now, out of reach of the wheel-side scan.
 EXCLUSIVE_PRE_EXISTING: dict[str, str] = {
-    "-H": "--harness",
     "-P": "--provider",
 }
 

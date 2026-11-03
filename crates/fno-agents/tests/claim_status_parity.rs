@@ -14,9 +14,9 @@
 //! corrupted store, the missing-argument and unknown-option usage errors,
 //! and the bare-node-id normalization (the one frozen case that reaches
 //! the roster crosscheck, against the empty stub roster). The bare-key
-//! refusal is deliberately not a frozen case: it is Python-surface
-//! behavior (see the colon-less-key test below), so the legs cannot and
-//! must not agree on it.
+//! refusal is not a frozen case: the Python leg owned it on its own
+//! surface, and the leaf took it over when that surface was deleted (see
+//! the colon-less-key test below).
 //! Captured with `FNO_CAPTURE_GOLDEN=1` while the oracle still exists; in
 //! normal mode the frozen bytes are the contract and the Python leg never
 //! runs.
@@ -491,26 +491,19 @@ fn the_status_leaf_matches_the_python_leg_on_every_frozen_case() {
     case("bare_node_id_normalized", &["ab-1234"], |_| {});
 }
 
-/// The colon-less-key refusal is Python-surface behavior, not a binary
-/// one: `_refuse_unknown_status_key` (cli.py) refuses on the dict the core
-/// read returns, so it fires after the read on both the legacy body and
-/// the post-swap forwarder, and `cli/tests/unit/test_claims_cli.py` pins
-/// it there. The binary layer answers a colon-less key with the free
-/// payload and exit 0 - exactly what the engine arm it replaces did -
-/// which is what lets the Python refusal fire cleanly. Cross-layer exit
-/// parity cannot hold here: the transport wraps any binary non-zero in a
-/// ClaimVerdictError traceback, so a refusing binary would regress the
-/// user surface from exit 2 to a traceback.
+/// A colon-less key nobody holds names no store, so the leaf refuses it
+/// with exit 2 rather than answer a guessed free.
 #[test]
-fn the_binary_answers_a_colonless_key_with_the_free_payload() {
+fn the_leaf_refuses_a_colonless_free_key() {
     let root = tempfile::tempdir().unwrap();
     let leg = run_rust(root.path(), &["unknownkey"]);
-    assert_eq!(leg.exit, 0, "stdout: {} stderr: {}", leg.stdout, leg.stderr);
-    let payload: serde_json::Value =
-        serde_json::from_str(&leg.stdout).expect("free payload is a JSON object");
-    assert_eq!(
-        payload,
-        serde_json::json!({"key": "unknownkey", "state": "free"})
+    assert_eq!(leg.exit, 2, "stdout: {} stderr: {}", leg.stdout, leg.stderr);
+    assert!(leg.stdout.is_empty(), "stdout: {}", leg.stdout);
+    assert!(
+        leg.stderr.contains(
+            "claim key must include a recognized prefix; no claim exists for 'unknownkey'"
+        ),
+        "stderr: {}",
+        leg.stderr
     );
-    assert!(leg.stderr.is_empty(), "stderr: {}", leg.stderr);
 }

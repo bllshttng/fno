@@ -7,8 +7,8 @@
 //! what that line is counting, never a differently-scoped set.
 
 use crate::claude_drive::claude_projects_dir;
+use crate::mail::state::newest_state;
 use crate::mail_control_drain::{landed_ids, withdrawn_ids};
-use crate::mail_delivery_state::newest_state;
 use crate::mail_header::ids_in_text;
 use crate::paths::AgentsHome;
 use crate::spawn_context::resolve_self_identity;
@@ -71,7 +71,7 @@ pub fn run_sent(args: &[String]) -> i32 {
     };
 
     let home = AgentsHome::from_env();
-    let bus = bus_dir(&home);
+    let bus = crate::mail_paths::state_bus_dir(&home);
     let all = dedupe_last_wins(read_bus(&bus));
     let now = now_secs();
 
@@ -131,8 +131,8 @@ pub fn run_sent(args: &[String]) -> i32 {
                 let mut delivery_state = newest_state(&all, &id);
                 // A transcript hit is the turn record too, not only a landed row.
                 if !delivery_state.is_accepted() && landed_flag.get(&id) == Some(&Some(true)) {
-                    delivery_state = crate::mail_delivery_state::DeliveryState::AcceptedNewTurn {
-                        evidence: crate::mail_delivery_state::Evidence {
+                    delivery_state = crate::mail::state::DeliveryState::AcceptedNewTurn {
+                        evidence: crate::mail::state::Evidence {
                             record: "landed".into(),
                             ..Default::default()
                         },
@@ -141,7 +141,7 @@ pub fn run_sent(args: &[String]) -> i32 {
                 json!({
                     "id": id,
                     "state": delivery_state.word(),
-                    "state_detail": crate::mail_delivery_state::detail(&delivery_state),
+                    "state_detail": crate::mail::state::detail(&delivery_state),
                     "to": str_field(m, "to", ""),
                     "to_kind": m.get("to_kind").cloned().unwrap_or(Value::Null),
                     "kind": str_field(m, "kind", ""),
@@ -205,7 +205,7 @@ pub fn run_sent(args: &[String]) -> i32 {
             str_field(m, "to", ""),
             delivery_of(m),
             str_field(m, "ts", ""),
-            crate::mail_delivery_state::receipt(&delivery_state, ""),
+            crate::mail::state::receipt(&delivery_state, ""),
         );
     }
     println!(
@@ -543,12 +543,6 @@ fn inbox_ttl(keys: &[&str], default: i64) -> i64 {
     crate::agents_config::config_lookup(&cwd, keys)
         .and_then(|v| v.as_integer())
         .unwrap_or(default)
-}
-
-fn bus_dir(home: &AgentsHome) -> PathBuf {
-    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let root = crate::agents_config::state_dir(&cwd).unwrap_or_else(|| home.root().to_path_buf());
-    crate::intel::bus_dir_of(&root)
 }
 
 /// Every retained envelope oldest -> newest: the rotated `<live>.<N>`

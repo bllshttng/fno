@@ -35,7 +35,7 @@
 //! - [`provider`]: [`provider::Provider`] + [`provider::ProviderWithPty`] traits
 //!   (LD8) and the three impls ([`provider::ClaudeProvider`] shellout,
 //!   [`provider::CodexProvider`] / [`provider::GeminiProvider`] PTY-managed).
-//! - [`envelope`]: [`envelope::Envelope`] structural anti-injection wrapper (LD15).
+//! - [`mail::frame`]: [`mail::frame::Envelope`] structural anti-injection wrapper (LD15).
 //! - [`screen`]: the terminal-grid construction behind [`readiness::ScreenView`]
 //!   (the per-CLI [`readiness::ReadinessDetector`] impls now live in
 //!   [`readiness`]).
@@ -85,6 +85,7 @@ pub mod autonomy_status;
 pub mod backlog;
 pub mod backlog_ready;
 pub mod backlog_share;
+pub mod bank_pr;
 pub mod bash_census;
 #[cfg(test)]
 #[path = "birth_guard_tests.rs"]
@@ -192,19 +193,21 @@ pub mod duration;
 pub mod effect_gate;
 pub mod effect_map;
 pub mod effort_surface;
-pub mod envelope;
 pub mod escalation;
 pub mod eval_attempt;
+pub mod eval_events;
 pub mod eval_part4;
 pub mod eval_reap;
 pub mod evals;
 pub mod evals_arm;
 pub mod evals_candidates;
+pub mod evals_capability;
 pub mod evals_climb;
 pub mod evals_compare;
 pub mod evals_drafts;
 pub mod evals_gate;
 pub mod evals_macro;
+pub mod evals_predict;
 pub mod evals_qualification;
 pub mod evals_trend;
 pub mod event_rules;
@@ -254,6 +257,7 @@ pub mod git_paths;
 #[cfg(test)]
 mod git_test_helpers;
 pub mod glob;
+pub mod golden_drafter;
 pub mod graph_get;
 pub mod graph_keeper;
 pub mod graph_store;
@@ -356,17 +360,18 @@ pub mod machine_load;
 pub mod machine_mail;
 pub mod machine_sample;
 pub mod machine_watch;
+pub mod mail;
 pub mod mail_arm;
 pub mod mail_backfill;
 pub mod mail_bus;
 pub mod mail_cli;
 pub mod mail_control_drain;
-pub mod mail_delivery_state;
 pub mod mail_envelope;
 pub mod mail_header;
 pub mod mail_hold;
 pub mod mail_inject;
 pub mod mail_notify_self;
+pub mod mail_paths;
 pub mod mail_receipt;
 pub mod mail_remote;
 pub mod mail_teach;
@@ -437,6 +442,7 @@ pub mod outstanding;
 pub mod outstanding_cmds;
 pub(crate) mod owner_ladder;
 pub mod pack_profile;
+pub mod page_relief;
 pub mod pane_claim;
 pub mod pane_identity;
 pub mod pane_keeper;
@@ -714,6 +720,7 @@ pub mod tick_ledger;
 pub mod tool_activity;
 pub mod tracker;
 pub mod transcript_activity;
+pub mod transcript_resolve;
 pub mod transcript_turns;
 pub mod truth_cli;
 pub mod truth_probe;
@@ -1669,6 +1676,13 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // A refused shared-backlog flush: the operator notice beside the
     // retained batch (backlog_share::repair).
     "backlog_refused_flush",
+    // The dead-letter cap's loud announcement: the batch ids the trim
+    // dropped (backlog_share::announce_refused_trim). No reader replays a
+    // refused batch, so the drop is forensic history only.
+    "backlog_refused_trimmed",
+    // The freed-page return arm (page_relief.rs): resident size before and
+    // after malloc_zone_pressure_relief, and the zone count it covered.
+    "page_relief_done",
     // Triage apply telemetry (the native triage engine): one row per
     // committed apply, carrying the applied counts, the priority moves and
     // the dropped-entry count.

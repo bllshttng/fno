@@ -242,35 +242,8 @@ CASES: list[dict] = [
     dict(label="job pr unknown", argv=["pr:424242", "hello"], rows=None),
     dict(label="to lead conflict", argv=["--to-lead", "lead", "--to-project", "p", "hello"], rows=None),
     dict(label="to lead vacant", argv=["--to-lead", "lead", "hello"], rows=None),
-    dict(label="to project durable", argv=["--to-project", "quiet-proj", "hello there team"], rows=None),
-    dict(label="to project json", argv=["--to-project", "quiet-proj", "hello there team", "--json"], rows=None),
-    dict(label="kind unknown refused", argv=["--kind", "bogus", "--to-project", "p", "hello"], rows=None),
-    dict(
-        label="kind sender unresolved",
-        argv=["--to-project", "quiet-proj", "--kind", "question", "what should we ship next?"],
-        rows=None,
-    ),
-    dict(
-        label="kind question durable",
-        argv=[
-            "--to-project", "quiet-proj", "--kind", "question",
-            "--from-name", "cap-worker", "what should we ship next?",
-        ],
-        rows=None,
-    ),
-    dict(
-        label="kind heads up durable",
-        argv=[
-            "--to-project", "quiet-proj", "--kind", "heads-up",
-            "--from-name", "cap-worker", "heads up on the port",
-        ],
-        rows=None,
-    ),
-    dict(
-        label="kind question to handle refused",
-        argv=["--kind", "question", "worker-1", "what next?"],
-        rows=[ROW_WORKER()],
-    ),
+    dict(label="to project no peer refused", argv=["--to-project", "quiet-proj", "hello there team"], rows=None),
+    dict(label="kind retired refused", argv=["--kind", "question", "--to-project", "p", "hello"], rows=None),
     dict(label="to self with positional refused", argv=["extra-positional", "hi", "--to-self"], rows=None),
     dict(label="to self durable", argv=["a wrapped note to my own inbox", "--to-self"], rows=[ROW_SELF()]),
     dict(label="force no pane", argv=["worker-1", "hello", "--force"], rows=[ROW_WORKER()]),

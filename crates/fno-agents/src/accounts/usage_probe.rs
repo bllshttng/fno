@@ -18,7 +18,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-const ANTHROPIC_API: &str = "https://api.anthropic.com";
+pub(crate) const ANTHROPIC_API: &str = "https://api.anthropic.com";
 const CLAUDE_USER_AGENT: &str = "claude-code/2.1.0";
 const ZAI_LIMIT_TYPES: [&str; 3] = ["TOKENS_LIMIT", "TIME_LIMIT", "CREDIT_LIMIT"];
 const ZAI_HOSTS: [&str; 2] = ["api.z.ai", "open.bigmodel.cn"];

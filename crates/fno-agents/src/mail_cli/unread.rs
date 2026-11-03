@@ -15,7 +15,7 @@ use std::path::PathBuf;
 
 use serde_json::Value;
 
-use crate::announce::read_bus_segments;
+use crate::mail::log::read_bus_segments;
 use crate::mail_control_drain::{deliverable, read_cursor_file, withdrawn_ids};
 
 const HELP: &str = "\
@@ -72,7 +72,7 @@ pub fn run(args: &[String]) -> i32 {
         return 2;
     }
 
-    let bus = bus_dir();
+    let bus = crate::mail_paths::bus_dir_of(&state_root());
     let msgs = read_bus_segments(&bus.join("messages.jsonl"));
     let (cursor, warnings) = read_cursor_file(&bus.join("cursors").join(format!("{name}.json")));
     for warning in &warnings {
@@ -160,19 +160,6 @@ pub fn run(args: &[String]) -> i32 {
 
 fn str_field<'a>(m: &'a Value, key: &str) -> &'a str {
     m.get(key).and_then(Value::as_str).unwrap_or("")
-}
-
-/// The bus directory as the Python oracle's `paths.bus_dir()` resolves it
-/// once both env overrides are absent: `<state root>/bus`. `FNO_BUS_DIR` and
-/// `FNO_INBOX_ROOT` live in `intel::bus_log_path`; the settings-file
-/// overrides (`config.paths.bus_dir`, `config.state_dir`) stay that
-/// function's documented gap. The bus hangs off the state root, not the
-/// agents home.
-fn bus_dir() -> PathBuf {
-    let file = crate::intel::bus_log_path(&state_root());
-    file.parent()
-        .map(std::path::Path::to_path_buf)
-        .unwrap_or_else(|| state_root().join("bus"))
 }
 
 /// The state root behind the Python `config.state_dir` default:

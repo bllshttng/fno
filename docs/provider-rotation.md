@@ -391,7 +391,7 @@ And the active shared-slot occupant correctly keeps `config_dir = None`, because
 
 One question had four readers: which account will this claude launch bill? `resolve_account_overlay` read the active stamp. `dispatch_env` returned a config directory. The usage probe ranked credential sources. `doctor` compared a stamp against a live principal. A path says where a credential is meant to be. A stamp says who put it there. Neither says who the credential presents as. So the four disagreed, and each one still printed a receipt naming an account.
 
-`fno.adapters.providers.binding.resolve_account_binding` is the single answer now, and the four consume it. It joins evidence that already existed: the OAuth profile principal, the credential-digest cache, and the per-record principal bound at `register`. It proves nothing new. It attaches that proof to the credential root the launch will read.
+`accounts::binding` (`crates/fno-agents/src/accounts/binding.rs`) is the single answer now, and the four consume it. It joins evidence that already existed: the OAuth profile principal, the credential-digest cache, and the per-record principal bound at `register`. It proves nothing new. It attaches that proof to the credential root the launch will read.
 
 The verdict is `matched`, `mismatch`, `ambiguous` or `unknown`. Only one of them refuses. A `mismatch` is a positive observation, so both launch env paths refuse with `account_identity_mismatch` before they spawn anything. An `unknown` never refuses. An unreachable profile endpoint must not ground the fleet, and an unpinned manual login keeps its permissive posture. What `unknown` forbids is a receipt naming an account as served. `doctor` and `fno config accounts usage` print `account_identity_unknown` with its cause instead.
 
@@ -466,8 +466,7 @@ Plain strings (no `${` prefix) pass through unchanged.
     (empty marker dir - api_key auth, no symlink)
 ```
 
-For `oauth_dir` auth, the symlink target is `credentials_source`. The symlink
-is created by `staging.stage(record)` and verified by `staging.verify_staged(record)`.
+For `oauth_dir` auth, the symlink target is `credentials_source`. You create the symlink, as the recipes below show. `staging::verify_staged` in `crates/fno-agents/src/accounts/staging.rs` checks it before every launch.
 
 ---
 
@@ -584,39 +583,25 @@ happened, so that question is read from the session transcript instead.
 
 ---
 
-## dispatch_env() contract
+## The launch env contract
 
-```python
-from fno.adapters.providers.dispatch import dispatch_env
-from pathlib import Path
+`accounts::env::launch_env` in `crates/fno-agents/src/accounts/env.rs` answers it. `fno-agents spawn-overlay` serves the same answer to every Python caller. For a staged claude `oauth_dir` record named `claude-max-secondary` it returns:
 
-env = dispatch_env(
-    provider_id="claude-max-secondary",
-    repo_root=Path("/path/to/project"),   # optional; defaults to os.getcwd()
-    root=Path.home() / ".fno" / "providers",  # optional; override for tests
-)
-# Returns: {"CLAUDE_CONFIG_DIR": "/Users/me/.fno/providers/claude-max-secondary/.claude"}
+```
+{"CLAUDE_CONFIG_DIR": "/Users/me/.fno/providers/claude-max-secondary/.claude"}
 ```
 
-**Input:** `provider_id` (string), optional `repo_root` (Path), optional `root` (Path).
+**Input:** the record id, the repo root, and the providers store root (`<state_dir>/providers`, `~/.fno/providers` by default).
 
-**Output:** A dict of environment variables to merge into the subprocess env before
-invoking the CLI binary. The dict is minimal: only the keys strictly required
-for credential isolation.
+**Output:** the environment variables to merge into the subprocess env before invoking the CLI binary. The map is minimal: only the keys strictly required for credential isolation.
 
-**Isolation guarantee:** `dispatch_env()` is a pure function. It reads
-`config.toml` and the filesystem but holds no module-level state and
-acquires no locks. Safe to call concurrently from a `ThreadPoolExecutor` or
-`asyncio` without additional synchronisation.
+**Isolation guarantee:** the read holds no state and takes no lock. It reads `config.toml` and the filesystem only, so concurrent callers need no synchronisation.
 
 **Failure modes:**
 
 - `ProviderNotFoundError` (subclass of `KeyError`) - `provider_id` not present
   in `config.accounts.records`. The record was never configured.
-- `ProviderUnavailableError` (subclass of `RuntimeError`) - the record exists
-  but cannot be used right now. For `oauth_dir`: provider is not staged (call
-  `staging.stage(record)` first). For `api_key`: an env reference cannot be
-  resolved (missing env var, keychain item, or file).
+- `ProviderUnavailableError` (subclass of `RuntimeError`) - the record exists but cannot be used right now. For `oauth_dir`: provider is not staged (run `fno config accounts register`). For `api_key`: an env reference cannot be resolved (missing env var, keychain item, or file).
 
 The distinction matters for callers: `ProviderNotFoundError` is a configuration
 error (stop, ask user to run `fno config accounts add`); `ProviderUnavailableError` is
@@ -659,13 +644,9 @@ fno config accounts add claude-max-secondary \
     --credentials-source ~/.claude.secondary \
     --scope global
 
-# Stage it (creates the symlink under ~/.fno/providers/)
-python3 -c "
-from fno.adapters.providers.loader import load_providers
-from fno.adapters.providers.staging import stage
-cfg = load_providers()
-stage(cfg.by_id['claude-max-secondary'])
-"
+# Stage it: link the account's claude dir under ~/.fno/providers/
+mkdir -p ~/.fno/providers/claude-max-secondary
+ln -s ~/.claude.secondary ~/.fno/providers/claude-max-secondary/.claude
 
 # Activate it for the next session
 fno config accounts use claude-max-secondary --scope global
@@ -683,22 +664,12 @@ fno config accounts add claude-backup \
     --scope global \
     --account-id my-backup-account
 
-# Stage (creates symlink)
-python3 -c "
-from fno.adapters.providers.loader import load_providers
-from fno.adapters.providers.staging import stage
-cfg = load_providers()
-stage(cfg.by_id['claude-backup'])
-"
+# Stage: link the account's claude dir under ~/.fno/providers/
+mkdir -p ~/.fno/providers/claude-backup
+ln -s ~/.claude.backup ~/.fno/providers/claude-backup/.claude
 
-# Verify staging is intact
-python3 -c "
-from fno.adapters.providers.loader import load_providers
-from fno.adapters.providers.staging import verify_staged
-cfg = load_providers()
-rec = cfg.by_id['claude-backup']
-print('staged:', verify_staged(rec))
-"
+# Verify staging is intact: the link must resolve
+ls -lL ~/.fno/providers/claude-backup/.claude
 ```
 
 ---
@@ -765,14 +736,9 @@ intent.
 
 **dispatch_env returns wrong env for the `claude` CLI kind**
 
-For `auth: oauth_dir` + `harness: claude`, `dispatch_env()` returns
-`{"CLAUDE_CONFIG_DIR": "..."}`. If the returned dict contains `HOME` instead,
-the record was added with a non-`claude` CLI value. Remove and re-add with
-`--harness claude`.
+For `auth: oauth_dir` + `harness: claude`, the launch env is `{"CLAUDE_CONFIG_DIR": "..."}`. If the returned map contains `HOME` instead, the record was added with a non-`claude` CLI value. Remove and re-add with `--harness claude`.
 
-For `auth: api_key`, `dispatch_env()` returns the resolved `env` dict directly.
-If `CLAUDE_CONFIG_DIR` is expected but absent, the record is using `oauth_dir`
-auth but is not staged. Call `staging.stage(record)` first.
+For `auth: api_key`, the launch env is the resolved `env` map. If `CLAUDE_CONFIG_DIR` is expected but absent, the record is using `oauth_dir` auth but is not staged. Run `fno config accounts register` first.
 
 ---
 
@@ -786,7 +752,7 @@ downstream tooling reconstruct what ran where.
 
 ### Error Taxonomy
 
-`cli/src/fno/adapters/providers/error_taxonomy.py` normalizes the
+`crates/fno-agents/src/accounts/error_class.rs` normalizes the
 outcome of a provider call (HTTP status + body, or CLI subprocess exit
 code + stderr) to a closed taxonomy. Only the first three classes
 trigger a swap.
@@ -1004,7 +970,7 @@ contract tests against golden output captured before the bash oracle was deleted
 
 The error taxonomy classifies a provider call into a closed `ErrorClass` set. Plan A adds two behaviors on top of it:
 
-1. **Priority-ordered error rules.** Body text runs BEFORE HTTP-status fallback. When the upstream provider returns 200 with a soft-error body, the body phrases catch the rate-limit class. Phrases include `"rate limit"`, `"quota exceeded"`, `"capacity"`, and `"overloaded"`. Status rules (401, 402, 403, 404, 429) act as fallbacks. Rules live in `cli/src/fno/adapters/providers/error_taxonomy.py::ERROR_RULES` as a verbatim rule table.
+1. **Priority-ordered error rules.** Body text runs BEFORE HTTP-status fallback. When the upstream provider returns 200 with a soft-error body, the body phrases catch the rate-limit class. Phrases include `"rate limit"`, `"quota exceeded"`, `"capacity"`, and `"overloaded"`. Status rules (401, 402, 403, 404, 429) act as fallbacks. Rules live in `ERROR_RULES` in `crates/fno-agents/src/accounts/error_class.rs` as a verbatim rule table.
 
 2. **Per-provider exponential backoff.** Repeated rate-limit/quota errors increment a per-provider `backoff_level` from 0 toward 15. The cooldown for the just-witnessed error is `BASE * 2^old_level` (1st hit -> 2000ms, 2nd -> 4000ms, 9th and beyond capped at 5min). The level drops back to 0 when the entry ages past the 1h health TTL. The Rust writer `accounts::state::update_health` does this arithmetic.
 
@@ -1227,12 +1193,7 @@ is absent or stale, behavior is byte-for-byte the reactive baseline.
 
 ### Layers
 
-- **Probe** (`adapters/providers/usage.py`): `probe_usage(record)` returns a
-  `UsageSnapshot` (per-window `used_pct` clamped to [0,100] + `resets_at` epoch)
-  or `None`. Claude reads its OAuth usage endpoint; codex reads the `rate_limits`
-  payload in its most recent session events. Both are `[VERIFY-AT-IMPL]` and
-  fail-open - any failure (endpoint drift, 401, timeout, missing files) is
-  `None`, never a raise, and never logs a token. Other CLIs are `None` in v1.
+- **Probe** (`crates/fno-agents/src/accounts/usage_probe.rs`): `probe_detail` returns a snapshot or nothing. A snapshot holds each window's `used_pct`, clamped to [0,100], and its `resets_at` epoch. Claude reads its OAuth usage endpoint. Codex reads the `rate_limits` payload in its most recent session events. Both fail open. Any failure (endpoint drift, 401, timeout, missing files) reads as no snapshot, never a raise, and never logs a token. Other CLIs read as no snapshot.
 - **Snapshot cache**: an additive `usage` field on `provider-runtime-state.json`
   under the existing `.update.lock` (no schema bump - the `model_locks`
   precedent). Every existing writer carries it through so a health/cursor write
@@ -1252,6 +1213,7 @@ When the resolved signal is `UNKNOWN` for any reason and the launch proceeds any
 ### CLI
 
 - `fno config accounts usage [--json/-J] [--refresh]` - per-provider windows (used %, resets-in). `--refresh` forces a probe past the TTL cache and renders that probe's own result, with no second cache read. Two reads of one observation can disagree. That disagreement once printed `unknown` while the probe returned real windows. An unknown provider is `{"state": "unknown", "reason": "<slug>"}` in JSON and `unknown (<slug>)` in human output. The slug names the boundary that failed. Capability is classified before attribution. So an unsupported harness or an api_key record is never reported as an account-binding fault it does not have. When the reading is good but its cache write lost the update-lock race, a known provider additionally carries `"persisted": false`. The reading is still displayed, because persistence and displayability are separate outcomes.
+- `fno config accounts usage --logins [--json]` - every login already on the machine, managed or not. It reads the plain claude Keychain item, shown as the System default row. It also reads each claude config dir, codex `auth.json`, and API keys in the env or `~/.fno/.env`. Each row names the provider, kind, plan, masked identity, and each window with used %, reset, span and pace. The read is read-only. It sends the live token as stored. An expired token reads `token-expired` and makes no request. It never refreshes, copies or writes a slot, and it keeps no cache. An API key with no usage endpoint (kimi, anthropic, openai, deepseek) reads `usage-unsupported`.
 
   | Slug | The boundary it names |
   |---|---|

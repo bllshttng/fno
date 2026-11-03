@@ -16,8 +16,6 @@
 #   - fno/paths.py, paths_cli.py - canonical accessor defs
 #   - fno/config/__init__.py    - bootstrap fallback (load before paths available)
 #   - fno/update.py             - has try/except fallback for source-path cache
-#   - fno/adapters/providers/dispatch.py - has try/except fallback for providers
-#   - fno/adapters/providers/staging.py  - has try/except fallback for providers
 #   - graph/_constants.py             - uses _state_dir() helper with try/except
 #   - doctor.py - the orphan-file report deliberately checks the DEFAULT
 #       (unconfigured) ~/.fno, not a configured override: it is an advisory
@@ -80,8 +78,6 @@ add_violation() {
 #   config_io.py (bootstrap: _global_settings_path defines where ~/.fno is,
 #     so it predates and cannot route through fno.paths),
 #   update.py (try/except),
-#   adapters/providers/dispatch.py (try/except), adapters/providers/staging.py (try/except),
-#   adapters/providers/loader.py (bootstrap: settings loader self-reference)
 #   agents/registry.py (guard identifies the shared HOME registry despite config overrides)
 #   graph/_constants.py (uses _state_dir() helper), test_*.py
 # ---------------------------------------------------------------------------
@@ -98,9 +94,6 @@ PY_HITS=$(
     | grep -v 'config_io\.py' \
     | grep -v 'graph/_constants\.py' \
     | grep -v 'update\.py' \
-    | grep -v 'adapters/providers/dispatch\.py' \
-    | grep -v 'adapters/providers/staging\.py' \
-    | grep -v 'adapters/providers/loader\.py' \
     | grep -v 'agents/dispatch_target\.py' \
     | grep -v 'agents/registry\.py' \
     | grep -v 'doctor\.py' \

@@ -166,6 +166,42 @@ fn append(path: &Path, event: &Value) -> Result<(), String> {
     Ok(())
 }
 
+fn blocked_marker(parent: &str, node: &str) -> Option<PathBuf> {
+    use sha2::{Digest, Sha256};
+    let settings = crate::config_doctor::Settings::load();
+    let key = Sha256::digest(format!("{parent}\0{node}"));
+    let name: String = key.iter().take(8).map(|b| format!("{b:02x}")).collect();
+    Some(
+        crate::config_doctor::project_space_dir(&settings)
+            .join("blocked-push")
+            .join(name),
+    )
+}
+
+/// True when the lead already got this exact (parent, node, reason) notice and no
+/// lifting event cleared it.
+fn blocked_already_sent(parent: &str, node: &str, reason: &str) -> bool {
+    blocked_marker(parent, node)
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .is_some_and(|seen| seen == reason)
+}
+
+fn blocked_record(parent: &str, node: &str, reason: &str) {
+    let Some(path) = blocked_marker(parent, node) else {
+        return;
+    };
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let _ = std::fs::write(path, reason);
+}
+
+fn blocked_lifted(parent: &str, node: &str) {
+    if let Some(path) = blocked_marker(parent, node) {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
 fn push(
     parent: &str,
     kind: &str,
@@ -173,6 +209,16 @@ fn push(
     node: Option<&str>,
     reason: Option<&str>,
 ) -> bool {
+    if kind == "blocked" {
+        if let Some(node) = node.filter(|v| !v.is_empty()) {
+            if blocked_already_sent(parent, node, reason.unwrap_or("")) {
+                eprintln!(
+                    "push: note: blocked notice already sent for this node and reason; skipped"
+                );
+                return false;
+            }
+        }
+    }
     let mut msg = format!(
         "[fno:{kind}] run={}",
         run.filter(|v| !v.is_empty()).unwrap_or("?")
@@ -204,6 +250,11 @@ fn push(
             }
             if !err.is_empty() {
                 eprintln!("push: note: {}", err.trim());
+            }
+            if kind == "blocked" {
+                if let Some(node) = node.filter(|v| !v.is_empty()) {
+                    blocked_record(parent, node, reason.unwrap_or(""));
+                }
             }
             true
         }
@@ -451,6 +502,11 @@ pub(super) fn run(args: &[OsString], json_mode: bool) -> i32 {
                     .unwrap_or("bot-review: skipped (no receipt)")
             ),
             Err(error) => eprintln!("bot-review: skipped (mirror error: {error})"),
+        }
+    }
+    if matches!(kind, "task_started" | "task_done" | "run_summary") {
+        if let (Some(parent), Some(node)) = (event["parent"].as_str(), event["node"].as_str()) {
+            blocked_lifted(parent, node);
         }
     }
     if kind == "blocked" {

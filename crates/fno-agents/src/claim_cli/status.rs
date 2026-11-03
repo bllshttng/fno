@@ -82,12 +82,8 @@ pub fn run(args: &[String]) -> i32 {
     } else {
         key_arg.to_string()
     };
-    // The store is read directly: Python's core swallows the engine
-    // subprocess's stderr on a corrupted file, so the leaf must not print
-    // one either - the corrupted payload alone is the answer. A colon-less
-    // free key answers exit 0 like the engine arm this leaf replaces: the
-    // bare-key refusal is Python's (`_refuse_unknown_status_key`), keyed on
-    // the dict this payload becomes.
+    // The store is read directly and prints no stderr on a corrupted file:
+    // the corrupted payload alone is the answer.
     let store_root = match root {
         Some(explicit) => Some(explicit),
         None => super::node_aware_root(&key),
@@ -102,6 +98,11 @@ pub fn run(args: &[String]) -> i32 {
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_string();
+    // A colon-less key nobody holds names no store, so free would be a guess.
+    if !key.contains(':') && state_str == "free" {
+        eprintln!("claim key must include a recognized prefix; no claim exists for '{key}'");
+        return 2;
+    }
 
     let mut info = match payload {
         Value::Object(m) => m,

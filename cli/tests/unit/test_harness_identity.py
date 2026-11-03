@@ -18,6 +18,7 @@ from fno.harness_identity import (
     legacy_suffix_handle,
     resolve_harness_identity,
     resolve_owned_identity,
+    scrub_ambient_identity,
     session_identity_key,
 )
 
@@ -39,6 +40,7 @@ def test_harness_of_session_id_reads_the_shapes_own_harness(session_id, expected
     ("marker", "session_id", "harness"),
     [
         ("CODEX_THREAD_ID", "thread-1", "codex"),
+        ("PI_SESSION_ID", "s-1", "pi"),
     ],
 )
 def test_resolves_each_supported_marker(marker, session_id, harness):
@@ -46,6 +48,19 @@ def test_resolves_each_supported_marker(marker, session_id, harness):
         session_id=session_id,
         harness=harness,
     )
+
+
+def test_pi_session_id_alone_is_owned_and_beside_claude_is_ambiguous():
+    owned = resolve_owned_identity({"PI_SESSION_ID": "s-1"})
+    assert (owned.harness, owned.session_id, owned.disposition) == ("pi", "s-1", "single")
+    mixed = {"PI_SESSION_ID": "s-1", "CLAUDE_CODE_SESSION_ID": "c-1"}
+    assert resolve_harness_identity(mixed) == HarnessIdentity(session_id=None, harness=None)
+
+
+def test_scrub_ambient_identity_removes_both_pi_names():
+    env = {"PI_SESSION_ID": "s-1", "PI_SESSION_FILE": "/tmp/s.jsonl", "KEEP": "1"}
+    assert set(scrub_ambient_identity(env)) == {"PI_SESSION_ID", "PI_SESSION_FILE"}
+    assert env == {"KEEP": "1"}
 
 
 def test_same_family_dup_resolves_and_disagreement_degrades():
