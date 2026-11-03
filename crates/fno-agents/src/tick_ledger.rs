@@ -4286,13 +4286,7 @@ mod tests {
                 json!("error"),
                 json!(null),
             ),
-            store_tick(
-                "2026-11-01T11:30:00Z",
-                "gamma",
-                1,
-                json!(null),
-                json!(null),
-            ),
+            store_tick("2026-11-01T11:30:00Z", "gamma", 1, json!(null), json!(null)),
         ];
         append_envelopes(&journal, &rows2);
         refresh_arm_fold(
