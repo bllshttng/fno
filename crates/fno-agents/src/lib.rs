@@ -648,6 +648,7 @@ pub mod stale_spaces;
 pub mod stalls;
 pub mod state;
 pub mod state_layout;
+mod state_layout_merge;
 pub mod state_layout_sqlite;
 pub mod state_path;
 pub mod state_root_drift;
