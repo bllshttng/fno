@@ -1982,6 +1982,7 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // A wait or cadence red-cancel of a head's runs in flight
     // (pr_status/wait.rs), with the failing checks that caused it.
     "ci_wait_cancel",
+    "ci_cancel_intent",
     // A PR queued in place of a merge, and the merge queue arm's acts
     // (merge_queue.rs).
     "merge_queue_entry",

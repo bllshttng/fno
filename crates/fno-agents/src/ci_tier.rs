@@ -193,11 +193,17 @@ fn read_repo(root: &Path) -> Result<Repo, String> {
     Ok((ranked, order, gates.len(), shas))
 }
 
-/// POST `action` on each run; the journal records what gh refused.
-pub(crate) fn act(root: &Path, list: &[(u64, Vec<u64>)], action: &str) -> Vec<Value> {
+/// POST `action` on each run; the journal records what gh refused. A cancel
+/// journals its caller first: `actor` names the arm.
+pub(crate) fn act(root: &Path, list: &[(u64, Vec<u64>)], action: &str, actor: &str) -> Vec<Value> {
     let post = |run: &u64| {
-        let path = format!("repos/{{owner}}/{{repo}}/actions/runs/{run}/{action}");
-        match crate::pr_push::gh_api("gh", root, &path, &["-X", "POST"]) {
+        let sent = if action == "cancel" {
+            crate::pr_push::cancel_run("gh", root, *run, actor)
+        } else {
+            let path = format!("repos/{{owner}}/{{repo}}/actions/runs/{run}/{action}");
+            crate::pr_push::gh_api("gh", root, &path, &["-X", "POST"]).map(|_| ())
+        };
+        match sent {
             Ok(_) => json!({"run": run, "ok": true}),
             Err(e) => json!({"run": run, "ok": false, "error": e}),
         }
@@ -438,9 +444,9 @@ fn pass_repo(root: &Path, slug: &str, path: &Path) -> Result<(), String> {
     let slots = SIZE.saturating_sub(gates);
     let approved = approved_heads(root, slug, &ranked, &shas);
     let plan = plan(&ranked, slots, &approved);
-    let cancelled = act(root, &plan.cancel, "cancel");
+    let cancelled = act(root, &plan.cancel, "cancel", "ci_tier");
     // A full rerun: a cancelled run has no failed job for rerun-failed-jobs.
-    let rerun = act(root, &plan.rerun, "rerun");
+    let rerun = act(root, &plan.rerun, "rerun", "ci_tier");
     let data = json!({"slug": slug, "slots": slots, "gates": gates, "active": plan.active,
         "ranked": order, "cancelled": cancelled, "rerun": rerun});
     let pass_row = json!({"ts": chrono::Utc::now().to_rfc3339(), "data": data});
