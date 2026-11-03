@@ -258,6 +258,7 @@ pub mod git_paths;
 #[cfg(test)]
 mod git_test_helpers;
 pub mod glob;
+pub mod golden_drafter;
 pub mod graph_get;
 pub mod graph_keeper;
 pub mod graph_store;
