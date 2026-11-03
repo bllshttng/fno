@@ -96,6 +96,7 @@ pub(crate) use overlay_paint::family_b_origin;
 mod row_stamp;
 // The sideline's density width rules.
 mod density_width;
+mod edge_drag;
 mod name_fit;
 use self::row_stamp::{no_pane_notice, paint_notice_overlay, paint_row_stamp, RowArm, RowStamp};
 use density_width::{
@@ -1078,6 +1079,10 @@ pub(crate) struct View {
     /// wire); the drag sets a free width (reversing snap-only).
     hover_sideline_border: bool,
     sideline_drag: Option<SidelineDrag>,
+    /// Sizes the operator set on client-laid-out splits this session, and
+    /// the edge drag in flight (one helper for every such split).
+    edge_sizes: edge_drag::EdgeSizes,
+    edge_drag: Option<edge_drag::EdgeDrag>,
     /// The pane whose grip the pointer is over, accented so the grip
     /// reads as grabbable before the press - the same "no portable cursor
     /// shape" constraint that makes [`View::hover_seam`] the whole affordance.
@@ -2094,6 +2099,8 @@ impl View {
             seam_drag: None,
             hover_sideline_border: false,
             sideline_drag: None,
+            edge_sizes: edge_drag::EdgeSizes::default(),
+            edge_drag: None,
             hover_grip: None,
             pane_drag: None,
             tab_drag: None,
@@ -8528,6 +8535,10 @@ async fn handle_stdin(
         }
         return Ok(StdinFlow::Continue);
     }
+    // A bare Esc during a client split drag puts the edge back.
+    if view.edge_drag.is_some() && passthrough == [0x1b] && view.revert_edge_drag() {
+        return Ok(StdinFlow::Continue);
+    }
     // A bare Esc during a feed-border drag reverts the width to where
     // the drag began, the sideline revert's mirror.
     if view.feed_drag.is_some()
@@ -8602,6 +8613,11 @@ async fn dispatch_event(
             if let Command::SplitDir(_) = cmd {
                 if !server_has_splitdir(view.server_proto) {
                     view.set_notice(split_skew_notice());
+                    return Ok(DispatchFlow::Continue);
+                }
+            }
+            if let Command::ResizeDir(dir) = cmd {
+                if view.nudge_edge(dir) {
                     return Ok(DispatchFlow::Continue);
                 }
             }

@@ -271,6 +271,12 @@ pub(super) async fn mouse_pre_pass(
             }
             continue;
         }
+        // A client-laid-out split (backlog panes, messages columns, the org
+        // explorer, the reply dock) grabs its edge before the surface under
+        // it sees the press, and owns the drag until release.
+        if super::edge_drag::mouse(view, rep) {
+            continue;
+        }
         // Full-screen sideline: the sideline owns every cell, so every
         // report routes to the sideline's own handlers - the dock first,
         // then the hit path a normal-mode sideline click runs (clamped into

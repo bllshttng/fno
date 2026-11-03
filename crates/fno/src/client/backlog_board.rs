@@ -1176,6 +1176,7 @@ impl View {
                 cols,
                 (0, 0, rows, cols),
                 self.input_owner() == super::region_focus::RegionOwner::Board,
+                self.edge_sizes.get(super::edge_drag::Edge::BacklogSeam),
                 &self.theme,
             );
         }

@@ -13,6 +13,23 @@ The three sideline-adjacent actions sit on three different keys, and their names
 
 The panel opens from the bell at the far right of the sideline's top row or with `prefix+q`. While open, bare `j`/`k` move, `Enter` opens a question or clears settled questions, `c` clears settled questions, and `q`/`Esc` closes it. Drag the panel's left border to resize it. The dragged width persists across restarts. `w` toggles the wide panel, about three fifths of the terminal, and back. `F` toggles the full-screen panel and back. On the Questions tab, `space` marks the selected question and moves the cursor down. `c` archives the marked questions. With none marked, `c` clears settled questions.
 
+## Resizing splits
+
+Every split has a drag edge and a key. Press the edge and drag. The size holds for the session, and a bare `Esc` mid-drag puts the edge back. The key is the resize chord: the prefix, then `Ctrl+arrow` (or `Ctrl+Opt+arrow`). When a surface below is on screen, the chord moves that surface's edge. Otherwise it resizes the tiled panes.
+
+| Surface | Drag this edge | Key |
+|---|---|---|
+| Tiled panes | The seam between two panes | Chord, any arrow |
+| Sideline | Its right border | Density button |
+| Notifications panel | Its left border | `w` toggles wide |
+| File viewer panel | Its left border | `-` and `+` |
+| Backlog board and detail | The rule between them (needs 100 columns) | Chord, left and right |
+| Messages columns | The first cell of the column to the right, for tree and participants | Chord, left and right; the thread column moves its left edge |
+| Org explorer and right pane | The rule between them (needs 80 columns) | Chord, left and right |
+| Reply dock | Its top border | Chord, up and down |
+
+Each pane keeps a minimum width, so a drag stops short of hiding a pane. A terminal that shrinks re-clamps the held size.
+
 ## The global chord: Ctrl+Opt+Left
 
 `Ctrl+Opt+Left` opens the sideline row selector with no prefix, from anywhere. It lands on the focused pane's row, not the top.
