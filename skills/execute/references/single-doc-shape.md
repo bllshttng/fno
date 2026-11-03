@@ -20,7 +20,7 @@ A plan is always a single `.md` file (G1 blocks authoring new folder plans; G3 r
 |-----------|--------|--------|
 | `fno-agents` binary not found | Returns `None` | Warning to stderr |
 | Plan file missing / unreadable (door exit 1) | Returns `None` | `BLOCKED blocked_reason=plan_unreadable: <reason>` to stderr |
-| Plan doc malformed (frontmatter parse failure, door exit 3) | Returns `None` | `Error: malformed plan doc (Execution Strategy YAML): <reason>` to stderr |
+| Plan doc malformed (frontmatter parse failure, door exit 3) | Returns `None` | `Error: malformed plan doc (frontmatter): <reason>` to stderr |
 | `## Execution Strategy` section absent | Returns `None` | `Warning: No execution strategy section found in <path>` to stderr |
 | Execution Strategy YAML malformed (`strategy_error`) | Returns `None` | `Error: malformed Execution Strategy YAML in <path>: <reason>` to stderr |
 | No valid waves parsed | Returns `None` | `Error: No valid waves found in Execution Strategy of <path>` |

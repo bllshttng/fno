@@ -1546,7 +1546,7 @@ def load_plan_strategy(
         return None
     if proc.returncode != 0:
         print(
-            f"Error: malformed plan doc (Execution Strategy YAML): {receipt.get('error')}",
+            f"Error: malformed plan doc (frontmatter): {receipt.get('error')}",
             file=sys.stderr,
         )
         return None

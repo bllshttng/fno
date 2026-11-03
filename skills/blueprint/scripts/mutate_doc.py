@@ -92,9 +92,12 @@ def _plan_door(args: list[str], text: str | None = None) -> tuple[int, Any]:
     binary = find_dev_binary() or resolve_binary()
     if binary is None:
         return 127, None
-    proc = subprocess.run(
-        [str(binary), "plan-cli", *args], input=text, capture_output=True, text=True, timeout=60
-    )
+    try:
+        proc = subprocess.run(
+            [str(binary), "plan-cli", *args], input=text, capture_output=True, text=True, timeout=60
+        )
+    except (OSError, subprocess.SubprocessError):
+        return 127, None
     try:
         return proc.returncode, json.loads(proc.stdout or "null")
     except ValueError:
