@@ -176,11 +176,23 @@ pub(crate) fn redact(text: &str, ctx: &Ctx) -> (String, Counts) {
     (out, counts)
 }
 
+/// A secret shape whose value is not the `[redacted]` marker. The masked
+/// `token=[redacted]` still matches the key=value shape, so the marker itself
+/// must not count as a survivor.
+fn secret_survives(text: &str) -> bool {
+    crate::intel_html::secret_rx()
+        .captures_iter(text)
+        .any(|caps| {
+            let value = caps.get(3).or_else(|| caps.get(5)).or_else(|| caps.get(0));
+            value.is_some_and(|m| !m.as_str().starts_with("[redacted]"))
+        })
+}
+
 /// Every class still present in `text`, in the vocabulary order. Names the
 /// class, never the matched text.
 fn residual_classes(text: &str, ctx: &Ctx) -> Vec<&'static str> {
     let mut found = Vec::new();
-    if crate::intel_html::secret_rx().is_match(text) {
+    if secret_survives(text) {
         found.push("secret");
     }
     if leak_rx("home-path").is_match(text) {
@@ -636,6 +648,7 @@ mod tests {
         let planted = "ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8";
         let refusal = check_clean("[bug] x", planted, &ctx()).unwrap_err();
         assert!(refusal.contains("secret") && !refusal.contains("ghp_"));
+        assert!(check_clean("[bug] x", "token=[redacted]", &ctx()).is_ok());
     }
 
     #[test]
