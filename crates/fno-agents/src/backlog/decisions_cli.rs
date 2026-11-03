@@ -222,11 +222,11 @@ pub(crate) fn read_graph_entries() -> Result<Vec<Value>, String> {
     .map_err(|e| e.0)
 }
 
-/// The whole-graph soft read: the full store on success, None (literal
-/// matching, the note on stderr) on a failed read. The read every subject
-/// query took before the scoped fast path existed.
-fn read_entries_soft() -> Option<Vec<Value>> {
-    match read_graph_entries() {
+/// The whole-graph soft read over one store: the full store on success,
+/// None (literal matching, the note on stderr) on a failed read. The read
+/// every subject query took before the scoped fast path existed.
+fn read_entries_soft_at(graph: &Path) -> Option<Vec<Value>> {
+    match crate::backlog::api::rows(&crate::backlog::api::Store::new(graph)).map_err(|e| e.0) {
         Ok(rows) if !rows.is_empty() => Some(rows),
         Ok(_) => None,
         Err(e) => {
@@ -248,7 +248,8 @@ fn read_entries_soft() -> Option<Vec<Value>> {
 /// id keeps the full read: the alias and dash-variant tiers resolve
 /// spellings one id lookup cannot. Any other shape (no lane, the coord
 /// lane) keeps the full read too: coord lifecycle reads target nodes the
-/// subject row cannot answer for.
+/// subject row cannot answer for. Both legs read the store the caller
+/// handed in, so a test seam scopes the whole answer.
 fn soft_entries_at(graph: &Path, subject: &str, lane: Option<&str>) -> Option<Vec<Value>> {
     let subject = subject.trim();
     if lane.is_some_and(|l| l != "coord") && is_wellformed_node_id(subject) {
@@ -256,7 +257,7 @@ fn soft_entries_at(graph: &Path, subject: &str, lane: Option<&str>) -> Option<Ve
             return Some(vec![row]);
         }
     }
-    read_entries_soft()
+    read_entries_soft_at(graph)
 }
 
 /// `soft_entries_at` over the machine's default store.
