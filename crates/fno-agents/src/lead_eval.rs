@@ -202,7 +202,7 @@ fn bus_index() -> BusIndex {
         .parent()
         .and_then(Path::parent)
         .unwrap_or(Path::new(".fno"));
-    let path = crate::intel::bus_log_path(fno_dir);
+    let path = crate::mail_paths::bus_log_path(fno_dir);
     BusIndex::load(&path)
 }
 

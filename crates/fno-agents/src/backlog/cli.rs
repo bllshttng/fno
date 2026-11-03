@@ -10,12 +10,9 @@
 //! (`backlog add node ...`) and legacy (`backlog add ...`) both resolve to
 //! the legacy command the actions historically ran under.
 //!
-//! Routing has two tiers. A native tier serves the actions whose engine
-//! owns the complete behavior of the invoked shape; the folded engines keep
-//! their exact argv contracts, so internal callers (the Python bridges, the
-//! mux snapshot read) move by swapping the first tokens. Every other
-//! invocation rides the compatibility forward to the wheel's Python CLI,
-//! unchanged, until its port lands with the rest of the epic.
+//! Every catalog command has a native arm. The folded engines keep their exact
+//! argv contracts, so internal callers (the mux snapshot read) move by swapping
+//! the first tokens. A word no arm owns answers from the tombstones.
 
 use super::commands::{self, GROUPS};
 
@@ -37,7 +34,19 @@ struct Resolved<'a> {
 /// Native auxiliary vocabulary: commands the dispatcher routes by engine
 /// contract that the Python catalog never carried (the note corpus/history
 /// reader rode the folded `backlog-notes` action, not a catalog command).
-const NATIVE_AUX: &[&str] = &["freshness", "notes", "target-binding", "birth-hook"];
+const NATIVE_AUX: &[&str] = &[
+    "freshness",
+    "notes",
+    "target-binding",
+    "birth-hook",
+    "script-door",
+];
+
+const DECIDE_RETRACT_HELP: &str = "Usage: fno backlog decide-retract <decision-id> --reason TEXT
+
+Retract one recorded decision. A law stays operator-only. The record stays; the
+retraction is a new row beside it.
+";
 
 /// Resolve the head of `args` to a legacy command. Grouped spelling first
 /// (`<group> <action>`, only when the second token IS one of that group's
@@ -73,12 +82,8 @@ fn resolve_head(args: &[String]) -> Result<Resolved<'_>, String> {
             legacy: commands::resolve(group, action).expect("catalog round-trip"),
             tail: &args[1..],
         }),
-        // Unknown and retired names ride the compat forward VERBATIM: the
-        // Python surface owns the retirement tombstones (annotate's note
-        // --blocking guidance) and its own unknown-command error, so the
-        // refusal text stays the one main has always answered with. The
-        // runtime name leaks into the 'static slot - at most once per
-        // process, and the exec replaces the process before it matters.
+        // Unknown and retired names fall to the tombstone arm. The runtime
+        // name leaks into the 'static slot - at most once per process.
         None => Ok(Resolved {
             legacy: Box::leak(first.to_string().into_boxed_str()),
             tail: &args[1..],
@@ -101,11 +106,6 @@ fn help_text() -> String {
                 .join("|")
         ));
     }
-    out.push_str(
-        "\nActions not yet native forward to the Python surface until their port \
-         lands; retired and unknown names ride the same forward, where the \
-         retirement tombstones live.\n",
-    );
     out
 }
 
@@ -122,19 +122,20 @@ pub fn run(args: &[String]) -> i32 {
         return 0;
     }
     // A leading option is the backlog app's own flag (`fno backlog --json
-    // decompose ...`): the catalog resolves commands, never app flags, so
-    // the whole argv rides the compat forward verbatim, exactly the shape
-    // the Python app has always parsed.
+    // decompose ...`): the one app flag rides to the command's own tail.
     if is_app_option_head(args) {
-        if let Some(pos) = args
-            .iter()
-            .position(|a| matches!(a.as_str(), "advance" | "join" | "dispatch-lanes"))
-        {
-            let mut native = args[pos..].to_vec();
-            native.extend_from_slice(&args[..pos]);
-            return run(&native);
+        let flag = args[0].as_str();
+        if flag != "--json" && flag != "-J" {
+            eprintln!("Error: No such option: {flag}");
+            return 2;
         }
-        return forward_verbatim(args);
+        let mut native = args[1..].to_vec();
+        if native.is_empty() {
+            eprintln!("{}", help_text());
+            return 2;
+        }
+        native.push(args[0].clone());
+        return run(&native);
     }
     let resolved = match resolve_head(args) {
         Ok(r) => r,
@@ -176,11 +177,10 @@ pub fn run(args: &[String]) -> i32 {
         // (law d-e11b2b3e: the twin is gone, the door is the seam). Not a
         // catalog command, so it adds nothing to the menu.
         "birth-hook" => super::birth::run_birth_hook(resolved.tail),
-        // The folded note action. A leading `--graph` is the engine door's
-        // shape (bridge, passthrough, status fanout); the plain public
-        // shape still carries Python-owned legs (evidence, identity,
-        // reader walk, delivery) and rides the forward until its port.
+        // A leading `--graph` is the engine door's shape (passthrough, status
+        // fanout); the plain shape is the public face.
         "note" if leads_with_engine_door(resolved.tail) => super::note_cli::run_note(resolved.tail),
+        "note" => super::note_public::run(resolved.tail),
         // The comment thread: the catalog folds `note comment` to the
         // legacy word `comment` (commands.rs), so this arm, not a `note`
         // tail probe, is what the receipts' own suggested command rides.
@@ -199,9 +199,8 @@ pub fn run(args: &[String]) -> i32 {
         // The folded batch read: the engine contract is a leading or
         // trailing `--graph`, several ids without the single-id render
         // flags, or the stdin tracker door (zero positionals: the engine's
-        // own stdin arm decides). A --help tail is the single-id command's
-        // help, which the Python surface still renders. The single-id
-        // render ladder (field / grouped / tiers / archive walk) is native.
+        // own stdin arm decides). The single-id render ladder (field / grouped
+        // / tiers / archive walk) answers everything else, help included.
         "get" if is_engine_get(resolved.tail) => crate::graph_get::run_graph_get(resolved.tail),
         "get" => super::get_cli::run(resolved.tail),
         // The search ladder is native; the FTS cache and the external
@@ -223,10 +222,11 @@ pub fn run(args: &[String]) -> i32 {
         // The retraction door is native: every lane through the same door
         // `fno inbox law retract` uses, laws still operator-only. The
         // Python twin this arm replaces is deleted in the same change
-        // (d-e11b2b3e). A help tail keeps the Python surface, whose parser
-        // renders the argument and option help the door's usage line does
-        // not (the same split the `get` arm makes).
-        "decide-retract" if carries(resolved.tail, &["--help", "-h"]) => forward_python(&resolved),
+        // (d-e11b2b3e).
+        "decide-retract" if carries(resolved.tail, &["--help", "-h"]) => {
+            print!("{DECIDE_RETRACT_HELP}");
+            0
+        }
         "decide-retract" => crate::law_match::run_backlog_retract(resolved.tail),
         // The decisions listing is native: the Python twin is deleted in the
         // same change (d-e11b2b3e), so the door owns every shape, help
@@ -242,9 +242,8 @@ pub fn run(args: &[String]) -> i32 {
         // The blueprint session lifecycle is native end to end: identity,
         // claims substrate, session rows, receipts. The Python twin is gone.
         "session" => super::session_cli::run(resolved.tail),
-        // The canonical close and its inverse are native for the close-flag
-        // surface; rich completion shapes keep their Python owner (the
-        // done_command delegate) and ride the forward from inside the arm.
+        // The canonical close and its inverse; `done` hands the completion
+        // flags to `done_rich` from inside the arm.
         "done" => super::workflows::run_done(resolved.tail),
         "reopen" => super::workflows::run_reopen(resolved.tail),
         "queue" => super::workflows::run_queue(resolved.tail),
@@ -257,11 +256,7 @@ pub fn run(args: &[String]) -> i32 {
         // (statuses.live_worked_node_ids over graph/worked.py) keeps its
         // callers (the next/undispatched occupancy legs) until their doors
         // go native.
-        // The observer is native on the graph backend; the external joined
-        // candidates still ride the python wheel from inside the arm.
         "undispatched" => super::undispatched::run(resolved.tail),
-        // The selection door: native on the graph backend; the external
-        // joined candidates still ride the python wheel from inside the arm.
         "next" => super::next::run(resolved.tail),
         // The drift closer is native end to end: scan, promise gate, one
         // locked close, the self-heals, and the shelled legs (auto-continue
@@ -275,12 +270,12 @@ pub fn run(args: &[String]) -> i32 {
         "lane-fill" => super::advance_fill::run_lane_fill(resolved.tail),
         "schedule-shadow" => super::advance_fill::run_schedule_shadow(resolved.tail),
         "worked" => super::worked::run(resolved.tail),
-        // The launch-edge writers are native (the first-launch stamp the
-        // spawn front forwards to, and the receipted backfill); the read
-        // shapes of `provenance` stay with the Python surface.
+        // The launch-edge writers (the first-launch stamp and the receipted
+        // backfill) beside the read shape.
         "provenance" if super::provenance_cli::owns(resolved.tail) => {
             super::provenance_cli::run(resolved.tail)
         }
+        "provenance" => super::provenance_read::run(resolved.tail),
         // The triage diagnostics group is native end to end: the nine
         // actions over the engine, health, and the locked apply. The door
         // owns every triage tail: the wheel's triage route forwards here,
@@ -349,13 +344,17 @@ pub fn run(args: &[String]) -> i32 {
         "decompose" => super::decompose::run_decompose(resolved.tail),
         "lanes" => super::finale::run_lanes(resolved.tail),
         "stuck-epics" => super::finale::run_stuck_epics(resolved.tail),
+        "wave-notes" => super::wave_notes::run_list(resolved.tail),
+        "wave-dispose" => super::wave_notes::run_dispose(resolved.tail),
         "reprioritize" => super::finale::run_reprioritize(resolved.tail),
         "discover" => super::finale::run_discover(resolved.tail),
         "pick" => super::finale::run_pick(resolved.tail),
         "requeue" => super::finale::run_requeue(resolved.tail),
         "retro" => crate::retro::run(resolved.tail),
         "carveout" => super::carveout::run_carveout(resolved.tail),
-        _ => forward_python(&resolved),
+        // Internal: the small facts scripts read. Not a catalog command.
+        "script-door" => super::script_door::run(resolved.tail),
+        _ => super::tombstones::refuse(args),
     }
 }
 
@@ -390,38 +389,6 @@ fn positional_count(tail: &[String]) -> usize {
     tail.iter().filter(|a| !a.starts_with('-')).count()
 }
 
-/// The compatibility forward: exec the wheel's Python CLI with the resolved
-/// `fno backlog <legacy-command> ...` argv, stdio inherited, its exit code
-/// returned. A grouped spelling arrives as the legacy command it resolves
-/// to, so the Python surface still sees the shape it has always owned. The
-/// one new seam crossing this fold pays; the resolver is the baselined
-/// `scrape::fno_py`. Branch handlers (the native get and find forward their
-/// external-backend and FTS branches through this same door).
-pub fn forward_to_python(legacy: &str, tail: &[String]) -> i32 {
-    let argv: Vec<String> = std::iter::once("backlog".to_string())
-        .chain(std::iter::once(legacy.to_string()))
-        .chain(tail.iter().cloned())
-        .collect();
-    exec_python(argv)
-}
-
-/// The unparsed forward: `fno-py backlog <args...>` with every token intact,
-/// for app-level options and the unknown/retired names Python owns.
-fn forward_verbatim(args: &[String]) -> i32 {
-    let argv: Vec<String> = std::iter::once("backlog".to_string())
-        .chain(args.iter().cloned())
-        .collect();
-    exec_python(argv)
-}
-
-fn exec_python(argv: Vec<String>) -> i32 {
-    crate::scrape::exec_python("fno-agents backlog", argv)
-}
-
-fn forward_python(resolved: &Resolved<'_>) -> i32 {
-    forward_to_python(resolved.legacy, resolved.tail)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -443,10 +410,7 @@ mod tests {
     }
 
     #[test]
-    fn an_unknown_command_rides_the_forward_verbatim() {
-        // The Python surface owns the retirement tombstones (annotate's
-        // note --blocking guidance) and the unknown-command error, so the
-        // unknown name forwards as itself, tail intact.
+    fn an_unknown_command_keeps_its_name_for_the_tombstone_arm() {
         let owned: Vec<String> = ["frobnicate", "x-abc"]
             .iter()
             .map(|s| s.to_string())
@@ -473,9 +437,7 @@ mod tests {
             .collect();
         let public_tail = resolve_head(&public).unwrap().tail;
         assert!(!leads_with_engine_door(public_tail));
-        // The over-match this test pins shut: a stray engine spelling
-        // anywhere else in a public tail keeps the Python path, whose
-        // parser ignores unknown extras - the shape today's behavior has.
+        // A stray engine spelling anywhere else stays on the public path.
         let stray: Vec<String> = ["note", "x-abc", "text", "--stdin"]
             .iter()
             .map(|s| s.to_string())
@@ -486,12 +448,11 @@ mod tests {
     }
 
     #[test]
-    fn help_text_lists_every_group_and_the_compat_note() {
+    fn help_text_lists_every_group() {
         let text = help_text();
         for g in GROUPS {
             assert!(text.contains(g.name), "group {} missing from help", g.name);
         }
-        assert!(text.contains("forward to the Python surface"), "{text}");
         // The append contract (older comments stay) is the fact agents
         // keep missing; the help row is where a fresh session reads it.
         let note = GROUPS

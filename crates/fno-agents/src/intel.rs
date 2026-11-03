@@ -350,44 +350,6 @@ fn session_join(
     join
 }
 
-/// The bus log path, mirroring `fno.paths.bus_dir`'s order every bus reader
-/// shares: FNO_BUS_DIR, then FNO_INBOX_ROOT, then the `config.paths.bus_dir`
-/// override (tilde-expanded; `{vault}`/`{project}` templates are not), else
-/// `<fno>/bus/messages.jsonl`. org_board.rs keeps its own env-only copy and
-/// documents the template gap there.
-pub(crate) fn bus_log_path(fno_dir: &Path) -> PathBuf {
-    if let Some(dir) = std::env::var("FNO_BUS_DIR").ok().filter(|v| !v.is_empty()) {
-        return PathBuf::from(dir).join("messages.jsonl");
-    }
-    if let Some(root) = std::env::var("FNO_INBOX_ROOT")
-        .ok()
-        .filter(|v| !v.is_empty())
-    {
-        return PathBuf::from(root).join(".bus").join("messages.jsonl");
-    }
-    if let Ok(cwd) = std::env::current_dir() {
-        if let Some(dir) = crate::agents_config::config_lookup(&cwd, &["paths", "bus_dir"])
-            .and_then(|v| v.as_str().map(str::to_string))
-            .filter(|s| !s.trim().is_empty())
-        {
-            return crate::cargo_build_dirs::expand_home(Path::new(&dir)).join("messages.jsonl");
-        }
-    }
-    fno_dir.join("bus").join("messages.jsonl")
-}
-
-/// The bus DIRECTORY under `fno_dir`, the shape the mail-front leaves read:
-/// `bus_log_path`'s parent, or `<fno_dir>/bus` when the log path has none.
-/// Callers must pass the PYTHON state root (`agents_config::state_dir`),
-/// mirroring `fno.paths.bus_dir`'s final fallback - not the agents home,
-/// which `FNO_STATE_DIR` does not move.
-pub(crate) fn bus_dir_of(fno_dir: &Path) -> PathBuf {
-    bus_log_path(fno_dir)
-        .parent()
-        .map(std::path::Path::to_path_buf)
-        .unwrap_or_else(|| fno_dir.join("bus"))
-}
-
 pub(crate) fn ts_secs(ts: &str) -> Option<u64> {
     crate::state::rfc3339_like_to_secs(ts).or_else(|| {
         ts.get(..19)
@@ -952,9 +914,12 @@ pub fn run_intel(args: &[String]) -> i32 {
     if args.iter().any(|a| a == "--receipt") {
         return crate::session_receipt::run(args);
     }
+    if args.iter().any(|a| a == "--plans" || a == "--plans-ladder") {
+        return crate::intel_plans::run(args);
+    }
     if args
         .iter()
-        .any(|a| a == "--corpus" || a == "--corpus-ingest")
+        .any(|a| a == "--corpus" || a == "--corpus-ingest" || a == "--corrections-sample")
     {
         return crate::intel_corpus::run(args);
     }
@@ -1003,6 +968,10 @@ pub fn run_intel(args: &[String]) -> i32 {
              pages to check by hand, and manifest.json (counts, scrub drops, leaks).\n\
              It refuses while the pages hold ticked items. --corpus-ingest <dir> reads\n\
              the ticked items and writes eval.jsonl. Nothing leaves the machine.\n\n\
+             --plans-ladder scores the fixed set in ~/.fno/evals/plan-labels/ladder-set.jsonl\n\
+             on fnod, then --teacher-url, then --hosted NAME=COMMAND, and stops at the\n\
+             first pass. --plans [--limit N] [--dry-run] labels plan premises with the\n\
+             winner and refuses, printing each score, when no rung passed.\n\n\
              --lens decisions traces every ruling in the window through four questions\n\
              from records, never model judgment: who issued it, where its authority\n\
              came from (witnessed_operator, law_citation, succession_event, relayed, or\n\
@@ -1404,7 +1373,7 @@ fn fold_all(
     events_journal: &Path,
     scorecard: Option<(HashMap<String, String>, Vec<Value>)>,
 ) -> Report {
-    let bus = BusIndex::load(&bus_log_path(fno_dir));
+    let bus = BusIndex::load(&crate::mail_paths::bus_log_path(fno_dir));
     let spaces = crate::paths::spaces_root_opt().unwrap_or_else(|| fno_dir.join("spaces"));
     let join = session_join(fno_dir, &spaces);
     let events = read_events(&fno_dir.join("events.jsonl"));

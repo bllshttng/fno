@@ -15,7 +15,8 @@ Options:
   --blocks-everything     Acknowledge that p0 blocks all downstream work.
   --difficulty TEXT       Intrinsic work difficulty: low|medium|high.
   --wave-of TEXT          Append this finding to an existing live node without
-                          minting a new id.
+                          minting a new id. It stays open until disposed: fno
+                          backlog list wave-notes.
   --separate              Force a separate node when a pre-mint fold offer is
                           shown.
   --blocked-by TEXT       Comma-separated ab-IDs

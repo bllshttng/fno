@@ -296,6 +296,22 @@ impl Pane {
         }
     }
 
+    /// When the open synchronized update (DEC mode 2026) expires, if one is open.
+    pub fn sync_deadline(&self) -> Option<std::time::Instant> {
+        self.processor.sync_timeout().sync_timeout()
+    }
+
+    /// Apply a synchronized update whose deadline has passed, and report whether
+    /// one was applied. The parser sets the deadline but leaves the expiry to its
+    /// owner, because a program that dies inside an update sends no more bytes.
+    pub fn expire_sync(&mut self, now: std::time::Instant) -> bool {
+        if self.sync_deadline().is_none_or(|deadline| deadline > now) {
+            return false;
+        }
+        self.processor.stop_sync(&mut self.term);
+        true
+    }
+
     /// Resize the grid, mirroring a PTY winsize change. Clamped to 1 so a
     /// degenerate size can never panic the parser.
     pub fn resize(&mut self, rows: u16, cols: u16) {
@@ -2176,6 +2192,23 @@ fn emit_terminated(kind: OscKind, buf: &[u8], out: &mut Vec<Seg>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn expire_sync_applies_held_bytes_only_after_the_deadline() {
+        let mut pane = Pane::new(4, 20);
+        pane.feed(b"before\r\n\x1b[?2026hheld");
+        assert!(!frame_text(&pane.frame()).contains("held"));
+        let deadline = pane.sync_deadline().expect("update is open");
+
+        let early = deadline - std::time::Duration::from_millis(1);
+        assert!(!pane.expire_sync(early));
+        assert!(!frame_text(&pane.frame()).contains("held"));
+
+        assert!(pane.expire_sync(deadline));
+        assert!(frame_text(&pane.frame()).contains("held"));
+        assert_eq!(pane.sync_deadline(), None);
+        assert!(!pane.expire_sync(deadline));
+    }
 
     #[test]
     fn vt_render_rows() {

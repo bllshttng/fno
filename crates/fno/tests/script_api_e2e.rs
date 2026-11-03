@@ -282,6 +282,45 @@ fn script_api_full_lifecycle_run_wait_read_kill_ls() {
 }
 
 #[test]
+fn unterminated_sync_update_expires_without_further_output() {
+    let scratch = Scratch::new("script_sync_expiry");
+    let dir = scratch.0.to_str().unwrap();
+    let run = pane(
+        &scratch,
+        &[
+            "run",
+            "--cwd",
+            dir,
+            "--",
+            "/bin/sh",
+            "-c",
+            r"printf 'BEFORE-MARK\n\033[?2026hHELD-MARK\n'; sleep 30",
+        ],
+    );
+    assert!(
+        run.status.success(),
+        "run stderr: {:?}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let id = stdout(&run);
+
+    // The program prints nothing after the begin-sync, so only a timer can
+    // release the held bytes.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut text = String::new();
+    while Instant::now() < deadline {
+        text = stdout(&pane(&scratch, &["read", &id]));
+        if text.contains("HELD-MARK") {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    kill_server(&scratch);
+    assert!(text.contains("BEFORE-MARK"), "read: {text:?}");
+    assert!(text.contains("HELD-MARK"), "held bytes stuck: {text:?}");
+}
+
+#[test]
 fn script_api_block_read_captures_span_exit_and_unavailable() {
     // v6 US1+US2 end to end: a pane emitting OSC 133 C/D markers captures one
     // command block; `read --block last --json` returns its output span with

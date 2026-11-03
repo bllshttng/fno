@@ -1,6 +1,5 @@
 //! Which claims root does one claim key live under: the global root for a
-//! global-id prefix, else the repo's space (the ported half of Python
-//! `fno.claims.io.claims_dir`). Split out of `claims.rs`: that file is over
+//! global-id prefix, else the repo's space. Split out of `claims.rs`: that file is over
 //! the 5,000-line budget and shrink-only, and the root-resolution question
 //! outgrew living beside the acquire/reap machinery. `claims.rs` re-exports
 //! the public names, so callers keep their paths.
@@ -38,9 +37,10 @@ const GLOBAL_ID_PREFIXES: &[&str] = &[
     // claim lookup - it degrades to the machine-wide root like every other
     // global key, never to a refusal that no root can be found.
     "test",
-    // `gh-budget:fleet`, the GitHub request budget's shared refusal hold:
-    // GitHub limits the user, not the machine, so one host's backoff must
-    // read from the same store every other host admits against.
+    // `gh-budget:fleet[:<login>]`, the GitHub request budget's shared
+    // refusal hold: GitHub limits the user, not the machine, so one host's
+    // backoff must read from the same store every other host on that login
+    // admits against.
     "gh-budget",
     // `build:cargo` (test_run.rs build-admit): one cargo build per machine.
     "build",
@@ -106,7 +106,7 @@ pub(crate) fn claims_dir(key: &str, root: Option<&Path>) -> Result<PathBuf, Stri
 
 /// Testable core of [`claims_dir`]: cwd, the override env, and the spaces
 /// root are explicit. A repo-local key (no global-id prefix, no explicit
-/// root) resolves like Python `fno.claims.io.claims_dir(None)`: the
+/// root) resolves to the default store: the
 /// `$FNO_CLAIMS_ROOT` override first (set-and-nonempty only; the
 /// empty-is-unset rule), else the repo's space. The resume-attach
 /// single-writer lock rides this: the live and parked Rust resume arms must
@@ -135,9 +135,8 @@ pub(crate) fn claims_dir_in(
         return Ok(PathBuf::from(override_root).join(CLAIMS_DIRNAME));
     }
     let cwd = &cwd()?;
-    // The space branch does NOT use CLAIMS_DIRNAME: Python lands repo-space
-    // claims at `<space>/claims` directly, no nested .fno segment
-    // (`fno.claims.io.claims_dir`'s space return).
+    // The space branch does NOT use CLAIMS_DIRNAME: repo-space claims land
+    // at `<space>/claims` directly, no nested .fno segment.
     let base = match spaces_root {
         Some(spaces) => spaces.join(crate::paths::space_slug(
             &crate::paths::canonical_repo_root(cwd)

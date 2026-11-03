@@ -114,8 +114,13 @@ fn collect_status(root: Option<&Path>) -> Vec<SpawnerStatus> {
         gate_with_master(root, |s| block_enabled(s, "post_merge", true));
     let (pr_watch_armed, pr_watch_rank) =
         gate_with_master(root, |s| block_enabled(s, "pr_watch", false));
-    let (recovery_armed, recovery_rank) =
-        gate_with_master(root, |s| block_enabled(s, "recovery", true));
+    let (recovery_armed, recovery_rank) = gate_with_master(root, |s| {
+        block_enabled(s, "recovery", true)
+            && root
+                .map(Path::to_path_buf)
+                .or_else(|| std::env::current_dir().ok())
+                .is_none_or(|cwd| crate::autonomy_policy::restart_allowed(&cwd))
+    });
     let (keep_going_armed, keep_going_rank) = keep_going_resolve(root);
     let (groom_armed, groom_rank) = gate_with_master(root, |s| block_enabled(s, "groom", true));
     let (evals_armed, evals_rank) = gate_with_master(root, |s| block_enabled(s, "evals", true));
@@ -310,10 +315,11 @@ fn format_table(rows: &[SpawnerStatus]) -> String {
 /// all prints every spawner's fail-safe default rather than raising.
 pub fn run(args: &[String]) -> i32 {
     if args.is_empty() || args[0] != "status" {
-        eprintln!("usage: fno-agents autonomy status [--project-root P]");
+        eprintln!("usage: fno-agents autonomy status [--project-root P] [--json|-J]");
         return 2;
     }
     let mut root: Option<PathBuf> = None;
+    let mut as_json = false;
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
@@ -321,15 +327,35 @@ pub fn run(args: &[String]) -> i32 {
                 root = Some(PathBuf::from(&args[i + 1]));
                 i += 2;
             }
+            "--json" | "-J" => {
+                as_json = true;
+                i += 1;
+            }
             other => {
                 eprintln!("unknown autonomy flag {other:?}");
                 return 2;
             }
         }
     }
+    let policy_root = root
+        .clone()
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_else(|| PathBuf::from("."));
+    let policy = crate::autonomy_policy::status_json(&policy_root);
+    if as_json {
+        println!("{}", serde_json::json!({ "policy": policy }));
+        return 0;
+    }
     let mut rows = collect_status(root.as_deref());
     stamp_provenance(&mut rows);
     println!("{}", format_table(&rows));
+    println!(
+        "\nautonomy.mode: {} (restart {}, merge {}, law {})",
+        policy["mode"].as_str().unwrap_or("ask"),
+        policy["restart"].as_str().unwrap_or("ask"),
+        policy["merge"].as_str().unwrap_or("ask"),
+        policy["law"].as_str().unwrap_or("ask"),
+    );
     0
 }
 

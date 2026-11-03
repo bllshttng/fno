@@ -28,3 +28,19 @@ def test_zero_schedule_disables_scheduled_run() -> None:
     from fno.config import EvalsBlock
 
     assert EvalsBlock(schedule_days=0).schedule_days == 0
+
+
+def test_gate_block_defaults_match_the_rust_gate() -> None:
+    from fno.config import EvalsBlock
+
+    b = EvalsBlock()
+    assert b.gate.daily_usd == 15.0
+    assert b.gate.lane == "zai-flash"
+
+
+def test_gate_block_round_trips_a_set_value() -> None:
+    from fno.config import EvalsBlock
+
+    b = EvalsBlock(gate={"daily_usd": 0, "lane": "codex-luna"})
+    assert b.gate.daily_usd == 0.0
+    assert b.gate.lane == "codex-luna"

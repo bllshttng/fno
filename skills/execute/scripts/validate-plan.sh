@@ -154,7 +154,7 @@ ok()    { echo "  OK:    $*"; }
 
 # Echo a plan's readiness rung, or `!<reason>` when the command could not answer.
 # Never classifies statuses itself; the single authority is `fno do plan rung`
-# (fno.graph.ladder).
+# (backlog_ready::plan_rung).
 #
 # The reason rides in the return VALUE rather than a global, because every
 # caller reads this through `$(...)` - a global set inside that subshell dies
@@ -172,14 +172,11 @@ ok()    { echo "  OK:    $*"; }
 # the check never actually runs. Falls back to the installed binary so the
 # script still works from a plugin install with no source tree.
 _plan_rung() {
-    local _out="" _src=""
-    _src="$(_fno_source_python)"
+    local _out="" _bin=""
+    _bin="$(resolve_agents_bin)"
     set +o pipefail
-    if [[ -n "$_src" ]]; then
-        local _py="${_src%%|*}" _root="${_src##*|}"
-        _out="$(PYTHONPATH="$_root/cli/src${PYTHONPATH:+:$PYTHONPATH}" \
-            "$_py" -m fno.cli do plan rung "$1" 2>/dev/null \
-            | sed -n 's/^rung=//p' | head -1)"
+    if [[ -n "$_bin" ]]; then
+        _out="$("$_bin" plan-cli rung "$1" 2>/dev/null | sed -n 's/^rung=//p' | head -1)"
     fi
     if [[ -z "$_out" ]] && command -v fno >/dev/null 2>&1; then
         _out="$(fno do plan rung "$1" 2>/dev/null | sed -n 's/^rung=//p' | head -1)"
@@ -423,78 +420,29 @@ _fno_source_python() {
 }
 
 _semantic_validate() {
-    local source_root="" python_bin="" _src=""
-    # Same resolver `_plan_rung` uses - one answer to "which fno runs?".
-    _src="$(_fno_source_python)"
-    if [[ -n "$_src" ]]; then
-        python_bin="${_src%%|*}"
-        source_root="${_src##*|}"
-    else
-        # No usable interpreter, but a source tree may still exist; the uv arm
-        # below can still run it, and the refusal message names the root.
-        source_root=$(_fno_source_root)
-    fi
-    if [[ -n "$source_root" ]]; then
-        # A source checkout whose interpreter lacks the CLI deps (a fresh
-        # worktree has no cli/.venv, so this lands on a bare python3) would
-        # otherwise surface an ImportError traceback as a plan violation.
-        local source_pythonpath="$source_root/cli/src${PYTHONPATH:+:$PYTHONPATH}" probe_error=""
-        # Import what the real invocation imports. `import fno.cli` alone proves
-        # only that typer is present: the plan sub-app is loaded lazily and pulls
-        # in PyYAML, so a narrower probe passes and the real call still crashes.
-        if [[ -n "$python_bin" ]]; then
-            probe_error=$(PYTHONPATH="$source_pythonpath" \
-                "$python_bin" -c 'import fno.cli, fno.plan.cli, fno.plan.execution_validation' 2>&1) && {
-                PYTHONPATH="$source_pythonpath" \
-                    "$python_bin" -m fno.cli do plan validate "$PLAN_DIR" --execution
-                return
-            }
-        fi
-        if command -v uv >/dev/null 2>&1; then
-            probe_error=$(uv run --project "$source_root/cli" \
-                python -c 'import fno.cli, fno.plan.cli, fno.plan.execution_validation' 2>&1) && {
-                uv run --project "$source_root/cli" \
-                    python -m fno.cli do plan validate "$PLAN_DIR" --execution
-                return
-            }
-        fi
-        # Refuse rather than delegate: an installed fno older than this checkout
-        # advertises --execution while missing the guards this source defines,
-        # so falling back would pass a plan this tree rejects.
-        echo "source fno CLI at $source_root/cli/src is not runnable: no usable interpreter" >&2
-        echo "run 'uv sync --project $source_root/cli' or set FNO_PYTHON to an interpreter with the CLI deps" >&2
-        [[ -n "$probe_error" ]] && echo "last probe error: ${probe_error##*$'\n'}" >&2
-        [[ -n "${FNO_PYTHON:-}" ]] && echo "note: FNO_PYTHON=$FNO_PYTHON is a strict override and outranks $source_root/cli/.venv" >&2
-        return 2
+    local bin=""
+    bin="$(resolve_agents_bin)"
+    if [[ -n "$bin" ]]; then
+        "$bin" plan-cli validate "$PLAN_DIR" --execution
+        return
     fi
     if ! command -v fno >/dev/null 2>&1; then
         echo "fno CLI not found; install or update it before validating executable plans" >&2
-        return 2
-    fi
-    if ! fno do plan validate --help 2>&1 | grep -- '--execution' >/dev/null; then
-        echo "installed fno predates semantic plan validation; run 'fno doctor update' or 'fno doctor --fix'" >&2
         return 2
     fi
     fno do plan validate "$PLAN_DIR" --execution
 }
 
 _dispatch_hold_validate() {
-    local source_root="" python_bin="" _src=""
-    _src="$(_fno_source_python)"
-    if [[ -n "$_src" ]]; then
-        python_bin="${_src%%|*}"
-        source_root="${_src##*|}"
-    else
-        source_root=$(_fno_source_root)
-    fi
-    [[ -z "$source_root" ]] && return 2
-    local source_pythonpath="$source_root/cli/src${PYTHONPATH:+:$PYTHONPATH}"
-    local code='from datetime import date, datetime
-from pathlib import Path
-import sys
-from fno.plan._doc import load_plan
+    local bin="" source_root=""
+    bin="$(resolve_agents_bin)"
+    source_root=$(_fno_source_root)
+    [[ -z "$bin" || -z "$source_root" ]] && return 2
+    local code='from datetime import date
+import json, sys
 from fno.rust_binary import plan_schema
-raw = load_plan(Path(sys.argv[1])).frontmatter.get("dispatch_hold")
+receipt = json.load(sys.stdin) or {}
+raw = (receipt.get("frontmatter") or {}).get("dispatch_hold")
 if raw is None:
     raise SystemExit(0)
 answer = plan_schema({"op": "validate-block", "kind": "dispatch_hold", "block": raw})
@@ -506,21 +454,15 @@ for error in answer.get("errors") or []:
     print("dispatch_hold.%s: %s" % (field or "dispatch_hold", error.get("message", "")))
 if not answer.get("valid"):
     raise SystemExit(1)
-review_on = raw.get("review_on")
-if isinstance(review_on, datetime):
-    review_on = review_on.date()
-if isinstance(review_on, date) and review_on < date.today():
+review_on = raw.get("review_on") if isinstance(raw, dict) else None
+try:
+    review_on = date.fromisoformat(str(review_on)[:10]) if review_on else None
+except ValueError:
+    review_on = None
+if review_on is not None and review_on < date.today():
     print(f"PAST:{review_on.isoformat()}")'
-    if [[ -n "$python_bin" ]] && PYTHONPATH="$source_pythonpath" \
-        "$python_bin" -c 'import yaml' 2>/dev/null; then
-        PYTHONPATH="$source_pythonpath" "$python_bin" -c "$code" "$PLAN_DIR"
-        return
-    fi
-    if command -v uv >/dev/null 2>&1; then
-        uv run --project "$source_root/cli" python -c "$code" "$PLAN_DIR"
-        return
-    fi
-    return 2
+    "$bin" plan-cli parse "$PLAN_DIR" 2>/dev/null \
+        | PYTHONPATH="$source_root/cli/src${PYTHONPATH:+:$PYTHONPATH}" python3 -c "$code"
 }
 
 echo "Validating plan: $PLAN_DIR"
@@ -2409,74 +2351,25 @@ echo ""
 echo "--- Task Edge Check ---"
 
 validate_task_edges_check() {
-    local source_root="" python_bin="" _src="" source_pythonpath="" plan_file="$PLAN_DIR"
-    if [[ -d "$plan_file" ]]; then
-        if [[ -f "$plan_file/00-INDEX.md" ]]; then
-            plan_file="$plan_file/00-INDEX.md"
-        else
-            ok "task edge check skipped (directory plan has no 00-INDEX.md)"
-            return 0
-        fi
-    fi
+    local plan_file="$PLAN_DIR" bin="" edge_out edge_rc=0
     [[ -f "$plan_file" ]] || return 0
-    _src="$(_fno_source_python)"
-    if [[ -n "$_src" ]]; then
-        python_bin="${_src%%|*}"
-        source_root="${_src##*|}"
-    else
-        source_root=$(_fno_source_root)
-    fi
-    if [[ -z "$python_bin" && -z "$source_root" ]]; then
-        ok "task edge check skipped (fno not importable)"
+    bin="$(resolve_agents_bin)"
+    if [[ -z "$bin" ]]; then
+        warn "task edge check NOT CHECKED (no fno-agents binary) - not a pass"
         return 0
     fi
-    source_pythonpath="$source_root/cli/src${PYTHONPATH:+:$PYTHONPATH}"
-    local code
-    code=$(cat <<'PYEOF'
-import re
-import sys
-from pathlib import Path
-
-plan = Path(sys.argv[1])
-section = []
-in_section = False
-for line in plan.read_text().splitlines():
-    if not in_section:
-        in_section = bool(re.match(r"^##+\s+Execution Strategy", line))
-        continue
-    if re.match(r"^##+\s", line):
-        break
-    section.append(line)
-
-if not section:
-    sys.exit(0)
-
+    # A strategy that does not parse is reported by the semantic check; this
+    # one reads only the declared edges of a strategy that does.
+    edge_out=$("$bin" plan-cli parse "$plan_file" 2>/dev/null | python3 -c '
+import json, sys
 try:
-    from fno.plan.brief import BriefParseError, parse_execution_strategy, validate_task_edges
-except ImportError:
-    sys.exit(0)
-
-try:
-    parsed = parse_execution_strategy("\n".join(section))
-except BriefParseError:
-    sys.exit(0)
-
-errors = validate_task_edges(parsed)
+    receipt = json.load(sys.stdin) or {}
+except ValueError:
+    raise SystemExit(0)
+errors = receipt.get("edge_errors") or []
 for err in errors:
     print(err)
-sys.exit(1 if errors else 0)
-PYEOF
-)
-    local edge_out edge_rc=0
-    if [[ -n "$python_bin" ]] && PYTHONPATH="$source_pythonpath" \
-        "$python_bin" -c 'import pydantic, yaml' 2>/dev/null; then
-        edge_out=$(PYTHONPATH="$source_pythonpath" "$python_bin" -c "$code" "$plan_file") || edge_rc=$?
-    elif command -v uv >/dev/null 2>&1 && [[ -n "$source_root" ]]; then
-        edge_out=$(uv run --project "$source_root/cli" python -c "$code" "$plan_file") || edge_rc=$?
-    else
-        ok "task edge check skipped (fno not importable)"
-        return 0
-    fi
+raise SystemExit(1 if errors else 0)') || edge_rc=$?
     if [[ $edge_rc -ne 0 ]]; then
         while IFS= read -r line; do
             [[ -n "$line" ]] && error "$line"
@@ -2643,7 +2536,7 @@ fi
 # frontmatter names a node, print the exact bind command. No graph read:
 # this stays a check, and re-running the bind is idempotent. The id is read
 # with the same node-else-claims rule mutate_doc.py binds by (ported from
-# plan_claims, cli/src/fno/graph/_intake.py:736).
+# plan_claims, crates/fno-agents/src/backlog/session_cli.rs).
 _fm_node_id() {
     awk '
         /^---/{c++; if(c==2) exit; next}

@@ -11,7 +11,7 @@ use super::*;
 /// One bus row append through the shared announce door, staging and audit
 /// records included.
 pub(super) fn bus_append_row(row: &Value) -> Result<(), String> {
-    let live = bus_log_path();
+    let live = crate::mail_paths::live_bus_log();
     let chats_dir = crate::chats::chats_dir();
     crate::announce::append_line_open(&live, row, &chats_dir)
 }
@@ -591,7 +591,7 @@ pub(crate) fn name_lane_send(args: NameLaneArgs) -> Result<NameLane, i32> {
         .map(|r| format!(" re:{r}"))
         .unwrap_or_default();
     if args.resolved.is_some() || args.token.is_some() {
-        crate::mail_delivery_state::record(
+        crate::mail_receipt::record(
             &msg_id,
             &lane_state,
             &stamp_from(args.from_name),
@@ -632,7 +632,7 @@ pub(crate) fn name_lane_send(args: NameLaneArgs) -> Result<NameLane, i32> {
                 &msg_id,
                 args.subject,
                 &recipient,
-                &crate::mail_delivery_state::receipt(&lane_state, &format!("{live}{corr}")),
+                &crate::mail::state::receipt(&lane_state, &format!("{live}{corr}")),
             )
         );
         return Ok(NameLane::Done);
@@ -644,7 +644,7 @@ pub(crate) fn name_lane_send(args: NameLaneArgs) -> Result<NameLane, i32> {
     let live_attempted = (args.resolved.is_some() || args.token.is_some()) && !self_send;
     let recipient_live =
         self_send || (args.resolved.is_some() && family1_probe_reachable(&recipient));
-    let owner = classify_durable_owner(false, recipient_live, !recipient_live);
+    let owner = classify_durable_owner(recipient_live, !recipient_live);
     let bus_only = live_reason.as_deref() == Some(BUS_ONLY_POLICY);
     let durable_body = wrap(None);
     let reply_thread = args.reply_to.and_then(reply_parent).map(|p| p.thread);
@@ -665,7 +665,6 @@ pub(crate) fn name_lane_send(args: NameLaneArgs) -> Result<NameLane, i32> {
         args.subject,
         args.reply_to,
         reply_thread.as_deref(),
-        false,
         None,
     );
     let thread_id = match write {
@@ -759,6 +758,7 @@ pub(crate) fn name_lane_send(args: NameLaneArgs) -> Result<NameLane, i32> {
             Some(recipient.as_str()),
             to_harness.as_deref().or(provider.as_deref()),
             to_session.as_deref(),
+            Some(owner),
         ) {
             return Err(NOT_LANDED_EXIT);
         }
@@ -773,7 +773,7 @@ pub(crate) fn name_lane_send(args: NameLaneArgs) -> Result<NameLane, i32> {
 /// Every live row holding the role right now,
 /// by name, sorted. Territory equality; the alias widening is a documented
 /// simplification in this port.
-pub(super) fn resolve_to_lead(scope: &str) -> Result<Vec<String>, (String, i32)> {
+pub(crate) fn resolve_to_lead(scope: &str) -> Result<Vec<String>, (String, i32)> {
     let registry = AgentsHome::shared_registry_json();
     let rows = crate::client_commands::load_registry_entries(&registry).map_err(|exc| {
         (
@@ -850,8 +850,8 @@ pub(super) fn resolve_to_lead_address(
 // The kind lane, the job lane, the project lane printer
 // ---------------------------------------------------------------------------
 
-/// One live peer delivers live by name,
-/// none queues durable to the project, many refuse (exit 17) unless --any.
+/// One live peer delivers live by name, none refuses (exit 16: no drain reads
+/// a queued project note), many refuse (exit 17) unless --any.
 pub(super) fn dispatch_send_to_project(
     project: &str,
     message: &str,
@@ -872,7 +872,7 @@ pub(super) fn dispatch_send_to_project(
             2,
         ));
     }
-    let (recipient, _candidates, durable) = resolve_to_project(project, any_flag)?;
+    let (recipient, _candidates, _durable) = resolve_to_project(project, any_flag)?;
     if let Some(recipient) = recipient {
         let mut result = dispatch_send(
             &recipient,
@@ -889,78 +889,11 @@ pub(super) fn dispatch_send_to_project(
         result.to = Some(recipient.clone());
         return Ok((result, Some(recipient)));
     }
-    if !durable {
-        unreachable!("resolve_to_project returned neither recipient nor durable");
-    }
-    let msg_id = generate_msg_id();
-    let reservation = reserve_send_budget(from_name, project, message, &msg_id);
-    if let Err((msg, code)) = &reservation {
-        return Err((msg.clone(), *code));
-    }
-    let reservation = reservation.expect("checked above");
-    let mut from_harness: Option<String> = None;
-    let mut from_session: Option<String> = None;
-    let registry = AgentsHome::shared_registry_json();
-    if let Ok(rows) = crate::client_commands::load_registry_entries(&registry) {
-        for row in rows.iter() {
-            if str_field(row, "name") == from_name {
-                from_harness = opt_str_field(row, "harness");
-                from_session = opt_str_field(row, "harness_session_id")
-                    .or_else(|| opt_str_field(row, "short_id"));
-            }
-        }
-    }
-    let words = crate::backlog::style_check::word_count(message) as i64;
-    let write = write_durable_thread(
-        project,
-        from_name,
-        "send",
-        message,
-        &msg_id,
-        Some("project"),
-        None,
-        from_harness.as_deref(),
-        from_session.as_deref(),
-        None,
-        "inbox-drain",
-        Some(words),
-        origin,
-        subject,
-        None,
-        None,
-        false,
-        None,
-    );
-    let thread_id = match write {
-        Ok(_) => msg_id,
-        Err(exc) => {
-            release_budget(&reservation);
-            emit_event(
-                "agent_send_failed",
-                json!({"stage": "durable-write", "name": project}),
-            );
-            return Err((
-                format!("durable envelope write failed for project {project:?}: {exc}"),
-                12,
-            ));
-        }
-    };
-    emit_event(
-        "agent_send_done",
-        json!({"name": project, "provider": provider.unwrap_or(""), "msg_id": thread_id, "delivery": "durable"}),
-    );
-    Ok((
-        DispatchSendResult {
-            msg_id: thread_id,
-            delivery: "durable".to_string(),
-            reason: None,
-            durable_owner: Some("inbox-drain".to_string()),
-            to: None,
-            to_harness: None,
-            to_session: None,
-            state: DeliveryState::Queued,
-        },
-        None,
+    Err((
+        format!(
+            "no live peer working on project {project:?}, and no drain reads a queued project note. Send to a session by name (`fno agents ls` lists them), or file the work as a backlog node."
+        ),
+        UNKNOWN_AGENT_EXIT,
     ))
 }
 
@@ -971,19 +904,9 @@ pub(super) fn print_project_demotion(
     to_project: &str,
     subject: Option<&str>,
 ) {
-    let window_tail = crate::mail_receipt::window_clause(24.0);
+    // A project send reaches a resolved peer or refuses; no receipt names the
+    // project itself.
     let Some(resolved) = result.to.as_ref() else {
-        // No resolved peer: the queue went to the project inbox itself.
-        warn_deferred(to_project, true, None);
-        println!(
-            "{}",
-            crate::mail_receipt::json_line(
-                &result.msg_id,
-                subject,
-                to_project,
-                &format!("queued (durable) [param-forced: --to-project]{window_tail}"),
-            )
-        );
         return;
     };
     if result.reason.as_deref() == Some(BUS_ONLY_POLICY) {
@@ -1125,185 +1048,6 @@ pub(crate) fn resolve_kind_sender(
         "error: set 'project' in .fno/config.toml or pass --from-name/--from-self".to_string(),
         2,
     ))
-}
-
-/// The kind lane: heads-up / question / fyi are durable project-inbox notes.
-/// They ALWAYS queue durable; a question escalates to the human, a heads-up
-/// wakes an asleep claude session to drain.
-#[allow(clippy::too_many_lines)]
-pub(super) fn kind_lane_send(
-    args: &SendArgs,
-    content: &str,
-    recipient_in: &str,
-    subject: Option<&str>,
-    mail_origin: Option<&str>,
-    // The sender after --from-self resolved it; `args.from_name` is only the
-    // raw --from-name flag.
-    from_name: Option<&str>,
-) -> Result<i32, i32> {
-    let kind = args.kind.as_deref().unwrap_or("");
-    // Python joins sorted(inbox_kinds); keep the literal in sorted order.
-    let known = ["fyi", "heads-up", "question"];
-    if !known.contains(&kind) {
-        if let Some((_, replacement)) = DEPRECATED_KINDS.iter().find(|(k, _)| *k == kind) {
-            eprintln!(
-                "error: kind {} was removed in the 2026-05 inbox redesign. Use --kind {replacement} instead.",
-                py_repr(kind)
-            );
-        } else {
-            eprintln!(
-                "error: --kind must be one of {} (got {})",
-                known.join(", "),
-                py_repr(kind)
-            );
-        }
-        return Err(2);
-    }
-    // US10: question/fyi to a session handle has no drain that reads it.
-    if args.to_project.is_none() && (kind == "question" || kind == "fyi") {
-        eprintln!(
-            "error: --kind {kind} to a session handle ({recipient_in}) has no drain that reads it. Drop --kind to inject it live, or add --to-project <project> to file it as a durable {kind} note."
-        );
-        return Err(2);
-    }
-    let mut persist_to_memory = false;
-    if let Some(persist) = args.persist.as_deref() {
-        if persist != "memory" {
-            eprintln!("error: --persist only accepts 'memory' (got {persist:?})");
-            return Err(2);
-        }
-        // Python refused the flag on every kind but fyi: persisting a
-        // heads-up or question to a memory file was always a caller mistake.
-        if kind != "fyi" {
-            eprintln!("error: --persist requires --kind fyi (got {kind:?})");
-            return Err(2);
-        }
-        persist_to_memory = true;
-    }
-    let workdir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let recipient = if args.to_project.is_none() {
-        // An agent-scoped heads-up resolves to a canonical session handle.
-        let reach = resolve_reachable(recipient_in);
-        let Some(resolved) = reach.hit else {
-            eprintln!(
-                "unknown agent or live-session handle: {}.",
-                py_repr(recipient_in)
-            );
-            return Err(UNKNOWN_AGENT_EXIT);
-        };
-        crate::identity::canonical_handle(&resolved.session_id)
-    } else {
-        recipient_in.to_string()
-    };
-    let sender = match resolve_kind_sender(from_name, &workdir) {
-        Ok(sender) => sender,
-        Err((msg, code)) => {
-            eprintln!("{msg}");
-            return Err(code);
-        }
-    };
-    let msg_id = generate_msg_id();
-    let reservation = reserve_send_budget(&sender, &recipient, content, &msg_id);
-    if let Err((msg, code)) = &reservation {
-        eprintln!("{msg}");
-        return Err(*code);
-    }
-    let refs = json!({
-        "ref_pr": args.ref_pr,
-        "ref_node": args.ref_node,
-        "ref_gate": args.ref_gate,
-    });
-    // A reply joins its parent's thread and kind when the chats store holds
-    // the parent; an unknown parent leaves a fresh thread that names it.
-    let parent = args.reply_to.as_deref().and_then(reply_parent);
-    let appended = parent.is_some();
-    let thread = parent
-        .as_ref()
-        .map(|p| p.thread.clone())
-        .unwrap_or_else(|| msg_id.clone());
-    let row_kind = parent
-        .as_ref()
-        .map(|p| p.kind.as_str())
-        .filter(|k| !k.is_empty())
-        .unwrap_or(kind);
-    let write = write_durable_thread(
-        &recipient,
-        &sender,
-        row_kind,
-        content,
-        &msg_id,
-        None,
-        None,
-        None,
-        None,
-        None,
-        "inbox-drain",
-        Some(crate::backlog::style_check::word_count(content) as i64),
-        mail_origin,
-        subject,
-        args.reply_to.as_deref(),
-        Some(&thread),
-        persist_to_memory,
-        Some(refs.clone()),
-    );
-    if let Err(exc) = write {
-        if let Ok(res) = &reservation {
-            release_budget(res);
-        }
-        eprintln!("error: {exc}");
-        return Err(2);
-    }
-    let thread_id = msg_id;
-    if kind == "question" {
-        let esc = escalate_to_human(&sender, &recipient, content, "question", Some(&thread_id));
-        if esc == "escalated" {
-            eprintln!("escalated to human ({recipient})");
-        }
-    } else if kind == "heads-up" {
-        let policy = crate::mail_hold::gate(&recipient, None, chrono::Utc::now());
-        if policy.deliver {
-            let reach = resolve_reachable(&recipient);
-            if let Some(resolved) = reach.hit {
-                if resolved.agent == "claude" {
-                    let cwd = resolved.cwd.clone().map(PathBuf::from);
-                    let (woke, short) = match cwd {
-                        Some(dir) => wake_and_deliver(&resolved.session_id, "", dir.to_str()),
-                        None => wake_and_deliver(&resolved.session_id, "", None),
-                    };
-                    if woke {
-                        eprintln!("woke {recipient} to drain (bg thread {short})");
-                    }
-                }
-            }
-        }
-    }
-    if args.json_out {
-        println!(
-            "{}",
-            json!({
-                "msg_id": thread_id,
-                "thread": thread,
-                "appended": appended,
-            })
-        );
-    } else {
-        let window_tail = crate::mail_receipt::window_clause(24.0);
-        let command = if appended {
-            "appended (durable)"
-        } else {
-            "queued (durable)"
-        };
-        println!(
-            "{}",
-            crate::mail_receipt::json_line(
-                &thread_id,
-                subject,
-                &recipient,
-                &format!("{command} [param-forced: --kind {kind}]{window_tail}"),
-            )
-        );
-    }
-    Ok(0)
 }
 
 // ---------------------------------------------------------------------------
@@ -1509,7 +1253,7 @@ pub(super) fn job_lane_send(
     } else {
         mail_inject_claude(&session_id, &wrapped, Some(&mut reasons), None)
     };
-    crate::mail_delivery_state::record(&msg_id, &state, &sender, &recipient);
+    crate::mail_receipt::record(&msg_id, &state, &sender, &recipient);
     let injected = state.reached();
     let bus_only = !injected && reasons.iter().any(|r| r == BUS_ONLY_POLICY);
     let holder_tag = format!(
@@ -1545,7 +1289,7 @@ pub(super) fn job_lane_send(
                 &msg_id,
                 subject,
                 &recipient,
-                &crate::mail_delivery_state::receipt(&state, &holder_tag),
+                &crate::mail::state::receipt(&state, &holder_tag),
             )
         );
         return Ok(());
@@ -1568,7 +1312,6 @@ pub(super) fn job_lane_send(
         subject,
         None,
         None,
-        false,
         None,
     );
     let thread_id = match write {
@@ -1696,7 +1439,7 @@ pub(super) fn run_dispatch_then_name_lane(
                         &result.msg_id,
                         subject,
                         token,
-                        &crate::mail_delivery_state::receipt(&result.state, ""),
+                        &crate::mail::state::receipt(&result.state, ""),
                     )
                 );
                 return 0;
@@ -1760,6 +1503,7 @@ pub(super) fn run_dispatch_then_name_lane(
                     result.to.as_deref(),
                     result.to_harness.as_deref(),
                     result.to_session.as_deref(),
+                    result.durable_owner.as_deref(),
                 )
             {
                 return NOT_LANDED_EXIT;
@@ -1940,7 +1684,7 @@ fn forced_pane_send(pane: ForcedPane) -> Result<NameLane, i32> {
         return Err(1);
     }
     let state = mail_inject_pane(entry, wrapped, None);
-    crate::mail_delivery_state::record(msg_id, &state, sender, recipient);
+    crate::mail_receipt::record(msg_id, &state, sender, recipient);
     if !state.reached() {
         release_budget(&reservation);
         eprintln!(
@@ -1964,7 +1708,7 @@ fn forced_pane_send(pane: ForcedPane) -> Result<NameLane, i32> {
             msg_id,
             subject,
             recipient,
-            &crate::mail_delivery_state::receipt(&state, &format!("[pane {pane_num}]")),
+            &crate::mail::state::receipt(&state, &format!("[pane {pane_num}]")),
         )
     );
     if !corr.is_empty() {

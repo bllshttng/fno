@@ -8,7 +8,9 @@
 //! Rust command as a subprocess and asserts `(exit, stdout, stderr)` against the
 //! frozen goldens under `tests/golden/style/`, keyed by a slug of the case
 //! label. To regenerate them (only meaningful while the Python leg still
-//! lives), run with `FNO_CAPTURE_GOLDEN=1`: the helper then runs the Python
+//! lives, which ended when `cli/src/fno/style.py` was deleted, so capture is
+//! retired and these goldens are frozen), run with `FNO_CAPTURE_GOLDEN=1`: the
+//! helper then runs the Python
 //! CLI (`cli/.venv/bin/fno-py doctor lint style ...`, uv fallback) on the same
 //! fixture, writes the goldens, and asserts Rust==Python before freezing.
 //!

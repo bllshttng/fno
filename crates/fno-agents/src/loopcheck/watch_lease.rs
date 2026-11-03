@@ -61,9 +61,10 @@ pub(super) fn record_build_park(parsed: &super::LoopCheckArgs) {
     }
 }
 
-/// Lease window for an idle watch: the declared timeout clamped to [5m, 2h]
-/// (never trust the tag for an unbounded hold) plus slack. Defaults to 15m when
-/// the tag omits or mangles `timeout`, giving the ~27m default lease.
+/// Lease window for an idle watch: the declared timeout clamped to [5m, 15m]
+/// (the ci-push-cadence law checks every 15 minutes; never trust the tag for
+/// an unbounded hold) plus slack. Defaults to 15m when the tag omits or
+/// mangles `timeout`, giving the ~27m default lease.
 pub(super) fn watch_window_ms(timeout: Option<&str>) -> i64 {
     watch_timeout_ms(timeout) + WATCH_SLACK_MS
 }
@@ -73,7 +74,7 @@ pub(super) fn watch_timeout_ms(timeout: Option<&str>) -> i64 {
     timeout
         .and_then(crate::claims::parse_ttl_ms)
         .unwrap_or(15 * 60_000)
-        .clamp(5 * 60_000, 2 * 3_600_000)
+        .clamp(5 * 60_000, 15 * 60_000)
 }
 
 pub(super) fn watch_expiry_ms(timeout: Option<&str>, now_ms: i64) -> i64 {
@@ -91,6 +92,7 @@ pub(super) fn watch_target(reason: &str, pr: Option<&str>) -> (&'static str, Opt
         "review" => "review",
         "merge_slot" => "merge_slot",
         "merge_hold" => "merge_hold",
+        "outside_hold" => "outside_hold",
         "local" => "local",
         _ => "unknown",
     };
@@ -187,12 +189,22 @@ pub(super) fn claim_pair(manifest: &str) -> Option<(String, String)> {
 
 /// Said instead of the generic renewal refusal when there is no claim at all.
 /// The generic one reads as transient, so a reader believes another watcher
-/// will help, arms one on every stop, and never idles once.
+/// will help, arms one on every stop, and never idles once. The heal line
+/// names the exact working shape because a worker burned three refused
+/// acquires on it (measured 2026-10-30): an unprefixed holder lands the claim
+/// but the manifest refresh refuses it, so the blocked line survives and the
+/// gate keeps reading no claim.
 pub(super) const NO_CLAIM_REFUSAL: &str =
     "watching ignored: this session recorded no node claim at init, so no watch lease can \
 ever renew, and arming another watcher will not change that. The manifest is write-once, \
-so rerunning `fno do target start` cannot restore the claim. Hand the PR to a session \
-that holds the claim.";
+so rerunning `fno do target start` cannot restore the claim. If `fno agents claim status \
+node:<id>` shows the node held by `spawn-handover:<this worker>` (live or suspect), the \
+heal is `fno agents claim acquire node:<id> --holder target-session:<session id> \
+--handover-from spawn-handover:<worker> --pid-unavailable --ttl <lease>`; the \
+`target-session:` prefix is required, because the manifest refresh refuses an unprefixed \
+holder, and the handover lands the claim lines and drops the blocked line. Once the \
+window is gone no command heals the manifest. Hand the PR to a session that holds the \
+claim.";
 
 /// The lead of the arm-and-tag hint. One literal, shared by the writer (the
 /// Step-5 continue message) and the idle-refusal tests, so the cut can never
@@ -742,6 +754,10 @@ mod tests {
             ("merge_hold", Some(1))
         );
         assert_eq!(watch_target("local", None), ("local", None));
+        assert_eq!(
+            watch_target("outside_hold", Some("1")),
+            ("outside_hold", Some(1))
+        );
         assert_eq!(watch_target("cargo-test", None), ("unknown", None));
         // Padding never eats a real number.
         assert_eq!(watch_target("ci", Some(" 2206 ")), ("ci", Some(2206)));

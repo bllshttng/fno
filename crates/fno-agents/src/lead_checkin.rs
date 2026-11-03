@@ -2774,6 +2774,21 @@ pub(crate) fn emit_row(path: &Path, source: &str, data: &Map<String, Value>) -> 
         );
         return false;
     }
+    // An overflow substitute is not a lead_checkin row: the emitter would
+    // write the event_payload_too_large meta-event and answer Ok, and every
+    // reader (org history, the daemon wake) filters by type, so the beat
+    // would print and exit 0 with nothing journalled (the 2026-11-02 15:31Z
+    // specimen). Size the row against the cap and refuse, the same contract
+    // as day boundary provenance; finish_checkin turns the false into rc 3.
+    let payload_len = serde_json::to_string(&data).map(|s| s.len()).unwrap_or(0);
+    let cap = crate::events_limits::max_data_bytes();
+    if payload_len > cap {
+        eprintln!(
+            "lead-checkin: WARNING: lead_checkin row not emitted: the beat data is \
+             {payload_len} bytes, over the {cap}-byte event cap; the beat is not journalled"
+        );
+        return false;
+    }
     match crate::events::EventEmitter::new(path, source).emit_fields(LEAD_CHECKIN, data.clone()) {
         Ok(()) => true,
         Err(e) => {
@@ -2822,7 +2837,16 @@ fn resolve_missing_team_inputs(
     board_state: &mut Option<PathBuf>,
     cwd: &Path,
 ) -> Result<(), String> {
-    let registry_path = crate::paths::AgentsHome::from_env().registry_json();
+    let home = crate::paths::AgentsHome::from_env();
+    let registry_path = home.registry_json();
+    // A beat that names the old territory by flag follows the widened role.
+    if let Some((held, wider)) = crate::lead_verdict_inputs::honor_wider_grant(&home) {
+        if crate::territory::canonical_scope(scope.trim())
+            == crate::territory::canonical_scope(held.trim())
+        {
+            *scope = wider;
+        }
+    }
     if scope.is_empty() {
         *scope = crate::lead_verdict_inputs::resolve_scope(None, &registry_path)?;
     }
@@ -2837,7 +2861,10 @@ fn resolve_missing_team_inputs(
                             && row
                                 .role_scope
                                 .as_deref()
-                                .map(|s| crate::territory::canonical_scope(s.trim()) == *scope)
+                                .map(|s| {
+                                    crate::territory::canonical_scope(s.trim())
+                                        == crate::territory::canonical_scope(scope.trim())
+                                })
                                 .unwrap_or(false)
                     })
                     .and_then(|row| row.role_level)
@@ -3011,6 +3038,15 @@ pub fn run_lead_checkin(args: &[String]) -> i32 {
         &ctx.cwd,
     ) {
         eprintln!("lead: {msg}");
+        return 2;
+    }
+    if ctx.level.is_none() {
+        eprintln!(
+            "lead: no team holds {} at any level, so a check-in has nothing to report. A role \
+             needs a level and a scope. Have a lead or the user grant it: fno agents org promote \
+             <handle> --scope {}",
+            ctx.scope, ctx.scope
+        );
         return 2;
     }
     // The canon doc lives in the scope's project, not the lead's cwd: a lead
@@ -4625,16 +4661,15 @@ mod tests {
         assert_eq!(rows.lines().count(), 1);
         assert!(rows.contains("\"source\":\"loop\""), "rows: {rows}");
 
-        // An oversized payload journals the meta-event, never a raw row.
+        // An oversized payload refuses the row instead of journaling the
+        // event_payload_too_large substitute: every reader filters by type,
+        // so a substitute would leave the beat exited 0 with nothing
+        // journalled; the false rides finish_checkin into rc 3.
         let huge = json!({"scope": "x-bbbb", "change": "x".repeat(70_000)});
-        assert!(emit_row(&path, "loop", huge.as_object().unwrap()));
+        assert!(!emit_row(&path, "loop", huge.as_object().unwrap()));
         let rows = crate::events::committed_journal_text(&path);
-        assert_eq!(rows.lines().count(), 2, "rows: {rows}");
-        assert!(rows.contains("event_payload_too_large"), "rows: {rows}");
-        assert!(
-            rows.contains("\"intended_kind\":\"lead_checkin\""),
-            "rows: {rows}"
-        );
+        assert_eq!(rows.lines().count(), 1, "rows: {rows}");
+        assert!(!rows.contains("event_payload_too_large"), "rows: {rows}");
 
         let mut data = Map::new();
         let change = finish_change(

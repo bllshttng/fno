@@ -68,13 +68,13 @@ assert 'candidates' in p and len(p['candidates']) == 3, 'expected 3 candidates'
 # Step 4: Apply a synthetic proposal (billing blocked_by auth).
 AUTH_ID=$(uv run --project "$REPO_ROOT/cli" python -c "
 from pathlib import Path
-from fno.graph.store import read_graph_strict
+import sys; sys.path.insert(0, '$REPO_ROOT/cli/tests/fixtures'); from graph_seed import read_graph_strict
 g = {'entries': read_graph_strict(Path('$TEST_HOME/.fno/graph.json'))}
 print(next(e['id'] for e in g['entries'] if e['title'] == 'Auth'))
 ")
 BILLING_ID=$(uv run --project "$REPO_ROOT/cli" python -c "
 from pathlib import Path
-from fno.graph.store import read_graph_strict
+import sys; sys.path.insert(0, '$REPO_ROOT/cli/tests/fixtures'); from graph_seed import read_graph_strict
 g = {'entries': read_graph_strict(Path('$TEST_HOME/.fno/graph.json'))}
 print(next(e['id'] for e in g['entries'] if e['title'] == 'Billing'))
 ")
@@ -93,7 +93,7 @@ HOME="$TEST_HOME" python3 scripts/triage.py apply "$TEST_HOME/apply.json" > /dev
 # Step 5: graph.db reflects the new blocked_by edge, graph.md re-rendered.
 uv run --project "$REPO_ROOT/cli" python -c "
 from pathlib import Path
-from fno.graph.store import read_graph_strict
+import sys; sys.path.insert(0, '$REPO_ROOT/cli/tests/fixtures'); from graph_seed import read_graph_strict
 g = {'entries': read_graph_strict(Path('$TEST_HOME/.fno/graph.json'))}
 billing = next(e for e in g['entries'] if e['title'] == 'Billing')
 assert '$AUTH_ID' in billing['blocked_by'], 'billing not blocked by auth'

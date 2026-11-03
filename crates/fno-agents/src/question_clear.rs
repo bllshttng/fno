@@ -15,6 +15,7 @@ mod tests {
             provenance: json!({"decided_by": "test-agent", "authority_source": "operator"}),
             closed_by: Some("test-agent".to_string()),
             caller: Some(ClearCaller::default()),
+            home: Some(crate::paths::AgentsHome::at(tmp.path().join("fno/agents"))),
             journal_path: tmp.path().join("project/events.jsonl"),
             index_path: tmp.path().join("fno/questions.jsonl"),
             decisions_path: tmp.path().join("fno/decisions.jsonl"),
@@ -105,6 +106,50 @@ mod tests {
     fn graph_decisions(req: &ClearRequest) -> Vec<Value> {
         crate::backlog::api::decisions(&crate::backlog::api::Store::new(&req.graph), None, None)
             .unwrap()
+    }
+
+    // One declaration for the door's answers to a copy: a bare clear and an
+    // agent's answer refuse, the user's records for the bus, a second loses.
+    #[test]
+    fn only_the_users_answer_on_a_copy_records_for_the_bus() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut req = request(&tmp, "q-1@hostb", None);
+        let mut copy = ask("q-1@hostb", "which lane?", None, None);
+        copy["data"]["origin_machine"] = json!("m-other");
+        copy["data"]["origin_question_id"] = json!("q-1");
+        copy["data"]["host"] = json!("hostb");
+        seed_question(&req, &copy);
+        let answers = |req: &ClearRequest| rows(&req.index_path, &["attention_answer"]);
+
+        let bare = run_clear(&req);
+        assert_eq!(bare.exit_code, 3, "{:?}", bare.lines);
+        assert!(bare.lines[0].contains("only that machine withdraws"));
+
+        req.answer = Some("ship it".to_string());
+        req.provenance = json!({"decided_by": "bot", "authority_source": "chat_attested",
+            "quote": "ship it"});
+        req.caller.as_mut().unwrap().ancestry_handle = Some("bot".to_string());
+        let agent = run_clear(&req);
+        assert_eq!(agent.exit_code, 3, "{:?}", agent.lines);
+        assert!(agent.lines[0].contains("only the user's answer travels"));
+        assert!(answers(&req).is_empty(), "a refusal writes nothing");
+
+        req.provenance = json!({"decided_by": "jason", "authority_source": "operator"});
+        req.caller = Some(ClearCaller::default());
+        let user = run_clear(&req);
+        assert_eq!(user.exit_code, 0, "{:?}", user.lines);
+        assert!(user.lines[0].contains("the answer goes there"));
+        assert!(user.closed.is_empty() && user.deliveries.is_empty());
+        let row = answers(&req)[0]["data"].clone();
+        assert_eq!(
+            (row["item_id"].as_str(), row["words"].as_str()),
+            (Some("q-1@hostb"), Some("ship it"))
+        );
+        assert!(rows(&req.index_path, &["operator_question_closed"]).is_empty());
+
+        let second = run_clear(&req);
+        assert_eq!(second.exit_code, 3, "{:?}", second.lines);
+        assert!(second.lines[0].contains("the first answer stands"));
     }
 
     #[test]
@@ -1051,6 +1096,11 @@ pub struct ClearRequest {
     /// `None` means run_clear resolves from the process itself.
     #[serde(skip)]
     pub caller: Option<ClearCaller>,
+    /// The home whose `questions.jsonl` is `index_path`: an answer on a copy
+    /// records there. The binary transport never sets it; `None` means the
+    /// process's own home.
+    #[serde(skip)]
+    pub home: Option<crate::paths::AgentsHome>,
     pub journal_path: PathBuf,
     pub index_path: PathBuf,
     pub decisions_path: PathBuf,
@@ -1333,7 +1383,29 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
     let mut unknown = 0usize;
     let mut refused = 0usize;
 
-    for qid in &req.ids {
+    for typed in &req.ids {
+        // An id this machine holds wins over a number with the same spelling.
+        let exact =
+            (asked.contains_key(typed) || closed_ids.contains(typed)).then(|| typed.clone());
+        let Some(resolved) = exact.or_else(|| crate::numbers::resolve('q', typed)) else {
+            unknown += 1;
+            answer.lines.push(format!(
+                "outstanding: {}",
+                crate::numbers::unresolved(typed)
+            ));
+            continue;
+        };
+        // A copy from another machine is stored under `q-1234abcd@host`.
+        let copy = (!asked.contains_key(&resolved))
+            .then(|| {
+                asked
+                    .keys()
+                    .find(|id| crate::numbers::canonical(id) == resolved)
+                    .cloned()
+            })
+            .flatten();
+        let qid = &copy.unwrap_or(resolved);
+        let shown = crate::numbers::display(qid);
         if closed_ids.contains(qid) {
             already_closed += 1;
             answer.lines.push(format!(
@@ -1460,7 +1532,9 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
         }
         // A copy of a question another machine asked closes only through
         // that machine's door, which records the decision and wakes the
-        // asker; a close here would leave the original open there.
+        // asker. The user's answer rides the bus there. That door records
+        // under its own daemon's authority, so nothing but the user's answer
+        // may travel: an agent's would land there as the user's.
         if crate::question_bus::peer_origin(question_event).is_some() {
             let host = question_event["data"]["host"]
                 .as_str()
@@ -1468,10 +1542,49 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
             let origin_id = question_event["data"]["origin_question_id"]
                 .as_str()
                 .unwrap_or(qid);
-            refused += 1;
-            answer.lines.push(format!(
-                "outstanding: refused: {qid} was asked on {host}. Nothing was closed; answer the copy here, or answer {origin_id} on {host}, and the close reaches this machine within a minute."
-            ));
+            let by_user = req.provenance["authority_source"].as_str() == Some("operator");
+            let Some(text) = req.answer.as_deref().filter(|_| by_user) else {
+                refused += 1;
+                answer.lines.push(if req.answer.is_some() {
+                    format!(
+                        "outstanding: refused: {qid} was asked on {host}, and only the user's answer travels there. Nothing was closed; the user answers the copy here, or {origin_id} on {host}."
+                    )
+                } else {
+                    format!(
+                        "outstanding: refused: {qid} was asked on {host}, and only that machine withdraws it. Nothing was closed; answer the copy here with --answer, or withdraw {origin_id} on {host}."
+                    )
+                });
+                continue;
+            };
+            let recorded = crate::attention_arm::append_answer_row(
+                &req.home
+                    .clone()
+                    .unwrap_or_else(crate::paths::AgentsHome::from_env),
+                qid,
+                "terminal",
+                &crate::attention_file::FileAnswer::Words(cut(text, req.cap)),
+                "sink",
+                "question_clear",
+                "terminal",
+            );
+            match recorded {
+                Ok((_, false)) => answer.lines.push(format!(
+                    "outstanding: {qid} was asked on {host}; the answer goes there and closes it on every machine within a minute."
+                )),
+                Ok((_, true)) => {
+                    refused += 1;
+                    answer.lines.push(format!(
+                        "outstanding: refused: {qid} already has an answer on this machine, and the first answer stands. Nothing changed."
+                    ));
+                }
+                Err(error) => {
+                    answer.exit_code = 1;
+                    answer
+                        .lines
+                        .push(format!("outstanding: nothing was written for {qid} ({error})"));
+                    break;
+                }
+            }
             continue;
         }
         if let Some(text) = req.answer.as_deref().filter(|_| lead_reason.is_none()) {
@@ -1597,7 +1710,7 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
             }
             let label = if was_resumed { "resumed" } else { "recorded" };
             answer.lines.push(format!(
-                "outstanding: closed {qid} (decision {decision_id} {label})"
+                "outstanding: closed {shown} (decision {decision_id} {label})"
             ));
             if let Some(subject) = merge_grant_subject(question_event) {
                 if !operator_can_grant(req)
@@ -1718,7 +1831,7 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
                 break;
             }
             answer.lines.push(format!(
-                "outstanding: closed {qid} (answered by recorded decision {decision_id})"
+                "outstanding: closed {shown} (answered by recorded decision {decision_id})"
             ));
             answer.closed.push(ClosedQuestion {
                 qid: qid.clone(),
@@ -1759,7 +1872,7 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
             }
             answer
                 .lines
-                .push(format!("outstanding: closed {qid} ({withdrawn_reason})"));
+                .push(format!("outstanding: closed {shown} ({withdrawn_reason})"));
             answer.closed.push(ClosedQuestion {
                 qid: qid.clone(),
                 decision_id: None,
@@ -2289,7 +2402,8 @@ fn perform_retraction(
             ));
         }
         crate::law_match::RetractOutcome::GraphRefused(e) => answer.lines.push(format!(
-            "outstanding: {target_id} is retracted, but the graph store refused ({e}); the retraction is durable in the journal and the index"
+            "outstanding: {target_id} is retracted, but the graph store refused ({e}); the retraction is durable in the journal and the index. {}",
+            crate::decide_door::GRAPH_RETRY
         )),
     }
 }

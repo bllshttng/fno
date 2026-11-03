@@ -137,6 +137,8 @@ When its subject resolves, an open question closes by itself. Three rules, first
 - `superseded`: the subject is head-scoped. Another open question on the same node re-asked the family at a different head later. Ties go to the larger id. This rule ignores `why_user`. The reason reads `superseded: <id> re-asks at head <head>`.
 - `node-closed` / `moot`: a node the question points at reads done or superseded. A user-only `why_user` closes `moot`, every other question closes `node-closed`. The reason reads `node-closed: N done` or `moot: N done`.
 
+The node-closed rule waits on any PR the question names, in its subject or its text. A node can close under a different feature while its PR stays open, and that PR still needs the answer. The closing doors read each such PR through the asker's cwd. A PR that reads merged or closed lets the rule close. A PR that reads open holds the question. The sweep then moves it to the node's lead once, with a wake and an `open-pr` hop in `via`. A user-only `why_user` keeps it on the user's board instead. A PR the sweep cannot read also holds the question, with no move. The attention read makes no PR reads, so a held row never shows `settled`.
+
 A head-scoped subject names one commit. Its last token, after the last space or `@`, is 7 to 40 lowercase hex characters with at least one digit. `visual approval PR 7 at 05ea5bcc` and `merge-grant:footnote#3354@d2ad514d` are the two shipped spellings.
 
 The derived close claims no authority. The row keeps the answer empty and puts the outcome in `reason`, so the page reads `closed`, not `answered`. No decision row, no grant, no answer mail. The machine close never answers for the user. It never touches a question whose subject has not resolved. A taste ask about rules on a live node stays open.
@@ -202,6 +204,16 @@ What a file answer can do: close the question, reach the asker, unblock the node
 Every path requires a bearer token that matches a configured sink's `token_env` value. The token identifies the sink, never a person. A refused request lands no row. The statuses are `401` for a bad token, `404` for an unknown id, and `409` for a closed item. `422` covers a bad shape, an out-of-range option, `done` on a question, and more than one choice.
 
 An accepted answer appends the same `attention_answer` row the arm writes. The authority stays `sink`. The idempotency key and any Tailscale Serve identity header ride the row as provenance. The endpoint then runs the same `fno inbox outstanding clear` the mux overlay runs. First answer wins. A retry under the same `idempotency_key` replays the receipt and lands no second row. A different key lands a superseded marker that changes nothing. When a clear fails, the row stays durable. The question then needs a terminal close, and the arm retries its own lane.
+
+## The command page answer
+
+The question drawer on `/command` answers in place. `POST /command/answer/{id}?t=<token>` takes one of `{"option": n}`, `{"words": "..."}` or `{"done": true}`. A page cannot delegate: that key is refused. The route never writes a row itself. It starts the same door the mux uses, `fno-agents needs --answer <id> --sink command_page --email <login>`, so the writer stays `append_answer_row` and first answer wins.
+
+The row carries `sink: command_page`, `authority: sink`, `email`, `person` and `machine_id`. An invite has no name beyond the login, so `person` is the login. The reply ladder reads every unsuperseded row whatever its sink, so the arm clears the question and delivers on its next beat.
+
+The refusals come in this order, and none starts a process. A bridge not bound to loopback gets 403. A bad token gets 401. An Origin that differs from Host gets 403. A bad body gets 400, an unknown question 404, and a failed invite check 403. The door refuses the rest with exit 2, and the route returns that line with 409. A second click on an answered question gets that 409, because the question is no longer open. It lands no second row.
+
+Identity comes from `Tailscale-User-Login` and counts only on a loopback bind behind `tailscale serve`. On a wide bind any client can send the header, so the bridge treats a wide bind as having no identity. `[[web.invites]]` rows in config.toml (`email`, `scope`, `role`) name who can do what. Roles rank viewer, commenter, editor, owner. Answering needs editor. A scope is `*` or a node id, and a node id covers that node and every node under it. When the list is set, a layer on the router checks every route for at least viewer. With no list, reads keep the token rule, the user on the local machine still answers, and a tailnet answer gets 403 naming `web.invites`.
 
 ## The ntfy and webhook sinks
 

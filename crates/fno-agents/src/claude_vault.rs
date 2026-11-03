@@ -16,7 +16,9 @@ const TOKEN_URL: &str = "https://platform.claude.com/v1/oauth/token";
 const CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 const PROFILE_BETA: &str = "oauth-2025-04-20";
 const FRESH_WINDOW_MS: i64 = 5 * 60 * 1000;
-const SECURITY_ITEM_NOT_FOUND: i32 = 44;
+/// `security find-generic-password` exits 44 for errSecItemNotFound. Any
+/// OTHER nonzero status is a read that FAILED, which is never absence.
+pub(crate) const SECURITY_ITEM_NOT_FOUND: i32 = 44;
 const SECURITY_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, Eq)]

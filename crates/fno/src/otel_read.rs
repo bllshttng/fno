@@ -73,7 +73,7 @@ fn workers(registry: &Path, now: &DateTime<Utc>) -> Result<(BTreeSet<String>, us
             u64::try_from(now.timestamp()).unwrap_or(0),
         );
         match word {
-            Some("alive") => match entry
+            "alive" => match entry
                 .get("harness_session_id")
                 .and_then(Value::as_str)
                 .filter(|s| !s.is_empty())
@@ -83,7 +83,7 @@ fn workers(registry: &Path, now: &DateTime<Utc>) -> Result<(BTreeSet<String>, us
                 }
                 None => unknown += 1,
             },
-            Some("dead") => {}
+            "dead" => {}
             _ => unknown += 1,
         }
     }

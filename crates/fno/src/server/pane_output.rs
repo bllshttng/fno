@@ -10,6 +10,30 @@ use std::time::Instant;
 
 use super::{Core, PaneChunk};
 
+/// The earliest deadline of a synchronized update open on any pane.
+pub(super) fn next_sync_deadline(core: &Core) -> Option<Instant> {
+    core.panes
+        .values()
+        .filter_map(|e| e.vt.sync_deadline())
+        .min()
+}
+
+/// Apply every synchronized update past its deadline, and repaint those panes.
+pub(super) fn expire_sync_updates(core: &mut Core, now: Instant) {
+    let expired: Vec<u64> = core
+        .panes
+        .iter_mut()
+        .filter_map(|(pid, entry)| entry.vt.expire_sync(now).then_some(*pid))
+        .collect();
+    for &pid in &expired {
+        core.broadcast_pane(pid);
+        core.note_pane_output(pid);
+    }
+    if !expired.is_empty() {
+        core.sync_focused_modes();
+    }
+}
+
 /// Drain the keeper's pane-output channel into the panes, and report whether
 /// anything was drained. Touched panes are broadcast and re-sync their
 /// modes; captured notifications are re-emitted titled with the pane name

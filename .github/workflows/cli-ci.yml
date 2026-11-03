@@ -38,6 +38,10 @@ on:
       - schemas/**
       # The cargo tests read the shipped Claude Code theme files.
       - themes/**
+      # The cargo tests read every grader command in the eval bank.
+      - evals/bank**
+      # The cargo tests prove each golden's grader on these labelled cases.
+      - evals/fixtures/**
       # The cargo job diffs this generated document against its source.
       - docs/harnesses/capability-matrix.md
       # The cargo job diffs this generated page against its renderer.
@@ -780,7 +784,13 @@ jobs:
       # usually saved first by the debug-profile jobs, so an exact hit
       # restored a debug tree and the release builds below paid full price
       # every run. Same pattern as the integration job's cache.
-      - uses: actions/cache@v5
+      # Restore and save are split: the post-step save of a single
+      # actions/cache step never runs when the job is cancelled at its cap,
+      # so a cold run that outgrew the cap saved nothing and the next run
+      # was cold too. The save below runs right after the builds.
+      - name: Restore cargo cache
+        id: cargo-cache
+        uses: actions/cache/restore@v5
         with:
           path: |
             ~/.cargo/registry
@@ -827,6 +837,19 @@ jobs:
         # fixture sees only the Rust guards' rows. The compiled deps come
         # from the cached build base, so this pays mostly the final link.
         run: cargo build --release --manifest-path crates/fno/Cargo.toml --bin fno
+      - name: Save cargo cache
+        # Right after the builds, before the budgets, so a later cap or a
+        # budget failure cannot cost the next run its warm tree.
+        if: steps.cargo-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/build
+            crates/fno-agents/target
+            crates/fno/target
+          key: ${{ runner.os }}-cargo-latency-${{ hashFiles('crates/fno-agents/Cargo.lock', 'crates/fno/Cargo.lock') }}
       - name: Generated copies match their sources
         run: |
           (cd cli && uv run fno-py doctor harness-matrix --write)
@@ -866,15 +889,6 @@ jobs:
     # shared lock, so 30 leaves room for a cold cargo cache and a hang
     # still fails sooner than a stuck queue would.
     timeout-minutes: 30
-
-    # The claim classifier parity harness needs the FULL oracle package
-    # (pydantic included: fno.claims.staleness imports claims/types.py), not a
-    # hand-picked subset a bare interpreter could carry. Point it at the
-    # uv-synced venv so the guard runs on the interpreter CI already keeps
-    # complete; otherwise the import fails and the harness rots into a
-    # silent skip.
-    env:
-      FNO_CLAIMS_PARITY_PYTHON: ${{ github.workspace }}/cli/.venv/bin/python
 
     steps:
       - name: Checkout
@@ -962,11 +976,6 @@ jobs:
         # "settings.yaml unparseable". Install pyyaml onto the setup-python
         # interpreter (the one which_python3() resolves) so the parity check sees
         # the same parser its frozen goldens were captured with.
-        #
-        # psutil is here for the same reason: the claim classifier parity
-        # harness imports fno.claims.staleness, whose module-level psutil import
-        # would fail on a bare interpreter and turn the differential harness
-        # into a permanent silent skip - a guard that never fires.
         run: python3 -m pip install "pyyaml>=6" "psutil>=5"
 
       - name: Clean cached Rust package artifacts
@@ -1021,7 +1030,7 @@ jobs:
             cli/src/fno/agents/harness_capabilities.toml \
             crates/fno/src/harness_capabilities.toml \
             cli/src/fno/agents/merge_posture.toml \
-            cli/src/fno/graph/page_reload.js \
+            cli/src/fno/tombstones.toml \
             cli/src/fno/agents/slot_lanes.toml \
             crates/fno-agents/src/events_limits.toml \
             cli/src/fno/agents/registry_schema.toml \
@@ -1160,7 +1169,6 @@ jobs:
     # Line tables keep file:line in a panic backtrace. DEV and TEST must
     # match, or cargo builds every dependency twice.
     env:
-      FNO_CLAIMS_PARITY_PYTHON: ${{ github.workspace }}/cli/.venv/bin/python
       CARGO_INCREMENTAL: 0
       CARGO_PROFILE_DEV_DEBUG: line-tables-only
       CARGO_PROFILE_TEST_DEBUG: line-tables-only

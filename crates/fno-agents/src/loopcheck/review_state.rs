@@ -1,36 +1,64 @@
-//! The coverage row's one-word answer: reviewed, refused, or unreviewed. A
-//! module named by its question: `loopcheck.rs` is far over the file budget
-//! and shrink-only, so the state deriver lives here with the tests that pin
-//! it.
+//! The coverage row's one-word answer: reviewed, refused, findings open, or
+//! unreviewed. A module named by its question: `loopcheck.rs` is far over the
+//! file budget and shrink-only, so the state deriver lives here with the tests
+//! that pin it.
 //!
 //! The predicate that gives the answer its politics: a refusal names the
 //! state only when the verdict was OWED. An optional GitHub App is honored
 //! when it responds and owed nothing when it does not, so its quota bounce
 //! must not rename an uncovered row after a reviewer nobody was waiting on.
-//! Both derivations (this one and the Python one it replaced) were pinned
-//! against the same golden table, `cli/tests/config/review_state_table.json`.
+//!
+//! A failed review is a review, so a fail round at the head never reads
+//! unreviewed. Both derivations (the report here and the stored row in
+//! `pr_status::reviews`) share one precedence and walk one golden table,
+//! `cli/tests/config/review_state_table.json`.
 
 use super::*;
+
+impl ReviewState {
+    /// The one precedence. Refusal outranks an open fail because the coverage
+    /// gate prescribes reviewer recovery from that word, and `reviewed_count`
+    /// still shows the round.
+    pub(crate) fn from_evidence(reviewed: bool, refusal_owed: bool, fail_at_head: bool) -> Self {
+        if reviewed {
+            Self::Reviewed
+        } else if refusal_owed {
+            Self::ReviewerRefused
+        } else if fail_at_head {
+            Self::FindingsOpen
+        } else {
+            Self::Unreviewed
+        }
+    }
+
+    pub(crate) fn word(self) -> &'static str {
+        match self {
+            Self::Reviewed => "reviewed",
+            Self::ReviewerRefused => "reviewer_refused",
+            Self::FindingsOpen => "findings_open",
+            Self::Unreviewed => "unreviewed",
+        }
+    }
+}
 
 impl CoverageReport {
     pub fn review_state(&self) -> Option<ReviewState> {
         if matches!(self.coverage, Coverage::Unknown) {
             return None;
         }
-        if self.verdicts.iter().any(|verdict| {
+        let reviewed = self.verdicts.iter().any(|verdict| {
             verdict.verdict == CoverageVerdict::Reviewed
                 && human_approval_counts(verdict, self.github_approval_satisfies)
-        }) {
-            return Some(ReviewState::Reviewed);
-        }
-        if self
+        });
+        let refusal_owed = self
             .verdicts
             .iter()
-            .any(|verdict| verdict.verdict == CoverageVerdict::Refused && verdict.required)
-        {
-            return Some(ReviewState::ReviewerRefused);
-        }
-        Some(ReviewState::Unreviewed)
+            .any(|verdict| verdict.verdict == CoverageVerdict::Refused && verdict.required);
+        Some(ReviewState::from_evidence(
+            reviewed,
+            refusal_owed,
+            self.fail_at_head,
+        ))
     }
 
     /// The state read at the round budget (d-0fa92eb9): a spent budget on a
@@ -57,29 +85,6 @@ mod tests {
     use super::*;
     use crate::loopcheck::{classify_coverage, Freshness};
 
-    fn github_verdict_with_required(
-        name: &str,
-        verdict: CoverageVerdict,
-        required: bool,
-    ) -> ReviewerVerdict {
-        ReviewerVerdict {
-            producer: CoverageProducer::GithubApp,
-            name: name.to_string(),
-            verdict,
-            human_approval: false,
-            author_approval: false,
-            attestation_origin: AttestationOrigin::Unknown,
-            reviewed_sha: String::new(),
-            freshness: None,
-            scope: None,
-            refusal_reason: None,
-            reviewer_context: None,
-            attest_machine: None,
-            required,
-            passed: false,
-        }
-    }
-
     fn human_github_approval(name: &str, author: bool) -> ReviewerVerdict {
         ReviewerVerdict {
             producer: CoverageProducer::GithubApp,
@@ -105,6 +110,7 @@ mod tests {
         // retired Python derivation: bob approving alice's PR reads
         // reviewed, so the flag widens who can satisfy the review gate.
         let rep = CoverageReport {
+            fail_at_head: false,
             github_approval_satisfies: true,
             coverage: Coverage::Covered(0),
             verdicts: vec![human_github_approval("bob", false)],
@@ -118,6 +124,7 @@ mod tests {
         // reviewed, so a run that collected no approval at all cannot
         // pass on the strength of the author's own.
         let rep = CoverageReport {
+            fail_at_head: false,
             github_approval_satisfies: true,
             coverage: Coverage::Covered(0),
             verdicts: vec![human_github_approval("alice", true)],
@@ -130,26 +137,12 @@ mod tests {
         // With the flag off every human approval is excluded, exactly the
         // pre-flag semantics: the flag only ever widens the count.
         let rep = CoverageReport {
+            fail_at_head: false,
             github_approval_satisfies: false,
             coverage: Coverage::Covered(0),
             verdicts: vec![human_github_approval("bob", false)],
         };
         assert_eq!(rep.review_state(), Some(ReviewState::Unreviewed));
-    }
-
-    #[test]
-    fn required_app_refusal_still_names_the_review_state() {
-        let rep = CoverageReport {
-            github_approval_satisfies: false,
-            coverage: Coverage::Covered(0),
-            verdicts: vec![github_verdict_with_required(
-                "chatgpt-codex-connector",
-                CoverageVerdict::Refused,
-                true,
-            )],
-        };
-        assert_eq!(rep.review_state(), Some(ReviewState::ReviewerRefused));
-        assert!(rep.refused_reviewers().contains(&"chatgpt-codex-connector"));
     }
 
     #[test]
@@ -192,6 +185,7 @@ mod tests {
         let verdict: ReviewerVerdict = serde_json::from_value(stored).unwrap();
         assert!(verdict.required, "absence reads REQUIRED, never skipped");
         let rep = CoverageReport {
+            fail_at_head: false,
             github_approval_satisfies: false,
             coverage: Coverage::Covered(0),
             verdicts: vec![verdict],
@@ -200,29 +194,21 @@ mod tests {
     }
 
     #[test]
-    fn under_budget_stale_verdict_stays_unreviewed() {
-        // The twin: the same row one round under the budget keeps today's
-        // reading, so the spent-budget pass is the cap's doing alone.
-        let rep = CoverageReport {
-            github_approval_satisfies: false,
-            coverage: Coverage::Covered(0),
-            verdicts: vec![ReviewerVerdict {
-                producer: CoverageProducer::LocalAttestation,
-                name: "code-review".to_string(),
-                verdict: CoverageVerdict::Stale,
-                human_approval: false,
-                author_approval: false,
-                attestation_origin: AttestationOrigin::Unknown,
-                reviewed_sha: "444500be".to_string(),
-                freshness: Some(Freshness::Stale),
-                scope: None,
-                refusal_reason: None,
-                reviewer_context: None,
-                attest_machine: None,
-                required: true,
-                passed: false,
-            }],
-        };
-        assert_eq!(rep.review_state_at(false), Some(ReviewState::Unreviewed));
+    fn every_golden_table_row_derives_its_expected_word() {
+        let table: Value = serde_json::from_str(include_str!(
+            "../../../../cli/tests/config/review_state_table.json"
+        ))
+        .unwrap();
+        for row in table["rows"].as_array().unwrap() {
+            let spent = row["rounds_exhausted"].as_bool().unwrap_or(false);
+            let rep = CoverageReport {
+                fail_at_head: row["fail_at_head"].as_bool().unwrap_or(false),
+                github_approval_satisfies: false,
+                coverage: Coverage::Covered(usize::from(spent)),
+                verdicts: serde_json::from_value(row["verdicts"].clone()).unwrap(),
+            };
+            let word = rep.review_state_at(spent).map(ReviewState::word);
+            assert_eq!(word, row["expected_state"].as_str(), "{}", row["name"]);
+        }
     }
 }

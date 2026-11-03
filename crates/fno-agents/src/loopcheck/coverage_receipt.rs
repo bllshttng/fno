@@ -406,6 +406,7 @@ mod tests {
         // pass on a line that never rendered, so the render itself is
         // asserted first, then the positive marker, then the four needles.
         let rep = CoverageReport {
+            fail_at_head: false,
             github_approval_satisfies: false,
             coverage: Coverage::Covered(0),
             verdicts: Vec::new(),

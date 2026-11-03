@@ -845,6 +845,104 @@ fn plugin_roots() -> (Vec<PluginRoot>, Vec<String>) {
     plugin_roots_for(&dirs_home())
 }
 
+/// The spawn-time pack presence verdict for one harness, or None when the
+/// read cannot measure (fail open: the spawn fails on its own there).
+/// "missing" is a measured absent the spawn admission refuses on, as is the
+/// codex converge's "wrong-channel"; every other verdict passes. Each arm
+/// reads the record its own install door writes, so presence never installs.
+pub fn pack_status(harness: &str) -> Option<String> {
+    match harness {
+        "codex" => Some(
+            crate::codex_converge::inspect(
+                &mut crate::codex_converge::codex_runner,
+                &crate::codex_converge::codex_home(),
+            )
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown")
+            .to_string(),
+        ),
+        "claude" => claude_pack_status(&claude_config_dir().join("plugins/installed_plugins.json")),
+        "footnote" => {
+            link_pack_status(&dirs_home().join(".footnote/plugins").join(PLUGIN_LINK_NAME))
+        }
+        "grok" => link_pack_status(
+            &crate::grok_store::grok_home()
+                .join("plugins")
+                .join(PLUGIN_LINK_NAME),
+        ),
+        "zcode" => zcode_pack_status(&zcode_config_path().ok()?),
+        "opencode" => Some(
+            if crate::opencode_install::pack_present() {
+                "ok"
+            } else {
+                "missing"
+            }
+            .to_string(),
+        ),
+        // agy imports the stage into a store fno cannot read, so no measured
+        // absent exists; pi and the rest install no stage. Both fail open.
+        _ => None,
+    }
+}
+
+/// Where claude reads its plugins from: the install door's resolution.
+fn claude_config_dir() -> PathBuf {
+    match std::env::var_os("CLAUDE_CONFIG_DIR") {
+        Some(dir) if !dir.is_empty() => PathBuf::from(dir),
+        _ => dirs_home().join(".claude"),
+    }
+}
+
+/// The claude leg: installed_plugins.json is the install ledger `claude
+/// plugin install` writes and uninstall removes. A missing registry is a
+/// measured absent; one that will not parse fails open, because the install
+/// cannot be ruled out from a record nobody can read.
+fn claude_pack_status(registry: &Path) -> Option<String> {
+    let text = match std::fs::read_to_string(registry) {
+        Ok(text) => text,
+        Err(_) => return Some("missing".to_string()),
+    };
+    let registry: Value = match serde_json::from_str(&text) {
+        Ok(v) => v,
+        Err(_) => return None,
+    };
+    let named = registry_fno_entries(&registry).is_some_and(|list| !list.is_empty());
+    Some(if named { "ok" } else { "missing" }.to_string())
+}
+
+/// The link arms (footnote, grok): the link the install door swaps in is the
+/// pack. An absent or dangling link cannot load.
+fn link_pack_status(link: &Path) -> Option<String> {
+    Some(if link.exists() { "ok" } else { "missing" }.to_string())
+}
+
+/// The zcode leg: the config's plugins block must be enabled with at least
+/// one stage dir on disk. A missing config is a measured absent; an
+/// unparseable one fails open.
+fn zcode_pack_status(config: &Path) -> Option<String> {
+    let text = match std::fs::read_to_string(config) {
+        Ok(text) => text,
+        Err(_) => return Some("missing".to_string()),
+    };
+    let v: Value = match serde_json::from_str(&text) {
+        Ok(v) => v,
+        Err(_) => return None,
+    };
+    let plugins = v.get("plugins");
+    let enabled = plugins
+        .and_then(|p| p.get("enabled"))
+        .and_then(Value::as_bool);
+    let dirs: Vec<&str> = plugins
+        .and_then(|p| p.get("dirs"))
+        .and_then(Value::as_array)
+        .map(|a| a.iter().filter_map(Value::as_str).collect())
+        .unwrap_or_default();
+    let present =
+        enabled != Some(false) && dirs.iter().any(|d| !d.is_empty() && Path::new(d).exists());
+    Some(if present { "ok" } else { "missing" }.to_string())
+}
+
 /// A single root's verdict carrying the role it played in the enumeration,
 /// plus the rendered one-line note and blocker text the doctor printer and
 /// blocker list print verbatim (the Python side is transport only).
@@ -1039,8 +1137,23 @@ fn restage_stage(source_dir: &Path, stage_parent: &Path) -> Result<RestageOutcom
         Some(&root),
     )?;
     let mut files = 0;
+    let mut full_stage: Option<std::path::PathBuf> = None;
     for profile in present {
-        files += build_stage_as(&root, stage_parent, profile)?.1;
+        let (stage, count) = build_stage_as(&root, stage_parent, profile)?;
+        files += count;
+        if profile == Profile::Full {
+            full_stage = Some(stage);
+        }
+    }
+    // A restage rewrites the full stage in place with no install attached, so
+    // without this the pointer keeps naming whatever copy primed last and an
+    // env-less reader resolves a stage one deploy older than the machine's
+    // newest (measured 2026-10-30: the stage moved a day ahead of the pointer
+    // and a worker's init resolved the stale copy). Same rule as
+    // install_harness: a pack restage never moves the pointer off a full
+    // stage, and a manifest-less stage writes nothing (the prime checks).
+    if let Some(stage) = full_stage {
+        prime_plugin_root_pointer(&stage);
     }
     Ok(RestageOutcome::Restaged {
         files,
@@ -3254,6 +3367,60 @@ mod tests {
         let _ = fs::remove_dir_all(&base);
     }
 
+    /// A restage rewrites the full stage in place, so it must move the
+    /// plugin-root pointer to the fresh stage: the deploy path once left the
+    /// pointer a day behind the stage and a worker's env-less init resolved
+    /// the stale copy. A pack-only restage never moves the pointer.
+    #[test]
+    fn restage_primes_pointer_from_full_stage() {
+        let base = std::env::temp_dir().join(format!("pi-restage-ptr-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let (source, stage) = fresh_stage(&base);
+        // new_repo already commits .claude-plugin/plugin.json naming fno,
+        // which both the prime's marker check and restage's source check
+        // require; the restaged stage keeps it.
+        let stage_parent = stage.parent().unwrap().to_path_buf();
+        let home = base.join("home");
+        fs::create_dir_all(home.join("install")).unwrap();
+        let ptr = home.join("install").join("plugin-root");
+        fs::write(&ptr, "/some/stale/copy\n").unwrap();
+        let previous_home = std::env::var_os("FNO_HOME");
+        std::env::set_var("FNO_HOME", &home);
+        restage_stage(&source, &stage_parent).unwrap();
+        assert_eq!(
+            fs::read_to_string(&ptr).unwrap().trim(),
+            stage.to_str().unwrap(),
+            "the restage moves the pointer to the fresh full stage"
+        );
+        // A pack-only restage (no full stage present) leaves the pointer.
+        let pack_base =
+            std::env::temp_dir().join(format!("pi-restage-ptr2-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&pack_base);
+        let pack_source = pack_base.join("source");
+        new_repo(&pack_source);
+        fs::write(
+            pack_source.join(crate::pack_profile::MANIFEST),
+            r#"{"mux":[]}"#,
+        )
+        .unwrap();
+        let pack_parent = pack_base.join("stage-parent");
+        fs::create_dir_all(&pack_parent).unwrap();
+        let (pack_stage, _) = build_stage_as(&pack_source, &pack_parent, Profile::Pack).unwrap();
+        restage_stage(&pack_source, &pack_parent).unwrap();
+        assert_eq!(
+            fs::read_to_string(&ptr).unwrap().trim(),
+            stage.to_str().unwrap(),
+            "a pack restage never moves the pointer off the full stage"
+        );
+        let _ = pack_stage;
+        match previous_home {
+            Some(v) => std::env::set_var("FNO_HOME", v),
+            None => std::env::remove_var("FNO_HOME"),
+        }
+        let _ = fs::remove_dir_all(&base);
+        let _ = fs::remove_dir_all(&pack_base);
+    }
+
     /// Regression: the --force arm once skipped `i += 1`, so the parse loop
     /// spun on the flag forever. The test returning at all is the proof.
     /// Also pins B5 at the same parser boundary: a mode flag after a harness
@@ -3694,6 +3861,58 @@ mod tests {
             install_path.exists(),
             "the registered installPath must survive the sweep"
         );
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    /// Each stage arm's spawn-time presence read is three-state: a measured
+    /// absent refuses, a readable naming record passes, and an unreadable
+    /// record fails open so a spawn that would work is never blocked.
+    #[test]
+    fn pack_status_reads_are_three_state_per_arm() {
+        let base = std::env::temp_dir().join(format!("pi-pack-status-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(&base).unwrap();
+        // claude: absent registry reads missing, a naming registry reads ok,
+        // and an unparseable registry fails open.
+        let registry = base.join("installed_plugins.json");
+        assert_eq!(claude_pack_status(&registry).as_deref(), Some("missing"));
+        fs::write(
+            &registry,
+            r#"{"plugins":{"fno@fno":[{"installPath":"/x"}]}}"#,
+        )
+        .unwrap();
+        assert_eq!(claude_pack_status(&registry).as_deref(), Some("ok"));
+        fs::write(&registry, "{not json").unwrap();
+        assert_eq!(claude_pack_status(&registry), None);
+        // footnote and grok share the link read: absent then linked.
+        let link = base.join("plugins/fno");
+        assert_eq!(link_pack_status(&link).as_deref(), Some("missing"));
+        fs::create_dir_all(link.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(&base, &link).unwrap();
+        assert_eq!(link_pack_status(&link).as_deref(), Some("ok"));
+        // zcode: absent config, an enabled dir that exists, a dirs entry that
+        // points nowhere, and an unparseable config.
+        let config = base.join("config.json");
+        assert_eq!(zcode_pack_status(&config).as_deref(), Some("missing"));
+        let stage = base.join("stage");
+        fs::create_dir_all(&stage).unwrap();
+        fs::write(
+            &config,
+            format!(
+                r#"{{"plugins":{{"enabled":true,"dirs":["{}"]}}}}"#,
+                stage.display()
+            ),
+        )
+        .unwrap();
+        assert_eq!(zcode_pack_status(&config).as_deref(), Some("ok"));
+        fs::write(
+            &config,
+            r#"{"plugins":{"enabled":true,"dirs":["/nowhere/fno"]}}"#,
+        )
+        .unwrap();
+        assert_eq!(zcode_pack_status(&config).as_deref(), Some("missing"));
+        fs::write(&config, "not json").unwrap();
+        assert_eq!(zcode_pack_status(&config), None);
         let _ = fs::remove_dir_all(&base);
     }
 }

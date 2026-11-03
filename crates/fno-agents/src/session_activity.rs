@@ -144,6 +144,20 @@ pub(crate) fn assistant_message_id(row: &Value) -> Option<&str> {
         .and_then(|v| v.as_str())
 }
 
+/// The zai route's fabricated assistant id: `msg_` followed by an 8-digit
+/// date stamp. Real Anthropic ids continue `msg_01` with mixed letters, so
+/// an all-digit run names a route-written id, and with it a `message.model`
+/// label the route did not verify.
+pub(crate) fn zai_route_id(id: &str) -> bool {
+    match id.strip_prefix("msg_") {
+        Some(rest) => {
+            let b = rest.as_bytes();
+            b.len() >= 8 && b[..8].iter().all(|c| c.is_ascii_digit())
+        }
+        None => false,
+    }
+}
+
 pub(crate) fn block_text(content: &Value) -> String {
     match content {
         Value::String(s) => s.clone(),
@@ -259,10 +273,31 @@ impl ActivityFold {
                 None => true,
             };
             if fresh {
+                // A zai route fabricates assistant ids as `msg_` + an
+                // 8-digit date stamp; on such rows the transcript's model
+                // label can name a claude model the route never served
+                // (measured 2026-11-01: 2,269+ zai rows labeled claude-*).
+                // The contradiction also asks for no requestId: a real
+                // Anthropic row always carries one, so its vote survives
+                // even on the unlikely all-digit id shape.
                 if let Some(m) = row
                     .get("message")
                     .and_then(|m| m.get("model"))
                     .and_then(|v| v.as_str())
+                    .filter(|m| {
+                        let Some(aid) = id else {
+                            return true;
+                        };
+                        if !zai_route_id(aid) {
+                            return true;
+                        }
+                        let request_unstamped = row
+                            .get("requestId")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .is_empty();
+                        !(request_unstamped && m.starts_with("claude"))
+                    })
                 {
                     *self.model_votes.entry(m.to_string()).or_insert(0) += 1;
                 }
@@ -553,6 +588,49 @@ mod tests {
         let act = claude_activity(&raw);
         assert_eq!(act.model.as_deref(), Some("glm-5.3-flash"));
         assert_eq!(claude_activity("").model, None);
+    }
+
+    #[test]
+    fn a_zai_routed_row_never_votes_a_claude_label() {
+        // The route fabricates `msg_` + 8-digit ids; a claude label on one
+        // is unverified (measured 2026-11-01) and must not label the
+        // session. A glm label on the same id is route-consistent and
+        // votes; a real `msg_01` id votes whatever it carries.
+        let row = |id: &str, model: &str| {
+            json!({"type": "assistant",
+                   "message": {"role": "assistant", "id": id, "model": model}})
+        };
+        let raw = claude_lines(&[row("msg_011ABCDEF", "claude-opus-5-5")]);
+        assert_eq!(
+            claude_activity(&raw).model.as_deref(),
+            Some("claude-opus-5-5")
+        );
+        let raw = claude_lines(&[row("msg_20261101120000", "claude-opus-5-5")]);
+        assert_eq!(claude_activity(&raw).model, None);
+        let raw = claude_lines(&[row("msg_20261101120000", "glm-5.3-flash")]);
+        assert_eq!(
+            claude_activity(&raw).model.as_deref(),
+            Some("glm-5.3-flash")
+        );
+        // Fewer than 8 digits is not the signature yet.
+        let raw = claude_lines(&[row("msg_2026", "claude-opus-5-5")]);
+        assert_eq!(
+            claude_activity(&raw).model.as_deref(),
+            Some("claude-opus-5-5")
+        );
+        assert!(zai_route_id("msg_20261101120000"));
+        assert!(!zai_route_id("msg_2026110"));
+        assert!(!zai_route_id("msg_011ABCDEF"));
+        // A request-stamped row is ambiguous evidence, not a contradiction:
+        // the vote survives rather than dropping a real id's label.
+        let stamped = json!({"type": "assistant", "requestId": "req_1",
+                            "message": {"role": "assistant", "id": "msg_20261101120000",
+                                        "model": "claude-opus-5-5"}});
+        let raw = claude_lines(&[stamped]);
+        assert_eq!(
+            claude_activity(&raw).model.as_deref(),
+            Some("claude-opus-5-5")
+        );
     }
 
     #[test]

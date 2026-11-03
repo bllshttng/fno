@@ -61,6 +61,7 @@ pub const GROUPS: &[Group] = &[
             ("lanes", "lanes"),
             ("undispatched", "undispatched"),
             ("stuck-epics", "stuck-epics"),
+            ("wave-notes", "wave-notes"),
         ],
     },
     Group {
@@ -75,7 +76,11 @@ pub const GROUPS: &[Group] = &[
     Group {
         name: "note",
         purpose: "Append a comment to the node thread (older comments stay)",
-        actions: &[("comment", "comment"), ("state", "note")],
+        actions: &[
+            ("comment", "comment"),
+            ("state", "note"),
+            ("dispose", "wave-dispose"),
+        ],
     },
     Group {
         name: "move",

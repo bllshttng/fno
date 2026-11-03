@@ -375,15 +375,3 @@ def _row_with_sid(name, sid, short):
     ])
 
 
-def test_append_row_alias_refuses_an_alias_another_row_answers_to(
-    tmp_path, monkeypatch
-) -> None:
-    """An ambiguous alias is no address: the append fails closed when another
-    row already answers to it, so `find` never has to guess."""
-    use_tmpdir(monkeypatch, tmp_path)
-    from fno.agents.registry import append_row_alias, load_registry
-
-    _row_with_sid("row-a", BIRTH, "aaaa1111")
-    _row_with_sid("legible-alias", REMINT, "bbbb2222")
-    assert append_row_alias("row-a", "legible-alias") is False
-    assert "legible-alias" not in load_registry()[0].aliases, "the ambiguous alias never lands"

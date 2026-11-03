@@ -292,12 +292,12 @@ pub fn run(args: &[String]) -> i32 {
                      fno-agents mail-remote key pin {} {}\n",
                     key.public_key(),
                     fingerprint(&key.public_key()),
-                    crate::mail_bus::normalize_host(&crate::claims::hostname()),
+                    crate::mail::address::normalize_host(&crate::claims::hostname()),
                     key.public_key()
                 )
             }),
         ["pin", host, public_key] => {
-            let host = crate::mail_bus::normalize_host(host);
+            let host = crate::mail::address::normalize_host(host);
             pin(&pins_path(&root), &host, public_key)
                 .map(|()| format!("pinned {host} to key {}\n", fingerprint(public_key)))
         }

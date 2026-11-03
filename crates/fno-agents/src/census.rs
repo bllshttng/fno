@@ -188,6 +188,52 @@ pub fn process_table() -> (Vec<ProcRow>, usize) {
     }
 }
 
+/// The parent pid and short name of a process the table cannot read. The
+/// table skips another uid's process (a terminal's root-owned `login`, and
+/// launchd), and macOS answers this short read for any uid. A sandbox refuses
+/// it, so a sandboxed caller reads `None`.
+#[cfg(target_os = "macos")]
+pub fn hidden_process(pid: u32) -> Option<(u32, String)> {
+    // `<sys/proc_info.h>`: the libc crate carries neither name.
+    const PROC_PIDT_SHORTBSDINFO: libc::c_int = 13;
+    #[repr(C)]
+    struct ProcBsdShortInfo {
+        pbsi_pid: u32,
+        pbsi_ppid: u32,
+        pbsi_pgid: u32,
+        pbsi_status: u32,
+        pbsi_comm: [libc::c_char; 16],
+        pbsi_rest: [u32; 8],
+    }
+    let mut info: ProcBsdShortInfo = unsafe { std::mem::zeroed() };
+    let size = std::mem::size_of::<ProcBsdShortInfo>() as libc::c_int;
+    let written = unsafe {
+        libc::proc_pidinfo(
+            pid as libc::c_int,
+            PROC_PIDT_SHORTBSDINFO,
+            0,
+            &mut info as *mut _ as *mut libc::c_void,
+            size,
+        )
+    };
+    if written != size {
+        return None;
+    }
+    let name: Vec<u8> = info
+        .pbsi_comm
+        .iter()
+        .take_while(|c| **c != 0)
+        .map(|c| *c as u8)
+        .collect();
+    Some((info.pbsi_ppid, String::from_utf8_lossy(&name).into_owned()))
+}
+
+/// `ps` already lists every uid off macOS, so a missing row stays unknown.
+#[cfg(not(target_os = "macos"))]
+pub fn hidden_process(_pid: u32) -> Option<(u32, String)> {
+    None
+}
+
 #[cfg(target_os = "macos")]
 fn process_table_libproc() -> (Vec<ProcRow>, usize) {
     use std::mem;

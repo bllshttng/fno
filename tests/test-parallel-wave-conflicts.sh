@@ -49,7 +49,7 @@ waves:
 - Modify: `docs/harnesses/codex.md`
 EOF
 
-# The conflict detection now imports fno.graph.collision, so the probe needs
+# The conflict detection reads the native collision door, so the probe needs
 # an interpreter with the cli package's deps. Prefer a venv next to the
 # checkout (or the canonical checkout this worktree branches from); fall back
 # to python3 for CI, where deps are installed into the environment.

@@ -584,16 +584,117 @@ pub fn run_decide_reindex(_argv: &[String]) -> i32 {
             }
         }
     }
-    let counts = json!({
+    // The graph leg last, so a journal-only row the loop above just indexed
+    // lands in the table in the same run.
+    let (replay, graph_error) =
+        match replay_unstored_decisions(&graph_path, &decisions_jsonl_path(), None) {
+            Ok(r) => (r, None),
+            Err(e) => (ReplayCounts::default(), Some(e)),
+        };
+    let mut counts = json!({
         "added": added,
         "already": already,
         "repaired": repaired,
         "invalid": invalid,
         "unusable": unusable,
         "total": known.len(),
+        "graph_replayed": replay.replayed,
+        "graph_refused": replay.refused,
     });
+    // The index leg already ran, so its counts print either way; an
+    // unreadable graph still fails the command.
+    if let Some(e) = &graph_error {
+        counts["graph_error"] = json!(e);
+    }
     println!("{counts}");
+    if let Some(e) = graph_error {
+        eprintln!("backlog decide-reindex: the graph replay failed: {e}");
+        return 1;
+    }
     0
+}
+
+/// The recovery every "graph store refused" line names.
+pub(crate) const GRAPH_RETRY: &str = "On a machine that shares its backlog, the store \
+beat retries the graph write each minute; `fno backlog decide-reindex` retries it now";
+
+/// One replay pass: rows written to the graph decisions table, and rows the
+/// store refused again. A refused row stays in the index for the next pass.
+#[derive(Debug, Default, PartialEq)]
+pub struct ReplayCounts {
+    pub replayed: usize,
+    pub refused: usize,
+}
+
+/// Write each index row the graph decisions table lacks, in index order,
+/// with its own id and ts. A door that refused the graph write left the row
+/// in the journal and the index only; this is its retry. `cap` bounds the
+/// rows one pass writes; a refused row costs no slot, so rows the store
+/// keeps refusing never starve the rows behind them. The table read is the
+/// db alone, because
+/// `read_store_rows` unions the index and would hide the gap. A replayed
+/// write is harmless: the insert is `ON CONFLICT(event_id) DO NOTHING`.
+pub fn replay_unstored_decisions(
+    graph: &std::path::Path,
+    index: &std::path::Path,
+    cap: Option<usize>,
+) -> Result<ReplayCounts, String> {
+    let mut counts = ReplayCounts::default();
+    let index_present = index.exists() || crate::event_store::store_path(index).exists();
+    if !index_present || !crate::backlog::database_path(graph).exists() {
+        return Ok(counts);
+    }
+    let store = crate::backlog::api::Store::new(graph);
+    let event_key = |ty: &str, data: &Value| {
+        let field = if ty == "operator_decision" {
+            "decision_id"
+        } else {
+            "retraction_id"
+        };
+        data.get(field)
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string()
+    };
+    let mut stored: std::collections::HashSet<String> =
+        crate::backlog::api::decisions(&store, None, None)
+            .map_err(|e| e.0)?
+            .iter()
+            .map(|row| event_key(row["_event_type"].as_str().unwrap_or(""), row))
+            .collect();
+    let text = crate::event_store::journal_text_checked(
+        index,
+        &crate::event_store::EventQuery::of_types(&["operator_decision", "decision_retracted"]),
+    )?;
+    for line in text.lines() {
+        let Ok(env) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        let ty = env.get("type").and_then(Value::as_str).unwrap_or("");
+        if ty != "operator_decision" && ty != "decision_retracted" {
+            continue;
+        }
+        let key = event_key(ty, &env["data"]);
+        if key.is_empty() || stored.contains(&key) {
+            continue;
+        }
+        if cap.is_some_and(|cap| counts.replayed >= cap) {
+            break;
+        }
+        let write = if ty == "operator_decision" {
+            crate::backlog::api::decision_record(&store, env.clone())
+        } else {
+            crate::backlog::api::decision_retract(&store, env.clone())
+        };
+        match write {
+            Ok(_) => {
+                stored.insert(key);
+                counts.replayed += 1;
+            }
+            Err(_) => counts.refused += 1,
+        }
+    }
+    Ok(counts)
 }
 
 /// The decide door entry: parse, then the gated write. The argv is the
@@ -740,6 +841,26 @@ for a lead ruling inside its own scope; omit the flag to resolve it from this se
         eprintln!("decide: --overturns requires --authority operator. Nothing was recorded.");
         return 2;
     }
+    // A number names its hash before any check below reads the token.
+    for token in [&mut door.supersedes, &mut door.overturns] {
+        if let Some(typed) = token.clone() {
+            match crate::numbers::resolve('d', &typed) {
+                Some(hash) => *token = Some(hash),
+                None => {
+                    eprintln!(
+                        "decide: {}. Nothing was recorded.",
+                        crate::numbers::unresolved(&typed)
+                    );
+                    return 2;
+                }
+            }
+        }
+    }
+    let overturns = door
+        .overturns
+        .as_deref()
+        .map(str::trim)
+        .filter(|t| !t.is_empty());
     // --overturns extends --supersedes when the target has a decision id; the
     // recoverability gate below covers the derived link the same way.
     if let (None, Some(t)) = (&door.supersedes, overturns) {
@@ -973,14 +1094,19 @@ Do NOT re-run decide; that records it twice."
     // The graph decisions table is the store `fno backlog decisions` reads
     // first; a refusal degrades to the durable capture, never a lost ruling.
     let graph_path = crate::graph_get::default_graph_path();
-    let db_ok = crate::backlog::api::decision_record(
+    let db_result = crate::backlog::api::decision_record(
         &crate::backlog::api::Store::new(&graph_path),
         envelope.clone(),
-    )
-    .is_ok();
-    let (node_id, why) = if !db_ok {
-        eprintln!("decide: recorded {decision_id}, but the graph store refused the ruling.");
-        (None, "the graph store refused the ruling".to_string())
+    );
+    let (node_id, why) = if let Err(e) = &db_result {
+        eprintln!(
+            "decide: recorded {decision_id}, but the graph store refused the ruling: {}. {GRAPH_RETRY}.",
+            e.0
+        );
+        (
+            None,
+            format!("the graph store refused the ruling ({})", e.0),
+        )
     } else {
         match crate::backlog::decisions_cli::read_graph_entries() {
             Err(e) => (None, format!("the graph could not be read ({e})")),

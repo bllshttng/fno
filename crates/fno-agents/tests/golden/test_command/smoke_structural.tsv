@@ -22,7 +22,7 @@ placement-rule lint self-test	.	bash scripts/tests/test_check_placement_rule.sh
 Build fno-agents debug binary (for journey tests)	crates/fno-agents	CARGO_BUILD_BUILD_DIR="$PWD/target" cargo build
 Build the fno front door (for the hash gate)	crates/fno	CARGO_BUILD_BUILD_DIR="$PWD/target" cargo build --quiet --bin fno
 paths.sh hash gate	.	FNO_AGENTS_WORKER="$PWD/crates/fno-agents/target/debug/fno-agents-worker" crates/fno/target/debug/fno config paths verify scripts/lib/paths.sh
-Scoped @requires_rust parity suites (binary present; stubbed providers)	cli	FAKE_BIN="$(mktemp -d)"for p in codex gemini opencode; do printf "%s\n%s\n" "#!/bin/sh" "exit 0" > "$FAKE_BIN/$p"; chmod +x "$FAKE_BIN/$p"; donePATH="$FAKE_BIN:$PATH" uv run pytest --tb=short -q tests/agents/test_rust_command_parity.py tests/unit/test_claims_core.py::TestSessionWitnessVerdicts
+Scoped @requires_rust parity suites (binary present; stubbed providers)	cli	FAKE_BIN="$(mktemp -d)"for p in codex gemini opencode; do printf "%s\n%s\n" "#!/bin/sh" "exit 0" > "$FAKE_BIN/$p"; chmod +x "$FAKE_BIN/$p"; donePATH="$FAKE_BIN:$PATH" uv run pytest --tb=short -q tests/agents/test_rust_command_parity.py
 Keyless dispatch-to-terminal smoke (binary present)	cli	uv run pytest --tb=short -q tests/unit/test_keyless_smoke.py
 registry-miss heal across the Rust/Python seam	.	bash tests/test-agents-heal-token.sh
 loop-check journey tests (e2e + emission-schema + backstop-subprocess)	.	bash tests/hooks/test_loop_check_e2e.shbash tests/events/test-loop-check-emission-schema.shbash tests/hooks/test_loop_check_backstop_subprocess.sh
@@ -31,6 +31,7 @@ Plan Mode front door harness	.	bash tests/hooks/test_capture_plan_mode.shbash t
 bg-dispatch harness	.	bash tests/test-bg-dispatch.sh
 init claim-wait harness	.	bash tests/test-init-claim-wait.sh
 dispatch grant posture harness	.	bash tests/target/test_dispatch_grant_posture.sh
+demo-snapshot teardown + stale-reap harness	.	bash tests/test-demo-snapshot-reap.sh
 agent skill harness	.	bash tests/skills/test_agent_normalize.shbash tests/skills/test_agent_receipt.shbash skills/agent/tests/test_normalize.shbash skills/agent/tests/test_confirm.shbash skills/agent/tests/test_auto_worktree.shbash skills/agent/tests/test_spawn_guard.sh
 mail skill harness	.	bash skills/mail/tests/test_normalize.sh
 events-discipline lint	.	bash scripts/lint/events-discipline.sh
@@ -56,14 +57,13 @@ No ${REPO_ROOT}/scripts in skills	.	bash scripts/lint/no-repo-root-scripts-in-sk
 Marketplace-readiness lint (no Skill calls, no path escapes, fno declared)	.	bash scripts/lint/no-cross-skill-runtime-calls.sh
 No unwrapped lib scripts	.	bash scripts/lint/no-unwrapped-lib-scripts.sh
 pin-skill generator self-test	.	bash tests/test-pin-skill.sh
-Agent flock-pattern lint	cli	uv run fno-py doctor lint flock-pattern
-Provider stderr-merge lint	cli	uv run fno-py doctor lint provider-stderr-merge
-Repo-root shell-out drift guard (clone-only allowlist)	cli	uv run fno-py doctor lint shellout-drift
-Spawn-shape lint (single-line argv guard)	cli	uv run fno-py doctor lint spawn-paths
-State-roots ratchet (declared root, R4/R5)	cli	uv run fno-py doctor lint state-roots
-Agent field coverage accounting	cli	uv run fno-py doctor lint field-coverage
+Provider stderr-merge lint	.	crates/fno/target/debug/fno doctor lint provider-stderr-merge
+Repo-root shell-out drift guard (clone-only allowlist)	.	crates/fno/target/debug/fno doctor lint shellout-drift
+Spawn-shape lint (single-line argv guard)	.	crates/fno/target/debug/fno doctor lint spawn-paths
+State-roots ratchet (declared root, R4/R5)	.	crates/fno/target/debug/fno doctor lint state-roots
+Agent field coverage accounting	.	crates/fno/target/debug/fno doctor lint field-coverage
 Menu-cap guard (cap 12 at three levels, hidden counts)	.	cargo test --quiet --manifest-path crates/fno/Cargo.toml --lib menu_caps
-Command-surface ratchet (real count, both binaries)	cli	uv run fno-py doctor lint command-ratchet
+Command-surface ratchet (real count, both binaries)	.	crates/fno/target/debug/fno doctor lint command-ratchet
 Schema parity self-test	.	bash scripts/tests/check-event-schema-parity-selftest.sh
 Schema parity check (Python side)	.	bash scripts/check-event-schema-parity.sh
 Provider vocabulary parity selftest	.	bash tests/ci/test_provider_vocabulary_parity.sh

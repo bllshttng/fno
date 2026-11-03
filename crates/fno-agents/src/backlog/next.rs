@@ -2,12 +2,11 @@
 //! prelude, occupancy, the keeper's select in-process, the observer merge
 //! with its guard re-filter, the claims-store reservation, and the
 //! zero-silent-starvation receipts. The external-backend shape (the joined
-//! tracker candidates) still rides the python wheel, the same split the
-//! `get`, `find`, and `undispatched` arms make.
+//! tracker candidates) answers through the tracker door.
 
 use crate::backlog_ready::{
-    configured_staleness_days, descendants_of, detect_project, dispatch_node_summary,
-    find_node_index, select, selection_guards, truthy, NoSuchParent, ReadyOpts,
+    descendants_of, detect_project, dispatch_node_summary, find_node_index, select,
+    selection_guards, truthy, NoSuchParent, ReadyOpts,
 };
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
@@ -449,18 +448,21 @@ fn stranded_next_receipts(receipts: &[(String, String)]) -> Vec<String> {
 }
 
 pub fn run(args: &[String]) -> i32 {
+    if args.iter().any(|a| a == "--help" || a == "-h") {
+        println!("{USAGE}");
+        return 0;
+    }
     let Some(o) = parse_opts(args) else {
         eprintln!("{USAGE}");
         return 2;
     };
-    if crate::backlog::workflows::active_backend_name() != "graph" {
-        return crate::backlog::cli::forward_to_python("next", args);
-    }
+    let external = crate::backlog::workflows::active_backend_name() != "graph";
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let repo_root = crate::backlog::create_cli::repo_root(&cwd);
     let now_ms = crate::claims::now_ms();
-    let config_dir = crate::claude_roster::config_dir();
-    let staleness_days = configured_staleness_days(&config_dir).unwrap_or(21).max(1);
+    let staleness_days = crate::backlog_ready::store_staleness_days()
+        .unwrap_or(21)
+        .max(1);
     let fno_dir = super::settings::graph_path()
         .parent()
         .map(std::path::Path::to_path_buf)
@@ -510,13 +512,20 @@ pub fn run(args: &[String]) -> i32 {
         with_blockers: true,
         ..Default::default()
     };
+    let read_selection = || -> Result<Vec<Value>, String> {
+        if external {
+            return super::done_rich::external_open_entries();
+        }
+        let graph = super::settings::graph_path();
+        crate::graph_store::read_rows_where_strict(&graph, &query)
+            .map_err(|error| format!("graph unreadable: {error}"))
+    };
     let need_prelude = (o.project.is_none() && !o.all) || o.parent.is_some() || o.claim.is_some();
     let pre_entries = if need_prelude {
-        let graph = super::settings::graph_path();
-        match crate::graph_store::read_rows_where_strict(&graph, &query) {
+        match read_selection() {
             Ok(rows) => Some(rows),
             Err(error) => {
-                eprintln!("Error: graph unreadable: {error}; selection refused");
+                eprintln!("Error: {error}; selection refused");
                 return 1;
             }
         }
@@ -640,22 +649,22 @@ pub fn run(args: &[String]) -> i32 {
                 }
             }
         }
-        let graph = super::settings::graph_path();
-        entries_for_receipts =
-            crate::graph_store::read_rows_where(&graph, &query).unwrap_or_default();
+        entries_for_receipts = if external {
+            pre.clone()
+        } else {
+            let graph = super::settings::graph_path();
+            crate::graph_store::read_rows_where(&graph, &query).unwrap_or_default()
+        };
     } else {
         let entries = match pre_entries {
             Some(entries) => entries,
-            None => {
-                let graph = super::settings::graph_path();
-                match crate::graph_store::read_rows_where_strict(&graph, &query) {
-                    Ok(rows) => rows,
-                    Err(error) => {
-                        eprintln!("Error: graph unreadable: {error}; selection refused");
-                        return 1;
-                    }
+            None => match read_selection() {
+                Ok(rows) => rows,
+                Err(error) => {
+                    eprintln!("Error: {error}; selection refused");
+                    return 1;
                 }
-            }
+            },
         };
         let (occupied, observer) = match prepare(&entries) {
             Ok(v) => v,

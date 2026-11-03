@@ -970,7 +970,15 @@ pub(crate) fn draw(view: &View, cells: &mut [Cell], rows_n: usize, cols: usize) 
                     } else {
                         ("? ", Color::Default)
                     };
-                    (format!("{glyph}{}", question_title(view, id)), color, true)
+                    let number = question_item(view, id)
+                        .and_then(|q| q.number.as_deref())
+                        .map(|n| format!("{n} "))
+                        .unwrap_or_default();
+                    (
+                        format!("{glyph}{number}{}", question_title(view, id)),
+                        color,
+                        true,
+                    )
                 }
                 Row::Clear(n) => (format!("Clear all {n} answered"), view.theme.brand, true),
                 Row::Announcement(s) => (format!("• {s}"), Color::Default, false),

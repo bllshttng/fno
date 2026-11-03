@@ -275,6 +275,11 @@ def capture(golden: Path) -> None:
                     continue
                 seen.add(key)
                 cases.append({"name": f"type.{path}.{len(cases)}", "validator": "", "loc": list(loc), "yaml": text, "exit": exit_code, "stderr": stderr, "value": value})
+    # A zero lane cap closes the lane; the probe budget above can drop it.
+    for name, probe in (("scalar", {"zai": 0}), ("table", {"zai": {"lanes": 0}, "anthropic": {"lanes": 0}})):
+        text = dump_yaml(nest(("agents", "provider_limits"), probe))
+        exit_code, stderr, out = load(root, text)
+        cases.append({"name": f"closed_lane.{name}", "validator": "", "loc": ["agents", "provider_limits"], "yaml": text, "exit": exit_code, "stderr": stderr, "value": at(out, ("agents", "provider_limits"))})
     (golden / "validators.tsv").write_text("".join(f"{r}\n" for r in tsv), encoding="utf-8")
     with (golden / "cases.jsonl").open("w", encoding="utf-8") as fh:
         for case in cases:

@@ -14,6 +14,8 @@ mod digest;
 mod fold;
 mod isolation;
 
+pub(crate) use fold::SKILL_USE_MARKER;
+
 use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -769,7 +771,7 @@ fn load_corpus(
         .and_then(|c| c.get("by_node").cloned());
     let repo_root = crate::paths::worktree_repo_root(cwd);
     let resolve =
-        |skill_id: &str, ts: Option<&str>| fold::default_skill_version(skill_id, ts, &repo_root);
+        |skill_id: &str, ts: Option<&str>| fold::cached_skill_version(skill_id, ts, &repo_root);
     let readers = fold::CorpusReaders {
         read_transcript: &fold::default_read_transcript,
         resolve_skill_version: &resolve,

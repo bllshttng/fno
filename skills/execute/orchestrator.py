@@ -21,7 +21,7 @@ from typing import Collection, List, Literal, Optional, Dict, Set
 from datetime import datetime
 
 # ---------------------------------------------------------------------------
-# Single-doc plan support imports (fno.plan._doc)
+# Single-doc plan support: fno on sys.path for the native door lookups
 # ---------------------------------------------------------------------------
 
 # Lazily resolve the CLI src directory relative to this file's canonical
@@ -352,12 +352,6 @@ def detect_hidden_output_conflicts(
     ``unevaluated`` ids with no parseable file list) plus the two legacy
     conflict keys the ``--wave-decision`` printer still reports.
     """
-    from fno.graph.collision import (
-        HIDDEN_SHARED_OUTPUT_ROOTS,
-        match_shared_root,
-        partition,
-    )
-
     by_file: Dict[str, List[str]] = {}
     by_root: Dict[str, List[str]] = {}
     file_conflicts: List[str] = []
@@ -365,15 +359,16 @@ def detect_hidden_output_conflicts(
     items: List[tuple[str, set[str]]] = []
 
     for task_id in task_ids:
-        targets = set(_task_targets(plan_path, task_id, surfaces))
-        items.append((task_id, targets))
+        items.append((task_id, set(_task_targets(plan_path, task_id, surfaces))))
+    answer = _collision_partition(items)
+    for task_id, targets in items:
         for target in sorted(targets):
             owners = by_file.setdefault(target, [])
             owners.append(task_id)
             if len(owners) == 2:
                 file_conflicts.append(target)
 
-            shared_root = match_shared_root(target, HIDDEN_SHARED_OUTPUT_ROOTS)
+            shared_root = answer["shared_roots"].get(target)
             if shared_root:
                 root_owners = by_root.setdefault(shared_root, [])
                 if task_id not in root_owners:
@@ -381,13 +376,26 @@ def detect_hidden_output_conflicts(
                 if len(root_owners) == 2:
                     root_conflicts.append(shared_root)
 
-    groups, unevaluated = partition(items, shared_roots=HIDDEN_SHARED_OUTPUT_ROOTS)
     return {
-        "groups": [sorted(group) for group in groups],
-        "unevaluated": sorted(unevaluated),
+        "groups": [sorted(group) for group in answer["groups"]],
+        "unevaluated": sorted(answer["unevaluated"]),
         "file_conflicts": sorted(set(file_conflicts)),
         "shared_output_conflicts": sorted(set(root_conflicts)),
     }
+
+
+def _collision_partition(items: List[tuple[str, set[str]]]) -> Dict:
+    """The native collision partition. A failed door raises: a wave that cannot
+    be partitioned must not read as free of collisions."""
+    payload = {"items": [[task_id, sorted(paths)] for task_id, paths in items]}
+    proc = subprocess.run(
+        [os.environ.get("FNO_AGENTS_FRONT") or "fno", "backlog", "script-door", "partition"],
+        input=json.dumps(payload),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return json.loads(proc.stdout)
 
 
 def partition_edges(
@@ -402,13 +410,12 @@ def partition_edges(
     ``--ready`` query unions these with the declared ``blocked_by`` edges,
     so the overlapping tasks serialize without flipping the wave's mode.
     """
-    from fno.graph.collision import HIDDEN_SHARED_OUTPUT_ROOTS, partition
-
     items = [
         (task_id, set(_task_targets(plan_path, task_id, surfaces)))
         for task_id in wave.tasks
     ]
-    groups, unevaluated = partition(items, shared_roots=HIDDEN_SHARED_OUTPUT_ROOTS)
+    answer = _collision_partition(items)
+    groups, unevaluated = answer["groups"], answer["unevaluated"]
 
     edges: Dict[str, List[str]] = {}
     for group in groups:
@@ -1514,26 +1521,36 @@ def load_plan_strategy(
     """
     plan_path = Path(plan_input)
 
-    try:
-        from fno.plan._doc import load_plan
-    except ImportError as exc:
-        print(f"Warning: fno.plan._doc not importable: {exc}", file=sys.stderr)
-        return None
+    # One native read: the plan-cli door parses the doc and its Execution
+    # Strategy, and validates the declared task edges.
+    from fno.rust_binary import find_dev_binary, resolve_binary
 
+    binary = find_dev_binary() or resolve_binary()
+    if binary is None:
+        print("Warning: fno-agents not found; cannot read the plan", file=sys.stderr)
+        return None
     try:
-        doc = load_plan(plan_path)
-    except OSError as exc:
+        proc = subprocess.run(
+            [str(binary), "plan-cli", "parse", str(plan_path)],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        receipt = json.loads(proc.stdout or "null")
+    except (OSError, subprocess.SubprocessError, ValueError) as exc:
+        print(f"BLOCKED blocked_reason=plan_unreadable: {exc}", file=sys.stderr)
+        return None
+    if not isinstance(receipt, dict) or proc.returncode == 1:
+        detail = receipt.get("error") if isinstance(receipt, dict) else proc.stderr.strip()
+        print(f"BLOCKED blocked_reason=plan_unreadable: {detail}", file=sys.stderr)
+        return None
+    if proc.returncode != 0:
         print(
-            f"BLOCKED blocked_reason=plan_unreadable: {exc}",
+            f"Error: malformed plan doc (frontmatter): {receipt.get('error')}",
             file=sys.stderr,
         )
         return None
-    except Exception as exc:
-        print(
-            f"Error: malformed plan doc (Execution Strategy YAML): {exc}",
-            file=sys.stderr,
-        )
-        return None
+    frontmatter = receipt.get("frontmatter") or {}
 
     # Validate the plan's frontmatter against the canonical schema at the moment
     # it starts driving execution (US2). A present-but-invalid field (a bad
@@ -1541,7 +1558,7 @@ def load_plan_strategy(
     # half-run. Missing required fields are tolerated (a plan may bind its node
     # later). Best-effort defense-in-depth; the blueprint save and finalize's
     # post-stamp check also guard the schema.
-    schema_report = _validate_frontmatter_via_schema(doc.frontmatter)
+    schema_report = _validate_frontmatter_via_schema(frontmatter)
     if schema_report is not None:
         print(
             f"BLOCKED blocked_reason=plan_frontmatter_invalid: {plan_path}\n{schema_report}",
@@ -1549,47 +1566,25 @@ def load_plan_strategy(
         )
         return None
 
-    strategy_body = doc.get_section("Execution Strategy")
-    if strategy_body is None:
+    if not any(heading == "Execution Strategy" for heading, _ in receipt.get("sections") or []):
         print(
             f"Warning: No execution strategy section found in {plan_path}",
             file=sys.stderr,
         )
         return None
 
-    # Delegate YAML extraction + parse + normalization to the canonical
-    # parser in fno.plan.brief. Single source of truth for the
-    # Execution Strategy schema; operator only converts the dict result
-    # into its ExecutionStrategy/Wave dataclasses. Addresses the
-    # duplicate-parsing finding from Gemini review on PR #283.
-    # Aliased import: orchestrator has its own parse_execution_strategy
-    # function (line 690) that operates on file paths and returns
-    # ExecutionStrategy; the brief module's function operates on a YAML
-    # text body and returns dict. Different signatures, same name - keep
-    # the local one accessible via its bare name.
-    try:
-        from fno.plan.brief import (
-            parse_execution_strategy as _brief_parse_strategy,
-            validate_task_edges as _validate_task_edges,
-            BriefParseError,
-        )
-    except ImportError as exc:
-        print(f"Warning: fno.plan.brief not importable: {exc}", file=sys.stderr)
-        return None
-
-    try:
-        raw = _brief_parse_strategy(strategy_body)
-    except BriefParseError as exc:
+    if receipt.get("strategy_error"):
         print(
-            f"Error: malformed Execution Strategy YAML in {plan_path}: {exc}",
+            f"Error: malformed Execution Strategy YAML in {plan_path}: {receipt['strategy_error']}",
             file=sys.stderr,
         )
         return None
+    raw = receipt.get("strategy") or {}
 
     # Declared per-task edges are validated at plan-load time, beside the
     # frontmatter schema: an unknown dependency or a cycle refuses the run
     # loudly instead of deadlocking a wave mid-flight.
-    edge_errors = _validate_task_edges(raw)
+    edge_errors = receipt.get("edge_errors") or []
     if edge_errors:
         print(
             f"BLOCKED blocked_reason=plan_task_edges_invalid: {plan_path}\n"
@@ -1604,7 +1599,7 @@ def load_plan_strategy(
     # Blueprint stamps difficulty per wave; the plan's frontmatter band is the
     # fallback so a partially-stamped strategy still reports a band. No model
     # or route lives here: the band is the axis, config maps it to a lane.
-    plan_band = _wave_band(doc.frontmatter.get("difficulty"), "")
+    plan_band = _wave_band(frontmatter.get("difficulty"), "")
     waves: List[Wave] = []
 
     for wave_data in raw.get("waves", []):

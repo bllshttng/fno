@@ -2057,7 +2057,7 @@ fn file_wave(
             }))
         );
     } else {
-        println!("wave note appended to {target_id} progress_notes ({char_count} chars); no node minted. Read it: fno backlog get {target_id}");
+        println!("wave note appended to {target_id} progress_notes ({char_count} chars); no node minted. Read it: fno backlog get {target_id}. It stays open until disposed, and lists once the host closes: fno backlog list wave-notes");
     }
     Ok(())
 }

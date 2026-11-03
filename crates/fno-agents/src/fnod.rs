@@ -22,9 +22,7 @@ const IS_ASK: &str = "Does this message ask the user for a decision or an answer
 /// or `fnod_error` with the reason the score is missing. `fnod.url` (empty
 /// turns it off) and `fnod.timeout_ms` come from fno config.
 pub(crate) fn is_ask(cwd: &Path, message: &str) -> Map<String, Value> {
-    let url = crate::agents_config::config_value_deep(cwd, &["fnod", "url"])
-        .and_then(|v| v.as_str().map(str::to_string))
-        .unwrap_or_else(|| DEFAULT_URL.to_string());
+    let url = configured_url(cwd);
     let timeout = crate::agents_config::config_value_deep(cwd, &["fnod", "timeout_ms"])
         .and_then(|v| v.as_integer())
         .and_then(|n| u64::try_from(n).ok())
@@ -70,8 +68,15 @@ pub(crate) fn is_ask(cwd: &Path, message: &str) -> Map<String, Value> {
     out
 }
 
+/// `fnod.url` from fno config, else the kev.serve default.
+pub(crate) fn configured_url(cwd: &Path) -> String {
+    crate::agents_config::config_value_deep(cwd, &["fnod", "url"])
+        .and_then(|v| v.as_str().map(str::to_string))
+        .unwrap_or_else(|| DEFAULT_URL.to_string())
+}
+
 /// Every address `url` resolves to is a loopback address.
-fn loopback(url: &str) -> bool {
+pub(crate) fn loopback(url: &str) -> bool {
     let authority = url
         .strip_prefix("http://")
         .unwrap_or_default()

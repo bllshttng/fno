@@ -1199,7 +1199,7 @@ fn every_lead_noprogress_terminal_escalates() {
         "the unshrunk-board terminal escalates: {logged}"
     );
     assert!(
-        calls[0].contains("--stalled undispatched:x-1234,undispatched:x-5678"),
+        calls[0].contains("--stalled undispatched:x-1234 --stalled undispatched:x-5678"),
         "it escalates over the board's actionable rows, QUEUE-QUALIFIED \
          (the same node in two queues is two rows), got: {}",
         calls[0]

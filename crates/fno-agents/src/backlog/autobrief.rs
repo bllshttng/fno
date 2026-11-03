@@ -244,282 +244,6 @@ pub fn resolve_dispatch_brief(node: &Value) -> DispatchBrief {
 }
 
 // ---------------------------------------------------------------------------
-// Transcript-store resolution (the resolver port)
-// ---------------------------------------------------------------------------
-
-/// The transcript-store answer for one provenance pointer.
-struct ResolvedTranscript {
-    resolved: bool,
-    path: Option<PathBuf>,
-    kind: String,
-    ambiguous: bool,
-}
-
-fn unresolved() -> ResolvedTranscript {
-    ResolvedTranscript {
-        resolved: false,
-        path: None,
-        kind: String::new(),
-        ambiguous: false,
-    }
-}
-
-fn home() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(PathBuf::from)
-}
-
-/// The codex rollout store: the env override, `$CODEX_HOME/sessions`, else
-/// `~/.codex/sessions`.
-fn codex_sessions_dir() -> Option<PathBuf> {
-    if let Some(v) = std::env::var_os("FNO_CODEX_SESSIONS_DIR").filter(|v| !v.is_empty()) {
-        return Some(PathBuf::from(v));
-    }
-    if let Some(home) = std::env::var_os("CODEX_HOME").filter(|v| !v.is_empty()) {
-        return Some(PathBuf::from(home).join("sessions"));
-    }
-    home().map(|h| h.join(".codex").join("sessions"))
-}
-
-/// The opencode SQLite store, the sibling of the legacy storage tree.
-fn opencode_db_path() -> Option<PathBuf> {
-    if let Some(v) = std::env::var_os("FNO_OPENCODE_STORAGE_DIR").filter(|v| !v.is_empty()) {
-        return Some(PathBuf::from(v).parent()?.join("opencode.db"));
-    }
-    home().map(|h| {
-        h.join(".local")
-            .join("share")
-            .join("opencode")
-            .join("opencode.db")
-    })
-}
-
-/// True iff the transcript holds at least one user/assistant turn: a real
-/// transcript, not the metadata-only stub a worktree re-key leaves behind.
-fn claude_has_conversation(path: &Path) -> bool {
-    let Ok(text) = std::fs::read_to_string(path) else {
-        return false;
-    };
-    for line in text.lines() {
-        let Ok(rec) = serde_json::from_str::<Value>(line.trim()) else {
-            continue;
-        };
-        if matches!(
-            rec.get("type").and_then(Value::as_str),
-            Some("user") | Some("assistant")
-        ) {
-            return true;
-        }
-    }
-    false
-}
-
-/// Resolve a provenance pointer to its on-disk transcript. resolved=true only
-/// when an actual store entry was found; ambiguous is a miss for the tail rung
-/// (wrong-session context is worse than none).
-fn resolve_transcript(harness: &str, session_id: &str, cwd: &str) -> ResolvedTranscript {
-    if session_id.is_empty() {
-        return unresolved();
-    }
-    if harness == "codex" {
-        return resolve_codex(session_id, cwd);
-    }
-    if harness == "opencode" {
-        return resolve_opencode(session_id, cwd);
-    }
-    if harness != "claude" || cwd.is_empty() {
-        return unresolved();
-    }
-    resolve_claude(session_id, cwd)
-}
-
-fn resolve_codex(session_id: &str, cwd: &str) -> ResolvedTranscript {
-    let Some(root) = codex_sessions_dir() else {
-        return unresolved();
-    };
-    let mut rollouts: Vec<PathBuf> = Vec::new();
-    collect_files(&root, "rollout-", ".jsonl", &mut rollouts);
-    // Fast path: codex embeds the session uuid in the rollout filename.
-    for path in &rollouts {
-        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-            if name.contains(session_id) {
-                return ResolvedTranscript {
-                    resolved: true,
-                    path: Some(path.clone()),
-                    kind: "jsonl".to_string(),
-                    ambiguous: false,
-                };
-            }
-        }
-    }
-    // Fallback: a rollout named by a turn id carries the session id in its
-    // first session_meta line; scan newest-first.
-    rollouts.sort_by_key(|p| {
-        std::cmp::Reverse(
-            std::fs::metadata(p)
-                .and_then(|m| m.modified())
-                .ok()
-                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|d| d.as_secs())
-                .unwrap_or(0),
-        )
-    });
-    for path in &rollouts {
-        if codex_meta_session(path).as_deref() == Some(session_id) {
-            return ResolvedTranscript {
-                resolved: true,
-                path: Some(path.clone()),
-                kind: "jsonl".to_string(),
-                ambiguous: false,
-            };
-        }
-    }
-    let _ = cwd;
-    unresolved()
-}
-
-fn collect_files(root: &Path, prefix: &str, suffix: &str, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(root) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let p = entry.path();
-        if p.is_dir() {
-            collect_files(&p, prefix, suffix, out);
-        } else if let Some(name) = p.file_name().and_then(|n| n.to_str()) {
-            if name.starts_with(prefix) && name.ends_with(suffix) {
-                out.push(p);
-            }
-        }
-    }
-}
-
-/// The session id the rollout's first session_meta line carries.
-fn codex_meta_session(path: &Path) -> Option<String> {
-    let text = std::fs::read_to_string(path).ok()?;
-    for line in text.lines().take(4) {
-        let Ok(rec) = serde_json::from_str::<Value>(line.trim()) else {
-            continue;
-        };
-        if rec.get("type").and_then(Value::as_str) == Some("session_meta") {
-            return text_field(&rec, "id");
-        }
-    }
-    None
-}
-
-fn resolve_opencode(session_id: &str, cwd: &str) -> ResolvedTranscript {
-    let Some(store) = opencode_db_path().filter(|p| p.exists()) else {
-        return unresolved();
-    };
-    let ok = crate::graph_store::open_read_only_wal_safe(&store)
-        .ok_or_else(|| rusqlite::Error::InvalidPath(store.clone()))
-        .and_then(|conn| {
-            let mut stmt = conn.prepare("SELECT 1 FROM session WHERE id = ?1 LIMIT 1")?;
-            let mut rows = stmt.query([session_id])?;
-            Ok(rows.next()?.is_some())
-        });
-    match ok {
-        Ok(true) => ResolvedTranscript {
-            resolved: true,
-            path: Some(store),
-            kind: "opencode-db".to_string(),
-            ambiguous: false,
-        },
-        _ => {
-            let _ = cwd;
-            unresolved()
-        }
-    }
-}
-
-/// Claude resolution searches EVERY project dir: a session's transcript can
-/// exist in more than one (a worktree re-key leaves a stub in the other).
-/// cwd stays required but no longer scopes the search.
-fn resolve_claude(session_id: &str, _cwd: &str) -> ResolvedTranscript {
-    let Some(root) = home().map(|h| h.join(".claude").join("projects")) else {
-        return unresolved();
-    };
-    let mut matches: Vec<PathBuf> = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(&root) {
-        for entry in entries.flatten() {
-            let dir = entry.path();
-            if !dir.is_dir() {
-                continue;
-            }
-            if let Ok(files) = std::fs::read_dir(&dir) {
-                for f in files.flatten() {
-                    let p = f.path();
-                    let Some(name) = p.file_name().and_then(|n| n.to_str()) else {
-                        continue;
-                    };
-                    let Some(stem) = name.strip_suffix(".jsonl") else {
-                        continue;
-                    };
-                    // A stem carrying a dot is a sibling artifact, never a
-                    // transcript; dropping it keeps a full uuid from matching
-                    // its own artifacts and reading as ambiguous.
-                    if !stem.contains('.') && stem.starts_with(session_id) {
-                        matches.push(p);
-                    }
-                }
-            }
-        }
-    }
-    matches.sort();
-    if matches.is_empty() {
-        return unresolved();
-    }
-    let stems: std::collections::BTreeSet<&str> = matches
-        .iter()
-        .filter_map(|p| p.file_name().and_then(|n| n.to_str()))
-        .collect();
-    if stems.len() > 1 {
-        // A short prefix matched two DISTINCT session uuids: genuinely
-        // ambiguous. First-sorted + ambiguous, never a guess.
-        return ResolvedTranscript {
-            resolved: true,
-            path: matches.first().cloned(),
-            kind: "jsonl".to_string(),
-            ambiguous: true,
-        };
-    }
-    if matches.len() == 1 {
-        return ResolvedTranscript {
-            resolved: true,
-            path: matches.into_iter().next(),
-            kind: "jsonl".to_string(),
-            ambiguous: false,
-        };
-    }
-    // Same session copied across canonical + worktree dirs: prefer the copies
-    // that actually carry conversation, then the newest write.
-    let mut with_convo: Vec<PathBuf> = matches
-        .iter()
-        .filter(|p| claude_has_conversation(p))
-        .cloned()
-        .collect();
-    if with_convo.is_empty() {
-        with_convo = matches;
-    }
-    with_convo.sort_by_key(|p| {
-        std::cmp::Reverse(
-            std::fs::metadata(p)
-                .and_then(|m| m.modified())
-                .ok()
-                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|d| d.as_secs())
-                .unwrap_or(0),
-        )
-    });
-    ResolvedTranscript {
-        resolved: true,
-        path: with_convo.into_iter().next(),
-        kind: "jsonl".to_string(),
-        ambiguous: false,
-    }
-}
-
-// ---------------------------------------------------------------------------
 // The tail rung
 // ---------------------------------------------------------------------------
 
@@ -536,14 +260,19 @@ fn transcript_tail_text(node: &Value, headroom: usize) -> String {
         return String::new();
     };
     let cwd = text_field(node, "source_cwd").unwrap_or_default();
-    let rt = resolve_transcript(&harness, &sid, &cwd);
+    let rt = crate::transcript_resolve::resolve_transcript(
+        &harness,
+        &sid,
+        &cwd,
+        &crate::transcript_resolve::Roots::default(),
+    );
     if !rt.resolved || rt.ambiguous {
         return String::new();
     }
     let Some(path) = rt.path else {
         return String::new();
     };
-    let mut pairs = match rt.kind.as_str() {
+    let mut pairs = match rt.kind {
         "opencode-db" => opencode_pairs(&path, &sid),
         _ => {
             if harness == "codex" {
@@ -746,4 +475,307 @@ fn parse_ts(value: &str) -> Option<f64> {
         return Some(n);
     }
     crate::event_store::parse_rfc3339_ms(v).map(|ms| ms as f64 / 1000.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    /// Redirect every store the resolver reads into a temp root and restore
+    /// the process env on drop, mirroring the birth.rs guard.
+    struct StoreGuard {
+        home: PathBuf,
+        state: PathBuf,
+    }
+
+    impl StoreGuard {
+        fn new() -> StoreGuard {
+            let tmp = TempDir::new().expect("temp dir");
+            let home = tmp.path().join("home");
+            let state = tmp.path().join("state");
+            fs::create_dir_all(home.join(".claude").join("projects")).expect("projects root");
+            fs::create_dir_all(&state).expect("state root");
+            std::env::set_var("HOME", &home);
+            std::env::set_var("FNO_STATE_DIR", &state);
+            std::env::remove_var("FNO_CONFIG");
+            std::env::remove_var("FNO_AGENT_SELF");
+            std::env::remove_var("FNO_CODEX_SESSIONS_DIR");
+            std::env::remove_var("CODEX_HOME");
+            std::env::remove_var("FNO_OPENCODE_STORAGE_DIR");
+            StoreGuard { home, state }
+        }
+
+        fn write_brief(&self, node_id: &str, body: &str) {
+            let dir = self.state.join("briefs");
+            fs::create_dir_all(&dir).expect("briefs dir");
+            fs::write(dir.join(format!("{node_id}.md")), body).expect("brief");
+        }
+
+        fn write_claude_transcript(&self, sid: &str, records: &[Value]) {
+            self.write_claude_transcript_named(sid, records)
+        }
+
+        fn write_claude_transcript_named(&self, stem: &str, records: &[Value]) {
+            let proj = self
+                .home
+                .join(".claude")
+                .join("projects")
+                .join("-tmp-workspace");
+            fs::create_dir_all(&proj).expect("project dir");
+            let lines: Vec<String> = records
+                .iter()
+                .map(|r| serde_json::to_string(r).expect("record"))
+                .collect();
+            fs::write(proj.join(format!("{stem}.jsonl")), lines.join("\n")).expect("transcript");
+        }
+    }
+
+    impl Drop for StoreGuard {
+        fn drop(&mut self) {
+            // TempDir removes the tree; only the env vars need restoring.
+            std::env::remove_var("FNO_STATE_DIR");
+        }
+    }
+
+    fn node(fields: &[(&str, Value)]) -> Value {
+        let mut m = serde_json::Map::new();
+        m.insert("id".into(), Value::from("x-1"));
+        for (k, v) in fields {
+            m.insert((*k).into(), v.clone());
+        }
+        Value::Object(m)
+    }
+
+    fn claude_turn(role: &str, text: &str, ts: &str) -> Value {
+        serde_json::json!({
+            "type": role,
+            "timestamp": ts,
+            "message": {"role": role, "content": [{"type": "text", "text": text}]}
+        })
+    }
+
+    #[test]
+    fn explicit_rung_wins_verbatim_and_unclamped() {
+        let _g = StoreGuard::new();
+        let big = "路".repeat(4000); // 12000 bytes, over the 8192 budget
+        let brief = resolve_dispatch_brief(&node(&[("dispatch_brief", Value::from(big.clone()))]));
+        assert_eq!(brief.tag, "explicit");
+        assert_eq!(brief.text.as_deref(), Some(big.as_str()));
+    }
+
+    #[test]
+    fn sidecar_rides_and_clamps_on_a_codepoint_boundary() {
+        let g = StoreGuard::new();
+        let big = "γ".repeat(6000); // 12000 bytes
+        g.write_brief("x-1", &big);
+        let brief = resolve_dispatch_brief(&node(&[
+            ("has_brief", Value::from(true)),
+            (
+                "details",
+                Value::from("unused: the sidecar outranks synthesis"),
+            ),
+        ]));
+        assert_eq!(brief.tag, "sidecar");
+        let text = brief.text.expect("sidecar text");
+        assert!(text.ends_with(TRUNC_MARKER));
+        assert!(text.as_bytes().len() <= BRIEF_MAX_BYTES);
+        // The last kept codepoint is whole, never a split multibyte char.
+        text.chars().next_back().expect("non-empty");
+    }
+
+    #[test]
+    fn sidecar_file_missing_falls_through_to_synthesis() {
+        let _g = StoreGuard::new();
+        let brief = resolve_dispatch_brief(&node(&[
+            ("has_brief", Value::from(true)),
+            ("details", Value::from("the only material present")),
+            ("source_harness", Value::from("claude")),
+            ("source_session_id", Value::from("sess-abcd1234")),
+            ("source_cwd", Value::from("/tmp/wk")),
+        ]));
+        assert_eq!(brief.tag, "synth-details");
+    }
+
+    #[test]
+    fn synth_envelope_names_provenance_and_never_fabricates() {
+        let g = StoreGuard::new();
+        let brief = resolve_dispatch_brief(&node(&[
+            ("title", Value::from("Ship the thing")),
+            ("details", Value::from("short details")),
+            ("source_harness", Value::from("claude")),
+            ("source_session_id", Value::from("sess-abcd1234")),
+            ("source_cwd", Value::from("/tmp/wk")),
+            ("slug", Value::from("ship-the-thing")),
+        ]));
+        assert_eq!(brief.tag, "synth-details");
+        let text = brief.text.expect("synth text");
+        assert!(text.starts_with("<fno_spawn "));
+        assert!(text.contains("from=\"sess-abcd1234\""));
+        assert!(text.contains("harness=\"claude\""));
+        assert!(text.contains("node=\"x-1 ship-the-thing\""));
+        assert!(text.contains("source=\"synth-details\""));
+        assert!(text.contains("title: Ship the thing"));
+        assert!(text.contains("details:\nshort details"));
+        assert!(text.ends_with("</fno_spawn>"));
+        // The live dispatcher handle outranks the historical filer.
+        std::env::set_var("FNO_AGENT_SELF", "live-lead-99");
+        let live = resolve_dispatch_brief(&node(&[
+            ("details", Value::from("short details")),
+            ("source_session_id", Value::from("sess-abcd1234")),
+        ]))
+        .text
+        .expect("live synth text");
+        assert!(live.contains("from=\"live-lead-99\""));
+        std::env::remove_var("FNO_AGENT_SELF");
+        drop(g);
+    }
+
+    #[test]
+    fn synth_none_without_material() {
+        let _g = StoreGuard::new();
+        let brief = resolve_dispatch_brief(&node(&[("title", Value::from("bare node"))]));
+        assert_eq!(brief.tag, "none");
+        assert_eq!(brief.text, None);
+    }
+
+    #[test]
+    fn clamp_bytes_never_splits_a_multibyte_char() {
+        let s = "γ".repeat(30); // 60 bytes
+        let out = clamp_bytes(&s, 30);
+        assert!(out.as_bytes().len() <= 30);
+        assert!(out.ends_with(TRUNC_MARKER));
+        // Decoding the kept head must not yield U+FFFD: the boundary is whole.
+        assert!(!out.contains('\u{FFFD}'));
+        assert_eq!(clamp_bytes("short", 100), "short");
+    }
+
+    #[test]
+    fn window_keeps_only_records_near_created_at() {
+        let g = StoreGuard::new();
+        g.write_claude_transcript(
+            "11111111-2222-3333-4444-555555555555",
+            &[
+                claude_turn("user", "birth the node", "2026-01-01T00:00:00Z"),
+                claude_turn("assistant", "node born", "2026-01-01T00:01:30Z"),
+                claude_turn("user", "much later chatter", "2026-01-01T00:10:00Z"),
+            ],
+        );
+        let brief = resolve_dispatch_brief(&node(&[
+            ("details", Value::from("thin")),
+            ("source_harness", Value::from("claude")),
+            (
+                "source_session_id",
+                Value::from("11111111-2222-3333-4444-555555555555"),
+            ),
+            ("source_cwd", Value::from("/tmp/wk")),
+            ("created_at", Value::from("2026-01-01T00:00:20Z")),
+        ]));
+        assert_eq!(brief.tag, "synth-details+tail");
+        let text = brief.text.expect("tail text");
+        assert!(text.contains("birth the node"));
+        assert!(text.contains("node born"));
+        assert!(!text.contains("much later chatter"));
+    }
+
+    #[test]
+    fn fully_windowed_out_tail_is_omitted_not_injected() {
+        let g = StoreGuard::new();
+        g.write_claude_transcript(
+            "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+            &[claude_turn(
+                "user",
+                "later conversation",
+                "2026-06-01T00:00:00Z",
+            )],
+        );
+        let brief = resolve_dispatch_brief(&node(&[
+            ("details", Value::from("thin")),
+            ("source_harness", Value::from("claude")),
+            (
+                "source_session_id",
+                Value::from("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"),
+            ),
+            ("source_cwd", Value::from("/tmp/wk")),
+            ("created_at", Value::from("2026-01-01T00:00:00Z")),
+        ]));
+        // Timestamped records all after the cutoff: the tail is OMITTED.
+        assert_eq!(brief.tag, "synth-details");
+        let text = brief.text.expect("details-only text");
+        assert!(!text.contains("later conversation"));
+    }
+
+    #[test]
+    fn ambiguous_claude_resolution_skips_tail() {
+        let g = StoreGuard::new();
+        // Two DISTINCT stems matching the short prefix read as ambiguous.
+        g.write_claude_transcript_named(
+            "11111111aaaa",
+            &[claude_turn("user", "one session", "2026-01-01T00:00:00Z")],
+        );
+        g.write_claude_transcript_named(
+            "11111111bbbb",
+            &[claude_turn("user", "other session", "2026-01-01T00:00:00Z")],
+        );
+        let brief = resolve_dispatch_brief(&node(&[
+            ("details", Value::from("thin")),
+            ("source_harness", Value::from("claude")),
+            ("source_session_id", Value::from("11111111")),
+            ("source_cwd", Value::from("/tmp/wk")),
+        ]));
+        assert_eq!(brief.tag, "synth-details");
+    }
+
+    #[test]
+    fn codex_rollout_tail_read() {
+        let g = StoreGuard::new();
+        let root = g.home.join("codex-sessions");
+        std::fs::create_dir_all(&root).expect("codex root");
+        std::env::set_var("FNO_CODEX_SESSIONS_DIR", &root);
+        let rollout = serde_json::json!({
+            "type": "response_item",
+            "timestamp": "2026-01-01T00:00:00Z",
+            "payload": {"type": "message", "role": "user",
+                        "content": [{"type": "input_text", "text": "codex turn"}]}
+        });
+        let sid = "11111111-2222-3333-4444-555555555555";
+        let path = root.join(format!("rollout-{sid}.jsonl"));
+        std::fs::write(&path, serde_json::to_string(&rollout).expect("record")).expect("rollout");
+        let brief = resolve_dispatch_brief(&node(&[
+            ("details", Value::from("thin")),
+            ("source_harness", Value::from("codex")),
+            ("source_session_id", Value::from(sid)),
+            ("source_cwd", Value::from("/tmp/wk")),
+        ]));
+        assert_eq!(brief.tag, "synth-details+tail");
+        let text = brief.text.expect("codex tail text");
+        assert!(text.contains("codex turn"));
+        std::env::remove_var("FNO_CODEX_SESSIONS_DIR");
+        drop(g);
+    }
+
+    #[test]
+    fn mail_framed_turns_omitted_from_tail() {
+        let g = StoreGuard::new();
+        g.write_claude_transcript_named(
+            "cccccccc-dddd-eeee-ffff-000000000000",
+            &[claude_turn(
+                "user",
+                "<fno_mail from=\"peer\" id=\"m1\">relay body</fno_mail>",
+                "2026-01-01T00:00:00Z",
+            )],
+        );
+        let brief = resolve_dispatch_brief(&node(&[
+            ("details", Value::from("thin")),
+            ("source_harness", Value::from("claude")),
+            (
+                "source_session_id",
+                Value::from("cccccccc-dddd-eeee-ffff-000000000000"),
+            ),
+            ("source_cwd", Value::from("/tmp/wk")),
+        ]));
+        // The relay shape is not a conversational pair; the tail is empty.
+        assert_eq!(brief.tag, "synth-details");
+    }
 }

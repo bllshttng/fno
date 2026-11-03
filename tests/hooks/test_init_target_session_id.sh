@@ -44,7 +44,7 @@ trap 'rm -rf "${_ALL_TMPS[@]}"' EXIT
 # into every subshell and flip the disagreement detection. A no-op in CI (which
 # sets none of these) and a scrub under an interactive harness.
 unset CLAUDE_CODE_SESSION_ID CLAUDECODE_SESSION_ID CODEX_THREAD_ID \
-      CODEX_SESSION_ID GEMINI_SESSION_ID OPENCODE_SESSION_ID TARGET_TRANSCRIPT_ID 2>/dev/null || true
+      CODEX_SESSION_ID GEMINI_SESSION_ID OPENCODE_SESSION_ID PI_SESSION_ID PI_SESSION_FILE TARGET_TRANSCRIPT_ID 2>/dev/null || true
 
 # This harness exercises identity fields after wrapper policy checks have
 # passed. Direct fallback gate behavior has dedicated review, containment, and
@@ -309,6 +309,49 @@ _ALL_TMPS+=("$TMP_E")
 grep -q "fno doctor update" "${TMP_E}/init-stderr.txt" \
   || fail "(e): refusal stderr does not name fno doctor update"
 pass "(e): a mint failure refuses init and names the remedy"
+
+# ── (f)-(h) pi: the stub answers nothing, so init fails open to the shell twin ─
+run_pi_init() {
+  local _dir="$1"; shift
+  (cd "$_dir" && env "$@" \
+    HOME="${_dir}/home" \
+    PATH="${_dir}/bin:$PATH" \
+    FNO_AGENTS_BIN="${_dir}/bin/fno-agents" \
+    FNO_TEST_SPACE="${_dir}/space" \
+    TARGET_START=1 \
+    TARGET_INPUT="test-pi-identity" \
+    TARGET_SESSION_ID= \
+    TARGET_LOCATION_OK="main-acknowledged" \
+    bash "$INIT" >"${_dir}/init-out.txt" 2>&1)
+}
+manifest_field() { grep "^$2:" "$1/space/target-state.md" | sed "s/^$2:[[:space:]]*//" | tr -d '"\r'; }
+
+log "(f): PI_SESSION_ID alone => manifest harness pi, harness_session_id stamped"
+make_repo TMP_F
+_ALL_TMPS+=("$TMP_F")
+run_pi_init "$TMP_F" PI_SESSION_ID=s-pi-1 || fail "(f): init exited non-zero"
+[[ "$(manifest_field "$TMP_F" harness)" == "pi" ]] \
+  || fail "(f): expected harness pi, got '$(manifest_field "$TMP_F" harness)'"
+[[ "$(manifest_field "$TMP_F" harness_session_id)" == "s-pi-1" ]] \
+  || fail "(f): expected harness_session_id s-pi-1, got '$(manifest_field "$TMP_F" harness_session_id)'"
+pass "(f): pi session stamped on the fail-open path"
+
+log "(g): PI_SESSION_ID beside CLAUDE_CODE_SESSION_ID => unknown harness, null session"
+make_repo TMP_G
+_ALL_TMPS+=("$TMP_G")
+run_pi_init "$TMP_G" PI_SESSION_ID=s-pi-1 CLAUDE_CODE_SESSION_ID=c-1 || fail "(g): init exited non-zero"
+[[ "$(manifest_field "$TMP_G" harness)" == "unknown" ]] \
+  || fail "(g): expected harness unknown, got '$(manifest_field "$TMP_G" harness)'"
+[[ "$(manifest_field "$TMP_G" harness_session_id)" == "null" ]] \
+  || fail "(g): expected null harness_session_id, got '$(manifest_field "$TMP_G" harness_session_id)'"
+pass "(g): mixed pi and claude markers stamp nothing"
+
+log "(h): re-init in the same pi env is not refused as a foreign manifest"
+run_pi_init "$TMP_F" PI_SESSION_ID=s-pi-1 || true
+if grep -q 'REFUSED: foreign session manifest' "$TMP_F/init-out.txt"; then
+  fail "(h): same-session pi re-init was refused as foreign"
+fi
+pass "(h): same-session rescue accepts the pi manifest"
 
 # AC1-HP (claude wins over an inherited foreign codex id) and AC3-ERR (the id a
 # live row owns is refused) are proven at the command level in Python

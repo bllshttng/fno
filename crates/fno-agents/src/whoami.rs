@@ -1398,12 +1398,13 @@ fn identity_ambiguity_message(ident: &crate::spawn_context::OwnedIdentity) -> St
 /// lists them. The fno plumbing names never strip: they are this process's
 /// own plumbing, not foreign lineage.
 fn ambient_strip_flags(keep_family: &str) -> Vec<String> {
-    const TABLE: [(&str, &str); 15] = [
+    const TABLE: [(&str, &str); 17] = [
         ("CODEX_THREAD_ID", "codex"),
         ("CLAUDE_CODE_SESSION_ID", "claude"),
         ("CODEX_SESSION_ID", "codex"),
         ("GEMINI_SESSION_ID", "gemini"),
         ("OPENCODE_SESSION_ID", "opencode"),
+        ("PI_SESSION_ID", "pi"),
         ("CLAUDE_SESSION_ID", "claude"),
         ("CLAUDECODE", "claude"),
         ("CLAUDECODE_SESSION_ID", "claude"),
@@ -1414,6 +1415,7 @@ fn ambient_strip_flags(keep_family: &str) -> Vec<String> {
         ("CODEX_SHELL", "codex"),
         ("CODEX_COMPANION_SESSION_ID", "codex"),
         ("CODEX_COMPANION_TRANSCRIPT_PATH", "codex"),
+        ("PI_SESSION_FILE", "pi"),
     ];
     let own_session = TABLE
         .iter()
@@ -1490,6 +1492,7 @@ fn family_of(name: &str) -> &'static str {
         }
         "GEMINI_SESSION_ID" => "gemini",
         "OPENCODE_SESSION_ID" => "opencode",
+        "PI_SESSION_ID" | "PI_SESSION_FILE" => "pi",
         "HERMES_SESSION_ID" => "hermes",
         "TARGET_SESSION_ID" => "fno",
         _ => "unknown",
@@ -1879,22 +1882,14 @@ fn project_id_from(path: &Path) -> Option<String> {
     }
 }
 
-fn bus_dir() -> Option<PathBuf> {
-    if let Some(dir) = std::env::var_os("FNO_BUS_DIR") {
-        return Some(PathBuf::from(dir));
-    }
-    if let Some(root) = std::env::var_os("FNO_INBOX_ROOT") {
-        return Some(PathBuf::from(root).join(".bus"));
-    }
-    let base = std::env::var_os("HOME")?;
-    Some(PathBuf::from(base).join(".fno").join("bus"))
-}
-
 /// Unread messages for one address after its cursor, the count the drain
 /// would print. Withdrawals, hosted/typed receipts and duplicate ids filter
 /// here, the same choke point every reader of the log shares.
 fn scan_unread_count(name: &str, exclude_from: Option<&[String]>) -> u64 {
-    let Some(bus) = bus_dir() else { return 0 };
+    let base = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let bus = crate::mail_paths::bus_dir_of(&base.join(".fno"));
     let rows = match read_bus_rows(&bus) {
         Ok(rows) => rows,
         Err(_) => return 0,

@@ -8,6 +8,7 @@ use super::*;
 
 fn report(verdicts: Vec<ReviewerVerdict>) -> CoverageReport {
     CoverageReport {
+        fail_at_head: false,
         github_approval_satisfies: false,
         coverage: Coverage::Covered(verdicts.len()),
         verdicts,

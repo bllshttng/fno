@@ -206,6 +206,7 @@ pub(crate) fn run_clear_cmd(args: &[String]) -> i32 {
         provenance,
         closed_by: crate::outstanding::session_id(&cwd),
         caller: None,
+        home: Some(home.clone()),
         journal_path: crate::paths::events_path(&cwd),
         index_path: crate::provider_cap::questions_path(&home),
         decisions_path: crate::decision_index::default_state_path("decisions.jsonl"),
@@ -338,7 +339,10 @@ fn deliver_answer(
             "outstanding: {qid} answered; asker {asker} is not live, so nobody was woken. {recovery}"
         );
     }
-    let body = format!("Answer to your question {qid} \"{question}\": {answer}.");
+    let body = format!(
+        "Answer to your question {} \"{question}\": {answer}.",
+        crate::numbers::display(qid)
+    );
     let argv = vec![
         crate::mail_cli::send_raw::agents_binary(),
         "mail".to_string(),

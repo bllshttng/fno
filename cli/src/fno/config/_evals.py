@@ -12,12 +12,24 @@ from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 _LOG = logging.getLogger(__name__)
 
 
+class GateBlock(BaseModel):
+    """The daemon's change gate (``evals.gate.*``): the daily spend cap and
+    the lane its goldens run on. The Rust gate reads both keys from raw TOML;
+    this block is what lets ``fno config get``/``set`` name them."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    daily_usd: float = 15.0
+    lane: str = "zai-flash"
+
+
 class EvalsBlock(BaseModel):
     """Eval-suite settings: the grading-worker gate plus the demand keys.
     Full key docs live in the generated reference and docs/evals.md."""
 
     model_config = ConfigDict(extra="ignore")
 
+    gate: GateBlock = GateBlock()
     enabled: bool = True
 
     @field_validator("enabled", mode="before")

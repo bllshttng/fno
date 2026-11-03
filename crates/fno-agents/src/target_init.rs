@@ -453,24 +453,62 @@ fn resolve_init_script_from(
     toplevel: Option<&str>,
 ) -> PathBuf {
     const REL: &str = "hooks/helpers/init-target-state.sh";
-    if let Some(root) = plugin_root {
-        return PathBuf::from(root).join(REL);
-    }
-    if let Some(root) = repo_root {
-        return PathBuf::from(root).join(REL);
-    }
-    if let Some(home) = home {
-        let pointer = PathBuf::from(home).join(".fno/install/plugin-root");
-        if let Ok(root) = std::fs::read_to_string(&pointer) {
-            return PathBuf::from(root.trim()).join(REL);
+    ladder_root(plugin_root, repo_root, home, toplevel)
+        .map(|root| root.join(REL))
+        .unwrap_or_else(|| PathBuf::from(REL))
+}
+
+/// The env-hint ladder: the first non-empty hint wins, then the install
+/// pointer beside HOME, then the repo toplevel. None when nothing names a
+/// root.
+fn ladder_root(
+    plugin_root: Option<&str>,
+    repo_root: Option<&str>,
+    home: Option<&str>,
+    toplevel: Option<&str>,
+) -> Option<PathBuf> {
+    plugin_root
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| repo_root.filter(|s| !s.is_empty()).map(PathBuf::from))
+        .or_else(|| {
+            home.and_then(|home| {
+                let pointer = PathBuf::from(home).join(".fno/install/plugin-root");
+                std::fs::read_to_string(&pointer)
+                    .ok()
+                    .map(|root| PathBuf::from(root.trim()))
+            })
+        })
+        .or_else(|| toplevel.filter(|s| !s.is_empty()).map(PathBuf::from))
+}
+
+/// The env-hint ladder `resolve_plugin_script` documents, generalized over
+/// the script's relative path: CLAUDE_PLUGIN_ROOT, CODEX_PLUGIN_ROOT,
+/// FNO_REPO_ROOT, the persisted plugin-root pointer beside HOME, then the
+/// cwd repo's toplevel. The env hints are authoritative: when set
+/// (non-empty), the script is expected there and we do NOT fall through.
+pub(crate) fn plugin_rel_path(rel: &str, cwd: &Path) -> PathBuf {
+    let hint = |key: &str| -> Option<String> { std::env::var(key).ok().filter(|v| !v.is_empty()) };
+    let plugin_hint = hint("CLAUDE_PLUGIN_ROOT").or_else(|| hint("CODEX_PLUGIN_ROOT"));
+    let toplevel = || -> Option<String> {
+        let out = std::process::Command::new("git")
+            .args(["rev-parse", "--show-toplevel"])
+            .current_dir(cwd)
+            .output()
+            .ok()?;
+        if !out.status.success() {
+            return None;
         }
-    }
-    if let Some(root) = toplevel {
-        if !root.is_empty() {
-            return PathBuf::from(root).join(REL);
-        }
-    }
-    PathBuf::from(REL)
+        Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    };
+    let root = ladder_root(
+        plugin_hint.as_deref(),
+        hint("FNO_REPO_ROOT").as_deref(),
+        std::env::var("HOME").ok().as_deref(),
+        toplevel().as_deref(),
+    );
+    root.map(|r| r.join(rel))
+        .unwrap_or_else(|| PathBuf::from(rel))
 }
 
 fn resolve_init_script() -> PathBuf {
@@ -513,6 +551,12 @@ fn node_str(node: Option<&serde_json::Value>, key: &str) -> String {
         .to_string()
 }
 
+/// The flag is the sole deliverables authority: `None` scrubs the variable to
+/// empty rather than letting an inherited value reach the helper.
+fn deliverables_env(deliverables: Option<i64>) -> String {
+    deliverables.map(|n| n.to_string()).unwrap_or_default()
+}
+
 fn run_helper(
     args: &Args,
     size: Option<&str>,
@@ -553,24 +597,24 @@ fn run_helper(
     if let Some(plan) = &args.plan_path {
         cmd.env("TARGET_PLAN_PATH", plan);
     }
-    if let Some(size) = size {
-        cmd.env("TARGET_SIZE", size);
-    }
-    if let Some(model) = &args.model {
-        if !model.is_empty() {
-            cmd.env("TARGET_DISPATCH_MODEL", model);
-        }
-    }
+    // Sole authority, like the scrub rows below: an inherited value must
+    // never reach the helper when the flag did not set it. The hook's
+    // manifest writer validates these against line injection; scrubbing at
+    // the decision layer keeps the same contract one hop earlier.
+    cmd.env("TARGET_SIZE", size.unwrap_or_default());
+    cmd.env(
+        "TARGET_DISPATCH_MODEL",
+        args.model.as_deref().unwrap_or_default(),
+    );
     // The env var and the manifest field keep their spelling: both are read
     // by other processes and are a later wave's to move.
-    if let Some(harness) = &args.harness {
-        if !harness.is_empty() {
-            cmd.env("TARGET_DISPATCH_PROVIDER", harness);
-        }
-    }
-    if let Some(n) = deliverables {
-        cmd.env("TARGET_DELIVERABLES", n.to_string());
-    }
+    cmd.env(
+        "TARGET_DISPATCH_PROVIDER",
+        args.harness.as_deref().unwrap_or_default(),
+    );
+    // Sole authority: an inherited TARGET_DELIVERABLES must never stamp a
+    // false denominator or smuggle a manifest line through the heredoc.
+    cmd.env("TARGET_DELIVERABLES", deliverables_env(deliverables));
     // Sole authority: an inherited TARGET_BEASTMODE must never self-grant.
     cmd.env("TARGET_BEASTMODE", if args.beastmode { "1" } else { "" });
     // Asymmetric on purpose: --no-merge SETS the refusal but never clears an
@@ -624,6 +668,21 @@ fn substrate_marks_unattended() -> bool {
         std::env::var("FNO_BG").ok().as_deref(),
         std::env::var("FNO_AGENT_SUBSTRATE").ok().as_deref(),
     )
+}
+
+#[cfg(test)]
+mod deliverables_env_tests {
+    use super::deliverables_env as env;
+
+    #[test]
+    fn none_scrubs_an_inherited_value() {
+        assert_eq!(env(None), "");
+    }
+
+    #[test]
+    fn some_stamps_the_declared_count() {
+        assert_eq!(env(Some(3)), "3");
+    }
 }
 
 #[cfg(test)]

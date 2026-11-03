@@ -227,8 +227,8 @@ pub fn launch_env(
         "oauth_dir" => {
             if !staging::verify_staged(record, &root) {
                 return Err(unavailable(format!(
-                    "Provider '{provider_id}' is not staged. \
-                     Call stage(record) before dispatch_env()."
+                    "Provider '{provider_id}' is not staged; run \
+                     `fno config accounts register` before dispatching to it."
                 )));
             }
             Ok(env_for_oauth(record, &root))

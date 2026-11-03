@@ -652,7 +652,7 @@ fn join_opencode_parts(blocks: &[Value]) -> String {
 // ---------------------------------------------------------------------------
 
 /// The claude synthetic placeholder, the port of `observed.py`.
-const CLAUDE_SYNTHETIC_MODEL: &str = "<synthetic>";
+pub(crate) const CLAUDE_SYNTHETIC_MODEL: &str = "<synthetic>";
 
 /// What the session ACTUALLY answered as, read from its summary. Five
 /// outcomes, not collapsed: observed / no-transcript / not-file-backed /

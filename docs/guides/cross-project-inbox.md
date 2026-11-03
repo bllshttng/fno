@@ -15,13 +15,15 @@ Once named, peers can `fno agents mail send --to-project <you>` and you read wit
 ## Send a message
 
 ```bash
-fno agents mail send --to-project acme-web --kind heads-up \
+fno agents mail send --to-project acme-web \
     --body "New region data source live in PR 112"
 ```
 
-The kinds are `send` (the default), `heads-up`, `question` and `fyi`. A `question` also escalates to a human.
+A project send reaches the one live peer working on that project. With no live peer it exits 16 and writes nothing, because no drain reads a queued project note. Send to a session by name, or file the work as a backlog node. With several live peers it exits 17 unless you pass `--any`.
 
-Optional flags: `--reply-to <msg-id>`, `--ref-pr <N>`, `--ref-node ab-...`, `--ref-gate <name>`.
+The `--kind` flag (`heads-up`, `question`, `fyi`) is retired and exits 2. To put a question to a human, run `fno inbox outstanding ask`.
+
+Optional flag: `--reply-to <msg-id>`.
 
 ## Read your inbox
 

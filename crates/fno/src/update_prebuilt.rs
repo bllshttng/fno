@@ -38,6 +38,13 @@ pub(crate) const BINARIES: [&str; 4] = [
     "fno",
 ];
 
+/// The compat stub's own markers: a sh shebang on the first line plus the
+/// retirement line anywhere in the file. Only a file carrying both is the
+/// no-op stub the old tarballs packed; a real binary fails the read or the
+/// match, so the cleanup can never delete one.
+const STUB_SHEBANG: &str = "#!/bin/sh";
+const STUB_RETIREMENT: &str = "footnote is retired; use fno";
+
 /// The CI matrix name for this host, or None where CI builds no tarball.
 pub(crate) fn platform() -> Option<&'static str> {
     match (std::env::consts::OS, std::env::consts::ARCH) {
@@ -418,7 +425,23 @@ pub(crate) fn swap_into(unpacked: &Path, bin_dir: &Path) -> Result<(), String> {
     for (tmp, dest) in &staged {
         std::fs::rename(tmp, dest).map_err(|e| format!("{}: {e}", dest.display()))?;
     }
+    remove_installed_stub(bin_dir);
     Ok(())
+}
+
+/// The tarball stopped carrying `footnote`, and swap_into lands only members
+/// it carries, so a machine that took the compat stub would keep that no-op
+/// script forever. Retire the name when the file is the stub script; any
+/// other file, real binary included, is left alone. Best effort: a name the
+/// next update can retire again is better than a failed update.
+fn remove_installed_stub(bin_dir: &Path) {
+    let path = bin_dir.join("footnote");
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return;
+    };
+    if text.lines().next() == Some(STUB_SHEBANG) && text.contains(STUB_RETIREMENT) {
+        let _ = std::fs::remove_file(path);
+    }
 }
 
 #[cfg(test)]
@@ -457,7 +480,6 @@ mod tests {
         // bin added to crates/fno-agents after this machine's first install).
         std::fs::write(src.path().join(BINARIES[3]), b"new").unwrap();
         std::fs::write(src.path().join("fno-gh-proxy"), b"proxy").unwrap();
-        std::fs::write(src.path().join("footnote"), b"stub").unwrap();
         swap_into(src.path(), dest.path()).unwrap();
         for name in BINARIES {
             assert_eq!(std::fs::read(dest.path().join(name)).unwrap(), b"new");
@@ -466,12 +488,35 @@ mod tests {
             std::fs::read(dest.path().join("fno-gh-proxy")).unwrap(),
             b"proxy"
         );
-        assert_eq!(
-            std::fs::read(dest.path().join("footnote")).unwrap(),
-            b"stub"
-        );
         let leftovers = std::fs::read_dir(dest.path()).unwrap().count();
-        assert_eq!(leftovers, BINARIES.len() + 2);
+        assert_eq!(leftovers, BINARIES.len() + 1);
+    }
+
+    #[test]
+    fn update_retires_the_stub_script_but_never_a_real_binary() {
+        let dir = tempfile::tempdir().unwrap();
+        let stub = dir.path().join("footnote");
+        std::fs::write(
+            &stub,
+            "#!/bin/sh\n# Compat stub: the standalone footnote harness is retired. Use fno.\necho \"footnote is retired; use fno\" >&2\nexit 1\n",
+        )
+        .unwrap();
+        remove_installed_stub(dir.path());
+        assert!(!stub.exists(), "the stub script must go");
+
+        // A real binary fails the read; a script without the retirement
+        // marker is someone else's file. Neither is touched.
+        let bin = dir.path().join("footnote");
+        std::fs::write(&bin, b"\xcf\xfa\xed\xfe old harness binary").unwrap();
+        remove_installed_stub(dir.path());
+        assert_eq!(
+            std::fs::read(&bin).unwrap(),
+            b"\xcf\xfa\xed\xfe old harness binary"
+        );
+
+        std::fs::write(&bin, "#!/bin/sh\nexec real-harness \"$@\"\n").unwrap();
+        remove_installed_stub(dir.path());
+        assert!(bin.exists(), "a real script must stay");
     }
 
     #[test]

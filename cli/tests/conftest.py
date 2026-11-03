@@ -12,7 +12,6 @@ from pathlib import Path
 import pytest
 
 
-
 @pytest.fixture(autouse=True)
 def _no_send_settle_wait(monkeypatch):
     """The post-send landed verify reads immediately under test.
@@ -57,22 +56,6 @@ def _operator_shell_identity(monkeypatch):
     monkeypatch.delenv("FNO_CLAUDE_THEME", raising=False)
 
 
-@pytest.fixture(autouse=True)
-def _hermetic_worked_authority(monkeypatch):
-    """Answer the worked authority available-but-empty in every test.
-
-    The strict worked-authority gate refuses every dispatch when the roster
-    read fails, and CI has no harness binaries, so dispatch tests passed on a
-    developer machine (real fleet answers) and failed in CI (read raises).
-    Patching the authority itself keeps the layers beneath it real: roster
-    join tests bind the function directly, fleet fakes at the census door and
-    identity pins between the claims modules all stay untouched. A test that
-    installs its own map, or raises to exercise the degrade, patches after
-    this one and wins.
-    """
-    monkeypatch.setattr(
-        "fno.graph.statuses.live_worked_node_ids", lambda *a, **kw: {}
-    )
 
 
 @pytest.fixture(autouse=True)
@@ -86,33 +69,6 @@ def _sandbox_project_spaces(tmp_path, monkeypatch):
     import fno fresh) resolve the SAME sandboxed root as the test process.
     """
     monkeypatch.setenv("FNO_SPACES_DIR", str(tmp_path / "spaces"))
-
-
-@pytest.fixture
-def _no_global_tick_events(monkeypatch):
-    """Capture pr-watch tick emissions instead of hitting the live events log.
-
-    Tests that drive the real tick command would otherwise append fabricated
-    pr_watch_tick_attempt/end records to ~/.fno/events.jsonl. Opt in per file:
-
-        pytestmark = pytest.mark.usefixtures("_no_global_tick_events")
-
-    An explicit events_path still delegates to the real writer, so direct
-    _emit_event tests keep their tmp files.
-    """
-    from fno.pr_watch import cli as prcli
-
-    real = prcli._emit_event
-    events: list[tuple[str, dict]] = []
-
-    def _capture(event_type, data, *, events_path=None):
-        if events_path is not None:
-            return real(event_type, data, events_path=events_path)
-        events.append((event_type, dict(data)))
-        return True
-
-    monkeypatch.setattr(prcli, "_emit_event", _capture)
-    return events
 
 
 _SERIAL_TEST_SUFFIXES = frozenset(
@@ -203,11 +159,13 @@ def _store_keeper_absent() -> bool:
     in the one job that can actually run them.
     """
     try:
-        from fno.graph.store import _worker_binary
+        from fno.rust_binary import find_dev_binary
     except Exception:  # noqa: BLE001 - an unreadable probe never skips
         return False
     try:
-        return _worker_binary() is None
+        import shutil
+
+        return find_dev_binary() is None and shutil.which("fno-agents") is None
     except Exception:  # noqa: BLE001 - same
         return False
 
@@ -216,7 +174,13 @@ def _store_keeper_absent() -> bool:
 #: is a nodeid PREFIX (a file, or a file plus a class), so a new case inside a
 #: listed class is covered without a second edit here.
 _NEEDS_STORE_KEEPER = (
-    "tests/test_pr_watch_dispatch.py::TestDurableGrantExecution",
+    "tests/integration/test_graph_cli.py",
+    "tests/lint/test_check_pitfalls.py::test_graduates_to_resolving_to_no_node_fails",
+    "tests/unit/plan/test_blueprint_surface_warning.py",
+    "tests/unit/plan/test_plan_sync.py",
+    "tests/unit/test_orchestrator_ready_tasks.py::TestPartitionEdgesReady",
+    "tests/unit/test_orchestrator_ready_tasks.py::TestReadyBandFilter",
+    "tests/unit/test_orchestrator_ready_tasks.py::TestReadyCli",
     "tests/unit/test_cli_wrappers.py::test_get_one_id_never_invokes_the_binary",
     "tests/unit/test_pr_closure_producer.py::test_supersede_keeps_the_human_reason",
 )
@@ -461,14 +425,11 @@ def _block_live_provider_exec(request, monkeypatch, tmp_path_factory):
     where nothing guarded at all. This root copy covers every cli test; the
     agents copy is gone, never kept beside it.
 
-    Two layers, because seams differ. One guarded ``Popen`` subclass is set
-    on the ``subprocess`` module: ``subprocess.run`` and ``check_output``
-    read ``Popen`` from that module global at call time, so one patch covers
-    them plus every direct ``Popen(...)`` call (the bare calls in ``agy`` and
-    ``pi`` included). The three harness aliases that captured
-    the original class at import time (``claude``, ``codex``,
-    ``cursor_agent``) are repointed to the guarded class. A subclass keeps
-    ``isinstance`` checks and ``Popen[bytes]`` working.
+    One guarded ``Popen`` subclass is set on the ``subprocess`` module:
+    ``subprocess.run`` and ``check_output`` read ``Popen`` from that module
+    global at call time, so one patch covers them plus every direct
+    ``Popen(...)`` call. A subclass keeps ``isinstance`` checks and
+    ``Popen[bytes]`` working.
 
     The discriminator is *which* binary runs, not whether a subprocess runs
     at all: the safe pattern installs a fake provider on a tmp-isolated PATH
@@ -496,22 +457,15 @@ def _block_live_provider_exec(request, monkeypatch, tmp_path_factory):
     import subprocess
     from pathlib import Path
 
-    from fno.agents.harnesses import agy as _agy
-    from fno.agents.harnesses import claude as _claude
-    from fno.agents.harnesses import codex as _codex
-    from fno.agents.harnesses import cursor_agent as _cursor
-
     # Use pytest's session basetemp (which honors a custom --basetemp) rather
     # than tempfile.gettempdir(), so the "is this a tmp-isolated fake?" check
     # stays correct under a non-default temp root.
     tmp_root = str(tmp_path_factory.getbasetemp().resolve())
     # claude + codex are the historical leakers; the rest are the launched
-    # name of every other harness module: agy.AGY_BINARY, and argv[0] of
-    # cursor_agent (module constant) / pi.rpc_argv / grok.acp_argv / kimi
-    # (inline argv, no constant to import).
+    # name of every other harness.
     provider_bins = {
         "claude", "codex", "pi", "grok", "kimi", "dsh",
-        _agy.AGY_BINARY, _cursor.CURSOR_AGENT_BINARY,
+        "agy", "cursor-agent",
     }
 
     def _is_real_provider_exec(cmd) -> bool:
@@ -569,12 +523,6 @@ def _block_live_provider_exec(request, monkeypatch, tmp_path_factory):
             super().__init__(args, *popenargs, **kwargs)
 
     monkeypatch.setattr(subprocess, "Popen", _GuardedPopen)
-    # Module aliases hold the ORIGINAL class from import time; repoint them.
-    # The claude alias is gone with its Popen-based logs seam (ported to the
-    # Rust client), so repoint it only when a later seam reintroduces it.
-    monkeypatch.setattr(_claude, "_subprocess_popen", _GuardedPopen, raising=False)
-    monkeypatch.setattr(_codex, "_subprocess_popen", _GuardedPopen)
-    monkeypatch.setattr(_cursor, "_subprocess_popen", _GuardedPopen)
 
 
 @pytest.fixture(autouse=True, scope="session")
@@ -598,38 +546,6 @@ def _pinned_native_fno():
             return os.environ.get("FNO_BIN") or pinned
         mp.setattr(store_client, "resolve_native_bin", _pinned)
         yield
-
-
-@pytest.fixture(autouse=True)
-def _neutral_host_harness(monkeypatch):
-    """Keep synthetic session markers independent of the pytest host harness.
-
-    Identity tests set their own Claude, Codex, or Gemini markers.  A real
-    harness ancestor belongs to the test runner rather than the synthetic
-    session, so letting the process-tree prover observe it makes local results
-    depend on which harness launched pytest.  Tests of proven ownership pin the
-    resolver explicitly after this fixture runs.
-    """
-    monkeypatch.setattr(
-        "fno.claims.session_pid.resolve_session_harness",
-        lambda from_pid=None: None,
-    )
-
-
-@pytest.fixture(autouse=True)
-def _hermetic_promise_carveout_gate(monkeypatch):
-    """Default condition D of the promise gate to an empty carve-out ledger.
-
-    ``resolve_promise_evidence`` (consulted by every close command) reads
-    ``.fno/carveouts.jsonl`` off the canonical repo root; in the test process
-    that resolves to the real checkout, so it would read the real ledger and
-    refuse every close. Default the reader to empty so unrelated close tests
-    stay hermetic; tests that exercise condition D override it (``carveout_reader``
-    on the unit gate, or re-patch this attribute for the close commands).
-    """
-    import fno.graph._reconcile as rec
-
-    monkeypatch.setattr(rec, "_unharvested_deferred_carveouts", lambda cwd: [])
 
 
 @pytest.fixture(autouse=True)
@@ -684,7 +600,7 @@ def _hermetic_authorized_merge(monkeypatch):
 # ---------------------------------------------------------------------------
 # Hermetic state isolation
 # ---------------------------------------------------------------------------
-# Applied at MODULE LOAD, not as a fixture. The fno.graph package freezes its
+# Applied at MODULE LOAD, not as a fixture. A Python graph client froze its
 # path constants at IMPORT time - store.py does ``from _constants import
 # GRAPH_JSON`` at module top and ``read_graph_strict(path: Path = GRAPH_JSON)`` as a
 # default arg - so the graph/ledger paths bind to ``~/.fno`` before any per-test
@@ -692,7 +608,7 @@ def _hermetic_authorized_merge(monkeypatch):
 # fail-open (``Path.home() / ".fno"``) then leaked test nodes into the
 # developer's REAL graph.json. A fixture runs too late; the only cure that beats
 # a frozen constant is to move the state location BEFORE the import, and
-# conftest.py is imported before the test modules that pull in fno.graph.
+# conftest.py is imported before the test modules.
 #
 # WHAT gets neutralised lives in the shared vocabulary (crates/fno-agents/
 # src/ambient_vocab.toml, byte-copied to cli/src/fno/ by build.rs), deny-by-
@@ -757,40 +673,6 @@ def harness_session_id() -> str:
     return _HARNESS_SESSION_ID
 
 
-
-
-@pytest.fixture(autouse=True)
-def _in_memory_hold_verdict(tmp_path, monkeypatch):
-    """The hold verdict answers from the graph on disk (one fno-agents
-    receipt). These tests build in-memory graphs; the adapter ships each
-    call's rows IN the payload so the reader answers from them. A test that
-    stubs the verdict itself overrides this."""
-
-    import json as _json
-
-    from fno.graph import ladder
-    from fno.rust_binary import call_binary_json as _real_call
-
-    real = ladder.dispatch_hold_verdict
-
-    def patched(entry, by_id):
-        rows = list(by_id.values())
-        if isinstance(entry, dict) and entry not in rows:
-            rows = rows + [entry]
-        rows = [e for e in rows if isinstance(e, dict) and e.get("id")]
-
-        def seeded_call(command, args, *, timeout=None):
-            payload = _json.loads(args[0])
-            payload["entries"] = rows
-            return _real_call(command, [_json.dumps(payload)], timeout=15)
-
-        monkeypatch.setattr("fno.rust_binary.call_binary_json", seeded_call)
-        if not isinstance(entry, dict) or not entry.get("id"):
-            # A row the graph cannot carry: read as unheld, as before.
-            return None
-        return real(entry, by_id)
-
-    monkeypatch.setattr(ladder, "dispatch_hold_verdict", patched)
 
 
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
@@ -901,23 +783,11 @@ def _reset_config_state() -> None:
         pass
 
 
-# The per-test clearer registry is retired: every cached state reader keys on
-# its declared root (test_cached_state_surface enforces a root parameter or a
-# recorded reason), so there is nothing left to clear per test.
-HERMETIC_CACHED_STATE_CLEARERS: tuple[tuple[str, str], ...] = (
-    ("fno.claims.session_pid", "_session_identity"),
-)
-
-
 @pytest.fixture
 def cwd_tmp(tmp_path: Path, monkeypatch):
-    """Collapse both claims roots (global + cwd-local) onto one tmp dir.
+    """Run in a disposable tmp dir that is also HOME, with no claims-root pin.
 
-    HOME=cwd means global_claims_root() and the canonical-repo-root
-    claims_dir(None) are the SAME directory, so a test can write with plain
-    acquire_claim(root=tmp_path) and know both of `list`/`reap`'s default
-    roots see it. Shared by test_claim_reap.py and test_claims_cli.py (both
-    exercise the same claims CLI surface against a hermetic HOME).
+    Repo config and the machine's own state cannot leak into the test.
     """
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("FNO_CLAIMS_ROOT", raising=False)
@@ -1031,7 +901,7 @@ def _closure_leg_hermetic(monkeypatch):
     `fno.rust_binary.command_call` themselves.
     """
     import fno.rust_binary as rb
-    from fno.graph._constants import is_wellformed_node_id
+    from fno.rust_binary import is_wellformed_node_id
 
     real_command_call = rb.command_call
 
@@ -1077,7 +947,7 @@ def _closure_leg_hermetic(monkeypatch):
 def _no_live_evidence_gate(monkeypatch):
     """Hermetic default for the evidence gate.
 
-    The note gate (`fno.graph.note_cli.note_evidence`) transports to the
+    The note gate (`backlog note`) transports to the
     `fno-agents evidence-gate` command through `fno.rust_binary.command_call`. In
     the test environment that resolver can find a real installed binary, so
     an unstubbed gate would run a foreign implementation of the claim
@@ -1190,33 +1060,8 @@ def _warn_no_local_door_binary() -> None:
 _door_binary_pin_warned = False
 
 
-_FACADE_NAMES = (
-    "GRAPH_JSON",
-    "GRAPH_MD",
-    "GRAPH_HTML",
-    "GRAPH_ARCHIVE_JSON",
-    "LEDGER_JSON",
-    "BRIEFS_DIR",
-)
 
 
-@pytest.fixture(autouse=True)
-def _unbake_constants_facade():
-    """Undo the baked-facade trap fno.graph._constants documents.
-
-    ``monkeypatch.setattr(gc, "GRAPH_JSON", g)`` reads the current value
-    through the module ``__getattr__`` (which RESOLVES a real path) and
-    restores that resolved path as a concrete attribute on teardown, so
-    every later test in the process reads a dead tmp graph. The module doc
-    begs for ``setitem(vars(module), ...)``; dozens of sites use setattr
-    anyway. Cleanup runs at SETUP: the previous test's monkeypatch undo is
-    the last writer by then, so the delete cannot race it.
-    """
-    import fno.graph._constants as gc
-
-    for name in _FACADE_NAMES:
-        if name in vars(gc):
-            delattr(gc, name)
 
 
 @pytest.fixture(autouse=True)

@@ -106,20 +106,6 @@ AUTO_LOADED = ["AGENTS.md", "CLAUDE.md", "skills/using-fno/SKILL.md"]
 #   json-projection-keys, claim-release-on-closure.
 REGISTRY = [
     {
-        "name": "harness-env-scrub",
-        "glob": "cli/src/fno/agents/harnesses/*.py",
-        "site": r"dict\(os\.environ\)",
-        "required": r"worker_environment|scrub_ambient_identity",
-        "why": "every child-env build on a spawn path crosses the harness_identity.worker_environment scrub floor (or scrubs directly)",
-    },
-    {
-        "name": "status-derivation-helper",
-        "glob": "cli/src/fno/graph/*.py",
-        "site": r"def _(?:effective_)?status",
-        "required": r"_apply_readiness_overlay|read_graph_strict|load_graph",
-        "why": "a status helper returning the stored field skips the read-time blocked derivation",
-    },
-    {
         "name": "spawn-placement-flag-reach",
         # Reader half, cross-language: a placement flag advertised on the
         # Python spawn surface must also appear in the Rust client's argv
@@ -480,10 +466,6 @@ self_test() {
 
   # Compliant sites for the registry globs this fixture does not exercise,
   # so only the canary entry reports. Same content reused by the clean tree.
-  write_compliant_graph() {
-    mkdir -p "$1/cli/src/fno/graph"
-    printf 'def _status_of(c):\n    entries = read_graph_strict()\n    return entries\n' > "$1/cli/src/fno/graph/render.py"
-  }
   write_compliant_gate() {
     mkdir -p "$1/cli/src/fno/agents"
     printf 'def lane_provider(row):\n    return resolve_provider(row.provider)\n' > "$1/cli/src/fno/agents/spawn_gate.py"
@@ -510,7 +492,6 @@ self_test() {
   printf 'X = "twin canary literal long enough to clear the threshold"\n' > "$tmp/canary/a.py"
   printf 'const S: &str = "twin canary literal long enough to clear the threshold";\n' > "$tmp/canary/b.rs"
   printf 'def build_child_env():\n    spawn_env = dict(os.environ)\n    return spawn_env\n' > "$tmp/canary/cli/src/fno/agents/harnesses/canary.py"
-  write_compliant_graph "$tmp/canary"
   write_compliant_gate "$tmp/canary"
   write_placement_ad "$tmp/canary"
   write_placement_reach_missing "$tmp/canary"
@@ -536,7 +517,6 @@ self_test() {
   printf 'X = "twin canary literal long enough to clear the threshold"\n' > "$tmp/clean/a.py"
   printf 'const S: &str = "a different rust literal that matches no python string here";\n' > "$tmp/clean/b.rs"
   printf 'from fno.harness_identity import scrub_ambient_identity\ndef build_child_env():\n    spawn_env = dict(os.environ)\n    scrub_ambient_identity(spawn_env)\n    return spawn_env\n' > "$tmp/clean/cli/src/fno/agents/harnesses/canary.py"
-  write_compliant_graph "$tmp/clean"
   write_compliant_gate "$tmp/clean"
   write_placement_ad "$tmp/clean"
   write_placement_reach_full "$tmp/clean"

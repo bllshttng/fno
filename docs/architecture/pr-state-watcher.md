@@ -12,15 +12,15 @@ It is the **sole** post-merge detector. `fno backlog reconcile` no longer dispat
 
 One LaunchAgent (`~/Library/LaunchAgents/sh.fno.pr-watcher.plist`) runs `fno do pr watch tick` on a `StartInterval` (default 600s). Global rather than per-repo because the PR record it iterates - the backlog graph at `~/.fno/graph.json` - is itself global and spans every repo.
 
-The implementation is a Python package (`cli/src/fno/pr_watch/`) split along a pure/impure seam so the decision logic is exhaustively unit-testable:
+The implementation is the `crates/fno-agents/src/pr_watch/` module. Its outside effects sit behind one trait, so the decision logic tests without gh:
 
 | Module | Responsibility |
 |---|---|
-| `__init__.py` | `decide()` - the pure decision core over `(observation, watermark, reviewers, merge_ready)` |
-| `_discover.py` | `discover_open_prs()` (open backlog nodes carrying a PR). `read_pr_state()` does per-PR `gh` reads. `read_tracked_pr_states()` is the batched read that sweeps every tracked record each tick. |
-| `_state.py` | `WatermarkStore` - the atomic per-PR watermark at `~/.fno/pr-watcher-state.json`. Keys normalize to `owner/repo#number` on load. |
-| `_dispatch.py` | `fire_skill()` (headless `claude --print` for the **review** poll only) + `tick()` (the impure orchestrator). Merge dispatch delegates to `post_merge_route.dispatch_post_merge_ritual`. Terminal-PR delivery retries live in the sidecar at `~/.fno/pr-watcher-state-delivery.json`. They never enter the observed-state cache. |
-| `_install.py` + `cli.py` | the `fno do pr watch {tick,install,uninstall,status}` commands + the gated plist installer |
+| `discover.rs` | `discover_open_prs()`, `read_pr_state()`, the batched `read_tracked_states()`, and `decide()`, the pure verdict |
+| `state.rs` | `Store`, the atomic per-PR watermark at `~/.fno/state/pr-watcher-state.json`, plus the branch-provenance cache. Keys normalize to `owner/repo#number` on load. Every write replays this tick's changes over the file under the pr-park flock. |
+| `dispatch.rs` | The sweep, the durable-grant merge queue and the `Seams` trait. Terminal-PR delivery retries live in the `-delivery` sidecar. They never enter the observed-state cache. |
+| `tick.rs` + `clock.rs` | The `tick` command, its phases and the phase clock. The door bounds every child by the phase deadline and kills its group on a cut. |
+| `install.rs`, `refresh.rs`, `heal.rs`, `status.rs` | The `fno do pr watch {install,uninstall,refresh,heal,status}` commands |
 
 ### One poll cycle (a tick)
 

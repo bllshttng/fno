@@ -348,7 +348,13 @@ fn opt_str_of(payload: &Value, key: &str) -> Option<String> {
 }
 
 pub(crate) fn probe_answer(_payload: &Value) -> Value {
-    probe::answer(_payload)
+    probe::answer(None, _payload)
+}
+
+/// The same probe anchored at an explicit cwd, for in-process callers whose
+/// config root is not the process cwd.
+pub(crate) fn probe_answer_at(cwd: Option<&std::path::Path>, _payload: &Value) -> Value {
+    probe::answer(cwd, _payload)
 }
 
 /// The probe's pieces, namespaced so the payload parsing and the row
@@ -356,8 +362,10 @@ pub(crate) fn probe_answer(_payload: &Value) -> Value {
 mod probe {
     use super::*;
 
-    pub(super) fn answer(payload: &Value) -> Value {
-        let config_cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    pub(super) fn answer(cwd: Option<&std::path::Path>, payload: &Value) -> Value {
+        let config_cwd = cwd
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
         let home = crate::paths::AgentsHome::from_env();
         let registry_path = home.registry_json();
         let caller = opt_str_of(payload, "caller_session");
@@ -1346,10 +1354,13 @@ mod tests {
         std::env::set_var("FNO_CLAIMS_ROOT", dir.join("claims-root"));
         std::env::set_var("FNO_CONFIG", dir.join(".fno").join("config.toml"));
 
-        let answer = probe::answer(&json!({
-            "name": "probe-registry-schema",
-            "substrate": "headless",
-        }));
+        let answer = probe::answer(
+            None,
+            &json!({
+                "name": "probe-registry-schema",
+                "substrate": "headless",
+            }),
+        );
 
         match prior_home {
             Some(value) => std::env::set_var(crate::paths::HOME_ENV, value),
@@ -1430,12 +1441,15 @@ mod tests {
         )
         .unwrap();
 
-        let answer = probe::answer(&json!({
-            "name": "probe-lane-lock",
-            "substrate": "headless",
-            "route_provider": "zai",
-            "account": ""
-        }));
+        let answer = probe::answer(
+            None,
+            &json!({
+                "name": "probe-lane-lock",
+                "substrate": "headless",
+                "route_provider": "zai",
+                "account": ""
+            }),
+        );
 
         std::env::remove_var(crate::paths::HOME_ENV);
         std::env::remove_var("FNO_CLAIMS_ROOT");
@@ -1505,7 +1519,7 @@ mod tests {
         };
         std::fs::write(&incident_path, serde_json::to_string(&record).unwrap()).unwrap();
 
-        let stopped = probe::answer(&json!({}));
+        let stopped = probe::answer(None, &json!({}));
         assert_eq!(stopped["verdict"], "refused");
         assert_eq!(stopped["reason"], "fleet-stop");
         assert!(stopped["message"]
@@ -1515,7 +1529,7 @@ mod tests {
         assert!(stopped["lanes"].is_object(), "{stopped}");
 
         std::fs::write(&incident_path, b"broken").unwrap();
-        let unreadable = probe::answer(&json!({}));
+        let unreadable = probe::answer(None, &json!({}));
         assert_eq!(unreadable["verdict"], "refused");
         assert_eq!(unreadable["reason"], "fleet-stop-unavailable");
         assert!(unreadable["message"]
@@ -1524,7 +1538,7 @@ mod tests {
             .contains("unreadable"));
 
         let _ = std::fs::remove_file(&incident_path);
-        let clear = probe::answer(&json!({}));
+        let clear = probe::answer(None, &json!({}));
         assert_eq!(clear["verdict"], "accepted");
         assert_ne!(clear["reason"], "fleet-stop");
 
@@ -1545,7 +1559,7 @@ mod tests {
         let prior_self = std::env::var_os("FNO_AGENT_SELF");
         std::env::set_var("FNO_MACHINE_BRAKE", &brake);
         std::env::set_var("FNO_AGENT_SELF", "probe-brake-worker");
-        let braked = probe::answer(&json!({}));
+        let braked = probe::answer(None, &json!({}));
         assert_eq!(braked["verdict"], "refused", "{braked}");
         assert_eq!(braked["reason"], "machine-runaway");
         assert!(braked["message"]
@@ -1553,7 +1567,7 @@ mod tests {
             .unwrap()
             .contains("machine runaway brake holds"));
         std::env::remove_var("FNO_AGENT_SELF");
-        assert_eq!(probe::answer(&json!({}))["verdict"], "accepted");
+        assert_eq!(probe::answer(None, &json!({}))["verdict"], "accepted");
         match prior_self {
             Some(value) => std::env::set_var("FNO_AGENT_SELF", value),
             None => std::env::remove_var("FNO_AGENT_SELF"),
@@ -1637,11 +1651,14 @@ mod tests {
         )
         .unwrap();
 
-        let answer = probe::answer(&json!({
-            "name": "probe-leadshare",
-            "substrate": "bg",
-            "caller_session": "session-aaaaaaaa"
-        }));
+        let answer = probe::answer(
+            None,
+            &json!({
+                "name": "probe-leadshare",
+                "substrate": "bg",
+                "caller_session": "session-aaaaaaaa"
+            }),
+        );
 
         std::env::remove_var(crate::paths::HOME_ENV);
         std::env::remove_var("FNO_CLAIMS_ROOT");

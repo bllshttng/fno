@@ -129,6 +129,7 @@ cargo-build	cargo-build	dir	daemon
 chats	chats	dir	daemon
 claim-aux	state/claim-aux	dir	daemon
 context-cache	cache/context	dir	daemon
+corrections	cache/corrections	dir	daemon
 fleet	cache/fleet	dir	daemon
 flight	state/flight	dir	daemon
 handoffs	handoffs	dir	daemon

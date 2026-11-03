@@ -176,6 +176,7 @@ fn row_identity(queue: &str, row: &Value) -> String {
         .get("id")
         .or_else(|| row.get("key"))
         .or_else(|| row.get("number"))
+        .or_else(|| row.get("node").filter(|v| !v.is_null()))
         .map(|v| v.to_string())
         .unwrap_or_else(|| row.to_string());
     format!("{queue}:{}", id.trim_matches('"'))
@@ -759,6 +760,20 @@ mod tests {
             "actionable": 0,
             "queues": queues,
         })
+    }
+
+    #[test]
+    fn a_verdict_row_is_named_by_its_node() {
+        let board = board_with_queues(json!([
+            {"name": "failed_verdict", "status": "ok", "actionable": true,
+             "rows": [{"node": "x-aaaa", "verdict": "FAIL", "report": "r.md", "claim": "a, b"}]},
+        ]));
+        let parsed = parse_org_board_value(&board).unwrap();
+        assert_eq!(parsed.actionable_ids, vec!["failed_verdict:x-aaaa"]);
+        assert_eq!(
+            row_identity("q", &json!({"id": "x-id", "node": "x-node"})),
+            "q:x-id"
+        );
     }
 
     #[test]

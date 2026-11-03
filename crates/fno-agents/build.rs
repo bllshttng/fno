@@ -42,8 +42,8 @@ fn main() {
     sync_module_copy("glob");
     sync_merge_posture();
     sync_ambient_vocab();
-    sync_page_reload();
     sync_model_reach();
+    sync_tombstones();
     sync_registry_schema();
     sync_events_limits();
     sync_events_schema();
@@ -406,20 +406,20 @@ fn sync_ambient_vocab() {
     write_if_different(&cli_copy, &bytes);
 }
 
-/// PRODUCE the downstream copy of the operator-page reload script.
+/// PRODUCE the downstream copy of the removed-command table.
 ///
-/// The crate owns `src/page_reload.js` (`lead_ledger.rs` `include_str!`s it),
-/// and the board renderer reads the byte copy
-/// `cli/src/fno/graph/page_reload.js` as package data. The cli-ci
-/// generated-copies step is the tripwire for a hand edit to the copy.
-fn sync_page_reload() {
-    println!("cargo:rerun-if-changed=src/page_reload.js");
-    let canonical = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/page_reload.js");
+/// The crate owns `src/tombstones.toml` so the published tarball carries it, and
+/// the Python root group reads the byte copy `cli/src/fno/tombstones.toml` as
+/// package data. The cli-ci generated-copies step is the tripwire for a hand
+/// edit to the copy.
+fn sync_tombstones() {
+    println!("cargo:rerun-if-changed=src/tombstones.toml");
+    let canonical = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/tombstones.toml");
     let Ok(bytes) = std::fs::read(&canonical) else {
         return;
     };
     let Some(root) = repo_root() else { return };
-    let cli_copy = root.join("cli/src/fno/graph/page_reload.js");
+    let cli_copy = root.join("cli/src/fno/tombstones.toml");
     if !cli_copy.is_file() {
         return;
     }

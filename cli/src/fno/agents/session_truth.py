@@ -90,16 +90,6 @@ STALE_ATTENTION_S = 600
 _TAIL_N = 40
 
 
-def fmt_age(seconds: float) -> str:
-    """Compact floored age: 45s / 12m / 3h."""
-    s = int(seconds)
-    if s < 60:
-        return f"{s}s"
-    if s < 3600:
-        return f"{s // 60}m"
-    return f"{s // 3600}h"
-
-
 def classify_tail(
     last_role: Optional[str],
     last_text: Optional[str],
@@ -182,7 +172,7 @@ def _transcript_age_s(
             mtime = transcript_path.stat().st_mtime
             basis = "mtime"
         else:
-            from fno.provenance.resolver import resolve_transcript
+            from fno.rust_binary import resolve_transcript
 
             rt = resolve_transcript(
                 agent,
@@ -225,43 +215,6 @@ def _record_stamp_epoch(ts: str) -> Optional[float]:
         return datetime.fromisoformat(str(ts).replace("Z", "+00:00")).timestamp()
     except ValueError:
         return None
-
-
-#: Tail depth for :func:`newest_entry_epoch`; the newest entry is near the end.
-_ENTRY_TAIL_BYTES = 256 * 1024
-
-
-def newest_entry_epoch(path: Path, tail_bytes: Optional[int] = _ENTRY_TAIL_BYTES) -> Optional[float]:
-    """Newest top-level ``timestamp`` in a jsonl transcript, in epoch SECONDS.
-
-    The age primitive the file stat must not be: trailing untimestamped
-    records keep the file young while the conversation is silent.
-    ``tail_bytes=None`` reads the whole file (the adopt stamp), so its window
-    is never narrower than truth's own read. None when unreadable or
-    stamp-free; the caller falls back and names it."""
-    try:
-        size = path.stat().st_size
-        with path.open("rb") as fh:
-            if tail_bytes is not None:
-                fh.seek(max(0, size - tail_bytes))
-            chunk = fh.read()
-        lines = chunk.decode("utf-8").splitlines()
-    except (OSError, UnicodeDecodeError):
-        return None
-    if tail_bytes is not None and size > tail_bytes and lines:
-        lines = lines[1:]  # a mid-file seek lands inside a line; drop it
-    newest: Optional[float] = None
-    for line in lines:
-        try:
-            ts = json.loads(line).get("timestamp")
-        except Exception:  # noqa: BLE001 - a torn/foreign line is not data
-            continue
-        if not ts:
-            continue
-        epoch = _record_stamp_epoch(ts)
-        if epoch is not None and (newest is None or epoch > newest):
-            newest = epoch
-    return newest
 
 
 def _opencode_activity_epoch(session_id: str, db_path: Path) -> Optional[float]:
@@ -328,13 +281,20 @@ def observed_title(agent: str, transcript_path: Optional[Path]) -> Optional[str]
         return None
 
 
-# Transcript location and the observed-model read live in fno.provenance:
-# fno.graph (core) needs them too, and a core module may not import from the
-# agents runtime. Re-exported so this module's own callers are unaffected.
-from fno.provenance.observed import (  # noqa: E402
-    observed_model,
-    resolve_transcript_path,
-)
+def observed_model(agent: str, transcript_path: Optional[Path]) -> dict:
+    """What the transcript says answered, as the native receipt; never raises."""
+    if agent not in ("claude", "codex"):
+        return {"kind": "not-file-backed"}
+    if transcript_path is None:
+        return {"kind": "no-transcript"}
+    from fno.rust_binary import call_binary_json
+
+    error, receipt = call_binary_json(
+        "attest", ["observed-model", "--agent", agent, "--path", str(transcript_path)]
+    )
+    if error is not None or not isinstance(receipt, dict):
+        return {"kind": "unreadable", "reason": error or "unreadable JSON receipt"}
+    return receipt
 
 
 def resolve_session_truth(
@@ -403,13 +363,17 @@ def resolve_session_truth(
     sid = getattr(session, "session_id", "") or ""
     cwd = getattr(session, "cwd", "") or ""
     raw_transcript_path = getattr(session, "transcript_path", None)
-    transcript_path = (
-        Path(raw_transcript_path)
-        if raw_transcript_path
-        else resolve_transcript_path(
-            agent, sid, cwd, projects_root, codex_sessions_dir
+    transcript_path = Path(raw_transcript_path) if raw_transcript_path else None
+    if transcript_path is None and agent in ("claude", "codex"):
+        # Only claude and codex keep a per-session file; opencode's shared
+        # store has none, so the observed read reports not-file-backed.
+        from fno.rust_binary import resolve_transcript
+
+        rt = resolve_transcript(
+            agent, sid, cwd, projects_root=projects_root, codex_sessions_dir=codex_sessions_dir
         )
-    )
+        if rt.resolved and rt.transcript_path:
+            transcript_path = Path(rt.transcript_path)
     observed = observed_model(agent, transcript_path)
     try:
         records = recent_records(
@@ -483,24 +447,25 @@ def resolve_session_truth(
     # the row, and a done promise is an outcome, not a refusal to consult.
     provider_refusal: Optional[str] = None
     if last_actor.role == "assistant" and state != "done":
-        from fno.adapters.providers.error_taxonomy import normalize
+        from fno.rust_binary import command_call
 
         # Only the leading clause: a worker whose turn merely discusses rate
         # limits carries the taxonomy's bare substrings further in.
         lead = " ".join((last_actor.text or "").split())[:120]
         try:
             verdict = (
-                normalize(http_status=None, exit_code=None, body=lead, reset_timezone=None)
+                command_call(["spawn-overlay", "accounts", "error-class"], {"body": lead}, timeout=5)
                 if lead
                 else None
             )
         except Exception:  # noqa: BLE001 - see below
             # This function is documented never to raise and every liveness
             # surface reads it, so a reporting field must not break the read:
-            # the same rule `observed_model` states for itself.
+            # the same rule `observed_model` states for itself. A missing
+            # fno-agents binary lands here too.
             verdict = None
-        if verdict is not None and verdict.triggers_swap:
-            provider_refusal = verdict.error_class.value
+        if verdict is not None and verdict.get("triggers_swap"):
+            provider_refusal = verdict.get("error_class")
     try:
         last_event_at = (
             None
@@ -580,6 +545,3 @@ def _humanize_age(seconds: Optional[int]) -> str:
         # fixed-width-4 invariant once a row is silent for 1000+ days).
         unit, n = "d", min(seconds // 86400, 999)
     return f"{n}{unit}".rjust(4)
-
-
-

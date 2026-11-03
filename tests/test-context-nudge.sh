@@ -157,7 +157,7 @@ export FNO_REPO_ROOT="$SBX"
 # parent harness for the compact probe below, where --to-self refuses a
 # contradicted marker as inherited identity.
 _SESSION_HARNESS="$(PYTHONPATH="$FNO_SRC" "$FNO_PYTHON" -c \
-  'from fno.claims.session_pid import resolve_session_harness; print(resolve_session_harness() or "")')"
+  'import json, subprocess; from fno.rust_binary import resolve_binary; b = resolve_binary(); print((json.loads(subprocess.run([str(b), "claim", "session-pid", "--json"], capture_output=True, text=True).stdout or "{}").get("harness") or "") if b else "")')"
 unset CODEX_THREAD_ID CLAUDE_CODE_SESSION_ID CODEX_SESSION_ID GEMINI_SESSION_ID OPENCODE_SESSION_ID CLAUDE_SESSION_ID
 export CLAUDE_CODE_SESSION_ID="$LEAD_SID"
 cd "$SBX"   # isolate: hook latches (.fno/), git root (carveouts), and events all land under $SBX
@@ -346,7 +346,13 @@ run_hook "$(payload "$SBX/low.jsonl")"
 assert_eq     "AC7: below trigger exits 0" "$RC" "0"
 assert_absent "AC7: below trigger no block" "$OUT" '"decision":"block"'
 
-# next band up (60%) blocks again after the 50% latch
+# next band up (60%) blocks again after the 50% latch. The 600k rewrite is the
+# SAME LENGTH as AC5's 500k write above (only the digits differ), so when both
+# land in one stat second the probe cache's size+mtime fingerprint does NOT
+# change and this fire is served the 50% copy (measured '60% used' absent; red
+# on main 2026-11-01). sleep 1 forces a later mtime, as in the AC17 rewrite
+# below.
+sleep 1
 write_transcript "$SBX/t.jsonl" 600000
 run_hook "$(payload "$SBX/t.jsonl")"
 assert_contains "AC7: next band blocks again" "$OUT" '60% used'
@@ -465,7 +471,9 @@ assert_absent "AC19: small window no quality block" "$OUT" '"decision":"block"'
 # both writes land in the same stat second the probe cache's size+mtime
 # fingerprint does NOT change and AC20's fire is served AC19's 55% copy (the
 # refire trace named it: measured 110000 at the 140000 case). sleep 1 forces
-# a later mtime; the production-granularity gap is filed for the hook.
+# a later mtime. Production transcripts append, so the size half of the
+# fingerprint moves; the equal-length rewrite is a fixture shape, and the
+# sleeps are the accepted fix at this granularity.
 sleep 1
 rm -f "$LATCHES"/.context-nudge-* 2>/dev/null
 write_transcript "$SBX/small.jsonl" 140000 "gpt-5-codex"   # 200k window, 70%, 60k left

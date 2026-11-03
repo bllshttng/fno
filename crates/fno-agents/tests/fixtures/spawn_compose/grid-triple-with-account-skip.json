@@ -11,6 +11,8 @@
   "expect": {
     "argv": [
       "spawn",
+      "--harness",
+      "codex",
       "--route",
       "zai/glm-x",
       "--name",
@@ -45,6 +47,11 @@
             "routing"
           ],
           [
+            "harness",
+            "codex",
+            "routing"
+          ],
+          [
             "route",
             "zai/glm-x",
             "difficulty-grid"
@@ -62,7 +69,7 @@
     },
     "stderr": [
       "fno agents spawn: account skipped (claude-only, grid harness 'codex'); 'readyrule' ignored",
-      "fno agents spawn: applied grid=grid effort(high) (routing), route=zai/glm-x (difficulty-grid), grid=codex/gpt-acct-x (difficulty-grid)"
+      "fno agents spawn: applied grid=grid effort(high) (routing), harness=codex (routing), route=zai/glm-x (difficulty-grid), grid=codex/gpt-acct-x (difficulty-grid)"
     ],
     "stdout": null
   },

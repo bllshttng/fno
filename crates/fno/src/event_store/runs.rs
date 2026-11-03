@@ -24,7 +24,7 @@ pub struct RunFilter {
 /// The run key both writers and the import share: `fno_id`, else
 /// `session_id`, else the backstop's node and PR for rows that predate
 /// scalar ids.
-fn run_key(run: &Value) -> Option<String> {
+pub(crate) fn run_key(run: &Value) -> Option<String> {
     for field in ["fno_id", "session_id"] {
         if let Some(id) = run.get(field).and_then(Value::as_str) {
             if !id.is_empty() {
@@ -44,6 +44,16 @@ fn run_key(run: &Value) -> Option<String> {
         return None;
     }
     Some(format!("{node}\u{1f}{pr}"))
+}
+
+/// The `data.run` object of one stored envelope line: the parse the fold
+/// and the history import share.
+pub(crate) fn run_from_line(line: &str) -> Option<Value> {
+    let parsed: Value = serde_json::from_str(line).ok()?;
+    parsed
+        .pointer("/data/run")
+        .filter(|v| v.is_object())
+        .cloned()
 }
 
 fn run_matches(run: &Value, filter: &RunFilter) -> bool {
@@ -89,13 +99,10 @@ fn fold_rows(rows: &[EventRow], filter: &RunFilter) -> Result<Vec<Value>, String
     let mut order: Vec<String> = Vec::new();
     let mut imported: Vec<(String, i64, Value)> = Vec::new();
     for row in rows {
-        let Ok(line) = serde_json::from_str::<Value>(&row.line) else {
+        let Some(run) = run_from_line(&row.line) else {
             continue;
         };
-        let Some(run) = line.pointer("/data/run").filter(|v| v.is_object()) else {
-            continue;
-        };
-        let Some(key) = run_key(run) else {
+        let Some(key) = run_key(&run) else {
             continue;
         };
         if row.r#type == "run_recorded" {

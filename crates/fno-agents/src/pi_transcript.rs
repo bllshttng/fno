@@ -149,7 +149,7 @@ impl TranscriptSource for PiSource {
 /// assistant row carrying a `tool_use` block so the shared counter sees it.
 /// Every other row shape (`session`, `model_change`,
 /// `thinking_level_change`, `bashExecution`) renders nothing.
-fn render(raw: &str) -> String {
+pub(crate) fn render(raw: &str) -> String {
     let mut out = String::new();
     for line in raw.lines() {
         let Ok(row) = serde_json::from_str::<Value>(line) else {

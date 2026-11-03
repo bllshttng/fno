@@ -332,6 +332,10 @@ fn pr_number(entry: &Value) -> Option<u64> {
 /// a fleet hold leaves GitHub's own queue free to merge the held PR
 /// server-side, the exact outcome the hold exists to prevent.
 pub(crate) fn disarm_automerge(pr: u64) -> String {
+    // A unit test's fixture PR number is a real PR in the repo the test runs in.
+    if cfg!(test) {
+        return "skipped: unit test".to_string();
+    }
     match std::process::Command::new("gh")
         .args(["pr", "merge", &pr.to_string(), "--disable-auto"])
         .output()

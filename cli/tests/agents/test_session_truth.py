@@ -298,7 +298,7 @@ def test_transcript_age_degrades_out_of_range_epoch_as_a_pair(monkeypatch, tmp_p
         transcript_path = str(tmp_path / "store.db")
 
     monkeypatch.setattr(
-        "fno.provenance.resolver.resolve_transcript", lambda *a, **k: _RT()
+        "fno.rust_binary.resolve_transcript", lambda *a, **k: _RT()
     )
 
     assert session_truth._transcript_age_s("opencode", "s", "/c", None, None, None) == (
@@ -485,7 +485,9 @@ def test_observed_model_escalates_past_an_inconclusive_tail(tmp_path):
     a window we never looked past would call a healthy worker unhealthy -- the
     exact wrong diagnosis this reading exists to prevent.
     """
-    from fno.provenance.observed import _MODEL_TAIL_BYTES, observed_model
+    from fno.agents.session_truth import observed_model
+
+    _MODEL_TAIL_BYTES = 256 * 1024  # the native reader's tail window
 
     path = tmp_path / "rollout.jsonl"
     context = json.dumps({"type": "turn_context", "payload": {"model": "gpt-5.6-sol"}})
@@ -678,9 +680,9 @@ def test_a_raising_refusal_classifier_never_breaks_the_liveness_read(tmp_path, m
     session = SimpleNamespace(agent="claude", session_id=sid, cwd=cwd, short_id=sid[:8])
 
     def boom(*_a, **_k):
-        raise RuntimeError("taxonomy blew up")
+        raise RuntimeError("the fno-agents binary was not found")
 
-    monkeypatch.setattr("fno.adapters.providers.error_taxonomy.normalize", boom)
+    monkeypatch.setattr("fno.rust_binary.command_call", boom)
 
     result = resolve_session_truth(
         "w1", resolve=_resolver(session), projects_root=tmp_path

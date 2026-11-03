@@ -1,0 +1,8 @@
+# Labelled cases for the golden-answer-the-question grader. Read by report --check-metrics.
+cases:
+  - {id: yes, label: good, files: {"reply.md": "Yes, zero code so far.\n"}}
+  - {id: zero, label: good, files: {"reply.md": "Zero. I only read files.\n"}}
+  - {id: no-code, label: good, files: {"reply.md": "No code yet: the tree is clean.\n"}}
+  - {id: preamble, label: bad, files: {"reply.md": "I have been reading the plan closely.\nSo yes.\n"}}
+  - {id: deflect, label: bad, files: {"reply.md": "Great progress on understanding the system.\n"}}
+  - {id: no-file, label: bad, files: {}}

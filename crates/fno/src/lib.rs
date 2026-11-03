@@ -86,6 +86,7 @@ mod doctor_update_tests;
 pub mod effect_map;
 #[cfg(feature = "full")]
 pub mod event_cli;
+mod event_corrections;
 #[cfg(feature = "full")]
 mod event_signals;
 #[cfg(feature = "full")]
@@ -131,7 +132,6 @@ pub mod link;
 pub mod lint_cli;
 #[cfg(feature = "full")]
 pub mod live_store_fence;
-#[cfg(feature = "full")]
 pub mod menu_caps;
 #[cfg(feature = "full")]
 pub mod messages_model;
@@ -184,6 +184,8 @@ pub mod paths_route;
 #[cfg(feature = "full")]
 pub mod popup;
 #[cfg(feature = "full")]
+pub mod pr_diff;
+#[cfg(feature = "full")]
 pub mod process_admission;
 pub mod product_boundary;
 #[cfg(feature = "full")]
@@ -205,6 +207,8 @@ pub mod registry_label;
 pub mod registry_read;
 #[cfg(feature = "full")]
 pub mod remote_target;
+#[cfg(feature = "full")]
+pub mod repo_lint;
 #[cfg(feature = "full")]
 pub mod restore_gate;
 #[cfg(feature = "full")]
@@ -298,7 +302,11 @@ pub mod vt;
 #[cfg(feature = "full")]
 pub mod web;
 #[cfg(feature = "full")]
+pub(crate) mod web_answer;
+#[cfg(feature = "full")]
 pub(crate) mod web_command;
+#[cfg(feature = "full")]
+pub(crate) mod web_invites;
 #[cfg(feature = "full")]
 pub(crate) mod web_trace;
 #[cfg(feature = "full")]

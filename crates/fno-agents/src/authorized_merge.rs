@@ -366,6 +366,11 @@ pub struct ChecksRead {
     pub rerun_recovered: Option<bool>,
     /// The check names the rerun recovered from, for the hold's own reason.
     pub rerun_failures: Option<Vec<String>>,
+    /// Some(why) when the evals gate reads red at this head. Eval red and CI
+    /// red are separate facts: the CI verdict judges CI alone (a red gate can
+    /// no longer turn the verdict red and cancel the head's runs), and the
+    /// merge holds on this field instead.
+    pub evals_gate_red: Option<String>,
 }
 
 /// The outside world, injectable so the decision is testable without a network.
@@ -936,6 +941,18 @@ fn decide_observed<P: Probes>(
                 })
             }
         }
+        // A red evals gate holds the merge while CI may be green: the gate is
+        // its own fact now, so it owns its hold. Held, never Failed: the
+        // cause and clearing command are the daemon's own words, and a
+        // `gate-retry` clears without a code push.
+        if let Some(description) = &checks.evals_gate_red {
+            return Err(Outcome::Held {
+                reason: format!(
+                    "evals gate red at this head: {description} \
+                     CI is judged separately; its runs were never the gate's."
+                ),
+            });
+        }
     }
 
     let strategy = probes.strategy(cwd);
@@ -1132,6 +1149,7 @@ pub fn preview_walk<P: Probes>(probes: &P, request: &Request, facts: &PrFacts) -
             optional_unresolved: request.supplied_optional_unresolved,
             rerun_recovered: request.supplied_rerun_recovered,
             rerun_failures: None,
+            evals_gate_red: None,
         },
         None => probes.checks_read(cwd, facts.number),
     });
@@ -1214,6 +1232,20 @@ pub fn preview_walk<P: Probes>(probes: &P, request: &Request, facts: &PrFacts) -
             ));
         } else {
             blockers.push(Blocker::refused(word.as_str(), detail));
+        }
+    }
+
+    // (9b) the evals gate, beside the verdict: its own fact owns its
+    // blocker, the way the effect path holds on it after the verdict match.
+    if request.require_checks {
+        if let Some(description) = &checks.evals_gate_red {
+            blockers.push(Blocker::held(
+                "evals_gate_red",
+                format!(
+                    "evals gate red at this head: {description} \
+                     CI is judged separately; its runs were never the gate's."
+                ),
+            ));
         }
     }
 
@@ -1474,8 +1506,8 @@ fn authority_refusal<P: Probes>(
     if !env_grant && !probes.auto_merge_enabled(cwd) {
         return Some((
             "auto_merge_disabled",
-            "auto_merge disabled (live config resolves auto_merge.enabled=false); sanctioned \
-             override (operator levers): `fno config set auto_merge.enabled true`, or start the \
+            "auto_merge disabled (live config resolves auto_merge.enabled=false, or autonomy.mode holds merge); sanctioned \
+             override (operator levers): `fno config set auto_merge.enabled true` plus an autonomy.mode that allows merge, or start the \
              run with TARGET_AUTO_MERGE=1 from the operator's shell"
                 .to_string(),
         ));
@@ -2246,6 +2278,7 @@ fn parse_checks_read(stdout: &[u8]) -> ChecksRead {
         optional_unresolved: None,
         rerun_recovered: None,
         rerun_failures: None,
+        evals_gate_red: None,
     };
     let Ok(v) = serde_json::from_slice::<Value>(stdout) else {
         return unknown;
@@ -2304,12 +2337,22 @@ fn parse_checks_read(stdout: &[u8]) -> ChecksRead {
                 _ => source(),
             }
         });
+    let evals_gate_red = v.get("evals_gate").and_then(|fact| {
+        let state = fact.get("state").and_then(Value::as_str).unwrap_or("");
+        matches!(state, "FAILURE" | "ERROR").then(|| {
+            fact.get("description")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string()
+        })
+    });
     ChecksRead {
         verdict,
         github_block,
         optional_unresolved,
         rerun_recovered,
         rerun_failures,
+        evals_gate_red,
     }
 }
 

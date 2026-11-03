@@ -865,7 +865,11 @@ fn validate_answer(req: &ValidateRequest) -> Value {
             Some("the statement is coordination, not durable law".to_string())
         } else if let Some(sup) = req.supersedes.as_deref() {
             if !is_decision_id(sup) {
-                Some("supersedes must be a decision id".to_string())
+                Some(if crate::numbers::resolve('d', sup).is_none() {
+                    crate::numbers::unresolved(sup)
+                } else {
+                    "supersedes must be a decision id".to_string()
+                })
             } else if matches_node_id_shape(req.subject.trim().to_lowercase().as_str())
                 || is_pr_subject(req.subject.trim().to_lowercase().as_str())
             {
@@ -1125,13 +1129,14 @@ pub(crate) fn settings_sources() -> Vec<std::path::PathBuf> {
 /// names what failed, because a row stamped with a guessed project is worse
 /// than a row not written.
 fn record_scope_answer(req: RecordScopeRequest) -> Value {
-    record_scope_answer_in(None, &settings_sources(), req.r#global, &req.paths)
+    let widen = req.r#global.then_some(Widen::Global);
+    record_scope_answer_in(None, &settings_sources(), widen.as_ref(), &req.paths)
 }
 
 fn record_scope_answer_in(
     cwd: Option<&std::path::Path>,
     sources: &[std::path::PathBuf],
-    is_global: bool,
+    widen: Option<&Widen>,
     raw_paths: &[String],
 ) -> Value {
     // The globs ride the door's validation: split, trim, drop empties, then
@@ -1148,20 +1153,61 @@ fn record_scope_answer_in(
             });
         }
     }
-    if is_global {
-        if paths.is_empty() {
-            return json!({"ok": true, "scope": "global"});
+    let scope = match widen {
+        Some(Widen::Global) => "global".to_string(),
+        Some(Widen::Machine(named)) => {
+            let id = named.clone().unwrap_or_else(crate::claims::machine_id);
+            if id.is_empty() {
+                return json!({
+                    "ok": false,
+                    "refusal": "this machine has no readable machine id; name one with --machine=<id>"
+                });
+            }
+            format!("machine:{id}")
         }
-        return json!({"ok": true, "scope": "global", "paths": paths});
+        Some(Widen::Person(named)) => {
+            format!(
+                "person:{}",
+                named.clone().unwrap_or_else(crate::identity::person)
+            )
+        }
+        None => match resolve_project(cwd, sources) {
+            Ok(slug) => format!("project:{slug}"),
+            Err(reason) => {
+                return json!({
+                    "ok": false,
+                    "refusal": format!(
+                        "no project stamps this law ({reason}); pass --global, --machine or --person to widen"
+                    )
+                })
+            }
+        },
+    };
+    if paths.is_empty() {
+        return json!({"ok": true, "scope": scope});
     }
-    match resolve_project(cwd, sources) {
-        Ok(slug) if paths.is_empty() => json!({"ok": true, "scope": format!("project:{slug}")}),
-        Ok(slug) => json!({"ok": true, "scope": format!("project:{slug}"), "paths": paths}),
-        Err(reason) => json!({
-            "ok": false,
-            "refusal": format!("no project stamps this law ({reason}); pass --global to widen")
-        }),
+    json!({"ok": true, "scope": scope, "paths": paths})
+}
+
+/// The person gate (user ruling d-2a01fdf1): a law that reaches past this
+/// machine's own person needs a stated `fleet.owner` first. That is `global`,
+/// or a `machine:` or `person:` scope naming someone else. A stated name is
+/// presence, never proof, so the gate stops a mistake and never an attacker.
+fn wide_scope_refusal(scope: &str) -> Option<String> {
+    let names_another = match scope.split_once(':') {
+        Some(("machine", id)) => id != crate::claims::machine_id(),
+        Some(("person", name)) => name != crate::identity::person(),
+        _ => scope == "global",
+    };
+    if !names_another || crate::identity::stated_person().is_some() {
+        return None;
     }
+    Some(format!(
+        "a {scope} law binds more than this machine's own person, and no person is \
+         stated. Set `[fleet] owner = \"<name>\"` in ~/.fno/config.toml by hand \
+         (`fno config set` refuses that key), then record again. A project law, \
+         a bare --machine and a bare --person need no name"
+    ))
 }
 
 /// The `list_decisions` scope filter: law-lane rows outside the session's
@@ -1183,34 +1229,33 @@ fn scope_split_answer_in(
     sources: &[std::path::PathBuf],
     req: ScopeSplitRequest,
 ) -> Value {
-    let project = resolve_project(cwd, sources);
+    let project = match resolve_project(cwd, sources) {
+        Ok(slug) => Some(slug),
+        // Fail open on the project with a named reason: losing a law is
+        // worse than seeing one that does not apply (d-0fa92eb9's posture).
+        // The reason rides stderr, not the note, so a caller's labels stay
+        // byte-stable.
+        Err(reason) => {
+            eprintln!("fno inbox law: project unresolvable ({reason}); no project law hidden");
+            None
+        }
+    };
     let mut kept = Vec::new();
     let mut hidden = 0usize;
-    match project {
-        Ok(slug) => {
-            for row in req.rows {
-                let is_law = row.get("lane").and_then(Value::as_str) == Some("law");
-                if is_law && !decision_index::row_in_scope(&row, &slug) {
-                    hidden += 1;
-                } else {
-                    kept.push(row);
-                }
-            }
-            let note = if hidden > 0 {
-                format!(" (hid {hidden} out-of-scope)")
-            } else {
-                String::new()
-            };
-            json!({"ok": true, "kept": kept, "hidden": hidden, "note": note})
-        }
-        // Fail open with a named reason: losing a law is worse than seeing
-        // one that does not apply (d-0fa92eb9's posture). The reason rides
-        // stderr, not the note, so a caller's labels stay byte-stable.
-        Err(reason) => {
-            eprintln!("fno inbox law: project unresolvable ({reason}); nothing hidden");
-            json!({"ok": true, "kept": req.rows, "hidden": 0, "note": ""})
+    for row in req.rows {
+        let is_law = row.get("lane").and_then(Value::as_str) == Some("law");
+        if is_law && !decision_index::row_visible(&row, project.as_deref()) {
+            hidden += 1;
+        } else {
+            kept.push(row);
         }
     }
+    let note = if hidden > 0 {
+        format!(" (hid {hidden} out-of-scope)")
+    } else {
+        String::new()
+    };
+    json!({"ok": true, "kept": kept, "hidden": hidden, "note": note})
 }
 
 // ---------------------------------------------------------------------------
@@ -1238,11 +1283,21 @@ pub(crate) struct RecordDoor {
     graduation: Option<String>,
     graduation_ref: Option<String>,
     reads: Vec<String>,
-    is_global: bool,
+    widen: Option<Widen>,
     raw_paths: Vec<String>,
+    quote: Option<String>,
 }
 
-const RECORD_USAGE: &str = "usage: fno inbox law set <subject> [decision] [--decision-file f|-] [--rationale s] [--option s]... [--supersedes d-x] [--graduation k] [--graduation-ref r] [--read cmd]... [--global] [--paths glob,glob]";
+/// A law's scope past the recording project, from one door flag. `None` in
+/// an identity arm names this machine or this person.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum Widen {
+    Global,
+    Machine(Option<String>),
+    Person(Option<String>),
+}
+
+const RECORD_USAGE: &str = "usage: fno inbox law set <subject> [decision] [--decision-file f|-] [--rationale s] [--option s]... [--supersedes d-x] [--graduation k] [--graduation-ref r] [--read cmd]... [--global | --machine[=<id>] | --person[=<name>]] [--paths glob,glob] [--quote <the user's words>]";
 const RETRACT_USAGE: &str = "usage: fno inbox law retract <subject-or-decision-id> --reason <why> [--authority operator|chat_attested] [--quote <the user's words>]";
 const HISTORY_USAGE: &str = "usage: fno inbox law history <subject-or-decision-id>";
 
@@ -1257,9 +1312,11 @@ fn parse_record_door(args: &[String]) -> Result<RecordDoor, String> {
         graduation: None,
         graduation_ref: None,
         reads: Vec::new(),
-        is_global: false,
+        widen: None,
         raw_paths: Vec::new(),
+        quote: None,
     };
+    let mut widened_by: Vec<String> = Vec::new();
     let mut positional = 0usize;
     let mut i = 0usize;
     while i < args.len() {
@@ -1280,18 +1337,37 @@ fn parse_record_door(args: &[String]) -> Result<RecordDoor, String> {
             "--decision-file" => door.decision_file = Some(take(&mut i)?),
             "--rationale" => door.rationale = Some(take(&mut i)?),
             "--option" => door.options.push(take(&mut i)?),
-            "--supersedes" => door.supersedes = Some(take(&mut i)?),
+            "--supersedes" => {
+                let typed = take(&mut i)?;
+                door.supersedes = Some(crate::numbers::resolve('d', &typed).unwrap_or(typed));
+            }
             "--graduation" => door.graduation = Some(take(&mut i)?),
             "--graduation-ref" => door.graduation_ref = Some(take(&mut i)?),
             "--read" => door.reads.push(take(&mut i)?),
             "--paths" => door.raw_paths.push(take(&mut i)?),
+            "--quote" => door.quote = Some(take(&mut i)?),
             "--global" => {
                 // An inline value parses like a bool flag should: --global=false
                 // must never widen because the value was ignored.
-                door.is_global = match inline.as_deref() {
+                let on = match inline.as_deref() {
                     None => true,
                     Some(v) => matches!(v.to_ascii_lowercase().as_str(), "true" | "1" | "yes"),
                 };
+                if on {
+                    door.widen = Some(Widen::Global);
+                    widened_by.push(flag.clone());
+                }
+            }
+            // A bare identity flag never takes the next argv word: it names
+            // this machine or person, and only `=<value>` names another.
+            "--machine" | "--person" => {
+                let named = inline.clone().filter(|v| !v.trim().is_empty());
+                door.widen = Some(if flag == "--machine" {
+                    Widen::Machine(named)
+                } else {
+                    Widen::Person(named)
+                });
+                widened_by.push(flag.clone());
             }
             f if f.starts_with('-') && f != "-" => {
                 return Err(format!("no such option: {f}\n{RECORD_USAGE}"));
@@ -1311,6 +1387,12 @@ fn parse_record_door(args: &[String]) -> Result<RecordDoor, String> {
     }
     if positional == 0 {
         return Err(format!("subject is required\n{RECORD_USAGE}"));
+    }
+    if widened_by.len() > 1 {
+        return Err(format!(
+            "one law takes one scope flag, and this one got {}\n{RECORD_USAGE}",
+            widened_by.join(" and ")
+        ));
     }
     Ok(door)
 }
@@ -1618,7 +1700,35 @@ fn run_record_door(args: &[String], stdin_text: &str) -> i32 {
         Ok(c) => c,
         Err(message) => return door_refuse(&message),
     };
+    if let Err(message) = autonomy_ask_gate(&caller, door.quote.as_deref(), &policy_cwd()) {
+        return door_refuse(&message);
+    }
     record_door_write(door, decision, &caller)
+}
+
+fn policy_cwd() -> std::path::PathBuf {
+    std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+}
+
+/// Process ancestry cannot tell a user's `/fno:law` from an agent's own Bash
+/// call, so where `autonomy.mode` asks, the user's words are the recorded ask.
+/// They never change the row's authority: it stays `chat_attested`.
+pub(crate) fn autonomy_ask_gate(
+    caller: &Caller,
+    quote: Option<&str>,
+    cwd: &std::path::Path,
+) -> Result<(), String> {
+    if caller.authority != "chat_attested"
+        || quote.is_some_and(|q| !q.trim().is_empty())
+        || !crate::autonomy_policy::law_needs_quote(cwd)
+    {
+        return Ok(());
+    }
+    Err(
+        "autonomy.mode asks the user before a session writes law: ask the user, \
+then pass --quote \"<the user's words>\""
+            .to_string(),
+    )
 }
 
 /// The argv parse, the decision text, and the statement validator: the gates
@@ -1673,8 +1783,12 @@ pub(crate) fn record_door_write(door: RecordDoor, decision: String, caller: &Cal
         relayed_by,
     } = caller;
     // The scope stamp with the widening and the globs validated at the door.
-    let scope_answer =
-        record_scope_answer_in(None, &settings_sources(), door.is_global, &door.raw_paths);
+    let scope_answer = record_scope_answer_in(
+        None,
+        &settings_sources(),
+        door.widen.as_ref(),
+        &door.raw_paths,
+    );
     if scope_answer.get("ok") != Some(&json!(true)) {
         let message = scope_answer
             .get("refusal")
@@ -1687,6 +1801,9 @@ pub(crate) fn record_door_write(door: RecordDoor, decision: String, caller: &Cal
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string();
+    if let Some(refusal) = wide_scope_refusal(&scope) {
+        return door_refuse(&refusal);
+    }
     let paths: Vec<Value> = scope_answer
         .get("paths")
         .and_then(Value::as_array)
@@ -1834,6 +1951,9 @@ pub(crate) fn record_door_write(door: RecordDoor, decision: String, caller: &Cal
             data["rationale"] = json!(text_cap(rationale, 2000));
         }
     }
+    if let Some(quote) = door.quote.as_deref().filter(|q| !q.trim().is_empty()) {
+        data["quote"] = json!(text_cap(quote, 2000));
+    }
     if let Some(sup) = &supersedes {
         data["supersedes"] = json!(sup);
     }
@@ -1919,7 +2039,9 @@ pub(crate) fn append_decision(envelope: &Value, decision_id: &str) -> Result<(),
     ) {
         eprintln!(
             "decide: recorded {decision_id}, but the graph store refused the \
-             ruling ({e:?}). The decision is durable in the journal and the index."
+             ruling ({}). The decision is durable in the journal and the index. {}.",
+            e.0,
+            crate::decide_door::GRAPH_RETRY
         );
     }
     Ok(())
@@ -2030,19 +2152,19 @@ pub(crate) fn all_decision_rows() -> Result<(Vec<Value>, usize), String> {
     )
 }
 
-/// The rows this caller's project may address: global plus the current
-/// project, the stage view. Unresolvable fails open, matching
-/// `retain_in_scope` semantics.
+/// The rows the retract, restore and history doors may address: global, the
+/// current project, and every machine or person law. Those doors manage law
+/// rather than apply it, so the owner reaches a law bound to another machine,
+/// or to a mistyped id that binds nowhere, from any machine. An unresolvable
+/// project fails open, as every reader does.
 pub(crate) fn scope_filtered_rows(rows: Vec<Value>) -> Vec<Value> {
-    match resolve_project(None, &settings_sources()) {
-        Ok(slug) => rows
-            .into_iter()
-            .filter(|r| decision_index::row_in_scope(r, &slug))
-            .collect(),
-        // Unresolvable fails open: nothing hidden, matching
-        // `retain_in_scope`.
-        Err(_) => rows,
-    }
+    let project = resolve_project(None, &settings_sources()).ok();
+    rows.into_iter()
+        .filter(|r| {
+            decision_index::binds_here(decision_index::row_scope(r)).is_some()
+                || decision_index::row_visible(r, project.as_deref())
+        })
+        .collect()
 }
 
 fn run_retract_door(argv: &[String]) -> i32 {
@@ -2146,6 +2268,8 @@ fn retract_target(
     stated_authority: Option<&str>,
     near_misses: impl Fn(&str, &[Value], bool) -> Vec<String>,
 ) -> Result<Value, String> {
+    let token =
+        &crate::numbers::resolve('d', token).ok_or_else(|| crate::numbers::unresolved(token))?;
     if is_decision_id(token) {
         let want = token.to_lowercase();
         let row = rows
@@ -2408,7 +2532,8 @@ fn write_retraction(
         RetractOutcome::GraphRefused(e) => {
             eprintln!(
                 "{label}: retracted {decision_id}, but the graph store refused \
-                 the retraction ({e}). The retraction is durable in the journal and the index."
+                 the retraction ({e}). The retraction is durable in the journal and the index. {}.",
+                crate::decide_door::GRAPH_RETRY
             );
             println!("{decision_id}");
             eprintln!(
@@ -2454,7 +2579,9 @@ fn run_history_read(argv: &[String]) -> i32 {
         }
     };
     let rows = scope_filtered_rows(rows);
-    let answer = history_answer(door.token.trim(), &rows);
+    let token = crate::numbers::resolve('d', door.token.trim())
+        .unwrap_or_else(|| door.token.trim().to_string());
+    let answer = history_answer(&token, &rows);
     if answer
         .get("chain")
         .and_then(Value::as_array)
@@ -2636,10 +2763,8 @@ fn graduated_retraction_lines_in(
     // open, matching `retain_in_scope`.
     let mut lines = Vec::new();
     for row in &index.rows {
-        if let Some(slug) = scope_project {
-            if !decision_index::row_in_scope(row, slug) {
-                continue;
-            }
+        if !decision_index::row_visible(row, scope_project) {
+            continue;
         }
         let Some(grad) = row.get("graduation") else {
             continue;
@@ -3175,7 +3300,7 @@ pub(crate) mod scope_tests {
         let answer = record_scope_answer_in(
             Some(&tmp.path().join("nowhere")),
             &sources(tmp.path()),
-            false,
+            None,
             &[],
         );
         assert_eq!(answer["ok"], false);
@@ -3193,7 +3318,7 @@ pub(crate) mod scope_tests {
         let answer = record_scope_answer_in(
             Some(&cwd),
             &sources(tmp.path()),
-            false,
+            None,
             &["crates/**, hooks/*.sh".to_string(), "  ".to_string()],
         );
         assert_eq!(answer["ok"], true);
@@ -3204,7 +3329,7 @@ pub(crate) mod scope_tests {
         );
         for bad in ["/etc/**", "../x/**"] {
             let answer =
-                record_scope_answer_in(Some(&cwd), &sources(tmp.path()), false, &[bad.to_string()]);
+                record_scope_answer_in(Some(&cwd), &sources(tmp.path()), None, &[bad.to_string()]);
             assert_eq!(answer["ok"], false, "{bad}");
             assert!(
                 answer["refusal"].as_str().expect("refusal").contains(bad),
@@ -3226,9 +3351,37 @@ pub(crate) mod scope_tests {
             graduation: None,
             graduation_ref: None,
             reads: Vec::new(),
-            is_global: false,
+            widen: None,
             raw_paths: Vec::new(),
+            quote: None,
         }
+    }
+
+    #[test]
+    fn autonomy_ask_gate_needs_the_users_words_only_from_a_session() {
+        let _guard = DOOR_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".fno")).unwrap();
+        let config = dir.path().join(".fno/config.toml");
+        std::env::set_var("FNO_CONFIG", &config);
+        let chat = Caller::as_authority("chat_attested");
+        let operator = Caller::as_authority("operator");
+        let outcomes = |body: &str| {
+            std::fs::write(&config, body).unwrap();
+            (
+                autonomy_ask_gate(&chat, None, dir.path()).is_ok(),
+                autonomy_ask_gate(&chat, Some("  "), dir.path()).is_ok(),
+                autonomy_ask_gate(&chat, Some("record it"), dir.path()).is_ok(),
+                autonomy_ask_gate(&operator, None, dir.path()).is_ok(),
+            )
+        };
+        let balanced = outcomes("");
+        let yolo = outcomes("[autonomy]\nmode = \"yolo\"\n");
+        let ask_allowed = outcomes("[autonomy]\nmode = \"ask\"\nallow = [\"law\"]\n");
+        std::env::remove_var("FNO_CONFIG");
+        assert_eq!(balanced, (false, false, true, true));
+        assert_eq!(yolo, (true, true, true, true));
+        assert_eq!(ask_allowed, (true, true, true, true));
     }
 
     /// Hermetic state for a door write: tmp FNO_HOME (index, questions,
@@ -3327,6 +3480,64 @@ pub(crate) mod scope_tests {
             journal.contains("Merges belong to the operator"),
             "{journal}"
         );
+    }
+
+    #[test]
+    fn one_scope_flag_per_law_and_a_wide_one_needs_a_stated_owner() {
+        let argv = |words: &[&str]| words.iter().map(|w| w.to_string()).collect::<Vec<_>>();
+        let Err(two) = parse_record_door(&argv(&["s", "d", "--global", "--machine"])) else {
+            panic!("two scope flags parse");
+        };
+        assert!(two.contains("--global and --machine"), "{two}");
+        let bare = parse_record_door(&argv(&["s", "--person", "d"])).expect("parses");
+        assert_eq!(bare.widen, Some(Widen::Person(None)));
+        assert_eq!(
+            bare.decision.as_deref(),
+            Some("d"),
+            "a bare flag takes no value"
+        );
+
+        let env = DoorEnv::new();
+        crate::paths::pin_test_claims_root(env.0.path());
+        let operator = Caller::as_authority("operator");
+        let record = |text: &str, widen: Option<Widen>| {
+            let mut d = door(text, text);
+            d.widen = widen;
+            record_door_write(d, text.to_string(), &operator)
+        };
+        // No fleet.owner: global refuses and no store holds the row.
+        assert_eq!(record("wide-one", Some(Widen::Global)), 3);
+        assert!(!env.index_text().contains("wide-one"));
+        assert!(!env.journal_text().contains("wide-one"));
+        let other = Some(Widen::Person(Some("nobody-zz9".into())));
+        assert_eq!(record("other-one", other), 3, "another person is wide too");
+        // A project law and this machine's own scope need no name.
+        assert_eq!(record("project-one", None), 0);
+        let mine = crate::claims::machine_id();
+        let own = record("machine-one", Some(Widen::Machine(None)));
+        assert_eq!(
+            own,
+            if mine.is_empty() { 3 } else { 0 },
+            "machine id {mine:?}"
+        );
+        if !mine.is_empty() {
+            let want = format!("\"scope\":\"machine:{mine}\"");
+            assert!(env.index_text().contains(&want), "{}", env.index_text());
+        }
+        // A stated owner opens the wide scopes.
+        std::fs::write(
+            env.1.path().join("config.toml"),
+            "[fleet]\nowner = \"jason\"\n",
+        )
+        .expect("writes");
+        assert_eq!(record("wide-two", Some(Widen::Global)), 0);
+        assert!(env.index_text().contains("\"scope\":\"global\""));
+        // A law bound to a person nobody resolves stays addressable here.
+        let typo = Some(Widen::Person(Some("nobody-zz9".into())));
+        assert_eq!(record("typo-one", typo), 0);
+        let (rows, _) = all_decision_rows().expect("the store reads");
+        let addressable = scope_filtered_rows(rows);
+        assert!(addressable.iter().any(|r| r["subject"] == "typo-one"));
     }
 
     #[test]

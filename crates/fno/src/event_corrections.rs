@@ -1,0 +1,697 @@
+//! `fno doctor event corrections`: correction rates per model or harness, the
+//! three correctors kept apart, and the precision read of a labels file.
+//!
+//! No total crosses the three sources: machine rows outnumber user rows by
+//! about 17 to 1, so a sum would bury the signal this report exists to show.
+
+use serde_json::{json, Value};
+use std::collections::{BTreeMap, BTreeSet};
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
+
+const SOURCES: [&str; 3] = ["user", "agent", "machine"];
+/// The floor a source must clear before a reader may trust it.
+const FLOOR_POINT: f64 = 0.80;
+const FLOOR_LOWER: f64 = 0.70;
+/// The five labelled sources the precision test draws.
+const PRECISION_SOURCES: [&str; 5] = [
+    "user/correct",
+    "user/reject",
+    "user/interrupt",
+    "agent/correct",
+    "machine/refused",
+];
+
+const HELP: &str = "Usage: fno doctor event corrections [OPTIONS]
+
+  Correction rates per model, harness, seat or day: user, agent and machine apart.
+
+Options:
+  --by <model|harness|role|day>  Group the rows. role is the corrected seat. [default: model]
+  --since <7d|ISO-8601>       Lower timestamp bound. [default: 7d, or 30d with --by day]
+  --source <user|agent|machine>  Print one source.
+  --include-interrupt         Count interrupts, which reports exclude by default.
+  --precision <file>          Print precision and a Wilson interval from a labels file.
+  --events <path>             Read this journal.
+  -J, --json                  Emit one structured result.
+  --help                      Show this message and exit.
+";
+
+struct Args {
+    by: String,
+    since: String,
+    source: Option<String>,
+    include_interrupt: bool,
+    precision: Option<PathBuf>,
+    journal: Option<PathBuf>,
+    json: bool,
+}
+
+fn parse(args: &[OsString]) -> Result<Option<Args>, String> {
+    let mut since = None;
+    let mut out = Args {
+        by: "model".into(),
+        since: String::new(),
+        source: None,
+        include_interrupt: false,
+        precision: None,
+        journal: None,
+        json: false,
+    };
+    let mut it = args.iter().map(|a| a.to_string_lossy().into_owned());
+    while let Some(tok) = it.next() {
+        let (flag, inline) = match tok.split_once('=') {
+            Some((f, v)) if f.starts_with("--") => (f.to_string(), Some(v.to_string())),
+            _ => (tok, None),
+        };
+        let mut value = |name: &str| {
+            inline
+                .clone()
+                .or_else(|| it.next())
+                .ok_or(format!("{name} needs a value"))
+        };
+        match flag.as_str() {
+            "--help" => return Ok(None),
+            "--by" => out.by = value("--by")?,
+            "--since" => since = Some(value("--since")?),
+            "--source" => out.source = Some(value("--source")?),
+            "--precision" => out.precision = Some(PathBuf::from(value("--precision")?)),
+            "--events" => out.journal = Some(PathBuf::from(value("--events")?)),
+            "--include-interrupt" => out.include_interrupt = true,
+            "--json" | "-J" => out.json = true,
+            other => return Err(format!("unknown flag {other}")),
+        }
+    }
+    if !matches!(out.by.as_str(), "model" | "harness" | "role" | "day") {
+        return Err(format!(
+            "--by must be model, harness, role or day, not {}",
+            out.by
+        ));
+    }
+    out.since = since.unwrap_or_else(|| if out.by == "day" { "30d" } else { "7d" }.to_string());
+    if let Some(source) = out.source.as_deref().filter(|s| !SOURCES.contains(s)) {
+        return Err(format!(
+            "--source must be user, agent or machine, not {source}"
+        ));
+    }
+    Ok(Some(out))
+}
+
+fn since_ms(raw: &str, now_ms: i64) -> Result<i64, String> {
+    if let Some(days) = raw.strip_suffix('d').and_then(|d| d.parse::<i64>().ok()) {
+        return Ok(now_ms - days * 86_400_000);
+    }
+    chrono::DateTime::parse_from_rfc3339(raw)
+        .map(|d| d.timestamp_millis())
+        .map_err(|_| format!("--since must be like 7d or an ISO-8601 stamp, not {raw}"))
+}
+
+/// The group a row counts under. An unmeasured reading keeps its own bucket:
+/// it never folds into a named model.
+fn group_of(data: &Value, by: &str) -> String {
+    if by == "harness" {
+        return data
+            .get("harness")
+            .and_then(Value::as_str)
+            .unwrap_or("unmeasured")
+            .to_string();
+    }
+    match data.pointer("/model/value").and_then(Value::as_str) {
+        Some(model) => {
+            let basis = data
+                .pointer("/model/basis")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
+            format!("{model} ({basis})")
+        }
+        None => "unmeasured".to_string(),
+    }
+}
+
+#[derive(Default, Clone)]
+struct Tally {
+    correct: u64,
+    reject: u64,
+    interrupt: u64,
+    refused: u64,
+    unwitnessed: u64,
+    /// Correct and reject rows that carry their own seat: the only rows the
+    /// seat tally's turns also cover.
+    stamped: u64,
+    rule_versions: BTreeSet<String>,
+}
+
+impl Tally {
+    fn total(&self, include_interrupt: bool) -> u64 {
+        self.correct
+            + self.reject
+            + self.refused
+            + if include_interrupt { self.interrupt } else { 0 }
+    }
+}
+
+/// Typed turns per group since a day, from the fold's cache: the denominator
+/// of the user rate. Keys read `day|harness|model`.
+fn typed_turns(cache: &Path, by: &str, since_day: &str) -> BTreeMap<String, u64> {
+    let mut out = BTreeMap::new();
+    let Ok(text) = std::fs::read_to_string(cache) else {
+        return out;
+    };
+    let Ok(parsed) = serde_json::from_str::<Value>(&text) else {
+        return out;
+    };
+    let rows = parsed.get("typed_turns").and_then(Value::as_object);
+    for (key, n) in rows.into_iter().flatten() {
+        let mut parts = key.splitn(3, '|');
+        let (Some(day), Some(harness), Some(model)) = (parts.next(), parts.next(), parts.next())
+        else {
+            continue;
+        };
+        if day < since_day {
+            continue;
+        }
+        let group = match by {
+            "harness" => harness,
+            "day" => day,
+            _ => model,
+        };
+        *out.entry(group.to_string()).or_default() += n.as_u64().unwrap_or(0);
+    }
+    out
+}
+
+/// Typed turns per seat since a day. Keys read `day|seat`.
+fn seat_turns(cache: &Path, since_day: &str) -> BTreeMap<String, u64> {
+    let mut out = BTreeMap::new();
+    let parsed = std::fs::read_to_string(cache)
+        .ok()
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok());
+    let rows = parsed
+        .as_ref()
+        .and_then(|p| p.get("seat_turns"))
+        .and_then(Value::as_object);
+    for (key, n) in rows.into_iter().flatten() {
+        let Some((day, seat)) = key.split_once('|') else {
+            continue;
+        };
+        if day >= since_day {
+            *out.entry(seat.to_string()).or_default() += n.as_u64().unwrap_or(0);
+        }
+    }
+    out
+}
+
+/// Each backfilled row's seat, by correction id. These rows read whatever the
+/// report's window, because a seat row's stamp is its pass, not its turn.
+fn backfilled_seats(journal: &Path) -> Result<BTreeMap<String, String>, String> {
+    let query = crate::event_store::EventQuery {
+        types: vec!["correction_seat".into()],
+        ..Default::default()
+    };
+    let mut out = BTreeMap::new();
+    for row in crate::event_store::query_events(journal, &query)? {
+        let Ok(envelope) = serde_json::from_str::<Value>(&row.line) else {
+            continue;
+        };
+        let data = &envelope["data"];
+        let id = data.get("correction_id").and_then(Value::as_str);
+        let seat = data.pointer("/seat/value").and_then(Value::as_str);
+        if let (Some(id), Some(seat)) = (id, seat) {
+            out.insert(id.to_string(), seat.to_string());
+        }
+    }
+    Ok(out)
+}
+
+/// The UTC day of the fold's first run, from its cache.
+fn first_run_day(cache: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(cache).ok()?;
+    let parsed = serde_json::from_str::<Value>(&text).ok()?;
+    let first_run = parsed.get("first_run_epoch").and_then(Value::as_i64)?;
+    let day = chrono::DateTime::from_timestamp(first_run, 0)?;
+    Some(day.format("%Y-%m-%d").to_string())
+}
+
+/// How much of a day the fold read after the fact. A turn older than the fold's
+/// first run is backfilled, so that run's own day is part of each.
+fn day_backfill(day: &str, first_day: &str) -> Option<&'static str> {
+    match day.cmp(first_day) {
+        std::cmp::Ordering::Less => Some("backfilled"),
+        std::cmp::Ordering::Equal => Some("part backfilled"),
+        std::cmp::Ordering::Greater => None,
+    }
+}
+
+/// The tally key names the bare model; the report names it with its basis.
+fn bare_group(group: &str) -> &str {
+    group.split(" (").next().unwrap_or(group)
+}
+
+fn report(args: &Args, journal: &Path, cache: &Path) -> Result<Value, String> {
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let since = since_ms(&args.since, now_ms)?;
+    let query = crate::event_store::EventQuery {
+        types: vec!["agent_corrected".into()],
+        since_ms: Some(since),
+        ..Default::default()
+    };
+    let rows = crate::event_store::query_events(journal, &query)?;
+    let by_role = args.by == "role";
+    let backfilled = if by_role {
+        backfilled_seats(journal)?
+    } else {
+        BTreeMap::new()
+    };
+    let mut blocks: BTreeMap<String, BTreeMap<String, Tally>> = BTreeMap::new();
+    for row in &rows {
+        let Ok(envelope) = serde_json::from_str::<Value>(&row.line) else {
+            continue;
+        };
+        let data = &envelope["data"];
+        let source = data
+            .get("corrected_by")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let entry = blocks
+            .entry(source.to_string())
+            .or_default()
+            .entry(if args.by == "day" {
+                envelope["ts"]
+                    .as_str()
+                    .and_then(|t| t.get(..10))
+                    .unwrap_or("unmeasured")
+                    .to_string()
+            } else if by_role {
+                data.pointer("/seat/value")
+                    .and_then(Value::as_str)
+                    .or_else(|| {
+                        let id = data.get("correction_id").and_then(Value::as_str)?;
+                        backfilled.get(id).map(String::as_str)
+                    })
+                    .unwrap_or("unmeasured")
+                    .to_string()
+            } else {
+                group_of(data, &args.by)
+            })
+            .or_default();
+        if let Some(version) = data.get("rule_version").and_then(Value::as_str) {
+            entry.rule_versions.insert(version.to_string());
+        }
+        if data.get("typed").and_then(Value::as_str) == Some("unwitnessed") {
+            entry.unwitnessed += 1;
+        }
+        let kind = data.get("kind").and_then(Value::as_str);
+        if data.get("seat").is_some() && matches!(kind, Some("correct" | "reject")) {
+            entry.stamped += 1;
+        }
+        match kind {
+            Some("correct") => entry.correct += 1,
+            Some("reject") => entry.reject += 1,
+            Some("interrupt") => entry.interrupt += 1,
+            Some("refused") => entry.refused += 1,
+            _ => {}
+        }
+    }
+    let since_day = chrono::DateTime::from_timestamp_millis(since)
+        .map(|d| d.format("%Y-%m-%d").to_string())
+        .unwrap_or_default();
+    let turns = if by_role {
+        seat_turns(cache, &since_day)
+    } else {
+        typed_turns(cache, &args.by, &since_day)
+    };
+    // A day or seat with typed turns and no correction is a rate of zero, not a gap.
+    let by_day = args.by == "day";
+    let keep_quiet = by_day || by_role;
+    let first_day = if by_day { first_run_day(cache) } else { None };
+    if keep_quiet {
+        let user = blocks.entry("user".to_string()).or_default();
+        for group in turns.keys() {
+            user.entry(group.clone()).or_default();
+        }
+    }
+    let mut out = serde_json::Map::new();
+    for source in SOURCES {
+        if args.source.as_deref().is_some_and(|s| s != source) {
+            continue;
+        }
+        let mut groups = Vec::new();
+        if let Some(block) = blocks.get(source) {
+            for (group, t) in block {
+                let count = t.total(args.include_interrupt);
+                if count == 0 && !(keep_quiet && source == "user") {
+                    continue;
+                }
+                let mut row = json!({
+                    "group": group, "count": count, "correct": t.correct,
+                    "reject": t.reject, "refused": t.refused,
+                    "rule_versions": t.rule_versions,
+                });
+                if by_day {
+                    row["backfill"] =
+                        json!(first_day.as_deref().and_then(|d| day_backfill(group, d)));
+                }
+                if args.include_interrupt {
+                    row["interrupt"] = json!(t.interrupt);
+                }
+                // A rate over typed turns is meaningful for the user only.
+                if source == "user" {
+                    let typed = turns.get(bare_group(group)).copied().unwrap_or(0);
+                    row["typed_turns"] = json!(typed);
+                    row["unwitnessed"] = json!(t.unwitnessed);
+                    let hits = if by_role {
+                        t.stamped
+                    } else {
+                        t.correct.saturating_add(t.reject)
+                    };
+                    row["rate"] = if typed > 0 {
+                        json!(hits as f64 / typed as f64)
+                    } else {
+                        Value::Null
+                    };
+                }
+                groups.push(row);
+            }
+        }
+        out.insert(source.to_string(), Value::Array(groups));
+    }
+    Ok(json!({"by": args.by, "since": args.since, "blocks": out,
+    "note": if by_role {
+        "A seat's rate counts only rows stamped when the fold read them, so a backfilled row adds to count and never to rate. Compare rates only within one rule_version."
+    } else {
+        "held is weak evidence: a merge shows nothing broke, never that the corrector was right. Compare rates only within one rule_version."
+    }}))
+}
+
+fn print_report(value: &Value) {
+    println!("{}", value["note"].as_str().unwrap_or(""));
+    for source in SOURCES {
+        let Some(groups) = value["blocks"].get(source).and_then(Value::as_array) else {
+            continue;
+        };
+        println!("\n{source}");
+        if groups.is_empty() {
+            println!("  no rows");
+        }
+        for g in groups {
+            let rate = g
+                .get("rate")
+                .and_then(Value::as_f64)
+                .map(|r| format!(" rate {r:.3} over {} typed turns", g["typed_turns"]))
+                .unwrap_or_default();
+            let unwitnessed = match g.get("unwitnessed").and_then(Value::as_u64) {
+                Some(n) if n > 0 => format!(" {n} unwitnessed"),
+                _ => String::new(),
+            };
+            let versions: Vec<&str> = g["rule_versions"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .collect();
+            let versions = if versions.is_empty() {
+                String::new()
+            } else {
+                format!(" rule {}", versions.join(","))
+            };
+            let backfill = g
+                .get("backfill")
+                .and_then(Value::as_str)
+                .map(|b| format!(" [{b}]"))
+                .unwrap_or_default();
+            println!(
+                "  {:<40} {:>6}{rate}{unwitnessed}{versions}{backfill}",
+                g["group"].as_str().unwrap_or(""),
+                g["count"]
+            );
+        }
+    }
+}
+
+/// The Wilson score interval at 95%.
+fn wilson(hits: u64, n: u64) -> (f64, f64) {
+    if n == 0 {
+        return (0.0, 0.0);
+    }
+    let z = 1.96_f64;
+    let (nf, p) = (n as f64, hits as f64 / n as f64);
+    let denom = 1.0 + z * z / nf;
+    let centre = p + z * z / (2.0 * nf);
+    let margin = z * ((p * (1.0 - p) + z * z / (4.0 * nf)) / nf).sqrt();
+    (
+        ((centre - margin) / denom).max(0.0),
+        ((centre + margin) / denom).min(1.0),
+    )
+}
+
+/// One labelled row per line: `{"source":"user/correct","correct":true}`. A
+/// row the two readers disagreed on has `correct: null` and counts as a miss.
+fn precision(path: &Path) -> Result<Value, String> {
+    let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let mut counts: BTreeMap<String, (u64, u64)> = BTreeMap::new();
+    for source in PRECISION_SOURCES {
+        counts.insert(source.to_string(), (0, 0));
+    }
+    for line in text.lines().filter(|l| !l.trim().is_empty()) {
+        let row: Value =
+            serde_json::from_str(line).map_err(|e| format!("{}: bad row: {e}", path.display()))?;
+        let Some(source) = row.get("source").and_then(Value::as_str) else {
+            continue;
+        };
+        let entry = counts.entry(source.to_string()).or_default();
+        entry.1 += 1;
+        if row.get("correct").and_then(Value::as_bool) == Some(true) {
+            entry.0 += 1;
+        }
+    }
+    let rows: Vec<Value> = counts
+        .iter()
+        .map(|(source, (hits, n))| {
+            let (low, high) = wilson(*hits, *n);
+            let point = if *n > 0 {
+                *hits as f64 / *n as f64
+            } else {
+                0.0
+            };
+            let cleared = *n > 0 && point >= FLOOR_POINT && low >= FLOOR_LOWER;
+            json!({"source": source, "hits": hits, "n": n, "precision": point,
+                "lower": low, "upper": high,
+                "confidence": if cleared { "above_floor" } else { "below_floor" }})
+        })
+        .collect();
+    Ok(json!({"floor": {"point": FLOOR_POINT, "lower": FLOOR_LOWER}, "sources": rows}))
+}
+
+fn print_precision(value: &Value) {
+    println!(
+        "floor: precision {} and lower bound {}",
+        value["floor"]["point"], value["floor"]["lower"]
+    );
+    for s in value["sources"].as_array().into_iter().flatten() {
+        println!(
+            "{:<18} {:>4}/{:<4} precision {:.3}  [{:.3}, {:.3}]  {}",
+            s["source"].as_str().unwrap_or(""),
+            s["hits"],
+            s["n"],
+            s["precision"].as_f64().unwrap_or(0.0),
+            s["lower"].as_f64().unwrap_or(0.0),
+            s["upper"].as_f64().unwrap_or(0.0),
+            s["confidence"].as_str().unwrap_or(""),
+        );
+    }
+}
+
+pub fn run(args: &[OsString]) -> i32 {
+    let parsed = match parse(args) {
+        Ok(Some(parsed)) => parsed,
+        Ok(None) => {
+            print!("{HELP}");
+            return 0;
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            return 2;
+        }
+    };
+    let state = crate::model_catalog::state_dir();
+    let result = match &parsed.precision {
+        Some(path) => precision(path),
+        None => {
+            let journal = parsed
+                .journal
+                .clone()
+                .unwrap_or_else(|| state.join("events.jsonl"));
+            let cache = crate::state_layout::place_in(&state, "corrections", "cursors.json");
+            report(&parsed, &journal, &cache)
+        }
+    };
+    match result {
+        Ok(value) if parsed.json => {
+            println!("{value}");
+            0
+        }
+        Ok(value) => {
+            if parsed.precision.is_some() {
+                print_precision(&value);
+            } else {
+                print_report(&value);
+            }
+            0
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            1
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn append(journal: &Path, id: &str, by: &str, kind: &str, model: Value) {
+        let stamp = chrono::Utc::now().to_rfc3339();
+        let envelope = json!({"ts": stamp, "type": "agent_corrected", "source": "daemon",
+            "data": {"correction_id": id, "corrected_by": by, "kind": kind,
+                "session_id": "s", "rule_version": "v1", "harness": "claude", "model": model}});
+        crate::event_store::append_envelope(journal, &envelope.to_string(), Some(id)).unwrap();
+    }
+
+    #[test]
+    fn by_role_splits_seats_and_a_backfilled_row_adds_to_count_never_to_rate() {
+        let dir = tempfile::tempdir().unwrap();
+        let journal = dir.path().join("events.jsonl");
+        let stamp = chrono::Utc::now().to_rfc3339();
+        let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        let add = |id: &str, seat: Option<&str>| {
+            let mut data = json!({"correction_id": id, "corrected_by": "user", "kind": "correct",
+                "session_id": "s", "rule_version": "v1"});
+            if let Some(seat) = seat {
+                data["seat"] = json!({"value": seat, "basis": "roster"});
+            }
+            let row =
+                json!({"ts": stamp, "type": "agent_corrected", "source": "daemon", "data": data});
+            crate::event_store::append_envelope(&journal, &row.to_string(), Some(id)).unwrap();
+        };
+        add("a", Some("lead:L0"));
+        add("b", Some("worker"));
+        add("c", None);
+        add("d", None);
+        let seat_row = json!({"ts": "2020-01-01T00:00:00Z", "type": "correction_seat",
+            "source": "daemon",
+            "data": {"correction_id": "c", "seat": {"value": "lead:L0", "basis": "role_vacated"}}});
+        crate::event_store::append_envelope(&journal, &seat_row.to_string(), Some("sc")).unwrap();
+        let cache = dir.path().join("cursors.json");
+        let key = format!("{today}|lead:L0");
+        let quiet = format!("{today}|lead:L1");
+        std::fs::write(
+            &cache,
+            json!({"seat_turns": {key: 4, quiet: 5}}).to_string(),
+        )
+        .unwrap();
+        let args = parse(&["--by=role".into()]).unwrap().unwrap();
+        let value = report(&args, &journal, &cache).unwrap();
+        let user = value["blocks"]["user"].as_array().unwrap();
+        let of = |g: &str| user.iter().find(|r| r["group"] == g).unwrap();
+        assert_eq!(of("lead:L0")["count"], 2);
+        assert_eq!(of("lead:L0")["rate"], 0.25, "the seat row adds no rate");
+        assert_eq!(
+            of("lead:L1")["rate"],
+            0.0,
+            "a quiet seat is a zero, not a gap"
+        );
+        assert_eq!(of("worker")["count"], 1);
+        assert!(of("worker")["rate"].is_null());
+        assert_eq!(of("unmeasured")["count"], 1, "never folded into a seat");
+    }
+
+    #[test]
+    fn by_day_groups_rows_and_turns_under_the_row_date() {
+        let dir = tempfile::tempdir().unwrap();
+        let journal = dir.path().join("events.jsonl");
+        let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        append(&journal, "a", "user", "correct", json!({}));
+        append(&journal, "b", "user", "reject", json!({}));
+        let cache = dir.path().join("cursors.json");
+        let key = format!("{today}|claude|m");
+        std::fs::write(
+            &cache,
+            json!({"first_run_epoch": chrono::Utc::now().timestamp(),
+                "typed_turns": {key: 8, "2999-01-01|claude|m": 4, "2000-01-01|claude|m": 3}})
+            .to_string(),
+        )
+        .unwrap();
+        let args = parse(&["--by".into(), "day".into()]).unwrap().unwrap();
+        assert_eq!(args.since, "30d");
+        let value = report(&args, &journal, &cache).unwrap();
+        let row = &value["blocks"]["user"][0];
+        assert_eq!(row["group"], today.as_str());
+        assert_eq!(row["count"], 2);
+        assert_eq!(row["rate"], 0.25);
+        assert_eq!(row["backfill"], "part backfilled");
+        assert_eq!(row["rule_versions"], json!(["v1"]));
+        let quiet = &value["blocks"]["user"][1];
+        assert_eq!(quiet["group"], "2999-01-01");
+        assert_eq!(quiet["rate"], 0.0);
+        assert!(quiet["backfill"].is_null());
+        let args = parse(&["--by=day".into(), "--since=999999d".into()])
+            .unwrap()
+            .unwrap();
+        let value = report(&args, &journal, &cache).unwrap();
+        let old = &value["blocks"]["user"][0];
+        assert_eq!(old["group"], "2000-01-01");
+        assert_eq!(old["backfill"], "backfilled");
+    }
+
+    #[test]
+    fn ac7_ac8_ac11_three_blocks_no_total_unmeasured_apart_and_precision_names_the_floor() {
+        let dir = tempfile::tempdir().unwrap();
+        let journal = dir.path().join("events.jsonl");
+        let opus = json!({"value": "claude-opus-5-5", "basis": "observed"});
+        let lied = json!({"value": null, "basis": "unmeasured", "reason": "routed"});
+        append(&journal, "a", "user", "correct", opus.clone());
+        append(&journal, "b", "user", "interrupt", opus.clone());
+        append(&journal, "c", "user", "correct", lied);
+        append(&journal, "d", "agent", "correct", opus.clone());
+        append(&journal, "e", "machine", "refused", opus);
+        let cache = dir.path().join("cursors.json");
+        std::fs::write(
+            &cache,
+            json!({"typed_turns": {"2999-01-01|claude|claude-opus-5-5": 10}}).to_string(),
+        )
+        .unwrap();
+        let args = parse(&[]).unwrap().unwrap();
+        let value = report(&args, &journal, &cache).unwrap();
+        let blocks = value["blocks"].as_object().unwrap();
+        assert_eq!(blocks.len(), 3);
+        assert!(value.get("total").is_none());
+        let user = blocks["user"].as_array().unwrap();
+        let named = user
+            .iter()
+            .find(|g| g["group"] == "claude-opus-5-5 (observed)")
+            .unwrap();
+        assert_eq!(named["count"], 1, "the interrupt stays out by default");
+        assert_eq!(named["typed_turns"], 10);
+        let unmeasured = user.iter().find(|g| g["group"] == "unmeasured").unwrap();
+        assert_eq!(unmeasured["count"], 1, "never folded into a named model");
+
+        // AC11: the precision read.
+        let file = dir.path().join("labels.jsonl");
+        let mut lines = Vec::new();
+        for i in 0..100 {
+            let hit = i < 95;
+            lines.push(json!({"source": "user/reject", "correct": hit}).to_string());
+            lines.push(json!({"source": "agent/correct", "correct": i < 60}).to_string());
+        }
+        std::fs::write(&file, lines.join("\n")).unwrap();
+        let value = precision(&file).unwrap();
+        let rows = value["sources"].as_array().unwrap();
+        assert_eq!(rows.len(), 5, "all five sources print, sampled or not");
+        let of = |s: &str| rows.iter().find(|r| r["source"] == s).unwrap();
+        assert_eq!(of("user/reject")["confidence"], "above_floor");
+        assert_eq!(of("agent/correct")["confidence"], "below_floor");
+        assert_eq!(of("machine/refused")["confidence"], "below_floor");
+        let lower = of("user/reject")["lower"].as_f64().unwrap();
+        assert!((lower - 0.888).abs() < 0.01, "{lower}");
+    }
+}

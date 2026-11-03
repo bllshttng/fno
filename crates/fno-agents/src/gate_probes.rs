@@ -898,6 +898,33 @@ mod tests {
         }
     }
 
+    /// The merge flow runs from the PR's worktree, and no row's cwd names a
+    /// worktree. The project lookup then finds nothing, and that must never
+    /// read as "no hold".
+    #[test]
+    fn hold_refuses_a_merge_run_from_a_worktree_no_row_names() {
+        let entries = vec![json!({
+            "id": "x-h7",
+            "project": "books",
+            "cwd": "/code/books",
+            "pr_number": 9,
+            "pr_url": "https://github.com/o/r/pull/9",
+            "dispatch_hold": {
+                "held": true, "reason": "awaiting ops",
+                "set_by": "lead", "release_when": "ops done", "review_on": "2026-10-06",
+            },
+        })];
+        let worktree = "/home/.fno/worktrees/books/x-h7";
+        assert_eq!(
+            crate::backlog_ready::detect_project(&entries, worktree),
+            None
+        );
+        match dispatch_hold_rows(Path::new(worktree), &facts(9), &entries) {
+            ProbeOutcome::Refused(text) => assert!(text.contains("dispatch-hold:x-h7")),
+            other => panic!("expected Refused, got {other:?}"),
+        }
+    }
+
     #[test]
     fn hold_refuses_when_bare_number_binding_is_ambiguous() {
         let hold = json!({

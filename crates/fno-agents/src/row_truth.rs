@@ -134,24 +134,26 @@ pub(crate) fn apply_title_changes(
 /// A liveness word this binary measures is served only while it is fresh:
 /// past the shared window (crates/fno/src/served_liveness.rs) it no longer
 /// answers "is this row alive NOW", and republishing it as the served word
-/// made a 24-hour-old `dead` read as current. Past the window the word is
-/// withheld (the reader falls back to the status ladder); the stamp is
-/// served unchanged so the age stays honest.
+/// made a 24-hour-old `dead` read as current. Past the window - and for any
+/// row the probe never answered - the word reads `unknown`, never the old
+/// verdict and never null: a null made a payload whose own basis read
+/// `stale` count a full fleet as zero alive. The stamp is served
+/// unchanged so the age stays honest.
 pub(crate) fn served_fresh_liveness<'a>(
     word: Option<&'a str>,
     measured_at: Option<&str>,
-) -> Option<&'a str> {
-    let stamp = measured_at.and_then(crate::state::rfc3339_like_to_secs)? as u64;
+) -> &'a str {
+    let stamp = measured_at.and_then(crate::state::rfc3339_like_to_secs);
     crate::served_liveness::served_liveness_word(
         word,
-        Some(stamp),
+        stamp.map(|s| s as u64),
         crate::daemon::now_epoch_secs() as u64,
     )
 }
 
 /// Why the row's served `liveness` reads the way it does: `fresh` inside
-/// the shared window, `stale` once the window passed (the word is
-/// withheld), `never-measured` with no word or no stamp. Sits beside
+/// the shared window, `stale` once the window passed (the word reads
+/// `unknown`), `never-measured` with no word or no stamp. Sits beside
 /// `liveness` on every list row (law d-d6cb1827: a field with a basis
 /// shows the basis, never blank).
 pub(crate) fn served_liveness_basis(word: Option<&str>, measured_at: Option<&str>) -> &'static str {

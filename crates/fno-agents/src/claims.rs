@@ -111,7 +111,7 @@ pub struct ClaimRecord {
     /// pre-change records (reads as `None` == ambient).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pid_provenance: Option<String>,
-    /// Stable machine identity (mirrors `fno.claims.hostid.machine_id`).
+    /// Stable machine identity (see [`machine_id`]).
     /// Additive for the same reason `harness` is: absent on pre-change records
     /// (reads as `None`, never a parse error). Overwriting `host` instead would
     /// make a still-running pre-change reader compare a machine id against its
@@ -432,8 +432,8 @@ fn platform_machine_id() -> String {
     String::new()
 }
 
-/// A stable identifier for this machine, or "" when there is none (mirrors
-/// `fno.claims.hostid.machine_id`). Never substitutes `hostname()`: readers
+/// A stable identifier for this machine, or "" when there is none. Never
+/// substitutes `hostname()`: readers
 /// treat a present value as authoritative.
 ///
 /// `gethostname(2)` is NOT a stable machine identity: on macOS with
@@ -450,8 +450,7 @@ pub fn machine_id() -> String {
     CACHE.get_or_init(platform_machine_id).clone()
 }
 
-/// Was this claim written on THIS machine? (mirrors
-/// `fno.claims.hostid.is_same_machine`)
+/// Was this claim written on THIS machine?
 ///
 /// `machine` is authoritative whenever present. It is absent only on a claim
 /// written before the field existed; those reproduce the old hostname compare
@@ -1194,6 +1193,7 @@ pub(crate) const HARNESS_SESSION_MARKERS: &[(&str, &str)] = &[
     ("CODEX_SESSION_ID", "codex"),
     ("GEMINI_SESSION_ID", "gemini"),
     ("OPENCODE_SESSION_ID", "opencode"),
+    ("PI_SESSION_ID", "pi"),
 ];
 
 pub(crate) const LEGACY_HARNESS_SESSION_MARKERS: &[(&str, &str)] =
@@ -1219,6 +1219,7 @@ pub(crate) const AMBIENT_IDENTITY_NAMES: &[&str] = &[
     "CODEX_SESSION_ID",
     "GEMINI_SESSION_ID",
     "OPENCODE_SESSION_ID",
+    "PI_SESSION_ID",
     "CLAUDE_SESSION_ID",
     "CLAUDECODE",
     "CLAUDECODE_SESSION_ID",
@@ -1229,6 +1230,7 @@ pub(crate) const AMBIENT_IDENTITY_NAMES: &[&str] = &[
     "CODEX_SHELL",
     "CODEX_COMPANION_SESSION_ID",
     "CODEX_COMPANION_TRANSCRIPT_PATH",
+    "PI_SESSION_FILE",
 ];
 
 /// The same names with their harness family, in the Python
@@ -1243,6 +1245,7 @@ pub(crate) const AMBIENT_IDENTITY_FAMILIES: &[(&str, &str)] = &[
     ("CODEX_SESSION_ID", "codex"),
     ("GEMINI_SESSION_ID", "gemini"),
     ("OPENCODE_SESSION_ID", "opencode"),
+    ("PI_SESSION_ID", "pi"),
     ("CLAUDE_SESSION_ID", "claude"),
     ("CLAUDECODE", "claude"),
     ("CLAUDECODE_SESSION_ID", "claude"),
@@ -1253,6 +1256,7 @@ pub(crate) const AMBIENT_IDENTITY_FAMILIES: &[(&str, &str)] = &[
     ("CODEX_SHELL", "codex"),
     ("CODEX_COMPANION_SESSION_ID", "codex"),
     ("CODEX_COMPANION_TRANSCRIPT_PATH", "codex"),
+    ("PI_SESSION_FILE", "pi"),
     ("FNO_AGENT_SUBSTRATE", "fno"),
     ("FNO_NODE_REASON", "fno"),
 ];
@@ -1407,6 +1411,7 @@ pub(crate) fn ambient_session_candidates() -> Vec<String> {
             "CODEX_SESSION_ID",
             "GEMINI_SESSION_ID",
             "OPENCODE_SESSION_ID",
+            "PI_SESSION_ID",
             "CLAUDE_SESSION_ID",
             "CLAUDECODE_SESSION_ID",
             "HERMES_SESSION_ID",
@@ -1480,9 +1485,6 @@ fn resolve_identity_from(get: impl Fn(&str) -> Option<String>) -> (Option<String
 ///
 /// Every other harness is unmeasured and therefore off the list by default.
 ///
-/// The Python twin is `_SHARED_HOST_HARNESSES` in
-/// `cli/src/fno/claims/session_pid.py`; the classifier parity harness holds the
-/// two to one verdict.
 const SHARED_HOST_HARNESSES: &[&str] = &["codex"];
 
 /// True when `harness` forks a process per session, so its pid's death is the
@@ -1524,17 +1526,17 @@ pub fn resolve_identity() -> (Option<String>, Option<String>) {
 /// precedence must not silently launder an inherited marker - a foreign
 /// CODEX_THREAD_ID lingering in a claude child's env - into the claim's harness
 /// tag. The Rust writer cannot prove which marker this process owns (that needs
-/// a process-tree/transcript check the Python resolver does), so it records
+/// a process-tree/transcript check the owned-caller proof does), so it records
 /// `None` for the ambiguous case rather than guessing; the authoritative proven
 /// harness is stamped on the manifest by the init hook via that resolver.
 ///
-/// That resolver is `resolve_self_identity` in `cli/src/fno/claims/self_identity.py`,
-/// which supplies a process-tree prover to `resolve_owned_identity`. The two writers agree on
-/// direction and differ in reach: Python proves an inherited marker foreign and
-/// stamps the real one, while this side only knows the families disagree. Both
+/// That resolver is the owned-caller proof in `spawn_context.rs`, which walks
+/// the process tree. The two writers agree on direction and differ in reach:
+/// the proof names an inherited marker foreign and stamps the real one, while
+/// this side only knows the families disagree. Both
 /// refuse rather than launder, so a claim written here is never WRONG, only
 /// sometimes untagged. Keep it that way - resolving by precedence here would
-/// reintroduce the leak on the one path the Python gate cannot see.
+/// reintroduce the leak on the one path the proof cannot see.
 pub fn resolve_harness_from(get: impl Fn(&str) -> Option<String>) -> Option<String> {
     resolve_identity_from(get).1
 }
@@ -1551,9 +1553,15 @@ pub fn resolve_harness_from(get: impl Fn(&str) -> Option<String>) -> Option<Stri
 /// Within one family the DURABLE marker leads (`CODEX_THREAD_ID` over legacy
 /// `CODEX_SESSION_ID`), the winner's VALUE is the parent session id, not just
 /// its harness kind. One measured exception,
-/// [`codex_thread_parent_edge_from`]: within an all-codex marker set the two
-/// ids legitimately differ and the thread id names this process, so a codex
-/// worker's own spawn names its parent instead of minting with no edge.
+/// [`same_family_parent_edge_from`]: when EVERY present marker (the vendor
+/// set plus the stamp pins) names one harness family, the family's own ids
+/// resolve the edge - the stamp's session id when the stamp carries one
+/// (fno stamped it for this very session, the non-circular ground), else the
+/// durable marker value. This covers the measured codex dual-id shape (root
+/// `CODEX_SESSION_ID` against per-thread `CODEX_THREAD_ID`) and the
+/// stamp-vs-thread shape that minted amber-vale with no parent edge on
+/// 2026-10-30. Two families, an invalid stamp, or no markers keep the full
+/// refusal.
 pub fn ambient_parent_edge() -> (Option<String>, Option<String>, Option<String>) {
     ambient_parent_edge_from(caller_env)
 }
@@ -1598,17 +1606,12 @@ pub fn ambient_parent_edge_from(
     let (session, harness) = if resolved.0.is_some() {
         resolved
     } else {
-        // The exception fires only where nothing contradicts it: over a
-        // canonical stamp that refused it would relaunder exactly the foreign
-        // marker the refusal exists for.
-        let (_, _, disposition) = canonical_identity_from(&get);
-        if disposition == CanonicalDisposition::Absent {
-            codex_thread_parent_edge_from(&get)
-                .map(|(session, harness)| (Some(session), Some(harness)))
-                .unwrap_or(resolved)
-        } else {
-            resolved
-        }
+        // A one-family env names its session within that family; provenance
+        // is lower-stakes than a claim, so the capture layer resolves it.
+        // Cross-family and no-marker shapes keep the full refusal.
+        same_family_parent_edge_from(&get)
+            .map(|(session, harness)| (Some(session), Some(harness)))
+            .unwrap_or(resolved)
     };
     (session, harness, cwd)
 }
@@ -1660,36 +1663,57 @@ fn ambient_edge_reason_from(get: impl Fn(&str) -> Option<String>) -> String {
     format!("identity disposition={disposition_word}{ambiguous}, markers={names}")
 }
 
-/// The measured codex thread shape behind the daemon's "spawn request carried
-/// no parent edge" mints: codex sets `CODEX_SESSION_ID` to the ROOT session
-/// and `CODEX_THREAD_ID` per thread, so an all-codex env legitimately carries
-/// two different ids and the thread id names this process - the same measured
-/// rule `resolve_owned_identity` (harness_identity.py) and the daemon-side
-/// `spawn_context` resolver apply to a proven codex family. Fires only when
-/// every present marker is codex; a marker of any other family keeps the full
-/// refusal (a foreign codex marker in a claude child is never laundered).
-fn codex_thread_parent_edge_from(
-    get: &impl Fn(&str) -> Option<String>,
-) -> Option<(String, String)> {
-    let mut thread: Option<String> = None;
+/// A parent edge from a ONE-family env. The strict prover refuses a session
+/// id whenever any proof step fails, but a spawn whose every present marker
+/// belongs to one harness family names its session within that family, and
+/// provenance is lower-stakes than a claim: no foreign marker can be laundered
+/// through a set where the stamp's harness counts as a family member. The
+/// stamp's session id wins (fno stamped it for this very session, the
+/// non-circular ground); otherwise the first vendor marker in precedence
+/// order wins (the durable one: `CODEX_THREAD_ID` before legacy
+/// `CODEX_SESSION_ID`). An invalid stamp, a two-family union, or no markers
+/// keep the full refusal. This generalizes the measured codex-thread rule the
+/// function previously pinned: it fired only over an absent stamp.
+fn same_family_parent_edge_from(get: &impl Fn(&str) -> Option<String>) -> Option<(String, String)> {
+    let (stamp_session, stamp_harness, disposition) = canonical_identity_from(get);
+    if disposition == CanonicalDisposition::Invalid {
+        return None;
+    }
+    let mut family: Option<String> = None;
+    let mut value: Option<String> = None;
     for (marker, harness) in HARNESS_SESSION_MARKERS
         .iter()
         .chain(LEGACY_HARNESS_SESSION_MARKERS.iter())
     {
-        let Some(value) = get(marker)
+        let Some(v) = get(marker)
             .map(|v| v.trim().to_string())
             .filter(|v| !v.is_empty())
         else {
             continue;
         };
-        if *harness != "codex" {
-            return None;
-        }
-        if *marker == "CODEX_THREAD_ID" {
-            thread.get_or_insert(value);
+        match family.as_deref() {
+            None => {
+                family = Some(harness.to_string());
+                value = Some(v);
+            }
+            Some(prev) if prev != *harness => return None,
+            _ => {} // same family: the first-seen (durable) value leads
         }
     }
-    thread.map(|session| (session, "codex".to_string()))
+    if let Some(stamp) = stamp_harness.as_deref() {
+        match family.as_deref() {
+            None => family = Some(stamp.to_string()),
+            Some(prev) if prev != stamp => return None,
+            _ => {}
+        }
+    }
+    let family = family?;
+    if let (Some(session), Some(harness)) = (stamp_session, stamp_harness) {
+        if harness == family {
+            return Some((session, harness));
+        }
+    }
+    value.map(|v| (v, family))
 }
 
 /// The acquire stamp, clamped past this process's own OS create time. The

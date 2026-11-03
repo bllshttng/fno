@@ -11,8 +11,9 @@
 //! `--cwd` or `--add-dir` value names a path ON THE TARGET HOST: the relay
 //! forwards byte-verbatim and the remote command validates.
 
-use crate::mail_bus::normalize_host;
-use crate::mail_remote::{fno_binary, split_target, target_error};
+use crate::mail::address::normalize_host;
+use crate::mail::address::{split_target, target_error};
+use crate::mail_remote::fno_binary;
 use std::ffi::OsString;
 use std::process::Command;
 
@@ -95,6 +96,16 @@ pub fn spawn_plan(args: &[String], local_host: &str) -> Result<SpawnPlan, String
     })
 }
 
+/// The relay words that carry a parent session across the ssh hop, empty
+/// when no edge resolved. One flag: the child row reads the session id; the
+/// parent's harness and cwd stay local facts.
+fn parent_edge_args(session: Option<&str>) -> Vec<String> {
+    match session.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(s) => vec!["--spawned-by".to_string(), s.to_string()],
+        None => Vec::new(),
+    }
+}
+
 /// Binary-direct entry from `fno-agents spawn-remote <tail...>`, where the
 /// tail is the spawn argv after the command word.
 pub fn run(args: &[String]) -> i32 {
@@ -114,7 +125,14 @@ pub fn run(args: &[String]) -> i32 {
         // No @ name rides, so the front door forwards, never re-enters.
         return crate::mail_remote::exec_forward(&argv, "fno agents spawn", false);
     }
-    let argv = crate::mail_remote::ssh_argv(&plan.host, &plan.words);
+    // An ssh hop forwards no caller environment, so the far side's ambient
+    // parent capture resolves nothing and its row records no edge. Carry the
+    // spawner's session id across as an explicit argument instead; a local
+    // forward keeps the inherited environment and needs no flag.
+    let (session, _harness, _cwd) = crate::claims::ambient_parent_edge();
+    let mut words = plan.words.clone();
+    words.extend(parent_edge_args(session.as_deref()));
+    let argv = crate::mail_remote::ssh_argv(&plan.host, &words);
     let mut cmd = Command::new(&argv[0]);
     cmd.args(&argv[1..]);
     match cmd.status() {
@@ -206,5 +224,38 @@ mod tests {
         assert!(spawn_plan(&["--name".to_string(), "q@".to_string()], "x").is_err());
         assert!(spawn_plan(&["--name".to_string(), "@".to_string()], "x").is_err());
         assert!(spawn_plan(&["--name".to_string()], "x").is_err());
+    }
+
+    // One table-style declaration: the CI delta caps new test declarations.
+    #[test]
+    fn the_relay_carries_a_resolved_parent_edge_over_the_hop() {
+        // A resolved session rides as the explicit argument, sh-quoted into
+        // the remote line so the far front door parses it.
+        let mut words = spawn_plan(
+            &[
+                "--name".to_string(),
+                "quinlan@mbp3".to_string(),
+                "hi".to_string(),
+            ],
+            "imac2d2",
+        )
+        .expect("plans")
+        .words;
+        words.extend(parent_edge_args(Some(" s-parent ")));
+        let line = crate::mail_remote::ssh_argv("mbp3", &words).join(" ");
+        assert!(line.contains("'--spawned-by' 's-parent'"));
+        // No resolved session adds no words: the relay stays byte-verbatim
+        // and the far row keeps its refusal reason.
+        let mut plain = spawn_plan(
+            &["--name".to_string(), "@mbp3".to_string(), "hi".to_string()],
+            "imac2d2",
+        )
+        .expect("plans")
+        .words;
+        let before = plain.clone();
+        plain.extend(parent_edge_args(None));
+        assert_eq!(plain, before);
+        // An empty or whitespace session is no edge.
+        assert!(parent_edge_args(Some("  ")).is_empty());
     }
 }

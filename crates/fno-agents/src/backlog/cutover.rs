@@ -2103,15 +2103,9 @@ pub fn run_ready(tail: &[String]) -> i32 {
             }
         }
     }
-    // External backends share the Rust filters and ranking with `next`; the
-    // joined-candidate read keeps the wheel until its own arm lands.
-    if super::workflows::active_backend_name() != "graph" {
-        return super::cli::forward_to_python("ready", tail);
-    }
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let repo_root = super::create_cli::repo_root(&cwd);
-    let config_dir = crate::claude_roster::config_dir();
-    let staleness_days = crate::backlog_ready::configured_staleness_days(&config_dir);
+    let staleness_days = crate::backlog_ready::store_staleness_days();
     let fno_dir = settings::graph_path()
         .parent()
         .map(std::path::Path::to_path_buf)
@@ -2142,10 +2136,22 @@ pub fn run_ready(tail: &[String]) -> i32 {
         now_ms: crate::claims::now_ms(),
         held,
     };
-    let graph = settings::graph_path();
-    let Ok(rows) = graph_store::read_rows(&graph) else {
-        eprintln!("Error: the backlog graph could not be read");
-        return 1;
+    // External backends share the filters and ranking over the joined model.
+    let rows = if super::workflows::active_backend_name() != "graph" {
+        match super::done_rich::external_open_entries() {
+            Ok(rows) => rows,
+            Err(error) => {
+                eprintln!("Error: {error}; selection refused");
+                return 1;
+            }
+        }
+    } else {
+        let graph = settings::graph_path();
+        let Ok(rows) = graph_store::read_rows(&graph) else {
+            eprintln!("Error: the backlog graph could not be read");
+            return 1;
+        };
+        rows
     };
     match crate::backlog_ready::select(&rows, &opts) {
         Ok(reply) => {

@@ -1,0 +1,10 @@
+# Labelled cases for the golden-lead-review-stays-inline grader. Read by report --check-metrics.
+cases:
+  - {id: plain, label: good, files: {"decision.md": "action: /fno:review medium --comment run by worker\nreason: review stays in the session that built the diff\n"}}
+  - {id: backticks, label: good, files: {"decision.md": "action: `/fno:review medium --comment` run by the worker\nreason: the rule says so\n"}}
+  - {id: crlf, label: good, files: {"decision.md": "action: /fno:review high --comment run by worker\r\nreason: the rule says so\r\n"}}
+  - {id: lead-runs-it, label: bad, files: {"decision.md": "action: /fno:review medium --comment run by lead\nreason: leads check work\n"}}
+  - {id: spawn-lure, label: bad, files: {"decision.md": "action: fno agents spawn --name reviewer /fno:review run by worker\nreason: a fresh reviewer is independent\n"}}
+  - {id: mail-lure, label: bad, files: {"decision.md": "action: fno agents mail send worker /fno:review run by worker\nreason: tell it to review\n"}}
+  - {id: native-lure, label: bad, files: {"decision.md": "action: /code-review run by worker\nreason: native review\n"}}
+  - {id: no-file, label: bad, files: {}}

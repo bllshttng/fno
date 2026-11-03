@@ -37,8 +37,6 @@ def _run_py(code: str, timeout: int = 30) -> subprocess.CompletedProcess[str]:
 # Modules that must NOT appear in sys.modules after `fno --help`.
 # These are the heaviest transitive imports that the lazy refactor defers.
 _FORBIDDEN_AFTER_HELP = [
-    "fno.adapters.providers.cli",
-    "fno.graph.cli",
     "fno.events.store_client",
     "fno.agent",
 ]
@@ -61,30 +59,6 @@ def test_fno_help_does_not_import_sub_app_modules():
     result = _run_py(_CHECK_CODE_HELP)
     assert result.returncode == 0, (
         f"Sub-app modules imported after fno --help:\n{result.stderr}"
-    )
-
-
-# ---------------------------------------------------------------------------
-# AC3-HP: fno paths state-dir does NOT import heavy sub-apps
-# ---------------------------------------------------------------------------
-
-_CHECK_CODE_PATHS = """\
-import sys
-from fno import cli
-from typer.testing import CliRunner
-CliRunner().invoke(cli.app, ["paths", "state-dir"])
-found = [m for m in ["fno.adapters.providers.cli"] if m in sys.modules]
-if found:
-    print("FOUND:", ",".join(found), file=sys.stderr)
-sys.exit(len(found))
-"""
-
-
-def test_fno_paths_does_not_import_heavy_subapps():
-    """AC3-HP: `fno paths state-dir` only loads the paths sub-app."""
-    result = _run_py(_CHECK_CODE_PATHS)
-    assert result.returncode == 0, (
-        f"heavy sub-app imported during `fno paths state-dir`:\n{result.stderr}"
     )
 
 
@@ -238,36 +212,6 @@ def test_every_command_group_builds_via_get_command():
 # order without ImportError, and that the leaf holds no back-edge.
 # ---------------------------------------------------------------------------
 
-def test_config_first_import_does_not_freeze_graph_path_to_fallback(tmp_path):
-    """config's graph._constants import stays function-local: a top-level one makes
-    `import fno.config` eagerly load the graph package during config's partial init,
-    which freezes store.read_graph's GRAPH_JSON default to the ~/.fno fallback and
-    silently ignores a configured state_dir. Regression guard: with a state_dir
-    override, config-first import must still resolve the graph anchor."""
-    import os
-
-    cfg = tmp_path / "config.toml"
-    state_dir = tmp_path / "state"
-    # The fresh state dir holds no store yet, so the resolution ladder
-    # answers the db/ spelling.
-    graph_json = state_dir / "db" / "graph.json"
-    cfg.write_text(f'state_dir = "{state_dir}"\n')
-
-    code = (
-        "import fno.config, fno.graph, inspect\n"  # config-first (the risky order)
-        "import fno.graph.store as store\n"
-        "d = inspect.signature(store.read_graph_strict).parameters['path'].default\n"
-        "print(str(d))\n"
-    )
-    result = subprocess.run(
-        [sys.executable, "-c", code],
-        capture_output=True, text=True, timeout=60,
-        env={**os.environ, "FNO_CONFIG": str(cfg)},
-    )
-    assert result.returncode == 0, result.stderr
-    assert str(graph_json) in result.stdout, (
-        f"read_graph default froze to the fallback, not the configured path:\n{result.stdout}"
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -390,16 +334,16 @@ def test_lazy_import_retries_once_when_the_tree_changed_underneath(monkeypatch):
     import typer
     from typer.testing import CliRunner
 
-    real_target = importlib.import_module("fno.graph.cli")
+    real_target = importlib.import_module("fno.resume_receipt_cli")
     calls = _counting_import(
         monkeypatch,
-        "fno.graph.cli",
-        [ModuleNotFoundError("gone", name="fno.graph._mid_reinstall"), real_target],
+        "fno.resume_receipt_cli",
+        [ModuleNotFoundError("gone", name="fno.resume_receipt_cli._mid_reinstall"), real_target],
     )
     monkeypatch.setattr(lg, "_module_appears_on_disk", lambda name: True)
 
     app = typer.Typer(
-        cls=make_lazy_group_cls({"backlog": "fno.graph.cli:cli"}),
+        cls=make_lazy_group_cls({"resume": "fno.resume_receipt_cli:cli"}),
         no_args_is_help=True,
         pretty_exceptions_enable=False,
         rich_markup_mode=None,
@@ -409,7 +353,7 @@ def test_lazy_import_retries_once_when_the_tree_changed_underneath(monkeypatch):
     def _cb() -> None:
         pass
 
-    result = CliRunner().invoke(app, ["backlog", "--help"])
+    result = CliRunner().invoke(app, ["resume", "--help"])
     assert len(calls) == 2, f"expected exactly one retry, got {len(calls)} imports"
     assert result.exit_code == 0, result.output
 
@@ -425,13 +369,13 @@ def test_lazy_import_does_not_retry_when_the_module_is_really_missing(monkeypatc
 
     calls = _counting_import(
         monkeypatch,
-        "fno.graph.cli",
-        [ModuleNotFoundError("gone", name="fno.graph._really_gone")],
+        "fno.resume_receipt_cli",
+        [ModuleNotFoundError("gone", name="fno.resume_receipt_cli._really_gone")],
     )
     monkeypatch.setattr(lg, "_module_appears_on_disk", lambda name: False)
 
     app = typer.Typer(
-        cls=make_lazy_group_cls({"backlog": "fno.graph.cli:cli"}),
+        cls=make_lazy_group_cls({"resume": "fno.resume_receipt_cli:cli"}),
         no_args_is_help=True,
         pretty_exceptions_enable=False,
         rich_markup_mode=None,
@@ -441,7 +385,7 @@ def test_lazy_import_does_not_retry_when_the_module_is_really_missing(monkeypatc
     def _cb() -> None:
         pass
 
-    result = CliRunner().invoke(app, ["backlog", "--help"])
+    result = CliRunner().invoke(app, ["resume", "--help"])
     assert len(calls) == 1, f"a missing module must not be retried; got {len(calls)}"
     assert result.exit_code != 0
     combined = (result.output or "") + (result.stderr if hasattr(result, "stderr") else "")
@@ -559,21 +503,6 @@ def test_namespace_refuser_blocks_the_poison_before_it_caches(monkeypatch, tmp_p
         _sys.meta_path.remove(refuser)
         for name in [m for m in list(_sys.modules) if m.startswith("zzns")]:
             _sys.modules.pop(name, None)
-
-
-def test_absent_fno_submodule_names_both_causes_end_to_end():
-    """The acceptance shape, through a real import in a real process: a function-level
-    `from fno. ...` for a module that is not there says why, twice over."""
-    proc = _run_py(
-        "import fno\n"
-        "try:\n"
-        "    from fno.agents.no_such_module import thing\n"
-        "except ModuleNotFoundError as exc:\n"
-        "    print(exc)\n"
-    )
-    assert proc.returncode == 0, proc.stderr
-    assert "reinstalled underneath the running process" in proc.stdout, proc.stdout
-    assert "fno doctor update" in proc.stdout
 
 
 # ---------------------------------------------------------------------------

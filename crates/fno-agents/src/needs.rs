@@ -538,6 +538,7 @@ struct NeedsArgs {
     delegate: bool,
     archive: Vec<String>,
     sink: Option<String>,
+    email: Option<String>,
     events_override: Vec<PathBuf>,
     ledger_override: Option<PathBuf>,
 }
@@ -555,6 +556,7 @@ fn parse_args(rest: &[String]) -> Result<NeedsArgs, String> {
     let mut delegate = false;
     let mut archive: Vec<String> = Vec::new();
     let mut sink: Option<String> = None;
+    let mut email: Option<String> = None;
     let mut events_override: Vec<PathBuf> = Vec::new();
     let mut ledger_override: Option<PathBuf> = None;
 
@@ -591,6 +593,7 @@ fn parse_args(rest: &[String]) -> Result<NeedsArgs, String> {
             "--delegate" => delegate = true,
             "--archive" => archive.push(it.next().ok_or("--archive needs an item id")?),
             "--sink" => sink = Some(it.next().ok_or("--sink needs a sink name")?),
+            "--email" => email = Some(it.next().ok_or("--email needs a login")?),
             "--events" => {
                 events_override.push(PathBuf::from(it.next().ok_or("--events needs a path")?))
             }
@@ -613,6 +616,7 @@ fn parse_args(rest: &[String]) -> Result<NeedsArgs, String> {
         delegate,
         archive,
         sink,
+        email,
         events_override,
         ledger_override,
     })
@@ -837,6 +841,7 @@ fn run_items(home: &AgentsHome, cwd: &Path) -> i32 {
     if let Ok(registry) = crate::state::load_registry(&home.registry_json()) {
         crate::attention::attach_reach(&mut items, &registry);
     }
+    crate::attention_arm::attach_numbers(&mut items);
     // The settled flag shares the sweep's question fold, rules and all. An
     // unreadable graph closes nothing.
     let facts = crate::question_sweep::read_closed_rung_facts(cwd, home);
@@ -893,7 +898,7 @@ fn mark_settled(
 /// beat. The bell's Clear all calls this; a graph it cannot read closes
 /// nothing.
 fn run_clear_settled(home: &AgentsHome, cwd: &Path) -> i32 {
-    let facts = crate::question_sweep::read_closed_rung_facts(cwd, home);
+    let facts = crate::question_sweep::read_facts_with_prs(cwd, home);
     let settled = settled_questions(&facts.raw, &facts);
     let now = crate::claims::now_ms() / 1000;
     let (cleared, errors) = crate::question_sweep::close_questions(
@@ -942,16 +947,33 @@ fn run_answer(home: &AgentsHome, cwd: &Path, args: &NeedsArgs, item_id: &str) ->
         );
         return 2;
     }
-    match args.sink.as_deref() {
-        Some("mux") => {}
-        other => {
+    // The mux stamps no login. The command page stamps the invited login it
+    // authenticated, and a login is legal only there.
+    let (sink, email) = match (args.sink.as_deref(), args.email.as_deref()) {
+        (Some("mux"), None) => ("mux", None),
+        (Some("mux"), Some(_)) => {
+            eprintln!("fno-agents: needs --email is legal only with --sink command_page");
+            return 2;
+        }
+        (Some("command_page"), Some(login)) if !login.trim().is_empty() => {
+            if args.delegate {
+                eprintln!("fno-agents: --delegate stays in the mux; the page cannot delegate");
+                return 2;
+            }
+            ("command_page", Some(login.trim()))
+        }
+        (Some("command_page"), _) => {
+            eprintln!("fno-agents: needs --sink command_page requires --email <login>");
+            return 2;
+        }
+        (other, _) => {
             eprintln!(
-                "fno-agents: needs --answer accepts only --sink mux (got {})",
+                "fno-agents: needs --answer accepts only --sink mux or command_page (got {})",
                 other.unwrap_or("none")
             );
             return 2;
         }
-    }
+    };
     let fno_dir = home
         .root()
         .parent()
@@ -1007,14 +1029,16 @@ fn run_answer(home: &AgentsHome, cwd: &Path, args: &NeedsArgs, item_id: &str) ->
     } else {
         crate::attention_file::FileAnswer::Words(args.words.clone().unwrap_or_default())
     };
-    match crate::attention_arm::append_answer_row(
+    let attested_by = email.map_or_else(|| "mux".to_string(), |e| format!("command_page:{e}"));
+    match crate::attention_arm::append_answer_row_stamped(
         home,
         item_id,
-        "mux",
+        sink,
         &answer,
         "sink",
         "needs_door",
-        "mux",
+        &attested_by,
+        email,
     ) {
         Ok((_, superseded)) => {
             println!(
@@ -1103,6 +1127,7 @@ fn run_archive(
             provenance: json!({}),
             closed_by: Some("mux".to_string()),
             caller,
+            home: Some(home.clone()),
             journal_path: crate::paths::space_dir(cwd).join("events.jsonl"),
             index_path: fno_dir.join("questions.jsonl"),
             decisions_path: fno_dir.join("decisions.jsonl"),
@@ -1286,10 +1311,11 @@ impl HeldFold {
 /// 2. `superseded` - the subject is head-scoped and another open question
 ///    with the same `node` field and family re-asked at a different head
 ///    later (ties break on the larger id). Ignores `why_user`.
-/// 3. `node-closed`/`moot` - a node in the set reads done or superseded;
-///    a user-only `why_user` closes moot. A merge_status stamp alone is
-///    never a terminal rung: a multi-ship node or a reopened node can
-///    carry one while work remains.
+/// 3. `node-closed`/`moot` - a node in the set reads done or superseded,
+///    and every PR the question names is merged or read closed; a user-only
+///    `why_user` closes moot. A merge_status stamp alone is never a terminal
+///    rung: a multi-ship node or a reopened node can carry one while work
+///    remains.
 ///
 /// Pure over journal contents; the caller supplies the graph facts and
 /// does the writing.
@@ -1297,7 +1323,6 @@ pub(crate) fn settled_questions(
     raw: &str,
     facts: &crate::question_sweep::RungFacts,
 ) -> Vec<(String, String)> {
-    const CLOSED_RUNGS: [&str; 2] = ["done", "superseded"];
     let (asked, closed) = open_question_rows(raw);
     let mut open: Vec<(String, Value)> = asked
         .into_iter()
@@ -1335,15 +1360,7 @@ pub(crate) fn settled_questions(
             .map(str::trim)
             .unwrap_or("");
         let head = crate::question_sweep::head_scoped(subject);
-        let mut nodes: Vec<String> = data
-            .get("node")
-            .and_then(Value::as_str)
-            .map(str::to_string)
-            .into_iter()
-            .collect();
-        if let Some(blocks) = data.get("blocks").and_then(Value::as_array) {
-            nodes.extend(blocks.iter().filter_map(Value::as_str).map(str::to_string));
-        }
+        let nodes = question_nodes(data);
         let mut reason = None;
         // 1. pr-merged: the subject names the thing that resolved. The
         // head-scoped shape alone is not enough: a multi-ship node carries
@@ -1377,19 +1394,20 @@ pub(crate) fn settled_questions(
                 }
             }
         }
-        // 3. node-closed / moot: the node read a terminal rung.
+        // 3. node-closed / moot: the node read a terminal rung, and no PR
+        // the question names can still need the answer.
         if reason.is_none() {
-            for n in &nodes {
-                if let Some(status) = facts.statuses.get(n) {
-                    if CLOSED_RUNGS.contains(&status.as_str()) {
-                        let user_only = crate::escalation::why_user_is_user_only(
-                            data.get("why_user").and_then(Value::as_str).unwrap_or(""),
-                            &crate::question_ladder::Rules::default(),
-                        );
-                        let word = if user_only { "moot" } else { "node-closed" };
-                        reason = Some(format!("{word}: {n} {status}"));
-                        break;
-                    }
+            if let Some((n, status)) = closed_node(&nodes, facts) {
+                if question_prs(data)
+                    .into_iter()
+                    .all(|pr| pr_settled(pr, data, &nodes, facts))
+                {
+                    let word = if user_only(data) {
+                        "moot"
+                    } else {
+                        "node-closed"
+                    };
+                    reason = Some(format!("{word}: {n} {status}"));
                 }
             }
         }
@@ -1400,24 +1418,184 @@ pub(crate) fn settled_questions(
     out
 }
 
-/// The subject names PR P: the shared page scanner, or a bare `#{P}` not
-/// followed by another digit.
-fn subject_names_pr(subject: &str, pr: u64) -> bool {
-    if crate::merge_gates::page_names_pr(subject, pr) {
-        return true;
-    }
-    let needle = format!("#{pr}");
-    let mut from = 0usize;
-    while let Some(at) = subject[from..].find(&needle) {
-        let at = from + at;
-        let after = at + needle.len();
-        let next = subject[after..].chars().next();
-        if !next.is_some_and(|c| c.is_ascii_digit()) {
-            return true;
+/// One question the node-closed rule holds because a PR it names reads open.
+pub(crate) struct HeldQuestion {
+    pub(crate) id: String,
+    pub(crate) data: Value,
+    pub(crate) node: String,
+    pub(crate) status: String,
+    pub(crate) pr: u64,
+}
+
+/// The hop action that records the move to the lead, so it happens once.
+pub(crate) const OPEN_PR_HOP: &str = "open-pr";
+
+/// Every `(asker cwd, PR)` the node-closed rule must read before it closes a
+/// question. A row with no cwd has no repo to read, so it stays open.
+pub(crate) fn prs_to_read(
+    raw: &str,
+    facts: &crate::question_sweep::RungFacts,
+) -> std::collections::BTreeSet<(String, u64)> {
+    let (asked, closed) = open_question_rows(raw);
+    let mut reads = std::collections::BTreeSet::new();
+    for (qid, data) in &asked {
+        let nodes = question_nodes(data);
+        if closed.contains(qid) || closed_node(&nodes, facts).is_none() {
+            continue;
         }
-        from = after;
+        let cwd = row_cwd(data);
+        if cwd.is_empty() {
+            continue;
+        }
+        for pr in question_prs(data) {
+            if !pr_settled(pr, data, &nodes, facts) {
+                reads.insert((cwd.to_string(), pr));
+            }
+        }
     }
-    false
+    reads
+}
+
+/// The open questions a closed node left with a live PR, for the lead. A
+/// user-only ask stays on the user's board, and a row moved once stays put.
+pub(crate) fn questions_for_the_lead(
+    raw: &str,
+    facts: &crate::question_sweep::RungFacts,
+    settled: &[(String, String)],
+) -> Vec<HeldQuestion> {
+    let (asked, closed) = open_question_rows(raw);
+    let mut out = Vec::new();
+    for (qid, data) in asked {
+        let nodes = question_nodes(&data);
+        let moved = data["via"]
+            .as_array()
+            .is_some_and(|via| via.iter().any(|hop| hop["action"] == OPEN_PR_HOP));
+        if closed.contains(&qid)
+            || moved
+            || user_only(&data)
+            || settled.iter().any(|(id, _)| *id == qid)
+        {
+            continue;
+        }
+        let Some((node, status)) = closed_node(&nodes, facts) else {
+            continue;
+        };
+        let (node, status) = (node.to_string(), status.to_string());
+        let pr = question_prs(&data).into_iter().find(|pr| {
+            facts.pr_open.get(&(row_cwd(&data).to_string(), *pr)) == Some(&true)
+                && !pr_settled(*pr, &data, &nodes, facts)
+        });
+        if let Some(pr) = pr {
+            out.push(HeldQuestion {
+                id: qid,
+                data,
+                node,
+                status,
+                pr,
+            });
+        }
+    }
+    out.sort_by(|a, b| a.id.cmp(&b.id));
+    out
+}
+
+/// A question's node set: the `node` field plus every `blocks` entry.
+fn question_nodes(data: &Value) -> Vec<String> {
+    let mut nodes: Vec<String> = data
+        .get("node")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .into_iter()
+        .collect();
+    if let Some(blocks) = data.get("blocks").and_then(Value::as_array) {
+        nodes.extend(blocks.iter().filter_map(Value::as_str).map(str::to_string));
+    }
+    nodes
+}
+
+/// The first node in the set that reads a terminal rung, with that rung.
+fn closed_node<'a>(
+    nodes: &'a [String],
+    facts: &'a crate::question_sweep::RungFacts,
+) -> Option<(&'a str, &'a str)> {
+    nodes.iter().find_map(|n| {
+        let status = facts.statuses.get(n)?;
+        ["done", "superseded"]
+            .contains(&status.as_str())
+            .then_some((n.as_str(), status.as_str()))
+    })
+}
+
+fn user_only(data: &Value) -> bool {
+    crate::escalation::why_user_is_user_only(
+        data.get("why_user").and_then(Value::as_str).unwrap_or(""),
+        &crate::question_ladder::Rules::default(),
+    )
+}
+
+fn row_cwd(data: &Value) -> &str {
+    data.get("cwd").and_then(Value::as_str).unwrap_or("").trim()
+}
+
+/// The PRs a question names. A subject can be absent, so the text counts too,
+/// but only as `PR P`: a bare `#2` in prose can mean an option or an issue.
+fn question_prs(data: &Value) -> Vec<u64> {
+    let field = |key: &str| data.get(key).and_then(Value::as_str).unwrap_or("");
+    let mut prs = named_prs(field("subject"), true);
+    prs.extend(named_prs(field("question"), false));
+    prs
+}
+
+/// A named PR no longer needs an answer only on a positive read: merged on
+/// one of the question's nodes, or read closed. An unread PR holds the row.
+fn pr_settled(
+    pr: u64,
+    data: &Value,
+    nodes: &[String],
+    facts: &crate::question_sweep::RungFacts,
+) -> bool {
+    let merged = nodes
+        .iter()
+        .any(|n| facts.merged_prs.get(n).is_some_and(|prs| prs.contains(&pr)));
+    merged || facts.pr_open.get(&(row_cwd(data).to_string(), pr)) == Some(&false)
+}
+
+/// Every PR number `text` names: `PR P` with any page separator, and `#P`
+/// when `bare_hash` allows it.
+fn named_prs(text: &str, bare_hash: bool) -> Vec<u64> {
+    let bytes = text.as_bytes();
+    let mut prs = Vec::new();
+    for i in 0..bytes.len() {
+        let word_start = i == 0 || !(bytes[i - 1].is_ascii_alphanumeric() || bytes[i - 1] == b'_');
+        let mut digits = if bare_hash && bytes[i] == b'#' {
+            i + 1
+        } else if word_start && bytes[i..].len() >= 2 && bytes[i..i + 2].eq_ignore_ascii_case(b"pr")
+        {
+            i + 2
+        } else {
+            continue;
+        };
+        while bytes[i] != b'#'
+            && matches!(bytes.get(digits), Some(b'#' | b'-' | b'/' | b':' | b' '))
+        {
+            digits += 1;
+        }
+        let end = bytes[digits..]
+            .iter()
+            .position(|b| !b.is_ascii_digit())
+            .map_or(bytes.len(), |n| digits + n);
+        if let Ok(pr) = text[digits..end].parse::<u64>() {
+            if !prs.contains(&pr) {
+                prs.push(pr);
+            }
+        }
+    }
+    prs
+}
+
+/// The subject names PR P.
+fn subject_names_pr(subject: &str, pr: u64) -> bool {
+    named_prs(subject, true).contains(&pr)
 }
 
 /// The open (asked, never closed) question rows: the journal fold the
@@ -2270,6 +2448,65 @@ mod tests {
     }
 
     #[test]
+    fn a_done_node_holds_a_question_until_the_pr_it_names_reads_closed() {
+        // The two real spellings: the PR only in the text, and only in the
+        // subject. An unread PR holds the row and moves nothing.
+        for (text, subject) in [
+            ("Close PR 3212 (x-gone)?", ""),
+            ("Land or close it?", r#","subject":"pr-3212-land-or-close"#),
+        ] {
+            let subject = if subject.is_empty() {
+                String::new()
+            } else {
+                format!(r#"{subject}""#)
+            };
+            let raw = format!(
+                r#"{{"ts":"2026-10-19T17:08:01Z","type":"operator_question","source":"target","data":{{"question_id":"q-pr","question":"{text}","cwd":"/repo","node":"x-gone"{subject}}}}}"#
+            );
+            let mut facts = fold_facts(&[("x-gone", "done")], &[]);
+            let key = ("/repo".to_string(), 3212);
+            assert!(settled_questions(&raw, &facts).is_empty(), "{raw}");
+            assert!(questions_for_the_lead(&raw, &facts, &[]).is_empty());
+            assert!(prs_to_read(&raw, &facts).contains(&key));
+
+            facts.pr_open.insert(key.clone(), true);
+            assert!(settled_questions(&raw, &facts).is_empty(), "{raw}");
+            let held = questions_for_the_lead(&raw, &facts, &[]);
+            assert_eq!(held.len(), 1);
+            assert_eq!((held[0].node.as_str(), held[0].pr), ("x-gone", 3212));
+
+            facts.pr_open.insert(key, false);
+            assert_eq!(
+                settled_questions(&raw, &facts),
+                vec![("q-pr".to_string(), "node-closed: x-gone done".to_string())]
+            );
+        }
+        // A bare `#99` in prose names no PR, so it reads nothing and holds nothing.
+        let raw = r#"{"ts":"t","type":"operator_question","source":"target","data":{"question_id":"q-opt","question":"Take option #99?","cwd":"/repo","node":"x-gone"}}"#;
+        let facts = fold_facts(&[("x-gone", "done")], &[]);
+        assert!(prs_to_read(raw, &facts).is_empty());
+        assert_eq!(settled_questions(raw, &facts).len(), 1);
+    }
+
+    #[test]
+    fn a_user_only_or_already_moved_question_stays_where_it_sits() {
+        let row = |qid: &str, extra: &str| {
+            format!(
+                r#"{{"ts":"t","type":"operator_question","source":"target","data":{{"question_id":"{qid}","question":"Close PR 9?","cwd":"/repo","node":"x-a"{extra}}}}}"#
+            )
+        };
+        let raw = [
+            row("q-taste", r#","why_user":"a product or taste call""#),
+            row("q-moved", r#","via":[{"action":"open-pr"}]"#),
+        ]
+        .join("\n");
+        let mut facts = fold_facts(&[("x-a", "done")], &[]);
+        facts.pr_open.insert(("/repo".to_string(), 9), true);
+        assert!(settled_questions(&raw, &facts).is_empty());
+        assert!(questions_for_the_lead(&raw, &facts, &[]).is_empty());
+    }
+
+    #[test]
     fn sweep_closes_only_terminal_rungs() {
         let raw = operator_question_blocked("2026-07-03T02:00:00Z", "q-hold", "pick", &["x-bbbb"]);
         let mk = |status: &str| settled_questions(&raw, &fold_facts(&[("x-bbbb", status)], &[]));
@@ -2585,6 +2822,7 @@ mod tests {
             delegate: false,
             archive: vec![],
             sink: Some("mux".to_string()),
+            email: None,
             events_override: vec![],
             ledger_override: None,
         };
@@ -2659,6 +2897,55 @@ mod tests {
             !raw.contains("attention_answer"),
             "refusals write nothing: {raw}"
         );
+    }
+
+    #[test]
+    fn needs_door_command_page_stamps_the_login_and_refuses_the_rest() {
+        let (dir, _root, mut args) = door_setup("needs_door_cmd_page_");
+        let cwd = dir.path().join("repo");
+        let home = crate::paths::AgentsHome::from_env();
+        let row_count = || {
+            let home = crate::paths::AgentsHome::from_env();
+            crate::event_store::journal_text(&crate::provider_cap::questions_path(&home), &[])
+                .matches("attention_answer")
+                .count()
+        };
+        // A page answer with no login, a login beside the mux sink, and a
+        // delegate from the page each refuse and write nothing.
+        args.sink = Some("command_page".to_string());
+        assert_eq!(run_answer(&home, &cwd, &args, "q-door"), 2);
+        args.email = Some("  ".to_string());
+        assert_eq!(run_answer(&home, &cwd, &args, "q-door"), 2);
+        args.sink = Some("mux".to_string());
+        args.email = Some("ann@example.com".to_string());
+        assert_eq!(run_answer(&home, &cwd, &args, "q-door"), 2);
+        args.sink = Some("command_page".to_string());
+        args.option = None;
+        args.delegate = true;
+        assert_eq!(run_answer(&home, &cwd, &args, "q-door"), 2);
+        assert_eq!(row_count(), 0);
+        // The real answer lands one row naming the login and the machine.
+        args.delegate = false;
+        args.option = Some(2);
+        assert_eq!(run_answer(&home, &cwd, &args, "q-door"), 0);
+        let home2 = crate::paths::AgentsHome::from_env();
+        let raw =
+            crate::event_store::journal_text(&crate::provider_cap::questions_path(&home2), &[]);
+        let row = raw
+            .lines()
+            .find(|l| l.contains("attention_answer"))
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_str(row).unwrap();
+        let data = &v["data"];
+        assert_eq!(data["sink"], "command_page", "{row}");
+        assert_eq!(data["email"], "ann@example.com", "{row}");
+        assert_eq!(data["person"], "ann@example.com", "{row}");
+        assert_eq!(data["authority"], "sink", "{row}");
+        assert_eq!(data["attested_by"], "command_page:ann@example.com", "{row}");
+        assert!(data.get("machine_id").is_some(), "{row}");
+        // A second click is refused as not open: the first answer closed it.
+        assert_eq!(run_answer(&home, &cwd, &args, "q-door"), 2);
+        assert_eq!(row_count(), 1);
     }
 
     #[test]

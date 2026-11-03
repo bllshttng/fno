@@ -26,6 +26,25 @@ fn counter_core(bytes: &[u8]) -> (Core, u64) {
 }
 
 #[test]
+fn a_pane_dirty_again_after_its_write_does_not_starve_its_neighbour() {
+    // Each map draws a new hash seed, and one lucky seed hides hash order.
+    for flooding in [1u64, 2, 3].repeat(64) {
+        let mut dirty: HashMap<u64, ()> = HashMap::from([(1, ()), (2, ()), (3, ())]);
+        let mut last = None;
+        let mut written = Vec::new();
+        for _ in 0..3 {
+            let (pane, ()) = client_writer::take_next_dirty(&mut dirty, last).unwrap();
+            written.push(pane);
+            last = Some(pane);
+            // The flood re-dirties its pane during every write.
+            dirty.insert(flooding, ());
+        }
+        written.sort_unstable();
+        assert_eq!(written, [1, 2, 3], "flooding pane {flooding}");
+    }
+}
+
+#[test]
 fn pane_counters_count_fed_bytes_and_hidden_panes_never_composite() {
     let (core, pid) = counter_core(b"hello");
     let c = &core.panes[&pid].stats;

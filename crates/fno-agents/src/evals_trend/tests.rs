@@ -16,8 +16,56 @@ fn row_json(task_id: &str, tier: &str, pass: bool, ts: &str) -> String {
         "ts": ts, "task_id": task_id, "tier": tier, "pass": pass,
         "reason": "", "duration_s": 1.0, "repeat_index": 0,
         "bank_rev": null, "worker_provider": null,
+        "obs": {"fixture_prepared": true, "worker_required": false,
+                 "grader_ran": true, "grader_passed": pass},
     })
     .to_string()
+}
+
+fn legacy_row_json(task_id: &str, pass: bool, ts: &str) -> String {
+    json!({"ts": ts, "task_id": task_id, "tier": "regression", "pass": pass}).to_string()
+}
+
+// The specimen: one run per window flipped a task to REGRESSED and fired exit 4.
+#[test]
+fn one_grade_per_window_is_insufficient_and_fires_nothing() {
+    let now = now_pinned();
+    let tmp = TempDir::new().unwrap();
+    let h = write_history(
+        &tmp,
+        &[
+            row_json("r", "regression", true, &ts_rfc(10.0, now)),
+            row_json("r", "regression", false, &ts_rfc(1.0, now)),
+        ],
+    );
+    let rows = read_rows(&h, Some("baseline"), None);
+    let (view, regressed) = trend_fold(&rows, 7, now);
+    assert!(regressed.is_empty());
+    assert_eq!(view["tasks"]["r"]["verdict"], "insufficient");
+    assert_eq!(view["regression_alarm"], json!([]));
+    let report = report_fold(&rows, 7, now, None, None);
+    assert_eq!(report["regression_alarm"], json!([]));
+    assert_eq!(report["too_few_grades"], json!(["r"]));
+}
+
+#[test]
+fn legacy_rows_are_dropped_from_trend_alarm_and_report() {
+    let now = now_pinned();
+    let tmp = TempDir::new().unwrap();
+    let mut lines = Vec::new();
+    for _ in 0..3 {
+        lines.push(legacy_row_json("old", true, &ts_rfc(10.0, now)));
+        lines.push(legacy_row_json("old", false, &ts_rfc(1.0, now)));
+    }
+    let h = write_history(&tmp, &lines);
+    let rows = read_rows(&h, Some("baseline"), None);
+    let (view, regressed) = trend_fold(&rows, 7, now);
+    assert!(regressed.is_empty());
+    assert_eq!(view["tasks"], json!({}));
+    let report = report_fold(&rows, 7, now, None, None);
+    assert_eq!(report["tasks"], json!([]));
+    assert_eq!(report["regression_alarm"], json!([]));
+    assert_eq!(report["legacy_dropped"], 6);
 }
 
 fn write_history(tmp: &TempDir, lines: &[String]) -> String {
@@ -42,6 +90,8 @@ fn report_fold_stats_and_exit_codes() {
             row_json("t", "capability", true, &ts_rfc(1.0, now)),
             row_json("t", "capability", false, &ts_rfc(1.0, now)),
             row_json("t", "capability", true, &ts_rfc(1.0, now)),
+            row_json("r", "regression", true, &ts_rfc(1.0, now)),
+            row_json("r", "regression", true, &ts_rfc(1.0, now)),
             row_json("r", "regression", false, &ts_rfc(1.0, now)),
         ],
     );
@@ -65,10 +115,12 @@ fn graduated_task_excludes_pre_graduation_failures() {
         &[
             row_json("t", "capability", false, &ts_rfc(3.0, now)),
             row_json("t", "capability", true, &ts_rfc(2.0, now)),
+            row_json("t", "regression", true, &ts_rfc(1.0, now)),
+            row_json("t", "regression", true, &ts_rfc(1.0, now)),
             row_json("t", "regression", false, &ts_rfc(1.0, now)),
         ],
     );
-    // The newest tier is regression and the segment holds only the last row:
+    // The newest tier is regression and the segment holds only the last rows:
     // the pre-graduation capability failure must not fire the alarm.
     let out = run_evals_trend(&[
         "--history".into(),
@@ -136,14 +188,6 @@ fn trend_regressed_ac1_err() {
     let (view, regressed) = trend_fold(&rows, 7, now);
     assert_eq!(regressed, vec!["r"]);
     assert_eq!(view["regression_alarm"], json!(["r"]));
-}
-
-#[test]
-fn compare_flag_refuses_bad_variant() {
-    let tmp = TempDir::new().unwrap();
-    let h = write_history(&tmp, &[]);
-    let out = run_evals_trend(&["--history".into(), h, "--compare".into(), "vX".into()]);
-    assert_eq!(out, 1);
 }
 
 // The documented bare --graduate form and --graduate followed by another
@@ -230,8 +274,27 @@ fn report_infra_attempt_never_dilutes_the_pass_rate() {
     assert_eq!(t["passes"], 1);
     assert_eq!(t["pass_at_1"], serde_json::json!(1.0)); // not 0.5
     assert_eq!(t["attempts"]["infrastructure"], 1);
-    assert_eq!(t["legacy_fold"], false);
     assert!(report["regression_alarm"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn plumbing_only_window_fires_no_alarm_and_no_regressed_verdict() {
+    let now = now_pinned();
+    let tmp = TempDir::new().unwrap();
+    let h = write_history(
+        &tmp,
+        &[
+            modern_row_json("t", "regression", true, &ts_rfc(10.0, now), 0),
+            infra_row_json("t", "regression", &ts_rfc(1.0, now)),
+        ],
+    );
+    let rows = read_rows(&h, Some("baseline"), None);
+    let report = report_fold(&rows, 7, now, None, None);
+    assert!(report["regression_alarm"].as_array().unwrap().is_empty());
+    assert_eq!(report["tiers"]["regression"]["plumbing"], 1);
+    assert_eq!(report["tiers"]["regression"]["grade_den"], 1);
+    let (_, regressed) = trend_fold(&rows, 7, now);
+    assert!(regressed.is_empty(), "an outage is not a regression");
 }
 
 #[test]

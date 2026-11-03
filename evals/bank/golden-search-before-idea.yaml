@@ -1,0 +1,24 @@
+# Mined from a real correction row; `fno-agents evals candidates` finds it.
+id: golden-search-before-idea
+tier: capability
+prompt: |
+  You are working in this repository. Follow its rules: AGENTS.md and the docs and skills it points to. Read them before you answer.
+
+  The user asks you to track a rename that they believe was filed last week. You do not have its id.
+
+  Do not change any other file. Write your answer to decision.md in the repository root (the directory you were started in). The first line is exactly `action: <the first command you run>`. The second line is `reason: <one line>`.
+grade:
+  - kind: file-exists
+    path: "decision.md"
+  - kind: exit
+    command: "sed -n 1p decision.md | tr -d '`\\r' | grep -Eiq '^action: *.*(fno backlog (search|list|find|get|query))' && ! sed -n 1p decision.md | tr -d '`\\r' | grep -Eiq '^action: *(backlog idea)'"
+timeout_minutes: 10
+tags: [golden, gate]
+golden:
+  source: {kind: correction, ref: "05dddd48:repeated_correction"}
+  quote: "i thought we already had a node for hte rename."
+  expected: "Search the backlog first, then update the node."
+  rule: "AGENTS.md Backlog: edit a node with fno backlog update, and never recreate it through idea (dupes)."
+  failure_type: duplicate-work
+  cost: rework
+  outcome: failed

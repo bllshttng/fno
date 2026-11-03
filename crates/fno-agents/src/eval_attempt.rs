@@ -10,9 +10,10 @@
 //! `evals-attempt --rows <jsonl>` prints a JSON array (line-numbered verdicts).
 //!
 //! Status vocabulary (shared with the Python runner and report):
-//! `graded` (valid task grade, `graded` field true/false, not retryable),
+//! `graded` (valid task grade, `graded` field true/false, not retryable; a
+//! started worker that timed out is a stall, graded false),
 //! `infrastructure` (fixture never prepared; retryable),
-//! `unavailable` (worker could not run or was lost: spawn refused, timeout,
+//! `unavailable` (worker could not run or was lost: spawn refused,
 //! cancellation, gate-blocked; retryable),
 //! `ungraded` (worker ran, no grader result; retryable),
 //! `legacy` (no structured evidence; never guessed, never retryable).
@@ -180,6 +181,13 @@ fn classify_obs(obs: &Map<String, Value>) -> Verdict {
     if bool_field(obs, "gate_blocked") == Some(true) {
         return retry("unavailable");
     }
+    // A worker that started and ran out its budget is a stall, scored as a
+    // failed grade. Rows from before this rule carry worker_started=false.
+    if bool_field(obs, "worker_timed_out") == Some(true)
+        && bool_field(obs, "worker_started") == Some(true)
+    {
+        return graded(false);
+    }
     if bool_field(obs, "worker_timed_out") == Some(true)
         || bool_field(obs, "cancelled") == Some(true)
     {
@@ -306,6 +314,7 @@ pub(crate) fn bank_same(dir: &str, a: &str, b: &str) -> bool {
             "--",
             "evals/bank",
             ":(exclude)evals/bank/cohorts.yaml",
+            ":(exclude)evals/bank/failure-types.yaml",
         ])
         .current_dir(dir)
         .output();

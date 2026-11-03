@@ -509,7 +509,7 @@ pub(crate) struct YouInputs<'a> {
 /// rows all read as fewer or empty rows, never an error.
 pub(crate) fn project_you(inputs: &YouInputs) -> Vec<Value> {
     let dot_fno = inputs.home_root.parent().unwrap_or(&inputs.home_root);
-    let bus = BusIndex::load(&crate::intel::bus_log_path(dot_fno));
+    let bus = BusIndex::load(&crate::mail_paths::bus_log_path(dot_fno));
     let lock =
         crate::gh_budget::FileLock::try_acquire(&crate::gh_budget::lock_path(&inputs.cache_path));
     let persist = lock.is_ok();

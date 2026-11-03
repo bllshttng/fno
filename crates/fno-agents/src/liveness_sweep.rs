@@ -727,7 +727,7 @@ pub(crate) fn persist_reconcile_changes(
     mode: &SweepMode,
     now: &str,
 ) -> Result<(), state::StateError> {
-    let log = crate::intel::bus_log_path(home.root().parent().unwrap_or(home.root()));
+    let log = crate::mail_paths::bus_log_path(home.root().parent().unwrap_or(home.root()));
     let bus_dir = log.parent().unwrap_or(home.root());
     let msgs = std::fs::read_to_string(&log).ok().and_then(|text| {
         text.lines()

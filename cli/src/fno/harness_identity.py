@@ -118,6 +118,7 @@ HARNESS_SESSION_MARKERS: tuple[tuple[str, str], ...] = (
     ("CODEX_SESSION_ID", "codex"),
     ("GEMINI_SESSION_ID", "gemini"),
     ("OPENCODE_SESSION_ID", "opencode"),
+    ("PI_SESSION_ID", "pi"),
 )
 
 LEGACY_HARNESS_SESSION_MARKERS: tuple[tuple[str, str], ...] = (
@@ -185,6 +186,7 @@ _EXTRA_IDENTITY_NAMES: tuple[tuple[str, str], ...] = (
     ("CODEX_SHELL", "codex"),
     ("CODEX_COMPANION_SESSION_ID", "codex"),
     ("CODEX_COMPANION_TRANSCRIPT_PATH", "codex"),
+    ("PI_SESSION_FILE", "pi"),
 )
 
 AMBIENT_IDENTITY_ENV: tuple[str, ...] = (

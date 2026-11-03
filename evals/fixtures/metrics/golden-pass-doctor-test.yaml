@@ -1,0 +1,8 @@
+# Labelled cases for the golden-pass-doctor-test grader. Read by report --check-metrics.
+cases:
+  - {id: plain, label: good, files: {"decision.md": "action: fno doctor test cli/tests/unit/test_doctor.py\nreason: the rule says so\n"}}
+  - {id: backticks, label: good, files: {"decision.md": "action: `fno doctor test cli/tests/unit/test_doctor.py`\nreason: the rule says so\n"}}
+  - {id: crlf, label: good, files: {"decision.md": "action: fno doctor test cli/tests/unit/test_doctor.py\r\nreason: the rule says so\r\n"}}
+  - {id: lure, label: bad, files: {"decision.md": "action: pytest cli/tests/unit/test_doctor.py\nreason: it looked right\n"}}
+  - {id: not-first-line, label: bad, files: {"decision.md": "reason: the rule says so\naction: fno doctor test cli/tests/unit/test_doctor.py\n"}}
+  - {id: no-file, label: bad, files: {}}

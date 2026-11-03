@@ -1272,6 +1272,10 @@ async fn run(args: Vec<String>) -> i32 {
             Some("--peek") => return fno_agents::peek::run_peek(&rest[1..]),
             Some("--team") => return fno_agents::team_read::run_team(&rest[1..]),
             Some("--role") => return fno_agents::role_grant::run_role(&rest[1..]),
+            Some("--lint-registry") | Some("--lint-field-coverage") => {
+                let op = rest[0].as_str();
+                return fno_agents::lint_registry::run(op, &rest[1..], &AgentsHome::from_env());
+            }
             _ => {}
         }
         let has_cap = rest.iter().any(|a| a.as_str() == "--capabilities");
@@ -1906,19 +1910,6 @@ async fn run(args: Vec<String>) -> i32 {
         }
     }
 }
-
-/// Invoking-harness env markers, highest priority first. Mirror of Python
-/// `harness_identity.HARNESS_SESSION_MARKERS`; cross-language drift is caught by
-/// the pytest `test_harness_markers_match_client_rs`, which reads this const from
-/// source (the Rust unit test only guards Rust-internal edits).
-#[allow(dead_code)]
-const HARNESS_MARKERS: &[(&str, &str)] = &[
-    ("CODEX_THREAD_ID", "codex"),
-    ("CLAUDE_CODE_SESSION_ID", "claude"),
-    ("CODEX_SESSION_ID", "codex"),
-    ("GEMINI_SESSION_ID", "gemini"),
-    ("OPENCODE_SESSION_ID", "opencode"),
-];
 
 fn validate_spawn_placement(params: &Value, substrate: &str) -> Result<(), String> {
     let squad = params.get("squad").and_then(Value::as_str);
@@ -3739,6 +3730,15 @@ fn build_request(command: &str, rest: &[String]) -> Result<(String, Value), Stri
             "--node" | "--slug" | "--plan" | "--session-phase" => {
                 params.insert(a[2..].replace('-', "_"), str_arg(&mut it, &a)?);
             }
+            // The cross-host relay's explicit parent edge (spawn_remote.rs):
+            // an ssh hop forwards no caller env, so the far side's ambient
+            // capture resolves nothing. The daemon mint reads the request.
+            "--spawned-by" => {
+                params.insert(
+                    "spawned_by_session".into(),
+                    str_arg(&mut it, "--spawned-by")?,
+                );
+            }
             // The seam's node-reason receipt, set only when the seed
             // named a node the seam could not resolve. Forwarded so the mint
             // stamps why the row works no node; never read as a decision.
@@ -4078,14 +4078,20 @@ fn build_request(command: &str, rest: &[String]) -> Result<(String, Value), Stri
             // daemon mint reads the parent from HERE, never from its own
             // environment (node-provenance.md: capture is ambient).
             let (session, harness, cwd) = fno_agents::claims::ambient_parent_edge();
-            if let Some(s) = session {
-                params.insert("spawned_by_session".into(), Value::String(s));
-            }
-            if let Some(h) = harness {
-                params.insert("spawned_by_harness".into(), Value::String(h));
-            }
-            if let Some(c) = cwd {
-                params.insert("spawned_by_cwd".into(), Value::String(c));
+            // An explicit `--spawned-by` (the cross-host relay's edge) wins
+            // over the ambient capture; the three ride together, so a
+            // carried session keeps its harness/cwd out too rather than
+            // mixing parentage from two captures.
+            if params.get("spawned_by_session").is_none() {
+                if let Some(s) = session {
+                    params.insert("spawned_by_session".into(), Value::String(s));
+                }
+                if let Some(h) = harness {
+                    params.insert("spawned_by_harness".into(), Value::String(h));
+                }
+                if let Some(c) = cwd {
+                    params.insert("spawned_by_cwd".into(), Value::String(c));
+                }
             }
             // With --name the whole positional tail is the message; without it the
             // first positional is still the name (a direct `fno-agents spawn`
@@ -4438,11 +4444,15 @@ fn format_success(
 /// Render agents list as Python-matching JSON (Task 3.1; discovered lane
 ///; provider key restored).
 ///
-/// Shape (schema_version 6): `{"agents": [...], "count": N,
-/// "discovered_sessions": [...], "discovered_count": M, "fields_omitted":
-/// [...], "filters_applied": {...}, "schema_version": 6}`. Stays
-/// byte-shape-aligned with Python's `format.render_json`.
-const LIST_JSON_SCHEMA_VERSION: u32 = 7;
+/// Shape (schema_version 8): `{"agents": [...], "count": N,
+/// "liveness_unknown": K, "discovered_sessions": [...], "discovered_count":
+/// M, "fields_omitted": [...], "filters_applied": {...}, "schema_version":
+/// 8}`. Stays byte-shape-aligned with Python's `format.render_json`.
+/// `liveness_unknown` (v8, additive) counts rows whose served liveness
+/// reads `unknown` - a stale or never-run probe: a zero alive
+/// count beside a nonzero unknown count says the PROBE went dark, not the
+/// fleet.
+const LIST_JSON_SCHEMA_VERSION: u32 = 8;
 
 fn render_list_json(
     agents: &Value,
@@ -4454,12 +4464,19 @@ fn render_list_json(
     codex_loaded: Option<&Value>,
     retired: &Value,
 ) -> String {
-    let count = agents.as_array().map(|a| a.len()).unwrap_or(0);
+    let rows = agents.as_array();
+    let count = rows.map_or(0, |a| a.len());
+    let liveness_unknown = rows.map_or(0, |a| {
+        a.iter()
+            .filter(|r| r.get("liveness").and_then(Value::as_str) == Some("unknown"))
+            .count()
+    });
     // `codex_loaded` is additive and present only when the caller probed the
     // codex daemon (`--harness codex`); the key is omitted otherwise.
     let mut payload = json!({
         "agents": agents,
         "count": count,
+        "liveness_unknown": liveness_unknown,
         "discovered_sessions": discovered,
         "discovered_count": discovered.len(),
         "fields_omitted": fields_omitted,

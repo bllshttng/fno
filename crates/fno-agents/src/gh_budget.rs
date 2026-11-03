@@ -279,6 +279,14 @@ pub fn points_for(argv: &[String]) -> u32 {
     let cmd: Vec<&str> = normalized.iter().map(String::as_str).collect();
     match cmd.first().copied() {
         Some("--version" | "version" | "help" | "--help" | "completion" | "config" | "alias") => 0,
+        Some("auth") => match cmd.get(1).copied() {
+            // `auth status` is the login read the shared hold keys on;
+            // charging it would re-enter admit from the hold read and
+            // recurse (gh_login). At most one validation call per hour
+            // behind the login cache.
+            Some("status") => 0,
+            _ => 1,
+        },
         Some("api") => {
             if cmd.get(1) == Some(&"rate_limit") {
                 return 0; // exempt from the primary limit; the budget need not count it
@@ -330,12 +338,33 @@ fn window_points(ledger: &Ledger, now: i64) -> i64 {
 /// that long. A hold lasts at least [`BASE_BACKOFF_MS`], so a short-stale
 /// answer still sees it.
 fn shared_hold(now: i64) -> (i64, String) {
+    let Some(key) = shared_hold_key() else {
+        // A remote with an unreadable login skips the shared rows entirely:
+        // the local ledger alone catches this machine's refusals, the same
+        // fail-open posture as an unreadable ledger.
+        return (0, String::new());
+    };
     shared_hold_cached(&shared_hold_cache_path(), now, || {
-        crate::claim_store::budget_hold_read(None, now)
+        crate::claim_store::budget_hold_read(None, now, &key)
             .ok()
             .flatten()
             .map(|(until, _, _, kind)| (until, kind))
     })
+}
+
+/// The shared hold's key: the bare machine-local key with no remote (a
+/// stock install pays no gh spawn for a login read), the login-keyed form
+/// with one, and None when a remote is set but the login is unreadable, so
+/// the machine skips the shared read and write entirely and the local
+/// ledger alone catches its refusals.
+fn shared_hold_key() -> Option<String> {
+    match crate::store_remote::configured() {
+        Ok(None) => Some(crate::claim_store::BUDGET_HOLD_KEY.to_string()),
+        Ok(Some(_)) => {
+            crate::gh_login::current().map(|login| crate::claim_store::budget_hold_key(&login))
+        }
+        Err(_) => Some(crate::claim_store::BUDGET_HOLD_KEY.to_string()),
+    }
 }
 
 const SHARED_HOLD_TTL_MS: i64 = 15_000;
@@ -974,14 +1003,12 @@ pub(crate) fn admission_armed() -> bool {
 /// reporting one refusal widen nothing.
 pub fn record_refusal(path: &Path, now: i64, kind: &str) -> Result<(), String> {
     let real = path == ledger_path().as_path();
-    let shared = if real {
-        let (shared_step, shared_last) =
-            crate::claim_store::budget_hold_history(None).unwrap_or((0, 0));
-        (shared_hold(now).0, shared_step, shared_last)
+    let (shared, hold_key) = if real {
+        shared_refusal_context(now)
     } else {
-        (0, 0, 0)
+        ((0, 0, 0), None)
     };
-    record_refusal_body(Some(path), now, kind, shared)
+    record_refusal_body(Some(path), now, kind, shared, hold_key.as_deref())
 }
 
 /// The real-ledger refusal entry: the fleet hold is read live and the
@@ -989,10 +1016,20 @@ pub fn record_refusal(path: &Path, now: i64, kind: &str) -> Result<(), String> {
 /// fold cannot strand them on different spellings. Tests inject through
 /// record_refusal instead.
 pub(crate) fn record_refusal_real(now: i64, kind: &str) -> Result<(), String> {
-    let (shared_step, shared_last) =
-        crate::claim_store::budget_hold_history(None).unwrap_or((0, 0));
-    let shared = (shared_hold(now).0, shared_step, shared_last);
-    record_refusal_body(None, now, kind, shared)
+    let (shared, hold_key) = shared_refusal_context(now);
+    record_refusal_body(None, now, kind, shared, hold_key.as_deref())
+}
+
+/// One refusal's shared-row context under one key choice: the live
+/// deadline, the history for escalation, and the key itself, so the read
+/// and the write land on the same login's row. (0s, None) when the machine
+/// skips the shared rows.
+fn shared_refusal_context(now: i64) -> ((i64, i64, i64), Option<String>) {
+    let Some(key) = shared_hold_key() else {
+        return ((0, 0, 0), None);
+    };
+    let history = crate::claim_store::budget_hold_history(None, &key).unwrap_or((0, 0));
+    ((shared_hold(now).0, history.0, history.1), Some(key))
 }
 
 /// The refusal body over an optional ledger override: None means the real
@@ -1002,6 +1039,7 @@ fn record_refusal_body(
     now: i64,
     kind: &str,
     shared: (i64, i64, i64),
+    hold_key: Option<&str>,
 ) -> Result<(), String> {
     let (_lock, path) = ledger_lock(ledger_override);
     let (mut ledger, _) = read_ledger(&path);
@@ -1044,15 +1082,18 @@ fn record_refusal_body(
     // on the returned ledger path: after a retake it names the current
     // answer even when the caller resolved before the fold.
     if path == ledger_path().as_path() {
-        if let Err(e) = crate::claim_store::budget_hold_write(
-            None,
-            &crate::claims::machine_id(),
-            ledger.backoff_until_ms,
-            ledger.backoff_step,
-            ledger.last_refusal_ms,
-            &ledger.refusal_kind,
-        ) {
-            eprintln!("gh-budget: fleet hold not shared: {e}");
+        if let Some(key) = hold_key {
+            if let Err(e) = crate::claim_store::budget_hold_write(
+                None,
+                key,
+                &crate::claims::machine_id(),
+                ledger.backoff_until_ms,
+                ledger.backoff_step,
+                ledger.last_refusal_ms,
+                &ledger.refusal_kind,
+            ) {
+                eprintln!("gh-budget: fleet hold not shared: {e}");
+            }
         }
     }
     Ok(())
@@ -1285,6 +1326,7 @@ fn status_value() -> Value {
             "core_seen_age_s": s.core_seen_age_s,
             "core_reading_fresh": s.core_reading_fresh,
             "core_reserve": s.core_reserve,
+            "gh_login": crate::gh_login::current(),
     })
 }
 
@@ -1454,7 +1496,7 @@ mod tests {
         kind: &str,
         shared: (i64, i64, i64),
     ) -> Result<(), String> {
-        record_refusal_body(Some(path), now, kind, shared)
+        record_refusal_body(Some(path), now, kind, shared, None)
     }
 
     /// The injected core-stamp seam.
@@ -1887,6 +1929,17 @@ mod tests {
             admit_spawn(gh, args).is_some(),
             "an unresolvable-as-child spawn keeps the consult"
         );
+    }
+
+    #[test]
+    fn auth_status_reads_zero_points_and_other_auth_subcommands_charge() {
+        let argv = |words: &[&str]| words.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            points_for(&argv(&["auth", "status", "--json", "hosts"])),
+            0,
+            "the login read is exempt so it cannot re-enter admit"
+        );
+        assert_eq!(points_for(&argv(&["auth", "refresh"])), 1);
     }
 
     #[test]

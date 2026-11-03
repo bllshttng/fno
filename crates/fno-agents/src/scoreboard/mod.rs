@@ -983,7 +983,7 @@ mod args;
 mod context_trace;
 mod door;
 pub(crate) mod plan_join;
-mod readers;
+pub(crate) mod readers;
 mod render;
 mod views;
 

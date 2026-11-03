@@ -64,7 +64,7 @@ fn rust_source_minus_tests(path: &Path) -> String {
     kept
 }
 
-/// Every arm the code can emit: the `KNOWN_ARMS` table plus the Python tick
+/// Every arm the code can emit: the `KNOWN_ARMS` table plus the tick and Python
 /// literals that have no row there (they are appended as observed-only rows).
 fn code_arms(python_sources: &[PathBuf]) -> BTreeSet<String> {
     let mut arms: BTreeSet<String> = BTreeSet::new();
@@ -82,6 +82,16 @@ fn code_arms(python_sources: &[PathBuf]) -> BTreeSet<String> {
             for capture in pattern.captures_iter(&text) {
                 arms.insert(capture[1].to_string());
             }
+        }
+    }
+    let tick = rust_source_minus_tests(&repo_root().join("crates/fno-agents/src/pr_watch/tick.rs"));
+    let tick_patterns = [
+        Regex::new(r#"run_phase\(\s*"[a-z_]+",\s*Some\("([a-z_]+)"\)"#).unwrap(),
+        Regex::new(r#"\.row\(\s*"([a-z_]+)""#).unwrap(),
+    ];
+    for pattern in &tick_patterns {
+        for capture in pattern.captures_iter(&tick) {
+            arms.insert(capture[1].to_string());
         }
     }
     arms

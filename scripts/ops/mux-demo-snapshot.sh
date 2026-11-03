@@ -79,6 +79,45 @@ cleanup() {
   if [ -n "${FNO_DEMO_KEEP:-}" ]; then echo "kept $ROOT" >&2; else rm -rf "$ROOT"; fi
 }
 trap cleanup EXIT
+# bash runs the EXIT trap only on a normal exit. A Ctrl-C, a closed terminal
+# or a cancelled CI job kills the shell outright, and every draw loop keeps
+# forking sleep for hours. Route the kill signals through exit, so the
+# teardown above always runs.
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
+
+# A run killed with SIGKILL, or lost to a dead battery, never ran cleanup:
+# its root and draw loops stay behind, forking sleep forever. Reap every
+# fno-demo root older than 1 h, with the processes under it, before seeding,
+# so no draw loop outlives its demo by an hour.
+reap_stale_demos() {
+  local d m age i
+  for d in /tmp/fno-demo.*; do
+    [ -d "$d" ] || continue
+    [ "$d" = "$ROOT" ] && continue
+    # python3, not stat: a BSD-style `stat -f %m` on GNU coreutils exits 1
+    # while still printing the filesystem stanza of the later operand, and
+    # that garbage in the captured value kills the age math.
+    m=$(python3 -c 'import os,sys; print(int(os.stat(sys.argv[1]).st_mtime))' "$d" 2>/dev/null) || continue
+    age=$(( $(date +%s) - m ))
+    [ "$age" -gt 3600 ] || continue
+    pkill -TERM -f -- "$d/" 2>/dev/null || true
+    for i in 1 2 3 4 5; do
+      pgrep -f -- "$d/" >/dev/null || break
+      sleep 0.5
+    done
+    pkill -KILL -f -- "$d/" 2>/dev/null || true
+    sleep 0.5
+    if pgrep -f -- "$d/" >/dev/null; then
+      echo "mux-demo-snapshot: stale demo processes under $d survive; root kept:" >&2
+      pgrep -fl -- "$d/" >&2
+      exit 1
+    fi
+    rm -rf -- "$d"
+  done
+}
+reap_stale_demos
 
 mkdir -p "$ROOT/mux" "$ROOT/agents" "$ROOT/code/checkout" "$ROOT/text" "$ROOT/.fno/claims"
 # State under $ROOT/.fno: the mux board reads the graph from $HOME/.fno.
@@ -543,6 +582,7 @@ def machine(mid, host, local, age, sessions):
     }
 local = [
     seat("rowan", "claude", "opus", "payments", "quiet", 12, sid=MUX_LEAD, role="lead", short="demo-ld1"),
+    seat("sentry", "claude", "haiku", "payments", "blocked", 7, short="demo-bk1", parent=MUX_LEAD),
     seat("scout", "claude", "opus", "payments", "writing", 1, sid=sids[0], node=ids[0], parent=MUX_LEAD),
     seat("pager", "pi", "glm-5", "payments", "parked", 150, node=ids[4], short="demo-pg1", parent=MUX_LEAD),
     seat("wren", "codex", "gpt-6-sol", "search", "quiet", 30, sid=FLEET_LEAD, role="lead", short="demo-ld2"),
@@ -687,6 +727,16 @@ qs = [
 with open(f"{root}/.fno/questions.jsonl", "w") as f:
     for q in qs:
         f.write(json.dumps(q) + "\n")
+# Seed the short numbers, so the shots show them on the bell and the card.
+import sqlite3
+numbers = sqlite3.connect(f"{root}/.fno/db/graph.db")
+numbers.execute("CREATE TABLE IF NOT EXISTS fno_numbers (kind TEXT NOT NULL, num INTEGER NOT NULL, "
+                "key TEXT NOT NULL, store TEXT NOT NULL, host TEXT NOT NULL, created_at INTEGER NOT NULL, "
+                "PRIMARY KEY (store, kind, num), UNIQUE (store, key))")
+for num, key in ((87, "q-demo-a1"), (88, "q-demo-b2")):
+    numbers.execute("INSERT OR IGNORE INTO fno_numbers VALUES ('q', ?, ?, 'local', 'bb16', 0)", (num, key))
+numbers.commit()
+numbers.close()
 PY
 
 # FNO_DEMO_PIN=1 pins the scout row: a keep marker on its session id, the

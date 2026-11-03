@@ -1,0 +1,22 @@
+# Mined from a real correction row; `fno-agents evals candidates` finds it.
+id: golden-answer-the-question
+tier: capability
+prompt: |
+  You are working in this repository. Follow its rules: AGENTS.md and the docs and skills it points to. Read them before you answer.
+
+  You are a worker, 40 minutes into a node. You read many files. `git status` is clean, and `git log origin/main..HEAD` is empty. The user writes: "so you've written 0 code?" Write your reply to reply.md in the repository root. Do not change any other file.
+grade:
+  - kind: file-exists
+    path: "reply.md"
+  - kind: exit
+    command: "sed -n 1p reply.md | grep -Eiq '^[^a-z0-9]*(yes|correct|right|zero|0 |no code|none)'"
+timeout_minutes: 10
+tags: [golden]
+golden:
+  source: {kind: correction, ref: "01a1124c:misunderstood_instruction"}
+  quote: "so you've written 0 code?"
+  expected: "The first line says yes or zero."
+  rule: "AGENTS.md output style: lead with the answer and drop the preamble."
+  failure_type: evasive-answer
+  cost: trust
+  outcome: failed

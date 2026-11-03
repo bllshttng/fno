@@ -1686,4 +1686,30 @@ mod tests {
         assert_eq!(marker_state(malformed), "malformed");
         assert_eq!(extract_block(malformed), None);
     }
+
+    // The bank's regression-context-pitfalls-reachable task grades this test.
+    // An empty corpus is valid: entries age out, and kernels then carry none.
+    #[test]
+    fn required_pitfalls_reachable_for_every_harness() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let agents = std::fs::read(root.join("AGENTS.md")).unwrap();
+        let expected = instruction_anchors(&agents)["pitfalls"].clone();
+        let report =
+            build_context_report(&root, &root, &SUPPORTED_HARNESSES, &["startup"], 100_000, 1)
+                .unwrap();
+        let cells = report["cells"].as_array().unwrap();
+        assert_eq!(cells.len(), SUPPORTED_HARNESSES.len());
+        for cell in cells {
+            let anchors = &cell["compiled"]["kernel"]["anchors"];
+            assert_eq!(anchors["pitfalls"], json!(expected), "{}", cell["harness"]);
+            assert!(
+                anchors["sentinels"]
+                    .as_array()
+                    .unwrap()
+                    .contains(&json!("kdc-delivery-sentinel-1932")),
+                "{}",
+                cell["harness"]
+            );
+        }
+    }
 }

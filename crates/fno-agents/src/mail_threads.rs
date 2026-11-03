@@ -223,8 +223,8 @@ fn expires_at(line: &Value) -> Option<&str> {
 /// writes `hosted`, which would otherwise turn a parked message accepted.
 fn delivery_states(
     texts: &[String],
-) -> std::collections::HashMap<String, crate::mail_delivery_state::DeliveryState> {
-    use crate::mail_delivery_state::{DeliveryState, Evidence};
+) -> std::collections::HashMap<String, crate::mail::state::DeliveryState> {
+    use crate::mail::state::{DeliveryState, Evidence};
     let mut out: std::collections::HashMap<String, DeliveryState> = Default::default();
     let mut stated: std::collections::HashSet<String> = Default::default();
     for line in texts.iter().flat_map(|t| t.lines()) {
@@ -295,13 +295,13 @@ fn failure_counts(texts: &[String]) -> std::collections::HashMap<String, u64> {
 /// The state word for one message row: its folded delivery lines, else the
 /// legacy reading of its own `delivery` mark.
 fn state_word(
-    states: &std::collections::HashMap<String, crate::mail_delivery_state::DeliveryState>,
+    states: &std::collections::HashMap<String, crate::mail::state::DeliveryState>,
     v: &Value,
 ) -> &'static str {
     let id = v.get("id").and_then(Value::as_str).unwrap_or("");
     match states.get(id) {
         Some(state) => state.word(),
-        None => crate::mail_delivery_state::DeliveryState::from_legacy(
+        None => crate::mail::state::DeliveryState::from_legacy(
             v.get("delivery")
                 .and_then(Value::as_str)
                 .unwrap_or("durable"),
@@ -714,7 +714,7 @@ pub fn run_mail_threads(args: &[String]) -> i32 {
             // The reader folds the stray bus-dir chats too, so mail the old
             // send lanes parked there shows before the next send runs.
             let chats = chats_dir();
-            if let Some(stray_root) = crate::chats::bus_append_live_path().parent() {
+            if let Some(stray_root) = crate::mail_paths::live_bus_log().parent() {
                 crate::chats::fold_stray_chats(&chats, stray_root);
             }
             let projection = project_at(&chats, &registry_rows(), now_secs());
@@ -765,7 +765,7 @@ fn run_journal_reply(args: &[String]) -> i32 {
 fn journal_bus_path() -> std::path::PathBuf {
     let home = AgentsHome::from_env();
     let dot_fno = home.root().parent().unwrap_or_else(|| home.root());
-    crate::intel::bus_log_path(dot_fno)
+    crate::mail_paths::bus_log_path(dot_fno)
 }
 
 fn journal_reply_at(
@@ -915,11 +915,13 @@ fn run_details(args: &[String]) -> i32 {
             "cache_write": t.cache_write,
         })
     });
-    let cost = details_cost(
-        ledger_cost(sid),
-        activity.as_ref().map(|(t, m)| (*t, m.as_deref())),
-        &crate::model_price::state_dir(),
-    );
+    let estimate = transcript_cost(sid, harness).or_else(|| {
+        details_cost(
+            activity.as_ref().map(|(t, m)| (*t, m.as_deref())),
+            &crate::model_price::state_dir(),
+        )
+    });
+    let cost = crate::model_price::with_otel_floor(sid, estimate).or_else(|| ledger_cost(sid));
     println!(
         "{}",
         json!({
@@ -931,17 +933,13 @@ fn run_details(args: &[String]) -> i32 {
     0
 }
 
-/// The session's dollar cost: the ledger sum when node_costs rows exist,
-/// else the transcript tokens priced at the transcript model's catalog
-/// rates. No rows and no known rate read null, never a fabricated zero.
+/// A non-claude session's dollars: its transcript tokens priced at the
+/// transcript model's catalog rates. No known rate reads null, never a
+/// fabricated zero.
 fn details_cost(
-    ledger: Option<f64>,
     activity: Option<(crate::session_activity::Tokens, Option<&str>)>,
     state: &Path,
 ) -> Option<f64> {
-    if ledger.is_some() {
-        return ledger;
-    }
     let (tokens, model) = activity?;
     let rates = crate::model_price::price_book(state)?.rates(model?, None)?;
     crate::model_price::cost(tokens, &rates)
@@ -965,13 +963,42 @@ fn transcript_activity(
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| std::path::PathBuf::from("/"));
     let path = crate::announce::transcript_path(&home, sid, codex)?;
-    let raw = std::fs::read_to_string(path).ok()?;
-    let act = if codex {
-        crate::session_activity::codex_activity(&raw)
-    } else {
-        crate::session_activity::claude_activity(&raw)
-    };
-    Some((act.tokens, act.model))
+    let raw = std::fs::read_to_string(&path).ok()?;
+    if codex {
+        let act = crate::session_activity::codex_activity(&raw);
+        return Some((act.tokens, act.model));
+    }
+    let act = crate::session_activity::claude_activity(&raw);
+    let mut tokens = act.tokens;
+    for sub in crate::model_price::subagent_transcripts(&path) {
+        let Ok(text) = std::fs::read_to_string(sub) else {
+            continue;
+        };
+        let t = crate::session_activity::claude_activity(&text).tokens;
+        tokens.input += t.input;
+        tokens.output += t.output;
+        tokens.cache_read += t.cache_read;
+        tokens.cache_write += t.cache_write;
+    }
+    Some((tokens, act.model))
+}
+
+/// A claude session's dollars through the daemon's own fold: the main
+/// transcript plus its subagents, with 1h cache writes at their own rate.
+/// The row and this modal then read one number.
+fn transcript_cost(sid: &str, harness: &str) -> Option<f64> {
+    if harness != "claude" && !harness.is_empty() {
+        return None;
+    }
+    let home = std::env::var_os("HOME").map(std::path::PathBuf::from)?;
+    let path = crate::announce::transcript_path(&home, sid, false)?;
+    let mut fold = crate::model_price::RunningCost::new();
+    fold.absorb(&path);
+    for sub in crate::model_price::subagent_transcripts(&path) {
+        fold.absorb_subagent(&sub);
+    }
+    let book = crate::model_price::price_book(&crate::model_price::state_dir())?;
+    fold.dollars(&book, None, None)
 }
 
 /// The session's cost from the graph's node_costs rows; null when the
@@ -1495,7 +1522,7 @@ mod tests {
             "re: user reply",
         )
         .unwrap();
-        let bus_rows = crate::announce::read_bus_segments(&bus);
+        let bus_rows = crate::mail::log::read_bus_segments(&bus);
         let reply = bus_rows
             .iter()
             .find(|row| row.get("id").and_then(Value::as_str) == Some(id.as_str()))
@@ -1626,15 +1653,11 @@ mod tests {
             cache_read: 1_000_000,
             cache_write: 0,
         };
-        let priced = details_cost(None, Some((tokens, Some("claude-opus-5-5"))), &state);
+        let priced = details_cost(Some((tokens, Some("claude-opus-5-5"))), &state);
         assert!((priced.unwrap() - 20.2).abs() < 1e-9);
         assert_eq!(
-            details_cost(None, Some((tokens, Some("mystery-1"))), &state),
+            details_cost(Some((tokens, Some("mystery-1"))), &state),
             None
-        );
-        assert_eq!(
-            details_cost(Some(3.5), Some((tokens, Some("claude-opus-5-5"))), &state),
-            Some(3.5)
         );
         let _ = std::fs::remove_dir_all(&state);
     }

@@ -151,6 +151,11 @@ pub(crate) fn resolve_scope(
     explicit_scope: Option<&str>,
     registry_path: &Path,
 ) -> Result<String, String> {
+    with_live_grants(|grants| resolve_scope_in(explicit_scope, registry_path, grants))
+}
+
+/// Call `f` with the grant receipts this machine holds.
+fn with_live_grants<T>(f: impl FnOnce(&Grants) -> T) -> T {
     let role_of = |scope: &str| {
         let answer =
             crate::territory::resolve_role_kind(&serde_json::json!({"scopes": [scope]})).ok()?;
@@ -175,13 +180,19 @@ pub(crate) fn resolve_scope(
             session,
         )
     };
-    let grants = Grants {
+    let promoted_at = |name: &str| {
+        newest_promote(
+            &crate::client_commands::trace_events_path(&crate::paths::AgentsHome::from_env()),
+            name,
+        )
+    };
+    f(&Grants {
         spaces_root: &crate::paths::spaces_root(),
         laws: &laws,
         role_of: &role_of,
         vacated_at: &vacated_at,
-    };
-    resolve_scope_in(explicit_scope, registry_path, &grants)
+        promoted_at: &promoted_at,
+    })
 }
 
 /// Where a user grant can live when the registry row lost its stamp: the
@@ -194,6 +205,9 @@ struct Grants<'a> {
     /// When this session last gave up a role (`agent_role_vacated`). A chat
     /// grant older than that is spent: `org done` must not be undone by it.
     vacated_at: &'a dyn Fn(&str) -> Option<chrono::DateTime<chrono::Utc>>,
+    /// When this row last took a role by name (`agent_promoted`). A grant older
+    /// than that never widens: a later promote may have narrowed it on purpose.
+    promoted_at: &'a dyn Fn(&str) -> Option<chrono::DateTime<chrono::Utc>>,
 }
 
 fn parse_ts(raw: &str) -> Option<chrono::DateTime<chrono::Utc>> {
@@ -202,17 +216,37 @@ fn parse_ts(raw: &str) -> Option<chrono::DateTime<chrono::Utc>> {
         .map(|t| t.with_timezone(&chrono::Utc))
 }
 
-/// The newest `agent_role_vacated` time for `session` in the agents journal.
-fn newest_vacate(events: &Path, session: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+/// The newest `kind` event in a journal whose `pointer` field equals `value`.
+fn newest_event(
+    events: &Path,
+    kind: &str,
+    pointer: &str,
+    value: &str,
+) -> Option<chrono::DateTime<chrono::Utc>> {
     std::fs::read_to_string(events)
         .ok()?
         .lines()
-        .filter(|line| line.contains("agent_role_vacated"))
+        .filter(|line| line.contains(kind))
         .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-        .filter(|e| e.get("type").and_then(Value::as_str) == Some("agent_role_vacated"))
-        .filter(|e| e.pointer("/data/holder_session").and_then(Value::as_str) == Some(session))
+        .filter(|e| e.get("type").and_then(Value::as_str) == Some(kind))
+        .filter(|e| e.pointer(pointer).and_then(Value::as_str) == Some(value))
         .filter_map(|e| parse_ts(e.get("ts")?.as_str()?))
         .max()
+}
+
+/// The newest `agent_role_vacated` time for `session` in the agents journal.
+fn newest_vacate(events: &Path, session: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    newest_event(
+        events,
+        "agent_role_vacated",
+        "/data/holder_session",
+        session,
+    )
+}
+
+/// The newest `agent_promoted` time for the row named `name`.
+fn newest_promote(events: &Path, name: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    newest_event(events, "agent_promoted", "/data/name", name)
 }
 
 /// The line that tells an agent how to record a grant the user says in chat.
@@ -267,11 +301,11 @@ fn resolve_scope_in(
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_string);
-    let team = match stamped {
+    let team = match stamped.filter(|_| row.role_level.is_some()) {
         Some(team) => team,
         None => heal_role(registry_path, grants, &session, row).ok_or_else(|| {
             format!(
-                "the registry row for {session} carries no role_scope, and no live lead \
+                "the registry row for {session} carries no complete role, and no live lead \
                  manifest or chat grant holds a grant the user made: the row is \
                  unstamped, so no team proves this session's authority. Ask your lead \
                  to grant the team. {}",
@@ -303,6 +337,13 @@ fn heal_role(
     stamp_role(registry_path, session, scope, level)
 }
 
+/// A law may name a row by handle, by short id, or by the 8-character session
+/// prefix a user reads off a status line.
+fn law_names_session(decision: &str, names: &[&str], session: &str) -> bool {
+    !decision.is_empty()
+        && (names.contains(&decision) || (decision.len() >= 8 && session.starts_with(decision)))
+}
+
 /// A user-ruling law row at `role-grant:<scope>` whose decision names this
 /// row's handle, short id or session. The scope resolves to its level.
 /// The user's words are stored, not checked against a transcript: the same
@@ -314,6 +355,20 @@ fn chat_grant(
     row: &crate::state::RegistryEntry,
 ) -> Option<(String, u32)> {
     let index = (grants.laws)().ok()?;
+    let subject = newest_grant_law(&index, grants, session, row)?
+        .get("subject")?
+        .as_str()?;
+    let (level, scope) = (grants.role_of)(subject.strip_prefix("role-grant:")?.trim())?;
+    Some((scope, level))
+}
+
+/// The newest unspent user grant that names this row.
+fn newest_grant_law<'a>(
+    index: &'a crate::decision_index::Index,
+    grants: &Grants,
+    session: &str,
+    row: &crate::state::RegistryEntry,
+) -> Option<&'a Value> {
     let names = [row.name.as_str(), row.short_id.as_str(), session];
     let spent_before = (grants.vacated_at)(session);
     let mut rows: Vec<&Value> = index
@@ -324,7 +379,7 @@ fn chat_grant(
             r.get("decision")
                 .and_then(Value::as_str)
                 .map(str::trim)
-                .is_some_and(|d| !d.is_empty() && names.contains(&d))
+                .is_some_and(|d| law_names_session(d, &names, session))
         })
         .filter(|r| {
             r.get("subject")
@@ -346,9 +401,109 @@ fn chat_grant(
             .unwrap_or("")
             .to_string()
     });
-    let subject = rows.last()?.get("subject")?.as_str()?;
+    rows.last().copied()
+}
+
+/// The role the newest grant names, when it strictly contains the role the row
+/// holds and postdates the row's last promote.
+fn wider_grant(
+    grants: &Grants,
+    session: &str,
+    row: &crate::state::RegistryEntry,
+    held: &str,
+    contains: &dyn Fn(&str, &str) -> bool,
+) -> Option<(String, u32)> {
+    let index = (grants.laws)().ok()?;
+    let law = newest_grant_law(&index, grants, session, row)?;
+    if let Some(promoted) = (grants.promoted_at)(&row.name) {
+        if parse_ts(law.get("ts")?.as_str()?)? <= promoted {
+            return None;
+        }
+    }
+    let subject = law.get("subject")?.as_str()?;
     let (level, scope) = (grants.role_of)(subject.strip_prefix("role-grant:")?.trim())?;
-    Some((scope, level))
+    contains(&scope, held).then_some((scope, level))
+}
+
+/// The user widened a lead that already holds a role: `heal_role` skips a
+/// stamped row, and `promote` refuses a self-edit. Re-stamp from the newest
+/// wider grant. Answers `(held, wider)` when the role moved.
+pub(crate) fn honor_wider_grant(home: &crate::paths::AgentsHome) -> Option<(String, String)> {
+    // Most callers hold no stamped row: they read no graph and no law store.
+    let (row, session) = stamped_live_row(home)?;
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    // Rung derivation reads this map: a guessed empty one would hide a rival.
+    let projects = crate::org_board::project_map(&cwd).ok()?;
+    let entries = crate::territory::graph_entries(&cwd).unwrap_or_default();
+    let lead_enabled = crate::lead_state::lead_loop_enabled(&cwd);
+    let (name, held, scope, level) = with_live_grants(|grants| {
+        widen_stamped_role(
+            home,
+            grants,
+            &row,
+            &session,
+            &projects,
+            &entries,
+            lead_enabled,
+        )
+    })?;
+    crate::role_grant::settle_user_rescope(home, &name, &held, &scope, level);
+    Some((held, scope))
+}
+
+/// This session's registry row, when it is live and holds a whole role.
+fn stamped_live_row(
+    home: &crate::paths::AgentsHome,
+) -> Option<(crate::state::RegistryEntry, String)> {
+    let (session, harness) = crate::claims::resolve_identity();
+    let (session, harness) = (session?, harness?);
+    let registry = crate::state::load_registry(&home.registry_json()).ok()?;
+    let row = crate::lead_state::find_by_session(&registry.entries, &session, Some(&harness))?;
+    if matches!(row.status, AgentStatus::Failed)
+        || matches!(
+            crate::row_verdict::fno_verdict(row),
+            crate::row_verdict::RowVerdict::Finished(_)
+        )
+    {
+        return None;
+    }
+    row.role_level?;
+    row.role_scope.as_deref().filter(|s| !s.trim().is_empty())?;
+    Some((row.clone(), session))
+}
+
+fn widen_stamped_role(
+    home: &crate::paths::AgentsHome,
+    grants: &Grants,
+    row: &crate::state::RegistryEntry,
+    session: &str,
+    projects: &std::collections::HashMap<String, String>,
+    entries: &[Value],
+    lead_enabled: bool,
+) -> Option<(String, String, String, u32)> {
+    let held = row.role_scope.clone()?;
+    let entry_of = |id: &str| entries.iter().find(|e| e["id"].as_str() == Some(id));
+    let contains = |outer: &str, inner: &str| {
+        crate::territory::scope_contains(outer, inner, &entry_of, projects)
+    };
+    let (scope, level) = wider_grant(grants, session, row, &held, &contains)?;
+    match crate::role_grant::rescope_from_user_grant(
+        home,
+        row,
+        &scope,
+        level,
+        projects,
+        lead_enabled,
+    ) {
+        Ok(()) => {
+            eprintln!("lead: the user's grant widened this role from {held} to {scope}");
+            Some((row.name.clone(), held, scope, level))
+        }
+        Err(e) => {
+            eprintln!("lead: the user's grant over {scope} did not apply: {e}");
+            None
+        }
+    }
 }
 
 fn manifest_grant(spaces_root: &Path, session: &str) -> Option<(String, u32)> {
@@ -398,10 +553,12 @@ fn stamp_role(registry_path: &Path, session: &str, scope: String, level: u32) ->
             ]
             .contains(&Some(session))
         })?;
-        if row
-            .role_scope
-            .as_deref()
-            .is_some_and(|s| !s.trim().is_empty())
+        // Half a role is no role: the grant completes it.
+        if row.role_level.is_some()
+            && row
+                .role_scope
+                .as_deref()
+                .is_some_and(|s| !s.trim().is_empty())
         {
             return None;
         }
@@ -1138,7 +1295,123 @@ mod tests {
             laws,
             role_of: &|scope: &str| Some((2, scope.to_string())),
             vacated_at: &|_: &str| None,
+            promoted_at: &|_: &str| None,
         }
+    }
+
+    /// The user said "muriel leads fno-web too" to a lead that already holds a
+    /// role. The check-in moves the row and the manifest, and a project lead
+    /// under the wider portfolio stays. A narrower grant, a grant older than the
+    /// last promote, and a live rival on the same rung each change nothing.
+    #[test]
+    fn a_users_wider_grant_restamps_a_stamped_lead() {
+        let _guard = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = tmp("wider-grant");
+        let session = "41f999e9-d3ba-41cb-9647-501a0b77551d";
+        let saved: Vec<_> = ["FNO_SPACES_DIR", crate::paths::HOME_ENV]
+            .iter()
+            .map(|k| (*k, std::env::var_os(k)))
+            .collect();
+        std::env::set_var("FNO_SPACES_DIR", dir.join("spaces"));
+        // A nested home keeps the journal beside it inside the test's directory.
+        let agents = dir.join("agents");
+        fs::create_dir_all(&agents).unwrap();
+        std::env::set_var(crate::paths::HOME_ENV, &agents);
+        std::env::set_var("FNO_HARNESS_NAME", "claude");
+        std::env::set_var("FNO_HARNESS_SESSION_ID", session);
+        let cwd = dir.join("repo");
+        fs::create_dir_all(&cwd).unwrap();
+        let home = crate::paths::AgentsHome::from_env();
+        let projects: std::collections::HashMap<String, String> =
+            ["fnh", "fno", "fno-web", "fno-books"]
+                .iter()
+                .map(|p| (p.to_string(), p.to_string()))
+                .collect();
+        let lead = teamed_row(serde_json::json!({
+            "name": "muriel", "harness_session_id": session, "role_level": 0,
+            "role_scope": "fnh,fno", "role_grantor": "human", "cwd": cwd,
+            "pid": std::process::id(),
+        }));
+        let other = |name: &str, level: u32, scope: &str| {
+            teamed_row(serde_json::json!({
+                "name": name, "harness_session_id": format!("ses-{name}"), "role_level": level,
+                "role_scope": scope, "pid": std::process::id(),
+            }))
+        };
+        let law = |subject: &str| {
+            serde_json::json!({
+                "decision_id": "d-1", "subject": subject, "decision": "muriel",
+                "authority_source": "chat_attested", "ts": "2026-11-02T20:11:31Z",
+                "rationale": "user in chat: yes muriel leads fno-web too",
+            })
+        };
+        let wider = "role-grant:fnh,fno,fno-web";
+        let holds = |scope: &str| {
+            crate::state::load_registry(&agents.join("registry.json"))
+                .unwrap()
+                .entries
+                .iter()
+                .find(|r| r.name == "muriel")
+                .and_then(|r| r.role_scope.clone())
+                .as_deref()
+                == Some(scope)
+        };
+        let widen = |grants: &Grants| {
+            let (row, session) = stamped_live_row(&home)?;
+            widen_stamped_role(&home, grants, &row, &session, &projects, &[], true)
+        };
+
+        write_registry(&agents, serde_json::json!([lead.clone()]));
+        assert!(widen(&grants(&dir, vec![law("role-grant:fnh")])).is_none());
+        assert!(holds("fnh,fno"), "a narrower grant moves nothing");
+
+        let later = |_: &str| parse_ts("2026-11-02T21:00:00Z");
+        let mut stale = grants(&dir, vec![law(wider)]);
+        stale.promoted_at = &later;
+        assert!(widen(&stale).is_none());
+        assert!(holds("fnh,fno"), "a later promote spends the grant");
+
+        write_registry(
+            &agents,
+            serde_json::json!([lead.clone(), other("rival", 0, "fno-web,fno-books")]),
+        );
+        assert!(widen(&grants(&dir, vec![law(wider)])).is_none());
+        assert!(holds("fnh,fno"), "a same-rung rival refuses");
+
+        write_registry(
+            &agents,
+            serde_json::json!([lead.clone(), other("rosa", 1, "fno-web")]),
+        );
+        let space = crate::paths::space_dir(&cwd);
+        let old = crate::lead_state::manifest_path(&space, "fnh,fno").unwrap();
+        fs::create_dir_all(old.parent().unwrap()).unwrap();
+        fs::write(
+            &old,
+            format!("---\nscope: fnh,fno\nharness_session_id: {session}\n---\n"),
+        )
+        .unwrap();
+        let moved = widen(&grants(&dir, vec![law(wider)])).expect("widens");
+        assert_eq!(moved.2, "fnh,fno,fno-web");
+        assert!(holds("fnh,fno,fno-web"));
+        assert!(!old.exists(), "the old manifest goes with the old role");
+        let armed = crate::lead_state::manifest_path(&space, "fnh,fno,fno-web").unwrap();
+        let armed = fs::read_to_string(armed).expect("the manifest moves with the row");
+        assert!(
+            armed.contains(&format!("harness_session_id: {session}")),
+            "{armed}"
+        );
+
+        for (key, value) in saved {
+            match value {
+                Some(v) => std::env::set_var(key, v),
+                None => std::env::remove_var(key),
+            }
+        }
+        std::env::remove_var("FNO_HARNESS_NAME");
+        std::env::remove_var("FNO_HARNESS_SESSION_ID");
+        fs::remove_dir_all(&dir).ok();
     }
 
     /// The user said "promote lead-a792 over fno-books" in chat and the agent
@@ -1188,6 +1461,35 @@ mod tests {
         with_teamed_identity(|| {
             resolve_scope_in(None, &spent, &after_done).expect_err("a vacated role stays vacated");
         });
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A law recorded against a session prefix counts, and a half role heals
+    /// from it: the row ends with a level and the granted scope.
+    #[test]
+    fn half_a_role_heals_from_a_law_naming_the_session_prefix() {
+        let id = "41f999e9-d3ba-41cb-9647-501a0b77551d";
+        assert!(law_names_session("41f999e9", &[], id));
+        assert!(!law_names_session("41f9", &[], id));
+        assert!(!law_names_session("", &[""], id));
+
+        let _guard = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = tmp("half-role");
+        let mut row = teamed_row(serde_json::json!({"role_scope": "fno-books"}));
+        row.as_object_mut().unwrap().remove("role_level");
+        let path = write_registry(&dir, serde_json::json!([row]));
+        let law = serde_json::json!({
+            "decision_id": "d-1", "subject": "role-grant:fno-books", "decision": "ses-team",
+            "authority_source": "chat_attested", "rationale": "user in chat: lead fno-books",
+            "ts": "2026-10-28T12:00:00Z",
+        });
+        with_teamed_identity(|| {
+            resolve_scope_in(None, &path, &grants(&dir, vec![law])).expect("heals");
+        });
+        let healed = crate::state::load_registry(&path).unwrap();
+        assert_eq!(healed.entries[0].role_level, Some(2));
         fs::remove_dir_all(&dir).ok();
     }
 

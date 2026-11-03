@@ -35,6 +35,8 @@ const PANE_PROBE_BUDGET: Duration = Duration::from_secs(30);
 /// The coerced per-provider lane caps. The legacy `max_lanes` spelling is
 /// read only when `provider_limits` is absent; malformed input restores the
 /// shared-account default, while an explicit empty table disables all caps.
+/// `Some(0)` is a closed lane: every live count is at the cap, so the gate
+/// refuses each spawn. `None` is the uncapped lane.
 pub(crate) fn provider_lane_caps(config_cwd: &Path) -> BTreeMap<String, Option<usize>> {
     let raw = agents_config::config_lookup(config_cwd, &["agents", "provider_limits"])
         .or_else(|| agents_config::config_lookup(config_cwd, &["agents", "max_lanes"]));
@@ -63,7 +65,7 @@ fn coerce_provider_lane_caps(raw: &toml::Value) -> Option<BTreeMap<String, Optio
             return None;
         }
         let lanes = if let Some(value) = budget.as_integer() {
-            Some(positive_lane_cap(value)?)
+            Some(lane_cap(value)?)
         } else if let Some(dimensions) = budget.as_table() {
             if dimensions
                 .keys()
@@ -73,9 +75,11 @@ fn coerce_provider_lane_caps(raw: &toml::Value) -> Option<BTreeMap<String, Optio
             }
             let mut lanes = None;
             for (dimension, value) in dimensions {
-                let value = positive_lane_cap(value.as_integer()?)?;
+                let value = value.as_integer()?;
                 if dimension == "lanes" {
-                    lanes = Some(value);
+                    lanes = Some(lane_cap(value)?);
+                } else if value < 1 {
+                    return None;
                 }
             }
             lanes
@@ -90,8 +94,8 @@ fn coerce_provider_lane_caps(raw: &toml::Value) -> Option<BTreeMap<String, Optio
     Some(caps)
 }
 
-fn positive_lane_cap(value: i64) -> Option<usize> {
-    usize::try_from(value).ok().filter(|cap| *cap > 0)
+fn lane_cap(value: i64) -> Option<usize> {
+    usize::try_from(value).ok()
 }
 
 fn valid_provider_name(provider: &str) -> bool {
@@ -2295,6 +2299,14 @@ mod tests {
                 expected(&[("zai", Some(2))]),
             ),
             ("[agents.provider_limits]\n", expected(&[])),
+            (
+                "[agents.provider_limits]\nzai = 0\n",
+                expected(&[("zai", Some(0))]),
+            ),
+            (
+                "[agents.provider_limits.zai]\nlanes = 0\n[agents.provider_limits.anthropic]\nlanes = 0\n",
+                expected(&[("zai", Some(0)), ("anthropic", Some(0))]),
+            ),
             ("[agents]\nmax_live = 2\n", expected(&[("zai", Some(5))])),
         ];
         for (config, caps) in cases {
@@ -2303,7 +2315,8 @@ mod tests {
         }
 
         for malformed in [
-            "[agents.provider_limits]\nzai = 0\n",
+            "[agents.provider_limits]\nzai = -1\n",
+            "[agents.provider_limits.zai]\nsubagents = 0\n",
             "[agents.provider_limits]\nzai = true\n",
             "[agents.provider_limits]\nzai = 2.5\n",
             "[agents.provider_limits]\nZai = 3\n",

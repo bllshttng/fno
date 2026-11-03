@@ -166,7 +166,7 @@ pub(super) fn post_send_settle_seconds() -> f64 {
 /// One pass over the bus log, newest last, best-effort.
 pub(super) fn bus_rows() -> Vec<Value> {
     let mut rows = Vec::new();
-    let Ok(text) = std::fs::read_to_string(bus_log_path()) else {
+    let Ok(text) = std::fs::read_to_string(crate::mail_paths::live_bus_log()) else {
         return rows;
     };
     for line in text.lines() {
@@ -205,7 +205,7 @@ pub(super) fn read_cursor(name: &str) -> Option<String> {
     if name.is_empty() || name.contains('/') || name.contains('\\') || name.contains("..") {
         return None;
     }
-    let path = bus_log_path()
+    let path = crate::mail_paths::live_bus_log()
         .parent()?
         .join("cursors")
         .join(format!("{name}.json"));
@@ -317,14 +317,16 @@ pub(super) fn live_pane_for(target: &str, session_id: Option<&str>) -> Option<i6
 }
 
 /// Python `receipts.report_landing`: after the settle window, re-read the
-/// recipient and print `landed (<how>)` or the NOT LANDED block. True when
-/// landed; the caller owns the non-zero exit.
+/// recipient and print `landed (<how>)`, the held line for a `live-drain`
+/// owner, or the NOT LANDED block. False only for NOT LANDED; the caller owns
+/// the non-zero exit.
 pub(super) fn report_landing(
     msg_id: &str,
     target: &str,
     to: Option<&str>,
     to_harness: Option<&str>,
     to_session: Option<&str>,
+    durable_owner: Option<&str>,
 ) -> bool {
     let settle = post_send_settle_seconds();
     if settle > 0.0 {
@@ -333,6 +335,10 @@ pub(super) fn report_landing(
     let (landed, how) = post_send_landed(msg_id, to, to_harness, to_session);
     if landed {
         println!("{msg_id} landed ({how})");
+        return true;
+    }
+    if durable_owner == Some("live-drain") {
+        println!("{}", crate::mail_receipt::held_for_turn(msg_id, target));
         return true;
     }
     let pane = live_pane_for(target, to_session);

@@ -46,7 +46,7 @@ def test_help_subcommand_works_in_module_mode():
     not directly executable.
 
     This test invokes the module-mode form via a real subprocess and
-    asserts the help output renders for a known subcommand (`claim`).
+    asserts the help output renders for a known subcommand (`config`).
     """
     # Use COLUMNS/NO_COLOR to keep the help output stable in CI.
     env = {
@@ -56,7 +56,7 @@ def test_help_subcommand_works_in_module_mode():
         "TERM": "dumb",
     }
     result = subprocess.run(
-        [sys.executable, "-m", "fno.cli", "help", "claim"],
+        [sys.executable, "-m", "fno.cli", "help", "config"],
         capture_output=True,
         text=True,
         env=env,
@@ -66,7 +66,6 @@ def test_help_subcommand_works_in_module_mode():
         f"expected rc=0, got rc={result.returncode}.\n"
         f"stdout={result.stdout}\nstderr={result.stderr}"
     )
-    # `fno agents claim --help` output mentions the subcommand commands the claim
-    # app registers (acquire, release, ...). ("gate" died with ab-d0337fbc.)
-    assert "acquire" in result.stdout
-    assert "release" in result.stdout
+    # The config group's help names the leaves it keeps registered.
+    assert "get" in result.stdout
+    assert "set" in result.stdout

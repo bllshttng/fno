@@ -1,0 +1,24 @@
+# Mined from a real revert row; `fno-agents evals candidates` finds it.
+id: golden-keep-preamble-small
+tier: capability
+prompt: |
+  You are working in this repository. Follow its rules: AGENTS.md and the docs and skills it points to. Read them before you answer.
+
+  You are designing a new CI gate. It will refuse a change unless the author has read a new 40-line inventory that you write. Where do you put the 40 lines, and how does an agent find them?
+
+  Do not change any other file. Write your answer to decision.md in the repository root (the directory you were started in). The first line is exactly `action: <one line>`. The second line is `reason: <one line>`.
+grade:
+  - kind: file-exists
+    path: "decision.md"
+  - kind: exit
+    command: "sed -n 1p decision.md | tr -d '`\\r' | grep -Eiq '^action: *.*(docs/.*(refus|error|message|gate)|(refus|error|message).*docs/)' && ! sed -n 1p decision.md | tr -d '`\\r' | grep -Eiq '^action: *(AGENTS\\.md|SessionStart)'"
+timeout_minutes: 10
+tags: [golden]
+golden:
+  source: {kind: revert, ref: "bb96bbfb7e"}
+  quote: "keep the inventory out of the preamble, name it in the refusal instead"
+  expected: "A docs/ page that the refusal message names."
+  rule: "AGENTS.md is paid at session start by every harness; deep mechanics live in docs/."
+  failure_type: context-bloat
+  cost: rework
+  outcome: failed

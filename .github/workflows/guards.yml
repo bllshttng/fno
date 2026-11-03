@@ -201,21 +201,48 @@ jobs:
       # pin, guard or refusal can reach it. The ratchet fails in BOTH
       # directions - a new hand-built path, and a baselined line whose site was
       # fixed and not removed.
+      # The repository lint checks answer from the native front door now
+      # (the Python lint legs deleted); the binary built below serves them
+      # in-process.
+      - name: Build fno (repo-lint door)
+        if: ${{ !cancelled() }}
+        working-directory: crates/fno
+        run: cargo build --bin fno
+
       - name: State-roots ratchet (declared root)
         if: ${{ !cancelled() }}
-        working-directory: cli
-        run: uv run fno-py doctor lint state-roots
+        env:
+          FNO_BIN: ${{ github.workspace }}/crates/fno/target/debug/fno
+        run: '"$FNO_BIN" doctor lint state-roots'
 
       # The Rust/Python seam ratchet, positive-controlled by
       # tests/ci/test_seam_crossings.sh: the selftest must fail on injected
-      # drift before the check is trusted on the real tree.
+      # drift before the check is trusted on the real tree. Both halves run
+      # the native front door.
       - name: Seam-crossings ratchet (selftest, then check)
         if: ${{ !cancelled() }}
         timeout-minutes: 5
+        env:
+          FNO_BIN: ${{ github.workspace }}/crates/fno/target/debug/fno
         run: |
           set -euo pipefail
           bash tests/ci/test_seam_crossings.sh
-          (cd cli && uv run fno-py doctor lint seam-crossings)
+          "$FNO_BIN" doctor lint seam-crossings
+
+      # A hook script the base revision's config referenced cannot be deleted
+      # in the same commit that unregisters it: running sessions cache hook
+      # config for their lifetime and a PreToolUse hook that cannot launch
+      # fails the whole Bash call, so one stubless deletion bricks every
+      # pre-merge session's shell. One release of no-op stub, then delete.
+      # Moved here from the guards job: the check is native now and reads
+      # the front door built above.
+      - name: Hook script tombstone gate (no stubless deletion)
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        env:
+          FNO_BIN: ${{ github.workspace }}/crates/fno/target/debug/fno
+        run: '"$FNO_BIN" doctor lint hook-tombstones'
+
 
       # The JSON-stdout house contract: a -J command prints exactly one JSON
       # document on stdout ([] on empty, {ok:false} on a refused read), so an
@@ -345,6 +372,17 @@ jobs:
         working-directory: crates/fno-agents
         run: cargo build --bin fno-agents
 
+      # State-root tidiness: the inventory doc's root rows are shrink-only.
+      # The runtime half is hooks/write-gate.sh, which refuses
+      # a NEW top-level write in either root; this gate is the review half,
+      # failing a PR whose diff adds a root pattern to the doc.
+      - name: State-root inventory rows are shrink-only
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: |
+          bash scripts/ci/check-state-root-rows.sh --self-test
+          bash scripts/ci/check-state-root-rows.sh
+
       - name: PR node closure
         id: closure
         env:
@@ -399,17 +437,6 @@ jobs:
         if: ${{ !cancelled() }}
         timeout-minutes: 5
         run: bash tests/ci/test_check_workflow_manifest.sh
-
-      # A hook script the base revision's config referenced cannot be deleted
-      # in the same commit that unregisters it: running sessions cache hook
-      # config for their lifetime and a PreToolUse hook that cannot launch
-      # fails the whole Bash call, so one stubless deletion bricks every
-      # pre-merge session's shell. One release of no-op stub, then delete.
-      - name: Hook script tombstone gate (no stubless deletion)
-        if: ${{ !cancelled() }}
-        timeout-minutes: 5
-        working-directory: cli
-        run: uv run fno-py doctor lint hook-tombstones
 
       # The shipped harness evidence as a subset of the one Rust roster
       # (provider.rs KNOWN_HARNESSES, parsed from source): setup docs, the
@@ -586,17 +613,6 @@ jobs:
         timeout-minutes: 5
         run: bash tests/ci/test_check_client_actions_shrink.sh
 
-      # State-root tidiness: the inventory doc's root rows are shrink-only.
-      # The runtime half is hooks/write-gate.sh, which refuses
-      # a NEW top-level write in either root; this gate is the review half,
-      # failing a PR whose diff adds a root pattern to the doc.
-      - name: State-root inventory rows are shrink-only
-        if: ${{ !cancelled() }}
-        timeout-minutes: 5
-        run: |
-          bash scripts/ci/check-state-root-rows.sh --self-test
-          bash scripts/ci/check-state-root-rows.sh
-
       # The write-side half of the same rule: a diff that ADDS a hand-built
       # root-level write (a bare state_dir() leaf, a fence-less
       # root_state_file, a Rust place() with no layout row) fails, so a new
@@ -622,6 +638,13 @@ jobs:
         if: ${{ !cancelled() }}
         timeout-minutes: 5
         run: bash scripts/ci/check-retired-command-strings.sh
+
+      # The mail module imports nothing outside crate::mail:: (law d-6f5b834b
+      # bars a separate crate, so this holds the dependency wall).
+      - name: Mail module dependency check
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: bash scripts/ci/check-mail-module-deps.sh
 
       - name: Role vocabulary check
         if: ${{ !cancelled() }}
@@ -736,11 +759,6 @@ jobs:
         run: |
           bash scripts/ci/check-tracker-partition.sh --self-test
           bash scripts/ci/check-tracker-partition.sh
-
-      - name: Tracker consumer census + self-test
-        if: ${{ !cancelled() }}
-        timeout-minutes: 5
-        run: bash scripts/ci/check-tracker-consumers.sh
 
       # From uv-install-bytecode.yml.
       - name: Bytecode gate + self-test

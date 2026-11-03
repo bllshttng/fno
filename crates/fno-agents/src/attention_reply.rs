@@ -205,8 +205,8 @@ pub fn tick_answers(
         }
         // A copy's answer was recorded on this machine, but the asking
         // machine delivers it: the ladder never runs, and the `carried`
-        // delivery row keeps the walk bounded so the copy never burns its
-        // clear retries against the origin-only refusal.
+        // delivery row keeps the walk bounded: a clear here could only
+        // refuse, because the copy already holds this first answer.
         if items.iter().any(|i| i.id == *item_id && i.host.is_some()) {
             state.cleared = true;
             state.rung = "carried".into();
@@ -362,7 +362,7 @@ fn step_of(state: &ReplyState, items: &[AttentionItem], now: u64, cwd: &Path) ->
             })
         });
     let facts = Facts {
-        mail_landed: crate::mail_delivery_state::receipt_reached(&state.receipt),
+        mail_landed: crate::mail::state::receipt_reached(&state.receipt),
         is_note: state.item_id.starts_with("note-"),
         session: session.as_ref().map(|(s, h)| (s.as_str(), h.as_str())),
         confirmed,
@@ -421,7 +421,8 @@ fn run_resume(
 fn resume_message(state: &ReplyState) -> String {
     format!(
         "Answer to your question {}: {}. If you already have this answer, ignore this copy.",
-        state.item_id, state.answer
+        crate::numbers::display(&state.item_id),
+        state.answer
     )
 }
 
@@ -888,7 +889,7 @@ mod tests {
     }
 
     // The ladder never runs for a copy's answer: the asking machine delivers
-    // it, so no local clear or mail burns against the origin-only refusal.
+    // it, so no local clear or mail runs on this machine.
     #[test]
     fn a_copy_answer_row_never_enters_the_local_ladder() {
         let _root = crate::paths::DeclaredRoot::declare("reply_copy_carried_");

@@ -9,6 +9,7 @@
 use serde_json::json;
 
 pub mod bank;
+pub mod failure_types;
 pub mod grading;
 pub mod graduate;
 pub mod history;
@@ -18,7 +19,7 @@ pub mod runner;
 pub fn run(args: &[String]) -> i32 {
     let Some(sub) = args.first() else {
         eprintln!(
-            "usage: fno-agents evals <command> [options] (run | trend | report | macro | export | qualify | graduate | grade)"
+            "usage: fno-agents evals <command> [options] (run | trend | report | macro | export | qualify | graduate | grade | candidates | drafts | gate-retry | events)"
         );
         return 2;
     };
@@ -32,11 +33,15 @@ pub fn run(args: &[String]) -> i32 {
         "run" => run_command(rest),
         "export" => export_command(rest),
         "qualify" => qualify_command(rest),
+        "candidates" => crate::evals_candidates::run(rest),
+        "drafts" => crate::evals_drafts::run(rest),
+        "gate-retry" => crate::evals_gate::retry(rest),
+        "events" => crate::eval_events::preview_command(rest),
         // The remainder lands with the port's later commits; the skeleton
         // answers every spelling so the dispatch shape compiles first.
         _ => {
             eprintln!(
-                "usage: fno-agents evals <command> [options] (run | trend | report | macro | export | qualify | graduate | grade)"
+                "usage: fno-agents evals <command> [options] (run | trend | report | macro | export | qualify | graduate | grade | candidates | drafts | gate-retry | events)"
             );
             return 2;
         }
@@ -210,7 +215,46 @@ fn agents_home() -> std::path::PathBuf {
 /// above 20 total runs, the cohort split validation, the sweep, and the
 /// per-task loop. The exit codes are the leaf's: 0 graded, 1 refusal, 2 a
 /// load-time discipline violation.
+/// The run's selection. A demoted task leaves every selection except one
+/// that names it with `--task`, so a person can test it again.
+fn select_tasks<'a>(
+    tasks: &'a [crate::evals::bank::TaskSpec],
+    task: Option<&str>,
+    tier: Option<&str>,
+    tag: Option<&str>,
+) -> Vec<&'a crate::evals::bank::TaskSpec> {
+    tasks
+        .iter()
+        .filter(|t| {
+            task.map(|f| f.split(',').any(|id| t.id == id))
+                .unwrap_or(true)
+        })
+        .filter(|t| tier.map(|f| t.tier == f).unwrap_or(true))
+        .filter(|t| tag.map(|f| t.tags.iter().any(|g| g == f)).unwrap_or(true))
+        .filter(|t| task.is_some() || !t.is_demoted())
+        .collect()
+}
+
+/// Drop the tasks carrying `tag`; no tag keeps the selection as it was.
+fn without_tag<'a>(
+    selected: Vec<&'a crate::evals::bank::TaskSpec>,
+    tag: Option<&str>,
+) -> Vec<&'a crate::evals::bank::TaskSpec> {
+    match tag {
+        Some(tag) => selected
+            .into_iter()
+            .filter(|t| !t.tags.iter().any(|g| g == tag))
+            .collect(),
+        None => selected,
+    }
+}
+
 fn run_command(rest: &[String]) -> i32 {
+    // Selection falls through to live runs, so help must return first.
+    if rest.iter().any(|a| a == "--help" || a == "-h") {
+        println!("Usage: fno-agents evals run [flags]. See docs/evals.md.");
+        return 0;
+    }
     let repeat: u32 = match flag_lookup(rest, "--repeat")
         .or_else(|| flag_lookup(rest, "-k"))
         .and_then(|v| v.parse().ok())
@@ -230,6 +274,11 @@ fn run_command(rest: &[String]) -> i32 {
     }
     if (variant == "baseline") != ref_arg.is_none() {
         eprintln!("Error: --variant v<N> and --ref REF must be used together");
+        return 1;
+    }
+    let overlay_ref = flag_lookup(rest, "--overlay-fixtures");
+    if overlay_ref.is_some() && ref_arg.is_none() {
+        eprintln!("Error: --overlay-fixtures needs --variant v<N> --ref REF");
         return 1;
     }
     let lane_coord = match flag_lookup(rest, "--lane") {
@@ -259,11 +308,21 @@ fn run_command(rest: &[String]) -> i32 {
     };
     let task_filter = flag_lookup(rest, "--task");
     let tier_filter = flag_lookup(rest, "--tier");
-    let selected: Vec<_> = tasks
-        .iter()
-        .filter(|t| task_filter.as_deref().map(|f| t.id == f).unwrap_or(true))
-        .filter(|t| tier_filter.as_deref().map(|f| t.tier == f).unwrap_or(true))
-        .collect();
+    let tag_filter = flag_lookup(rest, "--tag");
+    let workers: usize = flag_lookup(rest, "--workers")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1)
+        .max(1);
+    let exclude_tag = flag_lookup(rest, "--exclude-tag");
+    let selected = without_tag(
+        select_tasks(
+            &tasks,
+            task_filter.as_deref(),
+            tier_filter.as_deref(),
+            tag_filter.as_deref(),
+        ),
+        exclude_tag.as_deref(),
+    );
     if selected.is_empty() {
         eprintln!("Error: selection matched no bank tasks.");
         return 1;
@@ -293,7 +352,10 @@ fn run_command(rest: &[String]) -> i32 {
     // The cohort split validates BEFORE any worker call: one native door
     // call (membership, overlap, duplicates, bank rev).
     let cohorts_yaml = bank_dir.join("cohorts.yaml");
-    if cohorts_yaml.exists() {
+    let gate_run = flag_lookup(rest, "--cohort").is_some_and(|c| c.get(..5) == Some("gate-"));
+    // The split guards a held-out claim. A run picked by cohort name makes
+    // none, and a bank edit on main must not refuse every gate run.
+    if cohorts_yaml.exists() && !gate_run {
         match cohort_gate(&bank_dir, &tasks, &repo_root) {
             Ok(line) => println!("{line}"),
             // The refusal already carries the leg's full line shape.
@@ -309,38 +371,49 @@ fn run_command(rest: &[String]) -> i32 {
     }
     let history = history_path();
     let cohort = flag_lookup(rest, "--cohort");
-    let mut all_passed = true;
-    for task in &selected {
-        let results = crate::evals::runner::run_task(
-            task,
-            &repo_root,
-            repeat,
-            &history,
-            provider.as_deref(),
-            &variant,
-            ref_arg.as_deref().unwrap_or(&task.repo_fixture),
-            lane_coord.as_ref(),
-            cohort.as_deref(),
-        );
-        let passes = results.iter().filter(|r| r.passed).count();
-        let passk = if passes == repeat as usize {
-            "PASS"
-        } else {
-            "FAIL"
-        };
-        println!(
-            "  {:<11} {} [{}]: {}/{} pass  (pass^{}={})",
-            task.tier, task.id, variant, passes, repeat, repeat, passk
-        );
-        for r in &results {
-            if !r.passed {
-                println!("      run {}: {}", r.repeat_index, r.reason);
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let failed = std::sync::atomic::AtomicBool::new(false);
+    let run_next = || {
+        use std::sync::atomic::Ordering::Relaxed;
+        while let Some(task) = selected.get(next.fetch_add(1, Relaxed)) {
+            let results = crate::evals::runner::run_task(
+                task,
+                &repo_root,
+                repeat,
+                &history,
+                provider.as_deref(),
+                &variant,
+                ref_arg.as_deref().unwrap_or(&task.repo_fixture),
+                lane_coord.as_ref(),
+                cohort.as_deref(),
+                overlay_ref.as_deref(),
+            );
+            let passes = results.iter().filter(|r| r.passed).count();
+            let passk = if passes == repeat as usize {
+                "PASS"
+            } else {
+                "FAIL"
+            };
+            println!(
+                "  {:<11} {} [{}]: {}/{} pass  (pass^{}={})",
+                task.tier, task.id, variant, passes, repeat, repeat, passk
+            );
+            for r in &results {
+                if !r.passed {
+                    println!("      run {}: {}", r.repeat_index, r.reason);
+                }
+            }
+            if passes < repeat as usize {
+                failed.store(true, Relaxed);
             }
         }
-        if passes < repeat as usize {
-            all_passed = false;
+    };
+    std::thread::scope(|scope| {
+        for _ in 0..workers {
+            scope.spawn(run_next);
         }
-    }
+    });
+    let all_passed = !failed.load(std::sync::atomic::Ordering::Relaxed);
     println!(
         "{}",
         if all_passed {
@@ -350,6 +423,27 @@ fn run_command(rest: &[String]) -> i32 {
         }
     );
     0
+}
+
+/// Superseded nodes, from the graph: the plan's own status line is the rung
+/// authority's to read, and the node's status is the fact wanted here.
+pub(crate) fn superseded_nodes(graph: &std::path::Path) -> std::collections::BTreeSet<String> {
+    let query = crate::backlog::RowQuery {
+        fields: Some(["id", "status"].into_iter().map(str::to_string).collect()),
+        with_blockers: true,
+        ..Default::default()
+    };
+    crate::graph_store::read_rows_where(graph, &query)
+        .map(|rows| {
+            rows.iter()
+                .filter(|n| {
+                    n.get("status").and_then(serde_json::Value::as_str) == Some("superseded")
+                })
+                .filter_map(|n| n.get("id").and_then(serde_json::Value::as_str))
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// The cohort split gate: one native door call, the same argv the Python
@@ -440,7 +534,7 @@ pub(super) fn flag_lookup(args: &[String], name: &str) -> Option<String> {
 }
 
 /// The bank dir: explicit --bank, else <canonical-root>/evals/bank.
-pub(super) fn resolve_bank_dir(explicit: Option<String>) -> std::path::PathBuf {
+pub(crate) fn resolve_bank_dir(explicit: Option<String>) -> std::path::PathBuf {
     if let Some(b) = explicit {
         return std::path::PathBuf::from(b);
     }
@@ -647,5 +741,41 @@ fn py_compact(v: &serde_json::Value) -> String {
                 .collect();
             format!("{{{}}}", items.join(", "))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_demoted_task_leaves_tag_selection_and_a_named_run_keeps_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("g.yaml");
+        std::fs::write(
+            &path,
+            "id: g\ntier: capability\nprompt: p\ngrade:\n  - kind: file-exists\n    path: x\ntags: [golden, demoted]\n",
+        )
+        .unwrap();
+        let tasks = vec![crate::evals::bank::load_task(&path).unwrap()];
+        assert!(super::select_tasks(&tasks, None, None, Some("golden")).is_empty());
+        assert_eq!(super::select_tasks(&tasks, Some("g"), None, None).len(), 1);
+    }
+
+    #[test]
+    fn exclude_tag_drops_tagged_tasks_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut tasks = Vec::new();
+        for (id, tags) in [("a", "[golden]"), ("b", "[]")] {
+            let path = dir.path().join(format!("{id}.yaml"));
+            std::fs::write(
+                &path,
+                format!("id: {id}\ntier: capability\nprompt: p\ngrade:\n  - kind: file-exists\n    path: x\ntags: {tags}\n"),
+            )
+            .unwrap();
+            tasks.push(crate::evals::bank::load_task(&path).unwrap());
+        }
+        let all = super::select_tasks(&tasks, None, Some("capability"), None);
+        let kept = super::without_tag(all, Some("golden"));
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].id, "b");
     }
 }

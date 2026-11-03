@@ -35,11 +35,13 @@ struct Fake {
     optional_unresolved: Option<Option<i64>>,
     /// Rerun-recovery answer for the PR under decision.
     rerun_recovered: Option<bool>,
+    /// The evals gate red answer for the PR under decision; `None` (the
+    /// default) reads no gate red, so every pre-existing test keeps its
+    /// behavior.
+    evals_gate_red: Option<String>,
     /// The coverage verdict's exit for the PR under decision, armed into
     /// `coverage_verdict`; None reads 0.
     coverage_exit: Option<i32>,
-    /// The plan-fidelity gate's verdict for a test-armable refusal.
-    plan_fidelity_refused: bool,
     /// The `fno backlog decisions` exit and stdout the head-grant read
     /// gets. `None` exit reads 0; `None` stdout reads empty (malformed).
     decisions_exit: Option<i32>,
@@ -374,6 +376,11 @@ impl Probes for Fake {
             },
             rerun_recovered: if mine { self.rerun_recovered } else { None },
             rerun_failures: None,
+            evals_gate_red: if mine {
+                self.evals_gate_red.clone()
+            } else {
+                None
+            },
         }
     }
     fn covered_head(&self, _cwd: &Path, _pr: u64, _pr_head: &str) -> Option<String> {
@@ -436,14 +443,10 @@ impl Probes for Fake {
                 Vec::new(),
             ));
         }
-        // The only other fno-shell ask in these tests is the plan-fidelity
-        // probe: the verdict answer reads `refused` from the test arm.
-        let covered = if self.plan_fidelity_refused {
-            br#"{"refused": true, "reason": "test"}"#.to_vec()
-        } else {
-            br#"{"refused": false}"#.to_vec()
-        };
-        Ok((Some(0), covered, Vec::new()))
+        // The plan-fidelity gate computes in process now (its Python leg
+        // retired), so no fidelity ask reaches this shell any more. Whatever
+        // else arrives is a done probe: answer clean.
+        Ok((Some(0), br#"{}"#.to_vec(), Vec::new()))
     }
 
     fn coverage_verdict(
@@ -496,6 +499,70 @@ fn request(effect: Effect) -> Request {
 fn granted_decisions() -> Vec<u8> {
     br#"{"decisions":[{"authority_source":"operator","decision":"merge authorized for this head"}]}"#
         .to_vec()
+}
+
+// ── the evals gate hold: an eval fact beside the CI verdict ───────────
+
+/// Eval red and CI red are separate facts. CI green + a red evals gate
+/// holds the merge naming the gate's own cause and clearing command,
+/// never a CI refusal; the preview answers alike with blocker code
+/// `evals_gate_red`. The CI runs the gate red once cancelled are exactly
+/// the harm this separation prevents.
+#[test]
+fn a_red_evals_gate_holds_a_green_ci_merge_as_its_own_fact() {
+    let fake = Fake {
+        checks: Some("green".to_string()),
+        evals_gate_red: Some(
+            "no result. Clear: fno-agents evals gate-retry abc123. Cause: limit".to_string(),
+        ),
+        ..clean()
+    };
+    let outcome = run(
+        &fake,
+        &Request {
+            require_checks: true,
+            ..request(Effect::Merge)
+        },
+    );
+    assert_eq!(outcome.word(), "held", "{}", outcome.detail());
+    let detail = outcome.detail();
+    assert!(detail.contains("evals gate red"), "{}", detail);
+    assert!(
+        detail.contains("gate-retry"),
+        "the hold names the clearing command: {}",
+        detail
+    );
+    assert!(
+        !detail.contains("checks are"),
+        "the hold is the gate's, never the CI verdict's: {}",
+        detail
+    );
+
+    let blockers = preview_blockers(&fake, &preview_request(7));
+    let codes: Vec<&str> = blockers.iter().map(|b| b.code.as_str()).collect();
+    assert!(
+        codes.contains(&"evals_gate_red"),
+        "the preview names the gate hold: {:?}",
+        codes
+    );
+}
+
+/// The payload-to-decision seam: `evals_gate` FAILURE and ERROR read red;
+/// SUCCESS and PENDING never do.
+#[test]
+fn parse_checks_read_reads_the_evals_gate_fact() {
+    let red = parse_checks_read(
+        br#"{"verdict": "green", "evals_gate": {"state": "FAILURE", "description": "no result. Clear: fno-agents evals gate-retry abc. Cause: limit"}}"#,
+    );
+    assert!(red.evals_gate_red.is_some(), "{:?}", red.evals_gate_red);
+    let errored = parse_checks_read(br#"{"verdict": "green", "evals_gate": {"state": "ERROR", "description": "posting failed"}}"#);
+    assert!(errored.evals_gate_red.is_some());
+    let fine = parse_checks_read(
+        br#"{"verdict": "green", "evals_gate": {"state": "SUCCESS", "description": "gate goldens pass"}}"#,
+    );
+    assert!(fine.evals_gate_red.is_none());
+    let absent = parse_checks_read(br#"{"verdict": "green"}"#);
+    assert!(absent.evals_gate_red.is_none());
 }
 
 // ── the head-scoped operator merge grant ──────────────────────────────

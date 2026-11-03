@@ -11,6 +11,7 @@
 //! remote machine's own `fno` answers, and its exit code and receipt pass
 //! through byte-verbatim.
 
+use crate::mail::address::{split_target, target_error};
 use crate::mail_bus;
 use crate::store_remote::{self, Remote};
 use std::ffi::OsString;
@@ -31,29 +32,6 @@ pub fn seen_path(root: &std::path::Path) -> std::path::PathBuf {
 /// due time. Persisted so a daemon restart never resets a ladder.
 pub fn retry_path(root: &std::path::Path) -> std::path::PathBuf {
     root.join("mail_retry.jsonl")
-}
-
-/// What `split_target` refused.
-pub fn target_error(target: &str) -> String {
-    format!(
-        "cross-host target {target:?}: the form is <name>@<host>, one @, \
-both sides nonempty; a host alias in ssh_config covers user@host spellings"
-    )
-}
-
-/// Split `<name>@<host>` at its single `@`. Both sides nonempty; two `@`
-/// refuse (an ssh user@host spelling is not carried; an ssh_config Host
-/// alias covers those).
-pub fn split_target(target: &str) -> Result<(String, String), String> {
-    let at_count = target.matches('@').count();
-    if at_count != 1 {
-        return Err(target_error(target));
-    }
-    let (name, host) = target.split_once('@').unwrap_or(("", ""));
-    if name.is_empty() || host.is_empty() {
-        return Err(target_error(target));
-    }
-    Ok((name.to_string(), host.to_string()))
 }
 
 /// Whether a send target without `@` is a plain name this command may resolve:
@@ -176,21 +154,27 @@ pub fn sh_quote(word: &str) -> String {
     format!("'{}'", word.replace('\'', r"'\''"))
 }
 
+/// The fail-fast ssh posture every relay leg carries: BatchMode refuses
+/// instead of hanging on a prompt, and the connect bound keeps a dead
+/// MagicDNS host short.
+pub const SSH_FAST_OPTIONS: [&str; 4] = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=5"];
+
 /// The ssh relay command: the remote login shell resolves `fno` via its
 /// profile (the cargo bin dir), then execs the command with the words as
 /// positional arguments. `$0` is `sh`, so `"$@"` is the command tail. Every
 /// element rides sh-quoted, including the script itself: ssh joins argv
 /// with spaces and the remote shell parses the joined line.
 pub fn ssh_argv(host: &str, words: &[String]) -> Vec<String> {
-    let mut argv = vec![
-        "ssh".to_string(),
+    let mut argv = vec!["ssh".to_string()];
+    argv.extend(SSH_FAST_OPTIONS.map(String::from));
+    argv.extend([
         host.to_string(),
         "--".to_string(),
         "sh".to_string(),
         "-lc".to_string(),
         sh_quote("exec fno \"$@\""),
         "sh".to_string(),
-    ];
+    ]);
     argv.extend(words.iter().map(|w| sh_quote(w)));
     argv
 }
@@ -263,9 +247,19 @@ pub fn resolve_from_name_with(
         };
     }
     if let Some(given) = &tail.from_name {
-        let is_handle = given.len() == 8 && given.chars().all(|c| c.is_ascii_hexdigit());
+        // A canonical handle is the id's first eight: 8-hex for the uuid
+        // harnesses, `ses_` + 4 alphanumerics for opencode (case-exact).
+        let is_hex_handle = given.len() == 8 && given.chars().all(|c| c.is_ascii_hexdigit());
+        let is_ses_handle = given.len() == 8
+            && given.starts_with("ses_")
+            && given[4..].bytes().all(|b| b.is_ascii_alphanumeric());
         if let Some(own) = &own {
-            if is_handle && !given.eq_ignore_ascii_case(own) {
+            let foreign = if is_ses_handle {
+                given != own
+            } else {
+                is_hex_handle && !given.eq_ignore_ascii_case(own)
+            };
+            if foreign {
                 return Err(format!(
                     "--from-name {given} names another session; this session is {own}. \
 Omit --from-name to self-stamp."
@@ -291,7 +285,11 @@ pub fn resolve_from_name(tail: &SendTail) -> Result<FromName, String> {
 /// (informational provenance; a reply addresses `<name>@<host>`). The
 /// colon keeps the label to no `@`, so it never reads as a send target.
 pub fn sender_id(user: &str, host: &str, name: &str) -> String {
-    format!("{user}:{}/{}", mail_bus::normalize_host(host), name)
+    format!(
+        "{user}:{}/{}",
+        crate::mail::address::normalize_host(host),
+        name
+    )
 }
 
 /// Resolve the `fno` front door to exec on this machine. The daemon's pull
@@ -365,8 +363,8 @@ fn cmd_send(args: &[String]) -> i32 {
             return 2;
         }
     };
-    let local_host = mail_bus::normalize_host(&crate::claims::hostname());
-    if mail_bus::normalize_host(&host) == local_host {
+    let local_host = crate::mail::address::normalize_host(&crate::claims::hostname());
+    if crate::mail::address::normalize_host(&host) == local_host {
         // A same-host target needs no bus row and no ssh hop: forward the
         // stripped argv to the local command, every flag the caller passed
         // intact.
@@ -590,7 +588,7 @@ pub(crate) fn mirror_sent_row(
     if let Some(s) = subject.filter(|s| !s.is_empty()) {
         row["subject"] = serde_json::json!(s);
     }
-    let live = crate::mail_cli::send::bus_log_path();
+    let live = crate::mail_paths::live_bus_log();
     let chats_dir = crate::chats::chats_dir();
     if let Err(e) = crate::announce::append_line_open(&live, &row, &chats_dir) {
         eprintln!(
@@ -667,8 +665,8 @@ fn cmd_peek(args: &[String]) -> i32 {
         eprintln!("{}", target_error(target));
         return 2;
     };
-    let local_host = mail_bus::normalize_host(&crate::claims::hostname());
-    if mail_bus::normalize_host(&host) == local_host {
+    let local_host = crate::mail::address::normalize_host(&crate::claims::hostname());
+    if crate::mail::address::normalize_host(&host) == local_host {
         let mut argv = vec![fno_binary()];
         argv.push(OsString::from("agents"));
         argv.push(OsString::from("peek"));
@@ -717,8 +715,8 @@ pub(crate) fn reply_route(from: &str) -> ReplyRoute {
     if !crate::identity::is_sender_token(user) {
         return ReplyRoute::Forward;
     }
-    let host = mail_bus::normalize_host(host);
-    let local = mail_bus::normalize_host(&crate::claims::hostname());
+    let host = crate::mail::address::normalize_host(host);
+    let local = crate::mail::address::normalize_host(&crate::claims::hostname());
     if host == local {
         return ReplyRoute::Forward;
     }
@@ -920,7 +918,7 @@ fn cmd_status(_args: &[String]) -> i32 {
                 eprintln!("fno-agents mail-remote status: {e}");
                 return 1;
             }
-            let host = mail_bus::normalize_host(&crate::claims::hostname());
+            let host = crate::mail::address::normalize_host(&crate::claims::hostname());
             match mail_bus::sent_rows(&remote, &host) {
                 Ok(rows) => {
                     for (msg_id, status) in rows {
@@ -1067,14 +1065,18 @@ mod tests {
             ],
         );
         assert_eq!(argv[0], "ssh");
-        assert_eq!(argv[1], "mbp3");
-        assert_eq!(argv[2], "--");
-        assert_eq!(argv[3], "sh");
-        assert_eq!(argv[4], "-lc");
-        assert_eq!(argv[5], "'exec fno \"$@\"'");
-        assert_eq!(argv[6], "sh");
-        assert_eq!(argv[7], "'agents'");
-        assert_eq!(argv[9], "'nemo'");
+        assert_eq!(argv[1], "-o");
+        assert_eq!(argv[2], "BatchMode=yes");
+        assert_eq!(argv[3], "-o");
+        assert_eq!(argv[4], "ConnectTimeout=5");
+        assert_eq!(argv[5], "mbp3");
+        assert_eq!(argv[6], "--");
+        assert_eq!(argv[7], "sh");
+        assert_eq!(argv[8], "-lc");
+        assert_eq!(argv[9], "'exec fno \"$@\"'");
+        assert_eq!(argv[10], "sh");
+        assert_eq!(argv[11], "'agents'");
+        assert_eq!(argv[13], "'nemo'");
         // The send tail lifts identity flags and keeps the rest in order.
         let tail = parse_send_tail(&[
             "--from-name".into(),
@@ -1427,7 +1429,7 @@ mod tests {
         // handle or any other shape forwards. The local-host case is built
         // from the test host, so the same asserts hold on any machine.
         use crate::mail_remote::{reply_route, ReplyRoute};
-        let test_host = crate::mail_bus::normalize_host(&crate::claims::hostname());
+        let test_host = crate::mail::address::normalize_host(&crate::claims::hostname());
         assert_eq!(
             reply_route("bb16@some-remote/nemo"),
             ReplyRoute::Send {
@@ -1557,6 +1559,35 @@ mod tests {
             resolve_from_name_with(Some(own), &role),
             Ok(FromName::Given("Quinlan".to_string())),
             "a role name still passes verbatim"
+        );
+    }
+
+    #[test]
+    fn specimen_x50cc_opencode_neighbour_handle_refuses() {
+        let own_session = "ses_9f2ca1b2c3d4";
+        let neighbour = SendTail {
+            from_name: Some("ses_4ab1".to_string()),
+            ..SendTail::default()
+        };
+        let err = resolve_from_name_with(Some(own_session), &neighbour)
+            .expect_err("a copied opencode handle refuses");
+        assert!(err.contains("ses_9f2c"), "the refusal names the own handle");
+        let cased = SendTail {
+            from_name: Some("ses_9F2C".to_string()),
+            ..SendTail::default()
+        };
+        assert!(
+            resolve_from_name_with(Some(own_session), &cased).is_err(),
+            "opencode handles compare case-exact, so a case-variant is foreign"
+        );
+        let self_handle = SendTail {
+            from_name: Some("ses_9f2c".to_string()),
+            ..SendTail::default()
+        };
+        assert_eq!(
+            resolve_from_name_with(Some(own_session), &self_handle),
+            Ok(FromName::Given("ses_9f2c".to_string())),
+            "the session's own ses_ handle still passes"
         );
     }
 

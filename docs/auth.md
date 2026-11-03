@@ -35,5 +35,6 @@ If any of these are misconfigured, the run will fail with a clear error in the r
 - No telemetry beyond what Anthropic and GitHub already collect for their products.
 - Local cost telemetry stays local. fno can ingest Claude Code's OpenTelemetry records into a receiver on 127.0.0.1 and store exact per-request cost in `~/.fno/agents/otel/otel.db`. Nothing leaves this machine. Turn it off with `[telemetry] claude_otel = false` in config.toml. See `docs/architecture/cost-accuracy.md`.
 - Feed rows export nowhere by default. With `[telemetry.otlp] enabled = true`, row ids, kinds and refs go to the endpoint you name. Free text only goes with `log_content = true`. See `docs/architecture/activity-feed.md`.
+- Eval runs export nowhere by default. With `[telemetry.eval_events] enabled = true`, identifiers and grades go to PostHog, and no free text goes with them. See `docs/evals.md`.
 
 See `docs/security-posture.md` for the broader trust model.

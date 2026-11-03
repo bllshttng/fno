@@ -1,0 +1,11 @@
+{
+  "refused": false,
+  "shortfall": 0,
+  "carveouts": 0,
+  "covered": false,
+  "reason": null,
+  "unjoined": [],
+  "planned": 1,
+  "delivered": 1,
+  "plan_path": "__CASE_DIR__/plans/only-shipped.md"
+}

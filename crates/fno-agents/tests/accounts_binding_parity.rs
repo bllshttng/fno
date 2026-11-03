@@ -1,7 +1,7 @@
-//! parity-stage: differential
+//! parity-stage: characterization
 //! parity-oracle: fno.adapters.providers.binding.resolve_account_binding
 //!
-//! Differential parity for `accounts::binding`, the port of `binding.py` and
+//! Characterization for `accounts::binding`, the port of `binding.py` and
 //! the `managed.py` reads it stands on. Each
 //! `tests/golden/accounts_binding/*.json` case lays down an accounts config,
 //! Keychain items keyed by role, credential files, store principals and a

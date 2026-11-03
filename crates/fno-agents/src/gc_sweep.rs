@@ -648,12 +648,10 @@ pub fn read_graph_entries(home: &AgentsHome) -> Option<GraphRead> {
     let mut closed_planning: HashMap<String, std::collections::HashSet<String>> = HashMap::new();
     let mut plan_written: HashMap<String, std::collections::HashSet<String>> = HashMap::new();
     let mut statuses: HashMap<String, String> = HashMap::new();
-    let mut pr_state: HashMap<String, (Option<String>, usize, usize)> = HashMap::new();
-    let mut pr_number: HashMap<String, Option<u64>> = HashMap::new();
     let mut plan_paths: HashMap<String, String> = HashMap::new();
     let mut merged_ref_counts: HashMap<String, usize> = HashMap::new();
     let mut do_nodes: HashMap<String, std::collections::HashSet<String>> = HashMap::new();
-    let primaries = crate::additional_prs::primary_index(&entries);
+    let (pr_number, pr_state) = pr_facts(&entries);
     for entry in &entries {
         let Some(node_id) = graph_store::entry_id(entry) else {
             continue;
@@ -665,30 +663,6 @@ pub fn read_graph_entries(home: &AgentsHome) -> Option<GraphRead> {
                 .and_then(Value::as_str)
                 .unwrap_or_default()
                 .to_string(),
-        );
-        pr_number.insert(
-            node_id.to_string(),
-            entry.get("pr_number").and_then(Value::as_u64),
-        );
-        let additional = entry
-            .get("additional_prs")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-        let additional_open = additional
-            .iter()
-            .filter(|extra| crate::additional_prs::additional_pr_open(extra, node_id, &primaries))
-            .count();
-        pr_state.insert(
-            node_id.to_string(),
-            (
-                entry
-                    .get("merge_status")
-                    .and_then(Value::as_str)
-                    .map(str::to_string),
-                additional.len(),
-                additional_open,
-            ),
         );
         if let Some(plan) = entry.get("plan_path").and_then(Value::as_str) {
             if !plan.is_empty() {
@@ -813,6 +787,76 @@ pub fn read_graph_entries(home: &AgentsHome) -> Option<GraphRead> {
         delivery_merged_refs: merged_ref_counts,
         do_nodes,
         pr_reads: HashMap::new(),
+    })
+}
+
+/// The open-PR guard's narrow read: the session-to-node join plus the
+/// per-node PR facts, and nothing else. The reconcile sweep asks exactly one
+/// question of the graph (`row_has_open_pr`); the full read built a dozen
+/// indexes over every row and round-tripped the store through the model to
+/// answer it, so a large store paid its whole materialization per startup on
+/// a boolean. The narrow read skips the model round-trip and the indexes the
+/// sweep never reads.
+pub struct PrGuardRead {
+    /// Same shape as [`GraphRead::index`]: the ship-row-included reverse join.
+    pub index: HashMap<String, Vec<(String, String)>>,
+    pub pr_number: HashMap<String, Option<u64>>,
+    pub pr_state: HashMap<String, (Option<String>, usize, usize)>,
+}
+
+/// The per-node PR facts both graph reads build: the recorded PR number and
+/// the (merge_status, additional total, additional open) triple, with row
+/// defaults applied. One builder, two readers, no second fork.
+fn pr_facts(
+    entries: &[Value],
+) -> (
+    HashMap<String, Option<u64>>,
+    HashMap<String, (Option<String>, usize, usize)>,
+) {
+    let primaries = crate::additional_prs::primary_index(entries);
+    let mut pr_number = HashMap::new();
+    let mut pr_state = HashMap::new();
+    for entry in entries {
+        let Some(node_id) = graph_store::entry_id(entry) else {
+            continue;
+        };
+        pr_number.insert(
+            node_id.to_string(),
+            entry.get("pr_number").and_then(Value::as_u64),
+        );
+        let additional = entry
+            .get("additional_prs")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let additional_open = additional
+            .iter()
+            .filter(|extra| crate::additional_prs::additional_pr_open(extra, node_id, &primaries))
+            .count();
+        pr_state.insert(
+            node_id.to_string(),
+            (
+                entry
+                    .get("merge_status")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                additional.len(),
+                additional_open,
+            ),
+        );
+    }
+    (pr_number, pr_state)
+}
+
+pub fn read_pr_guard(home: &AgentsHome) -> Option<PrGuardRead> {
+    let store = crate::backlog::api::Store::new(&graph_path(home));
+    let entries = crate::graph_store::read_rows(&store.graph).ok()?;
+    let index = graph_store::sessions_index(&entries);
+    let (pr_number, pr_state) = pr_facts(&entries);
+    Some(PrGuardRead {
+        index,
+        pr_number,
+        pr_state,
     })
 }
 
@@ -958,7 +1002,7 @@ pub(crate) fn settle_stale_do_rows_with(
 }
 
 /// The whole-graph tx retry policy, one contract with the Python tx loop
-/// (`_TX_ATTEMPTS`, `_tx_backoff_secs` in `cli/src/fno/graph/store.py`):
+/// (the store client's transaction loop):
 /// sweepers are correlated by construction, so a flat delay re-lines every
 /// loser up at the same instant. Full-jitter exponential delay before retry
 /// attempt `attempt + 1`, uniform in [0, min(cap, base << attempt)]. A test
@@ -4342,28 +4386,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn tx_retry_policy_matches_the_python_tx_loop() {
-        let store = std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../cli/src/fno/graph/store.py"),
-        )
-        .expect("python store source");
-        let value = |name: &str| -> f64 {
-            let line = store
-                .lines()
-                .find(|l| l.starts_with(&format!("{name} = ")))
-                .unwrap_or_else(|| panic!("{name} missing from store.py"));
-            line.split('=').nth(1).unwrap().trim().parse().unwrap()
-        };
-        assert_eq!(value("_TX_ATTEMPTS") as usize, TX_ATTEMPTS);
-        assert_eq!(
-            (value("_TX_BACKOFF_BASE_S") * 1000.0).round() as u64,
-            TX_BACKOFF_BASE_MS
-        );
-        assert_eq!(
-            (value("_TX_BACKOFF_CAP_S") * 1000.0).round() as u64,
-            TX_BACKOFF_CAP_MS
-        );
+    fn tx_backoff_stays_under_the_cap() {
         for attempt in 0..TX_ATTEMPTS {
             let bound = TX_BACKOFF_CAP_MS.min(TX_BACKOFF_BASE_MS << attempt);
             assert!(tx_backoff_ms(attempt) <= bound);

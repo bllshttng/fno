@@ -792,11 +792,17 @@ native_verbs = ["/help", "/init", "/redo", "/share", "/undo"]
 # because a user-defined command can override a built-in by name; a
 # custom override is invisible to this table by construction.
 native_verb_meta = { "/help" = { use_when = "show help and built-in commands", risk = "safe", built_in = true }, "/init" = { use_when = "write the project AGENTS.md guide", risk = "safe", built_in = true }, "/redo" = { use_when = "re-apply the last undone change", risk = "safe", built_in = true }, "/share" = { use_when = "create a share link for this session", risk = "safe", built_in = true }, "/undo" = { use_when = "undo the agent's last file change", risk = "safe", built_in = true } }
-ready_marker = "unsupported"
-ready_rule_ids = []
-manifest_rules = [{ id = "permission_required", state = "blocked" }]
-send_keys_enter_delay_ms = 0
-submit_keys = ["unsupported"]
+# opencode submits on two lanes. A serve thread takes the turn over HTTP
+# (`opencode_serve::steer_registered_session`) and reads no key. A pane takes a
+# CR. Measured on a live 1.18.33 TUI, 2026-10-31: a CR after a typed line starts
+# the turn, on the home screen and in a session, and a line typed during a busy
+# turn queues as the next turn. A zero settle worked twice, so the 800 is the
+# peer rows' margin, not a measured need.
+ready_marker = "composer_footer"
+ready_rule_ids = ["composer_footer"]
+manifest_rules = [{ id = "permission_required", state = "blocked" }, { id = "composer_footer", state = "idle" }]
+send_keys_enter_delay_ms = 800
+submit_keys = ["enter"]
 stop_strategy = "registry-noop"
 remove_strategy = "registry-only"
 session_binding = { strategy = "store-lookup", required = false, timeout_ms = 2000 }

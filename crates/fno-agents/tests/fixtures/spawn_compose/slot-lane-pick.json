@@ -11,9 +11,14 @@
   "expect": {
     "argv": [
       "spawn",
+      "--harness",
+      "codex",
       "--name",
       "w5",
-      "/fno:target x-3"
+      "/fno:target x-3",
+      "--",
+      "--model",
+      "luna-x"
     ],
     "exit": 0,
     "journal": {
@@ -41,6 +46,16 @@
             "slot",
             "agents.profiles.target.lanes[0] agents.profiles.target.lanes[0]",
             "routing"
+          ],
+          [
+            "harness",
+            "codex",
+            "routing"
+          ],
+          [
+            "model",
+            "luna-x",
+            "lane agents.profiles.target.lanes[0]"
           ]
         ],
         "suppressed": [
@@ -57,8 +72,7 @@
     },
     "stderr": [
       "fno agents spawn: slot note agents.profiles.target.lanes[0] uncapped (no vendor declared)",
-      "fno agents spawn: model skipped (pick is for harness 'codex', spawn launches 'claude'); 'luna-x' ignored",
-      "fno agents spawn: applied slot=agents.profiles.target.lanes[0] agents.profiles.target.lanes[0] (routing)"
+      "fno agents spawn: applied slot=agents.profiles.target.lanes[0] agents.profiles.target.lanes[0] (routing), harness=codex (routing), model=luna-x (lane agents.profiles.target.lanes[0])"
     ],
     "stdout": null
   },

@@ -25,19 +25,27 @@ use crate::proto::{cell_flags, Cell, Color};
 struct Band {
     bg: [(u8, u8, u8); 2],
     text: (u8, u8, u8),
+    /// The accent a code span keeps inside the band, readable on both backgrounds.
+    code: (u8, u8, u8),
 }
+
+/// The `permission` colors of Claude Code's dark and light presets. It paints
+/// inline code spans and fences with one of them.
+const CODE_FG: [(u8, u8, u8); 2] = [(0xb1, 0xb9, 0xf9), (0x57, 0x69, 0xf7)];
 
 const BANDS: [Band; 2] = [
     // Footnote Paper: dark band on a light ground; text is Paper's ground.
     Band {
         bg: [(0x37, 0x37, 0x37), (0x44, 0x44, 0x44)],
         text: (0xf7, 0xf7, 0xf7),
+        code: (0xdd, 0xe1, 0xff),
     },
     // Footnote Superscript: white band on a dark ground; text is
     // Superscript's ground.
     Band {
         bg: [(0xff, 0xff, 0xff), (0xe6, 0xe6, 0xe6)],
         text: (0x14, 0x14, 0x14),
+        code: (0x23, 0x30, 0xb0),
     },
 ];
 
@@ -51,7 +59,15 @@ pub(crate) fn remap(cell: &mut Cell) {
         return;
     };
     if let Some(band) = BANDS.iter().find(|band| band.bg.contains(&(r, g, b))) {
-        let (tr, tg, tb) = band.text;
+        let (tr, tg, tb) = if let Color::Rgb(fr, fg, fb) = cell.fg {
+            if CODE_FG.contains(&(fr, fg, fb)) {
+                band.code
+            } else {
+                band.text
+            }
+        } else {
+            band.text
+        };
         cell.fg = Color::Rgb(tr, tg, tb);
     }
 }
@@ -121,6 +137,28 @@ mod tests {
                 band.bg[1],
                 "{file} hover band"
             );
+        }
+    }
+
+    #[test]
+    fn a_code_span_in_the_band_keeps_a_readable_accent() {
+        for (bg, shown_on) in [
+            ((0x37, 0x37, 0x37), LIGHT),
+            ((0x44, 0x44, 0x44), LIGHT),
+            ((0xff, 0xff, 0xff), DARK),
+            ((0xe6, 0xe6, 0xe6), DARK),
+        ] {
+            for span in CODE_FG {
+                let mut c = cell(
+                    Color::Rgb(span.0, span.1, span.2),
+                    Color::Rgb(bg.0, bg.1, bg.2),
+                    0,
+                );
+                remap(&mut c);
+                assert_ne!(c.fg, Color::Rgb(0xf7, 0xf7, 0xf7));
+                assert_ne!(c.fg, Color::Rgb(0x14, 0x14, 0x14));
+                assert!(contrast_ratio(&c, shown_on) >= 7.0, "span on {bg:?}");
+            }
         }
     }
 

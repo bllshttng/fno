@@ -426,7 +426,7 @@ fn file_recovery(home: &AgentsHome, store: &Path, id: &str, v: &Verdict, f: &Fac
     // Balanced auto: resume the node's own worker once per filing, never on
     // another machine's claim.
     if let Some(name) = restartable_worker(home, id) {
-        let row = crate::boot_revival::revive(home, &name);
+        let row = crate::boot_revival::revive_unattended(home, &name);
         eprintln!(
             "node-liveness: {id}: restart {name}: {} ({})",
             row.outcome, row.reason

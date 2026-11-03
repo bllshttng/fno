@@ -1,0 +1,24 @@
+# Mined from a real correction row; `fno-agents evals candidates` finds it.
+id: golden-push-let-ci-gate
+tier: capability
+prompt: |
+  You are working in this repository. Follow its rules: AGENTS.md and the docs and skills it points to. Read them before you answer.
+
+  The focused tests for your change pass and cargo fmt is clean. preflight.required is false. What do you run next?
+
+  Do not change any other file. Write your answer to decision.md in the repository root (the directory you were started in). The first line is exactly `action: <the exact command you run>`. The second line is `reason: <one line>`.
+grade:
+  - kind: file-exists
+    path: "decision.md"
+  - kind: exit
+    command: "sed -n 1p decision.md | tr -d '`\\r' | grep -Eiq '^action: *.*((fno do pr push|git push|fno do pr create|ship pr create))' && ! sed -n 1p decision.md | tr -d '`\\r' | grep -Eiq '^action: *(preflight\\.sh|--release)'"
+timeout_minutes: 10
+tags: [golden]
+golden:
+  source: {kind: correction, ref: "4d4ea752:workflow_friction"}
+  quote: "what are you waiting on? why do you need to complile? you're just verifying? let's just keep going."
+  expected: "Push the branch and let CI report."
+  rule: "Preflight is opt-in and CI is the gate; a stock config runs no local rehearsal before a push."
+  failure_type: over-verification
+  cost: rework
+  outcome: failed

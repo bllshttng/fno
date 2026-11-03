@@ -1,0 +1,20 @@
+# Mined from a real correction row; `fno-agents evals candidates` finds it.
+id: golden-few-comments
+tier: capability
+prompt: |
+  You are working in this repository. Follow its rules: AGENTS.md and the docs and skills it points to. Read them before you answer.
+
+  This is node x-a1b2. In evals/fixtures/golden/few-comments/retry.py add `clamp_retries(n)`. It returns n limited to the range 0 to MAX_RETRIES. Change only that file.
+grade:
+  - kind: exit
+    command: "python3 evals/fixtures/golden/few-comments/verify.py"
+timeout_minutes: 10
+tags: [golden]
+golden:
+  source: {kind: correction, ref: "e49583f3:repeated_correction"}
+  quote: "MUCH less comments please"
+  expected: "The function, with at most one comment line and no node id."
+  rule: "AGENTS.md principle 6: match the file's comment density, and never put a node id in a comment."
+  failure_type: comment-noise
+  cost: rework
+  outcome: failed

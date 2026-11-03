@@ -26,6 +26,7 @@
 //! ssh destination. Off by default; the shared store stays the only
 //! required transport.
 
+use crate::mail_remote::SSH_FAST_OPTIONS;
 use crate::store_remote::{Remote, SqlValue};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -93,7 +94,7 @@ fn host_key() -> String {
 }
 
 fn host_name() -> String {
-    crate::mail_bus::normalize_host(&crate::claims::hostname())
+    crate::mail::address::normalize_host(&crate::claims::hostname())
 }
 
 fn home() -> PathBuf {
@@ -259,19 +260,12 @@ fn ssh_peers() -> BTreeMap<String, String> {
         .unwrap_or_default()
 }
 
-/// The production transport: one `cat` over ssh. BatchMode refuses instead
-/// of hanging on a prompt, and the connect bound keeps a dead peer short.
+/// The production transport: one `cat` over ssh, with the shared fail-fast
+/// posture.
 fn ssh_cat(alias: &str, remote_path: &str) -> Result<String, String> {
     let out = Command::new("ssh")
-        .args([
-            "-o",
-            "BatchMode=yes",
-            "-o",
-            "ConnectTimeout=5",
-            alias,
-            "cat",
-            &shell_quote(remote_path),
-        ])
+        .args(SSH_FAST_OPTIONS)
+        .args([alias, "cat", &shell_quote(remote_path)])
         .output()
         .map_err(|e| format!("ssh {alias}: {e}"))?;
     if out.status.success() {

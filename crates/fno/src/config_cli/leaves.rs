@@ -83,7 +83,7 @@ pub fn run_build_dir(args: &[OsString]) -> i32 {
         .iter()
         .map(|a| a.to_string_lossy().to_string())
         .collect();
-    for token in &tokens {
+    if let Some(token) = tokens.first() {
         match token.as_str() {
             "--help" | "-h" => {
                 print!("{BUILDDIR_HELP}");
@@ -533,7 +533,7 @@ pub fn run_active_backlog(args: &[OsString]) -> i32 {
         .iter()
         .map(|a| a.to_string_lossy().to_string())
         .collect();
-    for token in &tokens {
+    if let Some(token) = tokens.first() {
         match token.as_str() {
             "--help" | "-h" => {
                 print!("{BACKLOG_HELP}");

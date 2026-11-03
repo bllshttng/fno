@@ -165,6 +165,7 @@ pub const FOLD_CANDIDATES: &[&str] = &[
     "chats",
     "claim-aux",
     "context-cache",
+    "corrections",
     "fleet",
     "flight",
     "handoffs",
@@ -449,6 +450,14 @@ pub fn migrate(root: &Path, apply: bool) -> Receipt {
     for (name, status) in crate::state_layout_sqlite::journal_retire(root, &stamp, apply) {
         receipt.entries.push(Entry {
             legacy: format!("{name} (journal)"),
+            status,
+        });
+    }
+    // The ledger history imports once into the store: a pass ahead of the
+    // carrier's deployment refuses by name, an imported root is silent.
+    for (name, status) in crate::run_import::ledger_history_import(root, &stamp, apply) {
+        receipt.entries.push(Entry {
+            legacy: format!("{name} (run-history)"),
             status,
         });
     }

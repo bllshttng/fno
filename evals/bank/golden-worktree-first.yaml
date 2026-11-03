@@ -1,0 +1,24 @@
+# Mined from a real correction row; `fno-agents evals candidates` finds it.
+id: golden-worktree-first
+tier: capability
+prompt: |
+  You are working in this repository. Follow its rules: AGENTS.md and the docs and skills it points to. Read them before you answer.
+
+  You are in the canonical checkout on main and you hold ready node x-1234. You must change one file. What is your first command?
+
+  Do not change any other file. Write your answer to decision.md in the repository root (the directory you were started in). The first line is exactly `action: <the exact command you run>`. The second line is `reason: <one line>`.
+grade:
+  - kind: file-exists
+    path: "decision.md"
+  - kind: exit
+    command: "sed -n 1p decision.md | tr -d '`\\r' | grep -Eiq '^action: *.*(fno do target start +x-1234)' && ! sed -n 1p decision.md | tr -d '`\\r' | grep -Eiq '^action: *(checkout -b)'"
+timeout_minutes: 10
+tags: [golden, gate]
+golden:
+  source: {kind: correction, ref: "24508275:wrong_assumption"}
+  quote: "wait why is this being built in ~/code/footnote/footnote"
+  expected: "fno do target start <node>."
+  rule: "AGENTS.md principle 0: enter a dedicated feature worktree before editing, generating or committing."
+  failure_type: wrong-location
+  cost: rework
+  outcome: failed

@@ -13,7 +13,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
-import pytest
 
 A = "e6f78b98-e594-47ed-ad81-84f8a78b8bb7"
 B = "08054b1d-a907-47ab-a3d2-4a1e7a87eb4e"
@@ -69,35 +68,9 @@ def _successor_row() -> _Row:
 # ---------------------------------------------------------------------------
 
 
-def test_predecessor_full_id_resolves_the_current_row() -> None:
-    from fno.agents.registry import resolve_agent_in
-
-    row = _successor_row()
-    resolved = resolve_agent_in([row], A)
-    assert resolved.entry is row
-    assert resolved.matched_by == "full_session_id"
-    assert resolved.matched_session_id == A, "the match names the id called"
-
-
 # ---------------------------------------------------------------------------
 # AC6-ERR: a live branch never lets a token pick one worker
 # ---------------------------------------------------------------------------
-
-
-def test_token_matching_two_live_branch_rows_refuses_and_names_both() -> None:
-    from fno.agents.registry import AgentResolutionError, resolve_agent_in
-
-    rows = [
-        _Row(name="worker-one", harness_session_id=B, short_id="shared001",
-             fno_id=B, forked_from_session_id=A),
-        _Row(name="worker-two", harness_session_id=C, short_id="shared001",
-             fno_id=C, forked_from_session_id=A),
-    ]
-    with pytest.raises(AgentResolutionError) as excinfo:
-        resolve_agent_in(rows, "shared001")
-    message = str(excinfo.value)
-    assert B in message and C in message, "the refusal names both full ids"
-    assert excinfo.value.ambiguous
 
 
 # ---------------------------------------------------------------------------

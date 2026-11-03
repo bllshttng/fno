@@ -6,15 +6,6 @@ protective infrastructure and a settings typo must never brick spawning.
 from fno.config import AgentsBlock
 
 
-def test_provider_loader_reserved_keys_match_agents_schema():
-    from fno.adapters.providers.loader import _AGENTS_RESERVED_KEYS
-
-    # `max_lanes` is the one tolerated legacy spelling (renamed provider_limits,
-    # x-3f84 W5): still parsed by the block's before-validator, so it stays
-    # reserved against provider pins.
-    assert _AGENTS_RESERVED_KEYS == set(AgentsBlock.model_fields) | {"max_lanes"}
-
-
 def test_max_live_below_one_coerces_to_default():
     assert AgentsBlock(max_live=0).max_live == 3
     assert AgentsBlock(max_live=-2).max_live == 3
@@ -36,7 +27,10 @@ def test_provider_limits_is_per_provider_and_invalid_shape_keeps_safe_default():
     }
     assert lanes == {"zai": (2, 1), "openai": (7, None)}
     assert AgentsBlock(provider_limits={}).provider_limits == {}
-    for broken in ({"zai": 0}, "broken", {"zai": True}, {"zai": {"bogus": 1}}):
+    closed = AgentsBlock(provider_limits={"zai": 0, "anthropic": {"lanes": 0}}).provider_limits
+    assert (closed["zai"].lanes, closed["zai"].subagents) == (0, 1)
+    assert closed["anthropic"].lanes == 0
+    for broken in ({"zai": -1}, {"zai": {"subagents": 0}}, "broken", {"zai": True}, {"zai": {"bogus": 1}}):
         restored = AgentsBlock(provider_limits=broken).provider_limits["zai"]
         assert (restored.lanes, restored.subagents) == (5, 1), broken
 

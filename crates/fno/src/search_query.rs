@@ -160,7 +160,7 @@ pub static AREAS: &[Area] = &[
             "decision_recorded",
         ],
         title_terms: &["backlog", "board", "kanban", "triage", "groom", "epic"],
-        path_terms: &["backlog", "cli/src/fno/graph"],
+        path_terms: &["backlog", "crates/fno-agents/src/backlog"],
         projects: &[],
     },
     Area {

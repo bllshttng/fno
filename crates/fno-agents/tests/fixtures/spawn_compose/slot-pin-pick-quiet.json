@@ -13,6 +13,8 @@
   "expect": {
     "argv": [
       "spawn",
+      "--harness",
+      "codex",
       "--name",
       "w6",
       "-m",
@@ -44,6 +46,11 @@
           [
             "slot",
             "operator-pin-override row=pin-x harness=codex (the typed model's declared row names its harness)",
+            "routing"
+          ],
+          [
+            "harness",
+            "codex",
             "routing"
           ],
           [

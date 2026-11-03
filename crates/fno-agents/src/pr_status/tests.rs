@@ -179,7 +179,7 @@ fn pr_json_from(name: &str) -> Value {
 fn red_fixture_collects_the_golden_failures() {
     let fake = FakeGh::from_fixture("red_detailed_capped");
     let pr_json = read_pr(&fake, Path::new("/tmp"), "Owner/Repo", 42, None).unwrap();
-    let rollup = without_coverage_statuses(pr_json["statusCheckRollup"].as_array().unwrap());
+    let rollup = generic_ci_rollup(pr_json["statusCheckRollup"].as_array().unwrap());
     let failing: Vec<Value> = crate::check_supersession::latest_per_name(&Value::Array(rollup))
         .as_array()
         .unwrap()
@@ -205,6 +205,42 @@ fn red_fixture_collects_the_golden_failures() {
         expected["failures"],
         "failure detail"
     );
+}
+
+/// A red evals/gate status is an eval fact, not a CI failure: the generic
+/// rollup drops it, so the verdict stays green over green check runs, and
+/// the fact extractor reads the newest row for the context.
+#[test]
+fn evals_gate_red_never_reds_the_ci_verdict() {
+    let rollup = vec![
+        json!({"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}),
+        json!({
+            "context": "evals/gate",
+            "state": "FAILURE",
+            "createdAt": "2026-09-25T00:05:00Z",
+            "description": "no result. Clear: fno-agents evals gate-retry abc. Cause: limit",
+        }),
+    ];
+    let (verdict, code, _) = verdict_for(&generic_ci_rollup(&rollup));
+    assert_eq!(verdict, "green", "the gate red stays out of the CI verdict");
+    assert_eq!(code, 0);
+    let fact = evals_gate_fact(&rollup).expect("the gate row is readable");
+    assert_eq!(fact["state"], "FAILURE");
+    assert_eq!(
+        fact["description"],
+        "no result. Clear: fno-agents evals gate-retry abc. Cause: limit"
+    );
+    // Supersession: the newest row for the context wins.
+    let two_rows = vec![
+        json!({"context": "evals/gate", "state": "FAILURE", "createdAt": "2026-09-25T00:05:00Z", "description": "old"}),
+        json!({"context": "evals/gate", "state": "SUCCESS", "createdAt": "2026-09-25T00:06:00Z", "description": "new"}),
+    ];
+    let fact = evals_gate_fact(&two_rows).expect("newest row");
+    assert_eq!(fact["state"], "SUCCESS");
+    assert!(evals_gate_fact(&[
+        json!({"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"})
+    ])
+    .is_none());
 }
 
 /// A log read lands in the job cache and the second read never spends a gh
@@ -325,6 +361,7 @@ fn composer_replays_the_goldens() {
         "all_status_contexts",
         "zero_job_runs",
         "terminal_merged",
+        "evals_gate_red_ci_green",
     ] {
         let fixture = load_fixture(name);
         let expected: Value =
@@ -468,4 +505,64 @@ fn optional_reviews_list_reads_rest_pages_and_keys_on_user_login() {
     assert!(reviews::fetch_reviews(&failed, cwd, "octocat/wordplay", 7).is_none());
     let out = reviews::optional_reviews(&failed, cwd, 7, "octocat/wordplay");
     assert_eq!(out["optional_reviews"], json!("unknown"));
+}
+
+/// The pinned read: `--expect-head` turns a settled answer about another
+/// head into a refusal that names the mismatch. A merged PR kept answering
+/// settled for a watcher armed on a later push; the pin is the refusal.
+#[test]
+fn the_pinned_read_refuses_any_answer_about_another_head() {
+    let mut merged = json!({
+        "pr": "1068",
+        "head": "37deafc2abcdef",
+        "pr_state": "MERGED",
+        "settled": true,
+        "verdict": "green",
+        "ready": true,
+        "ready_blockers": [],
+    });
+    let note = crate::pr_status::compose::apply_expect_head(
+        merged.as_object_mut().unwrap(),
+        "aaaaaaaaaaaa1234",
+    )
+    .expect("the heads differ, so the pin applies");
+    assert_eq!(
+        merged["settled"],
+        json!(false),
+        "the named sha is not tested"
+    );
+    assert_eq!(
+        merged["head_mismatch"]["expected"],
+        json!("aaaaaaaaaaaa1234")
+    );
+    assert_eq!(merged["head_mismatch"]["actual"], json!("37deafc2abcdef"));
+    assert_eq!(merged["ready"], json!(false));
+    assert_eq!(merged["ready_blockers"], json!(["head_mismatch"]));
+    assert!(note.contains("PR 1068 is MERGED at 37deafc2abcd"), "{note}");
+    assert!(note.contains("will never test aaaaaaaaaaaa"), "{note}");
+
+    // A matching pin mutates nothing; the compare is case-insensitive.
+    let mut open = json!({
+        "pr": "9",
+        "head": "37deafc2abcdef",
+        "pr_state": "OPEN",
+        "settled": true,
+        "ready": true,
+        "ready_blockers": [],
+    });
+    let matched = crate::pr_status::compose::apply_expect_head(
+        open.as_object_mut().unwrap(),
+        "37DEAFC2ABCDEF",
+    );
+    assert!(matched.is_none(), "a match is a pass");
+    assert_eq!(open["settled"], json!(true), "a match mutates nothing");
+
+    // An unreadable head (a degraded serve) cannot verify the pin: refused.
+    let mut degraded = json!({"pr": "9", "head": Value::Null, "settled": false});
+    let note = crate::pr_status::compose::apply_expect_head(
+        degraded.as_object_mut().unwrap(),
+        "aaaaaaaaaaaa1234",
+    )
+    .expect("no head provable, so the pin cannot pass");
+    assert!(note.contains("names no head"), "{note}");
 }

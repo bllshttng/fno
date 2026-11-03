@@ -115,7 +115,18 @@ pub(crate) fn bind_pr_rows(
             continue;
         }
         let refs = node_pr_refs(node);
-        let action = if refs.iter().any(|(number, _)| *number == pr_number) {
+        let primary_absent = !node.get("pr_number").map(Value::is_i64).unwrap_or(false);
+        let bound = refs.iter().any(|(number, _)| *number == pr_number);
+        let action = if bound && rebind && primary_absent {
+            // A closed PR reopened after the closed-PR leg moved it aside.
+            let obj = node.as_object_mut().expect("graph rows are objects");
+            if let Some(rows) = obj.get_mut("additional_prs").and_then(Value::as_array_mut) {
+                rows.retain(|r| r.get("number").and_then(Value::as_i64) != Some(pr_number));
+            }
+            obj.insert("pr_number".into(), json!(pr_number));
+            obj.insert("pr_url".into(), json!(pr_url));
+            "filled_primary"
+        } else if bound {
             "already_bound"
         } else if !node_is_open(node) {
             "already_done"
@@ -253,6 +264,20 @@ mod tests {
         let result = bind_pr_rows(&mut entries, &claimed, 7, None, Some("o/r"), false);
         assert_eq!(result.outcome, "refused");
         assert!(result.refusal.unwrap().contains("cross-repo claim"));
+    }
+
+    #[test]
+    fn a_reopened_pr_returns_from_additional_to_primary() {
+        let url = "https://github.com/o/r/pull/7";
+        let mut entries = vec![json!({
+            "id": "x-aaaa", "pr_number": null,
+            "additional_prs": [{"number": 7, "url": url, "merge_status": "closed"}],
+        })];
+        let claimed = vec!["x-aaaa".to_string()];
+        let result = bind_pr_rows(&mut entries, &claimed, 7, Some(url), None, true);
+        assert_eq!(result.bindings[0].action, "filled_primary");
+        assert_eq!(entries[0]["pr_number"], 7);
+        assert_eq!(entries[0]["additional_prs"], json!([]));
     }
 
     #[test]

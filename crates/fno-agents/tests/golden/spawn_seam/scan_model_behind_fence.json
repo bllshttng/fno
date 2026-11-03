@@ -17,7 +17,7 @@
     "has_harness": false,
     "has_model": true,
     "has_permission": false,
-    "model_value": null,
+    "model_value": "glm-5.2",
     "name": null,
     "permission_value": null,
     "positional_present": true,

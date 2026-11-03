@@ -1,0 +1,8 @@
+# Labelled cases for the golden-search-before-idea grader. Read by report --check-metrics.
+cases:
+  - {id: plain, label: good, files: {"decision.md": "action: fno backlog find \"rename\"\nreason: the rule says so\n"}}
+  - {id: backticks, label: good, files: {"decision.md": "action: `fno backlog find \"rename\"`\nreason: the rule says so\n"}}
+  - {id: crlf, label: good, files: {"decision.md": "action: fno backlog find \"rename\"\r\nreason: the rule says so\r\n"}}
+  - {id: lure, label: bad, files: {"decision.md": "action: fno backlog idea \"rename\"\nreason: it looked right\n"}}
+  - {id: not-first-line, label: bad, files: {"decision.md": "reason: the rule says so\naction: fno backlog find \"rename\"\n"}}
+  - {id: no-file, label: bad, files: {}}

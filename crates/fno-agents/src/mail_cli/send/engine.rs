@@ -2,6 +2,7 @@
 use super::lanes::*;
 use super::resolve::*;
 use super::*;
+use crate::mail::lane::{first_applicable, Lane, LaneKind, Target, LADDER};
 
 // ---------------------------------------------------------------------------
 // The per-agent registry lock (agents/lock.py hold_agent_lock)
@@ -764,18 +765,19 @@ fn a2a_marker() -> PathBuf {
 /// Classify a registered recipient without
 /// trusting its stored lifecycle.
 pub(super) fn registered_family1_state(row: &Value) -> String {
+    registered_family1_probe(row).map_or_else(|| "unknown".to_string(), |probe| probe.state)
+}
+
+fn registered_family1_probe(row: &Value) -> Option<crate::truth_probe::TruthProbe> {
     let session_id = opt_str_field(row, "harness_session_id")
         .or_else(|| opt_str_field(row, "cc_session_id"))
         .or_else(|| opt_str_field(row, "session_id"))
         .or_else(|| opt_str_field(row, "short_id"))
         .unwrap_or_default();
     if session_id.is_empty() {
-        return "unknown".to_string();
+        return None;
     }
-    match crate::truth_probe::family1_truth_probe(&session_id) {
-        Some(probe) => probe.state,
-        None => "unknown".to_string(),
-    }
+    crate::truth_probe::family1_truth_probe(&session_id)
 }
 
 /// One fire-and-forget live attempt over the row's
@@ -799,8 +801,70 @@ pub(super) fn deliver_live(
         reason_out.push(BUS_ONLY_POLICY.to_string());
         return DeliveryState::failed(BUS_ONLY_POLICY);
     }
-    let has_mux = row.get("mux").is_some_and(|m| m.is_object());
-    if has_mux {
+    let cx = LiveCtx {
+        row,
+        from_name,
+        sender_entry,
+    };
+    let target = live_target(row);
+    // The order is `mail::lane::LADDER`'s; the match gives each kind its adapter.
+    let lanes: Vec<Box<dyn Lane + '_>> = LADDER
+        .iter()
+        .map(|kind| -> Box<dyn Lane + '_> {
+            match kind {
+                LaneKind::Pane => Box::new(PaneLane(cx)),
+                LaneKind::CodexThread => Box::new(CodexThreadLane(cx)),
+                LaneKind::Keeper => Box::new(KeeperLane),
+                LaneKind::DaemonDeliver => Box::new(DaemonDeliverLane(cx)),
+                LaneKind::ClaudeSwitchboard => Box::new(ClaudeSwitchboardLane(cx)),
+            }
+        })
+        .collect();
+    match first_applicable(&lanes, &target) {
+        Some(lane) => lane.deliver(wrapped, &target, reason_out),
+        None => DeliveryState::failed("no-lane"),
+    }
+}
+
+/// What a lane needs from the send beside the wrapped text.
+#[derive(Clone, Copy)]
+struct LiveCtx<'a> {
+    row: &'a Value,
+    from_name: &'a str,
+    sender_entry: Option<&'a Value>,
+}
+
+/// The registry row flattened to the shape `mail::lane` selects on.
+fn live_target(row: &Value) -> Target {
+    let socket = opt_str_field(row, "messaging_socket_path");
+    let harness = str_field(row, "harness");
+    let keeper_thread = socket
+        .as_deref()
+        .is_some_and(|s| s.contains("mux/threads/"))
+        && crate::harness_capabilities::HarnessContract::packaged()
+            .ok()
+            .and_then(|c| c.thread_lane(harness).ok())
+            .map(|lane| lane == "keeper")
+            .unwrap_or(false);
+    Target {
+        session_id: opt_str_field(row, "harness_session_id"),
+        harness: harness.to_string(),
+        has_mux: row.get("mux").is_some_and(|m| m.is_object()),
+        codex_thread: is_codex_thread_entry(row),
+        keeper_thread,
+        messaging_socket: socket,
+    }
+}
+
+struct PaneLane<'a>(LiveCtx<'a>);
+
+impl Lane for PaneLane<'_> {
+    fn kind(&self) -> LaneKind {
+        LaneKind::Pane
+    }
+
+    fn deliver(&self, wrapped: &str, _t: &Target, reason_out: &mut Vec<String>) -> DeliveryState {
+        let row = self.0.row;
         let state = mail_inject_pane(row, wrapped, Some(reason_out));
         if state.reached() {
             return state;
@@ -825,9 +889,23 @@ pub(super) fn deliver_live(
                 }
             }
         }
-        return state;
+        state
     }
-    if is_codex_thread_entry(row) {
+}
+
+struct CodexThreadLane<'a>(LiveCtx<'a>);
+
+impl Lane for CodexThreadLane<'_> {
+    fn kind(&self) -> LaneKind {
+        LaneKind::CodexThread
+    }
+
+    fn deliver(&self, wrapped: &str, _t: &Target, reason_out: &mut Vec<String>) -> DeliveryState {
+        let LiveCtx {
+            row,
+            from_name,
+            sender_entry,
+        } = self.0;
         let delivered = switchboard_exchange(
             &str_field(row, "name"),
             from_name,
@@ -846,23 +924,33 @@ pub(super) fn deliver_live(
         if let Some(sid) = opt_str_field(row, "harness_session_id") {
             return mail_inject_codex(&sid, wrapped, Some(reason_out), None);
         }
-        return DeliveryState::failed("codex-thread-switchboard-miss");
+        DeliveryState::failed("codex-thread-switchboard-miss")
     }
-    let sock = opt_str_field(row, "messaging_socket_path").unwrap_or_default();
-    let lane_harness = str_field(row, "harness");
-    let keeper_row = sock.contains("mux/threads/")
-        && crate::harness_capabilities::HarnessContract::packaged()
-            .ok()
-            .and_then(|c| c.thread_lane(lane_harness).ok())
-            .map(|lane| lane == "keeper")
-            .unwrap_or(false);
-    if keeper_row {
-        if let Some(sid) = opt_str_field(row, "harness_session_id") {
-            return mail_inject_keeper(&sid, wrapped, lane_harness, Some(reason_out));
-        }
+}
+
+struct KeeperLane;
+
+impl Lane for KeeperLane {
+    fn kind(&self) -> LaneKind {
+        LaneKind::Keeper
     }
-    let route_harness = lane_harness;
-    if route_harness != "claude" && route_harness != "opencode" {
+
+    fn deliver(&self, wrapped: &str, t: &Target, reason_out: &mut Vec<String>) -> DeliveryState {
+        // `applies` holds a session id for this lane.
+        let sid = t.session_id.as_deref().unwrap_or_default();
+        mail_inject_keeper(sid, wrapped, &t.harness, Some(reason_out))
+    }
+}
+
+struct DaemonDeliverLane<'a>(LiveCtx<'a>);
+
+impl Lane for DaemonDeliverLane<'_> {
+    fn kind(&self) -> LaneKind {
+        LaneKind::DaemonDeliver
+    }
+
+    fn deliver(&self, wrapped: &str, _t: &Target, reason_out: &mut Vec<String>) -> DeliveryState {
+        let LiveCtx { row, from_name, .. } = self.0;
         let result = daemon_rpc(
             "agent.deliver",
             json!({
@@ -880,37 +968,56 @@ pub(super) fn deliver_live(
             eprintln!("fno-agents deliver demoted: {reason}; message queued durable");
             reason_out.push(reason.to_string());
         }
-        return state;
+        state
     }
-    // The switchboard fast lane: the daemon probes B's worker socket, so a
-    // claude peer that is NOT a live stream thread answers delivered=false and
-    // falls through to the socket path below. Observed mode mirrors B's reply
-    // when the sender row is in hand.
-    let to_identity = switchboard_identity(row);
-    let from_identity = sender_entry.map(switchboard_identity);
-    a2a_first_use_gate();
-    let exchange = switchboard_exchange(
-        &str_field(row, "name"),
-        from_name,
-        wrapped,
-        None,
-        to_identity,
-        from_identity,
-    );
-    if exchange == Some(true) {
-        return DeliveryState::Injected;
+}
+
+struct ClaudeSwitchboardLane<'a>(LiveCtx<'a>);
+
+impl Lane for ClaudeSwitchboardLane<'_> {
+    fn kind(&self) -> LaneKind {
+        LaneKind::ClaudeSwitchboard
     }
-    // Live inject over control.sock: the SOLE claude live lane.
-    let recipient = opt_str_field(row, "harness_session_id")
-        .or_else(|| opt_str_field(row, "short_id"))
-        .or_else(|| opt_str_field(row, "mcp_channel_id"));
-    match recipient {
-        None => {
-            reason_out.push("no-recipient".to_string());
-            DeliveryState::failed("no-recipient")
+
+    fn deliver(&self, wrapped: &str, t: &Target, reason_out: &mut Vec<String>) -> DeliveryState {
+        let LiveCtx {
+            row,
+            from_name,
+            sender_entry,
+        } = self.0;
+        // The switchboard fast lane: the daemon probes B's worker socket, so a
+        // claude peer that is NOT a live stream thread answers delivered=false and
+        // falls through to the socket path below. Observed mode mirrors B's reply
+        // when the sender row is in hand.
+        let to_identity = switchboard_identity(row);
+        let from_identity = sender_entry.map(switchboard_identity);
+        a2a_first_use_gate();
+        let exchange = switchboard_exchange(
+            &str_field(row, "name"),
+            from_name,
+            wrapped,
+            None,
+            to_identity,
+            from_identity,
+        );
+        if exchange == Some(true) {
+            return DeliveryState::Injected;
         }
-        Some(recipient) => {
-            mail_inject_claude(&recipient, wrapped, Some(reason_out), Some(lane_harness))
+        // Live inject over control.sock: the SOLE claude live lane.
+        let recipient = opt_str_field(row, "harness_session_id")
+            .or_else(|| opt_str_field(row, "short_id"))
+            .or_else(|| opt_str_field(row, "mcp_channel_id"));
+        match recipient {
+            None => {
+                reason_out.push("no-recipient".to_string());
+                DeliveryState::failed("no-recipient")
+            }
+            Some(recipient) => mail_inject_claude(
+                &recipient,
+                wrapped,
+                Some(reason_out),
+                Some(t.harness.as_str()),
+            ),
         }
     }
 }
@@ -929,7 +1036,7 @@ fn deliver_answer_state(result: &Value) -> DeliveryState {
             .is_some_and(|q| q == true || q.as_u64().unwrap_or(0) > 1);
         return if queued {
             DeliveryState::Parked {
-                where_: crate::mail_delivery_state::Parked::HarnessQueue,
+                where_: crate::mail::state::Parked::HarnessQueue,
             }
         } else {
             DeliveryState::Injected
@@ -1002,7 +1109,6 @@ pub(super) fn queue_durable_fallback(
         subject,
         None,
         None,
-        false,
         None,
     );
     match write {
@@ -1394,10 +1500,20 @@ pub(super) fn dispatch_send_locked(
     }
     let reservation = reservation.expect("checked above");
 
-    let family1_state = registered_family1_state(&existing);
+    let family1_probe = registered_family1_probe(&existing);
+    let family1_state = family1_probe
+        .as_ref()
+        .map_or("unknown", |probe| probe.state.as_str());
     let family1_live =
         family1_state == "working" || family1_state == "watching" || family1_state == "your-move";
-    let durable_owner = classify_durable_owner(false, family1_live, !family1_live);
+    // A dead process keeps its transcript state, so the owner also needs the
+    // verdict. The live attempt stays on: a `silent` row may still be alive.
+    let owner_live = family1_live
+        && family1_probe
+            .as_ref()
+            .and_then(|p| p.reachability.as_deref())
+            != Some("unreachable");
+    let durable_owner = classify_durable_owner(owner_live, !owner_live);
     let family1_attemptable = family1_live
         || family1_state == "unknown"
         || (str_field(&existing, "harness") == "claude" && existing.get("mux").is_none());
@@ -1494,12 +1610,7 @@ pub(super) fn dispatch_send_locked(
                 &mut live_reasons,
                 &family1_state,
             );
-            crate::mail_delivery_state::record(
-                &msg_id,
-                &state,
-                &mail_ctx.from_,
-                &recipient_for_row,
-            );
+            crate::mail_receipt::record(&msg_id, &state, &mail_ctx.from_, &recipient_for_row);
             let delivered = state.reached();
             live_state = state;
             if delivered {
@@ -1784,7 +1895,7 @@ pub(super) fn project_ambiguity_error(project: &str, live_candidates: &[String])
 }
 
 /// Exactly one live peer delivers live, none
-/// queues durable to the project, many refuse unless --any breaks the tie.
+/// has no recipient (the caller refuses), many refuse unless --any breaks the tie.
 pub(super) fn resolve_to_project(
     project: &str,
     any_flag: bool,

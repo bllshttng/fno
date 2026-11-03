@@ -172,6 +172,8 @@ struct AppState {
     /// True when the bound address is loopback, so the backlog page may act.
     /// Computed from the bound address, never from `--bind` text.
     writable: bool,
+    /// The `[[web.invites]]` rows, `None` when config sets none. Read once at bind.
+    invites: Option<Arc<Vec<crate::web_invites::Invite>>>,
     /// The cached backlog read model (`None` until the first gather).
     model: Arc<tokio::sync::Mutex<Option<CachedModel>>>,
     /// Fires on Ctrl-C so every ws loop ends and axum's graceful shutdown can
@@ -771,6 +773,8 @@ async fn run(args: WebArgs, socket: PathBuf) -> i32 {
         rundown_republish,
         command: Default::default(),
         writable,
+        invites: crate::web_invites::read_invites(&std::env::current_dir().unwrap_or_default())
+            .map(Arc::new),
         model: Default::default(),
         shutdown: shutdown_rx,
     };
@@ -816,10 +820,61 @@ fn router(state: AppState) -> Router {
         .route("/team", get(team))
         .route("/command", get(command))
         .route("/command/model.json", get(command_model))
+        .route("/command/answer/{id}", post(command_answer))
         .route("/trace", get(trace))
         .route("/trace/model.json", get(trace_model))
         .route("/ws", get(ws_handler))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            invite_gate,
+        ))
         .with_state(state)
+}
+
+/// Every request needs at least a viewer invite when `web.invites` is set.
+/// Per-route checks would let a new route slip past, so this one layer covers
+/// them all. With no invite list the layer passes and the token rules stand.
+async fn invite_gate(
+    State(st): State<AppState>,
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    let caller = caller_of(req.headers(), st.writable);
+    match crate::web_invites::decide(
+        &caller,
+        st.invites.as_deref().map(Vec::as_slice),
+        None,
+        crate::web_invites::Role::Viewer,
+    ) {
+        Ok(_) => next.run(req).await,
+        Err(r) => plain_status(
+            StatusCode::from_u16(r.code).unwrap_or(StatusCode::FORBIDDEN),
+            &r.text,
+        ),
+    }
+}
+
+/// The facts of one request that the invite decision reads.
+pub(crate) fn caller_of(
+    headers: &HeaderMap,
+    loopback_bind: bool,
+) -> crate::web_invites::Caller<'_> {
+    crate::web_invites::Caller {
+        login: headers
+            .get("tailscale-user-login")
+            .and_then(|v| v.to_str().ok()),
+        loopback_bind,
+        // A proxy can rewrite Host, but tailscale serve and every common
+        // reverse proxy add a forwarding header, so one of those marks the
+        // request as proxied whatever Host says.
+        loopback_host: !["x-forwarded-for", "x-forwarded-host", "forwarded"]
+            .iter()
+            .any(|h| headers.contains_key(*h))
+            && headers
+                .get(header::HOST)
+                .and_then(|h| h.to_str().ok())
+                .is_some_and(names_loopback),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1149,7 +1204,10 @@ async fn command_model(Query(q): Query<WsQuery>, State(st): State<AppState>) -> 
     if st.command.claim_refresh().await {
         tokio::spawn(refresh_command(st.clone()));
     }
-    json_response(&st.command.model().await)
+    let mut model = st.command.model().await;
+    // A read-only bridge shows the question drawer with no answer controls.
+    model["writable"] = serde_json::json!(st.writable);
+    json_response(&model)
 }
 
 async fn refresh_command(st: AppState) {
@@ -1467,6 +1525,97 @@ async fn backlog_act(
     };
     let (ok, notice) = run_planned(&st, &id, planned).await;
     act_response(ok, &notice)
+}
+
+/// `POST /command/answer/{id}?t=<token>`: answer one open question from the
+/// drawer. The refusals come in this order, and each one starts no process:
+/// loopback bind, token, same origin, body shape, the question, the invite.
+/// Then the answer door writes the one row. The route never records a
+/// decision itself.
+async fn command_answer(
+    axum::extract::Path(id): axum::extract::Path<String>,
+    Query(q): Query<WsQuery>,
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    body: Result<Json<crate::web_answer::AnswerBody>, axum::extract::rejection::JsonRejection>,
+) -> Response {
+    if !st.writable {
+        return plain_status(
+            StatusCode::FORBIDDEN,
+            "the bridge is read-only: it is not bound to loopback",
+        );
+    }
+    if !token_ok(q.t.as_deref(), &st.token) {
+        return unauthorized();
+    }
+    if let Err(msg) = crate::web_answer::same_origin(&headers) {
+        return plain_status(StatusCode::FORBIDDEN, msg);
+    }
+    if !crate::web_answer::valid_id(&id) {
+        return plain_status(StatusCode::BAD_REQUEST, "that is not a question id");
+    }
+    let pick = match body {
+        Ok(Json(b)) => match crate::web_answer::pick_of(b) {
+            Ok(p) => p,
+            Err(msg) => return plain_status(StatusCode::BAD_REQUEST, msg),
+        },
+        Err(_) => {
+            return plain_status(
+                StatusCode::BAD_REQUEST,
+                "the body is JSON with one of option, words or done",
+            )
+        }
+    };
+    // The page only offers a question it already holds, so the cache answers
+    // the node. A question the cache has not seen yet takes one fold read.
+    let node = match st.command.question_node(&id).await {
+        Some(node) => node,
+        None => match crate::needs_overlay::questions_now().await {
+            Ok(fold) => match fold.items.iter().find(|i| i.id == id) {
+                Some(item) => item.node.clone(),
+                None => return plain_status(StatusCode::NOT_FOUND, "no such question"),
+            },
+            Err(e) => return plain_status(StatusCode::SERVICE_UNAVAILABLE, &e),
+        },
+    };
+    let inputs = model_inputs(&st).await;
+    let chain = crate::web_answer::chain_of(&inputs.rows, node.as_deref());
+    let person = match crate::web_invites::decide(
+        &caller_of(&headers, st.writable),
+        st.invites.as_deref().map(Vec::as_slice),
+        Some(&chain),
+        crate::web_invites::Role::Editor,
+    ) {
+        Ok(person) => person,
+        Err(r) => {
+            return plain_status(
+                StatusCode::from_u16(r.code).unwrap_or(StatusCode::FORBIDDEN),
+                &r.text,
+            )
+        }
+    };
+    match crate::needs_overlay::answer_as(&id, pick, "command_page", Some(&person)).await {
+        Ok(receipt) => {
+            tokio::spawn(refresh_command(st.clone()));
+            let receipt = serde_json::from_str::<serde_json::Value>(&receipt)
+                .unwrap_or_else(|_| serde_json::json!({ "recorded": true }));
+            json_response(&receipt)
+        }
+        Err(f) => plain_status(
+            if f.timed_out {
+                StatusCode::SERVICE_UNAVAILABLE
+            } else if f.refused {
+                StatusCode::CONFLICT
+            } else {
+                StatusCode::INTERNAL_SERVER_ERROR
+            },
+            &if f.refused {
+                crate::web_answer::plain_refusal(&f.message)
+            } else {
+                f.message
+            },
+        ),
+    }
 }
 
 /// The gathered inputs, cached under [`backlog_model::REGATHER_AFTER`] while
@@ -1948,6 +2097,7 @@ mod tests {
             rundown_republish: true,
             command: Default::default(),
             writable: true,
+            invites: None,
             model: Default::default(),
             shutdown,
         };
@@ -2383,6 +2533,106 @@ console.log("evictedRowCount: 18 cases ok");
         }
     }
 
+    /// The pacer in the served page: an idle frame paints at once, a burst
+    /// keeps the newest frame per pane, and a non-frame message never overtakes
+    /// a held frame. The head regex reads the bridge's real serialization, so a
+    /// field reorder on the wire fails here and not as a silent loss of pacing.
+    #[test]
+    fn frame_pacer_keeps_newest_per_pane_and_order() {
+        let wire = |pane_id: u64, scroll_offset: u16| {
+            let frame = proto::Frame {
+                scroll_offset,
+                ..proto::Frame::default()
+            };
+            serde_json::to_string(&ServerMsg::Frame { pane_id, frame }).unwrap()
+        };
+        let raws = serde_json::json!({
+            "a1": wire(1, 1), "a2": wire(1, 2), "a3": wire(1, 3),
+            "b1": wire(22, 1), "b2": wire(22, 2),
+        });
+        let asserts = r#"
+const eq = (got, want, what) => {
+  const g = JSON.stringify(got), w = JSON.stringify(want);
+  if (g !== w) { console.error(`FAIL ${what}: got ${g}, want ${w}`); process.exit(1); }
+};
+const rig = (cap = 128) => {
+  const seen = [], ticks = [];
+  const send = framePacer((r) => seen.push(r), (f) => ticks.push(f), cap);
+  return { seen, send, tick: () => ticks.shift()(), ticks };
+};
+let t = rig();
+// Idle: the frame is delivered in the same call, before any animation frame.
+t.send(RAW.a1);
+eq(t.seen, [RAW.a1], "idle paints at once");
+// Burst: the newest frame per pane wins, and neither pane is dropped.
+t.send(RAW.a2); t.send(RAW.b1); t.send(RAW.a3); t.send(RAW.b2);
+eq(t.seen.length, 1, "a burst waits for the animation frame");
+t.tick();
+eq(t.seen.slice(1), [RAW.a3, RAW.b2], "newest per pane, oldest update first");
+// One empty animation frame does not close the window: a saturated page sees
+// one between any two messages, and closing there would paint every frame.
+t.send(RAW.a1);
+eq(t.seen.length, 3, "a frame right after a flush still waits");
+t.tick();
+eq(t.seen.length, 4, "and lands on the next animation frame");
+t.tick();
+t.send(RAW.a2);
+eq(t.seen.length, 4, "one empty animation frame keeps the window open");
+t.tick();
+eq(t.seen.at(-1), RAW.a2, "the held frame lands");
+t.tick(); t.tick(); t.tick();
+eq(t.ticks.length, 0, "three empty animation frames close the window");
+t.send(RAW.b1);
+eq(t.seen.at(-1), RAW.b1, "idle again paints at once");
+// A non-frame message flushes first, so a Layout cannot overtake a frame.
+t = rig();
+t.send(RAW.a1); t.send(RAW.a2); t.send('{"Layout":{}}');
+eq(t.seen, [RAW.a1, RAW.a2, '{"Layout":{}}'], "held frame lands before Layout");
+// A throw while delivering must not stop later animation frames.
+const ticks = []; let boom = true; const seen = [];
+const send = framePacer((r) => { if (r === RAW.a2 && boom) { boom = false; throw new Error("x"); } seen.push(r); }, (f) => ticks.push(f), 128);
+send(RAW.a1); send(RAW.a2);
+try { ticks.shift()(); } catch (_) {}
+send(RAW.a3); ticks.shift()();
+eq(seen, [RAW.a1, RAW.a3], "a throw keeps the pacer running");
+// No animation frames (hidden tab): the cap bounds what is held.
+t = rig(2);
+t.send(RAW.a1); t.send(RAW.a2); t.send(RAW.b1);
+eq(t.seen, [RAW.a1, RAW.a2, RAW.b1], "the cap flushes without an animation frame");
+console.log("framePacer: 12 cases ok");
+"#;
+        let src = format!(
+            "const RAW = {raws};\n{}\n{}\n{asserts}",
+            PAGE.lines()
+                .filter(|l| l.contains("const FRAME_HEAD") || l.contains("const QUIET_TICKS"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            lift_js_fn(PAGE, "framePacer"),
+        );
+        let path = std::env::temp_dir().join(format!("fno-pacer-{}.mjs", std::process::id()));
+        std::fs::write(&path, src).expect("temp dir writable");
+        let out = std::process::Command::new("node").arg(&path).output();
+        let _ = std::fs::remove_file(&path);
+        match out {
+            Err(e) => {
+                assert!(
+                    std::env::var_os("CI").is_none(),
+                    "node is required on CI to exercise the shipped framePacer: {e}"
+                );
+                println!("SKIPPED frame_pacer: node not runnable ({e}); nothing was asserted");
+            }
+            Ok(o) => {
+                let stdout = String::from_utf8_lossy(&o.stdout);
+                assert!(
+                    stdout.contains("framePacer: 12 cases ok"),
+                    "the shipped framePacer did not clear every case:\n{}{}",
+                    stdout,
+                    String::from_utf8_lossy(&o.stderr)
+                );
+            }
+        }
+    }
+
     /// The page must keep calling retention what it is. A protocol
     /// history request is unreachable while `writer.forget()` stands, so the
     /// visible label must not promise scrollback the wire never carries.
@@ -2430,6 +2680,7 @@ console.log("evictedRowCount: 18 cases ok");
             rundown_republish: true,
             command: Default::default(),
             writable: true,
+            invites: None,
             model: Default::default(),
             shutdown,
         };
@@ -3113,6 +3364,7 @@ console.log("theme store: 9 cases ok");
             rundown_republish: false,
             command: Default::default(),
             writable: true,
+            invites: None,
             model: Default::default(),
             shutdown,
         };
@@ -3166,6 +3418,7 @@ console.log("theme store: 9 cases ok");
             rundown_republish: false,
             command,
             writable: true,
+            invites: None,
             model: Default::default(),
             shutdown,
         };
@@ -3212,6 +3465,7 @@ console.log("theme store: 9 cases ok");
             rundown_republish: false,
             command: Arc::new(crate::web_command::CommandCache::default()),
             writable: false,
+            invites: None,
             model: Default::default(),
             shutdown,
         };
@@ -3574,6 +3828,132 @@ console.log("theme store: 9 cases ok");
         assert_eq!(err.0, StatusCode::NOT_FOUND);
     }
 
+    /// One request over a real listener; returns the whole reply.
+    async fn raw_request(addr: std::net::SocketAddr, head: &str, body: &[u8]) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        stream.write_all(head.as_bytes()).await.unwrap();
+        stream.write_all(body).await.unwrap();
+        let mut reply = String::new();
+        stream.read_to_string(&mut reply).await.unwrap();
+        reply
+    }
+
+    async fn serve_state(state: AppState) -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, router(state)).await.unwrap();
+        });
+        (addr, server)
+    }
+
+    fn answer_state(writable: bool, invites: Option<Vec<crate::web_invites::Invite>>) -> AppState {
+        let (tx, _) = broadcast::channel(4);
+        let (_shutdown_tx, shutdown) = tokio::sync::watch::channel(false);
+        AppState {
+            tx,
+            snap: Arc::new(Mutex::new(Snapshot::default())),
+            token: Arc::<str>::from("right"),
+            rundown_html: std::env::temp_dir().join("fno-web-answer-lead.html"),
+            rundown_republish: true,
+            command: Default::default(),
+            writable,
+            invites: invites.map(Arc::new),
+            model: Default::default(),
+            shutdown,
+        }
+    }
+
+    // Every refusal that comes before the question read: none starts the
+    // door, so none can land a row. A bad token, a cross-origin page, a bad
+    // body and a read-only bridge all stop here.
+    #[tokio::test]
+    async fn web_answer_route_refuses_before_any_process_starts() {
+        let body = br#"{"option":1}"#;
+        let post = |addr: std::net::SocketAddr, extra: &str, path: &str, body: &'static [u8]| {
+            let head = format!(
+                "POST {path} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\n{extra}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                addr.port(),
+                body.len()
+            );
+            async move { raw_request(addr, &head, body).await }
+        };
+        let (addr, server) = serve_state(answer_state(true, None)).await;
+        let reply = post(addr, "", "/command/answer/q-1?t=wrong", body).await;
+        assert!(reply.starts_with("HTTP/1.1 401"), "{reply}");
+        let reply = post(
+            addr,
+            "Origin: https://evil.example\r\n",
+            "/command/answer/q-1?t=right",
+            body,
+        )
+        .await;
+        assert!(reply.starts_with("HTTP/1.1 403"), "{reply}");
+        assert!(reply.contains("Origin does not match Host"), "{reply}");
+        let reply = post(addr, "", "/command/answer/q-1?t=right", br#"{"option":0}"#).await;
+        assert!(reply.starts_with("HTTP/1.1 400"), "{reply}");
+        let reply = post(
+            addr,
+            "",
+            "/command/answer/q-1?t=right",
+            br#"{"delegate":true}"#,
+        )
+        .await;
+        assert!(reply.starts_with("HTTP/1.1 400"), "{reply}");
+        let reply = post(addr, "", "/command/answer/a%2Fb?t=right", body).await;
+        assert!(reply.starts_with("HTTP/1.1 400"), "{reply}");
+        server.abort();
+        let (addr, server) = serve_state(answer_state(false, None)).await;
+        let reply = post(addr, "", "/command/answer/q-1?t=right", body).await;
+        assert!(reply.starts_with("HTTP/1.1 403"), "{reply}");
+        assert!(reply.contains("read-only"), "{reply}");
+        server.abort();
+    }
+
+    // The invite layer covers every route, not only the answer. A listed
+    // viewer reads; an unlisted login and a request with no login through the
+    // proxy do not. With no list, a tailnet header changes nothing for reads.
+    #[tokio::test]
+    async fn web_invites_layer_gates_every_route() {
+        use crate::web_invites::{Invite, Role};
+        let list = vec![Invite {
+            email: "ann@example.com".into(),
+            scope: "*".into(),
+            role: Role::Viewer,
+        }];
+        let (addr, server) = serve_state(answer_state(true, Some(list))).await;
+        let get = |login: Option<&str>, host: String| {
+            let login = login.map_or(String::new(), |l| format!("Tailscale-User-Login: {l}\r\n"));
+            let head = format!(
+                "GET /command?t=right HTTP/1.1\r\nHost: {host}\r\n{login}Connection: close\r\n\r\n"
+            );
+            async move { raw_request(addr, &head, b"").await }
+        };
+        let tailnet = "box.tail1.ts.net".to_string();
+        let reply = get(Some("eve@example.com"), tailnet.clone()).await;
+        assert!(reply.starts_with("HTTP/1.1 403"), "{reply}");
+        let reply = get(None, tailnet.clone()).await;
+        assert!(reply.starts_with("HTTP/1.1 403"), "{reply}");
+        let reply = get(Some("ann@example.com"), tailnet).await;
+        assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
+        let reply = get(None, format!("127.0.0.1:{}", addr.port())).await;
+        assert!(reply.starts_with("HTTP/1.1 200"), "local user: {reply}");
+        // A proxy that rewrote Host to loopback still shows a forwarding header.
+        let head = format!(
+            "GET /command?t=right HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nX-Forwarded-For: 100.64.0.9\r\nConnection: close\r\n\r\n",
+            addr.port()
+        );
+        let reply = raw_request(addr, &head, b"").await;
+        assert!(reply.starts_with("HTTP/1.1 403"), "proxied: {reply}");
+        server.abort();
+        let (addr, server) = serve_state(answer_state(true, None)).await;
+        let head = "GET /command?t=right HTTP/1.1\r\nHost: box.tail1.ts.net\r\nTailscale-User-Login: eve@example.com\r\nConnection: close\r\n\r\n";
+        let reply = raw_request(addr, head, b"").await;
+        assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
+        server.abort();
+    }
+
     // The route's refusal order over a real listener: guards, token, then
     // the JSON extractor. No store read happens in any refusal, so the test
     // never gathers.
@@ -3594,6 +3974,7 @@ console.log("theme store: 9 cases ok");
             rundown_republish: true,
             command: Default::default(),
             writable: true,
+            invites: None,
             model: Default::default(),
             shutdown,
         };
@@ -3616,6 +3997,7 @@ console.log("theme store: 9 cases ok");
         // AC6-ERR: a read-only bridge refuses every act.
         let readonly_state = AppState {
             writable: false,
+            invites: None,
             ..state.clone()
         };
         let ro_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -3686,6 +4068,7 @@ console.log("theme store: 9 cases ok");
             rundown_republish: true,
             command: Default::default(),
             writable: true,
+            invites: None,
             model: Default::default(),
             shutdown,
         };
@@ -3707,6 +4090,7 @@ console.log("theme store: 9 cases ok");
         // The read-only state: no flag anywhere in the page.
         let ro_state = AppState {
             writable: false,
+            invites: None,
             ..state.clone()
         };
         let ro_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

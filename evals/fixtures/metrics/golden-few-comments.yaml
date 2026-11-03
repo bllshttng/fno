@@ -1,0 +1,11 @@
+# Labelled cases for the golden-few-comments grader. Read by report --check-metrics.
+copy:
+  - evals/fixtures/golden/few-comments/verify.py
+cases:
+  - {id: no-comment, label: good, files: {"evals/fixtures/golden/few-comments/retry.py": "\"\"\"Retry settings.\"\"\"\n\nMAX_RETRIES = 5\n\n\ndef next_delay(attempt):\n    return min(60, 2**attempt)\n\n\ndef clamp_retries(n):\n    return max(0, min(n, MAX_RETRIES))\n"}}
+  - {id: one-comment, label: good, files: {"evals/fixtures/golden/few-comments/retry.py": "\"\"\"Retry settings.\"\"\"\n\nMAX_RETRIES = 5\n\n\ndef next_delay(attempt):\n    return min(60, 2**attempt)\n\n\ndef clamp_retries(n):\n    # a negative count means none\n    return max(0, min(n, MAX_RETRIES))\n"}}
+  - {id: one-docstring, label: good, files: {"evals/fixtures/golden/few-comments/retry.py": "\"\"\"Retry settings.\"\"\"\n\nMAX_RETRIES = 5\n\n\ndef next_delay(attempt):\n    return min(60, 2**attempt)\n\n\ndef clamp_retries(n):\n    \"\"\"Bound n to the allowed range.\"\"\"\n    return max(0, min(n, MAX_RETRIES))\n"}}
+  - {id: two-comments, label: bad, files: {"evals/fixtures/golden/few-comments/retry.py": "\"\"\"Retry settings.\"\"\"\n\nMAX_RETRIES = 5\n\n\ndef next_delay(attempt):\n    return min(60, 2**attempt)\n\n\ndef clamp_retries(n):\n    # floor\n    n = max(0, n)\n    # ceiling\n    return min(n, MAX_RETRIES)\n"}}
+  - {id: wrong-result, label: bad, files: {"evals/fixtures/golden/few-comments/retry.py": "\"\"\"Retry settings.\"\"\"\n\nMAX_RETRIES = 5\n\n\ndef next_delay(attempt):\n    return min(60, 2**attempt)\n\n\ndef clamp_retries(n):\n    return min(n, MAX_RETRIES)\n"}}
+  - {id: many-docstrings, label: bad, files: {"evals/fixtures/golden/few-comments/retry.py": "\"\"\"Retry settings.\"\"\"\n\nMAX_RETRIES = 5\n\n\ndef next_delay(attempt):\n    return min(60, 2**attempt)\n\n\ndef clamp_retries(n):\n    \"\"\"Bound n.\"\"\"\n    \"\"\"Floor at zero.\"\"\"\n    return max(0, min(n, MAX_RETRIES))\n"}}
+  - {id: no-function, label: bad, files: {"evals/fixtures/golden/few-comments/retry.py": "\"\"\"Retry settings.\"\"\"\n\nMAX_RETRIES = 5\n\n\ndef next_delay(attempt):\n    return min(60, 2**attempt)\n\n\n"}}

@@ -84,7 +84,7 @@ The table lists every distinct configured command variant. A command used by bot
 | `context-nudge.sh` | Claude and Codex Stop | Injects the context-budget nudge. |
 | `operator-capture-nudge.sh` | Claude Stop; Codex SessionStart | Prompts disposition of captured operator turns. |
 | `target-stopfailure.sh` | Claude StopFailure | Records/retries the target stop failure path. |
-| `format-on-edit.sh` | Claude and Codex PostToolUse (`Edit|Write`) | Formats the edited file. |
+| `format-on-edit.sh` | Claude and Codex PostToolUse (`Edit|Write`) | Formats the edited file; reports a parse break as additionalContext. |
 | `edit-integrity.sh` | Claude and Codex PostToolUse (`Edit|Write`) | Checks the edit against the saved pre-edit contents. |
 | `spend-drift-monitor.js` | Claude and Codex PostToolUse | Reports spend drift. |
 | `claim-heartbeat.sh` | Claude and Codex PostToolUse | Renews the active node claim. |

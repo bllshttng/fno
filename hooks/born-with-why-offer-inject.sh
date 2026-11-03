@@ -306,7 +306,7 @@ except Exception:
     # Any OTHER nonzero degrades to surfacing, because the cursor already
     # advanced and suppressing would discard a possibly-real offer for good.
     # Only rc 1 means "graph read cleanly, node absent": `fno backlog get` exits
-    # 3 on an unreadable graph (GRAPH_UNREADABLE_EXIT, cli/src/fno/graph/cli.py),
+    # 3 on an unreadable graph (GRAPH_UNREADABLE_EXIT, crates/fno-agents/src/backlog/get_cli.rs),
     # 2 on a click usage error, 124 when with_timeout kills a wedged call, and 99
     # when the `cd` above failed. Every one of those is transient or our own
     # fault, never evidence the node does not exist.

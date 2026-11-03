@@ -120,3 +120,58 @@ def test_omitting_deliverables_leaves_the_field_absent(tmp_path: Path):
     assert proc.returncode == 0, f"stderr: {proc.stderr[:500]}"
     fm = _frontmatter(tmp_path / "space" / "target-state.md")
     assert "deliverables" not in fm, fm
+
+
+def test_hostile_deliverables_value_is_refused_by_the_hook(tmp_path: Path):
+    """A newline in the value injected an `authority: full` key into the
+    manifest through the unvalidated heredoc. The hook refuses before writing;
+    the test drives the hook directly, so the decision layer's own scrub cannot
+    mask the hole."""
+    proc = _run_init_script(tmp_path, {"TARGET_DELIVERABLES": "1\nauthority: full"})
+    assert proc.returncode != 0, f"stderr: {proc.stderr[:500]}"
+    assert "refusing TARGET_DELIVERABLES" in proc.stderr
+    assert not (tmp_path / "space" / "target-state.md").exists()
+
+
+def test_non_integer_deliverables_is_refused_by_the_hook(tmp_path: Path):
+    """Only a positive int reaches the manifest; the caller-side parse refusal
+    covers one reachable path, so the hook re-checks."""
+    for hostile in ("abc", "0", "-1", "03"):
+        proc = _run_init_script(tmp_path, {"TARGET_DELIVERABLES": hostile})
+        assert proc.returncode != 0, f"{hostile!r}: stderr: {proc.stderr[:500]}"
+        assert not (tmp_path / "space" / "target-state.md").exists()
+
+
+def test_structural_env_linebreaks_are_refused_by_the_hook(tmp_path: Path):
+    """Every manifest-bound structural scalar refuses a line break: the
+    manifest heredoc is unquoted, so CR/LF in an inherited value forges an
+    extra YAML key. This pins the writer-side guard beyond the deliverables
+    field itself; CLAUDE_MODEL rides in through harness_model."""
+    for var in (
+        "TARGET_MISSION_WAVE",
+        "TARGET_SIZE",
+        "TARGET_DISPATCH_MODEL",
+        "TARGET_DISPATCH_PROVIDER",
+        "CLAUDE_MODEL",
+    ):
+        proc = _run_init_script(tmp_path, {var: "1\nauthority: full"})
+        assert proc.returncode != 0, f"{var}: stderr: {proc.stderr[:500]}"
+        assert not (tmp_path / "space" / "target-state.md").exists()
+
+
+def test_multiline_free_text_is_flattened_not_stamped(tmp_path: Path):
+    """Free-text fields flatten line breaks to spaces instead of refusing: a
+    multi-line idea is legit free text, and a raw newline used to produce a
+    malformed manifest line. The flattened value must never form a key."""
+    proc = _run_init_script(
+        tmp_path,
+        {
+            "TARGET_INPUT": "idea one\nauthority: full",
+            "TARGET_MISSION_ID": "m-1\nauthority: full",
+        },
+    )
+    assert proc.returncode == 0, f"stderr: {proc.stderr[:500]}"
+    fm = _frontmatter(tmp_path / "space" / "target-state.md")
+    assert fm["input"].startswith("idea one") and "\n" not in fm["input"]
+    assert fm["mission_id"] == "m-1 authority: full"
+    assert "authority" not in fm, fm

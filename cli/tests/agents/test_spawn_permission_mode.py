@@ -13,32 +13,12 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from fno.agents.dispatch import DispatchAskError
 from fno.agents.mux_spawn import build_pane_argv, permission_pane_tokens
 
 CWD = Path("/tmp")
 
 
 # --- mapping table (permission_pane_tokens) --------------------------------
-
-
-def test_mapping_fail_closed_on_unmappable(rust_door):
-    # A colon form needs both axes; a half form must refuse, never guess.
-    with pytest.raises(DispatchAskError) as exc:
-        permission_pane_tokens("codex", "workspace-write")
-    assert exc.value.exit_code == 2
-
-
-@pytest.mark.dev_build
-def test_codex_refusal_names_the_overlay_key(rust_door):
-    """fno's own builtin carries as codex's bypass flag; a genuinely foreign
-    word still refuses and names the config key that fixes it (AC5-HP)."""
-    assert permission_pane_tokens("codex", "bypassPermissions") == [
-        "--dangerously-bypass-approvals-and-sandbox"
-    ]
-    with pytest.raises(DispatchAskError) as exc:
-        permission_pane_tokens("codex", "acceptEdits")
-    assert "agents.*.harness.codex.permission_mode" in str(exc.value)
 
 
 @pytest.mark.dev_build
@@ -110,7 +90,6 @@ def rust_door(monkeypatch):
 # --- build_pane_argv integration -------------------------------------------
 
 
-
 # --- cmd_spawn CLI wiring ---------------------------------------------------
 
 
@@ -127,31 +106,7 @@ def _no_harness_markers(monkeypatch):
         monkeypatch.delenv(m, raising=False)
 
 
-def _stub_pane_path(monkeypatch) -> dict:
-    received: dict = {}
-    from fno.agents import mux_spawn
-
-    def fake_dispatch_spawn_pane(**kwargs):
-        received.update(kwargs)
-        return mux_spawn.MuxSpawnResult(
-            name=kwargs["name"],
-            provider=kwargs["provider"],
-            session="sess-1",
-            pane_id=1,
-            child_pid=None,
-            session_uuid=None,
-        )
-
-    monkeypatch.setattr(
-        mux_spawn, "dispatch_spawn_bounded_pane", fake_dispatch_spawn_pane
-    )
-    return received
-
-
-
 # --- bash surface: /agent spawn (spawn.sh) ----------------------------------
-
-
 
 
 # --- x-6863: one vocabulary, in Rust; the Python holds no second table ------

@@ -434,6 +434,11 @@ pub(crate) struct FacetKey {
 #[derive(Deserialize)]
 pub(crate) struct Facet {
     key: FacetKey,
+    /// The question_key the judgment answered. A facet judged under one
+    /// question must not judge a session under another: the friction
+    /// categories are per-question, so the fold rejects the carry-over.
+    #[serde(default)]
+    question_key: Option<String>,
     friction: String,
 }
 
@@ -531,11 +536,15 @@ pub(crate) struct RelayIn {
 }
 
 /// The facets of the sampled rows, keyed by session id, plus every session
-/// that cannot be judged with its reason. Files are parsed whole and never
+/// that cannot be judged with its reason. A facet counts only when its
+/// mtime+size key matches the fold row AND it was judged under this run's
+/// question_key: cached facets must not carry a judgment across questions.
+/// Files are parsed whole and never
 /// deleted: a bad file stays on disk for its author to fix.
 pub(crate) fn load_facets(
     facets_dir: &std::path::Path,
     sampled: &[FoldRow],
+    question_key: &str,
 ) -> (HashMap<String, Facet>, Vec<Value>) {
     // One verdict per session: a resumed codex thread leaves several rollout
     // rows under one id, and a session judged through any one of them is
@@ -550,11 +559,18 @@ pub(crate) fn load_facets(
             Ok(raw) => match serde_json::from_str::<Facet>(&raw) {
                 Err(err) => format!("invalid: {err}"),
                 Ok(facet) => {
-                    if facet.key.mtime == row.mtime && facet.key.size == row.size {
+                    if facet.key.mtime == row.mtime
+                        && facet.key.size == row.size
+                        && facet.question_key.as_deref() == Some(question_key)
+                    {
                         judged.insert(row.session.clone(), facet);
                         continue;
                     }
-                    "stale key".to_string()
+                    if facet.question_key.as_deref() != Some(question_key) {
+                        "stale question".to_string()
+                    } else {
+                        "stale key".to_string()
+                    }
                 }
             },
         };
@@ -571,17 +587,23 @@ pub(crate) fn load_facets(
     (judged, unjudged)
 }
 
-/// One run-file refusal, with the session id or field named. Nothing
-/// partial ever reaches the metrics: every check runs before any output.
-pub(crate) fn load_run(
-    path: &std::path::Path,
-    judged: &HashMap<String, Facet>,
-) -> Result<Run, String> {
+/// Read and parse the run file, with the schema check. Session coverage is
+/// [`validate_run`]'s job, once the question key is known. One refusal,
+/// with the session id or field named: nothing partial ever reaches the
+/// metrics.
+fn parse_run(path: &std::path::Path) -> Result<Run, String> {
     let raw = std::fs::read_to_string(path).map_err(|e| format!("unreadable: {e}"))?;
     let run: Run = serde_json::from_str(&raw).map_err(|e| format!("invalid JSON: {e}"))?;
     if run.schema != 1 {
         return Err(format!("unsupported schema {}", run.schema));
     }
+    Ok(run)
+}
+
+/// The session-coverage checks over a parsed run: every categorized
+/// session is judged, every judged session is categorized, no session in
+/// two categories.
+fn validate_run(run: &Run, judged: &HashMap<String, Facet>) -> Result<(), String> {
     let mut seen_top: HashMap<&str, &str> = HashMap::new();
     let mut categorized: HashSet<&str> = HashSet::new();
     for category in &run.categories {
@@ -618,7 +640,7 @@ pub(crate) fn load_run(
             return Err(format!("session {id} is judged but in no category"));
         }
     }
-    Ok(run)
+    Ok(())
 }
 
 fn median_of(mut values: Vec<u64>) -> Option<u64> {
@@ -914,11 +936,30 @@ pub(crate) fn populations_comparable(prior: &Value, doc: &Value) -> bool {
         && prior["categories"]["question_key"] == doc["categories"]["question_key"]
 }
 
+/// The judged population a fold document carries, from the categories
+/// block the post-process stamped. None on a doc that predates the stamp.
+fn judged_of(doc: &Value) -> Option<u64> {
+    doc["categories"]["judged"].as_u64()
+}
+
+/// The count over its judged sessions, in percent at one decimal: the
+/// shape `share_pct` prints, so both reads round the same way.
+fn rate_pct(count: u64, judged: u64) -> Option<f64> {
+    if judged == 0 {
+        return None;
+    }
+    Some((count as f64 * 1000.0 / judged as f64).round() / 10.0)
+}
+
 /// The next run's verdicts over the prior report's stamped suggestions:
 /// per suggestion, the prior baseline against the current value of the
-/// same metric. Counts read lower is better. An incompatible prior
-/// population (scope, period, sample, or question changed) reads
-/// unmeasured, never moved.
+/// same metric. A `friction:<word>` metric judges per judged session -
+/// samples of different sizes make raw counts incomparable (measured
+/// 2026-10-31: 53/125 to 24/50 read "moved" at 42.4% to 48.0%) - so its
+/// verdict compares rates and the row prints both populations. A prior or
+/// current doc without a judged population falls back to the raw counts.
+/// Counts read lower is better. An incompatible prior population (scope,
+/// period, sample, or question changed) reads unmeasured, never moved.
 pub(crate) fn scorecard(prior: &Value, doc: &Value) -> Vec<Value> {
     let Some(sugs) = prior.get("suggestions").and_then(|v| v.as_array()) else {
         return Vec::new();
@@ -932,11 +973,27 @@ pub(crate) fn scorecard(prior: &Value, doc: &Value) -> Vec<Value> {
             } else {
                 None
             };
-            let verdict = match (s["baseline"].as_u64(), current) {
-                (Some(p), Some(c)) if c < p => "moved",
-                (Some(p), Some(c)) if c > p => "worse",
-                (Some(_), Some(_)) => "unchanged",
-                _ => "unmeasured",
+            let baseline = s["baseline"].as_u64();
+            let rates = match metric.strip_prefix("friction:") {
+                Some(_) => baseline
+                    .zip(current)
+                    .zip(judged_of(prior))
+                    .zip(judged_of(doc))
+                    .and_then(|(((p, c), pj), cj)| {
+                        Some((rate_pct(p, pj)?, rate_pct(c, cj)?, pj, cj))
+                    }),
+                None => None,
+            };
+            let verdict = match rates {
+                Some((pr, cr, _, _)) if cr < pr => "moved",
+                Some((pr, cr, _, _)) if cr > pr => "worse",
+                Some(_) => "unchanged",
+                None => match (baseline, current) {
+                    (Some(p), Some(c)) if c < p => "moved",
+                    (Some(p), Some(c)) if c > p => "worse",
+                    (Some(_), Some(_)) => "unchanged",
+                    _ => "unmeasured",
+                },
             };
             let mut row = json!({
                 "friction": s["friction"],
@@ -946,6 +1003,12 @@ pub(crate) fn scorecard(prior: &Value, doc: &Value) -> Vec<Value> {
                 "current": current,
                 "verdict": verdict,
             });
+            if let Some((pr, cr, pj, cj)) = rates {
+                row["prior_judged"] = json!(pj);
+                row["current_judged"] = json!(cj);
+                row["prior_rate_pct"] = json!(pr);
+                row["current_rate_pct"] = json!(cr);
+            }
             if !comparable {
                 row["reason"] =
                     json!("prior report population differs (scope, period, sample, or question)");
@@ -1014,14 +1077,18 @@ pub(crate) fn run_categories(
         .filter_map(|s| serde_json::from_value(s.clone()).ok())
         .collect();
     let sampled: Vec<FoldRow> = rows.into_iter().filter(|r| r.sampled).collect();
-    let (facets, unjudged) = load_facets(facets_dir, &sampled);
-    let run = match load_run(std::path::Path::new(run_path), &facets) {
+    let run = match parse_run(std::path::Path::new(run_path)) {
         Ok(run) => run,
         Err(reason) => {
             eprintln!("fno-agents intel: --categories {run_path}: {reason}");
             return 2;
         }
     };
+    let (facets, unjudged) = load_facets(facets_dir, &sampled, &run.question_key);
+    if let Err(reason) = validate_run(&run, &facets) {
+        eprintln!("fno-agents intel: --categories {run_path}: {reason}");
+        return 2;
+    }
     let (merged, statuses, graph_err) = graph_maps();
     let items = category_metrics(&run, &sampled, &facets, &merged);
     let judged = facets.len();
@@ -1227,9 +1294,17 @@ mod tests {
         assert_eq!(sampled4, Some(2));
     }
 
-    fn write_facet(dir: &std::path::Path, sid: &str, mtime: u64, size: u64, friction: &str) {
+    fn write_facet(
+        dir: &std::path::Path,
+        sid: &str,
+        mtime: u64,
+        size: u64,
+        question: Option<&str>,
+        friction: &str,
+    ) {
         let body = json!({
             "key": {"session": sid, "mtime": mtime, "size": size},
+            "question_key": question,
             "friction": friction,
         });
         std::fs::create_dir_all(dir).unwrap();
@@ -1256,15 +1331,88 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("fno-ins-resume-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        write_facet(&dir, "resumed", 100, 200, "tool_failure");
+        write_facet(&dir, "resumed", 100, 200, Some("ab12cd34"), "tool_failure");
         let mut stale = fold_row("resumed");
         stale.mtime = 999;
         let mut fresh = fold_row("resumed");
         fresh.mtime = 100;
-        let (judged, unjudged) = load_facets(&dir, &[stale, fresh]);
+        let (judged, unjudged) = load_facets(&dir, &[stale, fresh], "ab12cd34");
         assert_eq!(judged.len(), 1);
         assert!(unjudged.is_empty());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_facet_from_another_question_never_judges_this_run() {
+        // A cached facet judged under one question must not judge a
+        // session under another: the fold rejects the carry-over as a
+        // stale question, and so rejects a pre-question facet.
+        let dir = std::env::temp_dir().join(format!("fno-ins-question-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        write_facet(&dir, "s1", 100, 200, Some("aaaa1111"), "tool_failure");
+        let (judged, unjudged) = load_facets(&dir, &[fold_row("s1")], "aaaa1111");
+        assert_eq!(judged.len(), 1);
+        assert!(unjudged.is_empty());
+        let (judged, unjudged) = load_facets(&dir, &[fold_row("s1")], "bbbb2222");
+        assert!(judged.is_empty());
+        assert_eq!(unjudged[0]["reason"], "stale question");
+        write_facet(&dir, "s2", 100, 200, None, "tool_failure");
+        let (judged, unjudged) = load_facets(&dir, &[fold_row("s2")], "aaaa1111");
+        assert!(judged.is_empty());
+        assert_eq!(unjudged[0]["reason"], "stale question");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_scorecard_judges_rates_per_judged_session() {
+        // Measured 2026-10-31: 53/125 to 24/50 read "moved" at 42.4% to
+        // 48.0%. Rates decide, and the row prints both populations. A
+        // doc without a judged population falls back to raw counts.
+        let prior = json!({
+            "categories": {"judged": 125},
+            "suggestions": [
+                {"friction": "workflow_friction", "node": "x-a",
+                 "metric": "friction:workflow_friction", "baseline": 53},
+                {"friction": "wrong_assumption", "node": "x-b",
+                 "metric": "friction:wrong_assumption", "baseline": 8},
+                {"friction": "tool_failure", "node": "x-c",
+                 "metric": "friction:tool_failure", "baseline": 9},
+            ],
+        });
+        let doc = json!({
+            "categories": {
+                "judged": 50,
+                "items": [{"metrics": {"friction": {
+                    "workflow_friction": 24, "wrong_assumption": 2, "tool_failure": 5}}}],
+            },
+        });
+        let v = scorecard(&prior, &doc);
+        assert_eq!(v.len(), 3);
+        assert_eq!(v[0]["verdict"], "worse");
+        assert_eq!(v[0]["prior_judged"], 125);
+        assert_eq!(v[0]["current_judged"], 50);
+        assert_eq!(v[0]["prior_rate_pct"], 42.4);
+        assert_eq!(v[0]["current_rate_pct"], 48.0);
+        assert_eq!(v[1]["verdict"], "moved");
+        assert_eq!(v[1]["prior_rate_pct"], 6.4);
+        assert_eq!(v[1]["current_rate_pct"], 4.0);
+        assert_eq!(v[2]["verdict"], "worse");
+        assert_eq!(v[2]["prior_rate_pct"], 7.2);
+        assert_eq!(v[2]["current_rate_pct"], 10.0);
+        // Fallback: a current doc without a judged population compares
+        // raw counts and carries no rate fields.
+        let prior_j = json!({
+            "categories": {"judged": 125},
+            "suggestions": [{"friction": "tool_failure", "node": "x-a",
+                             "metric": "friction:tool_failure", "baseline": 3}],
+        });
+        let doc_nj = json!({
+            "categories": {"items": [{"metrics": {"friction": {"tool_failure": 1}}}]},
+        });
+        let v = scorecard(&prior_j, &doc_nj);
+        assert_eq!(v[0]["verdict"], "moved");
+        assert!(v[0]["prior_judged"].is_null());
     }
 
     fn run_file(categories: Value) -> String {
@@ -1328,7 +1476,8 @@ mod tests {
             run_file(json!([{"name": "C", "sessions": ["ghost"]}])),
         )
         .unwrap();
-        let err = load_run(&missing, &facet_map).unwrap_err();
+        let run = parse_run(&missing).unwrap();
+        let err = validate_run(&run, &facet_map).unwrap_err();
         assert!(
             err.contains("ghost") && err.contains("no current facet"),
             "err: {err}"
@@ -1342,11 +1491,13 @@ mod tests {
             ])),
         )
         .unwrap();
-        let err = load_run(&dup, &facet_map).unwrap_err();
+        let run = parse_run(&dup).unwrap();
+        let err = validate_run(&run, &facet_map).unwrap_err();
         assert!(err.contains("s1 is in two categories"));
         let uncovered = dir.join("uncovered.json");
         std::fs::write(&uncovered, run_file(json!([{"name": "C", "sessions": []}]))).unwrap();
-        let err = load_run(&uncovered, &facet_map).unwrap_err();
+        let run = parse_run(&uncovered).unwrap();
+        let err = validate_run(&run, &facet_map).unwrap_err();
         assert!(err.contains("s1 is judged but in no category"));
         let schema2 = dir.join("schema2.json");
         std::fs::write(
@@ -1354,7 +1505,7 @@ mod tests {
             run_file(json!([])).replacen("\"schema\":1", "\"schema\":2", 1),
         )
         .unwrap();
-        let err = load_run(&schema2, &facet_map).unwrap_err();
+        let err = parse_run(&schema2).unwrap_err();
         assert!(err.contains("unsupported schema 2"));
         let _ = std::fs::remove_dir_all(&dir);
         // The suggestion stage: validation refusals, stamping, graph

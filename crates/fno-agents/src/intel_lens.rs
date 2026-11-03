@@ -394,7 +394,7 @@ pub fn run_lens(days: u64, json: bool) -> i32 {
     };
     let (rulings, unsourced, prose_only) =
         lens_rows(&raw, &witness, &succession, &span_lines, cutoff);
-    let bus = crate::provenance::BusIndex::load(&crate::intel::bus_log_path(
+    let bus = crate::provenance::BusIndex::load(&crate::mail_paths::bus_log_path(
         &home
             .root()
             .parent()

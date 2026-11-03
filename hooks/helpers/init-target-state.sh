@@ -251,6 +251,8 @@ detect_provider() {
     echo "gemini"
   elif [[ "${OPENCODE_SESSION_ID:-}" == *[![:space:]]* ]]; then
     echo "opencode"
+  elif [[ "${PI_SESSION_ID:-}" == *[![:space:]]* ]]; then
+    echo "pi"
   elif [[ -n "${CODEX_PLUGIN_ROOT:-}" ]]; then
     echo "codex"
   elif [[ -n "${GEMINI_PROJECT_DIR:-}" ]]; then
@@ -418,6 +420,12 @@ if declare -F get_auto_merge_enabled >/dev/null 2>&1; then
     AUTO_MERGE_ENABLED="false"
   }
 fi
+# autonomy.mode has one owner in Rust. An older binary answers nothing here and
+# the config read above stands; the merge door rechecks live either way.
+case "$(fno agents admit autonomy status --json 2>/dev/null || true)" in
+  *'"merge_enabled":true'*) AUTO_MERGE_ENABLED="true" ;;
+  *'"merge_enabled":false'*) AUTO_MERGE_ENABLED="false" ;;
+esac
 # The env grant is the OPERATOR's lever (codex P1 on PR 1131):
 # TARGET_AUTO_MERGE reaches a child only by inheritance, and a mesh-spawned
 # worker can export it before init to mint merge authority no config
@@ -646,7 +654,7 @@ _worktree_has_fresh_activity() {
 #      the shared .fno and every new session (even in a fresh worktree, via the
 #      .fno symlink) trips on it and hand-clears it. The reap keys on the CLAIM,
 #      NOT owner_pid: owner_pid is the transient `fno do target init` wrapper pid
-#      (dead ~1s after init returns, per cli/src/fno/claims/session_pid.py), so
+#      (dead ~1s after init returns, per `fno agents claim session-pid`), so
 #      it cannot tell a completed session from a live one. The node claim is
 #      acquired with the DURABLE session pid (nearest claude ancestor) + TTL, so
 #      its liveness is the real signal. A LIVE claim is preserved: a concurrent
@@ -800,7 +808,8 @@ if [[ -f "$STATE_FILE" ]] && is_valid_state_file; then
       "claude_session_id:${TARGET_TRANSCRIPT_ID:-${CLAUDE_CODE_SESSION_ID:-}}" \
       "codex_thread_id:${CODEX_THREAD_ID:-}" \
       "harness_session_id:${GEMINI_SESSION_ID:-}" \
-      "harness_session_id:${OPENCODE_SESSION_ID:-}"; do
+      "harness_session_id:${OPENCODE_SESSION_ID:-}" \
+      "harness_session_id:${PI_SESSION_ID:-}"; do
       _fm_field="${_fm_pair%%:*}"
       _fm_env="${_fm_pair#*:}"
       if [[ -n "$_fm_env" ]]; then
@@ -823,7 +832,7 @@ if [[ -f "$STATE_FILE" ]] && is_valid_state_file; then
     _FM_OURS=1
   fi
   if [[ -z "$_FM_OURS" ]]; then
-    _FM_CUR_HARNESS="${CLAUDE_CODE_SESSION_ID:-${CODEX_THREAD_ID:-${GEMINI_SESSION_ID:-${OPENCODE_SESSION_ID:-<none proven>}}}}"
+    _FM_CUR_HARNESS="${CLAUDE_CODE_SESSION_ID:-${CODEX_THREAD_ID:-${GEMINI_SESSION_ID:-${OPENCODE_SESSION_ID:-${PI_SESSION_ID:-<none proven>}}}}}"
     {
       echo "[init-target-state] REFUSED: foreign session manifest at $STATE_FILE."
       if [[ -n "$_FM_FNO_ID" ]]; then
@@ -1076,6 +1085,7 @@ if [[ ! -f "$STATE_FILE" ]]; then
     { [[ "${CLAUDE_CODE_SESSION_ID:-}" == *[![:space:]]* ]] || [[ "${CLAUDECODE_SESSION_ID:-}" == *[![:space:]]* ]]; } && _failopen_families=$((_failopen_families+1))
     [[ "${GEMINI_SESSION_ID:-}" == *[![:space:]]* ]] && _failopen_families=$((_failopen_families+1))
     [[ "${OPENCODE_SESSION_ID:-}" == *[![:space:]]* ]] && _failopen_families=$((_failopen_families+1))
+    [[ "${PI_SESSION_ID:-}" == *[![:space:]]* ]] && _failopen_families=$((_failopen_families+1))
     [[ "${HERMES_SESSION_ID:-}" == *[![:space:]]* ]] && _failopen_families=$((_failopen_families+1))
     if [[ "$_failopen_families" -ge 2 ]]; then
       _OWNED_HARNESS=""     # ambiguous -> manifest/claim "unknown", session null
@@ -1147,6 +1157,8 @@ if [[ ! -f "$STATE_FILE" ]]; then
       _HARNESS_SESSION="$GEMINI_SESSION_ID"
     elif [[ -n "${OPENCODE_SESSION_ID:-}" ]]; then
       _HARNESS_SESSION="$OPENCODE_SESSION_ID"
+    elif [[ -n "${PI_SESSION_ID:-}" ]]; then
+      _HARNESS_SESSION="$PI_SESSION_ID"
     fi
   fi
   _HARNESS_MODEL="${TARGET_HARNESS_MODEL:-${CLAUDE_MODEL:-${ANTHROPIC_MODEL:-}}}"
@@ -1187,6 +1199,45 @@ if [[ ! -f "$STATE_FILE" ]]; then
     echo "[init-target-state] no live row holds the candidate id and no harness session was proven (disposition='ambiguous'): this session cannot see itself, so no identity was attributed" >&2
   fi
 
+  # ── Manifest injection guard ─────────────────────────────────────
+  # The heredoc below is unquoted: every interpolated value lands on its
+  # own YAML line, and most arrive through the inherited environment. A
+  # CR or LF inside one forges an extra manifest key (authority: full is
+  # exactly the grant the beastmode scrub gates), so structural scalars
+  # refuse at the writer and free-text fields flatten. No legit value in
+  # either set contains a line break.
+  _refuse_linebreak() {
+    case "$2" in
+      *$'\n'* | *$'\r'*)
+        echo "init-target-state: refusing $1: a line break would forge a manifest key." >&2
+        return 1
+        ;;
+    esac
+  }
+  _flatten_breaks() {
+    local v="$1"
+    v="${v//$'\r'/ }"
+    printf '%s' "${v//$'\n'/ }"
+  }
+  INITIAL_INPUT="$(_flatten_breaks "${INITIAL_INPUT:-}")"
+  INITIAL_PLAN_PATH="$(_flatten_breaks "${INITIAL_PLAN_PATH:-}")"
+  TARGET_MISSION_ID="$(_flatten_breaks "${TARGET_MISSION_ID:-}")"
+  TARGET_MISSION_SLUG="$(_flatten_breaks "${TARGET_MISSION_SLUG:-}")"
+  TARGET_MISSION_FROM_MSG_ID="$(_flatten_breaks "${TARGET_MISSION_FROM_MSG_ID:-}")"
+  case "${TARGET_MISSION_WAVE:-}" in
+    "") ;;
+    *[!0-9]* | 0 | 0[0-9]*)
+      echo "init-target-state: refusing TARGET_MISSION_WAVE='${TARGET_MISSION_WAVE}': expected a positive integer." >&2
+      exit 1
+      ;;
+  esac
+  _refuse_linebreak _HARNESS_SESSION "$_HARNESS_SESSION" || exit 1
+  _refuse_linebreak harness_model "$_HARNESS_MODEL" || exit 1
+  _refuse_linebreak harness_effort "$_HARNESS_EFFORT" || exit 1
+  _refuse_linebreak TARGET_SIZE "${TARGET_SIZE:-}" || exit 1
+  _refuse_linebreak TARGET_DISPATCH_MODEL "${TARGET_DISPATCH_MODEL:-}" || exit 1
+  _refuse_linebreak TARGET_DISPATCH_PROVIDER "${TARGET_DISPATCH_PROVIDER:-}" || exit 1
+
   # ── Mission context ───────────────────────────────────────────────
   _fmt_mission_str() {
     local v="$1"
@@ -1225,12 +1276,21 @@ if [[ ! -f "$STATE_FILE" ]]; then
   # Scope denominator: a declared deliverable count for a plan-less
   # code run. Omitted unless --deliverables was passed, so absence (not 0) is
   # the unmeasurable state the denominator gate and the deliverables-1 ratio
-  # measurement key on - a stamped 0 would invert the gate, so the Python side
-  # refuses <=0 before this runs and only a positive int reaches the manifest.
+  # measurement key on - a stamped 0 would invert the gate. The caller-side
+  # refusal holds on only the path where the decision layer parsed the flag;
+  # an inherited value reaches here unvalidated (a newline in the value once
+  # injected an extra manifest key through this heredoc), so the
+  # manifest writer validates: a non-empty value must be a positive int.
   _deliverables_line=""
-  if [[ -n "${TARGET_DELIVERABLES:-}" ]]; then
-    _deliverables_line="deliverables: ${TARGET_DELIVERABLES}"$'\n'
-  fi
+  case "${TARGET_DELIVERABLES:-}" in
+    "") ;;
+    *[!0-9]* | 0 | 0[0-9]*)
+      rm -f "$local_temp"
+      echo "init-target-state: refusing TARGET_DELIVERABLES='${TARGET_DELIVERABLES}': expected a positive integer." >&2
+      exit 1
+      ;;
+    *) _deliverables_line="deliverables: ${TARGET_DELIVERABLES}"$'\n' ;;
+  esac
   # Turn mode (`TARGET_TURN_MODE=steps`): a non-looping target run. Omitted
   # unless set, so absence is the looping default the stop gate already serves;
   # ordinary|regular are input synonyms for steps, never stamped values.
@@ -1344,14 +1404,18 @@ try:
 except OSError:
     sys.exit(0)
 try:
-    from fno.graph.api import wire_rows
-    from fno.graph.store import shutdown_keeper
-    from fno.paths import graph_json
+    import json
+    import os
+    import subprocess
 
     # The total fold: a minimal row the typed model would drop can still be
     # the plan's delivery unit.
-    path = graph_json()
-    entries = wire_rows(path=path)
+    entries = json.loads(
+        subprocess.run(
+            [os.environ.get("FNO_AGENTS_FRONT") or "fno", "backlog", "script-door", "rows"],
+            capture_output=True, text=True, check=True,
+        ).stdout
+    )
 except Exception:
     sys.exit(0)
 # Collect ALL holders, then prefer the delivery unit. First-match-wins
@@ -1378,12 +1442,6 @@ if len(matches) > 1:
     units = [e for e in matches if not e.get("contained_in")]
     if len(units) == 1:
         matches = units
-# A bootstrap lookup leaves nothing running: the session reaper counts a
-# keeper rooted in a sandbox tmp tree as a leak.
-try:
-    shutdown_keeper(path)
-except Exception:
-    pass
 if len(matches) == 1:
     print(matches[0].get("id") or "")
 elif len(matches) > 1:

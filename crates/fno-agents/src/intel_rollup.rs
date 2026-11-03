@@ -29,7 +29,10 @@ use std::path::{Path, PathBuf};
 // v3: bindable turns record whether they are harness machinery; a cached
 // classification predating the guard must not replay, so the store resets
 // and the next run backfills.
-const VERSION: u32 = 3;
+// v4: a zai-routed row's claude model label is no longer voted (the route
+// contradicts it); persisted votes predating the filter must not survive,
+// so the store resets and the next run backfills.
+const VERSION: u32 = 4;
 const CHUNK: u64 = crate::transcript_activity::CHUNK;
 const HEAD_SAMPLE_BYTES: u64 = crate::transcript_activity::HEAD_SAMPLE_BYTES;
 const RECENT_IDS: usize = 64;

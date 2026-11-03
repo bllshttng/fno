@@ -331,6 +331,25 @@ fn write_and_load(
 }
 
 #[test]
+fn write_pane_row_records_only_a_claude_mode() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = AgentsHome::at(tmp.path().join("agents"));
+    let fenced = vec!["--permission-mode".to_string(), "acceptEdits".to_string()];
+    for (name, provider, passthrough, want) in [
+        ("a", "claude", fenced.clone(), Some("acceptEdits")),
+        ("b", "claude", Vec::new(), None),
+        ("c", "codex", fenced.clone(), None),
+    ] {
+        let mut ctx = PaneContext::simple(provider, "/repo");
+        ctx.passthrough = passthrough;
+        let registry =
+            write_and_load(&home, name, &ctx, &pane(), &ArmBind::NotApplicable, false).unwrap();
+        let row = registry.entries.iter().find(|e| e.name == name).unwrap();
+        assert_eq!(row.requested_permission_mode.as_deref(), want, "{name}");
+    }
+}
+
+#[test]
 fn write_pane_row_statuses_match_the_bind() {
     let tmp = tempfile::tempdir().unwrap();
     let home = AgentsHome::at(tmp.path().join("agents"));
@@ -486,6 +505,52 @@ fn died_receipt_names_the_death_and_the_row_reads_failed() {
         json.contains("\"unbound_reason\": \"pane-died-before-binding\""),
         "got: {json}"
     );
+}
+
+/// The mint stamps the parent edge the request carried (`--spawned-by`, the
+/// cross-host relay): the pane child's own adopt ambient-captures nothing
+/// over an ssh hop, so the mint is the only writer that can name the parent.
+#[test]
+fn the_pane_mint_stamps_the_carried_parent_edge() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = AgentsHome::at(tmp.path().join("agents"));
+    let mut ctx = PaneContext::simple("codex", "/repo");
+    ctx.spawned_by_session = Some("s-parent".to_string());
+    write_pane_row(
+        &home,
+        "w",
+        &ctx,
+        &pane(),
+        &ArmBind::Died {
+            reason: "pane-died-before-binding".into(),
+        },
+        false,
+        &None,
+    )
+    .unwrap();
+    let registry = state::load_registry(&home.registry_json())
+        .map_err(|e| e.to_string())
+        .unwrap();
+    let row = registry.entries.iter().find(|e| e.name == "w").unwrap();
+    assert_eq!(row.spawned_by_session.as_deref(), Some("s-parent"));
+    // No carried edge keeps the old silent mint.
+    write_pane_row(
+        &home,
+        "w2",
+        &PaneContext::simple("codex", "/repo"),
+        &pane(),
+        &ArmBind::Died {
+            reason: "pane-died-before-binding".into(),
+        },
+        false,
+        &None,
+    )
+    .unwrap();
+    let registry = state::load_registry(&home.registry_json())
+        .map_err(|e| e.to_string())
+        .unwrap();
+    let row = registry.entries.iter().find(|e| e.name == "w2").unwrap();
+    assert_eq!(row.spawned_by_session, None);
 }
 
 #[test]

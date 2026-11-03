@@ -132,6 +132,10 @@ pub struct PaneContext {
     /// The resolved account overlay (`accounts::launch::pane_overlay`),
     /// sealed. The wrapper carries it under any route.
     pub account_env: Map<String, Value>,
+    /// The parent session edge the request carried (`--spawned-by`, the
+    /// cross-host relay): the mint stamps it, because the child's own adopt
+    /// ambient-captures nothing over an ssh hop.
+    pub spawned_by_session: Option<String>,
 }
 
 impl PaneContext {
@@ -159,6 +163,7 @@ impl PaneContext {
             role: None,
             promoted: false,
             account_env: Map::new(),
+            spawned_by_session: None,
         }
     }
 
@@ -245,6 +250,7 @@ impl PaneContext {
                 .and_then(Value::as_object)
                 .cloned()
                 .unwrap_or_default(),
+            spawned_by_session: opt_str("spawned_by_session"),
         })
     }
 }
@@ -1225,6 +1231,10 @@ pub fn write_pane_row(
         requested_model: None,
         requested_provider: None,
         requested_effort: None,
+        // Claude only: another harness reads this column in its own vocabulary.
+        requested_permission_mode: (ctx.provider == "claude")
+            .then(|| crate::claude_ask::recorded_permission_mode(None, &ctx.passthrough))
+            .flatten(),
         spawn_payload: (!ctx.message.is_empty()).then(|| ctx.message.clone()),
         cwd: ctx.cwd.to_string_lossy().into_owned(),
         log_path: entry_log_path,
@@ -1244,7 +1254,10 @@ pub fn write_pane_row(
             .cloned(),
         account_record_id: launch_account.clone(),
         launch_account,
-        ..RegistryEntry::new(None, Lineage::captured((None, None, None)))
+        ..RegistryEntry::new(
+            None,
+            Lineage::captured((ctx.spawned_by_session.clone(), None, None)),
+        )
     };
     write_pane_row_txn(home, name, entry, replacing)
 }

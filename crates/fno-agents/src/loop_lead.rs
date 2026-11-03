@@ -713,16 +713,11 @@ pub(crate) fn escalate_stalled(
     // `retry_etxtbsy` wrapper provided. The terminal contract is unchanged:
     // a failed escalation is named and moves on, never blocks.
     let bound = crate::loopcheck::stopgate_pr_meta_timeout();
-    let stalled = ids.join(",");
-    let mut args: Vec<&str> = vec![
-        "agents",
-        "org",
-        "escalate",
-        "--stalled",
-        &stalled,
-        "--reason",
-        reason,
-    ];
+    let mut args: Vec<&str> = vec!["agents", "org", "escalate"];
+    for id in ids {
+        args.extend(["--stalled", id.as_str()]);
+    }
+    args.extend(["--reason", reason]);
     if !scope.is_empty() {
         args.push(scope);
     }

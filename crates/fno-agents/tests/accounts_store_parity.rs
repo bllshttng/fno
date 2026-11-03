@@ -1,7 +1,7 @@
-//! parity-stage: differential
+//! parity-stage: characterization
 //! parity-oracle: fno.adapters.providers.managed
 //!
-//! Differential parity for `accounts::store`, the port of `managed.py`'s
+//! Characterization for `accounts::store`, the port of `managed.py`'s
 //! store layer. Each `tests/golden/accounts_store/*.json` case lays down a
 //! store tree, slot credential files, Keychain items keyed by role, a process
 //! table and a `codex login status` answer, runs one store operation, and
@@ -62,14 +62,14 @@ impl Host for FakeHost {
             stdout,
             stderr,
         };
+        if let Some(fail) = self.fail.get(&role) {
+            return Ok(run(
+                fail["code"].as_i64().unwrap() as i32,
+                String::new(),
+                fail["stderr"].as_str().unwrap().to_string(),
+            ));
+        }
         if args[0] == "add-generic-password" {
-            if let Some(fail) = self.fail.get(&role) {
-                return Ok(run(
-                    fail["code"].as_i64().unwrap() as i32,
-                    String::new(),
-                    fail["stderr"].as_str().unwrap().to_string(),
-                ));
-            }
             let at = args.iter().position(|a| a == "-w").unwrap() + 1;
             let new = args[at].clone();
             self.writes.borrow_mut().push(json!([role, new]));

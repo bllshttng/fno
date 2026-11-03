@@ -7,7 +7,6 @@ the Rust tests). What stays is the config knob the gate shares.
 """
 from __future__ import annotations
 
-import pytest
 
 
 def test_non_finite_never_disarms_a_machine_guard():

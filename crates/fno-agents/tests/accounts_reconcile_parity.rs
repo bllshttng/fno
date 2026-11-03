@@ -1,7 +1,7 @@
-//! parity-stage: differential
+//! parity-stage: characterization
 //! parity-oracle: fno.adapters.providers.managed.reconcile_slot
 //!
-//! Differential parity for `accounts::reconcile`, the port of
+//! Characterization for `accounts::reconcile`, the port of
 //! `managed.reconcile_slot`. Each `tests/golden/accounts_reconcile/*.json`
 //! case lays down a store tree, Keychain items keyed by role, a profile
 //! endpoint keyed by bearer and the taint writers' start times; `expect`

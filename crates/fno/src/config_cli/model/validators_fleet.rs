@@ -30,11 +30,8 @@ pub(super) fn register(reg: &mut Registry) {
     );
     reg.after("A2aBlock", &["turn_ceiling"], ceiling_is_positive);
     reg.before("SidelineBlock", &["layout"], coerce_layout);
-    reg.before(
-        "ProviderBudget",
-        &["lanes", "subagents"],
-        coerce_budget_dimension,
-    );
+    reg.before("ProviderBudget", &["lanes"], coerce_lane_dimension);
+    reg.before("ProviderBudget", &["subagents"], coerce_budget_dimension);
     reg.before(
         "ProcessAdmissionBlock",
         &["max_processes"],
@@ -343,6 +340,21 @@ fn is_positive_int(v: &Value) -> bool {
     py_int_value(v).is_some_and(|n| n >= 1)
 }
 
+/// `_lane_count`: an int (never a bool) of at least 0. Zero closes the lane.
+fn is_lane_count(v: &Value) -> bool {
+    py_int_value(v).is_some_and(|n| n >= 0)
+}
+
+fn coerce_lane_dimension(_ctx: &mut Ctx, v: Value) -> Result<Value, Fail> {
+    Ok(match &v {
+        Value::Number(_) if is_lane_count(&v) => v.clone(),
+        Value::String(s) => py_int_str(s)
+            .filter(|n| *n >= 0)
+            .map_or(Value::Null, Value::from),
+        _ => Value::Null,
+    })
+}
+
 fn coerce_budget_dimension(_ctx: &mut Ctx, v: Value) -> Result<Value, Fail> {
     Ok(positive_int_or(&v, Value::Null))
 }
@@ -475,7 +487,7 @@ fn coerce_provider_limits(_ctx: &mut Ctx, v: Value) -> Result<Value, Fail> {
         if !is_provider_name(provider) {
             return Ok(builtin_provider_budgets());
         }
-        let fields: Map<String, Value> = if is_positive_int(budget) {
+        let fields: Map<String, Value> = if is_lane_count(budget) {
             let mut one = Map::new();
             one.insert("lanes".to_string(), budget.clone());
             one
@@ -485,7 +497,13 @@ fn coerce_provider_limits(_ctx: &mut Ctx, v: Value) -> Result<Value, Fail> {
             }
             let kept: Map<String, Value> = dims
                 .iter()
-                .filter(|(_, d)| is_positive_int(d))
+                .filter(|(k, d)| {
+                    if k.as_str() == "lanes" {
+                        is_lane_count(d)
+                    } else {
+                        is_positive_int(d)
+                    }
+                })
                 .map(|(k, d)| (k.clone(), d.clone()))
                 .collect();
             if kept.len() != dims.len() {

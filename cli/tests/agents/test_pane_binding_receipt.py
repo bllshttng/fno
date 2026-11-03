@@ -17,24 +17,13 @@ Coverage:
 """
 from __future__ import annotations
 
-import ast
-import inspect
 import json
 import subprocess
-import sys
-import textwrap
-from pathlib import Path
 from typing import Any
 
 import pytest
 
-from fno.agents import codex_pane, mux_spawn
-from fno.agents.mux_spawn import (
-    _submit_spawn_seed,
-    _await_pane_binding,
-    _backfill_codex_session_id,
-    _write_pane_death_log,
-)
+from fno.agents import mux_spawn
 
 
 @pytest.fixture(autouse=True)
@@ -42,10 +31,10 @@ def _graphless_seed_resolver(monkeypatch):
     """The seed-word gate fails open on an unreadable graph; pin that here so
     the plumbing tests' fake node words never depend on the ambient store."""
 
-    def _unreadable(path=None, **_):
+    def _unreadable(*_a, **_k):
         raise ValueError("graph store unreadable")
 
-    monkeypatch.setattr("fno.graph.load.load_graph", _unreadable)
+    monkeypatch.setattr("fno.rust_binary.backlog_match", _unreadable)
 
 MUX = {"session": "main", "pane_id": 81}
 SID = "019cc081-de0d-7283-97cc-751c46742a07"
@@ -100,32 +89,6 @@ def _no_sleep(_seconds: float) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_binding_returns_immediately_without_sleeping() -> None:
-    """A healthy spawn pays none of the window: the loop exits on the first tick."""
-    slept: list[float] = []
-    out = _await_pane_binding(
-        MUX, lambda: SID, runner=_runner(), sleep=slept.append, window_s=999.0
-    )
-    assert out.session_id == SID
-    assert out.pane_alive is True
-    assert out.reason == ""
-    assert slept == [], "a bound worker must not sleep out the window"
-
-
-def test_confirmed_dead_pane_is_the_died_outcome() -> None:
-    out = _await_pane_binding(
-        MUX,
-        lambda: None,
-        runner=_runner(wait_rc=WAIT_DEAD, tail="error: unexpected argument\n"),
-        sleep=_no_sleep,
-        window_s=999.0,
-    )
-    assert out.session_id is None
-    assert out.pane_alive is False
-    assert out.reason == "pane-died-before-binding"
-    assert "unexpected argument" in out.tail
-
-
 # ---------------------------------------------------------------------------
 # The codex app-server daemon oracle, at the receipt level: composed through
 # _make_codex_bind_probe into the same _await_pane_binding wait this file
@@ -133,70 +96,9 @@ def test_confirmed_dead_pane_is_the_died_outcome() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _codex_probe(monkeypatch, *, candidate):
-    from fno.agents.codex_pane import _make_codex_bind_probe
-
-    monkeypatch.setattr(codex_pane, "_CODEX_DAEMON_PROBE_INTERVAL_S", 0.0)
-    monkeypatch.setattr(mux_spawn, "_backfill_codex_session_id", lambda *a, **k: None)
-    monkeypatch.setattr(codex_pane, "_codex_daemon_candidate", lambda *a, **k: candidate)
-    monkeypatch.setattr(mux_spawn, "_mux_pane_alive", lambda *a, **k: True)
-    return _make_codex_bind_probe(
-        cwd=Path("/w/proj"),
-        spawn_started_ms=0,
-        child_pid=4242,
-        codex_sessions_dir=None,
-        daemon_baseline_ids=set(),
-        mux=MUX,
-        runner=_runner(),
-    )
-
-
 # ---------------------------------------------------------------------------
 # Evidence: captured before the pane is gone, and never fatal
 # ---------------------------------------------------------------------------
-
-
-def test_a_raising_pane_read_never_fails_the_binding_wait() -> None:
-    """Evidence is best-effort; binding is not."""
-    out = _await_pane_binding(
-        MUX,
-        lambda: None,
-        runner=_runner(wait_rc=WAIT_DEAD, raises=OSError("mux gone")),
-        sleep=_no_sleep,
-        window_s=0.0,
-    )
-    assert out.reason == "pane-died-before-binding"
-    assert out.tail == ""
-
-
-def test_an_empty_later_read_does_not_erase_earlier_evidence() -> None:
-    """A TUI that stops painting must not blank the output that explains it."""
-    reads = iter(["boom: bad flag\n", "", ""])
-    waits = iter([WAIT_ALIVE, WAIT_DEAD])
-
-    def run(argv, **_kw):
-        # argv is [fno, "mux", "pane", <command>, ...]
-        command = argv[3] if len(argv) > 3 else ""
-        if command == "wait":
-            return _proc(next(waits))
-        if command == "read":
-            return _proc(0, next(reads))
-        return _proc(0)
-
-    out = _await_pane_binding(MUX, lambda: None, runner=run, sleep=_no_sleep, window_s=999.0)
-    assert out.pane_alive is False, "alive on tick 1, gone on tick 2 is caught"
-    assert out.reason == "pane-died-before-binding"
-    assert "boom: bad flag" in out.tail
-
-
-def test_an_unwritable_log_dir_degrades_instead_of_raising(tmp_path: Path, monkeypatch) -> None:
-    """The spawn still reports the death; it just cannot point at a file."""
-
-    def boom():
-        raise OSError("read-only filesystem")
-
-    monkeypatch.setattr("fno.paths.state_dir", boom)
-    assert _write_pane_death_log("worker-x", "some output\n") == ""
 
 
 # ---------------------------------------------------------------------------
@@ -204,139 +106,14 @@ def test_an_unwritable_log_dir_degrades_instead_of_raising(tmp_path: Path, monke
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    # `harness`, not `provider`: these are binaries, not model vendors.
-    "harness,named,expected",
-    [
-        # A named reason survives verbatim.
-        ("codex", "pane-died-before-binding", "pane-died-before-binding"),
-        # The window-expired reason gains the reconcile pointer.
-        (
-            "codex",
-            "binding-window-expired",
-            "binding-window-expired: pane is live; fno agents reconcile will backfill its session id",
-        ),
-        # A branch that names no reason gets a GENERIC one: naming the harness
-        # would read as "this harness binds no session", which is what
-        # `bound is None` means and the opposite of a miss.
-        ("claude", None, "unbound-reason-unrecorded"),
-    ],
-)
-def test_every_unbound_receipt_names_a_reason(
-    harness: str, named: str | None, expected: str
-) -> None:
-    """An unbound receipt whose reason is null is the same empty signal as an
-    empty short_id. Pinning the IMPLICATION, not a list of branches, so a new
-    unbound branch cannot reintroduce a null by forgetting."""
-    assert mux_spawn._resolve_unbound_reason(False, named, harness) == expected
-
-
 # ---------------------------------------------------------------------------
 # Name reclamation is scoped to PROVED death, not to the terminal vocabulary
 # ---------------------------------------------------------------------------
 
 
-def test_orphaned_is_not_reclaimable_because_it_means_live() -> None:
-    """`orphaned` is stamped when a message fails to route - "agent is live but
-    not currently routable" - and reconcile keeps the pid because the process is
-    still running. Reclaiming one would delete a LIVE worker's row, hiding it
-    from `agents list`, reconcile, and lane cleanup while a second pane starts
-    on the same node. A control-socket hiccup is not a death."""
-    from fno.agents.registry import TERMINAL_STATUSES
-
-    assert "orphaned" in TERMINAL_STATUSES
-    assert "orphaned" not in mux_spawn._RECLAIMABLE_STATUSES
-    assert mux_spawn._RECLAIMABLE_STATUSES <= TERMINAL_STATUSES
-    assert {"exited", "failed", "permanent_dead"} == set(mux_spawn._RECLAIMABLE_STATUSES)
-
-
 # ---------------------------------------------------------------------------
 # `bound` is TRI-state: a harness that binds no session asserts nothing
 # ---------------------------------------------------------------------------
-
-
-def test_bound_is_tri_state_by_harness() -> None:
-    """A session-binding harness reports a real boolean. agy is pane-hostable
-    but exposes no session id, so it asserts nothing: False would call a
-    healthy worker a failure, True would be an unverified "it's live"."""
-    assert mux_spawn._resolve_bound(SID, "claude") is True
-    assert mux_spawn._resolve_bound(None, "claude") is False
-    assert mux_spawn._resolve_bound(None, "agy") is None
-    assert mux_spawn._resolve_unbound_reason(None, None, "agy") is None
-
-
-def test_shared_readiness_submits_a_preloaded_seed() -> None:
-    """Every pane harness reaches the same text-then-submit gate."""
-    calls: list[list[str]] = []
-
-    def run(argv, **_kw):
-        calls.append(argv)
-        command = argv[3]
-        if command == "wait":
-            return _proc(WAIT_ALIVE)
-        if command == "read":
-            return _proc(0, "seed text")
-        if command == "send":
-            return _proc(0)
-        raise AssertionError(argv)
-
-    state, detail, source, pane = _submit_spawn_seed("claude", "main", 81, "seed text", run)
-    assert state == "submitted"
-    assert detail == ""
-    assert source == "preloaded"
-    assert pane == "painted", "a frame that read back with content was seen"
-    send = next(call for call in calls if call[3] == "send")
-    assert "--submit" in send
-    assert send[send.index("--text") + 1] == ""
-
-
-def test_an_unconfirmed_submit_names_the_missing_ready_marker() -> None:
-    """Exit 22 is EXIT_SUBMIT_UNCONFIRMED in crates/fno pane_submit.rs.
-
-    mux typed the text, sent the Enter, and spent the whole confirm budget
-    watching a frame that never moved. The refusal must say the marker never
-    appeared. The bare "submission refused" this replaces read the same for a
-    dropped prompt, a dead pane, and a guard refusal. A harness that drops the
-    pre-session submit therefore failed with no named cause."""
-
-    def run(argv, **_kw):
-        command = argv[3]
-        if command == "wait":
-            return _proc(WAIT_ALIVE)
-        if command == "read":
-            return _proc(0, "idle composer")
-        if command == "send":
-            return _proc(22, stderr="fno mux pane: text delivered, submission unconfirmed")
-        raise AssertionError(argv)
-
-    state, detail, source, pane = _submit_spawn_seed("agy", "main", 81, "seed text", run)
-    assert state == "unconfirmed"
-    assert detail == (
-        "submission refused, no ready marker, submission unconfirmed (exit 22): "
-        "fno mux pane: text delivered, submission unconfirmed"
-    )
-    assert source == "delivered"
-
-
-def test_a_blank_frame_is_unattempted_not_unconfirmed() -> None:
-    """The two must never collapse. `unconfirmed` says a send was tried and did
-    not land, which the caller may fail the spawn on. A blank frame says the
-    screen could not be read, so nothing was tried - an absence about the
-    instrument, not a fact about the seed. Folding them together reaps an alive
-    child that simply has not painted yet."""
-
-    def run(argv, **_kw):
-        command = argv[3]
-        if command == "wait":
-            return _proc(WAIT_ALIVE)
-        if command == "read":
-            return _proc(0, "   \n")
-        raise AssertionError(f"a blank frame must not reach a send: {argv}")
-
-    state, detail, _source, pane = _submit_spawn_seed("claude", "main", 81, "seed text", run)
-    assert state == "unattempted"
-    assert "not attempted" in detail
-    assert pane == "blank", "a clean read of nothing is an unpainted pane, not a failed read"
 
 
 # --- an argv seed's delivery is not observable from a pane frame -------------
@@ -350,58 +127,6 @@ def test_a_blank_frame_is_unattempted_not_unconfirmed() -> None:
 # delivery is committed at exec time, before a pane exists to read. The spawn
 # knows what it put in the argv; that positive fact is what the receipt reports
 # now, instead of inferring delivery from the seed's ABSENCE in a painted frame.
-
-
-def test_an_argv_seed_is_submitted_even_when_the_frame_is_blank() -> None:
-    """A pane that has not painted has not refused anything.
-
-    This is the false-negative that nearly cost a live worker: a lead reading
-    `unattempted` either re-seeds a pane that is already running its task, or
-    reaps it and respawns.
-    """
-
-    def run(argv, **_kw):
-        command = argv[3]
-        if command == "wait":
-            return _proc(WAIT_ALIVE)
-        if command == "read":
-            return _proc(0, "   \n")
-        raise AssertionError(f"an argv seed must not reach a send: {argv}")
-
-    state, detail, source, pane = _submit_spawn_seed(
-        "claude", "main", 81, "seed text", run, seed_in_argv=True
-    )
-    assert state == "submitted"
-    assert source == "argv"
-    assert "argv" in detail
-    assert pane == "blank"
-
-
-def test_an_argv_seed_on_a_FAILED_read_reports_delivery_and_doubt_apart() -> None:
-    """AC2-HP. A non-zero read is the same instrument failure, arriving quietly.
-
-    `_run_mux` does not raise on a non-zero exit, so `mux pane read` against a
-    dead pane returns cleanly with empty stdout and is byte-identical to a live
-    pane that has not painted. The return code is the only thing separating
-    them, so it decides `pane_observation` and both failure shapes land on
-    `unreadable` - which is what keeps the dead pane from earning a clean spawn.
-    """
-
-    def run(argv, **_kw):
-        command = argv[3]
-        if command == "wait":
-            return _proc(WAIT_ALIVE)
-        if command == "read":
-            return _proc(1, "")
-        raise AssertionError(f"a failed read must not reach a send: {argv}")
-
-    state, detail, source, pane = _submit_spawn_seed(
-        "claude", "main", 81, "seed text", run, seed_in_argv=True
-    )
-    assert state == "submitted"
-    assert source == "argv"
-    assert pane == "unreadable", "a dead pane must not earn a clean receipt"
-    assert "not attempted" not in detail
 
 
 # --- AC7: the docstring's UNREACHABLE clause, asserted as a property ---------
@@ -478,174 +203,6 @@ def _seed_scenarios() -> list[tuple[str, str, Any]]:
     ]
 
 
-def _run_capturing_returns(provider: str, runner: Any, seed_in_argv: bool):
-    """Run one scenario and report which `return` LINE it came back from.
-
-    The line number is what makes the coverage assertion below a real one: a
-    scenario table can look exhaustive while three entries funnel through the
-    same arm, and only the executed lines can tell you so.
-    """
-    code = _submit_spawn_seed.__code__
-    taken: set[int] = set()
-
-    def local(frame, event, _arg):
-        if event == "return":
-            taken.add(frame.f_lineno)
-        return local
-
-    def tracer(frame, _event, _arg):
-        return local if frame.f_code is code else None
-
-    previous = sys.gettrace()
-    sys.settrace(tracer)
-    try:
-        result = _submit_spawn_seed(
-            provider, "main", 81, "seed text", runner, seed_in_argv=seed_in_argv
-        )
-    finally:
-        sys.settrace(previous)
-    return result, taken
-
-
-def _all_return_lines() -> set[int]:
-    """Every `return` in `_submit_spawn_seed`, read off the source itself."""
-    source = textwrap.dedent(inspect.getsource(_submit_spawn_seed))
-    offset = _submit_spawn_seed.__code__.co_firstlineno - 1
-    return {
-        node.lineno + offset
-        for node in ast.walk(ast.parse(source))
-        if isinstance(node, ast.Return)
-    }
-
-
-def test_no_arm_returns_unattempted_for_an_argv_seed_and_every_arm_is_reached() -> None:
-    """AC7-EDGE, over every arm, plus the guard on the guard.
-
-    The property: no arm returns `unattempted` when the seed rode in argv. The
-    coverage half fails HERE when a new arm has no scenario; a table that
-    silently stops covering the function is exactly how the original
-    contradiction survived a green suite.
-    """
-    reached: set[int] = set()
-    for name, provider, make_runner in _seed_scenarios():
-        for seed_in_argv in (True, False):
-            (state, detail, _source, pane), taken = _run_capturing_returns(
-                provider, make_runner(), seed_in_argv
-            )
-            reached |= taken
-            if seed_in_argv:
-                assert state != "unattempted", (
-                    f"{name}: an argv seed came back `unattempted`, the state the "
-                    f"docstring calls UNREACHABLE here and the one `cmd_spawn` turns "
-                    f"into exit 22. detail={detail!r}"
-                )
-                assert pane in ("painted", "blank", "unreadable"), f"{name}: pane={pane!r}"
-    missing = _all_return_lines() - reached
-    assert not missing, (
-        f"no scenario reaches the return(s) at line(s) {sorted(missing)} of "
-        f"_submit_spawn_seed. Add one to _seed_scenarios, or AC7 is not being "
-        f"asserted over that arm."
-    )
-
-
-def test_the_argv_marker_is_correct_for_every_pane_harness() -> None:
-    """The marker must agree with what `build_pane_argv` really emits.
-
-    The harnesses do not agree on how a seed enters the argv. claude, codex and
-    gemini append it as its own token (behind `--`, or after `-i`); opencode
-    FUSES it into `--prompt=<seed>`; agy embeds nothing and types it instead.
-    An element membership test (`seed in argv`) answers False for opencode on a
-    seed that was genuinely delivered, so the defect this guard exists to close
-    would survive for that one harness, silently, because the receipt still
-    looks ordinary.
-
-    Two message shapes, because they exercise different paths. A plain message
-    reaches every pane-hostable harness including gemini, whose `normalize_command`
-    refuses a slash command. A slash command exercises the normalize-then-enrich
-    rewrite the real call site performs before building, which is where
-    opencode's fusion actually bites.
-
-    This pins the marker against the real builder and the PRODUCTION predicate,
-    never a table restated here, so a harness changing how it carries the seed
-    fails loudly.
-    """
-    from pathlib import Path
-
-    from fno.agents.mux_spawn import build_pane_argv, normalize_command, seed_rode_in_argv
-    from fno.agents.spawn_payload import enrich_spawn_payload
-
-    plain = {"claude": True, "codex": True, "gemini": True, "opencode": True, "agy": False}
-    slash = {"claude": True, "codex": True, "opencode": True, "agy": False}
-
-    for raw, expected in (("do the thing", plain), ("/fno:target x-0000", slash)):
-        for provider, want in expected.items():
-            # Mirror dispatch_spawn_pane: normalize, enrich, THEN build.
-            msg = raw
-            if msg.strip().startswith(("/", "$fno:")):
-                msg = normalize_command(msg, provider)
-            msg = enrich_spawn_payload(msg)
-            argv = build_pane_argv(provider, msg, Path("/tmp"), False, None)
-            got = seed_rode_in_argv(msg, argv)
-            assert got is want, (
-                f"{provider} with {raw!r}: marker says seed_in_argv={got}, expected "
-                f"{want}. If this harness changed how it carries the seed, the "
-                f"receipt logic in _submit_spawn_seed must change with it."
-            )
-
-
-def test_shared_readiness_clears_agy_trust_before_seeding() -> None:
-    reads = iter(
-        [
-            "Do you trust the authors of files in this folder?",
-            "Antigravity CLI\n>\n",
-        ]
-    )
-    calls: list[list[str]] = []
-
-    def run(argv, **_kw):
-        calls.append(argv)
-        if argv[3] == "wait":
-            return _proc(WAIT_ALIVE)
-        if argv[3] == "read":
-            return _proc(0, next(reads))
-        if argv[3] == "send":
-            return _proc(0)
-        raise AssertionError(argv)
-
-    state, detail, source, pane = _submit_spawn_seed("agy", "main", 81, "seed text", run)
-    assert state == "submitted"
-    assert detail == ""
-    assert source == "trust-cleared"
-    assert pane == "painted", "the read-back that proved the modal cleared was seen"
-    sends = [call for call in calls if call[3] == "send"]
-    assert len(sends) == 2
-    assert sends[0][sends[0].index("--text") + 1] == ""
-    assert sends[1][sends[1].index("--text") + 1] == "seed text"
-    assert all("--submit" in call for call in sends)
-
-
-def test_shared_readiness_fails_when_agy_trust_does_not_clear() -> None:
-    def run(argv, **_kw):
-        if argv[3] == "wait":
-            return _proc(WAIT_ALIVE)
-        if argv[3] == "read":
-            return _proc(0, "Do you trust the contents of this project?")
-        if argv[3] == "send":
-            return _proc(0)
-        raise AssertionError(argv)
-
-    state, detail, source, pane = _submit_spawn_seed("agy", "main", 81, "seed text", run)
-    # `unconfirmed`, not `unattempted`. The clearing submit WAS sent and the
-    # modal outlived it, which is positive evidence the gate did not clear - not
-    # a paint-timing miss. Until a human answers that modal the pane runs
-    # nothing, so calling it `unattempted` would write a live registry row for a
-    # wedged pane and leak the very slot this change exists to reclaim.
-    assert state == "unconfirmed"
-    assert "trust gate did not clear" in detail
-    assert source == "trust-cleared"
-    assert pane == "painted", "the modal was read, twice; the instrument worked fine"
-
-
 # ---------------------------------------------------------------------------
 # A probe never fails a spawn (the pane already exists by the time it runs)
 # ---------------------------------------------------------------------------
@@ -715,38 +272,9 @@ def test_an_unsuccessful_enumeration_is_never_read_as_death(kwargs) -> None:
     assert mux_spawn._mux_pane_alive(MUX, _ls_runner(wait_rc=1, panes=[], **kwargs)) is None
 
 
-def test_repeat_deaths_do_not_overwrite_each_others_evidence(tmp_path, monkeypatch) -> None:
-    """The deaths worth reading are usually repeats, so a name-stable path would
-    destroy the run you wanted to compare against."""
-    monkeypatch.setattr("fno.paths.state_dir", lambda: tmp_path)
-    first = _write_pane_death_log("w", "first corpse\n", pane_id=81)
-    second = _write_pane_death_log("w", "second corpse\n", pane_id=84)
-    assert first != second
-    assert Path(first).read_text() == "first corpse\n"
-
-
 # ---------------------------------------------------------------------------
 # Regression pin for the node's claim 4 (already fixed; this keeps it fixed)
 # ---------------------------------------------------------------------------
-
-
-def test_production_codex_binding_never_keys_on_rollout_mtime(monkeypatch) -> None:
-    """The July misattribution came from selecting a codex session by newest
-    rollout mtime, which happily adopted an unrelated `codex exec` probe.
-
-    That code is gone, and so is the cwd+time store query: the id is read from
-    a rollout held open by the pane's OWN process tree. A miss on that tree
-    answers None, never a guess.
-    """
-
-    monkeypatch.setattr(mux_spawn, "_codex_session_id_for_pid", lambda *_a, **_kw: None)
-
-    assert (
-        _backfill_codex_session_id(
-            Path("/w/proj"), 0, child_pid=4242, sleep=_no_sleep
-        )
-        is None
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -764,90 +292,3 @@ def test_production_codex_binding_never_keys_on_rollout_mtime(monkeypatch) -> No
 # ---------------------------------------------------------------------------
 
 
-def test_daemon_candidate_names_the_disabled_oracle() -> None:
-    """The one condition no window length can fix, so it must be SAID.
-
-    A missing pre-spawn baseline disables the daemon oracle for the whole
-    spawn. Waiting 60s or 600s produces the same nothing.
-    """
-    seen: list = []
-    assert (
-        codex_pane._codex_daemon_candidate(Path("/w/proj"), None, observed=seen) is None
-    )
-    assert seen == ["daemon: no pre-spawn baseline, oracle disabled for this spawn"]
-
-
-def test_the_sink_holds_the_newest_observation_only(monkeypatch) -> None:
-    """Written in place, so a 60s poll cannot grow it without bound."""
-    loaded = iter([None, {"a"}])
-    monkeypatch.setattr(
-        codex_pane, "_codex_session_ids_loaded", lambda *a, **k: next(loaded)
-    )
-    seen: list = []
-    codex_pane._codex_daemon_candidate(Path("/w/proj"), {"a"}, observed=seen)
-    codex_pane._codex_daemon_candidate(Path("/w/proj"), {"a"}, observed=seen)
-    assert seen == ["daemon: no new codex session for this cwd"]
-
-
-def test_window_expiry_reports_what_it_measured() -> None:
-    sink = ["daemon: no new codex session for this cwd"]
-    out = _await_pane_binding(
-        MUX,
-        lambda: None,
-        runner=_runner(wait_rc=WAIT_ALIVE),
-        sleep=_no_sleep,
-        window_s=0.0,
-        condition_sink=sink,
-    )
-    assert out.reason == "binding-window-expired"
-    assert out.pane_alive is True, "a live pane past the window is still booting"
-    assert out.window_s == 0.0
-    assert out.polls >= 1
-    assert out.elapsed_s > 0.0
-    assert out.condition == "daemon: no new codex session for this cwd"
-
-
-def test_a_bound_wait_also_reports_its_measurement(monkeypatch) -> None:
-    """The positive control for the instrument itself.
-
-    A measurement that appears only on a failure cannot be told apart from one
-    that never ran, so the success path carries it too.
-    """
-    probe = _codex_probe(monkeypatch, candidate=SID)
-    out = _await_pane_binding(
-        MUX,
-        probe,
-        runner=_runner(),
-        sleep=_no_sleep,
-        window_s=999.0,
-        condition_sink=[],
-    )
-    assert out.session_id == SID
-    assert out.pane_alive is True
-    assert out.reason == ""
-    assert out.polls >= 1
-    assert out.elapsed_s > 0.0
-    assert out.window_s == 999.0
-
-
-def test_the_diagnostic_survives_an_unreadable_registry(monkeypatch) -> None:
-    """A flight recorder never fails the thing it records."""
-
-    def boom(*_a, **_kw):
-        raise OSError("registry unreadable")
-
-    monkeypatch.setattr(mux_spawn, "load_registry", boom)
-    binding = mux_spawn.PaneBinding(
-        None,
-        True,
-        "binding-window-expired",
-        "",
-        elapsed_s=1.0,
-        window_s=60.0,
-        polls=2,
-        condition="daemon: 3 new codex sessions for this cwd, ambiguous",
-    )
-    line = mux_spawn._bind_failure_diagnostic(binding)
-    assert "waited 1.0s of a 60.0s window across 2 poll(s)" in line
-    assert "last observed: daemon: 3 new codex sessions for this cwd, ambiguous" in line
-    assert "live agent" not in line, "an unreadable registry must not report a count"

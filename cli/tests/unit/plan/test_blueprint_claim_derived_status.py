@@ -4,8 +4,8 @@
 a node whose plan reads `status: design` through `/blueprint` first. But the same
 skill makes `fno do target init` mandatory, and init acquires the node claim. That
 claim is projected onto the plan doc as `in_progress`
-(cli/src/fno/plan/_project.py), along the forward-only axis in
-cli/src/fno/plan/_status.py, so it re-advances on every run.
+(crates/fno-agents/src/plan_doc/project.rs), along the forward-only axis in
+crates/fno-agents/src/plan_doc/status.rs, so it re-advances on every run.
 
 `in_progress` was then read as "past blueprint phase" and refused, which
 deadlocked the branch: holding the claim needed to work the node is what made the
@@ -83,7 +83,7 @@ tasks:
   - id: '1.1'
     title: Do the thing
     surface:
-      - cli/src/fno/plan/_status.py
+      - crates/fno-agents/src/plan_doc/status.rs
     verify: pytest cli/tests/unit/plan -q
     acceptance:
       - AC1-HP

@@ -35,7 +35,7 @@
 //! - [`provider`]: [`provider::Provider`] + [`provider::ProviderWithPty`] traits
 //!   (LD8) and the three impls ([`provider::ClaudeProvider`] shellout,
 //!   [`provider::CodexProvider`] / [`provider::GeminiProvider`] PTY-managed).
-//! - [`envelope`]: [`envelope::Envelope`] structural anti-injection wrapper (LD15).
+//! - [`mail::frame`]: [`mail::frame::Envelope`] structural anti-injection wrapper (LD15).
 //! - [`screen`]: the terminal-grid construction behind [`readiness::ScreenView`]
 //!   (the per-CLI [`readiness::ReadinessDetector`] impls now live in
 //!   [`readiness`]).
@@ -80,10 +80,12 @@ pub mod attention_reply;
 pub mod attention_route;
 pub mod attest;
 pub mod authorized_merge;
+pub mod autonomy_policy;
 pub mod autonomy_status;
 pub mod backlog;
 pub mod backlog_ready;
 pub mod backlog_share;
+pub mod bank_pr;
 pub mod bash_census;
 #[cfg(test)]
 #[path = "birth_guard_tests.rs"]
@@ -163,7 +165,12 @@ pub mod context_audit;
 pub mod context_run;
 pub mod context_window;
 pub mod convert;
+pub mod correction_detect;
+pub mod correction_fold;
 pub mod correction_meter;
+pub mod correction_outcome;
+pub mod correction_readings;
+pub mod correction_seat;
 pub mod corrections_verify;
 pub mod cursor_agent;
 pub mod cutover;
@@ -186,15 +193,21 @@ pub mod duration;
 pub mod effect_gate;
 pub mod effect_map;
 pub mod effort_surface;
-pub mod envelope;
 pub mod escalation;
 pub mod eval_attempt;
+pub mod eval_events;
 pub mod eval_part4;
 pub mod eval_reap;
 pub mod evals;
 pub mod evals_arm;
+pub mod evals_candidates;
+pub mod evals_capability;
 pub mod evals_climb;
+pub mod evals_compare;
+pub mod evals_drafts;
+pub mod evals_gate;
 pub mod evals_macro;
+pub mod evals_predict;
 pub mod evals_qualification;
 pub mod evals_trend;
 pub mod event_rules;
@@ -237,12 +250,14 @@ pub mod gh_budget;
 pub mod gh_cache;
 pub mod gh_etag;
 pub mod gh_incident;
+pub mod gh_login;
 pub mod gh_poller;
 pub mod gh_spend;
 pub mod git_paths;
 #[cfg(test)]
 mod git_test_helpers;
 pub mod glob;
+pub mod golden_drafter;
 pub mod graph_get;
 pub mod graph_keeper;
 pub mod graph_store;
@@ -272,6 +287,7 @@ pub mod intel_corpus;
 pub mod intel_html;
 pub mod intel_insights;
 pub mod intel_lens;
+pub mod intel_plans;
 pub mod intel_rollup;
 pub mod intel_rules_lens;
 pub mod intel_scorecard;
@@ -320,6 +336,7 @@ pub mod ledger_axes;
 pub(crate) mod ledger_register;
 pub(crate) mod ledger_workers;
 mod lifecycle_child;
+pub mod lint_registry;
 pub mod list_render;
 pub mod list_row;
 pub mod live_store_fence;
@@ -343,17 +360,18 @@ pub mod machine_load;
 pub mod machine_mail;
 pub mod machine_sample;
 pub mod machine_watch;
+pub mod mail;
 pub mod mail_arm;
 pub mod mail_backfill;
 pub mod mail_bus;
 pub mod mail_cli;
 pub mod mail_control_drain;
-pub mod mail_delivery_state;
 pub mod mail_envelope;
 pub mod mail_header;
 pub mod mail_hold;
 pub mod mail_inject;
 pub mod mail_notify_self;
+pub mod mail_paths;
 pub mod mail_receipt;
 pub mod mail_remote;
 pub mod mail_teach;
@@ -398,6 +416,7 @@ pub mod node_route;
 pub mod node_seed;
 pub mod notice_route;
 pub mod nudge;
+pub mod numbers;
 pub mod observer;
 pub mod occupancy_login;
 pub mod opencode_ask;
@@ -418,10 +437,12 @@ pub mod osc;
 pub mod otel_ingest;
 pub mod otel_read;
 pub mod otlp_export;
+pub mod outside_holds;
 pub mod outstanding;
 pub mod outstanding_cmds;
 pub(crate) mod owner_ladder;
 pub mod pack_profile;
+pub mod page_relief;
 pub mod pane_claim;
 pub mod pane_identity;
 pub mod pane_keeper;
@@ -560,6 +581,7 @@ pub mod row_verdict;
 pub mod rules;
 pub mod rules_check;
 pub mod rules_source;
+pub mod run_import;
 pub mod run_outcome;
 pub mod run_state;
 pub mod rundown;
@@ -698,6 +720,7 @@ pub mod tick_ledger;
 pub mod tool_activity;
 pub mod tracker;
 pub mod transcript_activity;
+pub mod transcript_resolve;
 pub mod transcript_turns;
 pub mod truth_cli;
 pub mod truth_probe;
@@ -1653,6 +1676,13 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // A refused shared-backlog flush: the operator notice beside the
     // retained batch (backlog_share::repair).
     "backlog_refused_flush",
+    // The dead-letter cap's loud announcement: the batch ids the trim
+    // dropped (backlog_share::announce_refused_trim). No reader replays a
+    // refused batch, so the drop is forensic history only.
+    "backlog_refused_trimmed",
+    // The freed-page return arm (page_relief.rs): resident size before and
+    // after malloc_zone_pressure_relief, and the zone count it covered.
+    "page_relief_done",
     // Triage apply telemetry (the native triage engine): one row per
     // committed apply, carrying the applied counts, the priority moves and
     // the dropped-entry count.
@@ -1942,6 +1972,9 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // user's look clears (look_hold.rs).
     "look_hold_cancel",
     "look_hold_release",
+    // A wait or cadence red-cancel of a head's runs in flight
+    // (pr_status/wait.rs), with the failing checks that caused it.
+    "ci_wait_cancel",
     // A PR queued in place of a merge, and the merge queue arm's acts
     // (merge_queue.rs).
     "merge_queue_entry",
@@ -2113,6 +2146,18 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     "pr_heal_flake",
     "pr_heal_pr",
     "pr_heal_hold",
+    // The pr-watch tick: its attempt bracket, the sweep receipt, one row per
+    // PR verdict, and the durable-grant merge queue (pr_watch/dispatch.rs).
+    "pr_watch_tick_attempt",
+    "pr_watch_tick_end",
+    "pr_watch_tick",
+    "pr_watch_sweep_chunk",
+    "pr_watch_skipped",
+    "pr_watch_parked",
+    "pr_watch_dispatched",
+    "pr_watch_dispatch_failed",
+    "pr_watch_cleanup_failed",
+    "merge_grant_execution",
     // Daemon startup scope declaration: sandbox home vs the operator's
     // shared home. Fleet gating and board routing key off it.
     "daemon_fleet_scope",

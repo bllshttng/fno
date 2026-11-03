@@ -194,4 +194,39 @@ sz=$(wc -c < "$LOG" | tr -d ' ')
 (( sz > 0 && sz <= EVAL_SWEEP_LOG_MAX_BYTES )) || fail "size guard: expected 0<size<=100, got $sz"
 pass "US3: size guard caps an oversized log to the byte limit, keeps the tail"
 
+# =========================================================================== #
+# US4: a broken pause read skips the fire and names itself in the log
+# =========================================================================== #
+
+EVAL_SWEEP_LOG_MAX_BYTES=1048576
+PAUSE_LOG="$WORK/pause/eval-sweep.log"
+cat > "$FAKEBIN/fno-status" <<'STATUS'
+#!/usr/bin/env bash
+[[ "$1 $2 $3" == "do loops status" ]] || exit 0
+[[ -n "${FAKE_STATUS_ERR:-}" ]] && echo "$FAKE_STATUS_ERR" >&2
+[[ -n "${FAKE_STATUS_OUT:-}" ]] && echo "$FAKE_STATUS_OUT"
+exit "${FAKE_STATUS_RC:-0}"
+STATUS
+chmod +x "$FAKEBIN/fno-status"
+
+FAKE_STATUS_RC=2 FAKE_STATUS_ERR="fno-agents-worker: pass a lane" \
+    _eval_sweep_paused "$FAKEBIN/fno-status" "$PAUSE_LOG" || fail "failed read did not skip the fire"
+grep -q 'pause read broken.*rc=2' "$PAUSE_LOG" || fail "failed read left no broken-read line"
+grep -q 'fno-agents-worker: pass a lane' "$PAUSE_LOG" || fail "failed read lost its stderr"
+pass "US4: failed read skips the fire and logs rc plus stderr"
+
+rm -f "$PAUSE_LOG"
+FAKE_STATUS_OUT="surprise" _eval_sweep_paused "$FAKEBIN/fno-status" "$PAUSE_LOG" \
+    || fail "unrecognized read did not skip the fire"
+grep -q 'pause read broken.*surprise' "$PAUSE_LOG" || fail "unrecognized read left no broken-read line"
+pass "US4: unrecognized output skips the fire and logs the output"
+
+rm -f "$PAUSE_LOG"
+FAKE_STATUS_OUT="paused by machine_watch" _eval_sweep_paused "$FAKEBIN/fno-status" "$PAUSE_LOG" \
+    || fail "a real pause did not skip the fire"
+! grep -q 'pause read broken' "$PAUSE_LOG" 2>/dev/null || fail "a real pause logged as broken"
+FAKE_STATUS_OUT="expired (was paused by x until y)" _eval_sweep_paused "$FAKEBIN/fno-status" "$PAUSE_LOG" \
+    && fail "an expired pause skipped the fire"
+pass "US4: a real pause skips quietly and an expired pause fires"
+
 log "all eval-sweep-ss tests passed"

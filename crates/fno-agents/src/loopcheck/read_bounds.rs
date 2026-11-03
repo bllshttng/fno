@@ -251,20 +251,6 @@ pub(crate) fn drain_reserve_half_spent(elapsed: std::time::Duration) -> bool {
     elapsed >= STOPGATE_DRAIN_RESERVE / 2
 }
 
-/// Clamp a configured read ceiling to this fire's budget deadline, so no
-/// single long read can spend more than the fire still has. The fidelity
-/// probe's separate 60s ceiling clamps through here - the budget is the
-/// fire's, not the read's.
-pub(crate) fn clamp_to_fire_deadline(configured: std::time::Duration) -> std::time::Duration {
-    STOPGATE_READS.with(|cell| match cell.borrow().1 {
-        Some(d) => {
-            let remaining = d.saturating_duration_since(std::time::Instant::now());
-            clamp_to_fire_budget(configured, remaining)
-        }
-        None => configured,
-    })
-}
-
 /// Pure clamp so the deadline math is testable without a clock: never above
 /// what remains of the budget, never below the floor.
 pub(crate) fn clamp_to_fire_budget(

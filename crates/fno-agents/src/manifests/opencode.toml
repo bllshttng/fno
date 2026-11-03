@@ -1,12 +1,9 @@
 # opencode readiness manifest - adapted from the reference's
 # src/detect/manifests/opencode.toml per manifests/ADAPTING.md.
 #
-# STAGED / INERT (AC2-FR): opencode is not a hosted fno provider yet (its
-# buildout is node: READABLE_PROVIDERS membership + provider impl +
-# readiness detector + mux-pane argv). Until lands, `scrape_targets`
-# selects no opencode row, so this manifest parses and is bundled but never
-# fires. It is staged here so the badge derives with zero further change to
-# this node's files the moment opencode becomes mux-hostable.
+# Live: the mail pane lane and the pane spawn read this verdict for an opencode
+# pane. Nothing reads a turn record for such a pane, so typing only when this
+# file says the composer is painted is the guard against a lost delivery.
 #
 # Translation notes (reference -> ours):
 #   - dropped reference metadata (id/version/updated_at/aliases/visible_*); kept
@@ -15,11 +12,12 @@
 #   - `contains = ["x"]` (the reference "any of") expanded to a plain `contains = "x"`
 #     for a single element; the multi-key AND rule wraps its keys under `all`.
 #   - opencode's screens are groundable from source (~/code/tools/opencode +
-#     ctx7 `opencode`); markers mirror the reference's, still to be pinned against a
-#     live opencode TUI when it is hosted (capture-readiness-grid.sh).
+#     ctx7 `opencode`); the blocked markers mirror the reference's. The working
+#     and idle markers are pinned against a live 1.18.33 TUI.
 #
 # State vocabulary + arbitration (same contract as codex.toml):
 #   permission_required (300, blocked) > interrupt_hint (110) > progress_bar (100)
+#   > composer_footer (10, idle)
 
 min_engine_version = 1
 
@@ -72,3 +70,16 @@ state = "working"
 priority = 100
 region = "whole_recent"
 gate = { regex = '(■|⬝){4,}' }
+
+# The composer footer. Live 1.18.33, 2026-10-31: the home screen and a session
+# both paint `ctrl+p commands` under the composer, and a busy session paints it
+# beside `esc interrupt`, so the working rules must outrank this one. The blank
+# frame before first paint matches nothing: bytes typed then are lost, measured
+# with a slow start that took 13s to paint. The home screen prints a tip, a
+# shortcut hint and a path line below the footer, so three lines miss it.
+[[rule]]
+id = "composer_footer"
+state = "idle"
+priority = 10
+region = "bottom_non_empty_lines(5)"
+gate = { contains = "ctrl+p" }

@@ -136,6 +136,7 @@ pub fn dispatch(rest: &[String]) -> i32 {
         Some("retract") => run_retract(&rest[1..], &cwd),
         Some("identity") => run_identity(),
         Some("event-context" | "observed-model") => event_context::run(rest),
+        Some("resolve-transcript") => crate::transcript_resolve::run(&rest[1..]),
         _ => {
             eprintln!(
                 "usage: fno-agents attest push|pull|retract|identity [--repo <slug>]  (push reads one envelope line on stdin)"

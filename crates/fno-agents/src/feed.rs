@@ -733,7 +733,8 @@ pub fn project(
                 | "fno_update_installed"
                 | "fno_update_failed"
                 | "mail_escalation"
-                | "main_ci_changed"),
+                | "main_ci_changed"
+                | "agent_corrected"),
             ) => k,
             _ => continue,
         };
@@ -742,6 +743,32 @@ pub fn project(
             continue;
         };
         match kind {
+            "agent_corrected" => {
+                let by = s_field(data, "corrected_by").unwrap_or_default();
+                let what = s_field(data, "kind").unwrap_or_default();
+                let quote = s_field(data, "quote").unwrap_or_default();
+                let reading = |key: &str| {
+                    data.get(key)
+                        .and_then(|r| r.get("value"))
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                };
+                rows.push(FeedRow {
+                    ts,
+                    kind: match by.as_str() {
+                        "user" => "agent_corrected".into(),
+                        other => format!("agent_corrected_{other}"),
+                    },
+                    node: reading("node"),
+                    session_id: s_field(data, "session_id").filter(|s| is_session_handle(s)),
+                    harness: s_field(data, "harness"),
+                    model: reading("model"),
+                    effort: reading("effort"),
+                    r#ref: s_field(data, "correction_id"),
+                    title: format!("{by} {what}: {}", one_line(&quote)),
+                    ..FeedRow::default()
+                });
+            }
             "main_ci_changed" => {
                 let state = s_field(data, "state").unwrap_or_default();
                 let sha = s_field(data, "sha").unwrap_or_default();
@@ -1330,6 +1357,7 @@ pub(crate) fn filter_rows(
                 .filter(|n| !n.is_empty())
                 .is_none_or(|n| r.node.as_deref().is_some_and(|v| in_set(v, &n)))
         })
+        .filter(|r| pre.kind.is_some() || !r.kind.starts_with("agent_corrected_"))
         .filter(|r| {
             pre.kind
                 .as_deref()
@@ -1423,6 +1451,9 @@ pub(crate) fn area_of(kind: &str) -> &'static str {
         "session_spawned"
         | "session_spawn_refused"
         | "session_reaped"
+        | "agent_corrected"
+        | "agent_corrected_agent"
+        | "agent_corrected_machine"
         | "worker_stalled"
         | "help_emitted"
         | "team_granted"
@@ -1461,6 +1492,9 @@ pub(crate) const MAIN_KINDS: &[&str] = &[
     "update_started",
     "update_finished",
     "main_ci_changed",
+    "agent_corrected",
+    "agent_corrected_agent",
+    "agent_corrected_machine",
 ];
 pub(crate) const SPAWN_KINDS: &[&str] = &["session_spawned", "session_spawn_refused"];
 pub(crate) const CLOSE_KINDS: &[&str] = &[
@@ -1677,6 +1711,32 @@ fn team_journals(home: &AgentsHome) -> String {
     raw
 }
 
+/// How far back the feed reads corrections. Machine rows run about 640 a day
+/// and the default view drops them, so an unbounded read would parse months of
+/// rows on every foreground call to show a few.
+const CORRECTION_WINDOW_S: u64 = 7 * 86_400;
+
+fn corrections_text(
+    path: &std::path::Path,
+    since_epoch: Option<u64>,
+    until_epoch: Option<u64>,
+) -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let floor = now.saturating_sub(CORRECTION_WINDOW_S);
+    crate::event_store::journal_text_checked(
+        path,
+        &crate::event_store::EventQuery {
+            since_ms: Some(since_epoch.unwrap_or(floor).max(floor) as i64 * 1000),
+            until_ms: until_epoch.map(|u| u as i64 * 1000),
+            ..crate::event_store::EventQuery::of_types(&["agent_corrected"])
+        },
+    )
+    .unwrap_or_default()
+}
+
 /// The main store's typed read for the coverage kinds. `events.jsonl` routes
 /// to db/events.db, the durable store; a store neither present nor readable
 /// notes its skip once and yields no rows (AC7-EDGE).
@@ -1713,7 +1773,13 @@ fn main_store_journal(
             ])
         },
     ) {
-        Ok(text) => (format!("{text}\n{mail}"), None),
+        Ok(text) => (
+            format!(
+                "{text}\n{mail}\n{}",
+                corrections_text(&path, since_epoch, until_epoch)
+            ),
+            None,
+        ),
         Err(e) => (mail, Some(format!("main store skipped ({e})"))),
     }
 }

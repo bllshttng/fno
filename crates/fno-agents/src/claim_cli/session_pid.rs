@@ -1,7 +1,6 @@
 //! The `claim session-pid` leaf, ported verbatim from
 //! `claim_commands.rs::run_claim_session_pid` (wave 7 of the leaf port): the
-//! one resolver of the durable pid arm. The Python side (`session_pid.py`,
-//! the init hook) reads THIS command; `durable_session_pid` calls the same
+//! one resolver of the durable pid arm. The init hook reads THIS command; `durable_session_pid` calls the same
 //! resolution in-process, so there is one producer and no subprocess behind
 //! the mutex. Contract matches the retired Python command byte for byte: the
 //! pid on stdout, nothing at all when uncapturable, always exit 0 - so
@@ -19,6 +18,11 @@ pub fn run(args: &[String]) -> i32 {
                 None => return 2,
             },
             "--json" | "-J" => json = true,
+            // A separate read: the --json shape is a frozen contract.
+            "--no-harness-ancestor" => {
+                println!("{}", crate::spawn_context::walk_finds_no_harness_ambient());
+                return 0;
+            }
             other => {
                 eprintln!("fno-agents: claim session-pid: unknown flag {other}");
                 return 2;

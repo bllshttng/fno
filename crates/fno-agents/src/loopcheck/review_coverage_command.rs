@@ -276,6 +276,7 @@ pub(super) fn decide_review_coverage(args: &[String]) -> (i32, String) {
                 let data = coverage_event_data(
                     pr_num,
                     &CoverageReport {
+                        fail_at_head: false,
                         github_approval_satisfies: false,
                         coverage: Coverage::Unknown,
                         verdicts: Vec::new(),

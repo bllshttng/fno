@@ -357,7 +357,7 @@ event_types:
           description: "Human-readable provenance on a settle row: why the row exists (the invocation died unanswered) and that no review ran. Present only on output_contract lost."
         model:
           type: string
-          description: "The model that ANSWERED, read from the attesting session's own transcript at emit via observed_model_for_session (cli/src/fno/provenance/observed.py, the platform provenance leaf) - claude's assistant message.model rows with synthetic notices skipped, codex's turn_context.payload.model. Stamped by the emit chokepoint (fno doctor event emit), never supplied by the caller: a --data value disagreeing with the transcript is refused, the same rule attester_session_id follows and for the same reason. Empty means NOT OBSERVABLE (no ambient harness, unreadable transcript, no model row yet), never proof of the primary model. This field used to record ANTHROPIC_MODEL - the model the session ASKED for - which a dedicated node measured naming a model that did not answer on four sessions in one day, because a non-Anthropic name over an unset base URL silently falls back to the primary Anthropic model. Events emitted before this change may carry that claim or the literal `unobserved` (a claim made and refused); both are legacy values a reader must not treat as an observation. Not read by loop-check; this is the audit trail a capability floor would need."
+          description: "The model that ANSWERED, read from the attesting session's own transcript at emit via the native observed-model read (crates/fno-agents/src/event_context.rs) - claude's assistant message.model rows with synthetic notices skipped, codex's turn_context.payload.model. Stamped by the emit chokepoint (fno doctor event emit), never supplied by the caller: a --data value disagreeing with the transcript is refused, the same rule attester_session_id follows and for the same reason. Empty means NOT OBSERVABLE (no ambient harness, unreadable transcript, no model row yet), never proof of the primary model. This field used to record ANTHROPIC_MODEL - the model the session ASKED for - which a dedicated node measured naming a model that did not answer on four sessions in one day, because a non-Anthropic name over an unset base URL silently falls back to the primary Anthropic model. Events emitted before this change may carry that claim or the literal `unobserved` (a claim made and refused); both are legacy values a reader must not treat as an observation. Not read by loop-check; this is the audit trail a capability floor would need."
         provider:
           type: string
           description: "The endpoint host the attesting session was pointed at (host only, derived from ANTHROPIC_BASE_URL at emit; scheme, path, and any userinfo are stripped so no key material lands here). Empty means not observable from the environment - the default Anthropic endpoint, or a lane that does not route via env. Same best-effort caveat as model."
@@ -558,8 +558,11 @@ event_types:
           description: "The WORD is the gate: `covered` means the review obligation is satisfied (the chain tiles with no open finding, or the configured rounds are spent), and every consumer keys on this string, never on the count beside it. `uncovered` is a real, known zero below the cap; `unknown` means the review read failed and no local evidence confirmed a review (fail closed for autonomy, honest in the receipt). A covered row CAN carry passed_count 0: a spent budget discharges the obligation whatever the rounds concluded."
         review_state:
           type: string
-          enum: [reviewed, unreviewed, reviewer_refused]
-          description: "Known review outcome when the evidence read succeeded. reviewed wins when any current non-human verdict counts; otherwise reviewer_refused wins when a configured reviewer refused; otherwise unreviewed. Omitted when coverage is unknown so transport failure never becomes a known review outcome."
+          enum: [reviewed, unreviewed, reviewer_refused, findings_open]
+          description: "Known review outcome when the evidence read succeeded. reviewed wins when any current non-human verdict counts; otherwise reviewer_refused wins when a configured reviewer refused; otherwise findings_open when a fail round still describes the head; otherwise unreviewed. Omitted when coverage is unknown so transport failure never becomes a known review outcome."
+        fail_at_head:
+          type: boolean
+          description: "True when a reviewer's latest attestation concluded fail and still describes this head. Absent means false."
         reviewed_count:
           type: integer
           description: "Count of reviewed verdicts EXCLUDING human approvals (whether a human approval counts is the operator's deferred call; lean exclude). A verdict counts only while its freshness is not `stale`. A review that concluded FAIL counts here too: the reviewer read the head, and the round-cap ruling counts the round whatever it concluded. Present on every row, unknown included - the coverage word can be unmeasured while the review count is not."
@@ -1240,7 +1243,7 @@ event_types:
     consumers: [operator]
 
   - name: backlog_refused_flush
-    description: "A shared-backlog flush the primary refused. The take-back covers only the nodes the refusal named (the whole batch when the refusal names no node, as with a global table or a failed request): the primary's copy comes back for those nodes' rows, every other change in the batch re-queues for the next flush, and an INSERT the take-back covers keeps its local row. The refused statements are kept in the replica's backlog_refused table for retry or inspection, and the same facts are on stderr. Emitted after the take-back transaction commits, so the event never lands without the retention."
+    description: "A shared-backlog flush the primary refused. The take-back covers only the nodes the refusal named (the whole batch when the refusal names no node, as with a global table or a failed request): the primary's copy comes back for those nodes' rows, every other change in the batch re-queues for the next flush, and an INSERT the take-back covers keeps its local row. The refused statements are kept in the replica's backlog_refused table for inspection; the cap keeps the newest batch and trims older ones, announced on stderr and by backlog_refused_trimmed. The same facts are on stderr. Emitted after the take-back transaction commits, so the event never lands without the retention."
     sources: [daemon]
     data:
       required: [nodes, tables, batch, error]
@@ -1257,6 +1260,40 @@ event_types:
         error:
           type: string
           description: "The primary's refusal text."
+    consumers: [operator]
+
+  - name: backlog_refused_trimmed
+    sources: [daemon]
+    description: "The replica's backlog_refused dead-letter cap trimmed older batches. Nothing replayable is lost: a refused batch's statements are the take-back's already-reverted rows and the writes that were still valid re-queued, and no reader re-sends a refused batch. The cap keeps the newest batch. Emitted after the trim commits; stderr names the same ids."
+    data:
+      required: [dropped_ids, dropped_batches, kept]
+      properties:
+        dropped_ids:
+          type: array
+          description: "The trimmed backlog_refused row ids."
+        dropped_batches:
+          type: array
+          description: "The same rows as '<id> (<batch>)' strings."
+        kept:
+          type: integer
+          description: "Batches the cap keeps (the newest one)."
+    consumers: [operator]
+
+  - name: page_relief_done
+    description: "The daemon's freed-page return arm ran malloc_zone_pressure_relief: resident size the kernel reported before and after, and how many malloc zones the pass relieved. Fires at most once a minute and only above the 160 MB resident threshold, so a quiet daemon never emits it."
+    sources: [daemon]
+    data:
+      required: [rss_kb_before, rss_kb_after, zones]
+      properties:
+        rss_kb_before:
+          type: integer
+          description: "Resident size in KB before the relief pass."
+        rss_kb_after:
+          type: integer
+          description: "Resident size in KB after the relief pass."
+        zones:
+          type: integer
+          description: "Malloc zones the pass relieved."
     consumers: [operator]
 
   - name: backlog_done_forced
@@ -1879,7 +1916,7 @@ event_types:
 
   - name: session_satisfied
     description: "Signals that a target session's work is complete; alternative to <promise> tag emission. The stop hook scans for these and may auto-release the Stop hook when a fresh event matches the current session and the three-factor gates are still satisfied. Data.source is the constrained subsystem that produced the signal (check_pr, pr_merge, ci_watcher, fno_gate_manual, delegated); envelope source is the producer identity."
-    # 'backlog' added: cli/src/fno/graph/_reconcile.py's
+    # 'backlog' added: backlog reconcile's
     # emit_session_satisfied_for_record stamps envelope source "backlog" for
     # the post-merge reconcile path (trigger=pr_merge), a real live producer
     # the earlier declaration missed. 'daemon' added: the native twin
@@ -3615,7 +3652,7 @@ event_types:
           type: string
         blocker:
           type: string
-          enum: [ci, review, merge_slot, merge_hold, local, unknown]
+          enum: [ci, review, merge_slot, merge_hold, outside_hold, local, unknown]
         task_id:
           type: [string, "null"]
         expires_at_ms:
@@ -4850,7 +4887,7 @@ event_types:
           description: "Optional. Executed evidence rows (cmd, exit code, output head) backing a code fact the ruling asserts. Listed by the reader projection before this declaration existed; declared here so the schema and the projection agree."
         scope:
           type: string
-          description: "Optional. Who the law governs: `global`, or `project:<slug>`. A row with no scope reads as project:fno, because every row recorded before this field existed was recorded in fno. The law door stamps the recording session's project by default; widening to global is an explicit --global, because law is never inherited by silence. Readers filter to global plus the session's project and fail open with a named reason when the project cannot be resolved."
+          description: "Optional. Who the law governs: `global`, `project:<slug>`, `machine:<id>` or `person:<name>`. A row with no scope reads as project:fno, because every row recorded before this field existed was recorded in fno. The law door stamps the recording session's project by default; widening is an explicit --global, --machine or --person, because law is never inherited by silence. A global law, or one naming another machine or person, needs a stated fleet.owner. Readers filter to global plus the session's project, machine id and person, and fail open with a named reason when the project cannot be resolved."
         paths:
           type: array
           description: "Optional. Repo-relative globs. A live law with paths becomes a pre-tool rule on Edit and Write of a matching file, printed once per session (hooks/rules-dispatch.sh)."
@@ -5411,8 +5448,8 @@ event_types:
           description: "PR number the tag names, or null when the tag names no positive PR number (a local run carries no pr)."
         blocker:
           type: string
-          enum: [ci, review, merge_slot, merge_hold, local, unknown]
-          description: "The blocker being waited on, taken from the <watching> tag's reason: 'ci' (checks pending or a cancelled run awaiting its rerun), 'review' (a bot review outstanding), 'merge_slot' (waiting for a merge slot), 'merge_hold' (a recorded merge freeze), 'local' (a run on this machine: a test suite, a build, a review fork), or 'unknown' (any other reason; the idle verifies nothing)."
+          enum: [ci, review, merge_slot, merge_hold, outside_hold, local, unknown]
+          description: "The blocker being waited on, taken from the <watching> tag's reason: 'ci' (checks pending or a cancelled run awaiting its rerun), 'review' (a bot review outstanding), 'merge_slot' (waiting for a merge slot), 'merge_hold' (a recorded merge freeze), 'outside_hold' (an outside hold: an install-channel row freed by an external deploy), 'local' (a run on this machine: a test suite, a build, a review fork), or 'unknown' (any other reason; the idle verifies nothing)."
         task_id:
           type: [string, "null"]
           description: "Harness task identifier from the <watching> tag, or null when the tag does not name one. Missing ids remain visible and are never guessed."
@@ -8696,6 +8733,10 @@ event_types:
     description: "The user's look cleared at the head, so the look_hold arm reran the runs it had cancelled there."
     sources: [daemon]
     data: {required: [slug, pr, sha, runs]}
+  - name: ci_wait_cancel
+    description: "A wait or cadence red-cancel of a head's runs still in flight: the failing checks that caused the red verdict, the head, the PR, and each run's cancel result."
+    sources: [rust, daemon]
+    data: {required: [slug, pr, head, cause, runs]}
   - name: merge_queue_entry
     description: "authorized_merge queued a PR head in place of merging it, because merge_queue.enabled is on. The merge queue arm lands it in a batch tested on main."
     sources: [daemon, rust]
@@ -8848,6 +8889,24 @@ event_types:
         run:
           type: object
           description: "The row as written, keyed by fno_id or session_id."
+    consumers: [operator]
+  - name: run_imported
+    retention: durable
+    description: "One ledger history row imported once: a ledger.json row no run_recorded carrier covers, moved into the store at this machine's import day. The row rides as written, so reconcile-backstop rows keep their node and PR join with cost_usd null."
+    sources: [migration]
+    data:
+      required: [run]
+      properties:
+        run:
+          type: object
+          description: "The imported row as written, keyed by fno_id, session_id, or the backstop's node and PR."
+    consumers: [operator]
+  - name: run_history_imported
+    retention: durable
+    description: "The ledger history import ran once for this machine: the imported row count, the earliest run start the import covers, and the import time. Readers that show history name the earliest start as the day history begins; a second import run refuses on this row."
+    sources: [migration]
+    data:
+      required: [count, earliest_started, imported_at]
     consumers: [operator]
   - name: session_finalized
     description: "Every finalize sub-step succeeded: the terminal event naming the termination reason, the ship receipt, and the auto-merge posture."
@@ -9073,8 +9132,163 @@ event_types:
           type: string
           description: "Refusal or failure reason, one line; present when outcome is not ok."
     consumers: [operator]
-# Size cap per Failure Modes (Boundaries): the system rejects events whose
-# data payload exceeds 64KB. Validators enforce this at validate() time.
+
+  - name: agent_corrected
+    retention: durable
+    description: "One correction of a working agent, detected off-loop from the transcripts and written by the daemon's correction arm. corrected_by names the corrector: user (a typed turn), agent (another agent's mail or bus row, verified always false: the corrector can be wrong), or machine (a gate refusal). Reports keep the three apart and never print a total across them. Every harness fact rides as a served reading {value, measured_at, basis} or {value: null, basis: unmeasured, reason}; a missing fact reads unmeasured, never a guess. The quote is scrubbed (secret shapes masked) and dropped whole on a residual match."
+    sources: [daemon, test]
+    data:
+      required: [correction_id, corrected_by, kind, session_id, rule_version]
+      properties:
+        correction_id:
+          type: string
+          description: "Stable id: `corr:` plus the corpus row_id keyed on session, turn and kind. A replay is ignored by the store's idempotent append."
+        corrected_by:
+          type: string
+          enum: [user, agent, machine]
+          description: "Who corrected. Kept apart in every report; interrupts are their own kind, not a separate source."
+        kind:
+          type: string
+          enum: [correct, reject, interrupt, refused]
+          description: "correct = the corrector redirected or disagreed; reject = a tool call refused by the user; interrupt = the user stopped the agent mid-action; refused = a gate refused the act (machine only)."
+        session_id:
+          type: string
+          description: "The corrected agent's harness session id."
+        rule_version:
+          type: string
+          description: "Detector rule version; rates compare only within one version."
+        confidence:
+          type: string
+          enum: [above_floor, below_floor]
+          description: "This source's measured precision against the floor. A reader that needs trusted rows skips below_floor."
+        turn:
+          type: string
+          description: "Turn identifier in the transcript (uuid or line key)."
+        ts_turn:
+          type: string
+          description: "RFC3339 stamp of the corrected turn itself, so a backfilled detection still carries the true moment."
+        harness:
+          type: [string, "null"]
+          description: "The corrected agent's harness axis (claude, codex, opencode, pi, footnote, agy)."
+        seat:
+          type: object
+          description: "The corrected session's seat as a served reading: lead:L<n>, lead with no rung known, or worker. Absent on rows older than the stamp; a correction_seat row carries those."
+        model:
+          type: object
+          description: "The corrected agent's model, as a served reading beside measured_at and basis."
+        effort:
+          type: object
+          description: "The corrected agent's effort axis; unmeasured on footnote and agy."
+        provider:
+          type: object
+          description: "The corrected agent's provider axis; derived from the model where the transcript names none."
+        account:
+          type: object
+          description: "Registry launch account at detect time."
+        harness_version:
+          type: object
+          description: "The harness binary's version, where the transcript names one."
+        fno_version:
+          type: object
+          description: "The fno binary version at detect time."
+        node:
+          type: object
+          description: "Node the session worked; branch-name fallback carries basis: branch."
+        pr:
+          type: object
+          description: "PR the session had open, from the graph, as a served reading."
+        head_sha:
+          type: object
+          description: "Transcript cwd's head at detect time, as a served reading."
+        active_skill:
+          type: [string, "null"]
+          description: "The last skill the session invoked before this turn."
+        corrected_by_session:
+          type: [string, "null"]
+          description: "agent rows: the sender session from the bus row, when the bus row names one."
+        refusal_class:
+          type: string
+          description: "machine rows: the error class (hook_blocked, permission_denied)."
+        skills_loaded:
+          type: array
+          description: "Skills the session loaded: Skill tool calls and command invocations, in order, newest last."
+          items: { type: string }
+        skills_referenced:
+          type: array
+          description: "Skill references opened past SKILL.md: Read/Grep calls into a loaded skill's references/."
+          items: { type: string }
+        subagents:
+          type: array
+          description: "Child sessions the corrected agent spawned (names when the registry knows them)."
+          items: { type: string }
+        quote:
+          type: [string, "null"]
+          description: "The correcting text, scrubbed, capped at 280 chars; null when a secret shape survived the scrub."
+        quote_status:
+          type: string
+          enum: [kept, dropped]
+          description: "dropped = the scrub found a residual secret shape and removed the quote; the row still lands."
+        typed:
+          type: string
+          enum: [witnessed, unwitnessed]
+          description: "user rows only: whether a submit witness bound the typed turn."
+        verified:
+          type: boolean
+          description: "agent rows only, always false: the corrector can be wrong."
+        after_question:
+          type: boolean
+          description: "The corrected assistant turn ended in a question; a bare `no` after one is an answer, not a correction."
+        corrected_by_model:
+          type: object
+          description: "agent rows: the corrector's own model, as a served reading."
+        corrected_by_harness:
+          type: object
+          description: "agent rows: the corrector's harness."
+        reason:
+          type: string
+          description: "machine rows: the guard's first line, scrubbed."
+        backfilled:
+          type: boolean
+          description: "The turn predates the arm's first run; registry and detect-time facts read unmeasured."
+        source_file:
+          type: string
+          description: "Transcript path the fold read (store-qualified for sqlite-backed sources)."
+    consumers: [fno doctor event corrections, fno agents fleet feed]
+
+  - name: correction_outcome
+    retention: durable
+    description: "The settled outcome of one agent_corrected row, appended at most once per settled row by the daemon's hourly outcome pass. The store is append-only, so outcome is its own event keyed by correction_id. held is weak evidence: a merge shows nothing broke, never that the corrector was right."
+    sources: [daemon, test]
+    data:
+      required: [correction_id, outcome, basis]
+      properties:
+        correction_id:
+          type: string
+          description: "The agent_corrected row this outcome settles."
+        outcome:
+          type: string
+          enum: [held, overruled, unresolved]
+          description: "held = the node merged after the correction with no overrule; overruled = a later correction, a retraction, or a decision_span names the same window; unresolved = no merge after 14 days."
+        basis:
+          type: string
+          description: "What decided the outcome (merged, retraction, decision_span, age)."
+    consumers: [fno doctor event corrections]
+
+  - name: correction_seat
+    retention: durable
+    description: "The seat of one agent_corrected row written before the fold stamped one, appended at most once per row by the daemon's hourly pass. The store is append-only, so the seat rides as its own row. An unmeasured session writes none."
+    sources: [daemon, test]
+    data:
+      required: [correction_id, seat]
+      properties:
+        correction_id:
+          type: string
+          description: "The agent_corrected row this seat belongs to."
+        seat:
+          type: object
+          description: "The session's seat as a served reading: lead:L<n>, lead with no rung known, or worker."
+    consumers: [fno doctor event corrections]
+
 limits:
   max_data_bytes: 65536
   data_size_encoding: compact-json-ascii-v1

@@ -30,13 +30,15 @@
     "an arm under 20 graded attempts is underpowered and fires no rule alone"
   ],
   "prices": {
+    "claude-opus-5-5": {"input_per_m": 4, "output_per_m": 20, "cache_read_per_m": 0.2, "cache_write_per_m": 5},
+    "claude-opus-5-5[1m]": {"input_per_m": 4, "output_per_m": 20, "cache_read_per_m": 0.2, "cache_write_per_m": 5},
     "glm-5.3-flash": {"input_per_m": 0.15, "output_per_m": 0.5, "cache_read_per_m": 0.03, "cache_write_per_m": 0.15},
     "glm-5.3-flash[1m]": {"input_per_m": 0.15, "output_per_m": 0.5, "cache_read_per_m": 0.03, "cache_write_per_m": 0.15},
     "GLM-5.3-Flash": {"input_per_m": 0.15, "output_per_m": 0.5, "cache_read_per_m": 0.03, "cache_write_per_m": 0.15},
     "zai/glm-5.3-flash": {"input_per_m": 0.15, "output_per_m": 0.5, "cache_read_per_m": 0.03, "cache_write_per_m": 0.15},
     "zai-coding-plan/glm-5.3-flash": {"input_per_m": 0.15, "output_per_m": 0.5, "cache_read_per_m": 0.03, "cache_write_per_m": 0.15}
   },
-  "prices_note": "GLM-5.3-Flash list price from the z.ai pricing page, read 2026-09-29: input 0.15, cached input 0.03, output 0.50 USD per 1M tokens. z.ai lists no cache-write charge and bills written tokens as input, so cache write is 0.15. The report prices by the exact model string, so every string an arm can report carries the same rates. An unlisted string reads unmeasured.",
+  "prices_note": "GLM-5.3-Flash list price from the z.ai pricing page, read 2026-09-29: input 0.15, cached input 0.03, output 0.50 USD per 1M tokens. z.ai lists no cache-write charge and bills written tokens as input, so cache write is 0.15. The report prices by the exact model string, so every string an arm can report carries the same rates. An unlisted string reads unmeasured. claude-opus-5-5 rates from the models.dev catalog cache, read 2026-11-01.",
   "amendment_1": {
     "declared_at": "2026-09-29T20:05:00Z",
     "run0_repeats": 1,

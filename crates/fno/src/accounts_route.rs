@@ -1,6 +1,6 @@
-//! `fno config accounts <command>`: the account commands `fno-agents spawn-overlay accounts`
-//! answers natively. A command not listed here still forwards to the Python
-//! group until its own port lands.
+//! `fno config accounts <command>`: every spelling lands on
+//! `fno-agents spawn-overlay accounts`, which answers the commands below, the
+//! bare group and `--help` with its usage, and refuses an unknown word by name.
 
 use std::ffi::OsString;
 
@@ -23,16 +23,11 @@ pub const NATIVE_ACCOUNTS_COMMANDS: &[&str] = &[
     "required-bot-check",
 ];
 
-/// `fno config accounts <command> ...` for a native command: the args from the
-/// command on, ready for `fno-agents spawn-overlay accounts`.
+/// `fno config accounts ...`: the args from the command on, ready for
+/// `fno-agents spawn-overlay accounts`.
 pub fn classify(args: &[OsString]) -> Option<Vec<OsString>> {
     let word = |i: usize| args.get(i).and_then(|a| a.to_str());
-    if word(0) != Some("config") || word(1) != Some("accounts") {
-        return None;
-    }
-    NATIVE_ACCOUNTS_COMMANDS
-        .contains(&word(2)?)
-        .then(|| args[2..].to_vec())
+    (word(0) == Some("config") && word(1) == Some("accounts")).then(|| args[2..].to_vec())
 }
 
 #[cfg(test)]
@@ -44,7 +39,7 @@ mod tests {
     }
 
     #[test]
-    fn classifies_native_account_commands_only() {
+    fn classifies_every_config_accounts_spelling() {
         let rest = classify(&oss(&[
             "config",
             "accounts",
@@ -81,7 +76,15 @@ mod tests {
         assert_eq!(rest, oss(&["use", "alt", "--scope", "global"]));
         let rest = classify(&oss(&["config", "accounts", "benchmarks", "show"])).unwrap();
         assert_eq!(rest, oss(&["benchmarks", "show"]));
-        assert_eq!(classify(&oss(&["config", "accounts"])), None);
+        assert_eq!(classify(&oss(&["config", "accounts"])), Some(vec![]));
+        assert_eq!(
+            classify(&oss(&["config", "accounts", "--help"])),
+            Some(oss(&["--help"]))
+        );
+        assert_eq!(
+            classify(&oss(&["config", "accounts", "bogus"])),
+            Some(oss(&["bogus"]))
+        );
         assert_eq!(classify(&oss(&["config", "paths", "show"])), None);
     }
 }

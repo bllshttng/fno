@@ -23,6 +23,7 @@ pub mod calibration_cli;
 pub mod capture;
 pub mod carveout;
 pub mod cli;
+pub(crate) mod closed_unmerged;
 pub(crate) mod closures;
 pub mod collision;
 pub mod commands;
@@ -35,6 +36,7 @@ pub mod decisions_cli;
 pub mod decompose;
 pub mod dispatch_resolve;
 pub mod done_evidence;
+pub mod done_rich;
 pub(crate) mod drift_emit;
 pub(crate) mod drift_scan;
 pub mod edges;
@@ -59,12 +61,14 @@ pub(crate) mod merge_state;
 pub mod migrations;
 pub mod model;
 pub mod next;
+pub mod node_match;
 pub mod node_ref;
 pub mod node_state;
 pub mod nodes;
 pub mod note_cli;
 pub mod note_history;
 pub mod note_migrate;
+pub mod note_public;
 pub mod note_stale;
 pub mod orphan_plans;
 pub mod patch;
@@ -72,6 +76,7 @@ pub mod pr_link;
 pub mod projections;
 pub(crate) mod promise;
 pub mod provenance_cli;
+pub mod provenance_read;
 pub mod publish;
 pub mod pull_requests;
 pub mod quota_route;
@@ -86,6 +91,7 @@ pub mod requests;
 pub mod schema_v4;
 pub mod scorecard;
 pub mod scorecard_router;
+pub mod script_door;
 pub mod search;
 pub mod session_cli;
 pub mod sessions;
@@ -96,6 +102,7 @@ pub(crate) mod supersession;
 pub mod target_binding;
 pub mod task;
 pub mod title_gate;
+pub mod tombstones;
 pub(crate) mod trace;
 pub mod triage;
 pub mod triage_cli;
@@ -103,6 +110,7 @@ pub mod triage_health;
 pub mod undispatched;
 pub mod update_cli;
 pub mod update_ops;
+pub mod wave_notes;
 pub mod worked;
 pub mod workflows;
 
@@ -1910,7 +1918,8 @@ pub fn export_status(graph: &Path) -> Result<String, String> {
 }
 
 /// At most one `graph.db.<stamp>` snapshot per hour in `backups/`, keeping
-/// the newest [`crate::graph_store::GRAPH_BACKUP_KEEP`]. VACUUM INTO also
+/// the newest [`crate::graph_store::GRAPH_BACKUP_KEEP`] with the whole pile
+/// under [`crate::graph_store::GRAPH_BACKUP_MAX_BYTES`]. VACUUM INTO also
 /// compacts; its target must not
 /// exist, so the microsecond stamp names it. The hour gate lives in
 /// `graph_meta.last_snapshot_ms`, not file mtimes, so a moved or inspected
