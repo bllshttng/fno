@@ -251,6 +251,8 @@ detect_provider() {
     echo "gemini"
   elif [[ "${OPENCODE_SESSION_ID:-}" == *[![:space:]]* ]]; then
     echo "opencode"
+  elif [[ "${PI_SESSION_ID:-}" == *[![:space:]]* ]]; then
+    echo "pi"
   elif [[ -n "${CODEX_PLUGIN_ROOT:-}" ]]; then
     echo "codex"
   elif [[ -n "${GEMINI_PROJECT_DIR:-}" ]]; then
@@ -806,7 +808,8 @@ if [[ -f "$STATE_FILE" ]] && is_valid_state_file; then
       "claude_session_id:${TARGET_TRANSCRIPT_ID:-${CLAUDE_CODE_SESSION_ID:-}}" \
       "codex_thread_id:${CODEX_THREAD_ID:-}" \
       "harness_session_id:${GEMINI_SESSION_ID:-}" \
-      "harness_session_id:${OPENCODE_SESSION_ID:-}"; do
+      "harness_session_id:${OPENCODE_SESSION_ID:-}" \
+      "harness_session_id:${PI_SESSION_ID:-}"; do
       _fm_field="${_fm_pair%%:*}"
       _fm_env="${_fm_pair#*:}"
       if [[ -n "$_fm_env" ]]; then
@@ -829,7 +832,7 @@ if [[ -f "$STATE_FILE" ]] && is_valid_state_file; then
     _FM_OURS=1
   fi
   if [[ -z "$_FM_OURS" ]]; then
-    _FM_CUR_HARNESS="${CLAUDE_CODE_SESSION_ID:-${CODEX_THREAD_ID:-${GEMINI_SESSION_ID:-${OPENCODE_SESSION_ID:-<none proven>}}}}"
+    _FM_CUR_HARNESS="${CLAUDE_CODE_SESSION_ID:-${CODEX_THREAD_ID:-${GEMINI_SESSION_ID:-${OPENCODE_SESSION_ID:-${PI_SESSION_ID:-<none proven>}}}}}"
     {
       echo "[init-target-state] REFUSED: foreign session manifest at $STATE_FILE."
       if [[ -n "$_FM_FNO_ID" ]]; then
@@ -1082,6 +1085,7 @@ if [[ ! -f "$STATE_FILE" ]]; then
     { [[ "${CLAUDE_CODE_SESSION_ID:-}" == *[![:space:]]* ]] || [[ "${CLAUDECODE_SESSION_ID:-}" == *[![:space:]]* ]]; } && _failopen_families=$((_failopen_families+1))
     [[ "${GEMINI_SESSION_ID:-}" == *[![:space:]]* ]] && _failopen_families=$((_failopen_families+1))
     [[ "${OPENCODE_SESSION_ID:-}" == *[![:space:]]* ]] && _failopen_families=$((_failopen_families+1))
+    [[ "${PI_SESSION_ID:-}" == *[![:space:]]* ]] && _failopen_families=$((_failopen_families+1))
     [[ "${HERMES_SESSION_ID:-}" == *[![:space:]]* ]] && _failopen_families=$((_failopen_families+1))
     if [[ "$_failopen_families" -ge 2 ]]; then
       _OWNED_HARNESS=""     # ambiguous -> manifest/claim "unknown", session null
@@ -1153,6 +1157,8 @@ if [[ ! -f "$STATE_FILE" ]]; then
       _HARNESS_SESSION="$GEMINI_SESSION_ID"
     elif [[ -n "${OPENCODE_SESSION_ID:-}" ]]; then
       _HARNESS_SESSION="$OPENCODE_SESSION_ID"
+    elif [[ -n "${PI_SESSION_ID:-}" ]]; then
+      _HARNESS_SESSION="$PI_SESSION_ID"
     fi
   fi
   _HARNESS_MODEL="${TARGET_HARNESS_MODEL:-${CLAUDE_MODEL:-${ANTHROPIC_MODEL:-}}}"

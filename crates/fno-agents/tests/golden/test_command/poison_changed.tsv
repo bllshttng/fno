@@ -25,5 +25,7 @@ GEMINI_SESSION_ID	fno-poison-session-gemini_session_id
 HERMES_SESSION_ID	fno-poison-session-hermes_session_id
 HOME	{FX}/home
 OPENCODE_SESSION_ID	fno-poison-session-opencode_session_id
+PI_SESSION_FILE	fno-poison-session-pi_session_file
+PI_SESSION_ID	fno-poison-session-pi_session_id
 TARGET_SESSION_ID	fno-poison-session-target_session_id
 USERPROFILE	{FX}/home
