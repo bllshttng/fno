@@ -179,19 +179,21 @@ fn blocked_marker(parent: &str, node: &str) -> Option<PathBuf> {
 }
 
 /// True when the lead already got this exact (parent, node, reason) notice and no
-/// lifting event cleared it. Records the reason when it is new.
+/// lifting event cleared it.
 fn blocked_already_sent(parent: &str, node: &str, reason: &str) -> bool {
+    blocked_marker(parent, node)
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .is_some_and(|seen| seen == reason)
+}
+
+fn blocked_record(parent: &str, node: &str, reason: &str) {
     let Some(path) = blocked_marker(parent, node) else {
-        return false;
+        return;
     };
-    if std::fs::read_to_string(&path).is_ok_and(|seen| seen == reason) {
-        return true;
-    }
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
-    let _ = std::fs::write(&path, reason);
-    false
+    let _ = std::fs::write(path, reason);
 }
 
 fn blocked_lifted(parent: &str, node: &str) {
@@ -213,7 +215,7 @@ fn push(
                 eprintln!(
                     "push: note: blocked notice already sent for this node and reason; skipped"
                 );
-                return true;
+                return false;
             }
         }
     }
@@ -248,6 +250,11 @@ fn push(
             }
             if !err.is_empty() {
                 eprintln!("push: note: {}", err.trim());
+            }
+            if kind == "blocked" {
+                if let Some(node) = node.filter(|v| !v.is_empty()) {
+                    blocked_record(parent, node, reason.unwrap_or(""));
+                }
             }
             true
         }
