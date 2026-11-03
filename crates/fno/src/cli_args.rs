@@ -110,6 +110,8 @@ pub enum MuxCmd {
     /// pane to viewers the driver admits (parse_share_args).
     /// `mux serve --observe --pane <id> [--name <label>]` watches one masked
     /// pane read-only in this terminal, over `ssh -t` (parse_observe_args).
+    /// `mux serve --link <key> [--host <host>]` opens one session live, with
+    /// input, in this terminal; `--host` dials its machine (parse_link_args).
     #[command(disable_help_flag = true)]
     Serve(MuxTail),
     /// `mux web reap [--json]`: the bridge marker's corpse sweep. A bare

@@ -30,3 +30,7 @@ A window smaller than the tab's area shows the top-left part of the tab. Panes c
 A larger window under `smallest` letterboxes: the cells beyond the tab's area show dim dots.
 
 Switching between two windows re-tiles the tab and signals every pane on each switch. There is no debounce, as in tmux.
+
+## A remote link does not resize
+
+A [remote session](mux-remote-sessions.md) opened from another machine is a passive client, so it is not a viewer here and never decides the size. The pty keeps the host's size. A smaller link window crops, and its paint keeps the cursor row in view. A larger one shows the pane at the host's size.

@@ -336,6 +336,7 @@ pub mod ledger_axes;
 pub(crate) mod ledger_register;
 pub(crate) mod ledger_workers;
 mod lifecycle_child;
+pub mod link_dial;
 pub mod lint_registry;
 pub mod list_render;
 pub mod list_row;
