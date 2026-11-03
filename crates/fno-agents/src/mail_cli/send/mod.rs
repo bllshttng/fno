@@ -349,15 +349,6 @@ fn system_arm_inbox_key(name: &str) -> Option<String> {
     Some(format!("{project}.{arm}"))
 }
 
-pub(crate) fn bus_log_path() -> PathBuf {
-    if let Ok(dir) = std::env::var("FNO_BUS_DIR") {
-        if !dir.is_empty() {
-            return PathBuf::from(dir).join("messages.jsonl");
-        }
-    }
-    crate::chats::bus_append_live_path()
-}
-
 /// Python `hashlib.sha256(f"{sender}\0{recipient}")[:16]`.
 fn escalation_pair(sender: &str, recipient: &str) -> String {
     use std::fmt::Write as _;
@@ -769,7 +760,7 @@ fn budget_ledger_path(pair: &str) -> PathBuf {
     for byte in digest.iter().take(8) {
         hex.push_str(&format!("{byte:02x}"));
     }
-    let bus_dir = bus_log_path()
+    let bus_dir = crate::mail_paths::live_bus_log()
         .parent()
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from("."));
@@ -846,7 +837,7 @@ fn budget_store(path: &Path, pair: &str, entries: &[Value]) -> Result<(), String
 /// The newest authored bus envelope addressed
 /// from `recipient` to `sender` since `floor`. `(msg_id, ts)` on a hit.
 fn budget_last_inbound(sender: &str, recipient: &str, floor: f64) -> Option<(String, f64)> {
-    let raw = std::fs::read_to_string(bus_log_path()).ok()?;
+    let raw = std::fs::read_to_string(crate::mail_paths::live_bus_log()).ok()?;
     let mut newest: Option<(String, f64)> = None;
     for line in raw.lines() {
         let line = line.trim();
@@ -1209,7 +1200,7 @@ pub(crate) fn write_durable_thread(
         origin,
         subject,
     );
-    let live = bus_log_path();
+    let live = crate::mail_paths::live_bus_log();
     let chats_dir = crate::chats::chats_dir();
     crate::announce::append_line_open(&live, &row, &chats_dir)
         .map_err(|exc| format!("bus append failed: {exc}"))

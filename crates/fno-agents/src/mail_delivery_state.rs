@@ -225,7 +225,7 @@ pub fn record_state(bus: &std::path::Path, of: &str, state: &DeliveryState, from
 /// [`record_state`] on the bus the mail readers use (`FNO_BUS_DIR`, then
 /// the inbox root, then the state root); no resolvable bus records nothing.
 pub fn record(of: &str, state: &DeliveryState, from: &str, to: &str) {
-    if let Some(bus) = crate::mail_cli::ack::bus_dir() {
+    if let Some(bus) = crate::mail_paths::state_bus_dir_opt() {
         record_state(&bus, of, state, from, to);
     }
 }

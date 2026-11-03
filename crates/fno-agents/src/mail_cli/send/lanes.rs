@@ -11,7 +11,7 @@ use super::*;
 /// One bus row append through the shared announce door, staging and audit
 /// records included.
 pub(super) fn bus_append_row(row: &Value) -> Result<(), String> {
-    let live = bus_log_path();
+    let live = crate::mail_paths::live_bus_log();
     let chats_dir = crate::chats::chats_dir();
     crate::announce::append_line_open(&live, row, &chats_dir)
 }

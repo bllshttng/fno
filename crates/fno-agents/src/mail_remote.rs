@@ -606,7 +606,7 @@ pub(crate) fn mirror_sent_row(
     if let Some(s) = subject.filter(|s| !s.is_empty()) {
         row["subject"] = serde_json::json!(s);
     }
-    let live = crate::mail_cli::send::bus_log_path();
+    let live = crate::mail_paths::live_bus_log();
     let chats_dir = crate::chats::chats_dir();
     if let Err(e) = crate::announce::append_line_open(&live, &row, &chats_dir) {
         eprintln!(

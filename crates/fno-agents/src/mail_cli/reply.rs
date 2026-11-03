@@ -20,7 +20,7 @@
 use serde_json::{json, Value};
 use std::path::PathBuf;
 
-use crate::mail_cli::ack::{bus_dir, load_messages};
+use crate::mail_cli::ack::load_messages;
 use crate::mail_cli::send;
 use crate::mail_cli::send::lanes::{name_lane_send, NameLane, NameLaneArgs};
 use crate::mail_cli::send::resolve::{is_full_session_id, resolve_reachable, ReachResult};
@@ -276,7 +276,7 @@ pub fn run(args: &[String]) -> i32 {
     // Directed-lane routing: look the --to msg-id up on the durable bus and
     // answer name/session/node mail back to its original sender. Anything
     // else falls through to the thread-store reply below.
-    let orig = bus_dir()
+    let orig = crate::mail_paths::state_bus_dir_opt()
         .map(|bus| load_messages(&bus))
         .unwrap_or_default()
         .into_iter()

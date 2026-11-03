@@ -1882,22 +1882,14 @@ fn project_id_from(path: &Path) -> Option<String> {
     }
 }
 
-fn bus_dir() -> Option<PathBuf> {
-    if let Some(dir) = std::env::var_os("FNO_BUS_DIR") {
-        return Some(PathBuf::from(dir));
-    }
-    if let Some(root) = std::env::var_os("FNO_INBOX_ROOT") {
-        return Some(PathBuf::from(root).join(".bus"));
-    }
-    let base = std::env::var_os("HOME")?;
-    Some(PathBuf::from(base).join(".fno").join("bus"))
-}
-
 /// Unread messages for one address after its cursor, the count the drain
 /// would print. Withdrawals, hosted/typed receipts and duplicate ids filter
 /// here, the same choke point every reader of the log shares.
 fn scan_unread_count(name: &str, exclude_from: Option<&[String]>) -> u64 {
-    let Some(bus) = bus_dir() else { return 0 };
+    let Some(base) = std::env::var_os("HOME") else {
+        return 0;
+    };
+    let bus = crate::mail_paths::bus_dir_of(&PathBuf::from(base).join(".fno"));
     let rows = match read_bus_rows(&bus) {
         Ok(rows) => rows,
         Err(_) => return 0,

@@ -71,7 +71,7 @@ pub fn run_sent(args: &[String]) -> i32 {
     };
 
     let home = AgentsHome::from_env();
-    let bus = bus_dir(&home);
+    let bus = crate::mail_paths::state_bus_dir(&home);
     let all = dedupe_last_wins(read_bus(&bus));
     let now = now_secs();
 
@@ -543,12 +543,6 @@ fn inbox_ttl(keys: &[&str], default: i64) -> i64 {
     crate::agents_config::config_lookup(&cwd, keys)
         .and_then(|v| v.as_integer())
         .unwrap_or(default)
-}
-
-fn bus_dir(home: &AgentsHome) -> PathBuf {
-    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let root = crate::agents_config::state_dir(&cwd).unwrap_or_else(|| home.root().to_path_buf());
-    crate::intel::bus_dir_of(&root)
 }
 
 /// Every retained envelope oldest -> newest: the rotated `<live>.<N>`
