@@ -133,7 +133,6 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
 # slack; the checked-in allocation and its reference costs live in
 # scripts/ci/command-collapse-map.tsv.
 COLLAPSE_KEEP: dict[str, set[str]] = {
-    "approvals": set(),
     "config": {"accounts", "get", "set"},
     "do": set(),
     "doctor": set(),
