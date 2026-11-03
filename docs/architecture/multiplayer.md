@@ -16,6 +16,8 @@ Run the primary on a private network such as Tailscale, and never bind it to a L
 
 The claim keys that decide dispatch move: `node:`, `dispatch:`, and `reconcile:` (`SHARED_PREFIXES` in `crates/fno-agents/src/claim_store.rs`). Every statement runs the same SQL on either store, so the local and remote legs cannot drift. Each claim is one conditional statement on the primary, and no decision reads a copy.
 
+Planning holds the node too. A think or a blueprint takes `node:<id>` under the planner holder, `blueprint-session:<session id>`, for its whole run. The key reaches the primary, so a planner seated on another machine sees it. The spawn guard and the planner door refuse a second planner. The refusal names the node's plan doc path, the doc's date, the holder's host, and the next command, `next: /fno:target <node>`. A plan doc inside the freshness window refuses a second think the same way. Past the window the think prints one warning and proceeds. The override doors are `/fno:blueprint <doc>` and `/fno:target <node>`.
+
 Two `gh-budget:` row shapes live there too. `gh-budget:fleet` is the shared GitHub refusal hold, and `gh-budget:poller` is the status poller lease, described in [One GitHub poller](#one-github-poller). On a shared primary both key by the machine's GitHub login (`gh-budget:fleet:<login>`, `gh-budget:poller:<login>`). So two accounts on one primary never share a hold or a lease. The bare forms stay machine-local on a stock install. Neither row decides dispatch.
 
 Every other claim stays local. `build:cargo`, `test:`, `session:`, `worker:` and `flight:` name resources of one machine. A cargo lock shared across machines serializes builds that never touch each other.
