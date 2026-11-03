@@ -213,7 +213,7 @@ pub const PLANNING_COMPLETE_STATUSES: [&str; 5] =
 pub const PLANNING_MOVED_ON_STATUSES: [&str; 2] = ["deferred", "superseded"];
 
 /// The idle grace for a PLANNER row whose planning assignment is finished
-/// (law d-81c6da7e): 20 quiet minutes, not the 900 s every other row takes.
+/// (law d-aecc0fdc): 20 quiet minutes, not the idle hour other fno rows take.
 /// A ruled constant, not a config key: the law fixes the number.
 pub const PLANNING_IDLE_RETIRE_SECS: i64 = 1200;
 
@@ -460,15 +460,16 @@ pub fn gc_decide(row: &GcRow, grace_secs: i64) -> (GcAction, Option<KeepReason>)
             // or (d-81c6da7e) this session wrote the node's plan. A quiet
             // replanning worker inherits no completion an earlier blueprint
             // wrote.
-            // d-81c6da7e: a finished planner's quiet gate is 1200 s, not
-            // the 900 s every other row takes. A released planner skipped
-            // the marker question by ruling, so only its quiet gate is
-            // left.: the lane keeps precedence over the
-            // session-shaped releases below, and an unfinished assignment
-            // holds even when the node's status would free a non-planner.
+            // d-aecc0fdc: a finished planner retires after 20 quiet
+            // minutes. The later idle-hour rule is for rows with no finished
+            // outcome, so it must not stretch this gate. A released planner
+            // skipped the marker question by ruling, so only its quiet gate
+            // is left. The lane keeps precedence over the session-shaped
+            // releases below, and an unfinished assignment holds even when
+            // the node's status would free a non-planner.
             if let Some(assignments) = &row.planning {
                 if row.hold_released {
-                    return spawn_idle_gate(row);
+                    return grace_gate(row, PLANNING_IDLE_RETIRE_SECS);
                 }
                 // An EMPTY status set fails closed: a lane that fires on a
                 // vacuous all() would retire a row the graph could not
@@ -485,7 +486,7 @@ pub fn gc_decide(row: &GcRow, grace_secs: i64) -> (GcAction, Option<KeepReason>)
                         &row.planning_plan_written,
                         row.turn_ended,
                     ) {
-                        None => spawn_idle_gate(row),
+                        None => grace_gate(row, PLANNING_IDLE_RETIRE_SECS),
                         Some((n, s)) => (
                             GcAction::Keep,
                             Some(KeepReason::PlanningUnclosed {
@@ -2477,11 +2478,6 @@ mod tests {
         }
     }
 
-    /// The planning lane (AC3-HP): a blueprint session named on a node that reached
-    /// ready has FINISHED its assignment - the plan was written, the node
-    /// moved on, and THIS session's own blueprint row carries `ended_at`.
-    /// Quiet past the 1200 s planner grace (d-81c6da7e), not the 900 s
-    /// default, retires it without closing the feature or inventing a node.
     /// An adopted row the harness finished: registry status terminal, no
     /// open PR. Stale graph mentions do not pin it. It takes the same grace
     /// gate a spawned row takes instead of keeping forever as a phantom.
@@ -2615,35 +2611,42 @@ mod tests {
         );
     }
 
-    /// The planner lane retires on the same origin-rule clock: a released
-    /// planner past the idle hour retires, and a typed last turn is not a
-    /// keep of its own - the idle clock runs from the last turn of any
-    /// kind.
+    /// A finished planner retires after 20 quiet minutes, not the idle
+    /// hour. The specimen: a `bp-` row with its plan written and its node
+    /// ready sat quiet 1810 s and kept as Active under the hour. A released
+    /// planner takes the same gate.
     #[test]
-    fn a_released_planner_retires_after_the_idle_hour() {
-        let planner = GcRow {
+    fn a_finished_planner_retires_after_twenty_quiet_minutes() {
+        let finished = GcRow {
             work: WorkState::Open {
                 node: "x-m2".into(),
-                status: "idea".into(),
+                status: "ready".into(),
             },
-            planning: Some(vec![("x-m2".to_string(), "idea".to_string())]),
-            hold_released: true,
-            turn_ended: true,
+            planning: Some(vec![("x-m2".to_string(), "ready".to_string())]),
+            planning_plan_written: vec!["x-m2".to_string()],
+            transcript_age_s: Some(1810),
             ..retiring()
         };
-        assert_eq!(
-            gc_decide(&planner, GRACE),
-            (GcAction::Retire, None),
-            "a released planner idle past the hour retires"
-        );
-        // Inside the grace the planner keeps like any fno-started row.
+        assert_eq!(gc_decide(&finished, GRACE), (GcAction::Retire, None));
+        let released = GcRow {
+            planning: Some(vec![("x-m2".to_string(), "idea".to_string())]),
+            planning_plan_written: Vec::new(),
+            hold_released: true,
+            ..finished.clone()
+        };
+        assert_eq!(gc_decide(&released, GRACE), (GcAction::Retire, None));
         let young = GcRow {
-            transcript_age_s: Some(4 * 60),
-            ..planner
+            transcript_age_s: Some(PLANNING_IDLE_RETIRE_SECS),
+            ..finished
         };
         assert_eq!(
             gc_decide(&young, GRACE),
-            (GcAction::Keep, Some(KeepReason::Active { age_s: 4 * 60 })),
+            (
+                GcAction::Keep,
+                Some(KeepReason::Active {
+                    age_s: PLANNING_IDLE_RETIRE_SECS
+                })
+            ),
         );
     }
 

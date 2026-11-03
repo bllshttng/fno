@@ -3,23 +3,37 @@
 #
 # A green checker aimed at nothing still reads as proof. This harness builds a
 # minimal fixture tree and proves each of the three assertions FAILS on
-# injected drift, then PASSES once the injection is removed - the same
-# injected-drift discipline as tests/ci/test_provider_vocabulary_parity.sh.
-# The helper-discovery case is the load-bearing one: a NEW resolver helper
-# under a fresh name, with no literal `Command::new("fno")` anywhere, must
-# fail the check on the helper's SHAPE alone.
+# injected drift, then PASSES once the injection is removed. The check runs
+# through the native binary door (the Python module deleted); the helper-
+# discovery case stays load-bearing: a NEW resolver helper under a fresh
+# name, with no literal `Command::new("fno")` anywhere, must fail the check
+# on the helper's SHAPE alone.
 set -uo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
+
+BIN="${FNO_BIN:-$ROOT/crates/fno/target/debug/fno}"
+if [ ! -x "$BIN" ]; then
+  BIN="$(command -v fno || true)"
+fi
+if [ -z "${BIN:-}" ] || [ ! -x "$BIN" ]; then
+  echo "seam crossings test: no fno binary (build crates/fno or set FNO_BIN)" >&2
+  exit 2
+fi
+
+check_clean() {
+  "$BIN" doctor lint seam-crossings --root "$tmp" 2>&1
+}
+
+seed_baseline() {
+  "$BIN" doctor lint seam-crossings --root "$tmp" --update
+}
 
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/seam-crossings.XXXXXX")
 trap 'rm -rf "$tmp"' EXIT
 
 mkdir -p "$tmp/crates/probe/src" "$tmp/cli/src/fno" "$tmp/scripts/ci"
 
-# The fixture: one env-key resolver (a helper spelling), one literal launch,
-# a comment mentioning the idiom (must never count), and a cfg(test) block
-# whose launch must never count either.
 cat > "$tmp/crates/probe/src/lib.rs" <<'RS'
 use std::process::Command;
 
@@ -59,35 +73,7 @@ status=0
 note() { printf '%s\n' "$*"; }
 fail() { printf 'FAIL: %s\n' "$*" >&2; status=1; }
 
-seed_baseline() {
-  (cd "$ROOT/cli" && uv run python - "$tmp" <<'PYEOF'
-import sys
-from pathlib import Path
-
-from fno import lint_seam_crossings as lsc
-
-root = Path(sys.argv[1])
-(root / lsc.BASELINE_RELPATH).write_text(lsc.build_baseline(root), encoding="utf-8")
-PYEOF
-)
-}
-
-check_clean() {
-  (cd "$ROOT/cli" && uv run python - "$tmp" <<'PYEOF'
-import sys
-from pathlib import Path
-
-from fno import lint_seam_crossings as lsc
-
-sys.exit(lsc.run(Path(sys.argv[1])))
-PYEOF
-)
-}
-
-# seed: regenerate the fixture baseline from the clean tree, then require a
-# clean pass AND a non-empty baseline (a green control aimed at nothing is
-# not a control).
-if ! seed_baseline; then
+if ! seed_baseline >/dev/null; then
   fail "baseline seeding crashed"
 fi
 
@@ -100,7 +86,7 @@ note "PASS: fixture baseline seeded ($baseline_sites site(s))"
 cp "$tmp/crates/probe/src/lib.rs" "$tmp/lib.rs.clean"
 cp "$tmp/cli/src/fno/innocent.py" "$tmp/innocent.py.clean"
 
-if out=$(check_clean 2>&1); then
+if out=$(check_clean); then
   note "PASS: clean fixture accepted"
 else
   printf '%s\n' "$out" >&2
@@ -114,7 +100,7 @@ fn added() {
     let mut cmd = Command::new("fno");
 }
 RS
-if out=$(check_clean 2>&1); then
+if out=$(check_clean); then
   fail 'added Command::new("fno") accepted'
 else
   case "$out" in
@@ -125,11 +111,9 @@ fi
 cp "$tmp/lib.rs.clean" "$tmp/crates/probe/src/lib.rs"
 
 # case 2: a baselined site removed from source (baseline not regenerated)
-# fails - the both-directional half. The strip drops every literal-launch
-# line, production and cfg(test) alike; the comment line quoting the idiom
-# stays, but a comment never was a site.
+# fails - the both-directional half.
 grep -v 'Command::new("fno")' "$tmp/lib.rs.clean" > "$tmp/crates/probe/src/lib.rs"
-if out=$(check_clean 2>&1); then
+if out=$(check_clean); then
   fail "removed baselined site accepted (ratchet does not fail both directions)"
 else
   case "$out" in
@@ -151,7 +135,7 @@ fn uses_helper() {
     let mut cmd = Command::new(porcelain_path());
 }
 RS
-if out=$(check_clean 2>&1); then
+if out=$(check_clean); then
   fail "new resolver helper under an unbaselined name accepted"
 else
   case "$out" in
@@ -160,28 +144,17 @@ else
   esac
 fi
 
-# the call line is invisible to the crossing rule (no literal), proving the
-# previous failure came from the resolver SHAPE, not a crossing-count rise.
-# This probe runs BEFORE the restore below: on the clean fixture it would be
-# vacuous, passing even if a future scanner started counting helper calls.
-if ! (cd "$ROOT/cli" && uv run python - "$tmp" <<'PYEOF'
-import sys
-from pathlib import Path
-
-from fno import lint_seam_crossings as lsc
-
-root = Path(sys.argv[1])
-sites = lsc.enumerate_sites(root)
-literal_new = [
-    t for _r, _l, t in sites[lsc.SITE_RULE] if 'Command::new("fno")' in t
-]
-# exactly the ONE original literal, never more, helper call included
-sys.exit(0 if len(literal_new) == 1 else 1)
-PYEOF
-); then
-  fail "crossing count rose with the helper injection; discovery case is not isolated"
-else
+# The call line is invisible to the crossing rule (no literal), proving the
+# previous failure came from the resolver SHAPE, not a crossing-count rise:
+# on the injected tree every crossing site is still baselined, so the counts
+# line reads measured == baselined for the crossing rule.
+counts=$(printf '%s\n' "$out" | grep -om1 'crossing [0-9]*/[0-9]*')
+mb=${counts#crossing }
+if [ "${mb%%/*}" = "${mb##*/}" ]; then
   note "PASS: helper case failed on shape with no crossing-count rise"
+else
+  printf '%s\n' "$out" >&2
+  fail "crossing count rose with the helper injection"
 fi
 cp "$tmp/lib.rs.clean" "$tmp/crates/probe/src/lib.rs"
 
@@ -199,7 +172,7 @@ fn wrapped_helper() -> String {
     key
 }
 RS
-if out=$(check_clean 2>&1); then
+if out=$(check_clean); then
   fail "multiline resolver expression accepted"
 else
   case "$out" in
@@ -218,7 +191,7 @@ cat >> "$tmp/cli/src/fno/innocent.py" <<'PY'
 def agents_ping() -> None:
     subprocess.run(["fno-agents", "agents", "ping"], check=False)
 PY
-if out=$(check_clean 2>&1); then
+if out=$(check_clean); then
   fail "literal fno-agents exec outside rust_binary.py accepted"
 else
   case "$out" in
@@ -235,7 +208,7 @@ def assembled_ping() -> None:
     argv = ["fno-agents", "agents", "ping"]
     subprocess.run(argv, check=False)
 PY
-if out=$(check_clean 2>&1); then
+if out=$(check_clean); then
   fail "variable-assembled fno-agents argv accepted"
 else
   case "$out" in
@@ -245,7 +218,7 @@ else
 fi
 cp "$tmp/innocent.py.clean" "$tmp/cli/src/fno/innocent.py"
 
-# case 4b2: an imported callable drops the qualifier, so the direct
+# case 4b: an imported callable drops the qualifier, so the direct
 # string-argument form must be caught without any subprocess. prefix.
 cat >> "$tmp/cli/src/fno/innocent.py" <<'PY'
 
@@ -255,7 +228,7 @@ def imported_run() -> None:
 
     run("fno-agents agents ping", check=False)
 PY
-if out=$(check_clean 2>&1); then
+if out=$(check_clean); then
   fail "imported-callable direct exec accepted"
 else
   case "$out" in
@@ -276,7 +249,7 @@ def locate() -> str:
 
     return shutil.which("fno-agents") or "fno-agents"
 PY
-if out=$(check_clean 2>&1); then
+if out=$(check_clean); then
   note "PASS: locator mention stays green (not an exec)"
 else
   printf '%s\n' "$out" >&2
@@ -290,7 +263,7 @@ sed '1a\
 \
 // inserted above the resolver: every line number below shifts by one
 ' "$tmp/lib.rs.clean" > "$tmp/crates/probe/src/lib.rs"
-if out=$(check_clean 2>&1); then
+if out=$(check_clean); then
   note "PASS: line move above baselined sites stays green"
 else
   printf '%s\n' "$out" >&2
@@ -299,7 +272,7 @@ fi
 cp "$tmp/lib.rs.clean" "$tmp/crates/probe/src/lib.rs"
 
 # final state must be clean again (fixture restored, baseline untouched)
-if out=$(check_clean 2>&1); then
+if out=$(check_clean); then
   note "PASS: fixture restored to green"
 else
   printf '%s\n' "$out" >&2

@@ -166,7 +166,7 @@ mod footnote_evidence;
 pub(crate) mod gh_read;
 pub(crate) mod intent;
 mod local_attestation;
-mod plan_fidelity;
+pub(crate) mod plan_fidelity;
 mod posture;
 mod pr_read;
 mod review_coverage_command;
@@ -256,7 +256,6 @@ use local_attestation::{
     zero_evidence_attestation, LocalPass,
 };
 pub use local_attestation::{disposition_blockers, mark_owed_verdicts, rounds_since_last_pass};
-use plan_fidelity::FIDELITY_TIMEOUT;
 #[cfg(test)]
 use posture::resolved_required_bots;
 use posture::{
@@ -1793,7 +1792,6 @@ pub(crate) fn decide_with_payload(
                 let mut fidelity_block: Option<String> = None;
                 let mut merge_owner: Option<String> = None;
                 if pr_open && ci_ok && pr_info.reviewed && head_shipped {
-                    let fno_bin = std::ffi::OsString::from(loopcheck_fno_bin());
                     let read = plan_fidelity::green_conjunct_read(
                         manifest_no_merge,
                         manifest_fields.auto_merge_source.as_deref(),
@@ -1802,21 +1800,6 @@ pub(crate) fn decide_with_payload(
                         &cwd,
                         pr_info.number,
                         &pr_info.head_oid,
-                        // The 60s ceiling, clamped to the fire budget: one
-                        // stop-gate read must not spend more than the fire
-                        // still has before the harness kills the hook.
-                        clamp_to_fire_deadline(FIDELITY_TIMEOUT),
-                        fno_bin.as_os_str(),
-                        |reason| {
-                            emit(
-                                "loop_check_fidelity_degraded",
-                                serde_json::json!({
-                                    "session_id": session_id,
-                                    "plan_path": manifest.plan_path,
-                                    "reason": reason
-                                }),
-                            );
-                        },
                     );
                     fidelity_block = read.block;
                     merge_owner = read.merge_owner;
@@ -2899,10 +2882,9 @@ mod read_bounds;
 
 pub(crate) use read_bounds::stopgate_pre_drain_spent;
 pub(crate) use read_bounds::{
-    clamp_to_fire_deadline, drain_reserve_half_spent, stopgate_drain_timeout,
-    stopgate_fire_remaining_ms, stopgate_harness_margin_remaining_ms, stopgate_hold_drain_reserve,
-    stopgate_pr_meta_timeout, stopgate_read_timeout, stopgate_stamp_fire, STOPGATE_DRAIN_FLOOR,
-    STOPGATE_FIRE_BUDGET,
+    drain_reserve_half_spent, stopgate_drain_timeout, stopgate_fire_remaining_ms,
+    stopgate_harness_margin_remaining_ms, stopgate_hold_drain_reserve, stopgate_pr_meta_timeout,
+    stopgate_read_timeout, stopgate_stamp_fire, STOPGATE_DRAIN_FLOOR, STOPGATE_FIRE_BUDGET,
 };
 
 // ── lead driver arm ───────────────────────────────────────────────────────────

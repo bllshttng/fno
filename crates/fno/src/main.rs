@@ -211,6 +211,10 @@ enum Role {
     DoctorLintStyle(Vec<OsString>),
     /// `fno doctor lint menu-caps`: the cap guard, in-process.
     DoctorLintMenuCaps(Vec<OsString>),
+    /// `fno doctor lint <check> ...` for the ported repository checks: the
+    /// dispatcher runs in-process (crate::repo_lint); registry and
+    /// field-coverage forward to the fno-agents registry door.
+    DoctorLintRepo(Vec<OsString>),
     /// `fno doctor update` and root `fno update`: the native updater (the
     /// Python leg is deleted in the same change). Args from the command name
     /// onward.
@@ -224,8 +228,6 @@ enum Role {
     AgentsLeadRefreshCanon(Vec<OsString>),
     /// `fno agents <word>` no earlier door claims: the mapped client argv.
     AgentsClient(Vec<OsString>),
-    /// `fno agents claim ...` past its native leaves: the claims CLI in the wheel.
-    AgentsPython(Vec<OsString>),
     /// `fno agents transcript ...`: the native session-bundle transfer.
     AgentsTranscript(Vec<OsString>),
     /// `fno whoami scoreboard ...`: the telemetry views, native via the
@@ -235,9 +237,6 @@ enum Role {
     /// forwarder printed lands on stderr (byte-identical), then the same
     /// exec as `fno whoami scoreboard`.
     ScoreboardAlias(Vec<OsString>),
-    /// `fno agents claim backlog|export ...`: the shared-store commands, run
-    /// by `fno-agents claim`.
-    ClaimStore(Vec<OsString>),
     /// `fno do review resolve-level ...`: the sizing leaf, exec'd through
     /// the sibling fno-agents `review-level` door. The rest of the review
     /// tree stays Python until its port.
@@ -865,20 +864,6 @@ fn classify_project(args: &[OsString]) -> Option<(Vec<OsString>, bool)> {
     classify_group_command(args, "config", "project").map(|rest| (rest, false))
 }
 
-/// `fno agents claim backlog|export ...`: the shared-store commands live only
-/// in `fno-agents claim`, and the Python claim group names its actions one
-/// by one, so the front claims these two and execs the native binary.
-fn classify_claim_store(args: &[OsString]) -> Option<Vec<OsString>> {
-    if args.len() < 3
-        || args[0].to_str()? != "agents"
-        || args[1].to_str()? != "claim"
-        || !matches!(args[2].to_str()?, "backlog" | "export")
-    {
-        return None;
-    }
-    Some(args[2..].to_vec())
-}
-
 /// `fno do review resolve-level ...`: the sizing leaf. The literal
 /// three-token prefix claims it here so it never reaches the Python
 /// forward as a near-miss of `fno do review classify`.
@@ -1283,6 +1268,10 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     match fno::lint_cli::classify_doctor_lint(args) {
         Some(fno::lint_cli::NativeLint::Style(rest)) => return Role::DoctorLintStyle(rest),
         Some(fno::lint_cli::NativeLint::MenuCaps(rest)) => return Role::DoctorLintMenuCaps(rest),
+        Some(fno::lint_cli::NativeLint::RegistryFamily(rest)) => {
+            return Role::DoctorLintRepo(rest);
+        }
+        Some(fno::lint_cli::NativeLint::RepoLint(rest)) => return Role::DoctorLintRepo(rest),
         None => {}
     }
     if let Some(rest) = fno::paths_route::classify(args) {
@@ -1350,9 +1339,6 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     }
     if let Some(rest) = classify_root_scoreboard(args) {
         return Role::ScoreboardAlias(rest);
-    }
-    if let Some(rest) = classify_claim_store(args) {
-        return Role::ClaimStore(rest);
     }
     if let Some(rest) = classify_review_level(args) {
         return Role::ReviewLevel(rest);
@@ -1544,7 +1530,6 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     }
     match fno::agents_client_route::classify(args) {
         Some(fno::agents_client_route::Route::Client(argv)) => return Role::AgentsClient(argv),
-        Some(fno::agents_client_route::Route::Python(argv)) => return Role::AgentsPython(argv),
         None => {}
     }
     match cli_args::classify(args) {
@@ -1787,7 +1772,6 @@ fn main() {
     match role {
         Role::Forward => bootstrap::forward(&args),
         Role::AgentsClient(argv) => std::process::exit(fno_agents_exec("fno agents", &[], &argv)),
-        Role::AgentsPython(argv) => bootstrap::forward(&argv),
         Role::Backlog => bootstrap::forward_backlog(&args),
         Role::DoPr => bootstrap::forward_agents(&args, "fno do pr"),
         Role::DoCi => bootstrap::forward_agents(&args, "fno do ci"),
@@ -1848,6 +1832,13 @@ fn main() {
         Role::DoctorEvent(rest) => std::process::exit(fno::event_cli::run(&rest)),
         Role::DoctorCost(rest) => std::process::exit(fno::doctor_cost::run(&rest)),
         Role::DoctorLintMenuCaps(rest) => std::process::exit(fno::menu_caps::run(&rest)),
+        Role::DoctorLintRepo(rest) => {
+            let flat: Vec<String> = rest
+                .iter()
+                .map(|a| a.to_string_lossy().into_owned())
+                .collect();
+            std::process::exit(fno::repo_lint::run(&flat));
+        }
         Role::DoctorLintStyle(rest) => {
             // The argv the sibling answers is the command name plus the tail
             // the classifier sliced: `style-check --stdin ...`.
@@ -2041,9 +2032,6 @@ fn main() {
             &["spawn-overlay", "observer"],
             &rest,
         )),
-        Role::ClaimStore(rest) => {
-            std::process::exit(fno_agents_exec("fno agents claim", &["claim"], &rest))
-        }
         Role::ReviewLevel(rest) => std::process::exit(fno_agents_exec(
             "fno do review resolve-level",
             &["review-level"],

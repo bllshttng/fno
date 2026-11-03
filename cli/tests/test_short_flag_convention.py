@@ -60,11 +60,11 @@ PRE_EXISTING_SHORTS: dict[str, tuple[str, str]] = {
 }
 
 #: Uppercase shorts outside the global register: still exclusive, i.e. the letter
-#: maps to exactly one long codebase-wide. ``-H``/``-P`` are the spawn axis pair:
-#: uppercase because the lowercase letters mean something else there (``-h`` is
-#: help, ``-p`` is headless, mirroring the harnesses' own one-shot short).
+#: maps to exactly one long codebase-wide. ``-P`` is half of the spawn axis pair:
+#: uppercase because ``-p`` means headless there, mirroring the harnesses' own
+#: one-shot short. Its twin ``-H --harness`` moved with the accounts port: the
+#: native arm owns that surface now, out of reach of the wheel-side scan.
 EXCLUSIVE_PRE_EXISTING: dict[str, str] = {
-    "-H": "--harness",
     "-P": "--provider",
 }
 

@@ -132,7 +132,6 @@ pub mod link;
 pub mod lint_cli;
 #[cfg(feature = "full")]
 pub mod live_store_fence;
-#[cfg(feature = "full")]
 pub mod menu_caps;
 #[cfg(feature = "full")]
 pub mod messages_model;
@@ -206,6 +205,8 @@ pub mod registry_label;
 pub mod registry_read;
 #[cfg(feature = "full")]
 pub mod remote_target;
+#[cfg(feature = "full")]
+pub mod repo_lint;
 #[cfg(feature = "full")]
 pub mod restore_gate;
 #[cfg(feature = "full")]

@@ -70,10 +70,14 @@ graph_node_id_of() {  # $1 = state file
 node_claim_exists() {  # $1 = HOME dir, $2 = node id
   local state
   state="$(FNO_CLAIMS_ROOT="$1" uv run --project "$REPO_ROOT/cli" python -c '
-import sys
-from pathlib import Path
-from fno.claims.core import claim_status
-print(claim_status("node:" + sys.argv[2], root=Path(sys.argv[1])).get("state") or "free")
+import json, subprocess, sys
+from fno.rust_binary import resolve_binary
+out = subprocess.run(
+    [str(resolve_binary()), "claim", "status", "node:" + sys.argv[2],
+     "--root", sys.argv[1], "--json", "--no-roster"],
+    capture_output=True, text=True, check=True,
+).stdout
+print(json.loads(out).get("state") or "free")
 ' "$1" "$2" 2>/dev/null)" || fail "claim status unreadable under $1"
   [[ -n "$state" ]] || fail "claim status empty under $1"
   [[ "$state" != "free" ]]

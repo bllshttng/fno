@@ -424,6 +424,33 @@
       "doc": "Export event titles as log text (default off: only the event kind)."
     },
     {
+      "path": "telemetry.eval_events.enabled",
+      "type": "bool",
+      "default": false,
+      "tier": "advanced",
+      "question": "",
+      "default_source": "",
+      "doc": "Send each eval run to PostHog as an event (default off)."
+    },
+    {
+      "path": "telemetry.eval_events.host",
+      "type": "str",
+      "default": "https://us.i.posthog.com",
+      "tier": "advanced",
+      "question": "",
+      "default_source": "",
+      "doc": "PostHog ingest host, https only."
+    },
+    {
+      "path": "telemetry.eval_events.token_env",
+      "type": "str",
+      "default": "FNO_POSTHOG_PROJECT_TOKEN",
+      "tier": "advanced",
+      "question": "",
+      "default_source": "",
+      "doc": "Env var holding the PostHog project token."
+    },
+    {
       "path": "attention.enabled",
       "type": "bool",
       "default": true,

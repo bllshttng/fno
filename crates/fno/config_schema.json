@@ -3227,9 +3227,34 @@
      },
      "otlp": {
       "$ref": "#/$defs/TelemetryOtlpBlock"
+     },
+     "eval_events": {
+      "$ref": "#/$defs/TelemetryEvalEventsBlock"
      }
     },
     "title": "TelemetryBlock",
+    "type": "object"
+   },
+   "TelemetryEvalEventsBlock": {
+    "description": "Eval runs as PostHog events. ``token_env`` names the env var holding the project token.",
+    "properties": {
+     "enabled": {
+      "default": false,
+      "title": "Enabled",
+      "type": "boolean"
+     },
+     "host": {
+      "default": "https://us.i.posthog.com",
+      "title": "Host",
+      "type": "string"
+     },
+     "token_env": {
+      "default": "FNO_POSTHOG_PROJECT_TOKEN",
+      "title": "Token Env",
+      "type": "string"
+     }
+    },
+    "title": "TelemetryEvalEventsBlock",
     "type": "object"
    },
    "TelemetryOtlpBlock": {
@@ -4349,6 +4374,33 @@
    "question": "",
    "default_source": "",
    "doc": "Export event titles as log text (default off: only the event kind)."
+  },
+  {
+   "path": "telemetry.eval_events.enabled",
+   "type": "bool",
+   "default": false,
+   "wizard": "advanced",
+   "question": "",
+   "default_source": "",
+   "doc": "Send each eval run to PostHog as an event (default off)."
+  },
+  {
+   "path": "telemetry.eval_events.host",
+   "type": "str",
+   "default": "https://us.i.posthog.com",
+   "wizard": "advanced",
+   "question": "",
+   "default_source": "",
+   "doc": "PostHog ingest host, https only."
+  },
+  {
+   "path": "telemetry.eval_events.token_env",
+   "type": "str",
+   "default": "FNO_POSTHOG_PROJECT_TOKEN",
+   "wizard": "advanced",
+   "question": "",
+   "default_source": "",
+   "doc": "Env var holding the PostHog project token."
   },
   {
    "path": "attention.enabled",

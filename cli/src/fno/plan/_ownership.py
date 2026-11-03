@@ -40,8 +40,8 @@ BLUEPRINT_WRITE_ALLOWLIST: frozenset[str] = frozenset(
         # `fno backlog join` on `auto`. Absent from this set the key was
         # hand-authored or nothing, which is why one plan in 1385 carried it.
         "join",
-        # Whether the PR may declare carve-outs. Its reader is
-        # fno.plan.fidelity, which refuses a declared exclusion on `forbidden`.
+        # Whether the PR may declare carve-outs. The fidelity gate reads it
+        # natively (loopcheck::plan_fidelity) and refuses on `forbidden`.
         "carveouts",
     }
 )

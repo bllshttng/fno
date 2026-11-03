@@ -94,6 +94,17 @@ pub(crate) fn with_identity(mut caller: Value, identity: String) -> Value {
     caller
 }
 
+/// An agent caller as the grant check reads it. `spawn --promote` and
+/// `org promote` both send this shape, so neither can drop a field the check needs.
+pub(crate) fn agent_caller(entry: &crate::state::RegistryEntry, sid: &str) -> Value {
+    let row_json = serde_json::to_value(entry).unwrap_or(Value::Null);
+    let mut out = json!({"kind": "agent"});
+    for key in ["name", "status", "role_scope", "role_level"] {
+        out[key] = row_json[key].clone();
+    }
+    with_identity(out, row_identity(entry, sid))
+}
+
 /// The calling session as the grant check reads it, and its session id.
 fn caller(home: &AgentsHome) -> (Value, Option<String>) {
     match calling_row(home) {
@@ -103,14 +114,7 @@ fn caller(home: &AgentsHome) -> (Value, Option<String>) {
             with_identity(json!({"kind": "unregistered"}), format!("session {sid}")),
             Some(sid),
         ),
-        Calling::Agent(entry, sid) => {
-            let row_json = serde_json::to_value(&*entry).unwrap_or(Value::Null);
-            let mut out = json!({"kind": "agent"});
-            for key in ["name", "status", "role_scope"] {
-                out[key] = row_json[key].clone();
-            }
-            (with_identity(out, row_identity(&entry, &sid)), Some(sid))
-        }
+        Calling::Agent(entry, sid) => (agent_caller(&entry, &sid), Some(sid)),
     }
 }
 

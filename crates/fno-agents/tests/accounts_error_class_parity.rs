@@ -1,12 +1,12 @@
-//! parity-stage: differential
+//! parity-stage: characterization
 //! parity-oracle: fno.adapters.providers.error_taxonomy
 //!
-//! Differential parity for `accounts::error_class`, the port of
+//! Characterization for `accounts::error_class`, the port of
 //! `error_taxonomy.py`. Each `tests/golden/accounts_error_class/*.json` case
 //! names an op, its inputs and the Python leg's answer under `expect`,
 //! captured with the clock pinned to `NOW` by
-//! `accounts_error_class_golden_driver.py` (the case table lives there;
-//! re-run it to add a case or re-freeze). This test runs the Rust op with
+//! `accounts_error_class_golden_driver.py`, the capture record now that the
+//! Python leg is gone. This test runs the Rust op with
 //! `now = NOW` and asserts equal JSON.
 
 use fno_agents::accounts::error_class::{self, Outcome, ERROR_RULES};
@@ -45,6 +45,14 @@ fn run_op(case: &Value) -> Value {
             json!([epoch, unparsed])
         }
         "window" => json!(error_class::reset_window_seconds_from(body.unwrap())),
+        "normalize_corpus" => Value::Array(
+            case["bodies"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|b| run_op(&json!({"op": "normalize", "status": case["status"], "body": b})))
+                .collect(),
+        ),
         other => panic!("unknown op {other}"),
     }
 }

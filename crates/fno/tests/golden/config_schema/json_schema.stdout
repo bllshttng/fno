@@ -3224,11 +3224,36 @@
           "title": "Claude Otel",
           "type": "boolean"
         },
+        "eval_events": {
+          "$ref": "#/$defs/TelemetryEvalEventsBlock"
+        },
         "otlp": {
           "$ref": "#/$defs/TelemetryOtlpBlock"
         }
       },
       "title": "TelemetryBlock",
+      "type": "object"
+    },
+    "TelemetryEvalEventsBlock": {
+      "description": "Eval runs as PostHog events. ``token_env`` names the env var holding the project token.",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "host": {
+          "default": "https://us.i.posthog.com",
+          "title": "Host",
+          "type": "string"
+        },
+        "token_env": {
+          "default": "FNO_POSTHOG_PROJECT_TOKEN",
+          "title": "Token Env",
+          "type": "string"
+        }
+      },
+      "title": "TelemetryEvalEventsBlock",
       "type": "object"
     },
     "TelemetryOtlpBlock": {

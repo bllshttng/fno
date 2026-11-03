@@ -14,7 +14,7 @@ use crate::accounts::usage_probe;
 use serde_json::{json, Map, Value};
 use std::path::Path;
 
-const USAGE_HELP: &str = "Usage: fno config accounts usage [--refresh] [--json]\n\n  Show per-account rate-limit windows: used % and reset time.\n\n  A provider with no fresh snapshot shows `unknown` with the reason, and the\n  command still exits 0: probing is advisory and fail-open.\n\n  --refresh   Force a fresh probe (bypass the TTL cache).\n  --json, -J  Emit a one-line JSON object keyed by provider id.";
+const USAGE_HELP: &str = "Usage: fno config accounts usage [--refresh] [--logins] [--json]\n\n  Show per-account rate-limit windows: used % and reset time.\n\n  A provider with no fresh snapshot shows `unknown` with the reason, and the\n  command still exits 0: probing is advisory and fail-open.\n\n  --refresh   Force a fresh probe (bypass the TTL cache).\n  --logins    Read every login on this machine, managed or not: the plain\n              claude Keychain item (System default), each claude config\n              dir, codex auth.json, and API keys in the env or ~/.fno/.env.\n              Read-only: the live token is sent as stored, never refreshed.\n  --json, -J  Emit a one-line JSON object keyed by provider id.";
 
 /// The world one report reads. The probe and the cache write are passed in,
 /// so a test drives the report without a network or a lock.
@@ -302,9 +302,11 @@ pub fn refreshed(cwd: &Path) -> Option<Map<String, Value>> {
 pub fn run(args: &[String]) -> i32 {
     let mut refresh = false;
     let mut as_json = false;
+    let mut logins = false;
     for arg in args {
         match arg.as_str() {
             "--refresh" => refresh = true,
+            "--logins" => logins = true,
             "--json" | "-J" => as_json = true,
             "-h" | "--help" => {
                 println!("{USAGE_HELP}");
@@ -317,6 +319,9 @@ pub fn run(args: &[String]) -> i32 {
         }
     }
     let cwd = crate::accounts::show::pwd();
+    if logins {
+        return crate::accounts::logins::run(&cwd, as_json);
+    }
     let now = state::wall_now();
     let (records, rows, threshold) = match report(&cwd, refresh, now) {
         Ok(report) => report,

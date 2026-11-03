@@ -2376,6 +2376,23 @@ pub struct ArmTickReduction {
     pub active_arms: Vec<String>,
 }
 
+/// The `ok` predicate for a tick row's skip reason, as one SQL boolean: no
+/// skip reason, or one outside the caller's failure set. An empty set says
+/// every row is ok, matching the fold's `is_none_or` read. Single quotes are
+/// escaped, though the set is compile-time today.
+fn skip_ok_sql(failure_skips: &[&str]) -> String {
+    let skip = "json_extract(line, '$.data.skip_reason')";
+    if failure_skips.is_empty() {
+        return "1".to_string();
+    }
+    let list = failure_skips
+        .iter()
+        .map(|s| format!("'{}'", s.replace('\'', "''")))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("{skip} IS NULL OR {skip} NOT IN ({list})")
+}
+
 /// Reduce the arms window of one journal. `None` when the journal has no
 /// readable events store (a raw or legacy journal): the caller folds its
 /// text instead.
@@ -2401,34 +2418,32 @@ pub fn reduce_arm_ticks(
     if !store_has_events(&conn).unwrap_or(false) {
         return None;
     }
-    // The skip GLOB columns read the line bytes, not a parsed Value. A null
-    // `skip_reason` matches neither string GLOB, so it reads as unexplaining
-    // like the fold's `as_str` does.
-    const WALK_SQL: &str = "SELECT ts_ms, json_extract(line, '$.data.arm'), \
-         json_extract(line, '$.data.skip_reason') \
-         FROM events WHERE type = ?1 AND ts_ms >= ?2 ORDER BY ts_ms DESC, seq DESC";
+    // One GROUP BY pass over the whole window holds every arm's newest and
+    // newest-ok. No early exit is exact: an arm's newest row can sit anywhere
+    // in the window, so a walk that stops once the arms seen so far each hold
+    // both maxima (true after the first ok row) drops every older arm, and the
+    // readout calls exactly those arms UNOBSERVED. The scalar aggregate keeps
+    // the pass cheap: three json_extracts per row, no line materialized.
+    let maxima_sql = format!(
+        "SELECT json_extract(line, '$.data.arm') AS arm, MAX(ts_ms), \
+         MAX(CASE WHEN {} THEN ts_ms END) \
+         FROM events WHERE type = ?1 AND ts_ms >= ?2 GROUP BY arm",
+        skip_ok_sql(failure_skips),
+    );
     let mut max_ts: std::collections::HashMap<String, i64> = Default::default();
     let mut max_ok_ts: std::collections::HashMap<String, i64> = Default::default();
     {
-        let mut stmt = conn.prepare(WALK_SQL).ok()?;
+        let mut stmt = conn.prepare(&maxima_sql).ok()?;
         let mut walk = stmt.query(params![tick_type, since_ms]).ok()?;
         while let Some(row) = walk.next().ok()? {
-            let ts_ms: i64 = row.get(0).ok()?;
-            let arm: Option<String> = row.get(1).ok()?;
+            let arm: Option<String> = row.get(0).ok()?;
             let Some(arm) = arm else {
                 continue;
             };
-            let skip: Option<String> = row.get(2).ok()?;
-            // Newest-first walk: the first ts seen for an arm is its maximum.
-            max_ts.entry(arm.clone()).or_insert(ts_ms);
-            let ok = skip.as_deref().is_none_or(|s| !failure_skips.contains(&s));
-            if ok {
-                max_ok_ts.entry(arm.clone()).or_insert(ts_ms);
-            }
-            // Every arm holds its newest and its newest-ok: no older row can
-            // change the maxima the fold folds.
-            if max_ok_ts.len() == max_ts.len() {
-                break;
+            let max: i64 = row.get(1).ok()?;
+            max_ts.insert(arm.clone(), max);
+            if let Some(max_ok) = row.get::<_, Option<i64>>(2).ok()? {
+                max_ok_ts.insert(arm, max_ok);
             }
         }
     }
@@ -2436,7 +2451,7 @@ pub fn reduce_arm_ticks(
     // scan: a string value quoting `"acted":1` could only false-positive
     // toward not-starved, the conservative side of the mark. The extract
     // runs on matching rows only, and the scan covers the whole window, so
-    // the early-stopped walk above never truncates this verdict.
+    // the maxima scan above never truncates this verdict.
     const ACTIVE_SQL: &str = "SELECT DISTINCT json_extract(line, '$.data.arm') FROM events \
          WHERE type = ?1 AND ts_ms >= ?2 \
          AND (line GLOB '*\"acted\":[1-9]*' \

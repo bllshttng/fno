@@ -1272,6 +1272,10 @@ async fn run(args: Vec<String>) -> i32 {
             Some("--peek") => return fno_agents::peek::run_peek(&rest[1..]),
             Some("--team") => return fno_agents::team_read::run_team(&rest[1..]),
             Some("--role") => return fno_agents::role_grant::run_role(&rest[1..]),
+            Some("--lint-registry") | Some("--lint-field-coverage") => {
+                let op = rest[0].as_str();
+                return fno_agents::lint_registry::run(op, &rest[1..], &AgentsHome::from_env());
+            }
             _ => {}
         }
         let has_cap = rest.iter().any(|a| a.as_str() == "--capabilities");

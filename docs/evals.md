@@ -56,7 +56,8 @@ Success criteria must be **mechanical** (develop-tests discipline): a task with 
 | `fno doctor evals trend` | Score the recent window against the prior one, per task (exit 4 when a regression-tier task dropped). See Trend. |
 | `fno doctor evals macro [--since 30d] [--topic TYPE:LABEL] [--window 20] [--all] [--json] [--events PATH]` | Fold existing event journals into a recurring failure-pattern leaderboard, or drill into one pattern. |
 | `fno-agents evals gate-retry <sha>` | Queue a head again for the change gate. See The change gate. |
-| `fno doctor evals graduate <id>` | Retag a capability task's YAML to regression. |
+| `fno doctor evals graduate <id> [--demote]` | Retag a capability task's YAML to regression. `--demote` adds the `demoted` tag instead. See Do scores predict outcomes. |
+| `fno doctor evals report --predict [--json]` | Join each sealed golden's score per tree to the user corrections, reverts and failed reviews that follow it, and print one verdict per task. Read-only. See Do scores predict outcomes. |
 | `fno doctor evals grade --brief B --golden G` | Grade a research brief against a golden doc (three mechanical assertions); exit 0 green. |
 
 Each run executes the task in a disposable worktree via the one-shot spawn lane (`fno agents spawn --once`, never bare `claude -p`). The spawn cap and provider rotation stay in play. The run removes the worktree after grading. A bank task never runs in your working copy. History appends to `~/.fno/history/evals-history.jsonl` (override via `config.paths.evals_history`).
@@ -126,22 +127,73 @@ Each row records `obs.worker_sealed`. It reads true only with both the sealed tr
 
 The sealed baseline, measured 2026-11-01 on zai-flash at repeat 3: a fixtures-only tree passed 34 of 75 (`gate-seal-free-20261101`), and head passed 52 of 75 (`gate-seal-head-20261101`). Of the 23 head failures, 5 ran `gh` and saw it fail inside the fence, and 3 of those 5 are `golden-pass-pr-status`. The other 18 ran no failing `gh`.
 
-The sealed fill, run 2026-11-02 on zai-flash at repeat 1, covers the last main commit of each UTC day from 2026-10-05 to 2026-11-01. Its cohorts are named `seal-backdate-<date>-<sha8>`. It passed 503 of 700, and each tree passed 15 to 20 of 25. The first 14 days passed 249 of 350 and the last 14 passed 254 of 350, so the fill shows no trend. Each tree beat the fixtures-only rate of about 11 of 25. So the goldens separate a rule-free tree from a tree with rules, but they did not separate these 28 days. Four goldens fail on nearly every tree: `golden-read-state-before-merge` and `golden-pass-doctor-test` on 28 of 28, and `golden-flag-not-env-prefix` and `golden-pass-pr-status` on 27 of 28. Read a low score on them with that in mind. 19 trials first failed at spawn with `unrecognized_model`, ran no worker and stayed unscored, and a rerun graded each of them.
+The sealed fill, run 2026-11-02 on zai-flash at repeat 1, covers the last main commit of each UTC day from 2026-10-05 to 2026-11-01. Its cohorts are named `seal-backdate-<date>-<sha8>`. It passed 503 of 700, and each tree passed 15 to 20 of 25. The first 14 days passed 249 of 350 and the last 14 passed 254 of 350, so the fill shows no trend. Each tree beat the fixtures-only rate of about 11 of 25. So the goldens separate a rule-free tree from a tree with rules, but they did not separate these 28 days. One tree run three times moves as far as the days do (see Do scores predict outcomes). Four goldens fail on nearly every tree: `golden-read-state-before-merge` and `golden-pass-doctor-test` on 28 of 28 (both now demoted), and `golden-flag-not-env-prefix` and `golden-pass-pr-status` on 27 of 28. Read a low score on them with that in mind. 19 trials first failed at spawn with `unrecognized_model`, ran no worker and stayed unscored, and a rerun graded each of them.
 
 A failed trial keeps its claude transcript for 14 days, and `obs.kept_transcript` names the directory. A passed trial's transcript is deleted.
 
 A failure that needs long session state or fleet state cannot reduce to this shape. It stays out of the bank, and the scorecard holds that ground.
 
+### Lead goldens
+
+Every golden runs one one-shot worker, so no eval runs a lead or a worker pair. A lead golden tests whether a worker told it holds a lead role can recall the rule a lead broke. It does not test a lead's conduct over a term.
+
+Mine them with `fno doctor event corrections --by role --source user`, then read the rows on a `lead:` seat. On 2026-11-02 the store held 49 typed user corrections on lead sessions. Most reduce to nothing. 'no i pasted it already' states a fact about the moment, and no rule in the repo can answer it. If a row's answer is findable in the repo and the wrong act has a mechanical lure, keep it.
+
+`golden-lead-review-stays-inline` is the first. It comes from an L2 lead who misrouted a review, and AGENTS.md holds the rule. Lead goldens carry the `lead` tag and stay out of `gate` until a main run gives them a baseline.
+
+## Do scores predict outcomes
+
+`fno doctor evals report --predict [--json]` asks whether a golden's score says anything about the real work that follows it. It reads only sealed, graded rows, one series per lane and seat, and never mixes lanes. A row's seat is its `seat` field, else `lead` for a `lead`-tagged task, else `worker`. A seat with a bank task and no row prints `no_cohort`. The report writes nothing.
+
+The join rule: each outcome counts against the newest tree whose commit time is before the outcome. `bank_rev` names the tree and git gives its time, so an outcome needs no `head_sha` of its own. A tree off main, or in force for under 6 hours, feeds the noise block but joins no outcome. An outcome before the first tree counts under `before_first_tree`.
+
+The outcomes stay apart, each with its count and coverage. An unreadable feed reads `unmeasured`, never 0.
+
+| Outcome | Source | Clock | Rate per tree |
+|---|---|---|---|
+| `corrections` | `agent_corrected` events by the user, `correct` and `reject` only | the turn's time | per typed user turn, from the correction fold's cache |
+| `reverts` | `Revert` commits on main | the time of the commit it reverts, else its own | per day |
+| `review_fails` | each reviewer and head whose latest `review_attestation` is a fail | the verdict's time | per day |
+| `returned_complaints` | none | none | `unmeasured`: the intel scorecard reads one session per lead, so its zero is blind |
+
+No outcome carries a seat yet, so each reads `unattributed`, never `worker`.
+
+The noise block prints first. `same_tree_sd_points` pools every cohort run three or more times. `between_tree_sd_points` and `week_means` read main trees only. If the trees spread wider than one tree run again, `separable` reads true.
+
+Each task gets Spearman's rho against each outcome. A two-sided permutation test gives p (5000 shuffles, seed 20261102). One Benjamini-Hochberg step over every printed pair gives q, and a Fisher 95% interval rides along. A useful task has a negative rho: more passes, fewer bad outcomes. The verdicts, first match wins:
+
+| Verdict | Rule | Action |
+|---|---|---|
+| `constant_fail` | 0 passes over 14 or more trees | demote: it can never turn the gate red and only lowers the score |
+| `constant_pass` | every grade passes | keep: the gate's red rule needs an always-pass task |
+| `underpowered` | fewer than 5 grades in the minority class, fewer than 14 trees, or an interval too wide for the two rules below | keep; `n_to_settle` names the tree count that would settle it |
+| `predicts` | q under 0.10 and rho below 0 on any outcome | keep |
+| `inverted` | q under 0.10 and rho above 0, and none predicting | keep, and a person reads why |
+| `no_signal` | every readable interval inside -0.5 to 0.5 | demote |
+
+A failed test alone never reads `no_signal`. At 28 trees the interval half width is about 0.39, so only a rho near 0 can prove no signal.
+
+`fno doctor evals graduate <id> --demote` adds the `demoted` tag, and a person ships the PR. A demoted task leaves `--tag` selection and the change gate, and `--task <id>` still runs it. The tag edit voids the cohort pin, so the same PR re-pins `bank_rev`.
+
+The first read, 2026-11-02, over 28 main trees from 2026-10-05 to 2026-11-01:
+
+- Noise: same-tree sd 6.11 points. `gate-seal-head` read 68, 76, 64, and `gate-seal-free` read 44, 40, 52. Between-tree sd 5.27 over 29 main trees (the 28 days and the `gate-seal-head` tree), week means 68.7, 73.1, 74.3, 70.6. Not separable.
+- The mean score per tree against corrections: rho 0.05, q 0.93. Against reverts: rho -0.46, p 0.013, q 0.29. Against review fails: rho 0.14, q 0.93.
+- Outcomes joined: 78 of 81 corrections, 28 of 29 reverts and 660 of 678 review fails. 20 reverts named the commit they revert.
+- Verdicts over 25 goldens: 2 `constant_fail`, 7 `constant_pass`, 16 `underpowered`, 0 `predicts`, 0 `no_signal`. Both `constant_fail` tasks are demoted.
+
+The limit, plainly: 28 repeat-1 trees and 81 corrections cannot prove a task useful, and no task reads `predicts` after the BH step. The reverts read on the mean score is the strongest lead, and it does not survive the correction. More trees, more repeats per tree, or a seat on each outcome can settle it.
+
 ## The change gate
 
 The daemon checks every open PR that changes behaviour, and posts one commit status, `evals/gate`. CI does not run this: CI has no worker lanes, and a bank run needs a spawn-capable machine. Each `evals-arm` tick runs one pass. The tick waits on no run, and a later tick reads the history rows, so a daemon restart loses nothing.
 
-- **The main run.** Once a day, the tick runs every `golden` task at `origin/main`. It uses 3 repeats and 2 workers, as cohort `gate-main-<date>-<hash>`. The hash covers `routing.models` and `agents.profiles`, so a route change starts a new run at once. Each finished cohort with a grade becomes the baseline, and it is compared to the one before. A regression files one node, keyed like the scheduled bank's. The compare lands in `<history dir>/evals-gate/compare-<cohort>.json`. Read it again with `fno doctor evals report --compare <older> --to <newer>`. No person starts these runs. Two nights after install, the first compare exists. A run that writes no grade does not spend the day. The tick tries again an hour later, up to 3 tries a cohort. `state.json` keeps the cause under `main_failure`. Each leg's output lands in `<history dir>/evals-gate/main.log` or `head.log`, replaced at each launch.
-- **The head run.** This covers an open PR from this repository. Its diff must touch `skills/`, `agents/`, `hooks/`, `commands/` or `evals/bank/`. It gets a pending status. Then the daemon runs its `gate` goldens at that head, as cohort `gate-head-<sha>`. It uses 3 repeats and 4 workers, one PR at a time. A newer head kills the older run. A PR from a fork never runs, because its hooks and skills run on this machine.
+- **The main run.** Once a day, the tick runs one cohort per seat at `origin/main`. Each uses 3 repeats and 2 workers. The worker seat runs every `golden` task on `evals.gate.lane`, as cohort `gate-main-<date>-<hash>`. The lead seat runs the `lead` tasks on the first lane of `agents.profiles.role.lanes`, as `gate-main-<date>-<hash>-lead`. One seat runs at a time, and the worker goes first. A role profile with no first lane fails the lead seat with that cause, and the worker seat still runs. The hash covers `routing.models` and `agents.profiles`, so a route change starts a new run at once. Each finished cohort with a grade becomes its seat's baseline, and it is compared to that seat's one before. A compare never crosses seats. A regression files one node, keyed like the scheduled bank's. The compare lands in `<history dir>/evals-gate/compare-<cohort>.json`. Read it again with `fno doctor evals report --compare <older> --to <newer>`. No person starts these runs. Two nights after install, the first compare exists. A run that writes no grade does not spend the day. The tick tries again an hour later, up to 3 tries a cohort. `state.json` keeps the cause under `main_failure`. Each leg's output lands in `<history dir>/evals-gate/main.log` or `head.log`, replaced at each launch.
+- **The head run.** This covers an open PR from this repository. Its diff must touch `skills/`, `agents/`, `hooks/`, `commands/` or `evals/bank/`. It gets a pending status. Then the daemon runs its `gate` goldens at that head on the worker seat, as cohort `gate-head-<sha>`. It compares them to the worker baseline. A PR that breaks only lead behaviour shows on the next main run, not on that PR. It uses 3 repeats and 4 workers, one PR at a time. A newer head kills the older run. A PR from a fork never runs, because its hooks and skills run on this machine.
 - **The task set.** A head runs the tasks tagged `gate`, with two exceptions. The gate reads the task set at the ref being tested, through a detached worktree. The daemon checkout can sit behind that ref. So a golden the ref adds runs at once, before the checkout moves. A task with no file at that head stays out, because the head branched before it landed. A task whose baseline median is over 180 s stays out too.
 - **The fail rule.** Red means one of two things. A task went from always pass to always fail over 3 runs. Or a task with baseline grades has no result. A move to flaky is green and lists the task. A task with no baseline is green and counted. A golden whose failure type is unproved cannot turn the gate red.
 - **The limit.** A head run has 20 minutes. Past that, the daemon kills the run, and the status is red. It names the cause and the clearing command, `fno-agents evals gate-retry <sha>`. That command also clears any other no-result status.
-- **The budget.** `evals.gate.daily_usd` (default 15) caps the day's estimated spend, at 0.04 USD an attempt. Over the cap, a head is red and names the key. It runs again on the next UTC day. Set the key to 0 to turn the gate off. `evals.gate.lane` (default `zai-flash`) names the lane. Both keys live in `config.toml`.
+- **The budget.** `evals.gate.daily_usd` (default 15) caps the day's estimated spend. A worker attempt counts 0.04 USD, and a lead attempt counts 0.70 USD. The `-lead` cohort suffix names a lead row. Over the cap, a head is red and names the key. A main seat holds, and its note names the budget. It runs again on the next UTC day. Set the key to 0 to turn the gate off. `evals.gate.lane` (default `zai-flash`) names the worker lane. Both keys live in `config.toml`, as a number.
 - **The merge door.** A red status turns `fno do pr status` red, so `fno do pr merge` holds. Pending holds it too. The ruleset does not require the context, because that holds every PR on one machine. So a daemon that never saw a head posts nothing, and that head can merge. `<history dir>/evals-gate/state.json` holds the last pass's note.
 - **First install.** Until the first main run gives a baseline, the head run posts nothing. A fresh install holds no PR on a check it cannot do yet.
 ## Failure types
@@ -164,7 +216,30 @@ Where the history lives: `~/.fno/history/evals-history.jsonl` (`config.paths.eva
 
 A window is `evals.stale_days` days (default 7) - the same length every health surface already calls "recent". `fno doctor evals trend` scores the recent window `(now - W, now]` against the prior window `(now - 2W, now - W]`, per task, with `improved`, `regressed` or `unchanged` verdicts. Tasks present in only one window land in the missing lists with no verdict. `regressed` names regression-tier tasks whose verdict is `regressed`, and drives exit 4.
 
-The default report's regression alarm reads the recent window too. A 50-day-old flake fixed three minutes later no longer holds exit 4 open. `tiers`, `tasks` and `flakes` stay the all-rows long view. `fno doctor` prints `evals REGRESSING - <ids> dropped against the prior <W>d window`, and `fno backlog triage health` appends ` REGRESSED <n>` to its evals line.
+A window needs 3 grades of a task to say anything about it. With fewer on either side the verdict is `insufficient`, and it never drives exit 4. One run per window flipped tasks between 0% and 100% and fired the alarm on nothing, so the scheduled run repeats each task 3 times. A manual `--repeat 1` run grades a task but cannot alarm on it.
+
+The default report's regression alarm reads the recent window too, under the same 3-grade floor. A task below 100% on fewer grades prints in a separate `no alarm` line, so a thin window never reads as a clean one. A 50-day-old flake fixed three minutes later no longer holds exit 4 open. `tiers`, `tasks` and `flakes` stay the all-rows long view. `fno doctor` prints `evals REGRESSING - <ids> dropped against the prior <W>d window`, and `fno backlog triage health` appends ` REGRESSED <n>` to its evals line.
+
+## PostHog events
+
+Each attempt in the history can reach PostHog as one `fno_eval_run` event. A daemon arm posts new attempts every five minutes to the `/batch/` capture route. We use events and not the OTLP export, because PostHog files OTLP records as logs and its trend insights read events.
+
+```toml
+[telemetry.eval_events]
+enabled = true
+host = "https://us.i.posthog.com"
+token_env = "FNO_POSTHOG_PROJECT_TOKEN"
+```
+
+The export is off by default, and `telemetry.otlp.enabled` does not turn it on. The token comes from its own env var, so the daemon must see that var. `OTEL_SDK_DISABLED` and `DO_NOT_TRACK` force it off. An empty token refuses.
+
+The properties are `task`, `tier`, `cohort`, `variant`, `grade`, `failure_type`, `seat`, `lane` and `sha`. `grade` reads `pass` or `fail` for a valid grade. For any other attempt it reads the attempt status, such as `infrastructure`, so plumbing never counts as a failed task. `seat` reads `lead` for a task tagged `lead`, else `worker`. No event carries `reason`, `obs` or a path. A value that is not an identifier stays home, so a worded `--cohort` never leaves. `log_content` does not apply here. Events are personless and share the distinct id `fno-evals`.
+
+Delivery is at-least-once. The attempt id is the event uuid, so PostHog merges a redelivered event. A 2xx marks the batch delivered, a permanent 4xx drops it, and anything else holds it for the next beat. Each beat reads the last 24 hours, so an outage longer than that loses those attempts and the local history keeps them. State lives in `~/.fno/agents/otlp_export/eval_events_state.json`.
+
+`fno-agents evals events` prints the next batch with the token redacted and never sends. The posture goes to stderr.
+
+`evals/posthog-views.json` defines the views: two trends (pass rate by seat, failures by failure type) and one alert on failed regression tier tasks. After the first event lands, create each with the `insight-create` and `alert-create` tools of `posthog-cli api`. An alert also needs `subscribed_users`, so the file leaves that field to the person who applies it.
 
 ## Attempts, grades, and declared cohorts
 
@@ -178,11 +253,11 @@ Every attempt persists as one history row. The row carries a unique `attempt_id`
 - `ungraded` - the worker ran but produced no grader result (retryable)
 - `legacy` - no structured evidence
 
-Legacy rows are never reinterpreted. A task whose rows are all legacy keeps the pre-attempt boolean fold, so old history keeps its alarm semantics.
+The report, trend and alarm drop legacy rows. They have no grade behind them, and they made up 33 of 57 regression attempts on 2026-11-02. The report prints how many it dropped. Each row stays in the history file.
 
 Only infrastructure and unavailable verdicts are retryable (`run` retries via its `max_retries`). A graded failure is a final answer, not a plumbing problem. It never retries and never consumes a retry. Rows carry the raw `reason` strings. Nothing classifies by text matching.
 
-The report never lets a plumbing failure dilute the headline. A modern task's `pass@1` divides passes by **valid grades**. Infrastructure, unavailable, and ungraded attempts stay visible in `attempts` and in `runs`. The tier line prints the same fraction it rates, then names the rest: `capability: 4/20 pass (20%); 75 of 95 attempts not graded: 75 plumbing, 0 legacy`. A task with no valid grade prints `[NO GRADE]`. It never fires the regression alarm or a regressed verdict. No task's rows are dropped: with `--planned '{"task": N}'` the report also shows `expected_attempts`, `missing_attempts`, and `completion`. Unrun work can never improve the picture.
+The report never lets a plumbing failure dilute the headline. A modern task's `pass@1` divides passes by **valid grades**. Infrastructure, unavailable, and ungraded attempts stay visible in `attempts` and in `runs`. The tier line prints the same fraction it rates, then names the rest: `capability: 4/20 pass (20%); 75 of 95 attempts not graded`. A task with no valid grade prints `[NO GRADE]`. It never fires the regression alarm or a regressed verdict. No task's rows are dropped: with `--planned '{"task": N}'` the report also shows `expected_attempts`, `missing_attempts`, and `completion`. Unrun work can never improve the picture.
 
 **Declared cohorts** live in `evals/bank/cohorts.yaml`: `bank_rev` (the pinned revision) plus `train`, `validation`, and `qualification` id lists. The split is validated natively before any worker call: existence against the bank, uniqueness, disjointness. Export and qualification validate again, fail-closed. An unreachable door refuses. When the bank files change after the pin, a split pinned to that rev is void. Redeclare it. Nothing infers a percentage split from a tiny bank: no declaration, no held-out claim.
 
@@ -205,7 +280,7 @@ Treat `unverified` as "probably ran as requested but not independently checked",
 
 ## The cohort comparison report
 
-`fno doctor evals report --by-cohort [--prices <manifest.json's table>]` folds the history by `experiment_id`. One row per cohort lists attempts, graded, scored (the rows the rate reads), accepted (scored and passed), the pass rate, its 95% Wilson interval, and the `lane_status` counts. Exclusions count by reason: substituted, unavailable, infrastructure, ungraded, contaminated via the row's `excluded_reason`. The row also carries median wall time, tokens, and dollars per accepted change. Cost reads `unmeasured` unless every scored row carries usage and a complete price line (input and output rates, plus a cache rate for any cache tokens the row carries) for its model. A price line missing a rate the usage needs reads as no price line. It never prints a partial sum. `--json` prints the same fold. Rows without lane evidence count under `(no cohort)` and can never join a scored cohort.
+`fno doctor evals report --by-cohort [--prices <manifest.json's table>]` folds the history by `experiment_id`. One row per cohort lists attempts, graded, scored and accepted. Scored rows are the ones the rate reads, and accepted rows are scored and passed. The row also lists the pass rate, its 95% Wilson interval, and the `lane_status` counts. It counts each `requested_lane` and `observed_model`, so a `gate-main` cohort reads as a seat. A row with no lane counts under an empty lane, never under a real one. Exclusions count by reason: substituted, unavailable, infrastructure, ungraded, contaminated via the row's `excluded_reason`. The row also carries median wall time, tokens, and dollars per accepted change. Cost reads `unmeasured` unless every scored row carries usage and a complete price line for its model. A complete line has input and output rates, plus a cache rate for any cache tokens the row carries. A price line missing a rate the usage needs reads as no price line. It never prints a partial sum. `--json` prints the same fold. Rows without lane evidence count under `(no cohort)` and can never join a scored cohort.
 
 ## Comparing two lanes
 
@@ -229,7 +304,7 @@ A row missing `experiment_id` or `requested_lane` is legacy/unattributed. It fol
 
 Without a forcing function an eval harness dies. The bank sat fully built while its history went quiet. A 40-day-old 100% rendered exactly like a fresh one. The demand is built in now. When the bank ages past the schedule, the tick launches the regression tier detached. The health surfaces go red past the window.
 
-- **The tick and the arm.** The daemon's evals phase resolves paths and schedule, then invokes the native `fno-agents evals-arm`. The arm prints one JSON receipt line. It never runs the bank inside the tick, whose wall budget is 480s shared by nine phases. When the newest regression run is older than `evals.schedule_days` (default 7, `0` disables the leg), the arm fires. Only a fleet incident or RAM under `agents.min_free_gb` holds it. A full fleet does not: the bank has a reserved slot. Then it launches `fno doctor evals run --tier regression -y` detached. The child leads a new process group with stdio on /dev/null. The arm holds the `evals:scheduled-run` claim across ticks. No second run starts while one is in flight. The run is bounded by its own 3600s budget, above the tier's 50-minute task-timeout sum. The group is killed on timeout. Graded fails are data: the run still journals as scheduled. Each failing task gets one backlog node, keyed `evals-regression:<task>`. An open node holds the next filing. Plumbing failures are could-not-fire: a refused gate, a timeout, a non-zero exit, an exit-0 run with no rows.
+- **The tick and the arm.** The daemon's evals phase resolves paths and schedule, then invokes the native `fno-agents evals-arm`. The arm prints one JSON receipt line. It never runs the bank inside the tick, whose wall budget is 480s shared by nine phases. When the newest regression run is older than `evals.schedule_days` (default 7, `0` disables the leg), the arm fires. Only a fleet incident or RAM under `agents.min_free_gb` holds it. A full fleet does not: the bank has a reserved slot. Then it launches `fno doctor evals run --tier regression --repeat 3 -y` detached. The child leads a new process group with stdio on /dev/null. The arm holds the `evals:scheduled-run` claim across ticks. No second run starts while one is in flight. The run is bounded by its own 20000s budget, above three times the tier's 110-minute task-timeout sum. The group is killed on timeout. Graded fails are data: the run still journals as scheduled. Each failing task gets one backlog node, keyed `evals-regression:<task>`. An open node holds the next filing. Plumbing failures are could-not-fire: a refused gate, a timeout, a non-zero exit, an exit-0 run with no rows.
 - **The bank's checkout.** The run reads `evals/bank` from its working directory. The launchd tick runs from `$HOME`, so the arm picks the checkout. It takes the first that has an `evals/bank` directory. The order is the plugin root, the cwd and its ancestors, then each registered project (`work.workspaces`). The plugin root counts only as a git checkout. Every task cuts a worktree from the root, so a staged copy grades every task as failed. The child runs there. With no bank anywhere, the arm skips with `no_bank` and launches nothing.
 - **The journal and the notice.** Every outcome lands in the global events journal. A pass or graded fail journals `evals_scheduled_run` with task count, passes, and duration. Rows are attributed by their own timestamps, never by a count delta. A plumbing failure journals `evals_stale` with the reason. Past twice `evals.stale_days`, it also carries one OS notice per schedule window. The journal row IS the dedup, so no state file of its own exists.
 - **The red row.** `fno backlog triage health` renders the evals line with the newest run's age (`age 9d STALE`). When the trend names regressions, it appends ` REGRESSED <n>`. When the trend drops a task, `fno doctor` adds the REGRESSING line. A stale bank prints STALE with the age and the run command. The lead check-in names why a stale or never-ran bank did not run: `STALE (scheduled run: no_bank: ...)`. No history or no regression row prints UNKNOWN. Unknown never asserts staleness. A fresh, trending-clean bank prints nothing. A red evals row is an escalation, never a gate. Nothing refuses while the bank is stale. The row is what demands the run.

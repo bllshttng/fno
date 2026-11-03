@@ -186,6 +186,14 @@ headers_env = "FNO_OTLP_HEADERS"
 # Export event titles as log text (default off: only the event kind).
 log_content = false
 
+[telemetry.eval_events]
+# Send each eval run to PostHog as an event (default off).
+enabled = false
+# PostHog ingest host, https only.
+host = "https://us.i.posthog.com"
+# Env var holding the PostHog project token.
+token_env = "FNO_POSTHOG_PROJECT_TOKEN"
+
 [attention]
 # Kill switch for the attention arm (question pages and sinks; default on).
 enabled = true

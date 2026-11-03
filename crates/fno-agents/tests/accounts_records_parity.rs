@@ -1,12 +1,12 @@
-//! parity-stage: differential
+//! parity-stage: characterization
 //! parity-oracle: fno.adapters.providers.loader.load_providers
 //!
-//! Differential parity for `accounts::records`, the port of `model.py` and
+//! Characterization for `accounts::records`, the port of `model.py` and
 //! the read side of `loader.py`. Each `tests/golden/accounts_records/*.json`
 //! case names an op, the config layers and slot stamps to lay down, and the
 //! Python leg's answer under `expect`, captured by
-//! `accounts_records_golden_driver.py` (the case table lives there; re-run it
-//! to add a case or re-freeze). This test builds the same fixture from the
+//! `accounts_records_golden_driver.py`, the capture record now that the
+//! Python leg is gone. This test builds the same fixture from the
 //! same file, runs the Rust op, and asserts equal JSON. A refusal compares
 //! the Python headline, which the Rust `LoadError::headline` reproduces.
 
@@ -58,6 +58,10 @@ fn lay_down(case: &Value, tmp: &Path) {
     std::env::set_var("PWD", tmp.join("repo"));
     std::env::set_var("FNO_REPO_ROOT", tmp.join("repo"));
     std::env::set_var("FNO_STATE_DIR", tmp.join("state"));
+    if let Some(layer) = case.get("fno_config").and_then(Value::as_str) {
+        let (_, rel) = LAYERS.iter().find(|(name, _)| *name == layer).unwrap();
+        std::env::set_var("FNO_CONFIG", tmp.join(rel));
+    }
 }
 
 fn accounts(r: Result<records::Accounts, records::LoadError>) -> Value {
@@ -154,4 +158,28 @@ fn accounts_records_match_the_python_leg() {
         failures.len(),
         failures.join("\n")
     );
+}
+
+/// The reserved keys track the `config.agents` schema: every `AgentsBlock`
+/// field, plus `max_lanes`, the one tolerated legacy spelling the block's
+/// before-validator still parses. The schema is the generated
+/// `crates/fno/config_schema.json`, so a new agents field reserves itself.
+#[test]
+fn reserved_agent_keys_track_the_agents_schema() {
+    let schema = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../fno/config_schema.json");
+    let schema: Value = serde_json::from_str(&std::fs::read_to_string(schema).unwrap()).unwrap();
+    let mut want: Vec<String> = schema["json_schema"]["$defs"]["AgentsBlock"]["properties"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .cloned()
+        .chain(["max_lanes".to_string()])
+        .collect();
+    want.sort();
+    let mut got: Vec<String> = records::AGENTS_RESERVED_KEYS
+        .iter()
+        .map(|k| k.to_string())
+        .collect();
+    got.sort();
+    assert_eq!(got, want);
 }

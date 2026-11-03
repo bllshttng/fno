@@ -89,7 +89,10 @@ def test_inventory_covers_every_session_env_the_source_reads_directly() -> None:
             if not name.startswith("FNO_"):
                 found.setdefault(name, str(path.relative_to(src)))
 
-    assert found, "source scan found no session env reads; the pattern has rotted"
+    # The positive control is the pattern itself: Python source may read no
+    # marker at all now that identity resolution is native.
+    sample = 'os.environ.get("CODEX_THREAD_SESSION_ID")'
+    assert pattern.findall(sample) == ["CODEX_THREAD_SESSION_ID"], "the pattern has rotted"
     missing = {n: where for n, where in found.items() if n not in AMBIENT_IDENTITY_ENV}
     assert not missing, (
         "these session markers are read by source but never scrubbed, so a test "

@@ -16,7 +16,7 @@ The consequence, and it is arithmetic, not preference. A subprocess has no cheap
 
 ## The measurement
 
-Reproduce every number below on a clean checkout with `cd cli && uv run fno-py doctor lint seam-crossings`. It prints, for each baselined set, the measured count beside the baseline count.
+Reproduce every number below on a clean checkout with `crates/fno/target/debug/fno doctor lint seam-crossings` (build the front door first). It prints, for each baselined set, the measured count beside the baseline count.
 
 Rust reaches the `fno` porcelain through **104 baselined crossing sites in both crates**. The lint also ratchets **25 resolver functions**, every function whose body resolves the porcelain path. The Python direction runs through one door. `cli/src/fno/rust_binary.py` is the only production Python file allowed to exec the literal `fno-agents` binary. 15 production files import it.
 

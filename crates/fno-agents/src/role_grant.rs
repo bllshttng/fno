@@ -23,9 +23,9 @@ const TERMINAL: [&str; 4] = ["exited", "orphaned", "failed", "permanent_dead"];
 const HELP: &str = "\
 Usage: fno agents role [OPTIONS] [HANDLE]
 
-  Role an existing session from an attended shell, from an agent whose own
-  role strictly contains the requested scope, or add to your own epic-set
-  role an epic your session created.
+  Role an existing session from an attended shell, from a level 0 lead over
+  any scope, from an agent whose own role strictly contains the requested
+  scope, or add to your own epic-set role an epic your session created.
 
   A row already holding a role is re-scoped rather than refused. --reclaim
   returns a transferred role to its recorded grantor and never creates a
@@ -208,10 +208,7 @@ fn caller_payload(calling: &Calling) -> Value {
             json!({"kind": "unregistered"}),
             format!("session {sid}"),
         ),
-        Calling::Agent(row, sid) => crate::spawn_promote::with_identity(
-            json!({"kind": "agent", "status": status_of(row), "role_scope": row.role_scope}),
-            crate::spawn_promote::row_identity(row, sid),
-        ),
+        Calling::Agent(row, sid) => crate::spawn_promote::agent_caller(row, sid),
     }
 }
 
@@ -272,10 +269,10 @@ fn widen_answer(scope: &str, caller: &RegistryEntry, target: &str, entries: &[Va
     .unwrap_or_else(|_| json!({}))
 }
 
-/// Grant a role to one existing row from an attended human shell, or from an
-/// agent whose own role strictly contains the requested scope. A row that
-/// already holds a role is re-scoped in the same registry write, and the
-/// receipt names what was vacated.
+/// Grant a role to one existing row from an attended human shell, from a level
+/// 0 lead over any scope, or from an agent whose own role strictly contains the
+/// requested scope. A row that already holds a role is re-scoped in the same
+/// registry write, and the receipt names what was vacated.
 pub fn promote(home: &AgentsHome, handle: &str, scopes: &[String]) -> Result<Value, String> {
     let projects = projects();
     let entries = graph_entries();
@@ -306,7 +303,11 @@ pub fn promote(home: &AgentsHome, handle: &str, scopes: &[String]) -> Result<Val
     if !widened && (denial.is_some() || self_edit) {
         let hint = widen["hint"].as_str().filter(|h| !h.is_empty());
         let text: Vec<&str> = [denial.as_deref(), hint].into_iter().flatten().collect();
-        return Err(if text.is_empty() {
+        return Err(if widen.get("widen").is_some() && text.is_empty() {
+            "role self-edit refused: a session cannot role itself. Ask the user or a higher \
+             lead to grant it."
+                .to_string()
+        } else if text.is_empty() {
             "role self-edit refused: the role-widen answer was unavailable".to_string()
         } else {
             text.join(" ")
@@ -602,6 +603,96 @@ fn send_term_command(address: &str, command: &str) -> String {
     )
 }
 
+/// Re-scope a live lead to the wider territory the user granted in chat, row
+/// and manifest together. `promote` cannot do this: the session is both
+/// caller and target, and the user is not at a shell. Only a live rival on the
+/// same rung refuses, the same rule a grant from the user's own shell meets.
+pub(crate) fn rescope_from_user_grant(
+    home: &AgentsHome,
+    target: &RegistryEntry,
+    scope: &str,
+    level: u32,
+    projects: &HashMap<String, String>,
+    lead_enabled: bool,
+) -> Result<(), String> {
+    let held = target.role_scope.clone().unwrap_or_default();
+    let session = holder_session(target).unwrap_or_default();
+    crate::state::update_registry(&home.registry_json(), |reg| {
+        let Some(live) = locked(&mut reg.entries, target).map(|r| r.clone()) else {
+            return Err(format!("the row for {} is gone", target.name));
+        };
+        if live.role_scope.as_deref() != Some(held.as_str()) {
+            return Err(format!("the role over {held} moved during the write"));
+        }
+        if let Some(rival) = reg.entries.iter().find(|r| {
+            r.name != target.name
+                && !terminal(r)
+                && crate::loop_lead::team_rivals_pub(
+                    r.role_scope.as_deref().unwrap_or(""),
+                    r.role_level,
+                    scope,
+                    Some(level),
+                    projects,
+                )
+        }) {
+            return Err(format!(
+                "live row {} holds {}",
+                rival.name,
+                rival.role_scope.as_deref().unwrap_or("?")
+            ));
+        }
+        let answer = crate::team_spawn::resolve(&json!({
+            "op": "arm", "scope": scope, "harness_session_id": session,
+            "owner_cwd": target.cwd, "role_level": level, "role_scope": scope,
+            "role_grantor": "human", "model": target.requested_model,
+            "harness": target.harness, "lead_enabled": lead_enabled,
+        }))?;
+        if let Some(e) = answer["error"].as_str() {
+            return Err(format!("lead manifest arming failed: {e}"));
+        }
+        if let Some(row) = locked(&mut reg.entries, target) {
+            row.role_level = Some(level);
+            row.role_scope = Some(scope.to_string());
+            row.role_grantor = Some("human".to_string());
+        }
+        Ok(())
+    })
+    .map_err(|e| format!("the registry write failed: {e}"))??;
+    remove_manifest(&held, &target.cwd, &session);
+    crate::claude_ask::emit_event(
+        &crate::client_commands::trace_events_path(home),
+        "agent_promoted",
+        &[
+            ("name", json!(target.name)),
+            ("level", json!(level)),
+            ("scope", json!(scope)),
+            ("grantor", json!("human")),
+            ("vacated_scope", json!(held)),
+            ("vacated_level", json!(target.role_level)),
+            ("stranded_subordinates", json!([])),
+        ],
+    );
+    Ok(())
+}
+
+/// The effects outside the row and the manifest: the team name follows the
+/// role, and the epics in the new territory arm.
+pub(crate) fn settle_user_rescope(
+    home: &AgentsHome,
+    name: &str,
+    held: &str,
+    scope: &str,
+    level: u32,
+) {
+    let rows = read_registry_entries(&home.registry_json()).unwrap_or_default();
+    let row = rows
+        .iter()
+        .find(|r| r["name"].as_str() == Some(name))
+        .and_then(|r| serde_json::from_value::<RegistryEntry>(r.clone()).ok());
+    carry_team_name(Some(held), scope, row.as_ref(), level);
+    arm_missions(home, scope);
+}
+
 /// Return a transferred role to its recorded grantor: the current holder is
 /// cleared and the live row named by `role_grantor` receives the same
 /// territory and level in one locked write.
@@ -774,6 +865,19 @@ mod tests {
         assert_eq!(holder_session(&r).as_deref(), Some("cc-1"));
         r.harness_session_id = Some("hs-1".into());
         assert_eq!(holder_session(&r).as_deref(), Some("hs-1"));
+    }
+
+    #[test]
+    fn a_callers_stored_level_reaches_the_grant_check() {
+        let verdict = |level: u32| {
+            let mut lead = row("muriel");
+            lead.role_scope = Some("alpha,beta".into());
+            lead.role_level = Some(level);
+            let calling = Calling::Agent(Box::new(lead), "s-1".into());
+            grant_refusal(&calling, "gamma", &HashMap::new(), &[])
+        };
+        assert_eq!(verdict(0), None);
+        assert!(verdict(1).unwrap().contains("neither contains nor equals"));
     }
 
     #[test]

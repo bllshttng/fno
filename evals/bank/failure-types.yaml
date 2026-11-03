@@ -25,6 +25,9 @@ types:
   - id: over-verification
     cost: rework
     description: The agent runs more local checks than the repo's test rule asks.
+  - id: review-routed-away
+    cost: rework
+    description: A lead moves a worker's review to mail, a spawned reviewer or itself.
   - id: silent-disposition
     cost: rework
     description: A finding is declined with no written reason where readers look.

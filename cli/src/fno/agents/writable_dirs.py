@@ -160,11 +160,14 @@ def _state_roots() -> list[Path]:
     except Exception:
         pass
     try:
-        from fno.claims.io import claims_dir, global_claims_root
+        from fno.rust_binary import call_binary_json
 
         # The claim store's own root, not the store: a worker creates the
-        # per-key lockfiles, and on a fresh machine the store itself.
-        out.append(claims_dir(global_claims_root()).parent)
+        # per-key lockfiles, and on a fresh machine the store itself. A
+        # node: key routes to the global store.
+        _error, routed = call_binary_json("claim", ["root", "node:x"], timeout=10)
+        if isinstance(routed, dict) and routed.get("dir"):
+            out.append(Path(str(routed["dir"])).parent)
     except Exception:
         pass
     try:

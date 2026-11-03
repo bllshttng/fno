@@ -18,7 +18,7 @@ use serde_json::Map;
 use serde_json::Value;
 
 const EXIT_USAGE: i32 = 2;
-const USAGE: &str = "usage: fno-agents evals-trend --history <jsonl> (--mode report [--since K] [--graduate N] [--json] [--compare A --to B [--repeats N] [--bank DIR] [--prices JSON]] [--by-failure-type [--repeats N] [--bank DIR]] [--check-metrics [--bank DIR]] [--planned <json>] [--qualification <manifest.json>] [--by-cohort [--prices <json>]] [--climb --baseline C --trial C [--cohorts-yaml P] [--stage V --trial-lane L]] | --mode trend | --mode summary) [--stale-days N] [--now <rfc3339>]";
+const USAGE: &str = "usage: fno-agents evals-trend --history <jsonl> (--mode report [--since K] [--graduate N] [--json] [--compare A --to B [--repeats N] [--bank DIR] [--prices JSON]] [--by-failure-type [--repeats N] [--bank DIR]] [--check-metrics [--bank DIR]] [--planned <json>] [--qualification <manifest.json>] [--by-cohort [--prices <json>]] [--predict [--bank DIR]] [--climb --baseline C --trial C [--cohorts-yaml P] [--stage V --trial-lane L]] | --mode trend | --mode summary) [--stale-days N] [--now <rfc3339>]";
 
 /// One history row: the fields the folds read. Absent keys read as the
 /// Python fold read them (missing `variant` is baseline, missing `ts` is
@@ -44,6 +44,18 @@ impl Row {
 
     pub(crate) fn lane_status(&self) -> Option<&str> {
         self.raw.get("lane_status").and_then(Value::as_str)
+    }
+
+    pub(crate) fn raw_str(&self, key: &str) -> Option<&str> {
+        self.raw.get(key).and_then(Value::as_str)
+    }
+
+    pub(crate) fn raw_i64(&self, key: &str) -> Option<i64> {
+        self.raw.get(key).and_then(Value::as_i64)
+    }
+
+    pub(crate) fn raw_obs_bool(&self, key: &str) -> Option<bool> {
+        self.raw.get("obs")?.get(key)?.as_bool()
     }
 }
 
@@ -104,15 +116,20 @@ pub(crate) fn read_rows(history: &str, variant: Option<&str>, since: Option<usiz
     rows
 }
 
+/// Grades a task needs in a window before the window can say anything about
+/// it. One run per window flipped tasks 0 to 100 percent and back on nothing.
+/// The scheduled run repeats each task this many times.
+pub(crate) const MIN_WINDOW_GRADES: usize = 3;
+
+fn is_legacy(r: &Row) -> bool {
+    crate::eval_attempt::classify(&r.raw, None).status == "legacy"
+}
+
 /// Per-task stats over one row list: attempts/passes since the task's latest
-/// tier change (the anti-false-alarm segment rule).
-///
-/// Two denominators: a task with ANY natively classified row reports
-/// `grades` (valid task grades) and correctness over those grades only -
-/// infrastructure/unavailable/ungraded attempts never drag the pass rate. A
-/// task whose rows are ALL legacy (pre-attempt history) keeps the old
-/// boolean fold: legacy evidence is never reinterpreted, and existing
-/// history keeps its alarm semantics. `runs` is the attempt count either way.
+/// tier change (the anti-false-alarm segment rule). Legacy rows carry no
+/// evidence and stay out. Correctness divides by `grades` only, so
+/// infrastructure/unavailable/ungraded attempts never drag the pass rate.
+/// `runs` counts those attempts too.
 struct TaskStat {
     task_id: String,
     tier: String,
@@ -122,46 +139,34 @@ struct TaskStat {
     infrastructure: usize,
     unavailable: usize,
     ungraded: usize,
-    legacy: usize,
-    legacy_fold: bool,
 }
 
 impl TaskStat {
-    /// Correctness denominator: valid grades for a modern task, attempts for
-    /// an all-legacy task.
-    fn grade_denominator(&self) -> usize {
-        if self.legacy_fold {
-            self.runs
-        } else {
-            self.grades
-        }
-    }
     fn pass_at_1(&self) -> f64 {
-        let den = self.grade_denominator();
-        if den == 0 {
+        if self.grades == 0 {
             0.0
         } else {
-            self.passes as f64 / den as f64
+            self.passes as f64 / self.grades as f64
         }
     }
     fn pass_k(&self) -> bool {
-        let den = self.grade_denominator();
-        den > 0 && self.passes == den
+        self.grades > 0 && self.passes == self.grades
     }
-    /// A real grade below 100%. A window holding only plumbing attempts graded
-    /// nothing, so it says nothing about the task.
+    fn below_full(&self) -> bool {
+        self.grades > 0 && self.passes < self.grades
+    }
+    /// Below 100% on enough grades to mean it.
     fn alarms(&self) -> bool {
-        self.grade_denominator() > 0 && self.pass_at_1() < 1.0
+        self.below_full() && self.grades >= MIN_WINDOW_GRADES
     }
     fn flake(&self) -> bool {
-        let den = self.grade_denominator();
-        self.passes > 0 && self.passes < den
+        self.passes > 0 && self.passes < self.grades
     }
 }
 
 fn stats(rows: &[Row]) -> Vec<TaskStat> {
     let mut by_task: BTreeMap<String, Vec<&Row>> = BTreeMap::new();
-    for r in rows {
+    for r in rows.iter().filter(|r| !is_legacy(r)) {
         by_task.entry(r.task_id.clone()).or_default().push(r);
     }
     let mut out = Vec::new();
@@ -186,8 +191,6 @@ fn stats(rows: &[Row]) -> Vec<TaskStat> {
             infrastructure: 0,
             unavailable: 0,
             ungraded: 0,
-            legacy: 0,
-            legacy_fold: false,
         };
         for r in &segment_rows {
             match crate::eval_attempt::classify(&r.raw, None).status {
@@ -199,15 +202,8 @@ fn stats(rows: &[Row]) -> Vec<TaskStat> {
                 }
                 "infrastructure" => stat.infrastructure += 1,
                 "unavailable" => stat.unavailable += 1,
-                "ungraded" => stat.ungraded += 1,
-                _ => stat.legacy += 1,
+                _ => stat.ungraded += 1,
             }
-        }
-        // All-legacy segment: keep the pre-attempt boolean fold verbatim.
-        stat.legacy_fold =
-            stat.grades + stat.infrastructure + stat.unavailable + stat.ungraded == 0;
-        if stat.legacy_fold {
-            stat.passes = segment_rows.iter().filter(|r| r.pass).count();
         }
         out.push(stat);
     }
@@ -242,13 +238,25 @@ fn window_rows<'a>(rows: &'a [Row], start: DateTime<Utc>, end: DateTime<Utc>) ->
         .collect()
 }
 
+/// Regression-tier tasks whose recent window fires the alarm.
+fn recent_alarm(rows: &[Row], start: DateTime<Utc>, end: DateTime<Utc>) -> Vec<String> {
+    stats_window(rows, start, end)
+        .into_iter()
+        .filter(|s| s.tier == "regression" && s.alarms())
+        .map(|s| s.task_id)
+        .collect()
+}
+
 /// Per-task verdict of one row list against another: runs, pass@1 per side,
-/// delta (b - a) and the improved/regressed/unchanged verdict.
+/// delta (b - a) and the verdict. A side under `MIN_WINDOW_GRADES` reads
+/// insufficient, whichever way the delta points.
 fn pair_verdict(a: &[&Row], b: &[&Row]) -> (usize, f64, usize, f64, f64, &'static str) {
     let a_p1 = a.iter().filter(|r| r.pass).count() as f64 / a.len() as f64;
     let b_p1 = b.iter().filter(|r| r.pass).count() as f64 / b.len() as f64;
     let delta = b_p1 - a_p1;
-    let verdict = if delta > 0.0 {
+    let verdict = if a.len() < MIN_WINDOW_GRADES || b.len() < MIN_WINDOW_GRADES {
+        "insufficient"
+    } else if delta > 0.0 {
         "improved"
     } else if delta < 0.0 {
         "regressed"
@@ -267,12 +275,7 @@ fn trend_fold(rows: &[Row], window_days: i64, now: DateTime<Utc>) -> (Value, Vec
     // an outage reads as a regression against the prior window.
     let graded: Vec<Row> = rows
         .iter()
-        .filter(|r| {
-            !matches!(
-                crate::eval_attempt::classify(&r.raw, None).status,
-                "infrastructure" | "unavailable" | "ungraded"
-            )
-        })
+        .filter(|r| crate::eval_attempt::classify(&r.raw, None).status == "graded")
         .cloned()
         .collect();
     let rows = graded.as_slice();
@@ -325,11 +328,7 @@ fn trend_fold(rows: &[Row], window_days: i64, now: DateTime<Utc>) -> (Value, Vec
         })
         .map(|(tid, _)| tid.clone())
         .collect();
-    let recent_alarm: Vec<String> = stats_window(rows, now - w, now)
-        .into_iter()
-        .filter(|s| s.tier == "regression" && s.alarms())
-        .map(|s| s.task_id)
-        .collect();
+    let recent_alarm = recent_alarm(rows, now - w, now);
     let view = json!({
         "window_days": window_days,
         "prior_start": (now - w - w).to_rfc3339(),
@@ -362,20 +361,18 @@ fn report_fold(
     planned: Option<&BTreeMap<String, usize>>,
 ) -> Value {
     let all = stats(rows);
+    let legacy_dropped = rows.iter().filter(|r| is_legacy(r)).count();
     let mut tiers: BTreeMap<String, (usize, usize)> = BTreeMap::new();
     for s in &all {
         let e = tiers.entry(s.tier.clone()).or_insert((0, 0));
         e.0 += s.runs;
         e.1 += s.passes;
-        // The tier rate sums each task's OWN denominator (grades for a modern
-        // task, attempts for an all-legacy task) so the aggregate never mixes
-        // infrastructure evidence into correctness.
     }
     let tier_json = Map::from_iter(tiers.iter().map(|(tier, (runs, passes))| {
         let den: usize = all
             .iter()
             .filter(|s| s.tier == *tier)
-            .map(|s| s.grade_denominator())
+            .map(|s| s.grades)
             .sum();
         let rate = if den == 0 {
             0.0
@@ -403,14 +400,12 @@ fn report_fold(
                 "passes": s.passes, "pass_at_1": round4(s.pass_at_1()),
                 "pass_k": s.pass_k(), "flake": s.flake(),
                 "grades": s.grades,
-                "grade_den": s.grade_denominator(),
+                "grade_den": s.grades,
                 "attempts": {
                     "infrastructure": s.infrastructure,
                     "unavailable": s.unavailable,
                     "ungraded": s.ungraded,
-                    "legacy": s.legacy,
                 },
-                "legacy_fold": s.legacy_fold,
             });
             if let Some(plan) = planned {
                 let expected = plan.get(&s.task_id).copied().unwrap_or(0);
@@ -433,9 +428,12 @@ fn report_fold(
         .map(|s| s.task_id.as_str())
         .collect();
     let w = chrono::Duration::days(window_days);
-    let alarm: Vec<String> = stats_window(rows, now - w, now)
+    let alarm = recent_alarm(rows, now - w, now);
+    // A failing task too thin to alarm still shows, so a thin window never
+    // reads as a clean one.
+    let too_few_grades: Vec<String> = stats_window(rows, now - w, now)
         .into_iter()
-        .filter(|s| s.tier == "regression" && s.alarms())
+        .filter(|s| s.tier == "regression" && s.below_full() && !s.alarms())
         .map(|s| s.task_id)
         .collect();
     let mut report = json!({
@@ -444,17 +442,20 @@ fn report_fold(
         "tasks": tasks,
         "flakes": flakes,
         "regression_alarm": alarm,
+        "too_few_grades": too_few_grades,
+        "legacy_dropped": legacy_dropped,
     });
     if let Some(n) = graduate_n {
-        let candidates: Vec<String> = group_by_task(rows.iter().collect())
-            .into_iter()
-            .filter(|(_, trs)| {
-                trs.last().map(|r| r.tier.as_str()) == Some("capability")
-                    && trs.len() >= n
-                    && trs[trs.len() - n..].iter().all(|r| r.pass)
-            })
-            .map(|(tid, _)| tid)
-            .collect();
+        let candidates: Vec<String> =
+            group_by_task(rows.iter().filter(|r| !is_legacy(r)).collect())
+                .into_iter()
+                .filter(|(_, trs)| {
+                    trs.last().map(|r| r.tier.as_str()) == Some("capability")
+                        && trs.len() >= n
+                        && trs[trs.len() - n..].iter().all(|r| r.pass)
+                })
+                .map(|(tid, _)| tid)
+                .collect();
         report["graduation_eligible"] =
             Value::Array(candidates.into_iter().map(Value::String).collect());
     }
@@ -505,6 +506,9 @@ fn cohort_fold(rows: &[Row], prices: Option<&Value>) -> Value {
 pub(crate) fn cohort_score(rows: &[&Row], prices: Option<&Value>) -> Value {
     let mut statuses: BTreeMap<String, usize> = BTreeMap::new();
     let mut lane_statuses: BTreeMap<String, usize> = BTreeMap::new();
+    // A row with no lane folds under the empty seat, never under a lane.
+    let mut lanes: BTreeMap<String, usize> = BTreeMap::new();
+    let mut models: BTreeMap<String, usize> = BTreeMap::new();
     let mut by_reason: BTreeMap<String, usize> = BTreeMap::new();
     let mut scored: Vec<&Row> = Vec::new();
     let mut excluded = 0usize;
@@ -522,6 +526,15 @@ pub(crate) fn cohort_score(rows: &[&Row], prices: Option<&Value>) -> Value {
             .and_then(Value::as_str)
             .unwrap_or("unverified");
         *lane_statuses.entry(lane_status.to_string()).or_default() += 1;
+        let text = |k: &str| {
+            r.raw
+                .get(k)
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string()
+        };
+        *lanes.entry(text("requested_lane")).or_default() += 1;
+        *models.entry(text("observed_model")).or_default() += 1;
         let reason = r.raw.get("excluded_reason").and_then(Value::as_str);
         if is_scored(r) {
             scored.push(r);
@@ -644,6 +657,8 @@ pub(crate) fn cohort_score(rows: &[&Row], prices: Option<&Value>) -> Value {
         },
         "median_wall_s": round4(median_wall_s),
         "lane_status_counts": lane_statuses,
+        "requested_lanes": lanes,
+        "observed_models": models,
         "status_counts": statuses,
         "excluded": {
             "total": excluded,
@@ -688,11 +703,7 @@ pub(crate) fn summary_payload(history: &str, stale_days: i64, now: DateTime<Utc>
     let rows = read_rows(history, Some("baseline"), None);
     let (_, regressed) = trend_fold(&rows, stale_days, now);
     let w = chrono::Duration::days(stale_days);
-    let recent_alarm: Vec<String> = stats_window(&rows, now - w, now)
-        .into_iter()
-        .filter(|s| s.tier == "regression" && s.alarms())
-        .map(|s| s.task_id)
-        .collect();
+    let recent_alarm = recent_alarm(&rows, now - w, now);
     let fold = report_fold(&rows, stale_days, now, None, None);
     let reg = fold.get("tiers").and_then(|t| t.get("regression"));
     let pass_rate = reg
@@ -897,6 +908,7 @@ pub fn run_evals_trend(args: &[String]) -> i32 {
     let mut planned: Option<BTreeMap<String, usize>> = None;
     let mut qualification: Option<String> = None;
     let mut by_cohort = false;
+    let mut predict = false;
     let mut by_failure_type = false;
     let mut check_metrics = false;
     let mut bank: Option<String> = None;
@@ -1010,6 +1022,7 @@ pub fn run_evals_trend(args: &[String]) -> i32 {
                 Err(()) => return EXIT_USAGE,
             },
             "--by-cohort" => by_cohort = true,
+            "--predict" => predict = true,
             "--by-failure-type" => by_failure_type = true,
             "--check-metrics" => check_metrics = true,
             "--bank" => match value("--bank") {
@@ -1161,6 +1174,9 @@ pub fn run_evals_trend(args: &[String]) -> i32 {
     if let Some(qpath) = &qualification {
         return qualification_report(&history, qpath, json_out, since);
     }
+    if predict {
+        return crate::evals_predict::run(&history, bank, json_out);
+    }
     if by_cohort {
         let rows = read_rows(&history, None, since);
         let fold = cohort_fold(&rows, prices.as_ref());
@@ -1208,8 +1224,15 @@ pub fn run_evals_trend(args: &[String]) -> i32 {
                     let tok_out = c["tokens"]["output"].to_string();
                     let cache_r = c["tokens"]["cache_read"].to_string();
                     let cache_w = c["tokens"]["cache_write"].to_string();
+                    let counts = |key: &str| {
+                        let map = c[key].as_object().cloned().unwrap_or_default();
+                        let parts: Vec<String> =
+                            map.iter().map(|(k, n)| format!("{k}:{n}")).collect();
+                        parts.join(",")
+                    };
+                    let (lane, model) = (counts("requested_lanes"), counts("observed_models"));
                     println!(
-                        "  {id}: attempts={attempts} graded={graded} accepted={accepted} rate={rate_pct:.1}% [{lo_pct:.1},{hi_pct:.1}] median={median}s in={tok_in} out={tok_out} cache_r={cache_r} cache_w={cache_w} {cost}"
+                        "  {id}: lane={lane} model={model} attempts={attempts} graded={graded} accepted={accepted} rate={rate_pct:.1}% [{lo_pct:.1},{hi_pct:.1}] median={median}s in={tok_in} out={tok_out} cache_r={cache_r} cache_w={cache_w} {cost}"
                     );
                 }
             }
@@ -1283,12 +1306,8 @@ pub fn run_evals_trend(args: &[String]) -> i32 {
             // The rate divides by grades, so the printed fraction does too;
             // attempts with no grade are named beside it, never folded in.
             let mut line = format!("  {tier}: {passes}/{den} pass ({pct:.0}%)");
-            if runs > den {
-                let legacy = runs - den - plumbing;
-                line += &format!(
-                    "; {} of {runs} attempts not graded: {plumbing} plumbing, {legacy} legacy",
-                    runs - den
-                );
+            if plumbing > 0 {
+                line += &format!("; {plumbing} of {runs} attempts not graded");
             }
             println!("{line}");
         }
@@ -1333,6 +1352,20 @@ pub fn run_evals_trend(args: &[String]) -> i32 {
         .unwrap_or_default();
     if !alarm_ids.is_empty() {
         println!("  REGRESSION ALARM: {} below 100%", alarm_ids.join(", "));
+    }
+    let thin_ids: Vec<&str> = report["too_few_grades"]
+        .as_array()
+        .map(|a| a.iter().filter_map(Value::as_str).collect())
+        .unwrap_or_default();
+    if !thin_ids.is_empty() {
+        println!(
+            "  below 100%, under {MIN_WINDOW_GRADES} grades, no alarm: {}",
+            thin_ids.join(", ")
+        );
+    }
+    let dropped = report["legacy_dropped"].as_u64().unwrap_or(0);
+    if dropped > 0 {
+        println!("  dropped {dropped} legacy attempts with no grade evidence");
     }
     if let Some(elig) = report.get("graduation_eligible").and_then(Value::as_array) {
         let ids: Vec<&str> = elig.iter().filter_map(Value::as_str).collect();

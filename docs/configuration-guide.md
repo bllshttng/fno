@@ -72,6 +72,9 @@ Keys live in a flat `config.toml` (`.fno/config.toml` project-local, `~/.fno/con
 | `telemetry.otlp.endpoint` | str | `` | advanced | OTLP collector URL, http(s); `/v1/logs` is appended when absent. |
 | `telemetry.otlp.headers_env` | str | `FNO_OTLP_HEADERS` | advanced | Env var holding the export auth headers as `name=value,...`. |
 | `telemetry.otlp.log_content` | bool | `false` | advanced | Export event titles as log text (default off: only the event kind). |
+| `telemetry.eval_events.enabled` | bool | `false` | advanced | Send each eval run to PostHog as an event (default off). |
+| `telemetry.eval_events.host` | str | `https://us.i.posthog.com` | advanced | PostHog ingest host, https only. |
+| `telemetry.eval_events.token_env` | str | `FNO_POSTHOG_PROJECT_TOKEN` | advanced | Env var holding the PostHog project token. |
 | `attention.enabled` | bool | `true` | advanced | Kill switch for the attention arm (question pages and sinks; default on). |
 | `attention.sinks` | list[dict[str, Any]] | `[]` | advanced | Push sinks for open questions: a list of tables with name, type (ntfy or webhook), url, topic, token_env, answer_base_url and body (title-only or full). |
 | `research.output_dir` | str (optional) | _(none)_ | advanced | Landing dir for the `fno do research` doc deliverable (brief + sources sidecar); vault area, not repo-relative. Unset => ship fails loud (never guesses). |

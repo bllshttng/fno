@@ -141,6 +141,18 @@ CASES = {
         },
         {},
     ),
+    # The credential Claude Code reads for an Anthropic-compatible vendor
+    # (z.ai, DeepSeek), so an api_key record may carry it in place of
+    # ANTHROPIC_API_KEY.
+    "api_key_anthropic_auth_token": (
+        "load",
+        {
+            "global": rec("zai", auth="api_key")
+            + '[accounts.records.env]\nANTHROPIC_BASE_URL = "https://api.z.ai/api/anthropic"\n'
+            + 'ANTHROPIC_AUTH_TOKEN = "${ENV:ZAI_API_KEY}"\n'
+        },
+        {},
+    ),
     "api_key_route": (
         "load",
         {"global": rec("a", auth="api_key", route=" zai/glm-5.3 ")},
@@ -303,6 +315,15 @@ CASES = {
         },
         {},
     ),
+    # $FNO_CONFIG names the one layer read: the global combo drops out.
+    "combos_fno_config_is_the_only_layer": (
+        "combos",
+        {
+            "global": A + '[accounts.combos.wide]\nproviders = ["alpha"]\n',
+            "project": A + '[accounts.combos.mine]\nproviders = ["alpha"]\nstrategy = "fallback"\n',
+        },
+        {"fno_config": "project"},
+    ),
     "combos_unknown_provider": (
         "combos",
         {"global": A + '[accounts.combos.main]\nproviders = ["ghost"]\n'},
@@ -423,6 +444,8 @@ def run_case(op, files, extra, tmp: Path):
         FNO_REPO_ROOT=str(tmp / "repo"),
         FNO_STATE_DIR=str(tmp / "state"),
     )
+    if "fno_config" in extra:
+        os.environ["FNO_CONFIG"] = str(tmp / LAYER_PATHS[extra["fno_config"]])
     os.chdir(tmp / "repo")
     loader._LEGACY_BLOCK_WARNED = True
     try:

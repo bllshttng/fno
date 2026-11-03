@@ -107,6 +107,8 @@ It does NOT ask for a retry. The durable event has already landed by then, so a 
 
 A failed PROJECTION does not fail the command at all. Both durable stores already hold the decision by then, so the ruling is recorded and recoverable. Only the node view is missing, and the command says which decision id it is.
 
+The graph write gets a retry. A peer machine reads only the graph decisions table, so a refused row there never reaches it. A machine that shares its backlog runs a store beat. Once a minute, the beat replays each index row the table lacks, at most 50 per pass. The row keeps its own id and ts, and the next flush ships it to the primary. `fno backlog decide-reindex` runs the same replay at once and prints `graph_replayed` and `graph_refused`. A row the store refuses again stays in the index for the next pass.
+
 ## A ruling an agent makes about another node
 
 Agents answer by default (ruling of 2026-09-14): an agent session records coordination decisions with `fno backlog decide`. Only the `operator` authority refuses an agent session there, because the superuser lane is not an agent's to claim. An agent that rules out another node's work records the verdict where that node's readers already look.
@@ -189,11 +191,11 @@ The standing query is law-only and lifecycle-filtered: `fno backlog decisions <t
 
 ## Law carries a scope
 
-Law is recorded where it is made, and scope names who it governs. The vocabulary has two values: `global` and `project:<slug>`. The slug is the settings project name, the same vocabulary a graph node's `project` field uses. A law and the nodes it governs answer one resolver.
+Law is recorded where it is made, and scope names who it governs. The vocabulary has four values: `global`, `project:<slug>`, `machine:<id>` and `person:<name>`. The slug is the settings project name, the same vocabulary a graph node's `project` field uses. A law and the nodes it governs answer one resolver. The machine id is the claim store's id, and the person is the `identity.rs` resolver that [multiplayer.md](multiplayer.md#the-person-beside-the-machine) describes.
 
-The law door (`fno inbox law set`) stamps the recording session's project by default. Widening to `global` is explicit on the door itself: the `--global` flag carries it, because law is never inherited by silence. A repo outside the work map makes the door refuse and name the path it failed to place. The door fails closed so a guessed stamp never lands, while every reader fails open.
+The law door (`fno inbox law set`) stamps the recording session's project by default. Widening is explicit on the door itself, because law is never inherited by silence. `--global` widens to every session. `--machine` and `--person` bind this machine or this person, and `--machine=<id>` or `--person=<name>` names another one. One law takes one of the three flags. A global law, or one that names another machine or person, needs a stated person first: `[fleet] owner = "<name>"` in `~/.fno/config.toml` (user ruling d-2a01fdf1). With no owner stated, the door refuses and records nothing. The stated name is presence, not proof, so the gate stops a mistake and never an attacker. A signed person key replaces it later. A repo outside the work map makes the door refuse and name the path it failed to place. The door fails closed so a guessed stamp never lands, while every reader fails open.
 
-Every law reader filters. Global law reaches every session. A project law reaches only that project's sessions. A row with no scope reaches only fno sessions, because all 82 pre-scope rows were recorded in fno. The general ones get promoted by an explicit re-record widened with `--global`.
+Every law reader filters. Global law reaches every session. A project law reaches only that project's sessions. A machine or person law reaches only the sessions that resolve that id or name, with or without a resolved project. A session that reads no machine id fails open and sees a machine law. The retract, restore and history doors still reach every machine and person law, so the owner can undo one from any machine. No event carries an identity, so the rule set judges these two scopes at build time. A row with no scope reaches only fno sessions, because all 82 pre-scope rows were recorded in fno. The general ones get promoted by an explicit re-record widened with `--global`.
 
 Readers return the count they withheld, and the report's JSON carries the note. The stage block lists a law's scope on its line. A workspace tier (`workspace:<name>`) is a rung nobody has reached. The field is a free string, so adding it later needs a reader branch and no migration.
 

@@ -146,7 +146,7 @@ Every subfolder and file below was found in the real root unnamed at the 2026-09
 | `observer-reports/` | the observer fold, via the `paths` accessor | one report per observation run |
 | `operator-capture/` | `cli/src/fno/inbox/operator_turns.py` writes `<session-id>.jsonl`, the ack ledger and receipt; `fno-agents compaction operator-turns` (`crates/fno-agents/src/operator_turns.rs`) writes `<session-id>.scan.json` | per session, the ack ledger is permanent. The scan cursor cache is safe to delete, the next read rescans from byte 0 |
 | `postmortems/` | the retro routine and stuck-terminal postmortem writer, via the `paths` accessor | permanent |
-| `providers/` | `cli/src/fno/adapters/providers/managed.py`, `staging.py` | permanent managed provider configs |
+| `providers/` | `crates/fno-agents/src/accounts/store.rs` (the managed store); oauth_dir staging links the operator creates, `accounts/staging.rs` checks | permanent managed provider configs |
 | `cargo-build/<h2>/<hash>/` | cargo itself, via the tracked `build.build-dir` and the `CARGO_BUILD_BUILD_DIR` value `fno_build_base` in `crates/fno-agents/src/cargo_build_dirs.rs` resolves | per-workspace intermediates, one hash dir per workspace root; final binaries stay in the checkout's `crates/*/target`; reclaimed by `worktree cleanup --cargo-targets` (live workspaces' hash dirs are protected via `cargo metadata`) |
 | `plugin-stage/fno/` | `fno config plugin install` via the `fno-agents plugin-install` command (`crates/fno-agents/src/plugin_install.rs::build_stage`); restaged by `fno doctor update` whenever the directory exists | a filtered copy of the checkout (git-tracked + untracked-but-not-ignored files only, no target/, worktrees or venvs); rebuilt wholesale on every install, so nothing in it outlives the next one; the swap is atomic by rename and hook scripts the old stage's config references are carried forward; `fno-agents plugin-install --check` is the drift verdict and `fno doctor` exits 1 on a stale stage |
 | `state/reclaim/last-run.json` | `fno doctor reclaim` via `crates/fno-agents/src/reclaim.rs::write_receipt` (the Python doctor command shells to `fno-agents reclaim`) | overwritten per `--apply` run; records bytes reclaimed per lane; the daemon's daily sweep gates on its mtime |
@@ -304,7 +304,7 @@ The deleter: a whole space (or a `<space>/worktrees/<name>` slice) whose source 
 |---|---|---|
 | `<space>/events.jsonl` | `paths.project_events_json()`; legacy bytes only since the event-store cutover | import source |
 | `<space>/events.db`, `.db-wal`, `.db-shm` | the `fno-event-store` crate, the authoritative event store beside each journal | durable and gate rows forever, ephemeral 672 h |
-| `<space>/claims/` | `fno.claims` for repo-local keys (`walker:`, `review:`, `reap:`); global-id keys (`node:`, `dispatch:`, ...) stay at the global root | re-acquirable leases |
+| `<space>/claims/` | `fno-agents claim` for repo-local keys (`walker:`, `review:`, `reap:`); global-id keys (`node:`, `dispatch:`, ...) stay at the global root | re-acquirable leases |
 | `<space>/leads/<scope>.md` | `crates/fno-agents/src/lead_state.rs` via promotion or `fno agents org init` | one loop-state file per live role scope; stale files are inert without a live registry role and cleanup is best-effort (`fno agents org done` on departure) |
 | `<space>/leads/<scope>.md.lock`, `.md.tmp` | `lead_state.rs` / `loop_lead.rs` / `lead_ops.rs` over the manifest lock | lock lives only for the critical section; tmp is replaced on every locked write |
 | `<space>/leads/<scope>.wake.json` | `lead_wake_triggers.rs` (the daemon's wake arm) | arm-local trigger cache with no lead meaning: `board_hash` + `board_rows` (the board-change trigger) and `answered_cursor` (the answered-escalation trigger); refreshed only when a wake fires, so it never outlives the manifest beside it |
@@ -333,7 +333,7 @@ Two files stay inside a checkout, each because moving it breaks the thing that w
 | Entry | Writer | Lifetime |
 |---|---|---|
 | `.fno/config.toml` | `fno config project init` / the operator | committed project config, the same class as `.claude/settings.json` |
-| `.fno/state-root-denied.json` | the DENIED worker, through `crates/fno-agents/src/claims.rs::write_state_root_breadcrumb` and its Python twin `cli/src/fno/claims/io.py::_breadcrumb_path` | until the next successful claim on this repo, which deletes it |
+| `.fno/state-root-denied.json` | the DENIED worker, through `crates/fno-agents/src/claims.rs::write_state_root_breadcrumb` | until the next successful claim on this repo, which deletes it |
 | `.fno/branch-provenance.json` | the pr-watch tick's stranded leg, via `crates/fno-agents/src/pr_watch/state.rs::write_provenance_cache` | overwritten every tick, never appended; safe to delete (the next tick rewrites it); the Kanban board's Branch Provenance section reads it |
 
 The breadcrumb is here because it is the only thing a mute worker can still say.

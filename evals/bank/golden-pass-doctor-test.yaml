@@ -13,7 +13,7 @@ grade:
   - kind: exit
     command: "sed -n 1p decision.md | tr -d '`\\r' | grep -Eiq '^action: *.*(fno doctor test .*test_doctor\\.py)' && ! sed -n 1p decision.md | tr -d '`\\r' | grep -Eiq '\\| *tail'"
 timeout_minutes: 10
-tags: [golden]
+tags: [golden, demoted]
 golden:
   source: {kind: reaction-approve, ref: "26c22992-5952-4ed7-af64-12d4593c0fe8:863edec7-0c87-471b-a451-580980661e73"}
   quote: "fno doctor test cli/tests/unit/test_doctor.py -k codex_app_server"

@@ -1639,7 +1639,6 @@ K10	cli/tests/unit/test_annotate.py	py	4
 K10	cli/tests/unit/test_archive_in_db.py	py	6
 K10	cli/tests/unit/test_archive_sweep.py	py	37
 K10	cli/tests/unit/test_auto_continue.py	py	10
-K10	cli/tests/unit/test_autobrief.py	py	25
 K10	cli/tests/unit/test_base_lineage.py	py	21
 K10	cli/tests/unit/test_bases.py	py	6
 K10	cli/tests/unit/test_batch_metrics.py	py	7
