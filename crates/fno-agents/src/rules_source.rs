@@ -957,6 +957,7 @@ mod tests {
             }
             row
         };
+        let mine = format!("person:{}", crate::identity::person());
         let laws = decision_index::Index {
             rows: vec![
                 law(
@@ -969,17 +970,11 @@ mod tests {
                 law(
                     "d-0000bbbb",
                     "2026-11-01T00:00:00Z",
-                    "project:fno",
+                    &mine,
                     Some("warn"),
                     true,
                 ),
-                law(
-                    "d-0000cccc",
-                    "2026-11-02T00:00:00Z",
-                    "project:fno",
-                    None,
-                    true,
-                ),
+                law("d-0000cccc", "2026-11-02T00:00:00Z", &mine, None, true),
                 law(
                     "d-0000dddd",
                     "2026-11-01T00:00:00Z",
