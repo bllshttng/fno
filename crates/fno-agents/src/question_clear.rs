@@ -152,6 +152,32 @@ mod tests {
         assert!(second.lines[0].contains("the first answer stands"));
     }
 
+    // The board's no-identity lane IS the user on a copy too: an answer that
+    // carries no session identity travels to the asking machine, while a
+    // caller with a resolved session handle is an agent and cannot.
+    #[test]
+    fn an_unattributed_board_answer_travels_for_the_user_on_a_copy() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut req = request(&tmp, "q-copy1@hostb", Some("ship it"));
+        req.provenance = json!({"decided_by": "unattributed-caller"});
+        req.caller = Some(ClearCaller::default());
+        let mut copy = ask("q-copy1@hostb", "which lane?", None, None);
+        copy["data"]["origin_machine"] = json!("bus-test");
+        copy["data"]["origin_question_id"] = json!("q-copy1");
+        copy["data"]["host"] = json!("hostb");
+        seed_question(&req, &copy);
+
+        let result = run_clear(&req);
+
+        assert_eq!(result.exit_code, 0, "{:?}", result.lines);
+        assert!(
+            result.lines[0].contains("the answer goes there"),
+            "{:?}",
+            result.lines
+        );
+        assert_eq!(rows(&req.index_path, &["attention_answer"]).len(), 1);
+    }
+
     #[test]
     fn answered_clear_records_one_decision_and_receipts_before_delivery() {
         let tmp = tempfile::tempdir().unwrap();
@@ -1567,7 +1593,10 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
         // that machine's door, which records the decision and wakes the
         // asker. The user's answer rides the bus there. That door records
         // under its own daemon's authority, so nothing but the user's answer
-        // may travel: an agent's would land there as the user's.
+        // may travel: an agent's would land there as the user's. The user's
+        // lane here is the same trust floor operator_can_grant reads: the
+        // no-identity clear caller IS the user's board, and a resolved
+        // session handle is an agent.
         if crate::question_bus::peer_origin(question_event).is_some() {
             let host = question_event["data"]["host"]
                 .as_str()
@@ -1575,7 +1604,9 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
             let origin_id = question_event["data"]["origin_question_id"]
                 .as_str()
                 .unwrap_or(qid);
-            let by_user = req.provenance["authority_source"].as_str() == Some("operator");
+            let authority = req.provenance["authority_source"].as_str();
+            let by_user = matches!(authority, None | Some("") | Some("operator"))
+                && agent_handle(req, &caller).is_none();
             let Some(text) = req.answer.as_deref().filter(|_| by_user) else {
                 refused += 1;
                 answer.lines.push(if req.answer.is_some() {
@@ -2133,7 +2164,9 @@ fn make_decision(
         decision
             .entry("authority_source")
             .or_insert(json!("operator"));
-        if decision.get("decided_by").and_then(Value::as_str) == Some("unattributed-caller") {
+        if decision.get("decided_by").and_then(Value::as_str)
+            == Some(crate::law_match::UNATTRIBUTED_CALLER)
+        {
             decision.insert("decided_by".into(), json!("operator"));
         }
         decision
