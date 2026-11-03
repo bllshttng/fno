@@ -1395,10 +1395,14 @@ pub fn node(inp: &Inputs, id: &str) -> Option<NodeView> {
                     .find(|a| a.harness_session_id.as_deref() == Some(sid))
             });
             let (action, reason, command) = session_reach(joined, sid, node_cwd.as_deref());
-            let model = s
-                .get("observed_model")
-                .and_then(|m| m.get("model"))
-                .and_then(Value::as_str)
+            // The live seat's model answers first: it is what runs now.
+            let model = joined
+                .and_then(|a| a.model.as_deref())
+                .or_else(|| {
+                    s.get("observed_model")
+                        .and_then(|m| m.get("model"))
+                        .and_then(Value::as_str)
+                })
                 .or_else(|| s.get("model").and_then(Value::as_str))
                 .map(str::to_string);
             SessionView {

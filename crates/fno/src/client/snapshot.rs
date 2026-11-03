@@ -23,7 +23,7 @@ const USAGE: &str =
     "usage: fno mux serve --snapshot --server <name> --out <path> [--squad <name>] \
 [--theme dark|light|macchiato] [--format html|svg|png] [--size <cols>x<rows> [--fit]] [--peer <cols>x<rows>] \
 [--font <family>] [--message <fmail-id>] \
-[--view bell|bell-wide|bell-full|feed|row-menu|hover|cursor|tab-menu|sideline-menu|composer|split-menu|settings|keys|org-block|org-table|org-recent|org-overview|org-graph|org-health|org-seat|org-feed|org-system|org-remote|org-peek|org-spawn|org-keys|messages-tree|messages-chats|messages-thread|messages-system|messages-archive|backlog-list|backlog-kanban|navigator-pr|navigator-model|navigator-menu|feed-detail|question-detail|connections|yard|needs]";
+[--view bell|bell-wide|bell-full|feed|row-menu|hover|cursor|tab-menu|sideline-menu|composer|split-menu|settings|keys|org-block|org-table|org-recent|org-overview|org-graph|org-health|org-seat|org-feed|org-system|org-remote|org-peek|org-spawn|org-keys|messages-tree|messages-chats|messages-thread|messages-system|messages-archive|backlog-list|backlog-kanban|review-diff|review-panel|review-panel-drag|navigator-pr|navigator-model|navigator-menu|feed-detail|question-detail|connections|yard|needs]";
 
 #[derive(Debug, PartialEq)]
 pub enum Format {
@@ -102,6 +102,12 @@ pub enum ViewKind {
     MessagesYou,
     /// The board on the newest You thread's detail, pairs right and left.
     MessagesYouThread,
+    /// The PR review overlay over the fixture diff, with two staged comments.
+    ReviewDiff,
+    /// The PR review as a right split beside the chat panes.
+    ReviewPanel,
+    /// The review split mid-drag at 60 percent, its edge in the accent.
+    ReviewPanelDrag,
     /// The backlog board full screen in list view, details pane beside it.
     BacklogList,
     /// The backlog board full screen in kanban view, details pane beside it.
@@ -253,6 +259,9 @@ fn parse_view(v: &str) -> Option<ViewKind> {
         "messages-archive" => Some(ViewKind::MessagesArchive),
         "messages-you" => Some(ViewKind::MessagesYou),
         "messages-you-thread" => Some(ViewKind::MessagesYouThread),
+        "review-diff" => Some(ViewKind::ReviewDiff),
+        "review-panel" => Some(ViewKind::ReviewPanel),
+        "review-panel-drag" => Some(ViewKind::ReviewPanelDrag),
         "backlog-list" => Some(ViewKind::BacklogList),
         "backlog-kanban" => Some(ViewKind::BacklogKanban),
         "navigator-pr" => Some(ViewKind::NavigatorPr),
@@ -339,7 +348,7 @@ pub fn parse(tail: &[OsString]) -> Result<SnapshotArgs, String> {
             "--view" => {
                 let v = value()?;
                 view = Some(parse_view(&v).ok_or_else(|| {
-                    format!("fno mux serve --snapshot: unknown view {v:?}; use bell, bell-wide, bell-full, feed, row-menu, tab-menu, sideline-menu, composer, split-menu, settings, keys, org-block, org-table, org-recent, org-overview, org-graph, org-health, org-seat, org-feed, org-system, org-remote, org-peek, org-spawn, org-keys, messages-tree, messages-chats, messages-thread, messages-system, messages-archive, messages-you, messages-you-thread, backlog-list, backlog-kanban, navigator-pr, navigator-menu, navigator-model, feed-detail, question-detail or connections")
+                    format!("fno mux serve --snapshot: unknown view {v:?}; use bell, bell-wide, bell-full, feed, row-menu, tab-menu, sideline-menu, composer, split-menu, settings, keys, org-block, org-table, org-recent, org-overview, org-graph, org-health, org-seat, org-feed, org-system, org-remote, org-peek, org-spawn, org-keys, messages-tree, messages-chats, messages-thread, messages-system, messages-archive, messages-you, messages-you-thread, backlog-list, backlog-kanban, review-diff, review-panel, review-panel-drag, navigator-pr, navigator-menu, navigator-model, feed-detail, question-detail or connections")
                 })?)
             }
             tok @ ("--server" | "--session") => {
@@ -628,6 +637,24 @@ fn find_chrome() -> Option<PathBuf> {
         .find(|p| p.is_file())
 }
 
+/// The split views open the fixture review beside the panes; the drag view
+/// holds its edge mid-drag at 60 percent.
+fn split_fixture(view: &mut View, kind: Option<&ViewKind>) {
+    if matches!(
+        kind,
+        Some(ViewKind::ReviewPanel | ViewKind::ReviewPanelDrag)
+    ) {
+        view.viewer.review = review_fixture().ok();
+    }
+    if matches!(kind, Some(ViewKind::ReviewPanelDrag)) {
+        view.viewer.dragging_at(60);
+    }
+}
+
+fn review_fixture() -> Result<super::backlog_board::pr_review::Review, String> {
+    super::backlog_board::pr_review::fixture(include_str!("tests/fixtures/pr_review.diff"))
+}
+
 /// Everything one observer attach delivers before it goes quiet.
 struct Observed {
     layout: LayoutView,
@@ -649,10 +676,13 @@ fn live_frame(
     let cwd = std::env::current_dir()
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_default();
-    // A sizing client reports the content area, as a real client does.
-    let dims = size
-        .filter(|_| fit)
-        .map(|t| View::new(t, server.into(), LayoutView::default()).content_dims());
+    // A sizing client reports the content area, as a real client does. The
+    // review split takes its columns before the server sizes the panes.
+    let dims = size.filter(|_| fit).map(|t| {
+        let mut sizing = View::new(t, server.into(), LayoutView::default());
+        split_fixture(&mut sizing, kind);
+        sizing.content_dims()
+    });
     // The peer attaches first and stays until the shot is composed.
     let _peer = peer
         .map(|t| View::new(t, server.into(), LayoutView::default()).content_dims())
@@ -1052,6 +1082,18 @@ shoot a root whose fleet map has seats \
                 _ => {}
             }
         }
+        Some(ViewKind::ReviewDiff) => {
+            View::open(&mut view);
+            let review = review_fixture()?;
+            view.backlog_board
+                .as_mut()
+                .ok_or("the backlog board did not open")?
+                .review = Some(review);
+        }
+        Some(ViewKind::ReviewPanel | ViewKind::ReviewPanelDrag) => {
+            review_fixture()?;
+            split_fixture(&mut view, kind);
+        }
         Some(ViewKind::BacklogList) | Some(ViewKind::BacklogKanban) => {
             // The V-cycle backlog board, full screen so the board and
             // details panes lay out side by side. Set the sideline field
@@ -1307,6 +1349,9 @@ mod tests {
             ("messages-archive", ViewKind::MessagesArchive),
             ("messages-you", ViewKind::MessagesYou),
             ("messages-you-thread", ViewKind::MessagesYouThread),
+            ("review-diff", ViewKind::ReviewDiff),
+            ("review-panel", ViewKind::ReviewPanel),
+            ("review-panel-drag", ViewKind::ReviewPanelDrag),
             ("backlog-list", ViewKind::BacklogList),
             ("backlog-kanban", ViewKind::BacklogKanban),
             ("navigator-pr", ViewKind::NavigatorPr),
@@ -1331,7 +1376,7 @@ mod tests {
         let e = parse_extra(&["--view", "nonesuch"]).expect_err("unknown view names the options");
         assert!(
             e.contains(
-                "bell, bell-wide, bell-full, feed, row-menu, tab-menu, sideline-menu, composer, split-menu, settings, keys, org-block, org-table, org-recent, org-overview, org-graph, org-health, org-seat, org-feed, org-system, org-remote, org-peek, org-spawn, org-keys, messages-tree, messages-chats, messages-thread, messages-system, messages-archive, messages-you, messages-you-thread, backlog-list, backlog-kanban, navigator-pr, navigator-menu, navigator-model, feed-detail, question-detail or connections"
+                "bell, bell-wide, bell-full, feed, row-menu, tab-menu, sideline-menu, composer, split-menu, settings, keys, org-block, org-table, org-recent, org-overview, org-graph, org-health, org-seat, org-feed, org-system, org-remote, org-peek, org-spawn, org-keys, messages-tree, messages-chats, messages-thread, messages-system, messages-archive, messages-you, messages-you-thread, backlog-list, backlog-kanban, review-diff, review-panel, review-panel-drag, navigator-pr, navigator-menu, navigator-model, feed-detail, question-detail or connections"
             ),
             "{e}"
         );
