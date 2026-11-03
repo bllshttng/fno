@@ -885,7 +885,7 @@ pub fn maybe_tick(arm: &Arm, home: AgentsHome) {
                 }),
             );
         }
-        // Whose load the box is in, from the one footprint answerer the
+        // Whose load the machine is in, from the one footprint answerer the
         // spawn CPU axis already reads: unreadable or fleet-majority keeps
         // today's path, a minority share is outside load.
         let admission = crate::spawn_gate::fleet_admission();

@@ -71,7 +71,7 @@ pub(super) const STRUCTURAL_STEPS: &[(&str, &str, &str)] = &[
     ("Spawn-shape lint (single-line argv guard)", ".", "crates/fno/target/debug/fno doctor lint spawn-paths"),
     ("State-roots ratchet (declared root, R4/R5)", ".", "crates/fno/target/debug/fno doctor lint state-roots"),
     ("Agent field coverage accounting", ".", "crates/fno/target/debug/fno doctor lint field-coverage"),
-    ("Menu-cap guard (cap 12 at three levels, hidden counts)", ".", "cargo test --quiet --manifest-path crates/fno/Cargo.toml --lib menu_caps"),
+    ("Menu-cap guard (cap 13 at a root, 12 below, hidden counts)", ".", "cargo test --quiet --manifest-path crates/fno/Cargo.toml --lib menu_caps"),
     ("Command-surface ratchet (real count, both binaries)", ".", "crates/fno/target/debug/fno doctor lint command-ratchet"),
     ("Schema parity self-test", ".", "bash scripts/tests/check-event-schema-parity-selftest.sh"),
     ("Schema parity check (Python side)", ".", "bash scripts/check-event-schema-parity.sh"),

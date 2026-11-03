@@ -1,13 +1,13 @@
 //! The sandbox launch seam: the `[sandbox] provider` key, the launch plan the
 //! daemon answers for one worktree (`agent.sandbox-plan`), and the wrap that
-//! runs a one-shot lane's command inside the box.
+//! runs a one-shot lane's command inside the sandbox.
 //!
 //! Ruling Q7 order is shared-state protection first: a `devcontainer` worker
 //! gets its worktree (the devcontainer CLI mounts the workspace folder) and
 //! the daemon's socket directory, never the agents home. Registry and claims
 //! change through daemon ops, never direct file writes. `none` is today: no
 //! isolation, direct state access. The host client keeps every gate and every
-//! claim; only the harness process runs in the box.
+//! claim; only the harness process runs in the sandbox.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -29,10 +29,10 @@ pub const CONTAINER_STATE_DIR: &str = "/fno-state";
 /// daemon restart.
 pub const CONTAINER_SOCK_DIR: &str = "/fno-state/sock";
 
-/// The one-shot lanes that call [`boxed`]. Any other harness or substrate
-/// would launch on the host while the config says it is boxed, so the spawn
+/// The one-shot lanes that call [`sandboxed`]. Any other harness or substrate
+/// would launch on the host while the config says it is sandboxed, so the spawn
 /// refuses it under `devcontainer`.
-pub const BOXED_HARNESSES: [&str; 5] = ["claude", "codex", "gemini", "opencode", "agy"];
+pub const SANDBOXED_HARNESSES: [&str; 5] = ["claude", "codex", "gemini", "opencode", "agy"];
 
 /// One bind-mount of the launch plan.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -121,7 +121,7 @@ pub fn up_argv(launch: &SandboxLaunch, worktree: &Path) -> Vec<String> {
         "--workspace-folder".to_string(),
         worktree.display().to_string(),
         // A linked worktree's `.git` file points at the main checkout's
-        // common dir; without it git fails inside the box.
+        // common dir; without it git fails inside the sandbox.
         "--mount-git-worktree-common-dir".to_string(),
     ];
     for m in &launch.mounts {
@@ -154,10 +154,10 @@ pub fn exec_prefix(launch: &SandboxLaunch, worktree: &Path) -> Vec<String> {
 static ACTIVE: OnceLock<(SandboxLaunch, PathBuf)> = OnceLock::new();
 
 /// The spawn's first sandbox leg, before the guard and the gate: does this
-/// spawn run in a box? `Ok(false)` under `none`, and for a caller that is
-/// itself boxed (its socket is pinned; a boxed worker spawning a peer stays
-/// in its own box). An exit code and a reason for a spawn the box cannot
-/// carry, so nothing launches on the host while the config says boxed.
+/// spawn run in a sandbox? `Ok(false)` under `none`, and for a caller that is
+/// itself sandboxed (its socket is pinned; a sandboxed worker spawning a peer stays
+/// in its own sandbox). An exit code and a reason for a spawn the sandbox cannot
+/// carry, so nothing launches on the host while the config says sandboxed.
 pub fn check(cwd: &Path, harness: &str, substrate: &str) -> Result<bool, (i32, String)> {
     if crate::client::sock_pinned() {
         return Ok(false);
@@ -165,25 +165,25 @@ pub fn check(cwd: &Path, harness: &str, substrate: &str) -> Result<bool, (i32, S
     match SandboxProvider::from_config(cwd).map_err(|e| (2, e))? {
         SandboxProvider::None => Ok(false),
         SandboxProvider::Devcontainer
-            if substrate == "headless" && BOXED_HARNESSES.contains(&harness) =>
+            if substrate == "headless" && SANDBOXED_HARNESSES.contains(&harness) =>
         {
             Ok(true)
         }
         SandboxProvider::Devcontainer => Err((
             2,
             format!(
-                "[sandbox] provider = \"devcontainer\" boxes only --as headless spawns of {}; \
+                "[sandbox] provider = \"devcontainer\" sandboxes only --as headless spawns of {}; \
                  a {harness} spawn on the {substrate} substrate would run on the host. \
                  Spawn with --as headless, or set [sandbox] provider = \"none\".",
-                BOXED_HARNESSES.join(", ")
+                SANDBOXED_HARNESSES.join(", ")
             ),
         )),
     }
 }
 
 /// The spawn's second sandbox leg, after the gate: ask the daemon for the
-/// plan, bring the box up, and probe the daemon from inside it. Only a
-/// passing probe arms [`boxed`]: a mounted socket that answers nobody (a
+/// plan, bring the sandbox up, and probe the daemon from inside it. Only a
+/// passing probe arms [`sandboxed`]: a mounted socket that answers nobody (a
 /// macOS Docker VM that does not pass unix sockets, or a container created
 /// before the socket directory was mounted) would run a worker that can
 /// report nothing.
@@ -244,14 +244,15 @@ pub fn arm(home: &crate::paths::AgentsHome, cwd: &Path) -> Result<(), (i32, Stri
         127 => {
             return Err((
                 127,
-                "the box image has no fno-agents on PATH; the worker could not report".to_string(),
+                "the sandbox image has no fno-agents on PATH; the worker could not report"
+                    .to_string(),
             ))
         }
         _ => {
             return Err((
                 84,
                 format!(
-                    "the box cannot reach the daemon at {inside}. Recreate the container \
+                    "the sandbox cannot reach the daemon at {inside}. Recreate the container \
                      with the socket mount: devcontainer up --workspace-folder {} \
                      --remove-existing-container",
                     cwd.display()
@@ -263,22 +264,22 @@ pub fn arm(home: &crate::paths::AgentsHome, cwd: &Path) -> Result<(), (i32, Stri
     Ok(())
 }
 
-/// Re-home a lane's composed command inside the box. Call it after the lane
+/// Re-home a lane's composed command inside the sandbox. Call it after the lane
 /// sets its env and before it sets stdio or `pre_exec`: those do not carry
 /// over to the new command. Unarmed, the command comes back untouched.
 ///
 /// The lane env (route keys, the claim stamp) rides a 0600 file in the
-/// mounted socket directory, which the box sources and deletes before the
-/// exec: an argv cannot hold a secret. A refusal (a host path the box cannot
+/// mounted socket directory, which the sandbox sources and deletes before the
+/// exec: an argv cannot hold a secret. A refusal (a host path the sandbox cannot
 /// see) comes back as a command that prints the reason and exits 84, so each
 /// lane reports it through its own subprocess-failure path.
-pub fn boxed(cmd: Command) -> Command {
+pub fn sandboxed(cmd: Command) -> Command {
     let Some((launch, worktree)) = ACTIVE.get() else {
         return cmd;
     };
     let mut argv = vec![cmd.get_program().to_string_lossy().into_owned()];
     argv.extend(cmd.get_args().map(|a| a.to_string_lossy().into_owned()));
-    // A removal (`env_remove`, the model scrub) rides as `None`: the box can
+    // A removal (`env_remove`, the model scrub) rides as `None`: the sandbox can
     // define the same key, so it must be unset there too.
     let env: Vec<(String, Option<String>)> = cmd
         .get_envs()
@@ -289,7 +290,7 @@ pub fn boxed(cmd: Command) -> Command {
             )
         })
         .collect();
-    let argv = match box_argv(launch, worktree, strip_qos(argv), &env) {
+    let argv = match sandboxed_argv(launch, worktree, strip_qos(argv), &env) {
         Ok(argv) => argv,
         Err(reason) => vec![
             "/bin/sh".to_string(),
@@ -306,7 +307,7 @@ pub fn boxed(cmd: Command) -> Command {
     out
 }
 
-/// The QoS prefix (`spawn_gate::qos_wrap`) names a host binary the box may
+/// The QoS prefix (`spawn_gate::qos_wrap`) names a host binary the sandbox may
 /// not carry, and it would lower the priority of the host's devcontainer
 /// client, not the worker. Drop it.
 fn strip_qos(argv: Vec<String>) -> Vec<String> {
@@ -322,7 +323,7 @@ fn strip_qos(argv: Vec<String>) -> Vec<String> {
     }
 }
 
-fn box_argv(
+fn sandboxed_argv(
     launch: &SandboxLaunch,
     worktree: &Path,
     mut argv: Vec<String>,
@@ -331,7 +332,7 @@ fn box_argv(
     // The dispatch cwd is canonical; compare argv paths in the same form.
     let canonical = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
     let inside = canonical(worktree);
-    // The box resolves the harness on its own PATH.
+    // The sandbox resolves the harness on its own PATH.
     if let Some(name) = Path::new(&argv[0]).file_name() {
         argv[0] = name.to_string_lossy().into_owned();
     }
@@ -339,8 +340,8 @@ fn box_argv(
         let p = Path::new(a);
         p.is_absolute() && p.exists() && !canonical(p).starts_with(&inside)
     };
-    // The seam's host write grants (`--add-dir ~/.fno`) name roots the box
-    // does not mount; inside the box they grant nothing, so drop them.
+    // The seam's host write grants (`--add-dir ~/.fno`) name roots the sandbox
+    // does not mount; inside the sandbox they grant nothing, so drop them.
     let mut kept = vec![argv[0].clone()];
     let mut rest = argv[1..].iter();
     while let Some(a) = rest.next() {
@@ -359,7 +360,7 @@ fn box_argv(
     let argv = kept;
     if let Some(host) = argv[1..].iter().find(|a| outside(a)) {
         return Err(format!(
-            "the command names {host}, a host path outside the worktree the box cannot see"
+            "the command names {host}, a host path outside the worktree the sandbox cannot see"
         ));
     }
     let mut out = exec_prefix(launch, worktree);
@@ -404,7 +405,7 @@ fn write_env_file(path: &Path, env: &[(String, Option<String>)]) -> std::io::Res
             .next()
             .is_some_and(|c| c == '_' || c.is_ascii_alphabetic())
             && k.chars().all(|c| c == '_' || c.is_ascii_alphanumeric());
-        // PWD names the host checkout; the box runs in its own workspace.
+        // PWD names the host checkout; the sandbox runs in its own workspace.
         match v {
             _ if !named || k == "PWD" => {}
             Some(v) => body.push_str(&format!("export {k}='{}'\n", v.replace('\'', "'\\''"))),
@@ -424,10 +425,10 @@ mod tests {
     use super::*;
 
     /// The wrap's shapes: a QoS prefix, an absolute harness path and a host
-    /// `--add-dir` grant drop; the lane env rides a 0600 file the box sources,
+    /// `--add-dir` grant drop; the lane env rides a 0600 file the sandbox sources,
     /// never the argv; any other host path outside the worktree refuses by name.
     #[test]
-    fn box_argv_wraps_env_through_a_file_and_refuses_host_paths() {
+    fn sandboxed_argv_wraps_env_through_a_file_and_refuses_host_paths() {
         let root = std::env::temp_dir().join(format!("sandbox-launch-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let sock_dir = root.join("sandbox-sock");
@@ -457,7 +458,7 @@ mod tests {
             ("ROUTE_KEY".to_string(), Some("s3'cret".to_string())),
             ("STALE_MODEL".to_string(), None),
         ];
-        let out = box_argv(&launch, &wt, argv, &env).unwrap();
+        let out = sandboxed_argv(&launch, &wt, argv, &env).unwrap();
         let joined = out.join(" ");
         assert!(joined.starts_with(&format!(
             "devcontainer exec --workspace-folder {} --remote-env FNO_STATE_DIR=/fno-state \
@@ -489,7 +490,7 @@ mod tests {
             "--settings".into(),
             host.display().to_string(),
         ];
-        let err = box_argv(&launch, &wt, argv, &[]).unwrap_err();
+        let err = sandboxed_argv(&launch, &wt, argv, &[]).unwrap_err();
         assert!(err.contains(&host.display().to_string()), "{err}");
     }
 }

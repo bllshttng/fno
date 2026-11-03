@@ -1202,24 +1202,26 @@ fn record_scope_answer_in(
     json!({"ok": true, "scope": scope, "paths": paths})
 }
 
-/// The user gate (user ruling d-2a01fdf1): a law that reaches past this
-/// machine's own user needs a stated `fleet.owner` first. That is `global`,
-/// or a `machine:` or `user:` scope naming someone else. A stated name is
-/// presence, never proof, so the gate stops a mistake and never an attacker.
-fn wide_scope_refusal(scope: &str) -> Option<String> {
+/// The user gate: a law that reaches past this machine's own user needs a
+/// user certificate that names this machine's key. That is `global`, or a
+/// `machine:` or `user:` scope naming someone else. The door then signs the
+/// row, and a certified peer binds it only when that user key proves it.
+pub(crate) fn wide_scope_refusal(scope: &str) -> Option<String> {
     let names_another = match scope.split_once(':') {
         Some(("machine", id)) => id != crate::claims::machine_id(),
         Some(("user" | "person", name)) => name != crate::identity::person(),
         _ => scope == "global",
     };
-    if !names_another || crate::identity::stated_person().is_some() {
+    if !names_another || crate::identity::proven_user().is_some() {
         return None;
     }
     Some(format!(
-        "a {scope} law binds more than this machine's own user, and no user is \
-         stated. Set `[fleet] owner = \"<name>\"` in ~/.fno/config.toml by hand \
-         (`fno config set` refuses that key), then record again. A project law, \
-         a bare --machine and a bare --user need no name"
+        "a {scope} law binds more than this machine's own user, and no user \
+         certificate proves who records it. Where the user key lives, run \
+         `fno-agents mail-remote key certify <user-key-file> <user> <this machine's key>` \
+         (`fno-agents mail-remote key show` prints the key), then install the line \
+         here with `fno-agents mail-remote key cert <line>`. A project law, a bare \
+         --machine and a bare --user need no certificate"
     ))
 }
 
@@ -2137,6 +2139,7 @@ pub(crate) fn record_door_write(door: RecordDoor, decision: String, caller: &Cal
     }
     if let Some(map) = data.as_object_mut() {
         crate::identity::stamp_person(map);
+        crate::identity::sign_law_row(map, "operator_decision", &ts);
     }
     let envelope = json!({"ts": ts, "type": "operator_decision", "source": "target", "data": data});
     if let Err(code) = append_decision(&envelope, &decision_id) {
@@ -2646,6 +2649,11 @@ pub(crate) fn write_retraction_event(w: &RetractWrite) -> RetractOutcome {
     }
     if let Some(q) = w.quote.as_deref().map(str::trim).filter(|q| !q.is_empty()) {
         data["quote"] = json!(text_cap(q, 2000));
+    }
+    // Signed, because an unsigned retraction would retire a signed wide law
+    // on every machine.
+    if let Some(map) = data.as_object_mut() {
+        crate::identity::sign_law_row(map, "decision_retracted", &ts);
     }
     let envelope =
         json!({"ts": ts, "type": "decision_retracted", "source": "target", "data": data});
@@ -3692,7 +3700,7 @@ pub(crate) mod scope_tests {
     }
 
     #[test]
-    fn one_scope_flag_per_law_and_a_wide_one_needs_a_stated_owner() {
+    fn one_scope_flag_per_law_and_a_wide_one_needs_a_user_certificate() {
         let argv = |words: &[&str]| words.iter().map(|w| w.to_string()).collect::<Vec<_>>();
         let Err(two) = parse_record_door(&argv(&["s", "d", "--global", "--machine"])) else {
             panic!("two scope flags parse");
@@ -3714,7 +3722,7 @@ pub(crate) mod scope_tests {
             d.widen = widen;
             record_door_write(d, text.to_string(), &operator)
         };
-        // No fleet.owner: global refuses and no store holds the row.
+        // No certificate: global refuses and no store holds the row.
         assert_eq!(record("wide-one", Some(Widen::Global)), 3);
         assert!(!env.index_text().contains("wide-one"));
         assert!(!env.journal_text().contains("wide-one"));
@@ -3733,14 +3741,49 @@ pub(crate) mod scope_tests {
             let want = format!("\"scope\":\"machine:{mine}\"");
             assert!(env.index_text().contains(&want), "{}", env.index_text());
         }
-        // A stated owner opens the wide scopes.
+        // A stated owner is a name, never proof: global still refuses.
         std::fs::write(
             env.1.path().join("config.toml"),
             "[fleet]\nowner = \"jason\"\n",
         )
         .expect("writes");
+        let refusal = wide_scope_refusal("global").expect("an owner alone refuses");
+        assert!(
+            refusal.contains("mail-remote key certify")
+                && refusal.contains("mail-remote key cert "),
+            "{refusal}"
+        );
+        assert_eq!(record("wide-owner", Some(Widen::Global)), 3);
+        assert!(!env.index_text().contains("wide-owner"));
+        assert!(!env.journal_text().contains("wide-owner"));
+        // A certificate for this machine's key opens the wide scopes, and
+        // the row it records reads back signed under that user key.
+        let agents = env.0.path().join("agents");
+        std::fs::create_dir_all(&agents).expect("mkdir");
+        let _agents = crate::claims::EnvVarGuard::set(
+            crate::paths::HOME_ENV,
+            agents.to_str().expect("utf-8"),
+        );
+        let user_key =
+            crate::machine_key::MachineKey::load_or_create(&env.0.path().join("user.pk8"))
+                .expect("user key");
+        let own = crate::machine_key::own().expect("own key").public_key();
+        std::fs::write(
+            crate::machine_key::cert_path(&agents),
+            crate::machine_key::mint_cert(&user_key, "jason", &own, 1),
+        )
+        .expect("writes");
         assert_eq!(record("wide-two", Some(Widen::Global)), 0);
         assert!(env.index_text().contains("\"scope\":\"global\""));
+        let (rows, _) = all_decision_rows().expect("the store reads");
+        let signed = rows
+            .iter()
+            .find(|r| r["subject"] == "wide-two")
+            .expect("the signed row reads back");
+        assert_eq!(
+            crate::identity::verify_law_row(signed),
+            Some(user_key.public_key())
+        );
         // A law bound to a user nobody resolves stays addressable here.
         let typo = Some(Widen::User(Some("nobody-zz9".into())));
         assert_eq!(record("typo-one", typo), 0);

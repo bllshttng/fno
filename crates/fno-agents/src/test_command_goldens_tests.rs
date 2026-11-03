@@ -86,7 +86,7 @@ fn cap() -> (String, String, String, String, String, String) {
     // The capture machine's TMPDIR carried a trailing slash, so the golden
     // pins both the raw and the canonicalized ceiling entry. Pin the same
     // shape here: the slashed form never equals its canonical form, so the
-    // FNO_CONFIG_SEARCH_ROOT row matches on every POSIX box.
+    // FNO_CONFIG_SEARCH_ROOT row matches on every POSIX machine.
     std::env::set_var("TMPDIR", format!("{}/", tmp_root()));
     let tmp = tempfile::tempdir().unwrap();
     let sb = tmp.path().join("sb");

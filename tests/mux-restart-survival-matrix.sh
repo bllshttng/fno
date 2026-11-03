@@ -335,7 +335,7 @@ kill_server_hard() {
 
 # ── the positive control: a dead canary must read as dead ────────────────
 # The kill is the snapshot boundary: reads BEFORE it race the append window
-# (a loaded box stretches any gap), reads AFTER a reaped corpse cannot grow.
+# (a loaded machine stretches any gap), reads AFTER a reaped corpse cannot grow.
 CTRL_FILE="$TMP_DIR/counter-ctrl"
 "$CANARY" "$CTRL_FILE" &
 CTRL_PID=$!
