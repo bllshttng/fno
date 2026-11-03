@@ -84,7 +84,7 @@ _ADVERTISED_SUBCOMMANDS = [
 # which render nowhere after d-26002be8; do is unusable for the leak-check
 # (substring of "doctor"), so the hidden REAL roots worth pinning are these.
 _HIDDEN_SUBCOMMANDS = [
-    "inbox",
+    "pr-watch",
 ]
 
 

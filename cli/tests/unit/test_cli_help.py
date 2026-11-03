@@ -30,7 +30,7 @@ def test_help_root_matches_dashdash_help():
     # Hidden commands are reachable only through the full-surface door.
     via_all = runner.invoke(app, ["help", "--all"])
     assert via_all.exit_code == 0
-    for needle in ("backlog", "inbox", "mux", "version", "update"):
+    for needle in ("backlog", "mux", "version", "update"):
         assert needle in via_all.output, f"missing {needle} in `fno help --all` output"
 
 

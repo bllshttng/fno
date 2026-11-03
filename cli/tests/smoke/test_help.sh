@@ -9,7 +9,7 @@ uv sync --quiet
 # spellings; d-26002be8 stopped rendering those anywhere, and the x-6233 fold
 # retired runtime outright, so the door now exposes the hidden REAL roots.
 out=$(uv run fno-py help --all 2>&1)
-for name in do inbox update; do
+for name in do evals update; do
   echo "$out" | grep -q "$name" || { echo "FAIL: help --all missing '$name'"; exit 1; }
 done
 echo "$out" | grep -qE '^  runtime' && { echo "FAIL: retired 'runtime' renders as a root"; exit 1; }
