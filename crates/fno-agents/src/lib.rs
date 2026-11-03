@@ -307,6 +307,7 @@ pub mod launch_workdir;
 pub mod law_match;
 pub mod law_pr_shape;
 pub mod law_restore;
+pub mod law_when;
 pub mod lead_answers;
 pub mod lead_checkin;
 pub(crate) mod lead_checkin_beat_budget;

@@ -112,7 +112,7 @@ pub fn assemble(
         // event carries an identity and `rules.rs` refuses those scopes.
         let scope = decision_index::row_scope(row);
         let identity = decision_index::binds_here(scope);
-        if identity == Some(false) {
+        if identity == Some(false) || !crate::law_when::row_active(row, false) {
             continue;
         }
         let subject = row.get("subject").and_then(Value::as_str).unwrap_or("");
