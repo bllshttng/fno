@@ -432,7 +432,7 @@ pub mod agent_launch;
 pub use agent_launch::{AgentLaunchRequest, AgentLaunchUpdate, LaunchState};
 
 pub mod link;
-pub use link::{LinkHello, RemoteRow, LINK_MIN_PROTO};
+pub use link::{is_remote_address, LinkHello, RemoteRow, LINK_MIN_PROTO, REMOTE_GLYPH};
 pub mod observer;
 pub use observer::{ObserverHello, ObserverRow, ObserverVia};
 

@@ -183,7 +183,7 @@ fn fold_seat(seat: &Value, all: &[&Value], host: &str, band: &Band) -> Seat {
     });
     let needs_input = band.fresh && seat["needs_input"].as_bool() == Some(true);
     Seat {
-        row: remote_row(seat, host, seat_state(seat, band), needs_input),
+        row: remote_row(seat, host, needs_input),
         project: text(seat, "project").unwrap_or_else(|| "(no project)".into()),
         lead: lead_of(seat, all),
         cwd: cwd
@@ -221,26 +221,13 @@ fn lead_of<'a>(seat: &'a Value, all: &[&'a Value]) -> String {
     "~ unteamed".into()
 }
 
-/// What a remote card says the session is doing. A stale beat outranks the
-/// seat's own word: the session may be fine, but this mux cannot see it.
-fn seat_state(seat: &Value, band: &Band) -> String {
-    let age = |s: i64| super::overlay_lines::humanize_age(Some(s.max(0) as u64));
-    if !band.fresh {
-        return format!("offline {}", age(band.age_s).trim());
-    }
-    if text(seat, "status").as_deref() == Some("writing") {
-        return "working".into();
-    }
-    match seat["age_s"].as_i64() {
-        Some(s) => format!("idle {}", age(s).trim()),
-        None => "idle".into(),
-    }
-}
-
-/// A fleet seat as a row. `name@host` is the address peek and mail already
-/// route, so those two work from the name alone. A seat waiting on the user
-/// badges blocked, so it sorts and rolls up as a local blocked row does.
-fn remote_row(seat: &Value, host: &str, state: String, needs_input: bool) -> AgentRow {
+/// A fleet seat as a row that paints like a local one: the same model, cost,
+/// context, token and compaction fields, and the last line the session wrote.
+/// A count its own machine has no reading for stays `None` and the card hides
+/// it. `name@host` is the address peek and mail already route, so those two
+/// work from the name alone. A seat waiting on the user badges blocked, so it
+/// sorts and rolls up as a local blocked row does.
+fn remote_row(seat: &Value, host: &str, needs_input: bool) -> AgentRow {
     let name = text(seat, "name").unwrap_or_default();
     let address = format!("{name}@{host}");
     AgentRow {
@@ -251,6 +238,10 @@ fn remote_row(seat: &Value, host: &str, state: String, needs_input: bool) -> Age
         // the name.
         model: text(seat, "model"),
         context_used_pct: seat["context_pct"].as_u64().map(|pct| pct.min(100) as u8),
+        session_cost_cents: seat["cost_cents"].as_u64(),
+        session_tokens: seat["tokens"].as_u64(),
+        compaction_count: seat["compactions"].as_u64(),
+        tail: text(seat, "last_message"),
         badge: if needs_input {
             Some(AgentBadge::Blocked)
         } else {
@@ -265,7 +256,6 @@ fn remote_row(seat: &Value, host: &str, state: String, needs_input: bool) -> Age
             host: host.to_string(),
             key: text(seat, "session_id").unwrap_or(name),
             name: address,
-            state,
         }),
         ..AgentRow::default()
     }
@@ -478,12 +468,8 @@ mod tests {
             (remote.host.as_str(), remote.key.as_str()),
             ("bb16", "133a419b")
         );
-        assert_eq!(remote.state, "working");
         let ines = bands[1].seats[1].row.remote.as_ref().unwrap();
-        assert_eq!(
-            (ines.key.as_str(), ines.state.as_str()),
-            ("ines", "idle 3m")
-        );
+        assert_eq!(ines.key, "ines");
 
         let stale =
             json!({"host": "bb16", "age_s": 120, "sessions": [{"name": "x", "harness": "codex"}]});
@@ -492,20 +478,17 @@ mod tests {
         assert!(bands[0].local, "this machine keeps a band with no beat");
         assert!(!bands[0].fresh);
         assert_eq!(bands.len(), 3);
-        let x = bands[1].seats[0].row.remote.as_ref().unwrap();
-        assert_eq!(
-            x.state, "offline 2m",
-            "a stale beat outranks the seat's word"
-        );
+        assert!(!bands[1].fresh, "a stale beat reads offline on its band");
     }
 
     #[test]
-    fn a_far_seat_files_badges_and_pins_by_its_machines_marks() {
+    fn a_remote_seat_files_badges_pins_and_prices_by_its_machines_marks() {
         let map = json!({"machines": [
             {"host": "bb16", "local": false, "fresh": true, "age_s": 5, "sessions": [
                 {"name": "muriel", "harness": "claude", "project": "fno",
                  "workspace": "footnote", "session_id": "133a419b", "status": "writing",
-                 "needs_input": true, "pinned": true},
+                 "needs_input": true, "pinned": true, "cost_cents": 412, "tokens": 90000,
+                 "compactions": 2, "context_pct": 41, "last_message": "reading the diff"},
                 {"name": "ines", "harness": "claude", "project": "fnh", "age_s": 180},
             ]},
             {"host": "mbp3", "local": false, "fresh": false, "age_s": 400, "sessions": [
@@ -525,6 +508,29 @@ mod tests {
         assert_eq!(seat_label(AgentGroup::Status, ines), "Completed");
         assert_eq!(muriel.row.badge, Some(AgentBadge::Blocked));
         assert!(muriel.row.pinned && !ines.row.pinned);
+        let row = &muriel.row;
+        assert_eq!(
+            (
+                row.session_cost_cents,
+                row.session_tokens,
+                row.compaction_count,
+                row.context_used_pct,
+                row.tail.as_deref(),
+            ),
+            (
+                Some(412),
+                Some(90_000),
+                Some(2),
+                Some(41),
+                Some("reading the diff")
+            ),
+            "a remote row carries the fields a local card paints"
+        );
+        let bare = &ines.row;
+        assert!(
+            bare.session_cost_cents.is_none() && bare.session_tokens.is_none(),
+            "no reading is no zero"
+        );
 
         let dusty = &seats("mbp3")[0];
         assert!(!dusty.needs_input, "a stale beat raises no alert");

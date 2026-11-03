@@ -265,15 +265,6 @@ pub(super) fn metrics(
     message: Option<&str>,
     width: usize,
 ) -> String {
-    // A remote row: no transcript of it reaches this machine, so the line names
-    // its host and its state from the fleet map instead.
-    if let Some(remote) = &a.remote {
-        let mut line = format!("remote · {} · {}", remote.host, remote.state);
-        if let Some(pct) = a.context_used_pct {
-            line.push_str(&format!(" · {pct}%"));
-        }
-        return crate::chrome::clip(&line, width);
-    }
     let phase = crate::lattice::spin_epoch().map(|t0| t0.elapsed().as_millis() as u64);
     let gave_up = loading_gave_up(a, now);
     let fields: Vec<String> = metric_cells(a, mode)

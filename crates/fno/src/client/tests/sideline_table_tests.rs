@@ -944,7 +944,6 @@ async fn agents_tab_ctrl_t_pins_the_session_and_the_row_shows_it() {
         host: "bb16".into(),
         key: "133a419b".into(),
         name: remote_row.name.clone(),
-        state: "working".into(),
     });
     assert_eq!(
         agent_sort::pin_argv(&remote_row).unwrap(),

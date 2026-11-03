@@ -13,10 +13,16 @@ pub struct RemoteRow {
     pub key: String,
     /// The `name@host` this row paints as, which its link pane also carries.
     pub name: String,
-    /// What the card says the remote session is doing, as of the last fleet
-    /// read: `working`, `idle 3m`, or `offline 2m` once its machine's beat is stale.
-    #[serde(default)]
-    pub state: String,
+}
+
+/// Painted beside the `name@host` title of a pane that shows a remote session.
+pub const REMOTE_GLYPH: char = '\u{21c4}';
+
+/// Whether a name is a remote row's `name@host` address, the form peek and mail
+/// route by. A local worker's registered name carries no host.
+pub fn is_remote_address(name: &str) -> bool {
+    name.rsplit_once('@')
+        .is_some_and(|(session, host)| !session.is_empty() && !host.is_empty())
 }
 
 /// Sent by a passive client right after its `Attach`: drive this one pane.
