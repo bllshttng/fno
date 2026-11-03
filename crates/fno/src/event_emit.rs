@@ -166,6 +166,40 @@ fn append(path: &Path, event: &Value) -> Result<(), String> {
     Ok(())
 }
 
+fn blocked_marker(parent: &str, node: &str) -> Option<PathBuf> {
+    use sha2::{Digest, Sha256};
+    let settings = crate::config_doctor::Settings::load();
+    let key = Sha256::digest(format!("{parent}\0{node}"));
+    let name: String = key.iter().take(8).map(|b| format!("{b:02x}")).collect();
+    Some(
+        crate::config_doctor::project_space_dir(&settings)
+            .join("blocked-push")
+            .join(name),
+    )
+}
+
+/// True when the lead already got this exact (parent, node, reason) notice and no
+/// lifting event cleared it. Records the reason when it is new.
+fn blocked_already_sent(parent: &str, node: &str, reason: &str) -> bool {
+    let Some(path) = blocked_marker(parent, node) else {
+        return false;
+    };
+    if std::fs::read_to_string(&path).is_ok_and(|seen| seen == reason) {
+        return true;
+    }
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let _ = std::fs::write(&path, reason);
+    false
+}
+
+fn blocked_lifted(parent: &str, node: &str) {
+    if let Some(path) = blocked_marker(parent, node) {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
 fn push(
     parent: &str,
     kind: &str,
@@ -173,6 +207,16 @@ fn push(
     node: Option<&str>,
     reason: Option<&str>,
 ) -> bool {
+    if kind == "blocked" {
+        if let Some(node) = node.filter(|v| !v.is_empty()) {
+            if blocked_already_sent(parent, node, reason.unwrap_or("")) {
+                eprintln!(
+                    "push: note: blocked notice already sent for this node and reason; skipped"
+                );
+                return true;
+            }
+        }
+    }
     let mut msg = format!(
         "[fno:{kind}] run={}",
         run.filter(|v| !v.is_empty()).unwrap_or("?")
@@ -451,6 +495,11 @@ pub(super) fn run(args: &[OsString], json_mode: bool) -> i32 {
                     .unwrap_or("bot-review: skipped (no receipt)")
             ),
             Err(error) => eprintln!("bot-review: skipped (mirror error: {error})"),
+        }
+    }
+    if matches!(kind, "task_started" | "task_done" | "run_summary") {
+        if let (Some(parent), Some(node)) = (event["parent"].as_str(), event["node"].as_str()) {
+            blocked_lifted(parent, node);
         }
     }
     if kind == "blocked" {
