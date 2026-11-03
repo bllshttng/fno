@@ -182,6 +182,11 @@ fn revert_for(
     }
     let body = format!("{why} This reverts that merge so main turns green in one CI run. The author of #{pr} re-lands it with the fix.\n\nFixes {node}");
     let url = crate::bank_pr::open_with(root, &branch, title, &body, |tree| {
+        // The helper fetches again; a main that moved since the check above
+        // is not the head read red.
+        if run(tree, "git", &["rev-parse", "HEAD"])? != sha {
+            return Err("main moved before the revert was cut".into());
+        }
         run(tree, "git", &["revert", "-m", "1", "--no-edit", sha]).map(|_| ())
     })?;
     let ask = format!("{why} The fno daemon opened a revert: {url}. Please re-land this change with the fix in a new PR.");

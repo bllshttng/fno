@@ -42,6 +42,12 @@ pub fn open_with(
     let tree_s = tree.to_string_lossy().into_owned();
     let _ = run(root, "git", &["worktree", "remove", "--force", &tree_s]);
     run(root, "git", &["fetch", "origin", "main"])?;
+    // No open PR holds this branch, so a remote copy is the leftover of a run
+    // whose `gh pr create` failed after its push. A fresh cut cannot push over it.
+    let heads = ["ls-remote", "--heads", "origin", branch];
+    if run(root, "git", &heads).is_ok_and(|out| !out.is_empty()) {
+        run(root, "git", &["push", "origin", "--delete", branch])?;
+    }
     run(
         root,
         "git",
