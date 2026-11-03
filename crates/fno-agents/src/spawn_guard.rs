@@ -19,7 +19,7 @@ use serde_json::{json, Map, Value};
 use std::path::{Path, PathBuf};
 
 use crate::backlog::advance::{observe_node_claim, DispatchClaimObservation};
-use crate::claims::{AcquireOpts, AcquireOutcome, ClaimState};
+use crate::claims::{AcquireOpts, AcquireOutcome, ClaimState, BLUEPRINT_HOLDER_PREFIX};
 
 /// Holder prefix of a reservation the spawn door writes. Recovery of a
 /// `dispatch:` key is scoped to it: `fno backlog advance` reserves the same
@@ -62,6 +62,10 @@ pub struct GuardRequest<'a> {
     /// that runs the guard in a subprocess passes its own pid, or the keys
     /// would name a process that exits the moment the guard answers.
     pub pid: Option<u32>,
+    /// The session phase this spawn binds its worker under, when the caller
+    /// resolved one. A think or blueprint phase turns on the plan-fresh
+    /// gate; work phases pass `None`.
+    pub phase: Option<&'a str>,
 }
 
 /// The verdict object and its exit code. Exit 0 for every answered verdict,
@@ -91,7 +95,7 @@ pub fn decide(req: &GuardRequest) -> (Value, i32) {
         );
         return (json!({"verdict": "corrupted", "detail": detail}), 0);
     }
-    let mut seen = observe(req, !req.no_reserve, Some((state, record)));
+    let mut seen = observe(req, !req.no_reserve, Some((state, record.clone())));
     let mut common = common_fields(req, &seen);
     if is_deferral(&seen.action) {
         return (refused(&seen.action, common), 0);
@@ -120,7 +124,23 @@ pub fn decide(req: &GuardRequest) -> (Value, i32) {
             } else {
                 state
             };
-            return (blocked(req, &seen, common, &node_key, now), 0);
+            return (blocked(req, &seen, common, &node_key, now, record.as_ref()), 0);
+        }
+    }
+    if let Some(session_phase) = req.phase {
+        match plan_fresh(req.node_id, session_phase) {
+            Some(PlanFresh::Refuse { detail, fields }) => {
+                let mut out = Map::new();
+                out.insert("verdict".into(), json!("refused"));
+                out.insert("reason".into(), json!("plan-fresh"));
+                for (k, v) in fields {
+                    out.insert(k, json!(v));
+                }
+                out.insert("detail".into(), json!(detail));
+                return (Value::Object(out), 0);
+            }
+            Some(PlanFresh::Warn(line)) => eprintln!("{line}"),
+            None => {}
         }
     }
     if req.no_reserve {
@@ -180,6 +200,7 @@ fn blocked(
     common: Map<String, Value>,
     node_key: &str,
     state: ClaimState,
+    record: Option<&crate::claims::ClaimRecord>,
 ) -> Value {
     // A launch-window holder reads SUSPECT for its whole TTL by construction
     // (its pid is the spawner that already exited), so it is never a wedge.
@@ -276,6 +297,16 @@ fn blocked(
     }
     if wedged && !req.no_reserve {
         out.insert("remedy".into(), json!(remedy_for(node_key)));
+    }
+    // A planner occupant means a think or blueprint is writing the node on
+    // another machine: the refusal names the doc, its date, the host and
+    // the target door, so the second planner never re-seats.
+    if seen.holder.starts_with(BLUEPRINT_HOLDER_PREFIX) {
+        let facts = plan_doc_facts(req.node_id);
+        let host = record.map(|r| r.host.as_str());
+        for (k, v) in planner_fields(facts.as_ref(), req.node_id, &seen.holder, host) {
+            out.insert(k, json!(v));
+        }
     }
     out.extend(common);
     Value::Object(out)
@@ -570,7 +601,172 @@ pub fn remedy_for(key: &str) -> String {
     )
 }
 
-/// The one stderr line a refused node dispatch prints. `reason=` comes first
+/// A node's plan doc, as far as this machine reads it: the carried path, its
+/// date, its frontmatter status.
+#[derive(Debug)]
+pub(crate) struct PlanDocFacts {
+    pub path: String,
+    pub date: Option<String>,
+    pub status: Option<String>,
+}
+
+/// The node row's plan doc, as far as this machine reads it. `None` when the
+/// row carries no plan_path.
+pub(crate) fn plan_doc_facts(node_id: &str) -> Option<PlanDocFacts> {
+    plan_doc_facts_in(&crate::backlog::settings::graph_path(), node_id)
+}
+
+fn plan_doc_facts_in(graph: &Path, node_id: &str) -> Option<PlanDocFacts> {
+    let rows = read_node_rows_in(graph, node_id).ok()?;
+    let row = rows.iter().find(|r| {
+        r.get("archived_at").filter(|v| !v.is_null()).is_none()
+            && r.get("id").and_then(Value::as_str) == Some(node_id)
+    })?;
+    let path = row
+        .get("plan_path")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|p| !p.is_empty())?
+        .to_string();
+    let text = std::fs::read_to_string(&path).ok();
+    let date = text
+        .as_deref()
+        .and_then(|t| frontmatter_value(t, "created"))
+        .or_else(|| filename_date(Path::new(&path)));
+    let status = text.as_deref().and_then(|t| frontmatter_value(t, "status"));
+    Some(PlanDocFacts { path, date, status })
+}
+
+/// One `key: value` line from a leading frontmatter block, clamped to the
+/// same window the node-doc finder reads.
+fn frontmatter_value(text: &str, key: &str) -> Option<String> {
+    let rest = text.strip_prefix("---")?;
+    let end = rest.find("\n---").unwrap_or(rest.len());
+    let block: String = rest[..end].chars().take(2000).collect();
+    block.lines().find_map(|line| {
+        let (k, v) = line.split_once(':')?;
+        k.trim()
+            .eq_ignore_ascii_case(key)
+            .then(|| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+    })
+}
+
+/// The `YYYYMMDD-` filename prefix as a date, the fallback when no
+/// frontmatter date reads.
+fn filename_date(path: &Path) -> Option<String> {
+    let name = path.file_name()?.to_str()?;
+    let head = name.get(..8)?;
+    head.chars()
+        .all(|c| c.is_ascii_digit())
+        .then(|| format!("{}-{}-{}", &head[0..4], &head[4..6], &head[6..8]))
+}
+
+/// Age of a `YYYY-MM-DD` date in days.
+fn plan_doc_age_days(date: &str) -> Option<i64> {
+    let doc = chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").ok()?;
+    Some((chrono::Utc::now().date_naive() - doc).num_days())
+}
+
+/// The plan-fresh gate: a refusal when the node's plan doc already answers
+/// the phase, a warning when a think passes on age.
+#[derive(Debug)]
+pub(crate) enum PlanFresh {
+    /// The doc already answers: refuse with these fields and detail.
+    Refuse {
+        detail: String,
+        fields: Vec<(String, String)>,
+    },
+    /// A stale doc a think passes: print this one line.
+    Warn(String),
+}
+
+/// How fresh a plan doc must be to refuse a second think. One constant, so
+/// a later ruling retunes the window in one place.
+const PLAN_FRESH_WINDOW_DAYS: i64 = 7;
+
+/// The gate. `Some` when the phase's plan doc already answers it.
+pub(crate) fn plan_fresh(node_id: &str, session_phase: &str) -> Option<PlanFresh> {
+    plan_fresh_in(
+        &crate::backlog::settings::graph_path(),
+        node_id,
+        session_phase,
+    )
+}
+
+fn plan_fresh_in(graph: &Path, node_id: &str, session_phase: &str) -> Option<PlanFresh> {
+    if session_phase != "think" && session_phase != "blueprint" {
+        return None;
+    }
+    let facts = plan_doc_facts_in(graph, node_id)?;
+    plan_fresh_for_facts(session_phase, &facts)
+}
+
+/// The rule, per phase. A think refuses a young doc and warns past the
+/// window; a blueprint refuses only a `status: ready` doc, which is the
+/// target door's input, never blueprint's.
+fn plan_fresh_for_facts(phase: &str, facts: &PlanDocFacts) -> Option<PlanFresh> {
+    let fields = |date: Option<&str>| {
+        let mut fields = vec![("plan".to_string(), facts.path.clone())];
+        if let Some(date) = date {
+            fields.push(("plan_date".to_string(), date.to_string()));
+        }
+        fields
+    };
+    match (phase, facts.status.as_deref(), facts.date.as_deref()) {
+        ("blueprint", Some("ready"), _) => Some(PlanFresh::Refuse {
+            detail: "the node's plan doc is already ready; run the target door".to_string(),
+            fields: fields(facts.date.as_deref()),
+        }),
+        ("blueprint", _, _) => None,
+        ("think", _, Some(date)) => {
+            let age = plan_doc_age_days(date)?;
+            if age < PLAN_FRESH_WINDOW_DAYS {
+                Some(PlanFresh::Refuse {
+                    detail: format!(
+                        "the node's plan doc is {age} day(s) old ({date}); a second think \
+                         waits past the 7-day window"
+                    ),
+                    fields: fields(Some(date)),
+                })
+            } else {
+                Some(PlanFresh::Warn(format!(
+                    "note: node plan doc from {date} ({path}); think proceeds past \
+                     the 7-day window",
+                    path = facts.path
+                )))
+            }
+        }
+        ("think", _, None) => None,
+        _ => None,
+    }
+}
+
+/// The planner-occupancy fields a refusal names: the node's plan doc, its
+/// date, the holder's host, and the next command. A planner claim means a
+/// think or blueprint is writing the node on another machine; the second
+/// planner's move is the target door, never a second seat.
+pub(crate) fn planner_fields(
+    facts: Option<&PlanDocFacts>,
+    node_id: &str,
+    holder: &str,
+    host: Option<&str>,
+) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    if let Some(host) = host.filter(|h| !h.is_empty()) {
+        out.push(("host".into(), host.to_string()));
+    }
+    if let Some(facts) = facts {
+        out.push(("plan".into(), facts.path.clone()));
+        if let Some(date) = facts.date.as_deref() {
+            out.push(("plan_date".into(), date.to_string()));
+        }
+        out.push(("next".into(), format!("/fno:target {node_id}")));
+    } else {
+        out.push(("next".into(), format!("wait for {holder} or peek it")));
+    }
+    out
+}
 /// and `detail=` last: both shell consumers and `advance_dispatch` /
 /// `dispatch_launch` read the tokens, never the prose.
 pub fn refusal_line(node: &str, verdict: &Value) -> String {
@@ -590,11 +786,24 @@ pub fn refusal_line(node: &str, verdict: &Value) -> String {
     if verdict.get("worker_unmeasured") == Some(&Value::Bool(true)) {
         worker.push_str(" worker_unmeasured=true");
     }
+    let planner: String = ["plan", "plan_date", "host", "next"]
+        .iter()
+        .filter_map(|k| {
+            text(k).map(|v| {
+                let shown = if v.chars().any(char::is_whitespace) {
+                    crate::claude_ask::py_repr(&v)
+                } else {
+                    v.to_string()
+                };
+                format!(" {k}={shown}")
+            })
+        })
+        .collect();
     let detail = text("detail")
         .map(|d| format!(" detail={}", crate::claude_ask::py_repr(d)))
         .unwrap_or_default();
     format!(
-        "node dispatch refused: node={node} verdict={} reason={reason}{prior}{worker}; \
+        "node dispatch refused: node={node} verdict={} reason={reason}{prior}{worker}{planner}; \
          no worker launched{detail}",
         text("verdict").unwrap_or("None")
     )
@@ -860,10 +1069,10 @@ pub fn resolve_provenance(
         .collect()
 }
 
-/// The node's row by id first; the whole table only when the id read finds
-/// nothing, which is the slug case.
-fn read_node_rows(node: &str) -> Result<Vec<Value>, String> {
-    let graph = crate::backlog::settings::graph_path();
+/// The node's rows by id first; the whole table only when the id read finds
+/// nothing, which is the slug case. The `graph` param keeps the read
+/// env-free, so a test passes a temp graph and no race.
+fn read_node_rows_in(graph: &Path, node: &str) -> Result<Vec<Value>, String> {
     let read = |id_in: Option<Vec<String>>| {
         crate::graph_store::read_rows_where_strict(
             &graph,
@@ -889,6 +1098,11 @@ fn read_node_rows(node: &str) -> Result<Vec<Value>, String> {
     } else {
         Ok(rows)
     }
+}
+
+/// The graph the guard reads, as [`read_node_rows_in`] wants it.
+fn read_node_rows(node: &str) -> Result<Vec<Value>, String> {
+    read_node_rows_in(&crate::backlog::settings::graph_path(), node)
 }
 
 /// The client door's guard for a node-bearing spawn. It clears the inherited
@@ -976,6 +1190,7 @@ pub fn guard_client_spawn(
         handover_holder: Some(handover.as_str()),
         root: None,
         pid: None,
+        phase: Some(phase.as_str()),
     });
     if verdict.get("verdict").and_then(Value::as_str) != Some("dispatchable") {
         eprintln!("{}", refusal_line(&guarded, &verdict));
@@ -1035,12 +1250,89 @@ mod tests {
             handover_holder: handover,
             root: Some(root),
             pid: None,
+            phase: None,
         }
     }
 
     fn holder_of(root: &Path, key: &str) -> Option<String> {
         crate::claims::status(key, Some(root)).1.map(|r| r.holder)
     }
+
+#[test]
+fn planner_refusal_names_doc_date_host_and_target() {
+    // AC4: the planner-held refusal carries the doc, its date, the holder's
+    // host and the target door, in one line a shell can read.
+    let facts = super::PlanDocFacts {
+        path: "/plans/20261102-somewhere-x-1.md".into(),
+        date: Some("2026-11-02".into()),
+        status: None,
+    };
+    let fields = super::planner_fields(
+        Some(&facts),
+        "x-1",
+        "blueprint-session:s9",
+        Some("other-host"),
+    );
+    let mut verdict = serde_json::Map::new();
+    verdict.insert("verdict".into(), serde_json::json!("already-running"));
+    verdict.insert("reason".into(), serde_json::json!("live-claim"));
+    verdict.insert("holder".into(), serde_json::json!("blueprint-session:s9"));
+    for (k, v) in fields {
+        verdict.insert(k, serde_json::json!(v));
+    }
+    let line = super::refusal_line("x-1", &serde_json::Value::Object(verdict));
+    assert!(line.contains("plan=/plans/20261102-somewhere-x-1.md"), "{line}");
+    assert!(line.contains("plan_date=2026-11-02"), "{line}");
+    assert!(line.contains("host=other-host"), "{line}");
+    assert!(line.contains("next=/fno:target x-1"), "{line}");
+}
+
+#[test]
+fn planner_refusal_without_a_doc_points_at_the_holder() {
+    let fields = super::planner_fields(None, "x-1", "blueprint-session:s9", None);
+    assert_eq!(
+        fields.iter().find(|(k, _)| k == "next").unwrap().1,
+        "wait for blueprint-session:s9 or peek it"
+    );
+}
+
+#[test]
+fn plan_fresh_gates_think_by_age_and_blueprint_by_status() {
+    // AC5: a think refuses a doc inside the window and warns past it; a
+    // blueprint refuses only a ready doc. A doc with no date gates nothing.
+    let today = chrono::Utc::now().date_naive().to_string();
+    let old = (chrono::Utc::now().date_naive() - chrono::Duration::days(30)).to_string();
+    let facts = |date: Option<&str>, status: Option<&str>| super::PlanDocFacts {
+        path: "/plans/20261101-somewhere-x-1.md".into(),
+        date: date.map(str::to_string),
+        status: status.map(str::to_string),
+    };
+    let refuse = |f: &super::PlanDocFacts| match super::plan_fresh_for_facts("think", f) {
+        Some(super::PlanFresh::Refuse { fields, .. }) => fields,
+        other => panic!("expected refuse, got {other:?}"),
+    };
+    let fresh = facts(Some(&today), None);
+    let fields = refuse(&fresh);
+    assert!(fields.iter().any(|(k, v)| k == "plan" && v.ends_with("somewhere-x-1.md")));
+    assert!(fields.iter().any(|(k, v)| k == "plan_date" && *v == today));
+
+    let stale = facts(Some(&old), None);
+    match super::plan_fresh_for_facts("think", &stale) {
+        Some(super::PlanFresh::Warn(line)) => assert!(line.contains("somewhere-x-1.md")),
+        other => panic!("expected warn, got {other:?}"),
+    }
+
+    let ready = facts(Some(&today), Some("ready"));
+    assert!(refuse_bp(&ready).is_some());
+    let design = facts(Some(&today), Some("design"));
+    assert!(super::plan_fresh_for_facts("blueprint", &design).is_none());
+    let undated = facts(None, None);
+    assert!(super::plan_fresh_for_facts("think", &undated).is_none());
+}
+
+fn refuse_bp(f: &super::PlanDocFacts) -> Option<super::PlanFresh> {
+    super::plan_fresh_for_facts("blueprint", f)
+}
 
     #[test]
     fn a_free_node_reserves_and_takes_the_handover_claim() {
