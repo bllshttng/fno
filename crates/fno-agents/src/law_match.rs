@@ -1291,6 +1291,7 @@ pub(crate) struct RecordDoor {
     widen: Option<Widen>,
     raw_paths: Vec<String>,
     quote: Option<String>,
+    strength: Option<String>,
 }
 
 /// A law's scope past the recording project, from one door flag. `None` in
@@ -1302,7 +1303,7 @@ pub(crate) enum Widen {
     Person(Option<String>),
 }
 
-const RECORD_USAGE: &str = "usage: fno inbox law set <subject> [decision] [--decision-file f|-] [--rationale s] [--option s]... [--supersedes d-x] [--graduation k] [--graduation-ref r] [--read cmd]... [--global | --machine[=<id>] | --person[=<name>]] [--paths glob,glob] [--quote <the user's words>]";
+const RECORD_USAGE: &str = "usage: fno inbox law set <subject> [decision] [--decision-file f|-] [--rationale s] [--option s]... [--supersedes d-x] [--graduation k] [--graduation-ref r] [--read cmd]... [--global | --machine[=<id>] | --person[=<name>]] [--paths glob,glob] [--strength inform|warn|require-ack|block] [--quote <the user's words>]";
 const RETRACT_USAGE: &str = "usage: fno inbox law retract <subject-or-decision-id> --reason <why> [--authority operator|chat_attested] [--quote <the user's words>]";
 const HISTORY_USAGE: &str = "usage: fno inbox law history <subject-or-decision-id>";
 
@@ -1320,6 +1321,7 @@ fn parse_record_door(args: &[String]) -> Result<RecordDoor, String> {
         widen: None,
         raw_paths: Vec::new(),
         quote: None,
+        strength: None,
     };
     let mut widened_by: Vec<String> = Vec::new();
     let mut positional = 0usize;
@@ -1351,6 +1353,16 @@ fn parse_record_door(args: &[String]) -> Result<RecordDoor, String> {
             "--read" => door.reads.push(take(&mut i)?),
             "--paths" => door.raw_paths.push(take(&mut i)?),
             "--quote" => door.quote = Some(take(&mut i)?),
+            "--strength" => {
+                let v = take(&mut i)?.to_ascii_lowercase();
+                if !crate::rules::STRENGTHS.contains(&v.as_str()) {
+                    return Err(format!(
+                        "--strength takes one of {}, not {v:?}\n{RECORD_USAGE}",
+                        crate::rules::STRENGTHS.join(", ")
+                    ));
+                }
+                door.strength = Some(v);
+            }
             "--global" => {
                 // An inline value parses like a bool flag should: --global=false
                 // must never widen because the value was ignored.
@@ -1970,6 +1982,9 @@ pub(crate) fn record_door_write(door: RecordDoor, decision: String, caller: &Cal
     }
     if !paths.is_empty() {
         data["paths"] = json!(paths);
+    }
+    if let Some(strength) = &door.strength {
+        data["strength"] = json!(strength);
     }
     if let Some(map) = data.as_object_mut() {
         crate::identity::stamp_person(map);
@@ -3359,6 +3374,7 @@ pub(crate) mod scope_tests {
             widen: None,
             raw_paths: Vec::new(),
             quote: None,
+            strength: None,
         }
     }
 
