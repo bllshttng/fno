@@ -31,7 +31,12 @@ pub struct UnsetResult {
 pub fn unset_value(key: &str, scope: &str) -> Res<UnsetResult> {
     let bare = key.strip_prefix("config.").unwrap_or(key);
     let retired = model::RETIRED_DISPATCH_KEYS.contains(&bare);
-    if !retired && resolve_parent_block(key).is_none() {
+    // `mux.keys` is a free-form action table, so its entries are not model
+    // fields; an entry must still be removable to clear a bad rebind.
+    let rebind_action = bare
+        .strip_prefix("mux.keys.")
+        .filter(|a| !a.is_empty() && !a.contains('.'));
+    if !retired && rebind_action.is_none() && resolve_parent_block(key).is_none() {
         return Err(Refusal::new(
             format!(
                 "unknown config key {}",
@@ -40,7 +45,12 @@ pub fn unset_value(key: &str, scope: &str) -> Res<UnsetResult> {
             1,
         ));
     }
-    let default = if retired {
+    let default = if let Some(action) = rebind_action {
+        crate::keys::default_bindings()
+            .iter()
+            .find(|kb| kb.action == action)
+            .map_or_else(|| "None".to_string(), |kb| crate::keys::key_disp(kb.key))
+    } else if retired {
         "None".to_string()
     } else {
         match default_at(key) {
@@ -48,7 +58,7 @@ pub fn unset_value(key: &str, scope: &str) -> Res<UnsetResult> {
             (value, false) => py_str(&value),
         }
     };
-    let store: Vec<String> = if retired {
+    let store: Vec<String> = if retired || rebind_action.is_some() {
         key.split('.').map(str::to_string).collect()
     } else {
         storage_parts(key)
