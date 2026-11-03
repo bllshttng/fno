@@ -173,7 +173,7 @@ pub(super) fn build_sweep_modal(c: &SweepCounts) -> AuxPopup {
         ),
         (
             format!("stopped sessions ({stopped})"),
-            "retire stopped rows with no node, PR or claim (transcripts stay)".to_string(),
+            "retire finished session rows the reaper would remove (transcripts stay)".to_string(),
             stopped > 0,
             AuxAction::SweepStopped,
         ),

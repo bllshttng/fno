@@ -3044,7 +3044,11 @@ pub(crate) fn run_with_release(
                     format!("node {node} {status}; recorded merge_status merged")
                 }
             }
-            _ => "done".to_string(), // unreachable: only AllDone and the released Open arms retire
+            WorkState::NoProvenance if crate::gc::stopped_stale(&probed) => format!(
+                "stopped, quiet past {}s; no node, open PR or live claim",
+                probed.stopped_retire_s.unwrap_or_default()
+            ),
+            _ => "done".to_string(), // a released no-provenance row
         };
         // The release rides the audit line: what was ruled, how old
         // the hold was, an unconfirmed stop named as such, and an unread
