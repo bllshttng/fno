@@ -111,7 +111,7 @@ mod tests {
 
     fn fleet() -> Vec<Value> {
         vec![
-            json!({"name": "king", "harness": "claude", "harness_session_id": "s-lead",
+            json!({"name": "lead-one", "harness": "claude", "harness_session_id": "s-lead",
                    "status": "busy", "role_level": 1, "role_scope": "b,a"}),
             json!({"name": "wk", "harness": "claude", "harness_session_id": "s-wk",
                    "status": "busy", "spawn_payload": "/fno:target x-1",
@@ -132,7 +132,7 @@ mod tests {
         let r = session_role(&fleet(), "s-lead", "claude").unwrap();
         assert_eq!(r.kind, RoleKind::Lead);
         assert_eq!(r.lead.as_deref(), Some("a,b"));
-        assert_eq!(r.name, "king");
+        assert_eq!(r.name, "lead-one");
     }
 
     #[test]
