@@ -1472,7 +1472,7 @@ fn lines_from_json(stdout: &str) -> Option<Vec<TLine>> {
 
 /// Frame the fold lines with a header + dismiss hint, padded to a common width
 /// so the inverse-video block is a clean rectangle.
-fn decorate(body: Vec<String>) -> Vec<TLine> {
+pub(crate) fn decorate(body: Vec<String>) -> Vec<TLine> {
     let mut out = Vec::with_capacity(body.len() + 2);
     out.push(TLine::line(TextStyle::Title, "while you were gone"));
     out.extend(body.into_iter().map(TLine::plain));

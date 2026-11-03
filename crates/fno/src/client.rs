@@ -10146,6 +10146,10 @@ mod keys_modal_tests;
 #[path = "client_tests/ground_tests.rs"]
 mod ground_tests;
 
+#[cfg(test)]
+#[path = "client_tests/text_hierarchy_tests.rs"]
+mod text_hierarchy_tests;
+
 #[path = "client/org_block.rs"]
 mod org_block;
 

@@ -920,21 +920,9 @@ impl Popup {
                         } else if selected {
                             vec![(0usize, chars, Role::BodyCursor)]
                         } else {
-                            // Char 0 is the leading pad; the key chars carry
-                            // the glyph span.
-                            let key = if glyph.chars().next().is_some_and(char::is_alphanumeric) {
-                                TextStyle::Section
-                            } else {
-                                TextStyle::Value
-                            };
-                            let mut segs = vec![(1usize, kw, Role::Text(key))];
                             let hint_w = hint_text.chars().count();
-                            if hint_w > 0 {
-                                let at =
-                                    text.trim_end().chars().count() - hint_text.chars().count();
-                                segs.push((at, hint_w, Role::Text(TextStyle::Hint)));
-                            }
-                            segs
+                            let at = text.trim_end().chars().count().saturating_sub(hint_w);
+                            entry_segs(glyph, kw, (hint_w > 0).then_some((at, hint_w)))
                         };
                         (
                             text,
@@ -962,13 +950,26 @@ impl Popup {
                         let gap = width
                             .saturating_sub(left_w + chrome::str_cols(&hint_text))
                             .max(BODY_RIGHT_GAP_COLS);
+                        let hint_at = left.chars().count() + gap;
+                        let hint_n = hint_text.chars().count();
                         let mut text = left;
                         text.push_str(&" ".repeat(gap));
                         text.push_str(&hint_text);
                         (
                             pad(&text, width),
-                            vec![],
-                            Role::Text(TextStyle::Item),
+                            entry_segs(
+                                glyph,
+                                glyph.chars().count(),
+                                (hint_n > 0).then_some((hint_at, hint_n)),
+                            )
+                            .into_iter()
+                            .filter(|_| !disabled)
+                            .collect(),
+                            if disabled {
+                                Role::Text(TextStyle::Meta)
+                            } else {
+                                Role::Text(TextStyle::Item)
+                            },
                             (!disabled && selected).then_some((0, width)),
                         )
                     } else {
@@ -982,16 +983,28 @@ impl Popup {
                         // The hint keeps the two-cell air before the border.
                         let hint_w = chrome::str_cols(hint);
                         let left = format!(" {glyph} {label}");
+                        let room = width.saturating_sub(hint_w + 1 + BODY_RIGHT_GAP_COLS);
                         let text = if hint_w == 0 {
                             pad(&left, width)
                         } else {
-                            let room = width.saturating_sub(hint_w + 1 + BODY_RIGHT_GAP_COLS);
                             pad(&format!("{} {hint} ", pad(&left, room)), width)
                         };
                         (
                             text,
-                            vec![],
-                            Role::Text(TextStyle::Item),
+                            if disabled {
+                                vec![]
+                            } else {
+                                entry_segs(
+                                    glyph,
+                                    glyph.chars().count(),
+                                    (hint_w > 0).then_some((room + 1, hint.chars().count())),
+                                )
+                            },
+                            if disabled {
+                                Role::Text(TextStyle::Meta)
+                            } else {
+                                Role::Text(TextStyle::Item)
+                            },
                             (!disabled && selected).then_some((0, width)),
                         )
                     };
@@ -1175,6 +1188,26 @@ impl Popup {
             body_spans,
         }
     }
+}
+
+/// The glyph and hint spans of an entry row. A mnemonic key reads as accent
+/// text, a mark (checkbox, radio, bullet) as the entry's bold value, and the
+/// hint as a dim right column. Char 0 is the leading pad.
+fn entry_segs(
+    glyph: &str,
+    glyph_w: usize,
+    hint_span: Option<(usize, usize)>,
+) -> Vec<(usize, usize, Role)> {
+    let key = if glyph.chars().next().is_some_and(char::is_alphanumeric) {
+        TextStyle::Section
+    } else {
+        TextStyle::Value
+    };
+    let mut segs = vec![(1usize, glyph_w, Role::Text(key))];
+    if let Some((at, n)) = hint_span {
+        segs.push((at, n, Role::Text(TextStyle::Hint)));
+    }
+    segs
 }
 
 /// Lay out one text field row. A text wider than the room shows the window

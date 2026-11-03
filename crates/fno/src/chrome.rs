@@ -362,6 +362,56 @@ pub struct BodySpan {
     pub join: Join,
 }
 
+/// Refuse a view that paints all its body text in one style. Over every
+/// non-space body cell (cursor, border, chrome and swatch cells excluded) it
+/// collects the distinct resolved `(fg, weight)` pairs: fewer than 2 is a flat
+/// view, and a view of 4+ text lines with no bold level has no heading or
+/// value to scan by. `title` names the view in the refusal.
+pub fn text_hierarchy(title: &str, framed: &Framed, theme: &Theme) -> Result<(), String> {
+    use crate::proto::{cell_flags, Color};
+    let mut styles: Vec<(Color, u8)> = Vec::new();
+    let mut text_lines = 0usize;
+    for line in &framed.lines {
+        let Some(span) = line.body else { continue };
+        let mut painted = false;
+        for (i, ch) in line.text.chars().enumerate() {
+            if i < span.start || i >= span.end || ch.is_whitespace() {
+                continue;
+            }
+            let role = line.roles.get(i).copied().unwrap_or_default();
+            if matches!(
+                role,
+                Role::Border | Role::BodySel | Role::BodyCursor | Role::BodyFocus | Role::Swatch(_)
+            ) {
+                continue;
+            }
+            painted = true;
+            let (fg, _, flags) = cell_style(role, theme);
+            let key = (fg, flags & (cell_flags::BOLD | cell_flags::ITALIC));
+            if !styles.contains(&key) {
+                styles.push(key);
+            }
+        }
+        text_lines += usize::from(painted);
+    }
+    if styles.len() < 2 {
+        return Err(format!(
+            "{title}: all body text paints one style ({:?}); give sections, values or meta their own level",
+            styles.first()
+        ));
+    }
+    if text_lines >= 4
+        && !styles
+            .iter()
+            .any(|(_, flags)| flags & cell_flags::BOLD != 0)
+    {
+        return Err(format!(
+            "{title}: {text_lines} text lines and no bold level; give the headings or values a bold level"
+        ));
+    }
+    Ok(())
+}
+
 /// A fully framed block: the lines to draw and the total framed width.
 #[derive(Debug, Clone)]
 pub struct Framed {
