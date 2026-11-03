@@ -499,22 +499,33 @@ fn pass_repo(root: &Path, slug: &str, path: &Path) -> Result<(), String> {
 pub(crate) fn run_pass(home: &AgentsHome) -> Result<(), String> {
     let path = crate::daemon::global_events_path(home);
     let mut slugs = HashSet::new();
+    let mut off: Vec<String> = Vec::new();
     for root in crate::daemon::worktree_sweep::registry_repo_roots(home) {
         let root = Path::new(&root);
-        // Two clones of one repo are one tier.
-        let slug = crate::pr_status::cache::git_slug(root).filter(|s| slugs.insert(s.clone()));
-        let Some(slug) = slug else { continue };
+        let Some(slug) = crate::pr_status::cache::git_slug(root) else {
+            continue;
+        };
         if !tier_on(root) {
-            // A push held before the switch went off must not wait on a
-            // pass that will never come.
-            let now = crate::ci_cadence::millis_now();
-            if let Err(e) = wake_held(&path, &slug, &Value::Null, now, true) {
-                eprintln!("ci-tier: {slug}: {e}");
-            }
+            off.push(slug);
+            continue;
+        }
+        // Two clones of one repo are one tier.
+        if !slugs.insert(slug.clone()) {
             continue;
         }
         if let Err(e) = pass_repo(root, &slug, &path) {
             eprintln!("ci-tier: {slug}: {e}");
+        }
+    }
+    // A push held before the switch went off must not wait on a pass that
+    // will never come. A repo with any clone still on keeps its tier.
+    let now = crate::ci_cadence::millis_now();
+    let mut done = HashSet::new();
+    for slug in off.into_iter().filter(|s| !slugs.contains(s)) {
+        if done.insert(slug.clone()) {
+            if let Err(e) = wake_held(&path, &slug, &Value::Null, now, true) {
+                eprintln!("ci-tier: {slug}: {e}");
+            }
         }
     }
     Ok(())
