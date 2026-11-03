@@ -564,17 +564,17 @@ mod tests {
     #[test]
     fn real_shot_names_pair_whatever_token_the_main_side_wears() {
         let names = [
-            "x-c277-settings-dark.png",
-            "x-c277-settings-before-dark.png",
-            "x-c277-connections-main-dark.png",
-            "x-c277-connections-dark.png",
-            "x-c277-stray.png",
+            "x-0000-settings-dark.png",
+            "x-0000-settings-before-dark.png",
+            "x-0000-connections-main-dark.png",
+            "x-0000-connections-dark.png",
+            "x-0000-stray.png",
         ]
         .map(String::from);
         let (pairs, loose) = pair_shots(&names);
         let views: Vec<&str> = pairs.iter().map(|p| p.view.as_str()).collect();
-        assert_eq!(views, ["x-c277-connections-dark", "x-c277-settings-dark"]);
-        assert_eq!(loose, ["x-c277-stray.png"]);
+        assert_eq!(views, ["x-0000-connections-dark", "x-0000-settings-dark"]);
+        assert_eq!(loose, ["x-0000-stray.png"]);
     }
 
     #[test]
