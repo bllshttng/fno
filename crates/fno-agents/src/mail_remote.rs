@@ -363,7 +363,7 @@ fn cmd_send(args: &[String]) -> i32 {
             return 2;
         }
     };
-    let local_host = crate::mail::address::normalize_host(&crate::claims::hostname());
+    let local_host = crate::mail::address::local_host();
     if crate::mail::address::normalize_host(&host) == local_host {
         // A same-host target needs no bus row and no ssh hop: forward the
         // stripped argv to the local command, every flag the caller passed
@@ -665,7 +665,7 @@ fn cmd_peek(args: &[String]) -> i32 {
         eprintln!("{}", target_error(target));
         return 2;
     };
-    let local_host = crate::mail::address::normalize_host(&crate::claims::hostname());
+    let local_host = crate::mail::address::local_host();
     if crate::mail::address::normalize_host(&host) == local_host {
         let mut argv = vec![fno_binary()];
         argv.push(OsString::from("agents"));
