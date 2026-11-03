@@ -414,6 +414,32 @@ pub fn rules_report(since: Option<&str>) -> Value {
     answer
 }
 
+/// The `rules-explain` mode: every live rule read against one event, with the
+/// status and the clause that held or failed. An event that names no project
+/// takes the cwd's, as the hook does. Rules a caller cannot read ride
+/// `unread`, so a short list is never mistaken for a short rule set.
+pub fn rules_explain(mut ev: crate::rules::Event) -> Value {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    if ev.project.is_none() {
+        ev.project =
+            crate::law_match::resolve_project(Some(&cwd), &crate::law_match::settings_sources())
+                .ok();
+    }
+    let today = chrono::Local::now().date_naive();
+    match rule_set(&cwd) {
+        Ok(set) => {
+            let rows = crate::rules::explain(&set.rules, &ev, today);
+            let applies = rows.iter().filter(|r| r.status == "applies").count();
+            let mut answer = json!({"ok": true, "event": ev.kind, "project": ev.project, "applies": applies, "rules": rows});
+            if !set.unread.is_empty() {
+                answer["unread"] = json!(set.unread);
+            }
+            answer
+        }
+        Err(reason) => json!({"ok": false, "error": format!("the rule set ({reason})")}),
+    }
+}
+
 /// `never_fired`, `unwired`, `unevaluated` over the live rules against the
 /// window's fire counts. Pure, so the report's lists have a hermetic shape.
 fn classify_live(

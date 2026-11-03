@@ -333,31 +333,75 @@ pub struct Event {
 /// event, each as a glob where `*` crosses `/`. Predicates are the Stop
 /// engine's to evaluate and are not read here.
 pub fn matches(rule: &Rule, ev: &Event) -> bool {
+    clauses(rule, ev).iter().all(|c| c.held)
+}
+
+/// One filter a rule sets, read against the event: the field, whether it
+/// held, and the event value that satisfied it or the one that did not.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct Clause {
+    pub field: &'static str,
+    pub held: bool,
+    pub patterns: Vec<String>,
+    /// The event value the clause matched on, or the value it was offered.
+    pub saw: Option<String>,
+}
+
+/// Every filter `rule.when` sets, in `matches` order. `matches` is the
+/// conjunction of these, so `explain` can never disagree with the match.
+fn clauses(rule: &Rule, ev: &Event) -> Vec<Clause> {
     let w = &rule.when;
-    let one = |pats: &[String], val: &Option<String>| {
-        pats.is_empty()
-            || val
+    let mut out = Vec::new();
+    if !w.events.is_empty() {
+        out.push(Clause {
+            field: "events",
+            held: w.events.contains(&ev.kind),
+            patterns: w.events.clone(),
+            saw: Some(ev.kind.clone()),
+        });
+    }
+    let mut many = |field: &'static str, pats: &[String], vals: &[String]| {
+        if pats.is_empty() {
+            return;
+        }
+        let hit = vals
+            .iter()
+            .find(|v| pats.iter().any(|p| crate::glob::fnmatch(v, p)));
+        out.push(Clause {
+            field,
+            held: hit.is_some(),
+            patterns: pats.to_vec(),
+            saw: hit.or(vals.first()).cloned(),
+        });
+    };
+    many("paths", &w.paths, &ev.paths);
+    many("subjects", &w.subjects, &ev.subjects);
+    let one = |field: &'static str, pats: &[String], val: &Option<String>| {
+        (!pats.is_empty()).then(|| Clause {
+            field,
+            held: val
                 .as_deref()
-                .is_some_and(|v| pats.iter().any(|p| crate::glob::fnmatch(v, p)))
+                .is_some_and(|v| pats.iter().any(|p| crate::glob::fnmatch(v, p))),
+            patterns: pats.to_vec(),
+            saw: val.clone(),
+        })
     };
-    let many = |pats: &[String], vals: &[String]| {
-        pats.is_empty()
-            || vals
-                .iter()
-                .any(|v| pats.iter().any(|p| crate::glob::fnmatch(v, p)))
-    };
-    (w.events.is_empty() || w.events.contains(&ev.kind))
-        && many(&w.paths, &ev.paths)
-        && many(&w.subjects, &ev.subjects)
-        && one(&w.tools, &ev.tool)
-        && one(&w.commands, &ev.command)
-        && one(&w.skills, &ev.skill)
-        && one(&w.nodes, &ev.node)
-        && one(&w.projects, &ev.project)
-        && one(&w.phases, &ev.phase)
-        && one(&w.harnesses, &ev.harness)
-        && one(&w.models, &ev.model)
-        && one(&w.machines, &ev.machine)
+    out.extend(
+        [
+            one("tools", &w.tools, &ev.tool),
+            one("commands", &w.commands, &ev.command),
+            one("skills", &w.skills, &ev.skill),
+            one("nodes", &w.nodes, &ev.node),
+            one("projects", &w.projects, &ev.project),
+            one("phases", &w.phases, &ev.phase),
+            one("harnesses", &w.harnesses, &ev.harness),
+            one("models", &w.models, &ev.model),
+            one("machines", &w.machines, &ev.machine),
+        ]
+        .into_iter()
+        .flatten(),
+    );
+    out
 }
 
 /// Lowercase, split on anything outside `[a-z0-9]`, then drop digit-only
@@ -611,6 +655,56 @@ pub fn decide(rules: &[Rule], ev: &Event, now: chrono::NaiveDate) -> Decision {
     }
 }
 
+/// One rule read against an event: whether it applies and why. `status` is
+/// `applies`, `out-of-scope`, `expired`, `stop-engine`, `unmatched`,
+/// `retrieval` (tier 1, read only at a prompt or skill event) or
+/// `unevaluated` (tier 2, a match that no one decides here).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct Explained {
+    pub rule: String,
+    pub law: Option<String>,
+    pub action: String,
+    pub tier: u8,
+    pub status: &'static str,
+    pub clauses: Vec<Clause>,
+}
+
+/// Read every rule against one event and say why each applies or not. Uses
+/// the same `scope_fits`, `expired` and `clauses` as `decide`, so a tier-0
+/// `applies` row is exactly a rule `decide` fires.
+pub fn explain(rules: &[Rule], ev: &Event, now: chrono::NaiveDate) -> Vec<Explained> {
+    rules
+        .iter()
+        .map(|r| {
+            let clauses = clauses(r, ev);
+            let held = clauses.iter().all(|c| c.held);
+            let status = if !r.when.predicates.is_empty() {
+                "stop-engine"
+            } else if !scope_fits(r.scope.as_deref(), ev) {
+                "out-of-scope"
+            } else if expired(r.expires.as_deref(), now) {
+                "expired"
+            } else if !held {
+                "unmatched"
+            } else {
+                match r.tier() {
+                    0 => "applies",
+                    1 => "retrieval",
+                    _ => "unevaluated",
+                }
+            };
+            Explained {
+                rule: r.id.clone(),
+                law: r.law.clone(),
+                action: r.action.clone(),
+                tier: r.tier(),
+                status,
+                clauses,
+            }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -720,6 +814,45 @@ mod tests {
         );
         ev.acks = vec!["ack".into()];
         assert_eq!(decide(&[ack], &ev, day()).verdict, "inject");
+    }
+
+    #[test]
+    fn explain_agrees_with_decide_and_names_the_failed_filter() {
+        let rules = vec![
+            rule("id = \"hit\"\naction = \"warn\"\n[rule.when]\ntools = [\"Edit\"]\npaths = [\"cli/src/*.py\"]\n"),
+            rule("id = \"miss\"\naction = \"warn\"\n[rule.when]\ntools = [\"Bash\"]\n"),
+            rule("id = \"old\"\naction = \"warn\"\nexpires = \"2026-01-01\"\n[rule.when]\ntools = [\"Edit\"]\n"),
+            rule("id = \"elsewhere\"\naction = \"warn\"\nscope = \"node:x-1\"\n[rule.when]\ntools = [\"Edit\"]\n"),
+        ];
+        let ev = Event {
+            kind: "pre-tool".into(),
+            tool: Some("Edit".into()),
+            paths: vec!["cli/src/law.py".into()],
+            ..Event::default()
+        };
+        let why = explain(&rules, &ev, day());
+        let got: Vec<(&str, &str)> = why.iter().map(|e| (e.rule.as_str(), e.status)).collect();
+        assert_eq!(
+            got,
+            [
+                ("hit", "applies"),
+                ("miss", "unmatched"),
+                ("old", "expired"),
+                ("elsewhere", "out-of-scope")
+            ]
+        );
+        let fired: Vec<String> = decide(&rules, &ev, day())
+            .fires
+            .into_iter()
+            .map(|f| f.rule)
+            .collect();
+        assert_eq!(fired, ["hit"], "applies is exactly what decide fires");
+        let failed = why[1].clauses.iter().find(|c| !c.held).unwrap();
+        assert_eq!(
+            (failed.field, failed.saw.as_deref()),
+            ("tools", Some("Edit"))
+        );
+        assert_eq!(why[0].clauses[1].saw.as_deref(), Some("cli/src/law.py"));
     }
 
     #[test]
