@@ -1169,10 +1169,35 @@ fn parse(stdout: &[u8]) -> Option<Org> {
     serde_json::from_slice(stdout).ok()
 }
 
+/// Fold the gate reading now: the daemon's per-cwd cached probe answer over
+/// the socket, falling back to the in-process spawn only when no daemon
+/// answers (a daemon-less install keeps today's behavior, and the spawned
+/// probe stays the fallback's cost, not the steady state's).
+pub async fn gate_now() -> Result<GateReading, String> {
+    if let Ok(reading) = daemon_gate().await {
+        return Ok(reading);
+    }
+    gate_now_via_spawn().await
+}
+
+/// The daemon socket arm: the same probe answer the spawned child printed,
+/// served from the daemon's per-cwd cache.
+async fn daemon_gate() -> Result<GateReading, String> {
+    let cwd = std::env::current_dir().map_err(|e| format!("cwd unreadable: {e}"))?;
+    let payload = serde_json::json!({"mode": "probe", "only": ["lanes"], "tests": true});
+    let answer = crate::agents_view::gate_probe_rpc(
+        &crate::agents_view::supervisor_sock_path(),
+        &cwd,
+        payload,
+    )
+    .await?;
+    serde_json::from_value(answer).map_err(|e| format!("gate answer invalid: {e}"))
+}
+
 /// Fold the spawn-gate probe now: one payload on stdin, the whole answer
 /// parsed as the gate reading. A nonzero exit is not a failure - the probe
 /// answers refusals on stdout too - but an empty one is.
-pub async fn gate_now() -> Result<GateReading, String> {
+async fn gate_now_via_spawn() -> Result<GateReading, String> {
     let mut command =
         crate::process_admission::tokio_command(crate::digest_overlay::fno_agents_bin());
     command
