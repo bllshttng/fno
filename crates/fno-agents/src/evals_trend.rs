@@ -18,7 +18,7 @@ use serde_json::Map;
 use serde_json::Value;
 
 const EXIT_USAGE: i32 = 2;
-const USAGE: &str = "usage: fno-agents evals-trend --history <jsonl> (--mode report [--since K] [--graduate N] [--json] [--compare A --to B [--repeats N] [--bank DIR] [--prices JSON]] [--by-failure-type [--repeats N] [--bank DIR]] [--check-metrics [--bank DIR]] [--planned <json>] [--qualification <manifest.json>] [--by-cohort [--prices <json>]] [--climb --baseline C --trial C [--cohorts-yaml P] [--stage V --trial-lane L]] | --mode trend | --mode summary) [--stale-days N] [--now <rfc3339>]";
+const USAGE: &str = "usage: fno-agents evals-trend --history <jsonl> (--mode report [--since K] [--graduate N] [--json] [--compare A --to B [--repeats N] [--bank DIR] [--prices JSON]] [--by-failure-type [--repeats N] [--bank DIR]] [--check-metrics [--bank DIR]] [--planned <json>] [--qualification <manifest.json>] [--by-cohort [--prices <json>]] [--predict [--bank DIR]] [--climb --baseline C --trial C [--cohorts-yaml P] [--stage V --trial-lane L]] | --mode trend | --mode summary) [--stale-days N] [--now <rfc3339>]";
 
 /// One history row: the fields the folds read. Absent keys read as the
 /// Python fold read them (missing `variant` is baseline, missing `ts` is
@@ -44,6 +44,18 @@ impl Row {
 
     pub(crate) fn lane_status(&self) -> Option<&str> {
         self.raw.get("lane_status").and_then(Value::as_str)
+    }
+
+    pub(crate) fn raw_str(&self, key: &str) -> Option<&str> {
+        self.raw.get(key).and_then(Value::as_str)
+    }
+
+    pub(crate) fn raw_i64(&self, key: &str) -> Option<i64> {
+        self.raw.get(key).and_then(Value::as_i64)
+    }
+
+    pub(crate) fn raw_obs_bool(&self, key: &str) -> Option<bool> {
+        self.raw.get("obs")?.get(key)?.as_bool()
     }
 }
 
@@ -896,6 +908,7 @@ pub fn run_evals_trend(args: &[String]) -> i32 {
     let mut planned: Option<BTreeMap<String, usize>> = None;
     let mut qualification: Option<String> = None;
     let mut by_cohort = false;
+    let mut predict = false;
     let mut by_failure_type = false;
     let mut check_metrics = false;
     let mut bank: Option<String> = None;
@@ -1009,6 +1022,7 @@ pub fn run_evals_trend(args: &[String]) -> i32 {
                 Err(()) => return EXIT_USAGE,
             },
             "--by-cohort" => by_cohort = true,
+            "--predict" => predict = true,
             "--by-failure-type" => by_failure_type = true,
             "--check-metrics" => check_metrics = true,
             "--bank" => match value("--bank") {
@@ -1159,6 +1173,9 @@ pub fn run_evals_trend(args: &[String]) -> i32 {
     }
     if let Some(qpath) = &qualification {
         return qualification_report(&history, qpath, json_out, since);
+    }
+    if predict {
+        return crate::evals_predict::run(&history, bank, json_out);
     }
     if by_cohort {
         let rows = read_rows(&history, None, since);

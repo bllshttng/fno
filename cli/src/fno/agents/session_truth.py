@@ -447,24 +447,25 @@ def resolve_session_truth(
     # the row, and a done promise is an outcome, not a refusal to consult.
     provider_refusal: Optional[str] = None
     if last_actor.role == "assistant" and state != "done":
-        from fno.adapters.providers.error_taxonomy import normalize
+        from fno.rust_binary import command_call
 
         # Only the leading clause: a worker whose turn merely discusses rate
         # limits carries the taxonomy's bare substrings further in.
         lead = " ".join((last_actor.text or "").split())[:120]
         try:
             verdict = (
-                normalize(http_status=None, exit_code=None, body=lead, reset_timezone=None)
+                command_call(["spawn-overlay", "accounts", "error-class"], {"body": lead}, timeout=5)
                 if lead
                 else None
             )
         except Exception:  # noqa: BLE001 - see below
             # This function is documented never to raise and every liveness
             # surface reads it, so a reporting field must not break the read:
-            # the same rule `observed_model` states for itself.
+            # the same rule `observed_model` states for itself. A missing
+            # fno-agents binary lands here too.
             verdict = None
-        if verdict is not None and verdict.triggers_swap:
-            provider_refusal = verdict.error_class.value
+        if verdict is not None and verdict.get("triggers_swap"):
+            provider_refusal = verdict.get("error_class")
     try:
         last_event_at = (
             None

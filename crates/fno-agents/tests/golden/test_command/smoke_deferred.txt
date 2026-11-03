@@ -7,4 +7,3 @@ tests/smoke-target-shim.sh
 tests/test-backlog-triage.sh
 tests/test-worktree-inside-checkout-redirect.sh
 tests/test_emit_gate_transition.sh
-tests/test_provider_substrate_e2e.sh

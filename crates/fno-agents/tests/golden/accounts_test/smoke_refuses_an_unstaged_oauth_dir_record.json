@@ -10,7 +10,7 @@
  "expect": {
   "exit": 1,
   "stdout": "",
-  "stderr": "smoke: dispatch_env failed for 'work': Provider 'work' is not staged. Call stage(record) before dispatch_env().\n",
+  "stderr": "smoke: dispatch_env failed for 'work': Provider 'work' is not staged; run `fno config accounts register` before dispatching to it.\n",
   "seen": null
  }
 }

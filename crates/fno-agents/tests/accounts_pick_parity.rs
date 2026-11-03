@@ -1,7 +1,7 @@
-//! parity-stage: differential
+//! parity-stage: characterization
 //! parity-oracle: fno.adapters.providers.cli
 //!
-//! Differential parity for `accounts::pick`, the port of `pick_account` and
+//! Characterization for `accounts::pick`, the port of `pick_account` and
 //! the `pick` command. Each `tests/golden/accounts_pick/*.json` case carries
 //! the files it set up and the Python command's stdout, stderr and exit
 //! code under `expect`, captured at `NOW` by `accounts_pick_golden_driver.py`

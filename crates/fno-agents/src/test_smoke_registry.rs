@@ -99,7 +99,6 @@ pub(super) const DISCOVERY_DEFERRED: &[&str] = &[
     "tests/test-backlog-triage.sh",
     "tests/test-worktree-inside-checkout-redirect.sh",
     "tests/test_emit_gate_transition.sh",
-    "tests/test_provider_substrate_e2e.sh",
 ];
 
 /// Machine constants the smoke runner pins (from smoke_constants.json).

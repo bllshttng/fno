@@ -1,12 +1,12 @@
-//! parity-stage: differential
+//! parity-stage: characterization
 //! parity-oracle: fno.adapters.providers.runtime_state
 //!
-//! Differential parity for `accounts::state`, the port of the read side of
+//! Characterization for `accounts::state`, the port of the read side of
 //! `runtime_state.py`. Each `tests/golden/accounts_state_read/*.json` case
 //! carries the state file it was captured against, the op and its inputs,
 //! and the Python leg's answer under `expect`, frozen at `NOW` by
-//! `accounts_state_read_golden_driver.py` (the case table lives there;
-//! re-run it to add a case or re-freeze). This test writes the same file,
+//! `accounts_state_read_golden_driver.py`, the capture record now that the
+//! Python leg is gone. This test writes the same file,
 //! runs the Rust op at `now = NOW` and asserts equal JSON.
 
 use fno_agents::accounts::state;

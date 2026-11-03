@@ -39,6 +39,16 @@ def reset(body, tz=None) -> dict:
     return dict(op="parse_reset_stamp", body=body, tz=tz)
 
 
+def corpus() -> dict:
+    """The machine's own recorded 429s: 38 `worker_silent` events, handles and
+    vendor request ids stripped, message shapes untouched."""
+    lines = (Path(__file__).resolve().parent / "fixtures" / "quota_429_worker_silent.jsonl").read_text(
+        encoding="utf-8"
+    )
+    bodies = [json.loads(line)["data"]["last_message"] for line in lines.splitlines() if line.strip()]
+    return dict(op="normalize_corpus", status=429, bodies=bodies)
+
+
 CASES = {
     "normalize_529_is_a_5xx_swap": norm(529, ""),
     "normalize_503_is_a_5xx_swap": norm(503, "server error"),
@@ -93,6 +103,10 @@ CASES = {
         None, "Usage limit reached for 5 hour. Your limit will reset at 2026-09-15 18:41:02"
     ),
     "normalize_auth_window_name_derives_nothing": norm(401, "Sessions are valid for 30 minutes"),
+    "normalize_resolved_stamp_beats_the_window_bound": norm(
+        429, f"Usage limit reached for 5 hour. Resets at {stamp(2)}"
+    ),
+    "normalize_recorded_429_corpus": corpus(),
     "classify_text_rule_capacity": rule(200, "overloaded due to capacity"),
     "classify_text_wins_over_status": rule(503, "rate limit exceeded"),
     "classify_plain_503_matches_no_rule": rule(503, "internal server error"),
@@ -131,6 +145,8 @@ def run_case(case: dict):
     from fno.adapters.providers import error_taxonomy as et
 
     op = case["op"]
+    if op == "normalize_corpus":
+        return [run_case(norm(case["status"], body)) for body in case["bodies"]]
     if op == "normalize":
         try:
             got = et.normalize(
