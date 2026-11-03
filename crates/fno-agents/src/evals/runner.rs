@@ -479,7 +479,8 @@ const SEALED_WORKER_ENV: [(&str, &str); 5] = [
 /// The spawn argv: the substrate's own --timeout is the first guard; a
 /// lane is a complete coordinate (its harness wins over the provider
 /// default, and its route/account ride along). `--` fences the prompt, or
-/// with `harness_flags` fences those and the prompt sits before it.
+/// with `harness_flags` (or a footnote lane model) fences those and the
+/// prompt sits before it.
 fn spawn_argv(
     name: &str,
     workdir: &str,
@@ -511,7 +512,13 @@ fn spawn_argv(
             argv.push(l.account.clone());
         }
     }
-    if harness_flags.is_empty() {
+    // The footnote harness reads its model only from fenced args, so a lane
+    // model that stays outside the fence makes the spawn refuse with
+    // "needs a model".
+    let lane_model = lane
+        .filter(|l| l.harness == "footnote" && !l.model.is_empty())
+        .map(|l| l.model.clone());
+    if harness_flags.is_empty() && lane_model.is_none() {
         argv.push("--".into());
         argv.push(prompt.into());
     } else {
@@ -519,6 +526,10 @@ fn spawn_argv(
         // prompt sits before it. run_task sends no flags with a dash-led prompt.
         argv.push(prompt.into());
         argv.push("--".into());
+        if let Some(m) = lane_model {
+            argv.push("-m".into());
+            argv.push(m);
+        }
         argv.extend_from_slice(harness_flags);
     }
     argv
@@ -1366,5 +1377,49 @@ mod tests {
         assert!(argv.contains(&"--route".to_string()));
         assert!(argv.contains(&"zai/glm".to_string()));
         assert!(argv.contains(&"--account".to_string()));
+    }
+
+    #[test]
+    fn a_footnote_lane_model_crosses_the_fence_as_minus_m() {
+        let lane = LaneRow {
+            name: "fn".into(),
+            harness: "footnote".into(),
+            model: "glm-5.3-flash".into(),
+            ..Default::default()
+        };
+        let argv = spawn_argv(
+            "n",
+            "/tmp/wt",
+            60,
+            Some("footnote"),
+            Some(&lane),
+            "run it",
+            &[],
+        );
+        let fence = argv.iter().position(|a| a == "--").unwrap();
+        assert_eq!(
+            argv[fence - 1],
+            "run it",
+            "the prompt sits before the fence"
+        );
+        assert_eq!(&argv[fence + 1..fence + 3], &["-m", "glm-5.3-flash"]);
+        // The model is footnote-only: another harness's lane model never rides.
+        let claude_lane = LaneRow {
+            name: "c".into(),
+            harness: "claude".into(),
+            model: "glm-5.3-flash".into(),
+            ..Default::default()
+        };
+        let argv = spawn_argv(
+            "n",
+            "/tmp/wt",
+            60,
+            Some("claude"),
+            Some(&claude_lane),
+            "p",
+            &[],
+        );
+        assert_eq!(argv.last().unwrap(), "p", "no fence shape without a model");
+        assert!(!argv.contains(&"-m".to_string()));
     }
 }
