@@ -8444,9 +8444,9 @@ event_types:
           description: "What remained of the fire's aggregate budget when the drain started. Near zero means the pre-drain reads had already spent the fire."
     consumers: [operator]
   # The agents family's legacy flat-kind telemetry, envelope-mapped by
-  # fno.agents.events.emit with the channel identity (source agents). These
-  # kinds predate their schema entries; the entries carry no required data
-  # so every historical shape lands, and the data stays open.
+  # the Rust emitter (crates/fno-agents/src/events.rs) with the channel
+  # identity (source agents). These kinds predate their schema entries; the
+  # entries carry no required data, so every historical shape lands.
   - name: agent_ask_started
     description: "An fno-agents ask RPC started."
     sources: [daemon, agents]

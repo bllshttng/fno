@@ -436,7 +436,7 @@ def test_import_hook_retries_a_module_that_is_on_disk_now(monkeypatch):
 
     This is the same disk-recheck-then-retry-once `_load_real` does, reaching the
     ~2000 function-level `from fno. ...` imports inside command bodies that the
-    lazy group never sees -- `fno agents truth` -> `fno.agents.session_truth`
+    lazy group never sees -- `fno harness-id` -> `fno.harness_identity`
     among them.
     """
     import fno
@@ -454,11 +454,11 @@ def test_import_hook_retries_a_module_that_is_on_disk_now(monkeypatch):
     monkeypatch.setattr(fno, "_module_appears_on_disk", lambda name: checked.append(name) or True)
     _spy_path_finder(monkeypatch, seen)
 
-    spec = finder.find_spec("fno.agents.session_truth", None, None)
+    spec = finder.find_spec("fno.harness_identity", None, None)
 
     assert spec == "SPEC"
-    assert checked == ["fno.agents.session_truth"], "the shared re-check is the gate"
-    assert seen == ["fno.agents.session_truth"], "retried exactly once, no loop"
+    assert checked == ["fno.harness_identity"], "the shared re-check is the gate"
+    assert seen == ["fno.harness_identity"], "retried exactly once, no loop"
 
 
 def test_namespace_refuser_blocks_the_poison_before_it_caches(monkeypatch, tmp_path):

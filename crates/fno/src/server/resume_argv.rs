@@ -341,7 +341,7 @@ mod tests {
         // No override is installed, so the REAL argv is asserted.
         clear_resume_program();
         let toml_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../cli/src/fno/agents/harness_capabilities.toml");
+            .join("../fno-agents/src/harness_capabilities.toml");
         let raw = std::fs::read_to_string(&toml_path)
             .unwrap_or_else(|e| panic!("read {}: {e}", toml_path.display()));
         let caps: toml::Value = toml::from_str(&raw).expect("parse harness_capabilities.toml");

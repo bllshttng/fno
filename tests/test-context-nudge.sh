@@ -128,7 +128,9 @@ export REGISTRY_SEED_BIN="$AGENTS_BIN"
 source "$REPO_ROOT/tests/helpers/registry-seed.sh"
 # Seed at this writer's schema. HOME is the sandbox, so this IS the shared
 # registry, and a source-built writer refuses to raise it from an older one.
-REG_V="$(PYTHONPATH="$FNO_SRC" "$FNO_PYTHON" -c 'from fno.agents.registry import SCHEMA_VERSION; print(SCHEMA_VERSION)')"
+# The schema version's owner is the canonical TOML (crates/fno-agents); the
+# Python constant's module is deleted.
+REG_V="$(sed -n 's/^version = //p' "$REPO_ROOT/crates/fno-agents/src/registry_schema.toml" | tr -d ' ')"
 export REG_V
 # Pin the optional-hook budget: this suite tests nudge LOGIC, and the runner's
 # load (four shards, one box) is a property of the shard, not of the code. A

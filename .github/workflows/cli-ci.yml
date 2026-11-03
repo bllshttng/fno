@@ -1027,13 +1027,9 @@ jobs:
           # bare `fno` on PATH is a stale installed tool, not this checkout.
           (cd cli && uv run fno-py doctor harness-matrix --write)
           git diff --exit-code -- \
-            cli/src/fno/agents/harness_capabilities.toml \
             crates/fno/src/harness_capabilities.toml \
-            cli/src/fno/agents/merge_posture.toml \
             cli/src/fno/tombstones.toml \
-            cli/src/fno/agents/slot_lanes.toml \
             crates/fno-agents/src/events_limits.toml \
-            cli/src/fno/agents/registry_schema.toml \
             docs/harnesses/capability-matrix.md
 
       - name: Schema parity check

@@ -4,17 +4,17 @@ Every EXIT_* constant with a value >= 64 across the Python and Rust trees
 claims its number once. The same NAME at the same number in both trees is
 byte-parity (the shared capacity pair, the fleet pair); two different names
 at one number is a collision and is the defect this gate exists to catch:
-78 once meant both the Python slot-queue refusal and the Rust state-root
+78 once meant both a slot-queue refusal and the Rust state-root
 refusal, and advance retried the permanent one forever. The convention band
 (small ints 0-5 and 13-25) is exempt by design. The table lives in
-fno/agents/spawn_gate.py, mirrored in crates/fno-agents/src/spawn_gate.rs.
+crates/fno-agents/src/spawn_gate.rs.
 """
 import re
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parents[3]
 _EXIT = re.compile(r"EXIT_([A-Z0-9_]+)\s*(?::[^=\n]*)?=\s*(\d+)")
-_GATES = ("cli/src/fno/agents/spawn_gate.py", "crates/fno-agents/src/spawn_gate.rs")
+_GATES = ("crates/fno-agents/src/spawn_gate.rs",)
 
 
 def _claims() -> dict[int, dict[str, list[str]]]:

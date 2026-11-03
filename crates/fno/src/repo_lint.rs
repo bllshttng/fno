@@ -263,12 +263,7 @@ fn forward_registry_family(inv: &Invocation) -> ! {
 /// grep-style guard, line regexes verbatim; multi-line assembly stays
 /// documented coverage debt.
 fn spawn_paths(inv: &Invocation) -> i32 {
-    const ALLOWLIST: &[&str] = &[
-        "cli/src/fno/agents/dispatch.py",
-        "cli/src/fno/agents/harnesses/claude.py",
-        "cli/src/fno/agents/harnesses/codex.py",
-        "cli/src/fno/llm.py",
-    ];
+    const ALLOWLIST: &[&str] = &["cli/src/fno/llm.py"];
     let argv_shape = regex::Regex::new(
         r#"\[\s*['\"](?:claude|codex)['\"](?:\s*,\s*[^,\]]+)*\s*,\s*['\"](?:--print|--bg|-p|--exec)['\"]"#,
     )

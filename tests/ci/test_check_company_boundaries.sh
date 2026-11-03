@@ -14,11 +14,12 @@ fail() { echo "  FAIL: $1"; FAILS=$((FAILS + 1)); }
 
 make_repo() {
     local root="$1"
-    mkdir -p "$root/cli/src/fno/company" "$root/cli/src/fno/agents" \
+    mkdir -p "$root/cli/src/fno/company" "$root/cli/src/fno/config" \
         "$root/agents" "$root/skills" "$root/plugins"
     printf 'class WorkOrderRef:\n    pass\n' > "$root/cli/src/fno/company/contracts.py"
-    printf 'from fno.company.contracts import WorkOrderRef\n' \
-        > "$root/cli/src/fno/agents/role.py"
+    # The positive control's edge: core -> platform, downward and legal.
+    printf 'from fno.paths import repo_root\n' \
+        > "$root/cli/src/fno/company/wiring.py"
 }
 
 echo "== mode help is discoverable =="
@@ -48,7 +49,7 @@ grep -q <<<"$out" '3 layers, 2 modules, 0 violations' \
 echo "== a broken scan fails closed =="
 BROKEN="$TMP/broken"
 make_repo "$BROKEN"
-printf 'class RoleRow:\n    pass\n' > "$BROKEN/cli/src/fno/agents/role.py"
+printf 'class WiringOnly:\n    pass\n' > "$BROKEN/cli/src/fno/company/wiring.py"
 out="$(bash "$CHECK" --strict "$BROKEN" 2>&1)"; rc=$?
 [[ $rc -eq 2 ]] && ok "missing control exits two" || fail "expected exit 2, got $rc: $out"
 grep -q <<<"$out" "positive control failed" \
@@ -62,12 +63,12 @@ make_repo "$VIOLATION"
 {
     printf '%s\n' '# padding' '# padding' '# padding' '# padding' '# padding'
     printf '%s\n' '# padding' '# padding' '# padding' '# padding' '# padding' '# padding'
-    printf '%s\n' 'from fno.agents.role import resolve_current_repo_slug'
-} > "$VIOLATION/cli/src/fno/company/contracts.py"
+    printf '%s\n' 'from fno.company.contracts import resolve_current_repo_slug'
+} > "$VIOLATION/cli/src/fno/config/spy.py"
 out="$(bash "$CHECK" --strict "$VIOLATION" 2>&1)"; rc=$?
 [[ $rc -eq 1 ]] && ok "prohibited edge exits one" || fail "expected exit 1, got $rc: $out"
 grep -q <<<"$out" \
-    'cli/src/fno/company/contracts.py:12: L1 core -> L5 runtime / from fno.agents.role import resolve_current_repo_slug' \
+    'cli/src/fno/config/spy.py:12: L0 platform -> L1 core / from fno.company.contracts import resolve_current_repo_slug' \
     && ok "finding carries exact evidence" || fail "exact evidence missing: $out"
 grep -q <<<"$out" 'layer cycle: L1 core -> L5 runtime -> L1 core' \
     && ok "declared-layer cycle is printed" || fail "cycle missing: $out"
@@ -76,7 +77,7 @@ echo "== baseline mode holds the exact finding set and ratchets downward =="
 FIXTURE_BASELINE="$TMP/fixture-baseline.txt"
 cat > "$FIXTURE_BASELINE" <<'EOF'
 # Human-readable fixture baseline.
-cli/src/fno/company/contracts.py: L1 core -> L5 runtime / from fno.agents.role import resolve_current_repo_slug
+cli/src/fno/config/spy.py: L0 platform -> L1 core / from fno.company.contracts import resolve_current_repo_slug
 layer cycle: L1 core -> L5 runtime -> L1 core
 EOF
 out="$(bash "$CHECK" --baseline --baseline-file "$FIXTURE_BASELINE" "$VIOLATION" 2>&1)"; rc=$?
@@ -88,13 +89,13 @@ grep -q <<<"$out" 'baseline holds: 1 prohibited dependency and 1 cycle' \
 # line column, so the row survives the shift with no regeneration.
 {
     for _ in {1..12}; do echo '# padding'; done
-    echo 'from fno.agents.role import resolve_current_repo_slug'
-} > "$VIOLATION/cli/src/fno/company/contracts.py"
+    echo 'from fno.company.contracts import resolve_current_repo_slug'
+} > "$VIOLATION/cli/src/fno/config/spy.py"
 out="$(bash "$CHECK" --baseline --baseline-file "$FIXTURE_BASELINE" "$VIOLATION" 2>&1)"; rc=$?
 [[ $rc -eq 0 ]] && ok "line move above the import keeps the baseline green" \
     || fail "line-key churn: a comment insertion forced a regeneration: $out"
 
-printf '\nfrom fno.agents.events import emit\n' >> "$VIOLATION/cli/src/fno/company/contracts.py"
+printf '\nfrom fno.company.contracts import emit\n' >> "$VIOLATION/cli/src/fno/config/spy.py"
 out="$(bash "$CHECK" --baseline --baseline-file "$FIXTURE_BASELINE" "$VIOLATION" 2>&1)"; rc=$?
 [[ $rc -eq 1 ]] && ok "new violation fails baseline" || fail "new violation escaped: $out"
 grep -q <<<"$out" 'new or changed violation' \
