@@ -287,6 +287,25 @@ fn slow_tasks(rows: &[Value], baseline: &str) -> BTreeSet<String> {
         .collect()
 }
 
+/// A task file's repo-relative path: `evals/bank/<id>.yaml`, or
+/// `skills/<name>/evals/<id>.yaml` for a task a skill carries.
+fn repo_relative_task(source: &std::path::Path) -> String {
+    let tail = |n: usize| {
+        let parts: Vec<_> = source.iter().rev().take(n).collect();
+        parts
+            .iter()
+            .rev()
+            .map(|c| c.to_string_lossy())
+            .collect::<Vec<_>>()
+            .join("/")
+    };
+    let skill_local = source
+        .parent()
+        .and_then(|d| d.file_name())
+        .is_some_and(|n| n == "evals");
+    tail(if skill_local { 4 } else { 3 })
+}
+
 /// The `gate` goldens among `tasks`. A golden added to main after the head
 /// branched has no fixture there, and would read as a regression.
 fn gate_tasks(
@@ -301,7 +320,7 @@ fn gate_tasks(
         .filter(|t| t.tags.iter().any(|tag| tag == GATE_TAG) && !t.is_demoted())
         .filter(|t| !slow.contains(&t.id))
         .filter(|t| {
-            let spec = format!("{sha}:evals/bank/{}.yaml", t.id);
+            let spec = format!("{sha}:{}", repo_relative_task(&t.source_path));
             (d.run)(&["git", "cat-file", "-e", &spec], p.repo).is_some_and(|r| r.ok)
         })
         .map(|t| t.id.clone())
