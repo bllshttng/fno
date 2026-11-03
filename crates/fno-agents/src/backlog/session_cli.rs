@@ -383,23 +383,32 @@ fn run_open(args: &[String]) -> i32 {
             holder: other, pid, ..
         } => {
             // A planner occupant names the doc, its date, the holder's host
-            // and the target door, so the second planner never re-seats.
+            // and the target door, so the second planner never re-seats. A
+            // work claim gets the plain line: its node is already in target.
             let host = rec
                 .as_ref()
                 .filter(|r| r.holder == other)
                 .map(|r| r.host.as_str());
-            let fields = crate::spawn_guard::planner_fields(
-                crate::spawn_guard::plan_doc_facts(&node_id).as_ref(),
-                &node_id,
-                &other,
-                host,
-            );
-            let flat: Vec<String> = fields.iter().map(|(k, v)| format!("{k}={v}")).collect();
-            eprintln!(
-                "session open: node:{node_id} held by {other} (pid={}): no planner started. {}",
-                pid.map(|p| p.to_string()).unwrap_or_else(|| "None".into()),
-                flat.join(" ")
-            );
+            if other.starts_with(BLUEPRINT_HOLDER_PREFIX) {
+                let fields = crate::spawn_guard::planner_fields(
+                    crate::spawn_guard::plan_doc_facts(&node_id).as_ref(),
+                    &node_id,
+                    &other,
+                    host,
+                );
+                let flat: Vec<String> =
+                    fields.iter().map(|(k, v)| format!("{k}={v}")).collect();
+                eprintln!(
+                    "session open: node:{node_id} held by {other} (pid={}): no planner started. {}",
+                    pid.map(|p| p.to_string()).unwrap_or_else(|| "None".into()),
+                    flat.join(" ")
+                );
+            } else {
+                eprintln!(
+                    "session open: node:{node_id} held by {other} (pid={}): no planner started.",
+                    pid.map(|p| p.to_string()).unwrap_or_else(|| "None".into())
+                );
+            }
             1
         }
         crate::claims::AcquireOutcome::Error(e) => {

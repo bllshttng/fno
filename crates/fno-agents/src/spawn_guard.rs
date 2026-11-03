@@ -613,11 +613,7 @@ pub(crate) struct PlanDocFacts {
 /// The node row's plan doc, as far as this machine reads it. `None` when the
 /// row carries no plan_path.
 pub(crate) fn plan_doc_facts(node_id: &str) -> Option<PlanDocFacts> {
-    plan_doc_facts_in(&crate::backlog::settings::graph_path(), node_id)
-}
-
-fn plan_doc_facts_in(graph: &Path, node_id: &str) -> Option<PlanDocFacts> {
-    let rows = read_node_rows_in(graph, node_id).ok()?;
+    let rows = read_node_rows_in(&crate::backlog::settings::graph_path(), node_id).ok()?;
     let row = rows.iter().find(|r| {
         r.get("archived_at").filter(|v| !v.is_null()).is_none()
             && r.get("id").and_then(Value::as_str) == Some(node_id)
@@ -647,7 +643,7 @@ fn frontmatter_value(text: &str, key: &str) -> Option<String> {
         let (k, v) = line.split_once(':')?;
         k.trim()
             .eq_ignore_ascii_case(key)
-            .then(|| v.trim().to_string())
+            .then(|| v.trim().trim_matches(|c| c == '"' || c == '\'').to_string())
             .filter(|v| !v.is_empty())
     })
 }
@@ -687,18 +683,10 @@ const PLAN_FRESH_WINDOW_DAYS: i64 = 7;
 
 /// The gate. `Some` when the phase's plan doc already answers it.
 pub(crate) fn plan_fresh(node_id: &str, session_phase: &str) -> Option<PlanFresh> {
-    plan_fresh_in(
-        &crate::backlog::settings::graph_path(),
-        node_id,
-        session_phase,
-    )
-}
-
-fn plan_fresh_in(graph: &Path, node_id: &str, session_phase: &str) -> Option<PlanFresh> {
     if session_phase != "think" && session_phase != "blueprint" {
         return None;
     }
-    let facts = plan_doc_facts_in(graph, node_id)?;
+    let facts = plan_doc_facts(node_id)?;
     plan_fresh_for_facts(session_phase, &facts)
 }
 
