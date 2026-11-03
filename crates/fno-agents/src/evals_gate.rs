@@ -41,9 +41,6 @@ use crate::gate_probes::RunProbe;
 
 const CONTEXT: &str = "evals/gate";
 const GATED_PATHS: [&str; 5] = ["skills/", "agents/", "hooks/", "commands/", "evals/bank/"];
-/// Source roots a task's `covers:` may name. A diff outside them and outside
-/// `GATED_PATHS` skips the bank read.
-const MAPPED_ROOTS: [&str; 2] = ["crates/", "cli/"];
 const GATE_TAG: &str = "gate";
 const GOLDEN_TAG: &str = "golden";
 const LEAD_TAG: &str = "lead";
@@ -439,42 +436,22 @@ fn is_covered(file: &str, covers: &[String]) -> bool {
     covers.iter().any(|c| file.starts_with(c.as_str()))
 }
 
-/// Every `covers:` prefix in the bank at `sha`. Git reads it, so a crate-only
-/// head needs no checkout, and the `ref-head` slot a running head uses stays put.
-fn covers_at(p: &Paths, d: &Deps, sha: &str) -> Vec<String> {
-    let Some(listed) = (d.run)(
-        &["git", "grep", "-l", "^covers:", sha, "--", "evals/bank"],
-        p.repo,
-    )
-    .filter(|r| r.ok) else {
-        return Vec::new();
-    };
-    listed
-        .stdout
-        .lines()
-        .filter_map(|spec| (d.run)(&["git", "show", spec], p.repo).filter(|r| r.ok))
-        .flat_map(|r| crate::evals::bank::covers_in(&r.stdout))
+/// The `covers:` prefixes of main's bank, read once per pass. The map is the
+/// bank's contract at main, so a head that edits it also touches `evals/bank/`.
+fn main_covers(p: &Paths) -> Vec<String> {
+    crate::evals::bank::discover_bank(&ref_bank(p, "main"))
+        .unwrap_or_default()
+        .into_iter()
+        .flat_map(|t| t.covers)
         .collect()
 }
 
 /// A head is gated by a skill, agent, hook, command or bank change, or by a
-/// crate or CLI change some task's `covers:` names. None when a read failed.
-fn head_is_gated(p: &Paths, d: &Deps, slug: &str, pr: &Pr) -> Option<bool> {
+/// change some task's `covers:` names. None when the file read failed.
+fn head_is_gated(p: &Paths, d: &Deps, slug: &str, pr: &Pr, covers: &[String]) -> Option<bool> {
     let files = head_files(p, d, slug, pr.number)?;
-    if touches_gated_path(&files.iter().map(String::as_str).collect::<Vec<_>>()) {
-        return Some(true);
-    }
-    if !files
-        .iter()
-        .any(|f| MAPPED_ROOTS.iter().any(|r| f.starts_with(r)))
-    {
-        return Some(false);
-    }
-    if !fetch(p, d, &format!("pull/{}/head", pr.number)) {
-        return None;
-    }
-    let covers = covers_at(p, d, &pr.sha);
-    Some(files.iter().any(|f| is_covered(f, &covers)))
+    let gated = touches_gated_path(&files.iter().map(String::as_str).collect::<Vec<_>>());
+    Some(gated || files.iter().any(|f| is_covered(f, covers)))
 }
 
 fn fetch(p: &Paths, d: &Deps, refspec: &str) -> bool {
@@ -911,6 +888,7 @@ fn head_leg(
     let Some(baseline) = state.worker.baseline.clone() else {
         return "head leg waits for a first baseline".into();
     };
+    let covers = main_covers(p);
     let mut new_heads = 0;
     for pr in prs {
         if state.heads.contains_key(&pr.sha) {
@@ -920,7 +898,7 @@ fn head_leg(
             break;
         }
         new_heads += 1;
-        match head_is_gated(p, d, slug, pr) {
+        match head_is_gated(p, d, slug, pr, &covers) {
             Some(true) => {
                 post_status(
                     p,
@@ -1264,8 +1242,6 @@ mod tests {
         adds: RefCell<Vec<String>>,
         real_git: bool,
         files: String,
-        /// The `covers:` line the mock serves for the bank file git reads.
-        covers: RefCell<String>,
     }
 
     impl World {
@@ -1295,7 +1271,6 @@ mod tests {
                 adds: RefCell::default(),
                 real_git: false,
                 files: files.into(),
-                covers: RefCell::default(),
             }
         }
 
@@ -1422,12 +1397,6 @@ mod tests {
                         ok("{}")
                     }
                     ["gh", "api", "--paginate", ..] => ok(&self.files),
-                    ["git", "grep", ..] if !self.covers.borrow().is_empty() => {
-                        ok("sha:evals/bank/c1.yaml\n")
-                    }
-                    ["git", "show", ..] if !self.covers.borrow().is_empty() => {
-                        ok(&self.covers.borrow())
-                    }
                     ["gh", "api", _] => {
                         // The real-git world heads the PR at main, so the
                         // worktree add has a revision it can check out.
@@ -1506,7 +1475,6 @@ mod tests {
                 "id: c1\ntier: regression\ngrade:\n  - kind: file-exists\n    path: x\ncovers: [\"crates/x/\"]\n",
             )
             .unwrap();
-            *w.covers.borrow_mut() = "covers: [\"crates/x/\"]\n".into();
             w.with_baseline();
             w.tick(true, Utc::now());
             let spawns = w.spawns.borrow();

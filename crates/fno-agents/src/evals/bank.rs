@@ -188,19 +188,6 @@ pub fn load_task(path: &std::path::Path) -> Result<TaskSpec, BankError> {
     })
 }
 
-/// The `covers:` prefixes in one task file's text, for a reader that must not
-/// fail on a file it only scans. A malformed entry reads as no coverage here;
-/// `load_task` is what refuses it.
-pub fn covers_in(text: &str) -> Vec<String> {
-    serde_yaml_ng::from_str::<serde_yaml_ng::Value>(text)
-        .ok()
-        .and_then(|v| v.get("covers").and_then(|c| c.as_sequence().cloned()))
-        .into_iter()
-        .flatten()
-        .filter_map(|s| s.as_str().filter(|s| s.ends_with('/')).map(str::to_string))
-        .collect()
-}
-
 /// `covers:` is a list of directory prefixes. A prefix with no trailing `/`
 /// would match a sibling (`crates/fno` also names `crates/fno-agents`).
 fn parse_covers(
