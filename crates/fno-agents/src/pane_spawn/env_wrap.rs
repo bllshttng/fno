@@ -27,7 +27,7 @@ pub(crate) fn qos_wrap_for(ctx: &PaneContext, argv: Vec<String>) -> Vec<String> 
 /// startup, so the strip is lossless; an inherited marker is how a codex
 /// worker spawned from a claude parent resolves as the wrong harness for
 /// life. Order is the Python tuple's order - the goldens pin it byte-equal.
-pub const AMBIENT_IDENTITY_ENV: [&str; 19] = [
+pub const AMBIENT_IDENTITY_ENV: [&str; 21] = [
     "FNO_HARNESS_NAME",
     "FNO_HARNESS_SESSION_ID",
     "CODEX_THREAD_ID",
@@ -35,6 +35,7 @@ pub const AMBIENT_IDENTITY_ENV: [&str; 19] = [
     "CODEX_SESSION_ID",
     "GEMINI_SESSION_ID",
     "OPENCODE_SESSION_ID",
+    "PI_SESSION_ID",
     "CLAUDE_SESSION_ID",
     "CLAUDECODE",
     "CLAUDECODE_SESSION_ID",
@@ -45,6 +46,7 @@ pub const AMBIENT_IDENTITY_ENV: [&str; 19] = [
     "CODEX_SHELL",
     "CODEX_COMPANION_SESSION_ID",
     "CODEX_COMPANION_TRANSCRIPT_PATH",
+    "PI_SESSION_FILE",
     "FNO_AGENT_SUBSTRATE",
     "FNO_NODE_REASON",
 ];

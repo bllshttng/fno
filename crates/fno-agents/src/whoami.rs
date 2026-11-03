@@ -1398,12 +1398,13 @@ fn identity_ambiguity_message(ident: &crate::spawn_context::OwnedIdentity) -> St
 /// lists them. The fno plumbing names never strip: they are this process's
 /// own plumbing, not foreign lineage.
 fn ambient_strip_flags(keep_family: &str) -> Vec<String> {
-    const TABLE: [(&str, &str); 15] = [
+    const TABLE: [(&str, &str); 17] = [
         ("CODEX_THREAD_ID", "codex"),
         ("CLAUDE_CODE_SESSION_ID", "claude"),
         ("CODEX_SESSION_ID", "codex"),
         ("GEMINI_SESSION_ID", "gemini"),
         ("OPENCODE_SESSION_ID", "opencode"),
+        ("PI_SESSION_ID", "pi"),
         ("CLAUDE_SESSION_ID", "claude"),
         ("CLAUDECODE", "claude"),
         ("CLAUDECODE_SESSION_ID", "claude"),
@@ -1414,6 +1415,7 @@ fn ambient_strip_flags(keep_family: &str) -> Vec<String> {
         ("CODEX_SHELL", "codex"),
         ("CODEX_COMPANION_SESSION_ID", "codex"),
         ("CODEX_COMPANION_TRANSCRIPT_PATH", "codex"),
+        ("PI_SESSION_FILE", "pi"),
     ];
     let own_session = TABLE
         .iter()
@@ -1490,6 +1492,7 @@ fn family_of(name: &str) -> &'static str {
         }
         "GEMINI_SESSION_ID" => "gemini",
         "OPENCODE_SESSION_ID" => "opencode",
+        "PI_SESSION_ID" | "PI_SESSION_FILE" => "pi",
         "HERMES_SESSION_ID" => "hermes",
         "TARGET_SESSION_ID" => "fno",
         _ => "unknown",
