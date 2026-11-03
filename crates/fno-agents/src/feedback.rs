@@ -29,7 +29,7 @@ Usage: fno do feedback (--node <id> | --text \"<words>\") [--kind bug|feature] [
   --node <id>     Draft from a backlog node's title and details.
   --text <words>  Draft from the user's own words.
   --kind          bug (default) or feature. A node's type picks it when absent.
-  --json          Print one JSON object instead of the readable draft.
+  --json, -J      Print one JSON object instead of the readable draft.
   --offline       Skip the duplicate search on GitHub.
 
 Redaction classes, masked in this order and rescanned before output: secret,
@@ -589,7 +589,7 @@ pub fn run(args: &[String]) -> i32 {
     let ctx = Ctx::from_machine(&cwd);
     match build(&source, kind_flag.as_deref(), &ctx, &repo_slug(), gh) {
         Ok(draft) => {
-            if args.iter().any(|a| a == "--json") {
+            if crate::json_output::requested(args) {
                 println!("{}", render_json(&draft));
             } else {
                 print!("{}", render_text(&draft));
