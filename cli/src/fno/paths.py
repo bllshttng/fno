@@ -759,9 +759,8 @@ def graph_archive_json() -> Path:
 
 
 def _pinned_root() -> Path:
-    """The pinned-global state root: the ``FNO_STATE_DIR`` seal or an
-    absolute ``state_dir`` anchors it; a relative one answers ``~/.fno``.
-    """
+    """The pinned-global state root (seal or absolute ``state_dir``, else
+    ``~/.fno``)."""
     if os.environ.get("FNO_STATE_DIR"):
         return state_dir()
     raw = os.path.expanduser(os.path.expandvars(_settings().state_dir))
@@ -770,16 +769,9 @@ def _pinned_root() -> Path:
     return _guard_state_path(_resolve("~/.fno/"))
 
 
-def _pinned_root_file(name: str) -> Path:
-    """The pinned-global answer for one state-root file."""
-    return _guard_state_path(_pinned_root() / name)
-
-
 def _pinned_state_subfile(name: str) -> Path:
-    """The pinned-global answer for one moved journal: the pin
-    :func:`_pinned_root` runs, then the move ladder into ``history/``
-    renames the root spelling in on first resolve.
-    """
+    """The pinned root, then the ``history/`` move ladder (the root spelling
+    renames in on first resolve)."""
     return _state_subfile_at(_pinned_root(), "history", name, name)
 
 
@@ -823,7 +815,7 @@ def operator_lane() -> Path:
         return _guard_state_path(
             _resolve(override, project_root=_resolve("~/.fno/"), settings=settings)
         )
-    return _pinned_root_file("my-priorities.md")
+    return _guard_state_path(_pinned_root() / "my-priorities.md")
 
 
 def global_events_json() -> Path:
