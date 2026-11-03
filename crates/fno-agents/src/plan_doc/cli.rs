@@ -103,8 +103,9 @@ fn plan_docs(mut params: Value) -> Option<Value> {
     }
 }
 
-fn run_writer(verb: &str, rest: &[String]) -> i32 {
-    let reply = plan_docs(json!({"op": "argv", "verb": verb, "args": rest}));
+fn run_writer(command: &str, rest: &[String]) -> i32 {
+    let params = json!({"op": "argv", "verb": command, "args": rest}); // verb-wording: allow (keeper argv key)
+    let reply = plan_docs(params);
     reply
         .and_then(|r| r["exit"].as_i64())
         .map(|code| code as i32)
