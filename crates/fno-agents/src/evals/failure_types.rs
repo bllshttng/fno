@@ -69,6 +69,10 @@ struct Case {
     label: Label,
     #[serde(default)]
     files: BTreeMap<String, String>,
+    /// Stub binaries by name, shell script bodies. They lead the grader's
+    /// PATH, so a CLI golden is proved with no real binary and no network.
+    #[serde(default)]
+    stub: BTreeMap<String, String>,
 }
 
 #[derive(Deserialize, PartialEq, Clone, Copy)]
@@ -110,7 +114,21 @@ fn run_case(
     for (rel, body) in &case.files {
         write(rel, body.as_bytes())?;
     }
-    let outcome = super::grading::grade_checks(&golden.grade, dir.path(), CASE_TIMEOUT_S, None);
+    // Outside the graded dir, so a grader that lists files never sees the stub.
+    let bin = tempfile::tempdir().map_err(|e| e.to_string())?;
+    for (name, body) in &case.stub {
+        let path = bin.path().join(name);
+        std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).map_err(|e| e.to_string())?;
+        std::fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .map_err(|e| e.to_string())?;
+    }
+    let outcome = super::grading::grade_checks(
+        &golden.grade,
+        dir.path(),
+        CASE_TIMEOUT_S,
+        None,
+        Some(bin.path()),
+    );
     Ok(outcome.passed)
 }
 
