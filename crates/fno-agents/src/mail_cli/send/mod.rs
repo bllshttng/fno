@@ -58,7 +58,7 @@ const NOT_LANDED_EXIT: i32 = crate::mail_receipt::NOT_LANDED_EXIT;
 const DEFAULT_LOCK_TIMEOUT: f64 = 30.0;
 
 /// `ask --to-project`: the one live peer that answers. Ask waits for a
-/// reply, so the no-live-peer outcome `mail send` queues durable refuses here.
+/// reply, so the no-live-peer outcome refuses here, as it does for `mail send`.
 pub fn resolve_ask_recipient(project: &str, any_flag: bool) -> Result<String, (String, i32)> {
     let (recipient, _candidates, _durable) = engine::resolve_to_project(project, any_flag)?;
     ask_recipient_or_refuse(project, recipient)
@@ -71,7 +71,7 @@ fn ask_recipient_or_refuse(
     recipient.ok_or_else(|| {
         (
             format!(
-                "no live peer working on project {project:?} to ask; use `fno agents mail send --to-project {project} ...` to queue durable."
+                "no live peer working on project {project:?} to ask; no drain reads a queued project note. Ask a session by name instead."
             ),
             UNKNOWN_AGENT_EXIT,
         )

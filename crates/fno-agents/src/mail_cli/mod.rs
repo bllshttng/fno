@@ -76,13 +76,13 @@ Options:
                            mismatch check).
   -c, --cwd <str>          Working directory context.
   --from-name <str>        XML-safe sender. Unset: session handle or 'fno' for
-                           agents; project for inbox notes.
+                           agents; project for project sends.
   --from-self              Stamp the sender with this session's own canonical
                            mail handle (the reply handle `fno whoami` shows).
                            Fails loud (exit 2) with no ambient harness
                            identity.
   --to-project <str>       Anycast: deliver to whoever works on this project
-                           (live if exactly one peer, durable queue if none).
+                           (live if exactly one peer; refuses if none).
                            Use instead of <name>.
   --to-lead <str>          Anycast over the role: deliver to whoever holds
                            this scope RIGHT NOW, resolved at send time; no

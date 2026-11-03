@@ -1794,7 +1794,7 @@ pub(super) fn project_ambiguity_error(project: &str, live_candidates: &[String])
 }
 
 /// Exactly one live peer delivers live, none
-/// queues durable to the project, many refuse unless --any breaks the tie.
+/// has no recipient (the caller refuses), many refuse unless --any breaks the tie.
 pub(super) fn resolve_to_project(
     project: &str,
     any_flag: bool,
