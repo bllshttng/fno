@@ -637,6 +637,7 @@
       },
       "board_scope": "repo",
       "prefix": null,
+      "preset": null,
       "keys": {},
       "notify_on_blocked": true,
       "notify_on_done": false,
@@ -2042,6 +2043,10 @@
      "default": null
     },
     {
+     "name": "preset",
+     "default": null
+    },
+    {
      "name": "keys",
      "default": {}
     },
@@ -3196,6 +3201,7 @@
   "mux.shell_integration",
   "mux.board_scope",
   "mux.prefix",
+  "mux.preset",
   "mux.keys",
   "mux.notify_on_blocked",
   "mux.notify_on_done",

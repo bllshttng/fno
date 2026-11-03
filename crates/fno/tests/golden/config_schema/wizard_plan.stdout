@@ -1729,6 +1729,15 @@
       "doc": "The mux prefix key, as C-a / Ctrl-a / ^a or a bare printable character. A digit 1-9 is refused (those select tabs), as is a key an action already holds. Unset keeps the built-in Ctrl-b."
     },
     {
+      "path": "mux.preset",
+      "type": "str (optional)",
+      "default": null,
+      "tier": "advanced",
+      "question": "Which key set should the mux use: tmux (default) or zellij?",
+      "default_source": "default",
+      "doc": "Named key set for the mux: tmux (default, the shipped table) | zellij (Zellij's pane-mode letters under the prefix: r splits right, d splits down, detach moves to Q). Rows in mux.keys win over the preset. A prefix mux and Zellij's modal one differ, so the preset maps letters, not modes: docs/mux-keys.md lists what does not map."
+    },
+    {
       "path": "mux.keys",
       "type": "dict[str, str]",
       "default": {},

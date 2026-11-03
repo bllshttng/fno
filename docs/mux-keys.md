@@ -77,3 +77,60 @@ selector = ";"
 The action id is `selector`, not `toggle-sideline`. `;` is a free single-byte chord, right pinky against the default left-hand `ctrl-b` prefix. A collision or unknown action id is refused and reported, never silently ignored.
 
 You can also rebind from the mux. The menu's `keybindings` row opens the table: the prefix line on top, every chord grouped under its section, and an `[ edit keys in <editor> ]` button on the tail. Enter on a chord row runs it. To rebind, take the button. It opens the key config in your `$EDITOR`. If no editor is set, it opens vi. After the editor exits, the mux reloads the keys, and a rejected entry is reported with the resolver's sentence.
+
+## Key presets: tmux and Zellij
+
+`mux.preset` names a set of `mux.keys` rows. Unset means `tmux`, the shipped table. Rows you write in `[mux.keys]` always win over the preset. The setup wizard asks for it under `/fno:setup advanced`.
+
+```toml
+[mux]
+preset = "zellij"
+```
+
+An unknown name keeps the tmux table and reports it.
+
+### Where the shipped table matches tmux
+
+This audit compares the table with `tmux list-keys -T prefix` from tmux 3.8, run on a default config. The prefix is `ctrl+b` in both.
+
+| tmux key | tmux action | Here |
+|---|---|---|
+| `%` and `"` | split right, split down | Same |
+| `x` | kill pane | Same |
+| `c`, `n`, `p`, `&`, `,` | new, next, previous, close, rename window | Same |
+| `1` to `9` | select window | Same. `0` is not bound |
+| `d` | detach | Same |
+| `w`, `f`, `?` | window tree, find, list keys | Close: `w` opens the sideline selector, `f` the navigator, `?` the key table |
+| `Up`, `Down`, `Left`, `Right` | select pane | Same, plus `h j k l` |
+| `Ctrl+arrow` | resize | Same, plus `H J K L` |
+| `z` | zoom pane | Differs: `z` cycles the active section. Zoom does not exist yet |
+| `o`, `;` | next pane, last pane | Differs: `o` sorts agents. No next-pane or last-pane command |
+| `l` | last window | Differs: `l` focuses right. No last-window command |
+| `{` and `}` | swap pane | Missing: no swap command |
+| `!` | break pane | Missing as a chord |
+| `s` | session tree | Differs: `s` toggles the status row |
+| `[` and `]` | copy mode, paste | Differs: they jump between command blocks |
+| `r` | refresh client | Differs: `r` reruns a block |
+
+The keys marked "Differs" belong to fno actions that have no tmux twin, so the default stays. Rebind them in `[mux.keys]` if you want the tmux meaning on a key. The commands that do not exist yet (zoom, next pane, last pane, last window, swap pane) need new server commands. They are tracked as their own work.
+
+### The zellij preset
+
+Zellij is modal. `Ctrl+p` enters pane mode, `Ctrl+t` tab mode, `Ctrl+o` session mode, and each mode has its own letters. This mux has one prefix and one flat key space. The two designs differ, so the preset does not give Zellij parity. It maps what the table can hold. These Zellij keys come from its default `default.kdl`:
+
+| Zellij | Key | Preset row |
+|---|---|---|
+| pane mode: new pane right | `r` | `split-right = "r"` |
+| pane mode: new pane down | `d` | `split-down = "d"` |
+| pane mode: close pane | `x` | Same by default |
+| pane mode: focus | `h j k l` | Same by default |
+| session mode: detach | `d` | `detach = "Q"`: `d` now splits, so detach moves |
+
+The preset also moves `rerun-block` to `u`, because `r` is now a split.
+
+What does not map:
+
+- Tab mode letters (`n` new tab, `x` close tab, `r` rename, `h`/`l` previous and next) reuse the pane mode letters. Tabs keep the tmux keys `c`, `&`, `,`, `p`, `n`.
+- Resize and move modes. Resize stays on `H J K L` and `Ctrl+arrow`.
+- Fullscreen (`f`), floating panes, stacked panes and pane frames. This mux has no equivalent chord.
+- Modes themselves. There is no locked mode and no mode line.

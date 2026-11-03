@@ -619,7 +619,10 @@ mod theme_role_override_tests {
 pub fn keymap(cwd: &Path) -> (crate::keys::Keymap, Vec<crate::keys::KeymapWarning>) {
     let prefix = mux_str(cwd, "prefix");
     let (entries, read_warnings) = mux_keys_table(cwd);
+    let (entries, preset_warnings) =
+        crate::keys::with_preset(mux_str(cwd, "preset").as_deref(), entries);
     let (map, mut warnings) = crate::keys::resolve_keymap(prefix.as_deref(), &entries);
+    warnings.extend(preset_warnings);
     // Read-time problems first: a file that would not parse explains every
     // rebind that is missing, so it outranks any one refused entry.
     for w in read_warnings.into_iter().rev() {

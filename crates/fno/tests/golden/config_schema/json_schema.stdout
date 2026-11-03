@@ -1576,6 +1576,18 @@
           "default": null,
           "title": "Prefix"
         },
+        "preset": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Preset"
+        },
         "restore": {
           "$ref": "#/$defs/MuxRestoreBlock"
         },
