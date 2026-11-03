@@ -131,7 +131,7 @@ fn a_real_send_crosses_both_binaries_in_at_most_two_hops() {
         &wrapper("agents", "$REAL_AGENTS"),
     );
     let host = Command::new("hostname").output().unwrap();
-    let host = fno_agents::mail_bus::normalize_host(&String::from_utf8_lossy(&host.stdout));
+    let host = fno_agents::mail::address::normalize_host(&String::from_utf8_lossy(&host.stdout));
     let at_self = format!("quinlan@{host}");
 
     // A plain name and a name@self each take the relay once and re-enter the

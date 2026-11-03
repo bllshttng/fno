@@ -1801,7 +1801,7 @@ K10	crates/fno-agents/src/digest.rs	rs	13
 K10	crates/fno-agents/src/disposition_gate.rs	rs	5
 K10	crates/fno-agents/src/distress.rs	rs	15
 K10	crates/fno-agents/src/drift.rs	rs	13
-K10	crates/fno-agents/src/envelope.rs	rs	5
+K10	crates/fno-agents/src/mail/frame.rs	rs	5
 K10	crates/fno-agents/src/escalation.rs	rs	9
 K10	crates/fno-agents/src/evidence.rs	rs	34
 K10	crates/fno-agents/src/fallback_chain.rs	rs	15
