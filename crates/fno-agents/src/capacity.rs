@@ -535,10 +535,12 @@ fn ledger_rows(cwd: &std::path::Path, home: &AgentsHome) -> Vec<Value> {
     let configured = crate::agents_config::config_lookup(cwd, &["paths", "ledger_json"])
         .and_then(|v| v.as_str().map(PathBuf::from));
     let path = configured.unwrap_or_else(|| {
-        home.root()
+        let root = home
+            .root()
             .parent()
-            .map(|dir| dir.join("ledger.json"))
-            .unwrap_or_else(|| PathBuf::from("ledger.json"))
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(".fno"));
+        crate::state_layout::place(&root, "ledger.json")
     });
     let Ok(raw) = std::fs::read_to_string(path) else {
         return Vec::new();

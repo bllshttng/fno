@@ -132,7 +132,7 @@ pub fn ledger_history_import(root: &Path, stamp: &str, apply: bool) -> Vec<(Stri
 /// The ledger files this machine holds: the global ledger, then every
 /// space-file ledger sorted for a stable emit order.
 fn ledger_files(root: &Path) -> Vec<PathBuf> {
-    let mut files = vec![root.join("ledger.json")];
+    let mut files = vec![crate::state_layout::place(root, "ledger.json")];
     let spaces = root.join("spaces");
     let mut space_files: Vec<PathBuf> = std::fs::read_dir(&spaces)
         .into_iter()

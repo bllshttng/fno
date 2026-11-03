@@ -12,11 +12,12 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-/// The ledger the flow aggregate reads. Under test the proto root is not
-/// compiled, so point at a path that reads as absent: no ledger, no rows.
+/// The ledger the flow aggregate reads, through the layout row. Under test
+/// the proto root is not compiled, so point at a path that reads as absent:
+/// no ledger, no rows.
 #[cfg(not(test))]
 fn ledger_path() -> PathBuf {
-    crate::proto::mux_sidecar_root().join("ledger.json")
+    crate::state_layout::place(&crate::proto::mux_sidecar_root(), "ledger.json")
 }
 
 #[cfg(test)]

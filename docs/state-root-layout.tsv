@@ -63,10 +63,15 @@ corrections.log	logs/corrections.log	append	daemon
 corrections.log.wm	logs/corrections.log.wm	overwrite	daemon
 merge-gate-overrides.log	logs/merge-gate-overrides.log	append	daemon
 health-alerts.log	logs/health-alerts.log	append	daemon
-# db/history/ - append-only jsonl journals.
+# db/history/ - append-only jsonl journals, plus the durable ledger (one JSON
+# doc rewritten per append under /tmp/fno-ledger.lock, so the newer copy wins
+# a both-exist merge and the loser parks). The question and decision journals
+# stay at the root: the routed store keys their family there, the same anchor
+# rule the retired events journal keeps.
 health-history.jsonl	db/history/health-history.jsonl	append	daemon
 evals-history.jsonl	db/history/evals-history.jsonl	append	daemon
 lesson-candidates.jsonl	db/history/lesson-candidates.jsonl	append	daemon
+ledger.json	db/history/ledger.json	overwrite	daemon
 # install/ - install markers; new wins.
 installed-rev	install/installed-rev	marker	daemon
 source-path	install/source-path	marker	daemon
@@ -153,6 +158,14 @@ route-settings	state/route-settings	dir	daemon
 saved-sessions	db/saved-sessions	dir	daemon
 validity-decks	db/validity-decks	dir	daemon
 # Parked residue - renamed into backups/state-root-migration/<stamp>/.
+ledger.md	-	park	daemon
+ledger.json.tmp	-	park	daemon
+decisions.jsonl.compact	-	park	daemon
+graph.json.lock.q	-	park	daemon
+questions.jsonl.lock	-	park	daemon
+questions.jsonl.lock.d	-	park	daemon
+decisions.jsonl.lock	-	park	daemon
+decisions.jsonl.lock.d	-	park	daemon
 MOVED-TO	-	park	daemon
 .reconcile-*	-	park	daemon
 .shown	-	park	daemon
@@ -179,3 +192,6 @@ jobs-tmp	-	park	daemon
 hooks	-	park	daemon
 signals	-	park	daemon
 squads.json.tmp.*	-	park	mux
+# Recovery copy rides beside the ledger it recovers (marker: new wins,
+# the legacy root copy parks).
+ledger.json.bak	db/history/ledger.json.bak	marker	daemon
