@@ -595,10 +595,14 @@ mod tests {
                 && error.contains(&fingerprint(&own_key)),
             "{error}"
         );
-        // An edited payload no longer verifies.
-        let (_, sig) = foreign.split_once('.').unwrap();
-        let forged = format!("{}.{sig}", B64.encode(br#"{"v":1,"user":"jason"}"#));
-        assert!(read_cert(&forged).is_none());
+        // A whole payload with one field edited keeps every key, so only the
+        // signature check can refuse it.
+        let (payload, sig) = foreign.split_once('.').unwrap();
+        let text = String::from_utf8(B64.decode(payload).unwrap()).unwrap();
+        let edited = text.replace("\"jason\"", "\"mallory\"");
+        assert_ne!(text, edited);
+        assert!(read_cert(&format!("{}.{sig}", B64.encode(&edited))).is_none());
+        assert!(read_cert(&foreign).is_some());
         assert!(crate::identity::proven_user().is_none());
 
         // This machine's certificate installs, proves the user, and shows.
