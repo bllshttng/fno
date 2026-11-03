@@ -1,0 +1,1 @@
+error: --kind question is retired: the note lane has no drain. Drop --kind to send to a session by name, or run `fno inbox outstanding ask` to put a question to a human.

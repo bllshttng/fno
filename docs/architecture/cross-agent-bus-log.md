@@ -203,7 +203,6 @@ One announcement is ONE `kind: "announce"` envelope on the shared bus. It is app
 | Reader: rows, unread scan, control sets, cursors (`chats bus-read`) | `crates/fno-agents/src/chats.rs`, `crates/fno-agents/src/mail_control_drain.rs` |
 | Loop-boundary addressed drain + self-name resolver | `cli/src/fno/agents/nudge.py` |
 | `bus_dir` resolver | `cli/src/fno/paths.py`, `config.paths.bus_dir`, `crates/fno-agents/src/intel.rs` |
-| Store bus write | `cli/src/fno/inbox/store.py` |
 | `--to-project` resolver + dispatch | `cli/src/fno/agents/dispatch.py` |
 | `inbox` / `ack` / `send --to-project` commands | `cli/src/fno/agents/cli.py` |
 | peer-project hint reader | `crates/fno-agents/src/inbox_peers.rs` |
