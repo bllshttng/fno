@@ -304,11 +304,11 @@ mod tests {
             json!("date")
         );
         assert_eq!(
-            parse_guard("event:x-a187", now).unwrap()["node_id"],
-            json!("x-a187")
+            parse_guard("event:x-aaaa", now).unwrap()["node_id"],
+            json!("x-aaaa")
         );
         assert_eq!(
-            parse_guard("set:x-a187,x-aff9", now).unwrap()["node_ids"]
+            parse_guard("set:x-aaaa,x-bbbb", now).unwrap()["node_ids"]
                 .as_array()
                 .unwrap()
                 .len(),
