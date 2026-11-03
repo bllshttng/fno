@@ -154,7 +154,6 @@ COLLAPSE_KEEP: dict[str, set[str]] = {
     "doctor": set(),
     "evals": set(),
     "paths": set(),
-    "plan": set(),
     "resume": set(),
 }
 
