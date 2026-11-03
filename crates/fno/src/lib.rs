@@ -184,6 +184,8 @@ pub mod paths_route;
 #[cfg(feature = "full")]
 pub mod popup;
 #[cfg(feature = "full")]
+pub mod pr_diff;
+#[cfg(feature = "full")]
 pub mod process_admission;
 pub mod product_boundary;
 #[cfg(feature = "full")]

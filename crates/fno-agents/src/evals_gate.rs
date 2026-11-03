@@ -44,7 +44,7 @@ const GATED_PATHS: [&str; 5] = ["skills/", "agents/", "hooks/", "commands/", "ev
 const GATE_TAG: &str = "gate";
 const GOLDEN_TAG: &str = "golden";
 const LEAD_TAG: &str = "lead";
-const REPEATS: usize = 3;
+pub(crate) const REPEATS: usize = 3;
 const HEAD_WORKERS: u32 = 4;
 const MAIN_WORKERS: u32 = 2;
 const HEAD_LIMIT_S: i64 = 1200;
@@ -72,6 +72,8 @@ const WORKER: Seat = Seat {
     suffix: "",
     attempt_usd: 0.04,
 };
+/// What one worker attempt costs, for a run priced beside the gate.
+pub(crate) const WORKER_ATTEMPT_USD: f64 = WORKER.attempt_usd;
 /// The kept GLM gate transcripts cost a mean 0.67 USD at Opus prices.
 const LEAD: Seat = Seat {
     name: "lead",
@@ -226,7 +228,7 @@ fn route_hash(repo: &Path) -> String {
     format!("{:08x}", hash >> 32)
 }
 
-fn history_rows(history: &Path) -> Vec<Value> {
+pub(crate) fn history_rows(history: &Path) -> Vec<Value> {
     std::fs::read_to_string(history)
         .unwrap_or_default()
         .lines()
@@ -241,7 +243,7 @@ fn row_cohort(row: &Value) -> &str {
 }
 
 /// Estimated dollars the gate spent on this UTC day.
-fn spent_today(rows: &[Value], now: DateTime<Utc>) -> f64 {
+pub(crate) fn spent_today(rows: &[Value], now: DateTime<Utc>) -> f64 {
     let day = now.format("%Y-%m-%d").to_string();
     rows.iter()
         .filter(|r| row_cohort(r).get(..5) == Some("gate-"))
@@ -482,7 +484,7 @@ fn run_argv(
 }
 
 /// TOML writes the budget as a float or an integer; a string read alone missed both.
-fn config_daily_usd(repo: &Path) -> f64 {
+pub(crate) fn config_daily_usd(repo: &Path) -> f64 {
     match crate::agents_config::config_value_deep(repo, &["evals", "gate", "daily_usd"]) {
         Some(toml::Value::Float(f)) => f,
         Some(toml::Value::Integer(i)) => i as f64,
@@ -491,7 +493,7 @@ fn config_daily_usd(repo: &Path) -> f64 {
     }
 }
 
-fn config_lane(repo: &Path) -> String {
+pub(crate) fn config_lane(repo: &Path) -> String {
     crate::paths_cli::cfg_str(repo, &["evals", "gate", "lane"])
         .filter(|v| !v.trim().is_empty())
         .unwrap_or_else(|| DEFAULT_LANE.to_string())
@@ -707,8 +709,44 @@ fn log_tail(log: &Path) -> String {
         .collect()
 }
 
+/// True when the evals tree (bank, fixtures, runner) differs between any bank
+/// rev the older cohort ran at and any the newer one did. A compare across such
+/// a change measures the harder bank, not the pipeline. Only a git diff that
+/// exits 1 counts: a rev git cannot read leaves the compare as it was.
+fn bank_moved(p: &Paths, d: &Deps, rows: &[Value], older: &str, newer: &str) -> bool {
+    let revs = |cohort: &str| -> BTreeSet<String> {
+        rows.iter()
+            .filter(|r| row_cohort(r) == cohort)
+            .filter_map(|r| r["bank_rev"].as_str())
+            .map(str::to_string)
+            .collect()
+    };
+    let new_revs = revs(newer);
+    revs(older).iter().any(|old| {
+        new_revs.iter().any(|new| {
+            old != new
+                && (d.run)(
+                    &[
+                        "git",
+                        "diff",
+                        "--quiet",
+                        old,
+                        new,
+                        "--",
+                        "evals",
+                        "crates/fno-agents/src/evals",
+                    ],
+                    p.repo,
+                )
+                .is_some_and(|r| r.code == Some(1))
+        })
+    })
+}
+
 /// A cohort with no grade is no baseline. A real one is compared to the one
-/// before, and that compare is the number the bank exists to print.
+/// before, and that compare is the number the bank exists to print. When the
+/// bank changed between the two, the new cohort starts a fresh baseline and no
+/// compare runs: every golden the harder bank fails would file a regression.
 fn finish_main(p: &Paths, d: &Deps, state: &mut State, seat: &Seat, cohort: &str) -> String {
     let graded = read_rows(&p.history.to_string_lossy(), None, None)
         .iter()
@@ -723,6 +761,11 @@ fn finish_main(p: &Paths, d: &Deps, state: &mut State, seat: &Seat, cohort: &str
     let Some(previous) = previous else {
         return format!("main {cohort} is the first baseline");
     };
+    if bank_moved(p, d, &history_rows(p.history), &previous, cohort) {
+        return format!(
+            "main {cohort}: the bank changed since {previous}; new baseline, no compare"
+        );
+    }
     let Ok(view) = compare(&ref_bank(p, "main"), p.history, &previous, cohort, None) else {
         return format!("main {cohort} compare failed");
     };
@@ -1220,6 +1263,12 @@ mod tests {
                             stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
                         })
                     }
+                    ["git", "diff", "--quiet", ..] => Some(Run {
+                        ok: false,
+                        code: Some(1),
+                        stdout: String::new(),
+                        stderr: String::new(),
+                    }),
                     ["git", "worktree", ..] => {
                         // Fallback mode: the gate reads the checkout bank.
                         Some(Run {
@@ -1397,6 +1446,40 @@ mod tests {
         assert_eq!(state.worker.baseline.as_deref(), Some(cohort.as_str()));
         assert!(state.worker.main_failure.is_none());
         assert_eq!(w.spawns.borrow().len(), 1);
+    }
+
+    #[test]
+    fn a_main_run_after_a_bank_change_resets_the_baseline_and_compares_nothing() {
+        let w = World::new("crates/x.rs\n");
+        let now = Utc::now()
+            .date_naive()
+            .and_hms_opt(1, 0, 0)
+            .unwrap()
+            .and_utc();
+        w.state(|s| s.worker.baseline = Some("old".into()));
+        w.tick(true, now);
+        let cohort = load_state(&state_dir(&w.history()))
+            .worker
+            .main_tried
+            .unwrap();
+        std::fs::create_dir_all(w.history().parent().unwrap()).unwrap();
+        let mut f = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(w.history())
+            .unwrap();
+        for (cohort, rev, pass) in [("old", "aaa", true), (cohort.as_str(), "bbb", false)] {
+            let row = json!({"task_id": "g2", "tier": "capability", "pass": pass,
+                "status": "graded", "variant": "v1", "experiment_id": cohort, "bank_rev": rev});
+            writeln!(f, "{row}").unwrap();
+        }
+        drop(f);
+        w.tick(false, now);
+        let state = load_state(&state_dir(&w.history()));
+        assert_eq!(state.worker.baseline.as_deref(), Some(cohort.as_str()));
+        assert!(!state_dir(&w.history())
+            .join(format!("compare-{cohort}.json"))
+            .exists());
     }
 
     #[test]

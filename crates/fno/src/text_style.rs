@@ -37,6 +37,10 @@ pub enum TextStyle {
     Tab,
     /// A state token that needs the reader.
     Status(Status),
+    /// A diff's added line.
+    Added,
+    /// A diff's removed line.
+    Removed,
 }
 
 impl TextStyle {
@@ -60,7 +64,8 @@ impl TextStyle {
             TextStyle::Badge | TextStyle::Status(Status::Warn) => (Color::Indexed(3), d, 0),
             TextStyle::Tab => (d, d, cell_flags::INVERSE),
             TextStyle::Status(Status::Ok) => (Color::Indexed(2), d, 0),
-            TextStyle::Status(Status::Error) => (Color::Indexed(1), d, 0),
+            TextStyle::Status(Status::Error) | TextStyle::Removed => (Color::Indexed(1), d, 0),
+            TextStyle::Added => (Color::Indexed(2), d, 0),
         }
     }
 

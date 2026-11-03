@@ -55,6 +55,16 @@ pub(super) fn span_at(row: u16, col: u16) -> Option<String> {
     backlog_style::span_at(row as usize, col as usize)
 }
 
+/// The review of a seat's PR, on the board, named for that seat. Esc goes back
+/// to the org view.
+pub(super) fn open_review(view: &mut View, node: String, url: &str, seat: String, machine: String) {
+    if view.backlog_board.is_none() {
+        View::open(view);
+    }
+    let seat = backlog_board::pr_review::SeatName { seat, machine };
+    backlog_board::pr_review::open(view, node, url, Some(seat));
+}
+
 /// The node in the backlog details pane. A board already open keeps its
 /// gathered state - the tap opens the detail ON it, never a fresh board
 /// that reads back to empty.

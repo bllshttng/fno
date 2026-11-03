@@ -88,8 +88,10 @@ Do this at most once per run, and only for a track where the ready depth is real
 Finish by mailing one screen - if it does not fit on a screen, you are reporting too much.
 
 ```bash
-fno agents mail send --to-project fno --kind fyi "groom <YYYY-MM-DD>" --body-file <report>
+FNO_MAIL_SUBJECT="groom <YYYY-MM-DD>" fno agents mail send --to-lead fno --body-file <report>
 ```
+
+When no lead holds the `fno` scope the send refuses with exit 2. Print the report as your final message then.
 
 The report carries, in this order:
 

@@ -99,6 +99,13 @@ impl InputField {
         events
     }
 
+    /// The text with a bar at the cursor, for a host that paints its own row.
+    pub(crate) fn display(&self) -> String {
+        let mut shown = self.text.clone();
+        shown.insert(self.byte_at(self.cursor), '\u{258f}');
+        shown
+    }
+
     pub(crate) fn row(&self, label: &str) -> PopupRow {
         PopupRow::Input {
             label: label.to_string(),

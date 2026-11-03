@@ -186,12 +186,16 @@ pub(crate) fn harness_of_session_id(session_id: &str) -> Option<&'static str> {
 }
 
 /// The person behind this machine: `fleet.owner`, else the login name.
-/// A display name the owner states, never proof; no gate reads it.
 pub(crate) fn person() -> String {
+    stated_person().unwrap_or_else(login_name)
+}
+
+/// The nonblank `fleet.owner`, when the owner stated one. A display name,
+/// never proof. The law door's wide-scope gate reads its presence.
+pub(crate) fn stated_person() -> Option<String> {
     crate::agents_config::config_lookup_global(&["fleet", "owner"])
         .and_then(|v| v.as_str().map(str::to_string))
         .filter(|v| !v.trim().is_empty())
-        .unwrap_or_else(login_name)
 }
 
 /// The person as a mail sender token: the user part of a `from_id` and the

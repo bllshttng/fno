@@ -46,7 +46,7 @@ Every other section (problem, design rationale, open questions) is optional cont
 design → ready → in_progress → reviewing → shipping → shipped
 ```
 
-Enforced by `fno.plan._status.validate_transition(old, new)`. Backward transitions raise `StatusTransitionError`. The Pydantic model uses `mode="before"` validators to coerce unquoted YAML booleans (Python `True`/`False`) that bash writers may emit - see `feedback_literal_string_rejects_yaml_bool`.
+Enforced by `validate_transition(old, new)` in `skills/blueprint/scripts/mutate_doc.py`, over the status ladder the `fno do plan parse` door serves. Backward transitions raise `StatusTransitionError`. `coerce_status_from_yaml` reads an unquoted YAML boolean (`True`/`False`) that a bash writer can emit as its lowercase word.
 
 **Valid transition examples:**
 
@@ -67,7 +67,7 @@ Enforced by `fno.plan._status.validate_transition(old, new)`. Backward transitio
 
 ## Section ownership allowlist
 
-`BLUEPRINT_WRITE_ALLOWLIST` in `fno.plan._ownership`:
+`BLUEPRINT_WRITE_ALLOWLIST` in `crates/fno-agents/src/plan_doc/cli.rs`, served to the mutation script by the `fno do plan parse` door:
 
 ```python
 BLUEPRINT_WRITE_ALLOWLIST = frozenset({

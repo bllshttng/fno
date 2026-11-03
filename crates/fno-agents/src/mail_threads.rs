@@ -223,8 +223,8 @@ fn expires_at(line: &Value) -> Option<&str> {
 /// writes `hosted`, which would otherwise turn a parked message accepted.
 fn delivery_states(
     texts: &[String],
-) -> std::collections::HashMap<String, crate::mail_delivery_state::DeliveryState> {
-    use crate::mail_delivery_state::{DeliveryState, Evidence};
+) -> std::collections::HashMap<String, crate::mail::state::DeliveryState> {
+    use crate::mail::state::{DeliveryState, Evidence};
     let mut out: std::collections::HashMap<String, DeliveryState> = Default::default();
     let mut stated: std::collections::HashSet<String> = Default::default();
     for line in texts.iter().flat_map(|t| t.lines()) {
@@ -295,13 +295,13 @@ fn failure_counts(texts: &[String]) -> std::collections::HashMap<String, u64> {
 /// The state word for one message row: its folded delivery lines, else the
 /// legacy reading of its own `delivery` mark.
 fn state_word(
-    states: &std::collections::HashMap<String, crate::mail_delivery_state::DeliveryState>,
+    states: &std::collections::HashMap<String, crate::mail::state::DeliveryState>,
     v: &Value,
 ) -> &'static str {
     let id = v.get("id").and_then(Value::as_str).unwrap_or("");
     match states.get(id) {
         Some(state) => state.word(),
-        None => crate::mail_delivery_state::DeliveryState::from_legacy(
+        None => crate::mail::state::DeliveryState::from_legacy(
             v.get("delivery")
                 .and_then(Value::as_str)
                 .unwrap_or("durable"),
@@ -714,7 +714,7 @@ pub fn run_mail_threads(args: &[String]) -> i32 {
             // The reader folds the stray bus-dir chats too, so mail the old
             // send lanes parked there shows before the next send runs.
             let chats = chats_dir();
-            if let Some(stray_root) = crate::chats::bus_append_live_path().parent() {
+            if let Some(stray_root) = crate::mail_paths::live_bus_log().parent() {
                 crate::chats::fold_stray_chats(&chats, stray_root);
             }
             let projection = project_at(&chats, &registry_rows(), now_secs());
@@ -765,7 +765,7 @@ fn run_journal_reply(args: &[String]) -> i32 {
 fn journal_bus_path() -> std::path::PathBuf {
     let home = AgentsHome::from_env();
     let dot_fno = home.root().parent().unwrap_or_else(|| home.root());
-    crate::intel::bus_log_path(dot_fno)
+    crate::mail_paths::bus_log_path(dot_fno)
 }
 
 fn journal_reply_at(
@@ -1522,7 +1522,7 @@ mod tests {
             "re: user reply",
         )
         .unwrap();
-        let bus_rows = crate::announce::read_bus_segments(&bus);
+        let bus_rows = crate::mail::log::read_bus_segments(&bus);
         let reply = bus_rows
             .iter()
             .find(|row| row.get("id").and_then(Value::as_str) == Some(id.as_str()))

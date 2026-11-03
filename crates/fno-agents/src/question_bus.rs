@@ -116,7 +116,7 @@ impl Host {
         let index = crate::provider_cap::questions_path(&home);
         Host {
             machine: crate::claims::machine_id(),
-            host: crate::mail_bus::normalize_host(&crate::claims::hostname()),
+            host: crate::mail::address::normalize_host(&crate::claims::hostname()),
             root: index
                 .parent()
                 .map(Path::to_path_buf)

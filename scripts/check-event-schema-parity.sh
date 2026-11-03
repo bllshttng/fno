@@ -531,6 +531,12 @@ dual_owner_kinds = {
     "lead_spawned_successor",
     "lead_wake_refused",
     "lead_woken",
+    # backlog_refused_trimmed + page_relief_done: the daemon's share-repair
+    # and freed-page arms are the one writers; schema.yaml carries them for
+    # the validator and `doctor event find`, the way session_registered
+    # above does.
+    "backlog_refused_trimmed",
+    "page_relief_done",
 }
 collisions -= dual_owner_kinds
 if collisions:

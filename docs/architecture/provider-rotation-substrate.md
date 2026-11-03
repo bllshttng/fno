@@ -59,17 +59,15 @@ These are non-negotiable for Specs 2 through 4. They are recorded here so future
 
 ## Module Boundaries
 
-The substrate package is `cli/src/fno/adapters/providers/`. No code outside this directory imports from it (yet); the public surface is the re-export list in `__init__.py`.
+The substrate is Rust: `crates/fno-agents/src/accounts/`. The Python package that first held it (`cli/src/fno/adapters/providers/`) is deleted, and its goldens are the contract now.
 
-| Module | Responsibility | Imports from |
-|--------|---------------|--------------|
-| `model.py` | ProviderRecord, ProvidersConfig, four exception classes | pydantic, pathlib |
-| `loader.py` | load_providers, save_providers | model, fno.state.io |
-| `cli.py` | `fno config accounts` Typer sub-app | model, loader, managed |
-| `staging.py` | stage, verify_staged | model, pathlib |
-| `dispatch.py` | dispatch_env, resolve_env_value | model, loader, staging, subprocess |
-
-`cli/src/fno/cli.py` registers the sub-app via a single `app.add_typer(providers_app, name="providers")` line, mirroring the existing `app.add_typer(graph_app, name="backlog")` pattern.
+| Module | Responsibility | Was |
+|--------|---------------|-----|
+| `records.rs` | Record validation, the layered read, combos, the quota block | `model.py`, `loader.py` |
+| `mod.rs` and one module per command | `fno config accounts` (every spelling routes here through `crates/fno/src/accounts_route.rs`) | `cli.py` |
+| `staging.rs` | The staged dir layout | `staging.py` |
+| `env.rs` | The launch env and env references | `dispatch.py` |
+| `error_class.rs` | The error taxonomy; `spawn-overlay accounts error-class` serves it to Python | `error_taxonomy.py` |
 
 `cli/src/fno/cost.py` gains two optional keyword-only parameters (`provider_id`, `account_id`); the entry only includes the keys when non-None. `scripts/metrics/register-task.py` reads them from `target-state.md` frontmatter and propagates. `scripts/metrics/session-cost.py` aggregates by `entry.get("provider_id", "unattributed")` so old-format ledger entries land in the unattributed bucket.
 
@@ -111,22 +109,17 @@ The plan's design doc enumerates failure modes per category. The substrate addre
 
 ## Tests
 
-Coverage is split between in-package pytest (logic correctness) and out-of-package bash tests (CLI surface integration).
+Every accounts contract is a Rust characterization over goldens captured from the deleted Python legs. The `*_golden_driver.py` beside each test is its capture record.
 
-| Test | Scope | Lines covered |
-|------|-------|---------------|
-| `crates/fno-agents/tests/accounts_records_parity.rs` | Record validation, refusal headlines, layered read, combos, quota, effective active (goldens captured from the Python leg) | model.py, loader.py read side |
-| `cli/src/fno/adapters/providers/test_loader.py` | config.toml parse, project-local override, save round-trip, corrupt-file refusal | loader.py |
-| `cli/src/fno/adapters/providers/test_cli.py` | Typer CliRunner: list/add/test/use/remove + 5 ACs | cli.py |
-| `crates/fno-agents/tests/accounts_show_parity.rs` | `show` text and `--print-binding` (goldens captured from the deleted Python command) | crates/fno-agents/src/accounts/show.rs |
-| `cli/src/fno/adapters/providers/test_staging.py` | symlink ops, idempotency, error paths | staging.py |
-| `crates/fno-agents/tests/accounts_env_parity.rs` | Launch env per auth arm, env references, staging check, identity refusal, the `--account` overlay lanes (goldens captured from the Python leg) | dispatch.py, staging.py verify_staged; the overlay goldens are frozen |
-| `crates/fno-agents/tests/accounts_launch_parity.rs` | The credentials compose and its decision, the state-root seal, the `--dispatch-account` answer, the dead worker's account | frozen goldens; the Python leg is deleted |
+| Test | Scope | Owner |
+|------|-------|-------|
+| `crates/fno-agents/tests/accounts_records_parity.rs` | Record validation, refusal headlines, layered read, `$FNO_CONFIG`, combos, quota, effective active | `records.rs` |
+| `crates/fno-agents/tests/accounts_show_parity.rs` | `show` text and `--print-binding` | `show.rs` |
+| `crates/fno-agents/tests/accounts_env_parity.rs` | Launch env per auth arm, env references, staging check, identity refusal, the `--account` overlay lanes | `env.rs`, `staging.rs` |
+| `crates/fno-agents/tests/accounts_launch_parity.rs` | The credentials compose and its decision, the state-root seal, the `--dispatch-account` answer, the dead worker's account | `credentials.rs`, `launch.rs` |
+| `crates/fno-agents/tests/accounts_error_class_parity.rs` | Error classes, cooldown rules, reset stamps, the recorded 429 corpus | `error_class.rs` |
 | `cli/src/fno/test_cost.py` | tagged write, untagged write, mixed-schema ledger, concurrent atomic write | cost.py |
 | `tests/test_register_task_provider_attribution.sh` | register-task.py reads target-state.md, propagates fields | register-task.py |
-| `tests/test_provider_substrate_e2e.sh` | full add → list → stage → use → dispatch → cost-write → remove cycle | end-to-end |
-
-98 pytest tests + 18 bash assertions across the substrate. All hermetic via `tmp_path` / `mktemp -d` + HOME override.
 
 ## Migration Path for Spec 2
 

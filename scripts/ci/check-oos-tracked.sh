@@ -25,7 +25,7 @@
 #   PR_BODY          the PR body
 #   PLAN_CARVEOUTS   optional; `forbidden` refuses ANY exclusion item, tracked or
 #                    waived, because the plan said nothing leaves this PR. Set by
-#                    fno.plan.fidelity from the plan's `carveouts:` key. CI never
+#                    the native fidelity gate from the plan's `carveouts:` key. CI never
 #                    sets it; unset or any other value keeps the rule below.
 #
 # Exit 0 when clean (or no OOS section, or empty body); exit 1 on an untracked

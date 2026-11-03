@@ -330,3 +330,183 @@ fn close_releases_the_blueprint_holder_and_stamps_the_row() {
     // The row stamp is second-resolution; the claim's ms acquire time truncates.
     assert_eq!(parsed.timestamp_millis(), (acquired / 1000) * 1000);
 }
+
+#[test]
+fn think_open_blocks_a_second_session_naming_the_target() {
+    // AC1 + AC2: session A opens a think; session B's open exits 1 and its
+    // stderr names A's holder and the target door.
+    let (_dir, config, graph) = sandbox();
+    seed(
+        &graph,
+        &[serde_json::json!({
+            "id": "x-think0001", "title": "n", "status": "idea",
+            "project": "fno", "slug": "n",
+            "plan_path": "/plans/20260901-somewhere-x-think0001.md",
+        })],
+    );
+    let (code, stdout, stderr) = session(
+        &config,
+        &graph,
+        &["open", "x-think0001", "--phase", "think", "--json"],
+        &[],
+        false,
+    );
+    assert_eq!(code, 0, "{stdout}{stderr}");
+    let receipt: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(receipt["status"], "opened");
+
+    let (code, stdout, stderr) = session(
+        &config,
+        &graph,
+        &[
+            "open",
+            "x-think0001",
+            "--phase",
+            "think",
+            "--json",
+            "--harness",
+            "claude",
+            "--session-id",
+            "sess-second",
+        ],
+        &[],
+        true,
+    );
+    assert_eq!(code, 1, "{stdout}{stderr}");
+    assert!(
+        stderr.contains("blueprint-session:sess-golden-0001"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("plan=/plans/20260901-somewhere-x-think0001.md"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("plan_date=2026-09-01"), "{stderr}");
+    assert!(stderr.contains("/fno:target x-think0001"), "{stderr}");
+}
+
+#[test]
+fn think_close_writes_a_think_row_and_frees_the_claim() {
+    // AC3: a think close writes one think session row with ended_at and
+    // releases the node claim.
+    let (_dir, config, graph) = sandbox();
+    seed(
+        &graph,
+        &[serde_json::json!({
+            "id": "x-think0002", "title": "n", "status": "idea",
+            "project": "fno", "slug": "n",
+        })],
+    );
+    let (code, stdout, stderr) = session(
+        &config,
+        &graph,
+        &["open", "x-think0002", "--phase", "think", "--json"],
+        &[],
+        false,
+    );
+    assert_eq!(code, 0, "{stdout}{stderr}");
+    let (code, stdout, stderr) = session(
+        &config,
+        &graph,
+        &[
+            "close",
+            "x-think0002",
+            "--phase",
+            "think",
+            "--summary",
+            "one line",
+            "--launch",
+            "/fno:blueprint x-think0002",
+            "--json",
+        ],
+        &[],
+        false,
+    );
+    assert_eq!(code, 0, "{stdout}{stderr}");
+    let receipt: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(receipt["phase"], "think");
+    assert_eq!(receipt["claim_released"], true);
+    assert!(lockfile(&graph, "x-think0002").is_none());
+    let rows = fno_agents::graph_store::read_rows_where_strict(
+        &graph,
+        &fno_agents::backlog::RowQuery::default(),
+    )
+    .unwrap();
+    let node = rows
+        .iter()
+        .find(|r| r.get("id").and_then(serde_json::Value::as_str) == Some("x-think0002"))
+        .unwrap();
+    let sessions = node["sessions"].as_array().unwrap();
+    let think_rows: Vec<_> = sessions.iter().filter(|s| s["phase"] == "think").collect();
+    assert_eq!(think_rows.len(), 1);
+    assert!(think_rows[0]["ended_at"].is_string());
+}
+
+#[test]
+fn open_refuses_a_fresh_plan_doc_for_a_second_planner() {
+    // AC5 at the open door: an inline planner never passes the spawn guard,
+    // so open runs the plan-fresh rule. Think refuses a doc inside the
+    // window; blueprint refuses a ready doc; a stale doc opens with a warn.
+    let dir = tempfile::tempdir().unwrap();
+    let doc = dir.path().join("20261102-somewhere-x-think0003.md");
+    let today = chrono::Utc::now().date_naive().to_string();
+    let old = (chrono::Utc::now().date_naive() - chrono::Duration::days(30)).to_string();
+    let (_dir, config, graph) = sandbox();
+    seed(
+        &graph,
+        &[serde_json::json!({
+            "id": "x-think0003", "title": "n", "status": "idea",
+            "project": "fno", "slug": "n",
+            "plan_path": doc.display().to_string(),
+        })],
+    );
+    std::fs::write(
+        &doc,
+        format!("---\nstatus: ready\ncreated: {today}\n---\n\n# n\n"),
+    )
+    .unwrap();
+
+    let (code, stdout, stderr) = session(
+        &config,
+        &graph,
+        &["open", "x-think0003", "--phase", "think", "--json"],
+        &[],
+        false,
+    );
+    assert_eq!(code, 1, "{stdout}{stderr}");
+    assert!(stderr.contains("reason=plan-fresh"), "{stderr}");
+    assert!(stderr.contains("somewhere-x-think0003.md"), "{stderr}");
+
+    let (code, _stdout, stderr) = session(
+        &config,
+        &graph,
+        &[
+            "open",
+            "x-think0003",
+            "--json",
+            "--harness",
+            "claude",
+            "--session-id",
+            "sess-second",
+        ],
+        &[],
+        true,
+    );
+    assert_eq!(code, 1, "{stderr}");
+    assert!(stderr.contains("reason=plan-fresh"), "{stderr}");
+
+    std::fs::write(
+        &doc,
+        format!("---\nstatus: ready\ncreated: {old}\n---\n\n# n\n"),
+    )
+    .unwrap();
+    let (code, stdout, stderr) = session(
+        &config,
+        &graph,
+        &["open", "x-think0003", "--phase", "think", "--json"],
+        &[],
+        false,
+    );
+    assert_eq!(code, 0, "{stdout}{stderr}");
+    assert!(stderr.contains("think proceeds"), "{stderr}");
+}

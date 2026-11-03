@@ -166,7 +166,7 @@ pub(super) fn post_send_settle_seconds() -> f64 {
 /// One pass over the bus log, newest last, best-effort.
 pub(super) fn bus_rows() -> Vec<Value> {
     let mut rows = Vec::new();
-    let Ok(text) = std::fs::read_to_string(bus_log_path()) else {
+    let Ok(text) = std::fs::read_to_string(crate::mail_paths::live_bus_log()) else {
         return rows;
     };
     for line in text.lines() {
@@ -205,7 +205,7 @@ pub(super) fn read_cursor(name: &str) -> Option<String> {
     if name.is_empty() || name.contains('/') || name.contains('\\') || name.contains("..") {
         return None;
     }
-    let path = bus_log_path()
+    let path = crate::mail_paths::live_bus_log()
         .parent()?
         .join("cursors")
         .join(format!("{name}.json"));

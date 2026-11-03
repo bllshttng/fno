@@ -765,6 +765,17 @@ fn lane_evidence(
     crate::eval_attempt::observe(&payload)
 }
 
+/// The harness a run spawns on: the lane row's, else the CLI arg. The history
+/// row records this same value, so a lane-driven run is not stamped null.
+fn seat_harness<'a>(
+    lane: Option<&'a LaneRow>,
+    worker_provider: Option<&'a str>,
+) -> Option<&'a str> {
+    lane.map(|l| l.harness.as_str())
+        .filter(|h| !h.is_empty())
+        .or(worker_provider)
+}
+
 /// The run loop: per (repeat, attempt): fresh disposable worktree ->
 /// optional worker -> mechanical grade -> history row -> worktree removed.
 /// Every attempt persists with a unique identity and structured
@@ -789,10 +800,7 @@ pub fn run_task(
     let timeout_s = std::cmp::max(1, task.timeout_minutes.saturating_mul(60));
     let mut results: Vec<RunResult> = Vec::new();
     let run_id = uuid_v4();
-    let spawn_harness = lane
-        .map(|l| l.harness.as_str())
-        .filter(|h| !h.is_empty())
-        .or(worker_provider);
+    let spawn_harness = seat_harness(lane, worker_provider);
     for i in 0..repeat {
         let started = std::time::Instant::now();
         let started_wall = std::time::SystemTime::now()
@@ -957,7 +965,7 @@ pub fn run_task(
             "obs": obs,
             "bank_rev": bank_rev,
             "tree_hash": tree,
-            "worker_provider": worker_provider,
+            "worker_provider": spawn_harness,
             "variant": variant,
             "experiment_id": experiment_id,
         });
@@ -1114,6 +1122,19 @@ mod tests {
         );
         let miss = lane_from_inventory(&inv, "nope").err().unwrap();
         assert!(miss.contains("['codex-luna', 'zai-flash']"), "{miss}");
+    }
+
+    #[test]
+    fn a_lane_run_stamps_the_lane_harness_not_the_cli_arg() {
+        let lane = LaneRow {
+            harness: "claude".into(),
+            ..Default::default()
+        };
+        assert_eq!(seat_harness(Some(&lane), None), Some("claude"));
+        assert_eq!(seat_harness(Some(&lane), Some("codex")), Some("claude"));
+        let bare = LaneRow::default();
+        assert_eq!(seat_harness(Some(&bare), Some("codex")), Some("codex"));
+        assert_eq!(seat_harness(None, None), None);
     }
 
     #[test]

@@ -771,6 +771,7 @@ fn run_request() -> i32 {
                     handover_holder: v["handover_holder"].as_str(),
                     root: None,
                     pid: v["pid"].as_u64().and_then(|p| u32::try_from(p).ok()),
+                    phase: None,
                 }),
             };
             let line = crate::spawn_guard::refusal_line(node, &verdict);

@@ -1153,12 +1153,12 @@ fn detail_field_labels_go_dim_and_values_stay_normal() {
     let sid = "4d4ea752-1063-4515-8366-b9946ed8f64d";
     let adopt = format!("$ fno agents registry adopt {sid}");
     assert!(
-        lines.iter().any(|l| l.trim() == sid),
-        "the session row shows the full id"
+        lines.iter().any(|l| l.contains(&sid[..16])),
+        "an unjoined session row names the session by its id"
     );
     assert!(
-        lines.iter().any(|l| l.starts_with(&adopt)),
-        "the session row shows the adopt command"
+        !lines.iter().any(|l| l.trim_start().starts_with("$ ")),
+        "the session rows print no command line: Enter opens the row"
     );
     let nv = crate::backlog_model::node(b.inputs.as_ref().expect("inputs"), "x-1")
         .expect("the fixture node resolves");
