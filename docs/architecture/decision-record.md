@@ -207,7 +207,7 @@ Readers return the count they withheld, and the report's JSON carries the note. 
 
 ## Start, state and window
 
-A law can carry a start, a state and a window beside its scope. `--from date:<when>` or `--from event:<node>` keeps the law off until that time or until the node closes. `--while <cmd>` keeps it on only while the command exits 0, and a law takes the flag more than once. `--between HH:MM-HH:MM` keeps it on inside a daily window in the machine's local time, and the window can wrap midnight. All of them must pass. The row stores them under `when`.
+A law can carry a start, a state and a window beside its scope. `--from date:<when>` or `--from event:<node>` keeps the law off until that time or until the node closes. `--while <cmd>` keeps it on only while the command exits 0, and a law takes the flag more than once. `--between HH:MM-HH:MM` keeps it on inside a daily window in the machine's local time, and the window can wrap midnight. All of them must pass. The row stores them under `when`. `--until YYYY-MM-DD` names the last day the law binds, and the rule fires a heads-up in that last day. `fno inbox law renew <subject-or-id> --until YYYY-MM-DD` moves the end by recording a copy that supersedes the old row.
 
 The rule set build never shells out, so it reads a cache at `law-when.json` in the state root. The record, match and stage doors refresh the cache, and a state reading younger than a minute is not re-run. A reading that cannot run keeps the last answer. With no answer at all, the law stays on, as it does for every law reader that cannot decide. The retract, restore and history doors ignore `when`, so the owner can undo a law that is off.
 

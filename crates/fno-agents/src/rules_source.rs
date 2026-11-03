@@ -141,11 +141,14 @@ pub fn assemble(
         }
         let paths = law_paths(row);
         let action = law_strength(row);
-        let scope_line = if scope == "global" || identity.is_some() {
+        let mut scope_line = if scope == "global" || identity.is_some() {
             String::new()
         } else {
             format!("\nscope = \"{}\"", toml_escape(scope))
         };
+        if let Some(until) = row.get("until").and_then(Value::as_str) {
+            scope_line.push_str(&format!("\nexpires = \"{}\"", toml_escape(until)));
+        }
         let body = if paths.is_empty() {
             format!(
                 "id = \"law-{id}\"\nlaw = \"{id}\"{scope_line}\naction = \"{action}\"\n[rule.when]\nretrieval = \"{}\"\nevents = [\"prompt\", \"skill\"]",
