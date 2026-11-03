@@ -43,7 +43,7 @@ const BACKUP_KEEP_NEWEST: usize = 5;
 /// Only [`BACKUP_PRUNE_SUBDIR`] is ever deletable, and only under the audit
 /// gate; the recovery snapshots can still be referenced by open attention
 /// items, so they are never swept. Rotation-managed trees (graph.db.*,
-/// claims-table) keep their own keep-N and are not stamp dirs.
+/// claims-table) keep their own keep-N and byte cap and are not stamp dirs.
 const BACKUP_REPORT_SUBDIRS: &[&str] = &[
     "state-root-migration",
     "state-root-recovery",
