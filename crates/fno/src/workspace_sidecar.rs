@@ -4,7 +4,7 @@
 //! answer to `fleet/workspaces.json` under the agents home and the daemon's
 //! beat forwards it to the other machines (`fno_agents::fleet_workspace` reads
 //! the same file). A session the server files under no named workspace has no
-//! entry, and its far row groups by project as before.
+//! entry, and its remote row groups by project as before.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

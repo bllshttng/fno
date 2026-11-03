@@ -265,7 +265,7 @@ pub(super) fn metrics(
     message: Option<&str>,
     width: usize,
 ) -> String {
-    // A far row: no transcript of it reaches this machine, so the line names
+    // A remote row: no transcript of it reaches this machine, so the line names
     // its host and its state from the fleet map instead.
     if let Some(remote) = &a.remote {
         let mut line = format!("remote · {} · {}", remote.host, remote.state);

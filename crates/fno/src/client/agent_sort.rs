@@ -36,7 +36,7 @@ pub(super) fn legacy_pin_notice(n: usize) -> (String, Instant) {
 /// The `fno-agents reap` argv that flips a row's pin. The pin IS the keep
 /// mark every reaper reads, keyed by session id, so a row with no session
 /// yet has nothing to pin. The mark lives on the machine that runs the
-/// session, so a far row names `<key>@<host>` and `reap` relays the keep
+/// session, so a remote row names `<key>@<host>` and `reap` relays the keep
 /// there over ssh, the way `peek` and `mail` reach it.
 pub(super) fn pin_argv(a: &AgentRow) -> Result<Vec<String>, String> {
     let flag = if a.pinned { "--unkeep" } else { "--keep" };
@@ -56,7 +56,7 @@ pub(super) fn pin_argv(a: &AgentRow) -> Result<Vec<String>, String> {
 }
 
 /// Flip a row's pin off the UI loop. The sideline shows the new state when
-/// the next layout reads the marker (a far row's, when its machine's next
+/// the next layout reads the marker (a remote row's, when its machine's next
 /// beat is read); the notice carries the command's own answer, so a refusal
 /// is never painted as a pin.
 pub(super) fn pin_agent(view: &mut View, a: &AgentRow) {

@@ -336,7 +336,7 @@ impl<'a> Marks<'a> {
     /// lattice's blocked word, so it needs a registry row; `pinned` answers
     /// for a bare session id too, because a keep mark outlives its row. It
     /// reads true wherever the reapers keep the row, an unreadable keep store
-    /// included, so the far sideline never pins less than the sweep keeps.
+    /// included, so the remote sideline never pins less than the sweep keeps.
     fn of(&self, w: &Worker, entry: Option<&RegistryEntry>) -> [(&'static str, Value); 3] {
         let workspace = [
             w.session_id.as_deref(),

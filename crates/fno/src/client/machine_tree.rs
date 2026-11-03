@@ -85,7 +85,7 @@ impl MachineTree {
     }
 }
 
-/// Turning the toggle off drops the bands at once, so no far row outlives it.
+/// Turning the toggle off drops the bands at once, so no remote row outlives it.
 pub(super) fn set_on(view: &mut View, on: bool) {
     view.machine_tree = MachineTree {
         on,
@@ -205,7 +205,7 @@ fn parent_seat<'a>(seat: &Value, all: &[&'a Value]) -> Option<&'a Value> {
     seats.find(|s| text(s, "session_id").is_some_and(|id| id.starts_with(&head)))
 }
 
-/// The far twin of `team_lead_name`: the seat itself when it holds a role,
+/// The remote twin of `team_lead_name`: the seat itself when it holds a role,
 /// else the first ancestor that does.
 fn lead_of<'a>(seat: &'a Value, all: &[&'a Value]) -> String {
     let mut at = seat;
@@ -221,7 +221,7 @@ fn lead_of<'a>(seat: &'a Value, all: &[&'a Value]) -> String {
     "~ unteamed".into()
 }
 
-/// What a far card says the session is doing. A stale beat outranks the
+/// What a remote card says the session is doing. A stale beat outranks the
 /// seat's own word: the session may be fine, but this mux cannot see it.
 fn seat_state(seat: &Value, band: &Band) -> String {
     let age = |s: i64| super::overlay_lines::humanize_age(Some(s.max(0) as u64));
@@ -257,7 +257,7 @@ fn remote_row(seat: &Value, host: &str, state: String, needs_input: bool) -> Age
             (text(seat, "status").as_deref() == Some("writing")).then_some(AgentBadge::Working)
         },
         pinned: seat["pinned"].as_bool() == Some(true),
-        // The Created and Modified sorts read these, so a far row orders by
+        // The Created and Modified sorts read these, so a remote row orders by
         // its own times inside a band.
         started_at: stamp(seat, "started_at"),
         updated_at: stamp(seat, "last_message_at"),
@@ -277,7 +277,7 @@ fn stamp(seat: &Value, key: &str) -> Option<u64> {
     Some(at.timestamp().max(0) as u64)
 }
 
-/// The band a far seat joins on the active axis, the local axis's own words.
+/// The band a remote seat joins on the active axis, the local axis's own words.
 fn seat_label(group: AgentGroup, seat: &Seat) -> String {
     match group {
         AgentGroup::Workspace => (seat.workspace.clone()).unwrap_or_else(|| seat.project.clone()),
@@ -362,7 +362,7 @@ impl View {
         for band in &tree.bands {
             let (rows, band_depths, states): (Vec<_>, Vec<_>, Vec<_>) = if band.local {
                 let (rows, d) = self.local_rows_with_depths();
-                // One indent under the machine, the same step the far bands take.
+                // One indent under the machine, the same step the remote bands take.
                 let rows = rows.into_iter().map(|row| match row {
                     DisplayRow::Header {
                         label,
@@ -413,7 +413,7 @@ impl View {
     }
 }
 
-/// Show a far row in a portal, through the reach a local paneless row takes.
+/// Show a remote row in a portal, through the reach a local paneless row takes.
 /// The server runs the link in the seat. A refusal lands as a notice here.
 pub(super) async fn reach(
     view: &mut View,
@@ -432,7 +432,7 @@ pub(super) async fn reach(
         .map_err(|e| format!("open send failed: {e}"))
 }
 
-/// Enter on a far row: the portal a local row's Enter names.
+/// Enter on a remote row: the portal a local row's Enter names.
 pub(super) async fn open(
     view: &mut View,
     remote: RemoteRow,

@@ -208,7 +208,7 @@ jobs:
             bash scripts/ops/mux-demo-snapshot.sh --out "shots/sideline-${size}.png" --format png --size "$size" --fit
           done
           # The other-machines layer: the second machine's rows by workspace
-          # and by status, where a far row pins first and a blocked one bands
+          # and by status, where a remote row pins first and a blocked one bands
           # under Needs input. The band sits below this machine's, so the
           # frame is taller than the rest.
           for group in workspace status; do

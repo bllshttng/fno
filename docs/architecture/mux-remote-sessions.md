@@ -10,9 +10,9 @@ While it is on, each machine gets a band at the top of the tree, and the active 
 
 This machine's band holds the ordinary tree from the server's layout. Other machines' rows come from `fno agents fleet top --machines`. The mux reads it off the UI loop every 15 seconds while the toggle is on. A failed read keeps the last good bands, so a row does not vanish because the primary blinked. A machine with no beat yet still gets its own band, which reads `offline`. With fewer than two machines there is no layer. Nothing connects to another machine until you open a row.
 
-The fleet map carries less than the layout, so a far row joins its band by the nearest fact it has:
+The fleet map carries less than the layout, so a remote row joins its band by the nearest fact it has:
 
-| Group | A far row joins |
+| Group | A remote row joins |
 |---|---|
 | workspace | the workspace its own machine's mux files it under, else its project. Seats nest under their parent seat |
 | lead | the first seat up its parent chain that holds a role |
@@ -21,7 +21,7 @@ The fleet map carries less than the layout, so a far row joins its band by the n
 | harness | its harness |
 | none | its machine band, with no band below it |
 
-The Created and Modified sorts read a far row's start and last-message times, so recency orders far rows too. A pin is a keep mark on the machine that runs the session. The fleet map carries it, so a pinned far row sorts first like a local one. `ctrl+t` on a far row runs `fno agents reap --keep` on that machine over ssh. The new pin shows at the next beat, up to 75 seconds later. A machine whose beat is stale raises no needs-input alert, because you cannot act on it from here.
+The Created and Modified sorts read a remote row's start and last-message times, so recency orders remote rows too. A pin is a keep mark on the machine that runs the session. The fleet map carries it, so a pinned remote row sorts first like a local one. `ctrl+t` on a remote row runs `fno agents reap --keep` on that machine over ssh. The new pin shows at the next beat, up to 75 seconds later. A machine whose beat is stale raises no needs-input alert, because you cannot act on it from here.
 
 A remote row is named `name@host`. Peek and mail already route that address. Its card paints the bare name, and its third line reads `remote · host · state` with the context percent after it. The state is `working` while the seat writes, `idle 3m` with the time since its last message, or `offline 2m` once its machine's beat is stale.
 

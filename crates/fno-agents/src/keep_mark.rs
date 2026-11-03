@@ -204,7 +204,7 @@ pub fn list(home: &AgentsHome) -> Vec<ListedMark> {
 #[derive(Debug, PartialEq, Eq)]
 enum Where {
     /// A row on another machine, by the handle that machine knows.
-    Far { host: String, name: String },
+    Remote { host: String, name: String },
     /// A row on this machine, with any `@host` of its own dropped.
     Here(String),
 }
@@ -214,7 +214,7 @@ enum Where {
 fn locate(handle: &str, local_host: &str) -> Where {
     match crate::mail::address::split_target(handle) {
         Ok((name, host)) if crate::mail::address::normalize_host(&host) != local_host => {
-            Where::Far { host, name }
+            Where::Remote { host, name }
         }
         Ok((name, _)) => Where::Here(name),
         Err(_) => Where::Here(handle.to_string()),
@@ -245,7 +245,7 @@ pub fn from_args(rest: &[String]) -> Option<i32> {
     // there: run the flag on that host over the relay `peek` and `mail` take.
     // The same spelling for this machine drops its host and runs here.
     let handle = match locate(handle, &crate::name_ledger::local_bus_host()) {
-        Where::Far { host, name } => {
+        Where::Remote { host, name } => {
             let words = ["agents", "reap", flag, name.as_str()].map(String::from);
             return Some(crate::mail_remote::relay(&host, &words));
         }
@@ -399,10 +399,10 @@ fn kept_list(home: &AgentsHome) -> i32 {
 mod tests {
     #[test]
     fn a_handle_with_another_machines_host_relays_and_this_machines_runs_here() {
-        let far = locate("133a419b@bb16", "imac2d2");
+        let remote = locate("133a419b@bb16", "imac2d2");
         assert_eq!(
-            far,
-            Where::Far {
+            remote,
+            Where::Remote {
                 host: "bb16".into(),
                 name: "133a419b".into()
             }

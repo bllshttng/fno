@@ -400,7 +400,7 @@ fn default_true() -> bool {
 /// v120: `SessionBinding.pr_url` + `pr_count` (serde default), so the PR
 /// chip opens the node's own repo and counts every PR; floor stays 58.
 /// v121: `ClientMsg::Link`, the link role a far `mux serve --link` takes, and
-/// `Command::ReachRemote`, a far row opened in a portal; floor stays 58.
+/// `Command::ReachRemote`, a remote row opened in a portal; floor stays 58.
 pub const PROTO_VERSION: u32 = 121;
 
 /// The oldest wire version this build can speak. Bumps that only add commands or
