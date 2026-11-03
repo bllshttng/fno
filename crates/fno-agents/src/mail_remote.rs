@@ -668,7 +668,7 @@ pub(crate) fn relay(host: &str, words: &[String]) -> i32 {
     match cmd.status() {
         Ok(status) => status.code().unwrap_or(1),
         Err(e) => {
-            eprintln!("fno agents mail: ssh to {host} failed: {e}");
+            eprintln!("fno agents: ssh to {host} failed: {e}");
             1
         }
     }
