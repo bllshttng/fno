@@ -3492,7 +3492,7 @@ MemAvailable:    8000000 kB\n";
     #[test]
     fn fixture_rows() {
         let fixture_path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../cli/tests/agents/fixtures/gate_escape_spawn_cap_parity.json");
+            .join("tests/fixtures/spawn_gate/gate_escape_spawn_cap_parity.json");
         let raw = std::fs::read_to_string(&fixture_path)
             .unwrap_or_else(|e| panic!("read fixture {}: {e}", fixture_path.display()));
         let fixture: serde_json::Value = serde_json::from_str(&raw).unwrap();
@@ -3505,7 +3505,7 @@ MemAvailable:    8000000 kB\n";
         }
 
         let fixture_path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../cli/tests/agents/fixtures/spawn_gate_admission.json");
+            .join("tests/fixtures/spawn_gate/spawn_gate_admission.json");
         let raw = std::fs::read_to_string(&fixture_path)
             .expect("the shared fixture must exist beside the Python suite");
         let doc: serde_json::Value = serde_json::from_str(&raw).expect("fixture is JSON");
@@ -4028,7 +4028,7 @@ Swapouts: 3444531.\n";
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         let fixture_path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../cli/tests/agents/fixtures/spawn_gate_slot_agreement.json");
+            .join("tests/fixtures/spawn_gate/spawn_gate_slot_agreement.json");
         let raw = std::fs::read_to_string(&fixture_path)
             .unwrap_or_else(|e| panic!("read fixture {}: {e}", fixture_path.display()));
         let fixture: serde_json::Value = serde_json::from_str(&raw).unwrap();

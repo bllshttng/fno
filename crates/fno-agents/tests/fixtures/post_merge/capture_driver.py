@@ -109,7 +109,12 @@ def build_case(root_path, case, index):
     if subject == "pr-sessions":
         return build_pr_sessions_case(root_path, case, index)
     if subject == "mint":
-        return build_mint_case(root_path, case, index)
+        # The Python mint this golden froze was deleted with the agents
+        # package; the native mint owns the shape now. The golden is frozen
+        # at its committed bytes - re-freezing is not possible from this tree.
+        raise SystemExit(
+            "capture: the mint oracle is native; this golden is frozen"
+        )
     if subject == "ritual":
         return build_ritual_case(root_path, case, index)
     raise SystemExit("unknown subject: %r" % subject)
@@ -481,63 +486,17 @@ def run_entry(case):
         }
         return envelope
     if subject == "mint":
-        import subprocess as sp
-        import types
-
-        # The capture pin: the last commit that still carried the Python mint
-        # (this PR's task 2.1 deleted it from events.py). A golden can only be
-        # re-frozen by running THIS driver at that ref.
-        pin = "6ef818c913"
-        raw = sp.run(
-            ["git", "show", pin + ":cli/src/fno/agents/events.py"],
-            capture_output=True, text=True, check=True, cwd=str(REPO_ROOT),
-        ).stdout
-        import fno.agents.events as live_events
-
-        old = types.ModuleType("fno.agents.events")
-        exec(compile(raw, "events_capture_pin.py", "exec"), old.__dict__)
-        kwargs = json.loads((Path.cwd() / "payload.json").read_text())
-
-        journal = Path.cwd() / "capture-journal.jsonl"
-
-        def write_row(kind, data, source="python"):
-            with journal.open("a") as fh:
-                fh.write(
-                    json.dumps(
-                        {"ts": "<TS>", "type": kind, "source": source, "data": data},
-                        sort_keys=True, separators=(",", ":"),
-                    )
-                    + "\n"
-                )
-
-        old._emit_daemon_envelope = write_row
-        kwargs.setdefault(
-            "candidate_row_names",
-            old.rows_for_cleanup(kwargs.get("worktree"), kwargs.get("node_ids") or []),
+        # The Python mint this golden froze was deleted with the agents
+        # package; the native mint owns the shape now. The golden is frozen
+        # at its committed bytes - re-freezing is not possible from this tree.
+        raise SystemExit(
+            "capture: the mint oracle is native; this golden is frozen"
         )
-        old.emit_merge_cleanup_requested(**kwargs)
-        rows = [json.loads(ln) for ln in journal.read_text().splitlines() if ln.strip()]
-        requested = [r for r in rows if r["type"] == "merge_cleanup_requested"]
-        data = dict(requested[-1]["data"])
-        if kwargs.get("merged_at") is None:
-            data["merged_at"] = "<STAMP>"
-        envelope = {
-            "exit": 0,
-            "stdout": json.dumps(data, sort_keys=True, separators=(",", ":")) + "\n",
-            "stderr": "",
-        }
-        return envelope
     if subject == "ritual":
-        # The oracle went native in this PR; the pin restores BOTH the old
-        # ritual and the old events helpers it imports. A golden can only be
-        # re-frozen by running THIS driver at that ref.
-        try:
-            from fno.pr import _ritual as live
-        except ImportError:
-            live = None
-        if live is None:
-            pin_module("6ef818c913", "cli/src/fno/agents/events.py", "fno.agents.events")
-            live = pin_module("6ef818c913", "cli/src/fno/pr/_ritual.py", "fno.pr._ritual")
+        # The oracle went native; the deleted events helpers the old fallback
+        # pinned went with the agents package.
+        from fno.pr import _ritual as live
+
         rc = live.run_ritual(case["pr"], bool(case.get("autonomous")), cwd=Path.cwd())
         envelope = {
             "exit": rc,
