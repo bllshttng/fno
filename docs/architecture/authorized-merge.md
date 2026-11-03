@@ -164,7 +164,7 @@ The arm refuses to guess. If the parent run is red, cancelled or missing, or the
 
 ### A check for every merge
 
-Every push to main runs `guards` and `rust-ci` in a group keyed by the commit sha, so no merge's run replaces another's. Together they take about 14 runner minutes. `fno do ci status <sha>` reads their push rows into `merge_check`: `green`, `red`, `pending`, or `unverified` when a run was cancelled or never started. On 2026-11-03, 10 of the 10 newest failed `cli-ci` push runs had both lanes green. So `merge_check: green` means the commit compiled and passed the guards. It never means the suite passed, and it does not allow a release. The coalesced `cli-ci` run stays the batch and release gate, and `verdict` still reads it.
+Every push to main runs `guards` and `rust-ci` in a group keyed by the commit sha, so no merge's run replaces another's. Together they take about 14 runner minutes. `fno do ci status <sha>` reads their push rows into `merge_check`: `green`, `red`, `pending`, or `unverified` for a cancelled or missing run. On 2026-11-03, 10 of the 10 newest failed `cli-ci` push runs had both lanes green. So `merge_check: green` means the commit compiled and passed the guards. It never means the suite passed, and it does not allow a release. The coalesced `cli-ci` run stays the batch and release gate, and `verdict` still reads it.
 
 To list rollback candidates, walk the first parents and print the field:
 
