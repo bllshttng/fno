@@ -699,16 +699,40 @@ fn default_spawn(
     }
 }
 
+/// Words that mark a line as the cause of a failed launch.
+const CAUSE_WORDS: [&str; 9] = [
+    "error",
+    "429",
+    "limit",
+    "exhaust",
+    "denied",
+    "refused",
+    "not found",
+    "unavailable",
+    "failed",
+];
+
 /// The line that names why a spawn exited non-zero. Claude prints
 /// `[claude-code:...]` diagnostics on runs that succeed too (an SDK side
-/// query on a routed model id), so as the last line they hide the real
-/// cause. Take the last line that is not one, else the last line.
+/// query on a routed model id), and a trailing hint can follow the real
+/// error. Take the last non-diagnostic line that reads as a cause, else the
+/// last non-diagnostic line, else the last line.
 fn failure_line(text: &str) -> String {
     let lines: Vec<&str> = text.trim().lines().collect();
-    lines
+    let plain: Vec<&str> = lines
+        .iter()
+        .copied()
+        .filter(|l| !l.trim_start().starts_with("[claude-code:"))
+        .collect();
+    let reads_as_cause = |l: &&str| {
+        let low = l.to_lowercase();
+        CAUSE_WORDS.iter().any(|w| low.contains(w))
+    };
+    plain
         .iter()
         .rev()
-        .find(|l| !l.trim_start().starts_with("[claude-code:"))
+        .find(|l| reads_as_cause(l))
+        .or(plain.last())
         .or(lines.last())
         .map(|l| l.to_string())
         .unwrap_or_default()
@@ -1136,6 +1160,8 @@ mod tests {
         let err = "429 quota exhausted\n[claude-code:unrecognized_model] {\"model\":\"m\"}\n";
         assert_eq!(failure_line(err), "429 quota exhausted");
         assert_eq!(failure_line("[claude-code:x] y"), "[claude-code:x] y");
+        let hinted = "Error: usage limit reached (429)\nrun with --help\n[claude-code:z] q\n";
+        assert_eq!(failure_line(hinted), "Error: usage limit reached (429)");
         assert_eq!(failure_line(""), "");
     }
 

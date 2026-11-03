@@ -954,6 +954,13 @@ fn question_hold(row: &OpenPrRow) -> bool {
             journals.push(canonical_journal);
         }
     }
+    // The machine index joins the fold, so this predicate agrees with the
+    // stop gate's hold fold: a question the bus beat closed store-side
+    // holds neither the gate nor the nudge.
+    let index = crate::outstanding::sources(std::path::Path::new(&row.cwd)).questions;
+    if !journals.contains(&index) {
+        journals.push(index);
+    }
     question_hold_in(row, &journals)
 }
 

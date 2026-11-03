@@ -5,10 +5,12 @@
 //! A node HELD on an open question must stop once, name the question, and
 //! never re-ask on a later fire: the first fire emits a
 //! `loop_check_question_gate` row with `gate: held_on_question`, and the
-//! second fire (the same question still open) terminates `HeldOnQuestion`
-//! with a digest naming the user-side clear. Only the user closes the
-//! question, so neither text names the decide command. The held state is the
-//! journal itself, never the fingerprint.
+//! second fire (the same question still open) terminates
+//! `DoneAwaitingRuling` with a digest naming the user-side clear. Only the
+//! user closes the question, so neither text names the decide command. The
+//! held state is the journal itself, never the fingerprint. The hold fold
+//! reads one substrate beyond the journals: the machine index, so a close
+//! the bus beat landed there clears the hold like a local one.
 
 use serde_json::Value;
 use std::path::PathBuf;
@@ -347,7 +349,18 @@ pub(crate) fn question_gates(
     // Step 3c: the first fire on a held node blocks ONCE, naming the question
     // id and the user-side remedies; the second fire on the same still-open
     // question terminates, so a held node stops once and is never re-asked.
-    let held = scan_open_holds(&journals, session_id, node_id, node_done);
+    // The machine index joins this fold only: its close rows clear a hold
+    // exactly as a local close row does, so a question closed store-side or
+    // on the answering host's journal stops holding. It carries no decision
+    // rows, so the unrecorded-decision fold above keeps its journals-only
+    // substrate (a synced close there would manufacture a hold the agent
+    // cannot resolve).
+    let mut hold_journals = journals.clone();
+    let index = crate::outstanding::sources(cwd).questions;
+    if !hold_journals.contains(&index) {
+        hold_journals.push(index);
+    }
+    let held = scan_open_holds(&hold_journals, session_id, node_id, node_done);
     if !held.is_empty() {
         let qids = held
             .iter()
@@ -367,10 +380,11 @@ pub(crate) fn question_gates(
             return QuestionGateStop::Block {
                 reason: format!(
                     "held on open question {qid}: '{}'. Only the user answers it. {} \
-                     This session cannot answer it on its own, and a decide record does \
-                     not close it. If this session asked it and no longer needs it, \
-                     withdraw it with `fno inbox outstanding clear {qid}`. Otherwise ask, \
-                     then end the turn. The next stop on this question ends the loop.",
+                     This session cannot answer it on its own, and an agent-side \
+                     decide is refused here. If this session asked it and no longer \
+                     needs it, withdraw it with `fno inbox outstanding clear {qid}`. \
+                     Otherwise ask, then end the turn. The next stop on this question \
+                     ends the loop.",
                     h.question,
                     crate::question_clear::chat_answer_line(&h.question_id),
                     qid = h.question_id
@@ -393,13 +407,13 @@ pub(crate) fn question_gates(
             "termination",
             serde_json::json!({
                 "session_id": session_id,
-                "reason": "HeldOnQuestion",
+                "reason": "DoneAwaitingRuling",
                 "question_id": h.question_id,
                 "message": digest,
             }),
         );
         return QuestionGateStop::Terminate {
-            reason: super::TerminationReason::HeldOnQuestion,
+            reason: super::TerminationReason::DoneAwaitingRuling,
             message: digest,
         };
     }
@@ -457,7 +471,7 @@ mod tests {
         };
         assert!(matches!(
             reason,
-            super::super::TerminationReason::HeldOnQuestion
+            super::super::TerminationReason::DoneAwaitingRuling
         ));
         assert!(message.contains("q-1"), "{message}");
         assert!(
@@ -493,6 +507,45 @@ mod tests {
                 QuestionGateStop::Block { .. }
             ));
         }
+    }
+
+    /// AC1: a close the machine index carries clears the hold an ask-only
+    /// journal contracts, and an index with no file keeps today's behavior
+    /// (fail-open, the hold stands). The index resolves through the
+    /// pin-test claims root, the seam the decide door's tests pin.
+    #[test]
+    fn index_close_clears_the_hold_and_a_missing_index_keeps_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("project-events.jsonl");
+        let global = dir.path().join("global-events.jsonl");
+        let cwd = dir.path().join("cwd");
+        std::fs::create_dir_all(&cwd).unwrap();
+        crate::paths::pin_test_claims_root(dir.path());
+        let index = crate::outstanding::sources(&cwd).questions;
+        crate::event_store::append_envelope(&project, &qrow("q-idx", "sess-a", &["x-n"]), None)
+            .unwrap();
+
+        // EDGE: the index file was never written; the hold stands and the
+        // first fire blocks exactly as the journals-only fold did.
+        let noop = |_t: &str, _d: Value| {};
+        assert!(matches!(
+            question_gates(&project, &global, &cwd, "sess-a", "x-n", &|_| false, &noop),
+            QuestionGateStop::Block { .. }
+        ));
+
+        // HP: the index gains the close row (the bus beat's copy+close
+        // shape), and the hold is gone - no block, no terminate.
+        let close = serde_json::json!({
+            "ts": "2026-11-03T00:00:00Z",
+            "type": "operator_question_closed",
+            "source": "test",
+            "data": {"question_id": "q-idx", "closed_by": "lead-on-another-host"},
+        });
+        crate::provider_cap::append_questions_row(&index, &close).unwrap();
+        assert!(matches!(
+            question_gates(&project, &global, &cwd, "sess-a", "x-n", &|_| false, &noop),
+            QuestionGateStop::None
+        ));
     }
 
     /// Every source whose strings an agent relays to the user. None may send
