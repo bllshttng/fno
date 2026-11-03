@@ -1,20 +1,8 @@
-"""The role grantor resolves identity through the one owned-identity resolver.
+"""The ambient-identity scrub list: which inherited names fno offers to unset.
 
 A claude session carrying seven inherited CODEX_* names once stamped a role
-grant with the inherited codex thread id: the registry recorded a codex grantor
-for a role a claude session issued, while ``fno whoami`` and ``fno backlog
-idea`` answered the claude session correctly in the same minute. One path of N
-reached a different answer, and it was the path that stamps authority.
-
-These tests hold the collapse. Every grantor derivation reaches
-``resolve_self_identity``, so a second implementation added to any of them fails
-here rather than in review.
-
-The rule the tests pin: the process-tree walk is the ONLY prover. A self-set
-marker such as ``CLAUDECODE`` survives a fork, so it names ancestry rather than
-self and must never stand in for the walk - promoting it contradicts a codex
-session's own marker and loses a valid identity. With no walk, resolution
-refuses rather than guesses, and ``fno whoami`` names the inherited family.
+grant with the inherited codex thread id. The owned-identity resolver is
+native now; these tests pin the Python scrub list the remedy text reads.
 """
 from __future__ import annotations
 
@@ -36,39 +24,6 @@ def poisoned_env(monkeypatch):
     monkeypatch.setenv("CLAUDECODE", "1")
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", CLAUDE_SID)
     monkeypatch.setenv("CODEX_THREAD_ID", CODEX_TID)
-
-
-def _walk(monkeypatch, harness):
-    """Pin what the process-tree walk can prove about this process."""
-    monkeypatch.setattr(
-        "fno.claims.session_pid.resolve_session_harness", lambda *_a, **_k: harness
-    )
-
-
-# --- the self-set marker is not an identity input ---------------------------
-
-
-def test_a_sole_codex_marker_survives_an_inherited_claude_marker(monkeypatch):
-    """The trap this file exists to keep shut.
-
-    CLAUDECODE looks like proof of a claude self: a shell that never ran claude
-    cannot produce it. But it survives a fork, so a codex session started from a
-    shell that HAD run claude carries it. Reading it as proof there contradicts
-    that session's own CODEX_THREAD_ID and turns a cleanly resolving codex
-    session into an ambiguous one, taking every identity consumer with it.
-    """
-    from fno.claims.self_identity import resolve_self_identity
-
-    for name in AMBIENT_IDENTITY_ENV:
-        monkeypatch.delenv(name, raising=False)
-    monkeypatch.setenv("CODEX_THREAD_ID", CODEX_TID)
-    monkeypatch.setenv("CLAUDECODE", "1")
-    _walk(monkeypatch, None)
-
-    identity = resolve_self_identity()
-
-    assert identity.session_id == CODEX_TID
-    assert identity.harness == "codex"
 
 
 # --- the grantor derivation -------------------------------------------------
