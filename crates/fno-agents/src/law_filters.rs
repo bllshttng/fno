@@ -301,10 +301,13 @@ mod tests {
             parse_pair("harness=codex").unwrap(),
             ("harness".into(), "codex".into())
         );
-        assert!(parse_pair("lead=rowan")
+        assert_eq!(
+            parse_pair("lead=rowan").unwrap(),
+            ("lead".into(), "rowan".into())
+        );
+        assert!(parse_pair("pr_label=paint")
             .unwrap_err()
             .contains("no identity source"));
-        assert!(parse_pair("pr_label=paint").is_err());
         assert!(parse_pair("colour=red")
             .unwrap_err()
             .contains("no such filter"));
