@@ -810,7 +810,7 @@ pub(super) fn deliver_live(
     let lanes: Vec<Box<dyn Lane + '_>> = vec![
         Box::new(PaneLane(cx)),
         Box::new(CodexThreadLane(cx)),
-        Box::new(KeeperLane(cx)),
+        Box::new(KeeperLane),
         Box::new(DaemonDeliverLane(cx)),
         Box::new(ClaudeSwitchboardLane(cx)),
     ];
@@ -922,9 +922,9 @@ impl Lane for CodexThreadLane<'_> {
     }
 }
 
-struct KeeperLane<'a>(LiveCtx<'a>);
+struct KeeperLane;
 
-impl Lane for KeeperLane<'_> {
+impl Lane for KeeperLane {
     fn kind(&self) -> LaneKind {
         LaneKind::Keeper
     }
