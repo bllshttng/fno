@@ -64,9 +64,9 @@ A live send ends in one of six states.
 | `accepted-steer` | The same record, folded into the turn that was running. |
 | `failed` | A reason string says why. |
 
-A lane reports an accepted state only when the harness's own turn record holds the envelope id. A started turn is not that proof.
+A lane reports an accepted state only if the harness's own turn record holds the envelope id. A started turn is not that proof.
 
-The bus keeps state history as append-only rows with `kind: state`. `meta.of` names the message. `newest_state` folds them in log order. An accepted state is terminal: a later row never lowers it. Among the other states the newest wins. With no state row, a `landed` row reads as accepted, and a legacy `delivery` field maps as follows: `typed` is `injected`, `hosted` and `cross-session` are `accepted-new-turn`, anything else is `queued`.
+The bus keeps state history as append-only rows with `kind: state`. `meta.of` names the message. `newest_state` folds them in log order. An accepted state is terminal: a later row never lowers it. Among the other states the newest wins. With no state row, a `landed` row reads as accepted. A legacy `delivery` field maps as follows: `typed` is `injected`. `hosted` and `cross-session` are `accepted-new-turn`. Anything else is `queued`.
 
 ## The log
 
@@ -81,7 +81,7 @@ The log path resolves in this order. The first rule that yields a value wins.
 3. The `paths.bus_dir` config value, with a leading `~` expanded.
 4. `bus/messages.jsonl` under the state root.
 
-A writer appends one line under an exclusive lock on `messages.jsonl.lock`. The lock waits up to `FNO_BUS_LOCK_TIMEOUT_SECS` (default 5). When the live file is at or over `FNO_BUS_MAX_BYTES` (default 5 MiB), the writer rotates first: it drops segment `FNO_BUS_RETAIN` (default 5), shifts the others up by one, and moves the live file to segment 1. A rotation failure never loses the message. The file mode is 0600.
+A writer appends one line under an exclusive lock on `messages.jsonl.lock`. The lock waits up to `FNO_BUS_LOCK_TIMEOUT_SECS` (default 5). If the live file is at or over `FNO_BUS_MAX_BYTES` (default 5 MiB), the writer rotates first. It drops segment `FNO_BUS_RETAIN` (default 5). It shifts the others up by one. It moves the live file to segment 1. A rotation failure never loses the message. The file mode is 0600.
 
 A reader skips a blank line silently. It skips a line that is not JSON, and a row that is not readable at its version, with a warning in the form `bus log: skipping ... <segment>:<line>`. An unreadable segment warns as a whole.
 
@@ -107,4 +107,4 @@ A target of the form `name@host` is relayed over ssh by the front door before an
 
 ## What this module does not do
 
-It does not mint ids, read clocks, resolve a handle, guard a sender, write the chats store or write a receipt. Those need the fleet, and the caller does them. `scripts/ci/check-mail-module-deps.sh` fails when a file here names a path outside `crate::mail::`.
+It does not mint ids, read clocks, resolve a handle, guard a sender, write the chats store or write a receipt. Those need the fleet, and the caller does them. `scripts/ci/check-mail-module-deps.sh` fails on any file here that names a path outside `crate::mail::`.
