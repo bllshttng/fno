@@ -43,8 +43,9 @@
 #
 # Re-pinned for the recall rewrite of the goldens.
 #
-# Re-pinned for the demote of the two goldens that fail on every tree.
-bank_rev: 9dbdf35b5a93ba04e098896c7733edddc279a0cb
+# Re-pinned for the demote of the two goldens that fail on every tree, at
+# the merge that brought main in.
+bank_rev: 159b4065a06046cf71b1a77630c46b31f37457fc
 
 train:
   - capability-lane-blueprint
