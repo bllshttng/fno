@@ -414,6 +414,7 @@ mod tests {
 
     #[test]
     fn approvals_commands_run_native_and_help_forwards() {
+        unclaimed_inbox_words_render_help_or_refuse_and_never_forward();
         assert_eq!(
             classify_inbox_approvals(&mk(&["inbox", "approvals", "ls", "--pending", "-J"])),
             Some(mk(&["approvals", "ls", "--pending", "-J"]))
@@ -426,7 +427,6 @@ mod tests {
         assert!(classify_inbox_approvals(&mk(&["inbox", "approvals"])).is_none());
         assert!(classify_inbox_approvals(&mk(&["inbox", "approvals", "nope"])).is_none());
     }
-    #[test]
     fn unclaimed_inbox_words_render_help_or_refuse_and_never_forward() {
         let help = |a: &[&str]| match classify_inbox_menu(&mk(a)) {
             Some(InboxMenu::Help { text, bare }) => Some((text, bare)),
