@@ -13,7 +13,7 @@ A plan whose `## Unknowns` reads `none: <why>` skips to implement.
 
 ## The steps
 
-0. List the premises the node, the plan and the brief assert, and measure each with section 1 of verify-footnotes.md (bundled at `references/verify-footnotes.md`). A REFUTED premise takes the step 5 door. A premise no read can settle gets UNMEASURED and goes to the question door before any build.
+0. List the premises the node, the plan and the brief assert. Measure each with section 1 of verify-footnotes.md (bundled at `references/verify-footnotes.md`). A REFUTED premise takes the step 5 door. A premise no read can settle gets UNMEASURED and goes to the question door before any build.
 
 1. For each `- [ ]` line, run its `measure:` command or read. One unknown at a time.
 2. Write the finding in the plan: `- [x] <question> - settled: <finding, with file:line or the command output>`. A finding that contradicts the plan is the point of this phase. Record it. Do not bend it to fit the plan.

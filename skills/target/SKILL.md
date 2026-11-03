@@ -114,7 +114,7 @@ The wrapper re-invokes the CLI until the session terminates (DonePRGreen, Budget
 
 ## Completion: what you do
 
-Section 3 of [references/verify-footnotes.md](references/verify-footnotes.md) is the short form of this section: no done claim without fresh command output; the stop hook below is the authority.
+Section 3 of [references/verify-footnotes.md](references/verify-footnotes.md) is the short form of this section: no done claim without fresh command output. The stop hook below is the authority.
 
 Emit `<promise>MISSION COMPLETE: ...</promise>` when the PR is up and CI is green - **promise early** (one exception: an approved auto-merge merges FIRST, see below), the external reads hold it. An unsatisfied read just blocks-and-retries naming what is missing; a premature promise never short-circuits the gate. **While waiting on an async check with nothing to do, arm ONE watcher and idle on a `<watching>` tag** (the exact protocol is [How to end every turn](#how-to-end-every-turn) below) - never re-read the poller and re-post the same status on a nudge; that is pure noise. **Read the manifest's resolved `auto_merge_approved` before you promise** - merge authority is config-driven, NOT bg-vs-attended, and nothing in the merge path checks attendance:
 

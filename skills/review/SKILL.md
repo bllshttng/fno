@@ -139,7 +139,7 @@ fi
 
 ### 2b. Run the lane
 
-Load [single-lane.md](references/single-lane.md) and execute it in full, in this context, with the resolved level, flags, and target. The lane runs inline as ordinary tool calls: mechanical checks, finder angles, dedup, three-state verify, cite-or-drop, carry-forward, then the classified emit. It dispatches ZERO review subagents and fires no native review command; the panel that used to run here is retired, and the six specialist hunter agents remain individually invocable by their own names. The lane checks changed prose and PR-body figures against section 2 (Claims) of [references/verify-footnotes.md](references/verify-footnotes.md).
+Load [single-lane.md](references/single-lane.md) and execute it in full, in this context, with the resolved level, flags, and target. The lane runs inline as ordinary tool calls: mechanical checks, finder angles, dedup, three-state verify, cite-or-drop, carry-forward, then the classified emit. It dispatches ZERO review subagents and fires no native review command. The panel that used to run here is retired, and the six specialist hunter agents remain individually invocable by their own names. The lane checks changed prose and PR-body figures against section 2 (Claims) of [references/verify-footnotes.md](references/verify-footnotes.md).
 
 ### 2f. Run the lane fresh (`--fresh`)
 
@@ -153,7 +153,7 @@ The second thing you run after a code review: a different CLASS of evidence, wit
 bash "${SKILL_DIR}/scripts/validate-prove-it.sh" <report-file>
 ```
 
-The validator REFUSES a PASS whose Steps list carries no marked probe - a happy-path replay is not a verification - and REFUSES a PASS whose `### Claims` section is missing or carries a claim row with no `CMD:` - an unproven claim is a claim nobody checked - and passes FAIL, BLOCKED, and SKIP through untouched (they carry no verdict on the change). prove-it is section 3 of [references/verify-footnotes.md](references/verify-footnotes.md) in runtime form: a claim with no command is a claim nobody checked. prove-it emits no attestation of its own; a PASS satisfies a declared `done_probe`, a FAIL is a blocking finding, and BLOCKED/SKIP read as unanswered; an ad-hoc report saved under the audited plan's `.artifacts/` gets a reader through `fno-agents prove-it-verdicts`, which notes an open FAIL on the node and holds its close.
+The validator REFUSES a PASS whose Steps list carries no marked probe. A happy-path replay is not a verification. It also REFUSES a PASS whose `### Claims` section is missing or carries a claim row with no `CMD:`, an unproven claim nobody checked. FAIL, BLOCKED, and SKIP pass through untouched, because they carry no verdict on the change. prove-it is section 3 of [references/verify-footnotes.md](references/verify-footnotes.md) in runtime form: a claim with no command is a claim nobody checked. prove-it emits no attestation of its own. A PASS satisfies a declared `done_probe`, a FAIL is a blocking finding, and BLOCKED/SKIP read as unanswered. An ad-hoc report saved under the audited plan's `.artifacts/` gets a reader through `fno-agents prove-it-verdicts`. It notes an open FAIL on the node and holds its close.
 
 ## Step 2c: cleanup mode (apply-or-skip terminus)
 
