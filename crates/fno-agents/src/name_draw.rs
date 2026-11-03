@@ -757,6 +757,26 @@ mod tests {
         assert_eq!(answer["draw"]["name"], "Zelda", "{answer}");
     }
 
+    /// A name the user reserves in `names.reserved` is used for every naming
+    /// decision, so the draw filter and the checkin/rename refusal skip it.
+    #[test]
+    fn a_user_reserved_name_counts_as_used() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = tmp.path().join("team_names.json");
+        let registry = tmp.path().join("registry.json");
+        crate::registry_store::seed_raw(
+            &registry,
+            json!({"schema_version": crate::state::REGISTRY_SCHEMA_VERSION, "agents": []})
+                .to_string(),
+        );
+        let config = tmp.path().join("config.toml");
+        std::fs::write(&config, "[names]\nreserved = [\"Esme\", \" \"]\n").unwrap();
+        std::env::set_var("FNO_CONFIG", &config);
+        let used = crate::team_names::used_names(&store, &registry);
+        std::env::remove_var("FNO_CONFIG");
+        assert!(used.unwrap().contains("esme"));
+    }
+
     #[test]
     fn settle_draw_declines_a_spawn_that_refuses_the_draw_contract() {
         let tmp = tempfile::tempdir().unwrap();

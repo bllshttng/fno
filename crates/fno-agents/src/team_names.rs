@@ -623,7 +623,40 @@ fn used_names_over(
     if let Ok(claims) = claim_names() {
         used.extend(claims);
     }
+    used.extend(reserved_names());
     Ok(used)
+}
+
+/// Names the user reserves (family, friends), lowercased: `names.reserved`
+/// in the per-user global config. Every draw, `checkin --name`, `--promote`
+/// and rename reads the used set, so listing a name there bars it from all
+/// of them. The list lives in user config and never ships in the repo. A
+/// missing or unreadable config reserves nothing.
+pub(crate) fn reserved_names() -> BTreeSet<String> {
+    // The ambient HOME config is fenced under test: read only when the run
+    // pinned a config file, as `claim_names` does for its root.
+    #[cfg(test)]
+    if std::env::var_os("FNO_CONFIG").is_none() {
+        return BTreeSet::new();
+    }
+    let Some(table) = crate::agents_config::global_config_path()
+        .and_then(|p| crate::finalize::load_config_toml(&p))
+    else {
+        return BTreeSet::new();
+    };
+    table
+        .get("names")
+        .and_then(|n| n.get("reserved"))
+        .and_then(toml::Value::as_array)
+        .map(|names| {
+            names
+                .iter()
+                .filter_map(toml::Value::as_str)
+                .map(|n| n.trim().to_ascii_lowercase())
+                .filter(|n| !n.is_empty())
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// The bus's names: from/to fields and every `@token` mention in a row,
