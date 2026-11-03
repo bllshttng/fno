@@ -1972,7 +1972,7 @@ mod style_gate_tests {
 
 // Ported from the Python tests when the anycast ask
 // moved off the Python seam: the no-live-peer refusal is ask's contract, not
-// the durable queue mail send falls back to.
+// a queued project note, which no drain reads.
 #[cfg(test)]
 mod ask_anycast_tests {
     use super::*;
@@ -1982,10 +1982,7 @@ mod ask_anycast_tests {
         let (msg, code) = ask_recipient_or_refuse("no-such-project", None).unwrap_err();
         assert_eq!(code, UNKNOWN_AGENT_EXIT);
         assert!(msg.contains("no live peer"), "{msg}");
-        assert!(
-            msg.contains("mail send --to-project no-such-project"),
-            "{msg}"
-        );
+        assert!(msg.contains("Ask a session by name"), "{msg}");
         assert_eq!(
             ask_recipient_or_refuse("p", Some("alpha".to_string())),
             Ok("alpha".to_string())
