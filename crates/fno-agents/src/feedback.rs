@@ -12,6 +12,7 @@
 use regex::Regex;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::OnceLock;
 
@@ -39,36 +40,18 @@ Exit codes: 0 draft printed, 2 misuse, 3 refused by the rescan (no draft),
 4 node unreadable. The command prints a link; open it and press Submit to
 file the issue. It never files anything itself.";
 
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
-pub(crate) struct Counts {
-    secret: usize,
-    path: usize,
-    email: usize,
-    session: usize,
-    private_path: usize,
-    project: usize,
-    user_host: usize,
-}
+/// Hits per class. Every class is present, so the JSON shape is fixed.
+pub(crate) type Counts = BTreeMap<&'static str, usize>;
 
-impl Counts {
-    fn total(&self) -> usize {
-        self.secret
-            + self.path
-            + self.email
-            + self.session
-            + self.private_path
-            + self.project
-            + self.user_host
-    }
-
-    fn to_json(&self) -> Value {
-        json!({
-            "secret": self.secret, "path": self.path, "email": self.email,
-            "session": self.session, "private_path": self.private_path,
-            "project": self.project, "user_host": self.user_host,
-        })
-    }
-}
+const CLASSES: [&str; 7] = [
+    "secret",
+    "path",
+    "email",
+    "session",
+    "private_path",
+    "project",
+    "user_host",
+];
 
 /// What the redaction needs from the machine: work-map project names and the
 /// login and host names. Tests build one by hand.
@@ -155,9 +138,9 @@ fn replace_token(text: &str, token: &str, with: &str) -> (String, usize) {
 /// Mask every private class. Order matters: secrets first (a token can sit
 /// inside a path), then paths, then the rest.
 pub(crate) fn redact(text: &str, ctx: &Ctx) -> (String, Counts) {
-    let mut counts = Counts::default();
+    let mut counts: Counts = CLASSES.iter().map(|c| (*c, 0)).collect();
     let secret = crate::intel_html::secret_rx();
-    counts.secret = secret.find_iter(text).count();
+    counts.insert("secret", secret.find_iter(text).count());
     let mut out = secret
         .replace_all(text, |caps: &regex::Captures| {
             match (caps.get(2), caps.get(4)) {
@@ -167,41 +150,28 @@ pub(crate) fn redact(text: &str, ctx: &Ctx) -> (String, Counts) {
             }
         })
         .into_owned();
-    let sweep = |out: &mut String, rx: &Regex, with: &str| -> usize {
-        let n = rx.find_iter(out).count();
-        if n > 0 {
-            *out = rx.replace_all(out, with).into_owned();
-        }
-        n
-    };
-    counts.path = sweep(&mut out, leak_rx("home-path"), "<local path>");
-    counts.email = sweep(&mut out, crate::correction_detect::email_rx(), "[email]");
-    counts.session = sweep(&mut out, leak_rx("session-id"), "[session]");
-    counts.private_path = sweep(&mut out, private_path_rx(), "<private path>");
-    for name in &ctx.projects {
-        let name = name.trim();
-        if name.is_empty() || name == "fno" {
+    for (class, rx, with) in [
+        ("path", leak_rx("home-path"), "<local path>"),
+        ("email", crate::correction_detect::email_rx(), "[email]"),
+        ("session", leak_rx("session-id"), "[session]"),
+        ("private_path", private_path_rx(), "<private path>"),
+    ] {
+        counts.insert(class, rx.find_iter(&out).count());
+        out = rx.replace_all(&out, with).into_owned();
+    }
+    let named = ctx
+        .projects
+        .iter()
+        .map(|n| (n.trim(), "[project]", "project"))
+        .chain(ctx.user.iter().map(|n| (n.as_str(), "[user]", "user_host")))
+        .chain(ctx.host.iter().map(|n| (n.as_str(), "[host]", "user_host")));
+    for (name, with, class) in named {
+        if name.is_empty() || name == "fno" || (class == "user_host" && name.chars().count() < 3) {
             continue;
         }
-        let (next, n) = replace_token(&out, name, "[project]");
-        out = next;
-        counts.project += n;
-    }
-    for (name, with) in ctx
-        .user
-        .iter()
-        .filter(|n| n.chars().count() >= 3)
-        .map(|n| (n.as_str(), "[user]"))
-        .chain(
-            ctx.host
-                .iter()
-                .filter(|n| n.chars().count() >= 3)
-                .map(|n| (n.as_str(), "[host]")),
-        )
-    {
         let (next, n) = replace_token(&out, name, with);
         out = next;
-        counts.user_host += n;
+        *counts.entry(class).or_default() += n;
     }
     (out, counts)
 }
@@ -480,19 +450,11 @@ pub(crate) fn build(
     let title: String = if id.is_some() {
         title
     } else {
-        counts = Counts::default();
+        counts = CLASSES.iter().map(|c| (*c, 0)).collect();
         title.chars().take(80).collect()
     };
-    for (mine, theirs) in [
-        (&mut counts.secret, word_counts.secret),
-        (&mut counts.path, word_counts.path),
-        (&mut counts.email, word_counts.email),
-        (&mut counts.session, word_counts.session),
-        (&mut counts.private_path, word_counts.private_path),
-        (&mut counts.project, word_counts.project),
-        (&mut counts.user_host, word_counts.user_host),
-    ] {
-        *mine += theirs;
+    for (class, n) in word_counts {
+        *counts.entry(class).or_default() += n;
     }
     let reference = id.map(str::to_string).unwrap_or_else(|| sha12(&title));
     let harness = std::env::var("FNO_HARNESS_NAME").unwrap_or_else(|_| "unknown".into());
@@ -527,13 +489,16 @@ fn render_json(d: &Draft) -> Value {
         "repo": d.repo, "kind": d.kind, "title": d.title, "body": d.body,
         "url": d.url, "url_has_body": d.url_has_body,
         "dedup": { "matches": d.dedup, "unread": d.dedup_unread },
-        "redactions": d.counts.to_json(), "ref": d.reference,
+        "redactions": json!(d.counts), "ref": d.reference,
     })
 }
 
 fn render_text(d: &Draft) -> String {
     let mut out = format!("Title: {}\n\n{}\n", d.title, d.body);
-    out.push_str(&format!("Redactions: {}\n", d.counts.total()));
+    out.push_str(&format!(
+        "Redactions: {}\n",
+        d.counts.values().sum::<usize>()
+    ));
     for m in &d.dedup {
         out.push_str(&format!(
             "dedup: #{} {} {} ({})\n",
@@ -604,7 +569,11 @@ pub fn run(args: &[String]) -> i32 {
         (None, None) => return 2,
     };
     let offline = args.iter().any(|a| a == "--offline");
-    let gh: Option<&GhFn> = if offline { None } else { Some(&real_gh as &GhFn) };
+    let gh: Option<&GhFn> = if offline {
+        None
+    } else {
+        Some(&real_gh as &GhFn)
+    };
     let ctx = Ctx::from_machine(&cwd);
     match build(&source, kind_flag.as_deref(), &ctx, &repo_slug(), gh) {
         Ok(draft) => {
@@ -655,7 +624,7 @@ mod tests {
                 "{leaked}"
             );
         }
-        assert_eq!(draft.counts.total(), 7);
+        assert_eq!(draft.counts.values().sum::<usize>(), 7);
         assert!(draft.url_has_body && draft.url.len() <= LINK_MAX_CHARS);
         let padded = format!("{FIXTURE} {}", "word ".repeat(2000));
         let long = build(&Source::Text(&padded), None, &ctx(), "o/r", None).unwrap();

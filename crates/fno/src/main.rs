@@ -2520,7 +2520,10 @@ mod tests {
             decide_role(&os(&["do", "feedback", "--text", "x"]), false),
             Role::DoFeedback
         );
-        assert_eq!(decide_role(&os(&["do", "feedback"]), false), Role::DoFeedback);
+        assert_eq!(
+            decide_role(&os(&["do", "feedback"]), false),
+            Role::DoFeedback
+        );
         assert_ne!(
             decide_role(&os(&["feedback", "--text", "x"]), false),
             Role::DoFeedback
