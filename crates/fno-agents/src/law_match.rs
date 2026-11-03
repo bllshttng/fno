@@ -85,6 +85,9 @@ enum MatchRequest {
     /// Prints one JSON answer and exits 0, like the other read modes.
     #[serde(rename = "rules-report")]
     RulesReport(RulesRequest),
+    /// Reads every rule against one event and says why each applies or not.
+    #[serde(rename = "rules-explain")]
+    RulesExplain(ExplainRequest),
 }
 
 /// The rules modes read one file: `file` for rules-check, `cases` for
@@ -98,6 +101,13 @@ struct RulesRequest {
     /// The report window, `7d`-shaped; rules-report only.
     #[serde(default)]
     since: Option<String>,
+}
+
+/// The rules-explain request: the event to read the rules against.
+#[derive(Deserialize)]
+struct ExplainRequest {
+    #[serde(default)]
+    event: crate::rules::Event,
 }
 
 /// The resolver request: the caller's authority claim and its carried
@@ -2862,7 +2872,7 @@ fn node_is_closed(node_id: &str) -> bool {
 pub fn run_law_match(args: &[String]) -> i32 {
     if args.iter().any(|a| a == "-h" || a == "--help") {
         println!(
-            "usage: fno inbox law match (one JSON request on stdin: mode=ask|law|stage|validate|record-scope|scope-split|rules-check|rules-measure|rules-import|rules-report|record|retract|history; record takes argv: the fno inbox law set command line, and stdin: the text --decision-file - reads; retract and history take argv: the matching fno inbox law command line)"
+            "usage: fno inbox law match (one JSON request on stdin: mode=ask|law|stage|validate|record-scope|scope-split|rules-check|rules-measure|rules-import|rules-report|rules-explain|record|retract|history; record takes argv: the fno inbox law set command line, and stdin: the text --decision-file - reads; retract and history take argv: the matching fno inbox law command line)"
         );
         return 0;
     }
@@ -2986,6 +2996,9 @@ pub fn run_law_match_str(input: &str) -> i32 {
         }
         MatchRequest::RulesImport(r) => {
             return crate::rules_source::run_rules_import(&r.file);
+        }
+        MatchRequest::RulesExplain(r) => {
+            serde_json::to_string(&crate::rules_source::rules_explain(r.event)).expect("serializes")
         }
         MatchRequest::RulesReport(r) => {
             serde_json::to_string(&crate::rules_source::rules_report(r.since.as_deref()))
