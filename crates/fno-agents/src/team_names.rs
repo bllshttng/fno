@@ -554,6 +554,9 @@ pub fn used_by(store_path: &Path, name: &str) -> String {
             e.host.unwrap_or_else(crate::name_ledger::host_label),
             e.ts
         ),
+        None if reserved_names().contains(&name.to_ascii_lowercase()) => {
+            "you reserved it in names.reserved".to_string()
+        }
         None => "an earlier lead, worker or draw used it".to_string(),
     }
 }
