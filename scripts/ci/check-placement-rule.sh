@@ -362,7 +362,6 @@ crates/fno-agents/src/context_audit.rs
 crates/fno-agents/src/observer/fold.rs
 crates/fno-agents/src/footprint_cause.rs
 cli/src/fno/paths.py
-cli/src/fno/provenance/resolver.py
 crates/fno-agents/src/scoreboard/views.rs
 crates/fno/src/setup_autowire.rs
 crates/fno/src/setup_autowire_tests.rs

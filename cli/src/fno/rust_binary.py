@@ -615,6 +615,23 @@ def call_front_json(payload: dict, *, timeout: Optional[float] = None) -> dict:
     return json.loads(done.stdout)
 
 
+def resolve_transcript(harness, session_id, cwd, *, projects_root=None, codex_sessions_dir=None):
+    """One provenance pointer through `attest resolve-transcript`; never raises.
+
+    The receipt's fields read as attributes. A door failure is reason "error".
+    """
+    from types import SimpleNamespace
+
+    args = ["resolve-transcript", "--harness", harness or "", "--session-id", session_id or "", "--cwd", cwd or ""]
+    for flag, root in (("--projects-root", projects_root), ("--codex-sessions-dir", codex_sessions_dir)):
+        if root is not None:
+            args += [flag, str(root)]
+    error, receipt = call_binary_json("attest", args, timeout=10)
+    if error is not None or not isinstance(receipt, dict):
+        receipt = {"resolved": False, "transcript_path": None, "ambiguous": False, "reason": "error"}
+    return SimpleNamespace(**receipt)
+
+
 def find_transcript(session_id: str) -> Optional[Path]:
     """The native doctor op door's transcript-by-uuid answer; None when absent.
 

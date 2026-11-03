@@ -413,7 +413,7 @@ def recent_records(
                 transcript_path, n, _parse_claude_record
             )
         else:
-            from fno.provenance.resolver import resolve_transcript
+            from fno.rust_binary import resolve_transcript
 
             rt = resolve_transcript(
                 "claude", session_id, cwd, projects_root=projects_root
