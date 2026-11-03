@@ -1244,7 +1244,10 @@ fn scope_split_answer_in(
     let mut hidden = 0usize;
     for row in req.rows {
         let is_law = row.get("lane").and_then(Value::as_str) == Some("law");
-        if is_law && !decision_index::row_visible(&row, project.as_deref()) {
+        if is_law
+            && !(decision_index::row_visible(&row, project.as_deref())
+                && crate::law_when::row_active(&row, true))
+        {
             hidden += 1;
         } else {
             kept.push(row);
@@ -1286,6 +1289,9 @@ pub(crate) struct RecordDoor {
     widen: Option<Widen>,
     raw_paths: Vec<String>,
     quote: Option<String>,
+    from: Option<String>,
+    whiles: Vec<String>,
+    between: Option<String>,
 }
 
 /// A law's scope past the recording project, from one door flag. `None` in
@@ -1297,7 +1303,7 @@ pub(crate) enum Widen {
     Person(Option<String>),
 }
 
-const RECORD_USAGE: &str = "usage: fno inbox law set <subject> [decision] [--decision-file f|-] [--rationale s] [--option s]... [--supersedes d-x] [--graduation k] [--graduation-ref r] [--read cmd]... [--global | --machine[=<id>] | --person[=<name>]] [--paths glob,glob] [--quote <the user's words>]";
+const RECORD_USAGE: &str = "usage: fno inbox law set <subject> [decision] [--decision-file f|-] [--rationale s] [--option s]... [--supersedes d-x] [--graduation k] [--graduation-ref r] [--read cmd]... [--global | --machine[=<id>] | --person[=<name>]] [--paths glob,glob] [--from date:<when>|event:<node>] [--while <cmd>]... [--between HH:MM-HH:MM] [--quote <the user's words>]";
 const RETRACT_USAGE: &str = "usage: fno inbox law retract <subject-or-decision-id> --reason <why> [--authority operator|chat_attested] [--quote <the user's words>]";
 const HISTORY_USAGE: &str = "usage: fno inbox law history <subject-or-decision-id>";
 
@@ -1315,6 +1321,9 @@ fn parse_record_door(args: &[String]) -> Result<RecordDoor, String> {
         widen: None,
         raw_paths: Vec::new(),
         quote: None,
+        from: None,
+        whiles: Vec::new(),
+        between: None,
     };
     let mut widened_by: Vec<String> = Vec::new();
     let mut positional = 0usize;
@@ -1346,6 +1355,9 @@ fn parse_record_door(args: &[String]) -> Result<RecordDoor, String> {
             "--read" => door.reads.push(take(&mut i)?),
             "--paths" => door.raw_paths.push(take(&mut i)?),
             "--quote" => door.quote = Some(take(&mut i)?),
+            "--from" => door.from = Some(take(&mut i)?),
+            "--while" => door.whiles.push(take(&mut i)?),
+            "--between" => door.between = Some(take(&mut i)?),
             "--global" => {
                 // An inline value parses like a bool flag should: --global=false
                 // must never widen because the value was ignored.
@@ -1809,6 +1821,14 @@ pub(crate) fn record_door_write(door: RecordDoor, decision: String, caller: &Cal
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
+    let when = match crate::law_when::build_when(
+        door.from.as_deref(),
+        &door.whiles,
+        door.between.as_deref(),
+    ) {
+        Ok(w) => w,
+        Err(message) => return door_refuse(&message),
+    };
     // The evidence gate: a measured claim carries the read that produced it.
     // Exempt when the RESOLVED authority is operator.
     let mut read_rows: Option<Vec<Value>> = None;
@@ -1966,6 +1986,9 @@ pub(crate) fn record_door_write(door: RecordDoor, decision: String, caller: &Cal
     if !paths.is_empty() {
         data["paths"] = json!(paths);
     }
+    if let Some(when) = &when {
+        data["when"] = when.clone();
+    }
     if let Some(map) = data.as_object_mut() {
         crate::identity::stamp_person(map);
     }
@@ -1983,6 +2006,9 @@ pub(crate) fn record_door_write(door: RecordDoor, decision: String, caller: &Cal
         );
     }
     println!("{decision_id}");
+    if let Some(when) = &when {
+        crate::law_when::warm(&json!({"decision_id": decision_id, "when": when}));
+    }
     if let Some(old) = &auto_superseded {
         eprintln!("superseded {old}");
     }
@@ -2763,7 +2789,9 @@ fn graduated_retraction_lines_in(
     // open, matching `retain_in_scope`.
     let mut lines = Vec::new();
     for row in &index.rows {
-        if !decision_index::row_visible(row, scope_project) {
+        if !decision_index::row_visible(row, scope_project)
+            || !crate::law_when::row_active(row, true)
+        {
             continue;
         }
         let Some(grad) = row.get("graduation") else {
@@ -3354,6 +3382,9 @@ pub(crate) mod scope_tests {
             widen: None,
             raw_paths: Vec::new(),
             quote: None,
+            from: None,
+            whiles: Vec::new(),
+            between: None,
         }
     }
 

@@ -199,6 +199,12 @@ Every law reader filters. Global law reaches every session. A project law reache
 
 Readers return the count they withheld, and the report's JSON carries the note. The stage block lists a law's scope on its line. A workspace tier (`workspace:<name>`) is a rung nobody has reached. The field is a free string, so adding it later needs a reader branch and no migration.
 
+## A law says when it is on
+
+A law can carry a start, a state and a window beside its scope. `--from date:<when>` or `--from event:<node>` keeps the law off until that time or until the node closes. `--while <cmd>` keeps it on only while the command exits 0, and a law takes the flag more than once. `--between HH:MM-HH:MM` keeps it on inside a daily window in the machine's local time, and the window may wrap midnight. All of them must pass. The row stores them under `when`.
+
+The rule set build never shells out, so it reads a cache at `law-when.json` in the state root. The record, match and stage doors refresh the cache, and a state reading younger than a minute is not re-run. A reading that cannot run keeps the last answer. With no answer the law stays on, the same posture every law reader takes when it cannot decide. The retract, restore and history doors ignore `when`, so the owner can undo a law that is off.
+
 ## Where law reaches a session
 
 No session loads law in bulk. The SessionStart law read is deleted (ruling of 2026-09-14): it read every live row, blew the hook's ten-second bound, and delivered nothing. A law reaches a session two ways, and neither loads all law. First, a law the superuser confirms graduates through the `graduation` field every law row carries. `enforced` with `doc:<rules file>=>marker:<text>` points at a rule file the harness loads whole. `enforced` with `gate:<cmd>=>marker:<text>` points at a refusal at the moment the law applies. Second, `ask` keeps reading law for one subject at ask time, so the law door's refusal still fires where the question is asked.
