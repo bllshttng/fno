@@ -999,6 +999,24 @@ fn classify_state_family(
     Some((&["state-cli"], tail, notice))
 }
 
+/// `fno do plan <anything>`: the whole group claims and the tail rides to the
+/// plan-cli door. The bare `fno plan` root stays retired. A root `-J`/`--json`
+/// peels and re-enters the tail, where validate parses it.
+fn classify_plan_family(
+    args: &[OsString],
+) -> Option<(&'static [&'static str], Vec<OsString>, Option<&'static str>)> {
+    let root_json = matches!(args.first()?.to_str()?, "-J" | "--json");
+    let args = if root_json { &args[1..] } else { args };
+    if args.first()?.to_str()? != "do" || args.get(1)?.to_str()? != "plan" {
+        return None;
+    }
+    let mut tail = args[2..].to_vec();
+    if root_json {
+        tail.push(OsString::from("--json"));
+    }
+    Some((&["plan-cli"], tail, None))
+}
+
 /// `fno do phase <anything>` and the deprecated bare `fno phase <anything>`:
 /// the whole group claims (kill-check is the group's one command, and it
 /// strips its own name from the tail), so the bare spelling's leaf sits one
@@ -1358,6 +1376,7 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     if let Some((door, rest, notice)) = classify_target_family(args)
         .or_else(|| classify_state_family(args))
         .or_else(|| classify_phase_family(args))
+        .or_else(|| classify_plan_family(args))
         .or_else(|| classify_pr_stub_manifest(args))
         .or_else(|| classify_bare_stub_manifest(args))
     {
@@ -2329,6 +2348,16 @@ mod tests {
             decide_role(&os(&["pr", "stub-manifest", "list"]), false),
             decide_role(&os(&["do", "pr", "stub-manifest", "list"]), false)
         );
+        // The whole `do plan` group rides the plan-cli door; the bare
+        // `plan` root stays retired, so it never reaches the door.
+        assert_eq!(
+            decide_role(&os(&["do", "plan", "validate", "p.md"]), false),
+            Role::TargetFamily(&["plan-cli"], os(&["validate", "p.md"]), None)
+        );
+        assert!(!matches!(
+            decide_role(&os(&["plan", "validate", "p.md"]), false),
+            Role::TargetFamily(..)
+        ));
         // The root `-J`/`--json` the global Python flag carried peels before
         // the family claim and re-enters the tail for the JSON doors.
         assert_eq!(

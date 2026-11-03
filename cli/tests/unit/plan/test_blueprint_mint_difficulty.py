@@ -119,7 +119,7 @@ tasks:
   - id: '1.1'
     title: Do the thing
     surface:
-      - cli/src/fno/plan/_status.py
+      - crates/fno-agents/src/plan_doc/status.rs
     verify: pytest cli/tests/unit/plan -q
     acceptance:
       - AC1-HP

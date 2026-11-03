@@ -3,9 +3,8 @@
 //!
 //! These drive the REAL built binary against a hermetic temp env. The
 //! cost/ledger legs are native now, so the ledger row is read from a temp
-//! `paths.ledger_json` instead of stubbed `fno/cost/*` modules; the remaining
-//! `python3 -m fno.cli` child is stubbed off PYTHONPATH, and `gh`/`fno`/`git`
-//! are shimmed on PATH where an assertion needs them:
+//! `paths.ledger_json` instead of stubbed `fno/cost/*` modules, and
+//! `gh`/`fno`/`git` are shimmed on PATH where an assertion needs them:
 //!
 //! - ALWAYS branch: ledger session-record fires on every terminal reason.
 //! - SHIP branch: stamp/graduate + handoff fire only on DonePRGreen/DoneAdvisory.
@@ -48,12 +47,10 @@ fn setup(session_id: &str) -> Env {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path().to_path_buf();
     let cwd = root.join("proj");
-    // PYTHONPATH root for the remaining in-package stub (fno.cli): finalize
-    // still shells `python3 -m fno.cli do plan validate` after the stamp; the
-    // cost/ledger legs are native now, so no fno/cost stubs exist. The native
-    // ledger write resolves through paths_cli's config chain, so the fixture
-    // pins `paths.ledger_json` to a temp file: the real ~/.fno/ledger.json is
-    // never touched by a test fire.
+    // An empty PYTHONPATH root keeps any Python child off the real package.
+    // The native ledger write resolves through paths_cli's config chain, so
+    // the fixture pins `paths.ledger_json` to a temp file: the real
+    // ~/.fno/ledger.json is never touched by a test fire.
     let pypath = root.join("pypath");
     let ledger = root.join("ledger.json");
     fs::create_dir_all(cwd.join(".fno")).unwrap();
@@ -64,7 +61,7 @@ fn setup(session_id: &str) -> Env {
     .unwrap();
     let handoffs = root.join("handoffs");
     let postmortems = root.join("postmortems");
-    fs::create_dir_all(pypath.join("fno/plan")).unwrap();
+    fs::create_dir_all(&pypath).unwrap();
     fs::create_dir_all(&handoffs).unwrap();
 
     let calls_log = cwd.join("calls.log");
@@ -173,27 +170,6 @@ fn setup(session_id: &str) -> Env {
     // A plan file so stamp/graduate stubs have a target (content irrelevant).
     fs::write(cwd.join("plan.md"), "---\nstatus: ready\n---\n").unwrap();
 
-    // Package markers + the in-package stub resolved off PYTHONPATH
-    // (run_finalize sets PYTHONPATH=<pypath>) so finalize's remaining
-    // `python3 -m fno.cli do plan validate` child runs the stub, not the real
-    // package. The cost/ledger legs are native; no fno/cost stubs exist.
-    fs::write(pypath.join("fno/__init__.py"), "").unwrap();
-    fs::write(pypath.join("fno/plan/__init__.py"), "").unwrap();
-    // fno.cli stub: finalize's post-stamp frontmatter validation shells
-    // `python3 -m fno.cli do plan validate <path>`; record it and pass, so the
-    // call is observable and the loud non-fatal branch stays quiet in a
-    // healthy run.
-    fs::write(
-        pypath.join("fno/cli.py"),
-        "import sys\n\
-         args = sys.argv[1:]\n\
-         if args[:3] == ['do', 'plan', 'validate']:\n\
-         \x20    open('calls.log','a').write('plan-validate %s\\n' % ' '.join(args[3:]))\n\
-         \x20    sys.exit(0)\n\
-         sys.exit(1)\n",
-    )
-    .unwrap();
-
     Env {
         _tmp: tmp,
         cwd,
@@ -239,11 +215,6 @@ fn run_finalize_in(env: &Env, cwd: &Path, reason: &str) -> std::process::Output 
         .arg(&env.handoffs)
         .arg("--postmortems-dir")
         .arg(&env.postmortems)
-        // Shadow the real `fno` package with the PYTHONPATH stub so finalize's
-        // `python3 -m fno.cost._session_cost` and `fno.cost._register` children
-        // resolve the test stubs. Set to the bare
-        // pypath (PYTHONPATH entries prepend to sys.path) so the stubs win over
-        // any site-packages/editable install of the real package.
         .env("FNO_SPACES_DIR", &env.spaces)
         .env(
             "FNO_CLAUDE_PROJECTS_DIR",
@@ -712,7 +683,6 @@ fn finalize_ship_gated() {
     .unwrap();
     let out = run_finalize(&env, "DonePRGreen");
     assert!(out.status.success());
-    let c = calls(&env);
     let rows = ledger_rows(&env);
     assert_eq!(rows.len(), 1, "one ledger row: {rows:?}");
     assert_eq!(rows[0]["termination_reason"], "DonePRGreen");
@@ -721,10 +691,6 @@ fn finalize_ship_gated() {
         1,
         "stamp must fire: {}",
         calls(&env)
-    );
-    assert!(
-        c.contains("plan-validate"),
-        "canonical do plan validation must run after stamp: {c}"
     );
     assert!(
         !plan_body(&env).contains("status: done"),

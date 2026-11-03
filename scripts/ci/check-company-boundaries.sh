@@ -139,16 +139,6 @@ LAYERS = (
             # The registry table door: claims, identity and agents all read
             # the registry through it.
             "fno.registry_door",
-            # Where a session's transcript is and what it says about itself.
-            # Asked by the agents runtime (`fno agents fleet truth`) and by the graph
-            # writer that stamps a node's session rows - opposite sides of the
-            # runtime boundary, which is what makes it a platform leaf.
-            # The MODULE, not the fno.provenance package: declaring the
-            # package would also map provenance.resolver, which reaches
-            # fno.agents.discover only on the opencode branch, which
-            # resolve_transcript_path cannot reach (it returns None for any
-            # agent outside {claude, codex} before calling the resolver).
-            "fno.provenance.observed",
         ),
     ),
     (
@@ -157,7 +147,6 @@ LAYERS = (
         (
             "fno.company",
             "fno.company.contracts",
-            "fno.plan",
         ),
     ),
     (5, "runtime", ("fno.runtime", "fno.agents")),

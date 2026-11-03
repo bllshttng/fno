@@ -54,7 +54,8 @@ GLOBAL_LONG_TO_SHORT: dict[str, str] = {v: k for k, v in GLOBAL_REGISTER.items()
 #: --blocked``). The uppercase pair (``-I``) stays codebase-exclusive like
 #: the global register.
 PRE_EXISTING_SHORTS: dict[str, tuple[str, str]] = {
-    "-A": ("--all", ""),  # exclusivity enforced by the global-register tests
+    # The -A --all row moved with the plan port: `fno do plan sync` is native,
+    # and the global register still pins -A to --all for any Python decl.
     # The -b --blocked row moved with the pick port: the native arm owns the
     # surface now, and the wheel-side scan can no longer see a Rust flag decl.
 }

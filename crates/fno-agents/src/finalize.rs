@@ -1059,117 +1059,6 @@ fn record_finalize_done(
 
 // ── ledger (always) ─────────────────────────────────────────────────────────
 
-/// Build a `python3` command (for `-m <module>`) rooted at `cwd`, injecting the
-/// repo's `cli/src` onto PYTHONPATH when running from a source checkout so the
-/// in-package `fno.*` modules import without an installed/editable package
-/// (codex PR #515 P1). When the stop hook resolves the checkout-built binary,
-/// these children otherwise run with only `cwd` on `sys.path`, where `fno` is
-/// not importable, so every terminal finalize silently failed to write the
-/// ledger / stamp the plan. In an installed environment `cli/src` is not found
-/// relative to the binary, PYTHONPATH is left untouched, and the installed
-/// `fno` package is used.
-pub(crate) fn py_module(cwd: &Path) -> Command {
-    let mut cmd = Command::new(py_interpreter(cwd));
-    cmd.current_dir(cwd);
-    if let Some(src) = repo_cli_src(cwd) {
-        let joined = match std::env::var_os("PYTHONPATH") {
-            Some(prev) if !prev.is_empty() => {
-                // APPEND (not prepend): cli/src is only a fallback that resolves
-                // `fno` when nothing else does (the codex P1 source-checkout
-                // case). An existing PYTHONPATH - a deliberate override, or the
-                // finalize_e2e stub package - must keep precedence, so we add
-                // cli/src AFTER it rather than shadowing it.
-                let mut s = prev;
-                s.push(":");
-                s.push(&src);
-                s
-            }
-            _ => std::ffi::OsString::from(&src),
-        };
-        cmd.env("PYTHONPATH", joined);
-    }
-    cmd
-}
-
-/// A `cli/.venv/bin/python3` under `root`, but ONLY when `root` is genuinely a
-/// footnote source checkout (it also holds `cli/src/fno/__init__.py`). Gating on
-/// the co-located package guards two cases (codex review on the PR): a
-/// foreign project `cwd` that happens to carry its own `cli/.venv` without `fno`
-/// installed, and a mis-derived canonical root from a nonstandard git-dir
-/// layout - either would otherwise hand back a venv where `import fno` fails and
-/// silently regress ledger/stamp finalization.
-fn footnote_venv(root: &Path) -> Option<String> {
-    let venv = root.join("cli/.venv/bin/python3");
-    if venv.is_file() && root.join("cli/src/fno/__init__.py").is_file() {
-        return Some(venv.to_string_lossy().into_owned());
-    }
-    None
-}
-
-/// Locate `<repo>/cli/src` (the dir holding `cli/src/fno/__init__.py`). Anchored
-/// on the target PROJECT (`cwd`), NOT the running binary: the DEPLOYED
-/// fno-agents binary lives in `~/.local/bin`, whose ancestors hold no checkout,
-/// so a `current_exe()` walk found neither `cli/src` nor `cli/.venv` and every
-/// deployed-binary finalize dropped its ledger row. `cwd` is the
-/// worktree, which tracks `cli/src`. Falls back to the canonical repo, then to a
-/// `current_exe()` walk (checkout-built binary run outside its repo). `None`
-/// when nothing resolves, so PYTHONPATH stays unset and an installed `fno` is
-/// used.
-fn repo_cli_src(cwd: &Path) -> Option<String> {
-    for anc in cwd.ancestors() {
-        if anc.join("cli/src/fno/__init__.py").is_file() {
-            return Some(anc.join("cli/src").to_string_lossy().into_owned());
-        }
-    }
-    if let Some(root) = crate::paths::canonical_repo_root(cwd) {
-        if root.join("cli/src/fno/__init__.py").is_file() {
-            return Some(root.join("cli/src").to_string_lossy().into_owned());
-        }
-    }
-    let exe = std::env::current_exe().ok()?;
-    for anc in exe.ancestors() {
-        if anc.join("cli/src/fno/__init__.py").is_file() {
-            return Some(anc.join("cli/src").to_string_lossy().into_owned());
-        }
-    }
-    None
-}
-
-/// The interpreter finalize's Python helpers run under. In a source checkout,
-/// prefer the repo's `cli/.venv` python: bare `python3` on PATH (e.g. Homebrew's
-/// `/opt/homebrew/opt/python@3.x`) resolves the `fno` package off PYTHONPATH but
-/// lacks fno's third-party deps (pydantic, ...), so `import fno.config` raised
-/// ModuleNotFoundError and every terminal finalize logged `ledger record failed`
-/// / `stamp failed` and wrote no termination_reason row. The venv has both fno
-/// and its deps. PYTHONPATH entries still precede site-packages, so the
-/// finalize_e2e stub package keeps precedence over the venv's installed `fno`.
-/// Falls back to `python3` when no venv is found (installed-wheel or bare
-/// environment). Anchored on `cwd`, then the CANONICAL repo, then a
-/// `current_exe()` walk: a linked worktree has `cli/src` but NO `cli/.venv`, and
-/// bare Homebrew `python3` lacks fno's deps (pydantic, ...), so a worktree
-/// finalize must resolve the canonical checkout's venv - PYTHONPATH
-/// alone would still fail on the missing dep.
-fn py_interpreter(cwd: &Path) -> String {
-    for anc in cwd.ancestors() {
-        if let Some(v) = footnote_venv(anc) {
-            return v;
-        }
-    }
-    if let Some(root) = crate::paths::canonical_repo_root(cwd) {
-        if let Some(v) = footnote_venv(&root) {
-            return v;
-        }
-    }
-    if let Ok(exe) = std::env::current_exe() {
-        for anc in exe.ancestors() {
-            if let Some(v) = footnote_venv(anc) {
-                return v;
-            }
-        }
-    }
-    "python3".to_string()
-}
-
 /// Build the terminal ledger row in-process (the ported `fno.cost._register`):
 /// the native session-cost leg prices the transcript, then the row carries
 /// graph_node_id + provider_id + session_id + cost + termination_reason.
@@ -1199,33 +1088,23 @@ fn write_ledger_record(
 
 // ── stamp (ship only) ────────────────────────────────────────────────────────
 
-/// After a stamp writes, validate the plan's frontmatter via `fno do plan validate`
-/// (the same read-only command). Non-fatal-but-loud: a non-zero exit (e.g. a stamp
-/// that left `status` unset) is reported on stderr for the next session to fix;
-/// the stamp is never rolled back and finalize never fails on it (AC1-FR). A
-/// concurrent edit is fine - the command reads whatever snapshot is on disk.
+/// After a stamp writes, validate the plan's frontmatter through the same
+/// check `fno do plan validate` runs. Non-fatal-but-loud: an invalid stamp
+/// (e.g. one that left `status` unset) is reported on stderr for the next
+/// session to fix; the stamp is never rolled back and finalize never fails on
+/// it (AC1-FR). A concurrent edit is fine - the check reads whatever snapshot
+/// is on disk.
 fn validate_stamped_frontmatter(cwd: &Path, plan_path: &str) {
     if plan_path.is_empty() {
         return;
     }
-    let full = cwd.join(plan_path);
-    match py_module(cwd)
-        .arg("-m")
-        .arg("fno.cli")
-        .arg("do")
-        .arg("plan")
-        .arg("validate")
-        .arg(&full)
-        .output()
-    {
-        Ok(out) if out.status.success() => {}
-        Ok(out) => eprintln!(
-            "finalize: post-stamp `fno do plan validate` FAILED (exit {:?}); stamp NOT rolled back - fix the plan frontmatter next session:\n{}\n{}",
-            out.status.code(),
-            String::from_utf8_lossy(&out.stdout).trim(),
-            String::from_utf8_lossy(&out.stderr).trim()
+    match crate::plan_doc::cli::frontmatter_violations(&cwd.join(plan_path)) {
+        Ok(lines) if lines.is_empty() => {}
+        Ok(lines) => eprintln!(
+            "finalize: post-stamp plan validation FAILED; stamp NOT rolled back - fix the plan frontmatter next session:\n{}",
+            lines.join("\n")
         ),
-        Err(e) => eprintln!("finalize: post-stamp `fno do plan validate` spawn failed: {e}"),
+        Err(e) => eprintln!("finalize: post-stamp plan validation could not run: {e}"),
     }
 }
 
@@ -1266,7 +1145,7 @@ fn stamp_and_graduate(
     }
 
     // Post-stamp schema check (AC1-FR): validate the freshly-stamped frontmatter
-    // through `fno do plan validate` (the plan-schema door). Non-fatal-but-loud -
+    // against the plan schema. Non-fatal-but-loud -
     // a schema-invalidating stamp is surfaced for the next session, never rolled
     // back and never failing finalize (finalize is idempotent/non-fatal by design).
     validate_stamped_frontmatter(cwd, plan_path);
@@ -3943,70 +3822,6 @@ mod tests {
     // so it is NOT checked out) the interpreter must resolve the CANONICAL
     // repo's venv, and cli/src must anchor on the worktree - neither via
     // current_exe(). Reproduces the deployed-binary anchor failure.
-    #[test]
-    fn worktree_resolves_canonical_venv_and_own_cli_src() {
-        fn git(cwd: &Path, args: &[&str]) -> bool {
-            Command::new("git")
-                .current_dir(cwd)
-                .args(args)
-                .output()
-                .map(|o| o.status.success())
-                .unwrap_or(false)
-        }
-        let tmp = tempfile::tempdir().unwrap();
-        let canon = tmp.path().join("canon");
-        let wt = tmp.path().join("wt"); // sibling of canon, NOT nested inside it
-        fs::create_dir_all(canon.join("cli/src/fno")).unwrap();
-        fs::write(canon.join("cli/src/fno/__init__.py"), "").unwrap();
-
-        if !git(&canon, &["init", "-q"]) {
-            return; // no git available - nothing to assert
-        }
-        for kv in [
-            "user.email=t@t",
-            "user.name=t",
-            "commit.gpgsign=false",
-            "init.defaultBranch=main",
-        ] {
-            git(
-                &canon,
-                &[
-                    "config",
-                    kv.split('=').next().unwrap(),
-                    kv.split('=').nth(1).unwrap(),
-                ],
-            );
-        }
-        git(&canon, &["add", "-A"]);
-        assert!(git(&canon, &["commit", "-qm", "init"]), "commit failed");
-
-        // Canonical carries the venv; a linked worktree does NOT (gitignored).
-        fs::create_dir_all(canon.join("cli/.venv/bin")).unwrap();
-        fs::write(canon.join("cli/.venv/bin/python3"), "").unwrap();
-
-        assert!(
-            git(&canon, &["worktree", "add", "-q", wt.to_str().unwrap()]),
-            "worktree add failed"
-        );
-        assert!(
-            wt.join("cli/src/fno/__init__.py").is_file(),
-            "wt has cli/src"
-        );
-        assert!(!wt.join("cli/.venv/bin/python3").exists(), "wt lacks venv");
-
-        // canonicalize both sides: git's --path-format=absolute returns the
-        // realpath (/private/var on macOS) while the temp path is /var.
-        let real = |p: &str| fs::canonicalize(p).unwrap();
-        assert_eq!(
-            real(&py_interpreter(&wt)),
-            real(canon.join("cli/.venv/bin/python3").to_str().unwrap())
-        );
-        assert_eq!(
-            real(&repo_cli_src(&wt).unwrap()),
-            real(wt.join("cli/src").to_str().unwrap())
-        );
-    }
-
     #[test]
     fn coverage_satisfied_reads_a_store_committed_covered_row() {
         // AC5-EDGE: an older imported row with count 0 and a newer covered

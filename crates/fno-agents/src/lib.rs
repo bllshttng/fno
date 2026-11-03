@@ -720,6 +720,7 @@ pub mod tick_ledger;
 pub mod tool_activity;
 pub mod tracker;
 pub mod transcript_activity;
+pub mod transcript_resolve;
 pub mod transcript_turns;
 pub mod truth_cli;
 pub mod truth_probe;

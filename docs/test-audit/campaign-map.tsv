@@ -617,7 +617,6 @@ K4	crates/fno-agents/tests/opencode_serve_journey.rs	rs	1
 K4	crates/fno-agents/tests/pi_session_identity.rs	rs	8
 K4	crates/fno-agents/tests/provider_cap_transcript_resolution.rs	rs	1
 K4	crates/fno-agents/tests/provider_contract.rs	rs	7
-K5	cli/src/fno/plan/test_reconcile.py	py	8
 K5	cli/tests/graph/test_backlog_search_fts.py	py	3
 K5	cli/tests/graph/test_batched_member_selection.py	py	9
 K5	cli/tests/graph/test_board.py	py	17
@@ -1122,8 +1121,6 @@ K6	crates/fno-agents/tests/review_coverage_paths.rs	rs	6
 K6	crates/fno-agents/tests/review_coverage_command.rs	rs	15
 K6	crates/fno-agents/tests/task_context_journey.rs	rs	1
 K6	crates/fno/src/event_store_recovery.rs	rs	1
-K7	cli/src/fno/plan/test_boundary.py	py	21
-K7	cli/src/fno/plan/test_folder_audit.py	py	8
 K7	cli/src/fno/target/test_blast.py	py	25
 K7	cli/src/fno/test_cost.py	py	20
 K7	cli/src/fno/test_target_init_blast.py	py	18
@@ -1188,7 +1185,6 @@ K7	cli/tests/unit/test_plan_migrate_keys.py	py	10
 K7	cli/tests/unit/test_plan_schema.py	py	17
 K7	cli/tests/unit/test_product_qualification_manifest.py	py	12
 K7	cli/tests/unit/test_product_qualification_report.py	py	2
-K7	cli/tests/unit/test_provenance_resolver.py	py	23
 K7	cli/tests/unit/test_research_grade.py	py	10
 K7	cli/tests/unit/test_resolve_executor_emit.py	py	5
 K7	cli/tests/unit/test_target_cli.py	py	73

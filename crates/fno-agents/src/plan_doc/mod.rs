@@ -1,9 +1,16 @@
 //! The plan-doc writer, ported from the Python `fno.plan._project`/
 //! `_rollup`/`_status` legs and the stamp module, served by the graph keeper.
 
+pub mod brief;
+pub mod cli;
 pub mod codec;
+pub mod criteria;
+pub mod doc;
+pub mod exec_validate;
+pub mod folder_audit;
 pub mod keeper;
 pub mod lock;
+pub mod migrate;
 pub mod node_accessors;
 pub mod project;
 pub mod reconcile;
