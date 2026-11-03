@@ -30,12 +30,12 @@ Read the argument left to right: an optional substrate token, an optional brief 
 
 ## The process
 
-0. **Claim the node.** When the question names a node, run `fno backlog session open <node> --phase think --json` first. Exit 0 means this session holds the node for the run (`joined` names a claim it already owns). A nonzero exit is the answer: relay the refusal line and stop. A free-text question with no node skips this step and the close below.
+0. **Claim the node.** Does the question name a node? Run `fno backlog session open <node> --phase think --json` first. Exit 0 means this session holds the node for the run (`joined` names a claim it already owns). A nonzero exit is the answer: relay the refusal line and stop. A free-text question with no node skips this step and the close below.
 1. **Ground.** Run `fno do think inspect "<question>" --json` and read the whole receipt. It reports source status, never a verdict. An unavailable search is not "nothing found". A stale schema is not "no DB change". Inspect what it cites before deciding relevance.
 2. **Investigate primary sources** - source code, specs, first-party APIs - never a secondary write-up of them. Follow every claim back to the source that owns it. Every claim you write carries a `file:line` or a URL. A claim you cannot trace is written down as untraced.
 3. **Write one Markdown file** at the path `fno do plan path --slug "<slug>" [--node <id>]` prints, citing each claim's source. Run the command from the node's project root. `fno backlog get <node>` prints that root as `cwd`. From a foreign session cwd the doc lands in the session's own plans dir, outside git. List only sources you actually read. Frontmatter carries `status: done` (a finished brief). When the question names a node, frontmatter also carries `node: <id>`. Use a canonical plan status word, never an invented one: the reconcile sweep reads unknown words as drift.
 
-When the question named a node, land the receipt before you stop: bind the doc with `fno backlog update <node> plan_path=<path>` when the node carries none, then run `fno backlog session close <node> --phase think --summary "<one line>" --launch "/fno:blueprint <path>" --json`. The close writes the node's think session row and frees the claim, so a think on another machine sees the doc instead of a free node.
+When the question named a node, land the receipt before you stop. Bind the doc first: `fno backlog update <node> plan_path=<path>`, for a node that carries none. Then run `fno backlog session close <node> --phase think --summary "<one line>" --launch "/fno:blueprint <path>" --json`. The close writes the node's think session row and frees the claim. A think on another machine then sees the doc instead of a free node.
 
 Print the file path and stop. Turning findings into a plan is `/fno:blueprint <path>`.
 
