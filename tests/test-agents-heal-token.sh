@@ -29,7 +29,8 @@ FIXSLUG="$(printf '%s' "$FIXCWD" | tr '/.' '--')"
 mkdir -p "$tmp/bin" "$FIXCWD" "$tmp/projects/$FIXSLUG" "$tmp/codex/2026/07/20" "$tmp/home"
 # Run from a cwd that is NOT a known project: project confinement (defect 1) is
 # N/A outside a project, so this test exercises machine-wide adoption. The confined path (same-project adopt,
-# foreign refuse) is covered by cli/tests/agents/test_store_fallback_confinement.py.
+# foreign refuse) is covered by the heal-token legs of
+# crates/fno-agents/tests/registry_commands_parity.rs.
 cd "$tmp" || { echo "FAIL: could not enter tmp"; exit 1; }
 
 # Shim `fno` to this worktree's source. `mux` never

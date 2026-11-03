@@ -539,35 +539,6 @@ jobs:
           : "$start"
           "$FNO_AGENTS_FRONT" test-run doctor smoke --only 'Sync + build,Pytest*' --shard ${{ matrix.shard }}/4
 
-  slow-e2e:
-    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
-    runs-on: ubuntu-24.04
-    # The real-pane test rebuilds both native binaries; its separate 144s cap
-    # names the slow step while this bounds setup and the Cargo work around it.
-    timeout-minutes: 15
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Provision the slow-test runner
-        uses: ./.github/actions/smoke-setup
-
-      - name: Sync the cli venv
-        # The pane lane drives pytest through the native front, which resolves
-        # bare python3 when no cli venv exists. The old `uv run --project cli
-        # fno-py` form auto-synced that venv; the port to the native runner
-        # dropped it and the schedule lane died on "No module named pytest"
-        # (2026-10-30, reproduced on rerun). The smoke shards get the same
-        # sync from the registry's Sync + build step; this lane bypasses the
-        # registry, so it syncs here.
-        working-directory: cli
-        run: uv sync
-
-      - name: Run the slow pane lane
-        env:
-          FNO_PYTEST_SHARD: "1/1"
-        run: $FNO_AGENTS_FRONT test-run doctor --stream cli/tests/agents/test_pane_journeys.py -- -m slow_e2e
-
   smoke-rest:
     needs: [pr-affected]
     if: ${{ !cancelled() && needs.pr-affected.outputs.python_full == 'true' }}

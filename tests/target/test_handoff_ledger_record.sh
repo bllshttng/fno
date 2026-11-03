@@ -62,7 +62,7 @@ done
 # shadow the repo's own cargo build.
 REAL_AGENTS_BIN="$(env PATH='/usr/bin:/bin' PYTHONPATH="$FNO_SRC" "$FNO_PYTHON" -c 'from fno import rust_binary; b = rust_binary.resolve_binary(); print(b or "")')"
 [ -n "$REAL_AGENTS_BIN" ] || { fail "no fno-agents binary resolves (cargo build --release -p fno-agents)"; exit 1; }
-CHILD_NAME="$("$REAL_AGENTS_BIN" registry name --source sh --command t "$NODE_ID" --slug work --discriminator g2)"
+CHILD_NAME="$("$REAL_AGENTS_BIN" status --name --source sh --command t "$NODE_ID" --slug work --discriminator g2)"
 CHILD_NAME="${CHILD_NAME##*$'\n'}"
 CAP_NONCE="ledger-capability-nonce"
 CAP_DIGEST="$(printf '%s\n%s\n%s' "$CAP_NONCE" "$PROJ" "$PROJ" | shasum -a 256 | awk '{print $1}')"

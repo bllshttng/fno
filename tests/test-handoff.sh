@@ -265,11 +265,12 @@ expected_child_name() {
   # The successor name contract IS the x-84b2 vocabulary, so the expectation
   # is computed by the same bridge handoff.sh mints with - a stub answer here
   # would test a second copy of the shape. The name door is the Rust one
-  # (`fno agents registry name`), the same call handoff.sh itself makes.
+  # (`status --name`), the same call the stub router and handoff.sh itself
+  # make.
   local bin out
   bin="$(env PYTHONPATH="$FNO_SRC" "$FNO_PYTHON" -c 'from fno import rust_binary; b = rust_binary.find_dev_binary() or rust_binary.resolve_binary(); print(b or "")')"
   [ -n "$bin" ] || { echo "no fno-agents binary for agents name" >&2; exit 127; }
-  out="$("$bin" registry name --source sh --command t "$NODE_ID" --slug "$TEST_NODE_SLUG" --discriminator g2)"
+  out="$("$bin" status --name --source sh --command t "$NODE_ID" --slug "$TEST_NODE_SLUG" --discriminator g2)"
   printf '%s' "${out##*$'\n'}"
 }
 capability_digest() {
