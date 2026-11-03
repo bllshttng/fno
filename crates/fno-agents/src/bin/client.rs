@@ -1911,19 +1911,6 @@ async fn run(args: Vec<String>) -> i32 {
     }
 }
 
-/// Invoking-harness env markers, highest priority first. Mirror of Python
-/// `harness_identity.HARNESS_SESSION_MARKERS`; cross-language drift is caught by
-/// the pytest `test_harness_markers_match_client_rs`, which reads this const from
-/// source (the Rust unit test only guards Rust-internal edits).
-#[allow(dead_code)]
-const HARNESS_MARKERS: &[(&str, &str)] = &[
-    ("CODEX_THREAD_ID", "codex"),
-    ("CLAUDE_CODE_SESSION_ID", "claude"),
-    ("CODEX_SESSION_ID", "codex"),
-    ("GEMINI_SESSION_ID", "gemini"),
-    ("OPENCODE_SESSION_ID", "opencode"),
-];
-
 fn validate_spawn_placement(params: &Value, substrate: &str) -> Result<(), String> {
     let squad = params.get("squad").and_then(Value::as_str);
     let split = params.get("split").and_then(Value::as_str);

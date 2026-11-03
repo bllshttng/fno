@@ -1193,6 +1193,7 @@ pub(crate) const HARNESS_SESSION_MARKERS: &[(&str, &str)] = &[
     ("CODEX_SESSION_ID", "codex"),
     ("GEMINI_SESSION_ID", "gemini"),
     ("OPENCODE_SESSION_ID", "opencode"),
+    ("PI_SESSION_ID", "pi"),
 ];
 
 pub(crate) const LEGACY_HARNESS_SESSION_MARKERS: &[(&str, &str)] =
@@ -1218,6 +1219,7 @@ pub(crate) const AMBIENT_IDENTITY_NAMES: &[&str] = &[
     "CODEX_SESSION_ID",
     "GEMINI_SESSION_ID",
     "OPENCODE_SESSION_ID",
+    "PI_SESSION_ID",
     "CLAUDE_SESSION_ID",
     "CLAUDECODE",
     "CLAUDECODE_SESSION_ID",
@@ -1228,6 +1230,7 @@ pub(crate) const AMBIENT_IDENTITY_NAMES: &[&str] = &[
     "CODEX_SHELL",
     "CODEX_COMPANION_SESSION_ID",
     "CODEX_COMPANION_TRANSCRIPT_PATH",
+    "PI_SESSION_FILE",
 ];
 
 /// The same names with their harness family, in the Python
@@ -1242,6 +1245,7 @@ pub(crate) const AMBIENT_IDENTITY_FAMILIES: &[(&str, &str)] = &[
     ("CODEX_SESSION_ID", "codex"),
     ("GEMINI_SESSION_ID", "gemini"),
     ("OPENCODE_SESSION_ID", "opencode"),
+    ("PI_SESSION_ID", "pi"),
     ("CLAUDE_SESSION_ID", "claude"),
     ("CLAUDECODE", "claude"),
     ("CLAUDECODE_SESSION_ID", "claude"),
@@ -1252,6 +1256,7 @@ pub(crate) const AMBIENT_IDENTITY_FAMILIES: &[(&str, &str)] = &[
     ("CODEX_SHELL", "codex"),
     ("CODEX_COMPANION_SESSION_ID", "codex"),
     ("CODEX_COMPANION_TRANSCRIPT_PATH", "codex"),
+    ("PI_SESSION_FILE", "pi"),
     ("FNO_AGENT_SUBSTRATE", "fno"),
     ("FNO_NODE_REASON", "fno"),
 ];
@@ -1406,6 +1411,7 @@ pub(crate) fn ambient_session_candidates() -> Vec<String> {
             "CODEX_SESSION_ID",
             "GEMINI_SESSION_ID",
             "OPENCODE_SESSION_ID",
+            "PI_SESSION_ID",
             "CLAUDE_SESSION_ID",
             "CLAUDECODE_SESSION_ID",
             "HERMES_SESSION_ID",

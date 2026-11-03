@@ -1973,6 +1973,7 @@ pub fn infer_dispatch_provider(lookup: impl Fn(&str) -> Option<String>) -> &'sta
         Some("gemini") => "gemini",
         Some("opencode") => "opencode",
         Some("agy") => "agy",
+        Some("pi") => "pi",
         _ => "claude",
     }
 }
