@@ -162,6 +162,18 @@ Each minute the arm reads main's verdict through the gate's own cached reading. 
 
 The arm refuses to guess. If the parent run is red, cancelled or missing, or the head is not a PR merge, it journals `ambiguous` and opens nothing. A red whose failing checks all sit on heal's flake ledger journals `flaky`. Every outcome is one `main_revert_check` row per red head, so a daemon restart never opens a second revert. The arm never merges the revert. The owner merges it through this gate.
 
+### A check for every merge
+
+Every push to main runs `guards` and `rust-ci` in a group keyed by the commit sha, so no merge's run replaces another's. Together they take about 14 runner minutes. `fno do ci status <sha>` reads their push rows into `merge_check`: `green`, `red`, `pending`, or `unverified` when a run was cancelled or never started. On 2026-11-03, 10 of the 10 newest failed `cli-ci` push runs had both lanes green. So `merge_check: green` means the commit compiled and passed the guards. It never means the suite passed, and it does not allow a release. The coalesced `cli-ci` run stays the batch and release gate, and `verdict` still reads it.
+
+To list rollback candidates, walk the first parents and print the field:
+
+```bash
+for sha in $(git log --first-parent --format=%h -n 20 origin/main); do
+  echo "$sha $(fno do ci status "$sha" | jq -r .merge_check)"
+done
+```
+
 ## The merge queue
 
 A PR green on its own can still break main. On 2026-10-26 PR 3958 was green at 14:23Z, merged at 16:17Z over 48 newer main commits, and turned the `guards` job red on main. The merge queue tests each PR on top of current main before it lands. It is off by default. Turn it on per repo:
