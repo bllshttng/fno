@@ -457,7 +457,8 @@ mod tests {
             ("ines", "idle 3m")
         );
 
-        let stale = json!({"host": "bb16", "age_s": 120, "sessions": [{"name": "x"}]});
+        let stale =
+            json!({"host": "bb16", "age_s": 120, "sessions": [{"name": "x", "harness": "codex"}]});
         let others = json!({"machines": [stale, {"host": "mbp3"}]});
         let bands = fold(&others);
         assert!(bands[0].local, "this machine keeps a band with no beat");

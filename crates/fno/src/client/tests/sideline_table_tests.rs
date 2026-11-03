@@ -791,8 +791,8 @@ fn group_by_axes_build_labelled_bands_with_rollups() {
 
     // The machine layer wraps the active axis only while its toggle is on.
     let fleet = serde_json::json!({"machines": [{"host": "far", "fresh": true, "age_s": 9,
-        "sessions": [{"name": "boss", "role": "L1", "session_id": "aaaa1111-x"},
-                     {"name": "w", "parent": "aaaa1111", "status": "writing"}]}]});
+        "sessions": [{"name": "boss", "harness": "claude", "role": "L1", "session_id": "aaaa1111-x"},
+                     {"name": "w", "harness": "claude", "parent": "aaaa1111", "status": "writing"}]}]});
     let headers = |v: &View| -> Vec<String> {
         let rows = v.display_rows();
         let labels = rows.iter().filter_map(|r| match r {
