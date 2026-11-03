@@ -132,6 +132,11 @@ const REFUSED_DDL: &str = "CREATE TABLE IF NOT EXISTS main.backlog_refused (
   ops TEXT NOT NULL
 );";
 
+/// How many dead-letter batches the cap keeps: the newest, the only one any
+/// reader reads. One name feeds the trim's SELECT and the event's kept field,
+/// so the two cannot drift.
+const REFUSED_CAP: i64 = 1;
+
 /// The primary-side bookkeeping. `backlog_cas.n` takes only 1, so a
 /// conditional statement that matched no row fails its batch. A batch id
 /// lands once, so a resent outbox never applies twice. The seed marker exists
@@ -1301,6 +1306,41 @@ fn repair(
             ],
         )
         .map_err(|e| e.to_string())?;
+    // The dead letter is kept for inspection, never retried: no reader
+    // re-sends a refused batch (replaying one refuses again by construction,
+    // and the take-back above already re-queued the writes that were still
+    // valid), so the oldest batches are trimmable. Without a cap a churning
+    // primary grew the table unbounded - 1.7 GB of kept statements on one
+    // machine. The cap drops loudly: every trimmed batch id lands in stderr
+    // and a `backlog_refused_trimmed` event below.
+    let dropped_refused: Vec<(i64, String)> = {
+        let mut statement = transaction
+            .prepare(&format!(
+                "SELECT id, batch FROM backlog_refused WHERE id NOT IN
+                 (SELECT id FROM backlog_refused ORDER BY id DESC LIMIT {REFUSED_CAP})"
+            ))
+            .map_err(|e| e.to_string())?;
+        let rows = statement
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .map_err(|e| e.to_string())?;
+        let collected: Result<Vec<(i64, String)>, _> = rows.collect();
+        collected.map_err(|e| e.to_string())?
+    };
+    if !dropped_refused.is_empty() {
+        let ids: Vec<String> = dropped_refused
+            .iter()
+            .map(|(id, _)| id.to_string())
+            .collect();
+        transaction
+            .execute(
+                &format!(
+                    "DELETE FROM backlog_refused WHERE id IN ({})",
+                    ids.join(",")
+                ),
+                [],
+            )
+            .map_err(|e| e.to_string())?;
+    }
     transaction
         .execute_batch(&format!(
             "DELETE FROM backlog_outbox WHERE id <= {last};
@@ -1361,6 +1401,7 @@ fn repair(
     }
     stamp_fresh(&transaction, "repair")?;
     transaction.commit().map_err(|e| e.to_string())?;
+    announce_refused_trim(&dropped_refused);
     let taken: Vec<Change> = changes.iter().filter(|c| taken_back(c)).cloned().collect();
     notice_refusal(
         &taken,
@@ -1379,6 +1420,18 @@ fn repair(
 /// re-queued, the newer queued writes dropped with the batch, and the local
 /// rows kept because the primary never received them. A notice failure never
 /// fails the repair that already committed.
+/// The best-effort journal emitter in the space this process resolves: the
+/// shape both share-lane notices announce through. `None` outside a space.
+fn space_emitter() -> Option<crate::events::EventEmitter> {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let space = crate::paths::space_dir_opt(&cwd)?;
+    let path = space.join("events.jsonl");
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+    Some(crate::events::EventEmitter::new(path, "backlog"))
+}
+
 fn notice_refusal(
     taken: &[Change],
     requeued: usize,
@@ -1391,18 +1444,43 @@ fn notice_refusal(
         "backlog-share: {}",
         refusal_notice(taken, requeued, dropped_newer, kept_unlanded)
     );
-    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let Some(space) = crate::paths::space_dir_opt(&cwd) else {
+    let Some(emitter) = space_emitter() else {
         return;
     };
-    let path = space.join("events.jsonl");
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).ok();
-    }
-    let emitter = crate::events::EventEmitter::new(path, "backlog");
     let _ = emitter.emit(
         "backlog_refused_flush",
         &refused_flush_data(taken, batch, error),
+    );
+}
+
+/// Say loudly what the dead-letter cap dropped: one stderr line and a
+/// `backlog_refused_trimmed` event naming every trimmed batch. Nothing
+/// replayable is lost - a refused batch's statements are the take-back's
+/// already-reverted rows, and the writes that were still valid re-queued - so
+/// the announcement exists so the drop is attributable, not recoverable.
+fn announce_refused_trim(dropped: &[(i64, String)]) {
+    if dropped.is_empty() {
+        return;
+    }
+    let named: Vec<String> = dropped
+        .iter()
+        .map(|(id, batch)| format!("{id} ({batch})"))
+        .collect();
+    eprintln!(
+        "backlog-share: backlog_refused cap: trimmed {} dead-letter batch(es) no reader replays: {}",
+        dropped.len(),
+        named.join(", ")
+    );
+    let Some(emitter) = space_emitter() else {
+        return;
+    };
+    let _ = emitter.emit(
+        "backlog_refused_trimmed",
+        &json!({
+            "dropped_ids": dropped.iter().map(|(id, _)| id).collect::<Vec<_>>(),
+            "dropped_batches": named,
+            "kept": REFUSED_CAP,
+        }),
     );
 }
 
@@ -3130,6 +3208,52 @@ mod tests {
         assert!(refusal.starts_with(REFUSED), "{refusal}");
         assert_eq!(title(&a, "x-del").as_deref(), Some("still here"));
         assert_eq!(outbox(&a), 0);
+    }
+
+    /// The dead letter keeps the newest refusal only. Older batches are
+    /// inspection history no reader retries, and a primary churning refusals
+    /// grew the table unbounded (1.7 GB of kept statements on one machine),
+    /// so each insert trims to the newest.
+    #[test]
+    fn the_refused_dead_letter_keeps_only_the_newest_batch() {
+        let primary = test_primary::start();
+        let a = machine();
+        on(&primary, &a);
+        seed(&a.graph).unwrap();
+        add_node(&a, "x-cap", "cap me");
+        flush(&a.graph).unwrap();
+
+        // Three take-back refusals in a row: the peer moves the row on the
+        // primary, this machine writes past it, the flush refuses.
+        for round in 1..=3 {
+            primary
+                .db
+                .lock()
+                .unwrap()
+                .execute(
+                    &format!("UPDATE {NODES} SET title = 'peer{round}' WHERE id = 'x-cap'"),
+                    [],
+                )
+                .unwrap();
+            retitle(&a, "x-cap", &format!("from a{round}"));
+            let refusal = flush(&a.graph).unwrap_err();
+            route_to_primary(None);
+            assert!(refusal.starts_with(REFUSED), "round {round}: {refusal}");
+            on(&primary, &a);
+        }
+        let connection = crate::backlog::open(&a.graph).unwrap();
+        let (kept, ops): (i64, String) = connection
+            .query_row(
+                "SELECT COUNT(*), COALESCE(MAX(ops), '') FROM backlog_refused",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(kept, 1, "only the newest refused batch survives the cap");
+        assert!(
+            ops.contains("from a3"),
+            "the surviving batch is the newest one: {ops}"
+        );
     }
 
     #[test]

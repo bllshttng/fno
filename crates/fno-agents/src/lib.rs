@@ -439,6 +439,7 @@ pub mod outstanding;
 pub mod outstanding_cmds;
 pub(crate) mod owner_ladder;
 pub mod pack_profile;
+pub mod page_relief;
 pub mod pane_claim;
 pub mod pane_identity;
 pub mod pane_keeper;
@@ -1671,6 +1672,13 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // A refused shared-backlog flush: the operator notice beside the
     // retained batch (backlog_share::repair).
     "backlog_refused_flush",
+    // The dead-letter cap's loud announcement: the batch ids the trim
+    // dropped (backlog_share::announce_refused_trim). No reader replays a
+    // refused batch, so the drop is forensic history only.
+    "backlog_refused_trimmed",
+    // The freed-page return arm (page_relief.rs): resident size before and
+    // after malloc_zone_pressure_relief, and the zone count it covered.
+    "page_relief_done",
     // Triage apply telemetry (the native triage engine): one row per
     // committed apply, carrying the applied counts, the priority moves and
     // the dropped-entry count.
