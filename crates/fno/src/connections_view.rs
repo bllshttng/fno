@@ -2544,16 +2544,17 @@ mod tests {
             "{narrow}"
         );
 
+        let five_hour = format!("5h      {}{}  26%", "━".repeat(5), "─".repeat(15));
         v.apply_read(ReadOutcome::Ok {
             accounts: sample_accounts(),
             combos: sample_combos(),
         });
         assert!(
-            v.render().join("\n").contains("5h 26%"),
+            v.render().join("\n").contains(&five_hour),
             "re-read blanked usage"
         );
         v.apply_read(ReadOutcome::UsageFailed("timed out".into()));
-        assert!(v.render().join("\n").contains("5h 26%"));
+        assert!(v.render().join("\n").contains(&five_hour));
         assert_eq!(v.notice.as_deref(), Some("usage refresh failed: timed out"));
 
         // r re-authenticates a claude login with both Keychain logins, the
