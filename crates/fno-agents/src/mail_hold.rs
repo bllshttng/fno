@@ -130,9 +130,7 @@ fn state_root() -> PathBuf {
 }
 
 pub(crate) fn hold_sidecar_path(handle: &str) -> PathBuf {
-    state_root()
-        .join("mail-hold")
-        .join(format!("{handle}.json"))
+    crate::state_layout::place_in(&state_root(), "mail-hold", &format!("{handle}.json"))
 }
 
 /// The one token-to-row rule, `hold.addresses` mirrored: a token addresses a
@@ -268,14 +266,18 @@ fn write_clock(
         "{{\"until\": {until_part}, \"window_s\": {window_s}, \
          \"clock_kind\": \"{clock_kind}\", \"ceiling\": {ceiling_part}{source_part}}}\n",
     );
-    let dir = state_root().join("mail-hold");
+    let target = hold_sidecar_path(handle);
+    let dir = target
+        .parent()
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_default();
     std::fs::create_dir_all(&dir)?;
     let tmp = dir.join(format!(".{}.tmp", std::process::id()));
     {
         let mut f = std::fs::File::create(&tmp)?;
         f.write_all(payload.as_bytes())?;
     }
-    std::fs::rename(&tmp, hold_sidecar_path(handle))
+    std::fs::rename(&tmp, target)
 }
 
 /// The sidecar clock as both writers leave it. A present-but-unparseable
@@ -943,9 +945,7 @@ pub(crate) fn gate_parked_line(
 /// The parked raw payloads for one held session, beside its clock in the one
 /// hold store.
 fn parked_dir(handle: &str) -> PathBuf {
-    state_root()
-        .join("mail-hold")
-        .join(format!("{handle}.parked"))
+    crate::state_layout::place_in(&state_root(), "mail-hold", &format!("{handle}.parked"))
 }
 
 fn process_alive(pid: i32) -> bool {
@@ -1715,7 +1715,9 @@ pub(crate) mod tests {
     /// lookup ([`crate::chats::message_sender`]) finds `id` naming `sender`.
     /// The index is never built; the scan fallback reads the file.
     pub(crate) fn write_chats_message(dir: &std::path::Path, id: &str, sender: &str) {
-        let chat = dir.join("chats").join(format!("pair-{sender}-worker"));
+        let chat = crate::state_layout::place_dir(dir, "chats")
+            .unwrap()
+            .join(format!("pair-{sender}-worker"));
         std::fs::create_dir_all(&chat).unwrap();
         let line = serde_json::json!({
             "type": "message", "id": id, "from": sender, "body": "note",
@@ -1744,14 +1746,11 @@ pub(crate) mod tests {
     }
 
     pub(crate) fn clock(dir: &std::path::Path, handle: &str) -> serde_json::Value {
-        serde_json::from_str(
-            &std::fs::read_to_string(dir.join("mail-hold").join(format!("{handle}.json"))).unwrap(),
-        )
-        .unwrap()
+        serde_json::from_str(&std::fs::read_to_string(clock_path(dir, handle)).unwrap()).unwrap()
     }
 
     pub(crate) fn clock_path(dir: &std::path::Path, handle: &str) -> std::path::PathBuf {
-        dir.join("mail-hold").join(format!("{handle}.json"))
+        crate::state_layout::place_in(dir, "mail-hold", &format!("{handle}.json"))
     }
 
     /// Append one `operator_submit` witness row to the temp journal
@@ -2189,7 +2188,8 @@ pub(crate) mod tests {
             // turn-boundary surface they promise is real).
             let v = gate(SID, None, now);
             assert!(!v.deliver && v.receipt.is_none() && v.until.is_none());
-            std::fs::create_dir_all(dir.join("mail-hold")).unwrap();
+            std::fs::create_dir_all(crate::state_layout::place_dir(dir, "mail-hold").unwrap())
+                .unwrap();
             std::fs::write(
                 clock_path(dir, &identity_key(SID)),
                 "{\"until\": null, \"window_s\": null, \"clock_kind\": \"idle\", \"ceiling\": null}\n",
@@ -2268,8 +2268,7 @@ pub(crate) mod tests {
     }
 
     fn parked_dir_for(dir: &std::path::Path) -> std::path::PathBuf {
-        dir.join("mail-hold")
-            .join(format!("{}.parked", identity_key(SID)))
+        crate::state_layout::place_in(dir, "mail-hold", &format!("{}.parked", identity_key(SID)))
     }
 
     #[test]

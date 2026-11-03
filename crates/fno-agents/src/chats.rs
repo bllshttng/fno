@@ -76,7 +76,8 @@ pub(crate) fn chat_id_for_channel(scope: &str) -> String {
 // ---------------------------------------------------------------------------
 
 /// The chats dir: `config.paths.chats` from the config ladder, else
-/// `<state_dir>/chats` (which is `~/.fno/chats` on a stock machine). The
+/// the table's chats folder under the state dir (`~/.fno/db/mail/chats` on a
+/// stock machine). The
 /// override may point at a synced folder (the vault); the index never follows
 /// it there (node requirement 3).
 pub(crate) fn chats_dir() -> PathBuf {
@@ -90,11 +91,14 @@ pub(crate) fn chats_dir() -> PathBuf {
     // a test that pins FNO_AGENTS_HOME gets its chats beside its bus, never
     // the operator's ~/.fno/chats.
     if let Some(dot_fno) = declared_dot_fno() {
-        return dot_fno.join("chats");
+        return chats_under(&dot_fno);
     }
-    let mut dir = crate::backlog::settings::state_dir().unwrap_or_else(default_dot_fno);
-    dir.push("chats");
-    dir
+    chats_under(&crate::backlog::settings::state_dir().unwrap_or_else(default_dot_fno))
+}
+
+/// The table's chats folder under a state root.
+fn chats_under(root: &Path) -> PathBuf {
+    crate::state_layout::place_dir(root, "chats").unwrap_or_else(|| root.join("chats"))
 }
 
 /// The derived index. Always under the state dir, never under the (possibly
