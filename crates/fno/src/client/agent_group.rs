@@ -47,6 +47,7 @@ fn group_key_of(view: &View, name: &str) -> String {
             .map(|s| s.name.clone())
             .unwrap_or_else(|| "~ elsewhere".into()),
         AgentGroup::Team | AgentGroup::Cwd | AgentGroup::Harness => keyed_label(view, a),
+        AgentGroup::Flat => String::new(),
         AgentGroup::Status => match agent_lattice_state(a) {
             LatticeState::Blocked | LatticeState::DoneUnseen => "Needs input".into(),
             LatticeState::Working | LatticeState::Unmeasured | LatticeState::Empty => {
@@ -97,6 +98,59 @@ pub(super) fn band_spend(view: &View, label: &str) -> Option<String> {
     })
 }
 
+/// The [`ChromeHit`] for an agent row: focus its pane, else reach a paneless
+/// live row through the ONE dedicated thread pane, else resume a resumable row
+/// through its harness, else say it has no pane here. Shared by a sideline
+/// click ([`View::row_action`]) and the navigator's goto ([`View::nav_rows`])
+/// so the two inputs resolve the same entity identically. Pure - the
+/// agent's own fields decide, so no `&self` needed.
+pub(super) fn agent_hit(a: &AgentRow, _active_squad: u64) -> ChromeHit {
+    if let Some(remote) = &a.remote {
+        return ChromeHit::OpenRemote(remote.clone());
+    }
+    match a.pane_id {
+        Some(pid) => ChromeHit::Cmds(vec![Command::FocusPane(pid)]),
+        None if !a.exited => {
+            // Every paneless live row reaches a portal: Drive
+            // attaches, Follow tails the transcript, Locate renders the
+            // explanation screen. One command, no placement dialog - the
+            // server owns the tier (the row set lives there). The command's id
+            // is the attach id for a claude row and the row NAME for every
+            // other harness (Follow/Locate rows carry no attach id); the
+            // refusal invariant holds by construction because the
+            // client never chooses between attach and focus.
+            //
+            ChromeHit::Cmds(vec![Command::AttachAgent {
+                id: a.reach_key(),
+                placement: enter_placement(),
+            }])
+        }
+        None => {
+            // A paneless row whose harness owns a resume form resumes
+            // through that form: the server spawns `claude --resume <sid>` /
+            // `codex resume <sid>` as a pane in the recorded cwd. The
+            // operator's explicit gesture - restore never sends this.
+            if a.resumable {
+                ChromeHit::Cmds(vec![Command::ResumeAgent {
+                    name: a.name.clone(),
+                }])
+            } else {
+                ChromeHit::Notice(no_pane_notice(a))
+            }
+        }
+    }
+}
+
+/// Where Enter shows a paneless row, local or far: portal 0, which is exactly
+/// where the single thread pane always landed. `P` opens the next free
+/// portal beside it.
+pub(super) fn enter_placement() -> PanePlacement {
+    PanePlacement {
+        portal: Some(0),
+        ..PanePlacement::default()
+    }
+}
+
 type Bucket<'a> = (String, Vec<&'a AgentRow>);
 
 fn push<'a>(buckets: &mut Vec<Bucket<'a>>, key: String, a: &'a AgentRow) {
@@ -113,6 +167,15 @@ fn push<'a>(buckets: &mut Vec<Bucket<'a>>, key: String, a: &'a AgentRow) {
 pub(super) fn grouped_rows_with_depths(view: &View) -> (Vec<DisplayRow<'_>>, Vec<usize>) {
     let buckets: Vec<Bucket<'_>> = match view.agent_group {
         AgentGroup::Workspace => Vec::new(), // unreachable: the caller guards
+        // No header to fold, so exited rows stay hidden, as a fresh band hides them.
+        AgentGroup::Flat => {
+            let rows: Vec<_> = (view.layout.agents.iter())
+                .filter(|a| !a.exited)
+                .map(DisplayRow::Agent)
+                .collect();
+            let depths = vec![0; rows.len()];
+            return (rows, depths);
+        }
         AgentGroup::Team | AgentGroup::Cwd | AgentGroup::Harness => {
             let mut buckets: Vec<Bucket<'_>> = Vec::new();
             for a in &view.layout.agents {
@@ -191,6 +254,10 @@ pub(super) fn reorder_agent_rows(view: &mut View, cur: usize, delta: isize) {
     // full-screen mode, where the two catalogs diverge.
     let rows = view.display_rows();
     let name = match rows.get(cur) {
+        Some(DisplayRow::Agent(a)) if a.remote.is_some() => {
+            view.set_notice("reorder works on this machine's rows".into());
+            return;
+        }
         Some(DisplayRow::Agent(a)) => a.name.clone(),
         _ => {
             view.set_notice("shift+arrow reorders an agent row".into());

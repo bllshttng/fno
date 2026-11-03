@@ -288,7 +288,6 @@ def scrubbed_env(home: Path, stamps: dict[str, str]) -> dict[str, str]:
         "FNO_WORKER_NAME",
         "FNO_ROUTE_PROVIDER",
         "FNO_HARNESS_SESSION_ID",
-        "FNO_INBOX_ROOT",
         "FNO_BUS_DIR",
         "FNO_CONFIG",
         "FNO_STATE_DIR",

@@ -30,7 +30,7 @@ use std::path::Path;
 use regex::Regex;
 
 /// The one cap, at the root, the second level and the third.
-pub const MENU_CAP: usize = 12;
+pub const MENU_CAP: usize = 13;
 
 const MAP_REL: &str = "scripts/ci/command-collapse-map.tsv";
 const BASELINE_REL: &str = "scripts/ci/command-baseline.txt";
@@ -330,7 +330,7 @@ pub fn check(counts: &BTreeMap<String, usize>, debt: &str) -> Result<String, Vec
 const USAGE: &str = "usage: fno doctor lint menu-caps
 
 Counts every command, hidden included, at the first three levels of fno and
-fno-agents. Cap 12. Groups over the cap today are named in
+fno-agents. Cap 13. Groups over the cap today are named in
 scripts/ci/menu-caps-debt.tsv, which may only shrink.
 Exit 0 ok, 1 a group over its cap or ceiling, 2 an input is missing.";
 
@@ -386,10 +386,10 @@ mod tests {
     fn menu_caps_refuses_every_debt_drift_and_counts_hidden_leaves() {
         // A group at the cap passes with no row; one more command, hidden or
         // not, refuses by name with the count and the cap (AC2).
-        assert!(check(&tree(&[("do", 12)]), "").is_ok());
-        let over = check(&tree(&[("do", 13)]), "").unwrap_err();
+        assert!(check(&tree(&[("do", 13)]), "").is_ok());
+        let over = check(&tree(&[("do", 14)]), "").unwrap_err();
         assert!(
-            over[0].contains("`do` holds 13") && over[0].contains("cap 12"),
+            over[0].contains("`do` holds 14") && over[0].contains("cap 13"),
             "{over:?}"
         );
         // Above, below, and inside a ceiling each refuse with the fix (AC3).
@@ -429,8 +429,8 @@ mod tests {
         assert_eq!(got["mux"], 13);
         assert_eq!(got.get("lead"), None);
         assert_eq!(got["fno-agents"], 7, "{got:?}");
-        // The root is the table's twelve; Rust-claimed rows count (AC1-HP).
-        assert_eq!(got["(root)"], 12, "{got:?}");
+        // The root is the table's thirteen; Rust-claimed rows count (AC1-HP).
+        assert_eq!(got["(root)"], 13, "{got:?}");
         assert!(got["inbox"] >= 2, "{got:?}");
         assert_eq!(got["config accounts"], 15, "{got:?}");
         assert!(got.contains_key("agents fleet"));

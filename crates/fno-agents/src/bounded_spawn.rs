@@ -127,12 +127,11 @@ mod tests {
     /// loaded fleet host still turned a healthy done_probe into BLOCKED and
     /// held the stop gate. Both runners now route through the one spawner,
     /// and the last direct spawn left the file entirely: the detached
-    /// notifier moved to `operator_notice::notify_operator_with`, which is
-    /// the crate's one direct spawn - detached with null stdio and non-fatal
-    /// by design, so it cannot take the bounded transport's piped,
-    /// owns-the-output contract, and its failures have no caller to retry to.
-    /// `run_probe` and its tests now live in acceptance_evidence.rs; the guard
-    /// scans both production halves.
+    /// notifier's spawn retired with the in-process notify port, and the
+    /// notify dispatch's one `fno mux notify` seam spawn is bounded (its
+    /// failures have no caller to retry to). `run_probe` and its tests now
+    /// live in acceptance_evidence.rs; the guard scans both production
+    /// halves.
     #[test]
     fn no_unretried_spawn_outside_the_bounded_spawner() {
         fn production(source: &'static str) -> &'static str {

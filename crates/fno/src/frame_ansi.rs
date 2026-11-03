@@ -24,7 +24,7 @@ pub fn paint(frame: &Frame, top: u16, rows: u16, cols: u16) -> Vec<u8> {
     out
 }
 
-fn paint_row(out: &mut Vec<u8>, cells: &[Cell]) {
+pub(crate) fn paint_row(out: &mut Vec<u8>, cells: &[Cell]) {
     let mut style: Option<(Color, Color, u8)> = None;
     for cell in cells {
         if cell.flags & cell_flags::WIDE_SPACER != 0 {

@@ -1098,7 +1098,7 @@ impl View {
                 let label = match &card_parts {
                     Some((slug, Some(role))) => format!("{slug} \u{b7} {role}"),
                     Some((slug, None)) => slug.clone(),
-                    None => a.name.clone(),
+                    None => card_line::shown_name(a).to_string(),
                 };
                 // (US3, inline) A member with a different project or worktree
                 // path shows it inline in parens after the slug or name, only
@@ -1380,10 +1380,11 @@ impl View {
         let (fill_fg, _, _) = crate::theme::chosen_card_style(&self.theme);
         let on_chosen_fill = agent.pane_id == Some(self.layout.focus) && !agent.exited;
         // The name matters most: the node may not start before the slug's
-        // end plus one space. It cuts its front, or drops, to fit.
+        // end plus one space. It cuts its front, or drops, to fit. A slug
+        // clipped to fit is not found whole, and leaves the node no room.
         let slug = card_line::slug(agent, &self.backlog);
         let painted: String = line.iter().map(|c| c.c).collect();
-        let keep = painted.find(&slug).map_or(0, |b| {
+        let keep = painted.find(&slug).map_or(usize::MAX, |b| {
             painted[..b].chars().count() + slug.chars().count() + 1
         });
         let fitted = agent
