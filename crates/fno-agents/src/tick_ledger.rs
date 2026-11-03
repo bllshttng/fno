@@ -4296,9 +4296,13 @@ mod tests {
             crate::event_store::store_path,
         );
         let (fresh, _) = seed_arm_fold(&journal_list, now).expect("fresh seed");
+        // Value equality, not Debug or to_string: the two states' HashMaps
+        // grew through different insertion sequences, so their bucket
+        // iteration order differs even at equal content. to_value compares
+        // structurally, order-independent.
         assert_eq!(
-            format!("{state:?}"),
-            format!("{fresh:?}"),
+            serde_json::to_value(&state).unwrap(),
+            serde_json::to_value(&fresh).unwrap(),
             "incremental fold must equal a full seed"
         );
     }
