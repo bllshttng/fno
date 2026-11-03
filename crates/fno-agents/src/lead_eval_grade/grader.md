@@ -1,6 +1,6 @@
-Retro grader. You grade the retro of one lead's reign. Your working directory holds the evidence.
+Retro grader. You grade the retro of one lead's run. Your working directory holds the evidence.
 
-part1-metrics.md holds the mechanical numbers, with a table "Against the last lead". part2-timeline.md holds the mechanical timeline. part3-failures.md holds the mechanical failure tables, still marked pending. The files data/out/reader-*.md hold reports from readers. Each reader read part of the reign's digests in full. Read every report with the Read tool.
+part1-metrics.md holds the mechanical numbers, with a table "Against the last lead". part2-timeline.md holds the mechanical timeline. part3-failures.md holds the mechanical failure tables, still marked pending. The files data/out/reader-*.md hold reports from readers. Each reader read part of the run's digests in full. Read every report with the Read tool.
 
 The caller adds the fold's key numbers below. Use the reader reports as your evidence. Quote only what a reader report or a mechanical file shows. Never invent a quote, a count or a time. Cite each quote with its window and time, as the reader gave it. If the readers disagree, say so and keep both readings.
 
@@ -16,7 +16,7 @@ List the reforms. For each, give the change and the specimen that motivates it. 
 
 === part5-leadership.md ===
 
-Say how to lead the fleet, from this reign. Name the patterns to keep and the patterns to drop. Give a rule for each, in short imperative sentences. Each rule cites its specimen.
+Say how to lead the fleet, from this run. Name the patterns to keep and the patterns to drop. Give a rule for each, in short imperative sentences. Each rule cites its specimen.
 
 === PENDING-NODES.md ===
 

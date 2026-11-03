@@ -685,10 +685,10 @@ fn bound_counts<'a>(windows: impl IntoIterator<Item = &'a Window>) -> Value {
     json!({ "errors": errors, "tool_calls": tools })
 }
 
-/// Merges that landed inside a merge freeze during one reign. Reads the
+/// Merges that landed inside a merge freeze during one run. Reads the
 /// `decision_span` rows of the project journal: each `merge_freeze_set` opens
 /// an interval for its repo, closed by the next `merge_freeze_cleared` or
-/// `merge_freeze_set` for that repo (an unpaired set stays open to the reign
+/// `merge_freeze_set` for that repo (an unpaired set stays open to the run
 /// end). A `merge_landed` (row ts) or `merged_outside_fno` (`merged_at`) in
 /// the interval counts unless its PR is on that freeze's `pin_prs`. An
 /// unreadable store answers `{"unmeasured": reason}`, never an empty list.
@@ -697,13 +697,13 @@ fn freeze_merges(journal: &Path, start: &str, end: &str) -> Value {
         timestamp_epoch(start).map(|s| (s * 1000.0) as i64),
         timestamp_epoch(end).map(|s| (s * 1000.0) as i64),
     ) else {
-        return json!({"unmeasured": "the reign has no readable span"});
+        return json!({"unmeasured": "the run has no readable span"});
     };
     if !crate::event_store::store_path(journal).exists() {
         return json!({"unmeasured": "the project journal has no event store"});
     }
-    // Freezes set before the reign can still cover its merges: read every
-    // freeze row, then only the merges inside the reign.
+    // Freezes set before the run can still cover its merges: read every
+    // freeze row, then only the merges inside the run.
     let rows = match crate::event_store::query_events(
         journal,
         &crate::event_store::EventQuery::of_types(&["decision_span"]),

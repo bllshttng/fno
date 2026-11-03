@@ -13,7 +13,7 @@ const GRADER_PROMPT: &str = include_str!("grader.md");
 const DEFAULT_MODEL: &str = "opus";
 const CALL_TIMEOUT_S: u64 = 1800;
 /// Digest bytes one reader takes: about 150k tokens, which leaves room for
-/// its report inside a 200k window. A reign over the budget gets more readers.
+/// its report inside a 200k window. A run over the budget gets more readers.
 const READER_BYTE_BUDGET: u64 = 600_000;
 const SECTIONS: [&str; 4] = [
     "part3-failures.md",
@@ -145,7 +145,7 @@ fn digest_files(dir: &Path) -> Result<Vec<(PathBuf, u64)>, String> {
 }
 
 /// Contiguous groups balanced by digest bytes: two readers, more when the
-/// reign passes the per-reader budget, one for a one-window reign.
+/// run passes the per-reader budget, one for a one-window run.
 fn split_windows(files: &[(PathBuf, u64)]) -> Vec<Vec<PathBuf>> {
     let total: u64 = files.iter().map(|(_, n)| n).sum();
     let wanted = if files.len() <= 1 {
