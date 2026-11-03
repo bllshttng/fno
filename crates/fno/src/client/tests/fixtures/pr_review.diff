@@ -1,0 +1,150 @@
+diff --git a/crates/fno-agents/src/backlog/note_cli.rs b/crates/fno-agents/src/backlog/note_cli.rs
+index b931931644..cb8fd33720 100644
+--- a/crates/fno-agents/src/backlog/note_cli.rs
++++ b/crates/fno-agents/src/backlog/note_cli.rs
+@@ -437,10 +437,14 @@ fn finding_pointer_line(node_id: &str, finding_id: &str) -> String {
+     )
+ }
+ 
++/// How long a note waits on the holder notice. The wrapped mail door took 13 s
++/// against a live holder; the board's write budget is 10 s.
++const NOTICE_BOUND: std::time::Duration = std::time::Duration::from_secs(6);
++
+ /// Best-effort holder notice after a finding lands: one pointer line to the
+-/// live claim holder, injected detached through this binary's own
+-/// mail-inject lane. A miss only degrades the receipt line; the durable
+-/// record gates regardless.
++/// live claim holder through the wrapped mail door. `mail-inject` is no route
++/// here: it refuses any payload that is not a `/` or `$` command. A miss only
++/// degrades the receipt line; the durable record gates regardless.
+ pub(crate) fn notice_holder(node_id: &str, pointer: &str) -> Option<String> {
+     let (state, record) = crate::claims::status(&format!("node:{node_id}"), None);
+     if !matches!(
+@@ -451,28 +455,62 @@ pub(crate) fn notice_holder(node_id: &str, pointer: &str) -> Option<String> {
+     }
+     let record = record?;
+     let sid = record.holder.rsplit(':').next()?.to_string();
+-    let harness = record.harness.clone().unwrap_or_else(|| "claude".into());
+-    let mut child = std::process::Command::new(std::env::current_exe().ok()?)
+-        .args([
+-            "mail-inject",
+-            "--session",
+-            &sid,
+-            "--harness",
+-            &harness,
+-            "--sender",
+-            "note",
+-        ])
+-        .stdin(std::process::Stdio::piped())
+-        .stdout(std::process::Stdio::null())
+-        .stderr(std::process::Stdio::null())
+-        .spawn()
+-        .ok()?;
+-    use std::io::Write;
+-    let _ = child
+-        .stdin
+-        .take()
+-        .and_then(|mut stdin| stdin.write_all(pointer.as_bytes()).ok());
+-    Some(format!("pointer sent to {}", record.holder))
++    if crate::claims::ambient_session_candidates().contains(&sid) {
++        return Some(format!("holder {} is this session", record.holder));
++    }
++    let mut command = std::process::Command::new(std::env::current_exe().ok()?);
++    command.args(["mail", "send", "--from-name", "note", "--", &sid, pointer]);
++    Some(deliver_pointer(command, &record.holder, NOTICE_BOUND))
++}
++
++/// Run the mail send and word the receipt from its exit: sent on 0, not
++/// reached on a refusal. Past `bound` the child keeps running detached, because
++/// a slow send still lands. Stderr goes to a file, since a pipe would break the
++/// child once this process exits.
++fn deliver_pointer(
++    mut command: std::process::Command,
++    holder: &str,
++    bound: std::time::Duration,
++) -> String {
++    use std::process::Stdio;
++    let err_path = std::env::temp_dir().join(format!(
++        "fno-note-notice-{}-{:?}.err",
++        std::process::id(),
++        std::thread::current().id()
++    ));
++    let not_reached = |why: &str| format!("holder {holder} not reached here: {why}");
++    let Ok(err_file) = std::fs::File::create(&err_path) else {
++        return not_reached("could not open a stderr file");
++    };
++    command
++        .stdin(Stdio::null())
++        .stdout(Stdio::null())
++        .stderr(err_file);
++    let mut child = match command.spawn() {
++        Ok(child) => child,
++        Err(e) => return not_reached(&e.to_string()),
++    };
++    let started = std::time::Instant::now();
++    let status = loop {
++        match child.try_wait() {
++            Ok(Some(status)) => break Some(status),
++            Ok(None) if started.elapsed() < bound => {
++                std::thread::sleep(std::time::Duration::from_millis(25))
++            }
++            _ => break None,
++        }
++    };
++    let stderr = std::fs::read_to_string(&err_path).unwrap_or_default();
++    let _ = std::fs::remove_file(&err_path);
++    match status {
++        Some(status) if status.success() => format!("pointer sent to {holder}"),
++        Some(status) => {
++            // The refusal is the last line; a sender warning can precede it.
++            let why = stderr.lines().rev().find(|l| !l.trim().is_empty());
++            not_reached(why.unwrap_or(&format!("mail send exit {:?}", status.code())))
++        }
++        None => format!("pointer to {holder} still sending after {}s", bound.as_secs()),
++    }
+ }
+ 
+ /// `note comment` - the user-to-agent thread on a node. Forms:
+@@ -1275,6 +1313,42 @@ mod tests {
+         (guard, root)
+     }
+ 
++    fn sh(script: &str) -> std::process::Command {
++        let mut command = std::process::Command::new("sh");
++        command.args(["-c", script]);
++        command
++    }
++
++    #[test]
++    fn holder_receipt_reads_sent_only_on_a_zero_exit() {
++        let bound = std::time::Duration::from_secs(5);
++        assert_eq!(
++            deliver_pointer(sh("exit 0"), "target-session:abc", bound),
++            "pointer sent to target-session:abc"
++        );
++    }
++
++    #[test]
++    fn holder_receipt_names_a_refusal_and_a_slow_send() {
++        let bound = std::time::Duration::from_secs(5);
++        let refused = deliver_pointer(
++            sh("echo 'warning: sender' >&2; echo 'unknown agent' >&2; exit 16"),
++            "target-session:abc",
++            bound,
++        );
++        assert_eq!(
++            refused,
++            "holder target-session:abc not reached here: unknown agent"
++        );
++        let slow = deliver_pointer(
++            sh("sleep 3"),
++            "target-session:abc",
++            std::time::Duration::from_millis(50),
++        );
++        assert!(slow.contains("still sending"), "{slow}");
++        assert!(!slow.contains("pointer sent"), "{slow}");
++    }
++
+     #[test]
+     fn comment_thread_cli_contract() {
+         let (_lock, _root) = claims_root_pin();

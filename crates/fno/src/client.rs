@@ -8723,15 +8723,14 @@ async fn dispatch_event(
             let fresh = view
                 .yard_fold_at
                 .is_some_and(|t| t.elapsed() < YARD_CACHE_TTL);
-            if fresh {
-                view.yard_degraded = false;
-            } else {
+            view.yard_degraded = false;
+            if !fresh {
                 view.yard_fold = None;
-                view.yard_degraded = false;
                 view.yard_want = true;
             }
         }
         Event::OpenFeed => feed_view::toggle(view, sock_w).await?,
+        Event::OpenReview => backlog_board::pr_review::toggle_split(view, sock_w).await?,
         Event::FocusFeed => feed_view::focus(view, sock_w).await?,
         Event::OpenTeam => view.org.toggle(),
         Event::ToggleBell => bell::toggle(view),
