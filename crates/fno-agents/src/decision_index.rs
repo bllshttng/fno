@@ -414,12 +414,28 @@ pub fn live_laws(path: &Path) -> Result<Index, String> {
     Ok(laws_of(read_live(path)?))
 }
 
-/// The scope a row reads as: the stamp, else the pre-scope legacy value.
-/// Every row recorded before the field existed was recorded in fno.
+/// Subject prefixes whose laws bind every project: dispatch, model-tier and
+/// fleet rulings. A law with one of these subjects and no scope stamp reads
+/// `global`, and the record door stamps it so.
+const FLEET_SUBJECT_PREFIXES: [&str; 3] = ["dispatch-", "model-", "fleet-"];
+
+pub fn is_fleet_subject(subject: &str) -> bool {
+    FLEET_SUBJECT_PREFIXES
+        .iter()
+        .any(|p| subject.starts_with(p))
+}
+
+/// The scope a row reads as: the stamp, else `global` for a fleet subject,
+/// else the pre-scope legacy value. Every other row recorded before the
+/// field existed was recorded in fno.
 pub fn row_scope(row: &Value) -> &str {
-    row.get("scope")
-        .and_then(Value::as_str)
-        .unwrap_or("project:fno")
+    if let Some(stamp) = row.get("scope").and_then(Value::as_str) {
+        return stamp;
+    }
+    match row.get("subject").and_then(Value::as_str) {
+        Some(subject) if is_fleet_subject(subject) => "global",
+        _ => "project:fno",
+    }
 }
 
 /// The session-scope test: `global` always governs; a
@@ -794,6 +810,20 @@ mod scope_tests {
             assert_eq!(retain_in_scope(&mut index, project), 1, "{project:?}");
             assert_eq!(index.rows.len(), 2, "{project:?}");
         }
+    }
+
+    #[test]
+    fn an_unstamped_fleet_subject_reads_global_in_every_project() {
+        let mut dispatch = law("d-fleet001", None);
+        dispatch["subject"] = serde_json::json!("dispatch-model");
+        assert_eq!(row_scope(&dispatch), "global");
+        assert!(row_in_scope(&dispatch, "fnh"));
+        let topic = law("d-topic001", None);
+        assert_eq!(row_scope(&topic), "project:fno");
+        assert!(!row_in_scope(&topic, "fnh"));
+        let mut stamped = law("d-fleet002", Some("project:fno"));
+        stamped["subject"] = serde_json::json!("dispatch-model");
+        assert!(!row_in_scope(&stamped, "fnh"));
     }
 
     #[test]
