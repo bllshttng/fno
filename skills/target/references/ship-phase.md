@@ -47,7 +47,7 @@ A PR that touches a paint path holds for the user's look. Run the design critic 
 
 1. Shoot main and the PR head under the dark and the light theme. Save the shots in the vault `mux` folder as `<node>-*.png`.
 2. Run `fno-agents visual critique-prep <node>`. It pairs the shots and writes `<node>-critique.json` at the PR head.
-3. Run the `fno:design-critic` agent on the node. It fills the findings against `docs/architecture/mux-design-system.md`. When the harness cannot load the agent type, read `agents/design-critic.md` and do its steps inline.
+3. Run the `design-critic` skill on the node. On Claude, the `fno:design-critic` agent loads it. Codex and opencode load the skill directly, because they cannot run a plugin agent type. It fills the findings against `docs/architecture/mux-design-system.md`.
 4. Fix every `high` finding. Push, then shoot again, run prep again and run the critic again at the new head.
 5. When no `high` finding stays open, stop. The `visual_approval` gate files the look page itself and lists what the critic checked and left.
 

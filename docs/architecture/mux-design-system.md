@@ -1,6 +1,6 @@
 # The mux design system
 
-This page is the rulebook for how the mux looks. The `design-critic` agent judges paint PRs against it, and a worker reads it before a paint change. Every rule names the file and the symbol that paints it, so a reader can check the rule against the code. The rules come from the shipped code first. Some rules come from outside design guides, cut down to what a terminal can do. Those rules name their source.
+This page is the rulebook for how the mux looks. The `design-critic` skill judges paint PRs against it, and a worker reads it before a paint change. Every rule names the file and the symbol that paints it, so a reader can check the rule against the code. The rules come from the shipped code first. Some rules come from outside design guides, cut down to what a terminal can do. Those rules name their source.
 
 ## How to read this page
 
