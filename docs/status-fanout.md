@@ -74,7 +74,7 @@ The arm notices ride this sink too. `arm_watch`, the `notify_watch` board and ma
 
 The `notify_watch` lanes are opt-in. `[notify] signals` names the ones the arm samples every 300 s, for example `signals = ["main_ci", "release_run"]`. The board lanes are `operator_question`, `mergeable_pr`, `undriven_pr`, and `failed_verdict`. The CI lanes are `main_ci` and `release_run`. With the list empty, the arm does nothing. `release_run` reads the newest finished `release.yml` run of each repo. A failed run pages once and mails the live level-0 lead with the run's first `::error::` line. With no such lead, it files a `release-watch` fleet task instead. A cancelled run is not a verdict, and a passing run clears the signal. The page comes from this machine because a hosted runner cannot reach a private ntfy server.
 
-In the Rust callers `--pointer` leads the argv: `fno inbox notify --pointer P TITLE BODY`. The Python group callback refuses an option after its positionals, so the trailing form exits 2 and writes no row. `arm_watch` counts a notice sent only on exit 0. A notice that died at the gate leaves the dedupe token unwritten, so the next tick retries.
+The Python caller (`rust_binary.notify_operator`) keeps `--pointer` leading the argv: `fno inbox notify --pointer P TITLE BODY`. The Python group callback refuses an option after its positionals, so the trailing form exits 2 and writes no row. The Rust daemon hands the pointer to the dispatch owner as a value, so the argv rule is the Python door's alone. `arm_watch` counts a notice sent only on exit 0. A notice that died at the gate leaves the dedupe token unwritten, so the next tick retries.
 
 ### The ntfy recipe (self-hosted over Tailscale)
 

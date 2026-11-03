@@ -4891,6 +4891,9 @@ event_types:
         paths:
           type: array
           description: "Optional. Repo-relative globs. A live law with paths becomes a pre-tool rule on Edit and Write of a matching file, printed once per session (hooks/rules-dispatch.sh)."
+        when:
+          type: object
+          description: "Optional. When the law is on. `from` is `{kind: date, at}` or `{kind: event, node_id}` and keeps the law off until it starts; once started it stays started. `while` is a list of `{cmd}` and the law is on only while every command exits 0. `window` is `{start, end}` in HH:MM machine-local time and may wrap midnight. All three must pass. An unreadable reading keeps the last answer, and with none the law stays on."
         trace:
           type: object
           description: "Optional. The traced-decision envelope (shape: decision_span.trace). The answer row carries span_id = decision_id and parent_span_id = the question_id it answers, so one query on trace_id reads the whole chain."

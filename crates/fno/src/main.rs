@@ -170,6 +170,9 @@ enum Role {
     /// pane read-only in this terminal (run over `ssh -t`); the driver sees the
     /// watcher on the pane border and the sideline.
     MuxObserve(fno::observe::ObserveArgs),
+    /// `mux serve --link <key> [--host <host>]`: open one session live, with
+    /// input, in this terminal. `--host` dials the machine that hosts it.
+    MuxLink(fno::mux_link::LinkArgs),
     /// `mux serve --snapshot ...`: compose one frame (a staged demo fleet, or
     /// a live server through the observer attach) and write it as
     /// html, svg or png. Carries the serve tail; `client::snapshot::parse`
@@ -600,6 +603,45 @@ fn parse_observe_args(rest: &[OsString]) -> Option<fno::observe::ObserveArgs> {
     }
     args.pane = pane?;
     observe.then_some(args)
+}
+
+/// Parse `serve --link` flags into [`fno::mux_link::LinkArgs`]. The key is required;
+/// a missing value or an unknown flag is `None`, which the caller maps to usage.
+fn parse_link_args(rest: &[OsString]) -> Option<fno::mux_link::LinkArgs> {
+    let mut args = fno::mux_link::LinkArgs {
+        key: String::new(),
+        host: None,
+        session: None,
+    };
+    let mut it = rest.iter();
+    while let Some(a) = it.next() {
+        match a.to_str()? {
+            "--link" => args.key = it.next()?.to_str()?.to_string(),
+            "--host" => args.host = Some(it.next()?.to_str()?.to_string()),
+            tok @ ("--server" | "--session") => {
+                mux_cli::note_server_flag(tok);
+                args.session = Some(it.next()?.to_str()?.to_string())
+            }
+            _ => return None,
+        }
+    }
+    (!args.key.is_empty()).then_some(args)
+}
+
+/// `mux serve --link`: dial the host, be the far door, or hand a paneless row to
+/// the harness's own attach. Those last two run on the machine that hosts the row.
+fn run_link(args: fno::mux_link::LinkArgs) -> i32 {
+    const LABEL: &str = "fno mux serve --link";
+    if let Some(host) = &args.host {
+        let action = ["attach", "--dial", host.as_str()];
+        return fno_agents_exec(LABEL, &action, &[OsString::from(&args.key)]);
+    }
+    match fno::mux_link::serve(&args) {
+        fno::mux_link::Door::Exit(code) => code,
+        fno::mux_link::Door::Attach(name) => {
+            fno_agents_exec(LABEL, &["attach", "--inline"], &[OsString::from(name)])
+        }
+    }
 }
 
 /// The mail reader's lexical claim, in the shape of `agents_history::classify`:
@@ -1649,6 +1691,15 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
                     ),
                 }
             }
+            cli_args::MuxCmd::Serve(t) if t.tail.iter().any(|a| a == "--link") => {
+                match parse_link_args(&t.tail) {
+                    Some(l) => Role::MuxLink(l),
+                    None => Role::MuxUsage(
+                        "fno mux serve --link: needs <key>; optional --host <host>, --server <name>"
+                            .into(),
+                    ),
+                }
+            }
             cli_args::MuxCmd::Serve(t) if t.tail.iter().any(|a| a == "--observe") => {
                 match parse_observe_args(&t.tail) {
                     Some(o) => Role::MuxObserve(o),
@@ -1700,6 +1751,15 @@ fn main() {
     if let Some(line) = fno::command_names::root_refusal(&args) {
         eprintln!("{line}");
         std::process::exit(2);
+    }
+    // `fno mail ...` is the agents mail group at the root: rewrite it to the
+    // nested spelling so every door below sees the argv it owns.
+    let mail_at = args
+        .iter()
+        .take_while(|a| *a == "-J" || *a == "--json")
+        .count();
+    if args.get(mail_at).and_then(|a| a.to_str()) == Some("mail") {
+        args.insert(mail_at, OsString::from("agents"));
     }
     // The worktree family's door claims before any forwarding: the Python
     // mounts die with the family port, so these argv shapes must answer
@@ -2240,6 +2300,7 @@ fn main() {
         }
         Role::MuxShare(share_args) => exit_mux(fno::share::serve(share_args)),
         Role::MuxObserve(observe_args) => exit_mux(fno::observe::serve(observe_args)),
+        Role::MuxLink(link_args) => exit_mux(run_link(link_args)),
         Role::MuxWebCtl(op) => {
             let tail = op.tail();
             exit_mux(mux_cli::web_ctl::web(op, &tail, env_session.as_deref()))

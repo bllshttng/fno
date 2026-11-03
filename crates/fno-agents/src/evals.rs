@@ -106,10 +106,7 @@ pub fn history_path() -> std::path::PathBuf {
     // config.paths.evals_history, else <state>/history/evals-history.jsonl
     // (the Python leg's default carried the history/ dir).
     crate::eval_reap::eval_history_path().unwrap_or_else(|| {
-        dirs_home()
-            .join(".fno")
-            .join("history")
-            .join("evals-history.jsonl")
+        crate::state_layout::place_in(&dirs_home().join(".fno"), "history", "evals-history.jsonl")
     })
 }
 

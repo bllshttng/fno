@@ -21,13 +21,13 @@ pub(crate) fn overlay_hold_marks(rows: &mut [RegistryAgent], now_secs: u64) {
 /// wrote. A global-config `paths.state_dir` root is not mirrored here;
 /// that install degrades to no mark, never a wrong one.
 fn hold_dir() -> PathBuf {
-    if let Some(home) = std::env::var_os("FNO_HOME") {
-        return PathBuf::from(home).join("mail-hold");
-    }
-    std::env::var_os("HOME")
-        .map(|h| PathBuf::from(h).join(".fno"))
-        .unwrap_or_else(|| PathBuf::from(".fno"))
-        .join("mail-hold")
+    let root = match std::env::var_os("FNO_HOME") {
+        Some(home) => PathBuf::from(home),
+        None => std::env::var_os("HOME")
+            .map(|h| PathBuf::from(h).join(".fno"))
+            .unwrap_or_else(|| PathBuf::from(".fno")),
+    };
+    crate::state_layout::place_dir(&root, "mail-hold").unwrap_or_else(|| root.join("mail-hold"))
 }
 
 pub(crate) fn overlay_hold_marks_at(rows: &mut [RegistryAgent], hold_dir: &Path, now_secs: u64) {

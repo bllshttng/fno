@@ -143,13 +143,6 @@ pub const APPROVED_TOP_LEVEL: &[&str] = &[
     "agents", "backups", "cache", "db", "install", "logs", "mux", "spaces", "state",
 ];
 
-/// Destinations still in the table that fold into an approved category in a
-/// named later slice. The closed-set test refuses an entry the table no
-/// longer uses, so the slice that folds a folder drops its entry in the
-/// same change.
-pub const TRANSITIONAL_TOP_LEVEL: &[(&str, &str)] =
-    &[("history", "folds into db in the durable-group slice")];
-
 /// The folders a `dir` row may carry: the ruled fold set. `sessions` is
 /// absent (it parks; it does not fold) and `worktrees` is absent (the ruled
 /// relocation changes the allocation default only; live checkouts never
@@ -170,7 +163,6 @@ pub const FOLD_CANDIDATES: &[&str] = &[
     "flight",
     "handoffs",
     "history",
-    "inbox",
     "latches",
     "locks",
     "mail-escalations",
@@ -193,7 +185,8 @@ pub const FOLD_CANDIDATES: &[&str] = &[
 /// Fold candidates whose children can be held by an open flock. The mover
 /// will not fold one while a regular-file child's lock is held; the row
 /// reports pending and the next daemon-start pass retries.
-const LOCK_BEARING_FOLDERS: &[&str] = &["claim-aux", "flight", "fleet", "locks", "mail-hold"];
+const LOCK_BEARING_FOLDERS: &[&str] =
+    &["bus", "claim-aux", "flight", "fleet", "locks", "mail-hold"];
 
 /// Fold candidates that drain instead of folding: each child's absolute
 /// path is recorded elsewhere (a route-settings file is named in an agent
@@ -202,6 +195,11 @@ const LOCK_BEARING_FOLDERS: &[&str] = &["claim-aux", "flight", "fleet", "locks",
 /// at the row's destination, the 14-day prune empties the legacy folder,
 /// and this pass removes the empty shell.
 const DRAIN_ONLY_FOLDERS: &[&str] = &["route-settings"];
+
+/// Fold candidates that hold message or journal lines. A clashing child never
+/// parks here: it merges (`state_layout_merge`), and a destination that does
+/// not exist yet takes the whole folder in one rename.
+const MERGE_FOLDERS: &[&str] = &["bus", "chats", "history"];
 
 /// The anchor's file name. Frozen: the lock, its queue, the keeper socket and
 /// the note journal all derive from it, so an older binary and a newer one
@@ -695,10 +693,15 @@ fn migrate_dir(root: &Path, row: &Row, apply: bool, stamp: &str) -> Status {
             Err(e) => Status::Refused(format!("refused: {e}")),
         };
     }
+    // The folder's own name, whichever way the row points: `--reverse` swaps
+    // the ends and the same rules still apply.
+    let name = legacy
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(&row.legacy);
+    let merges = MERGE_FOLDERS.contains(&name);
     let mut held_locks: Vec<std::fs::File> = Vec::new();
-    if LOCK_BEARING_FOLDERS.contains(&row.legacy.as_str())
-        && !dir_children_lockable(&legacy, &mut held_locks)
-    {
+    if LOCK_BEARING_FOLDERS.contains(&name) && !dir_children_lockable(&legacy, &mut held_locks) {
         return Status::Pending("a child lock is held".to_string());
     }
     // A claim-aux lane dir belongs to a live waiter that polls its path, and
@@ -714,7 +717,7 @@ fn migrate_dir(root: &Path, row: &Row, apply: bool, stamp: &str) -> Status {
     if !apply {
         return Status::Pending("fold (dry run)".to_string());
     }
-    // claim-aux and locks fold whole: a directory rename is atomic, so no
+    // claim-aux, locks and the message folders fold whole: a directory rename is atomic, so no
     // waiter's ticket path (claim-aux) or held lock inode (locks) ever moves
     // mid-write - the kernel carries every child to its new name in one
     // step, and a taker that already opened the file keeps it. The emptiness
@@ -723,7 +726,7 @@ fn migrate_dir(root: &Path, row: &Row, apply: bool, stamp: &str) -> Status {
     // row for this pass with place() still answering the legacy dir. Only
     // the destination's parent is created first; the rename carries every
     // child in one step.
-    if row.legacy == "claim-aux" || row.legacy == "locks" {
+    if row.legacy == "claim-aux" || row.legacy == "locks" || merges {
         if row.legacy == "claim-aux" && !lane_dirs_empty(&legacy) {
             return Status::Pending("a waiter holds a ticket".to_string());
         }
@@ -746,6 +749,13 @@ fn migrate_dir(root: &Path, row: &Row, apply: bool, stamp: &str) -> Status {
         // is taken), so fall through to the per-child fold: its flock probe
         // covers the legacy children, and its emptied-folder removal drains
         // the residue the whole-dir rename cannot touch.
+        if merges {
+            return match crate::state_layout_merge::merge_tree(root, stamp, &legacy, &new) {
+                Ok(true) => Status::Merged,
+                Ok(false) => Status::Pending("a destination lock is held".to_string()),
+                Err(e) => Status::Refused(e),
+            };
+        }
     }
     if let Err(e) = std::fs::create_dir_all(&new) {
         return Status::Refused(format!("refused: {e}"));
@@ -1028,15 +1038,53 @@ pub fn run_at_daemon_start(home: &crate::paths::AgentsHome) {
     }
 }
 
-/// `fno-agents state migrate [--apply] [--json|-J]`: dry run by default.
-/// Resolves the state root the way every other state-root reader does.
+/// The fold run backwards for the named folders: each `dir` row's ends swap
+/// and the same mover (merge lane included) carries the folder home. Names
+/// the table does not carry as a moved `dir` row are an error, so a typo
+/// never reads as a clean rollback.
+fn migrate_reverse(root: &Path, names: &[String], apply: bool) -> Result<Receipt, String> {
+    let stamp = utc_stamp();
+    let mut receipt = Receipt::default();
+    for name in names {
+        let row = find(name)
+            .filter(|r| r.kind == Kind::Dir && r.legacy != r.new)
+            .ok_or_else(|| format!("no moved dir row named {name}"))?;
+        let swapped = Row {
+            legacy: row.new.clone(),
+            new: row.legacy.clone(),
+            ..row.clone()
+        };
+        let status = migrate_dir(root, &swapped, apply, &stamp);
+        if let Some(parent) = root.join(&swapped.legacy).parent() {
+            if parent != root && parent.parent() != Some(root) {
+                std::fs::remove_dir(parent).ok();
+            }
+        }
+        receipt.entries.push(Entry {
+            legacy: swapped.legacy,
+            status,
+        });
+    }
+    Ok(receipt)
+}
+
+/// `fno-agents state migrate [--apply] [--reverse <name>...] [--json|-J]`:
+/// dry run by default. Resolves the state root the way every other
+/// state-root reader does.
 pub fn run_migrate_cli(args: &[String]) -> i32 {
     let mut apply = false;
+    let mut reverse: Option<Vec<String>> = None;
     let json = crate::json_output::requested(args);
     for arg in args {
         match arg.as_str() {
             "--apply" => apply = true,
+            "--reverse" => reverse = Some(Vec::new()),
             other if crate::json_output::is_flag(other) => {}
+            other if reverse.is_some() && !other.starts_with('-') => {
+                if let Some(names) = reverse.as_mut() {
+                    names.push(other.to_string());
+                }
+            }
             other => {
                 eprintln!("fno-agents state migrate: unknown arg: {other}");
                 return 2;
@@ -1050,7 +1098,20 @@ pub fn run_migrate_cli(args: &[String]) -> i32 {
             .unwrap_or_default();
         home.join(".fno")
     });
-    let receipt = migrate(&root, apply);
+    let receipt = match &reverse {
+        Some(names) if names.is_empty() => {
+            eprintln!("fno-agents state migrate: --reverse needs at least one folder name");
+            return 2;
+        }
+        Some(names) => match migrate_reverse(&root, names, apply) {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("fno-agents state migrate: {e}");
+                return 2;
+            }
+        },
+        None => migrate(&root, apply),
+    };
     if json {
         let entries: Vec<String> = receipt
             .entries
@@ -1133,14 +1194,12 @@ mod tests {
     }
 
     // The closed set of top-level destinations a table row may name. The
-    // ruled categories (d-c74fda50) plus the park base; the two
-    // transitional entries retire with the slices that fold them. A new
+    // ruled categories (d-c74fda50) plus the park base. A new
     // name is a new top-level folder on every machine: it needs the review
     // a new root row gets.
     #[test]
     fn top_level_set_is_closed() {
         let rows = parse_table(LAYOUT_TSV).expect("shipped table must parse");
-        let transitional: Vec<&str> = TRANSITIONAL_TOP_LEVEL.iter().map(|(n, _)| *n).collect();
         for row in &rows {
             if row.kind == Kind::Park {
                 assert_eq!(row.new, "-", "park row {} has no destination", row.legacy);
@@ -1166,16 +1225,9 @@ mod tests {
                 row.legacy
             );
             assert!(
-                APPROVED_TOP_LEVEL.contains(&first) || transitional.contains(&first),
+                APPROVED_TOP_LEVEL.contains(&first),
                 "row {} names top-level {first} outside the ruled categories",
                 row.legacy
-            );
-        }
-        for (name, why) in TRANSITIONAL_TOP_LEVEL {
-            assert!(
-                rows.iter()
-                    .any(|r| r.kind != Kind::Park && r.new.starts_with(&format!("{name}/"))),
-                "transitional top-level {name} is unused ({why}); fold it and drop the entry"
             );
         }
         for name in FOLD_CANDIDATES {
@@ -2124,6 +2176,116 @@ mod tests {
         assert!(root.join("installed-rev").exists(), "legacy untouched");
         clean(&root);
     }
+    fn lines(p: &Path) -> Vec<String> {
+        let mut v: Vec<String> = std::fs::read_to_string(p)
+            .unwrap()
+            .lines()
+            .map(str::to_string)
+            .collect();
+        v.sort();
+        v
+    }
+
+    #[test]
+    fn a_stale_writer_s_bus_and_chat_lines_merge_and_nothing_parks() {
+        let root = tmp_root("mailmerge");
+        let write = |rel: &str, body: &str| {
+            let p = root.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, body).unwrap();
+        };
+        write("db/mail/bus/messages.jsonl", "a\nb\n");
+        write("bus/messages.jsonl", "b\nc\n");
+        write("db/mail/chats/chat-1/messages.jsonl", "x\n");
+        write("chats/chat-1/messages.jsonl", "x\ny\n");
+        write("chats/chat-2/messages.jsonl", "z\n");
+        let table =
+            parse_table("bus\tdb/mail/bus\tdir\tdaemon\nchats\tdb/mail/chats\tdir\tdaemon\n")
+                .unwrap();
+        let out = migrate_rows(&root, &table, true, "test");
+        assert!(out.iter().all(|e| !e.status.is_pending()), "{out:?}");
+        assert_eq!(
+            lines(&root.join("db/mail/bus/messages.jsonl")),
+            ["a", "b", "c"]
+        );
+        assert_eq!(
+            lines(&root.join("db/mail/chats/chat-1/messages.jsonl")),
+            ["x", "y"]
+        );
+        assert_eq!(
+            lines(&root.join("db/mail/chats/chat-2/messages.jsonl")),
+            ["z"]
+        );
+        assert!(!root.join("bus").exists() && !root.join("chats").exists());
+        assert!(!root.join("backups").exists(), "a message log never parks");
+        clean(&root);
+    }
+
+    #[test]
+    fn history_file_rows_and_the_dir_row_fold_in_one_pass() {
+        let root = tmp_root("histpass");
+        std::fs::create_dir_all(root.join("history")).unwrap();
+        std::fs::create_dir_all(root.join("db/history")).unwrap();
+        std::fs::write(root.join("health-history.jsonl"), "1\n").unwrap();
+        std::fs::write(root.join("history/health-history.jsonl"), "2\n").unwrap();
+        std::fs::write(root.join("db/history/health-history.jsonl"), "0\n").unwrap();
+        let table = parse_table(
+            "health-history.jsonl\tdb/history/health-history.jsonl\tappend\tdaemon\nhistory\tdb/history\tdir\tdaemon\n",
+        )
+        .unwrap();
+        migrate_rows(&root, &table, true, "test");
+        assert_eq!(
+            lines(&root.join("db/history/health-history.jsonl")),
+            ["0", "1", "2"]
+        );
+        assert!(!root.join("history").exists());
+        clean(&root);
+    }
+
+    #[test]
+    fn a_held_bus_lock_defers_the_fold_and_moves_nothing() {
+        let root = tmp_root("buslock");
+        std::fs::create_dir_all(root.join("bus")).unwrap();
+        std::fs::write(root.join("bus/messages.jsonl"), "a\n").unwrap();
+        let lock = std::fs::File::create(root.join("bus/messages.jsonl.lock")).unwrap();
+        lock.lock().unwrap();
+        let table = parse_table("bus\tdb/mail/bus\tdir\tdaemon\n").unwrap();
+        let out = migrate_rows(&root, &table, true, "test");
+        assert!(out[0].status.is_pending(), "{:?}", out[0].status);
+        assert!(root.join("bus/messages.jsonl").exists());
+        assert!(!root.join("db/mail/bus").exists());
+        clean(&root);
+    }
+
+    #[test]
+    fn reverse_carries_a_folded_folder_home_and_refuses_an_unknown_name() {
+        let root = tmp_root("reverse");
+        std::fs::create_dir_all(root.join("db/mail/bus")).unwrap();
+        std::fs::write(root.join("db/mail/bus/messages.jsonl"), "a\n").unwrap();
+        let out = migrate_reverse(&root, &["bus".to_string()], true).unwrap();
+        assert!(!out.entries[0].status.is_pending());
+        assert_eq!(lines(&root.join("bus/messages.jsonl")), ["a"]);
+        assert!(!root.join("db/mail").exists());
+        assert!(migrate_reverse(&root, &["nope".to_string()], true).is_err());
+        clean(&root);
+    }
+
+    #[test]
+    fn the_dead_inbox_folder_parks_whole() {
+        let root = tmp_root("inboxpark");
+        std::fs::create_dir_all(root.join("inbox/h1")).unwrap();
+        std::fs::write(root.join("inbox/h1/m.md"), "old").unwrap();
+        migrate(&root, true);
+        assert!(!root.join("inbox").exists());
+        let parked: Vec<_> = std::fs::read_dir(root.join("backups/state-root-migration"))
+            .unwrap()
+            .flatten()
+            .filter(|stamp| stamp.path().join("inbox/h1/m.md").exists())
+            .collect();
+        assert_eq!(parked.len(), 1);
+        clean(&root);
+    }
+
     #[test]
     fn vendored_table_matches_the_repo_copy() {
         let repo = include_str!("../../../docs/state-root-layout.tsv");

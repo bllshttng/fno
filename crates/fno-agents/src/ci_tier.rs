@@ -85,12 +85,21 @@ pub(crate) fn head_of(runs: &[Value]) -> Head {
     head
 }
 
-/// The tier for one pass over ranked PRs and their heads.
-pub(crate) fn plan(ranked: &[(Rank, Head)], slots: usize) -> Plan {
+/// The tier for one pass over ranked PRs and their heads. `approved` names
+/// the PRs whose visual approval is pinned to the head under test: their CI
+/// cannot restart by a push, so the tier never cancels one and reruns its
+/// cancelled runs at once, outside the slot count.
+pub(crate) fn plan(ranked: &[(Rank, Head)], slots: usize, approved: &HashSet<u64>) -> Plan {
     let mut plan = Plan::default();
     for ((.., pr), head) in ranked {
         let idle = head.in_flight.is_empty();
         if idle && (head.cancelled.is_empty() || head.failed) {
+            continue;
+        }
+        if approved.contains(pr) {
+            if idle {
+                plan.rerun.push((*pr, head.cancelled.clone()));
+            }
             continue;
         }
         if plan.active.len() < slots {
@@ -151,7 +160,7 @@ fn node_rank(pull: &Value, entries: &[Value]) -> (bool, u8) {
     )
 }
 
-type Repo = (Vec<(Rank, Head)>, Vec<Value>, usize);
+type Repo = (Vec<(Rank, Head)>, Vec<Value>, usize, Vec<(u64, String)>);
 
 /// The open PRs, ranked, each with its head's runs; the same order as
 /// `{pr, branch}` rows; and the gate runs in flight.
@@ -170,17 +179,18 @@ fn read_repo(root: &Path) -> Result<Repo, String> {
         }
     }
     prs.sort();
-    let (mut ranked, mut order) = (Vec::new(), Vec::new());
+    let (mut ranked, mut order, mut shas) = (Vec::new(), Vec::new(), Vec::new());
     for (pr, sha, branch) in prs {
         order.push(json!({"pr": pr.3, "branch": branch}));
         ranked.push((pr, head_of(&runs_of(root, &format!("head_sha={sha}"))?)));
+        shas.push((pr.3, sha));
     }
     let mut gates = HashSet::new();
     for status in ["queued", "in_progress"] {
         let runs = runs_of(root, &format!("status={status}"))?;
         gates.extend(runs.iter().filter(|r| is_gate(r)).map(id));
     }
-    Ok((ranked, order, gates.len()))
+    Ok((ranked, order, gates.len(), shas))
 }
 
 /// POST `action` on each run; the journal records what gh refused.
@@ -394,8 +404,29 @@ fn wake_held(path: &Path, slug: &str, pass_row: &Value, now_ms: i64) -> Result<(
     Ok(())
 }
 
+/// The PRs whose head carries a pinned visual approval. Only a head with
+/// runs to act on reads the gate, and a head with no paint path costs one
+/// cached files read.
+fn approved_heads(
+    root: &Path,
+    slug: &str,
+    ranked: &[(Rank, Head)],
+    shas: &[(u64, String)],
+) -> HashSet<u64> {
+    static PAINT: std::sync::OnceLock<crate::look_hold::PaintCache> = std::sync::OnceLock::new();
+    let paint = PAINT.get_or_init(Default::default);
+    let open = |head: &Head| !head.in_flight.is_empty() || !head.cancelled.is_empty();
+    ranked
+        .iter()
+        .zip(shas)
+        .filter(|((_, head), _)| open(head))
+        .filter(|(_, (pr, sha))| crate::look_hold::approved_at_head(paint, root, slug, *pr, sha))
+        .map(|(_, (pr, _))| *pr)
+        .collect()
+}
+
 fn pass_repo(root: &Path, slug: &str, path: &Path) -> Result<(), String> {
-    let (mut ranked, order, gates) = read_repo(root)?;
+    let (mut ranked, order, gates, shas) = read_repo(root)?;
     let now = crate::ci_cadence::millis_now();
     let passes = rows_of(path, PASS_EVENT, slug, now - DAY_MS)?;
     let ours = ours(&passes);
@@ -405,7 +436,8 @@ fn pass_repo(root: &Path, slug: &str, path: &Path) -> Result<(), String> {
     }
     // Each merge-queue-gate run in flight holds one slot.
     let slots = SIZE.saturating_sub(gates);
-    let plan = plan(&ranked, slots);
+    let approved = approved_heads(root, slug, &ranked, &shas);
+    let plan = plan(&ranked, slots, &approved);
     let cancelled = act(root, &plan.cancel, "cancel");
     // A full rerun: a cancelled run has no failed job for rerun-failed-jobs.
     let rerun = act(root, &plan.rerun, "rerun");
@@ -524,12 +556,29 @@ mod tests {
             (pr(6, 2), head(&[60], &[], false, 1, 5)),
             (pr(7, 3), head(&[], &[90], false, 0, 1)),
         ];
-        let plan = plan(&ranked, 2);
+        let plan = plan(&ranked, 2, &HashSet::new());
         // Green 1 and idle red 4 hold no slot.
         assert_eq!(plan.active, vec![2, 3]);
         assert_eq!(plan.rerun, vec![(3, vec![70])]);
         // 5 has 80 percent passed; 7 waits with nothing to cancel.
         assert_eq!(plan.cancel, vec![(6, vec![60])]);
+    }
+
+    #[test]
+    fn an_approved_head_keeps_its_run_and_reruns_outside_the_slot_count() {
+        let ranked = vec![
+            (pr(1, 0), head(&[10], &[], false, 0, 3)),
+            (pr(2, 1), head(&[20], &[], false, 0, 3)),
+            (pr(3, 2), head(&[], &[30], false, 0, 3)),
+            (pr(4, 2), head(&[40], &[], false, 0, 3)),
+        ];
+        let approved: HashSet<u64> = [2, 3].into();
+        let plan = plan(&ranked, 1, &approved);
+        // 1 takes the one slot. 2 is approved so it keeps its run, 3 is
+        // approved so its cancelled run reruns, and only 4 is cancelled.
+        assert_eq!(plan.active, vec![1]);
+        assert_eq!(plan.cancel, vec![(4, vec![40])]);
+        assert_eq!(plan.rerun, vec![(3, vec![30])]);
     }
 
     #[test]

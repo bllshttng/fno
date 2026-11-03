@@ -677,7 +677,8 @@ impl super::Core {
             },
         };
         eff.portal = explicit.then_some(portal_idx);
-        self.reach_portal(client_id, view, vp, portal_idx, name, &eff, explicit);
+        let key = super::portal_reach::ReachKey::Row(name);
+        self.reach_portal(client_id, view, vp, portal_idx, key, &eff, explicit);
     }
 }
 

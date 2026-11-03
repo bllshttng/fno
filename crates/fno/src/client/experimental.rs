@@ -9,6 +9,7 @@ use super::*;
 pub(crate) enum Flag {
     OrgBoard,
     PaneShare,
+    OtherMachines,
 }
 
 /// The toggle states the settings tab and the menu's share rows render.
@@ -16,17 +17,27 @@ pub(crate) enum Flag {
 pub(crate) struct Flags {
     pub(crate) org_board: bool,
     pub(crate) pane_share: bool,
+    pub(crate) other_machines: bool,
     /// Knocks waiting on the running share; `None` while no share runs.
     pub(crate) share: Option<usize>,
 }
 
 impl Flag {
-    pub(crate) const ALL: [Flag; 2] = [Flag::OrgBoard, Flag::PaneShare];
+    pub(crate) const ALL: [Flag; 3] = [Flag::OrgBoard, Flag::PaneShare, Flag::OtherMachines];
 
     pub(crate) fn label(self) -> &'static str {
         match self {
             Flag::OrgBoard => "fleet org board",
             Flag::PaneShare => "pane share",
+            Flag::OtherMachines => "other machines",
+        }
+    }
+
+    /// What turning the flag on costs, beside its label.
+    pub(crate) fn hint(self) -> &'static str {
+        match self {
+            Flag::OtherMachines => "fleet map read every 15s",
+            _ => "",
         }
     }
 
@@ -34,6 +45,7 @@ impl Flag {
         match self {
             Flag::OrgBoard => crate::view_store::EXPERIMENTAL_ORG_BOARD,
             Flag::PaneShare => crate::view_store::EXPERIMENTAL_PANE_SHARE,
+            Flag::OtherMachines => crate::view_store::EXPERIMENTAL_OTHER_MACHINES,
         }
     }
 
@@ -41,6 +53,7 @@ impl Flag {
         match self {
             Flag::OrgBoard => flags.org_board,
             Flag::PaneShare => flags.pane_share,
+            Flag::OtherMachines => flags.other_machines,
         }
     }
 }
@@ -49,6 +62,7 @@ pub(crate) fn flags(view: &View) -> Flags {
     Flags {
         org_board: view.experimental_org_board,
         pane_share: view.experimental_pane_share,
+        other_machines: view.machine_tree.on,
         share: view.share.as_ref().map(|s| s.waiting()),
     }
 }
@@ -72,6 +86,7 @@ pub(crate) fn toggle(view: &mut View, flag: Flag) {
                 view.share = None;
             }
         }
+        Flag::OtherMachines => super::machine_tree::set_on(view, on),
     }
     crate::view_store::save_experimental(flag.name(), on);
     let word = if on { "on" } else { "off" };
