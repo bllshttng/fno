@@ -1,8 +1,8 @@
 #!/bin/bash
 # Set up an Intel Mac to run the harness-fit study (Amendment 6).
 #
-#   git clone https://github.com/bllshttng/fno && cd footnote
-#   git checkout feature/x-272d-harness-fit-wave
+#   git clone https://github.com/bllshttng/fno && cd fno
+#   git checkout main
 #   bash evals/harness-fit/setup-imac.sh            # install and check
 #   bash evals/harness-fit/setup-imac.sh --check    # check only, change nothing
 #
@@ -39,7 +39,7 @@ ok "$(sysctl -n hw.model), $cores physical cores, $mem_gib GiB; Run 0 runs $conc
 
 echo "== repo"
 branch="$(git -C "$REPO" rev-parse --abbrev-ref HEAD)"
-if [ "$branch" = feature/x-272d-harness-fit-wave ]; then ok "branch $branch"; else bad "on branch $branch; check out feature/x-272d-harness-fit-wave"; fi
+if [ "$branch" = main ]; then ok "branch $branch"; else bad "on branch $branch; check out main"; fi
 if [ "$(git -C "$REPO" rev-parse --is-shallow-repository)" = true ]; then
   run git -C "$REPO" fetch --unshallow origin  # the replay bank checks out old merge commits
 fi
@@ -128,7 +128,7 @@ if [ -f "$WS/run1-config.toml" ]; then ok "run1-config.toml"; else bad "run1-con
 
 echo "== footnote binary (Run 1, Amendment 14)"
 # Pinned fnh sha; see manifest.json amendment_14. FNH_SHA overrides for a re-pin.
-FNH_SHA="${FNH_SHA:-c4655c3f9b93d88a58070bff1fd6203b2e08e0a0}"
+FNH_SHA="${FNH_SHA:-a307cc92b2fec84c485e2101ae41fb0e7e30b25a}"
 if [ "$CHECK" = 1 ]; then
   if [ -x "$WS/bin/footnote" ]; then ok "footnote at $WS/bin/footnote"; else bad "footnote is not installed at $WS/bin/footnote"; fi
 else
