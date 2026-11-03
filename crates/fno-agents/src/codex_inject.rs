@@ -1348,8 +1348,8 @@ const ROLLOUT_CONFIRM_BUDGET: Duration = Duration::from_secs(10);
 pub async fn deliver_state_via_codex_daemon(
     thread_id: &str,
     text: &str,
-) -> crate::mail_delivery_state::DeliveryState {
-    use crate::mail_delivery_state::{DeliveryState, Parked};
+) -> crate::mail::state::DeliveryState {
+    use crate::mail::state::{DeliveryState, Parked};
     let rollout = crate::codex_store::codex_rollout_path(None, thread_id);
     let baseline = rollout
         .as_ref()

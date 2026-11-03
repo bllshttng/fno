@@ -831,7 +831,7 @@ fn record_raw(
         obj.insert("meta".to_string(), Value::Object(meta));
     }
     obj.insert("body".to_string(), json!(stripped));
-    let live = crate::chats::bus_append_live_path();
+    let live = crate::mail_paths::live_bus_log();
     let chats_dir = crate::chats::chats_dir();
     if let Err(exc) = crate::announce::append_line_open(&live, &Value::Object(obj), &chats_dir) {
         eprintln!("delivery succeeded; outbox record failed; do not retry: {exc}");

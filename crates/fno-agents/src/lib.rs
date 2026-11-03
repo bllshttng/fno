@@ -35,7 +35,7 @@
 //! - [`provider`]: [`provider::Provider`] + [`provider::ProviderWithPty`] traits
 //!   (LD8) and the three impls ([`provider::ClaudeProvider`] shellout,
 //!   [`provider::CodexProvider`] / [`provider::GeminiProvider`] PTY-managed).
-//! - [`envelope`]: [`envelope::Envelope`] structural anti-injection wrapper (LD15).
+//! - [`mail::frame`]: [`mail::frame::Envelope`] structural anti-injection wrapper (LD15).
 //! - [`screen`]: the terminal-grid construction behind [`readiness::ScreenView`]
 //!   (the per-CLI [`readiness::ReadinessDetector`] impls now live in
 //!   [`readiness`]).
@@ -193,7 +193,6 @@ pub mod duration;
 pub mod effect_gate;
 pub mod effect_map;
 pub mod effort_surface;
-pub mod envelope;
 pub mod escalation;
 pub mod eval_attempt;
 pub mod eval_events;
@@ -361,17 +360,18 @@ pub mod machine_load;
 pub mod machine_mail;
 pub mod machine_sample;
 pub mod machine_watch;
+pub mod mail;
 pub mod mail_arm;
 pub mod mail_backfill;
 pub mod mail_bus;
 pub mod mail_cli;
 pub mod mail_control_drain;
-pub mod mail_delivery_state;
 pub mod mail_envelope;
 pub mod mail_header;
 pub mod mail_hold;
 pub mod mail_inject;
 pub mod mail_notify_self;
+pub mod mail_paths;
 pub mod mail_receipt;
 pub mod mail_remote;
 pub mod mail_teach;

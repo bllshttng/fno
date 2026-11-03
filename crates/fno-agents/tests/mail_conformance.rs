@@ -1,29 +1,23 @@
 //! parity-stage: characterization
 //! parity-oracle: fno.bus.log.iter_messages
 //!
-//! Characterization harness for the bus log's native read door
-//! (`chats bus-read`): the Python read leg (bus/log.py's iter_messages, the
-//! cursor scan in bus/cursor.py) is deleted in the same change, and these
-//! goldens freeze its contract. The scan semantics (cursor walk, the
-//! deliverability filter, the withdrawal and hosted-twin supersession, one
-//! row per id) were already native in mail_control_drain::unread_messages;
-//! this door exposes them, and the rows/sets/cursor modes cover
-//! iter_messages, the id sets and the cursor read.
+//! The mail conformance suite: what any implementation of the mail bus must
+//! do, written against the public `mail::` API and the bus-read door. The
+//! contract lives in `src/mail/SPEC.md`; each test names the section it pins.
 //!
-//! Sanctioned divergences, uncharacterized by the goldens: the oracle's
-//! `str()` coercion of odd field types (a numeric ts, a null thread) has no
-//! golden, so the door answers with the row as parsed; a row whose required
-//! id/from/to/kind is present but non-string skips as malformed. The door
-//! sorts the sets answer for a stable contract where the oracle returned a
-//! set; consumers test membership, not order. The door's warnings print to
-//! its own stderr, which the Python door transport captures and surfaces
-//! only on failure, where the oracle printed them to the caller's terminal;
-//! the binary's direct surfaces still see them.
+//! The door cases (`door_reads_match_goldens`, the two `stage_mints_*` tests)
+//! are the characterization the Python read leg left behind: its cursor walk,
+//! deliverability filter, withdrawal and hosted-twin supersession, and one
+//! row per id. Sanctioned divergences, uncharacterized by the goldens: the
+//! oracle's `str()` coercion of odd field types (a numeric ts, a null thread)
+//! has no golden, so the door answers with the row as parsed; a row whose
+//! required id/from/to/kind is present but non-string skips as malformed. The
+//! door sorts the sets answer for a stable contract where the oracle returned
+//! a set; consumers test membership, not order.
 //!
-//! Every case runs the client binary on a fresh temp root. The fixture ids,
-//! bodies and timestamps are fixed strings, so the output carries no clock
-//! or path. The door runs with no --bus, so FNO_BUS_DIR rules the path
-//! exactly as it rules the Python tests.
+//! Every door case runs the client binary on a fresh temp root. The fixture
+//! ids, bodies and timestamps are fixed strings, so the output carries no
+//! clock or path. The door runs with no --bus, so FNO_BUS_DIR rules the path.
 
 mod common;
 
@@ -225,7 +219,7 @@ const CASES: &[Case] = &[
 ];
 
 #[test]
-fn bus_read_matches_goldens() {
+fn door_reads_match_goldens() {
     for case in CASES {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
@@ -235,7 +229,7 @@ fn bus_read_matches_goldens() {
             exit: Some(exit),
             streams: vec![stdout, filter_stderr(&stderr)],
         };
-        assert_golden("bus_read", case.label, &golden, None);
+        assert_golden("mail_conformance", case.label, &golden, None);
     }
 }
 
@@ -369,4 +363,178 @@ fn read_rows(root: &Path) -> Vec<serde_json::Value> {
         .map(serde_json::from_str)
         .collect::<Result<Vec<_>, _>>()
         .unwrap()
+}
+
+// ---------------------------------------------------------------------------
+// The public mail:: API (SPEC.md sections: envelope, threads, addresses,
+// states, log, lanes)
+// ---------------------------------------------------------------------------
+
+use fno_agents::mail::address::Address;
+use fno_agents::mail::envelope::{is_readable, tag, thread_root, Envelope, ENVELOPE_VERSION};
+use fno_agents::mail::lane::{LaneKind, Target, LADDER};
+use fno_agents::mail::log::{read_bus_segments_reported, resolve_log_path};
+use fno_agents::mail::state::{newest_state, DeliveryState};
+use serde_json::json;
+
+/// Envelope: field order is byte order, an empty tag is absent, `v` leads.
+#[test]
+fn envelope_bytes_follow_the_field_order() {
+    let mut env = Envelope::new(
+        "fmail-aaaaaaaaaaaa",
+        "2026-11-03T10:00:00Z",
+        "fmail-aaaaaaaaaaaa",
+        "lead",
+        "worker",
+        "send",
+        "hello",
+    );
+    env.from_harness = tag(Some("claude"));
+    env.in_reply_to = tag(Some(""));
+    env.subject = tag(Some("S"));
+    env.word_count = Some(1);
+    env.meta.insert("owner".into(), json!("lead"));
+    assert_eq!(ENVELOPE_VERSION, 1);
+    assert_eq!(
+        serde_json::to_string(&env.into_value()).unwrap(),
+        r#"{"v":1,"id":"fmail-aaaaaaaaaaaa","ts":"2026-11-03T10:00:00Z","thread":"fmail-aaaaaaaaaaaa","from":"lead","to":"worker","kind":"send","from_harness":"claude","subject":"S","word_count":1,"meta":{"owner":"lead"},"body":"hello"}"#
+    );
+}
+
+/// Envelope and log: a row with no `v` reads as 1; a newer `v` and a
+/// malformed line each skip with a warning that names the segment and line.
+#[test]
+fn the_reader_skips_what_it_cannot_read_and_names_where() {
+    assert!(is_readable(&json!({"id": "a"})));
+    assert!(is_readable(&json!({"v": 1})));
+    assert!(!is_readable(&json!({"v": 2})));
+    let dir = tempfile::tempdir().unwrap();
+    let live = dir.path().join("messages.jsonl");
+    std::fs::write(
+        &live,
+        "{\"id\":\"a\",\"v\":1}\nnot json\n{\"id\":\"b\",\"v\":2}\n{\"id\":\"c\"}\n",
+    )
+    .unwrap();
+    let (rows, warnings) = read_bus_segments_reported(&live);
+    let ids: Vec<&str> = rows.iter().map(|r| r.row["id"].as_str().unwrap()).collect();
+    assert_eq!(ids, ["a", "c"]);
+    assert_eq!(rows[1].line, 4);
+    assert_eq!(
+        warnings,
+        [
+            "bus log: skipping malformed line messages.jsonl:2 (JSONDecodeError)",
+            "bus log: skipping row messages.jsonl:3 (v=2 is newer than supported v=1)",
+        ]
+    );
+    // The ladder: FNO_BUS_DIR, then FNO_INBOX_ROOT/.bus, then config, then the root.
+    let root = std::path::Path::new("/r");
+    let cfg = std::path::Path::new("/cfg");
+    assert_eq!(
+        resolve_log_path(root, Some("/e"), Some("/i"), Some(cfg)),
+        std::path::PathBuf::from("/e/messages.jsonl")
+    );
+    assert_eq!(
+        resolve_log_path(root, Some(""), Some("/i"), Some(cfg)),
+        std::path::PathBuf::from("/i/.bus/messages.jsonl")
+    );
+    assert_eq!(
+        resolve_log_path(root, None, None, Some(cfg)),
+        std::path::PathBuf::from("/cfg/messages.jsonl")
+    );
+    assert_eq!(
+        resolve_log_path(root, None, None, None),
+        std::path::PathBuf::from("/r/bus/messages.jsonl")
+    );
+}
+
+/// Threads: the root is one level. A reply to a reply carries the same root.
+#[test]
+fn a_reply_to_a_reply_keeps_the_first_root() {
+    let a = "fmail-aaaaaaaaaaaa";
+    let b_thread = thread_root(None, a);
+    assert_eq!(b_thread, a);
+    let c_thread = thread_root(Some(&b_thread), "fmail-bbbbbbbbbbbb");
+    assert_eq!(c_thread, a);
+}
+
+/// Addresses: a handle, `name@host` with the host normalized, and two `@` refuse.
+#[test]
+fn address_forms_parse_to_the_table() {
+    assert_eq!(
+        Address::parse_target("quill").unwrap(),
+        Address::Handle("quill".into())
+    );
+    assert_eq!(
+        Address::parse_target("quill@iMac2D2.local").unwrap(),
+        Address::Remote {
+            name: "quill".into(),
+            host: "imac2d2".into()
+        }
+    );
+    let err = Address::parse_target("a@b@c").unwrap_err();
+    assert!(err.contains("the form is <name>@<host>, one @"), "{err}");
+}
+
+/// States: an acceptance is never lowered; with no state row a legacy
+/// `delivery` field and a `landed` row each imply one.
+#[test]
+fn the_state_fold_never_lowers_an_acceptance() {
+    let msg = json!({"id": "m1", "kind": "send", "delivery": "typed"});
+    assert_eq!(newest_state(&[msg.clone()], "m1"), DeliveryState::Injected);
+    let state = |s: &DeliveryState| {
+        let mut meta = s.to_json();
+        meta["of"] = json!("m1");
+        json!({"id": "s", "kind": "state", "meta": meta})
+    };
+    let accepted = DeliveryState::accepted(false, Default::default());
+    let rows = vec![
+        msg,
+        state(&accepted),
+        state(&DeliveryState::failed("io-error")),
+    ];
+    assert_eq!(newest_state(&rows, "m1"), accepted);
+    assert_eq!(
+        newest_state(&[json!({"id": "m2", "kind": "send"})], "m2"),
+        DeliveryState::Queued
+    );
+}
+
+/// Lanes: the first lane in the ladder that serves the target carries the send.
+#[test]
+fn the_lane_ladder_picks_one_lane_in_order() {
+    let pick = |t: &Target| LADDER.iter().copied().find(|k| k.applies(t));
+    let base = Target {
+        harness: "claude".into(),
+        session_id: Some("s1".into()),
+        ..Target::default()
+    };
+    assert_eq!(pick(&base), Some(LaneKind::ClaudeSwitchboard));
+    let pane = Target {
+        has_mux: true,
+        codex_thread: true,
+        ..base.clone()
+    };
+    assert_eq!(pick(&pane), Some(LaneKind::Pane));
+    let codex = Target {
+        harness: "codex".into(),
+        codex_thread: true,
+        ..base.clone()
+    };
+    assert_eq!(pick(&codex), Some(LaneKind::CodexThread));
+    let keeper = Target {
+        keeper_thread: true,
+        ..base.clone()
+    };
+    assert_eq!(pick(&keeper), Some(LaneKind::Keeper));
+    // A keeper row with no session id falls through to the harness lanes.
+    let keeper_no_session = Target {
+        session_id: None,
+        ..keeper
+    };
+    assert_eq!(pick(&keeper_no_session), Some(LaneKind::ClaudeSwitchboard));
+    let acp = Target {
+        harness: "gemini".into(),
+        ..base
+    };
+    assert_eq!(pick(&acp), Some(LaneKind::DaemonDeliver));
 }

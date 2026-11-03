@@ -1227,7 +1227,7 @@ pub(crate) fn sample_pass(dir: &Path, budget_mib: u64, rows: usize) -> FoldRecei
         cache: dir.join("cursors.json"),
         journal: dir.join("events.jsonl"),
         sources: all_sources(),
-        bus: BusIndex::load(&crate::intel::bus_log_path(&fno_dir)),
+        bus: BusIndex::load(&crate::mail_paths::bus_log_path(&fno_dir)),
         witness: SubmitIndex::load(&home.events_jsonl()),
         detect: load_detect_facts(&home),
         now_epoch: chrono::Utc::now().timestamp().max(0) as u64,
@@ -1248,7 +1248,7 @@ fn run_pass(home: &AgentsHome) -> Option<FoldReceipt> {
         cache: cache_path(&fno_dir),
         journal,
         sources: all_sources(),
-        bus: BusIndex::load(&crate::intel::bus_log_path(&fno_dir)),
+        bus: BusIndex::load(&crate::mail_paths::bus_log_path(&fno_dir)),
         witness: SubmitIndex::load(&home.events_jsonl()),
         detect: load_detect_facts(home),
         now_epoch: chrono::Utc::now().timestamp().max(0) as u64,
@@ -1269,7 +1269,7 @@ fn run_outcome_pass(home: &AgentsHome) {
     let graph = crate::backlog::settings::graph_path();
     let rows = crate::graph_store::read_rows(&graph).unwrap_or_default();
     let merges = crate::correction_outcome::node_merges(&rows);
-    let bus = BusIndex::load(&crate::intel::bus_log_path(fno_dir));
+    let bus = BusIndex::load(&crate::mail_paths::bus_log_path(fno_dir));
     let now = chrono::Utc::now().timestamp();
     if let Err(error) = crate::correction_outcome::outcome_pass(&journal, &bus, &merges, now) {
         eprintln!("correction outcome: append failed: {error}");
