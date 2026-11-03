@@ -742,7 +742,7 @@ pub(crate) fn gate_main_summary(history: &str, now: DateTime<Utc>) -> Value {
     let rows = read_rows(history, None, None);
     let graded: Vec<&Row> = rows
         .iter()
-        .filter(|r| r.raw_str("status") == Some("graded"))
+        .filter(|r| is_scored(r))
         .filter(|r| {
             r.experiment_id
                 .as_deref()
