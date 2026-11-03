@@ -218,7 +218,7 @@ fno agents spawn --once -t 300 --name "peer-$TARGET" "$(cat "$BRIEF")"
 
 ### 3b. GENERATE (routed claude -> GLM) - the Rust spawn door on the zai route
 
-For a `config.review.peers` entry `{provider: claude, model: "<rprov>,<rmodel>"}` (e.g. `zai,glm-5.3`), the review runs through `fno agents spawn --once` on the explicit route - the same door every routed worker uses. The route's env is resolved by `crates/fno-agents/src/provider_route.rs` from the machine's own accounts, and the credential scrub is `crates/fno-agents/src/model_env_scrub.rs` (the retired `harnesses/claude.py` twin); nothing is hand-rolled here.
+For a `config.review.peers` entry `{provider: claude, model: "<rprov>,<rmodel>"}` (e.g. `zai,glm-5.3`), the review runs through `fno agents spawn --once` on the explicit route - the same door every routed worker uses. The route's env is resolved by `crates/fno-agents/src/provider_route.rs` from the machine's own accounts. The credential scrub is `crates/fno-agents/src/model_env_scrub.rs` (the retired `harnesses/claude.py` twin). Nothing is hand-rolled here.
 
 ```bash
 # $BRIEF = the review prompt (step 2); "zai,glm-5.3" = the peers entry's `model`.
@@ -233,10 +233,7 @@ GLM_RC=$?
 
 The fail-safe is the door's own route refusal: with no z.ai key (or a misnamed provider), the spawn prints `--route "zai,glm-5.3" refused (provider unknown, non-anthropic, or keyless); no worker launched` and exits nonzero. The peer abstains and NOTHING falls back to an Anthropic-billed run - the refusal is the abstention, not an error to retry around.
 
-Then relay `$GLM_REVIEW` through step 4 exactly like a codex/gemini result: a
-non-zero `$GLM_RC` (including the route refusal) is a FAILED/abstained peer - say
-so plainly ("z.ai key unset - GLM peer skipped") and leave the gate as-is. NEVER
-invent findings to stand in for the GLM review you did not actually get.
+Then relay `$GLM_REVIEW` through step 4 exactly like a codex/gemini result: a non-zero `$GLM_RC` (including the route refusal) is a FAILED/abstained peer - say so plainly ("z.ai key unset - GLM peer skipped") and leave the gate as-is. NEVER invent findings to stand in for the GLM review you did not actually get.
 
 ### 4. RELAY honestly (the cardinal guard)
 
