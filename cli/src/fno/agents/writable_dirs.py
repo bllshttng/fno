@@ -45,12 +45,11 @@ discovered later. It is not fixed by narrowing the grant, because the graph
 stores and locks sit at that same level - see the paragraph below.
 
 It cannot be narrowed to subdirectories. ``graph.json`` and the runtime
-stores beside it write with
-``tempfile.mkstemp(dir=path.parent)`` followed by ``os.replace``
-(``graph_store.rs``). An atomic replace needs write access to the
-DIRECTORY, not the file, so a worker that mutates the graph needs the
-root itself. Granting the children instead would leave every graph write
-refused.
+stores beside it write with ``tempfile.mkstemp(dir=path.parent)``
+followed by ``os.replace`` (``graph_store.rs``). An atomic replace needs
+write access to the DIRECTORY, not the file, so a worker that mutates
+the graph needs the root itself. Granting the children instead would
+leave every graph write refused.
 
 A project that does not want the sibling-worktree reach moves them out with
 ``config.paths.worktrees_base``. The harness-native default already places them
