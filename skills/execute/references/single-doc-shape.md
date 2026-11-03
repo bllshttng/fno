@@ -8,11 +8,11 @@ A plan is always a single `.md` file (G1 blocks authoring new folder plans; G3 r
 
 `skills/execute/orchestrator.py`'s `load_plan_strategy` is the dispatcher `/execute waves` calls. It:
 
-1. Runs `fno-agents plan-cli parse <plan>` (the hidden `fno do plan parse` leaf) for the frontmatter, the sections, the parsed `## Execution Strategy` block, and its task-edge errors. The parser is the one `fno do plan brief` uses.
-2. Validates the frontmatter through the plan-schema door, then refuses on a missing strategy section, a strategy parse error, or an edge error.
+1. Runs `fno-agents plan-cli parse <plan>`, the hidden `fno do plan parse` leaf. The receipt carries the frontmatter, the sections, the parsed strategy, and its task-edge errors. `fno do plan brief` uses the same parser.
+2. Validates the frontmatter through the plan-schema door. It refuses on a missing strategy section, a strategy parse error, or an edge error.
 3. Builds and returns an `ExecutionStrategy` dataclass (`waves: List[Wave]`, `scope`, `project_tasks`).
 
-`orchestrator.py` also has a lower-level `parse_execution_strategy(index_path: str)` - a self-contained, stdlib-only regex parser used directly by `main()`'s CLI entry point (`orchestrator.py <path-to-plan.md>`). It reads the same `## Execution Strategy` fenced YAML block from any single file; it does not go through the parse door.
+`orchestrator.py` also has a lower-level `parse_execution_strategy(index_path: str)` - a self-contained, stdlib-only regex parser used directly by `main()`'s CLI entry point (`orchestrator.py <path-to-plan.md>`). It reads the same `## Execution Strategy` fenced YAML block from any single file. It does not go through the parse door.
 
 ## Failure surfaces (`load_plan_strategy`)
 

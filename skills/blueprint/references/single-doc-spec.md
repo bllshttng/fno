@@ -46,7 +46,7 @@ Every other section (problem, design rationale, open questions) is optional cont
 design → ready → in_progress → reviewing → shipping → shipped
 ```
 
-Enforced by `validate_transition(old, new)` in `skills/blueprint/scripts/mutate_doc.py`, over the status ladder the `fno do plan parse` door serves. Backward transitions raise `StatusTransitionError`. `coerce_status_from_yaml` reads an unquoted YAML boolean (`True`/`False`) that a bash writer may emit as its lowercase word.
+Enforced by `validate_transition(old, new)` in `skills/blueprint/scripts/mutate_doc.py`, over the status ladder the `fno do plan parse` door serves. Backward transitions raise `StatusTransitionError`. `coerce_status_from_yaml` reads an unquoted YAML boolean (`True`/`False`) that a bash writer can emit as its lowercase word.
 
 **Valid transition examples:**
 

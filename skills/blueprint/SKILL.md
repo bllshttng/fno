@@ -586,7 +586,7 @@ Any attempt to write outside this allowlist exits 2. Author-owned sections (Over
 
 ### Acceptance criteria compilation
 
-The `## Acceptance Criteria` section is **source**: authors and native plan modes have creative freedom in how they phrase a criterion. Blueprint compiles that source into strict execution semantics through one canonical compiler (`crates/fno-agents/src/plan_doc/criteria.rs`), the same implementation the mutation script, the semantic validator, and the worker-brief generator all call.
+The `## Acceptance Criteria` section is **source**: authors and native plan modes have creative freedom in how they phrase a criterion. Blueprint compiles that source into strict execution semantics through one canonical compiler (`crates/fno-agents/src/plan_doc/criteria.rs`). The mutation script, the semantic validator, and the worker-brief generator all call it.
 
 Accepted source shapes (container syntax alone does not decide validity; a candidate is valid when it yields a non-empty statement):
 
