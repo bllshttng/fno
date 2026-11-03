@@ -711,6 +711,7 @@ with lines:
                     "DoneAwaitingMerge",
                     "DoneUnreviewed",
                     "DoneAwaitingReview",
+                    "DoneAwaitingRuling",
                     "DonePlanned",
                     "NoWork",
                 }

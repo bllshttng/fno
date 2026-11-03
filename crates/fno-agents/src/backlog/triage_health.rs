@@ -571,7 +571,9 @@ pub(crate) fn evals_summary() -> Option<Value> {
     {
         return None;
     }
+    let gate_main = crate::evals_trend::gate_main_summary(path.to_str()?, chrono::Utc::now());
     Some(json!({
+        "gate_main": gate_main,
         "regression_pass_rate": payload.get("regression_pass_rate"),
         "flake_count": payload.get("flake_count"),
         "regression_alarm": payload.get("regression_alarm"),

@@ -672,7 +672,7 @@ fn default_spawn(
                 } else {
                     err_text
                 };
-                let last = tail.trim().lines().last().unwrap_or("").to_string();
+                let last = failure_line(&tail);
                 return SpawnResult {
                     ok: false,
                     reason: format!("spawn exit {code}: {last}"),
@@ -697,6 +697,45 @@ fn default_spawn(
             }
         }
     }
+}
+
+/// Words that mark a line as the cause of a failed launch.
+const CAUSE_WORDS: [&str; 9] = [
+    "error",
+    "429",
+    "limit",
+    "exhaust",
+    "denied",
+    "refused",
+    "not found",
+    "unavailable",
+    "failed",
+];
+
+/// The line that names why a spawn exited non-zero. Claude prints
+/// `[claude-code:...]` diagnostics on runs that succeed too (an SDK side
+/// query on a routed model id), and a trailing hint can follow the real
+/// error. Take the last non-diagnostic line that reads as a cause, else the
+/// last non-diagnostic line, else the last line.
+fn failure_line(text: &str) -> String {
+    let lines: Vec<&str> = text.trim().lines().collect();
+    let plain: Vec<&str> = lines
+        .iter()
+        .copied()
+        .filter(|l| !l.trim_start().starts_with("[claude-code:"))
+        .collect();
+    let reads_as_cause = |l: &&str| {
+        let low = l.to_lowercase();
+        CAUSE_WORDS.iter().any(|w| low.contains(w))
+    };
+    plain
+        .iter()
+        .rev()
+        .find(|l| reads_as_cause(l))
+        .or(plain.last())
+        .or(lines.last())
+        .map(|l| l.to_string())
+        .unwrap_or_default()
 }
 
 /// A resolved lane coordinate from the native inventory (route_gather):
@@ -1114,6 +1153,16 @@ mod tests {
         assert_eq!(answered, tree_hash(d.path()).unwrap());
         assert_eq!(git(&["diff", "--cached", "--name-only"]), "");
         assert!(git(&["status", "--porcelain"]).contains("?? decision.md"));
+    }
+
+    #[test]
+    fn a_failure_reason_skips_the_claude_code_diagnostic_line() {
+        let err = "429 quota exhausted\n[claude-code:unrecognized_model] {\"model\":\"m\"}\n";
+        assert_eq!(failure_line(err), "429 quota exhausted");
+        assert_eq!(failure_line("[claude-code:x] y"), "[claude-code:x] y");
+        let hinted = "Error: usage limit reached (429)\nrun with --help\n[claude-code:z] q\n";
+        assert_eq!(failure_line(hinted), "Error: usage limit reached (429)");
+        assert_eq!(failure_line(""), "");
     }
 
     #[test]

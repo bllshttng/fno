@@ -149,6 +149,9 @@ pub(crate) fn tick(
     if !can_launch {
         return "gated";
     }
+    if crate::evals_gate::zai_peak_hold(leg.repo, &crate::evals_gate::config_lane(leg.repo), now) {
+        return "zai_peak";
+    }
     if tried_within_a_day(leg.history, now) {
         return "retry_wait";
     }

@@ -275,6 +275,11 @@ pub(crate) fn exit_code_for_reason(reason: &TerminationReason) -> i32 {
         // the other Done* terminals - the reason string (not the exit code) is
         // what a wrapper reads to see it declined the autonomous merge.
         | TerminationReason::DoneUnreviewed
+        // DoneAwaitingRuling: work complete, the only missing input is the
+        // user's ruling on a question the session asked once and named. A
+        // clean stop like the other Done* terminals; the reason string
+        // (not the exit code) is what a wrapper reads to see the wait.
+        | TerminationReason::DoneAwaitingRuling
         | TerminationReason::NoWork => 0,
         // HeldOnQuestion: a clean stop for input, exit 0 - the loop did its
         // job by stopping once with the question named; it is not a failure.

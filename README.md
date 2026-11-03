@@ -8,10 +8,6 @@ It works across harnesses and machines. Lead agents hand out ready work. Message
 curl -fsSL fno.sh | sh
 ```
 
-![A replay of one real target run, from the start command to merged PR 4195](docs/images/target-run.gif)
-
-The GIF replays one real run, start command to merged [PR 4195](https://github.com/bllshttng/fno/pull/4195), at 270x.
-
 Then open a session in a git repo you can push to, and run `/fno:target "your feature"`. Next: the [quickstart](docs/quickstart.md). Site: [fno.sh](https://fno.sh).
 
 Set the targets. Your agents do the rest. Say F[no] to mostly done.
