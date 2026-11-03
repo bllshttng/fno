@@ -440,7 +440,15 @@ def build_only(root_arg):
     root_path.mkdir(parents=True, exist_ok=True)
     listing = []
     for index, case in enumerate(load_cases()):
-        case_dir = build_case(root_path, case, index)
+        try:
+            case_dir = build_case(root_path, case, index)
+        except SystemExit:
+            if (case.get("subject") or "pr-sessions") != "mint":
+                raise
+            # The frozen-mint refusal bars a re-CAPTURE, never a build:
+            # the native mint replays these cases against the frozen
+            # goldens, so the inputs still get built here.
+            case_dir = build_mint_case(root_path, case, index)
         listing.append(
             {
                 "label": case["label"],
