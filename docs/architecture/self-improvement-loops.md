@@ -11,6 +11,7 @@ The three loops that turn what the fleet did into what the fleet does better. Ea
 | S2 corrections (the intel path) | Runs when `/fno:intel` writes its report; the writer is `scripts/corrections-insights-tag.sh` | (none; watermark in `~/.fno/logs/corrections.log.wm`) | always available | S2 rows in `~/.fno/logs/corrections.log`, one per `#agent-correction` line, carrying `signal=<friction category>` | `fno outstanding` scoring via the `verifyDecisions` lane |
 | evals | The daemon's evals phase on the pr-watch tick | `evals.n` (days between regression runs; `0` disables) | `7` | Run receipts + trend rows (`fno-agents evals-arm`, `evals-trend`) | `fno doctor evals` |
 | question judge | The daemon's `question_judge` arm, hourly | `questions.judge.enabled` | `false` | Shadow verdicts in `~/.fno/state/judge/verdicts.jsonl`; a user answer that differs feeds the next prompt | `fno inbox outstanding judge --report` |
+| upstream issue | An intel suggestion on fno's own code, or the user's own words | (none) | always available | A redacted draft on stdout plus a prefilled `issues/new` link. Nothing is filed. | `fno do feedback --node <id>` or `--text "<words>"` |
 | pr-watch heal | The pr-watch tick over every red open PR | `auto_heal.enabled` | `false` | Heal attempts + reports per PR (`fno do pr heal` applies the mechanical fix) | `fno do pr heal <n>` |
 
 ## What feeds what
@@ -18,6 +19,8 @@ The three loops that turn what the fleet did into what the fleet does better. Ea
 - The transcript fold (`fno-agents intel`, report via `/fno:intel`) is the S2 writer's only report source. Before intel, no writer produced a file with `#agent-correction` lines. The S2 path had been starving since it shipped. The fold classifies turns by provenance first, so only operator-typed turns reach the corrections the skill quotes.
 - The S0 watcher and the S2 rows share `~/.fno/logs/corrections.log`. S0 rows come from postmortems, S2 rows from intel reports. The `verifyDecisions` lane scores the `signal=` field across both.
 - Evals and heal are daemon-tick loops: both read what the other loops wrote. A healed PR re-runs evals banks. A graded failure in a scheduled regression run files one bug node per task. An open node holds the next filing, and a plumbing failure files no node.
+
+- A node is the join for the upstream-issue loop. `fno do feedback` masks secrets, paths, emails, session ids, vault paths, project names and the login and host names, then rescans and refuses a draft that still carries one. The user's Submit click on github.com is the only publish step.
 
 ## Tuning
 
