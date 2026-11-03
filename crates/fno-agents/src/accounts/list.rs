@@ -428,7 +428,7 @@ mod tests {
         let vendor = |url: &str| url.contains("z.ai").then(|| "zai".to_string());
         let got = |route, env| record_provider(route, env, &vendor);
         assert_eq!(got(Some("deepseek/v3"), None).as_deref(), Some("deepseek"));
-        let zai = env(&[("ANTHROPIC_BASE_URL", "https://api.z.ai/api/anthropic")]);
+        let zai = env(&[("ANTHROPIC_BASE_URL", "https://z.ai.example/anthropic")]);
         assert_eq!(got(None, Some(&zai)).as_deref(), Some("zai"));
         let bedrock = env(&[("CLAUDE_CODE_USE_BEDROCK", "1")]);
         assert_eq!(got(None, Some(&bedrock)).as_deref(), Some("bedrock"));
