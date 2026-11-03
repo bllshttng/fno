@@ -240,8 +240,8 @@ def resolve_canonical_repo_root() -> Path:
     :func:`resolve_repo_root` (``--show-toplevel``) so per-session state
     (``target-state.md``, ``artifacts/``) stays bound to its own worktree. Only
     config and cross-worktree coordination state climb to canonical. Claims
-    (``fno.claims``) are in the coordination category: a node claim must
-    be visible from every worktree, so ``claims_dir()`` also resolves here.
+    are in the coordination category: a node claim must be visible from
+    every worktree, so the native claims root also resolves to canonical.
     Mirrors ``graph._intake._git_repo_root``, whose docstring draws the same
     durable-vs-ephemeral line.
 
@@ -668,11 +668,11 @@ STATE_FILES: tuple[StateFile, ...] = (
     StateFile(
         filename="claims",
         # Not in this module, and the table says so rather than pretending
-        # otherwise: claims resolve through the claims package.
-        resolver="fno.claims.io.global_claims_dir",
+        # otherwise: claims resolve natively, in fno-agents.
+        resolver="fno_agents.claims_root.global_claims_dir",
         root_class="OPERATOR",
         selector="FNO_CLAIMS_ROOT, else $HOME",
-        owning_modules=("cli/src/fno/claims/io.py", "crates/fno-agents/src/claims.rs"),
+        owning_modules=("crates/fno-agents/src/claims_root.rs",),
     ),
     StateFile(
         filename="messages.jsonl",

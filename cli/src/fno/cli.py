@@ -90,7 +90,6 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
         "Skill bundle build + lint; moved to `fno doctor bundle`.",
         {"hidden": True},
     ),
-    "claim": ("fno.claims.cli:cli", "Work-claim coordination primitive", {"hidden": True}),
     "resume": (
         "fno.resume_receipt_cli:cli",
         "Durable typed resume receipts (evidence, never write authority)",
@@ -151,7 +150,6 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
 # scripts/ci/command-collapse-map.tsv.
 COLLAPSE_KEEP: dict[str, set[str]] = {
     "approvals": set(),
-    "claim": {"release"},
     "config": {"accounts", "get", "set"},
     "do": set(),
     "doctor": set(),

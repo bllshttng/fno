@@ -871,15 +871,6 @@ jobs:
     # still fails sooner than a stuck queue would.
     timeout-minutes: 30
 
-    # The claim classifier parity harness needs the FULL oracle package
-    # (pydantic included: fno.claims.staleness imports claims/types.py), not a
-    # hand-picked subset a bare interpreter could carry. Point it at the
-    # uv-synced venv so the guard runs on the interpreter CI already keeps
-    # complete; otherwise the import fails and the harness rots into a
-    # silent skip.
-    env:
-      FNO_CLAIMS_PARITY_PYTHON: ${{ github.workspace }}/cli/.venv/bin/python
-
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -966,11 +957,6 @@ jobs:
         # "settings.yaml unparseable". Install pyyaml onto the setup-python
         # interpreter (the one which_python3() resolves) so the parity check sees
         # the same parser its frozen goldens were captured with.
-        #
-        # psutil is here for the same reason: the claim classifier parity
-        # harness imports fno.claims.staleness, whose module-level psutil import
-        # would fail on a bare interpreter and turn the differential harness
-        # into a permanent silent skip - a guard that never fires.
         run: python3 -m pip install "pyyaml>=6" "psutil>=5"
 
       - name: Clean cached Rust package artifacts
@@ -1164,7 +1150,6 @@ jobs:
     # Line tables keep file:line in a panic backtrace. DEV and TEST must
     # match, or cargo builds every dependency twice.
     env:
-      FNO_CLAIMS_PARITY_PYTHON: ${{ github.workspace }}/cli/.venv/bin/python
       CARGO_INCREMENTAL: 0
       CARGO_PROFILE_DEV_DEBUG: line-tables-only
       CARGO_PROFILE_TEST_DEBUG: line-tables-only

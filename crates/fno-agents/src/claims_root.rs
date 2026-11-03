@@ -1,6 +1,5 @@
 //! Which claims root does one claim key live under: the global root for a
-//! global-id prefix, else the repo's space (the ported half of Python
-//! `fno.claims.io.claims_dir`). Split out of `claims.rs`: that file is over
+//! global-id prefix, else the repo's space. Split out of `claims.rs`: that file is over
 //! the 5,000-line budget and shrink-only, and the root-resolution question
 //! outgrew living beside the acquire/reap machinery. `claims.rs` re-exports
 //! the public names, so callers keep their paths.
@@ -107,7 +106,7 @@ pub(crate) fn claims_dir(key: &str, root: Option<&Path>) -> Result<PathBuf, Stri
 
 /// Testable core of [`claims_dir`]: cwd, the override env, and the spaces
 /// root are explicit. A repo-local key (no global-id prefix, no explicit
-/// root) resolves like Python `fno.claims.io.claims_dir(None)`: the
+/// root) resolves to the default store: the
 /// `$FNO_CLAIMS_ROOT` override first (set-and-nonempty only; the
 /// empty-is-unset rule), else the repo's space. The resume-attach
 /// single-writer lock rides this: the live and parked Rust resume arms must
@@ -136,9 +135,8 @@ pub(crate) fn claims_dir_in(
         return Ok(PathBuf::from(override_root).join(CLAIMS_DIRNAME));
     }
     let cwd = &cwd()?;
-    // The space branch does NOT use CLAIMS_DIRNAME: Python lands repo-space
-    // claims at `<space>/claims` directly, no nested .fno segment
-    // (`fno.claims.io.claims_dir`'s space return).
+    // The space branch does NOT use CLAIMS_DIRNAME: repo-space claims land
+    // at `<space>/claims` directly, no nested .fno segment.
     let base = match spaces_root {
         Some(spaces) => spaces.join(crate::paths::space_slug(
             &crate::paths::canonical_repo_root(cwd)

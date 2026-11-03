@@ -1,14 +1,15 @@
 //! The operator leaf surface for `fno agents claim`, ported wave by wave
-//! from `cli/src/fno/claims/cli.py`.
+//! from the retired Python claims CLI.
 //!
-//! `claim_commands.rs::run_claim` dispatches one op per wave here. The Python
-//! leaf forwards binary-direct (the `_forward_to_binary` shape), so this
+//! `claim_commands.rs::run_claim` dispatches one op per wave here. The front
+//! door execs `fno agents claim` straight into this binary, so this
 //! module owns the operator contract: flag spellings, validation messages,
 //! exit codes (0 acquired; 1 held-by-other/contention; 2 validation; 3
 //! transient) and the human/JSON output shapes. The goldens frozen from the
 //! Python leaf (`tests/claim_acquire_parity.rs`) are the contract.
 
 pub mod acquire;
+pub mod help;
 pub mod list;
 pub mod manifest_refresh;
 pub mod reap;

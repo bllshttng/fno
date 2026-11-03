@@ -346,7 +346,6 @@ crates/fno-agents/src/backlog/advance_join.rs
 crates/fno-agents/src/backlog/maintenance.rs
 crates/fno-agents/src/backlog/maintenance_tests.rs
 crates/fno-agents/src/review_capability.rs
-cli/src/fno/claims/session_pid.py
 crates/fno-agents/src/context_audit.rs
 crates/fno-agents/src/observer/fold.rs
 crates/fno-agents/src/footprint_cause.rs

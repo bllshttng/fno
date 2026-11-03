@@ -46,13 +46,13 @@ Every liveness word the fleet renders is one of two things. A measurement, which
 | roster `live` from a spawn receipt | the worker can do work | a process started and a seed was accepted | no, it cannot show the model runs |
 | roster `orphaned` | the worker died | a family-1 `done` or `stalled` verdict | yes for `stalled`, an inference for `done` |
 
-`claim suspect` is the one row where a reader cannot recover the cause. `cli/src/fno/claims/staleness.py::is_live` returns false for five distinct situations. The claim is on another machine. The OS does not report the pid. The pid was reused. Permissions refused the inspection. Or the holder was never a long-lived process. `claim_status` returns the raw inputs but no basis, so every caller reads one word for all five. A PreToolUse hook exits immediately, so every hook-registered hold sits in this state permanently and looks the same as a crashed worker.
+`claim suspect` is the one row where a reader cannot recover the cause. `is_live` in `crates/fno-agents/src/claims.rs` returns false for five distinct situations. The claim is on another machine. The OS does not report the pid. The pid was reused. Permissions refused the inspection. Or the holder was never a long-lived process. `claim_status` returns the raw inputs but no basis, so every caller reads one word for all five. A PreToolUse hook exits immediately, so every hook-registered hold sits in this state permanently and looks the same as a crashed worker.
 
-### The claim classifier is duplicated and only partly guarded
+### The claim classifier has one leg
 
-`cli/src/fno/claims/staleness.py::classify` and `crates/fno-agents/src/claims.rs::classify` are two implementations of one rule, including the hybrid and suspect arms. Each says in a comment that it mirrors the other. No test drives both, so the comment is the only thing holding them together. They agree today, read line by line.
+`classify` in `crates/fno-agents/src/claims.rs` is the one implementation of the rule, including the hybrid and suspect arms. The Python twin is deleted. `crates/fno-agents/tests/claim_classifier_parity.rs` holds the verdicts it froze.
 
-`liveness_origin` is the same shape and now has the guard the classifier lacks. Both producers read one corpus, `schemas/agents-row-contradiction.json`, asserted from Python in `cli/tests/agents/test_row_contradiction.py` and from Rust in `row_contradiction_fixture_matches_python_projection`.
+`liveness_origin` still has two producers, and a shared corpus guards them. Both producers read one corpus, `schemas/agents-row-contradiction.json`, asserted from Python in `cli/tests/agents/test_row_contradiction.py` and from Rust in `row_contradiction_fixture_matches_python_projection`.
 
 That corpus is worth reading before trusting any parity claim here. It existed and drove both languages while the two producers still disagreed, because none of its cases carried the one row shape that separated them. A corpus blind to a divergence reads exactly like a corpus proving there is none. Add the case that fails before you add the rule that passes.
 
