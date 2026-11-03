@@ -331,6 +331,7 @@ The store also failed in the opposite direction. When nobody was building, it sa
 | Claim | Holder | Can it come back under a new pid? | Proof of death |
 |---|---|---|---|
 | `node:<id>` | a session | yes, the daemon respawns it | same-machine pid dead and session witness absent, or node settlement proves abandonment |
+| `node:<id>` | a planner, `blueprint-session:<sid>` | no, the lease is the whole life | the 2h lease expiry; the clock decides, never a pid |
 | `dispatch:<id>` | `spawn-cli:<pid>` | no, but its TTL is the boot window | expiry in a sweep, dead pid at the guard about to launch |
 | any, expired TTL | any | n/a | expiry and grace, unless a live pid or session witness keeps it live |
 
