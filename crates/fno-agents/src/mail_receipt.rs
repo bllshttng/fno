@@ -438,7 +438,12 @@ mod tests {
 }
 
 /// A `kind: state` bus row recording that message `of` reached `state`.
-pub fn state_row(of: &str, state: &crate::mail::state::DeliveryState, from: &str, to: &str) -> Value {
+pub fn state_row(
+    of: &str,
+    state: &crate::mail::state::DeliveryState,
+    from: &str,
+    to: &str,
+) -> Value {
     let id = crate::announce::new_msg_id();
     let mut meta = state.to_json();
     meta["of"] = json!(of);
@@ -457,7 +462,13 @@ pub fn state_row(of: &str, state: &crate::mail::state::DeliveryState, from: &str
 
 /// Append a [`state_row`] to the live bus segment; a failure only warns,
 /// because the staged message row already holds the body.
-pub fn record_state(bus: &std::path::Path, of: &str, state: &crate::mail::state::DeliveryState, from: &str, to: &str) {
+pub fn record_state(
+    bus: &std::path::Path,
+    of: &str,
+    state: &crate::mail::state::DeliveryState,
+    from: &str,
+    to: &str,
+) {
     let row = state_row(of, state, from, to);
     let live = bus.join("messages.jsonl");
     if let Err(e) = crate::announce::append_line_open(&live, &row, &crate::chats::chats_dir()) {

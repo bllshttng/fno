@@ -1006,9 +1006,12 @@ impl Lane for ClaudeSwitchboardLane<'_> {
                 reason_out.push("no-recipient".to_string());
                 DeliveryState::failed("no-recipient")
             }
-            Some(recipient) => {
-                mail_inject_claude(&recipient, wrapped, Some(reason_out), Some(t.harness.as_str()))
-            }
+            Some(recipient) => mail_inject_claude(
+                &recipient,
+                wrapped,
+                Some(reason_out),
+                Some(t.harness.as_str()),
+            ),
         }
     }
 }
@@ -1601,12 +1604,7 @@ pub(super) fn dispatch_send_locked(
                 &mut live_reasons,
                 &family1_state,
             );
-            crate::mail_receipt::record(
-                &msg_id,
-                &state,
-                &mail_ctx.from_,
-                &recipient_for_row,
-            );
+            crate::mail_receipt::record(&msg_id, &state, &mail_ctx.from_, &recipient_for_row);
             let delivered = state.reached();
             live_state = state;
             if delivered {

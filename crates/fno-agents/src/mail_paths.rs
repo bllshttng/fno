@@ -36,6 +36,18 @@ pub(crate) fn live_bus_log() -> PathBuf {
     bus_log_path(home.root().parent().unwrap_or_else(|| home.root()))
 }
 
+/// The live bus log from the state dir alone, for callers that must not touch
+/// the agents home (a test process with no declared home fences it).
+pub(crate) fn state_live_bus_log() -> PathBuf {
+    let dot_fno = crate::backlog::settings::state_dir().unwrap_or_else(|| {
+        std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("/"))
+            .join(".fno")
+    });
+    bus_log_path(&dot_fno)
+}
+
 /// The bus directory the mail leaves read: the state root when one resolves,
 /// else the agents home's root.
 pub(crate) fn state_bus_dir(home: &crate::paths::AgentsHome) -> PathBuf {
@@ -44,8 +56,15 @@ pub(crate) fn state_bus_dir(home: &crate::paths::AgentsHome) -> PathBuf {
     bus_dir_of(&root)
 }
 
-/// The same directory from the state root alone; `None` when no state root
-/// resolves.
+/// The same directory from the state root alone. With no state root the
+/// answer holds only if an environment override names the bus.
 pub(crate) fn state_bus_dir_opt() -> Option<PathBuf> {
-    crate::agents_config::state_dir(Path::new(".")).map(|dir| bus_dir_of(&dir))
+    let env_names_bus = ["FNO_BUS_DIR", "FNO_INBOX_ROOT"]
+        .iter()
+        .any(|key| std::env::var(key).is_ok_and(|v| !v.is_empty()));
+    match crate::agents_config::state_dir(Path::new(".")) {
+        Some(dir) => Some(bus_dir_of(&dir)),
+        None if env_names_bus => Some(bus_dir_of(Path::new("."))),
+        None => None,
+    }
 }

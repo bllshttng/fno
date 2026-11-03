@@ -7,8 +7,8 @@
 //! what that line is counting, never a differently-scoped set.
 
 use crate::claude_drive::claude_projects_dir;
-use crate::mail_control_drain::{landed_ids, withdrawn_ids};
 use crate::mail::state::newest_state;
+use crate::mail_control_drain::{landed_ids, withdrawn_ids};
 use crate::mail_header::ids_in_text;
 use crate::paths::AgentsHome;
 use crate::spawn_context::resolve_self_identity;

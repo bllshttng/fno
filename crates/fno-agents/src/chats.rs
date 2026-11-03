@@ -1688,7 +1688,12 @@ pub fn run_chats(args: &[String]) -> i32 {
                     return 1;
                 }
             };
-            match record_at(&dir, &index_path(), &crate::mail_paths::live_bus_log(), &line) {
+            match record_at(
+                &dir,
+                &index_path(),
+                &crate::mail_paths::state_live_bus_log(),
+                &line,
+            ) {
                 Ok(Recorded::Message { chat_id }) => {
                     println!(
                         "{{\"recorded\":true,\"type\":\"message\",\"chat_id\":\"{chat_id}\"}}"
@@ -1967,7 +1972,11 @@ pub fn run_chats(args: &[String]) -> i32 {
                 };
             }
             if args.iter().any(|a| a == "--missing") {
-                return match migrate_missing(&dir, &index_path(), &crate::mail_paths::live_bus_log()) {
+                return match migrate_missing(
+                    &dir,
+                    &index_path(),
+                    &crate::mail_paths::state_live_bus_log(),
+                ) {
                     Ok(receipt) => {
                         println!(
                             "{{\"migrated\":true,\"missing\":true,\"messages\":{},\"deliveries\":{},\"skipped\":{}}}",
@@ -1992,7 +2001,7 @@ pub fn run_chats(args: &[String]) -> i32 {
                 eprintln!("chats migrate: refused, already migrated ({ts})");
                 return 1;
             }
-            match migrate_import(&dir, &crate::mail_paths::live_bus_log()) {
+            match migrate_import(&dir, &crate::mail_paths::state_live_bus_log()) {
                 Ok(receipt) => {
                     let _ = set_migrated_at(
                         &conn,
@@ -2427,7 +2436,12 @@ fn list_chats(dir: &Path) -> Result<Vec<String>, String> {
 // ---------------------------------------------------------------------------
 
 pub(crate) fn record(chats_dir: &Path, line: &Value) -> Result<Recorded, String> {
-    record_at(chats_dir, &index_path(), &crate::mail_paths::live_bus_log(), line)
+    record_at(
+        chats_dir,
+        &index_path(),
+        &crate::mail_paths::state_live_bus_log(),
+        line,
+    )
 }
 
 pub(crate) fn rebuild_index(chats_dir: &Path) -> Result<String, String> {

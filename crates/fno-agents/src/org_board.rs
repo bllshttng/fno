@@ -1043,8 +1043,10 @@ pub fn read_board(opts: &BoardOpts) -> Value {
                                     (row.session.clone(), holder, row.ts.clone())
                                 })
                                 .collect();
-                            let answered =
-                                queues::mail_answered_since(&crate::mail_paths::live_bus_log(), &mail_candidates);
+                            let answered = queues::mail_answered_since(
+                                &crate::mail_paths::live_bus_log(),
+                                &mail_candidates,
+                            );
 
                             let mut sessions: Vec<String> = Vec::new();
                             for (session, holder, _) in &mail_candidates {

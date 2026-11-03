@@ -285,7 +285,11 @@ pub fn resolve_from_name(tail: &SendTail) -> Result<FromName, String> {
 /// (informational provenance; a reply addresses `<name>@<host>`). The
 /// colon keeps the label to no `@`, so it never reads as a send target.
 pub fn sender_id(user: &str, host: &str, name: &str) -> String {
-    format!("{user}:{}/{}", crate::mail::address::normalize_host(host), name)
+    format!(
+        "{user}:{}/{}",
+        crate::mail::address::normalize_host(host),
+        name
+    )
 }
 
 /// Resolve the `fno` front door to exec on this machine. The daemon's pull
