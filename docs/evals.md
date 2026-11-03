@@ -15,7 +15,7 @@ A capability task that passes its last N consecutive full runs (default 3) becom
 
 ## Bank format
 
-One file per task under `evals/bank/*.yaml`:
+One file per task under `evals/bank/*.yaml`, or under `skills/<name>/evals/*.yaml` when the task grades one skill. `fno doctor evals run` loads both. A PR that edits a `SKILL.md` must leave a case in that skill's `evals/` folder. The same folder may hold `claude plugin eval` case directories:
 
 ```yaml
 id: capability-add-hello-command

@@ -169,6 +169,24 @@ fn git_in(dir: &std::path::Path, args: &[&str]) -> Result<String, String> {
 /// in memory.
 const ANSWER_KEY_PATHS: [&str; 2] = ["evals/bank", "evals/fixtures/metrics"];
 
+/// A skill's golden tasks sit beside it in `skills/<name>/evals/*.yaml`, so they
+/// are answer keys too. Case directories deeper in `evals/` stay.
+fn remove_skill_task_files(tree: &std::path::Path) {
+    let Ok(skills) = std::fs::read_dir(tree.join("skills")) else {
+        return;
+    };
+    for skill in skills.flatten() {
+        let Ok(files) = std::fs::read_dir(skill.path().join("evals")) else {
+            continue;
+        };
+        for f in files.flatten().map(|f| f.path()) {
+            if f.is_file() && f.extension().is_some_and(|e| e == "yaml") {
+                let _ = std::fs::remove_file(f);
+            }
+        }
+    }
+}
+
 /// Where sealed trees live: the temp dir, so no `$HOME` file sits on the
 /// worker's ancestor path. None of it may sit inside `$HOME`, which the fence
 /// denies as a whole.
@@ -267,6 +285,7 @@ fn fill_sealed_tree(
     for key in ANSWER_KEY_PATHS {
         let _ = std::fs::remove_dir_all(dir.join(key));
     }
+    remove_skill_task_files(dir);
     // An empty template: a user's template can carry hooks that name real paths.
     git_in(dir, &["init", "-q", "--template="])?;
     // The fence denies the user's git config, so the worker's git reads these.
