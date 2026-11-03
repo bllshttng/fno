@@ -1,4 +1,3 @@
-ledger.json
 config.toml
 .lock
 config.toml.lock
@@ -38,43 +37,33 @@ repro-isolated
 .DS_Store
 .metadata_never_index
 .path-migration-done
-ledger.md
 backups
 briefs
-bus
-chats
 cache
 db
 fleet # pre-freeze resident: paths.fleet_dir() accessor (whoami panel, beacon markers)
 heal
 migrations
-handoffs
 install
 inbox
 .interrupted-writes
 logs
-mail-escalations
 notes
 nudge-cursors
 rules-seen
 observer-reports
-operator-capture
-postmortems
 providers
 cargo-build
 plugin-stage
 relay-claude
-saved-sessions
 sessions
 spaces
 worktree-salvage
-history
 worktrees
 board.py
 board.sh
 board_ids.py
 board_render.py
-validity-decks
 .claude
 .fno
 .impeccable
@@ -86,7 +75,6 @@ latches
 .think-spawn-daily.json
 .preflight-cancel
 .preflight-receipt-locks
-mail-hold
 route-settings
 bin
 .lock.d
@@ -95,3 +83,6 @@ bin
 # posture.json is the removed posture command's advisory stamp.
 events.jsonl
 posture.json
+evals
+event-rules
+config.toml.pre-x6062

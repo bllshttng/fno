@@ -177,6 +177,9 @@ pub enum ClientMsg {
     /// after `Attach`. Ignored from a non-passive client. The tag lasts as
     /// long as the connection.
     Observe(crate::proto::observer::ObserverHello),
+    /// (v121) A passive client takes the link role: it drives the one pane
+    /// the hello names. Ignored from a non-passive client.
+    Link(crate::proto::link::LinkHello),
 }
 
 /// Server -> client.

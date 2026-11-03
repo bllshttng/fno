@@ -434,7 +434,7 @@ pub enum Event {
     CycleSidelineView,
     /// (redefined by) Toggle the org block on the left
     /// sideline between its three-line glance and the full reading: load
-    /// against the cap, what saturates the box, the working/idle/dead
+    /// against the cap, what saturates the machine, the working/idle/dead
     /// census, and the lane advisor's own answer. The block is always
     /// visible; this only expands or collapses it, and the client's view
     /// layer interprets that, not here.
@@ -1401,7 +1401,7 @@ fn default_bindings() -> Vec<KeyBinding> {
             "cycle-agent-group",
             CycleAgentGroup,
             Global,
-            "group agents by workspace, lead, cwd, status, or harness",
+            "group agents by workspace, lead, cwd, status, harness, or none",
         ),
         b(
             b'Y',

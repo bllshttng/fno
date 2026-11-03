@@ -2140,7 +2140,8 @@ pub fn run_maintain(tail: &[String]) -> i32 {
         slug: &slug_from_node_cwd,
         roster: &roster,
         history: super::triage_health::history_path(&Value::Null),
-        deck_dir: super::settings::state_dir().map(|d| d.join("validity-decks")),
+        deck_dir: super::settings::state_dir()
+            .and_then(|d| crate::state_layout::place_dir(&d, "validity-decks")),
         sweep: SweepSeams {
             exists_for: &validity::validity_exists_for,
             search: &validity::validity_search,

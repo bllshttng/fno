@@ -2,6 +2,8 @@
 
 There is ONE spawn gate: `crates/fno-agents/src/spawn_gate.rs`, with the lane axes in `spawn_gate_lanes.rs`. Every door asks the same gate: pane, routed, account, and the native bg/headless arms. Python's `cli/src/fno/agents/spawn_gate.py` is a TRANSPORT over the `fno-agents spawn-gate` command. It carries the caller's identity in. It carries the refusal out, as data. This doc carries the long stories from the docstrings. The code keeps its prose short. The mux's own revival door asks through `crates/fno/src/server/revival_gate.rs`: the resume gesture and the held-pane focus ask in `gate` mode with `hold: false` (the command releases the mutex before it answers), and the workspace restore asks once in `probe` mode and spends the headroom it grants.
 
+The org block's gate reading has its own door: `agent.gate-probe` on the daemon socket (`crates/fno-agents/src/spawn_gate_probe.rs`). The daemon answers `probe` mode from a per-cwd cache refreshed every 60 s. The probe is one daemon-side compute, never one spawned `fno-agents spawn-gate` child per mux client per refresh. The probe's child reads have no timeout. A caller that arrives while a compute runs serves its stale entry instead of queueing behind it. With no entry yet, the daemon refuses and the client falls back to the spawn for one refresh. The same answer shape the command prints on stdout rides the socket.
+
 ## The command contract
 
 `fno-agents spawn-gate` reads one JSON payload on stdin. It writes one JSON answer on stdout. The command exits 0 whenever it produced an ANSWER, including a refusal. A refusal is data. The caller decides what to do with it. The gate's own prose (`spawn queued: ...` during a 240-second queue) streams on stderr.

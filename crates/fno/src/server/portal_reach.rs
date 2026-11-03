@@ -283,7 +283,7 @@ pub(super) fn fill_held_portal_at(
         view,
         vp,
         idx,
-        &row_key,
+        ReachKey::Row(&row_key),
         &PanePlacement::default(),
         false,
     ))
@@ -575,7 +575,85 @@ pub(super) fn portal_replay_placement(placement: &PanePlacement, portal_idx: u8)
     }
 }
 
+/// What a portal reach shows: a row this machine's registry answers by key,
+/// or a row on another machine, which its seat shows through the link.
+pub(super) enum ReachKey<'a> {
+    Row(&'a str),
+    Far(&'a crate::proto::RemoteRow),
+}
+
 impl Core {
+    /// The portal index a reach lands in: the one the caller named, else the
+    /// next free one. A full space refuses visibly, because repointing an
+    /// occupied index is the silent wrong action the placement refusals exist
+    /// to prevent. `portal_new` names no index BECAUSE the caller must not
+    /// choose one: allocating here, where reaches are handled one at a time,
+    /// is what makes two clients opening a portal at once safe.
+    pub(super) fn portal_index_for(
+        &mut self,
+        client_id: u64,
+        placement: &PanePlacement,
+    ) -> Option<u8> {
+        let idx = placement
+            .portal_target()
+            .or_else(|| self.next_free_portal());
+        if idx.is_none() {
+            self.notice(
+                client_id,
+                "all 256 portal indices are live; close one first",
+            );
+        }
+        idx
+    }
+
+    /// A far row's reach: the same portal path a local paneless row takes.
+    pub(super) fn reach_far(
+        &mut self,
+        client_id: u64,
+        view: (u64, TabId),
+        vp: Rect,
+        remote: &crate::proto::RemoteRow,
+        placement: &PanePlacement,
+    ) -> Flow {
+        if !placement.wants_portal() {
+            self.notice(client_id, "a row on another machine opens in a portal");
+            return Flow::Continue;
+        }
+        let Some(portal) = self.portal_index_for(client_id, placement) else {
+            return Flow::Continue;
+        };
+        let explicit = placement.portal.is_some();
+        let key = ReachKey::Far(remote);
+        self.reach_portal(client_id, view, vp, portal, key, placement, explicit)
+    }
+
+    /// Resolve exactly one live paneless row for the key. Names are not
+    /// unique; a name that matches two rows must refuse, never pick.
+    fn reach_row(&mut self, client_id: u64, key: &str) -> Option<RegistryAgent> {
+        let mut hits = self.agents.iter().filter(|a| row_answers_input(a, key));
+        match (hits.next(), hits.next()) {
+            (Some(a), None) => Some(a.clone()),
+            (Some(a), Some(b)) if same_session_twins(a, b) => Some(a.clone()),
+            (Some(_), Some(_)) => {
+                self.notice(
+                    client_id,
+                    "more than one row goes by that name - reach it by its pane",
+                );
+                None
+            }
+            _ => {
+                // The bare "no such agent" this arm used to emit
+                // sent a reader hunting a lifecycle resolver that is not in
+                // this chain. Name the door and the row it looked for.
+                self.notice(
+                    client_id,
+                    format!("portal reach: no live row answers {key}"),
+                );
+                None
+            }
+        }
+    }
+
     /// Reach `key` (an attach id for a claude row, a registry name
     /// for every other harness) through portal `portal`. The tier is
     /// capability-computed (`agents_view::thread_reach`): Drive runs the
@@ -612,7 +690,7 @@ impl Core {
         view: (u64, TabId),
         vp: Rect,
         mut portal_idx: u8,
-        key: &str,
+        key: ReachKey<'_>,
         placement: &PanePlacement,
         portal_explicit: bool,
     ) -> Flow {
@@ -630,29 +708,27 @@ impl Core {
             || placement.at.is_some()
             || placement.tab.is_some()
             || !matches!(placement.target, PaneTarget::CurrentRoute);
-        // Resolve exactly one live paneless row for the key. Names are not
-        // unique; a name that matches two rows must refuse, never pick.
-        let mut hits = self.agents.iter().filter(|a| row_answers_input(a, key));
-        let row = match (hits.next(), hits.next()) {
-            (Some(a), None) => a.clone(),
-            (Some(a), Some(b)) if same_session_twins(a, b) => a.clone(),
-            (Some(_), Some(_)) => {
-                self.notice(
-                    client_id,
-                    "more than one row goes by that name - reach it by its pane",
-                );
-                return Flow::Continue;
-            }
-            _ => {
-                // The bare "no such agent" this arm used to emit
-                // sent a reader hunting a lifecycle resolver that is not in
-                // this chain. Name the door and the row it looked for.
-                self.notice(
-                    client_id,
-                    format!("portal reach: no live row answers {key}"),
-                );
-                return Flow::Continue;
-            }
+        // A far row has no registry row here. It stands in as a row that
+        // carries only its `name@host`, which is also the key its portal
+        // stores, and its seat runs the link instead of a tier argv.
+        let (row, link) = match key {
+            ReachKey::Far(remote) => match crate::mux_link::pane_argv(remote) {
+                Ok(argv) => {
+                    let row = RegistryAgent {
+                        name: remote.name.clone(),
+                        ..RegistryAgent::default()
+                    };
+                    (row, Some(argv))
+                }
+                Err(e) => {
+                    self.notice(client_id, e);
+                    return Flow::Continue;
+                }
+            },
+            ReachKey::Row(key) => match self.reach_row(client_id, key) {
+                Some(row) => (row, None),
+                None => return Flow::Continue,
+            },
         };
         // From here the key is the row's id, whatever the caller typed: the
         // portal saves it, and a restart finds the row again by it.
@@ -756,8 +832,10 @@ impl Core {
         let staged_plan_ms = self.reentry_verdict.as_ref().map(|v| v.plan_ms);
         // The tier's argv is built server-side, where the row set lives: the
         // client's reach command is tier-blind by design.
-        let argv = match tier {
-            Reach::Drive => {
+        let far = link.is_some();
+        let argv = match (link, tier) {
+            (Some(argv), _) => argv,
+            (None, Reach::Drive) => {
                 let id = row.attach_id.clone().expect("Drive implies attach_id");
                 // The Drive argv is the canonical re-entry plan for a
                 // claude row. `None` means the plan is resolving off-loop; the
@@ -773,10 +851,11 @@ impl Core {
                 };
                 argv
             }
-            Reach::Follow => peek_argv(&row.name),
-            Reach::Locate => locate_argv(&row),
+            (None, Reach::Follow) => peek_argv(&row.name),
+            (None, Reach::Locate) => locate_argv(&row),
         };
         let mechanism = match (&tier, staged_plan_ms) {
+            _ if far => "link",
             (Reach::Drive, None) => "attach-direct",
             (Reach::Drive, Some(_)) if argv.iter().any(|a| a == "respawn" || a == "--resume") => {
                 "relaunch"

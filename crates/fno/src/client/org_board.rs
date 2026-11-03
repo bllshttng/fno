@@ -21,12 +21,15 @@ pub(crate) use actions::{Act, Done};
 pub(crate) enum OrgMsg {
     Gather(FleetInputs),
     Action(Done),
+    /// The sideline machine layer's own fleet read.
+    Machines(Result<serde_json::Value, String>),
 }
 
 pub(crate) fn apply(view: &mut View, gen: u64, msg: OrgMsg) {
     match msg {
         OrgMsg::Gather(inputs) => apply_fold(view, gen, inputs),
         OrgMsg::Action(done) => apply_action(view, gen, done),
+        OrgMsg::Machines(read) => super::machine_tree::apply(view, read),
     }
 }
 
@@ -34,6 +37,21 @@ pub(crate) fn apply(view: &mut View, gen: u64, msg: OrgMsg) {
 const LEFT: usize = 34;
 /// Below this width the explorer paints alone.
 const MIN_SPLIT: usize = 80;
+/// Narrowest either pane may get when the divider moves.
+const MIN_PANE: usize = 20;
+
+/// The explorer's width at `width`: the held size, else the default.
+pub(super) fn explorer_w(width: usize, sizes: &super::edge_drag::EdgeSizes) -> usize {
+    explorer_bounds(width).map_or(LEFT, |(lo, hi)| {
+        sizes.resolve(super::edge_drag::Edge::OrgExplorer, LEFT, lo, hi)
+    })
+}
+
+/// The explorer's width range at `width`, or `None` when the board is too
+/// narrow to split and so has no divider to move.
+pub(super) fn explorer_bounds(width: usize) -> Option<(usize, usize)> {
+    (width >= MIN_SPLIT).then(|| (MIN_PANE, width.saturating_sub(MIN_PANE + 1).max(MIN_PANE)))
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Item {
@@ -365,6 +383,7 @@ impl OrgBoard {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn frame(
         &self,
         questions: Option<&crate::needs_overlay::QuestionsFold>,
@@ -372,8 +391,21 @@ impl OrgBoard {
         body_h: usize,
         now: u64,
     ) -> Frame {
+        self.frame_with(questions, width, body_h, now, LEFT)
+    }
+
+    /// [`Self::frame`] with the explorer at `left` columns when the right
+    /// pane shows beside it.
+    pub(crate) fn frame_with(
+        &self,
+        questions: Option<&crate::needs_overlay::QuestionsFold>,
+        width: usize,
+        body_h: usize,
+        now: u64,
+        left: usize,
+    ) -> Frame {
         let split = width >= MIN_SPLIT;
-        let explorer_w = if split { LEFT } else { width };
+        let explorer_w = if split { left } else { width };
         let explorer = super::org_tabs::explorer(
             self.fleet.as_ref(),
             &self.entries(),
@@ -392,13 +424,13 @@ impl OrgBoard {
                 right: Vec::new(),
             };
         }
-        let (mut right, body) = self.right(questions, width - LEFT - 1, now);
+        let (mut right, body) = self.right(questions, width - left - 1, now);
         let avail = body_h.saturating_sub(right.len());
         let start = self.scroll.min(body.len().saturating_sub(avail));
         right.extend(body.into_iter().skip(start).take(avail));
         Frame {
             explorer,
-            right_x: Some(LEFT + 1),
+            right_x: Some(left + 1),
             right,
         }
     }
@@ -515,12 +547,13 @@ impl OrgBoard {
         height: usize,
         row: usize,
         col: usize,
+        left: usize,
     ) -> Option<String> {
         let body_h = height.saturating_sub(1);
         if row >= body_h {
             return None;
         }
-        let frame = self.frame(questions, width, body_h, now());
+        let frame = self.frame_with(questions, width, body_h, now(), left);
         let line = match frame.right_x {
             Some(x) if col >= x => {
                 return frame.right.get(row)?.tap_at(col - x).map(str::to_string)
@@ -548,6 +581,7 @@ pub(crate) fn open(view: &mut View) {
     super::backlog_board::set_sideline_view(view, SidelineView::Org);
 }
 pub(crate) fn maybe_kick(view: &mut View, tx: &OrgTx) {
+    super::machine_tree::maybe_kick(view, tx);
     let Some(b) = view.org_board.as_mut() else {
         return;
     };
@@ -669,7 +703,8 @@ pub(crate) fn paint(
     }
     let body_h = height - 1;
     let now = now();
-    let frame = b.frame(view.questions_fold.as_ref(), width, body_h, now);
+    let left = explorer_w(width, &view.edge_sizes);
+    let frame = b.frame_with(view.questions_fold.as_ref(), width, body_h, now, left);
     let explorer_w = frame.right_x.map_or(width, |x| x - 1);
     let lines: Vec<BLine> = frame.explorer.into_iter().map(|l| l.line).collect();
     super::backlog_style::paint_panel_at(
@@ -1001,6 +1036,7 @@ pub(crate) async fn mouse(
             height,
             rep.row as usize,
             rep.col as usize,
+            explorer_w(width, &view.edge_sizes),
         )
     }) else {
         return Ok(());

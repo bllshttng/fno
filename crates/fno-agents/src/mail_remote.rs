@@ -159,6 +159,25 @@ pub fn sh_quote(word: &str) -> String {
 /// MagicDNS host short.
 pub const SSH_FAST_OPTIONS: [&str; 4] = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=5"];
 
+/// The long-lived posture for a terminal carried over ssh: `-t` for the far
+/// tty, and a keepalive so a dead link reads as dead in 45 seconds instead of
+/// never. No `ControlMaster`: the first ssh would own the master, so closing
+/// its pane would end every other link to that machine.
+const SSH_TTY_OPTIONS: [&str; 5] = [
+    "-t",
+    "-o",
+    "ServerAliveInterval=15",
+    "-o",
+    "ServerAliveCountMax=3",
+];
+
+/// [`ssh_argv`] for a terminal session that stays open.
+pub fn ssh_tty_argv(host: &str, words: &[String]) -> Vec<String> {
+    let mut argv = ssh_argv(host, words);
+    argv.splice(1..1, SSH_TTY_OPTIONS.map(String::from));
+    argv
+}
+
 /// The ssh relay command: the remote login shell resolves `fno` via its
 /// profile (the cargo bin dir), then execs the command with the words as
 /// positional arguments. `$0` is `sh`, so `"$@"` is the command tail. Every
@@ -1611,10 +1630,10 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         std::env::set_var("FNO_STATE_DIR", root.path());
         std::env::set_var(crate::paths::HOME_ENV, root.path().join("agents"));
-        let bus_live = root.path().join("bus").join("messages.jsonl");
+        let bus_live = root.path().join("db/mail/bus/messages.jsonl");
         let read_chats = |payload: &str| -> Vec<Value> {
             let mut rows = Vec::new();
-            let dir = root.path().join("chats");
+            let dir = root.path().join("db/mail/chats");
             let Ok(rd) = std::fs::read_dir(&dir) else {
                 return rows;
             };

@@ -715,13 +715,19 @@ pub fn owner_from_env() -> Option<(u32, u64)> {
 
 /// The current process identity in the environment shape inherited by every
 /// test-spawned daemon or client.
-pub fn self_owner_env() -> [(&'static str, String); 2] {
+pub fn self_owner_env() -> [(&'static str, String); 3] {
     let pid = std::process::id();
     let birth = crate::daemon::process_start_time(pid)
         .expect("the current test process must have a readable birth time");
     [
         ("FNO_TEST_OWNER_PID", pid.to_string()),
         ("FNO_TEST_OWNER_BIRTH", birth.to_string()),
+        // The notify dispatch runs in-process in this binary now, so a child
+        // that reaches a notice would toast the operator's screen for real
+        // (the 2026-10-01 leak class). The hermetic stamp is the family's
+        // designed suppression: the mux spawn and the toast skip, the
+        // channel verdict stays honest.
+        ("FNO_TEST_HERMETIC", "1".to_string()),
     ]
 }
 
@@ -2964,7 +2970,12 @@ mod tests {
             .unwrap_or_else(|e| e.into_inner());
         let td = tempfile::TempDir::new().unwrap();
         let saved = std::env::var_os("FNO_AGENTS_HOME");
+        let saved_state = std::env::var_os("FNO_STATE_DIR");
         std::env::set_var("FNO_AGENTS_HOME", td.path());
+        // self_owner_env carries the hermetic stamp, and the fence it arms
+        // judges the STATE root: pin it beside the agents home, or the run
+        // resolves $HOME/.fno/spaces and the fence refuses the whole test.
+        std::env::set_var("FNO_STATE_DIR", td.path());
         crate::paths::pin_test_claims_root(td.path());
         for (key, value) in self_owner_env() {
             std::env::set_var(key, value);
@@ -2975,12 +2986,20 @@ mod tests {
             "-c".to_string(),
             argv.to_string(),
         ]);
-        for key in ["FNO_TEST_OWNER_PID", "FNO_TEST_OWNER_BIRTH"] {
+        for key in [
+            "FNO_TEST_OWNER_PID",
+            "FNO_TEST_OWNER_BIRTH",
+            "FNO_TEST_HERMETIC",
+        ] {
             std::env::remove_var(key);
         }
         match saved {
             Some(v) => std::env::set_var("FNO_AGENTS_HOME", v),
             None => std::env::remove_var("FNO_AGENTS_HOME"),
+        }
+        match saved_state {
+            Some(v) => std::env::set_var("FNO_STATE_DIR", v),
+            None => std::env::remove_var("FNO_STATE_DIR"),
         }
         code
     }
@@ -3111,7 +3130,7 @@ mod tests {
         let _guard = crate::claims::test_env_lock()
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        // A pid this test did not spawn (pid 1 on any unix box) will never
+        // A pid this test did not spawn (pid 1 on any unix machine) will never
         // match a birth value this process invents, so the token is refused
         // rather than trusted.
         std::env::set_var("FNO_TEST_OWNER_PID", "1");

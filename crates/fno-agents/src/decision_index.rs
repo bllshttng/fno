@@ -17,6 +17,24 @@ use std::path::{Path, PathBuf};
 /// applies.
 pub const LAW_LANE_CUTOVER: &str = "2026-08-21T00:00:00Z";
 
+/// A wide law row recorded at or after this instant binds a machine that
+/// holds a user certificate only when that certificate's user key signed
+/// it. Measured 2026-11-03: the newest unsigned wide row read 23:47:37Z the
+/// day before. An older row reads as legacy and binds as it always did.
+pub const PROOF_CUTOVER: &str = "2026-11-03T00:00:00Z";
+
+thread_local! {
+    /// The rows the last store read on this thread withheld.
+    static WITHHELD: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many rows the last `read_store_rows` on this thread withheld as
+/// unproven. A note for a listing to print, never a filter. Per thread, so
+/// a daemon's concurrent reads never cross.
+pub fn withheld_unproven() -> usize {
+    WITHHELD.with(std::cell::Cell::get)
+}
+
 /// The live flattened decisions plus the count of lines that could not join
 /// them. `damaged` is a report for the reader, never a filter: the rows are
 /// exactly what the Python reader would call live.
@@ -227,7 +245,65 @@ fn row_key(row: &Value) -> (String, String) {
 /// paths: a caller that cannot read the store must say so, never render an
 /// empty list that reads as "no rulings exist". `damaged` counts JSONL
 /// lines only, the same source the Python reader reports.
+///
+/// On a machine that holds a user certificate, the rows then pass
+/// `admit_proven`, so every law reader sees only proven wide law.
 pub fn read_store_rows(graph: &Path, jsonl: &Path) -> Result<(Vec<Value>, usize), String> {
+    let (mut rows, damaged) = read_store_rows_raw(graph, jsonl)?;
+    let withheld = crate::identity::trusted_user_key()
+        .map_or(0, |user_key| admit_proven(&mut rows, &user_key));
+    WITHHELD.with(|count| count.set(withheld));
+    Ok((rows, damaged))
+}
+
+/// Drop the rows a peer could have written in this machine's user's name,
+/// returning how many. A wide decision (global, or bound to a machine or
+/// user) at or after `PROOF_CUTOVER` stays only when `user_key` proves it.
+/// A retraction of a proven wide law, or a decision that supersedes one,
+/// needs the same proof, so an unsigned row cannot retire signed law.
+pub fn admit_proven(rows: &mut Vec<Value>, user_key: &str) -> usize {
+    let kind = |row: &Value| {
+        row.get("_event_type")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string()
+    };
+    let text = |row: &Value, key: &str| {
+        row.get(key)
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_lowercase()
+    };
+    let proven = |row: &Value| crate::identity::verify_law_row(row).as_deref() == Some(user_key);
+    let before = rows.len();
+    let mut guarded = std::collections::HashSet::new();
+    rows.retain(|row| {
+        let wide =
+            binds(row_scope(row), String::new, String::new).is_some() || row_scope(row) == "global";
+        let fresh = row.get("ts").and_then(Value::as_str).unwrap_or("") >= PROOF_CUTOVER;
+        if kind(row) != "operator_decision" || !wide || !fresh {
+            return true;
+        }
+        let keep = proven(row);
+        if keep {
+            guarded.insert(text(row, "decision_id"));
+        }
+        keep
+    });
+    rows.retain(|row| {
+        let target = match kind(row).as_str() {
+            "decision_retracted" => text(row, "target_decision_id"),
+            "operator_decision" => text(row, "supersedes"),
+            _ => String::new(),
+        };
+        !guarded.contains(&target) || proven(row)
+    });
+    before - rows.len()
+}
+
+/// The store rows with no admit pass: the reindex keys its replay on every
+/// stored row, withheld ones included, or it would re-append them each run.
+pub fn read_store_rows_raw(graph: &Path, jsonl: &Path) -> Result<(Vec<Value>, usize), String> {
     let db = crate::backlog::database_path(graph);
     let db_present = db.exists();
     // The journal's store counts as present: rows committed to decisions.db
@@ -424,15 +500,16 @@ pub fn row_scope(row: &Value) -> &str {
 
 /// The session-scope test: `global` always governs; a
 /// `project:<slug>` row governs only the matching slug; a `machine:<id>` or
-/// `person:<name>` row governs only the session that resolves that identity.
+/// `user:<name>` (legacy `person:<name>`) row governs only the session that resolves that identity.
 pub fn row_in_scope(row: &Value, project: &str) -> bool {
-    match row_scope(row) {
-        "global" => true,
-        scoped => binds_here(scoped).unwrap_or_else(|| scoped == format!("project:{project}")),
-    }
+    filters_match(row)
+        && match row_scope(row) {
+            "global" => true,
+            scoped => binds_here(scoped).unwrap_or_else(|| scoped == format!("project:{project}")),
+        }
 }
 
-/// The identity arms of the scope test: `Some` for a `machine:` or `person:`
+/// The identity arms of the scope test: `Some` for a `machine:` or `user:`
 /// scope, `None` for every other scope.
 pub fn binds_here(scope: &str) -> Option<bool> {
     binds(scope, crate::claims::machine_id, crate::identity::person)
@@ -450,17 +527,26 @@ fn binds(
         let mine = machine();
         return Some(mine.is_empty() || mine == id);
     }
-    scope.strip_prefix("person:").map(|name| name == person())
+    scope
+        .strip_prefix("user:")
+        .or_else(|| scope.strip_prefix("person:"))
+        .map(|name| name == person())
 }
 
 /// The one visibility test every scope filter shares. `None` fails open on
 /// the project: it hides no project row. A row bound to another machine or
-/// person still hides, because identity needs no project.
+/// user still hides, because identity needs no project.
 pub fn row_visible(row: &Value, project: Option<&str>) -> bool {
     match project {
         Some(project) => row_in_scope(row, project),
-        None => binds_here(row_scope(row)) != Some(false),
+        None => filters_match(row) && binds_here(row_scope(row)) != Some(false),
     }
+}
+
+/// The row's filters beside its scope; every filter must match. The matcher
+/// and the session facts live in `law_filters`.
+pub fn filters_match(row: &Value) -> bool {
+    crate::law_filters::filters_match(row)
 }
 
 /// Keep only the rows the session may see, returning the withheld count.
@@ -784,5 +870,147 @@ mod scope_tests {
             assert_eq!(retain_in_scope(&mut index, project), 1, "{project:?}");
             assert_eq!(index.rows.len(), 2, "{project:?}");
         }
+    }
+
+    #[test]
+    fn a_user_scope_binds_like_the_legacy_person_scope() {
+        assert_eq!(
+            binds("user:jason", || "m".into(), || "jason".into()),
+            Some(true)
+        );
+        assert_eq!(
+            binds("user:anouk", || "m".into(), || "jason".into()),
+            Some(false)
+        );
+        assert_eq!(
+            binds("person:anouk", || "m".into(), || "jason".into()),
+            Some(false)
+        );
+    }
+}
+
+#[cfg(test)]
+mod proof_tests {
+    use super::*;
+    use crate::machine_key::{cert_path, mint_cert, own, MachineKey};
+
+    const AFTER: &str = "2026-11-04T00:00:00Z";
+    const LATER: &str = "2026-11-05T00:00:00Z";
+
+    fn certify(root: &Path, user_key: &MachineKey) {
+        let line = mint_cert(user_key, "jason", &own().expect("own key").public_key(), 1);
+        std::fs::write(cert_path(root), line).expect("writes");
+    }
+
+    /// One store envelope; `signed` seals it under the installed certificate.
+    fn envelope(kind: &str, ts: &str, mut data: Value, signed: bool) -> String {
+        if signed {
+            let map = data.as_object_mut().expect("object");
+            crate::identity::sign_law_row(map, kind, ts);
+        }
+        json!({"ts": ts, "type": kind, "data": data}).to_string()
+    }
+
+    fn law(id: &str, scope: &str) -> Value {
+        json!({
+            "decision_id": id, "subject": "topic", "decision": "Ruling.",
+            "authority_source": "operator", "scope": scope,
+        })
+    }
+
+    fn live_ids(graph: &Path, jsonl: &Path) -> Vec<String> {
+        let mut ids: Vec<String> = read_store_live(graph, jsonl)
+            .expect("reads")
+            .rows
+            .iter()
+            .filter_map(|r| r.get("decision_id").and_then(Value::as_str))
+            .map(str::to_string)
+            .collect();
+        ids.sort();
+        ids
+    }
+
+    #[test]
+    fn a_certified_machine_reads_only_wide_law_its_user_key_signed() {
+        let _lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _home = crate::claims::EnvVarGuard::set(
+            crate::paths::HOME_ENV,
+            dir.path().to_str().expect("utf-8"),
+        );
+        let mine = MachineKey::load_or_create(&dir.path().join("mine.pk8")).expect("key");
+        let theirs = MachineKey::load_or_create(&dir.path().join("theirs.pk8")).expect("key");
+        certify(dir.path(), &theirs);
+        let op = "operator_decision";
+        let foreign = envelope(op, AFTER, law("d-0000000b", "global"), true);
+        certify(dir.path(), &mine);
+        let jsonl = dir.path().join("decisions.jsonl");
+        let lines = [
+            envelope(op, AFTER, law("d-0000000a", "global"), true),
+            foreign,
+            envelope(op, AFTER, law("d-0000000c", "global"), false),
+            envelope(
+                op,
+                "2026-11-01T00:00:00Z",
+                law("d-0000000d", "global"),
+                false,
+            ),
+            envelope(op, AFTER, law("d-0000000e", "project:demo"), false),
+        ];
+        std::fs::write(&jsonl, lines.join("\n") + "\n").expect("writes");
+        let graph = dir.path().join("graph.json");
+        let (rows, _) = read_store_rows(&graph, &jsonl).expect("reads");
+        assert_eq!(withheld_unproven(), 2);
+        let mut ids: Vec<&str> = rows
+            .iter()
+            .filter_map(|r| r.get("decision_id").and_then(Value::as_str))
+            .collect();
+        ids.sort();
+        // The signed row, the legacy row and the project row stay.
+        assert_eq!(ids, ["d-0000000a", "d-0000000d", "d-0000000e"]);
+        // With no certificate the machine reads every row, as before.
+        std::fs::remove_file(cert_path(dir.path())).expect("removes");
+        assert_eq!(read_store_rows(&graph, &jsonl).expect("reads").0.len(), 5);
+        assert_eq!(withheld_unproven(), 0);
+    }
+
+    #[test]
+    fn an_unsigned_retirement_of_signed_wide_law_binds_only_where_no_certificate_is() {
+        let _lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _home = crate::claims::EnvVarGuard::set(
+            crate::paths::HOME_ENV,
+            dir.path().to_str().expect("utf-8"),
+        );
+        let mine = MachineKey::load_or_create(&dir.path().join("mine.pk8")).expect("key");
+        certify(dir.path(), &mine);
+        let retract = |target: &str, id: &str, signed: bool| {
+            let data = json!({"retraction_id": id, "target_decision_id": target, "reason": "r"});
+            envelope("decision_retracted", LATER, data, signed)
+        };
+        let mut superseder = law("d-0000000f", "project:demo");
+        superseder["supersedes"] = json!("d-0000000b");
+        let op = "operator_decision";
+        let jsonl = dir.path().join("decisions.jsonl");
+        let graph = dir.path().join("graph.json");
+        let mut lines = vec![
+            envelope(op, AFTER, law("d-0000000a", "global"), true),
+            envelope(op, AFTER, law("d-0000000b", "global"), true),
+            retract("d-0000000a", "r-0000001", false),
+            envelope(op, LATER, superseder, false),
+        ];
+        std::fs::write(&jsonl, lines.join("\n") + "\n").expect("writes");
+        assert_eq!(live_ids(&graph, &jsonl), ["d-0000000a", "d-0000000b"]);
+        // A signed retraction retires it here too.
+        lines.push(retract("d-0000000a", "r-0000002", true));
+        std::fs::write(&jsonl, lines.join("\n") + "\n").expect("writes");
+        assert_eq!(live_ids(&graph, &jsonl), ["d-0000000b"]);
+        // With no certificate the unsigned rows retire as they always did.
+        std::fs::remove_file(cert_path(dir.path())).expect("removes");
+        assert_eq!(live_ids(&graph, &jsonl), ["d-0000000f"]);
     }
 }

@@ -310,8 +310,8 @@ pub(crate) fn run_one_shot(
     // The harness resolves its project from $PWD, not the process cwd.
     cmd.env("PWD", cwd);
     crate::claims::stamp_command_env(&mut cmd, Some(agent_self), harness, None);
-    // A `[sandbox] provider = "devcontainer"` spawn runs this lane in the box.
-    let mut cmd = crate::sandbox_launch::boxed(cmd);
+    // A `[sandbox] provider = "devcontainer"` spawn runs this lane in the sandbox.
+    let mut cmd = crate::sandbox_launch::sandboxed(cmd);
     cmd.stdin(Stdio::null());
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());

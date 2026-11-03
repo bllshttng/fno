@@ -49,6 +49,10 @@ enum MatchRequest {
     /// is 0 restored, 1 recorded-but-index-failed, 3 refused.
     #[serde(rename = "restore")]
     Restore(RecordDoorRequest),
+    /// The renew door: `argv` is the `fno inbox law renew` command line.
+    /// Same ownership as `restore`: stdout carries the new id.
+    #[serde(rename = "renew")]
+    Renew(RecordDoorRequest),
     #[serde(rename = "scope-split")]
     ScopeSplit(ScopeSplitRequest),
     /// The decisions listing read: `argv` is the `fno backlog decisions`
@@ -85,6 +89,9 @@ enum MatchRequest {
     /// Prints one JSON answer and exits 0, like the other read modes.
     #[serde(rename = "rules-report")]
     RulesReport(RulesRequest),
+    /// Reads every rule against one event and says why each applies or not.
+    #[serde(rename = "rules-explain")]
+    RulesExplain(ExplainRequest),
 }
 
 /// The rules modes read one file: `file` for rules-check, `cases` for
@@ -98,6 +105,13 @@ struct RulesRequest {
     /// The report window, `7d`-shaped; rules-report only.
     #[serde(default)]
     since: Option<String>,
+}
+
+/// The rules-explain request: the event to read the rules against.
+#[derive(Deserialize)]
+struct ExplainRequest {
+    #[serde(default)]
+    event: crate::rules::Event,
 }
 
 /// The resolver request: the caller's authority claim and its carried
@@ -1165,9 +1179,9 @@ fn record_scope_answer_in(
             }
             format!("machine:{id}")
         }
-        Some(Widen::Person(named)) => {
+        Some(Widen::User(named)) => {
             format!(
-                "person:{}",
+                "user:{}",
                 named.clone().unwrap_or_else(crate::identity::person)
             )
         }
@@ -1177,7 +1191,7 @@ fn record_scope_answer_in(
                 return json!({
                     "ok": false,
                     "refusal": format!(
-                        "no project stamps this law ({reason}); pass --global, --machine or --person to widen"
+                        "no project stamps this law ({reason}); pass --global, --machine or --user to widen"
                     )
                 })
             }
@@ -1189,24 +1203,26 @@ fn record_scope_answer_in(
     json!({"ok": true, "scope": scope, "paths": paths})
 }
 
-/// The person gate (user ruling d-2a01fdf1): a law that reaches past this
-/// machine's own person needs a stated `fleet.owner` first. That is `global`,
-/// or a `machine:` or `person:` scope naming someone else. A stated name is
-/// presence, never proof, so the gate stops a mistake and never an attacker.
-fn wide_scope_refusal(scope: &str) -> Option<String> {
+/// The user gate: a law that reaches past this machine's own user needs a
+/// user certificate that names this machine's key. That is `global`, or a
+/// `machine:` or `user:` scope naming someone else. The door then signs the
+/// row, and a certified peer binds it only when that user key proves it.
+pub(crate) fn wide_scope_refusal(scope: &str) -> Option<String> {
     let names_another = match scope.split_once(':') {
         Some(("machine", id)) => id != crate::claims::machine_id(),
-        Some(("person", name)) => name != crate::identity::person(),
+        Some(("user" | "person", name)) => name != crate::identity::person(),
         _ => scope == "global",
     };
-    if !names_another || crate::identity::stated_person().is_some() {
+    if !names_another || crate::identity::proven_user().is_some() {
         return None;
     }
     Some(format!(
-        "a {scope} law binds more than this machine's own person, and no person is \
-         stated. Set `[fleet] owner = \"<name>\"` in ~/.fno/config.toml by hand \
-         (`fno config set` refuses that key), then record again. A project law, \
-         a bare --machine and a bare --person need no name"
+        "a {scope} law binds more than this machine's own user, and no user \
+         certificate proves who records it. Where the user key lives, run \
+         `fno-agents mail-remote key certify <user-key-file> <user> <this machine's key>` \
+         (`fno-agents mail-remote key show` prints the key), then install the line \
+         here with `fno-agents mail-remote key cert <line>`. A project law, a bare \
+         --machine and a bare --user need no certificate"
     ))
 }
 
@@ -1244,7 +1260,10 @@ fn scope_split_answer_in(
     let mut hidden = 0usize;
     for row in req.rows {
         let is_law = row.get("lane").and_then(Value::as_str) == Some("law");
-        if is_law && !decision_index::row_visible(&row, project.as_deref()) {
+        if is_law
+            && !(decision_index::row_visible(&row, project.as_deref())
+                && crate::law_when::row_active(&row, true))
+        {
             hidden += 1;
         } else {
             kept.push(row);
@@ -1291,18 +1310,27 @@ pub(crate) struct RecordDoor {
     widen: Option<Widen>,
     raw_paths: Vec<String>,
     quote: Option<String>,
+    /// Filters beside the scope: the law applies only where every one matches.
+    /// `(key, value)` pairs; the second list is the `not` form.
+    filters: Vec<(String, String)>,
+    not_filters: Vec<(String, String)>,
+    strength: Option<String>,
+    from: Option<String>,
+    whiles: Vec<String>,
+    between: Option<String>,
+    until: Option<String>,
 }
 
 /// A law's scope past the recording project, from one door flag. `None` in
-/// an identity arm names this machine or this person.
+/// an identity arm names this machine or this user.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Widen {
     Global,
     Machine(Option<String>),
-    Person(Option<String>),
+    User(Option<String>),
 }
 
-const RECORD_USAGE: &str = "usage: fno inbox law set <subject> [decision] [--decision-file f|-] [--rationale s] [--option s]... [--supersedes d-x] [--graduation k] [--graduation-ref r] [--read cmd]... [--global | --machine[=<id>] | --person[=<name>]] [--paths glob,glob] [--quote <the user's words>]";
+const RECORD_USAGE: &str = "usage: fno inbox law set <subject> [decision] [--decision-file f|-] [--rationale s] [--option s]... [--supersedes d-x] [--graduation k] [--graduation-ref r] [--read cmd]... [--global | --machine[=<id>] | --user[=<name>]] [--paths glob,glob] [--from date:<when>|event:<node>] [--while <cmd>]... [--between HH:MM-HH:MM] [--until YYYY-MM-DD] [--strength inform|warn|require-ack|block] [--quote <the user's words>] [--filter <key>=<value>]... [--not <key>=<value>]...";
 const RETRACT_USAGE: &str = "usage: fno inbox law retract <subject-or-decision-id> --reason <why> [--authority operator|chat_attested] [--quote <the user's words>]";
 const HISTORY_USAGE: &str = "usage: fno inbox law history <subject-or-decision-id>";
 
@@ -1320,6 +1348,13 @@ fn parse_record_door(args: &[String]) -> Result<RecordDoor, String> {
         widen: None,
         raw_paths: Vec::new(),
         quote: None,
+        filters: Vec::new(),
+        not_filters: Vec::new(),
+        strength: None,
+        from: None,
+        whiles: Vec::new(),
+        between: None,
+        until: None,
     };
     let mut widened_by: Vec<String> = Vec::new();
     let mut positional = 0usize;
@@ -1351,6 +1386,32 @@ fn parse_record_door(args: &[String]) -> Result<RecordDoor, String> {
             "--read" => door.reads.push(take(&mut i)?),
             "--paths" => door.raw_paths.push(take(&mut i)?),
             "--quote" => door.quote = Some(take(&mut i)?),
+            "--filter" | "--not" => {
+                let spec = take(&mut i)?;
+                let pair = crate::law_filters::parse_pair(&spec)
+                    .map_err(|e| format!("{flag} {spec}: {e}\n{RECORD_USAGE}"))?;
+                if flag == "--not" {
+                    door.not_filters.push(pair);
+                } else {
+                    door.filters.push(pair);
+                }
+            }
+            "--strength" => {
+                let v = take(&mut i)?.to_ascii_lowercase();
+                if !crate::rules::STRENGTHS.contains(&v.as_str()) {
+                    return Err(format!(
+                        "--strength takes one of {}, not {v:?}\n{RECORD_USAGE}",
+                        crate::rules::STRENGTHS.join(", ")
+                    ));
+                }
+                door.strength = Some(v);
+            }
+            "--from" => door.from = Some(take(&mut i)?),
+            "--while" => door.whiles.push(take(&mut i)?),
+            "--between" => door.between = Some(take(&mut i)?),
+            "--until" => {
+                door.until = Some(crate::law_renew::parse_until(&take(&mut i)?)?);
+            }
             "--global" => {
                 // An inline value parses like a bool flag should: --global=false
                 // must never widen because the value was ignored.
@@ -1364,13 +1425,13 @@ fn parse_record_door(args: &[String]) -> Result<RecordDoor, String> {
                 }
             }
             // A bare identity flag never takes the next argv word: it names
-            // this machine or person, and only `=<value>` names another.
-            "--machine" | "--person" => {
+            // this machine or user, and only `=<value>` names another.
+            "--machine" | "--user" => {
                 let named = inline.clone().filter(|v| !v.trim().is_empty());
                 door.widen = Some(if flag == "--machine" {
                     Widen::Machine(named)
                 } else {
-                    Widen::Person(named)
+                    Widen::User(named)
                 });
                 widened_by.push(flag.clone());
             }
@@ -1814,6 +1875,14 @@ pub(crate) fn record_door_write(door: RecordDoor, decision: String, caller: &Cal
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
+    let when = match crate::law_when::build_when(
+        door.from.as_deref(),
+        &door.whiles,
+        door.between.as_deref(),
+    ) {
+        Ok(w) => w,
+        Err(message) => return door_refuse(&message),
+    };
     // The evidence gate: a measured claim carries the read that produced it.
     // Exempt when the RESOLVED authority is operator.
     let mut read_rows: Option<Vec<Value>> = None;
@@ -1837,7 +1906,7 @@ pub(crate) fn record_door_write(door: RecordDoor, decision: String, caller: &Cal
         return door_refuse(&format!(
             "'{}' is a review-coverage waiver subject: waiver evidence needs \
              superuser authority, and a chat-attested row proves only that a \
-             session was addressed, not that a person reviewed anything. \
+             session was addressed, not that a user reviewed anything. \
              Waivers are recorded by the attended command \
              `fno do pr coverage-waive <pr> --reason \"...\"` at an operator \
              terminal; a session a harness identifies records nothing there.",
@@ -1965,14 +2034,38 @@ pub(crate) fn record_door_write(door: RecordDoor, decision: String, caller: &Cal
     if let Some(rows) = &read_rows {
         data["reads"] = json!(rows);
     }
+    let mut filters = serde_json::Map::new();
+    for (prefix, pairs) in [("", &door.filters), ("not_", &door.not_filters)] {
+        for (key, value) in pairs {
+            let name = format!("{prefix}{key}");
+            let joined = match filters.get(&name).and_then(Value::as_str) {
+                Some(prev) => format!("{prev},{value}"),
+                None => value.clone(),
+            };
+            filters.insert(name, json!(joined));
+        }
+    }
+    if !filters.is_empty() {
+        data["filters"] = Value::Object(filters);
+    }
     if !scope.is_empty() {
         data["scope"] = json!(scope);
     }
     if !paths.is_empty() {
         data["paths"] = json!(paths);
     }
+    if let Some(strength) = &door.strength {
+        data["strength"] = json!(strength);
+    }
+    if let Some(when) = &when {
+        data["when"] = when.clone();
+    }
+    if let Some(until) = &door.until {
+        data["until"] = json!(until);
+    }
     if let Some(map) = data.as_object_mut() {
         crate::identity::stamp_person(map);
+        crate::identity::sign_law_row(map, "operator_decision", &ts);
     }
     let envelope = json!({"ts": ts, "type": "operator_decision", "source": "target", "data": data});
     if let Err(code) = append_decision(&envelope, &decision_id) {
@@ -1988,6 +2081,9 @@ pub(crate) fn record_door_write(door: RecordDoor, decision: String, caller: &Cal
         );
     }
     println!("{decision_id}");
+    if let Some(when) = &when {
+        crate::law_when::row_active(&json!({"decision_id": decision_id, "when": when}), true);
+    }
     if let Some(old) = &auto_superseded {
         eprintln!("superseded {old}");
     }
@@ -2158,7 +2254,7 @@ pub(crate) fn all_decision_rows() -> Result<(Vec<Value>, usize), String> {
 }
 
 /// The rows the retract, restore and history doors may address: global, the
-/// current project, and every machine or person law. Those doors manage law
+/// current project, and every machine or user law. Those doors manage law
 /// rather than apply it, so the owner reaches a law bound to another machine,
 /// or to a mistyped id that binds nowhere, from any machine. An unresolvable
 /// project fails open, as every reader does.
@@ -2480,6 +2576,11 @@ pub(crate) fn write_retraction_event(w: &RetractWrite) -> RetractOutcome {
     if let Some(q) = w.quote.as_deref().map(str::trim).filter(|q| !q.is_empty()) {
         data["quote"] = json!(text_cap(q, 2000));
     }
+    // Signed, because an unsigned retraction would retire a signed wide law
+    // on every machine.
+    if let Some(map) = data.as_object_mut() {
+        crate::identity::sign_law_row(map, "decision_retracted", &ts);
+    }
     let envelope =
         json!({"ts": ts, "type": "decision_retracted", "source": "target", "data": data});
     let journal = project_events_journal();
@@ -2768,7 +2869,9 @@ fn graduated_retraction_lines_in(
     // open, matching `retain_in_scope`.
     let mut lines = Vec::new();
     for row in &index.rows {
-        if !decision_index::row_visible(row, scope_project) {
+        if !decision_index::row_visible(row, scope_project)
+            || !crate::law_when::row_active(row, true)
+        {
             continue;
         }
         let Some(grad) = row.get("graduation") else {
@@ -2819,7 +2922,7 @@ fn node_is_closed(node_id: &str) -> bool {
 pub fn run_law_match(args: &[String]) -> i32 {
     if args.iter().any(|a| a == "-h" || a == "--help") {
         println!(
-            "usage: fno inbox law match (one JSON request on stdin: mode=ask|law|stage|validate|record-scope|scope-split|rules-check|rules-measure|rules-import|rules-report|record|retract|history; record takes argv: the fno inbox law set command line, and stdin: the text --decision-file - reads; retract and history take argv: the matching fno inbox law command line)"
+            "usage: fno inbox law match (one JSON request on stdin: mode=ask|law|stage|validate|record-scope|scope-split|rules-check|rules-measure|rules-import|rules-report|rules-explain|record|retract|history; record takes argv: the fno inbox law set command line, and stdin: the text --decision-file - reads; retract and history take argv: the matching fno inbox law command line)"
         );
         return 0;
     }
@@ -2913,6 +3016,9 @@ pub fn run_law_match_str(input: &str) -> i32 {
         MatchRequest::Restore(r) => {
             return crate::law_restore::run_restore(&r.argv);
         }
+        MatchRequest::Renew(r) => {
+            return crate::law_renew::run_renew(&r.argv);
+        }
         MatchRequest::Ask(r) => serde_json::to_string(&ask_answer(&r)).expect("serializes"),
         MatchRequest::Law(r) => {
             let near = near_law_lines(&r.law);
@@ -2943,6 +3049,9 @@ pub fn run_law_match_str(input: &str) -> i32 {
         }
         MatchRequest::RulesImport(r) => {
             return crate::rules_source::run_rules_import(&r.file);
+        }
+        MatchRequest::RulesExplain(r) => {
+            serde_json::to_string(&crate::rules_source::rules_explain(r.event)).expect("serializes")
         }
         MatchRequest::RulesReport(r) => {
             serde_json::to_string(&crate::rules_source::rules_report(r.since.as_deref()))
@@ -3359,7 +3468,36 @@ pub(crate) mod scope_tests {
             widen: None,
             raw_paths: Vec::new(),
             quote: None,
+            filters: Vec::new(),
+            not_filters: Vec::new(),
+            strength: None,
+            from: None,
+            whiles: Vec::new(),
+            between: None,
+            until: None,
         }
+    }
+
+    #[test]
+    fn the_record_door_takes_filters_and_refuses_a_key_with_no_source() {
+        let argv = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let door = parse_record_door(&argv(&[
+            "s",
+            "--filter",
+            "harness=codex",
+            "--not",
+            "model=glm-5.3-flash",
+        ]))
+        .expect("parses");
+        assert_eq!(door.filters, vec![("harness".into(), "codex".into())]);
+        assert_eq!(
+            door.not_filters,
+            vec![("model".into(), "glm-5.3-flash".into())]
+        );
+        let refused = parse_record_door(&argv(&["s", "--filter", "lane=paint"]))
+            .err()
+            .expect("lane has no source yet");
+        assert!(refused.contains("no identity source"), "{refused}");
     }
 
     #[test]
@@ -3488,14 +3626,14 @@ pub(crate) mod scope_tests {
     }
 
     #[test]
-    fn one_scope_flag_per_law_and_a_wide_one_needs_a_stated_owner() {
+    fn one_scope_flag_per_law_and_a_wide_one_needs_a_user_certificate() {
         let argv = |words: &[&str]| words.iter().map(|w| w.to_string()).collect::<Vec<_>>();
         let Err(two) = parse_record_door(&argv(&["s", "d", "--global", "--machine"])) else {
             panic!("two scope flags parse");
         };
         assert!(two.contains("--global and --machine"), "{two}");
-        let bare = parse_record_door(&argv(&["s", "--person", "d"])).expect("parses");
-        assert_eq!(bare.widen, Some(Widen::Person(None)));
+        let bare = parse_record_door(&argv(&["s", "--user", "d"])).expect("parses");
+        assert_eq!(bare.widen, Some(Widen::User(None)));
         assert_eq!(
             bare.decision.as_deref(),
             Some("d"),
@@ -3510,12 +3648,12 @@ pub(crate) mod scope_tests {
             d.widen = widen;
             record_door_write(d, text.to_string(), &operator)
         };
-        // No fleet.owner: global refuses and no store holds the row.
+        // No certificate: global refuses and no store holds the row.
         assert_eq!(record("wide-one", Some(Widen::Global)), 3);
         assert!(!env.index_text().contains("wide-one"));
         assert!(!env.journal_text().contains("wide-one"));
-        let other = Some(Widen::Person(Some("nobody-zz9".into())));
-        assert_eq!(record("other-one", other), 3, "another person is wide too");
+        let other = Some(Widen::User(Some("nobody-zz9".into())));
+        assert_eq!(record("other-one", other), 3, "another user is wide too");
         // A project law and this machine's own scope need no name.
         assert_eq!(record("project-one", None), 0);
         let mine = crate::claims::machine_id();
@@ -3529,16 +3667,51 @@ pub(crate) mod scope_tests {
             let want = format!("\"scope\":\"machine:{mine}\"");
             assert!(env.index_text().contains(&want), "{}", env.index_text());
         }
-        // A stated owner opens the wide scopes.
+        // A stated owner is a name, never proof: global still refuses.
         std::fs::write(
             env.1.path().join("config.toml"),
             "[fleet]\nowner = \"jason\"\n",
         )
         .expect("writes");
+        let refusal = wide_scope_refusal("global").expect("an owner alone refuses");
+        assert!(
+            refusal.contains("mail-remote key certify")
+                && refusal.contains("mail-remote key cert "),
+            "{refusal}"
+        );
+        assert_eq!(record("wide-owner", Some(Widen::Global)), 3);
+        assert!(!env.index_text().contains("wide-owner"));
+        assert!(!env.journal_text().contains("wide-owner"));
+        // A certificate for this machine's key opens the wide scopes, and
+        // the row it records reads back signed under that user key.
+        let agents = env.0.path().join("agents");
+        std::fs::create_dir_all(&agents).expect("mkdir");
+        let _agents = crate::claims::EnvVarGuard::set(
+            crate::paths::HOME_ENV,
+            agents.to_str().expect("utf-8"),
+        );
+        let user_key =
+            crate::machine_key::MachineKey::load_or_create(&env.0.path().join("user.pk8"))
+                .expect("user key");
+        let own = crate::machine_key::own().expect("own key").public_key();
+        std::fs::write(
+            crate::machine_key::cert_path(&agents),
+            crate::machine_key::mint_cert(&user_key, "jason", &own, 1),
+        )
+        .expect("writes");
         assert_eq!(record("wide-two", Some(Widen::Global)), 0);
         assert!(env.index_text().contains("\"scope\":\"global\""));
-        // A law bound to a person nobody resolves stays addressable here.
-        let typo = Some(Widen::Person(Some("nobody-zz9".into())));
+        let (rows, _) = all_decision_rows().expect("the store reads");
+        let signed = rows
+            .iter()
+            .find(|r| r["subject"] == "wide-two")
+            .expect("the signed row reads back");
+        assert_eq!(
+            crate::identity::verify_law_row(signed),
+            Some(user_key.public_key())
+        );
+        // A law bound to a user nobody resolves stays addressable here.
+        let typo = Some(Widen::User(Some("nobody-zz9".into())));
         assert_eq!(record("typo-one", typo), 0);
         let (rows, _) = all_decision_rows().expect("the store reads");
         let addressable = scope_filtered_rows(rows);

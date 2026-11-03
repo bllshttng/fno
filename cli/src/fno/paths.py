@@ -758,31 +758,34 @@ def graph_archive_json() -> Path:
     return graph_json().parent / "graph-archive.json"
 
 
-def _pinned_root_file(name: str) -> Path:
-    """The pinned-global answer for one state-root file: the ``FNO_STATE_DIR``
-    seal or an absolute ``state_dir`` anchors it; a *relative* ``state_dir``
-    would land it inside a repo checkout, so ``~/.fno`` answers instead.
-    """
+def _pinned_root() -> Path:
+    """The pinned-global state root (seal or absolute ``state_dir``, else
+    ``~/.fno``)."""
     if os.environ.get("FNO_STATE_DIR"):
-        return root_state_file(name)
+        return state_dir()
     raw = os.path.expanduser(os.path.expandvars(_settings().state_dir))
     if os.path.isabs(raw):
-        return root_state_file(name)
-    return _guard_state_path(_resolve("~/.fno/") / name)
+        return _guard_state_path(_resolve(raw))
+    return _guard_state_path(_resolve("~/.fno/"))
+
+
+def _pinned_state_subfile(name: str) -> Path:
+    """The pinned root, then the ``db/history/`` move ladder (the root
+    spelling renames in on first resolve)."""
+    return _state_subfile_at(_pinned_root(), "db/history", name, name)
 
 
 def ledger_json() -> Path:
     """Return the path to ledger.json.
 
-    Pinned global: the ledger is cross-project by definition (one row per
-    terminal session across every repo), so it must never fork into a
-    per-repo stray. The ``FNO_STATE_DIR`` seal wins first, before any
-    override. An absolute ``config.paths.ledger_json`` override wins next,
-    while a relative override is anchored under ``~/.fno``; otherwise
-    :func:`_pinned_root_file` answers.
+    Pinned global (one ledger per person, never a per-repo stray): the
+    ``FNO_STATE_DIR`` seal wins first, then an absolute ``paths.ledger_json``
+    override (a relative one anchors under ``~/.fno``). The default leg
+    answers the layout table's ``db/history/`` row, renaming the root
+    spelling in on first resolve (the Python mirror of Rust ``place()``).
     """
     if os.environ.get("FNO_STATE_DIR"):
-        return root_state_file("ledger.json")
+        return _pinned_state_subfile("ledger.json")
     settings = _settings()
     override = settings.paths.ledger_json
     if override is not None:
@@ -792,7 +795,7 @@ def ledger_json() -> Path:
         return _guard_state_path(
             _resolve(override, project_root=_resolve("~/.fno/"), settings=settings)
         )
-    return _pinned_root_file("ledger.json")
+    return _pinned_state_subfile("ledger.json")
 
 
 def operator_lane() -> Path:
@@ -812,7 +815,7 @@ def operator_lane() -> Path:
         return _guard_state_path(
             _resolve(override, project_root=_resolve("~/.fno/"), settings=settings)
         )
-    return _pinned_root_file("my-priorities.md")
+    return _guard_state_path(_pinned_root() / "my-priorities.md")
 
 
 def global_events_json() -> Path:
@@ -879,7 +882,6 @@ _ROOT_STATE_FILE_ROWS: frozenset[str] = frozenset(
     {
         "config.toml", "config.toml.lock", "config.toml.bak",
         "settings.yaml", "settings.yaml.lock",
-        "ledger.json",
         "decisions.jsonl", "decisions.jsonl.compact", "decisions.jsonl.corrupt",
         "questions.jsonl",
         "my-priorities.md", "my-priorities.md.lock",
@@ -908,7 +910,7 @@ def root_state_file(name: str) -> Path:
 
 def questions_jsonl() -> Path:
     """Return the permanent machine-wide operator-question index."""
-    return _pinned_root_file("questions.jsonl")
+    return _guard_state_path(_pinned_root() / "questions.jsonl")
 
 
 def project_events_json() -> Path:
@@ -1121,9 +1123,14 @@ def evals_history() -> Path:
     if override is not None:
         return _guard_state_path(_resolve(override))
     raw = os.path.expanduser(os.path.expandvars(settings.state_dir))
-    if os.path.isabs(raw):
-        return state_dir() / "history" / "evals-history.jsonl"
-    return _guard_state_path(_resolve("~/.fno/") / "history" / "evals-history.jsonl")
+    root = state_dir() if os.path.isabs(raw) else _resolve("~/.fno/")
+    return _guard_state_path(
+        Path(
+            _plan_path_door(
+                ["state", "path", "dir", "history", "--file", "evals-history.jsonl", "--root", str(root)]
+            )
+        )
+    )
 
 
 def runtime_state_json() -> Path:
@@ -1195,31 +1202,24 @@ def observer_reports_dir(
 
 
 def bus_dir() -> Path:
-    """Return the cross-agent bus directory (default: ~/.fno/bus/).
+    """Return the cross-agent bus directory (default: ~/.fno/db/mail/bus/).
 
     Holds the canonical provider-neutral message log (``messages.jsonl``,
     plus rotated ``messages.jsonl.N`` segments) and per-agent read cursors
     under ``cursors/``. Override via ``config.paths.bus_dir`` in settings.yaml.
 
-    Env overrides take precedence so the bus co-isolates with the inbox store
-    under tmp dirs and CI/tests never write the real ~/.fno/bus:
-      1. ``FNO_BUS_DIR``    - explicit override (tests / operators).
-      2. ``FNO_INBOX_ROOT`` - the inbox store's test root; the bus lands at
-                              ``<FNO_INBOX_ROOT>/.bus`` so every existing inbox
-                              test/smoke that isolates the store also isolates
-                              the bus, with no per-test fixture churn.
+    ``FNO_BUS_DIR`` is the explicit override (tests / operators), so CI and
+    tests never write the real bus. The default answers from the Rust ``dir``
+    door.
     """
     explicit = os.environ.get("FNO_BUS_DIR")
     if explicit:
         return _guard_state_path(Path(explicit))
-    inbox_root = os.environ.get("FNO_INBOX_ROOT")
-    if inbox_root:
-        return _guard_state_path(Path(inbox_root) / ".bus")
     settings = _settings()
     override = settings.paths.bus_dir
     if override is not None:
         return _guard_state_path(_resolve(override))
-    return state_dir() / "bus"
+    return Path(_plan_path_door(["state", "path", "dir", "bus", "--root", str(state_dir())]))
 
 
 def _plan_path_door(args: list[str]) -> str:
@@ -1328,7 +1328,10 @@ def handoffs_dir(project_root: Optional[Path] = None) -> Path:
         vroot = vault_root()
         if vroot is not None:
             return vroot / "internal" / project_name / "handoffs"
-    return state_dir() / "handoffs" / project_name
+    return (
+        Path(_plan_path_door(["state", "path", "dir", "handoffs", "--root", str(state_dir())]))
+        / project_name
+    )
 
 
 def briefs_dir() -> Path:
@@ -1355,7 +1358,7 @@ def postmortems_dir() -> Path:
     override = settings.paths.postmortems_dir
     if override is not None:
         return _guard_state_path(_resolve(override))
-    return state_dir() / "postmortems"
+    return Path(_plan_path_door(["state", "path", "dir", "postmortems", "--root", str(state_dir())]))
 
 
 def worktrees_base() -> Path:

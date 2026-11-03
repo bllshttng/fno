@@ -24,6 +24,13 @@ pub(super) fn server_has_pane_scroll(server_proto: Option<u32>) -> bool {
     server_proto.is_some_and(|proto| proto >= 118)
 }
 
+/// True when the attached server parses `Command::ReachRemote` (v121), the
+/// portal open for a row on another machine. Same reading of "never
+/// announced" as the SplitDir gate: unable.
+pub(super) fn server_has_remote_reach(server_proto: Option<u32>) -> bool {
+    server_proto.is_some_and(|proto| proto >= 121)
+}
+
 /// The refusal line a move or an Add folder shows against an older server.
 pub(super) fn workspace_pins_skew_notice() -> String {
     "update the mux server to move a session".into()

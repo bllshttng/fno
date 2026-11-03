@@ -517,6 +517,14 @@ fn list_core(
             decisions_jsonl().display()
         );
     }
+    let withheld = crate::decision_index::withheld_unproven();
+    if withheld > 0 {
+        eprintln!(
+            "decide: {withheld} wide row(s) recorded since {} were withheld: this machine's \
+             user key did not sign them. `fno-agents mail-remote key show` names the key.",
+            crate::decision_index::PROOF_CUTOVER
+        );
+    }
     Ok(list_core_over(
         rows, damaged, entries, subject, lane, state, scope_all,
     ))

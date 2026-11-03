@@ -594,7 +594,7 @@ fn lanes_threads() -> (Option<i64>, String) {
 ///
 /// The test-thread count comes from the spawn-gate headroom, capped at the
 /// machine's own CPU count: a lane is a worker-lane headroom count, not a
-/// thread count, so an idle box's 64-lane reading must never become 64 test
+/// thread count, so an idle machine's 64-lane reading must never become 64 test
 /// threads on a 12-core machine. A bare `--` (libtest args follow) or an
 /// unrelated `--jobs`/`-j` build-parallelism flag no longer suppresses the
 /// cap - only an explicit `--test-threads` does, and even that is clamped to

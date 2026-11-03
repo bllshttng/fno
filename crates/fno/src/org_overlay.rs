@@ -622,7 +622,7 @@ impl Panel {
                             }
                         }
                         if low > ceiling {
-                            // The over verdict names the axis it read, so a busy box
+                            // The over verdict names the axis it read, so a busy machine
                             // is never mistaken for the fleet being over.
                             l.push_str(&format!(
                                 " · {:.1}x over on fleet_cpu_share",
@@ -877,7 +877,7 @@ impl Panel {
             }
 
             // the machine the lanes compete for, not the fleet alone. The 100%
-            // reading was TRUE and unbelievable, so a saturated box names the
+            // reading was TRUE and unbelievable, so a saturated machine names the
             // place the explanation lives.
             match (
                 org.arm_num("whole-machine cpu", "busy_fraction"),
@@ -957,7 +957,7 @@ impl Panel {
         }
 
         // the lanes payload's own readings, when it landed: the caller's
-        // share, what saturates the box, the advisor's answer, and the
+        // share, what saturates the machine, the advisor's answer, and the
         // attribution gap. The unattributed bucket renders only when it
         // holds someone - a count that sees nobody says so by being absent.
         if let Some(org) = self.fold.as_ref() {
@@ -977,7 +977,7 @@ impl Panel {
                 lines.push(line);
             }
 
-            // what is saturating the box, from the ps read the fold already
+            // what is saturating the machine, from the ps read the fold already
             // performed - never a second instrument.
             match census.top_consumers.as_ref().map(Vec::as_slice) {
                 Some([]) => lines.push(format!(
@@ -1169,10 +1169,35 @@ fn parse(stdout: &[u8]) -> Option<Org> {
     serde_json::from_slice(stdout).ok()
 }
 
+/// Fold the gate reading now: the daemon's per-cwd cached probe answer over
+/// the socket, falling back to the in-process spawn only when no daemon
+/// answers (a daemon-less install keeps today's behavior, and the spawned
+/// probe stays the fallback's cost, not the steady state's).
+pub async fn gate_now() -> Result<GateReading, String> {
+    if let Ok(reading) = daemon_gate().await {
+        return Ok(reading);
+    }
+    gate_now_via_spawn().await
+}
+
+/// The daemon socket arm: the same probe answer the spawned child printed,
+/// served from the daemon's per-cwd cache.
+async fn daemon_gate() -> Result<GateReading, String> {
+    let cwd = std::env::current_dir().map_err(|e| format!("cwd unreadable: {e}"))?;
+    let payload = serde_json::json!({"mode": "probe", "only": ["lanes"], "tests": true});
+    let answer = crate::agents_view::gate_probe_rpc(
+        &crate::agents_view::supervisor_sock_path(),
+        &cwd,
+        payload,
+    )
+    .await?;
+    serde_json::from_value(answer).map_err(|e| format!("gate answer invalid: {e}"))
+}
+
 /// Fold the spawn-gate probe now: one payload on stdin, the whole answer
 /// parsed as the gate reading. A nonzero exit is not a failure - the probe
 /// answers refusals on stdout too - but an empty one is.
-pub async fn gate_now() -> Result<GateReading, String> {
+async fn gate_now_via_spawn() -> Result<GateReading, String> {
     let mut command =
         crate::process_admission::tokio_command(crate::digest_overlay::fno_agents_bin());
     command

@@ -50,7 +50,7 @@ fn sideline_menu_lists_backlog_and_leaves_experimental_to_settings() {
         experimental::Flags {
             org_board: true,
             pane_share: true,
-            share: None,
+            ..Default::default()
         },
     );
     // With pane share on, the menu carries the share row, still paired.

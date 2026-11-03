@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -51,12 +52,12 @@ def _user_row(text: str, uuid: str, ts: str) -> dict:
     }
 
 
-def _run_hook(tmp_path: Path, *, env_extra: dict[str, str], bin_dir: Path) -> subprocess.CompletedProcess[str]:
+def _run_hook(tmp_path: Path, *, env_extra: dict[str, str], bin_dir: Path, hook: Path = HOOK) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
     env.update(env_extra)
     return subprocess.run(
-        ["bash", str(HOOK)],
+        ["bash", str(hook)],
         env=env,
         cwd=str(tmp_path),
         capture_output=True,
@@ -101,11 +102,27 @@ def test_speaks_with_literal_count_at_depth_three(tmp_path):
 
 
 def test_silent_when_deployed_fno_lacks_the_command(tmp_path):
-    """AC: exit 2 (Typer no-such-command) -> silent, exit 0, no perpetual nag."""
+    """AC: exit 2 (Typer no-such-command) -> silent, exit 0, no perpetual nag.
+
+    Silence also needs no checkout front: the hook resolves
+    $HOOK_DIR/../crates/fno/target before PATH, so the scenario runs a copy
+    of the hook tree without the crates dir - the deployed-repo shape. With
+    a checkout build present the read goes there, and a failed read from it
+    reports instead of staying silent.
+    """
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     _fno_wrapper(bin_dir, exit_code=2)
-    result = _run_hook(tmp_path, env_extra={}, bin_dir=bin_dir)
+    tree = tmp_path / "deployed"
+    hook_copy = tree / "hooks" / HOOK.name
+    hook_copy.parent.mkdir(parents=True)
+    (tree / "scripts" / "lib").mkdir(parents=True)
+    shutil.copy(HOOK, hook_copy)
+    shutil.copy(
+        REPO_ROOT / "scripts" / "lib" / "hook-budget.sh",
+        tree / "scripts" / "lib" / "hook-budget.sh",
+    )
+    result = _run_hook(tmp_path, env_extra={}, bin_dir=bin_dir, hook=hook_copy)
     assert result.returncode == 0, result.stderr
     assert result.stdout == ""
 

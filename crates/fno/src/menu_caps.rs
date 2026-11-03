@@ -1,5 +1,5 @@
 //! `fno doctor lint menu-caps`: the first three levels of every fno binary
-//! hold at most twelve commands each, and a hidden command counts. Hiding is not
+//! hold at most twelve commands each (thirteen at a root), and a hidden command counts. Hiding is not
 //! folding, so the guard never reads a visibility cell.
 //!
 //! It is a pure read over committed files, so it needs no Python and no
@@ -22,15 +22,26 @@
 //! `scripts/ci/menu-caps-debt.tsv` names the groups that are over today. It
 //! is shrink-only: a group over the cap needs a row, may not pass its row's
 //! ceiling, may not sit below it (lower the row in the same change), and a
-//! row for a group back at twelve or under must go.
+//! row for a group back at its cap or under must go.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use regex::Regex;
 
-/// The one cap, at the root, the second level and the third.
-pub const MENU_CAP: usize = 13;
+/// The cap at a binary's root: `fno` and `fno-agents`.
+pub const ROOT_CAP: usize = 13;
+/// The cap at the second and third levels.
+pub const GROUP_CAP: usize = 12;
+
+/// The cap for a counted group: a root holds thirteen, every other group twelve.
+pub fn cap_for(path: &str) -> usize {
+    if path == "(root)" || path == "fno-agents" {
+        ROOT_CAP
+    } else {
+        GROUP_CAP
+    }
+}
 
 const MAP_REL: &str = "scripts/ci/command-collapse-map.tsv";
 const BASELINE_REL: &str = "scripts/ci/command-baseline.txt";
@@ -280,18 +291,19 @@ pub fn check(counts: &BTreeMap<String, usize>, debt: &str) -> Result<String, Vec
     let rows = debt_rows(debt).map_err(|e| vec![e])?;
     let mut failures = Vec::new();
     for (path, &count) in counts {
-        if count <= MENU_CAP {
+        let cap = cap_for(path);
+        if count <= cap {
             continue;
         }
         match rows.get(path) {
             None => failures.push(format!(
-                "`{path}` holds {count} commands (cap {MENU_CAP}) and has no debt row. Fold its \
+                "`{path}` holds {count} commands (cap {cap}) and has no debt row. Fold its \
                  commands into nested groups; hiding a command does not lower the count. Only a \
                  group over the cap today may enter {DEBT_REL}, as `{path}\\t{count}\\t<note>`."
             )),
             Some(&ceiling) if count > ceiling => failures.push(format!(
                 "`{path}` holds {count} commands, above its debt ceiling {ceiling} (cap \
-                 {MENU_CAP}). Nest the new command under a group, or remove it."
+                 {cap}). Nest the new command under a group, or remove it."
             )),
             Some(&ceiling) if count < ceiling => failures.push(format!(
                 "`{path}` holds {count} commands, below its debt ceiling {ceiling}. Lower its \
@@ -302,9 +314,10 @@ pub fn check(counts: &BTreeMap<String, usize>, debt: &str) -> Result<String, Vec
     }
     for path in rows.keys() {
         let count = counts.get(path).copied().unwrap_or(0);
-        if count <= MENU_CAP {
+        let cap = cap_for(path);
+        if count <= cap {
             failures.push(format!(
-                "`{path}` holds {count} commands, inside the cap of {MENU_CAP}. Delete its row \
+                "`{path}` holds {count} commands, inside the cap of {cap}. Delete its row \
                  from {DEBT_REL}."
             ));
         }
@@ -317,7 +330,7 @@ pub fn check(counts: &BTreeMap<String, usize>, debt: &str) -> Result<String, Vec
         .map(|path| format!("{path} {}", counts[path]))
         .collect();
     Ok(format!(
-        "menu-caps: ok (cap {MENU_CAP} at levels 1-3; {} groups in debt: {})",
+        "menu-caps: ok (cap {ROOT_CAP} at a root, {GROUP_CAP} below; {} groups in debt: {})",
         debt.len(),
         if debt.is_empty() {
             "none".to_string()
@@ -330,7 +343,7 @@ pub fn check(counts: &BTreeMap<String, usize>, debt: &str) -> Result<String, Vec
 const USAGE: &str = "usage: fno doctor lint menu-caps
 
 Counts every command, hidden included, at the first three levels of fno and
-fno-agents. Cap 13. Groups over the cap today are named in
+fno-agents. Cap 13 at a root, 12 at levels two and three. Groups over the cap today are named in
 scripts/ci/menu-caps-debt.tsv, which may only shrink.
 Exit 0 ok, 1 a group over its cap or ceiling, 2 an input is missing.";
 
@@ -386,12 +399,16 @@ mod tests {
     fn menu_caps_refuses_every_debt_drift_and_counts_hidden_leaves() {
         // A group at the cap passes with no row; one more command, hidden or
         // not, refuses by name with the count and the cap (AC2).
-        assert!(check(&tree(&[("do", 13)]), "").is_ok());
-        let over = check(&tree(&[("do", 14)]), "").unwrap_err();
+        assert!(check(&tree(&[("do", 12)]), "").is_ok());
+        let over = check(&tree(&[("do", 13)]), "").unwrap_err();
         assert!(
-            over[0].contains("`do` holds 14") && over[0].contains("cap 13"),
+            over[0].contains("`do` holds 13") && over[0].contains("cap 12"),
             "{over:?}"
         );
+        // A root holds one more than a group: 13 passes, 14 refuses (AC1).
+        assert!(check(&tree(&[("(root)", 13), ("fno-agents", 13)]), "").is_ok());
+        let root = check(&tree(&[("(root)", 14)]), "").unwrap_err();
+        assert!(root[0].contains("cap 13"), "{root:?}");
         // Above, below, and inside a ceiling each refuse with the fix (AC3).
         let above = check(&tree(&[("mux", 22)]), "mux\t21\tfold\n").unwrap_err();
         assert!(above[0].contains("above its debt ceiling 21"), "{above:?}");

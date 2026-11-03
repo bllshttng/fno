@@ -29,6 +29,7 @@ pub(crate) struct ComposeInputs {
     pub failures: Value,
     pub review_lane: bool,
     pub platform_incident: Value,
+    pub ci_tier_keeper: Value,
 }
 
 /// One status read: the exit code, the stdout JSON payload, the stderr lines
@@ -213,6 +214,11 @@ pub(crate) fn compose_payload(inputs: &ComposeInputs) -> (i32, Value, Vec<String
     if !inputs.platform_incident.is_null() {
         payload.insert("platform_incident".into(), inputs.platform_incident.clone());
     }
+    // The tier fact rides the same cancelled-only shape: a live keeper
+    // holds, an absent one names the rerun as the remedy.
+    if !inputs.ci_tier_keeper.is_null() {
+        payload.insert("ci_tier_keeper".into(), inputs.ci_tier_keeper.clone());
+    }
     payload.insert("optional_reviews".into(), reviews_list);
     payload.insert(
         "optional_reviews_unresolved".into(),
@@ -296,6 +302,13 @@ pub(crate) fn compose_payload(inputs: &ComposeInputs) -> (i32, Value, Vec<String
     rerun_recovery_note(&payload, &mut stderr);
     let _ = review_lane; // coverage-status repost is a live-half write, never a golden arm
     push_unsettled_notes(&verdict, &generic_rollup, &mut stderr);
+    // A stranded tier hold says rerun in one line, so the worker holding
+    // per the tier law learns the hold would never resolve.
+    if inputs.ci_tier_keeper.get("remedy").and_then(Value::as_str) == Some("rerun") {
+        if let Some(note) = inputs.ci_tier_keeper.get("note").and_then(Value::as_str) {
+            stderr.push(format!("note: {note}"));
+        }
+    }
     push_review_notes(
         &reviews_unresolved,
         &reviews_resolved_unchanged,

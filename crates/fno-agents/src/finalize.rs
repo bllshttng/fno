@@ -131,7 +131,7 @@ const HELP: &str = "fno-agents finalize - terminal-only side-effect writer (step
 Usage: fno-agents finalize --state <target-state.md> --cwd <project-root> --reason <TerminationReason> \\\n\
                            [--transcript <transcript.jsonl>] [--events <p>] [--global-events <p>] \\\n\
                            [--settings <p>] [--handoffs-dir <p>] [--postmortems-dir <p>]\n\
-Reason values: DonePRGreen|DoneAdvisory|DoneDelivery|DoneBatched|DoneAwaitingMerge|DoneAwaitingReview|DonePlanned|NoWork|Budget|NoProgress|HeldOnQuestion|Interrupted|Aborted";
+Reason values: DonePRGreen|DoneAdvisory|DoneDelivery|DoneBatched|DoneAwaitingMerge|DoneAwaitingReview|DoneAwaitingRuling|DonePlanned|NoWork|Budget|NoProgress|HeldOnQuestion|Interrupted|Aborted";
 
 // ── manifest fields finalize reads directly ────────────────────────────────
 
@@ -1387,7 +1387,9 @@ pub(crate) fn resolve_handoffs_dir(
             .unwrap_or_else(|| cwd.to_path_buf())
             .join(".fno"),
     };
-    base.join("handoffs").join(project)
+    crate::state_layout::place_dir(&base, "handoffs")
+        .unwrap_or_else(|| base.join("handoffs"))
+        .join(project)
 }
 
 /// One file's `obsidian:` block, keyed per-field so a caller can merge across
@@ -2816,7 +2818,8 @@ fn resolve_postmortems_dir(
     let base = home
         .map(Path::to_path_buf)
         .unwrap_or_else(|| cwd.to_path_buf());
-    base.join(".fno/postmortems")
+    let root = base.join(".fno");
+    crate::state_layout::place_dir(&root, "postmortems").unwrap_or_else(|| root.join("postmortems"))
 }
 
 /// Best-effort: the newest assistant text message in the transcript JSONL, used
@@ -3483,6 +3486,32 @@ mod tests {
         }
     }
 
+    /// AC3: a ruling-only wait terminal classifies clean - stamped terminal,
+    /// never stuck, the circuit breaker reads it as success - while staying
+    /// out of the ship, merge-arm, node-close, claim-release and delivered
+    /// sets, shaped like DoneAwaitingMerge.
+    #[test]
+    fn done_awaiting_ruling_is_a_clean_terminal() {
+        let record = classify_legacy("DoneAwaitingRuling").expect("the wire reason must parse");
+        let p = record.projection();
+        assert!(!p.stuck, "{p:?}");
+        assert!(p.do_stamp_terminal, "{p:?}");
+        assert!(p.circuit_breaker_success, "{p:?}");
+        assert!(!p.ship_reason, "{p:?}");
+        assert!(!p.merge_armable, "{p:?}");
+        assert!(!p.node_closable, "{p:?}");
+        assert!(!p.graduate, "{p:?}");
+        assert!(p.record_ledger, "{p:?}");
+        let reason = crate::loopcheck::TerminationReason::DoneAwaitingRuling;
+        assert!(!reason.releases_claim());
+        assert!(!reason.is_delivered());
+        assert_eq!(
+            crate::loop_target::exit_code_for_reason(&reason),
+            0,
+            "a clean stop for input exits 0"
+        );
+    }
+
     #[test]
     fn finalize_done_closes_a_sealing_shadow_run() {
         let _root = crate::paths::DeclaredRoot::declare("finalize_done_closes_a_seali");
@@ -3571,7 +3600,7 @@ mod tests {
         let got = resolve_handoffs_dir(None, None, &cwd, Some(&home));
         assert_eq!(
             got,
-            home.join(".fno/handoffs/fnoe999_0"),
+            home.join(".fno/db/handoffs/fnoe999_0"),
             "a temp cwd with a fallback name never reaches the vault"
         );
         write_settings(&cwd, "[project]\nid = \"demo\"\n");
@@ -3604,7 +3633,7 @@ mod tests {
         );
         write_settings(&home, "[obsidian]\nenabled = true\nvault = \"myvault\"\n");
         let got = resolve_handoffs_dir(None, None, &cwd, Some(&home));
-        assert_eq!(got, home.join(".fno/handoffs/demo"));
+        assert_eq!(got, home.join(".fno/db/handoffs/demo"));
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -3655,7 +3684,7 @@ mod tests {
         // No override, no env, no settings -> ~/.fno/postmortems.
         assert_eq!(
             resolve_postmortems_dir(None, None, Some(&home), &cwd),
-            home.join(".fno/postmortems")
+            home.join(".fno/db/postmortems")
         );
         let _ = fs::remove_dir_all(&cwd);
     }

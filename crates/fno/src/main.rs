@@ -170,6 +170,9 @@ enum Role {
     /// pane read-only in this terminal (run over `ssh -t`); the driver sees the
     /// watcher on the pane border and the sideline.
     MuxObserve(fno::observe::ObserveArgs),
+    /// `mux serve --link <key> [--host <host>]`: open one session live, with
+    /// input, in this terminal. `--host` dials the machine that hosts it.
+    MuxLink(fno::mux_link::LinkArgs),
     /// `mux serve --snapshot ...`: compose one frame (a staged demo fleet, or
     /// a live server through the observer attach) and write it as
     /// html, svg or png. Carries the serve tail; `client::snapshot::parse`
@@ -434,16 +437,18 @@ enum Role {
     /// `fno do ci ...`: the per-commit CI-state namespace execs the sibling
     /// binary's ci dispatcher, the same byte-verbatim handover as DoPr.
     DoCi,
+    /// `fno do show|diff ...`: a file at a revision and the diff between two
+    /// revisions exec the sibling binary's rev dispatcher, the DoCi handover.
+    DoRev,
     /// `fno backlog list [<query>]`: the native node-query door (the grammar
     /// and the read model both live in this crate, d-069a9fa1). Args after
     /// `list`.
     BacklogList(Vec<String>),
     /// `fno inbox law set|stage|match`: the native law-door commands, classified
-    /// lexically the way `fno doctor event` is, because the Python CLI owns
-    /// the rest of the `inbox` tree.
+    /// lexically the way `fno doctor event` is.
     InboxLaw(Vec<OsString>),
     /// `fno inbox decisions ...`: the native listing read, classified beside
-    /// the law commands; the Python `inbox` tree keeps every other name.
+    /// the law commands; the menu classifier answers every other name.
     InboxDecisions(Vec<OsString>),
     /// `fno inbox decide ...`: the native decide record command, classified
     /// beside the law commands.
@@ -451,6 +456,9 @@ enum Role {
     /// `fno inbox user|operator status`: the native queue read; the carried
     /// tail is the `fno-agents compaction` argv.
     InboxUser(Vec<OsString>),
+    /// Every other `fno inbox ...` argv: the group and command help pages and
+    /// the refusals. The Python `inbox` mount is deleted, so none forwards.
+    InboxMenu(fno::inbox_user::InboxMenu),
     /// `fno inbox outstanding [--json|-J]`: the native listing and its
     /// subcommands; the carried tail is the `fno-agents compaction
     /// outstanding` argv.
@@ -598,6 +606,45 @@ fn parse_observe_args(rest: &[OsString]) -> Option<fno::observe::ObserveArgs> {
     }
     args.pane = pane?;
     observe.then_some(args)
+}
+
+/// Parse `serve --link` flags into [`fno::mux_link::LinkArgs`]. The key is required;
+/// a missing value or an unknown flag is `None`, which the caller maps to usage.
+fn parse_link_args(rest: &[OsString]) -> Option<fno::mux_link::LinkArgs> {
+    let mut args = fno::mux_link::LinkArgs {
+        key: String::new(),
+        host: None,
+        session: None,
+    };
+    let mut it = rest.iter();
+    while let Some(a) = it.next() {
+        match a.to_str()? {
+            "--link" => args.key = it.next()?.to_str()?.to_string(),
+            "--host" => args.host = Some(it.next()?.to_str()?.to_string()),
+            tok @ ("--server" | "--session") => {
+                mux_cli::note_server_flag(tok);
+                args.session = Some(it.next()?.to_str()?.to_string())
+            }
+            _ => return None,
+        }
+    }
+    (!args.key.is_empty()).then_some(args)
+}
+
+/// `mux serve --link`: dial the host, be the far door, or hand a paneless row to
+/// the harness's own attach. Those last two run on the machine that hosts the row.
+fn run_link(args: fno::mux_link::LinkArgs) -> i32 {
+    const LABEL: &str = "fno mux serve --link";
+    if let Some(host) = &args.host {
+        let action = ["attach", "--dial", host.as_str()];
+        return fno_agents_exec(LABEL, &action, &[OsString::from(&args.key)]);
+    }
+    match fno::mux_link::serve(&args) {
+        fno::mux_link::Door::Exit(code) => code,
+        fno::mux_link::Door::Attach(name) => {
+            fno_agents_exec(LABEL, &["attach", "--inline"], &[OsString::from(name)])
+        }
+    }
 }
 
 /// The mail reader's lexical claim, in the shape of `agents_history::classify`:
@@ -1489,6 +1536,13 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     {
         return Role::DoCi;
     }
+    // `do show` and `do diff` claim as single words: the dispatcher owns the
+    // spellings and the argv passes through byte-verbatim.
+    if args.first().and_then(|a| a.to_str()) == Some("do")
+        && matches!(args.get(1).and_then(|a| a.to_str()), Some("show" | "diff"))
+    {
+        return Role::DoRev;
+    }
     if let Some(rest) = fno::law_cli::classify_inbox_law(args) {
         return Role::InboxLaw(rest);
     }
@@ -1520,6 +1574,9 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
         .or_else(|| fno::inbox_user::classify_inbox_approvals(args))
     {
         return Role::InboxUser(argv);
+    }
+    if let Some(menu) = fno::inbox_user::classify_inbox_menu(args) {
+        return Role::InboxMenu(menu);
     }
     if let Some(rest) = fno::setup_run::classify(args) {
         return Role::SetupRun(rest);
@@ -1640,6 +1697,15 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
                     Some(s) => Role::MuxShare(s),
                     None => Role::MuxUsage(
                         "fno mux serve --share: needs --pane <id>; optional --steer, --tunnel, --managed, --port <n>, --server <name>"
+                            .into(),
+                    ),
+                }
+            }
+            cli_args::MuxCmd::Serve(t) if t.tail.iter().any(|a| a == "--link") => {
+                match parse_link_args(&t.tail) {
+                    Some(l) => Role::MuxLink(l),
+                    None => Role::MuxUsage(
+                        "fno mux serve --link: needs <key>; optional --host <host>, --server <name>"
                             .into(),
                     ),
                 }
@@ -1803,6 +1869,7 @@ fn main() {
         Role::Backlog => bootstrap::forward_backlog(&args),
         Role::DoPr => bootstrap::forward_agents(&args, "fno do pr"),
         Role::DoCi => bootstrap::forward_agents(&args, "fno do ci"),
+        Role::DoRev => bootstrap::forward_agents(&args, "fno do show"),
         Role::BacklogList(rest) => std::process::exit(fno::backlog_list::run(&rest)),
         Role::NotTty => {
             // AC1-EDGE: piped/CI bare `fno` gets a notice, not a TUI. Exit 0 -
@@ -2188,6 +2255,18 @@ fn main() {
         Role::InboxUser(argv) => {
             std::process::exit(fno_agents_exec("fno inbox", &["compaction"], &argv))
         }
+        Role::InboxMenu(fno::inbox_user::InboxMenu::Help { text, bare }) => {
+            if bare {
+                eprint!("{text}");
+                std::process::exit(2);
+            }
+            print!("{text}");
+            std::process::exit(0)
+        }
+        Role::InboxMenu(fno::inbox_user::InboxMenu::Refuse(message)) => {
+            eprintln!("{message}");
+            std::process::exit(2)
+        }
         Role::InboxNotify(rest) => std::process::exit(fno::notify_dispatch::run(&rest)),
         Role::NotifyDeprecated(rest) => {
             eprintln!("{}", fno::notify_dispatch::DEPRECATED_MOVE_LINE);
@@ -2232,6 +2311,7 @@ fn main() {
         }
         Role::MuxShare(share_args) => exit_mux(fno::share::serve(share_args)),
         Role::MuxObserve(observe_args) => exit_mux(fno::observe::serve(observe_args)),
+        Role::MuxLink(link_args) => exit_mux(run_link(link_args)),
         Role::MuxWebCtl(op) => {
             let tail = op.tail();
             exit_mux(mux_cli::web_ctl::web(op, &tail, env_session.as_deref()))
@@ -2412,6 +2492,22 @@ mod tests {
         assert_ne!(
             decide_role(&os(&["do", "review", "--help"]), false),
             Role::DoPr
+        );
+    }
+
+    #[test]
+    fn do_show_and_diff_claim_and_state_show_stays_put() {
+        assert_eq!(
+            decide_role(&os(&["do", "show", "main:f.txt"]), false),
+            Role::DoRev
+        );
+        assert_eq!(
+            decide_role(&os(&["do", "diff", "a", "b", "--", "f"]), false),
+            Role::DoRev
+        );
+        assert_ne!(
+            decide_role(&os(&["do", "state", "show"]), false),
+            Role::DoRev
         );
     }
 

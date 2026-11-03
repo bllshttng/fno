@@ -15,9 +15,9 @@
 //!
 //! The row shape is owned here and declared in `cli/src/fno/events/schema.yaml`.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use crate::loop_runtime::Journal;
@@ -545,29 +545,50 @@ fn journal_rows(journals: &[PathBuf], types: &[&str], since_unix: u64) -> Vec<Va
 /// bounded read answers in place of the whole-history fold.
 pub fn read_arms(journals: &[PathBuf], now_unix: u64) -> Vec<ArmStatus> {
     let since = now_unix.saturating_sub(ARM_WINDOW_FLOOR_S);
-    if let Some((values, _, _)) = reduced_arm_read(journals, since, since) {
-        return arms_from_rows(&values, now_unix);
+    if let Some(red) = reduced_arm_read(journals, since, since) {
+        return arms_from_rows(&red.rows, now_unix);
     }
     arms_from_rows(&journal_rows(journals, ARM_ROW_TYPES, since), now_unix)
+}
+
+/// The reduced fold's raw facts: the union fold rows in the text path's
+/// order plus the per-arm walk maxima. The starvation mark slices the
+/// active maxima to its own threshold, so one reduction serves every
+/// caller's window.
+struct ReducedArms {
+    rows: Vec<Value>,
+    max_ts: Vec<(String, i64)>,
+    max_active_ts: Vec<(String, i64)>,
+}
+
+/// Arms with a newest active row at or after `active_since_ms`, from the
+/// sorted maxima. Order stays sorted, so this is a drop-in for the old
+/// DISTINCT set.
+fn active_arms_within(max_active_ts: &[(String, i64)], active_since_ms: i64) -> Vec<String> {
+    max_active_ts
+        .iter()
+        .filter(|(_, ts)| *ts >= active_since_ms)
+        .map(|(arm, _)| arm.clone())
+        .collect()
 }
 
 /// The arms window every fold reads, reduced in the stores when every
 /// journal answers from one: the fold rows (each arm's newest and newest-ok
 /// tie sets, the healer's receipts, the retry candidates, the un-ingested
-/// tails) plus the starvation sets the mark needs. `None` when any journal
-/// still holds raw rows the stores never ingested, so the caller folds the
-/// text and stays exact.
+/// tails) plus the per-arm maxima the starvation mark slices. `None` when
+/// any journal still holds raw rows the stores never ingested, so the
+/// caller folds the text and stays exact.
 fn reduced_arm_read(
     journals: &[PathBuf],
     since_unix: u64,
     active_since_unix: u64,
-) -> Option<(Vec<Value>, Vec<(String, i64)>, Vec<String>)> {
+) -> Option<ReducedArms> {
     let since_ms = i64::try_from(since_unix).ok()?.saturating_mul(1000);
     let active_ms = i64::try_from(active_since_unix).ok()?.saturating_mul(1000);
     let needles: Vec<String> = ARM_ROW_TYPES.iter().map(|t| format!("\"{t}\"")).collect();
     let mut values = Vec::new();
     let mut max_ts: HashMap<String, i64> = HashMap::new();
-    let mut active: HashSet<String> = HashSet::new();
+    let mut max_active: HashMap<String, i64> = HashMap::new();
     for j in journals {
         match crate::event_store::reduce_arm_ticks(
             j,
@@ -590,7 +611,12 @@ fn reduced_arm_read(
                         *seen = ts;
                     }
                 }
-                active.extend(red.active_arms);
+                for (arm, ts) in red.max_active_ts {
+                    let seen = max_active.entry(arm).or_insert(ts);
+                    if ts > *seen {
+                        *seen = ts;
+                    }
+                }
             }
             None => {
                 // No store here. A raw journal with rows the folds read means
@@ -618,24 +644,53 @@ fn reduced_arm_read(
     }
     let mut max_pairs: Vec<(String, i64)> = max_ts.into_iter().collect();
     max_pairs.sort();
-    let mut active: Vec<String> = active.into_iter().collect();
-    active.sort();
-    Some((values, max_pairs, active))
+    let mut max_active_pairs: Vec<(String, i64)> = max_active.into_iter().collect();
+    max_active_pairs.sort();
+    Some(ReducedArms {
+        rows: values,
+        max_ts: max_pairs,
+        max_active_ts: max_active_pairs,
+    })
 }
 
 /// The arms fold over rows already collected, so [`read_arms_starved`]
 /// parses each journal once and shares the rows with the starvation mark.
 fn arms_from_rows(values: &[Value], now_unix: u64) -> Vec<ArmStatus> {
+    let (newest, newest_ok, retries) = fold_rows_to_maps(values);
+    rows_from_maps(&newest, &newest_ok, &retries, now_unix)
+}
+
+/// The per-arm maxima maps every arm row is built from: one fold over the
+/// rows, shared by the local readout and the daemon's served fold.
+pub(crate) type ArmFoldMaps = (
+    HashMap<String, NewestTick>,
+    HashMap<String, NewestTick>,
+    HashMap<String, NewestTick>,
+);
+
+/// Fold rows into the per-arm maxima maps. The daemon's seed and its tail
+/// refresh both land here, so the incremental fold and the local fold share
+/// one set of tie rules.
+pub(crate) fn fold_rows_to_maps(values: &[Value]) -> ArmFoldMaps {
     let mut newest: HashMap<String, NewestTick> = HashMap::new();
     let mut newest_ok: HashMap<String, NewestTick> = HashMap::new();
     let mut retries: HashMap<String, NewestTick> = HashMap::new();
     for value in values {
         fold_arm_row(value, &mut newest, &mut newest_ok, &mut retries);
     }
+    (newest, newest_ok, retries)
+}
 
-    // The static spec facts ride the fold; the runtime arm value is filled
-    // by [`fill_arm_values`] at the readout layer, so this fold stays
-    // machine-independent (and unit-testable without a config).
+/// Build the arm rows from the maxima maps: the static spec facts ride the
+/// fold; the runtime arm value is filled by [`fill_arm_values`] at the
+/// readout layer, so this fold stays machine-independent (and unit-testable
+/// without a config).
+pub(crate) fn rows_from_maps(
+    newest: &HashMap<String, NewestTick>,
+    newest_ok: &HashMap<String, NewestTick>,
+    retries: &HashMap<String, NewestTick>,
+    now_unix: u64,
+) -> Vec<ArmStatus> {
     let mut rows: Vec<ArmStatus> = KNOWN_ARMS
         .iter()
         .map(|spec| {
@@ -687,12 +742,13 @@ fn arms_from_rows(values: &[Value], now_unix: u64) -> Vec<ArmStatus> {
 }
 
 /// The newest tick row seen for an arm: its parsed ts, the raw ts string, and
-/// its data object.
-#[derive(Clone)]
-struct NewestTick {
-    ts_unix: u64,
-    ts: String,
-    data: Value,
+/// its data object. Serialization is the served fold's wire shape: the
+/// daemon ships these maps and the reader rebuilds the readout from them.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct NewestTick {
+    pub ts_unix: u64,
+    pub ts: String,
+    pub data: Value,
 }
 
 fn fold_arm_row(
@@ -820,11 +876,12 @@ fn heal_tick_as_arm_row(value: &Value) -> Value {
 pub fn mark_starved(journals: &[PathBuf], rows: &mut [ArmStatus], now_unix: u64, threshold_s: u64) {
     let since = now_unix.saturating_sub(ARM_WINDOW_FLOOR_S.max(threshold_s));
     let active_since = now_unix.saturating_sub(threshold_s);
-    if let Some((_, max_ts, active)) = reduced_arm_read(journals, since, active_since) {
+    if let Some(red) = reduced_arm_read(journals, since, active_since) {
         let active_ms = i64::try_from(active_since)
             .unwrap_or(i64::MAX)
             .saturating_mul(1000);
-        mark_starved_reduced(rows, &max_ts, &active, active_ms);
+        let active = active_arms_within(&red.max_active_ts, active_ms);
+        mark_starved_reduced(rows, &red.max_ts, &active, active_ms);
         return;
     }
     let values = journal_rows(journals, ARM_ROW_TYPES, since);
@@ -928,13 +985,14 @@ pub fn read_arms_starved(journals: &[PathBuf], now_unix: u64) -> Vec<ArmStatus> 
     let threshold = crate::agents_config::notify_arm_starved_after_s(&cwd);
     let since = now_unix.saturating_sub(ARM_WINDOW_FLOOR_S.max(threshold));
     let active_since = now_unix.saturating_sub(threshold);
-    if let Some((values, max_ts, active)) = reduced_arm_read(journals, since, active_since) {
-        let mut rows = arms_from_rows(&values, now_unix);
+    if let Some(red) = reduced_arm_read(journals, since, active_since) {
+        let mut rows = arms_from_rows(&red.rows, now_unix);
         fill_arm_values(&mut rows, &cwd);
         let active_ms = i64::try_from(active_since)
             .unwrap_or(i64::MAX)
             .saturating_mul(1000);
-        mark_starved_reduced(&mut rows, &max_ts, &active, active_ms);
+        let active = active_arms_within(&red.max_active_ts, active_ms);
+        mark_starved_reduced(&mut rows, &red.max_ts, &active, active_ms);
         return rows;
     }
     let values = journal_rows(journals, ARM_ROW_TYPES, since);
@@ -942,6 +1000,359 @@ pub fn read_arms_starved(journals: &[PathBuf], now_unix: u64) -> Vec<ArmStatus> 
     fill_arm_values(&mut rows, &cwd);
     mark_starved_rows(&values, &mut rows, now_unix, threshold);
     rows
+}
+
+/// The trace facts that cross a served fold: the journal-derived half of
+/// [`TickTrace`]. The pause and plist probes stay with the reader, so they
+/// describe the reading machine, never the serving one.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ServedTraceFacts {
+    pub attempt_ts_unix: Option<u64>,
+    pub end_ts_unix: Option<u64>,
+    pub end_phase: Option<String>,
+    pub end_outcome: Option<String>,
+    pub end_cut: Option<Vec<String>>,
+}
+
+/// The arms fold a daemon serves over `agent.status`: the per-arm maxima
+/// maps (newest tick, newest ok tick, newest retry per project) plus the
+/// walk maxima, so the reader rebuilds the exact readout the local fold
+/// produces with no store read of its own. The maps carry no window: the
+/// reader slices every verdict to its own clock and config, so one fold
+/// serves any reader. `journals` names the fold's source list; a reader
+/// whose own journal list differs refuses the fold and reads locally, so a
+/// daemon on another home can never answer for this machine's arms.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArmFoldServed {
+    pub schema_version: u32,
+    pub journals: Vec<String>,
+    #[serde(default)]
+    pub arms: BTreeMap<String, ServedArmTicks>,
+    #[serde(default)]
+    pub retries: BTreeMap<String, NewestTick>,
+    pub max_ts: Vec<(String, i64)>,
+    pub max_active_ts: Vec<(String, i64)>,
+    pub trace: ServedTraceFacts,
+}
+
+/// One arm's fold maxima as served.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ServedArmTicks {
+    pub newest: Option<NewestTick>,
+    pub newest_ok: Option<NewestTick>,
+}
+
+/// The served-fold schema the reader accepts. A daemon speaking a later
+/// schema is refused: the reader falls back to its local fold.
+pub const ARM_FOLD_SCHEMA_VERSION: u32 = 1;
+
+/// The daemon's incremental fold state: the per-arm maxima maps the served
+/// payload serializes, kept window-free (the reader slices every verdict to
+/// its own clock), plus the per-store seq boundaries the tail refresh reads
+/// past. Retention deletes only rows older than the reader's window, so a
+/// map entry pointing at a deleted row is filtered by the reader's window
+/// slice anyway; a daily reseed on the caller's side bounds map drift.
+#[derive(Debug, Serialize)]
+pub struct ArmFoldState {
+    pub newest: HashMap<String, NewestTick>,
+    pub newest_ok: HashMap<String, NewestTick>,
+    pub retries: HashMap<String, NewestTick>,
+    /// Each tick arm's newest ts in ms (the starvation mark's ticked side).
+    pub max_ts: HashMap<String, i64>,
+    /// Each tick arm's newest active-row ts in ms (the mark's explained
+    /// side: acted nonzero, or the skip explains).
+    pub max_active_ts: HashMap<String, i64>,
+    pub trace_attempt: Option<NewestTick>,
+    pub trace_end: Option<NewestTick>,
+}
+
+/// Seed the fold from the full windowed read: the maps, the per-arm maxima,
+/// and the trace ticks. `None` when any journal holds raw rows the stores
+/// never ingested: that home must run the exact text fold, so the daemon
+/// serves no fold and every reader folds locally.
+pub fn seed_arm_fold(
+    journal_list: &[PathBuf],
+    now_unix: u64,
+) -> Option<(ArmFoldState, Vec<(PathBuf, i64)>)> {
+    let since = now_unix.saturating_sub(ARM_WINDOW_FLOOR_S);
+    let red = reduced_arm_read(journal_list, since, since)?;
+    let (newest, newest_ok, retries) = fold_rows_to_maps(&red.rows);
+    let mut state = ArmFoldState {
+        newest,
+        newest_ok,
+        retries,
+        max_ts: red.max_ts.into_iter().collect(),
+        max_active_ts: red.max_active_ts.into_iter().collect(),
+        trace_attempt: None,
+        trace_end: None,
+    };
+    for value in journal_rows(journal_list, TICK_TRACE_TYPES, since) {
+        fold_trace_row(&mut state, &value);
+    }
+    // The tail boundary per store: the table's max rowid. The seed folded
+    // every tick row in the window; rows beyond the boundary are new ones
+    // only, so the refresh reads exactly the rows the seed never saw.
+    let last_seqs = journal_list
+        .iter()
+        .map(|j| {
+            let store = crate::event_store::store_path(j);
+            let max: Option<i64> = crate::event_store::store_max_seq(&store).ok();
+            (j.clone(), max.unwrap_or(0))
+        })
+        .collect();
+    Some((state, last_seqs))
+}
+
+/// Fold new rows into the state: import the journals' stray bytes, then walk
+/// each store's tail past the last folded seq. Non-fold rows in the tail are
+/// skipped by type; a map's newest-wins tie rules are [`fold_arm_row`]'s,
+/// the same ones the local fold runs.
+pub fn refresh_arm_fold(
+    state: &mut ArmFoldState,
+    journal_list: &[PathBuf],
+    last_seqs: &mut Vec<(PathBuf, i64)>,
+    store_of: impl Fn(&Path) -> PathBuf,
+) {
+    for j in journal_list {
+        let live = crate::event_store::live_journal(j);
+        let _ = crate::event_store::import_all(&live);
+        let store = store_of(j);
+        let last = last_seqs
+            .iter()
+            .find(|(p, _)| p == j)
+            .map(|(_, s)| *s)
+            .unwrap_or(0);
+        let mut newest_seq = last;
+        let rows = crate::event_store::store_tail_rows(&store, last);
+        for (seq, line) in rows {
+            newest_seq = newest_seq.max(seq);
+            if let Ok(v) = serde_json::from_str::<Value>(&line) {
+                fold_refresh_row(state, &v);
+            }
+        }
+        if let Some(entry) = last_seqs.iter_mut().find(|(p, _)| p == j) {
+            entry.1 = newest_seq;
+        } else {
+            last_seqs.push((j.clone(), newest_seq));
+        }
+    }
+}
+
+/// Dispatch one tail row into the fold: arm ticks and heal receipts go
+/// through [`fold_arm_row`] (and raise the maxima), trace records merge
+/// newest-wins.
+fn fold_refresh_row(state: &mut ArmFoldState, value: &Value) {
+    match value.get("type").and_then(Value::as_str) {
+        Some(t) if t == EVENT_TYPE || t == HEAL_TICK_TYPE => {
+            fold_arm_row(
+                value,
+                &mut state.newest,
+                &mut state.newest_ok,
+                &mut state.retries,
+            );
+            // The maxima ride tick rows only, matching the seed's SQL pass:
+            // heal receipts fold into arm rows but never raise a max.
+            if value.get("type").and_then(Value::as_str) != Some(EVENT_TYPE) {
+                return;
+            }
+            let Some(arm) = value
+                .get("data")
+                .and_then(|d| d.get("arm"))
+                .and_then(Value::as_str)
+            else {
+                return;
+            };
+            let Some(ts_unix) = value
+                .get("ts")
+                .and_then(Value::as_str)
+                .and_then(parse_rfc3339_unix)
+            else {
+                return;
+            };
+            let ts_ms = i64::try_from(ts_unix)
+                .unwrap_or(i64::MAX)
+                .saturating_mul(1000);
+            bump_max(&mut state.max_ts, arm, ts_ms);
+            let data = value.get("data").and_then(Value::as_object);
+            let acted = data
+                .and_then(|d| d.get("acted"))
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            let skip = data
+                .and_then(|d| d.get("skip_reason"))
+                .and_then(Value::as_str);
+            let active = acted != 0 || matches!(skip, Some(s) if s != "starved");
+            if active {
+                bump_max(&mut state.max_active_ts, arm, ts_ms);
+            }
+        }
+        Some("pr_watch_tick_attempt") | Some("pr_watch_tick_end") => fold_trace_row(state, value),
+        _ => {}
+    }
+}
+
+/// Merge one trace record into the state, newest-wins on equal ts.
+fn fold_trace_row(state: &mut ArmFoldState, value: &Value) {
+    let typ = value.get("type").and_then(Value::as_str).unwrap_or("");
+    let Some(ts_unix) = value
+        .get("ts")
+        .and_then(Value::as_str)
+        .and_then(parse_rfc3339_unix)
+    else {
+        return;
+    };
+    let ts = value
+        .get("ts")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let data = value.get("data").cloned().unwrap_or(Value::Null);
+    let tick = NewestTick { ts_unix, ts, data };
+    let slot = if typ == "pr_watch_tick_attempt" {
+        &mut state.trace_attempt
+    } else {
+        &mut state.trace_end
+    };
+    if slot
+        .as_ref()
+        .is_none_or(|prev| tick.ts_unix >= prev.ts_unix)
+    {
+        *slot = Some(tick);
+    }
+}
+
+fn bump_max(map: &mut HashMap<String, i64>, arm: &str, ts_ms: i64) {
+    let seen = map.entry(arm.to_string()).or_insert(ts_ms);
+    if ts_ms > *seen {
+        *seen = ts_ms;
+    }
+}
+
+/// Serialize the fold the daemon serves from its state.
+pub fn served_from_state(state: &ArmFoldState, journals: Vec<String>) -> ArmFoldServed {
+    let mut arm_keys: Vec<&String> = state.newest.keys().chain(state.newest_ok.keys()).collect();
+    arm_keys.sort();
+    arm_keys.dedup();
+    let arms: BTreeMap<String, ServedArmTicks> = arm_keys
+        .into_iter()
+        .map(|arm| {
+            (
+                arm.clone(),
+                ServedArmTicks {
+                    newest: state.newest.get(arm).cloned(),
+                    newest_ok: state.newest_ok.get(arm).cloned(),
+                },
+            )
+        })
+        .collect();
+    let retries: BTreeMap<String, NewestTick> = state
+        .retries
+        .iter()
+        .map(|(p, t)| (p.clone(), t.clone()))
+        .collect();
+    let mut max_ts: Vec<(String, i64)> =
+        state.max_ts.iter().map(|(a, t)| (a.clone(), *t)).collect();
+    max_ts.sort();
+    let mut max_active_ts: Vec<(String, i64)> = state
+        .max_active_ts
+        .iter()
+        .map(|(a, t)| (a.clone(), *t))
+        .collect();
+    max_active_ts.sort();
+    ArmFoldServed {
+        schema_version: ARM_FOLD_SCHEMA_VERSION,
+        journals,
+        arms,
+        retries,
+        max_ts,
+        max_active_ts,
+        trace: ServedTraceFacts {
+            attempt_ts_unix: state.trace_attempt.as_ref().map(|t| t.ts_unix),
+            end_ts_unix: state.trace_end.as_ref().map(|t| t.ts_unix),
+            end_phase: state
+                .trace_end
+                .as_ref()
+                .and_then(|t| str_field(&t.data, "phase")),
+            end_outcome: state
+                .trace_end
+                .as_ref()
+                .and_then(|t| str_field(&t.data, "outcome")),
+            end_cut: state.trace_end.as_ref().and_then(|t| {
+                t.data.get("cut").and_then(Value::as_array).map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(str::to_string))
+                        .collect()
+                })
+            }),
+        },
+    }
+}
+
+/// Assemble the readout from a served fold: the exact in-memory fold the
+/// local path runs, fed from the payload instead of the store. `None` when
+/// the fold carries an unsupported schema or does not describe this reader's
+/// journals, so the caller falls back to its local read.
+pub fn arms_from_served(
+    served: &ArmFoldServed,
+    home: &AgentsHome,
+    now_unix: u64,
+) -> Option<(Vec<ArmStatus>, TickTrace)> {
+    if served.schema_version != ARM_FOLD_SCHEMA_VERSION {
+        return None;
+    }
+    let expected: Vec<String> = journals(home)
+        .iter()
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect();
+    if served.journals != expected {
+        return None;
+    }
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let threshold = crate::agents_config::notify_arm_starved_after_s(&cwd);
+    let since = now_unix.saturating_sub(ARM_WINDOW_FLOOR_S.max(threshold));
+    let mut newest: HashMap<String, NewestTick> = HashMap::new();
+    let mut newest_ok: HashMap<String, NewestTick> = HashMap::new();
+    for (arm, ticks) in &served.arms {
+        if let Some(n) = &ticks.newest {
+            if n.ts_unix >= since {
+                newest.insert(arm.clone(), n.clone());
+            }
+        }
+        if let Some(o) = &ticks.newest_ok {
+            if o.ts_unix >= since {
+                newest_ok.insert(arm.clone(), o.clone());
+            }
+        }
+    }
+    let retries: HashMap<String, NewestTick> = served
+        .retries
+        .iter()
+        .map(|(project, tick)| (project.clone(), tick.clone()))
+        .collect();
+    let mut rows = rows_from_maps(&newest, &newest_ok, &retries, now_unix);
+    fill_arm_values(&mut rows, &cwd);
+    let active_since = now_unix.saturating_sub(threshold);
+    let active_ms = i64::try_from(active_since)
+        .unwrap_or(i64::MAX)
+        .saturating_mul(1000);
+    let active = active_arms_within(&served.max_active_ts, active_ms);
+    mark_starved_reduced(&mut rows, &served.max_ts, &active, active_ms);
+    let trace = TickTrace {
+        attempt_ts_unix: served.trace.attempt_ts_unix,
+        attempt_age_s: served
+            .trace
+            .attempt_ts_unix
+            .map(|t| now_unix.saturating_sub(t)),
+        end_ts_unix: served.trace.end_ts_unix,
+        end_age_s: served.trace.end_ts_unix.map(|t| now_unix.saturating_sub(t)),
+        end_phase: served.trace.end_phase.clone(),
+        end_outcome: served.trace.end_outcome.clone(),
+        end_cut: served.trace.end_cut.clone(),
+        foreign_plist: None,
+        pause: None,
+    };
+    let trace = trace_with_live_facts(trace, &rows);
+    Some((rows, trace))
 }
 
 /// One fold collecting every `(ts, acted, skip_explains)` triple an arm's
@@ -1370,7 +1781,14 @@ pub(crate) fn parse_launchctl_list(text: &str) -> LaunchdFold {
 /// 2s; every failure mode (nonzero exit, kill, absent HOME) leaves the trace
 /// untouched. A healthy tier runs no exec at all.
 pub fn read_tick_trace_live(journals: &[PathBuf], rows: &[ArmStatus], now_unix: u64) -> TickTrace {
-    let mut trace = read_tick_trace(journals, now_unix);
+    let trace = read_tick_trace(journals, now_unix);
+    trace_with_live_facts(trace, rows)
+}
+
+/// [`read_tick_trace`]'s output plus the one live pause read and the
+/// stale-launchd plist probe. The journal fold and the served fold both end
+/// here, so a served trace carries the same live facts a local one does.
+pub fn trace_with_live_facts(mut trace: TickTrace, rows: &[ArmStatus]) -> TickTrace {
     // The one live pause read, taken before the tier check so a healthy
     // tier carries the fact too (the lead summary reads it there). A
     // journal-folded trace stays pause-free.
@@ -3753,6 +4171,33 @@ mod tests {
             !cont.retries.is_empty(),
             "select-unmeasured keeps its retry set"
         );
+
+        // The served-fold parity: the payload the daemon serves over
+        // `agent.status` folds to the same rows the store and raw folds
+        // produce, so a status client answers from the payload with no
+        // store scan of its own.
+        let home = crate::paths::AgentsHome::at(dir.clone());
+        let journal_list = journals(&home);
+        let (state, _last) =
+            seed_arm_fold(&journal_list, now).expect("store-backed home seeds a fold");
+        let served = served_from_state(
+            &state,
+            journal_list
+                .iter()
+                .map(|p| p.to_string_lossy().into_owned())
+                .collect(),
+        );
+        let (served_arms, served_trace) =
+            arms_from_served(&served, &home, now).expect("served fold assembles");
+        let served_lines: Vec<String> = served_arms.iter().map(render_row).collect();
+        assert_eq!(
+            served_lines, raw_lines,
+            "served fold must fold to the raw text path's rows"
+        );
+        // The trace facts ride the fold: these rows carry no trace record,
+        // so the served trace stays empty.
+        assert_eq!(served.trace.attempt_ts_unix, None);
+        assert_eq!(served_trace.end_ts_unix, None);
     }
 
     /// A journal with no store must not force the text fold when it holds
@@ -3780,6 +4225,85 @@ mod tests {
         assert_eq!(
             a, b,
             "an empty no-store journal must not block the reduction"
+        );
+    }
+
+    /// A served fold naming journals this reader does not fold is refused:
+    /// a daemon on another home must never answer for this machine's arms.
+    #[test]
+    fn served_fold_with_foreign_journals_is_refused() {
+        let dir = temp_dir();
+        append_envelopes(
+            &dir.join("events.jsonl"),
+            &[store_tick(
+                "2026-11-01T11:00:00Z",
+                "alpha",
+                0,
+                json!(null),
+                json!(null),
+            )],
+        );
+        let home = crate::paths::AgentsHome::at(dir.clone());
+        let now = parse_rfc3339_unix("2026-11-01T12:00:00Z").unwrap();
+        let journal_list = journals(&home);
+        let (state, _last) = seed_arm_fold(&journal_list, now).expect("fold computes");
+        let served = served_from_state(
+            &state,
+            journal_list
+                .iter()
+                .map(|p| p.to_string_lossy().into_owned())
+                .collect(),
+        );
+        let other = crate::paths::AgentsHome::at(dir.join("elsewhere"));
+        assert!(
+            arms_from_served(&served, &other, now).is_none(),
+            "a fold for another home's journals is refused"
+        );
+    }
+
+    /// Seed then tail-refresh must fold to the same maps a fresh seed folds
+    /// on the same rows: the incremental fold and the full fold share one
+    /// set of maxima.
+    #[test]
+    fn tail_refresh_matches_a_full_seed() {
+        let dir = temp_dir();
+        let journal = dir.join("events.jsonl");
+        append_envelopes(
+            &journal,
+            &[
+                store_tick("2026-11-01T09:00:00Z", "alpha", 0, json!(null), json!(null)),
+                store_tick("2026-11-01T10:00:00Z", "beta", 0, json!(null), json!(null)),
+            ],
+        );
+        let now = parse_rfc3339_unix("2026-11-01T12:00:00Z").unwrap();
+        let journal_list = vec![journal.clone()];
+        let (mut state, mut last_seqs) = seed_arm_fold(&journal_list, now).expect("seed");
+        let rows2 = [
+            store_tick(
+                "2026-11-01T11:00:00Z",
+                "alpha",
+                0,
+                json!("error"),
+                json!(null),
+            ),
+            store_tick("2026-11-01T11:30:00Z", "gamma", 1, json!(null), json!(null)),
+        ];
+        append_envelopes(&journal, &rows2);
+        refresh_arm_fold(
+            &mut state,
+            &journal_list,
+            &mut last_seqs,
+            crate::event_store::store_path,
+        );
+        let (fresh, _) = seed_arm_fold(&journal_list, now).expect("fresh seed");
+        // Value equality, not Debug or to_string: the two states' HashMaps
+        // grew through different insertion sequences, so their bucket
+        // iteration order differs even at equal content. to_value compares
+        // structurally, order-independent.
+        assert_eq!(
+            serde_json::to_value(&state).unwrap(),
+            serde_json::to_value(&fresh).unwrap(),
+            "incremental fold must equal a full seed"
         );
     }
 

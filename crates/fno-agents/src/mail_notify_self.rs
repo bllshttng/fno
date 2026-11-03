@@ -3,7 +3,7 @@
 //!
 //! The UserPromptSubmit hook used to shell out to the Python `fno agents
 //! mail notify-self`, whose interpreter start alone outran its hook budget
-//! on a loaded box: every run was cancelled, so nothing ever delivered. The
+//! on a loaded machine: every run was cancelled, so nothing ever delivered. The
 //! shell layer is a cheap gate now and this command owns scan, cursors, dedup,
 //! and rendering, dispatched from client.rs before the tokio runtime builds
 //! so a fire answers in microseconds.
@@ -380,7 +380,7 @@ mod tests {
         crate::mail_hold::tests::with_hold_env(|home| {
             let (_dir, bus) = bus_fixture("busy");
             append(&bus, "lead", &handle, "hello");
-            let clock_dir = home.join("mail-hold");
+            let clock_dir = crate::state_layout::place_dir(home, "mail-hold").unwrap();
             std::fs::create_dir_all(&clock_dir).unwrap();
             let clock = json!({
                 "until": "2099-01-01T00:00:00Z",

@@ -419,7 +419,7 @@ rows_lines "$EVENTS" | jq -se --arg sha "$GREEN_FULL" \
     || fail "advisory receipt execution count/result wrong"
 
 echo "== AC3-EDGE: an attestation from another host is rejected =="
-write_attest "$GREEN_FULL" foreign-box
+write_attest "$GREEN_FULL" foreign-host
 out="$(run_pf 2>&1)"; rc=$?
 [[ $rc -eq 0 ]] && ok "still GREEN after rejecting the foreign attestation" || fail "expected 0 got $rc: $out"
 grep <<<"$out" -q "foreign host" && ok "receipt states the attestation was rejected as foreign" || fail "no foreign-host line: $out"
@@ -935,7 +935,7 @@ kill "$unit_a" "$unit_b" 2>/dev/null; wait "$unit_a" 2>/dev/null; wait "$unit_b"
 # from a truly idle tree - so assert REAL positive CPU from a busy tree.
 # Four spinners over 15s yield >= 1 integer CPU-second even at load ~400
 # (measured ~1s per spinner per 20s at load 380); fewer or shorter would
-# truncate to zero on a starved box.
+# truncate to zero on a starved machine.
 unit_spin_pids=""
 for _s in 1 2 3 4; do ( while :; do :; done ) & unit_spin_pids="$unit_spin_pids $!"; REAP_PIDS="$REAP_PIDS $!"; done
 unit_sum_start=0

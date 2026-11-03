@@ -198,6 +198,11 @@ fn main() {
     if args.first() == Some(&"do".to_string()) && args.get(1) == Some(&"ci".to_string()) {
         std::process::exit(fno_agents::ci_front::run(&args[2..]));
     }
+    if args.first().map(String::as_str) == Some("do")
+        && matches!(args.get(1).map(String::as_str), Some("show" | "diff"))
+    {
+        std::process::exit(fno_agents::rev_front::run(&args[1..]));
+    }
     // gh-cache, target-status: the early transport arms; client_transport.rs
     // holds their bodies and comments. worktree-reapable and launch-workdir
     // stay here: their own ports own the moves into their modules.
@@ -416,7 +421,7 @@ async fn run(args: Vec<String>) -> i32 {
     }
 
     // `orphan-reap` is the hidden reap lever for orphaned cargo test binaries:
-    // the daemon's 300s sweep and a human on a wedged box both run
+    // the daemon's 300s sweep and a human on a wedged machine both run
     // it binary-direct. Same `matches!` treatment as `mail-inject` so it stays
     // out of CLIENT_COMMAND_USAGE / RUST_CLIENT_COMMANDS and the routable-command
     // parity guard - it reads one ps snapshot and prints, it is not an
@@ -2300,10 +2305,10 @@ fn maybe_run_spawn(
             Ok(None) => fno_agents::spawn_cwd::resolve_dispatch_cwd(params),
         }
     };
-    // `[sandbox] provider`: refuse a spawn the box cannot carry before the
-    // guard and the gate; the box itself comes up after the gate admits.
-    let boxed = match fno_agents::sandbox_launch::check(&cwd, provider, public_substrate) {
-        Ok(boxed) => boxed,
+    // `[sandbox] provider`: refuse a spawn the sandbox cannot carry before the
+    // guard and the gate; the sandbox itself comes up after the gate admits.
+    let sandboxed = match fno_agents::sandbox_launch::check(&cwd, provider, public_substrate) {
+        Ok(sandboxed) => sandboxed,
         Err((code, reason)) => {
             eprintln!("fno-agents spawn: {reason}");
             return Some(code);
@@ -2463,7 +2468,7 @@ fn maybe_run_spawn(
         }};
     }
 
-    if boxed {
+    if sandboxed {
         if let Err((code, reason)) = fno_agents::sandbox_launch::arm(home, &cwd) {
             eprintln!("fno-agents spawn: [sandbox] devcontainer refused: {reason}");
             if let Some(g) = gate_guard.as_mut() {
@@ -2878,7 +2883,6 @@ fn retired_command_pointer(command: &str) -> Option<&'static str> {
 /// but the arms rows print either way.
 async fn run_status(json_out: bool) -> i32 {
     let home = AgentsHome::from_env();
-    let (mut arms, trace) = fno_agents::status_render::arms_readout(&home);
     let req = Request::new(1, "agent.status", Value::Object(Map::new()));
     match call_if_running(&home, &req).await {
         Ok(resp) => match resp.payload {
@@ -2895,6 +2899,10 @@ async fn run_status(json_out: bool) -> i32 {
                     .and_then(Value::as_u64)
                     .unwrap_or(0);
                 let drifted = matches!(drift, DriftState::Drifted { .. });
+                // The served fold when the daemon carries one for these
+                // journals, the local journal fold otherwise (an old daemon
+                // answers without `arms_fold`).
+                let (mut arms, trace) = fno_agents::status_render::arms_for_status(&home, &result);
                 fno_agents::arm_repair::explain(
                     &mut arms,
                     &fno_agents::tick_ledger::DaemonFacts::Up { uptime_s, drifted },
@@ -2954,6 +2962,7 @@ async fn run_status(json_out: bool) -> i32 {
         Err(ClientError::DaemonNotRunning) => {
             // The arms table is exactly what a dead control plane needs to
             // show; print it beside the down-daemon signal rather than nothing.
+            let (mut arms, trace) = fno_agents::status_render::arms_readout(&home);
             fno_agents::arm_repair::explain(
                 &mut arms,
                 &fno_agents::tick_ledger::DaemonFacts::Down,
@@ -2976,6 +2985,7 @@ async fn run_status(json_out: bool) -> i32 {
             // shape as DaemonNotRunning - the arms readout stands on its own.
             // Daemon rules do not fire on Unknown, so stale rows read
             // `unexplained` rather than blaming a daemon of unknown health.
+            let (mut arms, trace) = fno_agents::status_render::arms_readout(&home);
             fno_agents::arm_repair::explain(
                 &mut arms,
                 &fno_agents::tick_ledger::DaemonFacts::Unknown,

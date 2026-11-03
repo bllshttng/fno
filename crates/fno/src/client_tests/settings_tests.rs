@@ -167,7 +167,14 @@ fn settings_rows() {
             _ => None,
         })
         .collect();
-    assert_eq!(labels, ["fleet org board", "pane share"]);
+    assert_eq!(
+        labels,
+        [
+            "fleet org board",
+            "pane share",
+            "other machines · fleet map read every 15s"
+        ]
+    );
     assert_eq!(
         actions,
         experimental::Flag::ALL.map(AuxAction::ToggleExperimental)
