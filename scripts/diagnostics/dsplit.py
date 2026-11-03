@@ -31,6 +31,7 @@ from collections import defaultdict
 
 
 WORKER_EXE = "fno-agents-worker"
+DAEMON_EXE = "fno-agents-daemon"
 
 
 def cpu_seconds(s):
@@ -73,6 +74,26 @@ def adopt(rows, members, classes, root):
     return members, classes
 
 
+def pick_daemon(rows):
+    """The one resident daemon pid among the rows, or a refusal naming the count.
+
+    The daemon binary ignores unknown argv, so any process whose executable is
+    fno-agents-daemon may be the resident. The match keys on the executable,
+    not the full argv, so a wrapper that merely names the daemon in its
+    command text is never a candidate. A transient `version` probe can still
+    double the count and refuse; retry once it exits.
+    """
+    out = []
+    for pid, (_, _, command) in rows.items():
+        parts = command.split()
+        if parts and parts[0].rsplit("/", 1)[-1] == DAEMON_EXE:
+            out.append(pid)
+    if len(out) != 1:
+        sys.exit(f"expected one resident {DAEMON_EXE}, found {len(out)}: {out}; "
+                 "pass the pid")
+    return out[0]
+
+
 def snapshot():
     out = subprocess.run(["ps", "-axo", "pid=,ppid=,cputime=,command="],
                          capture_output=True, text=True).stdout
@@ -89,15 +110,7 @@ def snapshot():
 
 
 def daemon_pid():
-    # The daemon binary ignores unknown argv, so ANY fno-agents-daemon process
-    # except the cheap `version` probe may be the resident. Require exactly one
-    # candidate; a count alone cannot tell a resident from a probe.
-    out = subprocess.run(["pgrep", "-f", "fno-agents-daemon"],
-                         capture_output=True, text=True).stdout.split()
-    if len(out) != 1:
-        sys.exit(f"expected one resident fno-agents-daemon, found {len(out)}: {out}; "
-                 "pass the pid")
-    return int(out[0])
+    return pick_daemon(snapshot())
 
 
 def label(command):
