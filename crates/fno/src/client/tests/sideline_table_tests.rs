@@ -937,6 +937,24 @@ async fn agents_tab_ctrl_t_pins_the_session_and_the_row_shows_it() {
     let mut pinned_b = b.clone();
     pinned_b.pinned = true;
     assert_eq!(agent_sort::pin_argv(&pinned_b).unwrap()[1], "--unkeep");
+    // A far row's mark lives on its own machine: the handle names the host,
+    // and a row with no session id of its own still has a key to send.
+    let mut far = mk("muriel@bb16", 6);
+    far.remote = Some(crate::proto::RemoteRow {
+        host: "bb16".into(),
+        key: "133a419b".into(),
+        name: far.name.clone(),
+        state: "working".into(),
+    });
+    assert_eq!(
+        agent_sort::pin_argv(&far).unwrap(),
+        vec!["reap", "--keep", "133a419b@bb16"]
+    );
+    far.pinned = true;
+    assert_eq!(
+        agent_sort::pin_argv(&far).unwrap(),
+        vec!["reap", "--unkeep", "133a419b@bb16"]
+    );
 
     let mut v = wide_view(vec![mk("a", 4), b]);
     let at = v

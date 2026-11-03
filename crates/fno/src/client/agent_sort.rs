@@ -15,11 +15,6 @@ pub(super) struct AgentOrder<'a> {
 /// notices why.
 pub(super) fn toggle_pin(view: &mut View, cur: usize) {
     let agent = match view.display_rows().get(cur) {
-        // The pin is a keep mark on the machine that runs the session.
-        Some(DisplayRow::Agent(a)) if a.remote.is_some() => {
-            view.set_notice("pin works on this machine's rows".into());
-            return;
-        }
         Some(DisplayRow::Agent(a)) => (*a).clone(),
         _ => {
             view.set_notice("pin works on an agent row".into());
@@ -40,20 +35,30 @@ pub(super) fn legacy_pin_notice(n: usize) -> (String, Instant) {
 
 /// The `fno-agents reap` argv that flips a row's pin. The pin IS the keep
 /// mark every reaper reads, keyed by session id, so a row with no session
-/// yet has nothing to pin.
+/// yet has nothing to pin. The mark lives on the machine that runs the
+/// session, so a far row names `<key>@<host>` and `reap` relays the keep
+/// there over ssh, the way `peek` and `mail` reach it.
 pub(super) fn pin_argv(a: &AgentRow) -> Result<Vec<String>, String> {
+    let flag = if a.pinned { "--unkeep" } else { "--keep" };
+    if let Some(remote) = &a.remote {
+        return Ok(vec![
+            "reap".into(),
+            flag.into(),
+            format!("{}@{}", remote.key, remote.host),
+        ]);
+    }
     let sid = a
         .harness_session_id
         .clone()
         .filter(|s| !s.is_empty())
         .ok_or_else(|| format!("{} has no session id to pin yet", a.name))?;
-    let flag = if a.pinned { "--unkeep" } else { "--keep" };
     Ok(vec!["reap".into(), flag.into(), sid])
 }
 
 /// Flip a row's pin off the UI loop. The sideline shows the new state when
-/// the next layout reads the marker; the notice carries the command's own
-/// answer, so a refusal is never painted as a pin.
+/// the next layout reads the marker (a far row's, when its machine's next
+/// beat is read); the notice carries the command's own answer, so a refusal
+/// is never painted as a pin.
 pub(super) fn pin_agent(view: &mut View, a: &AgentRow) {
     let argv = match pin_argv(a) {
         Ok(argv) => argv,

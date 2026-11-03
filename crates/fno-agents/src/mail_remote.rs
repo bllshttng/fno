@@ -661,7 +661,7 @@ fn queue_and_report(
 }
 
 /// The ssh relay: exec, inherit stdio, pass the exit code through.
-fn relay(host: &str, words: &[String]) -> i32 {
+pub(crate) fn relay(host: &str, words: &[String]) -> i32 {
     let argv = ssh_argv(host, words);
     let mut cmd = Command::new(&argv[0]);
     cmd.args(&argv[1..]);

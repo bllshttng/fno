@@ -200,6 +200,27 @@ pub fn list(home: &AgentsHome) -> Vec<ListedMark> {
     out
 }
 
+/// Where a keep handle points.
+#[derive(Debug, PartialEq, Eq)]
+enum Where {
+    /// A row on another machine, by the handle that machine knows.
+    Far { host: String, name: String },
+    /// A row on this machine, with any `@host` of its own dropped.
+    Here(String),
+}
+
+/// Split `<handle>@<host>` and compare the host with `local_host` (already
+/// normalized), the comparison `peek` and `mail` make.
+fn locate(handle: &str, local_host: &str) -> Where {
+    match crate::mail::address::split_target(handle) {
+        Ok((name, host)) if crate::mail::address::normalize_host(&host) != local_host => {
+            Where::Far { host, name }
+        }
+        Ok((name, _)) => Where::Here(name),
+        Err(_) => Where::Here(handle.to_string()),
+    }
+}
+
 /// The `--keep` / `--unkeep` / `--kept` arms of `fno agents reap`, parsed
 /// beside the sweep the way [`crate::reap_release::from_args`] parses
 /// `--release`. Prints and returns the exit code; `None` when no keep flag
@@ -220,6 +241,17 @@ pub fn from_args(rest: &[String]) -> Option<i32> {
     } else {
         ""
     };
+    // `<handle>@<host>` is a row on another machine, whose keep mark lives
+    // there: run the flag on that host over the relay `peek` and `mail` take.
+    // The same spelling for this machine drops its host and runs here.
+    let handle = match locate(handle, &crate::name_ledger::local_bus_host()) {
+        Where::Far { host, name } => {
+            let words = ["agents", "reap", flag, name.as_str()].map(String::from);
+            return Some(crate::mail_remote::relay(&host, &words));
+        }
+        Where::Here(name) => name,
+    };
+    let handle = handle.as_str();
     // Everything except the flag, its handle, and --json is an error.
     let extras: Vec<String> = rest
         .iter()
@@ -365,6 +397,29 @@ fn kept_list(home: &AgentsHome) -> i32 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_handle_with_another_machines_host_relays_and_this_machines_runs_here() {
+        let far = locate("133a419b@bb16", "imac2d2");
+        assert_eq!(
+            far,
+            Where::Far {
+                host: "bb16".into(),
+                name: "133a419b".into()
+            }
+        );
+        assert_eq!(
+            locate("133a419b@iMac2D2.local", "imac2d2"),
+            Where::Here("133a419b".into()),
+            "the same machine spelled another way"
+        );
+        assert_eq!(locate("w2", "imac2d2"), Where::Here("w2".into()));
+        assert_eq!(
+            locate("a@b@c", "imac2d2"),
+            Where::Here("a@b@c".into()),
+            "a handle the split refuses falls to the local arms, which refuse it"
+        );
+    }
+
     use super::*;
     use crate::state::RegistryEntry;
 

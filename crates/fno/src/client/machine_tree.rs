@@ -19,6 +19,9 @@ use crate::proto::RemoteRow;
 
 const READ_EVERY: Duration = Duration::from_secs(15);
 
+/// The status band for a session waiting on the user, in the local band's words.
+const NEEDS_INPUT: &str = "Needs input";
+
 /// Another machine's session: its row and the band each axis files it under.
 #[derive(Debug)]
 struct Seat {
@@ -26,9 +29,14 @@ struct Seat {
     project: String,
     lead: String,
     cwd: String,
-    /// The fleet map says `writing`. Its status words carry no needs-input
-    /// state, so a far row never lands in that band.
+    /// The fleet map says `writing`.
     working: bool,
+    /// The seat is blocked on the user, as its own machine's badge says, and
+    /// that machine's beat is fresh enough to act on.
+    needs_input: bool,
+    /// The workspace its own machine's mux files it under. Absent when no mux
+    /// there names one, and the project stands in.
+    workspace: Option<String>,
     /// Its session id, and its parent seat's, for nesting under workspace.
     id: Option<String>,
     parent: Option<String>,
@@ -168,14 +176,17 @@ fn fold_seat(seat: &Value, all: &[&Value], host: &str, band: &Band) -> Seat {
             .unwrap_or_default();
         base.to_string()
     });
+    let needs_input = band.fresh && seat["needs_input"].as_bool() == Some(true);
     Seat {
-        row: remote_row(seat, host, seat_state(seat, band)),
+        row: remote_row(seat, host, seat_state(seat, band), needs_input),
         project: text(seat, "project").unwrap_or_else(|| "(no project)".into()),
         lead: lead_of(seat, all),
         cwd: cwd
             .filter(|c| !c.is_empty())
             .unwrap_or_else(|| "(no cwd)".into()),
         working: text(seat, "status").as_deref() == Some("writing"),
+        needs_input,
+        workspace: text(seat, "workspace"),
         id: text(seat, "session_id"),
         parent: parent_seat(seat, all).and_then(|p| text(p, "session_id")),
     }
@@ -222,8 +233,9 @@ fn seat_state(seat: &Value, band: &Band) -> String {
 }
 
 /// A fleet seat as a row. `name@host` is the address peek and mail already
-/// route, so those two work from the name alone.
-fn remote_row(seat: &Value, host: &str, state: String) -> AgentRow {
+/// route, so those two work from the name alone. A seat waiting on the user
+/// badges blocked, so it sorts and rolls up as a local blocked row does.
+fn remote_row(seat: &Value, host: &str, state: String, needs_input: bool) -> AgentRow {
     let name = text(seat, "name").unwrap_or_default();
     let address = format!("{name}@{host}");
     AgentRow {
@@ -234,7 +246,12 @@ fn remote_row(seat: &Value, host: &str, state: String) -> AgentRow {
         // the name.
         model: text(seat, "model"),
         context_used_pct: seat["context_pct"].as_u64().map(|pct| pct.min(100) as u8),
-        badge: (text(seat, "status").as_deref() == Some("writing")).then_some(AgentBadge::Working),
+        badge: if needs_input {
+            Some(AgentBadge::Blocked)
+        } else {
+            (text(seat, "status").as_deref() == Some("writing")).then_some(AgentBadge::Working)
+        },
+        pinned: seat["pinned"].as_bool() == Some(true),
         // The Created and Modified sorts read these, so a far row orders by
         // its own times inside a band.
         started_at: stamp(seat, "started_at"),
@@ -258,9 +275,10 @@ fn stamp(seat: &Value, key: &str) -> Option<u64> {
 /// The band a far seat joins on the active axis, the local axis's own words.
 fn seat_label(group: AgentGroup, seat: &Seat) -> String {
     match group {
-        AgentGroup::Workspace => seat.project.clone(),
+        AgentGroup::Workspace => (seat.workspace.clone()).unwrap_or_else(|| seat.project.clone()),
         AgentGroup::Team => seat.lead.clone(),
         AgentGroup::Cwd => seat.cwd.clone(),
+        AgentGroup::Status if seat.needs_input => NEEDS_INPUT.into(),
         AgentGroup::Status if seat.working => "Working".into(),
         AgentGroup::Status => "Completed".into(),
         AgentGroup::Harness => (seat.row.harness.clone()).unwrap_or_else(|| "(no harness)".into()),
@@ -287,10 +305,15 @@ fn remote_rows<'a>(view: &'a View, band: &'a Band) -> (Vec<DisplayRow<'a>>, Vec<
             None => buckets.push((label, vec![seat])),
         }
     }
-    // Status keeps its fixed order, Working before Completed; the rest read
-    // alphabetically.
+    // Status keeps its fixed order, Needs input then Working then Completed,
+    // the order a local status band takes; the rest read alphabetically.
+    let status_rank = |label: &str| match label {
+        NEEDS_INPUT => 0,
+        "Working" => 1,
+        _ => 2,
+    };
     buckets.sort_by(|a, b| match group {
-        AgentGroup::Status => b.0.cmp(&a.0),
+        AgentGroup::Status => status_rank(&a.0).cmp(&status_rank(&b.0)),
         _ => a.0.cmp(&b.0),
     });
     let (mut out, mut depths) = (Vec::new(), Vec::new());
@@ -469,5 +492,37 @@ mod tests {
             x.state, "offline 2m",
             "a stale beat outranks the seat's word"
         );
+    }
+
+    #[test]
+    fn a_far_seat_files_badges_and_pins_by_its_machines_marks() {
+        let map = json!({"machines": [
+            {"host": "bb16", "local": false, "fresh": true, "age_s": 5, "sessions": [
+                {"name": "muriel", "harness": "claude", "project": "fno",
+                 "workspace": "footnote", "session_id": "133a419b", "status": "writing",
+                 "needs_input": true, "pinned": true},
+                {"name": "ines", "harness": "claude", "project": "fnh", "age_s": 180},
+            ]},
+            {"host": "mbp3", "local": false, "fresh": false, "age_s": 400, "sessions": [
+                {"name": "dusty", "harness": "claude", "project": "fno", "needs_input": true},
+            ]},
+        ]});
+        let bands = fold(&map);
+        let seats = |host: &str| &bands.iter().find(|b| b.host == host).unwrap().seats;
+        let (muriel, ines) = (&seats("bb16")[0], &seats("bb16")[1]);
+        assert_eq!(seat_label(AgentGroup::Workspace, muriel), "footnote");
+        assert_eq!(
+            seat_label(AgentGroup::Workspace, ines),
+            "fnh",
+            "with no workspace the project stands in"
+        );
+        assert_eq!(seat_label(AgentGroup::Status, muriel), "Needs input");
+        assert_eq!(seat_label(AgentGroup::Status, ines), "Completed");
+        assert_eq!(muriel.row.badge, Some(AgentBadge::Blocked));
+        assert!(muriel.row.pinned && !ines.row.pinned);
+
+        let dusty = &seats("mbp3")[0];
+        assert!(!dusty.needs_input, "a stale beat raises no alert");
+        assert_eq!(seat_label(AgentGroup::Status, dusty), "Completed");
     }
 }

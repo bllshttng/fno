@@ -14,14 +14,14 @@ The fleet map carries less than the layout, so a far row joins its band by the n
 
 | Group | A far row joins |
 |---|---|
-| workspace | its project, nested under its parent seat. The fleet map carries no workspace |
+| workspace | the workspace its own machine's mux files it under, else its project. Seats nest under their parent seat |
 | lead | the first seat up its parent chain that holds a role |
 | cwd | the last part of its cwd |
-| status | Working while it writes, else Completed. The fleet map has no needs-input state |
+| status | Needs input while its own machine's badge reads blocked, else Working while it writes, else Completed |
 | harness | its harness |
 | none | its machine band, with no band below it |
 
-The Created and Modified sorts read a far row's start and last-message times, so recency orders far rows too. A pin is a keep mark on the machine that runs the session. The fleet map does not carry it, so a far row never sorts as pinned, and `ctrl+t` on a far row refuses.
+The Created and Modified sorts read a far row's start and last-message times, so recency orders far rows too. A pin is a keep mark on the machine that runs the session. The fleet map carries it, so a pinned far row sorts first like a local one. `ctrl+t` on a far row runs `fno agents reap --keep` on that machine over ssh. The new pin shows when the next beat lands, up to 75 seconds later. A machine whose beat is stale raises no needs-input alert, because you cannot act on it from here.
 
 A remote row is named `name@host`. Peek and mail already route that address. Its card paints the bare name, and its third line reads `remote · host · state` with the context percent after it. The state is `working` while the seat writes, `idle 3m` with the time since its last message, or `offline 2m` once its machine's beat is stale.
 
