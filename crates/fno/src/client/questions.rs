@@ -1352,8 +1352,10 @@ impl View {
                         if let Some(full) =
                             fold.items.iter().find(|f| bare_id(&f.id) == bare_id(&q.id))
                         {
-                            let (state, settled) = (q.state.clone(), q.settled);
+                            let (title, state, settled) =
+                                (q.title.clone(), q.state.clone(), q.settled);
                             *q = full.clone();
+                            q.title = title;
                             q.state = state;
                             q.settled = settled;
                         }
