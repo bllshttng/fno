@@ -211,18 +211,21 @@ fn collect_rollouts(root: &Path, out: &mut Vec<PathBuf>) {
 fn codex_meta_session(path: &Path) -> Option<String> {
     use std::io::BufRead;
     let file = std::fs::File::open(path).ok()?;
-    std::io::BufReader::new(file).lines().take(4).find_map(|line| {
-        let rec = serde_json::from_str::<Value>(line.ok()?.trim()).ok()?;
-        if rec.get("type").and_then(Value::as_str) != Some("session_meta") {
-            return None;
-        }
-        let payload = rec.get("payload").unwrap_or(&rec);
-        payload
-            .get("id")
-            .or_else(|| rec.get("id"))
-            .and_then(Value::as_str)
-            .map(str::to_string)
-    })
+    std::io::BufReader::new(file)
+        .lines()
+        .take(4)
+        .find_map(|line| {
+            let rec = serde_json::from_str::<Value>(line.ok()?.trim()).ok()?;
+            if rec.get("type").and_then(Value::as_str) != Some("session_meta") {
+                return None;
+            }
+            let payload = rec.get("payload").unwrap_or(&rec);
+            payload
+                .get("id")
+                .or_else(|| rec.get("id"))
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
 }
 
 fn resolve_codex(session_id: &str, roots: &Roots) -> ResolvedTranscript {
