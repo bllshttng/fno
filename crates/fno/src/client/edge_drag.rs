@@ -27,6 +27,20 @@ pub(crate) enum Edge {
     ReplyDock,
 }
 
+impl Edge {
+    /// The name a snapshot's `--edge` flag gives an edge.
+    pub(crate) fn from_name(name: &str) -> Option<Self> {
+        Some(match name {
+            "backlog" => Self::BacklogSeam,
+            "messages-tree" => Self::MessagesTree,
+            "messages-part" => Self::MessagesPart,
+            "org" => Self::OrgExplorer,
+            "dock" => Self::ReplyDock,
+            _ => return None,
+        })
+    }
+}
+
 /// Which way the pointer measures the size.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Along {
