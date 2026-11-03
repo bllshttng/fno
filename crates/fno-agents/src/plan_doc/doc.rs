@@ -262,10 +262,10 @@ mod tests {
 
     #[test]
     fn parses_frontmatter_and_sections_in_order() {
-        let text = "---\nstatus: design\nnode: x-1234\ntags: [a, b]\n---\n\n## Overview\n\nFirst body.\n\n## Execution Strategy\n\n```yaml\nwaves: []\n```\n\n## Deferred\n\nlater\n";
+        let text = "---\nstatus: design\nnode: x-aaaa\ntags: [a, b]\n---\n\n## Overview\n\nFirst body.\n\n## Execution Strategy\n\n```yaml\nwaves: []\n```\n\n## Deferred\n\nlater\n";
         let doc = load_plan_text(text).unwrap();
         assert_eq!(doc.frontmatter["status"], "design");
-        assert_eq!(doc.frontmatter["node"], "x-1234");
+        assert_eq!(doc.frontmatter["node"], "x-aaaa");
         let names: Vec<&str> = doc.sections.iter().map(|(h, _)| h.as_str()).collect();
         assert_eq!(names, vec!["Overview", "Execution Strategy", "Deferred"]);
         assert_eq!(doc.get_section("Overview").unwrap(), "First body.");
