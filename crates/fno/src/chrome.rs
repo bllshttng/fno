@@ -367,6 +367,7 @@ pub struct BodySpan {
 /// collects the distinct resolved `(fg, weight)` pairs: fewer than 2 is a flat
 /// view, and a view of 4+ text lines with no bold level has no heading or
 /// value to scan by. `title` names the view in the refusal.
+#[cfg(test)]
 pub fn text_hierarchy(title: &str, framed: &Framed, theme: &Theme) -> Result<(), String> {
     use crate::proto::{cell_flags, Color};
     let mut styles: Vec<(Color, u8)> = Vec::new();

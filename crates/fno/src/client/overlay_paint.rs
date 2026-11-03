@@ -8,7 +8,7 @@ use super::blank_straddling_pair;
 use crate::chrome;
 use crate::popup;
 use crate::proto::Cell;
-use crate::text_style::{TLine, ToTLine};
+use crate::text_style::{TLine, TextStyle, ToTLine};
 use crate::theme::Theme;
 
 #[derive(Debug, Clone, Copy)]
@@ -198,8 +198,8 @@ fn wrap_overlay_lines<S: ToTLine>(lines: &[S], cap: usize) -> (Vec<TLine>, Vec<u
     let mut out = Vec::with_capacity(lines.len());
     let mut src = Vec::with_capacity(lines.len());
     for (i, line) in lines.iter().enumerate() {
-        let line = line.to_tline();
-        let text = line.text.trim_end();
+        let line = line.to_tline().trim_end();
+        let text = line.text.as_str();
         if chrome::str_cols(text) <= text_w {
             out.push(line);
             src.push(i);
@@ -213,7 +213,7 @@ fn wrap_overlay_lines<S: ToTLine>(lines: &[S], cap: usize) -> (Vec<TLine>, Vec<u
         };
         let room = text_w - chrome::str_cols(&indent);
         for piece in line.strip_front(indent.chars().count()).wrap(room) {
-            let mut row = TLine::plain(indent.clone());
+            let mut row = TLine::parts(&[(&indent, TextStyle::Item)]);
             row.join = piece.join;
             row.push_line(piece);
             out.push(row);

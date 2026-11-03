@@ -244,7 +244,7 @@ pub fn cell_style(role: Role, t: &Theme) -> (Color, Color, u8) {
         };
     }
     // Named theme: chrome takes explicit colors on the default bg; the body
-    // rides the theme ground (PanelBody resolved above the split), so
+    // rides the theme ground (the Text levels resolve above the split), so
     // content reads in the emulator's own colors under every theme.
     match role {
         Role::Border => (t.border, Color::Default, 0),
@@ -856,7 +856,7 @@ mod tests {
                 "{n} focused chip carries INVERSE"
             );
             // A focused chip must not read like its neighbors: unfocused
-            // chips ride PanelBody (default video) under every theme.
+            // chips ride Text(Item) (default video) under every theme.
             assert_ne!(
                 cell_style(Role::ChipFocus, &t),
                 cell_style(Role::Text(TextStyle::Item), &t),

@@ -1011,7 +1011,7 @@ impl Popup {
                     // A disabled entry contributes no target and no hit span, so
                     // nav()/selected() (which read targets()) and the click router
                     // (which reads hits) both pass over it. Its row still renders,
-                    // greyed via BodyDim, carrying the reason as the hint.
+                    // greyed via the Meta level, carrying the reason as the hint.
                     let hits = if disabled {
                         Vec::new()
                     } else {
@@ -1544,9 +1544,9 @@ mod tests {
         );
         assert!(
             disabled_line.roles.contains(&Role::Text(TextStyle::Meta)),
-            "disabled row greys via BodyDim"
+            "disabled row greys via Meta"
         );
-        // Every non-border cell on the disabled row is BodyDim: it carries no
+        // Every non-border cell on the disabled row is Meta: it carries no
         // normal (Body) or selected (BodySel) cell a selectable row would.
         assert!(
             disabled_line
