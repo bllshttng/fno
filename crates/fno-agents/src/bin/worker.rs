@@ -216,6 +216,10 @@ fn run_stream_lane(args: Vec<String>) {
             std::process::exit(2);
         }
     };
+    // The daemon always passes --cwd, so the pane env posture keys on the
+    // session's real repo: a foreign-repo adoption gets the scrub instead of
+    // the daemon's fleet fill.
+    fno_agents::cargo_build_dirs::fill_pane_env(&cfg.cwd);
     let rt = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()

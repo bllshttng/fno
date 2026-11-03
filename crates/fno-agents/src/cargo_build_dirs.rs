@@ -73,13 +73,14 @@ pub fn build_dir_env_value(root: &Path) -> String {
     format!("{}/{{workspace-path-hash}}", fno_build_base(root).display())
 }
 
-/// `root` is a footnote checkout: its `.cargo/config.toml` names the
+/// `root` is a fleet-cargo checkout: its `.cargo/config.toml` names the
 /// checkout's own rustc wrapper and that wrapper file is present. Only such
 /// a cwd earns the fleet fill; a foreign repo's cargo must keep its own
 /// build-dir defaults, or a fleet pane spawned there inherits the fno base
 /// and puts foreign intermediates under ~/.fno where the reclaim lanes
-/// sweep them.
-pub fn is_footnote_checkout(root: &Path) -> bool {
+/// sweep them. The plugin-source predicate of the same shape answers a
+/// different question and stays private in hook::test_run_guard.
+pub fn is_fleet_cargo_checkout(root: &Path) -> bool {
     let Ok(text) = std::fs::read_to_string(root.join(".cargo/config.toml")) else {
         return false;
     };
@@ -91,7 +92,7 @@ pub fn is_footnote_checkout(root: &Path) -> bool {
 /// footnote checkout. A preset wins. Env mutation: call only while the
 /// process is single-threaded.
 pub fn fill_build_dir_env(root: &Path) {
-    if !is_footnote_checkout(root) {
+    if !is_fleet_cargo_checkout(root) {
         return;
     }
     if std::env::var_os("CARGO_BUILD_BUILD_DIR").is_none() {
@@ -121,7 +122,7 @@ pub fn sccache_bin() -> Option<PathBuf> {
 /// the fill, for the same reason as the build-dir fill. Env mutation: call
 /// only while the process is single-threaded.
 pub fn fill_sccache_env(root: &Path) {
-    if !is_footnote_checkout(root) {
+    if !is_fleet_cargo_checkout(root) {
         return;
     }
     if sccache_bin().is_none() {
@@ -144,7 +145,7 @@ pub fn fill_sccache_env(root: &Path) {
 /// ~/.fno, and the wrapper re-exports it. Env mutation: call only while the
 /// process is single-threaded.
 pub fn fill_pane_env(root: &Path) {
-    if is_footnote_checkout(root) {
+    if is_fleet_cargo_checkout(root) {
         fill_build_dir_env(root);
         fill_sccache_env(root);
     } else {
@@ -2466,9 +2467,9 @@ mod tests {
     }
 
     #[test]
-    fn is_footnote_checkout_requires_wrapper_config_and_file() {
+    fn is_fleet_cargo_checkout_requires_wrapper_config_and_file() {
         let root = temp_root("gate-fs");
-        assert!(!is_footnote_checkout(&root), "no config earns no pass");
+        assert!(!is_fleet_cargo_checkout(&root), "no config earns no pass");
         std::fs::create_dir_all(root.join(".cargo")).unwrap();
         std::fs::write(
             root.join(".cargo/config.toml"),
@@ -2476,12 +2477,12 @@ mod tests {
         )
         .unwrap();
         assert!(
-            !is_footnote_checkout(&root),
+            !is_fleet_cargo_checkout(&root),
             "config without the wrapper line earns no pass"
         );
         plant_footnote(&root);
         assert!(
-            is_footnote_checkout(&root),
+            is_fleet_cargo_checkout(&root),
             "wrapper-naming config plus wrapper file passes"
         );
     }
