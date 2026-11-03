@@ -734,6 +734,55 @@ pub(crate) fn summary_payload(history: &str, stale_days: i64, now: DateTime<Utc>
     })
 }
 
+/// The newest `gate-main` day, folded from every variant of the history: the
+/// daily main-branch gate run the weekly regression bank never counts. Null
+/// when no graded gate-main row carries a timestamp.
+pub(crate) fn gate_main_summary(history: &str, now: DateTime<Utc>) -> Value {
+    const PREFIX: &str = "gate-main-";
+    let rows = read_rows(history, None, None);
+    let graded: Vec<&Row> = rows
+        .iter()
+        .filter(|r| r.raw_str("status") == Some("graded"))
+        .filter(|r| {
+            r.experiment_id
+                .as_deref()
+                .map_or(false, |e| e.starts_with(PREFIX))
+        })
+        .collect();
+    let Some(newest) = graded.iter().filter_map(|r| r.ts).max() else {
+        return Value::Null;
+    };
+    // A cohort id reads gate-main-YYYY-MM-DD-<hash>[-lead]: the day is the run.
+    let day = |r: &Row| {
+        r.experiment_id
+            .as_deref()
+            .map(|e| e[PREFIX.len()..].chars().take(10).collect::<String>())
+    };
+    let Some(latest_day) = graded
+        .iter()
+        .filter(|r| r.ts == Some(newest))
+        .find_map(|r| day(r))
+    else {
+        return Value::Null;
+    };
+    let run: Vec<&&Row> = graded
+        .iter()
+        .filter(|r| day(r).as_deref() == Some(latest_day.as_str()))
+        .collect();
+    let passed = run.iter().filter(|r| r.pass).count();
+    let lanes: std::collections::BTreeSet<&str> = run
+        .iter()
+        .filter_map(|r| r.raw_str("requested_lane"))
+        .collect();
+    json!({
+        "day": latest_day,
+        "rows": run.len(),
+        "pass_rate": passed as f64 / run.len() as f64,
+        "lanes": lanes.len(),
+        "age_days": ((now - newest).num_seconds() as f64 / 86_400.0 * 1000.0).round() / 1000.0,
+    })
+}
+
 fn print_summary(history: &str, stale_days: i64, now: DateTime<Utc>) -> i32 {
     println!(
         "{}",
