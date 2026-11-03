@@ -187,4 +187,3 @@ fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 
     std::fs::remove_file(&path).ok();
 }
-
