@@ -21,7 +21,7 @@ The fleet map carries less than the layout, so a far row joins its band by the n
 | harness | its harness |
 | none | its machine band, with no band below it |
 
-The Created and Modified sorts read a far row's start and last-message times, so recency orders far rows too. A pin is a keep mark on the machine that runs the session. The fleet map carries it, so a pinned far row sorts first like a local one. `ctrl+t` on a far row runs `fno agents reap --keep` on that machine over ssh. The new pin shows when the next beat lands, up to 75 seconds later. A machine whose beat is stale raises no needs-input alert, because you cannot act on it from here.
+The Created and Modified sorts read a far row's start and last-message times, so recency orders far rows too. A pin is a keep mark on the machine that runs the session. The fleet map carries it, so a pinned far row sorts first like a local one. `ctrl+t` on a far row runs `fno agents reap --keep` on that machine over ssh. The new pin shows at the next beat, up to 75 seconds later. A machine whose beat is stale raises no needs-input alert, because you cannot act on it from here.
 
 A remote row is named `name@host`. Peek and mail already route that address. Its card paints the bare name, and its third line reads `remote · host · state` with the context percent after it. The state is `working` while the seat writes, `idle 3m` with the time since its last message, or `offline 2m` once its machine's beat is stale.
 
