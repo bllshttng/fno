@@ -18,7 +18,22 @@ from pathlib import Path
 # rule, ab-f063 Wave 2). The sidecar we READ is Claude Code's own statusline
 # file and legitimately stays under ~/.claude/.
 FNO_HOME = Path(os.environ.get("FNO_HOME") or (Path.home() / ".fno"))
-SESSIONS_DIR = FNO_HOME / "saved-sessions"
+def _sessions_dir():
+    # The state-root table owns the folder; the literal is the no-binary
+    # fallback only.
+    try:
+        out = subprocess.run(
+            ["fno-agents", "state", "path", "dir", "saved-sessions", "--root", str(FNO_HOME)],
+            capture_output=True, text=True, timeout=10, check=True,
+        ).stdout.strip()
+        if out:
+            return Path(out)
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return FNO_HOME / "db" / "saved-sessions"
+
+
+SESSIONS_DIR = _sessions_dir()
 SIDECAR_PATH = Path.home() / ".claude" / ".session-context.json"
 SKIP_TYPES = {"progress", "file-history-snapshot"}
 NOISE_PREFIXES = (

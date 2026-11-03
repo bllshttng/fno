@@ -139,7 +139,7 @@ fn chats_dir() -> Option<std::path::PathBuf> {
             }
         }
     }
-    Some(crate::model_catalog::state_dir().join("chats"))
+    crate::state_layout::place_dir(&crate::model_catalog::state_dir(), "chats")
 }
 
 #[derive(Debug, Clone, Default)]

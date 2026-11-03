@@ -584,7 +584,7 @@ def ts(mins_ago):
 
 # Chats store: from/to join the registry rows above, so threads resolve to
 # seeded agents. The fleet: broadcast lands on the bell's Announcements tab.
-chats = f"{root}/.fno/chats"
+chats = f"{root}/.fno/db/mail/chats"
 
 def msg(i, mins_ago, frm, to, body):
     return {"type": "message", "kind": "send", "v": 1, "id": f"fmail-demo-{i}",

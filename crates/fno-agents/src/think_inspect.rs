@@ -391,10 +391,8 @@ pub fn pitfalls_section(repo: &Path, plans_path: &Path, home: &Path) -> Value {
     retros.sort();
     retros.reverse();
     retros.truncate(5);
-    let candidates = home
-        .join(".fno")
-        .join("history")
-        .join("lesson-candidates.jsonl");
+    let candidates =
+        crate::state_layout::place_in(&home.join(".fno"), "history", "lesson-candidates.jsonl");
     let count = read_text(&candidates)
         .map(|body| {
             py_splitlines(&body)
