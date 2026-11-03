@@ -18,14 +18,20 @@
 # Args:
 #   --candidate JSON   Candidate object {type, name, description, body}
 #   --session-id SID   Source session id
-#   --file PATH        Override target (default $HOME/.fno/history/lesson-candidates.jsonl)
+#   --file PATH        Override target (default: the history folder the state-root table names)
 
 # No `set -e`: a failed append must not abort the caller's memory write.
 set -uo pipefail
 
 CANDIDATE_JSON=""
 SESSION_ID=""
-FILE="${LESSON_CANDIDATES_FILE:-${HOME:-}/.fno/history/lesson-candidates.jsonl}"
+FILE="${LESSON_CANDIDATES_FILE:-}"
+if [[ -z "$FILE" ]]; then
+    # The table owns where history lives; ask its door, keep a literal
+    # fallback so a missing binary never blocks the memory write.
+    FILE="$(fno-agents state path dir history --file lesson-candidates.jsonl --root "${HOME:-}/.fno" 2>/dev/null)" || FILE=""
+    [[ -n "$FILE" ]] || FILE="${HOME:-}/.fno/db/history/lesson-candidates.jsonl"
+fi
 
 while [[ $# -gt 0 ]]; do
     case "$1" in

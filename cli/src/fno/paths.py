@@ -1121,9 +1121,14 @@ def evals_history() -> Path:
     if override is not None:
         return _guard_state_path(_resolve(override))
     raw = os.path.expanduser(os.path.expandvars(settings.state_dir))
-    if os.path.isabs(raw):
-        return state_dir() / "history" / "evals-history.jsonl"
-    return _guard_state_path(_resolve("~/.fno/") / "history" / "evals-history.jsonl")
+    root = state_dir() if os.path.isabs(raw) else _resolve("~/.fno/")
+    return _guard_state_path(
+        Path(
+            _plan_path_door(
+                ["state", "path", "dir", "history", "--file", "evals-history.jsonl", "--root", str(root)]
+            )
+        )
+    )
 
 
 def runtime_state_json() -> Path:
@@ -1195,31 +1200,24 @@ def observer_reports_dir(
 
 
 def bus_dir() -> Path:
-    """Return the cross-agent bus directory (default: ~/.fno/bus/).
+    """Return the cross-agent bus directory (default: ~/.fno/db/mail/bus/).
 
     Holds the canonical provider-neutral message log (``messages.jsonl``,
     plus rotated ``messages.jsonl.N`` segments) and per-agent read cursors
     under ``cursors/``. Override via ``config.paths.bus_dir`` in settings.yaml.
 
-    Env overrides take precedence so the bus co-isolates with the inbox store
-    under tmp dirs and CI/tests never write the real ~/.fno/bus:
-      1. ``FNO_BUS_DIR``    - explicit override (tests / operators).
-      2. ``FNO_INBOX_ROOT`` - the inbox store's test root; the bus lands at
-                              ``<FNO_INBOX_ROOT>/.bus`` so every existing inbox
-                              test/smoke that isolates the store also isolates
-                              the bus, with no per-test fixture churn.
+    ``FNO_BUS_DIR`` is the explicit override (tests / operators), so CI and
+    tests never write the real bus. The default answers from the Rust ``dir``
+    door.
     """
     explicit = os.environ.get("FNO_BUS_DIR")
     if explicit:
         return _guard_state_path(Path(explicit))
-    inbox_root = os.environ.get("FNO_INBOX_ROOT")
-    if inbox_root:
-        return _guard_state_path(Path(inbox_root) / ".bus")
     settings = _settings()
     override = settings.paths.bus_dir
     if override is not None:
         return _guard_state_path(_resolve(override))
-    return state_dir() / "bus"
+    return Path(_plan_path_door(["state", "path", "dir", "bus", "--root", str(state_dir())]))
 
 
 def _plan_path_door(args: list[str]) -> str:
@@ -1328,7 +1326,10 @@ def handoffs_dir(project_root: Optional[Path] = None) -> Path:
         vroot = vault_root()
         if vroot is not None:
             return vroot / "internal" / project_name / "handoffs"
-    return state_dir() / "handoffs" / project_name
+    return (
+        Path(_plan_path_door(["state", "path", "dir", "handoffs", "--root", str(state_dir())]))
+        / project_name
+    )
 
 
 def briefs_dir() -> Path:
@@ -1355,7 +1356,7 @@ def postmortems_dir() -> Path:
     override = settings.paths.postmortems_dir
     if override is not None:
         return _guard_state_path(_resolve(override))
-    return state_dir() / "postmortems"
+    return Path(_plan_path_door(["state", "path", "dir", "postmortems", "--root", str(state_dir())]))
 
 
 def worktrees_base() -> Path:

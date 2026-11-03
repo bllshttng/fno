@@ -34,14 +34,13 @@ const LIVE_SPAWN_TIMEOUT_S: u64 = 75;
 /// The env pins a live journey strips from every child it spawns, beside the
 /// two it SETS (`FNO_HOME`, `HOME`): the harness config roots and the fno
 /// state pins that would otherwise reach the real fleet from inside a proof.
-const AMBIENT_PINS: [&str; 19] = [
+const AMBIENT_PINS: [&str; 18] = [
     "FNO_CONFIG",
     "FNO_AGENTS_HOME",
     "FNO_REPO_ROOT",
     "FNO_SPACES_DIR",
     "FNO_EVENTS_PATH",
     "FNO_BUS_DIR",
-    "FNO_INBOX_ROOT",
     "FNO_CLAIMS_ROOT",
     "CLAUDE_PLUGIN_ROOT",
     "CODEX_PLUGIN_ROOT",
