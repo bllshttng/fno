@@ -1052,7 +1052,7 @@ pub const ARM_FOLD_SCHEMA_VERSION: u32 = 1;
 /// past. Retention deletes only rows older than the reader's window, so a
 /// map entry pointing at a deleted row is filtered by the reader's window
 /// slice anyway; a daily reseed on the caller's side bounds map drift.
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 pub struct ArmFoldState {
     pub newest: HashMap<String, NewestTick>,
     pub newest_ok: HashMap<String, NewestTick>,
