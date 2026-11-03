@@ -31,7 +31,14 @@ pub(crate) fn merge_tree(
             complete &= merge_tree(root, stamp, &from, &to)?;
         } else if from.is_file() && to.is_file() {
             if name.ends_with(".lock") {
-                std::fs::remove_file(&from).map_err(|e| format!("refused: {e}"))?;
+                // A holder on the old binary keeps its lock until it lets go;
+                // unlinking a held lock would let a second writer in.
+                let free = std::fs::File::open(&from).is_ok_and(|f| f.try_lock().is_ok());
+                if free {
+                    std::fs::remove_file(&from).map_err(|e| format!("refused: {e}"))?;
+                } else {
+                    complete = false;
+                }
             } else if is_journal(&name) {
                 complete &= merge_lines(&from, &to)?;
             } else {
