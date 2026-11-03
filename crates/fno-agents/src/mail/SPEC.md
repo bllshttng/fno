@@ -77,9 +77,8 @@ The live log is `messages.jsonl`. Rotated segments are `messages.jsonl.<N>`. A h
 The log path resolves in this order. The first rule that yields a value wins.
 
 1. `FNO_BUS_DIR`, then `messages.jsonl` in it.
-2. `FNO_INBOX_ROOT`, then `.bus/messages.jsonl` under it.
-3. The `paths.bus_dir` config value, with a leading `~` expanded.
-4. `bus/messages.jsonl` under the state root.
+2. The `paths.bus_dir` config value, with a leading `~` expanded.
+3. `db/mail/bus/messages.jsonl` under the state root. A root the daemon has not folded yet answers `bus/messages.jsonl` until its next start.
 
 A writer appends one line under an exclusive lock on `messages.jsonl.lock`. The lock waits up to `FNO_BUS_LOCK_TIMEOUT_SECS` (default 5). If the live file is at or over `FNO_BUS_MAX_BYTES` (default 5 MiB), the writer rotates first. It drops segment `FNO_BUS_RETAIN` (default 5). It shifts the others up by one. It moves the live file to segment 1. A rotation failure never loses the message. The file mode is 0600.
 

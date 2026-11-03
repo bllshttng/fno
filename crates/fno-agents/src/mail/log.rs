@@ -12,35 +12,31 @@ use serde_json::Value;
 const LOCK_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// The bus log path, the one ladder every bus reader and writer shares:
-/// `FNO_BUS_DIR`, then `FNO_INBOX_ROOT/.bus`, then the `config.paths.bus_dir`
-/// override, else `<fno_dir>/bus/messages.jsonl`. The caller reads the
-/// environment and the config and passes the three values in, so this
-/// module stays free of the config cascade.
+/// `FNO_BUS_DIR`, then the `config.paths.bus_dir` override, else the table's
+/// bus folder under `fno_dir` (`state_layout`, so a root the daemon has not
+/// folded yet still answers its legacy spelling). The caller reads the
+/// environment and the config and passes the two values in, so this module
+/// stays free of the config cascade.
 pub fn resolve_log_path(
     fno_dir: &Path,
     bus_dir_env: Option<&str>,
-    inbox_root_env: Option<&str>,
     configured_dir: Option<&Path>,
 ) -> PathBuf {
     if let Some(dir) = bus_dir_env.filter(|v| !v.is_empty()) {
         return PathBuf::from(dir).join("messages.jsonl");
     }
-    if let Some(root) = inbox_root_env.filter(|v| !v.is_empty()) {
-        return PathBuf::from(root).join(".bus").join("messages.jsonl");
-    }
     if let Some(dir) = configured_dir {
         return dir.join("messages.jsonl");
     }
-    fno_dir.join("bus").join("messages.jsonl")
+    crate::state_layout::place_in(fno_dir, "bus", "messages.jsonl")
 }
 
-/// The bus DIRECTORY for `log_path`: its parent, or `<fno_dir>/bus` when the
-/// path has none.
+/// The bus DIRECTORY for `log_path`: its parent, or the table's bus folder
+/// under `fno_dir` when the path has none.
 pub fn dir_of_log(log_path: &Path, fno_dir: &Path) -> PathBuf {
-    log_path
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| fno_dir.join("bus"))
+    log_path.parent().map(Path::to_path_buf).unwrap_or_else(|| {
+        crate::state_layout::place_dir(fno_dir, "bus").unwrap_or_else(|| fno_dir.join("bus"))
+    })
 }
 
 /// All retained bus lines oldest -> newest (log.py::_segment_paths_oldest_first

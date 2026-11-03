@@ -41,7 +41,6 @@ const AMBIENT_PINS: [&str; 19] = [
     "FNO_SPACES_DIR",
     "FNO_EVENTS_PATH",
     "FNO_BUS_DIR",
-    "FNO_INBOX_ROOT",
     "FNO_CLAIMS_ROOT",
     "CLAUDE_PLUGIN_ROOT",
     "CODEX_PLUGIN_ROOT",
