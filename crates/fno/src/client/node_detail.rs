@@ -84,12 +84,14 @@ pub(crate) async fn press_session(
             super::backlog_board::set_sideline_view(view, crate::view_store::SidelineView::Agents);
             apply_hit(view, hit, sock).await?;
         }
-        SessionAction::Dim(_) if joined.is_none() && sid.is_some() => {
-            revive(view, sid.unwrap_or_default(), sock).await?;
-        }
         SessionAction::Dim(why) => view.set_notice(why),
     }
     Ok(())
+}
+
+/// A session row no registry row joins: the detail offers its revive.
+fn revivable(s: &crate::backlog_model::SessionView) -> bool {
+    s.action == "none" && s.agent.is_none() && s.session_id.is_some()
 }
 
 /// A dead session the registry lacks: adopt writes its row, then a portal
@@ -485,7 +487,7 @@ pub(crate) fn pane_lines(
         k += 1;
         // A session the registry lacks revives through adopt, then a reach.
         let action = match s.action.as_str() {
-            "none" if s.agent.is_none() && s.session_id.is_some() => "revive".to_string(),
+            _ if revivable(s) => "revive".to_string(),
             "none" => s.reason.clone().unwrap_or_else(|| "none".into()),
             other => other.to_string(),
         };
@@ -883,6 +885,10 @@ async fn activate(
             let Some(s) = nv.sessions.get(*i) else {
                 return Ok(());
             };
+            // Only a detail row revives: a dead session the registry lacks.
+            if let (true, Some(sid)) = (revivable(s), s.session_id.as_deref()) {
+                return revive(view, sid, sock_w).await;
+            }
             press_session(
                 view,
                 s.session_id.as_deref(),

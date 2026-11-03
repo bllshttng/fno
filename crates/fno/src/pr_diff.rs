@@ -238,11 +238,11 @@ index 111..222 100644\n\
 --- a/src/a.rs\n\
 +++ b/src/a.rs\n\
 @@ -2974,6 +2974,7 @@ fn outer() {\n\
- keep one\n\
+\x20keep one\n\
 -gone\n\
 +fresh\n\
 +fresher\n\
- keep two\n\
+\x20keep two\n\
 \\ No newline at end of file\n\
 diff --git a/b.bin b/b.bin\n\
 Binary files a/b.bin and b/b.bin differ\n";
