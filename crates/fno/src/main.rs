@@ -1696,6 +1696,15 @@ fn main() {
         eprintln!("{line}");
         std::process::exit(2);
     }
+    // `fno mail ...` is the agents mail group at the root: rewrite it to the
+    // nested spelling so every door below sees the argv it owns.
+    let mail_at = args
+        .iter()
+        .take_while(|a| *a == "-J" || *a == "--json")
+        .count();
+    if args.get(mail_at).and_then(|a| a.to_str()) == Some("mail") {
+        args.insert(mail_at, OsString::from("agents"));
+    }
     // The worktree family's door claims before any forwarding: the Python
     // mounts die with the family port, so these argv shapes must answer
     // natively or not at all.
