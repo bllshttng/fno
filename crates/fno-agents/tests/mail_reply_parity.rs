@@ -110,9 +110,7 @@ fn run_case(
     // The capture driver pointed inbox_project cases at the fixture root and
     // named the known project the sender resolves to.
     let cmd = match inbox_project {
-        Some(project) => cmd
-            .env("FNO_BUS_DIR", root.join("inbox").join(".bus"))
-            .env("FNO_INBOX_KNOWN_PROJECTS", project),
+        Some(project) => cmd.env("FNO_INBOX_KNOWN_PROJECTS", project),
         None => cmd,
     };
     let cmd = if style_on {

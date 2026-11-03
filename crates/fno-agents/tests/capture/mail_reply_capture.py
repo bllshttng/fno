@@ -442,13 +442,12 @@ def run_case(case: dict, bindir: Path) -> None:
             (root / ".fno").mkdir(parents=True, exist_ok=True)
             (root / ".fno" / "settings.yaml").write_text(f"project: {project}\n")
             (root / "inbox").mkdir(parents=True, exist_ok=True)
-            env["FNO_BUS_DIR"] = str(root / "inbox" / ".bus")
             env["FNO_INBOX_KNOWN_PROJECTS"] = project
             if case.get("parent_thread"):
                 # The seeding helper runs in THIS process, which resolves the
                 # bus from os.environ, not from the child's env dict.
                 saved = (os.environ.get("FNO_BUS_DIR"), os.environ.get("FNO_INBOX_KNOWN_PROJECTS"))
-                os.environ["FNO_BUS_DIR"] = env["FNO_BUS_DIR"]
+                os.environ["FNO_BUS_DIR"] = str(root / "inbox" / ".bus")
                 os.environ["FNO_INBOX_KNOWN_PROJECTS"] = project
                 try:
                     parent = seed_project_thread(root, env)
