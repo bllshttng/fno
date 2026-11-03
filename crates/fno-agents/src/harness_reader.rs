@@ -1231,12 +1231,45 @@ fn run_live_rubric(harness: &str, root: &IsolatedRoot) -> (Vec<LineVerdict>, Iso
         return (lines, isolation);
     }
     // The readiness capture is the repo's own smoke script, run through the
-    // isolated env so its pane lands in the isolated mux state too.
+    // isolated env so its pane lands in the isolated mux state too. The argv
+    // is rendered HERE from the packaged capability table - the same lane the
+    // real pane arm launches - with a fresh session id, so the script
+    // captures what production runs. A harness whose table declares no
+    // interactive_create form records a skip naming the render error and
+    // never runs the script (AC3-ERR).
+    let rendered = crate::identity::mint_fno_id()
+        .map_err(|e| e.to_string())
+        .and_then(|id| {
+            crate::harness_capabilities::render_session_argv(
+                harness,
+                "interactive_create",
+                Some(&id),
+            )
+            .map_err(|e| e.to_string())
+        });
+    let argv = match rendered {
+        Ok(argv) => argv,
+        Err(error) => {
+            lines.push(LineVerdict::new(
+                "MANIFEST PINNED",
+                "skip",
+                "live readiness-grid capture",
+                1,
+                format!("render error: {error}"),
+            ));
+            lines.push(cleanup_line(root, &name));
+            return (lines, isolation);
+        }
+    };
     let repo_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let mut capture_cmd = Command::new("bash");
     capture_cmd
         .arg(repo_root.join("cli/scripts/smoke/capture-readiness-grid.sh"))
-        .arg(harness);
+        .arg(harness)
+        .arg("--");
+    for token in &argv {
+        capture_cmd.arg(token);
+    }
     root.child_env(&mut capture_cmd);
     capture_cmd.env("READINESS_SMOKE", "1");
     let capture = run_command_bounded(capture_cmd, INSTRUMENT_TIMEOUT_S);
@@ -1301,7 +1334,6 @@ fn row_matches_line(harness: &str) -> LineVerdict {
         "diff",
         "--exit-code",
         "--",
-        "cli/src/fno/agents/harness_capabilities.toml",
         "crates/fno/src/harness_capabilities.toml",
     ]);
     fresh.current_dir(&root);
@@ -1395,7 +1427,7 @@ fn manifest_pinned_line(
             let fixture = std::env::current_dir()
                 .unwrap_or_else(|_| PathBuf::from("."))
                 .join(format!(
-                    "cli/tests/agents/fixtures/readiness-grid-{harness}.txt"
+                    "crates/fno-agents/tests/fixtures/readiness-grid/readiness-grid-{harness}.txt"
                 ));
             let evaluated = readiness_marker_from_fixture(harness, &fixture);
             match evaluated {
