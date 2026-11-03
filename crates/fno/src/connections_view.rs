@@ -3236,7 +3236,7 @@ mod tests {
 
         let mut v = ready_view();
         let out = v.render().join("\n");
-        assert!(out.contains('…')); // every identity cell pending
+        assert!(!out.contains('…')); // a pending identity cell shows nothing
         v.acct_sel = 1;
         v.on_key(b'\t'); // -> Order, build an unsaved reorder buffer
         assert!(matches!(v.on_key(b'J'), ConnIntent::Redraw));
