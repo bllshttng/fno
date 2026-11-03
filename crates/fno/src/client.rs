@@ -5193,10 +5193,8 @@ impl View {
         layout_lines_overlay(origin, dims, &chrome, &lines, None, anchor)
     }
 
-    /// The Connections modal's hit-test layout: the draw arm and this build
-    /// the SAME `layout_lines_overlay` block from the same chrome and body,
-    /// so a click resolves to the cell the operator sees (AC: the footer's
-    /// esc close words are a target, not a label).
+    /// The Connections hit-test layout: the same chrome and body overlay the
+    /// draw arm builds, so a click lands on the cell the user sees.
     fn connections_overlay_layout(
         &self,
         _rows: usize,
@@ -5204,13 +5202,12 @@ impl View {
     ) -> OverlayLayout {
         let (origin, dims) = self.overlay_viewport();
         let chrome = chrome::Chrome::new("connections", Anchor::Center).footer("esc close");
+        let (body, _) = conn.render_body(&self.layout.agents, overlay_text_cols(dims.1));
         overlay_paint::layout_body_overlay(
             origin,
             dims,
             &chrome,
-            &conn
-                .render_body(&self.layout.agents, overlay_text_cols(dims.1))
-                .0,
+            &body,
             None,
             OverlayAnchor::Center,
         )
