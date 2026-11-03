@@ -798,7 +798,7 @@ fn approval_carries<P: Probes>(
         .rev()
         .filter(|sha| sha.as_str() != head)
         .take(CARRY_WALK)
-        .find(|sha| texts.iter().any(|text| text.contains(sha.as_str())))
+        .find(|sha| texts.iter().any(|text| text_names_head(text, sha)))
     else {
         return false;
     };
@@ -846,7 +846,7 @@ fn adds_no_paint_surface(was: &BTreeSet<String>, now: &BTreeSet<String>) -> bool
 fn declined_after(declines: &[String], newer: &[&str]) -> bool {
     declines
         .iter()
-        .any(|text| newer.iter().any(|sha| text.contains(sha)))
+        .any(|text| newer.iter().any(|sha| text_names_head(text, sha)))
 }
 
 /// The paint files the PR's three-dot compare against the base changes at
@@ -1395,13 +1395,13 @@ fn law_approval_texts<P: Probes>(probes: &P, cwd: &Path, pr: u64) -> Vec<String>
         .collect()
 }
 
-/// True when a live `chat_attested` law row names this PR and the exact full
-/// head sha. Head-scoped like the role row: a push voids it.
+/// True when a live `chat_attested` law row names this PR and the head sha,
+/// full or as a ten-character prefix. Head-scoped like the role row: a push voids it.
 pub(crate) fn law_chat_clears_pr<P: Probes>(probes: &P, cwd: &Path, pr: u64, head: &str) -> bool {
     !head.is_empty()
         && law_approval_texts(probes, cwd, pr)
             .iter()
-            .any(|text| text.contains(head))
+            .any(|text| text_names_head(text, head))
 }
 
 /// The `owner/name` pair a remote url names, normalized across the ssh
@@ -1566,6 +1566,11 @@ mod tests {
     fn a_decline_after_the_approved_commit_voids_the_carry() {
         let declines = vec!["May PR 9 merge? answer 2 at c3".to_string()];
         assert!(declined_after(&declines, &["c3", "c4"]));
+        let spelled = vec!["May PR 9 merge? answer 2 at 0123456789".to_string()];
+        assert!(declined_after(
+            &spelled,
+            &["0123456789abcdef0123456789abcdef01234567"]
+        ));
         assert!(!declined_after(&declines, &["c4"]));
         assert!(!declined_after(&[], &["c3"]));
     }
