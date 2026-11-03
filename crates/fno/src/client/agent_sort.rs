@@ -15,6 +15,11 @@ pub(super) struct AgentOrder<'a> {
 /// notices why.
 pub(super) fn toggle_pin(view: &mut View, cur: usize) {
     let agent = match view.display_rows().get(cur) {
+        // The pin is a keep mark on the machine that runs the session.
+        Some(DisplayRow::Agent(a)) if a.remote.is_some() => {
+            view.set_notice("pin works on this machine's rows".into());
+            return;
+        }
         Some(DisplayRow::Agent(a)) => (*a).clone(),
         _ => {
             view.set_notice("pin works on an agent row".into());

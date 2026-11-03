@@ -121,6 +121,14 @@ pub(crate) fn host_label() -> String {
         .clone()
 }
 
+/// This machine's mail bus host: the stable `host_label()`, normalized.
+/// `gethostname(2)` drifts with DHCP, VPN and sleep and strands pending rows
+/// addressed to the old spelling. Pull and the sender stamp both read this
+/// one function, so they cannot disagree.
+pub(crate) fn local_bus_host() -> String {
+    crate::mail::address::normalize_host(&host_label())
+}
+
 /// Insert `entries` as this machine's rows. A row already there is skipped,
 /// so a retry or a second backfill writes nothing twice.
 fn insert(remote: &Remote, entries: &[&NameHistoryEntry]) -> Result<(), String> {

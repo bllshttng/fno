@@ -114,6 +114,17 @@ fn flatten_envelopes(text: &str) -> (Vec<Value>, usize) {
 /// rule is prove_it's, applied at its call site, because law rows carry
 /// `decision` and no `text` at all.
 pub fn derive_rows(rows: Vec<Value>, damaged: usize) -> Index {
+    derive_rows_with(rows, damaged, true)
+}
+
+/// `derive_rows` that keeps a law whose date guard has fired. `fno inbox law
+/// recheck` reads this form, so it can write the receipt the derivation would
+/// otherwise hide.
+pub fn derive_rows_unguarded(rows: Vec<Value>, damaged: usize) -> Index {
+    derive_rows_with(rows, damaged, false)
+}
+
+fn derive_rows_with(rows: Vec<Value>, damaged: usize, apply_date_guard: bool) -> Index {
     let is_decision = |row: &Value| {
         matches!(
             row.get("_event_type").and_then(Value::as_str),
@@ -132,14 +143,14 @@ pub fn derive_rows(rows: Vec<Value>, damaged: usize) -> Index {
                 .to_lowercase();
             id.is_empty() || !retired.contains_key(&id)
         })
-        .filter(|row| !date_guard_fired(row, &chrono::Utc::now().to_rfc3339()))
+        .filter(|row| !apply_date_guard || !date_guard_fired(row, &chrono::Utc::now().to_rfc3339()))
         .collect();
     Index { rows, damaged }
 }
 
 /// A rule holds until its guard fires. A `date` guard is pure, so the index
 /// derivation retires the row itself: `guard: {kind: "date", at: <RFC 3339>}`.
-/// Event, set and reading guards need the graph or a shell, so
+/// Event and set guards need the graph, and a reading needs a shell, so
 /// `fno inbox law recheck` evaluates those.
 pub fn date_guard_fired(row: &Value, now_rfc3339: &str) -> bool {
     let Some(guard) = row.get("guard").filter(|g| g.is_object()) else {
@@ -447,10 +458,11 @@ pub fn row_scope(row: &Value) -> &str {
 /// `project:<slug>` row governs only the matching slug; a `machine:<id>` or
 /// `user:<name>` (legacy `person:<name>`) row governs only the session that resolves that identity.
 pub fn row_in_scope(row: &Value, project: &str) -> bool {
-    match row_scope(row) {
-        "global" => true,
-        scoped => binds_here(scoped).unwrap_or_else(|| scoped == format!("project:{project}")),
-    }
+    filters_match(row)
+        && match row_scope(row) {
+            "global" => true,
+            scoped => binds_here(scoped).unwrap_or_else(|| scoped == format!("project:{project}")),
+        }
 }
 
 /// The identity arms of the scope test: `Some` for a `machine:` or `user:`
@@ -481,27 +493,16 @@ fn binds(
 /// the project: it hides no project row. A row bound to another machine or
 /// user still hides, because identity needs no project.
 pub fn row_visible(row: &Value, project: Option<&str>) -> bool {
-    filters_match(row) && scope_visible(row, project)
-}
-
-/// The row's filters beside its scope; every filter must match. A `node`
-/// filter binds the session whose `FNO_NODE` names that node. A session with
-/// no node fails open, the posture every law reader keeps.
-pub fn filters_match(row: &Value) -> bool {
-    let Some(node) = row.pointer("/filters/node").and_then(Value::as_str) else {
-        return true;
-    };
-    match std::env::var("FNO_NODE") {
-        Ok(mine) if !mine.is_empty() => mine == node,
-        _ => true,
-    }
-}
-
-fn scope_visible(row: &Value, project: Option<&str>) -> bool {
     match project {
         Some(project) => row_in_scope(row, project),
-        None => binds_here(row_scope(row)) != Some(false),
+        None => filters_match(row) && binds_here(row_scope(row)) != Some(false),
     }
+}
+
+/// The row's filters beside its scope; every filter must match. The matcher
+/// and the session facts live in `law_filters`.
+pub fn filters_match(row: &Value) -> bool {
+    crate::law_filters::filters_match(row)
 }
 
 /// Keep only the rows the session may see, returning the withheld count.
@@ -825,5 +826,21 @@ mod scope_tests {
             assert_eq!(retain_in_scope(&mut index, project), 1, "{project:?}");
             assert_eq!(index.rows.len(), 2, "{project:?}");
         }
+    }
+
+    #[test]
+    fn a_user_scope_binds_like_the_legacy_person_scope() {
+        assert_eq!(
+            binds("user:jason", || "m".into(), || "jason".into()),
+            Some(true)
+        );
+        assert_eq!(
+            binds("user:anouk", || "m".into(), || "jason".into()),
+            Some(false)
+        );
+        assert_eq!(
+            binds("person:anouk", || "m".into(), || "jason".into()),
+            Some(false)
+        );
     }
 }

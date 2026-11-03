@@ -426,25 +426,18 @@ fn the_reader_skips_what_it_cannot_read_and_names_where() {
             "bus log: skipping row messages.jsonl:3 (v=2 is newer than supported v=1)",
         ]
     );
-    // The ladder: FNO_BUS_DIR, then FNO_INBOX_ROOT/.bus, then config, then the root.
-    let root = std::path::Path::new("/r");
+    // The ladder: FNO_BUS_DIR, then config, then the table's bus folder.
+    let default_log = std::path::PathBuf::from("/r/db/mail/bus/messages.jsonl");
     let cfg = std::path::Path::new("/cfg");
     assert_eq!(
-        resolve_log_path(root, Some("/e"), Some("/i"), Some(cfg)),
+        resolve_log_path(&default_log, Some("/e"), Some(cfg)),
         std::path::PathBuf::from("/e/messages.jsonl")
     );
     assert_eq!(
-        resolve_log_path(root, Some(""), Some("/i"), Some(cfg)),
-        std::path::PathBuf::from("/i/.bus/messages.jsonl")
-    );
-    assert_eq!(
-        resolve_log_path(root, None, None, Some(cfg)),
+        resolve_log_path(&default_log, None, Some(cfg)),
         std::path::PathBuf::from("/cfg/messages.jsonl")
     );
-    assert_eq!(
-        resolve_log_path(root, None, None, None),
-        std::path::PathBuf::from("/r/bus/messages.jsonl")
-    );
+    assert_eq!(resolve_log_path(&default_log, None, None), default_log);
 }
 
 /// Threads: the root is one level. A reply to a reply carries the same root.

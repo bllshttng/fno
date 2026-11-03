@@ -597,6 +597,65 @@ pub(super) fn thread_core() -> (Core, u64, u64, mpsc::Receiver<ServerMsg>) {
 }
 
 #[test]
+fn far_row_reach_opens_a_portal_seat_running_the_link() {
+    // A row from another machine takes a local row's reach: Enter's portal,
+    // a seat named for the row, one viewer per row. Only the argv differs.
+    let (mut core, client_id, _p1, mut rx) = thread_core();
+    let remote = crate::proto::RemoteRow {
+        host: "bb16".into(),
+        key: "133a419b".into(),
+        name: "muriel@bb16".into(),
+        ..Default::default()
+    };
+    let reach = |remote: &crate::proto::RemoteRow, placement| Command::ReachRemote {
+        remote: remote.clone(),
+        placement,
+    };
+    let enter = PanePlacement {
+        portal: Some(0),
+        ..Default::default()
+    };
+    let seat = core.next_pane_id;
+    core.command(client_id, reach(&remote, enter.clone()));
+    let portal = core.portals.get(&0).expect("portal 0 open");
+    assert_eq!(
+        (portal.row_key.as_str(), portal.seat),
+        ("muriel@bb16", seat)
+    );
+    let exe = std::env::current_exe().unwrap();
+    let exe = exe.file_name().unwrap().to_string_lossy().into_owned();
+    let entry = &core.panes[&seat];
+    assert_eq!(
+        entry.cmd.as_deref(),
+        Some(exe.as_str()),
+        "the seat runs the link"
+    );
+    assert_eq!(entry.name.as_deref(), Some("muriel@bb16"));
+
+    let fresh = PanePlacement {
+        portal_new: true,
+        ..Default::default()
+    };
+    core.command(client_id, reach(&remote, fresh));
+    assert_eq!(core.portals.len(), 1, "one row, one viewer");
+
+    let panes = core.panes.len();
+    let hostile = crate::proto::RemoteRow {
+        host: "-oProxyCommand=x".into(),
+        name: "x@-o".into(),
+        ..remote.clone()
+    };
+    core.command(client_id, reach(&hostile, enter));
+    assert_eq!(core.panes.len(), panes, "an ssh option is not a host");
+    let notices = drain_notices(&mut rx);
+    assert!(notices
+        .iter()
+        .any(|t| t.contains("portal 0: already showing")));
+    assert!(notices.iter().any(|t| t.contains("no far row at")));
+    core.reap_pane(seat);
+}
+
+#[test]
 fn thread_pane_open_rows() {
     // AC3-HP: no slot, a reach on thread row A opens exactly one pane
     // running A's tier argv, records the slot, and persists no squad

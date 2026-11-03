@@ -113,8 +113,12 @@ pub(crate) fn reading_verdict(
 
 /// One pass over the live laws. `apply` retracts a law whose guard fired.
 pub(crate) fn collect(apply: bool) -> Result<Value, String> {
-    let index = decision_index::default_store_live()
-        .map_err(|e| format!("the decision index could not be read ({e})"))?;
+    let (rows, damaged) = decision_index::read_store_rows(
+        &crate::graph_get::default_graph_path(),
+        &decision_index::default_state_path("decisions.jsonl"),
+    )
+    .map_err(|e| format!("the decision index could not be read ({e})"))?;
+    let index = decision_index::derive_rows_unguarded(rows, damaged);
     let entries = crate::backlog::decisions_cli::read_graph_entries().ok();
     let root = evidence_repo_root();
     let mut runner = |cmd: &str, root: &std::path::Path| crate::evidence::shell_run(cmd, root, 20);
@@ -164,7 +168,9 @@ pub(crate) fn collect(apply: bool) -> Result<Value, String> {
             "retracted": done,
         }));
     }
-    Ok(json!({"laws": report, "stale": stale, "expired": expired, "unknown": unknown, "retracted": retracted}))
+    Ok(
+        json!({"laws": report, "stale": stale, "expired": expired, "unknown": unknown, "retracted": retracted}),
+    )
 }
 
 /// The check-in beat's line: silent when every law's premise holds.
@@ -177,7 +183,12 @@ pub(crate) fn beat_line(reading: &Value) -> String {
         n("retracted"),
         n("unknown")
     );
-    for l in reading.get("laws").and_then(Value::as_array).into_iter().flatten() {
+    for l in reading
+        .get("laws")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
         line.push_str(&format!(
             "\n  {} {} {}: {}",
             l["decision_id"].as_str().unwrap_or(""),

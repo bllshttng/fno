@@ -101,7 +101,9 @@ pub(super) fn escalate_to_human(
     msg_id: Option<&str>,
 ) -> &'static str {
     let pair = escalation_pair(sender, recipient);
-    let marker_dir = state_dir().join("mail-escalations");
+    let state = state_dir();
+    let marker_dir = crate::state_layout::place_dir(&state, "mail-escalations")
+        .unwrap_or_else(|| state.join("mail-escalations"));
     let verdict = render_receipt(&[
         "debounce",
         "--marker-dir",

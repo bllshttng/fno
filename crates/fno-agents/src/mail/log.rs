@@ -12,26 +12,22 @@ use serde_json::Value;
 const LOCK_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// The bus log path, the one ladder every bus reader and writer shares:
-/// `FNO_BUS_DIR`, then `FNO_INBOX_ROOT/.bus`, then the `config.paths.bus_dir`
-/// override, else `<fno_dir>/bus/messages.jsonl`. The caller reads the
-/// environment and the config and passes the three values in, so this
-/// module stays free of the config cascade.
+/// `FNO_BUS_DIR`, then the `config.paths.bus_dir` override, else
+/// `default_log`, the log the state-root layout names (the caller resolves
+/// it, so this module stays free of the layout and the config cascade). The
+/// caller reads the environment and the config and passes the values in.
 pub fn resolve_log_path(
-    fno_dir: &Path,
+    default_log: &Path,
     bus_dir_env: Option<&str>,
-    inbox_root_env: Option<&str>,
     configured_dir: Option<&Path>,
 ) -> PathBuf {
     if let Some(dir) = bus_dir_env.filter(|v| !v.is_empty()) {
         return PathBuf::from(dir).join("messages.jsonl");
     }
-    if let Some(root) = inbox_root_env.filter(|v| !v.is_empty()) {
-        return PathBuf::from(root).join(".bus").join("messages.jsonl");
-    }
     if let Some(dir) = configured_dir {
         return dir.join("messages.jsonl");
     }
-    fno_dir.join("bus").join("messages.jsonl")
+    default_log.to_path_buf()
 }
 
 /// The bus DIRECTORY for `log_path`: its parent, or `<fno_dir>/bus` when the

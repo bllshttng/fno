@@ -721,6 +721,60 @@ fn close_and_move(
     );
 }
 
+/// Close the open page for `qid` as answered, in the step that records the
+/// answer, instead of waiting for the arm's next beat. A lost beat left the
+/// page open with an empty answer, and the visual-approval gate read it as
+/// no look. `Ok(false)` when no open page names the question.
+pub(crate) fn close_open_page(
+    dir: &Path,
+    qid: &str,
+    answer: &str,
+    recorded_by: &str,
+) -> Result<bool, String> {
+    let mut io = RealIo::new(dir);
+    for path in io.list_md(dir) {
+        let Ok(text) = io.read(&path) else {
+            continue;
+        };
+        let Some((front, _)) = parse_page(&text) else {
+            continue;
+        };
+        if front.question_id != qid || front.status != "open" {
+            continue;
+        }
+        let stem = path
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let page = FoundPage {
+            path,
+            stem,
+            text,
+            front,
+        };
+        let receipt = format!("Recorded: {} ({})", short_answer(answer), recorded_by);
+        let mut tick = SinkTick::default();
+        close_and_move(
+            &page,
+            dir,
+            "answered",
+            answer,
+            "",
+            recorded_by,
+            &receipt,
+            &mut io,
+            &mut tick,
+            true,
+            None,
+        );
+        return match tick.skip {
+            Some(why) => Err(format!("{}: {why}", page.path.display())),
+            None => Ok(true),
+        };
+    }
+    Ok(false)
+}
+
 /// Read `done/`: the closed ids and their parsed pages, so the delivery
 /// dedup and the index agree on what a closed page is. A lost close lists
 /// as a page but not as a closed id, so a question that reads open again

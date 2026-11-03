@@ -96,6 +96,7 @@ pub(crate) use overlay_paint::family_b_origin;
 mod row_stamp;
 // The sideline's density width rules.
 mod density_width;
+mod edge_drag;
 mod name_fit;
 use self::row_stamp::{no_pane_notice, paint_notice_overlay, paint_row_stamp, RowArm, RowStamp};
 use density_width::{
@@ -784,8 +785,9 @@ pub(crate) struct View {
     /// Extended-table row order, persisted alongside the density.
     /// Inert in the other two densities (they render no table).
     agent_sort: AgentSort,
-    /// The agents view's group-by axis (prefix+G), persisted like the density.
+    /// The agents view's group-by axis (prefix+W), persisted like the density.
     agent_group: AgentGroup,
+    machine_tree: machine_tree::MachineTree,
     /// The card's `node · PR` header row switch (prefix+Y), persisted.
     show_card_head: bool,
     /// The manual reorder sequence (agent names in display order) behind the
@@ -1078,6 +1080,8 @@ pub(crate) struct View {
     /// wire); the drag sets a free width (reversing snap-only).
     hover_sideline_border: bool,
     sideline_drag: Option<SidelineDrag>,
+    edge_sizes: edge_drag::EdgeSizes,
+    edge_drag: Option<edge_drag::EdgeDrag>,
     /// The pane whose grip the pointer is over, accented so the grip
     /// reads as grabbable before the press - the same "no portable cursor
     /// shape" constraint that makes [`View::hover_seam`] the whole affordance.
@@ -1980,6 +1984,7 @@ impl View {
             sideline_width,
             agent_sort,
             agent_group,
+            machine_tree: machine_tree::MachineTree::load(),
             show_card_head,
             manual_order,
             status_on: true,
@@ -2094,6 +2099,8 @@ impl View {
             seam_drag: None,
             hover_sideline_border: false,
             sideline_drag: None,
+            edge_sizes: edge_drag::EdgeSizes::default(),
+            edge_drag: None,
             hover_grip: None,
             pane_drag: None,
             tab_drag: None,
@@ -3367,27 +3374,17 @@ impl View {
 
     /// Set the sideline to a free width from the dragged border column,
     /// clamped to `[MIN_SLIM_PANEL_W .. `[`sideline_max_width`]`]`. Returns
-    /// whether the width changed, so the caller re-reports the content viewport
-    /// only on a real crossing (the drag reports far more cells than columns).
-    ///
-    /// Reverses snap-only rule: the width is now continuous. The lower
-    /// clamp is the constant `MIN_SLIM_PANEL_W`, NOT the current density's floor,
-    /// so a drag can shrink past a mode's structural floor - crossing it demotes
-    /// the mode (Locked 5) rather than stopping the drag (AC2-EDGE).
+    /// whether the width changed. The floor is `MIN_SLIM_PANEL_W`, not the
+    /// density's, so a drag past a mode's floor demotes the mode.
     fn drag_sideline_to(&mut self, col: u16, now: Instant) -> bool {
-        // Every drag report is motion, even one that clamps to the same width at
-        // a bound: refresh the stuck-drag deadline FIRST, before any early
-        // return, so an actively-held drag pinned against a clamp never expires
-        // under the hand (codex P2). Only a genuinely report-less interval - the
-        // swallowed mouse-up - then lets the timeout fire.
+        // Refresh the stuck-drag deadline before any early return: a held drag
+        // pinned against a clamp must not expire. Only silence lets it fire.
         if let Some(drag) = self.sideline_drag.as_mut() {
             drag.last_at = now;
         }
         let max = sideline_max_width(self.term.1);
-        // A WINCH can shrink the terminal below MIN_SLIM + MIN_CONTENT mid-drag,
-        // making `max < MIN_SLIM_PANEL_W`; a `clamp(MIN_SLIM_PANEL_W, max)` with
-        // min > max panics (codex P2). The rail is hidden at that size, so there
-        // is nothing to set - keep the stored width for when it grows back.
+        // A WINCH can leave `max < MIN_SLIM_PANEL_W`, and clamp panics when
+        // min > max. The rail is hidden then: keep the stored width.
         if max < MIN_SLIM_PANEL_W {
             return false;
         }
@@ -3398,12 +3395,8 @@ impl View {
             return false;
         }
         self.sideline_width = want;
-        // Locked 5: a drag below the current mode's structural floor demotes the
-        // mode to the widest that still renders. Only Extended has a floor above
-        // MIN_SLIM_PANEL_W, so in practice this is Extended -> Regular; Regular
-        // and Slim render down to the slim floor and never trip it. Same
-        // re-anchor ordering as `cycle_density`: the row set changes with the
-        // density, so re-anchor the selector (which re-clamps the scroll) after.
+        // Below the mode's floor, demote it (in practice Extended -> Regular),
+        // then re-anchor the selector after the row set changes, as `cycle_density` does.
         if self.sideline_width < min_render_width(self.density) {
             let held = self.selected_agent_name();
             self.density = Density::Regular;
@@ -5193,10 +5186,8 @@ impl View {
         layout_lines_overlay(origin, dims, &chrome, &lines, None, anchor)
     }
 
-    /// The Connections modal's hit-test layout: the draw arm and this build
-    /// the SAME `layout_lines_overlay` block from the same chrome and body,
-    /// so a click resolves to the cell the operator sees (AC: the footer's
-    /// esc close words are a target, not a label).
+    /// The Connections hit-test layout: the same chrome and body overlay the
+    /// draw arm builds, so a click lands on the cell the user sees.
     fn connections_overlay_layout(
         &self,
         _rows: usize,
@@ -5204,11 +5195,12 @@ impl View {
     ) -> OverlayLayout {
         let (origin, dims) = self.overlay_viewport();
         let chrome = chrome::Chrome::new("connections", Anchor::Center).footer("esc close");
-        layout_lines_overlay(
+        let (body, _) = conn.render_body(&self.layout.agents, overlay_text_cols(dims.1));
+        overlay_paint::layout_body_overlay(
             origin,
             dims,
             &chrome,
-            &conn.render_with(&self.layout.agents, overlay_text_cols(dims.1)),
+            &body,
             None,
             OverlayAnchor::Center,
         )
@@ -5694,10 +5686,10 @@ impl View {
     // free: folded rows are absent from this list, so selector navigation only
     // ever lands on rendered rows. Overflow is reached by the fold row's own
     // Enter/click toggle, which persists in `idle_expanded`.
-    /// The tree rows with the per-row lineage depth beside it (see
-    /// [`Self::display_rows_with_depths`]). The depth is computed over the
-    /// EMITTED set after every display filter, never re-derived in the painter.
-    fn tree_rows_with_depths(&self) -> (Vec<DisplayRow<'_>>, Vec<usize>) {
+    /// This machine's tree rows with the per-row lineage depth beside it, computed over
+    /// the EMITTED set after every display filter, never re-derived in the painter.
+    /// [`Self::tree_rows_with_depths`] wraps them in the machine layer.
+    fn local_rows_with_depths(&self) -> (Vec<DisplayRow<'_>>, Vec<usize>) {
         if self.agent_group != AgentGroup::Workspace {
             return agent_group::grouped_rows_with_depths(self);
         }
@@ -6257,6 +6249,8 @@ enum TabHit {
 #[derive(Debug, Clone)]
 enum ChromeHit {
     Cmds(Vec<Command>),
+    /// A row on another machine: open or focus its link pane.
+    OpenRemote(crate::proto::RemoteRow),
     /// The strip row's view word (`Agents  Messages`, R15): switch the
     /// sideline to that view.
     TopRow(crate::view_store::SidelineView),
@@ -6295,52 +6289,6 @@ enum ChromeHit {
     /// A card's node tap: the plan in Obsidian, else the node details pane.
     OpenNode(String),
     OpenPr(String),
-}
-
-/// The [`ChromeHit`] for an agent row: focus its pane, else reach a paneless
-/// live row through the ONE dedicated thread pane, else resume a resumable row
-/// through its harness, else say it has no pane here. Shared by a sideline
-/// click ([`View::row_action`]) and the navigator's goto ([`View::nav_rows`])
-/// so the two inputs resolve the same entity identically. Pure - the
-/// agent's own fields decide, so no `&self` needed.
-fn agent_hit(a: &AgentRow, _active_squad: u64) -> ChromeHit {
-    match a.pane_id {
-        Some(pid) => ChromeHit::Cmds(vec![Command::FocusPane(pid)]),
-        None if !a.exited => {
-            // Every paneless live row reaches a portal: Drive
-            // attaches, Follow tails the transcript, Locate renders the
-            // explanation screen. One command, no placement dialog - the
-            // server owns the tier (the row set lives there). The command's id
-            // is the attach id for a claude row and the row NAME for every
-            // other harness (Follow/Locate rows carry no attach id); the
-            // refusal invariant holds by construction because the
-            // client never chooses between attach and focus.
-            //
-            // The default gesture names portal 0, which is exactly
-            // where the single thread pane always landed. `P` opens the next
-            // free portal beside it; nothing about this path changed.
-            ChromeHit::Cmds(vec![Command::AttachAgent {
-                id: a.reach_key(),
-                placement: PanePlacement {
-                    portal: Some(0),
-                    ..PanePlacement::default()
-                },
-            }])
-        }
-        None => {
-            // A paneless row whose harness owns a resume form resumes
-            // through that form: the server spawns `claude --resume <sid>` /
-            // `codex resume <sid>` as a pane in the recorded cwd. The
-            // operator's explicit gesture - restore never sends this.
-            if a.resumable {
-                ChromeHit::Cmds(vec![Command::ResumeAgent {
-                    name: a.name.clone(),
-                }])
-            } else {
-                ChromeHit::Notice(no_pane_notice(a))
-            }
-        }
-    }
 }
 
 /// The rollup state of a pane/agent, worst-first. The navigator's state filter
@@ -8528,6 +8476,9 @@ async fn handle_stdin(
         }
         return Ok(StdinFlow::Continue);
     }
+    if passthrough == [0x1b] && view.revert_edge_drag() {
+        return Ok(StdinFlow::Continue);
+    }
     // A bare Esc during a feed-border drag reverts the width to where
     // the drag began, the sideline revert's mirror.
     if view.feed_drag.is_some()
@@ -8604,6 +8555,9 @@ async fn dispatch_event(
                     view.set_notice(split_skew_notice());
                     return Ok(DispatchFlow::Continue);
                 }
+            }
+            if matches!(cmd, Command::ResizeDir(d) if view.nudge_edge(d)) {
+                return Ok(DispatchFlow::Continue);
             }
             view.note_command_sent(&cmd);
             write_msg(sock_w, &ClientMsg::Command(cmd))
@@ -9048,6 +9002,7 @@ async fn apply_hit(
             }
         }
         ChromeHit::Notice(msg) => view.set_notice(msg.to_string()),
+        ChromeHit::OpenRemote(remote) => machine_tree::open(view, remote, sock_w).await?,
         // The `+` footer opens the name-input overlay; the next keys
         // route to create_keys (Enter sends NewSquad, Esc cancels).
         ChromeHit::OpenCreate => view.open_create(),
@@ -10264,7 +10219,10 @@ mod agent_sort;
 
 #[path = "client/agent_group.rs"]
 mod agent_group;
+use agent_group::agent_hit;
 mod hold;
+#[path = "client/machine_tree.rs"]
+mod machine_tree;
 
 #[path = "client/header_band.rs"]
 mod header_band;

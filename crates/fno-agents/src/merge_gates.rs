@@ -632,6 +632,7 @@ pub(crate) fn visual_approval_blocker<P: Probes>(
         || node_id
             .as_deref()
             .is_some_and(|node| role_chat_clears_pr(probes, cwd, pr, head, node))
+        || law_chat_clears_pr(probes, cwd, pr, head)
         || approval_carries(
             probes,
             cwd,
@@ -731,6 +732,7 @@ fn approval_carries<P: Probes>(
         node.map(|n| role_approval_texts(probes, cwd, pr, n))
             .unwrap_or_default(),
     );
+    texts.extend(law_approval_texts(probes, cwd, pr));
     let Some(approved) = commits
         .iter()
         .rev()
@@ -1172,33 +1174,80 @@ pub(crate) fn role_chat_clears_pr<P: Probes>(
     !head.is_empty()
         && role_approval_texts(probes, cwd, pr, node)
             .iter()
-            .any(|text| text.contains(head))
+            .any(|text| text_names_head(text, head))
+}
+
+/// One `fno backlog decisions ... --json` read; None when the read fails.
+fn decisions_payload<P: Probes>(probes: &P, cwd: &Path, args: &[&str]) -> Option<Value> {
+    let args: Vec<String> = args.iter().map(|s| (*s).to_string()).collect();
+    let Some((Some(0), out, _)) = probes.fno_shell(cwd, &args).ok() else {
+        return None;
+    };
+    serde_json::from_slice::<Value>(&out).ok()
+}
+
+/// The text names the head: the full sha, or a hex token of at least ten
+/// characters that begins it. A question card abbreviates the head it asks
+/// about, and the user's answer on the board inherits that spelling.
+fn text_names_head(text: &str, head: &str) -> bool {
+    !head.is_empty()
+        && (text.contains(head)
+            || text
+                .split(|c: char| !c.is_ascii_hexdigit())
+                .any(|t| t.len() >= 10 && head.starts_with(t)))
+}
+
+/// A board answer recorded as a decision: the user answered a question the
+/// board put to them, so the row carries the question text that names the PR
+/// and head, and the answer text that picks the approve option. The page
+/// stays open when its close is lost; the decision still holds the answer.
+fn board_approval_text(row: &Value, pr: u64) -> Option<String> {
+    let trace = row.get("trace")?;
+    let from_board = trace.get("comms").and_then(Value::as_str) == Some("question")
+        && trace.get("recipient_kind").and_then(Value::as_str) == Some("user");
+    let question = row.get("question").and_then(Value::as_str)?;
+    let answer = row.get("decision").and_then(Value::as_str)?;
+    // The asking team may close its own question with a role, team, agent or
+    // beastmode answer. Only the user's own answer (no authority stamp, or
+    // an operator or quoted chat stamp) is a look.
+    let by_user = match row.get("authority_source").and_then(Value::as_str) {
+        None | Some("operator") => true,
+        Some("chat_attested") => row
+            .get("quote")
+            .and_then(Value::as_str)
+            .is_some_and(|q| !q.trim().is_empty()),
+        Some(_) => false,
+    };
+    (from_board
+        && by_user
+        && row.get("question_id").is_some()
+        && answer_approves(answer)
+        && page_names_pr(question, pr))
+    .then(|| question.to_string())
 }
 
 /// The text of every live role row on this node that approves this PR, at
 /// any head: one decisions read, so a caller can test many heads with it.
+/// A board answer on the node counts too (see `board_approval_text`).
 fn role_approval_texts<P: Probes>(probes: &P, cwd: &Path, pr: u64, node: &str) -> Vec<String> {
     // Subject-scoped and uncapped: a capped newest-first read of the whole
     // lane loses an approval once enough other rows land after it.
-    let args: Vec<String> = [
-        "backlog",
-        "decisions",
-        node,
-        "--lane",
-        "unattributed",
-        "--state",
-        "all",
-        "--limit",
-        "0",
-        "--json",
-    ]
-    .iter()
-    .map(|s| (*s).to_string())
-    .collect();
-    let Some((Some(0), out, _)) = probes.fno_shell(cwd, &args).ok() else {
-        return Vec::new();
-    };
-    let Ok(payload) = serde_json::from_slice::<Value>(&out) else {
+    let Some(payload) = decisions_payload(
+        probes,
+        cwd,
+        &[
+            "backlog",
+            "decisions",
+            node,
+            "--lane",
+            "unattributed",
+            "--state",
+            "all",
+            "--limit",
+            "0",
+            "--json",
+        ],
+    ) else {
         return Vec::new();
     };
     let approved: Vec<String> = approving_pages(&vault_root(cwd), pr)
@@ -1206,25 +1255,93 @@ fn role_approval_texts<P: Probes>(probes: &P, cwd: &Path, pr: u64, node: &str) -
         .map(|(id, _)| id)
         .filter(|id| !id.is_empty())
         .collect();
+    let rows = payload
+        .get("decisions")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten();
+    let mut texts = Vec::new();
+    for row in rows {
+        if row.get("subject").and_then(Value::as_str) != Some(node) {
+            continue;
+        }
+        if let Some(text) = board_approval_text(row, pr) {
+            texts.push(text);
+            continue;
+        }
+        let live = matches!(
+            row.get("lifecycle").and_then(Value::as_str),
+            Some("live") | Some("unscoped")
+        );
+        if row.get("authority_source").and_then(Value::as_str) == Some("role")
+            && live
+            && (row_is_chat_attested(row)
+                || row_cites_any(row, &approved)
+                || row_attests_identifier_only(row))
+        {
+            let text = row_text(row);
+            if page_names_pr(&text, pr) {
+                texts.push(text);
+            }
+        }
+    }
+    texts
+}
+
+/// The text of every live `chat_attested` law row that approves this PR, at
+/// any head. The worker the user spoke to records the user's words as law
+/// (`fno inbox law set`), and the lead who owns the gate cannot re-record an
+/// approval it never witnessed. The row must carry the user's words (a
+/// `user in chat` rationale or a stored `quote`), name the PR, and open with
+/// an approve word; the head test stays with the caller.
+fn law_approval_texts<P: Probes>(probes: &P, cwd: &Path, pr: u64) -> Vec<String> {
+    let Some(payload) = decisions_payload(
+        probes,
+        cwd,
+        &[
+            "backlog",
+            "decisions",
+            "--lane",
+            "law",
+            "--state",
+            "live",
+            "--limit",
+            "0",
+            "--json",
+        ],
+    ) else {
+        return Vec::new();
+    };
     payload
         .get("decisions")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
         .filter(|row| {
-            row.get("authority_source").and_then(Value::as_str) == Some("role")
-                && row.get("subject").and_then(Value::as_str) == Some(node)
-                && matches!(
-                    row.get("lifecycle").and_then(Value::as_str),
-                    Some("live") | Some("unscoped")
-                )
+            row.get("authority_source").and_then(Value::as_str) == Some("chat_attested")
+                && row.get("lifecycle").and_then(Value::as_str) == Some("live")
                 && (row_is_chat_attested(row)
-                    || row_cites_any(row, &approved)
-                    || row_attests_identifier_only(row))
+                    || row
+                        .get("quote")
+                        .and_then(Value::as_str)
+                        .is_some_and(|q| !q.trim().is_empty()))
+                && row
+                    .get("decision")
+                    .and_then(Value::as_str)
+                    .is_some_and(answer_approves)
         })
         .map(row_text)
         .filter(|text| page_names_pr(text, pr))
         .collect()
+}
+
+/// True when a live `chat_attested` law row names this PR and the exact full
+/// head sha. Head-scoped like the role row: a push voids it.
+pub(crate) fn law_chat_clears_pr<P: Probes>(probes: &P, cwd: &Path, pr: u64, head: &str) -> bool {
+    !head.is_empty()
+        && law_approval_texts(probes, cwd, pr)
+            .iter()
+            .any(|text| text.contains(head))
 }
 
 /// The `owner/name` pair a remote url names, normalized across the ssh

@@ -8,6 +8,7 @@ config	live	-	configuration
 do	live	-	the delivery pipeline
 doctor	live	-	health checks, tests, lint, update
 inbox	live	-	what waits on a human
+mail	live	-	agent mail: send, read and reply (the agents mail commands)
 mux	live	-	the terminal multiplexer
 restart	live	-	restart the fleet daemon (d-da008537)
 uninstall	live	-	remove fno
@@ -38,7 +39,6 @@ lead	retired	agents org	-
 lead board	retired	inbox board	-
 lint	retired	doctor lint	-
 loops	retired	agents loop control	-
-mail	retired	agents mail	-
 mcp	retired	agents mail admin mcp	-
 notify	retired	inbox notify	-
 observer	retired	doctor observer	-

@@ -79,7 +79,11 @@ pub(crate) fn eval_history_path() -> Option<PathBuf> {
         }
     }
     let state = crate::agents_config::state_dir(&cwd)?;
-    Some(state.join("history").join("evals-history.jsonl"))
+    Some(crate::state_layout::place_in(
+        &state,
+        "history",
+        "evals-history.jsonl",
+    ))
 }
 
 #[cfg(test)]

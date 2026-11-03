@@ -11,16 +11,21 @@ use crate::spawn_gate::machine_reading_notes;
 
 /// The control-plane arms rows from the arm journals plus the pr_watch tick
 /// trace the readout's cause rules consult.
+/// The reader's `now`, one place for the served and local folds.
+fn now_unix() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
 pub fn arms_readout(
     home: &AgentsHome,
 ) -> (
     Vec<crate::tick_ledger::ArmStatus>,
     crate::tick_ledger::TickTrace,
 ) {
-    let now_unix = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
+    let now_unix = now_unix();
     // The journal list is owned by tick_ledger::journals, so the readout
     // and the arm_watch fold the same files and cannot drift.
     let journals = crate::tick_ledger::journals(home);
@@ -55,6 +60,30 @@ pub fn degraded_status_payload(arms: &[crate::tick_ledger::ArmStatus]) -> Value 
             &std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
         ),
     })
+}
+
+/// The arms + trace for a status run whose daemon answered: the daemon's
+/// served fold when the payload carries one that describes this reader's
+/// journals (and its schema is understood), the local journal fold
+/// otherwise. One assembly for the up-path; the degraded paths (daemon
+/// down/unreachable) fold locally through [`arms_readout`].
+pub fn arms_for_status(
+    home: &AgentsHome,
+    result: &Value,
+) -> (
+    Vec<crate::tick_ledger::ArmStatus>,
+    crate::tick_ledger::TickTrace,
+) {
+    if let Some(fold) = result
+        .get("arms_fold")
+        .and_then(|v| serde_json::from_value::<crate::tick_ledger::ArmFoldServed>(v.clone()).ok())
+    {
+        let now = now_unix();
+        if let Some(assembled) = crate::tick_ledger::arms_from_served(&fold, home, now) {
+            return assembled;
+        }
+    }
+    arms_readout(home)
 }
 
 /// The human render: one owned line per arm (red rows first-class), then the

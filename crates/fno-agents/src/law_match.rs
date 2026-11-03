@@ -88,6 +88,9 @@ enum MatchRequest {
     /// Prints one JSON answer and exits 0, like the other read modes.
     #[serde(rename = "rules-report")]
     RulesReport(RulesRequest),
+    /// Reads every rule against one event and says why each applies or not.
+    #[serde(rename = "rules-explain")]
+    RulesExplain(ExplainRequest),
 }
 
 /// The rules modes read one file: `file` for rules-check, `cases` for
@@ -101,6 +104,13 @@ struct RulesRequest {
     /// The report window, `7d`-shaped; rules-report only.
     #[serde(default)]
     since: Option<String>,
+}
+
+/// The rules-explain request: the event to read the rules against.
+#[derive(Deserialize)]
+struct ExplainRequest {
+    #[serde(default)]
+    event: crate::rules::Event,
 }
 
 /// The resolver request: the caller's authority claim and its carried
@@ -1247,7 +1257,10 @@ fn scope_split_answer_in(
     let mut hidden = 0usize;
     for row in req.rows {
         let is_law = row.get("lane").and_then(Value::as_str) == Some("law");
-        if is_law && !decision_index::row_visible(&row, project.as_deref()) {
+        if is_law
+            && !(decision_index::row_visible(&row, project.as_deref())
+                && crate::law_when::row_active(&row, true))
+        {
             hidden += 1;
         } else {
             kept.push(row);
@@ -1275,6 +1288,11 @@ fn scope_split_answer_in(
 
 pub(crate) const WAIVER_SUBJECT_PREFIX: &str = "review-coverage-waiver";
 
+/// The caller identity a no-identity, no-terminal run stamps (decide door
+/// state 3). It must never sit on an operator law row; the clear door's
+/// make_decision corrects it over to `operator`.
+pub(crate) const UNATTRIBUTED_CALLER: &str = "unattributed-caller";
+
 /// The law-set argv, parsed natively.
 pub(crate) struct RecordDoor {
     subject: String,
@@ -1289,11 +1307,17 @@ pub(crate) struct RecordDoor {
     widen: Option<Widen>,
     raw_paths: Vec<String>,
     quote: Option<String>,
+    /// Filters beside the scope: the law applies only where every one matches.
+    /// `(key, value)` pairs; the second list is the `not` form.
+    filters: Vec<(String, String)>,
+    not_filters: Vec<(String, String)>,
+    strength: Option<String>,
+    from: Option<String>,
+    whiles: Vec<String>,
+    between: Option<String>,
     /// The end condition (`--until`), parsed at record time. Separate from
     /// scope: the guard says when the rule ends, the filters say where it holds.
     guard: Option<Value>,
-    /// A filter beside the scope: the rule applies only to this node's session.
-    node_filter: Option<String>,
 }
 
 /// A law's scope past the recording project, from one door flag. `None` in
@@ -1305,7 +1329,7 @@ pub(crate) enum Widen {
     User(Option<String>),
 }
 
-const RECORD_USAGE: &str = "usage: fno inbox law set <subject> [decision] [--decision-file f|-] [--rationale s] [--option s]... [--supersedes d-x] [--graduation k] [--graduation-ref r] [--read cmd]... [--global | --machine[=<id>] | --user[=<name>]] [--paths glob,glob] [--quote <the user's words>] [--until date:<when>|for:<30m|2h|1d>|event:<node>|set:<node>,<node>] [--node <id>]";
+const RECORD_USAGE: &str = "usage: fno inbox law set <subject> [decision] [--decision-file f|-] [--rationale s] [--option s]... [--supersedes d-x] [--graduation k] [--graduation-ref r] [--read cmd]... [--global | --machine[=<id>] | --user[=<name>]] [--paths glob,glob] [--from date:<when>|event:<node>] [--while <cmd>]... [--between HH:MM-HH:MM] [--strength inform|warn|require-ack|block] [--quote <the user's words>] [--filter <key>=<value>]... [--not <key>=<value>]...";
 /// The guard grammar of `--until`. A rule holds until its guard fires.
 /// `date` and `for` resolve to a fixed instant now; `event` waits for one
 /// node to close; `set` freezes the node ids now and drains as they close.
@@ -1332,7 +1356,9 @@ pub(crate) fn parse_guard(spec: &str, now: chrono::DateTime<chrono::Utc>) -> Res
         }
         "for" => {
             let (num, unit) = rest.split_at(rest.len().saturating_sub(1));
-            let n: i64 = num.parse().map_err(|_| bad("duration is <N>m, <N>h or <N>d"))?;
+            let n: i64 = num
+                .parse()
+                .map_err(|_| bad("duration is <N>m, <N>h or <N>d"))?;
             let span = match unit {
                 "m" => chrono::Duration::minutes(n),
                 "h" => chrono::Duration::hours(n),
@@ -1348,7 +1374,11 @@ pub(crate) fn parse_guard(spec: &str, now: chrono::DateTime<chrono::Utc>) -> Res
             Ok(json!({"kind": "event", "node_id": rest}))
         }
         "set" => {
-            let ids: Vec<&str> = rest.split(',').map(str::trim).filter(|s| !s.is_empty()).collect();
+            let ids: Vec<&str> = rest
+                .split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .collect();
             if ids.is_empty() || !ids.iter().all(|i| matches_node_id_shape(&i.to_lowercase())) {
                 return Err(bad("set takes comma-separated node ids"));
             }
@@ -1376,8 +1406,13 @@ fn parse_record_door(args: &[String]) -> Result<RecordDoor, String> {
         widen: None,
         raw_paths: Vec::new(),
         quote: None,
+        filters: Vec::new(),
+        not_filters: Vec::new(),
+        strength: None,
+        from: None,
+        whiles: Vec::new(),
+        between: None,
         guard: None,
-        node_filter: None,
     };
     let mut widened_by: Vec<String> = Vec::new();
     let mut positional = 0usize;
@@ -1409,8 +1444,30 @@ fn parse_record_door(args: &[String]) -> Result<RecordDoor, String> {
             "--read" => door.reads.push(take(&mut i)?),
             "--paths" => door.raw_paths.push(take(&mut i)?),
             "--quote" => door.quote = Some(take(&mut i)?),
+            "--filter" | "--not" => {
+                let spec = take(&mut i)?;
+                let pair = crate::law_filters::parse_pair(&spec)
+                    .map_err(|e| format!("{flag} {spec}: {e}\n{RECORD_USAGE}"))?;
+                if flag == "--not" {
+                    door.not_filters.push(pair);
+                } else {
+                    door.filters.push(pair);
+                }
+            }
+            "--strength" => {
+                let v = take(&mut i)?.to_ascii_lowercase();
+                if !crate::rules::STRENGTHS.contains(&v.as_str()) {
+                    return Err(format!(
+                        "--strength takes one of {}, not {v:?}\n{RECORD_USAGE}",
+                        crate::rules::STRENGTHS.join(", ")
+                    ));
+                }
+                door.strength = Some(v);
+            }
             "--until" => door.guard = Some(parse_guard(&take(&mut i)?, chrono::Utc::now())?),
-            "--node" => door.node_filter = Some(take(&mut i)?),
+            "--from" => door.from = Some(take(&mut i)?),
+            "--while" => door.whiles.push(take(&mut i)?),
+            "--between" => door.between = Some(take(&mut i)?),
             "--global" => {
                 // An inline value parses like a bool flag should: --global=false
                 // must never widen because the value was ignored.
@@ -1874,6 +1931,14 @@ pub(crate) fn record_door_write(door: RecordDoor, decision: String, caller: &Cal
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
+    let when = match crate::law_when::build_when(
+        door.from.as_deref(),
+        &door.whiles,
+        door.between.as_deref(),
+    ) {
+        Ok(w) => w,
+        Err(message) => return door_refuse(&message),
+    };
     // The evidence gate: a measured claim carries the read that produced it.
     // Exempt when the RESOLVED authority is operator.
     let mut read_rows: Option<Vec<Value>> = None;
@@ -2044,14 +2109,31 @@ pub(crate) fn record_door_write(door: RecordDoor, decision: String, caller: &Cal
     if let Some(guard) = &door.guard {
         data["guard"] = guard.clone();
     }
-    if let Some(node) = door.node_filter.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
-        data["filters"] = json!({"node": node});
+    let mut filters = serde_json::Map::new();
+    for (prefix, pairs) in [("", &door.filters), ("not_", &door.not_filters)] {
+        for (key, value) in pairs {
+            let name = format!("{prefix}{key}");
+            let joined = match filters.get(&name).and_then(Value::as_str) {
+                Some(prev) => format!("{prev},{value}"),
+                None => value.clone(),
+            };
+            filters.insert(name, json!(joined));
+        }
+    }
+    if !filters.is_empty() {
+        data["filters"] = Value::Object(filters);
     }
     if !scope.is_empty() {
         data["scope"] = json!(scope);
     }
     if !paths.is_empty() {
         data["paths"] = json!(paths);
+    }
+    if let Some(strength) = &door.strength {
+        data["strength"] = json!(strength);
+    }
+    if let Some(when) = &when {
+        data["when"] = when.clone();
     }
     if let Some(map) = data.as_object_mut() {
         crate::identity::stamp_person(map);
@@ -2070,6 +2152,9 @@ pub(crate) fn record_door_write(door: RecordDoor, decision: String, caller: &Cal
         );
     }
     println!("{decision_id}");
+    if let Some(when) = &when {
+        crate::law_when::row_active(&json!({"decision_id": decision_id, "when": when}), true);
+    }
     if let Some(old) = &auto_superseded {
         eprintln!("superseded {old}");
     }
@@ -2850,7 +2935,9 @@ fn graduated_retraction_lines_in(
     // open, matching `retain_in_scope`.
     let mut lines = Vec::new();
     for row in &index.rows {
-        if !decision_index::row_visible(row, scope_project) {
+        if !decision_index::row_visible(row, scope_project)
+            || !crate::law_when::row_active(row, true)
+        {
             continue;
         }
         let Some(grad) = row.get("graduation") else {
@@ -2901,7 +2988,7 @@ fn node_is_closed(node_id: &str) -> bool {
 pub fn run_law_match(args: &[String]) -> i32 {
     if args.iter().any(|a| a == "-h" || a == "--help") {
         println!(
-            "usage: fno inbox law match (one JSON request on stdin: mode=ask|law|stage|validate|record-scope|scope-split|rules-check|rules-measure|rules-import|rules-report|record|retract|history; record takes argv: the fno inbox law set command line, and stdin: the text --decision-file - reads; retract and history take argv: the matching fno inbox law command line)"
+            "usage: fno inbox law match (one JSON request on stdin: mode=ask|law|stage|validate|record-scope|scope-split|rules-check|rules-measure|rules-import|rules-report|rules-explain|record|retract|history; record takes argv: the fno inbox law set command line, and stdin: the text --decision-file - reads; retract and history take argv: the matching fno inbox law command line)"
         );
         return 0;
     }
@@ -3028,6 +3115,9 @@ pub fn run_law_match_str(input: &str) -> i32 {
         }
         MatchRequest::RulesImport(r) => {
             return crate::rules_source::run_rules_import(&r.file);
+        }
+        MatchRequest::RulesExplain(r) => {
+            serde_json::to_string(&crate::rules_source::rules_explain(r.event)).expect("serializes")
         }
         MatchRequest::RulesReport(r) => {
             serde_json::to_string(&crate::rules_source::rules_report(r.since.as_deref()))
@@ -3444,9 +3534,36 @@ pub(crate) mod scope_tests {
             widen: None,
             raw_paths: Vec::new(),
             quote: None,
+            filters: Vec::new(),
+            not_filters: Vec::new(),
+            strength: None,
+            from: None,
+            whiles: Vec::new(),
+            between: None,
             guard: None,
-            node_filter: None,
         }
+    }
+
+    #[test]
+    fn the_record_door_takes_filters_and_refuses_a_key_with_no_source() {
+        let argv = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let door = parse_record_door(&argv(&[
+            "s",
+            "--filter",
+            "harness=codex",
+            "--not",
+            "model=glm-5.3-flash",
+        ]))
+        .expect("parses");
+        assert_eq!(door.filters, vec![("harness".into(), "codex".into())]);
+        assert_eq!(
+            door.not_filters,
+            vec![("model".into(), "glm-5.3-flash".into())]
+        );
+        let refused = parse_record_door(&argv(&["s", "--filter", "lane=paint"]))
+            .err()
+            .expect("lane has no source yet");
+        assert!(refused.contains("no identity source"), "{refused}");
     }
 
     #[test]
