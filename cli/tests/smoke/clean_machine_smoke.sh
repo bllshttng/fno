@@ -134,7 +134,7 @@ check_help phase-kill-check "$FNO" do phase kill-check --help
 check_help cost "$FNO" whoami cost --help
 
 # A real run: notify must fail (or succeed) on its own merits - on a headless
-# CI box with no notify-send it returns a clean non-zero, never a 127/traceback.
+# CI runner with no notify-send it returns a clean non-zero, never a 127/traceback.
 run_capture "$FNO" notify "smoke" "clean-machine"
 if printf '%s' "$OUT" | grep -qiE "$REGRESSION"; then
   miss "internal:notify" "rc=$RC shell-out/crash signal: $(printf '%s' "$OUT" | head -1)"

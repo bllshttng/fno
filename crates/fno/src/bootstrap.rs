@@ -355,21 +355,21 @@ fn run(args: &[OsString]) -> BootResult<()> {
     // below is decorative: during a `--force` the script is absent for ~490ms,
     // a single look skips this whole arm, and control falls straight into
     // another `--force` - the storm. But NOT unconditionally: this arm also
-    // runs on a box that never installed fno, where a blind 3s is a first-run
+    // runs on a machine that never installed fno, where a blind 3s is a first-run
     // tax on a wait that can never pay off.
     //
-    // The discriminator is "has this box ever had an fno install", asked two
+    // The discriminator is "has this machine ever had an fno install", asked two
     // ways because neither alone survives every window. The bin DIRECTORY
     // answers for an install this shim never made (the installer script, a
     // plain `uv tool install`), but `uv tool install --force` removes
     // `<tools>/fno` WHOLE - that recursive removal is what the "failed to
     // remove directory .../fno/lib (os error 66)" race message names - so the
     // bin dir is gone too for part of the very window this wait exists to
-    // cover. Our own cache dir survives that removal and is absent on a box
+    // cover. Our own cache dir survives that removal and is absent on a machine
     // that has never bootstrapped fno, so ask it first and fall back to the
     // bin dir. Both being absent is the only cheap-look case.
     //
-    // Stated rather than discovered: a box carrying a failure stamp carries a
+    // Stated rather than discovered: a machine carrying a failure stamp carries a
     // cache dir too, so every call in the cooldown pays this 3s before it
     // reaches the stamp below. Bounded, and still an order cheaper than the
     // reinstall the stamp exists to prevent.

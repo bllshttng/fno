@@ -55,7 +55,7 @@ _TREES = ("cli/tests", "cli/src/fno")
 def test_no_ambient_harness_identity_resolves() -> None:
     """No harness identity is resolvable from inside the suite.
 
-    Passes vacuously on a clean box, which is exactly why the subprocess test
+    Passes vacuously on a clean machine, which is exactly why the subprocess test
     below re-runs this one with every marker exported. Keep both.
     """
     survivors = [m for m in ALL_MARKERS if m in os.environ]

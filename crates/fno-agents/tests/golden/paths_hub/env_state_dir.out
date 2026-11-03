@@ -1,6 +1,6 @@
 state_dir=<FIXTURE>/envstate
 graph_json=<FIXTURE>/envstate/db/graph.json
-ledger_json=<FIXTURE>/envstate/ledger.json
+ledger_json=<FIXTURE>/envstate/db/history/ledger.json
 briefs_dir=<FIXTURE>/envstate/briefs
 fleet_dir=<FIXTURE>/envstate/fleet
 postmortems_dir=<FIXTURE>/envstate/db/postmortems

@@ -25,7 +25,7 @@ use serde_json::{json, Map, Value};
 use crate::census::ProcRow;
 use crate::paths::AgentsHome;
 
-/// The sustained-CPU floor: a one-core box still gets a meaningful bar.
+/// The sustained-CPU floor: a one-core machine still gets a meaningful bar.
 pub(crate) const SUSTAINED_CPU_FLOOR_CORES: f64 = 0.25;
 /// The sustained threshold is this fraction of measured capacity.
 pub(crate) const SUSTAINED_CPU_CAPACITY_FRACTION: f64 = 0.1;

@@ -51,7 +51,7 @@ chmod +x "$TMP/cli/.venv/bin/python3"
 # --- 3. The installed interpreter is found even with fno-py off PATH ---------
 # On a cargo-only install only the Rust mux (~/.cargo/bin/fno) is on PATH; fno-py
 # is not, and that machine has no checkout venv to fall back on. Hermetic: a fake
-# shim under a fake HOME, so this asserts the resolver's own legs, not the box.
+# shim under a fake HOME, so this asserts the resolver's own legs, not the machine.
 FAKEHOME="$(mktemp -d)"
 mkdir -p "$FAKEHOME/.local/bin"
 printf '#!%s\n' "$(command -v sh)" > "$FAKEHOME/.local/bin/fno-py"
