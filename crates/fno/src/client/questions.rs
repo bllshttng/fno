@@ -400,7 +400,7 @@ fn question_page(
 }
 
 /// The question page's rendered lines at the detail pane's width.
-fn page_lines(d: &Detail, w: usize, now: u64) -> Vec<backlog_style::BLine> {
+fn page_lines(d: &Detail, w: usize, now: u64) -> Vec<crate::text_style::TLine> {
     super::node_detail::backlog_md::md_lines(&question_page(d.item(), d, now, w), w)
 }
 
@@ -492,10 +492,10 @@ pub(super) fn draw_detail(
     };
     if hint_h > 0 {
         let wrapped = super::backlog_board::backlog_panes::hint_rows(hint, cols);
-        let hint_lines: Vec<backlog_style::BLine> = wrapped
+        let hint_lines: Vec<crate::text_style::TLine> = wrapped
             .into_iter()
             .take(2)
-            .map(backlog_style::BLine::meta)
+            .map(crate::text_style::TLine::meta)
             .collect();
         backlog_style::paint_panel(
             cells,
@@ -557,8 +557,8 @@ fn draw_strip(
     theme: &Theme,
 ) {
     let rows = top + h;
-    let mut lines = vec![backlog_style::BLine::meta(String::new()); h - 1];
-    lines.push(backlog_style::BLine::meta(strip_label(d)));
+    let mut lines = vec![crate::text_style::TLine::meta(String::new()); h - 1];
+    lines.push(crate::text_style::TLine::meta(strip_label(d)));
     backlog_style::paint_panel(cells, rows, cols, top, cols, h, &lines, None, theme);
     let slots: Vec<usize> = (0..d.shots.len()).filter(|&i| d.img(i).is_some()).collect();
     let shown: Vec<&image::DynamicImage> = slots.iter().filter_map(|&i| d.img(i)).collect();
@@ -621,8 +621,8 @@ fn draw_expanded(d: &Detail, cells: &mut [Cell], rows: usize, cols: usize, theme
         d.shots.len(),
         d.shots[i].name()
     );
-    let mut lines = vec![backlog_style::BLine::meta(title)];
-    lines.resize(rows, backlog_style::BLine::meta(String::new()));
+    let mut lines = vec![crate::text_style::TLine::meta(title)];
+    lines.resize(rows, crate::text_style::TLine::meta(String::new()));
     backlog_style::paint_panel(cells, rows, cols, 0, cols, rows, &lines, None, theme);
     let Some(img) = d.img(i) else {
         return;

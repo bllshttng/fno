@@ -141,6 +141,7 @@ pub(crate) fn back_row() -> PopupRow {
 mod tests {
     use super::*;
     use crate::popup::{Anchor, Popup};
+    use crate::text_style::TextStyle;
     use crate::theme::Role;
 
     #[test]
@@ -176,7 +177,11 @@ mod tests {
             Role::BodyCursor,
             "cursor cell before the placeholder"
         );
-        assert_eq!(line.roles[ph], Role::PanelMeta, "placeholder is dimmed");
+        assert_eq!(
+            line.roles[ph],
+            Role::Text(TextStyle::Meta),
+            "placeholder is dimmed"
+        );
     }
 }
 

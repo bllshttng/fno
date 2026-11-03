@@ -14,6 +14,7 @@
 
 use crate::chrome::{self, BodyLine, Chrome, FramedLine, Join, Scroll};
 use crate::proto::{Cell, Color};
+use crate::text_style::TextStyle;
 use crate::theme::{Role, Theme};
 
 /// Popup content never renders wider than this (fixed max width); longer
@@ -344,7 +345,7 @@ pub struct Popup {
     /// this tab's own rows.
     pub min_width: usize,
     /// Opt this popup into the plain-body anatomy: no inverse ground, the key
-    /// column bold accent ([`Role::BodyAccent`]), the cursor row the one
+    /// column bold accent ([`Role::Text(TextStyle::Section)`]), the cursor row the one
     /// filled band ([`Role::BodyCursor`]), section headings accent text. The
     /// which-key modal's shape (the unreadable-inverse-body review).
     pub plain_body: bool,
@@ -390,7 +391,7 @@ pub struct RenderedLine {
     /// framed pass translates them into the per-char `roles`.
     pub segs: Vec<(usize, usize, Role)>,
     /// The role for chars no seg covers: the theme ground
-    /// ([`Role::PanelBody`]) under every theme - one body treatment.
+    /// ([`Role::Text(TextStyle::Item)`]) under every theme - one body treatment.
     pub pad_role: Role,
 }
 
@@ -803,7 +804,9 @@ impl Popup {
                     // never a band; an empty header is the inter-section
                     // spacer line. One body treatment under every theme.
                     let segs = (!s.is_empty())
-                        .then(|| vec![(0usize, text.chars().count(), Role::BodyAccent)])
+                        .then(|| {
+                            vec![(0usize, text.chars().count(), Role::Text(TextStyle::Section))]
+                        })
                         .unwrap_or_default();
                     RenderedLine {
                         text,
@@ -812,7 +815,7 @@ impl Popup {
                         hits: vec![],
                         roles: vec![],
                         segs,
-                        pad_role: Role::PanelBody,
+                        pad_role: Role::Text(TextStyle::Item),
                     }
                 }
                 PopupRow::Text(s) => {
@@ -826,7 +829,7 @@ impl Popup {
                         hits: vec![],
                         roles: vec![],
                         segs: vec![],
-                        pad_role: Role::PanelBody,
+                        pad_role: Role::Text(TextStyle::Item),
                     }
                 }
                 PopupRow::Rule => RenderedLine {
@@ -836,7 +839,7 @@ impl Popup {
                     hits: vec![],
                     roles: vec![],
                     segs: vec![],
-                    pad_role: Role::PanelMeta,
+                    pad_role: Role::Text(TextStyle::Meta),
                 },
                 PopupRow::Info { label, value } => {
                     // The plain two-column shape, inert: the label sits in the
@@ -850,8 +853,8 @@ impl Popup {
                         sel_span: None,
                         hits: vec![],
                         roles: vec![],
-                        segs: vec![(1usize, kw, Role::BodyAccent)],
-                        pad_role: Role::PanelBody,
+                        segs: vec![(1usize, kw, Role::Text(TextStyle::Section))],
+                        pad_role: Role::Text(TextStyle::Item),
                     }
                 }
                 PopupRow::Input {
@@ -870,7 +873,7 @@ impl Popup {
                         hits: vec![(ti, 0, width)],
                         roles: vec![],
                         segs: vec![],
-                        pad_role: Role::PanelBody,
+                        pad_role: Role::Text(TextStyle::Item),
                     }
                 }
                 PopupRow::Entry {
@@ -897,7 +900,7 @@ impl Popup {
                         } else {
                             // Char 0 is the leading pad; the key chars carry
                             // the accent span.
-                            vec![(1usize, kw, Role::BodyAccent)]
+                            vec![(1usize, kw, Role::Text(TextStyle::Section))]
                         };
                         (
                             text,
@@ -905,7 +908,7 @@ impl Popup {
                             if selected {
                                 Role::BodyCursor
                             } else {
-                                Role::PanelBody
+                                Role::Text(TextStyle::Item)
                             },
                             None,
                         )
@@ -929,7 +932,7 @@ impl Popup {
                         (
                             pad(&text, width),
                             vec![],
-                            Role::PanelBody,
+                            Role::Text(TextStyle::Item),
                             (!disabled && selected).then_some((0, width)),
                         )
                     } else {
@@ -952,7 +955,7 @@ impl Popup {
                         (
                             text,
                             vec![],
-                            Role::PanelBody,
+                            Role::Text(TextStyle::Item),
                             (!disabled && selected).then_some((0, width)),
                         )
                     };
@@ -1019,7 +1022,7 @@ impl Popup {
                             // builder's `●` glyph. Unchosen radios read as
                             // ordinary text, never a wall of brand marks.
                             if glyph == "\u{25cf}" {
-                                segs.push((1usize, kw, Role::BodyAccent));
+                                segs.push((1usize, kw, Role::Text(TextStyle::Section)));
                             }
                             segs.push((swatch_start, 2usize, Role::Swatch(*color)));
                         }
@@ -1041,7 +1044,7 @@ impl Popup {
                         pad_role: if selected && self.plain_body {
                             Role::BodyCursor
                         } else {
-                            Role::PanelBody
+                            Role::Text(TextStyle::Item)
                         },
                     }
                 }
@@ -1067,7 +1070,7 @@ impl Popup {
                         hits,
                         roles: vec![],
                         segs: vec![],
-                        pad_role: Role::PanelBody,
+                        pad_role: Role::Text(TextStyle::Item),
                     }
                 }
             };
@@ -1126,7 +1129,7 @@ impl Popup {
                 hits: fl.hits,
                 roles: fl.roles,
                 segs: vec![],
-                pad_role: Role::PanelBody,
+                pad_role: Role::Text(TextStyle::Item),
             })
             .collect();
         Rendered {
@@ -1161,12 +1164,20 @@ fn input_line(
         line.push(' ');
     }
     let mut segs = vec![
-        (1usize, head_n.saturating_sub(2), Role::BodyAccent),
+        (
+            1usize,
+            head_n.saturating_sub(2),
+            Role::Text(TextStyle::Section),
+        ),
         (cursor_at, 1, Role::BodyCursor),
     ];
     if chars.is_empty() && !placeholder.is_empty() {
         line.push_str(placeholder);
-        segs.push((cursor_at + 1, placeholder.chars().count(), Role::PanelMeta));
+        segs.push((
+            cursor_at + 1,
+            placeholder.chars().count(),
+            Role::Text(TextStyle::Meta),
+        ));
     }
     RenderedLine {
         text: pad(&line, width),
@@ -1175,7 +1186,7 @@ fn input_line(
         hits: vec![],
         roles: vec![],
         segs,
-        pad_role: Role::PanelBody,
+        pad_role: Role::Text(TextStyle::Item),
     }
 }
 
@@ -1463,7 +1474,7 @@ mod tests {
             "disabled row has no hit target"
         );
         assert!(
-            disabled_line.roles.contains(&Role::BodyDim),
+            disabled_line.roles.contains(&Role::Text(TextStyle::Meta)),
             "disabled row greys via BodyDim"
         );
         // Every non-border cell on the disabled row is BodyDim: it carries no
@@ -1472,7 +1483,7 @@ mod tests {
             disabled_line
                 .roles
                 .iter()
-                .all(|&role| matches!(role, Role::BodyDim | Role::Border)),
+                .all(|&role| matches!(role, Role::Text(TextStyle::Meta) | Role::Border)),
             "disabled row has no selectable body cells"
         );
         // The cells are still inside the block, so the router reads an in-block

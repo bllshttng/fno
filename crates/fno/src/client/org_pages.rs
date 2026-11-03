@@ -1,11 +1,11 @@
 //! The org view's pages: a seat, the FEED of questions to the user, and
 //! SYSTEM's machine table. A field with no reading names its basis.
 
-use super::backlog_style::BRole;
 use super::org_seats::{Fleet, Lead, Machine, Seat};
 use super::org_tabs::{
     ago, blank, dur, epoch, fit, glyph, kv, meta, not_sampled, rule, sampled, status_role, Lb, Line,
 };
+use crate::text_style::TextStyle;
 
 const NOT_PUBLISHED: &str = "not published";
 
@@ -23,9 +23,9 @@ pub(crate) fn seat(m: &Machine, p: &Lead, s: &Seat, width: usize, now: u64) -> V
     let inner = width.saturating_sub(17);
     let mut out = vec![
         Lb::default()
-            .s(" seat ", BRole::Meta)
-            .s(s.name.clone(), BRole::Body)
-            .s(" \u{b7} ", BRole::Meta)
+            .s(" seat ", TextStyle::Meta)
+            .s(s.name.clone(), TextStyle::Item)
+            .s(" \u{b7} ", TextStyle::Meta)
             .s(
                 format!("{} {}", glyph(s.status), s.status),
                 status_role(s.status),
@@ -37,21 +37,21 @@ pub(crate) fn seat(m: &Machine, p: &Lead, s: &Seat, width: usize, now: u64) -> V
             "context",
             s.context_pct
                 .map_or_else(|| NOT_PUBLISHED.into(), |p| format!("{p}% used")),
-            BRole::Body,
+            TextStyle::Item,
         ),
-        kv("runtime", or_np(s.harness.as_deref()), BRole::Body),
+        kv("runtime", or_np(s.harness.as_deref()), TextStyle::Item),
     ];
     out.push(if s.local.is_some() {
         Lb::default()
-            .s(format!("   {}", fit("terminal:", 12)), BRole::Meta)
-            .s("enter attaches here \u{b7} ", BRole::Head)
-            .s(attach_command(s), BRole::Body)
+            .s(format!("   {}", fit("terminal:", 12)), TextStyle::Meta)
+            .s("enter attaches here \u{b7} ", TextStyle::Title)
+            .s(attach_command(s), TextStyle::Item)
             .done()
     } else {
         Lb::default()
-            .s(format!("   {}", fit("terminal:", 12)), BRole::Meta)
-            .s(attach_command(s), BRole::Body)
-            .s(format!(" on {}", m.host), BRole::Meta)
+            .s(format!("   {}", fit("terminal:", 12)), TextStyle::Meta)
+            .s(attach_command(s), TextStyle::Item)
+            .s(format!(" on {}", m.host), TextStyle::Meta)
             .done()
     });
     out.push(blank());
@@ -60,12 +60,12 @@ pub(crate) fn seat(m: &Machine, p: &Lead, s: &Seat, width: usize, now: u64) -> V
     out.push(kv(
         "for",
         s.status_age_s.map_or_else(|| "unknown".into(), dur),
-        BRole::Body,
+        TextStyle::Item,
     ));
     out.push(kv(
         "last turn",
         ago(s.last_message_at.as_deref(), now).unwrap_or_else(|| NOT_PUBLISHED.into()),
-        BRole::Body,
+        TextStyle::Item,
     ));
     out.push(blank());
     match &s.work {
@@ -84,21 +84,25 @@ pub(crate) fn seat(m: &Machine, p: &Lead, s: &Seat, width: usize, now: u64) -> V
                     .flatten()
                     .collect::<Vec<_>>()
                     .join(" \u{b7} "),
-                BRole::Body,
+                TextStyle::Item,
             ));
             out.push(kv(
                 "title",
                 fit(w.title.as_deref().unwrap_or("not in this graph"), inner)
                     .trim_end()
                     .to_string(),
-                BRole::Body,
+                TextStyle::Item,
             ));
             out.push(match &w.plan {
-                Some(plan) => kv("plan", fit(plan, inner).trim_end().to_string(), BRole::Body),
-                None => kv("plan", "no plan_path", BRole::Meta),
+                Some(plan) => kv(
+                    "plan",
+                    fit(plan, inner).trim_end().to_string(),
+                    TextStyle::Item,
+                ),
+                None => kv("plan", "no plan_path", TextStyle::Meta),
             });
             if let Some(pr) = w.pr {
-                out.push(kv("pr", format!("#{pr}"), BRole::Body));
+                out.push(kv("pr", format!("#{pr}"), TextStyle::Item));
             }
             if let Some((id, title)) = &w.epic {
                 let text = match title {
@@ -108,13 +112,13 @@ pub(crate) fn seat(m: &Machine, p: &Lead, s: &Seat, width: usize, now: u64) -> V
                 out.push(kv(
                     "epic",
                     fit(&text, inner).trim_end().to_string(),
-                    BRole::Body,
+                    TextStyle::Item,
                 ));
             }
         }
         None => {
             out.push(rule("Current work", width));
-            out.push(kv("node", "none", BRole::Meta));
+            out.push(kv("node", "none", TextStyle::Meta));
         }
     }
     out.push(blank());
@@ -124,8 +128,8 @@ pub(crate) fn seat(m: &Machine, p: &Lead, s: &Seat, width: usize, now: u64) -> V
             for line in text.lines().take(6) {
                 out.push(
                     Lb::default()
-                        .s("   \u{2502} ", BRole::Meta)
-                        .s(fit(line, inner).trim_end().to_string(), BRole::Body)
+                        .s("   \u{2502} ", TextStyle::Meta)
+                        .s(fit(line, inner).trim_end().to_string(), TextStyle::Item)
                         .done(),
                 );
             }
@@ -140,18 +144,26 @@ pub(crate) fn seat(m: &Machine, p: &Lead, s: &Seat, width: usize, now: u64) -> V
             };
             out.push(
                 Lb::default()
-                    .s("   \u{2502} ", BRole::Meta)
-                    .s(stamp, BRole::Body)
+                    .s("   \u{2502} ", TextStyle::Meta)
+                    .s(stamp, TextStyle::Item)
                     .done(),
             );
         }
     }
     out.push(blank());
     out.push(rule("Seat", width));
-    out.push(kv("machine", format!("{} ({})", m.host, m.id), BRole::Body));
-    out.push(kv("lead", p.name.clone(), BRole::Body));
-    out.push(kv("project", or_np(s.project.as_deref()), BRole::Body));
-    out.push(kv("session", or_np(s.session_id.as_deref()), BRole::Body));
+    out.push(kv(
+        "machine",
+        format!("{} ({})", m.host, m.id),
+        TextStyle::Item,
+    ));
+    out.push(kv("lead", p.name.clone(), TextStyle::Item));
+    out.push(kv("project", or_np(s.project.as_deref()), TextStyle::Item));
+    out.push(kv(
+        "session",
+        or_np(s.session_id.as_deref()),
+        TextStyle::Item,
+    ));
     out.push(kv(
         "model",
         match (&s.model, &s.model_basis) {
@@ -159,19 +171,23 @@ pub(crate) fn seat(m: &Machine, p: &Lead, s: &Seat, width: usize, now: u64) -> V
             (Some(model), None) => model.clone(),
             _ => NOT_PUBLISHED.into(),
         },
-        BRole::Body,
+        TextStyle::Item,
     ));
-    out.push(kv("started", or_np(s.started_at.as_deref()), BRole::Body));
+    out.push(kv(
+        "started",
+        or_np(s.started_at.as_deref()),
+        TextStyle::Item,
+    ));
     out.push(kv(
         "alive",
         epoch(s.started_at.as_deref())
             .map_or_else(|| NOT_PUBLISHED.into(), |t| dur(now as i64 - t)),
-        BRole::Body,
+        TextStyle::Item,
     ));
     out.push(kv(
         "cwd",
         fit(&or_np(s.cwd.as_deref()), inner).trim_end().to_string(),
-        BRole::Body,
+        TextStyle::Item,
     ));
     out.push(blank());
     out.push(meta(match (&s.local, m.local) {
@@ -190,9 +206,9 @@ pub(crate) fn seat(m: &Machine, p: &Lead, s: &Seat, width: usize, now: u64) -> V
 
 pub(crate) fn feed(fold: Option<&crate::needs_overlay::QuestionsFold>, width: usize) -> Vec<Line> {
     let mut out = vec![
-        Lb::default().s(" fleet / the user", BRole::Meta).done(),
+        Lb::default().s(" fleet / the user", TextStyle::Meta).done(),
         blank(),
-        Lb::default().s(" Human requests", BRole::Head).done(),
+        Lb::default().s(" Human requests", TextStyle::Title).done(),
     ];
     match fold {
         None => out.push(meta("   questions not read yet")),
@@ -211,13 +227,13 @@ pub(crate) fn feed(fold: Option<&crate::needs_overlay::QuestionsFold>, width: us
                 };
                 out.push(
                     Lb::default()
-                        .s("  \u{25a0} ", BRole::Meta)
-                        .s(format!("[{kind}] "), BRole::Meta)
+                        .s("  \u{25a0} ", TextStyle::Meta)
+                        .s(format!("[{kind}] "), TextStyle::Meta)
                         .s(
                             fit(title, width.saturating_sub(kind.chars().count() + 8))
                                 .trim_end()
                                 .to_string(),
-                            BRole::Body,
+                            TextStyle::Item,
                         )
                         .done(),
                 );
@@ -241,7 +257,7 @@ pub(crate) fn feed(fold: Option<&crate::needs_overlay::QuestionsFold>, width: us
 
 pub(crate) fn system(fleet: &Fleet, width: usize) -> Vec<Line> {
     let mut out = vec![
-        Lb::default().s(" machines", BRole::Meta).done(),
+        Lb::default().s(" machines", TextStyle::Meta).done(),
         blank(),
         Lb::default()
             .s(
@@ -254,27 +270,34 @@ pub(crate) fn system(fleet: &Fleet, width: usize) -> Vec<Line> {
                     fit("Cap", 15),
                     fit("Memory", 13)
                 ),
-                BRole::Head,
+                TextStyle::Title,
             )
             .done(),
     ];
     for m in &fleet.machines {
         out.push(
             Lb::default()
-                .s(format!(" {}", fit(&m.host, 12)), BRole::Body)
+                .s(format!(" {}", fit(&m.host, 12)), TextStyle::Item)
                 .s(
                     fit(if m.fresh { "online" } else { "stale" }, 9),
-                    if m.fresh { BRole::Body } else { BRole::Head },
+                    if m.fresh {
+                        TextStyle::Item
+                    } else {
+                        TextStyle::Title
+                    },
                 )
-                .s(fit(&dur(m.age_s), 8), BRole::Meta)
-                .s(fit(if m.takes_work { "yes" } else { "no" }, 6), BRole::Meta)
+                .s(fit(&dur(m.age_s), 8), TextStyle::Meta)
+                .s(
+                    fit(if m.takes_work { "yes" } else { "no" }, 6),
+                    TextStyle::Meta,
+                )
                 .s(
                     fit(
                         &m.cap
                             .map_or_else(|| NOT_PUBLISHED.into(), |c| c.to_string()),
                         15,
                     ),
-                    BRole::Meta,
+                    TextStyle::Meta,
                 )
                 .s(
                     fit(
@@ -282,12 +305,12 @@ pub(crate) fn system(fleet: &Fleet, width: usize) -> Vec<Line> {
                             .map_or_else(|| "not sampled".into(), |u| format!("{:.0}%", u * 100.0)),
                         13,
                     ),
-                    BRole::Meta,
+                    TextStyle::Meta,
                 )
                 .s(
                     m.cpu
                         .map_or_else(|| "not sampled".into(), |c| format!("{c:.0}%")),
-                    BRole::Meta,
+                    TextStyle::Meta,
                 )
                 .whole(&super::org_board::host_key(m))
                 .done(),
@@ -313,7 +336,7 @@ pub(crate) fn system(fleet: &Fleet, width: usize) -> Vec<Line> {
             out.push(kv(
                 &m.host,
                 sampled(m).unwrap_or("not sampled").to_string(),
-                BRole::Body,
+                TextStyle::Item,
             ));
         }
     }

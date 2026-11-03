@@ -10,9 +10,9 @@
 //! reason, never a stale launch.
 
 use super::backlog_board::{rule, BoardView};
-use super::backlog_style::{BLine, BRole, BSeg};
 use super::*;
 use crate::backlog_model::{session_action, SessionAction};
+use crate::text_style::{TLine, TSeg, TextStyle};
 
 pub(crate) fn resolve_session(
     view: &View,
@@ -187,14 +187,14 @@ pub(crate) fn pane_lines(
     node_id: &str,
     sel_arg: Option<usize>,
     w: usize,
-) -> (Vec<BLine>, Option<usize>) {
-    let mut lines: Vec<BLine> = Vec::new();
+) -> (Vec<TLine>, Option<usize>) {
+    let mut lines: Vec<TLine> = Vec::new();
     let Some(inputs) = b.inputs.as_ref() else {
-        return (vec![BLine::meta("reading board...")], None);
+        return (vec![TLine::meta("reading board...")], None);
     };
     let Some(view) = crate::backlog_model::node(inputs, node_id) else {
         return (
-            vec![BLine::meta(format!("no node {node_id} in the board read"))],
+            vec![TLine::meta(format!("no node {node_id} in the board read"))],
             None,
         );
     };
@@ -209,18 +209,18 @@ pub(crate) fn pane_lines(
     // Title: the id (accent), the title (bold), and the status/priority pill.
     let status = view.card.status.clone().unwrap_or_else(|| "none".into());
     let prio = view.card.priority.clone().unwrap_or_else(|| "none".into());
-    let title = BLine::of(&[
-        BSeg {
+    let title = TLine::of(&[
+        TSeg {
             text: view.card.id.clone(),
-            role: BRole::Label,
+            role: TextStyle::Badge,
         },
-        BSeg {
+        TSeg {
             text: format!("  {}", view.card.title),
-            role: BRole::Head,
+            role: TextStyle::Title,
         },
-        BSeg {
+        TSeg {
             text: format!("  [{} {}]", status, prio),
-            role: BRole::Pill,
+            role: TextStyle::Badge,
         },
     ]);
     lines.push(title);
@@ -229,7 +229,7 @@ pub(crate) fn pane_lines(
         Some(lead) => format!("{} (L{})", lead.name, lead.level),
         None => "none".into(),
     };
-    lines.push(BLine::meta(format!(
+    lines.push(TLine::meta(format!(
         "{} \u{b7} {} \u{b7} {} \u{b7} {} \u{b7} {} \u{b7} lead: {}",
         status,
         view.card.project.as_deref().unwrap_or("none"),
@@ -238,18 +238,18 @@ pub(crate) fn pane_lines(
         view.difficulty.as_deref().unwrap_or("none"),
         lead
     )));
-    lines.push(BLine::plain(String::new()));
+    lines.push(TLine::plain(String::new()));
     // Field lines: the label dim (the accent-dim slot is the id's, so a
     // field label reads as the meta rank) and the value plain.
     let field = |label: &str, value: String| {
-        BLine::of(&[
-            BSeg {
+        TLine::of(&[
+            TSeg {
                 text: format!("{label}:"),
-                role: BRole::Meta,
+                role: TextStyle::Meta,
             },
-            BSeg {
+            TSeg {
                 text: format!(" {}", value),
-                role: BRole::Body,
+                role: TextStyle::Item,
             },
         ])
     };
@@ -277,9 +277,9 @@ pub(crate) fn pane_lines(
         view.cwd.clone().unwrap_or_else(|| "none".into()),
     ));
     for f in &view.unavailable {
-        lines.push(BLine::meta(format!("{}: {}", f.feature, f.reason)));
+        lines.push(TLine::meta(format!("{}: {}", f.feature, f.reason)));
     }
-    lines.push(BLine::plain(String::new()));
+    lines.push(TLine::plain(String::new()));
 
     // Links section: the parent first, then one row per id under each bold
     // heading, selectable.
@@ -297,8 +297,8 @@ pub(crate) fn pane_lines(
             continue;
         }
         any_links = true;
-        lines.push(BLine::head(format!("{name} ({}):", group.len())));
-        lines.push(BLine::meta(rule(w)));
+        lines.push(TLine::head(format!("{name} ({}):", group.len())));
+        lines.push(TLine::meta(rule(w)));
         for l in group.iter() {
             let marker = if k == sel {
                 follow = Some(lines.len());
@@ -310,26 +310,26 @@ pub(crate) fn pane_lines(
             };
             let col = l.column.clone().unwrap_or_default();
             let title = l.title.clone().unwrap_or_default();
-            lines.push(BLine::of(&[
-                BSeg {
+            lines.push(TLine::of(&[
+                TSeg {
                     text: format!("{marker} "),
-                    role: BRole::Body,
+                    role: TextStyle::Item,
                 },
-                BSeg {
+                TSeg {
                     text: l.id.clone(),
-                    role: BRole::Label,
+                    role: TextStyle::Badge,
                 },
-                BSeg {
+                TSeg {
                     text: format!(" {} {}", col, title),
-                    role: BRole::Body,
+                    role: TextStyle::Item,
                 },
             ]));
         }
     }
     if !any_links {
-        lines.push(BLine::head("links"));
-        lines.push(BLine::meta(rule(w)));
-        lines.push(BLine::meta("none"));
+        lines.push(TLine::head("links"));
+        lines.push(TLine::meta(rule(w)));
+        lines.push(TLine::meta("none"));
     }
     if !view.prs.is_empty() {
         let pr: Vec<String> = view
@@ -340,23 +340,23 @@ pub(crate) fn pane_lines(
                 None => format!("#{}", p.number),
             })
             .collect();
-        lines.push(BLine::of(&[
-            BSeg {
+        lines.push(TLine::of(&[
+            TSeg {
                 text: "prs:".into(),
-                role: BRole::Meta,
+                role: TextStyle::Meta,
             },
-            BSeg {
+            TSeg {
                 text: format!(" {}", pr.join(", ")),
-                role: BRole::Body,
+                role: TextStyle::Item,
             },
         ]));
     }
-    lines.push(BLine::plain(String::new()));
+    lines.push(TLine::plain(String::new()));
 
     // Session section: bold header + thin rule, then the phase table.
-    lines.push(BLine::head("sessions"));
-    lines.push(BLine::meta(rule(w)));
-    lines.push(BLine::meta(format!(
+    lines.push(TLine::head("sessions"));
+    lines.push(TLine::meta(rule(w)));
+    lines.push(TLine::meta(format!(
         "{:<9} {:<7} {:<9} {}",
         "phase", "harness", "model", "action"
     )));
@@ -373,7 +373,7 @@ pub(crate) fn pane_lines(
             "none" => s.reason.clone().unwrap_or_else(|| "none".into()),
             other => other.to_string(),
         };
-        lines.push(BLine::plain(format!(
+        lines.push(TLine::plain(format!(
             "{marker} {:<8} {:<7} {:<9} {}",
             s.phase.as_deref().unwrap_or("-"),
             s.harness.as_deref().unwrap_or("-"),
@@ -381,16 +381,16 @@ pub(crate) fn pane_lines(
             action
         )));
         if let Some(sid) = s.session_id.as_deref() {
-            lines.push(BLine::meta(sid.to_string()));
+            lines.push(TLine::meta(sid.to_string()));
         }
         if let Some(cmd) = s.command.as_deref() {
-            lines.push(BLine::meta(format!("$ {cmd}")));
+            lines.push(TLine::meta(format!("$ {cmd}")));
         }
     }
     if view.sessions.is_empty() {
-        lines.push(BLine::meta("sessions: none"));
+        lines.push(TLine::meta("sessions: none"));
     }
-    lines.push(BLine::plain(String::new()));
+    lines.push(TLine::plain(String::new()));
 
     // The comment thread: bold header + thin rule, oldest first, replies
     // indented under their heads; the ask state rides as a mark. Note-kind
@@ -415,13 +415,13 @@ pub(crate) fn pane_lines(
         .iter()
         .filter(|n| n.state.as_deref() == Some("open"))
         .count();
-    lines.push(BLine::head(format!(
+    lines.push(TLine::head(format!(
         "comments ({}, {} open) \u{b7} decisions ({})",
         thread.len(),
         open,
         view.decisions.len()
     )));
-    lines.push(BLine::meta(rule(w)));
+    lines.push(TLine::meta(rule(w)));
     for note in &thread {
         let mark = match note.state.as_deref() {
             Some("open") => "\u{25cb}",
@@ -441,7 +441,7 @@ pub(crate) fn pane_lines(
         if let Some(refer) = &note.state_ref {
             row.push_str(&format!(" \u{b7} {refer}"));
         }
-        lines.push(BLine::plain(row));
+        lines.push(TLine::plain(row));
         // Who wrote it, shown in the thread and copyable.
         let mut who: Vec<String> = Vec::new();
         if let Some(name) = &note.agent_name {
@@ -457,17 +457,17 @@ pub(crate) fn pane_lines(
             who.push(format!("on {working}"));
         }
         if !who.is_empty() {
-            lines.push(BLine::plain(format!(
+            lines.push(TLine::plain(format!(
                 "{indent}      \u{b7} {}",
                 who.join(" \u{b7} ")
             )));
         }
     }
-    lines.push(BLine::plain(String::new()));
+    lines.push(TLine::plain(String::new()));
     // Document section: the node's markdown plan when readable, else its
     // details text.
-    lines.push(BLine::head("document"));
-    lines.push(BLine::meta(rule(w)));
+    lines.push(TLine::head("document"));
+    lines.push(TLine::meta(rule(w)));
     let doc = b.doc.as_ref().filter(|d| d.node_id == node_id);
     match (&view.plan_path, doc) {
         (Some(path), Some(d)) if d.error.is_empty() => {
@@ -478,7 +478,7 @@ pub(crate) fn pane_lines(
                 .map(|d| d.error.clone())
                 .filter(|e| !e.is_empty())
                 .unwrap_or_else(|| "still loading".into());
-            lines.push(BLine::meta(format!("plan: {path} (unreadable: {reason})")));
+            lines.push(TLine::meta(format!("plan: {path} (unreadable: {reason})")));
             render_details(&view, w, &mut lines);
         }
         (None, _) => render_details(&view, w, &mut lines),
@@ -497,17 +497,17 @@ pub(crate) fn pane_lines(
 }
 
 /// The details text wrapped as plain lines, or `details: none`.
-fn render_details(view: &crate::backlog_model::NodeView, w: usize, out: &mut Vec<BLine>) {
+fn render_details(view: &crate::backlog_model::NodeView, w: usize, out: &mut Vec<TLine>) {
     let text = view.details.as_ref().and_then(|d| d.as_str()).unwrap_or("");
     if text.trim().is_empty() {
-        out.push(BLine::meta("details: none"));
+        out.push(TLine::meta("details: none"));
         return;
     }
     let mut wrapped: Vec<String> = Vec::new();
     for para in text.split('\n') {
         wrap_line(para, w, &mut wrapped);
     }
-    out.extend(wrapped.into_iter().map(BLine::plain));
+    out.extend(wrapped.into_iter().map(TLine::plain));
 }
 
 /// Word-wrap one paragraph into lines of at most `w` display columns on

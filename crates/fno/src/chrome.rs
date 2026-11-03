@@ -18,6 +18,7 @@
 
 use crate::popup::Anchor;
 use crate::proto::Cell;
+use crate::text_style::TextStyle;
 use crate::theme::{cell_style, Role, Theme};
 use unicode_width::UnicodeWidthChar;
 
@@ -295,7 +296,7 @@ pub struct Scroll {
 pub struct BodyLine {
     pub text: String,
     /// A greyed, inert row (a disabled `PopupRow::Entry`): every cell takes
-    /// [`Role::BodyDim`] regardless of selection, so it reads as inert.
+    /// [`Role::Text(TextStyle::Meta)`] regardless of selection, so it reads as inert.
     pub disabled: bool,
     /// `(offset, len)` within `text` that is the selected cut-out.
     pub sel_span: Option<(usize, usize)>,
@@ -462,12 +463,12 @@ pub fn frame(body: &[BodyLine], chrome: &Chrome, body_w: usize, scroll: Option<S
 /// rule, a footer as dim text, and no row of the frame is a band.
 fn flat_role(r: Role) -> Role {
     match r {
-        Role::Border => Role::PanelRule,
-        Role::Title => Role::PanelHead,
-        Role::Chip => Role::PanelLabel,
-        Role::Subtitle | Role::Footer | Role::Tab(_) => Role::PanelMeta,
-        Role::ScrollTrack => Role::PanelRule,
-        Role::ScrollThumb => Role::PanelHead,
+        Role::Border => Role::Text(TextStyle::Meta),
+        Role::Title => Role::Text(TextStyle::Title),
+        Role::Chip => Role::Text(TextStyle::Badge),
+        Role::Subtitle | Role::Footer | Role::Tab(_) => Role::Text(TextStyle::Meta),
+        Role::ScrollTrack => Role::Text(TextStyle::Meta),
+        Role::ScrollThumb => Role::Text(TextStyle::Title),
         other => other,
     }
 }
@@ -597,7 +598,7 @@ pub(crate) fn paint_line(
         if sc >= cols {
             break;
         }
-        let role = roles.get(j).copied().unwrap_or(Role::PanelBody);
+        let role = roles.get(j).copied().unwrap_or(Role::Text(TextStyle::Item));
         let (fg, bg, flags) = cell_style(role, theme);
         cells[sr * cols + sc] = Cell {
             c: ch,
@@ -861,7 +862,7 @@ fn body_row(
     };
     let sel_from_start = line.sel_span.is_some_and(|(off, _)| off == 0);
     let pad_role = if line.disabled {
-        Role::BodyDim
+        Role::Text(TextStyle::Meta)
     } else if sel_from_start {
         Role::BodySel
     } else {
@@ -891,7 +892,7 @@ fn body_row(
             break;
         }
         let role = if line.disabled {
-            Role::BodyDim
+            Role::Text(TextStyle::Meta)
         } else if in_sel(char_idx) {
             Role::BodySel
         } else {
@@ -908,7 +909,7 @@ fn body_row(
     for _ in col..text_w {
         text.push(' ');
         roles.push(if line.disabled {
-            Role::BodyDim
+            Role::Text(TextStyle::Meta)
         } else if sel_from_start {
             Role::BodySel
         } else {
@@ -1552,7 +1553,7 @@ mod tests {
         // The board's body lines arrive with panel segs (to_body_line), so
         // the body chars resolve through pad_role, never Role::Body.
         let mut body_line = bl("row");
-        body_line.pad_role = Role::PanelBody;
+        body_line.pad_role = Role::Text(TextStyle::Item);
         let framed = frame(&[body_line], &chrome, 20, None);
         for name in ["", "catppuccin", "tokyo-night", "gruvbox"] {
             let t = crate::theme::Theme::from_name(name).0;

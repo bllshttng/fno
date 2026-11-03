@@ -8,8 +8,8 @@ use unicode_width::UnicodeWidthStr;
 
 mod observer_rows;
 
-use super::backlog_style::BLine;
 use super::*;
+use crate::text_style::TLine;
 
 /// The sideline Table's five columns: status word, name, message, PR, age.
 /// Width ranking (operator, 2026-09-20): name first, message second, status
@@ -445,7 +445,7 @@ impl View {
                     );
                 }
             } else {
-                let msg = BLine::meta("backlog off (pref)");
+                let msg = TLine::meta("backlog off (pref)");
                 let lines = [msg];
                 backlog_style::paint_panel(
                     cells,

@@ -1,11 +1,11 @@
 //! The detail pane's markdown renderer. Pure, line-oriented, no
-//! dependency: one markdown doc in, styled `BLine`s out.
+//! dependency: one markdown doc in, styled `TLine`s out.
 
-use super::backlog_style::BLine;
 use super::node_detail::wrap_line_joined;
+use crate::text_style::TLine;
 
-pub(crate) fn md_lines(text: &str, w: usize) -> Vec<BLine> {
-    let mut out: Vec<BLine> = Vec::new();
+pub(crate) fn md_lines(text: &str, w: usize) -> Vec<TLine> {
+    let mut out: Vec<TLine> = Vec::new();
     let src: Vec<&str> = text.lines().collect();
     let mut i = 0usize;
     // Frontmatter: a leading `---` block folds to one meta line. An
@@ -22,7 +22,7 @@ pub(crate) fn md_lines(text: &str, w: usize) -> Vec<BLine> {
         if i < src.len() {
             i += 1;
         }
-        out.push(BLine::meta(format!("frontmatter: {n} lines")));
+        out.push(TLine::meta(format!("frontmatter: {n} lines")));
     }
     let mut para: Vec<&str> = Vec::new();
     let mut fence = false;
@@ -33,7 +33,7 @@ pub(crate) fn md_lines(text: &str, w: usize) -> Vec<BLine> {
             if line.trim_start().starts_with("```") {
                 fence = false;
             } else {
-                out.extend(BLine::meta(line).wrap(w));
+                out.extend(TLine::meta(line).wrap(w));
             }
             continue;
         }
@@ -48,9 +48,9 @@ pub(crate) fn md_lines(text: &str, w: usize) -> Vec<BLine> {
         if head_like {
             flush(&mut para, &mut out, w);
             if !out.is_empty() {
-                out.push(BLine::plain(String::new()));
+                out.push(TLine::plain(String::new()));
             }
-            out.push(BLine::head(inline(line[hash_run..].trim_start())));
+            out.push(TLine::head(inline(line[hash_run..].trim_start())));
             continue;
         }
         // Tables and blockquotes: dim, and a long row wraps whole.
@@ -58,9 +58,9 @@ pub(crate) fn md_lines(text: &str, w: usize) -> Vec<BLine> {
         if t.starts_with('|') || t == ">" || t.starts_with("> ") {
             flush(&mut para, &mut out, w);
             if t.starts_with('|') {
-                out.extend(BLine::meta(line).wrap(w));
+                out.extend(TLine::meta(line).wrap(w));
             } else {
-                out.extend(BLine::meta(format!("\u{2502} {}", t.trim_start_matches('>'))).wrap(w));
+                out.extend(TLine::meta(format!("\u{2502} {}", t.trim_start_matches('>'))).wrap(w));
             }
             continue;
         }
@@ -84,7 +84,7 @@ pub(crate) fn md_lines(text: &str, w: usize) -> Vec<BLine> {
                 } else {
                     format!("{}{}", " ".repeat(indent + 2), l)
                 };
-                let mut item = BLine::plain(format!("{}{}", " ".repeat(indent), padded));
+                let mut item = TLine::plain(format!("{}{}", " ".repeat(indent), padded));
                 item.join = join;
                 out.push(item);
             }
@@ -102,7 +102,7 @@ pub(crate) fn md_lines(text: &str, w: usize) -> Vec<BLine> {
 
 /// Push the accumulated paragraph's wrapped lines: consecutive text
 /// lines join into one paragraph, then wrap at `w`.
-fn flush(para: &mut Vec<&str>, out: &mut Vec<BLine>, w: usize) {
+fn flush(para: &mut Vec<&str>, out: &mut Vec<TLine>, w: usize) {
     if para.is_empty() {
         return;
     }
@@ -113,9 +113,9 @@ fn flush(para: &mut Vec<&str>, out: &mut Vec<BLine>, w: usize) {
 }
 
 /// Wrap one inline-stripped paragraph at `w` and push the plain lines.
-fn flush_body(owned: &str, out: &mut Vec<BLine>, w: usize) {
+fn flush_body(owned: &str, out: &mut Vec<TLine>, w: usize) {
     for (l, join) in wrap_line_joined(owned, w) {
-        let mut line = BLine::plain(l);
+        let mut line = TLine::plain(l);
         line.join = join;
         out.push(line);
     }
@@ -163,8 +163,8 @@ fn find_char(chars: &[char], from: usize, needle: char) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::backlog_style::BRole;
     use super::*;
+    use crate::text_style::TextStyle;
 
     const W: usize = 60;
 
@@ -181,7 +181,7 @@ mod tests {
         assert_eq!(lines[0].text, "frontmatter: 2 lines");
         let heads = lines
             .iter()
-            .filter(|l| l.default_role == BRole::Head)
+            .filter(|l| l.default_role == TextStyle::Title)
             .count();
         assert_eq!(heads, 1, "one heading");
         assert!(lines.iter().any(|l| l.text == "Plan"));
@@ -197,7 +197,7 @@ mod tests {
             .position(|l| l.text == "Step one")
             .expect("heading line");
         assert_eq!(lines[at - 1].text, "");
-        assert_eq!(lines[at].default_role, BRole::Head);
+        assert_eq!(lines[at].default_role, TextStyle::Title);
         assert!(!lines.iter().any(|l| l.text.contains("##")));
         assert!(lines.iter().any(|l| l.text == "more"));
     }
@@ -220,7 +220,7 @@ mod tests {
             .iter()
             .find(|l| l.text.contains("| col | col |"))
             .expect("table row kept");
-        assert!(table.roles.is_empty() && table.default_role == BRole::Meta);
+        assert!(table.roles.is_empty() && table.default_role == TextStyle::Meta);
         let quote = lines
             .iter()
             .find(|l| l.text.starts_with('\u{2502}'))
