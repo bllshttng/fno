@@ -54,6 +54,10 @@ const MAX_TASK_WALL_S: f64 = 180.0;
 const NEW_HEADS_PER_TICK: usize = 10;
 const DEFAULT_DAILY_USD: f64 = 15.0;
 const DEFAULT_LANE: &str = "zai-flash";
+/// Runs once when the main lane gives up with no grade, so a capped lane does
+/// not leave the day without graded rows.
+const DEFAULT_FALLBACK_LANE: &str = "claude-sonnet-5";
+const FALLBACK_SUFFIX: &str = "-fallback";
 
 /// Who does the work a cohort grades. Spend is each gate row of the day at its
 /// seat's attempt price, because a row's usage has no price until a manifest
@@ -134,6 +138,9 @@ struct SeatState {
     main_tried: Option<String>,
     #[serde(default)]
     main_failure: Option<MainFailure>,
+    /// The cohort whose fallback run was launched. One fallback per cohort.
+    #[serde(default)]
+    fallback_tried: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -499,6 +506,12 @@ pub(crate) fn config_lane(repo: &Path) -> String {
         .unwrap_or_else(|| DEFAULT_LANE.to_string())
 }
 
+fn fallback_lane(repo: &Path) -> String {
+    crate::paths_cli::cfg_str(repo, &["evals", "gate", "fallback_lane"])
+        .filter(|v| !v.trim().is_empty())
+        .unwrap_or_else(|| DEFAULT_FALLBACK_LANE.to_string())
+}
+
 /// The worker seat keeps `evals.gate.lane`. The lead seat runs the first lane
 /// leads are routed to, so the gate grades the seat the user corrects.
 fn seat_lane(repo: &Path, seat: &Seat) -> Result<String, String> {
@@ -596,12 +609,17 @@ fn main_seat(
 ) -> (String, bool) {
     let cohort = format!("{day}{}", seat.suffix);
     let s = state.seat(seat);
+    let mut fallback = false;
     if s.main_tried.as_deref() == Some(cohort.as_str()) {
         match s.main_failure.as_ref().filter(|f| f.cohort == cohort) {
             None => return (format!("main {cohort} tried"), true),
             Some(f) if f.tries >= MAIN_MAX_TRIES => {
-                let note = format!("main {cohort} gave up after {} tries: {}", f.tries, f.cause);
-                return (note, true);
+                if s.fallback_tried.as_deref() == Some(cohort.as_str()) {
+                    let note =
+                        format!("main {cohort} gave up after {} tries: {}", f.tries, f.cause);
+                    return (note, true);
+                }
+                fallback = true;
             }
             Some(f) if d.now.timestamp() < f.next_try => {
                 return (format!("main {cohort} waits to retry: {}", f.cause), true);
@@ -612,9 +630,18 @@ fn main_seat(
     if !can_launch {
         return ("main held by the spawn gate".into(), false);
     }
-    let lane = match seat_lane(p.repo, seat) {
-        Ok(lane) => lane,
-        Err(cause) => return (main_failed(d, state, seat, &cohort, cause), false),
+    let lane = if fallback {
+        fallback_lane(p.repo)
+    } else {
+        match seat_lane(p.repo, seat) {
+            Ok(lane) => lane,
+            Err(cause) => return (main_failed(d, state, seat, &cohort, cause), false),
+        }
+    };
+    let run_cohort = if fallback {
+        format!("{cohort}{FALLBACK_SUFFIX}")
+    } else {
+        cohort.clone()
     };
     if !fetch(p, d, "main") {
         return ("main fetch failed".into(), false);
@@ -655,22 +682,26 @@ fn main_seat(
         ("--tag", seat.tag),
         MAIN_WORKERS,
         &lane,
-        &cohort,
+        &run_cohort,
         &sha,
         arg_bank.as_ref(),
     );
-    state.seat(seat).main_tried = Some(cohort.clone());
+    if fallback {
+        state.seat(seat).fallback_tried = Some(cohort.clone());
+    } else {
+        state.seat(seat).main_tried = Some(cohort.clone());
+    }
     match (d.spawn)(&argv, p.repo, &p.state_dir.join(MAIN_LOG)) {
         Ok(pid) => {
             state.main_run = Some(MainRun {
-                cohort: cohort.clone(),
+                cohort: run_cohort.clone(),
                 pid,
                 started: d.now.timestamp(),
                 seat: seat.name.into(),
             });
             // Saved at once: a tick killed here must not launch a second run.
             save_state(&p.state_dir, state);
-            (format!("main {cohort} launched"), false)
+            (format!("main {run_cohort} launched on {lane}"), false)
         }
         Err(e) => {
             let cause = format!("launch failed: {e}");
@@ -751,6 +782,15 @@ fn finish_main(p: &Paths, d: &Deps, state: &mut State, seat: &Seat, cohort: &str
     let graded = read_rows(&p.history.to_string_lossy(), None, None)
         .iter()
         .any(|r| r.experiment_id.as_deref() == Some(cohort) && crate::evals_trend::is_scored(r));
+    if cohort.ends_with(FALLBACK_SUFFIX) {
+        // A fallback lane measures a different seat: it is never a baseline.
+        let tail = log_tail(&p.state_dir.join(MAIN_LOG));
+        return if graded {
+            format!("main {cohort} graded on the fallback lane; no baseline, no compare")
+        } else {
+            format!("main {cohort} wrote no grade: {tail}")
+        };
+    }
     if !graded {
         let tail = log_tail(&p.state_dir.join(MAIN_LOG));
         return main_failed(d, state, seat, cohort, format!("wrote no grade: {tail}"));
@@ -1416,7 +1456,17 @@ mod tests {
             w.tick(false, at(tries));
         }
         w.tick(true, at(3));
-        assert_eq!(w.spawns.borrow().len(), MAIN_MAX_TRIES as usize);
+        assert_eq!(w.spawns.borrow().len(), MAIN_MAX_TRIES as usize + 1);
+        let fallback = w.spawns.borrow()[MAIN_MAX_TRIES as usize].join(" ");
+        assert!(fallback.contains("--lane claude-sonnet-5"), "{fallback}");
+        assert!(fallback.contains("-fallback"), "{fallback}");
+        w.tick(false, at(3));
+        w.tick(true, at(4));
+        assert_eq!(
+            w.spawns.borrow().len(),
+            MAIN_MAX_TRIES as usize + 1,
+            "one fallback per cohort"
+        );
         let state = load_state(&dir);
         assert!(
             state.last_note.contains("gave up after 3 tries"),
