@@ -396,6 +396,17 @@ pub(crate) fn truncate_chars(s: &str, n: usize) -> String {
     s.chars().take(n).collect()
 }
 
+/// The stored head of a read's stdout. A recheck compares against this same
+/// shape, so the stored row and the fresh reading can never differ by form.
+pub(crate) fn out_head(stdout: &str) -> String {
+    let head = stdout
+        .lines()
+        .take(OUT_HEAD_LINES)
+        .collect::<Vec<_>>()
+        .join("\n");
+    truncate_chars(&head, OUT_HEAD_CHARS)
+}
+
 /// Run each read, bounded, and return one evidence row per command.
 ///
 /// A read that cannot run stores no row. An all-zero answer set refuses
@@ -446,16 +457,10 @@ pub fn run_reads(
         // a measurement, not a zero.
         let stripped = outcome.stdout.trim();
         zero_flags.push(stripped.is_empty() || stripped == "0");
-        let head = outcome
-            .stdout
-            .lines()
-            .take(OUT_HEAD_LINES)
-            .collect::<Vec<_>>()
-            .join("\n");
         rows.push(json!({
             "cmd": cmd,
             "exit": outcome.exit,
-            "out_head": truncate_chars(&head, OUT_HEAD_CHARS),
+            "out_head": out_head(&outcome.stdout),
             "ts": Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
             "head_sha": sha,
         }));

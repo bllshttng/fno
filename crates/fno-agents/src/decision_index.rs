@@ -132,8 +132,29 @@ pub fn derive_rows(rows: Vec<Value>, damaged: usize) -> Index {
                 .to_lowercase();
             id.is_empty() || !retired.contains_key(&id)
         })
+        .filter(|row| !date_guard_fired(row, &chrono::Utc::now().to_rfc3339()))
         .collect();
     Index { rows, damaged }
+}
+
+/// A rule holds until its guard fires. A `date` guard is pure, so the index
+/// derivation retires the row itself: `guard: {kind: "date", at: <RFC 3339>}`.
+/// Event, set and reading guards need the graph or a shell, so
+/// `fno inbox law recheck` evaluates those.
+pub fn date_guard_fired(row: &Value, now_rfc3339: &str) -> bool {
+    let Some(guard) = row.get("guard").filter(|g| g.is_object()) else {
+        return false;
+    };
+    if guard.get("kind").and_then(Value::as_str) != Some("date") {
+        return false;
+    }
+    let (Some(at), Ok(now)) = (
+        guard.get("at").and_then(Value::as_str),
+        chrono::DateTime::parse_from_rfc3339(now_rfc3339),
+    ) else {
+        return false;
+    };
+    chrono::DateTime::parse_from_rfc3339(at).is_ok_and(|at| at <= now)
 }
 
 /// The retirement map behind `derive_rows`, exposed for readers that render
@@ -424,7 +445,7 @@ pub fn row_scope(row: &Value) -> &str {
 
 /// The session-scope test: `global` always governs; a
 /// `project:<slug>` row governs only the matching slug; a `machine:<id>` or
-/// `person:<name>` row governs only the session that resolves that identity.
+/// `user:<name>` (legacy `person:<name>`) row governs only the session that resolves that identity.
 pub fn row_in_scope(row: &Value, project: &str) -> bool {
     match row_scope(row) {
         "global" => true,
@@ -432,7 +453,7 @@ pub fn row_in_scope(row: &Value, project: &str) -> bool {
     }
 }
 
-/// The identity arms of the scope test: `Some` for a `machine:` or `person:`
+/// The identity arms of the scope test: `Some` for a `machine:` or `user:`
 /// scope, `None` for every other scope.
 pub fn binds_here(scope: &str) -> Option<bool> {
     binds(scope, crate::claims::machine_id, crate::identity::person)
@@ -450,13 +471,33 @@ fn binds(
         let mine = machine();
         return Some(mine.is_empty() || mine == id);
     }
-    scope.strip_prefix("person:").map(|name| name == person())
+    scope
+        .strip_prefix("user:")
+        .or_else(|| scope.strip_prefix("person:"))
+        .map(|name| name == person())
 }
 
 /// The one visibility test every scope filter shares. `None` fails open on
 /// the project: it hides no project row. A row bound to another machine or
-/// person still hides, because identity needs no project.
+/// user still hides, because identity needs no project.
 pub fn row_visible(row: &Value, project: Option<&str>) -> bool {
+    filters_match(row) && scope_visible(row, project)
+}
+
+/// The row's filters beside its scope; every filter must match. A `node`
+/// filter binds the session whose `FNO_NODE` names that node. A session with
+/// no node fails open, the posture every law reader keeps.
+pub fn filters_match(row: &Value) -> bool {
+    let Some(node) = row.pointer("/filters/node").and_then(Value::as_str) else {
+        return true;
+    };
+    match std::env::var("FNO_NODE") {
+        Ok(mine) if !mine.is_empty() => mine == node,
+        _ => true,
+    }
+}
+
+fn scope_visible(row: &Value, project: Option<&str>) -> bool {
     match project {
         Some(project) => row_in_scope(row, project),
         None => binds_here(row_scope(row)) != Some(false),

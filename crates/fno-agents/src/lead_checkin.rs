@@ -1387,6 +1387,9 @@ fn collect_readings(ctx: &Ctx, beat: &Beat, since: Option<&str>) -> Vec<Reading>
             )
         }
     });
+    take_reading(&mut readings, beat_started, "laws", || {
+        crate::law_recheck::collect(true)
+    });
     take_reading(&mut readings, beat_started, "machine", {
         let events_paths = events_paths.clone();
         move || crate::lead_checkin_machine::newest_reading(&events_paths)
@@ -2027,6 +2030,7 @@ fn render_lines_with(
             crate::lead_checkin_machine::beat_line as fn(&Value) -> String,
         ),
         ("telemetry", crate::otel_read::health_line),
+        ("laws", crate::law_recheck::beat_line),
     ] {
         if ok(name, &mut lines) {
             if let Some(reading) = by_name(name) {
