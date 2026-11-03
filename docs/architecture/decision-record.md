@@ -199,11 +199,11 @@ Every law reader filters. Global law reaches every session. A project law reache
 
 Readers return the count they withheld, and the report's JSON carries the note. The stage block lists a law's scope on its line. A workspace tier (`workspace:<name>`) is a rung nobody has reached. The field is a free string, so adding it later needs a reader branch and no migration.
 
-## A law says when it is on
+## Start, state and window
 
-A law can carry a start, a state and a window beside its scope. `--from date:<when>` or `--from event:<node>` keeps the law off until that time or until the node closes. `--while <cmd>` keeps it on only while the command exits 0, and a law takes the flag more than once. `--between HH:MM-HH:MM` keeps it on inside a daily window in the machine's local time, and the window may wrap midnight. All of them must pass. The row stores them under `when`.
+A law can carry a start, a state and a window beside its scope. `--from date:<when>` or `--from event:<node>` keeps the law off until that time or until the node closes. `--while <cmd>` keeps it on only while the command exits 0, and a law takes the flag more than once. `--between HH:MM-HH:MM` keeps it on inside a daily window in the machine's local time, and the window can wrap midnight. All of them must pass. The row stores them under `when`.
 
-The rule set build never shells out, so it reads a cache at `law-when.json` in the state root. The record, match and stage doors refresh the cache, and a state reading younger than a minute is not re-run. A reading that cannot run keeps the last answer. With no answer the law stays on, the same posture every law reader takes when it cannot decide. The retract, restore and history doors ignore `when`, so the owner can undo a law that is off.
+The rule set build never shells out, so it reads a cache at `law-when.json` in the state root. The record, match and stage doors refresh the cache, and a state reading younger than a minute is not re-run. A reading that cannot run keeps the last answer. If there is no answer, the law stays on, the posture every law reader takes when it cannot decide. The retract, restore and history doors ignore `when`, so the owner can undo a law that is off.
 
 ## Where law reaches a session
 

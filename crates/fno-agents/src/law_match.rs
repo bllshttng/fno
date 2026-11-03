@@ -2007,7 +2007,7 @@ pub(crate) fn record_door_write(door: RecordDoor, decision: String, caller: &Cal
     }
     println!("{decision_id}");
     if let Some(when) = &when {
-        crate::law_when::warm(&json!({"decision_id": decision_id, "when": when}));
+        crate::law_when::row_active(&json!({"decision_id": decision_id, "when": when}), true);
     }
     if let Some(old) = &auto_superseded {
         eprintln!("superseded {old}");

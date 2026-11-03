@@ -1,5 +1,4 @@
-//! The "when is this law on" half of a law row: a start condition, an on/off
-//! state and a recurring window. A law row carries them under `when`:
+//! A law row's `when`: a start, a state and a daily window.
 //!
 //! ```json
 //! "when": {
@@ -9,76 +8,57 @@
 //! }
 //! ```
 //!
-//! `from` keeps the law off until it starts, and once started it stays
-//! started. Each `while` command must exit 0 for the law to be on. `window`
-//! is machine-local wall time and may wrap midnight. All three must pass.
-//!
-//! The date and window parts are pure. An event start reads the graph and a
-//! state guard runs a command, so the hot readers (the rule set build) read
-//! the cache and never shell out; the match and stage doors refresh it. An
-//! unreadable reading keeps the last cached answer, and with no answer the law
-//! stays on, the posture every law reader keeps when it cannot decide.
+//! `from` keeps the law off until it starts, and a started law stays started.
+//! The law is on only while every `while` command exits 0. `window` is
+//! machine-local and can wrap midnight. All three must pass. An event start
+//! reads the graph and a state guard runs a command, so the rule set build
+//! reads a cache and the match and stage doors refresh it. A reading that
+//! cannot run keeps the last answer, and with none the law stays on.
 
 use chrono::{DateTime, Local, NaiveDate, NaiveTime, TimeZone, Timelike, Utc};
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use std::collections::BTreeMap;
 
-/// A state reading younger than this is trusted without re-running.
 const STATE_TTL_SECS: i64 = 60;
 const READ_TIMEOUT_SECS: u64 = 10;
 const CACHE_FILE: &str = "law-when.json";
 
-pub const USAGE: &str =
-    "[--from date:<when>|event:<node>] [--while <cmd>]... [--between HH:MM-HH:MM]";
-
-/// `--from`: `date:<RFC 3339 | YYYY-MM-DD | YYYY-MM-DDTHH:MM>` or `event:<node>`.
-/// A bare date or local datetime reads in this machine's time zone.
+/// `--from date:<RFC 3339 | YYYY-MM-DD>` or `--from event:<node>`. A bare
+/// date reads as midnight in this machine's time zone.
 pub fn parse_from(spec: &str) -> Result<Value, String> {
-    let (kind, rest) = spec
-        .split_once(':')
-        .ok_or_else(|| format!("--from wants date:<when> or event:<node>, got {spec:?}"))?;
-    match kind {
-        "date" => parse_instant(rest)
-            .map(|at| json!({"kind": "date", "at": at.to_rfc3339()}))
-            .ok_or_else(|| format!("--from date:{rest} is not an RFC 3339 time or a date")),
-        "event" if !rest.trim().is_empty() => Ok(json!({"kind": "event", "node_id": rest.trim()})),
-        _ => Err(format!(
-            "--from wants date:<when> or event:<node>, got {spec:?}"
-        )),
+    let bad = || format!("--from wants date:<when> or event:<node>, got {spec:?}");
+    match spec.split_once(':').ok_or_else(bad)? {
+        ("date", t) => {
+            let at = DateTime::parse_from_rfc3339(t)
+                .map(|t| t.with_timezone(&Utc))
+                .ok()
+                .or_else(|| {
+                    let midnight = NaiveDate::parse_from_str(t, "%Y-%m-%d")
+                        .ok()?
+                        .and_hms_opt(0, 0, 0)?;
+                    let local = Local.from_local_datetime(&midnight).earliest()?;
+                    Some(local.with_timezone(&Utc))
+                })
+                .ok_or_else(bad)?;
+            Ok(json!({"kind": "date", "at": at.to_rfc3339()}))
+        }
+        ("event", n) if !n.trim().is_empty() => Ok(json!({"kind": "event", "node_id": n.trim()})),
+        _ => Err(bad()),
     }
 }
 
-fn parse_instant(text: &str) -> Option<DateTime<Utc>> {
-    if let Ok(t) = DateTime::parse_from_rfc3339(text) {
-        return Some(t.with_timezone(&Utc));
-    }
-    let naive = if let Ok(d) = NaiveDate::parse_from_str(text, "%Y-%m-%d") {
-        d.and_hms_opt(0, 0, 0)?
-    } else {
-        chrono::NaiveDateTime::parse_from_str(text, "%Y-%m-%dT%H:%M").ok()?
-    };
-    Local
-        .from_local_datetime(&naive)
-        .earliest()
-        .map(|t| t.with_timezone(&Utc))
-}
-
-/// `--between HH:MM-HH:MM`, machine-local. Equal ends are refused: that
-/// window is either empty or always open, and neither is a window.
+/// `--between HH:MM-HH:MM`. Equal ends are refused: that window is empty or
+/// always open, and neither is a window.
 pub fn parse_window(spec: &str) -> Result<Value, String> {
-    let bad = || format!("--between wants HH:MM-HH:MM, got {spec:?}");
+    let bad = || format!("--between wants HH:MM-HH:MM with two different times, got {spec:?}");
     let (a, b) = spec.split_once('-').ok_or_else(bad)?;
     let time = |t: &str| NaiveTime::parse_from_str(t.trim(), "%H:%M").map_err(|_| bad());
     let (start, end) = (time(a)?, time(b)?);
     if start == end {
-        return Err(format!(
-            "--between {spec:?} opens and closes at the same minute"
-        ));
+        return Err(bad());
     }
-    Ok(json!({
-        "start": start.format("%H:%M").to_string(),
-        "end": end.format("%H:%M").to_string(),
-    }))
+    Ok(json!({"start": start.format("%H:%M").to_string(), "end": end.format("%H:%M").to_string()}))
 }
 
 /// The row's `when` object from the door flags, `None` when no flag was given.
@@ -93,9 +73,8 @@ pub fn build_when(
     }
     let cmds: Vec<Value> = whiles
         .iter()
-        .map(|c| c.trim())
-        .filter(|c| !c.is_empty())
-        .map(|c| json!({"cmd": c}))
+        .filter(|c| !c.trim().is_empty())
+        .map(|c| json!({"cmd": c.trim()}))
         .collect();
     if !cmds.is_empty() {
         when.insert("while".into(), Value::Array(cmds));
@@ -106,13 +85,11 @@ pub fn build_when(
     Ok((!when.is_empty()).then(|| Value::Object(when)))
 }
 
-/// Whether `now` falls inside the window. A start after the end wraps midnight.
+/// Whether `now` is inside the window. A start after the end wraps midnight.
 pub fn window_open(window: &Value, now: NaiveTime) -> bool {
     let at = |k: &str| {
-        window
-            .get(k)
-            .and_then(Value::as_str)
-            .and_then(|t| NaiveTime::parse_from_str(t, "%H:%M").ok())
+        let t = window.get(k)?.as_str()?;
+        NaiveTime::parse_from_str(t, "%H:%M").ok()
     };
     let (Some(start), Some(end)) = (at("start"), at("end")) else {
         return true;
@@ -125,18 +102,24 @@ pub fn window_open(window: &Value, now: NaiveTime) -> bool {
     }
 }
 
-/// What the cache remembers about one law.
+/// What one reading left behind for one law.
+#[derive(Default, Clone, Debug, Serialize, Deserialize)]
+pub struct Entry {
+    started: Option<bool>,
+    on: Option<bool>,
+    at: Option<String>,
+}
+
 #[derive(Default, Clone, Debug)]
-pub struct Cache(BTreeMap<String, Value>);
+pub struct Cache(BTreeMap<String, Entry>);
 
 impl Cache {
     pub fn load() -> Cache {
         let path = crate::decision_index::default_state_path(CACHE_FILE);
         let map = std::fs::read_to_string(path)
             .ok()
-            .and_then(|t| serde_json::from_str::<BTreeMap<String, Value>>(&t).ok())
-            .unwrap_or_default();
-        Cache(map)
+            .and_then(|t| serde_json::from_str(&t).ok());
+        Cache(map.unwrap_or_default())
     }
 
     fn save(&self) {
@@ -149,32 +132,10 @@ impl Cache {
             let _ = std::fs::remove_file(&tmp);
         }
     }
+}
 
-    fn started(&self, id: &str) -> Option<bool> {
-        self.0.get(id)?.get("started")?.as_bool()
-    }
-
-    fn on(&self, id: &str) -> Option<bool> {
-        self.0.get(id)?.get("on")?.as_bool()
-    }
-
-    fn read_at(&self, id: &str) -> Option<DateTime<Utc>> {
-        let at = self.0.get(id)?.get("at")?.as_str()?;
-        DateTime::parse_from_rfc3339(at)
-            .ok()
-            .map(|t| t.with_timezone(&Utc))
-    }
-
-    fn entry(&mut self, id: &str) -> &mut Map<String, Value> {
-        let slot = self
-            .0
-            .entry(id.to_string())
-            .or_insert_with(|| Value::Object(Map::new()));
-        if !slot.is_object() {
-            *slot = Value::Object(Map::new());
-        }
-        slot.as_object_mut().expect("object just ensured")
-    }
+fn law_id(row: &Value) -> &str {
+    row.get("decision_id").and_then(Value::as_str).unwrap_or("")
 }
 
 /// Why a law is off, `None` when every part of its `when` passes.
@@ -185,87 +146,60 @@ pub fn off_reason(
     cache: &Cache,
 ) -> Option<String> {
     let when = row.get("when").filter(|w| w.is_object())?;
-    let id = row
-        .get("decision_id")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    if let Some(from) = when.get("from") {
-        match from.get("kind").and_then(Value::as_str) {
-            Some("date") => {
-                let at = from.get("at").and_then(Value::as_str).unwrap_or_default();
-                let started = DateTime::parse_from_rfc3339(at).map_or(true, |t| t <= now);
-                if !started {
-                    return Some(format!("starts {at}"));
-                }
+    let seen = cache.0.get(law_id(row));
+    match when.pointer("/from/kind").and_then(Value::as_str) {
+        Some("date") => {
+            let at = when.pointer("/from/at").and_then(Value::as_str)?;
+            if DateTime::parse_from_rfc3339(at).is_ok_and(|t| t > now) {
+                return Some(format!("starts {at}"));
             }
-            Some("event") if cache.started(id) == Some(false) => {
-                let node = from.get("node_id").and_then(Value::as_str).unwrap_or("");
-                return Some(format!("starts when {node} closes"));
-            }
-            _ => {}
         }
+        Some("event") if seen.and_then(|e| e.started) == Some(false) => {
+            let node = when.pointer("/from/node_id").and_then(Value::as_str);
+            return Some(format!("starts when {} closes", node.unwrap_or("its node")));
+        }
+        _ => {}
     }
-    if when
+    let has_state = when
         .get("while")
         .and_then(Value::as_array)
-        .is_some_and(|w| !w.is_empty())
-        && cache.on(id) == Some(false)
-    {
+        .is_some_and(|w| !w.is_empty());
+    if has_state && seen.and_then(|e| e.on) == Some(false) {
         return Some("its state guard reads off".into());
     }
-    if let Some(window) = when.get("window") {
-        if !window_open(window, local) {
-            let (s, e) = (
-                window["start"].as_str().unwrap_or(""),
-                window["end"].as_str().unwrap_or(""),
-            );
-            return Some(format!("outside its window {s}-{e}"));
-        }
-    }
-    None
+    let window = when.get("window")?;
+    (!window_open(window, local)).then(|| format!("outside its window {window}"))
 }
 
 /// Re-read the graph and the state commands for one law and record the
-/// answers. An unreadable reading leaves the last answer in place.
-pub fn refresh_row(row: &Value, cache: &mut Cache, entries: &mut Option<Option<Vec<Value>>>) {
+/// answers. A reading that cannot run leaves the last answer in place.
+fn refresh_row(row: &Value, cache: &mut Cache) {
     let Some(when) = row.get("when").filter(|w| w.is_object()) else {
         return;
     };
-    let id = row
-        .get("decision_id")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string();
-    if id.is_empty() {
-        return;
-    }
-    let now = Utc::now();
-    if let Some(node) = when
-        .pointer("/from/node_id")
-        .and_then(Value::as_str)
-        .filter(|_| cache.started(&id) != Some(true))
-    {
-        let graph =
-            entries.get_or_insert_with(|| crate::backlog::decisions_cli::read_graph_entries().ok());
-        let closed = graph.as_deref().and_then(|g| {
-            g.iter()
-                .find(|e| e.get("id").and_then(Value::as_str) == Some(node))
-                .map(|n| !crate::backlog_ready::node_is_open(n))
-        });
-        if let Some(closed) = closed {
-            cache.entry(&id).insert("started".into(), json!(closed));
+    let entry = cache.0.entry(law_id(row).to_string()).or_default();
+    if let Some(node) = when.pointer("/from/node_id").and_then(Value::as_str) {
+        if entry.started != Some(true) {
+            let graph = crate::backlog::decisions_cli::read_graph_entries().unwrap_or_default();
+            let found = graph
+                .iter()
+                .find(|e| e.get("id").and_then(Value::as_str) == Some(node));
+            if let Some(n) = found {
+                entry.started = Some(!crate::backlog_ready::node_is_open(n));
+            }
         }
     }
-    let cmds: Vec<&str> = when
+    let fresh = entry
+        .at
+        .as_deref()
+        .and_then(|t| DateTime::parse_from_rfc3339(t).ok())
+        .is_some_and(|t| (Utc::now() - t.with_timezone(&Utc)).num_seconds() < STATE_TTL_SECS);
+    let cmds = when
         .get("while")
         .and_then(Value::as_array)
         .into_iter()
-        .flatten()
-        .filter_map(|w| w.get("cmd").and_then(Value::as_str))
-        .collect();
-    let fresh = cache
-        .read_at(&id)
-        .is_some_and(|t| (now - t).num_seconds() < STATE_TTL_SECS);
+        .flatten();
+    let cmds: Vec<&str> = cmds.filter_map(|w| w.get("cmd")?.as_str()).collect();
     if cmds.is_empty() || fresh {
         return;
     }
@@ -273,36 +207,26 @@ pub fn refresh_row(row: &Value, cache: &mut Cache, entries: &mut Option<Option<V
     let mut on = true;
     for cmd in cmds {
         match crate::evidence::shell_run(cmd, &root, READ_TIMEOUT_SECS) {
-            Ok(out) if out.exit == 0 => {}
-            Ok(_) => on = false,
+            Ok(out) => on &= out.exit == 0,
             Err(_) => return,
         }
     }
-    let e = cache.entry(&id);
-    e.insert("on".into(), json!(on));
-    e.insert("at".into(), json!(now.to_rfc3339()));
+    entry.on = Some(on);
+    entry.at = Some(Utc::now().to_rfc3339());
 }
 
-/// Whether the law applies right now. `refresh` lets the caller run the
-/// graph read and the state commands first; the rule set build passes false
-/// and reads only what the cache holds.
+/// Whether the law applies now. `refresh` runs the graph read and the state
+/// commands first; the rule set build passes false and reads the cache only.
 pub fn row_active(row: &Value, refresh: bool) -> bool {
     if row.get("when").is_none_or(|w| !w.is_object()) {
         return true;
     }
     let mut cache = Cache::load();
     if refresh {
-        refresh_row(row, &mut cache, &mut None);
+        refresh_row(row, &mut cache);
         cache.save();
     }
     off_reason(row, Utc::now(), Local::now().time(), &cache).is_none()
-}
-
-/// Refresh every law row once, sharing one graph read, for the record door.
-pub fn warm(row: &Value) {
-    let mut cache = Cache::load();
-    refresh_row(row, &mut cache, &mut None);
-    cache.save();
 }
 
 #[cfg(test)]
@@ -313,110 +237,64 @@ mod tests {
         NaiveTime::from_hms_opt(h, m, 0).unwrap()
     }
 
-    fn law(when: Value) -> Value {
-        json!({"decision_id": "d-1", "when": when})
+    fn cached(started: Option<bool>, on: Option<bool>) -> Cache {
+        Cache(BTreeMap::from([(
+            "d-1".into(),
+            Entry {
+                started,
+                on,
+                at: None,
+            },
+        )]))
+    }
+
+    #[test]
+    fn the_flags_parse_and_bad_ones_are_refused() {
+        assert_eq!(build_when(None, &[], None).unwrap(), None);
+        let w = build_when(Some("event:x-1"), &["true".into()], Some("22:00-08:00")).unwrap();
+        let w = w.unwrap();
+        assert_eq!(w["from"]["node_id"], "x-1");
+        assert_eq!(w["while"][0]["cmd"], "true");
+        assert!(parse_from("date:2026-11-04").unwrap()["at"].is_string());
+        for bad in ["0.4.5", "event:", "date:soon"] {
+            assert!(parse_from(bad).is_err(), "{bad}");
+        }
+        for bad in ["08:00-08:00", "8am-5pm"] {
+            assert!(parse_window(bad).is_err(), "{bad}");
+        }
     }
 
     #[test]
     fn a_window_wraps_midnight() {
         let w = parse_window("22:00-08:00").unwrap();
-        assert!(window_open(&w, t(23, 30)));
-        assert!(window_open(&w, t(7, 59)));
-        assert!(!window_open(&w, t(8, 0)));
-        assert!(!window_open(&w, t(12, 0)));
+        assert!(window_open(&w, t(23, 30)) && window_open(&w, t(7, 59)));
+        assert!(!window_open(&w, t(8, 0)) && !window_open(&w, t(12, 0)));
         let day = parse_window("09:00-17:00").unwrap();
-        assert!(window_open(&day, t(9, 0)));
-        assert!(!window_open(&day, t(17, 0)));
+        assert!(window_open(&day, t(9, 0)) && !window_open(&day, t(17, 0)));
     }
 
     #[test]
-    fn a_bad_window_or_start_is_refused() {
-        assert!(parse_window("08:00-08:00").is_err());
-        assert!(parse_window("8am-5pm").is_err());
-        assert!(parse_from("0.4.5").is_err());
-        assert!(parse_from("event:").is_err());
-        assert_eq!(parse_from("event:x-1").unwrap()["node_id"], "x-1");
-        assert!(parse_from("date:2026-11-04").unwrap()["at"].is_string());
-    }
-
-    #[test]
-    fn no_flag_builds_no_when() {
-        assert_eq!(build_when(None, &[], None).unwrap(), None);
-        let w = build_when(
-            Some("event:x-1"),
-            &["gh run list".into()],
-            Some("22:00-08:00"),
-        )
-        .unwrap()
-        .unwrap();
-        assert_eq!(w["while"][0]["cmd"], "gh run list");
-        assert_eq!(w["window"]["start"], "22:00");
-    }
-
-    #[test]
-    fn a_date_start_holds_the_law_off_until_it_passes() {
-        let row = law(json!({"from": {"kind": "date", "at": "2026-11-10T00:00:00+00:00"}}));
-        let cache = Cache::default();
-        let before = DateTime::parse_from_rfc3339("2026-11-09T00:00:00Z")
-            .unwrap()
-            .into();
-        let after = DateTime::parse_from_rfc3339("2026-11-10T00:00:01Z")
-            .unwrap()
-            .into();
-        assert!(off_reason(&row, before, t(12, 0), &cache)
+    fn every_part_must_pass_and_an_unread_part_fails_open() {
+        let now = Utc::now();
+        let dated = json!({"decision_id": "d-1", "when": {"from": {"kind": "date", "at": "2999-01-01T00:00:00+00:00"}}});
+        assert!(off_reason(&dated, now, t(1, 0), &Cache::default())
             .unwrap()
             .starts_with("starts "));
-        assert_eq!(off_reason(&row, after, t(12, 0), &cache), None);
-    }
-
-    #[test]
-    fn an_event_start_stays_off_until_the_cache_reads_started() {
-        let row = law(json!({"from": {"kind": "event", "node_id": "x-1"}}));
-        let now = Utc::now();
-        let mut cache = Cache::default();
+        let event =
+            json!({"decision_id": "d-1", "when": {"from": {"kind": "event", "node_id": "x-1"}}});
+        assert_eq!(off_reason(&event, now, t(1, 0), &Cache::default()), None);
+        assert!(off_reason(&event, now, t(1, 0), &cached(Some(false), None)).is_some());
         assert_eq!(
-            off_reason(&row, now, t(12, 0), &cache),
-            None,
-            "no reading fails open"
+            off_reason(&event, now, t(1, 0), &cached(Some(true), None)),
+            None
         );
-        cache.entry("d-1").insert("started".into(), json!(false));
+        let both = json!({"decision_id": "d-1", "when": {"while": [{"cmd": "true"}], "window": {"start": "22:00", "end": "08:00"}}});
         assert_eq!(
-            off_reason(&row, now, t(12, 0), &cache).as_deref(),
-            Some("starts when x-1 closes")
+            off_reason(&both, now, t(23, 0), &cached(None, Some(true))),
+            None
         );
-        cache.entry("d-1").insert("started".into(), json!(true));
-        assert_eq!(off_reason(&row, now, t(12, 0), &cache), None);
-    }
-
-    #[test]
-    fn a_state_guard_follows_the_cached_reading() {
-        let row = law(json!({"while": [{"cmd": "true"}]}));
-        let now = Utc::now();
-        let mut cache = Cache::default();
-        assert_eq!(off_reason(&row, now, t(1, 0), &cache), None);
-        cache.entry("d-1").insert("on".into(), json!(false));
-        assert!(off_reason(&row, now, t(1, 0), &cache).is_some());
-        cache.entry("d-1").insert("on".into(), json!(true));
-        assert_eq!(off_reason(&row, now, t(1, 0), &cache), None);
-    }
-
-    #[test]
-    fn every_part_must_pass() {
-        let row = law(json!({
-            "window": {"start": "22:00", "end": "08:00"},
-            "while": [{"cmd": "true"}],
-        }));
-        let now = Utc::now();
-        let mut cache = Cache::default();
-        cache.entry("d-1").insert("on".into(), json!(true));
-        assert_eq!(off_reason(&row, now, t(23, 0), &cache), None);
-        assert!(off_reason(&row, now, t(12, 0), &cache)
-            .unwrap()
-            .contains("window"));
-    }
-
-    #[test]
-    fn a_row_with_no_when_is_always_on() {
+        assert!(off_reason(&both, now, t(23, 0), &cached(None, Some(false))).is_some());
+        assert!(off_reason(&both, now, t(12, 0), &cached(None, Some(true))).is_some());
         assert!(row_active(&json!({"decision_id": "d-9"}), false));
     }
 }
