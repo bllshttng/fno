@@ -198,6 +198,11 @@ fn main() {
     if args.first() == Some(&"do".to_string()) && args.get(1) == Some(&"ci".to_string()) {
         std::process::exit(fno_agents::ci_front::run(&args[2..]));
     }
+    if args.first().map(String::as_str) == Some("do")
+        && matches!(args.get(1).map(String::as_str), Some("show" | "diff"))
+    {
+        std::process::exit(fno_agents::rev_front::run(&args[1..]));
+    }
     // gh-cache, target-status: the early transport arms; client_transport.rs
     // holds their bodies and comments. worktree-reapable and launch-workdir
     // stay here: their own ports own the moves into their modules.
