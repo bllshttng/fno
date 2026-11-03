@@ -2,7 +2,7 @@
 //! binary or a hook script that writes the legacy spelling after a fold
 //! recreates the legacy folder, and the per-child park rule would hide those
 //! lines from every reader. `bus`, `chats` and `history` fold through here
-//! instead: a child the destination lacks renames in, a journal merges by
+//! instead: a child the destination lacks renames in, a line log merges by
 //! line set, anything else keeps the newer file and parks the older.
 
 use std::collections::HashSet;
@@ -39,7 +39,7 @@ pub(crate) fn merge_tree(
                 } else {
                     complete = false;
                 }
-            } else if is_journal(&name) {
+            } else if is_line_log(&name) {
                 complete &= merge_lines(&from, &to)?;
             } else {
                 keep_newer(root, stamp, &from, &to)?;
@@ -57,8 +57,8 @@ pub(crate) fn merge_tree(
     Ok(complete)
 }
 
-/// A line journal: `x.jsonl` or a rotated segment `x.jsonl.<n>`.
-fn is_journal(name: &str) -> bool {
+/// A line log: `x.jsonl` or a rotated segment `x.jsonl.<n>`.
+fn is_line_log(name: &str) -> bool {
     name.ends_with(".jsonl")
         || name
             .rsplit_once(".jsonl.")
@@ -125,7 +125,7 @@ fn merge_lines(from: &Path, to: &Path) -> Result<bool, String> {
     Ok(true)
 }
 
-/// Two copies of a non-journal file: the newer one stays at `to`, the older
+/// Two copies of a non-log file: the newer one stays at `to`, the older
 /// parks.
 fn keep_newer(root: &Path, stamp: &str, from: &Path, to: &Path) -> Result<(), String> {
     let mtime = |p: &Path| {
