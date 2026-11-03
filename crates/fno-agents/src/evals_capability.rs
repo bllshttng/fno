@@ -331,6 +331,11 @@ pub(crate) fn graduation_pr(
     repo: &Path,
     day: DateTime<Utc>,
 ) -> Result<Option<String>, String> {
+    // An open PR on the day's branch would swallow a second batch unpushed.
+    let branch = format!("evals/graduate-{}", day.format("%Y-%m-%d"));
+    if matches!(crate::bank_pr::existing_pr(repo, &branch), Ok(Some(_))) {
+        return Ok(None);
+    }
     let ids = eligible(history, repo);
     open_graduation(history, repo, day, &ids)
 }

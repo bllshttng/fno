@@ -15,7 +15,7 @@ fn run(cwd: &Path, bin: &str, args: &[&str]) -> Result<String, String> {
 }
 
 /// URL of the open PR whose head is `branch`, if one exists.
-fn existing_pr(root: &Path, branch: &str) -> Result<Option<String>, String> {
+pub(crate) fn existing_pr(root: &Path, branch: &str) -> Result<Option<String>, String> {
     let args = [
         "pr", "list", "--head", branch, "--state", "open", "--json", "url", "--jq", ".[0].url",
     ];

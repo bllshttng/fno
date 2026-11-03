@@ -290,6 +290,12 @@ fn spawn_reader(
 /// The daemon's daily entry, called after the drafts pass.
 pub(crate) fn daily(dir: &Path) {
     let Some(repo) = bank_repo() else { return };
+    // `open` returns an open PR on the day's branch without pushing to it, so
+    // a second batch that day would be recorded as shipped and lost.
+    let branch = format!("evals/golden-drafts-{}", Utc::now().format("%Y-%m-%d"));
+    if matches!(crate::bank_pr::existing_pr(&repo, &branch), Ok(Some(_))) {
+        return;
+    }
     let max = max_per_day(&repo);
     let open = |branch: &str, title: &str, body: &str, edits: &[(PathBuf, Vec<u8>)]| {
         crate::bank_pr::open(&repo, branch, title, body, edits)
