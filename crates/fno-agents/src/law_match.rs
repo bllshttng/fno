@@ -3408,7 +3408,7 @@ pub(crate) mod scope_tests {
         let refused = parse_record_door(&argv(&["s", "--filter", "lead=rowan"]))
             .err()
             .expect("lead has no source yet");
-        assert!(refused.contains("x-ffc5"), "{refused}");
+        assert!(refused.contains("no identity source"), "{refused}");
     }
 
     #[test]

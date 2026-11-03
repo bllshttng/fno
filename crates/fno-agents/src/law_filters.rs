@@ -7,8 +7,8 @@
 //!
 //! A filter reads a fact about the reading session. A session that cannot
 //! name the fact fails open, the posture every law reader keeps. A key with no
-//! fact source today is refused at record time and names the node that will
-//! supply it, so a law never stores a filter nothing can enforce.
+//! fact source today is refused at record time, so a law never stores a
+//! filter nothing can enforce.
 
 use serde_json::Value;
 
@@ -27,15 +27,9 @@ pub const SOURCED_KEYS: &[(&str, &str)] = &[
     ("branch", "the checked-out branch"),
 ];
 
-/// Keys the spec names that no session fact backs yet, with the node that
-/// will supply the source.
-pub const UNSOURCED_KEYS: &[(&str, &str)] = &[
-    ("lead", "x-ffc5"),
-    ("role", "x-ffc5"),
-    ("lane", "x-5428"),
-    ("pr_label", "x-5428"),
-    ("pr_over_lines", "x-5428"),
-];
+/// Keys the spec names that no session fact backs yet. The door refuses
+/// them, so a law never stores a filter nothing can enforce.
+pub const UNSOURCED_KEYS: &[&str] = &["lead", "role", "lane", "pr_label", "pr_over_lines"];
 
 /// Parse `key=value` for a record flag: the key must be sourced, and the
 /// `not_` form is the caller's job (the flag decides it, not the key).
@@ -50,9 +44,9 @@ pub fn parse_pair(spec: &str) -> Result<(String, String), String> {
     if SOURCED_KEYS.iter().any(|(k, _)| *k == key) {
         return Ok((key.to_string(), value.to_string()));
     }
-    if let Some((_, node)) = UNSOURCED_KEYS.iter().find(|(k, _)| *k == key) {
+    if UNSOURCED_KEYS.contains(&key) {
         return Err(format!(
-            "filter {key} has no identity source yet; node {node} supplies it"
+            "filter {key} has no identity source yet, so the door cannot enforce it"
         ));
     }
     let known: Vec<&str> = SOURCED_KEYS.iter().map(|(k, _)| *k).collect();
@@ -227,8 +221,10 @@ mod tests {
             parse_pair("harness=codex").unwrap(),
             ("harness".into(), "codex".into())
         );
-        assert!(parse_pair("lead=rowan").unwrap_err().contains("x-ffc5"));
-        assert!(parse_pair("pr_label=paint").unwrap_err().contains("x-5428"));
+        assert!(parse_pair("lead=rowan")
+            .unwrap_err()
+            .contains("no identity source"));
+        assert!(parse_pair("pr_label=paint").is_err());
         assert!(parse_pair("colour=red")
             .unwrap_err()
             .contains("no such filter"));
