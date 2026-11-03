@@ -109,7 +109,7 @@ fn parent_edge_args(session: Option<&str>) -> Vec<String> {
 /// Binary-direct entry from `fno-agents spawn-remote <tail...>`, where the
 /// tail is the spawn argv after the command word.
 pub fn run(args: &[String]) -> i32 {
-    let local_host = crate::claims::hostname();
+    let local_host = crate::name_ledger::local_bus_host();
     let plan = match spawn_plan(args, &local_host) {
         Ok(plan) => plan,
         Err(e) => {
