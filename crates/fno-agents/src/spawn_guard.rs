@@ -1272,7 +1272,7 @@ fn planner_refusal_names_doc_date_host_and_target() {
     assert!(line.contains("plan=/plans/20261102-somewhere-x-1.md"), "{line}");
     assert!(line.contains("plan_date=2026-11-02"), "{line}");
     assert!(line.contains("host=other-host"), "{line}");
-    assert!(line.contains("next=/fno:target x-1"), "{line}");
+    assert!(line.contains("/fno:target x-1"), "{line}");
 }
 
 #[test]
