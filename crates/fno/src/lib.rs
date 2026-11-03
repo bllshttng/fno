@@ -260,7 +260,6 @@ pub mod spawn_journal;
 #[cfg(feature = "full")]
 pub mod splash;
 #[cfg(feature = "full")]
-#[cfg(feature = "full")]
 pub mod squad;
 #[cfg(feature = "full")]
 pub mod squad_cascade;
@@ -318,7 +317,6 @@ pub mod wizard_term;
 pub mod wordmark;
 #[cfg(feature = "full")]
 pub mod worktree_door;
-#[cfg(feature = "full")]
 
 #[cfg(feature = "full")]
 pub mod doctor;
