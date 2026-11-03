@@ -192,8 +192,12 @@ fn write_stubs(dir: &Path) {
 }
 
 fn run_command(dir: &Path, extra: &[&str]) -> (i32, String, String) {
+    // The cancel journals its intent row first; keep it out of the real home.
+    let agents = dir.join("agents-home");
+    std::fs::create_dir_all(&agents).unwrap();
     let out = Command::new(env!("CARGO_BIN_EXE_fno-agents"))
         .envs(fno_agents::test_run::self_owner_env())
+        .env("FNO_AGENTS_HOME", &agents)
         .args(["pr-push"])
         .arg("--cwd")
         .arg(dir)

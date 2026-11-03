@@ -179,7 +179,7 @@ fn pass_repo(root: &Path, slug: &str, path: &Path, paint: &PaintCache) -> Result
             if list.is_empty() {
                 continue;
             }
-            let runs = &crate::ci_tier::act(root, &[(pr, list)], action)[0]["runs"];
+            let runs = &crate::ci_tier::act(root, &[(pr, list)], action, "look_hold")[0]["runs"];
             let data = json!({"slug": slug, "pr": pr, "sha": sha, "runs": runs});
             emitter
                 .emit(kind, &data)

@@ -35,7 +35,6 @@
 # read from its dispatchers and cross-checked against the live binary, but its
 # FLAGS are not enumerated, so a hidden flag on a mux command is invisible to this
 # gate. The lint output names that boundary on every green run.
-approvals
 backlog
 backlog advance
 backlog done
@@ -54,15 +53,6 @@ doctor
 evals
 fno-agents
 help
-inbox approvals decide
-inbox approvals ls
-inbox approvals show
-inbox operator ack
-inbox operator list
-inbox operator status
-inbox user ack
-inbox user list
-inbox user status
 mux
 paths
 plan
