@@ -120,7 +120,7 @@ _SWEEP_GRACE_S=300
 # Where the two files below live. `$SCRIPT_DIR/../.fno` is right for a real
 # session: the cache is per-checkout. It is wrong under a test runner, where
 # executing this hook writes the checkout's own state root, which is live state
-# on a developer box and a hand-built `<root>/.fno/<file>` path either way.
+# on a developer machine and a hand-built `<root>/.fno/<file>` path either way.
 #
 # `FNO_TEST_HERMETIC=1` declares a sandboxed process root, and the pytest
 # conftest chain stamps it with `HOME` inside the sandbox, so honouring it here

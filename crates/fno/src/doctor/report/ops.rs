@@ -47,7 +47,7 @@ fn find_transcript_for(session_id: &str) -> Option<PathBuf> {
 /// Most recent ledger-registered session whose transcript survives
 /// (doctor.py:897-911).
 pub(crate) fn find_recent_session_with_transcript() -> Option<(String, PathBuf)> {
-    let ledger = state_dir().join("ledger.json");
+    let ledger = crate::state_layout::place(&state_dir(), "ledger.json");
     let data = std::fs::read_to_string(&ledger).ok()?;
     let payload: Value = serde_json::from_str(&data).ok()?;
     let entries = match &payload {

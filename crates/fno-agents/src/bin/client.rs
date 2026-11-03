@@ -416,7 +416,7 @@ async fn run(args: Vec<String>) -> i32 {
     }
 
     // `orphan-reap` is the hidden reap lever for orphaned cargo test binaries:
-    // the daemon's 300s sweep and a human on a wedged box both run
+    // the daemon's 300s sweep and a human on a wedged machine both run
     // it binary-direct. Same `matches!` treatment as `mail-inject` so it stays
     // out of CLIENT_COMMAND_USAGE / RUST_CLIENT_COMMANDS and the routable-command
     // parity guard - it reads one ps snapshot and prints, it is not an
@@ -2294,10 +2294,10 @@ fn maybe_run_spawn(
             Ok(None) => fno_agents::spawn_cwd::resolve_dispatch_cwd(params),
         }
     };
-    // `[sandbox] provider`: refuse a spawn the box cannot carry before the
-    // guard and the gate; the box itself comes up after the gate admits.
-    let boxed = match fno_agents::sandbox_launch::check(&cwd, provider, public_substrate) {
-        Ok(boxed) => boxed,
+    // `[sandbox] provider`: refuse a spawn the sandbox cannot carry before the
+    // guard and the gate; the sandbox itself comes up after the gate admits.
+    let sandboxed = match fno_agents::sandbox_launch::check(&cwd, provider, public_substrate) {
+        Ok(sandboxed) => sandboxed,
         Err((code, reason)) => {
             eprintln!("fno-agents spawn: {reason}");
             return Some(code);
@@ -2457,7 +2457,7 @@ fn maybe_run_spawn(
         }};
     }
 
-    if boxed {
+    if sandboxed {
         if let Err((code, reason)) = fno_agents::sandbox_launch::arm(home, &cwd) {
             eprintln!("fno-agents spawn: [sandbox] devcontainer refused: {reason}");
             if let Some(g) = gate_guard.as_mut() {

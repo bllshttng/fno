@@ -10,7 +10,7 @@
 //! - AC12-ERR: Rust holds LOCK_EX, Python's non-blocking acquire fails.
 //!
 //! Skips cleanly (does not fail) when `python3` is unavailable, so a Rust-only
-//! dev box still passes; CI for this Python-first project always has python3.
+//! dev machine still passes; CI for this Python-first project always has python3.
 
 use std::io::Write;
 use std::path::PathBuf;

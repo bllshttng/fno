@@ -256,7 +256,7 @@ fn cases() -> Vec<Case> {
             claims: &[],
             expect_err: false,
         },
-        // Containers are never actionable work: the box vs its leaves.
+        // Containers are never actionable work: the container vs its leaves.
         Case {
             name: "containers",
             flags: &["-A"],
