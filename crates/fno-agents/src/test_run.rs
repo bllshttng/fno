@@ -715,13 +715,19 @@ pub fn owner_from_env() -> Option<(u32, u64)> {
 
 /// The current process identity in the environment shape inherited by every
 /// test-spawned daemon or client.
-pub fn self_owner_env() -> [(&'static str, String); 2] {
+pub fn self_owner_env() -> [(&'static str, String); 3] {
     let pid = std::process::id();
     let birth = crate::daemon::process_start_time(pid)
         .expect("the current test process must have a readable birth time");
     [
         ("FNO_TEST_OWNER_PID", pid.to_string()),
         ("FNO_TEST_OWNER_BIRTH", birth.to_string()),
+        // The notify dispatch runs in-process in this binary now, so a child
+        // that reaches a notice would toast the operator's screen for real
+        // (the 2026-10-01 leak class). The hermetic stamp is the family's
+        // designed suppression: the mux spawn and the toast skip, the
+        // channel verdict stays honest.
+        ("FNO_TEST_HERMETIC", "1".to_string()),
     ]
 }
 

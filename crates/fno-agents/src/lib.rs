@@ -415,6 +415,7 @@ pub mod node_reading;
 pub mod node_route;
 pub mod node_seed;
 pub mod notice_route;
+pub mod notify_dispatch;
 pub mod nudge;
 pub mod numbers;
 pub mod observer;
