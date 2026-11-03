@@ -79,8 +79,8 @@ mod tests {
 
     #[test]
     fn command_names_refuse_retired_and_unknown_root_words() {
-        // The root holds twelve live names (d-aef0ed7b), and each passes.
-        assert_eq!(live_roots().len(), 12, "{:?}", live_roots());
+        // The root holds thirteen live names (d-dae52645), and each passes.
+        assert_eq!(live_roots().len(), 13, "{:?}", live_roots());
         assert!(live_roots().iter().all(|w| refusal(&[w, "x"]).is_none()));
         assert!(refusal(&[]).is_none() && refusal(&["--session", "work"]).is_none());
         // A retired word names its new spelling; a removed one says why;
