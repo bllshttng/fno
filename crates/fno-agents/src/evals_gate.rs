@@ -54,6 +54,31 @@ const MAX_TASK_WALL_S: f64 = 180.0;
 const NEW_HEADS_PER_TICK: usize = 10;
 const DEFAULT_DAILY_USD: f64 = 15.0;
 const DEFAULT_LANE: &str = "zai-flash";
+/// The user's zai-peak ruling: Monday to Friday, 06:00 to 10:00 UTC, zai burns
+/// credits at twice the rate, so the gate keeps its runs off zai then.
+fn zai_peak(now: DateTime<Utc>) -> bool {
+    use chrono::{Datelike, Timelike};
+    now.weekday().num_days_from_monday() < 5 && (6..10).contains(&now.hour())
+}
+
+/// True when `lane` rides zai, read from the routing inventory. A lane the
+/// inventory does not list is no zai lane.
+fn lane_is_zai(repo: &Path, lane: &str) -> bool {
+    crate::route_gather::inventory(repo)
+        .get("rows")
+        .and_then(Value::as_array)
+        .and_then(|rows| rows.iter().find(|r| r["name"].as_str() == Some(lane)))
+        .is_some_and(|r| {
+            r["account"].as_str() == Some("zai")
+                || r["route"].as_str().is_some_and(|v| v.starts_with("zai/"))
+        })
+}
+
+/// True when a gate run on `lane` waits for the peak window to end.
+pub(crate) fn zai_peak_hold(repo: &Path, lane: &str, now: DateTime<Utc>) -> bool {
+    zai_peak(now) && lane_is_zai(repo, lane)
+}
+
 /// Runs once when the main lane gives up with no grade, so a capped lane does
 /// not leave the day without graded rows.
 const FALLBACK_LANE: &str = "claude-sonnet-5";
@@ -638,6 +663,9 @@ fn main_seat(
             Err(cause) => return (main_failed(d, state, seat, &cohort, cause), false),
         }
     };
+    if zai_peak_hold(p.repo, &lane, d.now) {
+        return (format!("main {cohort} waits out the zai peak"), true);
+    }
     let run_cohort = if fallback {
         format!("{cohort}{FALLBACK_SUFFIX}")
     } else {
@@ -1017,6 +1045,9 @@ fn launch_head(
     }
     let cohort = format!("gate-head-{}", short(&pr.sha));
     let lane = config_lane(p.repo);
+    if zai_peak_hold(p.repo, &lane, d.now) {
+        return format!("head {} waits out the zai peak", short(&pr.sha));
+    }
     let argv = run_argv(
         p,
         ("--task", &tasks.join(",")),
@@ -1474,6 +1505,19 @@ mod tests {
             state.last_note
         );
         assert!(state.worker.baseline.is_none());
+    }
+
+    #[test]
+    fn zai_peak_is_monday_to_friday_0600_to_1000_utc() {
+        let at = |s: &str| DateTime::parse_from_rfc3339(s).unwrap().with_timezone(&Utc);
+        assert!(zai_peak(at("2026-11-02T06:00:00Z")), "Monday 06:00 opens");
+        assert!(zai_peak(at("2026-11-06T09:59:00Z")), "Friday 09:59 holds");
+        assert!(!zai_peak(at("2026-11-02T10:00:00Z")), "10:00 closes");
+        assert!(!zai_peak(at("2026-11-02T05:59:00Z")), "before 06:00");
+        assert!(
+            !zai_peak(at("2026-11-07T07:00:00Z")),
+            "Saturday is off peak"
+        );
     }
 
     #[test]
