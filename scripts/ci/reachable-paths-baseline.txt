@@ -7,7 +7,6 @@ A	</fno_relay_compression>	py=cli/src/fno/agents/spawn_payload.py;rs=crates/fno-
 A	[(](?:[yy]/[nn]|+(?:/+)+)[)]*$	py=cli/src/fno/agents/session_truth.py;rs=crates/fno-agents/src/session_truth.rs	# CLASSIFY protocol|msg-twin|data
 A	[a-z][a-z0-9]{0,7}-?[0-9a-f]{4,8}	py=cli/src/fno/rust_binary.py|hooks/git_protection_impl.py;rs=crates/fno-agents/src/org_board/queues.rs	# CLASSIFY protocol|msg-twin|data
 A	^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$	py=cli/src/fno/agents/store_fallback.py|scripts/diagnostics/codex-lead-continuation-smoke.py;rs=crates/fno/src/doctor/bind_canary.rs|crates/fno/src/doctor/report/ops.rs	# CLASSIFY protocol|msg-twin|data
-A	`([^`]+/[^`]+[a-za-z0-9_]+)`	py=cli/src/fno/plan/reconcile.py;rs=crates/fno-agents/src/target_orient.rs	# CLASSIFY protocol|msg-twin|data
 A	account_identity_mismatch	py=cli/src/fno/adapters/providers/binding.py;rs=crates/fno-agents/src/accounts/binding.rs	# CLASSIFY protocol|msg-twin|data
 A	account_identity_unknown	py=cli/src/fno/adapters/providers/binding.py;rs=crates/fno-agents/src/accounts/binding.rs	# CLASSIFY protocol|msg-twin|data
 A	active_record_not_found: '{active}' is not in records	py=cli/src/fno/adapters/providers/loader.py;rs=crates/fno-agents/src/accounts/records.rs	# CLASSIFY protocol|msg-twin|data
@@ -117,7 +116,6 @@ A	native claim verdict omitted sweep fields	py=cli/src/fno/claims/core.py;rs=cra
 A	needs every session lane	py=cli/src/fno/agents/harness_map.py;rs=crates/fno-agents/src/harness_capabilities.rs	# CLASSIFY protocol|msg-twin|data
 A	no live {cli} login in the shared slot; sign in, then reconcile	py=cli/src/fno/adapters/providers/managed.py;rs=crates/fno-agents/src/accounts/reconcile.rs	# CLASSIFY protocol|msg-twin|data
 A	no provable session identity	py=cli/src/fno/claims/self_identity.py;rs=crates/fno-agents/src/backlog/create_cli.rs	# CLASSIFY protocol|msg-twin|data
-A	none (no file paths found in plan)	py=cli/src/fno/plan/reconcile.py;rs=crates/fno-agents/src/target_orient.rs	# CLASSIFY protocol|msg-twin|data
 A	normalizederror.model must be a non-empty string when set	py=cli/src/fno/adapters/providers/error_taxonomy.py;rs=crates/fno-agents/src/accounts/error_class.rs	# CLASSIFY protocol|msg-twin|data
 A	obsidian.enabled is true but obsidian.vault is not set	py=cli/src/fno/config/__init__.py;rs=crates/fno/src/config_cli/model/validators_core.rs	# CLASSIFY protocol|msg-twin|data
 A	only an extension harness may name a loop artifact	py=cli/src/fno/agents/harness_map.py;rs=crates/fno-agents/src/harness_capabilities.rs	# CLASSIFY protocol|msg-twin|data
@@ -157,7 +155,6 @@ A	task {task_id} of node {node_id}	py=cli/src/fno/claims/tasks.py;rs=crates/fno-
 A	task:{node_id}:{task_id}	py=skills/execute/orchestrator.py;rs=crates/fno-agents/src/backlog/task.rs	# CLASSIFY protocol|msg-twin|data
 A	the shared ~/.claude slot	py=cli/src/fno/adapters/providers/binding.py;rs=crates/fno-agents/src/accounts/binding.rs	# CLASSIFY protocol|msg-twin|data
 A	then act on the printout per the lead skill. when nothing changed and	py=cli/src/fno/config/_lead.py;rs=crates/fno/src/config_cli/model/validators_blocks.rs	# CLASSIFY protocol|msg-twin|data
-A	unknown (plan unreadable: {exc})	py=cli/src/fno/plan/reconcile.py;rs=crates/fno-agents/src/target_orient.rs	# CLASSIFY protocol|msg-twin|data
 A	unsupported strategy has executable data	py=cli/src/fno/agents/harness_map.py;rs=crates/fno-agents/src/harness_capabilities.rs	# CLASSIFY protocol|msg-twin|data
 A	worktree slice of the space	py=cli/src/fno/paths.py;rs=crates/fno/src/config_doctor/reporters.rs	# CLASSIFY protocol|msg-twin|data
 A	{4}-{2}-{2}[t ]{2}:{2}(?::{2})?(?:+)?	py=cli/src/fno/adapters/providers/error_taxonomy.py;rs=crates/fno-agents/src/accounts/error_class.rs	# CLASSIFY protocol|msg-twin|data

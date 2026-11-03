@@ -392,7 +392,7 @@ kind: quick-plan
 created: <YYYY-MM-DD>      # required; the consolidation gate reads it
 difficulty: <low|medium|high> # required for plans created after 2026-08-26
 join: <manual|auto>        # who hands out the remaining waves; the join-posture gate asks
-# carveouts: forbidden     # set when the plan says one PR, no follow-up nodes; fno.plan.fidelity refuses a PR that declares an exclusion
+# carveouts: forbidden     # set when the plan says one PR, no follow-up nodes; the fidelity gate refuses a PR that declares an exclusion
 # claims: ab-XXXXXXXX      # only when the input was an ab-id
 # executor: tdd            # transcribed from a Locked Decision, if any
 consolidation:             # step 2d, exactly one outcome (see 2d above)
@@ -586,7 +586,7 @@ Any attempt to write outside this allowlist exits 2. Author-owned sections (Over
 
 ### Acceptance criteria compilation
 
-The `## Acceptance Criteria` section is **source**: authors and native plan modes have creative freedom in how they phrase a criterion. Blueprint compiles that source into strict execution semantics through one canonical compiler (`cli/src/fno/plan/criteria.py`), the same implementation the mutation script, the semantic validator, and the worker-brief generator all call.
+The `## Acceptance Criteria` section is **source**: authors and native plan modes have creative freedom in how they phrase a criterion. Blueprint compiles that source into strict execution semantics through one canonical compiler (`crates/fno-agents/src/plan_doc/criteria.rs`), the same implementation the mutation script, the semantic validator, and the worker-brief generator all call.
 
 Accepted source shapes (container syntax alone does not decide validity; a candidate is valid when it yields a non-empty statement):
 

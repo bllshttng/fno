@@ -84,7 +84,6 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
     # the entries below whose names
     # are retired at the front door (crates/fno/command-names.tsv) and answer
     # only through fno-py.
-    "plan": ("fno.plan:plan_app", "Plan frontmatter stamping (in-package)", {"hidden": True}),
     "bundle": (
         "fno.doctor_foreign:bundle_signpost",
         "Skill bundle build + lint; moved to `fno doctor bundle`.",

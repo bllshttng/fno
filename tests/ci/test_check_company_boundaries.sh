@@ -15,7 +15,7 @@ fail() { echo "  FAIL: $1"; FAILS=$((FAILS + 1)); }
 make_repo() {
     local root="$1"
     mkdir -p "$root/cli/src/fno/company" "$root/cli/src/fno/agents" \
-        "$root/cli/src/fno/plan" "$root/agents" "$root/skills" "$root/plugins"
+        "$root/cli/src/fno/claims" "$root/agents" "$root/skills" "$root/plugins"
     printf 'class WorkOrderRef:\n    pass\n' > "$root/cli/src/fno/company/contracts.py"
     printf 'from fno.claims.core import claim_status\n' \
         > "$root/cli/src/fno/agents/role.py"
@@ -131,14 +131,14 @@ echo "== ImportFrom aliases and package-relative imports cannot bypass the map =
 ALIASES="$TMP/aliases"
 make_repo "$ALIASES"
 printf 'from fno import agents\n' > "$ALIASES/cli/src/fno/company/contracts.py"
-printf 'from .. import agents\n' > "$ALIASES/cli/src/fno/plan/__init__.py"
+printf 'from .. import agents\n' > "$ALIASES/cli/src/fno/claims/__init__.py"
 out="$(bash "$CHECK" --strict "$ALIASES" 2>&1)"; rc=$?
 [[ $rc -eq 1 ]] && ok "alias forms exit one" || fail "expected exit 1, got $rc: $out"
 grep -q <<<"$out" 'cli/src/fno/company/contracts.py:1: L1 core -> L5 runtime / from fno import agents' \
     && ok "absolute package alias caught" || fail "absolute alias missed: $out"
 [[ "$(echo "$out" | grep -c 'cli/src/fno/company/contracts.py:1: L1 core -> L5 runtime')" -eq 1 ]] \
     && ok "absolute alias emits one finding" || fail "absolute alias duplicated: $out"
-grep -q <<<"$out" 'cli/src/fno/plan/__init__.py:1: L1 core -> L5 runtime / from .. import agents' \
+grep -q <<<"$out" 'cli/src/fno/claims/__init__.py:1: L1 core -> L5 runtime / from .. import agents' \
     && ok "relative package alias caught" || fail "relative alias missed: $out"
 
 echo "== the public fno.company facade is part of the core layer =="
