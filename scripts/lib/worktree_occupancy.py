@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -26,7 +27,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional, Tuple
 
-from fno.agents.session_truth import STALLED_AFTER_S
+# The stalled threshold's canonical owner is STALLED_AFTER_S in
+# crates/fno-agents/src/session_truth.rs:60; this is the grandfathered
+# classifier's local mirror, kept in sync by readers, not an import.
+STALLED_AFTER_S = 2 * 3600
 
 HOLDS = "holds"
 INERT = "inert"
@@ -278,6 +282,47 @@ def _job_state_reader(home: str, now: float) -> Callable[[str], Optional[Tuple[s
     return read
 
 
+def _agents_bin() -> str:
+    """The fno-agents binary, resolved like hooks/lib/agents-bin.sh: env
+    override, then this checkout's target builds, then PATH."""
+    root = Path(__file__).resolve().parents[2]
+    override = os.environ.get("FNO_AGENTS_BIN")
+    if override and os.access(override, os.X_OK):
+        return override
+    for rel in ("crates/fno-agents/target/release/fno-agents",
+                "crates/fno-agents/target/debug/fno-agents"):
+        candidate = root / rel
+        if os.access(candidate, os.X_OK):
+            return str(candidate)
+    return shutil.which("fno-agents") or ""
+
+
+def _bg_socket_pid_map() -> Dict[str, int]:
+    """The live claude bg socket map through `fno-agents occupancy-login
+    --bg-sockets` (crates/fno-agents/src/footprint_cause.rs is the owner).
+
+    Best effort like the Rust map itself: any failure (no binary, a failing
+    run, unparseable rows) returns {}, which every reader treats as unknown,
+    never as no sessions."""
+    bin_path = _agents_bin()
+    if not bin_path:
+        return {}
+    try:
+        out = subprocess.run(
+            [bin_path, "occupancy-login", "--bg-sockets"],
+            capture_output=True, text=True, timeout=30, check=True,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return {}
+    mapping: Dict[str, int] = {}
+    for row in out.stdout.splitlines():
+        parts = row.split("\t")
+        if len(parts) != 2 or not parts[0] or not parts[1].isdigit():
+            return {}
+        mapping[parts[0]] = int(parts[1])
+    return mapping
+
+
 def main(argv: List[str]) -> int:
     """``python scripts/lib/worktree_occupancy.py <worktree> <pid>...``
 
@@ -295,11 +340,9 @@ def main(argv: List[str]) -> int:
             if isinstance(pid, int):
                 procs[pid] = info
 
-        from fno.agents.session_procs import bg_socket_pid_map
-
         keeper_verdicts = _keeper_verdicts() if pids else None
 
-        socket_map = bg_socket_pid_map()
+        socket_map = _bg_socket_pid_map()
         job_of_pid: Optional[Dict[int, str]] = None
         if socket_map:
             job_of_pid = {pid: job for job, pid in socket_map.items()}
