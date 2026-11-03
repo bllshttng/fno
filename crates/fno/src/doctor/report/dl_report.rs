@@ -75,7 +75,7 @@ fn evals_stale_days() -> i64 {
 }
 
 pub(crate) fn evals_summary() -> Value {
-    let path = state_dir().join("history/evals-history.jsonl");
+    let path = crate::state_layout::place_in(&state_dir(), "history", "evals-history.jsonl");
     if !path.exists() {
         return Value::Null;
     }
