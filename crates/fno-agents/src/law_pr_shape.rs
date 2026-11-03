@@ -80,7 +80,8 @@ fn read_shape(root: &Path, slug: &str, head_ref: &str, now: f64) -> Option<PrSha
 /// The shape of the PR on `branch`, from the stamped row. No network read.
 pub fn session_shape(cwd: &Path, branch: &str) -> Option<PrShape> {
     let root = crate::gh_cache::rows_root(cwd)?;
-    let slug = crate::finalize::slug_from_git_remote(cwd)?;
+    let url = crate::finalize::git_capture(cwd, &["config", "--get", "remote.origin.url"])?;
+    let slug = crate::backlog::pr_link::slug_from_remote(&url)?;
     read_shape(&root, &slug, branch, crate::gh_cache::now_secs())
 }
 
