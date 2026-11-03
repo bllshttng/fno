@@ -754,7 +754,6 @@ pub mod worker_wake;
 pub mod worktree;
 pub mod worktree_reapable;
 pub mod write_queue;
-pub mod yard;
 pub mod you_threads;
 pub mod zcode;
 pub mod zcode_ask;

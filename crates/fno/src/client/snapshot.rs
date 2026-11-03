@@ -23,7 +23,7 @@ const USAGE: &str =
     "usage: fno mux serve --snapshot --server <name> --out <path> [--squad <name>] \
 [--theme dark|light|macchiato] [--format html|svg|png] [--size <cols>x<rows> [--fit]] [--peer <cols>x<rows>] \
 [--font <family>] [--message <fmail-id>] [--edge backlog|messages-tree|messages-part|org|dock=<size>] \
-[--view bell|bell-wide|bell-full|feed|row-menu|hover|cursor|tab-menu|sideline-menu|composer|split-menu|settings|keys|org-block|org-table|org-recent|org-overview|org-graph|org-health|org-seat|org-feed|org-system|messages-tree|messages-chats|messages-thread|messages-system|messages-archive|backlog-list|backlog-kanban|review-diff|review-panel|review-panel-drag|navigator-pr|navigator-model|navigator-menu|feed-detail|question-detail|connections|connections-use|yard|needs|dock]";
+[--view bell|bell-wide|bell-full|feed|row-menu|hover|cursor|tab-menu|sideline-menu|composer|split-menu|settings|keys|org-block|org-table|org-recent|org-overview|org-graph|org-health|org-seat|org-feed|org-system|messages-tree|messages-chats|messages-thread|messages-system|messages-archive|backlog-list|backlog-kanban|review-diff|review-panel|review-panel-drag|navigator-pr|navigator-model|navigator-menu|feed-detail|question-detail|connections|connections-use|needs|dock]";
 
 #[derive(Debug, PartialEq)]
 pub enum Format {
@@ -125,8 +125,6 @@ pub enum ViewKind {
     /// The connections overlay with the `u` confirm staged on the first
     /// account that is not active.
     ConnectionsUse,
-    /// The yard overlay on its first citizen.
-    Yard,
     /// The needs-me overlay with its first row picked, after the same
     /// questions gather the bell shots run.
     Needs,
@@ -207,7 +205,6 @@ fn parse_view(v: &str) -> Option<ViewKind> {
         "question-detail" => Some(ViewKind::QuestionDetail),
         "connections" => Some(ViewKind::Connections),
         "connections-use" => Some(ViewKind::ConnectionsUse),
-        "yard" => Some(ViewKind::Yard),
         "needs" => Some(ViewKind::Needs),
         "dock" => Some(ViewKind::Dock),
         _ => None,
@@ -969,12 +966,6 @@ questions (scripts/ops/mux-demo-snapshot.sh seeds one)",
         Some(ViewKind::Keys) => {
             view.open_keys_modal();
         }
-        Some(ViewKind::Yard) => {
-            view.yard = Some(super::YardSel {
-                sel: 0,
-                opened_at: Instant::now(),
-            });
-        }
         Some(ViewKind::Needs) => {
             let questions = runtime.block_on(crate::needs_overlay::questions_now());
             view.apply_questions_fold(questions);
@@ -1365,7 +1356,6 @@ mod tests {
             ("question-detail", ViewKind::QuestionDetail),
             ("connections", ViewKind::Connections),
             ("connections-use", ViewKind::ConnectionsUse),
-            ("yard", ViewKind::Yard),
             ("needs", ViewKind::Needs),
             ("dock", ViewKind::Dock),
         ] {

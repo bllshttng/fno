@@ -1786,17 +1786,12 @@ fn open_create_is_modal_over_keyboard_overlays() {
     let mut view = two_pane_view();
     view.selector = Some(0);
     view.answers = Some(0);
-    view.yard = Some(YardSel {
-        sel: 0,
-        opened_at: Instant::now(),
-    });
     view.open_create();
     assert!(view.selector.is_none(), "create clears an open selector");
     assert!(
         view.answers.is_none(),
         "create clears an open answer overlay"
     );
-    assert!(view.yard.is_none(), "create clears an open yard");
     assert!(view.search.is_none());
     assert_eq!(
         view.create.as_deref(),
@@ -5442,27 +5437,18 @@ async fn x7683_right_press_on_a_sideline_row_under_nav_opens_nothing() {
 }
 
 #[tokio::test]
-async fn x7683_right_press_on_a_sideline_row_under_answers_yard_digest_opens_nothing() {
-    // answers/yard/digest LOOK read-only like peek, but each owns live
+async fn x7683_right_press_on_a_sideline_row_under_answers_digest_opens_nothing() {
+    // answers/digest LOOK read-only like peek, but each owns live
     // keys routed AFTER row_menu: answers dispatches PaneAnswer digits and
-    // goto/close on Enter, yard takes n/N/q, digest swallows its next key
+    // goto/close on Enter, digest swallows its next key
     // dismissing itself. Unlike peek (which the menu-open path clears),
     // none is cleared on open, so a menu over one steals its keys - Enter
     // meant to accept an answer could run a menu action on a live agent.
     // Named so clippy's type_complexity stays quiet: the array is a table of
     // (label, opener), and spelling the boxed closure inline said neither.
     type OpenOverlay = Box<dyn FnOnce(&mut super::View)>;
-    let overlays: [(&str, OpenOverlay); 3] = [
+    let overlays: [(&str, OpenOverlay); 2] = [
         ("answers", Box::new(|v| v.answers = Some(0))),
-        (
-            "yard",
-            Box::new(|v| {
-                v.yard = Some(super::YardSel {
-                    sel: 0,
-                    opened_at: std::time::Instant::now(),
-                })
-            }),
-        ),
         (
             "digest",
             Box::new(|v| v.digest = Some(vec!["catch-up".into()])),
@@ -10993,184 +10979,6 @@ fn needs_overlay_lines_renders_stale_question_with_explanation() {
         .any(|l| l.contains("recorded but reaches no session")));
     assert!(lines.iter().any(|l| l.contains("1. a")));
     assert!(lines.iter().any(|l| l.contains("2. b")));
-}
-
-// ---- x-b2bf: the yard ----
-
-#[test]
-fn yard_eye_binds_the_rows_own_reading() {
-    use crate::sprites::Eye;
-    // Gift: an open PR outranks every mood.
-    let mut g = blocked_row("g", 1, None);
-    g.badge = Some(AgentBadge::Working);
-    g.pr = Some(883);
-    assert_eq!(yard_eye(&g, None), Eye::Gift);
-    // Working, nothing owed: the default body eye.
-    let mut w = blocked_row("w", 2, None);
-    w.badge = Some(AgentBadge::Working);
-    assert_eq!(yard_eye(&w, None), Eye::Working);
-    // Attention: every human-owing need kind.
-    for kind in [
-        NeedKind::Question,
-        NeedKind::Decision,
-        NeedKind::MailQuestion,
-        NeedKind::BlockedAnswerable,
-        NeedKind::BlockedFocusOnly,
-        NeedKind::DoneUnseen,
-    ] {
-        assert_eq!(yard_eye(&w, Some(kind)), Eye::Attention, "{kind:?}");
-    }
-    // Faded: wedged review, budget stop.
-    assert_eq!(yard_eye(&w, Some(NeedKind::ReviewWedged)), Eye::Faded);
-    assert_eq!(yard_eye(&w, Some(NeedKind::BudgetStop)), Eye::Faded);
-    // No badge, no need: NO reading - reserved, never content.
-    let mut dark = blocked_row("dark", 3, None);
-    dark.badge = None;
-    assert_eq!(yard_eye(&dark, None), Eye::Reserved);
-    let mut gone = blocked_row("gone", 4, None);
-    gone.exited = true;
-    assert_eq!(yard_eye(&gone, None), Eye::Reserved);
-}
-
-#[test]
-fn yard_crowd_reads_rows_and_joins_needs() {
-    let mut working = blocked_row("working", 2, None);
-    working.badge = Some(AgentBadge::Working);
-    let mut blocked_focus = blocked_row("stuck", 3, None);
-    blocked_focus.badge = Some(AgentBadge::Blocked);
-    let v = view_with_agents(vec![working, blocked_focus]);
-    let crowd = v.yard_crowd();
-    assert_eq!(crowd[0].0, "working");
-    assert_eq!(crowd[0].1, crate::sprites::Eye::Working);
-    // A blocked row joins the needs queue -> attention eye.
-    assert_eq!(crowd[1].1, crate::sprites::Eye::Attention);
-    assert_eq!(crowd[1].2, 0); // team defaults to 0, no hat
-}
-
-#[test]
-fn yard_selection_re_anchors_by_citizen_across_a_scrape() {
-    // sel indexes layout.agents order; a scrape that drops the row BEFORE
-    // the cursor would slide the spotlight onto another citizen. The
-    // selection must follow the citizen, not the slot.
-    let a = blocked_row("aa", 2, None);
-    let b = blocked_row("bb", 3, None);
-    let mut v = view_with_agents(vec![a, b]);
-    v.yard = Some(YardSel {
-        sel: 1,
-        opened_at: std::time::Instant::now(),
-    });
-    assert_eq!(v.yard_selected_name().as_deref(), Some("bb"));
-    let mut next = v.layout.clone();
-    next.agents = vec![next.agents[1].clone()]; // aa exited
-    v.set_layout(next);
-    assert_eq!(
-        v.yard_selected_name().as_deref(),
-        Some("bb"),
-        "spotlight must stay on bb, not clamp onto a wrong citizen"
-    );
-    // Crowd empty (all rows gone): the name capture degrades to None; the
-    // render's own clamp keeps the index in range.
-    let mut none = v.layout.clone();
-    none.agents.clear();
-    v.set_layout(none);
-    assert!(v.yard_selected_name().is_none());
-}
-
-fn yard_item(
-    name: &str,
-    species: usize,
-    rarity: &str,
-    team: u32,
-    first: bool,
-) -> crate::yard_overlay::YardItem {
-    crate::yard_overlay::YardItem {
-        id: format!("{name}-id"),
-        name: name.into(),
-        harness: Some("claude".into()),
-        species,
-        rarity: rarity.into(),
-        role_level: team,
-        first_sighting: first,
-    }
-}
-
-#[test]
-fn yard_overlay_renders_one_spotlight_sprite() {
-    let crowd = vec![
-        ("a", crate::sprites::Eye::Working, 0u32),
-        ("b", crate::sprites::Eye::Attention, 0),
-    ];
-    let id = yard_item("b", 0, "common", 0, false);
-    let lines = yard_overlay_lines(&crowd, 1, Some(&id), 0, NeedsFooter::AsOf);
-    // Crowd row: exactly the two eye glyphs.
-    assert!(lines
-        .iter()
-        .any(|l| { l.trim_start() == "\u{b7}@" || l.trim_start().starts_with("\u{b7}@") }));
-    // Caption carries identity outcome fields, never a rank or boundary.
-    let caption = lines.iter().find(|l| l.contains("b · cat")).unwrap();
-    assert!(caption.contains("b") && caption.contains("cat") && caption.contains("common"));
-    assert!(!caption.contains("60") && !caption.contains("boundary"));
-    // The sprite: each of the cat's rendered rows WITH CONTENT appears
-    // exactly once (padding trails, so match on the prefix; the sprite's
-    // own blank top row is indistinguishable from padding by design),
-    // and NO hat row (team 0) - one sprite, no second block.
-    for row in crate::sprites::render_frame(0, 0, crate::sprites::Eye::Attention) {
-        if row.trim().is_empty() {
-            continue;
-        }
-        assert!(
-            lines
-                .iter()
-                .filter(|l| l.starts_with(&format!("  {row}")))
-                .count()
-                == 1,
-            "sprite row {row:?} once"
-        );
-    }
-    assert!(!lines.iter().any(|l| l.contains("\\^^^/")));
-    assert!(lines.iter().any(|l| l.contains("2 citizens")));
-}
-
-#[test]
-fn yard_overlay_team_hat_only_when_grounded() {
-    let crowd = vec![("lead", crate::sprites::Eye::Working, 2u32)];
-    let id = yard_item("lead", 0, "rare", 0, true);
-    let lines = yard_overlay_lines(&crowd, 0, Some(&id), 0, NeedsFooter::AsOf);
-    assert!(lines.iter().any(|l| l.contains("\\^^^/")), "team hat row");
-    let caption = lines.iter().find(|l| l.contains("lead ·")).unwrap();
-    assert!(caption.contains("team 2"));
-    assert!(caption.contains("NEW"));
-}
-
-#[test]
-fn yard_overlay_without_identity_never_guesses_a_species() {
-    let crowd = vec![("x", crate::sprites::Eye::Working, 0u32)];
-    let lines = yard_overlay_lines(&crowd, 0, None, 0, NeedsFooter::Folding);
-    assert!(lines.iter().any(|l| l.contains("identity fold pending")));
-    // No sprite rows: nothing 12-wide renders.
-    assert!(!lines
-        .iter()
-        .any(|l| l.trim_start().chars().count() == crate::sprites::SPRITE_W));
-    assert!(lines.iter().any(|l| l.contains("folding identities")));
-    let degraded = yard_overlay_lines(&crowd, 0, None, 0, NeedsFooter::Degraded);
-    assert!(degraded
-        .iter()
-        .any(|l| l.contains("identity fold unavailable")));
-    // Fold landed but this row has no registry citizen behind it (a bare
-    // shell, a tombstone): say so, never "pending" forever, never a guess.
-    let landed = yard_overlay_lines(&crowd, 0, None, 0, NeedsFooter::AsOf);
-    assert!(landed
-        .iter()
-        .any(|l| l.contains("no yard identity (not a registry citizen)")));
-    assert!(!landed.iter().any(|l| l.contains("pending")));
-}
-
-#[test]
-fn yard_overlay_empty_yard_is_the_failure_state() {
-    let lines = yard_overlay_lines(&[], 0, None, 0, NeedsFooter::AsOf);
-    assert!(lines
-        .iter()
-        .any(|l| l.contains("the yard is empty - nothing was dispatched")));
 }
 
 #[test]

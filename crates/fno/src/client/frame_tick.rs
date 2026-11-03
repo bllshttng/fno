@@ -1,25 +1,19 @@
 //! The client loop's frame timer: when to wake an otherwise idle terminal
-//! (nothing else redraws there) so a timed animation advances. Three sources:
-//! the yard overlay's spotlight, the Working-row spin, and the metrics
-//! skeleton's breathe. Re-armed each loop pass; with none running there is no
+//! (nothing else redraws there) so a timed animation advances. Two sources:
+//! the Working-row spin and the metrics skeleton's breathe. Re-armed each loop pass; with none running there is no
 //! deadline and no wakeup.
 
 use super::*;
 
 impl View {
     pub(super) fn frame_deadline(&self) -> Option<Instant> {
-        let yard = self
-            .yard
-            .as_ref()
-            .map(|yv| (yv.opened_at, YARD_FRAME_MS as u64));
         let spin = crate::lattice::spin_epoch()
             .filter(|_| self.working_row_on_screen())
             .map(|t0| (t0, crate::lattice::SPIN_FRAME_MS));
         let breathe = crate::lattice::spin_epoch()
             .filter(|_| self.breathe_on_screen())
             .map(|t0| (t0, crate::lattice::SPIN_FRAME_MS));
-        yard.into_iter()
-            .chain(spin)
+        spin.into_iter()
             .chain(breathe)
             .map(|(t0, step)| next_boundary(t0, step))
             .min()

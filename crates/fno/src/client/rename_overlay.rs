@@ -52,7 +52,6 @@ impl View {
     pub(super) fn open_rename_seeded(&mut self, target: RenameTarget, seed: String) {
         self.selector = None;
         self.answers = None;
-        self.yard = None;
         self.search = None;
         self.move_pick = None;
         self.attach_place = None;

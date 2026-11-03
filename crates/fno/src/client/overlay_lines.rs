@@ -236,38 +236,6 @@ pub(crate) fn peek_overlay_lines(
 }
 
 impl View {
-    /// Paint the yard: the crowd, and the picked citizen's spotlight. The
-    /// caption names that citizen, so it is the yard's cursor row.
-    pub(super) fn draw_yard(&self, yv: &YardSel, cells: &mut [Cell], rows: usize, cols: usize) {
-        let (origin, dims) = self.overlay_viewport();
-        let crowd = self.yard_crowd();
-        let sel = yv.sel.min(crowd.len().saturating_sub(1));
-        let identity = crowd
-            .get(sel)
-            .and_then(|(name, _, _)| self.yard_identity(name));
-        let frame = (yv.opened_at.elapsed().as_millis() / YARD_FRAME_MS)
-            % crate::sprites::FRAME_COUNT as u128;
-        let (lines, cursor) = crate::yard_overlay::overlay_lines_cursor(
-            &crowd,
-            sel,
-            identity,
-            frame as usize,
-            self.yard_footer(),
-        );
-        let chrome = chrome::Chrome::new("the yard", Anchor::Center).footer("n/N pick · q close");
-        draw_lines_overlay(
-            cells,
-            rows,
-            cols,
-            origin,
-            dims,
-            &chrome,
-            &lines,
-            &self.theme,
-            cursor,
-        );
-    }
-
     /// Paint the connections modal. The modal reports the line its fill covers.
     pub(super) fn draw_connections(
         &self,

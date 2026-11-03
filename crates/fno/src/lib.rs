@@ -260,7 +260,6 @@ pub mod spawn_journal;
 #[cfg(feature = "full")]
 pub mod splash;
 #[cfg(feature = "full")]
-pub mod sprites;
 #[cfg(feature = "full")]
 pub mod squad;
 #[cfg(feature = "full")]
@@ -320,7 +319,6 @@ pub mod wordmark;
 #[cfg(feature = "full")]
 pub mod worktree_door;
 #[cfg(feature = "full")]
-pub mod yard_overlay;
 
 #[cfg(feature = "full")]
 pub mod doctor;

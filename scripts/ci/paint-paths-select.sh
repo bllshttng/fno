@@ -54,14 +54,12 @@ if [[ -d "$root/crates/fno/src/client" ]]; then
     "crates/fno/src/ratatui_blit.rs"
     "crates/fno/src/sideline_color.rs"
     "crates/fno/src/splash.rs"
-    "crates/fno/src/sprites.rs"
     "crates/fno/src/theme.rs"
     "crates/fno/src/web_backlog.html"
     "crates/fno/src/web_command.html"
     "crates/fno/src/web_page.html"
     "crates/fno/src/web_trace.html"
     "crates/fno/src/wordmark.rs"
-    "crates/fno/src/yard_overlay.rs"
   )
 fi
 
