@@ -96,7 +96,7 @@ The user answers the head's page, or a role row records the approval at that hea
 
 Each cancel and release row names the blocker it acted on in a `blocker` field.
 
-Some paint PRs change comment lines only. A Rust comment changes no pixel, so the gate holds nothing when every edit to every paint file is a `//` line. The gate reads each paint file's patch from the files API. A rename, a non-Rust file, an empty patch or an unreadable read keeps the hold.
+Some paint PRs change comment lines only. A Rust comment changes no pixel. If every edit to every paint file is a `//` line, the gate holds nothing. The gate reads each paint file's patch from the files API. A rename, a non-Rust file, an empty patch or an unreadable read keeps the hold.
 
 An approval sticks to the PR until it merges. A later head keeps the look, so a new commit never cancels CI again. The gate takes the newest earlier commit of the PR that the user approved and keeps its sha on the record for audit. It compares the paint files of the three-dot diff against the base, at that commit and at the head. Edits to files the approved patch already showed carry, copy and code alike. The hold returns in two cases. The user declined a commit pushed after the approval (an answered page naming that commit with a hold-for-changes answer), or the head paints a file the approval never showed. A merged PR that is not yet on main brings its own paint files, so that merge holds until the other PR lands on main.
 
