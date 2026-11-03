@@ -269,6 +269,10 @@ impl TLine {
     /// walk pads the gap with that line's default role - without this, every
     /// later column's roles shift and a header's style lands mid-word.
     pub(crate) fn push_line(&mut self, other: TLine) {
+        let had = self.text.chars().count();
+        while self.roles.len() < had {
+            self.roles.push(self.default_role);
+        }
         self.text.push_str(&other.text);
         self.roles.extend(other.roles);
         let chars = self.text.chars().count();

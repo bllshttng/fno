@@ -296,7 +296,7 @@ pub struct Scroll {
 pub struct BodyLine {
     pub text: String,
     /// A greyed, inert row (a disabled `PopupRow::Entry`): every cell takes
-    /// [`Role::Text(TextStyle::Meta)`] regardless of selection, so it reads as inert.
+    /// `Role::Text(TextStyle::Meta)` regardless of selection, so it reads as inert.
     pub disabled: bool,
     /// `(offset, len)` within `text` that is the selected cut-out.
     pub sel_span: Option<(usize, usize)>,

@@ -345,7 +345,7 @@ pub struct Popup {
     /// this tab's own rows.
     pub min_width: usize,
     /// Opt this popup into the plain-body anatomy: no inverse ground, the key
-    /// column bold accent ([`Role::Text(TextStyle::Section)`]), the cursor row the one
+    /// column bold accent (`Role::Text(TextStyle::Section)`), the cursor row the one
     /// filled band ([`Role::BodyCursor`]), section headings accent text. The
     /// which-key modal's shape (the unreadable-inverse-body review).
     pub plain_body: bool,
@@ -391,7 +391,7 @@ pub struct RenderedLine {
     /// framed pass translates them into the per-char `roles`.
     pub segs: Vec<(usize, usize, Role)>,
     /// The role for chars no seg covers: the theme ground
-    /// ([`Role::Text(TextStyle::Item)`]) under every theme - one body treatment.
+    /// (`Role::Text(TextStyle::Item)`) under every theme - one body treatment.
     pub pad_role: Role,
 }
 
@@ -845,8 +845,7 @@ impl Popup {
                 },
                 PopupRow::Info { label, value } => {
                     // The plain two-column shape, inert: the label sits in the
-                    // fixed key column as accent text (the bold left column a
-                    // field list reads by), the value plain. No hit span and
+                    // fixed key column as dim text, the value bold. No hit span and
                     // no selection: provenance text, never an action.
                     let text = pad(&format!(" {} {}", pad(label, kw), value), width);
                     RenderedLine {
