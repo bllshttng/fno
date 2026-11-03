@@ -33,7 +33,12 @@ pub(super) async fn tap(
     match routed {
         Some(Ok(StdinFlow::Detach)) => return Ok(StdinFlow::Detach),
         Some(Err(e)) => return Err(e),
-        // The same holds for an open but unfocused file viewer panel.
+        // The same holds for an open but unfocused file viewer panel. The
+        // review split reads it as its own Esc, so unsent drafts warn first.
+        None if view.viewer.review.is_some() => {
+            file_viewer::keys(view, &[0x1b], sock_w).await?;
+            return Ok(StdinFlow::Continue);
+        }
         None if view.viewer_open() => {
             file_viewer::close(view, sock_w).await?;
             return Ok(StdinFlow::Continue);

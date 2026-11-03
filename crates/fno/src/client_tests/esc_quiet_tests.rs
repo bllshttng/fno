@@ -137,6 +137,7 @@ async fn a_lone_esc_left_in_a_picker_carry_flushes_closed() {
     let mut v = two_pane_view();
     v.portal_pick = Some(PortalPick {
         id: "a".into(),
+        remote: None,
         cursor: 0,
         esc: Vec::new(),
     });

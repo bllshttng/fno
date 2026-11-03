@@ -289,9 +289,19 @@ pub(crate) struct ViewerState {
     /// Panel width as a percent of the terminal; 0 reads as the default. It
     /// outlives a close, so a resize sticks for the session.
     pct: u16,
+    /// The PR review split beside the chat pane. It takes the panel's place.
+    pub(super) review: Option<super::backlog_board::pr_review::Review>,
+    /// A press on the panel's left edge is dragging it.
+    drag: bool,
 }
 
 impl ViewerState {
+    /// The `review-panel-drag` snapshot: the split mid-drag at `pct`.
+    pub(super) fn dragging_at(&mut self, pct: u16) {
+        self.pct = pct;
+        self.drag = true;
+    }
+
     fn pct(&self) -> u16 {
         if self.pct == 0 {
             DEFAULT_PCT
@@ -359,10 +369,8 @@ impl View {
     /// when it is a modal, or when the terminal cannot spare the columns (the
     /// viewer then shows as a modal).
     pub(super) fn viewer_panel_w(&self) -> u16 {
-        let Some(v) = &self.viewer.open else {
-            return 0;
-        };
-        if v.shape != ViewerShape::Panel {
+        let file = self.viewer.open.as_ref();
+        if self.viewer.review.is_none() && file.is_none_or(|v| v.shape != ViewerShape::Panel) {
             return 0;
         }
         let cols = self.term.1;
@@ -376,11 +384,24 @@ impl View {
 
     /// Whether the viewer is open and holds the keyboard.
     pub(super) fn viewer_focused(&self) -> bool {
-        self.viewer.open.as_ref().is_some_and(|v| v.focused)
+        let review = self.viewer.review.as_ref().is_some_and(|r| r.focused);
+        review || self.viewer.open.as_ref().is_some_and(|v| v.focused)
     }
 
     pub(super) fn viewer_open(&self) -> bool {
-        self.viewer.open.is_some()
+        self.viewer.open.is_some() || self.viewer.review.is_some()
+    }
+
+    /// The review split's rect (top, left, h, w) and whether it sits beside
+    /// the panes. A terminal too narrow for a split gets the whole content.
+    fn review_rect(&self) -> (usize, usize, usize, usize, bool) {
+        let panel = self.viewer_panel_w() as usize;
+        let rows = self.content_dims().0 as usize;
+        let cols = self.term.1 as usize;
+        match panel {
+            0 => (TAB_BAR_ROWS as usize, 0, rows, cols, false),
+            w => (TAB_BAR_ROWS as usize, cols - w, rows, w, true),
+        }
     }
 }
 
@@ -618,6 +639,21 @@ fn layout(plan: &Plan, v: &FileViewer, md: Option<&[BLine]>) -> OverlayLayout {
 /// Paint the viewer into the frame: after the panes, before the modals.
 pub(super) fn draw(view: &View, cells: &mut [Cell], rows: usize, cols: usize) {
     image_layer::clear();
+    if let Some(review) = &view.viewer.review {
+        let (top, left, h, w, beside) = view.review_rect();
+        let rect = (top, left, h, w);
+        super::backlog_board::pr_review::paint(
+            review,
+            None,
+            cells,
+            rows,
+            cols,
+            rect,
+            beside.then_some(view.viewer.drag),
+            &view.theme,
+        );
+        return;
+    }
     let Some(v) = &view.viewer.open else {
         return;
     };
@@ -701,6 +737,48 @@ async fn send_resize(
         .map_err(|e| format!("resize send failed: {e}"))
 }
 
+/// Open the PR review split. It replaces an open file and takes the keys.
+pub(super) async fn open_review(
+    view: &mut View,
+    review: super::backlog_board::pr_review::Review,
+    sock_w: &mut (impl tokio::io::AsyncWrite + Unpin),
+) -> Result<(), String> {
+    view.viewer.open = None;
+    view.viewer.review = Some(review);
+    view.region_owner = region_focus::RegionOwner::Pane;
+    send_resize(view, sock_w).await
+}
+
+/// The split's keys go to the review. A close gives the columns back.
+async fn review_keys(
+    view: &mut View,
+    bytes: &[u8],
+    sock_w: &mut (impl tokio::io::AsyncWrite + Unpin),
+) -> Result<StdinFlow, String> {
+    let typing = view
+        .viewer
+        .review
+        .as_ref()
+        .is_some_and(|r| r.input.is_some());
+    match bytes {
+        b"-" if !typing => {
+            return resize(view, -STEP_PCT, sock_w)
+                .await
+                .map(|_| StdinFlow::Continue)
+        }
+        b"+" | b"=" if !typing => {
+            return resize(view, STEP_PCT, sock_w)
+                .await
+                .map(|_| StdinFlow::Continue)
+        }
+        _ => super::backlog_board::pr_review::keys(view, bytes),
+    }
+    if view.viewer.review.is_none() {
+        send_resize(view, sock_w).await?;
+    }
+    Ok(StdinFlow::Continue)
+}
+
 /// Open a loaded file, replacing any viewer already open. A panel takes
 /// columns from the panes, so the new content area travels to the server.
 pub(super) async fn open(
@@ -708,7 +786,16 @@ pub(super) async fn open(
     loaded: Loaded,
     sock_w: &mut (impl tokio::io::AsyncWrite + Unpin),
 ) -> Result<(), String> {
+    // Staged review comments are never dropped by a file open.
+    let unsent = view.viewer.review.as_ref().map_or(0, |r| r.drafts.len());
+    if unsent > 0 {
+        view.set_notice(format!(
+            "{unsent} unsent comments in the review: send or close it first"
+        ));
+        return Ok(());
+    }
     let was_panel = view.viewer_panel_w() > 0;
+    view.viewer.review = None;
     // A rendered markdown doc has no source rows, so a `path:line` hint on a
     // `.md` click cannot name a row to highlight.
     let target = match &loaded.body {
@@ -749,6 +836,7 @@ pub(super) async fn close(
 ) -> Result<(), String> {
     let was_panel = view.viewer_panel_w() > 0;
     view.viewer.open = None;
+    view.viewer.review = None;
     if was_panel {
         send_resize(view, sock_w).await?;
     }
@@ -863,6 +951,9 @@ pub(super) async fn keys(
     bytes: &[u8],
     sock_w: &mut (impl tokio::io::AsyncWrite + Unpin),
 ) -> Result<StdinFlow, String> {
+    if view.viewer.review.is_some() {
+        return review_keys(view, bytes, sock_w).await;
+    }
     let Some(v) = view.viewer.open.as_mut() else {
         return Ok(StdinFlow::Continue);
     };
@@ -897,11 +988,53 @@ pub(super) async fn keys(
     Ok(StdinFlow::Continue)
 }
 
+/// The panel edge drag: a press on the panel's left edge grabs it, a drag
+/// report sets the width in percent (clamped as `-` and `+` clamp), and any
+/// other report ends it. The width holds for the session. `Ok(true)` means
+/// the drag took the report.
+pub(super) async fn drag_mouse(
+    view: &mut View,
+    rep: crate::mouse::MouseReport,
+    sock_w: &mut (impl tokio::io::AsyncWrite + Unpin),
+) -> Result<bool, String> {
+    let panel = view.viewer_panel_w();
+    if !view.viewer.drag {
+        let edge = panel > 0 && rep.row >= TAB_BAR_ROWS && rep.col == view.term.1 - panel;
+        let grab = edge && matches!(rep.kind, MouseKind::Press(MouseButton::Left));
+        view.viewer.drag = grab;
+        return Ok(grab);
+    }
+    let MouseKind::Drag(MouseButton::Left) = rep.kind else {
+        view.viewer.drag = false;
+        return Ok(true);
+    };
+    let cols = u32::from(view.term.1.max(1));
+    let want = cols.saturating_sub(u32::from(rep.col)) * 100 / cols;
+    let pct = (want as i16).clamp(MIN_PCT, MAX_PCT) as u16;
+    if pct != view.viewer.pct() {
+        view.viewer.pct = pct;
+        scroll_by(view, 0);
+        send_resize(view, sock_w).await?;
+    }
+    Ok(true)
+}
+
 /// One mouse report while the viewer is open. `true` means the viewer took
 /// it. A modal owns the pointer outright. A panel owns only its own columns:
 /// a click inside focuses it, a click anywhere else hands the keyboard back
 /// and falls through to what is under the pointer.
 pub(super) fn mouse(view: &mut View, rep: crate::mouse::MouseReport) -> bool {
+    if view.viewer.review.is_some() {
+        let (top, left, h, w, _) = view.review_rect();
+        let (row, col) = (rep.row as usize, rep.col as usize);
+        let inside = row >= top && row < top + h && col >= left && col < left + w;
+        if matches!(rep.kind, MouseKind::Press(MouseButton::Left)) {
+            if let Some(review) = view.viewer.review.as_mut() {
+                review.focused = inside;
+            }
+        }
+        return inside;
+    }
     let Some(v) = &view.viewer.open else {
         return false;
     };
@@ -1153,6 +1286,28 @@ mod tests {
         assert!(!v.viewer_focused(), "and hands the keyboard back");
         assert!(mouse(&mut v, press(5, 100)) && v.viewer_focused());
         assert!(!mouse(&mut v, press(5, 2)));
+        // The edge drags: a press grabs it, column 30 of 120 reads 75 percent,
+        // a drag past the edge holds the 80 percent clamp, a release ends it.
+        let mut sock = Vec::new();
+        let edge = v.term.1 - v.viewer_panel_w();
+        let to = |col| crate::mouse::MouseReport {
+            kind: MouseKind::Drag(MouseButton::Left),
+            ..press(5, col)
+        };
+        assert!(drag_mouse(&mut v, press(5, edge), &mut sock).await.unwrap());
+        assert!(drag_mouse(&mut v, to(30), &mut sock).await.unwrap());
+        assert_eq!(v.viewer.pct(), 75);
+        assert!(drag_mouse(&mut v, to(0), &mut sock).await.unwrap());
+        assert_eq!(v.viewer.pct(), 80);
+        let up = crate::mouse::MouseReport {
+            kind: MouseKind::Release(MouseButton::Left),
+            ..press(5, 0)
+        };
+        assert!(drag_mouse(&mut v, up, &mut sock).await.unwrap());
+        assert!(
+            !v.viewer.drag && !sock.is_empty(),
+            "the panes got the new width"
+        );
         // A panel's close sends the new content area, so the chip tap that
         // `tap_chip` asserts silent is called directly here.
         let (mut scanner, mut sock) = (Scanner::default(), Vec::new());

@@ -22,8 +22,8 @@ pub(crate) fn postmortems_root_for_home(
     home: Option<&Path>,
 ) -> Option<PathBuf> {
     match fno_home {
-        Some(p) => Some(p.join("postmortems")),
-        None => home.map(|h| h.join(".fno/postmortems")),
+        Some(p) => crate::state_layout::place_dir(p, "postmortems"),
+        None => home.and_then(|h| crate::state_layout::place_dir(&h.join(".fno"), "postmortems")),
     }
 }
 
@@ -52,15 +52,15 @@ mod tests {
         let fno_home = Path::new("/var/folders/T/.tmpRS");
         assert_eq!(
             postmortems_root_for_home(Some(fno_home), Some(Path::new("/Users/op"))),
-            Some(fno_home.join("postmortems"))
+            Some(fno_home.join("db/postmortems"))
         );
         assert!(is_real_run(
-            Some(&fno_home.join("postmortems")),
-            Path::new("/var/folders/T/.tmpRS/postmortems/pm.md")
+            Some(&fno_home.join("db/postmortems")),
+            Path::new("/var/folders/T/.tmpRS/db/postmortems/pm.md")
         ));
         // A different temp dir is still not this home's corpus.
         assert!(!is_real_run(
-            Some(&fno_home.join("postmortems")),
+            Some(&fno_home.join("db/postmortems")),
             Path::new("/var/folders/T/.tmpOTHER/pm.md")
         ));
     }

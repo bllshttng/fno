@@ -76,7 +76,8 @@ pub(crate) fn chat_id_for_channel(scope: &str) -> String {
 // ---------------------------------------------------------------------------
 
 /// The chats dir: `config.paths.chats` from the config ladder, else
-/// `<state_dir>/chats` (which is `~/.fno/chats` on a stock machine). The
+/// the table's chats folder under the state dir (`~/.fno/db/mail/chats` on a
+/// stock machine). The
 /// override may point at a synced folder (the vault); the index never follows
 /// it there (node requirement 3).
 pub(crate) fn chats_dir() -> PathBuf {
@@ -90,11 +91,14 @@ pub(crate) fn chats_dir() -> PathBuf {
     // a test that pins FNO_AGENTS_HOME gets its chats beside its bus, never
     // the operator's ~/.fno/chats.
     if let Some(dot_fno) = declared_dot_fno() {
-        return dot_fno.join("chats");
+        return chats_under(&dot_fno);
     }
-    let mut dir = crate::backlog::settings::state_dir().unwrap_or_else(default_dot_fno);
-    dir.push("chats");
-    dir
+    chats_under(&crate::backlog::settings::state_dir().unwrap_or_else(default_dot_fno))
+}
+
+/// The table's chats folder under a state root.
+fn chats_under(root: &Path) -> PathBuf {
+    crate::state_layout::place_dir(root, "chats").unwrap_or_else(|| root.join("chats"))
 }
 
 /// The derived index. Always under the state dir, never under the (possibly
@@ -446,7 +450,7 @@ pub(crate) fn record_at(
 /// The bus kinds that are a receipt about another message: a `landed`
 /// transcript match, or a `state` row naming the delivery state it reached.
 fn is_receipt_kind(kind: &str) -> bool {
-    kind == "landed" || kind == crate::mail_delivery_state::STATE_KIND
+    kind == "landed" || kind == crate::mail::state::STATE_KIND
 }
 
 /// The message a receipt row is about, and the delivery word it records.
@@ -1028,28 +1032,13 @@ impl MigrationReceipt {
     }
 }
 
-fn bus_live_path() -> PathBuf {
-    let mut dir = crate::backlog::settings::state_dir().unwrap_or_else(default_dot_fno);
-    dir.push("bus");
-    dir.push("messages.jsonl");
-    dir
-}
-
-/// The live log the bus-append door writes: the same resolution the
-/// Python appender used, so `FNO_BUS_DIR` keeps ruling the path.
-pub(crate) fn bus_append_live_path() -> PathBuf {
-    let home = crate::paths::AgentsHome::from_env();
-    let dot_fno = home.root().parent().unwrap_or_else(|| home.root());
-    crate::intel::bus_log_path(dot_fno)
-}
-
 /// Import the retained bus rows oldest-first: `send`/`announce` rows become
 /// message lines (original ids kept), receipt rows become delivery lines
 /// joined on their message id. Rows without an id or of a control kind are
 /// skipped and counted. Each chat's file is written chronologically in bus
 /// order.
 fn migrate_import(chats_dir: &Path, bus: &Path) -> Result<MigrationReceipt, String> {
-    let rows = crate::announce::read_bus_segments(bus);
+    let rows = crate::mail::log::read_bus_segments(bus);
     let mut receipt = MigrationReceipt::default();
     // The id -> chat map the delivery join reads (first message occurrence
     // wins; ids are unique per send), and the staged lines per chat in bus
@@ -1203,7 +1192,7 @@ fn known_message_ids(
 }
 
 fn migrate_missing(chats_dir: &Path, db: &Path, bus: &Path) -> Result<MigrationReceipt, String> {
-    let rows = crate::announce::read_bus_segments(bus);
+    let rows = crate::mail::log::read_bus_segments(bus);
     let mut receipt = MigrationReceipt::default();
     let mut order: Vec<String> = Vec::new();
     let mut chats: std::collections::HashMap<String, Vec<Value>> = std::collections::HashMap::new();
@@ -1703,7 +1692,12 @@ pub fn run_chats(args: &[String]) -> i32 {
                     return 1;
                 }
             };
-            match record_at(&dir, &index_path(), &bus_live_path(), &line) {
+            match record_at(
+                &dir,
+                &index_path(),
+                &crate::mail_paths::state_live_bus_log(),
+                &line,
+            ) {
                 Ok(Recorded::Message { chat_id }) => {
                     println!(
                         "{{\"recorded\":true,\"type\":\"message\",\"chat_id\":\"{chat_id}\"}}"
@@ -1763,7 +1757,7 @@ pub fn run_chats(args: &[String]) -> i32 {
             let live = args
                 .get(1)
                 .map(std::path::PathBuf::from)
-                .unwrap_or_else(bus_append_live_path);
+                .unwrap_or_else(crate::mail_paths::live_bus_log);
             match crate::announce::append_line_open(&live, &line, &dir) {
                 Ok(()) => {
                     println!("{{\"appended\":true}}");
@@ -1955,7 +1949,7 @@ pub fn run_chats(args: &[String]) -> i32 {
             line.insert("body".into(), json!(body));
             let live = live_arg
                 .map(std::path::PathBuf::from)
-                .unwrap_or_else(bus_append_live_path);
+                .unwrap_or_else(crate::mail_paths::live_bus_log);
             match crate::announce::append_line_open(&live, &Value::Object(line), &dir) {
                 Ok(()) => {
                     println!("{{\"staged\":true,\"id\":\"{id}\"}}");
@@ -1982,7 +1976,11 @@ pub fn run_chats(args: &[String]) -> i32 {
                 };
             }
             if args.iter().any(|a| a == "--missing") {
-                return match migrate_missing(&dir, &index_path(), &bus_live_path()) {
+                return match migrate_missing(
+                    &dir,
+                    &index_path(),
+                    &crate::mail_paths::state_live_bus_log(),
+                ) {
                     Ok(receipt) => {
                         println!(
                             "{{\"migrated\":true,\"missing\":true,\"messages\":{},\"deliveries\":{},\"skipped\":{}}}",
@@ -2007,7 +2005,7 @@ pub fn run_chats(args: &[String]) -> i32 {
                 eprintln!("chats migrate: refused, already migrated ({ts})");
                 return 1;
             }
-            match migrate_import(&dir, &bus_live_path()) {
+            match migrate_import(&dir, &crate::mail_paths::state_live_bus_log()) {
                 Ok(receipt) => {
                     let _ = set_migrated_at(
                         &conn,
@@ -2243,12 +2241,12 @@ fn run_bus_read(args: &[String]) -> i32 {
             }
         }
     }
-    let live = bus.unwrap_or_else(bus_append_live_path);
+    let live = bus.unwrap_or_else(crate::mail_paths::live_bus_log);
     let bus_dir = match live.parent() {
         Some(p) => p.to_path_buf(),
         None => std::path::PathBuf::from("."),
     };
-    let (raw, mut warnings) = crate::announce::read_bus_segments_reported(&live);
+    let (raw, mut warnings) = crate::mail::log::read_bus_segments_reported(&live);
     // The envelope contract the Python read leg froze: a row without its
     // required address/identity fields is malformed and skips with a named
     // warning, so every mode answers over the rows the old leg would read.
@@ -2442,7 +2440,12 @@ fn list_chats(dir: &Path) -> Result<Vec<String>, String> {
 // ---------------------------------------------------------------------------
 
 pub(crate) fn record(chats_dir: &Path, line: &Value) -> Result<Recorded, String> {
-    record_at(chats_dir, &index_path(), &bus_live_path(), line)
+    record_at(
+        chats_dir,
+        &index_path(),
+        &crate::mail_paths::state_live_bus_log(),
+        line,
+    )
 }
 
 pub(crate) fn rebuild_index(chats_dir: &Path) -> Result<String, String> {

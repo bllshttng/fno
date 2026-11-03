@@ -1016,7 +1016,7 @@ pub fn run_fleet_cli(args: &[String]) -> i32 {
         roots: Roots {
             claude_projects: crate::claude_drive::claude_projects_dir(),
             codex_sessions: None,
-            bus_log: crate::intel::bus_log_path(&state_dir),
+            bus_log: crate::mail_paths::bus_log_path(&state_dir),
         },
         state_dir: state_dir.clone(),
         now: Utc::now(),

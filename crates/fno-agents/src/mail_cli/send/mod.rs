@@ -26,7 +26,7 @@
 //! socket's own truth.
 
 use super::send_raw::{agents_binary, run_captured};
-use crate::mail_delivery_state::DeliveryState;
+use crate::mail::state::DeliveryState;
 use crate::paths::AgentsHome;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
@@ -347,15 +347,6 @@ fn system_arm_inbox_key(name: &str) -> Option<String> {
         return None;
     }
     Some(format!("{project}.{arm}"))
-}
-
-pub(crate) fn bus_log_path() -> PathBuf {
-    if let Ok(dir) = std::env::var("FNO_BUS_DIR") {
-        if !dir.is_empty() {
-            return PathBuf::from(dir).join("messages.jsonl");
-        }
-    }
-    crate::chats::bus_append_live_path()
 }
 
 /// Python `hashlib.sha256(f"{sender}\0{recipient}")[:16]`.
@@ -769,7 +760,7 @@ fn budget_ledger_path(pair: &str) -> PathBuf {
     for byte in digest.iter().take(8) {
         hex.push_str(&format!("{byte:02x}"));
     }
-    let bus_dir = bus_log_path()
+    let bus_dir = crate::mail_paths::live_bus_log()
         .parent()
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from("."));
@@ -846,7 +837,7 @@ fn budget_store(path: &Path, pair: &str, entries: &[Value]) -> Result<(), String
 /// The newest authored bus envelope addressed
 /// from `recipient` to `sender` since `floor`. `(msg_id, ts)` on a hit.
 fn budget_last_inbound(sender: &str, recipient: &str, floor: f64) -> Option<(String, f64)> {
-    let raw = std::fs::read_to_string(bus_log_path()).ok()?;
+    let raw = std::fs::read_to_string(crate::mail_paths::live_bus_log()).ok()?;
     let mut newest: Option<(String, f64)> = None;
     for line in raw.lines() {
         let line = line.trim();
@@ -1087,7 +1078,8 @@ fn utc_now_iso() -> String {
 }
 
 /// The wire envelope row Python `_append_to_bus` wrote through the bus door:
-/// required keys first, optional tags in the house order, body last.
+/// required keys first, optional tags in the house order, body last. The
+/// order is `mail::envelope::Envelope`'s field order.
 #[allow(clippy::too_many_arguments)]
 fn bus_envelope_row(
     msg_id: &str,
@@ -1108,38 +1100,21 @@ fn bus_envelope_row(
     origin: Option<&str>,
     subject: Option<&str>,
 ) -> Value {
-    let mut obj = serde_json::Map::new();
-    obj.insert("v".to_string(), json!(1));
-    obj.insert("id".to_string(), json!(msg_id));
-    obj.insert("ts".to_string(), json!(ts));
-    obj.insert("thread".to_string(), json!(thread_id));
-    obj.insert("from".to_string(), json!(sender));
-    obj.insert("to".to_string(), json!(recipient));
-    obj.insert("kind".to_string(), json!(kind));
-    for (key, value) in [
-        ("from_harness", from_harness),
-        ("to_harness", to_harness),
-        ("in_reply_to", in_reply_to),
-        ("from_session", from_session),
-        ("from_model", from_model),
-        ("to_kind", to_kind),
-        ("origin", origin),
-        ("subject", subject),
-    ] {
-        if let Some(v) = value.filter(|v| !v.is_empty()) {
-            obj.insert(key.to_string(), json!(v));
-        }
-    }
-    if let Some(wc) = word_count {
-        obj.insert("word_count".to_string(), json!(wc));
-    }
+    use crate::mail::envelope::{tag, Envelope};
+    let mut env = Envelope::new(msg_id, ts, thread_id, sender, recipient, kind, body);
+    env.from_harness = tag(from_harness);
+    env.to_harness = tag(to_harness);
+    env.in_reply_to = tag(in_reply_to);
+    env.from_session = tag(from_session);
+    env.from_model = tag(from_model);
+    env.to_kind = tag(to_kind);
+    env.origin = tag(origin);
+    env.subject = tag(subject);
+    env.word_count = word_count;
     if let Value::Object(meta) = meta {
-        if !meta.is_empty() {
-            obj.insert("meta".to_string(), Value::Object(meta));
-        }
+        env.meta = meta;
     }
-    obj.insert("body".to_string(), json!(body));
-    Value::Object(obj)
+    env.into_value()
 }
 
 /// Python `_append_to_bus` + `write_new_thread`: the durable-first bus append
@@ -1209,7 +1184,7 @@ pub(crate) fn write_durable_thread(
         origin,
         subject,
     );
-    let live = bus_log_path();
+    let live = crate::mail_paths::live_bus_log();
     let chats_dir = crate::chats::chats_dir();
     crate::announce::append_line_open(&live, &row, &chats_dir)
         .map_err(|exc| format!("bus append failed: {exc}"))
@@ -1236,7 +1211,7 @@ pub(crate) fn reply_parent(msg_id: &str) -> Option<ReplyParent> {
             .map(str::to_string)
     };
     Some(ReplyParent {
-        thread: field("thread").unwrap_or_else(|| msg_id.to_string()),
+        thread: crate::mail::envelope::thread_root(field("thread").as_deref(), msg_id),
         from: field("from").unwrap_or_default(),
         // An announce parent is a fleet broadcast: its reply keeps the
         // caller's kind, or the reply would land on the channel.
@@ -1658,7 +1633,7 @@ pub fn run(args: &[String]) -> i32 {
                             &result.msg_id,
                             subject.as_deref(),
                             &to,
-                            &crate::mail_delivery_state::receipt(
+                            &crate::mail::state::receipt(
                                 &result.state,
                                 &format!("[project {project}]"),
                             ),

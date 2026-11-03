@@ -131,7 +131,25 @@ Settings are read from two locations. Project-local wins over global:
 
 `fno config accounts add --scope project` writes to the project file.
 `fno config accounts add --scope global` writes to the global file.
-`fno config accounts use` defaults to `--scope project`.
+
+`fno config accounts use` defaults to `--scope project`. The `u` key in the mux Connections view always passes `--scope global`.
+
+### What the `u` key does to live workers
+
+Press `u` on a row in the Connections view, then press Enter. The prompt names the live workers on that harness. A claude process started outside the mux is not in that count, but the result line carries the real count.
+
+| Record | Shared slot | Live workers | New spawns |
+|---|---|---|---|
+| claude `managed` | Refreshes the target, saves the outgoing account, writes the slot, and verifies it. | They keep running, and the result line warns about them. What they bill next is unmeasured. | Run on the new account. |
+| codex `managed` | Writes only when no codex runs. | Any live codex defers the switch with exit 2, and the slot does not change. | Run on the new account. |
+| claude with a `config_dir` | None. `u` names the `s` key and runs nothing. | No change. | Only through `s` or `--account`. |
+| `api_key`, `oauth_dir` | None. Only the pointer moves. | No change. | No change. No spawn path reads the pointer, so name the account with `--account`. |
+
+The pointer is one value across all harnesses, so `u` on a codex row also moves it off a claude row. A project `active` key wins over the global pointer. If that hides the move, the result line warns. A stored login that is spent refuses the switch, and the result line sends you to `r`, which opens a login pane.
+
+The Connections view groups accounts by provider: Anthropic, OpenAI, zai, Amazon Bedrock, DeepSeek, OpenCode and Llama. A route, a Bedrock key, or a base URL names a record's provider. A record with none of these groups under its harness's own vendor. A provider with no saved account still shows, with an add hint. The `[ACTIVE]` badge marks the record new spawns use. When no record is active, it marks the System default row, the plain harness login. Enter does what `u` does. A row names its plan and the email its saved login proved at sign-in, masked as `j•••@m•••.xyz`. The plan comes from a record's own `plan` key, else from the saved claude login's tier, such as `Max 20x`.
+
+On a claude row, `r` re-authenticates. After a confirm it opens a pane that runs `fno config accounts use <id> --scope global --login`. `--login` forces the vault login, so a working stored copy does not stop it. It runs two browser logins, one per Keychain item. Each login proves its principal before the store write. The account then takes the shared slot. On a codex row with a spent login, `r` opens `codex login` and a second `r` saves it. On any other row, `r` saves the current login again.
 
 ---
 
@@ -397,13 +415,13 @@ The verdict is `matched`, `mismatch`, `ambiguous` or `unknown`. Only one of them
 
 A reading is bound to the credential generation that produced it. Identity is proven before the usage request, which stops another account's numbers being fetched at all. A sign-in that lands after the request is a separate window, and a reading from it is discarded with `identity_changed`. The marker matters as much as the discard: a missing snapshot alone reads exactly like a probe that never ran.
 
-The accounts list and the Connections modal carry an identity column. The modal renders the cell that `fno config accounts list` prints, so one renderer states every token, and a row states who its credential is proved to serve. A matched row names its own record. A mismatch renders `!serves <record>`. The active stamp names the account that put a credential in the slot. The slot credential presents as the named record. The row shows both instead of papering over the gap. `?<reason>` marks anything unproved, and two credential roots observing one principal flag `!shared-identity`. A row never names an account it did not prove. To keep the account that is signed in, run `fno config accounts reconcile-slot claude`. To move to another account, follow the switch in the section below.
+The accounts list carries an identity column, and a row states who its credential is proved to serve. If that cell warns, as `!serves` or `!shared-identity` does, the Connections modal shows it. The modal drops the `?` tokens. A matched row names its own record. A mismatch renders `!serves <record>`. The active stamp names the account that put a credential in the slot. The slot credential presents as the named record. The row shows both instead of papering over the gap. `?<reason>` marks anything unproved, and two credential roots observing one principal flag `!shared-identity`. A row never names an account it did not prove. To keep the account that is signed in, run `fno config accounts reconcile-slot claude`. To move to another account, follow the switch in the section below.
 
 One lane fact, observed on Claude Code 2.1.266. The Keychain item is chosen by whether `CLAUDE_CONFIG_DIR` is set at all, not by which account will read it. An interactive `claude` reads the unscoped `Claude Code-credentials` item. A daemon-hosted background session reads the scoped `Claude Code-credentials-<hash>` item, where the hash is the first 8 hex of the sha256 of `$HOME/.claude`. A login reaches a running session on its next request, with no restart.
 
 ### Switching claude accounts is manual, by design
 
-Two claude accounts on one machine are two separate session stores, and that separation is the point. The operator signs in as the other account twice, and never runs `/logout` first. A logout can revoke the refresh token of the account you leave, and every stored copy of that account then stops working. A plain `claude /login` moves interactive sessions. `CLAUDE_CONFIG_DIR=$HOME/.claude claude /login` moves the background fleet. Blocked sessions recover on their next request, so no daemon bounce and no respawn is needed. The second login also makes the two items agree, which clears the ambiguous-slot finding. `fno config accounts use` is not the switch yet, because it writes a stored copy whose refresh token the live session has already spent.
+Two claude accounts on one machine are two separate session stores, and that separation is the point. The operator signs in as the other account twice, and never runs `/logout` first. A logout can revoke the refresh token of the account you leave, and every stored copy of that account then stops working. A plain `claude /login` moves interactive sessions. `CLAUDE_CONFIG_DIR=$HOME/.claude claude /login` moves the background fleet. Blocked sessions recover on their next request, so no daemon bounce and no respawn is needed. The second login also makes the two items agree, which clears the ambiguous-slot finding. `fno config accounts use` refreshes the stored copy first. If the live session has already spent that copy's refresh token, the switch refuses.
 
 A second account can instead keep its own credential directory (`--config-dir ~/.claude-alt`). Its transcript folders are often symlinks back into canonical. Sharing transcripts never merges credential identity. The binding reads the Keychain item scoped to that directory, plus that directory's own `.credentials.json`. Neither source is a transcript.
 

@@ -170,6 +170,7 @@ fn switch_slot(config_cwd: &Path, to: &str) -> bool {
         Some(config_cwd),
         config_cwd,
         crate::accounts::use_switch::PinPolicy::Warn,
+        false,
         &crate::accounts::store::SystemHost,
         &outside,
     )

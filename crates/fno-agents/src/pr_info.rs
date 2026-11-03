@@ -189,8 +189,12 @@ fn fetch_rest(pr: u64, cwd: &Path, slug: &str) -> Result<Value, RestReason> {
             "",
         )
     })?;
-    rest_payload(pr, &pulls)
-        .ok_or_else(|| RestReason::new("gh api pulls/<n> carried a malformed body", ""))
+    let info = rest_payload(pr, &pulls)
+        .ok_or_else(|| RestReason::new("gh api pulls/<n> carried a malformed body", ""))?;
+    if let Some(head_ref) = info.get("head_ref").and_then(Value::as_str) {
+        crate::law_pr_shape::stamp(cwd, slug, head_ref, &pulls);
+    }
+    Ok(info)
 }
 
 fn resolve_slug(cwd: &Path, repo: Option<&str>) -> Result<String, RestReason> {

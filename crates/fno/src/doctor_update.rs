@@ -278,9 +278,19 @@ fn run_inherit(bin: &Path, args: &[String]) -> i32 {
 /// The compile fallback. `cargo install` skips the checkout's
 /// `.cargo/config.toml`, so the admission wrapper it names never ran and an
 /// update compiled outside the build:cargo slot. RUSTC_WRAPPER puts it back.
+/// The build-dir env is self-sufficient for the same reason: a daemon
+/// started from a foreign repo no longer exports CARGO_BUILD_BUILD_DIR, so
+/// an unset child env gets the `fno config build-dir` value here and the
+/// install's intermediates keep landing on the fleet base.
 fn run_cargo_install(source: &Path, args: &[String]) -> i32 {
     let mut cmd = crate::process_admission::std_command("cargo");
     cmd.args(args);
+    if std::env::var_os("CARGO_BUILD_BUILD_DIR").is_none() {
+        cmd.env(
+            "CARGO_BUILD_BUILD_DIR",
+            crate::config_cli::leaves::cargo_build_dir_value(),
+        );
+    }
     if std::env::var_os("RUSTC_WRAPPER").is_none() {
         let wrapper = source
             .parent()

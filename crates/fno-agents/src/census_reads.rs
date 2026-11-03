@@ -205,6 +205,7 @@ fn run_spawn_guard(args: &[String]) -> i32 {
             handover_holder: None,
             root: None,
             pid: Some(std::process::id()),
+            phase: None,
         }),
     };
     if parsed.json_output {

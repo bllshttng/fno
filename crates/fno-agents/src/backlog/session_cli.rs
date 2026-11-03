@@ -13,8 +13,8 @@ use serde_json::{json, Value};
 
 use super::node_ref::resolve_tiers;
 use super::settings;
+use crate::claims::BLUEPRINT_HOLDER_PREFIX;
 
-pub(crate) const BLUEPRINT_HOLDER_PREFIX: &str = "blueprint-session:";
 const HANDOVER_HOLDER_PREFIX: &str = "spawn-handover:";
 const BLUEPRINT_TTL_MS: i64 = 2 * 60 * 60 * 1000;
 const SESSION_PHASES: &[&str] = &["think", "blueprint", "execute", "review", "ship"];
@@ -243,16 +243,31 @@ fn read_transcript_model(harness: &str, path: &PathBuf) -> Value {
     }
 }
 
+/// The planner phase an open or close binds: `think` or `blueprint`,
+/// default `blueprint`. An unknown word exits 2 naming the two legal ones.
+fn planner_phase(given: Option<&str>) -> Result<String, i32> {
+    match given.map(str::trim) {
+        None | Some("") | Some("blueprint") => Ok("blueprint".to_string()),
+        Some("think") => Ok("think".to_string()),
+        Some(other) => {
+            eprintln!("session: --phase must be one of 'think', 'blueprint' (got {other}).");
+            Err(2)
+        }
+    }
+}
+
 fn run_open(args: &[String]) -> i32 {
     let mut node: Option<String> = None;
     let mut harness: Option<String> = None;
     let mut session_id: Option<String> = None;
+    let mut phase: Option<String> = None;
     let mut json_out = false;
     let mut it = args.iter();
     while let Some(arg) = it.next() {
         match arg.as_str() {
             "--harness" => harness = it.next().cloned(),
             "--session-id" => session_id = it.next().cloned(),
+            "--phase" => phase = it.next().cloned(),
             "--json" | "-J" => json_out = true,
             "-h" | "--help" => {
                 println!("Usage: fno backlog session open [OPTIONS] NODE");
@@ -270,6 +285,10 @@ fn run_open(args: &[String]) -> i32 {
             "Usage: fno backlog session open [OPTIONS] NODE\n\nError: a node argument is required."
         );
         return 2;
+    };
+    let phase = match planner_phase(phase.as_deref()) {
+        Ok(phase) => phase,
+        Err(code) => return code,
     };
     let Some((h, s)) = eff_identity(harness.as_deref(), session_id.as_deref()) else {
         eprintln!("session open: no ambient identity for {node}; run inside a session.");
@@ -319,12 +338,27 @@ fn run_open(args: &[String]) -> i32 {
             return 0;
         }
     }
+    // An inline planner never passes the spawn guard, so the open door runs
+    // the same plan-fresh rule. A claim this session owns joined above and
+    // skips this.
+    match crate::spawn_guard::plan_fresh(&node_id, &phase) {
+        Some(crate::spawn_guard::PlanFresh::Refuse { detail, fields }) => {
+            let flat: Vec<String> = fields.iter().map(|(k, v)| format!("{k}={v}")).collect();
+            eprintln!(
+                "session open: node:{node_id} refused: reason=plan-fresh {} {detail}",
+                flat.join(" ")
+            );
+            return 1;
+        }
+        Some(crate::spawn_guard::PlanFresh::Warn(line)) => eprintln!("{line}"),
+        None => {}
+    }
     let pid = crate::claims::open_session_pid();
     let opts = crate::claims::AcquireOpts {
         pid: pid.map(|p| p as u32),
         pid_unavailable: pid.is_none(),
         ttl_ms: Some(BLUEPRINT_TTL_MS),
-        reason: Some(format!("blueprint session for {node_id}")),
+        reason: Some(format!("{phase} session for {node_id}")),
         identity: Some((s.clone(), h.clone())),
         root: root.clone(),
         ..Default::default()
@@ -348,10 +382,32 @@ fn run_open(args: &[String]) -> i32 {
         crate::claims::AcquireOutcome::HeldByOther {
             holder: other, pid, ..
         } => {
-            eprintln!(
-                "session open: node:{node_id} held by {other} (pid={}); no planner started.",
-                pid.map(|p| p.to_string()).unwrap_or_else(|| "None".into())
-            );
+            // A planner occupant names the doc, its date, the holder's host
+            // and the target door, so the second planner never re-seats. A
+            // work claim gets the plain line: its node is already in target.
+            let host = rec
+                .as_ref()
+                .filter(|r| r.holder == other)
+                .map(|r| r.host.as_str());
+            if other.starts_with(BLUEPRINT_HOLDER_PREFIX) {
+                let fields = crate::spawn_guard::planner_fields(
+                    crate::spawn_guard::plan_doc_facts(&node_id).as_ref(),
+                    &node_id,
+                    &other,
+                    host,
+                );
+                let flat: Vec<String> = fields.iter().map(|(k, v)| format!("{k}={v}")).collect();
+                eprintln!(
+                    "session open: node:{node_id} held by {other} (pid={}): no planner started. {}",
+                    pid.map(|p| p.to_string()).unwrap_or_else(|| "None".into()),
+                    flat.join(" ")
+                );
+            } else {
+                eprintln!(
+                    "session open: node:{node_id} held by {other} (pid={}): no planner started.",
+                    pid.map(|p| p.to_string()).unwrap_or_else(|| "None".into())
+                );
+            }
             1
         }
         crate::claims::AcquireOutcome::Error(e) => {
@@ -424,6 +480,7 @@ fn run_close(args: &[String]) -> i32 {
     let mut harness: Option<String> = None;
     let mut session_id: Option<String> = None;
     let mut started_at: Option<String> = None;
+    let mut phase: Option<String> = None;
     let mut json_out = false;
     let mut it = args.iter();
     while let Some(arg) = it.next() {
@@ -433,6 +490,7 @@ fn run_close(args: &[String]) -> i32 {
             "--harness" => harness = it.next().cloned(),
             "--session-id" => session_id = it.next().cloned(),
             "--started-at" => started_at = it.next().cloned(),
+            "--phase" => phase = it.next().cloned(),
             "--json" | "-J" => json_out = true,
             "-h" | "--help" => {
                 println!(
@@ -462,6 +520,10 @@ fn run_close(args: &[String]) -> i32 {
             "Usage: fno backlog session close [OPTIONS] NODE\n\nError: Missing option '--launch'."
         );
         return 2;
+    };
+    let phase = match planner_phase(phase.as_deref()) {
+        Ok(phase) => phase,
+        Err(code) => return code,
     };
     let summary = summary.trim().to_string();
     let launch = launch.trim().to_string();
@@ -517,7 +579,7 @@ pass --harness/--session-id or run inside a session."
     }
     let ended_at = now_utc_stamp();
     let row = match crate::graph_keeper::session_row(
-        "blueprint",
+        &phase,
         &h,
         &s,
         None,
@@ -548,7 +610,7 @@ pass --harness/--session-id or run inside a session."
         return 2;
     }
     let receipt = RefCell::new(json!({
-        "node_id": node_id, "status": "closed", "phase": "blueprint",
+        "node_id": node_id, "status": "closed", "phase": phase.clone(),
         "harness": h, "session_id": s, "summary": summary, "launch": launch,
         "ended_at": ended_at, "claim_released": false,
     }));
@@ -598,7 +660,7 @@ pass --harness/--session-id or run inside a session."
     if json_out {
         println!("{}", receipt.into_inner());
     } else {
-        println!("blueprint closed {node_id} ({h}:{s})");
+        println!("{phase} closed {node_id} ({h}:{s})");
         println!("summary: {summary}");
         println!("launch: {launch}");
     }

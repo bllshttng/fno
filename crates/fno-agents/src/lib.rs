@@ -35,7 +35,7 @@
 //! - [`provider`]: [`provider::Provider`] + [`provider::ProviderWithPty`] traits
 //!   (LD8) and the three impls ([`provider::ClaudeProvider`] shellout,
 //!   [`provider::CodexProvider`] / [`provider::GeminiProvider`] PTY-managed).
-//! - [`envelope`]: [`envelope::Envelope`] structural anti-injection wrapper (LD15).
+//! - [`mail::frame`]: [`mail::frame::Envelope`] structural anti-injection wrapper (LD15).
 //! - [`screen`]: the terminal-grid construction behind [`readiness::ScreenView`]
 //!   (the per-CLI [`readiness::ReadinessDetector`] impls now live in
 //!   [`readiness`]).
@@ -193,7 +193,6 @@ pub mod duration;
 pub mod effect_gate;
 pub mod effect_map;
 pub mod effort_surface;
-pub mod envelope;
 pub mod escalation;
 pub mod eval_attempt;
 pub mod eval_events;
@@ -306,7 +305,9 @@ pub mod launch_flags;
 pub mod launch_record;
 pub mod launch_workdir;
 pub mod law_match;
+pub mod law_pr_shape;
 pub mod law_restore;
+pub mod law_when;
 pub mod lead_answers;
 pub mod lead_checkin;
 pub(crate) mod lead_checkin_beat_budget;
@@ -337,6 +338,7 @@ pub mod ledger_axes;
 pub(crate) mod ledger_register;
 pub(crate) mod ledger_workers;
 mod lifecycle_child;
+pub mod link_dial;
 pub mod lint_registry;
 pub mod list_render;
 pub mod list_row;
@@ -361,17 +363,18 @@ pub mod machine_load;
 pub mod machine_mail;
 pub mod machine_sample;
 pub mod machine_watch;
+pub mod mail;
 pub mod mail_arm;
 pub mod mail_backfill;
 pub mod mail_bus;
 pub mod mail_cli;
 pub mod mail_control_drain;
-pub mod mail_delivery_state;
 pub mod mail_envelope;
 pub mod mail_header;
 pub mod mail_hold;
 pub mod mail_inject;
 pub mod mail_notify_self;
+pub mod mail_paths;
 pub mod mail_receipt;
 pub mod mail_remote;
 pub mod mail_teach;
@@ -415,6 +418,7 @@ pub mod node_reading;
 pub mod node_route;
 pub mod node_seed;
 pub mod notice_route;
+pub mod notify_dispatch;
 pub mod nudge;
 pub mod numbers;
 pub mod observer;
@@ -603,6 +607,7 @@ pub mod session_names_fold;
 pub(crate) mod session_origin;
 pub(crate) mod session_receipt;
 pub mod session_report;
+pub mod session_role;
 pub mod session_start_bytes;
 pub mod session_truth;
 pub mod silence_sweep;
@@ -648,6 +653,7 @@ pub mod stale_spaces;
 pub mod stalls;
 pub mod state;
 pub mod state_layout;
+mod state_layout_merge;
 pub mod state_layout_sqlite;
 pub mod state_path;
 pub mod state_root_drift;

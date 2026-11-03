@@ -380,7 +380,7 @@ mod tests {
         crate::mail_hold::tests::with_hold_env(|home| {
             let (_dir, bus) = bus_fixture("busy");
             append(&bus, "lead", &handle, "hello");
-            let clock_dir = home.join("mail-hold");
+            let clock_dir = crate::state_layout::place_dir(home, "mail-hold").unwrap();
             std::fs::create_dir_all(&clock_dir).unwrap();
             let clock = json!({
                 "until": "2099-01-01T00:00:00Z",

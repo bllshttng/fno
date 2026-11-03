@@ -135,7 +135,7 @@ def test_ledger_json_pinned_global_ignores_relative_state_dir(
     """The ledger is cross-project and must NOT fork into a per-repo
     stray. A relative (project-/CWD-anchored) state_dir must not drag the
     ledger into the repo checkout; it stays anchored to the user-global
-    ~/.fno, under the layout table's ``history/`` row. An absolute state_dir
+    ~/.fno, under the layout table's ``db/history/`` row. An absolute state_dir
     (the default and test sandboxes) is honored.
     """
     # An isolated HOME so the move ladder's first resolve renames a fixture
@@ -155,8 +155,8 @@ def test_ledger_json_pinned_global_ignores_relative_state_dir(
     result = ledger_json()
     # Pinned to <home>/.fno, NOT tmp_path/.fno (which is where a relative
     # state_dir would land graph.json/events under CWD), and through the
-    # history/ row: the fixture root file renamed in on first resolve.
-    assert result == (home / ".fno" / "history" / "ledger.json").resolve()
+    # db/history/ row: the fixture root file renamed in on first resolve.
+    assert result == (home / ".fno" / "db" / "history" / "ledger.json").resolve()
     assert result.exists()
     assert not legacy.exists()
     # The cwd-anchored stray a relative state_dir would have produced.
@@ -255,12 +255,12 @@ def test_all_global_dirs_derive_from_custom_state_dir(
 
     base = Path(custom_dir).resolve()
     assert fleet_dir() == base / "fleet"
-    assert postmortems_dir() == base / "postmortems"
+    assert postmortems_dir() == base / "db" / "postmortems"
     assert worktrees_base() == base / "worktrees"
     assert memory_dir() == base / "memory"
-    # The ledger answers through the layout table's history/ row; the root
+    # The ledger answers through the layout table's db/history/ row; the root
     # spelling only until the mover (or this first resolve) renames it in.
-    assert ledger_json() == base / "history" / "ledger.json"
+    assert ledger_json() == base / "db" / "history" / "ledger.json"
     assert global_events_json() == base / "events.jsonl"
 
 
@@ -398,7 +398,7 @@ def test_ledger_json_seal_beats_the_ledger_override(
 
     from fno.paths import ledger_json
 
-    assert ledger_json() == (tmp_path / "pinned").resolve() / "history" / "ledger.json"
+    assert ledger_json() == (tmp_path / "pinned").resolve() / "db" / "history" / "ledger.json"
 
 
 def test_migrate_from_checkout_refuses_the_state_root(

@@ -1387,7 +1387,9 @@ pub(crate) fn resolve_handoffs_dir(
             .unwrap_or_else(|| cwd.to_path_buf())
             .join(".fno"),
     };
-    base.join("handoffs").join(project)
+    crate::state_layout::place_dir(&base, "handoffs")
+        .unwrap_or_else(|| base.join("handoffs"))
+        .join(project)
 }
 
 /// One file's `obsidian:` block, keyed per-field so a caller can merge across
@@ -2816,7 +2818,8 @@ fn resolve_postmortems_dir(
     let base = home
         .map(Path::to_path_buf)
         .unwrap_or_else(|| cwd.to_path_buf());
-    base.join(".fno/postmortems")
+    let root = base.join(".fno");
+    crate::state_layout::place_dir(&root, "postmortems").unwrap_or_else(|| root.join("postmortems"))
 }
 
 /// Best-effort: the newest assistant text message in the transcript JSONL, used
@@ -3571,7 +3574,7 @@ mod tests {
         let got = resolve_handoffs_dir(None, None, &cwd, Some(&home));
         assert_eq!(
             got,
-            home.join(".fno/handoffs/fnoe999_0"),
+            home.join(".fno/db/handoffs/fnoe999_0"),
             "a temp cwd with a fallback name never reaches the vault"
         );
         write_settings(&cwd, "[project]\nid = \"demo\"\n");
@@ -3604,7 +3607,7 @@ mod tests {
         );
         write_settings(&home, "[obsidian]\nenabled = true\nvault = \"myvault\"\n");
         let got = resolve_handoffs_dir(None, None, &cwd, Some(&home));
-        assert_eq!(got, home.join(".fno/handoffs/demo"));
+        assert_eq!(got, home.join(".fno/db/handoffs/demo"));
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -3655,7 +3658,7 @@ mod tests {
         // No override, no env, no settings -> ~/.fno/postmortems.
         assert_eq!(
             resolve_postmortems_dir(None, None, Some(&home), &cwd),
-            home.join(".fno/postmortems")
+            home.join(".fno/db/postmortems")
         );
         let _ = fs::remove_dir_all(&cwd);
     }

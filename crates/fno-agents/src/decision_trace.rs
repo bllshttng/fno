@@ -212,7 +212,7 @@ fn ask_key(sender: Option<&str>, target: Option<&str>, body: &str) -> String {
 fn read_bus_message(msg_id: &str) -> Option<(String, String, String)> {
     let home = crate::paths::AgentsHome::from_env_opt()?;
     let fno_dir = home.root().parent().unwrap_or_else(|| home.root());
-    let rows = crate::announce::read_bus_segments(&crate::intel::bus_log_path(fno_dir));
+    let rows = crate::mail::log::read_bus_segments(&crate::mail_paths::bus_log_path(fno_dir));
     for row in rows {
         if row.get("id").and_then(Value::as_str) == Some(msg_id) {
             let field = |k: &str| row.get(k).and_then(Value::as_str).map(str::to_string);

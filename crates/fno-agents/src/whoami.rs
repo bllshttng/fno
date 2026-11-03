@@ -779,6 +779,13 @@ fn whoami_render(opts: &Options, home: &AgentsHome) -> i32 {
         if let Some(text) = &role {
             payload.insert("role".into(), Value::String(text.clone()));
         }
+        if let Some(found) = session_role_of(&ident, home) {
+            payload.insert("role_kind".into(), found.kind.as_str().into());
+            payload.insert("role_name".into(), Value::String(found.name));
+            if let Some(lead) = found.lead {
+                payload.insert("role_lead".into(), Value::String(lead));
+            }
+        }
         if let Some(reading) = &context_reading {
             payload.insert("context_used_pct".into(), json!(reading.2));
             payload.insert("context_used_tokens".into(), json!(reading.0));
@@ -1770,6 +1777,17 @@ fn manifest_identity_values(project_root: &Path) -> Vec<String> {
     out
 }
 
+/// The filter-facing role read: kind, registry name, covering lead scope.
+fn session_role_of(
+    ident: &crate::spawn_context::OwnedIdentity,
+    home: &AgentsHome,
+) -> Option<crate::session_role::SessionRole> {
+    let (Some(sid), Some(harness)) = (&ident.session_id, &ident.harness) else {
+        return None;
+    };
+    crate::session_role::session_role(&registry_rows(home), sid, harness)
+}
+
 /// The one role rendering, or None: `L{level} {scope}` plus its grantor.
 fn role_text(ident: &crate::spawn_context::OwnedIdentity, home: &AgentsHome) -> Option<String> {
     let (Some(sid), Some(harness)) = (&ident.session_id, &ident.harness) else {
@@ -1882,22 +1900,14 @@ fn project_id_from(path: &Path) -> Option<String> {
     }
 }
 
-fn bus_dir() -> Option<PathBuf> {
-    if let Some(dir) = std::env::var_os("FNO_BUS_DIR") {
-        return Some(PathBuf::from(dir));
-    }
-    if let Some(root) = std::env::var_os("FNO_INBOX_ROOT") {
-        return Some(PathBuf::from(root).join(".bus"));
-    }
-    let base = std::env::var_os("HOME")?;
-    Some(PathBuf::from(base).join(".fno").join("bus"))
-}
-
 /// Unread messages for one address after its cursor, the count the drain
 /// would print. Withdrawals, hosted/typed receipts and duplicate ids filter
 /// here, the same choke point every reader of the log shares.
 fn scan_unread_count(name: &str, exclude_from: Option<&[String]>) -> u64 {
-    let Some(bus) = bus_dir() else { return 0 };
+    let base = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let bus = crate::mail_paths::bus_dir_of(&base.join(".fno"));
     let rows = match read_bus_rows(&bus) {
         Ok(rows) => rows,
         Err(_) => return 0,

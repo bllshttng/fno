@@ -288,7 +288,7 @@ fn backfill_live_path(explicit: Option<&str>) -> PathBuf {
     }
     let home = crate::paths::AgentsHome::from_env();
     let dot_fno = home.root().parent().unwrap_or_else(|| home.root());
-    crate::intel::bus_log_path(dot_fno)
+    crate::mail_paths::bus_log_path(dot_fno)
 }
 
 /// Pair each send with its receiver-side block by body attribution. The
@@ -438,7 +438,7 @@ fn run_backfill(args: &[String]) -> i32 {
             Some(live.as_str())
         });
         let mut existing: std::collections::HashSet<String> = std::collections::HashSet::new();
-        for seg in crate::announce::read_bus_segments(&live_path) {
+        for seg in crate::mail::log::read_bus_segments(&live_path) {
             if let Some(id) = seg.get("id").and_then(Value::as_str) {
                 existing.insert(id.to_string());
             }

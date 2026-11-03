@@ -523,10 +523,10 @@ pub(crate) fn bus_dir(settings: &Settings) -> PathBuf {
     if let Some(explicit) = env_nonempty("FNO_BUS_DIR") {
         return PathBuf::from(explicit);
     }
-    if let Some(inbox) = env_nonempty("FNO_INBOX_ROOT") {
-        return PathBuf::from(inbox).join(".bus");
-    }
-    override_path(settings, "paths.bus_dir").unwrap_or_else(|| state_dir(settings).join("bus"))
+    override_path(settings, "paths.bus_dir").unwrap_or_else(|| {
+        let root = state_dir(settings);
+        crate::state_layout::place_dir(&root, "bus").unwrap_or_else(|| root.join("bus"))
+    })
 }
 
 pub(crate) fn project_events_json(settings: &Settings) -> PathBuf {

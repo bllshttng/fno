@@ -146,23 +146,29 @@ mkdir -p "$ROOT/mux" "$ROOT/agents" "$ROOT/code/checkout" "$ROOT/text" "$ROOT/.f
     'id = "studio"' \
     'name = "Studio"' \
     'harness = "claude"' \
-    'auth = "oauth_dir"' \
-    'credentials_source = "~/.claude-studio"' \
+    'auth = "managed"' \
     'priority = 10' \
     '[[accounts.records]]' \
     'id = "night-shift"' \
     'name = "Night shift"' \
     'harness = "claude"' \
-    'auth = "oauth_dir"' \
-    'credentials_source = "~/.claude-night"' \
+    'auth = "managed"' \
     'priority = 20' \
     '[[accounts.records]]' \
     'id = "codex-lab"' \
     'name = "Codex lab"' \
     'harness = "codex"' \
-    'auth = "oauth_dir"' \
-    'credentials_source = "~/.codex-lab"' \
-    'priority = 30'
+    'auth = "managed"' \
+    'plan = "Pro"' \
+    'priority = 30' \
+    '[[accounts.records]]' \
+    'id = "glm-key"' \
+    'name = "GLM key"' \
+    'harness = "claude"' \
+    'auth = "api_key"' \
+    'env = { ANTHROPIC_BASE_URL = "https://api.z.ai/api/anthropic", ANTHROPIC_API_KEY = "demo-placeholder" }' \
+    'plan = "GLM Coding Plan Max"' \
+    'priority = 40'
   if [ -n "${FNO_DEMO_PY_SOURCE:-}" ]; then
     printf '[dev]\nsource = "%s"\n' "$FNO_DEMO_PY_SOURCE"
   fi
@@ -199,6 +205,11 @@ export PATH
 exec "$REAL_AGENTS" "\$@"
 SH
 chmod +x "$ROOT/fleetbin/fno-agents"
+# The managed demo records would read the macOS Keychain, and its unscoped
+# item is the real login on this machine. This shim answers every Keychain
+# read with not-found, so the shot never touches a real credential.
+printf '#!/bin/sh\nexit 44\n' >"$ROOT/fleetbin/security"
+chmod +x "$ROOT/fleetbin/security"
 export PATH="$ROOT/fleetbin:$PATH"
 export FNO_AGENTS_BIN="$ROOT/fleetbin/fno-agents"
 # The claims legacy lock takes a FILESYSTEM root; a fresh root carries the
@@ -233,9 +244,32 @@ usage = {
                     "windows": [win("5h", 4.0, 15800), win("weekly", 22.0, 475200)]},
     "codex-lab": {"probed_at": now - 120, "source": "session-log",
                   "windows": [win("5h", 12.0, 9600), win("weekly", 9.0, 518400)]},
+    "glm-key": {"probed_at": now - 180, "source": "api-quota",
+                "windows": [win("5h", 71.0, 3600)]},
 }
 with open(f"{root}/.fno/state/provider-runtime-state.json", "w") as f:
     json.dump({"schema_version": 2, "usage": usage}, f)
+# Saved logins for the managed records: invented principals and tiers, and
+# tokens that sign in nowhere. The row reads its plan and email from these.
+import os
+logins = {
+    "studio": ("claude", "ada@studio.example", {"subscriptionType": "max", "rateLimitTier": "default_claude_max_20x"}),
+    "night-shift": ("claude", "night@ops.example", {"subscriptionType": "pro", "rateLimitTier": "default_claude_ai"}),
+    "codex-lab": ("codex", "lab@codex.example", None),
+}
+for rid, (harness, email, tier) in logins.items():
+    d = f"{root}/.fno/providers/{rid}"
+    os.makedirs(d, exist_ok=True)
+    meta = {"harness": harness, "account_id": rid, "captured_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now - 2 * 86400)), "kind": "keychain",
+            "principal": {"account_uuid": f"acc-{rid}", "organization_uuid": "org-demo", "email": email}}
+    with open(f"{d}/meta.json", "w") as f:
+        json.dump(meta, f)
+    blob = {"claudeAiOauth": dict({"accessToken": f"demo-{rid}", "refreshToken": f"demo-{rid}"}, **tier)} if tier else {"tokens": {}}
+    with open(f"{d}/blob", "w") as f:
+        json.dump(blob, f)
+# A managed record reads as active from the slot stamp, not the pointer.
+with open(f"{root}/.fno/providers/.active-claude", "w") as f:
+    f.write("studio")
 stamp = lambda t: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t))
 if hold:
     with open(f"{root}/.fno/agents/fleet-stop.json", "w") as f:
@@ -584,7 +618,7 @@ def ts(mins_ago):
 
 # Chats store: from/to join the registry rows above, so threads resolve to
 # seeded agents. The fleet: broadcast lands on the bell's Announcements tab.
-chats = f"{root}/.fno/chats"
+chats = f"{root}/.fno/db/mail/chats"
 
 def msg(i, mins_ago, frm, to, body):
     return {"type": "message", "kind": "send", "v": 1, "id": f"fmail-demo-{i}",

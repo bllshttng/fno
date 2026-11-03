@@ -137,10 +137,48 @@ pub enum Role {
     /// A panel line that needs the reader (a failed delivery): the
     /// emulator's index-1 red slot, on the terminal's own bg.
     PanelWarn,
+    /// A status badge (`[ACTIVE]`): a filled block in the theme's accent,
+    /// bold, so the one marked row reads before any text on it.
+    Badge,
+    /// A level meter's fill, by how full it is: the emulator's green, amber
+    /// and red slots ([`type_scale::level`]).
+    LevelOk,
+    LevelWarn,
+    LevelHigh,
     /// A literal-color span (the colors tab's swatches). The color IS the
     /// content, so it resolves above the theme split and never shifts with
     /// the theme.
     Swatch(Color),
+}
+
+/// The type levels a body view paints with, by meaning, so views that share
+/// a level share its look. Each name is a [`Role`]; the theme resolves it.
+pub mod type_scale {
+    use super::Role;
+
+    /// A group's title (a provider, a section): the strongest text.
+    pub const HEADING: Role = Role::PanelHead;
+    /// The name of one item in a group (an account): bold.
+    pub const NAME: Role = Role::PanelHead;
+    /// A value the reader compares across rows (a percent): bold.
+    pub const STRONG: Role = Role::PanelHead;
+    /// Plain text on the ground.
+    pub const BODY: Role = Role::PanelBody;
+    /// Detail and key hints: the dim slot.
+    pub const META: Role = Role::PanelMeta;
+    /// A status badge on the one marked row.
+    pub const BADGE: Role = Role::Badge;
+    /// A warning the reader must act on.
+    pub const WARN: Role = Role::PanelWarn;
+
+    /// A meter fill's level for `pct` used: amber over 70, red over 90.
+    pub fn level(pct: u32) -> Role {
+        match pct {
+            p if p > 90 => Role::LevelHigh,
+            p if p > 70 => Role::LevelWarn,
+            _ => Role::LevelOk,
+        }
+    }
 }
 
 impl Theme {
@@ -230,6 +268,18 @@ pub fn cell_style(role: Role, t: &Theme) -> (Color, Color, u8) {
         Role::PanelHead => return (Color::Default, Color::Default, cell_flags::BOLD),
         Role::PanelLabel | Role::PanelPill => return (Color::Indexed(3), Color::Default, 0),
         Role::PanelWarn => return (Color::Indexed(1), Color::Default, 0),
+        Role::LevelOk => return (Color::Indexed(2), Color::Default, 0),
+        Role::LevelWarn => return (Color::Indexed(3), Color::Default, 0),
+        Role::LevelHigh => return (Color::Indexed(1), Color::Default, 0),
+        // INVERSE over the accent fg: the accent becomes the fill and the
+        // terminal's own bg the text, so the badge reads on dark and light.
+        Role::Badge => {
+            return (
+                t.brand,
+                Color::Default,
+                cell_flags::INVERSE | cell_flags::BOLD,
+            )
+        }
         Role::PanelTab => return (Color::Default, Color::Default, cell_flags::INVERSE),
         // Index 8, not the DIM flag: the merged band evidence showed DIM
         // washing the default fg out on a light terminal, while index 8 stays

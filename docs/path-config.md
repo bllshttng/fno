@@ -62,7 +62,7 @@ plans_dir = ".fno/plans/"   # the legacy default; unset it resolves to <space>/p
 # Per-resource overrides. TOML has no null: OMIT a key to derive it from
 # state_dir. Each line below names the default an omitted key resolves to.
 [paths]
-# ledger_json     = ...   # default: <state_dir>/history/ledger.json
+# ledger_json     = ...   # default: <state_dir>/db/history/ledger.json
 # briefs_dir      = ...   # default: <state_dir>/briefs/
 # fleet_dir       = ...   # default: <state_dir>/fleet/
 # postmortems_dir = ...   # default: <state_dir>/postmortems/
