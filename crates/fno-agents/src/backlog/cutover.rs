@@ -2400,7 +2400,6 @@ fn absolutize(path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::release_node_lockfile_over;
-    use std::path::PathBuf;
     use tempfile::TempDir;
 
     #[test]
