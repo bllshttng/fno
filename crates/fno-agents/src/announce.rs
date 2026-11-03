@@ -26,6 +26,7 @@ use std::time::Duration;
 
 use serde_json::{json, Map, Value};
 
+use crate::mail::envelope::ENVELOPE_VERSION;
 use crate::mail::log::read_bus_segments;
 use crate::store_remote::{Remote, SqlValue};
 
@@ -37,7 +38,6 @@ pub(crate) const TERMINAL_STATUSES: &[&str] = &["exited", "orphaned", "failed", 
 const ANNOUNCE_KIND: &str = "announce";
 const LANDED_KIND: &str = "landed";
 const WAKE_KIND: &str = "announce-wake";
-const ENVELOPE_VERSION: i64 = 1;
 
 /// Rate limit: 6 announcements per sender per rolling hour, counted from the
 /// bus itself (no second state file to drift).
@@ -294,7 +294,7 @@ pub(crate) fn append_line_open(live: &Path, obj: &Value, chats_dir: &Path) -> Re
         crate::chats::record(chats_dir, obj)?;
     }
     crate::mail::log::append_raw(live, obj)?;
-    if kind == "landed" || kind == crate::mail_delivery_state::STATE_KIND || has_delivery {
+    if kind == "landed" || kind == crate::mail::state::STATE_KIND || has_delivery {
         if let Err(e) = crate::chats::record(chats_dir, obj) {
             eprintln!("chats record (receipt) failed: {e}");
         }

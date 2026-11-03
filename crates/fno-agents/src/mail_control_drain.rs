@@ -207,7 +207,7 @@ pub(crate) fn deliverable(m: &Value) -> bool {
     let kind = m.get("kind").and_then(Value::as_str).unwrap_or("");
     if kind == WITHDRAW_KIND
         || kind == LANDED_KIND
-        || kind == crate::mail_delivery_state::STATE_KIND
+        || kind == crate::mail::state::STATE_KIND
     {
         return false;
     }

@@ -8,7 +8,7 @@
 
 use crate::claude_drive::claude_projects_dir;
 use crate::mail_control_drain::{landed_ids, withdrawn_ids};
-use crate::mail_delivery_state::newest_state;
+use crate::mail::state::newest_state;
 use crate::mail_header::ids_in_text;
 use crate::paths::AgentsHome;
 use crate::spawn_context::resolve_self_identity;
@@ -131,8 +131,8 @@ pub fn run_sent(args: &[String]) -> i32 {
                 let mut delivery_state = newest_state(&all, &id);
                 // A transcript hit is the turn record too, not only a landed row.
                 if !delivery_state.is_accepted() && landed_flag.get(&id) == Some(&Some(true)) {
-                    delivery_state = crate::mail_delivery_state::DeliveryState::AcceptedNewTurn {
-                        evidence: crate::mail_delivery_state::Evidence {
+                    delivery_state = crate::mail::state::DeliveryState::AcceptedNewTurn {
+                        evidence: crate::mail::state::Evidence {
                             record: "landed".into(),
                             ..Default::default()
                         },
@@ -141,7 +141,7 @@ pub fn run_sent(args: &[String]) -> i32 {
                 json!({
                     "id": id,
                     "state": delivery_state.word(),
-                    "state_detail": crate::mail_delivery_state::detail(&delivery_state),
+                    "state_detail": crate::mail::state::detail(&delivery_state),
                     "to": str_field(m, "to", ""),
                     "to_kind": m.get("to_kind").cloned().unwrap_or(Value::Null),
                     "kind": str_field(m, "kind", ""),
@@ -205,7 +205,7 @@ pub fn run_sent(args: &[String]) -> i32 {
             str_field(m, "to", ""),
             delivery_of(m),
             str_field(m, "ts", ""),
-            crate::mail_delivery_state::receipt(&delivery_state, ""),
+            crate::mail::state::receipt(&delivery_state, ""),
         );
     }
     println!(

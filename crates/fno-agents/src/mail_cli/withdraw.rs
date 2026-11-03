@@ -123,8 +123,8 @@ pub fn run(args: &[String]) -> i32 {
     // A tombstone retracts only the bus copy. Once the bytes sit with the
     // recipient's harness (accepted, queued there, or typed at its prompt)
     // a tombstone would print success while retracting nothing.
-    use crate::mail_delivery_state::{DeliveryState, Parked};
-    match crate::mail_delivery_state::newest_state(&msgs, &msg_id) {
+    use crate::mail::state::{DeliveryState, Parked};
+    match crate::mail::state::newest_state(&msgs, &msg_id) {
         state @ (DeliveryState::AcceptedNewTurn { .. } | DeliveryState::AcceptedSteer { .. }) => {
             eprintln!(
                 "{msg_id} is {}: the recipient's harness took it, so it cannot be withdrawn. Send a correction.",

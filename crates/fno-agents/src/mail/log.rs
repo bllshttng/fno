@@ -99,6 +99,15 @@ pub fn read_bus_segments_reported(live: &Path) -> (Vec<PositionedBusRow>, Vec<St
         };
         for (lineno, line) in text.lines().enumerate() {
             match serde_json::from_str::<Value>(line) {
+                Ok(v) if !super::envelope::is_readable(&v) => warnings.push(format!(
+                    "bus log: skipping row {}:{} (v={} is newer than supported v={})",
+                    p.file_name()
+                        .and_then(std::ffi::OsStr::to_str)
+                        .unwrap_or_default(),
+                    lineno + 1,
+                    super::envelope::row_version(&v),
+                    super::envelope::ENVELOPE_VERSION
+                )),
                 Ok(v) => out.push(PositionedBusRow {
                     row: v,
                     source: p

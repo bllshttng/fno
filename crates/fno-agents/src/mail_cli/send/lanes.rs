@@ -591,7 +591,7 @@ pub(crate) fn name_lane_send(args: NameLaneArgs) -> Result<NameLane, i32> {
         .map(|r| format!(" re:{r}"))
         .unwrap_or_default();
     if args.resolved.is_some() || args.token.is_some() {
-        crate::mail_delivery_state::record(
+        crate::mail_receipt::record(
             &msg_id,
             &lane_state,
             &stamp_from(args.from_name),
@@ -632,7 +632,7 @@ pub(crate) fn name_lane_send(args: NameLaneArgs) -> Result<NameLane, i32> {
                 &msg_id,
                 args.subject,
                 &recipient,
-                &crate::mail_delivery_state::receipt(&lane_state, &format!("{live}{corr}")),
+                &crate::mail::state::receipt(&lane_state, &format!("{live}{corr}")),
             )
         );
         return Ok(NameLane::Done);
@@ -1253,7 +1253,7 @@ pub(super) fn job_lane_send(
     } else {
         mail_inject_claude(&session_id, &wrapped, Some(&mut reasons), None)
     };
-    crate::mail_delivery_state::record(&msg_id, &state, &sender, &recipient);
+    crate::mail_receipt::record(&msg_id, &state, &sender, &recipient);
     let injected = state.reached();
     let bus_only = !injected && reasons.iter().any(|r| r == BUS_ONLY_POLICY);
     let holder_tag = format!(
@@ -1289,7 +1289,7 @@ pub(super) fn job_lane_send(
                 &msg_id,
                 subject,
                 &recipient,
-                &crate::mail_delivery_state::receipt(&state, &holder_tag),
+                &crate::mail::state::receipt(&state, &holder_tag),
             )
         );
         return Ok(());
@@ -1439,7 +1439,7 @@ pub(super) fn run_dispatch_then_name_lane(
                         &result.msg_id,
                         subject,
                         token,
-                        &crate::mail_delivery_state::receipt(&result.state, ""),
+                        &crate::mail::state::receipt(&result.state, ""),
                     )
                 );
                 return 0;
@@ -1684,7 +1684,7 @@ fn forced_pane_send(pane: ForcedPane) -> Result<NameLane, i32> {
         return Err(1);
     }
     let state = mail_inject_pane(entry, wrapped, None);
-    crate::mail_delivery_state::record(msg_id, &state, sender, recipient);
+    crate::mail_receipt::record(msg_id, &state, sender, recipient);
     if !state.reached() {
         release_budget(&reservation);
         eprintln!(
@@ -1708,7 +1708,7 @@ fn forced_pane_send(pane: ForcedPane) -> Result<NameLane, i32> {
             msg_id,
             subject,
             recipient,
-            &crate::mail_delivery_state::receipt(&state, &format!("[pane {pane_num}]")),
+            &crate::mail::state::receipt(&state, &format!("[pane {pane_num}]")),
         )
     );
     if !corr.is_empty() {

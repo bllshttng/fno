@@ -362,7 +362,7 @@ fn step_of(state: &ReplyState, items: &[AttentionItem], now: u64, cwd: &Path) ->
             })
         });
     let facts = Facts {
-        mail_landed: crate::mail_delivery_state::receipt_reached(&state.receipt),
+        mail_landed: crate::mail::state::receipt_reached(&state.receipt),
         is_note: state.item_id.starts_with("note-"),
         session: session.as_ref().map(|(s, h)| (s.as_str(), h.as_str())),
         confirmed,

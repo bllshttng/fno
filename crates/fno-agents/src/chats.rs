@@ -446,7 +446,7 @@ pub(crate) fn record_at(
 /// The bus kinds that are a receipt about another message: a `landed`
 /// transcript match, or a `state` row naming the delivery state it reached.
 fn is_receipt_kind(kind: &str) -> bool {
-    kind == "landed" || kind == crate::mail_delivery_state::STATE_KIND
+    kind == "landed" || kind == crate::mail::state::STATE_KIND
 }
 
 /// The message a receipt row is about, and the delivery word it records.

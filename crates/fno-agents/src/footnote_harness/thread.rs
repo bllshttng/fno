@@ -32,7 +32,7 @@ use crate::acp_stdio::{
 };
 use crate::claude_ask::AskOutcome;
 use crate::footnote_transcript::LaunchSpec;
-use crate::mail_delivery_state::{DeliveryState, Parked};
+use crate::mail::state::{DeliveryState, Parked};
 use crate::paths::AgentsHome;
 use crate::protocol::{ErrorCode, Request, Response};
 use crate::state::{load_registry, update_registry, RegistryEntry};
@@ -191,7 +191,7 @@ fn work(session: Arc<AcpSession>, host: Arc<Host>) {
 /// the request goes out (`failed` with the error). ACP has no steer, so an
 /// accepted prompt is always a new turn.
 fn record_mail_state(meta: Option<&Value>, lost: Option<&str>) {
-    use crate::mail_delivery_state::{DeliveryState, Evidence};
+    use crate::mail::state::{DeliveryState, Evidence};
     let origin = meta.and_then(|m| m.get("footnote/origin"));
     let Some(id) = origin
         .and_then(|o| o.get("message_id"))
@@ -215,7 +215,7 @@ fn record_mail_state(meta: Option<&Value>, lost: Option<&str>) {
             },
         ),
     };
-    crate::mail_delivery_state::record(id, &state, from, "");
+    crate::mail_receipt::record(id, &state, from, "");
 }
 
 /// Answer socket requests until SIGINT, SIGTERM or a lost session.

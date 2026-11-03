@@ -11,7 +11,7 @@
 //! status substrings, so the assembly must match the retired Python bodies
 //! exactly, including Python's banker's rounding on the drain window.
 
-use serde_json::json;
+use serde_json::{json, Value};
 
 /// The NOT LANDED exit: the local send wrote its durable copy for a recipient that is not live, and could not confirm the live inject. The copy exists,
 /// so the receiver's mail owns the body and a retry would duplicate it -
@@ -434,5 +434,41 @@ mod tests {
         // A different pair never shares the window.
         assert_eq!(escalate_debounce(&dir, "p2", 300), "claim");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+/// A `kind: state` bus row recording that message `of` reached `state`.
+pub fn state_row(of: &str, state: &crate::mail::state::DeliveryState, from: &str, to: &str) -> Value {
+    let id = crate::announce::new_msg_id();
+    let mut meta = state.to_json();
+    meta["of"] = json!(of);
+    json!({
+        "v": crate::mail::envelope::ENVELOPE_VERSION,
+        "id": id,
+        "thread": id,
+        "ts": crate::graph_store::now_isoformat(),
+        "from": from,
+        "to": to,
+        "kind": crate::mail::state::STATE_KIND,
+        "body": "",
+        "meta": meta,
+    })
+}
+
+/// Append a [`state_row`] to the live bus segment; a failure only warns,
+/// because the staged message row already holds the body.
+pub fn record_state(bus: &std::path::Path, of: &str, state: &crate::mail::state::DeliveryState, from: &str, to: &str) {
+    let row = state_row(of, state, from, to);
+    let live = bus.join("messages.jsonl");
+    if let Err(e) = crate::announce::append_line_open(&live, &row, &crate::chats::chats_dir()) {
+        eprintln!("delivery state row failed: {e}");
+    }
+}
+
+/// [`record_state`] on the bus the mail readers use (`FNO_BUS_DIR`, then
+/// the inbox root, then the state root); no resolvable bus records nothing.
+pub fn record(of: &str, state: &crate::mail::state::DeliveryState, from: &str, to: &str) {
+    if let Some(bus) = crate::mail_paths::state_bus_dir_opt() {
+        record_state(&bus, of, state, from, to);
     }
 }

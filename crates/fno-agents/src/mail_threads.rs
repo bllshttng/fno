@@ -223,8 +223,8 @@ fn expires_at(line: &Value) -> Option<&str> {
 /// writes `hosted`, which would otherwise turn a parked message accepted.
 fn delivery_states(
     texts: &[String],
-) -> std::collections::HashMap<String, crate::mail_delivery_state::DeliveryState> {
-    use crate::mail_delivery_state::{DeliveryState, Evidence};
+) -> std::collections::HashMap<String, crate::mail::state::DeliveryState> {
+    use crate::mail::state::{DeliveryState, Evidence};
     let mut out: std::collections::HashMap<String, DeliveryState> = Default::default();
     let mut stated: std::collections::HashSet<String> = Default::default();
     for line in texts.iter().flat_map(|t| t.lines()) {
@@ -295,13 +295,13 @@ fn failure_counts(texts: &[String]) -> std::collections::HashMap<String, u64> {
 /// The state word for one message row: its folded delivery lines, else the
 /// legacy reading of its own `delivery` mark.
 fn state_word(
-    states: &std::collections::HashMap<String, crate::mail_delivery_state::DeliveryState>,
+    states: &std::collections::HashMap<String, crate::mail::state::DeliveryState>,
     v: &Value,
 ) -> &'static str {
     let id = v.get("id").and_then(Value::as_str).unwrap_or("");
     match states.get(id) {
         Some(state) => state.word(),
-        None => crate::mail_delivery_state::DeliveryState::from_legacy(
+        None => crate::mail::state::DeliveryState::from_legacy(
             v.get("delivery")
                 .and_then(Value::as_str)
                 .unwrap_or("durable"),

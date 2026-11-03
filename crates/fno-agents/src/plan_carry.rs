@@ -94,7 +94,7 @@ fn host_key() -> String {
 }
 
 fn host_name() -> String {
-    crate::mail_bus::normalize_host(&crate::claims::hostname())
+    crate::mail::address::normalize_host(&crate::claims::hostname())
 }
 
 fn home() -> PathBuf {
