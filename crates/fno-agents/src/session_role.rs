@@ -11,8 +11,8 @@
 
 use serde_json::Value;
 
-use crate::AgentStatus;
 use crate::whoami::find_by_session;
+use crate::AgentStatus;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RoleKind {
