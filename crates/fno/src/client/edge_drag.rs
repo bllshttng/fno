@@ -376,8 +376,8 @@ mod tests {
         assert_eq!(col.size_at(5, 200), 60, "dragged past the ceiling");
         let row = grab(Along::RowFromBottom, 40);
         assert_eq!(
-            row.size_at(25, 0),
-            15,
+            row.size_at(15, 0),
+            25,
             "a pointer above the origin grows it"
         );
         assert_eq!(row.size_at(50, 0), 20, "a pointer below the origin floors");
