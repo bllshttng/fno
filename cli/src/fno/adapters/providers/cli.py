@@ -80,17 +80,13 @@ def list_forward(
 
 
 
-@cli.command("usage")
-def usage_forward(
-    refresh: bool = typer.Option(
-        False, "--refresh", help="Force a fresh probe (bypass the TTL cache)."
-    ),
-    json_output: bool = typer.Option(
-        False, "--json", "-J", help="Emit a one-line JSON object keyed by provider id."
-    ),
-) -> None:
+@cli.command(
+    "usage",
+    context_settings={"allow_extra_args": True, "ignore_unknown_options": True, "help_option_names": []},
+)
+def usage_forward(ctx: typer.Context) -> None:
     """Show per-account rate-limit windows: used % and reset time."""
-    _forward_accounts("usage", *(["--refresh"] if refresh else []), *(["--json"] if json_output else []))
+    _forward_accounts("usage", *ctx.args)
 
 
 @cli.command("window")
