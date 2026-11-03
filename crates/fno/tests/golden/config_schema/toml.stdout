@@ -186,6 +186,14 @@ headers_env = "FNO_OTLP_HEADERS"
 # Export event titles as log text (default off: only the event kind).
 log_content = false
 
+[telemetry.eval_events]
+# Send each eval run to PostHog as an event (default off).
+enabled = false
+# PostHog ingest host, https only.
+host = "https://us.i.posthog.com"
+# Env var holding the PostHog project token.
+token_env = "FNO_POSTHOG_PROJECT_TOKEN"
+
 [attention]
 # Kill switch for the attention arm (question pages and sinks; default on).
 enabled = true
@@ -574,6 +582,10 @@ graphql_min_remaining = 200
 # Consecutive broken tick ends (timeout/error) at a fresh watermark before the watcher reads `wedged` and auto-heal re-renders its plist via `fno do pr watch refresh`.
 wedged_after_ticks = 3
 
+[ci_tier]
+# Run the CI tier on this machine: the daemon keeps at most six merge-queue runs in flight per repo, ranking the open PRs, cancelling the overflow, and rerunning a run it cancelled once a slot frees (a cancelled run cannot rerun failed jobs, so the rerun is full). Default false. Opt in on ONE machine per repo: two clones of a repo are one tier, two machines are two arms that would cancel and rerun each other's work.
+enabled = false
+
 [groom]
 # Enable the daily backlog-grooming worker spawn (fno backlog groom). Defaults true.
 enabled = true
@@ -589,6 +601,12 @@ stale_days = 7
 scratch_threshold = 3
 # Window in days the scratch-shape sweep reads job tmp dirs over.
 scratch_window_days = 28
+
+[evals.gate]
+# Daily USD cap on the daemon's evals change gate, at 0.04 an attempt. 0 turns the gate off.
+daily_usd = 15.0
+# Lane the gate's golden runs use. Defaults zai-flash.
+lane = "zai-flash"
 
 [recovery]
 # Enable the bg-session recovery sweep: provider failover on swap-class deaths plus close-surfacing for finished-but-lingering sessions (rides the pr_watch tick). Assumes bypass workers (the config.agents.defaults.permission_mode built-in for autonomous dispatch); a non-bypass worker cannot run autonomously and is not resumed.
