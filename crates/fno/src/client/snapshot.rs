@@ -22,8 +22,8 @@ use serde_json::Value;
 const USAGE: &str =
     "usage: fno mux serve --snapshot --server <name> --out <path> [--squad <name>] \
 [--theme dark|light|macchiato] [--format html|svg|png] [--size <cols>x<rows> [--fit]] [--peer <cols>x<rows>] \
-[--font <family>] [--message <fmail-id>] \
-[--view bell|bell-wide|bell-full|feed|row-menu|hover|cursor|tab-menu|sideline-menu|composer|split-menu|settings|keys|org-block|org-table|org-recent|org-overview|org-graph|org-health|org-seat|org-feed|org-system|messages-tree|messages-chats|messages-thread|messages-system|messages-archive|backlog-list|backlog-kanban|review-diff|review-panel|review-panel-drag|navigator-pr|navigator-model|navigator-menu|feed-detail|question-detail|connections|connections-use|yard|needs]";
+[--font <family>] [--message <fmail-id>] [--edge backlog|messages-tree|messages-part|org|dock=<size>] \
+[--view bell|bell-wide|bell-full|feed|row-menu|hover|cursor|tab-menu|sideline-menu|composer|split-menu|settings|keys|org-block|org-table|org-recent|org-overview|org-graph|org-health|org-seat|org-feed|org-system|messages-tree|messages-chats|messages-thread|messages-system|messages-archive|backlog-list|backlog-kanban|review-diff|review-panel|review-panel-drag|navigator-pr|navigator-model|navigator-menu|feed-detail|question-detail|connections|connections-use|yard|needs|dock]";
 
 #[derive(Debug, PartialEq)]
 pub enum Format {
@@ -130,6 +130,8 @@ pub enum ViewKind {
     /// The needs-me overlay with its first row picked, after the same
     /// questions gather the bell shots run.
     Needs,
+    /// The sideline list with the first agent's reply dock open under it.
+    Dock,
 }
 
 /// The seeded demo mail id a Messages view opens on when no --message
@@ -207,6 +209,7 @@ fn parse_view(v: &str) -> Option<ViewKind> {
         "connections-use" => Some(ViewKind::ConnectionsUse),
         "yard" => Some(ViewKind::Yard),
         "needs" => Some(ViewKind::Needs),
+        "dock" => Some(ViewKind::Dock),
         _ => None,
     }
 }
@@ -237,6 +240,9 @@ pub struct SnapshotArgs {
     /// The client-local surface to open before composing, for shots of a
     /// bell panel or a menu no server frame ever carries.
     pub view: Option<ViewKind>,
+    /// Splits held at a dragged size, as `name=size` pairs: the state a live
+    /// drag leaves, so a shot can show a mid-drag frame.
+    pub edges: Vec<(String, usize)>,
 }
 
 /// True when a `serve` tail asks for a snapshot rather than the web bridge.
@@ -257,6 +263,7 @@ pub fn parse(tail: &[OsString]) -> Result<SnapshotArgs, String> {
     let mut font = None;
     let mut message = None;
     let mut view = None;
+    let mut edges: Vec<(String, usize)> = Vec::new();
     let mut it = tail.iter();
     while let Some(a) = it.next() {
         let a = a.to_str().ok_or_else(|| USAGE.to_string())?;
@@ -280,6 +287,17 @@ pub fn parse(tail: &[OsString]) -> Result<SnapshotArgs, String> {
             }
             "--out" => out = Some(PathBuf::from(value()?)),
             "--message" => message = Some(value()?),
+            "--edge" => {
+                let v = value()?;
+                let pair = v
+                    .split_once('=')
+                    .and_then(|(n, s)| Some((n.to_string(), s.parse::<usize>().ok()?)))
+                    .filter(|(n, _)| super::edge_drag::Edge::from_name(n).is_some())
+                    .ok_or_else(|| {
+                        format!("fno mux serve --snapshot: --edge wants backlog|messages-tree|messages-part|org|dock=<size>, got {v:?}")
+                    })?;
+                edges.push(pair);
+            }
             "--view" => {
                 let v = value()?;
                 view = Some(parse_view(&v).ok_or_else(|| {
@@ -360,6 +378,7 @@ session text, run scripts/ops/mux-demo-snapshot.sh"
         font,
         message,
         view,
+        edges,
     })
 }
 
@@ -386,6 +405,7 @@ pub fn run(args: SnapshotArgs) -> i32 {
         chrome,
         args.message.as_deref(),
         args.view.as_ref(),
+        &args.edges,
     );
     match frame.and_then(|f| write(&f, &args)) {
         Ok(()) => {
@@ -605,6 +625,7 @@ fn live_frame(
     chrome: crate::theme::Theme,
     message: Option<&str>,
     kind: Option<&ViewKind>,
+    edges: &[(String, usize)],
 ) -> Result<Frame, String> {
     let socket = proto::socket_path(server)?;
     let runtime = tokio::runtime::Runtime::new().map_err(|e| format!("runtime: {e}"))?;
@@ -666,6 +687,11 @@ fn live_frame(
             view.term
         }
     };
+    for (name, size) in edges {
+        if let Some(edge) = super::edge_drag::Edge::from_name(name) {
+            view.edge_sizes.set(edge, *size);
+        }
+    }
     runtime.block_on(super::backlog_board::fold_once(&mut view));
     // The Messages board gathers via a client-side subprocess and the
     // snapshot has no event loop, so the tab would paint empty. --message
@@ -874,6 +900,35 @@ questions (scripts/ops/mux-demo-snapshot.sh seeds one)",
                 d.wait_decoded(Duration::from_secs(10));
             }
             select_modal_line(&mut view)?;
+        }
+        Some(ViewKind::Dock) => {
+            let (i, name) = view
+                .display_rows()
+                .iter()
+                .enumerate()
+                .find_map(|(i, r)| match r {
+                    super::DisplayRow::Agent(a) => Some((i, a.name.clone())),
+                    _ => None,
+                })
+                .ok_or("no agent rows to dock a reply under")?;
+            let seq = view.open_peek(i, name);
+            if let Some(p) = view.peek.as_mut().filter(|p| p.seq == seq) {
+                p.body = Some(
+                    [
+                        "  you: can you take the checkout retry next?",
+                        "  agent: yes, reading the queue worker first.",
+                        "  agent: the retry loop swallows the 429, fixing that now.",
+                        "  you: thanks, ping me when the PR is up.",
+                    ]
+                    .map(String::from)
+                    .to_vec(),
+                );
+            }
+            // The dock needs a sideline at least MIN_DOCK_W wide; the demo
+            // root's default is narrower, so the peek would center instead.
+            view.sideline_width = view.sideline_width.max(48);
+            view.peek_docked = true;
+            view.peek_input = Some((String::new(), String::from("on it")));
         }
         Some(ViewKind::RowMenu) => {
             let i = view
@@ -1312,6 +1367,7 @@ mod tests {
             ("connections-use", ViewKind::ConnectionsUse),
             ("yard", ViewKind::Yard),
             ("needs", ViewKind::Needs),
+            ("dock", ViewKind::Dock),
         ] {
             let args = parse_extra(&["--view", name]).expect(name);
             assert_eq!(args.view, Some(kind), "{name}");

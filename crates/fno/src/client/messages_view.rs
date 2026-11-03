@@ -714,8 +714,12 @@ impl MessagesBoard {
     }
 
     /// The three columns' lines.
-    pub(crate) fn columns(&self, w: usize) -> (Vec<BLine>, Vec<BLine>, Vec<BLine>) {
-        let (tree_w, part_w) = split(w);
+    pub(crate) fn columns(
+        &self,
+        w: usize,
+        split: (usize, usize),
+    ) -> (Vec<BLine>, Vec<BLine>, Vec<BLine>) {
+        let (tree_w, part_w) = split;
         let tree = self.tree_column(tree_w);
         let chats = self.chats_column(part_w);
         let content = self.thread_lines(w.saturating_sub(tree_w + part_w)).0;
@@ -1139,9 +1143,8 @@ pub(crate) fn paint(
             cells[r * cols + c] = Cell::default();
         }
     }
-    let (tree, partners, thread) = b.columns(width);
-    let tree_w = (width / 4).max(14).min(width / 2);
-    let part_w = (width / 4).max(14).min(width.saturating_sub(tree_w) / 2);
+    let (tree_w, part_w) = split(width, &view.edge_sizes);
+    let (tree, partners, thread) = b.columns(width, (tree_w, part_w));
     let thread_w = width.saturating_sub(tree_w + part_w);
     let body_h = height.saturating_sub(2);
     // The cursor's painted line follows the window, so a long tree keeps
@@ -1412,10 +1415,34 @@ pub(crate) fn maybe_kick(view: &mut View, tx: &MessagesTx) {
     }
 }
 
-/// The column widths the paint and the click map share.
-fn split(width: usize) -> (usize, usize) {
-    let tree_w = (width / 4).max(14).min(width / 2);
-    let part_w = (width / 4).max(14).min(width.saturating_sub(tree_w) / 2);
+/// Narrowest any of the three columns may get.
+const MIN_COL_W: usize = 14;
+
+/// The tree column's width range at `width`: the thread and participants
+/// columns keep their floor.
+pub(super) fn tree_bounds(width: usize) -> (usize, usize) {
+    let hi = width.saturating_sub(2 * MIN_COL_W).max(MIN_COL_W);
+    (MIN_COL_W.min(hi), hi)
+}
+
+/// The participants column's width range once the tree column is `tree_w`.
+pub(super) fn part_bounds(width: usize, tree_w: usize) -> (usize, usize) {
+    let hi = width.saturating_sub(tree_w + MIN_COL_W).max(MIN_COL_W);
+    (MIN_COL_W.min(hi), hi)
+}
+
+/// The column widths the paint and the click map share. A held width (a
+/// drag or key nudge this session) wins over the quarter-width default.
+pub(super) fn split(width: usize, sizes: &super::edge_drag::EdgeSizes) -> (usize, usize) {
+    use super::edge_drag::Edge;
+    let default_tree = (width / 4).max(MIN_COL_W).min(width / 2);
+    let (lo, hi) = tree_bounds(width);
+    let tree_w = sizes.resolve(Edge::MessagesTree, default_tree, lo, hi);
+    let default_part = (width / 4)
+        .max(MIN_COL_W)
+        .min(width.saturating_sub(tree_w) / 2);
+    let (lo, hi) = part_bounds(width, tree_w);
+    let part_w = sizes.resolve(Edge::MessagesPart, default_part, lo, hi);
     (tree_w, part_w)
 }
 
@@ -2003,7 +2030,7 @@ pub(crate) async fn mouse(
         }
         return Ok(());
     }
-    let (tree_w, part_w) = split(view.term.1 as usize);
+    let (tree_w, part_w) = split(view.term.1 as usize, &view.edge_sizes);
     let col = if (rep.col as usize) < tree_w {
         Col::Tree
     } else if (rep.col as usize) < tree_w + part_w {
@@ -2119,7 +2146,7 @@ pub(crate) async fn mouse(
                 .and_then(|line| line.checked_sub(start_line))
         }
         Col::Thread => {
-            let (tree_w, part_w) = split(view.term.1 as usize);
+            let (tree_w, part_w) = split(view.term.1 as usize, &view.edge_sizes);
             let thread_w = (view.term.1 as usize).saturating_sub(tree_w + part_w);
             let Some(board) = view.messages_board.as_ref() else {
                 return Ok(());
