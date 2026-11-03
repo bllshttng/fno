@@ -738,6 +738,7 @@ pub mod usage_refresh;
 pub mod verify_advise;
 pub mod verify_evidence;
 pub mod version;
+pub(crate) mod visual_screen;
 pub mod wait;
 pub mod wake_meter;
 pub mod wake_name;
