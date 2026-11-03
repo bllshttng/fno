@@ -47,6 +47,10 @@ pub mod bootstrap;
 #[cfg(feature = "full")]
 pub mod build_drift;
 #[cfg(feature = "full")]
+pub mod chokepoint;
+#[cfg(feature = "full")]
+pub mod chokepoint_events;
+#[cfg(feature = "full")]
 pub mod chrome;
 #[cfg(feature = "full")]
 pub mod claude_fallback;
@@ -130,10 +134,6 @@ pub mod lead_route;
 pub mod link;
 #[cfg(feature = "full")]
 pub mod lint_cli;
-#[cfg(feature = "full")]
-pub mod chokepoint;
-#[cfg(feature = "full")]
-pub mod chokepoint_events;
 #[cfg(feature = "full")]
 pub mod live_store_fence;
 pub mod menu_caps;

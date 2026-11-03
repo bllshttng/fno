@@ -8,7 +8,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::fmt;
-use std::fs::{File, OpenOptions};
+use std::fs::OpenOptions;
 use std::io::{self, Write};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -745,7 +745,7 @@ pub fn admit_tab(
 fn test_permit(scope: Scope, count: usize, ceiling: usize) -> AdmissionPermit {
     AdmissionPermit {
         _lock: Some(Box::new(
-            File::open(std::env::current_exe().expect("test executable path"))
+            std::fs::File::open(std::env::current_exe().expect("test executable path"))
                 .expect("test executable is readable"),
         )),
         scope,
