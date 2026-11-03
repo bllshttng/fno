@@ -1446,7 +1446,7 @@ mod tests {
     }
 
     /// The row `fno-agents needs --items --json` printed for q-b4d63b60.
-    const STORED_ROW: &str = r#"{"as_of":1,"items":[{"id":"q-b4d63b60","kind":"question","title":"Does PR 4328 look right to merge","body":"Does PR 4328 look right to merge","project":"footnote","priority":"high","created_at":"2026-11-03T02:29:56.393Z","deadline":"2026-11-04T18:00:00Z","on_silence":"wait","class":"taste","subject":"visual approval","asker":{"handle":"ce094978","person":"bb16"},"node":"x-d471","blocked_because":"PR 4328 holds on visual approval only.","options_rationale":"The look is the one open gate.","recommendation":{"option":1,"why":"It meets the law.","downside":"A later change costs a new PR."},"options":[{"n":1,"text":"Approve PR 4328.","next":"the worker merges."},{"n":2,"text":"Change something first.","next":"the worker fixes it."}],"unknowns":"The shots use a demo fleet.","reversible":"costly","cost_if_wrong":"A look you dislike ships.","meanwhile":"x-828f keeps moving.","tried":"I read the shots.","evidence":"Visual Log entry.","ready":true,"missing":[],"state":"open","settled":false}],"answered":[]}"#;
+    const STORED_ROW: &str = r#"{"as_of":1,"items":[{"id":"q-b4d63b60","kind":"question","title":"Does PR 4328 look right to merge","body":"Does PR 4328 look right to merge","project":"footnote","priority":"high","created_at":"2026-11-03T02:29:56.393Z","deadline":"2026-11-04T18:00:00Z","on_silence":"wait","class":"taste","subject":"visual approval","asker":{"handle":"ce094978","person":"bb16"},"node":"x-aaaa","blocked_because":"PR 4328 holds on visual approval only.","options_rationale":"The look is the one open gate.","recommendation":{"option":1,"why":"It meets the law.","downside":"A later change costs a new PR."},"options":[{"n":1,"text":"Approve PR 4328.","next":"the worker merges."},{"n":2,"text":"Change something first.","next":"the worker fixes it."}],"unknowns":"The shots use a demo fleet.","reversible":"costly","cost_if_wrong":"A look you dislike ships.","meanwhile":"x-bbbb keeps moving.","tried":"I read the shots.","evidence":"Visual Log entry.","ready":true,"missing":[],"state":"open","settled":false}],"answered":[]}"#;
 
     fn stored_fold() -> QuestionsFold {
         let response: crate::needs_overlay::QuestionsResponse =
@@ -1463,7 +1463,7 @@ mod tests {
         assert!(!page.contains("NOT RECORDED"), "{page}");
         for want in [
             "class taste",
-            "node x-d471",
+            "node x-aaaa",
             "## why asked\n\nPR 4328 holds",
             "## why these options\n\nThe look",
             "1. Approve PR 4328.  [recommended]",
@@ -1471,7 +1471,7 @@ mod tests {
             "## recommended\n\noption 1 \u{b7} It meets the law.",
             "## reversible\n\ncostly",
             "## cost if wrong\n\nA look you dislike ships.",
-            "## meanwhile\n\nx-828f keeps moving.",
+            "## meanwhile\n\nx-bbbb keeps moving.",
             "## not thought through\n\nThe shots use a demo fleet.",
             "## tried\n\nI read the shots.",
             "## evidence\n\nVisual Log entry.",
@@ -1493,7 +1493,7 @@ mod tests {
         v.questions_index = Some(fold_with(vec![stub]));
         let merged = v.questions_merged().unwrap();
         let q = &merged.items[0];
-        assert_eq!(q.node.as_deref(), Some("x-d471"));
+        assert_eq!(q.node.as_deref(), Some("x-aaaa"));
         assert_eq!(q.options.len(), 2);
         assert!(q.blocked_because.is_some());
     }
@@ -1515,7 +1515,7 @@ mod tests {
 
         v.apply_questions_fold(Ok(stored_fold()));
         let d = v.question_detail.as_ref().unwrap();
-        assert_eq!(d.item.node.as_deref(), Some("x-d471"));
+        assert_eq!(d.item.node.as_deref(), Some("x-aaaa"));
         assert_eq!(d.item.options.len(), 2);
         assert!(d.degraded.is_none());
     }
