@@ -907,9 +907,7 @@ def root_state_file(name: str) -> Path:
 
 
 def questions_jsonl() -> Path:
-    """Return the permanent machine-wide operator-question index, through
-    the move ladder into ``history/`` (the layout table's row).
-    """
+    """The machine's operator-question index, via the ``history/`` ladder."""
     return _pinned_state_subfile("questions.jsonl")
 
 
