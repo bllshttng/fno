@@ -334,7 +334,9 @@ impl<'a> Marks<'a> {
 
     /// The facts a sideline sorts and groups on. `needs_input` is the badge
     /// lattice's blocked word, so it needs a registry row; `pinned` answers
-    /// for a bare session id too, because a keep mark outlives its row.
+    /// for a bare session id too, because a keep mark outlives its row. It
+    /// reads true wherever the reapers keep the row, an unreadable keep store
+    /// included, so the far sideline never pins less than the sweep keeps.
     fn of(&self, w: &Worker, entry: Option<&RegistryEntry>) -> [(&'static str, Value); 3] {
         let workspace = [
             w.session_id.as_deref(),
