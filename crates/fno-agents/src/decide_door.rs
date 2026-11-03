@@ -51,6 +51,12 @@ pub(crate) enum DecideIdentity {
     Forced(Option<&'static str>),
 }
 
+/// The canonical handle of the agent session this process runs as, `None`
+/// when the caller is no agent session.
+pub(crate) fn ambient_agent_handle() -> Option<String> {
+    DecideIdentity::Ambient.agent()
+}
+
 impl DecideIdentity {
     fn agent(self) -> Option<String> {
         match self {
@@ -106,7 +112,7 @@ fn ambient_role_covers(handle: &str, subject: &str) -> bool {
 /// The role-scope rule: the caller holds a team, and a subject that names a
 /// node (by id or slug) must sit inside one of the caller's territories. A
 /// topic subject names no node, so holding a team is enough there.
-fn role_covers_subject(
+pub(crate) fn role_covers_subject(
     mine: &[crate::territory::Team],
     subject: &str,
     entries: &[Value],
