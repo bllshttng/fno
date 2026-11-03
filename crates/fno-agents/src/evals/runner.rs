@@ -755,7 +755,35 @@ pub struct LaneRow {
 /// declared lanes (the Python repr shape, single quotes).
 pub fn resolve_lane(name: &str) -> Result<LaneRow, String> {
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-    lane_from_inventory(&crate::route_gather::inventory(&cwd), name)
+    let lane = lane_from_inventory(&crate::route_gather::inventory(&cwd), name)?;
+    if lane.harness == "claude" && !lane.account.is_empty() {
+        if let Ok(accounts) = crate::accounts::records::load(None, &cwd) {
+            let ids: Vec<&str> = accounts
+                .records
+                .iter()
+                .filter(|r| r.harness == "claude")
+                .map(|r| r.id.as_str())
+                .collect();
+            lane_account_check(&lane, &ids)?;
+        }
+    }
+    Ok(lane)
+}
+
+/// A claude lane's `account` must name a registered record. A route such as
+/// `zai/...` is a vendor, not an account: naming it as one made every spawn on
+/// the lane exit 2 after the gate had already queued its trials.
+fn lane_account_check(lane: &LaneRow, claude_ids: &[&str]) -> Result<(), String> {
+    if claude_ids.contains(&lane.account.as_str()) {
+        return Ok(());
+    }
+    Err(format!(
+        "lane '{}' names account '{}', which is not a registered claude account ({}); \
+         drop `account` from its routing.models row or register it",
+        lane.name,
+        lane.account,
+        claude_ids.join(", ")
+    ))
 }
 
 fn lane_from_inventory(inv: &serde_json::Value, name: &str) -> Result<LaneRow, String> {
@@ -1163,6 +1191,18 @@ mod tests {
         let hinted = "Error: usage limit reached (429)\nrun with --help\n[claude-code:z] q\n";
         assert_eq!(failure_line(hinted), "Error: usage limit reached (429)");
         assert_eq!(failure_line(""), "");
+    }
+
+    #[test]
+    fn a_claude_lane_naming_an_unregistered_account_is_refused_by_name() {
+        let lane = LaneRow {
+            name: "zai-flash".into(),
+            account: "zai".into(),
+            ..LaneRow::default()
+        };
+        assert!(lane_account_check(&lane, &["makers", "zai"]).is_ok());
+        let err = lane_account_check(&lane, &["makers", "readyrule"]).unwrap_err();
+        assert!(err.contains("'zai'") && err.contains("makers, readyrule"));
     }
 
     #[test]
