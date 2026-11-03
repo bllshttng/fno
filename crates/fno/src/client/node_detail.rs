@@ -84,8 +84,45 @@ pub(crate) async fn press_session(
             super::backlog_board::set_sideline_view(view, crate::view_store::SidelineView::Agents);
             apply_hit(view, hit, sock).await?;
         }
+        SessionAction::Dim(_) if joined.is_none() && sid.is_some() => {
+            revive(view, sid.unwrap_or_default(), sock).await?;
+        }
         SessionAction::Dim(why) => view.set_notice(why),
     }
+    Ok(())
+}
+
+/// A dead session the registry lacks: adopt writes its row, then a portal
+/// reach runs the server's re-entry plan (respawn or a background resume,
+/// then attach). Never a foreground resume pane.
+async fn revive(
+    view: &mut View,
+    sid: &str,
+    sock: &mut (impl tokio::io::AsyncWrite + Unpin),
+) -> Result<(), String> {
+    let args = ["adopt".to_string(), sid.to_string()];
+    let bin = crate::digest_overlay::fno_agents_bin();
+    let (ok, name) = crate::backlog_write::run_command_in(bin, &args, None).await;
+    if !ok {
+        view.set_notice(format!("revive refused: {name}"));
+        return Ok(());
+    }
+    view.backlog_board = None;
+    view.org_board = None;
+    view.region_owner = super::region_focus::RegionOwner::Pane;
+    super::backlog_board::set_sideline_view(view, crate::view_store::SidelineView::Agents);
+    let placement = crate::proto::PanePlacement {
+        portal: Some(0),
+        ..crate::proto::PanePlacement::default()
+    };
+    let cmd = crate::proto::Command::AttachAgent {
+        id: name.clone(),
+        placement,
+    };
+    write_msg(sock, &ClientMsg::Command(cmd))
+        .await
+        .map_err(|e| format!("revive send failed: {e}"))?;
+    view.set_notice(format!("reviving {name}"));
     Ok(())
 }
 #[path = "backlog_md.rs"]
@@ -446,14 +483,16 @@ pub(crate) fn pane_lines(
             follow = Some(lines.len());
         }
         k += 1;
+        // A session the registry lacks revives through adopt, then a reach.
         let action = match s.action.as_str() {
+            "none" if s.agent.is_none() && s.session_id.is_some() => "revive".to_string(),
             "none" => s.reason.clone().unwrap_or_else(|| "none".into()),
             other => other.to_string(),
         };
         let cut = |text: Option<&str>, n: usize| -> String {
             text.unwrap_or("-").chars().take(n).collect()
         };
-        let model = s.model.as_deref().or(s.harness.as_deref());
+        let model = s.model.as_deref();
         let machine = s.agent.as_ref().map(|_| here.as_str());
         let name = s.agent.as_deref().or(s.session_id.as_deref());
         // `2026-11-02T14:19:00Z` reads `11-02 14:19`.
