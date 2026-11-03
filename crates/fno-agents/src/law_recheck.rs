@@ -1,7 +1,7 @@
 //! `fno inbox law recheck`: re-measure the premise of every live law.
 //!
 //! A law is recorded with a guard (`--until`) and/or readings (`--read`).
-//! Date guards retire in the index derivation. This verb covers the rest:
+//! Date guards retire in the index derivation. This command covers the rest:
 //! an event or drained-set guard reads the graph, and a reading re-runs its
 //! command and compares it with the output stored at record time. A law whose
 //! reading moved is reported stale, never silently obeyed. `--apply` retracts
