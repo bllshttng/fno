@@ -1462,17 +1462,20 @@ mod tests {
 
     #[test]
     fn a_crate_head_runs_only_the_tasks_covering_it_and_an_uncovered_one_posts_nothing() {
-        // (changed files, tasks the one launch must hold, or None for no launch)
+        // (changed files, tasks the one launch must hold or None, statuses posted)
         let cases = [
-            ("crates/x/a.rs\n", Some("--task c1 ")),
-            ("skills/s\ncrates/x/a.rs\n", Some("--task c1,g1 ")),
-            ("crates/y/a.rs\n", None),
+            ("cli/x/a.rs\n", Some("--task c1 "), 1),
+            ("skills/s\ncli/x/a.rs\n", Some("--task c1,g1 "), 1),
+            ("cli/y/a.rs\n", None, 0),
+            // A crate head needs a build, and with no checkout to build the
+            // deployed binary must not grade it: red, no launch.
+            ("crates/x/a.rs\n", None, 2),
         ];
-        for (files, task_arg) in cases {
+        for (files, task_arg, posted) in cases {
             let w = World::new(files);
             std::fs::write(
                 w.dir.path().join("evals/bank/c1.yaml"),
-                "id: c1\ntier: regression\ngrade:\n  - kind: file-exists\n    path: x\ncovers: [\"crates/x/\"]\n",
+                "id: c1\ntier: regression\ngrade:\n  - kind: file-exists\n    path: x\ncovers: [\"cli/x/\", \"crates/x/\"]\n",
             )
             .unwrap();
             w.with_baseline();
@@ -1480,14 +1483,13 @@ mod tests {
             let spawns = w.spawns.borrow();
             let argv = spawns.first().map(|a| a.join(" ")).unwrap_or_default();
             match task_arg {
-                Some(arg) => {
-                    assert!(argv.contains(arg), "{files}: {argv}");
-                    assert!(w.posts.borrow()[0].starts_with("pending"), "{files}");
-                }
-                None => {
-                    assert!(spawns.is_empty(), "{files}: {argv}");
-                    assert!(w.posts.borrow().is_empty(), "{files}");
-                }
+                Some(arg) => assert!(argv.contains(arg), "{files}: {argv}"),
+                None => assert!(spawns.is_empty(), "{files}: {argv}"),
+            }
+            let posts = w.posts.borrow();
+            assert_eq!(posts.len(), posted, "{files}: {posts:?}");
+            if posted == 2 {
+                assert!(posts[1].starts_with("failure"), "{files}: {posts:?}");
             }
         }
     }
