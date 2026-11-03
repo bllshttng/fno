@@ -31,6 +31,7 @@ Plan Mode front door harness	.	bash tests/hooks/test_capture_plan_mode.shbash t
 bg-dispatch harness	.	bash tests/test-bg-dispatch.sh
 init claim-wait harness	.	bash tests/test-init-claim-wait.sh
 dispatch grant posture harness	.	bash tests/target/test_dispatch_grant_posture.sh
+demo-snapshot teardown + stale-reap harness	.	bash tests/test-demo-snapshot-reap.sh
 agent skill harness	.	bash tests/skills/test_agent_normalize.shbash tests/skills/test_agent_receipt.shbash skills/agent/tests/test_normalize.shbash skills/agent/tests/test_confirm.shbash skills/agent/tests/test_auto_worktree.shbash skills/agent/tests/test_spawn_guard.sh
 mail skill harness	.	bash skills/mail/tests/test_normalize.sh
 events-discipline lint	.	bash scripts/lint/events-discipline.sh

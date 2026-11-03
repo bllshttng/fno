@@ -40,6 +40,7 @@ pub(super) const STRUCTURAL_STEPS: &[(&str, &str, &str)] = &[
     ("bg-dispatch harness", ".", "bash tests/test-bg-dispatch.sh"),
     ("init claim-wait harness", ".", "bash tests/test-init-claim-wait.sh"),
     ("dispatch grant posture harness", ".", "bash tests/target/test_dispatch_grant_posture.sh"),
+    ("demo-snapshot teardown + stale-reap harness", ".", "bash tests/test-demo-snapshot-reap.sh"),
     ("agent skill harness", ".", "bash tests/skills/test_agent_normalize.sh\nbash tests/skills/test_agent_receipt.sh\nbash skills/agent/tests/test_normalize.sh\nbash skills/agent/tests/test_confirm.sh\nbash skills/agent/tests/test_auto_worktree.sh\nbash skills/agent/tests/test_spawn_guard.sh"),
     ("mail skill harness", ".", "bash skills/mail/tests/test_normalize.sh"),
     ("events-discipline lint", ".", "bash scripts/lint/events-discipline.sh"),

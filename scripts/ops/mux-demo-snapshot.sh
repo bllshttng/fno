@@ -79,6 +79,42 @@ cleanup() {
   if [ -n "${FNO_DEMO_KEEP:-}" ]; then echo "kept $ROOT" >&2; else rm -rf "$ROOT"; fi
 }
 trap cleanup EXIT
+# bash runs the EXIT trap only on a normal exit. A Ctrl-C, a closed terminal
+# or a cancelled CI job kills the shell outright, and every draw loop keeps
+# forking sleep for hours. Route the kill signals through exit, so the
+# teardown above always runs.
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
+
+# A run killed with SIGKILL, or lost to a dead battery, never ran cleanup:
+# its root and draw loops stay behind, forking sleep forever. Reap every
+# fno-demo root older than 1 h, with the processes under it, before seeding,
+# so no draw loop outlives its demo by an hour.
+reap_stale_demos() {
+  local d m age i
+  for d in /tmp/fno-demo.*; do
+    [ -d "$d" ] || continue
+    [ "$d" = "$ROOT" ] && continue
+    m=$(stat -f %m "$d" 2>/dev/null || stat -c %Y "$d" 2>/dev/null) || continue
+    age=$(( $(date +%s) - m ))
+    [ "$age" -gt 3600 ] || continue
+    pkill -TERM -f -- "$d/" 2>/dev/null || true
+    for i in 1 2 3 4 5; do
+      pgrep -f -- "$d/" >/dev/null || break
+      sleep 0.5
+    done
+    pkill -KILL -f -- "$d/" 2>/dev/null || true
+    sleep 0.5
+    if pgrep -f -- "$d/" >/dev/null; then
+      echo "mux-demo-snapshot: stale demo processes under $d survive; root kept:" >&2
+      pgrep -fl -- "$d/" >&2
+      exit 1
+    fi
+    rm -rf -- "$d"
+  done
+}
+reap_stale_demos
 
 mkdir -p "$ROOT/mux" "$ROOT/agents" "$ROOT/code/checkout" "$ROOT/text" "$ROOT/.fno/claims"
 # State under $ROOT/.fno: the mux board reads the graph from $HOME/.fno.
