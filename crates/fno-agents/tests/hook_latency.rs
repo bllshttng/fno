@@ -297,7 +297,6 @@ fn build_bench() -> Bench {
         ("FNO_HOME", space.clone()),
         ("FNO_CLAIMS_ROOT", space.join("claims")),
         ("FNO_BUS_DIR", space.join("bus")),
-        ("FNO_INBOX_ROOT", space.join("inbox")),
         ("FNO_EVENTS_PATH", events.clone()),
         ("EVENTS_FILE", events.clone()),
         ("GLOBAL_EVENTS_PATH", global.clone()),

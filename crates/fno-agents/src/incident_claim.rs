@@ -261,7 +261,7 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let home = crate::paths::AgentsHome::at(dir.path().join("agents"));
         std::fs::create_dir_all(home.root()).unwrap();
-        std::fs::create_dir_all(dir.path().join("bus")).unwrap();
+        std::fs::create_dir_all(dir.path().join("db/mail/bus")).unwrap();
         (dir, home)
     }
 
@@ -281,7 +281,7 @@ mod tests {
     }
 
     fn bus_lines(dir: &Path) -> Vec<serde_json::Value> {
-        std::fs::read_to_string(dir.join("bus").join("messages.jsonl"))
+        std::fs::read_to_string(dir.join("db/mail/bus/messages.jsonl"))
             .unwrap()
             .lines()
             .map(|line| serde_json::from_str(line).unwrap())

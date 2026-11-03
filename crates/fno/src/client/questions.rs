@@ -23,6 +23,9 @@ pub(super) struct Detail {
     /// The opened question; the bell panel tabs are the board, so the old
     /// list pane is gone and a view holds exactly the row it opened on.
     pub(super) item: crate::needs_overlay::QuestionItem,
+    /// Why the projection read is unavailable, while it is. The page names it
+    /// so a bare index row reads as a failed read, not an empty question.
+    pub(super) degraded: Option<String>,
     pub(super) sel: Option<u32>,
     pub(super) notes: Option<String>,
     pub(super) free: Option<String>,
@@ -100,6 +103,7 @@ impl Detail {
         }
         Some(Detail {
             item,
+            degraded: None,
             sel: None,
             notes: None,
             free: None,
@@ -155,6 +159,14 @@ impl Detail {
     }
 }
 
+/// One `## heading` block, printed only when the field holds text: a
+/// section the source never recorded prints nothing.
+fn section(s: &mut String, heading: &str, body: Option<&str>) {
+    if let Some(text) = body.map(str::trim).filter(|v| !v.is_empty()) {
+        s.push_str(&format!("## {heading}\n\n{text}\n\n"));
+    }
+}
+
 /// The question page as markdown, the shape the backlog board's renderer
 /// turns into the detail pane's lines: title and meta, the context sections,
 /// the numbered options (the recommended one marked), and the answer line.
@@ -171,6 +183,11 @@ fn question_page(
         &item.title
     };
     s.push_str(&format!("# {title}\n\n"));
+    if let Some(reason) = d.degraded.as_deref() {
+        s.push_str(&format!(
+            "projection unavailable: {reason}; this page shows what the index holds\n\n"
+        ));
+    }
     let asker = item.asker.as_ref();
     let origin = item.origin.as_ref();
     // The card's header line: who asked (registry name, mail tag), the lead
@@ -249,7 +266,6 @@ fn question_page(
             s.push_str(&format!("{body}\n\n"));
         }
     }
-    let not_recorded = "NOT RECORDED";
     // The notes input lives in the page: directly under
     // the question body, above `## why asked`, pre-wrapped so every line
     // keeps the blockquote bar, with the cursor block riding the text.
@@ -266,23 +282,15 @@ fn question_page(
         }
         s.push('\n');
     }
-    s.push_str(&format!(
-        "## why asked\n\n{}\n\n",
-        item.blocked_because
-            .as_deref()
-            .map(str::trim)
-            .filter(|v| !v.is_empty())
-            .unwrap_or(not_recorded)
-    ));
-    s.push_str(&format!(
-        "## why these options\n\n{}\n\n",
-        item.options_rationale
-            .as_deref()
-            .map(str::trim)
-            .filter(|v| !v.is_empty())
-            .unwrap_or(not_recorded)
-    ));
-    s.push_str("## options\n\n");
+    section(&mut s, "why asked", item.blocked_because.as_deref());
+    section(
+        &mut s,
+        "why these options",
+        item.options_rationale.as_deref(),
+    );
+    if !item.options.is_empty() {
+        s.push_str("## options\n\n");
+    }
     for o in &item.options {
         let mut line = format!("{}. {}", o.n, o.text);
         if d.sel == Some(o.n) {
@@ -310,10 +318,6 @@ fn question_page(
             if none_sel { "  [selected]" } else { "" }
         ));
         s.push('\n');
-    } else {
-        // An empty options heading reads as a dropped section; the same
-        // not-recorded word every other section uses names it instead.
-        s.push_str(&format!("{not_recorded}\n\n"));
     }
     if let Some(r) = &item.recommendation {
         s.push_str(&format!(
@@ -326,56 +330,14 @@ fn question_page(
                 .unwrap_or_default()
         ));
     }
-    s.push_str(&format!(
-        "## reversible\n\n{}\n\n",
-        item.reversible
-            .as_deref()
-            .map(str::trim)
-            .filter(|v| !v.is_empty())
-            .unwrap_or(not_recorded)
-    ));
+    section(&mut s, "reversible", item.reversible.as_deref());
     if item.reversible.as_deref() == Some("costly") {
-        s.push_str(&format!(
-            "## cost if wrong\n\n{}\n\n",
-            item.cost_if_wrong
-                .as_deref()
-                .map(str::trim)
-                .filter(|v| !v.is_empty())
-                .unwrap_or(not_recorded)
-        ));
+        section(&mut s, "cost if wrong", item.cost_if_wrong.as_deref());
     }
-    s.push_str(&format!(
-        "## meanwhile\n\n{}\n\n",
-        item.meanwhile
-            .as_deref()
-            .map(str::trim)
-            .filter(|v| !v.is_empty())
-            .unwrap_or(not_recorded)
-    ));
-    s.push_str(&format!(
-        "## not thought through\n\n{}\n\n",
-        item.unknowns
-            .as_deref()
-            .map(str::trim)
-            .filter(|v| !v.is_empty())
-            .unwrap_or(not_recorded)
-    ));
-    s.push_str(&format!(
-        "## tried\n\n{}\n\n",
-        item.tried
-            .as_deref()
-            .map(str::trim)
-            .filter(|v| !v.is_empty())
-            .unwrap_or(not_recorded)
-    ));
-    s.push_str(&format!(
-        "## evidence\n\n{}\n\n",
-        item.evidence
-            .as_deref()
-            .map(str::trim)
-            .filter(|v| !v.is_empty())
-            .unwrap_or(not_recorded)
-    ));
+    section(&mut s, "meanwhile", item.meanwhile.as_deref());
+    section(&mut s, "not thought through", item.unknowns.as_deref());
+    section(&mut s, "tried", item.tried.as_deref());
+    section(&mut s, "evidence", item.evidence.as_deref());
     // The default on silence with its deadline: what the row does when no
     // answer lands before the deadline passes.
     let silence = match (
@@ -385,9 +347,9 @@ fn question_page(
         (Some(what), Some(at)) => format!("{what} at {at}"),
         (Some(what), None) => what.to_string(),
         (None, Some(at)) => format!("at {at}"),
-        (None, None) => not_recorded.to_string(),
+        (None, None) => String::new(),
     };
-    s.push_str(&format!("## on silence\n\n{silence}\n\n"));
+    section(&mut s, "on silence", Some(&silence));
     if d.delegate {
         s.push_str(
             "## answer\n\nagents decide: the team over the node decides a reversible call\n\n",
@@ -1291,6 +1253,47 @@ impl View {
         let merged = self.questions_merged();
         let fold = merged.as_ref().unwrap_or(&empty);
         self.question_detail = Detail::open(fold, id);
+        if let Some(d) = &mut self.question_detail {
+            d.degraded = self.questions_degraded_reason.clone();
+        }
+    }
+
+    /// Re-read the open page's question from the merged fold, so a page that
+    /// opened on an index stub fills in when the projection lands. The
+    /// reader's own state (pick, notes, scroll) stays; a changed shot list
+    /// reopens the page so the strip decodes the new files.
+    pub(super) fn refresh_detail(&mut self) {
+        let Some(id) = self.question_detail.as_ref().map(|d| d.item.id.clone()) else {
+            return;
+        };
+        let merged = self.questions_merged();
+        let Some(fresh) = merged
+            .as_ref()
+            .and_then(|f| f.items.iter().find(|q| q.id == id))
+        else {
+            return;
+        };
+        let reason = self.questions_degraded_reason.clone();
+        let Some(d) = &mut self.question_detail else {
+            return;
+        };
+        d.degraded = reason;
+        if d.item.images == fresh.images {
+            d.item = fresh.clone();
+            return;
+        }
+        let Some(mut next) = merged.as_ref().and_then(|f| Detail::open(f, &id)) else {
+            return;
+        };
+        next.degraded = d.degraded.clone();
+        next.sel = d.sel;
+        next.notes = d.notes.take();
+        next.free = d.free.take();
+        next.notice = d.notice.take();
+        next.scroll = d.scroll;
+        next.delegate = d.delegate;
+        next.archive_armed = d.archive_armed;
+        *d = next;
     }
 
     pub(super) fn list_selector(&self) -> Option<usize> {
@@ -1317,6 +1320,7 @@ impl View {
                 self.questions_degraded_reason = Some(reason);
             }
         }
+        self.refresh_detail();
         bell::clamp_selection(self);
     }
 
@@ -1339,6 +1343,24 @@ impl View {
                 // projection and `q-1234abcd` in the index: one question, one
                 // row.
                 let mut items: Vec<_> = primary.items.clone();
+                if !healthy {
+                    // The index holds an id, title and state only. Where the
+                    // last good projection holds the same question, its fields
+                    // fill the stub, and the index keeps the open or answered
+                    // call.
+                    for q in &mut items {
+                        if let Some(full) =
+                            fold.items.iter().find(|f| bare_id(&f.id) == bare_id(&q.id))
+                        {
+                            let (title, state, settled) =
+                                (q.title.clone(), q.state.clone(), q.settled);
+                            *q = full.clone();
+                            q.title = title;
+                            q.state = state;
+                            q.settled = settled;
+                        }
+                    }
+                }
                 let mut held: std::collections::HashSet<String> = primary
                     .items
                     .iter()
@@ -1361,6 +1383,7 @@ impl View {
     /// projection answers.
     pub(super) fn apply_questions_index(&mut self, fold: crate::needs_overlay::QuestionsFold) {
         self.questions_index = Some(fold);
+        self.refresh_detail();
         bell::clamp_selection(self);
     }
 
@@ -1424,6 +1447,81 @@ mod tests {
         }
     }
 
+    /// The row `fno-agents needs --items --json` printed for q-b4d63b60.
+    const STORED_ROW: &str = r#"{"as_of":1,"items":[{"id":"q-b4d63b60","kind":"question","title":"Does PR 4328 look right to merge","body":"Does PR 4328 look right to merge","project":"footnote","priority":"high","created_at":"2026-11-03T02:29:56.393Z","deadline":"2026-11-04T18:00:00Z","on_silence":"wait","class":"taste","subject":"visual approval","asker":{"handle":"ce094978","person":"bb16"},"node":"x-aaaa","blocked_because":"PR 4328 holds on visual approval only.","options_rationale":"The look is the one open gate.","recommendation":{"option":1,"why":"It meets the law.","downside":"A later change costs a new PR."},"options":[{"n":1,"text":"Approve PR 4328.","next":"the worker merges."},{"n":2,"text":"Change something first.","next":"the worker fixes it."}],"unknowns":"The shots use a demo fleet.","reversible":"costly","cost_if_wrong":"A look you dislike ships.","meanwhile":"x-bbbb keeps moving.","tried":"I read the shots.","evidence":"Visual Log entry.","ready":true,"missing":[],"state":"open","settled":false}],"answered":[]}"#;
+
+    fn stored_fold() -> QuestionsFold {
+        let response: crate::needs_overlay::QuestionsResponse =
+            serde_json::from_str(STORED_ROW).unwrap();
+        fold_with(response.items)
+    }
+
+    #[test]
+    fn a_stored_row_renders_every_section() {
+        let fold = stored_fold();
+        let q = fold.items[0].clone();
+        let d = Detail::open(&fold, "q-b4d63b60").unwrap();
+        let page = question_page(&q, &d, 0, 80);
+        assert!(!page.contains("NOT RECORDED"), "{page}");
+        for want in [
+            "class taste",
+            "node x-aaaa",
+            "## why asked\n\nPR 4328 holds",
+            "## why these options\n\nThe look",
+            "1. Approve PR 4328.  [recommended]",
+            "2. Change something first.",
+            "## recommended\n\noption 1 \u{b7} It meets the law.",
+            "## reversible\n\ncostly",
+            "## cost if wrong\n\nA look you dislike ships.",
+            "## meanwhile\n\nx-bbbb keeps moving.",
+            "## not thought through\n\nThe shots use a demo fleet.",
+            "## tried\n\nI read the shots.",
+            "## evidence\n\nVisual Log entry.",
+            "## on silence\n\nwait at 2026-11-04T18:00:00Z",
+        ] {
+            assert!(page.contains(want), "{want} missing from:\n{page}");
+        }
+    }
+
+    #[test]
+    fn a_degraded_projection_keeps_the_fields_the_index_lacks() {
+        let mut v = view_with_agents(vec![]);
+        v.questions_fold = Some(stored_fold());
+        v.questions_degraded = true;
+        let mut stub = item("q-b4d63b60", true);
+        stub.title = "Does PR 4328 look right to merge".into();
+        stub.options = vec![];
+        stub.blocked_because = None;
+        v.questions_index = Some(fold_with(vec![stub]));
+        let merged = v.questions_merged().unwrap();
+        let q = &merged.items[0];
+        assert_eq!(q.node.as_deref(), Some("x-aaaa"));
+        assert_eq!(q.options.len(), 2);
+        assert!(q.blocked_because.is_some());
+    }
+
+    #[test]
+    fn an_open_page_fills_in_when_the_projection_lands() {
+        let mut v = view_with_agents(vec![]);
+        let mut stub = item("q-b4d63b60", true);
+        stub.options = vec![];
+        stub.blocked_because = None;
+        v.apply_questions_index(fold_with(vec![stub]));
+        v.apply_questions_fold(Err("timed out".into()));
+        v.open_detail_on("q-b4d63b60");
+        let d = v.question_detail.as_ref().unwrap();
+        assert!(d.item.node.is_none());
+        assert_eq!(d.degraded.as_deref(), Some("timed out"));
+        let page = question_page(&d.item, d, 0, 80);
+        assert!(page.contains("projection unavailable: timed out"), "{page}");
+
+        v.apply_questions_fold(Ok(stored_fold()));
+        let d = v.question_detail.as_ref().unwrap();
+        assert_eq!(d.item.node.as_deref(), Some("x-aaaa"));
+        assert_eq!(d.item.options.len(), 2);
+        assert!(d.degraded.is_none());
+    }
+
     #[test]
     fn page_rows() {
         let mut q = item("q-1", false);
@@ -1466,7 +1564,8 @@ mod tests {
         q.unknowns = None;
         let d = Detail::open(&fold_with(vec![q.clone()]), "q-2").unwrap();
         let page = question_page(&q, &d, 0, 60);
-        assert!(page.contains("NOT RECORDED"));
+        assert!(!page.contains("NOT RECORDED"), "{page}");
+        assert!(!page.contains("## not thought through"), "{page}");
 
         let q = item("q-1", true);
         let mut d = Detail::open(&fold_with(vec![q.clone()]), "q-1").unwrap();
@@ -1519,12 +1618,13 @@ mod tests {
             assert!(page.contains(want), "{want} missing from:\n{page}");
         }
 
-        // A row with none of the new fields still renders, NOT RECORDED in
-        // their place.
+        // A row with none of the new fields still renders, and the empty
+        // sections print nothing.
         let bare = item("q-bare", true);
         let d = Detail::open(&fold_with(vec![bare.clone()]), "q-bare").unwrap();
         let page = question_page(&bare, &d, 0, 60);
-        assert!(page.contains("NOT RECORDED"));
+        assert!(!page.contains("NOT RECORDED"), "{page}");
+        assert!(!page.contains("## tried"), "{page}");
         assert!(!page.contains("via "), "no lead named: {page}");
 
         // A name equal to the handle prints once: the parenthetical would

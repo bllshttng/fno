@@ -129,7 +129,7 @@ pub fn emit_paths_sh_defaults() -> String {
         ("LEDGER_JSON_PATH", "ledger.json"),
         ("BRIEFS_DIR", "briefs"),
         ("FLEET_DIR", "fleet"),
-        ("POSTMORTEMS_DIR", "postmortems"),
+        ("POSTMORTEMS_DIR", "db/postmortems"),
         ("WORKTREES_BASE", "worktrees"),
         ("MEMORY_DIR", "memory"),
         ("HOOK_LOGS_DIR", "hook-logs"),
@@ -145,8 +145,9 @@ pub fn emit_paths_sh_defaults() -> String {
     // Defaults mode: no handoffs override, obsidian off, project.id unset --
     // the literal fallback line keeps the stub machine-stable; the basename
     // resolves at source-time from the consumer's repo.
-    lines
-        .push("export HANDOFFS_DIR=\"$STATE_DIR/handoffs/$(basename \"$REPO_ROOT\")\"".to_string());
+    lines.push(
+        "export HANDOFFS_DIR=\"$STATE_DIR/db/handoffs/$(basename \"$REPO_ROOT\")\"".to_string(),
+    );
     lines.push(format!(
         "export CONFIG_FILE={}",
         bash_quote("$STATE_DIR/config.toml")
@@ -652,7 +653,12 @@ pub(crate) fn handoffs_dir(cwd: &Path) -> PathBuf {
             .join("internal")
             .join(project)
             .join("handoffs"),
-        None => state_root(cwd).join("handoffs").join(project),
+        None => {
+            let root = state_root(cwd);
+            crate::state_layout::place_dir(&root, "handoffs")
+                .unwrap_or_else(|| root.join("handoffs"))
+                .join(project)
+        }
     }
 }
 
@@ -704,11 +710,11 @@ pub fn postmortems_dir(cwd: &Path) -> PathBuf {
             return p;
         }
     }
-    state_dir_resolved(cwd)
+    let root = state_dir_resolved(cwd)
         .ok()
         .filter(|d| d.is_absolute())
-        .unwrap_or_else(|| crate::decision_index::default_state_path(""))
-        .join("postmortems")
+        .unwrap_or_else(|| crate::decision_index::default_state_path(""));
+    crate::state_layout::place_dir(&root, "postmortems").unwrap_or_else(|| root.join("postmortems"))
 }
 
 /// Python `paths.observer_reports_dir(project_id=...)`: the explicit
@@ -828,7 +834,7 @@ pub fn emit_paths_sh_live(cwd: &Path) -> Result<String, String> {
         ("LEDGER_JSON_PATH", "ledger_json", "ledger.json"),
         ("BRIEFS_DIR", "briefs_dir", "briefs"),
         ("FLEET_DIR", "fleet_dir", "fleet"),
-        ("POSTMORTEMS_DIR", "postmortems_dir", "postmortems"),
+        ("POSTMORTEMS_DIR", "postmortems_dir", "db/postmortems"),
         ("WORKTREES_BASE", "worktrees_base", "worktrees"),
         ("MEMORY_DIR", "memory_dir", "memory"),
         ("HOOK_LOGS_DIR", "hook_logs_dir", "hook-logs"),
@@ -921,12 +927,12 @@ pub fn emit_paths_sh_live(cwd: &Path) -> Result<String, String> {
                                 "project.id {pid:?} contains invalid characters; only [A-Za-z0-9._-] are allowed"
                             ));
                         }
-                        format!("$STATE_DIR/handoffs/{pid}")
+                        format!("$STATE_DIR/db/handoffs/{pid}")
                     }
                     None => return Ok(finish_live_stub(
                         cwd,
                         lines,
-                        "export HANDOFFS_DIR=\"$STATE_DIR/handoffs/$(basename \"$REPO_ROOT\")\"",
+                        "export HANDOFFS_DIR=\"$STATE_DIR/db/handoffs/$(basename \"$REPO_ROOT\")\"",
                     )),
                 }
             }

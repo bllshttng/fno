@@ -615,8 +615,7 @@ pub(crate) fn cancel_in_flight(
     let mut results = Vec::new();
     let mut cancelled = Vec::new();
     for id in &runs {
-        let path = format!("repos/{{owner}}/{{repo}}/actions/runs/{id}/cancel");
-        match crate::pr_push::gh_api(gh_bin, cwd, &path, &["-X", "POST"]) {
+        match crate::pr_push::cancel_run(gh_bin, cwd, *id, "ci_wait") {
             Ok(_) => {
                 results.push(json!({"run": id, "ok": true}));
                 cancelled.push(format!("wait: red at {short}; cancelled run {id}"));
@@ -1258,12 +1257,21 @@ exit 1
         // The store lands the row: read it back through the sanctioned
         // reader instead of the flat file the store replaces.
         let journal = home.path().join("events.jsonl");
-        let query = crate::event_store::EventQuery::of_types(&["ci_wait_cancel"]);
+        let query =
+            crate::event_store::EventQuery::of_types(&["ci_wait_cancel", "ci_cancel_intent"]);
         let text = crate::event_store::journal_text_checked(&journal, &query).unwrap();
         let rows: Vec<Value> = text
             .lines()
             .filter_map(|l| serde_json::from_str(l).ok())
             .collect();
+        // Every cancel POST is preceded by a row naming who asked.
+        let intent = rows
+            .iter()
+            .find(|r| r["type"] == "ci_cancel_intent")
+            .expect("the intent row landed");
+        assert_eq!(intent["data"]["run"], 302);
+        assert_eq!(intent["data"]["actor"], "ci_wait");
+        assert!(intent["data"]["pid"].is_u64(), "{intent}");
         let row = rows
             .iter()
             .find(|r| r["type"] == "ci_wait_cancel")

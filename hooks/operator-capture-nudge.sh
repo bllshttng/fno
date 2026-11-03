@@ -70,10 +70,22 @@ if [[ -n "$session" ]]; then
         exit 0
     fi
 fi
+# The inbox family lives at the Rust front door. A dev or smoke checkout
+# whose PATH `fno` is the Python wheel no longer carries the word (the
+# Python group is deleted), so resolve the checkout's front build first and
+# fall back to PATH. A deployed repo has no checkout build and reads the
+# installed front either way.
+front_bin=""
+# Debug outranks release: the checkout's fresh smoke build is debug, and a
+# release binary can only be a cache leftover from an older commit.
+for candidate in "$HOOK_DIR/../crates/fno/target/debug/fno" "$HOOK_DIR/../crates/fno/target/release/fno"; do
+    [[ -x "$candidate" ]] && { front_bin="$candidate"; break; }
+done
+[[ -n "$front_bin" ]] || front_bin="fno"
 if [[ -n "$session" ]]; then
-    payload=$(hook_cache_serve "opcap-$session" 60 "" -- fno inbox operator status --json 2>/dev/null) || rc=$?
+    payload=$(hook_cache_serve "opcap-$session" 60 "" -- "$front_bin" inbox operator status --json 2>/dev/null) || rc=$?
 else
-    payload=$(hook_run_optional fno inbox operator status --json 2>/dev/null) || rc=$?
+    payload=$(hook_run_optional "$front_bin" inbox operator status --json 2>/dev/null) || rc=$?
 fi
 
 # A non-zero exit is not silence: collapsing a failed read into an empty

@@ -42,11 +42,15 @@ fn truthy(v: Option<&Value>) -> bool {
 
 /// This live session's promoted manifest, or why there is none. The row, not
 /// file presence, proves authority. Each refusal names WHICH reading failed.
+/// A stored terminal word never refuses a session the harness still serves
+/// as writing: the transcript seam rides along for that one question, the
+/// way `org_vacancies` takes it.
 pub(crate) fn resolve_manifest_path(
     session: &str,
     harness: Option<&str>,
     state_root: Option<&Path>,
     registry: &Path,
+    transcript_age_s: &dyn Fn(&str) -> Option<i64>,
 ) -> Result<PathBuf, String> {
     if session.is_empty() {
         return Err("no harness session id was given".to_string());
@@ -60,7 +64,9 @@ pub(crate) fn resolve_manifest_path(
                 None => format!("no registry row names session {session}"),
             }
         })?;
-    if crate::lead_state::is_terminal(row) {
+    if crate::lead_state::is_terminal(row)
+        && !crate::lead_state::served_live(session, transcript_age_s)
+    {
         let status = py_str(serde_json::to_value(&row.status).ok().as_ref());
         return Err(format!(
             "the registry row for {session} is {status}, a terminal state"
@@ -137,6 +143,7 @@ pub fn run_manifest_path(args: &[String]) -> i32 {
         harness.as_deref(),
         state_root.as_deref(),
         &registry_path(),
+        &crate::team_reap::transcript_age_now,
     ) {
         Ok(path) => {
             println!("{}", path.display());
@@ -154,7 +161,14 @@ pub fn run_manifest_path(args: &[String]) -> i32 {
 fn caller_manifest() -> Option<PathBuf> {
     let (session, harness) = crate::claims::resolve_identity();
     let session = session.filter(|s| !s.is_empty())?;
-    resolve_manifest_path(&session, harness.as_deref(), None, &registry_path()).ok()
+    resolve_manifest_path(
+        &session,
+        harness.as_deref(),
+        None,
+        &registry_path(),
+        &crate::team_reap::transcript_age_now,
+    )
+    .ok()
 }
 
 // ---- faq ------------------------------------------------------------------
@@ -502,5 +516,44 @@ mod tests {
             (page.0.as_str(), page.1.as_str()),
             (golden("max.out"), golden("max.err"))
         );
+    }
+
+    /// The measured 2026-11-03 refusal: a lead stamped `exited` by the sweep
+    /// while still writing could not resolve its own manifest. A transcript
+    /// moving inside the attention window outranks the stored terminal word;
+    /// a quiet transcript or no transcript keeps the veto.
+    #[test]
+    fn a_terminal_row_with_a_writing_transcript_still_resolves_its_manifest() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let sid = "41f999e9-d3ba-41cb-9647-501a0b77551d";
+        let row = serde_json::json!({
+            "name": "lead", "cwd": "/tmp/x", "created_at": "2026-09-01T00:00:00Z",
+            "status": "exited", "harness": "claude", "harness_session_id": sid,
+            "role_scope": "x-root",
+        });
+        let registry = dir.path().join("registry.json");
+        crate::registry_store::seed_raw(
+            &registry,
+            serde_json::json!({
+                "schema_version": crate::state::REGISTRY_SCHEMA_VERSION,
+                "agents": [row],
+            })
+            .to_string(),
+        );
+        let root = dir.path().join("space");
+        let manifest = root.join("leads/x-root.md");
+        std::fs::create_dir_all(manifest.parent().unwrap()).unwrap();
+        std::fs::write(&manifest, "---\nscope: x-root\nshape: pass\n---\n").unwrap();
+        let fresh = |_: &str| Some(30);
+        let quiet = |_: &str| Some(10_000);
+        let resolved = resolve_manifest_path(sid, Some("claude"), Some(&root), &registry, &fresh);
+        assert_eq!(resolved.ok().as_deref(), Some(manifest.as_path()));
+        let err = resolve_manifest_path(sid, Some("claude"), Some(&root), &registry, &quiet)
+            .expect_err("a quiet transcript keeps the stored word's veto");
+        assert!(err.contains("terminal state"), "{err}");
+        let none = |_: &str| None;
+        let err = resolve_manifest_path(sid, Some("claude"), Some(&root), &registry, &none)
+            .expect_err("no transcript is no override");
+        assert!(err.contains("terminal state"), "{err}");
     }
 }

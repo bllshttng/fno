@@ -23,7 +23,7 @@ Usage (via the factory)
     import typer
 
     LAZY = {
-        "inbox":   ("fno.inbox.cli:cli",    "operator inbox"),
+        "queue":   ("fno.queue.cli:cli",    "work queue"),
     }
 
     app = typer.Typer(cls=make_lazy_group_cls(LAZY), ...)

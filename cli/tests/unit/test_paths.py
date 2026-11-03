@@ -243,7 +243,7 @@ def test_all_global_dirs_derive_from_custom_state_dir(
 
     base = Path(custom_dir).resolve()
     assert fleet_dir() == base / "fleet"
-    assert postmortems_dir() == base / "postmortems"
+    assert postmortems_dir() == base / "db" / "postmortems"
     assert worktrees_base() == base / "worktrees"
     assert memory_dir() == base / "memory"
     assert ledger_json() == base / "ledger.json"

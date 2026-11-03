@@ -85,7 +85,6 @@ fn base_env<'a>(cmd: &'a mut Command, root: &Path) -> &'a mut Command {
         .env_remove("FNO_CLAUDE_PROJECTS_DIR")
         .env_remove("FNO_CLAUDE_SESSIONS_DIR")
         .env_remove("FNO_CLAUDE_DAEMON_DIR")
-        .env_remove("FNO_INBOX_ROOT")
         .env_remove("FNO_INBOX_KNOWN_PROJECTS")
         .env_remove("FNO_MAIL_BODY_WARN")
         .env_remove("FNO_MAIL_BODY_REFUSE")
@@ -111,9 +110,7 @@ fn run_case(
     // The capture driver pointed inbox_project cases at the fixture root and
     // named the known project the sender resolves to.
     let cmd = match inbox_project {
-        Some(project) => cmd
-            .env("FNO_INBOX_ROOT", root.join("inbox"))
-            .env("FNO_INBOX_KNOWN_PROJECTS", project),
+        Some(project) => cmd.env("FNO_INBOX_KNOWN_PROJECTS", project),
         None => cmd,
     };
     let cmd = if style_on {
@@ -336,7 +333,11 @@ fn seed_project_thread(root: &Path) -> &'static str {
         map.insert("type".into(), serde_json::json!("message"));
         map.insert("chat_id".into(), serde_json::json!("chat-seedparent00000"));
     }
-    let chat = root.join("chats").join("chat-seedparent00000");
+    let chat = root
+        .join("db")
+        .join("mail")
+        .join("chats")
+        .join("chat-seedparent00000");
     std::fs::create_dir_all(&chat).unwrap();
     let mut line = rec.to_string();
     line.push('\n');
