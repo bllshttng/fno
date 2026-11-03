@@ -112,7 +112,7 @@ This audit compares the table with `tmux list-keys -T prefix` from tmux 3.8, run
 | `[` and `]` | copy mode, paste | Differs: they jump between command blocks |
 | `r` | refresh client | Differs: `r` reruns a block |
 
-The keys marked "Differs" belong to fno actions that have no tmux twin, so the default stays. Rebind them in `[mux.keys]` if you want the tmux meaning on a key. The commands that do not exist yet (zoom, next pane, last pane, last window, swap pane) need new server commands. They are tracked as their own work.
+The keys marked "Differs" belong to fno actions that have no tmux twin, so the default stays. To get the tmux meaning on a key, rebind it in `[mux.keys]`. The commands that do not exist yet (zoom, next pane, last pane, last window, swap pane) need new server commands. They are tracked as their own work.
 
 ### The zellij preset
 
