@@ -429,9 +429,9 @@ impl ProviderWithPty for ClaudeInteractiveProvider {
 // ---------------------------------------------------------------------------
 
 /// Codex provider. Argv mirrors codex.py (`codex exec --json ...` /
-/// `codex exec resume <id> --json ...`); the stream parser is pinned to the
-/// codex 0.130 JSONL vocabulary captured in
-/// `tests/fixtures/codex-jsonl-sample.jsonl`.
+/// `codex exec resume <id> --json ...`); the stream parser pins the codex
+/// 0.130 JSONL vocabulary (thread.started / item.completed / agent_message
+/// rows), asserted by this module's own tests.
 pub struct CodexProvider;
 
 /// The command-token shape every reader shares: a leading `/` or `$`

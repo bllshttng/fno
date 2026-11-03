@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -297,6 +298,30 @@ def _agents_bin() -> str:
     return shutil.which("fno-agents") or ""
 
 
+def _check_stalled_mirror() -> Optional[str]:
+    """The mirror's drift guard: slice the canonical const off
+    crates/fno-agents/src/session_truth.rs and name a disagreement. A
+    shipped wheel without crates/ reads None and trusts the mirror."""
+    rust = Path(__file__).resolve().parents[2] / "crates/fno-agents/src/session_truth.rs"
+    try:
+        text = rust.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    match = re.search(
+        r"STALLED_AFTER_S:\s*f64\s*=\s*([\d.]+)\s*\*\s*([\d.]+)", text
+    )
+    if match is None:
+        return "crates/fno-agents/src/session_truth.rs no longer spells the const as a product"
+    canonical = float(match.group(1)) * float(match.group(2))
+    if canonical != STALLED_AFTER_S:
+        return (
+            f"STALLED_AFTER_S drifted: canonical {canonical:g} in"
+            " crates/fno-agents/src/session_truth.rs vs mirror"
+            f" {STALLED_AFTER_S} here; resync the mirror or retune both"
+        )
+    return None
+
+
 def _bg_socket_pid_map() -> Dict[str, int]:
     """The live claude bg socket map through `fno-agents occupancy-login
     --bg-sockets` (crates/fno-agents/src/footprint_cause.rs is the owner).
@@ -327,7 +352,13 @@ def main(argv: List[str]) -> int:
     """``python scripts/lib/worktree_occupancy.py <worktree> <pid>...``
 
     One tab-separated row per pid: ``pid verdict action job reason cmd``.
-    Any failure exits 2 with nothing on stdout, so the bridge fails closed."""
+    Any failure exits 2 with nothing on stdout, so the bridge fails closed.
+    Exit 3 names a drifted STALLED_AFTER_S mirror: the sweep verdict would
+    disagree with the canonical threshold, so it refuses rather than lies."""
+    drift = _check_stalled_mirror()
+    if drift:
+        print(f"worktree-occupancy: {drift}", file=sys.stderr)
+        return 3
     try:
         worktree = argv[0]
         pids = [int(a) for a in argv[1:]]

@@ -699,6 +699,11 @@ pub(crate) fn handle_session_report(
                 "source": source,
             }),
         );
+        // The only transition that asks anything: on a branch fork the
+        // operator decides inherit-vs-clean exactly once per edge.
+        if classification == "branch" {
+            record_branch_question(&home, &name, &harness, &predecessor, &successor);
+        }
     }
 
     // The worker's first id observation opens spawn_guard's parked pending
@@ -1383,6 +1388,74 @@ fn spawn_pending_open(home: &AgentsHome, name: &str, session_id: &str) {
     let _ = std::thread::spawn(move || {
         let _ = crate::pending_session_row::open_parked_for(&registry, &graph, &name, &session_id);
     });
+}
+
+/// The branch fork's ONE durable operator question (the retired Python
+/// `_record_branch_question`): should the new live session inherit the node
+/// and its claim, or start clean? Recorded once per fork edge - the marker
+/// needle in the recall index dedups a re-observed branch. Best effort like
+/// every observability write: a failed record is swallowed, never a report
+/// failure (AC7-ERR).
+fn record_branch_question(
+    home: &AgentsHome,
+    name: &str,
+    harness: &str,
+    predecessor: &str,
+    successor: &str,
+) {
+    let index = crate::provider_cap::questions_path(home);
+    let key = format!("{name}:{predecessor}:{successor}");
+    let needle = format!("[session-transition-branch:{key}]");
+    let seen = crate::event_store::journal_text(
+        &index,
+        &["operator_question", "operator_question_closed"],
+    );
+    if seen.contains(&needle) {
+        return;
+    }
+    let mut id_bytes = [0u8; 4];
+    if getrandom::fill(&mut id_bytes).is_err() {
+        return;
+    }
+    let hex: String = id_bytes.iter().map(|x| format!("{x:02x}")).collect();
+    let event = json!({
+        "ts": crate::daemon::now_rfc3339_like(),
+        "type": "operator_question",
+        "source": "hook",
+        "data": {
+            "question_id": format!("q-{hex}"),
+            "question": format!(
+                "{needle} Branch {name} ({harness}) forked live session \
+                 {predecessor} into {successor}. Should it inherit the node \
+                 and claim, or start clean?"
+            ),
+            "session_id": successor,
+            "ask": "answer inherit or clean; inherit proceeds only through the \
+                    voluntary claim-handover path and never force-releases the \
+                    live predecessor",
+            "options": ["inherit node and claim", "start clean"],
+        },
+    });
+    let _ = crate::question_intake::append_question_event(
+        &event,
+        &branch_question_journal(home),
+        &index,
+    );
+}
+
+/// The project journal a question records into: the repo's space journal
+/// when one resolves, else the checkout's `.fno/events.jsonl` - the same
+/// precedence the claim events path walks. Tests redirect to the temp home
+/// so a unit test never writes the real repo's journal.
+fn branch_question_journal(home: &AgentsHome) -> std::path::PathBuf {
+    if cfg!(test) {
+        return home.root().join(".fno/events.jsonl");
+    }
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    match crate::paths::space_dir_opt(&cwd) {
+        Some(space) => space.join("events.jsonl"),
+        None => crate::paths::worktree_repo_root(&cwd).join(".fno/events.jsonl"),
+    }
 }
 
 #[cfg(test)]
@@ -2163,5 +2236,21 @@ mod tests {
         .unwrap();
         assert_eq!(transitions.len(), 1, "{transitions:?}");
         assert!(transitions[0].line.contains("branch"));
+        // The fork's ONE operator question: recorded on the index, asked
+        // inherit-vs-clean, and never re-asked for the same fork edge.
+        let index = crate::provider_cap::questions_path(&home);
+        let questions = crate::event_store::journal_text(&index, &["operator_question"]);
+        let needle = "[session-transition-branch:w1-branch-".to_owned();
+        assert!(questions.contains(&needle), "{questions}");
+        assert!(questions.contains("inherit node and claim"), "{questions}");
+        let before = questions.matches(&needle).count();
+        let resp = handle_session_report(&home, &emitter(&home), &req(params));
+        assert_eq!(response_json(&resp)["result"]["stored"], true);
+        let after = crate::event_store::journal_text(&index, &["operator_question"]);
+        assert_eq!(
+            after.matches(&needle).count(),
+            before,
+            "a re-observed branch never re-asks"
+        );
     }
 }
