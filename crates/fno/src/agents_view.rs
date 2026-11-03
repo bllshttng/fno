@@ -2328,6 +2328,39 @@ pub async fn agent_list_rpc(sock: &std::path::Path) -> Result<serde_json::Value,
     .map_err(|_| "agent.list: round trip exceeded 120s".to_string())?
 }
 
+/// One `agent.gate-probe` round trip: the spawn-gate probe's answer, served
+/// from the daemon's per-cwd cache. The org block's gate reading rides this
+/// instead of spawning `fno-agents spawn-gate` per client per TTL, so the
+/// probe is never a mux child (the slowness audit's 0.02-core child budget).
+///
+/// `Err(_)` - no daemon (absent socket), transport fault, or the bound
+/// exceeded. The caller falls back to the in-process spawn, the same
+/// degrade a daemon-less install has always paid.
+pub async fn gate_probe_rpc(
+    sock: &std::path::Path,
+    cwd: &std::path::Path,
+    payload: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let params = serde_json::json!({
+        "cwd": cwd.to_string_lossy(),
+        "payload": payload,
+    });
+    let result = tokio::time::timeout(
+        GATE_PROBE_RPC_BUDGET,
+        daemon_rpc(sock, "agent.gate-probe", params),
+    )
+    .await
+    .map_err(|_| "agent.gate-probe: round trip exceeded the budget".to_string())??;
+    result
+        .get("answer")
+        .cloned()
+        .ok_or_else(|| "agent.gate-probe: answer carried no probe payload".to_string())
+}
+
+/// One probe compute costs ~2s of blocking-pool work daemon-side; the
+/// bound covers a queued compute behind another cwd's, plus the round trip.
+const GATE_PROBE_RPC_BUDGET: std::time::Duration = std::time::Duration::from_secs(8);
+
 /// Union the fno registry rows with claude's roster. Pure so the
 /// whole merge is unit-testable without files or a clock, exactly like
 /// `derive_rows`. The join key is the registry row's `attach_id` (== its claude
