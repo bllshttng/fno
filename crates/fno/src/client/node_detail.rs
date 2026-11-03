@@ -10,9 +10,9 @@
 //! reason, never a stale launch.
 
 use super::backlog_board::{rule, BoardView};
-use crate::text_style::{TLine, TSeg, TextStyle};
 use super::*;
 use crate::backlog_model::{session_action, SessionAction};
+use crate::text_style::{TLine, TSeg, TextStyle};
 
 pub(crate) fn resolve_session(
     view: &View,
