@@ -1609,10 +1609,10 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         std::env::set_var("FNO_STATE_DIR", root.path());
         std::env::set_var(crate::paths::HOME_ENV, root.path().join("agents"));
-        let bus_live = root.path().join("bus").join("messages.jsonl");
+        let bus_live = root.path().join("db/mail/bus/messages.jsonl");
         let read_chats = |payload: &str| -> Vec<Value> {
             let mut rows = Vec::new();
-            let dir = root.path().join("chats");
+            let dir = root.path().join("db/mail/chats");
             let Ok(rd) = std::fs::read_dir(&dir) else {
                 return rows;
             };

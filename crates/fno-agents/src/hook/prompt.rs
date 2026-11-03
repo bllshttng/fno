@@ -193,14 +193,14 @@ mod tests {
             let mail = "<fno_mail from=\"x\">hello</fno_mail>";
             crate::mail_hold::conversation_prompt(SID, mail);
             assert!(
-                !dir.join("mail-hold").join(format!("{SID}.json")).exists(),
+                !dir.join("db/mail/mail-hold").join(format!("{SID}.json")).exists(),
                 "a mail-tagged prompt never arms the conversation hold"
             );
             // The header-framed shape reads injected the same way.
             let header_mail = "`@folio · msg-1 · hello`\nhello body";
             crate::mail_hold::conversation_prompt(SID, header_mail);
             assert!(
-                !dir.join("mail-hold").join(format!("{SID}.json")).exists(),
+                !dir.join("db/mail/mail-hold").join(format!("{SID}.json")).exists(),
                 "a header-framed prompt never arms the conversation hold"
             );
         });
