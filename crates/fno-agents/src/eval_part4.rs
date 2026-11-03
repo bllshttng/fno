@@ -67,6 +67,20 @@ pub fn unfilled_part4s(cwd: &Path) -> Vec<PathBuf> {
     unfilled
 }
 
+/// The check-in line for one path `unfilled_part4s` returned. A PENDING-NODES
+/// file is a list of reforms with no node, so it reads `open reforms`.
+pub fn beat_line(path: &Path) -> String {
+    let pending_nodes = path
+        .file_name()
+        .is_some_and(|n| n.to_string_lossy().starts_with("PENDING-NODES"));
+    let label = if pending_nodes {
+        "open reforms"
+    } else {
+        "unfilled part4"
+    };
+    format!("{label}: {}", path.display())
+}
+
 /// The trailing 8-hex session handle of an eval dir name, when it has one.
 fn session_handle(dir_name: &str) -> Option<&str> {
     let tail = dir_name.rsplit('-').next()?;
