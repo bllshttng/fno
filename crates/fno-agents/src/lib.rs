@@ -306,6 +306,7 @@ pub mod launch_record;
 pub mod launch_workdir;
 pub mod law_match;
 pub mod law_pr_shape;
+pub mod law_renew;
 pub mod law_restore;
 pub mod law_when;
 pub mod lead_answers;

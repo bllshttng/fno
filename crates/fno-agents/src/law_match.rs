@@ -49,6 +49,10 @@ enum MatchRequest {
     /// is 0 restored, 1 recorded-but-index-failed, 3 refused.
     #[serde(rename = "restore")]
     Restore(RecordDoorRequest),
+    /// The renew door: `argv` is the `fno inbox law renew` command line.
+    /// Same ownership as `restore`: stdout carries the new id.
+    #[serde(rename = "renew")]
+    Renew(RecordDoorRequest),
     #[serde(rename = "scope-split")]
     ScopeSplit(ScopeSplitRequest),
     /// The decisions listing read: `argv` is the `fno backlog decisions`
@@ -1308,6 +1312,7 @@ pub(crate) struct RecordDoor {
     from: Option<String>,
     whiles: Vec<String>,
     between: Option<String>,
+    until: Option<String>,
 }
 
 /// A law's scope past the recording project, from one door flag. `None` in
@@ -1319,7 +1324,7 @@ pub(crate) enum Widen {
     Person(Option<String>),
 }
 
-const RECORD_USAGE: &str = "usage: fno inbox law set <subject> [decision] [--decision-file f|-] [--rationale s] [--option s]... [--supersedes d-x] [--graduation k] [--graduation-ref r] [--read cmd]... [--global | --machine[=<id>] | --person[=<name>]] [--paths glob,glob] [--from date:<when>|event:<node>] [--while <cmd>]... [--between HH:MM-HH:MM] [--strength inform|warn|require-ack|block] [--quote <the user's words>]";
+const RECORD_USAGE: &str = "usage: fno inbox law set <subject> [decision] [--decision-file f|-] [--rationale s] [--option s]... [--supersedes d-x] [--graduation k] [--graduation-ref r] [--read cmd]... [--global | --machine[=<id>] | --person[=<name>]] [--paths glob,glob] [--from date:<when>|event:<node>] [--while <cmd>]... [--between HH:MM-HH:MM] [--until YYYY-MM-DD] [--strength inform|warn|require-ack|block] [--quote <the user's words>]";
 const RETRACT_USAGE: &str = "usage: fno inbox law retract <subject-or-decision-id> --reason <why> [--authority operator|chat_attested] [--quote <the user's words>]";
 const HISTORY_USAGE: &str = "usage: fno inbox law history <subject-or-decision-id>";
 
@@ -1341,6 +1346,7 @@ fn parse_record_door(args: &[String]) -> Result<RecordDoor, String> {
         from: None,
         whiles: Vec::new(),
         between: None,
+        until: None,
     };
     let mut widened_by: Vec<String> = Vec::new();
     let mut positional = 0usize;
@@ -1385,6 +1391,9 @@ fn parse_record_door(args: &[String]) -> Result<RecordDoor, String> {
             "--from" => door.from = Some(take(&mut i)?),
             "--while" => door.whiles.push(take(&mut i)?),
             "--between" => door.between = Some(take(&mut i)?),
+            "--until" => {
+                door.until = Some(crate::law_renew::parse_until(&take(&mut i)?)?);
+            }
             "--global" => {
                 // An inline value parses like a bool flag should: --global=false
                 // must never widen because the value was ignored.
@@ -2018,6 +2027,9 @@ pub(crate) fn record_door_write(door: RecordDoor, decision: String, caller: &Cal
     }
     if let Some(when) = &when {
         data["when"] = when.clone();
+    }
+    if let Some(until) = &door.until {
+        data["until"] = json!(until);
     }
     if let Some(map) = data.as_object_mut() {
         crate::identity::stamp_person(map);
@@ -2966,6 +2978,9 @@ pub fn run_law_match_str(input: &str) -> i32 {
         MatchRequest::Restore(r) => {
             return crate::law_restore::run_restore(&r.argv);
         }
+        MatchRequest::Renew(r) => {
+            return crate::law_renew::run_renew(&r.argv);
+        }
         MatchRequest::Ask(r) => serde_json::to_string(&ask_answer(&r)).expect("serializes"),
         MatchRequest::Law(r) => {
             let near = near_law_lines(&r.law);
@@ -3419,6 +3434,7 @@ pub(crate) mod scope_tests {
             from: None,
             whiles: Vec::new(),
             between: None,
+            until: None,
         }
     }
 
