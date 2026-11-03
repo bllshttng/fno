@@ -714,7 +714,7 @@ pub fn run_doctor(out: &mut String) -> i32 {
         ),
         (
             "postmortems_dir",
-            super::state_child(&settings, "postmortems_dir", "postmortems"),
+            super::state_child(&settings, "postmortems_dir", "db/postmortems"),
         ),
         (
             "worktrees_base",

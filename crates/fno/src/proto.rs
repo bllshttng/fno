@@ -399,7 +399,9 @@ fn default_true() -> bool {
 /// sideline's pin star and pin-first order; floor stays 58.
 /// v120: `SessionBinding.pr_url` + `pr_count` (serde default), so the PR
 /// chip opens the node's own repo and counts every PR; floor stays 58.
-pub const PROTO_VERSION: u32 = 120;
+/// v121: `ClientMsg::Link`, the link role a far `mux serve --link` takes, and
+/// `Command::ReachRemote`, a far row opened in a portal; floor stays 58.
+pub const PROTO_VERSION: u32 = 121;
 
 /// The oldest wire version this build can speak. Bumps that only add commands or
 /// `#[serde(default)]` fields move `PROTO_VERSION`; a change to an existing
@@ -429,6 +431,8 @@ pub mod err_code;
 pub mod agent_launch;
 pub use agent_launch::{AgentLaunchRequest, AgentLaunchUpdate, LaunchState};
 
+pub mod link;
+pub use link::{LinkHello, RemoteRow, LINK_MIN_PROTO};
 pub mod observer;
 pub use observer::{ObserverHello, ObserverRow, ObserverVia};
 
@@ -1081,6 +1085,10 @@ fn is_zero(n: &u32) -> bool {
 /// under; `None` is the catch-all for rows whose cwd matches no squad.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AgentRow {
+    /// A row from another machine's fleet entry. Client-side only: the server
+    /// never sends one, so this adds nothing to the wire.
+    #[serde(skip)]
+    pub remote: Option<RemoteRow>,
     pub squad: Option<u64>,
     pub name: String,
     /// (v63) The harness axis, verbatim from the registry row
@@ -1730,6 +1738,14 @@ pub enum Command {
     /// so the value can only ever be `claude attach`'s positional arg.
     AttachAgent {
         id: String,
+        #[serde(default)]
+        placement: PanePlacement,
+    },
+    /// (v121) Show a row from another machine in a portal, through the
+    /// portal reach a paneless local row takes. The seat runs the link
+    /// (`fno mux serve --link <key> --host <host>`) in place of an attach.
+    ReachRemote {
+        remote: RemoteRow,
         #[serde(default)]
         placement: PanePlacement,
     },
@@ -4144,7 +4160,7 @@ mod tests {
         // re-assert the same literal, which caught nothing a single pin does
         // not and turned every bump into a three-file edit; they now assert
         // only their own wire shapes.
-        assert_eq!(PROTO_VERSION, 120);
+        assert_eq!(PROTO_VERSION, 121);
         // v64 added `PanePlacement.portal` and `AgentRow.portal`.
         // Both are additive `#[serde(default)]` fields, so the floor does NOT
         // move with them - a v63 client still attaches. Pinned beside the

@@ -3,24 +3,19 @@
 
 use std::path::{Path, PathBuf};
 
-/// The bus log under `fno_dir`: `FNO_BUS_DIR`, then `FNO_INBOX_ROOT/.bus`, then
-/// the `config.paths.bus_dir` override (tilde-expanded; `{vault}`/`{project}`
-/// templates are not), else `<fno_dir>/bus/messages.jsonl`.
+/// The bus log under `fno_dir`: `FNO_BUS_DIR`, then the `config.paths.bus_dir`
+/// override (tilde-expanded; `{vault}`/`{project}` templates are not), else the
+/// bus folder the layout table names under `fno_dir`.
 pub(crate) fn bus_log_path(fno_dir: &Path) -> PathBuf {
     let bus_dir_env = std::env::var("FNO_BUS_DIR").ok();
-    let inbox_root_env = std::env::var("FNO_INBOX_ROOT").ok();
     let configured = std::env::current_dir().ok().and_then(|cwd| {
         crate::agents_config::config_lookup(&cwd, &["paths", "bus_dir"])
             .and_then(|v| v.as_str().map(str::to_string))
             .filter(|s| !s.trim().is_empty())
             .map(|dir| crate::cargo_build_dirs::expand_home(Path::new(&dir)))
     });
-    crate::mail::log::resolve_log_path(
-        fno_dir,
-        bus_dir_env.as_deref(),
-        inbox_root_env.as_deref(),
-        configured.as_deref(),
-    )
+    let default_log = crate::state_layout::place_in(fno_dir, "bus", "messages.jsonl");
+    crate::mail::log::resolve_log_path(&default_log, bus_dir_env.as_deref(), configured.as_deref())
 }
 
 /// The bus DIRECTORY under `fno_dir`: `bus_log_path`'s parent. Callers pass
@@ -59,9 +54,7 @@ pub(crate) fn state_bus_dir(home: &crate::paths::AgentsHome) -> PathBuf {
 /// The same directory from the state root alone. With no state root the
 /// answer holds only if an environment override names the bus.
 pub(crate) fn state_bus_dir_opt() -> Option<PathBuf> {
-    let env_names_bus = ["FNO_BUS_DIR", "FNO_INBOX_ROOT"]
-        .iter()
-        .any(|key| std::env::var(key).is_ok_and(|v| !v.is_empty()));
+    let env_names_bus = std::env::var("FNO_BUS_DIR").is_ok_and(|v| !v.is_empty());
     match crate::agents_config::state_dir(Path::new(".")) {
         Some(dir) => Some(bus_dir_of(&dir)),
         None if env_names_bus => Some(bus_dir_of(Path::new("."))),

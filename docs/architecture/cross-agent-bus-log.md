@@ -22,7 +22,7 @@ One global append-only log is the system of record. The per-recipient markdown t
 | Cursors (this work) | `<bus_dir>/cursors/<name>.json` | Per-consumer read position, keyed by last-seen message-id. |
 | Markdown render (demoted) | `<recipient>/inbox/*.md` | Obsidian-visible render of the log; no authority. |
 
-`bus_dir` resolves via `fno.paths.bus_dir()`: `FNO_BUS_DIR` env override, else `<FNO_INBOX_ROOT>/.bus` when the inbox store is test-isolated (so every existing inbox test/smoke co-isolates the bus), else `config.paths.bus_dir`, else `state_dir()/bus` (default `~/.fno/bus/`).
+`bus_dir` resolves via `fno.paths.bus_dir()`: `FNO_BUS_DIR` env override, else `config.paths.bus_dir`, else the bus folder the state-root table names under `state_dir()` (default `~/.fno/db/mail/bus/`).
 
 ### The envelope (versioned)
 

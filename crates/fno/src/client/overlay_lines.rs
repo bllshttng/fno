@@ -278,18 +278,17 @@ impl View {
     ) {
         let (origin, dims) = self.overlay_viewport();
         let chrome = chrome::Chrome::new("connections", Anchor::Center).footer("esc close");
-        let (lines, cursor) = conn.render_cursor(&self.layout.agents, overlay_text_cols(dims.1));
-        draw_lines_overlay(
-            cells,
-            rows,
-            cols,
+        // Body lines, not strings: the view paints its type levels as spans.
+        let (body, cursor) = conn.render_body(&self.layout.agents, overlay_text_cols(dims.1));
+        let layout = super::overlay_paint::layout_body_overlay(
             origin,
             dims,
             &chrome,
-            &lines,
-            &self.theme,
+            &body,
             cursor,
+            OverlayAnchor::Center,
         );
+        draw_overlay_layout(cells, rows, cols, &layout, &self.theme);
     }
 
     /// The navigator's framed block, from the live layout. One layout feeds

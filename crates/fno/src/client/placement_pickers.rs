@@ -66,6 +66,8 @@ pub(crate) enum PortalPickDecision {
 /// resolves the cursor against the rows the layout holds at that moment.
 pub(crate) struct PortalPick {
     pub(crate) id: String,
+    /// Set for a row on another machine: the commit sends its reach.
+    pub(crate) remote: Option<crate::proto::RemoteRow>,
     pub(crate) cursor: usize,
     pub(crate) esc: Vec<u8>,
 }
@@ -127,8 +129,11 @@ impl View {
         self.clear_peek();
         // The new-portal row is the LAST row, so the cursor starts at the open
         // count - zero open portals leaves cursor 0, the only row there is.
+        let far = self.machine_tree.rows().find(|a| a.name == id);
+        let remote = far.and_then(|a| a.remote.clone());
         self.portal_pick = Some(PortalPick {
             id,
+            remote,
             cursor: self.open_portal_rows().len(),
             esc: Vec::new(),
         });
@@ -525,14 +530,17 @@ pub(crate) async fn portal_pick_keys(
         // re-checks its target: the row can exit or gain a pane while
         // the picker sits open, and the server's stale-id refusal must
         // not be the first thing that tells the operator.
-        let attachable = view.layout.agents.iter().any(|a| {
-            a.pane_id.is_none()
-                && !a.exited
-                && a.attach_id
-                    .as_deref()
-                    .map(|s| s == pick.id.as_str())
-                    .unwrap_or(a.name == pick.id)
-        });
+        let attachable = match &pick.remote {
+            Some(_) => view.machine_tree.rows().any(|a| a.name == pick.id),
+            None => view.layout.agents.iter().any(|a| {
+                a.pane_id.is_none()
+                    && !a.exited
+                    && a.attach_id
+                        .as_deref()
+                        .map(|s| s == pick.id.as_str())
+                        .unwrap_or(a.name == pick.id)
+            }),
+        };
         if !attachable {
             view.set_notice("agent is no longer attachable".into());
             return Ok(StdinFlow::Continue);
@@ -581,6 +589,10 @@ pub(crate) async fn portal_pick_keys(
                 },
             }
         };
+        if let Some(remote) = pick.remote {
+            super::machine_tree::reach(view, remote, placement, sock_w).await?;
+            return Ok(StdinFlow::Continue);
+        }
         write_msg(
             sock_w,
             &ClientMsg::Command(Command::AttachAgent {

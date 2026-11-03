@@ -595,7 +595,11 @@ fn evals_history_path() -> Option<PathBuf> {
         }
     }
     let state = crate::agents_config::state_dir(&cwd)?;
-    Some(state.join("history").join("evals-history.jsonl"))
+    Some(crate::state_layout::place_in(
+        &state,
+        "history",
+        "evals-history.jsonl",
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -1082,7 +1086,7 @@ pub(crate) fn history_path(config: &Value) -> Option<PathBuf> {
     }
     let cwd = std::env::current_dir().ok()?;
     crate::agents_config::state_dir(&cwd)
-        .map(|root| root.join("history").join("health-history.jsonl"))
+        .map(|root| crate::state_layout::place_in(&root, "history", "health-history.jsonl"))
 }
 
 /// Append one JSONL summary and prune past retain_days (health_monitor.py

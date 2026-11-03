@@ -22,7 +22,7 @@ pub(crate) const RELEASE_EVENT: &str = "look_hold_release";
 /// unset: footnote's cheap build (fmt, check) and the shots the user looks at.
 const SHOT_WORKFLOWS: &str = "rust-ci.yml";
 
-type PaintCache = Arc<Mutex<HashMap<String, bool>>>;
+pub(crate) type PaintCache = Arc<Mutex<HashMap<String, bool>>>;
 
 #[derive(Default)]
 pub struct Arm {
@@ -94,36 +94,53 @@ pub(crate) fn decide(head: &Head, ours: &HashSet<u64>, held: Option<bool>) -> (V
     }
 }
 
-/// The visual-approval gate at `sha`. A head that touches no paint path
-/// answers from the cache, so only paint heads read the gate.
-fn held(paint: &PaintCache, root: &Path, slug: &str, pr: u64, sha: &str) -> Option<bool> {
+/// Whether the head touches a paint path. A head's changed files never
+/// change, so each head costs one files read. None when the list is unread.
+fn touches_paint(paint: &PaintCache, root: &Path, slug: &str, pr: u64, sha: &str) -> Option<bool> {
     let probes = crate::authorized_merge::RealProbes;
     let key = format!("{slug}#{pr}@{sha}");
     let mut cache = paint.lock().unwrap_or_else(|e| e.into_inner());
-    let touches = match cache.get(&key) {
-        Some(touches) => *touches,
-        None => {
-            let files = crate::merge_gates::pr_file_paths(&probes, root, pr)?;
-            let paths = crate::agents_config::visual_paint_paths(root);
-            let touches = files
-                .iter()
-                .any(|f| crate::merge_gates::path_matches_paint(f, &paths));
-            if cache.len() > 2_000 {
-                cache.clear();
-            }
-            cache.insert(key, touches);
-            touches
-        }
-    };
-    drop(cache);
-    if !touches {
+    if let Some(touches) = cache.get(&key) {
+        return Some(*touches);
+    }
+    let files = crate::merge_gates::pr_file_paths(&probes, root, pr)?;
+    let paths = crate::agents_config::visual_paint_paths(root);
+    let touches = files
+        .iter()
+        .any(|f| crate::merge_gates::path_matches_paint(f, &paths));
+    if cache.len() > 2_000 {
+        cache.clear();
+    }
+    cache.insert(key, touches);
+    Some(touches)
+}
+
+/// The visual-approval gate at `sha`. A head that touches no paint path
+/// answers from the cache, so only paint heads read the gate.
+fn held(paint: &PaintCache, root: &Path, slug: &str, pr: u64, sha: &str) -> Option<bool> {
+    if !touches_paint(paint, root, slug, pr, sha)? {
         return Some(false);
     }
+    let probes = crate::authorized_merge::RealProbes;
     match crate::merge_gates::visual_approval_blocker(&probes, root, pr, sha) {
         None => Some(false),
         Some(b) if b.code == "visual_approval" => Some(true),
         Some(_) => None,
     }
+}
+
+/// True when the head paints and the user's look is pinned to it. The CI
+/// tier spares such a PR: a push cannot restart its CI, because a new
+/// commit voids the pin.
+pub(crate) fn approved_at_head(
+    paint: &PaintCache,
+    root: &Path,
+    slug: &str,
+    pr: u64,
+    sha: &str,
+) -> bool {
+    touches_paint(paint, root, slug, pr, sha) == Some(true)
+        && held(paint, root, slug, pr, sha) == Some(false)
 }
 
 fn pass_repo(root: &Path, slug: &str, path: &Path, paint: &PaintCache) -> Result<(), String> {
@@ -162,7 +179,7 @@ fn pass_repo(root: &Path, slug: &str, path: &Path, paint: &PaintCache) -> Result
             if list.is_empty() {
                 continue;
             }
-            let runs = &crate::ci_tier::act(root, &[(pr, list)], action)[0]["runs"];
+            let runs = &crate::ci_tier::act(root, &[(pr, list)], action, "look_hold")[0]["runs"];
             let data = json!({"slug": slug, "pr": pr, "sha": sha, "runs": runs});
             emitter
                 .emit(kind, &data)

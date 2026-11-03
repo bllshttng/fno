@@ -10,7 +10,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `ANTHROPIC_BASE_URL` | rs | Overrides the Anthropic API base URL. |
 | `ANTHROPIC_MODEL` | rs | Overrides the default Anthropic model. |
 | `CARGO` | rs | Names the cargo binary the `cargo_build_dirs` lane runs `cargo metadata` through; the PATH scan and `$CARGO_HOME/bin/cargo` are the fallbacks. |
-| `CARGO_BUILD_BUILD_DIR` | rs | unclear: crates/fno-agents/src/hook/stop.rs:519 |
+| `CARGO_BUILD_BUILD_DIR` | rs | The fleet build-dir value the daemon, keeper, stream and stop-hook fills set for fleet-cargo checkouts, and foreign panes scrub; read it with `fno config build-dir`. |
 | `CARGO_HOME` | rs | Cargo install root; the default is ~/.cargo. |
 | `CARGO_MANIFEST_DIR` | rs | Cargo sets it on each process that it starts. The live-store fence then refuses to open a store under the operator home `.fno`. Only the admission call of the rustc wrapper removes it. |
 | `CENSUS_DEFERRED_FILE` | rs | Overrides the census deferred set for a targeted run: crates/fno-agents/src/test_census.rs |
@@ -131,7 +131,6 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_HOME` | py+rs | Relocates fno's config-free sidecars (plugin-root pointer, push-stamps, corrections log, decision index) and the Rust defaults when no config sets state_dir. Does not move state_dir or the backlog; a store write under FNO_HOME that targets the default store ($HOME/.fno) is refused. Sandbox with FNO_CONFIG (docs/path-config.md). |
 | `FNO_HOOK_CONTEXT` | rs | Set to 1 on every hook command; an fno call that carries it never joins its session to fno. Spawned children have it cleared. |
 | `FNO_IDLE_EXIT_GRACE_MS` | rs | unclear: crates/fno/src/server.rs:14324 |
-| `FNO_INBOX_ROOT` | py+rs | Test override for the bus: the bus lives at `<root>/.bus`. `FNO_BUS_DIR` wins when both are set (`bus_dir` in cli/src/fno/paths.py). |
 | `FNO_INIT_PROGRESS_FILE` | rs | Step-marker file `fno do target start` hands its init door; the door appends begin/done markers and the parent prints the last marker in the 540s timeout receipt. Unset (a bare `fno do target init`), the markers are skipped. See target_init.rs `init_progress`. |
 | `FNO_INSTALL_BUILD` | rs | unclear: cli/src/fno/update.py:1748 |
 | `FNO_KEEPER_ORPHAN_POLL_MS` | rs | Pane keeper poll interval in ms for the socket-dir-gone check; default 30000. Tests set it low. |

@@ -42,7 +42,7 @@ operator_app = typer.Typer(
     name="user",
     help="Queue of this session's undispositioned user turns, derived "
     "from the transcript by the Rust reader and acked to a per-session "
-    "ledger under ~/.fno/operator-capture/ (the <session>.scan.json scan "
+    "ledger in the operator-capture folder (the <session>.scan.json scan "
     "cursor is a cache; deleting it only forces a full rescan). Machine "
     "envelopes are refused and counted by name in that reader. Residual "
     "hole: raw mail (send --raw) reads as a user turn; over-counting is "

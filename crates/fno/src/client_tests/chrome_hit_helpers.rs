@@ -15,6 +15,7 @@ pub(super) fn chrome_hit_label(hit: &Option<ChromeHit>) -> &'static str {
     match hit {
         None => "None",
         Some(ChromeHit::Cmds(_)) => "Cmds",
+        Some(ChromeHit::OpenRemote(_)) => "OpenRemote",
         Some(ChromeHit::Notice(_)) => "Notice",
         Some(ChromeHit::OpenCreate) => "OpenCreate",
         Some(ChromeHit::ToggleComposer) => "ToggleComposer",

@@ -178,11 +178,11 @@ mod tests {
     }
 
     fn bus_path(tmp: &Path) -> PathBuf {
-        tmp.join("bus").join("messages.jsonl")
+        tmp.join("db/mail/bus/messages.jsonl")
     }
 
     fn chats_dir(tmp: &Path) -> PathBuf {
-        tmp.join("chats")
+        tmp.join("db/mail/chats")
     }
 
     fn write_registry(tmp: &Path, rows: Value) {

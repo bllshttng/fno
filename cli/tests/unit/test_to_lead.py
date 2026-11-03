@@ -19,7 +19,7 @@ from fno.paths_testing import use_tmpdir
 @pytest.fixture
 def env(tmp_path, monkeypatch):
     use_tmpdir(monkeypatch, tmp_path)
-    monkeypatch.setenv("FNO_INBOX_ROOT", str(tmp_path / "agents"))
+    monkeypatch.setenv("FNO_BUS_DIR", str(tmp_path / "agents" / ".bus"))
     return tmp_path
 
 
