@@ -118,12 +118,12 @@ pub fn key_disp(b: u8) -> String {
 
 /// The named key a control byte is indistinguishable from on a terminal, for
 /// the bytes a chord can never claim: `ctrl+m` and `ctrl+j` arrive as Enter,
-/// `ctrl+i` as Tab, `ctrl+[` (0x1B) as Esc.
+/// `ctrl+i` as Tab. `parse_key` cannot produce Esc (`ctrl+[` is not a letter),
+/// so no Esc arm is needed.
 fn terminal_twin(b: u8) -> Option<&'static str> {
     match b {
         0x09 => Some("Tab"),
         0x0A | 0x0D => Some("Enter"),
-        0x1B => Some("Esc"),
         _ => None,
     }
 }
@@ -2454,13 +2454,11 @@ mod tests {
         let p = DEFAULT_PREFIX;
         let digit = resolve_rebind_with(p, &[], "detach", b'3').unwrap_err();
         assert!(digit.contains("1-9 select tabs"), "{digit}");
-        // Enter, Tab and Esc arrive as ctrl+m/j, ctrl+i and ctrl+[: refused.
+        // Enter and Tab arrive as ctrl+m/j and ctrl+i: refused.
         let enter = resolve_rebind_with(p, &[], "detach", 0x0D).unwrap_err();
         assert!(enter.contains("same byte as Enter"), "{enter}");
         let tab = resolve_rebind_with(p, &[], "detach", 0x09).unwrap_err();
         assert!(tab.contains("same byte as Tab"), "{tab}");
-        let esc = resolve_rebind_with(p, &[], "detach", 0x1B).unwrap_err();
-        assert!(esc.contains("same byte as Esc"), "{esc}");
         let (kept, warn) = resolve_keymap(None, &[("split-down".into(), "C-m".into())]);
         assert!(kept.rebinds.is_empty(), "default key is kept");
         assert_eq!(warn.len(), 1, "{warn:?}");

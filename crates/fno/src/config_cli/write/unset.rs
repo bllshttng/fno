@@ -58,7 +58,9 @@ pub fn unset_value(key: &str, scope: &str) -> Res<UnsetResult> {
             (value, false) => py_str(&value),
         }
     };
-    let store: Vec<String> = if retired || rebind_action.is_some() {
+    let store: Vec<String> = if rebind_action.is_some() {
+        bare.split('.').map(str::to_string).collect()
+    } else if retired {
         key.split('.').map(str::to_string).collect()
     } else {
         storage_parts(key)
