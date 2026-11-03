@@ -3341,7 +3341,15 @@ pub fn run_lead_checkin(args: &[String]) -> i32 {
     // The predecessor's open reforms ride every beat until filled: the
     // successor's first beat names each unfilled part4 so it gets done.
     for path in crate::eval_part4::unfilled_part4s(&ctx.cwd) {
-        lines.push(format!("unfilled part4: {}", path.display()));
+        let label = if path
+            .file_name()
+            .is_some_and(|n| n.to_string_lossy().starts_with("PENDING-NODES"))
+        {
+            "open reforms"
+        } else {
+            "unfilled part4"
+        };
+        lines.push(format!("{label}: {}", path.display()));
     }
 
     let emitted = if ctx.emit {
