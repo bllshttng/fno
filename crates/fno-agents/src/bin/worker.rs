@@ -192,13 +192,12 @@ fn law_exec_lane() {
     std::process::exit(fno_agents::law_match::run_law_match_str(&input));
 }
 
-/// `--keeper` / `--pane` entrypoint: parse, fill the build-dir env (before any
-/// thread starts, so the env write is sound), then run the keeper; every hosted
-/// harness child inherits it.
+/// `--keeper` / `--pane` entrypoint: parse, settle the build env for the
+/// pane's own repo (before any thread starts, so the env write is sound),
+/// then run the keeper; every hosted harness child inherits the posture.
 fn pane_keeper_lane(args: &[String]) -> Result<(), String> {
     let cfg = fno_agents::pane_keeper::parse_pane_args(args)?;
-    fno_agents::cargo_build_dirs::fill_build_dir_env(&cfg.cwd);
-    fno_agents::cargo_build_dirs::fill_sccache_env(&cfg.cwd);
+    fno_agents::cargo_build_dirs::fill_pane_env(&cfg.cwd);
     fno_agents::pane_keeper::run(cfg)
 }
 

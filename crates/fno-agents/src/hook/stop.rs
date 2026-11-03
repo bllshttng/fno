@@ -1555,8 +1555,9 @@ mod tests {
     }
 
     /// The shell contract, native now: an unset env is resolved from
-    /// config and set in place; a session preset survives untouched. The env
-    /// pin holds the same lock the other env-pinning suites hold.
+    /// config and set in place; a session preset survives untouched; a
+    /// foreign-repo owner cwd earns no export at all. The env pin holds the
+    /// same lock the other env-pinning suites hold.
     #[test]
     fn export_session_build_dir_sets_unset_and_honors_preset() {
         let _guard = crate::claims::test_env_lock()
@@ -1565,6 +1566,18 @@ mod tests {
         let saved = std::env::var_os("CARGO_BUILD_BUILD_DIR");
         let dir = std::env::temp_dir().join(format!("stop-gate-export-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
+        std::fs::create_dir_all(dir.join(".cargo")).unwrap();
+        std::fs::write(
+            dir.join(".cargo/config.toml"),
+            b"[build]\nrustc-wrapper = \"scripts/lib/cargo-rustc-wrapper.sh\"\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(dir.join("scripts/lib")).unwrap();
+        std::fs::write(
+            dir.join("scripts/lib/cargo-rustc-wrapper.sh"),
+            b"#!/bin/sh\n",
+        )
+        .unwrap();
 
         std::env::remove_var("CARGO_BUILD_BUILD_DIR");
         export_session_build_dir("target", &dir);
@@ -1592,11 +1605,26 @@ mod tests {
             "non-target drivers get no build-dir export"
         );
 
+        // A foreign owner cwd earns no export: the fill gate sees no wrapper
+        // naming config, so a target run inside another repo's dir leaves
+        // the env exactly as it found it.
+        let foreign =
+            std::env::temp_dir().join(format!("stop-gate-export-fn-{}", std::process::id()));
+        std::fs::create_dir_all(&foreign).unwrap();
+        std::env::remove_var("CARGO_BUILD_BUILD_DIR");
+        export_session_build_dir("target", &foreign);
+        assert_eq!(
+            std::env::var_os("CARGO_BUILD_BUILD_DIR"),
+            None,
+            "a foreign owner cwd must earn no build-dir export"
+        );
+
         match saved {
             Some(v) => std::env::set_var("CARGO_BUILD_BUILD_DIR", v),
             None => std::env::remove_var("CARGO_BUILD_BUILD_DIR"),
         }
         std::fs::remove_dir_all(&dir).ok();
+        std::fs::remove_dir_all(&foreign).ok();
     }
 
     fn fire_with_goal(goal: Value) -> Fire {
