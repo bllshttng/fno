@@ -1162,7 +1162,9 @@ fn is_open_do_row(row: &Value) -> bool {
 }
 
 /// Best-effort release of the `node:<id>` lockfile. Releases stale or own
-/// holders; keeps a LIVE foreign holder. Never fails the command.
+/// holders; keeps a LIVE foreign holder. Each root with nothing to release
+/// defers to the next; "no lockfile" answers only once every root is free.
+/// Never fails the command.
 pub(crate) fn release_node_lockfile(node_id: &str) -> String {
     let key = format!("node:{node_id}");
     let roots: Vec<Option<PathBuf>> = {
@@ -1170,17 +1172,22 @@ pub(crate) fn release_node_lockfile(node_id: &str) -> String {
         roots.dedup();
         roots
     };
-    if let Some(root) = roots.first() {
+    release_node_lockfile_over(&key, &roots)
+}
+
+/// The root walk `release_node_lockfile` runs over the node's roots.
+fn release_node_lockfile_over(key: &str, roots: &[Option<PathBuf>]) -> String {
+    for root in roots {
         let root = root.as_deref();
-        let (state, record) = crate::claims::status(&key, root);
+        let (state, record) = crate::claims::status(key, root);
         match state {
-            crate::claims::ClaimState::Free => return "no lockfile".to_string(),
+            crate::claims::ClaimState::Free => continue,
             crate::claims::ClaimState::Stale => {
                 let holder = record
                     .as_ref()
                     .map(|r| r.holder.clone())
                     .unwrap_or_default();
-                let note = match crate::claims::release(&key, &holder, root, None) {
+                let note = match crate::claims::release(key, &holder, root, None) {
                     Ok(()) => "released stale lockfile".to_string(),
                     Err(_) => "lockfile changed".to_string(),
                 };
@@ -1200,7 +1207,7 @@ pub(crate) fn release_node_lockfile(node_id: &str) -> String {
                     .map(|r| r.holder.clone())
                     .unwrap_or_default();
                 if holder == invoking_claim_holder() {
-                    return match crate::claims::release(&key, &holder, root, None) {
+                    return match crate::claims::release(key, &holder, root, None) {
                         Ok(()) => "released own lockfile".to_string(),
                         Err(_) => "lockfile changed".to_string(),
                     };
@@ -1213,7 +1220,7 @@ pub(crate) fn release_node_lockfile(node_id: &str) -> String {
             }
         }
     }
-    "lockfile untouched".to_string()
+    "no lockfile".to_string()
 }
 
 /// The holder id this invocation would hold: the target manifest's recorded
@@ -2388,4 +2395,41 @@ fn absolutize(path: &str) -> String {
     }
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     cwd.join(p).display().to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::release_node_lockfile_over;
+    use std::path::PathBuf;
+    use tempfile::TempDir;
+
+    #[test]
+    fn a_free_root_defers_to_the_next_root_before_answering() {
+        let first = TempDir::new().unwrap();
+        let second = TempDir::new().unwrap();
+        let roots = vec![
+            Some(first.path().to_path_buf()),
+            Some(second.path().to_path_buf()),
+        ];
+        let key = "node:fallthrough-test";
+        assert_eq!(release_node_lockfile_over(key, &roots), "no lockfile");
+
+        // A live foreign holder at the second root is seen after the first
+        // root answers free; the early return this replaces used to hide it.
+        let opts = crate::claims::AcquireOpts {
+            identity: Some(("claim-test-session".into(), "claude".into())),
+            root: Some(second.path().to_path_buf()),
+            events_dir: Some(second.path().to_path_buf()),
+            ..Default::default()
+        };
+        match crate::claims::acquire(key, "pty:second-holder", opts) {
+            crate::claims::AcquireOutcome::Acquired(_) => {}
+            other => panic!("{other:?}"),
+        }
+        let note = release_node_lockfile_over(key, &roots);
+        assert!(
+            note.starts_with("lockfile left (live foreign holder)"),
+            "{note}"
+        );
+    }
 }
