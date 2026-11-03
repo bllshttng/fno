@@ -114,8 +114,8 @@ pub(crate) fn needs_overlay_lines(
 
     let styled = |style: TextStyle, text: &str| TLine::line(style, pad_to(text, ANSWER_OVERLAY_W));
     let mut lines = vec![styled(
-        TextStyle::Title,
-        " needs me · digit answers · n/N cycle · ⏎ goto · q close",
+        TextStyle::Hint,
+        " digit answers · n/N cycle · ⏎ goto",
     )];
 
     lines.push(styled(TextStyle::Section, " Mine"));
