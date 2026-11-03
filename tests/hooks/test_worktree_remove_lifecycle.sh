@@ -1347,7 +1347,7 @@ echo "== 7. cleanup --merged consumes the occupancy classifier (x-0396) =="
 # A merged, pushed, clean sandbox tree: branch tip reachable from origin/main,
 # nothing unpushed, so step 4 (processes) is the first guard the tree meets.
 # --no-verify: a machine-local pre-push hook refuses branch main on some
-# operator boxes (see section 5b); the fixture is throwaway, the hook is not
+# operator machines (see section 5b); the fixture is throwaway, the hook is not
 # under test.
 new_merged_tree() {
     local S BARE

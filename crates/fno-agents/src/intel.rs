@@ -282,7 +282,7 @@ fn session_join(
     spaces: &Path,
 ) -> HashMap<String, (Vec<String>, Option<String>, Option<u64>)> {
     let mut join = HashMap::new();
-    let ledger = fno_dir.join("ledger.json");
+    let ledger = crate::state_layout::place(fno_dir, "ledger.json");
     if let Ok(raw) = std::fs::read_to_string(&ledger) {
         if let Ok(doc) = serde_json::from_str::<Value>(&raw) {
             if let Some(entries) = doc.get("entries").and_then(|v| v.as_array()) {

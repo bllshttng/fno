@@ -1110,7 +1110,7 @@
       "tier": "advanced",
       "question": "",
       "default_source": "default",
-      "doc": "Available-RAM floor in GB for spawn preflight; spawn refuses below it (<= 0 disables; default 4). Set it to what the OS needs to stay out of swap: 2 on an 8 GB box, 3 on 16 GB, 4 above."
+      "doc": "Available-RAM floor in GB for spawn preflight; spawn refuses below it (<= 0 disables; default 4). Set it to what the OS needs to stay out of swap: 2 on an 8 GB machine, 3 on 16 GB, 4 above."
     },
     {
       "path": "agents.max_swap_pct",
@@ -1137,7 +1137,7 @@
       "tier": "advanced",
       "question": "",
       "default_source": "default",
-      "doc": "Share of CPU capacity the fleet may hold, checked on EVERY spawn (default 0.5). An attribution gap widens the share to an interval bounded above by the whole machine's measured CPU: over by its own attributed work the gate holds and re-samples; the ceiling inside the interval refuses and names both bounds plus the gap; above the interval the gate admits and says the reading was an upper bound. Leave 0.5 unless the box is dedicated, then 0.6."
+      "doc": "Share of CPU capacity the fleet may hold, checked on EVERY spawn (default 0.5). An attribution gap widens the share to an interval bounded above by the whole machine's measured CPU: over by its own attributed work the gate holds and re-samples; the ceiling inside the interval refuses and names both bounds plus the gap; above the interval the gate admits and says the reading was an upper bound. Leave 0.5 unless the machine is dedicated, then 0.6."
     },
     {
       "path": "agents.worker_qos",

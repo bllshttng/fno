@@ -201,7 +201,7 @@ fn codex_bin() -> Result<PathBuf, String> {
 
 /// The transaction entry. Lock, re-read, snapshot, restart, verify.
 pub async fn codex_daemon_upgrade_transaction() -> UpgradeOutcome {
-    // No codex CLI on the box: there is no shared daemon this machine could
+    // No codex CLI on this machine: there is no shared daemon it could
     // own, and a held line for a daemon that cannot exist is noise. Skipped,
     // said once, plainly.
     if crate::codex_daemon_readiness::codex_cli_path().is_none() {
@@ -412,7 +412,7 @@ mod tests {
     /// never touches the daemon. The lock file is the provider's own; the
     /// test only holds and releases it. The transaction answers `Absent`
     /// before it ever reaches the lock when the codex CLI is not on the
-    /// machine, so that box asserts the Absent gate instead - the lock-busy
+    /// machine, so that test asserts the Absent gate instead - the lock-busy
     /// arm runs wherever a CLI exists.
     #[tokio::test(flavor = "current_thread")]
     async fn the_second_concurrent_transaction_reads_lock_busy() {
@@ -425,7 +425,7 @@ mod tests {
         if crate::codex_daemon_readiness::codex_cli_path().is_none() {
             assert!(
                 matches!(outcome, crate::codex_daemon_upgrade::UpgradeOutcome::Absent),
-                "a CLI-less box answers Absent before the lock, got {outcome:?}"
+                "a CLI-less machine answers Absent before the lock, got {outcome:?}"
             );
             return;
         }

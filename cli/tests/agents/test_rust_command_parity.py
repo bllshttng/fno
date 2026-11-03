@@ -38,7 +38,7 @@ def _fno_shim_dir() -> str | None:
     ``fno agents heal-token --all-sources`` (``client_commands.rs``). ``fno`` is the
     cargo-installed RUST binary; the Python package installs only ``fno-py``
     (``[project.scripts]``). So a checkout that has never run ``cargo install``
-    -- CI, and any dev box that only built ``fno-agents`` -- has no ``fno`` on
+    -- CI, and any dev machine that only built ``fno-agents`` -- has no ``fno`` on
     PATH and the shellout dies with ENOENT for a purely environmental reason.
 
     The shim resolves ``fno-py`` at exec time rather than install time, because
@@ -47,7 +47,7 @@ def _fno_shim_dir() -> str | None:
     ``mux`` never forwards: the Python front execs whichever ``fno`` is on
     PATH for that command, which here is this shim again, and the recursion runs
     until the runner kills it. The Rust attach command reaches the mux through
-    ``fno mux thread``, so the shim answers as a box with no live mux server.
+    ``fno mux thread``, so the shim answers as a machine with no live mux server.
     """
     if shutil.which("fno"):
         return None

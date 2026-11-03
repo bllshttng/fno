@@ -659,7 +659,7 @@ fn default_sources(home: &AgentsHome, cwd: &Path) -> (Vec<PathBuf>, PathBuf) {
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from(".fno"));
     let events = question_journals(&fno_dir, cwd);
-    let ledger = fno_dir.join("ledger.json");
+    let ledger = crate::state_layout::place(&fno_dir, "ledger.json");
     (events, ledger)
 }
 
