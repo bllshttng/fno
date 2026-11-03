@@ -1170,8 +1170,9 @@ pub(crate) fn release_node_lockfile(node_id: &str) -> String {
         roots.dedup();
         roots
     };
-    for root in &roots {
-        let (state, record) = crate::claims::status(&key, root.as_deref());
+    if let Some(root) = roots.first() {
+        let root = root.as_deref();
+        let (state, record) = crate::claims::status(&key, root);
         match state {
             crate::claims::ClaimState::Free => return "no lockfile".to_string(),
             crate::claims::ClaimState::Stale => {
@@ -1179,7 +1180,7 @@ pub(crate) fn release_node_lockfile(node_id: &str) -> String {
                     .as_ref()
                     .map(|r| r.holder.clone())
                     .unwrap_or_default();
-                let note = match crate::claims::release(&key, &holder, root.as_deref(), None) {
+                let note = match crate::claims::release(&key, &holder, root, None) {
                     Ok(()) => "released stale lockfile".to_string(),
                     Err(_) => "lockfile changed".to_string(),
                 };
@@ -1199,7 +1200,7 @@ pub(crate) fn release_node_lockfile(node_id: &str) -> String {
                     .map(|r| r.holder.clone())
                     .unwrap_or_default();
                 if holder == invoking_claim_holder() {
-                    return match crate::claims::release(&key, &holder, root.as_deref(), None) {
+                    return match crate::claims::release(&key, &holder, root, None) {
                         Ok(()) => "released own lockfile".to_string(),
                         Err(_) => "lockfile changed".to_string(),
                     };

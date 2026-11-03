@@ -251,7 +251,9 @@ pub fn state_verdicts(path: &Path) -> BTreeMap<String, String> {
 fn testcase_re() -> &'static regex::Regex {
     static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     RE.get_or_init(|| {
-        regex::Regex::new(r"(?s)<testcase\s+([^>]*?)/?>((?:(?!</testcase>).)*?)(?:</testcase>|$)")
+        // The regex crate has no look-around: a lazy capture to the first
+        // closing tag (or end of text) is the same contract.
+        regex::Regex::new(r"(?s)<testcase\s+([^>]*?)/?>(.*?)(?:</testcase>|$)")
             .expect("static regex")
     })
 }
