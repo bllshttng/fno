@@ -209,6 +209,9 @@ mod tests {
                 ("priority", "p2")
             ]
         ));
+        let branch = json!({"filters": {"branch": "release/*"}});
+        assert!(run(branch.clone(), &[("branch", "release/0.4.5")]));
+        assert!(!run(branch, &[("branch", "feature/x")]));
     }
 
     #[test]
@@ -216,13 +219,6 @@ mod tests {
         let row = json!({"filters": {"epic": "x-aaaa", "not_provider": "zai"}});
         assert!(run(row, &[]));
         assert!(run(json!({}), &[("epic", "x-bbbb")]));
-    }
-
-    #[test]
-    fn a_branch_choice_may_end_in_a_star() {
-        let row = json!({"filters": {"branch": "release/*"}});
-        assert!(run(row.clone(), &[("branch", "release/0.4.5")]));
-        assert!(!run(row, &[("branch", "feature/x")]));
     }
 
     #[test]
