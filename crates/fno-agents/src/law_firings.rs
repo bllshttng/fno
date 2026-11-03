@@ -14,7 +14,7 @@ use serde_json::{json, Value};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-const LOG_FILE: &str = "law-firings.jsonl";
+const LOG_FILE: &str = "state/law-firings.jsonl";
 
 pub fn default_path() -> PathBuf {
     crate::decision_index::default_state_path(LOG_FILE)
