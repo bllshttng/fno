@@ -2,7 +2,7 @@
 
 This suite tests two things. It asks whether Claude selects an fno skill for a natural request and whether the result improves with the plugin.
 
-Every prompt avoids the skill name. Cases cover `target`, `think`, `review`, `ship`'s PR mode, and `fix`. A sixth requires no skill call.
+Every prompt avoids the skill name. The positive cases live beside the skill they test: `skills/target/evals/target-end-to-end`, `skills/think/evals/think-research`, `skills/review/evals/review-ready`, `skills/ship/evals/pr-open` and `skills/fix/evals/fix-red-tests`. This directory keeps the one case that belongs to no skill, `negative-python-question`, which requires no skill call.
 
 The fno eval bank (`evals/bank`) and the trend reader in `crates/fno-agents` grade what a dispatched worker produced. This suite grades a person typing into a fresh session: skill choice on free phrasing, and the task result, with the plugin and without it. It is a different question, so it is not a second harness for the same answer.
 
@@ -20,11 +20,13 @@ The `fix`, `target`, and `think` fixtures end on a feature branch. On `main`, th
 Claude Code 2.1.269 or later ships the command. Run it from the repo root:
 
 ```sh
-claude plugin eval . --eval-dir evals/claude-plugin --model claude-opus-5-5 \
+claude plugin eval . --eval-dir skills/fix/evals --model claude-opus-5-5 \
   --judge-model claude-sonnet-5 --scaffold --allow-tools Bash Edit Write --max-cost-usd 20
 ```
 
-`--scaffold` runs each `fixture.sh` as you, outside the sandbox. Read them first. They only write inside the run's workspace. `--allow-tools` lets Claude edit files and run the tests. Use a Sonnet judge: the default small judge failed a correct `findings.md`. Every run is a real model call on your account. Six cases at three runs in two arms cost $8.48 at list price on `claude-opus-5-5`. Add `--ablation none` to skip the no-plugin arm and halve the cost. In that mode the skill-fired grader also counts, so `SCORE` is not comparable with a two-arm `WITH`. Add `--case <name> --runs 1` to try one case once. Each invocation writes `results/<timestamp>/`, which git ignores. No CI job runs this suite.
+Swap `skills/fix/evals` for any skill's folder, or for `evals/claude-plugin` to run the negative case. The same folders also hold golden-task `*.yaml` files that `fno doctor evals run` loads with the bank. Each runner reads its own file kind and skips the other's.
+
+`--scaffold` runs each `fixture.sh` as you, outside the sandbox. Read them first. They only write inside the run's workspace. `--allow-tools` lets Claude edit files and run the tests. Use a Sonnet judge: the default small judge failed a correct `findings.md`. Every run is a real model call on your account. The six original cases at three runs in two arms cost $8.48 at list price on `claude-opus-5-5`. Add `--ablation none` to skip the no-plugin arm and halve the cost. In that mode the skill-fired grader also counts, so `SCORE` is not comparable with a two-arm `WITH`. Add `--case <name> --runs 1` to try one case once. Each invocation writes `results/<timestamp>/`, which git ignores. No CI job runs this suite.
 
 ## Read the table
 
