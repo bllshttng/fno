@@ -53,6 +53,7 @@ doctor
 evals
 fno-agents
 help
+inbox
 mux
 paths
 plan

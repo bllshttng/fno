@@ -593,6 +593,56 @@ def version(ctx: typer.Context) -> None:
     _run_rust_front(["version", *ctx.args])
 
 
+@app.command(
+    context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
+    add_help_option=False,
+    help=(
+        "Operator queue, outstanding board, law, decisions, notify and the "
+        "capture hooks (the Rust front's command family).\n\n"
+        "Run `fno inbox --help` for the full surface."
+    ),
+)
+def inbox(ctx: typer.Context) -> None:
+    """Forward to the Rust front's `inbox` family (the Python mount is deleted).
+
+    The Python inbox group and its operator, approvals and notify legs are
+    gone; every `fno inbox` word lives at the Rust front door now. The hook
+    scripts and every dev checkout whose PATH `fno` is this wheel resolve the
+    front binary directly, the way the `backlog` forward resolves fno-agents:
+    `shutil.which("fno")` answers the venv's own fno-py in a smoke run, so the
+    which-based forward would re-enter this wheel and refuse on its marker.
+    """
+    import os
+    import subprocess
+
+    from fno._subprocess_util import propagate_returncode
+    from fno.rust_binary import resolve_front_binary
+
+    if os.environ.get("FNO_PY_HANDOFF"):
+        typer.echo(
+            "fno-py: recursive hand-off refused (FNO_PY_HANDOFF is already set): "
+            "the `fno` found on PATH forwards back to fno-py. Run the Rust front "
+            "binary directly, or fix the shim so `fno` resolves to it.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    binary = resolve_front_binary()
+    if binary is None:
+        typer.echo(
+            "fno: the Rust front binary was not found; the `inbox` family lives "
+            "there (build the checkout with `cargo build -p fno`, or install "
+            "with `fno update`).",
+            err=True,
+        )
+        raise typer.Exit(code=127)
+    result = subprocess.run(
+        [str(binary), "inbox", *ctx.args],
+        check=False,
+        env=dict(os.environ, FNO_PY_HANDOFF="1"),
+    )
+    raise typer.Exit(code=propagate_returncode(result.returncode))
+
+
 def main() -> None:
     """Console entrypoint: append the reinstall hint to a bare mid-reinstall ImportError.
 
