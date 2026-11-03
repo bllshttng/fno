@@ -661,7 +661,7 @@ fn default_spawn(
                 } else {
                     err_text
                 };
-                let last = tail.trim().lines().last().unwrap_or("").to_string();
+                let last = failure_line(&tail);
                 return SpawnResult {
                     ok: false,
                     reason: format!("spawn exit {code}: {last}"),
@@ -686,6 +686,21 @@ fn default_spawn(
             }
         }
     }
+}
+
+/// The line that names why a spawn exited non-zero. Claude prints
+/// `[claude-code:...]` diagnostics on runs that succeed too (an SDK side
+/// query on a routed model id), so as the last line they hide the real
+/// cause. Take the last line that is not one, else the last line.
+fn failure_line(text: &str) -> String {
+    let lines: Vec<&str> = text.trim().lines().collect();
+    lines
+        .iter()
+        .rev()
+        .find(|l| !l.trim_start().starts_with("[claude-code:"))
+        .or(lines.last())
+        .map(|l| l.to_string())
+        .unwrap_or_default()
 }
 
 /// A resolved lane coordinate from the native inventory (route_gather):
@@ -1103,6 +1118,14 @@ mod tests {
         assert_eq!(answered, tree_hash(d.path()).unwrap());
         assert_eq!(git(&["diff", "--cached", "--name-only"]), "");
         assert!(git(&["status", "--porcelain"]).contains("?? decision.md"));
+    }
+
+    #[test]
+    fn a_failure_reason_skips_the_claude_code_diagnostic_line() {
+        let err = "429 quota exhausted\n[claude-code:unrecognized_model] {\"model\":\"m\"}\n";
+        assert_eq!(failure_line(err), "429 quota exhausted");
+        assert_eq!(failure_line("[claude-code:x] y"), "[claude-code:x] y");
+        assert_eq!(failure_line(""), "");
     }
 
     #[test]
