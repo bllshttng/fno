@@ -357,7 +357,12 @@ fn set_graded_by(dir: &Path, text: &str) {
     let lines: Vec<String> = raw
         .lines()
         .map(|line| {
-            if !replaced && line.starts_with("graded_by: ") {
+            // Only this module's own stamps give way: a hand-graded index
+            // keeps its `graded_by`.
+            let ours = line.strip_prefix("graded_by: ").is_some_and(|v| {
+                v == "pending" || v.starts_with("failed:") || v.contains("(lead_eval_grade)")
+            });
+            if !replaced && ours {
                 replaced = true;
                 format!("graded_by: {text}")
             } else {
