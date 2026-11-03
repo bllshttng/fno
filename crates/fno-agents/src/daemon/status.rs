@@ -91,7 +91,6 @@ async fn fold_served_cached(home: AgentsHome) -> Option<Arc<crate::tick_ledger::
         let journals = crate::tick_ledger::journals(&home);
         let day = now / 86_400;
         let key = fold_key(&home);
-        let home_owned = home.clone();
         match guard.as_mut() {
             // Unchanged facts and day: answer from the fold in memory.
             Some(live) if live.home == home_path && live.day == day && live.key == key => {}
@@ -108,16 +107,18 @@ async fn fold_served_cached(home: AgentsHome) -> Option<Arc<crate::tick_ledger::
             }
             // New home (or first call): seed from the full windowed read. A
             // text-path home stores `None` once, so it pays no scan per read.
+            // The key stays the pre-seed facts: a tick landing mid-seed
+            // changes the files, so the next read tail-refreshes rather than
+            // trusting a key newer than the fold it names.
             _ => {
                 let seeded = crate::tick_ledger::seed_arm_fold(&journals, now);
-                let key_now = fold_key(&home_owned);
                 let (state, last_seqs) = match seeded {
                     Some(pair) => (Some(pair.0), pair.1),
                     None => (None, Vec::new()),
                 };
                 *guard = Some(FoldLive {
                     home: home_path.clone(),
-                    key: key_now,
+                    key,
                     day,
                     last_seqs,
                     state,
