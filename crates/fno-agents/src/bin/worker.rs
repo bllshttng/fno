@@ -126,6 +126,9 @@ fn main() {
     if let Some(idx) = args.iter().position(|a| a == "--footnote-host") {
         let [spec, socket, name] =
             [1, 2, 3].map(|i| args.get(idx + i).cloned().unwrap_or_default());
+        if let Some(cwd) = spec_cwd(&spec) {
+            fno_agents::cargo_build_dirs::fill_pane_env(&cwd);
+        }
         std::process::exit(fno_agents::footnote_harness::thread::run_host(
             PathBuf::from(spec).as_path(),
             PathBuf::from(socket).as_path(),
@@ -135,6 +138,9 @@ fn main() {
     if let Some(idx) = args.iter().position(|a| a == "--muse-host") {
         let [spec, socket, name] =
             [1, 2, 3].map(|i| args.get(idx + i).cloned().unwrap_or_default());
+        if let Some(cwd) = spec_cwd(&spec) {
+            fno_agents::cargo_build_dirs::fill_pane_env(&cwd);
+        }
         std::process::exit(fno_agents::muse::host::run_host(
             PathBuf::from(spec).as_path(),
             PathBuf::from(socket).as_path(),
@@ -192,14 +198,23 @@ fn law_exec_lane() {
     std::process::exit(fno_agents::law_match::run_law_match_str(&input));
 }
 
-/// `--keeper` / `--pane` entrypoint: parse, fill the build-dir env (before any
-/// thread starts, so the env write is sound), then run the keeper; every hosted
-/// harness child inherits it.
+/// `--keeper` / `--pane` entrypoint: parse, settle the build env for the
+/// pane's own repo (before any thread starts, so the env write is sound),
+/// then run the keeper; every hosted harness child inherits the posture.
 fn pane_keeper_lane(args: &[String]) -> Result<(), String> {
     let cfg = fno_agents::pane_keeper::parse_pane_args(args)?;
-    fno_agents::cargo_build_dirs::fill_build_dir_env(&cfg.cwd);
-    fno_agents::cargo_build_dirs::fill_sccache_env(&cfg.cwd);
+    fno_agents::cargo_build_dirs::fill_pane_env(&cfg.cwd);
     fno_agents::pane_keeper::run(cfg)
+}
+
+/// The spec file's `cwd`, for the host lanes' pane env posture: both host
+/// specs carry the session's work dir, so the lane keys the posture on the
+/// real repo without an argv change. An unreadable spec keeps today's
+/// behavior (the daemon's env inherits untouched).
+fn spec_cwd(spec: &str) -> Option<PathBuf> {
+    let text = std::fs::read_to_string(spec).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&text).ok()?;
+    Some(PathBuf::from(value.get("cwd")?.as_str()?))
 }
 
 /// `fno-agents-worker --stream` entrypoint: the claude stream-json host lane.
@@ -217,6 +232,10 @@ fn run_stream_lane(args: Vec<String>) {
             std::process::exit(2);
         }
     };
+    // The daemon always passes --cwd, so the pane env posture keys on the
+    // session's real repo: a foreign-repo adoption gets the scrub instead of
+    // the daemon's fleet fill.
+    fno_agents::cargo_build_dirs::fill_pane_env(&cfg.cwd);
     let rt = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
