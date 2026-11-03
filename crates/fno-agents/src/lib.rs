@@ -305,6 +305,7 @@ pub mod launch_flags;
 pub mod launch_record;
 pub mod launch_workdir;
 pub mod law_match;
+pub mod law_pr_shape;
 pub mod law_restore;
 pub mod lead_answers;
 pub mod lead_checkin;
