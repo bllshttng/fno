@@ -209,9 +209,10 @@ fn collect_rollouts(root: &Path, out: &mut Vec<PathBuf>) {
 
 /// The session id the rollout's first session_meta line carries.
 fn codex_meta_session(path: &Path) -> Option<String> {
-    let text = std::fs::read_to_string(path).ok()?;
-    text.lines().take(4).find_map(|line| {
-        let rec = serde_json::from_str::<Value>(line.trim()).ok()?;
+    use std::io::BufRead;
+    let file = std::fs::File::open(path).ok()?;
+    std::io::BufReader::new(file).lines().take(4).find_map(|line| {
+        let rec = serde_json::from_str::<Value>(line.ok()?.trim()).ok()?;
         if rec.get("type").and_then(Value::as_str) != Some("session_meta") {
             return None;
         }

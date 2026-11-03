@@ -140,7 +140,7 @@ pub fn migrate_text(text: &str) -> (Option<String>, Vec<String>) {
 }
 
 /// The scan result the sweep returns.
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct MigrateResult {
     pub migrated: usize,
     pub skipped: usize,

@@ -1,7 +1,6 @@
 //! `fno do plan <leaf>`: the plan command group, ported whole from the
-//! deleted `cli/src/fno/plan/cli.py`. The front door claims `do plan` and the
-//! bare `plan` spelling and routes the tail here as the `plan-cli` family
-//! door. Leaves:
+//! deleted `cli/src/fno/plan/cli.py`. The front door claims `do plan` and
+//! routes the tail here as the `plan-cli` family door. Leaves:
 //!
 //!   stamp | graduate | set-expected   raw flags to the plan-doc writer
 //!   path              the save path for a NEW plan/design doc
@@ -650,7 +649,7 @@ fn run_sync(rest: &[String]) -> i32 {
     };
     println!(
         "plan sync: {repainted} docs repainted, {} unchanged",
-        ids.len() - repainted
+        ids.len().saturating_sub(repainted)
     );
     0
 }
