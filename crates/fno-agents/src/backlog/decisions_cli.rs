@@ -196,6 +196,12 @@ enum CoreError {
     ValueError(String),
 }
 
+/// Whether the lane filter lets a coord row into the answer: the one shape
+/// whose rendered lifecycle consults the graph.
+fn coord_renders_through(lane: Option<&str>) -> bool {
+    lane.map_or(true, |l| l == "coord")
+}
+
 struct ListOut {
     label: String,
     rows: Vec<Value>,
@@ -647,7 +653,14 @@ fn list_core_over(
     }
 
     let mut graph_unread: Option<String> = None;
-    if entries.is_none() && decisions.iter().any(|r| decision_lane(r) == "coord") {
+    // The graph serves coord lifecycle alone: a lane that filters coord rows
+    // out of the answer never renders one, so the read stays skipped and the
+    // coord rows derive degraded lifecycles the lane filter then drops. The
+    // law gate's uncapped read pays no graph for rows it never prints.
+    if coord_renders_through(lane)
+        && entries.is_none()
+        && decisions.iter().any(|r| decision_lane(r) == "coord")
+    {
         match read_graph_entries() {
             Ok(rows) => *entries = Some(rows),
             Err(e) => graph_unread = Some(format!("the graph could not be read ({e})")),
@@ -2554,5 +2567,43 @@ mod tests {
             soft_entries_at(&graph, "x-aaaa1111", Some("unattributed")).is_none(),
             "an unreadable store is the soft read's None, never an error"
         );
+    }
+
+    #[test]
+    fn coord_lifecycle_renders_only_through_the_coord_lane() {
+        assert!(coord_renders_through(None));
+        assert!(coord_renders_through(Some("coord")));
+        assert!(!coord_renders_through(Some("law")));
+        assert!(!coord_renders_through(Some("unattributed")));
+        assert!(!coord_renders_through(Some("grant")));
+    }
+
+    #[test]
+    fn law_answer_is_identical_without_the_coord_graph_read() {
+        // The fixture carries a coord row; the law answer renders none of
+        // it, so the suppressed read and the provided entries must derive
+        // the same rows.
+        let rows = seed_fixture();
+        let mut suppressed: Option<Vec<Value>> = None;
+        let a = list_core_over(
+            rows.clone(),
+            0,
+            &mut suppressed,
+            None,
+            Some("law"),
+            Some("all"),
+            false,
+        );
+        let mut provided: Option<Vec<Value>> = Some(Vec::new());
+        let b = list_core_over(
+            rows,
+            0,
+            &mut provided,
+            None,
+            Some("law"),
+            Some("all"),
+            false,
+        );
+        assert_eq!(a.rows, b.rows);
     }
 }
