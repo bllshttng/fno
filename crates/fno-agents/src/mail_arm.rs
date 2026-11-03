@@ -427,8 +427,8 @@ pub(crate) fn style_door_refuses(payload: &str) -> bool {
 pub(crate) fn style_door_report(payload: &str) -> Option<String> {
     let output = ask_style_door(&style_door_report_argv(mail_word_cap()), payload)?;
     (output.status.code() == Some(1)).then(|| {
-        // The door prints its human report on stderr; stdout carries it
-        // only in JSON mode.
+        // The door prints its human report on stderr; stdout is the
+        // fallback for a door that writes it there.
         let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
         if stderr.trim().is_empty() {
             String::from_utf8_lossy(&output.stdout).into_owned()
