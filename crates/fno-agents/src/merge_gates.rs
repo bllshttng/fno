@@ -748,7 +748,7 @@ pub(crate) fn visual_approval_blocker<P: Probes>(
                 .unwrap_or_default();
             let headings = visual_screen::rule_headings(&doc);
             let remedy = format!(
-                "run `fno-agents visual critique-prep {node}`, then the `fno:design-critic` agent on \
+                "run `fno-agents visual critique-prep {node}`, then the `design-critic` skill on \
                  {node}-critique.json, fix every high finding, and re-read status at the new head"
             );
             match visual_screen::read_critique(&mux, node, head, &headings) {
