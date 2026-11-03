@@ -59,6 +59,19 @@ fn resolve_harness_single_family_wins_disagreement_is_unknown() {
             .as_deref(),
         Some("opencode")
     );
+    assert_eq!(
+        resolve_harness_from(|k| (k == "PI_SESSION_ID").then(|| "s-1".to_string())).as_deref(),
+        Some("pi")
+    );
+    // pi beside claude is a disagreement, never claude by precedence.
+    assert_eq!(
+        resolve_harness_from(|k| match k {
+            "PI_SESSION_ID" => Some("s-1".to_string()),
+            "CLAUDE_CODE_SESSION_ID" => Some("c-1".to_string()),
+            _ => None,
+        }),
+        None
+    );
     // No markers -> None (unknown), never a panic.
     assert_eq!(resolve_harness_from(|_| None), None);
 }
