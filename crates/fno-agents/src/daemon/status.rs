@@ -87,7 +87,18 @@ async fn fold_served_cached(home: AgentsHome) -> Option<Arc<crate::tick_ledger::
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
-        let mut guard = FOLD_STATE.lock().ok()?;
+        // Poison recovery is safe here: a panic mid-fold leaves the maps
+        // partially refreshed, and the next refresh tail-folds from the last
+        // recorded seq, so replay is idempotent (newest-wins). A poisoned
+        // lock that quietly disabled the fold forever would be worse than a
+        // loud recovery note.
+        let mut guard = match FOLD_STATE.lock() {
+            Ok(g) => g,
+            Err(poisoned) => {
+                eprintln!("fno-agents: fold state lock recovered from poison");
+                poisoned.into_inner()
+            }
+        };
         let journals = crate::tick_ledger::journals(&home);
         let day = now / 86_400;
         let key = fold_key(&home);
