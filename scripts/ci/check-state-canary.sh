@@ -23,9 +23,9 @@
 #              exit non-zero naming that file. An inner verify that PASSES
 #              makes self-test exit 1.
 #
-# The dev-box guard is not optional. A graph.db larger than the measured empty
+# The dev-machine guard is not optional. A graph.db larger than the measured empty
 # schema is a live operator root: print the skip receipt and do nothing.
-# No dev box ever has its graph planted over. On CI the runner HOME is empty,
+# No dev machine ever has its graph planted over. On CI the runner HOME is empty,
 # so the canary runs on every shard.
 #
 # The snapshot lives OUTSIDE both watched roots. A snapshot written inside one
@@ -68,7 +68,7 @@ require_python() {
 # Walk both roots and print "<sha256>  <path>", sorted. Symlinks are NOT
 # followed. setup-worktree.sh retired the fno state links, so a worktree's .fno
 # holds plain files and following finds nothing new. It also costs. On one dev
-# box following raised the population from 74,515 files to 180,362. The links
+# machine following raised the population from 74,515 files to 180,362. The links
 # under ~/.fno/worktrees reach the vault and the canonical checkout, and every
 # file found is hashed, twice per run.
 snapshot_now() {
@@ -88,7 +88,7 @@ RUNNER_OWNED = {
 
 # Pruned at the state root's top level. A worktree is a git checkout with its
 # own history, not operator state, and it dominates the population: measured on
-# one dev box, 25,027 of 68,279 files and 2.89 of 4.17 GB. Every prune is named
+# one dev machine, 25,027 of 68,279 files and 2.89 of 4.17 GB. Every prune is named
 # in the receipt, because a green resting on a silent ignore list is the thing
 # this script refuses.
 PRUNED_TOPLEVEL = {"worktrees"}
@@ -127,7 +127,7 @@ for root in roots:
             # Only a REGULAR file carries content to hash. A socket, fifo,
             # device or symlink is furniture: it has no bytes to compare, and
             # open() on one raises, so hashing it would report ordinary state
-            # as a violation. Measured on one dev box, a live operator root
+            # as a violation. Measured on one dev machine, a live operator root
             # holds 10 sockets and 9 dangling symlinks. Record the kind (and a
             # symlink's target) instead: an added, removed or retargeted one
             # still shows up as ADDED, REMOVED or CHANGED, with no read.
@@ -356,7 +356,7 @@ if violations:
         file=sys.stderr,
     )
     # On a live operator root the comparison cannot attribute a change to THIS
-    # suite: measured on one box, 87 live sessions minted four 13.1 MB graph
+    # suite: measured on one machine, 87 live sessions minted four 13.1 MB graph
     # backups inside a single 20-second window. Gating there would be
     # permanently red, which is how a guard gets disabled. So report every
     # change and gate only on what keeps its meaning without attribution: a
@@ -385,11 +385,11 @@ PY
 }
 
 # One lane of the positive control. `mode` is the shape of the HOME it builds:
-# `fresh` is the CI runner, `live` is a developer box whose graph already has
+# `fresh` is the CI runner, `live` is a developer machine whose graph already has
 # rows. Both must end red on a one-byte write to graph.db.
 #
 # Running BOTH is the point. The old control only ever built a fresh HOME, so
-# it passed identically whether the production lane measured a dev box or stood
+# it passed identically whether the production lane measured a dev machine or stood
 # down on it. That is the trap AGENTS.md names: a green control aimed at the
 # wrong target still reads as proof.
 self_test_lane() {
@@ -477,7 +477,7 @@ PY
     # above, and it must not gate here.
     if ((inner_rc != 0)); then
       report "self-test[live] FAILED: an ordinary change gated on a live root (rc $inner_rc)"
-      report "self-test[live]: a permanently red dev box is how a guard gets disabled"
+      report "self-test[live]: a permanently red dev machine is how a guard gets disabled"
       cat "$inner_out" >&2
       rm -rf "$tmp_home" "$tmp_root" "$inner_out"
       return 1

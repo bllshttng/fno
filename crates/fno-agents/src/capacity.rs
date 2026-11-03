@@ -26,7 +26,7 @@ pub const DEFAULT_CUT_FLEET_SHARE: f64 = 0.75;
 pub const DEFAULT_CUT_HOLD_SECONDS: u64 = 600;
 /// Each cut multiplies the effective cap by `1 - fraction`.
 pub const DEFAULT_CUT_FRACTION: f64 = 0.25;
-/// Fleet CPU share below which the box counts as calm.
+/// Fleet CPU share below which the machine counts as calm.
 pub const DEFAULT_RAISE_FLEET_SHARE: f64 = 0.35;
 /// Sustained calm before one +1 decay step.
 pub const DEFAULT_RAISE_HOLD_SECONDS: u64 = 900;
@@ -333,7 +333,7 @@ pub fn effective_for(cwd: &std::path::Path) -> Effective {
     )
 }
 
-/// The state file: per machine, keyed by the stable platform id when the box
+/// The state file: per machine, keyed by the stable platform id when the machine
 /// has one (a hostname moves under a roaming laptop; the platform id does
 /// not), hostname as the fallback.
 pub fn state_path(home: &AgentsHome) -> PathBuf {

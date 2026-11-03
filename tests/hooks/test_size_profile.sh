@@ -67,7 +67,7 @@ EOF
 # Print the init script's own refusal when it wrote no state.
 #
 # This existed as `2>&1` for the script's whole life, and it cost two sessions
-# an evening. The suite fails here in-sequence on a developer box and passes
+# an evening. The suite fails here in-sequence on a developer machine and passes
 # both standalone and on CI, so it depends on state an earlier step leaves.
 # Nobody isolated WHICH step, because the one line naming the reason was
 # discarded at the moment it was produced. The assertion then reported "state
