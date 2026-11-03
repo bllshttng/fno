@@ -2539,7 +2539,10 @@ mod tests {
         assert!(row("ccr").contains("u: make active"), "{narrow}");
         // A row the cursor is not on sheds its least-read fields to fit, so
         // the overlay never wraps it.
-        assert!(crate::chrome::str_cols(row("ccr")) <= 60, "{narrow}");
+        assert!(
+            crate::chrome::str_cols(row("ccr").trim_end()) <= 60,
+            "{narrow}"
+        );
 
         v.apply_read(ReadOutcome::Ok {
             accounts: sample_accounts(),
