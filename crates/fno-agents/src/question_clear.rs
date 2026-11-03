@@ -1712,6 +1712,25 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
             answer.lines.push(format!(
                 "outstanding: closed {shown} (decision {decision_id} {label})"
             ));
+            // The page closes in this step. The arm's later beat finds it
+            // already answered; a lost beat no longer leaves it open.
+            let vault = crate::paths::canonical_repo_root(&req.repo_root)
+                .unwrap_or_else(|| req.repo_root.clone());
+            let by = req
+                .provenance
+                .get("decided_by")
+                .and_then(Value::as_str)
+                .unwrap_or("terminal");
+            if let Err(error) = crate::attention_arm::close_open_page(
+                &crate::escalation::questions_dir(&vault),
+                qid,
+                &text,
+                by,
+            ) {
+                answer.lines.push(format!(
+                    "outstanding: the question page for {qid} stays open ({error}); the board closes it on its next beat"
+                ));
+            }
             if let Some(subject) = merge_grant_subject(question_event) {
                 if !operator_can_grant(req)
                     && req
