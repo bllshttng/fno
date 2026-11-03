@@ -32,7 +32,7 @@ const VALID_KINDS: [&str; 4] = ["fyi", "heads-up", "question", "send"];
 fn deprecated_kind_replacement(kind: &str) -> Option<&'static str> {
     match kind {
         "notification" => Some("fyi"),
-        "lesson" => Some("fyi --persist memory"),
+        "lesson" => Some("fyi"),
         "answer" => Some("fyi --reply-to <msg-id>  (or any kind with --reply-to)"),
         "complete" => Some("fyi --reply-to <msg-id>"),
         _ => None,
@@ -803,7 +803,6 @@ fn thread_store_reply(
         None,
         Some(to_msg),
         Some(&thread),
-        false,
         Some(Value::Object(refs)),
     ) {
         send::release_budget(&reservation);

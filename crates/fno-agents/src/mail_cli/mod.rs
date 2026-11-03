@@ -89,12 +89,9 @@ Options:
                            live holder queues nothing.
   --any                    With --to-project, break a multi-live-peer tie
                            (most recent activity wins).
-  -k, --kind <str>         Inbox kind (heads-up | question | fyi); pair with
-                           --to-project. Omit for a plain agent-to-agent send.
-  --reply-to <str>         With --kind: msg-id being replied to (appends to
-                           the existing thread).
-  --persist <str>          With --kind fyi: 'memory' writes a recipient memory
-                           file.
+  -k, --kind <str>         Retired: the note lane is gone. A plain send reaches
+                           a session; `fno inbox outstanding ask` reaches a
+                           human. The flag exits 2 and names both.
   -b, --body <str>         Message body in ANY mode (alternative to the
                            positional arg).
   --body-file <path>       Read the body from a file ('-' = stdin); binds in

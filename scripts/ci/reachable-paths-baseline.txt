@@ -83,7 +83,6 @@ A	fno_posthog_project_token	py=cli/src/fno/config/_telemetry.py;rs=crates/fno-ag
 A	fno_seed_prov_from_session	py=cli/src/fno/harness_identity.py;rs=crates/fno-agents/src/claude_supervisor.rs|crates/fno-agents/src/mail_cli/seed_provenance.rs|crates/fno-agents/src/pane_spawn/env_wrap.rs	# CLASSIFY protocol|msg-twin|data
 A	footprint_sustained_cpu_cores	py=cli/src/fno/adapters/providers/loader.py;rs=crates/fno-agents/src/accounts/records.rs|crates/fno-agents/src/footprint_cause.rs	# CLASSIFY protocol|msg-twin|data
 A	fresh reviewer context required	py=cli/src/fno/config/__init__.py;rs=crates/fno-agents/src/loopcheck/posture.rs	# CLASSIFY protocol|msg-twin|data
-A	fyi --reply-to <msg-id> (or any kind with --reply-to)	py=cli/src/fno/inbox/store.py;rs=crates/fno-agents/src/mail_cli/reply.rs|crates/fno-agents/src/mail_cli/send/mod.rs	# CLASSIFY protocol|msg-twin|data
 A	githubcom[:/](.+?)(?:git)?$	py=scripts/metrics/completion-summary.py;rs=crates/fno-agents/src/ledger_register.rs	# CLASSIFY protocol|msg-twin|data
 A	harness_capabilities.toml	py=cli/src/fno/agents/harness_map.py;rs=crates/fno-agents/src/harness_capabilities.rs|crates/fno/src/agents_view.rs	# CLASSIFY protocol|msg-twin|data
 A	hooks/helpers/init-target-state.sh	py=cli/src/fno/paths.py;rs=crates/fno-agents/src/target_init.rs|crates/fno/src/cli_hooks.rs	# CLASSIFY protocol|msg-twin|data

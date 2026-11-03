@@ -101,37 +101,20 @@ const NO_ENVELOPE_CLAUSE: &str = "no durable envelope was written";
 
 const KNOWN_PROVIDERS: [&str; 2] = ["claude", "codex"];
 
-const DEPRECATED_KINDS: [(&str, &str); 4] = [
-    ("notification", "fyi"),
-    ("lesson", "fyi --persist memory"),
-    (
-        "answer",
-        "fyi --reply-to <msg-id>  (or any kind with --reply-to)",
-    ),
-    ("complete", "fyi"),
-];
-
 const ESCALATION_DEBOUNCE_S: u64 = 300;
 
-/// TTL horizon per durable-owner class (hours); `inbox/store.py` owns the
-/// table and the sweep reads the same numbers off the envelope.
+/// TTL horizon per durable-owner class (hours); the sweep reads the same
+/// numbers off the envelope.
 fn owner_ttl_hours(owner: &str) -> f64 {
     match owner {
         "live-drain" => 1.0,
         "wake-daemon" => 6.0,
-        "inbox-drain" => 24.0,
         _ => 0.0,
     }
 }
 
-fn classify_durable_owner(
-    param_forced: bool,
-    recipient_live: bool,
-    recipient_resumable: bool,
-) -> &'static str {
-    if param_forced {
-        "inbox-drain"
-    } else if recipient_live {
+fn classify_durable_owner(recipient_live: bool, recipient_resumable: bool) -> &'static str {
+    if recipient_live {
         "live-drain"
     } else if recipient_resumable {
         "wake-daemon"
@@ -570,13 +553,8 @@ struct SendArgs {
     any_live: bool,
     kind: Option<String>,
     reply_to: Option<String>,
-    persist: Option<String>,
     body: Option<String>,
     body_file: Option<PathBuf>,
-    ref_pr: Option<i64>,
-    ref_node: Option<String>,
-    ref_gate: Option<String>,
-    json_out: bool,
     raw: bool,
     check: bool,
     to_self: bool,
@@ -604,13 +582,8 @@ fn parse_args(args: &[String]) -> Result<SendArgs, i32> {
         any_live: false,
         kind: None,
         reply_to: None,
-        persist: None,
         body: None,
         body_file: None,
-        ref_pr: None,
-        ref_node: None,
-        ref_gate: None,
-        json_out: false,
         raw: false,
         check: false,
         to_self: false,
@@ -655,21 +628,10 @@ fn parse_args(args: &[String]) -> Result<SendArgs, i32> {
             "--any" => out.any_live = true,
             "--kind" | "-k" => out.kind = Some(take_arg(args, &mut index, "--kind")?),
             "--reply-to" => out.reply_to = Some(take_arg(args, &mut index, "--reply-to")?),
-            "--persist" => out.persist = Some(take_arg(args, &mut index, "--persist")?),
             "--body" | "-b" => out.body = Some(take_arg(args, &mut index, "--body")?),
             "--body-file" => {
                 out.body_file = Some(PathBuf::from(take_arg(args, &mut index, "--body-file")?));
             }
-            "--ref-pr" => {
-                let v = take_arg(args, &mut index, "--ref-pr")?;
-                out.ref_pr = Some(v.parse::<i64>().map_err(|_| {
-                    eprintln!("error: --ref-pr needs an integer (got {v:?})");
-                    2
-                })?);
-            }
-            "--ref-node" => out.ref_node = Some(take_arg(args, &mut index, "--ref-node")?),
-            "--ref-gate" => out.ref_gate = Some(take_arg(args, &mut index, "--ref-gate")?),
-            "--json" | "-J" => out.json_out = true,
             "--raw" => out.raw = true,
             "--check" => out.check = true,
             // `--self-ok` is the raw leaf's spelling: the parity leaf argv
@@ -1204,7 +1166,6 @@ pub(crate) fn write_durable_thread(
     subject: Option<&str>,
     replies_to: Option<&str>,
     thread: Option<&str>,
-    persist: bool,
     refs: Option<Value>,
 ) -> Result<(), String> {
     validate_recipient(recipient)?;
@@ -1221,9 +1182,6 @@ pub(crate) fn write_durable_thread(
             "ttl_at".to_string(),
             json!(format_dt(now + ttl_hours * 3600.0)),
         );
-    }
-    if persist {
-        meta.insert("persist_to_memory".to_string(), json!(true));
     }
     if let Some(map) = refs.as_ref().and_then(Value::as_object) {
         for (rk, rv) in map {
@@ -1421,6 +1379,12 @@ pub fn run(args: &[String]) -> i32 {
         );
         return 2;
     }
+    if let Some(kind) = args.kind.as_deref() {
+        eprintln!(
+            "error: --kind {kind} is retired: the note lane has no drain. Drop --kind to send to a session by name, or run `fno inbox outstanding ask` to put a question to a human."
+        );
+        return 2;
+    }
     let subject = (std::env::var("FNO_MAIL_SUBJECT").unwrap_or_default().trim()).to_string();
     let subject = if subject.is_empty() {
         None
@@ -1460,8 +1424,6 @@ pub fn run(args: &[String]) -> i32 {
             Some("--to-project")
         } else if args.to_self {
             Some("--to-self")
-        } else if args.kind.is_some() {
-            Some("--kind")
         } else if args.raw {
             Some("--raw")
         } else if args.force {
@@ -1536,8 +1498,6 @@ pub fn run(args: &[String]) -> i32 {
     };
     let lane = if args.raw {
         "raw"
-    } else if args.kind.is_some() {
-        "inbox"
     } else if args.to_project.is_some() {
         "project"
     } else if args.to_lead.is_some() {
@@ -1594,8 +1554,6 @@ pub fn run(args: &[String]) -> i32 {
     if args.force {
         let why = if args.raw {
             Some("--raw already types at the prompt line, unwrapped")
-        } else if args.kind.is_some() {
-            Some("--kind is a durable inbox note by design")
         } else if args.to_project.is_some() {
             Some("a project addresses a repo, not a pane")
         } else if name.as_deref().map(is_job_token).unwrap_or(false) {
@@ -1660,43 +1618,6 @@ pub fn run(args: &[String]) -> i32 {
             "error: --check applies to --raw (the keystroke lane); a wrapped send always has the durable fallback"
         );
         return 2;
-    }
-
-    if args.kind.is_some() {
-        let recipient = args
-            .to_project
-            .clone()
-            .or_else(|| name.clone())
-            .unwrap_or_default();
-        let content: Option<String> = if body_text.is_some() {
-            body_text.clone()
-        } else if args.to_project.is_some() {
-            message.clone().or_else(|| name.clone())
-        } else {
-            message.clone()
-        };
-        let Some(content) = content else {
-            eprintln!("usage: fno agents mail send --to-project <project> --kind <kind> <message>");
-            return 2;
-        };
-        if recipient.is_empty() {
-            eprintln!("usage: fno agents mail send --to-project <project> --kind <kind> <message>");
-            return 2;
-        }
-        if let Err(code) = vet_body(&content, args.style_exception.as_deref()) {
-            return code;
-        }
-        return match kind_lane_send(
-            &args,
-            &content,
-            &recipient,
-            subject.as_deref(),
-            mail_origin,
-            from_name.as_deref(),
-        ) {
-            Ok(code) => code,
-            Err(code) => code,
-        };
     }
 
     if let Some(project) = args.to_project.as_deref() {
