@@ -27,7 +27,7 @@ pub(super) trait Probes {
     fn current_branch(&self) -> Option<String>;
     fn repo_roots(&self) -> Vec<PathBuf>;
     fn pr_worktree(&self, pr: &str) -> Option<PathBuf>;
-    fn git_common_dir(&self) -> Option<PathBuf>;
+    fn review_claims_dir(&self) -> Option<PathBuf>;
     fn branch_node_ids(&self, head_ref: &str) -> Vec<String>;
     fn in_flight(&self, branch: &str) -> Option<Value>;
     fn merge_switch(&self, repo_root: &Path) -> bool;
@@ -253,20 +253,10 @@ impl Probes for RealProbes {
             .then(|| worktree.canonicalize().unwrap_or(worktree))
     }
 
-    fn git_common_dir(&self) -> Option<PathBuf> {
-        // git under 2.31 echoes --path-format=absolute back and exits 0, so
-        // only one absolute line counts; else the plain read joins the cwd.
-        for flags in [&["--path-format=absolute"][..], &[][..]] {
-            let mut args = vec!["rev-parse"];
-            args.extend_from_slice(flags);
-            args.push("--git-common-dir");
-            let out = self.git(&args, 5)?;
-            let lines: Vec<&str> = out.lines().collect();
-            if lines.len() == 1 && (flags.is_empty() || Path::new(lines[0]).is_absolute()) {
-                return Some(self.cwd.join(lines[0]));
-            }
-        }
-        None
+    fn review_claims_dir(&self) -> Option<PathBuf> {
+        // The store a review hold is acquired in: the repo's space, shared
+        // by every worktree of the checkout.
+        crate::claims_root::claims_dir("review:branch:", None).ok()
     }
 
     fn branch_node_ids(&self, head_ref: &str) -> Vec<String> {
@@ -358,7 +348,7 @@ pub(super) mod fake {
         pub branch: Option<String>,
         pub roots: Vec<PathBuf>,
         pub pr_worktree: Option<PathBuf>,
-        pub common_dir: Option<PathBuf>,
+        pub claims_dir: Option<PathBuf>,
         pub node_ids: Vec<String>,
         pub in_flight: Option<Value>,
         pub switch: bool,
@@ -377,8 +367,8 @@ pub(super) mod fake {
         fn pr_worktree(&self, _pr: &str) -> Option<PathBuf> {
             self.pr_worktree.clone()
         }
-        fn git_common_dir(&self) -> Option<PathBuf> {
-            self.common_dir.clone()
+        fn review_claims_dir(&self) -> Option<PathBuf> {
+            self.claims_dir.clone()
         }
         fn branch_node_ids(&self, _head_ref: &str) -> Vec<String> {
             self.node_ids.clone()

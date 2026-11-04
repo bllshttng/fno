@@ -233,14 +233,7 @@ fn review_hold_refusal(command: &str, ctx: &Ctx) -> Option<String> {
     if parse_merge_pr(command).is_none() || targets_other_repo(command) {
         return None;
     }
-    // The common dir is the canonical checkout's .git even from a linked
-    // worktree, which is where a repo-local claim key lives.
-    let claims = ctx
-        .probes
-        .git_common_dir()?
-        .parent()?
-        .join(".fno")
-        .join("claims");
+    let claims = ctx.probes.review_claims_dir()?;
     let mut held: Vec<String> = std::fs::read_dir(&claims)
         .ok()?
         .filter_map(|e| e.ok()?.file_name().into_string().ok())
@@ -323,7 +316,8 @@ fn active_session(prefer_pr: Option<&str>, ctx: &Ctx) -> Option<Session> {
     let matches: Vec<Session> = roots
         .into_iter()
         .filter_map(|root| {
-            let state = root.join(".fno").join("target-state.md");
+            // The space slice first, the pre-space checkout manifest second.
+            let state = crate::target_orient::manifest_path(&root)?;
             active_state(&state).map(|fm| (state, fm, root))
         })
         .collect();
@@ -675,7 +669,7 @@ mod tests {
         std::fs::create_dir_all(&claims).unwrap();
         std::fs::write(claims.join("review%3Abranch%3Afeature%2Fx.lock"), b"").unwrap();
         let fake = Fake {
-            common_dir: Some(dir.path().join(".git")),
+            claims_dir: Some(claims.clone()),
             ..Fake::default()
         };
         let r = judge_with(&bash("gh pr merge 42"), &ctx(dir.path(), &fake)).unwrap();
