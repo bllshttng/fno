@@ -181,10 +181,14 @@ if [[ -z "${FNO_AGENTS_BIN:-}" ]]; then
     done
 fi
 if [[ -n "${FNO_AGENTS_BIN:-}" ]]; then
+    # The default preset leaves bg-process off, so the chain writes no row.
+    PRESET_SAVE="${FNO_GUARD_PRESET-}"
+    export FNO_GUARD_PRESET=strict
     expect_row "bpg allows a bounded command" bg-process-guard allow \
         '{"tool_name":"Bash","tool_input":{"command":"head -c 1M /dev/zero > /dev/null"}}' bash "pretooluse-bash-dispatch.sh"
     expect_row "bpg denies an unbounded yes" bg-process-guard block \
         '{"tool_name":"Bash","tool_input":{"command":"yes"}}' bash "pretooluse-bash-dispatch.sh"
+    if [[ -n "$PRESET_SAVE" ]]; then export FNO_GUARD_PRESET="$PRESET_SAVE"; else unset FNO_GUARD_PRESET; fi
 else
     # No checkout build of fno-agents here. An installed binary may predate
     # the in-process guard and answer {}, so only a checkout build counts.
