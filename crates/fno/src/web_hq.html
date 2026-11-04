@@ -778,10 +778,12 @@ function decSelect(id, label, values) {
 function decPaint() {
   const pick = (id) => document.getElementById(id).value, audit = document.getElementById("dec-audit").checked;
   const shown = decRows.filter((r) => (!pick("dec-lane") || r.lane === pick("dec-lane")) && (!pick("dec-state") || r.lifecycle === pick("dec-state")) && (!pick("dec-author") || decWho(r) === pick("dec-author")) && (!audit || ((r.lane === "unattributed" || decWho(r) === "?") && !decReviewed.has(r.decision_id)))).sort((a, b) => (a.ts < b.ts ? 1 : -1));
-  document.getElementById("dec-count").textContent = shown.length + " of " + decRows.length;
-  document.getElementById("dec-body").replaceChildren(...shown.map((r) => {
+  const cap = 300;
+  document.getElementById("dec-count").textContent = shown.length > cap ? "newest " + cap + " of " + shown.length : shown.length + " of " + decRows.length;
+  document.getElementById("dec-body").replaceChildren(...shown.slice(0, cap).map((r) => {
     const tr = el("tr");
     for (const v of [r.lifecycle, r.lane, (r.ts || "").slice(0, 10), decWho(r), r.quote ? "Q" : "", r.subject, r.decision, r.question || ""]) tr.append(el("td", null, v));
+    tr.children[2].style.whiteSpace = "nowrap";
     return tr;
   }));
 }
