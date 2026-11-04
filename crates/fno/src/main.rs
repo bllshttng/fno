@@ -1751,6 +1751,7 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
 }
 
 fn main() {
+    fno::chokepoint_events::install();
     let args: Vec<OsString> = env::args_os().skip(1).collect();
     let is_tty = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
     let env_session = mux_cli::env_server();

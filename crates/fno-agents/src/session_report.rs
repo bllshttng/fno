@@ -852,16 +852,12 @@ fn write_spool(path: &Path, lines: &[String]) {
 /// (a fleet starting while the daemon is down, exactly when the spool is
 /// needed) would otherwise each rename a private replacement over the
 /// others' frames. Same sidecar-flock pattern as the registry.
-fn spool_lock(path: &Path) -> Option<std::fs::File> {
-    let lock_path = path.with_extension("lock");
-    let file = std::fs::OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .open(lock_path)
-        .ok()?;
-    file.lock().ok().map(|_| file)
+fn spool_lock(path: &Path) -> Option<crate::chokepoint::Held> {
+    crate::chokepoint::take(
+        &crate::chokepoint::SESSION_SPOOL,
+        &path.with_extension("lock"),
+    )
+    .ok()
 }
 
 /// Best-effort: a spool failure loses the frame rather than blocking the hook.
