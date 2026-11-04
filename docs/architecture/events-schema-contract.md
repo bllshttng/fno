@@ -309,7 +309,7 @@ macOS and Linux without the `flock(1)` shell binary). State-file flip
 uses temp-write + atomic-rename so concurrent readers never see
 partial state.
 
-Skill bodies must use `${SKILL_DIR}/...` paths (per the rule against repo-root script paths in skills) and `skill-bundles.yaml` must list both `scripts/lib/set-gate.sh` and `scripts/lib/events-validate.sh` under the consuming skill.
+Skill bodies must use `${SKILL_DIR}/...` paths, never repo-root script paths. `skill-bundles.yaml` must list both `scripts/lib/set-gate.sh` and `scripts/lib/events-validate.sh` under the consuming skill.
 
 For non-gate events from shell, source `scripts/lib/events.sh` and
 call `emit_event_raw TYPE PAYLOAD` (legacy shape) or build the canonical
