@@ -476,11 +476,18 @@ const SEALED_WORKER_ENV: [(&str, &str); 5] = [
     ("RIPGREP_CONFIG_PATH", ""),
 ];
 
+/// The permission mode an unattended footnote evals lane runs in. The other
+/// lane doors run headless workers bypassed (the claude one-shot and opencode
+/// pass their skip flag, zcode defaults its yolo mode), so the footnote lane
+/// matches them through its launch spec. A footnote spawn without the flag
+/// keeps the harness default; the mode is never a default.
+const FOOTNOTE_LANE_PERMISSION_MODE: &str = "bypassPermissions";
+
 /// The spawn argv: the substrate's own --timeout is the first guard; a
 /// lane is a complete coordinate (its harness wins over the provider
 /// default, and its route/account ride along). `--` fences the prompt, or
-/// with `harness_flags` (or a footnote lane model) fences those and the
-/// prompt sits before it.
+/// with `harness_flags` (or a footnote lane model or permission mode) fences
+/// those and the prompt sits before it.
 fn spawn_argv(
     name: &str,
     workdir: &str,
@@ -518,7 +525,12 @@ fn spawn_argv(
     let lane_model = lane
         .filter(|l| l.harness == "footnote" && !l.model.is_empty())
         .map(|l| l.model.clone());
-    if harness_flags.is_empty() && lane_model.is_none() {
+    // The unattended footnote lane runs bypassed like every other lane door;
+    // the mode rides the fence so the launch spec carries it.
+    let lane_mode = lane
+        .filter(|l| l.harness == "footnote")
+        .map(|_| FOOTNOTE_LANE_PERMISSION_MODE);
+    if harness_flags.is_empty() && lane_model.is_none() && lane_mode.is_none() {
         argv.push("--".into());
         argv.push(prompt.into());
     } else {
@@ -529,6 +541,10 @@ fn spawn_argv(
         if let Some(m) = lane_model {
             argv.push("-m".into());
             argv.push(m);
+        }
+        if let Some(m) = lane_mode {
+            argv.push("--permission-mode".into());
+            argv.push(m.to_string());
         }
         argv.extend_from_slice(harness_flags);
     }
@@ -1492,6 +1508,12 @@ mod tests {
             "the prompt sits before the fence"
         );
         assert_eq!(&argv[fence + 1..fence + 3], &["-m", "glm-5.3-flash"]);
+        // The unattended footnote lane runs bypassed like every other lane
+        // door: the mode rides the fence so the launch spec carries it.
+        assert_eq!(
+            &argv[fence + 3..fence + 5],
+            &["--permission-mode", "bypassPermissions"]
+        );
         // The model is footnote-only: another harness's lane model never rides.
         let claude_lane = LaneRow {
             name: "c".into(),
@@ -1509,6 +1531,22 @@ mod tests {
             &[],
         );
         assert_eq!(argv.last().unwrap(), "p", "no fence shape without a model");
+        assert!(!argv.contains(&"-m".to_string()));
+        // The mode is footnote-only too: another harness's lane never carries
+        // it (each door owns its own unattended posture).
+        assert!(!argv.contains(&"--permission-mode".to_string()));
+        // A footnote lane with no model still gets the fence for the mode.
+        let bare = LaneRow {
+            name: "fn2".into(),
+            harness: "footnote".into(),
+            ..Default::default()
+        };
+        let argv = spawn_argv("n", "/tmp/wt", 60, Some("footnote"), Some(&bare), "p", &[]);
+        let fence = argv.iter().position(|a| a == "--").unwrap();
+        assert_eq!(
+            &argv[fence + 1..fence + 3],
+            &["--permission-mode", "bypassPermissions"]
+        );
         assert!(!argv.contains(&"-m".to_string()));
     }
 }

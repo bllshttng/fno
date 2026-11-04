@@ -831,7 +831,7 @@ mod tests {
         text.push('\n');
         text.push_str(&span("r-a", "warn", &ago(2)));
         text.push('\n');
-        text.push_str(&span("r-b", "warn", &ago(20)));
+        text.push_str(&span("r-b", "warn", &ago(30)));
         text.push('\n');
         std::fs::write(&journal, text).unwrap();
 
