@@ -607,7 +607,7 @@ else
             pane_identity_ok=1
           # Check that short_id is a genuine 8-hex handle derived from THIS
           # session id, without restating which 8 characters. The producer reads
-          # canonical_handle (fno.harness_identity), the one source for that
+          # canonical_handle (crates/fno-agents/src/identity.rs), the one source for that
           # string; pinning the offset here would silently reject a correct
           # receipt the day that function changes which slice it returns.
           elif [[ "$receipt_status" == "live" \

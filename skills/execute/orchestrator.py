@@ -32,8 +32,6 @@ _CLI_SRC = _SKILLS_DIR.parents[1] / "cli" / "src"
 if str(_CLI_SRC) not in sys.path:
     sys.path.insert(0, str(_CLI_SRC))
 
-from fno import harness_identity, harness_names  # noqa: E402  (path set above)
-
 
 # PRODUCT.md validation thresholds (mirrors /impeccable's loader contract)
 PRODUCT_MD_MIN_CHARS: int = 200
@@ -143,31 +141,69 @@ def resolve_invoking_harness(
     explicit: Optional[str] = None,
     env: Optional[dict] = None,
 ) -> tuple[str, str]:
-    """Resolve the invoking harness from the canonical roster and identity.
+    """Resolve the invoking harness through the native roster and identity doors.
 
     Returns ``(harness, source)`` where ``source`` is ``"explicit"``,
     ``"env-marker"`` or ``"env-default"``. An explicit value wins and is
-    validated against :data:`fno.harness_names.KNOWN_HARNESSES` (the L0 roster
-    every other caller shares); with no explicit value the ambient identity is
-    resolved through :func:`fno.harness_identity.resolve_harness_identity`,
-    which maps ``CODEX_THREAD_ID`` to codex and ``OPENCODE_SESSION_ID`` to
-    opencode and answers None when markers disagree. ``"env-default"``
-    (claude) is distinguishable from ``"env-marker"``, so a caller that
-    requires a positively identified harness can refuse on the difference.
-    The value is a harness, never a model vendor.
+    validated against the canonical roster (`fno-agents harness-roster`, the
+    L0 list in provider.rs every other caller shares); with no explicit value
+    the ambient identity resolves through `fno-agents route-slot` mode
+    resolve, which folds the harness markers from ``env`` the same way the
+    deleted ``fno.harness_identity`` folded them: the canonical stamp leads,
+    the vendor fold answers an absent stamp, and a contradiction or invalid
+    stamp answers nothing rather than guessing. ``"env-default"`` (claude)
+    is distinguishable from ``"env-marker"``, so a caller that requires a
+    positively identified harness can refuse on the difference. The value is
+    a harness, never a model vendor.
     """
+    from fno.rust_binary import call_binary_json, find_dev_binary, resolve_binary
+
+    binary = find_dev_binary() or resolve_binary()
+    if binary is None:
+        raise RuntimeError(
+            "the harness roster and identity live in the fno-agents binary; "
+            "run `fno doctor update --rust` or set FNO_AGENTS_BIN"
+        )
     if explicit is not None and explicit.strip():
         h = explicit.strip().lower()
-        if h not in harness_names.KNOWN_HARNESSES:
+        error, payload = call_binary_json("harness-roster", timeout=15, binary=binary)
+        if error is not None or not isinstance(payload, dict):
+            raise RuntimeError(
+                f"the harness roster read failed: {error or payload!r}; "
+                "run `fno doctor update --rust` or set FNO_AGENTS_BIN"
+            )
+        known = payload.get("known")
+        if not known or not all(isinstance(n, str) and n for n in known):
+            raise RuntimeError(
+                f"fno-agents harness-roster answered no usable 'known': {payload!r}"[:200]
+            )
+        if h not in known:
             raise ValueError(
-                f"unknown harness {explicit!r}; expected one of "
-                f"{', '.join(harness_names.KNOWN_HARNESSES)}"
+                f"unknown harness {explicit!r}; expected one of {', '.join(known)}"
             )
         return h, "explicit"
-    inferred = harness_identity.resolve_harness_identity(env).harness
-    if inferred:
-        return inferred, "env-marker"
-    return "claude", "env-default"
+    payload_env = env if env is not None else dict(os.environ)
+    str_env = {
+        k: v for k, v in payload_env.items() if isinstance(k, str) and isinstance(v, str)
+    }
+    proc = subprocess.run(
+        [str(binary), "route-slot"],
+        input=json.dumps({"mode": "resolve", "explicit": None, "env": str_env}),
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=15,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"the harness identity read failed (route-slot exited {proc.returncode}); "
+            "run `fno doctor update --rust` or set FNO_AGENTS_BIN"
+        )
+    answer = json.loads(proc.stdout)
+    harness = answer.get("harness") or "claude"
+    if answer.get("source") == "harness-inferred":
+        return harness, "env-marker"
+    return harness, "env-default"
 
 
 def load_project_constraints() -> List[str]:

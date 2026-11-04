@@ -224,7 +224,7 @@ fn main() {
     ) {
         std::process::exit(fno_agents::harness_reader::transport_doors(&args));
     }
-    // `harness-roster`: Python's fno.harness_names one-roster JSON read.
+    // `harness-roster`: the one-roster JSON read.
     if args.first().map(String::as_str) == Some("harness-roster") {
         std::process::exit(fno_agents::harness_roster::run_harness_roster(&args[1..]));
     }

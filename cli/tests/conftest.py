@@ -47,9 +47,12 @@ def _operator_shell_identity(monkeypatch):
     that harness while any of its markers survives. A test that wants an agent
     session sets the markers it needs itself.
     """
-    from fno.harness_identity import AMBIENT_IDENTITY_ENV
+    import tomllib
 
-    for name in AMBIENT_IDENTITY_ENV:
+    vocab = Path(__file__).resolve().parents[2] / "crates/fno-agents/src/ambient_vocab.toml"
+    markers = tomllib.loads(vocab.read_text(encoding="utf-8"))["identity_markers"]
+
+    for name in markers:
         monkeypatch.delenv(name, raising=False)
     # A mux worker pane exports the claude theme; a bg_create test must not
     # inherit a settings file from the shell that ran pytest.

@@ -20,7 +20,13 @@ if str(ORCH_DIR) not in sys.path:
 
 import orchestrator  # noqa: E402  (skills/execute is not a package; added to sys.path)
 
+# The resolution answers through the fno-agents doors (harness-roster and
+# route-slot); without a binary the cases would fail on the transport, not
+# the logic, so they skip where the suite deletes the dev build.
+requires_rust = pytest.mark.dev_build
 
+
+@requires_rust
 def test_codex_thread_id_marker_resolves_to_codex():
     # AC7-ERR: the marker the old two-variable sniff never read.
     harness, source = orchestrator.resolve_invoking_harness(
@@ -30,6 +36,7 @@ def test_codex_thread_id_marker_resolves_to_codex():
     assert source == "env-marker"
 
 
+@requires_rust
 def test_conflicting_family_markers_degrade_to_env_default():
     # Mixed families refuse to guess; the answer is the named default.
     harness, source = orchestrator.resolve_invoking_harness(
@@ -39,6 +46,7 @@ def test_conflicting_family_markers_degrade_to_env_default():
     assert source == "env-default"
 
 
+@requires_rust
 def test_explicit_wins_over_a_conflicting_env_signal():
     # A gemini env marker must not override an explicit codex argument.
     harness, source = orchestrator.resolve_invoking_harness(
@@ -48,6 +56,7 @@ def test_explicit_wins_over_a_conflicting_env_signal():
     assert source == "explicit"
 
 
+@requires_rust
 def test_unknown_explicit_harness_is_rejected():
     # An invalid explicit value fails closed rather than silently falling through.
     with pytest.raises(ValueError):

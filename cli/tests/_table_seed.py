@@ -12,14 +12,25 @@ from typing import Any, Optional
 
 def seed_registry(rows: list[dict[str, Any]], path: Optional[Path] = None, **document: Any) -> None:
     """Replace the registry document with ``rows`` (plus any top-level keys)."""
-    from fno import paths
-    from fno.registry_door import commit_registry_document, read_registry_document
+    from fno import paths, rust_binary
 
     target = Path(path) if path is not None else Path(paths.agents_registry_path())
     target.parent.mkdir(parents=True, exist_ok=True)
-    current, revision = read_registry_document(target)
+    answer = rust_binary.command_call(
+        "registry-commit", {"path": str(target.absolute()), "op": "read"}
+    )
+    current = answer.get("document")
+    revision = answer.get("revision")
+    if not isinstance(current, dict) or not isinstance(revision, int):
+        raise RuntimeError(f"registry read returned no document for {target}")
     payload = {**current, **document, "agents": rows}
-    commit_registry_document(target, payload, revision)
+    answer = rust_binary.command_call(
+        "registry-commit",
+        {**payload, "path": str(target.absolute()), "revision": revision},
+    )
+    if answer.get("status") != "written":
+        detail = answer.get("message") or answer.get("reason") or "unknown refusal"
+        raise RuntimeError(f"registry-commit refused {target}: {detail}")
 
 
 def seed_legacy_registry(entries: list[Any], path: Path) -> Path:

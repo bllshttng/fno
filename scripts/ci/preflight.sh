@@ -962,8 +962,9 @@ TMPHOME="$(mktemp -d)"
 # the case where Python cannot run at all;
 # cli/tests/smoke/test_preflight_hermetic.sh executes this derivation and checks
 # the literal against the same constant, which is what keeps both honest.
-if HARNESS_MARKERS="$(PYTHONPATH="$PREFLIGHT_WT/cli/src" python3 -c \
-    'from fno.harness_identity import AMBIENT_IDENTITY_ENV; print(" ".join(AMBIENT_IDENTITY_ENV))' 2>/dev/null)" \
+if HARNESS_MARKERS="$(python3 -c \
+    'import tomllib,sys; print(" ".join(tomllib.load(open(sys.argv[1],"rb"))["identity_markers"]))' \
+    "$PREFLIGHT_WT/crates/fno-agents/src/ambient_vocab.toml" 2>/dev/null)" \
    && [[ -n "$HARNESS_MARKERS" ]]; then
     :
 else

@@ -75,7 +75,7 @@ fn answer_minutes() -> i64 {
 const CONVERSATION_SOURCE: &str = "conversation";
 
 /// The full normalized session id: the collision-free clock key. Mirrors
-/// Python's `session_identity_key` (harness_identity.py), so the two legs
+/// the deleted Python `session_identity_key`, so the two legs
 /// agree on the file both write. UUID-family ids compare case-insensitively;
 /// opencode's `ses_` ids do not. The retired first-eight key stays readable
 /// through hold.py's `addresses()` sweep.
