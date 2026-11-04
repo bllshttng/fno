@@ -76,16 +76,6 @@ pub(crate) struct Case {
     stub: BTreeMap<String, String>,
 }
 
-impl Case {
-    /// The label word the report lines print: `good` or `bad`.
-    pub(crate) fn label_word(&self) -> &'static str {
-        match self.label {
-            Label::Good => "good",
-            Label::Bad => "bad",
-        }
-    }
-}
-
 #[derive(Deserialize, PartialEq, Clone, Copy)]
 #[serde(rename_all = "lowercase")]
 enum Label {
@@ -165,15 +155,19 @@ pub(crate) fn record_rubric_fixture(
                         }
                     }
                 };
-                rows.push(format!(
-                    r#"{{"case":"{}","criterion":"{}","lane":"{}","verdict":"{}","work_product_sha":"{}","prompt_sha":"{}"}}"#,
-                    case.id,
-                    criterion.id,
-                    v.lane,
-                    verdict,
-                    sha256_text(work_product),
-                    crate::evals::rubric::prompt_sha(&ask),
-                ));
+                // serde_json escapes the verdict text; a fault carrying
+                // quotes or backslashes must not corrupt the record line.
+                rows.push(
+                    serde_json::json!({
+                        "case": case.id,
+                        "criterion": criterion.id,
+                        "lane": v.lane,
+                        "verdict": verdict,
+                        "work_product_sha": sha256_text(work_product),
+                        "prompt_sha": crate::evals::rubric::prompt_sha(&ask),
+                    })
+                    .to_string(),
+                );
             }
         }
     }

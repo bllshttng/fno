@@ -1301,6 +1301,11 @@ pub fn run_evals_trend(args: &[String]) -> i32 {
         return 0;
     }
     let bank_dir = crate::evals::resolve_bank_dir(bank);
+    if spend && !check_metrics {
+        eprintln!("evals-trend: --spend is a --check-metrics modifier");
+        eprintln!("{USAGE}");
+        return EXIT_USAGE;
+    }
     if check_metrics {
         return crate::evals_compare::run_check_metrics(&bank_dir, json_out, spend);
     }

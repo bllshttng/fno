@@ -41,13 +41,18 @@ pub fn grade(
     base_ref: Option<&str>,
 ) -> GradeOutcome {
     let timeout_s = std::cmp::max(1, task.timeout_minutes.saturating_mul(60));
-    let judge = super::rubric::SpawnJudge::from_config(
-        &std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
-        &crate::evals::history_path()
-            .parent()
-            .map(std::path::Path::to_path_buf)
-            .unwrap_or_else(|| std::path::PathBuf::from(".")),
-    );
+    let has_rubric = task.grade.iter().any(|c| c.rubric.is_some());
+    let judge = if has_rubric {
+        super::rubric::SpawnJudge::from_config(
+            &std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
+            &crate::evals::history_path()
+                .parent()
+                .map(std::path::Path::to_path_buf)
+                .unwrap_or_else(|| std::path::PathBuf::from(".")),
+        )
+    } else {
+        Ok(None)
+    };
     let judge = match judge {
         Ok(Some(judge)) => Some(judge),
         Ok(None) => None,

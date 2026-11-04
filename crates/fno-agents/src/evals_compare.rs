@@ -624,7 +624,7 @@ fn parse_labels(path: &str) -> Result<Vec<LabelRow>, String> {
 /// Cohen's kappa), and the exit reads the bar: proved only at n >= 100,
 /// agreement >= 0.90 and kappa >= 0.80, every lane.
 pub(crate) fn run_judge_agreement(labels_path: &str, bank: &Path, json_out: bool) -> i32 {
-    let labels = match crate::evals_compare::parse_labels(labels_path) {
+    let labels = match parse_labels(labels_path) {
         Ok(rows) => rows,
         Err(e) => {
             eprintln!("evals judge-agreement: {e}");
@@ -771,7 +771,10 @@ pub(crate) fn run_judge_agreement(labels_path: &str, bank: &Path, json_out: bool
     }
     let n: u32 = tallies.iter().map(|t| t.n).sum();
     if n < crate::evals::rubric::MIN_LABELS as u32 {
-        println!("unproved: {n} of 100 labels");
+        println!(
+            "unproved: {n} of {} labels",
+            crate::evals::rubric::MIN_LABELS
+        );
         return EXIT_REGRESSED;
     }
     println!(
@@ -785,7 +788,7 @@ pub(crate) fn run_judge_agreement(labels_path: &str, bank: &Path, json_out: bool
 /// `report --draft-labels <labels.yaml>`: the (case, criterion) pairs the
 /// labels file has not labelled yet, verdicts hidden (no judge runs).
 pub(crate) fn run_draft_labels(labels_path: &str, bank: &Path) -> i32 {
-    let labels = match crate::evals_compare::parse_labels(labels_path) {
+    let labels = match parse_labels(labels_path) {
         Ok(rows) => rows,
         Err(e) => {
             eprintln!("evals draft-labels: {e}");

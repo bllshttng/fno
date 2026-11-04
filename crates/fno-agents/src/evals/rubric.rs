@@ -264,6 +264,20 @@ fn judge_argv(
     } else {
         argv.push("--route".into());
         argv.push(lane.route.clone());
+        argv.push("--".into());
+        for flag in [
+            "--setting-sources",
+            "--strict-mcp-config",
+            "--tools",
+            "--disable-slash-commands",
+            "--no-chrome",
+            "--no-session-persistence",
+        ] {
+            argv.push(flag.into());
+            if flag == "--setting-sources" || flag == "--tools" {
+                argv.push(String::new());
+            }
+        }
     }
     argv
 }
@@ -720,7 +734,10 @@ mod tests {
         };
         let argv = judge_argv(&zai, "prompt here", Path::new("."), 240, "rubric-x");
         assert!(argv.contains(&"--route".into()) && argv.contains(&"zai/glm-5.3-flash[1m]".into()));
-        assert!(!argv.contains(&"--".into()));
+        assert!(
+            argv.contains(&"--".into()),
+            "routed claude judges take the reader fence"
+        );
         let anthropic = LaneRow {
             name: "haiku".into(),
             harness: "claude".into(),
