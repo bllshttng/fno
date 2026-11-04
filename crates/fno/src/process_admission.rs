@@ -8,7 +8,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::fmt;
-use std::fs::{File, OpenOptions};
+use std::fs::OpenOptions;
 use std::io::{self, Write};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -200,7 +200,7 @@ impl std::error::Error for AdmissionFailure {}
 /// install is broken or replaced, so it must not depend on reading the
 /// executable it is recovering.
 pub struct AdmissionPermit {
-    _lock: Option<File>,
+    _lock: Option<Box<dyn std::any::Any + Send + Sync>>,
     scope: Scope,
     count: usize,
     ceiling: usize,
@@ -637,8 +637,8 @@ pub fn admit_agent_spawn() -> Result<AdmissionPermit, AdmissionFailure> {
     if std::env::var_os("FNO_MUX_NATIVE_TEST_ADMISSION").is_none() {
         return Ok(test_permit(Scope::Fleet, 0, ceiling.get()));
     }
-    let lock = match acquire_lock(true) {
-        Ok(lock) => Some(lock),
+    let lock: Option<Box<dyn std::any::Any + Send + Sync>> = match acquire_lock() {
+        Ok(lock) => Some(Box::new(lock)),
         // A fact, not a race: with no descriptor left, the census behind the
         // lock would fail the same way. Admit, and let the spawn below name
         // its own limit.
@@ -744,10 +744,10 @@ pub fn admit_tab(
 #[cfg(test)]
 fn test_permit(scope: Scope, count: usize, ceiling: usize) -> AdmissionPermit {
     AdmissionPermit {
-        _lock: Some(
-            File::open(std::env::current_exe().expect("test executable path"))
+        _lock: Some(Box::new(
+            std::fs::File::open(std::env::current_exe().expect("test executable path"))
                 .expect("test executable is readable"),
-        ),
+        )),
         scope,
         count,
         ceiling,
@@ -885,9 +885,9 @@ fn no_descriptor_left(error: &io::Error) -> bool {
     )
 }
 
-/// `wait: false` takes the lock only if it is free right now, and answers
-/// `Other` when an agent holds it: a human never queues behind a spawn.
-fn acquire_lock(wait: bool) -> Result<File, AcquireFailure> {
+/// Waits at most the spawn-admission row's bound, then answers `Other` with the
+/// holder named: a wedged census holder never parks a spawn without limit.
+fn acquire_lock() -> Result<crate::chokepoint::Held, AcquireFailure> {
     let path = admission_lock_path()
         .map_err(|e| AcquireFailure::Other(format!("cannot prepare admission state: {e}")))?;
     let file = OpenOptions::new()
@@ -910,32 +910,9 @@ fn acquire_lock(wait: bool) -> Result<File, AcquireFailure> {
     #[cfg(unix)]
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
         .map_err(|e| AcquireFailure::Other(format!("cannot secure {}: {e}", path.display())))?;
-    #[cfg(unix)]
-    {
-        let fd = std::os::unix::io::AsRawFd::as_raw_fd(&file);
-        loop {
-            // SAFETY: `fd` is an open file descriptor owned by `file`; the
-            // exclusive lock serializes census plus spawn.
-            let op = if wait {
-                libc::LOCK_EX
-            } else {
-                libc::LOCK_EX | libc::LOCK_NB
-            };
-            let rc = unsafe { libc::flock(fd, op) };
-            if rc == 0 {
-                break;
-            }
-            let error = io::Error::last_os_error();
-            if error.kind() != io::ErrorKind::Interrupted {
-                return Err(AcquireFailure::Other(format!(
-                    "cannot lock {}: {}",
-                    path.display(),
-                    error
-                )));
-            }
-        }
-    }
-    Ok(file)
+    drop(file);
+    crate::chokepoint::take(&crate::chokepoint::SPAWN_ADMISSION, &path)
+        .map_err(|refused| AcquireFailure::Other(refused.to_string()))
 }
 
 fn admission_state_dir() -> io::Result<PathBuf> {

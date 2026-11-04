@@ -223,14 +223,8 @@ pub(crate) fn clear_mux_refs(
             .unwrap_or_else(|| std::path::Path::new(".")),
     )
     .map_err(|e| format!("lock dir: {e}"))?;
-    // Truncate, like the Python opener ("w"): the lock file carries no data.
-    let lock = std::fs::OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(true)
-        .open(&lock_path)
-        .map_err(|e| format!("lock open: {e}"))?;
-    lock.lock().map_err(|e| format!("lock: {e}"))?;
+    let lock = crate::chokepoint::take(&crate::chokepoint::MUX_RESEAT, &lock_path)
+        .map_err(|e| format!("lock: {e}"))?;
 
     let result = (|| {
         let raw = std::fs::read_to_string(registry).map_err(|e| format!("read: {e}"))?;
@@ -256,7 +250,7 @@ pub(crate) fn clear_mux_refs(
         Ok(cleared)
     })();
 
-    let _ = std::fs::File::unlock(&lock);
+    drop(lock);
     result
 }
 

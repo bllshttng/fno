@@ -49,6 +49,10 @@ enum MatchRequest {
     /// is 0 restored, 1 recorded-but-index-failed, 3 refused.
     #[serde(rename = "restore")]
     Restore(RecordDoorRequest),
+    /// The renew door: `argv` is the `fno inbox law renew` command line.
+    /// Same ownership as `restore`: stdout carries the new id.
+    #[serde(rename = "renew")]
+    Renew(RecordDoorRequest),
     #[serde(rename = "scope-split")]
     ScopeSplit(ScopeSplitRequest),
     /// The decisions listing read: `argv` is the `fno backlog decisions`
@@ -796,6 +800,17 @@ fn stage_answer(req: StageRequest) -> Value {
     unread.extend(set.unread.iter().cloned());
     let today = chrono::Local::now().date_naive();
     let decision = crate::rules::decide(&set.rules, &ev, today);
+    let fired: Vec<&str> = decision
+        .fires
+        .iter()
+        .filter_map(|f| f.law.as_deref())
+        .collect();
+    crate::law_firings::record(
+        &crate::law_firings::default_path(),
+        &fired,
+        stage_name,
+        chrono::Utc::now(),
+    );
     let mut matching: Vec<String> = decision
         .fires
         .iter()
@@ -1314,6 +1329,7 @@ pub(crate) struct RecordDoor {
     from: Option<String>,
     whiles: Vec<String>,
     between: Option<String>,
+    until: Option<String>,
 }
 
 /// A law's scope past the recording project, from one door flag. `None` in
@@ -1325,7 +1341,7 @@ pub(crate) enum Widen {
     User(Option<String>),
 }
 
-const RECORD_USAGE: &str = "usage: fno inbox law set <subject> [decision] [--decision-file f|-] [--rationale s] [--option s]... [--supersedes d-x] [--graduation k] [--graduation-ref r] [--read cmd]... [--global | --machine[=<id>] | --user[=<name>]] [--paths glob,glob] [--from date:<when>|event:<node>] [--while <cmd>]... [--between HH:MM-HH:MM] [--strength inform|warn|require-ack|block] [--quote <the user's words>] [--filter <key>=<value>]... [--not <key>=<value>]...";
+const RECORD_USAGE: &str = "usage: fno inbox law set <subject> [decision] [--decision-file f|-] [--rationale s] [--option s]... [--supersedes d-x] [--graduation k] [--graduation-ref r] [--read cmd]... [--global | --machine[=<id>] | --user[=<name>]] [--paths glob,glob] [--from date:<when>|event:<node>] [--while <cmd>]... [--between HH:MM-HH:MM] [--until YYYY-MM-DD] [--strength inform|warn|require-ack|block] [--quote <the user's words>] [--filter <key>=<value>]... [--not <key>=<value>]...";
 const RETRACT_USAGE: &str = "usage: fno inbox law retract <subject-or-decision-id> --reason <why> [--authority operator|chat_attested] [--quote <the user's words>]";
 const HISTORY_USAGE: &str = "usage: fno inbox law history <subject-or-decision-id>";
 
@@ -1349,6 +1365,7 @@ fn parse_record_door(args: &[String]) -> Result<RecordDoor, String> {
         from: None,
         whiles: Vec::new(),
         between: None,
+        until: None,
     };
     let mut widened_by: Vec<String> = Vec::new();
     let mut positional = 0usize;
@@ -1403,6 +1420,9 @@ fn parse_record_door(args: &[String]) -> Result<RecordDoor, String> {
             "--from" => door.from = Some(take(&mut i)?),
             "--while" => door.whiles.push(take(&mut i)?),
             "--between" => door.between = Some(take(&mut i)?),
+            "--until" => {
+                door.until = Some(crate::law_renew::parse_until(&take(&mut i)?)?);
+            }
             "--global" => {
                 // An inline value parses like a bool flag should: --global=false
                 // must never widen because the value was ignored.
@@ -1839,13 +1859,16 @@ pub(crate) fn record_door_write(door: RecordDoor, decision: String, caller: &Cal
         attested_by,
         relayed_by,
     } = caller;
+    // A fleet subject with no widening flag defaults to global, so a project
+    // that does not resolve still records it. The globs are still validated.
+    let fleet_default = door.widen.is_none() && decision_index::is_fleet_subject(&door.subject);
+    let widen = if fleet_default {
+        Some(&Widen::Global)
+    } else {
+        door.widen.as_ref()
+    };
     // The scope stamp with the widening and the globs validated at the door.
-    let scope_answer = record_scope_answer_in(
-        None,
-        &settings_sources(),
-        door.widen.as_ref(),
-        &door.raw_paths,
-    );
+    let scope_answer = record_scope_answer_in(None, &settings_sources(), widen, &door.raw_paths);
     if scope_answer.get("ok") != Some(&json!(true)) {
         let message = scope_answer
             .get("refusal")
@@ -1858,8 +1881,10 @@ pub(crate) fn record_door_write(door: RecordDoor, decision: String, caller: &Cal
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string();
-    if let Some(refusal) = wide_scope_refusal(&scope) {
-        return door_refuse(&refusal);
+    if !fleet_default {
+        if let Some(refusal) = wide_scope_refusal(&scope) {
+            return door_refuse(&refusal);
+        }
     }
     let paths: Vec<Value> = scope_answer
         .get("paths")
@@ -2050,6 +2075,9 @@ pub(crate) fn record_door_write(door: RecordDoor, decision: String, caller: &Cal
     }
     if let Some(when) = &when {
         data["when"] = when.clone();
+    }
+    if let Some(until) = &door.until {
+        data["until"] = json!(until);
     }
     if let Some(map) = data.as_object_mut() {
         crate::identity::stamp_person(map);
@@ -3004,6 +3032,9 @@ pub fn run_law_match_str(input: &str) -> i32 {
         MatchRequest::Restore(r) => {
             return crate::law_restore::run_restore(&r.argv);
         }
+        MatchRequest::Renew(r) => {
+            return crate::law_renew::run_renew(&r.argv);
+        }
         MatchRequest::Ask(r) => serde_json::to_string(&ask_answer(&r)).expect("serializes"),
         MatchRequest::Law(r) => {
             let near = near_law_lines(&r.law);
@@ -3459,6 +3490,7 @@ pub(crate) mod scope_tests {
             from: None,
             whiles: Vec::new(),
             between: None,
+            until: None,
         }
     }
 

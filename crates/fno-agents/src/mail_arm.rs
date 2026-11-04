@@ -111,8 +111,9 @@ pub fn beat(remote: &Remote) -> Result<PullOutcome, String> {
     if let Err(e) = schema {
         return Err(e.clone());
     }
-    match mail_bus::fetch_pending(remote, &host) {
-        Ok(rows) => outcome.delivered = pull_rows(remote, rows, &home_root()),
+    let home = home_root();
+    match mail_bus::fetch_pending(remote, &held_hosts(&home, &host)) {
+        Ok(rows) => outcome.delivered = pull_rows(remote, rows, &home),
         Err(e) => eprintln!("mail-arm: pull: {e}"),
     }
     match flush(remote) {
@@ -126,6 +127,33 @@ pub fn beat(remote: &Remote) -> Result<PullOutcome, String> {
     // Open questions ride the same beat to the other machines of the store.
     crate::question_bus::tick(remote);
     Ok(outcome)
+}
+
+/// Every bus label this machine has held, current first. A rename leaves
+/// pending rows keyed to the old label, and the signature forbids re-keying
+/// them, so the pull reads the old labels too. `FNO_MAIL_PREVIOUS_HOST`
+/// (comma list) seeds a rename that happened before this file existed.
+pub(crate) fn held_hosts(home: &std::path::Path, current: &str) -> Vec<String> {
+    let path = home.join("mail-host-names");
+    let mut names: Vec<String> = std::fs::read_to_string(&path)
+        .unwrap_or_default()
+        .lines()
+        .map(str::to_string)
+        .collect();
+    let seeded = std::env::var("FNO_MAIL_PREVIOUS_HOST").unwrap_or_default();
+    let before = names.len();
+    for name in std::iter::once(current).chain(seeded.split(',')) {
+        let name = crate::mail::address::normalize_host(name);
+        if !name.is_empty() && !names.contains(&name) {
+            names.push(name);
+        }
+    }
+    if names.len() != before {
+        let _ = std::fs::write(&path, names.join("\n") + "\n");
+    }
+    names.retain(|n| n != current);
+    names.insert(0, current.to_string());
+    names
 }
 
 fn home_root() -> PathBuf {
@@ -426,12 +454,21 @@ pub(crate) fn style_door_refuses(payload: &str) -> bool {
 /// side does.
 pub(crate) fn style_door_report(payload: &str) -> Option<String> {
     let output = ask_style_door(&style_door_report_argv(mail_word_cap()), payload)?;
-    (output.status.code() == Some(1)).then(|| String::from_utf8_lossy(&output.stdout).into_owned())
+    (output.status.code() == Some(1)).then(|| {
+        // The door prints its human report on stderr; stdout is the
+        // fallback for a door that writes it there.
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        if stderr.trim().is_empty() {
+            String::from_utf8_lossy(&output.stdout).into_owned()
+        } else {
+            stderr
+        }
+    })
 }
 
 /// The report form of the door consult: the same argv without --json, so
-/// exit 1 with the human report is the refusal and stdout rides to the
-/// sender.
+/// exit 1 with the human report (on stderr) is the refusal and rides to
+/// the sender.
 pub(crate) fn style_door_report_argv(word_cap: Option<i64>) -> Vec<String> {
     style_door_argv(word_cap)
         .into_iter()
@@ -448,7 +485,7 @@ fn ask_style_door(argv: &[String], payload: &str) -> Option<std::process::Output
     let mut child = cmd
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
         .spawn()
         .ok()?;
     let payload = payload.to_string();

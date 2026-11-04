@@ -141,11 +141,14 @@ pub fn assemble(
         }
         let paths = law_paths(row);
         let action = law_strength(row);
-        let scope_line = if scope == "global" || identity.is_some() {
+        let mut scope_line = if scope == "global" || identity.is_some() {
             String::new()
         } else {
             format!("\nscope = \"{}\"", toml_escape(scope))
         };
+        if let Some(until) = row.get("until").and_then(Value::as_str) {
+            scope_line.push_str(&format!("\nexpires = \"{}\"", toml_escape(until)));
+        }
         let body = if paths.is_empty() {
             format!(
                 "id = \"law-{id}\"\nlaw = \"{id}\"{scope_line}\naction = \"{action}\"\n[rule.when]\nretrieval = \"{}\"\nevents = [\"prompt\", \"skill\"]",
@@ -823,19 +826,12 @@ mod tests {
             })
             .to_string()
         };
-        // Spans land relative to now, never on authored dates: the report's
-        // 7d window moves with the clock, and a hardcoded span falls out of
-        // it the week after the test was written.
-        let days_ago = |d: i64| {
-            (chrono::Utc::now() - chrono::Duration::days(d))
-                .format("%Y-%m-%dT00:00:00Z")
-                .to_string()
-        };
-        let mut text = span("r-a", "block", &days_ago(1));
+        let ago = |days: i64| (chrono::Utc::now() - chrono::Duration::days(days)).to_rfc3339();
+        let mut text = span("r-a", "block", &ago(1));
         text.push('\n');
-        text.push_str(&span("r-a", "warn", &days_ago(2)));
+        text.push_str(&span("r-a", "warn", &ago(2)));
         text.push('\n');
-        text.push_str(&span("r-b", "warn", &days_ago(10)));
+        text.push_str(&span("r-b", "warn", &ago(30)));
         text.push('\n');
         std::fs::write(&journal, text).unwrap();
 
