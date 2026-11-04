@@ -352,10 +352,11 @@ impl View {
         out
     }
 
-    /// Rows and questions waiting on the user: local blocked rows, remote
-    /// blocked rows, and open questions. Local rows fold the same state
-    /// function as every section rollup, so they equal the sum of the
-    /// section counts.
+    /// Agent rows waiting on the user: local blocked rows and remote
+    /// blocked rows. Open questions stay in the notifications panel, where
+    /// they answer (operator, 2026-11-04): a question line here never
+    /// opened anything. Local rows fold the same state function as every
+    /// section rollup, so they equal the sum of the section counts.
     pub(super) fn need_input_count(&self) -> usize {
         let local = self
             .layout
@@ -363,7 +364,7 @@ impl View {
             .iter()
             .filter(|a| agent_lattice_state(a) == LatticeState::Blocked)
             .count();
-        local + self.machine_tree.blocked_remote() + self.open_question_count()
+        local + self.machine_tree.blocked_remote()
     }
 
     /// Columns the strip's count label covers, for the tap map. Zero when
@@ -385,10 +386,11 @@ impl View {
         format!(" {need} need input").chars().count().min(stop)
     }
 
-    /// The pinned Needs input section: a header, the blocked rows (this
-    /// machine, then remote machines), and one line per open question. The
-    /// rows also stay in their groups below, so a click never lands on a
-    /// row that moved.
+    /// The pinned Needs input section: a header, then the blocked rows
+    /// (this machine, then remote machines). Open questions never appear
+    /// here; the notifications panel lists and answers them. The rows also
+    /// stay in their groups below, so a click never lands on a row that
+    /// moved.
     pub(super) fn pin_needs<'a>(
         &'a self,
         rows: Vec<DisplayRow<'a>>,
@@ -405,16 +407,9 @@ impl View {
             .filter(blocked)
             .chain(self.machine_tree.rows().filter(blocked))
             .collect();
-        let questions: Vec<String> = self.questions_merged().map_or_else(Vec::new, |fold| {
-            fold.items
-                .iter()
-                .filter(|q| q.state == "open" && !q.settled)
-                .map(|q| q.title.clone())
-                .collect()
-        });
         let mut out = vec![DisplayRow::Header {
             label: "Needs input".into(),
-            rollup: vec![(LatticeState::Blocked, agents.len() + questions.len())],
+            rollup: vec![(LatticeState::Blocked, agents.len())],
             key: SectionKey::Group("@needs-input".into()),
             view: SectionView::Expanded,
         }];
@@ -423,25 +418,11 @@ impl View {
             out.push(DisplayRow::Agent(a));
             out_depths.push(0);
         }
-        for title in questions {
-            out.push(DisplayRow::NeedNote(title));
-            out_depths.push(0);
-        }
         out.push(DisplayRow::Blank);
         out_depths.push(0);
         out.extend(rows);
         out_depths.extend(depths);
         (out, out_depths)
-    }
-
-    /// Open questions the user can answer, one per question across machines.
-    pub(super) fn open_question_count(&self) -> usize {
-        self.questions_merged().map_or(0, |fold| {
-            fold.items
-                .iter()
-                .filter(|q| q.state == "open" && !q.settled)
-                .count()
-        })
     }
 
     /// The glyph beside the count: it alternates on the spin clock while
@@ -824,9 +805,6 @@ impl View {
                     ))
                 }
                 DisplayRow::TableEmpty => Some(("  no agents".to_string(), cell_flags::DIM)),
-                DisplayRow::NeedNote(t) => {
-                    Some((crate::chrome::clip(&format!("  ? {t}"), text_w), 0))
-                }
                 // The card separator (the operator's 2026-10-04 spacing
                 // mockup): one dim dashed rule, full width.
                 DisplayRow::CardRule => Some(("\u{2504}".repeat(text_w), cell_flags::DIM)),
@@ -1105,7 +1083,6 @@ impl View {
             | DisplayRow::NewSquad
             | DisplayRow::Blank
             | DisplayRow::TableEmpty
-            | DisplayRow::NeedNote(_)
             | DisplayRow::CardDetail(..)
             | DisplayRow::CardMetrics(..)
             | DisplayRow::CardRule
