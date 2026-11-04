@@ -77,7 +77,7 @@ if [[ -n "$_WT_NAME" && -n "$_CAP_SESSION" ]] && command -v fno >/dev/null 2>&1;
     _cap_stub="$(fno config paths shell-stub 2>/dev/null || true)"
     # shellcheck source=/dev/null
     [ -n "$_cap_stub" ] && [ -f "$_cap_stub" ] && . "$_cap_stub" 2>/dev/null || true
-    _CAP_LATCH_DIR="${LATCHES_DIR:-${STATE_DIR:-$HOME/.fno}/latches}"
+    _CAP_LATCH_DIR="${LATCHES_DIR:-${STATE_DIR:-$HOME/.fno}/state/latches}"
     mkdir -p "$_CAP_LATCH_DIR" 2>/dev/null || true
     find "$_CAP_LATCH_DIR" -maxdepth 1 -name '.worktree-create-*' -mtime +2 -delete 2>/dev/null || true
     _CAP_LATCH="$_CAP_LATCH_DIR/.worktree-create-$_CAP_SESSION"

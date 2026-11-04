@@ -112,6 +112,8 @@ toml = "0.8"
 # Format-preserving edits of the accounts config: comments survive a write.
 toml_edit = "0.22"
 regex = "1"
+# Visual-approval pre-screen: decode and diff the main and PR shots.
+png = "0.18"
 # The store's version-conflict digest (file_content_version) and the dedup
 # keys are SHA256 on both legs; blake3 cannot stand in for them.
 sha1 = "0.10"

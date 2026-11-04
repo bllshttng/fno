@@ -245,7 +245,7 @@ mod tests {
         let line = crate::mail_remote::ssh_argv("mbp3", &words).join(" ");
         assert!(line.contains("'--spawned-by' 's-parent'"));
         // No resolved session adds no words: the relay stays byte-verbatim
-        // and the far row keeps its refusal reason.
+        // and the remote row keeps its refusal reason.
         let mut plain = spawn_plan(
             &["--name".to_string(), "@mbp3".to_string(), "hi".to_string()],
             "imac2d2",

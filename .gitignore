@@ -199,3 +199,8 @@ graphify-out/
 
 # claude plugin eval writes one timestamped run per invocation here.
 /evals/claude-plugin/results/
+
+# capture-readiness-grid.sh drops its capture artifacts beside the tracked
+# fixtures it sits with; the .txt/.hex captures are machine-local, never
+# committed.
+/crates/fno-agents/tests/fixtures/readiness-grid/

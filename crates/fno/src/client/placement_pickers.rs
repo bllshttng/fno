@@ -129,8 +129,8 @@ impl View {
         self.clear_peek();
         // The new-portal row is the LAST row, so the cursor starts at the open
         // count - zero open portals leaves cursor 0, the only row there is.
-        let far = self.machine_tree.rows().find(|a| a.name == id);
-        let remote = far.and_then(|a| a.remote.clone());
+        let remote_row = self.machine_tree.rows().find(|a| a.name == id);
+        let remote = remote_row.and_then(|a| a.remote.clone());
         self.portal_pick = Some(PortalPick {
             id,
             remote,

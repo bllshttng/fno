@@ -79,6 +79,17 @@ fn ps_field(field: &str, pid: &str) -> Option<String> {
     }
 }
 
+/// The `--bg-sockets` TSV: one `job<TAB>pid` row per map entry, sorted by the
+/// map's own key order. An empty map is an empty string: the caller prints
+/// nothing and exits 0, and readers treat empty as unknown.
+fn bg_socket_tsv(map: &std::collections::BTreeMap<String, u32>) -> String {
+    let mut out = String::new();
+    for (job, pid) in map {
+        out.push_str(&format!("{job}\t{pid}\n"));
+    }
+    out
+}
+
 fn has_live_child(pid: &str) -> bool {
     // Exit 1 means no children; any other failure reads as a child, fail
     // closed.
@@ -116,7 +127,21 @@ fn tty_idle_secs(pid: &str) -> (Option<u64>, String) {
 /// `fno-agents occupancy-login <pid>...`: one TSV row per login shell this
 /// lane answers (pid verdict action job reason cmd). Pids it does not answer
 /// stay with the classifier.
+///
+/// `fno-agents occupancy-login --bg-sockets`: one `job<TAB>pid` row per live
+/// claude bg socket, the map `scripts/lib/worktree_occupancy.py` used to
+/// import `session_procs.bg_socket_pid_map` for. Best effort like the map's
+/// own contract: an empty map (no farm, dead lsof) prints nothing and exits
+/// 0, and the script reads empty as unknown, never as no sessions.
 pub fn run(args: &[String]) -> i32 {
+    if args.first().map(String::as_str) == Some("--bg-sockets") {
+        let map = crate::footprint_cause::bg_socket_pid_map(None);
+        let tsv = bg_socket_tsv(&map);
+        if !tsv.is_empty() {
+            print!("{tsv}");
+        }
+        return 0;
+    }
     let mut out = String::new();
     for pid in args {
         if pid.parse::<u32>().is_err() {
@@ -181,5 +206,18 @@ mod tests {
         let (verdict, reason) = decide(false, None, "").unwrap();
         assert_eq!(verdict, "holds");
         assert_eq!(reason, "login shell: tty unreadable");
+    }
+
+    #[test]
+    fn bg_socket_tsv_prints_one_job_pid_row_per_entry() {
+        let mut map = std::collections::BTreeMap::new();
+        map.insert("e6f78b98".to_string(), 4242u32);
+        map.insert("0a1b2c3d".to_string(), 7u32);
+        assert_eq!(
+            bg_socket_tsv(&map),
+            "0a1b2c3d\t7\ne6f78b98\t4242\n",
+            "sorted by job, one tab between the fields"
+        );
+        assert_eq!(bg_socket_tsv(&std::collections::BTreeMap::new()), "");
     }
 }

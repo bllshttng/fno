@@ -715,6 +715,7 @@ fn manifest_paths(root: &Path) -> Vec<PathBuf> {
     }
     for base in [
         root.join("repo/.claude/worktrees"),
+        home.join(".fno/spaces/worktrees"),
         home.join(".fno/worktrees"),
     ] {
         if let Ok(wts) = std::fs::read_dir(&base) {
@@ -821,11 +822,13 @@ pub fn side_effects(root: &Path, env: &[(String, String)], cwd: &Path, node: &st
             worktrees.push(normalize(&wt.path().to_string_lossy(), root, node));
         }
     }
-    if let Ok(slugs) = std::fs::read_dir(root.join("home/.fno/worktrees")) {
-        for slug_dir in slugs.flatten() {
-            if let Ok(leaves) = std::fs::read_dir(slug_dir.path()) {
-                for leaf in leaves.flatten() {
-                    worktrees.push(normalize(&leaf.path().to_string_lossy(), root, node));
+    for base in ["home/.fno/spaces/worktrees", "home/.fno/worktrees"] {
+        if let Ok(slugs) = std::fs::read_dir(root.join(base)) {
+            for slug_dir in slugs.flatten() {
+                if let Ok(leaves) = std::fs::read_dir(slug_dir.path()) {
+                    for leaf in leaves.flatten() {
+                        worktrees.push(normalize(&leaf.path().to_string_lossy(), root, node));
+                    }
                 }
             }
         }
@@ -1007,6 +1010,7 @@ pub fn play(subject: &str, case: &Case, root: &Path, leg: &Leg) {
             let mut wt = None;
             for base in [
                 root.join("repo/.claude/worktrees"),
+                root.join("home/.fno/spaces/worktrees"),
                 root.join("home/.fno/worktrees"),
             ] {
                 if let Ok(entries) = std::fs::read_dir(&base) {

@@ -1,5 +1,6 @@
-//! parity-stage: differential
-//! parity-oracle: fno.agents.discover.discover_live_sessions
+//! parity-stage: characterization
+//! parity-oracle: fno.agents.discover.discover_live_sessions (deleted Python
+//! twin; the committed goldens pin its answers, no differential run remains)
 
 use fno_agents::discovered_sessions::aliases::{
     default_alias, disambiguate, fit_sid_alias, is_accreted, is_legacy_handle,

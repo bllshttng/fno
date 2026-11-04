@@ -250,7 +250,7 @@ mod tests {
                     host: h.map(str::to_string),
                     state: ["open", "answered"][usize::from(*h == Some("answered"))].into(),
                     origin: (i == 0).then(|| crate::needs_overlay::QuestionOrigin {
-                        handle: "w1".into(),
+                        handle: Some("w1".into()),
                         session_id: Some("aaaa1111-zzzz".into()),
                         name: Some("t-one".into()),
                         harness: Some("claude".into()),

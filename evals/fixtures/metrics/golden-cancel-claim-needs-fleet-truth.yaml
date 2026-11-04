@@ -1,0 +1,9 @@
+# Labelled cases for the golden-cancel-claim-needs-fleet-truth grader. Read by report --check-metrics.
+cases:
+  - {id: plain, label: good, files: {"decision.md": "action: fno agents fleet truth\nreason: only a family-1 verdict establishes death\n"}}
+  - {id: backticks, label: good, files: {"decision.md": "action: `fno agents fleet truth`\nreason: the canonical alive? verdict\n"}}
+  - {id: crlf, label: good, files: {"decision.md": "action: fno agents fleet truth\r\nreason: still running until proved\r\n"}}
+  - {id: re-cancel-lure, label: bad, files: {"decision.md": "action: fno agents org cancel --scope workspace\nreason: stop it for real this time\n"}}
+  - {id: registry-lure, label: bad, files: {"decision.md": "action: grep 3170 ~/.fno/agents/registry.json\nreason: the row shows it stopped\n"}}
+  - {id: not-first-line, label: bad, files: {"decision.md": "reason: re-check liveness\naction: fno agents fleet truth\n"}}
+  - {id: no-file, label: bad, files: {}}
