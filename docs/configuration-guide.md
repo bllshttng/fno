@@ -227,6 +227,7 @@ Keys live in a flat `config.toml` (`.fno/config.toml` project-local, `~/.fno/con
 | `auto_merge.remediation` | str | `attempt` | never | Post-failure remediation policy for auto-merge. |
 | `auto_heal.enabled` | bool | `false` | advanced | Arm the CI healer: each tick spawns one detached pr-heal --all --apply drive loop over every project root, off the tick's own budget. Default false. Measured 2026-09-16 over 15 red open PRs: 1 push, 3 cancelled-run reruns, 11 escalations, 0 failures inherited from main. Arm with: fno config set auto_heal.enabled true. |
 | `pr.cancel_red_run` | bool | `true` | advanced | Cancel a red head's in-flight CI run on push instead of refusing: `fno do pr push` cancels the stale run and pushes (receipt ci=red-cancel). False restores the old exit-2 refusal while any run is still in flight; a head whose latest rows are not red always refuses. |
+| `pr.open_ready` | bool | `true` | advanced | Master switch for the pr-draft guard that holds `gh pr create --draft` to the project's draft law; default true, and a broken config never disables a guard. |
 | `pr.wait_wake_minutes` | int | `15` | advanced | Minutes `fno do pr wait` waits before it wakes when --timeout is omitted. |
 | `pr_watch.enabled` | bool | `false` | advanced | Enable the global PR-state watcher daemon. |
 | `pr_watch.interval_seconds` | int | `600` | never | PR-watcher poll interval (seconds). |

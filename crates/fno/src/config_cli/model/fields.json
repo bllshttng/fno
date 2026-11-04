@@ -481,6 +481,7 @@
      "name": "pr",
      "default": {
       "cancel_red_run": true,
+      "open_ready": true,
       "wait_wake_minutes": 15
      }
     },
@@ -1753,6 +1754,10 @@
    "fields": [
     {
      "name": "cancel_red_run",
+     "default": true
+    },
+    {
+     "name": "open_ready",
      "default": true
     },
     {
@@ -3341,6 +3346,7 @@
   "auto_merge.conflict_resolution",
   "auto_merge.remediation",
   "pr.cancel_red_run",
+  "pr.open_ready",
   "pr.wait_wake_minutes",
   "pr_watch.enabled",
   "pr_watch.interval_seconds",

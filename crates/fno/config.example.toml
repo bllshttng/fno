@@ -575,6 +575,8 @@ enabled = false
 [pr]
 # Cancel a red head's in-flight CI run on push instead of refusing: `fno do pr push` cancels the stale run and pushes (receipt ci=red-cancel). False restores the old exit-2 refusal while any run is still in flight; a head whose latest rows are not red always refuses.
 cancel_red_run = true
+# Master switch for the pr-draft guard that holds `gh pr create --draft` to the project's draft law; default true, and a broken config never disables a guard.
+open_ready = true
 # Minutes `fno do pr wait` waits before it wakes when --timeout is omitted.
 wait_wake_minutes = 15
 

@@ -2077,11 +2077,16 @@
       "type": "object"
     },
     "PrBlock": {
-      "description": "Pr verb defaults (nested under 'config.pr').\n\ncancel_red_run (default True): `fno do pr push` cancels a red head's\nin-flight CI run and pushes with receipt ci=red-cancel; False\nrestores the old exit-2 refusal while any run is still in flight.\nA head whose latest rows are not red always refuses, whatever this\nkey reads.\n\nwait_wake_minutes (default 15): the minutes `fno do pr wait` waits\nbefore it wakes when --timeout is omitted.",
+      "description": "Pr verb defaults (nested under 'config.pr').\n\ncancel_red_run (default True): `fno do pr push` cancels a red head's\nin-flight CI run and pushes with receipt ci=red-cancel; False\nrestores the old exit-2 refusal while any run is still in flight.\nA head whose latest rows are not red always refuses, whatever this\nkey reads.\n\nopen_ready (default True): master switch for the pr-draft guard that\nholds `gh pr create --draft` to the project's draft law; a broken\nconfig never disables a guard.\n\nwait_wake_minutes (default 15): the minutes `fno do pr wait` waits\nbefore it wakes when --timeout is omitted.",
       "properties": {
         "cancel_red_run": {
           "default": true,
           "title": "Cancel Red Run",
+          "type": "boolean"
+        },
+        "open_ready": {
+          "default": true,
+          "title": "Open Ready",
           "type": "boolean"
         },
         "wait_wake_minutes": {
