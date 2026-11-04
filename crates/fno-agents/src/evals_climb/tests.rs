@@ -116,7 +116,11 @@ fn climb_of(tmp: &TempDir, lines: &[String], prices: Option<Value>) -> Value {
         format!(
             // Quoted: a bare 40-digit pin parses as a YAML number, and the
             // loader demands a string.
-            "bank_rev: '{PIN}'\ntrain: [t1, t2]\nvalidation: []\nqualification: [h1, h2, h3, h4]\n"
+            "bank_rev: '{PIN}'\ntrain: [t1, t2]\nvalidation: []\nqualification: [{q}]\n",
+            q = (0..20)
+                .map(|i| format!("h{i:02}"))
+                .collect::<Vec<_>>()
+                .join(", ")
         ),
     )
     .unwrap();
@@ -208,4 +212,85 @@ fn few_graded_heldout_rows_read_underpowered_never_propose() {
     assert_eq!(v["verdict"], "underpowered", "reason: {}", v["reason"]);
     assert_eq!(v["heldout"]["trial"]["scored"], 4);
     assert!(v.get("accept").is_none());
+}
+
+/// One repeat's grades per task, `passes` of 10 passing.
+fn repeat_rows(
+    cohort: &str,
+    task: &str,
+    rep: i64,
+    passes_of_10: usize,
+    usage: Value,
+) -> Vec<String> {
+    (0..10)
+        .map(|i| {
+            row(
+                task,
+                i < passes_of_10,
+                cohort,
+                "m-base",
+                "ok",
+                usage.clone(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn an_aa_measured_floor_reads_regression_where_the_fixed_bar_reads_propose() {
+    let tmp = TempDir::new().unwrap();
+    // Baseline 70%: per task (p0, p1) of 10 grades per repeat; the deltas
+    // (rep0 minus rep1) carry sd 0.1836, so the floor at r=2 over 20 tasks
+    // is 8.1 points. Trial 60% at the same repeats.
+    let base: [(usize, usize); 20] = [
+        (8, 6),
+        (8, 6),
+        (8, 6),
+        (8, 6),
+        (6, 8),
+        (6, 8),
+        (6, 8),
+        (6, 8),
+        (9, 5),
+        (5, 9),
+        (7, 7),
+        (7, 7),
+        (7, 7),
+        (7, 7),
+        (7, 7),
+        (7, 7),
+        (7, 7),
+        (7, 7),
+        (7, 7),
+        (7, 7),
+    ];
+    let mut lines = Vec::new();
+    for (i, (p0, p1)) in base.iter().enumerate() {
+        let task = format!("h{:02}", i);
+        lines.extend(repeat_rows("base", &task, 0, *p0, priced_usage()));
+        lines.extend(repeat_rows("base", &task, 1, *p1, priced_usage()));
+        lines.extend(repeat_rows("trial", &task, 0, 6, priced_usage()));
+        lines.extend(repeat_rows("trial", &task, 1, 6, priced_usage()));
+    }
+    let v = climb_of(&tmp, &lines, None);
+    assert_eq!(v["verdict"], "regression", "reason: {}", v["reason"]);
+    assert_eq!(v["noise_source"], "aa_measured", "{}", v);
+    assert_eq!(v["noise_floor"].as_f64().unwrap().round(), 8.0, "{}", v);
+    assert_eq!(v["heldout"]["power"]["verdict"], "beats_noise", "{}", v);
+    // The same rows under the fixed bar stay a tie arm: the trial is
+    // cheaper but its lower bound sits under base minus 15 points.
+    let lines2: Vec<String> = base
+        .iter()
+        .enumerate()
+        .flat_map(|(i, _)| {
+            let task = format!("h{:02}", i);
+            let mut v = repeat_rows("base", &task, 0, 7, priced_usage());
+            v.extend(repeat_rows("trial", &task, 0, 6, priced_usage()));
+            v
+        })
+        .collect();
+    let tmp2 = TempDir::new().unwrap();
+    let v2 = climb_of(&tmp2, &lines2, None);
+    assert_eq!(v2["noise_source"], "preregistered", "{}", v2);
+    assert_eq!(v2["heldout"]["power"]["aa"], Value::Null, "{}", v2);
 }

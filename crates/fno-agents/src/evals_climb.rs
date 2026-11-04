@@ -3,28 +3,29 @@
 //! `fno doctor evals report --climb --baseline <cohort> --trial <cohort>`.
 //! The method is the harness-fit study's: a change wins on held-out, never
 //! on train; train rising while held-out stays flat is the revert shape.
-//! The thresholds are the preregistration's named numbers, not tuned knobs
-//! (evals/harness-fit/README.md, "Decision rules").
+//! The bar is the noise floor: measured from the baseline's A/A rows (two
+//! repeats of the same tree) when they exist, else the preregistration's
+//! named constant (evals/harness-fit/README.md, "Decision rules"), which
+//! is also the scorecard router's bar. No threshold is tuned per run.
 //!
 //! The fold never prints a held-out prompt, trace, or per-attempt row - the
 //! cells are cohort aggregates only, the same projection `qualify_aggregate`
 //! keeps (a held-out claim is evidence, not a transcript).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use serde_json::{json, Value};
 
 use crate::agents_config::config_value_deep;
 use crate::eval_attempt::{bank_same, load_cohorts_yaml, validate_cohorts};
-use crate::evals_trend::{cohort_score, read_rows, Row};
+use crate::evals_trend::{cohort_score, is_scored, read_rows, Row};
 
 const EXIT_USAGE: i32 = 2;
 
-/// The noise floor the harness-fit preregistration names (about 15 points
-/// at these n): a smaller held-out move reads as flat, never as a win or a
-/// loss. The scorecard router reads the same constant, so one number
-/// decides both folds.
+/// The preregistered fallback bar (about 15 points at these n): the noise
+/// floor when no A/A cohort measures one, and the scorecard router's bar,
+/// because a node's merge rates have no repeat run to measure one.
 pub(crate) const NOISE: f64 = 0.15;
 
 /// A `propose` on a flat held-out needs the trial to cost at least this
@@ -309,6 +310,66 @@ fn climb_payload(args: &ClimbArgs) -> Result<Value, String> {
     let trial_train = score(args.trial, "train");
     let trial_heldout = score(args.trial, "heldout");
 
+    // The measured bar: an A/A read over the baseline's held-out rows at
+    // the smaller repeat count of the two cohorts. Every held-out task is
+    // in the pairing, constants at delta 0, so the floor stays in the
+    // pooled-rate unit `cell_rate` reads. No A/A reads the preregistered
+    // constant, and today's verdicts.
+    let heldout_tasks: BTreeSet<String> = cells
+        .iter()
+        .filter(|((_, role), _)| *role == "heldout")
+        .flat_map(|(_, v)| v.iter().map(|r| r.task_id.clone()))
+        .collect();
+    let rep_count = |cohort: &str| -> usize {
+        cells.get(&(cohort, "heldout")).map_or(1, |rows| {
+            rows.iter()
+                .filter(|r| is_scored(r))
+                .map(|r| r.raw_i64("repeat_index").unwrap_or(0))
+                .collect::<BTreeSet<i64>>()
+                .len()
+                .max(1)
+        })
+    };
+    let r = rep_count(args.baseline).min(rep_count(args.trial));
+    let base_cell_rows = cells
+        .get(&(args.baseline, "heldout"))
+        .cloned()
+        .unwrap_or_default();
+    let aa = crate::evals_power::aa_floor(&base_cell_rows, &heldout_tasks, r);
+    let floor = match &aa {
+        Ok(f) => f.floor_points / 100.0,
+        Err(_) => NOISE,
+    };
+    let source = match &aa {
+        Ok(_) => "aa_measured",
+        Err(_) => "preregistered",
+    };
+
+    // The power object rides under heldout, the same shape compare emits:
+    // paired per-task deltas over held-out tasks, with the measured floor.
+    let cell_map = |cohort: &str| -> BTreeMap<String, (usize, usize)> {
+        let mut m: BTreeMap<String, (usize, usize)> = BTreeMap::new();
+        if let Some(rows) = cells.get(&(cohort, "heldout")) {
+            for t in &heldout_tasks {
+                let mut acc = (0usize, 0usize);
+                for r in rows.iter().filter(|r| is_scored(r) && r.task_id == *t) {
+                    acc.0 += 1;
+                    acc.1 += r.pass as usize;
+                }
+                m.insert(t.clone(), acc);
+            }
+        }
+        m
+    };
+    let base_map = cell_map(args.baseline);
+    let trial_map = cell_map(args.trial);
+    let p = crate::evals_power::paired(&base_map, &trial_map);
+    let mut rng = crate::evals_power::Rng(crate::evals_power::SEED);
+    let power = match &aa {
+        Ok(f) => crate::evals_power::power_block(&p, &mut rng, r, Some(f), None),
+        Err(skip) => crate::evals_power::power_block(&p, &mut rng, r, None, Some(*skip)),
+    };
+
     // The verdict chain. The power gate reads first: every later label is a
     // claim about a difference, and below the floor a difference is not
     // measurable (the regression and propose shapes below can only fire on
@@ -341,7 +402,7 @@ fn climb_payload(args: &ClimbArgs) -> Result<Value, String> {
                 subst_note(&trial_heldout),
             ),
         )
-    } else if cell_rate(&base_heldout) - cell_rate(&trial_heldout) > NOISE
+    } else if cell_rate(&base_heldout) - cell_rate(&trial_heldout) > floor
         && separated(base_ci, trial_ci)
     {
         (
@@ -352,8 +413,8 @@ fn climb_payload(args: &ClimbArgs) -> Result<Value, String> {
             ),
         )
     } else if train_readable
-        && cell_rate(&trial_train) - cell_rate(&base_train) > NOISE
-        && cell_rate(&trial_heldout) - cell_rate(&base_heldout) <= NOISE
+        && cell_rate(&trial_train) - cell_rate(&base_train) > floor
+        && cell_rate(&trial_heldout) - cell_rate(&base_heldout) <= floor
     {
         (
             "overfit",
@@ -378,11 +439,11 @@ fn climb_payload(args: &ClimbArgs) -> Result<Value, String> {
         // within that floor: a trial whose lower bound sits far under the
         // baseline rate cannot read as a win.
         let trial_lo = trial_ci.map(|(lo, _)| lo).unwrap_or_default();
-        let flat_and_cheaper = heldout_move >= -NOISE
-            && trial_lo >= cell_rate(&base_heldout) - NOISE
+        let flat_and_cheaper = heldout_move >= -floor
+            && trial_lo >= cell_rate(&base_heldout) - floor
             && trial_cost <= base_cost * (1.0 - COST_CUT);
         let better_not_pricier =
-            heldout_move > NOISE && separated(trial_ci, base_ci) && trial_cost <= base_cost;
+            heldout_move > floor && separated(trial_ci, base_ci) && trial_cost <= base_cost;
         if flat_and_cheaper || better_not_pricier {
             // A zero baseline cost has no percent cut to name; the reason
             // then carries the absolute dollars per accepted instead.
@@ -418,7 +479,13 @@ fn climb_payload(args: &ClimbArgs) -> Result<Value, String> {
         "baseline": args.baseline,
         "trial": args.trial,
         "train": {"baseline": base_train, "trial": trial_train},
-        "heldout": {"baseline": base_heldout, "trial": trial_heldout},
+        "heldout": {
+            "baseline": base_heldout,
+            "trial": trial_heldout,
+            "power": power,
+        },
+        "noise_floor": floor * 100.0,
+        "noise_source": source,
         // Lane verification at a glance per cell: a baseline scored on
         // unverified rows while the trial is excluded on verified mismatch
         // is an asymmetric comparison, and the payload must say so where a
@@ -452,6 +519,17 @@ fn print_verdict(v: &Value) {
         v["verdict"].as_str().unwrap_or_default()
     );
     println!("  reason: {}", v["reason"].as_str().unwrap_or_default());
+    let floor = v["noise_floor"].as_f64().unwrap_or(15.0);
+    let source = v["noise_source"].as_str().unwrap_or("preregistered");
+    let cohort = v["heldout"]["power"]["aa"]["cohort"].as_str();
+    let cohort_note = cohort.map(|c| format!(", {c}")).unwrap_or_default();
+    let mdd = v["heldout"]["power"]["mdd_points"].as_f64();
+    let mdd_txt = mdd
+        .map(|m| format!("{m:.1} points"))
+        .unwrap_or_else(|| "unmeasured".to_string());
+    println!(
+        "  noise floor: {floor:.1} points ({source}{cohort_note}), smallest detectable {mdd_txt}"
+    );
     for (role, label) in [("train", "train"), ("heldout", "held-out")] {
         for side in ["baseline", "trial"] {
             let cell = &v[role][side];
