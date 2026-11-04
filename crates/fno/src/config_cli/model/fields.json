@@ -16,6 +16,10 @@
      "default": "%Y%m%d-{slug}-{node}.md"
     },
     {
+     "name": "repo_aliases",
+     "default": {}
+    },
+    {
      "name": "branch",
      "default": {
       "prefix": "fno"
@@ -713,6 +717,14 @@
        "pick_on_launch": false
       },
       "failover": null
+     }
+    },
+    {
+     "name": "github",
+     "default": {
+      "app_id": "",
+      "app_installation_id": "",
+      "app_key_path": "~/.fno/secrets/github-app.pem"
      }
     },
     {
@@ -3014,6 +3026,23 @@
      "default": null
     }
    ]
+  },
+  "GithubBlock": {
+   "extra": "ignore",
+   "fields": [
+    {
+     "name": "app_id",
+     "default": ""
+    },
+    {
+     "name": "app_installation_id",
+     "default": ""
+    },
+    {
+     "name": "app_key_path",
+     "default": "~/.fno/secrets/github-app.pem"
+    }
+   ]
   }
  },
  "field_meta": [
@@ -3022,6 +3051,7 @@
   "state_dir",
   "plans_dir",
   "plans_filename",
+  "repo_aliases",
   "branch.prefix",
   "paths.ledger_json",
   "paths.evals_history",
@@ -3360,6 +3390,9 @@
   "accounts.quota.probe_ttl_seconds",
   "accounts.quota.defer_horizon_minutes",
   "accounts.quota.pick_on_launch",
-  "accounts.failover"
+  "accounts.failover",
+  "github.app_id",
+  "github.app_installation_id",
+  "github.app_key_path"
  ]
 }

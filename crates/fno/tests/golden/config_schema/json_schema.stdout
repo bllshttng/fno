@@ -1013,6 +1013,28 @@
       "title": "GateBlock",
       "type": "object"
     },
+    "GithubBlock": {
+      "description": "GitHub App identity (nested under ``config.github``).",
+      "properties": {
+        "app_id": {
+          "default": "",
+          "title": "App Id",
+          "type": "string"
+        },
+        "app_installation_id": {
+          "default": "",
+          "title": "App Installation Id",
+          "type": "string"
+        },
+        "app_key_path": {
+          "default": "~/.fno/secrets/github-app.pem",
+          "title": "App Key Path",
+          "type": "string"
+        }
+      },
+      "title": "GithubBlock",
+      "type": "object"
+    },
     "GroomBlock": {
       "description": "Daily backlog-grooming pass settings (nested under 'config.groom').\n\nwave 2: `fno backlog groom` (`spawn_worker` in\n   crates/fno-agents/src/backlog/groom.rs) previously spawned with no enable key at all, so it\n   could not be turned off. Default ``True`` matches the spawner's CURRENT\n   effective behavior (it always ran) - shipping this gate changes nothing\n   for an existing user until they explicitly disable it.\n   ",
       "properties": {
@@ -3654,6 +3676,9 @@
     },
     "evals": {
       "$ref": "#/$defs/EvalsBlock"
+    },
+    "github": {
+      "$ref": "#/$defs/GithubBlock"
     },
     "groom": {
       "$ref": "#/$defs/GroomBlock"

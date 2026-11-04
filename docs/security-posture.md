@@ -52,10 +52,17 @@ What the guard does not cover: an effect hidden inside a script or a raw `curl` 
 
 ## Code scanning dispositions
 
-CodeQL runs as GitHub default setup, which takes no config file. A rule class judged not to apply is therefore dismissed per alert, with the reason below.
+CodeQL runs through advanced setup (`.github/workflows/codeql.yml` with `.github/codeql/codeql-config.yml`). The analyze job is skipped until the repository switches from default setup to advanced setup. The gate is the `CODEQL_ADVANCED_SETUP` repository variable. Between merge and the switch, default setup keeps its weekly scan and the skipped job keeps main green. Rule classes judged not to apply are excluded in the config or dismissed per alert, with the reasons below.
 
+- **`rust/cleartext-logging` (404 alerts, excluded in the config).** False positive. Every source expression is an identifier printed to the user's own terminal: account arguments, session ids, uuids, account names. The twelve hits naming a secret, password, certificate or key are test assertion messages or counts. No hit writes key material to a log file. The same config ignores test trees: `paths-ignore` covers `crates/*/tests/**`, `cli/tests/**` and `**/fixtures/**`. That keeps `py/clear-text-storage-sensitive-data` (1 alert, a test fixture) out of every run.
+- **`actions/cache-poisoning` (10 alerts, dismissed).** False positive. Both workflows trigger only on `workflow_dispatch` and `workflow_call`. The one caller passes a pinned main sha or rc tag as `ref`. No fork or pull-request code reaches a cacheable step.
+- **`js/xss` (2 alerts) and `js/xss-through-dom` (1 alert), dismissed.** False positive. The mux web pages set `innerHTML` only from `renderRow` output: text passes the `esc()` escape helper and colors are numeric. The backlog link href is built from server-rendered data and `encodeURIComponent`.
+- **`js/polynomial-redos` (1 alert) and `py/redos` (1 alert), fixed in code.** The lazy regexes went quadratic on nested-unclosed input. Both promise readers and the graphql inventory gate now use a linear scan or first-character-disjoint value tokens.
+- **`actions/missing-workflow-permissions` (25 alerts), fixed in code.** The five workflows the alerts name carry top-level `permissions:` blocks now.
 - **`rust/hard-coded-cryptographic-value` (8 alerts, 447-454).** False positive. The query reads the parameter name `nonce` in `verify_child_promise` as key material. The value is a session promise token that the code compares by equality with a stored journal string. No cipher, key or MAC consumes it. All eight hits are test literals (`crates/fno-agents/tests/verify_evidence_parity.rs`, and the `#[cfg(test)]` module in `crates/fno-agents/src/verify_evidence.rs`). Dismissal reason: `used in tests`.
 - **`rust/command-line-injection` (1 alert, 446).** False positive. The attention API clears an item with an argv vector, never a shell. The `id` must match an open item from `fno-agents needs --items --json`. The `--answer` value is taken verbatim by the clear command. The route needs a bearer sink token and binds to 127.0.0.1. Dismissal reason: `false positive`.
+
+Critical-severity alerts are held for the maintainer's decision and stay out of these dispositions.
 
 ## Future considerations
 

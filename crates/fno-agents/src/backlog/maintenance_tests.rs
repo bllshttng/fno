@@ -480,3 +480,71 @@ fn the_abandoned_leg_settles_a_gone_row_and_holds_a_fresh_one() {
     );
     assert!(!truthy(fx.row("ab-held01")["sessions"][0].get("ended_at")));
 }
+
+#[test]
+fn the_rename_sweep_rewrites_open_rows_through_the_alias_and_skips_claimed() {
+    let old = "https://github.com/bllshttng/fno/pull/4327";
+    let new = "https://github.com/fnodotdev/fno/pull/4327";
+    let new2 = "https://github.com/fnodotdev/fno/pull/4411";
+    let alias = |slug: &str| {
+        if slug == "bllshttng/fno" {
+            Some("fnodotdev/fno".to_string())
+        } else {
+            None
+        }
+    };
+    let entries = vec![
+        node(
+            "x-old-open",
+            json!({"status": "in_review", "pr_number": 4327, "pr_url": old}),
+        ),
+        node(
+            "x-old-open-2",
+            json!({"status": "in_review", "pr_number": 4411,
+                   "pr_url": "https://github.com/bllshttng/fno/pull/4411"}),
+        ),
+        node(
+            "x-old-done",
+            json!({"status": "done", "completed_at": "2026-11-01T00:00:00Z",
+                   "pr_number": 1,
+                   "pr_url": "https://github.com/bllshttng/fno/pull/1"}),
+        ),
+    ];
+    let fixes = detect_rename_fixes(&entries, &alias);
+    assert_eq!(
+        fixes.len(),
+        2,
+        "both open nodes sharing one old slug rewrite; a closed row keeps its history"
+    );
+
+    // The locked apply: only the open row rewrites, a claim skips.
+    let cands = Candidates {
+        renames: &fixes,
+        rescope: &[],
+        prune: &[],
+        pr_urls: &[],
+        twins: &[],
+        shapes: &[],
+        defers: &[],
+        stale_ready: &[],
+        ready_staleness_days: 30,
+    };
+    let mut ents = entries.clone();
+    let claimed: BTreeSet<String> = ["x-old-open".to_string()].into();
+    let applied = cands.apply(&mut ents, &claimed);
+    assert_eq!(ents[0]["pr_url"], json!(old), "a claimed node is left");
+    assert_eq!(ents[1]["pr_url"], json!(new2), "an unclaimed node rewrites");
+    assert_eq!(applied.renames.len(), 1);
+
+    let free = BTreeSet::new();
+    let applied = cands.apply(&mut ents, &free);
+    assert_eq!(ents[0]["pr_url"], json!(new));
+    assert_eq!(ents[1]["pr_url"], json!(new2));
+    assert_eq!(
+        ents[2]["pr_url"],
+        json!("https://github.com/bllshttng/fno/pull/1")
+    );
+    // The second apply only rewrites the node still carrying the old url;
+    // a row the first apply moved matches neither old_url nor changes.
+    assert_eq!(applied.renames.len(), 1);
+}

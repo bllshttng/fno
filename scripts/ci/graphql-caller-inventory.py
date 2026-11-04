@@ -21,7 +21,11 @@ PATTERNS = {
         r'(?:["\']gh["\']\s*,\s*)?["\']api["\']\s*,\s*["\']graphql["\']'
     ),
     "shell-pr": re.compile(
-        r"\bgh\s+(?:(?:-R|--repo|--hostname)(?:=|\s+)?\S+\s+)*"
+        # The value token's alternatives are disjoint by first character
+        # (whitespace, '=', or any other nonspace). Overlapping
+        # alternatives here give the * loop two parses per flag and the
+        # match goes exponential on nested-unclosed input (CodeQL py/redos).
+        r"\bgh\s+(?:(?:-R|--repo|--hostname)(?:[^\s=]\S*|=\S+|\s+\S+)\s+)*"
         r"pr\s+(?:view|checks|list|status)\b"
     ),
     "shell-api": re.compile(r"\bgh\s+api\b[^\n]*\bgraphql\b"),
