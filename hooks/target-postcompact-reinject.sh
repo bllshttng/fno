@@ -120,31 +120,21 @@ if [[ -n "$BINDING_FILE" ]]; then
     # The verifier decides what may be re-emitted: an edited digest, stage, or
     # constraint set is a corrupt declared binding and renders NOTHING (the
     # fields below are the verifier's answer, never the raw file's).
-    VERIFIED="$(python3 - "$BINDING_FILE" <<'PY' 2>/dev/null
-import json, subprocess, sys
-try:
-    with open(sys.argv[1]) as fh:
-        binding = json.load(fh)
-except Exception:
-    sys.exit(0)
-try:
-    out = subprocess.run(
-        ["fno-agents", "task-context-show"],
-        input=json.dumps({"binding": binding}),
-        capture_output=True, text=True, timeout=20,
-    )
-    answer = json.loads(out.stdout)
-except Exception:
-    sys.exit(0)
-if not answer.get("ok"):
-    sys.exit(0)
-print(str(binding.get("binding_digest", "unknown")))
-print(str(binding.get("stage", "unknown")))
-for c in binding.get("required_constraints", [])[:10]:
-    if isinstance(c, str) and c.strip():
-        print("- " + c)
-PY
-)"
+    VERIFIED=""
+    BINDING_JSON="$(jq -ce 'if type == "object" then . else error("not a binding") end' "$BINDING_FILE" 2>/dev/null || true)"
+    if [[ -n "$BINDING_JSON" ]] && command -v fno-agents >/dev/null 2>&1; then
+        # shellcheck source=../scripts/lib/with-timeout.sh
+        source "$SOURCE_ROOT/scripts/lib/with-timeout.sh" 2>/dev/null || with_timeout() { shift; "$@"; }
+        ANSWER="$(jq -cn --argjson b "$BINDING_JSON" '{binding: $b}' \
+            | with_timeout 20 fno-agents task-context-show 2>/dev/null || true)"
+        if printf '%s' "$ANSWER" | jq -e '.ok | . != null and . != false and . != 0 and . != ""' >/dev/null 2>&1; then
+            VERIFIED="$(printf '%s' "$BINDING_JSON" | jq -r '
+                (.binding_digest // "unknown" | tostring),
+                (.stage // "unknown" | tostring),
+                ((.required_constraints // [])[:10][]
+                    | select(type == "string" and test("\\S")) | "- " + .)' 2>/dev/null || true)"
+        fi
+    fi
     if [[ -n "$VERIFIED" ]]; then
         BDIGEST="$(printf '%s\n' "$VERIFIED" | sed -n 1p)"
         BSTAGE="$(printf '%s\n' "$VERIFIED" | sed -n 2p)"
