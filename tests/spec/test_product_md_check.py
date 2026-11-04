@@ -149,7 +149,7 @@ def test_product_md_fallback_satisfies_check(fallback_dir):
 
 def test_todo_dominance_treated_as_stale():
     """Gemini fix (PR #217 round 1): PRODUCT.md > 200 bytes but >25% [TODO] tokens
-    must be treated as stale, matching orchestrator.py's is_product_md_stale.
+    must be treated as stale, matching product_md_stale in wave_ready.rs.
     Without this, /blueprint silently passes a stub and /operator surprises the
     user by hard-blocking at dispatch time."""
     with tempfile.TemporaryDirectory() as tmp:

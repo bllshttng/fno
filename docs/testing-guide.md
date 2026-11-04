@@ -41,7 +41,6 @@ Located in `scripts/`, these shell test scripts cover core plugin features:
 | `test-target-state-recovery.sh` | State file recovery after crashes or corruption |
 | `test-thrashing-detection.sh` | Thrashing loop detection (unit) |
 | `test-thrashing-integration.sh` | Thrashing loop detection (integration, end-to-end) |
-| `test-parallel-wave-conflicts.sh` | Parallel wave conflict detection for shared outputs |
 | `test-scan-antipatterns.sh` | Antipattern scanning correctness in plans |
 | `test-sync-codex-agents.sh` | Codex agent synchronization from shared sources |
 | `test-validate-plan.sh` | Plan validation logic and format checking |
@@ -78,7 +77,7 @@ Three validation scripts enforce structural and process rules:
 
 | Script | Purpose |
 |--------|---------|
-| `skills/execute/orchestrator.py` | Wave orchestration engine with a testable CLI interface |
+| `crates/fno-agents/src/wave_ready.rs` | Wave verbs behind `fno-agents wave` |
 | `scripts/roadmap-tasks.py` | Task lifecycle management - status tracking, dependency resolution |
 | `scripts/metrics/register-task.py` | Task registration for metrics tracking |
 | `scripts/metrics/session-cost.py` | Session cost calculation and reporting |
@@ -113,17 +112,14 @@ bash scripts/test-thrashing-detection.sh
 bash scripts/lib/test_config.sh
 ```
 
-### Orchestrator CLI
+### Wave CLI
 
 ```bash
-# Show help and available options
-python skills/execute/orchestrator.py --help
+# Print the dispatchable tasks of a plan as JSON
+fno-agents wave ready path/to/plan.md
 
-# Parse and validate a plan's execution strategy
-python skills/execute/orchestrator.py path/to/00-INDEX.md
-
-# Route a task description to the correct agent
-python skills/execute/orchestrator.py --agent "Build React component" --tags ui,frontend
+# Print the dispatchable tasks against a STATE.md
+fno-agents wave ready path/to/plan.md --state path/to/STATE.md
 ```
 
 ### Reading a gate's result (assert a positive marker)

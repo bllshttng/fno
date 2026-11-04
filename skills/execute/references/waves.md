@@ -196,7 +196,7 @@ For each DISPATCH ROUND, drive off the ready set, not wave order:
 # reads): cross-session done/in_progress task rows then join this session's
 # STATE.md [x] as completions and claims. A failed node read degrades to
 # STATE.md only - proceed, never stall on the richer read.
-READY_ARGS=(--ready --state .fno/STATE.md)
+READY_ARGS=(--state .fno/STATE.md)
 if [[ -n "${NODE_ID:-}" ]]; then
     READY_ARGS+=(--node "$NODE_ID")
 fi
@@ -219,7 +219,7 @@ fi
 if [[ -n "$WORKER_BAND" ]]; then
     READY_ARGS+=(--band "$WORKER_BAND")
 fi
-READY_JSON=$(python3 skills/execute/orchestrator.py "$PLAN_PATH" "${READY_ARGS[@]}")
+READY_JSON=$(fno-agents wave ready "$PLAN_PATH" "${READY_ARGS[@]}")
 ```
 
 A task appears under `ready` when its effective blockers are all complete and no peer holds it. A declared `blocked_by` list wins, including an explicit empty list. A task without that key derives every task in the previous wave. Inside a parallel wave, `collision.partition` adds derived edges: tasks sharing a file (or a hidden shared output root) serialize in wave order, and a task with no parseable file list waits for every evaluated sibling. Live foreign task claims appear under `claimed`. Stale or self-owned claims are re-offered. Tasks held back by unfinished blockers appear under `blocked_on` with those blockers and re-enter `ready` on a later round, so they need no action now. Unknown task-row statuses appear under `blocked` and never dispatch. Dispatch every entry under `ready` before running the query again:
@@ -289,21 +289,15 @@ and failure modes.
 Before dispatching `frontend-executor` for any task whose resolved executor is
 `impeccable`, re-check PRODUCT.md presence and freshness at dispatch time:
 
-```python
-from orchestrator import check_product_md_for_dispatch
-
-gate_passed = check_product_md_for_dispatch(
-    repo_root=Path(repo_root),
-    plan_path=plan_path,
-    stages=task_stages,  # e.g. ["craft", "critique", "harden"]
-)
-if not gate_passed:
-    # <help> has already been emitted to stdout.
-    # Return early - do NOT dispatch frontend-executor.
-    return
+```bash
+# --stages is the task's impeccable stages, comma-separated.
+if ! fno-agents wave product-gate --repo "$REPO_ROOT" --plan "$PLAN_PATH" --stages craft,critique,harden; then
+    # The <help> is already on stdout. Do NOT dispatch frontend-executor.
+    exit 0
+fi
 ```
 
-The function searches in order: `${REPO_ROOT}/PRODUCT.md`,
+The gate searches in order: `${REPO_ROOT}/PRODUCT.md`,
 `${REPO_ROOT}/.agents/context/PRODUCT.md`, `${REPO_ROOT}/docs/PRODUCT.md`.
 It treats the file as stale if it is shorter than 200 chars or if `[TODO]`
 markers make up more than 25% of its content (mirrors /impeccable's loader
@@ -463,10 +457,10 @@ already fired from `resolve-executor.sh` at dispatch; `run_summary` fires from
 
 ```bash
 # task_done with the parsed outcome (SUCCESS | DONE_WITH_CONCERNS | FAILED):
-python3 "${SKILL_DIR:-skills/execute}/orchestrator.py" --emit-boundary task_done \
+fno-agents wave emit-boundary task_done \
   --task "{N.M}" --outcome "{status}" --data '{"commit":"{sha}","concerns":{k}}'
 # blocked on a RESULT: BLOCKED return (or a <help> distress emission):
-python3 "${SKILL_DIR:-skills/execute}/orchestrator.py" --emit-boundary blocked \
+fno-agents wave emit-boundary blocked \
   --task "{N.M}" --data '{"reason":"{why}"}'
 ```
 

@@ -25,7 +25,6 @@
 #   - test_*.py                       - sandboxed tests
 #   - scripts/metrics/*.py            - standalone analysis scripts (not in CLI)
 #   - scripts/discovery-brief.py      - standalone script with docstring reference
-#   - scripts/orchestrator.py / operator/ - standalone scripts
 #
 # Bash (entire-file or pattern exclusions):
 #   - scripts/lib/paths.sh            - the generated stub

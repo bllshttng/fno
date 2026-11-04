@@ -662,7 +662,7 @@ fn validate_acceptance_evidence(
 /// Validate the representation consumed by workers and wave scheduling.
 ///
 /// `acceptance_contract` overrides the frontmatter value so a caller can
-/// validate a PROPOSED state without writing it first (mutate_doc.finalize
+/// validate a PROPOSED state without writing it first (`plan-cli mutate --finalize`
 /// passes `compiled-v1` to validate a design->ready promotion before it
 /// lands). When None the contract is read from the frontmatter. Only a
 /// `compiled-v1` plan gets strict acceptance-reference resolution; an

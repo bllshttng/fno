@@ -78,7 +78,7 @@ is known):
    node is the one PR. Still record this in `## Delivery Groups`
    (AC1-EDGE: never force a split).
 4. Write a `## Delivery Groups` section to the doc (this section is owned by
-   the decomposition step, NOT by `mutate_doc.py`; it is preserved across
+   the decomposition step, NOT by `fno-agents plan-cli mutate`; it is preserved across
    `rewrite` re-runs). Format:
    ```markdown
    ## Delivery Groups

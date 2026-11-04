@@ -2,7 +2,7 @@
 
 `skills/target/scripts/handoff.sh` section 8d appends this session's id to the
 plan's `session_ids`. It is a separate implementation from `_stamp.py` and
-`mutate_doc.py`, and it is reachable on its own - so a round-trip guard that
+`fno do plan mutate`, and it is reachable on its own - so a round-trip guard that
 covers only the other two is decorative.
 
 These tests exec the real embedded snippet extracted from the shipped script,

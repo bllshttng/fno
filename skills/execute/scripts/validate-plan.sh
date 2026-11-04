@@ -850,7 +850,7 @@ validate_kill_criteria_block() {
         }
         # A new list item marker "- " - accept it indented ("  - ", hand-written)
         # or at column 0 ("- ", the PyYAML default block-sequence dump from
-        # mutate_doc.py). Both are valid YAML under kill_criteria.
+        # plan-cli mutate). Both are valid YAML under kill_criteria.
         /^[[:space:]]*-[[:space:]]/ {
             flush_entry()
             idx++
@@ -1433,7 +1433,7 @@ fi
 # -------------------------------------------------------------------
 # Step 2e names candidate routes and the facts nobody measured, and /target
 # settles them before code. Skill prose alone does not hold it: the design-doc
-# path runs mutate_doc.py straight to an Execution Strategy. The markers are
+# path runs plan-cli mutate straight to an Execution Strategy. The markers are
 # the `## Routes` and `## Unknowns` headings. A plan dated on or before the
 # routes gate may still carry the older `## Design` section instead. A doc
 # still at status: design has not been blueprinted yet, so the gate waits.
@@ -2174,7 +2174,7 @@ fi
 # been dispatchable-planless ever since. On a passing run, when the
 # frontmatter names a node, print the exact bind command. No graph read:
 # this stays a check, and re-running the bind is idempotent. The id is read
-# with the same node-else-claims rule mutate_doc.py binds by (ported from
+# with the same node-else-claims rule plan-cli mutate binds by (ported from
 # plan_claims, crates/fno-agents/src/backlog/session_cli.rs).
 _fm_node_id() {
     awk '

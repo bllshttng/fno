@@ -185,8 +185,8 @@ Then read what already moves on the same files. Run `fno do pr list --state open
 3. **Write** the plan.
 
    - **A design doc was supplied** (mutate-in-place, the common path): keep its
-     existing path unchanged - `mutate_doc.py` writes back to the same file
-     (`os.replace` onto the resolved path), so an already-node-bearing name is
+     existing path unchanged - `fno-agents plan-cli mutate` writes back to the same file
+     (an atomic rename onto the resolved path), so an already-node-bearing name is
      preserved as-is and the `-<node-id>` suffix is never dropped or duplicated
      into `…--.md` (US4). Do NOT rename a supplied doc.
    - **Creating fresh** (no design doc): write to the path printed by
@@ -213,7 +213,7 @@ Then read what already moves on the same files. Run `fno do pr list --state open
    runtime surface inference (overridable via `FNO_EXECUTOR_OVERRIDE`).
 
    **Enrich the Execution Strategy before it becomes executable.**
-   Run `mutate_doc.py` with `--draft`; it produces the deterministic wave/task skeleton while keeping a design-status document in `design`.
+   Run `fno-agents plan-cli mutate "$PLAN_PATH" --draft`; it produces the deterministic wave/task skeleton while keeping a design-status document in `design`.
    On the full-context main thread, replace every placeholder and populate each task's `surface`, concrete `verify` command, and `acceptance` list from the design and inspected codebase.
 
    **Then ask the join posture.** The trigger is every plan that carries an `## Execution Strategy`. One question, one key: `join: manual | auto   # default manual`.
@@ -224,12 +224,11 @@ Then read what already moves on the same files. Run `fno do pr list --state open
 
    Full body: [references/blueprint-gates.md](references/blueprint-gates.md#join-posture-step-3-every-plan-carrying-an-execution-strategy).
 
-   Then validate the exact saved file before collision checking or intake. `mutate_doc.py` runs through the same interpreter ladder `validate-plan.sh` uses (`FNO_PYTHON`, then the source checkout's `cli/.venv`): a bare `python3` dies with `ModuleNotFoundError: No module named 'pydantic'` right after the validator prints PASS on machines whose system python lacks it (reproduced 2026-09-11). Resolve the interpreter once, then chain:
+   Then validate the exact saved file before collision checking or intake:
 
    ```bash
-   FINALIZE_PY="${FNO_PYTHON:-$( [[ -x "$(dirname "$SKILL_DIR")/../cli/.venv/bin/python" ]] && echo "$(dirname "$SKILL_DIR")/../cli/.venv/bin/python" || echo python3 )}"
    bash "${SKILL_DIR}/scripts/validate-plan.sh" "$PLAN_PATH" \
-     && "$FINALIZE_PY" "${SKILL_DIR}/scripts/mutate_doc.py" "$PLAN_PATH" --finalize
+     && fno-agents plan-cli mutate "$PLAN_PATH" --finalize
    fno doctor observer judge --plan "$PLAN_PATH" --node "${CLAIMS_ID:-}" || true
    ```
 
@@ -501,11 +500,11 @@ Modifiers are composable in any order: `/blueprint quick greenfield rewrite <doc
 
 ### Script invocation
 
-The mutation is implemented in `skills/blueprint/scripts/mutate_doc.py`.
+The mutation is implemented in `crates/fno-agents/src/plan_doc/mutate.rs`.
 Arguments mirror the modifiers above:
 
 ```bash
-python3 skills/blueprint/scripts/mutate_doc.py <doc-path> \
+fno-agents plan-cli mutate <doc-path> \
   [--mode greenfield|brownfield|auto] \
   [--rewrite] \
   [--draft | --finalize] \
@@ -517,7 +516,7 @@ python3 skills/blueprint/scripts/mutate_doc.py <doc-path> \
 Exit codes:
 - `0` success
 - `1` doc already at status:ready without --rewrite; or the argument is not a path or names a missing file (remedy: `fno do plan path`)
-- `2` section ownership violation
+- `2` section ownership violation, or a bad argument (the usage line names it)
 - `3` frontmatter status missing / invalid
 
 ### Section ownership
