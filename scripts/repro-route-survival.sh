@@ -20,7 +20,14 @@ set -euo pipefail
 
 root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 scratch="$(mktemp -d /tmp/fno-route-repro.XXXXXX)"
-trap 'rm -rf "$scratch"' EXIT
+scratch_daemon_pid=""
+cleanup() {
+  # The lazy-started scratch daemon is this run's child; it never outlives
+  # the scratch home it serves.
+  [[ -n "$scratch_daemon_pid" ]] && kill "$scratch_daemon_pid" 2>/dev/null
+  rm -rf "$scratch"
+}
+trap cleanup EXIT
 
 PRIMARY="e6f78b98-e594-47ed-ad81-84f8a78b8bb7"
 FORK="f00baa11-2222-4333-8444-555566667777"
@@ -97,9 +104,16 @@ fno_agents() {
 }
 
 printf '%s\n' 'repro 1/5: the additive fork SessionStart lands both ids on one row'
-uv run --project "$root_dir/cli" python -m fno.agents.register_session \
-  --harness claude --session-id "$FORK" --cwd "$scratch/work" \
-  --agent-self repro-router > "$scratch/out/sessionstart.out" 2> "$scratch/out/sessionstart.err"
+# The report client never lazy-starts a daemon (a session start must never
+# block on one), so a scratch daemon comes up first: any daemon-bound call
+# starts it pinned to FNO_AGENTS_HOME, and the report then lands on it.
+fno_agents list --json > "$scratch/out/list.json" 2> "$scratch/out/list.err" \
+  || fail "scratch daemon lazy-start failed: $(cat "$scratch/out/list.err")"
+scratch_daemon_pid="$(fno_agents status --json 2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("daemon",{}).get("pid",""))' 2>/dev/null || true)"
+fno_agents report --kind session --harness claude --agent-self repro-router \
+  --session-id "$FORK" --wait-row \
+  > "$scratch/out/sessionstart.out" 2> "$scratch/out/sessionstart.err" \
+  || fail "the session report refused: $(cat "$scratch/out/sessionstart.err")"
 reg="$scratch/.fno/agents/registry.json"
 grep -q "\"harness_session_id\": \"$PRIMARY\"" "$reg" || fail "the primary id was replaced"
 grep -q "\"related_session_id\": \"$FORK\"" "$reg" || fail "the fork id did not land on the row"

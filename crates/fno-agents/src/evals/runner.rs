@@ -476,11 +476,18 @@ const SEALED_WORKER_ENV: [(&str, &str); 5] = [
     ("RIPGREP_CONFIG_PATH", ""),
 ];
 
+/// The permission mode an unattended footnote evals lane runs in. The other
+/// lane doors run headless workers bypassed (the claude one-shot and opencode
+/// pass their skip flag, zcode defaults its yolo mode), so the footnote lane
+/// matches them through its launch spec. A footnote spawn without the flag
+/// keeps the harness default; the mode is never a default.
+const FOOTNOTE_LANE_PERMISSION_MODE: &str = "bypassPermissions";
+
 /// The spawn argv: the substrate's own --timeout is the first guard; a
 /// lane is a complete coordinate (its harness wins over the provider
 /// default, and its route/account ride along). `--` fences the prompt, or
-/// with `harness_flags` (or a footnote lane model) fences those and the
-/// prompt sits before it.
+/// with `harness_flags` (or a footnote lane model or permission mode) fences
+/// those and the prompt sits before it.
 fn spawn_argv(
     name: &str,
     workdir: &str,
@@ -518,7 +525,12 @@ fn spawn_argv(
     let lane_model = lane
         .filter(|l| l.harness == "footnote" && !l.model.is_empty())
         .map(|l| l.model.clone());
-    if harness_flags.is_empty() && lane_model.is_none() {
+    // The unattended footnote lane runs bypassed like every other lane door;
+    // the mode rides the fence so the launch spec carries it.
+    let lane_mode = lane
+        .filter(|l| l.harness == "footnote")
+        .map(|_| FOOTNOTE_LANE_PERMISSION_MODE);
+    if harness_flags.is_empty() && lane_model.is_none() && lane_mode.is_none() {
         argv.push("--".into());
         argv.push(prompt.into());
     } else {
@@ -529,6 +541,10 @@ fn spawn_argv(
         if let Some(m) = lane_model {
             argv.push("-m".into());
             argv.push(m);
+        }
+        if let Some(m) = lane_mode {
+            argv.push("--permission-mode".into());
+            argv.push(m.to_string());
         }
         argv.extend_from_slice(harness_flags);
     }
@@ -755,7 +771,35 @@ pub struct LaneRow {
 /// declared lanes (the Python repr shape, single quotes).
 pub fn resolve_lane(name: &str) -> Result<LaneRow, String> {
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-    lane_from_inventory(&crate::route_gather::inventory(&cwd), name)
+    let lane = lane_from_inventory(&crate::route_gather::inventory(&cwd), name)?;
+    if lane.harness == "claude" && !lane.account.is_empty() {
+        if let Ok(accounts) = crate::accounts::records::load(None, &cwd) {
+            let ids: Vec<&str> = accounts
+                .records
+                .iter()
+                .filter(|r| r.harness == "claude")
+                .map(|r| r.id.as_str())
+                .collect();
+            lane_account_check(&lane, &ids)?;
+        }
+    }
+    Ok(lane)
+}
+
+/// A claude lane's `account` must name a registered record. A route such as
+/// `zai/...` is a vendor, not an account: naming it as one made every spawn on
+/// the lane exit 2 after the gate had already queued its trials.
+fn lane_account_check(lane: &LaneRow, claude_ids: &[&str]) -> Result<(), String> {
+    if claude_ids.contains(&lane.account.as_str()) {
+        return Ok(());
+    }
+    Err(format!(
+        "lane '{}' names account '{}', which is not a registered claude account ({}); \
+         drop `account` from its routing.models row or register it",
+        lane.name,
+        lane.account,
+        claude_ids.join(", ")
+    ))
 }
 
 fn lane_from_inventory(inv: &serde_json::Value, name: &str) -> Result<LaneRow, String> {
@@ -1166,6 +1210,18 @@ mod tests {
     }
 
     #[test]
+    fn a_claude_lane_naming_an_unregistered_account_is_refused_by_name() {
+        let lane = LaneRow {
+            name: "zai-flash".into(),
+            account: "zai".into(),
+            ..LaneRow::default()
+        };
+        assert!(lane_account_check(&lane, &["makers", "zai"]).is_ok());
+        let err = lane_account_check(&lane, &["makers", "readyrule"]).unwrap_err();
+        assert!(err.contains("'zai'") && err.contains("makers, readyrule"));
+    }
+
+    #[test]
     fn a_lane_resolves_from_the_inventory_rows_and_a_miss_names_the_declared_ones() {
         let inv = serde_json::json!({"rows": [
             {"name": "zai-flash", "harness": "claude", "route": "zai/glm", "account": "zai"},
@@ -1452,6 +1508,12 @@ mod tests {
             "the prompt sits before the fence"
         );
         assert_eq!(&argv[fence + 1..fence + 3], &["-m", "glm-5.3-flash"]);
+        // The unattended footnote lane runs bypassed like every other lane
+        // door: the mode rides the fence so the launch spec carries it.
+        assert_eq!(
+            &argv[fence + 3..fence + 5],
+            &["--permission-mode", "bypassPermissions"]
+        );
         // The model is footnote-only: another harness's lane model never rides.
         let claude_lane = LaneRow {
             name: "c".into(),
@@ -1469,6 +1531,22 @@ mod tests {
             &[],
         );
         assert_eq!(argv.last().unwrap(), "p", "no fence shape without a model");
+        assert!(!argv.contains(&"-m".to_string()));
+        // The mode is footnote-only too: another harness's lane never carries
+        // it (each door owns its own unattended posture).
+        assert!(!argv.contains(&"--permission-mode".to_string()));
+        // A footnote lane with no model still gets the fence for the mode.
+        let bare = LaneRow {
+            name: "fn2".into(),
+            harness: "footnote".into(),
+            ..Default::default()
+        };
+        let argv = spawn_argv("n", "/tmp/wt", 60, Some("footnote"), Some(&bare), "p", &[]);
+        let fence = argv.iter().position(|a| a == "--").unwrap();
+        assert_eq!(
+            &argv[fence + 1..fence + 3],
+            &["--permission-mode", "bypassPermissions"]
+        );
         assert!(!argv.contains(&"-m".to_string()));
     }
 }

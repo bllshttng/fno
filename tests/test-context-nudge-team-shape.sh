@@ -71,12 +71,14 @@ export REGISTRY_SEED_BIN="$AGENTS_BIN"
 source "$REPO_ROOT/tests/helpers/registry-seed.sh"
 # Seed at this writer's schema. HOME is the sandbox, so this IS the shared
 # registry, and a source-built writer refuses to raise it from an older one.
-REG_V="$(PYTHONPATH="$FNO_SRC" "$FNO_PYTHON" -c 'from fno.agents.registry import SCHEMA_VERSION; print(SCHEMA_VERSION)')"
+# The schema version's owner is the canonical TOML (crates/fno-agents); the
+# Python constant's module is deleted.
+REG_V="$(sed -n 's/^version = //p' "$REPO_ROOT/crates/fno-agents/src/registry_schema.toml" | tr -d ' ')"
 export REG_V
 
 SBX="$(mktemp -d)"
 trap 'rm -rf "$SBX" "$BINDIR"' EXIT
-mkdir -p "$SBX/.fno/agents" "$SBX/.fno/latches"
+mkdir -p "$SBX/.fno/agents" "$SBX/.fno/state/latches"
 printf 'schema_version: 1\nconfig:\n  state_dir: %s/.fno/\n' "$SBX" > "$SBX/.fno/settings.yaml"
 touch "$SBX/.fno/.path-migration-done"
 printf '[target.handoff]\nlead_used_pct_trigger = 40\nused_pct_trigger = 50\n' > "$SBX/.fno/config.toml"
@@ -112,7 +114,7 @@ payload() {
     '{session_id:$s, transcript_path:$t, cwd:"/repo", hook_event_name:"Stop", stop_hook_active:false}'
 }
 run_hook() {
-  rm -f "$SBX/.fno/latches"/.context-nudge-* 2>/dev/null
+  rm -f "$SBX/.fno/state/latches"/.context-nudge-* 2>/dev/null
   OUT=$(printf '%s' "$1" | bash "$HOOK" 2>/dev/null); RC=$?
 }
 ROWS_BIN="${FNO_BIN:-}"

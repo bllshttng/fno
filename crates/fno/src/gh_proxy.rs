@@ -2,7 +2,7 @@
 //! command to the Python shell.
 //!
 //! The proxy is a two-line shim, `exec <fno-agents> gh "$@"`, in the state
-//! root's `bin/github-cli` dir. The front door puts that dir first on PATH,
+//! root's `install/bin/github-cli` dir. The front door puts that dir first on PATH,
 //! names it in `FNO_GH_PROXY_DIR`, and drops `FNO_REAL_GH`, so every `gh` the
 //! Python shell or its children run goes through the quota broker. The shim
 //! names fno-agents by absolute path: a reinstall that dropped the old
@@ -20,7 +20,7 @@ pub const PROXY_DEPTH_ENV: &str = "FNO_GH_PROXY_DEPTH";
 const REAL_GH_ENV: &str = "FNO_REAL_GH";
 const LEGACY_SHIM: &str = "#!/bin/sh\nexec fno-gh-proxy \"$@\"\n";
 
-/// The state root's `bin/github-cli` dir: `$FNO_STATE_DIR` or `$HOME/.fno`,
+/// The state root's `install/bin/github-cli` dir: `$FNO_STATE_DIR` or `$HOME/.fno`,
 /// never a settings load. The quota broker reads the same dir.
 pub fn proxy_dir() -> Option<PathBuf> {
     let root = std::env::var_os("FNO_STATE_DIR")

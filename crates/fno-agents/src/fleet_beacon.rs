@@ -22,11 +22,14 @@
 //! A seat row carries the beat that wrote it, and a read keeps it only when
 //! that beat is still the machine's newest, so a seat left behind by a newer
 //! daemon never attaches to an old daemon's session of the same name.
-//! Two more side tables follow the same rule. `fleet_turn` carries a
+//! Three more side tables follow the same rule. `fleet_turn` carries a
 //! session's last message and last prompt text, its user turn count and its
 //! progress, so a remote session's drawer shows them. `fleet_machine_facts`
 //! carries the machine's display name (`fleet.name`) and its provider lanes,
-//! without the holder names. The text goes only to the user's own primary.
+//! without the holder names. `fleet_mark` carries the facts a sideline sorts,
+//! groups and prices a row on: the session's workspace name, whether it needs
+//! input, whether the user pinned it, and the cost, token and compaction counts
+//! its own machine's mux serves. The text goes only to the user's own primary.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -102,6 +105,18 @@ CREATE TABLE IF NOT EXISTS fleet_turn (
     beat_at INTEGER NOT NULL,
     PRIMARY KEY (machine_id, name)
 );
+CREATE TABLE IF NOT EXISTS fleet_mark (
+    machine_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    workspace TEXT,
+    needs_input INTEGER,
+    pinned INTEGER,
+    cost_cents INTEGER,
+    tokens INTEGER,
+    compactions INTEGER,
+    beat_at INTEGER NOT NULL,
+    PRIMARY KEY (machine_id, name)
+);
 CREATE TABLE IF NOT EXISTS fleet_machine_facts (
     machine_id TEXT PRIMARY KEY,
     display_name TEXT,
@@ -117,6 +132,8 @@ const SEAT_COLUMNS: &str = "machine_id, name, session_id, model, model_basis, st
      last_message_at, cwd, project, role, context_pct, beat_at";
 const TURN_COLUMNS: &str =
     "machine_id, name, last_message, last_prompt, user_turns, progress, beat_at";
+const MARK_COLUMNS: &str = "machine_id, name, workspace, needs_input, pinned, cost_cents, \
+     tokens, compactions, beat_at";
 const FACTS_COLUMNS: &str = "machine_id, display_name, lanes, beat_at";
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -182,6 +199,20 @@ pub struct Session {
     pub last_prompt: Option<String>,
     pub user_turns: Option<i64>,
     pub progress: Option<String>,
+    /// The sideline marks, from `fleet_mark`. Null for a machine whose daemon
+    /// predates the table. `workspace` is the name the machine's own mux files
+    /// the session under, null when no mux there names one.
+    pub workspace: Option<String>,
+    /// The session waits on the user: a blocked badge on its machine.
+    pub needs_input: Option<bool>,
+    /// The user's keep mark stands on the session.
+    pub pinned: Option<bool>,
+    /// The running cost in cents and the token and compaction counts behind a
+    /// card, as the session's own machine's mux serves them. Null where that
+    /// mux has no reading, never a zero.
+    pub cost_cents: Option<i64>,
+    pub tokens: Option<i64>,
+    pub compactions: Option<i64>,
 }
 
 impl Session {
@@ -190,6 +221,15 @@ impl Session {
             || self.last_prompt.is_some()
             || self.user_turns.is_some()
             || self.progress.is_some()
+    }
+
+    fn has_mark(&self) -> bool {
+        self.workspace.is_some()
+            || self.needs_input.is_some()
+            || self.pinned.is_some()
+            || self.cost_cents.is_some()
+            || self.tokens.is_some()
+            || self.compactions.is_some()
     }
 
     fn has_seat(&self) -> bool {
@@ -364,10 +404,20 @@ pub fn sessions_from_top(machine_id: &str, top: &Value) -> Vec<Session> {
                 context_pct: row.get("context_pct").and_then(Value::as_i64),
                 last_message: text(row, "last_message"),
                 progress: text(row, "progress"),
+                workspace: text(row, "workspace"),
+                needs_input: row.get("needs_input").and_then(Value::as_bool),
+                pinned: row.get("pinned").and_then(Value::as_bool),
+                cost_cents: row.get("cost_cents").and_then(Value::as_i64),
+                tokens: row.get("tokens").and_then(Value::as_i64),
+                compactions: row.get("compactions").and_then(Value::as_i64),
                 ..Session::default()
             })
         })
         .collect()
+}
+
+fn opt_flag(v: Option<bool>) -> SqlValue {
+    v.map_or(SqlValue::Null, |f| SqlValue::Integer(i64::from(f)))
 }
 
 fn opt_real(v: Option<f64>) -> SqlValue {
@@ -423,6 +473,10 @@ pub fn publish(remote: &Remote, machine: &Machine, sessions: &[Session]) -> Resu
             vec![id.clone()],
         ),
         (
+            "DELETE FROM fleet_mark WHERE machine_id = ?1".to_string(),
+            vec![id.clone()],
+        ),
+        (
             format!(
                 "INSERT OR REPLACE INTO fleet_machine_facts ({FACTS_COLUMNS}) \
                  VALUES (?1, ?2, ?3, ?4)"
@@ -436,6 +490,25 @@ pub fn publish(remote: &Remote, machine: &Machine, sessions: &[Session]) -> Resu
         ),
     ];
     for s in sessions {
+        if s.has_mark() {
+            steps.push((
+                format!(
+                    "INSERT OR REPLACE INTO fleet_mark ({MARK_COLUMNS}) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)"
+                ),
+                vec![
+                    id.clone(),
+                    SqlValue::Text(s.name.clone()),
+                    opt_text(&s.workspace),
+                    opt_flag(s.needs_input),
+                    opt_flag(s.pinned),
+                    opt_int(s.cost_cents),
+                    opt_int(s.tokens),
+                    opt_int(s.compactions),
+                    SqlValue::Integer(machine.beat_at),
+                ],
+            ));
+        }
         if s.has_turn() {
             steps.push((
                 format!(
@@ -642,6 +715,28 @@ pub fn read(remote: &Remote) -> Result<Fleet, String> {
                 s.last_prompt = text(&r[3]);
                 s.user_turns = r[4].integer();
                 s.progress = text(&r[5]);
+            }
+        }
+        Err(error) => errors.push(error),
+    }
+    match remote.execute(&format!("SELECT {MARK_COLUMNS} FROM fleet_mark"), &[]) {
+        Ok(reply) => {
+            for r in &reply.rows {
+                let (machine_id, name) = (text(&r[0]), text(&r[1]));
+                if current(&fleet.machines, &machine_id, r[8].integer()).is_none() {
+                    continue;
+                }
+                let Some(s) = fleet.sessions.iter_mut().find(|s| {
+                    Some(&s.machine_id) == machine_id.as_ref() && Some(&s.name) == name.as_ref()
+                }) else {
+                    continue;
+                };
+                s.workspace = text(&r[2]);
+                s.needs_input = r[3].integer().map(|n| n != 0);
+                s.pinned = r[4].integer().map(|n| n != 0);
+                s.cost_cents = r[5].integer();
+                s.tokens = r[6].integer();
+                s.compactions = r[7].integer();
             }
         }
         Err(error) => errors.push(error),

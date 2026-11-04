@@ -105,6 +105,19 @@ pub fn host_ticks() -> Option<HostTicks> {
     None
 }
 
+/// Free space on the filesystem holding `path`, in GiB, as an unprivileged
+/// process may use it (`f_bavail`). `None` when the probe cannot answer.
+pub fn disk_free_gb(path: &Path) -> Option<f64> {
+    use std::os::unix::ffi::OsStrExt;
+    let cpath = std::ffi::CString::new(path.as_os_str().as_bytes()).ok()?;
+    let mut buf: libc::statvfs = unsafe { std::mem::zeroed() };
+    if unsafe { libc::statvfs(cpath.as_ptr(), &mut buf) } != 0 {
+        return None;
+    }
+    let bytes = (buf.f_bavail as f64) * (buf.f_frsize as f64);
+    Some(bytes / 1024.0 / 1024.0 / 1024.0)
+}
+
 pub fn load_average() -> Option<(f64, f64, f64)> {
     let mut values = [0.0_f64; 3];
     let count = unsafe { libc::getloadavg(values.as_mut_ptr(), 3) };
@@ -245,6 +258,9 @@ pub struct MachineSample {
     pub swap_total_gb: Option<f64>,
     pub total_mem_gb: Option<f64>,
     pub memory_pressure_level: Option<u64>,
+    /// Free GiB on the root filesystem; the runaway brake reads it.
+    #[serde(default)]
+    pub disk_free_gb: Option<f64>,
     pub live_rows: Option<u64>,
     pub leads: Option<u64>,
     pub workers: Option<u64>,
@@ -329,6 +345,7 @@ pub fn read(
         swap_total_gb: None,
         total_mem_gb: None,
         memory_pressure_level: None,
+        disk_free_gb: disk_free_gb(Path::new("/")),
         live_rows: None,
         leads: None,
         workers: None,

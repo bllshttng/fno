@@ -10,7 +10,7 @@
 # without codex installed can still run the rest of the test suite.
 #
 # Outputs:
-#   - JSONL stream tee'd to stdout AND tests/agents/fixtures/codex-jsonl-sample.jsonl
+#   - JSONL stream tee'd to stdout AND crates/fno-agents/tests/fixtures/codex-jsonl/codex-jsonl-sample.jsonl
 #   - The distinct ``type`` field values that appeared, printed to stderr
 #
 # Failure modes:
@@ -38,7 +38,7 @@ fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CLI_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-FIXTURE_DIR="${CLI_ROOT}/tests/agents/fixtures"
+FIXTURE_DIR="${CLI_ROOT}/../crates/fno-agents/tests/fixtures/codex-jsonl"
 FIXTURE_FILE="${FIXTURE_DIR}/codex-jsonl-sample.jsonl"
 
 mkdir -p "${FIXTURE_DIR}"

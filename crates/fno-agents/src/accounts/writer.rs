@@ -9,9 +9,7 @@
 
 use crate::accounts::records::{self, Record};
 use serde_json::Value as Json;
-use std::fs::OpenOptions;
 use std::io::Write as _;
-use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 use toml_edit::{Array, ArrayOfTables, DocumentMut, InlineTable, Item, Table, Value};
 
@@ -57,15 +55,8 @@ pub fn mutate<T, E>(
 ) -> Result<Result<T, E>, WriteError> {
     let dir = path.parent().unwrap_or(Path::new("."));
     std::fs::create_dir_all(dir)?;
-    let lock = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(lock_path(path))?;
-    // SAFETY: flock on a descriptor this function owns; closing it on drop
-    // releases the lock.
-    if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) } != 0 {
-        return Err(std::io::Error::last_os_error().into());
-    }
+    let lock = crate::chokepoint::take(&crate::chokepoint::ACCOUNTS, &lock_path(path))
+        .map_err(std::io::Error::from)?;
     let mut doc = read_strict(path)?;
     let out = match edit(&mut doc) {
         Ok(out) => out,

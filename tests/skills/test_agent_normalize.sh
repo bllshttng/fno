@@ -674,10 +674,7 @@ if "$REAL_FNO_DIR/fno" agents name target x-1 >/dev/null 2>&1; then
   OUT="$(NODE_SLUG_RESOLVER="$LONGSLUG" DISPATCH_PROVIDER_RESOLVER="$STUB_EMPTY" \
          PATH="$REAL_FNO_DIR:$PATH" bash "$NORM" --input "ab-deadbeef")"
   SHELL_NAME="$(field "$OUT" name)"
-  PY_NAME="$("$VENV_PY" -c "
-import sys; sys.path.insert(0, '$REPO_ROOT/cli/src')
-from fno.agents.naming import agent_name
-print(agent_name('spawn', 'ab-deadbeef', slug='path consolidation wave 0 delegate handoff'))")"
+  PY_NAME="$("$REAL_AGENTS_BIN" status --name spawn ab-deadbeef --slug "path consolidation wave 0 delegate handoff")"
   [[ -n "$SHELL_NAME" && "$SHELL_NAME" == "$PY_NAME" ]] \
     && pass "x-3218 shell bridge is byte-identical to direct Python generation" \
     || fail "x-3218 parity: shell=$SHELL_NAME python=$PY_NAME"

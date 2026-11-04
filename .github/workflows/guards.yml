@@ -64,7 +64,9 @@ on:
     branches: [main]
 
 concurrency:
-  group: guards-${{ github.head_ref || github.ref }}
+  # A main push keys by sha so every merge keeps its own settled run; a called
+  # or dispatched run keeps the ref key.
+  group: guards-${{ github.event_name == 'push' && github.sha || github.head_ref || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
@@ -772,6 +774,18 @@ jobs:
         if: ${{ !cancelled() }}
         timeout-minutes: 5
         run: bash tests/ci/test_uv_install_verify_wait.sh
+
+      # Every install command README.md advertises must be proven by an
+      # expect: pass row of the install-channel matrix. The proof runs here
+      # and not as a README.md path trigger on install-channels.yml: that
+      # trigger made a README-only PR pay the full 22-row clean-runner
+      # matrix for a scan that takes seconds. The matrix still runs daily,
+      # on dispatch, and on install-surface change, and keeps its
+      # readme-commands row for those runs.
+      - name: README install commands are proven by matrix pass rows
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: bash scripts/ci/check-readme-install-commands.sh
 
       # From internal-refs.yml. The check-no-internal-refs guard blocks four
       # leak classes: internal/ vault-path literals in shipped prose,

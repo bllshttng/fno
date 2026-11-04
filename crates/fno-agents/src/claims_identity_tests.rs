@@ -346,3 +346,35 @@ fn ambient_edge_reason_names_disposition_and_marker_set() {
         "identity disposition=invalid, markers=FNO_HARNESS_SESSION_ID"
     );
 }
+
+/// The shell twin (`detect_provider()` in hooks/helpers/init-target-state.sh)
+/// walks HARNESS_SESSION_MARKERS in table order: each marker read as
+/// `"${<marker>:-}"` under the non-blank glob, each harness echoed right
+/// after. A twin that drops or reorders a marker fails here by name, so the
+/// Rust canonical table is the one session-marker source (AC6-HP, AC6-ERR).
+#[test]
+fn shell_marker_twin_matches_table() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../hooks/helpers/init-target-state.sh");
+    let script = std::fs::read_to_string(&path).expect("the shell twin reads beside the crate");
+    let body_start = script
+        .find("detect_provider() {")
+        .expect("detect_provider() present");
+    let body = &script[body_start..];
+    let body_end = body.find("\n}").expect("detect_provider() closes");
+    let body = &body[..body_end];
+    let mut cursor = 0usize;
+    for (marker, harness) in HARNESS_SESSION_MARKERS {
+        let read_form = format!("\"${{{marker}:-}}\"");
+        let read_at = body[cursor..]
+            .find(&read_form)
+            .unwrap_or_else(|| panic!("{marker} never read as {read_form}"));
+        let after_read = cursor + read_at + read_form.len();
+        let echo_form = format!("echo \"{harness}\"");
+        let echo_at = body[after_read..]
+            .find(&echo_form)
+            .unwrap_or_else(|| panic!("{harness} never echoed for {marker}"));
+        // In order: the NEXT marker's read must come after this echo.
+        cursor = after_read + echo_at;
+    }
+}

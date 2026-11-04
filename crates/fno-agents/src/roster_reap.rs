@@ -98,6 +98,9 @@ pub struct RosterReapSummary {
     /// Apply-mode removals whose typed outcome did not confirm: named,
     /// never silent, retried by the next pass.
     pub refused: Vec<(String, String)>,
+    /// Keeps that protect a live lead or a just-active turn, shaped like the
+    /// registry sweep's holds so the tick's `retire_holds` row names them.
+    pub holds: Vec<crate::gc_sweep::Hold>,
 }
 
 impl RosterReapSummary {
@@ -357,6 +360,7 @@ pub(crate) fn run_with_scope_workers(
         early_fire: bool,
     }
     let mut candidates: Vec<Candidate> = Vec::new();
+    let mut lead_roles = crate::lead_state::ManifestRoleCache::new();
     for row in &rows {
         let ident = row
             .session_id
@@ -415,6 +419,23 @@ pub(crate) fn run_with_scope_workers(
         entry.harness = Some("claude".into());
         entry.cwd = row.cwd.clone().unwrap_or_default();
         entry.origin = Some("spawn".into());
+        // A session a lead manifest names as holder owns a live org role. One
+        // finished node never retires a lead: it runs many.
+        if lead_roles.holds(&entry) {
+            let detail = "lead manifest names this session as holder".to_string();
+            summary.holds.push(crate::gc_sweep::Hold {
+                id: ident.clone(),
+                reason: "live_lead_role",
+                detail: detail.clone(),
+                age_s: None,
+                age_basis: "unmeasured",
+                escalated: false,
+            });
+            summary
+                .kept
+                .push(judgement_class(&ident, None, detail, false, "owned"));
+            continue;
+        }
         let terminal = row
             .state
             .as_deref()
@@ -2138,5 +2159,50 @@ mod tests {
         let f = std::fs::File::options().append(true).open(&path).unwrap();
         f.set_modified(std::time::SystemTime::now()).unwrap();
         path
+    }
+
+    /// A finished node never retires the session that holds a lead manifest:
+    /// the lead runs many nodes, and the refusal is named in the holds.
+    #[test]
+    fn a_session_a_lead_manifest_names_is_kept_and_held() {
+        let _env = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = tmpdir("lead-role");
+        let saved = std::env::var_os("FNO_SPACES_DIR");
+        std::env::set_var("FNO_SPACES_DIR", dir.join("spaces"));
+        let leads = crate::paths::space_dir(std::path::Path::new("/work")).join("leads");
+        std::fs::create_dir_all(&leads).unwrap();
+        std::fs::write(
+            leads.join("books.md"),
+            "---\nharness_session_id: sid-1\nrole_scope: books\nrole_level: 1\n---\n",
+        )
+        .unwrap();
+        let transcript = quiet_transcript(&dir, "sid-1");
+        let summary = run(
+            &no_home(),
+            900,
+            RosterScope::Provenanced,
+            false,
+            &roster(vec![row("ab12cd34", Some("sid-1"), Some("elena"))]),
+            &[],
+            &|| Some(graph_done_via_sessions("x-aaaa", &["sid-1"])),
+            &|_e| Some(vec![transcript.clone()]),
+            &|refs| {
+                refs.iter()
+                    .map(|e| (crate::gc::row_handle(e), mtime_age(&[transcript.clone()])))
+                    .collect()
+            },
+            crate::daemon::now_epoch_secs(),
+            &|_| panic!("a lead holder must never reach the removal cascade"),
+        );
+        match saved {
+            Some(v) => std::env::set_var("FNO_SPACES_DIR", v),
+            None => std::env::remove_var("FNO_SPACES_DIR"),
+        }
+        assert!(summary.retired.is_empty(), "{summary:?}");
+        assert_eq!(summary.holds.len(), 1, "{summary:?}");
+        assert_eq!(summary.holds[0].reason, "live_lead_role");
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

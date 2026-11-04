@@ -128,12 +128,11 @@ pub fn emit_paths_sh_defaults() -> String {
     for (name, sub) in [
         ("LEDGER_JSON_PATH", "db/history/ledger.json"),
         ("BRIEFS_DIR", "briefs"),
-        ("FLEET_DIR", "fleet"),
         ("POSTMORTEMS_DIR", "db/postmortems"),
-        ("WORKTREES_BASE", "worktrees"),
+        ("WORKTREES_BASE", "spaces/worktrees"),
         ("MEMORY_DIR", "memory"),
         ("HOOK_LOGS_DIR", "hook-logs"),
-        ("LATCHES_DIR", "latches"),
+        ("LATCHES_DIR", "state/latches"),
     ] {
         let v = bash_quote(&format!("$STATE_DIR/{sub}"));
         lines.push(format!("export {name}={v}"));
@@ -691,20 +690,47 @@ pub fn ledger_json(cwd: &Path) -> PathBuf {
         })
 }
 
-/// Python `paths.worktrees_base()`: the `paths.worktrees_base` override, else
-/// `<state_dir>/worktrees`. A relative state dir falls back to the default
-/// state root, as `ledger_json` does.
-pub fn worktrees_base(cwd: &Path) -> PathBuf {
-    if let Some(raw) = cfg_str(cwd, &["paths", "worktrees_base"]) {
-        if let Ok(p) = resolve_override_path(&raw) {
-            return p;
-        }
-    }
+/// The external worktrees base when no `paths.worktrees_base` override is
+/// set: `<state>/spaces/worktrees`, with checkouts at `<base>/<repo>/<name>`.
+/// Allocation (`worktree::policy`) and the relocation allow both ask here, so
+/// the two cannot disagree.
+pub fn default_worktrees_base(state: &Path) -> PathBuf {
+    state.join("spaces").join("worktrees")
+}
+
+/// The pre-fold default base, `<state>/worktrees`. New worktrees never land
+/// here; checkouts already under it stay listed, allowed and counted until
+/// they are reaped.
+pub fn legacy_worktrees_base(state: &Path) -> PathBuf {
+    state.join("worktrees")
+}
+
+fn state_root_for_worktrees(cwd: &Path) -> PathBuf {
     state_dir_resolved(cwd)
         .ok()
         .filter(|d| d.is_absolute())
         .unwrap_or_else(|| crate::decision_index::default_state_path(""))
-        .join("worktrees")
+}
+
+fn explicit_worktrees_base(cwd: &Path) -> Option<PathBuf> {
+    let raw = cfg_str(cwd, &["paths", "worktrees_base"])?;
+    resolve_override_path(&raw).ok()
+}
+
+/// The `paths.worktrees_base` override, else `default_worktrees_base`. A
+/// relative state dir falls back to the default state root, as `ledger_json`
+/// does.
+pub fn worktrees_base(cwd: &Path) -> PathBuf {
+    explicit_worktrees_base(cwd)
+        .unwrap_or_else(|| default_worktrees_base(&state_root_for_worktrees(cwd)))
+}
+
+/// The pre-fold base, only while no override is set: an override means the
+/// operator chose where checkouts live and nothing sits at the old default.
+pub fn legacy_worktrees_base_for(cwd: &Path) -> Option<PathBuf> {
+    explicit_worktrees_base(cwd)
+        .is_none()
+        .then(|| legacy_worktrees_base(&state_root_for_worktrees(cwd)))
 }
 
 /// Python `paths.postmortems_dir()`: the `paths.postmortems_dir` override,
@@ -838,9 +864,8 @@ pub fn emit_paths_sh_live(cwd: &Path) -> Result<String, String> {
     for (name, key, sub) in [
         ("LEDGER_JSON_PATH", "ledger_json", "db/history/ledger.json"),
         ("BRIEFS_DIR", "briefs_dir", "briefs"),
-        ("FLEET_DIR", "fleet_dir", "fleet"),
         ("POSTMORTEMS_DIR", "postmortems_dir", "db/postmortems"),
-        ("WORKTREES_BASE", "worktrees_base", "worktrees"),
+        ("WORKTREES_BASE", "worktrees_base", "spaces/worktrees"),
         ("MEMORY_DIR", "memory_dir", "memory"),
         ("HOOK_LOGS_DIR", "hook_logs_dir", "hook-logs"),
     ] {
@@ -872,10 +897,10 @@ pub fn emit_paths_sh_live(cwd: &Path) -> Result<String, String> {
         };
         lines.push(format!("export {name}={}", bash_quote(&v)));
     }
-    // No config override: latches_dir() tracks state_dir by design.
+    // No config override: LATCHES_DIR tracks state_dir by design.
     lines.push(format!(
         "export LATCHES_DIR={}",
-        bash_quote("$STATE_DIR/latches")
+        bash_quote("$STATE_DIR/state/latches")
     ));
 
     // PLANS_DIR: project-relative by default.

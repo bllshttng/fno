@@ -6,12 +6,13 @@ name: rust-ci
 # stress trials, and dependency audit.
 
 # PR re-pushes share a group keyed by head_ref and cancel their own running
-# run. Main pushes share one group keyed by ref, with the same rule as
-# cli-ci.yml: the running main run finishes, the newest push replaces the
-# pending one, and the tip is the commit that tests. The nightly schedule run
-# gets its own group so a nightly never makes a main push queue behind it.
+# run. Main pushes key by sha, unlike cli-ci.yml: this workflow costs about 5
+# runner minutes, so every merge keeps its own settled run and `fno do ci
+# status` can read a per-commit merge_check. cli-ci.yml costs over 200 runner
+# minutes and keeps coalescing. The nightly schedule run gets its own group so
+# a nightly never makes a main push queue behind it.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'schedule' && 'nightly' || github.head_ref || github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'schedule' && 'nightly' || github.event_name == 'push' && github.sha || github.head_ref || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 on:
@@ -30,10 +31,6 @@ on:
       - cli/src/fno/config/__init__.py
       - cli/src/fno/pr/_reviews.py
       - cli/src/fno/review_capability.py
-      - cli/src/fno/agents/spawn_gate.py
-      - cli/src/fno/agents/registry.py
-      - cli/src/fno/agents/store_fallback.py
-      - cli/src/fno/agents/mux_spawn.py
       - .github/workflows/rust-ci.yml
 
 jobs:
@@ -206,6 +203,14 @@ jobs:
           # The whole mux with no view open: the card sideline at two widths.
           for size in 200x56 120x40; do
             bash scripts/ops/mux-demo-snapshot.sh --out "shots/sideline-${size}.png" --format png --size "$size" --fit
+          done
+          # The other-machines layer: the second machine's rows by workspace
+          # and by status, where a remote row pins first and a blocked one bands
+          # under Needs input. The band sits below this machine's, so the
+          # frame is taller than the rest.
+          for group in workspace status; do
+            bash scripts/ops/mux-demo-snapshot.sh --out "shots/machines-${group}.png" --format png --view machines --group "$group" --remote-pane --size 200x72 --fit
+            bash scripts/ops/mux-demo-snapshot.sh --out "shots/machines-${group}-light.png" --format png --view machines --group "$group" --remote-pane --theme light --size 200x72 --fit
           done
           # Two windows on one tab: the active big window fills, the same
           # window under the smallest policy letterboxes, and a small

@@ -108,6 +108,8 @@ pub mod census;
 pub mod census_reads;
 pub mod chats;
 pub mod check_supersession;
+pub mod chokepoint;
+pub mod chokepoint_events;
 pub mod ci_cadence;
 pub mod ci_front;
 pub mod ci_tier;
@@ -229,6 +231,7 @@ pub mod fleet_law;
 pub mod fleet_load;
 pub mod fleet_state;
 pub mod fleet_task;
+pub mod fleet_workspace;
 pub mod flight_gate;
 pub(crate) mod fnod;
 pub mod footnote_harness;
@@ -741,6 +744,7 @@ pub mod usage_refresh;
 pub mod verify_advise;
 pub mod verify_evidence;
 pub mod version;
+pub mod visual_screen;
 pub mod wait;
 pub mod wake_meter;
 pub mod wake_name;
@@ -2129,6 +2133,13 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // The same failure the Python identification arm emits: the manifest
     // rebind at a promoted row's first self-identification did not land.
     "role_manifest_arm_failed",
+    // The session-report lineage port (session_report.rs): the daemon's
+    // classification of a differing reported session id (succession or
+    // branch fork), and the cwd heal it attempts, or fails, on the
+    // reporting worker's own row.
+    "session_transition_classified",
+    "session_cwd_healed",
+    "session_cwd_heal_failed",
     // Ordered exit teardown (daemon-emitted, inside-out E3.3): a claude row with
     // an inside-leg report is going Exited; the completion is published before
     // the registry clears the report (AC-X2-4).

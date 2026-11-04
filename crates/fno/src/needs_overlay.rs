@@ -104,7 +104,11 @@ pub struct QuestionAsker {
 /// command page re-serializes it, so it also derives Serialize.
 #[derive(Debug, Clone, Default, Deserialize, serde::Serialize)]
 pub struct QuestionOrigin {
-    pub handle: String,
+    /// The asker's lane name. Reads null as absent: one cross-machine copy
+    /// stamped `"handle": null` (the ask carried no asker) and a bare String
+    /// here refused the whole response, blanking every question page.
+    #[serde(default)]
+    pub handle: Option<String>,
     #[serde(default)]
     pub session_id: Option<String>,
     #[serde(default)]
@@ -465,13 +469,80 @@ fn parse_mine(stdout: &[u8]) -> Option<Vec<MineItem>> {
 }
 
 fn parse_questions(stdout: &[u8]) -> Option<QuestionsFold> {
-    serde_json::from_slice::<QuestionsResponse>(stdout)
-        .ok()
-        .map(|response| QuestionsFold {
-            items: response.items.into_iter().filter(keep_question).collect(),
-            answered: response.answered,
-            as_of: response.as_of,
+    if let Ok(response) = serde_json::from_slice::<QuestionsResponse>(stdout) {
+        return Some(fold_from(response.items, response.answered, response.as_of));
+    }
+    // The envelope parsed as a whole is the fast path. On its failure, salvage
+    // item by item: one malformed row (a null where a type is expected) once
+    // blanked every question page, so a bad row now becomes its own degraded
+    // line and the readable rows survive. Only a stdout that is not JSON at
+    // all (a torn write) still fails quiet.
+    let raw = serde_json::from_slice::<serde_json::Value>(stdout).ok()?;
+    let items = raw.get("items")?.as_array()?;
+    let parsed: Vec<QuestionItem> = items
+        .iter()
+        .enumerate()
+        .map(|(i, item)| {
+            serde_json::from_value::<QuestionItem>(item.clone())
+                .unwrap_or_else(|e| degraded_question(item, i, &e))
         })
+        .collect();
+    let answered = raw
+        .get("answered")
+        .and_then(serde_json::Value::as_array)
+        .map(|rows| {
+            rows.iter()
+                .filter_map(|r| serde_json::from_value::<AnsweredItem>(r.clone()).ok())
+                .collect()
+        })
+        .unwrap_or_default();
+    let as_of = raw.get("as_of").and_then(serde_json::Value::as_u64);
+    Some(fold_from(parsed, answered, as_of))
+}
+
+fn fold_from(
+    items: Vec<QuestionItem>,
+    answered: Vec<AnsweredItem>,
+    as_of: Option<u64>,
+) -> QuestionsFold {
+    QuestionsFold {
+        items: items.into_iter().filter(keep_question).collect(),
+        answered,
+        as_of,
+    }
+}
+
+/// One unreadable projection row, rendered as its own degraded question so a
+/// malformed item never blanks the rest of the board. The id and created_at
+/// ride when the raw row carries them; the serde error names the field that
+/// refused.
+fn degraded_question(
+    raw: &serde_json::Value,
+    index: usize,
+    err: &serde_json::Error,
+) -> QuestionItem {
+    let id = raw
+        .get("id")
+        .and_then(serde_json::Value::as_str)
+        .filter(|s| !s.is_empty());
+    QuestionItem {
+        id: id
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("q-unreadable-{index}")),
+        kind: "question".into(),
+        title: "projection row unreadable".into(),
+        body: Some(format!(
+            "this question's stored row could not be read: {err}"
+        )),
+        created_at: raw
+            .get("created_at")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        state: "open".into(),
+        priority: "p2".into(),
+        ..QuestionItem::default()
+    }
 }
 
 /// The pick the overlay sends through the door: an option number (1-based),
@@ -727,6 +798,57 @@ mod tests {
     #[test]
     fn torn_questions_json_fails_quiet() {
         assert!(parse_questions(br#"{"items":[{"id":"q-1""#).is_none());
+    }
+
+    #[test]
+    fn null_handle_item_parses_and_sibling_rows_survive() {
+        // One cross-machine copy carried origin {"handle": null}; a bare
+        // String handle refused the whole response and blanked every page.
+        // Null reads absent, so the row itself parses and its siblings
+        // render in full.
+        let json = br#"{"as_of":5,"items":[
+            {"id":"q-null","kind":"question","title":"from the mirror","state":"open",
+             "priority":"p1","created_at":"2026-11-03T22:00:00Z",
+             "origin":{"handle":null,"host":"iMac2D2.local"}},
+            {"id":"q-good","kind":"question","title":"which route?","state":"open",
+             "priority":"p1","created_at":"2026-11-03T22:05:00Z",
+             "options":[{"n":1,"text":"oauth"}]}
+        ]}"#;
+        let fold = parse_questions(json).expect("null-handle row must not blank the fold");
+        assert_eq!(fold.items.len(), 2, "both rows survive");
+        let origin = fold.items[0].origin.as_ref().unwrap();
+        assert_eq!(origin.handle.as_deref(), None, "null reads absent");
+        assert_eq!(origin.host.as_deref(), Some("iMac2D2.local"));
+        assert_eq!(fold.items[1].id, "q-good");
+        assert_eq!(fold.items[1].options[0].text, "oauth");
+    }
+
+    #[test]
+    fn malformed_row_degrades_alone_and_readable_rows_survive() {
+        // A row no field-fix can read (a string where a bool is expected)
+        // becomes its own degraded question; the readable sibling is intact.
+        let json = br#"{"items":[
+            {"id":"q-bad","kind":"question","title":"broken","state":"open",
+             "priority":"p1","created_at":"2026-11-03T22:00:00Z","ready":"yes"},
+            {"id":"q-ok","kind":"question","title":"which route?","state":"open",
+             "priority":"p1","created_at":"2026-11-03T22:05:00Z"}
+        ],"answered":[{"id":"q-old","title":"old","asker":"w9","answer":"narrow","at":"2026-11-03T21:00:00Z"},{"id":"x","title":7}]}"#;
+        let fold = parse_questions(json).expect("salvage parse succeeds");
+        assert_eq!(fold.items.len(), 2);
+        assert_eq!(fold.items[0].id, "q-bad");
+        assert_eq!(
+            fold.items[0].title, "projection row unreadable",
+            "the bad row renders its own degraded line"
+        );
+        assert!(fold.items[0]
+            .body
+            .as_deref()
+            .is_some_and(|b| b.contains("could not be read")));
+        assert_eq!(
+            fold.items[1].title, "which route?",
+            "the good row is intact"
+        );
+        assert_eq!(fold.answered.len(), 1, "unreadable answered rows drop");
     }
 
     #[test]

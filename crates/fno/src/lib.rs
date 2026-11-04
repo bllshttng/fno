@@ -47,6 +47,10 @@ pub mod bootstrap;
 #[cfg(feature = "full")]
 pub mod build_drift;
 #[cfg(feature = "full")]
+pub mod chokepoint;
+#[cfg(feature = "full")]
+pub mod chokepoint_events;
+#[cfg(feature = "full")]
 pub mod chrome;
 #[cfg(feature = "full")]
 pub mod claude_fallback;
@@ -317,6 +321,8 @@ pub mod wizard;
 pub mod wizard_term;
 #[cfg(feature = "full")]
 pub mod wordmark;
+#[cfg(feature = "full")]
+pub mod workspace_sidecar;
 #[cfg(feature = "full")]
 pub mod worktree_door;
 #[cfg(feature = "full")]

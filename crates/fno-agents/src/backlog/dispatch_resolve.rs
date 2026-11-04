@@ -107,8 +107,8 @@ fn contract_caps<'a>(
     contract.capabilities(harness).map_err(|_| {
         let roster: Vec<&str> = contract.harness.keys().map(String::as_str).collect();
         format!(
-            "unknown harness {}; the harness-capability map \
-             (fno.agents.harness_map) knows: {}",
+            "unknown harness {}; the packaged capability table \
+             (crates/fno-agents/src/harness_capabilities.toml) knows: {}",
             py_repr(harness),
             roster.join(", ")
         )

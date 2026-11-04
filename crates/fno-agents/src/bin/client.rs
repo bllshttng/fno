@@ -137,6 +137,7 @@ const ALL_CLIENT_ACTIONS: &[&str] = &[
 ];
 
 fn main() {
+    fno_agents::chokepoint_events::install();
     let args: Vec<String> = std::env::args().skip(1).collect();
     // First, so a proxied gh call pays no other arm; transport-only.
     if let Some(code) = fno_agents::pr_status::adapter::gh_transport_door(&args) {
