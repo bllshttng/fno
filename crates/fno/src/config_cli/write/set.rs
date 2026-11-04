@@ -456,3 +456,34 @@ fn couple_grant_observer() {
         ),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The GitHub App token path (crates/fno-agents/src/github_app.rs) reads
+    /// github.app_id, github.app_installation_id and github.app_key_path from
+    /// the global config; one `config set -g` batch must accept all three and
+    /// land them as strings.
+    #[test]
+    fn set_accepts_the_github_app_keys() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pin = dir.path().join("config.toml");
+        // The only FNO_CONFIG writer in the test tree: the pin routes the
+        // global write at a temp file so no real home is touched.
+        std::env::set_var("FNO_CONFIG", &pin);
+        let items = vec![
+            ("github.app_id".to_string(), "1".to_string()),
+            ("github.app_installation_id".to_string(), "42".to_string()),
+            (
+                "github.app_key_path".to_string(),
+                "~/.fno/secrets/github-app.pem".to_string(),
+            ),
+        ];
+        let results = set_values(&items, "global", None).expect("set accepts the github keys");
+        assert_eq!(results.len(), 3);
+        let written = std::fs::read_to_string(&pin).expect("config written");
+        assert!(written.contains("app_installation_id = \"42\""));
+        std::env::remove_var("FNO_CONFIG");
+    }
+}

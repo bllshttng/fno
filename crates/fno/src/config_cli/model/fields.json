@@ -716,6 +716,14 @@
      }
     },
     {
+     "name": "github",
+     "default": {
+      "app_id": "",
+      "app_installation_id": "",
+      "app_key_path": "~/.fno/secrets/github-app.pem"
+     }
+    },
+    {
      "name": "schema_version",
      "default": 1
     }
@@ -3014,6 +3022,23 @@
      "default": null
     }
    ]
+  },
+  "GithubBlock": {
+   "extra": "ignore",
+   "fields": [
+    {
+     "name": "app_id",
+     "default": ""
+    },
+    {
+     "name": "app_installation_id",
+     "default": ""
+    },
+    {
+     "name": "app_key_path",
+     "default": "~/.fno/secrets/github-app.pem"
+    }
+   ]
   }
  },
  "field_meta": [
@@ -3360,6 +3385,9 @@
   "accounts.quota.probe_ttl_seconds",
   "accounts.quota.defer_horizon_minutes",
   "accounts.quota.pick_on_launch",
-  "accounts.failover"
+  "accounts.failover",
+  "github.app_id",
+  "github.app_installation_id",
+  "github.app_key_path"
  ]
 }
