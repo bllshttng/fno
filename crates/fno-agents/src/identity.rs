@@ -336,7 +336,10 @@ mod tests {
     const FROZEN_HANDLES: &[(&str, &str)] = &[
         ("d23c3d68-7d5c-4c1e-9a51-2f8e0a9b1c3d", "d23c3d68"),
         ("D23C3D68-7D5C-4C1E-9A51-2F8E0A9B1C3D", "d23c3d68"),
-        ("20261102T101112-abcdef01234567890123456789abcdef", "20261102"),
+        (
+            "20261102T101112-abcdef01234567890123456789abcdef",
+            "20261102",
+        ),
         ("ses_AbCdEfGhIjKlMnOpQrStUv", "ses_AbCd"),
         ("ses_lowercase-nope", "ses_lowe"),
         ("abcd", "abcd"),

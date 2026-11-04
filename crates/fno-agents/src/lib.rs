@@ -1173,8 +1173,8 @@ mod tests {
         let Some(root) = repo_root_for_test() else {
             return;
         };
-        let schema_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("src/event_store/schema.yaml");
+        let schema_path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/event_store/schema.yaml");
         if !schema_path.is_file() {
             // The crates.io tarball case cannot trigger: the schema ships in
             // the manifest tree now. A parse failure below is NOT swallowed.
