@@ -58,19 +58,42 @@ pub(super) enum BoundedRun {
 /// stderr are drained on background threads for the same reason `run_probe`
 /// drains stderr that way: reading a pipe only after the child exits
 /// deadlocks against a child that fills the pipe buffer before exiting.
+/// One external stop-gate read: a first attempt that may carry an
+/// installation token, then one attempt with the caller's own auth when the
+/// failure names missing visibility (a stale installation scope). The
+/// decision and its window live in `github_app::should_retry_without_app`.
 pub(super) fn run_bounded(
     fno_bin: &OsStr,
     args: &[&str],
     cwd: &Path,
     timeout: std::time::Duration,
 ) -> BoundedRun {
-    if timeout <= super::read_bounds::STOPGATE_PRE_DRAIN_SPENT_BOUND {
-        return BoundedRun::Refused;
+    let (run, injected) = run_bounded_attempt(fno_bin, args, cwd, timeout, true);
+    if let BoundedRun::Completed(out) = &run {
+        let failed = out.status.code().is_some_and(|code| code != 0);
+        let stderr = String::from_utf8_lossy(&out.stderr_tail);
+        if crate::github_app::should_retry_without_app(injected, failed, &stderr) {
+            return run_bounded_attempt(fno_bin, args, cwd, timeout, false).0;
+        }
     }
-    let mut child = match crate::bounded_spawn::spawn_bounded(fno_bin, args, cwd) {
-        Ok(c) => c,
-        Err(kind) => return BoundedRun::SpawnFailed(kind),
-    };
+    run
+}
+
+fn run_bounded_attempt(
+    fno_bin: &OsStr,
+    args: &[&str],
+    cwd: &Path,
+    timeout: std::time::Duration,
+    allow_app_token: bool,
+) -> (BoundedRun, bool) {
+    if timeout <= super::read_bounds::STOPGATE_PRE_DRAIN_SPENT_BOUND {
+        return (BoundedRun::Refused, false);
+    }
+    let (mut child, injected) =
+        match crate::bounded_spawn::spawn_bounded_flagged(fno_bin, args, cwd, allow_app_token) {
+            Ok(pair) => pair,
+            Err(kind) => return (BoundedRun::SpawnFailed(kind), false),
+        };
     let pgid = child.id() as i32;
 
     let mut stdout_pipe = child.stdout.take();
@@ -149,13 +172,13 @@ pub(super) fn run_bounded(
     // that forks) so the drain threads see EOF either way.
     killpg(pgid);
 
-    match outcome {
+    let run = match outcome {
         // Captured at the moment the bound was actually crossed, not after
         // kill_process_group + killpg have run - else the reported duration
         // is inflated by cleanup cost instead of reflecting the timeout itself.
         Outcome::TimedOut(elapsed) => BoundedRun::TimedOut(
             elapsed,
-            // The kill ended the writer, so the drain sees EOF; a short
+            // The kill ended the writer, so the drain threads see EOF; a short
             // bounded collect keeps whatever gh printed before the bound
             // (the network-vs-GitHub evidence a timeout row would
             // otherwise drop). A straggler holding the write end costs the
@@ -174,7 +197,8 @@ pub(super) fn run_bounded(
                 stderr_tail,
             })
         }
-    }
+    };
+    (run, injected)
 }
 
 /// How an external stop-gate read failed. `TimedOut` is its own kind so a
