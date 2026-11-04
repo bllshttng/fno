@@ -193,7 +193,7 @@ pub fn run(args: &[String]) -> i32 {
         return 2;
     }
 
-    let held = live_node_claims();
+    let held = held_node_claims();
     if let Err(e) = &held {
         eprintln!("requests: takes are skipped: {e}");
     }
@@ -315,7 +315,7 @@ fn positive_usize(raw: &str) -> Option<usize> {
 
 /// `owner/repo` out of the project root's origin remote, through the
 /// publish command's parser.
-pub(crate) fn origin_repo(root: &Path) -> Option<String> {
+fn origin_repo(root: &Path) -> Option<String> {
     let out = std::process::Command::new("git")
         .args(["remote", "get-url", "origin"])
         .current_dir(root)
@@ -668,7 +668,7 @@ fn record_upvote(
 
 /// Every live `node:` claim with its holder and, for a take, the issue it
 /// came from. `Err` when the claim store cannot be read.
-fn live_node_claims() -> Result<HeldClaims, String> {
+fn held_node_claims() -> Result<HeldClaims, String> {
     let records = crate::claims::list(Some("node:"), None, false)?;
     Ok(records
         .iter()
@@ -1311,6 +1311,7 @@ mod tests {
         rows.push(private);
         let mut held = HeldClaims::new();
         held.insert("c-cd34".to_string(), held_by("target-session:s1"));
+        let rows_before = rows.len();
         let out = apply_issues(
             &mut rows,
             &[
@@ -1361,7 +1362,7 @@ mod tests {
                 out.receipt
             );
         }
-        assert_eq!(out.rows.len(), rows.len(), "a take writes no graph row");
+        assert_eq!(rows.len(), rows_before, "a take writes no graph row");
 
         let blind = import(
             &mut rows,
@@ -1399,21 +1400,21 @@ mod tests {
             ["release c-ab12: issue 99 is closed or lost its labels"]
         );
         let full_page = Limits {
-            limit: 0,
+            limit: 1,
             max_new: 20,
             max_open: 50,
             max_per_author: 2,
         };
         let kept = apply_issues(
             &mut rows,
-            &[],
+            &[issue(30, "Plain ask", "b", "chatty")],
             "o/r",
             project,
             "/tmp/p",
             &full_page,
             Some(&gone),
         );
-        assert!(kept.claims.is_empty());
+        assert!(kept.claims.is_empty(), "{:?}", kept.receipt);
     }
 
     #[test]
@@ -1432,7 +1433,7 @@ mod tests {
         };
         let lines = write_claims(&[grant], Some(root.path()));
         let ids = crate::backlog::next::live_claimed_node_ids();
-        let held = live_node_claims();
+        let held = held_node_claims();
         let (_, record) = crate::claims::status("node:c-ab12", None);
         let release = ClaimOp::Release {
             node: "c-ab12".to_string(),

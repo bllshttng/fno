@@ -623,9 +623,9 @@ Cards whose titles carry a home path or session id are withheld with one warning
 
 ## Take requests from the public board
 
-With `--requests`, `fno backlog publish` renders two links: a header link to a prefilled issue form and an Upvote link on each open card. The links appear only after you pass the flag. On a project whose origin is not a GitHub repo the command refuses and names the reason. The label is `fno-request` by default and `--label` renames it.
+With `--requests`, `fno backlog publish` renders three links. A header link opens a prefilled issue form. Each open card gets an Upvote link. Each open card that nobody holds also gets a Take link. The links appear only after you pass the flag. On a project whose origin is not a GitHub repo the command refuses and names the reason. The label is `fno-request` by default and `--label` renames it.
 
-The prefilled form comes from an issue form you commit by hand to `.github/ISSUE_TEMPLATE/` in your repo. fno never writes it for you. The form applies the request label to every visitor issue.
+The prefilled form comes from an issue form you commit by hand to `.github/ISSUE_TEMPLATE/` in your repo, named for the label (`fno-request.yml` by default). fno never writes it for you. Publish warns when the file is missing. The form applies the request label to every visitor issue.
 
 Spam control is a second label. Create an approval label, `fno-approved` by default, and apply it by hand to each issue you want imported. Only a maintainer with triage rights can apply a label by hand, so the label is the trust signal. Name yours differently and the import reads it with `--approved-label`.
 

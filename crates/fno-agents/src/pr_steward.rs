@@ -710,11 +710,9 @@ fn rebuilt_pr_url(io: &dyn Io, node: &str) -> Option<String> {
 }
 
 /// Close an outside pull request after the project merged its own rebuild of
-/// the work: one comment with the merged link (the outside-contributions
-/// law), then
-/// the close. A marker already on the pull request means the comment stays
-/// posted once and only the close is retried. `Ok(false)` means the node has
-/// not merged yet.
+/// the work: one comment with the merged link, then the close. A marker
+/// already on the pull request means the comment stays posted once and only
+/// the close is retried. `Ok(false)` means the node has not merged yet.
 fn close_after_merge(io: &dyn Io, slug: &str, pr: u64, node: &str) -> Result<bool, String> {
     let Some(url) = rebuilt_pr_url(io, node) else {
         return Ok(false);
