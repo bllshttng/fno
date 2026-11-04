@@ -1015,13 +1015,14 @@ case "${1:-status}" in
         # Cross-references the agents registry (real session names + measured
         # live/exited status) instead of `.fno/target-state.md`'s owner_pid,
         # which names the short-lived `fno do target init` CLI invocation and
-        # reads as dead within seconds of session start - see
-        # scripts/lib/worktree-status.py for the verified specimen.
-        if command -v python3 >/dev/null 2>&1; then
-            python3 "${_WT_LIFECYCLE_DIR}/worktree-status.py" --repo "$(pwd)" "$@"
+        # reads as dead within seconds of session start
+        # (crates/fno-agents/src/worktree/status.rs).
+        _wt_status_bin="${FNO_AGENTS_BIN:-$(command -v fno-agents 2>/dev/null)}"
+        if [[ -n "$_wt_status_bin" && -x "$_wt_status_bin" ]]; then
+            "$_wt_status_bin" worktree-status --repo "$(pwd)" "$@"
         else
-            echo "worktree status: python3 not found" >&2
-            exit 1
+            echo "worktree status: the fno-agents binary was not found; run \`fno doctor update --rust\`." >&2
+            exit 127
         fi
         ;;
 
