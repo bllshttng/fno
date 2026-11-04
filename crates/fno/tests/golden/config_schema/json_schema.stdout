@@ -2076,6 +2076,24 @@
       "title": "PostMergeBlock",
       "type": "object"
     },
+    "PrBlock": {
+      "description": "Pr verb defaults (nested under 'config.pr').\n\ncancel_red_run (default True): `fno do pr push` cancels a red head's\nin-flight CI run and pushes with receipt ci=red-cancel; False\nrestores the old exit-2 refusal while any run is still in flight.\nA head whose latest rows are not red always refuses, whatever this\nkey reads.\n\nwait_wake_minutes (default 15): the minutes `fno do pr wait` waits\nbefore it wakes when --timeout is omitted.",
+      "properties": {
+        "cancel_red_run": {
+          "default": true,
+          "title": "Cancel Red Run",
+          "type": "boolean"
+        },
+        "wait_wake_minutes": {
+          "default": 15,
+          "minimum": 1,
+          "title": "Wait Wake Minutes",
+          "type": "integer"
+        }
+      },
+      "title": "PrBlock",
+      "type": "object"
+    },
     "PrWatchBlock": {
       "description": "PR-state watcher settings (nested under 'config.pr_watch').\n\nControls the global launchd watcher that polls open-PR backlog nodes\nand fires headless /fno:ship pr check / /fno:ship pr merged.\n\nFields: enabled (operator opt-in, default False); interval_seconds\n(plist StartInterval, default 600); retries (consecutive dispatch\nfailures before a PR parks, default 3); max_age_days (default 14);\nmodel (headless skill-fire model, default claude-haiku-4-5);\ntick_timeout_seconds (wall clock per tick; unset derives\nmax(60, 0.8 * interval_seconds) so launchd never suppresses the next\ntick); graphql_min_remaining (dispatch-pass skip floor on the shared\nGraphQL budget, default 200); wedged_after_ticks (consecutive broken\ntick ends at a fresh watermark before liveness reads wedged, default\n3; one broken tick is transient).",
       "properties": {
@@ -3775,6 +3793,9 @@
     },
     "post_merge": {
       "$ref": "#/$defs/PostMergeBlock"
+    },
+    "pr": {
+      "$ref": "#/$defs/PrBlock"
     },
     "pr_watch": {
       "$ref": "#/$defs/PrWatchBlock"

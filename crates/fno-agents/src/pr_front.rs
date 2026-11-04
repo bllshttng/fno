@@ -7,7 +7,7 @@
 //! the wheel's pr_app deletion.
 
 use serde_json::{json, Value};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// The subcommands the family door answers, not this dispatcher: decide_role
 /// routes them elsewhere, and this refusal names the door for a hand-typed
@@ -211,6 +211,16 @@ fn current_cwd_string() -> String {
         .unwrap_or_else(|_| ".".to_string())
 }
 
+/// The `pr wait` wake bound: `pr.wait_wake_minutes` from config (default 15),
+/// read through the same candidate chain `fno config get` resolves.
+fn wait_wake_timeout(cwd: &Path) -> String {
+    let minutes = crate::agents_config::config_lookup(cwd, &["pr", "wait_wake_minutes"])
+        .and_then(|v| v.as_integer())
+        .filter(|m| *m > 0)
+        .unwrap_or(15);
+    format!("{minutes}m")
+}
+
 /// The first all-digits tail token, the positional PR operand.
 fn pr_operand(tail: &[String]) -> Option<u64> {
     tail.iter()
@@ -278,7 +288,7 @@ fn dispatch(sub: &str, tail: &[String]) -> i32 {
                 "until": option_value(tail, "--until")
                     .unwrap_or_else(|| "settled".to_string()),
                 "timeout": option_value(tail, "--timeout")
-                    .unwrap_or_else(|| "15m".to_string()),
+                    .unwrap_or_else(|| wait_wake_timeout(Path::new(&current_cwd_string()))),
                 "interval": option_value(tail, "--interval")
                     .unwrap_or_else(|| "60".to_string()),
             });
@@ -434,6 +444,44 @@ fn sync_canonical(tail: &[String]) -> i32 {
         eprintln!("{line}");
     }
     exit
+}
+
+#[cfg(test)]
+mod wait_wake_timeout_tests {
+    use super::wait_wake_timeout;
+
+    #[test]
+    fn the_default_reads_15_minutes() {
+        // A cwd with no local config falls through the candidate chain; the
+        // default 15 only moves when the OPERATOR sets the key, and the
+        // override case below covers that. Hermetic enough: the key is new.
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(wait_wake_timeout(dir.path()), "15m");
+    }
+
+    #[test]
+    fn the_config_key_overrides_the_default() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".fno")).unwrap();
+        std::fs::write(
+            dir.path().join(".fno/config.toml"),
+            "[pr]\nwait_wake_minutes = 7\n",
+        )
+        .unwrap();
+        assert_eq!(wait_wake_timeout(dir.path()), "7m");
+    }
+
+    #[test]
+    fn a_non_positive_value_falls_back_to_the_default() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".fno")).unwrap();
+        std::fs::write(
+            dir.path().join(".fno/config.toml"),
+            "[pr]\nwait_wake_minutes = 0\n",
+        )
+        .unwrap();
+        assert_eq!(wait_wake_timeout(dir.path()), "15m");
+    }
 }
 
 #[cfg(test)]

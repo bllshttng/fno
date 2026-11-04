@@ -2077,6 +2077,24 @@
     "title": "PostMergeBlock",
     "type": "object"
    },
+   "PrBlock": {
+    "description": "Pr verb defaults (nested under 'config.pr').\n\ncancel_red_run (default True): `fno do pr push` cancels a red head's\nin-flight CI run and pushes with receipt ci=red-cancel; False\nrestores the old exit-2 refusal while any run is still in flight.\nA head whose latest rows are not red always refuses, whatever this\nkey reads.\n\nwait_wake_minutes (default 15): the minutes `fno do pr wait` waits\nbefore it wakes when --timeout is omitted.",
+    "properties": {
+     "cancel_red_run": {
+      "default": true,
+      "title": "Cancel Red Run",
+      "type": "boolean"
+     },
+     "wait_wake_minutes": {
+      "default": 15,
+      "minimum": 1,
+      "title": "Wait Wake Minutes",
+      "type": "integer"
+     }
+    },
+    "title": "PrBlock",
+    "type": "object"
+   },
    "PrWatchBlock": {
     "description": "PR-state watcher settings (nested under 'config.pr_watch').\n\nControls the global launchd watcher that polls open-PR backlog nodes\nand fires headless /fno:ship pr check / /fno:ship pr merged.\n\nFields: enabled (operator opt-in, default False); interval_seconds\n(plist StartInterval, default 600); retries (consecutive dispatch\nfailures before a PR parks, default 3); max_age_days (default 14);\nmodel (headless skill-fire model, default claude-haiku-4-5);\ntick_timeout_seconds (wall clock per tick; unset derives\nmax(60, 0.8 * interval_seconds) so launchd never suppresses the next\ntick); graphql_min_remaining (dispatch-pass skip floor on the shared\nGraphQL budget, default 200); wedged_after_ticks (consecutive broken\ntick ends at a fresh watermark before liveness reads wedged, default\n3; one broken tick is transient).",
     "properties": {
@@ -3793,6 +3811,9 @@
    },
    "auto_heal": {
     "$ref": "#/$defs/AutoHealBlock"
+   },
+   "pr": {
+    "$ref": "#/$defs/PrBlock"
    },
    "pr_watch": {
     "$ref": "#/$defs/PrWatchBlock"
@@ -5863,6 +5884,24 @@
    "question": "",
    "default_source": "",
    "doc": "Arm the CI healer: each tick spawns one detached pr-heal --all --apply drive loop over every project root, off the tick's own budget. Default false. Measured 2026-09-16 over 15 red open PRs: 1 push, 3 cancelled-run reruns, 11 escalations, 0 failures inherited from main. Arm with: fno config set auto_heal.enabled true."
+  },
+  {
+   "path": "pr.cancel_red_run",
+   "type": "bool",
+   "default": true,
+   "wizard": "advanced",
+   "question": "",
+   "default_source": "",
+   "doc": "Cancel a red head's in-flight CI run on push instead of refusing: `fno do pr push` cancels the stale run and pushes (receipt ci=red-cancel). False restores the old exit-2 refusal while any run is still in flight; a head whose latest rows are not red always refuses."
+  },
+  {
+   "path": "pr.wait_wake_minutes",
+   "type": "int",
+   "default": 15,
+   "wizard": "advanced",
+   "question": "",
+   "default_source": "",
+   "doc": "Minutes `fno do pr wait` waits before it wakes when --timeout is omitted."
   },
   {
    "path": "pr_watch.enabled",
