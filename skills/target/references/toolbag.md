@@ -43,6 +43,6 @@ A pack install drops five skills: agent, mail, dnd, fno-me and lead. Their rows 
 | `fno:using-fno` | You are unsure whether a CLI primitive or a skill fits. | The surface table. |
 | `fno:agent` | A second worker is needed (spawn, handoff, peek). Full install only. | A spawn receipt. |
 | `fno:mail` | The lead or a peer must hear something. Full install only. | A message id. |
-| `fno:growth-launch`, `fno:groom`, `fno:lead`, `fno:dnd`, `fno:fno-me`, `fno:cache-keepalive`, `fno:harness-verbs` | Never from a target run. Each owns its own session or loop. `fno:harness-verbs` only redirects to `fno:harness-commands`. | Nothing. |
+| `fno:growth-launch`, `fno:groom`, `fno:lead`, `fno:dnd`, `fno:fno-me`, `fno:cache-keepalive`, `fno:harness-verbs` | Never from a target run. Each owns its own session or loop. `fno:harness-verbs` only redirects to `fno:harness-commands`. | Nothing. | <!-- verb-wording: allow -->
 
 When a skill folder has no row here, `scripts/lint/check-skill-reach.sh` fails.
