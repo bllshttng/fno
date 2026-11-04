@@ -2101,7 +2101,7 @@ stops
         let registry = home.registry_json();
         std::fs::write(
             &registry,
-            r#"{"schema_version":1,"agents":[{"name":"t-two","session_id":"s1","harness":"codex"}]}"#,
+            r#"{"schema_version":1,"agents":[{"name":"t-two","cwd":"/repo/fno","session_id":"s1","harness":"codex"}]}"#,
         )
         .unwrap();
         let root = tmp_root("origin-fill");
