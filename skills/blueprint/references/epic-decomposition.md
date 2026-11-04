@@ -77,9 +77,7 @@ is known):
 3. If the grouping collapses to a single group, **skip decompose** - the epic
    node is the one PR. Still record this in `## Delivery Groups`
    (AC1-EDGE: never force a split).
-4. Write a `## Delivery Groups` section to the doc (this section is owned by
-   the decomposition step, NOT by `fno-agents plan-cli mutate`; it is preserved across
-   `rewrite` re-runs). Format:
+4. Write a `## Delivery Groups` section to the doc. The decomposition step owns this section, NOT `fno-agents plan-cli mutate`. It survives `rewrite` re-runs. Format:
    ```markdown
    ## Delivery Groups
 

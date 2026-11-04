@@ -516,7 +516,7 @@ Tasks are routed to specialized agent profiles based on keywords in the task des
 
 ### Hidden Shared Output Protection
 
-`fno-agents wave ready` detects when parallel tasks would write to shared paths. It serializes the overlapping tasks in wave order, and the rest of the wave stays parallel. The roots are `HIDDEN_SHARED_OUTPUT_ROOTS` in `crates/fno-agents/src/backlog/collision.rs`:
+`fno-agents wave ready` finds parallel tasks that write to one shared path. It serializes the overlapping tasks in wave order, and the rest of the wave stays parallel. The roots are `HIDDEN_SHARED_OUTPUT_ROOTS` in `crates/fno-agents/src/backlog/collision.rs`:
 
 ```text
 HIDDEN_SHARED_OUTPUT_ROOTS = (

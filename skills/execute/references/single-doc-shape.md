@@ -6,7 +6,7 @@ A plan is always a single `.md` file (G1 blocks authoring new folder plans; G3 r
 
 ## `fno-agents wave ready <plan>`
 
-`/execute waves` asks `fno-agents wave ready <plan> [--state <STATE.md>] [--node <id>] [--band low|medium|high]` for the tasks it may dispatch. The loader (`load` in `crates/fno-agents/src/wave_ready.rs`):
+`/execute waves` asks `fno-agents wave ready <plan> [--state <STATE.md>] [--node <id>] [--band low|medium|high]` for the tasks it can dispatch. The loader (`load` in `crates/fno-agents/src/wave_ready.rs`):
 
 1. Reads the plan through `plan_doc::doc::load_plan`, the same parser the `fno do plan parse` door uses. `fno do plan brief` uses the same parser.
 2. Validates the frontmatter through the plan-schema door. It refuses on a missing strategy section, a strategy parse error, or an edge error.

@@ -213,7 +213,9 @@ Then read what already moves on the same files. Run `fno do pr list --state open
    runtime surface inference (overridable via `FNO_EXECUTOR_OVERRIDE`).
 
    **Enrich the Execution Strategy before it becomes executable.**
-   Run `fno-agents plan-cli mutate "$PLAN_PATH" --draft`; it produces the deterministic wave/task skeleton while keeping a design-status document in `design`.
+
+   Run `fno-agents plan-cli mutate "$PLAN_PATH" --draft`. It produces the deterministic wave/task skeleton and keeps a design-status document in `design`.
+
    On the full-context main thread, replace every placeholder and populate each task's `surface`, concrete `verify` command, and `acceptance` list from the design and inspected codebase.
 
    **Then ask the join posture.** The trigger is every plan that carries an `## Execution Strategy`. One question, one key: `join: manual | auto   # default manual`.
