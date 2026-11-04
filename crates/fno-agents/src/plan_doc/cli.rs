@@ -6,6 +6,7 @@
 //!   path              the save path for a NEW plan/design doc
 //!   brief             a scoped task brief from a single-doc plan
 //!   parse             one plan doc as JSON, for the skill scripts (hidden)
+//!   mutate            the /blueprint draft and finalize writer (hidden)
 //!   validate          frontmatter, or --execution semantics (read-only)
 //!   folder-audit      folder plans owned by a non-terminal node
 //!   rung              the readiness rung and dispatch verdict (hidden)
@@ -42,6 +43,7 @@ pub fn run(args: &[String]) -> i32 {
         "path" => crate::plans_path::run_plan_path(rest),
         "brief" => run_brief(rest),
         "parse" => run_parse(rest),
+        "mutate" => super::mutate::run(rest),
         "validate" => run_validate(rest),
         "folder-audit" => run_folder_audit(rest),
         "rung" => run_rung(rest),

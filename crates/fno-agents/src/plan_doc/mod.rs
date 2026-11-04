@@ -11,6 +11,7 @@ pub mod folder_audit;
 pub mod keeper;
 pub mod lock;
 pub mod migrate;
+pub mod mutate;
 pub mod node_accessors;
 pub mod project;
 pub mod reconcile;
