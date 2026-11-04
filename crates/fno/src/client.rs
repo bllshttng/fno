@@ -3951,6 +3951,10 @@ impl View {
             DisplayRow::Agent(a) => Some(agent_hit(a, self.layout.active_squad)),
             // A `~` header cycles its own view state, exactly like a squad
             // name row: inert to the selector, clickable.
+            // The pinned Needs input header has no fold state: a click closes it.
+            DisplayRow::Header { key, .. } if *key == SectionKey::Group("@needs-input".into()) => {
+                Some(ChromeHit::NeedInput)
+            }
             DisplayRow::Header { key, .. } => Some(ChromeHit::CycleSection(key.clone())),
             // The idle fold toggles its squad's idle expansion: actionable
             // (click and Enter), so not inert.
@@ -5621,9 +5625,12 @@ impl View {
                         kept_depths.push(d);
                     }
                 }
-                (kept_rows, kept_depths)
+                self.pin_needs(kept_rows, kept_depths)
             }
-            Density::Extended => self.table_rows_with_depths(),
+            Density::Extended => {
+                let (rows, depths) = self.table_rows_with_depths();
+                self.pin_needs(rows, depths)
+            }
         }
     }
 
