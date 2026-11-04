@@ -1,8 +1,8 @@
-# Golden task: step 1 reads the last assistant turn that hit the cache.
+# Capability task: step 1 reads the last assistant turn that hit the cache.
 # The fixture holds a warm turn, a malformed line, a later warmer turn, and
 # a cold last turn. The stats come from the warmer turn, never the cold one.
 id: cache-stats-last-warm-turn
-tier: golden
+tier: capability
 prompt: |
   Run step 1 ("Get Cache Stats") of skills/cache-keepalive/SKILL.md in this
   checkout. Use evals/fixtures/cache-keepalive/transcript.jsonl as the

@@ -1,7 +1,7 @@
-# Golden task: every triage step runs the native command. The skill once
+# Capability task: every triage step runs the native command. The skill once
 # fell back to a Python shim; the shim is gone, so a fallback is a dead path.
 id: triage-commands-native
-tier: golden
+tier: capability
 prompt: |
   Read skills/triage/SKILL.md in this checkout; do not run triage. Write to
   evals/fixtures/triage/commands.txt the exact commands the skill runs for

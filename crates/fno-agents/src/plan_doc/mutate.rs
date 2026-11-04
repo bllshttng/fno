@@ -1001,8 +1001,12 @@ mod tests {
             true,
             dir.path(),
         );
+        // The frontmatter keeps the author's value; the strategy fence below it
+        // carries its own `execution_mode`.
+        let fm = out.split("\n---").next().unwrap_or("");
         assert!(
-            out.contains("execution_mode: sequential") && !out.contains("execution_mode: mixed")
+            fm.contains("execution_mode: sequential") && !fm.contains("execution_mode: mixed"),
+            "{out}"
         );
         assert!(out.contains("difficulty: low\n") && out.contains("    difficulty: low\n"));
         assert_eq!(

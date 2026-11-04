@@ -1527,10 +1527,10 @@ mod tests {
             }
         }
 
-        // The allowed files: production binary repair (install_verify), six
+        // The allowed files: production binary repair (install_verify), seven
         // production dir modes (paths, fleet_incident, chats, the
         // session-state pin dir, the mcp sidecar's socket-parent tightening,
-        // the daemon's sandbox socket dir),
+        // the daemon's sandbox socket dir, the saved-sessions dir),
         // two dir-mode
         // restores in tests (claims, operator_turns); the bin test target
         // cannot see a cfg(test) lib fn (client_tests); and the plan writer's
@@ -1548,6 +1548,7 @@ mod tests {
             ("chats.rs", 1),
             ("mcp/sidecar.rs", 1),
             ("daemon/sandbox_host.rs", 1),
+            ("hook/save_session.rs", 1),
         ];
         let allowed_counts: std::collections::HashMap<&str, usize> =
             ALLOWED.iter().copied().collect();
