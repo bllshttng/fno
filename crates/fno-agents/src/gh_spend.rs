@@ -400,6 +400,7 @@ pub(crate) fn is_poll_class(label: &str) -> bool {
         || label == "lead-checkin"
         || label == "pr-heal"
         || label == "backlog reconcile"
+        || label == "unknown"
         || label == "authorized-merge status-read"
         || label.starts_with("authorized-merge status-wait")
 }
