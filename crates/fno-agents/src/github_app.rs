@@ -203,7 +203,9 @@ fn repo_from_args<'a>(args: impl Iterator<Item = &'a OsStr>) -> Option<String> {
 /// leading-slash path, or a full URL all carry the segment. Template
 /// placeholders (`:owner`) never resolve.
 fn repo_from_api_path(endpoint: &str) -> Option<String> {
-    let segs: Vec<&str> = endpoint.split('/').filter(|s| !s.is_empty()).collect();
+    // The query rides the last path segment; cut it before segmenting.
+    let path = endpoint.split('?').next().unwrap_or(endpoint);
+    let segs: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
     let i = segs.iter().position(|s| *s == "repos")?;
     let owner = segs.get(i + 1)?;
     let repo = segs.get(i + 2)?;
@@ -526,7 +528,11 @@ fn fetch_installations(cfg: &AppConfig, now_ms: i64) -> Result<Vec<InstallRef>, 
             .and_then(Value::as_array)
             .cloned()
             .unwrap_or_default();
+        // The stop counts raw rows: a dropped row (no account login) must
+        // not keep the loop fetching pages total_count never described.
+        let mut seen = 0u64;
         for row in rows.iter() {
+            seen += 1;
             let id = row.get("id").and_then(Value::as_u64).map(|n| n.to_string());
             let login = row
                 .get("account")
@@ -537,7 +543,7 @@ fn fetch_installations(cfg: &AppConfig, now_ms: i64) -> Result<Vec<InstallRef>, 
                 refs.push(InstallRef { id, login });
             }
         }
-        if (refs.len() as u64) >= total || rows.is_empty() {
+        if seen >= total || rows.is_empty() {
             break;
         }
     }
@@ -593,14 +599,17 @@ fn list_installation_repos(token: &str) -> Result<Vec<String>, String> {
             .and_then(Value::as_array)
             .cloned()
             .unwrap_or_default();
+        // Raw-row stop, same reason as the installations loop.
+        let mut seen = 0u64;
         for row in rows.iter() {
+            seen += 1;
             if let Some(name) = row.get("full_name").and_then(Value::as_str) {
                 if let Some(slug) = normalize_repo(name) {
                     repos.push(slug);
                 }
             }
         }
-        if (repos.len() as u64) >= total || rows.is_empty() {
+        if seen >= total || rows.is_empty() {
             break;
         }
     }
@@ -906,6 +915,11 @@ mod tests {
         assert_eq!(case(&["--repo=o/r"]).as_deref(), Some("o/r"));
         assert_eq!(case(&["-Ro/r"]).as_deref(), Some("o/r"));
         assert_eq!(case(&["api", "repos/o/r/pulls"]).as_deref(), Some("o/r"));
+        // A query on the repo segment itself must not poison the slug.
+        assert_eq!(
+            case(&["api", "repos/o/r?per_page=1"]).as_deref(),
+            Some("o/r")
+        );
         assert_eq!(case(&["api", "/repos/o/r"]).as_deref(), Some("o/r"));
         assert_eq!(
             case(&["api", "https://api.github.com/repos/o/r/pulls?x=1"]).as_deref(),
@@ -1045,6 +1059,17 @@ mod tests {
         // A placed token reports true, so the caller can arm the 404 retry.
         let mut placed = Command::new("gh");
         assert!(inject_with(&mut placed, Some("app-token")));
+    }
+
+    #[test]
+    fn inject_never_touches_a_non_gh_program() {
+        let mut git = Command::new("git");
+        git.args(["fetch", "origin"]);
+        assert!(!inject(&mut git, OsStr::new("git")));
+        assert!(git.get_envs().all(|(k, _)| k != OsStr::new("GH_TOKEN")));
+        let mut curl = Command::new("curl");
+        assert!(!inject(&mut curl, OsStr::new("curl")));
+        assert!(curl.get_envs().all(|(k, _)| k != OsStr::new("GH_TOKEN")));
     }
 
     #[test]
