@@ -156,9 +156,9 @@ The task fixture is the fix commit's parent. The grader overwrites the fix's tes
 
 `--ref` on a work-product task keeps the parent as the fixture. It replaces only the rules a worker reads (`AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `.claude`, `skills`, `agents`, `commands`, `hooks`). `bank_rev` records the `--ref` sha and `fixture_rev` records the parent, so `report --predict` still joins on the rules tree.
 
-Mine candidates with `fno doctor evals candidates --source fix-pr`. The miner lists a `fix` commit only when it changes a separate test file under `src/` and a source file. A fix whose tests sit inline in the changed file is not listed, because re-applying that file would re-apply the fix.
+Mine candidates with `fno doctor evals candidates --source fix-pr`. The miner lists a `fix` commit that changes both a separate test file under `src/` and a source file. A fix whose tests sit inline in the changed file is not listed, because re-applying that file also re-applies the fix.
 
-Mint a draft with `fno doctor evals drafts --from-commit <sha>`. The mint runs the crate's tests at the parent and at the fix. It sets f2p to the tests in the fix's test files that pass only with the fix, and p2p to the ones that pass in both. Then it runs the fix three times in a sealed tree. Every f2p id must pass all three. The draft lands in `<state>/evals/golden-drafts/work-product/` with a `qualified:` block. The bank loader refuses a tests task that has no `qualified:` block or no `golden:` block.
+Mint a draft with `fno doctor evals drafts --from-commit <sha>`. The mint runs the crate's tests at the parent and at the fix. It sets f2p to the tests in the fix's test files that pass only with the fix. It sets p2p to the ones that pass in both. Then it runs the fix three times in a sealed tree. Every f2p id must pass all three. The draft lands in `<state>/evals/golden-drafts/work-product/` with a `qualified:` block. The bank loader refuses a tests task that has no `qualified:` block or no `golden:` block.
 
 Only the `cargo` runner exists. A pytest runner waits until a pytest candidate set shows a useful qualify rate.
 
