@@ -1012,7 +1012,7 @@ pub(crate) fn draw(view: &View, cells: &mut [Cell], rows_n: usize, cols: usize) 
                 }
                 Row::Clear(n) => (format!("Clear all {n} answered"), view.theme.brand, true),
                 Row::Audit(n) => (
-                    format!("{n} decisions have no author: open the audit queue"),
+                    format!("{n} decisions have no author"),
                     view.theme.brand,
                     true,
                 ),

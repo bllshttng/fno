@@ -79,6 +79,7 @@ fn paint_ansi(row: &mut [Cell], line: &str) {
 }
 
 pub(crate) fn paint_full(view: &View, cells: &mut [Cell], rows: usize, cols: usize) {
+    cells[..rows * cols].fill(Cell::default());
     view.paint_top_row(cells, cols, cols);
     let Some(b) = &view.decisions_board else {
         return;

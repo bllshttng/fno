@@ -309,21 +309,24 @@ impl View {
     pub(super) fn top_row_words(&self) -> Vec<(&'static str, crate::view_store::SidelineView)> {
         // The full words end at column 19; the buttons need the bell label,
         // the density glyph, and a gap past that, so the full form pays off
-        // only from here.
+        // only from here. Below it the tabs read `A  M  D`, and below
+        // `SHORT_WORDS_MIN_W` the Decisions tab yields so the density seat stays clear.
         const FULL_WORDS_MIN_W: usize = 30;
+        const SHORT_WORDS_MIN_W: usize = 12;
         let tw = self.sideline_paint_w().saturating_sub(1);
-        if tw >= FULL_WORDS_MIN_W {
-            vec![
-                ("Agents", crate::view_store::SidelineView::Agents),
-                ("Messages", crate::view_store::SidelineView::Messages),
-                ("Decisions", crate::view_store::SidelineView::Decisions),
-            ]
+        let (agents, messages, decisions) = if tw >= FULL_WORDS_MIN_W {
+            ("Agents", "Messages", "Decisions")
         } else {
-            vec![
-                ("A", crate::view_store::SidelineView::Agents),
-                ("M", crate::view_store::SidelineView::Messages),
-            ]
+            ("A", "M", "D")
+        };
+        let mut words = vec![
+            (agents, crate::view_store::SidelineView::Agents),
+            (messages, crate::view_store::SidelineView::Messages),
+        ];
+        if tw >= SHORT_WORDS_MIN_W {
+            words.push((decisions, crate::view_store::SidelineView::Decisions));
         }
+        words
     }
 
     /// The strip row's words with their column spans, shared by the paint
