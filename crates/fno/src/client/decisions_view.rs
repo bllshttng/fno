@@ -38,14 +38,6 @@ pub(crate) fn open_rows(view: &mut View, rows: Vec<crate::decisions_overlay::Dec
     super::backlog_board::set_sideline_view(view, SidelineView::Decisions);
 }
 
-/// The alerts row's tap: open the tab on the audit queue.
-pub(crate) fn open_audit(view: &mut View) {
-    open(view);
-    if let Some(b) = view.decisions_board.as_mut() {
-        b.table.apply(Key::Audit);
-    }
-}
-
 /// Paint the style codes `render` emits (reset, bold, dim, reverse) into one
 /// row of cells.
 fn paint_ansi(row: &mut [Cell], line: &str) {
