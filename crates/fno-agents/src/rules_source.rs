@@ -826,11 +826,19 @@ mod tests {
             })
             .to_string()
         };
-        let mut text = span("r-a", "block", "2026-10-29T00:00:00Z");
+        // Dates relative to the run: a hardcoded span leaves the live 7d
+        // window on a real calendar date and the count flips (the
+        // 2026-11-04 midnight flip this test rode once already).
+        let day = |offset: i64| {
+            (chrono::Utc::now() - chrono::Duration::days(offset))
+                .format("%Y-%m-%dT00:00:00Z")
+                .to_string()
+        };
+        let mut text = span("r-a", "block", &day(5));
         text.push('\n');
-        text.push_str(&span("r-a", "warn", "2026-10-28T00:00:00Z"));
+        text.push_str(&span("r-a", "warn", &day(6)));
         text.push('\n');
-        text.push_str(&span("r-b", "warn", "2026-10-20T00:00:00Z"));
+        text.push_str(&span("r-b", "warn", &day(8)));
         text.push('\n');
         std::fs::write(&journal, text).unwrap();
 
