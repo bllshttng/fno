@@ -399,7 +399,6 @@ fno backlog join width <plan-path>
 
 It prints the int and exits 0.
 It exits 1 with no output when the plan does not measure.
-Run it under the interpreter that resolves `fno`, because a bare python without the fno dependencies exits 1 for the wrong reason.
 When the probe exits 1, the plan is unmeasured, not narrow.
 Never read that silence as a width of one.
 

@@ -57,8 +57,7 @@ decision matrix.
 ```bash
 PROJECT=$(basename "$(git rev-parse --show-toplevel)")
 RESULT=$(bash scripts/lib/worktree-manager.sh create "$PROJECT" sign-in-sheet)
-WORKTREE_PATH=$(echo "$RESULT" | python3 -c \
-    'import json,sys; print(json.load(sys.stdin)["path"])')
+WORKTREE_PATH=$(echo "$RESULT" | jq -r '.path')
 cd "$WORKTREE_PATH"
 ```
 

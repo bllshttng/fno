@@ -639,33 +639,22 @@ The `no-collision-check` positional modifier (and `--no-collision-check` flag) s
 
 After the plan file is written and any collision check has resolved, but BEFORE auto-intake, scan the plan's Files-to-Modify table for paths that match a peer-owned surface. Mechanical resolution, not LLM judgment. Skip the whole step silently when no `peers` block exists (opt-in by design).
 
-```python
-import json, subprocess
-maps = json.loads(subprocess.run(["fno", "inbox", "peers", "--json"],
-                                 capture_output=True, text=True, check=True).stdout)
-peers = maps["peers"]                  # {peer: [surface_name, ...]}
-patterns = maps["surface_patterns"]    # {surface_name: [glob, ...]}
+```bash
+MAPS="$(fno inbox peers --json)"
+# {peer: [surface_name, ...]}; an empty object means no peers block, so skip the step.
+printf '%s' "$MAPS" | jq -c '.peers'
+# {surface_name: [glob, ...]}
+printf '%s' "$MAPS" | jq -c '.surface_patterns'
 ```
 
-For each peer, union the glob patterns of every surface that peer owns,
-then test the plan's Files-to-Modify rows against that union. The
-patterns intentionally use `**` for recursive matches (e.g. `src/api/**`),
-so use a matcher that supports recursive globs across the project's
-target Python (3.11+). `fnmatch.fnmatch` does NOT recurse on `**`, and
-`pathlib.PurePath.match` only treats `**` as recursive starting in 3.13.
-The portable choice is to translate the glob to a regex and match:
+For each peer, union the glob patterns of every surface that peer owns, then test the plan's Files-to-Modify rows against that union. The patterns use `**` for recursive matches (for example `src/api/**`). Translate each glob to an anchored regex: `**` becomes `.*` (it crosses segments), `*` becomes `[^/]*` (one segment), and `?` becomes `.`. Then match the whole path, for example with jq:
 
-```python
-import re, fnmatch
-def match_recursive(file_path: str, pat: str) -> bool:
-    # Translate `**` to `.*` (cross-segment) and `*` to `[^/]*` (single segment).
-    regex = (
-        re.escape(pat)
-        .replace(r"\*\*", ".*")
-        .replace(r"\*", "[^/]*")
-        .replace(r"\?", ".")
-    )
-    return re.fullmatch(regex, file_path) is not None
+```bash
+printf '%s\n' "$FILE_PATH" | jq -Rr --arg pat "$PAT" '
+  ($pat | gsub("(?<c>[.+^$()|\\[\\]{}])"; "\\\(.c)")
+        | gsub("\\*\\*"; "\u0000") | gsub("\\*"; "[^/]*")
+        | gsub("\u0000"; ".*") | gsub("\\?"; ".")) as $re
+  | select(test("^" + $re + "$"))'
 ```
 
 For each peer with at least one match, check the rc on send and update

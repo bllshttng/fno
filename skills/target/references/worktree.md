@@ -44,10 +44,8 @@ These are real bugs that have shipped and shaped the rules above.
 # Create. Manager picks worktree_base from config.toml; falls back to
 # <repo>/.claude/worktrees. Branch defaults to feature/{slug}.
 RESULT=$(bash scripts/lib/worktree-manager.sh create "$PROJECT" "$SLUG")
-WORKTREE_PATH=$(echo "$RESULT" | python3 -c \
-    'import json,sys; print(json.load(sys.stdin)["path"])')
-EXISTED=$(echo "$RESULT" | python3 -c \
-    'import json,sys; print(json.load(sys.stdin)["existing"])')
+WORKTREE_PATH=$(echo "$RESULT" | jq -r '.path')
+EXISTED=$(echo "$RESULT" | jq -r '.existing')
 
 # Setup: lockfile-hash cached, env files declared in settings copied.
 # Idempotent - safe to call on every run.
