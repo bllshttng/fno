@@ -47,20 +47,6 @@ _before_from_payload() {
             BEFORE_FILE=""
             return 0
         }
-    elif command -v python3 >/dev/null 2>&1; then
-        printf '%s' "$PAYLOAD" | python3 -c '
-import json, sys
-try:
-    value = json.load(sys.stdin).get("tool_response", {}).get("originalFile")
-    if isinstance(value, str):
-        sys.stdout.write(value)
-except Exception:
-    pass
-' >"$BEFORE_FILE" 2>/dev/null || {
-            rm -f "$BEFORE_FILE"
-            BEFORE_FILE=""
-            return 0
-        }
     else
         rm -f "$BEFORE_FILE"
         BEFORE_FILE=""
@@ -113,11 +99,6 @@ FINDINGS="$(cat "$ENTRY_OUT")"
 
 if command -v jq >/dev/null 2>&1; then
     CONTEXT="$(printf '%s' "$FINDINGS" | jq -Rs .)"
-elif command -v python3 >/dev/null 2>&1; then
-    CONTEXT="$(FINDINGS_ENV="$FINDINGS" python3 -c '
-import json, os, sys
-sys.stdout.write(json.dumps(os.environ["FINDINGS_ENV"]))
-' 2>/dev/null || true)"
 else
     CONTEXT=""
 fi

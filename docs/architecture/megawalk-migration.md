@@ -54,7 +54,7 @@ Bare invocation is resume-aware - it reads `megawalk-state.md` and picks the nex
 /megawalk adopt plans/a.md plans/b.md   # explicit multi-path
 ```
 
-`roadmap-tasks.py intake --batch` exits 1 with the same redirect so scripts and muscle-memory calls fail loudly instead of silently. (The `adopt` Typer alias is gone entirely; calling `roadmap-tasks.py adopt` exits 2 with "No such command".)
+`fno backlog intake --batch` exits 1 with the same redirect, so scripts and muscle-memory calls fail loudly instead of silently. The `adopt` Typer alias is gone entirely.
 
 ## Removed: top-level `/megawalk vision.md`
 

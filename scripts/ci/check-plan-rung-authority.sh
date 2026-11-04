@@ -396,7 +396,10 @@ crates/fno-agents/src/plan_carry.rs
 crates/fno-agents/src/scoreboard/plan_join.rs
 crates/fno-agents/src/surface_check.rs
 crates/fno-agents/src/verify_advise.rs
-crates/fno-agents/src/wave.rs"
+crates/fno-agents/src/wave.rs
+crates/fno-agents/src/wave_ready.rs"
+# wave_ready.rs reads the Execution Strategy and the task file lists to list
+# dispatchable tasks; its frontmatter check drops every `status` error.
 # evals_candidates.rs reads only the plan frontmatter `title`, `claims` and
 # PR urls to rank golden candidates; superseded comes from the graph, so it
 # never extracts a plan status and the shelling rule does not apply to it.
@@ -619,6 +622,16 @@ while IFS= read -r reader; do
         matches="$(
             printf '%s\n' "$matches" \
                 | grep -vE '\["status", "--porcelain"' \
+                || true
+        )"
+    fi
+    if [ "$reader" = "crates/fno-agents/src/wave_ready.rs" ]; then
+        # wave_ready's "status" literals: the schema-error field it DROPS from
+        # the frontmatter report, the `agents claim status` argv, and the
+        # graph task row's status. None reads the plan's `status:` key.
+        matches="$(
+            printf '%s\n' "$matches" \
+                | grep -vE '!= Some\("status"\)|"claim", "status"|row\.get\("status"\)' \
                 || true
         )"
     fi

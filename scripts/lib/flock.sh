@@ -3,10 +3,10 @@
 #
 # Usage:
 #   source "$(dirname "$0")/lib/flock.sh"
-#   with_task_lock python3 roadmap-tasks.py update 5 --status done
+#   with_task_lock fno backlog update 5 --status done
 #
 # Uses mkdir-based locking (POSIX atomic, works on macOS without flock).
-# Python roadmap-tasks.py uses fcntl.flock internally for its own writes.
+# The backlog CLI locks its own graph writes.
 # This wrapper serializes shell-initiated mutations.
 
 TASK_LOCK_DIR="/tmp/fno-ledger.lock.d"

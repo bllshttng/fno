@@ -31,13 +31,13 @@ fail() {
 }
 
 # Step 1: Intake three mock plans to the backlog (no roadmap_id).
-HOME="$TEST_HOME" python3 scripts/roadmap-tasks.py intake "$TEST_HOME/plans/auth.md" \
+HOME="$TEST_HOME" fno backlog intake "$TEST_HOME/plans/auth.md" \
     --title "Auth" --priority p1 > /dev/null \
     || fail "intake auth"
-HOME="$TEST_HOME" python3 scripts/roadmap-tasks.py intake "$TEST_HOME/plans/billing.md" \
+HOME="$TEST_HOME" fno backlog intake "$TEST_HOME/plans/billing.md" \
     --title "Billing" --priority p2 > /dev/null \
     || fail "intake billing"
-HOME="$TEST_HOME" python3 scripts/roadmap-tasks.py intake "$TEST_HOME/plans/dashboard.md" \
+HOME="$TEST_HOME" fno backlog intake "$TEST_HOME/plans/dashboard.md" \
     --title "Dashboard" --priority p3 > /dev/null \
     || fail "intake dashboard"
 
@@ -55,7 +55,7 @@ for title in Auth Billing Dashboard; do
 done
 
 # Step 3: Dry-run triage emits a proposal JSON with the three schema keys.
-HOME="$TEST_HOME" python3 scripts/triage.py propose --dry-run > "$TEST_HOME/proposal.json" 2> "$TEST_HOME/proposal.err"
+HOME="$TEST_HOME" fno backlog triage propose --dry-run > "$TEST_HOME/proposal.json" 2> "$TEST_HOME/proposal.err"
 grep -q "^Proposed" "$TEST_HOME/proposal.err" || fail "dry-run did not print 'Proposed' header"
 python3 -c "
 import json, sys
@@ -87,7 +87,7 @@ cat > "$TEST_HOME/apply.json" <<EOF
 }
 EOF
 
-HOME="$TEST_HOME" python3 scripts/triage.py apply "$TEST_HOME/apply.json" > /dev/null \
+HOME="$TEST_HOME" fno backlog triage apply "$TEST_HOME/apply.json" > /dev/null \
     || fail "triage apply"
 
 # Step 5: graph.db reflects the new blocked_by edge, graph.md re-rendered.
@@ -114,7 +114,7 @@ EOF
 # Ignore the expected non-zero exit; check stderr for the cycle warning and
 # stdout for the dropped edge.
 set +e
-HOME="$TEST_HOME" python3 scripts/triage.py validate "$TEST_HOME/cycle.json" > "$TEST_HOME/validated.json" 2> "$TEST_HOME/validate.err"
+HOME="$TEST_HOME" fno backlog triage validate "$TEST_HOME/cycle.json" > "$TEST_HOME/validated.json" 2> "$TEST_HOME/validate.err"
 validate_rc=$?
 set -e
 [[ "$validate_rc" -ne 0 ]] || fail "validate should exit non-zero when edges are dropped"
@@ -129,7 +129,7 @@ assert v.get('validation_errors'), 'validation_errors should be populated'
 # AC6: empty backlog handled cleanly.
 EMPTY_HOME="$(mktemp -d)"
 trap "rm -rf '$TEST_HOME' '$EMPTY_HOME'" EXIT
-HOME="$EMPTY_HOME" python3 scripts/triage.py propose 2>&1 | grep -q "no pending nodes" \
+HOME="$EMPTY_HOME" fno backlog triage propose 2>&1 | grep -q "no pending nodes" \
     || fail "empty backlog did not report 'no pending nodes'"
 
 # Phase 04 AC1-AC2: docs cross-reference the new surface. Cheap grep checks

@@ -4,6 +4,7 @@
 pub mod brief;
 pub mod cli;
 pub mod codec;
+pub mod consolidation;
 pub mod criteria;
 pub mod doc;
 pub mod exec_validate;
@@ -11,6 +12,7 @@ pub mod folder_audit;
 pub mod keeper;
 pub mod lock;
 pub mod migrate;
+pub mod mutate;
 pub mod node_accessors;
 pub mod project;
 pub mod reconcile;

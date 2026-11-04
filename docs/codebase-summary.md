@@ -121,7 +121,7 @@ Other       ██                                 5%
 | **Claude Code CLI** | Latest | Primary execution environment |
 | **bash/zsh** | 4.0+ / 5.0+ | Hook scripts, automation |
 | **git** | 2.30+ | Version control, worktrees, PR flow |
-| **Python 3** | 3.9+ | Orchestrator (`operator/orchestrator.py`), agent sync |
+| **Python 3** | 3.9+ | Agent sync |
 
 ### Optional (Recommended)
 
@@ -256,8 +256,8 @@ The plugin includes test scripts but no formal test framework:
 # Scan for anti-patterns
 ./scripts/scan-antipatterns.sh
 
-# Run orchestrator CLI
-python skills/execute/orchestrator.py --help
+# Print the dispatchable tasks of a plan
+fno-agents wave ready path/to/plan.md
 
 # Test hook behavior
 ./scripts/test_stop_hook_events.sh

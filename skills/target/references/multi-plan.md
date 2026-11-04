@@ -89,8 +89,8 @@ PLAN_NAME=$(basename "$PLAN_PATH" .md)
 
 # Manager emits JSON: {status, existing, path, branch, mode}
 RESULT=$(bash scripts/lib/worktree-manager.sh create "$PROJECT_NAME" "$PLAN_NAME")
-WORKTREE_PATH=$(echo "$RESULT" | python3 -c 'import json,sys; print(json.load(sys.stdin)["path"])')
-BRANCH_NAME=$(echo "$RESULT" | python3 -c 'import json,sys; print(json.load(sys.stdin)["branch"])')
+WORKTREE_PATH=$(echo "$RESULT" | jq -r '.path')
+BRANCH_NAME=$(echo "$RESULT" | jq -r '.branch')
 ```
 
 Re-running fork mode against the same plan folder is idempotent: the
