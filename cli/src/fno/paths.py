@@ -431,6 +431,26 @@ def _global_settings_path() -> Path:
     return Path.home() / ".fno" / "settings.yaml"
 
 
+def _canonical_root_from_gitfile(repo_root: Path) -> Optional[Path]:
+    """Canonical root from a linked worktree's ``.git`` pointer file; None
+    when ``.git`` is a real dir or unparseable. Plain IO by contract: the
+    settings cache key runs on every read and never shells out."""
+    git_path = repo_root / ".git"
+    if not git_path.is_file():
+        return None
+    try:
+        text = git_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    for line in text.splitlines():
+        if line.strip().startswith("gitdir:"):
+            gitdir = line.split(":", 1)[1].strip()
+            idx = gitdir.find("/.git/worktrees/")
+            if idx > 0:
+                return Path(gitdir[:idx])
+    return None
+
+
 def _settings_fingerprint() -> tuple[tuple[str, int, int], ...]:
     """(path, mtime_ns, size) per existing candidate, the loader's walk.
 
@@ -447,8 +467,8 @@ def _settings_fingerprint() -> tuple[tuple[str, int, int], ...]:
             repo_root / ".fno" / "config.local.toml",
         ]
         if os.environ.get("FNO_NO_CANONICAL_CONFIG") != "1":
-            canonical = resolve_canonical_worktree()
-            if canonical is not None and canonical != resolve_repo_root():
+            canonical = _canonical_root_from_gitfile(repo_root)
+            if canonical is not None and canonical != repo_root:
                 locations += [
                     canonical / ".fno" / name
                     for name in ("config.toml", "settings.yaml")
@@ -543,7 +563,8 @@ def _settings_at(key: tuple) -> _SettingsFacts:
     root = key[-1]
     root_arg = {"root": root} if root else {}
     from fno import rust_binary
-    receipt = rust_binary.settings_read(**root_arg)
+    binary = rust_binary.find_dev_binary()
+    receipt = rust_binary.settings_read(binary=binary, **root_arg)
     return _SettingsFacts(receipt.get("paths") if receipt else None)
 
 

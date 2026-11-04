@@ -207,14 +207,6 @@ def test_every_command_group_builds_via_get_command():
 
 
 # ---------------------------------------------------------------------------
-# config <-> graph import cycle: broken by the fno.config_io leaf (x-7fdd).
-# Guards the invariant that both packages import at module scope in EITHER
-# order without ImportError, and that the leaf holds no back-edge.
-# ---------------------------------------------------------------------------
-
-
-
-# ---------------------------------------------------------------------------
 # AC5-ERR / AC6-EDGE: a missing fno submodule names the reinstall window
 # ---------------------------------------------------------------------------
 

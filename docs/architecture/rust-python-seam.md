@@ -106,7 +106,6 @@ The table classifies the crossing sites, one line of reason each. The pass that 
 | `yard_overlay.rs:50` | infrastructure | the delegation body line, one resolver per crate enforced here |
 | `yard_overlay.rs:57` | conforming | yard fold read through the command owner, fail-open |
 | `spawn_gate_lanes.rs:123` | conforming | pane listing fallback for the same probe, the pane owner's authoritative enumeration |
-| `doctor/report/collectors.rs deployed_config_keys` | conforming | installed-wheel config keys read through `fno-py`, the wheel's own interpreter; the wheel owns the fact and no native import exists |
 | `doctor/report/collectors.rs installed_pkg_dir` | conforming | installed package dir resolved by the interpreter that owns it, so source-vs-deployed comparison never guesses a site-packages layout |
 | `doctor/report/ops.rs run_session_cost` | conforming | session cost computed by the cost module's own `python3 -m` entry point; the billing arithmetic stays single-implementation in Python |
 | `doctor/mod.rs context_audit_run` | conforming | the context census runs as `python -m fno.context_audit` on the wheel's interpreter, all its inputs in one JSON argument; the census stays Python until its family ports |

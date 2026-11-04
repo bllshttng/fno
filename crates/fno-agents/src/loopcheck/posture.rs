@@ -14,7 +14,7 @@ pub(super) const DEFAULT_REQUIRED_BOTS: &[&str] = &[];
 /// peer harnesses are alternatives for one composite gate, not N required votes.
 // ── review.posture  ──────────────────────────────────────────────────
 //
-// The nine-rung ladder, mirrored from `fno.config.REVIEW_POSTURES`. One leaf
+// The nine-rung ladder, mirrored from the deleted Python REVIEW_POSTURES table. One leaf
 // names how much review a code PR must have; coverage resolves the rung and
 // reports satisfaction against the verdicts it already computed. Python reads
 // the emitted fields and never reclassifies them (the Ownership rule).

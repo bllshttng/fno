@@ -1,23 +1,19 @@
 //! parity-stage: characterization
-//! parity-oracle: fno.review_capability (through the review-level capability door shapes)
+//! parity-oracle: gone (fno.review_capability died with the Python runtime;
+//! the committed goldens under tests/golden/review_capability/ stay as the
+//! frozen contract)
 //!
 //! Golden parity for the `review-level capability` port, frozen against the
-//! live Python leg before wave 2 deletes it. Each case drives the REAL binary
-//! with the same env pins, fixtures, and payload the capture driver
-//! (`review_capability_golden_driver.py`) runs the Python leg under; the
-//! goldens under `tests/golden/review_capability/` hold the leg's door bytes
-//! with fixture paths normalized to `<TMP>`.
-//!
-//! Capture: `FNO_CAPTURE_GOLDEN=1` re-runs the driver per case (`--case`),
-//! asserts Rust==Python, and re-freezes via the shared helper. Normal mode
-//! (CI): the frozen golden is the contract and Python never runs. The case
-//! table below is the lockstep twin of the driver's; add a case to BOTH or
-//! neither. The github-apps probe cases run a stub `gh` on PATH so both legs
-//! answer False / None / True without a network.
+//! live Python leg while it lived. Each case drives the REAL binary with the
+//! same env pins, fixtures, and payload the capture driver ran the Python
+//! leg under; the goldens under `tests/golden/review_capability/` hold the
+//! leg's door bytes with fixture paths normalized to `<TMP>`. The frozen
+//! golden is the contract. The github-apps probe cases run a stub `gh` on
+//! PATH so the binary answers False / None / True without a network.
 
 mod common;
 
-use common::{assert_golden, capture_mode, python_executable, Golden};
+use common::{assert_golden, Golden};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -585,25 +581,6 @@ fn run_child(root: &Path, spec: &Case) -> Golden {
 /// The capture-mode oracle: the Python leg through the driver's `--case`
 /// door. The driver owns every fixture and env pin, so the caller passes a
 /// minimal env; the driver normalizes its own paths to `<TMP>`.
-fn run_python_oracle(spec: &Case) -> Golden {
-    let driver =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/review_capability_golden_driver.py");
-    let output = Command::new(python_executable())
-        .arg(&driver)
-        .arg("--case")
-        .arg(common::slug(spec.label))
-        .env("PYTHONPATH", python_path())
-        .output()
-        .expect("capture driver spawns");
-    Golden {
-        exit: output.status.code(),
-        streams: vec![
-            String::from_utf8_lossy(&output.stdout).into_owned(),
-            String::from_utf8_lossy(&output.stderr).into_owned(),
-        ],
-    }
-}
-
 /// Repo `cli/src` so Python can import the real `fno` package.
 fn python_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../cli/src")
@@ -617,7 +594,7 @@ fn review_capability_golden_parity() {
     std::fs::create_dir_all(&root).unwrap();
     for spec in cases() {
         let rust = run_child(&root, &spec);
-        let oracle = capture_mode().then(|| run_python_oracle(&spec));
+        let oracle = None;
         assert_golden("review_capability", spec.label, &rust, oracle);
     }
     let _ = std::fs::remove_dir_all(&root);

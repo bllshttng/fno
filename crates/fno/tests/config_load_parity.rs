@@ -1,20 +1,18 @@
-//! parity-stage: differential
-//! parity-oracle: fno.config._loader._load_settings_at
+//! parity-stage: characterization
+//! parity-oracle: gone with the config family (the committed goldens under
+//! tests/golden/config_load stay as the frozen contract)
 //!
-//! The config loader port, held against goldens captured from the Python
-//! loader through `config_load_driver.py --capture` (the committed oracle).
-//! The Python loader stays live until the config family deletes it; this
-//! file then flips to characterization with the oracle gone.
-//! Every pydantic validator on the settings model tree has a row in
-//! `validators.tsv`; `cases.jsonl` holds the probes the driver kept for it,
-//! plus one bad value per schema leaf type and the no-file defaults. Each
-//! case is one pinned `settings.yaml`, so the native side replays it as one
-//! layer named `<FIXTURE>/settings.yaml`: the same alias pass and unwrap the
-//! reader runs, then `validate_layer_list`. A loaded case compares the
-//! validated value at the probed loc; a refused case compares the refusal
-//! text byte for byte; both compare the stderr lines. The host owns one
-//! fold: Python prints a warning's file:line before its category, and the
-//! driver drops it.
+//! The config loader port, frozen against goldens captured from the Python
+//! loader while it lived. Every pydantic validator on the settings model
+//! tree has a row in `validators.tsv`; `cases.jsonl` holds the probes the
+//! capture kept, plus one bad value per schema leaf type and the no-file
+//! defaults. Each case is one pinned `settings.yaml`, so the native side
+//! replays it as one layer named `<FIXTURE>/settings.yaml`: the same alias
+//! pass and unwrap the reader runs, then `validate_layer_list`. A loaded
+//! case compares the validated value at the probed loc; a refused case
+//! compares the refusal text byte for byte; both compare the stderr lines.
+//! The capture-time host owned one fold (a warning's file:line prefix),
+//! frozen into the goldens.
 
 use fno::config_cli::model::{drop_retired_dispatch_keys, validate_layer_list};
 use fno::config_cli::{alias_legacy_keys, parse_config_file, unwrap_config_dict, yaml_to_json};
