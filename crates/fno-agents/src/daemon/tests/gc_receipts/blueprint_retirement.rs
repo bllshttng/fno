@@ -153,9 +153,11 @@ fn a_row_no_witness_can_lift_retires_past_a_day_and_the_dry_run_agrees() {
     let dry = run_probe_unread_sweep(&home, &emitter, &unread, true);
     assert_eq!(held(&dry), vec!["t-new".to_string()], "{dry:?}");
     assert!(
-        dry.dry_run_unverified.iter().any(|(id, _)| id == "t-old"),
-        "{:?}",
         dry.dry_run_unverified
+            .iter()
+            .chain(&dry.needs_live_stop)
+            .any(|(id, _)| id == "t-old"),
+        "the rehearsal names the old row past the probe: {dry:?}"
     );
     let live = run_probe_unread_sweep(&home, &emitter, &unread, false);
     assert_eq!(held(&live), vec!["t-new".to_string()], "{live:?}");

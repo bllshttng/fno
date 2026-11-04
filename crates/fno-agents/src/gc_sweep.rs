@@ -1438,8 +1438,9 @@ fn hold_clock(age: Option<i64>, e: &state::RegistryEntry, now: i64) -> (Option<i
     }
 }
 
-/// A row the truth probe cannot answer for, with no transcript, no pid and
-/// no inside-leg report, has no witness left that could ever lift the hold.
+/// A row the truth probe cannot answer for, with no transcript, no pid, no
+/// pane and no inside-leg report, has no witness left that could ever lift
+/// the hold. A pane row is excluded: its pane may be live with no pid recorded.
 /// Past this clock the silence retires it instead of keeping it forever.
 const PROBE_UNREAD_RETIRE_AFTER_S: i64 = 86_400;
 
@@ -2067,6 +2068,7 @@ pub(crate) fn run_with_release(
             let no_witness_stale = fresh_age.is_none()
                 && age.is_none()
                 && e.pid.is_none()
+                && e.mux.is_none()
                 && e.inside_leg.is_none()
                 && matches!(hold_age_s, Some(a) if a > PROBE_UNREAD_RETIRE_AFTER_S);
             let still_quiet = worker_finished(e, fresh_age, grace_secs, None)
