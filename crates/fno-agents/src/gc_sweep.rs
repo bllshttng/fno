@@ -2228,11 +2228,12 @@ pub(crate) fn run_with_release(
         // untouched.
         let stop_on_death =
             |entry: &state::RegistryEntry| death.is_some() || release_stop || stop_confirmed(entry);
-        // the session-shaped release that let an OPEN-work row
-        // retire. The obligation re-checks (stage and commit) yield to it.
-        // The policy judged the row past its window: a stale open do row
-        // no longer holds it, so the obligation re-checks yield.
-        let (released, idle_hour_past) = (true, true);
+        // An open do row the decision already saw is stale and no longer
+        // holds a row past its window, so the re-checks yield to it. A row
+        // the decision saw none on stays checked: a do row that opens before
+        // the stop is fresh work, and it holds.
+        let released = graph.open_do.contains_key(&sid.to_ascii_lowercase());
+        let idle_hour_past = true;
         // The stop gate's read-only answer, folded here where the evidence
         // lives: harness death state, a stop-family release, or the pane
         // precheck's already-stopped. Staging decides with it, and the
