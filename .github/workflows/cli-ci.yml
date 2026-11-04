@@ -752,12 +752,13 @@ jobs:
     # the full release build cold: passing runs reached 18.1 to 19.2m by
     # 2026-10-30 (12.6m release build, 6.1m native build, 0.8m budgets) and
     # one run was cancelled just past the cap. The dedicated release cache
-    # above should return warm runs to minutes; the cap stays 20m until a
-    # warm run says otherwise. History: the cold release build of fno-agents
+    # above should return warm runs to minutes. A cold run still lands at
+    # 18 to 20m: on 2026-11-04 one finished its budgets at 20m01s and was
+    # killed at the cap, so the cap is 25m. History: the cold release build of fno-agents
     # outgrew 10m once the crate grew the native decisions listing, then
     # outgrew 15m twice on 2026-10-08 under fleet load, dying inside cargo
     # before any budget ran each time.
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
