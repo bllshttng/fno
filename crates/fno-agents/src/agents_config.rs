@@ -1737,11 +1737,12 @@ pub fn repo_aliases(cwd: &Path) -> std::collections::BTreeMap<String, String> {
             };
             let old = old.trim().to_lowercase();
             let new = new.trim().to_lowercase();
-            let new = new.trim().to_lowercase();
             if old.is_empty() || new.is_empty() || old == new {
                 continue;
             }
-            out.insert(old, new);
+            // Candidates run most-specific first; the first file naming an
+            // alias wins, like every getter here.
+            out.entry(old).or_insert(new);
         }
     }
     out

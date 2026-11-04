@@ -383,7 +383,8 @@ fn detect_rename_fixes(
     resolver: &dyn Fn(&str) -> Option<String>,
 ) -> Vec<RenameFix> {
     let mut fixes: Vec<RenameFix> = Vec::new();
-    let mut attempted: BTreeSet<String> = BTreeSet::new();
+    let mut memo: std::collections::BTreeMap<String, Option<String>> =
+        std::collections::BTreeMap::new();
     for e in entries {
         if !crate::backlog_ready::node_is_open(e) {
             continue;
@@ -398,10 +399,19 @@ fn detect_rename_fixes(
             let Some(slug) = super::pr_link::repo_slug_from_url(Some(&url)) else {
                 continue;
             };
-            if !attempted.insert(slug.to_lowercase()) {
-                continue;
-            }
-            let Some(canonical) = resolver(&slug) else {
+            // The memo bounds the NETWORK ask (one resolver call per
+            // distinct slug), never the fix: two open nodes sharing one old
+            // slug each get their own rewrite, and a slug the resolver
+            // answered keeps its answer.
+            let canonical = match memo.get(&slug.to_lowercase()) {
+                Some(cached) => cached.clone(),
+                None => {
+                    let answer = resolver(&slug);
+                    memo.insert(slug.to_lowercase(), answer.clone());
+                    answer
+                }
+            };
+            let Some(canonical) = canonical else {
                 continue;
             };
             if canonical.eq_ignore_ascii_case(&slug) {

@@ -485,6 +485,7 @@ fn the_abandoned_leg_settles_a_gone_row_and_holds_a_fresh_one() {
 fn the_rename_sweep_rewrites_open_rows_through_the_alias_and_skips_claimed() {
     let old = "https://github.com/bllshttng/fno/pull/4327";
     let new = "https://github.com/fnodotdev/fno/pull/4327";
+    let new2 = "https://github.com/fnodotdev/fno/pull/4411";
     let alias = |slug: &str| {
         if slug == "bllshttng/fno" {
             Some("fnodotdev/fno".to_string())
@@ -498,16 +499,21 @@ fn the_rename_sweep_rewrites_open_rows_through_the_alias_and_skips_claimed() {
             json!({"status": "in_review", "pr_number": 4327, "pr_url": old}),
         ),
         node(
+            "x-old-open-2",
+            json!({"status": "in_review", "pr_number": 4411,
+                   "pr_url": "https://github.com/bllshttng/fno/pull/4411"}),
+        ),
+        node(
             "x-old-done",
             json!({"status": "done", "pr_number": 1,
                    "pr_url": "https://github.com/bllshttng/fno/pull/1"}),
         ),
     ];
     let fixes = detect_rename_fixes(&entries, &alias);
-    assert_eq!(fixes.len(), 1, "a closed row keeps its history");
     assert_eq!(
-        (fixes[0].old_url.as_str(), fixes[0].new_url.as_str()),
-        (old, new)
+        fixes.len(),
+        2,
+        "both open nodes sharing one old slug rewrite; a closed row keeps its history"
     );
 
     // The locked apply: only the open row rewrites, a claim skips.
@@ -531,9 +537,10 @@ fn the_rename_sweep_rewrites_open_rows_through_the_alias_and_skips_claimed() {
     let free = BTreeSet::new();
     let applied = cands.apply(&mut ents, &free);
     assert_eq!(ents[0]["pr_url"], json!(new));
+    assert_eq!(ents[1]["pr_url"], json!(new2));
     assert_eq!(
-        ents[1]["pr_url"],
-        json!(json!("https://github.com/bllshttng/fno/pull/1"))
+        ents[2]["pr_url"],
+        json!("https://github.com/bllshttng/fno/pull/1")
     );
-    assert_eq!(applied.renames.len(), 1);
+    assert_eq!(applied.renames.len(), 2);
 }

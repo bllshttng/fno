@@ -320,14 +320,20 @@ pub fn aliases_with_probe(
     here: Option<&str>,
     ref_slugs: impl Iterator<Item = String>,
 ) -> BTreeMap<String, String> {
-    aliases_with_probe_inner(here, ref_slugs, repo_alias_map(cwd), |slug, cwd| {
-        probe_rename_alias(slug, cwd)
-    })
+    aliases_with_probe_inner(
+        cwd,
+        here,
+        ref_slugs,
+        repo_alias_map(cwd),
+        probe_rename_alias,
+    )
 }
 
 /// The injectable half of [`aliases_with_probe`], so a test pins the probe
-/// instead of the network.
+/// instead of the network. `probe_cwd` reaches the probe so a cache write
+/// lands in the caller's row store, never the process-cwd store.
 fn aliases_with_probe_inner(
+    probe_cwd: Option<&Path>,
     here: Option<&str>,
     ref_slugs: impl Iterator<Item = String>,
     base: BTreeMap<String, String>,
@@ -347,7 +353,7 @@ fn aliases_with_probe_inner(
         if !attempted.insert(slug.to_lowercase()) {
             continue;
         }
-        if let Some(canonical) = probe(slug, None) {
+        if let Some(canonical) = probe(slug, probe_cwd) {
             map.entry(slug.to_lowercase()).or_insert(canonical);
         }
     }

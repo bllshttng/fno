@@ -434,6 +434,9 @@ fn leg_bind(payload: &serde_json::Value) -> (i32, String, String) {
     }
     let pr_number = pr_number_from_url(Some(url)).unwrap();
     let repo = repo_slug_from_url(Some(url));
+    // The alias map reads before the lock: the mutate closure can rerun on a
+    // conflict retry, and fs reads never belong inside the graph lock.
+    let aliases = crate::backlog::pr_link::repo_alias_map(None);
     let mut bound: Option<PrRowBindResult> = None;
     let live = mutate_rows(&path, Duration::from_secs(30), None, None, |entries| {
         bound = Some(bind_pr_rows(
@@ -443,7 +446,7 @@ fn leg_bind(payload: &serde_json::Value) -> (i32, String, String) {
             Some(url),
             repo.as_deref(),
             false,
-            &crate::backlog::pr_link::repo_alias_map(None),
+            &aliases,
         ));
         Ok(true)
     });
