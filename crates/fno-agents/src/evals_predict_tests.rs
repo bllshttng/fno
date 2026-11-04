@@ -142,3 +142,45 @@ fn bh_leaves_few_predicts_over_random_noise() {
     let predicts = view["verdict_counts"]["predicts"].as_u64().unwrap_or(0);
     assert!(predicts < 15, "{}", view["verdict_counts"]);
 }
+
+#[test]
+fn the_report_names_the_change_it_could_have_seen() {
+    let mut h = Hist::new();
+    // Seven main trees, all in week 0: k = 7. One cohort run three times
+    // on s00 reads 68, 76, 64 - sd 6.11 points, the gate-seal-head shape.
+    for (rep, passes) in [(0, 17), (1, 19), (2, 16)] {
+        h.tree("s00", "head", rep, passes);
+    }
+    let others = [
+        ("s01", 18),
+        ("s02", 18),
+        ("s03", 18),
+        ("s04", 18),
+        ("s05", 18),
+        ("s06", 18),
+    ];
+    for (sha, passes) in others {
+        h.tree(sha, sha, 0, passes);
+    }
+    let view = fold(&h.rows(), &inputs(7, vec![feed("corrections", vec![])]));
+    let noise = &view["noise"];
+    let mdd_week = noise["mdd_week_points"].as_f64().unwrap();
+    assert!((mdd_week - 9.14).abs() < 0.01, "{noise}");
+    assert!(!noise["halves"].is_null(), "{noise}");
+    assert_eq!(
+        noise["halves"]["paired"]["tasks_informative"],
+        json!(3),
+        "{noise}"
+    );
+}
+
+#[test]
+fn a_report_with_one_main_tree_reads_halves_unmeasured() {
+    let mut h = Hist::new();
+    for (rep, passes) in [(0, 17), (1, 19), (2, 16)] {
+        h.tree("s00", "head", rep, passes);
+    }
+    let view = fold(&h.rows(), &inputs(1, vec![feed("corrections", vec![])]));
+    assert!(view["noise"]["halves"].is_null(), "{}", view);
+    print_text(&view);
+}
