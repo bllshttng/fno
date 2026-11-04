@@ -1866,7 +1866,7 @@ impl ConnectionsView {
             "{}{id_hint}",
             field(w.step == WizardStep::Id, "name", &w.id)
         ));
-        if w.step != WizardStep::Id {
+        if w.step != WizardStep::Id && w.provider.is_none() && w.local.is_none() {
             if w.step == WizardStep::Kind {
                 self.cursor_row.set(Some(out.len()));
             }
@@ -1890,31 +1890,25 @@ impl ConnectionsView {
     }
 
     /// The Provider step: the search line, then Popular, Local and the
-    /// catalog rows, each naming the harnesses that can run it.
+    /// catalog rows, with a mark on each provider that has an account.
     fn render_provider_step(&self, w: &Wizard, out: &mut Vec<String>) {
-        use crate::provider_picker::{harnesses_for, harnesses_for_local, Entry};
+        use crate::provider_picker::Entry;
         out.push(format!("  search: {}_", w.query));
         out.push(String::new());
         let rows = crate::provider_picker::entries(self.catalog.as_ref(), &w.query);
         if rows.is_empty() {
             out.push("  no provider matches".to_string());
         }
+        let connected: std::collections::HashSet<String> =
+            self.accounts.iter().map(provider_key).collect();
         // A window that keeps the highlighted row on screen.
         let first = w.pick.saturating_sub(PICKER_ROWS - 1);
         let mut section = "";
         for (i, row) in rows.iter().enumerate().skip(first).take(PICKER_ROWS) {
-            let (head, reach) = match row {
-                Entry::Catalog { id, popular, .. } => (
-                    if *popular { "Popular" } else { "Other" },
-                    harnesses_for(
-                        id,
-                        self.catalog
-                            .as_ref()
-                            .and_then(|c| c.get(id))
-                            .and_then(|cp| cp.npm.as_deref()),
-                    ),
-                ),
-                Entry::Local(s) => ("Local", harnesses_for_local(s)),
+            let head = match row {
+                Entry::Catalog { popular: true, .. } => "Popular",
+                Entry::Catalog { .. } => "Other",
+                Entry::Local(_) => "Local",
             };
             if head != section {
                 section = head;
@@ -1924,9 +1918,15 @@ impl ConnectionsView {
                 self.cursor_row.set(Some(out.len()));
             }
             let mark = if i == w.pick { ">" } else { " " };
-            out.push(format!("  {mark} {:<20} {}", row.title(), reach.join(" ")));
+            let key = match row {
+                Entry::Catalog { id, .. } => id.as_str(),
+                Entry::Local(s) => s.key,
+            };
+            let dot = if connected.contains(key) { "●" } else { " " };
+            out.push(format!("  {mark} {dot} {}", row.title()));
         }
         out.push(String::new());
+        out.push("  ● connected account".to_string());
         out.push("type: search  Tab: next  Ctrl-P: prev  Enter: pick  Esc: cancel".to_string());
     }
 
@@ -2113,7 +2113,7 @@ fn mask_emails(text: &str) -> String {
 }
 
 /// Rows the Provider step shows at once.
-const PICKER_ROWS: usize = 12;
+const PICKER_ROWS: usize = 17;
 
 /// Cells in a usage bar.
 const BAR_CELLS: usize = 20;
@@ -3211,7 +3211,7 @@ mod tests {
         let out = v.render().join("\n");
         assert!(out.contains("Popular") && out.contains("OpenRouter"));
         assert!(out.contains("Local") && out.contains("LM Studio"));
-        assert!(out.contains("opencode"));
+        assert!(!out.contains("runs in"));
     }
 
     // AC3-HP (default): the managed claude account shares ~/.claude - login runs

@@ -138,32 +138,6 @@ fn display_name<'a>(id: &'a str, cp: &'a CatalogProvider) -> &'a str {
     }
 }
 
-/// The harnesses that can run a catalog provider. opencode runs any of
-/// them; fnh speaks five wires; claude needs an anthropic-compatible
-/// endpoint; codex an openai-compatible one.
-pub fn harnesses_for(id: &str, npm: Option<&str>) -> Vec<&'static str> {
-    let mut out = vec!["opencode"];
-    if ["anthropic", "openai", "deepseek", "openrouter", "ollama"].contains(&id) {
-        out.push("fnh");
-    }
-    match npm {
-        Some(n) if n.contains("anthropic") => out.push("claude"),
-        Some(n) if n.contains("openai") => out.push("codex"),
-        _ => {}
-    }
-    out
-}
-
-/// The harnesses that can run a local server: every one speaks the openai
-/// wire, so codex and opencode run it; ollama is also an fnh wire.
-pub fn harnesses_for_local(server: &LocalServer) -> Vec<&'static str> {
-    let mut out = vec!["opencode", "codex"];
-    if server.key == "ollama" {
-        out.push("fnh");
-    }
-    out
-}
-
 /// Model ids from a local server's models reply: ollama's `models[].name`,
 /// or the openai-style `data[].id`.
 pub fn parse_local_models(body: &str) -> Vec<String> {
@@ -227,19 +201,6 @@ mod tests {
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].title(), "xAI");
         assert_eq!(entries(None, "lm studio").len(), 1);
-    }
-
-    #[test]
-    fn harness_names_follow_the_wire() {
-        assert_eq!(
-            harnesses_for("openrouter", Some("@ai-sdk/openai-compatible")),
-            ["opencode", "fnh", "codex"]
-        );
-        assert_eq!(
-            harnesses_for("anthropic", Some("@ai-sdk/anthropic")),
-            ["opencode", "fnh", "claude"]
-        );
-        assert_eq!(harnesses_for("xai", Some("@ai-sdk/xai")), ["opencode"]);
     }
 
     #[test]
