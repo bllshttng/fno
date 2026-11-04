@@ -715,6 +715,22 @@ mod probe {
                     out,
                 );
             }
+            // Disk floor: the same call the gate makes, so the check-in
+            // capacity line names `disk_floor` before a spawn is tried.
+            let disk_floor_gb = agents_config::min_free_disk_gb(&config_cwd);
+            let disk_free = crate::disk_floor::free_disk_gb(home.root());
+            if let Some(term) = crate::disk_floor::disk_floor_term(disk_free, disk_floor_gb) {
+                return refuse_with(
+                    "disk_floor",
+                    term,
+                    json!({
+                        "free_disk_gb": disk_free,
+                        "min_free_disk_gb": disk_floor_gb,
+                    }),
+                    &make_rows(None, slots, cap, yours, ram_row, Vec::new()),
+                    out,
+                );
+            }
             // CPU axis: one footprint reading feeds the verdict and the rows.
             let (prefetched, probe_err) = match spawn_gate::footprint_cause_raw() {
                 Ok(raw) => (Some(raw), None),

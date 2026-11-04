@@ -1177,9 +1177,13 @@ fn live_root_pids(
             continue;
         };
         match root_pid_is_live(pid, Some(start)) {
+            // The probe cannot read this pid at all (gone from the process
+            // table since the row was written live, or unreadable). Mark the
+            // row unmeasured instead of refusing the whole reading: the gap
+            // widens the share band, so cpu_admission stays conservative.
             None => {
-                return Err(format!(
-                    "worker root liveness unavailable: pid {pid} start time could not be read for row {}",
+                dead_rows.push(format!(
+                    "{} (pid={pid} start time unreadable)",
                     name_or(row)
                 ));
             }
@@ -2173,5 +2177,43 @@ mod tests {
         assert!(is_test_runner("/usr/bin/python3 -m pytest x"));
         assert!(!is_test_runner("tail -f /tmp/pytest-of-user/out"));
         assert!(!is_test_runner("git log --grep pytest"));
+    }
+
+    #[test]
+    fn an_unreadable_live_row_pid_marks_the_row_unmeasured() {
+        let _lock = crate::claims::test_env_lock();
+        let dir = std::env::temp_dir().join(format!(
+            "fno-footprint-unreadable-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let _home = crate::claims::EnvVarGuard::set(crate::paths::HOME_ENV, &dir.to_string_lossy());
+        let registry = crate::paths::AgentsHome::from_env().registry_json();
+        std::fs::create_dir_all(registry.parent().unwrap()).unwrap();
+        // 0x7FFF_F000 passes the broadcast guard yet reads no process on any
+        // host, so the probe answers None: the stale-live pid shape that
+        // refused the whole reading on 2026-11-04.
+        let dead_pid: u32 = 0x7FFF_F000;
+        crate::registry_store::replace_document(
+            &registry,
+            serde_json::json!({
+                "schema_version": crate::state::REGISTRY_SCHEMA_VERSION,
+                "entries": [{
+                    "name": "ev-th-evals-29494",
+                    "harness": "claude",
+                    "status": "live",
+                    "pid": dead_pid,
+                    "pid_start_time": 4242
+                }],
+            }),
+        );
+        let out = live_root_pids(None, &BTreeSet::new(), 0.0, &BTreeMap::new());
+        let _ = std::fs::remove_dir_all(&dir);
+        let (roots, gap) = out.unwrap();
+        assert!(!roots.contains(&dead_pid));
+        let gap = gap.expect("an unmeasured row names its undercount");
+        assert!(gap.contains("ev-th-evals-29494"), "{gap}");
+        assert!(gap.contains("start time unreadable"), "{gap}");
     }
 }

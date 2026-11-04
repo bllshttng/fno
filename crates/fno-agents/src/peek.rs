@@ -33,7 +33,7 @@ const STATUS_KINDS: [&str; 4] = ["task_started", "task_done", "blocked", "run_su
 const LIVE_STATUSES: [&str; 6] = ["spawning", "ready", "idle", "busy", "live", "restarting"];
 
 const HELP: &str = "\
-Usage: fno agents peek [OPTIONS] [HANDLE]
+Usage: fno agents session peek [OPTIONS] [HANDLE]
 
   Observe a peer read-only.
 
@@ -127,7 +127,7 @@ fn parse(args: &[String]) -> Result<Args, i32> {
         return Err(2);
     }
     if !out.all && out.handle.is_none() {
-        eprintln!("usage: fno agents peek <handle>  (or --all)");
+        eprintln!("usage: fno agents session peek <handle>  (or --all)");
         return Err(2);
     }
     if out.follow && (out.all || out.grep.is_some()) {

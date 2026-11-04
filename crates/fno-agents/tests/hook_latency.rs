@@ -1194,6 +1194,33 @@ fn hook_budget_bash_pretooluse_dispatch() {
                 .contains("[fno pipe guard]"));
         },
     );
+
+    // The allow path on a command that names neither `git` nor `gh` starts no
+    // interpreter: every guard on it is Rust, and git-protection's Python
+    // owner is skipped. `python3` and `fno` are absent from the exec list on
+    // purpose, so a Python start on this path fails CI.
+    run_fixture(
+        "hook_budget_bash_pretooluse_dispatch_allow",
+        "hooks/pretooluse-bash-dispatch.sh",
+        &FixtureSpec {
+            payload: guard_payload(VISITOR_SID, "Bash", json!({"command": "ls -la /tmp"})),
+            manifest: "",
+            claims: &[],
+            extra_env: &[],
+            budget_p90_ms: 150.0,
+            ceiling_ms: 300.0,
+            allowed_execs: &["bash", "fno-agents", "git"],
+            max_git: Some(5),
+        },
+        |code, stdout, stderr| {
+            assert_eq!(code, 0, "{stderr}");
+            assert_eq!(
+                stdout.trim(),
+                "{}",
+                "a plain non-git command must allow: {stdout} {stderr}"
+            );
+        },
+    );
 }
 
 fn assert_bash_pretooluse_dispatch_order() {
@@ -1261,7 +1288,7 @@ fn assert_bash_pretooluse_dispatch_order() {
             "recursive-grep-guard".to_string(),
         ],
         &guards,
-        "Python guards retain their registration order",
+        "the former Python guards retain their registration order",
     );
     assert_subsequence(
         &[

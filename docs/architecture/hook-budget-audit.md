@@ -62,7 +62,7 @@ The table lists every distinct configured command variant. A command used by bot
 | `join-partition-write-guard.sh` | Claude PreToolUse (`Edit|Write`) | Refuses writes to a partition owned by another join participant. |
 | `plan-location-guard.sh` | Claude and Codex PreToolUse (`Write`) / (`Edit|Write`) | Refuses plan writes outside the configured plans directory. |
 | `lead-delegation-guard.sh` | Claude PreToolUse (`Edit|Write|NotebookEdit|Bash`) | Refuses a titled lead's direct implementation writes. |
-| `pretooluse-bash-dispatch.sh` | Claude and Codex PreToolUse (`Bash` / `^Bash$`) | Runs Git protection, deployed-binary copy protection, background-process protection, pipe-result protection, recursive-grep protection, and raw-test protection in their previous order. |
+| `pretooluse-bash-dispatch.sh` | Claude and Codex PreToolUse (`Bash` / `^Bash$`) | Runs Git protection, deployed-binary copy protection, background-process protection, pipe-result protection, recursive-grep protection, and raw-test protection in their previous order. Background-process and recursive-grep protection run in process; Git protection starts its Python guard only when the command text can name `git` or `gh`. |
 | `session-state.sh claude PreToolUse` | Claude PreToolUse (no matcher) | Marks the session as working. |
 | `session-state.sh claude UserPromptSubmit` | Claude UserPromptSubmit | Marks the session as working. |
 | `session-state.sh claude Notification` | Claude Notification (`permission_prompt|agent_needs_input`) | Marks the session as waiting for input. |

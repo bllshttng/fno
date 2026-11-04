@@ -16,7 +16,7 @@ use regex::Regex;
 use serde_json::{json, Value};
 
 const USAGE: &str =
-    "usage: fno-agents evals candidates [--limit N] [--source KIND] [--json] (KIND: reaction-correct | reaction-reject | reaction-approve | correction | revert | plan | plan-label)";
+    "usage: fno-agents evals candidates [--limit N] [--source KIND] [--json] (KIND: reaction-correct | reaction-reject | reaction-approve | correction | revert | fix-pr | plan | plan-label)";
 const DEFAULT_LIMIT: usize = 50;
 const QUOTE_CHARS: usize = 240;
 
@@ -168,6 +168,55 @@ fn read_reverts(repo: &Path, out: &mut Vec<Candidate>) {
                 source_ref: sha.to_string(),
                 quote: clip_tail(subject),
                 score: 4,
+            });
+        }
+    }
+}
+
+/// A test-only Rust file a fix can be graded by: a `tests.rs`, a `*_tests.rs`
+/// or a file under `tests/`, inside a crate's `src/`. A fix whose tests sit
+/// inline in its own source file has no such file, since re-applying the tests
+/// would re-apply the fix.
+pub(crate) fn is_test_file(path: &str) -> bool {
+    let name = path.rsplit('/').next().unwrap_or(path);
+    path.ends_with(".rs")
+        && path.contains("/src/")
+        && (name == "tests.rs" || name.ends_with("_tests.rs") || path.contains("/tests/"))
+}
+
+/// First-parent `fix` commits that touch a separate test file and a source
+/// file. The diff against the first parent is the whole fix.
+fn read_fix_commits(repo: &Path, out: &mut Vec<Candidate>) {
+    let mut cmd = std::process::Command::new("git");
+    cmd.arg("-C").arg(repo).args([
+        "log",
+        "--first-parent",
+        "-n",
+        "1500",
+        "--format=%x01%H%x09%s",
+        "--name-only",
+    ]);
+    let Ok(output) = crate::bounded_cmd::output_with_timeout_result(cmd, 60) else {
+        return;
+    };
+    for record in String::from_utf8_lossy(&output.stdout)
+        .split('\u{1}')
+        .skip(1)
+    {
+        let mut lines = record.lines();
+        let Some((sha, subject)) = lines.next().and_then(|h| h.split_once('\t')) else {
+            continue;
+        };
+        if !subject.starts_with("fix") {
+            continue;
+        }
+        let rust: Vec<&str> = lines.filter(|f| f.ends_with(".rs")).collect();
+        if rust.iter().any(|f| is_test_file(f)) && rust.iter().any(|f| !is_test_file(f)) {
+            out.push(Candidate {
+                kind: "fix-pr".into(),
+                source_ref: sha.to_string(),
+                quote: clip_tail(subject),
+                score: 3,
             });
         }
     }
@@ -330,6 +379,7 @@ fn mine(sources: &Sources) -> Vec<Candidate> {
     read_correction_events(&sources.events, &mut rows);
     read_plan_labels(&sources.plan_labels, &mut rows);
     read_reverts(&sources.repo, &mut rows);
+    read_fix_commits(&sources.repo, &mut rows);
     if let Some(plans) = &sources.plans {
         read_plans(plans, &sources.superseded, &mut rows);
     }
@@ -396,6 +446,41 @@ mod tests {
             .collect();
         files.sort();
         files
+    }
+
+    #[test]
+    fn fix_pr_lists_only_a_fix_with_a_separate_test_file() {
+        let repo = tempfile::tempdir().unwrap();
+        let git = |args: &[&str]| {
+            let ok = std::process::Command::new("git")
+                .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+                .args(["-c", "commit.gpgsign=false"])
+                .args(args)
+                .current_dir(repo.path())
+                .status()
+                .unwrap()
+                .success();
+            assert!(ok, "git {args:?}");
+        };
+        let commit = |files: &[&str], subject: &str| {
+            for f in files {
+                let path = repo.path().join(f);
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                let old = std::fs::read_to_string(&path).unwrap_or_default();
+                std::fs::write(&path, format!("{old}x\n")).unwrap();
+                git(&["add", f]);
+            }
+            git(&["commit", "-q", "-m", subject]);
+        };
+        git(&["init", "-q"]);
+        commit(&["c/src/a.rs", "c/src/a/tests.rs"], "fix(a): split test");
+        commit(&["c/src/b.rs"], "fix(b): inline tests only");
+        commit(&["c/src/c.rs", "c/src/c_tests.rs"], "feat(c): not a fix");
+        let mut rows = Vec::new();
+        read_fix_commits(repo.path(), &mut rows);
+        let quotes: Vec<&str> = rows.iter().map(|r| r.quote.as_str()).collect();
+        assert_eq!(quotes, ["fix(a): split test"]);
+        assert_eq!(rows[0].source_ref.len(), 40);
     }
 
     #[test]

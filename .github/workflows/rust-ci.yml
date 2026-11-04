@@ -176,6 +176,32 @@ jobs:
           cargo build --locked
           cargo build --locked --manifest-path ../fno-agents/Cargo.toml
 
+      - name: Flag file collisions with other open PRs
+        # The bell-shots build is gated on the bell surface, so this step
+        # builds the binary itself when the step above skipped it; the job's
+        # cargo cache makes that incremental. A fork PR's token is
+        # read-only, so the summary and one notice per colliding PR are the
+        # whole delivery (no comment), and the action notes and exits 0 on
+        # an unread answer. continue-on-error keeps a refused or slow read
+        # from reding the job.
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        working-directory: crates/fno-agents
+        run: |
+          if [ ! -x target/debug/fno-agents ]; then
+            cargo build --locked
+          fi
+          target/debug/fno-agents backlog collisions prs --pr "${{ github.event.pull_request.number }}" --json > "$RUNNER_TEMP/collisions.json"
+          count="$(jq '.collisions | length' "$RUNNER_TEMP/collisions.json")"
+          if [ "$count" -gt 0 ]; then
+            echo "### File collisions with other open PRs" >> "$GITHUB_STEP_SUMMARY"
+            jq -r '.collisions[] | "- #\(.pr): \(.shared | join(", "))"' "$RUNNER_TEMP/collisions.json" >> "$GITHUB_STEP_SUMMARY"
+            jq -r '.collisions[] | "::notice title=File collision with PR #\(.pr)::\(.shared | join(", "))"' "$RUNNER_TEMP/collisions.json"
+          else
+            echo "no open PR shares a changed file with this PR" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
       - name: Shoot the bell and Messages views
         if: env.shoot == '1'
         env:
@@ -191,7 +217,7 @@ jobs:
           # demo script points at its fleet shim; PATH backs any bare call.
           export PATH="$PWD/crates/fno-agents/target/debug:$PATH"
           mkdir -p shots
-          for view in bell bell-wide bell-full messages-tree messages-chats messages-thread messages-system messages-archive backlog-list backlog-kanban review-diff review-panel review-panel-drag navigator-pr navigator-model navigator-menu feed-detail question-detail org-table org-recent org-overview org-graph org-health org-seat org-feed org-system needs-input needs-input-pulse-on needs-input-pulse-off; do
+          for view in bell bell-wide bell-full messages-tree messages-chats messages-thread messages-system messages-archive backlog-list backlog-kanban review-diff review-panel review-panel-drag navigator-pr navigator-model navigator-menu feed-detail question-detail org-table org-recent org-overview org-graph org-health org-seat org-feed org-system needs-input needs-input-pulse-on needs-input-pulse-off org-remote org-peek org-spawn org-keys; do
             bash scripts/ops/mux-demo-snapshot.sh --out "shots/${view}.png" --format png --view "$view" --size 200x56 --fit
           done
           # The selection paints with the theme's sel surface: shoot it light too.
@@ -393,9 +419,10 @@ jobs:
     # green. Known expected warning: `serial` 0.4.0 (RUSTSEC-2017-0008) via
     # portable-pty 0.8 -- clears when the dep-refresh node ab-e784d8ff bumps
     # portable-pty to 0.9 (which swaps serial for the maintained serial2).
-    # The nightly schedule added above runs audit too, so advisories on
-    # untouched deps surface daily instead of waiting for the next crates/**
-    # push. Runs locally as `cargo audit` from crates/fno-agents
+    # The fno-agents leg carries one --ignore, named beside its invocation
+    # below. The nightly schedule added above runs audit too, so advisories
+    # on untouched deps surface daily instead of waiting for the next
+    # crates/** push. Runs locally as `cargo audit` from crates/fno-agents
     # (cargo install cargo-audit).
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -412,7 +439,12 @@ jobs:
 
       - name: cargo audit (fno-agents)
         working-directory: crates/fno-agents
-        run: cargo audit
+        # RUSTSEC-2023-0071 (Marvin Attack, rsa 0.9): rsa is a dev-dependency
+        # for github_app test key generation only. No release binary links it
+        # and the test path never decrypts attacker-chosen ciphertext, so the
+        # side channel has no oracle here. No fixed upgrade exists; drop the
+        # ignore when rsa 0.10 ships.
+        run: cargo audit --ignore RUSTSEC-2023-0071
 
       - name: cargo audit (fno)
         working-directory: crates/fno

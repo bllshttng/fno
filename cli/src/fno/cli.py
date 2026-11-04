@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import os
 import sys
-from pathlib import Path
 from typing import Any, Optional
 
 import click
@@ -125,38 +124,6 @@ for _group_name, _keep in COLLAPSE_KEEP.items():
 # ---------------------------------------------------------------------------
 # Helpers that defer their own imports until needed
 # ---------------------------------------------------------------------------
-
-
-def _load_v2_config_flag(repo_root: Path) -> bool:
-    """Read ``v2_enabled`` from the project's config (config.toml, else legacy
-    settings.yaml).
-
-    Returns False on any read/parse failure - v2 is strictly opt-in.
-    Local settings win over the per-user global file.
-
-    Imports are deferred so the cli module body stays cheap to load.
-    """
-    from fno.config import config_read_candidates, read_config_flat
-
-    def _flag_set(path: Path) -> bool:
-        try:
-            return path.is_file() and read_config_flat(path).get("v2_enabled") is True
-        except Exception:
-            return False
-
-    # Project-local candidates first - resolving them never raises - so a local
-    # config.toml wins even when the global fallback is malformed. config_file()
-    # is resolved only after, and guarded, since it can raise on a bad global
-    # config; that must fail open (return False), never shadow the local file.
-    if any(_flag_set(p) for p in config_read_candidates([repo_root / ".fno" / "settings.yaml"])):
-        return True
-    try:
-        from fno import paths as _paths
-
-        fallback = config_read_candidates([_paths.config_file()])
-    except Exception:
-        return False
-    return any(_flag_set(p) for p in fallback)
 
 
 def _warn_deprecated_alias_if_needed() -> None:

@@ -54,7 +54,7 @@ pub(super) fn register(reg: &mut Registry) {
     reg.model_after("AgentsBlock", warn_max_load_per_cpu_deprecated);
     reg.before(
         "AgentsBlock",
-        &["min_free_gb", "max_swap_pct"],
+        &["min_free_gb", "min_free_disk_gb", "max_swap_pct"],
         coerce_ram_floor_terms,
     );
     reg.before(
@@ -546,10 +546,10 @@ fn finite_or(v: &Value, default: f64) -> Value {
 }
 
 fn coerce_ram_floor_terms(ctx: &mut Ctx, v: Value) -> Result<Value, Fail> {
-    let default = if ctx.field_name == "min_free_gb" {
-        4.0
-    } else {
-        90.0
+    let default = match ctx.field_name.as_str() {
+        "min_free_gb" => 4.0,
+        "min_free_disk_gb" => 20.0,
+        _ => 90.0,
     };
     Ok(finite_or(&v, default))
 }

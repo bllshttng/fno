@@ -169,11 +169,32 @@ expect_row "gp allows a benign command" git-protection allow \
 expect_row "gp denies a raw gh pr checks read" git-protection block \
     '{"tool_name":"Bash","tool_input":{"command":"gh pr checks 12"}}' python3 "git-protection.py"
 
-# ── bg-process-guard.py (Bash) ────────────────────────────────────────────────
-expect_row "bpg allows a bounded command" bg-process-guard allow \
-    '{"tool_name":"Bash","tool_input":{"command":"head -c 1M /dev/zero > /dev/null"}}' python3 "bg-process-guard.py"
-expect_row "bpg denies an unbounded yes" bg-process-guard block \
-    '{"tool_name":"Bash","tool_input":{"command":"yes"}}' python3 "bg-process-guard.py"
+# ── bg-process-guard (Bash, a Rust guard inside the pretooluse-bash chain) ────
+# The chain writes the row, so the case runs the dispatch against the checkout
+# build, never a stale installed binary.
+if [[ -z "${FNO_AGENTS_BIN:-}" ]]; then
+    for _profile in release debug; do
+        if [[ -x "$REPO_ROOT/crates/fno-agents/target/$_profile/fno-agents" ]]; then
+            export FNO_AGENTS_BIN="$REPO_ROOT/crates/fno-agents/target/$_profile/fno-agents"
+            break
+        fi
+    done
+fi
+if [[ -n "${FNO_AGENTS_BIN:-}" ]]; then
+    # The default preset leaves bg-process off, so the chain writes no row.
+    PRESET_SAVE="${FNO_GUARD_PRESET-}"
+    export FNO_GUARD_PRESET=strict
+    expect_row "bpg allows a bounded command" bg-process-guard allow \
+        '{"tool_name":"Bash","tool_input":{"command":"head -c 1M /dev/zero > /dev/null"}}' bash "pretooluse-bash-dispatch.sh"
+    expect_row "bpg denies an unbounded yes" bg-process-guard block \
+        '{"tool_name":"Bash","tool_input":{"command":"yes"}}' bash "pretooluse-bash-dispatch.sh"
+    if [[ -n "$PRESET_SAVE" ]]; then export FNO_GUARD_PRESET="$PRESET_SAVE"; else unset FNO_GUARD_PRESET; fi
+else
+    # No checkout build of fno-agents here. An installed binary may predate
+    # the in-process guard and answer {}, so only a checkout build counts.
+    # The Rust unit tests and the hook-latency order test own these rows.
+    printf '[liveness] SKIP: bpg rows need a checkout fno-agents build (none here)\n'
+fi
 
 # ── law-authority-gate.py: gone ───────────────────────────────────────────────
 # main deleted the guard wholesale in the law-recording collapse (363ab7b16);

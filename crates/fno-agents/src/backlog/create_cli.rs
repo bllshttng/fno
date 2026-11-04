@@ -564,9 +564,10 @@ pub(crate) fn mint_node_id(
     let tombstones = load_id_tombstones();
     let plan_ids = plan_frontmatter_ids();
     let aliases = alias_pool();
+    let numbers = crate::numbers::node_number_texts();
     let minted = mint_node_id_with_prefix(
         existing,
-        &[&archive_ids, &tombstones, &plan_ids, &aliases],
+        &[&archive_ids, &tombstones, &plan_ids, &aliases, &numbers],
         &prefix,
         width,
     )?;

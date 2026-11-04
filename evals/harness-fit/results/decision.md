@@ -59,3 +59,15 @@ Both earlier decisions fired Rule 1 on the same tie. Their scorer read any `1302
 Route GLM coding work through opencode lanes in `config.routing.models`, at the same model and effort. Claude Code on GLM solves about as many tasks, at higher cost per solved task. The user decides. No production config was changed.
 
 A cheaper follow-up can test the margin without a new study. Find why Claude Code runs 27 tasks to their timeout on GLM at effort high. The 2026-10-02 smoke streamed about 40,000 thinking tokens in one turn. Then re-run its Run 0 arm with the cause fixed. If its cost per pass falls within 30% of opencode's, the routing case weakens.
+
+## The footnote arm: the Amendment 14 gate
+
+Verdict: footnote minus opencode is 0.0 points on the covered tasks, PASS at the -15.0 bar. The paired 95% bootstrap interval is 0.0 to 0.0 (4,000 resamples, seed 272). The interval is degenerate because both arms scored zero on every covered task: the comparison reads two floors, not a margin. Footnote's alone rate sits at 0.0% over 3 scored attempts, Wilson interval 0.0% to 56.2%. Opencode's recorded rate on the same tasks is 0.0% over 9, interval 0.0% to 29.9%.
+
+The lane ran on imac2d2 from 02:22Z on 2026-11-04 under approval q-e3937891 option 1, capped at 25 attempts. It covered 3 of 10 replay tasks with 7 attempts. The driving worker's session died mid-chain, and the lane stopped at 05:42Z after its last driver invocation finished. No worker remained to seat the next task. The smoke passed every Amendment 14 term before any paid attempt. The rows, exclusions and spend live in `results/run-1.md`, footnote arm section.
+
+The exclusions, counted: 5 pre-lane rows score as smoke noise. The thread named 3: 2 spawn refusals and 1 bypassless graded attempt. Transcript headers show 5, and the extra 2 also read `permission_mode: default`. In the lane, 1 attempt died on a registry lock before starting. Three attempts on replay-x-5978 hit the harness budget at about 45 minutes and never graded. Reading those 3 as stalls per Amendment 4 gives footnote 0 of 6 scored instead of 0 of 3. The paired difference stays 0.0 points.
+
+This arm is underpowered by the record's own rule: under 20 graded attempts fires nothing alone. The verdict certifies parity at the floor on the covered tasks and nothing more. The remaining 7 tasks need a fresh approval and a seated worker.
+
+Spend: $2.97 in the paid lane, $3.17 in smoke-phase noise, $6.15 across the footnote lane. The node's spend probe read all Run 0 jobs at $10.17, so committed spend is about $16.32 against the $200 ceiling.

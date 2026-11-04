@@ -23,7 +23,6 @@ docs/harnesses/capability-matrix.md	crates/fno-agents/src/harness_capabilities.t
 docs/harnesses/command-matrix.md	crates/fno-agents/src/harness_capabilities.toml and skills/*/SKILL.md frontmatter	crates/fno-agents/target/debug/fno-agents harness-matrix --write
 skills/agent/references/launch-*.md	docs/harnesses/launch/launch-*.md and docs/harnesses/help/*.txt	crates/fno-agents/target/debug/fno-agents harness-matrix --write
 .codex/agents/*.toml	agents/*.md	python3 scripts/sync-codex-agents.py
-crates/fno/config_schema.json	SettingsModel and cli/src/fno/config/registry.py	cd cli && uv run python -m fno.config.schema_gen --write
 docs/configuration-guide.md	crates/fno/config_schema.json	fno config schema --markdown --write
 docs/config.example.toml	crates/fno/config_schema.json	fno config schema --toml --write
 crates/fno/config.example.toml	crates/fno/config_schema.json	fno config schema --toml --write

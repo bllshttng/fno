@@ -124,6 +124,19 @@ pub(crate) fn humanize_age(secs: Option<u64>) -> String {
     format!("{body:>4}")
 }
 
+/// Sanitize every external-sourced peek line (transcript body, scraped
+/// reason) before it becomes cells: `fno agents session peek` reads raw
+/// on-disk transcript text that can carry ANSI escapes / C0 controls, and the
+/// peek path does NOT VT-parse (unlike pane output), so an unstripped ESC/CR
+/// would reach the user's terminal. Tabs become spaces; every other
+/// control char is dropped (a residual bracket-code is harmless text).
+pub(crate) fn sanitize_peek_line(s: &str) -> String {
+    s.chars()
+        .map(|c| if c == '\t' { ' ' } else { c })
+        .filter(|c| !c.is_control())
+        .collect()
+}
+
 /// Build the read-only peek overlay lines: a header (badge glyph + name
 /// + full wrapped status sentence), the answerable block when the row is
 /// blocked (prompt + numbered options, reused verbatim), a divider, then the
@@ -143,18 +156,6 @@ pub(crate) fn peek_overlay_lines(
             pad_to(" peek · row gone", PEEK_OVERLAY_W),
         )];
     };
-    // Sanitize every external-sourced line (transcript body, scraped reason)
-    // before it becomes overlay cells (codex review): `fno agents peek` reads
-    // raw on-disk transcript text that can carry ANSI escapes / C0 controls, and
-    // the peek path does NOT VT-parse (unlike pane output), so an unstripped
-    // ESC/CR would reach the operator's terminal. Tabs become spaces; every
-    // other control char is dropped (a residual bracket-code is harmless text).
-    fn sanitize_peek_line(s: &str) -> String {
-        s.chars()
-            .map(|c| if c == '\t' { ' ' } else { c })
-            .filter(|c| !c.is_control())
-            .collect()
-    }
     // the peek header reuses the sideline row's lattice state.
     // `agent_lattice_state` is both exit- and seen-aware (it routes the non-exit
     // case through `pane_state`), so the peek, the row, and the rollups agree
@@ -256,38 +257,6 @@ pub(crate) fn peek_overlay_lines(
 }
 
 impl View {
-    /// Paint the yard: the crowd, and the picked citizen's spotlight. The
-    /// caption names that citizen, so it is the yard's cursor row.
-    pub(super) fn draw_yard(&self, yv: &YardSel, cells: &mut [Cell], rows: usize, cols: usize) {
-        let (origin, dims) = self.overlay_viewport();
-        let crowd = self.yard_crowd();
-        let sel = yv.sel.min(crowd.len().saturating_sub(1));
-        let identity = crowd
-            .get(sel)
-            .and_then(|(name, _, _)| self.yard_identity(name));
-        let frame = (yv.opened_at.elapsed().as_millis() / YARD_FRAME_MS)
-            % crate::sprites::FRAME_COUNT as u128;
-        let (lines, cursor) = crate::yard_overlay::overlay_lines_cursor(
-            &crowd,
-            sel,
-            identity,
-            frame as usize,
-            self.yard_footer(),
-        );
-        let chrome = chrome::Chrome::new("the yard", Anchor::Center).footer("n/N pick · q close");
-        draw_lines_overlay(
-            cells,
-            rows,
-            cols,
-            origin,
-            dims,
-            &chrome,
-            &lines,
-            &self.theme,
-            cursor,
-        );
-    }
-
     /// Paint the connections modal. The modal reports the line its fill covers.
     pub(super) fn draw_connections(
         &self,

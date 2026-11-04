@@ -374,10 +374,10 @@ mod tests {
                 "2026-09-17T17:11:47Z",
                 "954ee57fed",
                 "feature/gonefork",
-                "github.com/bllshttng/fno"
+                "github.com/fnodotdev/fno"
             )
         );
-        let merged = missing_global_attestations(&global, "", "github.com/bllshttng/fno");
+        let merged = missing_global_attestations(&global, "", "github.com/fnodotdev/fno");
         let coverage = classify_coverage_tiled(
             &[],
             &[],

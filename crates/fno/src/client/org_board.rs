@@ -12,8 +12,15 @@ use crate::view_store::{OrgTab, SidelineView};
 
 pub(crate) type OrgTx = tokio::sync::mpsc::UnboundedSender<(u64, OrgMsg)>;
 
+#[path = "org_actions.rs"]
+mod actions;
+// The snapshot feeds a finished peek in, so its page shows with no ssh hop.
+use actions::Queued;
+pub(crate) use actions::{Act, Done};
+
 pub(crate) enum OrgMsg {
     Gather(FleetInputs),
+    Action(Done),
     /// The sideline machine layer's own fleet read.
     Machines(Result<serde_json::Value, String>),
 }
@@ -21,6 +28,7 @@ pub(crate) enum OrgMsg {
 pub(crate) fn apply(view: &mut View, gen: u64, msg: OrgMsg) {
     match msg {
         OrgMsg::Gather(inputs) => apply_fold(view, gen, inputs),
+        OrgMsg::Action(done) => apply_action(view, gen, done),
         OrgMsg::Machines(read) => super::machine_tree::apply(view, read),
     }
 }
@@ -82,6 +90,20 @@ pub(crate) struct OrgBoard {
     last_read: Option<Instant>,
     pub(crate) keys_help: bool,
     esc: Vec<u8>,
+    /// The action a key queued; the loop's kick runs it off the UI loop.
+    queued: Option<Queued>,
+    /// The label of the action running now. One runs at a time.
+    acting: Option<String>,
+    /// A peek's result, shown while its seat stays selected.
+    page: Option<Page>,
+    /// The spawn prompt being typed, as raw bytes so UTF-8 survives.
+    prompt: Option<Vec<u8>>,
+}
+
+struct Page {
+    key: String,
+    title: String,
+    lines: Vec<String>,
 }
 
 /// One frame's lines: the explorer windowed to the body height, and the
@@ -122,6 +144,10 @@ impl OrgBoard {
             last_read: None,
             keys_help: false,
             esc: Vec::new(),
+            queued: None,
+            acting: None,
+            page: None,
+            prompt: None,
         }
     }
 
@@ -190,6 +216,9 @@ impl OrgBoard {
         }
         self.key = key.to_string();
         self.scroll = 0;
+        self.page = None;
+        // A spawn prompt belongs to the row it opened on.
+        self.prompt = None;
     }
 
     fn step(&mut self, delta: isize) {
@@ -229,6 +258,55 @@ impl OrgBoard {
         self.seat().and_then(|(_, _, s)| s.local.clone())
     }
 
+    /// The selected seat runs on another machine, so its keys take the relay.
+    fn remote_seat(&self) -> bool {
+        self.seat()
+            .is_some_and(|(m, _, s)| !m.local && s.local.is_none())
+    }
+
+    /// The selected machine, and the seat when one is selected.
+    fn target(&self) -> Option<(&Machine, Option<&Seat>)> {
+        let f = self.fleet.as_ref()?;
+        match self.current() {
+            Item::Host(m) | Item::Lead(m, _) => Some((&f.machines[m], None)),
+            Item::Seat(m, p, s) => Some((&f.machines[m], Some(&f.machines[m].leads[p].seats[s]))),
+            _ => None,
+        }
+    }
+
+    /// `act` on the selection, ready to queue, or the refusal that names why
+    /// nothing runs.
+    fn plan(&self, act: Act, input: &str) -> Result<Queued, String> {
+        let running = self
+            .acting
+            .as_ref()
+            .or(self.queued.as_ref().map(|q| &q.label));
+        if let Some(running) = running {
+            return Err(format!("{running} is still running: one action at a time"));
+        }
+        let (m, seat) = self
+            .target()
+            .ok_or("select a machine, lead or seat first")?;
+        let local_owner = self.fleet.as_ref().and_then(|f| {
+            f.machines
+                .iter()
+                .find(|m| m.local)
+                .and_then(|m| m.owner.as_deref())
+        });
+        let argv = actions::action_argv(act, m, seat, local_owner, input)?;
+        let label = match (act, seat) {
+            (Act::Peek, Some(s)) => format!("peek {}@{}", s.short, m.host),
+            (Act::View, Some(s)) => format!("view {}@{}", s.short, m.host),
+            _ => format!("spawn on {}", m.host),
+        };
+        Ok(Queued {
+            act,
+            label,
+            key: self.key.clone(),
+            argv,
+        })
+    }
+
     /// The right pane: fixed lines (title and tab strip), then the body
     /// the scroll offset windows.
     fn right(
@@ -239,6 +317,12 @@ impl OrgBoard {
     ) -> (Vec<Line>, Vec<Line>) {
         if self.keys_help {
             return (vec![title("Keys", width)], super::org_pages::keys_help());
+        }
+        if let Some(p) = self.page.as_ref().filter(|p| p.key == self.key) {
+            return (
+                vec![title(&p.title, width)],
+                super::org_pages::peek_page(&p.lines),
+            );
         }
         let item = self.current();
         if item == Item::Feed {
@@ -279,9 +363,7 @@ impl OrgBoard {
                 };
                 let rows = t::scope(f, &item);
                 let body = match self.tab {
-                    OrgTab::Table => {
-                        t::table(&rows, &self.key, width, now, matches!(item, Item::Lead(..)))
-                    }
+                    OrgTab::Table => t::table(&rows, &self.key, width, now),
                     OrgTab::Recent => t::recent(&rows, width, now),
                     OrgTab::Overview => t::overview(f, &item, &rows, width, now),
                     OrgTab::Graph => t::graph(f, &item, &rows, &self.key, width),
@@ -375,6 +457,27 @@ impl OrgBoard {
         }
     }
 
+    /// The spawn prompt as the key bar shows it while it is open. It shows
+    /// even when the row left the map, because every key still feeds it.
+    fn prompt_line(&self) -> Option<String> {
+        let text = String::from_utf8_lossy(self.prompt.as_ref()?).into_owned();
+        let at = match self.target() {
+            Some((m, seat)) => {
+                let cwd = actions::spawn_cwd(m, seat).unwrap_or_default();
+                let off = if m.takes_work {
+                    ""
+                } else {
+                    " (takes work is off; a typed spawn still runs)"
+                };
+                format!(" on {} in {cwd}{off}", m.host)
+            }
+            None => " (the row left the map)".into(),
+        };
+        Some(format!(
+            "spawn{at}: {text}_ \u{b7} enter run \u{b7} esc cancel"
+        ))
+    }
+
     /// The bottom bar as one string: [`Self::footer_parts`] joined.
     #[cfg(test)]
     pub(crate) fn footer(&self, focused: bool, width: usize, now: u64) -> String {
@@ -394,14 +497,18 @@ impl OrgBoard {
             Item::Seat(..) if self.joined().is_some() => {
                 keys.extend(["enter attach", "space peek", "x stop", "P portal"])
             }
+            Item::Seat(..) if self.remote_seat() => keys.extend(["space peek", "P view"]),
             Item::Root | Item::Host(_) | Item::Lead(..) => keys.push("enter open"),
             _ => {}
         }
         if matches!(item, Item::Host(_) | Item::Lead(..) | Item::Seat(..)) {
-            keys.push("u up");
+            keys.extend(["s spawn", "u up"]);
         }
         keys.extend(["W web", "F full", "? keys", "esc close"]);
-        let mut keys = keys.join(" \u{b7} ");
+        let mut keys = match self.prompt_line() {
+            Some(line) => line,
+            None => keys.join(" \u{b7} "),
+        };
         if !focused {
             keys = format!("tap to focus \u{b7} {keys}");
         }
@@ -411,6 +518,9 @@ impl OrgBoard {
         }
         if let Some(notice) = self.fleet.as_ref().and_then(|f| f.notice.as_deref()) {
             out.push_str(&format!(" \u{b7} {notice}"));
+        }
+        if let Some(running) = &self.acting {
+            out.push_str(&format!(" \u{b7} {running} running"));
         }
         match (&self.error, &self.fleet) {
             (Some((e, at)), _) => out.push_str(&format!(
@@ -473,6 +583,16 @@ pub(crate) fn maybe_kick(view: &mut View, tx: &OrgTx) {
     let Some(b) = view.org_board.as_mut() else {
         return;
     };
+    // `keys` holds no sender, so a key queues its action and this kick,
+    // which runs every loop, starts it.
+    if let Some(q) = b.queued.take() {
+        b.acting = Some(q.label.clone());
+        let (gen, tx) = (b.gen, tx.clone());
+        tokio::spawn(async move {
+            let done = actions::run(q).await;
+            let _ = tx.send((gen, OrgMsg::Action(done)));
+        });
+    }
     if b.inflight
         || b.last_read
             .is_some_and(|t| t.elapsed() < Duration::from_secs(60))
@@ -516,6 +636,48 @@ pub(crate) fn apply_fold(view: &mut View, gen: u64, inputs: FleetInputs) {
         }
     }
 }
+/// A finished action: a peek lands as a page, anything else as a notice. A
+/// failure names the command's own error and the board stays open.
+pub(crate) fn apply_action(view: &mut View, gen: u64, done: Done) {
+    // The board may have closed while the action ran. A spawn still ran, so
+    // its notice still shows; only a peek page needs the board.
+    let mut board = view.org_board.as_mut().filter(|b| b.gen == gen);
+    if let Some(b) = board.as_deref_mut() {
+        b.acting = None;
+    }
+    let notice = match (done.act, done.result) {
+        (Act::Peek, Ok(lines)) => {
+            if let Some(b) = board {
+                b.page = Some(Page {
+                    key: done.key,
+                    title: done.label,
+                    lines,
+                });
+                b.scroll = 0;
+            }
+            return;
+        }
+        (Act::Spawn, Ok(lines)) => {
+            // Read the map again now, so the new seat shows on the next beat.
+            if let Some(b) = board {
+                b.last_read = None;
+            }
+            // The receipt is the spawn's last line, a JSON row naming the seat.
+            let receipt = lines.iter().rev().find(|l| !l.trim().is_empty());
+            let seat = receipt.and_then(|l| {
+                let row: serde_json::Value = serde_json::from_str(l).ok()?;
+                let (name, short) = (row["name"].as_str()?, row["short_id"].as_str()?);
+                Some(format!("{name} ({short}) shows on the map within one beat"))
+            });
+            let said = seat.or_else(|| receipt.map(|l| l.trim().to_string()));
+            format!("{} ok: {}", done.label, said.unwrap_or_default())
+        }
+        (Act::View, Ok(_)) => format!("{}: pane opened", done.label),
+        (_, Err(e)) => e,
+    };
+    view.set_notice(notice);
+}
+
 pub(crate) fn paint(
     view: &View,
     cells: &mut [Cell],
@@ -642,10 +804,18 @@ pub(crate) async fn keys(
         let Some(b) = view.org_board.as_mut() else {
             break;
         };
+        if b.prompt.is_some() {
+            if let Some(notice) = prompt_key(b, token) {
+                view.set_notice(notice);
+            }
+            continue;
+        }
         match token {
             ModalKey::Esc | ModalKey::Byte(b'q') => {
                 if b.keys_help {
                     b.keys_help = false;
+                } else if b.page.as_ref().is_some_and(|p| p.key == b.key) {
+                    b.page = None;
                 } else {
                     view.org_board = None;
                     super::backlog_board::set_sideline_view(view, SidelineView::Agents);
@@ -715,15 +885,61 @@ pub(crate) async fn keys(
                 Item::Feed | Item::System => {}
                 _ => b.step(1),
             },
+            // Refuse before the prompt opens, so nobody types a prompt for
+            // a machine that cannot take it.
+            ModalKey::Byte(b's') => match b.plan(Act::Spawn, "") {
+                Err(e) if e != actions::NO_PROMPT => view.set_notice(e),
+                _ => b.prompt = Some(Vec::new()),
+            },
             ModalKey::Byte(key @ (b' ' | b'x' | b'P')) => {
                 if let Some(agent) = b.joined() {
                     dispatch(view, agent, key, sock).await?;
+                } else if b.remote_seat() {
+                    let planned = match key {
+                        b' ' => b.plan(Act::Peek, ""),
+                        b'P' => b.plan(Act::View, ""),
+                        _ => Err(b.seat().map_or_else(String::new, |(m, _, s)| {
+                            format!(
+                                "x stops a seat on this machine only: run fno agents session stop {} on {}",
+                                s.short, m.host
+                            )
+                        })),
+                    };
+                    match planned {
+                        Ok(q) => b.queued = Some(q),
+                        Err(e) => view.set_notice(e),
+                    }
                 }
             }
             _ => {}
         }
     }
     Ok(StdinFlow::Continue)
+}
+
+/// One key while the spawn prompt is open. Enter queues the spawn or returns
+/// its refusal; Esc closes the prompt.
+fn prompt_key(b: &mut OrgBoard, token: ModalKey) -> Option<String> {
+    let text = b.prompt.as_mut()?;
+    match token {
+        ModalKey::Esc => b.prompt = None,
+        ModalKey::Byte(127 | 8) => {
+            let mut s = String::from_utf8_lossy(text).into_owned();
+            s.pop();
+            *text = s.into_bytes();
+        }
+        ModalKey::Byte(c) if c >= 0x20 => text.push(c),
+        ModalKey::Enter => {
+            let input = String::from_utf8_lossy(text).into_owned();
+            b.prompt = None;
+            match b.plan(Act::Spawn, &input) {
+                Ok(q) => b.queued = Some(q),
+                Err(e) => return Some(e),
+            }
+        }
+        _ => {}
+    }
+    None
 }
 /// The bridge's `/command` URL for `W`, or why it opens nothing. Over ssh a
 /// loopback bridge is unreachable from the user's browser, and a wide one is

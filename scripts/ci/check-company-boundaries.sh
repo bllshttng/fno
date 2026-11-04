@@ -126,10 +126,8 @@ LAYERS = (
         "platform",
         (
             "fno.paths",
-            "fno.config",
-            # The events store client: the config status sinks read events
-            # through it while the wheel lives. The package row left with the
-            # events package's Python residue port.
+            # The events store client: the events package's Python residue
+            # port left this module as the package's only Python reader.
             "fno.events.store_client",
             # Leaf utilities with callers on both sides of the runtime boundary.
             # Declared, not merely moved: an undeclared module is unmapped, and

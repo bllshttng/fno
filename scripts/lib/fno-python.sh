@@ -8,10 +8,10 @@
 # Callers keep their own PYTHONPATH export: it must still happen when a partial
 # deploy dropped this file, so it cannot live here.
 #
-# A bare `python3` is whatever is first on PATH. One without fno's deps dies in
-# fno.paths on `import fno.config`, and the ledger writers route stderr to a log,
-# so the row is dropped silently. `--help` never reaches that import, so a smoke
-# check that only runs --help reports healthy.
+# A bare `python3` is whatever is first on PATH. One without fno's deps dies
+# in fno.paths on its first wheel dependency import, and the ledger writers
+# route stderr to a log, so the row is dropped silently. `--help` never
+# reaches that import, so a smoke check that only runs --help reports healthy.
 #
 # The CALLER resolves the interpreter, never the callee: a `python3 -m fno.<mod>`
 # run imports the package (-> fno.events -> yaml) before the module's __main__

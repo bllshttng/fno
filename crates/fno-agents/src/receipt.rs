@@ -250,6 +250,11 @@ pub fn write_reap_receipt(home: &AgentsHome, receipt: &ReapReceipt) -> std::io::
     Ok(())
 }
 
+/// The message a receipt's spawn revival carries: the session resumes its
+/// own transcript, so the prompt only says to go on.
+pub(crate) const RESUME_MESSAGE: &str =
+    "continue: this session was reaped and is resumed; pick up where the transcript ends";
+
 /// A bare `claude --resume` lands on the account default, so the recipe asks
 /// resume_pin the way the reentry plan does: pin the row's model, or name the
 /// fno door that rebuilds a route a copied command cannot carry.
@@ -272,11 +277,26 @@ fn claude_resume_recipe(
         Err(crate::resume_pin::Unpinned {
             lost_route: Some((provider, model)),
             ..
-        }) => [
-            "fno", "agents", "spawn", "--resume", sid, "-P", &provider, "-m", &model,
-        ]
-        .map(str::to_string)
-        .to_vec(),
+        }) => {
+            // Spawn's own form: the message is the positional, the row name
+            // rides `--name` (a revival keeps its name), and the route is one
+            // `--route provider/model` token. `-P` is a tombstone that exits 2.
+            let route = format!("{provider}/{model}");
+            [
+                "fno",
+                "agents",
+                "spawn",
+                RESUME_MESSAGE,
+                "--name",
+                &e.name,
+                "--resume",
+                sid,
+                "--route",
+                &route,
+            ]
+            .map(str::to_string)
+            .to_vec()
+        }
         Err(_) => argv,
     }
 }
@@ -522,6 +542,32 @@ mod tests {
         .unwrap()
     }
 
+    /// A route the claude resume cannot carry comes back through spawn's own
+    /// form: message, `--name`, `--resume`, one `--route provider/model`.
+    #[test]
+    fn a_lost_route_resume_is_a_spawn_line_that_runs() {
+        let mut e = sample_row("t-command-center-is");
+        e.model = Some("sonnet".into());
+        let argv = claude_resume_recipe(&e, "s-1", vec!["claude".into()], &|_| Some("zai".into()));
+        assert_eq!(
+            argv,
+            [
+                "fno",
+                "agents",
+                "spawn",
+                RESUME_MESSAGE,
+                "--name",
+                "t-command-center-is",
+                "--resume",
+                "s-1",
+                "--route",
+                "zai/sonnet",
+            ]
+            .map(str::to_string)
+        );
+        assert!(!argv.iter().any(|t| t == "-P" || t == "-m"));
+    }
+
     /// Every receipt names its writer: two `Writer` values produce the same
     /// key set and different stamps. The old absence assertions are
     /// gone; a receipt that cannot name its writer is not constructible.
@@ -680,13 +726,13 @@ mod tests {
         // test into the paths.rs guard, and a dangling route dir is just a
         // lookup miss, which is what this test wants.
         assert!(
-            receipt.resume.ends_with("-m 'glm-5.3-flash[1m]'"),
+            receipt.resume.ends_with("--route 'zai/glm-5.3-flash[1m]'"),
             "{}",
             receipt.resume
         );
         assert_eq!(
             receipt.resume_argv.last().map(String::as_str),
-            Some("glm-5.3-flash[1m]")
+            Some("zai/glm-5.3-flash[1m]")
         );
     }
 

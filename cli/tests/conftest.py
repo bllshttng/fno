@@ -738,28 +738,6 @@ def _config_search_ceiling(tmp_path_factory: pytest.TempPathFactory):
     os.environ["FNO_CONFIG_SEARCH_ROOT"] = previous
 
 
-@pytest.fixture(autouse=True)
-def _reset_config_state() -> None:
-    """Reset the config state a keyed cache cannot key on.
-
-    The settings and repo-root caches key on their declaration, so entries
-    cannot leak between tests and there is nothing to clear. But
-    ``config._loaded_from`` is a module global holding only the most recent
-    load, and paths.config_file() reports it (Finding 3), so reset it or the
-    first config_file() read in a test reports the previous test's settings
-    file. The merged-global-config cache read_global_block serves from keeps
-    the same reset for the same reason.
-    """
-    from fno import config as _cfg
-    _cfg._loaded_from = None  # reset loaded_from tracker (Finding 3)
-    try:
-        from fno.config_io import clear_global_merged_cache
-
-        clear_global_merged_cache()
-    except Exception:
-        pass
-
-
 @pytest.fixture
 def cwd_tmp(tmp_path: Path, monkeypatch):
     """Run in a disposable tmp dir that is also HOME, with no claims-root pin.

@@ -13,10 +13,11 @@ use serde::{Deserialize, Serialize};
 /// generated copy committed without a rebuild.
 pub const CAPABILITY_TOML: &str = include_str!("harness_capabilities.toml");
 
-/// True when the harness's session-state wiring names no blocked producer
-/// (`blocked = "none"`): its hook lane can report working/done but has no
-/// event that states blocked, so the screen manifest owns that rung for the
-/// harness's rows. The daemon sweep keeps scraping such rows (scrape.rs) and
+/// True when the screen manifest owns the blocked rung for the harness's
+/// rows: its session-state wiring names no blocked producer
+/// (`blocked = "none"`), or names one that covers only part of the waiting
+/// states and sets `screen_backstop` (codex: PermissionRequest states an
+/// approval wait, but no hook covers `request_user_input`). The daemon sweep keeps scraping such rows (scrape.rs) and
 /// the badge readers merge a fresh screen `blocked` over the leg. Computed
 /// once per process off the bundled table; unknown harness, non-supported
 /// job, unwired or event-named wiring all read false.
@@ -33,7 +34,7 @@ pub fn session_state_names_no_blocked_producer(harness: &str) -> bool {
                 contract
                     .hook_job(name, "session_state")
                     .and_then(|job| job.wiring.as_ref())
-                    .is_some_and(|w| w.blocked == "none")
+                    .is_some_and(|w| w.blocked == "none" || w.screen_backstop)
                     && contract
                         .hook_job(name, "session_state")
                         .is_some_and(|job| job.state == "supported")
@@ -305,6 +306,10 @@ pub struct HookJob {
 pub struct HookWiring {
     pub events: BTreeMap<String, String>,
     pub blocked: String,
+    /// The blocked event covers only some waiting states, so the screen
+    /// manifest keeps scraping the harness's rows for the rest.
+    #[serde(default)]
+    pub screen_backstop: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

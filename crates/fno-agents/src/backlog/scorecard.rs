@@ -968,7 +968,7 @@ mod tests {
     /// grants the CI, review and fix-of-fix surfaces.
     fn with_pr_url(mut n: Value, pr: i64) -> Value {
         n["pr_number"] = json!(pr);
-        n["pr_url"] = json!(format!("https://github.com/bllshttng/fno/pull/{pr}"));
+        n["pr_url"] = json!(format!("https://github.com/fnodotdev/fno/pull/{pr}"));
         n
     }
 
@@ -1439,7 +1439,7 @@ mod tests {
             &OutcomeFeeds {
                 review_fails_by_pr: Some(&HashMap::from([(4201_i64, 3_u64)])),
             },
-            Some("github.com/bllshttng/fno"),
+            Some("github.com/fnodotdev/fno"),
             28,
             parse_local(NOW).unwrap(),
             None,

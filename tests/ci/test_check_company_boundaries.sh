@@ -14,12 +14,13 @@ fail() { echo "  FAIL: $1"; FAILS=$((FAILS + 1)); }
 
 make_repo() {
     local root="$1"
-    mkdir -p "$root/cli/src/fno/config" \
+    mkdir -p "$root/cli/src/fno/events" \
         "$root/agents" "$root/skills" "$root/plugins"
     # The positive control's edge: platform -> platform, same-layer and
-    # legal (the cross-layer pair left with the company package).
+    # legal (the cross-layer pair left with the company package). The
+    # fixture module is the one the gate still maps.
     printf 'from fno.paths import repo_root\n' \
-        > "$root/cli/src/fno/config/__init__.py"
+        > "$root/cli/src/fno/events/store_client.py"
 }
 
 echo "== mode help is discoverable =="
@@ -49,7 +50,7 @@ grep -q <<<"$out" '1 layers, 1 modules, 0 violations' \
 echo "== a broken scan fails closed =="
 BROKEN="$TMP/broken"
 make_repo "$BROKEN"
-printf 'value = 1\n' > "$BROKEN/cli/src/fno/config/__init__.py"
+printf 'value = 1\n' > "$BROKEN/cli/src/fno/events/store_client.py"
 out="$(bash "$CHECK" --strict "$BROKEN" 2>&1)"; rc=$?
 [[ $rc -eq 2 ]] && ok "missing control exits two" || fail "expected exit 2, got $rc: $out"
 grep -q <<<"$out" "positive control failed" \

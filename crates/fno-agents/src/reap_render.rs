@@ -8,6 +8,10 @@
 use crate::gc_sweep::{GcSummary, StateFilesReapSummary, StateReapFamilySummary};
 use serde_json::{json, Value};
 
+/// The roster reaper's no-node keep, spelled once for both renderers.
+pub(crate) const NO_PROVENANCE: &str =
+    "no provenance: no source resolved a node (sessions, registry, name, transcript)";
+
 /// Render the file-only reap receipt independently from row retirement.
 pub fn render_state_files_reap(summary: &StateFilesReapSummary, json_out: bool) -> String {
     if json_out {
@@ -134,20 +138,6 @@ pub fn render_reap(summary: &GcSummary, json_out: bool, dry_run: bool) -> String
             .iter()
             .map(|(id, reason)| json!({"id": id, "reason": reason}))
             .collect();
-        let open_work: Vec<Value> = summary
-            .kept_open_work
-            .iter()
-            .map(|(id, node, status, reader)| {
-                json!({"id": id, "node": node, "status": status, "reader": reader})
-            })
-            .collect();
-        let open_work_stale: Vec<Value> = summary
-            .kept_open_work_stale
-            .iter()
-            .map(|(id, node, status, reader)| {
-                json!({"id": id, "node": node, "status": status, "reader": reader})
-            })
-            .collect();
         let active: Vec<Value> = summary
             .kept_active
             .iter()
@@ -178,16 +168,6 @@ pub fn render_reap(summary: &GcSummary, json_out: bool, dry_run: bool) -> String
             .iter()
             .map(|(id, node)| json!({"id": id, "node": node}))
             .collect();
-        let planning_unclosed: Vec<Value> = summary
-            .kept_planning_unclosed
-            .iter()
-            .map(|(id, node)| json!({"id": id, "node": node}))
-            .collect();
-        let triples = |rows: &Vec<(String, String, String)>| -> Vec<Value> {
-            rows.iter()
-                .map(|(id, a, b)| json!({"id": id, "detail_a": a, "detail_b": b}))
-                .collect()
-        };
         let settled: Vec<Value> = summary
             .settled_do_rows
             .iter()
@@ -222,24 +202,15 @@ pub fn render_reap(summary: &GcSummary, json_out: bool, dry_run: bool) -> String
                 "prune_failed": prune_failed,
                 "settled_do_rows": settled,
                 "settle_refused": pair(&summary.settle_refused),
-                "kept_operator": summary.kept_operator,
                 "kept_promoted": summary.kept_teamed,
-                "kept_not_spawn": pair(&summary.kept_not_spawn),
-                "kept_no_provenance": summary.kept_no_provenance,
-                "kept_node_conflict": triples(&summary.kept_node_conflict),
-                "kept_pr_contradicts": triples(&summary.kept_pr_contradicts),
-                "kept_open_work": open_work,
-                "kept_open_work_stale": open_work_stale,
                 "kept_open_do_row": open_do,
                 "kept_open_pr": pair(&summary.kept_open_pr),
-                "kept_planning_unclosed": planning_unclosed,
                 "kept_active": active,
                 "kept_attended": pair(&summary.kept_attended),
                 "kept_other": pair(&summary.kept_other),
                 "kept_marked": pair(&summary.kept_marked),
                 "kept_probe_unread": probe_unread,
                 "kept_live_claim": live_claim,
-                "kept_transcript_unresolved": summary.kept_transcript_unresolved,
                 "kept_graph_unreadable": summary.kept_graph_unreadable,
                 "kept_dirty": pathed(&summary.kept_dirty),
                 "kept_unmerged": pathed(&summary.kept_unmerged),
@@ -256,7 +227,6 @@ pub fn render_reap(summary: &GcSummary, json_out: bool, dry_run: bool) -> String
                 "hold_escalate_after_s": summary.hold_escalate_after_s,
                 "release_refused": summary.release_refused,
                 "open_pr_rows": summary.open_pr_rows,
-                "dead_work_rows": summary.dead_work_rows,
                 "open_pr_nudge": nudge_json,
                 "roles": summary.teams,
                 "schema_skew": match summary.schema_skew {
@@ -311,49 +281,8 @@ pub fn render_reap(summary: &GcSummary, json_out: bool, dry_run: bool) -> String
     for (node, reason) in &summary.settle_refused {
         out.push_str(&format!("  settle refused {node} ({reason})\n"));
     }
-    for id in &summary.kept_operator {
-        out.push_str(&format!("  kept {id} (operator row)\n"));
-    }
     for id in &summary.kept_teamed {
         out.push_str(&format!("  kept {id} (teamed)\n"));
-    }
-    for (id, origin) in &summary.kept_not_spawn {
-        let why = if origin.is_empty() {
-            "no origin recorded".to_string()
-        } else {
-            format!("origin {origin}")
-        };
-        out.push_str(&format!("  kept {id} (not a spawn row: {why})\n"));
-    }
-    for id in &summary.kept_no_provenance {
-        // change 4: this line used to emit an unbalanced paren and a
-        // literal backslash-n; invisible only while the bucket measured
-        // empty. One spelling with every other kept line.
-        out.push_str(&format!(
-            "  kept {id} ({})\n",
-            crate::gc::KeepReason::NoProvenance.as_str()
-        ));
-    }
-    for (id, a, b) in &summary.kept_node_conflict {
-        out.push_str(&format!(
-            "  kept {id} (sources disagree: {a} vs {b}){}\n",
-            hold_line(summary, id)
-        ));
-    }
-    for (id, node, detail) in &summary.kept_pr_contradicts {
-        out.push_str(&format!(
-            "  kept {id} (pr state contradicts: {node} {detail})\n"
-        ));
-    }
-    for (id, node, status, reader) in &summary.kept_open_work {
-        out.push_str(&format!(
-            "  kept {id} (open work: {node} {status}; read via {reader})\n"
-        ));
-    }
-    for (id, node, status, reader) in &summary.kept_open_work_stale {
-        out.push_str(&format!(
-            "  kept {id} (open work inside the retire window: {node} {status}; read via {reader}; quiet past the window retires)\n"
-        ));
     }
     for (id, node) in &summary.kept_open_do_row {
         let detail = summary
@@ -376,12 +305,6 @@ pub fn render_reap(summary: &GcSummary, json_out: bool, dry_run: bool) -> String
             .unwrap_or("");
         out.push_str(&format!(
             "  kept {id} (open pr: {node} {detail}){}\n",
-            hold_line(summary, id)
-        ));
-    }
-    for (id, node) in &summary.kept_planning_unclosed {
-        out.push_str(&format!(
-            "  kept {id} (planning assignment not finished by this session: {node}){}\n",
             hold_line(summary, id)
         ));
     }
@@ -409,23 +332,6 @@ pub fn render_reap(summary: &GcSummary, json_out: bool, dry_run: bool) -> String
         out.push_str(&format!(
             "  kept {id} (probe unread: {detail}){}\n",
             hold_line(summary, id)
-        ));
-    }
-    for hold in &summary.kept_transcript_unresolved {
-        let age = hold_age(hold.held_s);
-        let decide = hold.nodes_done && hold.held_s > crate::gc_sweep::UNRESOLVED_HOLD_DECIDE_S;
-        let suffix = if decide {
-            format!("; needs a decision: fno agents rm {}", hold.id)
-        } else {
-            String::new()
-        };
-        // Main's line carries the clock and the 6h rm ask; the hold
-        // projection renders no second age here, so one line reads one
-        // clock. The escalated hold still asks for its release through the
-        // [reap-hold] question lane.
-        out.push_str(&format!(
-            "  kept {} (transcript unresolved for {}: absence is not quiet{suffix})\n",
-            hold.id, age
         ));
     }
     for id in &summary.kept_graph_unreadable {
@@ -736,18 +642,6 @@ pub fn mux_sweep_text_line(mux: &MuxSweep, dry_run: bool) -> String {
             None => format!("mux sweep (unread): {stderr_first}\n"),
         },
         MuxSweep::Skipped => "mux sweep (skipped by --no-mux)\n".to_string(),
-    }
-}
-
-/// (change 3) `i64` seconds as `16h31m`, `59m`, `59s`.
-fn hold_age(held_s: i64) -> String {
-    let s = held_s.max(0) as u64;
-    if s >= 3600 {
-        format!("{}h{}m", s / 3600, (s % 3600) / 60)
-    } else if s >= 60 {
-        format!("{}m", s / 60)
-    } else {
-        format!("{s}s")
     }
 }
 

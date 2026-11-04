@@ -117,6 +117,8 @@ environment = [
     "USERNAME",
     "TERM",
     "COLORTERM",
+    "TERM_PROGRAM",
+    "__CFBundleIdentifier",
     "PYTHONPATH",
     "PYTEST_CURRENT_TEST",
     "CI",

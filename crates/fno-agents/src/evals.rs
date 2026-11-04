@@ -15,6 +15,8 @@ pub mod graduate;
 pub mod history;
 pub mod research_grade;
 pub mod runner;
+pub mod tests_grade;
+pub mod tests_mint;
 
 pub fn run(args: &[String]) -> i32 {
     let Some(sub) = args.first() else {
@@ -540,7 +542,7 @@ pub(crate) fn resolve_bank_dir(explicit: Option<String>) -> std::path::PathBuf {
 
 /// The canonical repo root the bank resolves against: FNO_REPO_ROOT, then
 /// the first git worktree-list row, then cwd (the Python resolver's walk).
-pub(super) fn canonical_repo_root() -> std::path::PathBuf {
+pub(crate) fn canonical_repo_root() -> std::path::PathBuf {
     if let Some(root) = std::env::var_os("FNO_REPO_ROOT") {
         if !root.is_empty() {
             return std::path::PathBuf::from(root);

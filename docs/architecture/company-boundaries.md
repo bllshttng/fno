@@ -28,7 +28,7 @@ Seven of the original nine prohibited imports were misplaced leaf utilities, and
 
 | Was | Now | Why it could move |
 |---|---|---|
-| `fno.graph._constants.RESERVED_PREFIXES` read by `fno.config` | owned by `fno.config` | a three-element frozenset whose only reader was the importing validator |
+| `fno.graph._constants.RESERVED_PREFIXES` read by the deleted `fno.config` | owned by `fno.graph._constants` | a three-element frozenset whose only reader was the importing validator, deleted with the config family |
 | `fno.agents.events.emit` called by `fno backlog undefer` / `unsupersede` | `fno.graph.failure.emit_undefer_boundary` | the log is graph-owned and `fno.graph.failure` already reads it; the agents emitter was serving as a bare append-a-JSON-line helper |
 | `fno.agents.provider_resolve` | `fno.dispatch_flags` (since retired whole: the fold lives native behind route-slot's dispatch modes) | seven callers spanning every layer; the only remaining dependency was the harness-marker table, and see the caveat below |
 | `fno.agents.drive_authority` | `fno.drive_authority` | a read-only `state.json` reader whose only dependency is `fno.paths` |
@@ -45,7 +45,7 @@ A shim would keep the upward import spelling available and hide the move from th
 
 The two survivors form one finding. The `fno doctor event emit` builder stamps the sending session identity through `fno.agents.self_stamp`. It resolves spawn lineage through `fno.agents.registry`. That is platform-layer code reading agent-runtime state, and it is a genuine architectural finding rather than a misplaced file. Neither callee can move down. `agents.registry` is the agents registry. The remaining options are larger than a burndown. One option puts the stamp behind a registered hook, which leaves processes without `fno.agents` unstamped. Another moves envelope construction into the runtime layer and leaves `fno doctor event emit` as a thin caller.
 
-Two shortcuts were considered and rejected on measurement rather than taste. Hoisting `fno.graph.cli` and `fno.events.cli` to a higher layer clears nothing. Those modules still import L5 `fno.agents`. If CLI modules are declared L5, the check bites. `graph/cli.py` has roughly 10k lines of logic, not a composition root. Declaring it unconstrained empties the check. Reclassifying `fno.events` from platform to runtime fails a harder test. `fno.config`, `fno.graph`, and `fno.approvals` all import it. The move creates nine upward violations while erasing three.
+Two shortcuts were considered and rejected on measurement rather than taste. Hoisting `fno.graph.cli` and `fno.events.cli` to a higher layer clears nothing. Those modules still import L5 `fno.agents`. If CLI modules are declared L5, the check bites. `graph/cli.py` has roughly 10k lines of logic, not a composition root. Declaring it unconstrained empties the check. Reclassifying `fno.events` from platform to runtime fails a harder test. `fno.config` (deleted with the family), `fno.graph`, and `fno.approvals` all imported it. The move creates nine upward violations while erasing three.
 
 ## Audit and CI modes
 

@@ -2,7 +2,7 @@
   "name": "fno",
   "owner": {
     "name": "Jason Noah Choi",
-    "url": "https://github.com/bllshttng/fno"
+    "url": "https://github.com/fnodotdev/fno"
   },
   "metadata": {
     "description": "Set the targets. Your agents do the rest. Say F[no] to mostly done.",
@@ -13,7 +13,7 @@
       "name": "fno",
       "source": {
         "source": "github",
-        "repo": "bllshttng/fno",
+        "repo": "fnodotdev/fno",
         "ref": "stable"
       },
       "description": "Set the targets. Your agents do the rest. Say F[no] to mostly done.",
@@ -24,7 +24,7 @@
       "name": "fno-nightly",
       "source": {
         "source": "github",
-        "repo": "bllshttng/fno",
+        "repo": "fnodotdev/fno",
         "ref": "plugin-nightly"
       },
       "description": "Footnote nightly: yesterday's green main, rolling and replaceable.",
@@ -35,7 +35,7 @@
       "name": "buddy",
       "source": {
         "source": "git-subdir",
-        "url": "https://github.com/bllshttng/fno.git",
+        "url": "https://github.com/fnodotdev/fno.git",
         "path": "plugins/buddy",
         "ref": "main"
       },

@@ -405,27 +405,6 @@ fn leading_command(text: &str) -> Option<&str> {
         .or_else(|| text.strip_prefix("$fno:"))
 }
 
-/// Does this claude session's transcript carry a real fno skill invocation
-/// (typed `<command-name>/fno:`, a leading `/fno:` call, or a Skill tool
-/// call)? The 2026-10-24 bg-adoption ruling: a claude bg row fno never
-/// stamped with an origin is still fno's own work when its transcript shows
-/// one, so the reaper may judge it like a spawn row.
-///
-/// `using-fno` never counts. The preamble is injected as context after the
-/// session already joined - a join needs a real fno skill or command - and
-/// [`invocation`] reads injected prose as a mention, not a call. `fno-me`
-/// counts like any other command.
-pub(crate) fn bg_fno_invocation(session_id: &str, account: Option<&str>) -> bool {
-    // An isolated-account row keeps its transcript under that account's
-    // config root, so the ambient scan alone would miss it.
-    let path = crate::claude_drive::find_transcript_for_account(session_id, account)
-        .or_else(|| crate::claude_drive::find_transcript(session_id));
-    let Some(path) = path else {
-        return false;
-    };
-    bg_fno_invocation_in(&path)
-}
-
 /// [`bg_fno_invocation`] against an explicit transcript file, so the scan
 /// is testable without a session on disk.
 pub(crate) fn bg_fno_invocation_in(path: &std::path::Path) -> bool {
@@ -443,8 +422,9 @@ pub(crate) fn bg_fno_invocation_in(path: &std::path::Path) -> bool {
         let Ok(event) = serde_json::from_str::<Value>(&line) else {
             continue;
         };
+        // A mesh join (`fno-me`) and the preamble (`using-fno`) run no work.
         if let Some((command, _)) = invocation(&event) {
-            if command != "using-fno" {
+            if command != "using-fno" && command != "fno-me" {
                 return true;
             }
         }
