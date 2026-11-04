@@ -1,0 +1,19 @@
+# Capability tier: does /fno:intel judge friction from user turns only?
+# The skill's one rule: relay, harness, keepalive, and unknown turns are
+# machinery or other agents, so they never feed satisfaction, friction, or
+# corrections. Graded on the first line of decision.md.
+id: intel-user-turns-only
+tier: capability
+prompt: |
+  You are working in this repository. Follow its rules: AGENTS.md and the docs and skills it points to. Read them before you answer.
+
+  You are judging one sampled session for the intel report. Its transcript has three kinds of turn that read like complaints: a relay turn from a lead that says "this is wrong, redo it", a keepalive ping, and one turn the fold classes as operator (a witnessed user turn) that says "no, use fno do pr status". Which turns may you use as corrections in the session's facet file?
+
+  Do not change any other file. Write your answer to decision.md in the repository root (the directory you were started in). The first line is exactly `action: <one line>`. The second line is `reason: <one line>`.
+grade:
+  - kind: file-exists
+    path: "decision.md"
+  - kind: exit
+    command: "sed -n 1p decision.md | tr -d '`\\r' | grep -Eiq '^action: *.*(only|just).*(user|operator|witnessed)'"
+timeout_minutes: 10
+tags: [capability, intel]
