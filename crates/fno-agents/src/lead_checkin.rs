@@ -2034,10 +2034,7 @@ fn render_lines_with(
     ] {
         if ok(name, &mut lines) {
             if let Some(reading) = by_name(name) {
-                let line = render(&reading.value);
-                if !line.is_empty() {
-                    lines.push(line);
-                }
+                lines.extend(Some(render(&reading.value)).filter(|l| !l.is_empty()));
             }
         }
     }
