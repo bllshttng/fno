@@ -924,6 +924,77 @@ fn agents_tab_strip_counts_rows_that_need_input() {
     assert!(row.chars().take(start).all(|c| c == ' '), "{row:?}");
 }
 
+#[test]
+fn needs_input_section_holds_agent_rows_only() {
+    // An open question answers from the notifications panel, so it joins
+    // neither the strip count nor the pinned section (operator, 2026-11-04):
+    // a question line here was never tappable, and the same question is
+    // already listed, tappable, on the Questions tab.
+    let mut v = wide_view(vec![
+        agent_row("b1", 4, Some(AgentBadge::Blocked), false),
+        agent_row("w1", 5, Some(AgentBadge::Working), false),
+    ]);
+    v.apply_questions_fold(Ok(crate::needs_overlay::QuestionsFold {
+        items: vec![crate::needs_overlay::QuestionItem {
+            id: "q-demo-a1".into(),
+            title: "Hold the demo until the shot lands?".into(),
+            state: "open".into(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    }));
+    assert_eq!(v.need_input_count(), 1, "questions leave the count");
+    v.needs_open = true;
+    let pinned: Vec<DisplayRow> = v
+        .display_rows()
+        .into_iter()
+        .take_while(|r| !matches!(r, DisplayRow::Blank))
+        .collect();
+    assert!(
+        matches!(&pinned[..], [DisplayRow::Header { label, .. }, DisplayRow::Agent(_)]
+            if label.as_str() == "Needs input"),
+        "header + the blocked agent, nothing else, got {} rows",
+        pinned.len()
+    );
+    let text = frame_text(&v.compose());
+    assert!(
+        !text.contains("Hold the demo"),
+        "the question never paints in the sideline, got:\n{text}"
+    );
+}
+
+#[test]
+fn pinned_needs_agent_row_taps_like_its_group_row() {
+    let mut v = wide_view(vec![
+        agent_row("b1", 4, Some(AgentBadge::Blocked), false),
+        agent_row("w1", 5, Some(AgentBadge::Working), false),
+    ]);
+    v.needs_open = true;
+    let at: Vec<usize> = v
+        .display_rows()
+        .iter()
+        .enumerate()
+        .filter_map(|(i, r)| matches!(r, DisplayRow::Agent(a) if a.name == "b1").then_some(i))
+        .collect();
+    assert_eq!(
+        at.len(),
+        2,
+        "the blocked row paints pinned and in its group"
+    );
+    let top = v.sideline_top() as u16;
+    let hit = |i: usize| v.chrome_hit(top + i as u16, 3);
+    assert_eq!(
+        format!("{:?}", hit(at[0])),
+        format!("{:?}", hit(at[1])),
+        "a tap on the pinned copy resolves like its group copy"
+    );
+    assert!(
+        matches!(hit(at[0]), Some(ChromeHit::Cmds(c)) if c == vec![Command::FocusPane(4)]),
+        "the tap opens the row's pane, got {:?}",
+        hit(at[0])
+    );
+}
+
 #[tokio::test]
 async fn agents_tab_ctrl_t_pins_the_session_and_the_row_shows_it() {
     let mk = |name: &str, pane: u64| agent_row(name, pane, Some(AgentBadge::Working), false);

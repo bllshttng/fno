@@ -1053,6 +1053,11 @@ questions (scripts/ops/mux-demo-snapshot.sh seeds one)",
             }
         }
         Some(kind @ (ViewKind::NeedsInputPulseOn | ViewKind::NeedsInputPulseOff)) => {
+            // The strip count reads the questions fold the live loop kicks;
+            // the snapshot has no loop, so gather it or the pulse shot
+            // undercounts the very surface it freezes.
+            let questions = runtime.block_on(crate::needs_overlay::questions_now());
+            view.apply_questions_fold(questions);
             if view.need_input_count() == 0 {
                 return Err("nothing needs input, so the pulse would shoot empty".to_string());
             }
@@ -1064,6 +1069,10 @@ questions (scripts/ops/mux-demo-snapshot.sh seeds one)",
             super::sideline::PULSE_PIN.store(beat, std::sync::atomic::Ordering::Relaxed);
         }
         Some(ViewKind::NeedsInput) => {
+            // Same gather as the pulse views: without the fold the section
+            // shot cannot show what it exists to judge.
+            let questions = runtime.block_on(crate::needs_overlay::questions_now());
+            view.apply_questions_fold(questions);
             if view.need_input_count() == 0 {
                 return Err("nothing needs input, so the section would shoot empty".to_string());
             }
