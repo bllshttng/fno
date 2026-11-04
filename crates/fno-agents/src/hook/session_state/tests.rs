@@ -97,8 +97,8 @@ fn picker_reclassification_names_what_the_session_waits_on() {
 }
 
 /// The row map is the data: claude wires its four events onto Notification;
-/// codex wires three and declares no blocked producer (PermissionRequest is
-/// unwired until a payload is captured); a goal-leg PreToolUse decides
+/// codex wires three plus PermissionRequest as its blocked producer, with
+/// the screen backstop kept for `request_user_input`; a goal-leg PreToolUse decides
 /// working (a continuation is a user-role row, so UserPromptSubmit never
 /// fires - the tool calls are the only signal).
 #[test]
@@ -114,7 +114,9 @@ fn the_row_map_wires_claude_and_codex() {
         assert_eq!(claude.events.get(event).map(String::as_str), Some(word));
     }
     let codex = job("codex");
-    assert_eq!(codex.blocked, "none");
+    assert_eq!(codex.blocked, "PermissionRequest");
+    assert!(codex.screen_backstop);
+    assert!(crate::harness_capabilities::session_state_names_no_blocked_producer("codex"));
     assert_eq!(
         codex.events.get("PreToolUse").map(String::as_str),
         Some("working")
