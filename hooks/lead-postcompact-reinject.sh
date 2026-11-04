@@ -39,7 +39,7 @@ BRIEF="$PLUGIN_ROOT/skills/lead/references/postcompact-brief.md"
 # shellcheck source=../scripts/lib/postcompact-carrier.sh
 source "$CARRIER_LIB"
 
-# Read the hook event through the shared lib (TTY-guarded; one python pass).
+# Read the hook event through the shared lib (TTY-guarded; one jq pass).
 EVENT="$(postcompact_read_event)"
 SOURCE="$(printf '%s' "$EVENT" | sed -n 1p)"
 SID="$(printf '%s' "$EVENT" | sed -n 2p)"
