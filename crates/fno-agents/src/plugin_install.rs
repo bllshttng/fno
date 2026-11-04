@@ -3127,7 +3127,7 @@ mod tests {
         fs::write(dir.join(".claude-plugin/plugin.json"), r#"{"name":"fno"}"#).unwrap();
         fs::write(
             dir.join(MARKETPLACE_REL),
-            r#"{"name":"fno","plugins":[{"name":"fno","source":{"source":"github","repo":"bllshttng/fno","ref":"stable"}},{"name":"fno-nightly","source":{"source":"github","repo":"bllshttng/fno","ref":"nightly"}}]}"#,
+            r#"{"name":"fno","plugins":[{"name":"fno","source":{"source":"github","repo":"fnodotdev/fno","ref":"stable"}},{"name":"fno-nightly","source":{"source":"github","repo":"fnodotdev/fno","ref":"nightly"}}]}"#,
         )
         .unwrap();
         git_in(dir, &["add", "-A"]);
@@ -3258,7 +3258,7 @@ mod tests {
         let _ = fs::remove_dir_all(&base);
         let (source, stage) = fresh_stage(&base);
         fs::create_dir_all(source.join(".agents/plugins")).unwrap();
-        fs::write(source.join(CODEX_MARKETPLACE_REL), r#"{"plugins":[{"name":"fno","source":{"source":"url","url":"https://github.com/bllshttng/fno.git","ref":"stable"}}]}"#).unwrap();
+        fs::write(source.join(CODEX_MARKETPLACE_REL), r#"{"plugins":[{"name":"fno","source":{"source":"url","url":"https://github.com/fnodotdev/fno.git","ref":"stable"}}]}"#).unwrap();
         git_in(&source, &["add", CODEX_MARKETPLACE_REL]);
         git_in(&source, &["commit", "-q", "-m", "codex marketplace"]);
         let (stage, _) = build_stage(&source, stage.parent().unwrap()).unwrap();
@@ -3333,7 +3333,7 @@ mod tests {
         new_repo(&source);
         fs::write(
             source.join(MARKETPLACE_REL),
-            r#"{"name":"fno","plugins":[{"name":"fno-nightly","source":{"source":"github","repo":"bllshttng/fno","ref":"nightly"}}]}"#,
+            r#"{"name":"fno","plugins":[{"name":"fno-nightly","source":{"source":"github","repo":"fnodotdev/fno","ref":"nightly"}}]}"#,
         )
         .unwrap();
         git_in(&source, &["add", "-A"]);
@@ -3474,20 +3474,20 @@ mod tests {
             release_channel("claude", &claude, &codex)
         };
         assert_eq!(
-            claude_with(json!({"source": "github", "repo": "bllshttng/fno", "ref": "stable"}))
+            claude_with(json!({"source": "github", "repo": "fnodotdev/fno", "ref": "stable"}))
                 .as_deref(),
-            Some("stable (github:bllshttng/fno#stable)")
+            Some("stable (github:fnodotdev/fno#stable)")
         );
         assert_eq!(
             claude_with(
-                json!({"source": "github", "repo": "bllshttng/fno", "ref": "plugin-nightly"})
+                json!({"source": "github", "repo": "fnodotdev/fno", "ref": "plugin-nightly"})
             )
             .as_deref(),
-            Some("nightly (github:bllshttng/fno#plugin-nightly)")
+            Some("nightly (github:fnodotdev/fno#plugin-nightly)")
         );
         assert_eq!(
-            claude_with(json!({"source": "github", "repo": "bllshttng/fno"})).as_deref(),
-            Some("main (github:bllshttng/fno#main)")
+            claude_with(json!({"source": "github", "repo": "fnodotdev/fno"})).as_deref(),
+            Some("main (github:fnodotdev/fno#main)")
         );
         assert_eq!(
             claude_with(json!({"source": "directory", "path": "/stage"})),
@@ -3496,13 +3496,13 @@ mod tests {
 
         let marker = codex.join("footnote/plugin-channel.json");
         let codex_with = |channel: &str| {
-            let v = json!({"channel": channel, "source": "bllshttng/fno", "ref": "stable"});
+            let v = json!({"channel": channel, "source": "fnodotdev/fno", "ref": "stable"});
             fs::write(&marker, v.to_string()).unwrap();
             release_channel("codex", &claude, &codex)
         };
         assert_eq!(
             codex_with("release").as_deref(),
-            Some("stable (bllshttng/fno#stable)")
+            Some("stable (fnodotdev/fno#stable)")
         );
         assert_eq!(codex_with("dev"), None);
         assert_eq!(release_channel("agy", &claude, &codex), None);
@@ -3546,7 +3546,7 @@ mod tests {
         let claude = home.join(".claude");
         assert!(legacy_claude_migration(&claude).is_empty());
 
-        let known = json!({"footnote": {"source": {"source": "github", "repo": "bllshttng/fno", "ref": "stable"}}});
+        let known = json!({"footnote": {"source": {"source": "github", "repo": "fnodotdev/fno", "ref": "stable"}}});
         fs::write(
             claude.join("plugins/known_marketplaces.json"),
             known.to_string(),
@@ -3567,7 +3567,7 @@ mod tests {
         );
         assert_eq!(
             release_channel("claude", &claude, &home.join(".codex")).as_deref(),
-            Some("stable (github:bllshttng/fno#stable)")
+            Some("stable (github:fnodotdev/fno#stable)")
         );
         // A failed migration leaves both ids registered; the guard sees both.
         let both = json!({"version": 2, "plugins": {
@@ -3594,7 +3594,7 @@ mod tests {
         );
 
         // Once the new name is registered, nothing is left to migrate.
-        let known = json!({"fno": {"source": {"source": "github", "repo": "bllshttng/fno", "ref": "stable"}}});
+        let known = json!({"fno": {"source": {"source": "github", "repo": "fnodotdev/fno", "ref": "stable"}}});
         fs::write(
             claude.join("plugins/known_marketplaces.json"),
             known.to_string(),

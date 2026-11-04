@@ -9,6 +9,7 @@
 //! ratchet never sees them (shrink law d-fe66560a).
 
 pub mod adapter;
+pub mod bg_process_guard;
 pub mod bin_install_guard;
 pub mod diff_budget;
 pub mod edit_integrity;
@@ -17,6 +18,7 @@ pub mod lead_guard_wire;
 pub mod pipe_guard;
 pub mod pretooluse_bash;
 pub mod prompt;
+pub mod recursive_grep_guard;
 pub mod refusal_streak;
 pub mod rules;
 pub mod send_message_guard;
@@ -37,6 +39,7 @@ use std::path::{Path, PathBuf};
 /// calls this before the runtime builds, so a fire costs one process.
 pub fn dispatch(args: &[String]) -> i32 {
     match args.first().map(String::as_str) {
+        Some("bg-process-guard") => bg_process_guard::run(&args[1..]),
         Some("bin-install-guard") => bin_install_guard::run(&args[1..]),
         Some("diff-budget") => diff_budget::run(&args[1..]),
         Some("edit-integrity") => edit_integrity::run(&args[1..]),
@@ -45,6 +48,7 @@ pub fn dispatch(args: &[String]) -> i32 {
         Some("pipe-guard") => pipe_guard::run(&args[1..]),
         Some("pretooluse-bash") => pretooluse_bash::run(&args[1..]),
         Some("prompt") => prompt::run(&args[1..]),
+        Some("recursive-grep-guard") => recursive_grep_guard::run(&args[1..]),
         Some("posttooluse-bash") => refusal_streak::run(&args[1..]),
         Some("rules") => crate::event_rules::run_hook(&args[1..]),
         Some("send-message-guard") => send_message_guard::run(&args[1..]),
@@ -58,7 +62,7 @@ pub fn dispatch(args: &[String]) -> i32 {
         Some("write-gate") => write_gate::run(&args[1..]),
         other => {
             eprintln!(
-                "fno-agents hook: unknown entry {other:?}; expected bin-install-guard, diff-budget, edit-integrity, effect-guard, lead-guard, pipe-guard, posttooluse-bash, pretooluse-bash, prompt, rules, send-message-guard, session-state, subagent-worktree-guard, task-boundary, test-run-guard, transcript-push, worktree-relocation-allow, write-gate or stop"
+                "fno-agents hook: unknown entry {other:?}; expected bg-process-guard, bin-install-guard, diff-budget, edit-integrity, effect-guard, lead-guard, pipe-guard, posttooluse-bash, pretooluse-bash, prompt, recursive-grep-guard, rules, send-message-guard, session-state, subagent-worktree-guard, task-boundary, test-run-guard, transcript-push, worktree-relocation-allow, write-gate or stop"
             );
             2
         }
