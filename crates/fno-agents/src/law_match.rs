@@ -800,6 +800,17 @@ fn stage_answer(req: StageRequest) -> Value {
     unread.extend(set.unread.iter().cloned());
     let today = chrono::Local::now().date_naive();
     let decision = crate::rules::decide(&set.rules, &ev, today);
+    let fired: Vec<&str> = decision
+        .fires
+        .iter()
+        .filter_map(|f| f.law.as_deref())
+        .collect();
+    crate::law_firings::record(
+        &crate::law_firings::default_path(),
+        &fired,
+        stage_name,
+        chrono::Utc::now(),
+    );
     let mut matching: Vec<String> = decision
         .fires
         .iter()
@@ -1848,13 +1859,16 @@ pub(crate) fn record_door_write(door: RecordDoor, decision: String, caller: &Cal
         attested_by,
         relayed_by,
     } = caller;
+    // A fleet subject with no widening flag defaults to global, so a project
+    // that does not resolve still records it. The globs are still validated.
+    let fleet_default = door.widen.is_none() && decision_index::is_fleet_subject(&door.subject);
+    let widen = if fleet_default {
+        Some(&Widen::Global)
+    } else {
+        door.widen.as_ref()
+    };
     // The scope stamp with the widening and the globs validated at the door.
-    let scope_answer = record_scope_answer_in(
-        None,
-        &settings_sources(),
-        door.widen.as_ref(),
-        &door.raw_paths,
-    );
+    let scope_answer = record_scope_answer_in(None, &settings_sources(), widen, &door.raw_paths);
     if scope_answer.get("ok") != Some(&json!(true)) {
         let message = scope_answer
             .get("refusal")
@@ -1867,8 +1881,10 @@ pub(crate) fn record_door_write(door: RecordDoor, decision: String, caller: &Cal
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string();
-    if let Some(refusal) = wide_scope_refusal(&scope) {
-        return door_refuse(&refusal);
+    if !fleet_default {
+        if let Some(refusal) = wide_scope_refusal(&scope) {
+            return door_refuse(&refusal);
+        }
     }
     let paths: Vec<Value> = scope_answer
         .get("paths")

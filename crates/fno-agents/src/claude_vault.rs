@@ -302,12 +302,7 @@ fn run_with_options(action: &str, options: Options, external: &dyn External) -> 
         return execute(action, &options, external);
     }
     let lock_path = options.store.join(".switch.lock");
-    let lock = match OpenOptions::new()
-        .create(true)
-        .read(true)
-        .write(true)
-        .open(lock_path)
-    {
+    let _lock = match crate::chokepoint::take(&crate::chokepoint::CLAUDE_VAULT, &lock_path) {
         Ok(lock) => lock,
         Err(reason) => {
             return (
@@ -316,9 +311,6 @@ fn run_with_options(action: &str, options: Options, external: &dyn External) -> 
             )
         }
     };
-    if lock.lock().is_err() {
-        return (1, Receipt::new(action, "lock-unavailable", None));
-    }
     execute(action, &options, external)
 }
 
