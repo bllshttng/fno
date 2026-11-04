@@ -31,7 +31,7 @@ pub(crate) fn open_rows(view: &mut View, rows: Vec<crate::decisions_overlay::Dec
             rows,
             reviewed: load_reviewed(&store_path()),
             filter: Filter::default(),
-            sel: 0,
+            pick: 0,
         },
     });
     view.region_owner = super::region_focus::RegionOwner::Board;

@@ -46,7 +46,7 @@ pub struct Table {
     pub rows: Vec<DecisionRow>,
     pub reviewed: HashSet<String>,
     pub filter: Filter,
-    pub sel: usize,
+    pub pick: usize,
 }
 
 impl Table {
@@ -55,21 +55,21 @@ impl Table {
     }
 
     pub(crate) fn selected(&self) -> Option<&DecisionRow> {
-        self.shown().get(self.sel).copied()
+        self.shown().get(self.pick).copied()
     }
 
     /// Apply a navigation or filter key; an action key returns to the loop.
     pub fn apply(&mut self, key: Key) {
         match key {
-            Key::Up => self.sel = self.sel.saturating_sub(1),
-            Key::Down => self.sel = (self.sel + 1).min(self.shown().len().saturating_sub(1)),
+            Key::Up => self.pick = self.pick.saturating_sub(1),
+            Key::Down => self.pick = (self.pick + 1).min(self.shown().len().saturating_sub(1)),
             Key::Lane => self.filter.cycle_lane(),
             Key::State => self.filter.cycle_state(),
             Key::Author => self.filter.cycle_author(),
             Key::Audit => self.filter.toggle_audit(),
             _ => {}
         }
-        self.sel = self.sel.min(self.shown().len().saturating_sub(1));
+        self.pick = self.pick.min(self.shown().len().saturating_sub(1));
     }
 }
 
@@ -112,7 +112,7 @@ pub fn render(t: &Table, w: usize, h: usize) -> Vec<String> {
     );
     let mut out = vec![head];
     let body_rows = h.saturating_sub(4);
-    let top = t.sel.saturating_sub(body_rows.saturating_sub(1));
+    let top = t.pick.saturating_sub(body_rows.saturating_sub(1));
     // 59 columns of fixed fields precede the text; one more keeps the last
     // column clear of the wrap edge.
     let text_w = w.saturating_sub(60);
@@ -127,7 +127,7 @@ pub fn render(t: &Table, w: usize, h: usize) -> Vec<String> {
             fit(&r.subject, 14),
             fit(&r.decision, text_w),
         );
-        out.push(if i == t.sel {
+        out.push(if i == t.pick {
             format!("\x1b[7m{line}\x1b[0m")
         } else {
             line
@@ -137,10 +137,12 @@ pub fn render(t: &Table, w: usize, h: usize) -> Vec<String> {
         out.push(String::new());
     }
     // The question the selected decision answered, so the pair reads as one.
-    out.push(match shown.get(t.sel).and_then(|r| r.question.as_deref()) {
-        Some(q) => format!("\x1b[2mquestion: {}\x1b[0m", fit(q, w.saturating_sub(10))),
-        None => String::new(),
-    });
+    out.push(
+        match shown.get(t.pick).and_then(|r| r.question.as_deref()) {
+            Some(q) => format!("\x1b[2mquestion: {}\x1b[0m", fit(q, w.saturating_sub(10))),
+            None => String::new(),
+        },
+    );
     out.push("\x1b[2mj/k move  l lane  s state  a author  u audit queue  r retract  o overrule  v reviewed  g question  q quit\x1b[0m".to_string());
     out
 }
@@ -203,7 +205,7 @@ pub fn run() -> i32 {
         rows,
         reviewed: load_reviewed(&store),
         filter: Filter::default(),
-        sel: 0,
+        pick: 0,
     };
     let mut _screen = match crate::observe::Screen::enter() {
         Ok(s) => Some(s),
@@ -282,7 +284,7 @@ mod tests {
             ],
             reviewed: HashSet::new(),
             filter: Filter::default(),
-            sel: 0,
+            pick: 0,
         }
     }
 
@@ -292,9 +294,9 @@ mod tests {
         assert_eq!(parse_key(b"z"), Key::Other);
         let mut t = table();
         t.apply(parse_key(b"\x1b[B"));
-        assert_eq!(t.sel, 1);
+        assert_eq!(t.pick, 1);
         t.apply(Key::State);
-        assert_eq!(t.sel, 0);
+        assert_eq!(t.pick, 0);
         assert_eq!(t.shown().len(), 1);
     }
 
