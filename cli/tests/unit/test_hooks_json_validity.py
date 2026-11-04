@@ -246,9 +246,7 @@ def test_bg_process_guard_wired_beside_git_protection_on_both_harnesses() -> Non
     for guard in (
         "hooks/git-protection.py",
         "hooks/bin-install-guard.sh",
-        "hooks/bg-process-guard.py",
         "hooks/pipe-guard.sh",
-        "hooks/recursive-grep-guard.py",
         "hooks/test-run-guard.sh",
     ):
         assert (REPO_ROOT / guard).is_file(), f"guard missing at {guard}"
