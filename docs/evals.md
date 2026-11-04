@@ -40,6 +40,11 @@ grade:                      # >=1 mechanical check; a gradeless task is rejected
     package: x
     f2p: [m::tests::new_case]   # fail-to-pass: fail before the fix, pass after
     p2p: [m::tests::old_case]   # pass-to-pass: pass before and after
+  - kind: rubric            # judge-graded (see Rubric goldens); capability tier only
+    path: decision.md       # the work product the judges read, or `diff: true` for the git diff against the grade base
+    criteria:               # each criterion is one binary fact, one judge call each
+      - {id: stays-rust, text: the answer names a crates/ path, tag: hurdle}
+      - {id: no-new-python, text: the answer never adds Python to cli/src/fno, tag: principle}
 timeout_minutes: 20
 tags: [cli, greenfield]
 ```
@@ -162,6 +167,16 @@ Mint a draft with `fno doctor evals drafts --from-commit <sha>`. The mint runs t
 
 Only the `cargo` runner exists. A pytest runner waits until a pytest candidate set shows a useful qualify rate.
 
+## Rubric goldens
+
+A decision golden grades one string the worker wrote. A rubric golden grades the behaviour itself: judges read the task prompt, one criterion and the work product, and answer pass or fail per criterion. Each criterion is one binary fact tagged `hurdle` (a fail fails the check) or `principle` (a fail only lowers the criterion pass rate the detail prints). No scale, no partial credit.
+
+The judges come from `config.evals.rubric.judges`, a list of exactly two lane names from different vendors (self-preference bias, RLHF book 12.4.2: a vendor's judge favors its own vendor's work). A same-vendor list refuses at grade time and the check reads a missing result, never a pass. Verdicts cache by sha256 of (work product, criterion text, lane, template) under `<history dir>/evals-rubric-cache/`, so repeats of one tree grade the same within a cohort. A judge timeout or spawn error reads a missing result, never a pass.
+
+`fno doctor evals report --check-metrics` reads the recorded verdicts (`--spend` writes them) and `report --judge-agreement <labels.yaml>` reads user labels. The separability proof (same-tree sd below between-tree sd) is tracked on a follow-up node once user labels land.
+
+One judge call costs about one worker attempt (a 2026-11-04 codex one-shot measured 45,290 input tokens, 8 output, mostly harness boot), and a two-criterion check spends 4 calls per trial (2 judges x 2 criteria), cache hits free.
+
 ## Do scores predict outcomes
 
 `fno doctor evals report --predict [--json]` asks whether a golden's score says anything about the real work that follows it. It reads only sealed, graded rows, one series per lane and seat, and never mixes lanes. A row's seat is its `seat` field, else `lead` for a `lead`-tagged task, else `worker`. A seat with a bank task and no row prints `no_cohort`. The report writes nothing.
@@ -229,7 +244,7 @@ A metric proves a grader before anyone trusts it. Each golden has `evals/fixture
 
 A golden whose type is not proved lists under Unproved in a compare, and it cannot make the compare exit 1. With no readable catalog, nothing reads unproved, so a regression still fails.
 
-No type needs a judge grader today, because each golden grades a decision file or a work product. `macro` patterns stay out of this list. They are session and fleet states such as `termination:NoProgress`, which a fixture cannot reach.
+A rubric golden's grader is model-graded, so its proof reads recorded verdicts and never spawns on a gate tick. `report --check-metrics --spend` runs the judges over the fixture cases once and writes `evals/fixtures/metrics/<id>.verdicts.jsonl`; the proof then reads that record, and a missing or stale record (the prompt hash moved) reads not proved. A rubric golden's type reads proved only when its cases pass with the recorded verdicts and its judges hold the agreement bar: `report --judge-agreement <labels.yaml>` prints n, raw agreement and Cohen's kappa per judge, and the bar is n >= 100, agreement >= 0.90 and kappa >= 0.80 (the APEX-Accounting judge read 97.1 percent agreement and kappa 0.857 against three experts). `--draft-labels <labels.yaml>` prints the (case, criterion) pairs still missing labels, verdicts hidden, so nobody grades to their own answer. The seed rubric golden carries no `gate` tag, so the head run never picks it; the daily main run does run it, and its spend is capped by `evals.gate.daily_usd` like any worker attempt. `macro` patterns stay out of this list: they are session and fleet states such as `termination:NoProgress`, which a fixture cannot reach.
 
 ## Trend
 
