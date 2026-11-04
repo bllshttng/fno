@@ -2077,7 +2077,7 @@
       "type": "object"
     },
     "PrBlock": {
-      "description": "Pr verb defaults (nested under 'config.pr').\n\ncancel_red_run (default True): `fno do pr push` cancels a red head's\nin-flight CI run and pushes with receipt ci=red-cancel; False\nrestores the old exit-2 refusal while any run is still in flight.\nA head whose latest rows are not red always refuses, whatever this\nkey reads.\n\nopen_ready (default True): master switch for the pr-draft guard that\nholds `gh pr create --draft` to the project's draft law; a broken\nconfig never disables a guard.\n\nwait_wake_minutes (default 15): the minutes `fno do pr wait` waits\nbefore it wakes when --timeout is omitted.",
+      "description": "Pr verb defaults (nested under 'config.pr').\n\ncancel_red_run (default True): gates every red-run cancel site. True\nlets `fno do pr push` cancel a red head's in-flight CI run and push\n(receipt ci=red-cancel), lets `fno do pr wait` cancel on a red\nverdict, and lets the daemon cadence cancel before it wakes the\npusher. False restores the old exit-2 push refusal while a run is\nin flight, reads a red verdict as final, and leaves the runs\nrunning - a sharded suite keeps every failure from its one run. A\nhead whose latest rows are not red always refuses.\n\nopen_ready (default True): master switch for the pr-draft guard that\nholds `gh pr create --draft` to the project's draft law; a broken\nconfig never disables a guard.\n\nwait_wake_minutes (default 15): the minutes `fno do pr wait` waits\nbefore it wakes when --timeout is omitted.",
       "properties": {
         "cancel_red_run": {
           "default": true,

@@ -452,14 +452,11 @@ mod wait_wake_timeout_tests {
 
     #[test]
     fn the_default_reads_15_minutes() {
-        // FNO_CONFIG pins the sole candidate to a file that does not exist,
-        // so the read takes the built-in default even on a machine whose
-        // canonical or global config sets the key.
+        // A cwd with no local config falls through the candidate chain; the
+        // default 15 only moves when the OPERATOR sets the key globally, and
+        // the override case below covers that. CI carries no operator config.
         let dir = tempfile::tempdir().unwrap();
-        let absent = dir.path().join("absent.toml");
-        std::env::set_var("FNO_CONFIG", &absent);
         assert_eq!(wait_wake_timeout(dir.path()), "15m");
-        std::env::remove_var("FNO_CONFIG");
     }
 
     #[test]
