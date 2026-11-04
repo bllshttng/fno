@@ -559,16 +559,19 @@ pub fn run_at(root: &Path) -> Result<(), String> {
     }
     // v1 receipts were stamped by a walk that skipped a symlinked spaces
     // root, so they cannot vouch for it; a re-walk is idempotent.
-    let marker = root.join("migrations/role-vocabulary-v2.done");
+    let marker = crate::state_layout::place_in(root, "migrations", "role-vocabulary-v2.done");
     // The table pass has its own receipt: roots stamped v2 before it existed
     // still hold crown_* rows in graph.db.
-    let table_marker = root.join("migrations/role-registry-table-v1.done");
+    let table_marker =
+        crate::state_layout::place_in(root, "migrations", "role-registry-table-v1.done");
     if marker.exists() && table_marker.exists() {
         return Ok(());
     }
     crate::live_store_fence::refuse_worktree_build_on_operator_store(root)?;
-    std::fs::create_dir_all(marker.parent().expect("marker has parent"))
-        .map_err(|e| e.to_string())?;
+    for path in [&marker, &table_marker] {
+        std::fs::create_dir_all(path.parent().expect("marker has parent"))
+            .map_err(|e| e.to_string())?;
+    }
     let _lock = crate::chokepoint::take(
         &crate::chokepoint::ROLE_MIGRATION,
         &marker.with_extension("lock"),

@@ -193,19 +193,19 @@ fn question_page(
     // The card's header line: who asked (registry name, mail tag), the lead
     // the row climbed through, the class, and the node with its graph stage.
     let who = match origin {
+        // Origin present but carrying no usable identity (a null or empty
+        // handle and no registry name) reads as an unknown asker, never as a
+        // blank header. Absent means absent: a null handle once blanked
+        // every question page.
         Some(o) => {
-            let name = o
-                .name
-                .as_deref()
-                .filter(|n| !n.is_empty())
-                .unwrap_or(&o.handle);
-            // The parenthetical names the handle beside the registry name;
-            // with no registry name the handle already printed, so the parens
-            // would read one word twice.
-            if name == o.handle.as_str() {
-                format!("asked by {name}")
-            } else {
-                format!("asked by {name} ({})", o.handle)
+            let handle = o.handle.as_deref().filter(|h| !h.is_empty());
+            let name = o.name.as_deref().filter(|n| !n.is_empty());
+            match (name, handle) {
+                (Some(n), Some(h)) if n == h => format!("asked by {n}"),
+                (Some(n), Some(h)) => format!("asked by {n} ({h})"),
+                (Some(n), None) => format!("asked by {n}"),
+                (None, Some(h)) => format!("asked by {h}"),
+                (None, None) => asker.map(|a| a.handle.as_str()).unwrap_or("?").to_string(),
             }
         }
         None => asker.map(|a| a.handle.as_str()).unwrap_or("?").to_string(),
@@ -362,7 +362,7 @@ fn question_page(
 }
 
 /// The question page's rendered lines at the detail pane's width.
-fn page_lines(d: &Detail, w: usize, now: u64) -> Vec<backlog_style::BLine> {
+fn page_lines(d: &Detail, w: usize, now: u64) -> Vec<crate::text_style::TLine> {
     super::node_detail::backlog_md::md_lines(&question_page(d.item(), d, now, w), w)
 }
 
@@ -454,10 +454,10 @@ pub(super) fn draw_detail(
     };
     if hint_h > 0 {
         let wrapped = super::backlog_board::backlog_panes::hint_rows(hint, cols);
-        let hint_lines: Vec<backlog_style::BLine> = wrapped
+        let hint_lines: Vec<crate::text_style::TLine> = wrapped
             .into_iter()
             .take(2)
-            .map(backlog_style::BLine::meta)
+            .map(crate::text_style::TLine::meta)
             .collect();
         backlog_style::paint_panel(
             cells,
@@ -519,8 +519,8 @@ fn draw_strip(
     theme: &Theme,
 ) {
     let rows = top + h;
-    let mut lines = vec![backlog_style::BLine::meta(String::new()); h - 1];
-    lines.push(backlog_style::BLine::meta(strip_label(d)));
+    let mut lines = vec![crate::text_style::TLine::meta(String::new()); h - 1];
+    lines.push(crate::text_style::TLine::meta(strip_label(d)));
     backlog_style::paint_panel(cells, rows, cols, top, cols, h, &lines, None, theme);
     let slots: Vec<usize> = (0..d.shots.len()).filter(|&i| d.img(i).is_some()).collect();
     let shown: Vec<&image::DynamicImage> = slots.iter().filter_map(|&i| d.img(i)).collect();
@@ -583,8 +583,8 @@ fn draw_expanded(d: &Detail, cells: &mut [Cell], rows: usize, cols: usize, theme
         d.shots.len(),
         d.shots[i].name()
     );
-    let mut lines = vec![backlog_style::BLine::meta(title)];
-    lines.resize(rows, backlog_style::BLine::meta(String::new()));
+    let mut lines = vec![crate::text_style::TLine::meta(title)];
+    lines.resize(rows, crate::text_style::TLine::meta(String::new()));
     backlog_style::paint_panel(cells, rows, cols, 0, cols, rows, &lines, None, theme);
     let Some(img) = d.img(i) else {
         return;
@@ -1584,7 +1584,7 @@ mod tests {
         // the on-silence line show their fields.
         let mut q = item("q-o", true);
         q.origin = Some(crate::needs_overlay::QuestionOrigin {
-            handle: "w1".into(),
+            handle: Some("w1".into()),
             session_id: Some("aaaa1111-bbbb".into()),
             name: Some("t-one".into()),
             harness: Some("claude".into()),
@@ -1631,7 +1631,7 @@ mod tests {
         // read the same word twice.
         let mut same = item("q-same", true);
         same.origin = Some(crate::needs_overlay::QuestionOrigin {
-            handle: "w1".into(),
+            handle: Some("w1".into()),
             session_id: Some("aaaa1111-bbbb".into()),
             name: Some("w1".into()),
             harness: Some("claude".into()),

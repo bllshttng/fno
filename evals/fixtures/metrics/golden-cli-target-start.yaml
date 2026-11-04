@@ -1,0 +1,26 @@
+# Labelled cases for the golden-cli-target-start grader. A stub fno stands in for the head's binary. Read by report --check-metrics.
+cases:
+  - id: prints-usage
+    label: good
+    stub:
+      fno: "printf 'usage: fno do target start <node|text> [--plan-path <path>]\\n' >&2; exit 2"
+  - id: usage-after-error
+    label: good
+    stub:
+      fno: "printf 'usage: fno do target start: the command takes a node id\\nusage: fno do target start <node|text>\\n' >&2; exit 2"
+  - id: usage-on-stdout
+    label: good
+    stub:
+      fno: "printf 'usage: fno do target start <node|text>\\n'"
+  - id: command-gone
+    label: bad
+    stub:
+      fno: "printf 'fno: no command `do target start`.\\n' >&2; exit 2"
+  - id: usage-renamed
+    label: bad
+    stub:
+      fno: "printf 'usage: fno do target begin <node|text>\\n' >&2; exit 2"
+  - id: silent
+    label: bad
+    stub:
+      fno: "exit 0"

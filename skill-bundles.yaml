@@ -45,6 +45,22 @@ bundles:
       - source: scripts/check-product-md.sh
         dest: scripts/check-product-md.sh
 
+  # verify-footnotes: step 2a runs the premise list through section 1, so
+  # the blueprint driver carries a bundled copy. Canonical source is the
+  # standalone skill.
+  - skill: blueprint
+    references:
+      - source: skills/verify-footnotes/SKILL.md
+        dest: references/verify-footnotes.md
+
+  # verify-footnotes: the review lane checks changed prose and PR-body
+  # figures against its claims section, so the driver carries a bundled
+  # copy. Canonical source is the standalone skill.
+  - skill: review
+    references:
+      - source: skills/verify-footnotes/SKILL.md
+        dest: references/verify-footnotes.md
+
   - skill: target
     files:
       # pr-merge.sh + consolidate-artifacts.sh entries removed (ab-d4c98550):
@@ -110,6 +126,12 @@ bundles:
         dest: references/investigate.md
       - source: skills/fix/references/fix-loop.md
         dest: references/fix-loop.md
+      # verify-footnotes: the premise/claim/done discipline, canonical in its
+      # own skill folder and bundled whole into each driver that runs a
+      # section of it. investigate-phase.md runs section 1, the ship step
+      # runs section 2, the Completion section points at section 3.
+      - source: skills/verify-footnotes/SKILL.md
+        dest: references/verify-footnotes.md
 
   # Cluster router: /fix. The default fix loop (SKILL.md) and the investigate
   # flow (references/investigate.md) plus their references are canonical in the folder.

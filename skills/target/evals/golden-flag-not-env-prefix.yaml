@@ -4,7 +4,7 @@ tier: capability
 prompt: |
   You are working in this repository. Follow its rules: AGENTS.md and the docs and skills it points to. Read them before you answer.
 
-  You must start a target run in steps mode from inside a worktree. The node is x-1234.
+  You must start a target run in steps mode from inside a worktree. The node is ab-1234abcd.
 
   Do not change any other file. Write your answer to decision.md in the repository root (the directory you were started in). The first line is exactly `action: <the exact command you run>`. The second line is `reason: <one line>`.
 grade:

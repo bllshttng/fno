@@ -37,6 +37,13 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Half of GitHub's advertised 900 points/minute REST secondary limit.
 pub const DEFAULT_POINTS_PER_MIN: u32 = 450;
+/// One poll-class caller's rolling-minute point cap. The 2026-11-03 outage
+/// ran a wedged unlabeled poller at 4.5 Hz for 4.3 hours (12,410 rows)
+/// because nothing bounded one caller between the machine cap and GitHub's
+/// own refusals. A legitimate poll loop needs nowhere near this (the
+/// measured fleet aggregate was 63/min across every label); a runaway
+/// binds within half a minute.
+pub const POLLER_CAP_PER_MIN: u32 = 120;
 const WINDOW_MS: i64 = 60_000;
 const HALF_OPEN_MS: i64 = 30_000;
 const ESCALATION_WINDOW_MS: i64 = 900_000;
@@ -74,6 +81,9 @@ fn ledger_word(state: LedgerState) -> &'static str {
 #[derive(Debug, Clone)]
 struct Ledger {
     stamps: Vec<(i64, u32)>,
+    /// Per-caller spend stamps `(ts_ms, caller label, points)`, pruned on
+    /// write like `stamps`. The poller cap sums one label's window.
+    caller_stamps: Vec<(i64, String, u32)>,
     backoff_until_ms: i64,
     backoff_step: i64,
     /// The GitHub response kind of the live hold's opening refusal:
@@ -98,6 +108,7 @@ impl Default for Ledger {
     fn default() -> Self {
         Ledger {
             stamps: Vec::new(),
+            caller_stamps: Vec::new(),
             backoff_until_ms: 0,
             backoff_step: 0,
             refusal_kind: "unknown".to_string(),
@@ -541,6 +552,23 @@ fn read_ledger(path: &Path) -> (Ledger, LedgerState) {
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
+    // Older ledgers carry no caller_stamps; absent reads empty.
+    let caller_stamps = v
+        .get("caller_stamps")
+        .and_then(Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|s| {
+                    let triple = s.as_array()?;
+                    Some((
+                        triple.first()?.as_i64()?,
+                        triple.get(1)?.as_str()?.to_string(),
+                        triple.get(2)?.as_u64()? as u32,
+                    ))
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
     let num = |key: &str| v.get(key).and_then(Value::as_i64).unwrap_or(0);
     // Absent core fields read as unknown (-1/0/0): an older ledger written
     // by a deployed fno-agents without this change admits as before.
@@ -551,6 +579,7 @@ fn read_ledger(path: &Path) -> (Ledger, LedgerState) {
     (
         Ledger {
             stamps,
+            caller_stamps,
             backoff_until_ms: num("backoff_until_ms"),
             backoff_step: num("backoff_step"),
             refusal_kind: v
@@ -571,8 +600,10 @@ fn read_ledger(path: &Path) -> (Ledger, LedgerState) {
 fn write_ledger(path: &Path, ledger: &Ledger, now: i64) -> Result<(), String> {
     let mut out = ledger.clone();
     out.stamps.retain(|(t, _)| now - *t < WINDOW_MS);
+    out.caller_stamps.retain(|(t, _, _)| now - *t < WINDOW_MS);
     let body = json!({
         "stamps": out.stamps,
+        "caller_stamps": out.caller_stamps,
         "backoff_until_ms": out.backoff_until_ms,
         "backoff_step": out.backoff_step,
         "refusal_kind": out.refusal_kind,
@@ -698,6 +729,9 @@ fn admit_with(ledger_override: Option<&Path>, argv: &[String], now: i64, cap: u3
         if ledger.last_half_open_ms == 0 || now - ledger.last_half_open_ms >= HALF_OPEN_MS {
             ledger.last_half_open_ms = now;
             ledger.stamps.push((now, points));
+            ledger
+                .caller_stamps
+                .push((now, crate::gh_spend::caller_label(), points));
             write_ledger(&path, &ledger, now).ok();
             let v = Verdict {
                 admitted: true,
@@ -726,6 +760,44 @@ fn admit_with(ledger_override: Option<&Path>, argv: &[String], now: i64, cap: u3
         return verdict;
     }
 
+    // The poller cap, before the machine cap so the refusal names its
+    // caller: a poll-class label may not outspend its rolling-minute share.
+    // A non-poll caller (a merge, a push, a human) rides the machine budget
+    // alone, never this cap.
+    let caller = crate::gh_spend::caller_label();
+    let caller_is_poll = crate::gh_spend::is_poll_class(&caller);
+    if caller_is_poll {
+        let caller_60s: i64 = ledger
+            .caller_stamps
+            .iter()
+            .filter(|(t, l, _)| *l == caller && now - *t < WINDOW_MS)
+            .map(|(_, _, p)| *p as i64)
+            .sum();
+        if caller_60s + points as i64 > POLLER_CAP_PER_MIN as i64 {
+            let oldest = ledger
+                .caller_stamps
+                .iter()
+                .filter(|(_, l, _)| *l == caller)
+                .map(|(t, _, _)| *t)
+                .min()
+                .unwrap_or(now);
+            let retry_after_s =
+                (((WINDOW_MS - (now - oldest)) / 1000).max(1)).min(WINDOW_MS / 1000);
+            let mut verdict = Verdict {
+                admitted: false,
+                cause: Some("caller-cap"),
+                retry_after_s,
+                points_60s: window_points(&ledger, now),
+                cap,
+                ledger: state,
+                refusal: None,
+            };
+            verdict.refusal = Some(refusal_line(&verdict, -1));
+            crate::gh_spend::journal_verdict(&path, argv, now, &verdict);
+            return verdict;
+        }
+    }
+
     let points_60s = window_points(&ledger, now);
     if points_60s + points as i64 > cap as i64 {
         let oldest = ledger.stamps.iter().map(|(t, _)| *t).min().unwrap_or(now);
@@ -745,6 +817,7 @@ fn admit_with(ledger_override: Option<&Path>, argv: &[String], now: i64, cap: u3
     }
 
     ledger.stamps.push((now, points));
+    ledger.caller_stamps.push((now, caller.clone(), points));
     write_ledger(&path, &ledger, now).ok();
     let v = Verdict {
         admitted: true,
@@ -2026,6 +2099,51 @@ mod tests {
         record_core_at(&path3, 0, now / 1000 - 100, now);
         let v = admit(&path3, &core_read, now, 450);
         assert!(v.admitted, "a passed reset ignores core state: {v:?}");
+    }
+
+    #[test]
+    fn a_poll_class_caller_over_its_cap_refuses_while_a_merge_admits() {
+        // The 2026-11-03 runaway: one unlabeled poller spent 12,410 rows at
+        // 4.5 Hz for 4.3 h because nothing bounded ONE caller between the
+        // machine cap and GitHub's refusals. `unknown` now reads poll-class,
+        // and a poll-class label may not outspend POLLER_CAP_PER_MIN in its
+        // rolling minute while a non-poll caller rides the machine cap alone.
+        let _env = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("budget.json");
+        let now = 1_760_000_000_000i64;
+        let read = argv(&["api", "repos/o/r/pulls/1"]);
+        std::env::set_var("FNO_GH_CALLER", "unknown");
+        let v = admit(&path, &read, now, 450);
+        assert!(
+            v.admitted,
+            "the first read under an empty ledger admits: {v:?}"
+        );
+        for _ in 1..POLLER_CAP_PER_MIN {
+            let v = admit(&path, &read, now, 450);
+            assert!(v.admitted, "a read inside the cap admits: {v:?}");
+        }
+        let v = admit(&path, &read, now, 450);
+        assert!(!v.admitted);
+        assert_eq!(v.cause, Some("caller-cap"));
+        assert!(v.retry_after_s >= 1 && v.retry_after_s <= 60, "{v:?}");
+
+        // A non-poll caller at the same ledger admits: the cap binds one
+        // label, never the machine.
+        std::env::set_var("FNO_GH_CALLER", "fno do pr merge");
+        let v = admit(&path, &read, now, 400);
+        assert!(
+            v.admitted,
+            "a non-poll caller rides the machine cap alone: {v:?}"
+        );
+
+        // The window ages: the same caller admits again a window later.
+        let v = admit(&path, &read, now + WINDOW_MS as i64 + 1_000, 450);
+        assert!(v.admitted, "a caller's window prunes: {v:?}");
+        std::env::remove_var("FNO_GH_CALLER");
+        drop(_env);
     }
 
     #[test]

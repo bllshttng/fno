@@ -14,7 +14,9 @@ use std::collections::HashMap;
 /// the pane carries no registered name. Chain: registered name
 /// (`FNO_AGENT_SELF`) -> `cmd` -> `node` -> cwd basename -> `shell`. Sanitized
 /// like a wire name (these land in chrome cells). Never an ordinal - a plain
-/// pane is `shell`, not a number the operator cannot map back.
+/// pane is `shell`, not a number the operator cannot map back. A registered
+/// name that is a remote row's `name@host` address keeps it and takes the remote
+/// glyph in front.
 pub(crate) fn pane_label(
     name: Option<&str>,
     node: Option<&str>,
@@ -23,9 +25,15 @@ pub(crate) fn pane_label(
 ) -> String {
     for c in [name, cmd, node].into_iter().flatten() {
         let clean = sanitize_tab_name(c);
-        if !clean.is_empty() {
-            return clean;
+        if clean.is_empty() {
+            continue;
         }
+        let remote = name == Some(c) && crate::proto::is_remote_address(&clean);
+        return if remote {
+            format!("{} {clean}", crate::proto::REMOTE_GLYPH)
+        } else {
+            clean
+        };
     }
     let base = cwd.trim_end_matches('/').rsplit('/').next().unwrap_or("");
     let clean = sanitize_tab_name(base);
@@ -268,6 +276,17 @@ mod tests {
         assert_eq!(m.node.as_deref(), Some("node7"));
         assert_eq!(m.branch.as_deref(), Some("main"));
         assert_eq!(m.ctx.as_deref(), Some("49%"));
+    }
+
+    // A pane that shows a remote session keeps its `name@host` and wears the
+    // remote glyph beside it. A local name carries no host and no glyph.
+    #[test]
+    fn a_remote_session_label_wears_the_glyph() {
+        assert_eq!(
+            pane_label(Some("tomas@imac2d2"), None, "/w", Some("fno")),
+            "\u{21c4} tomas@imac2d2"
+        );
+        assert_eq!(pane_label(Some("tomas"), None, "/w", Some("fno")), "tomas");
     }
 
     #[test]

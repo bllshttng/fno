@@ -64,9 +64,9 @@ plans_dir = ".fno/plans/"   # the legacy default; unset it resolves to <space>/p
 [paths]
 # ledger_json     = ...   # default: <state_dir>/db/history/ledger.json
 # briefs_dir      = ...   # default: <state_dir>/briefs/
-# fleet_dir       = ...   # default: <state_dir>/fleet/
+# fleet_dir       = ...   # no reader; the megatron fleet dir it named is retired
 # postmortems_dir = ...   # default: <state_dir>/postmortems/
-# worktrees_base  = ...   # default: <state_dir>/worktrees/
+# worktrees_base  = ...   # default: <state_dir>/spaces/worktrees/ (older checkouts under <state_dir>/worktrees/ stay readable)
 # memory_dir      = ...   # default: <state_dir>/memory/
 # hook_logs_dir   = ...   # default: <state_dir>/hook-logs/
 # handoffs_dir    = ...   # default: <vault>/internal/{project}/handoffs/ when

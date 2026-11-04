@@ -8,6 +8,7 @@ use crate::authorized_merge::{
     node_carries_tag, pr_bound_entry, Blocker, PrFacts, ProbeOutcome, Probes, MAIN_REPAIR_TAG,
 };
 use crate::loopcheck::coverage_gate::{refusal_line, GateState};
+use crate::visual_screen;
 use serde_json::Value;
 use std::collections::BTreeSet;
 use std::io::Write;
@@ -669,8 +670,14 @@ pub(crate) fn visual_approval_blocker<P: Probes>(
     if touched.is_empty() {
         return None;
     }
-    // A diff of comment lines changes no pixel, so a look would judge nothing.
-    if comment_only_on(probes, cwd, pr, &touched) {
+    // Comments and code names cannot move a pixel, so a look would judge
+    // nothing. The code diff alone clears the gate: no shots, no ruling, no
+    // question. Every unreadable patch keeps the hold.
+    if comment_only_on(probes, cwd, pr, &touched)
+        || touched.iter().all(|f| {
+            paint_patch(probes, cwd, pr, f).is_some_and(|p| visual_screen::names_only_patch(&p))
+        })
+    {
         return None;
     }
     // Ruling: a declared main-repair node IS the red-main fix; its lane
@@ -746,21 +753,62 @@ pub(crate) fn visual_approval_blocker<P: Probes>(
              page has no shots key: bind the node, then re-read status",
         ),
         (Some(node), shots) => {
-            let short = head.chars().take(8).collect::<String>();
             let mux = crate::escalation::vault_dir_with_home(&root, home.as_deref(), "mux");
-            let shots: Vec<PathBuf> = shots.iter().map(|s| mux.join(s)).collect();
-            detail.push_str(&file_visual_question(
-                &root,
-                pr,
-                head,
-                &short,
-                node,
-                &touched.join(", "),
-                &shots,
-            ));
+            let doc = std::fs::read_to_string(root.join("docs/architecture/mux-design-system.md"))
+                .unwrap_or_default();
+            let headings = visual_screen::rule_headings(&doc);
+            let remedy = format!(
+                "run `fno-agents visual critique-prep {node}`, then the `design-critic` skill on \
+                 {node}-critique.json, fix every high finding, and re-read status at the new head"
+            );
+            match visual_screen::read_critique(&mux, node, head, &headings) {
+                visual_screen::CritiqueRead::Missing => detail.push_str(&format!(
+                    "; no design critique at this head, so the gate files no page: {remedy}"
+                )),
+                visual_screen::CritiqueRead::Unfilled(why) => detail.push_str(&format!(
+                    "; the design critique is not usable ({why}), so the gate files no page: {remedy}"
+                )),
+                visual_screen::CritiqueRead::High(high) => detail.push_str(&format!(
+                    "; the design critic left {} high finding(s), so the gate files no page: {}; fix \
+                     each, then {remedy}",
+                    high.len(),
+                    high.join("; ")
+                )),
+                visual_screen::CritiqueRead::Ready(c) => {
+                    let mut images: Vec<PathBuf> = shots.iter().map(|s| mux.join(s)).collect();
+                    images.extend(c.views.iter().filter_map(|v| v.boxed.as_ref()).map(|b| mux.join(b)));
+                    detail.push_str(&file_visual_question(
+                        &root,
+                        pr,
+                        head,
+                        node,
+                        &touched.join(", "),
+                        &visual_screen::critique_summary(&c),
+                        &images,
+                    ));
+                }
+            }
         }
     }
     Some(Blocker::held("visual_approval", detail))
+}
+
+/// The unified-diff patch GitHub holds for one changed file of the PR.
+/// `None` when the read fails or GitHub sent no patch (binary, too large).
+fn paint_patch<P: Probes>(probes: &P, cwd: &Path, pr: u64, file: &str) -> Option<String> {
+    let filter = format!(".[] | select(.filename == \"{file}\") | .patch // empty");
+    let args: Vec<String> = [
+        "api",
+        &format!("repos/{{owner}}/{{repo}}/pulls/{pr}/files"),
+        "--paginate",
+        "--jq",
+        &filter,
+    ]
+    .iter()
+    .map(|s| (*s).to_string())
+    .collect();
+    let (ok, out) = probes.run_gh(cwd, &args).ok()?;
+    (ok && !out.trim().is_empty()).then_some(out)
 }
 
 /// The public front page a reader meets before any install: the README and
@@ -916,7 +964,7 @@ fn vault_root(cwd: &Path) -> PathBuf {
 /// The mux captures for one node's PR: `internal/<project>/mux/<node>-*.png`
 /// top level, plus files inside a `<node>-shots/` folder, as vault-relative
 /// embed names. Sorted, so the embedded list is stable.
-fn mux_shots(root: &Path, home: Option<&Path>, node: &str) -> Vec<String> {
+pub(crate) fn mux_shots(root: &Path, home: Option<&Path>, node: &str) -> Vec<String> {
     let dir = crate::escalation::vault_dir_with_home(root, home, "mux");
     let Ok(read) = std::fs::read_dir(&dir) else {
         return Vec::new();
@@ -968,13 +1016,31 @@ fn visual_page_filed(root: &Path, pr: u64, head: &str) -> bool {
 /// class word, and prose after it reads as no class, refusing the very
 /// page this gate files. The shots ride `--image`, so
 /// the page shows them under its Screens heading.
-fn visual_question_markdown(pr: u64, head: &str, short: &str, node: &str, files: &str) -> String {
+fn visual_question_markdown(
+    pr: u64,
+    head: &str,
+    short: &str,
+    node: &str,
+    files: &str,
+    summary: &str,
+) -> String {
+    let changed = if summary.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "## What the critic checked and left\n\
+             The design critic read the main and PR shots against the mux design system. \
+             A red box frames each changed region under Screens.\n\
+             {summary}\n\n"
+        )
+    };
     format!(
         "---\n\
          recommend: 1\n\
          why_user: taste\n\
          ---\n\n\
          May PR {pr} merge as painted? ({node} at {short})\n\n\
+         {changed}\
          ## Blocked because\n\
          The visual-approval gate holds PR {pr} at head {head}: its diff touches the \
          paint surface the config lists ({files}). The user's look is the only clear.\n\n\
@@ -1011,11 +1077,12 @@ fn file_visual_question(
     root: &Path,
     pr: u64,
     head: &str,
-    short: &str,
     node: &str,
     files: &str,
+    summary: &str,
     shots: &[PathBuf],
 ) -> String {
+    let short = head.chars().take(8).collect::<String>();
     if visual_page_filed(root, pr, head) {
         return format!("; the question page for PR {pr} at {short} is already filed");
     }
@@ -1023,7 +1090,7 @@ fn file_visual_question(
         "fno-visual-ask-{pr}-{short}-{}.md",
         std::process::id()
     ));
-    let markdown = visual_question_markdown(pr, head, short, node, files);
+    let markdown = visual_question_markdown(pr, head, &short, node, files, summary);
     if let Err(e) = std::fs::write(&path, markdown) {
         return format!("; the question could not be staged: {e}");
     }
@@ -1631,8 +1698,14 @@ mod tests {
         // The ask door's asker-decides refusal reads why_user as exactly one
         // class word; prose after the word reads as no class and would
         // refuse the page this gate files.
-        let page =
-            visual_question_markdown(3036, "05ea5bcccc12", "05ea5bcc", "x-aaaa", "client/tab.rs");
+        let page = visual_question_markdown(
+            3036,
+            "05ea5bcccc12",
+            "05ea5bcc",
+            "x-aaaa",
+            "client/tab.rs",
+            "",
+        );
         let why = page
             .lines()
             .find(|l| l.starts_with("why_user:"))

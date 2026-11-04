@@ -64,19 +64,6 @@ session_id: 20260511T235959Z-77777-thinkc
 # Session State (planning fixture)
 """
 
-FLEET_MISSION = """---
-mission_id: fleet-fixture-001
-title: "Fixture mission"
-status: running
-wave_current: 2
-wave_total: 4
-projects:
-  footnote:
-    cwd: __PROJECT_ROOT__
----
-# Fleet Mission (fixture)
-"""
-
 RESIDENT_STATE = """---
 session_id: resident-run
 harness_session_id: resident-session
@@ -135,7 +122,6 @@ class Case:
     argv: tuple[str, ...]
     files: dict[str, str] = field(default_factory=dict)
     env: dict[str, str] = field(default_factory=dict)
-    fleet: bool = False
 
 
 CLAUDE_STAMP = {"CLAUDE_CODE_SESSION_ID": "879d8d26-2505-4977-9b87-000000000000"}
@@ -146,9 +132,9 @@ FULL_STACK = {
 }
 
 CASES: tuple[Case, ...] = (
-    Case("bare_full_stack", ("whoami",), FULL_STACK, fleet=True),
-    Case("bare_full_stack_json", ("whoami", "--json"), FULL_STACK, fleet=True),
-    Case("bare_full_stack_global_json", ("-J", "whoami"), FULL_STACK, fleet=True),
+    Case("bare_full_stack", ("whoami",), FULL_STACK),
+    Case("bare_full_stack_json", ("whoami", "--json"), FULL_STACK),
+    Case("bare_full_stack_global_json", ("-J", "whoami"), FULL_STACK),
     Case("bare_empty_project", ("whoami",), {}),
     Case("bare_empty_project_json", ("whoami", "--json"), {}),
     Case(
@@ -195,7 +181,6 @@ CASES: tuple[Case, ...] = (
         "bare_suppressed_layers",
         ("whoami", "--no-walker", "--no-fleet"),
         FULL_STACK,
-        fleet=True,
     ),
     Case(
         "bare_session_fallback",
@@ -257,19 +242,11 @@ def build_fixture(case: Case, root: Path) -> Path:
         path = project / rel
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(body, encoding="utf-8")
-    if case.fleet:
-        fleet_root = root / "fake_home" / ".fno" / "fleet" / "fleet-fixture-001"
-        fleet_root.mkdir(parents=True)
-        (fleet_root / "00-INDEX.md").write_text(
-            FLEET_MISSION.replace("__PROJECT_ROOT__", str(project.resolve())),
-            encoding="utf-8",
-        )
     # A seeded state root, not a fresh one: the paths bootstrap answers a
     # first-run migration with its own setup notice and a settings write.
     # That notice is the state layer's, not whoami's, so the fixture seeds
     # the settings file and sentinel a migrated root already has (the same
-    # shape paths_testing.use_tmpdir writes) and fleet_dir() still resolves
-    # to fake_home/.fno/fleet.
+    # shape paths_testing.use_tmpdir writes).
     state = root / "fake_home" / ".fno"
     state.mkdir(parents=True, exist_ok=True)
     (state / "settings.yaml").write_text(
@@ -292,7 +269,6 @@ def main() -> None:
                         "name": c.name,
                         "argv": list(c.argv),
                         "env": dict(c.env),
-                        "fleet": c.fleet,
                     }
                     for c in CASES
                 ]

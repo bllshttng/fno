@@ -1,6 +1,7 @@
 //! The eval bank: task format + loader + load-time discipline
 //! (the deleted Python leg's bank.py, ported per the dual-implementation
-//! protocol). A bank task is one evals/bank/<id>.yaml file; the two
+//! protocol). A bank task is one evals/bank/<id>.yaml file, or a
+//! skills/<name>/evals/<id>.yaml file beside the skill it grades; the two
 //! disciplines: a task without a runnable grade is rejected naming the id
 //! and file, and an all-trivial grade warns so a task cannot silently
 //! always-pass. The goldens pin the bytes.
@@ -46,6 +47,9 @@ pub struct TaskSpec {
     pub repo_fixture: String,
     pub timeout_minutes: i64,
     pub tags: Vec<String>,
+    /// Source path prefixes this task covers. A PR head that changes one runs
+    /// the task, with no `gate` tag needed.
+    pub covers: Vec<String>,
     pub golden: Option<Golden>,
     pub source_path: std::path::PathBuf,
 }
@@ -158,6 +162,11 @@ pub fn load_task(path: &std::path::Path) -> Result<TaskSpec, BankError> {
                 .collect()
         })
         .unwrap_or_default();
+    let covers = parse_covers(
+        map.get(serde_yaml_ng::Value::String("covers".into())),
+        &id,
+        path,
+    )?;
     let golden = match map.get(serde_yaml_ng::Value::String("golden".into())) {
         Some(raw) => Some(parse_golden(raw, &id, path)?),
         None => None,
@@ -165,6 +174,7 @@ pub fn load_task(path: &std::path::Path) -> Result<TaskSpec, BankError> {
     Ok(TaskSpec {
         id,
         golden,
+        covers,
         tier: tier.to_string(),
         prompt,
         grade: checks,
@@ -177,6 +187,31 @@ pub fn load_task(path: &std::path::Path) -> Result<TaskSpec, BankError> {
         tags,
         source_path: path.to_path_buf(),
     })
+}
+
+/// `covers:` is a list of directory prefixes. A prefix with no trailing `/`
+/// would match a sibling (`crates/fno` also names `crates/fno-agents`).
+fn parse_covers(
+    raw: Option<&serde_yaml_ng::Value>,
+    task_id: &str,
+    path: &std::path::Path,
+) -> Result<Vec<String>, BankError> {
+    let Some(raw) = raw else {
+        return Ok(Vec::new());
+    };
+    let bad = || {
+        BankError(format!(
+            "task '{task_id}' ({}): 'covers' must be a list of path prefixes ending in '/'",
+            path.display()
+        ))
+    };
+    let seq = raw.as_sequence().ok_or_else(bad)?;
+    seq.iter()
+        .map(|v| match v.as_str() {
+            Some(s) if s.ends_with('/') => Ok(s.to_string()),
+            _ => Err(bad()),
+        })
+        .collect()
 }
 
 fn parse_golden(
@@ -330,7 +365,34 @@ pub fn warn_if_decorative(task_id: &str, path: &std::path::Path, checks: &[Grade
     }
 }
 
-/// Load every *.yaml under bank_dir, sorted by id; duplicate ids refuse.
+/// The task files a skill carries beside its SKILL.md: `skills/<name>/evals/*.yaml`
+/// next to a bank at `<root>/evals/bank`. Case directories (`evals/<case>/case.yaml`,
+/// the `claude plugin eval` layout) sit one level deeper and are not read here.
+fn skill_task_paths(bank_dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let root = match (bank_dir.file_name(), bank_dir.parent()) {
+        (Some(n), Some(evals))
+            if n == "bank" && evals.file_name().is_some_and(|e| e == "evals") =>
+        {
+            evals.parent()
+        }
+        _ => None,
+    };
+    let Some(skills) = root.map(|r| r.join("skills")) else {
+        return Vec::new();
+    };
+    let Ok(entries) = std::fs::read_dir(skills) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter_map(|e| std::fs::read_dir(e.path().join("evals")).ok())
+        .flat_map(|d| d.flatten().map(|f| f.path()))
+        .filter(|p| p.extension().is_some_and(|e| e == "yaml") && p.is_file())
+        .collect()
+}
+
+/// Load every *.yaml under bank_dir and every skill-local `skills/*/evals/*.yaml`,
+/// sorted by id; duplicate ids refuse.
 pub fn discover_bank(bank_dir: &std::path::Path) -> Result<Vec<TaskSpec>, BankError> {
     require(
         bank_dir.is_dir(),
@@ -349,6 +411,7 @@ pub fn discover_bank(bank_dir: &std::path::Path) -> Result<Vec<TaskSpec>, BankEr
         .map(|e| e.path())
         .filter(|p| p.extension().map(|e| e == "yaml").unwrap_or(false))
         .collect();
+    paths.extend(skill_task_paths(bank_dir));
     paths.sort();
     for yaml_path in paths {
         if yaml_path.file_name().is_some_and(|n| {
@@ -398,6 +461,32 @@ mod tests {
         assert!(err.0.contains("task 'no-grade'"), "{0}", err.0);
         assert!(
             err.0.contains("(a task with no runnable grade is invalid)"),
+            "{0}",
+            err.0
+        );
+    }
+
+    #[test]
+    fn a_skill_local_task_loads_beside_the_bank_and_a_duplicate_id_refuses() {
+        let root = tempfile::tempdir().unwrap();
+        let bank = root.path().join("evals").join("bank");
+        let body = |id: &str| {
+            format!("id: {id}\ntier: capability\ngrade:\n  - kind: file-exists\n    path: x\ntimeout_minutes: 1\n")
+        };
+        write_task(&bank, "a.yaml", &body("bank-one"));
+        let evals = root.path().join("skills").join("target").join("evals");
+        write_task(&evals, "b.yaml", &body("skill-one"));
+        write_task(&evals.join("case-dir"), "case.yaml", "name: not-a-task\n");
+        let ids: Vec<String> = discover_bank(&bank)
+            .unwrap()
+            .into_iter()
+            .map(|t| t.id)
+            .collect();
+        assert_eq!(ids, ["bank-one", "skill-one"]);
+        write_task(&evals, "c.yaml", &body("bank-one"));
+        let err = discover_bank(&bank).unwrap_err();
+        assert!(
+            err.0.contains("duplicate bank task id 'bank-one'"),
             "{0}",
             err.0
         );
@@ -484,6 +573,32 @@ mod tests {
         };
         assert!(count("failed") >= 20, "failed goldens: {}", count("failed"));
         assert!(count("passed") >= 5, "passed goldens: {}", count("passed"));
+    }
+
+    #[test]
+    fn covers_loads_a_prefix_list_and_refuses_anything_else() {
+        let dir = tempfile::tempdir().unwrap();
+        let grade = "grade:\n  - kind: file-exists\n    path: x\n";
+        let body = |covers: &str| format!("id: c\ntier: regression\n{grade}{covers}");
+        let ok = write_task(
+            dir.path(),
+            "ok.yaml",
+            &body("covers: [\"crates/fno-agents/src/backlog/\"]\n"),
+        );
+        assert_eq!(
+            load_task(&ok).unwrap().covers,
+            vec!["crates/fno-agents/src/backlog/"]
+        );
+        for (name, covers) in [
+            ("bare", "covers: [\"crates/fno\"]\n"),
+            ("scalar", "covers: crates/fno/\n"),
+            ("num", "covers: [3]\n"),
+        ] {
+            let p = write_task(dir.path(), &format!("{name}.yaml"), &body(covers));
+            let err = load_task(&p).unwrap_err();
+            assert!(err.0.contains("task 'c'"), "{0}", err.0);
+            assert!(err.0.contains(&format!("{name}.yaml")), "{0}", err.0);
+        }
     }
 
     #[test]

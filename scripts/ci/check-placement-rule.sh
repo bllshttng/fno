@@ -425,7 +425,6 @@ scripts/install-autocorrect-cron.sh
 scripts/install-corrections-git-hook.sh
 scripts/lib/config.sh
 scripts/lib/corrections-lock.sh
-scripts/lib/mission-emit.sh
 scripts/lib/worktree-lifecycle.sh
 scripts/lib/worktree-manager.sh
 scripts/lib/worktree_occupancy.py

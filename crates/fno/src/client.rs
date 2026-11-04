@@ -45,7 +45,9 @@ mod wire_version;
 mod workspace_folder;
 use wire_version::{server_has_pane_scroll, server_has_splitdir, split_skew_notice};
 
-use sweep_scope::{build_sweep_modal, parse_sweep_receipt, sweep_apply_args, SweepCounts};
+use sweep_scope::{begin_sweep_apply, build_sweep_modal, run_sweep_command, SweepCounts};
+#[cfg(test)]
+use sweep_scope::{parse_sweep_receipt, sweep_apply_args};
 
 use self::rename_overlay::RenameTarget;
 pub use row_menu::SplitOpens;
@@ -76,6 +78,7 @@ use crate::proto::{
 };
 use crate::ratatui_blit::{rt_color, rt_modifier};
 use crate::sideline_color;
+use crate::text_style::{TLine, TextStyle};
 use crate::theme::{cell_style, Theme};
 use crate::tree::{Axis, Dir, Rect, TabId};
 use crate::view_store::{
@@ -628,66 +631,6 @@ struct TabDrag {
     moved: bool,
 }
 
-/// The workspace peek body: everything the layout already holds for
-/// one squad - its origin, its tabs (the active one marked), and its member
-/// rows with their states. Pure and local; no wire round trip.
-fn squad_peek_lines(layout: &LayoutView, sid: u64) -> Vec<String> {
-    let Some(s) = layout.squads.iter().find(|s| s.id == sid) else {
-        return vec!["workspace is no longer here".into()];
-    };
-    let mut out = vec![
-        format!("origin  {}", s.canonical_cwd),
-        format!("tabs    {} · panes {}", s.tabs.len(), s.panes),
-    ];
-    for (i, t) in s.tabs.iter().enumerate() {
-        let marker = if i == s.active_tab { "*" } else { " " };
-        let label = if t.name.is_empty() {
-            format!("tab {}", i + 1)
-        } else {
-            t.name.clone()
-        };
-        out.push(format!("{marker} {label}"));
-    }
-    let members: Vec<&AgentRow> = layout
-        .agents
-        .iter()
-        .filter(|a| a.squad == Some(sid))
-        .collect();
-    if members.is_empty() {
-        out.push("members none".into());
-        return out;
-    }
-    out.push("members".into());
-    for a in members {
-        let state = if a.exited {
-            "exited"
-        } else {
-            // The one state vocabulary (pane_state + the nav filter words): a
-            // finished-but-unseen member is `done`, not `idle`.
-            match pane_state(a.badge, a.seen, a.pane_activity) {
-                PaneState::Blocked => "blocked",
-                PaneState::Working => "working",
-                PaneState::DoneUnseen => "done",
-                // NOT "unread": that word names output nobody has
-                // looked at, which is `DoneUnseen` - a different row, filed
-                // under "done". A filter typed as `unread` would then return
-                // rows with no liveness reading and EXCLUDE every row that
-                // actually has unseen output, which is this branch's own
-                // defect: a word standing in for a fact it does not name.
-                PaneState::Unmeasured => "unmeasured",
-                PaneState::Idle => "idle",
-                PaneState::Empty => "empty",
-            }
-        };
-        let pane = a
-            .pane_id
-            .map(|p| format!(" · pane {p}"))
-            .unwrap_or_default();
-        out.push(format!("  {} · {state}{pane}", a.name));
-    }
-    out
-}
-
 /// (v43, G3) The drag source of a sideline agent row.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum RowSource {
@@ -928,6 +871,8 @@ pub(crate) struct View {
     /// events leg. Rendered as its own row kind, ranked ahead of the rest of
     /// THEY NEED YOU.
     questions_fold: Option<crate::needs_overlay::QuestionsFold>,
+    /// The pinned Needs input section is open (a tap on the strip count).
+    needs_open: bool,
     /// The question pages index, read in-process: the bell's fast seed.
     questions_index: Option<crate::needs_overlay::QuestionsFold>,
     questions_degraded: bool,
@@ -975,7 +920,7 @@ pub(crate) struct View {
     org: crate::org_overlay::Panel,
     /// Catch-up "while you were gone" digest lines, set on attach after
     /// an absence; the next keypress dismisses it (like [`View::overlay`]).
-    digest: Option<Vec<String>>,
+    digest: Option<Vec<TLine>>,
     notice: Option<(String, Instant)>,
     reply_notice_tx: Option<tokio::sync::mpsc::UnboundedSender<String>>,
     /// The session-details modal's off-loop token fetch: (participant key,
@@ -1315,6 +1260,8 @@ enum SweepScope {
     Named,
     /// The bare prune: stale squad rows, gated behind their own row.
     Squads,
+    /// Stopped session rows, retired by the registry reaper.
+    Stopped,
 }
 
 /// A sweep command the run loop should spawn: a counts probe for the choice
@@ -1333,6 +1280,7 @@ enum SweepMsg {
         closed: usize,
         reaped: usize,
         removed: usize,
+        stopped: usize,
     },
     Failed(String),
 }
@@ -1772,6 +1720,7 @@ pub(crate) enum AuxAction {
     SweepBoth,
     SweepNamed,
     SweepSquads,
+    SweepStopped,
     Detach,
     ToggleHoverFocus,
     /// Flip one experimental toggle, then rebuild the open sidebar menu.
@@ -1832,6 +1781,7 @@ mod messages_reply;
 mod overlay_lines;
 #[cfg(test)]
 pub(crate) use overlay_lines::nav_overlay_lines;
+use overlay_lines::squad_peek_lines;
 pub(crate) use overlay_lines::{humanize_age, humanize_ago, nav_agent_tokens, peek_overlay_lines};
 mod messages_view;
 mod org_board;
@@ -1881,66 +1831,6 @@ use messages_reply::peek_keys;
 #[cfg(test)]
 use update_menu::build_sideline_menu;
 use update_menu::{build_update_modal, UpdateProbe};
-
-/// The operator tapped a choice: the modal named the counts, so the tap IS
-/// the confirmation. Queue the apply for the run loop (or say why not).
-fn begin_sweep_apply(view: &mut View, scope: SweepScope) {
-    view.aux = None;
-    if view.sweep_inflight {
-        view.set_notice("a sweep is already running".into());
-    } else {
-        view.sweep_action = Some(SweepAction::Apply(scope));
-    }
-}
-
-/// Run one `mux workspace prune` command off the UI thread: a `--dry-run --json`
-/// probe for the choice modal's counts, or a scoped apply whose JSON receipt
-/// becomes the notice. Bounded so a wedged server cannot hold the UI loop's
-/// sweep slot forever; the counts parse fails loud rather than opening a
-/// modal with fabricated zeros.
-async fn run_sweep_command(action: SweepAction) -> SweepMsg {
-    let mut command = crate::process_admission::tokio_command(crate::server::fno_bin());
-    let mut args = vec![
-        "mux".to_string(),
-        "workspace".to_string(),
-        "prune".to_string(),
-        "--json".to_string(),
-    ];
-    let apply_secs = match action {
-        SweepAction::Counts => {
-            args.push("--dry-run".to_string());
-            10
-        }
-        SweepAction::Apply(scope) => {
-            sweep_apply_args(scope, &mut args);
-            // Each folded tab is one control roundtrip; a big workspace
-            // sweep legitimately outlasts a modal probe.
-            60
-        }
-    };
-    command
-        .args(&args)
-        .stdin(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .kill_on_drop(true);
-    let fut = crate::process_admission::tokio_output(&mut command);
-    let output = match tokio::time::timeout(Duration::from_secs(apply_secs), fut).await {
-        Ok(Ok(o)) => o,
-        Ok(Err(e)) => return SweepMsg::Failed(format!("prune spawn failed: {e}")),
-        Err(_) => return SweepMsg::Failed("prune timed out".into()),
-    };
-    if !output.status.success() {
-        return SweepMsg::Failed(format!(
-            "prune exited {}",
-            output.status.code().unwrap_or(-1)
-        ));
-    }
-    let parsed: serde_json::Value = match serde_json::from_slice(&output.stdout) {
-        Ok(v) => v,
-        Err(e) => return SweepMsg::Failed(format!("prune output unparseable ({e})")),
-    };
-    parse_sweep_receipt(action, &parsed)
-}
 
 impl View {
     fn new(term: (u16, u16), session: String, layout: LayoutView) -> Self {
@@ -2028,6 +1918,7 @@ impl View {
             mine_action: None,
             mine_acting: false,
             questions_fold: None,
+            needs_open: false,
             questions_index: None,
             questions_degraded: false,
             questions_degraded_reason: None,
@@ -2220,110 +2111,6 @@ impl View {
             worst.entry(r.name.clone()).or_insert(r.kind);
         }
         worst
-    }
-
-    fn needs_queue(&self) -> Vec<NeedRow> {
-        let mut rows: Vec<NeedRow> = Vec::new();
-
-        // Leg 1: live badge rows from the current layout (no shell-out).
-        for a in &self.layout.agents {
-            if is_blocked_row(a) {
-                let kind = if a.answerable.is_some() {
-                    NeedKind::BlockedAnswerable
-                } else {
-                    NeedKind::BlockedFocusOnly
-                };
-                let reason = a.reason.clone().unwrap_or_else(|| {
-                    if a.answerable.is_some() {
-                        "needs an answer".into()
-                    } else {
-                        "needs focus".into()
-                    }
-                });
-                rows.push(NeedRow {
-                    kind,
-                    name: a.name.clone(),
-                    reason,
-                    ts: String::new(),
-                    id_key: a.name.clone(),
-                    answerable: a.answerable.clone(),
-                    pane_id: a.pane_id,
-                    attach_id: a.attach_id.clone(),
-                    squad: a.squad,
-                    tab: a.tab,
-                });
-            } else if !a.exited
-                && pane_state(a.badge, a.seen, a.pane_activity) == PaneState::DoneUnseen
-            {
-                rows.push(NeedRow {
-                    kind: NeedKind::DoneUnseen,
-                    name: a.name.clone(),
-                    reason: a.reason.clone().unwrap_or_else(|| "done, unseen".into()),
-                    ts: String::new(),
-                    id_key: a.name.clone(),
-                    answerable: None,
-                    pane_id: a.pane_id,
-                    attach_id: a.attach_id.clone(),
-                    squad: a.squad,
-                    tab: a.tab,
-                });
-            }
-        }
-
-        // Leg 2: event-fold items, joined to a roster row, else rendered
-        // squadless when live, else dropped (a dead session's stale stop must
-        // not nag forever - Locked 5).
-        if let Some(items) = &self.needs_fold {
-            for item in items {
-                let kind = match item.kind.as_str() {
-                    "review_wedged" => NeedKind::ReviewWedged,
-                    "budget_stop" => NeedKind::BudgetStop,
-                    "mail_question" => NeedKind::MailQuestion,
-                    "operator_question" => NeedKind::Question,
-                    "carveout_stale" | "stale_claims" => NeedKind::Decision,
-                    _ => continue,
-                };
-                match self.join_fold_row(item) {
-                    Some(a) => rows.push(NeedRow {
-                        kind,
-                        name: a.name.clone(),
-                        reason: item.evidence.clone(),
-                        ts: item.ts.clone(),
-                        id_key: item.session_id.clone(),
-                        answerable: None,
-                        pane_id: a.pane_id,
-                        attach_id: a.attach_id.clone(),
-                        squad: a.squad,
-                        tab: a.tab,
-                    }),
-                    None if item.live => rows.push(NeedRow {
-                        kind,
-                        name: item
-                            .name
-                            .clone()
-                            .or_else(|| item.node.clone())
-                            .unwrap_or_else(|| item.session_id.clone()),
-                        reason: item.evidence.clone(),
-                        ts: item.ts.clone(),
-                        id_key: item.session_id.clone(),
-                        answerable: None,
-                        pane_id: None,
-                        attach_id: None,
-                        squad: None,
-                        tab: None,
-                    }),
-                    None => {} // unjoined + not live: drop (stale-nag guard)
-                }
-            }
-        }
-
-        rows.sort_by(|a, b| {
-            a.kind
-                .cmp(&b.kind)
-                .then_with(|| a.ts.cmp(&b.ts))
-                .then_with(|| a.name.cmp(&b.name))
-        });
-        rows
     }
 
     /// `needs_queue()` filtered for the operator panel: a `MailQuestion` row is
@@ -3610,6 +3397,7 @@ impl View {
             DisplayRow::Blank
             | DisplayRow::CardRule
             | DisplayRow::TableHead
+            | DisplayRow::NeedNote(_)
             | DisplayRow::TableEmpty => None,
         }
     }
@@ -3947,6 +3735,10 @@ impl View {
             DisplayRow::Agent(a) => Some(agent_hit(a, self.layout.active_squad)),
             // A `~` header cycles its own view state, exactly like a squad
             // name row: inert to the selector, clickable.
+            // The pinned Needs input header has no fold state: a click closes it.
+            DisplayRow::Header { key, .. } if *key == SectionKey::Group("@needs-input".into()) => {
+                Some(ChromeHit::NeedInput)
+            }
             DisplayRow::Header { key, .. } => Some(ChromeHit::CycleSection(key.clone())),
             // The idle fold toggles its squad's idle expansion: actionable
             // (click and Enter), so not inert.
@@ -3959,6 +3751,7 @@ impl View {
             DisplayRow::Blank
             | DisplayRow::CardRule
             | DisplayRow::TableHead
+            | DisplayRow::NeedNote(_)
             | DisplayRow::TableEmpty => None,
             // The `+` footer opens the name-input overlay.
             DisplayRow::NewSquad if self.term.0 < MIN_ROWS_FOR_STATUS => Some(ChromeHit::Notice(
@@ -5077,7 +4870,7 @@ impl View {
         let viewport_w = dims.1.saturating_sub(chrome::Chrome::FRAME_COLS);
         let body_w = chrome.min_inner_w().max(40).min(viewport_w).max(1);
         let text = format!("{name}_");
-        let line = format!("{text:<body_w$}");
+        let line = TLine::line(TextStyle::Item, format!("{text:<body_w$}"));
         layout_lines_overlay(origin, dims, &chrome, &[line], None, OverlayAnchor::Center)
     }
 
@@ -5241,45 +5034,6 @@ impl View {
         }
         let layout = self.confirm_overlay_layout(rows, action);
         draw_overlay_layout(cells, rows, cols, &layout, &self.theme);
-    }
-
-    /// Build the move-tab picker overlay lines: a header plus one
-    /// numbered line per candidate squad, the number being the digit that
-    /// selects it. A candidate that vanished from the catalog since open still
-    /// renders (labelled) - the digit is re-validated on press, and the server
-    /// refuses a stale id regardless.
-    fn move_pick_lines(&self, picker: &MovePick) -> Vec<String> {
-        const W: usize = 40;
-        let command = match &picker.src {
-            MoveSrc::Tab(_) => "move tab to:",
-            MoveSrc::Pane(_) => "move pane to:",
-            MoveSrc::Row { .. } => "move session to:",
-            MoveSrc::Folder { .. } => "add folder:",
-        };
-        let mut lines = vec![pad_to(&format!(" {command}"), W)];
-        for (i, &sid) in picker.squads.iter().enumerate() {
-            let folder = workspace_folder::folder_label(&picker.src, sid);
-            let name = folder.as_deref().unwrap_or_else(|| {
-                self.layout
-                    .squads
-                    .iter()
-                    .find(|s| s.id == sid)
-                    .map(|s| s.name.as_str())
-                    .unwrap_or("(gone)")
-            });
-            // Only the first nine are digit-addressable; the rest get a blank
-            // gutter, so the drawn numbering never promises a key that does
-            // not exist.
-            let ord = if i < 9 {
-                (i + 1).to_string()
-            } else {
-                " ".into()
-            };
-            lines.push(pad_to(&format!("   {ord} {name}"), W));
-        }
-        lines.push(pad_to(" hjkl/arrows move · enter move here", W));
-        lines.push(pad_to(" 1-9 move to first nine · esc/q cancel", W));
-        lines
     }
 
     /// The tab-bar spans in paint order: the active squad's name (inert), its
@@ -5597,6 +5351,7 @@ impl View {
             Density::Regular => {
                 let (rows, depths) = self.tree_rows_with_depths();
                 let (rows, depths) = self.sort_agent_runs(rows, depths);
+                let (rows, depths) = self.pin_needs(rows, depths);
                 self.card_rows(rows, depths)
             }
             Density::Slim => {
@@ -5615,9 +5370,12 @@ impl View {
                         kept_depths.push(d);
                     }
                 }
-                (kept_rows, kept_depths)
+                self.pin_needs(kept_rows, kept_depths)
             }
-            Density::Extended => self.table_rows_with_depths(),
+            Density::Extended => {
+                let (rows, depths) = self.table_rows_with_depths();
+                self.pin_needs(rows, depths)
+            }
         }
     }
 
@@ -5949,6 +5707,9 @@ enum DisplayRow<'a> {
     /// a header with nothing under it reads as a stalled table, so the empty
     /// state is stated rather than implied.
     TableEmpty,
+    /// A line of the pinned Needs input section that is not an agent row: an
+    /// open question. Inert; the question is answered from the bell panel.
+    NeedNote(String),
     /// The top-K idle fold: a squad with more live idle rows than the
     /// cap folds the overflow behind this one row. `hidden` is the foldable
     /// count (the idle rows past the cap, always > 0 when this row is emitted).
@@ -6055,6 +5816,7 @@ fn row_is_inert(drow: &DisplayRow) -> bool {
             | DisplayRow::CardMetrics(..)
             | DisplayRow::CardRule
             | DisplayRow::TableHead
+            | DisplayRow::NeedNote(_)
             | DisplayRow::TableEmpty
     )
 }
@@ -6254,6 +6016,9 @@ enum ChromeHit {
     /// The strip row's view word (`Agents  Messages`, R15): switch the
     /// sideline to that view.
     TopRow(crate::view_store::SidelineView),
+    /// The `N need input` count on the strip row: opens or closes the
+    /// pinned Needs input section.
+    NeedInput,
     Bell(bell::Hit),
     /// Owned, not `&'static`: an in-flight card's notice carries the
     /// server-computed `where_hint` (v18), which is per-card data.
@@ -8078,9 +7843,9 @@ async fn attach_and_run(
                             ));
                         }
                     }
-                    SweepMsg::Applied { closed, reaped, removed } => {
+                    SweepMsg::Applied { closed, reaped, removed, stopped } => {
                         view.set_notice(format!(
-                            "swept: closed {closed} tab(s), reaped {reaped} dead member(s), removed {removed} workspace row(s)"
+                            "swept: closed {closed} tab(s), reaped {reaped} dead member(s), removed {removed} workspace row(s), retired {stopped} stopped session(s)"
                         ));
                     }
                     SweepMsg::Failed(reason) => {
@@ -8992,6 +8757,7 @@ async fn apply_hit(
             crate::view_store::SidelineView::Backlog => View::open(view),
             crate::view_store::SidelineView::Org => org_board::open(view),
         },
+        ChromeHit::NeedInput => view.needs_open = !view.needs_open,
         ChromeHit::Bell(hit) => bell::apply_hit(view, hit),
         ChromeHit::Cmds(cmds) => {
             for cmd in cmds {
@@ -9180,6 +8946,7 @@ async fn execute_aux_action(
         }
         AuxAction::SweepNamed => begin_sweep_apply(view, SweepScope::Named),
         AuxAction::SweepSquads => begin_sweep_apply(view, SweepScope::Squads),
+        AuxAction::SweepStopped => begin_sweep_apply(view, SweepScope::Stopped),
         AuxAction::OpenConnections => {
             // close the MENU and open the Connections modal in its
             // loading state; arm the first read (the run loop spawns it).
@@ -10197,6 +9964,10 @@ mod keys_modal_tests;
 #[path = "client_tests/ground_tests.rs"]
 mod ground_tests;
 
+#[cfg(test)]
+#[path = "client_tests/text_hierarchy_tests.rs"]
+mod text_hierarchy_tests;
+
 #[path = "client/org_block.rs"]
 mod org_block;
 
@@ -10223,6 +9994,8 @@ use agent_group::agent_hit;
 mod hold;
 #[path = "client/machine_tree.rs"]
 mod machine_tree;
+#[path = "client/needs_queue.rs"]
+mod needs_queue;
 
 #[path = "client/header_band.rs"]
 mod header_band;

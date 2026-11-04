@@ -1377,7 +1377,7 @@ impl ConnectionsView {
             Tab::Accounts => ("[Accounts]", " Order "),
             Tab::Order => (" Accounts ", "[Order]"),
         };
-        format!("connections   {a}{o}")
+        format!("{a}{o}")
     }
 
     /// The Accounts tab: one card per provider, in [`PROVIDERS`] order, then
@@ -1750,7 +1750,7 @@ impl ConnectionsView {
     fn footer(&self) -> String {
         match self.tab {
             Tab::Accounts => {
-                "Tab: order  j/k: move  u/Enter: make active  r: re-authenticate  d: remove  a: add  s: spawn-acct  R: refresh  Esc: close"
+                "Tab: order  j/k: move  u/Enter: make active  r: re-authenticate  d: remove  a: add  s: spawn-acct  R: refresh"
                     .to_string()
             }
             Tab::Order => {
@@ -2451,7 +2451,7 @@ mod tests {
             line.segs
                 .iter()
                 .find(|(o, n, _)| at >= *o && at < o + n)
-                .map_or(Role::PanelBody, |s| s.2)
+                .map_or(type_scale::BODY, |s| s.2)
         };
         assert_eq!(role_at("Anthropic"), type_scale::HEADING);
         assert_eq!(role_at("[ACTIVE]  ccm"), type_scale::BADGE);

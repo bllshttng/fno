@@ -930,7 +930,7 @@ fn blob_hash(repo_root: &Path, rel_path: &str) -> String {
 
 /// Every project name in the workspace work-map (redaction guard input). A
 /// malformed work-map must not uncap redaction, so errors read as no names.
-fn project_names(cwd: &Path) -> Vec<String> {
+pub(crate) fn project_names(cwd: &Path) -> Vec<String> {
     let mut names = Vec::new();
     if let Some(work) = crate::agents_config::config_lookup(cwd, &["work"])
         .and_then(|v| v.get("workspaces").and_then(|w| w.as_table()).cloned())

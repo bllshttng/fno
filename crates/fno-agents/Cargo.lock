@@ -1309,6 +1309,7 @@ dependencies = [
  "getrandom 0.3.4",
  "libc",
  "md-5",
+ "png",
  "portable-pty",
  "proptest",
  "regex",

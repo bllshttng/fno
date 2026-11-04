@@ -50,7 +50,6 @@ parse-claims-arg.sh
 # that exercise the helpers in isolation); none has a standalone CLI
 # entry point because callers go through the hook's normal control flow.
 platform-io.sh
-mission-emit.sh
 handoff-generator.sh
 claim-release.sh
 wake-signals.sh

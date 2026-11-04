@@ -817,6 +817,41 @@ pub(crate) fn read_open_work_retire_s(content: &str) -> Option<u64> {
     table_open_work_retire_s(&parse_config(content)?)
 }
 
+/// Default quiet time before a stopped session row with no node, no open PR
+/// and no live claim retires: one day, resolvable from
+/// `agents.reap.stopped_retire_s`.
+pub const DEFAULT_STOPPED_RETIRE_SECS: u64 = 86_400;
+
+/// Resolve `agents.reap.stopped_retire_s`, same precedence and fail-open
+/// degrade as [`open_work_retire_secs`]: a zero or unparseable value falls
+/// back to the default, never to "retire every stopped row now".
+/// `$FNO_AGENTS_STOPPED_RETIRE_SECS` is a test/tuning override.
+pub fn stopped_retire_secs(cwd: &Path) -> u64 {
+    if let Some(v) = non_empty_env("FNO_AGENTS_STOPPED_RETIRE_SECS")
+        .and_then(|s| s.to_str().and_then(|s| s.trim().parse::<u64>().ok()))
+        .filter(|v| *v > 0)
+    {
+        return v;
+    }
+    resolve(cwd, table_stopped_retire_s).unwrap_or(DEFAULT_STOPPED_RETIRE_SECS)
+}
+
+fn table_stopped_retire_s(t: &toml::Table) -> Option<u64> {
+    t.get("agents")?
+        .as_table()?
+        .get("reap")?
+        .as_table()?
+        .get("stopped_retire_s")?
+        .as_integer()
+        .and_then(|i| u64::try_from(i).ok())
+        .filter(|v| *v > 0)
+}
+
+#[cfg(test)]
+pub(crate) fn read_stopped_retire_s(content: &str) -> Option<u64> {
+    table_stopped_retire_s(&parse_config(content)?)
+}
+
 /// Resolve `test.orphan_min_elapsed_seconds` for the orphan-reap sweep, same
 /// precedence + fail-open degrade as [`retire_grace_secs`].
 pub fn orphan_min_elapsed_secs(cwd: &Path) -> u64 {
@@ -1421,7 +1456,6 @@ const BUILTIN_VISUAL_PAINT_PATHS: &[&str] = &[
     "crates/fno/src/band_remap.rs",
     "crates/fno/src/chrome.rs",
     "crates/fno/src/connections_view.rs",
-    "crates/fno/src/digest_overlay.rs",
     "crates/fno/src/feed_overlay.rs",
     "crates/fno/src/frame_ansi.rs",
     "crates/fno/src/frame_html.rs",
@@ -1454,11 +1488,19 @@ const BUILTIN_DOCS_TREE_PAINT_PATHS: &[&str] = &["fno-sh-docs/**"];
 
 /// Resolve `merge.visual_paint_paths`, the render-surface paths whose PRs
 /// hold for the user's visual approval until an answered question page names
-/// the PR at its head. A configured list wins, and an explicit empty list disarms the
-/// gate. With no key in any tier, a checkout that carries the mux client gets
-/// the built-in paint list, so a stock footnote tree holds its own UI PRs;
-/// any other project stays disarmed until it names its paint surface here.
+/// the PR at its head. A checkout that carries the mux client always gets the
+/// built-in paint list, so every machine reads the same list for footnote's
+/// own PRs and a local config cannot change what holds. Any other project
+/// reads its configured list, where an explicit empty list disarms the gate,
+/// and stays disarmed until it names its paint surface here.
 pub fn visual_paint_paths(cwd: &Path) -> Vec<String> {
+    let root = crate::paths::canonical_repo_root(cwd).unwrap_or_else(|| cwd.to_path_buf());
+    if root.join(BUILTIN_VISUAL_PAINT_ANCHOR).is_dir() {
+        return BUILTIN_VISUAL_PAINT_PATHS
+            .iter()
+            .map(|p| (*p).to_string())
+            .collect();
+    }
     let configured = resolve(cwd, |t| {
         t.get("merge")?
             .as_table()?
@@ -1474,13 +1516,7 @@ pub fn visual_paint_paths(cwd: &Path) -> Vec<String> {
         _ => Vec::new(),
     });
     configured.unwrap_or_else(|| {
-        let root = crate::paths::canonical_repo_root(cwd).unwrap_or_else(|| cwd.to_path_buf());
-        if root.join(BUILTIN_VISUAL_PAINT_ANCHOR).is_dir() {
-            BUILTIN_VISUAL_PAINT_PATHS
-                .iter()
-                .map(|p| (*p).to_string())
-                .collect()
-        } else if root.join(BUILTIN_DOCS_TREE_ANCHOR).is_dir() {
+        if root.join(BUILTIN_DOCS_TREE_ANCHOR).is_dir() {
             BUILTIN_DOCS_TREE_PAINT_PATHS
                 .iter()
                 .map(|p| (*p).to_string())
@@ -2265,6 +2301,18 @@ mod tests {
         assert_eq!(ml, DEFAULT_MAX_LIVE);
         assert_eq!(mf, DEFAULT_MIN_FREE_GB);
         assert!(qos, "unknown worker_qos coerces to utility (enabled)");
+    }
+
+    #[test]
+    fn stopped_retire_s_reads_the_reap_table_and_rejects_zero() {
+        assert_eq!(
+            read_stopped_retire_s("[agents.reap]\nstopped_retire_s = 7200\n"),
+            Some(7200)
+        );
+        assert_eq!(
+            read_stopped_retire_s("[agents.reap]\nstopped_retire_s = 0\n"),
+            None
+        );
     }
 
     #[test]

@@ -14,6 +14,7 @@
 
 use crate::chrome::{self, BodyLine, Chrome, FramedLine, Join, Scroll};
 use crate::proto::{Cell, Color};
+use crate::text_style::TextStyle;
 use crate::theme::{Role, Theme};
 
 /// Popup content never renders wider than this (fixed max width); longer
@@ -344,7 +345,7 @@ pub struct Popup {
     /// this tab's own rows.
     pub min_width: usize,
     /// Opt this popup into the plain-body anatomy: no inverse ground, the key
-    /// column bold accent ([`Role::BodyAccent`]), the cursor row the one
+    /// column bold accent (`Role::Text(TextStyle::Section)`), the cursor row the one
     /// filled band ([`Role::BodyCursor`]), section headings accent text. The
     /// which-key modal's shape (the unreadable-inverse-body review).
     pub plain_body: bool,
@@ -390,7 +391,7 @@ pub struct RenderedLine {
     /// framed pass translates them into the per-char `roles`.
     pub segs: Vec<(usize, usize, Role)>,
     /// The role for chars no seg covers: the theme ground
-    /// ([`Role::PanelBody`]) under every theme - one body treatment.
+    /// (`Role::Text(TextStyle::Item)`) under every theme - one body treatment.
     pub pad_role: Role,
 }
 
@@ -724,8 +725,10 @@ impl Popup {
                 } => {
                     if self.plain_body {
                         // The two-column shape: leading pad + fixed key column
-                        // + gap + label; the hint column is dropped.
-                        1 + kw + 1 + chrome::str_cols(label) + 2
+                        // + gap + label, then the hint as a dim right column.
+                        let hint_w = chrome::str_cols(hint);
+                        let hint_w = if hint_w == 0 { 0 } else { 2 + hint_w };
+                        1 + kw + 1 + chrome::str_cols(label) + hint_w + 2
                     } else {
                         // glyph + space + label + gap + hint
                         chrome::str_cols(glyph)
@@ -803,7 +806,9 @@ impl Popup {
                     // never a band; an empty header is the inter-section
                     // spacer line. One body treatment under every theme.
                     let segs = (!s.is_empty())
-                        .then(|| vec![(0usize, text.chars().count(), Role::BodyAccent)])
+                        .then(|| {
+                            vec![(0usize, text.chars().count(), Role::Text(TextStyle::Section))]
+                        })
                         .unwrap_or_default();
                     RenderedLine {
                         text,
@@ -812,7 +817,7 @@ impl Popup {
                         hits: vec![],
                         roles: vec![],
                         segs,
-                        pad_role: Role::PanelBody,
+                        pad_role: Role::Text(TextStyle::Item),
                     }
                 }
                 PopupRow::Text(s) => {
@@ -826,7 +831,7 @@ impl Popup {
                         hits: vec![],
                         roles: vec![],
                         segs: vec![],
-                        pad_role: Role::PanelBody,
+                        pad_role: Role::Text(TextStyle::Item),
                     }
                 }
                 PopupRow::Rule => RenderedLine {
@@ -836,12 +841,11 @@ impl Popup {
                     hits: vec![],
                     roles: vec![],
                     segs: vec![],
-                    pad_role: Role::PanelMeta,
+                    pad_role: Role::Text(TextStyle::Meta),
                 },
                 PopupRow::Info { label, value } => {
                     // The plain two-column shape, inert: the label sits in the
-                    // fixed key column as accent text (the bold left column a
-                    // field list reads by), the value plain. No hit span and
+                    // fixed key column as dim text, the value bold. No hit span and
                     // no selection: provenance text, never an action.
                     let text = pad(&format!(" {} {}", pad(label, kw), value), width);
                     RenderedLine {
@@ -850,8 +854,11 @@ impl Popup {
                         sel_span: None,
                         hits: vec![],
                         roles: vec![],
-                        segs: vec![(1usize, kw, Role::BodyAccent)],
-                        pad_role: Role::PanelBody,
+                        segs: vec![
+                            (1usize, kw, Role::Text(TextStyle::Meta)),
+                            (kw + 2, value.chars().count(), Role::Text(TextStyle::Value)),
+                        ],
+                        pad_role: Role::Text(TextStyle::Item),
                     }
                 }
                 PopupRow::Input {
@@ -870,7 +877,7 @@ impl Popup {
                         hits: vec![(ti, 0, width)],
                         roles: vec![],
                         segs: vec![],
-                        pad_role: Role::PanelBody,
+                        pad_role: Role::Text(TextStyle::Item),
                     }
                 }
                 PopupRow::Entry {
@@ -882,30 +889,49 @@ impl Popup {
                     let disabled = !*enabled;
                     let selected = !disabled && sel == Some((ri, 0));
                     // Plain-body: the two-column shape. The key column is
-                    // fixed-width accent text, the label plain, the hint
-                    // column dropped. The cursor row is the one filled band,
-                    // riding the segs: a sel_span would paint the inverse
-                    // cut-out, invisible on the plain ground.
+                    // fixed-width: a mnemonic key reads as accent, a mark (a
+                    // checkbox, a radio) as the entry's bold value. The label
+                    // is plain and the hint a dim right column. The cursor row
+                    // is the one filled band, riding the segs: a sel_span
+                    // would paint the inverse cut-out, invisible on the plain
+                    // ground. A disabled row paints dim whole.
                     let (text, segs, pad_role, sel_span) = if self.plain_body {
                         let left = format!(" {} {}", pad(glyph, kw), label);
-                        let text = pad(&left, width);
+                        let hint_text = clip_cols(
+                            hint,
+                            width.saturating_sub(chrome::str_cols(&left) + 2 + BODY_RIGHT_GAP_COLS),
+                        );
+                        let text = if hint_text.is_empty() {
+                            pad(&left, width)
+                        } else {
+                            let gap = width
+                                .saturating_sub(
+                                    chrome::str_cols(&left)
+                                        + chrome::str_cols(&hint_text)
+                                        + BODY_RIGHT_GAP_COLS,
+                                )
+                                .max(2);
+                            pad(&format!("{left}{}{hint_text}", " ".repeat(gap)), width)
+                        };
                         let chars = text.chars().count();
                         let segs = if disabled {
                             vec![]
                         } else if selected {
                             vec![(0usize, chars, Role::BodyCursor)]
                         } else {
-                            // Char 0 is the leading pad; the key chars carry
-                            // the accent span.
-                            vec![(1usize, kw, Role::BodyAccent)]
+                            let hint_w = hint_text.chars().count();
+                            let at = text.trim_end().chars().count().saturating_sub(hint_w);
+                            entry_segs(glyph, kw, (hint_w > 0).then_some((at, hint_w)))
                         };
                         (
                             text,
                             segs,
                             if selected {
                                 Role::BodyCursor
+                            } else if disabled {
+                                Role::Text(TextStyle::Meta)
                             } else {
-                                Role::PanelBody
+                                Role::Text(TextStyle::Item)
                             },
                             None,
                         )
@@ -923,13 +949,26 @@ impl Popup {
                         let gap = width
                             .saturating_sub(left_w + chrome::str_cols(&hint_text))
                             .max(BODY_RIGHT_GAP_COLS);
+                        let hint_at = left.chars().count() + gap;
+                        let hint_n = hint_text.chars().count();
                         let mut text = left;
                         text.push_str(&" ".repeat(gap));
                         text.push_str(&hint_text);
                         (
                             pad(&text, width),
-                            vec![],
-                            Role::PanelBody,
+                            entry_segs(
+                                glyph,
+                                glyph.chars().count(),
+                                (hint_n > 0).then_some((hint_at, hint_n)),
+                            )
+                            .into_iter()
+                            .filter(|_| !disabled)
+                            .collect(),
+                            if disabled {
+                                Role::Text(TextStyle::Meta)
+                            } else {
+                                Role::Text(TextStyle::Item)
+                            },
                             (!disabled && selected).then_some((0, width)),
                         )
                     } else {
@@ -943,23 +982,35 @@ impl Popup {
                         // The hint keeps the two-cell air before the border.
                         let hint_w = chrome::str_cols(hint);
                         let left = format!(" {glyph} {label}");
+                        let room = width.saturating_sub(hint_w + 1 + BODY_RIGHT_GAP_COLS);
                         let text = if hint_w == 0 {
                             pad(&left, width)
                         } else {
-                            let room = width.saturating_sub(hint_w + 1 + BODY_RIGHT_GAP_COLS);
                             pad(&format!("{} {hint} ", pad(&left, room)), width)
                         };
                         (
                             text,
-                            vec![],
-                            Role::PanelBody,
+                            if disabled {
+                                vec![]
+                            } else {
+                                entry_segs(
+                                    glyph,
+                                    glyph.chars().count(),
+                                    (hint_w > 0).then_some((room + 1, hint.chars().count())),
+                                )
+                            },
+                            if disabled {
+                                Role::Text(TextStyle::Meta)
+                            } else {
+                                Role::Text(TextStyle::Item)
+                            },
                             (!disabled && selected).then_some((0, width)),
                         )
                     };
                     // A disabled entry contributes no target and no hit span, so
                     // nav()/selected() (which read targets()) and the click router
                     // (which reads hits) both pass over it. Its row still renders,
-                    // greyed via BodyDim, carrying the reason as the hint.
+                    // greyed via the Meta level, carrying the reason as the hint.
                     let hits = if disabled {
                         Vec::new()
                     } else {
@@ -1019,7 +1070,7 @@ impl Popup {
                             // builder's `●` glyph. Unchosen radios read as
                             // ordinary text, never a wall of brand marks.
                             if glyph == "\u{25cf}" {
-                                segs.push((1usize, kw, Role::BodyAccent));
+                                segs.push((1usize, kw, Role::Text(TextStyle::Section)));
                             }
                             segs.push((swatch_start, 2usize, Role::Swatch(*color)));
                         }
@@ -1041,7 +1092,7 @@ impl Popup {
                         pad_role: if selected && self.plain_body {
                             Role::BodyCursor
                         } else {
-                            Role::PanelBody
+                            Role::Text(TextStyle::Item)
                         },
                     }
                 }
@@ -1067,7 +1118,7 @@ impl Popup {
                         hits,
                         roles: vec![],
                         segs: vec![],
-                        pad_role: Role::PanelBody,
+                        pad_role: Role::Text(TextStyle::Item),
                     }
                 }
             };
@@ -1126,7 +1177,7 @@ impl Popup {
                 hits: fl.hits,
                 roles: fl.roles,
                 segs: vec![],
-                pad_role: Role::PanelBody,
+                pad_role: Role::Text(TextStyle::Item),
             })
             .collect();
         Rendered {
@@ -1136,6 +1187,26 @@ impl Popup {
             body_spans,
         }
     }
+}
+
+/// The glyph and hint spans of an entry row. A mnemonic key reads as accent
+/// text, a mark (checkbox, radio, bullet) as the entry's bold value, and the
+/// hint as a dim right column. Char 0 is the leading pad.
+fn entry_segs(
+    glyph: &str,
+    glyph_w: usize,
+    hint_span: Option<(usize, usize)>,
+) -> Vec<(usize, usize, Role)> {
+    let key = if glyph.chars().next().is_some_and(char::is_alphanumeric) {
+        TextStyle::Section
+    } else {
+        TextStyle::Value
+    };
+    let mut segs = vec![(1usize, glyph_w, Role::Text(key))];
+    if let Some((at, n)) = hint_span {
+        segs.push((at, n, Role::Text(TextStyle::Hint)));
+    }
+    segs
 }
 
 /// Lay out one text field row. A text wider than the room shows the window
@@ -1161,12 +1232,20 @@ fn input_line(
         line.push(' ');
     }
     let mut segs = vec![
-        (1usize, head_n.saturating_sub(2), Role::BodyAccent),
+        (
+            1usize,
+            head_n.saturating_sub(2),
+            Role::Text(TextStyle::Section),
+        ),
         (cursor_at, 1, Role::BodyCursor),
     ];
     if chars.is_empty() && !placeholder.is_empty() {
         line.push_str(placeholder);
-        segs.push((cursor_at + 1, placeholder.chars().count(), Role::PanelMeta));
+        segs.push((
+            cursor_at + 1,
+            placeholder.chars().count(),
+            Role::Text(TextStyle::Meta),
+        ));
     }
     RenderedLine {
         text: pad(&line, width),
@@ -1175,7 +1254,7 @@ fn input_line(
         hits: vec![],
         roles: vec![],
         segs,
-        pad_role: Role::PanelBody,
+        pad_role: Role::Text(TextStyle::Item),
     }
 }
 
@@ -1463,16 +1542,16 @@ mod tests {
             "disabled row has no hit target"
         );
         assert!(
-            disabled_line.roles.contains(&Role::BodyDim),
-            "disabled row greys via BodyDim"
+            disabled_line.roles.contains(&Role::Text(TextStyle::Meta)),
+            "disabled row greys via Meta"
         );
-        // Every non-border cell on the disabled row is BodyDim: it carries no
+        // Every non-border cell on the disabled row is Meta: it carries no
         // normal (Body) or selected (BodySel) cell a selectable row would.
         assert!(
             disabled_line
                 .roles
                 .iter()
-                .all(|&role| matches!(role, Role::BodyDim | Role::Border)),
+                .all(|&role| matches!(role, Role::Text(TextStyle::Meta) | Role::Border)),
             "disabled row has no selectable body cells"
         );
         // The cells are still inside the block, so the router reads an in-block

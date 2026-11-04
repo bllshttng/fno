@@ -1,10 +1,14 @@
 # The canonical event schema. Owned beside its Rust readers in this crate.
 # Single source of truth for events.jsonl envelope shape across footnote.
-# Lives beside its Python loader (fno.events) and ships as package data.
+# Lives in the manifest tree so the crates.io build carries its own source;
+# build.rs projects events_schema.json (both crates) and events_limits.toml
+# from it.
 #
-# Both validators load this file:
-#   - cli/src/fno/events/__init__.py (Python; imports raise SchemaUnavailableError if absent)
-#   - scripts/lib/events-validate.sh (bash; caches at /tmp/events-schema-$$.cache via yq or python3 fallback)
+# Readers load it through the projection or compile it in:
+#   - build.rs (the projection the committed jsons carry)
+#   - scripts/check-event-schema-parity.sh (steps the yaml directly)
+#   - scripts/lib/events-validate.sh judges through the store binary, which
+#     compiles the schema in
 #
 # Adding a new event type:
 #   1. Add an entry under `event_types`.
@@ -4911,8 +4915,8 @@ event_types:
       properties:
         span_kind:
           type: string
-          enum: [ask, route, correction, block, nudge, notify, merge_landed, merge_armed, merge_requested, merged_outside_fno, rule]
-          description: "The hop this row records: ask (a worker asked its lead), route (the lead answered itself or escalated), correction (a later ruling overturns a span), block (a guard refused a chat ask that skipped the route span, or an event_rules row blocked a Stop, attrs rule/matched_event), nudge and notify (an event_rules row fired once per matched event or sent the operator an FYI, attrs rule/matched_event), merge_landed and merge_armed (the merge owner recorded a Merged or Armed outcome, attrs pr/repo/head/path/grant), merge_requested (the gh proxy or the PostToolUse hook saw a merge argv, attrs pr/repo/path), merged_outside_fno (reconcile closed a node whose merge the journal never saw, attrs pr/repo/merged_at/merge_sha), rule (fno::rules::decide fired a rule at a hook or door, attrs rule/law/event/verdict/tool). More values land as later surfaces adopt the envelope."
+          enum: [ask, route, correction, block, nudge, notify, merge_landed, merge_armed, merge_requested, merged_outside_fno, merge_freeze_set, merge_freeze_cleared, rule]
+          description: "The hop this row records: ask (a worker asked its lead), route (the lead answered itself or escalated), correction (a later ruling overturns a span), block (a guard refused a chat ask that skipped the route span, or an event_rules row blocked a Stop, attrs rule/matched_event), nudge and notify (an event_rules row fired once per matched event or sent the operator an FYI, attrs rule/matched_event), merge_landed and merge_armed (the merge owner recorded a Merged or Armed outcome, attrs pr/repo/head/path/grant), merge_requested (the gh proxy or the PostToolUse hook saw a merge argv, attrs pr/repo/path), merged_outside_fno (reconcile closed a node whose merge the journal never saw, attrs pr/repo/merged_at/merge_sha), merge_freeze_set and merge_freeze_cleared (the merge freeze was set or lifted, attrs repo/lift, and for a set subject/set_by/pin_sha/pin_prs), rule (fno::rules::decide fired a rule at a hook or door, attrs rule/law/event/verdict/tool). More values land as later surfaces adopt the envelope."
         trace:
           type: object
           required: [trace_id, span_id, actor_kind, comms]

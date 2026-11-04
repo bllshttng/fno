@@ -2224,8 +2224,8 @@ fn a_paint_pr_holds_until_an_answered_page_names_it() {
     assert!(crate::merge_gates::visual_approval_blocker(&off, &bare, 7, &head).is_none());
     assert!(off.gh_calls.borrow().is_empty());
     // A checkout that carries the mux client arms the built-in paint list
-    // with no config key: a stock footnote tree holds its own UI PRs. An
-    // explicit empty list is still the opt-out.
+    // with no config key: a stock footnote tree holds its own UI PRs, and a
+    // config list cannot opt a client tree out.
     let stock = std::env::temp_dir().join(format!("xc129-stock-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&stock);
     std::fs::create_dir_all(stock.join("crates/fno/src/client")).unwrap();
@@ -2240,7 +2240,16 @@ fn a_paint_pr_holds_until_an_answered_page_names_it() {
         "[merge]\nvisual_paint_paths = []\n",
     )
     .unwrap();
-    assert!(crate::merge_gates::visual_approval_blocker(&armed, &stock, 7, &head).is_none());
+    // A machine config cannot disarm or narrow the list in a client tree.
+    let held = crate::merge_gates::visual_approval_blocker(&armed, &stock, 7, &head)
+        .expect("config does not change what holds in a footnote tree");
+    assert_eq!(held.code, "visual_approval");
+    let mut keymap_only = clean();
+    keymap_only.gh_output = "crates/fno/src/digest_overlay.rs\n".to_string();
+    assert!(
+        crate::merge_gates::visual_approval_blocker(&keymap_only, &stock, 7, &head).is_none(),
+        "digest_overlay.rs renders nothing, so it holds no PR"
+    );
     std::fs::remove_dir_all(&tmp).ok();
     std::fs::remove_dir_all(&bare).ok();
     std::fs::remove_dir_all(&stock).ok();

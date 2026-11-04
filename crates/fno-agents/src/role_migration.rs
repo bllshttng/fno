@@ -558,16 +558,19 @@ pub fn run_at(root: &Path) -> Result<(), String> {
     }
     // v1 receipts were stamped by a walk that skipped a symlinked spaces
     // root, so they cannot vouch for it; a re-walk is idempotent.
-    let marker = root.join("migrations/role-vocabulary-v2.done");
+    let marker = crate::state_layout::place_in(root, "migrations", "role-vocabulary-v2.done");
     // The table pass has its own receipt: roots stamped v2 before it existed
     // still hold crown_* rows in graph.db.
-    let table_marker = root.join("migrations/role-registry-table-v1.done");
+    let table_marker =
+        crate::state_layout::place_in(root, "migrations", "role-registry-table-v1.done");
     if marker.exists() && table_marker.exists() {
         return Ok(());
     }
     crate::live_store_fence::refuse_worktree_build_on_operator_store(root)?;
-    std::fs::create_dir_all(marker.parent().expect("marker has parent"))
-        .map_err(|e| e.to_string())?;
+    for path in [&marker, &table_marker] {
+        std::fs::create_dir_all(path.parent().expect("marker has parent"))
+            .map_err(|e| e.to_string())?;
+    }
     let _lock = crate::chokepoint::take(
         &crate::chokepoint::ROLE_MIGRATION,
         &marker.with_extension("lock"),
@@ -758,7 +761,7 @@ mod tests {
         run_at(tmp.path()).unwrap();
         assert!(tmp
             .path()
-            .join("migrations/role-registry-table-v1.done")
+            .join("install/migrations/role-registry-table-v1.done")
             .exists());
         let db = crate::registry_read::database_path(&path).unwrap();
         let stored: String = rusqlite::Connection::open(db)
@@ -926,7 +929,19 @@ mod tests {
         assert!(!kings.exists(), "the emptied legacy directory is removed");
         assert!(tmp
             .path()
-            .join("migrations/role-vocabulary-v2.done")
+            .join("install/migrations/role-vocabulary-v2.done")
             .exists());
+    }
+
+    #[test]
+    fn folded_markers_alone_end_the_run_before_it_takes_the_lock() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("install/migrations");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("role-vocabulary-v2.done"), "1\n").unwrap();
+        std::fs::write(dir.join("role-registry-table-v1.done"), "1\n").unwrap();
+        run_at(tmp.path()).unwrap();
+        assert!(!dir.join("role-vocabulary-v2.lock").exists());
+        assert!(!tmp.path().join("migrations").exists());
     }
 }

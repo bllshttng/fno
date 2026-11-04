@@ -134,6 +134,9 @@ struct HeadRun {
     pid: u32,
     started: i64,
     tasks: Vec<String>,
+    /// The run built the head first, so a slow build can read as the cause.
+    #[serde(default)]
+    built: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -279,6 +282,9 @@ pub(crate) fn spent_today(rows: &[Value], now: DateTime<Utc>) -> f64 {
     let day = now.format("%Y-%m-%d").to_string();
     rows.iter()
         .filter(|r| row_cohort(r).get(..5) == Some("gate-"))
+        // A grade-only attempt starts no worker and costs nothing. A row that
+        // does not say, an old one, still counts.
+        .filter(|r| r.pointer("/obs/worker_required") != Some(&Value::Bool(false)))
         .filter(|r| {
             r.get("ts")
                 .and_then(Value::as_str)
@@ -319,24 +325,51 @@ fn slow_tasks(rows: &[Value], baseline: &str) -> BTreeSet<String> {
         .collect()
 }
 
+/// A task file's repo-relative path: `evals/bank/<id>.yaml`, or
+/// `skills/<name>/evals/<id>.yaml` for a task a skill carries.
+fn repo_relative_task(source: &std::path::Path) -> String {
+    let tail = |n: usize| {
+        let parts: Vec<_> = source.iter().rev().take(n).collect();
+        parts
+            .iter()
+            .rev()
+            .map(|c| c.to_string_lossy())
+            .collect::<Vec<_>>()
+            .join("/")
+    };
+    let skill_local = source
+        .parent()
+        .and_then(|d| d.file_name())
+        .is_some_and(|n| n == "evals");
+    tail(if skill_local { 4 } else { 3 })
+}
+
 /// The `gate` goldens among `tasks`. A golden added to main after the head
 /// branched has no fixture there, and would read as a regression.
 fn gate_tasks(
     tasks: &[crate::evals::bank::TaskSpec],
+    files: &[String],
     sha: &str,
     slow: &BTreeSet<String>,
     d: &Deps,
     p: &Paths,
-) -> Vec<String> {
+) -> Vec<crate::evals::bank::TaskSpec> {
+    // The `gate` set runs for a skill, agent, hook, command or bank change. A
+    // crate-only diff runs only the tasks whose `covers:` it touches.
+    let gated = touches_gated_path(&files.iter().map(String::as_str).collect::<Vec<_>>());
     tasks
         .iter()
-        .filter(|t| t.tags.iter().any(|tag| tag == GATE_TAG) && !t.is_demoted())
+        .filter(|t| !t.is_demoted())
+        .filter(|t| {
+            (gated && t.tags.iter().any(|tag| tag == GATE_TAG))
+                || files.iter().any(|f| is_covered(f, &t.covers))
+        })
         .filter(|t| !slow.contains(&t.id))
         .filter(|t| {
-            let spec = format!("{sha}:evals/bank/{}.yaml", t.id);
+            let spec = format!("{sha}:{}", repo_relative_task(&t.source_path));
             (d.run)(&["git", "cat-file", "-e", &spec], p.repo).is_some_and(|r| r.ok)
         })
-        .map(|t| t.id.clone())
+        .cloned()
         .collect()
 }
 
@@ -438,16 +471,38 @@ fn open_prs(p: &Paths, d: &Deps, slug: &str) -> Option<Vec<Pr>> {
     Some(prs)
 }
 
-/// None on a failed read, so a blip never records a head as ungated.
-fn head_is_gated(p: &Paths, d: &Deps, slug: &str, number: u64) -> Option<bool> {
+/// The files a PR changes. None on a failed read, so a blip never records a
+/// head as ungated.
+fn head_files(p: &Paths, d: &Deps, slug: &str, number: u64) -> Option<Vec<String>> {
     let endpoint = format!("repos/{slug}/pulls/{number}/files?per_page=100");
     let out = (d.run)(
         &["gh", "api", "--paginate", &endpoint, "--jq", ".[].filename"],
         p.repo,
     )
     .filter(|r| r.ok)?;
-    let files: Vec<&str> = out.stdout.lines().collect();
-    Some(touches_gated_path(&files))
+    Some(out.stdout.lines().map(str::to_string).collect())
+}
+
+fn is_covered(file: &str, covers: &[String]) -> bool {
+    covers.iter().any(|c| file.starts_with(c.as_str()))
+}
+
+/// The `covers:` prefixes of main's bank, read once per pass. The map is the
+/// bank's contract at main, so a head that edits it also touches `evals/bank/`.
+fn main_covers(p: &Paths) -> Vec<String> {
+    crate::evals::bank::discover_bank(&ref_bank(p, "main"))
+        .unwrap_or_default()
+        .into_iter()
+        .flat_map(|t| t.covers)
+        .collect()
+}
+
+/// A head is gated by a skill, agent, hook, command or bank change, or by a
+/// change some task's `covers:` names. None when the file read failed.
+fn head_is_gated(p: &Paths, d: &Deps, slug: &str, pr: &Pr, covers: &[String]) -> Option<bool> {
+    let files = head_files(p, d, slug, pr.number)?;
+    let gated = touches_gated_path(&files.iter().map(String::as_str).collect::<Vec<_>>());
+    Some(gated || files.iter().any(|f| is_covered(f, covers)))
 }
 
 fn fetch(p: &Paths, d: &Deps, refspec: &str) -> bool {
@@ -513,6 +568,36 @@ fn run_argv(
     }
     argv.push("-y".into());
     argv
+}
+
+/// Builds the ref's `fno-agents` pair into a target dir that outlives the ref
+/// slot, so a repeat build is incremental, then runs the rest of argv with the
+/// grader pointed at it. `set -e`: a failed build runs nothing and grades nothing.
+const BUILD_SCRIPT: &str = r#"set -e
+root=$1; shift
+cargo build --quiet --manifest-path "$root/crates/fno-agents/Cargo.toml" --bins
+FNO_EVALS_HEAD_BIN="$CARGO_TARGET_DIR/debug" exec "$@""#;
+
+/// `argv` behind a build of the checkout `root`. The build runs inside the
+/// detached run, so the tick still never waits on it.
+fn with_build(p: &Paths, slot: &str, root: &Path, argv: Vec<String>) -> Vec<String> {
+    let target = p.state_dir.join(format!("target-{slot}"));
+    let mut wrapped: Vec<String> = vec![
+        "env".into(),
+        format!("CARGO_TARGET_DIR={}", target.display()),
+        "sh".into(),
+        "-c".into(),
+        BUILD_SCRIPT.into(),
+        "gate-build".into(),
+        root.to_string_lossy().into_owned(),
+    ];
+    wrapped.extend(argv);
+    wrapped
+}
+
+/// The checkout a bank dir sits in: `<root>/evals/bank`.
+fn checkout_of(bank: &Path) -> Option<&Path> {
+    bank.parent()?.parent()?.parent()
 }
 
 /// TOML writes the budget as a float or an integer; a string read alone missed both.
@@ -685,27 +770,29 @@ fn main_seat(
     let bank_dir = arg_bank
         .clone()
         .unwrap_or_else(|| p.repo.join("evals").join("bank"));
-    let tasks = match crate::evals::bank::discover_bank(&bank_dir) {
+    let selected = match crate::evals::bank::discover_bank(&bank_dir) {
         Ok(tasks) => tasks
-            .iter()
+            .into_iter()
             .filter(|t| t.tags.iter().any(|tag| tag == seat.tag) && !t.is_demoted())
-            .count(),
+            .collect::<Vec<_>>(),
         // No launch on an unread bank: the retry loop carries the cause.
         Err(e) => {
             let cause = format!("bank unread at the ref: {}", e.0);
             return (main_failed(d, state, seat, &cohort, cause), false);
         }
     };
-    if tasks == 0 {
+    if selected.is_empty() {
         state.seat(seat).main_tried = Some(cohort.clone());
         return (format!("main {cohort} has no {} task", seat.tag), true);
     }
-    let cost = (tasks * REPEATS) as f64 * seat.attempt_usd;
+    // A grade-only task starts no worker and costs nothing.
+    let workers = selected.iter().filter(|t| t.prompt.is_some()).count();
+    let cost = (workers * REPEATS) as f64 * seat.attempt_usd;
     if spent_today(&history_rows(p.history), d.now) + cost > daily_usd {
         let note = format!("main {cohort} held: {cost:.2} USD over the daily budget");
         return (note, false);
     }
-    let argv = run_argv(
+    let mut argv = run_argv(
         p,
         ("--tag", seat.tag),
         MAIN_WORKERS,
@@ -714,6 +801,14 @@ fn main_seat(
         &sha,
         arg_bank.as_ref(),
     );
+    // The baseline of a CLI golden must grade main's own build, never the deployed one.
+    if selected.iter().any(|t| !t.covers.is_empty()) {
+        let Some(root) = arg_bank.as_deref().and_then(checkout_of) else {
+            let cause = "no checkout of the ref to build".to_string();
+            return (main_failed(d, state, seat, &cohort, cause), false);
+        };
+        argv = with_build(p, "main", root, argv);
+    }
     if fallback {
         state.seat(seat).fallback_tried = Some(cohort.clone());
     } else {
@@ -880,6 +975,7 @@ fn head_leg(
     let Some(baseline) = state.worker.baseline.clone() else {
         return "head leg waits for a first baseline".into();
     };
+    let covers = main_covers(p);
     let mut new_heads = 0;
     for pr in prs {
         if state.heads.contains_key(&pr.sha) {
@@ -889,7 +985,7 @@ fn head_leg(
             break;
         }
         new_heads += 1;
-        match head_is_gated(p, d, slug, pr.number) {
+        match head_is_gated(p, d, slug, pr, &covers) {
             Some(true) => {
                 post_status(
                     p,
@@ -930,6 +1026,12 @@ fn head_leg(
     launch_head(p, d, state, slug, pr, &baseline, daily_usd, &today)
 }
 
+fn wrote_rows(p: &Paths, cohort: &str) -> bool {
+    history_rows(p.history)
+        .iter()
+        .any(|r| row_cohort(r) == cohort)
+}
+
 /// The in-flight head run: drop it when its head moved, read it when done.
 fn settle_head_run(p: &Paths, d: &Deps, state: &mut State, slug: &str, prs: &[Pr]) {
     let Some(run) = state.head_run.clone() else {
@@ -959,7 +1061,19 @@ fn settle_head_run(p: &Paths, d: &Deps, state: &mut State, slug: &str, prs: &[Pr
             "failure",
             no_result(
                 &run.sha,
-                &format!("over the {}-minute limit", HEAD_LIMIT_S / 60),
+                &format!(
+                    "{}over the {}-minute limit",
+                    if run.built { "build and run " } else { "" },
+                    HEAD_LIMIT_S / 60
+                ),
+            ),
+        ),
+        // A run that wrote no row quit early: a failed build names itself in the log.
+        (Some(_), false) if run.built && !wrote_rows(p, &run.cohort) => (
+            "failure",
+            no_result(
+                &run.sha,
+                &format!("no grade: {}", log_tail(&p.state_dir.join(HEAD_LOG))),
             ),
         ),
         (Some(baseline), false) => {
@@ -1011,10 +1125,13 @@ fn launch_head(
             state.heads.insert(pr.sha.clone(), disposition);
         }
     };
+    let Some(files) = head_files(p, d, slug, pr.number) else {
+        return format!("head {} files unread", short(&pr.sha));
+    };
     // An unreadable bank at the head is red, never green: a PR that broke
     // its bank file must not pass for want of tasks.
     let tasks = match crate::evals::bank::discover_bank(&bank_dir) {
-        Ok(tasks) => gate_tasks(&tasks, &pr.sha, &slow, d, p),
+        Ok(tasks) => gate_tasks(&tasks, &files, &pr.sha, &slow, d, p),
         Err(e) => {
             finish(
                 "failure",
@@ -1032,7 +1149,13 @@ fn launch_head(
         );
         return format!("head {} has no gate golden", short(&pr.sha));
     }
-    let cost = (tasks.len() * REPEATS) as f64 * WORKER.attempt_usd;
+    let workers = tasks.iter().filter(|t| t.prompt.is_some()).count();
+    let cost = (workers * REPEATS) as f64 * WORKER.attempt_usd;
+    // A covering task grades the head's own build. A `cli/`-only head needs no
+    // build: its covering tasks call `uv run` from the tree.
+    let builds = tasks.iter().any(|t| !t.covers.is_empty())
+        && files.iter().any(|f| f.starts_with("crates/"));
+    let tasks: Vec<String> = tasks.into_iter().map(|t| t.id).collect();
     if spent_today(&rows, d.now) + cost > daily_usd {
         finish(
             "failure",
@@ -1048,7 +1171,7 @@ fn launch_head(
     if zai_peak_hold(p.repo, &lane, d.now) {
         return format!("head {} waits out the zai peak", short(&pr.sha));
     }
-    let argv = run_argv(
+    let mut argv = run_argv(
         p,
         ("--task", &tasks.join(",")),
         HEAD_WORKERS,
@@ -1057,6 +1180,15 @@ fn launch_head(
         &pr.sha,
         arg_bank.as_ref(),
     );
+    if builds {
+        let Some(root) = arg_bank.as_deref().and_then(checkout_of) else {
+            // The deployed binary must never grade this head.
+            let cause = no_result(&pr.sha, "no checkout of the head to build");
+            finish("failure", &cause, DONE.into());
+            return format!("head {} has no checkout to build", short(&pr.sha));
+        };
+        argv = with_build(p, "head", root, argv);
+    }
     match (d.spawn)(&argv, p.repo, &p.state_dir.join(HEAD_LOG)) {
         Ok(pid) => {
             state.head_run = Some(HeadRun {
@@ -1066,6 +1198,7 @@ fn launch_head(
                 pid,
                 started: d.now.timestamp(),
                 tasks,
+                built: builds,
             });
             save_state(&p.state_dir, state);
             format!("head {} launched", short(&pr.sha))
@@ -1415,6 +1548,53 @@ mod tests {
                 s.worker.main_tried = Some(tried);
             });
         }
+    }
+
+    #[test]
+    fn a_crate_head_runs_only_the_tasks_covering_it_and_an_uncovered_one_posts_nothing() {
+        // (changed files, tasks the one launch must hold or None, statuses posted)
+        let cases = [
+            ("cli/x/a.rs\n", Some("--task c1 "), 1),
+            ("skills/s\ncli/x/a.rs\n", Some("--task c1,g1 "), 1),
+            ("cli/y/a.rs\n", None, 0),
+            // A crate head needs a build, and with no checkout to build the
+            // deployed binary must not grade it: red, no launch.
+            ("crates/x/a.rs\n", None, 2),
+        ];
+        for (files, task_arg, posted) in cases {
+            let w = World::new(files);
+            std::fs::write(
+                w.dir.path().join("evals/bank/c1.yaml"),
+                "id: c1\ntier: regression\ngrade:\n  - kind: file-exists\n    path: x\ncovers: [\"cli/x/\", \"crates/x/\"]\n",
+            )
+            .unwrap();
+            w.with_baseline();
+            w.tick(true, Utc::now());
+            let spawns = w.spawns.borrow();
+            let argv = spawns.first().map(|a| a.join(" ")).unwrap_or_default();
+            match task_arg {
+                Some(arg) => assert!(argv.contains(arg), "{files}: {argv}"),
+                None => assert!(spawns.is_empty(), "{files}: {argv}"),
+            }
+            let posts = w.posts.borrow();
+            assert_eq!(posts.len(), posted, "{files}: {posts:?}");
+            if posted == 2 {
+                assert!(posts[1].starts_with("state=failure"), "{files}: {posts:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_grade_only_row_costs_nothing_and_a_row_that_does_not_say_still_counts() {
+        let now = Utc::now();
+        let ts = now.to_rfc3339();
+        let row = |obs: Value| json!({"experiment_id": "gate-head-abc", "ts": ts, "obs": obs});
+        let rows = [
+            row(json!({"worker_required": false})),
+            row(json!({"worker_required": true})),
+            row(json!({})),
+        ];
+        assert!((spent_today(&rows, now) - 2.0 * WORKER.attempt_usd).abs() < 1e-9);
     }
 
     #[test]
