@@ -160,6 +160,25 @@ struct OpenPr {
 /// `pr_push::gh_api`; tests inject.
 type Gh<'a> = &'a dyn Fn(&str) -> Result<String, String>;
 
+/// Lifts pr_create's one-path `gh` seam onto the shared `GhProbe` shape the
+/// paginated `pr_file_paths` read takes: `args[1]` is the repo-relative path
+/// with its query, which is exactly what `Gh` receives.
+struct GhProbeAdapter<'a> {
+    gh: Gh<'a>,
+}
+
+impl crate::pr_status_facts::GhProbe for GhProbeAdapter<'_> {
+    fn run_gh(&self, _cwd: &Path, args: &[String]) -> Result<(bool, String, String), String> {
+        let Some(path) = args.get(1) else {
+            return Err("gh read carries no endpoint".to_string());
+        };
+        match (self.gh)(path) {
+            Ok(stdout) => Ok((true, stdout, String::new())),
+            Err(e) => Ok((false, String::new(), e)),
+        }
+    }
+}
+
 fn open_prs(slug: &str, gh: Gh) -> Result<Vec<OpenPr>, String> {
     let mut rows = Vec::new();
     for page in 1..=MAX_PAGES {
@@ -214,20 +233,6 @@ fn open_prs(slug: &str, gh: Gh) -> Result<Vec<OpenPr>, String> {
     Ok(rows)
 }
 
-fn pr_files(slug: &str, number: i64, gh: Gh) -> Result<Vec<String>, String> {
-    let raw = gh(&format!("repos/{slug}/pulls/{number}/files?per_page=100"))?;
-    let parsed: Value =
-        serde_json::from_str(&raw).map_err(|_| format!("gh api files for #{number} non-JSON"))?;
-    let Some(items) = parsed.as_array() else {
-        return Err(format!("gh api files for #{number} a non-array"));
-    };
-    Ok(items
-        .iter()
-        .filter_map(|f| f.get("filename").and_then(Value::as_str))
-        .map(String::from)
-        .collect())
-}
-
 /// The first open PR that shares changed files with an overlapping subject,
 /// or None when the create may proceed.
 fn find_duplicate(
@@ -237,6 +242,7 @@ fn find_duplicate(
     not_duplicates: &[i64],
     gh: Gh,
     slug: &str,
+    cwd: &Path,
 ) -> Result<Option<(OpenPr, Vec<String>)>, String> {
     for pr in open_prs(slug, gh)? {
         if pr.branch == branch || not_duplicates.contains(&pr.number) {
@@ -245,7 +251,9 @@ fn find_duplicate(
         if !subjects_overlap(title, &pr.title) {
             continue;
         }
-        let their_files = pr_files(slug, pr.number, gh)?;
+        let probe = GhProbeAdapter { gh };
+        let their_files =
+            crate::pr_status::lists::pr_file_paths(&probe, cwd, slug, pr.number as u64)?;
         let shared: Vec<String> = my_files
             .iter()
             .filter(|f| their_files.contains(f))
@@ -315,6 +323,7 @@ fn run_stdin_check_only(payload: &str) -> i32 {
         &[],
         &|path| gh_api("gh", &cwd, path, &[]),
         &slug,
+        &cwd,
     ) {
         Ok(Some((pr, shared))) => {
             let shown = shared
@@ -650,7 +659,15 @@ fn run(a: &Args, gh: Gh) -> i32 {
             return 2;
         }
     };
-    match find_duplicate(&a.title, &my_files, &branch, &a.not_duplicates, gh, &slug) {
+    match find_duplicate(
+        &a.title,
+        &my_files,
+        &branch,
+        &a.not_duplicates,
+        gh,
+        &slug,
+        &a.cwd,
+    ) {
         Err(msg) => {
             eprintln!("pr-create: {msg}");
             4
@@ -785,6 +802,7 @@ mod tests {
             &[],
             &gh,
             "o/r",
+            Path::new("."),
         )
         .unwrap();
         let (pr, shared) = dup.expect("the open twin refuses");
@@ -1139,5 +1157,47 @@ mod tests {
 
     fn json_array(items: Vec<Value>) -> String {
         Value::Array(items).to_string()
+    }
+
+    #[test]
+    fn a_150_file_pr_compares_every_page_not_just_the_first_hundred() {
+        // AC2: the old one-page `pr_files` read undercounted a PR over 100
+        // files, so a duplicate on file 150 slipped past. The shared
+        // `pr_file_paths` read paginates, so the 150th file matches.
+        let gh = |path: &str| {
+            if path.contains("/pulls?state=open") {
+                Ok(json_array(vec![pr_json(
+                    3050,
+                    "fix(backlog): repair the graph door",
+                    "graph-door-hotfix",
+                    "bllshttng",
+                )]))
+            } else if path.contains("/pulls/3050/files") && path.ends_with("page=1") {
+                let files: Vec<Value> = (0..100)
+                    .map(|i| file_json(&format!("src/file{i}.rs")))
+                    .collect();
+                Ok(json_array(files))
+            } else if path.contains("/pulls/3050/files") && path.ends_with("page=2") {
+                let files: Vec<Value> = (100..150)
+                    .map(|i| file_json(&format!("src/file{i}.rs")))
+                    .collect();
+                Ok(json_array(files))
+            } else {
+                Err(format!("unexpected gh read: {path}"))
+            }
+        };
+        let dup = find_duplicate(
+            "fix(backlog): repair the graph door",
+            &["src/file149.rs".to_string()],
+            "feature/duplicate-guard",
+            &[],
+            &gh,
+            "o/r",
+            Path::new("."),
+        )
+        .unwrap();
+        let (pr, shared) = dup.expect("file 149 sits past the old one-page read's first 100");
+        assert_eq!(pr.number, 3050);
+        assert_eq!(shared, vec!["src/file149.rs"]);
     }
 }

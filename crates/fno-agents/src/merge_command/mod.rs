@@ -497,9 +497,11 @@ fn hold_refusal(flow: &mut FlowResult, pr: i64, base: &Path, why: &str) {
 /// silently ignored. Fires on every positive hold/invalid verdict, never on
 /// an unheld read; any failure notes and returns.
 fn disarm_queued_auto_merge(flow: &mut FlowResult, pr: i64, cwd: &Path, why: &str) {
-    let child = match Command::new("gh")
-        .args(["pr", "merge", &pr.to_string(), "--disable-auto"])
-        .current_dir(cwd)
+    let mut disarm = Command::new("gh");
+    disarm.args(["pr", "merge", &pr.to_string(), "--disable-auto"]);
+    disarm.current_dir(cwd);
+    crate::github_app::inject(&mut disarm, std::ffi::OsStr::new("gh"));
+    let child = match disarm
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

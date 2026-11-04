@@ -59,15 +59,6 @@ pub fn run(home: &AgentsHome, cwd: &Path, handle: &str) -> i32 {
         return 2;
     }
 
-    // A `sources disagree` release never retires open work: both witness
-    // nodes must read done on the live graph.
-    if hold.reason == "sources disagree" {
-        if let Some(refusal) = witness_refusal(home, &hold) {
-            eprintln!("{refusal}");
-            return 2;
-        }
-    }
-
     let release = Release {
         handle: hold.id.clone(),
         reason: hold.reason.to_string(),
@@ -138,34 +129,6 @@ pub(crate) fn fresh_hold_refusal(hold: &gc_sweep::Hold, threshold_s: u64) -> Str
     )
 }
 
-/// The witness refusal for a `sources disagree` release: a witness whose
-/// node still carries ACTIVE work names itself and refuses. Done and the
-/// inactive NODE statuses (deferred, idea, gc.rs INACTIVE_NODE_STATUSES)
-/// are not open work - a node parked at deferred is exactly the shape the
-/// session-shaped releases already retire onto - so they release.
-/// The witnesses ride the hold detail as `sessions <node> vs registry
-/// <node>`.
-pub(crate) fn witness_refusal(home: &AgentsHome, hold: &gc_sweep::Hold) -> Option<String> {
-    let (a, b) = hold.detail.split_once(" vs ")?;
-    let statuses = gc_sweep::read_graph_node_states(home);
-    for side in [a, b] {
-        let node = side.split_whitespace().last()?;
-        let status = statuses
-            .as_ref()
-            .and_then(|s| s.get(node))
-            .map(|(status, _, _)| status.as_str())
-            .unwrap_or("unknown");
-        let parked = crate::gc::INACTIVE_NODE_STATUSES.contains(&status);
-        if status != "done" && !parked {
-            return Some(format!(
-                "{}: {node} reads {status}; a release never retires open work",
-                hold.id
-            ));
-        }
-    }
-    None
-}
-
 /// The registry row a handle names: name, short id, or session id.
 pub(crate) fn load_registry_row(home: &AgentsHome, handle: &str) -> Option<state::RegistryEntry> {
     let registry = state::load_registry(&home.registry_json()).ok()?;
@@ -188,10 +151,8 @@ fn row_bucket(home: &AgentsHome, _cwd: &Path, grace_secs: i64, handle: &str) -> 
 /// produce (a dry-run-unverified row needs terminal roster evidence).
 pub(crate) fn row_bucket_in(home: &AgentsHome, dry: &gc_sweep::GcSummary, handle: &str) -> String {
     let in_plain = dry
-        .kept_operator
+        .kept_teamed
         .iter()
-        .chain(&dry.kept_teamed)
-        .chain(&dry.kept_no_provenance)
         .chain(&dry.kept_graph_unreadable)
         .any(|id| id == handle);
     if in_plain {
@@ -202,16 +163,6 @@ pub(crate) fn row_bucket_in(home: &AgentsHome, dry: &gc_sweep::GcSummary, handle
     }
     if dry.kept_active.iter().any(|(id, _)| id == handle) {
         return "kept active".to_string();
-    }
-    if dry
-        .kept_transcript_unresolved
-        .iter()
-        .any(|h| h.id == handle)
-    {
-        return "kept transcript unresolved".to_string();
-    }
-    if dry.kept_node_conflict.iter().any(|(id, _, _)| id == handle) {
-        return "kept node conflict".to_string();
     }
     if dry.kept_open_do_row.iter().any(|(id, _)| id == handle) {
         return "kept open do row".to_string();

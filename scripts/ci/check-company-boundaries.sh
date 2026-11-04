@@ -126,7 +126,6 @@ LAYERS = (
         "platform",
         (
             "fno.paths",
-            "fno.config",
             "fno.events",
             # Leaf utilities with callers on both sides of the runtime boundary.
             # Declared, not merely moved: an undeclared module is unmapped, and

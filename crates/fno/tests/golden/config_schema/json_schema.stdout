@@ -240,9 +240,19 @@
           "title": "Max Load Per Cpu",
           "type": "number"
         },
+        "max_open_prs": {
+          "default": 20,
+          "title": "Max Open Prs",
+          "type": "integer"
+        },
         "max_swap_pct": {
           "default": 90.0,
           "title": "Max Swap Pct",
+          "type": "number"
+        },
+        "min_free_disk_gb": {
+          "default": 20.0,
+          "title": "Min Free Disk Gb",
           "type": "number"
         },
         "min_free_gb": {

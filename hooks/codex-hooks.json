@@ -118,6 +118,17 @@
         ]
       }
     ],
+    "PermissionRequest": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 \"${PLUGIN_ROOT}/hooks/session-state.sh\" codex PermissionRequest || { rc=$?; [ $rc -eq 127 ] || exit $rc; echo '{\"systemMessage\":\"fno hook session-state.sh codex PermissionRequest exited 127: a file or command is missing, and this hook did not run. An update can delete the plugin folder this session uses. Start a new session.\"}'; }"
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "hooks": [

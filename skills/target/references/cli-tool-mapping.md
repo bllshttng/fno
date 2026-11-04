@@ -5,10 +5,10 @@ When this skill references Claude Code tools, use the equivalent on your platfor
 
 ## Skill Invocation
 
-| Action | Claude Code | Gemini CLI | Codex CLI |
-|--------|------------|------------|-----------|
-| Load a skill | `Skill` tool with `skill: "fno:plan"` | `activate_skill` tool with skill name | Skills auto-loaded; reference with `$skill-name` |
-| Run a slash command | `/fno:plan` | `/fno:plan` (if command exists) or `activate_skill` | `$footnote-plan` |
+| Action | Claude Code | opencode | Codex CLI |
+|--------|------------|----------|-----------|
+| Load a skill | `Skill` tool with `skill: "fno:fix"` | `skill` tool with `skill({ name: "fix" })` | Open the skill's `SKILL.md` from the skills list |
+| Run a slash command | `/fno:fix` | `/fno:fix` | `$fno:fix` (single-quote it on a shell line) |
 
 ## Subagent Dispatch
 

@@ -91,18 +91,6 @@ pub fn reconcile_slot(
         .unwrap_or_else(|why| Outcome::refused("slot-unreadable", why))
 }
 
-fn slot_pinned(blockers: &[String]) -> Outcome {
-    Outcome::refused(
-        "slot-pinned",
-        format!(
-            "{} was pinning the slot when it was tainted and can still write the \
-             previous account's refreshed credential, so proving the identity now \
-             would not keep it true; stop it and retry",
-            blockers.join(", ")
-        ),
-    )
-}
-
 fn read_slot(cli: &str, probe: &dyn SlotProbe) -> Result<Vec<String>, String> {
     binding::slot_blobs(None, probe)
         .map_err(|()| format!("the {cli} slot credential could not be read"))
@@ -120,12 +108,9 @@ fn reconcile_locked(
     host: &dyn Host,
     now: f64,
 ) -> Result<Outcome, String> {
-    // The pin gate runs before the profile round trip: a writer that rewrites
-    // the slot and exits during that call would pass a later liveness check.
-    let blockers = store::taint_writers_still_live(root, cli, host).map_err(store_err)?;
-    if !blockers.is_empty() {
-        return Ok(slot_pinned(&blockers));
-    }
+    // Live sessions do not block the proof. It binds to the captured bytes, and
+    // the re-reads before the commit and before the taint clears refuse
+    // (`slot-changed`) if a session rewrote the slot meanwhile.
     let blobs = read_slot(cli, probe)?;
     if blobs.is_empty() {
         return Ok(Outcome::refused(
@@ -206,10 +191,9 @@ fn reconcile_locked(
              nothing was written, retry once it settles",
         ));
     }
-    let blockers = store::taint_writers_still_live(root, cli, host).map_err(store_err)?;
-    if !blockers.is_empty() {
-        return Ok(slot_pinned(&blockers));
-    }
+    let previous = crate::accounts::slot::active_slot_id(cli, Some(root), root)
+        .ok()
+        .flatten();
 
     // Taint first, clear last: a crash anywhere between leaves the slot
     // tainted, the safe direction to fail.
@@ -250,14 +234,26 @@ fn reconcile_locked(
     store::set_slot_taint(root, cli, false, &[], host).map_err(io)?;
     let _ = std::fs::remove_file(root.join(format!(".active-{cli}.reconcile-attempt")));
     binding::note_slot_principal(cli, root, &wanted, blob, now);
+    let pids: Vec<u32> = store::pinning_sessions_for(cli, host)
+        .unwrap_or_default()
+        .iter()
+        .map(|p| p.pid)
+        .collect();
+    let mut detail = format!(
+        "the live {cli} slot belongs to '{}' (proven by live profile); snapshot \
+         refreshed, stamped active, taint cleared",
+        matched.id
+    );
+    for line in
+        crate::accounts::use_switch::bill_report(cli, &matched.id, previous.as_deref(), &pids)
+    {
+        detail.push('\n');
+        detail.push_str(&line);
+    }
     Ok(Outcome {
         outcome: "matched".to_string(),
         record_id: Some(matched.id.clone()),
-        detail: format!(
-            "the live {cli} slot belongs to '{}' (proven by live profile); snapshot \
-             refreshed, stamped active, taint cleared",
-            matched.id
-        ),
+        detail,
     })
 }
 

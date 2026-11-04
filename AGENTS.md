@@ -170,7 +170,7 @@ Bug in plan -> fix inline, note in SUMMARY.md. Minor enhancement (<15 min) -> im
 ## Skill / agent development
 
 - **Skill:** `skills/<name>/SKILL.md` (+ optional `references/`, `scripts/`). **Agent:** `agents/<name>.md` with frontmatter.
-- **Self-containment (CI-enforced):** driver skills (`/target`) must be portable. They allow no `${REPO_ROOT}/scripts/` refs, path escapes, or runtime `Skill()` calls between drivers. Build-time reuse uses `skill-bundles.yaml` and `fno doctor bundle`. The `bundle check` action gates freshness.
+- **Skills ship together:** the fno skills load each other by name at runtime. `skills/target/references/toolbag.md` lists them. No skill refs `${REPO_ROOT}/scripts/`. Script reuse is build-time through `skill-bundles.yaml` and `fno doctor bundle`. The `bundle check` action gates freshness.
 - **TDD:** failing test -> red -> minimal code -> green -> verify -> atomic commit.
 - **Testing:** `fno-agents wave ready --help`, then `./scripts/validate-test-first.sh`.
 

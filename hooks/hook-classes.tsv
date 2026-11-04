@@ -72,6 +72,7 @@ codex	UserPromptSubmit	inject-mail-notify.sh	wait	-
 codex	UserPromptSubmit	inject-announce.sh	wait	-
 codex	UserPromptSubmit	prompt-outstanding.sh	wait	-
 codex	UserPromptSubmit	rules-dispatch.sh	wait	-
+codex	PermissionRequest	session-state.sh	wait	-
 codex	Stop	code-review-attest.sh	block	closed
 codex	Stop	codex-review-findings.sh	block	open
 codex	Stop	session-state.sh	wait	-

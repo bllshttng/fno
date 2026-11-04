@@ -539,8 +539,15 @@ fn stamped_annotated(mut row: Value, archived: bool) -> Value {
         }
     }
     let cwd = resolved_cwd(&row);
+    let number = row
+        .get("id")
+        .and_then(Value::as_str)
+        .and_then(crate::numbers::label);
     if let Some(obj) = row.as_object_mut() {
         obj.insert("_resolved_cwd".to_string(), cwd);
+        if let Some(number) = number {
+            obj.insert("_number".to_string(), Value::String(number));
+        }
     }
     let mut out = vec![row];
     crate::node_reading::attach_reading(&mut out);

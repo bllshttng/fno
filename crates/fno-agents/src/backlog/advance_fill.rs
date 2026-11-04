@@ -292,7 +292,7 @@ pub fn select_lane_fill(
         .map(Path::to_path_buf)
         .unwrap_or_else(|| repo_root.to_path_buf());
     let held = crate::needs::held_map(&fno_dir, repo_root);
-    let occupied = claimed_node_ids()?;
+    let occupied = super::next::live_claimed_node_ids()?;
 
     let mut used_domains = live_lane_domains(claims_root).unwrap_or_default();
     let graph = super::settings::graph_path();
@@ -449,16 +449,6 @@ pub fn select_lane_fill(
     Ok((selected, report))
 }
 
-fn claimed_node_ids() -> Result<BTreeSet<String>, String> {
-    match claims::list(Some("node:"), None, false) {
-        Ok(records) => Ok(records
-            .iter()
-            .filter_map(|record| record.key.strip_prefix("node:").map(str::to_string))
-            .collect()),
-        Err(error) => Err(format!("live claim state is unavailable ({error})")),
-    }
-}
-
 /// The read-only bounded-frontier report (shadow-first core): the SAME
 /// per-candidate classification as the live fill, no slot taken, a typed
 /// verdict for every ready row. `effective_cap` reports the rollout ceiling
@@ -483,7 +473,7 @@ pub fn schedule_shadow(
         .map(Path::to_path_buf)
         .unwrap_or_else(|| repo_root.to_path_buf());
     let held = crate::needs::held_map(&fno_dir, repo_root);
-    let occupied = match claimed_node_ids() {
+    let occupied = match super::next::live_claimed_node_ids() {
         Ok(ids) => ids,
         Err(_) => {
             return json!({

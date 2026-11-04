@@ -128,7 +128,12 @@ impl Host for FakeWorld {
 }
 
 impl Outside for FakeWorld {
-    fn vault(&self, action: &str, _root: &Path, id: Option<&str>) -> Result<String, String> {
+    fn vault(
+        &self,
+        action: &str,
+        _root: &Path,
+        id: Option<&str>,
+    ) -> Result<use_switch::VaultAnswer, String> {
         let call = match id {
             Some(id) => format!("{action}:{id}"),
             None => action.to_string(),
@@ -139,12 +144,19 @@ impl Outside for FakeWorld {
         } else {
             "written"
         };
-        Ok(self
-            .vault
-            .get(action)
-            .and_then(Value::as_str)
-            .unwrap_or(default)
-            .to_string())
+        Ok(use_switch::VaultAnswer {
+            verdict: self
+                .vault
+                .get(action)
+                .and_then(Value::as_str)
+                .unwrap_or(default)
+                .to_string(),
+            note: self
+                .vault
+                .get(&format!("{action}_note"))
+                .and_then(Value::as_str)
+                .map(str::to_string),
+        })
     }
     fn login(&self, _root: &Path, id: &str) -> i32 {
         self.calls.borrow_mut().push(format!("login:{id}"));

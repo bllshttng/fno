@@ -23,7 +23,7 @@ const USAGE: &str =
     "usage: fno mux serve --snapshot --server <name> --out <path> [--squad <name>] \
 [--theme dark|light|macchiato] [--format html|svg|png] [--size <cols>x<rows> [--fit]] [--peer <cols>x<rows>] \
 [--font <family>] [--message <fmail-id>] [--edge backlog|messages-tree|messages-part|org|dock=<size>] \
-[--view bell|bell-wide|bell-full|feed|row-menu|hover|cursor|tab-menu|sideline-menu|composer|split-menu|settings|keys|org-block|org-table|org-recent|org-overview|org-graph|org-health|org-seat|org-feed|org-system|messages-tree|messages-chats|messages-thread|messages-system|messages-archive|backlog-list|backlog-kanban|review-diff|review-panel|review-panel-drag|navigator-pr|navigator-model|navigator-menu|feed-detail|question-detail|connections|connections-use|needs|dock|machines]";
+[--view bell|bell-wide|bell-full|feed|row-menu|hover|cursor|tab-menu|sideline-menu|composer|split-menu|settings|keys|org-block|org-table|org-recent|org-overview|org-graph|org-health|org-seat|org-feed|org-system|org-remote|org-peek|org-spawn|org-keys|messages-tree|messages-chats|messages-thread|messages-system|messages-archive|backlog-list|backlog-kanban|review-diff|review-panel|review-panel-drag|navigator-pr|navigator-model|navigator-menu|feed-detail|question-detail|connections|connections-use|needs|dock|machines]";
 
 #[derive(Debug, PartialEq)]
 pub enum Format {
@@ -95,6 +95,12 @@ pub enum ViewKind {
     OrgSeat,
     OrgFeed,
     OrgSystem,
+    /// A seat on another machine with its relay keys, its peek page, the
+    /// spawn prompt open on that machine, and the board's keys page.
+    OrgRemote,
+    OrgPeek,
+    OrgSpawn,
+    OrgKeys,
     /// The Messages board with focus on column 1, 2 or 3.
     MessagesTree,
     MessagesChats,
@@ -135,6 +141,13 @@ pub enum ViewKind {
     /// The connections overlay with the `u` confirm staged on the first
     /// account that is not active.
     ConnectionsUse,
+    /// The connections overlay with the add wizard open on its provider
+    /// picker.
+    ConnectionsAdd,
+    /// The add picker with a search typed into it.
+    ConnectionsAddSearch,
+    /// The add wizard on a local server's base URL step.
+    ConnectionsAddLocal,
     /// The sweep-threads choice modal over a staged fleet's counts.
     Sweep,
     /// The needs-me overlay with its first row picked, after the same
@@ -174,6 +187,65 @@ fn select_modal_line(view: &mut View) -> Result<(), String> {
         .ok_or_else(|| "the modal painted no body text to select".to_string())
 }
 
+/// Select the first seat on another machine, then open what the shot names
+/// the way its key does. A peek page is the runner's own message fed in, so
+/// no shot reaches over ssh.
+fn remote_shot(
+    runtime: &tokio::runtime::Runtime,
+    view: &mut View,
+    kind: Option<&ViewKind>,
+) -> Result<(), String> {
+    use super::org_board::{host_key, seat_key, Act, Done, OrgMsg};
+    let b = view.org_board.as_mut().ok_or("org view did not open")?;
+    let remote = b.fleet.as_ref().and_then(|f| {
+        let m = f.machines.iter().find(|m| !m.local)?;
+        m.leads.iter().find_map(|p| {
+            let s = p.seats.iter().find(|s| s.local.is_none())?;
+            Some((
+                host_key(m),
+                seat_key(m, p, s),
+                s.short.clone(),
+                m.host.clone(),
+                s.harness.clone().unwrap_or_default(),
+            ))
+        })
+    });
+    let (host, seat, short, on, agent) = remote.ok_or(
+        "org view has no seat on another machine: shoot a root whose fleet map \
+has one (scripts/ops/mux-demo-snapshot.sh seeds one)",
+    )?;
+    let spawn = kind == Some(&ViewKind::OrgSpawn);
+    b.select(if spawn { &host } else { &seat });
+    let gen = b.gen;
+    let typed: &[&[u8]] = match kind {
+        Some(ViewKind::OrgSpawn) => &[b"s", b"fix the flaky login test"],
+        Some(ViewKind::OrgKeys) => &[b"?"],
+        _ => &[],
+    };
+    let mut sink = tokio::io::sink();
+    for bytes in typed {
+        runtime.block_on(super::org_board::keys(view, bytes, &mut sink))?;
+    }
+    if kind == Some(&ViewKind::OrgPeek) {
+        let lines = [
+            format!("peer {short}: agent={agent} short_id={short} recorded_cwd=~/code/checkout"),
+            "user: fix the retry budget in the payments client".into(),
+            "assistant: The budget resets on every reconnect, so a flapping link retries forever."
+                .into(),
+            "assistant: Moving the reset to the first good response, then a test for the flap."
+                .into(),
+        ];
+        let done = Done {
+            act: Act::Peek,
+            label: format!("peek {short}@{on}"),
+            key: seat,
+            result: Ok(lines.into()),
+        };
+        super::org_board::apply(view, gen, OrgMsg::Action(done));
+    }
+    Ok(())
+}
+
 fn parse_view(v: &str) -> Option<ViewKind> {
     match v {
         "bell" => Some(ViewKind::Bell),
@@ -201,6 +273,10 @@ fn parse_view(v: &str) -> Option<ViewKind> {
         "org-seat" => Some(ViewKind::OrgSeat),
         "org-feed" => Some(ViewKind::OrgFeed),
         "org-system" => Some(ViewKind::OrgSystem),
+        "org-remote" => Some(ViewKind::OrgRemote),
+        "org-peek" => Some(ViewKind::OrgPeek),
+        "org-spawn" => Some(ViewKind::OrgSpawn),
+        "org-keys" => Some(ViewKind::OrgKeys),
         "messages-tree" => Some(ViewKind::MessagesTree),
         "messages-chats" => Some(ViewKind::MessagesChats),
         "messages-thread" => Some(ViewKind::MessagesThread),
@@ -221,6 +297,9 @@ fn parse_view(v: &str) -> Option<ViewKind> {
         "sweep" => Some(ViewKind::Sweep),
         "connections" => Some(ViewKind::Connections),
         "connections-use" => Some(ViewKind::ConnectionsUse),
+        "connections-add" => Some(ViewKind::ConnectionsAdd),
+        "connections-add-search" => Some(ViewKind::ConnectionsAddSearch),
+        "connections-add-local" => Some(ViewKind::ConnectionsAddLocal),
         "needs" => Some(ViewKind::Needs),
         "dock" => Some(ViewKind::Dock),
         "machines" => Some(ViewKind::Machines),
@@ -315,7 +394,7 @@ pub fn parse(tail: &[OsString]) -> Result<SnapshotArgs, String> {
             "--view" => {
                 let v = value()?;
                 view = Some(parse_view(&v).ok_or_else(|| {
-                    format!("fno mux serve --snapshot: unknown view {v:?}; use bell, bell-wide, bell-full, feed, row-menu, tab-menu, sideline-menu, composer, split-menu, settings, keys, org-block, org-table, org-recent, org-overview, org-graph, org-health, org-seat, org-feed, org-system, messages-tree, messages-chats, messages-thread, messages-system, messages-archive, messages-you, messages-you-thread, backlog-list, backlog-kanban, review-diff, review-panel, review-panel-drag, navigator-pr, navigator-menu, navigator-model, feed-detail, question-detail, connections-use or connections")
+                    format!("fno mux serve --snapshot: unknown view {v:?}; use bell, bell-wide, bell-full, feed, row-menu, tab-menu, sideline-menu, composer, split-menu, settings, keys, org-block, org-table, org-recent, org-overview, org-graph, org-health, org-seat, org-feed, org-system, org-remote, org-peek, org-spawn, org-keys, messages-tree, messages-chats, messages-thread, messages-system, messages-archive, messages-you, messages-you-thread, backlog-list, backlog-kanban, review-diff, review-panel, review-panel-drag, navigator-pr, navigator-menu, navigator-model, feed-detail, question-detail, connections-use or connections")
                 })?)
             }
             tok @ ("--server" | "--session") => {
@@ -608,6 +687,16 @@ fn find_chrome() -> Option<PathBuf> {
 
 /// The split views open the fixture review beside the panes; the drag view
 /// holds its edge mid-drag at 60 percent.
+/// A few catalog providers for the add picker's Other section.
+const DEMO_CATALOG: &str = r#"{
+  "xai": {"name": "xAI", "env": ["XAI_API_KEY"], "api": "https://api.x.ai/v1", "npm": "@ai-sdk/xai", "models": {"grok-4": {}}},
+  "groq": {"name": "Groq", "env": ["GROQ_API_KEY"], "api": "https://api.groq.com/openai/v1", "npm": "@ai-sdk/groq", "models": {"llama-3.3-70b": {}}},
+  "mistral": {"name": "Mistral", "env": ["MISTRAL_API_KEY"], "api": "https://api.mistral.ai/v1", "npm": "@ai-sdk/mistral", "models": {"mistral-large": {}}},
+  "togetherai": {"name": "Together AI", "env": ["TOGETHER_API_KEY"], "api": "https://api.together.xyz/v1", "npm": "@ai-sdk/togetherai", "models": {"qwen3": {}}},
+  "fireworks-ai": {"name": "Fireworks AI", "env": ["FIREWORKS_API_KEY"], "api": "https://api.fireworks.ai/inference/v1", "npm": "@ai-sdk/openai-compatible", "models": {"kimi": {}}},
+  "cerebras": {"name": "Cerebras", "env": ["CEREBRAS_API_KEY"], "api": "https://api.cerebras.ai/v1", "npm": "@ai-sdk/cerebras", "models": {"gpt-oss": {}}}
+}"#;
+
 fn split_fixture(view: &mut View, kind: Option<&ViewKind>) {
     if matches!(
         kind,
@@ -1018,7 +1107,13 @@ questions (scripts/ops/mux-demo-snapshot.sh seeds one)",
             view.apply_questions_fold(questions);
             view.answers = Some(0);
         }
-        Some(kind @ (ViewKind::Connections | ViewKind::ConnectionsUse)) => {
+        Some(
+            kind @ (ViewKind::Connections
+            | ViewKind::ConnectionsUse
+            | ViewKind::ConnectionsAdd
+            | ViewKind::ConnectionsAddSearch
+            | ViewKind::ConnectionsAddLocal),
+        ) => {
             view.open_connections();
             let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
             runtime.block_on(crate::connections_view::load_all(tx, view.conn_gen));
@@ -1052,6 +1147,27 @@ shoot a root whose config lists accounts (scripts/ops/mux-demo-snapshot.sh seeds
                 cv.acct_sel = cv.accounts.iter().position(|a| !a.active).unwrap_or(0);
                 cv.render_with(&view.layout.agents, usize::MAX);
                 cv.on_key(b'u');
+            }
+            if matches!(
+                kind,
+                ViewKind::ConnectionsAdd
+                    | ViewKind::ConnectionsAddSearch
+                    | ViewKind::ConnectionsAddLocal
+            ) {
+                cv.on_key(b'a');
+                // A throwaway root has no models.dev cache: seed a few
+                // catalog providers so the Other section paints.
+                if cv.catalog.is_none() {
+                    cv.catalog = crate::model_catalog::parse(DEMO_CATALOG).ok();
+                }
+                let keys: &[u8] = match kind {
+                    ViewKind::ConnectionsAddSearch => b"ai",
+                    ViewKind::ConnectionsAddLocal => b"ollama\r\r",
+                    _ => b"",
+                };
+                for k in keys {
+                    cv.on_key(*k);
+                }
             }
         }
         Some(ViewKind::Machines) => {
@@ -1096,7 +1212,11 @@ shoot from a host where the lanes command answers"
             | ViewKind::OrgHealth
             | ViewKind::OrgSeat
             | ViewKind::OrgFeed
-            | ViewKind::OrgSystem,
+            | ViewKind::OrgSystem
+            | ViewKind::OrgRemote
+            | ViewKind::OrgPeek
+            | ViewKind::OrgSpawn
+            | ViewKind::OrgKeys,
         ) => {
             // The org view at one tab or page: open it the way the key
             // does, run one synchronous fleet read, then select what the
@@ -1139,6 +1259,12 @@ shoot a root whose fleet map has seats \
                 Some(ViewKind::OrgSeat) => b.select(&first),
                 Some(ViewKind::OrgFeed) => b.select("feed"),
                 Some(ViewKind::OrgSystem) => b.select("system"),
+                Some(
+                    ViewKind::OrgRemote
+                    | ViewKind::OrgPeek
+                    | ViewKind::OrgSpawn
+                    | ViewKind::OrgKeys,
+                ) => remote_shot(&runtime, &mut view, kind)?,
                 _ => {}
             }
         }
@@ -1401,6 +1527,10 @@ mod tests {
             ("org-seat", ViewKind::OrgSeat),
             ("org-feed", ViewKind::OrgFeed),
             ("org-system", ViewKind::OrgSystem),
+            ("org-remote", ViewKind::OrgRemote),
+            ("org-peek", ViewKind::OrgPeek),
+            ("org-spawn", ViewKind::OrgSpawn),
+            ("org-keys", ViewKind::OrgKeys),
             ("messages-tree", ViewKind::MessagesTree),
             ("messages-chats", ViewKind::MessagesChats),
             ("messages-thread", ViewKind::MessagesThread),
@@ -1421,6 +1551,9 @@ mod tests {
             ("sweep", ViewKind::Sweep),
             ("connections", ViewKind::Connections),
             ("connections-use", ViewKind::ConnectionsUse),
+            ("connections-add", ViewKind::ConnectionsAdd),
+            ("connections-add-search", ViewKind::ConnectionsAddSearch),
+            ("connections-add-local", ViewKind::ConnectionsAddLocal),
             ("needs", ViewKind::Needs),
             ("dock", ViewKind::Dock),
             ("machines", ViewKind::Machines),
@@ -1438,7 +1571,7 @@ mod tests {
         let e = parse_extra(&["--view", "nonesuch"]).expect_err("unknown view names the options");
         assert!(
             e.contains(
-                "bell, bell-wide, bell-full, feed, row-menu, tab-menu, sideline-menu, composer, split-menu, settings, keys, org-block, org-table, org-recent, org-overview, org-graph, org-health, org-seat, org-feed, org-system, messages-tree, messages-chats, messages-thread, messages-system, messages-archive, messages-you, messages-you-thread, backlog-list, backlog-kanban, review-diff, review-panel, review-panel-drag, navigator-pr, navigator-menu, navigator-model, feed-detail, question-detail, connections-use or connections"
+                "bell, bell-wide, bell-full, feed, row-menu, tab-menu, sideline-menu, composer, split-menu, settings, keys, org-block, org-table, org-recent, org-overview, org-graph, org-health, org-seat, org-feed, org-system, org-remote, org-peek, org-spawn, org-keys, messages-tree, messages-chats, messages-thread, messages-system, messages-archive, messages-you, messages-you-thread, backlog-list, backlog-kanban, review-diff, review-panel, review-panel-drag, navigator-pr, navigator-menu, navigator-model, feed-detail, question-detail, connections-use or connections"
             ),
             "{e}"
         );

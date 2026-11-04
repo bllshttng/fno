@@ -161,9 +161,7 @@ fn a_bp_row_with_an_empty_planning_set_retires_on_the_session_basis() {
     );
     assert_eq!(summary.retired.len(), 1, "{:?}", summary.retired);
     assert!(
-        summary.retired[0]
-            .1
-            .contains("node x-a75f is idea, not active work"),
+        summary.retired[0].1.starts_with("node x-a75f idea; idle "),
         "{:?}",
         summary.retired[0].1
     );

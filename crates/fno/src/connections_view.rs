@@ -224,10 +224,20 @@ pub struct Wizard {
     pub dir: String,
     /// api-key kind: the key value typed (base_url is the GLM preset).
     pub api_key: String,
+    /// Provider step: the search text and the highlighted row.
+    pub query: String,
+    pub pick: usize,
+    /// A catalog provider picked for a key (`AddKind::Provider`).
+    pub provider: Option<String>,
+    /// A local server picked for a base URL (`AddKind::Provider`).
+    pub local: Option<crate::provider_picker::LocalServer>,
+    pub base_url: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WizardStep {
+    Provider,
+    BaseUrl,
     Id,
     Kind,
     Dir,
@@ -260,6 +270,9 @@ pub enum AddKind {
     ClaudeIsolated,
     Codex,
     ApiKeyGlm,
+    /// A catalog provider or local server picked in the Provider step.
+    /// Reached only through the picker, never the Kind cycle.
+    Provider,
 }
 
 impl AddKind {
@@ -267,6 +280,7 @@ impl AddKind {
         match self {
             AddKind::Claude | AddKind::ClaudeIsolated => "claude",
             AddKind::Codex => "codex",
+            AddKind::Provider => "opencode",
             // GLM is a claude-cli provider fronted by a base_url + api key.
             AddKind::ApiKeyGlm => "claude",
         }
@@ -277,6 +291,7 @@ impl AddKind {
             AddKind::ClaudeIsolated => "claude (isolated config dir)",
             AddKind::Codex => "codex (oauth login)",
             AddKind::ApiKeyGlm => "api-key: GLM/z.ai",
+            AddKind::Provider => "api key or local server",
         }
     }
     fn next(self) -> AddKind {
@@ -284,7 +299,7 @@ impl AddKind {
             AddKind::Claude => AddKind::ClaudeIsolated,
             AddKind::ClaudeIsolated => AddKind::Codex,
             AddKind::Codex => AddKind::ApiKeyGlm,
-            AddKind::ApiKeyGlm => AddKind::Claude,
+            AddKind::ApiKeyGlm | AddKind::Provider => AddKind::Claude,
         }
     }
 }
@@ -294,6 +309,46 @@ impl AddKind {
 fn glm_base_url() -> String {
     crate::model_catalog::vendor_base_url("zai", "anthropic")
         .expect("model_reach.toml carries the zai anthropic endpoint")
+}
+
+impl ConnectionsView {
+    /// `accounts add` for a catalog provider's key: the opencode harness,
+    /// the catalog's first key env, and a route that names the provider so
+    /// the card groups the row. The route model is the catalog's first id.
+    fn catalog_key_argv(&self, w: &Wizard, provider: &str) -> Vec<String> {
+        let cp = self.catalog.as_ref().and_then(|c| c.get(provider));
+        let env = cp
+            .and_then(|cp| cp.env.first().cloned())
+            .unwrap_or_default();
+        let model = cp
+            .and_then(|cp| cp.model_ids().into_iter().next())
+            .unwrap_or_default();
+        vec![
+            "config".into(),
+            "accounts".into(),
+            "add".into(),
+            w.id.clone(),
+            "--harness".into(),
+            "opencode".into(),
+            "--auth".into(),
+            "api_key".into(),
+            "--route".into(),
+            format!("{provider}/{model}"),
+            "--env".into(),
+            format!("{env}={}", w.api_key),
+        ]
+    }
+}
+
+/// The model ids a local server reports, read with a short-bound curl. An
+/// unreachable server reads as no models.
+fn probe_local_models(origin: &str, path: &str) -> Vec<String> {
+    let url = format!("{}{path}", origin.trim().trim_end_matches('/'));
+    std::process::Command::new("curl")
+        .args(["-s", "-m", "2", &url])
+        .output()
+        .map(|o| crate::provider_picker::parse_local_models(&String::from_utf8_lossy(&o.stdout)))
+        .unwrap_or_default()
 }
 
 /// Validate a new-account id BEFORE any subprocess: lowercase alphanumeric +
@@ -373,6 +428,9 @@ pub struct ConnectionsView {
     pub combo_input: Option<ComboInput>,
     /// The `a`dd wizard, `Some` while collecting inputs. Keys divert to it.
     pub wizard: Option<Wizard>,
+    /// The models.dev catalog the Provider step searches, read when the
+    /// wizard opens. None when no cache exists yet.
+    pub catalog: Option<crate::model_catalog::Catalog>,
     /// Session-local pending logins, rendered as synthetic Accounts rows after
     /// the real records. Never persisted; register is the durable step.
     pub pending: Vec<PendingLogin>,
@@ -433,6 +491,7 @@ impl ConnectionsView {
             dirty_order: None,
             combo_input: None,
             wizard: None,
+            catalog: None,
             pending: Vec::new(),
             gen: 0,
             active_account: None,
@@ -649,15 +708,27 @@ impl ConnectionsView {
             b's' => self.act_set_active(),
             b'd' => self.act_remove(),
             b'a' => {
-                let kind = self
-                    .selected_account()
-                    .map_or(AddKind::Claude, |a| add_kind_for(&provider_key(a)));
+                let key = self.selected_account().map(provider_key);
+                self.catalog = crate::model_catalog::load(&crate::model_catalog::state_dir()).ok();
+                let pick = key
+                    .as_deref()
+                    .and_then(|k| {
+                        crate::provider_picker::entries(self.catalog.as_ref(), "")
+                            .iter()
+                            .position(|e| matches!(e, crate::provider_picker::Entry::Catalog { id, .. } if id == k))
+                    })
+                    .unwrap_or(0);
                 self.wizard = Some(Wizard {
-                    step: WizardStep::Id,
+                    step: WizardStep::Provider,
                     id: String::new(),
-                    kind,
+                    kind: key.as_deref().map_or(AddKind::Claude, add_kind_for),
                     dir: String::new(),
                     api_key: String::new(),
+                    query: String::new(),
+                    pick,
+                    provider: None,
+                    local: None,
+                    base_url: String::new(),
                 });
                 self.notice = None;
                 ConnIntent::Redraw
@@ -1103,6 +1174,8 @@ impl ConnectionsView {
             return ConnIntent::Bell;
         };
         match w.step {
+            WizardStep::Provider => self.provider_step_key(key),
+            WizardStep::BaseUrl => self.base_url_key(key),
             WizardStep::Id => match key {
                 b'\r' | b'\n' => {
                     if !valid_account_id(&w.id) {
@@ -1110,7 +1183,13 @@ impl ConnectionsView {
                             Some("id must be lowercase letters/digits/-, leading letter".into());
                         return ConnIntent::Redraw;
                     }
-                    w.step = WizardStep::Kind;
+                    w.step = if w.local.is_some() {
+                        WizardStep::BaseUrl
+                    } else if w.provider.is_some() {
+                        WizardStep::ApiKey
+                    } else {
+                        WizardStep::Kind
+                    };
                     self.notice = None;
                     ConnIntent::Redraw
                 }
@@ -1143,7 +1222,7 @@ impl ConnectionsView {
                         w.step = WizardStep::Dir;
                         ConnIntent::Redraw
                     }
-                    AddKind::ApiKeyGlm => {
+                    AddKind::ApiKeyGlm | AddKind::Provider => {
                         w.step = WizardStep::ApiKey;
                         ConnIntent::Redraw
                     }
@@ -1242,11 +1321,125 @@ impl ConnectionsView {
         ConnIntent::SpawnLogin(argv)
     }
 
+    /// A key in the Provider step: type to search, Ctrl-N/Ctrl-P or Tab to
+    /// move, Enter to pick. A popular provider with a login flow keeps its
+    /// old kind; the other catalog providers take a key, the local servers
+    /// a base URL.
+    fn provider_step_key(&mut self, key: u8) -> ConnIntent {
+        use crate::provider_picker::{entries, Entry};
+        let Some(w) = self.wizard.as_mut() else {
+            return ConnIntent::Bell;
+        };
+        let rows = entries(self.catalog.as_ref(), &w.query);
+        match key {
+            b'\t' | 0x0e => w.pick = (w.pick + 1).min(rows.len().saturating_sub(1)),
+            0x10 => w.pick = w.pick.saturating_sub(1),
+            0x7f | 0x08 => {
+                w.query.pop();
+                w.pick = 0;
+            }
+            0x15 => {
+                w.query.clear();
+                w.pick = 0;
+            }
+            b'\r' | b'\n' => {
+                let Some(row) = rows.get(w.pick) else {
+                    return ConnIntent::Bell;
+                };
+                match row {
+                    Entry::Local(s) => {
+                        w.local = Some(*s);
+                        w.base_url = s.origin.to_string();
+                        w.id = s.key.to_string();
+                        w.kind = AddKind::Provider;
+                    }
+                    Entry::Catalog { id, .. } => {
+                        let keyed = self
+                            .catalog
+                            .as_ref()
+                            .and_then(|c| c.get(id))
+                            .is_some_and(|cp| !cp.env.is_empty());
+                        match id.as_str() {
+                            "anthropic" | "openai" | "zai" => w.kind = add_kind_for(id),
+                            _ if keyed => {
+                                w.provider = Some(id.clone());
+                                w.id = id.clone();
+                                w.kind = AddKind::Provider;
+                            }
+                            _ => w.kind = add_kind_for(id),
+                        }
+                    }
+                }
+                w.step = WizardStep::Id;
+            }
+            c if c.is_ascii_graphic() || c == b' ' => {
+                w.query.push(c as char);
+                w.pick = 0;
+            }
+            _ => return ConnIntent::Bell,
+        }
+        ConnIntent::Redraw
+    }
+
+    /// A key in the BaseUrl step (local servers): edit the URL, Enter asks
+    /// the server what models it holds and adds the account only when it
+    /// answers with at least one.
+    fn base_url_key(&mut self, key: u8) -> ConnIntent {
+        let Some(w) = self.wizard.as_mut() else {
+            return ConnIntent::Bell;
+        };
+        match key {
+            0x7f | 0x08 => {
+                w.base_url.pop();
+            }
+            0x15 => w.base_url.clear(),
+            b'\r' | b'\n' => {
+                let server = w.local.expect("base url step follows a local pick");
+                let models = probe_local_models(&w.base_url, server.models_path);
+                let Some(first) = models.first().cloned() else {
+                    self.notice = Some(format!(
+                        "no models from {}{} - is {} running?",
+                        w.base_url.trim_end_matches('/'),
+                        server.models_path,
+                        server.title
+                    ));
+                    return ConnIntent::Redraw;
+                };
+                let w = self.wizard.take().expect("wizard present");
+                self.acting = true;
+                self.notice = None;
+                return ConnIntent::Run(vec![
+                    "config".into(),
+                    "accounts".into(),
+                    "add".into(),
+                    w.id,
+                    "--harness".into(),
+                    "opencode".into(),
+                    "--auth".into(),
+                    "api_key".into(),
+                    "--route".into(),
+                    format!("{}/{first}", server.key),
+                    "--env".into(),
+                    format!(
+                        "OPENAI_BASE_URL={}",
+                        crate::provider_picker::openai_base(&w.base_url)
+                    ),
+                ]);
+            }
+            c if c.is_ascii_graphic() => w.base_url.push(c as char),
+            _ => return ConnIntent::Bell,
+        }
+        ConnIntent::Redraw
+    }
+
     /// Close the wizard and add the GLM api-key provider in one command.
     fn finish_api_key(&mut self) -> ConnIntent {
         let w = self.wizard.take().expect("wizard present");
         self.acting = true;
         self.notice = None;
+        if let Some(provider) = w.provider.as_deref() {
+            return ConnIntent::Run(self.catalog_key_argv(&w, provider));
+        }
         ConnIntent::Run(vec![
             "config".into(),
             "accounts".into(),
@@ -1650,6 +1843,10 @@ impl ConnectionsView {
     /// Render the add-wizard input lines (replaces the list body while open).
     fn render_wizard(&self, w: &Wizard, out: &mut Vec<String>) {
         out.push("add account".to_string());
+        if w.step == WizardStep::Provider {
+            self.render_provider_step(w, out);
+            return;
+        }
         let field = |active: bool, label: &str, val: &str| {
             let caret = if active { "_" } else { "" };
             format!("  {label}: {val}{caret}")
@@ -1669,7 +1866,7 @@ impl ConnectionsView {
             "{}{id_hint}",
             field(w.step == WizardStep::Id, "name", &w.id)
         ));
-        if w.step != WizardStep::Id {
+        if w.step != WizardStep::Id && w.provider.is_none() && w.local.is_none() {
             if w.step == WizardStep::Kind {
                 self.cursor_row.set(Some(out.len()));
             }
@@ -1684,8 +1881,71 @@ impl ConnectionsView {
             self.cursor_row.set(Some(out.len()));
             out.push(field(true, "api key", &w.api_key));
         }
+        if w.step == WizardStep::BaseUrl {
+            self.cursor_row.set(Some(out.len()));
+            out.push(field(true, "base url", &w.base_url));
+        }
         out.push(String::new());
         out.push("Enter: next   Esc: cancel".to_string());
+    }
+
+    /// The Provider step: the search line, then Popular, Local and the
+    /// catalog rows, with a mark on each provider that has an account.
+    fn render_provider_step(&self, w: &Wizard, out: &mut Vec<String>) {
+        use crate::provider_picker::Entry;
+        let mut search = Spans::default();
+        search
+            .add("  search: ", type_scale::META)
+            .add(&format!("{}_", w.query), type_scale::BODY);
+        self.push_spans(out, search);
+        out.push(String::new());
+        let rows = crate::provider_picker::entries(self.catalog.as_ref(), &w.query);
+        if rows.is_empty() {
+            let mut none = Spans::default();
+            none.add("  no provider matches", type_scale::META);
+            self.push_spans(out, none);
+        }
+        let connected: std::collections::HashSet<String> =
+            self.accounts.iter().map(provider_key).collect();
+        // A window that keeps the highlighted row on screen.
+        let first = w.pick.saturating_sub(PICKER_ROWS - 1);
+        let mut section = "";
+        for (i, row) in rows.iter().enumerate().skip(first).take(PICKER_ROWS) {
+            let head = match row {
+                Entry::Catalog { popular: true, .. } => "Popular",
+                Entry::Catalog { .. } => "Other",
+                Entry::Local(_) => "Local",
+            };
+            if head != section {
+                section = head;
+                let mut line = Spans::default();
+                line.add(&format!("  {head}"), type_scale::HEADING);
+                self.push_spans(out, line);
+            }
+            if i == w.pick {
+                self.cursor_row.set(Some(out.len()));
+            }
+            let mark = if i == w.pick { ">" } else { " " };
+            let key = match row {
+                Entry::Catalog { id, .. } => id.as_str(),
+                Entry::Local(s) => s.key,
+            };
+            let dot = if connected.contains(key) { "●" } else { " " };
+            let mut line = Spans::default();
+            line.add(&format!("  {mark} {dot} "), type_scale::BODY)
+                .add(row.title(), type_scale::BODY);
+            self.push_spans(out, line);
+        }
+        out.push(String::new());
+        let mut legend = Spans::default();
+        legend.add("  ● connected account", type_scale::META);
+        self.push_spans(out, legend);
+        let mut keys = Spans::default();
+        keys.add(
+            "type: search  Tab: next  Ctrl-P: prev  Enter: pick  Esc: cancel",
+            type_scale::META,
+        );
+        self.push_spans(out, keys);
     }
 
     fn render_order(&self, out: &mut Vec<String>) {
@@ -1869,6 +2129,9 @@ fn mask_emails(text: &str) -> String {
     };
     text.split(' ').map(mask).collect::<Vec<_>>().join(" ")
 }
+
+/// Rows the Provider step shows at once.
+const PICKER_ROWS: usize = 17;
 
 /// Cells in a usage bar.
 const BAR_CELLS: usize = 20;
@@ -2903,6 +3166,72 @@ mod tests {
         }
     }
 
+    /// Open the add wizard and take the highlighted provider row.
+    fn open_add(v: &mut ConnectionsView) {
+        v.on_key(b'a');
+        v.on_key(b'\r');
+    }
+
+    #[test]
+    fn picker_adds_a_catalog_provider_by_key_and_a_local_server_by_url() {
+        let catalog = crate::model_catalog::parse(
+            r#"{"xai": {"name": "xAI", "env": ["XAI_API_KEY"], "api": "https://api.x.ai/v1", "npm": "@ai-sdk/xai", "models": {"grok-4": {}}}}"#,
+        )
+        .unwrap();
+        let mut v = ready_view();
+        v.on_key(b'a');
+        v.catalog = Some(catalog);
+        type_str(&mut v, "xai");
+        v.on_key(b'\r'); // provider -> name (prefilled with the provider id)
+        assert_eq!(v.wizard.as_ref().unwrap().id, "xai");
+        v.on_key(b'\r'); // name -> key, the kind step is skipped
+        assert_eq!(v.wizard.as_ref().unwrap().step, WizardStep::ApiKey);
+        type_str(&mut v, "k1");
+        match v.on_key(b'\r') {
+            ConnIntent::Run(argv) => {
+                assert_eq!(
+                    argv[3..],
+                    [
+                        "xai",
+                        "--harness",
+                        "opencode",
+                        "--auth",
+                        "api_key",
+                        "--route",
+                        "xai/grok-4",
+                        "--env",
+                        "XAI_API_KEY=k1"
+                    ]
+                );
+            }
+            _ => panic!("expected a Run intent"),
+        }
+
+        let mut v = ready_view();
+        v.on_key(b'a');
+        type_str(&mut v, "ollama");
+        v.on_key(b'\r');
+        v.on_key(b'\r'); // name -> base url, prefilled with the default origin
+        let w = v.wizard.as_ref().unwrap();
+        assert_eq!(w.step, WizardStep::BaseUrl);
+        assert_eq!(w.base_url, "http://127.0.0.1:11434");
+        assert!(v.render().join("\n").contains("base url"));
+    }
+
+    #[test]
+    fn provider_step_lists_popular_with_the_harnesses_that_run_each() {
+        let mut v = ConnectionsView::new();
+        v.apply_read(ReadOutcome::Ok {
+            accounts: Vec::new(),
+            combos: Vec::new(),
+        });
+        v.on_key(b'a');
+        let out = v.render().join("\n");
+        assert!(out.contains("Popular") && out.contains("OpenRouter"));
+        assert!(out.contains("Local") && out.contains("LM Studio"));
+        assert!(!out.contains("runs in"));
+    }
+
     // AC3-HP (default): the managed claude account shares ~/.claude - login runs
     // in the shared slot (NO CLAUDE_CONFIG_DIR override, no dir step, no
     // per-account dir), so all accounts reuse one config (the token-swap model).
@@ -2910,7 +3239,8 @@ mod tests {
     fn wizard_spawn_rows() {
         let mut v = ready_view();
         assert_eq!(v.on_key(b'a'), ConnIntent::Redraw);
-        assert!(v.wizard.is_some());
+        assert_eq!(v.wizard.as_ref().unwrap().step, WizardStep::Provider);
+        v.on_key(b'\r'); // provider: the selected card's own row
         type_str(&mut v, "ccm2");
         assert_eq!(v.on_key(b'\r'), ConnIntent::Redraw); // id -> kind (default = shared claude)
         let intent = v.on_key(b'\r'); // kind=Claude(shared) -> spawn directly (no dir step)
@@ -2929,7 +3259,7 @@ mod tests {
         assert!(out.contains("ccm2") && out.contains("claude") && out.contains("…login pending"));
 
         let mut v = ready_view();
-        v.on_key(b'a');
+        open_add(&mut v);
         type_str(&mut v, "ccm2");
         v.on_key(b'\r'); // id -> kind
         v.on_key(b'\t'); // Claude(shared) -> ClaudeIsolated
@@ -2954,7 +3284,7 @@ mod tests {
         assert_eq!(v.pending[0].dir, expected_dir);
 
         let mut v = ready_view();
-        v.on_key(b'a');
+        open_add(&mut v);
         type_str(&mut v, "cdx");
         v.on_key(b'\r'); // id -> kind
         v.on_key(b'\t'); // Claude -> ClaudeIsolated
@@ -3018,14 +3348,14 @@ mod tests {
         assert!(v.pending.is_empty());
 
         let mut v = ready_view();
-        v.on_key(b'a');
+        open_add(&mut v);
         type_str(&mut v, "Bad");
         assert_eq!(v.on_key(b'\r'), ConnIntent::Redraw); // stays on Id
         assert_eq!(v.wizard.as_ref().unwrap().step, WizardStep::Id);
         assert!(v.notice.as_deref().unwrap().contains("lowercase"));
 
         let mut v = ready_view();
-        v.on_key(b'a');
+        open_add(&mut v);
         type_str(&mut v, "x");
         assert_eq!(v.on_key(0x1b), ConnIntent::Redraw);
         assert!(v.wizard.is_none());
@@ -3035,7 +3365,7 @@ mod tests {
     #[test]
     fn api_key_wizard_builds_add_command_with_glm_preset() {
         let mut v = ready_view();
-        v.on_key(b'a');
+        open_add(&mut v);
         type_str(&mut v, "glm2");
         v.on_key(b'\r'); // id -> kind
         v.on_key(b'\t'); // Claude -> ClaudeIsolated

@@ -72,6 +72,7 @@ def test_codex_hooks_use_supported_event_names_and_existing_commands() -> None:
         "PostToolUse",
         "PreCompact",
         "PostCompact",
+        "PermissionRequest",
         "SessionStart",
         "UserPromptSubmit",
         "SubagentStart",

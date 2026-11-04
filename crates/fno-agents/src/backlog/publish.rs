@@ -167,9 +167,13 @@ fn publish(
                  Publish without --requests"
             )
         })?;
+        let label = label.unwrap_or("fno-request");
+        if let Some(warning) = missing_form_warning(Path::new(&root), label) {
+            eprintln!("publish: {warning}");
+        }
         Some(json!({
             "repo": format!("{owner}/{repo}"),
-            "label": label.unwrap_or("fno-request"),
+            "label": label,
         }))
     } else {
         if label.is_some() {
@@ -205,6 +209,23 @@ fn publish(
     })();
     let _ = std::fs::remove_dir_all(&staged.dir);
     result
+}
+
+/// Every board-request link names the form `.github/ISSUE_TEMPLATE/<label>.yml`.
+/// Without that file GitHub opens a blank issue and drops the prefilled
+/// title, so a missing form is worth a warning. Publishing carries on.
+fn missing_form_warning(root: &Path, label: &str) -> Option<String> {
+    let form = Path::new(".github")
+        .join("ISSUE_TEMPLATE")
+        .join(format!("{label}.yml"));
+    if root.join(&form).is_file() {
+        return None;
+    }
+    Some(format!(
+        "the board-request links name {} and {} has none; GitHub opens a blank issue instead",
+        form.display(),
+        root.display()
+    ))
 }
 
 /// Render the public projection into a fresh stage dir through the front
@@ -738,5 +759,20 @@ mod tests {
         assert!(err.contains("fno doctor update --rust"), "{err}");
         let err = check_receipt(r#"{"written":[]}"#, 0).unwrap_err();
         assert!(err.contains("wrote nothing"), "{err}");
+    }
+
+    #[test]
+    fn a_missing_request_form_warns_by_name_and_a_present_one_does_not() {
+        let dir = TempDir::new("form");
+        let warning = missing_form_warning(&dir.0, "fno-request").expect("no form yet");
+        assert!(
+            warning.contains(".github/ISSUE_TEMPLATE/fno-request.yml"),
+            "{warning}"
+        );
+        let templates = dir.0.join(".github").join("ISSUE_TEMPLATE");
+        std::fs::create_dir_all(&templates).unwrap();
+        std::fs::write(templates.join("fno-request.yml"), "name: x\n").unwrap();
+        assert!(missing_form_warning(&dir.0, "fno-request").is_none());
+        assert!(missing_form_warning(&dir.0, "other-label").is_some());
     }
 }
