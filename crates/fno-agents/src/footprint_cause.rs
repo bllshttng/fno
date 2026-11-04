@@ -1177,9 +1177,13 @@ fn live_root_pids(
             continue;
         };
         match root_pid_is_live(pid, Some(start)) {
+            // The probe cannot read this pid at all (gone from the process
+            // table since the row was written live, or unreadable). Mark the
+            // row unmeasured instead of refusing the whole reading: the gap
+            // widens the share band, so cpu_admission stays conservative.
             None => {
-                return Err(format!(
-                    "worker root liveness unavailable: pid {pid} start time could not be read for row {}",
+                dead_rows.push(format!(
+                    "{} (pid={pid} start time unreadable)",
                     name_or(row)
                 ));
             }
@@ -2192,14 +2196,19 @@ mod tests {
         // host, so the probe answers None: the stale-live pid shape that
         // refused the whole reading on 2026-11-04.
         let dead_pid: u32 = 0x7FFF_F000;
-        let doc = serde_json::json!({"agents": [{
-            "name": "ev-th-evals-29494",
-            "harness": "claude",
-            "status": "live",
-            "pid": dead_pid,
-            "pid_start_time": 4242
-        }]});
-        std::fs::write(&registry, serde_json::to_string(&doc).unwrap()).unwrap();
+        crate::registry_store::replace_document(
+            &registry,
+            serde_json::json!({
+                "schema_version": crate::state::REGISTRY_SCHEMA_VERSION,
+                "entries": [{
+                    "name": "ev-th-evals-29494",
+                    "harness": "claude",
+                    "status": "live",
+                    "pid": dead_pid,
+                    "pid_start_time": 4242
+                }],
+            }),
+        );
         let out = live_root_pids(None, &BTreeSet::new(), 0.0, &BTreeMap::new());
         match prior_home {
             Some(v) => std::env::set_var(crate::paths::HOME_ENV, v),
