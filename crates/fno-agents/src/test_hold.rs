@@ -297,7 +297,8 @@ pub const RERUN_EVENT: &str = "test_hold_rerun";
 
 /// The cancelled runs of a head that the lift reruns: the head has no run in
 /// flight and no failure, so cancels are all that keep it red. A run a look
-/// hold or a red wait named stays cancelled; each owns its own answer.
+/// hold or a red wait named stays cancelled; each owns its own answer. A
+/// head the look hold still holds is skipped by the caller.
 pub(crate) fn stranded(head: &crate::ci_tier::Head, named: &HashSet<u64>) -> Vec<u64> {
     if !head.in_flight.is_empty() || head.failed {
         return Vec::new();
@@ -328,6 +329,7 @@ fn rerun_repo(root: &Path, slug: &str, path: &Path) -> Result<(), String> {
     let now = crate::ci_cadence::millis_now();
     let named = crate::ci_tier::named_cancels(path, slug, now - 24 * 3_600_000)?;
     let emitter = crate::events::EventEmitter::new(path.to_path_buf(), "daemon");
+    let paint = crate::look_hold::PaintCache::default();
     let pulls = crate::pr_push::gh_api_pages_conditional(
         "gh",
         root,
@@ -349,6 +351,11 @@ fn rerun_repo(root: &Path, slug: &str, path: &Path) -> Result<(), String> {
         let runs = crate::ci_tier::runs_of(root, &format!("head_sha={sha}"))?;
         let list = stranded(&crate::ci_tier::head_of(&runs), &named);
         if list.is_empty() {
+            continue;
+        }
+        // A head the look hold keeps cancelled would only be cancelled again
+        // within one tick; an unreadable gate acts on nothing.
+        if crate::look_hold::held(&paint, root, slug, pr, sha) != Some(false) {
             continue;
         }
         let posted = &crate::ci_tier::act(root, &[(pr, list)], "rerun", "test_hold")[0]["runs"];

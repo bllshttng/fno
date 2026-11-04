@@ -117,7 +117,13 @@ fn touches_paint(paint: &PaintCache, root: &Path, slug: &str, pr: u64, sha: &str
 
 /// The visual-approval gate at `sha`. A head that touches no paint path
 /// answers from the cache, so only paint heads read the gate.
-fn held(paint: &PaintCache, root: &Path, slug: &str, pr: u64, sha: &str) -> Option<bool> {
+pub(crate) fn held(
+    paint: &PaintCache,
+    root: &Path,
+    slug: &str,
+    pr: u64,
+    sha: &str,
+) -> Option<bool> {
     if !touches_paint(paint, root, slug, pr, sha)? {
         return Some(false);
     }
