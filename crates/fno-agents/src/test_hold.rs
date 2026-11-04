@@ -281,14 +281,8 @@ pub fn reconcile(home: &AgentsHome) -> Result<Outcome, String> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     }
-    let lock = std::fs::OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .write(true)
-        .open(&lock_path)
-        .map_err(|e| format!("cannot open {}: {e}", lock_path.display()))?;
-    lock.lock()
-        .map_err(|e| format!("cannot lock {}: {e}", lock_path.display()))?;
+    let lock = crate::chokepoint::take(&crate::chokepoint::TEST_HOLD, &lock_path)
+        .map_err(|e| e.to_string())?;
     let result = reconcile_locked(home, &path);
     let _ = lock.unlock();
     result

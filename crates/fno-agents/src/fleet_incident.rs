@@ -844,14 +844,8 @@ pub(crate) fn write_transition_with_metadata(
     // The lock file is a sidecar because the state file itself is replaced by
     // rename, which would drop the lock mid-write.
     let lock_path = path.with_extension("json.lock");
-    let lock = std::fs::OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .write(true)
-        .open(&lock_path)
-        .map_err(|e| format!("cannot open {}: {e}", lock_path.display()))?;
-    lock.lock()
-        .map_err(|e| format!("cannot lock {}: {e}", lock_path.display()))?;
+    let lock = crate::chokepoint::take(&crate::chokepoint::FLEET_INCIDENT, &lock_path)
+        .map_err(|e| e.to_string())?;
     let out = write_transition_locked(path, state, reason, by, holds, metadata);
     let _ = lock.unlock();
     out
@@ -943,14 +937,8 @@ pub(crate) fn mark_pause_mail_released(
     owner_session_id: &str,
 ) -> Result<(), String> {
     let lock_path = path.with_extension("json.lock");
-    let lock = std::fs::OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .write(true)
-        .open(&lock_path)
-        .map_err(|error| format!("cannot open {}: {error}", lock_path.display()))?;
-    lock.lock()
-        .map_err(|error| format!("cannot lock {}: {error}", lock_path.display()))?;
+    let lock = crate::chokepoint::take(&crate::chokepoint::FLEET_INCIDENT, &lock_path)
+        .map_err(|e| e.to_string())?;
     let result = match read_at(path) {
         Verdict::Clear(mut record) | Verdict::Stopped(mut record)
             if record.state == "clear"
