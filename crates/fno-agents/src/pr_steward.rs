@@ -1390,10 +1390,10 @@ mod tests {
         write_stage(
             &dir,
             SLUG,
-            112,
+            116,
             r#"{"stage":"done","issue":7,"node":"x-aaaa"}"#,
         );
-        let pages = vec![pull_row(112, true)];
+        let pages = vec![pull_row(116, true)];
         assert_eq!(run_pass(&io, &cwd, &pages, false), "steward_closed");
         let calls = io.gh_calls();
         assert_eq!(calls.len(), 3, "{calls:?}");
@@ -1402,10 +1402,10 @@ mod tests {
             "{calls:?}"
         );
         assert!(
-            calls[2].contains("/repos/o/r/pulls/112") && calls[2].contains("state=closed"),
+            calls[2].contains("/repos/o/r/pulls/116") && calls[2].contains("state=closed"),
             "{calls:?}"
         );
-        assert_eq!(read_stage(&dir, SLUG, 112).stage.as_deref(), Some("closed"));
+        assert_eq!(read_stage(&dir, SLUG, 116).stage.as_deref(), Some("closed"));
         assert_eq!(run_pass(&io, &cwd, &pages, false), "steward_idle");
         assert_eq!(io.gh_calls().len(), 3, "a closed stage calls nothing");
         io.gh
