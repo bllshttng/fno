@@ -453,16 +453,16 @@ fn ac4_err_graph_unreadable_and_stop_refusal_keep_every_row() {
     assert!(reg.entries.iter().any(|e| e.name == "row-a"));
 }
 
-/// Locked Decision 1, one table, two rows: every named node done but one
-/// carrying an OPEN do row for this session keeps the row and names the
-/// node, and the same row with its do entry closed (absent from
-/// open_do, the seam model of a closed row) retires by name with
-/// kept_open_do_row empty. The exact (short_id, node) identity must
-/// land on each side; a count assertion alone would pass on an unrelated
-/// row. The sweep never settles graph rows on a retirement.
+/// A stale open do row on a done node no longer holds a row: inside its
+/// idle hour the spawn row keeps as active, and past the hour it retires by
+/// name with the do row still open. The sweep never settles graph rows on a
+/// retirement.
 #[test]
-fn an_open_do_row_on_a_done_node_holds_the_retirement_and_a_closed_one_retires_by_name() {
-    for (open_do, expect_retired) in [(&[("sess-d", "N1")][..], false), (&[][..], true)] {
+fn a_stale_open_do_row_keeps_nothing_past_the_window() {
+    for (open_do, expect_retired) in [
+        (&[("sess-d", "N1")][..], false),
+        (&[("sess-d", "N1")][..], true),
+    ] {
         let home = tmp_home("gc-open-do");
         let emitter = EventEmitter::new(home.events_jsonl(), "daemon");
         let transcripts = tempfile::tempdir().unwrap();
@@ -508,10 +508,7 @@ fn an_open_do_row_on_a_done_node_holds_the_retirement_and_a_closed_one_retires_b
             assert!(!reg.entries.iter().any(|e| e.name == "row-d"));
         } else {
             assert!(summary.retired.is_empty());
-            assert_eq!(
-                summary.kept_open_do_row,
-                vec![("rowd".to_string(), "N1".to_string())]
-            );
+            assert_eq!(summary.kept_active, vec![("rowd".to_string(), 1800)]);
             let reg = state::load_registry(&home.registry_json()).unwrap();
             assert!(reg.entries.iter().any(|e| e.name == "row-d"));
         }
