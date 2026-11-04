@@ -413,7 +413,7 @@ mod tests {
     }
 
     fn child(id: &str, title: &str, extra: Value) -> Value {
-        let mut row = json!({"id": id, "title": title, "parent": "x-e000", "status": "ready"});
+        let mut row = json!({"id": id, "title": title, "parent": "epic", "status": "ready"});
         row.as_object_mut()
             .unwrap()
             .extend(extra.as_object().unwrap().clone());
@@ -421,7 +421,7 @@ mod tests {
     }
 
     fn epic(extra: Value) -> Value {
-        let mut row = json!({"id": "x-e000", "title": "Shared work", "share": "github"});
+        let mut row = json!({"id": "epic", "title": "Shared work", "share": "github"});
         row.as_object_mut()
             .unwrap()
             .extend(extra.as_object().unwrap().clone());
@@ -442,18 +442,14 @@ mod tests {
         let epic = epic(json!({}));
         let rows = vec![
             epic.clone(),
-            child("x-c001", "First", json!({"pr_number": 12})),
-            child(
-                "x-c002",
-                "Second",
-                json!({"status": "done", "pr_number": 9}),
-            ),
-            child("x-c003", "Third", json!({})),
-            child("x-c004", "Local only", json!({"public": false})),
+            child("kid-1", "First", json!({"pr_number": 12})),
+            child("kid-2", "Second", json!({"status": "done", "pr_number": 9})),
+            child("kid-3", "Third", json!({})),
+            child("kid-4", "Local only", json!({"public": false})),
         ];
         let claims = vec![
-            claim("x-c001", "github:visitor-1"),
-            claim("x-c003", "target-session:abc"),
+            claim("kid-1", "github:visitor-1"),
+            claim("kid-3", "target-session:abc"),
         ];
         let out = sync_epic(&tracker(&hub), "o/r", &rows, &epic, &claims, Some("owner")).unwrap();
         assert_eq!(
@@ -486,7 +482,7 @@ mod tests {
     #[test]
     fn a_second_pass_edits_inside_the_markers_and_keeps_every_other_byte() {
         let hub = Arc::new(Mutex::new(Hub::default()));
-        let mut rows = vec![epic(json!({})), child("x-c001", "First", json!({}))];
+        let mut rows = vec![epic(json!({})), child("kid-1", "First", json!({}))];
         let first = sync_epic(&tracker(&hub), "o/r", &rows, &rows[0].clone(), &[], None).unwrap();
         assert_eq!(first.unwrap().action, Action::Created);
         // A person writes above and below the block.
@@ -499,7 +495,7 @@ mod tests {
             hub.bodies[0].clone()
         };
         rows[0]["epic_issue"] = json!(1);
-        rows.push(child("x-c002", "Second", json!({})));
+        rows.push(child("kid-2", "Second", json!({})));
         let out = sync_epic(&tracker(&hub), "o/r", &rows, &rows[0].clone(), &[], None).unwrap();
         assert_eq!(
             out,
@@ -529,7 +525,7 @@ mod tests {
     #[test]
     fn an_issue_missing_from_the_row_is_found_by_its_marker_not_opened_again() {
         let hub = Arc::new(Mutex::new(Hub::default()));
-        let rows = vec![epic(json!({})), child("x-c001", "First", json!({}))];
+        let rows = vec![epic(json!({})), child("kid-1", "First", json!({}))];
         sync_epic(&tracker(&hub), "o/r", &rows, &rows[0].clone(), &[], None).unwrap();
         let out = sync_epic(&tracker(&hub), "o/r", &rows, &rows[0].clone(), &[], None).unwrap();
         assert_eq!(
@@ -547,25 +543,25 @@ mod tests {
     fn a_child_pr_refs_the_issue_and_the_last_open_child_closes_it() {
         let rows = vec![
             epic(json!({"epic_issue": 7})),
-            child("x-c001", "One", json!({})),
-            child("x-c002", "Two", json!({})),
-            child("x-c003", "Three", json!({"status": "done"})),
-            child("x-c004", "Local only", json!({"public": false})),
+            child("kid-1", "One", json!({})),
+            child("kid-2", "Two", json!({})),
+            child("kid-3", "Three", json!({"status": "done"})),
+            child("kid-4", "Local only", json!({"public": false})),
         ];
-        assert_eq!(ref_line(&rows, "x-c001", "body"), Some("Refs #7".into()));
+        assert_eq!(ref_line(&rows, "kid-1", "body"), Some("Refs #7".into()));
         let mut rows = rows;
         rows[2]["status"] = json!("done");
-        assert_eq!(ref_line(&rows, "x-c001", "body"), Some("Closes #7".into()));
-        assert_eq!(ref_line(&rows, "x-c001", "Intro\nrefs #7\n"), None);
+        assert_eq!(ref_line(&rows, "kid-1", "body"), Some("Closes #7".into()));
+        assert_eq!(ref_line(&rows, "kid-1", "Intro\nrefs #7\n"), None);
         rows[0].as_object_mut().unwrap().remove("epic_issue");
-        assert_eq!(ref_line(&rows, "x-c001", "body"), None);
+        assert_eq!(ref_line(&rows, "kid-1", "body"), None);
     }
 
     #[test]
     fn a_private_title_cannot_ping_a_stranger_or_forge_a_marker() {
         let line = render_line(
             &child(
-                "x-c001",
+                "kid-1",
                 "ask @octocat <!-- /fno-epic-checklist -->",
                 json!({}),
             ),

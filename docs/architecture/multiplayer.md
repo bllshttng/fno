@@ -207,7 +207,7 @@ Leases and rows key by the machine's GitHub login (`gh_login` reads it once per 
 
 Each person keeps their own store, so nodes stay local. A shared epic publishes one GitHub issue, and that issue is the one page everyone reads. The mark `share=github` on an epic turns it on, and it is off by default. Set it with `fno backlog update <epic> --set share=github`. The mark has no link to `store.share_backlog`. That key moves your whole backlog between your own machines. This mark publishes one epic's titles on a public page.
 
-The heal pass runs the sync (`crates/fno-agents/src/epic_issue.rs`). It runs once per pr-watch tick, so every `pr_watch.interval_seconds` (600 by default), and only while `auto_heal.enabled` is true. The first pass opens one issue in the project's origin repo and stores its number on the epic as `epic_issue`. Set `epic_issue=<n>` by hand to adopt an issue you already opened. Set `epic_issue=null` to open a new one. If a pass opens an issue but cannot write the number, the next pass finds the issue by its hidden `<!-- fno-epic:<id> -->` line and opens no second one.
+The heal pass runs the sync (`crates/fno-agents/src/epic_issue.rs`). It runs once per pr-watch tick, so every `pr_watch.interval_seconds` (600 by default), and only while `auto_heal.enabled` is true. The first pass opens one issue in the project's origin repo and stores its number on the epic as `epic_issue`. Set `epic_issue=<n>` by hand to adopt an issue you already opened. Set `epic_issue=null` to open a new one. A pass can open an issue and then fail to write the number. The next pass finds that issue by its hidden `<!-- fno-epic:<id> -->` line, so no second issue opens.
 
 fno writes only between `<!-- fno-epic-checklist -->` and `<!-- /fno-epic-checklist -->`. Write above or below them as you like. If one marker is missing, or the two are out of order, the pass leaves the body alone and names the damage on stderr.
 
@@ -217,7 +217,7 @@ Each child gets one line:
 - [ ] <title> · @<handle> · #<PR>
 ```
 
-`[x]` marks a done child. The handle is the holder of the child's live node claim. A `github:<login>` holder prints that login. Any other holder is a session on your machine, so the line names the login your `gh` is signed in as. A child with no claim has no handle. A child with no PR has no `#`. A child has no line when:
+`[x]` marks a done child. The handle is the holder of the child's live node claim. A `github:<login>` holder prints that login. Any other holder is a session on your machine, so the line names the login your `gh` is signed in as. A child with no claim has no handle. A child with no PR has no `#`. A child has no line in four cases:
 
 - its `public` field is false,
 - it is an imported request that you have not made public,
@@ -226,9 +226,9 @@ Each child gets one line:
 
 A title is private text on a public page. fno writes `<` as `&lt;` and puts a zero-width space after `@`, so a title cannot open a tag or notify a stranger. An epic keeps syncing for 2 days after it closes, so its last checkbox lands.
 
-The edit shows the fnodotdev bot when the GitHub App is set: `github.app_id`, `github.app_installation_id` and `github.app_key_path` in `~/.fno/config.toml`. The installation needs Issues write. Without the App, your own `gh` token makes the edit.
+When the GitHub App is set, the edit shows the fnodotdev bot. Set `github.app_id`, `github.app_installation_id` and `github.app_key_path` in `~/.fno/config.toml`. The installation needs Issues write. Without the App, your own `gh` token makes the edit.
 
-`fno do pr create` adds one line to the body file when the node's parent epic has an `epic_issue`. The line is `Refs #<n>`. When no other published child of the epic is still open, the line is `Closes #<n>`, and the merge closes the issue. A body that already names the issue gets no second line. A `public: false` child never counts as open, because the issue never shows it.
+When the node's parent epic has an `epic_issue`, `fno do pr create` adds one line to the body file. The line is `Refs #<n>`. When no other published child of the epic is still open, the line is `Closes #<n>`, and the merge closes the issue. A body that already names the issue gets no second line. A `public: false` child never counts as open, because the issue never shows it.
 
 ## Failure: the primary is unreachable
 
