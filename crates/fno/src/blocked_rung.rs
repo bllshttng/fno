@@ -15,9 +15,11 @@
 use crate::agents_view::{report_is_live, resolved_rows};
 use crate::proto::{AgentBadge, AnswerablePrompt};
 
-/// True when the harness's session-state wiring names no blocked producer
-/// (`blocked = "none"`). Fail-closed: unknown harness, non-supported job,
-/// unwired or event-named wiring all read false.
+/// True when the screen manifest owns the blocked rung for the harness: its
+/// session-state wiring names no blocked producer (`blocked = "none"`), or
+/// sets `screen_backstop` because its blocked event covers only some waits.
+/// Fail-closed: unknown harness, non-supported job, unwired or event-named
+/// wiring without the flag all read false.
 fn wiring_names_no_blocked_producer(harness: Option<&str>) -> bool {
     let Some(h) = harness else {
         return false;
@@ -31,10 +33,11 @@ fn wiring_names_no_blocked_producer(harness: Option<&str>) -> bool {
     if job.get("state").and_then(|v| v.as_str()) != Some("supported") {
         return false;
     }
-    job.get("wiring")
-        .and_then(|w| w.get("blocked"))
-        .and_then(|v| v.as_str())
-        == Some("none")
+    let Some(wiring) = job.get("wiring") else {
+        return false;
+    };
+    wiring.get("blocked").and_then(|v| v.as_str()) == Some("none")
+        || wiring.get("screen_backstop").and_then(|v| v.as_bool()) == Some(true)
 }
 
 /// The screen-manifest rung's badge mapping, moved from agents_view's

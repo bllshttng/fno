@@ -447,15 +447,15 @@ mod repo_refusal_tests {
     #[test]
     fn a_repo_that_differs_from_the_cwd_repo_is_refused() {
         let tail = argv(&["52", "--repo", "footnote-sh/fno-web"]);
-        let refusal = repo_refusal("status", &tail, Some("bllshttng/fno")).unwrap();
+        let refusal = repo_refusal("status", &tail, Some("fnodotdev/fno")).unwrap();
         assert!(refusal.contains("footnote-sh/fno-web"));
-        assert!(refusal.contains("bllshttng/fno"));
+        assert!(refusal.contains("fnodotdev/fno"));
     }
 
     #[test]
     fn a_matching_or_absent_repo_passes() {
-        let same = argv(&["52", "--repo=BLLSHTTNG/fno"]);
-        assert!(repo_refusal("status", &same, Some("bllshttng/fno")).is_none());
+        let same = argv(&["52", "--repo=FNODOTDEV/fno"]);
+        assert!(repo_refusal("status", &same, Some("fnodotdev/fno")).is_none());
         assert!(repo_refusal("status", &argv(&["52"]), None).is_none());
     }
 }

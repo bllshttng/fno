@@ -76,7 +76,7 @@ A	merge.visual_shot_workflows	py=cli/src/fno/config/_readback.py;rs=crates/fno/s
 A	obsidian.enabled is true but obsidian.vault is not set	py=cli/src/fno/config/__init__.py;rs=crates/fno/src/config_cli/model/validators_core.rs	# CLASSIFY protocol|msg-twin|data
 A	orphan_reap_after_seconds	py=cli/src/fno/config/_sweeps.py;rs=crates/fno-agents/src/accounts/records.rs|crates/fno-agents/src/agents_config.rs|crates/fno/src/config_cli/model/validators_blocks.rs|crates/fno/src/config_doctor/checks.rs	# CLASSIFY protocol|msg-twin|data
 A	paths.cargo_targets_base	py=cli/src/fno/config/registry.py;rs=crates/fno/src/config_cli/leaves.rs	# CLASSIFY protocol|msg-twin|data
-A	permissiondecisionreason	py=hooks/bg_process_guard_impl.py|hooks/git_protection_impl.py|hooks/helpers/join_partition_guard.py|hooks/recursive_grep_guard_impl.py;rs=crates/fno-agents/src/hook/mod.rs|crates/fno-agents/src/hook/pretooluse_bash.rs	# CLASSIFY protocol|msg-twin|data
+A	permissiondecisionreason	py=hooks/git_protection_impl.py|hooks/helpers/join_partition_guard.py;rs=crates/fno-agents/src/hook/mod.rs|crates/fno-agents/src/hook/pretooluse_bash.rs	# CLASSIFY protocol|msg-twin|data
 A	post_merge.parking_lot_path	py=cli/src/fno/config/registry.py;rs=crates/fno/src/setup_cmds.rs	# CLASSIFY protocol|msg-twin|data
 A	pr_status_cache_retain_days	py=cli/src/fno/config/_sweeps.py;rs=crates/fno-agents/src/agents_config.rs|crates/fno/src/config_cli/model/validators_blocks.rs|crates/fno/src/config_doctor/checks.rs	# CLASSIFY protocol|msg-twin|data
 A	print a single resolved config value. read-only.	py=cli/src/fno/config_writer_cli.py;rs=crates/fno/src/config_cli/get.rs	# CLASSIFY protocol|msg-twin|data

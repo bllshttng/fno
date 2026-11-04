@@ -126,6 +126,46 @@ fresh; lines 12 grow >> cli/src/fno/keep.py; commit
 check 'the config key moves the budget' 1 'budget 5' PATH="$CONFIGBIN:$PATH"
 rm -rf "$CONFIGBIN"
 
+# --- the Python location rule --------------------------------------------------
+# A NEW .py path outside the allowed homes is refused; a file that exists at
+# the base keeps its home. The homes: cli/src/fno, plugins/hermes,
+# evals/harness-fit, evals/fixtures, scripts/release.
+fresh; lines 5 t > scripts/stray.py; commit
+check 'a new .py outside the allowed homes is refused' 1 \
+  'scripts/stray.py is a new Python file outside the allowed homes'
+
+fresh
+mkdir -p plugins/hermes/promise-tag-reader evals/harness-fit/run evals/fixtures scripts/release
+lines 5 t > plugins/hermes/promise-tag-reader/new.py
+lines 5 t > evals/harness-fit/run/new.py
+lines 5 t > evals/fixtures/new.py
+lines 5 t > scripts/release/new.py
+commit
+# A silent setup failure would leave HEAD == BASE, and the empty diff prints
+# the same ok line: assert the files landed before the case can pass.
+for p in plugins/hermes/promise-tag-reader/new.py evals/harness-fit/run/new.py \
+         evals/fixtures/new.py scripts/release/new.py; do
+  git cat-file -e "HEAD:$p" || { printf 'FAIL: setup lost %s\n' "$p" >&2; FAIL=$((FAIL + 1)); }
+done
+check 'each allowed home admits a new .py' 0 \
+  'cli/src/fno added +0, net +0, budget 30'
+
+fresh; lines 5 grow >> scripts/tool.py; commit
+check 'an existing stray .py may be edited in place' 0 \
+  'cli/src/fno added +0, net +0, budget 30'
+
+fresh; git mv scripts/tool.py scripts/tool2.py; commit
+check 'a rename into a disallowed home is refused' 1 \
+  'scripts/tool2.py is a new Python file outside the allowed homes'
+
+fresh; mkdir -p evals/fixtures; git mv scripts/tool.py evals/fixtures/tool.py; commit
+check 'a rename into an allowed home passes' 0 \
+  'cli/src/fno added +0, net +0, budget 30'
+
+fresh; mkdir -p scripts/release-notes; lines 5 t > scripts/release-notes/gen.py; commit
+check 'an allowlist prefix matches whole segments only' 1 \
+  'scripts/release-notes/gen.py is a new Python file outside the allowed homes'
+
 # --- the operator label exception ---------------------------------------------
 # The live-read cases use a PATH stub so the selftest proves the route and the
 # no-call-on-pass contract without depending on a GitHub credential.

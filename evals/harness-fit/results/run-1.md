@@ -72,3 +72,42 @@ The pilot's claude lane ran on the 200,000-token window, and many of its claude 
 | claude | 30 | 6 | 0 | 0 | unavailable 24 |
 | opencode | 31 | 22 | 2 | 11 | rate-limit 3, unavailable 6 |
 | pi | 30 | 0 | 0 | 0 | unavailable 30 |
+
+## The footnote arm (2026-11-04, Amendment 14)
+
+The footnote lane ran after the October tables above and reuses their opencode rows as the baseline. Amendment 14 is the record: harness `footnote`, model `zai/glm-5.3-flash`, fnh pin `a307cc9`, one machine (imac2d2), the replay bank, no re-run of opencode.
+
+The smoke passed every Amendment 14 term. Row 2026-11-04T02:22:56Z (session `8c5e84fb`) reads `lane_status: ok` and `usage_source: footnote-transcript`, the transcript header carries `permission_mode: bypassPermissions`, and the observed model is `zai/glm-5.3-flash` unsubstituted. That attempt doubles as the lane's first scored attempt.
+
+The lane ran 7 attempts on 3 tasks and stopped at 05:42Z. The approved arm capped 25 attempts (first 5 tasks at 3 repeats, last 5 at 2). The driving worker's session died at about 04:41Z, its last driver invocation finished at 05:42Z, and no worker remained to seat the next task. Coverage is 3 of 10 tasks.
+
+| Task | footnote | opencode (recorded) |
+|---|---|---|
+| replay-x-c911 | 0/1 | 0/3 |
+| replay-x-1018 | 0/2 | 0/3 |
+| replay-x-5978 | 0/0 | 0/3 |
+
+| Lane | Attempts | Scored | Accepted | Rate | 95% interval |
+|---|---|---|---|---|---|
+| footnote | 7 | 3 | 0 | 0.0% | 0.0% to 56.2% |
+| opencode, same 3 tasks | 9 | 9 | 0 | 0.0% | 0.0% to 29.9% |
+
+Scored means a graded row. The footnote median scored attempt ran 24.2 minutes against opencode's recorded 6.4 for the full bank. Three footnote attempts on replay-x-5978 hit the harness budget at about 45 minutes and never graded, so the scorer files that task 0/0. Amendment 4 reads a worker that ran out its budget as a stall, and a stall scores. Under that reading the task scores 0/3. Both readings give footnote zero accepted changes on every covered task. The paired difference is 0.0 points either way, so the verdict does not move.
+
+### Footnote exclusions
+
+Five pre-lane rows sit outside the paid lane, all on replay-x-c911, all before 02:22:56Z. The node thread named 3 of them. The transcript headers show 5. The last 3 carry `permission_mode: default`, so they predate the gamma-2 bypass deployment and score as excluded smoke noise.
+
+| Row (UTC) | Shape | Spend |
+|---|---|---|
+| 11-03 15:46 | spawn exit 2, the pre-gamma fence refused the model | none |
+| 11-03 19:52 | spawn exit 2, the same refusal after redeploy | none |
+| 11-03 20:37 | graded fail, header reads `default` | $0.34 |
+| 11-03 20:55 | budget exit, header reads `default` | $2.45 |
+| 11-03 21:02 | graded fail, header reads `default` | $0.39 |
+
+`score_run1.py` has no smoke concept and counts the two graded noise rows as scored. The verdict applies the thread's pre-lane ruling on top of the scorer, with the header evidence above.
+
+One in-lane attempt never started: its spawn hit a registry lock 16 seconds in (exit 12) on replay-x-1018. It reads `unavailable` with no spend, and the arm's serial run left the slot unfilled.
+
+Spend: the paid lane spent $2.97, folded from the footnote transcripts at the scorer's list prices. Of that, $1.30 sits on the scored attempts and $1.67 on the three budget exits. Smoke-phase noise spent $3.17. All footnote-lane spend on this node is $6.15, and footnote's own `cost_usd` total matches the list-price fold to the fourth decimal.

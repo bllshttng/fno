@@ -5,7 +5,7 @@
 //!
 //! The measurement this exists for: 73 `yes > /dev/null` at PPID 1, 797% CPU,
 //! 71 core-hours in one night, plus a `grep -rn` at 64% and a set of background
-//! tasks whose session had exited. The guard in `hooks/bg-process-guard.py`
+//! tasks whose session had exited. The guard in `crates/fno-agents/src/hook/bg_process_guard.rs`
 //! prevents the first class at creation time. Nothing can refuse the other two
 //! at creation time, so this sweep is what covers them, and it is the only
 //! path-agnostic net in the design: a test fixture, a non-Claude harness, and a

@@ -75,9 +75,18 @@ pub(crate) fn adopted_row_is_finished(
     agents_memo: &std::cell::RefCell<Option<ClaudeAgentsSnapshot>>,
     agents_read: &dyn Fn() -> ClaudeAgentsSnapshot,
 ) -> bool {
-    if e.origin.as_deref() != Some("adopted") {
-        return false;
-    }
+    e.origin.as_deref() == Some("adopted") && exited_unlisted(e, agents_memo, agents_read)
+}
+
+/// A terminal registry status that no known roster contradicts with a live
+/// listing. Any origin: the stopped arm reads it in place of the corpse
+/// probe, because the roster lists a finished session forever and absence
+/// can never be proven for it.
+pub(crate) fn exited_unlisted(
+    e: &state::RegistryEntry,
+    agents_memo: &std::cell::RefCell<Option<ClaudeAgentsSnapshot>>,
+    agents_read: &dyn Fn() -> ClaudeAgentsSnapshot,
+) -> bool {
     if !matches!(
         e.status,
         crate::AgentStatus::Exited | crate::AgentStatus::PermanentDead

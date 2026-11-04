@@ -623,15 +623,22 @@ pub fn past_idle_hour(row: &GcRow) -> bool {
 /// A stopped row that has sat quiet past its window with nothing left to
 /// protect: no open node, no open PR, no live claim, no cascade hold. The
 /// clock is the transcript's quiet age (its mtime), else the report clock,
-/// so a row with no `last_message_at` still has an age.
+/// so a row with no `last_message_at` still has an age. A node read only
+/// from the transcript is a witness: neither its open status nor two
+/// mentions that disagree pin a stopped row.
 pub fn stopped_stale(row: &GcRow) -> bool {
     let Some(window) = row.stopped_retire_s else {
         return false;
     };
-    !matches!(row.work, WorkState::Open { .. })
+    let witness = !row.worked_node;
+    (witness || !matches!(row.work, WorkState::Open { .. }))
         && row.live_claim.is_none()
         && row.open_pr.is_none()
-        && row.confirm_hold.is_none()
+        && match &row.confirm_hold {
+            None => true,
+            Some(KeepReason::NodeConflict { .. }) => witness,
+            Some(_) => false,
+        }
         && idle_age_s(row).is_some_and(|age| age > window)
 }
 
@@ -2539,7 +2546,35 @@ mod tests {
             ..stopped_operator()
         };
         assert_eq!(gc_decide(&no_transcript, GRACE).0, GcAction::Retire);
+        // A transcript mention is a witness: an open node or two mentions
+        // that disagree do not pin a stopped row.
+        let open = WorkState::Open {
+            node: "x-1".into(),
+            status: "idea".into(),
+        };
+        let conflict = KeepReason::NodeConflict {
+            a: "transcript-first x-1".into(),
+            b: "transcript-last x-2".into(),
+        };
+        for witness in [
+            GcRow {
+                worked_node: false,
+                work: open.clone(),
+                ..stopped_operator()
+            },
+            GcRow {
+                worked_node: false,
+                confirm_hold: Some(conflict.clone()),
+                ..stopped_operator()
+            },
+        ] {
+            assert_eq!(gc_decide(&witness, GRACE).0, GcAction::Retire);
+        }
         for keep in [
+            GcRow {
+                confirm_hold: Some(conflict),
+                ..stopped_operator()
+            },
             GcRow {
                 transcript_age_s: Some(86_400),
                 ..stopped_operator()

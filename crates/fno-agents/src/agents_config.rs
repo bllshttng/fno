@@ -1082,6 +1082,13 @@ pub const DEFAULT_MAX_LIVE: u32 = 3;
 pub const DEFAULT_MAX_LIVE_PER_TERRITORY: u32 = 4;
 /// Default available-RAM floor (GB) for spawn preflight. `<= 0` disables.
 pub const DEFAULT_MIN_FREE_GB: f64 = 4.0;
+/// Default free-disk floor (GB) on the data volume. A fleet of builds once
+/// filled it to 153 MiB. `<= 0` disables.
+pub const DEFAULT_MIN_FREE_DISK_GB: f64 = 20.0;
+/// Default cap on open PRs in the repo before the spawn gate holds new
+/// `/fno:target` seats: past it every PR waits on every other PR's CI.
+/// `0` disables.
+pub const DEFAULT_MAX_OPEN_PRS: u32 = 20;
 /// Default swap-pressure ceiling (percent used) for spawn preflight: available
 /// RAM can read six times its floor while the kernel is paging to a nearly
 /// full swap device. `<= 0` disables.
@@ -1175,6 +1182,24 @@ pub fn min_free_gb(cwd: &Path) -> f64 {
     resolve_agents_value(cwd, "min_free_gb")
         .and_then(|raw| raw.parse::<f64>().ok())
         .unwrap_or(DEFAULT_MIN_FREE_GB)
+}
+
+/// Resolve `agents.min_free_disk_gb`: spawn refuses a build worker below it
+/// and the janitor runs when free space crosses it. `<= 0` disables;
+/// unparseable falls back to [`DEFAULT_MIN_FREE_DISK_GB`].
+pub fn min_free_disk_gb(cwd: &Path) -> f64 {
+    resolve_agents_value(cwd, "min_free_disk_gb")
+        .and_then(|raw| raw.parse::<f64>().ok())
+        .unwrap_or(DEFAULT_MIN_FREE_DISK_GB)
+}
+
+/// Resolve `agents.max_open_prs`: new target seats wait while the repo holds
+/// more open PRs than this. `0` disables; unparseable falls back to
+/// [`DEFAULT_MAX_OPEN_PRS`].
+pub fn max_open_prs(cwd: &Path) -> u32 {
+    resolve_agents_value(cwd, "max_open_prs")
+        .and_then(|raw| raw.parse::<u32>().ok())
+        .unwrap_or(DEFAULT_MAX_OPEN_PRS)
 }
 
 /// Resolve `agents.max_swap_pct`: spawn refuses when swap used is at or above
@@ -1468,14 +1493,12 @@ const BUILTIN_VISUAL_PAINT_PATHS: &[&str] = &[
     "crates/fno/src/ratatui_blit.rs",
     "crates/fno/src/sideline_color.rs",
     "crates/fno/src/splash.rs",
-    "crates/fno/src/sprites.rs",
     "crates/fno/src/theme.rs",
     "crates/fno/src/web_backlog.html",
     "crates/fno/src/web_command.html",
     "crates/fno/src/web_page.html",
     "crates/fno/src/web_trace.html",
     "crates/fno/src/wordmark.rs",
-    "crates/fno/src/yard_overlay.rs",
     "README.md",
     "docs/images/**",
 ];

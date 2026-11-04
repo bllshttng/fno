@@ -458,11 +458,10 @@ pub fn load_sink_auth() -> Vec<SinkAuth> {
 fn run_bounded(bin: PathBuf, args: &[&str], bound: Duration) -> Result<(bool, String), String> {
     use std::process::Stdio;
     let out_path = std::env::temp_dir().join(format!(
-        "fno-attention-api-{}-{}.out",
-        std::process::id(),
-        Instant::now().elapsed().as_nanos()
+        "{}.out",
+        crate::doctor_update::capture_tag("fno-attention-api")
     ));
-    let out_file = std::fs::File::create(&out_path).map_err(|e| e.to_string())?;
+    let out_file = crate::doctor_update::create_exclusive(&out_path).map_err(|e| e.to_string())?;
     let mut command = crate::process_admission::std_command(bin);
     command
         .args(args)

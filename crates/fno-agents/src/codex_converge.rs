@@ -21,7 +21,7 @@ pub const PLUGIN_ID: &str = "fno@fno";
 /// literal: the seam-crossings ratchet reads a bare join of it as a binary
 /// resolver, and this joins a directory.
 const PLUGIN_DIR: &str = "fno";
-const RELEASE_SOURCE: &str = "bllshttng/fno";
+const RELEASE_SOURCE: &str = "fnodotdev/fno";
 /// The bare repo's default branch is slow to clone and can time out.
 const RELEASE_REF: &str = "stable";
 const LEGACY_DEV_MARKETPLACE: &str = "footnote-dev";
