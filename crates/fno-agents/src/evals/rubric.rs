@@ -690,10 +690,14 @@ mod tests {
             }]
         };
         assert!(agreement_proved(&rows(100, 95, 0.85)));
+        assert!(
+            agreement_proved(&rows(100, 90, 0.85)),
+            "the agreement bar is inclusive at 0.90"
+        );
         assert!(!agreement_proved(&rows(99, 99, 0.95)), "n under the bar");
         assert!(
-            !agreement_proved(&rows(100, 90, 0.85)),
-            "agreement at the bar fails >= 0.90 only above"
+            !agreement_proved(&rows(100, 89, 0.85)),
+            "agreement under the bar fails"
         );
         assert!(!agreement_proved(&rows(100, 95, 0.79)));
         assert!(!agreement_proved(&[]), "no judge reads unproved");
