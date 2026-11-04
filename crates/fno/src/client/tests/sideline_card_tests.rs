@@ -1487,13 +1487,13 @@ fn remote_fleet() -> serde_json::Value {
     ]})
 }
 
-/// The same band a beat later: a new seat arrived, so mercedes moves under
-/// any ordering the bucket sorts by (arrival order or the fleet beat's own
-/// seat sort).
+/// The same band a beat later: a blocked seat arrived, so mercedes moves.
+/// A blocked seat never folds behind the idle "+N more" row, so the shift
+/// is visible instead of absorbed by the fold.
 fn remote_fleet_after_a_beat() -> serde_json::Value {
     serde_json::json!({"machines": [
         {"host": "iMac2D2", "local": false, "fresh": true, "age_s": 3, "sessions": [
-            {"name": "aaron", "harness": "claude", "project": "fno"},
+            {"name": "aaron", "harness": "claude", "project": "fno", "needs_input": true},
             {"name": "orla", "harness": "claude", "project": "fno"},
             {"name": "mercedes", "harness": "claude", "project": "fno", "status": "writing"},
         ]},
@@ -1617,7 +1617,23 @@ fn the_selector_follows_mercedes_through_a_fleet_re_sort() {
     let mercedes = painted_agent_at(&v, "mercedes@iMac2D2");
     v.selector = Some(mercedes);
     v.hover_row = Some(mercedes);
+    for (i, r) in v.painted_rows().iter().enumerate() {
+        if let DisplayRow::Agent(a) = r {
+            eprintln!(
+                "BEFORE [{i}] {} exited={} portal={:?}",
+                a.name, a.exited, a.portal
+            );
+        }
+    }
     machine_tree::apply(&mut v, Ok(remote_fleet_after_a_beat()));
+    for (i, r) in v.painted_rows().iter().enumerate() {
+        if let DisplayRow::Agent(a) = r {
+            eprintln!(
+                "AFTER  [{i}] {} exited={} portal={:?}",
+                a.name, a.exited, a.portal
+            );
+        }
+    }
     let after = painted_agent_at(&v, "mercedes@iMac2D2");
     assert_ne!(
         after, mercedes,
