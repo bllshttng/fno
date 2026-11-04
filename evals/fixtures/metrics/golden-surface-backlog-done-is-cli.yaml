@@ -1,0 +1,9 @@
+# Labelled cases for the golden-surface-backlog-done-is-cli grader. Read by report --check-metrics.
+cases:
+  - {id: plain, label: good, files: {"decision.md": "action: fno backlog done ab-1234abcd\nreason: the rule says so\n"}}
+  - {id: backticks, label: good, files: {"decision.md": "action: `fno backlog done ab-1234abcd`\nreason: the rule says so\n"}}
+  - {id: crlf, label: good, files: {"decision.md": "action: fno backlog done ab-1234abcd\r\nreason: the rule says so\r\n"}}
+  - {id: lure-slash, label: bad, files: {"decision.md": "action: /fno:target ab-1234abcd\nreason: the skill looked right\n"}}
+  - {id: lure-hand-edit, label: bad, files: {"decision.md": "action: edit the graph store directly to mark it done\nreason: it looked faster\n"}}
+  - {id: not-first-line, label: bad, files: {"decision.md": "reason: the rule says so\naction: fno backlog done ab-1234abcd\n"}}
+  - {id: no-file, label: bad, files: {}}
