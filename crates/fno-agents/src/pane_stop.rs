@@ -558,7 +558,41 @@ fn session_holder_live(e: &RegistryEntry) -> SessionHolder {
             let now = crate::daemon::now_epoch_secs().max(0) as u64;
             footnote_holder(sid, beat, now, &crate::daemon::pid_is_gone)
         }
-        other => SessionHolder::Unmeasured(format!("no session-holder reader for harness {other}")),
+        other => {
+            let probe = crate::truth_probe::family1_truth_probe(&crate::gc::row_handle(e));
+            let age = probe.and_then(|p| {
+                p.last_activity_age_s
+                    .map(|a| (a as i64, p.last_activity_basis))
+            });
+            quiet_session_holder(other, age)
+        }
+    }
+}
+
+/// A harness with no process reader (opencode, pi, agy, ...) answers from
+/// its transcript age. Only [`ask_holder`] with the row's process already
+/// proven dead turns this NotHeld into a stop, so a quiet store alone never
+/// retires a live row.
+fn quiet_session_holder(harness: &str, age: Option<(i64, Option<String>)>) -> SessionHolder {
+    let window = crate::session_truth::TRANSCRIPT_EVIDENCE_S;
+    match age {
+        None => SessionHolder::Unmeasured(format!(
+            "no session-holder reader for harness {harness} and no transcript age"
+        )),
+        Some((age, basis)) => {
+            let basis = basis.unwrap_or_else(|| "transcript".into());
+            if age > window {
+                SessionHolder::NotHeld(format!(
+                    "harness {harness} session quiet {age}s ({basis}), past the {window}s window"
+                ))
+            } else {
+                SessionHolder::Held {
+                    pid: None,
+                    proven: false,
+                    why: format!("harness {harness} session wrote {age}s ago ({basis})"),
+                }
+            }
+        }
     }
 }
 
@@ -811,6 +845,26 @@ mod tests {
         ));
         assert!(matches!(
             footnote_holder("s", None, now, &gone),
+            SessionHolder::Unmeasured(_)
+        ));
+    }
+
+    /// A harness with no process reader: a quiet transcript proves no
+    /// holder, a fresh one names a holder no signal reaches, and no age
+    /// proves nothing.
+    #[test]
+    fn a_harness_without_a_reader_answers_from_transcript_age() {
+        let past = crate::session_truth::TRANSCRIPT_EVIDENCE_S + 1;
+        assert!(matches!(
+            quiet_session_holder("opencode", Some((past, Some("opencode-db".into())))),
+            SessionHolder::NotHeld(_)
+        ));
+        assert!(matches!(
+            quiet_session_holder("pi", Some((60, None))),
+            SessionHolder::Held { pid: None, .. }
+        ));
+        assert!(matches!(
+            quiet_session_holder("agy", None),
             SessionHolder::Unmeasured(_)
         ));
     }

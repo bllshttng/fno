@@ -112,6 +112,10 @@ pub const SPAWN_IDLE_GRACE_SECS: i64 = 3_300;
 /// idle day, and so does a row with no transcript at all.
 pub const SKILL_IDLE_RETIRE_SECS: i64 = 86_400;
 
+/// Law d-b01ffede: a row whose node is done retires after 30 idle minutes,
+/// whatever its origin.
+pub const DONE_NODE_IDLE_RETIRE_SECS: i64 = 1_800;
+
 /// WHICH positive fact holds a [`GcAction::Keep`] row. Removal is the
 /// default, so an unknown fact never keeps a row: there is no variant for
 /// one.
@@ -198,7 +202,17 @@ pub fn gc_decide(row: &GcRow, grace_secs: i64) -> (GcAction, Option<KeepReason>)
 /// tail, a terminal eval) waits only the grace. A spawned planner waits 20
 /// minutes, any other spawned row one hour, and every other row one day: a
 /// planning session the user started by hand is not a dispatched planner.
+/// A row whose every node is done waits at most 30 minutes (law d-b01ffede).
 pub fn idle_window(row: &GcRow, grace_secs: i64) -> i64 {
+    let window = origin_idle_window(row, grace_secs);
+    if matches!(row.work, WorkState::AllDone { .. }) {
+        window.min(DONE_NODE_IDLE_RETIRE_SECS)
+    } else {
+        window
+    }
+}
+
+fn origin_idle_window(row: &GcRow, grace_secs: i64) -> i64 {
     let spawned = row.origin.as_deref() == Some("spawn");
     if row.tail_done || row.eval_finished {
         grace_secs
@@ -2068,6 +2082,13 @@ mod tests {
             ..planner
         };
         assert_eq!(gc_decide(&hand_planner, GRACE).0, GcAction::Keep);
+        // Law d-b01ffede: a done node caps any origin's window at 30 minutes.
+        let hand_done = GcRow {
+            origin: None,
+            transcript_age_s: Some(DONE_NODE_IDLE_RETIRE_SECS + 1),
+            ..retiring()
+        };
+        assert_eq!(gc_decide(&hand_done, GRACE), (GcAction::Retire, None));
         // A row with no transcript ages on the report clock for a day.
         let failed_start = GcRow {
             fno_skill: None,

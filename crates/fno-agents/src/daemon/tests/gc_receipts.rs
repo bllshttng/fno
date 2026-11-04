@@ -454,7 +454,7 @@ fn ac4_err_graph_unreadable_and_stop_refusal_keep_every_row() {
 }
 
 /// A stale open do row on a done node no longer holds a row: inside its
-/// idle hour the spawn row keeps as active, and past the hour it retires by
+/// 30-minute window the spawn row keeps as active, and past it it retires by
 /// name with the do row still open. The sweep never settles graph rows on a
 /// retirement.
 #[test]
@@ -466,8 +466,9 @@ fn a_stale_open_do_row_keeps_nothing_past_the_window() {
         let home = tmp_home("gc-open-do");
         let emitter = EventEmitter::new(home.events_jsonl(), "daemon");
         let transcripts = tempfile::tempdir().unwrap();
-        // A held row sits inside the idle hour; past it a spawn row retires.
-        let age = if expect_retired { 2 * 3600 } else { 1800 };
+        // A held row sits inside the 30-minute done-node window; past it
+        // the row retires.
+        let age = if expect_retired { 2 * 3600 } else { 1500 };
         let quiet = quiet_transcript(transcripts.path(), "d.jsonl", age);
         state::update_registry(&home.registry_json(), |r| {
             let mut e = ask_row("row-d", None);
@@ -508,7 +509,7 @@ fn a_stale_open_do_row_keeps_nothing_past_the_window() {
             assert!(!reg.entries.iter().any(|e| e.name == "row-d"));
         } else {
             assert!(summary.retired.is_empty());
-            assert_eq!(summary.kept_active, vec![("rowd".to_string(), 1800)]);
+            assert_eq!(summary.kept_active, vec![("rowd".to_string(), 1500)]);
             let reg = state::load_registry(&home.registry_json()).unwrap();
             assert!(reg.entries.iter().any(|e| e.name == "row-d"));
         }
