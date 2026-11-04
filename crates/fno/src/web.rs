@@ -1121,7 +1121,11 @@ fn moved_to_hq(target: &str, query: Option<String>) -> Response {
         Some(q) if !q.is_empty() => format!("{target}?{q}"),
         _ => target.to_string(),
     };
-    (StatusCode::PERMANENT_REDIRECT, [(header::LOCATION, location)]).into_response()
+    (
+        StatusCode::PERMANENT_REDIRECT,
+        [(header::LOCATION, location)],
+    )
+        .into_response()
 }
 
 async fn command_redirect(axum::extract::RawQuery(q): axum::extract::RawQuery) -> Response {
@@ -1225,10 +1229,7 @@ async fn hq_model(Query(q): Query<WsQuery>, State(st): State<AppState>) -> Respo
     if !token_ok(q.t.as_deref(), &st.token) {
         return unauthorized();
     }
-    st.hq
-        .first
-        .get_or_init(|| refresh_hq(st.clone()))
-        .await;
+    st.hq.first.get_or_init(|| refresh_hq(st.clone())).await;
     if st.hq.claim_refresh().await {
         tokio::spawn(refresh_hq(st.clone()));
     }
@@ -3434,9 +3435,7 @@ console.log("theme store: 9 cases ok");
         // A recorded, spent first read: the route spawns no fleet read.
         let fleet = serde_json::json!({"machines": [{"host": "bb16", "sessions": []}]});
         let none = backlog_model::Inputs::default();
-        hq
-            .record(Ok(fleet), Err("x".into()), &none, 1, &[])
-            .await;
+        hq.record(Ok(fleet), Err("x".into()), &none, 1, &[]).await;
         hq.first.set(()).unwrap();
         let state = AppState {
             tx,
@@ -3466,10 +3465,16 @@ console.log("theme store: 9 cases ok");
         };
         let reply = ask("/command?t=right&question=q-1").await;
         assert!(reply.starts_with("HTTP/1.1 308"), "{reply}");
-        assert!(reply.contains("location: hq?t=right&question=q-1"), "{reply}");
+        assert!(
+            reply.contains("location: hq?t=right&question=q-1"),
+            "{reply}"
+        );
         let reply = ask("/command/model.json?t=right").await;
         assert!(reply.starts_with("HTTP/1.1 308"), "{reply}");
-        assert!(reply.contains("location: ../hq/model.json?t=right"), "{reply}");
+        assert!(
+            reply.contains("location: ../hq/model.json?t=right"),
+            "{reply}"
+        );
         let reply = ask("/hq/model.json").await;
         assert!(reply.starts_with("HTTP/1.1 401"), "{reply}");
         let reply = ask("/hq/model.json?t=right").await;
@@ -3927,13 +3932,7 @@ console.log("theme store: 9 cases ok");
         assert!(reply.contains("Origin does not match Host"), "{reply}");
         let reply = post(addr, "", "/hq/answer/q-1?t=right", br#"{"option":0}"#).await;
         assert!(reply.starts_with("HTTP/1.1 400"), "{reply}");
-        let reply = post(
-            addr,
-            "",
-            "/hq/answer/q-1?t=right",
-            br#"{"delegate":true}"#,
-        )
-        .await;
+        let reply = post(addr, "", "/hq/answer/q-1?t=right", br#"{"delegate":true}"#).await;
         assert!(reply.starts_with("HTTP/1.1 400"), "{reply}");
         let reply = post(addr, "", "/hq/answer/a%2Fb?t=right", body).await;
         assert!(reply.starts_with("HTTP/1.1 400"), "{reply}");
