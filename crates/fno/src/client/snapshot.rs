@@ -1248,7 +1248,7 @@ pr_number (scripts/ops/mux-demo-snapshot.sh seeds one)",
         | None => {}
         Some(ViewKind::Decisions) => {
             let rows = serde_json::from_value(serde_json::json!([
-                {"decision_id":"d-1","decision":"Ship the Decisions tab whole","subject":"x-7145","decided_by":"jc","authority_source":"operator","quote":"build all of it","ts":"2026-11-03T09:00:00Z","lifecycle":"live","lane":"law","question":"Split the node into three PRs?"},
+                {"decision_id":"d-1","decision":"Ship the Decisions tab whole","subject":"mux","decided_by":"jc","authority_source":"operator","quote":"build all of it","ts":"2026-11-03T09:00:00Z","lifecycle":"live","lane":"law","question":"Split the node into three PRs?"},
                 {"decision_id":"d-2","decision":"Hold CI until the ranked PRs land","subject":"ci","decided_by":"iris","authority_source":"role","ts":"2026-11-02T15:30:00Z","lifecycle":"live","lane":"coord"},
                 {"decision_id":"d-3","decision":"Retry the push after the rate limit","subject":"push","ts":"2026-10-30T11:00:00Z","lifecycle":"expired","lane":"unattributed"},
                 {"decision_id":"d-4","decision":"Use the shared pane for retract","subject":"mux","ts":"2026-10-28T08:15:00Z","lifecycle":"live","lane":"unattributed"}
