@@ -558,7 +558,7 @@ class _SettingsFacts:
     @property
     def state_dir(self) -> str:
         value = self._str("state_dir")
-        return value if value not in (None, "") else "~/.fno/"
+        return value if value else "~/.fno/"
 
     @property
     def paths(self) -> "_PathOverrides":

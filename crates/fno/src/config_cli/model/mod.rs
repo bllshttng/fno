@@ -1144,7 +1144,7 @@ mod table_agreement_tests {
                 .get("properties")
                 .and_then(Value::as_object);
             let def = if model == "SettingsModel" {
-                root.map(Value::Object)
+                root.map(|m| Value::Object(m.clone()))
             } else {
                 defs.get(model).cloned()
             };
