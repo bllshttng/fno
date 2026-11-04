@@ -12,9 +12,7 @@ use super::grading::{spawn_wait_timeout, CheckResult, WaitOutcome};
 
 /// One shared target dir, so a cold sealed tree reuses compiled dependencies.
 fn target_dir() -> PathBuf {
-    std::env::var_os("CARGO_TARGET_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| std::env::temp_dir().join("fno-evals-cargo-target"))
+    std::env::temp_dir().join("fno-evals-cargo-target")
 }
 
 fn fail(detail: String) -> CheckResult {
