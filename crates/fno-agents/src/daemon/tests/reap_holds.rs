@@ -36,8 +36,9 @@ fn ac2_hp_every_hold_line_carries_an_age_and_basis() {
     let emitter = EventEmitter::new(home.events_jsonl(), "daemon");
     let transcripts = tempfile::tempdir().unwrap();
     let quiet = quiet_transcript(transcripts.path(), "quiet.jsonl", 2 * 3600);
-    // Inside the idle hour, so the work-state keeps still hold.
-    let recent = quiet_transcript(transcripts.path(), "recent.jsonl", 1800);
+    // Past the grace, inside the 30-minute done-node window, so the
+    // work-state keeps still hold.
+    let recent = quiet_transcript(transcripts.path(), "recent.jsonl", 1500);
     let stamp = |ago_s: i64| {
         (chrono::Utc::now() - chrono::Duration::seconds(ago_s))
             .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
@@ -58,7 +59,7 @@ fn ac2_hp_every_hold_line_carries_an_age_and_basis() {
         tu.short_id = "turow".into();
         tu.harness_session_id = Some("sess-tu".into());
         tu.origin = Some("spawn".into());
-        tu.created_at = stamp(1800);
+        tu.created_at = stamp(1500);
         // The verdict door reads the stored status first; these scenarios vary
         // the vendor word, so the row itself must be fno-undecided.
         tu.status = crate::AgentStatus::Idle;
@@ -181,8 +182,9 @@ fn ac3_edge_a_changed_hold_refuses_the_release() {
         row.short_id = "chgrow".into();
         row.harness_session_id = Some("sess-chg".into());
         row.origin = Some("spawn".into());
-        // Inside the idle hour, so the row holds as transcript unresolved.
-        row.created_at = (chrono::Utc::now() - chrono::Duration::seconds(1800))
+        // Inside the 30-minute done-node window, so the row holds as
+        // transcript unresolved.
+        row.created_at = (chrono::Utc::now() - chrono::Duration::seconds(1500))
             .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
         r.entries.push(row);
     })
