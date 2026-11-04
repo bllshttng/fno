@@ -17,6 +17,7 @@ pub fn dispatch(command: &str, rest: &[String]) -> Option<i32> {
         "node-bind" => Some(crate::node_bind::run(rest)),
         "research" => Some(crate::research::run(rest)),
         "think-inspect" => Some(crate::think_inspect::run(rest)),
+        "visual" => Some(crate::visual_screen::run_critique_prep(rest)),
         "think-dispatch" => Some(crate::think_dispatch::run(rest)),
         _ => None,
     }
