@@ -2174,4 +2174,42 @@ mod tests {
         assert!(!is_test_runner("tail -f /tmp/pytest-of-user/out"));
         assert!(!is_test_runner("git log --grep pytest"));
     }
+
+    #[test]
+    fn an_unreadable_live_row_pid_marks_the_row_unmeasured() {
+        let _lock = crate::claims::test_env_lock();
+        let dir = std::env::temp_dir().join(format!(
+            "fno-footprint-unreadable-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let prior_home = std::env::var_os(crate::paths::HOME_ENV);
+        std::env::set_var(crate::paths::HOME_ENV, &dir);
+        let registry = crate::paths::AgentsHome::from_env().registry_json();
+        std::fs::create_dir_all(registry.parent().unwrap()).unwrap();
+        // 0x7FFF_F000 passes the broadcast guard yet reads no process on any
+        // host, so the probe answers None: the stale-live pid shape that
+        // refused the whole reading on 2026-11-04.
+        let dead_pid: u32 = 0x7FFF_F000;
+        let doc = serde_json::json!({"agents": [{
+            "name": "ev-th-evals-29494",
+            "harness": "claude",
+            "status": "live",
+            "pid": dead_pid,
+            "pid_start_time": 4242
+        }]});
+        std::fs::write(&registry, serde_json::to_string(&doc).unwrap()).unwrap();
+        let out = live_root_pids(None, &BTreeSet::new(), 0.0, &BTreeMap::new());
+        match prior_home {
+            Some(v) => std::env::set_var(crate::paths::HOME_ENV, v),
+            None => std::env::remove_var(crate::paths::HOME_ENV),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+        let (roots, gap) = out.unwrap();
+        assert!(!roots.contains(&dead_pid));
+        let gap = gap.expect("an unmeasured row names its undercount");
+        assert!(gap.contains("ev-th-evals-29494"), "{gap}");
+        assert!(gap.contains("start time unreadable"), "{gap}");
+    }
 }
