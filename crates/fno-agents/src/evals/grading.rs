@@ -1,7 +1,10 @@
-//! Mechanical grading: the four check kinds against a graded worktree
+//! Mechanical grading: the check kinds against a graded worktree
 //! (the deleted Python leg's grading.py, ported). Deterministic by
-//! construction: no model in the pass/fail path. The same worktree
-//! end-state always grades the same.
+//! construction, with one fenced exception: the `rubric` kind is the one
+//! model path, and it stays fenced by the load-time refusal on
+//! `tier: regression`, the verdict cache, and the recorded-verdicts proof
+//! rule (see rubric.rs). Every other kind: the same worktree end-state
+//! always grades the same.
 
 /// The directory holding a build of the graded ref's `fno-agents` pair. The
 /// gate sets it; a grader's `fno` then runs that build and not the deployed one.
@@ -38,18 +41,47 @@ pub fn grade(
     base_ref: Option<&str>,
 ) -> GradeOutcome {
     let timeout_s = std::cmp::max(1, task.timeout_minutes.saturating_mul(60));
-    grade_checks(&task.grade, workdir, timeout_s, base_ref, None)
+    let judge = super::rubric::SpawnJudge::from_config(
+        &std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
+        &crate::evals::history_path()
+            .parent()
+            .map(std::path::Path::to_path_buf)
+            .unwrap_or_else(|| std::path::PathBuf::from(".")),
+    );
+    let judge = match judge {
+        Ok(Some(judge)) => Some(judge),
+        Ok(None) => None,
+        Err(e) => {
+            eprintln!("WARNING: rubric judges refused: {e}; rubric checks read missing results");
+            None
+        }
+    };
+    grade_checks(
+        &task.grade,
+        workdir,
+        timeout_s,
+        base_ref,
+        None,
+        task.prompt.as_deref(),
+        judge.as_ref().map(|j| j as &dyn super::rubric::Judge),
+    )
 }
 
 /// Grade a check list against a directory. A metric case calls this with the
 /// golden's own checks, so the proof covers the grader the golden runs.
 /// `bin_dir` leads the grader's PATH: a proof case puts a stub binary there.
+/// The rubric arm consults `judge` (the panel over one criterion) and reads
+/// the task prompt; both arrive from `grade()`, or a recorded-verdicts judge
+/// from the metric proof. A rubric check with `judge: None` reads a missing
+/// result, never a pass.
 pub fn grade_checks(
     checks: &[super::bank::GradeCheck],
     workdir: &std::path::Path,
     timeout_s: i64,
     base_ref: Option<&str>,
     bin_dir: Option<&std::path::Path>,
+    task_prompt: Option<&str>,
+    judge: Option<&dyn super::rubric::Judge>,
 ) -> GradeOutcome {
     let mut results: Vec<CheckResult> = Vec::new();
     for check in checks {
@@ -62,6 +94,7 @@ pub fn grade_checks(
                     .join(crate::claude_ask::claude_cwd_slug(workdir)),
             )),
             "tests" => results.push(super::tests_grade::grade(check, workdir, timeout_s)),
+            "rubric" => results.push(grade_rubric(check, workdir, base_ref, task_prompt, judge)),
             _ => results.push(grade_grep(check, workdir)),
         }
     }
@@ -177,6 +210,119 @@ fn grade_grep(check: &super::bank::GradeCheck, workdir: &std::path::Path) -> Che
     }
 }
 
+/// `rubric`: judge-graded. One work product (`path` file, or the git diff
+/// against the grade base for `diff: true`), one panel per criterion. The
+/// check fails when a hurdle fails under any judge, or any judge cell
+/// faults (a missing result, never a pass); the detail names rates and the
+/// disagreement count.
+fn grade_rubric(
+    check: &super::bank::GradeCheck,
+    workdir: &std::path::Path,
+    base_ref: Option<&str>,
+    task_prompt: Option<&str>,
+    judge: Option<&dyn super::rubric::Judge>,
+) -> CheckResult {
+    use super::bank::RubricTag;
+    use super::rubric::{Judge, RubricAsk};
+    let missing = |why: String| CheckResult {
+        kind: "rubric".into(),
+        passed: false,
+        detail: format!("rubric: missing result, {why}"),
+    };
+    let Some(spec) = check.rubric.as_ref() else {
+        return missing("check carries no criteria".into());
+    };
+    let Some(judge) = judge else {
+        return missing("no judge configured (set config.evals.rubric.judges to two lanes from different vendors)".into());
+    };
+    let Some(prompt) = task_prompt else {
+        return missing("no task prompt".into());
+    };
+    let work_product = match (&spec.path, spec.diff) {
+        (Some(rel), _) => std::fs::read_to_string(workdir.join(rel))
+            .map_err(|e| format!("cannot read work product {rel}: {e}")),
+        (None, true) => match base_ref {
+            Some(base) => std::process::Command::new("/usr/bin/git")
+                .args(["diff", base])
+                .current_dir(workdir)
+                .output()
+                .map(|out| String::from_utf8_lossy(&out.stdout).into_owned())
+                .map_err(|e| format!("git diff failed: {e}")),
+            None => Err("a diff work product needs a grade base".to_string()),
+        },
+        (None, false) => Err("no work-product source (path or diff) on the check".into()),
+    };
+    let work_product = match work_product {
+        Ok(text) => text,
+        Err(why) => return missing(why),
+    };
+    let mut faults: Vec<String> = Vec::new();
+    let mut passed_cells = 0u32;
+    let mut cells = 0u32;
+    let mut disagreements = 0u32;
+    let mut hurdle_failure: Option<(String, String)> = None;
+    for criterion in &spec.criteria {
+        let ask = RubricAsk {
+            task_prompt: prompt,
+            criterion,
+            work_product: &work_product,
+        };
+        let panel = judge.panel(&ask);
+        if panel.is_empty() {
+            faults.push(format!(
+                "criterion '{}': the judge panel returned no verdicts",
+                criterion.id
+            ));
+        }
+        let mut cell_verdicts: Vec<bool> = Vec::new();
+        for v in &panel {
+            match &v.fault {
+                Some(why) => faults.push(format!(
+                    "criterion '{}': judge '{}' fault: {why}",
+                    criterion.id, v.lane
+                )),
+                None => {
+                    cells += 1;
+                    cell_verdicts.push(v.passed);
+                    if v.passed {
+                        passed_cells += 1;
+                    }
+                    if criterion.tag == RubricTag::Hurdle && !v.passed {
+                        hurdle_failure = Some((criterion.id.clone(), v.lane.clone()));
+                    }
+                }
+            }
+        }
+        cell_verdicts.dedup();
+        if cell_verdicts.len() > 1 {
+            disagreements += 1;
+        }
+    }
+    if let Some((cid, lane)) = hurdle_failure {
+        return CheckResult {
+            kind: "rubric".into(),
+            passed: false,
+            detail: format!(
+                "rubric: hurdle '{cid}' failed under judge '{lane}'; cells {passed_cells}/{cells}, disagreements {disagreements}"
+            ),
+        };
+    }
+    if !faults.is_empty() {
+        return CheckResult {
+            kind: "rubric".into(),
+            passed: false,
+            detail: format!("rubric: missing result, {}", faults.join("; ")),
+        };
+    }
+    CheckResult {
+        kind: "rubric".into(),
+        passed: true,
+        detail: format!(
+            "rubric: all hurdles passed; cells {passed_cells}/{cells}, disagreements {disagreements}"
+        ),
+    }
+}
+
 /// `tool-budget`: the worker's recorded tool calls must not exceed
 /// `max_tool_calls`. The evidence is the claude transcript the trial left in
 /// its own projects dir (every trial is a fresh cwd, so the dir holds this
@@ -288,6 +434,7 @@ mod tests {
             pattern: None,
             max_tool_calls: Some(max),
             tests: None,
+            rubric: None,
         }
     }
 
@@ -347,6 +494,130 @@ mod tests {
         let r = grade_tool_budget(&budget(40), empty.path());
         assert!(
             !r.passed && r.detail.contains("no transcript"),
+            "{}",
+            r.detail
+        );
+    }
+
+    fn rubric_check(hurdle_first: bool) -> super::super::bank::GradeCheck {
+        let tag = |hurdle: bool| {
+            if hurdle {
+                super::super::bank::RubricTag::Hurdle
+            } else {
+                super::super::bank::RubricTag::Principle
+            }
+        };
+        super::super::bank::GradeCheck {
+            kind: "rubric".into(),
+            command: None,
+            expect: 0,
+            path: Some("w.md".into()),
+            pattern: None,
+            max_tool_calls: None,
+            tests: None,
+            rubric: Some(super::super::bank::RubricSpec {
+                path: Some("w.md".into()),
+                diff: false,
+                criteria: vec![
+                    super::super::bank::RubricCriterion {
+                        id: "stays-rust".into(),
+                        text: "names a crates/ path".into(),
+                        tag: tag(hurdle_first),
+                    },
+                    super::super::bank::RubricCriterion {
+                        id: "concise".into(),
+                        text: "one line of reason".into(),
+                        tag: tag(!hurdle_first),
+                    },
+                ],
+            }),
+        }
+    }
+
+    struct FakeJudge {
+        hurdle_passes: bool,
+        fault: Option<String>,
+    }
+
+    impl super::super::rubric::Judge for FakeJudge {
+        fn panel(
+            &self,
+            _ask: &super::super::rubric::RubricAsk,
+        ) -> Vec<super::super::rubric::LaneVerdict> {
+            let cell = |lane: &str, passed: bool| super::super::rubric::LaneVerdict {
+                lane: lane.into(),
+                passed,
+                fault: None,
+            };
+            if let Some(why) = &self.fault {
+                return vec![
+                    cell("zai", true),
+                    super::super::rubric::LaneVerdict {
+                        lane: "codex".into(),
+                        passed: false,
+                        fault: Some(why.clone()),
+                    },
+                ];
+            }
+            vec![cell("zai", self.hurdle_passes), cell("codex", true)]
+        }
+    }
+
+    #[test]
+    fn a_failed_hurdle_fails_the_check_and_names_hurdle_and_judge() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("w.md"), "action: crates/x\n").unwrap();
+        let judge = FakeJudge {
+            hurdle_passes: false,
+            fault: None,
+        };
+        let r = grade_rubric(
+            &rubric_check(true),
+            dir.path(),
+            None,
+            Some("prompt"),
+            Some(&judge),
+        );
+        assert!(!r.passed, "{}", r.detail);
+        assert!(
+            r.detail.contains("stays-rust") && r.detail.contains("zai"),
+            "{}",
+            r.detail
+        );
+    }
+
+    #[test]
+    fn principles_only_lower_the_rate_and_a_judge_fault_reads_missing_never_pass() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("w.md"), "action: crates/x\n").unwrap();
+        // A failing principle drops one cell: 3 of 4 clean cells pass.
+        let judge = FakeJudge {
+            hurdle_passes: true,
+            fault: None,
+        };
+        let r = grade_rubric(
+            &rubric_check(false),
+            dir.path(),
+            None,
+            Some("prompt"),
+            Some(&judge),
+        );
+        assert!(r.passed, "{}", r.detail);
+        assert!(r.detail.contains("cells 3/4"), "{}", r.detail);
+        // AC2-EDGE: a faulting judge is a missing result, never a pass.
+        let judge = FakeJudge {
+            hurdle_passes: true,
+            fault: Some("timed out".into()),
+        };
+        let r = grade_rubric(
+            &rubric_check(false),
+            dir.path(),
+            None,
+            Some("prompt"),
+            Some(&judge),
+        );
+        assert!(
+            !r.passed && r.detail.contains("missing result"),
             "{}",
             r.detail
         );
