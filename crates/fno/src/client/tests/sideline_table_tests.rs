@@ -790,7 +790,7 @@ fn group_by_axes_build_labelled_bands_with_rollups() {
     assert_eq!(live.count(), 3, "flat keeps every live row");
 
     // The machine layer wraps the active axis only while its toggle is on.
-    let fleet = serde_json::json!({"machines": [{"host": "far", "fresh": true, "age_s": 9,
+    let fleet = serde_json::json!({"machines": [{"host": "imac2d2", "fresh": true, "age_s": 9,
         "sessions": [{"name": "boss", "harness": "claude", "role": "L1", "session_id": "aaaa1111-x"},
                      {"name": "w", "harness": "claude", "parent": "aaaa1111", "status": "writing"}]}]});
     let headers = |v: &View| -> Vec<String> {
@@ -811,33 +811,33 @@ fn group_by_axes_build_labelled_bands_with_rollups() {
     v.machine_tree.on = true;
     crate::client::machine_tree::apply(&mut v, Ok(fleet));
     let here = format!("{} · offline · 0s", crate::agents_view::hostname());
-    let far = ["far · ready · 9s", "  Working", "  Completed"];
+    let remote_rows = ["imac2d2 · ready · 9s", "  Working", "  Completed"];
     assert_eq!(
         headers(&v),
         [here.as_str(), "  Needs input", "  Working"]
             .into_iter()
-            .chain(far)
+            .chain(remote_rows)
             .collect::<Vec<_>>()
     );
     v.agent_group = AgentGroup::Team;
     assert_eq!(
         headers(&v)[3..],
-        ["far · ready · 9s", "  boss"],
-        "a far worker joins its lead"
+        ["imac2d2 · ready · 9s", "  boss"],
+        "a remote worker joins its lead"
     );
-    // Under workspace a far worker nests under its parent; flat keeps only
+    // Under workspace a remote worker nests under its parent; flat keeps only
     // the machine bands.
     v.agent_group = AgentGroup::Workspace;
     let (rows, depths) = v.tree_rows_with_depths();
-    let far: Vec<(&str, usize)> = (rows.iter().zip(&depths))
+    let remote_rows: Vec<(&str, usize)> = (rows.iter().zip(&depths))
         .filter_map(|(r, d)| match r {
             DisplayRow::Agent(a) if a.remote.is_some() => Some((a.name.as_str(), *d)),
             _ => None,
         })
         .collect();
-    assert_eq!(far, [("boss@far", 0), ("w@far", 1)]);
+    assert_eq!(remote_rows, [("boss@imac2d2", 0), ("w@imac2d2", 1)]);
     v.agent_group = AgentGroup::Flat;
-    assert_eq!(headers(&v), [here.as_str(), "far · ready · 9s"]);
+    assert_eq!(headers(&v), [here.as_str(), "imac2d2 · ready · 9s"]);
 }
 
 #[test]
@@ -937,6 +937,23 @@ async fn agents_tab_ctrl_t_pins_the_session_and_the_row_shows_it() {
     let mut pinned_b = b.clone();
     pinned_b.pinned = true;
     assert_eq!(agent_sort::pin_argv(&pinned_b).unwrap()[1], "--unkeep");
+    // A remote row's mark lives on its own machine: the handle names the host,
+    // and a row with no session id of its own still has a key to send.
+    let mut remote_row = mk("muriel@bb16", 6);
+    remote_row.remote = Some(crate::proto::RemoteRow {
+        host: "bb16".into(),
+        key: "133a419b".into(),
+        name: remote_row.name.clone(),
+    });
+    assert_eq!(
+        agent_sort::pin_argv(&remote_row).unwrap(),
+        vec!["reap", "--keep", "133a419b@bb16"]
+    );
+    remote_row.pinned = true;
+    assert_eq!(
+        agent_sort::pin_argv(&remote_row).unwrap(),
+        vec!["reap", "--unkeep", "133a419b@bb16"]
+    );
 
     let mut v = wide_view(vec![mk("a", 4), b]);
     let at = v

@@ -219,10 +219,9 @@ pub(crate) fn build_resume_argv_tokens_split(
             // NO permission bypass rides here, deliberately. A registry row
             // records no sandbox posture, so this lane cannot tell a bounded
             // worker from a yolo one, and an unconditional bypass would resume
-            // every bounded worker with approvals off. See the Python twin.
-            // Right after the grant, so the token order matches the Python
-            // twin exactly. `test_rust_command_parity` compares the two argvs
-            // element for element, so "both are globals" is not enough here.
+            // every bounded worker with approvals off. Right after the grant:
+            // the token order is the resume contract, kept exactly as the
+            // deleted Python twin held it element for element.
             // The split caller (the mux gesture) omits `--cd` when it passes
             // `pin_cd == false`: the worker lands on a fallback directory and
             // codex's own session-directory offer is the one a human can take.

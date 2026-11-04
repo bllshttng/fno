@@ -48,7 +48,6 @@ fn state_roots_rule_a_fires_on_a_hand_built_path_and_both_directions_hold() {
         root: dir.clone(),
         update: false,
         no_degrade: false,
-        providers_dir: None,
         json: false,
         live: false,
         base: None,
@@ -85,7 +84,6 @@ fn spawn_paths_fires_on_a_hand_assembled_session_argv() {
         root: dir.clone(),
         update: false,
         no_degrade: false,
-        providers_dir: None,
         json: false,
         live: false,
         base: None,
@@ -94,37 +92,6 @@ fn spawn_paths_fires_on_a_hand_assembled_session_argv() {
     // The allowlisted files stay silent: a clean tree passes.
     std::fs::remove_file(dir.join("cli/src/fno/rogue.py")).unwrap();
     assert_eq!(spawn_paths(&inv), 0);
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
-fn provider_stderr_merge_fires_without_a_justification_window() {
-    let dir = fixture("stderr-merge");
-    let harness_dir = dir.join("cli/src/fno/agents/harnesses");
-    std::fs::create_dir_all(&harness_dir).unwrap();
-    std::fs::write(
-        harness_dir.join("rogue.py"),
-        "import subprocess\nout = subprocess.run(cmd, stderr=subprocess.STDOUT)\n",
-    )
-    .unwrap();
-    std::fs::write(
-        harness_dir.join("locked.py"),
-        "import subprocess\n# Locked Decision: this provider's stderr is log noise only.\nout = subprocess.run(cmd, stderr=subprocess.STDOUT)\n",
-    )
-    .unwrap();
-    let inv = Invocation {
-        check: "provider-stderr-merge".into(),
-        root: dir.clone(),
-        update: false,
-        no_degrade: false,
-        providers_dir: None,
-        json: false,
-        live: false,
-        base: None,
-    };
-    assert_eq!(provider_stderr_merge(&inv), 1);
-    std::fs::remove_file(harness_dir.join("rogue.py")).unwrap();
-    assert_eq!(provider_stderr_merge(&inv), 0);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -178,7 +145,6 @@ fn command_ratchet_refuses_a_rust_leaf_the_baseline_lacks() {
         root: dir.clone(),
         update: false,
         no_degrade: false,
-        providers_dir: None,
         json: false,
         live: false,
         base: None,

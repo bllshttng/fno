@@ -31,10 +31,6 @@ on:
       - cli/src/fno/config/__init__.py
       - cli/src/fno/pr/_reviews.py
       - cli/src/fno/review_capability.py
-      - cli/src/fno/agents/spawn_gate.py
-      - cli/src/fno/agents/registry.py
-      - cli/src/fno/agents/store_fallback.py
-      - cli/src/fno/agents/mux_spawn.py
       - .github/workflows/rust-ci.yml
 
 jobs:
@@ -209,6 +205,14 @@ jobs:
             bash scripts/ops/mux-demo-snapshot.sh --out "shots/sideline-${size}.png" --format png --size "$size" --fit
           done
           bash scripts/ops/mux-demo-snapshot.sh --out shots/sideline-200x56-light.png --format png --theme light --size 200x56 --fit
+          # The other-machines layer: the second machine's rows by workspace
+          # and by status, where a remote row pins first and a blocked one bands
+          # under Needs input. The band sits below this machine's, so the
+          # frame is taller than the rest.
+          for group in workspace status; do
+            bash scripts/ops/mux-demo-snapshot.sh --out "shots/machines-${group}.png" --format png --view machines --group "$group" --remote-pane --size 200x72 --fit
+            bash scripts/ops/mux-demo-snapshot.sh --out "shots/machines-${group}-light.png" --format png --view machines --group "$group" --remote-pane --theme light --size 200x72 --fit
+          done
           # Two windows on one tab: the active big window fills, the same
           # window under the smallest policy letterboxes, and a small
           # observer crops a tab the big peer sized.

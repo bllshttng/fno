@@ -1,10 +1,11 @@
-//! Mirror of the Python inherited-model-env scrub
-//! (`cli/src/fno/agents/model_routing.py`). The Python seam covers the `fno`
-//! front door; the compiled client is reachable without it (`fno-agents
-//! spawn`, the loop runtime), and both Rust claude spawn arms would otherwise
-//! hand the child the parent env verbatim. A Python test parses this file's
-//! `MODEL_ENV_KEYS` mirror and pins it to the Python tuple, the same
-//! anti-drift move the SessionStart hook's var list uses.
+//! Mirror of the inherited-model-env scrub the retired Python
+//! (`cli/src/fno/agents/model_routing.py`) owned. The Python seam covered
+//! the `fno` front door; the compiled client is reachable without it
+//! (`fno-agents spawn`, the loop runtime), and both Rust claude spawn arms
+//! would otherwise hand the child the parent env verbatim. The shell twin is
+//! the SessionStart attestation hook's var list
+//! (`hooks/attest-model.sh` `MODEL_ENV_VARS`), pinned by the
+//! `model_env_lists_stay_equal` test in `tests/hooks/test_attest_model.sh`.
 //!
 //! A strip, never a refusal: a long-lived daemon stamps the env of its first
 //! shell into every child it spawns, and a refusal at 3am kills a loop over a
@@ -14,7 +15,9 @@
 
 use std::path::PathBuf;
 
-/// The five model vars, one list with the Python `MODEL_ENV_KEYS`.
+/// The five model vars, one list with the shell twin
+/// `MODEL_ENV_VARS` in `hooks/attest-model.sh`; the
+/// `model_env_lists_stay_equal` test pins the pair.
 pub const MODEL_ENV_KEYS: [&str; 5] = [
     "ANTHROPIC_MODEL",
     "ANTHROPIC_DEFAULT_OPUS_MODEL",

@@ -50,6 +50,8 @@ The built-in paint list also covers `README.md` and `docs/images/**`, so public 
 
 The hold also holds CI. While `visual_approval` stands at a head, the daemon's `look_hold` arm cancels every run on it but `rust-ci.yml`, which carries the shots. The answer at that head reruns them. See [pr-heal](pr-heal.md#the-look-hold).
 
+The page waits for a design critique. Before it files the page, the gate reads `<node>-critique.json` in the vault `mux` folder. The `fno:design-critic` agent fills it against [the mux design system](mux-design-system.md). The gate holds and files nothing in five cases. The file is missing or names an older head. It lacks the `critic` stamp or has an empty `checked` list. It holds a malformed finding. The detail names the bad field or the two commands to run. If a finding is `high`, the gate holds and lists each one as `view / region / rule`. Otherwise the page gains two sections, "What the critic checked" and "What the critic left". The second lists the medium and low findings and the views the critic did not judge. Every one of these holds keeps the code `visual_approval`. A paint diff that changes only comments or code names carries no `visual_approval` at all.
+
 The Python ready conjunction is retired (`_ready_blockers`, the waiver overlay, the posture and rerun appends). The waiver overlay runs inside the coverage gate the preview shells (`fno do pr coverage-check`). A waived PR exits 0 at the gate, and no status copy of the overlay can drift from it.
 
 ## The GitHub merge state conjunct

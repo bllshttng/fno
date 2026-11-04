@@ -19,6 +19,7 @@ A cell is a projection, never a fresh measurement. The rule, in order:
 | autocorrect | - | native | native | `absent` | native | native | native | `unmeasured` | `unmeasured` | native | native | native | native | native |
 | blueprint | - | native | native | `absent` | native | native | native | `unmeasured` | `unmeasured` | native | native | native | native | native |
 | cache-keepalive | claude | native | absent | `absent` | absent | absent | absent | `unmeasured` | `unmeasured` | absent | absent | absent | absent | absent |
+| design-critic | - | native | native | `absent` | native | native | native | `unmeasured` | `unmeasured` | native | native | native | native | native |
 | dnd | - | native | native | `absent` | native | native | native | `unmeasured` | `unmeasured` | native | native | native | native | native |
 | execute | - | native | native | `absent` | native | native | native | `unmeasured` | `unmeasured` | native | native | native | native | native |
 | fix | - | native | native | `absent` | native | native | native | `unmeasured` | `unmeasured` | native | native | native | native | native |
@@ -42,6 +43,7 @@ A cell is a projection, never a fresh measurement. The rule, in order:
 | think | - | native | native | `absent` | native | native | native | `unmeasured` | `unmeasured` | native | native | native | native | native |
 | triage | subagent_dispatch | native | native | `absent` | native | native | native | `unmeasured` | `unmeasured` | native | native | native | native | native |
 | using-fno | - | native | native | `absent` | native | native | native | `unmeasured` | `unmeasured` | native | native | native | native | native |
+| verify-footnotes | - | native | native | `absent` | native | native | native | `unmeasured` | `unmeasured` | native | native | native | native | native |
 
 The loop refusals the matrix quotes:
 

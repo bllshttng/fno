@@ -19,6 +19,9 @@ use crate::proto::RemoteRow;
 
 const READ_EVERY: Duration = Duration::from_secs(15);
 
+/// The status band for a session waiting on the user, in the local band's words.
+const NEEDS_INPUT: &str = "Needs input";
+
 /// Another machine's session: its row and the band each axis files it under.
 #[derive(Debug)]
 struct Seat {
@@ -26,9 +29,14 @@ struct Seat {
     project: String,
     lead: String,
     cwd: String,
-    /// The fleet map says `writing`. Its status words carry no needs-input
-    /// state, so a far row never lands in that band.
+    /// The fleet map says `writing`.
     working: bool,
+    /// The seat is blocked on the user, as its own machine's badge says, and
+    /// that machine's beat is fresh enough to act on.
+    needs_input: bool,
+    /// The workspace its own machine's mux files it under. Absent when no mux
+    /// there names one, and the project stands in.
+    workspace: Option<String>,
     /// Its session id, and its parent seat's, for nesting under workspace.
     id: Option<String>,
     parent: Option<String>,
@@ -73,6 +81,11 @@ impl MachineTree {
             .count()
     }
 
+    /// The layer paints only with the toggle on and a second machine reporting.
+    pub(super) fn layered(&self) -> bool {
+        self.on && self.bands.len() >= 2
+    }
+
     /// The rows this tree painted, for a menu action to resolve at execution time.
     pub(super) fn rows(&self) -> impl Iterator<Item = &AgentRow> {
         self.bands
@@ -82,7 +95,7 @@ impl MachineTree {
     }
 }
 
-/// Turning the toggle off drops the bands at once, so no far row outlives it.
+/// Turning the toggle off drops the bands at once, so no remote row outlives it.
 pub(super) fn set_on(view: &mut View, on: bool) {
     view.machine_tree = MachineTree {
         on,
@@ -178,14 +191,17 @@ fn fold_seat(seat: &Value, all: &[&Value], host: &str, band: &Band) -> Seat {
             .unwrap_or_default();
         base.to_string()
     });
+    let needs_input = band.fresh && seat["needs_input"].as_bool() == Some(true);
     Seat {
-        row: remote_row(seat, host, seat_state(seat, band)),
+        row: remote_row(seat, host, needs_input),
         project: text(seat, "project").unwrap_or_else(|| "(no project)".into()),
         lead: lead_of(seat, all),
         cwd: cwd
             .filter(|c| !c.is_empty())
             .unwrap_or_else(|| "(no cwd)".into()),
         working: text(seat, "status").as_deref() == Some("writing"),
+        needs_input,
+        workspace: text(seat, "workspace"),
         id: text(seat, "session_id"),
         parent: parent_seat(seat, all).and_then(|p| text(p, "session_id")),
     }
@@ -199,7 +215,7 @@ fn parent_seat<'a>(seat: &Value, all: &[&'a Value]) -> Option<&'a Value> {
     seats.find(|s| text(s, "session_id").is_some_and(|id| id.starts_with(&head)))
 }
 
-/// The far twin of `team_lead_name`: the seat itself when it holds a role,
+/// The remote twin of `team_lead_name`: the seat itself when it holds a role,
 /// else the first ancestor that does.
 fn lead_of<'a>(seat: &'a Value, all: &[&'a Value]) -> String {
     let mut at = seat;
@@ -215,25 +231,13 @@ fn lead_of<'a>(seat: &'a Value, all: &[&'a Value]) -> String {
     "~ unteamed".into()
 }
 
-/// What a far card says the session is doing. A stale beat outranks the
-/// seat's own word: the session may be fine, but this mux cannot see it.
-fn seat_state(seat: &Value, band: &Band) -> String {
-    let age = |s: i64| super::overlay_lines::humanize_age(Some(s.max(0) as u64));
-    if !band.fresh {
-        return format!("offline {}", age(band.age_s).trim());
-    }
-    if text(seat, "status").as_deref() == Some("writing") {
-        return "working".into();
-    }
-    match seat["age_s"].as_i64() {
-        Some(s) => format!("idle {}", age(s).trim()),
-        None => "idle".into(),
-    }
-}
-
-/// A fleet seat as a row. `name@host` is the address peek and mail already
-/// route, so those two work from the name alone.
-fn remote_row(seat: &Value, host: &str, state: String) -> AgentRow {
+/// A fleet seat as a row that paints like a local one: the same model, cost,
+/// context, token and compaction fields, and the last line the session wrote.
+/// A count its own machine has no reading for stays `None` and the card hides
+/// it. `name@host` is the address peek and mail already route, so those two
+/// work from the name alone. A seat waiting on the user badges blocked, so it
+/// sorts and rolls up as a local blocked row does.
+fn remote_row(seat: &Value, host: &str, needs_input: bool) -> AgentRow {
     let name = text(seat, "name").unwrap_or_default();
     let address = format!("{name}@{host}");
     AgentRow {
@@ -244,12 +248,17 @@ fn remote_row(seat: &Value, host: &str, state: String) -> AgentRow {
         // the name.
         model: text(seat, "model"),
         context_used_pct: seat["context_pct"].as_u64().map(|pct| pct.min(100) as u8),
-        badge: match text(seat, "status").as_deref() {
-            Some("writing") => Some(AgentBadge::Working),
-            Some("blocked") => Some(AgentBadge::Blocked),
-            _ => None,
+        session_cost_cents: seat["cost_cents"].as_u64(),
+        session_tokens: seat["tokens"].as_u64(),
+        compaction_count: seat["compactions"].as_u64(),
+        tail: text(seat, "last_message"),
+        badge: if needs_input {
+            Some(AgentBadge::Blocked)
+        } else {
+            (text(seat, "status").as_deref() == Some("writing")).then_some(AgentBadge::Working)
         },
-        // The Created and Modified sorts read these, so a far row orders by
+        pinned: seat["pinned"].as_bool() == Some(true),
+        // The Created and Modified sorts read these, so a remote row orders by
         // its own times inside a band.
         started_at: stamp(seat, "started_at"),
         updated_at: stamp(seat, "last_message_at"),
@@ -257,7 +266,6 @@ fn remote_row(seat: &Value, host: &str, state: String) -> AgentRow {
             host: host.to_string(),
             key: text(seat, "session_id").unwrap_or(name),
             name: address,
-            state,
         }),
         ..AgentRow::default()
     }
@@ -269,12 +277,13 @@ fn stamp(seat: &Value, key: &str) -> Option<u64> {
     Some(at.timestamp().max(0) as u64)
 }
 
-/// The band a far seat joins on the active axis, the local axis's own words.
+/// The band a remote seat joins on the active axis, the local axis's own words.
 fn seat_label(group: AgentGroup, seat: &Seat) -> String {
     match group {
-        AgentGroup::Workspace => seat.project.clone(),
+        AgentGroup::Workspace => (seat.workspace.clone()).unwrap_or_else(|| seat.project.clone()),
         AgentGroup::Team => seat.lead.clone(),
         AgentGroup::Cwd => seat.cwd.clone(),
+        AgentGroup::Status if seat.needs_input => NEEDS_INPUT.into(),
         AgentGroup::Status if seat.working => "Working".into(),
         AgentGroup::Status => "Completed".into(),
         AgentGroup::Harness => (seat.row.harness.clone()).unwrap_or_else(|| "(no harness)".into()),
@@ -301,10 +310,15 @@ fn remote_rows<'a>(view: &'a View, band: &'a Band) -> (Vec<DisplayRow<'a>>, Vec<
             None => buckets.push((label, vec![seat])),
         }
     }
-    // Status keeps its fixed order, Working before Completed; the rest read
-    // alphabetically.
+    // Status keeps its fixed order, Needs input then Working then Completed,
+    // the order a local status band takes; the rest read alphabetically.
+    let status_rank = |label: &str| match label {
+        NEEDS_INPUT => 0,
+        "Working" => 1,
+        _ => 2,
+    };
     buckets.sort_by(|a, b| match group {
-        AgentGroup::Status => b.0.cmp(&a.0),
+        AgentGroup::Status => status_rank(&a.0).cmp(&status_rank(&b.0)),
         _ => a.0.cmp(&b.0),
     });
     let (mut out, mut depths) = (Vec::new(), Vec::new());
@@ -341,14 +355,14 @@ impl View {
     /// per machine while the toggle is on and a second machine reports.
     pub(super) fn tree_rows_with_depths(&self) -> (Vec<DisplayRow<'_>>, Vec<usize>) {
         let tree = &self.machine_tree;
-        if !tree.on || tree.bands.len() < 2 {
+        if !tree.layered() {
             return self.local_rows_with_depths();
         }
         let (mut out, mut depths) = (Vec::new(), Vec::new());
         for band in &tree.bands {
             let (rows, band_depths, states): (Vec<_>, Vec<_>, Vec<_>) = if band.local {
                 let (rows, d) = self.local_rows_with_depths();
-                // One indent under the machine, the same step the far bands take.
+                // One indent under the machine, the same step the remote bands take.
                 let rows = rows.into_iter().map(|row| match row {
                     DisplayRow::Header {
                         label,
@@ -399,7 +413,7 @@ impl View {
     }
 }
 
-/// Show a far row in a portal, through the reach a local paneless row takes.
+/// Show a remote row in a portal, through the reach a local paneless row takes.
 /// The server runs the link in the seat. A refusal lands as a notice here.
 pub(super) async fn reach(
     view: &mut View,
@@ -418,7 +432,7 @@ pub(super) async fn reach(
         .map_err(|e| format!("open send failed: {e}"))
 }
 
-/// Enter on a far row: the portal a local row's Enter names.
+/// Enter on a remote row: the portal a local row's Enter names.
 pub(super) async fn open(
     view: &mut View,
     remote: RemoteRow,
@@ -464,12 +478,8 @@ mod tests {
             (remote.host.as_str(), remote.key.as_str()),
             ("bb16", "133a419b")
         );
-        assert_eq!(remote.state, "working");
         let ines = bands[1].seats[1].row.remote.as_ref().unwrap();
-        assert_eq!(
-            (ines.key.as_str(), ines.state.as_str()),
-            ("ines", "idle 3m")
-        );
+        assert_eq!(ines.key, "ines");
 
         let stale =
             json!({"host": "bb16", "age_s": 120, "sessions": [{"name": "x", "harness": "codex"}]});
@@ -478,10 +488,62 @@ mod tests {
         assert!(bands[0].local, "this machine keeps a band with no beat");
         assert!(!bands[0].fresh);
         assert_eq!(bands.len(), 3);
-        let x = bands[1].seats[0].row.remote.as_ref().unwrap();
+        assert!(!bands[1].fresh, "a stale beat reads offline on its band");
+    }
+
+    #[test]
+    fn a_remote_seat_files_badges_pins_and_prices_by_its_machines_marks() {
+        let map = json!({"machines": [
+            {"host": "bb16", "local": false, "fresh": true, "age_s": 5, "sessions": [
+                {"name": "muriel", "harness": "claude", "project": "fno",
+                 "workspace": "footnote", "session_id": "133a419b", "status": "writing",
+                 "needs_input": true, "pinned": true, "cost_cents": 412, "tokens": 90000,
+                 "compactions": 2, "context_pct": 41, "last_message": "reading the diff"},
+                {"name": "ines", "harness": "claude", "project": "fnh", "age_s": 180},
+            ]},
+            {"host": "mbp3", "local": false, "fresh": false, "age_s": 400, "sessions": [
+                {"name": "dusty", "harness": "claude", "project": "fno", "needs_input": true},
+            ]},
+        ]});
+        let bands = fold(&map);
+        let seats = |host: &str| &bands.iter().find(|b| b.host == host).unwrap().seats;
+        let (muriel, ines) = (&seats("bb16")[0], &seats("bb16")[1]);
+        assert_eq!(seat_label(AgentGroup::Workspace, muriel), "footnote");
         assert_eq!(
-            x.state, "offline 2m",
-            "a stale beat outranks the seat's word"
+            seat_label(AgentGroup::Workspace, ines),
+            "fnh",
+            "with no workspace the project stands in"
         );
+        assert_eq!(seat_label(AgentGroup::Status, muriel), "Needs input");
+        assert_eq!(seat_label(AgentGroup::Status, ines), "Completed");
+        assert_eq!(muriel.row.badge, Some(AgentBadge::Blocked));
+        assert!(muriel.row.pinned && !ines.row.pinned);
+        let row = &muriel.row;
+        assert_eq!(
+            (
+                row.session_cost_cents,
+                row.session_tokens,
+                row.compaction_count,
+                row.context_used_pct,
+                row.tail.as_deref(),
+            ),
+            (
+                Some(412),
+                Some(90_000),
+                Some(2),
+                Some(41),
+                Some("reading the diff")
+            ),
+            "a remote row carries the fields a local card paints"
+        );
+        let bare = &ines.row;
+        assert!(
+            bare.session_cost_cents.is_none() && bare.session_tokens.is_none(),
+            "no reading is no zero"
+        );
+
+        let dusty = &seats("mbp3")[0];
+        assert!(!dusty.needs_input, "a stale beat raises no alert");
+        assert_eq!(seat_label(AgentGroup::Status, dusty), "Completed");
     }
 }
