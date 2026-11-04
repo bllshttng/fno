@@ -40,7 +40,7 @@ fn a_live_working_report_blocks_the_tick_retirement() {
             })
             .collect()
     };
-    let summary = run_probe_unread_sweep(&home, &emitter, &age_seam, false);
+    let summary = run_probe_unread_sweep(&home, &emitter, &age_seam, false, None);
     assert_eq!(summary.retired.len(), 0, "{:?}", summary.retired);
     let (id, detail) = summary
         .kept_probe_unread
@@ -88,7 +88,7 @@ fn an_unanswered_re_read_after_a_new_turn_holds_by_name() {
             })
             .collect()
     };
-    let summary = run_probe_unread_sweep(&home, &emitter, &age_seam, false);
+    let summary = run_probe_unread_sweep(&home, &emitter, &age_seam, false, None);
     assert_eq!(summary.retired.len(), 0, "{:?}", summary.retired);
     let (id, detail) = summary
         .kept_probe_unread
@@ -171,19 +171,23 @@ fn a_row_no_witness_can_lift_retires_past_a_day_and_the_dry_run_agrees() {
             .map(|(id, _)| id.clone())
             .collect()
     };
-    let dry = run_probe_unread_sweep(&home, &emitter, &unread, true);
+    let ids =
+        |s: &GcSummary| -> Vec<String> { s.retired.iter().map(|(id, _)| id.clone()).collect() };
+    // Unpreviewed, the rehearsal names the surface gate it cannot apply.
+    let blind = run_probe_unread_sweep(&home, &emitter, &unread, true, None);
+    assert!(ids(&blind).is_empty(), "{blind:?}");
+    let clear = |_: &state::RegistryEntry| true;
+    let dry = run_probe_unread_sweep(&home, &emitter, &unread, true, Some(&clear));
     assert_eq!(held(&dry), vec!["t-new".to_string()], "{dry:?}");
-    assert!(
-        dry.dry_run_unverified
-            .iter()
-            .chain(&dry.needs_live_stop)
-            .any(|(id, _)| id == "t-old"),
-        "the rehearsal names the old row past the probe: {dry:?}"
-    );
-    let live = run_probe_unread_sweep(&home, &emitter, &unread, false);
+    assert!(dry.dry_run_unverified.is_empty(), "{dry:?}");
+    let live = run_probe_unread_sweep(&home, &emitter, &unread, false, None);
     assert_eq!(held(&live), vec!["t-new".to_string()], "{live:?}");
-    let retired: Vec<&str> = live.retired.iter().map(|(id, _)| id.as_str()).collect();
-    assert_eq!(retired, vec!["t-old"], "{:?}", live.retired);
+    assert_eq!(ids(&live), vec!["t-old".to_string()], "{:?}", live.retired);
+    assert_eq!(
+        ids(&dry),
+        ids(&live),
+        "the previewed dry run predicts the live sweep"
+    );
     let hold = live.holds.iter().find(|h| h.id == "t-new").expect("hold");
     assert_eq!(hold.age_basis, "row exited");
 }
@@ -300,8 +304,9 @@ fn run_probe_unread_sweep(
     emitter: &EventEmitter,
     age_seam: &dyn Fn(&[&state::RegistryEntry]) -> std::collections::HashMap<String, Option<i64>>,
     dry_run: bool,
+    surface_preview: Option<&dyn Fn(&state::RegistryEntry) -> bool>,
 ) -> GcSummary {
-    gc_sweep::run(
+    gc_sweep::run_with_release(
         home,
         emitter,
         900,
@@ -316,5 +321,8 @@ fn run_probe_unread_sweep(
         &no_agents,
         &|_| (Some(true), Some(true)),
         &|_| None,
+        false,
+        None,
+        surface_preview,
     )
 }

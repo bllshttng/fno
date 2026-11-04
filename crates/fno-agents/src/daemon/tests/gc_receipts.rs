@@ -2470,6 +2470,7 @@ fn stage_direct(
         crate::gc_sweep::StopObservation::Unproven,
         false,
         false,
+        false,
         stop,
         kill,
         &|_| crate::daemon::CascadeOutcome::NotApplicable,

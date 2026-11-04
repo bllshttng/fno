@@ -1494,6 +1494,7 @@ pub(crate) fn run(
         prune_tree,
         false,
         None,
+        None,
     )
 }
 
@@ -1534,6 +1535,7 @@ pub(crate) fn run_done_only(
         prune_tree,
         true,
         None,
+        None,
     )
 }
 
@@ -1565,6 +1567,7 @@ pub(crate) fn run_with_release(
     prune_tree: &dyn Fn(&state::RegistryEntry) -> Option<crate::daemon::PruneOutcome>,
     only_done: bool,
     release: Option<&Release>,
+    surface_preview: Option<&dyn Fn(&state::RegistryEntry) -> bool>,
 ) -> GcSummary {
     let mut summary = GcSummary::default();
     // The retention pass runs on EVERY sweep, before the empty-registry early
@@ -2267,6 +2270,7 @@ pub(crate) fn run_with_release(
             } else {
                 StopObservation::Unproven
             };
+        let dry_surface_clear = dry_run && surface_preview.is_some_and(|preview| preview(e));
         let staged = match stage_session_retirement(
             home,
             e,
@@ -2277,6 +2281,7 @@ pub(crate) fn run_with_release(
                 RetireMode::Apply
             },
             stop_observation,
+            dry_surface_clear,
             released,
             idle_hour_past,
             &stop_on_death,
@@ -2560,6 +2565,7 @@ pub(crate) fn stage_session_retirement(
     ledger_rows: Option<&[Value]>,
     mode: RetireMode,
     stop_observation: StopObservation,
+    dry_surface_clear: bool,
     session_released: bool,
     idle_hour_past: bool,
     stop_confirmed: &dyn Fn(&state::RegistryEntry) -> bool,
@@ -2617,8 +2623,9 @@ pub(crate) fn stage_session_retirement(
         // the rehearsal never fires an effect, and it does not
         // report a row as retiring while a mutation-only gate stands
         // unevaluated between it and a real retirement. The stop gate the
-        // caller already read answers here; the active-surface removal can
-        // only be known by applying it, so the row lands in the sweep's
+        // caller already read answers here. The active-surface removal is
+        // known only when the caller's read-only preview proved both native
+        // effects are no-ops; any other row lands in the sweep's
         // dry_run_unverified bucket - named, never in retired.
         return match stop_observation {
             StopObservation::Unproven => Err(RetireRefusal::StopUnproven(
@@ -2628,9 +2635,11 @@ pub(crate) fn stage_session_retirement(
             )),
             StopObservation::Proven => {
                 receipts.insert(e.name.clone(), receipt);
-                Ok(StagedRetirement::Unverified(
-                    "active-surface removal was not evaluated".into(),
-                ))
+                Ok(if dry_surface_clear {
+                    StagedRetirement::Retired
+                } else {
+                    StagedRetirement::Unverified("active-surface removal was not evaluated".into())
+                })
             }
         };
     }

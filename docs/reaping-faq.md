@@ -122,7 +122,7 @@ The `held` line is the trap. The line reads `held {id} (needs live stop: {reason
 
 The guard exists because of one incident. On 2026-09-08 a dry run promised 9 retirements, and the real run retired 0 (`gc_sweep.rs` `needs_live_stop`).
 
-The rehearsal has a second honest hold: `held {id} (dry-run did not evaluate: {gate}; apply may still refuse)`. A dry-run row whose remaining gate needs a mutation is named where it stands. It is never planted into `retired` or `pruned`, so neither count can read a promise the run did not evaluate (`gc_sweep.rs` `run_with_release`). The apply run can still refuse that gate: the dry-run report says `apply may still refuse`, naming the uncertainty.
+The rehearsal has a second honest hold: `held {id} (dry-run did not evaluate: {gate}; apply may still refuse)`. A dry-run row whose remaining gate needs a mutation is named where it stands. It is never planted into `retired` or `pruned`, so neither count can read a promise the run did not evaluate (`gc_sweep.rs` `run_with_release`). The apply run can still refuse that gate: the dry-run report says `apply may still refuse`, naming the uncertainty. One row shape skips the hold. It is a claude row with no pane and no mux ref, absent from the claude roster union, with no live squad member. For that row the live surface removal reads already-absent and the mux retirement reads not-applicable, and neither acts. The dry run reads the same two sources without acting (`gc_native.rs` `surface_provably_clear`), so it lists the row under `retired`, as the live sweep will.
 
 If the dry run prints a `held` line, run the real command and read its verdict.
 
