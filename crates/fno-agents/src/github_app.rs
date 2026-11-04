@@ -74,7 +74,7 @@ fn inject_with(cmd: &mut Command, token: Option<&str>) {
 
 fn installation_token() -> Option<String> {
     let cfg = app_config()?;
-    let notice = |reason: String| notice_fallback_once(&reason);
+    let notice = |reason: &str| notice_fallback_once(reason);
     token_from(
         Some(cfg),
         &cache_path(),
@@ -82,7 +82,7 @@ fn installation_token() -> Option<String> {
         |cfg, now| {
             mint(cfg, now)
                 .map_err(|e| {
-                    notice(e);
+                    notice(&e);
                     e
                 })
                 .ok()
@@ -120,11 +120,11 @@ fn expand_tilde(path: &Path) -> PathBuf {
 fn config_string(keys: &[&str]) -> Option<String> {
     let value = crate::agents_config::config_lookup_global(keys)?;
     match &value {
-        Value::String(s) => {
+        toml::Value::String(s) => {
             let s = s.trim().to_string();
             (!s.is_empty()).then_some(s)
         }
-        Value::Integer(i) => Some(i.to_string()),
+        toml::Value::Integer(i) => Some(i.to_string()),
         _ => None,
     }
 }
@@ -299,7 +299,7 @@ fn sign_jwt(pkcs8_der: &[u8], app_id: &str, now_ms: i64) -> Result<String, Strin
         .as_bytes(),
     );
     let signing_input = format!("{header}.{claims}");
-    let mut sig = vec![0u8; key.public_modulus_len()];
+    let mut sig = vec![0u8; key.public().modulus_len()];
     key.sign(
         &ring::signature::RSA_PKCS1_SHA256,
         &ring::rand::SystemRandom::new(),
