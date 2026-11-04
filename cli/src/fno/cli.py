@@ -66,61 +66,23 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
         "Evaluate generic delivery evidence.",
         {"hidden": True},
     ),
-    # the entries below whose names
-    # are retired at the front door (crates/fno/command-names.tsv) and answer
-    # only through fno-py.
-    "bundle": (
-        "fno.doctor_foreign:bundle_signpost",
-        "Skill bundle build + lint; moved to `fno doctor bundle`.",
-        {"hidden": True},
-    ),
-    "resume": (
-        "fno.resume_receipt_cli:cli",
-        "Durable typed resume receipts (evidence, never write authority)",
-        {"hidden": True},
-    ),
+    # the entries below whose names are retired at the front door
+    # (crates/fno/command-names.tsv) and answer only through fno-py.
     "config": ("fno.config_writer_cli:app", "Configuration management"),
-    "paths": ("fno.paths_cli:app", "Path resolution helpers", {"hidden": True}),
     # `fno route` (the hidden root spelling of the provider route lanes)
     # answers natively: the front classifies it onto route-slot's
     # config-route mode, so no Python mount remains. The worktree family's
     # root spellings joined the same way with its port. `fno scoreboard`
     # joined too: the front prints the command_moves notice and re-spells to
     # `fno whoami scoreboard`.
-    "evals": (
-        "fno.evals_cli:evals_app",
-        "Golden-task efficacy evals (run / report / diff)",
-        {"hidden": True},
-    ),
     "pr-watch": (
         "fno.do_cli:pr_watch_command",
         "PR-state watcher: auto-fire /fno:ship pr check + /fno:ship pr merged for open-PR backlog nodes",
         {"hidden": True},
     ),
     # Individual commands (plain functions wrapped as single-command apps) -
-    # `fno whoami` itself is native; this lazy row hosts the four hidden
-    # leaves other families still own (fno.whoami_leaves). `status` and
-    # `cost` are move-intercepted spellings; their rows stay for the release
-    # clock, now pointing at the leaf stub they land on.
-    "whoami": (
-        "fno.whoami_leaves:whoami_app",
-        "Operating-stack summary: project + fleet + walker + session + harness.",
-    ),
-    "status": (
-        "fno.whoami_leaves:whoami_app",
-        "Session gate satisfaction + bounded events tail + inconsistencies.",
-        {"hidden": True},
-    ),
-    "cost": (
-        "fno.whoami_leaves:cost_command",
-        "Cost + usage metrics from session transcripts and ledger.json.",
-        {"hidden": True},
-    ),
-    "doctor": (
-        "fno.doctor_foreign:doctor_app",
-        "Foreign doctor leaves (evals, lint); the family's own surfaces are native.",
-        {},
-    ),
+    # `fno whoami`, its cost/ledger leaves and the whole `fno doctor` family
+    # answer natively at the Rust front door; no Python rows remain.
     "update": (
         "fno.rust_binary:_update_signpost",
         "The updater is native: the Rust front door answers `update` and `doctor update`.",
@@ -135,10 +97,6 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
 COLLAPSE_KEEP: dict[str, set[str]] = {
     "config": {"accounts", "get", "set"},
     "do": set(),
-    "doctor": set(),
-    "evals": set(),
-    "paths": set(),
-    "resume": set(),
 }
 
 for _group_name, _keep in COLLAPSE_KEEP.items():

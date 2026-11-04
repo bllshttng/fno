@@ -334,16 +334,16 @@ def test_lazy_import_retries_once_when_the_tree_changed_underneath(monkeypatch):
     import typer
     from typer.testing import CliRunner
 
-    real_target = importlib.import_module("fno.resume_receipt_cli")
+    real_target = importlib.import_module("fno.do_cli")
     calls = _counting_import(
         monkeypatch,
-        "fno.resume_receipt_cli",
-        [ModuleNotFoundError("gone", name="fno.resume_receipt_cli._mid_reinstall"), real_target],
+        "fno.do_cli",
+        [ModuleNotFoundError("gone", name="fno.do_cli._mid_reinstall"), real_target],
     )
     monkeypatch.setattr(lg, "_module_appears_on_disk", lambda name: True)
 
     app = typer.Typer(
-        cls=make_lazy_group_cls({"resume": "fno.resume_receipt_cli:cli"}),
+        cls=make_lazy_group_cls({"do": "fno.do_cli:do_app"}),
         no_args_is_help=True,
         pretty_exceptions_enable=False,
         rich_markup_mode=None,
@@ -353,7 +353,7 @@ def test_lazy_import_retries_once_when_the_tree_changed_underneath(monkeypatch):
     def _cb() -> None:
         pass
 
-    result = CliRunner().invoke(app, ["resume", "--help"])
+    result = CliRunner().invoke(app, ["do", "--help"])
     assert len(calls) == 2, f"expected exactly one retry, got {len(calls)} imports"
     assert result.exit_code == 0, result.output
 
@@ -369,13 +369,13 @@ def test_lazy_import_does_not_retry_when_the_module_is_really_missing(monkeypatc
 
     calls = _counting_import(
         monkeypatch,
-        "fno.resume_receipt_cli",
-        [ModuleNotFoundError("gone", name="fno.resume_receipt_cli._really_gone")],
+        "fno.do_cli",
+        [ModuleNotFoundError("gone", name="fno.do_cli._really_gone")],
     )
     monkeypatch.setattr(lg, "_module_appears_on_disk", lambda name: False)
 
     app = typer.Typer(
-        cls=make_lazy_group_cls({"resume": "fno.resume_receipt_cli:cli"}),
+        cls=make_lazy_group_cls({"do": "fno.do_cli:do_app"}),
         no_args_is_help=True,
         pretty_exceptions_enable=False,
         rich_markup_mode=None,
@@ -385,7 +385,7 @@ def test_lazy_import_does_not_retry_when_the_module_is_really_missing(monkeypatc
     def _cb() -> None:
         pass
 
-    result = CliRunner().invoke(app, ["resume", "--help"])
+    result = CliRunner().invoke(app, ["do", "--help"])
     assert len(calls) == 1, f"a missing module must not be retried; got {len(calls)}"
     assert result.exit_code != 0
     combined = (result.output or "") + (result.stderr if hasattr(result, "stderr") else "")
@@ -436,7 +436,7 @@ def test_import_hook_retries_a_module_that_is_on_disk_now(monkeypatch):
 
     This is the same disk-recheck-then-retry-once `_load_real` does, reaching the
     ~2000 function-level `from fno. ...` imports inside command bodies that the
-    lazy group never sees -- `fno harness-id` -> `fno.harness_identity`
+    lazy group never sees -- `fno harness-id` -> `fno.do_cli`
     among them.
     """
     import fno
@@ -454,11 +454,11 @@ def test_import_hook_retries_a_module_that_is_on_disk_now(monkeypatch):
     monkeypatch.setattr(fno, "_module_appears_on_disk", lambda name: checked.append(name) or True)
     _spy_path_finder(monkeypatch, seen)
 
-    spec = finder.find_spec("fno.harness_identity", None, None)
+    spec = finder.find_spec("fno.do_cli", None, None)
 
     assert spec == "SPEC"
-    assert checked == ["fno.harness_identity"], "the shared re-check is the gate"
-    assert seen == ["fno.harness_identity"], "retried exactly once, no loop"
+    assert checked == ["fno.do_cli"], "the shared re-check is the gate"
+    assert seen == ["fno.do_cli"], "retried exactly once, no loop"
 
 
 def test_namespace_refuser_blocks_the_poison_before_it_caches(monkeypatch, tmp_path):
