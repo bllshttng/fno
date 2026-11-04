@@ -2,9 +2,10 @@
 //! (repo, PR, head), flock-protected, refreshed at most once per TTL, served
 //! degraded inside a fleet backoff. Ported from `fno.pr._cache`.
 //!
-//! Code default, deliberately not operator config: TTL 60s. Env overrides
-//! exist for tests and one-off tuning: FNO_PR_STATUS_TTL,
-//! FNO_PR_STATUS_CACHE_DIR.
+//! Code default, deliberately not operator config: TTL 60s, and a settled
+//! row serves a head-pinned caller for the settled TTL instead. Env
+//! overrides exist for tests and one-off tuning: FNO_PR_STATUS_TTL,
+//! FNO_PR_STATUS_SETTLED_TTL, FNO_PR_STATUS_CACHE_DIR.
 
 use super::compose::{serve_notes, verdict_line};
 use super::RestReason;
