@@ -175,6 +175,13 @@ if [[ -z "${FNO_AGENTS_BIN:-}" ]]; then
     done
 fi
 if [[ -n "${FNO_AGENTS_BIN:-}" ]]; then
+    # The gp cases run first. The strict bpg cases also write a
+    # git-protection allow row, and a second row with the same guard,
+    # decision and tool adds nothing to the committed count.
+    expect_row "gp allows a benign command" git-protection allow \
+        '{"tool_name":"Bash","tool_input":{"command":"echo hello"}}' bash "pretooluse-bash-dispatch.sh"
+    expect_row "gp denies a raw gh pr checks read" git-protection block \
+        '{"tool_name":"Bash","tool_input":{"command":"gh pr checks 12"}}' bash "pretooluse-bash-dispatch.sh"
     # The default preset leaves bg-process off, so the chain writes no row.
     PRESET_SAVE="${FNO_GUARD_PRESET-}"
     export FNO_GUARD_PRESET=strict
@@ -183,10 +190,6 @@ if [[ -n "${FNO_AGENTS_BIN:-}" ]]; then
     expect_row "bpg denies an unbounded yes" bg-process-guard block \
         '{"tool_name":"Bash","tool_input":{"command":"yes"}}' bash "pretooluse-bash-dispatch.sh"
     if [[ -n "$PRESET_SAVE" ]]; then export FNO_GUARD_PRESET="$PRESET_SAVE"; else unset FNO_GUARD_PRESET; fi
-    expect_row "gp allows a benign command" git-protection allow \
-        '{"tool_name":"Bash","tool_input":{"command":"echo hello"}}' bash "pretooluse-bash-dispatch.sh"
-    expect_row "gp denies a raw gh pr checks read" git-protection block \
-        '{"tool_name":"Bash","tool_input":{"command":"gh pr checks 12"}}' bash "pretooluse-bash-dispatch.sh"
 else
     # No checkout build of fno-agents here. An installed binary may predate
     # the in-process guard and answer {}, so only a checkout build counts.
