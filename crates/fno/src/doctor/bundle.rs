@@ -10,7 +10,7 @@ fn script_for(command: &str) -> Option<&'static str> {
     match command {
         "build" => Some("scripts/generate-skill-bundles.sh"),
         "check" => Some("scripts/lint/check-skill-bundles-fresh.sh"),
-        "lint" => Some("scripts/lint/no-cross-skill-runtime-calls.sh"),
+        "lint" => Some("scripts/lint/check-skill-reach.sh"),
         _ => None,
     }
 }

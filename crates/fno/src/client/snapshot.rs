@@ -135,6 +135,13 @@ pub enum ViewKind {
     /// The connections overlay with the `u` confirm staged on the first
     /// account that is not active.
     ConnectionsUse,
+    /// The connections overlay with the add wizard open on its provider
+    /// picker.
+    ConnectionsAdd,
+    /// The add picker with a search typed into it.
+    ConnectionsAddSearch,
+    /// The add wizard on a local server's base URL step.
+    ConnectionsAddLocal,
     /// The sweep-threads choice modal over a staged fleet's counts.
     Sweep,
     /// The needs-me overlay with its first row picked, after the same
@@ -221,6 +228,9 @@ fn parse_view(v: &str) -> Option<ViewKind> {
         "sweep" => Some(ViewKind::Sweep),
         "connections" => Some(ViewKind::Connections),
         "connections-use" => Some(ViewKind::ConnectionsUse),
+        "connections-add" => Some(ViewKind::ConnectionsAdd),
+        "connections-add-search" => Some(ViewKind::ConnectionsAddSearch),
+        "connections-add-local" => Some(ViewKind::ConnectionsAddLocal),
         "needs" => Some(ViewKind::Needs),
         "dock" => Some(ViewKind::Dock),
         "machines" => Some(ViewKind::Machines),
@@ -608,6 +618,16 @@ fn find_chrome() -> Option<PathBuf> {
 
 /// The split views open the fixture review beside the panes; the drag view
 /// holds its edge mid-drag at 60 percent.
+/// A few catalog providers for the add picker's Other section.
+const DEMO_CATALOG: &str = r#"{
+  "xai": {"name": "xAI", "env": ["XAI_API_KEY"], "api": "https://api.x.ai/v1", "npm": "@ai-sdk/xai", "models": {"grok-4": {}}},
+  "groq": {"name": "Groq", "env": ["GROQ_API_KEY"], "api": "https://api.groq.com/openai/v1", "npm": "@ai-sdk/groq", "models": {"llama-3.3-70b": {}}},
+  "mistral": {"name": "Mistral", "env": ["MISTRAL_API_KEY"], "api": "https://api.mistral.ai/v1", "npm": "@ai-sdk/mistral", "models": {"mistral-large": {}}},
+  "togetherai": {"name": "Together AI", "env": ["TOGETHER_API_KEY"], "api": "https://api.together.xyz/v1", "npm": "@ai-sdk/togetherai", "models": {"qwen3": {}}},
+  "fireworks-ai": {"name": "Fireworks AI", "env": ["FIREWORKS_API_KEY"], "api": "https://api.fireworks.ai/inference/v1", "npm": "@ai-sdk/openai-compatible", "models": {"kimi": {}}},
+  "cerebras": {"name": "Cerebras", "env": ["CEREBRAS_API_KEY"], "api": "https://api.cerebras.ai/v1", "npm": "@ai-sdk/cerebras", "models": {"gpt-oss": {}}}
+}"#;
+
 fn split_fixture(view: &mut View, kind: Option<&ViewKind>) {
     if matches!(
         kind,
@@ -1018,7 +1038,13 @@ questions (scripts/ops/mux-demo-snapshot.sh seeds one)",
             view.apply_questions_fold(questions);
             view.answers = Some(0);
         }
-        Some(kind @ (ViewKind::Connections | ViewKind::ConnectionsUse)) => {
+        Some(
+            kind @ (ViewKind::Connections
+            | ViewKind::ConnectionsUse
+            | ViewKind::ConnectionsAdd
+            | ViewKind::ConnectionsAddSearch
+            | ViewKind::ConnectionsAddLocal),
+        ) => {
             view.open_connections();
             let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
             runtime.block_on(crate::connections_view::load_all(tx, view.conn_gen));
@@ -1052,6 +1078,27 @@ shoot a root whose config lists accounts (scripts/ops/mux-demo-snapshot.sh seeds
                 cv.acct_sel = cv.accounts.iter().position(|a| !a.active).unwrap_or(0);
                 cv.render_with(&view.layout.agents, usize::MAX);
                 cv.on_key(b'u');
+            }
+            if matches!(
+                kind,
+                ViewKind::ConnectionsAdd
+                    | ViewKind::ConnectionsAddSearch
+                    | ViewKind::ConnectionsAddLocal
+            ) {
+                cv.on_key(b'a');
+                // A throwaway root has no models.dev cache: seed a few
+                // catalog providers so the Other section paints.
+                if cv.catalog.is_none() {
+                    cv.catalog = crate::model_catalog::parse(DEMO_CATALOG).ok();
+                }
+                let keys: &[u8] = match kind {
+                    ViewKind::ConnectionsAddSearch => b"ai",
+                    ViewKind::ConnectionsAddLocal => b"ollama\r\r",
+                    _ => b"",
+                };
+                for k in keys {
+                    cv.on_key(*k);
+                }
             }
         }
         Some(ViewKind::Machines) => {
@@ -1421,6 +1468,9 @@ mod tests {
             ("sweep", ViewKind::Sweep),
             ("connections", ViewKind::Connections),
             ("connections-use", ViewKind::ConnectionsUse),
+            ("connections-add", ViewKind::ConnectionsAdd),
+            ("connections-add-search", ViewKind::ConnectionsAddSearch),
+            ("connections-add-local", ViewKind::ConnectionsAddLocal),
             ("needs", ViewKind::Needs),
             ("dock", ViewKind::Dock),
             ("machines", ViewKind::Machines),

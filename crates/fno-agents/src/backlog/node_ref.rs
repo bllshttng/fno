@@ -99,6 +99,16 @@ pub fn resolve_tiers<'a>(entries: &'a [Value], query: &str) -> Option<&'a Value>
             return Some(e);
         }
     }
+    // A short number (`x-15`): the hash tiers above ran first, so a hash that
+    // reads like a number still names itself.
+    if let Some(id) = crate::numbers::resolve_node(query) {
+        if let Some(hit) = entries
+            .iter()
+            .find(|e| e.get("id").and_then(Value::as_str) == Some(id.as_str()))
+        {
+            return Some(hit);
+        }
+    }
     let q_lc = query.to_lowercase();
     for e in entries {
         let slug = e.get("slug").and_then(Value::as_str);

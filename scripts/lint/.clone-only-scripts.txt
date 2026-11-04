@@ -30,7 +30,7 @@
 
 # The bundle shell-outs (scripts/generate-skill-bundles.sh,
 # scripts/lint/check-skill-bundles-fresh.sh,
-# scripts/lint/no-cross-skill-runtime-calls.sh) dropped from this list in
+# scripts/lint/check-skill-reach.sh) dropped from this list in
 # the PR that deleted the Python bundle CLI: the guard scans cli/src/fno,
 # and the caller there is gone (the native `fno doctor bundle` resolves the
 # same scripts from the Rust side, outside this guard's scope). INTERNALIZED

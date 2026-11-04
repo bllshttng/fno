@@ -3,8 +3,10 @@
 
 This is the check that found what eight rounds of hand-written cases could not.
 The first run over the corpus found 3 false refusals in 23 denials, and both
-later regressions in `hooks/bg-process-guard.py` were introduced by the round
-that fixed the previous ones. So run it after ANY change to that parser.
+later regressions in the bg-process guard were introduced by the round that
+fixed the previous ones. So run it after ANY change to that parser. The
+working-tree side is `fno-agents hook bg-process-guard`; `--against` reads
+the retired Python guard from an older ref.
 
 Two modes:
 
@@ -30,7 +32,48 @@ import sys
 import tempfile
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
-GUARD = REPO / "hooks" / "bg-process-guard.py"
+OLD_GUARD_PATH = "hooks/bg-process-guard.py"
+
+
+class _RustGuard:
+    """The working-tree guard: `fno-agents hook bg-process-guard`, one process
+    per command, with the same `decide` surface the retired Python module had."""
+
+    def __init__(self) -> None:
+        self.bin = self._resolve()
+        self._events = tempfile.mkdtemp(prefix="guard-sweep-") + "/events.jsonl"
+
+    @staticmethod
+    def _resolve() -> str:
+        import os
+        import shutil
+
+        pinned = os.environ.get("FNO_AGENTS_BIN")
+        candidates = [pinned] if pinned else []
+        candidates += [
+            str(REPO / "crates" / "fno-agents" / "target" / profile / "fno-agents")
+            for profile in ("release", "debug")
+        ]
+        candidates.append(shutil.which("fno-agents"))
+        for path in candidates:
+            if path and pathlib.Path(path).is_file():
+                return path
+        raise SystemExit("no fno-agents binary: set FNO_AGENTS_BIN or build crates/fno-agents")
+
+    def decide(self, command: str):
+        import os
+
+        payload = {"tool_name": "Bash", "tool_input": {"command": command}}
+        proc = subprocess.run(
+            [self.bin, "hook", "bg-process-guard"],
+            input=json.dumps(payload), capture_output=True, text=True,
+            env={**os.environ, "FNO_EVENTS_PATH": self._events,
+                 "FNO_GUARD_PRESET": "strict"},
+        )
+        if proc.returncode != 0:
+            raise RuntimeError(proc.stderr.strip())
+        out = json.loads(proc.stdout or "{}")
+        return out.get("reason")
 
 
 def _load(path: pathlib.Path, name: str):
@@ -89,7 +132,7 @@ def _denies(guard, command: str):
 
 def _guard_at(ref: str, tmp: pathlib.Path):
     blob = subprocess.run(
-        ["git", "-C", str(REPO), "show", f"{ref}:hooks/bg-process-guard.py"],
+        ["git", "-C", str(REPO), "show", f"{ref}:{OLD_GUARD_PATH}"],
         capture_output=True, text=True, check=True,
     ).stdout
     path = tmp / "guard_old.py"
@@ -114,7 +157,7 @@ def main() -> int:
         print(f"no transcripts at {args.transcripts}", file=sys.stderr)
         return 1
 
-    guard = _load(GUARD, "guard_new")
+    guard = _RustGuard()
     commands = _commands(args.transcripts)
     print(f"unique commands: {len(commands)}")
 

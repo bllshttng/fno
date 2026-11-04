@@ -61,6 +61,7 @@ pub fn grade_checks(
                 &crate::claude_drive::claude_projects_dir()
                     .join(crate::claude_ask::claude_cwd_slug(workdir)),
             )),
+            "tests" => results.push(super::tests_grade::grade(check, workdir, timeout_s)),
             _ => results.push(grade_grep(check, workdir)),
         }
     }
@@ -242,7 +243,7 @@ fn collect_jsonl(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
     }
 }
 
-enum WaitOutcome {
+pub(super) enum WaitOutcome {
     Done(i32),
     TimedOut,
     Failed(String),
@@ -250,7 +251,7 @@ enum WaitOutcome {
 
 /// Spawn the command and wait up to *timeout_s*; a timed-out child is
 /// killed (the Python subprocess timeout semantics).
-fn spawn_wait_timeout(cmd: &mut std::process::Command, timeout_s: i64) -> WaitOutcome {
+pub(super) fn spawn_wait_timeout(cmd: &mut std::process::Command, timeout_s: i64) -> WaitOutcome {
     match cmd.spawn() {
         Err(e) => WaitOutcome::Failed(e.to_string()),
         Ok(mut child) => {
@@ -286,6 +287,7 @@ mod tests {
             path: None,
             pattern: None,
             max_tool_calls: Some(max),
+            tests: None,
         }
     }
 
