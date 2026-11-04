@@ -416,7 +416,8 @@ impl View {
                             a.remote.is_none() && a.portal.is_some()
                                 && twins.contains(&a.name))
                     })
-                    .unzip(); // One indent under the machine, the same step the remote bands take.
+                    .unzip();
+                // One indent under the machine, the same step the remote bands take.
                 let rows = rows.into_iter().map(|row| match row {
                     DisplayRow::Header {
                         label,

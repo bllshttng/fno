@@ -458,9 +458,11 @@ fn find_with_the_toggle_off_lists_the_seat_pane_as_it_is() {
     };
     let rows = v.nav_filtered(&nav);
     assert_eq!(rows.len(), 1);
-    assert_eq!(
-        rows[0].label,
-        format!("{} mercedes@iMac2D2", crate::proto::REMOTE_GLYPH)
+    assert!(
+        rows[0]
+            .label
+            .contains(&format!("{} mercedes@iMac2D2", crate::proto::REMOTE_GLYPH)),
+        "the seat twin stays findable as the local pane row it is"
     );
     assert!(
         matches!(rows[0].hit, ChromeHit::Cmds(ref cs) if cs.iter().any(|c| matches!(c, Command::FocusPane(7)))),

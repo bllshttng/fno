@@ -5,6 +5,18 @@
 use super::*;
 
 impl View {
+    /// The navigator's flat GLOBAL catalog: one [`NavRow`] per squad, per
+    /// tab (ignoring expand state - a collapsed squad's tabs still appear,
+    /// the key difference from [`display_rows`]), per plain pane (v22: those
+    /// NOT already shown as an agent row), per agent across the WHOLE
+    /// session, and one row per remote seat while the machine layer is
+    /// layered. Shares the agent -> [`ChromeHit`] mapping with [`row_action`]
+    /// (via [`agent_hit`]) so a keyboard goto and a mouse click never
+    /// diverge. Squad/tab rows carry their own SelectSquad/SelectTab in
+    /// `hit`; an agent row carries a `goto_squad` prefix (its pane lives in
+    /// another squad). The `+ new workspace` footer is omitted - the
+    /// navigator is a goto-existing picker (Discretion 4). Fully owned (no
+    /// layout borrow) so goto can mutate the view after building it.
     pub(super) fn nav_rows(&self) -> Vec<NavRow> {
         let mut out = Vec::new();
         // One session, one row: a seat twin (the portal pane a reach names
@@ -59,7 +71,7 @@ impl View {
                     ));
                 }
             }
-            // x-9b4d: one session, one row - the seat twin folds into the
+            // One session, one row: the seat twin folds into the
             // remote row appended below, so an open portal's pane never
             // paints twice in the catalog.
             for a in self.layout.agents.iter().filter(|a| {
@@ -91,7 +103,7 @@ impl View {
         }) {
             out.push(orphan_row(a, self.layout.active_squad));
         }
-        // x-9b4d: one row per remote seat, hit through the same agent_hit
+        // One row per remote seat, hit through the same agent_hit
         // a local row takes; Enter opens its portal (OpenRemote).
         for row in self.machine_tree.rows() {
             let remote = match &row.remote {

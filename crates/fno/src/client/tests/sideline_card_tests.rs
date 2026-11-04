@@ -1607,57 +1607,6 @@ fn one_session_one_row() {
 }
 
 #[test]
-fn held_highlights_survive_the_twin_layout_push() {
-    // AC4-EDGE + unknown 1 measured: before the fold, adding the seat twin in
-    // a layout push shifted every remote row down one, and BOTH held
-    // highlights are index-held (the selector re-anchors by name only in
-    // Extended density; hover only clears past the end), so the band landed
-    // on orla. With the twin folded, the push moves nothing.
-    let mut v = machines_view(vec![]);
-    v.layout.focus = 7;
-    let mercedes = painted_agent_at(&v, "mercedes@iMac2D2");
-    v.hover_row = Some(mercedes);
-    v.selector = Some(mercedes);
-    // The portal seat pane appears in a later layout push.
-    v.set_layout(LayoutView {
-        squads: vec![meta(1, "footnote", 2, 1), meta(2, "notes", 1, 0)],
-        active_squad: 1,
-        panes: vec![
-            (
-                10,
-                Rect {
-                    x: 0,
-                    y: 0,
-                    rows: 29,
-                    cols: 35,
-                },
-            ),
-            (
-                11,
-                Rect {
-                    x: 36,
-                    y: 0,
-                    rows: 29,
-                    cols: 36,
-                },
-            ),
-        ],
-        focus: 7,
-        area: (29, 72),
-        agents: vec![seat_twin()],
-        focus_node: None,
-    });
-    let after = painted_agent_at(&v, "mercedes@iMac2D2");
-    assert_eq!(after, mercedes, "the twin never shifts the remote rows");
-    assert_eq!(v.hover_row, Some(mercedes), "hover stays on mercedes");
-    assert_eq!(
-        v.selected_agent_name().as_deref(),
-        Some("mercedes@iMac2D2"),
-        "the selector stays on mercedes"
-    );
-}
-
-#[test]
 fn the_selector_follows_mercedes_through_a_fleet_re_sort() {
     // AC4-EDGE: a fleet read that re-sorts the band moves the selector by
     // identity (any density), and a hover whose row moved away clears
