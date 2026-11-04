@@ -428,6 +428,7 @@ scripts/ci/check-no-internal-refs.sh
 scripts/ci/check-no-stale-skill-refs.sh
 scripts/ci/check-placement-rule.sh
 scripts/diagnostics/guard-corpus-sweep.py
+scripts/release/hookagg.py
 scripts/corrections-log-init.sh
 scripts/corrections-migrate-to-fno.sh
 scripts/ensure-global-dir.sh

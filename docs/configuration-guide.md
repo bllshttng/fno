@@ -349,4 +349,7 @@ Keys live in a flat `config.toml` (`.fno/config.toml` project-local, `~/.fno/con
 | `accounts.quota.defer_horizon_minutes` | int | `60` | never | How far ahead a quota-window reset is still worth deferring for. |
 | `accounts.quota.pick_on_launch` | bool | `false` | never | Pick the least-loaded account at spawn time instead of pinning one. |
 | `accounts.failover` | FailoverBlock (optional) | _(none)_ | never | Provider-rotation failover: {max_swaps_per_phase}. |
+| `github.app_id` | str | `` | never | GitHub App id; with github.app_installation_id it arms App-installation token minting for GitHub API calls. |
+| `github.app_installation_id` | str | `` | never | GitHub App installation id; required beside github.app_id before the App path mints tokens. |
+| `github.app_key_path` | str | `~/.fno/secrets/github-app.pem` | never | Path to the GitHub App private key PEM (default ~/.fno/secrets/github-app.pem, mode 0600); a leading ~ expands against $HOME. |
 | `schema_version` | int | `1` | never | Settings schema version; managed by fno, not hand-set. |
