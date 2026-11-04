@@ -117,10 +117,7 @@ fn run_case(
     // Outside the graded dir, so a grader that lists files never sees the stub.
     let bin = tempfile::tempdir().map_err(|e| e.to_string())?;
     for (name, body) in &case.stub {
-        let path = bin.path().join(name);
-        std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).map_err(|e| e.to_string())?;
-        std::fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o755))
-            .map_err(|e| e.to_string())?;
+        crate::write_exec_stub(bin.path(), name, &format!("#!/bin/sh\n{body}\n"));
     }
     let outcome = super::grading::grade_checks(
         &golden.grade,

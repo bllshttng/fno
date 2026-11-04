@@ -1560,7 +1560,7 @@ mod tests {
             let posts = w.posts.borrow();
             assert_eq!(posts.len(), posted, "{files}: {posts:?}");
             if posted == 2 {
-                assert!(posts[1].starts_with("failure"), "{files}: {posts:?}");
+                assert!(posts[1].starts_with("state=failure"), "{files}: {posts:?}");
             }
         }
     }
