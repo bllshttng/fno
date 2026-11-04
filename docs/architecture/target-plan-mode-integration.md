@@ -115,7 +115,7 @@ construction).
 `EnterPlanMode`/`ExitPlanMode` are Claude Code tools. On Gemini/Codex the
 matcher never fires, no sidecar is written, and `/target` behaves exactly as
 today. The feature lives entirely in the optional hook + skill-relative scripts,
-so the portable driver-skill contract (CI-enforced self-containment) is intact.
+so the rule against repo-root script paths in skills stays intact.
 
 The front door is a claude-only sub-mode of `target`, not a row of its own in `docs/harnesses/command-matrix.md`. `docs/SKILL-COMPAT-MATRIX.md` states the sub-mode rule.
 

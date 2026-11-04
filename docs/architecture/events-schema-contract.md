@@ -309,8 +309,8 @@ macOS and Linux without the `flock(1)` shell binary). State-file flip
 uses temp-write + atomic-rename so concurrent readers never see
 partial state.
 
-Skill bodies must use `${SKILL_DIR}/...` paths (per the skill
-self-containment rule) and `skill-bundles.yaml` must list both
+Skill bodies must use `${SKILL_DIR}/...` paths (per the rule
+against repo-root script paths in skills) and `skill-bundles.yaml` must list both
 `scripts/lib/set-gate.sh` and `scripts/lib/events-validate.sh` under
 the consuming skill.
 
