@@ -1435,4 +1435,4 @@ Press `a` on the Accounts tab. A picker opens. Type to search. Popular providers
 
 Anthropic and OpenAI start a login pane. zai asks for a key. Any other catalog provider asks for a name and a key, and `fno` saves an opencode `api_key` account whose route names the provider.
 
-A Local server (Ollama, LM Studio, vLLM, llama.cpp, MLX) asks for a base URL instead of a key. `fno` asks the server for its models and adds the account if it lists at least one. The probe waits up to 2 seconds.
+A Local server (Ollama, LM Studio, vLLM, llama.cpp, MLX) asks for a base URL instead of a key. `fno` asks the server for its models. It adds the account when the list holds a model. The probe waits up to 2 seconds.
