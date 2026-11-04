@@ -422,7 +422,11 @@ mod tests {
             .decode(parts[2])
             .unwrap();
         ring::signature::RsaPublicKeyComponents { n: &n, e: &e }
-            .verify(&ring::signature::RSA_PKCS1_2048_8192_SHA256, msg.as_bytes(), &sig)
+            .verify(
+                &ring::signature::RSA_PKCS1_2048_8192_SHA256,
+                msg.as_bytes(),
+                &sig,
+            )
             .expect("signature verifies");
     }
 
