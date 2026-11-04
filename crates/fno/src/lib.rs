@@ -201,6 +201,7 @@ pub mod proto_pane;
 #[cfg(feature = "full")]
 pub mod proto_slot;
 pub mod provider_key;
+pub mod provider_picker;
 #[cfg(feature = "full")]
 pub mod pty;
 #[cfg(feature = "full")]

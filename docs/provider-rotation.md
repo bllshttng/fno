@@ -1428,3 +1428,11 @@ asymmetry:
   different-family capacity exists - the review cannot silently pass.
 
 `fno do review --assess-assurance --policy-size <S|M|L> [--risk-surface ...]` prints the verdict JSON and exits `3` when unsatisfied. A direct CLI caller is blocked the same way the `/fno:ship pr check` skill is (no skill-only guard). See `skills/ship/references/check.md` Step 0c.
+
+## Add a provider from the Accounts tab
+
+Press `a` on the Accounts tab. A picker opens. Type to search. Popular providers come first, then Local servers, then the rest of the models.dev catalog from A to Z. Each row names the harnesses that can run it.
+
+Anthropic and OpenAI start a login pane. zai asks for a key. Any other catalog provider asks for a name and a key, and `fno` saves an opencode `api_key` account whose route names the provider.
+
+A Local server (Ollama, LM Studio, vLLM, llama.cpp, MLX) asks for a base URL instead of a key. `fno` asks the server for its models. An empty list adds nothing. The probe waits up to 2 seconds.
