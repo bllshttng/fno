@@ -33,15 +33,10 @@ postcompact_carrier() {  # $1 = SOURCE field from the event ("" on codex)
 
 # postcompact_emit CARRIER CONTEXT - print the harness's delivery payload.
 postcompact_emit() {
-    python3 -c "
-import json, sys
-carrier, context = sys.argv[1:3]
-if carrier == 'additionalContext':
-    payload = {'hookSpecificOutput': {'hookEventName': 'SessionStart', 'additionalContext': context}}
-else:
-    payload = {'systemMessage': context}
-print(json.dumps(payload))
-" "$1" "$2" 2>/dev/null
+    jq -cn --arg carrier "$1" --arg context "$2" '
+        if $carrier == "additionalContext"
+        then {hookSpecificOutput: {hookEventName: "SessionStart", additionalContext: $context}}
+        else {systemMessage: $context} end' 2>/dev/null
 }
 
 # postcompact_read_event - read the hook event from stdin (TTY-guarded: a bare
@@ -50,15 +45,9 @@ print(json.dumps(payload))
 postcompact_read_event() {
     local input=""
     [[ -t 0 ]] || input="$(cat 2>/dev/null || true)"
-    printf '%s' "$input" | python3 -c '
-import json, sys
-try:
-    e = json.load(sys.stdin)
-except Exception:
-    e = {}
-for k in ("source", "session_id", "transcript_path"):
-    print(e.get(k) or "")
-' 2>/dev/null
+    printf '%s' "$input" | jq -r '
+        (.source, .session_id, .transcript_path)
+        | if . == null or . == false or . == "" or . == 0 then "" else tostring end' 2>/dev/null
 }
 
 # postcompact_resolve_sid EVENT_SID TRANSCRIPT - echo this session's id.

@@ -207,7 +207,7 @@ rm -rf "$S"
 
 echo "== 4. sweep reaps dead bg-job records =="
 
-eval "$(sed -n '/^_reap_job_candidates()/,/^}/p; /^_reap_jobs()/,/^}/p' "$LIFECYCLE")"
+eval "$(sed -n '/^_wt_abspath()/,/^}/p; /^_reap_job_candidates()/,/^}/p; /^_reap_jobs()/,/^}/p' "$LIFECYCLE")"
 JH=$(mktemp -d -t reap-home.XXXXXX)
 mkdir -p "$JH/.claude/jobs/jDONE" "$JH/.claude/jobs/jLIVE" "$JH/.claude/jobs/jCANON" "$JH/bin"
 ARCH="/some/wt/x-abcd"; CANON="/repo/canonical"

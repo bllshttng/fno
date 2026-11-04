@@ -661,7 +661,7 @@ The target autonomous loop uses a stop hook to enforce completion:
 | References dir | Always `references/` | `skills/target/references/` |
 | Reference files | kebab-case `.md` | `iteration-loop.md` |
 | Scripts dir | Always `scripts/` | `skills/execute/scripts/` |
-| Script files | kebab-case `.sh` or `.py` | `orchestrator.py` |
+| Script files | kebab-case `.sh` | `validate-plan.sh` |
 
 ### Agents
 

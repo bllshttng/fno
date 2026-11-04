@@ -1175,10 +1175,13 @@ fn parse_wave_operation_args(
 /// Transport entrypoint: `fno-agents wave check|fork|join ...`.
 pub fn run(args: &[String]) -> i32 {
     let Some(command) = args.first().map(String::as_str) else {
-        eprintln!("usage: fno-agents wave check|fork|join ...");
+        eprintln!("usage: fno-agents wave check|fork|join|ready|emit-boundary|product-gate|constraints ...");
         return 2;
     };
     let rest = &args[1..];
+    if let Some(code) = crate::wave_ready::dispatch(command, rest) {
+        return code;
+    }
     let result = match command {
         "check" => return run_check(rest),
         "fork" => match parse_wave_operation_args(rest, false) {

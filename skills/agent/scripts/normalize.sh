@@ -463,10 +463,9 @@ fi
 # Resolver is test-injectable via PROJECT_ROOT_RESOLVER (mirrors the provider and
 # slug resolvers): a command taking the project name and printing ONE line in the
 # protocol `ok\t<canonical>\t<abspath>` | `notfound\t<csv of known names>` |
-# `error\t<message>`. Default = the shipped fno python driving the native
-# resolver (the project-family port: `spawn-overlay project resolve` folds short_name ->
-# canonical; `project_root_from_settings` maps canonical -> abs path and stays
-# in Python with the graph).
+# `error\t<message>`. Default = fno-agents itself: `spawn-overlay project resolve`
+# folds short_name -> canonical, and `backlog project-root` maps canonical -> abs
+# path.
 PROJECT_CANON=""
 RESOLVED_CWD=""
 
@@ -476,62 +475,34 @@ resolve_project() {
     "$PROJECT_ROOT_RESOLVER" "$_proj" 2>/dev/null
     return 0
   fi
-  local py_entry shebang _uv_dir
-  # The shipped `fno` may be the Rust mux binary (no python shebang), in which
-  # case it cannot import the fno package. The Python CLI is the `fno-py` console
-  # script, which a cargo-only install does NOT put on PATH (only ~/.cargo/bin/fno
-  # is) - the mux resolves it at <uv tool dir>/fno/bin/fno-py
-  # (crates/fno/src/bootstrap.rs), so mirror that rather than requiring fno-py on
-  # PATH. Then fall back to `fno` itself when it is a python entrypoint (older
-  # single-binary installs). WAVE 2.
-  py_entry=""
-  if command -v fno-py >/dev/null 2>&1; then
-    py_entry="$(command -v fno-py)"
-  elif command -v uv >/dev/null 2>&1; then
-    _uv_dir="$(NO_COLOR=1 UV_NO_COLOR=1 uv tool dir 2>/dev/null || true)"
-    _uv_dir="${_uv_dir%$'\r'}"
-    [[ -n "$_uv_dir" && -x "$_uv_dir/fno/bin/fno-py" ]] && py_entry="$_uv_dir/fno/bin/fno-py"
+  local bin out err errf rc canon path known
+  bin="${FNO_AGENTS_BIN:-}"
+  [[ -n "$bin" && -x "$bin" ]] || bin="$(command -v fno-agents 2>/dev/null || true)"
+  [[ -n "$bin" ]] || { printf 'error\tfno-agents binary not found; cannot resolve project\n'; return 0; }
+  errf="$(mktemp "${TMPDIR:-/tmp}/normalize-project-XXXXXX")" || { printf 'error\tproject resolver crashed\n'; return 0; }
+  out="$("$bin" spawn-overlay project resolve "$_proj" 2>"$errf")"
+  rc=$?
+  err="$(cat "$errf" 2>/dev/null)"
+  command -p rm -f "$errf"
+  err="${err#"${err%%[![:space:]]*}"}"
+  err="${err%"${err##*[![:space:]]}"}"
+  if [[ "$rc" -ne 0 ]]; then
+    if [[ "$err" == *"known canonical names"* && "$err" == *"["*"]"* ]]; then
+      known="${err##*\[}"
+      known="${known%]*}"
+      known="${known//\'/}"
+      printf 'notfound\t%s\n' "${known// /}"
+    else
+      printf 'error\t%s\n' "${err:-resolve exited $rc}"
+    fi
+    return 0
   fi
-  if [[ -z "$py_entry" ]] && command -v fno >/dev/null 2>&1; then
-    py_entry="$(command -v fno)"
-  fi
-  [[ -n "$py_entry" ]] || { printf 'error\tfno not on PATH (cannot resolve --project %s)\n' "$_proj"; return 0; }
-  # Strip a trailing CR: a CRLF-lined entrypoint (WSL / git autocrlf) would
-  # leave \r on the shebang and break the interpreter exec.
-  shebang="$(head -1 "$py_entry" 2>/dev/null | sed 's/^#![[:space:]]*//' | tr -d '\r')"
-  # Same interpreter guard as resolve_from_config: only a python entrypoint can
-  # import the fno package. A shell-wrapper / non-python entrypoint means the
-  # resolver is unreachable.
-  [[ -n "$shebang" && "$shebang" == *python* ]] || { printf 'error\tproject resolver unavailable (%s is not a python entrypoint)\n' "$py_entry"; return 0; }
-  local py_cmd=()
-  read -r -a py_cmd <<< "$shebang"
-  { [[ -x "${py_cmd[0]}" ]] || command -v "${py_cmd[0]}" >/dev/null 2>&1; } || { printf 'error\tproject resolver interpreter not executable\n'; return 0; }
-  "${py_cmd[@]}" -c 'import sys, subprocess
-proj = sys.argv[1]
-try:
-    from fno.rust_binary import resolve_binary
-except Exception as e:
-    print("error\tproject resolver import failed: %s" % e); sys.exit(0)
-binary = resolve_binary()
-if binary is None:
-    print("error\tfno-agents binary not found; cannot resolve project"); sys.exit(0)
-proc = subprocess.run([str(binary), "spawn-overlay", "project", "resolve", proj],
-                      capture_output=True, text=True)
-if proc.returncode != 0:
-    err = proc.stderr.strip()
-    if "known canonical names" in err:
-        known = err.rsplit("[", 1)[1].rsplit("]", 1)[0].replace("'\''", "").replace(" ", "")
-        print("notfound\t" + known)
-    else:
-        print("error\t%s" % (err or "resolve exited %d" % proc.returncode))
-    sys.exit(0)
-canon = proc.stdout.strip()
-root = subprocess.run([str(binary), "backlog", "project-root", canon],
-                      capture_output=True, text=True)
-path = root.stdout.strip() if root.returncode == 0 else ""
-if not path:
-    print("error\tproject %r resolved to no path in settings" % canon); sys.exit(0)
-print("ok\t%s\t%s" % (canon, path))' "$_proj" 2>/dev/null || { printf 'error\tproject resolver crashed\n'; return 0; }
+  canon="$(printf '%s' "$out" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+  path="$("$bin" backlog project-root "$canon" 2>/dev/null)" || path=""
+  path="${path#"${path%%[![:space:]]*}"}"
+  path="${path%"${path##*[![:space:]]}"}"
+  [[ -n "$path" ]] || { printf "error\tproject '%s' resolved to no path in settings\n" "$canon"; return 0; }
+  printf 'ok\t%s\t%s\n' "$canon" "$path"
 }
 
 # -C/--project was passed but its value is empty (a bare trailing `-C`, or an

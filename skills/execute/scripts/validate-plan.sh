@@ -39,47 +39,19 @@ _decision_read() {
         verdict="unread exit $rc: ${stderr_line:-no stderr}"
     elif [[ -z "$out" ]]; then
         verdict="notlive"
-    elif ! command -v python3 >/dev/null 2>&1; then
-        verdict="unread no python3"
+    elif ! command -v jq >/dev/null 2>&1; then
+        verdict="unread no jq"
     else
-        if parsed=$(printf '%s\n' "$out" | python3 -c '
-import json
-import sys
-
-def unread(reason):
-    print("unread")
-    print(reason)
-
-try:
-    payload = json.load(sys.stdin)
-except Exception:
-    unread("decisions JSON did not parse")
-    raise SystemExit(0)
-
-rows = payload.get("decisions") if isinstance(payload, dict) else None
-if not isinstance(rows, list):
-    unread("decisions JSON did not parse")
-    raise SystemExit(0)
-
-matches = [row for row in rows if isinstance(row, dict) and row.get("decision_id") == sys.argv[1]]
-if not matches:
-    print("notlive")
-    raise SystemExit(0)
-
-row = matches[0]
-lifecycle = row.get("lifecycle")
-if lifecycle == "unknown":
-    unread("lifecycle unknown, the graph was not read")
-elif lifecycle == "live":
-    def one_line(value):
-        return " ".join(value.split()) if isinstance(value, str) else ""
-    print("live")
-    print("")
-    print(one_line(row.get("subject")))
-    print(one_line(row.get("decision")))
-else:
-    print("notlive")
-' "$id" 2>"$TMPDIR_BASE_VAL/decisions-json.err"); then
+        if parsed=$(printf '%s\n' "$out" | jq -rRs --arg id "$id" '
+def one_line: if type == "string" then [splits("\\s+")] | map(select(. != "")) | join(" ") else "" end;
+(try fromjson catch null) as $p | $p | if (type == "object") and ((.decisions | type) == "array") then
+  ([.decisions[] | select(type == "object" and .decision_id == $id)] | first) as $row
+  | if $row == null then "notlive"
+    elif $row.lifecycle == "unknown" then "unread\nlifecycle unknown, the graph was not read"
+    elif $row.lifecycle == "live" then "live\n\n\($row.subject | one_line)\n\($row.decision | one_line)"
+    else "notlive" end
+else "unread\ndecisions JSON did not parse" end
+' 2>"$TMPDIR_BASE_VAL/decisions-json.err"); then
             verdict=$(printf '%s\n' "$parsed" | sed -n '1p')
             case "$verdict" in
                 live)
@@ -399,26 +371,6 @@ resolve_front_bin() {
     fi
 }
 
-# Echo `<python>|<source_root>` for a checkout that can import the fno CLI, or
-# nothing. Shared by _plan_rung, _semantic_validate, and the consolidation gate
-# so the "which fno runs?" question has ONE answer here.
-_fno_source_python() {
-    local source_root="" python_bin=""
-    source_root=$(_fno_source_root)
-    [[ -z "$source_root" ]] && return 0
-    if [[ -n "${FNO_PYTHON:-}" && -x "${FNO_PYTHON}" ]]; then
-        python_bin="$FNO_PYTHON"
-    elif [[ -x "$source_root/cli/.venv/bin/python" ]]; then
-        python_bin="$source_root/cli/.venv/bin/python"
-    elif command -v python3 >/dev/null 2>&1; then
-        python_bin=$(command -v python3)
-    elif command -v python >/dev/null 2>&1; then
-        python_bin=$(command -v python)
-    fi
-    [[ -z "$python_bin" ]] && return 0
-    printf '%s|%s' "$python_bin" "$source_root"
-}
-
 _semantic_validate() {
     local bin=""
     bin="$(resolve_agents_bin)"
@@ -434,35 +386,27 @@ _semantic_validate() {
 }
 
 _dispatch_hold_validate() {
-    local bin="" source_root=""
+    local bin="" raw="" answer="" review_on=""
     bin="$(resolve_agents_bin)"
-    source_root=$(_fno_source_root)
-    [[ -z "$bin" || -z "$source_root" ]] && return 2
-    local code='from datetime import date
-import json, sys
-from fno.rust_binary import plan_schema
-receipt = json.load(sys.stdin) or {}
-raw = (receipt.get("frontmatter") or {}).get("dispatch_hold")
-if raw is None:
-    raise SystemExit(0)
-answer = plan_schema({"op": "validate-block", "kind": "dispatch_hold", "block": raw})
-if answer is None:
-    print("dispatch_hold.door: the plan-schema door could not run")
-    raise SystemExit(1)
-for error in answer.get("errors") or []:
-    field = str(error.get("field", "dispatch_hold")).replace("dispatch_hold.", "")
-    print("dispatch_hold.%s: %s" % (field or "dispatch_hold", error.get("message", "")))
-if not answer.get("valid"):
-    raise SystemExit(1)
-review_on = raw.get("review_on") if isinstance(raw, dict) else None
-try:
-    review_on = date.fromisoformat(str(review_on)[:10]) if review_on else None
-except ValueError:
-    review_on = None
-if review_on is not None and review_on < date.today():
-    print(f"PAST:{review_on.isoformat()}")'
-    "$bin" plan-cli parse "$PLAN_DIR" 2>/dev/null \
-        | PYTHONPATH="$source_root/cli/src${PYTHONPATH:+:$PYTHONPATH}" python3 -c "$code"
+    [[ -z "$bin" ]] && return 2
+    command -v jq >/dev/null 2>&1 || return 2
+    raw=$("$bin" plan-cli parse "$PLAN_DIR" 2>/dev/null \
+        | jq -c '.frontmatter.dispatch_hold | if . == null then empty else . end' 2>/dev/null)
+    [[ -z "$raw" ]] && return 0
+    answer=$(jq -nc --argjson block "$raw" '{op: "validate-block", kind: "dispatch_hold", block: $block}' \
+        | "$bin" state plan-schema 2>/dev/null)
+    if [[ -z "$answer" ]]; then
+        echo "dispatch_hold.door: the plan-schema door could not run"
+        return 1
+    fi
+    printf '%s' "$answer" | jq -r '.errors[]?
+        | ((.field // "dispatch_hold") | tostring | gsub("dispatch_hold\\."; "")) as $f
+        | "dispatch_hold.\(if $f == "" then "dispatch_hold" else $f end): \(.message // "")"'
+    [[ "$(printf '%s' "$answer" | jq -r '.valid')" == true ]] || return 1
+    review_on=$(printf '%s' "$raw" | jq -r 'if type == "object" and .review_on then .review_on | tostring | .[0:10] else "" end')
+    if [[ "$review_on" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ && "$review_on" < "$(date +%Y-%m-%d)" ]]; then
+        echo "PAST:$review_on"
+    fi
 }
 
 echo "Validating plan: $PLAN_DIR"
@@ -486,29 +430,25 @@ if [[ -f "$PLAN_DIR" ]]; then
         # having validated nothing. The whole chain's only trace is a warning line
         # that scrolls past. An unquoted `title: command X: qualifier` is how it
         # happens in practice, since node titles here routinely carry a colon.
-        _fm_python=""
-        if [[ -n "${FNO_PYTHON:-}" && -x "${FNO_PYTHON}" ]]; then
-            _fm_python="$FNO_PYTHON"
-        elif command -v python3 >/dev/null 2>&1; then
-            _fm_python=$(command -v python3)
+        _fm_bin="$(resolve_agents_bin)"
+        _fm_out=""
+        _fm_rc=0
+        if [[ -n "$_fm_bin" ]]; then
+            _fm_out=$("$_fm_bin" plan-cli parse "$PLAN_DIR" 2>/dev/null) || _fm_rc=$?
         fi
-        if [[ -n "$_fm_python" ]] && "$_fm_python" -c 'import yaml' 2>/dev/null; then
-            _fm_err=$(awk '/^---/{c++; if(c==2) exit; next} c==1{print}' "$PLAN_DIR" \
-                | "$_fm_python" -c 'import sys,yaml
-try:
-    yaml.safe_load(sys.stdin.read())
-except yaml.YAMLError as exc:
-    sys.stdout.write(" ".join(str(exc).split())[:200])' 2>/dev/null)
-            if [[ -n "$_fm_err" ]]; then
-                error "frontmatter is not valid YAML: $_fm_err"
-                error "  a title containing a colon must be quoted: title: \"command X: qualifier\""
-            else
-                ok "frontmatter parses as YAML"
-            fi
-        else
-            # No PyYAML is a tooling gap, not a plan defect. Say so rather than
+        if [[ -z "$_fm_bin" ]]; then
+            # No parser is a tooling gap, not a plan defect. Say so rather than
             # passing silently, which would read as "the frontmatter is fine".
-            warn "frontmatter YAML parse not checked (no python3 with PyYAML)"
+            warn "frontmatter YAML parse not checked (no fno-agents binary)"
+        elif [[ $_fm_rc -eq 3 ]]; then
+            _fm_err=$(printf '%s' "$_fm_out" | jq -r '.error // empty' 2>/dev/null)
+            _fm_err=$(printf '%s' "$_fm_err" | tr -s '[:space:]' ' ')
+            error "frontmatter is not valid YAML: ${_fm_err:0:200}"
+            error "  a title containing a colon must be quoted: title: \"command X: qualifier\""
+        elif [[ $_fm_rc -eq 0 ]]; then
+            ok "frontmatter parses as YAML"
+        else
+            warn "frontmatter YAML parse not checked (plan-cli parse exit $_fm_rc)"
         fi
         if _fm_has '^[[:space:]]*project:'; then
             ok "has 'project:' field"
@@ -564,7 +504,7 @@ except yaml.YAMLError as exc:
             else
                 _hold_rc=$?
                 if [[ $_hold_rc -eq 2 ]]; then
-                    error "dispatch_hold could not be validated (source fno dependencies unavailable)"
+                    error "dispatch_hold could not be validated (no fno-agents binary or jq)"
                 else
                     error "malformed dispatch_hold: ${_hold_out//$'\n'/; }"
                 fi
@@ -910,7 +850,7 @@ validate_kill_criteria_block() {
         }
         # A new list item marker "- " - accept it indented ("  - ", hand-written)
         # or at column 0 ("- ", the PyYAML default block-sequence dump from
-        # mutate_doc.py). Both are valid YAML under kill_criteria.
+        # plan-cli mutate). Both are valid YAML under kill_criteria.
         /^[[:space:]]*-[[:space:]]/ {
             flush_entry()
             idx++
@@ -1088,7 +1028,7 @@ check_consolidation_file() {
     # hard-FAILED valid plans. A second implementation of a shape the door
     # already pins can only ever diverge from it,
     # so there is now one implementation and bash keeps only what is policy.
-    local _src="" python_bin="" source_root="" delegate_out="" delegate_rc=0
+    local bin="" delegate_out="" delegate_rc=0
     # The plan names no node id, so the decisions rows below have no subject
     # and cannot run. Say NOT CHECKED here, in bash, where the absence is
     # readable - the delegate's W channel is fail-closed, for a damaged
@@ -1096,310 +1036,16 @@ check_consolidation_file() {
     if [[ -z "$(_plan_node_id "$file")" ]] || ! _is_node_id_sh "$(_plan_node_id "$file")"; then
         warn "$label: decisions_acknowledged check NOT CHECKED (no well-formed node:/claims: id in frontmatter) - not a pass"
     fi
-    _src="$(_fno_source_python)"
-    if [[ -n "$_src" ]]; then
-        python_bin="${_src%%|*}"
-        source_root="${_src##*|}"
-    else
-        source_root=$(_fno_source_root)
-    fi
-    if [[ -z "$source_root" ]]; then
+    bin="$(resolve_agents_bin)"
+    if [[ -z "$bin" ]]; then
         # A tooling gap is not a clean plan. Say the check did not run rather
         # than printing the OK marker, which would read as "the block is fine".
-        warn "$label: consolidation block NOT CHECKED (no fno source checkout to import the shape model from) - not a pass"
+        warn "$label: consolidation block NOT CHECKED (no fno-agents binary to run the shape check) - not a pass"
         return 0
     fi
-    local consolidation_prog
-    consolidation_prog=$(cat <<'PYEOF'
-import sys
-
-try:
-    import yaml
-
-    from fno.rust_binary import plan_schema
-except Exception as exc:  # missing PyYAML / fno on this interpreter
-    sys.stdout.write("U\t" + " ".join(str(exc).split())[:160] + "\n")
-    raise SystemExit(0)
-
-ENUM = "(absorb | append | proceed_alone)"
-
-
-def frontmatter(path):
-    """The text between the first two `---` lines.
-
-    Deliberately the same rule as the `/^---/` awk every other check in this
-    script uses. A stricter reader here would report NOT CHECKED on a plan the
-    presence check had already accepted, which is the divergence this rewrite
-    exists to remove.
-    """
-    lines = open(path, encoding="utf-8").read().splitlines()
-    opened = None
-    for i, line in enumerate(lines):
-        if line.startswith("---"):
-            if opened is None:
-                opened = i
-            else:
-                return "\n".join(lines[opened + 1:i])
-    return None
-
-
-def dup_keys(node, out):
-    """Duplicate keys anywhere under the consolidation subtree.
-
-    PyYAML takes the LAST of a repeated key silently, so two `outcome:` lines
-    parse to one value and the discarded decision leaves no trace. The node
-    graph still has both, which is why this reads `compose` and not the dict.
-    """
-    if isinstance(node, yaml.MappingNode):
-        seen = set()
-        for key, value in node.value:
-            name = getattr(key, "value", None)
-            if name in seen:
-                out.append(name)
-            seen.add(name)
-            dup_keys(value, out)
-    elif isinstance(node, yaml.SequenceNode):
-        for item in node.value:
-            dup_keys(item, out)
-    return out
-
-
-def render(err, block):
-    """Translate one plan-schema door error into the channel's own words."""
-    field = str(err.get("field") or "")
-    message = str(err.get("message") or "")
-    if field == "consolidation.outcome":
-        if message == "Field required":
-            return "consolidation block present but has no outcome: line (expected %s)" % ENUM
-        raw = block.get("outcome")
-        return "consolidation outcome `%s` is not in the enum %s" % (raw, ENUM)
-    parts = field.split(".")
-    if len(parts) == 3 and parts[0] == "consolidation" and parts[2].isdigit():
-        return "consolidation section `%s` entry %d is not an id/reason mapping" % (
-            parts[1],
-            int(parts[2]) + 1,
-        )
-    if len(parts) == 4 and parts[0] == "consolidation" and parts[2].isdigit():
-        section, index, leaf = parts[1], int(parts[2]), parts[3]
-        entry = None
-        listed = block.get(section)
-        if isinstance(listed, list) and index < len(listed):
-            entry = listed[index]
-        if leaf == "id":
-            if message == "Field required":
-                return "consolidation section `%s` has an entry with no id" % section
-            raw = entry.get("id") if isinstance(entry, dict) else entry
-            return (
-                "consolidation entry id `%s` (%s) is not a node id "
-                "(expected <prefix>-<hex>, e.g. x-aaaa)" % (raw, section)
-            )
-        if leaf == "decision_id":
-            if message == "Field required":
-                return "consolidation section `%s` has an entry with no decision_id" % section
-            raw = entry.get("decision_id") if isinstance(entry, dict) else entry
-            return (
-                "consolidation entry decision_id `%s` (%s) is not a decision id "
-                "(expected d-<hex>)" % (raw, section)
-            )
-        if leaf == "reason":
-            named = entry.get("id") if isinstance(entry, dict) else None
-            if named is None and isinstance(entry, dict):
-                named = entry.get("decision_id")
-            if named is None:
-                named = entry
-            return (
-                "consolidation entry `%s` (%s) has an empty reason - the recorded "
-                "decision must be checkable by a later reader" % (named, section)
-            )
-        return (
-            "consolidation section `%s` entry %d is not an id/reason mapping"
-            % (section, index + 1)
-        )
-    if message.startswith("Value error, "):
-        message = message[len("Value error, "):]
-    for outcome, key in (("absorb", "absorbed"), ("append", "appended_to")):
-        if message == "outcome %s requires at least one %s entry" % (outcome, key):
-            return "consolidation outcome is %s but the %s: list is empty" % (outcome, key)
-    where = field[len("consolidation."):] if field.startswith("consolidation.") else field
-    return "consolidation block%s: %s" % (" " + where if where else "", message)
-
-
-path = sys.argv[1]
-text = frontmatter(path)
-if text is None:
-    sys.stdout.write("U\tno closed --- frontmatter block\n")
-    raise SystemExit(0)
-try:
-    loaded = yaml.safe_load(text)
-    composed = yaml.compose(text)
-except yaml.YAMLError as exc:
-    # The frontmatter check above already errors on this; do not double-report.
-    sys.stdout.write("U\t" + " ".join(str(exc).split())[:160] + "\n")
-    raise SystemExit(0)
-
-block = (loaded or {}).get("consolidation")
-if not isinstance(block, dict):
-    sys.stdout.write(
-        "E\tconsolidation: must be a block of keys with an outcome: line %s, not `%s`\n"
-        % (ENUM, block)
-    )
-    raise SystemExit(0)
-
-for key, value in (composed.value if composed else []):
-    if getattr(key, "value", None) == "consolidation":
-        for name in dup_keys(value, []):
-            sys.stdout.write(
-                "E\tconsolidation block has more than one `%s:` line - a repeated key "
-                "silently discards the earlier value\n" % name
-            )
-
-answer = plan_schema({"op": "validate-block", "kind": "consolidation", "block": block})
-if answer is None:
-    sys.stdout.write("U\tplan-schema door unavailable\n")
-    raise SystemExit(0)
-if not answer.get("valid"):
-    for err in answer.get("errors") or []:
-        sys.stdout.write("E\t" + " ".join(render(err, block).split()) + "\n")
-    raise SystemExit(0)
-sys.stdout.write("O\t%s\n" % block.get("outcome"))
-
-# Which of the node's LIVE decisions has no decisions_acknowledged entry.
-# This is the one part of the check the shape door cannot do (it has
-# no access to the decision index), so it runs here rather than in the
-# plan-schema door: the door stays a pure shape authority, this stays the
-# one place that reads live data.
-#
-# node -> claims -> graph_node_id, same order and same one-element-list
-# unwrap as the Rust sweep's plan_link_id. The shell resolves the link (the
-# _plan_node_id helper) and passes it in, so this stays one leg of the rule
-# with no Python import: `claims` alone missed every plan using the canonical
-# `node:` key - the field quick-template.md actually ships, `claims:` being
-# commented out there as the ab-id-input special case.
-node_id = sys.argv[2] if len(sys.argv) > 2 else None
-if isinstance(node_id, str) and node_id.strip():
-    try:
-        from fno.rust_binary import FrontTimeout, call_front_json
-
-        answer = call_front_json(
-            {
-                "mode": "decisions",
-                "argv": [node_id.strip(), "--limit", "0", "--state", "all", "--json"],
-            }
-        )
-        rows = answer.get("decisions") or []
-        damaged = int(answer.get("damaged") or 0)
-    except FrontTimeout as exc:
-        sys.stdout.write("T\t%s\n" % " ".join(str(exc).split())[:200])
-        raise SystemExit(0)
-    except Exception as exc:  # noqa: BLE001 - an unread graph is not an empty graph
-        sys.stdout.write(
-            "W\tthe graph could not be read (%s), so coord lifecycles and slug subjects are unknown\n"
-            % " ".join(str(exc).split())[:160]
-        )
-        raise SystemExit(0)
-    if damaged:
-        # A damaged row could have held the closing verdict this whole
-        # gate exists to catch - reading the surviving rows as complete
-        # would be exactly the silent-pass failure the gate polices, one
-        # layer down. `fno backlog decide-reindex` is the recovery (same
-        # as _read_index's own operator-facing message).
-        sys.stdout.write(
-            "W\t%d damaged row(s) in the decision index - run "
-            "`fno backlog decide-reindex` and re-validate\n" % damaged
-        )
-    else:
-        # The door degrades a graph it cannot read to `lifecycle: unknown`
-        # rows that carry the reason; that is the fail-closed W below, never
-        # a clean read - an unreadable graph could be hiding the closing
-        # verdict this gate exists to catch.
-        unknown_graph = [
-            r
-            for r in rows
-            if r.get("lifecycle") == "unknown"
-            and "could not be read" in str(r.get("lifecycle_reason") or "")
-        ]
-        if unknown_graph:
-            sys.stdout.write(
-                "W\tthe graph could not be read (%s), so coord lifecycles and slug subjects are unknown\n"
-                % " ".join(str(unknown_graph[0].get("lifecycle_reason") or "").split())[:160]
-            )
-            raise SystemExit(0)
-
-        def valid_expiry_ref_shape(ref):
-            if not isinstance(ref, dict):
-                return False
-            kind = ref.get("kind")
-            if kind == "node":
-                return isinstance(ref.get("node_id"), str) and bool(
-                    ref["node_id"].strip()
-                )
-            if kind == "pr":
-                number = ref.get("number")
-                return (
-                    isinstance(ref.get("repository"), str)
-                    and bool(ref["repository"].strip())
-                    and isinstance(number, int)
-                    and not isinstance(number, bool)
-                    and number > 0
-                )
-            return False
-
-        for row in rows:
-            if row.get("lane") != "coord" or "expiry_ref" not in row:
-                continue
-            did = str(row.get("decision_id") or "<missing>")
-            if not valid_expiry_ref_shape(row.get("expiry_ref")):
-                sys.stdout.write(
-                    "E\tcoord decision %s has invalid expiry_ref shape; "
-                    "use a node ref with node_id or a PR ref with repository "
-                    "and positive number\n" % did
-                )
-            elif row.get("lifecycle") == "unscoped":
-                sys.stdout.write(
-                    "E\tcoord decision %s has explicit expiry_ref but no "
-                    "positive closure evidence; repair the graph evidence "
-                    "and re-validate\n" % did
-                )
-        # Drop rows the derived superseded_by map marks withdrawn - a
-        # withdrawn ruling must not demand acknowledgment. Never scan the
-        # ruling's own prose for this: a superseded ruling keeps its old
-        # text, and prose search cannot tell live from withdrawn.
-        live = [r for r in rows if r.get("lifecycle") == "live"]
-        # casefold both sides: DecisionAcknowledgment accepts
-        # d-ABCD1234 (the id regex is case-insensitive, matching
-        # looks_like_decision_id), and a real minted id is always
-        # lowercase hex - but a hand-typed one in a plan need not be, and
-        # this is the only decision-id comparison in the codebase that is
-        # not already casefolded (list_decisions itself casefolds
-        # subject matches).
-        acked = {
-            str(e.get("decision_id") or "").casefold()
-            for e in (block.get("decisions_acknowledged") or [])
-        }
-        for row in live:
-            did = str(row.get("decision_id") or "")
-            if did and did.casefold() not in acked:
-                text = " ".join(str(row.get("decision") or "").split())[:80]
-                ts = str(row.get("ts") or "")
-                sys.stdout.write("M\t%s\t%s\t%s\n" % (did, ts, text))
-        sys.stdout.write("D\t%d\n" % len(live))
-PYEOF
-    )
-    # Same ladder _semantic_validate walks: the checkout's own interpreter
-    # first, then uv, which is the only arm a fresh worktree with no cli/.venv
-    # can take.
-    if [[ -n "$python_bin" ]]; then
-        delegate_out=$(PYTHONPATH="$source_root/cli/src${PYTHONPATH:+:$PYTHONPATH}" \
-            "$python_bin" -c "$consolidation_prog" "$file" "$(_plan_node_id "$file")" 2>&1) || delegate_rc=$?
-    fi
-    if [[ -z "$python_bin" || "$delegate_out" == U$'\t'* ]] \
-            && command -v uv >/dev/null 2>&1; then
-        delegate_rc=0
-        delegate_out=$(uv run --project "$source_root/cli" \
-            python -c "$consolidation_prog" "$file" "$(_plan_node_id "$file")" 2>&1) || delegate_rc=$?
-    fi
+    delegate_out=$("$bin" plan-cli consolidation "$file" "$(_plan_node_id "$file")" 2>&1) || delegate_rc=$?
     if [[ -z "$delegate_out" && "$delegate_rc" -eq 0 ]]; then
-        warn "$label: consolidation block NOT CHECKED (no interpreter with the fno CLI importable at $source_root) - not a pass"
+        warn "$label: consolidation block NOT CHECKED (the shape check printed nothing) - not a pass"
         return 0
     fi
 
@@ -1787,7 +1433,7 @@ fi
 # -------------------------------------------------------------------
 # Step 2e names candidate routes and the facts nobody measured, and /target
 # settles them before code. Skill prose alone does not hold it: the design-doc
-# path runs mutate_doc.py straight to an Execution Strategy. The markers are
+# path runs plan-cli mutate straight to an Execution Strategy. The markers are
 # the `## Routes` and `## Unknowns` headings. A plan dated on or before the
 # routes gate may still carry the older `## Design` section instead. A doc
 # still at status: design has not been blueprinted yet, so the gate waits.
@@ -2360,16 +2006,9 @@ validate_task_edges_check() {
     fi
     # A strategy that does not parse is reported by the semantic check; this
     # one reads only the declared edges of a strategy that does.
-    edge_out=$("$bin" plan-cli parse "$plan_file" 2>/dev/null | python3 -c '
-import json, sys
-try:
-    receipt = json.load(sys.stdin) or {}
-except ValueError:
-    raise SystemExit(0)
-errors = receipt.get("edge_errors") or []
-for err in errors:
-    print(err)
-raise SystemExit(1 if errors else 0)') || edge_rc=$?
+    edge_out=$("$bin" plan-cli parse "$plan_file" 2>/dev/null \
+        | jq -rRs '(try fromjson catch null) | if type == "object" then (.edge_errors // [])[] | tostring else empty end' 2>&1) || edge_rc=$?
+    [[ $edge_rc -eq 0 && -n "$edge_out" ]] && edge_rc=1
     if [[ $edge_rc -ne 0 ]]; then
         while IFS= read -r line; do
             [[ -n "$line" ]] && error "$line"
@@ -2535,7 +2174,7 @@ fi
 # been dispatchable-planless ever since. On a passing run, when the
 # frontmatter names a node, print the exact bind command. No graph read:
 # this stays a check, and re-running the bind is idempotent. The id is read
-# with the same node-else-claims rule mutate_doc.py binds by (ported from
+# with the same node-else-claims rule plan-cli mutate binds by (ported from
 # plan_claims, crates/fno-agents/src/backlog/session_cli.rs).
 _fm_node_id() {
     awk '

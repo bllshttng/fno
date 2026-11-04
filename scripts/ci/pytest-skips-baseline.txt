@@ -41,4 +41,3 @@ cli/tests/unit/test_backlog_capture_tombstone.py::_cap_native::pytest.skip  # na
 cli/tests/goldens/_door.py::door::pytest.skip  # native door: the golden receipts drive the fno-agents binary; without a dev build there is no door to pin
 cli/tests/unit/test_evidence_refusal_remedy.py::test_unmeasured_refusal_names_only_remedies_the_commands_support::pytest.skip  # front-binary probe: CI builds crates/fno, a bare checkout has none
 cli/tests/unit/test_backlog_decompose_door.py::_door::pytest.skip  # the decompose door drives the native fno-agents binary, and the smoke shard deletes that target on purpose
-cli/tests/unit/plan/test_blueprint_mint_difficulty.py::_gate_error::pytest.skip  # native door: the gate drives the fno-agents binary through plan_schema; without a dev build there is no door to ask

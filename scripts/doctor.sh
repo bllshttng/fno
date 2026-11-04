@@ -8,8 +8,7 @@ FAIL=0
 SKILLS_ROOT="${CODEX_SKILLS_ROOT:-}"
 SKILLS_ROOT_RECORD="$ROOT_DIR/.fno/codex-skills-root"
 INVENTORY=0
-PYTHON="${FNO_PYTHON:-python3}"
-SKILL_DISCOVERY_PY="$ROOT_DIR/scripts/lib/skill_discovery.py"
+skill_discovery() { codex_skill_discovery "$ROOT_DIR" "$@"; }
 
 usage() {
   cat <<USAGE
@@ -89,7 +88,6 @@ check_required jq
 
 echo
 echo "== Optional dependencies =="
-check_optional python3
 check_optional node
 check_optional npm
 check_optional pnpm
@@ -111,17 +109,16 @@ if command -v codex >/dev/null 2>&1; then
     FAIL=1
   else
     # Same resolver + same inventory as setup.sh: one engine, no drift.
-    # python3 stays an optional dep: without it the inventory is unmeasured,
-    # not failed.
-    if ! command -v "${FNO_PYTHON:-python3}" >/dev/null 2>&1; then
-      echo "  [warn] ${FNO_PYTHON:-python3} unavailable; skill inventory unmeasured"
+    # Without fno-agents the inventory is unmeasured, not failed.
+    if ! command -v fno-agents >/dev/null 2>&1; then
+      echo "  [warn] fno-agents unavailable; skill inventory unmeasured"
     else
     if [[ -n "${CODEX_PLUGIN_CACHE:-}" ]]; then
       CACHE_ARGS=(--cache "$CODEX_PLUGIN_CACHE")
     else
       CACHE_ARGS=()
     fi
-    PROBE="$("$PYTHON" "$SKILL_DISCOVERY_PY" probe --repo "$ROOT_DIR" "${CACHE_ARGS[@]+${CACHE_ARGS[@]}}")"
+    PROBE="$(skill_discovery probe --repo "$ROOT_DIR" "${CACHE_ARGS[@]+${CACHE_ARGS[@]}}")"
     PLUGIN_PATH="$(sed -n 's/^plugin=//p' <<< "$PROBE")"
     PLUGIN_VERSION="$(sed -n 's/^version=//p' <<< "$PROBE")"
     if [[ -n "$PLUGIN_PATH" ]]; then
@@ -130,9 +127,9 @@ if command -v codex >/dev/null 2>&1; then
       echo "  [info] installed plugin: none (development aliases are the source)"
     fi
 
-    INV="$("$PYTHON" "$SKILL_DISCOVERY_PY" inventory --repo "$ROOT_DIR" --root "$SKILLS_ROOT_RESOLVED" --tsv "${CACHE_ARGS[@]+${CACHE_ARGS[@]}}")"
+    INV="$(skill_discovery inventory --repo "$ROOT_DIR" --root "$SKILLS_ROOT_RESOLVED" --tsv "${CACHE_ARGS[@]+${CACHE_ARGS[@]}}")"
     if [[ "$INVENTORY" -eq 1 ]]; then
-      "$PYTHON" "$SKILL_DISCOVERY_PY" inventory --repo "$ROOT_DIR" --root "$SKILLS_ROOT_RESOLVED" "${CACHE_ARGS[@]+${CACHE_ARGS[@]}}"
+      skill_discovery inventory --repo "$ROOT_DIR" --root "$SKILLS_ROOT_RESOLVED" "${CACHE_ARGS[@]+${CACHE_ARGS[@]}}"
     fi
     BROKEN=0
     STALE=0

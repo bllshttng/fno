@@ -2,17 +2,16 @@
 
 `skills/target/scripts/handoff.sh` section 8d appends this session's id to the
 plan's `session_ids`. It is a separate implementation from `_stamp.py` and
-`mutate_doc.py`, and it is reachable on its own - so a round-trip guard that
+`fno do plan mutate`, and it is reachable on its own - so a round-trip guard that
 covers only the other two is decorative.
 
-These tests exec the real embedded snippet extracted from the shipped script,
+These tests run the real shell function extracted from the shipped script,
 not a copy, so the guard cannot drift from the code it protects.
 """
 from __future__ import annotations
 
 import re
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
@@ -30,20 +29,17 @@ _HANDOFF = _REPO_ROOT / "skills" / "target" / "scripts" / "handoff.sh"
 
 
 def _section_8d() -> str:
-    """Pull the 8d python heredoc out of the shipped shell script."""
+    """Pull the 8d shell function out of the shipped script."""
     text = _HANDOFF.read_text(encoding="utf-8")
-    marker = "# 8d."
-    start = text.index(marker)
-    body = text[start:]
-    snippet = re.search(r"<<'PYEOF'\n(.*?)\nPYEOF", body, re.DOTALL)
-    assert snippet, "section 8d python heredoc not found in handoff.sh"
-    return snippet.group(1)
+    body = text[text.index("# 8d."):]
+    snippet = re.search(r"^_append_plan_session_id\(\) \{\n.*?^\}$", body, re.DOTALL | re.MULTILINE)
+    assert snippet, "section 8d function not found in handoff.sh"
+    return snippet.group(0)
 
 
 def _run_8d(plan: Path, sid: str) -> None:
     proc = subprocess.run(
-        [sys.executable, "-", str(plan), sid],
-        input=_section_8d(),
+        ["bash", "-c", _section_8d() + '\n_append_plan_session_id "$1" "$2"', "8d", str(plan), sid],
         capture_output=True,
         text=True,
     )

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tests for the `projects` subcommand on scripts/triage.py and the `each`
+# Tests for the `projects` subcommand of `fno backlog triage` and the `each`
 # iteration mode wired in skills/triage/SKILL.md.
 #
 # Covers the acceptance criteria from the plan:
@@ -25,7 +25,7 @@ fail() {
 # --------------------------------------------------------------------------
 # AC1: empty-graph edge case - projects returns {"projects": []} and exits 0
 # --------------------------------------------------------------------------
-HOME="$TEST_HOME" python3 scripts/triage.py projects > "$TEST_HOME/empty.json" \
+HOME="$TEST_HOME" fno backlog triage projects > "$TEST_HOME/empty.json" \
     || fail "projects subcommand exited non-zero on empty graph"
 
 python3 -c "
@@ -107,7 +107,7 @@ cat <<'EOF' | uv run --project "$REPO_ROOT/cli" python "$REPO_ROOT/cli/tests/fix
 }
 EOF
 
-HOME="$TEST_HOME" python3 scripts/triage.py projects > "$TEST_HOME/out.json" \
+HOME="$TEST_HOME" fno backlog triage projects > "$TEST_HOME/out.json" \
     || fail "projects exited non-zero on populated graph"
 
 python3 -c "

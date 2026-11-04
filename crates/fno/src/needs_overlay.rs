@@ -101,7 +101,7 @@ pub struct QuestionAsker {
 
 /// Who asked, mirroring the projection's `origin`: the session the question
 /// came from, with its registry name, harness and host when known. The
-/// command page re-serializes it, so it also derives Serialize.
+/// HQ page re-serializes it, so it also derives Serialize.
 #[derive(Debug, Clone, Default, Deserialize, serde::Serialize)]
 pub struct QuestionOrigin {
     /// The asker's lane name. Reads null as absent: one cross-machine copy

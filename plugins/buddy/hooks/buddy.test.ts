@@ -283,7 +283,7 @@ test('an old python wrapper moves to the fast path at 1 s, and an idle buddy hol
   expect(files.get('/home/u/.fno/state/buddy/statusline.sh')).toBe('# wrapper')
   expect(JSON.parse(files.get('/home/u/.fno/state/buddy/inner.json')!).statusLine).toEqual({ ...mine, refreshInterval: 30 })
 
-  // Every new frame costs the status line a Python start, so a quiet buddy stops changing its frame.
+  // Every new frame costs the status line a renderer start, so a quiet buddy stops changing its frame.
   const sprites = () => JSON.parse(files.get('/home/u/.fno/state/buddy/frames/s1.json')!).sprite
   await clock.advance(70_000)
   const still = sprites()

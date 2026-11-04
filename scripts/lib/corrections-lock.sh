@@ -180,16 +180,11 @@ corrections_rejected_log_path() {
 # 4. Truncate to 200 codepoints with a trailing "..." marker.
 corrections_escape_details() {
   local text="$1"
-  # Strip control chars except tab and space. Use python so the byte-by-byte
-  # filter is unambiguous regardless of shell locale.
-  text=$(printf '%s' "$text" | python3 -c '
-import sys
-raw = sys.stdin.read()
-# Keep tab (0x09) and printable ASCII + UTF-8 multibyte. Drop 0x00-0x08,
-# 0x0B-0x1F, and 0x7F. Newlines (0x0A) are handled by the caller below.
-out = "".join(c for c in raw if c == "\t" or c == "\n" or (ord(c) >= 0x20 and ord(c) != 0x7F))
-sys.stdout.write(out)
-' 2>/dev/null || printf '%s' "$text")
+  # Strip control chars except tab and newline: drop 0x00-0x08, 0x0B-0x1F
+  # and 0x7F. LC_ALL=C makes tr filter bytes, so the filter does not depend
+  # on the shell locale; UTF-8 multibyte bytes are all >= 0x80 and survive.
+  # Newlines (0x0A) are handled below.
+  text=$(printf '%s' "$text" | LC_ALL=C tr -d '\000-\010\013-\037\177' 2>/dev/null || printf '%s' "$text")
   # Replace literal pipes with \| and newlines with " ; "
   text="${text//|/\\|}"
   text="${text//$'\n'/ ; }"

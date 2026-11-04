@@ -27,7 +27,7 @@ for bin in "$(command -v fno-agents 2>/dev/null)" "${FNO_AGENTS_BIN:-}" \
 done
 case "$stdin" in
     *graph.json*|*target-state.md*|*graph.db*|*.fno/artifacts/*)
-        printf '%s\n' '{"decision":"block","reason":"graph-write-protect: neither jq nor python3 available to parse a payload referencing a protected state file; blocking fail-closed. Install jq or python3.","hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"graph-write-protect: neither jq nor python3 available to parse a payload referencing a protected state file; blocking fail-closed. Install jq or python3."}}'
+        printf '%s\n' '{"decision":"block","reason":"graph-write-protect: no fno-agents binary available to parse a payload referencing a protected state file; blocking fail-closed. Install fno (it ships fno-agents).","hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"graph-write-protect: no fno-agents binary available to parse a payload referencing a protected state file; blocking fail-closed. Install fno (it ships fno-agents)."}}'
         exit 0
         ;;
 esac

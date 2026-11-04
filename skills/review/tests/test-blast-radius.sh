@@ -9,13 +9,13 @@
 #
 # The fixture rebuilds that shape: a reviewed repo that adds a TUI, reviewed
 # from a linked worktree, and a sibling repo carrying the stale claim. The lane
-# step lists siblings with sibling-roots.py, then greps each sibling for the
+# step lists siblings with sibling-roots.sh, then greps each sibling for the
 # surface name. The replay must land on the stale line.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
-HELPER="$REPO_ROOT/skills/review/scripts/sibling-roots.py"
+HELPER="$REPO_ROOT/skills/review/scripts/sibling-roots.sh"
 LANE="$REPO_ROOT/skills/review/references/single-lane.md"
 
 PASS=0
@@ -66,10 +66,10 @@ JSON
 test_sibling_resolution() {
   echo "== siblings resolve from a linked worktree; an unlisted repo exits 3, not a zero"
   local out rc lonely_rc
-  out="$(python3 "$HELPER" "$TMP/fnh-wt" < "$TMP/workspaces.json")"
+  out="$(bash "$HELPER" "$TMP/fnh-wt" < "$TMP/workspaces.json")"
   rc=$?
   mkrepo "$TMP/lonely"
-  python3 "$HELPER" "$TMP/lonely" < "$TMP/workspaces.json" >/dev/null 2>&1
+  bash "$HELPER" "$TMP/lonely" < "$TMP/workspaces.json" >/dev/null 2>&1
   lonely_rc=$?
   if [ "$rc" -eq 0 ] && [ "$out" = "fno	$(cd "$TMP/fno" && pwd -P)" ] && [ "$lonely_rc" -eq 3 ]; then
     pass "only the on-disk, pathful sibling in the same workspace is listed; unlisted exits 3"
@@ -83,9 +83,9 @@ test_lane_replay_lands_on_the_stale_claim() {
   local hits="" name path
   while IFS=$'\t' read -r name path; do
     hits+="$(git -C "$path" grep -n -F -e 'TUI' HEAD || true)"
-  done < <(python3 "$HELPER" "$TMP/fnh-wt" < "$TMP/workspaces.json")
+  done < <(bash "$HELPER" "$TMP/fnh-wt" < "$TMP/workspaces.json")
   if [[ "$hits" == *"harness_capabilities.toml:4:# No TUI exists"* ]] \
-    && grep -qF 'fno config get work.workspaces | python3 "${SKILL_DIR}/scripts/sibling-roots.py" .' "$LANE" \
+    && grep -qF 'fno config get work.workspaces | bash "${SKILL_DIR}/scripts/sibling-roots.sh" .' "$LANE" \
     && grep -qF 'siblings: unconfigured' "$LANE"; then
     pass "sweep names the stale line by file:line, and Angle G runs this helper and maps exit 3"
   else

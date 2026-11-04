@@ -570,6 +570,14 @@ jobs:
         timeout-minutes: 5
         run: bash scripts/ci/check-preamble-budget.sh
 
+      # The user path (hooks, skills, buddy, user-path scripts) starts no new
+      # Python; each file is held to its shrink-only row in
+      # scripts/ci/user-python-debt.tsv.
+      - name: No new Python on the user path
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: bash scripts/ci/check-no-user-python.sh
+
       # A tracked source file over 5,000 lines is shrink-only relative to the
       # merge base; the refusal names the module-per-question remedy. The
       # waiver is read live from the PR that owns the checked commit, so push,

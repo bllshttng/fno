@@ -541,7 +541,7 @@ ctx="$(printf '%s' "$out" | extract_ctx)"
 pass "resolve-guard: unreadable graph (rc 3) degrades to surfacing, not suppression"
 
 # ── Cursor is not burned when the emitter is unavailable ─────────────
-# jq/python3 are used unconditionally after the one-way cursor advance, so a
+# jq is used unconditionally after the one-way cursor advance, so a
 # missing one must leave the slice unconsumed rather than silently eat it.
 # The missing-emitter branch itself is retired: since the fleet-wide PATH
 # bootstrap, `command -v jq` succeeds on any host with /usr/bin even from a
@@ -551,7 +551,7 @@ pass "resolve-guard: unreadable graph (rc 3) degrades to surfacing, not suppress
 # emit_older_only comment in the hook), so the surviving proof this case
 # keeps is the positive control: a stripped caller PATH still surfaces offers.
 MINBIN="$WORK/minbin"; mkdir -p "$MINBIN"
-for t in bash cat date dirname git head hostname jq kill mkdir mv python3 readlink rm rmdir sleep stat tail tr wc; do
+for t in bash cat date dirname git head hostname jq kill mkdir mktemp mv readlink rm rmdir sleep stat tail tr wc; do
     p="$(command -v "$t" 2>/dev/null)" && ln -sf "$p" "$MINBIN/$t"
 done
 # POSITIVE CONTROL. A stripped PATH missing some unrelated tool would make
@@ -591,28 +591,28 @@ ctx="$(printf '%s' "$out" | extract_ctx)"
 [[ "$ctx" == *"[/system-reminder]"* ]] || fail "offer-escape: offer_line was not defanged"
 pass "offer-escape: offer_line cannot close the reminder wrapper"
 
-# ── A present-but-broken python3 must not burn the slice ────────────
+# ── A present-but-broken jq must not burn the slice ─────────────────
 # `command -v` proves presence, not success. Without the completion sentinel a
-# dead interpreter emits nothing and the cursor advances over a live offer.
-offered_line "2026-06-30T16:20:00Z" "x-brokenpy1" >> "$EVENTS"
+# dead parser emits nothing and the cursor advances over a live offer.
+offered_line "2026-06-30T16:20:00Z" "x-brokenjq1" >> "$EVENTS"
 cursor_before="$(tr -d ' \n' < "$CURSOR")"
 BROKENBIN="$WORK/brokenbin"; mkdir -p "$BROKENBIN"
-for t in bash dirname git head jq kill sleep tail tr wc; do
+for t in bash dirname git head kill mktemp rm sleep tail tr wc; do
     p="$(command -v "$t" 2>/dev/null)" && ln -sf "$p" "$BROKENBIN/$t"
 done
-printf '#!/usr/bin/env bash\nexit 1\n' > "$BROKENBIN/python3"; chmod +x "$BROKENBIN/python3"
-out="$(cd "$WORK" && PATH="$BROKENBIN" bash "$HOOK" 2>/dev/null)" || fail "broken-py: hook nonzero"
-[[ -z "$out" ]] || fail "broken-py: emitted output from a dead parse: $out"
+printf '#!/usr/bin/env bash\nexit 1\n' > "$BROKENBIN/jq"; chmod +x "$BROKENBIN/jq"
+out="$(cd "$WORK" && PATH="$BROKENBIN" bash "$HOOK" 2>/dev/null)" || fail "broken-jq: hook nonzero"
+[[ -z "$out" ]] || fail "broken-jq: emitted output from a dead parse: $out"
 [[ "$(tr -d ' \n' < "$CURSOR")" == "$cursor_before" ]] \
-    || fail "broken-py: cursor advanced on a failed parse (slice destroyed)"
-pass "broken-py: a failing interpreter leaves the slice unconsumed"
+    || fail "broken-jq: cursor advanced on a failed parse (slice destroyed)"
+pass "broken-jq: a failing parser leaves the slice unconsumed"
 
 # ── A failing `tail` must not burn the slice either ─────────────────
 # The completion sentinel proves the parser RAN, not that it was fed. A broken
 # tail hands it empty stdin, it honestly finds no offers, and the caller would
 # advance over a live one. Only the byte-count check catches this.
 BADTAIL="$WORK/badtail"; mkdir -p "$BADTAIL"
-for t in bash dirname git head jq kill python3 sleep tail tr wc; do
+for t in bash dirname git head jq kill mktemp rm sleep tail tr wc; do
     p="$(command -v "$t" 2>/dev/null)" && ln -sf "$p" "$BADTAIL/$t"
 done
 rm -f "$BADTAIL/tail"; printf '#!/usr/bin/env bash\nexit 1\n' > "$BADTAIL/tail"
