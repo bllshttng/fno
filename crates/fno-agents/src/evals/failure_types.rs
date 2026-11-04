@@ -117,7 +117,22 @@ fn run_case(
     // Outside the graded dir, so a grader that lists files never sees the stub.
     let bin = tempfile::tempdir().map_err(|e| e.to_string())?;
     for (name, body) in &case.stub {
-        crate::write_exec_stub(bin.path(), name, &format!("#!/bin/sh\n{body}\n"));
+        // A child sh writes the bytes, so no write fd of this process can leak
+        // into a sibling fork and fail the exec with Text file busy.
+        let path = bin.path().join(name);
+        let wrote = std::process::Command::new("/bin/sh")
+            .args([
+                "-c",
+                r#"printf '#!/bin/sh\n%s\n' "$2" > "$1" && chmod 755 "$1""#,
+                "sh",
+            ])
+            .arg(&path)
+            .arg(body)
+            .status()
+            .map_err(|e| e.to_string())?;
+        if !wrote.success() {
+            return Err(format!("could not write stub {name}: {wrote}"));
+        }
     }
     let outcome = super::grading::grade_checks(
         &golden.grade,
