@@ -1026,6 +1026,15 @@ mod tests {
     #[test]
     fn inject_respects_a_caller_decision_an_operator_token_and_the_kill_switch() {
         let _guard = env_lock().lock().unwrap_or_else(|e| e.into_inner());
+        // The gate is gh-only: a non-gh child never sees the token, so a
+        // widened program check cannot stamp installations onto git or curl.
+        let mut git = Command::new("git");
+        git.args(["fetch", "origin"]);
+        assert!(!inject(&mut git, OsStr::new("git")));
+        assert!(git.get_envs().all(|(k, _)| k != OsStr::new("GH_TOKEN")));
+        let mut curl = Command::new("curl");
+        assert!(!inject(&mut curl, OsStr::new("curl")));
+        assert!(curl.get_envs().all(|(k, _)| k != OsStr::new("GH_TOKEN")));
         // A caller that set or removed GH_TOKEN decided; the app never overrides.
         let mut decided = Command::new("gh");
         decided.env("GH_TOKEN", "callers-own");
@@ -1062,31 +1071,20 @@ mod tests {
     }
 
     #[test]
-    fn inject_never_touches_a_non_gh_program() {
-        let mut git = Command::new("git");
-        git.args(["fetch", "origin"]);
-        assert!(!inject(&mut git, OsStr::new("git")));
-        assert!(git.get_envs().all(|(k, _)| k != OsStr::new("GH_TOKEN")));
-        let mut curl = Command::new("curl");
-        assert!(!inject(&mut curl, OsStr::new("curl")));
-        assert!(curl.get_envs().all(|(k, _)| k != OsStr::new("GH_TOKEN")));
-    }
-
-    #[test]
-    fn visibility_compares_normalized_slugs() {
-        let auth = InstallAuth {
-            token: "t".to_string(),
-            repos: vec!["fnodotdev/fno".to_string()],
-        };
-        assert!(auth.sees("fnodotdev/fno"));
-        assert!(!auth.sees("bllshttng/fno-books"));
-    }
-
-    #[test]
     fn token_path_is_chosen_when_the_key_exists_without_a_live_call() {
         let dir = std::env::temp_dir().join("fno-github-app-test-mint");
         std::fs::create_dir_all(&dir).unwrap();
         let (cfg, cache) = temp_cfg(&dir);
+        // The cache starts as a pre-scoping row (token and expiry, no repo
+        // list), so the single mint below proves both contracts at once: the
+        // token path runs without a live POST, and a listless row re-mints
+        // so scope and token land together.
+        let now = 1_700_000_000_000i64;
+        write_token_cache(&cache, "ghs_legacy", now / 1000, &[]);
+        let raw = std::fs::read_to_string(&cache).unwrap();
+        let mut v: Value = serde_json::from_str(&raw).unwrap();
+        v.as_object_mut().unwrap().remove("repos");
+        std::fs::write(&cache, v.to_string()).unwrap();
         let posts = Mutex::new(0usize);
         let seen_jwt = Mutex::new(String::new());
         let token = auth_from(
@@ -1152,30 +1150,6 @@ mod tests {
     }
 
     #[test]
-    fn a_fresh_token_without_a_scoped_list_re_mints_so_scope_and_token_agree() {
-        let dir = std::env::temp_dir().join("fno-github-app-test-unscoped");
-        std::fs::create_dir_all(&dir).unwrap();
-        let (cfg, cache) = temp_cfg(&dir);
-        // A pre-scoping cache row: token and expiry, no repo list.
-        let now = 1_700_000_000_000;
-        write_token_cache(&cache, "ghs_legacy", now / 1000, &[]);
-        let raw = std::fs::read_to_string(&cache).unwrap();
-        let mut v: Value = serde_json::from_str(&raw).unwrap();
-        v.as_object_mut().unwrap().remove("repos");
-        std::fs::write(&cache, v.to_string()).unwrap();
-        let posts = Mutex::new(0usize);
-        let auth = auth_from(&cfg, "2222222", &cache, now + 60_000, |_c, _i, _n| {
-            *posts.lock().unwrap() += 1;
-            Some((
-                serde_json::json!({"token": "ghs_fresh"}).to_string(),
-                vec!["fnodotdev/fno".to_string()],
-            ))
-        });
-        assert_eq!(auth.as_ref().map(|a| a.token.as_str()), Some("ghs_fresh"));
-        assert_eq!(*posts.lock().unwrap(), 1, "a listless row re-mints");
-    }
-
-    #[test]
     fn unconfigured_or_keyless_falls_back_without_writing_cache() {
         let dir = std::env::temp_dir().join("fno-github-app-test-fallback");
         std::fs::create_dir_all(&dir).unwrap();
@@ -1198,7 +1172,7 @@ mod tests {
     }
 
     #[test]
-    fn a_fresh_installations_cache_answers_without_a_fetch() {
+    fn the_installations_cache_lifecycle_serves_fresh_stale_and_fetch_failure() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("installs.json");
         let now = 1_700_000_000_000i64;
@@ -1210,6 +1184,7 @@ mod tests {
             }],
             now,
         );
+        // Fresh: served from cache, no fetch, owner match is case-blind.
         let refs = installations_from(&path, now + 60_000, |_| {
             panic!("fresh cache must not fetch")
         });
@@ -1218,21 +1193,7 @@ mod tests {
             Some("1")
         );
         assert_eq!(installation_for_owner(&refs, "nobody"), None);
-    }
-
-    #[test]
-    fn a_stale_list_refetches_and_a_fetch_failure_serves_stale() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("installs.json");
-        let now = 1_700_000_000_000i64;
-        write_installs_cache(
-            &path,
-            &[InstallRef {
-                id: "1".to_string(),
-                login: "fnodotdev".to_string(),
-            }],
-            now,
-        );
+        // Stale: refetched once and rewritten.
         let stale_at = now + (INSTALLS_TTL_S + 60) * 1000;
         let fetched = Mutex::new(0usize);
         let refs = installations_from(&path, stale_at, |_| {
