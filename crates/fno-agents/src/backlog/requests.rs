@@ -4,7 +4,8 @@
 //! maintainer-applied approval label through the tracker's `list_labeled`,
 //! and files each as an intake row with `source_kind: external_request` and
 //! `public: false`, records an upvote as an external encounter on an
-//! already-published row, or grants a take as a day-long node claim.
+//! already-published row, or grants a claim as a day-long node claim. A
+//! claim is called a take inside the code.
 //! Visitor text is quarantined: the sanitized title
 //! carries no markup, the body rides inside an envelope whose header alone
 //! fills the session-prompt excerpt, and nothing is written to GitHub. Dry
@@ -29,13 +30,13 @@ const EXTERNAL_KIND: &str = "external_request";
 const EXTERNAL_TAG: &str = "external-request";
 /// The board card id an upvote issue names: `Upvote c-ab12`.
 const UPVOTE_TITLE: &str = r"^Upvote ([a-z][a-z0-9]{0,7}-[0-9a-f]{4,8})$";
-/// The board card id a take issue names: `Take c-ab12`. The PR steward reads
-/// the same pattern to link a take's pull request to its node.
-pub(crate) const TAKE_TITLE: &str = r"^Take ([a-z][a-z0-9]{0,7}-[0-9a-f]{4,8})$";
-/// The steward tags a node whose take arrived as a pull request. It also
+/// The board card id a claim issue names: `Claim c-ab12`. The PR steward reads
+/// the same pattern to link a claim's pull request to its node.
+pub(crate) const TAKE_TITLE: &str = r"^Claim ([a-z][a-z0-9]{0,7}-[0-9a-f]{4,8})$";
+/// The steward tags a node whose claim arrived as a pull request. It also
 /// releases the claim so the fleet can build the node; the tag stops the
-/// import from granting the same take again.
-pub(crate) const TAKE_DELIVERED_TAG: &str = "take-delivered";
+/// import from granting the same claim again.
+pub(crate) const TAKE_DELIVERED_TAG: &str = "claim-delivered";
 /// A GitHub login, or the `unknown` placeholder.
 const LOGIN_PATTERN: &str = r"^[A-Za-z0-9-]{1,39}$";
 
@@ -195,7 +196,7 @@ pub fn run(args: &[String]) -> i32 {
 
     let held = held_node_claims();
     if let Err(e) = &held {
-        eprintln!("requests: takes are skipped: {e}");
+        eprintln!("requests: claims are skipped: {e}");
     }
     let graph = super::settings::graph_path();
     let mut retry = 0u8;
@@ -299,10 +300,10 @@ fn help_text() -> String {
      Reads open issues carrying both the request label (default fno-request)\n\
      and the approval label (default fno-approved, applied by hand by a\n\
      maintainer), then files each as an intake row, records an upvote, or\n\
-     grants a take. An issue titled `Take <id>` holds that node for its\n\
-     author for a day. Each run renews the take while the issue stays open\n\
+     grants a claim. An issue titled `Claim <id>` holds that node for its\n\
+     author for a day. Each run renews the claim while the issue stays open\n\
      and approved, and releases it once the issue leaves the list. A login\n\
-     holds at most --max-per-author takes.\n\
+     holds at most --max-per-author claims.\n\
      Dry run by default: pass --apply to write. The import never writes to\n\
      GitHub. Visitor text is quarantined in the row's details; accept a\n\
      request by rewriting it in your own words, never by promoting it."
@@ -504,7 +505,7 @@ fn apply_issues(
                 Ok(claim) => {
                     outcome.takes += 1;
                     outcome.claims.push(claim);
-                    outcome.receipt.push(format!("take {target} by {login}"));
+                    outcome.receipt.push(format!("claim {target} by {login}"));
                 }
                 Err(reason) => {
                     outcome.skipped += 1;
@@ -714,7 +715,7 @@ fn write_claims(ops: &[ClaimOp], events_dir: Option<&Path>) -> Vec<String> {
                 let opts = crate::claims::AcquireOpts {
                     pid_unavailable: true,
                     ttl_ms: Some(crate::claims::MAX_TTL_MS),
-                    reason: Some(format!("take of {node} from {repo}#{issue}")),
+                    reason: Some(format!("claim of {node} from {repo}#{issue}")),
                     metadata: Some(meta),
                     pid_provenance: Some("ambient".to_string()),
                     identity: Some((String::new(), "github".to_string())),
@@ -726,10 +727,10 @@ fn write_claims(ops: &[ClaimOp], events_dir: Option<&Path>) -> Vec<String> {
                         format!("claimed {node} for {holder}")
                     }
                     crate::claims::AcquireOutcome::HeldByOther { holder, .. } => {
-                        format!("skipped take {node}: taken by {holder}")
+                        format!("skipped claim {node}: held by {holder}")
                     }
                     crate::claims::AcquireOutcome::Error(e) => {
-                        format!("skipped take {node}: {e}")
+                        format!("skipped claim {node}: {e}")
                     }
                 }
             }
@@ -779,18 +780,18 @@ fn record_take(
         .and_then(Value::as_array)
         .is_some_and(|tags| tags.iter().any(|t| t.as_str() == Some(TAKE_DELIVERED_TAG)));
     if delivered {
-        return Err(format!("{target} already has a delivered take"));
+        return Err(format!("{target} already has a delivered claim"));
     }
     match held.get(target) {
         Some(other) if other.holder != take.holder => {
-            return Err(format!("taken by {}", other.holder));
+            return Err(format!("held by {}", other.holder));
         }
         Some(_) => {}
         None => {
             let mine = held.values().filter(|h| h.holder == take.holder).count();
             if mine >= max_per_login {
                 return Err(format!(
-                    "{} is at the take ceiling ({max_per_login})",
+                    "{} is at the claim ceiling ({max_per_login})",
                     take.holder
                 ));
             }
@@ -972,7 +973,7 @@ fn print_receipt(outcome: &Outcome, parsed: &Parsed) {
                 "dry_run": outcome.dry_run,
                 "filed": outcome.filed,
                 "votes": outcome.votes,
-                "takes": outcome.takes,
+                "claims": outcome.takes,
                 "skipped": outcome.skipped,
                 "results": results,
             }))
@@ -984,7 +985,7 @@ fn print_receipt(outcome: &Outcome, parsed: &Parsed) {
         println!("{line}");
     }
     println!(
-        "{}: {} filed, {} votes, {} takes, {} skipped",
+        "{}: {} filed, {} votes, {} claims, {} skipped",
         if outcome.dry_run {
             "dry run"
         } else {
@@ -1005,7 +1006,7 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    /// The import with no claim store: takes are skipped, the rest runs as
+    /// The import with no claim store: claims are skipped, the rest runs as
     /// it always did.
     fn import(
         rows: &mut Vec<Value>,
@@ -1315,14 +1316,14 @@ mod tests {
         let out = apply_issues(
             &mut rows,
             &[
-                issue(1, "Take c-ab12", "", "Visitor-1"),
-                issue(2, "Take c-ab12", "", "Visitor-2"),
-                issue(3, "Take c-cd34", "", "Visitor-2"),
-                issue(4, "Take c-ef56", "", "Visitor-1"),
-                issue(5, "Take c-0a0b", "", "Visitor-1"),
-                issue(6, "Take c-1111", "", "Visitor-3"),
-                issue(7, "Take zz-9999", "", "Visitor-3"),
-                issue(9, "Take c-7777", "", "Visitor-1"),
+                issue(1, "Claim c-ab12", "", "Visitor-1"),
+                issue(2, "Claim c-ab12", "", "Visitor-2"),
+                issue(3, "Claim c-cd34", "", "Visitor-2"),
+                issue(4, "Claim c-ef56", "", "Visitor-1"),
+                issue(5, "Claim c-0a0b", "", "Visitor-1"),
+                issue(6, "Claim c-1111", "", "Visitor-3"),
+                issue(7, "Claim zz-9999", "", "Visitor-3"),
+                issue(9, "Claim c-7777", "", "Visitor-1"),
             ],
             "o/r",
             project,
@@ -1349,12 +1350,12 @@ mod tests {
         );
         assert_eq!((out.takes, out.skipped, out.filed), (2, 6, 0));
         for want in [
-            "skipped issue 2: taken by github:visitor-1",
-            "skipped issue 3: taken by target-session:s1",
-            "skipped issue 5: c-0a0b already has a delivered take",
+            "skipped issue 2: held by github:visitor-1",
+            "skipped issue 3: held by target-session:s1",
+            "skipped issue 5: c-0a0b already has a delivered claim",
             "skipped issue 6: c-1111 is not an open public row",
             "skipped issue 7: no such open public row zz-9999",
-            "skipped issue 9: github:visitor-1 is at the take ceiling (2)",
+            "skipped issue 9: github:visitor-1 is at the claim ceiling (2)",
         ] {
             assert!(
                 out.receipt.iter().any(|l| l == want),
@@ -1366,7 +1367,7 @@ mod tests {
 
         let blind = import(
             &mut rows,
-            &[issue(10, "Take c-ab12", "", "Visitor-1")],
+            &[issue(10, "Claim c-ab12", "", "Visitor-1")],
             "o/r",
             project,
             "/tmp/p",

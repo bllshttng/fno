@@ -3028,9 +3028,9 @@ const upUrl = upvoteIssueUrl("o/r", "fno-request", "c-ab12");
 eq(upUrl.origin + upUrl.pathname, "https://github.com/o/r/issues/new", "the upvote link base");
 eq(upUrl.searchParams.get("title"), "Upvote c-ab12", "the upvote sends the card id only");
 eq(upUrl.searchParams.get("labels"), "fno-request", "the upvote label param");
-const takeUrl = takeIssueUrl("o/r", "fno-request", "c-ab12");
-eq(takeUrl.searchParams.get("title"), "Take c-ab12", "the take sends the card id only");
-eq(takeUrl.searchParams.get("labels"), "fno-request", "the take label param");
+const claimUrl = claimIssueUrl("o/r", "fno-request", "c-ab12");
+eq(claimUrl.searchParams.get("title"), "Claim c-ab12", "the claim sends the card id only");
+eq(claimUrl.searchParams.get("labels"), "fno-request", "the claim label param");
 console.log("snapshot page helpers: 40 cases ok");
 // The board shortcuts: every key the ? sheet advertises, the typing guard,
 // the Escape unwind order, and the copied-id toast line.
@@ -3155,7 +3155,7 @@ console.log("theme store: 9 cases ok");
                 "themeAttr",
                 "requestIssueUrl",
                 "upvoteIssueUrl",
-                "takeIssueUrl",
+                "claimIssueUrl",
             ]
             .iter()
             .map(|name| lift_js_fn(BACKLOG_PAGE, name))

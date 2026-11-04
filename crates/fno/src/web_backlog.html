@@ -420,7 +420,7 @@ function cardKeeps(card, nodes, state) {
 }
 // The board-request links (public mode, publish --requests). The address is
 // built on URL + searchParams, never by string concatenation of card text,
-// and the upvote and the take send the card id only, never the card title.
+// and the upvote and the claim send the card id only, never the card title.
 // GitHub reads `labels`; a bare `label` is ignored.
 function requestIssueUrl(repo, label) {
   const u = new URL("https://github.com/" + repo + "/issues/new");
@@ -435,11 +435,11 @@ function upvoteIssueUrl(repo, label, id) {
   u.searchParams.set("title", "Upvote " + id);
   return u;
 }
-function takeIssueUrl(repo, label, id) {
+function claimIssueUrl(repo, label, id) {
   const u = new URL("https://github.com/" + repo + "/issues/new");
   u.searchParams.set("template", label + ".yml");
   u.searchParams.set("labels", label);
-  u.searchParams.set("title", "Take " + id);
+  u.searchParams.set("title", "Claim " + id);
   return u;
 }
 // One fzf-style hit: needle characters appear in order, gaps allowed,
@@ -2008,11 +2008,11 @@ function laneKeyOf(card, lanesBy, parents, byId) {
       if (!card.claimed) {
         dg.appendChild(document.createTextNode(" · "));
         const ta = document.createElement("a");
-        ta.href = takeIssueUrl(snap.requests.repo, snap.requests.label, card.id).href;
+        ta.href = claimIssueUrl(snap.requests.repo, snap.requests.label, card.id).href;
         ta.target = "_blank";
         ta.rel = "noopener noreferrer";
-        ta.title = "Take " + card.id;
-        ta.textContent = "Take";
+        ta.title = "Claim " + card.id;
+        ta.textContent = "Claim";
         dg.appendChild(ta);
       }
     }

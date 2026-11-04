@@ -983,9 +983,9 @@ fn rank_band(rank: Option<f64>) -> u8 {
 /// overlay consumes: node id -> claim holder, for claims whose `state` is
 /// `"live"` under a `node:` / `dispatch:` key. Only `"live"` counts
 /// as in-flight (Locked 2); the sweep's other states (`stale`/`suspect`/...)
-/// never flip a card. The one exception is a contributor's take: a day's
+/// never flip a card. The one exception is a contributor's claim: a day's
 /// lease held by a `github:` login with no process behind it, which the
-/// sweep reads `suspect` and which still marks the node taken. `None` on
+/// sweep reads `suspect` and which still marks the node claimed. `None` on
 /// unparseable output so the caller keeps its
 /// last-good sweep — a flaky tick must not downgrade in-flight cards.
 ///
@@ -2475,7 +2475,7 @@ mod tests {
             {"key":"node:x-e","state":"suspect","holder":"github:visitor-1","host":"h"}
         ]}"#;
         let live = live_claims_from_sweep(stdout).unwrap();
-        // Only live claims count, and a contributor's take; node: holder
+        // Only live claims count, and a contributor's claim; node: holder
         // preferred over dispatch:.
         assert_eq!(live.len(), 3);
         assert_eq!(live["x-a"], "target-session:abc");
