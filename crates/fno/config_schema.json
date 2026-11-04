@@ -6997,7 +6997,7 @@
    "path": "github.app_id",
    "type": "str",
    "default": "",
-   "doc": "GitHub App id; with github.app_installation_id it arms App-installation token minting for GitHub API calls.",
+   "doc": "GitHub App id; arms App-installation token minting for GitHub API calls. The installation is resolved per repo owner from the app's installations list; a repo whose owner has no installation keeps the user token.",
    "wizard": "never",
    "question": "",
    "default_source": ""
@@ -7006,7 +7006,7 @@
    "path": "github.app_installation_id",
    "type": "str",
    "default": "",
-   "doc": "GitHub App installation id; required beside github.app_id before the App path mints tokens.",
+   "doc": "Optional GitHub App installation id pin; skips the per-owner installation resolution and serves every repo that installation can see.",
    "wizard": "never",
    "question": "",
    "default_source": ""
