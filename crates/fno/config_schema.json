@@ -1014,28 +1014,6 @@
     "title": "GateBlock",
     "type": "object"
    },
-   "GithubBlock": {
-    "description": "GitHub App identity (nested under ``config.github``).\n\n``app_id`` and ``app_installation_id`` together arm the App token path:\nGitHub API traffic then mints short-lived installation tokens instead of\nspending the user token's hourly quota. ``app_key_path`` is the private\nkey PEM; a leading ``~`` expands against ``$HOME``.",
-    "properties": {
-     "app_id": {
-      "default": "",
-      "title": "App Id",
-      "type": "string"
-     },
-     "app_installation_id": {
-      "default": "",
-      "title": "App Installation Id",
-      "type": "string"
-     },
-     "app_key_path": {
-      "default": "~/.fno/secrets/github-app.pem",
-      "title": "App Key Path",
-      "type": "string"
-     }
-    },
-    "title": "GithubBlock",
-    "type": "object"
-   },
    "GroomBlock": {
     "description": "Daily backlog-grooming pass settings (nested under 'config.groom').\n\nwave 2: `fno backlog groom` (`spawn_worker` in\n   crates/fno-agents/src/backlog/groom.rs) previously spawned with no enable key at all, so it\n   could not be turned off. Default ``True`` matches the spawner's CURRENT\n   effective behavior (it always ran) - shipping this gate changes nothing\n   for an existing user until they explicitly disable it.\n   ",
     "properties": {
@@ -3814,9 +3792,6 @@
    },
    "accounts": {
     "$ref": "#/$defs/AccountsBlock"
-   },
-   "github": {
-    "$ref": "#/$defs/GithubBlock"
    },
    "schema_version": {
     "default": 1,
@@ -6927,33 +6902,6 @@
    "question": "",
    "default_source": "",
    "doc": "Provider-rotation failover: {max_swaps_per_phase}."
-  },
-  {
-   "path": "github.app_id",
-   "type": "str",
-   "default": "",
-   "wizard": "never",
-   "question": "",
-   "default_source": "",
-   "doc": "GitHub App id; with github.app_installation_id it arms App-installation token minting for GitHub API calls."
-  },
-  {
-   "path": "github.app_installation_id",
-   "type": "str",
-   "default": "",
-   "wizard": "never",
-   "question": "",
-   "default_source": "",
-   "doc": "GitHub App installation id; required beside github.app_id before the App path mints tokens."
-  },
-  {
-   "path": "github.app_key_path",
-   "type": "str",
-   "default": "~/.fno/secrets/github-app.pem",
-   "wizard": "never",
-   "question": "",
-   "default_source": "",
-   "doc": "Path to the GitHub App private key PEM (default ~/.fno/secrets/github-app.pem, mode 0600); a leading ~ expands against $HOME."
   },
   {
    "path": "schema_version",

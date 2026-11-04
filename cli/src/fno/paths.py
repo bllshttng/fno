@@ -24,10 +24,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from functools import cache
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Optional
-
-if TYPE_CHECKING:
-    from fno.config import SettingsModel
+from typing import Any, NamedTuple, Optional
 
 
 def _warn_if_foreign_fno_repo_root(resolved: Path, cwd: Path) -> None:
@@ -251,10 +248,9 @@ def resolve_canonical_repo_root() -> Path:
     fallback (also covers bare / separate-git-dir layouts the helper returns
     ``None`` for).
 
-    Uncached on purpose: :func:`fno.config.load_settings` is an uncached
-    wrapper over a declaration-keyed cache, so caching here buys nothing,
-    and staying uncached keeps test isolation simple and honors
-    mid-process ``FNO_REPO_ROOT`` changes.
+    Uncached on purpose: staying uncached keeps test isolation simple and
+    honors mid-process ``FNO_REPO_ROOT`` changes (the settings receipt cache
+    keys on the same declaration, so a pinned process still reparses).
     """
     env_root = os.environ.get("FNO_REPO_ROOT")
     if env_root:
@@ -394,18 +390,245 @@ def migrate_from_checkout(old: Path, new: Path) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Settings cache (lazy import to avoid circular-import hazard at module load)
+# Settings facts through the door (the config family's one reader left)
 # ---------------------------------------------------------------------------
 
+#: The settings keys the resolvers consume through the settings-read door.
+_PATH_KEYS: tuple[str, ...] = (
+    "worktrees_base",
+    "spaces_dir",
+    "retro_pending_dir",
+    "postmortems_dir",
+    "operator_lane",
+    "observer_reports_dir",
+    "memory_dir",
+    "ledger_json",
+    "inbox_path",
+    "hook_logs_dir",
+    "handoffs_dir",
+    "fleet_dir",
+    "evals_history",
+    "bus_dir",
+    "briefs_dir",
+)
 
-def _settings() -> "SettingsModel":
-    """Load the settings for the caller's declared root.
 
-    Uncached: the keyed cache lives on ``fno.config._load_settings_at``;
-    a cache here would be keyed on nothing.
+def _global_settings_path() -> Path:
+    """The per-user global settings file (the config_io twin).
+
+    A set FNO_CONFIG with no explicit global relocation IS the global config:
+    a sandbox pinned only by FNO_CONFIG must not inherit the machine's real
+    global file. FNO_GLOBAL_SETTINGS_PATH outranks the pin; /dev/null disables
+    the global candidate. Empty-string env vars read as unset.
     """
-    from fno.config import load_settings
-    return load_settings()
+    env_config = os.environ.get("FNO_CONFIG")
+    explicit_global = os.environ.get("FNO_GLOBAL_SETTINGS_PATH")
+    if env_config and not explicit_global:
+        return Path(env_config)
+    if explicit_global:
+        return Path(explicit_global)
+    return Path.home() / ".fno" / "settings.yaml"
+
+
+def _canonical_root_from_gitfile(repo_root: Path) -> Optional[Path]:
+    """Canonical root from a linked worktree's ``.git`` pointer file; None
+    when ``.git`` is a real dir or unparseable. Plain IO by contract: the
+    settings cache key runs on every read and never shells out."""
+    git_path = repo_root / ".git"
+    if not git_path.is_file():
+        return None
+    try:
+        text = git_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    for line in text.splitlines():
+        if line.strip().startswith("gitdir:"):
+            gitdir = line.split(":", 1)[1].strip()
+            idx = gitdir.find("/.git/worktrees/")
+            if idx > 0:
+                return Path(gitdir[:idx])
+    return None
+
+
+def _settings_fingerprint() -> tuple[tuple[str, int, int], ...]:
+    """(path, mtime_ns, size) per existing candidate, the loader's walk.
+
+    Locations stated directly; OSError contributes nothing.
+    """
+    env_config = os.environ.get("FNO_CONFIG")
+    if env_config:
+        locations = [Path(env_config)]
+    else:
+        repo_root = resolve_repo_root()
+        locations = [
+            repo_root / ".fno" / "config.toml",
+            repo_root / ".fno" / "settings.yaml",
+            repo_root / ".fno" / "config.local.toml",
+        ]
+        if os.environ.get("FNO_NO_CANONICAL_CONFIG") != "1":
+            canonical = _canonical_root_from_gitfile(repo_root)
+            if canonical is not None and canonical != repo_root:
+                locations += [
+                    canonical / ".fno" / name
+                    for name in ("config.toml", "settings.yaml")
+                ]
+        global_path = _global_settings_path()
+        if global_path.name == "settings.yaml":
+            locations.append(global_path.with_name("config.toml"))
+        locations.append(global_path)
+    fingerprint: list[tuple[str, int, int]] = []
+    for candidate in locations:
+        try:
+            st = candidate.stat()
+        except OSError:
+            continue
+        fingerprint.append((str(candidate), st.st_mtime_ns, st.st_size))
+    return tuple(fingerprint)
+
+
+_PathOverrides = NamedTuple(
+    "_PathOverrides",
+    [
+        ("worktrees_base", Optional[str]),
+        ("spaces_dir", Optional[str]),
+        ("retro_pending_dir", Optional[str]),
+        ("postmortems_dir", Optional[str]),
+        ("operator_lane", Optional[str]),
+        ("observer_reports_dir", Optional[str]),
+        ("memory_dir", Optional[str]),
+        ("ledger_json", Optional[str]),
+        ("inbox_path", Optional[str]),
+        ("hook_logs_dir", Optional[str]),
+        ("handoffs_dir", Optional[str]),
+        ("fleet_dir", Optional[str]),
+        ("evals_history", Optional[str]),
+        ("bus_dir", Optional[str]),
+        ("briefs_dir", Optional[str]),
+    ],
+)
+_ObsidianFacts = NamedTuple(
+    "_ObsidianFacts",
+    [("enabled", bool), ("vault", Optional[str])],
+)
+_PostMergeFacts = NamedTuple(
+    "_PostMergeFacts",
+    [("parking_lot_path", Optional[str]), ("maintainer_marker", Optional[str])],
+)
+_ProjectFacts = NamedTuple("_ProjectFacts", [("id", Optional[str])])
+
+
+class _SettingsFacts:
+    """Attribute view over the settings-read door receipt.
+
+    Exposes the SettingsModel surface the resolvers read: .paths.<key>,
+    .obsidian.enabled/.vault, .state_dir, .post_merge.parking_lot_path and
+    .maintainer_marker, .project.id. A None receipt field falls back to the
+    model's non-null defaults (state_dir -> ~/.fno/, obsidian.enabled ->
+    False); everything else passes None through, like the Optional fields.
+    """
+
+    __slots__ = ("_r",)
+
+    def __init__(self, receipt: Optional[dict[str, Any]]) -> None:
+        self._r = receipt or {}
+
+    def _at(self, dotted: str) -> Any:
+        node: Any = self._r.get("paths") or {}
+        for part in dotted.split("."):
+            if not isinstance(node, dict):
+                return None
+            node = node.get(part)
+        return node
+
+    def _str(self, dotted: str) -> Optional[str]:
+        """A path-shaped receipt value; anything but a string reads unset.
+
+        The door is fail-open and carries raw JSON, so a wrong-typed config
+        value (``paths.inbox_path = 42``) arrives as an int. The old model
+        refused it loudly; the door contract answers nulls instead of
+        guesses, so the resolver keeps its built-in default.
+        """
+        value = self._at(dotted)
+        return value if isinstance(value, str) else None
+
+    def _bool(self, dotted: str) -> bool:
+        value = self._at(dotted)
+        return value if isinstance(value, bool) else False
+
+    @property
+    def state_dir(self) -> str:
+        value = self._str("state_dir")
+        return value if value else "~/.fno/"
+
+    @property
+    def paths(self) -> "_PathOverrides":
+        return _PathOverrides._make(self._str(key) for key in _PATH_KEYS)
+
+    @property
+    def obsidian(self) -> "_ObsidianFacts":
+        return _ObsidianFacts(
+            enabled=self._bool("obsidian_enabled"),
+            vault=self._str("obsidian_vault"),
+        )
+
+    @property
+    def post_merge(self) -> "_PostMergeFacts":
+        return _PostMergeFacts(
+            parking_lot_path=self._str("post_merge_parking_lot_path"),
+            maintainer_marker=self._str("post_merge_maintainer_marker"),
+        )
+
+    @property
+    def project(self) -> "_ProjectFacts":
+        return _ProjectFacts(id=self._str("project_id"))
+
+
+def _settings_key() -> "tuple[Any, ...]":
+    """Declaration + content fingerprint (docs/path-config.md 'Settings cache
+    key'). A same-key edit reparses with no explicit cache clear.
+    """
+    env = os.environ.get
+    repo_root = resolve_repo_root()
+    return (
+        env("FNO_CONFIG"),
+        env("FNO_GLOBAL_SETTINGS_PATH"),
+        env("FNO_NO_CANONICAL_CONFIG"),
+        env("FNO_REPO_ROOT"),
+        env("HOME"),
+        str(repo_root),
+        _settings_fingerprint(),
+    )
+
+
+@cache
+def _settings_at(key: "tuple[Any, ...]") -> _SettingsFacts:
+    """One settings-read receipt for a declaration key, cached per process.
+
+    The door spawn is the cost a keyed cache hides: every settings-backed
+    resolver in the process shares one receipt per declaration.
+    """
+    root = key[-1]
+    from fno import rust_binary
+    binary = rust_binary.find_dev_binary()
+    # Ambient reads send no root: the door resolves it and honors the
+    # FNO_CONFIG pin (the pin is the whole config world). The explicit-root
+    # call (the load_settings_for_repo twin) sends the root and walks that
+    # repo unpinned.
+    receipt = rust_binary.settings_read(
+        binary=binary, root=str(root) if root else None
+    )
+    return _SettingsFacts(receipt)
+
+
+def _settings(root: Optional[str] = None) -> _SettingsFacts:
+    """The settings facts for the caller's declared root.
+
+    `root` pins the walk at an explicit repo root (the load_settings_for_repo
+    twin); None lets the door resolve from env/cwd/git like the old
+    load_settings did.
+    """
+    key = (*_settings_key(), root or "")
+    return _settings_at(key)
 
 
 # ---------------------------------------------------------------------------
@@ -485,7 +708,7 @@ def _project_name(
     project_root: Optional[Path] = None,
     *,
     for_vault: bool = False,
-    settings: Optional[SettingsModel] = None,
+    settings: Optional[_SettingsFacts] = None,
 ) -> str:
     """Stable project-folder name for ``internal/<project>/`` paths.
 
@@ -511,7 +734,7 @@ def _resolve(
     raw: str,
     project_root: Optional[Path] = None,
     *,
-    settings: Optional[SettingsModel] = None,
+    settings: Optional[_SettingsFacts] = None,
 ) -> Path:
     """Expand ~, $VAR, {vault}, {project}; absolutize via .resolve().
 
@@ -1434,7 +1657,7 @@ def project_log(name: str, project_root: Optional[Path] = None) -> Path:
     return space.resolve()
 
 
-def vault_root(*, settings: Optional[SettingsModel] = None) -> Optional[Path]:
+def vault_root(*, settings: Optional[_SettingsFacts] = None) -> Optional[Path]:
     """Filesystem path of the configured Obsidian vault, or None.
 
     Returns None when ``obsidian.enabled`` is false or ``obsidian.vault`` is
@@ -1492,9 +1715,7 @@ def inbox_path(project_root: Optional[Path] = None) -> Path:
     if project_root is None or os.environ.get("FNO_CONFIG"):
         settings = _settings()
     else:
-        from fno.config import load_settings_for_repo
-
-        settings = load_settings_for_repo(root)
+        settings = _settings(root=str(root))
     override = settings.paths.inbox_path
     post_merge_parking_lot = settings.post_merge.parking_lot_path
     if override is not None:
@@ -1543,19 +1764,17 @@ def config_file() -> Path:
     """Return the path to the active config file (config.toml on a flat install;
     a legacy settings.yaml when that is what loaded).
 
-    Prefers the path that load_settings() actually used to load the file
-    (Finding 3: loader and paths must agree on the settings file location).
-    Falls back to state_dir()/config.toml (the canonical flat file) when
-    settings were loaded from built-in defaults (no file on disk).
+    Prefers the file the settings-read receipt names as `source` (the file
+    the merge decided from; Finding 3: loader and paths must agree on the
+    settings file location). Falls back to state_dir()/config.toml (the
+    canonical flat file) when nothing on disk decided (no receipt source).
 
-    Triggers a settings load if not already cached, so _loaded_from is set.
+    One door read (cached) carries both the source and the values.
     """
-    from fno.config import loaded_from
-    # Trigger a load (no-op if cached) so _loaded_from is populated.
-    _settings()
-    actual = loaded_from()
+    facts = _settings()
+    actual = facts._r.get("source")
     if actual is not None:
-        return actual
+        return Path(actual)
     return root_state_file("config.toml")
 
 

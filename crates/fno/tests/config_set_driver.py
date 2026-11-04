@@ -1,28 +1,16 @@
 #!/usr/bin/env python3
-"""Live oracle for the config-writer port (`fno config set`, `unset`, `rm`).
+"""Fixture builder and after-state reader for the config-writer port
+(`fno config set`, `unset`, `rm`), the characterization replay in
+config_set_parity.rs.
 
-Modes, the shape of config_cli_driver.py:
-
-  --case NAME ROOT     build case NAME's fixture under ROOT, run the base
-                       commit's Python writer through the real top-level app,
-                       and relay (stdout, stderr, exit code) byte-verbatim.
-  --fixture NAME ROOT  build the fixture only (the Rust replay's first step).
-  --state ROOT         print the after-state both legs compare: each config
+  --fixture NAME ROOT  build case NAME's fixture under ROOT (the Rust
+                       replay's first step).
+  --state ROOT         print the after-state the replay compares: each config
                        file parsed, and the config_write receipt rows.
-  --capture DIR        run every case in a fresh tempdir and freeze the
-                       normalized triple plus the after-state into DIR.
+  --list               print the case table as JSON.
 
-The oracle legs (config/writer.py, claims/optout_lease.py and
-config_writer_cli.py) load from git: the nearest ancestor of HEAD that still
-holds writer.py. Capture refuses and names the leg when no ancestor within
-reach holds it.
-
-Two facts belong to the host, not the contract, and both legs read them from
-the fixture: the claim doors and the pr-watch doors answer from
-fake_fno_agents.py, and the attester identity is the FNO_FIXTURE_ATTESTER
-stamp with an `env_only` witness (the native leg asks the fake's
-`attest identity`; this leg patches the Python resolver to the same answer),
-because a real ancestry walk reads whichever harness launched the run.
+The frozen goldens under tests/golden/config_set are the contract; the live
+Python leg they captured from died with the config family.
 """
 from __future__ import annotations
 
@@ -31,20 +19,12 @@ import os
 import shutil
 import subprocess
 import sys
-import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[3]
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(REPO / "cli" / "src"))
-
-ORACLE_LEGS = (
-    ("fno.config.writer", "cli/src/fno/config/writer.py"),
-    ("fno.claims.optout_lease", "cli/src/fno/claims/optout_lease.py"),
-    ("fno.config_writer_cli", "cli/src/fno/config_writer_cli.py"),
-)
-
 
 @dataclass
 class Case:
@@ -219,62 +199,6 @@ def scrubbed_env(root: Path, case_env: dict[str, str]) -> dict[str, str]:
     return env
 
 
-def oracle_ref(repo_path: str) -> str:
-    for depth in range(0, 40):
-        rev = "HEAD" if depth == 0 else f"HEAD~{depth}"
-        probe = subprocess.run(
-            ["git", "cat-file", "-e", f"{rev}:{repo_path}"], capture_output=True, cwd=REPO
-        )
-        if probe.returncode == 0:
-            return rev
-    raise SystemExit(
-        f"capture refused: no ancestor of HEAD within 40 commits holds {repo_path}, "
-        "the Python writer leg; a golden can only be frozen while the leg is in reach"
-    )
-
-
-def load_oracle_modules() -> None:
-    import types
-
-    import fno.harness_identity as harness_identity
-
-    def fixture_attester(env=None):  # noqa: ANN001 - the resolver's signature
-        return (os.environ.get("FNO_FIXTURE_ATTESTER", ""), "env_only")
-
-    harness_identity.resolve_attester_identity = fixture_attester
-    for module_name, repo_path in ORACLE_LEGS:
-        source = subprocess.run(
-            ["git", "show", f"{oracle_ref(repo_path)}:{repo_path}"],
-            capture_output=True, text=True, check=True, cwd=REPO,
-        ).stdout
-        module = types.ModuleType(module_name)
-        module.__file__ = f"<git-show:{repo_path}>"
-        sys.modules[module_name] = module
-        parent, _, leaf = module_name.rpartition(".")
-        exec(compile(source, module.__file__, "exec"), module.__dict__)
-        setattr(sys.modules[parent], leaf, module)
-
-
-def run_case(case: Case, root: Path) -> tuple[str, str, int]:
-    project = fixture(case.fixture, root)
-    env = scrubbed_env(root, case.env)
-    os.environ.clear()
-    os.environ.update(env)
-    load_oracle_modules()
-    os.chdir(project)
-    from typer.testing import CliRunner
-
-    from fno.cli import app
-
-    sys.argv[0] = "fno"
-    result = CliRunner().invoke(app, list(case.argv))
-    if result.exception is not None and not isinstance(result.exception, SystemExit):
-        import traceback
-
-        traceback.print_exception(result.exception)
-    return result.stdout or "", result.stderr or "", result.exit_code
-
-
 def read_receipts(root: Path) -> list[dict]:
     """The config_write rows in both pinned journals, payload only: the
     envelope's ts and ids are minted per run. Both legs commit through the
@@ -330,44 +254,7 @@ def after_state(root: Path) -> dict:
     }
 
 
-def normalize(text: str, root: Path) -> str:
-    resolved = str(root.resolve())
-    for token in (f"/private{resolved}", resolved, str(root)):
-        text = text.replace(token, "<FIXTURE>")
-    return text
-
-
-def capture(golden_dir: Path) -> None:
-    for _, repo_path in ORACLE_LEGS:
-        oracle_ref(repo_path)
-    golden_dir.mkdir(parents=True, exist_ok=True)
-    for case in CASES:
-        with tempfile.TemporaryDirectory() as raw:
-            root = Path(raw)
-            proc = subprocess.run(
-                [sys.executable, str(Path(__file__).resolve()), "--case", case.name, str(root)],
-                capture_output=True, text=True,
-            )
-            state = subprocess.run(
-                [sys.executable, str(Path(__file__).resolve()), "--state", str(root)],
-                capture_output=True, text=True, check=True,
-            ).stdout
-            out = normalize(proc.stdout, root)
-            err = normalize(proc.stderr, root)
-            state = normalize(state, root)
-        (golden_dir / f"{case.name}.out").write_text(out, encoding="utf-8")
-        (golden_dir / f"{case.name}.err").write_text(err, encoding="utf-8")
-        (golden_dir / f"{case.name}.exit").write_text(f"{proc.returncode}\n", encoding="utf-8")
-        (golden_dir / f"{case.name}.state.json").write_text(state, encoding="utf-8")
-        print(f"{case.name}: exit {proc.returncode}, {len(out)}B out, {len(err)}B err")
-
-
 def main() -> None:
-    if len(sys.argv) == 4 and sys.argv[1] == "--case":
-        out, err, code = run_case(next(c for c in CASES if c.name == sys.argv[2]), Path(sys.argv[3]))
-        sys.stdout.write(out)
-        sys.stderr.write(err)
-        sys.exit(code)
     if len(sys.argv) == 4 and sys.argv[1] == "--fixture":
         fixture(next(c for c in CASES if c.name == sys.argv[2]).fixture, Path(sys.argv[3]))
         return
@@ -377,12 +264,7 @@ def main() -> None:
     if len(sys.argv) == 2 and sys.argv[1] == "--list":
         print(json.dumps([{"name": c.name, "argv": c.argv, "fixture": c.fixture, "env": c.env} for c in CASES]))
         return
-    if len(sys.argv) == 3 and sys.argv[1] == "--capture":
-        capture(Path(sys.argv[2]))
-        return
     sys.exit(
-        "usage: config_set_driver.py --case NAME ROOT | --fixture NAME ROOT"
-        " | --state ROOT | --list | --capture GOLDEN_DIR"
     )
 
 

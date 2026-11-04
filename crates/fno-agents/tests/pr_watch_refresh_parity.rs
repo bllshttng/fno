@@ -1,15 +1,13 @@
 //! parity-stage: characterization
-//! parity-oracle: cli/src/fno/pr_watch/_install.py:refresh_watcher
+//! parity-oracle: gone (cli/src/fno/pr_watch died with the Python runtime; the
+//! committed goldens under tests/golden/pr-watch-refresh/ stay as the frozen
+//! contract)
 //!
 //! Characterization for the pr-watch refresh port: the Rust command
 //! (`fno-agents pr-watch refresh`, reached through `pr_watch::refresh`) is
-//! pinned by the frozen goldens under tests/golden/pr-watch-refresh/. Under
-//! `FNO_CAPTURE_GOLDEN=1` this file runs as a LIVE differential: the Python
-//! leg (`refresh_watcher` + `heal_status_line` through the fixture oracle)
-//! answers the same fixture with the same env pins and the run asserts
-//! byte-identity before the goldens freeze. The Python function survives
-//! only for callers a later wave moves (`groom.py`, the `heal` leaf), so
-//! capture keeps working until wave 6.
+//! pinned by the frozen goldens under tests/golden/pr-watch-refresh/. The
+//! goldens froze from the live Python leg (`refresh_watcher` +
+//! `heal_status_line`) while it lived; the frozen files are the contract.
 //!
 //! Four fixture states: the watcher disabled, a tick in flight (bounce
 //! deferred), a plain bounce (bootout/bootstrap/kickstep scripted), and an
@@ -20,15 +18,11 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use common::{assert_golden, capture_mode, python_executable, slug, Golden};
+use common::{assert_golden, slug, Golden};
 
 mod common;
 
 /// Repo `cli/src` so Python can import the real `fno` package.
-fn pythonpath() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../cli/src")
-}
-
 /// Case directories and the bounce's gui uid are the only machine-dependent
 /// parts of the readout; timestamps ride no stdout.
 fn masked(text: &str, dir: &Path) -> String {
@@ -136,30 +130,6 @@ fn rust_leg(dir: &Path, case: &Case) -> Golden {
 }
 
 /// The old leg through its own Python surface, capture mode only.
-fn python_oracle(dir: &Path, case: &Case) -> Golden {
-    let oracle_script =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pr_watch_refresh/oracle.py");
-    let mut cmd = Command::new(python_executable());
-    cmd.arg(&oracle_script);
-    cmd.arg("--case").arg(dir);
-    if case.force_bounce {
-        cmd.arg("--force-bounce");
-    }
-    for (k, v) in pin_env(dir, case) {
-        cmd.env(k, v);
-    }
-    cmd.env("PYTHONPATH", pythonpath());
-    cmd.current_dir(dir);
-    let out = cmd.output().expect("oracle runs");
-    // stdout + exit are the pinned contract: interpreter stderr is this
-    // machine's noise.
-    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
-    Golden {
-        exit: Some(out.status.code().unwrap_or(-1)),
-        streams: vec![stdout],
-    }
-}
-
 fn cases() -> Vec<Case> {
     vec![
         Case {
@@ -207,17 +177,7 @@ fn pr_watch_refresh_goldens() {
             exit: rust.exit,
             streams: rust.streams.into_iter().map(|s| masked(&s, &dir)).collect(),
         };
-        let oracle = capture_mode().then(|| {
-            let golden = python_oracle(&dir, &case);
-            Golden {
-                exit: golden.exit,
-                streams: golden
-                    .streams
-                    .into_iter()
-                    .map(|s| masked(&s, &dir))
-                    .collect(),
-            }
-        });
+        let oracle = None;
         assert_golden("pr-watch-refresh", case.label, &rust, oracle);
     }
 }

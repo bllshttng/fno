@@ -4,7 +4,7 @@ An operator edits a config file and wants one answer. Did the edit take effect?
 
 `fno config get <leaf>` answers it one leaf at a time. Its `source:` line names the deciding file and the files it overrode, and that line is the only place precedence is visible. It requires already knowing which leaf to ask about.
 
-`fno config doctor` is the command an operator reaches for instead. Its verdict used to be computed from a config it never proved it read. The checks in `crates/fno/src/config_doctor/checks.rs` close that gap, and the unknown-key and enum walks in `schema_walk.rs` beside it read the committed schema table. The loader keeps its own half in `cli/src/fno/config/_readback.py`: the unknown-key walk it warns through and the refusal text `SettingsRefused` carries.
+`fno config doctor` is the command an operator reaches for instead. Its verdict used to be computed from a config it never proved it read. The checks in `crates/fno/src/config_doctor/checks.rs` close that gap, and the unknown-key and enum walks in `schema_walk.rs` beside it read the committed schema table. The loader's own half lived in `cli/src/fno/config/_readback.py`. The config family port deleted it, and the native loader in `crates/fno/src/config_cli/model/` carries both walks now.
 
 ## The parse the doctor can see
 
@@ -54,13 +54,13 @@ The settings-source line lists the files that CONTRIBUTED, from `_aliased_layers
 
 `_UNMODELED_BLOCKS` holds `kanban` and `providers`. The board renderer reads `kanban` straight out of the file, so the model never carries it. `providers` is the pre-rename spelling of `accounts`. The loader's alias copies it across and leaves it in place. Both work. Neither is unknown.
 
-## The module loads fno.config by importlib
+## The deleted readback module loaded fno.config by importlib
 
-`config/_readback.py` reaches `fno.config` through `_cfg()`, which calls `importlib.import_module`. A plain import puts `fno.config` in a mypy strongly-connected component. There the lazy `__getattr__` re-exports in `graph/_constants.py` degrade to `Optional[Path]`, and two files this feature never touches fail.
+`config/_readback.py` (deleted) reached `fno.config` through `_cfg()`, which called `importlib.import_module`. A plain import puts `fno.config` in a mypy strongly-connected component. There the lazy `__getattr__` re-exports in `graph/_constants.py` degrade to `Optional[Path]`, and two files this feature never touches fail.
 
 The number came from a measurement, not from reasoning. `origin/main` is clean at 567 files. The branch reported three errors at 568. Hiding the module made them vanish, which named the cause. Removing the doctor's import edge did not, and neither did moving the module out of the package.
 
-`fno.config._revoke_unbacked_optouts` records the same failure and the same remedy.
+The loader's `_revoke_unbacked_optouts` (now `crates/fno/src/config_cli/model/`'s optout revocation) records the same failure and the same remedy.
 
 ## Not here
 

@@ -227,7 +227,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_RM_ASSUME_YES` | rs | Assume yes for the rm confirm prompt. |
 | `FNO_ROLES_ROOT` | rs | The business-role definition root; unset means `<repo root>/.fno/roles`. Role discovery and the business-role tri-state read it in crates/fno-agents/src/roles/registry.rs `default_role_root`. |
 | `FNO_ROUTE_MODEL` | rs | Fallback model a thread row stamps when the caller named no model and the writer session's observed model is absent (comment_create, api.rs). |
-| `FNO_ROUTE_PROVIDER` | py+rs | unclear: cli/src/fno/agent/cli.py:303; the lead check-in's blueprint reading also reads it (crates/fno-agents/src/lead_checkin.rs r_blueprint) to pick the blueprint-subagent ceiling. |
+| `FNO_ROUTE_PROVIDER` | rs | set by `fno config set --provider` (its help text names the stamp). Read at `crates/fno/src/config_cli/leaves.rs` (route resolution) and `crates/fno-agents/src/lead_checkin.rs` (the blueprint-subagent ceiling). |
 | `FNO_ROUTE_SETTINGS_DIR` | rs | unclear: crates/fno-agents/src/claude_adopt.rs:112 |
 | `FNO_ROUTE_SLOT_DEBUG` | py | unclear: cli/src/fno/rust_binary.py:224 |
 | `FNO_RUNTIME_STATE_PATH` | rs | Overrides the provider runtime-state file (quota locks, usage); the default is ~/.fno/runtime-state.json. |

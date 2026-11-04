@@ -28,7 +28,7 @@ Seven of the original nine prohibited imports were misplaced leaf utilities, and
 
 | Was | Now | Why it could move |
 |---|---|---|
-| `fno.graph._constants.RESERVED_PREFIXES` read by `fno.config` | owned by `fno.config` | a three-element frozenset whose only reader was the importing validator |
+| `fno.graph._constants.RESERVED_PREFIXES` read by the deleted `fno.config` | owned by `fno.graph._constants` | a three-element frozenset whose only reader was the importing validator, deleted with the config family |
 | `fno.agents.events.emit` called by `fno backlog undefer` / `unsupersede` | `fno.graph.failure.emit_undefer_boundary` | the log is graph-owned and `fno.graph.failure` already reads it; the agents emitter was serving as a bare append-a-JSON-line helper |
 | `fno.agents.provider_resolve` | `fno.dispatch_flags` (since retired whole: the fold lives native behind route-slot's dispatch modes) | seven callers spanning every layer; the only remaining dependency was the harness-marker table, and see the caveat below |
 | `fno.agents.drive_authority` | `fno.drive_authority` | a read-only `state.json` reader whose only dependency is `fno.paths` |
@@ -38,14 +38,16 @@ Applying this document's own test to the third row: `fno.dispatch_flags` was the
 It imported `fno.harness_identity`, which built `LEGACY_HANDLE_RE` at import time from `fno.agents.harness_map.known_harnesses()`, so `import fno.dispatch_flags` pulled in `fno.agents`.
 That edge is now closed: the harness-name set lives at L0 (`fno.harness_names`), so `fno.harness_identity` builds the regex from L0 data with no runtime import, and both `fno.harness_identity` and `fno.harness_names` are declared in the boundary map so the now-absent edge is visible rather than hidden in an unmapped blind spot.
 The runtime capability table (`fno.agents.harness_map`) asserts its keys stay in sync with the name list, so adding a harness stays a single coupled change.
-`fno.drive_authority`, `fno.rust_binary`, `fno.config` and `fno.graph.failure` were each verified to import no `fno.agents` module, eagerly or lazily; `fno.harness_identity` now joins that list.
+
+`fno.drive_authority`, `fno.rust_binary`, the since-deleted `fno.config` and `fno.graph.failure` were each verified to import no `fno.agents` module. `fno.harness_identity` now joins that list.
+
 
 None of the moves left a re-export shim at the old path.
 A shim would keep the upward import spelling available and hide the move from the next reader.
 
 The two survivors form one finding. The `fno doctor event emit` builder stamps the sending session identity through `fno.agents.self_stamp`. It resolves spawn lineage through `fno.agents.registry`. That is platform-layer code reading agent-runtime state, and it is a genuine architectural finding rather than a misplaced file. Neither callee can move down. `agents.registry` is the agents registry. The remaining options are larger than a burndown. One option puts the stamp behind a registered hook, which leaves processes without `fno.agents` unstamped. Another moves envelope construction into the runtime layer and leaves `fno doctor event emit` as a thin caller.
 
-Two shortcuts were considered and rejected on measurement rather than taste. Hoisting `fno.graph.cli` and `fno.events.cli` to a higher layer clears nothing. Those modules still import L5 `fno.agents`. If CLI modules are declared L5, the check bites. `graph/cli.py` has roughly 10k lines of logic, not a composition root. Declaring it unconstrained empties the check. Reclassifying `fno.events` from platform to runtime fails a harder test. `fno.config`, `fno.graph`, and `fno.approvals` all import it. The move creates nine upward violations while erasing three.
+Two shortcuts were considered and rejected on measurement rather than taste. Hoisting `fno.graph.cli` and `fno.events.cli` to a higher layer clears nothing. Those modules still import L5 `fno.agents`. If CLI modules are declared L5, the check bites. `graph/cli.py` has roughly 10k lines of logic, not a composition root. Declaring it unconstrained empties the check. Reclassifying `fno.events` from platform to runtime fails a harder test. `fno.config` (deleted with the family), `fno.graph`, and `fno.approvals` all imported it. The move creates nine upward violations while erasing three.
 
 ## Audit and CI modes
 

@@ -24,6 +24,10 @@ pub fn run_settings_read(args: &[String]) -> i32 {
         .map(str::to_string);
     let pairs = super::settings::work_map_pairs();
     let project = super::settings::detect_project(detect.as_deref());
+    let root = request
+        .get("root")
+        .and_then(Value::as_str)
+        .map(std::path::PathBuf::from);
     let projects: Vec<Value> = pairs
         .iter()
         .map(|(name, path)| serde_json::json!([name, path]))
@@ -34,6 +38,7 @@ pub fn run_settings_read(args: &[String]) -> i32 {
         "candidates": super::settings::candidates(),
         "projects": projects,
         "project": project,
+        "paths": super::settings::paths_facts(root.as_deref()),
     });
     println!("{payload}");
     0
