@@ -135,6 +135,20 @@ pub(crate) fn adoption_node(
     one(cwd).map(|node| (node, "worktree"))
 }
 
+/// Bind a freshly minted row that names no node. Only a claude row with a
+/// session id is read; every other row, and a row that already holds a node,
+/// is left alone.
+pub(crate) fn bind_adopted_node(entry: &mut crate::state::RegistryEntry) {
+    let sid = entry.harness_session_id.clone().unwrap_or_default();
+    if entry.node.is_some() || sid.is_empty() || entry.harness_name() != "claude" {
+        return;
+    }
+    if let Some((node, basis)) = adoption_node(&sid, entry.launch_account.as_deref(), &entry.cwd) {
+        entry.node = Some(node);
+        entry.node_basis = Some(basis.to_string());
+    }
+}
+
 /// Stamp `node` + `node_basis: "first-turn"` on the row keyed by `sid`,
 /// minting one adopt-style when the session has no row. A row that already
 /// names a node is left untouched (spawn and target work reads as claimed by

@@ -262,17 +262,6 @@ pub(crate) fn manifest_field(content: &str, key: &str) -> Option<String> {
 /// Idempotent: re-adopting the same session refreshes the row rather than
 /// duplicating it.
 pub fn upsert_adopted_row(registry_path: &Path, entry: RegistryEntry) -> Result<(), StateError> {
-    // A bg lead adopted with no node binds from its first fno call or its
-    // worktree path, so the node-done reap can see it. Read outside the lock.
-    let bound = if entry.node.is_none() {
-        crate::node_bind::adoption_node(
-            entry.harness_session_id.as_deref().unwrap_or_default(),
-            entry.launch_account.as_deref(),
-            &entry.cwd,
-        )
-    } else {
-        None
-    };
     update_registry(registry_path, |reg| {
         // Find the row index by the session uuid first, then move `entry`
         // into place. The key is kept for the launch-edge fill below.
@@ -313,12 +302,6 @@ pub fn upsert_adopted_row(registry_path: &Path, entry: RegistryEntry) -> Result<
                     // never downgrades a first-turn bind to claimed work.
                     reg.entries[i].node_basis = node_basis;
                 }
-                if reg.entries[i].node.is_none() {
-                    if let Some((node, basis)) = &bound {
-                        reg.entries[i].node = Some(node.clone());
-                        reg.entries[i].node_basis = Some((*basis).to_string());
-                    }
-                }
                 // An agent adopt keeps the row's prior origin (the adopt
                 // observed nothing about the birth); a user-typed adopt
                 // upgrades it to `operator`, the origin the gc keeps
@@ -341,14 +324,7 @@ pub fn upsert_adopted_row(registry_path: &Path, entry: RegistryEntry) -> Result<
                 reg.entries[i].predecessor_session_ids = prev.predecessor_session_ids;
                 reg.entries[i].created_at = prev.created_at;
             }
-            None => {
-                let mut entry = entry;
-                if let Some((node, basis)) = &bound {
-                    entry.node = Some(node.clone());
-                    entry.node_basis = Some((*basis).to_string());
-                }
-                reg.entries.push(entry);
-            }
+            None => reg.entries.push(entry),
         }
         // A claude --bg worker has no spawn birth, so its launcher is the
         // launch record its SessionStart claimed. A born edge always wins.

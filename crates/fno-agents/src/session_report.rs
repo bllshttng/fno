@@ -339,6 +339,7 @@ pub(crate) fn handle_session_report(
                     entry.name = crate::native_adopt::unique_name(&r.entries, &entry.name);
                     // The report that mints the row is its first report.
                     entry.last_report_at = Some(now_stamp.clone());
+                    crate::node_bind::bind_adopted_node(&mut entry);
                     row_name = Some(entry.name.clone());
                     r.entries.push(entry);
                     let new_idx = r.entries.len() - 1;
