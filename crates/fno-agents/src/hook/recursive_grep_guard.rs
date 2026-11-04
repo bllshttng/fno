@@ -299,7 +299,7 @@ mod tests {
         repo(tmp.path());
         make_cache(
             &tmp.path()
-                .join(".claude/worktrees/wt/crates/fno-agents/target"),
+                .join("nested/worktrees/wt/crates/fno-agents/target"),
         );
         make_cache(&tmp.path().join("crates/fno/target"));
         for source in ["cli/src/fno/target", "skills/target", "tests/target"] {
