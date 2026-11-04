@@ -12,7 +12,8 @@
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
 
-const PROMISE_RE = /<promise>([\s\S]*?)<\/promise>/g;
+const PROMISE_OPEN = "<promise>";
+const PROMISE_CLOSE = "</promise>";
 
 const SENTINEL_DIR = ".fno";
 const SENTINEL_FILE = "target-promise.signal";
@@ -51,12 +52,27 @@ export default {
       ctx: AgentContext,
     ): Promise<void> => {
       const body = event?.cleanedBody ?? "";
-      if (!body.includes("<promise>")) return;
+      if (!body.includes(PROMISE_OPEN)) return;
 
-      const matches = Array.from(body.matchAll(PROMISE_RE));
-      if (matches.length === 0) return;
+      // Linear scan preserving the lazy global regex semantics the sentinel
+      // protocol pins (docs/harnesses/promise-sentinel.md): each open pairs
+      // with the nearest close after it, the scan resumes after that close,
+      // and the last pair wins. The lazy regex itself is quadratic on
+      // nested-unclosed input (CodeQL js/polynomial-redos), so it is not
+      // used here.
+      const inners: string[] = [];
+      let at = 0;
+      while (true) {
+        const open = body.indexOf(PROMISE_OPEN, at);
+        if (open === -1) break;
+        const close = body.indexOf(PROMISE_CLOSE, open + PROMISE_OPEN.length);
+        if (close === -1) break;
+        inners.push(body.slice(open + PROMISE_OPEN.length, close));
+        at = close + PROMISE_CLOSE.length;
+      }
+      if (inners.length === 0) return;
 
-      const last = matches[matches.length - 1][1].trim();
+      const last = inners[inners.length - 1].trim();
       if (!last) return;
 
       const cwd = ctx?.workspaceDir ?? ctx?.cwd ?? process.cwd();
