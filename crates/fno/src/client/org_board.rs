@@ -4,10 +4,10 @@
 //! page. Every seat comes from the fleet map, so the other machine's seats
 //! show beside this one's.
 
-use super::backlog_style::{BLine, BRole};
 use super::org_seats::{Fleet, FleetInputs, Lead, Machine, Seat};
 use super::org_tabs::{Entry, Lb, Line};
 use super::*;
+use crate::text_style::{TLine, TextStyle};
 use crate::view_store::{OrgTab, SidelineView};
 
 pub(crate) type OrgTx = tokio::sync::mpsc::UnboundedSender<(u64, OrgMsg)>;
@@ -103,8 +103,8 @@ fn title(text: &str, width: usize) -> Line {
     let head = format!("\u{2500} {text} ");
     let rest = width.saturating_sub(head.chars().count());
     Lb::default()
-        .s(head, BRole::Head)
-        .s("\u{2500}".repeat(rest), BRole::Meta)
+        .s(head, TextStyle::Title)
+        .s("\u{2500}".repeat(rest), TextStyle::Meta)
         .done()
 }
 
@@ -542,7 +542,7 @@ pub(crate) fn paint(
     let left = explorer_w(width, &view.edge_sizes);
     let frame = b.frame_with(view.questions_fold.as_ref(), width, body_h, now, left);
     let explorer_w = frame.right_x.map_or(width, |x| x - 1);
-    let lines: Vec<BLine> = frame.explorer.into_iter().map(|l| l.line).collect();
+    let lines: Vec<TLine> = frame.explorer.into_iter().map(|l| l.line).collect();
     super::backlog_style::paint_panel_at(
         cells,
         rows,
@@ -556,7 +556,7 @@ pub(crate) fn paint(
         &view.theme,
     );
     if let Some(x) = frame.right_x {
-        let divider = vec![BLine::meta("\u{2502}"); body_h];
+        let divider = vec![TLine::meta("\u{2502}"); body_h];
         super::backlog_style::paint_panel_at(
             cells,
             rows,
@@ -569,7 +569,7 @@ pub(crate) fn paint(
             None,
             &view.theme,
         );
-        let lines: Vec<BLine> = frame.right.into_iter().map(|l| l.line).collect();
+        let lines: Vec<TLine> = frame.right.into_iter().map(|l| l.line).collect();
         super::backlog_style::paint_panel_at(
             cells,
             rows,
@@ -594,8 +594,8 @@ pub(crate) fn paint(
         &[{
             let (keys, state) = b.footer_parts(focused, width, now);
             Lb::default()
-                .s(keys, BRole::Body)
-                .s(state, BRole::Meta)
+                .s(keys, TextStyle::Item)
+                .s(state, TextStyle::Meta)
                 .done()
                 .line
         }],

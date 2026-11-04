@@ -8,12 +8,13 @@
 //! discipline: a cheap store-version probe answers `Unchanged` when nothing
 //! moved; a moved (or failed) probe runs the full `backlog_model::gather`.
 
-use super::backlog_style::{self, BLine, BRole, BSeg};
+use super::backlog_style;
 use super::*;
 use crate::backlog_model;
 use crate::backlog_model::{unavailable_features, Board, Lane};
 use crate::backlog_view::graph_path;
 use crate::store_client;
+use crate::text_style::{TLine, TSeg, TextStyle};
 use serde_json::Value;
 use std::time::Duration;
 
@@ -155,7 +156,7 @@ pub(crate) struct BoardView {
 /// unframed painter, the converted body for the framed overlay painter).
 struct BodyMemo {
     key: BodyKey,
-    lines: Vec<BLine>,
+    lines: Vec<TLine>,
     follow: Option<usize>,
 }
 
@@ -175,7 +176,7 @@ pub(crate) struct BodyKey {
 
 struct DetailMemo {
     key: DetailKey,
-    lines: Vec<BLine>,
+    lines: Vec<TLine>,
     follow: Option<usize>,
 }
 
@@ -314,7 +315,7 @@ impl BoardView {
     pub(crate) fn board_body_cached(
         &self,
         key: BodyKey,
-        build: impl FnOnce() -> (Vec<BLine>, Option<usize>),
+        build: impl FnOnce() -> (Vec<TLine>, Option<usize>),
     ) -> Option<usize> {
         {
             let mut slot = self.board_memo.borrow_mut();
@@ -332,7 +333,7 @@ impl BoardView {
     pub(crate) fn detail_lines_cached(
         &self,
         key: DetailKey,
-        build: impl FnOnce() -> (Vec<BLine>, Option<usize>),
+        build: impl FnOnce() -> (Vec<TLine>, Option<usize>),
     ) -> Option<usize> {
         {
             let mut slot = self.detail_memo.borrow_mut();
@@ -347,10 +348,10 @@ impl BoardView {
 
     /// The raw cached lines by shared borrow: the paint pass reads them
     /// without the per-frame clone an owned getter pays.
-    pub(crate) fn board_lines_ref(&self) -> std::cell::Ref<'_, [BLine]> {
+    pub(crate) fn board_lines_ref(&self) -> std::cell::Ref<'_, [TLine]> {
         std::cell::Ref::map(self.board_memo.borrow(), |s| match s {
             Some(m) => m.lines.as_slice(),
-            None => &[] as &[BLine],
+            None => &[] as &[TLine],
         })
     }
 
@@ -366,10 +367,10 @@ impl BoardView {
 
     /// The cached detail lines by shared borrow, and the band strip that
     /// gates them to the owning pane - the paint pass reads without clone.
-    pub(crate) fn detail_lines_ref(&self) -> std::cell::Ref<'_, [BLine]> {
+    pub(crate) fn detail_lines_ref(&self) -> std::cell::Ref<'_, [TLine]> {
         std::cell::Ref::map(self.detail_memo.borrow(), |s| match s {
             Some(m) => m.lines.as_slice(),
-            None => &[] as &[BLine],
+            None => &[] as &[TLine],
         })
     }
 
@@ -715,22 +716,22 @@ fn restore_board_prefs(b: &mut BoardView) {
 
 /// Render the overlay body: the lines and the cursor row for the painter's
 /// follow. `w` is the chrome's inner width; every line truncates to it.
-pub(crate) fn render(b: &BoardView, w: usize) -> (Vec<BLine>, Option<usize>) {
-    let mut lines: Vec<BLine> = Vec::new();
+pub(crate) fn render(b: &BoardView, w: usize) -> (Vec<TLine>, Option<usize>) {
+    let mut lines: Vec<TLine> = Vec::new();
     let mut follow: Option<usize> = None;
     let Some(board) = b.body.as_ref() else {
         if b.errors.is_empty() {
-            lines.push(BLine::plain("reading board..."));
+            lines.push(TLine::plain("reading board..."));
         } else {
             for e in &b.errors {
-                lines.push(BLine::meta(format!("! {e}")));
+                lines.push(TLine::meta(format!("! {e}")));
             }
         }
         return (lines, None);
     };
     push_stats_line(b, &mut lines, board, w);
     for e in &b.errors {
-        lines.push(BLine::meta(format!("! {e}")));
+        lines.push(TLine::meta(format!("! {e}")));
     }
     // A filter matching nothing says so over a zeroed board; it never
     // falls back to the unfiltered body (AC11 shape).
@@ -744,14 +745,14 @@ pub(crate) fn render(b: &BoardView, w: usize) -> (Vec<BLine>, Option<usize>) {
             Some(q) => format!("no cards match: {q}"),
             None => "no cards match".into(),
         };
-        lines.push(BLine::meta(line));
+        lines.push(TLine::meta(line));
     }
     push_lanes(b, &mut lines, &mut follow, board, w);
     (lines, follow)
 }
 
 /// The totals line: each column's open total, then the flow aggregate.
-fn push_stats_line(b: &BoardView, lines: &mut Vec<BLine>, board: &Board, w: usize) {
+fn push_stats_line(b: &BoardView, lines: &mut Vec<TLine>, board: &Board, w: usize) {
     let _ = (b, w);
     let mut line = String::new();
     for t in &board.stats.open {
@@ -764,7 +765,7 @@ fn push_stats_line(b: &BoardView, lines: &mut Vec<BLine>, board: &Board, w: usiz
     line.push_str(&format!(" · Done {done}"));
     line.push_str(" │ ");
     line.push_str(&flow_line(&board.stats.flow));
-    lines.push(BLine::meta(crate::chrome::clip(&line, w)));
+    lines.push(TLine::meta(crate::chrome::clip(&line, w)));
 }
 
 /// The uncapped Done total, summed from the lanes' own cells.
@@ -825,7 +826,7 @@ fn flow_line(flow: &Value) -> String {
 /// Milestone (the epic set), Labels, then Project and Lead when set.
 /// Cells join with ` │ ` and the caller wraps them by width. When no node
 /// carries a tag, the Labels cell says so.
-pub(crate) fn filter_bar_lines(b: &BoardView, board: &Board, w: usize) -> Vec<BLine> {
+pub(crate) fn filter_bar_lines(b: &BoardView, board: &Board, w: usize) -> Vec<TLine> {
     let _ = w;
     let mut cells: Vec<(&str, String)> = Vec::new();
     let q = b.query.q.as_deref().unwrap_or("any");
@@ -852,39 +853,39 @@ pub(crate) fn filter_bar_lines(b: &BoardView, board: &Board, w: usize) -> Vec<BL
         cells.push(("Project", set("project")));
         cells.push(("Lead", set("lead")));
     }
-    let mut lines: Vec<BLine> = Vec::new();
-    let mut line = BLine::plain(String::new());
+    let mut lines: Vec<TLine> = Vec::new();
+    let mut line = TLine::plain(String::new());
     let mut used = 0usize;
     for (label, value) in cells.iter() {
         let cell_w = label.chars().count() + 2 + value.chars().count();
         if used > 0 && used + 3 + cell_w > w {
             lines.push(line.trunc(w));
-            line = BLine::plain(String::new());
-            line.push_line(BLine::of(&[
-                BSeg {
+            line = TLine::plain(String::new());
+            line.push_line(TLine::of(&[
+                TSeg {
                     text: format!("{label}: "),
-                    role: BRole::Meta,
+                    role: TextStyle::Meta,
                 },
-                BSeg {
+                TSeg {
                     text: value.clone(),
-                    role: BRole::Body,
+                    role: TextStyle::Item,
                 },
             ]));
             used = cell_w;
             continue;
         }
         if used > 0 {
-            line.push_line(BLine::plain(" │ "));
+            line.push_line(TLine::plain(" │ "));
             used += 3;
         }
-        line.push_line(BLine::of(&[
-            BSeg {
+        line.push_line(TLine::of(&[
+            TSeg {
                 text: format!("{label}: "),
-                role: BRole::Meta,
+                role: TextStyle::Meta,
             },
-            BSeg {
+            TSeg {
                 text: value.clone(),
-                role: BRole::Body,
+                role: TextStyle::Item,
             },
         ]));
         used += cell_w;
@@ -898,7 +899,7 @@ pub(crate) fn filter_bar_lines(b: &BoardView, board: &Board, w: usize) -> Vec<BL
 /// `lanes: none`), no header, always expanded.
 fn push_lanes(
     b: &BoardView,
-    lines: &mut Vec<BLine>,
+    lines: &mut Vec<TLine>,
     follow: &mut Option<usize>,
     board: &Board,
     w: usize,
@@ -907,27 +908,27 @@ fn push_lanes(
         let expanded = board.lanes.len() == 1 || li == b.lane;
         if board.lanes.len() > 1 {
             let arrow = if expanded { "\u{25be}" } else { "\u{25b8}" };
-            let mut segs: Vec<BSeg> = vec![
-                BSeg {
+            let mut segs: Vec<TSeg> = vec![
+                TSeg {
                     text: format!("{arrow} "),
-                    role: BRole::Body,
+                    role: TextStyle::Item,
                 },
-                BSeg {
+                TSeg {
                     text: lane.title.to_string(),
-                    role: BRole::Head,
+                    role: TextStyle::Title,
                 },
             ];
             for name in b.layout.columns.iter() {
                 let Some(cell) = lane.cells.iter().find(|c| &c.column == name) else {
                     continue;
                 };
-                segs.push(BSeg {
+                segs.push(TSeg {
                     text: format!("  {}", cell_total_line(cell)),
-                    role: BRole::Meta,
+                    role: TextStyle::Meta,
                 });
             }
-            lines.push(BLine::of(&segs).trunc(w));
-            lines.push(BLine::meta(rule(w)));
+            lines.push(TLine::of(&segs).trunc(w));
+            lines.push(TLine::meta(rule(w)));
         }
         if expanded {
             if w >= WIDE_CELLS_AT {
@@ -955,7 +956,7 @@ fn cell_total_line(cell: &backlog_model::Cell) -> String {
 }
 /// One card row: the cursor `>`, a claim/block glyph, the short id (the
 /// accent slot), and the title, truncated to the cell width.
-fn card_line(b: &BoardView, li: usize, col_name: &str, ri: usize, w: usize) -> BLine {
+fn card_line(b: &BoardView, li: usize, col_name: &str, ri: usize, w: usize) -> TLine {
     let sel = li == b.lane
         && col_name
             == b.layout
@@ -971,7 +972,7 @@ fn card_line(b: &BoardView, li: usize, col_name: &str, ri: usize, w: usize) -> B
         .and_then(|l| l.cells.iter().find(|c| c.column == col_name))
         .and_then(|c| c.cards.get(ri))
     else {
-        return BLine::plain(String::new());
+        return TLine::plain(String::new());
     };
     let glyph = if card.claimed {
         "\u{25cf}"
@@ -981,18 +982,18 @@ fn card_line(b: &BoardView, li: usize, col_name: &str, ri: usize, w: usize) -> B
         " "
     };
     let sel_mark = if sel { "\u{25b8}" } else { " " };
-    let mut line = BLine::of(&[
-        BSeg {
+    let mut line = TLine::of(&[
+        TSeg {
             text: format!("{sel_mark}{glyph} "),
-            role: BRole::Body,
+            role: TextStyle::Item,
         },
-        BSeg {
+        TSeg {
             text: card.id.clone(),
-            role: BRole::Label,
+            role: TextStyle::Badge,
         },
-        BSeg {
+        TSeg {
             text: format!(" {}", card.title),
-            role: BRole::Body,
+            role: TextStyle::Item,
         },
     ]);
     line.band = sel;
@@ -1004,7 +1005,7 @@ fn card_line(b: &BoardView, li: usize, col_name: &str, ri: usize, w: usize) -> B
 /// (D4); every other shown column shrinks to an id plus a short title.
 fn push_wide_cells(
     b: &BoardView,
-    lines: &mut Vec<BLine>,
+    lines: &mut Vec<TLine>,
     follow: &mut Option<usize>,
     lane: &Lane,
     li: usize,
@@ -1040,24 +1041,24 @@ fn push_wide_cells(
     } else {
         0
     };
-    let mut cols: Vec<(usize, usize, Vec<BLine>)> = Vec::new();
+    let mut cols: Vec<(usize, usize, Vec<TLine>)> = Vec::new();
     for (si, (ci, cell)) in shown.iter().enumerate() {
         let cw = if si == b.col { focus_w } else { other_w };
-        let mut col: Vec<BLine> = vec![BLine::of(&[
-            BSeg {
+        let mut col: Vec<TLine> = vec![TLine::of(&[
+            TSeg {
                 text: cell.column.to_string(),
-                role: BRole::Head,
+                role: TextStyle::Title,
             },
-            BSeg {
+            TSeg {
                 text: format!(" {}", cell_total(cell)),
-                role: BRole::Meta,
+                role: TextStyle::Meta,
             },
         ])];
         for ri in 0..cell.cards.len() {
             col.push(card_line(b, li, &cell.column, ri, cw));
         }
         if cell.total > cell.cards.len() {
-            col.push(BLine::meta(format!(
+            col.push(TLine::meta(format!(
                 "+{} more",
                 cell.total - cell.cards.len()
             )));
@@ -1069,10 +1070,10 @@ fn push_wide_cells(
 
 /// Row-merge the cells' line columns, tracking the cursor row for follow.
 fn interleave(
-    lines: &mut Vec<BLine>,
+    lines: &mut Vec<TLine>,
     follow: &mut Option<usize>,
     b: &BoardView,
-    cols: Vec<(usize, usize, Vec<BLine>)>,
+    cols: Vec<(usize, usize, Vec<TLine>)>,
     lane: &Lane,
     li: usize,
     w: usize,
@@ -1080,11 +1081,11 @@ fn interleave(
     let height = cols.iter().map(|(_, _, c)| c.len()).max().unwrap_or(0);
     let start = lines.len();
     for row in 0..height {
-        let mut line = BLine::plain(String::new());
+        let mut line = TLine::plain(String::new());
         for (_ci, cw, col) in cols.iter() {
-            let seg = col.get(row).cloned().unwrap_or_else(|| BLine::plain(""));
+            let seg = col.get(row).cloned().unwrap_or_else(|| TLine::plain(""));
             line.push_line(seg.pad_to(*cw));
-            line.push_line(BLine::plain(" "));
+            line.push_line(TLine::plain(" "));
         }
         lines.push(line.trunc(w));
     }
@@ -1108,7 +1109,7 @@ fn cursor_cell<'a>(b: &BoardView, lane: &'a Lane) -> Option<&'a backlog_model::C
 /// old `build_kanban`'s shape - a `Now  12` header, card rows, `+N more`.
 fn push_stacked_cells(
     b: &BoardView,
-    lines: &mut Vec<BLine>,
+    lines: &mut Vec<TLine>,
     follow: &mut Option<usize>,
     lane: &backlog_model::Lane,
     li: usize,
@@ -1119,21 +1120,21 @@ fn push_stacked_cells(
             continue;
         };
         let header_at = lines.len();
-        lines.push(BLine::of(&[
-            BSeg {
+        lines.push(TLine::of(&[
+            TSeg {
                 text: cell.column.to_string(),
-                role: BRole::Head,
+                role: TextStyle::Title,
             },
-            BSeg {
+            TSeg {
                 text: format!("  {}", cell_total(cell)),
-                role: BRole::Meta,
+                role: TextStyle::Meta,
             },
         ]));
         for ri in 0..cell.cards.len() {
             lines.push(card_line(b, li, &cell.column, ri, w));
         }
         if cell.total > cell.cards.len() {
-            lines.push(BLine::meta(format!(
+            lines.push(TLine::meta(format!(
                 "+{} more",
                 cell.total - cell.cards.len()
             )));

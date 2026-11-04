@@ -27,7 +27,8 @@ def _tracked_files() -> list[Path]:
 
 
 def test_think_payload_stays_under_the_byte_pin() -> None:
-    files = _tracked_files()
+    # evals/ holds cases the runner reads; the agent never loads them.
+    files = [f for f in _tracked_files() if "evals" not in f.relative_to(ROOT).parts]
     total = sum(f.stat().st_size for f in files)
     allowed = {"SKILL.md", "LIMITATIONS.md"}
     offenders = sorted(str(f.relative_to(ROOT)) for f in files if f.name not in allowed)

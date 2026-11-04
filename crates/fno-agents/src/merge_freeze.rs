@@ -577,6 +577,14 @@ fn set_in(store: &Store, payload: &Value, laws: Laws, gh: GhRun) -> String {
         )
         .to_string();
     }
+    let mut span = serde_json::Map::new();
+    span.insert("repo".into(), json!(repo));
+    span.insert("subject".into(), json!(subject));
+    span.insert("set_by".into(), json!(set_by));
+    span.insert("lift".into(), json!(next.lift_subject()));
+    span.insert("pin_sha".into(), json!(next.sha));
+    span.insert("pin_prs".into(), json!(next.prs));
+    crate::merge_provenance::record_freeze("merge_freeze_set", payload_str(payload, "cwd"), span);
     let (disarmed, failed) = disarm_off_pin(gh, repo, &next.prs);
     let mut out = receipt("frozen", 0, "");
     if let Some(obj) = out.as_object_mut() {
@@ -696,6 +704,14 @@ fn clear_in(store: &Store, payload: &Value, laws: Laws) -> String {
     if let Err(e) = store.remove() {
         return receipt("error", 2, format!("freeze clear failed: {e}")).to_string();
     }
+    let mut span = serde_json::Map::new();
+    span.insert("repo".into(), json!(record.repo));
+    span.insert("lift".into(), json!(lift));
+    crate::merge_provenance::record_freeze(
+        "merge_freeze_cleared",
+        payload_str(payload, "cwd"),
+        span,
+    );
     let mut out = receipt("lifted", 0, "");
     if let Some(obj) = out.as_object_mut() {
         obj.insert("evidence".into(), json!(evidence));

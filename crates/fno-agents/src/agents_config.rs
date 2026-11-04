@@ -1456,7 +1456,6 @@ const BUILTIN_VISUAL_PAINT_PATHS: &[&str] = &[
     "crates/fno/src/band_remap.rs",
     "crates/fno/src/chrome.rs",
     "crates/fno/src/connections_view.rs",
-    "crates/fno/src/digest_overlay.rs",
     "crates/fno/src/feed_overlay.rs",
     "crates/fno/src/frame_ansi.rs",
     "crates/fno/src/frame_html.rs",
@@ -1489,11 +1488,19 @@ const BUILTIN_DOCS_TREE_PAINT_PATHS: &[&str] = &["fno-sh-docs/**"];
 
 /// Resolve `merge.visual_paint_paths`, the render-surface paths whose PRs
 /// hold for the user's visual approval until an answered question page names
-/// the PR at its head. A configured list wins, and an explicit empty list disarms the
-/// gate. With no key in any tier, a checkout that carries the mux client gets
-/// the built-in paint list, so a stock footnote tree holds its own UI PRs;
-/// any other project stays disarmed until it names its paint surface here.
+/// the PR at its head. A checkout that carries the mux client always gets the
+/// built-in paint list, so every machine reads the same list for footnote's
+/// own PRs and a local config cannot change what holds. Any other project
+/// reads its configured list, where an explicit empty list disarms the gate,
+/// and stays disarmed until it names its paint surface here.
 pub fn visual_paint_paths(cwd: &Path) -> Vec<String> {
+    let root = crate::paths::canonical_repo_root(cwd).unwrap_or_else(|| cwd.to_path_buf());
+    if root.join(BUILTIN_VISUAL_PAINT_ANCHOR).is_dir() {
+        return BUILTIN_VISUAL_PAINT_PATHS
+            .iter()
+            .map(|p| (*p).to_string())
+            .collect();
+    }
     let configured = resolve(cwd, |t| {
         t.get("merge")?
             .as_table()?
@@ -1509,13 +1516,7 @@ pub fn visual_paint_paths(cwd: &Path) -> Vec<String> {
         _ => Vec::new(),
     });
     configured.unwrap_or_else(|| {
-        let root = crate::paths::canonical_repo_root(cwd).unwrap_or_else(|| cwd.to_path_buf());
-        if root.join(BUILTIN_VISUAL_PAINT_ANCHOR).is_dir() {
-            BUILTIN_VISUAL_PAINT_PATHS
-                .iter()
-                .map(|p| (*p).to_string())
-                .collect()
-        } else if root.join(BUILTIN_DOCS_TREE_ANCHOR).is_dir() {
+        if root.join(BUILTIN_DOCS_TREE_ANCHOR).is_dir() {
             BUILTIN_DOCS_TREE_PAINT_PATHS
                 .iter()
                 .map(|p| (*p).to_string())

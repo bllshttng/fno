@@ -101,6 +101,7 @@ struct Payload {
 }
 
 use crate::client::{pad_to, NeedsFooter, YARD_OVERLAY_W};
+use crate::text_style::{TLine, TextStyle};
 
 /// Build the yard overlay lines: the CROWD as one glyph per citizen
 /// (the cheap layer - many cats, one cell each, the only multi-citizen
@@ -119,7 +120,7 @@ pub(crate) fn overlay_lines(
     identity: Option<&crate::yard_overlay::YardItem>,
     frame: usize,
     footer: NeedsFooter,
-) -> Vec<String> {
+) -> Vec<TLine> {
     overlay_lines_cursor(crowd, sel, identity, frame, footer).0
 }
 
@@ -130,14 +131,15 @@ pub(crate) fn overlay_lines_cursor(
     identity: Option<&crate::yard_overlay::YardItem>,
     frame: usize,
     footer: NeedsFooter,
-) -> (Vec<String>, Option<usize>) {
+) -> (Vec<TLine>, Option<usize>) {
     let mut cursor = None;
-    let mut lines = vec![pad_to(" the yard · n/N pick · q close", YARD_OVERLAY_W)];
+    let styled = |style: TextStyle, text: &str| TLine::line(style, pad_to(text, YARD_OVERLAY_W));
+    let mut lines = vec![styled(TextStyle::Title, " the yard · n/N pick · q close")];
     if crowd.is_empty() {
         // The true failure state of a dispatch system: nothing was sent out.
-        lines.push(pad_to(
+        lines.push(styled(
+            TextStyle::Hint,
             "   the yard is empty - nothing was dispatched",
-            YARD_OVERLAY_W,
         ));
     } else {
         // Crowd row: one eye glyph per citizen, wrapped to the body width.
@@ -147,37 +149,41 @@ pub(crate) fn overlay_lines_cursor(
             .collect::<Vec<_>>()
             .chunks(YARD_OVERLAY_W - 3)
         {
-            lines.push(pad_to(
+            lines.push(styled(
+                TextStyle::Item,
                 &format!("   {}", chunk.iter().collect::<String>()),
-                YARD_OVERLAY_W,
             ));
         }
-        lines.push(pad_to("", YARD_OVERLAY_W));
+        lines.push(styled(TextStyle::Item, ""));
         let sel = sel.min(crowd.len() - 1);
         let (name, eye, team) = crowd[sel];
         cursor = Some(lines.len());
         match identity {
             Some(id) => {
-                let mut caption =
-                    format!("   {name} · {}", crate::sprites::species_name(id.species));
+                let mut meta = format!(" · {}", crate::sprites::species_name(id.species));
                 if !id.rarity.is_empty() {
-                    caption.push_str(&format!(" · {}", id.rarity));
+                    meta.push_str(&format!(" · {}", id.rarity));
                 }
                 if team >= 1 {
-                    caption.push_str(&format!(" · team {team}"));
+                    meta.push_str(&format!(" · team {team}"));
                 }
-                if id.first_sighting {
-                    caption.push_str(" · NEW");
-                }
-                lines.push(pad_to(&caption, YARD_OVERLAY_W));
+                let new = if id.first_sighting { " · NEW" } else { "" };
+                lines.push(
+                    TLine::parts(&[
+                        (&format!("   {name}"), TextStyle::Value),
+                        (&meta, TextStyle::Meta),
+                        (new, TextStyle::Badge),
+                    ])
+                    .pad_to(YARD_OVERLAY_W),
+                );
                 if team >= 1 {
-                    lines.push(pad_to(
+                    lines.push(styled(
+                        TextStyle::Badge,
                         &format!("  {}", crate::sprites::HAT_TEAM),
-                        YARD_OVERLAY_W,
                     ));
                 }
                 for row in crate::sprites::render_frame(id.species, frame, eye) {
-                    lines.push(pad_to(&format!("  {row}"), YARD_OVERLAY_W));
+                    lines.push(styled(TextStyle::Item, &format!("  {row}")));
                 }
             }
             None => {
@@ -191,7 +197,13 @@ pub(crate) fn overlay_lines_cursor(
                     NeedsFooter::Degraded => "identity fold unavailable".to_string(),
                     NeedsFooter::AsOf => "no yard identity (not a registry citizen)".to_string(),
                 };
-                lines.push(pad_to(&format!("   {name} · {why}"), YARD_OVERLAY_W));
+                lines.push(
+                    TLine::parts(&[
+                        (&format!("   {name}"), TextStyle::Value),
+                        (&format!(" · {why}"), TextStyle::Hint),
+                    ])
+                    .pad_to(YARD_OVERLAY_W),
+                );
             }
         }
     }
@@ -200,7 +212,7 @@ pub(crate) fn overlay_lines_cursor(
         NeedsFooter::Degraded => "   identity fold unavailable - readings only".to_string(),
         NeedsFooter::AsOf => format!("   {} citizens", crowd.len()),
     };
-    lines.push(pad_to(&footer_line, YARD_OVERLAY_W));
+    lines.push(styled(TextStyle::Hint, &footer_line));
     (lines, cursor)
 }
 

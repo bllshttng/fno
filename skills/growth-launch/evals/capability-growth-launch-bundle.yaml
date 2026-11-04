@@ -1,7 +1,6 @@
-# Capability tier: a campaign bundle held at a founder approval gate. Moved
-# verbatim from skills/growth-launch/evals/evals.json, which had zero consumers
-# (no runner ever read skills/<name>/evals). The skill-local convention is
-# deleted in this change; this bank task is where its assertions now live.
+# Capability tier: a campaign bundle held at a founder approval gate. Its
+# assertions came from an evals.json no runner ever read; `fno doctor evals`
+# now loads this file from beside the skill.
 #
 # Prompt-bearing, so `fno doctor evals run` spawns a live headless worker for it. It is
 # deliberately NOT wired into CI: it is a manual, budgeted invocation. Five of
