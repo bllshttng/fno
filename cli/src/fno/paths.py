@@ -561,10 +561,13 @@ def _settings_at(key: tuple) -> _SettingsFacts:
     resolver in the process shares one receipt per declaration.
     """
     root = key[-1]
-    root_arg = {"root": root} if root else {}
     from fno import rust_binary
     binary = rust_binary.find_dev_binary()
-    receipt = rust_binary.settings_read(binary=binary, **root_arg)
+    # The door sees Python's own resolved root: one answer, no re-derivation
+    # drift between the two resolvers (the explicit parking-lot root wins).
+    receipt = rust_binary.settings_read(
+        binary=binary, root=str(root or key[5])
+    )
     return _SettingsFacts(receipt.get("paths") if receipt else None)
 
 
