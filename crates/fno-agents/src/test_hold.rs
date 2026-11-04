@@ -56,6 +56,8 @@ pub struct Outcome {
     pub killed: usize,
     pub announced: Option<String>,
     pub announce_error: Option<String>,
+    /// This pass ended a hold that held `tests`.
+    pub lifted: bool,
 }
 
 impl Outcome {
@@ -285,7 +287,84 @@ pub fn reconcile(home: &AgentsHome) -> Result<Outcome, String> {
         .map_err(|e| e.to_string())?;
     let result = reconcile_locked(home, &path);
     let _ = lock.unlock();
+    if result.as_ref().is_ok_and(|o| o.lifted) {
+        rerun_stranded(home);
+    }
     result
+}
+
+pub const RERUN_EVENT: &str = "test_hold_rerun";
+
+/// The cancelled runs of a head that the lift reruns: the head has no run in
+/// flight and no failure, so cancels are all that keep it red. A run a look
+/// hold or a red wait named stays cancelled; each owns its own answer. A
+/// head the look hold still holds is skipped by the caller.
+pub(crate) fn stranded(head: &crate::ci_tier::Head, named: &HashSet<u64>) -> Vec<u64> {
+    if !head.in_flight.is_empty() || head.failed {
+        return Vec::new();
+    }
+    head.cancelled
+        .iter()
+        .copied()
+        .filter(|run| !named.contains(run))
+        .collect()
+}
+
+/// A hold ends after fleet workers cancelled their PRs' CI to free slots, so
+/// each open PR is left with cancels and no verdict. Rerun them once.
+fn rerun_stranded(home: &AgentsHome) {
+    let path = crate::daemon::global_events_path(home);
+    let mut slugs = HashSet::new();
+    for root in crate::daemon::worktree_sweep::registry_repo_roots(home) {
+        let root = Path::new(&root);
+        let slug = crate::pr_status::cache::git_slug(root).filter(|s| slugs.insert(s.clone()));
+        let Some(slug) = slug else { continue };
+        if let Err(e) = rerun_repo(root, &slug, &path) {
+            eprintln!("test-hold: {slug}: {e}");
+        }
+    }
+}
+
+fn rerun_repo(root: &Path, slug: &str, path: &Path) -> Result<(), String> {
+    let now = crate::ci_cadence::millis_now();
+    let named = crate::ci_tier::named_cancels(path, slug, now - 24 * 3_600_000)?;
+    let emitter = crate::events::EventEmitter::new(path.to_path_buf(), "daemon");
+    let paint = crate::look_hold::PaintCache::default();
+    let pulls = crate::pr_push::gh_api_pages_conditional(
+        "gh",
+        root,
+        "repos/{owner}/{repo}/pulls?state=open&per_page=100",
+    )?;
+    for pull in pulls
+        .iter()
+        .filter_map(serde_json::Value::as_array)
+        .flatten()
+    {
+        let pr = pull
+            .get("number")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0);
+        let sha = crate::ci_tier::word(pull, "/head/sha");
+        if pr == 0 || sha.is_empty() {
+            continue;
+        }
+        let runs = crate::ci_tier::runs_of(root, &format!("head_sha={sha}"))?;
+        let list = stranded(&crate::ci_tier::head_of(&runs), &named);
+        if list.is_empty() {
+            continue;
+        }
+        // A head the look hold keeps cancelled would only be cancelled again
+        // within one tick; an unreadable gate acts on nothing.
+        if crate::look_hold::held(&paint, root, slug, pr, sha) != Some(false) {
+            continue;
+        }
+        let posted = &crate::ci_tier::act(root, &[(pr, list)], "rerun", "test_hold")[0]["runs"];
+        let data = serde_json::json!({"slug": slug, "pr": pr, "sha": sha, "runs": posted});
+        emitter
+            .emit(RERUN_EVENT, &data)
+            .map_err(|e| format!("{RERUN_EVENT} row did not land: {e}"))?;
+    }
+    Ok(())
 }
 
 fn reconcile_locked(home: &AgentsHome, path: &Path) -> Result<Outcome, String> {
@@ -305,6 +384,7 @@ fn reconcile_locked(home: &AgentsHome, path: &Path) -> Result<Outcome, String> {
                 outcome.resumed += 1;
             }
         }
+        outcome.lifted = true;
         announce(
             &mut outcome,
             "All clear: the test hold is lifted. Tests may run again.",
@@ -548,5 +628,23 @@ mod tests {
         }
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_lift_reruns_only_cancels_that_keep_a_head_red() {
+        use crate::ci_tier::Head;
+        let head = |in_flight: Vec<u64>, cancelled: Vec<u64>, failed| Head {
+            in_flight,
+            cancelled,
+            failed,
+            ..Head::default()
+        };
+        let named: HashSet<u64> = [2].into();
+        assert_eq!(
+            stranded(&head(vec![], vec![1, 2, 3], false), &named),
+            vec![1, 3]
+        );
+        assert!(stranded(&head(vec![9], vec![1], false), &named).is_empty());
+        assert!(stranded(&head(vec![], vec![1], true), &named).is_empty());
     }
 }

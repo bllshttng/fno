@@ -47,13 +47,8 @@ fi
 
 _json_field() {
   # Echo a top-level string field from the hook event JSON, or "".
-  printf '%s' "$INPUT" | python3 -c '
-import sys, json
-try:
-    print(json.load(sys.stdin).get(sys.argv[1], "") or "")
-except Exception:
-    print("")
-' "$1" 2>/dev/null
+  printf '%s' "$INPUT" | jq -r --arg k "$1" '
+    (.[$k] // "") | if . == 0 then "" elif type == "string" then . else tojson end' 2>/dev/null
 }
 
 # ---------------------------------------------------------------------------
@@ -117,23 +112,16 @@ if command -v fno >/dev/null 2>&1; then
   fi
 fi
 
-TEAM_INFO="$(SID="$SID" REG_ROWS="$REG_ROWS" python3 -c '
-import json, os
-sid = os.environ.get("SID", "")
-try:
-    data = json.loads(os.environ.get("REG_ROWS") or "[]")
-except Exception:
-    data = []
-if isinstance(data, dict):
-    data = data.get("agents") or data.get("rows") or []
-rows = data if isinstance(data, list) else []
-mine = [r for r in rows if r.get("session_id") == sid or r.get("harness_session_id") == sid]
-r = mine[0] if mine else {}
-lvl = r.get("role_level")
-scp = r.get("role_scope")
-print("1" if (mine and (lvl is not None or scp is not None)) else "0")
-print(scp if isinstance(scp, str) else "")
-print(r.get("project_root") or r.get("cwd") or "")
+TEAM_INFO="$(SID="$SID" REG_ROWS="$REG_ROWS" jq -nr '
+($ENV.SID // "") as $sid
+| (($ENV.REG_ROWS // "") | if . == "" then "[]" else . end | try fromjson catch []) as $data
+| (if ($data | type) == "object" then ($data.agents // $data.rows // []) else $data end) as $data
+| (if ($data | type) == "array" then $data else [] end) as $rows
+| [$rows[] | select(.session_id == $sid or .harness_session_id == $sid)] as $mine
+| ($mine[0] // {}) as $r
+| (if ($mine | length) > 0 and ($r.role_level != null or $r.role_scope != null) then "1" else "0" end),
+  (if ($r.role_scope | type) == "string" then $r.role_scope else "" end),
+  ([$r.project_root, $r.cwd, ""] | map(select(. != null and . != false and . != "")) | first // "" | tostring)
 ' 2>/dev/null || true)"
 IS_TEAMED="$(printf '%s' "$TEAM_INFO" | sed -n 1p)"
 TEAM_SCOPE="$(printf '%s' "$TEAM_INFO" | sed -n 2p)"
@@ -223,175 +211,114 @@ if command -v fno >/dev/null 2>&1; then
   PR_RAW="$(fno do pr list --state open 2>/dev/null || true)"
 fi
 
+# The team scope's children, id plus status, via the existing epic status
+# read. A portfolio team stores its scope as a comma-joined set of epics -
+# query each member and merge, so a level-2 lead over more than one epic sees
+# every member's children, not just the first. Bounded (5s per member) and
+# degrade-only: a member that is not a queryable epic (a level-1
+# whole-project team, an unreadable graph) contributes nothing rather than
+# failing the whole read; the section reads unavailable only when EVERY
+# member yields nothing.
+PURVIEW=""
+if [[ "$IS_TEAMED" == "1" && -n "$TEAM_SCOPE" ]] && command -v fno >/dev/null 2>&1; then
+  # shellcheck source=../scripts/lib/with-timeout.sh
+  source "$SOURCE_ROOT/scripts/lib/with-timeout.sh" 2>/dev/null || with_timeout() { shift; "$@"; }
+  _children=""
+  IFS=',' read -r -a _members <<< "$TEAM_SCOPE"
+  for _member in "${_members[@]}"; do
+    _member="${_member#"${_member%%[![:space:]]*}"}"
+    _member="${_member%"${_member##*[![:space:]]}"}"
+    [[ -n "$_member" ]] || continue
+    _children+="$(with_timeout 5 fno backlog epic status "$_member" --json 2>/dev/null \
+      | jq -c '.children | if type == "array" then .[] else empty end' 2>/dev/null || true)"$'\n'
+  done
+  PURVIEW="$(printf '%s' "$_children" | jq -rs '
+    def pys: if . == null then "None" elif . == true then "True" elif . == false then "False"
+      elif type == "string" then . else tojson end;
+    def get($k; $d): if has($k) then .[$k] else $d end;
+    reduce .[] as $c ({seen: [], rows: []};
+      if (.seen | index([$c.id])) then . else .seen += [$c.id] | .rows += [$c] end)
+    | .rows | map("- \(get("id"; "-") | pys) [\(get("status"; "-") | pys)] \(get("slug"; "") | pys)")
+    | join("\n")' 2>/dev/null || true)"
+  unset _children _members _member
+fi
+
 # ---------------------------------------------------------------------------
-# Build the auto block. One python heredoc (quoted delimiter => no shell
-# escaping) reads the facts from env and emits the mechanical sections. JSON
-# parsing stays in python; bash never touches it.
-# No apostrophes anywhere in this heredoc body: bash's paren-matching for the
-# enclosing $(...) misreads an apostrophe followed later by a parenthesized
-# comment/string as an unterminated quote, and the script fails `bash -n`
-# with an EOF error that names an unrelated later line.
+# Build the auto block. One jq program reads the facts from env and emits the
+# mechanical sections. JSON parsing stays in jq; bash never touches it.
 # ---------------------------------------------------------------------------
 AUTO_BLOCK="$(SID="$SID" SHORT="$SHORT" NODE="$NODE" PLAN="$PLAN" \
-             REG_ROWS="$REG_ROWS" REG_RC="$REG_RC" PR_RAW="$PR_RAW" IS_TEAMED="$IS_TEAMED" python3 <<'PY' 2>/dev/null || true
-import json
-import os
-import subprocess
-
-
-def rows_from(raw):
-    try:
-        data = json.loads(raw) if raw else []
-    except Exception:
-        return []
-    if isinstance(data, dict):
-        data = data.get("agents") or data.get("rows") or []
-    return data if isinstance(data, list) else []
-
-
-sid = os.environ.get("SID", "")
-short = os.environ.get("SHORT", "")
-node = os.environ.get("NODE", "")
-plan = os.environ.get("PLAN", "")
-rows = rows_from(os.environ.get("REG_ROWS", ""))
-mine = [r for r in rows if r.get("session_id") == sid or r.get("harness_session_id") == sid]
-r = mine[0] if mine else {}
-
-lvl = r.get("role_level")
-scp = r.get("role_scope")
-teamed = os.environ.get("IS_TEAMED") == "1"
-reg_rc = os.environ.get("REG_RC", "")
-if reg_rc not in ("", "0"):
-    team = "unknown (registry-json exit %s)" % reg_rc
-elif not mine:
-    team = "none (no registry row for this session)"
-elif not teamed:
-    team = "none (unpromoted)"
-else:
-    team = "level %s | scope %s" % (lvl if lvl is not None else "-", scp if scp is not None else "-")
-
-# The stored `status` word lies (a dead row can read `live`
-# indefinitely), so this reads the SERVED `liveness` field instead - `fno
-# agents registry-json` derives it from the freshness rule and withholds a
-# stale word as null. A row whose liveness is null (never measured, or stale
-# past the window) is unresolved, not alive: listed under its own label
-# rather than silently among the live, so a broken reader never reads as an
-# all-clear.
-alive = [x for x in rows
-         if x.get("spawned_by_session") == sid
-         and x.get("liveness") == "alive"]
-unresolved = [x for x in rows
-              if x.get("spawned_by_session") == sid
-              and x.get("liveness") not in ("alive", "dead")]
-if not alive and not unresolved:
-    workers = "none"
-else:
-    lines = [
-        "- %s | %s | %s" % ((x.get("session_id") or "")[-8:], x.get("name", "-"), x.get("status", "-"))
-        for x in alive
-    ]
-    if unresolved:
-        lines.append("- unresolved liveness:")
-        lines.extend(
-            "  - %s | %s | %s" % ((x.get("session_id") or "")[-8:], x.get("name", "-"), x.get("status", "-"))
-            for x in unresolved
-        )
-    workers = "\n".join(lines)
-
-if node or plan:
-    pointers = []
-    if node:
-        pointers.append("- node: %s" % node)
-    if plan:
-        pointers.append("- plan: %s" % plan)
-    nodes = "\n".join(pointers)
-else:
-    nodes = "none (no target manifest - non-target session)"
-
-out = ["## Identity (auto)",
-       "- mail handle (tail-8): `%s`" % short,
-       "- team: %s" % team,
-       "",
-       "## Live workers (auto)",
-       workers,
-       "",
-       "## Node pointers (auto)",
-       nodes]
-
-pr_rows = rows_from(os.environ.get("PR_RAW", ""))
-if pr_rows:
-    out += ["", "## Open PRs (auto)"]
-    out += ["- #%s [%s] %s (%s)" % (x.get("number", "-"), x.get("state", "-"),
-                                    x.get("title", "-"), x.get("headRefName", "-"))
-            for x in pr_rows]
-
-
-def _epic_children(epic_id):
-    """One epic's children via `epic status`, or None on any failure."""
-    try:
-        proc = subprocess.run(
-            ["fno", "backlog", "epic", "status", epic_id, "--json"],
-            capture_output=True, text=True, timeout=5, check=False,
-        )
-        data = json.loads(proc.stdout or "")
-    except Exception:
-        return None
-    children = data.get("children")
-    return children if isinstance(children, list) else None
-
-
-def nodes_under_purview(scope):
-    """The team scope's children, id plus status, via the existing epic
-    status read. A portfolio team stores its scope as a comma-joined set of
-    epics (fno.agents.team.canonical_scope) - query each member and merge,
-    so a level-2 lead over more than one epic sees every member's children,
-    not just the first. Bounded (5s per member) and degrade-only: a member
-    that is not a queryable epic (a level-1 whole-project team, an
-    unreadable graph) contributes nothing rather than failing the whole
-    read; this whole block is skipped only when EVERY member yields nothing."""
-    if not scope:
-        return None
-    rows = []
-    seen_ids = set()
-    for member in (part.strip() for part in scope.split(",")):
-        if not member:
-            continue
-        for c in _epic_children(member) or []:
-            node_id = c.get("id")
-            if node_id in seen_ids:
-                continue
-            seen_ids.add(node_id)
-            rows.append(c)
-    if not rows:
-        return None
-    return "\n".join(
-        "- %s [%s] %s" % (c.get("id", "-"), c.get("status", "-"), c.get("slug", ""))
-        for c in rows
-    )
-
-
-# A lead additionally holds its nodes under purview and its own live workers -
-# facts no other session has. Skipped whole when unpromoted so a non-lead canon
-# doc stays byte-identical to the prior output (AC2-EDGE).
-if teamed:
-    nodes = nodes_under_purview(scp) or "_(nodes under purview: unavailable)_"
-    out += [
-        "",
+             REG_ROWS="$REG_ROWS" REG_RC="$REG_RC" PR_RAW="$PR_RAW" IS_TEAMED="$IS_TEAMED" \
+             PURVIEW="$PURVIEW" jq -nr '
+# The values print the way the old python printf did ("%s" of a value).
+def pys: if . == null then "None" elif . == true then "True" elif . == false then "False"
+  elif type == "string" then . else tojson end;
+def get($k; $d): if has($k) then .[$k] else $d end;
+def rows_from: if . == "" then [] else (try fromjson catch []) end
+  | if type == "object" then (.agents // .rows // []) else . end
+  | if type == "array" then . else [] end;
+def tail8: (.session_id // "") | if type == "string" then .[-8:] else "" end;
+def worker_row: "\(tail8) | \(get("name"; "-") | pys) | \(get("status"; "-") | pys)";
+($ENV.SID // "") as $sid
+| ($ENV.SHORT // "") as $short
+| ($ENV.NODE // "") as $node
+| ($ENV.PLAN // "") as $plan
+| (($ENV.REG_ROWS // "") | rows_from) as $rows
+| [$rows[] | select(.session_id == $sid or .harness_session_id == $sid)] as $mine
+| ($mine[0] // {}) as $r
+| $r.role_level as $lvl
+| $r.role_scope as $scp
+| (($ENV.IS_TEAMED // "") == "1") as $teamed
+| ($ENV.REG_RC // "") as $reg_rc
+| (if ($reg_rc != "" and $reg_rc != "0") then "unknown (registry-json exit \($reg_rc))"
+   elif ($mine | length) == 0 then "none (no registry row for this session)"
+   elif ($teamed | not) then "none (unpromoted)"
+   else "level \(if $lvl != null then $lvl | pys else "-" end) | scope \(if $scp != null then $scp | pys else "-" end)"
+   end) as $team
+# The stored `status` word lies (a dead row can read `live` indefinitely), so
+# this reads the SERVED `liveness` field instead. A row whose liveness is null
+# (never measured, or stale past the window) is unresolved, not alive: listed
+# under its own label so a broken reader never reads as an all-clear.
+| [$rows[] | select(.spawned_by_session == $sid and .liveness == "alive")] as $alive
+| [$rows[] | select(.spawned_by_session == $sid and .liveness != "alive" and .liveness != "dead")] as $unresolved
+| (if ($alive | length) == 0 and ($unresolved | length) == 0 then "none"
+   else ([$alive[] | "- " + worker_row]
+         + (if ($unresolved | length) > 0
+            then ["- unresolved liveness:"] + [$unresolved[] | "  - " + worker_row]
+            else [] end)) | join("\n")
+   end) as $workers
+| (if $node != "" or $plan != "" then
+     ([if $node != "" then "- node: \($node)" else empty end,
+       if $plan != "" then "- plan: \($plan)" else empty end] | join("\n"))
+   else "none (no target manifest - non-target session)" end) as $nodes
+| (($ENV.PR_RAW // "") | rows_from) as $pr_rows
+| ["## Identity (auto)",
+   "- mail handle (tail-8): `\($short)`",
+   "- team: \($team)",
+   "",
+   "## Live workers (auto)",
+   $workers,
+   "",
+   "## Node pointers (auto)",
+   $nodes]
+  + (if ($pr_rows | length) > 0 then
+       ["", "## Open PRs (auto)"]
+       + [$pr_rows[] | "- #\(get("number"; "-") | pys) [\(get("state"; "-") | pys)] \(get("title"; "-") | pys) (\(get("headRefName"; "-") | pys))"]
+     else [] end)
+# A lead additionally holds its nodes under purview and its own live workers.
+# Skipped whole when unpromoted so a non-lead canon doc stays byte-identical.
+  + (if $teamed then
+       ["",
         "## Lead: nodes under purview (auto)",
-        "level %s over %s" % (lvl if lvl is not None else "-", scp if scp is not None else "-"),
+        "level \(if $lvl != null then $lvl | pys else "-" end) over \(if $scp != null then $scp | pys else "-" end)",
         "",
-        nodes,
+        (($ENV.PURVIEW // "") | if . == "" then "_(nodes under purview: unavailable)_" else . end),
         "",
-        # `workers` is spawned_by_session, not team-scope-filtered: a
-        # successor omits a predecessor workers list, and unrelated-territory
-        # workers of this session leak in. Follow-up under.
         "## Lead: live workers in scope (auto)",
-        workers,
-    ]
-
-print("\n".join(out))
-PY
-)"
+        $workers]
+     else [] end)
+| join("\n")
+' 2>/dev/null || true)"
 
 # ---------------------------------------------------------------------------
 # Preserve any judgment the session already wrote under the two session markers.

@@ -130,11 +130,10 @@ def verify_child_promise(
 # The deterministic completeness count a barrier consumes before it lets
 # synthesis proceed. Kept OUTSIDE any model-generated summary: a summary that
 # claims "all done" is not evidence; this tally is. It is contract-agnostic on
-# purpose - the caller classifies each worker return (via the canonical
-# ``classify_worker_return``) into ``completed`` / ``failed`` / the explicit
-# blocking kinds and hands the classified pairs here, so the single source of
-# the status enum stays in ``skills/execute/orchestrator.py`` and this module
-# does pure set math.
+# purpose - the caller classifies each worker return into ``completed`` /
+# ``failed`` / the explicit blocking kinds and hands the classified pairs
+# here, so the status enum stays with the caller and this module does pure
+# set math.
 
 FanInKind: TypeAlias = Literal[
     "completed",

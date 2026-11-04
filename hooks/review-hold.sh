@@ -93,12 +93,16 @@ esac
 cwd="$(printf '%s' "$input" | jq -r '.cwd // empty' 2>/dev/null || true)"
 [[ -n "$cwd" && -d "$cwd" ]] || cwd="$PWD"
 
-# The parse and the join ride the CLI's rust seam directly, the way the
-# deleted python leg did: FNO is the test-stub surface for the commands this
-# hook DRIVES (acquire, event emit), not for its own plumbing.
-parsed="$(python3 -c 'import json, sys; from fno import rust_binary
-err, row = rust_binary.call_binary_json("review-level", ["invocations", "parse", "--raw", sys.argv[1]])
-print(json.dumps(row) if err is None and row is not None else "")' "$skill_raw" 2>/dev/null || true)"
+# The parse and the join ride fno-agents directly: FNO is the test-stub
+# surface for the commands this hook DRIVES (acquire, event emit), not for its
+# own plumbing. A refused or absent door reads as no parse.
+# shellcheck source=lib/agents-bin.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/agents-bin.sh" 2>/dev/null || true
+AGENTS="$(declare -F fno_agents_bin >/dev/null && fno_agents_bin "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)")"
+parsed=""
+if [[ -n "$AGENTS" ]] && parse_out="$("$AGENTS" review-level invocations parse --raw "$skill_raw" 2>/dev/null)"; then
+  parsed="$(printf '%s' "$parse_out" | jq -c 'select(. != null)' 2>/dev/null || true)"
+fi
 args_raw="$(printf '%s' "$parsed" | jq -r '.args_raw // empty' 2>/dev/null || true)"
 level="$(printf '%s' "$parsed" | jq -r '.level // "unset"' 2>/dev/null || echo unset)"
 level_source="$(printf '%s' "$parsed" | jq -r '.level_source // "fallback"' 2>/dev/null || echo fallback)"
@@ -166,12 +170,10 @@ holder="review-session:${session:-unknown}"
 # sent row and this started row then carry ONE id), and only mint-plus-write
 # a fresh sidecar on a miss, so a second review never re-adopts the first
 # one's consumed id.
-invocation_id="$(python3 -c 'import subprocess, sys; from fno import rust_binary
-binary = rust_binary.resolve_binary()
-if binary is None:
-    raise SystemExit(1)
-proc = subprocess.run([str(binary), "review-level", "invocations", "join", "--session", sys.argv[1]], capture_output=True, text=True)
-print(proc.stdout.strip() if proc.returncode == 0 else "")' "$session" 2>/dev/null || true)"
+invocation_id=""
+if [[ -n "$AGENTS" ]]; then
+  invocation_id="$("$AGENTS" review-level invocations join --session "$session" 2>/dev/null)" || invocation_id=""
+fi
 case "$invocation_id" in
   ri-*) ;;
   *) invocation_id="ri-$(date -u +%s 2>/dev/null || echo 0)-$$" ;;
@@ -179,7 +181,7 @@ esac
 # The attest sidecar answers from the state layout table via the `dir`
 # door; on a door refusal (no binary, or an fno-agents predating the door)
 # the legacy spelling answers, the path every pre-door binary wrote.
-model_sidecar="$("${FNO_AGENTS_BIN:-fno-agents}" state path dir attest --file "${session}.json" 2>/dev/null || true)"
+model_sidecar="$("${AGENTS:-fno-agents}" state path dir attest --file "${session}.json" 2>/dev/null || true)"
 [[ -n "$model_sidecar" ]] || model_sidecar="${FNO_HOME:-$HOME/.fno}/attest/${session}.json" # state-root: legacy fallback
 model_family="$(jq -r '.model_family // .model // empty' "$model_sidecar" 2>/dev/null || true)"
 data="$(jq -cn \

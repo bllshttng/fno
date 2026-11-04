@@ -9,6 +9,7 @@ Keys live in a flat `config.toml` (`.fno/config.toml` project-local, `~/.fno/con
 | `state_dir` | str | `~/.fno/` | advanced | Root dir for global fno do state. |
 | `plans_dir` | str | `.fno/plans/` | advanced | Where folder plans are written. |
 | `plans_filename` | str | `%Y%m%d-{slug}-{node}.md` | advanced | Plan/design-doc filename template: strftime codes plus {slug} and {node} placeholders; must render to a bare *.md name. |
+| `repo_aliases` | dict[str, str] | `{}` | advanced | Rename map `old = "new"` between owner/repo slugs. A PR url recorded under a repo's former name binds in the merge gate and heals in the sweep leg; GitHub's own redirect (GET /repos/old answers the new full_name) seeds the same map through the gh-facts cache, so the config row is the offline override, never a requirement. Specimen: `bllshttng/fno = "fnodotdev/fno"`. |
 | `branch.prefix` | str | `fno` | advanced | Prefix for dispatched worktree branches: <prefix>/<slug>-<node>. |
 | `build.agent_freeze` | bool | `false` | never | Agent build freeze: while set, the rustc wrapper's doors refuse an agent session's compile and test run with exit 86 and name CI as the gate; the user's own cargo and the install build still compile. |
 | `paths.ledger_json` | str (optional) | _(none)_ | never | Override path to ledger.json. |
@@ -349,4 +350,7 @@ Keys live in a flat `config.toml` (`.fno/config.toml` project-local, `~/.fno/con
 | `accounts.quota.defer_horizon_minutes` | int | `60` | never | How far ahead a quota-window reset is still worth deferring for. |
 | `accounts.quota.pick_on_launch` | bool | `false` | never | Pick the least-loaded account at spawn time instead of pinning one. |
 | `accounts.failover` | FailoverBlock (optional) | _(none)_ | never | Provider-rotation failover: {max_swaps_per_phase}. |
+| `github.app_id` | str | `` | never | GitHub App id; with github.app_installation_id it arms App-installation token minting for GitHub API calls. |
+| `github.app_installation_id` | str | `` | never | GitHub App installation id; required beside github.app_id before the App path mints tokens. |
+| `github.app_key_path` | str | `~/.fno/secrets/github-app.pem` | never | Path to the GitHub App private key PEM (default ~/.fno/secrets/github-app.pem, mode 0600); a leading ~ expands against $HOME. |
 | `schema_version` | int | `1` | never | Settings schema version; managed by fno, not hand-set. |

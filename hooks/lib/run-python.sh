@@ -1,25 +1,7 @@
 #!/usr/bin/env bash
-# Resolve an interpreter for hook scripts: python3, python, then the
-# interpreter uv manages (fno installs through uv, so a uv python exists
-# where system python3 does not - 2026-10-29 clean-machine install). Hooks never
-# block: with no interpreter at all, emit {} and exit 0.
-set -uo pipefail
-
-# The appended fallback keeps the resolver alive under a caller env with no
-# usable PATH (the worktree-write-protect pattern). FNO_HOOK_PY_FALLBACK_PATH
-# replaces the fallback dirs for the hook test suite, which simulates a machine
-# with no system python by pointing PATH at a directory holding only a fake
-# uv. Never set it outside tests.
-PATH="${PATH:+$PATH:}${FNO_HOOK_PY_FALLBACK_PATH:-/usr/bin:/bin:/usr/sbin:/sbin}"
-export PATH
-
-for py in python3 python; do
-    command -v "$py" >/dev/null 2>&1 && exec "$py" "$@"
-done
-if command -v uv >/dev/null 2>&1; then
-    # --no-python-downloads keeps the rung offline: a hook never downloads
-    # an interpreter or blocks on the network.
-    py="$(uv python find --no-python-downloads 2>/dev/null)" && [[ -n "$py" && -x "$py" ]] && exec "$py" "$@"
-fi
-echo '{}'
+# Tombstone stub: the save-session hook moved to hooks/save-session.sh, which
+# runs `fno-agents hook save-session`. A session started before that change
+# still holds a PreCompact/SessionEnd row that launches this path, so it stays
+# one release as a no-op that exits 0 and starts nothing. Delete it in a later
+# release; `fno doctor lint hook-tombstones` enforces the two steps.
 exit 0

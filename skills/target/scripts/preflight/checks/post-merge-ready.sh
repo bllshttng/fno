@@ -31,11 +31,7 @@ if [[ $RC -ne 0 || -z "$OUT" ]]; then
     exit 0
 fi
 
-STATUS="$(printf '%s' "$OUT" | python3 -c 'import sys, json
-try:
-    print(json.load(sys.stdin).get("status") or "")
-except Exception:
-    print("")' 2>/dev/null)"
+STATUS="$(printf '%s' "$OUT" | jq -r '.status // "" | tostring' 2>/dev/null)"
 
 case "$STATUS" in
     unconfigured)
@@ -47,11 +43,7 @@ case "$STATUS" in
         ;;
     error)
         # AC1-ERR: a settings load failure surfaces as unknown carrying the cause.
-        CAUSE="$(printf '%s' "$OUT" | python3 -c 'import sys, json
-try:
-    print(json.load(sys.stdin).get("cause") or "settings load error")
-except Exception:
-    print("settings load error")' 2>/dev/null)"
+        CAUSE="$(printf '%s' "$OUT" | jq -r '.cause // "settings load error" | tostring' 2>/dev/null || echo "settings load error")"
         echo "$NAME unknown post-merge config could not be read: $CAUSE"
         ;;
     *)

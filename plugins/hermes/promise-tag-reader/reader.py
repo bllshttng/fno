@@ -8,11 +8,11 @@ rename) so partial states never surface.
 
 from __future__ import annotations
 
-import re
 import sys
 from pathlib import Path
 
-PROMISE_RE = re.compile(r"<promise>(.*?)</promise>", re.DOTALL)
+PROMISE_OPEN = "<promise>"
+PROMISE_CLOSE = "</promise>"
 
 SENTINEL_DIR_NAME = ".fno"
 SENTINEL_FILE_NAME = "target-promise.signal"
@@ -29,11 +29,26 @@ def on_response(response_text: str, cwd: Path | str) -> Path | None:
     Returns:
         Path to the written sentinel file, or None if no tag was found.
     """
-    matches = PROMISE_RE.findall(response_text)
-    if not matches:
+    # Linear scan preserving the lazy global regex semantics the sentinel
+    # protocol pins (docs/harnesses/promise-sentinel.md): each open pairs
+    # with the nearest close after it, the scan resumes after that close,
+    # and the last pair wins. The lazy regex itself is quadratic on
+    # nested-unclosed input (CodeQL py/redos), so it is not used here.
+    inners = []
+    at = 0
+    while True:
+        at = response_text.find(PROMISE_OPEN, at)
+        if at == -1:
+            break
+        close = response_text.find(PROMISE_CLOSE, at + len(PROMISE_OPEN))
+        if close == -1:
+            break
+        inners.append(response_text[at + len(PROMISE_OPEN) : close])
+        at = close + len(PROMISE_CLOSE)
+    if not inners:
         return None
 
-    inner = matches[-1].strip()
+    inner = inners[-1].strip()
     if not inner:
         return None
 

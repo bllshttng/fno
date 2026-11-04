@@ -1422,7 +1422,7 @@ const BUILTIN_VISUAL_PAINT_PATHS: &[&str] = &[
     "crates/fno/src/splash.rs",
     "crates/fno/src/theme.rs",
     "crates/fno/src/web_backlog.html",
-    "crates/fno/src/web_command.html",
+    "crates/fno/src/web_hq.html",
     "crates/fno/src/web_page.html",
     "crates/fno/src/web_trace.html",
     "crates/fno/src/wordmark.rs",
@@ -1639,6 +1639,40 @@ pub fn auto_continue_select_timeout_s(cwd: &Path) -> u64 {
             .unwrap_or(120);
     }
     120
+}
+
+/// `[repo_aliases]` (default empty): rename map `old = "new"` between
+/// `owner/repo` slugs. A url recorded under a repo's former name binds and
+/// heals against the renamed repo; `bllshttng/fno = "fnodotdev/fno"` is the
+/// specimen. Keys and values are lowercased; a malformed leaf (non-string
+/// value, empty side) drops that entry, never the whole table.
+pub fn repo_aliases(cwd: &Path) -> std::collections::BTreeMap<String, String> {
+    let mut out = std::collections::BTreeMap::new();
+    for path in config_candidates(cwd) {
+        let Ok(content) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        let Some(table) = parse_config(&content) else {
+            continue;
+        };
+        let Some(aliases) = table.get("repo_aliases").and_then(Value::as_table) else {
+            continue;
+        };
+        for (old, new) in aliases {
+            let Some(new) = new.as_str() else {
+                continue;
+            };
+            let old = old.trim().to_lowercase();
+            let new = new.trim().to_lowercase();
+            if old.is_empty() || new.is_empty() || old == new {
+                continue;
+            }
+            // Candidates run most-specific first; the first file naming an
+            // alias wins, like every getter here.
+            out.entry(old).or_insert(new);
+        }
+    }
+    out
 }
 
 /// `[notify] arm_failing_after_s` (default 1800): how long an arm stays failing, or stale from a dead scheduler, before the arm_watch daemon arm tells the operator. Also the rate floor between arm notices. `0` or a value that does not parse falls back to 1800.

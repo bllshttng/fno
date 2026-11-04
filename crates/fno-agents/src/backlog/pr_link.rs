@@ -4,6 +4,8 @@
 //! parser would break.
 
 use regex::Regex;
+use serde_json::{json, Value};
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::OnceLock;
 
@@ -194,6 +196,170 @@ pub fn is_repo_slug(value: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b"_.-".contains(&b))
 }
 
+// ---------------------------------------------------------------------------
+// Repo rename aliases
+//
+// A repo transfer keeps every url recorded under the old name. The rename
+// aliases (config `[repo_aliases]` first, then the gh-facts `rename` rows)
+// let a comparison treat the two names as one repo instead of refusing an
+// old url as a cross-repo claim. The gh-facts row store already owns
+// permanent repo facts; a rename is one.
+// ---------------------------------------------------------------------------
+
+/// `full_name` out of a `gh api repos/{slug}` body, or None.
+fn rename_probe_full_name(body: &str) -> Option<String> {
+    let row: serde_json::Value = serde_json::from_str(body.trim()).ok()?;
+    let name = row.get("full_name")?.as_str()?.trim();
+    (!name.is_empty()).then(|| name.to_string())
+}
+
+/// Ask GitHub what `old` is called now (a transfer answers the new
+/// `full_name`) and cache the answer, including a no-rename answer, so a
+/// foreign repo never re-probes. Budget-admitted and bounded like every gh
+/// spawn here.
+pub fn probe_rename_alias(old: &str, cwd: Option<&Path>) -> Option<String> {
+    let old = old.trim().to_lowercase();
+    if !is_repo_slug(&old) {
+        return None;
+    }
+    let base = cwd.unwrap_or_else(|| Path::new("."));
+    // The row store answers first: a name asked once (rename or not) never
+    // spawns gh again.
+    let cached = match crate::gh_cache::rows_root(base) {
+        Some(root) => crate::gh_cache::read_row(
+            &root,
+            "rename",
+            &old,
+            None,
+            None,
+            crate::gh_cache::now_secs(),
+        )
+        .get("row")
+        .and_then(|row| row.get("full_name"))
+        .and_then(Value::as_str)
+        .map(str::to_string),
+        None => None,
+    };
+    if let Some(name) = cached {
+        let canonical = name.trim().to_lowercase();
+        return (canonical != old).then_some(canonical);
+    }
+    let (rc, out) = run_slug_cmd(&["gh", "api", &format!("repos/{old}")], base.to_str());
+    if rc != 0 {
+        return None;
+    }
+    let name = rename_probe_full_name(&out)?;
+    if let Some(root) = crate::gh_cache::rows_root(base) {
+        crate::gh_cache::write_row(&root, "rename", &old, None, &json!({"full_name": name}));
+    }
+    let canonical = name.to_lowercase();
+    (canonical != old).then_some(canonical)
+}
+
+/// The rename aliases visible without a network read: config
+/// `[repo_aliases]` plus every cached gh-facts `rename` row.
+pub fn repo_alias_map(cwd: Option<&Path>) -> BTreeMap<String, String> {
+    let base = cwd.unwrap_or_else(|| Path::new("."));
+    let mut map = crate::agents_config::repo_aliases(base);
+    let Some(root) = crate::gh_cache::rows_root(base) else {
+        return map;
+    };
+    let Ok(rows) = std::fs::read_dir(root.join("rename")) else {
+        return map;
+    };
+    for row in rows.flatten() {
+        let Some(stem) = row
+            .path()
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .map(str::to_owned)
+        else {
+            continue;
+        };
+        // row_path built the filename with `/` -> `--`; GitHub names carry
+        // no double hyphen, so the reverse is unambiguous.
+        let slug = stem.replace("--", "/");
+        let Ok(text) = std::fs::read_to_string(row.path()) else {
+            continue;
+        };
+        let Some(name) = serde_json::from_str::<serde_json::Value>(&text)
+            .ok()
+            .and_then(|row| {
+                row.get("full_name")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            })
+        else {
+            continue;
+        };
+        let (old, new) = (slug.to_lowercase(), name.trim().to_lowercase());
+        if !old.is_empty() && !new.is_empty() && old != new {
+            map.entry(old).or_insert(new);
+        }
+    }
+    map
+}
+
+/// `slug` under the rename aliases: the mapped name, else the lowercased slug.
+pub fn canonical_repo_slug(slug: &str, aliases: &BTreeMap<String, String>) -> String {
+    let lower = slug.trim().to_lowercase();
+    aliases.get(&lower).cloned().unwrap_or(lower)
+}
+
+/// Do two `owner/repo` slugs name the same repo once rename aliases apply?
+pub fn same_repo_slug(a: &str, b: &str, aliases: &BTreeMap<String, String>) -> bool {
+    canonical_repo_slug(a, aliases) == canonical_repo_slug(b, aliases)
+}
+
+/// Seed the alias map for a gate decision: every ref slug that differs from
+/// `here` and has no alias yet gets one bounded rename probe (cached after
+/// the first ask), so the first merge attempt after a transfer pays a
+/// handful of reads and every later one pays none.
+pub fn aliases_with_probe(
+    cwd: Option<&Path>,
+    here: Option<&str>,
+    ref_slugs: impl Iterator<Item = String>,
+) -> BTreeMap<String, String> {
+    aliases_with_probe_inner(
+        cwd,
+        here,
+        ref_slugs,
+        repo_alias_map(cwd),
+        probe_rename_alias,
+    )
+}
+
+/// The injectable half of [`aliases_with_probe`], so a test pins the probe
+/// instead of the network. `probe_cwd` reaches the probe so a cache write
+/// lands in the caller's row store, never the process-cwd store.
+fn aliases_with_probe_inner(
+    probe_cwd: Option<&Path>,
+    here: Option<&str>,
+    ref_slugs: impl Iterator<Item = String>,
+    base: BTreeMap<String, String>,
+    probe: impl Fn(&str, Option<&Path>) -> Option<String>,
+) -> BTreeMap<String, String> {
+    let mut map = base;
+    let Some(here) = here else {
+        return map;
+    };
+    let mut attempted: std::collections::HashSet<String> =
+        std::collections::HashSet::from([here.to_lowercase()]);
+    for slug in ref_slugs {
+        let slug = slug.trim();
+        if slug.is_empty() || same_repo_slug(slug, here, &map) {
+            continue;
+        }
+        if !attempted.insert(slug.to_lowercase()) {
+            continue;
+        }
+        if let Some(canonical) = probe(slug, probe_cwd) {
+            map.entry(slug.to_lowercase()).or_insert(canonical);
+        }
+    }
+    map
+}
+
 /// The ship lifecycle row stamped when a node is FIRST PR-linked. The row
 /// records whoever ran the link, no terminal closes it, and a re-stamp of
 /// the same (phase, harness, session) collapses - a link event, never
@@ -259,5 +425,33 @@ pub fn stamp_ship_on_link(graph: &Path, node_id: &str) {
     };
     if let Err(e) = run() {
         eprintln!("update: ship provenance stamp skipped for {node_id}: {e}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rename_probe_parses_full_name_and_answers_none_on_garbage() {
+        assert_eq!(
+            rename_probe_full_name("{\"full_name\": \"fnodotdev/fno\"}"),
+            Some("fnodotdev/fno".to_string())
+        );
+        assert_eq!(rename_probe_full_name("not json"), None);
+        assert_eq!(rename_probe_full_name("{\"name\": \"fno\"}"), None);
+    }
+
+    #[test]
+    fn alias_map_and_comparison_treat_old_and_new_as_one_repo() {
+        let mut aliases = BTreeMap::new();
+        aliases.insert("bllshttng/fno".to_string(), "fnodotdev/fno".to_string());
+        assert!(same_repo_slug("bllshttng/fno", "fnodotdev/fno", &aliases));
+        assert!(same_repo_slug("Bllshttng/FNO", "fnodotdev/fno", &aliases));
+        assert!(!same_repo_slug(
+            "fnodotdev/fno",
+            "bllshttng/other",
+            &aliases
+        ));
     }
 }

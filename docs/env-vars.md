@@ -9,6 +9,8 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `ANTHROPIC_API_KEY` | py | Anthropic API key; presence enables bare-key auth for the LLM lane. |
 | `ANTHROPIC_BASE_URL` | rs | Overrides the Anthropic API base URL. |
 | `ANTHROPIC_MODEL` | rs | Overrides the default Anthropic model. |
+| `BUDDY_HOME` | rs | The buddy plugin root that `plugins/buddy/hooks/statusline.sh` exports; the native statusline reads its frames and heartbeat files under it, and prints nothing when it is unset. |
+| `BUDDY_KEY` | rs | The cache key that statusline.sh computes from the input and width. The native statusline writes it beside its output, so the shell can reprint that output with no process start. |
 | `CARGO` | rs | Names the cargo binary the `cargo_build_dirs` lane runs `cargo metadata` through; the PATH scan and `$CARGO_HOME/bin/cargo` are the fallbacks. |
 | `CARGO_BUILD_BUILD_DIR` | rs | The fleet build-dir value the daemon, keeper, stream and stop-hook fills set for fleet-cargo checkouts, and foreign panes scrub; read it with `fno config build-dir`. |
 | `CARGO_HOME` | rs | Cargo install root; the default is ~/.cargo. |
@@ -35,6 +37,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `CODEX_THREAD_ID` | rs | The codex thread id: codex sets it per thread in child tool env (the root session keeps CODEX_SESSION_ID), never in its own process env. The rollout witness matches it against a daemon row at this cwd to complete a name_only pane's own identity. |
 | `COLORFGBG` | rs | The rxvt-style `fg;bg` terminal color report; a background field of 7 or 15 reads as a light terminal, which picks the `footnote-paper` mux theme default, and anything else keeps `footnote-superscript`. |
 | `COLORTERM` | rs | unclear: crates/fno/src/mux_cli.rs:1508 |
+| `COLUMNS` | rs | Terminal width in columns; the buddy statusline lays out its line to fit it. |
 | `EDITOR` | rs | The editor the board's full description edit runs in; `vi` when unset. |
 | `EVENTS_FILE` | rs | unclear: crates/fno-agents/src/verify_evidence.rs:932 |
 | `FNO_ACTOR_KIND` | rs | The launcher stamp a machine arm's parent sets on its child so `decision_trace::actor_kind` reads `sweep` for work with no ambient session (merge_close.rs `run_reconcile`, hook/stop.rs `spawn_finalize_detached`). Only the exact value `sweep` is honored; any other value falls through to session resolution. |

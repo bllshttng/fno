@@ -130,32 +130,14 @@ A task another session's claim owns gets `[~]`, not `[!]`. Nothing failed. Anoth
 
 ## Parsing STATE.md
 
-Python helper for reading state:
+Read task markers with grep. Each row is `- [<marker>] <id>: <title> - <status>`. The marker is `x` for complete and `!` for failed:
 
-```python
-def parse_state(state_path: str) -> dict:
-    content = Path(state_path).read_text()
-
-    # Parse YAML frontmatter
-    frontmatter = yaml.safe_load(
-        re.search(r'^---\n(.*?)\n---', content, re.DOTALL).group(1)
-    )
-
-    # Parse task statuses
-    tasks = {}
-    for match in re.finditer(r'- \[(.)\] ([\d.]+[a-z]?): .* - (\w+)', content):
-        marker, task_id, status = match.groups()
-        tasks[task_id] = {
-            'complete': marker == 'x',
-            'failed': marker == '!',
-            'status': status
-        }
-
-    return {
-        'updated': frontmatter.get('updated'),
-        'plan': frontmatter.get('plan'),
-        'tasks': tasks
-    }
+```bash
+# One "<marker> <id> <status>" line per task row.
+grep -E '^- \[.\] [0-9.]+[a-z]?: .* - [A-Za-z_]+$' .fno/STATE.md \
+  | sed -E 's/^- \[(.)\] ([0-9.]+[a-z]?): .* - ([A-Za-z_]+)$/\1 \2 \3/'
+# Frontmatter fields (updated, plan) read the same way.
+sed -n '2,/^---$/p' .fno/STATE.md | grep -E '^(updated|plan):'
 ```
 
 ## Task Executor Return Contract

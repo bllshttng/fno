@@ -155,6 +155,7 @@ pub mod codex_inject;
 /// [`CodexRoute`] in its signature.
 pub mod codex_posture;
 pub mod codex_route;
+pub mod codex_skills;
 pub mod codex_store;
 pub mod codex_thread;
 mod codex_thread_entry;
@@ -432,6 +433,7 @@ pub mod notify_dispatch;
 pub mod nudge;
 pub mod numbers;
 pub mod observer;
+pub mod occupancy_classify;
 pub mod occupancy_login;
 pub mod opencode_ask;
 pub mod opencode_config;
@@ -759,6 +761,7 @@ pub mod watch;
 pub mod watch_expiry;
 pub mod watchdog;
 pub mod wave;
+pub mod wave_ready;
 pub mod whoami;
 pub mod worked_nodes;
 pub mod worker_wake;
@@ -1526,10 +1529,10 @@ mod tests {
             }
         }
 
-        // The allowed files: production binary repair (install_verify), six
+        // The allowed files: production binary repair (install_verify), seven
         // production dir modes (paths, fleet_incident, chats, the
         // session-state pin dir, the mcp sidecar's socket-parent tightening,
-        // the daemon's sandbox socket dir),
+        // the daemon's sandbox socket dir, the saved-sessions dir),
         // two dir-mode
         // restores in tests (claims, operator_turns); the bin test target
         // cannot see a cfg(test) lib fn (client_tests); and the plan writer's
@@ -1547,6 +1550,7 @@ mod tests {
             ("chats.rs", 1),
             ("mcp/sidecar.rs", 1),
             ("daemon/sandbox_host.rs", 1),
+            ("hook/save_session.rs", 1),
         ];
         let allowed_counts: std::collections::HashMap<&str, usize> =
             ALLOWED.iter().copied().collect();
@@ -1992,6 +1996,9 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // user's look clears (look_hold.rs).
     "look_hold_cancel",
     "look_hold_release",
+    // The reruns a lifted test hold posts on open PRs left with only
+    // cancelled runs (test_hold.rs).
+    "test_hold_rerun",
     // A wait or cadence red-cancel of a head's runs in flight
     // (pr_status/wait.rs), with the failing checks that caused it.
     "ci_wait_cancel",

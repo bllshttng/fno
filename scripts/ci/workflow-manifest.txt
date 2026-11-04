@@ -7,6 +7,7 @@
 # catch a reviewer has to remember to make. Adding a workflow needs a line
 # here too, in the same PR.
 cli-ci.yml
+codeql.yml
 coverage-context-parity.yml
 crates-publish.yml
 deferred-census.yml

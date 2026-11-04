@@ -205,9 +205,9 @@ Every path requires a bearer token that matches a configured sink's `token_env` 
 
 An accepted answer appends the same `attention_answer` row the arm writes. The authority stays `sink`. The idempotency key and any Tailscale Serve identity header ride the row as provenance. The endpoint then runs the same `fno inbox outstanding clear` the mux overlay runs. First answer wins. A retry under the same `idempotency_key` replays the receipt and lands no second row. A different key lands a superseded marker that changes nothing. When a clear fails, the row stays durable. The question then needs a terminal close, and the arm retries its own lane.
 
-## The command page answer
+## The HQ page answer
 
-The question drawer on `/command` answers in place. `POST /command/answer/{id}?t=<token>` takes one of `{"option": n}`, `{"words": "..."}` or `{"done": true}`. A page cannot delegate: that key is refused. The route never writes a row itself. It starts the same door the mux uses, `fno-agents needs --answer <id> --sink command_page --email <login>`, so the writer stays `append_answer_row` and first answer wins.
+The question drawer on `/hq` answers in place. `POST /hq/answer/{id}?t=<token>` takes one of `{"option": n}`, `{"words": "..."}` or `{"done": true}`. A page cannot delegate: that key is refused. The route never writes a row itself. It starts the same door the mux uses, `fno-agents needs --answer <id> --sink command_page --email <login>`, so the writer stays `append_answer_row` and first answer wins.
 
 The row carries `sink: command_page`, `authority: sink`, `email`, `person` and `machine_id`. An invite has no name beyond the login, so `person` is the login. The reply ladder reads every unsuperseded row whatever its sink, so the arm clears the question and delivers on its next beat.
 

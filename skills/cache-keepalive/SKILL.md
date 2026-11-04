@@ -58,34 +58,18 @@ fi
 ### 1. Get Cache Stats
 
 ```bash
-SESSION_ID=$(cat ~/.claude/.session-context.json 2>/dev/null | python3 -c "import json,sys; print(json.load(sys.stdin).get('session_id',''))" 2>/dev/null)
+SESSION_ID=$(jq -r '.session_id // ""' ~/.claude/.session-context.json 2>/dev/null)
 if [ -n "$SESSION_ID" ]; then
-  find ~/.claude/projects/ -name "${SESSION_ID}.jsonl" 2>/dev/null | head -1 | xargs python3 -c "
-import json, sys
-last_usage = None
-model = 'unknown'
-for line in open(sys.argv[1]):
-    try:
-        obj = json.loads(line)
-        if obj.get('type') == 'assistant':
-            u = obj.get('message', {}).get('usage', {})
-            m = obj.get('message', {}).get('model', '')
-            if u.get('cache_read_input_tokens', 0) > 0:
-                last_usage = u
-                model = m
-    except: pass
-if last_usage:
-    cr = last_usage.get('cache_read_input_tokens', 0)
-    inp = last_usage.get('input_tokens', 0)
-    cc = last_usage.get('cache_creation_input_tokens', 0)
-    total_ctx = cr + inp + cc
-    print(f'CACHE_READ={cr}')
-    print(f'INPUT={inp}')
-    print(f'TOTAL_CTX={total_ctx}')
-    print(f'MODEL={model}')
-else:
-    print('NO_USAGE_DATA')
-" 2>/dev/null
+  TRANSCRIPT=$(find ~/.claude/projects/ -name "${SESSION_ID}.jsonl" 2>/dev/null | head -1)
+  # The last assistant turn that read the cache; a malformed line is skipped.
+  jq -Rrn '[inputs | fromjson? | select(.type == "assistant" and (.message.usage.cache_read_input_tokens // 0) > 0)] | last
+    | if . == null then "NO_USAGE_DATA" else
+        .message.usage as $u
+        | "CACHE_READ=\($u.cache_read_input_tokens // 0)",
+          "INPUT=\($u.input_tokens // 0)",
+          "TOTAL_CTX=\(($u.cache_read_input_tokens // 0) + ($u.input_tokens // 0) + ($u.cache_creation_input_tokens // 0))",
+          "MODEL=\(.message.model // "unknown")"
+      end' "$TRANSCRIPT" 2>/dev/null
 fi
 ```
 

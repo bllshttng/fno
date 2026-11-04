@@ -168,7 +168,7 @@ Neither reading alone is safe. Bare zero-commits-ahead also reads a branch whose
 
 The process table plus the lsof cwd snapshot (`_wt_pids`) is the only truthful occupancy source. Every classification reads that enumeration. None invents a second one.
 
-Never ask a recorded cwd which tree a worker occupies. The agents-registry `cwd` field is the spawn directory, and the claude job `state.json` `cwd` field is the spawn directory too. Measured 2026-09-11: 29 of 30 alive registry rows and 17 of 17 live bg jobs read the canonical checkout while their sessions wrote inside worktrees. A hold detector built on either field named its own live worktree free. The classifier is `scripts/lib/worktree_occupancy.py`. It never reads those fields. The bridge is `scripts/lib/worktree-occupancy.sh`.
+Never ask a recorded cwd which tree a worker occupies. The agents-registry `cwd` field is the spawn directory, and the claude job `state.json` `cwd` field is the spawn directory too. Measured 2026-09-11: 29 of 30 alive registry rows and 17 of 17 live bg jobs read the canonical checkout while their sessions wrote inside worktrees. A hold detector built on either field named its own live worktree free. The classifier is `fno-agents occupancy-login --classify` (`crates/fno-agents/src/occupancy_classify.rs`). It never reads those fields. The bridge is `scripts/lib/worktree-occupancy.sh`.
 
 `claude bg-spare` argv is identical for a live session and an idle spare, so argv alone can never mark a spare reapable. The identity is the daemon's rendezvous socket farm (`session_procs.bg_socket_pid_map`), which joins a pid to its job id. A join miss holds.
 

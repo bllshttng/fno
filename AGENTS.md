@@ -94,7 +94,7 @@ Day-to-day usage (create/edit/columns/lifecycle/roadmap) is in [docs/backlog-usa
 
 ## Execution & looping
 
-**Waves + executors.** Plans declare waves in `00-INDEX.md`; `skills/execute/orchestrator.py` routes tasks to agents by keyword. Executor resolves via task block -> plan frontmatter -> surface inference: `do`/`tdd` (archer, default) or `impeccable` (frontend-executor). [executor-resolution](skills/execute/references/executor-resolution.md).
+**Waves + executors.** Plans declare waves in their `## Execution Strategy`. `fno-agents wave ready` lists the dispatchable tasks. Executor resolves via task block -> plan frontmatter -> surface inference: `do`/`tdd` (archer, default) or `impeccable` (frontend-executor). [executor-resolution](skills/execute/references/executor-resolution.md).
 
 **Looping.**
 - *In-session:* `hooks/target-stop-hook.sh` shims `fno-agents loop-check`, deciding stop/allow from external truth only: `<promise>` intent, done() reads (PR exists, CI green, every `config.review.required_bots` bot reviewed with no unaddressed blocking finding, and either no open finding or the configured rounds spent), any plan-declared `done_probes`, a backstop fingerprint, and budget. Terminal-allow invokes `fno-agents finalize` (idempotent).
@@ -140,7 +140,7 @@ Preferred (claude): a JSON object in a fenced ```json block (or `<result>{...}</
 {"result": "SUCCESS", "task": "2.1", "commit": "abc123", "summary": "..."}
 ```
 
-`result` ∈ `SUCCESS | DONE_WITH_CONCERNS | FAILED | BLOCKED`; `task` required. Fallback (codex/gemini): the `RESULT:`/`TASK:`/... line grammar, fail-closed. Parser: `parse_task_result` in `skills/execute/orchestrator.py`.
+`result` ∈ `SUCCESS | DONE_WITH_CONCERNS | FAILED | BLOCKED`. `task` is required. Fallback (codex/gemini): the `RESULT:`/`TASK:`/... line grammar, fail-closed. Grammar: [state-formats](skills/execute/references/state-formats.md).
 
 ### Deviation rules
 
@@ -172,7 +172,7 @@ Bug in plan -> fix inline, note in SUMMARY.md. Minor enhancement (<15 min) -> im
 - **Skill:** `skills/<name>/SKILL.md` (+ optional `references/`, `scripts/`). **Agent:** `agents/<name>.md` with frontmatter.
 - **Skills ship together:** the fno skills load each other by name at runtime. `skills/target/references/toolbag.md` lists them. No skill refs `${REPO_ROOT}/scripts/`. Script reuse is build-time through `skill-bundles.yaml` and `fno doctor bundle`. The `bundle check` action gates freshness.
 - **TDD:** failing test -> red -> minimal code -> green -> verify -> atomic commit.
-- **Testing:** `python skills/execute/orchestrator.py --help`; `./scripts/validate-test-first.sh`.
+- **Testing:** `fno-agents wave ready --help`, then `./scripts/validate-test-first.sh`.
 
 ## Deep-dive docs
 

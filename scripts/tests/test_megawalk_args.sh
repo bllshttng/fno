@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # test_megawalk_args.sh -- guardrails around the 2026-04-20 megawalk surface reduction.
 #
-# Covers the parts we CAN exercise mechanically: the roadmap-tasks.py
+# Covers the parts we CAN exercise mechanically: the `fno backlog`
 # argument parsing that the skill delegates to, and the shared graph-ID
 # resolver that all three shipping skills source before dispatch. The
 # SKILL.md prose itself is LLM-interpreted and cannot be asserted here.
@@ -43,9 +43,9 @@ JSON
 
 # Case 1: intake's `--batch` redirect answers from the native door now. The
 # command and its redirect moved into the Rust dispatcher, and the wheel keeps
-# only the route (the triage shape), so the shim's forward lands on the
-# native removal refusal - the redirect alive, one implementation.
-OUT=$(python3 "$REPO_ROOT/scripts/roadmap-tasks.py" intake --batch plans/foo 2>&1 || true)
+# only the route (the triage shape), so the call lands on the
+# native removal refusal: the redirect alive, one implementation.
+OUT=$(fno backlog intake --batch plans/foo 2>&1 || true)
 if echo "$OUT" | grep -qiE "multi-path intake"; then
     pass "intake --batch redirects at the native door"
 else
@@ -69,12 +69,12 @@ result=$(resolve_arg "ab-deadbeef" 2>/dev/null)
     || fail "unknown id passes through" "got: '$result'"
 
 # Case 5: `get` command works for a seeded node (smoke-check phase 2 integration).
-get_out=$(python3 "$REPO_ROOT/scripts/roadmap-tasks.py" get "ab-12345678" --field plan_path 2>&1)
+get_out=$(fno backlog get "ab-12345678" --field plan_path 2>&1)
 get_rc=$?
 if [[ "$get_rc" -eq 0 && "$get_out" == "plans/test.md" ]]; then
-    pass "roadmap-tasks.py get --field plan_path works"
+    pass "fno backlog get --field plan_path works"
 else
-    fail "roadmap-tasks.py get" "rc=$get_rc out=$get_out"
+    fail "fno backlog get" "rc=$get_rc out=$get_out"
 fi
 
 echo

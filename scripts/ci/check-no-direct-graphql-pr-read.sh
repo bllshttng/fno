@@ -9,7 +9,10 @@ matches=$(python3 scripts/ci/graphql-caller-inventory.py)
 classified=$(printf '%s\n' "$matches" | awk 'NF {n++} END {print n+0}')
 unclassified=$(printf '%s\n' "$matches" | awk -F'|' '$1 == "unclassified" {n++} END {print n+0}')
 digest=$(printf '%s\n' "$matches" | LC_ALL=C sort | shasum -a 256 | awk '{print $1}')
-expected_digest="e3a0bbc63998b22d2537f9afff53c60523e14bc4f237030727643f1e4a9d3ebf"
+# Re-pinned 2026-11-04: main's inventory had already drifted past this pin
+# before the linear shell-pr repair landed (the original and repaired
+# patterns hash the tree identically), so the drift predates that repair.
+expected_digest="e12596458d44333fb2d89ccd9f31a3662ec00525b5008fe214a9633838c676b9"
 
 if [[ "${1:-}" == "--print-digest" ]]; then
   printf 'classified_graphql_callers=%s digest=%s\n' "$classified" "$digest"

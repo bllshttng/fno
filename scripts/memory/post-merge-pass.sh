@@ -56,8 +56,8 @@ if [[ -z "$PR_META" ]]; then
     echo "post-merge-pass: fno do pr info failed for PR $PR_NUMBER; sentinel preserved" >&2
     exit 2
 fi
-PR_STATE=$(printf '%s' "$PR_META" | python3 -c 'import sys,json; print(json.load(sys.stdin).get("state",""))' 2>/dev/null) || PR_STATE=""
-MERGED_AT=$(printf '%s' "$PR_META" | python3 -c 'import sys,json; v=json.load(sys.stdin).get("merged_at"); print(v if v else "")' 2>/dev/null) || MERGED_AT=""
+PR_STATE=$(printf '%s' "$PR_META" | jq -r '.state // "" | tostring' 2>/dev/null) || PR_STATE=""
+MERGED_AT=$(printf '%s' "$PR_META" | jq -r '.merged_at | if . == null or . == false or . == "" then "" else tostring end' 2>/dev/null) || MERGED_AT=""
 
 case "$PR_STATE" in
     MERGED)
@@ -85,7 +85,7 @@ fi
 
 # Late comments (post-merge): single page is sufficient for the post-merge
 # window in practice. --paginate concatenates multiple JSON arrays per page,
-# which the Python parser below cannot json.loads correctly. We track
+# which the jq encoder below cannot parse as one value. We track
 # whether the gh call succeeded so partial failures are surfaced.
 LC_OK=true
 LATE_COMMENTS=$(gh api "repos/$OWNER/$REPO/issues/$PR_NUMBER/comments" \
@@ -101,29 +101,23 @@ LATE_REVIEWS=$(gh api "repos/$OWNER/$REPO/pulls/$PR_NUMBER/reviews" \
 
 # Ungraduated done-with-concerns sigma-review artifacts.
 DONE_WITH_CONCERNS_FILES=$(grep -lE '^verdict: done-with-concerns' "$REPO_ROOT"/.fno/artifacts/review-*.md 2>/dev/null | tr '\n' ',' | sed 's/,$//') || DONE_WITH_CONCERNS_FILES=""
-DWC_JSON=$(printf '%s' "$DONE_WITH_CONCERNS_FILES" | python3 -c 'import sys, json; s=sys.stdin.read().strip(); print(json.dumps([p for p in s.split(",") if p]))' 2>/dev/null) || DWC_JSON="[]"
+DWC_JSON=$(jq -cn --arg s "$DONE_WITH_CONCERNS_FILES" '$s | gsub("^\\s+|\\s+$"; "") | split(",") | map(select(. != ""))' 2>/dev/null) || DWC_JSON="[]"
 
-# Emit the JSON. If the Python heredoc fails, KEEP the sentinel so the next
+# Emit the JSON. If the encode fails, KEEP the sentinel so the next
 # invocation can retry. Use a tempfile so we know whether stdout was emitted.
 PY_OUT=$(mktemp -t post-merge-pass-out-XXXXXX) || {
     echo "post-merge-pass: mktemp failed; sentinel preserved" >&2
     exit 2
 }
-PR_NUMBER="$PR_NUMBER" MERGED_AT="$MERGED_AT" LC="$LATE_COMMENTS" LR="$LATE_REVIEWS" DWC="$DWC_JSON" \
-LC_OK="$LC_OK" LR_OK="$LR_OK" \
-    python3 - <<'PYEOF' > "$PY_OUT"
-import os, json, sys
-out = {
-    "pr": int(os.environ["PR_NUMBER"]),
-    "merged_at": os.environ["MERGED_AT"],
-    "late_comments": json.loads(os.environ["LC"]) if os.environ.get("LC") else [],
-    "late_reviews": json.loads(os.environ["LR"]) if os.environ.get("LR") else [],
-    "done_with_concerns": json.loads(os.environ["DWC"]) if os.environ.get("DWC") else [],
-    "comments_fetch_ok": os.environ.get("LC_OK") == "true",
-    "reviews_fetch_ok": os.environ.get("LR_OK") == "true",
-}
-print(json.dumps(out))
-PYEOF
+jq -cn \
+    --arg pr "$PR_NUMBER" --arg merged_at "$MERGED_AT" \
+    --arg lc "$LATE_COMMENTS" --arg lr "$LATE_REVIEWS" --arg dwc "$DWC_JSON" \
+    --arg lc_ok "$LC_OK" --arg lr_ok "$LR_OK" '
+    def arr: if . == "" then [] else fromjson end;
+    {pr: ($pr | tonumber), merged_at: $merged_at,
+     late_comments: ($lc | arr), late_reviews: ($lr | arr),
+     done_with_concerns: ($dwc | arr),
+     comments_fetch_ok: ($lc_ok == "true"), reviews_fetch_ok: ($lr_ok == "true")}' > "$PY_OUT"
 PY_RC=$?
 if [[ $PY_RC -ne 0 ]]; then
     echo "post-merge-pass: JSON encode failed (rc=$PY_RC); sentinel preserved" >&2

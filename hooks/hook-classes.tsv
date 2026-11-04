@@ -47,13 +47,13 @@ claude	PostToolUse	refusal-streak-record.sh	wait	-
 claude	SubagentStart	target-subagent-guard.sh	wait	-
 claude	SubagentStop	target-subagent-guard.sh	wait	-
 claude	SubagentStop	code-review-attest.sh	block	closed
-claude	PreCompact	run-python.sh	wait	-
+claude	PreCompact	save-session.sh	wait	-
 claude	PreCompact	precompact-canon-doc.sh	wait	-
 claude	WorktreeCreate	worktree-setup.sh	block	open
 claude	WorktreeRemove	worktree-remove.sh	block	closed
 claude	CwdChanged	worktree-env-reload.sh	wait	-
 claude	FileChanged	worktree-env-reload.sh	wait	-
-claude	SessionEnd	run-python.sh	wait	-
+claude	SessionEnd	save-session.sh	wait	-
 claude	SessionStart	session-start-using-fno.sh	wait	-
 claude	SessionStart	context-run.sh	wait	-
 claude	SessionStart	daemon-liveness-session-start.sh	wait	-
@@ -88,7 +88,7 @@ codex	PostToolUse	claim-heartbeat.sh	wait	-
 codex	PostToolUse	friction-offer-inject.sh	wait	-
 codex	SubagentStart	target-subagent-guard.sh	wait	-
 codex	SubagentStop	target-subagent-guard.sh	wait	-
-codex	PreCompact	run-python.sh	wait	-
+codex	PreCompact	save-session.sh	wait	-
 codex	PreCompact	precompact-canon-doc.sh	wait	-
 codex	PostCompact	context-run.sh	wait	-
 codex	PostCompact	inject-announce.sh	wait	-
