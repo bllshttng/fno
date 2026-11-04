@@ -35,6 +35,12 @@ static LEAK_PATTERNS: LazyLock<Vec<(&'static str, Regex)>> = LazyLock::new(|| {
     ]
 });
 
+/// The shared `(class, pattern)` vocabulary, for callers that mask what the
+/// gate would refuse (the upstream-issue draft).
+pub(crate) fn leak_patterns() -> &'static [(&'static str, Regex)] {
+    &LEAK_PATTERNS
+}
+
 /// Every leak class the title matches, in vocabulary order.
 pub fn title_leak_classes(title: &str) -> Vec<&'static str> {
     LEAK_PATTERNS

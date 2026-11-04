@@ -509,11 +509,6 @@ pub enum Event {
     /// answers, `n`/`N` cycle the blocked queue, Enter focuses, Esc closes) are
     /// interpreted by the client's view layer, not here (like OpenSelector).
     OpenAnswers,
-    /// Open the yard overlay (prefix+m): the fleet as F[no]nimals -
-    /// collection - one eye glyph per citizen, one spotlight sprite at a
-    /// time. Overlay-mode keys (`n`/`N` pick, `q`/Esc close) are interpreted
-    /// by the client's view layer, not here (like OpenAnswers).
-    OpenYard,
     /// Open the backlog board (prefix+O).
     OpenBacklogBoard,
     CycleSidelineView,
@@ -605,7 +600,7 @@ pub enum Event {
     ToggleBell,
     /// Open the Messages tab (prefix+M) from anywhere: the mail overlay
     /// takes the keyboard, its own bare keys move and open (the messages
-    /// help section). Case pair with `m` (the yard), the h/H convention.
+    /// help section).
     OpenMessages,
     /// Open the settings modal (prefix+S). The same surface the sideline
     /// menu's `settings` row opens, reached from the keyboard. Case pair
@@ -1406,13 +1401,6 @@ pub(crate) fn default_bindings() -> Vec<KeyBinding> {
             OpenDecisions,
             Global,
             "decisions table (audit, retract, overrule)",
-        ),
-        b(
-            b'm',
-            "yard",
-            OpenYard,
-            Global,
-            "the yard (fleet as a menagerie)",
         ),
         b(
             b'P',

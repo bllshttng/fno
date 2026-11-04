@@ -68,7 +68,7 @@ test	retired	doctor test	-
 think	retired	do think	-
 workspace	retired	agents workspace	-
 worktree	retired	agents workspace worktree	-
-yard	retired	agents audit yard	-
+yard	retired	-	the yard is deleted
 inbox day	live	-	claimed by inbox_user::classify_inbox_day
 inbox decide	live	-	claimed by law_cli::classify_inbox_decide
 inbox decisions	live	-	claimed by law_cli::classify_inbox_decisions

@@ -14,7 +14,6 @@ pub(super) fn compose_cursor(view: &View, launcher_cursor: Option<(u16, u16)>) -
     }
     let overlays_closed = view.selector.is_none()
         && view.answers.is_none()
-        && view.yard.is_none()
         && view.digest.is_none()
         && view.move_pick.is_none()
         && view.attach_place.is_none()

@@ -7,7 +7,7 @@ use super::keys_modal::keys_modal_keys;
 use super::*;
 use super::{
     attach_place_keys, confirm_keys, connections_keys, move_pick_keys, peek_keys, portal_pick_keys,
-    row_menu_keys, selector_keys, yard_keys, StdinFlow, View,
+    row_menu_keys, selector_keys, StdinFlow, View,
 };
 use super::{aux_keys, questions, sideline};
 use super::{backlog_board, org_board};
@@ -96,9 +96,6 @@ pub(super) async fn route(
     if view.answers.is_some() {
         return Some(answer_keys(view, bytes, sock_w).await);
     }
-    if view.yard.is_some() {
-        return Some(yard_keys(view, bytes, sock_w).await);
-    }
     if view.viewer_focused() {
         return Some(super::file_viewer::keys(view, bytes, sock_w).await);
     }
@@ -176,7 +173,7 @@ pub(super) async fn route(
         // stays visible but takes nothing. Prefix chords still resolve first
         // (which-key parity): the board's folder sees only the plain-byte
         // chunks. The board sits BELOW every other modal: a chord can open
-        // one over it (composer, selector, answers, yard, connections, ...),
+        // one over it (composer, selector, answers, connections, ...),
         // and a visible child modal owns the keyboard - or its keys would
         // die in the board's folder behind it.
         return Some(backlog_board::route_board_keys(view, scanner, bytes, sock_w).await);
