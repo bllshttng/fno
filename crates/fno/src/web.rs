@@ -1241,8 +1241,8 @@ async fn hq_model(Query(q): Query<WsQuery>, State(st): State<AppState>) -> Respo
 }
 
 /// `GET /hq/decisions.json`: every recorded decision plus the ids the
-/// user marked reviewed. Read-only: a retract or an overrule needs the user's
-/// own terminal, so the page links to the table and writes nothing.
+/// user marked reviewed. Read-only: a retract or an overrule needs a real
+/// tty, so the page writes nothing.
 async fn hq_decisions(Query(q): Query<WsQuery>, State(st): State<AppState>) -> Response {
     if !token_ok(q.t.as_deref(), &st.token) {
         return unauthorized();
