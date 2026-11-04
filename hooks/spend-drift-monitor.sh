@@ -34,7 +34,7 @@ fi
 sid="$(sed -n 's/.*"session_id"[[:space:]]*:[[:space:]]*"\([A-Za-z0-9_-]*\)".*/\1/p' | head -n 1)"
 # A payload with no session id has no session to key on. It keys on the day
 # instead, so one such session cannot silence the notice for every later one.
-latch_dir="${LATCHES_DIR:-${STATE_DIR:-$HOME/.fno}/latches}"
+latch_dir="${LATCHES_DIR:-${STATE_DIR:-$HOME/.fno}/state/latches}"
 marker="${latch_dir}/.spend-drift-no-node-${sid:-day-$(date +%Y%m%d)}"
 if [ -e "$marker" ]; then
   exit 0
