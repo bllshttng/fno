@@ -79,6 +79,8 @@ pub mod context_used;
 #[cfg(feature = "full")]
 pub mod cursor;
 #[cfg(feature = "full")]
+pub mod decisions_overlay;
+#[cfg(feature = "full")]
 pub mod digest_overlay;
 #[cfg(feature = "full")]
 pub mod dispatch_launch;
@@ -95,8 +97,6 @@ mod event_corrections;
 mod event_signals;
 #[cfg(feature = "full")]
 pub mod event_store;
-#[cfg(feature = "full")]
-pub mod decisions_overlay;
 #[cfg(feature = "full")]
 pub mod feed_overlay;
 #[cfg(feature = "full")]

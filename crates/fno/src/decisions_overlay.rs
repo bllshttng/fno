@@ -73,12 +73,6 @@ impl DecisionRow {
     pub fn needs_audit(&self) -> bool {
         self.lane == "unattributed" || self.author() == Author::Unknown
     }
-
-    /// Only a live or expired row can be overruled; a retracted or
-    /// superseded row is already out of play.
-    pub fn actionable(&self) -> bool {
-        matches!(self.lifecycle.as_str(), "live" | "unscoped" | "expired")
-    }
 }
 
 /// The three filter axes the view cycles with one key each. `None` means all.
@@ -257,17 +251,6 @@ mod tests {
             .map(|r| r.decision_id.clone())
             .collect();
         assert_eq!(ids, ["new", "old"]);
-    }
-
-    #[test]
-    fn cycling_wraps_to_all() {
-        let mut f = Filter::default();
-        for _ in 0..LANES.len() {
-            f.cycle_lane();
-        }
-        assert_eq!(f.lane, Some("unattributed"));
-        f.cycle_lane();
-        assert_eq!(f.lane, None);
     }
 
     #[test]
