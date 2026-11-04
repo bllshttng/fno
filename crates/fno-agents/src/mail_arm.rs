@@ -111,8 +111,9 @@ pub fn beat(remote: &Remote) -> Result<PullOutcome, String> {
     if let Err(e) = schema {
         return Err(e.clone());
     }
-    match mail_bus::fetch_pending(remote, &host) {
-        Ok(rows) => outcome.delivered = pull_rows(remote, rows, &home_root()),
+    let home = home_root();
+    match mail_bus::fetch_pending(remote, &held_hosts(&home, &host)) {
+        Ok(rows) => outcome.delivered = pull_rows(remote, rows, &home),
         Err(e) => eprintln!("mail-arm: pull: {e}"),
     }
     match flush(remote) {
@@ -126,6 +127,33 @@ pub fn beat(remote: &Remote) -> Result<PullOutcome, String> {
     // Open questions ride the same beat to the other machines of the store.
     crate::question_bus::tick(remote);
     Ok(outcome)
+}
+
+/// Every bus label this machine has held, current first. A rename leaves
+/// pending rows keyed to the old label, and the signature forbids re-keying
+/// them, so the pull reads the old labels too. `FNO_MAIL_PREVIOUS_HOST`
+/// (comma list) seeds a rename that happened before this file existed.
+pub(crate) fn held_hosts(home: &std::path::Path, current: &str) -> Vec<String> {
+    let path = home.join("mail-host-names");
+    let mut names: Vec<String> = std::fs::read_to_string(&path)
+        .unwrap_or_default()
+        .lines()
+        .map(str::to_string)
+        .collect();
+    let seeded = std::env::var("FNO_MAIL_PREVIOUS_HOST").unwrap_or_default();
+    let before = names.len();
+    for name in std::iter::once(current).chain(seeded.split(',')) {
+        let name = crate::mail::address::normalize_host(name);
+        if !name.is_empty() && !names.contains(&name) {
+            names.push(name);
+        }
+    }
+    if names.len() != before {
+        let _ = std::fs::write(&path, names.join("\n") + "\n");
+    }
+    names.retain(|n| n != current);
+    names.insert(0, current.to_string());
+    names
 }
 
 fn home_root() -> PathBuf {

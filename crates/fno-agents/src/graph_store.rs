@@ -2455,7 +2455,7 @@ impl BoundedLock {
             if my_turn {
                 match file.try_lock() {
                     Ok(()) => {
-                        stamp_lock_holder(&file);
+                        crate::chokepoint::stamp(&file, crate::chokepoint::GRAPH_STORE.name, "");
                         return Ok(BoundedLock {
                             file,
                             path: lock_path,
@@ -2471,6 +2471,8 @@ impl BoundedLock {
             std::thread::sleep(LOCK_POLL);
         }
         crate::lock_queue::withdraw(ticket.as_deref());
+        let _ =
+            crate::chokepoint::report_expiry(&crate::chokepoint::GRAPH_STORE, &lock_path, timeout);
         Err(StoreError::LockTimeout(
             lock_path.display().to_string(),
             timeout,
@@ -2481,25 +2483,6 @@ impl BoundedLock {
     pub fn lock_path(&self) -> &Path {
         &self.path
     }
-}
-
-/// Record this process as the holder, in the JSON stamp shape
-/// `agent_lock::stamp_holder` writes and Python's `fno.agents.lock` reads.
-/// The write rides the fd this holder keeps open for its whole hold, so only
-/// the current holder ever writes. Advisory: a crashed writer leaves its
-/// record behind, which is exactly what the next timeout refusal should name.
-fn stamp_lock_holder(mut file: &File) {
-    use std::io::{Seek, SeekFrom, Write};
-    if file.set_len(0).is_err() {
-        return;
-    }
-    let _ = file.seek(SeekFrom::Start(0));
-    let line = serde_json::json!({
-        "pid": std::process::id(),
-        "acquired_at": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Micros, false),
-    });
-    let _ = writeln!(file, "{line}");
-    let _ = file.flush();
 }
 
 /// The holder line for a timeout refusal: the recorded pid and hold age,

@@ -7,7 +7,6 @@ use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
 use std::io::Read as _;
-use std::os::fd::AsRawFd;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -591,7 +590,7 @@ fn admit(argv: &[String]) -> Option<String> {
 /// lock family Python's fcntl takes, so a still-running Python broker and
 /// this port serialize against each other.
 struct QuotaLock {
-    handle: std::fs::File,
+    _held: crate::chokepoint::Held,
 }
 
 impl QuotaLock {
@@ -611,20 +610,10 @@ impl QuotaLock {
             if let Some(parent) = path.parent() {
                 let _ = std::fs::create_dir_all(parent);
             }
-            let handle = std::fs::OpenOptions::new()
-                .read(true)
-                .write(true)
-                .create(true)
-                .append(true)
-                .open(&path)
-                .map_err(|e| format!("cannot open {}: {e}", path.display()))?;
-            let fd = handle.as_raw_fd();
-            let locked = unsafe { libc::flock(fd, libc::LOCK_EX) };
-            if locked != 0 {
-                let e = std::io::Error::last_os_error();
-                return Err(format!("cannot lock {}: {e}", path.display()));
-            }
-            let opened_meta = handle
+            let held = crate::chokepoint::take(&crate::chokepoint::GH_QUOTA, &path)
+                .map_err(|e| e.to_string())?;
+            let opened_meta = held
+                .file()
                 .metadata()
                 .map(|m| (m.dev(), m.ino()))
                 .map_err(|e| format!("cannot stat {}: {e}", path.display()))?;
@@ -632,17 +621,10 @@ impl QuotaLock {
                 .map(|m| (m.dev(), m.ino()))
                 .map_err(|e| format!("cannot stat {}: {e}", path.display()))?;
             if opened_meta == current_meta {
-                return Ok(QuotaLock { handle });
+                return Ok(QuotaLock { _held: held });
             }
             // The lock file was replaced mid-acquire; drop and retry.
-            unsafe { libc::flock(fd, libc::LOCK_UN) };
         }
-    }
-}
-
-impl Drop for QuotaLock {
-    fn drop(&mut self) {
-        unsafe { libc::flock(self.handle.as_raw_fd(), libc::LOCK_UN) };
     }
 }
 

@@ -1499,7 +1499,7 @@ pub(crate) fn build_board(inputs: &BoardInputs) -> Value {
             },
             unplanned_rows,
             true,
-            "one blueprint per lead at a time, and only while plans ready are fewer than the lead's worker slots; merge same-shape nodes into one waved plan".to_string(),
+            "one or two blueprints per lead: up to two while plans ready are fewer than the lead's worker slots, else one when none runs; merge same-shape nodes into one waved plan".to_string(),
             "/fno:blueprint",
             None,
         ),
