@@ -1756,11 +1756,6 @@ mod tests {
                               "retries": 0, "parked": null, "merge_dispatched": false,
                               "last_polled_at": "2026-11-01T00:00:00Z"}}),
         );
-        let fake = Fake {
-            obs: Some(open_obs(Some("2026-11-01T00:30:00Z"))),
-            reviewers: vec!["bot".into()],
-            ..Default::default()
-        };
         let opts = SweepOpts {
             min_repoll_s: 0,
             ..rig.opts()
