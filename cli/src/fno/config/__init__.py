@@ -2239,6 +2239,8 @@ class AgentsBlock(SweepKeys):
     min_free_gb: float = 4.0
     # free-disk floor (GB) on the data volume; <= 0 disables.
     min_free_disk_gb: float = 20.0
+    # open-PR cap: the spawn gate holds new target seats above it; 0 disables.
+    max_open_prs: int = 20
     # swap ceiling (percent used) beside min_free_gb; <= 0 disables.
     max_swap_pct: float = 90.0
     # Deprecated and ignored since 2026-09-09: admission decides on the

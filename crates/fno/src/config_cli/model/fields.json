@@ -344,6 +344,8 @@
       },
       "pane_group_max": 4,
       "min_free_gb": 4.0,
+      "min_free_disk_gb": 20.0,
+      "max_open_prs": 20,
       "max_swap_pct": 90.0,
       "max_load_per_cpu": 8.0,
       "max_fleet_cpu_share": 0.5,
@@ -1427,6 +1429,14 @@
     {
      "name": "min_free_gb",
      "default": 4.0
+    },
+    {
+     "name": "min_free_disk_gb",
+     "default": 20.0
+    },
+    {
+     "name": "max_open_prs",
+     "default": 20
     },
     {
      "name": "max_swap_pct",
@@ -3162,6 +3172,8 @@
   "process_admission.max_processes",
   "agents.provider_limits",
   "agents.min_free_gb",
+  "agents.max_open_prs",
+  "agents.min_free_disk_gb",
   "agents.max_swap_pct",
   "agents.max_load_per_cpu",
   "agents.max_fleet_cpu_share",
