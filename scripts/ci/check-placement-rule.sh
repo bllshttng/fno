@@ -430,7 +430,6 @@ scripts/lib/config.sh
 scripts/lib/corrections-lock.sh
 scripts/lib/worktree-lifecycle.sh
 scripts/lib/worktree-manager.sh
-scripts/lib/worktree_occupancy.py
 scripts/lint/no-invalid-events.sh
 scripts/metrics/port-order.sh
 scripts/migrate-events-shape.py

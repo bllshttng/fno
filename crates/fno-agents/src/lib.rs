@@ -432,6 +432,7 @@ pub mod notify_dispatch;
 pub mod nudge;
 pub mod numbers;
 pub mod observer;
+pub mod occupancy_classify;
 pub mod occupancy_login;
 pub mod opencode_ask;
 pub mod opencode_config;
