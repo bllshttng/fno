@@ -13,7 +13,7 @@ Not for: a first PR. That is the [quickstart](quickstart.md).
 In any Claude Code session:
 
 ```
-/plugin marketplace add bllshttng/fno#stable
+/plugin marketplace add fnodotdev/fno#stable
 /plugin install fno@fno
 ```
 
@@ -34,7 +34,7 @@ On the first session after install, footnote prints the install plan and starts 
 Codex CLI:
 
 ```
-codex plugin marketplace add bllshttng/fno@stable
+codex plugin marketplace add fnodotdev/fno@stable
 codex plugin add fno@fno
 ```
 
@@ -44,14 +44,14 @@ Every other harness has its own page under [harnesses/](harnesses/). [HARNESSES.
 
 ### The CLI alone
 
-`curl -fsSL fno.sh | sh`, `uv tool install fno`, `pip install fno`, or `brew install bllshttng/fno/fno` each install the published PyPI wheel. The wheel bundles the complete set: the Rust `fno` front door, the three `fno-agents` binaries, and the Python CLI (`fno-py`). `cargo install fno` is the source route. It builds the Rust front door with your Rust toolchain. The front door bootstraps the Python CLI on first use.
+`curl -fsSL fno.sh | sh`, `uv tool install fno`, `pip install fno`, or `brew install fnodotdev/fno/fno` each install the published PyPI wheel. The wheel bundles the complete set: the Rust `fno` front door, the three `fno-agents` binaries, and the Python CLI (`fno-py`). `cargo install fno` is the source route. It builds the Rust front door with your Rust toolchain. The front door bootstraps the Python CLI on first use.
 
 ### Local clone
 
 Clone, run setup, get the CLI:
 
 ```bash
-git clone https://github.com/bllshttng/fno.git footnote
+git clone https://github.com/fnodotdev/fno.git footnote
 cd footnote
 bash scripts/setup.sh
 ```

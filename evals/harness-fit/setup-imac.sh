@@ -1,7 +1,7 @@
 #!/bin/bash
 # Set up an Intel Mac to run the harness-fit study (Amendment 6).
 #
-#   git clone https://github.com/bllshttng/fno && cd fno
+#   git clone https://github.com/fnodotdev/fno && cd fno
 #   git checkout main
 #   bash evals/harness-fit/setup-imac.sh            # install and check
 #   bash evals/harness-fit/setup-imac.sh --check    # check only, change nothing
