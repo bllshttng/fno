@@ -1162,7 +1162,7 @@ mod table_agreement_tests {
                 }
             }
             for name in props.keys() {
-                if !field_names.contains(name) {
+                if !field_names.contains(&name.as_str()) {
                     problems.push(format!(
                         "config_schema.json $defs {model}.{name} has no fields.json field"
                     ));

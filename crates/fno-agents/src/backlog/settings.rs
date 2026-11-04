@@ -891,7 +891,7 @@ mod paths_facts_tests {
         }
         // Unset keys read null (the model defaults live on the Python side).
         for key in ["fleet_dir", "evals_history"] {
-            assert_eq!(door.get(*key), Some(&Value::Null), "unset key {key}");
+            assert_eq!(door.get(key), Some(&Value::Null), "unset key {key}");
         }
 
         // The loader oracle over the same layers: every value the fixture
@@ -925,7 +925,7 @@ mod paths_facts_tests {
             ("inbox_path", "paths.inbox_path"),
         ] {
             assert_eq!(
-                door.get(*key),
+                door.get(key),
                 Some(&at(dotted)),
                 "door vs loader at {dotted}"
             );

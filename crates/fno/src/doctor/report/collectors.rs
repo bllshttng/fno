@@ -320,7 +320,7 @@ fn unknown_components() -> Vec<Value> {
 /// fields.json `field_meta` keys (no Python exec; the crossing this was is
 /// retired with the config family).
 fn deployed_config_keys() -> Option<Vec<String>> {
-    Some(fno::config_cli::model::field_meta_keys())
+    Some(crate::config_cli::model::field_meta_keys())
 }
 
 /// The source checkout's schema-key table: the committed fields.json in the
