@@ -251,18 +251,16 @@ fn pem_body(pem: &str) -> Result<String, String> {
 }
 
 /// Wrap PKCS#1 RSAPrivateKey DER into the PrivateKeyInfo (PKCS#8) frame:
-/// `SEQUENCE { version 0, rsaEncryption AlgId, BIT STRING { pkcs1 } }`.
+/// `SEQUENCE { version 0, rsaEncryption AlgId, OCTET STRING { pkcs1 } }`.
+/// The private key rides an OCTET STRING (RFC 5208); the BIT STRING form
+/// belongs to SubjectPublicKeyInfo, and ring's unwrap refuses it.
 fn pkcs1_to_pkcs8(pkcs1: &[u8]) -> Vec<u8> {
     const RSA_ENCRYPTION_ALG_ID: [u8; 15] = [
         0x30, 0x0d, 0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01, 0x05, 0x00,
     ];
     let mut inner = vec![0x02, 0x01, 0x00];
     inner.extend_from_slice(&RSA_ENCRYPTION_ALG_ID);
-    inner.extend_from_slice(&tlv(0x03, &{
-        let mut bits = vec![0x00];
-        bits.extend_from_slice(pkcs1);
-        bits
-    }));
+    inner.extend_from_slice(&tlv(0x04, pkcs1));
     tlv(0x30, &inner)
 }
 
