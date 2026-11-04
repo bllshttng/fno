@@ -726,6 +726,16 @@ pub(crate) fn visual_approval_blocker<P: Probes>(
          records the approval. Pass each shot with --image.",
         touched.join(", ")
     );
+    if touched.iter().any(|f| is_public_copy(f)) {
+        detail.push_str(
+            "; this PR changes public copy (README or docs/images). Before the page \
+             reaches the user, brief a fresh subagent as the target developer, told \
+             nothing else, and have it answer in writing: what does this show, would \
+             it make you install fno, and what number or claim here hurts. Put the \
+             answer on the question page. A 'hurts' answer sends the change back \
+             before the user sees it",
+        );
+    }
     match (node_id.as_deref(), shots.as_slice()) {
         (Some(node), []) => detail.push_str(&format!(
             "; no shots at internal/fno/mux/{node}-*.png: capture them first, then \
@@ -751,6 +761,12 @@ pub(crate) fn visual_approval_blocker<P: Probes>(
         }
     }
     Some(Blocker::held("visual_approval", detail))
+}
+
+/// The public front page a reader meets before any install: the README and
+/// its images. Landing copy lives in the docs tree and takes the same path.
+fn is_public_copy(path: &str) -> bool {
+    path == "README.md" || path.starts_with("docs/images/")
 }
 
 /// How many earlier commits of the PR the carry walks, newest first.
@@ -798,7 +814,7 @@ fn approval_carries<P: Probes>(
         .rev()
         .filter(|sha| sha.as_str() != head)
         .take(CARRY_WALK)
-        .find(|sha| texts.iter().any(|text| text.contains(sha.as_str())))
+        .find(|sha| texts.iter().any(|text| text_names_head(text, sha)))
     else {
         return false;
     };
@@ -846,7 +862,7 @@ fn adds_no_paint_surface(was: &BTreeSet<String>, now: &BTreeSet<String>) -> bool
 fn declined_after(declines: &[String], newer: &[&str]) -> bool {
     declines
         .iter()
-        .any(|text| newer.iter().any(|sha| text.contains(sha)))
+        .any(|text| newer.iter().any(|sha| text_names_head(text, sha)))
 }
 
 /// The paint files the PR's three-dot compare against the base changes at
@@ -1395,13 +1411,13 @@ fn law_approval_texts<P: Probes>(probes: &P, cwd: &Path, pr: u64) -> Vec<String>
         .collect()
 }
 
-/// True when a live `chat_attested` law row names this PR and the exact full
-/// head sha. Head-scoped like the role row: a push voids it.
+/// True when a live `chat_attested` law row names this PR and the head sha,
+/// full or as a ten-character prefix. Head-scoped like the role row: a push voids it.
 pub(crate) fn law_chat_clears_pr<P: Probes>(probes: &P, cwd: &Path, pr: u64, head: &str) -> bool {
     !head.is_empty()
         && law_approval_texts(probes, cwd, pr)
             .iter()
-            .any(|text| text.contains(head))
+            .any(|text| text_names_head(text, head))
 }
 
 /// The `owner/name` pair a remote url names, normalized across the ssh
@@ -1427,6 +1443,18 @@ pub(crate) fn repo_slug_from_origin(url: &str) -> Option<String> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn readme_and_doc_images_are_public_copy_and_other_docs_are_not() {
+        assert!(is_public_copy("README.md"));
+        assert!(is_public_copy("docs/images/target-run.gif"));
+        assert!(!is_public_copy("docs/architecture/pr-status-verdict.md"));
+        assert!(!is_public_copy("crates/fno/README.md"));
+        assert!(path_matches_paint(
+            "docs/images/target-run.gif",
+            &["docs/images/**".to_string()]
+        ));
+    }
 
     #[test]
     fn a_paint_diff_of_comments_only_skips_the_look() {
@@ -1566,6 +1594,11 @@ mod tests {
     fn a_decline_after_the_approved_commit_voids_the_carry() {
         let declines = vec!["May PR 9 merge? answer 2 at c3".to_string()];
         assert!(declined_after(&declines, &["c3", "c4"]));
+        let spelled = vec!["May PR 9 merge? answer 2 at 0123456789".to_string()];
+        assert!(declined_after(
+            &spelled,
+            &["0123456789abcdef0123456789abcdef01234567"]
+        ));
         assert!(!declined_after(&declines, &["c4"]));
         assert!(!declined_after(&[], &["c3"]));
     }

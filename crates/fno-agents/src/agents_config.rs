@@ -1411,7 +1411,8 @@ final-head code review. {FLOOR_REMEDY}"
     None
 }
 
-/// The mux client's render surface, the paint footnote's own PRs change. The
+/// The mux client's render surface, the paint footnote's own PRs change, plus
+/// the README and `docs/images`, the public front page a reader sees first. The
 /// default applies only where this tree exists, so another project's PRs
 /// keep the gate off and spend no changed-files read.
 const BUILTIN_VISUAL_PAINT_PATHS: &[&str] = &[
@@ -1441,6 +1442,8 @@ const BUILTIN_VISUAL_PAINT_PATHS: &[&str] = &[
     "crates/fno/src/web_trace.html",
     "crates/fno/src/wordmark.rs",
     "crates/fno/src/yard_overlay.rs",
+    "README.md",
+    "docs/images/**",
 ];
 const BUILTIN_VISUAL_PAINT_ANCHOR: &str = "crates/fno/src/client";
 
