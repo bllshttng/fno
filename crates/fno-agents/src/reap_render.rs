@@ -8,6 +8,10 @@
 use crate::gc_sweep::{GcSummary, StateFilesReapSummary, StateReapFamilySummary};
 use serde_json::{json, Value};
 
+/// The roster reaper's no-node keep, spelled once for both renderers.
+pub(crate) const NO_PROVENANCE: &str =
+    "no provenance: no source resolved a node (sessions, registry, name, transcript)";
+
 /// Render the file-only reap receipt independently from row retirement.
 pub fn render_state_files_reap(summary: &StateFilesReapSummary, json_out: bool) -> String {
     if json_out {
@@ -329,10 +333,7 @@ pub fn render_reap(summary: &GcSummary, json_out: bool, dry_run: bool) -> String
         // change 4: this line used to emit an unbalanced paren and a
         // literal backslash-n; invisible only while the bucket measured
         // empty. One spelling with every other kept line.
-        out.push_str(&format!(
-            "  kept {id} ({})\n",
-            crate::gc::KeepReason::NoProvenance.as_str()
-        ));
+        out.push_str(&format!("  kept {id} ({})\n", NO_PROVENANCE));
     }
     for (id, a, b) in &summary.kept_node_conflict {
         out.push_str(&format!(

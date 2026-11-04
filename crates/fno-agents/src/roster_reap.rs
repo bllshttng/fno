@@ -565,12 +565,7 @@ pub(crate) fn run_with_scope_workers(
                             summary.kept.push(judgement_class(
                                 &ident,
                                 Some(reason_node),
-                                crate::gc::KeepReason::PlanningUnclosed {
-                                    node: planning_node.clone(),
-                                    status: planning_status.clone(),
-                                }
-                                .as_str()
-                                .to_string()
+                                "planning assignment not finished by this session".to_string()
                                     + &format!(": {planning_node} {planning_status}"),
                                 false,
                                 "fleet",
@@ -708,7 +703,7 @@ pub(crate) fn run_with_scope_workers(
                     summary.kept.push(judgement(
                         &ident,
                         None,
-                        crate::gc::KeepReason::NoProvenance.as_str().to_string(),
+                        crate::reap_render::NO_PROVENANCE.to_string(),
                         false,
                     ));
                     continue;
