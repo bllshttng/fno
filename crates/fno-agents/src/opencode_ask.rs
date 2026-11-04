@@ -163,12 +163,7 @@ pub(crate) fn apply_opencode_variant_at(
         )
     })?;
     let lock_path = locks.join("model.json.lock");
-    let lock = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&lock_path)
-        .map_err(|error| format!("cannot open OpenCode model lock: {error}"))?;
-    lock.lock()
+    let _lock = crate::chokepoint::take(&crate::chokepoint::OPENCODE_ASK, &lock_path)
         .map_err(|error| format!("cannot lock OpenCode model state: {error}"))?;
 
     let mut data: serde_json::Value = if path.exists() {

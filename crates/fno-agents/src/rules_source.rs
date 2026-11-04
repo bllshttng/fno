@@ -826,12 +826,12 @@ mod tests {
             })
             .to_string()
         };
-        let days_ago = |d: i64| (chrono::Utc::now() - chrono::Duration::days(d)).to_rfc3339();
-        let mut text = span("r-a", "block", &days_ago(1));
+        let ago = |days: i64| (chrono::Utc::now() - chrono::Duration::days(days)).to_rfc3339();
+        let mut text = span("r-a", "block", &ago(1));
         text.push('\n');
-        text.push_str(&span("r-a", "warn", &days_ago(2)));
+        text.push_str(&span("r-a", "warn", &ago(2)));
         text.push('\n');
-        text.push_str(&span("r-b", "warn", &days_ago(20)));
+        text.push_str(&span("r-b", "warn", &ago(30)));
         text.push('\n');
         std::fs::write(&journal, text).unwrap();
 
