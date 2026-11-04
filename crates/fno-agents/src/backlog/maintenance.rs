@@ -365,9 +365,62 @@ fn detect_url_less_prs(
     fixes
 }
 
-// ---------------------------------------------------------------------------
-// Dedup, rollup and shared-plan cost (propose-only)
-// ---------------------------------------------------------------------------
+/// A PR url recorded under a repo's former name, and the rewritten shape
+/// (same number, swapped slug segment).
+struct RenameFix {
+    node_id: String,
+    old_url: String,
+    new_url: String,
+}
+
+/// The one-time sweep: OPEN rows only, one bounded rename probe per
+/// distinct foreign slug (cached in gh-facts after the first ask), then the
+/// in-place url rewrite for every ref whose slug canonicalizes to another
+/// name. Closed rows keep their history; the gate binds them through the
+/// alias either way.
+fn detect_rename_fixes(
+    entries: &[Value],
+    resolver: &dyn Fn(&str) -> Option<String>,
+) -> Vec<RenameFix> {
+    let mut fixes: Vec<RenameFix> = Vec::new();
+    let mut attempted: BTreeSet<String> = BTreeSet::new();
+    for e in entries {
+        if !crate::backlog_ready::node_is_open(e) {
+            continue;
+        }
+        let Some(nid) = entry_id(e) else {
+            continue;
+        };
+        let nid = nid.to_string();
+        let refs = super::merge_evidence::node_pr_refs(e);
+        for (_num, url) in refs {
+            let Some(url) = url else { continue };
+            let Some(slug) = super::pr_link::repo_slug_from_url(Some(&url)) else {
+                continue;
+            };
+            if !attempted.insert(slug.to_lowercase()) {
+                continue;
+            }
+            let Some(canonical) = resolver(&slug) else {
+                continue;
+            };
+            if canonical.eq_ignore_ascii_case(&slug) {
+                continue;
+            }
+            let new_url = url.replacen(
+                &format!("github.com/{slug}"),
+                &format!("github.com/{canonical}"),
+                1,
+            );
+            fixes.push(RenameFix {
+                node_id: nid.clone(),
+                old_url: url.clone(),
+                new_url,
+            });
+        }
+    }
+    fixes
+}
 
 /// Groups of more than one idea sharing a normalized title. Scoped to the
 /// idea pile, so distinct ready or done work is never flagged.
@@ -1325,6 +1378,7 @@ fn read_graph(graph: &Path) -> Result<Vec<Value>, StoreError> {
 /// because a conflict retry reruns the mutation over a fresh read.
 #[derive(Default)]
 struct Applied {
+    renames: Vec<Value>,
     rescope: Vec<String>,
     prune: Vec<String>,
     pr_urls: Vec<Value>,
@@ -1337,7 +1391,8 @@ struct Applied {
 
 impl Applied {
     fn any(&self) -> bool {
-        !(self.rescope.is_empty()
+        !(self.renames.is_empty()
+            && self.rescope.is_empty()
             && self.prune.is_empty()
             && self.pr_urls.is_empty()
             && self.twins.is_empty()
@@ -1349,6 +1404,7 @@ impl Applied {
 
 /// The deterministic legs' candidates, applied as one locked mutation.
 struct Candidates<'c> {
+    renames: &'c [RenameFix],
     rescope: &'c [RescopeFix],
     prune: &'c [String],
     pr_urls: &'c [&'c PrUrlFix],
@@ -1361,7 +1417,8 @@ struct Candidates<'c> {
 
 impl Candidates<'_> {
     fn is_empty(&self) -> bool {
-        self.rescope.is_empty()
+        self.renames.is_empty()
+            && self.rescope.is_empty()
             && self.prune.is_empty()
             && self.pr_urls.is_empty()
             && self.twins.is_empty()
@@ -1421,6 +1478,38 @@ impl Candidates<'_> {
             ents[i]["pr_url"] = json!(url);
             a.pr_urls
                 .push(json!({"node_id": fix.node_id, "pr_url": url}));
+        }
+        for fix in self.renames {
+            if claimed.contains(&fix.node_id) {
+                a.skipped.push(fix.node_id.clone());
+                continue;
+            }
+            let Some(i) = index(ents, &fix.node_id) else {
+                continue;
+            };
+            // Re-check under lock: the url must still read the old name,
+            // primary or additional.
+            let mut changed = false;
+            if ents[i].get("pr_url").and_then(Value::as_str) == Some(fix.old_url.as_str()) {
+                ents[i]["pr_url"] = json!(fix.new_url);
+                changed = true;
+            }
+            if let Some(rows) = ents[i]
+                .get_mut("additional_prs")
+                .and_then(Value::as_array_mut)
+            {
+                for row in rows.iter_mut() {
+                    if row.get("url").and_then(Value::as_str) == Some(fix.old_url.as_str()) {
+                        row["url"] = json!(fix.new_url);
+                        changed = true;
+                    }
+                }
+            }
+            if changed {
+                a.renames.push(json!({
+                    "node_id": fix.node_id, "old_url": fix.old_url, "new_url": fix.new_url,
+                }));
+            }
         }
         a.twins = apply_twin_drops(ents, self.twins, claimed, &mut a.skipped);
         a.shapes = apply_harness_shape_fixes(ents, self.shapes, claimed, &mut a.skipped);
@@ -1555,6 +1644,11 @@ pub(crate) fn run_pass(flags: Flags, seams: &Seams, out: &mut Out) -> i32 {
     enter!("pr-url");
     let pr_url_fixes = detect_url_less_prs(&entries, seams.slug);
     pass.done("pr-url", pr_url_fixes.len());
+    enter!("repo-rename");
+    let rename_fixes = detect_rename_fixes(&entries, &|slug: &str| {
+        super::pr_link::probe_rename_alias(slug, None)
+    });
+    pass.done("repo-rename", rename_fixes.len());
     let pr_url_writable: Vec<&PrUrlFix> =
         pr_url_fixes.iter().filter(|f| f.pr_url.is_some()).collect();
     let pr_url_unresolvable: Vec<&PrUrlFix> =
@@ -1615,6 +1709,7 @@ pub(crate) fn run_pass(flags: Flags, seams: &Seams, out: &mut Out) -> i32 {
     enter!("apply");
     let mut applied = Applied::default();
     let cands = Candidates {
+        renames: &rename_fixes,
         rescope: &rescope_fixes,
         prune: &prune_ids,
         pr_urls: &pr_url_writable,
@@ -1719,6 +1814,7 @@ pub(crate) fn run_pass(flags: Flags, seams: &Seams, out: &mut Out) -> i32 {
         "pruned": pick(applied.prune.len(), prune_ids.len()),
         "pr_url_backfilled": pick(applied.pr_urls.len(), pr_url_writable.len()),
         "pr_url_unresolvable": pr_url_unresolvable.len(),
+        "repo_renamed": pick(applied.renames.len(), rename_fixes.len()),
         "dedup_groups": dup_groups.len(),
         "shared_plan_cost_violations": plan_cost.len(),
         "rollup_candidates": rollup.len(),

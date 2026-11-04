@@ -480,3 +480,60 @@ fn the_abandoned_leg_settles_a_gone_row_and_holds_a_fresh_one() {
     );
     assert!(!truthy(fx.row("ab-held01")["sessions"][0].get("ended_at")));
 }
+
+#[test]
+fn the_rename_sweep_rewrites_open_rows_through_the_alias_and_skips_claimed() {
+    let old = "https://github.com/bllshttng/fno/pull/4327";
+    let new = "https://github.com/fnodotdev/fno/pull/4327";
+    let alias = |slug: &str| {
+        if slug == "bllshttng/fno" {
+            Some("fnodotdev/fno".to_string())
+        } else {
+            None
+        }
+    };
+    let entries = vec![
+        node(
+            "x-old-open",
+            json!({"status": "in_review", "pr_number": 4327, "pr_url": old}),
+        ),
+        node(
+            "x-old-done",
+            json!({"status": "done", "pr_number": 1,
+                   "pr_url": "https://github.com/bllshttng/fno/pull/1"}),
+        ),
+    ];
+    let fixes = detect_rename_fixes(&entries, &alias);
+    assert_eq!(fixes.len(), 1, "a closed row keeps its history");
+    assert_eq!(
+        (fixes[0].old_url.as_str(), fixes[0].new_url.as_str()),
+        (old, new)
+    );
+
+    // The locked apply: only the open row rewrites, a claim skips.
+    let cands = Candidates {
+        renames: &fixes,
+        rescope: &[],
+        prune: &[],
+        pr_urls: &[],
+        twins: &[],
+        shapes: &[],
+        defers: &[],
+        stale_ready: &[],
+        ready_staleness_days: 30,
+    };
+    let mut ents = entries.clone();
+    let claimed: BTreeSet<String> = ["x-old-open".to_string()].into();
+    let applied = cands.apply(&mut ents, &claimed);
+    assert_eq!(ents[0]["pr_url"], json!(old), "a claimed node is left");
+    assert_eq!(applied.renames.len(), 0);
+
+    let free = BTreeSet::new();
+    let applied = cands.apply(&mut ents, &free);
+    assert_eq!(ents[0]["pr_url"], json!(new));
+    assert_eq!(
+        ents[1]["pr_url"],
+        json!(json!("https://github.com/bllshttng/fno/pull/1"))
+    );
+    assert_eq!(applied.renames.len(), 1);
+}
