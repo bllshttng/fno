@@ -278,6 +278,17 @@ mod tests {
         assert_eq!(m.ctx.as_deref(), Some("49%"));
     }
 
+    // A pane that shows a remote session keeps its `name@host` and wears the
+    // remote glyph beside it. A local name carries no host and no glyph.
+    #[test]
+    fn a_remote_session_label_wears_the_glyph() {
+        assert_eq!(
+            pane_label(Some("tomas@imac2d2"), None, "/w", Some("fno")),
+            "\u{21c4} tomas@imac2d2"
+        );
+        assert_eq!(pane_label(Some("tomas"), None, "/w", Some("fno")), "tomas");
+    }
+
     #[test]
     fn builder_drops_missing_facts() {
         let m = pane_meta(4, None, None, "/home/u/proj", None, None, None);
