@@ -1200,25 +1200,6 @@ mod tests {
         );
     }
 
-    /// Repo root for a test that reads across the tree, or `None` off a checkout.
-    fn repo_root_for_test() -> Option<std::path::PathBuf> {
-        let out = std::process::Command::new("git")
-            .args(["rev-parse", "--show-toplevel"])
-            .current_dir(env!("CARGO_MANIFEST_DIR"))
-            .output()
-            .ok()?;
-        if !out.status.success() {
-            return None;
-        }
-        let top = String::from_utf8(out.stdout).ok()?;
-        let top = top.trim();
-        if top.is_empty() {
-            None
-        } else {
-            Some(std::path::PathBuf::from(top))
-        }
-    }
-
     #[test]
     fn every_production_emit_kind_is_registered() {
         use std::collections::BTreeSet;
