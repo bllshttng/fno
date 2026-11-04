@@ -266,16 +266,45 @@ fn read_files(pr: i64, repo: Option<&str>, cwd: &Path) -> Result<Vec<String>, Pr
     })
 }
 
-/// One `gh api` read returning the parsed JSON body.
+/// One `gh api` read returning the parsed JSON body. A concrete path rides
+/// the conditional etag door (`eligible` names exactly that shape), so the
+/// watch lanes' repeat reads of an unchanged PR answer 304 for no core
+/// point; a template path keeps the plain spawn with the escape-sequences
+/// flag, whose substitution the door's fingerprint cannot carry.
 fn gh_api_json(path: &str, cwd: &Path) -> Result<Value, PrReadError> {
-    let (ok, out, err) = run_labeled(
-        "backlog-evidence",
-        "gh",
-        &["api", "--allow-escape-sequences", path],
-        cwd,
-        QUERY_TIMEOUT,
-    )
-    .map_err(|e| PrReadError::new(e, "availability"))?;
+    gh_api_json_via(cwd, path, |argv| {
+        run_labeled("backlog-evidence", "gh", argv, cwd, QUERY_TIMEOUT)
+            .map(|(ok, out, err)| (ok, out.into_bytes(), err))
+    })
+}
+
+/// The door-routing body behind [`gh_api_json`], with the gh spawn
+/// injected: a concrete path rides the conditional etag door, a template
+/// path keeps the plain spawn. The test injects an argv recorder instead of
+/// a real gh.
+fn gh_api_json_via(
+    cwd: &Path,
+    path: &str,
+    spawn: impl Fn(&[&str]) -> Result<(bool, Vec<u8>, String), String>,
+) -> Result<Value, PrReadError> {
+    let plain = ["api".to_string(), path.to_string()];
+    if crate::gh_etag::eligible(&plain).is_some() {
+        let (ok, out, err) = crate::gh_etag::conditional_api_get(cwd, path, spawn)
+            .map_err(|e| PrReadError::new(e, "availability"))?;
+        if !ok {
+            let message = if err.trim().is_empty() { out } else { err };
+            return Err(PrReadError::new(message, ""));
+        }
+        return serde_json::from_str(out.trim()).map_err(|e| {
+            PrReadError::new(
+                format!("gh api returned output that is not JSON: {e}"),
+                "malformed",
+            )
+        });
+    }
+    let (ok, out, err) = (spawn)(&["api", "--allow-escape-sequences", path])
+        .map_err(|e| PrReadError::new(e, "availability"))?;
+    let out = String::from_utf8_lossy(&out).into_owned();
     if !ok {
         let message = if err.trim().is_empty() { out } else { err };
         return Err(PrReadError::new(message, ""));
@@ -511,7 +540,49 @@ mod tests {
         assert_eq!(paths.len(), FILES_PAGE_SIZE + 3);
         let cap = paginate_files(|_| Ok(full_page.clone())).expect_err("cap fails closed");
         assert_eq!(cap.kind, "evidence_incomplete", "{}", cap.kind);
-        let cap_msg = cap.message.clone();
         assert!(cap_msg.contains("3,000-file cap"), "{cap_msg}");
+    }
+
+    /// A concrete-path read rides the conditional etag door: the door's own
+    /// spawn shape (`api -i path`) reaches gh, never the plain
+    /// escape-sequences shape. A template path keeps the plain shape.
+    #[test]
+    fn a_concrete_merge_state_read_rides_the_conditional_door() {
+        let _guard = cache_env_lock();
+        let _dir = temp_cache_dir("door").expect("temp dir");
+        let seen: std::sync::Arc<std::sync::Mutex<Vec<Vec<String>>>> = Default::default();
+        let sink = seen.clone();
+        let spawn = move |argv: &[&str]| {
+            sink.lock()
+                .expect("lock")
+                .push(argv.iter().map(|s| s.to_string()).collect());
+            Ok((true, br#"{"pr":7}"#.to_vec(), String::new()))
+        };
+        let v = gh_api_json_via(Path::new("."), "repos/o/r/pulls/7", &spawn)
+            .expect("the door passthrough parses");
+        assert_eq!(v.get("pr").and_then(Value::as_i64), Some(7));
+
+        let (door_calls, plain_calls) = {
+            let all = seen.lock().expect("lock");
+            (
+                all.iter().filter(|a| a.contains(&"-i".to_string())).count(),
+                all.iter()
+                    .filter(|a| a.contains(&"--allow-escape-sequences".to_string()))
+                    .count(),
+            )
+        };
+        assert_eq!(door_calls, 1, "the eligible path rode the door: {seen:?}");
+        assert_eq!(plain_calls, 0, "no plain spawn for the eligible path");
+
+        let v = gh_api_json_via(Path::new("."), "repos/{owner}/{repo}/pulls/7", &spawn)
+            .expect("the template fallback parses");
+        assert_eq!(v.get("pr").and_then(Value::as_i64), Some(7));
+        let plain = seen.lock().expect("lock");
+        assert!(
+            plain
+                .iter()
+                .any(|a| a.contains(&"--allow-escape-sequences".to_string())),
+            "the template path kept the plain shape: {plain:?}"
+        );
     }
 }
