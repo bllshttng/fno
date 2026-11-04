@@ -452,6 +452,23 @@ pub(crate) fn bg_fno_invocation_in(path: &std::path::Path) -> bool {
     false
 }
 
+/// The argument text of the transcript's first real fno call (never
+/// `using-fno`): the prompt a bg lead was launched with, which names its node.
+pub(crate) fn first_fno_invocation_args(session_id: &str, account: Option<&str>) -> Option<String> {
+    let path = crate::claude_drive::find_transcript_for_account(session_id, account)
+        .or_else(|| crate::claude_drive::find_transcript(session_id))?;
+    let file = std::fs::File::open(path).ok()?;
+    std::io::BufReader::new(file)
+        .lines()
+        .map_while(Result::ok)
+        .filter(|line| line.contains("fno:"))
+        .find_map(|line| {
+            let event = serde_json::from_str::<Value>(&line).ok()?;
+            let (command, args) = invocation(&event)?;
+            (command != "using-fno").then_some(args)
+        })
+}
+
 fn command_token(rest: &str) -> &str {
     let end = rest
         .find(|c: char| !(c.is_ascii_lowercase() || c == '-'))
