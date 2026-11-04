@@ -34,7 +34,19 @@ const INSERT: &str = "INSERT OR IGNORE INTO fno_numbers \
 SELECT ?1, COALESCE(MAX(num), 0) + 1, ?2, ?3, ?4, strftime('%s','now') \
 FROM fno_numbers WHERE kind = ?1 AND store = ?3";
 
+/// A node number skips every value that already names a node: `x-1477` is a
+/// real hash, so the 1477th `x` node takes `x-1478`. One typed token then
+/// reads one node. `substr(?1, 3)` strips the `n:` off the kind.
+const NODE_INSERT: &str = "INSERT OR IGNORE INTO fno_numbers \
+(kind, num, key, store, host, created_at) \
+SELECT ?1, (WITH RECURSIVE c(n) AS (\
+SELECT COALESCE(MAX(num), 0) + 1 FROM fno_numbers WHERE kind = ?1 AND store = ?3 \
+UNION ALL SELECT n + 1 FROM c \
+WHERE EXISTS (SELECT 1 FROM nodes WHERE id = substr(?1, 3) || '-' || n)) \
+SELECT n FROM c ORDER BY n DESC LIMIT 1), ?2, ?3, ?4, strftime('%s','now')";
+
 const LOCAL_STORE: &str = "local";
+const NODE_KIND: &str = "n:";
 const TICK: Duration = Duration::from_secs(60);
 const MINT_BATCH: usize = 200;
 
@@ -110,12 +122,38 @@ fn open_write_at(graph: &Path) -> Result<Connection, String> {
     Ok(conn)
 }
 
-/// Mint one key in a local store. A second mint of a key is a no-op.
+/// The counter a node id counts in: `n:x` for `x-cba7`. Each prefix counts
+/// alone, so `x-15` and `fb-15` are two nodes.
+fn node_kind(id: &str) -> Option<String> {
+    let (prefix, tail) = id.split_once('-')?;
+    let word = !prefix.is_empty() && prefix.bytes().all(|b| b.is_ascii_lowercase());
+    (word && !tail.is_empty()).then(|| format!("{NODE_KIND}{prefix}"))
+}
+
+/// The kind and key of every id to number: decisions and questions by hash
+/// shape, nodes by the `n:` marker the caller put on them.
+fn kind_and_key(key: &str) -> Option<(String, &str)> {
+    match key.strip_prefix(NODE_KIND) {
+        Some(id) => Some((node_kind(id)?, id)),
+        None => Some((kind_of(key)?.to_string(), key)),
+    }
+}
+
+fn insert_for(kind: &str) -> &'static str {
+    if kind.starts_with(NODE_KIND) {
+        NODE_INSERT
+    } else {
+        INSERT
+    }
+}
+
+/// Mint one key in a local store. A second mint of a key is a no-op. A node
+/// key reads `n:<node id>`.
 pub fn mint_local(conn: &Connection, key: &str, store: &str, host: &str) -> Result<(), String> {
-    let Some(kind) = kind_of(key) else {
+    let Some((kind, key)) = kind_and_key(key) else {
         return Ok(());
     };
-    conn.execute(INSERT, params![kind, key, store, host])
+    conn.execute(insert_for(&kind), params![kind, key, store, host])
         .map(drop)
         .map_err(|e| e.to_string())
 }
@@ -125,12 +163,12 @@ fn mint_remote(remote: &Remote, keys: &[String], host: &str) -> Result<(), Strin
     let steps: Vec<(String, Vec<SqlValue>)> = keys
         .iter()
         .filter_map(|key| {
-            let kind = kind_of(key)?;
+            let (kind, key) = kind_and_key(key)?;
             Some((
-                INSERT.to_string(),
+                insert_for(&kind).to_string(),
                 vec![
-                    SqlValue::Text(kind.to_string()),
-                    SqlValue::Text(key.clone()),
+                    SqlValue::Text(kind),
+                    SqlValue::Text(key.to_string()),
                     SqlValue::Text(store.clone()),
                     SqlValue::Text(host.to_string()),
                 ],
@@ -149,7 +187,16 @@ fn mint_remote(remote: &Remote, keys: &[String], host: &str) -> Result<(), Strin
 fn pull(remote: &Remote, conn: &Connection) -> Result<usize, String> {
     let store = remote.host().to_string();
     let mut pulled = 0;
-    for kind in ["d", "q"] {
+    let kinds = remote.execute(
+        "SELECT DISTINCT kind FROM fno_numbers WHERE store = ?",
+        &[SqlValue::Text(store.clone())],
+    )?;
+    let kinds: Vec<String> = kinds
+        .rows
+        .iter()
+        .filter_map(|row| row.first().and_then(SqlValue::text).map(str::to_string))
+        .collect();
+    for kind in kinds.iter().map(String::as_str) {
         let cursor: i64 = conn
             .query_row(
                 "SELECT COALESCE(MAX(num), 0) FROM fno_numbers WHERE store = ?1 AND kind = ?2",
@@ -188,7 +235,10 @@ fn pull(remote: &Remote, conn: &Connection) -> Result<usize, String> {
 }
 
 fn print_row(kind: &str, num: i64, store: &str, current: &str) -> String {
-    let letter = kind.to_ascii_uppercase();
+    let letter = match kind.strip_prefix(NODE_KIND) {
+        Some(prefix) => format!("{prefix}-"),
+        None => kind.to_ascii_uppercase(),
+    };
     if store == current {
         format!("{letter}{num}")
     } else {
@@ -292,6 +342,59 @@ pub fn resolve(kind: char, text: &str) -> Option<String> {
     resolve_in(open_read().as_ref(), kind, text, &current_store())
 }
 
+/// The `<prefix>-<digits>` split of a typed node number: `x-15` is
+/// (`x`, 15, no store). A `@store` tail names another machine's count.
+fn node_number_text(text: &str) -> Option<(&str, i64, Option<&str>)> {
+    let (head, store) = match text.split_once('@') {
+        Some((head, store)) if !store.is_empty() => (head, Some(store)),
+        _ => (text, None),
+    };
+    let (prefix, digits) = head.split_once('-')?;
+    let word = !prefix.is_empty() && prefix.bytes().all(|b| b.is_ascii_lowercase());
+    let digits_ok = (1..=7).contains(&digits.len()) && digits.bytes().all(|b| b.is_ascii_digit());
+    (word && digits_ok).then(|| (prefix, digits.parse().unwrap_or(0), store))
+}
+
+/// The node id a typed number names: `x-15` is the 15th `x` node. `None`
+/// when the token is not a number or nothing holds it. The caller asks the
+/// exact-id tier first, so a hash that reads like a number still wins.
+pub fn resolve_node_in(conn: Option<&Connection>, text: &str, current: &str) -> Option<String> {
+    let (prefix, num, store) = node_number_text(text.trim())?;
+    conn?
+        .query_row(
+            "SELECT key FROM fno_numbers WHERE kind = ?1 AND num = ?2 AND store = ?3",
+            params![
+                format!("{NODE_KIND}{prefix}"),
+                num,
+                store.unwrap_or(current)
+            ],
+            |row| row.get(0),
+        )
+        .ok()
+}
+
+/// `resolve_node_in` over this machine's table.
+pub fn resolve_node(text: &str) -> Option<String> {
+    node_number_text(text.trim())?;
+    resolve_node_in(open_read().as_ref(), text, &current_store())
+}
+
+/// Every number a node holds, as text: `x-15`. A new hash must avoid these,
+/// or one typed token would name two nodes.
+pub fn node_number_texts() -> std::collections::BTreeSet<String> {
+    let Some(conn) = open_read() else {
+        return Default::default();
+    };
+    let Ok(mut stmt) =
+        conn.prepare("SELECT substr(kind, 3) || '-' || num FROM fno_numbers WHERE kind LIKE 'n:%'")
+    else {
+        return Default::default();
+    };
+    let rows = stmt.query_map([], |row| row.get::<_, String>(0));
+    rows.map(|rows| rows.flatten().collect())
+        .unwrap_or_default()
+}
+
 /// `Q87`, or `None` while the arm has not reached this id.
 pub fn label(id: &str) -> Option<String> {
     label_in(&open_read()?, id, &current_store())
@@ -322,7 +425,9 @@ pub fn annotate(text: &str) -> String {
 
 fn annotate_with(text: &str, held: &HashMap<String, String>) -> String {
     static HASH: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    let hash = HASH.get_or_init(|| regex::Regex::new(r"\b[dq]-[0-9a-f]{8}\b").expect("hash regex"));
+    let hash = HASH.get_or_init(|| {
+        regex::Regex::new(r"\b(?:[dq]-[0-9a-f]{8}|[a-z]{1,8}-[0-9a-f]{4})\b").expect("hash regex")
+    });
     if held.is_empty() {
         return text.to_string();
     }
@@ -374,6 +479,7 @@ fn wanted(
 }
 
 fn unnumbered(conn: &Connection, keys: Vec<String>, store: &str) -> Vec<String> {
+    let bare = |key: &str| key.strip_prefix(NODE_KIND).unwrap_or(key).to_string();
     let held: std::collections::HashSet<String> = conn
         .prepare("SELECT key FROM fno_numbers WHERE store = ?1")
         .and_then(|mut stmt| {
@@ -381,7 +487,9 @@ fn unnumbered(conn: &Connection, keys: Vec<String>, store: &str) -> Vec<String> 
             Ok(rows.flatten().collect())
         })
         .unwrap_or_default();
-    keys.into_iter().filter(|key| !held.contains(key)).collect()
+    keys.into_iter()
+        .filter(|key| !held.contains(&bare(key)))
+        .collect()
 }
 
 /// One sweep: mint every unnumbered key, then cache the primary's rows. An
@@ -422,6 +530,19 @@ pub fn sweep(
     }
 }
 
+/// Every node id, oldest first, so history reads x-1..x-N in filing order.
+fn node_ids_oldest_first(graph: &Path) -> Vec<String> {
+    let Some(conn) = open_read_at(graph) else {
+        return Vec::new();
+    };
+    let Ok(mut stmt) = conn.prepare("SELECT id FROM nodes ORDER BY created_at, ordinal, id") else {
+        return Vec::new();
+    };
+    let rows = stmt.query_map([], |row| row.get::<_, String>(0));
+    rows.map(|rows| rows.flatten().collect())
+        .unwrap_or_default()
+}
+
 fn beat(cwd: &Path) -> Result<usize, String> {
     let remote = crate::store_remote::configured()?;
     let decisions = crate::decision_index::default_store_live()?;
@@ -431,10 +552,16 @@ fn beat(cwd: &Path) -> Result<usize, String> {
     // Notes and pins ride the board without an ask row; they get a number too.
     let (items, _, _) = crate::attention_arm::read_items(cwd);
     let extra: Vec<String> = items.into_iter().map(|item| item.id).collect();
+    let mut keys = wanted(&decisions.rows, &asked, &extra);
+    keys.extend(
+        node_ids_oldest_first(&db_path())
+            .into_iter()
+            .map(|id| format!("{NODE_KIND}{id}")),
+    );
     sweep(
         &db_path(),
         remote.as_ref(),
-        wanted(&decisions.rows, &asked, &extra),
+        keys,
         &crate::mail::address::normalize_host(&crate::claims::hostname()),
     )
 }
@@ -551,6 +678,30 @@ mod tests {
         assert_eq!(label_in(&conn, "d-00000002", "local").unwrap(), "D2");
         assert_eq!(label_in(&conn, "q-00000001", "local").unwrap(), "Q1");
         assert_eq!(label_in(&conn, "note-a", "local").unwrap(), "Q2");
+    }
+
+    #[test]
+    fn nodes_count_per_prefix_and_skip_numbers_that_are_hashes() {
+        let (_dir, graph, conn) = conn();
+        conn.execute_batch("CREATE TABLE nodes (id TEXT PRIMARY KEY)")
+            .unwrap();
+        // `x-2` is a real hash, so the second `x` node takes 3.
+        conn.execute("INSERT INTO nodes (id) VALUES ('x-2')", [])
+            .unwrap();
+        let keys: Vec<String> = ["x-aaaa", "x-bbbb", "fb-cccc"]
+            .iter()
+            .map(|id| format!("n:{id}"))
+            .collect();
+        assert_eq!(sweep(&graph, None, keys.clone(), "h").unwrap(), 3);
+        assert_eq!(sweep(&graph, None, keys, "h").unwrap(), 0);
+        assert_eq!(label_in(&conn, "x-aaaa", "local").unwrap(), "x-1");
+        assert_eq!(label_in(&conn, "x-bbbb", "local").unwrap(), "x-3");
+        assert_eq!(label_in(&conn, "fb-cccc", "local").unwrap(), "fb-1");
+        let found = |text| resolve_node_in(Some(&conn), text, "local");
+        assert_eq!(found("x-3").as_deref(), Some("x-bbbb"));
+        assert_eq!(found("fb-1").as_deref(), Some("fb-cccc"));
+        assert_eq!(found("x-2"), None);
+        assert_eq!(found("x-cba7"), None);
     }
 
     #[test]
