@@ -115,7 +115,13 @@ fn tree_of(repo: &Path, rev: &str) -> Result<tempfile::TempDir, String> {
 }
 
 fn results(tree: &Path, package: &str) -> Result<BTreeMap<String, String>, String> {
-    run_cargo(tree, package, None, RUN_TIMEOUT_S).map(|out| parse_libtest(&out))
+    let found = parse_libtest(&run_cargo(tree, package, None, RUN_TIMEOUT_S)?);
+    if found.is_empty() {
+        return Err(format!(
+            "cargo test -p {package} --lib printed no test results (a bin-only package, or a build failure)"
+        ));
+    }
+    Ok(found)
 }
 
 /// Mint one draft; returns its path. Every refusal names the commit.
