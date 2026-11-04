@@ -396,7 +396,10 @@ crates/fno-agents/src/plan_carry.rs
 crates/fno-agents/src/scoreboard/plan_join.rs
 crates/fno-agents/src/surface_check.rs
 crates/fno-agents/src/verify_advise.rs
-crates/fno-agents/src/wave.rs"
+crates/fno-agents/src/wave.rs
+crates/fno-agents/src/wave_ready.rs"
+# wave_ready.rs reads the Execution Strategy and the task file lists to list
+# dispatchable tasks; its frontmatter check drops every `status` error.
 # evals_candidates.rs reads only the plan frontmatter `title`, `claims` and
 # PR urls to rank golden candidates; superseded comes from the graph, so it
 # never extracts a plan status and the shelling rule does not apply to it.

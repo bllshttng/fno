@@ -76,7 +76,7 @@ Three validation scripts enforce structural and process rules:
 
 | Script | Purpose |
 |--------|---------|
-| `crates/fno-agents/src/wave_ready.rs` | Wave verbs behind `fno-agents wave` |
+| `crates/fno-agents/src/wave_ready.rs` | Wave commands behind `fno-agents wave` |
 | `scripts/metrics/register-task.py` | Task registration for metrics tracking |
 | `scripts/metrics/session-cost.py` | Session cost calculation and reporting |
 

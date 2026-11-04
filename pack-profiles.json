@@ -58,6 +58,7 @@
     "hooks/lib/run-python.sh",
     "hooks/refusal-streak-record.sh",
     "hooks/review-hold.sh",
+    "hooks/save-session.sh",
     "hooks/session-join-prompt.sh",
     "hooks/session-start-using-fno.sh",
     "hooks/session-start.sh",

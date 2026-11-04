@@ -473,7 +473,7 @@ Read or write any key with `fno config get|set|unset <key>` (atomic, schema-chec
 
 ## Wave CLI
 
-`fno-agents wave` serves the wave verbs `/execute waves` calls. The code is in `crates/fno-agents/src/wave_ready.rs`.
+`fno-agents wave` serves the wave commands `/execute waves` calls. The code is in `crates/fno-agents/src/wave_ready.rs`.
 
 ```bash
 # Print the dispatchable tasks as JSON
