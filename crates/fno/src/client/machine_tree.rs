@@ -71,6 +71,16 @@ impl MachineTree {
         }
     }
 
+    /// Remote rows reading blocked. Zero while the toggle is off.
+    pub(super) fn blocked_remote(&self) -> usize {
+        if !self.on {
+            return 0;
+        }
+        self.rows()
+            .filter(|r| r.badge == Some(AgentBadge::Blocked))
+            .count()
+    }
+
     /// The layer paints only with the toggle on and a second machine reporting.
     pub(super) fn layered(&self) -> bool {
         self.on && self.bands.len() >= 2

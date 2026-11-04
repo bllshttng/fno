@@ -930,6 +930,8 @@ pub(crate) struct View {
     /// events leg. Rendered as its own row kind, ranked ahead of the rest of
     /// THEY NEED YOU.
     questions_fold: Option<crate::needs_overlay::QuestionsFold>,
+    /// The pinned Needs input section is open (a tap on the strip count).
+    needs_open: bool,
     /// The question pages index, read in-process: the bell's fast seed.
     questions_index: Option<crate::needs_overlay::QuestionsFold>,
     questions_degraded: bool,
@@ -1974,6 +1976,7 @@ impl View {
             mine_action: None,
             mine_acting: false,
             questions_fold: None,
+            needs_open: false,
             questions_index: None,
             questions_degraded: false,
             questions_degraded_reason: None,
@@ -2166,110 +2169,6 @@ impl View {
             worst.entry(r.name.clone()).or_insert(r.kind);
         }
         worst
-    }
-
-    fn needs_queue(&self) -> Vec<NeedRow> {
-        let mut rows: Vec<NeedRow> = Vec::new();
-
-        // Leg 1: live badge rows from the current layout (no shell-out).
-        for a in &self.layout.agents {
-            if is_blocked_row(a) {
-                let kind = if a.answerable.is_some() {
-                    NeedKind::BlockedAnswerable
-                } else {
-                    NeedKind::BlockedFocusOnly
-                };
-                let reason = a.reason.clone().unwrap_or_else(|| {
-                    if a.answerable.is_some() {
-                        "needs an answer".into()
-                    } else {
-                        "needs focus".into()
-                    }
-                });
-                rows.push(NeedRow {
-                    kind,
-                    name: a.name.clone(),
-                    reason,
-                    ts: String::new(),
-                    id_key: a.name.clone(),
-                    answerable: a.answerable.clone(),
-                    pane_id: a.pane_id,
-                    attach_id: a.attach_id.clone(),
-                    squad: a.squad,
-                    tab: a.tab,
-                });
-            } else if !a.exited
-                && pane_state(a.badge, a.seen, a.pane_activity) == PaneState::DoneUnseen
-            {
-                rows.push(NeedRow {
-                    kind: NeedKind::DoneUnseen,
-                    name: a.name.clone(),
-                    reason: a.reason.clone().unwrap_or_else(|| "done, unseen".into()),
-                    ts: String::new(),
-                    id_key: a.name.clone(),
-                    answerable: None,
-                    pane_id: a.pane_id,
-                    attach_id: a.attach_id.clone(),
-                    squad: a.squad,
-                    tab: a.tab,
-                });
-            }
-        }
-
-        // Leg 2: event-fold items, joined to a roster row, else rendered
-        // squadless when live, else dropped (a dead session's stale stop must
-        // not nag forever - Locked 5).
-        if let Some(items) = &self.needs_fold {
-            for item in items {
-                let kind = match item.kind.as_str() {
-                    "review_wedged" => NeedKind::ReviewWedged,
-                    "budget_stop" => NeedKind::BudgetStop,
-                    "mail_question" => NeedKind::MailQuestion,
-                    "operator_question" => NeedKind::Question,
-                    "carveout_stale" | "stale_claims" => NeedKind::Decision,
-                    _ => continue,
-                };
-                match self.join_fold_row(item) {
-                    Some(a) => rows.push(NeedRow {
-                        kind,
-                        name: a.name.clone(),
-                        reason: item.evidence.clone(),
-                        ts: item.ts.clone(),
-                        id_key: item.session_id.clone(),
-                        answerable: None,
-                        pane_id: a.pane_id,
-                        attach_id: a.attach_id.clone(),
-                        squad: a.squad,
-                        tab: a.tab,
-                    }),
-                    None if item.live => rows.push(NeedRow {
-                        kind,
-                        name: item
-                            .name
-                            .clone()
-                            .or_else(|| item.node.clone())
-                            .unwrap_or_else(|| item.session_id.clone()),
-                        reason: item.evidence.clone(),
-                        ts: item.ts.clone(),
-                        id_key: item.session_id.clone(),
-                        answerable: None,
-                        pane_id: None,
-                        attach_id: None,
-                        squad: None,
-                        tab: None,
-                    }),
-                    None => {} // unjoined + not live: drop (stale-nag guard)
-                }
-            }
-        }
-
-        rows.sort_by(|a, b| {
-            a.kind
-                .cmp(&b.kind)
-                .then_with(|| a.ts.cmp(&b.ts))
-                .then_with(|| a.name.cmp(&b.name))
-        });
-        rows
     }
 
     /// `needs_queue()` filtered for the operator panel: a `MailQuestion` row is
@@ -3556,6 +3455,7 @@ impl View {
             DisplayRow::Blank
             | DisplayRow::CardRule
             | DisplayRow::TableHead
+            | DisplayRow::NeedNote(_)
             | DisplayRow::TableEmpty => None,
         }
     }
@@ -3893,6 +3793,10 @@ impl View {
             DisplayRow::Agent(a) => Some(agent_hit(a, self.layout.active_squad)),
             // A `~` header cycles its own view state, exactly like a squad
             // name row: inert to the selector, clickable.
+            // The pinned Needs input header has no fold state: a click closes it.
+            DisplayRow::Header { key, .. } if *key == SectionKey::Group("@needs-input".into()) => {
+                Some(ChromeHit::NeedInput)
+            }
             DisplayRow::Header { key, .. } => Some(ChromeHit::CycleSection(key.clone())),
             // The idle fold toggles its squad's idle expansion: actionable
             // (click and Enter), so not inert.
@@ -3905,6 +3809,7 @@ impl View {
             DisplayRow::Blank
             | DisplayRow::CardRule
             | DisplayRow::TableHead
+            | DisplayRow::NeedNote(_)
             | DisplayRow::TableEmpty => None,
             // The `+` footer opens the name-input overlay.
             DisplayRow::NewSquad if self.term.0 < MIN_ROWS_FOR_STATUS => Some(ChromeHit::Notice(
@@ -5543,6 +5448,7 @@ impl View {
             Density::Regular => {
                 let (rows, depths) = self.tree_rows_with_depths();
                 let (rows, depths) = self.sort_agent_runs(rows, depths);
+                let (rows, depths) = self.pin_needs(rows, depths);
                 self.card_rows(rows, depths)
             }
             Density::Slim => {
@@ -5561,9 +5467,12 @@ impl View {
                         kept_depths.push(d);
                     }
                 }
-                (kept_rows, kept_depths)
+                self.pin_needs(kept_rows, kept_depths)
             }
-            Density::Extended => self.table_rows_with_depths(),
+            Density::Extended => {
+                let (rows, depths) = self.table_rows_with_depths();
+                self.pin_needs(rows, depths)
+            }
         }
     }
 
@@ -5895,6 +5804,9 @@ enum DisplayRow<'a> {
     /// a header with nothing under it reads as a stalled table, so the empty
     /// state is stated rather than implied.
     TableEmpty,
+    /// A line of the pinned Needs input section that is not an agent row: an
+    /// open question. Inert; the question is answered from the bell panel.
+    NeedNote(String),
     /// The top-K idle fold: a squad with more live idle rows than the
     /// cap folds the overflow behind this one row. `hidden` is the foldable
     /// count (the idle rows past the cap, always > 0 when this row is emitted).
@@ -6001,6 +5913,7 @@ fn row_is_inert(drow: &DisplayRow) -> bool {
             | DisplayRow::CardMetrics(..)
             | DisplayRow::CardRule
             | DisplayRow::TableHead
+            | DisplayRow::NeedNote(_)
             | DisplayRow::TableEmpty
     )
 }
@@ -6200,6 +6113,9 @@ enum ChromeHit {
     /// The strip row's view word (`Agents  Messages`, R15): switch the
     /// sideline to that view.
     TopRow(crate::view_store::SidelineView),
+    /// The `N need input` count on the strip row: opens or closes the
+    /// pinned Needs input section.
+    NeedInput,
     Bell(bell::Hit),
     /// Owned, not `&'static`: an in-flight card's notice carries the
     /// server-computed `where_hint` (v18), which is per-card data.
@@ -8938,6 +8854,7 @@ async fn apply_hit(
             crate::view_store::SidelineView::Backlog => View::open(view),
             crate::view_store::SidelineView::Org => org_board::open(view),
         },
+        ChromeHit::NeedInput => view.needs_open = !view.needs_open,
         ChromeHit::Bell(hit) => bell::apply_hit(view, hit),
         ChromeHit::Cmds(cmds) => {
             for cmd in cmds {
@@ -10170,6 +10087,8 @@ use agent_group::agent_hit;
 mod hold;
 #[path = "client/machine_tree.rs"]
 mod machine_tree;
+#[path = "client/needs_queue.rs"]
+mod needs_queue;
 
 #[path = "client/header_band.rs"]
 mod header_band;
