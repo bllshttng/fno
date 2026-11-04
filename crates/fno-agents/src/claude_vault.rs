@@ -322,7 +322,7 @@ pub(crate) fn run_action(
     store: &Path,
     id: Option<&str>,
     lock_held: bool,
-) -> Result<(i32, String), String> {
+) -> Result<(i32, String, Option<String>), String> {
     let mut args = vec!["--store".to_string(), store.to_string_lossy().into_owned()];
     if let Some(id) = id {
         args.push("--id".to_string());
@@ -333,7 +333,15 @@ pub(crate) fn run_action(
     }
     let options = parse_options(action, &args)?;
     let (code, receipt) = run_with_options(action, options, &SystemExternal);
-    Ok((code, receipt.verdict))
+    Ok((code, receipt.verdict, receipt.note))
+}
+
+/// True when the blob's access token expiry is already past. A blob with no
+/// expiry reads as not expired.
+pub(crate) fn blob_expired(blob: &str) -> bool {
+    oauth(blob)
+        .and_then(|o| o.expires_at)
+        .is_some_and(|expires_at| expires_at <= now_ms())
 }
 
 fn execute(action: &str, options: &Options, external: &dyn External) -> (i32, Receipt) {
