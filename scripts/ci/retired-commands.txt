@@ -23,7 +23,7 @@ fno mail|fno agents mail (the form every skill already teaches)|d-b93d7754
 fno test|fno doctor test|d-df6c29a6
 fno workspace|fno agents workspace|d-cf2d6fe1
 fno project|fno config project|d-344fe242
-fno yard|fno agents yard|the root-command fold
+fno yard|nothing (the yard is deleted)|the yard deletion
 fno runtime|fno agents workspace (retired outright, tombstoned)|d-cf2d6fe1
 --model-tier|difficulty=<band> on fno backlog update - the work-difficulty axis (low, medium, high)|the difficulty-axis rename
 # The operator-form retirement (user 2026-10-02): fno backlog update writes

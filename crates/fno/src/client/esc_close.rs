@@ -146,16 +146,6 @@ mod tests {
                 Box::new(|v| v.answers.is_none()),
             ),
             (
-                "yard",
-                Box::new(|v| {
-                    v.yard = Some(YardSel {
-                        sel: 0,
-                        opened_at: Instant::now(),
-                    })
-                }),
-                Box::new(|v| v.yard.is_none()),
-            ),
-            (
                 "move to",
                 Box::new(|v| v.open_move_to(1)),
                 Box::new(|v| v.move_to.is_none()),

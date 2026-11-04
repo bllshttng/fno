@@ -304,29 +304,10 @@ pub(crate) fn notify_transition(title: String, body: String) {
     crate::operator_notice::notify_operator(&title, &body, None);
 }
 
-/// The toast argv, pure so tests pin the escaping: macOS quotes the body into
-/// `osascript -e`, escaping backslash first then double quote, the exact
-/// escaping the Python dispatch uses; other hosts pass argv to notify-send.
-pub(super) fn toast_argv(os: &str, title: &str, body: &str) -> Vec<String> {
-    if os == "macos" {
-        let esc_body = body.replace('\\', "\\\\").replace('"', "\\\"");
-        let esc_title = title.replace('\\', "\\\\").replace('"', "\\\"");
-        vec![
-            "osascript".to_string(),
-            "-e".to_string(),
-            format!("display notification \"{esc_body}\" with title \"{esc_title}\""),
-        ]
-    } else {
-        vec![
-            "notify-send".to_string(),
-            title.to_string(),
-            body.to_string(),
-        ]
-    }
-}
-
-/// A done badge's desk toast: Rust fires the OS toast itself and writes no
-/// journal row, so the flip never reaches a status sink. Hermetic tests skip
+/// A done badge's desk toast: an attached mux client writes the OSC alert to
+/// its own terminal, so the alert wears that terminal's icon; with no client
+/// the dispatch names the user's terminal app, then plain osascript. It writes
+/// no journal row, so the flip never reaches a status sink. Hermetic tests skip
 /// it; a spawn failure or a timeout is dropped, since the registry write has
 /// already landed.
 fn local_toast(title: &str, body: &str) {
@@ -339,14 +320,12 @@ fn local_toast(title: &str, body: &str) {
     if std::env::var_os("FNO_TEST_HERMETIC").is_some_and(|v| v == "1") {
         return;
     }
-    let argv = toast_argv(std::env::consts::OS, title, body);
+    let (title, body) = (title.to_string(), body.to_string());
     // Builder, not spawn: spawn panics when the OS refuses the thread; a
     // dropped toast must never take the caller down with it.
     let _ = std::thread::Builder::new()
         .name("badge-toast".to_string())
         .spawn(move || {
-            let mut cmd = std::process::Command::new(&argv[0]);
-            cmd.args(&argv[1..]);
-            let _ = crate::bounded_cmd::output_with_timeout(cmd, 5);
+            crate::notify_dispatch::desk_toast(&title, &body);
         });
 }
