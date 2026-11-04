@@ -243,7 +243,7 @@ Known limits: a forked review skill may not see main-thread hook context. Verifi
 
 ## The Decisions table
 
-`fno inbox decisions --table` shows every recorded decision in one screen. Press prefix+Z in the mux to open it in a new pane. Each row carries state, lane, date, who decided, a quote flag, subject, and text. The keys `l`, `s`, and `a` cycle the lane, state, and author filters. `u` shows the audit queue: unattributed rows and rows with no authority, minus the rows marked reviewed.
+`fno inbox decisions --table` shows every recorded decision in one screen. Press prefix+m in the mux to open it full screen. The retract and overrule keys open it in a pane, because the law door needs your terminal. The notifications panel also has a Decisions tab, and each row links to its question. Each row carries state, lane, date, who decided, a quote flag, subject, and text. The keys `l`, `s`, and `a` cycle the lane, state, and author filters. `u` shows the audit queue: unattributed rows and rows with no authority, minus the rows marked reviewed.
 
 `r` retracts the selected row. `o` overrules it with new text. `v` marks it reviewed in `mux/decisions-reviewed.json`. The table runs in a pane so the law door sees a real terminal, which is the operator proof it reads. Law rows go through `fno inbox law retract` and `law set --supersedes`. Other rows go through `fno backlog decide-retract` and `fno inbox decide --supersedes`, both with `--authority operator`.
 
