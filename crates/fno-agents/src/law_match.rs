@@ -3134,15 +3134,15 @@ pub(crate) mod tests {
 
     #[test]
     fn a_law_keyed_on_a_node_never_refuses_a_later_ask_on_that_node() {
-        let laws = vec![law("d-9e178d21", "x-7145", "HQ.", "2026-11-04T03:00:00Z")];
+        let laws = vec![law("d-aaaa1111", "x-abcd", "HQ.", "2026-11-04T03:00:00Z")];
         let mut req = ask_req(
-            "PR 4414 look: which Decisions table? x-7145",
+            "Which table do the decisions use? x-abcd",
             None,
-            Some("x-7145"),
+            Some("x-abcd"),
         );
         req.laws = laws.clone();
         assert!(ask_answer(&req).exact.is_empty());
-        req.subject = Some("x-7145".to_owned());
+        req.subject = Some("x-abcd".to_owned());
         assert!(ask_answer(&req).exact.is_empty());
     }
 
