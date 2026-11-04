@@ -18,6 +18,7 @@
 
 use crate::popup::Anchor;
 use crate::proto::Cell;
+use crate::text_style::TextStyle;
 use crate::theme::{cell_style, Role, Theme};
 use unicode_width::UnicodeWidthChar;
 
@@ -295,7 +296,7 @@ pub struct Scroll {
 pub struct BodyLine {
     pub text: String,
     /// A greyed, inert row (a disabled `PopupRow::Entry`): every cell takes
-    /// [`Role::BodyDim`] regardless of selection, so it reads as inert.
+    /// `Role::Text(TextStyle::Meta)` regardless of selection, so it reads as inert.
     pub disabled: bool,
     /// `(offset, len)` within `text` that is the selected cut-out.
     pub sel_span: Option<(usize, usize)>,
@@ -359,6 +360,57 @@ pub struct BodySpan {
     pub start: usize,
     pub end: usize,
     pub join: Join,
+}
+
+/// Refuse a view that paints all its body text in one style. Over every
+/// non-space body cell (cursor, border, chrome and swatch cells excluded) it
+/// collects the distinct resolved `(fg, weight)` pairs: fewer than 2 is a flat
+/// view, and a view of 4+ text lines with no bold level has no heading or
+/// value to scan by. `title` names the view in the refusal.
+#[cfg(test)]
+pub fn text_hierarchy(title: &str, framed: &Framed, theme: &Theme) -> Result<(), String> {
+    use crate::proto::{cell_flags, Color};
+    let mut styles: Vec<(Color, u8)> = Vec::new();
+    let mut text_lines = 0usize;
+    for line in &framed.lines {
+        let Some(span) = line.body else { continue };
+        let mut painted = false;
+        for (i, ch) in line.text.chars().enumerate() {
+            if i < span.start || i >= span.end || ch.is_whitespace() {
+                continue;
+            }
+            let role = line.roles.get(i).copied().unwrap_or_default();
+            if matches!(
+                role,
+                Role::Border | Role::BodySel | Role::BodyCursor | Role::BodyFocus | Role::Swatch(_)
+            ) {
+                continue;
+            }
+            painted = true;
+            let (fg, _, flags) = cell_style(role, theme);
+            let key = (fg, flags & (cell_flags::BOLD | cell_flags::ITALIC));
+            if !styles.contains(&key) {
+                styles.push(key);
+            }
+        }
+        text_lines += usize::from(painted);
+    }
+    if styles.len() < 2 {
+        return Err(format!(
+            "{title}: all body text paints one style ({:?}); give sections, values or meta their own level",
+            styles.first()
+        ));
+    }
+    if text_lines >= 4
+        && !styles
+            .iter()
+            .any(|(_, flags)| flags & cell_flags::BOLD != 0)
+    {
+        return Err(format!(
+            "{title}: {text_lines} text lines and no bold level; give the headings or values a bold level"
+        ));
+    }
+    Ok(())
 }
 
 /// A fully framed block: the lines to draw and the total framed width.
@@ -462,12 +514,12 @@ pub fn frame(body: &[BodyLine], chrome: &Chrome, body_w: usize, scroll: Option<S
 /// rule, a footer as dim text, and no row of the frame is a band.
 fn flat_role(r: Role) -> Role {
     match r {
-        Role::Border => Role::PanelRule,
-        Role::Title => Role::PanelHead,
-        Role::Chip => Role::PanelLabel,
-        Role::Subtitle | Role::Footer | Role::Tab(_) => Role::PanelMeta,
-        Role::ScrollTrack => Role::PanelRule,
-        Role::ScrollThumb => Role::PanelHead,
+        Role::Border => Role::Text(TextStyle::Meta),
+        Role::Title => Role::Text(TextStyle::Title),
+        Role::Chip => Role::Text(TextStyle::Badge),
+        Role::Subtitle | Role::Footer | Role::Tab(_) => Role::Text(TextStyle::Meta),
+        Role::ScrollTrack => Role::Text(TextStyle::Meta),
+        Role::ScrollThumb => Role::Text(TextStyle::Title),
         other => other,
     }
 }
@@ -597,7 +649,7 @@ pub(crate) fn paint_line(
         if sc >= cols {
             break;
         }
-        let role = roles.get(j).copied().unwrap_or(Role::PanelBody);
+        let role = roles.get(j).copied().unwrap_or(Role::Text(TextStyle::Item));
         let (fg, bg, flags) = cell_style(role, theme);
         cells[sr * cols + sc] = Cell {
             c: ch,
@@ -861,7 +913,7 @@ fn body_row(
     };
     let sel_from_start = line.sel_span.is_some_and(|(off, _)| off == 0);
     let pad_role = if line.disabled {
-        Role::BodyDim
+        Role::Text(TextStyle::Meta)
     } else if sel_from_start {
         Role::BodySel
     } else {
@@ -891,7 +943,7 @@ fn body_row(
             break;
         }
         let role = if line.disabled {
-            Role::BodyDim
+            Role::Text(TextStyle::Meta)
         } else if in_sel(char_idx) {
             Role::BodySel
         } else {
@@ -908,7 +960,7 @@ fn body_row(
     for _ in col..text_w {
         text.push(' ');
         roles.push(if line.disabled {
-            Role::BodyDim
+            Role::Text(TextStyle::Meta)
         } else if sel_from_start {
             Role::BodySel
         } else {
@@ -1552,7 +1604,7 @@ mod tests {
         // The board's body lines arrive with panel segs (to_body_line), so
         // the body chars resolve through pad_role, never Role::Body.
         let mut body_line = bl("row");
-        body_line.pad_role = Role::PanelBody;
+        body_line.pad_role = Role::Text(TextStyle::Item);
         let framed = frame(&[body_line], &chrome, 20, None);
         for name in ["", "catppuccin", "tokyo-night", "gruvbox"] {
             let t = crate::theme::Theme::from_name(name).0;

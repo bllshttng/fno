@@ -8,6 +8,7 @@ use super::blank_straddling_pair;
 use crate::chrome;
 use crate::popup;
 use crate::proto::Cell;
+use crate::text_style::{TLine, TextStyle, ToTLine};
 use crate::theme::Theme;
 
 #[derive(Debug, Clone, Copy)]
@@ -74,7 +75,7 @@ pub(crate) fn family_b_origin(
 /// Lay out family-B overlay lines in the content viewport. The body window,
 /// frame, origin, and hit spans are calculated once for both drawing and input.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn layout_lines_overlay<S: AsRef<str>>(
+pub(crate) fn layout_lines_overlay<S: ToTLine>(
     content_origin: (usize, usize),
     content_dims: (usize, usize),
     chrome: &chrome::Chrome,
@@ -96,7 +97,7 @@ pub(crate) fn layout_lines_overlay<S: AsRef<str>>(
 /// [`layout_lines_overlay`] with `follow` kept in view; `paint_cursor` also
 /// fills that line with the one cursor ([`crate::cursor`]). A tail-follow
 /// (the reply dock) keeps the newest line in view without it.
-pub(crate) fn layout_lines_overlay_at<S: AsRef<str>>(
+pub(crate) fn layout_lines_overlay_at<S: ToTLine>(
     content_origin: (usize, usize),
     content_dims: (usize, usize),
     chrome: &chrome::Chrome,
@@ -116,7 +117,7 @@ pub(crate) fn layout_lines_overlay_at<S: AsRef<str>>(
     let follow = follow.and_then(|f| src.iter().position(|&s| s == f));
     let body_w = lines
         .iter()
-        .map(|l| chrome::str_cols(l).max(chrome::str_cols(l.trim_end()) + 2))
+        .map(|l| chrome::str_cols(&l.text).max(chrome::str_cols(l.text.trim_end()) + 2))
         .max()
         .unwrap_or(0)
         .min(cap);
@@ -162,9 +163,9 @@ pub(crate) fn layout_lines_overlay_at<S: AsRef<str>>(
         .iter()
         .enumerate()
         .map(|(i, l)| {
-            let mut line = chrome::BodyLine::plain(l);
+            let mut line = super::backlog_style::to_body_line(l);
             if paint_cursor && follow == Some(start + i) {
-                line.sel_span = Some((0, l.chars().count()));
+                line.sel_span = Some((0, l.text.chars().count()));
             }
             line
         })
@@ -192,28 +193,30 @@ pub(crate) fn overlay_text_cols(content_cols: usize) -> usize {
 /// Wrap each line whose text would not fit `cap` body columns less the two
 /// pad columns, keeping its indent on every continuation. Returns the lines
 /// and, per line, the index of the source line it came from.
-fn wrap_overlay_lines<S: AsRef<str>>(lines: &[S], cap: usize) -> (Vec<String>, Vec<usize>) {
+fn wrap_overlay_lines<S: ToTLine>(lines: &[S], cap: usize) -> (Vec<TLine>, Vec<usize>) {
     let text_w = overlay_text_cols(cap + chrome::Chrome::FRAME_COLS);
     let mut out = Vec::with_capacity(lines.len());
     let mut src = Vec::with_capacity(lines.len());
     for (i, line) in lines.iter().enumerate() {
-        let line = line.as_ref();
-        let text = line.trim_end();
+        let line = line.to_tline().trim_end();
+        let text = line.text.as_str();
         if chrome::str_cols(text) <= text_w {
-            out.push(line.to_string());
+            out.push(line);
             src.push(i);
             continue;
         }
         let indent = &text[..text.len() - text.trim_start().len()];
         let indent = if chrome::str_cols(indent) * 2 < text_w {
-            indent
+            indent.to_string()
         } else {
-            ""
+            String::new()
         };
-        let mut wrapped = Vec::new();
-        crate::client::wrap_line(text, text_w - chrome::str_cols(indent), &mut wrapped);
-        for w in wrapped {
-            out.push(format!("{indent}{w}"));
+        let room = text_w - chrome::str_cols(&indent);
+        for piece in line.strip_front(indent.chars().count()).wrap(room) {
+            let mut row = TLine::parts(&[(&indent, TextStyle::Item)]);
+            row.join = piece.join;
+            row.push_line(piece);
+            out.push(row);
             src.push(i);
         }
     }
@@ -333,7 +336,7 @@ pub(crate) fn draw_popup_overlay(
 /// viewport's `(rows, cols)` (status row excluded). The framed block is centered
 /// on its FRAMED dimensions (placement; policy).
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn draw_lines_overlay<S: AsRef<str>>(
+pub(crate) fn draw_lines_overlay<S: ToTLine>(
     cells: &mut [Cell],
     rows: usize,
     cols: usize,

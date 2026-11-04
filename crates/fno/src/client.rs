@@ -78,6 +78,7 @@ use crate::proto::{
 };
 use crate::ratatui_blit::{rt_color, rt_modifier};
 use crate::sideline_color;
+use crate::text_style::{TLine, TextStyle};
 use crate::theme::{cell_style, Theme};
 use crate::tree::{Axis, Dir, Rect, TabId};
 use crate::view_store::{
@@ -630,66 +631,6 @@ struct TabDrag {
     moved: bool,
 }
 
-/// The workspace peek body: everything the layout already holds for
-/// one squad - its origin, its tabs (the active one marked), and its member
-/// rows with their states. Pure and local; no wire round trip.
-fn squad_peek_lines(layout: &LayoutView, sid: u64) -> Vec<String> {
-    let Some(s) = layout.squads.iter().find(|s| s.id == sid) else {
-        return vec!["workspace is no longer here".into()];
-    };
-    let mut out = vec![
-        format!("origin  {}", s.canonical_cwd),
-        format!("tabs    {} · panes {}", s.tabs.len(), s.panes),
-    ];
-    for (i, t) in s.tabs.iter().enumerate() {
-        let marker = if i == s.active_tab { "*" } else { " " };
-        let label = if t.name.is_empty() {
-            format!("tab {}", i + 1)
-        } else {
-            t.name.clone()
-        };
-        out.push(format!("{marker} {label}"));
-    }
-    let members: Vec<&AgentRow> = layout
-        .agents
-        .iter()
-        .filter(|a| a.squad == Some(sid))
-        .collect();
-    if members.is_empty() {
-        out.push("members none".into());
-        return out;
-    }
-    out.push("members".into());
-    for a in members {
-        let state = if a.exited {
-            "exited"
-        } else {
-            // The one state vocabulary (pane_state + the nav filter words): a
-            // finished-but-unseen member is `done`, not `idle`.
-            match pane_state(a.badge, a.seen, a.pane_activity) {
-                PaneState::Blocked => "blocked",
-                PaneState::Working => "working",
-                PaneState::DoneUnseen => "done",
-                // NOT "unread": that word names output nobody has
-                // looked at, which is `DoneUnseen` - a different row, filed
-                // under "done". A filter typed as `unread` would then return
-                // rows with no liveness reading and EXCLUDE every row that
-                // actually has unseen output, which is this branch's own
-                // defect: a word standing in for a fact it does not name.
-                PaneState::Unmeasured => "unmeasured",
-                PaneState::Idle => "idle",
-                PaneState::Empty => "empty",
-            }
-        };
-        let pane = a
-            .pane_id
-            .map(|p| format!(" · pane {p}"))
-            .unwrap_or_default();
-        out.push(format!("  {} · {state}{pane}", a.name));
-    }
-    out
-}
-
 /// (v43, G3) The drag source of a sideline agent row.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum RowSource {
@@ -979,7 +920,7 @@ pub(crate) struct View {
     org: crate::org_overlay::Panel,
     /// Catch-up "while you were gone" digest lines, set on attach after
     /// an absence; the next keypress dismisses it (like [`View::overlay`]).
-    digest: Option<Vec<String>>,
+    digest: Option<Vec<TLine>>,
     notice: Option<(String, Instant)>,
     reply_notice_tx: Option<tokio::sync::mpsc::UnboundedSender<String>>,
     /// The session-details modal's off-loop token fetch: (participant key,
@@ -1840,6 +1781,7 @@ mod messages_reply;
 mod overlay_lines;
 #[cfg(test)]
 pub(crate) use overlay_lines::nav_overlay_lines;
+use overlay_lines::squad_peek_lines;
 pub(crate) use overlay_lines::{humanize_age, humanize_ago, nav_agent_tokens, peek_overlay_lines};
 mod messages_view;
 mod org_board;
@@ -4928,7 +4870,7 @@ impl View {
         let viewport_w = dims.1.saturating_sub(chrome::Chrome::FRAME_COLS);
         let body_w = chrome.min_inner_w().max(40).min(viewport_w).max(1);
         let text = format!("{name}_");
-        let line = format!("{text:<body_w$}");
+        let line = TLine::line(TextStyle::Item, format!("{text:<body_w$}"));
         layout_lines_overlay(origin, dims, &chrome, &[line], None, OverlayAnchor::Center)
     }
 
@@ -5092,45 +5034,6 @@ impl View {
         }
         let layout = self.confirm_overlay_layout(rows, action);
         draw_overlay_layout(cells, rows, cols, &layout, &self.theme);
-    }
-
-    /// Build the move-tab picker overlay lines: a header plus one
-    /// numbered line per candidate squad, the number being the digit that
-    /// selects it. A candidate that vanished from the catalog since open still
-    /// renders (labelled) - the digit is re-validated on press, and the server
-    /// refuses a stale id regardless.
-    fn move_pick_lines(&self, picker: &MovePick) -> Vec<String> {
-        const W: usize = 40;
-        let command = match &picker.src {
-            MoveSrc::Tab(_) => "move tab to:",
-            MoveSrc::Pane(_) => "move pane to:",
-            MoveSrc::Row { .. } => "move session to:",
-            MoveSrc::Folder { .. } => "add folder:",
-        };
-        let mut lines = vec![pad_to(&format!(" {command}"), W)];
-        for (i, &sid) in picker.squads.iter().enumerate() {
-            let folder = workspace_folder::folder_label(&picker.src, sid);
-            let name = folder.as_deref().unwrap_or_else(|| {
-                self.layout
-                    .squads
-                    .iter()
-                    .find(|s| s.id == sid)
-                    .map(|s| s.name.as_str())
-                    .unwrap_or("(gone)")
-            });
-            // Only the first nine are digit-addressable; the rest get a blank
-            // gutter, so the drawn numbering never promises a key that does
-            // not exist.
-            let ord = if i < 9 {
-                (i + 1).to_string()
-            } else {
-                " ".into()
-            };
-            lines.push(pad_to(&format!("   {ord} {name}"), W));
-        }
-        lines.push(pad_to(" hjkl/arrows move · enter move here", W));
-        lines.push(pad_to(" 1-9 move to first nine · esc/q cancel", W));
-        lines
     }
 
     /// The tab-bar spans in paint order: the active squad's name (inert), its
@@ -10060,6 +9963,10 @@ mod keys_modal_tests;
 #[cfg(test)]
 #[path = "client_tests/ground_tests.rs"]
 mod ground_tests;
+
+#[cfg(test)]
+#[path = "client_tests/text_hierarchy_tests.rs"]
+mod text_hierarchy_tests;
 
 #[path = "client/org_block.rs"]
 mod org_block;

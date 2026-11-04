@@ -8,8 +8,8 @@ use unicode_width::UnicodeWidthStr;
 
 mod observer_rows;
 
-use super::backlog_style::BLine;
 use super::*;
+use crate::text_style::TLine;
 
 /// A snapshot freezes the need-input pulse on one beat, so a still shot can
 /// show each frame. The live client never sets it.
@@ -557,7 +557,7 @@ impl View {
                     );
                 }
             } else {
-                let msg = BLine::meta("backlog off (pref)");
+                let msg = TLine::meta("backlog off (pref)");
                 let lines = [msg];
                 backlog_style::paint_panel(
                     cells,
