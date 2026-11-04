@@ -260,7 +260,7 @@ pub(super) fn begin_sweep_apply(view: &mut View, scope: SweepScope) {
 /// modal with fabricated zeros.
 pub(super) async fn run_sweep_command(action: SweepAction) -> SweepMsg {
     if action == SweepAction::Apply(SweepScope::Stopped) {
-        return match run_reap(false).await {
+        return match run_json("reap", reap_args(false), 60).await {
             Ok(v) => SweepMsg::Applied {
                 closed: 0,
                 reaped: 0,
@@ -270,7 +270,6 @@ pub(super) async fn run_sweep_command(action: SweepAction) -> SweepMsg {
             Err(e) => SweepMsg::Failed(e),
         };
     }
-    let mut command = crate::process_admission::tokio_command(crate::server::fno_bin());
     let mut args = vec![
         "mux".to_string(),
         "workspace".to_string(),
@@ -289,31 +288,16 @@ pub(super) async fn run_sweep_command(action: SweepAction) -> SweepMsg {
             60
         }
     };
-    command
-        .args(&args)
-        .stdin(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .kill_on_drop(true);
-    let fut = crate::process_admission::tokio_output(&mut command);
-    let output = match tokio::time::timeout(Duration::from_secs(apply_secs), fut).await {
-        Ok(Ok(o)) => o,
-        Ok(Err(e)) => return SweepMsg::Failed(format!("prune spawn failed: {e}")),
-        Err(_) => return SweepMsg::Failed("prune timed out".into()),
-    };
-    if !output.status.success() {
-        return SweepMsg::Failed(format!(
-            "prune exited {}",
-            output.status.code().unwrap_or(-1)
-        ));
-    }
-    let parsed: serde_json::Value = match serde_json::from_slice(&output.stdout) {
+    let parsed = match run_json("prune", args, apply_secs).await {
         Ok(v) => v,
-        Err(e) => return SweepMsg::Failed(format!("prune output unparseable ({e})")),
+        Err(e) => return SweepMsg::Failed(e),
     };
     let mut msg = parse_sweep_receipt(action, &parsed);
     if let SweepMsg::Counts(counts) = &mut msg {
         // A failed reap probe leaves the row greyed out: zero, never a guess.
-        counts.stopped = run_reap(true).await.map_or(0, |v| retired_count(&v));
+        counts.stopped = run_json("reap", reap_args(true), 60)
+            .await
+            .map_or(0, |v| retired_count(&v));
     }
     msg
 }
@@ -324,22 +308,36 @@ fn retired_count(receipt: &serde_json::Value) -> usize {
 
 /// `fno agents registry reap --json`, dry-run or applied: the one reaper the
 /// daemon runs, so the modal's count is what the tap retires.
-async fn run_reap(dry_run: bool) -> Result<serde_json::Value, String> {
-    let mut command = crate::process_admission::tokio_command(crate::server::fno_bin());
-    command.args(["agents", "registry", "reap", "--json"]);
+fn reap_args(dry_run: bool) -> Vec<String> {
+    let mut args: Vec<String> = ["agents", "registry", "reap", "--json"]
+        .map(String::from)
+        .into();
     if dry_run {
-        command.arg("--dry-run");
+        args.push("--dry-run".into());
     }
+    args
+}
+
+/// Run one bounded `fno` command and parse its JSON stdout. `what` names the
+/// command in the failure line.
+async fn run_json(what: &str, args: Vec<String>, secs: u64) -> Result<serde_json::Value, String> {
+    let mut command = crate::process_admission::tokio_command(crate::server::fno_bin());
     command
+        .args(&args)
         .stdin(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .kill_on_drop(true);
     let fut = crate::process_admission::tokio_output(&mut command);
-    let output = match tokio::time::timeout(Duration::from_secs(60), fut).await {
-        Ok(Ok(o)) if o.status.success() => o,
-        Ok(Ok(o)) => return Err(format!("reap exited {}", o.status.code().unwrap_or(-1))),
-        Ok(Err(e)) => return Err(format!("reap spawn failed: {e}")),
-        Err(_) => return Err("reap timed out".into()),
+    let output = match tokio::time::timeout(Duration::from_secs(secs), fut).await {
+        Ok(Ok(o)) => o,
+        Ok(Err(e)) => return Err(format!("{what} spawn failed: {e}")),
+        Err(_) => return Err(format!("{what} timed out")),
     };
-    serde_json::from_slice(&output.stdout).map_err(|e| format!("reap output unparseable ({e})"))
+    if !output.status.success() {
+        return Err(format!(
+            "{what} exited {}",
+            output.status.code().unwrap_or(-1)
+        ));
+    }
+    serde_json::from_slice(&output.stdout).map_err(|e| format!("{what} output unparseable ({e})"))
 }
