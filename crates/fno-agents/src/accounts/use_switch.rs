@@ -580,7 +580,7 @@ fn lookup(
     Ok((accounts.records, record))
 }
 
-fn print_switched(record: &Record, result: &SwitchResult, run: &mut Run) {
+fn print_switched(record: &Record, result: &SwitchResult, keychain: bool, run: &mut Run) {
     let active = &result.active;
     if record.harness == "codex" {
         let reason = result.reason.as_deref().unwrap_or("None");
@@ -601,7 +601,7 @@ fn print_switched(record: &Record, result: &SwitchResult, run: &mut Run) {
         run.out(&format!(
             "Materialized managed account '{active}' into the slot (verified)."
         ));
-        if result.slot_changed {
+        if result.slot_changed && keychain {
             run.out(&format!("  unscoped: {active}"));
             run.out(&format!("  scoped: {active}"));
         }
@@ -754,7 +754,7 @@ pub fn use_account(
                 return run;
             }
         };
-        print_switched(&record, &result, &mut run);
+        print_switched(&record, &result, host.keychain_slot(), &mut run);
     }
 
     let Some(target) = records::scope_path(scope, cwd) else {
