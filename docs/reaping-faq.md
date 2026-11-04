@@ -101,14 +101,14 @@ These five move or remove state around sessions. None stops or removes a session
 2. keep mark: `kept {id} (keep mark: ...)`. Set by `fno agents registry reap --keep <row>`, lifted by `--unkeep`
 3. graph unreadable: `kept {id} (graph unreadable: never a retirement on a failed read)`
 4. attended: `kept {id} (attended: ...)`
-5. policy `gc_decide`: a live claim, then an open PR the session drives, then a brainstorm transcript, then the idle window (`active` or `no clock`)
+5. policy `gc_decide`, in order: a live claim, an open PR the session drives, a brainstorm, then the idle window
 6. live descendant: `kept {id} (live descendant: {child})`, skipped for a terminal row
 7. apply freshness re-check: `kept {id} (active: ...)` or `kept {id} (probe unread: ...)`
-8. the stop gate and receipt stage: `held {id} (needs live stop: {reason})`, `kept {id} (stop refused: {reason})`, `kept {id} (no resumable receipt: {reason})`
-9. the dry-run unverified gate: `held {id} (dry-run did not evaluate: {gate}; apply may still refuse)`
+8. the stop gate and receipt stage: the `needs live stop`, `stop refused` and `no resumable receipt` lines
+9. the dry-run unverified gate: the `dry-run did not evaluate` line
 10. the tree verdict, then the commit: `kept tree {id} (...)` lines, then the retire lines. At commit the open-PR guard keeps a driver row whose node still records an open PR (`gc_open_pr_guard.rs` `hold_open_pr_reaps`)
 
-Origin and open work no longer keep a row. An operator row and an adopted row take the same gates as a spawn row; only their idle window differs (the table above).
+Origin and open work no longer keep a row. An operator row and an adopted row take the same gates as a spawn row. Only their idle window differs (the table above).
 
 ## A dry run and a real run answer different questions
 
@@ -132,7 +132,7 @@ Removal is reversible. A session never ends, the receipt holds the resume comman
 
 The sweep reads the transcript at both ends (`reap_evidence.rs`):
 
-- The head names the skill. A `/fno:<skill>` call (target, fix, blueprint, review), a `$fno:` call or a `Skill` tool call marks a skill session (`session_backfill.rs` `bg_fno_invocation_in`). `using-fno` and `fno-me` never count: one is injected context and the other is a mesh join.
+- The head names the skill. A `/fno:` call, a `$fno:` call or a `Skill` tool call marks a skill session (`session_backfill.rs` `bg_fno_invocation_in`). `using-fno` and `fno-me` never count: one is injected context and the other is a mesh join.
 - The tail names the end. A `<promise>` with no newer user turn after it marks the work done.
 
 Each row then has one idle window (`gc.rs` `idle_window`). The clock is the transcript's quiet age, else the report clock (last report, else creation):
@@ -144,9 +144,9 @@ Each row then has one idle window (`gc.rs` `idle_window`). The clock is the tran
 | origin `spawn` | 1 hour (law d-e3defbb7) |
 | every other skill session, and a row with no transcript | 1 day (law d-defa43c7) |
 
-A row with no transcript at all wrote nothing a brainstorm would keep, so it is read as a failed start and ages on the report clock.
+A row with no transcript wrote nothing a brainstorm keeps. The sweep reads it as a failed start, and it ages on the report clock.
 
-Measured on 2026-11-04 on the laptop: of 63 stopped rows, 31 had no transcript jsonl, 4 ended in a promise, and 28 had a transcript with no promise.
+Measured on 2026-11-04 on the laptop: 63 stopped rows. 31 had no transcript jsonl, 4 ended in a promise, and 28 had no promise.
 
 ## Why a row stays
 
@@ -168,7 +168,7 @@ A kept row names one of these reasons. Each is a positive fact.
 
 ### open pr
 
-`kept {id} (open pr: {node} #{pr})`. The session drives a PR that is still open: it has a `do` row on the node, the node carries `pr_number`, and the recorded `merge_status` is not `merged`. Once the row is quiet past the grace, the sweep asks GitHub once per pass, cached per PR (`gc_sweep.rs` `open_pr_verdict`). An open PR holds. A merged or closed PR releases the row. An unreadable answer is not a keep; the commit-time guard (`gc_open_pr_guard.rs`) still holds a recorded open PR. A done node whose merge outcome nothing records reads GitHub once for the row's own PR. A live newer peer that holds a `do` row on the node drives the PR instead, and this row's keep lifts.
+`kept {id} (open pr: {node} #{pr})`. The session drives a PR that is still open. It has an `execute` row on the node, the node carries `pr_number`, and `merge_status` is not `merged`. Once the row is quiet past the grace, the sweep asks GitHub once per pass, cached per PR (`gc_sweep.rs` `open_pr_verdict`). An open PR holds. A merged or closed PR releases the row. An unreadable answer keeps the row too, because the recorded PR is the positive fact. A done node whose merge outcome nothing records reads GitHub once for the row's own PR. A live newer peer that holds a `do` row on the node drives the PR instead, and this row's keep lifts.
 
 The remedy is merge, not reap. Run `fno do pr status <N>` to see what blocks it.
 
@@ -204,7 +204,7 @@ Events: `pr_nudge_sent`, `pr_nudge_escalated`, `pr_nudge_paused`. State is one f
 
 ### open do row
 
-The graph re-check at stage and commit still exists for the merge reaper, which calls the same staging (`gc_sweep.rs` `stage_session_retirement`). The registry sweep passes its rows as released: a stale open do row no longer holds a row the policy retired. The settle pass still fills stale open do rows on done nodes before the row pass reads the graph (`gc_sweep.rs` `settle_stale_do_rows`), so the record stays true.
+The graph re-check at stage and commit still exists for the merge reaper, which calls the same staging (`gc_sweep.rs` `stage_session_retirement`). The registry sweep passes its rows as released: a stale open do row no longer holds a row the policy retired. The settle pass still fills stale open do rows on done nodes before the row pass reads the graph (`gc_sweep.rs` `settle_stale_do_rows`).
 
 ## The row is waiting on evidence
 
