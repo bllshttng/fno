@@ -558,6 +558,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # The stress harness builds the three test binaries at the shard's
+      # tail; on 2026-11-04 shard 1 died there with "No space left on
+      # device" before a test ran, the same class the other shards fixed
+      # on 2026-10-24. The image's unused toolchains are about 25 GB.
+      - name: Free runner disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL \
+            /usr/local/.ghcup /usr/share/swift /usr/local/share/powershell /usr/local/share/chromium
+          df -h /
+
       - name: Provision the smoke runner
         uses: ./.github/actions/smoke-setup
 
