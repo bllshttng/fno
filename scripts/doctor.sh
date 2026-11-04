@@ -8,8 +8,7 @@ FAIL=0
 SKILLS_ROOT="${CODEX_SKILLS_ROOT:-}"
 SKILLS_ROOT_RECORD="$ROOT_DIR/.fno/codex-skills-root"
 INVENTORY=0
-# The one skill-discovery engine (crates/fno-agents/src/codex_skills.rs).
-skill_discovery() { fno-agents plugin-install --codex-skills "$@"; }
+skill_discovery() { codex_skill_discovery "$ROOT_DIR" "$@"; }
 
 usage() {
   cat <<USAGE

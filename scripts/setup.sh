@@ -7,17 +7,7 @@ source "$ROOT_DIR/scripts/lib/codex_utils.sh"
 PROVIDER=""
 CODEX_SKILLS_ROOT=""
 SKILLS_SOURCE="auto"
-# The one skill-discovery engine (crates/fno-agents/src/codex_skills.rs).
-# A bootstrap can run before fno is installed: then nothing is curated, the
-# probe reads no plugin, and setup links the development aliases.
-skill_discovery() {
-  if command -v fno-agents >/dev/null 2>&1; then
-    fno-agents plugin-install --codex-skills "$@"
-  elif [[ "$1" == "probe" ]]; then
-    echo "Codex: fno-agents not installed; skill discovery reads no plugin" >&2
-    echo "plugin="
-  fi
-}
+skill_discovery() { codex_skill_discovery "$ROOT_DIR" "$@"; }
 
 usage() {
   cat <<USAGE
