@@ -34,13 +34,15 @@ pub(crate) fn ttl() -> u64 {
     raw.parse::<u64>().map(|v| v.max(1)).unwrap_or(60)
 }
 
-/// How long a settled row serves the head-pinned poll path. A row minted
-/// for head H carries a concluded verdict that cannot change except by a
-/// manual re-run on that same head; a push mints a new key and misses at
-/// once, so a PR's review/fix plateau costs one refresh per settled TTL
-/// instead of one per TTL. The spend journal names this plateau the fleet's
-/// top spender (2026-11-03: `do pr` at 60 percent of live requests, most
-/// rows re-reading settled heads every 60 s).
+/// How long a settled GREEN row serves the head-pinned poll path. A row
+/// minted for head H carries a concluded verdict whose fix can only arrive
+/// as a new head (a push mints a new key and misses at once), so a PR's
+/// review/merge plateau costs one refresh per settled TTL instead of one
+/// per TTL. The spend journal names this plateau the fleet's top spender
+/// (2026-11-03: `do pr` at 60 percent of live requests, most rows
+/// re-reading settled heads every 60 s). A settled RED row is exactly the
+/// state an operator pokes with a check re-run on the same head, so it
+/// keeps the short TTL.
 const SETTLED_TTL_S: u64 = 600;
 
 fn settled_ttl() -> u64 {
@@ -56,7 +58,10 @@ fn settled_ttl() -> u64 {
 /// unpinned read - the human status command, which wants the PR's current
 /// truth whatever the head - keeps the short TTL.
 fn row_ttl(row: &Value, pinned: bool) -> f64 {
-    if pinned && row.pointer("/output/settled").and_then(Value::as_bool) == Some(true) {
+    let out = row.get("output");
+    let settled = out.and_then(|o| o.get("settled")).and_then(Value::as_bool) == Some(true);
+    let green = out.and_then(|o| o.get("green")).and_then(Value::as_bool) == Some(true);
+    if pinned && settled && green {
         settled_ttl() as f64
     } else {
         ttl() as f64
@@ -963,6 +968,17 @@ mod tests {
         assert!(
             fresh_serve(&dir, "Owner--Repo", "42", now_secs(), None).is_none(),
             "an unpinned read keeps the short TTL"
+        );
+        // A settled RED row is the re-runnable state: it keeps the short TTL.
+        let red = json!({
+            "ts": now_secs() - 120.0,
+            "exit": 0,
+            "output": {"head": "aaaaaaaa1111", "verdict": "red", "settled": true, "green": false},
+        });
+        write_row(&dir, "Owner--Repo-42-aaaaaaaa1111", &red);
+        assert!(
+            fresh_serve(&dir, "Owner--Repo", "42", now_secs(), Some("aaaaaaaa1111")).is_none(),
+            "a 120s-old settled-red row keeps the short TTL"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
