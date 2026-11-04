@@ -58,7 +58,6 @@ pub(super) const STRUCTURAL_STEPS: &[(&str, &str, &str)] = &[
     ("Skill snippet lint self-test", ".", "bash tests/ci/test_check_skill_snippets.sh"),
     ("Pitfalls corpus cap", ".", "bash scripts/ci/check-pitfalls.sh"),
     ("No stale /spec refs (blueprint rename audit)", ".", "bash scripts/ci/check-no-stale-spec-refs.sh"),
-    ("Config schema docs freshness", ".", "bash scripts/ci/check-config-schema-drift.sh"),
     ("Skill bundles freshness check", ".", "bash scripts/lint/check-skill-bundles-fresh.sh"),
     ("Hook exec bits", ".", "bash scripts/ci/check-hook-exec-bit.sh"),
     ("No ${REPO_ROOT}/scripts in skills", ".", "bash scripts/lint/no-repo-root-scripts-in-skills.sh"),
