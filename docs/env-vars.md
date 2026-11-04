@@ -55,14 +55,14 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_AGENTS_TIMER_EXE` | rs | Overrides the binary the mail-hold release timer re-enters (mail_hold.rs spawn_release_timer); empty falls through to the process's own executable. A test suite that arms the standard release leg pins a stub here so no timer escapes the sandbox. |
 | `FNO_AGENTS_WORKER` | rs | Marks the process as a footnote worker. |
 | `FNO_AGENTS_WORKER_BIN` | rs | Path to the worker binary. The daemon lazy-start passes it on, so a test harness runs its own build. |
-| `FNO_AGENT_HARNESS` | py+rs | declared in crates/fno-agents/src/claims.rs (AMBIENT_IDENTITY_NAMES) |
+| `FNO_AGENT_HARNESS` | rs | declared in crates/fno-agents/src/claims.rs (AMBIENT_IDENTITY_NAMES) |
 | `FNO_AGENT_NAME` | rs | Worker name a note's thread row stamps as its agent_name when the writer's live claim carries no spawn-handover holder name (comment_identity, note_cli.rs). |
 | `FNO_AGENT_NO_ROW` | rs | Set by the headless claude lane to the child's own `FNO_AGENT_SELF`. The child's SessionStart report then joins but writes no registry row, so a `claude -p` one-shot never shows in the mux. |
 | `FNO_AGENT_PROVIDER` | rs | Pre-cutover name for `FNO_AGENT_HARNESS`. whoami reads it only when the new name is unset, and prints one rename line on stderr. |
 | `FNO_AGENT_ROW_PENDING` | rs | unclear: crates/fno-agents/src/register.rs:83 |
-| `FNO_AGENT_SELF` | py+rs | unclear: cli/src/fno/agent/cli.py:363 |
+| `FNO_AGENT_SELF` | rs | the registry rows and the mux name the session's self handle |
 | `FNO_AGENT_SESSION` | rs | unclear: crates/fno-agents/src/registry_commands.rs:195 |
-| `FNO_AGENT_SUBSTRATE` | py+rs | Spawn substrate of the calling agent (`pane`, `thread`, `headless`). The init door's work-start dispatch treats any value other than `pane` (unset included) as unattended. Read in crates/fno-agents/src/target_init.rs `substrate_marks_unattended`. |
+| `FNO_AGENT_SUBSTRATE` | rs | Spawn substrate of the calling agent (`pane`, `thread`, `headless`). The init door's work-start dispatch treats any value other than `pane` (unset included) as unattended. Read in crates/fno-agents/src/target_init.rs `substrate_marks_unattended`. |
 | `FNO_ATTEST_DEBUG` | rs | Prints one stderr line naming the pull's slug, row count and primary url. Unset prints nothing; diagnostics only, never the data channel. Read in crates/fno-agents/src/attest.rs `run_pull`. |
 | `FNO_ATTEST_ENV_ONLY` | rs | `1` makes the retract arm's retractor identity resolve as an environment-only witness (no process ancestry), skipping the CLAUDE_CODE_SESSION_ID conflict read; the identity-conflict unit test pins it. Read in crates/fno-agents/src/attest.rs `resolve_retractor_identity`. |
 | `FNO_AUTO_CONTINUE` | rs | Env override of the merge-triggered auto-continue gate; truthy-set membership on the whole value, mirrored exactly from Python. |
@@ -125,8 +125,8 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_GRAPH_JSON` | rs | Names the stable graph store anchor; the SQLite store is the `.db` sibling. Every footnote launch names it: the headless, thread and both pane lanes set it to the launch resolution (a declared `FNO_STATE_DIR`/`FNO_CONFIG` sandbox anchored at the child's cwd wins, an inherited value survives when no sandbox is declared, and the porcelain answer is the fallback). |
 | `FNO_GUARD_TRACE` | rs | unclear: crates/fno-agents/src/hook/lead_guard.rs:25 |
 | `FNO_HARNESS` | rs | The arming session's harness, the fallback a new lead manifest names when the holder row carries none. |
-| `FNO_HARNESS_NAME` | py+rs | The caller's harness name in the canonical identity stamp; the hold gate's direct read pairs it with FNO_HARNESS_SESSION_ID to answer whether the caller is the recipient. |
-| `FNO_HARNESS_SESSION_ID` | py+rs | The normalized full harness session id; native context hooks use it when the provider-specific id is absent. |
+| `FNO_HARNESS_NAME` | rs | The caller's harness name in the canonical identity stamp; the hold gate's direct read pairs it with FNO_HARNESS_SESSION_ID to answer whether the caller is the recipient. |
+| `FNO_HARNESS_SESSION_ID` | rs | The normalized full harness session id; native context hooks use it when the provider-specific id is absent. |
 | `FNO_HEALTH_HISTORY` | rs | crates/fno-agents/src/backlog/triage_health.rs (history_path) |
 | `FNO_HOME` | py+rs | Relocates fno's config-free sidecars (plugin-root pointer, push-stamps, corrections log, decision index) and the Rust defaults when no config sets state_dir. Does not move state_dir or the backlog; a store write under FNO_HOME that targets the default store ($HOME/.fno) is refused. Sandbox with FNO_CONFIG (docs/path-config.md). |
 | `FNO_HOOK_CONTEXT` | rs | Set to 1 on every hook command; an fno call that carries it never joins its session to fno. Spawned children have it cleared. |

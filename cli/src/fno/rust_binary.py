@@ -591,8 +591,24 @@ def _native_family_signpost(name: str, command: str):
     )
 
 
-_whoami_signpost_command = _native_family_signpost("whoami", "fno whoami status")
-_doctor_signpost_command = _native_family_signpost("doctor", "fno doctor")
+def _signpost_or_none(maker, *args):
+    """Build a signpost command, or None under the bare-interpreter law.
+
+    This module is imported by interpreters with no typer (the crates-side
+    integration tests, CI guard lanes running system python); the lazy
+    imports inside the signposts exist for them. None is unreachable from
+    the CLI: cli.py imports typer before these rows resolve.
+    """
+    try:
+        return maker(*args)
+    except ImportError:
+        return None
+
+
+_whoami_signpost_command = _signpost_or_none(
+    _native_family_signpost, "whoami", "fno whoami status"
+)
+_doctor_signpost_command = _signpost_or_none(_native_family_signpost, "doctor", "fno doctor")
 
 
 def _evals_signpost():
@@ -616,7 +632,7 @@ def _evals_signpost():
     )
 
 
-_evals_signpost_command = _evals_signpost()
+_evals_signpost_command = _signpost_or_none(_evals_signpost)
 
 
 class FrontTimeout(CommandUnavailable):

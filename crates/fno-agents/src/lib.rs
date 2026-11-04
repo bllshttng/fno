@@ -1170,9 +1170,6 @@ mod tests {
     fn known_event_kinds_documented_in_schema_yaml() {
         use std::collections::BTreeSet;
 
-        let Some(root) = repo_root_for_test() else {
-            return;
-        };
         let schema_path =
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/event_store/schema.yaml");
         if !schema_path.is_file() {
