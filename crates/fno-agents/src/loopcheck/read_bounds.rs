@@ -12,7 +12,7 @@
 const STOPGATE_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// Aggregate wall-clock budget for ONE fire's external reads. The harness
-/// kills the stop hook at 60s (hooks/git-protection.py records the budget and
+/// kills the stop hook at 60s (hook/git_protection/merge_gate.rs records the budget and
 /// the Stop hook carries no override), so N sequential reads each legal at
 /// 30s could burn multiples of that and die mid-fire with no decision -
 /// recreating the exact no-decision path this transport exists to close.

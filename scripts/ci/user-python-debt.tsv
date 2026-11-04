@@ -3,6 +3,3 @@
 # file with no row, and a row above the live count. Lower or remove a row from the
 # guard's own --print output, never raise one by hand. A .py file counts 1.
 # Columns: path, ceiling, owner (the effort that retires it).
-hooks/git_protection_impl.py	1	git-protection-port (git protection retires)
-hooks/git-protection.py	1	git-protection-port (git protection retires)
-hooks/lib/guard_mark.py	1	git-protection-port (git protection retires)

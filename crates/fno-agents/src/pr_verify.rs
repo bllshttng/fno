@@ -447,7 +447,7 @@ fn bounded_remediation(
             );
             let _ = writeln!(
                 out,
-                "merge_blocked_by_freshness_cap: git-protection.py blocked the merge (state-file mtime > 1h). Bypass it from a shell with gh pr merge {pr} --{strategy}."
+                "merge_blocked_by_freshness_cap: the git-protection hook blocked the merge (state-file mtime > 1h). Bypass it from a shell with gh pr merge {pr} --{strategy}."
             );
             return 1;
         }

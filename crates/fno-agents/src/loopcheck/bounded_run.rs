@@ -341,7 +341,7 @@ impl GhReadError {
     /// The positive outcome marker for `loop_check_gh_error` rows: every row
     /// carries one, so a timeout is distinguishable in the events log without
     /// parsing prose.
-    pub(super) fn outcome(&self) -> &'static str {
+    pub(crate) fn outcome(&self) -> &'static str {
         match self.kind {
             ReadErrorKind::TimedOut => "timeout",
             ReadErrorKind::Failed => "failed",

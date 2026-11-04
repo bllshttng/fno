@@ -52,8 +52,6 @@ def _disposition(relative: str, source: str, offset: int) -> str:
         "crates/fno-agents/src/finalize.rs",
     } or relative.startswith("crates/fno-agents/src/loopcheck/"):
         return "fixed-purpose-adapter"
-    if relative == "hooks/git_protection_impl.py":
-        return "operator-guard-definition"
     if relative == "scripts/diagnostics/graphql-quota-soak.py":
         return "quota-soak-broker"
     if relative.startswith("skills/"):

@@ -209,10 +209,12 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_PROCESS_ADMISSION_MAX` | rs | unclear: crates/fno/src/process_admission.rs:533 |
 | `FNO_PR_BASE_LINEAGE_OK` | rs | Set to `stale-acknowledged` by an operator who has judged a stale-base lineage refusal: the base-lineage probe records a gate-escape event and clears instead of refusing. |
 | `FNO_PR_BASE_OK` | rs | Set to `stale-acknowledged` to ship past a stale-base refusal on a deliberately old base; the batch-lane ship guard honors it (the preflight guard reaches it through its BYPASS_ENV constant, which the scanner does not see). |
+| `FNO_PR_CLOSURE_OK` | rs | Set to `1` to open an ad-hoc PR that closes no node: the git-protection hook skips its closure-line refusal on `gh pr create`. An inline assignment prefix on the command counts too. |
 | `FNO_PR_STATUS_CACHE_DIR` | rs | unclear: crates/fno-agents/src/gc.rs:2231 |
 | `FNO_PR_STATUS_SETTLED_TTL` | rs | Overrides the settled-row TTL in seconds (default 600): how long a settled green status row keeps serving a head-pinned wait before the cache re-reads GitHub. |
 | `FNO_PR_STATUS_TTL` | rs | unclear: crates/fno-agents/src/pr_status/cache.rs:32 |
 | `FNO_PR_WATCH_TICK_TIMEOUT` | rs | Seconds the `pr-watch tick` wall backstop allows before the tick exits 75. |
+| `FNO_PUSH_NOW` | rs | Set to `1` to push past the git-protection push debounce. The hook records a `push_debounce_bypass` event. |
 | `FNO_PY` | rs | Overrides the resolved fno-py console script path (tests and nonstandard installs); empty falls through to the resolver legs. The Rust front door honors it ABOVE the cached sentinel, so a study venv can repoint `fno` at its own env (gap-audit 9); set but unusable refuses naming the var. `fno version` names the resolved target on its `python-cli:` line, and `fno version --json` carries it as `python_script`. |
 | `FNO_PY_BACKLOG_FORWARD` | py | Set to the forwarded argv as JSON on the child when fno-py forwards `backlog` to `fno-agents`. A re-entry with the same argv refuses: the binary is older than fno-py and sent the command back, and without the marker each level spawns another (the 2026-11-02 script-door flood). |
 | `FNO_PY_HANDOFF` | py | Set to `1` on the child when fno-py hands a Rust-front command to the `fno` binary. A re-entry with it already set refuses: the PATH `fno` resolved back to fno-py, and without the marker each level spawns another (the 2026-10-02 mux-prune flood). |

@@ -247,11 +247,11 @@
 #      the various watermark files, insights.md) - only corrections.log and
 #      corrections-rejected.log were in scope (see skills/autocorrect/SKILL.md).
 #
-# Carveout cv-8dc3c6dc (RESOLVED): git-protection.py's state
+# Carveout cv-8dc3c6dc (RESOLVED): the git-protection hook's state
 # (git-protection.json + approve_no_verify.flag) and save-session.py's
 # transcripts used to write under the harness state dir. Both were re-homed
 # to ${FNO_HOME:-~/.fno} in the git-protection-hook re-home change:
-#   - hooks/git-protection.py is now OFF this allowlist entirely - it writes
+#   - the hook (now crates/fno-agents/src/hook/git_protection/) is OFF this allowlist entirely - it writes
 #     nothing under the harness dir and holds no reference to it, so CI
 #     enforces the placement rule for it with no exception.
 #   - crates/fno-agents/src/hook/save_session.rs (the save-session port) stays

@@ -1,6 +1,6 @@
 A	--dangerously-bypass-approvals-and-sandbox	py=scripts/diagnostics/codex-lead-continuation-smoke.py;rs=crates/fno-agents/src/codex_ask.rs|crates/fno-agents/src/codex_posture.rs|crates/fno-agents/src/pane_identity.rs|crates/fno-agents/src/provider.rs|crates/fno-agents/src/spawn_seam.rs	# CLASSIFY protocol|msg-twin|data
 A	--dangerously-bypass-hook-trust	py=scripts/diagnostics/codex-lead-continuation-smoke.py;rs=crates/fno-agents/src/codex_ask.rs|crates/fno-agents/src/provider.rs	# CLASSIFY protocol|msg-twin|data
-A	[a-z][a-z0-9]{0,7}-?[0-9a-f]{4,8}	py=cli/src/fno/rust_binary.py|hooks/git_protection_impl.py;rs=crates/fno-agents/src/org_board/queues.rs	# CLASSIFY protocol|msg-twin|data
+A	[a-z][a-z0-9]{0,7}-?[0-9a-f]{4,8}	py=cli/src/fno/rust_binary.py;rs=crates/fno-agents/src/org_board/queues.rs	# CLASSIFY protocol|msg-twin|data
 A	^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$	py=scripts/diagnostics/codex-lead-continuation-smoke.py;rs=crates/fno/src/doctor/bind_canary.rs|crates/fno/src/doctor/report/ops.rs	# CLASSIFY protocol|msg-twin|data
 A	anthropic_default_fable_model	py=evals/harness-fit/run/launch.py;rs=crates/fno-agents/src/accounts/credentials.rs|crates/fno-agents/src/model_env_scrub.rs|crates/fno-agents/src/route_settings.rs	# CLASSIFY protocol|msg-twin|data
 A	anthropic_default_opus_model	py=evals/harness-fit/run/launch.py;rs=crates/fno-agents/src/accounts/credentials.rs|crates/fno-agents/src/model_env_scrub.rs	# CLASSIFY protocol|msg-twin|data
@@ -35,7 +35,6 @@ A	hooks/helpers/init-target-state.sh	py=cli/src/fno/paths.py;rs=crates/fno-agent
 A	https://api.z.ai/api/anthropic	py=evals/harness-fit/run/footnote_agent.py|evals/harness-fit/run/launch.py;rs=crates/fno-agents/src/footnote_harness/tests.rs|crates/fno-agents/src/model_env_scrub.rs|crates/fno-agents/src/pane_spawn/row8_tests.rs|crates/fno-agents/src/route_settings.rs|crates/fno-agents/src/spawn_overlay.rs|crates/fno/src/model_catalog.rs	# CLASSIFY protocol|msg-twin|data
 A	https://api.z.ai/api/coding/paas/v4	py=evals/harness-fit/run/launch.py;rs=crates/fno-agents/src/codex_route.rs|crates/fno/src/model_catalog.rs	# CLASSIFY protocol|msg-twin|data
 A	long text from an argument or a file	py=cli/src/fno/text_or_file.py;rs=crates/fno-agents/src/text_or_file.rs	# CLASSIFY protocol|msg-twin|data
-A	permissiondecisionreason	py=hooks/git_protection_impl.py;rs=crates/fno-agents/src/hook/mod.rs|crates/fno-agents/src/hook/pretooluse_bash.rs	# CLASSIFY protocol|msg-twin|data
 A	post_merge_maintainer_marker	py=cli/src/fno/paths.py;rs=crates/fno-agents/src/backlog/settings.rs	# CLASSIFY protocol|msg-twin|data
 A	post_merge_parking_lot_path	py=cli/src/fno/paths.py;rs=crates/fno-agents/src/backlog/settings.rs	# CLASSIFY protocol|msg-twin|data
 A	print a single resolved config value. read-only.	py=cli/src/fno/config_writer_cli.py;rs=crates/fno/src/config_cli/get.rs	# CLASSIFY protocol|msg-twin|data
