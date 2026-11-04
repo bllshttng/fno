@@ -540,6 +540,7 @@ mod tests {
         assert_eq!(paths.len(), FILES_PAGE_SIZE + 3);
         let cap = paginate_files(|_| Ok(full_page.clone())).expect_err("cap fails closed");
         assert_eq!(cap.kind, "evidence_incomplete", "{}", cap.kind);
+        let cap_msg = cap.message.clone();
         assert!(cap_msg.contains("3,000-file cap"), "{cap_msg}");
     }
 
