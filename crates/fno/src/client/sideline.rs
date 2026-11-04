@@ -512,6 +512,25 @@ impl View {
         }
     }
 
+    /// Whether agent row `a` hosts pane `pid`: the one predicate behind the
+    /// chosen-row tests, the pane-menu resolution, the drag re-anchor, the
+    /// focus reveal and the selector seed. A remote row hosts the pane its
+    /// portal twin carries (the seat pane a reach named with the glyph
+    /// address), so the remote row reads chosen, seeded, revealable and
+    /// menu-resolvable while the twin itself stays out of the sideline and
+    /// the navigator: one session, one row.
+    pub(super) fn row_hosts_pane(&self, a: &AgentRow, pid: u64) -> bool {
+        if a.pane_id == Some(pid) {
+            return true;
+        }
+        match &a.remote {
+            Some(remote) => {
+                machine_tree::portal_twin(self, remote).is_some_and(|t| t.pane_id == Some(pid))
+            }
+            None => false,
+        }
+    }
+
     pub(super) fn draw_sideline(
         &self,
         cells: &mut [Cell],
@@ -878,7 +897,7 @@ impl View {
             if matches!(drow, DisplayRow::NewSquad) {
                 self.paint_new_squad_footer(cells, r, cols, text_w, panel_w);
             }
-            let chosen = matches!(drow, DisplayRow::Agent(a) if a.pane_id == Some(self.layout.focus) && !a.exited);
+            let chosen = matches!(drow, DisplayRow::Agent(a) if self.row_hosts_pane(a, self.layout.focus) && !a.exited);
             let mut highlit =
                 chosen || self.list_selector() == Some(i) || self.hover_row == Some(i);
             if card {
@@ -891,7 +910,7 @@ impl View {
                 );
             let card_chosen = card_pair
                 && matches!(drow, DisplayRow::Agent(a) | DisplayRow::CardDetail(a) | DisplayRow::CardMetrics(a)
-                    if a.pane_id == Some(self.layout.focus) && !a.exited);
+                    if self.row_hosts_pane(a, self.layout.focus) && !a.exited);
             if card_chosen {
                 // The chosen card fills all 3 lines, full width, hover
                 // included: the chosen fill wins on hover.
@@ -949,7 +968,7 @@ impl View {
                 if let (false, DisplayRow::Agent(a)) = (driven, drow) {
                     let lat = agent_lattice_state(a);
                     let style = lattice_style(lat, self.theme.needs_you, self.theme.ok);
-                    let accent = if a.pane_id == Some(self.layout.focus) && a.exited {
+                    let accent = if self.row_hosts_pane(a, self.layout.focus) && a.exited {
                         self.theme.brand
                     } else {
                         agent_lane_fg(a, lat, style.fg)
@@ -1090,7 +1109,8 @@ impl View {
         // An EXITED focus row is legibly dead: DIM accent on its cells and
         // no band (a dead "you are here" never reads as a live one). A live
         // focus row's band is the overlay's accent highlight.
-        let is_focus = matches!(drow, DisplayRow::Agent(a) if a.pane_id == Some(self.layout.focus));
+        let is_focus =
+            matches!(drow, DisplayRow::Agent(a) if self.row_hosts_pane(a, self.layout.focus));
         let focus_exited = is_focus && matches!(drow, DisplayRow::Agent(a) if a.exited);
         let (mut row_cells, _): (Vec<RtCell>, u8) = match drow {
             // The full-width rows - squad and section bands, sublines, the
@@ -1470,7 +1490,7 @@ impl View {
         };
         let line = &mut cells[row * cols..row * cols + text_w];
         let lattice = agent_lattice_state(agent);
-        let status_fg = if agent.pane_id == Some(self.layout.focus) && agent.exited {
+        let status_fg = if self.row_hosts_pane(agent, self.layout.focus) && agent.exited {
             self.theme.brand
         } else {
             agent_lane_fg(
@@ -1493,7 +1513,7 @@ impl View {
         // spans read in the fill's base tone (brand-on-brand text would
         // vanish - the composed contrast test pins this at 3:1).
         let (fill_fg, _, _) = crate::theme::chosen_card_style(&self.theme);
-        let on_chosen_fill = agent.pane_id == Some(self.layout.focus) && !agent.exited;
+        let on_chosen_fill = self.row_hosts_pane(agent, self.layout.focus) && !agent.exited;
         // The name matters most: the node may not start before the slug's
         // end plus one space. It cuts its front, or drops, to fit. A slug
         // clipped to fit is not found whole, and leaves the node no room.
