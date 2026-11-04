@@ -24,8 +24,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from functools import cache
 from pathlib import Path
-from types import SimpleNamespace
-from typing import Any, Optional
+from typing import Any, NamedTuple, Optional
 
 
 def _warn_if_foreign_fno_repo_root(resolved: Path, cwd: Path) -> None:
@@ -485,6 +484,39 @@ def _settings_fingerprint() -> tuple[tuple[str, int, int], ...]:
             continue
         fingerprint.append((str(candidate), st.st_mtime_ns, st.st_size))
     return tuple(fingerprint)
+
+
+_PathOverrides = NamedTuple(
+    "_PathOverrides",
+    [
+        ("worktrees_base", Optional[str]),
+        ("spaces_dir", Optional[str]),
+        ("retro_pending_dir", Optional[str]),
+        ("postmortems_dir", Optional[str]),
+        ("operator_lane", Optional[str]),
+        ("observer_reports_dir", Optional[str]),
+        ("memory_dir", Optional[str]),
+        ("ledger_json", Optional[str]),
+        ("inbox_path", Optional[str]),
+        ("hook_logs_dir", Optional[str]),
+        ("handoffs_dir", Optional[str]),
+        ("fleet_dir", Optional[str]),
+        ("evals_history", Optional[str]),
+        ("bus_dir", Optional[str]),
+        ("briefs_dir", Optional[str]),
+    ],
+)
+_ObsidianFacts = NamedTuple(
+    "_ObsidianFacts",
+    [("enabled", bool), ("vault", Optional[str])],
+)
+_PostMergeFacts = NamedTuple(
+    "_PostMergeFacts",
+    [("parking_lot_path", Optional[str]), ("maintainer_marker", Optional[str])],
+)
+_ProjectFacts = NamedTuple("_ProjectFacts", [("id", Optional[str])])
+
+
 class _SettingsFacts:
     """Attribute view over the settings-read door receipt.
 
@@ -497,7 +529,7 @@ class _SettingsFacts:
 
     __slots__ = ("_r",)
 
-    def __init__(self, receipt: Optional[dict]) -> None:
+    def __init__(self, receipt: Optional[dict[str, Any]]) -> None:
         self._r = receipt or {}
 
     def _at(self, dotted: str) -> Any:
@@ -524,33 +556,33 @@ class _SettingsFacts:
         return value if isinstance(value, bool) else False
 
     @property
-    def state_dir(self) -> Optional[str]:
+    def state_dir(self) -> str:
         value = self._str("state_dir")
         return value if value not in (None, "") else "~/.fno/"
 
     @property
-    def paths(self) -> Any:
-        return SimpleNamespace(
-            **{key: self._str(key) for key in _PATH_KEYS}
-        )
+    def paths(self) -> "_PathOverrides":
+        return _PathOverrides._make(self._str(key) for key in _PATH_KEYS)
 
     @property
-    def obsidian(self) -> Any:
-        return SimpleNamespace(
+    def obsidian(self) -> "_ObsidianFacts":
+        return _ObsidianFacts(
             enabled=self._bool("obsidian_enabled"),
             vault=self._str("obsidian_vault"),
         )
 
     @property
-    def post_merge(self) -> Any:
-        return SimpleNamespace(
+    def post_merge(self) -> "_PostMergeFacts":
+        return _PostMergeFacts(
             parking_lot_path=self._str("post_merge_parking_lot_path"),
             maintainer_marker=self._str("post_merge_maintainer_marker"),
         )
 
     @property
-    def project(self) -> Any:
-        return SimpleNamespace(id=self._str("project_id"))
+    def project(self) -> "_ProjectFacts":
+        return _ProjectFacts(id=self._str("project_id"))
+
+
 def _settings_key() -> "tuple[Any, ...]":
     """Declaration + content fingerprint (docs/path-config.md 'Settings cache
     key'). A same-key edit reparses with no explicit cache clear.
