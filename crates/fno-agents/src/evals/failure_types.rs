@@ -179,8 +179,7 @@ pub(crate) fn record_rubric_fixture(
 
 /// The hex sha256 of one text, the hash a recorded verdict row carries.
 fn sha256_text(text: &str) -> String {
-    use sha2::{Digest, Sha256};
-    format!("{:x}", Sha256::digest(text.as_bytes()))
+    crate::evals::rubric::text_sha256(text)
 }
 
 fn run_case(

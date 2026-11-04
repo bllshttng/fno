@@ -398,6 +398,7 @@ impl Judge for RecordedJudge {
             )];
         }
         let prompt_hash = prompt_sha(ask);
+        let work_hash = text_sha256(ask.work_product);
         matching
             .iter()
             .map(|row| {
@@ -406,6 +407,15 @@ impl Judge for RecordedJudge {
                         &row.lane,
                         format!(
                             "recorded verdict for criterion '{}' is stale (prompt hash moved)",
+                            ask.criterion.id
+                        ),
+                    );
+                }
+                if !row.work_product_sha.is_empty() && row.work_product_sha != work_hash {
+                    return LaneVerdict::fault(
+                        &row.lane,
+                        format!(
+                            "recorded verdict for criterion '{}' is stale (work product moved)",
                             ask.criterion.id
                         ),
                     );
@@ -442,6 +452,13 @@ pub fn prompt_sha(ask: &RubricAsk) -> String {
     hasher.update([0]);
     hasher.update(ask.criterion.text.as_bytes());
     format!("{:x}", hasher.finalize())
+}
+
+/// The plain sha256 of one text, the work-product hash a recorded row
+/// carries for its own staleness check.
+pub fn text_sha256(text: &str) -> String {
+    use sha2::{Digest, Sha256};
+    format!("{:x}", Sha256::digest(text.as_bytes()))
 }
 
 /// One judge lane tallied against the user labels.
