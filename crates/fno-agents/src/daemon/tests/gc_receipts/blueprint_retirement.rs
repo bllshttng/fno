@@ -40,7 +40,7 @@ fn a_live_working_report_blocks_the_tick_retirement() {
             })
             .collect()
     };
-    let summary = run_probe_unread_sweep(&home, &emitter, &age_seam);
+    let summary = run_probe_unread_sweep(&home, &emitter, &age_seam, false);
     assert_eq!(summary.retired.len(), 0, "{:?}", summary.retired);
     let (id, detail) = summary
         .kept_probe_unread
@@ -88,7 +88,7 @@ fn an_unanswered_re_read_after_a_new_turn_holds_by_name() {
             })
             .collect()
     };
-    let summary = run_probe_unread_sweep(&home, &emitter, &age_seam);
+    let summary = run_probe_unread_sweep(&home, &emitter, &age_seam, false);
     assert_eq!(summary.retired.len(), 0, "{:?}", summary.retired);
     let (id, detail) = summary
         .kept_probe_unread
@@ -107,6 +107,62 @@ fn an_unanswered_re_read_after_a_new_turn_holds_by_name() {
         .expect("a hold rides the bucket");
     assert_eq!(hold.reason, "probe unread");
     assert!(summary.kept_active.is_empty(), "{:?}", summary.kept_active);
+}
+
+/// The 2026-11-04 specimen: a hand-started row with an empty created_at, an
+/// exit stamp, no pid, no inside-leg report and no transcript the probe can
+/// read. Past one day on its exit clock nothing can lift the hold, so the
+/// live sweep retires it; a fresh exit still holds by name. The dry run makes
+/// the same re-read, so it predicts the live split instead of promising both.
+#[test]
+fn a_row_no_witness_can_lift_retires_past_a_day_and_the_dry_run_agrees() {
+    let (_dir, home) = staged_probe_unread_home();
+    let emitter = EventEmitter::new(home.events_jsonl(), "daemon");
+    let ago = |s: i64| {
+        (chrono::Utc::now() - chrono::Duration::seconds(s))
+            .format("%Y-%m-%dT%H:%M:%SZ")
+            .to_string()
+    };
+    crate::state::update_registry(&home.registry_json(), |r| {
+        let template = r.entries[0].clone();
+        r.entries.clear();
+        for (name, exited) in [("t-old", ago(2 * 86_400)), ("t-new", ago(3_600))] {
+            let mut e = template.clone();
+            e.name = name.into();
+            e.short_id = name.into();
+            e.created_at = String::new();
+            e.inside_leg = None;
+            e.status = crate::AgentStatus::Exited;
+            e.exited_at = Some(exited);
+            r.entries.push(e);
+        }
+    })
+    .unwrap();
+    let unread = |entries: &[&state::RegistryEntry]| {
+        entries
+            .iter()
+            .map(|e| (crate::gc::row_handle(e), None))
+            .collect()
+    };
+    let held = |s: &GcSummary| -> Vec<String> {
+        s.kept_probe_unread
+            .iter()
+            .map(|(id, _)| id.clone())
+            .collect()
+    };
+    let dry = run_probe_unread_sweep(&home, &emitter, &unread, true);
+    assert_eq!(held(&dry), vec!["t-new".to_string()], "{dry:?}");
+    assert!(
+        dry.dry_run_unverified.iter().any(|(id, _)| id == "t-old"),
+        "{:?}",
+        dry.dry_run_unverified
+    );
+    let live = run_probe_unread_sweep(&home, &emitter, &unread, false);
+    assert_eq!(held(&live), vec!["t-new".to_string()], "{live:?}");
+    let retired: Vec<&str> = live.retired.iter().map(|(id, _)| id.as_str()).collect();
+    assert_eq!(retired, vec!["t-old"], "{:?}", live.retired);
+    let hold = live.holds.iter().find(|h| h.id == "t-new").expect("hold");
+    assert_eq!(hold.age_basis, "row exited");
 }
 
 /// AC4-EDGE: a `bp-` row whose planning set is EMPTY retires through
@@ -220,12 +276,13 @@ fn run_probe_unread_sweep(
     home: &AgentsHome,
     emitter: &EventEmitter,
     age_seam: &dyn Fn(&[&state::RegistryEntry]) -> std::collections::HashMap<String, Option<i64>>,
+    dry_run: bool,
 ) -> GcSummary {
     gc_sweep::run(
         home,
         emitter,
         900,
-        false,
+        dry_run,
         7,
         &crate::gc_sweep::read_graph_entries,
         &|_| Some(vec![]),

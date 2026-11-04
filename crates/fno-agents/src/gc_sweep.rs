@@ -1421,15 +1421,27 @@ fn report_age(e: &state::RegistryEntry, now: i64) -> Option<i64> {
 /// answered, else seconds since the row's `created_at`, else unmeasured -
 /// and an unmeasured hold never escalates, because a wrong number is not a
 /// clock.
-fn hold_clock(age: Option<i64>, created_at: &str, now: i64) -> (Option<i64>, &'static str) {
+fn hold_clock(age: Option<i64>, e: &state::RegistryEntry, now: i64) -> (Option<i64>, &'static str) {
+    let since =
+        |at: &str| crate::tick_ledger::parse_rfc3339_unix(at).map(|t| (now - t as i64).max(0));
+    // A hand-started row can carry an empty created_at; its exit stamp is
+    // the next stable anchor (last_reconciled_at moves on every probe).
     match age {
         Some(a) => (Some(a), "transcript quiet"),
-        None => match crate::tick_ledger::parse_rfc3339_unix(created_at) {
-            Some(created) => (Some((now - created as i64).max(0)), "row created"),
-            None => (None, "unmeasured"),
+        None => match since(&e.created_at) {
+            Some(s) => (Some(s), "row created"),
+            None => match e.exited_at.as_deref().and_then(since) {
+                Some(s) => (Some(s), "row exited"),
+                None => (None, "unmeasured"),
+            },
         },
     }
 }
+
+/// A row the truth probe cannot answer for, with no transcript, no pid and
+/// no inside-leg report, has no witness left that could ever lift the hold.
+/// Past this clock the silence retires it instead of keeping it forever.
+const PROBE_UNREAD_RETIRE_AFTER_S: i64 = 86_400;
 
 /// The settle blocker an open-do-row hold names: the same pr_state
 /// read the confirm step makes, so the hold line carries the why the settle
@@ -1771,7 +1783,7 @@ pub(crate) fn run_with_release(
         };
         let sid = e.harness_session_id.as_deref().unwrap_or("").trim();
         let hits = store_matches(e);
-        let (hold_age_s, hold_age_basis) = hold_clock(*age, &e.created_at, now);
+        let (hold_age_s, hold_age_basis) = hold_clock(*age, e, now);
         // K5: a typed user turn inside the attended window. The user is
         // talking to this session.
         if let Some(hold) = crate::attended::sweep_hold(
@@ -1995,8 +2007,10 @@ pub(crate) fn run_with_release(
         // transcript activity. Activity arrived in the window -> keep, and a
         // re-read that cannot resolve (a moved or deleted transcript) keeps
         // too: absence on re-read is not quiet. One stat, on rows already
-        // classified would-retire, so the hot path pays nothing.
-        if !dry_run {
+        // classified would-retire, so the hot path pays nothing. The re-read
+        // only reads, so a dry run makes it too: a rehearsal that skipped it
+        // predicted retirements the live run then kept as probe-unread.
+        {
             // The re-read rides the same age seam: a fresh answer for
             // THIS row, so activity inside the classify-to-apply gap keeps.
             let fresh_age = age_many(&[e]).get(&row_handle(e)).copied().flatten();
@@ -2050,8 +2064,14 @@ pub(crate) fn run_with_release(
                 && e.inside_leg.is_some()
                 && !live_working
                 && fresh_seq == e.inside_leg.as_ref().map(|leg| leg.seq);
+            let no_witness_stale = fresh_age.is_none()
+                && age.is_none()
+                && e.pid.is_none()
+                && e.inside_leg.is_none()
+                && matches!(hold_age_s, Some(a) if a > PROBE_UNREAD_RETIRE_AFTER_S);
             let still_quiet = worker_finished(e, fresh_age, grace_secs, None)
                 || quiet_witness
+                || no_witness_stale
                 || (session_terminal.is_some()
                     && matches!((fresh_age, age), (Some(now_a), Some(then_a)) if now_a >= then_a));
             if !still_quiet {
