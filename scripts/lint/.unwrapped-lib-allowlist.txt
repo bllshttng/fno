@@ -283,7 +283,7 @@ cargo-rustc-wrapper.sh
 # registry - the wrapped entry point for that population is
 # `fno agents internal registry-json`, so a wrapper here would be a second path around
 # the one registry read. The plan's declared second caller is a future
-# add -A guard in hooks/git-protection.py, which would source it the same way.
+# add -A guard in the git-protection hook, which would source it the same way.
 # Pure sourcing library; no CLI of its own.
 rooted-writers.sh
 
