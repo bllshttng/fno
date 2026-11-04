@@ -184,11 +184,10 @@ jobs:
 
       - name: Command matrix fresh
         if: ${{ !cancelled() }}
-        working-directory: cli
         run: |
           set -euo pipefail
-          uv run fno-py doctor harness-matrix --write
-          git diff --exit-code -- ../docs/harnesses/command-matrix.md
+          fno-agents harness-matrix --write --root "$GITHUB_WORKSPACE"
+          git diff --exit-code -- docs/harnesses/command-matrix.md
 
       # hooks/write-gate.sh refuses edits only to generated copies
       # that generated-artifacts.tsv or skill-bundles.yaml names. The census
@@ -524,11 +523,6 @@ jobs:
         if: ${{ !cancelled() }}
         timeout-minutes: 5
         run: bash scripts/ci/check-tests-hermetic-events.sh
-
-      - name: identity precedence-primitive caller ratchet
-        if: ${{ !cancelled() }}
-        timeout-minutes: 5
-        run: bash scripts/ci/check-identity-stamp-sites.sh
 
       - name: hook source identity
         if: ${{ !cancelled() }}

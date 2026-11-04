@@ -18,12 +18,11 @@ from fno._lazy_group import make_lazy_group_cls
 
 _LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] = {
     # Folded under config (unit 6). The old top-level spellings stay
-    # retired at the front door (command-names.tsv); these mounts are the canonical
-    # homes. Lazy because `fno config get` runs from shell dozens of times per
-    # phase and must not pay for their imports.
+    # retired at the front door (command-names.tsv). Lazy because
+    # `fno config get` runs from shell dozens of times per phase and must
+    # not pay for their imports.
     # Hidden: the menu cap is 12 and config already curates nine visible
     # commands; `fno help config --all` lists these.
-    "paths": ("fno.paths_cli:app", "Path resolution helpers", {"hidden": True}),
     # `config route` / `config routing` (the provider route lanes and the
     # declared-inventory reads) answer natively: the front classifies both
     # spellings onto route-slot's config-route mode, so no Python mount

@@ -13,7 +13,7 @@
 # Allowlist rationale
 # -------------------
 # Python (entire-file exclusions):
-#   - fno/paths.py, paths_cli.py - canonical accessor defs
+#   - fno/paths.py - canonical accessor defs
 #   - fno/config/__init__.py    - bootstrap fallback (load before paths available)
 #   - fno/update.py             - has try/except fallback for source-path cache
 #   - graph/_constants.py             - uses _state_dir() helper with try/except
@@ -72,7 +72,7 @@ add_violation() {
 # Python: Path.home() / ".fno" in CLI source files
 #
 # Files excluded (known legitimate fallbacks or bootstrap paths):
-#   paths.py, paths_cli.py, config/__init__.py,
+#   paths.py, config/__init__.py,
 #   config_io.py (bootstrap: _global_settings_path defines where ~/.fno is,
 #     so it predates and cannot route through fno.paths),
 #   update.py (try/except),
@@ -85,7 +85,6 @@ PY_HITS=$(
         "$REPO_ROOT/cli/src/fno/" \
         --include='*.py' \
         --exclude='paths.py' \
-        --exclude='paths_cli.py' \
         --exclude='test_*.py' \
         2>/dev/null \
     | grep -v 'config/__init__\.py' \

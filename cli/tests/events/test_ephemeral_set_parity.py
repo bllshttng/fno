@@ -17,7 +17,7 @@ import pytest
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-SCHEMA_PATH = REPO_ROOT / "cli/src/fno/events/schema.yaml"
+SCHEMA_PATH = REPO_ROOT / "crates/fno-agents/src/event_store/schema.yaml"
 EVENTS_RS = REPO_ROOT / "crates/fno-agents/src/event_store.rs"
 
 # Floor guarding against a VACUOUS pass: a regex that matched the wrong block

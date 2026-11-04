@@ -1,10 +1,14 @@
-# cli/src/fno/events/schema.yaml
+# The canonical event schema. Owned beside its Rust readers in this crate.
 # Single source of truth for events.jsonl envelope shape across footnote.
-# Lives beside its Python loader (fno.events) and ships as package data.
+# Lives in the manifest tree so the crates.io build carries its own source;
+# build.rs projects events_schema.json (both crates) and events_limits.toml
+# from it.
 #
-# Both validators load this file:
-#   - cli/src/fno/events/__init__.py (Python; imports raise SchemaUnavailableError if absent)
-#   - scripts/lib/events-validate.sh (bash; caches at /tmp/events-schema-$$.cache via yq or python3 fallback)
+# Readers load it through the projection or compile it in:
+#   - build.rs (the projection the committed jsons carry)
+#   - scripts/check-event-schema-parity.sh (steps the yaml directly)
+#   - scripts/lib/events-validate.sh judges through the store binary, which
+#     compiles the schema in
 #
 # Adding a new event type:
 #   1. Add an entry under `event_types`.

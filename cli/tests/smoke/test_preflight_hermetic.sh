@@ -15,10 +15,11 @@ grep -Fq 'for v in $HARNESS_MARKERS; do unset "$v"; done' "$PF" \
 grep -Fq 'export FNO_NO_CANONICAL_CONFIG=1' "$PF" \
   || fail "run_hermetic does not export FNO_NO_CANONICAL_CONFIG=1"
 
-# The marker list is derived from the Python single source of truth, with a
-# fail-closed literal fallback (never a silent skip).
-grep -Fq 'HARNESS_SESSION_MARKERS' "$PF" \
-  || fail "marker list not sourced from HARNESS_SESSION_MARKERS"
+# The marker list is derived from the Rust single source of truth (the
+# identity_markers table in ambient_vocab.toml), with a fail-closed literal
+# fallback (never a silent skip).
+grep -Fq 'identity_markers' "$PF" \
+  || fail "marker list not sourced from the ambient_vocab.toml identity_markers table"
 grep -Fq 'hardcoded fallback list' "$PF" \
   || fail "no fail-closed fallback for the marker fetch"
 
@@ -28,33 +29,56 @@ grep -Fq 'hardcoded fallback list' "$PF" \
 grep -Fq '&& [[ -n "$HARNESS_MARKERS" ]]; then' "$PF" \
   || fail "fallback not keyed on fetch exit status (partial-stdout+nonzero would slip past)"
 
-# Both marker lists preflight can end up using must cover AMBIENT_IDENTITY_ENV:
-# the derivation it runs when Python works, and the literal it falls back to when
-# Python does not. The fallback especially needs its own check - it only runs
-# when the venv is broken, which is exactly when nobody is reading the output.
+# Both marker lists preflight can end up using must cover identity_markers:
+# the derivation it runs when python3 works, and the literal it falls back to
+# when python3 does not. The fallback especially needs its own check - it only
+# runs when the interpreter is broken, which is exactly when nobody is reading
+# the output.
 #
 # Done in ONE python3 call that EXECUTES preflight's own derivation rather than
-# grepping for tuple names. Two reasons. A name-occurrence grep passes on the
-# unused import alone, so dropping the tuple from the executable expression while
-# leaving the import reds nothing. And a shell `while read` over a here-string is
-# silently skipped when bash cannot create the temp file backing `<<<`, under
+# grepping for table names. Two reasons. A name-occurrence grep passes on an
+# unused path alone, so dropping the TOML from the executable expression while
+# leaving the filename reds nothing. And a shell `while read` over a here-string
+# is silently skipped when bash cannot create the temp file backing `<<<`, under
 # `set -e`, reaching PASS with zero assertions run (observed, not theorized).
 # One command, one exit code, nothing to skip.
-PROBLEMS="$(PYTHONPATH=cli/src python3 - "$PF" <<'PYEOF'
+PROBLEMS="$(python3 - "$PF" <<'PYEOF'
 import re, subprocess, sys, os
-from fno.harness_identity import AMBIENT_IDENTITY_ENV
 
+VOCAB = "crates/fno-agents/src/ambient_vocab.toml"
 source = open(sys.argv[1]).read()
-expected = set(AMBIENT_IDENTITY_ENV)
 problems = []
 
+# The expected set reads the table textually: tomllib needs 3.11+, and this
+# check must run everywhere the suite runs. The Rust build parses the same
+# file with a real TOML reader, so table validity is already gated.
+vocab_text = open(VOCAB).read()
+section = re.search(r"^identity_markers = \[\n((?:    \"[A-Za-z0-9_]+\",\n)+)\]", vocab_text, re.M)
+if not section:
+    problems.append("cannot read the identity_markers table from ambient_vocab.toml")
+    expected = set()
+else:
+    expected = set(re.findall(r"\"([A-Za-z0-9_]+)\"", section.group(1)))
+
 # The derivation preflight actually runs, executed rather than pattern-matched.
-snippet = re.search(r"'(from fno\.harness_identity import [^']*)'", source)
+# An interpreter without tomllib (3.9 and older) cannot run it: say so on
+# stderr and leave the derived-list comparison to CI, where python3 is new
+# enough. The literal check below runs everywhere.
+try:
+    import tomllib  # noqa: F401
+    have_tomllib = True
+except ImportError:
+    have_tomllib = False
+
+snippet = re.search(r"'(import tomllib,sys[^\n]*)'", source)
 if not snippet:
     problems.append("cannot locate the python derivation in preflight.sh")
+elif not have_tomllib:
+    print("note: no tomllib on this interpreter; the derived-list comparison runs on CI",
+          file=sys.stderr)
 else:
-    env = dict(os.environ, PYTHONPATH="cli/src")
-    out = subprocess.run([sys.executable, "-c", snippet.group(1)],
+    env = dict(os.environ)
+    out = subprocess.run([sys.executable, "-c", snippet.group(1), VOCAB],
                          capture_output=True, text=True, env=env)
     if out.returncode != 0:
         problems.append(f"preflight's derivation does not run: {out.stderr.strip()}")
@@ -62,6 +86,8 @@ else:
         derived = set(out.stdout.split())
         if missing := expected - derived:
             problems.append(f"derivation misses {sorted(missing)}")
+        if extra := derived - expected:
+            problems.append(f"derivation invents {sorted(extra)}")
 
 # The last-resort literal.
 literal = re.search(r'^\s*HARNESS_MARKERS="(FNO_HARNESS_NAME[^"]*)"\s*$', source, re.M)

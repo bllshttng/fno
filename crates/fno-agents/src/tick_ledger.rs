@@ -13,7 +13,7 @@
 //! producer receipt cannot say whether a producer exists, and only an
 //! observed receipt is a measurement.
 //!
-//! The row shape is owned here and declared in `cli/src/fno/events/schema.yaml`.
+//! The row shape is owned here and declared in `src/event_store/schema.yaml`.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};

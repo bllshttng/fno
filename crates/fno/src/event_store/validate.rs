@@ -4,7 +4,7 @@
 //! Ported rule-by-rule from the Python judge this store retired; the
 //! diagnostics are the contract, one line each, naming the failed field.
 //! The rule set arrives as `events_schema.json` (generated from
-//! cli/src/fno/events/schema.yaml by build.rs) and the type-specific
+//! src/event_store/schema.yaml by build.rs) and the type-specific
 //! behavioral rules are code. Diagnostics reproduce Python's repr shapes
 //! (single-quoted strings, sorted single-quoted lists) so callers that
 //! matched the old lines keep matching them.
