@@ -252,9 +252,9 @@ fn a_stale_target_without_a_terminal_refuses_and_names_both_logins() {
     let lab = Lab::new(&["work", "makers"], &[], MAKERS_STALE);
     let world = World::new(&lab.home, "live-owner", false);
     let got = lab.use_makers(&world, &[]);
-    assert_ne!(got.code, 0, "{}", got.stderr);
-    assert!(got.stderr.contains("claude /login"), "{}", got.stderr);
-    assert!(got.stderr.contains("CLAUDE_CONFIG_DIR="), "{}", got.stderr);
+    assert_ne!(got.code, 0);
+    assert!(got.stderr.contains("claude /login"));
+    assert!(got.stderr.contains("CLAUDE_CONFIG_DIR="));
     assert_eq!(lab.stamp(), "work");
     assert_eq!(world.item("unscoped"), WORK);
     assert_eq!(world.item("scoped:slot"), WORK);
@@ -267,9 +267,9 @@ fn a_stale_target_on_a_terminal_logs_in_and_defaults_to_the_global_scope() {
     let lab = Lab::new(&["work", "makers"], &[], MAKERS_STALE);
     let world = World::new(&lab.home, "live-owner", true);
     let got = lab.use_makers(&world, &[]);
-    assert_eq!(got.code, 0, "{}", got.stderr);
+    assert_eq!(got.code, 0);
     assert!(world.calls.borrow().contains(&"login:makers".to_string()));
-    assert!(got.stdout.contains("scope=global"), "{}", got.stdout);
+    assert!(got.stdout.contains("scope=global"));
     assert_eq!(lab.global_active().as_deref(), Some("makers"));
 }
 
@@ -280,10 +280,10 @@ fn a_switch_names_an_expired_outgoing_item_and_both_items_land() {
     let mut world = World::new(&lab.home, "fresh", false);
     world.sync_note = Some("skipped expired: scoped-keychain".to_string());
     let got = lab.use_makers(&world, &["--scope", "global"]);
-    assert_eq!(got.code, 0, "{}", got.stderr);
-    assert!(got.stderr.contains("scoped-keychain"), "{}", got.stderr);
-    assert!(got.stdout.contains("unscoped: makers"), "{}", got.stdout);
-    assert!(got.stdout.contains("scoped: makers"), "{}", got.stdout);
+    assert_eq!(got.code, 0);
+    assert!(got.stderr.contains("scoped-keychain"));
+    assert!(got.stdout.contains("unscoped: makers"));
+    assert!(got.stdout.contains("scoped: makers"));
     assert_eq!(world.item("unscoped"), MAKERS);
     assert_eq!(world.item("scoped:slot"), MAKERS);
 }
@@ -294,8 +294,8 @@ fn a_project_only_record_refuses_the_terminal_global_default() {
     let lab = Lab::new(&["work"], &["makers"], MAKERS);
     let world = World::new(&lab.home, "fresh", true);
     let got = lab.use_makers(&world, &[]);
-    assert_ne!(got.code, 0, "{}", got.stdout);
-    assert!(got.stderr.contains("--scope project"), "{}", got.stderr);
+    assert_ne!(got.code, 0);
+    assert!(got.stderr.contains("--scope project"));
     assert_eq!(lab.stamp(), "work");
     assert!(lab.global_active().is_none());
 }
@@ -307,15 +307,12 @@ fn three_live_sessions_are_named_when_the_bill_moves() {
     let world = World::new(&lab.home, "fresh", false);
     world.pins.borrow_mut().push(vec![4242, 4343, 4444]);
     let got = lab.use_makers(&world, &["--scope", "global"]);
-    assert_eq!(got.code, 0, "{}", got.stderr);
-    assert!(
-        got.stdout
-            .contains("3 live claude sessions now bill to 'makers' (were 'work')"),
-        "{}",
-        got.stdout
-    );
+    assert_eq!(got.code, 0);
+    assert!(got
+        .stdout
+        .contains("3 live claude sessions now bill to 'makers' (were 'work')"));
     for pid in ["pid 4242", "pid 4343", "pid 4444"] {
-        assert!(got.stdout.contains(pid), "{}", got.stdout);
+        assert!(got.stdout.contains(pid));
     }
 }
 
@@ -449,7 +446,7 @@ fn reconcile_proves_the_slot_while_twenty_writers_are_alive() {
         Duration::from_millis(200),
         1_800_000_000.0,
     );
-    assert_eq!(got.outcome, "matched", "{}", got.detail);
+    assert_eq!(got.outcome, "matched");
     assert_eq!(lab.stamp(), "makers");
     assert!(!lab.store.join(".active-claude.tainted").exists());
     assert_eq!(
