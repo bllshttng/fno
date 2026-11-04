@@ -163,13 +163,7 @@ PATH="$PATH_SAVE"
 expect_row "plg allows a non-plan write" plan-location-guard allow \
     '{"tool_name":"Write","tool_input":{"file_path":"'"$TMP"'/repo/docs/notes.txt","content":"x"}}'
 
-# ── git-protection.py (Bash) ──────────────────────────────────────────────────
-expect_row "gp allows a benign command" git-protection allow \
-    '{"tool_name":"Bash","tool_input":{"command":"echo hello"}}' python3 "git-protection.py"
-expect_row "gp denies a raw gh pr checks read" git-protection block \
-    '{"tool_name":"Bash","tool_input":{"command":"gh pr checks 12"}}' python3 "git-protection.py"
-
-# ── bg-process-guard (Bash, a Rust guard inside the pretooluse-bash chain) ────
+# ── git-protection and bg-process-guard (Rust guards in the pretooluse-bash chain)
 # The chain writes the row, so the case runs the dispatch against the checkout
 # build, never a stale installed binary.
 if [[ -z "${FNO_AGENTS_BIN:-}" ]]; then
@@ -189,11 +183,15 @@ if [[ -n "${FNO_AGENTS_BIN:-}" ]]; then
     expect_row "bpg denies an unbounded yes" bg-process-guard block \
         '{"tool_name":"Bash","tool_input":{"command":"yes"}}' bash "pretooluse-bash-dispatch.sh"
     if [[ -n "$PRESET_SAVE" ]]; then export FNO_GUARD_PRESET="$PRESET_SAVE"; else unset FNO_GUARD_PRESET; fi
+    expect_row "gp allows a benign command" git-protection allow \
+        '{"tool_name":"Bash","tool_input":{"command":"echo hello"}}' bash "pretooluse-bash-dispatch.sh"
+    expect_row "gp denies a raw gh pr checks read" git-protection block \
+        '{"tool_name":"Bash","tool_input":{"command":"gh pr checks 12"}}' bash "pretooluse-bash-dispatch.sh"
 else
     # No checkout build of fno-agents here. An installed binary may predate
     # the in-process guard and answer {}, so only a checkout build counts.
     # The Rust unit tests and the hook-latency order test own these rows.
-    printf '[liveness] SKIP: bpg rows need a checkout fno-agents build (none here)\n'
+    printf '[liveness] SKIP: bpg and gp rows need a checkout fno-agents build (none here)\n'
 fi
 
 # ── law-authority-gate.py: gone ───────────────────────────────────────────────

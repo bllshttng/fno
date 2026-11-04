@@ -1174,7 +1174,6 @@ fn hook_budget_bash_pretooluse_dispatch() {
                 "git",
                 "jq",
                 "mktemp",
-                "python3",
                 "pwd",
                 "rm",
             ],
@@ -1195,10 +1194,9 @@ fn hook_budget_bash_pretooluse_dispatch() {
         },
     );
 
-    // The allow path on a command that names neither `git` nor `gh` starts no
-    // interpreter: every guard on it is Rust, and git-protection's Python
-    // owner is skipped. `python3` and `fno` are absent from the exec list on
-    // purpose, so a Python start on this path fails CI.
+    // Every guard in the chain runs in process, git-protection included, so
+    // no path starts an interpreter. `python3` and `fno` are absent from the
+    // exec lists below on purpose: a Python start on any of them fails CI.
     run_fixture(
         "hook_budget_bash_pretooluse_dispatch_allow",
         "hooks/pretooluse-bash-dispatch.sh",
@@ -1219,6 +1217,50 @@ fn hook_budget_bash_pretooluse_dispatch() {
                 "{}",
                 "a plain non-git command must allow: {stdout} {stderr}"
             );
+        },
+    );
+
+    run_fixture(
+        "hook_budget_bash_pretooluse_dispatch_git",
+        "hooks/pretooluse-bash-dispatch.sh",
+        &FixtureSpec {
+            payload: guard_payload(VISITOR_SID, "Bash", json!({"command": "git status"})),
+            manifest: "",
+            claims: &[],
+            extra_env: &[],
+            budget_p90_ms: 150.0,
+            ceiling_ms: 300.0,
+            allowed_execs: &["bash", "fno-agents", "git"],
+            max_git: Some(5),
+        },
+        |code, stdout, stderr| {
+            assert_eq!(code, 0, "{stderr}");
+            assert_eq!(stdout.trim(), "{}", "git status must allow: {stdout} {stderr}");
+        },
+    );
+
+    run_fixture(
+        "hook_budget_bash_pretooluse_dispatch_gh",
+        "hooks/pretooluse-bash-dispatch.sh",
+        &FixtureSpec {
+            payload: guard_payload(VISITOR_SID, "Bash", json!({"command": "gh pr checks 12"})),
+            manifest: "",
+            claims: &[],
+            extra_env: &[],
+            budget_p90_ms: 150.0,
+            ceiling_ms: 300.0,
+            allowed_execs: &["bash", "fno-agents", "git"],
+            max_git: Some(5),
+        },
+        |code, stdout, stderr| {
+            assert_eq!(code, 0, "{stderr}");
+            let response: Value = serde_json::from_str(stdout.trim())
+                .unwrap_or_else(|error| panic!("{stdout:?} is not JSON: {error}"));
+            assert_eq!(response["hookSpecificOutput"]["permissionDecision"], "deny");
+            assert!(response["hookSpecificOutput"]["permissionDecisionReason"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("[fno GraphQL reserve]"));
         },
     );
 }

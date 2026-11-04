@@ -1,16 +1,12 @@
 //! One Bash PreToolUse entry for the guards that share the same payload.
 //!
-//! Keep the former registration order. Rust guards run in-process. The
-//! git-protection guard keeps its Python owner and runs as a child with the
-//! same stdin and environment, and only when the command text can name `git`
-//! or `gh`. A denial from any guard is returned after all have recorded
-//! their decision. The guardrail preset owns whether a guard
-//! runs at all: a preset-disabled guard answers nothing and emits no row.
+//! Keep the former registration order. Every guard runs in process. A
+//! denial from any guard is returned after all have recorded their
+//! decision. The guardrail preset owns whether a guard runs at all: a
+//! preset-disabled guard answers nothing and emits no row.
 
 use serde_json::Value;
-use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 
 pub fn run(_args: &[String]) -> i32 {
     let raw = super::read_stdin();
@@ -23,18 +19,11 @@ pub fn run(_args: &[String]) -> i32 {
         .or_else(|| std::env::current_dir().ok())
         .unwrap_or_else(|| PathBuf::from("."));
     let process_cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let plugin_root = std::env::var_os("FNO_REPO_ROOT")
-        .filter(|root| !root.is_empty())
-        .map(PathBuf::from)
-        .or_else(crate::provider::plugin_root);
     let mut refusals = Vec::new();
 
     // One config resolution for the whole chain: guard_enabled re-walks the
     // config candidates per call, and this hook runs on every Bash turn.
     let preset = crate::agents_config::guard_preset(&cwd);
-    // Resolved once for the chain; the Python guards receive it as
-    // FNO_EVENTS_PATH so guard_mark skips its own resolver subprocess.
-    let events_pin = crate::state_path::resolve("events", &cwd);
 
     if crate::agents_config::preset_runs(preset, "bg-process") {
         let bg_refusal = super::bg_process_guard::judge(&payload);
@@ -49,21 +38,11 @@ pub fn run(_args: &[String]) -> i32 {
     }
 
     if crate::agents_config::preset_runs(preset, "git-protection") {
-        let command = payload
-            .pointer("/tool_input/command")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        if !git_protection_may_refuse(command) {
-            super::emit_guard_decision(&cwd, "git-protection", "Bash", false);
-        } else if let Some(root) = plugin_root.as_deref() {
-            if let Some(reason) =
-                run_python_guard(&root, "git-protection.py", &raw, events_pin.as_deref())
-            {
-                refusals.push(reason);
-            }
-        } else {
-            eprintln!("pretooluse-bash: plugin root unavailable; skipping git-protection guard");
-        }
+        // Git reads and the guard's state run in the process cwd, never the
+        // payload cwd.
+        let git_refusal = super::git_protection::judge(&payload, &process_cwd);
+        super::emit_guard_decision(&cwd, "git-protection", "Bash", git_refusal.is_some());
+        refusals.extend(git_refusal);
     }
 
     if crate::agents_config::preset_runs(preset, "pipe") {
@@ -244,104 +223,6 @@ fn record_launch(payload: &Value, cwd: &Path) {
     }
 }
 
-/// A necessary condition for any git-protection refusal: the guard splits the
-/// command into shell tokens, and a token is its raw characters minus quotes
-/// and escapes. Every deny path needs a `git` or `gh` token, and one survives
-/// stripping `"`, `'` and `\` and lowercasing. False means the Python guard
-/// cannot refuse, so it does not start.
-fn git_protection_may_refuse(command: &str) -> bool {
-    let flat: String = command
-        .chars()
-        .filter(|c| !matches!(c, '"' | '\'' | '\\'))
-        .flat_map(char::to_lowercase)
-        .collect();
-    flat.contains("git") || flat.contains("gh")
-}
-
-fn run_python_guard(
-    root: &Path,
-    script: &str,
-    input: &str,
-    events_pin: Option<&Path>,
-) -> Option<String> {
-    let path = root.join("hooks").join(script);
-    let mut command = Command::new("python3");
-    command.arg(&path);
-    // The shared guard_mark resolves the events journal with a
-    // `fno-agents state path events` subprocess per guard; handing the pin
-    // we already resolved saves one process spin per Python guard on every
-    // Bash turn.
-    if let Some(pin) = events_pin {
-        command.env("FNO_EVENTS_PATH", pin);
-    }
-    let mut child = match command
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-    {
-        Ok(child) => child,
-        Err(error) => {
-            eprintln!(
-                "pretooluse-bash: could not start {}: {error}; allowing",
-                path.display()
-            );
-            return None;
-        }
-    };
-    if let Some(mut stdin) = child.stdin.take() {
-        if let Err(error) = stdin.write_all(input.as_bytes()) {
-            let _ = child.kill();
-            let _ = child.wait();
-            eprintln!(
-                "pretooluse-bash: could not send payload to {}: {error}; allowing",
-                path.display()
-            );
-            return None;
-        }
-    }
-    let output = match child.wait_with_output() {
-        Ok(output) => output,
-        Err(error) => {
-            eprintln!(
-                "pretooluse-bash: could not read {}: {error}; allowing",
-                path.display()
-            );
-            return None;
-        }
-    };
-    if !output.stderr.is_empty() {
-        eprint!("{}", String::from_utf8_lossy(&output.stderr));
-    }
-    if !output.status.success() {
-        eprintln!(
-            "pretooluse-bash: {} exited {}; allowing",
-            path.display(),
-            output.status
-        );
-        return None;
-    }
-    python_refusal(&output.stdout)
-}
-
-fn python_refusal(stdout: &[u8]) -> Option<String> {
-    let response: Value = serde_json::from_slice(stdout).ok()?;
-    let specific = response.get("hookSpecificOutput").unwrap_or(&response);
-    let decision = specific
-        .get("permissionDecision")
-        .or_else(|| response.get("decision"))
-        .and_then(Value::as_str);
-    if !matches!(decision, Some("deny" | "block")) {
-        return None;
-    }
-    specific
-        .get("permissionDecisionReason")
-        .or_else(|| response.get("reason"))
-        .and_then(Value::as_str)
-        .map(str::to_owned)
-        .or_else(|| Some("a Bash PreToolUse guard denied this command".to_string()))
-}
-
 /// The learned-cap floor is the user's setting: the hook refuses an agent
 /// tool call that runs the setter. The user's own shell line runs no
 /// PreToolUse hook, so the same line still works from a person. The scan is
@@ -371,19 +252,6 @@ fn refuse_floor_setter(cmd: &str) -> Option<String> {
         }
     }
     None
-}
-
-#[cfg(test)]
-mod git_gate_tests {
-    use super::git_protection_may_refuse;
-
-    #[test]
-    fn the_text_check_is_a_necessary_condition_for_a_git_token() {
-        assert!(git_protection_may_refuse("g\"\"it push origin main"));
-        assert!(git_protection_may_refuse("GH pr merge 1"));
-        assert!(git_protection_may_refuse("g\\it status"));
-        assert!(!git_protection_may_refuse("ls -la /tmp"));
-    }
 }
 
 #[cfg(test)]
