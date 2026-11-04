@@ -728,6 +728,16 @@
      }
     },
     {
+     "name": "questions",
+     "default": {
+      "judge": {
+       "batch": 10,
+       "enabled": false,
+       "model": "sonnet"
+      }
+     }
+    },
+    {
      "name": "schema_version",
      "default": 1
     }
@@ -3043,6 +3053,36 @@
      "default": "~/.fno/secrets/github-app.pem"
     }
    ]
+  },
+  "JudgeBlock": {
+   "extra": "ignore",
+   "fields": [
+    {
+     "name": "batch",
+     "default": 10
+    },
+    {
+     "name": "enabled",
+     "default": false
+    },
+    {
+     "name": "model",
+     "default": "sonnet"
+    }
+   ]
+  },
+  "QuestionsBlock": {
+   "extra": "ignore",
+   "fields": [
+    {
+     "name": "judge",
+     "default": {
+      "batch": 10,
+      "enabled": false,
+      "model": "sonnet"
+     }
+    }
+   ]
   }
  },
  "field_meta": [
@@ -3393,6 +3433,9 @@
   "accounts.failover",
   "github.app_id",
   "github.app_installation_id",
-  "github.app_key_path"
+  "github.app_key_path",
+  "questions.judge.batch",
+  "questions.judge.enabled",
+  "questions.judge.model"
  ]
 }
