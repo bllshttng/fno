@@ -2393,28 +2393,33 @@ pub fn maybe_tick(arm: &Arm) {
     let flag = Arc::clone(&arm.in_flight);
     let hold_until = Arc::clone(&arm.hold_until);
     std::thread::spawn(move || {
-        let graph = crate::backlog::settings::graph_path();
-        let mut unreachable = false;
-        if let Err(error) = flush(&graph) {
-            unreachable |= crate::store_remote::is_unreachable(&error);
-            eprintln!("backlog-share: flush: {error}");
-        }
-        if let Err(error) = sync(&graph) {
-            unreachable |= crate::store_remote::is_unreachable(&error);
-            eprintln!("backlog-share: sync: {error}");
-        }
-        if let Err(error) = crate::plan_carry::sync(&graph) {
-            unreachable |= crate::store_remote::is_unreachable(&error);
-            eprintln!("backlog-share: plans: {error}");
-        }
-        if prune_due {
-            if let Err(error) = report_and_prune(&graph) {
+        // eprintln! panics when stderr's reader is gone; a panic here must
+        // still release the gate and the hold, or the arm wedges shut.
+        let beat = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let graph = crate::backlog::settings::graph_path();
+            let mut unreachable = false;
+            if let Err(error) = flush(&graph) {
                 unreachable |= crate::store_remote::is_unreachable(&error);
-                eprintln!("backlog-share: prune: {error}");
+                eprintln!("backlog-share: flush: {error}");
             }
-            replay_decisions(&graph);
-        }
-        record_beat(&hold_until, unreachable);
+            if let Err(error) = sync(&graph) {
+                unreachable |= crate::store_remote::is_unreachable(&error);
+                eprintln!("backlog-share: sync: {error}");
+            }
+            if let Err(error) = crate::plan_carry::sync(&graph) {
+                unreachable |= crate::store_remote::is_unreachable(&error);
+                eprintln!("backlog-share: plans: {error}");
+            }
+            if prune_due {
+                if let Err(error) = report_and_prune(&graph) {
+                    unreachable |= crate::store_remote::is_unreachable(&error);
+                    eprintln!("backlog-share: prune: {error}");
+                }
+                replay_decisions(&graph);
+            }
+            unreachable
+        }));
+        record_beat(&hold_until, beat.unwrap_or(false));
         flag.store(false, Ordering::SeqCst);
     });
 }
