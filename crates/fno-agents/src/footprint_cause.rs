@@ -2188,8 +2188,7 @@ mod tests {
             line!()
         ));
         std::fs::create_dir_all(&dir).unwrap();
-        let prior_home = std::env::var_os(crate::paths::HOME_ENV);
-        std::env::set_var(crate::paths::HOME_ENV, &dir);
+        let _home = crate::claims::EnvVarGuard::set(crate::paths::HOME_ENV, &dir.to_string_lossy());
         let registry = crate::paths::AgentsHome::from_env().registry_json();
         std::fs::create_dir_all(registry.parent().unwrap()).unwrap();
         // 0x7FFF_F000 passes the broadcast guard yet reads no process on any
@@ -2210,10 +2209,6 @@ mod tests {
             }),
         );
         let out = live_root_pids(None, &BTreeSet::new(), 0.0, &BTreeMap::new());
-        match prior_home {
-            Some(v) => std::env::set_var(crate::paths::HOME_ENV, v),
-            None => std::env::remove_var(crate::paths::HOME_ENV),
-        }
         let _ = std::fs::remove_dir_all(&dir);
         let (roots, gap) = out.unwrap();
         assert!(!roots.contains(&dead_pid));
