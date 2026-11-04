@@ -753,8 +753,11 @@ jobs:
     # warm run says otherwise. History: the cold release build of fno-agents
     # outgrew 10m once the crate grew the native decisions listing, then
     # outgrew 15m twice on 2026-10-08 under fleet load, dying inside cargo
-    # before any budget ran each time.
-    timeout-minutes: 20
+    # before any budget ran each time. 2026-11-04: the residue port grew the
+    # crate again and nine branch runs died at this cap before the save step
+    # could land a warm tree, so the cap moved to 25m to give one cold run
+    # room to save.
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
