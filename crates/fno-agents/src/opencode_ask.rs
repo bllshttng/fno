@@ -163,12 +163,7 @@ pub(crate) fn apply_opencode_variant_at(
         )
     })?;
     let lock_path = locks.join("model.json.lock");
-    let lock = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&lock_path)
-        .map_err(|error| format!("cannot open OpenCode model lock: {error}"))?;
-    lock.lock()
+    let _lock = crate::chokepoint::take(&crate::chokepoint::OPENCODE_ASK, &lock_path)
         .map_err(|error| format!("cannot lock OpenCode model state: {error}"))?;
 
     let mut data: serde_json::Value = if path.exists() {
@@ -310,8 +305,8 @@ pub(crate) fn run_one_shot(
     // The harness resolves its project from $PWD, not the process cwd.
     cmd.env("PWD", cwd);
     crate::claims::stamp_command_env(&mut cmd, Some(agent_self), harness, None);
-    // A `[sandbox] provider = "devcontainer"` spawn runs this lane in the box.
-    let mut cmd = crate::sandbox_launch::boxed(cmd);
+    // A `[sandbox] provider = "devcontainer"` spawn runs this lane in the sandbox.
+    let mut cmd = crate::sandbox_launch::sandboxed(cmd);
     cmd.stdin(Stdio::null());
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());

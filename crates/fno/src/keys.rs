@@ -116,6 +116,18 @@ pub fn key_disp(b: u8) -> String {
     }
 }
 
+/// The named key a control byte is indistinguishable from on a terminal, for
+/// the bytes a chord can never claim: `ctrl+m` and `ctrl+j` arrive as Enter,
+/// `ctrl+i` as Tab. `parse_key` cannot produce Esc (`ctrl+[` is not a letter),
+/// so no Esc arm is needed.
+fn terminal_twin(b: u8) -> Option<&'static str> {
+    match b {
+        0x09 => Some("Tab"),
+        0x0A | 0x0D => Some("Enter"),
+        _ => None,
+    }
+}
+
 /// Build a [`Keymap`] from raw config strings, reporting every entry it had to
 /// reject. Pure, so the resolution rules are testable without a config file.
 ///
@@ -151,6 +163,12 @@ pub fn resolve_keymap(
                 "config.mux.prefix: 1-9 select tabs and cannot be the prefix; keeping {}",
                 key_disp(DEFAULT_PREFIX)
             ))),
+            Some(b) if terminal_twin(b).is_some() => warnings.push(KeymapWarning(format!(
+                "config.mux.prefix: {} is the same byte as {}, so it cannot be the prefix; keeping {}",
+                key_disp(b),
+                terminal_twin(b).unwrap_or_default(),
+                key_disp(DEFAULT_PREFIX)
+            ))),
             Some(b) => prefix = b,
             None => warnings.push(KeymapWarning(format!(
                 "config.mux.prefix: cannot read {spec:?} as a key; keeping {}",
@@ -182,6 +200,13 @@ pub fn resolve_keymap(
         if byte.is_ascii_digit() && byte != b'0' {
             warnings.push(KeymapWarning(format!(
                 "config.mux.keys.{action}: 1-9 select tabs and cannot be rebound"
+            )));
+            continue;
+        }
+        if let Some(twin) = terminal_twin(byte) {
+            warnings.push(KeymapWarning(format!(
+                "config.mux.keys.{action}: {} is the same byte as {twin}, so the chord would never fire; keeping the default",
+                key_disp(byte)
             )));
             continue;
         }
@@ -434,7 +459,7 @@ pub enum Event {
     CycleSidelineView,
     /// (redefined by) Toggle the org block on the left
     /// sideline between its three-line glance and the full reading: load
-    /// against the cap, what saturates the box, the working/idle/dead
+    /// against the cap, what saturates the machine, the working/idle/dead
     /// census, and the lane advisor's own answer. The block is always
     /// visible; this only expands or collapses it, and the client's view
     /// layer interprets that, not here.
@@ -1059,7 +1084,7 @@ pub struct KeyBinding {
 /// The authoritative prefix-chord table AS SHIPPED, before `config.mux.keys` is
 /// applied. Call [`key_bindings`] instead unless you specifically want the
 /// defaults (the rebind resolver does, to know which actions exist).
-fn default_bindings() -> Vec<KeyBinding> {
+pub(crate) fn default_bindings() -> Vec<KeyBinding> {
     use Command as C;
     use Event::*;
     use KeySection::*;
@@ -2429,6 +2454,14 @@ mod tests {
         let p = DEFAULT_PREFIX;
         let digit = resolve_rebind_with(p, &[], "detach", b'3').unwrap_err();
         assert!(digit.contains("1-9 select tabs"), "{digit}");
+        // Enter and Tab arrive as ctrl+m/j and ctrl+i: refused.
+        let enter = resolve_rebind_with(p, &[], "detach", 0x0D).unwrap_err();
+        assert!(enter.contains("same byte as Enter"), "{enter}");
+        let tab = resolve_rebind_with(p, &[], "detach", 0x09).unwrap_err();
+        assert!(tab.contains("same byte as Tab"), "{tab}");
+        let (kept, warn) = resolve_keymap(None, &[("split-down".into(), "C-m".into())]);
+        assert!(kept.rebinds.is_empty(), "default key is kept");
+        assert_eq!(warn.len(), 1, "{warn:?}");
         let on_prefix = resolve_rebind_with(p, &[], "detach", p).unwrap_err();
         assert!(on_prefix.contains("is the prefix"), "{on_prefix}");
         let taken = resolve_rebind_with(p, &[], "detach", b'c').unwrap_err();

@@ -137,6 +137,7 @@ const ALL_CLIENT_ACTIONS: &[&str] = &[
 ];
 
 fn main() {
+    fno_agents::chokepoint_events::install();
     let args: Vec<String> = std::env::args().skip(1).collect();
     // First, so a proxied gh call pays no other arm; transport-only.
     if let Some(code) = fno_agents::pr_status::adapter::gh_transport_door(&args) {
@@ -197,6 +198,11 @@ fn main() {
     }
     if args.first() == Some(&"do".to_string()) && args.get(1) == Some(&"ci".to_string()) {
         std::process::exit(fno_agents::ci_front::run(&args[2..]));
+    }
+    if args.first().map(String::as_str) == Some("do")
+        && matches!(args.get(1).map(String::as_str), Some("show" | "diff"))
+    {
+        std::process::exit(fno_agents::rev_front::run(&args[1..]));
     }
     // gh-cache, target-status: the early transport arms; client_transport.rs
     // holds their bodies and comments. worktree-reapable and launch-workdir
@@ -416,7 +422,7 @@ async fn run(args: Vec<String>) -> i32 {
     }
 
     // `orphan-reap` is the hidden reap lever for orphaned cargo test binaries:
-    // the daemon's 300s sweep and a human on a wedged box both run
+    // the daemon's 300s sweep and a human on a wedged machine both run
     // it binary-direct. Same `matches!` treatment as `mail-inject` so it stays
     // out of CLIENT_COMMAND_USAGE / RUST_CLIENT_COMMANDS and the routable-command
     // parity guard - it reads one ps snapshot and prints, it is not an
@@ -2294,10 +2300,10 @@ fn maybe_run_spawn(
             Ok(None) => fno_agents::spawn_cwd::resolve_dispatch_cwd(params),
         }
     };
-    // `[sandbox] provider`: refuse a spawn the box cannot carry before the
-    // guard and the gate; the box itself comes up after the gate admits.
-    let boxed = match fno_agents::sandbox_launch::check(&cwd, provider, public_substrate) {
-        Ok(boxed) => boxed,
+    // `[sandbox] provider`: refuse a spawn the sandbox cannot carry before the
+    // guard and the gate; the sandbox itself comes up after the gate admits.
+    let sandboxed = match fno_agents::sandbox_launch::check(&cwd, provider, public_substrate) {
+        Ok(sandboxed) => sandboxed,
         Err((code, reason)) => {
             eprintln!("fno-agents spawn: {reason}");
             return Some(code);
@@ -2457,7 +2463,7 @@ fn maybe_run_spawn(
         }};
     }
 
-    if boxed {
+    if sandboxed {
         if let Err((code, reason)) = fno_agents::sandbox_launch::arm(home, &cwd) {
             eprintln!("fno-agents spawn: [sandbox] devcontainer refused: {reason}");
             if let Some(g) = gate_guard.as_mut() {

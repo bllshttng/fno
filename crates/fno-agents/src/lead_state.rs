@@ -31,7 +31,6 @@ use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::Write;
-use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 
 /// Terminal for the vacancy and join reads. Orphaned is the reversible
@@ -666,14 +665,10 @@ pub(crate) fn with_manifest_lock<T>(
         fs::create_dir_all(parent)
             .map_err(|e| format!("cannot create {}: {e}", parent.display()))?;
     }
-    let lock = fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&lock_path)
-        .map_err(|e| format!("cannot open {}: {e}", lock_path.display()))?;
-    unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) };
+    let lock = crate::chokepoint::take(&crate::chokepoint::LEAD_STATE, &lock_path)
+        .map_err(|e| e.to_string())?;
     let result = f();
-    unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_UN) };
+    drop(lock);
     result
 }
 

@@ -1062,7 +1062,7 @@ pub const DEFAULT_MAX_FLEET_CPU_SHARE: f64 = 0.5;
 /// the Pydantic default.
 pub const DEFAULT_SINGLE_FLIGHT_TTL_S: u64 = 60;
 /// Default join budget. Over the 23.2 s worst-measured roster read, so a loaded
-/// box joins instead of timing out. Matches the Pydantic default.
+/// machine joins instead of timing out. Matches the Pydantic default.
 pub const DEFAULT_SINGLE_FLIGHT_JOIN_BUDGET_S: u64 = 30;
 /// Default age at which a child reparented to init is reaped: three times
 /// `do pr wait --timeout 30m`, the longest detached child that is allowed to be
@@ -1411,7 +1411,8 @@ final-head code review. {FLOOR_REMEDY}"
     None
 }
 
-/// The mux client's render surface, the paint footnote's own PRs change. The
+/// The mux client's render surface, the paint footnote's own PRs change, plus
+/// the README and `docs/images`, the public front page a reader sees first. The
 /// default applies only where this tree exists, so another project's PRs
 /// keep the gate off and spend no changed-files read.
 const BUILTIN_VISUAL_PAINT_PATHS: &[&str] = &[
@@ -1441,6 +1442,8 @@ const BUILTIN_VISUAL_PAINT_PATHS: &[&str] = &[
     "crates/fno/src/web_trace.html",
     "crates/fno/src/wordmark.rs",
     "crates/fno/src/yard_overlay.rs",
+    "README.md",
+    "docs/images/**",
 ];
 const BUILTIN_VISUAL_PAINT_ANCHOR: &str = "crates/fno/src/client";
 

@@ -10,7 +10,7 @@ Three surfaces read the field, and all three refuse or hide the contained node:
 - `_redirect_if_contained` (`cli/src/fno/target_cli.py`) is the named-dispatch half: naming a contained node exits 2 with `ships inside <owner>'s PR` and claims nothing.
 - When the owner's PR merges, `_cascade_close_contained` (`cli/src/fno/graph/cli.py`) closes every contained node, stamping `shipped inside <owner>` on each.
 
-A fourth rule rides the same field. Only a child that is NOT contained in its parent makes that parent a box, in `_container_ids`. An owner whose every child is contained is a delivery unit, so it drains instead of sitting undispatchable forever.
+A fourth rule rides the same field. Only a child that is NOT contained in its parent makes that parent a container, in `_container_ids`. An owner whose every child is contained is a delivery unit, so it drains instead of sitting undispatchable forever.
 
 ## Writers
 

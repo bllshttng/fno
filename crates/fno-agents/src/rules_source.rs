@@ -141,11 +141,14 @@ pub fn assemble(
         }
         let paths = law_paths(row);
         let action = law_strength(row);
-        let scope_line = if scope == "global" || identity.is_some() {
+        let mut scope_line = if scope == "global" || identity.is_some() {
             String::new()
         } else {
             format!("\nscope = \"{}\"", toml_escape(scope))
         };
+        if let Some(until) = row.get("until").and_then(Value::as_str) {
+            scope_line.push_str(&format!("\nexpires = \"{}\"", toml_escape(until)));
+        }
         let body = if paths.is_empty() {
             format!(
                 "id = \"law-{id}\"\nlaw = \"{id}\"{scope_line}\naction = \"{action}\"\n[rule.when]\nretrieval = \"{}\"\nevents = [\"prompt\", \"skill\"]",
@@ -823,16 +826,12 @@ mod tests {
             })
             .to_string()
         };
-        let ago = |days: i64| {
-            (chrono::Utc::now() - chrono::Duration::days(days))
-                .format("%Y-%m-%dT%H:%M:%SZ")
-                .to_string()
-        };
+        let ago = |days: i64| (chrono::Utc::now() - chrono::Duration::days(days)).to_rfc3339();
         let mut text = span("r-a", "block", &ago(1));
         text.push('\n');
         text.push_str(&span("r-a", "warn", &ago(2)));
         text.push('\n');
-        text.push_str(&span("r-b", "warn", &ago(15)));
+        text.push_str(&span("r-b", "warn", &ago(30)));
         text.push('\n');
         std::fs::write(&journal, text).unwrap();
 

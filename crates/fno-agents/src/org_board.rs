@@ -1678,7 +1678,7 @@ pub(crate) fn default_needs_sources(home: &crate::paths::AgentsHome) -> (Vec<Pat
     let global_events = fno_dir.join("events.jsonl");
     let questions = fno_dir.join("questions.jsonl");
     let project_events = PathBuf::from(".fno").join("events.jsonl");
-    let ledger = fno_dir.join("ledger.json");
+    let ledger = crate::state_layout::place(&fno_dir, "ledger.json");
     (vec![project_events, global_events, questions], ledger)
 }
 

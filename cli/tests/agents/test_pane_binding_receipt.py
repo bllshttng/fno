@@ -121,7 +121,7 @@ def _no_sleep(_seconds: float) -> None:
 # `seed: unattempted` while the pane already showed the command and the agent was
 # running it, and pane 96 reported the same word for a pane that genuinely got
 # nothing. One word, two opposite realities, and the false reading correlates
-# with machine load because frame paint is slower when the box is busy.
+# with machine load because frame paint is slower when the machine is busy.
 #
 # The seed rides in the process argv for every pane harness except agy, so its
 # delivery is committed at exec time, before a pane exists to read. The spawn

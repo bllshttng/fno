@@ -8,8 +8,8 @@ set -u
 # A footnote session reports its own state in its session record, and its
 # loop fires this plugin hook under the claude label. Stay out of its way.
 [[ "${FNO_HARNESS_NAME:-}" == "footnote" ]] && exit 0
-# Only a boxed session pushes: its transcript file is out of the host's
-# reach. The spawn pins this socket inside the box and nowhere else.
+# Only a sandboxed session pushes: its transcript file is out of the host's
+# reach. The spawn pins this socket inside the sandbox and nowhere else.
 [[ -z "${FNO_SUPERVISOR_SOCKET:-}" ]] && exit 0
 PATH="${PATH:+$PATH:}/usr/bin:/bin"
 export PATH

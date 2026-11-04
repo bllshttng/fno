@@ -113,14 +113,8 @@ pub(crate) fn claim_incident(
         .ok_or_else(|| format!("no parent directory for {}", path.display()))?;
     std::fs::create_dir_all(dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
     let lock_path = path.with_extension("json.lock");
-    let lock = std::fs::OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .write(true)
-        .open(&lock_path)
-        .map_err(|e| format!("cannot open {}: {e}", lock_path.display()))?;
-    lock.lock()
-        .map_err(|e| format!("cannot lock {}: {e}", lock_path.display()))?;
+    let lock = crate::chokepoint::take(&crate::chokepoint::FLEET_INCIDENT, &lock_path)
+        .map_err(|e| e.to_string())?;
     let out = claim_incident_locked(&path, incident, pr, by, note);
     let _ = lock.unlock();
     out

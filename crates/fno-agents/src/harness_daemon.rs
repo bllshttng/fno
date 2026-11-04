@@ -251,8 +251,8 @@ fn success(harness: &str, state: DaemonState, reused: bool) -> EnsureResult {
     }
 }
 
-pub(crate) fn acquire_lock(path: &Path) -> Option<std::fs::File> {
-    lock_with(path, libc::LOCK_EX)
+pub(crate) fn acquire_lock(path: &Path) -> Option<crate::chokepoint::Held> {
+    crate::chokepoint::take(&crate::chokepoint::HARNESS_DAEMON, path).ok()
 }
 
 /// Non-blocking variant: `None` = someone else holds it, try again later.

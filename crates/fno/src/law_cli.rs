@@ -14,8 +14,9 @@ use std::process::{Command, Stdio};
 
 /// The commands the native surface serves. The Python `fno inbox law` group
 /// forwards here instead of holding its own write path.
-pub const NATIVE_LAW_SUBCOMMANDS: &[&str] =
-    &["set", "stage", "match", "retract", "restore", "history"];
+pub const NATIVE_LAW_SUBCOMMANDS: &[&str] = &[
+    "set", "stage", "match", "retract", "restore", "renew", "history",
+];
 
 /// Classify `fno inbox law <sub> ...` for the front door: `Some(rest)` runs
 /// natively, `None` forwards to the Python CLI.
@@ -72,7 +73,7 @@ pub fn run(args: &[OsString]) -> i32 {
         .any(|a| a.to_str() == Some("-h") || a.to_str() == Some("--help"))
     {
         println!(
-            "usage: fno inbox law set <subject> [decision] [--global | --machine[=<id>] | --person[=<name>]] [--paths g1,g2] [--from date:<when>|event:<node>] [--while <cmd>]... [--between HH:MM-HH:MM] [--strength inform|warn|require-ack|block] [--rationale s] [--option s]... [--supersedes d-x] [--graduation k] [--graduation-ref r] [--decision-file f|-] [--read cmd]... | fno inbox law stage | fno inbox law match (one JSON request on stdin) | fno inbox law retract <subject-or-id> --reason <why> [--quote <the user's words>] | fno inbox law restore <decision-id> | fno inbox law history <subject-or-id>"
+            "usage: fno inbox law set <subject> [decision] [--global | --machine[=<id>] | --user[=<name>]] [--paths g1,g2] [--from date:<when>|event:<node>] [--while <cmd>]... [--between HH:MM-HH:MM] [--until YYYY-MM-DD] [--strength inform|warn|require-ack|block] [--rationale s] [--option s]... [--supersedes d-x] [--graduation k] [--graduation-ref r] [--decision-file f|-] [--read cmd]... [--filter <key>=<value>]... [--not <key>=<value>]... | fno inbox law stage | fno inbox law match (one JSON request on stdin) | fno inbox law retract <subject-or-id> --reason <why> [--quote <the user's words>] | fno inbox law restore <decision-id> | fno inbox law renew <subject-or-id> --until YYYY-MM-DD | fno inbox law history <subject-or-id>"
         );
         return 0;
     }
@@ -112,7 +113,7 @@ pub fn run(args: &[OsString]) -> i32 {
             }
             law_exec(&buf, Attended::No)
         }
-        "retract" | "restore" => {
+        "retract" | "restore" | "renew" => {
             let argv: Vec<String> = rest
                 .iter()
                 .filter_map(|a| a.to_str().map(str::to_owned))
@@ -141,7 +142,7 @@ pub fn run(args: &[OsString]) -> i32 {
         }
         _ => {
             eprintln!(
-                "error: expected a subcommand (set | stage | match | retract | restore | history)"
+                "error: expected a subcommand (set | stage | match | retract | restore | renew | history)"
             );
             2
         }

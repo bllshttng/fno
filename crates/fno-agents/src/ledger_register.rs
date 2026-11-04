@@ -855,18 +855,13 @@ fn append_to_tasks_json(tasks_path: &Path, entry: &Value) -> Result<(), String> 
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("cannot create {}: {e}", parent.display()))?;
     }
-    let lock = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(crate::ledger_axes::LOCK_PATH)
-        .map_err(|e| format!("cannot open {}: {e}", crate::ledger_axes::LOCK_PATH))?;
-    let result = {
-        use std::os::fd::AsRawFd;
-        unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) };
-        let r = append_locked(tasks_path, entry);
-        unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_UN) };
-        r
-    };
+    let lock = crate::chokepoint::take(
+        &crate::chokepoint::LEDGER,
+        Path::new(crate::ledger_axes::LOCK_PATH),
+    )
+    .map_err(|e| e.to_string())?;
+    let result = append_locked(tasks_path, entry);
+    drop(lock);
     result
 }
 

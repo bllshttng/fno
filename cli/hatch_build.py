@@ -30,7 +30,7 @@ except ImportError:  # hatchling is the build backend, absent when unit-testing
 #: The standalone Rust executables a release wheel ships (US6 + x-538e): the
 #: `fno` front door (the mux binary that owns `fno` on PATH and forwards
 #: non-mux commands to `fno-py`), the agent client (`fno agents` execs it), the
-#: daemon, and the worker. Staging only the agent triad left a pip-only box
+#: daemon, and the worker. Staging only the agent triad left a pip-only machine
 #: without the advertised `fno` command. They are standalone executables, NOT
 #: CPython extensions, so the wheel tag stays `py3-none-<platform>` (see
 #: apply_binary_bundle).

@@ -433,9 +433,9 @@ fn leg_bind(payload: &serde_json::Value) -> (i32, String, String) {
     }
     let pr_number = pr_number_from_url(Some(url)).unwrap();
     let repo = repo_slug_from_url(Some(url));
-    let mut boxed: Option<PrRowBindResult> = None;
+    let mut bound: Option<PrRowBindResult> = None;
     let live = mutate_rows(&path, Duration::from_secs(30), None, None, |entries| {
-        boxed = Some(bind_pr_rows(
+        bound = Some(bind_pr_rows(
             entries,
             &matched,
             pr_number,
@@ -446,7 +446,7 @@ fn leg_bind(payload: &serde_json::Value) -> (i32, String, String) {
         Ok(true)
     });
     let bound = match live {
-        Ok(_) => boxed.unwrap_or_else(|| refused(Some("the graph write failed".to_string()))),
+        Ok(_) => bound.unwrap_or_else(|| refused(Some("the graph write failed".to_string()))),
         Err(e) => refused(Some(format!("the graph write failed: {e}"))),
     };
     if bound.outcome == "bound" {
