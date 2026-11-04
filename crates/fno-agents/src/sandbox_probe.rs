@@ -43,6 +43,10 @@ fn sandbox_argv(sandbox: &str, approval: &str, roots: Vec<String>) -> Vec<String
             "sandbox_workspace_write.writable_roots={}",
             json!(roots)
         ));
+        // The worker's bounded posture forces network on; a probe without it
+        // judges `gh` blocked in a sandbox the worker never runs in.
+        argv.push("-c".to_string());
+        argv.push(crate::codex_posture::BOUNDED_NETWORK_OVERRIDE.to_string());
         argv.push("-c".to_string());
         argv.push(format!("approval_policy=\"{approval}\""));
     }
@@ -460,6 +464,12 @@ mod tests {
         assert!(bounded
             .iter()
             .any(|t| t.contains("sandbox_workspace_write.writable_roots")));
+        assert!(
+            bounded
+                .iter()
+                .any(|t| t == crate::codex_posture::BOUNDED_NETWORK_OVERRIDE),
+            "the probe sandbox must grant the network the worker gets: {bounded:?}"
+        );
     }
 
     /// AC3-HP: whatever the wrapped child did, the probe's own process removes

@@ -18,7 +18,7 @@ A wrap is a layout choice, not a line break. Each row carries a `chrome::Join`.
 - `Space`: the row continues the one above, and the wrap stood at a space.
 - `Seam`: the row continues the one above, and the wrap split a word.
 
-A copy joins `Space` rows with one space and `Seam` rows with nothing. A long URL pastes whole. The wrap sites set the join. These are `wrap_line_joined`, `BLine::wrap` and the popup `wrap_rows`.
+A copy joins `Space` rows with one space and `Seam` rows with nothing. A long URL pastes whole. The wrap sites set the join. These are `wrap_line_joined`, `TLine::wrap` and the popup `wrap_rows`.
 
 ## Clicks still work
 

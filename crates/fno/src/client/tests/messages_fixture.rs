@@ -193,8 +193,8 @@ async fn messages_reply_board_contracts() {
         chats_lines.iter().map(|l| &l.text).collect::<Vec<_>>()
     );
     let strip = &chats_lines[0];
-    assert!(strip.roles[..7].iter().all(|r| *r == BRole::Tab));
-    assert!(!strip.roles[7..].contains(&BRole::Tab));
+    assert!(strip.roles[..7].iter().all(|r| *r == TextStyle::Tab));
+    assert!(!strip.roles[7..].contains(&TextStyle::Tab));
     b.col2 = ChatTab::System;
     let sys = b.chat_rows("s-c");
     assert!(
@@ -294,7 +294,7 @@ async fn messages_reply_board_contracts() {
     // key, then the copy rung last, in the warning color.
     let warn: Vec<&str> = lines4
         .iter()
-        .filter(|l| l.roles.contains(&BRole::Warn))
+        .filter(|l| l.roles.contains(&TextStyle::ERROR))
         .map(|l| l.text.trim())
         .collect();
     assert_eq!(

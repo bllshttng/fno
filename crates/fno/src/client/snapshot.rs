@@ -57,6 +57,13 @@ pub enum ViewKind {
     Cursor,
     /// The tab-strip context menu on the first tab.
     TabMenu,
+    /// The sideline with the pinned Needs input section open, as a tap on the
+    /// strip count opens it.
+    NeedsInput,
+    /// The sideline strip with the need-input pulse frozen on its lit beat.
+    NeedsInputPulseOn,
+    /// The same strip frozen on its dark beat.
+    NeedsInputPulseOff,
     /// The sideline menu popup.
     SidelineMenu,
     /// The new-agent composer sheet, with a seeded draft so the editor text
@@ -178,6 +185,9 @@ fn parse_view(v: &str) -> Option<ViewKind> {
         "row-menu" => Some(ViewKind::RowMenu),
         "hover" => Some(ViewKind::Hover),
         "cursor" => Some(ViewKind::Cursor),
+        "needs-input" => Some(ViewKind::NeedsInput),
+        "needs-input-pulse-on" => Some(ViewKind::NeedsInputPulseOn),
+        "needs-input-pulse-off" => Some(ViewKind::NeedsInputPulseOff),
         "tab-menu" => Some(ViewKind::TabMenu),
         "sideline-menu" => Some(ViewKind::SidelineMenu),
         "composer" => Some(ViewKind::Composer),
@@ -956,6 +966,23 @@ questions (scripts/ops/mux-demo-snapshot.sh seeds one)",
                 view.selector = i;
             }
         }
+        Some(kind @ (ViewKind::NeedsInputPulseOn | ViewKind::NeedsInputPulseOff)) => {
+            if view.need_input_count() == 0 {
+                return Err("nothing needs input, so the pulse would shoot empty".to_string());
+            }
+            let beat = if matches!(kind, ViewKind::NeedsInputPulseOn) {
+                super::sideline::PULSE_ON
+            } else {
+                super::sideline::PULSE_OFF
+            };
+            super::sideline::PULSE_PIN.store(beat, std::sync::atomic::Ordering::Relaxed);
+        }
+        Some(ViewKind::NeedsInput) => {
+            if view.need_input_count() == 0 {
+                return Err("nothing needs input, so the section would shoot empty".to_string());
+            }
+            view.needs_open = true;
+        }
         Some(ViewKind::SplitMenu) => {
             let i = view
                 .display_rows()
@@ -1365,6 +1392,9 @@ mod tests {
             ("row-menu", ViewKind::RowMenu),
             ("hover", ViewKind::Hover),
             ("cursor", ViewKind::Cursor),
+            ("needs-input", ViewKind::NeedsInput),
+            ("needs-input-pulse-on", ViewKind::NeedsInputPulseOn),
+            ("needs-input-pulse-off", ViewKind::NeedsInputPulseOff),
             ("tab-menu", ViewKind::TabMenu),
             ("sideline-menu", ViewKind::SidelineMenu),
             ("composer", ViewKind::Composer),

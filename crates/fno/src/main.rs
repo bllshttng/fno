@@ -437,6 +437,9 @@ enum Role {
     /// `fno do ci ...`: the per-commit CI-state namespace execs the sibling
     /// binary's ci dispatcher, the same byte-verbatim handover as DoPr.
     DoCi,
+    /// `fno do feedback ...`: the redacted upstream-issue draft execs the
+    /// sibling binary, the same byte-verbatim handover as DoCi.
+    DoFeedback,
     /// `fno do show|diff ...`: a file at a revision and the diff between two
     /// revisions exec the sibling binary's rev dispatcher, the DoCi handover.
     DoRev,
@@ -1536,6 +1539,11 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     {
         return Role::DoCi;
     }
+    if args.first().and_then(|a| a.to_str()) == Some("do")
+        && args.get(1).and_then(|a| a.to_str()) == Some("feedback")
+    {
+        return Role::DoFeedback;
+    }
     // `do show` and `do diff` claim as single words: the dispatcher owns the
     // spellings and the argv passes through byte-verbatim.
     if args.first().and_then(|a| a.to_str()) == Some("do")
@@ -1870,6 +1878,7 @@ fn main() {
         Role::Backlog => bootstrap::forward_backlog(&args),
         Role::DoPr => bootstrap::forward_agents(&args, "fno do pr"),
         Role::DoCi => bootstrap::forward_agents(&args, "fno do ci"),
+        Role::DoFeedback => bootstrap::forward_agents(&args, "fno do feedback"),
         Role::DoRev => bootstrap::forward_agents(&args, "fno do show"),
         Role::BacklogList(rest) => std::process::exit(fno::backlog_list::run(&rest)),
         Role::NotTty => {
@@ -2530,6 +2539,22 @@ mod tests {
         assert_ne!(
             decide_role(&os(&["do", "pr", "status", "41"]), false),
             Role::DoCi
+        );
+    }
+
+    #[test]
+    fn do_feedback_claims_its_spelling_and_no_root_word() {
+        assert_eq!(
+            decide_role(&os(&["do", "feedback", "--text", "x"]), false),
+            Role::DoFeedback
+        );
+        assert_eq!(
+            decide_role(&os(&["do", "feedback"]), false),
+            Role::DoFeedback
+        );
+        assert_ne!(
+            decide_role(&os(&["feedback", "--text", "x"]), false),
+            Role::DoFeedback
         );
     }
 

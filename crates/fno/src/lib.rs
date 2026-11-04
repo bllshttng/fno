@@ -285,6 +285,8 @@ mod test_keeper_cleanup;
 #[cfg(all(test, feature = "full"))]
 pub(crate) mod test_owner;
 #[cfg(feature = "full")]
+pub mod text_style;
+#[cfg(feature = "full")]
 pub mod theme;
 #[cfg(feature = "full")]
 pub mod theme_import;

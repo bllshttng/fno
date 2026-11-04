@@ -11,6 +11,12 @@
 /// The group's dispatch: `Some(exit code)` when `args` names one of these
 /// arms, `None` so the caller falls through to the next arm.
 pub fn transport_early_arms(args: &[String]) -> Option<i32> {
+    if args.first().map(String::as_str) == Some("do")
+        && args.get(1).map(String::as_str) == Some("feedback")
+    {
+        // The redacted upstream-issue draft; nothing is filed.
+        return Some(crate::feedback::run(&args[2..]));
+    }
     match args.first().map(String::as_str) {
         // Permanent GitHub-fact rows (merged PRs, repo metadata); reconcile
         // and base-lineage reach it through command_call; transport-only.

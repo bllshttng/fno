@@ -676,10 +676,10 @@ fn num(n: Option<u32>, width: usize) -> String {
 }
 
 /// One diff row's styled line, at this width's gutter.
-fn row_line(row: &DiffRow, marked: bool, cols: usize) -> BLine {
+fn row_line(row: &DiffRow, marked: bool, cols: usize) -> TLine {
     let mark = if marked { "\u{25cf}" } else { " " };
     if row.kind == RowKind::Hunk {
-        return BLine::meta(row.text.clone());
+        return TLine::meta(row.text.clone());
     }
     let gutter = if cols >= WIDE_GUTTER_AT {
         format!("{} {}", num(row.old, 6), num(row.new, 6))
@@ -687,20 +687,20 @@ fn row_line(row: &DiffRow, marked: bool, cols: usize) -> BLine {
         num(row.new.or(row.old), 6)
     };
     let (sign, role) = match row.kind {
-        RowKind::Added => ("+", BRole::Added),
-        RowKind::Removed => ("-", BRole::Removed),
-        _ => (" ", BRole::Body),
+        RowKind::Added => ("+", TextStyle::Added),
+        RowKind::Removed => ("-", TextStyle::Removed),
+        _ => (" ", TextStyle::Item),
     };
-    BLine::of(&[
-        BSeg {
+    TLine::of(&[
+        TSeg {
             text: mark.to_string(),
-            role: BRole::Label,
+            role: TextStyle::Badge,
         },
-        BSeg {
+        TSeg {
             text: format!("{gutter} "),
-            role: BRole::Meta,
+            role: TextStyle::Meta,
         },
-        BSeg {
+        TSeg {
             text: format!("{sign}{}", row.text),
             role,
         },
@@ -738,16 +738,16 @@ fn header(review: &Review) -> (String, String) {
 
 /// The lines of the diff window: starts high enough that the cursor shows even
 /// with comment lines between. Returns the lines and the cursor's line.
-fn window(review: &Review, h: usize, cols: usize) -> (Vec<BLine>, Option<usize>) {
+fn window(review: &Review, h: usize, cols: usize) -> (Vec<TLine>, Option<usize>) {
     let Phase::Loaded { diff, .. } = &review.phase else {
         return (Vec::new(), None);
     };
-    let line_at = |at: usize, flat: &Flat| -> Vec<BLine> {
+    let line_at = |at: usize, flat: &Flat| -> Vec<TLine> {
         let mut out = Vec::new();
         match flat {
             Flat::File(f) => {
                 let file = &diff.files[*f];
-                out.push(BLine::head(format!(
+                out.push(TLine::head(format!(
                     "{} ({})",
                     file.new_path,
                     status_word(file.status)
@@ -757,9 +757,9 @@ fn window(review: &Review, h: usize, cols: usize) -> (Vec<BLine>, Option<usize>)
                 let draft = review.drafts.get(&at);
                 out.push(row_line(&diff.files[*f].rows[*r], draft.is_some(), cols));
                 if let Some(text) = draft {
-                    out.push(BLine::of(&[BSeg {
+                    out.push(TLine::of(&[TSeg {
                         text: format!("  \u{25cf} {}", text.lines().next().unwrap_or("")),
-                        role: BRole::Label,
+                        role: TextStyle::Badge,
                     }]));
                 }
             }
@@ -840,22 +840,22 @@ pub(crate) fn paint(
     );
     let body_h = h - HEADER_ROWS - 1;
     let (body, follow) = match &review.phase {
-        Phase::Loading => (vec![BLine::meta("reading the diff")], None),
-        Phase::Failed(why) => (vec![BLine::plain(format!("diff not read: {why}"))], None),
-        Phase::NoPr(why) => (vec![BLine::plain(why.clone())], None),
+        Phase::Loading => (vec![TLine::meta("reading the diff")], None),
+        Phase::Failed(why) => (vec![TLine::plain(format!("diff not read: {why}"))], None),
+        Phase::NoPr(why) => (vec![TLine::plain(why.clone())], None),
         Phase::Loaded { .. } => window(review, body_h, w),
     };
-    let to = [BLine::meta(to).trunc(w)];
-    let panel = |cells: &mut [Cell], at: usize, lines: &[BLine], height, follow| {
+    let to = [TLine::meta(to).trunc(w)];
+    let panel = |cells: &mut [Cell], at: usize, lines: &[TLine], height, follow| {
         backlog_style::paint_panel_at(cells, rows, cols, left, at, w, height, lines, follow, theme)
     };
     panel(cells, top + 1, &to, 1, None);
     panel(cells, top + HEADER_ROWS, &body, body_h, follow);
     let foot = match &review.input {
-        Some((_, field)) => BLine::plain(format!("comment: {}", field.display())),
-        None if notice.is_some() => BLine::plain(notice.unwrap_or_default()),
-        None if review.sending => BLine::meta("sending the review"),
-        None => BLine::meta(format!("{} staged - {HINT}", review.drafts.len())),
+        Some((_, field)) => TLine::plain(format!("comment: {}", field.display())),
+        None if notice.is_some() => TLine::plain(notice.unwrap_or_default()),
+        None if review.sending => TLine::meta("sending the review"),
+        None => TLine::meta(format!("{} staged - {HINT}", review.drafts.len())),
     };
     panel(cells, top + h - 1, &[foot.trunc(w)], 1, None);
 }
