@@ -47,6 +47,7 @@ pub(crate) fn spawn_bounded(
     let mut cmd = crate::pr_status::quota::helper_command(bin);
     cmd.args(args);
     cmd.current_dir(cwd);
+    crate::github_app::inject(&mut cmd, bin);
     spawn_bounded_command(cmd)
 }
 

@@ -261,6 +261,7 @@ pub mod gh_spend;
 pub mod git_paths;
 #[cfg(test)]
 mod git_test_helpers;
+pub mod github_app;
 pub mod glob;
 pub mod golden_drafter;
 pub mod graph_get;
