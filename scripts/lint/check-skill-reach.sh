@@ -1,28 +1,25 @@
 #!/usr/bin/env bash
-# Marketplace-readiness lint for driver skills.
+# Skill-reach lint. The fno skills ship together as one plugin, so /target
+# may load any of them by name mid-run. This lint guards that reach.
 #
-# Verifies that each driver skill (/target, /megawalk, /megatron) is
-# self-contained at the skill-folder level so the folder can be lifted
-# into any markdown-aware runtime (Codex, Gemini, openclaw, etc.) without
-# the surrounding fno-plugin context.
+# Three checks:
+#   1. Each of target, review, fix and think declares its `fno` binary
+#      dependency under `metadata.requires.binaries` in frontmatter. Mirrors
+#      how an npm skill declares `node` or a CLI tool declares `gh`.
+#   2. skills/target/references/toolbag.md names every other skill dir as
+#      `fno:<name>`, so a new skill cannot ship without target knowing it.
+#   3. No file under skills/target says target never hands off to a sibling
+#      skill. That sentence was the old portability rule.
 #
-# Three checks per driver skill:
-#   1. No Skill() runtime calls. Driver skills must use Read for
-#      progressive disclosure and Task/Agent for dispatched subagents,
-#      never the Skill tool at runtime.
-#   2. No ../../_shared/ or ../../<sibling-skill>/ path escapes. Cross-skill
-#      content reuse must happen at BUILD TIME via skill-bundles.yaml, so
-#      each skill folder is self-contained at checkout.
-#   3. The skill's SKILL.md declares its `fno` binary dependency under
-#      `metadata.requires.binaries` in frontmatter. Mirrors how an npm skill
-#      declares `node` or a CLI tool declares `gh`.
+# The ${REPO_ROOT}/scripts ban is a separate lint
+# (no-repo-root-scripts-in-skills.sh) and still holds.
 #
 # Usage:
-#   bash scripts/lint/no-cross-skill-runtime-calls.sh
-#   bash scripts/lint/no-cross-skill-runtime-calls.sh --root /tmp/fixture
+#   bash scripts/lint/check-skill-reach.sh
+#   bash scripts/lint/check-skill-reach.sh --root /tmp/fixture
 #
 # The --root flag lets tests point the lint at a fixture tree instead
-# of the real repo. Default: $(git rev-parse --show-toplevel).
+# of the real repo. Default: the git toplevel of the working directory.
 set -euo pipefail
 
 # ---------------------------------------------------------------------------
@@ -86,59 +83,19 @@ else
   "${PY[@]}" -c 'import yaml' 2>/dev/null || PY=(python3)
 fi
 
-# ---------------------------------------------------------------------------
-# Driver skill list. Fixtures pass --root pointing at a tree where these
-# subdirs exist. Missing dirs are tolerated (lint just skips them)
-# so tests can fixture only the skills they care about.
-#
-#   DRIVER_SKILLS   - the pipeline drivers (target, megawalk).
-#   CLUSTER_ROUTERS - the router+mode skills (epic). A router
-#                     folds sibling skills in as modes via bundled references,
-#                     so it must obey the same self-containment invariants:
-#                     no Skill() runtime calls, no ../../ path escapes, and an
-#                     `fno` binary declaration in frontmatter.
-# ---------------------------------------------------------------------------
-DRIVER_SKILLS=(target megawalk)
-CLUSTER_ROUTERS=(review fix think pr do)
-SELF_CONTAINED_SKILLS=("${DRIVER_SKILLS[@]}" "${CLUSTER_ROUTERS[@]}")
+# Skills that must declare the fno binary. Missing dirs are tolerated (lint
+# just skips them) so tests can fixture only the skills they care about.
+FNO_DECLARING_SKILLS=(target review fix think)
 EXIT=0
 
-for skill in "${SELF_CONTAINED_SKILLS[@]}"; do
+for skill in "${FNO_DECLARING_SKILLS[@]}"; do
   SKILL_DIR="$ROOT/skills/$skill"
   if [[ ! -d "$SKILL_DIR" ]]; then
     continue
   fi
 
   # -------------------------------------------------------------------
-  # Check 1: No Skill() runtime calls in any .md file in the skill folder.
-  # -------------------------------------------------------------------
-  HITS=$(grep -rnE 'Skill\(' "$SKILL_DIR" --include='*.md' 2>/dev/null || true)
-  if [[ -n "$HITS" ]]; then
-    echo "ERROR: Skill() runtime call in skills/$skill (forbidden in driver skills)." >&2
-    echo "  Use Read for in-context progressive disclosure or Task/Agent for dispatched subagents." >&2
-    echo "$HITS" >&2
-    echo "" >&2
-    EXIT=1
-  fi
-
-  # -------------------------------------------------------------------
-  # Check 2: No ../../_shared/ or ../../<sibling-skill>/ path escapes.
-  # Match both Markdown link-target form (X.md) and bare references.
-  # -------------------------------------------------------------------
-  HITS=$(grep -rnE '\.\./\.\./_shared/|\.\./\.\./[a-z][a-z0-9_-]*/' "$SKILL_DIR" --include='*.md' 2>/dev/null || true)
-  if [[ -n "$HITS" ]]; then
-    echo "ERROR: cross-skill path escape in skills/$skill (forbidden)." >&2
-    echo "  Use bundled references/ or agents/ instead (see skill-bundles.yaml)." >&2
-    echo "$HITS" >&2
-    echo "" >&2
-    EXIT=1
-  fi
-
-  # -------------------------------------------------------------------
-  # Check 3: metadata.requires.binaries.fno declared in SKILL.md frontmatter.
-  # Tolerates missing SKILL.md only when the directory is also missing
-  # (handled by the outer `continue` above); past that, SKILL.md is
-  # required and must declare the dep.
+  # Check 1: metadata.requires.binaries.fno declared in SKILL.md frontmatter.
   # -------------------------------------------------------------------
   SKILL_FILE="$SKILL_DIR/SKILL.md"
   if [[ ! -f "$SKILL_FILE" ]]; then
@@ -167,13 +124,52 @@ for skill in "${SELF_CONTAINED_SKILLS[@]}"; do
     EXIT=1
   elif [[ $rc -ne 0 ]]; then
     echo "ERROR: skills/$skill/SKILL.md does not declare 'fno' under metadata.requires.binaries in frontmatter." >&2
-    echo "  Add a requires: block to the frontmatter (see Phase 6 of the encapsulation refactor)." >&2
+    echo "  Add a requires: block to the frontmatter." >&2
     echo "" >&2
     EXIT=1
   fi
 done
 
-if [[ $EXIT -eq 0 ]]; then
-  echo "marketplace-readiness lint: all driver skills + cluster routers self-contained"
+TARGET_DIR="$ROOT/skills/target"
+if [[ -d "$TARGET_DIR" ]]; then
+  # -------------------------------------------------------------------
+  # Check 2: the toolbag names every other skill.
+  # -------------------------------------------------------------------
+  TOOLBAG="$TARGET_DIR/references/toolbag.md"
+  if [[ ! -f "$TOOLBAG" ]]; then
+    echo "ERROR: skills/target/references/toolbag.md missing." >&2
+    EXIT=1
+  else
+    TOTAL=0
+    NAMED=0
+    for skill_md in "$ROOT"/skills/*/SKILL.md; do
+      [[ -f "$skill_md" ]] || continue
+      name="$(basename "$(dirname "$skill_md")")"
+      [[ "$name" == "target" ]] && continue
+      TOTAL=$((TOTAL + 1))
+      # The boundary keeps fno:ship from matching a row for fno:ship-docs.
+      if grep -qE "fno:${name}([^a-z0-9-]|\$)" "$TOOLBAG"; then
+        NAMED=$((NAMED + 1))
+      else
+        echo "ERROR: skills/target/references/toolbag.md does not name fno:$name." >&2
+        EXIT=1
+      fi
+    done
+    if [[ $NAMED -eq $TOTAL ]]; then
+      echo "toolbag names $NAMED of $TOTAL skills"
+    fi
+  fi
+
+  # -------------------------------------------------------------------
+  # Check 3: target never claims it cannot hand off to a sibling skill.
+  # -------------------------------------------------------------------
+  HITS=$(grep -rn 'never hands off' "$TARGET_DIR" --include='*.md' 2>/dev/null || true)
+  if [[ -n "$HITS" ]]; then
+    echo "ERROR: skills/target says target never hands off to a sibling skill." >&2
+    echo "  The fno skills ship together. Name the skill in toolbag.md and reach for it." >&2
+    echo "$HITS" >&2
+    EXIT=1
+  fi
 fi
+
 exit $EXIT
