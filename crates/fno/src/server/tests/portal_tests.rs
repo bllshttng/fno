@@ -597,7 +597,7 @@ pub(super) fn thread_core() -> (Core, u64, u64, mpsc::Receiver<ServerMsg>) {
 }
 
 #[test]
-fn far_row_reach_opens_a_portal_seat_running_the_link() {
+fn remote_row_reach_opens_a_portal_seat_running_the_link() {
     // A row from another machine takes a local row's reach: Enter's portal,
     // a seat named for the row, one viewer per row. Only the argv differs.
     let (mut core, client_id, _p1, mut rx) = thread_core();
@@ -651,7 +651,7 @@ fn far_row_reach_opens_a_portal_seat_running_the_link() {
     assert!(notices
         .iter()
         .any(|t| t.contains("portal 0: already showing")));
-    assert!(notices.iter().any(|t| t.contains("no far row at")));
+    assert!(notices.iter().any(|t| t.contains("no remote row at")));
     core.reap_pane(seat);
 }
 
@@ -868,11 +868,11 @@ fn thread_pane_ctl_rows() {
     // attached it regardless of hosting session).
     let (mut core, _client_id, _p1, _rx) = thread_core();
     let (tx, rx) = tokio::sync::oneshot::channel::<ServerMsg>();
-    let mut hosted = bg_row("far-row", "/tmp/seen", None);
+    let mut hosted = bg_row("remote-row", "/tmp/seen", None);
     hosted.mux = Some(("other-session".to_string(), 42));
     let agents = vec![hosted];
 
-    core.portal_ctl("far-row", 0, PanePlacement::default(), Some(agents), tx);
+    core.portal_ctl("remote-row", 0, PanePlacement::default(), Some(agents), tx);
 
     match rx.blocking_recv().expect("a reply") {
         ServerMsg::Notice { text } => assert!(

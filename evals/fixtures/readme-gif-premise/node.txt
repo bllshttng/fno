@@ -1,0 +1,3 @@
+Growth play 1: prepare for a GitHub Trending push
+
+Item 1: Rewrite the top of README.md so the first screen has one line on what fno does, the install line, and a 30-second GIF of one real target run to a green PR.
