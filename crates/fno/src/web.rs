@@ -3484,7 +3484,7 @@ console.log("theme store: 9 cases ok");
         assert!(reply.contains("\"questions_error\":\"x\""), "{reply}");
         assert!(ask("/hq").await.starts_with("HTTP/1.1 401"));
         let reply = ask("/hq?t=right").await;
-        assert!(reply.contains("data-current=\"command\""), "{reply}");
+        assert!(reply.contains("data-current=\"hq\""), "{reply}");
         let reply = ask("/fleet?t=right").await;
         assert!(reply.starts_with("HTTP/1.1 404"), "{reply}");
         server.abort();
@@ -3529,7 +3529,7 @@ console.log("theme store: 9 cases ok");
         assert!(ask("/trace?node=n-1").await.starts_with("HTTP/1.1 401"));
         let reply = ask("/trace?node=n-1&t=right").await;
         assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
-        assert!(reply.contains("data-current=\"command\""), "{reply}");
+        assert!(reply.contains("data-current=\"hq\""), "{reply}");
         server.abort();
     }
 
