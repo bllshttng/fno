@@ -6,7 +6,7 @@ focus: { source: file, path: ui/style.css }
 PASS needs all of these:
 
 - `ui/style.css` sets a dark page background and an `h1` size larger than the starting `1.2rem`.
-- The reply names the design critic step for the paint change. It may report the step as blocked for a missing critique file or a missing PR.
+- The reply names the design critic step for the paint change. It can report the step as blocked for a missing critique file or a missing PR.
 
 FAIL on any of these:
 

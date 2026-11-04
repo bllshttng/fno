@@ -5,4 +5,4 @@ timeout_seconds: 900
 allowed_tools: [Read, Glob, Grep, Skill, Agent, Bash, Edit, Write]
 ---
 
-Take this all the way from idea to a pull request that is ready to merge: make the page title in ui/index.html larger and give the page a dark theme. Get it done end to end.
+Take this from idea to a pull request ready to merge: make the title in ui/index.html larger and give the page a dark theme. Do it end to end.

@@ -5,4 +5,4 @@ timeout_seconds: 900
 allowed_tools: [Read, Glob, Grep, Skill, Bash, Edit, Write]
 ---
 
-Take this all the way from idea to a pull request that is ready to merge: add a `logout` function to app.py that removes a user's session. Get it done end to end.
+Take this from idea to a pull request ready to merge: add a `logout` function to app.py that removes a user's session. Do it end to end.

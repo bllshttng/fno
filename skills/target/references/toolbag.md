@@ -2,7 +2,7 @@
 
 The fno skills ship together as one plugin. A target run reaches for the skill the moment calls for. A reach is a call by name. It is never a copy of the skill's text into target.
 
-Load this file when a moment in the table below arrives. The CLI-versus-skill split is in `skills/using-fno/SKILL.md`.
+When a moment in the table below arrives, load this file. The CLI-versus-skill split is in `skills/using-fno/SKILL.md`.
 
 ## How to reach a skill mid-run
 
@@ -45,4 +45,4 @@ A pack install drops five skills: agent, mail, dnd, fno-me and lead. Their rows 
 | `fno:mail` | The lead or a peer must hear something. Full install only. | A message id. |
 | `fno:growth-launch`, `fno:groom`, `fno:lead`, `fno:dnd`, `fno:fno-me`, `fno:cache-keepalive`, `fno:harness-verbs` | Never from a target run. Each owns its own session or loop. `fno:harness-verbs` only redirects to `fno:harness-commands`. | Nothing. |
 
-`scripts/lint/check-skill-reach.sh` fails when a skill folder has no row here.
+When a skill folder has no row here, `scripts/lint/check-skill-reach.sh` fails.

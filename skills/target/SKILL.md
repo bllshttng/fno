@@ -423,7 +423,7 @@ Loaded by state — the "read X when Y" load conditions are inline above; this i
 - [references/init-state.md](references/init-state.md) - Steps 1-3f initialization sequence
 - [references/boundary-reconcile.md](references/boundary-reconcile.md) - STALE boundary reconcile procedure
 - [references/investigate-phase.md](references/investigate-phase.md) - Settle the plan's unknowns and pick its route before code
-- [references/toolbag.md](references/toolbag.md) - Every other fno skill: when to reach for it, what it returns, how to load it per harness
+- [references/toolbag.md](references/toolbag.md) - Each other fno skill: its moment, its return, and how to load it
 - [references/reconcile-mode.md](references/reconcile-mode.md) - `--reconcile` de-stub pass contract
 - [references/phase-transition-guards.md](references/phase-transition-guards.md) - Acceptance criteria gate before /execute waves
 - [references/phase-invocations.md](references/phase-invocations.md) - Phase routing + invocation logic + Linear sync + validate artifact
