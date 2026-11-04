@@ -11,6 +11,7 @@
 pub mod adapter;
 pub mod bg_process_guard;
 pub mod bin_install_guard;
+pub mod buddy_statusline;
 pub mod diff_budget;
 pub mod edit_integrity;
 pub mod join_partition_guard;
@@ -43,6 +44,7 @@ pub fn dispatch(args: &[String]) -> i32 {
     match args.first().map(String::as_str) {
         Some("bg-process-guard") => bg_process_guard::run(&args[1..]),
         Some("bin-install-guard") => bin_install_guard::run(&args[1..]),
+        Some("buddy-statusline") => buddy_statusline::run(&args[1..]),
         Some("diff-budget") => diff_budget::run(&args[1..]),
         Some("edit-integrity") => edit_integrity::run(&args[1..]),
         Some("effect-guard") => crate::effect_gate::run_hook(&args[1..]),

@@ -23,10 +23,10 @@ const SEEN_MS = 5_000
 const TYPED_MS = 600_000
 // The status line wrapper drops a frame older than 45 s, so an idle frame is rewritten well before that.
 const FRAME_REFRESH_MS = 25_000
-// Each new frame starts Python in the status line, so the buddy moves only while something
+// Each new frame starts the renderer in the status line, so the buddy moves only while something
 // happens: for this long after you type, a turn ends, it speaks, or you pet it. Then it holds still.
 const ANIMATE_MS = 60_000
-// While it moves, the fidget steps this often; one step per status line run would cost a Python start a second.
+// While it moves, the fidget steps this often; one step per status line run would cost a renderer start a second.
 const STEP_MS = 2_000
 let turnAt = -Infinity
 const PANE_ID = 'buddy'
@@ -34,8 +34,7 @@ const PANE_ID = 'buddy'
 const CARD_ID = 'buddy-card'
 let cardSnap: Shown | undefined
 const PANE_COLUMNS = 24
-const WRAPPER = 'statusline.py'
-// The status line runs this first; it skips Python on ticks where nothing changed.
+// The status line runs this first; it starts no process on ticks where nothing changed.
 const FAST = 'statusline.sh'
 // bbb: bring back buddy.
 const COMMANDS = ['buddy', 'bbb']
@@ -435,7 +434,7 @@ async function resolveStateDir($: EngineInterface): Promise<string> {
 
 // Keeps a copy of the wrapper at a path that survives plugin updates, so statusLine never points into the plugin cache.
 async function installWrapper($: EngineInterface): Promise<void> {
-  for (const file of [WRAPPER, FAST]) {
+  for (const file of [FAST]) {
     const ours = await $.fs.read(`${$.plugin.root}/hooks/${file}`)
     const target = `${buddyDir()}/${file}`
     let theirs = ''
@@ -655,8 +654,8 @@ function sprite(c: Companion, now: number): string[] {
   return lines
 }
 
-// The wrapper stamps a heartbeat each time Python runs, so a status line set in any settings file counts.
-// The shell fast path skips Python, but a new frame or every 25th tick runs it, about every 25 s at most.
+// The wrapper stamps a heartbeat each time the renderer runs, so a status line set in any settings file counts.
+// The shell fast path starts no process, but a new frame or every 25th tick runs it, about every 25 s at most.
 const WRAPPER_SEEN_MS = 45_000
 async function wrapperSeen($: EngineInterface, now: number): Promise<boolean> {
   if (!stateDir) return false
