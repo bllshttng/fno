@@ -1749,9 +1749,17 @@ mod tests {
             .unwrap_or_else(|e| e.into_inner());
 
         // Saved-env guard: other tests read these pins, so restore, not remove.
+        // Claiming hermetic manufactures the fence's claim, so every root the
+        // fence judges must be pinned under std::env::temp_dir() here: the CI
+        // cargo job exports FNO_AGENTS_HOME=$RUNNER_TEMP/fno-agents for the
+        // whole job, and an unpinned claim made the fence refuse that ambient
+        // value (the cli-ci red this test shipped).
         struct Pins {
             hermetic: Option<std::ffi::OsString>,
             state: Option<std::ffi::OsString>,
+            agents_home: Option<std::ffi::OsString>,
+            spaces: Option<std::ffi::OsString>,
+            fno_home: Option<std::ffi::OsString>,
         }
         impl Drop for Pins {
             fn drop(&mut self) {
@@ -1763,15 +1771,33 @@ mod tests {
                     Some(v) => std::env::set_var("FNO_STATE_DIR", v),
                     None => std::env::remove_var("FNO_STATE_DIR"),
                 }
+                match &self.agents_home {
+                    Some(v) => std::env::set_var("FNO_AGENTS_HOME", v),
+                    None => std::env::remove_var("FNO_AGENTS_HOME"),
+                }
+                match &self.spaces {
+                    Some(v) => std::env::set_var("FNO_SPACES_DIR", v),
+                    None => std::env::remove_var("FNO_SPACES_DIR"),
+                }
+                match &self.fno_home {
+                    Some(v) => std::env::set_var("FNO_HOME", v),
+                    None => std::env::remove_var("FNO_HOME"),
+                }
             }
         }
         let _pins = Pins {
             hermetic: std::env::var_os("FNO_TEST_HERMETIC"),
             state: std::env::var_os("FNO_STATE_DIR"),
+            agents_home: std::env::var_os("FNO_AGENTS_HOME"),
+            spaces: std::env::var_os("FNO_SPACES_DIR"),
+            fno_home: std::env::var_os("FNO_HOME"),
         };
         std::env::set_var("FNO_TEST_HERMETIC", "1");
         let state = tempfile::tempdir().unwrap();
         std::env::set_var("FNO_STATE_DIR", state.path());
+        std::env::set_var("FNO_AGENTS_HOME", state.path().join("agents-home"));
+        std::env::set_var("FNO_SPACES_DIR", state.path().join("spaces"));
+        std::env::set_var("FNO_HOME", state.path().join("fno-home"));
 
         // The checkout: fno-web origin, so the slug is fnodotdev/fno-web.
         let repo = tempfile::tempdir().unwrap();
