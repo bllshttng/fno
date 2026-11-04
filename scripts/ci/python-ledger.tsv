@@ -1,5 +1,5 @@
 # Every tracked .py file outside cli/, with its fate.
-# Verdicts: keep | delete-by <node> | port-by <node> | delete (no live caller; goes with the named extras).
+# Verdicts: keep | tombstone (a no-op stub for a retired hook path, deleted next release) | delete-by <node> | port-by <node> | delete (no live caller; goes with the named extras).
 # Columns: path, verdict, reason.
 crates/fno-agents/tests/accounts_binding_golden_driver.py	delete-by x-8b53	oracle driver that reads cli/; goes when the Python CLI does
 crates/fno-agents/tests/accounts_env_golden_driver.py	delete-by x-8b53	oracle driver that reads cli/; goes when the Python CLI does
@@ -89,9 +89,7 @@ evals/harness-fit/run/setaside_run0.py	keep	harbor task data the eval harness ru
 evals/harness-fit/run/status.py	keep	harbor task data the eval harness runs, not fno code
 hooks/git-protection.py	delete-by x-c166	git protection moves to the native guard
 hooks/git_protection_impl.py	delete-by x-c166	git protection moves to the native guard
-hooks/helpers/join_partition_guard.py	delete	the x-dff1 parent ports it to fno-agents and deletes it
 hooks/lib/guard_mark.py	delete-by x-c166	git protection moves to the native guard
-plugins/buddy/hooks/statusline.py	delete	the x-dff1 parent ports it to fno-agents and deletes it
 plugins/hermes/promise-tag-reader/__init__.py	keep	the Hermes host loads Python plugins only
 plugins/hermes/promise-tag-reader/reader.py	keep	the Hermes host loads Python plugins only
 scripts/analysis/graph-write-gate-audit.py	delete-by x-8b53	dev or CI tooling (a CI script, schema row or tombstone names it); off the user path
@@ -118,9 +116,6 @@ scripts/evals/keyless_smoke.py	delete-by x-8b53	CI or build tooling that reads c
 scripts/lib/bundle-frontmatter.py	delete-by x-8b53	CI or build tooling that reads cli/ or runs under the dev venv; never on the user path
 scripts/lib/check-skill-frontmatter.py	delete-by x-8b53	CI or build tooling that reads cli/ or runs under the dev venv; never on the user path
 scripts/lib/parse-bundle-manifest.py	delete-by x-8b53	CI or build tooling that reads cli/ or runs under the dev venv; never on the user path
-scripts/lib/skill_discovery.py	delete	the x-dff1 parent ports it to fno-agents and deletes it
-scripts/lib/worktree-status.py	delete	the x-dff1 parent ports it to fno-agents and deletes it
-scripts/lib/worktree_occupancy.py	delete	the x-dff1 parent ports it to fno-agents and deletes it
 scripts/mail-bus-lag.py	delete	no caller; the docs/architecture/multiplayer.md line goes with it
 scripts/metrics/completion-summary.py	delete	no caller; its test and test_smoke_registry.rs row and reachable-paths-baseline row go with it
 scripts/metrics/prompt_prefix_cache_probe.py	delete	no caller; its reachable-paths-baseline rows go with it
@@ -130,12 +125,8 @@ scripts/regen-generated-copies.py	delete-by x-8b53	CI or build tooling that read
 scripts/release/draft-release-notes.py	keep	release.yml runs it in CI only; never on the user path
 scripts/release/update-homebrew-formula.py	keep	release.yml runs it in CI only; never on the user path
 scripts/roadmap-tasks.py	delete	the x-dff1 parent ports it to fno-agents and deletes it
-scripts/save-session.py	delete	the x-dff1 parent ports it to fno-agents and deletes it
 scripts/sync-codex-agents.py	delete-by x-8b53	CI or build tooling that reads cli/ or runs under the dev venv; never on the user path
 scripts/triage.py	delete	the x-dff1 parent ports it to fno-agents and deletes it
-skills/blueprint/scripts/mutate_doc.py	delete	the x-dff1 parent ports it to fno-agents and deletes it
-skills/execute/orchestrator.py	delete	the x-dff1 parent ports it to fno-agents and deletes it
-skills/review/scripts/sibling-roots.py	delete	the x-dff1 parent ports it to fno-agents and deletes it
 tests/agents/test_frontend_executor.py	delete-by x-8b53	pytest-only coverage of retired Python surfaces; goes with the Python test tree
 tests/agents/test_frontend_executor_smoke.py	delete-by x-8b53	pytest-only coverage of retired Python surfaces; goes with the Python test tree
 tests/hooks/test_codex_lead_continuation_classifier.py	delete	covers codex-lead-continuation-smoke.py only
@@ -145,8 +136,6 @@ tests/hooks/test_merge_guard_review_hold.py	delete-by x-c166	covers the git-prot
 tests/hooks/test_merge_guard_stacked_base.py	delete-by x-c166	covers the git-protection hook; goes with it (drop its test_smoke_registry.rs row)
 tests/hooks/test_merge_guard_worktree.py	delete-by x-c166	covers the git-protection hook; goes with it (drop its test_smoke_registry.rs row)
 tests/metrics/test_completion_summary_path.py	delete	covers completion-summary.py only
-tests/operator/test_dispatch_gate.py	delete-by x-8b53	pytest-only coverage of retired Python surfaces; goes with the Python test tree
-tests/operator/test_return_contract.py	delete-by x-8b53	pytest-only coverage of retired Python surfaces; goes with the Python test tree
 tests/spec/test_impeccable_stages_validator.py	delete-by x-8b53	pytest-only coverage of retired Python surfaces; goes with the Python test tree
 tests/spec/test_product_md_check.py	delete-by x-8b53	pytest-only coverage of retired Python surfaces; goes with the Python test tree
-tests/test_save_session_fences.py	delete	covers save-session.py only; goes with it
+scripts/save-session.py	tombstone	the old PreCompact and SessionEnd rows name it; hooks/lib/run-python.sh, also a stub, exits 0 before it

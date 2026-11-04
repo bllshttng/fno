@@ -49,12 +49,14 @@ SCAN='
       || /(^[[:space:]]*|exec[[:space:]]+|\$\()"?[$A-Za-z0-9_{}\/.-]*\.py"?([[:space:]]|$)/ {
         print f "\t" NR
     }'
+TOMBSTONES="$(awk -F'\t' '$2 == "tombstone" { print $1 }' scripts/ci/python-ledger.tsv 2>/dev/null)"
 scan_files() {
     local f
     while IFS= read -r f; do
         [[ -n "$f" && -f "$f" ]] || continue
         if [[ "$f" == *.py ]]; then
-            printf '%s\t0\n' "$f"
+            # A tombstone stub keeps a retired hook path resolvable and is never run.
+            printf '%s\n' "$TOMBSTONES" | grep -qxF -- "$f" || printf '%s\t0\n' "$f"
         else
             awk -v f="$f" "$SCAN" "$f" 2>/dev/null
         fi
