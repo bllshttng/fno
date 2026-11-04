@@ -3885,6 +3885,7 @@ class ConfigBlock(BaseModel):
     state_dir: str = "~/.fno/"
     plans_dir: str = ".fno/plans/"
     plans_filename: str = "%Y%m%d-{slug}-{node}.md"
+    repo_aliases: dict[str, str] = Field(default_factory=dict)
     branch: BranchBlock = Field(default_factory=BranchBlock)
     build: BuildBlock = Field(default_factory=BuildBlock)
     paths: PathsBlock = Field(default_factory=PathsBlock)

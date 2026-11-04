@@ -46,6 +46,7 @@ FIELD_META: dict[str, Meta] = {
     "plans_dir": Meta("advanced", "Where folder plans are written.", default_source="default"),
     "plans_filename": Meta("advanced", "Plan/design-doc filename template: strftime codes plus {slug} and {node} placeholders; must render to a bare *.md name.", default_source="default"),
     "branch.prefix": Meta("advanced", "Prefix for dispatched worktree branches: <prefix>/<slug>-<node>.", default_source="default"),
+    "repo_aliases": Meta("advanced", "Rename map `old = \"new\"` between owner/repo slugs. A PR url recorded under a repo's former name binds in the merge gate and heals in the sweep leg; GitHub's own redirect (GET /repos/old answers the new full_name) seeds the same map through the gh-facts cache, so the config row is the offline override, never a requirement. Specimen: `bllshttng/fno = \"fnodotdev/fno\"`.", default_source="default"),
     "paths.ledger_json": Meta("never", "Override path to ledger.json."),
     "paths.evals_history": Meta("never", "Override path to the evals-history.jsonl bank-run ledger."),
     "paths.briefs_dir": Meta("never", "Override path to the sidecar briefs dir."),
