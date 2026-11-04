@@ -323,6 +323,56 @@ fn mux_clients(title: &str, message: &str) -> Option<u64> {
     // @fno-copy:end mux_channel
 }
 
+/// The macOS app that owns the user's terminal, from `TERM_PROGRAM` or the
+/// launching bundle id. A multiplexer (Zellij) sets neither of its own, so the
+/// outer terminal's value shows through. `None` means no known terminal.
+fn terminal_app(term_program: &str, bundle_id: &str) -> Option<&'static str> {
+    match term_program {
+        "WarpTerminal" => return Some("Warp"),
+        "iTerm.app" => return Some("iTerm"),
+        "Apple_Terminal" => return Some("Terminal"),
+        "ghostty" => return Some("Ghostty"),
+        "WezTerm" => return Some("WezTerm"),
+        "Hyper" => return Some("Hyper"),
+        _ => {}
+    }
+    match bundle_id {
+        "dev.warp.Warp-Stable" => Some("Warp"),
+        "com.googlecode.iterm2" => Some("iTerm"),
+        "com.apple.Terminal" => Some("Terminal"),
+        "com.mitchellh.ghostty" => Some("Ghostty"),
+        "com.github.wez.wezterm" => Some("WezTerm"),
+        "co.zeit.hyper" => Some("Hyper"),
+        _ => None,
+    }
+}
+
+/// The AppleScript for one toast. Backslash first, then double quote, so a
+/// title or body cannot end the string literal and inject script. A known
+/// terminal owns the alert, so macOS shows that app's icon, not Script Editor.
+fn toast_script(app: Option<&str>, title: &str, message: &str) -> String {
+    let esc = |s: &str| s.replace('\\', "\\\\").replace('"', "\\\"");
+    let show = format!(
+        "display notification \"{}\" with title \"{}\"",
+        esc(message),
+        esc(title)
+    );
+    match app {
+        Some(app) => format!("tell application \"{app}\" to {show}"),
+        None => show,
+    }
+}
+
+/// The desk toast the daemon fires on a done badge: an attached mux client
+/// first (it writes the OSC alert to its own terminal), then the local tool.
+/// No journal row. A failure on either leg is dropped.
+pub fn desk_toast(title: &str, message: &str) {
+    if mux_clients(title, message).is_some_and(|clients| clients > 0) {
+        return;
+    }
+    dispatch_local(title, message);
+}
+
 /// Fire the OS toast. True when a local tool was available to attempt it. The
 /// tool's own failure is swallowed: a notification is never load-bearing.
 /// Under the hermetic stamp the subprocess is skipped but a present tool still
@@ -337,9 +387,11 @@ fn dispatch_local(title: &str, message: &str) -> bool {
         if suppressed() {
             return true;
         }
-        let esc_message = message.replace('\\', "\\\\").replace('"', "\\\"");
-        let esc_title = title.replace('\\', "\\\\").replace('"', "\\\"");
-        let script = format!("display notification \"{esc_message}\" with title \"{esc_title}\"");
+        let app = terminal_app(
+            &std::env::var("TERM_PROGRAM").unwrap_or_default(),
+            &std::env::var("__CFBundleIdentifier").unwrap_or_default(),
+        );
+        let script = toast_script(app, title, message);
         let _ = run_bounded(
             Command::new("osascript")
                 .arg("-e")
@@ -487,6 +539,22 @@ fn config_candidates() -> Vec<PathBuf> {
 mod tests {
     use super::*;
     use crate::claims::test_env_lock;
+
+    #[test]
+    fn terminal_app_names_each_terminal_the_user_runs() {
+        assert_eq!(terminal_app("ghostty", ""), Some("Ghostty"));
+        assert_eq!(terminal_app("", "dev.warp.Warp-Stable"), Some("Warp"));
+        assert_eq!(terminal_app("vscode", ""), None);
+    }
+
+    #[test]
+    fn toast_script_escapes_and_names_the_app() {
+        assert_eq!(
+            toast_script(Some("iTerm"), "a\"b", "c\\d"),
+            "tell application \"iTerm\" to display notification \"c\\\\d\" with title \"a\\\"b\""
+        );
+        assert!(toast_script(None, "t", "m").starts_with("display notification"));
+    }
 
     #[test]
     fn empty_title_and_message_take_the_defaults() {
