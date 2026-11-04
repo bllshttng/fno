@@ -284,7 +284,6 @@ fn der_len(len: usize) -> Vec<u8> {
 }
 
 fn sign_jwt(pkcs8_der: &[u8], app_id: &str, now_ms: i64) -> Result<String, String> {
-    use base64::Engine as _;
     let key = ring::signature::RsaKeyPair::from_pkcs8(pkcs8_der)
         .map_err(|e| format!("key rejected: {e}"))?;
     let now_s = now_ms / 1000;
@@ -379,6 +378,7 @@ mod tests {
         let key = rsa::RsaPrivateKey::new(&mut rng, 2048).expect("keygen");
         key.to_pkcs1_pem(rsa::pkcs1::LineEnding::LF)
             .expect("encode pem")
+            .to_string()
     }
 
     fn temp_cfg(dir: &Path) -> (AppConfig, PathBuf) {
@@ -422,7 +422,11 @@ mod tests {
             .decode(parts[2])
             .unwrap();
         ring::signature::RsaPublicKeyComponents { n: &n, e: &e }
-            .verify(&ring::signature::RSA_PKCS1_SHA256, msg.as_bytes(), &sig)
+            .verify(
+                &ring::signature::RSA_PKCS1_2048_8192_SHA256,
+                msg.as_bytes(),
+                &sig,
+            )
             .expect("signature verifies");
     }
 
@@ -440,7 +444,10 @@ mod tests {
                 .expect("test sign");
             *seen_jwt.lock().unwrap() = jwt.clone();
             assert_eq!(jwt.split('.').count(), 3);
-            serde_json::json!({"token": "ghs_testtoken", "expires_at": "irrelevant"}).to_string()
+            Some(
+                serde_json::json!({"token": "ghs_testtoken", "expires_at": "irrelevant"})
+                    .to_string(),
+            )
         });
         assert_eq!(token.as_deref(), Some("ghs_testtoken"));
         assert_eq!(*posts.lock().unwrap(), 1, "one mint, no live POST");
