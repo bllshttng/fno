@@ -146,68 +146,52 @@ fi
 # above: no transcript, no summary, no candidates, or a read that failed
 # (empty stdout) means no section, never a failed hook.
 ID_MAX_BYTES=2000
-if [[ -n "$TRANSCRIPT" && -f "$TRANSCRIPT" ]] && command -v python3 >/dev/null 2>&1; then
+if [[ -n "$TRANSCRIPT" && -f "$TRANSCRIPT" ]] && command -v jq >/dev/null 2>&1; then
     # Two literals, not one: a tool result echoing a transcript line (this
     # hook greps its own needle) must not shadow the real summary entry.
     SUMMARY_LINE="$(grep '"isCompactSummary":true' "$TRANSCRIPT" 2>/dev/null | grep '"type":"user"' | tail -1 || true)"
-    CANDIDATES="$(printf '%s' "$SUMMARY_LINE" | python3 -c "
-import re, sys
-text = sys.stdin.buffer.read().decode('utf-8', errors='replace')
+    CANDIDATES="$(printf '%s' "$SUMMARY_LINE" | jq -Rsj '
 # Whole uuids mask first: their inner hex groups straddle the id grammar at
 # word boundaries (...-abcd-1234-...) and are never node ids.
-text = re.sub(r'[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}', ' ', text)
-found = sorted(set(re.findall(r'\b(?:[a-z][a-z0-9]{0,7}-[0-9a-f]{4,8}|x[0-9a-f]{4,8})\b', text)))
-sys.stdout.write('\n'.join(found[:40]))
-" 2>/dev/null || true)"
+gsub("[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"; " ")
+| [scan("\\b(?:[a-z][a-z0-9]{0,7}-[0-9a-f]{4,8}|x[0-9a-f]{4,8})\\b")]
+| unique | .[:40] | join("\n")
+' 2>/dev/null || true)"
     if [[ -n "$CANDIDATES" ]]; then
         BOARD_ROWS="$(printf '%s\n' "$CANDIDATES" | xargs fno backlog get 2>/dev/null || true)"
         BOARD_BLOCK="$(CANDIDATES="$CANDIDATES" ROWS_JSON="$BOARD_ROWS" \
-            REGISTRY_JSON="$AGENTS_JSON" CAP="$ID_MAX_BYTES" python3 -c "
-import json, os, sys
-
-cands = [c for c in os.environ.get('CANDIDATES', '').splitlines() if c]
+            REGISTRY_JSON="$AGENTS_JSON" CAP="$ID_MAX_BYTES" jq -nj '
+def cpbytes: if . < 128 then 1 elif . < 2048 then 2 elif . < 65536 then 3 else 4 end;
+# UTF-8-safe cut: keep whole characters up to $cap bytes, never split one.
+def bytecut($cap):
+  reduce explode[] as $c ({n: 0, out: [], done: false};
+    if .done then .
+    elif .n + ($c | cpbytes) > $cap then .done = true
+    else .n += ($c | cpbytes) | .out += [$c] end)
+  | .out | implode;
+[($ENV.CANDIDATES // "") | split("\n")[] | select(. != "")] as $cands
 # A batch answer is always a JSON array (even an all-miss one). Empty or
 # unparseable stdout means the command itself failed; emit nothing rather than
 # fabricate an unverified all-unresolved list.
-raw = os.environ.get('ROWS_JSON', '')
-try:
-    data = json.loads(raw) if raw.strip() else None
-except ValueError:
-    data = None
-if not isinstance(data, list):
-    sys.exit(0)
-rows = data
-by_id = {r.get('id'): r for r in rows
-         if isinstance(r, dict) and r.get('id') and not r.get('error')}
-live = set()
-try:
-    registry = json.loads(os.environ.get('REGISTRY_JSON', '') or 'null') or {}
-    for agent in registry.get('agents') or []:
-        for key in ('session_id', 'harness_session_id'):
-            value = agent.get(key)
-            if value:
-                live.add(value)
-except ValueError:
-    live = set()
-
-lines = ['unresolved: ' + c for c in cands if c not in by_id]
-for c in cands:
-    row = by_id.get(c)
-    if row is None:
-        continue
-    holder = row.get('locked_by_harness_session') or ''
-    held = '-' if not holder else ('yes' if holder in live else 'no')
-    lines.append('resolved: %s status=%s locked_by=%s holder_live=%s' % (
-        c, row.get('status') or '?', row.get('locked_by_harness') or '-', held))
-out = '\n'.join(lines)
-cap = int(os.environ.get('CAP') or '2000')
-payload = out.encode('utf-8')
-if len(payload) > cap:
-    # UTF-8-safe cut: decode, drop the trailing partial character, never
-    # split one mid-sequence.
-    out = payload[:cap].decode('utf-8', errors='ignore') + '\n\n_(truncated at %dB)_' % cap
-sys.stdout.write(out)
-" 2>/dev/null || true)"
+| (($ENV.ROWS_JSON // "") as $raw
+   | if ($raw | test("\\S")) then ($raw | try fromjson catch null) else null end) as $data
+| if ($data | type) != "array" then empty else
+  (reduce ($data[] | select(type == "object" and (.id // false) and ((.error // false) | not))) as $r
+     ({}; . + {($r.id | tostring): $r})) as $by_id
+  | ((($ENV.REGISTRY_JSON // "") | if . == "" then null else (try fromjson catch null) end) // {}) as $reg
+  | ([($reg.agents // [])[] | (.session_id, .harness_session_id) | select(. != null and . != false and . != "")]) as $live
+  | ([$cands[] | select($by_id[.] == null) | "unresolved: " + .]
+     + [$cands[] | . as $c | $by_id[$c] | select(. != null)
+        | ((.locked_by_harness_session // "") | if . == "" or . == false then "" else . end) as $holder
+        | (if $holder == "" then "-" elif ($live | index([$holder])) then "yes" else "no" end) as $held
+        | "resolved: \($c) status=\(.status // "?" | if . == "" or . == false then "?" else . end) locked_by=\(.locked_by_harness // "-" | if . == "" or . == false then "-" else . end) holder_live=\($held)"])
+    | join("\n") as $out
+    | (($ENV.CAP // "") | if . == "" then 2000 else tonumber end) as $cap
+    | if ($out | utf8bytelength) > $cap
+      then ($out | bytecut($cap)) + "\n\n_(truncated at \($cap)B)_"
+      else $out end
+  end
+' 2>/dev/null || true)"
         if [[ -n "$BOARD_BLOCK" ]]; then
             CONTEXT="$CONTEXT
 

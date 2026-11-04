@@ -62,16 +62,6 @@ _CAP_SESSION=""
 if command -v jq >/dev/null 2>&1; then
     _CAP_SESSION="$(printf '%s' "$HOOK_INPUT" | jq -r '.session_id // empty' 2>/dev/null || true)"
 fi
-if [[ -z "$_CAP_SESSION" ]] && command -v python3 >/dev/null 2>&1; then
-    _CAP_SESSION="$(printf '%s' "$HOOK_INPUT" | python3 -c '
-import json, sys
-try:
-    d = json.load(sys.stdin)
-except (json.JSONDecodeError, ValueError):
-    d = {}
-print(d.get("session_id", "") or "")
-' 2>/dev/null || true)"
-fi
 _CAP_LATCH=""
 if [[ -n "$_WT_NAME" && -n "$_CAP_SESSION" ]] && command -v fno >/dev/null 2>&1; then
     _cap_stub="$(fno config paths shell-stub 2>/dev/null || true)"
@@ -184,15 +174,8 @@ fi
 # Worktree name (from stdin; fall back to the path basename, e.g. when the
 # /speculate skill invokes this manually with only `.path`).
 NAME_FROM_INPUT=""
-if command -v python3 >/dev/null 2>&1; then
-    NAME_FROM_INPUT=$(printf '%s' "$HOOK_INPUT" | python3 -c '
-import json, sys
-try:
-    d = json.load(sys.stdin)
-except (json.JSONDecodeError, ValueError):
-    d = {}
-print(d.get("name", ""))
-' 2>/dev/null || true)
+if command -v jq >/dev/null 2>&1; then
+    NAME_FROM_INPUT=$(printf '%s' "$HOOK_INPUT" | jq -r '.name // empty | tostring' 2>/dev/null || true)
 fi
 [[ -z "$NAME_FROM_INPUT" ]] && NAME_FROM_INPUT="$(basename "$WORKTREE_PATH")"
 
@@ -288,13 +271,13 @@ elif [[ -f "yarn.lock" && ! -d "node_modules" ]]; then
 elif [[ -f "bun.lockb" && ! -d "node_modules" ]]; then
     bun install 2>&1 | tail -3 >&2
 elif [[ -f "requirements.txt" && ! -d ".venv" ]]; then
-    python3 -m venv .venv >&2 2>&1
+    python3 -m venv .venv >&2 2>&1  # user-project-python: the project's own deps
     .venv/bin/pip install -r requirements.txt 2>&1 | tail -3 >&2
 elif [[ -f "pyproject.toml" && ! -d ".venv" ]]; then
     if command -v uv >/dev/null 2>&1; then
         uv sync 2>&1 | tail -3 >&2
     else
-        python3 -m venv .venv >&2 2>&1
+        python3 -m venv .venv >&2 2>&1  # user-project-python: the project's own deps
         .venv/bin/pip install . 2>&1 | tail -3 >&2
     fi
 fi
