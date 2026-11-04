@@ -544,9 +544,11 @@ mod tests {
         assert!(cap_msg.contains("3,000-file cap"), "{cap_msg}");
     }
 
-    /// A concrete-path read rides the conditional etag door: the door's own
-    /// spawn shape (`api -i path`) reaches gh, never the plain
-    /// escape-sequences shape. A template path keeps the plain shape.
+    /// A concrete-path read rides the conditional etag door: the spawn gh
+    /// sees carries `-i`. The plain template shape never does, and both
+    /// shapes carry the door's own `--allow-escape-sequences` guard
+    /// (spawn_unescaped flags every gh call it makes), so `-i` is the
+    /// discriminator.
     #[test]
     fn a_concrete_merge_state_read_rides_the_conditional_door() {
         let _guard = cache_env_lock();
@@ -568,7 +570,10 @@ mod tests {
             (
                 all.iter().filter(|a| a.contains(&"-i".to_string())).count(),
                 all.iter()
-                    .filter(|a| a.contains(&"--allow-escape-sequences".to_string()))
+                    .filter(|a| {
+                        a.contains(&"--allow-escape-sequences".to_string())
+                            && !a.contains(&"-i".to_string())
+                    })
                     .count(),
             )
         };
