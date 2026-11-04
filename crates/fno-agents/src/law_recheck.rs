@@ -113,11 +113,15 @@ pub(crate) fn reading_verdict(
 
 /// One pass over the live laws. `apply` retracts a law whose guard fired.
 pub(crate) fn collect(apply: bool) -> Result<Value, String> {
-    let (rows, damaged) = decision_index::read_store_rows(
+    let (rows, damaged) = match decision_index::read_store_rows(
         &crate::graph_get::default_graph_path(),
         &decision_index::default_state_path("decisions.jsonl"),
-    )
-    .map_err(|e| format!("the decision index could not be read ({e})"))?;
+    ) {
+        Ok(read) => read,
+        // A project that never recorded a law has no store: nothing to recheck.
+        Err(e) if e.starts_with("no decision store") => (Vec::new(), 0),
+        Err(e) => return Err(format!("the decision index could not be read ({e})")),
+    };
     let index = decision_index::derive_rows_unguarded(rows, damaged);
     let entries = crate::backlog::decisions_cli::read_graph_entries().ok();
     let root = evidence_repo_root();
@@ -173,9 +177,12 @@ pub(crate) fn collect(apply: bool) -> Result<Value, String> {
     )
 }
 
-/// The check-in beat's line: silent when every law's premise holds.
+/// The check-in beat's line: empty when every law's premise holds.
 pub(crate) fn beat_line(reading: &Value) -> String {
     let n = |k: &str| reading.get(k).and_then(Value::as_u64).unwrap_or(0);
+    if n("stale") + n("expired") + n("unknown") == 0 {
+        return String::new();
+    }
     let mut line = format!(
         "laws: {} stale, {} expired ({} retracted), {} unknown",
         n("stale"),
