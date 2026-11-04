@@ -3,25 +3,6 @@
 # file with no row, and a row above the live count. Lower or remove a row from the
 # guard's own --print output, never raise one by hand. A .py file counts 1.
 # Columns: path, ceiling, owner (the node that retires it).
-hooks/claim-heartbeat.sh	2	x-dff1 parent (Rust arm for the gh pr create shlex attribution)
-hooks/codex-hooks.json	1	x-dff1 parent (dies with save-session.py)
 hooks/git_protection_impl.py	1	x-c166 (git protection retires)
 hooks/git-protection.py	1	x-c166 (git protection retires)
-hooks/helpers/join_partition_guard.py	1	x-dff1 parent
-hooks/hooks.json	2	x-dff1 parent (dies with save-session.py)
 hooks/lib/guard_mark.py	1	x-c166 (git protection retires)
-hooks/lib/run-python.sh	2	x-dff1 parent (dies with save-session.py)
-plugins/buddy/hooks/statusline.py	1	x-dff1 parent
-plugins/buddy/hooks/statusline.sh	1	x-dff1 parent
-scripts/lib/skill_discovery.py	1	x-dff1 parent
-scripts/lib/worktree_occupancy.py	1	x-dff1 parent
-scripts/lib/worktree-lifecycle.sh	3	x-dff1 parent
-scripts/lib/worktree-occupancy.sh	3	x-dff1 parent
-scripts/save-session.py	1	x-dff1 parent
-scripts/setup.sh	1	x-dff1 parent
-scripts/validate-plan.sh	17	x-dff1 parent
-skills/blueprint/scripts/mutate_doc.py	1	x-dff1 parent
-skills/blueprint/scripts/validate-plan.sh	17	x-dff1 parent
-skills/execute/orchestrator.py	1	x-dff1 parent
-skills/execute/scripts/validate-plan.sh	17	x-dff1 parent
-skills/review/scripts/sibling-roots.py	1	x-dff1 parent

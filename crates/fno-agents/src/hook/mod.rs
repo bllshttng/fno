@@ -18,6 +18,7 @@ pub mod join_partition_guard;
 pub mod lead_guard;
 pub mod lead_guard_wire;
 pub mod pipe_guard;
+pub mod pr_attribution;
 pub mod pretooluse_bash;
 pub mod prompt;
 pub mod recursive_grep_guard;
@@ -51,6 +52,7 @@ pub fn dispatch(args: &[String]) -> i32 {
         Some("join-partition-guard") => join_partition_guard::run(&args[1..]),
         Some("lead-guard") => lead_guard::run(&args[1..]),
         Some("pipe-guard") => pipe_guard::run(&args[1..]),
+        Some("pr-attribution") => pr_attribution::run(&args[1..]),
         Some("pretooluse-bash") => pretooluse_bash::run(&args[1..]),
         Some("prompt") => prompt::run(&args[1..]),
         Some("recursive-grep-guard") => recursive_grep_guard::run(&args[1..]),
