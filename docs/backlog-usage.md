@@ -625,7 +625,7 @@ Cards whose titles carry a home path or session id are withheld with one warning
 
 ## Take requests from the public board
 
-With `--requests`, `fno backlog publish` renders three links. A header link opens a prefilled issue form. Each open card gets an Upvote link. Each open card that nobody holds also gets a Take link. The links appear only after you pass the flag. On a project whose origin is not a GitHub repo the command refuses and names the reason. The label is `fno-request` by default and `--label` renames it.
+With `--requests`, `fno backlog publish` renders three links. A header link opens a prefilled issue form. Each open card gets an Upvote link. Each open card that nobody holds also gets a Claim link. The links appear only after you pass the flag. On a project whose origin is not a GitHub repo the command refuses and names the reason. The label is `fno-request` by default and `--label` renames it.
 
 The prefilled form comes from an issue form you commit by hand to `.github/ISSUE_TEMPLATE/` in your repo, named for the label (`fno-request.yml` by default). fno never writes it for you. Publish warns when the file is missing. The form applies the request label to every visitor issue.
 
@@ -648,18 +648,18 @@ One caution: a difficulty makes an imported row a candidate for autonomous dispa
 
 An upvote becomes an encounter on the card, shown on the board and in the panel's demand line. Outside votes stay out of `fno backlog demand` and out of the board's ordering.
 
-### Take a card
+### Claim a card
 
-A contributor can take a card. The Take link in the detail panel of an open card that nobody holds opens an issue titled `Take <id>`. The title carries the card id and nothing else.
+A contributor can claim a card. The Claim link in the detail panel of an open card that nobody holds opens an issue titled `Claim <id>`. The title carries the card id and nothing else.
 
-The import treats a take like a request. It needs the request label and your approval label. On `--apply` an approved take becomes a claim on the node, held by `github:<login>` for 24 hours. Every dispatcher skips a node under a live claim, so the fleet leaves the card alone. The board marks the card claimed.
+The import treats a claim like a request. It needs the request label and your approval label. On `--apply` an approved claim issue becomes a node claim, held by `github:<login>` for 24 hours. Every dispatcher skips a node under a live claim, so the fleet leaves the card alone. The board marks the card claimed.
 
-Each import run renews the claim while the issue stays open and keeps both labels. Run the import on a schedule, at least once a day, to keep takes alive. A run that no longer sees the issue releases the claim. A run that reads a full page of `--limit` issues releases nothing, because it cannot see the issues past the page.
+Each import run renews the claim while the issue stays open and keeps both labels. Run the import on a schedule, at least once a day, to keep claims alive. A run that no longer sees the issue releases the claim. A run that reads a full page of `--limit` issues releases nothing, because it cannot see the issues past the page.
 
-A take ends in one of three ways:
+A claim ends in one of three ways:
 
 - The issue closes, or you remove a label. The next import run releases the claim.
-- The contributor opens a pull request that closes the take issue. The steward tags the node `take-delivered`, releases the claim and adds a note with the credit trailer. The fleet builds the node from its own plan. The import never grants a node that carries the tag.
+- The contributor opens a pull request that closes the Claim issue. The steward tags the node `claim-delivered`, releases the claim and adds a note with the credit trailer. The fleet builds the node from its own plan. The import never grants a node that carries the tag.
 - No import run renews the claim for 24 hours. The claim goes stale and the node is free.
 
-One login holds at most `--max-per-author` takes (3). The import refuses a take on a node that another holder already holds, and the receipt names the holder.
+One login holds at most `--max-per-author` claims (3). The import refuses a claim on a node that another holder already holds, and the receipt names the holder.
