@@ -567,7 +567,7 @@ def _update_signpost() -> None:
     raise typer.Exit(code=2)
 
 
-def _native_family_signpost(name: str, verb: str) -> "click.Command":
+def _native_family_signpost(name: str, command: str) -> "click.Command":
     """The no-front-door spelling for a family the Rust front door owns: the
     menu keeps the name advertised, and this leaf only names what installs
     the door that answers it."""
@@ -578,7 +578,7 @@ def _native_family_signpost(name: str, verb: str) -> "click.Command":
     def _cb(**_kwargs: object) -> None:
         typer.echo(
             f"fno: the {name} family is native to the Rust front door; install it from the source checkout with "
-            f"`cargo install --locked --path <src>/crates/fno`, then re-run `{verb}`."
+            f"`cargo install --locked --path <src>/crates/fno`, then re-run `{command}`."
         )
         raise typer.Exit(code=2)
 

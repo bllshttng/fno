@@ -37,7 +37,7 @@ set -euo pipefail
 # Path globs (perl regexes) whose content may keep the word.
 ALLOW_FILES='^(LICENSE[^/]*|.*CHANGELOG[^/]*|scripts/ci/check-no-verb-wording\.sh|skills/harness-verbs/(SKILL|LIMITATIONS)\.md)$'
 # Cargo-generated copies and the sources the build freeze holds.
-ALLOW_FILES+='|^(cli/src/fno/events/schema\.yaml|skills/target/cli/src/fno/events/schema\.yaml)$'
+ALLOW_FILES+='|^crates/fno-agents/src/event_store/schema\.yaml$'
 ALLOW_FILES+='|^(crates/fno-agents/src/harness_capabilities\.toml|crates/fno/src/harness_capabilities\.toml)$'
 ALLOW_FILES+='|^(crates/fno-agents/src/event_store/events_schema\.json|crates/fno/src/event_store/events_schema\.json)$'
 ALLOW_FILES+='|^(crates/fno-agents/src/role_migration\.rs|crates/fno/src/role_migration\.rs)$'

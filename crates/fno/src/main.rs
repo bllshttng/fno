@@ -2048,8 +2048,7 @@ fn main() {
                 std::process::exit(0);
             }
             // The retired flag spelling maps to the door's name; the deleted
-            // Python alias accepted it for one release (verb-wording:
-            // allow).
+            // Python alias accepted it for one release.
             let legacy = "--next-verb"; // verb-wording: allow (old flag, one release)
             let argv: Vec<OsString> = rest
                 .iter()

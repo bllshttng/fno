@@ -328,7 +328,7 @@ pub(crate) fn stamp_person(data: &mut serde_json::Map<String, serde_json::Value>
 
 #[cfg(test)]
 mod tests {
-    use super::{canonical_handle, mint_fno_id, mint_unique_fno_id_with};
+    use super::canonical_handle;
 
     /// The address table, frozen from Python \`canonical_handle\` the day its
     /// module deleted: first eight chars, lowercased unless the id is
