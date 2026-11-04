@@ -288,6 +288,25 @@ fn read_stamp_fields(path: &Path) -> (Option<String>, Option<String>) {
     (field("chokepoint"), field("acquired_at"))
 }
 
+/// The holder's command line, cut to 120 characters. The stamp's op names the
+/// lock row, which every holder of one lock shares; the command line is what
+/// tells an `authorized-merge` from a `registry-commit`.
+fn process_command(pid: u64) -> String {
+    std::process::Command::new("ps")
+        .args(["-o", "command=", "-p", &pid.to_string()])
+        .output()
+        .ok()
+        .map(|out| {
+            String::from_utf8_lossy(&out.stdout)
+                .trim()
+                .chars()
+                .take(120)
+                .collect()
+        })
+        .filter(|text: &String| !text.is_empty())
+        .unwrap_or_else(|| "command unreadable".to_string())
+}
+
 /// Name a live holder that has kept the lock past [`LONG_HOLD_SECS`], once per
 /// hold: a `.longhold` sidecar remembers the acquire time already named, so a
 /// queue of waiters prints one line, not one each.
@@ -307,10 +326,11 @@ fn note_long_hold(refused: &Refused, acquired_at: Option<&str>) -> bool {
         return false;
     }
     eprintln!(
-        "chokepoint {}: {} held {age}s by pid {pid} (op {})",
+        "chokepoint {}: {} held {age}s by pid {pid} (op {}; {})",
         refused.row,
         refused.path.display(),
-        refused.holder_op.as_deref().unwrap_or("unknown")
+        refused.holder_op.as_deref().unwrap_or("unknown"),
+        process_command(pid)
     );
     true
 }
