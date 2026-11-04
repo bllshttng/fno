@@ -114,6 +114,27 @@ fn open_nodes_named(prompt: &str) -> Result<BTreeSet<String>, String> {
     Ok(open)
 }
 
+/// The one open node an adopted row works, read from its first fno call's
+/// arguments (basis `first-turn`) or, failing that, its worktree path
+/// (basis `worktree`). Several open nodes in either source bind nothing.
+pub(crate) fn adoption_node(
+    sid: &str,
+    account: Option<&str>,
+    cwd: &str,
+) -> Option<(String, &'static str)> {
+    let one = |text: &str| {
+        let nodes = open_nodes_named(text).ok()?;
+        (nodes.len() == 1).then(|| nodes.into_iter().next())?
+    };
+    if let Some(node) = crate::session_backfill::first_fno_invocation_args(sid, account)
+        .as_deref()
+        .and_then(one)
+    {
+        return Some((node, "first-turn"));
+    }
+    one(cwd).map(|node| (node, "worktree"))
+}
+
 /// Stamp `node` + `node_basis: "first-turn"` on the row keyed by `sid`,
 /// minting one adopt-style when the session has no row. A row that already
 /// names a node is left untouched (spawn and target work reads as claimed by
@@ -309,6 +330,26 @@ mod tests {
         assert_eq!(row.node_basis, None);
         std::env::remove_var("FNO_STATE_DIR");
         std::env::remove_var(crate::paths::HOME_ENV);
+    }
+
+    #[test]
+    fn adoption_binds_one_open_node_from_the_worktree_path() {
+        let _g = env_guard();
+        let tmp = tempfile::TempDir::new().expect("tmp");
+        std::env::set_var("FNO_STATE_DIR", tmp.path());
+        seed(
+            tmp.path(),
+            &[
+                json!({"id": "x-aaaa", "title": "a", "status": "in_progress"}),
+                json!({"id": "x-cccc", "title": "c", "status": "done"}),
+            ],
+        );
+        let sid = "11111111-2222-4333-8444-555566667777";
+        let bound = adoption_node(sid, None, "/w/footnote/worktrees/x-aaaa");
+        assert_eq!(bound, Some(("x-aaaa".to_string(), "worktree")));
+        assert_eq!(adoption_node(sid, None, "/w/worktrees/x-cccc"), None);
+        assert_eq!(adoption_node(sid, None, "/w/footnote"), None);
+        std::env::remove_var("FNO_STATE_DIR");
     }
 
     #[test]
