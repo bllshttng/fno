@@ -1138,7 +1138,17 @@ mod table_agreement_tests {
             .expect("$defs table");
         let mut problems: Vec<String> = Vec::new();
         for (model, node) in fields["models"].as_object().expect("models table") {
-            let Some(def) = defs.get(model) else {
+            // SettingsModel is the schema's root: json_schema renders it as
+            // top-level properties, never as a $def.
+            let root = schema["json_schema"]
+                .get("properties")
+                .and_then(Value::as_object);
+            let def = if model == "SettingsModel" {
+                root.map(Value::Object)
+            } else {
+                defs.get(model).cloned()
+            };
+            let Some(def) = def else {
                 problems.push(format!(
                     "fields.json model {model} has no config_schema.json $defs entry"
                 ));
