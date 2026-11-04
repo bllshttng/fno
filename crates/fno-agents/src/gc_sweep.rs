@@ -78,32 +78,7 @@ pub struct GcSummary {
     /// lineage guard exists to keep a running parent's surface alive for
     /// its children, and a terminal parent has none.
     pub kept_live_descendants: Vec<(String, String)>,
-    pub kept_operator: Vec<String>,
     pub kept_teamed: Vec<String>,
-    /// `(id, origin)`: origin is not `spawn` (adopted, unknown spelling), so
-    /// a sweep never removes it - only a row fno itself spawned retires.
-    pub kept_not_spawn: Vec<(String, String)>,
-    /// Named in no node's `sessions[]`: no provenance, no work-done verdict.
-    pub kept_no_provenance: Vec<String>,
-    /// `(id, a, b)`: two provenance sources resolved different
-    /// nodes, so the row is held rather than retired on a guess.
-    pub kept_node_conflict: Vec<(String, String, String)>,
-    /// `(id, node, detail)`: the node reads done but its PR state
-    /// contradicts - an open additional PR, or a recorded merge_status that
-    /// is not `merged`.
-    pub kept_pr_contradicts: Vec<(String, String, String)>,
-    /// `(id, node)`: the node reads planning-complete but THIS session's own
-    /// blueprint/think row on it carries no `ended_at` - the completion
-    /// belongs to an earlier assignment, never to this worker.
-    pub kept_planning_unclosed: Vec<(String, String)>,
-    /// `(id, node, status, reader)` (change 4): a named node is not
-    /// done; the first open one, and the provenance source that resolved it,
-    /// so a sessions-join keep is distinguishable from a name-pattern keep.
-    pub kept_open_work: Vec<(String, String, String, String)>,
-    /// `(id, node, status, reader)` (change 2): open work quiet INSIDE the
-    /// open-work window; past the window the row falls to the grace gate and
-    /// would retire, so a reader can tell an aging keep from one with no clock.
-    pub kept_open_work_stale: Vec<(String, String, String, String)>,
     /// `(id, age_s)`: the transcript was written inside the grace window.
     pub kept_active: Vec<(String, i64)>,
     /// `(id, detail)`: a typed user turn inside the attended window - the
@@ -122,10 +97,6 @@ pub struct GcSummary {
     /// bound and the in-process quiet witness could not lift the row either.
     /// An unread instrument is never reported as `active`, never an invented age.
     pub kept_probe_unread: Vec<(String, String)>,
-    /// The transcript could not be resolved through the row's own store.
-    /// (change 3) Rows of `{ id, held_s, nodes_done }`: the hold
-    /// names its age, and an old hold on done work asks for a decision.
-    pub kept_transcript_unresolved: Vec<UnresolvedHold>,
     /// The graph could not be read this pass. Never a retirement on a failed
     /// read.
     pub kept_graph_unreadable: Vec<String>,
@@ -207,10 +178,6 @@ pub struct GcSummary {
     /// One entry per kept open-PR row (Locked Decision 7): the nudge
     /// ladder's input. A projection the `kept_total` does not count.
     pub open_pr_rows: Vec<OpenPrRow>,
-    /// One entry per dead-worker row the sweep kept on an in_progress
-    /// node (law d-71d03643): the nudge ladder's Resume rung is the
-    /// owner. A projection the `kept_total` does not count.
-    pub dead_work_rows: Vec<OpenPrRow>,
     /// The dead-team sweep's report when it ran beside this pass; `None`
     /// when it did not run. The daemon arm reports teams through its detail
     /// line, the manual command fills this field.
@@ -295,21 +262,12 @@ impl GcSummary {
     pub fn kept_total(&self) -> usize {
         self.kept_shared_tree.len()
             + self.kept_live_descendants.len()
-            + self.kept_operator.len()
             + self.kept_teamed.len()
-            + self.kept_not_spawn.len()
-            + self.kept_no_provenance.len()
-            + self.kept_node_conflict.len()
-            + self.kept_pr_contradicts.len()
-            + self.kept_planning_unclosed.len()
-            + self.kept_open_work.len()
-            + self.kept_open_work_stale.len()
             + self.kept_active.len()
             + self.kept_attended.len()
             + self.kept_other.len()
             + self.kept_marked.len()
             + self.kept_probe_unread.len()
-            + self.kept_transcript_unresolved.len()
             + self.kept_graph_unreadable.len()
             + self.kept_open_do_row.len()
             + self.kept_open_pr.len()
@@ -342,21 +300,6 @@ pub struct StateReapEntry {
     pub bytes: u64,
     pub age_s: u64,
 }
-
-/// (change 3) One transcript-unresolved hold: the row, how long it has sat
-/// unresolved (now minus `last_message_at`, else `created_at`), and whether
-/// every node it names reads done. The hold is right; it lacked a clock.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct UnresolvedHold {
-    pub id: String,
-    pub held_s: i64,
-    pub nodes_done: bool,
-}
-
-/// (change 3) When an unresolved hold is this old AND the row's work
-/// is all done, the render asks for a decision: `fno agents rm <name>` - an
-/// rm that, since change 1, proves the death it prints.
-pub(crate) const UNRESOLVED_HOLD_DECIDE_S: i64 = 6 * 3600;
 
 /// One state file retained because its safety proof was incomplete.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -1923,6 +1866,9 @@ pub(crate) fn run_with_release(
             },
         };
         let pid_gone = e.pid.is_some_and(crate::daemon::pid_is_gone);
+        // A transcript written inside the grace keeps the row whatever its
+        // ends say, so only a quiet row pays the head and tail reads.
+        let quiet = !matches!(age, Some(a) if a <= grace_secs);
         let row = GcRow {
             origin: e.origin.clone(),
             teamed: false,
@@ -1933,8 +1879,10 @@ pub(crate) fn run_with_release(
             worktree_clean: None,
             branch_merged: None,
             planner: crate::planning_lane::signals(graph, sid, &e.name).is_some(),
-            fno_skill: crate::reap_evidence::fno_skill(hits.as_deref()),
-            tail_done: crate::reap_evidence::tail_done(hits.as_deref(), e.harness_name()),
+            fno_skill: quiet
+                .then(|| crate::reap_evidence::fno_skill(hits.as_deref()))
+                .flatten(),
+            tail_done: quiet && crate::reap_evidence::tail_done(hits.as_deref(), e.harness_name()),
             live_claim: claims_by_session
                 .get(sid.to_ascii_lowercase().as_str())
                 .cloned(),
@@ -2474,7 +2422,9 @@ pub(crate) fn run_with_release(
                 released,
                 idle_hour_past,
                 via_release: release_note.is_some(),
-                pr_settled_live: pr_settled,
+                // A driving peer owns the PR, so the guard yields as it does
+                // to a settled PR.
+                pr_settled_live: pr_settled || peer_drives_pr,
             },
         );
     }

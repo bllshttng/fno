@@ -62,8 +62,8 @@ pub struct GcRow {
     /// Is the worktree's branch merged into the main line? Asked only after
     /// cleanliness answered `true`.
     pub branch_merged: Option<bool>,
-    /// The row is a planner (blueprint/think phase, or a `bp-` label): its
-    /// idle window is 20 minutes (d-aecc0fdc).
+    /// The row is a planner (blueprint/think phase, or a `bp-` label). A
+    /// spawned planner's idle window is 20 minutes (d-aecc0fdc).
     pub planner: bool,
     /// The head of the transcript: `Some(true)` the session ran an fno skill
     /// (target, fix, blueprint, review), `Some(false)` a transcript with no
@@ -195,14 +195,16 @@ pub fn gc_decide(row: &GcRow, grace_secs: i64) -> (GcAction, Option<KeepReason>)
 }
 
 /// How long a row may sit quiet before it retires. Finished work (a promise
-/// tail, a terminal eval) waits only the grace. A planner waits 20 minutes,
-/// a spawned row one hour, and every other row one day.
+/// tail, a terminal eval) waits only the grace. A spawned planner waits 20
+/// minutes, any other spawned row one hour, and every other row one day: a
+/// planning session the user started by hand is not a dispatched planner.
 pub fn idle_window(row: &GcRow, grace_secs: i64) -> i64 {
+    let spawned = row.origin.as_deref() == Some("spawn");
     if row.tail_done || row.eval_finished {
         grace_secs
-    } else if row.planner {
+    } else if spawned && row.planner {
         PLANNING_IDLE_RETIRE_SECS
-    } else if row.origin.as_deref() == Some("spawn") {
+    } else if spawned {
         SPAWN_IDLE_RETIRE_SECS
     } else {
         SKILL_IDLE_RETIRE_SECS
@@ -446,10 +448,7 @@ pub fn gc_sweep_dry_run(home: &AgentsHome, grace_secs: i64) -> gc_sweep::GcSumma
         .map(|row| (row.node, row.harness, row.session_id))
         .collect();
     // The ladder's DRY-RUN plan: decisions only, no effect, no state write.
-    // The ladder's input is the concatenation: open-PR rows first, then the
-    // dead-worker rows, in one slice so `cleanup_state_files` sees both.
-    let mut ladder_rows = summary.open_pr_rows.clone();
-    ladder_rows.extend(summary.dead_work_rows.iter().cloned());
+    let ladder_rows = summary.open_pr_rows.clone();
     summary.open_pr_nudge = crate::pr_nudge::plan(home, &ladder_rows, grace_secs);
     summary
 }
@@ -1053,8 +1052,7 @@ pub fn maybe_retirement_sweep(
         // command run never nudges; its dry run prints the plan. The ladder's
         // input is the concatenation: open-PR rows first, then the
         // dead-worker rows, in one slice so `cleanup_state_files` sees both.
-        let mut ladder_rows = summary.open_pr_rows.clone();
-        ladder_rows.extend(summary.dead_work_rows.iter().cloned());
+        let ladder_rows = summary.open_pr_rows.clone();
         crate::pr_nudge::run_ladder(&home, &emitter, &ladder_rows, grace_secs);
         unowned_sweeps(&home, &emitter, &grace_cwd);
         // The roster sweep runs AFTER the registry sweep: a row the registry
@@ -2042,6 +2040,12 @@ mod tests {
             ..retiring()
         };
         assert_eq!(gc_decide(&planner, GRACE), (GcAction::Retire, None));
+        // A planning session the user started by hand keeps its day.
+        let hand_planner = GcRow {
+            origin: None,
+            ..planner
+        };
+        assert_eq!(gc_decide(&hand_planner, GRACE).0, GcAction::Keep);
         // A row with no transcript ages on the report clock for a day.
         let failed_start = GcRow {
             fno_skill: None,

@@ -188,10 +188,8 @@ fn row_bucket(home: &AgentsHome, _cwd: &Path, grace_secs: i64, handle: &str) -> 
 /// produce (a dry-run-unverified row needs terminal roster evidence).
 pub(crate) fn row_bucket_in(home: &AgentsHome, dry: &gc_sweep::GcSummary, handle: &str) -> String {
     let in_plain = dry
-        .kept_operator
+        .kept_teamed
         .iter()
-        .chain(&dry.kept_teamed)
-        .chain(&dry.kept_no_provenance)
         .chain(&dry.kept_graph_unreadable)
         .any(|id| id == handle);
     if in_plain {
@@ -202,16 +200,6 @@ pub(crate) fn row_bucket_in(home: &AgentsHome, dry: &gc_sweep::GcSummary, handle
     }
     if dry.kept_active.iter().any(|(id, _)| id == handle) {
         return "kept active".to_string();
-    }
-    if dry
-        .kept_transcript_unresolved
-        .iter()
-        .any(|h| h.id == handle)
-    {
-        return "kept transcript unresolved".to_string();
-    }
-    if dry.kept_node_conflict.iter().any(|(id, _, _)| id == handle) {
-        return "kept node conflict".to_string();
     }
     if dry.kept_open_do_row.iter().any(|(id, _)| id == handle) {
         return "kept open do row".to_string();

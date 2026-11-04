@@ -4,7 +4,7 @@ A reaping sweep judged a session row and kept it. This page names the keep reaso
 
 Run `fno agents registry reap --dry-run` and find your row handle in the report. The dry run classifies every row, names one reason per row, and writes nothing. It stops no process, prunes no tree, and writes no receipt.
 
-Measured on this machine on 2026-09-10 with the dry run: 1 `would retire` line, 49 `kept` lines, 1 `held` line. The largest bucket was `open work` with 22 rows. Eight rows sat behind a permanent exemption: 2 operator rows, 4 titled rows, 2 adopted rows. Counts like these move within the hour, so run your own dry run and date the result.
+Counts move within the hour, so run your own dry run and date the result.
 
 ## Is this page for you?
 
@@ -251,7 +251,7 @@ Two receipt lines ride the same retention pass. `expired receipt {name}` names a
 
 Each item here cost a real session time. One corrects an older belief.
 
-1. **`open work` is not a backlog chore.** The row waits for its node to ship. Deleting or hand-closing the node is falsifying work.
+1. **Open work no longer keeps a row.** A quiet row past its window retires whatever its node reads. The node keeps its record, and `fno agents resume` brings the session back. Deleting or hand-closing the node is still falsifying work.
 2. **A second claude account holds rows the ambient account cannot see.** `no job matching <id>` from one root is a wrong-root absence.
 3. **`claude rm` takes the short id.** The full session id answers `No job matching` and exits 0. The exit code reads as success.
 4. **`claude rm` does not read the session cwd.** Measured 2026-10-25: 116 dirty-cwd sessions still left the list. One scratch session's cwd held a modified tracked file. `claude rm` removed that session with exit 0 and left the list. The refusal `claude rm --help` documents lives in its claude-managed worktree flags. Those flags (`--discard-unpushed`, `--force-remove-worktree`) name uncommitted changes to the worktree's own tracked files. A plain checkout cwd, dirty or clean, is not consulted.
@@ -273,24 +273,15 @@ Every top-level key of `fno agents registry reap --json`, one row each. The dry 
 | `prune_failed` | `prune failed {id} ({reason})` | [The sweep tried and did not finish](#the-sweep-tried-and-did-not-finish) |
 | `settled_do_rows` | `settled {id} (stale open do row filled on done node: {node})` | [open do row](#open-do-row) |
 | `settle_refused` | `settle refused {node} ({reason})` | [open do row](#open-do-row) |
-| `kept_operator` | `kept {id} (operator row)` | [Rows no sweep can take](#rows-no-sweep-can-take) |
-| `kept_promoted` | `kept {id} (promoted)` | [Rows no sweep can take](#rows-no-sweep-can-take) |
-| `kept_not_spawn` | `kept {id} (not a spawn row: {why})` | [Rows no sweep can take](#rows-no-sweep-can-take) |
-| `kept_no_provenance` | `kept {id} (no provenance: ...)` | [no provenance](#no-provenance) |
-| `kept_node_conflict` | `kept {id} (sources disagree: {a} vs {b})` | [sources disagree](#sources-disagree) |
-| `kept_pr_contradicts` | `kept {id} (pr state contradicts: {node} {detail})` | [pr state contradicts](#pr-state-contradicts) |
-| `kept_open_work` | `kept {id} (open work: {node} {status}; read via {reader})` | [open work](#open-work) |
-| `kept_open_work_stale` | `kept {id} (open work inside the retire window: {node} {status}; read via {reader}; quiet past the window retires)` | [open work](#open-work) |
+| `kept_promoted` | `kept {id} (promoted)` | [teamed, keep mark](#teamed-keep-mark) |
 | `kept_open_do_row` | `kept {id} (open do row: {node}: {detail})` | [open do row](#open-do-row) |
 | `kept_open_pr` | `kept {id} (open pr: {node} {detail})` | [open pr](#open-pr) |
-| `kept_planning_unclosed` | `kept {id} (planning assignment not finished by this session: {node})` | [planning assignment not finished by this session](#planning-assignment-not-finished-by-this-session) |
 | `kept_active` | `kept {id} (active: transcript written {age}s ago)` | [active](#active) |
 | `kept_attended` | `kept {id} (attended: typed user turn {age}s ago)` | [attended](#attended) |
-| `kept_other` | `kept {id} ({reason})` | [idle](#idle) |
-| `kept_marked` | `kept {id} (keep mark: set {time} by {who})` | [Rows no sweep can take](#rows-no-sweep-can-take) |
+| `kept_other` | `kept {id} ({reason})`: `brainstorm` and `no clock` land here | [brainstorm](#brainstorm) |
+| `kept_marked` | `kept {id} (keep mark: set {time} by {who})` | [teamed, keep mark](#teamed-keep-mark) |
 | `kept_live_claim` | `kept {id} (live claim held: {detail})` | [live claim](#live-claim) |
 | `kept_probe_unread` | `kept {id} (probe unread: {detail})` | [probe unread](#probe-unread) |
-| `kept_transcript_unresolved` | `kept {id} (transcript unresolved for {age}: absence is not quiet)` | [transcript unresolved](#transcript-unresolved) |
 | `kept_graph_unreadable` | `kept {id} (graph unreadable: never a retirement on a failed read)` | [graph unreadable](#graph-unreadable) |
 | `kept_dirty` | `kept tree {id} (dirty: {path})` | [The row retired and its tree stayed](#the-row-retired-and-its-tree-stayed) |
 | `kept_unmerged` | `kept tree {id} (clean but the branch never merged: {path})` | [The row retired and its tree stayed](#the-row-retired-and-its-tree-stayed) |
@@ -304,10 +295,9 @@ Every top-level key of `fno agents registry reap --json`, one row each. The dry 
 | `expired_receipts` | `expired receipt {name}` | [The sweep tried and did not finish](#the-sweep-tried-and-did-not-finish) |
 | `kept_receipts` | `kept receipt {name} ({reason})` | [The sweep tried and did not finish](#the-sweep-tried-and-did-not-finish) |
 | `holds` | projection, no line: one entry per held handle; feeds the `retire_holds` journal row | [Read the answer](#read-the-answer) |
-| `hold_escalate_after_s` | projection, no line: the threshold behind the escalation suffix `; past ...: fno agents registry reap --release` | [planning assignment not finished by this session](#planning-assignment-not-finished-by-this-session) |
-| `release_refused` | the refusal lines a `--release` pass prints verbatim | [Rows no sweep can take](#rows-no-sweep-can-take) |
+| `hold_escalate_after_s` | projection, no line: the threshold behind the escalation suffix `; past ...: fno agents registry reap --release` | [Why a row stays](#why-a-row-stays) |
+| `release_refused` | the refusal lines a `--release` pass prints verbatim | [teamed, keep mark](#teamed-keep-mark) |
 | `open_pr_rows` | projection, no line: one entry per kept open-PR row; the nudge ladder reads it | [the nudge ladder](#the-nudge-ladder) |
-| `dead_work_rows` | projection, no line: one entry per dead-worker row kept on an in_progress node; the ladder's Resume rung owns it | [dead open work](#dead-open-work) |
 | `open_pr_nudge` | `would nudge {id} ({action})` | [the nudge ladder](#the-nudge-ladder) |
 | `roles` | `vacated role {scope} (holder {session} dead: {evidence}; inherits: {inheritor})` and `kept role {scope} ({reason})`; `null` when no role sweep ran | [Manifest-only roles and the dead-role reaper](architecture/lead.md#manifest-only-roles-and-the-dead-role-reaper) |
 | `schema_skew` | `registry schema v{on_disk} is ahead of the v{understood} this fno understands: ...` | [Read the answer](#read-the-answer) |
@@ -321,24 +311,16 @@ Every keep and hold reason from the sections above, one row each.
 
 | Report line | Act or wait | The check that confirms it |
 |---|---|---|
-| `kept {id} (dead open work: {node})` | Resume: `fno agents session resume <id>`. The ladder's Resume rung does this automatically. | `fno agents session list` shows the row's process gone while the node reads `in_progress`. |
-| `kept {id} (operator row)` | Wait. This one is permanent. | The line itself names the reason. |
 | `kept {id} (promoted)` | Wait. This one is permanent. | The line itself names the reason. |
-| `kept {id} (not a spawn row: {why})` | Wait. This one is permanent - unless the row is claude and its transcript shows a real fno skill invocation (the bg-adoption ruling; see [Rows no sweep can take](#rows-no-sweep-can-take)). | The line prints `origin adopted` or `no origin recorded`. |
+| `kept {id} (brainstorm: no fno skill in the transcript)` | Wait. Law d-defa43c7 keeps a brainstorm; `fno agents session rm` removes it by hand. | The transcript holds no `/fno:` or `$fno:` call. |
+| `kept {id} (no clock: neither transcript nor report age)` | Restore a parseable `created_at` or a report on the row. | Run `fno agents session list`. |
 | `kept {id} (keep mark: set {time} by {who})` | When the session is no longer wanted: `fno agents registry reap --unkeep <row>`. `--kept` lists every mark. | The dry run line itself. |
-| `kept {id} (open work: {node} {status}; read via {reader})` | Wait for the node to ship. Never close the node by hand. | Run `fno backlog get <node>` and read `status`. |
-| `kept {id} (open work inside the retire window: {node} {status}; read via {reader}; quiet past the window retires)` | Wait past the window, or act on the named node. | Run `fno backlog get <node>` and read `status`. |
 | `kept {id} (open pr: {node} {detail})` | Drive the PR to merge, or record a merge order. | Run `fno do pr status <N>`. |
 | `kept {id} (open do row: {node}: {detail})` | Wait. A real run settles it. Never close the node. | Run `fno backlog get <node>` and read `status`. |
-| `kept {id} (planning assignment not finished by this session: {node})` | Wait up to 20 quiet minutes, or rule with `fno agents registry reap --release <row>` once escalated. | The line names the node and the hold age. |
 | `kept {id} (live descendant: {child})` | Wait for the live CHILD row to go, unless the parent's roster state reads `done`, `stopped` or `failed`. A handoff row (`sob-t-`, `ac-t-`) never holds its spawner. | The same report carries the child line. |
 | `kept {id} (active: transcript written {age}s ago)` | Wait past the grace window. Nothing retires the row early inside it. | Run the dry run again. Read the new age. |
 | `kept {id} (live claim held: {detail})` | The claim's holder process is live. Release the claim if it is stuck: `fno agents claim release`. | Run `fno agents claim status <key>`, with the key from `{detail}`. |
 | `kept {id} (probe unread: {detail})` | Wait for the next sweep. The probe usually answers then. A moved seq means a new turn: the keep is real. | Run the dry run again. Read the detail. |
-| `kept {id} (transcript unresolved for {age}: absence is not quiet)` | Diagnose one of the four causes above. | Run `fno agents session list`. Rerun the dry run. Search the store roots. |
-| `kept {id} (no provenance: ...)` | Restore one resolvable source for the row. | Run `fno-agents node-route --names <name> --json`. |
-| `kept {id} (sources disagree: {a} vs {b})` | Fix source `{a}`, which named `{b}`. | Run `fno-agents node-route --names <name> --json`. |
-| `kept {id} (pr state contradicts: {node} {detail})` | Fix the PR record named in `{detail}`. | Run `fno backlog get <node>`. |
 | `kept {id} (graph unreadable: ...)` | Rerun when the graph reads. | Run the dry run again. |
 | `kept {id} (no resumable receipt: {reason})` | Rerun the sweep. | The line names the reason. |
 | `held {id} (needs live stop: {reason})` | Run the real command. The row can still retire. | Run `fno agents registry reap`. |
