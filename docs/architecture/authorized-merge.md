@@ -116,7 +116,7 @@ Per outside, non-bot PR the steward takes one action per pass, tracked in stage 
 
 A pull request can close a take issue instead. The issue title is `Take <id>`, its author is the pull request's author, and a maintainer applied both labels. The steward then links the pull request to node `<id>` and mints no `Outside issue` node. It tags the node `take-delivered`, releases the contributor's claim and adds a note. The pull request still never merges. The fleet builds the node from its own plan and credits the contributor with a `Co-authored-by` trailer.
 
-Each pass also checks every outside pull request that has a node. When the node is done and its merge status reads merged, the steward posts one comment with the merged pull request link and the `fno-pr-steward:merged` marker, then closes the outside pull request. A marker already on the pull request means the comment is not posted again and only the close is retried. This is the close step the outside-contributions law asks for.
+Each pass also checks every outside pull request that has a node. When the node is done and its merge status reads merged, the steward posts one comment. The comment holds the merged pull request link and the `fno-pr-steward:merged` marker. The steward then closes the outside pull request. A marker already on the pull request means the comment is not posted again and only the close is retried. This is the close step the outside-contributions law asks for.
 
 ## The merge freeze
 
