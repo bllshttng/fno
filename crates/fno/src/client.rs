@@ -5019,7 +5019,7 @@ impl View {
         let viewport_w = dims.1.saturating_sub(chrome::Chrome::FRAME_COLS);
         let body_w = chrome.min_inner_w().max(40).min(viewport_w).max(1);
         let text = format!("{name}_");
-        let line = TLine::line(TextStyle::Value, format!("{text:<body_w$}"));
+        let line = TLine::line(TextStyle::Item, format!("{text:<body_w$}"));
         layout_lines_overlay(origin, dims, &chrome, &[line], None, OverlayAnchor::Center)
     }
 
