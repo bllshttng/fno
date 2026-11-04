@@ -55,7 +55,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_AGENTS_TIMER_EXE` | rs | Overrides the binary the mail-hold release timer re-enters (mail_hold.rs spawn_release_timer); empty falls through to the process's own executable. A test suite that arms the standard release leg pins a stub here so no timer escapes the sandbox. |
 | `FNO_AGENTS_WORKER` | rs | Marks the process as a footnote worker. |
 | `FNO_AGENTS_WORKER_BIN` | rs | Path to the worker binary. The daemon lazy-start passes it on, so a test harness runs its own build. |
-| `FNO_AGENT_HARNESS` | py+rs | unclear: cli/src/fno/harness_identity.py:77 |
+| `FNO_AGENT_HARNESS` | py+rs | declared in crates/fno-agents/src/claims.rs (AMBIENT_IDENTITY_NAMES) |
 | `FNO_AGENT_NAME` | rs | Worker name a note's thread row stamps as its agent_name when the writer's live claim carries no spawn-handover holder name (comment_identity, note_cli.rs). |
 | `FNO_AGENT_NO_ROW` | rs | Set by the headless claude lane to the child's own `FNO_AGENT_SELF`. The child's SessionStart report then joins but writes no registry row, so a `claude -p` one-shot never shows in the mux. |
 | `FNO_AGENT_PROVIDER` | rs | Pre-cutover name for `FNO_AGENT_HARNESS`. whoami reads it only when the new name is unset, and prints one rename line on stderr. |

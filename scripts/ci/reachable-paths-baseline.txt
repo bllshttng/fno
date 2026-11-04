@@ -24,10 +24,6 @@ A	build.agent_freeze is a toml bool, not a string	py=cli/src/fno/config/build_bl
 A	cache_creation_input_tokens	py=scripts/metrics/prompt_prefix_cache_probe.py;rs=crates/fno-agents/src/context_window.rs|crates/fno-agents/src/eval_attempt/tests_observe.rs|crates/fno-agents/src/model_price.rs|crates/fno-agents/src/session_activity.rs|crates/fno-agents/src/session_cost.rs|crates/fno/src/context_used.rs	# CLASSIFY protocol|msg-twin|data
 A	cache_write_input_tokens	py=scripts/metrics/prompt_prefix_cache_probe.py;rs=crates/fno-agents/src/session_activity.rs	# CLASSIFY protocol|msg-twin|data
 A	cli/src/fno/agent/state.py	py=cli/src/fno/paths.py;rs=crates/fno/src/repo_lint/state_roots.rs	# CLASSIFY protocol|msg-twin|data
-A	cli/src/fno/events/schema.yaml	py=scripts/regen-generated-copies.py;rs=crates/fno-agents/build.rs|crates/fno-agents/src/lib.rs	# CLASSIFY protocol|msg-twin|data
-A	codex_companion_session_id	py=cli/src/fno/harness_identity.py;rs=crates/fno-agents/src/claims.rs|crates/fno-agents/src/claude_supervisor.rs|crates/fno-agents/src/pane_spawn/env_wrap.rs|crates/fno-agents/src/whoami.rs|crates/fno/src/client/server_spawn.rs	# CLASSIFY protocol|msg-twin|data
-A	codex_companion_transcript_path	py=cli/src/fno/harness_identity.py;rs=crates/fno-agents/src/claims.rs|crates/fno-agents/src/pane_spawn/env_wrap.rs|crates/fno-agents/src/whoami.rs	# CLASSIFY protocol|msg-twin|data
-A	codex_internal_originator_override	py=cli/src/fno/harness_identity.py;rs=crates/fno-agents/src/claims.rs|crates/fno-agents/src/pane_spawn/env_wrap.rs|crates/fno-agents/src/whoami.rs	# CLASSIFY protocol|msg-twin|data
 A	completed_window_seconds	py=scripts/analysis/graph-write-gate-audit.py;rs=crates/fno-agents/src/backlog/mod.rs|crates/fno-agents/src/graph_keeper.rs	# CLASSIFY protocol|msg-twin|data
 A	config.backlog.staleness_days must be >= 1	py=cli/src/fno/config/__init__.py;rs=crates/fno/src/config_cli/model/validators_core.rs	# CLASSIFY protocol|msg-twin|data
 A	config.blueprint.max_prs_per_epic must be >= 1	py=cli/src/fno/config/__init__.py;rs=crates/fno/src/config_cli/model/validators_core.rs	# CLASSIFY protocol|msg-twin|data
@@ -43,7 +39,6 @@ A	crates/fno-agents/src/harness_capabilities.toml	py=scripts/regen-generated-cop
 A	crates/fno-agents/src/intel.rs	py=cli/src/fno/paths.py;rs=crates/fno/src/repo_lint/state_roots.rs	# CLASSIFY protocol|msg-twin|data
 A	crates/fno-agents/src/paths.rs	py=cli/src/fno/paths.py;rs=crates/fno-agents/src/bin/pr-affected.rs|crates/fno/src/repo_lint/state_roots.rs	# CLASSIFY protocol|msg-twin|data
 A	cutover_low_after_minutes	py=cli/src/fno/config/_dispatch_commands.py;rs=crates/fno-agents/src/backlog/quota_route.rs|crates/fno/src/config_cli/model/validators_blocks.rs	# CLASSIFY protocol|msg-twin|data
-A	delivery, effect, evidence, and observation refs require a work_order	py=cli/src/fno/company/contracts.py;rs=crates/fno-agents/src/delivery_eval.rs	# CLASSIFY protocol|msg-twin|data
 A	different model family required	py=cli/src/fno/config/__init__.py;rs=crates/fno-agents/src/loopcheck/posture.rs	# CLASSIFY protocol|msg-twin|data
 A	error: cannot read {path}: {exc}	py=cli/src/fno/text_or_file.py;rs=crates/fno-agents/src/agents_seam.rs	# CLASSIFY protocol|msg-twin|data
 A	error: provide {what} once - inline or as a file, not both	py=cli/src/fno/text_or_file.py;rs=crates/fno-agents/src/text_or_file.rs	# CLASSIFY protocol|msg-twin|data
@@ -62,7 +57,6 @@ A	fno_global_settings_path	py=cli/src/fno/config/_loader.py|cli/src/fno/config_i
 A	fno_law_door_timeout_seconds	py=cli/src/fno/rust_binary.py;rs=crates/fno-agents/src/claude_supervisor.rs	# CLASSIFY protocol|msg-twin|data
 A	fno_lead_walk_session_key	py=scripts/diagnostics/codex-lead-continuation-smoke.py;rs=crates/fno-agents/src/loop_lead.rs	# CLASSIFY protocol|msg-twin|data
 A	fno_posthog_project_token	py=cli/src/fno/config/_telemetry.py;rs=crates/fno-agents/src/eval_events.rs	# CLASSIFY protocol|msg-twin|data
-A	fno_seed_prov_from_session	py=cli/src/fno/harness_identity.py;rs=crates/fno-agents/src/claude_supervisor.rs|crates/fno-agents/src/mail_cli/seed_provenance.rs|crates/fno-agents/src/pane_spawn/env_wrap.rs	# CLASSIFY protocol|msg-twin|data
 A	fresh reviewer context required	py=cli/src/fno/config/__init__.py;rs=crates/fno-agents/src/loopcheck/posture.rs	# CLASSIFY protocol|msg-twin|data
 A	githubcom[:/](.+?)(?:git)?$	py=scripts/metrics/completion-summary.py;rs=crates/fno-agents/src/ledger_register.rs	# CLASSIFY protocol|msg-twin|data
 A	hooks/helpers/init-target-state.sh	py=cli/src/fno/paths.py;rs=crates/fno-agents/src/target_init.rs|crates/fno/src/cli_hooks.rs	# CLASSIFY protocol|msg-twin|data

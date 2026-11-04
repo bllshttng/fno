@@ -841,33 +841,13 @@ trips first wins. v0 attribution math is approximate
 to bound damage. Exact per-segment math (rate card x tokens per
 segment) is deferred to Spec 2.5.
 
-### Per-turn Attribution Sidecar
+### Per-turn Attribution
 
-`cli/src/fno/turn_attribution.py` owns
-`.fno/turn-attribution.jsonl`. Each line records one assistant
-turn with the active provider and any normalized error class:
-
-```jsonl
-{"turn_index":0,"ts":"2026-05-05T01:23:45Z","provider_id":"claude-anthropic","error_class":null}
-{"turn_index":1,"ts":"2026-05-05T01:24:48Z","provider_id":"claude-openrouter","error_class":"provider_5xx"}
-```
-
-Writes serialize via `fcntl.LOCK_EX` so concurrent dispatchers can't
-tear the JSONL. Writes are non-blocking on failure: a turn that can't
-write the stamp continues and the sidecar's missing entries fall back
-to active-at-compute attribution at downstream read time.
-
-The sidecar feeds:
-
-- The stop hook's per-turn provider summary (logged at completion)
-- `fno config accounts list` per-session per-provider spend (deferred to 2.5)
-
-### State Files Owned by Spec 2
-
-| File | Owner | Reset on |
-|---|---|---|
-| `.fno/turn-attribution.jsonl` | dispatch layer | session boundary (gitignored, re-created per session) |
-| `~/.fno/config.toml.lock` | save_providers, the Rust `accounts/writer.rs` | n/a (lock file, content irrelevant) |
+The per-turn sidecar (`turn_attribution.py`, `.fno/turn-attribution.jsonl`) retired with the
+Python dispatch layer: it had no writer or reader left. Per-provider attribution computes
+from session facts at read time (active-at-compute with the same fallback the sidecar's
+readers used). `~/.fno/config.toml.lock` stays: save_providers, the Rust
+`accounts/writer.rs`, n/a (lock file, content irrelevant).
 
 ---
 
@@ -1412,7 +1392,7 @@ separate post-hoc layer).
 | size `M` | `diverse_preferred` |
 | size `S` / unknown | `portable` |
 
-The effective kinds start from the session's ambient harness (`resolve_harness_identity`), and an implementer with no ledger row yet is that same harness. A codex session with cross-model off reads `[codex]` and can never satisfy high assurance on its own. That is the honest reading under law d-d4b4293e. Review runs in the session that did the work. The only way to hand that session a different family was a spawned review session.
+The effective kinds start from the session's ambient harness (the route-slot resolve door), and an implementer with no ledger row yet is that same harness. A codex session with cross-model off reads `[codex]` and can never satisfy high assurance on its own. That is the honest reading under law d-d4b4293e. Review runs in the session that did the work. The only way to hand that session a different family was a spawned review session.
 
 `assess_assurance(policy, ...)` turns the *effective reviewer kinds* (what the
 panel will genuinely dispatch to) into a verdict with a single load-bearing

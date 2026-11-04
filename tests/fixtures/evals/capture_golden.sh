@@ -182,19 +182,6 @@ write_settings
     FNO_NO_CANONICAL_CONFIG=1 \
     "$AGENTS_BIN" evals --help > /dev/null 2>&1 ) || true
 
-# Warm the project venv before the first case: uv's first run creates the
-# environment and its bootstrap lines would otherwise land in a golden.
-uv run --project "$ROOT/cli" fno-py --help > /dev/null 2>&1 || true
-
-# Warm the fixture env too: the CLI's first-run path-migration line under a
-# fresh state dir would otherwise land in the first case's stderr.
-( cd "$ROOT" && env -u FNO_TASK_CONTEXT_FILE -u FNO_CLAIMS_ROOT -u FNO_EVENTS_PATH \
-    -u FNO_HOME -u FNO_REPO_ROOT \
-    FNO_CONFIG="$FIXBASE/config.toml" \
-    FNO_STATE_DIR="$FIXBASE/state" \
-    FNO_NO_CANONICAL_CONFIG=1 \
-    uv run --project "$ROOT/cli" fno-py doctor evals --help > /dev/null 2>&1 ) || true
-
 ## ── run: refusals ─────────────────────────────────────────────────────────
 
 RB="$FIXBASE/run-refusals"

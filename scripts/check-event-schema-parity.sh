@@ -4,7 +4,7 @@
 # Cross-language event schema parity check (W7).
 #
 # 1. Validates events-v3.json + status-v1.json parse as JSON.
-# 2. Runs `python -m fno.events --emit-schema` (30s timeout).
+# 2. Runs the native schema projection (30s timeout).
 # 3. Runs `fno-agents --emit-schema` if the binary is found (30s timeout);
 #    WARN + continue (exit 0) if absent (the Rust CI job is the real gate).
 # 4. Diffs each emitter's self-described envelope against the on-disk schema.

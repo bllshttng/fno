@@ -213,14 +213,13 @@ chmod +x "$BIN/fno" "$BIN/fno-agents" "$BIN/cargo" "$BIN/cargo-audit" "$BIN/rust
 export PATH="$BIN:$PATH"
 
 # --- build the fixture repo -------------------------------------------------
-FIX="$TMP/repo"; mkdir -p "$FIX/scripts/ci" "$FIX/scripts/lib" "$FIX/cli/src/fno/events"
+FIX="$TMP/repo"; mkdir -p "$FIX/scripts/ci" "$FIX/scripts/lib" "$FIX/cli/src/fno"
 git -C "$FIX" init -q
 git -C "$FIX" config user.email t@t.t; git -C "$FIX" config user.name t
 cp "$PREFLIGHT_SRC" "$FIX/scripts/ci/preflight.sh"
 # The lib dir ships as a unit: events-validate.sh sources its sibling
 # fno-python.sh for interpreter resolution.
 cp "$REPO_ROOT/scripts/lib/events-validate.sh" "$REPO_ROOT/scripts/lib/fno-python.sh" "$FIX/scripts/lib/"
-cp "$REPO_ROOT/crates/fno-agents/src/event_store/schema.yaml" "$FIX/cli/src/fno/events/schema.yaml"
 # Tracker gate stubs: the real gates need the full cli project and a live
 # registry; this fixture exercises preflight's orchestration (verdicts,
 # receipts, locks), so the gates stub green and honor POISON like the uv stub.

@@ -1,4 +1,4 @@
-# cli/src/fno/events/schema.yaml
+# The canonical event schema. Owned beside its Rust readers in this crate.
 # Single source of truth for events.jsonl envelope shape across footnote.
 # Lives beside its Python loader (fno.events) and ships as package data.
 #
