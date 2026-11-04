@@ -13,6 +13,7 @@ pub mod bg_process_guard;
 pub mod bin_install_guard;
 pub mod diff_budget;
 pub mod edit_integrity;
+pub mod join_partition_guard;
 pub mod lead_guard;
 pub mod lead_guard_wire;
 pub mod pipe_guard;
@@ -21,6 +22,7 @@ pub mod prompt;
 pub mod recursive_grep_guard;
 pub mod refusal_streak;
 pub mod rules;
+pub mod save_session;
 pub mod send_message_guard;
 pub mod session_state;
 pub mod stop;
@@ -44,6 +46,7 @@ pub fn dispatch(args: &[String]) -> i32 {
         Some("diff-budget") => diff_budget::run(&args[1..]),
         Some("edit-integrity") => edit_integrity::run(&args[1..]),
         Some("effect-guard") => crate::effect_gate::run_hook(&args[1..]),
+        Some("join-partition-guard") => join_partition_guard::run(&args[1..]),
         Some("lead-guard") => lead_guard::run(&args[1..]),
         Some("pipe-guard") => pipe_guard::run(&args[1..]),
         Some("pretooluse-bash") => pretooluse_bash::run(&args[1..]),
@@ -51,6 +54,7 @@ pub fn dispatch(args: &[String]) -> i32 {
         Some("recursive-grep-guard") => recursive_grep_guard::run(&args[1..]),
         Some("posttooluse-bash") => refusal_streak::run(&args[1..]),
         Some("rules") => crate::event_rules::run_hook(&args[1..]),
+        Some("save-session") => save_session::run(&args[1..]),
         Some("send-message-guard") => send_message_guard::run(&args[1..]),
         Some("session-state") => session_state::run(&args[1..]),
         Some("transcript-push") => transcript_push::run(&args[1..]),
@@ -62,7 +66,7 @@ pub fn dispatch(args: &[String]) -> i32 {
         Some("write-gate") => write_gate::run(&args[1..]),
         other => {
             eprintln!(
-                "fno-agents hook: unknown entry {other:?}; expected bg-process-guard, bin-install-guard, diff-budget, edit-integrity, effect-guard, lead-guard, pipe-guard, posttooluse-bash, pretooluse-bash, prompt, recursive-grep-guard, rules, send-message-guard, session-state, subagent-worktree-guard, task-boundary, test-run-guard, transcript-push, worktree-relocation-allow, write-gate or stop"
+                "fno-agents hook: unknown entry {other:?}; expected bg-process-guard, bin-install-guard, diff-budget, edit-integrity, effect-guard, join-partition-guard, lead-guard, pipe-guard, posttooluse-bash, pretooluse-bash, prompt, recursive-grep-guard, rules, save-session, send-message-guard, session-state, subagent-worktree-guard, task-boundary, test-run-guard, transcript-push, worktree-relocation-allow, write-gate or stop"
             );
             2
         }
