@@ -926,7 +926,7 @@ mod tests {
             dir.path(),
             "ok.yaml",
             &body(
-                "    path: decision.md\n",
+                &format!("    path: decision.md\n{criteria}"),
                 "capability",
                 "golden:\n  source: {kind: revert, ref: r}\n  expected: e\n  rule: r\n  failure_type: wrong-language\n  outcome: failed\n",
             ),

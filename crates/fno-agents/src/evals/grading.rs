@@ -228,7 +228,7 @@ fn grade_rubric(
     judge: Option<&dyn super::rubric::Judge>,
 ) -> CheckResult {
     use super::bank::RubricTag;
-    use super::rubric::{Judge, RubricAsk};
+    use super::rubric::RubricAsk;
     let missing = |why: String| CheckResult {
         kind: "rubric".into(),
         passed: false,
