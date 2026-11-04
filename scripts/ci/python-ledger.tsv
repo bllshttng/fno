@@ -87,9 +87,6 @@ evals/harness-fit/run/score_run0.py	keep	harbor task data the eval harness runs,
 evals/harness-fit/run/score_run1.py	keep	harbor task data the eval harness runs, not fno code
 evals/harness-fit/run/setaside_run0.py	keep	harbor task data the eval harness runs, not fno code
 evals/harness-fit/run/status.py	keep	harbor task data the eval harness runs, not fno code
-hooks/git-protection.py	delete-by git-protection-port	git protection moves to the native guard
-hooks/git_protection_impl.py	delete-by git-protection-port	git protection moves to the native guard
-hooks/lib/guard_mark.py	delete-by git-protection-port	git protection moves to the native guard
 plugins/hermes/promise-tag-reader/__init__.py	keep	the Hermes host loads Python plugins only
 plugins/hermes/promise-tag-reader/reader.py	keep	the Hermes host loads Python plugins only
 scripts/analysis/graph-write-gate-audit.py	delete-by python-cli-retirement	dev or CI tooling (a CI script, schema row or tombstone names it); off the user path
