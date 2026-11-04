@@ -287,6 +287,11 @@
       "title": "Min Free Gb",
       "type": "number"
      },
+     "min_free_disk_gb": {
+      "default": 20.0,
+      "title": "Min Free Disk Gb",
+      "type": "number"
+     },
      "max_swap_pct": {
       "default": 90.0,
       "title": "Max Swap Pct",
@@ -5255,6 +5260,15 @@
    "question": "",
    "default_source": "default",
    "doc": "Available-RAM floor in GB for spawn preflight; spawn refuses below it (<= 0 disables; default 4). Set it to what the OS needs to stay out of swap: 2 on an 8 GB machine, 3 on 16 GB, 4 above."
+  },
+  {
+   "path": "agents.min_free_disk_gb",
+   "type": "float",
+   "default": 20.0,
+   "wizard": "advanced",
+   "question": "",
+   "default_source": "default",
+   "doc": "Free-disk floor in GB on the data volume for spawn preflight; spawn refuses a build worker below it and the janitor (fno doctor reclaim --apply) runs when free space crosses it (<= 0 disables; default 20)."
   },
   {
    "path": "agents.max_swap_pct",
