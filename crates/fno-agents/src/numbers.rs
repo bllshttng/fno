@@ -721,10 +721,8 @@ mod tests {
     #[test]
     fn nodes_count_per_prefix_and_skip_numbers_that_are_hashes() {
         let (_dir, graph, conn) = conn();
-        conn.execute_batch("CREATE TABLE nodes (id TEXT PRIMARY KEY)")
-            .unwrap();
         // `x-2` is a real hash, so the second `x` node takes 3.
-        conn.execute("INSERT INTO nodes (id) VALUES ('x-2')", [])
+        conn.execute_batch("CREATE TABLE nodes AS SELECT 'x-2' AS id")
             .unwrap();
         let keys: Vec<String> = ["x-aaaa", "x-bbbb", "fb-cccc"]
             .iter()
