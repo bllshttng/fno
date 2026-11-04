@@ -1617,23 +1617,7 @@ fn the_selector_follows_mercedes_through_a_fleet_re_sort() {
     let mercedes = painted_agent_at(&v, "mercedes@iMac2D2");
     v.selector = Some(mercedes);
     v.hover_row = Some(mercedes);
-    for (i, r) in v.painted_rows().iter().enumerate() {
-        if let DisplayRow::Agent(a) = r {
-            eprintln!(
-                "BEFORE [{i}] {} exited={} portal={:?}",
-                a.name, a.exited, a.portal
-            );
-        }
-    }
     machine_tree::apply(&mut v, Ok(remote_fleet_after_a_beat()));
-    for (i, r) in v.painted_rows().iter().enumerate() {
-        if let DisplayRow::Agent(a) = r {
-            eprintln!(
-                "AFTER  [{i}] {} exited={} portal={:?}",
-                a.name, a.exited, a.portal
-            );
-        }
-    }
     let after = painted_agent_at(&v, "mercedes@iMac2D2");
     assert_ne!(
         after, mercedes,
