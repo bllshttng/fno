@@ -288,16 +288,24 @@ pub(super) async fn run_sweep_command(action: SweepAction) -> SweepMsg {
             60
         }
     };
-    let parsed = match run_json("prune", args, apply_secs).await {
+    // The counts probe reads both populations at once, so the modal waits for
+    // the slower read, not the sum.
+    let probe = action == SweepAction::Counts;
+    let (pruned, reaped) = tokio::join!(run_json("prune", args, apply_secs), async {
+        if probe {
+            run_json("reap", reap_args(true), 60).await.ok()
+        } else {
+            None
+        }
+    });
+    let parsed = match pruned {
         Ok(v) => v,
         Err(e) => return SweepMsg::Failed(e),
     };
     let mut msg = parse_sweep_receipt(action, &parsed);
     if let SweepMsg::Counts(counts) = &mut msg {
         // A failed reap probe leaves the row greyed out: zero, never a guess.
-        counts.stopped = run_json("reap", reap_args(true), 60)
-            .await
-            .map_or(0, |v| retired_count(&v));
+        counts.stopped = reaped.map_or(0, |v| retired_count(&v));
     }
     msg
 }
