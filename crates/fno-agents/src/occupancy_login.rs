@@ -113,8 +113,8 @@ fn tty_idle_secs(pid: &str) -> (Option<u64>, String) {
 
 /// One `pid verdict action job reason cmd` row for a login shell this lane
 /// answers; None leaves the pid with the classifier.
-pub(crate) fn login_row(pid: &str) -> Option<String> {
-    pid.parse::<u32>().ok()?;
+pub(crate) fn login_row(pid: u32) -> Option<String> {
+    let pid = &pid.to_string();
     let argv_text = ps_field("args=", pid)?;
     let tokens: Vec<&str> = argv_text.split_whitespace().collect();
     if !is_login_shell(&tokens) {
@@ -133,7 +133,8 @@ pub fn run(args: &[String]) -> i32 {
     if args.first().map(String::as_str) == Some("--classify") {
         return crate::occupancy_classify::run(&args[1..]);
     }
-    for pid in args {
+    // Only a parsed pid reaches the row, never the raw argument text.
+    for pid in args.iter().filter_map(|a| a.parse::<u32>().ok()) {
         if let Some(row) = login_row(pid) {
             println!("{row}");
         }

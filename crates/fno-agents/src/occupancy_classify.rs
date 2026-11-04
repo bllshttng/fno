@@ -274,7 +274,7 @@ pub fn run(args: &[String]) -> i32 {
     let mut rows: BTreeMap<u32, String> = BTreeMap::new();
     let mut left = Vec::new();
     for pid in &pids {
-        match crate::occupancy_login::login_row(&pid.to_string()) {
+        match crate::occupancy_login::login_row(*pid) {
             Some(row) => {
                 rows.insert(*pid, row);
             }
