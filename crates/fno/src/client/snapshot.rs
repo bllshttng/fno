@@ -146,6 +146,8 @@ pub enum ViewKind {
     Decisions,
     /// The bell panel with the audit queue row on top of its All tab.
     BellAudit,
+    /// The bell panel on its Decisions tab.
+    BellDecisions,
 }
 
 /// The seeded demo mail id a Messages view opens on when no --message
@@ -229,6 +231,7 @@ fn parse_view(v: &str) -> Option<ViewKind> {
         "dock" => Some(ViewKind::Dock),
         "decisions" => Some(ViewKind::Decisions),
         "bell-audit" => Some(ViewKind::BellAudit),
+        "bell-decisions" => Some(ViewKind::BellDecisions),
         "machines" => Some(ViewKind::Machines),
         _ => None,
     }
@@ -813,11 +816,22 @@ shoot a root whose chats store has rows (scripts/ops/mux-demo-snapshot.sh seeds 
         Some(ViewKind::Bell)
         | Some(ViewKind::BellWide)
         | Some(ViewKind::BellFull)
-        | Some(ViewKind::BellAudit) => {
+        | Some(ViewKind::BellAudit)
+        | Some(ViewKind::BellDecisions) => {
             let gen = crate::client::bell::open(&mut view);
             let mut projection = runtime.block_on(crate::messages_model::gather());
-            if let (Some(ViewKind::BellAudit), Ok(Value::Object(m))) = (kind, &mut projection) {
-                m.insert("decision_facts".into(), serde_json::json!({"audit": 3}));
+            if let (Some(ViewKind::BellAudit | ViewKind::BellDecisions), Ok(Value::Object(m))) =
+                (kind, &mut projection)
+            {
+                m.insert(
+                    "decision_facts".into(),
+                    serde_json::json!({"audit": 3, "total": 4, "rows": [
+                        {"text": "2026-11-03 live mux: Ship the Decisions tab whole", "question_id": "q-demo-1"},
+                        {"text": "2026-11-02 live ci: Hold CI until the ranked PRs land", "question_id": null},
+                        {"text": "2026-10-30 expired push: Retry after the rate limit", "question_id": null},
+                        {"text": "2026-10-28 live mux: Use the shared pane for retract", "question_id": "q-demo-2"}
+                    ]}),
+                );
             }
             // Same refusal as the messages board: an announcements-less
             // gather paints the bell as "nothing here", a shot with nothing
@@ -852,6 +866,10 @@ shoot a root whose chats store has rows (scripts/ops/mux-demo-snapshot.sh seeds 
                 }
                 Some(ViewKind::BellFull) => {
                     view.bell.size = super::bell::Size::Full;
+                }
+                Some(ViewKind::BellDecisions) => {
+                    view.bell.tab = super::bell::Tab::Decisions;
+                    view.bell.size = super::bell::Size::Wide;
                 }
                 _ => {}
             }
@@ -1447,6 +1465,7 @@ mod tests {
             ("dock", ViewKind::Dock),
             ("decisions", ViewKind::Decisions),
             ("bell-audit", ViewKind::BellAudit),
+            ("bell-decisions", ViewKind::BellDecisions),
             ("machines", ViewKind::Machines),
         ] {
             let args = parse_extra(&["--view", name]).expect(name);

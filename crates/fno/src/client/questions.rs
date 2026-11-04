@@ -192,7 +192,7 @@ fn question_page(
         ));
     }
     if let Some(decision) = d.decision.as_deref() {
-        s.push_str(&format!("decision: {decision}\n\n"));
+        s.push_str(&format!("decision: {decision} (d opens it)\n\n"));
     }
     let asker = item.asker.as_ref();
     let origin = item.origin.as_ref();
@@ -1046,6 +1046,11 @@ pub(super) async fn detail_keys(
                     view.question_archive = Some(ids);
                     view.question_acting = true;
                 }
+            }
+            b'd' if d.decision.is_some() => {
+                view.question_detail = None;
+                super::bell::open_decisions(view);
+                return Ok(StdinFlow::Continue);
             }
             b'a' => {
                 let (open, pin) = (d.item().state == "open", d.item().kind == "pin");

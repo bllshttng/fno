@@ -147,7 +147,23 @@ pub fn bell_facts() -> serde_json::Value {
             Some((q.to_string(), format!("{} ({date})", r.decision).into()))
         })
         .collect();
-    serde_json::json!({"audit": visible(&rows, &f, &reviewed).len(), "by_question": by_question})
+    let mut newest: Vec<&DecisionRow> = rows.iter().collect();
+    newest.sort_by(|a, b| b.ts.cmp(&a.ts));
+    let listed: Vec<serde_json::Value> = newest
+        .iter()
+        .take(80)
+        .map(|r| {
+            let date = r.ts.get(..10).unwrap_or(&r.ts);
+            let text = format!("{date} {} {}: {}", r.lifecycle, r.subject, r.decision);
+            serde_json::json!({"text": text, "question_id": r.question_id})
+        })
+        .collect();
+    serde_json::json!({
+        "audit": visible(&rows, &f, &reviewed).len(),
+        "total": rows.len(),
+        "rows": listed,
+        "by_question": by_question,
+    })
 }
 
 /// The rows a filter admits, newest first.
