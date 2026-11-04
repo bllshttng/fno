@@ -272,7 +272,7 @@ pub(crate) fn merge_blocker<P: GhProbe>(probes: &P, payload: &Value) -> Value {
         .or_else(|| payload.get("baseRefName"))
         .and_then(Value::as_str)
         .unwrap_or("");
-    let (mut blockers, missing, source) = match state {
+    let (mut blockers, missing, mut source) = match state {
         "clean" | "has_hooks" | "unstable" | "dirty" | "unknown" | "" => {
             (Vec::new(), Value::Null, format!("mergeable_state {state}"))
         }
@@ -319,6 +319,26 @@ pub(crate) fn merge_blocker<P: GhProbe>(probes: &P, payload: &Value) -> Value {
         }
         Some(Value::Null) => blockers.push("not_mergeable_unknown".to_string()),
         _ => {}
+    }
+    // A stale refs/pull/N/head mimics a conflict: GitHub computed mergeable
+    // against the old pull ref, not the branch tip. Name the remedy instead
+    // of the fake conflict; close + reopen rebuilds the ref.
+    let stale = payload.get("pull_head_stale").and_then(Value::as_object);
+    if stale.is_some() {
+        blockers.retain(|b| !b.starts_with("not_mergeable_conflicting"));
+        blockers.push("stale_pull_head_ref".to_string());
+        source = format!(
+            "{source}; refs/pull/N/head {ref_sha} sits behind the branch tip \
+             {head_sha} - close and reopen the PR to rebuild the pull ref",
+            ref_sha = stale
+                .and_then(|s| s.get("ref_sha"))
+                .and_then(Value::as_str)
+                .unwrap_or("?"),
+            head_sha = stale
+                .and_then(|s| s.get("head_sha"))
+                .and_then(Value::as_str)
+                .unwrap_or("?"),
+        );
     }
     blockers.sort();
     blockers.dedup();

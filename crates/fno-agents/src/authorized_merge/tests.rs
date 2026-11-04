@@ -1,6 +1,6 @@
 use super::*;
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 #[derive(Default)]
 struct Fake {
@@ -2084,6 +2084,36 @@ fn live_lanes_counts_live_lane_claims_at_the_canonical_root() {
 }
 
 #[test]
+fn an_old_name_url_binds_after_a_repo_transfer_when_the_alias_names_it() {
+    let rows = [
+        json!({"id": "x-old", "pr_number": 4327,
+               "pr_url": "https://github.com/bllshttng/fno/pull/4327"}),
+        json!({"id": "x-extra", "additional_prs": [
+               {"number": 4411, "url": "https://github.com/bllshttng/fno/pull/4411"}]}),
+    ];
+    let mut aliases = BTreeMap::new();
+    aliases.insert("bllshttng/fno".to_string(), "fnodotdev/fno".to_string());
+    assert_eq!(
+        crate::authorized_merge::pr_bound_index(&rows, 4327, Some("fnodotdev/fno"), &aliases),
+        Some(0)
+    );
+    assert_eq!(
+        crate::authorized_merge::pr_bound_index(&rows, 4411, Some("fnodotdev/fno"), &aliases),
+        Some(1)
+    );
+    // No alias, no bind: the cross-repo guard still holds.
+    assert_eq!(
+        crate::authorized_merge::pr_bound_index(
+            &rows,
+            4327,
+            Some("fnodotdev/fno"),
+            &BTreeMap::new()
+        ),
+        None
+    );
+}
+
+#[test]
 fn a_paint_pr_holds_until_an_answered_page_names_it() {
     let tmp = std::env::temp_dir().join(format!("xc129-gate-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&tmp);
@@ -2454,15 +2484,15 @@ fn a_role_chat_approval_clears_the_paint_hold_only_at_its_head() {
                {"number": 7, "url": "https://github.com/O/Here/pull/7"}]}),
     ];
     assert_eq!(
-        crate::authorized_merge::pr_bound_index(&rows, 7, Some("o/here")),
+        crate::authorized_merge::pr_bound_index(&rows, 7, Some("o/here"), &BTreeMap::new()),
         Some(2)
     );
     assert_eq!(
-        crate::authorized_merge::pr_bound_index(&rows[..2], 7, Some("o/here")),
+        crate::authorized_merge::pr_bound_index(&rows[..2], 7, Some("o/here"), &BTreeMap::new()),
         None
     );
     assert_eq!(
-        crate::authorized_merge::pr_bound_index(&rows, 7, None),
+        crate::authorized_merge::pr_bound_index(&rows, 7, None, &BTreeMap::new()),
         Some(0)
     );
     fake.decisions_stdout = Some(

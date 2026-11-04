@@ -3626,6 +3626,13 @@
     "title": "Plans Filename",
     "type": "string"
    },
+   "repo_aliases": {
+    "additionalProperties": {
+     "type": "string"
+    },
+    "title": "Repo Aliases",
+    "type": "object"
+   },
    "branch": {
     "$ref": "#/$defs/BranchBlock"
    },
@@ -3854,6 +3861,15 @@
    "question": "",
    "default_source": "default",
    "doc": "Plan/design-doc filename template: strftime codes plus {slug} and {node} placeholders; must render to a bare *.md name."
+  },
+  {
+   "path": "repo_aliases",
+   "type": "dict[str, str]",
+   "default": {},
+   "wizard": "advanced",
+   "question": "",
+   "default_source": "default",
+   "doc": "Rename map `old = \"new\"` between owner/repo slugs. A PR url recorded under a repo's former name binds in the merge gate and heals in the sweep leg; GitHub's own redirect (GET /repos/old answers the new full_name) seeds the same map through the gh-facts cache, so the config row is the offline override, never a requirement. Specimen: `bllshttng/fno = \"fnodotdev/fno\"`."
   },
   {
    "path": "branch.prefix",
