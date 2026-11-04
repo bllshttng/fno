@@ -2006,6 +2006,7 @@ function laneKeyOf(card, lanesBy, parents, byId) {
       ua.textContent = "Upvote";
       dg.appendChild(ua);
       if (!card.claimed) {
+        dg.appendChild(document.createTextNode(" · "));
         const ta = document.createElement("a");
         ta.href = takeIssueUrl(snap.requests.repo, snap.requests.label, card.id).href;
         ta.target = "_blank";
