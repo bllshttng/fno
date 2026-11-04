@@ -64,7 +64,9 @@ on:
     branches: [main]
 
 concurrency:
-  group: guards-${{ github.head_ref || github.ref }}
+  # A main push keys by sha so every merge keeps its own settled run; a called
+  # or dispatched run keeps the ref key.
+  group: guards-${{ github.event_name == 'push' && github.sha || github.head_ref || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
