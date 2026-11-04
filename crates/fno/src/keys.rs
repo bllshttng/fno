@@ -2558,13 +2558,13 @@ mod tests {
         // A user row on the same action wins; a user row on a preset key
         // takes that key and the preset row steps aside without a warning.
         let user = vec![
-            ("detach".to_string(), "X".to_string()),
+            ("detach".to_string(), "Z".to_string()),
             ("search".to_string(), "u".to_string()),
         ];
         let (rows, _) = with_preset(Some("zellij"), user);
         let (map, warn) = resolve_keymap(None, &rows);
         assert!(warn.iter().all(|w| !w.0.contains("preset")), "{warn:?}");
-        assert_eq!(key(&map, "detach"), Some(b'X'));
+        assert_eq!(key(&map, "detach"), Some(b'Z'));
         assert_eq!(key(&map, "search"), Some(b'u'));
         assert_eq!(key(&map, "rerun-block"), None, "preset row yielded");
 
