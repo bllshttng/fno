@@ -221,10 +221,8 @@ pub(crate) fn fold(
     let aa = crate::evals_power::aa_floor(&rows_a, &informative, repeats);
     let mut rng = crate::evals_power::Rng(crate::evals_power::SEED);
     let power = match aa.as_ref() {
-        Ok(f) => crate::evals_power::power_block(&p, &mut rng, repeats, Some(f), None),
-        Err(skip) => {
-            crate::evals_power::power_block(&p, &mut rng, repeats, None, Some(skip.clone()))
-        }
+        Ok(f) => crate::evals_power::power_block(&p, &mut rng, Some(f), None),
+        Err(skip) => crate::evals_power::power_block(&p, &mut rng, None, Some(skip.clone())),
     };
     Ok(json!({
         "a": {"name": a, "revs": revs(&rows_a), "counts": counts_a, "pass_rate": rate(pass_a, den_a)},

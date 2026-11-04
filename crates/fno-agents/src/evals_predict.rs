@@ -333,7 +333,7 @@ fn halves_power(
     }
     let p = crate::evals_power::paired(&map_e, &map_l);
     let mut rng = Rng(SEED);
-    crate::evals_power::power_block(&p, &mut rng, 1, None, None)
+    crate::evals_power::power_block(&p, &mut rng, None, None)
 }
 fn outcome_series(
     name: &str,

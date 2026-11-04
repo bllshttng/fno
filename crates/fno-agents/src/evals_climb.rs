@@ -366,8 +366,8 @@ fn climb_payload(args: &ClimbArgs) -> Result<Value, String> {
     let p = crate::evals_power::paired(&base_map, &trial_map);
     let mut rng = crate::evals_power::Rng(crate::evals_power::SEED);
     let power = match &aa {
-        Ok(f) => crate::evals_power::power_block(&p, &mut rng, r, Some(f), None),
-        Err(skip) => crate::evals_power::power_block(&p, &mut rng, r, None, Some(*skip)),
+        Ok(f) => crate::evals_power::power_block(&p, &mut rng, Some(f), None),
+        Err(skip) => crate::evals_power::power_block(&p, &mut rng, None, Some(*skip)),
     };
 
     // The verdict chain. The power gate reads first: every later label is a

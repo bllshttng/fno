@@ -242,7 +242,6 @@ pub(crate) fn aa_floor(
 pub(crate) fn power_block(
     paired: &Paired,
     rng: &mut Rng,
-    repeats: usize,
     aa: Option<&AaFloor>,
     aa_skipped: Option<AaSkip>,
 ) -> Value {
@@ -349,7 +348,7 @@ mod tests {
             b.insert(format!("t{i}"), (g, if i % 2 == 0 { 3 } else { 2 }));
         }
         let p = paired(&a, &b);
-        let block = power_block(&p, &mut Rng(SEED), 3, None, Some(AaSkip::TooFewTasks));
+        let block = power_block(&p, &mut Rng(SEED), None, Some(AaSkip::TooFewTasks));
         assert_eq!(block["noise_source"], "preregistered", "{block}");
         assert_eq!(block["aa"], Value::Null, "{block}");
         assert_eq!(block["aa_skipped"], "too_few_tasks", "{block}");
