@@ -253,6 +253,8 @@ pub enum SidelineView {
     Messages,
     Backlog,
     Org,
+    /// A strip word that opens the Decisions table pane; never the painted view.
+    Decisions,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]

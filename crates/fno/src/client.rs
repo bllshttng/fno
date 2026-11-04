@@ -8988,6 +8988,9 @@ async fn apply_hit(
             crate::view_store::SidelineView::Messages => messages_view::open(view),
             crate::view_store::SidelineView::Backlog => View::open(view),
             crate::view_store::SidelineView::Org => org_board::open(view),
+            crate::view_store::SidelineView::Decisions => {
+                crate::decisions_table::open_pane(&view.session)
+            }
         },
         ChromeHit::Bell(hit) => bell::apply_hit(view, hit),
         ChromeHit::Cmds(cmds) => {
