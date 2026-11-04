@@ -75,8 +75,6 @@ pub(super) const STRUCTURAL_STEPS: &[(&str, &str, &str)] = &[
     ("Schema parity check (Python side)", ".", "bash scripts/check-event-schema-parity.sh"),
     ("Provider vocabulary parity selftest", ".", "bash tests/ci/test_provider_vocabulary_parity.sh"),
     ("Provider vocabulary parity check", ".", "bash scripts/ci/check-provider-vocabulary-parity.sh"),
-    ("Reviewer descriptor parity selftest", ".", "bash scripts/ci/check-reviewer-descriptor-parity.sh --selftest"),
-    ("Reviewer descriptor parity check", ".", "bash scripts/ci/check-reviewer-descriptor-parity.sh"),
     ("smoke mode machinery self-test", ".", "bash tests/ci/test_smoke_modes.sh"),
     ("hermetic lanes positive control (the dirty lane must be able to go red)", ".", "bash tests/ci/test_hermetic_lanes.sh"),
     ("preflight orchestration self-test", ".", "bash tests/ci/test_preflight.sh"),

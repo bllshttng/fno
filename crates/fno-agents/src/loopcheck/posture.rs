@@ -21,8 +21,9 @@ pub(super) const DEFAULT_REQUIRED_BOTS: &[&str] = &[];
 
 /// Component vocabulary -> (rank, cost, freshness, diversity) per rung. The
 /// component strings are the shared vocabulary: `self`, `independent`,
-/// `github`, `peer`. `check-reviewer-descriptor-parity.sh` pins ranks and
-/// costs against the Python table.
+/// `github`, `peer`. This table is the sole owner of ranks and costs since
+/// the Python descriptor table and its parity script retired with the
+/// config family.
 pub(super) fn posture_rung(
     value: &str,
 ) -> Option<(

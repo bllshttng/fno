@@ -450,23 +450,22 @@ Nothing else in the tree is a confirmed dual implementation today.
 
 **The lint residue family.** Dual, disposition dual-logic, RETIRED by the residue port (2026-11-01). The behavior: the `fno doctor lint` checks, answered from `cli/src/fno/lint_cli.py`, `lint_command_ratchet.py`, `lint_seam_crossings.py`, and `lint_shellout_drift.py` behind the doctor forward. One reader answers now: the door in `crates/fno/src/repo_lint.rs` behind `fno doctor lint <check>`. The check bodies sit in `repo_lint/{command_ratchet,seam_crossings,shellout_drift,state_roots}.rs`. The registry family (registry, field-coverage) lives in `crates/fno-agents/src/lint_registry.rs`. The four Python legs and their seven test files are deleted. Departures: the command ratchet's two-reader design retired with the Python half. The native ratchet holds the typed tree against the committed manifests. Provider-stderr-merge and state-roots rule B read lines, not an ast; provider-stderr-merge itself retired with the harness dir it scanned (the agents-package port deleted the last Python provider surfaces, 2026-11-03). Field-coverage's projected keys come from the schema's required and derived sets. The degrade probes keep the Python leg's 30-second timeout. Characterization: `crates/fno/src/repo_lint/tests.rs` runs each ported check against a hand-built tree. The baselines are the live-tree contract. CI walks them on every push.
 
-## The eight CI parity scripts
+## The four CI parity scripts
 
-All eight are shared-vocabulary. None is a port candidate. The reasons differ enough to state one at a time.
+All four are shared-vocabulary. None is a port candidate. The reasons differ enough to state one at a time.
 
 | Script | Compares | Verdict |
 |---|---|---|
 | `check-coverage-context-parity.sh` | two commit-status context strings and one label, across the Python publisher, the operator ruleset data, the Rust publisher, and the refresher workflow | shared-vocabulary |
 | `check-harness-roster-parity.py` | the `KNOWN_HARNESSES` const in `provider.rs` (the one roster) against three evidence surfaces it must supersede: `docs/SETUP-<name>.md` filenames, the `for_name()` match arms, and the `_register()` calls in the Python adapter registry, each held as a subset | shared-vocabulary |
 | `check-provider-vocabulary-parity.sh` | provider vocabulary across four Rust files and two Python files | shared-vocabulary |
-| `check-review-app-parity.sh` | review-App logins across `BOT_PROFILES` in Rust and two Python declarations, plus a `usage_markers` field per profile | shared-vocabulary |
-| `check-reviewer-descriptor-parity.sh` | `_RESOLVABLE_REVIEWERS` against `REVIEWER_INVOCATIONS`: invocation string, self-cert flag, per-harness command overrides | shared-vocabulary |
+| `check-review-app-parity.sh` | the Rust-only marker-completeness contract: one review app, the two logins in `BOT_PROFILES`, and the `usage_markers` fields | shared-vocabulary |
 
 One of these needs a note. A reader in a hurry can mistake it for a port candidate.
 
 `check-coverage-context-parity.sh` and `check-harness-roster-parity.py` both compare code against artifacts that are not code. A GitHub workflow, operator ruleset data, and setup-doc filenames are among them. No port retires either one.
 
-`check-reviewer-descriptor-parity.sh` is the closest of the five to a port candidate. It compares one declaration set held twice, in two languages. A port of the config layer deletes one side. It is still not dual LOGIC, and the config layer is not on the sequence below.
+`check-reviewer-descriptor-parity.sh` retired with the config family port (2026-11-04). The Python descriptor table it compared against is gone. `REVIEWER_INVOCATIONS` in `self_review_floor.rs` is the sole owner of the invocations now.
 
 ## The port protocol
 
