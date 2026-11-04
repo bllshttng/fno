@@ -1008,7 +1008,7 @@ fn decide_observed<P: Probes>(
             });
         }
         // Pending holds too: docs/evals.md "The merge door" has promised it
-        // since the gate shipped, and PR 4430 merged through this hole. Held,
+        // since the gate shipped, and a pending gate merged through this hole. Held,
         // never Failed: the run may still settle green.
         if checks.evals_gate_pending() {
             return Err(Outcome::Held {
@@ -1021,7 +1021,7 @@ fn decide_observed<P: Probes>(
             });
         }
         // A gated head with no gate status holds: the daemon either never
-        // reached this head (the PR 4310 shape) or its status was lost. The
+        // reached this head (the tick never ran it) or its status was lost. The
         // expectation probe is fail-open: an unreadable file read never
         // manufactures the hold. First install passes because the probe
         // reads no baseline there.

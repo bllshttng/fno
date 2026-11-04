@@ -588,9 +588,9 @@ fn parse_checks_read_reads_the_evals_gate_fact() {
 
 // ── pending and missing-but-expected hold the merge door ──────────────
 
-/// docs/evals.md "The merge door" says pending holds. PR 4430 merged 19:06
-/// UTC while the gate read PENDING "queued for the gate goldens", through
-/// this exact hole. CI green + a pending gate holds, naming the wait and
+/// docs/evals.md "The merge door" says pending holds; a merge landed
+/// through this exact hole while the gate read PENDING "queued for the
+/// gate goldens". CI green + a pending gate holds, naming the wait and
 /// the stuck-pending clearing command; the preview answers alike.
 #[test]
 fn a_pending_evals_gate_holds_a_green_ci_merge() {
@@ -633,7 +633,7 @@ fn a_pending_evals_gate_holds_a_green_ci_merge() {
 }
 
 /// A gated head with no gate status at all holds: the daemon never reached
-/// the head (the PR 4310 shape) or its status was lost. The expectation
+/// the head (the tick never reached it) or its status was lost. The expectation
 /// probe - gated diff, seated baseline - is what separates this from a
 /// machine the gate does not run on.
 #[test]
@@ -1809,8 +1809,8 @@ fn the_command_refuses_a_payload_that_names_no_effect() {
 }
 
 /// The receipt ask's gate key parses tri-state: absent probes, null reads
-/// "no row at this head", an object carries the row. The PR 4430 hole was
-/// the ask never carrying the key at all.
+/// "no row at this head", an object carries the row. The hole this closes
+/// was the ask never carrying the key at all.
 #[test]
 fn the_receipt_ask_parses_the_evals_gate_key_tri_state() {
     let absent = parse_request(&json!({"cwd": "/tmp", "effect": "preview"}))

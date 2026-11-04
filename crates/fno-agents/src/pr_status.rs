@@ -1144,9 +1144,8 @@ pub(crate) fn status_payload<P: GhProbe>(
     });
     // The gate row this read already has rides the ask, so the walk never
     // answers pending or red from a stale absence: present object = a row,
-    // null = no row at this head. This is the seam the PR 4430 hole ran
-    // through - the composer had the PENDING fact and never handed it to the
-    // decision.
+    // null = no row at this head. This is the seam the hole ran through: the
+    // composer had the PENDING fact and never handed it to the decision.
     receipt_ask["evals_gate"] = pr_json
         .get("statusCheckRollup")
         .and_then(Value::as_array)
