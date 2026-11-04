@@ -636,7 +636,7 @@ mod tests {
             ["git", "push", "origin", "main"]
         );
         assert_eq!(
-            argv("eval 'X=1 gh pr create'"),
+            argv("X=1 eval 'gh pr create'"),
             (
                 vec!["gh".into(), "pr".into(), "create".into()],
                 vec!["X=1".into()]
@@ -646,7 +646,7 @@ mod tests {
 
     #[test]
     fn hooks_path_reads_are_not_settings() {
-        let words = |s: &str| split_words(s).unwrap();
+        let words = |s: &str| command_segments(s).unwrap().remove(0);
         assert!(sets_hooks_path(&words(
             "git -c core.hooksPath=/dev/null push"
         )));
