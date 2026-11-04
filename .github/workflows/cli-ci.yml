@@ -1,16 +1,13 @@
 name: cli-ci
 
 # PR re-pushes share a group keyed by head_ref and cancel their own running
-# run. Main pushes share one group keyed by ref. The running main run always
-# finishes, and the newest push replaces the pending one, so a burst of merges
-# queues at most two runs and the tip is the commit that tests. A group keyed
-# by sha ran every merge in full: the runs piled up against the PR runs and
-# main never settled. Cancelling the running main run instead starves main:
-# merges land faster than the suite finishes, so no main run ever completes.
-# The repo is user-owned, so GitHub has no merge queue for it: this coalesced
-# main run and the fno merge queue are the batch that runs every lane.
+# run. A main push keys by sha, so every merge keeps its own settled run and
+# a burst of merges never cancels the run before it. The enterprise plan
+# gives main enough slots to run them side by side. The repo is user-owned,
+# so GitHub has no merge queue for it: the main run and the fno merge queue
+# are the batch that runs every lane.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.sha || github.head_ref || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 on:
