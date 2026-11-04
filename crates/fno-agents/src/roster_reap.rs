@@ -103,10 +103,6 @@ pub struct RosterReapSummary {
     pub holds: Vec<crate::gc_sweep::Hold>,
 }
 
-/// A turn inside this window keeps a session whatever the roster state says:
-/// a lead that just finished a turn reads `done` between turns.
-pub(crate) const RECENT_TURN_SECS: i64 = 600;
-
 impl RosterReapSummary {
     /// AC1-ERR (change 1): rows reached the quiet gate and the batch
     /// answered none of them. That is not a clean pass with nothing to do -
@@ -768,20 +764,6 @@ pub(crate) fn run_with_scope_workers(
                 false,
                 class,
             )),
-            Some(age) if age <= RECENT_TURN_SECS => {
-                let detail = format!("turn {age}s ago, inside the {RECENT_TURN_SECS}s floor");
-                summary.holds.push(crate::gc_sweep::Hold {
-                    id: ident.clone(),
-                    reason: "recent_turn",
-                    detail: detail.clone(),
-                    age_s: Some(age),
-                    age_basis: "transcript quiet",
-                    escalated: false,
-                });
-                summary
-                    .kept
-                    .push(judgement_class(&ident, node, detail, false, class));
-            }
             Some(_age) if !c.early_fire && c.terminal.is_none() => {
                 summary.kept.push(judgement_class(
                     &ident,
@@ -2221,35 +2203,6 @@ mod tests {
         assert!(summary.retired.is_empty(), "{summary:?}");
         assert_eq!(summary.holds.len(), 1, "{summary:?}");
         assert_eq!(summary.holds[0].reason, "live_lead_role");
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    /// A turn inside the floor holds a finished-node session even when the
-    /// harness already reads it terminal: `done` also reads between turns.
-    #[test]
-    fn a_turn_inside_the_floor_is_held_though_the_node_is_done() {
-        let dir = tmpdir("recent-turn");
-        let transcript = fresh_transcript(&dir, "sid-1");
-        let summary = run(
-            &no_home(),
-            900,
-            RosterScope::Provenanced,
-            false,
-            &roster(vec![row("ab12cd34", Some("sid-1"), Some("hand-typed"))]),
-            &[],
-            &|| Some(graph_done_via_sessions("x-aaaa", &["sid-1"])),
-            &|_e| Some(vec![transcript.clone()]),
-            &|refs| {
-                refs.iter()
-                    .map(|e| (crate::gc::row_handle(e), mtime_age(&[transcript.clone()])))
-                    .collect()
-            },
-            crate::daemon::now_epoch_secs(),
-            &|_| panic!("a session mid-turn must never reach the removal cascade"),
-        );
-        assert!(summary.retired.is_empty(), "{summary:?}");
-        assert_eq!(summary.holds.len(), 1, "{summary:?}");
-        assert_eq!(summary.holds[0].reason, "recent_turn");
         std::fs::remove_dir_all(&dir).ok();
     }
 }
