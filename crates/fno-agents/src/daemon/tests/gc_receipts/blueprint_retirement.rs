@@ -116,7 +116,24 @@ fn an_unanswered_re_read_after_a_new_turn_holds_by_name() {
 /// the same re-read, so it predicts the live split instead of promising both.
 #[test]
 fn a_row_no_witness_can_lift_retires_past_a_day_and_the_dry_run_agrees() {
-    let (_dir, home) = staged_probe_unread_home();
+    let (dir, home) = staged_probe_unread_home();
+    let session = |sid: &str| {
+        json!({
+            "phase": "execute",
+            "harness": "claude",
+            "session_id": sid,
+            "started_at": "2026-09-01T00:00:00Z",
+            "ended_at": "2026-09-01T01:00:00Z",
+        })
+    };
+    stage_graph(
+        dir.path(),
+        json!([{
+            "id": "x-u1",
+            "status": "done",
+            "sessions": [session("s-u1"), session("s-u2")],
+        }]),
+    );
     let emitter = EventEmitter::new(home.events_jsonl(), "daemon");
     let ago = |s: i64| {
         (chrono::Utc::now() - chrono::Duration::seconds(s))
@@ -126,10 +143,14 @@ fn a_row_no_witness_can_lift_retires_past_a_day_and_the_dry_run_agrees() {
     crate::state::update_registry(&home.registry_json(), |r| {
         let template = r.entries[0].clone();
         r.entries.clear();
-        for (name, exited) in [("t-old", ago(2 * 86_400)), ("t-new", ago(3_600))] {
+        for (name, sid, exited) in [
+            ("t-old", "s-u1", ago(2 * 86_400)),
+            ("t-new", "s-u2", ago(3_600)),
+        ] {
             let mut e = template.clone();
             e.name = name.into();
             e.short_id = name.into();
+            e.harness_session_id = Some(sid.into());
             e.created_at = String::new();
             e.inside_leg = None;
             e.status = crate::AgentStatus::Exited;
