@@ -78,6 +78,7 @@ use crate::proto::{
 };
 use crate::ratatui_blit::{rt_color, rt_modifier};
 use crate::sideline_color;
+use crate::text_style::{TLine, TextStyle};
 use crate::theme::{cell_style, Theme};
 use crate::tree::{Axis, Dir, Rect, TabId};
 use crate::view_store::{
@@ -630,66 +631,6 @@ struct TabDrag {
     moved: bool,
 }
 
-/// The workspace peek body: everything the layout already holds for
-/// one squad - its origin, its tabs (the active one marked), and its member
-/// rows with their states. Pure and local; no wire round trip.
-fn squad_peek_lines(layout: &LayoutView, sid: u64) -> Vec<String> {
-    let Some(s) = layout.squads.iter().find(|s| s.id == sid) else {
-        return vec!["workspace is no longer here".into()];
-    };
-    let mut out = vec![
-        format!("origin  {}", s.canonical_cwd),
-        format!("tabs    {} · panes {}", s.tabs.len(), s.panes),
-    ];
-    for (i, t) in s.tabs.iter().enumerate() {
-        let marker = if i == s.active_tab { "*" } else { " " };
-        let label = if t.name.is_empty() {
-            format!("tab {}", i + 1)
-        } else {
-            t.name.clone()
-        };
-        out.push(format!("{marker} {label}"));
-    }
-    let members: Vec<&AgentRow> = layout
-        .agents
-        .iter()
-        .filter(|a| a.squad == Some(sid))
-        .collect();
-    if members.is_empty() {
-        out.push("members none".into());
-        return out;
-    }
-    out.push("members".into());
-    for a in members {
-        let state = if a.exited {
-            "exited"
-        } else {
-            // The one state vocabulary (pane_state + the nav filter words): a
-            // finished-but-unseen member is `done`, not `idle`.
-            match pane_state(a.badge, a.seen, a.pane_activity) {
-                PaneState::Blocked => "blocked",
-                PaneState::Working => "working",
-                PaneState::DoneUnseen => "done",
-                // NOT "unread": that word names output nobody has
-                // looked at, which is `DoneUnseen` - a different row, filed
-                // under "done". A filter typed as `unread` would then return
-                // rows with no liveness reading and EXCLUDE every row that
-                // actually has unseen output, which is this branch's own
-                // defect: a word standing in for a fact it does not name.
-                PaneState::Unmeasured => "unmeasured",
-                PaneState::Idle => "idle",
-                PaneState::Empty => "empty",
-            }
-        };
-        let pane = a
-            .pane_id
-            .map(|p| format!(" · pane {p}"))
-            .unwrap_or_default();
-        out.push(format!("  {} · {state}{pane}", a.name));
-    }
-    out
-}
-
 /// (v43, G3) The drag source of a sideline agent row.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum RowSource {
@@ -930,6 +871,8 @@ pub(crate) struct View {
     /// events leg. Rendered as its own row kind, ranked ahead of the rest of
     /// THEY NEED YOU.
     questions_fold: Option<crate::needs_overlay::QuestionsFold>,
+    /// The pinned Needs input section is open (a tap on the strip count).
+    needs_open: bool,
     /// The question pages index, read in-process: the bell's fast seed.
     questions_index: Option<crate::needs_overlay::QuestionsFold>,
     questions_degraded: bool,
@@ -954,30 +897,12 @@ pub(crate) struct View {
     /// Generation token, bumped on every open/close so a fold result
     /// landing after the overlay closed or re-opened is discarded (AC6-FR).
     needs_gen: u64,
-    /// The yard overlay, when open. The cursor indexes the
-    /// roster-derived crowd; the spotlight renders that citizen's sprite,
-    /// and `opened_at` drives frame cycling (a flavour channel - it carries
-    /// no reading, so a timer is legal where it would not be for the eye).
-    yard: Option<YardSel>,
-    /// Pending escape bytes in yard-overlay mode (same split-arrow safety as
-    /// [`View::ans_esc`]).
-    yard_esc: Vec<u8>,
-    /// The identity fold's last result while the overlay is open
-    /// (`None` = not yet fetched this open). Species/rarity/team/
-    /// first-sighting only - no status field, ever: the eye is derived from
-    /// the row's own badge/need values so the sprite cannot disagree.
-    yard_fold: Option<Vec<crate::yard_overlay::YardItem>>,
-    yard_fold_at: Option<Instant>,
-    yard_degraded: bool,
-    yard_want: bool,
-    yard_inflight: bool,
-    yard_gen: u64,
     /// The org panel. The whole thing - open flag, cached fold,
     /// generation - lives in its own module, so this is one field.
     org: crate::org_overlay::Panel,
     /// Catch-up "while you were gone" digest lines, set on attach after
     /// an absence; the next keypress dismisses it (like [`View::overlay`]).
-    digest: Option<Vec<String>>,
+    digest: Option<Vec<TLine>>,
     notice: Option<(String, Instant)>,
     reply_notice_tx: Option<tokio::sync::mpsc::UnboundedSender<String>>,
     /// The session-details modal's off-loop token fetch: (participant key,
@@ -1838,6 +1763,7 @@ mod messages_reply;
 mod overlay_lines;
 #[cfg(test)]
 pub(crate) use overlay_lines::nav_overlay_lines;
+use overlay_lines::squad_peek_lines;
 pub(crate) use overlay_lines::{humanize_age, humanize_ago, nav_agent_tokens, peek_overlay_lines};
 mod messages_view;
 mod org_board;
@@ -1974,6 +1900,7 @@ impl View {
             mine_action: None,
             mine_acting: false,
             questions_fold: None,
+            needs_open: false,
             questions_index: None,
             questions_degraded: false,
             questions_degraded_reason: None,
@@ -1988,14 +1915,6 @@ impl View {
             needs_want: false,
             needs_inflight: false,
             needs_gen: 0,
-            yard: None,
-            yard_esc: Vec::new(),
-            yard_fold: None,
-            yard_fold_at: None,
-            yard_degraded: false,
-            yard_want: false,
-            yard_inflight: false,
-            yard_gen: 0,
             org: crate::org_overlay::Panel::default(),
             digest: None,
             notice: view_store::take_legacy_pins().map(agent_sort::legacy_pin_notice),
@@ -2168,110 +2087,6 @@ impl View {
         worst
     }
 
-    fn needs_queue(&self) -> Vec<NeedRow> {
-        let mut rows: Vec<NeedRow> = Vec::new();
-
-        // Leg 1: live badge rows from the current layout (no shell-out).
-        for a in &self.layout.agents {
-            if is_blocked_row(a) {
-                let kind = if a.answerable.is_some() {
-                    NeedKind::BlockedAnswerable
-                } else {
-                    NeedKind::BlockedFocusOnly
-                };
-                let reason = a.reason.clone().unwrap_or_else(|| {
-                    if a.answerable.is_some() {
-                        "needs an answer".into()
-                    } else {
-                        "needs focus".into()
-                    }
-                });
-                rows.push(NeedRow {
-                    kind,
-                    name: a.name.clone(),
-                    reason,
-                    ts: String::new(),
-                    id_key: a.name.clone(),
-                    answerable: a.answerable.clone(),
-                    pane_id: a.pane_id,
-                    attach_id: a.attach_id.clone(),
-                    squad: a.squad,
-                    tab: a.tab,
-                });
-            } else if !a.exited
-                && pane_state(a.badge, a.seen, a.pane_activity) == PaneState::DoneUnseen
-            {
-                rows.push(NeedRow {
-                    kind: NeedKind::DoneUnseen,
-                    name: a.name.clone(),
-                    reason: a.reason.clone().unwrap_or_else(|| "done, unseen".into()),
-                    ts: String::new(),
-                    id_key: a.name.clone(),
-                    answerable: None,
-                    pane_id: a.pane_id,
-                    attach_id: a.attach_id.clone(),
-                    squad: a.squad,
-                    tab: a.tab,
-                });
-            }
-        }
-
-        // Leg 2: event-fold items, joined to a roster row, else rendered
-        // squadless when live, else dropped (a dead session's stale stop must
-        // not nag forever - Locked 5).
-        if let Some(items) = &self.needs_fold {
-            for item in items {
-                let kind = match item.kind.as_str() {
-                    "review_wedged" => NeedKind::ReviewWedged,
-                    "budget_stop" => NeedKind::BudgetStop,
-                    "mail_question" => NeedKind::MailQuestion,
-                    "operator_question" => NeedKind::Question,
-                    "carveout_stale" | "stale_claims" => NeedKind::Decision,
-                    _ => continue,
-                };
-                match self.join_fold_row(item) {
-                    Some(a) => rows.push(NeedRow {
-                        kind,
-                        name: a.name.clone(),
-                        reason: item.evidence.clone(),
-                        ts: item.ts.clone(),
-                        id_key: item.session_id.clone(),
-                        answerable: None,
-                        pane_id: a.pane_id,
-                        attach_id: a.attach_id.clone(),
-                        squad: a.squad,
-                        tab: a.tab,
-                    }),
-                    None if item.live => rows.push(NeedRow {
-                        kind,
-                        name: item
-                            .name
-                            .clone()
-                            .or_else(|| item.node.clone())
-                            .unwrap_or_else(|| item.session_id.clone()),
-                        reason: item.evidence.clone(),
-                        ts: item.ts.clone(),
-                        id_key: item.session_id.clone(),
-                        answerable: None,
-                        pane_id: None,
-                        attach_id: None,
-                        squad: None,
-                        tab: None,
-                    }),
-                    None => {} // unjoined + not live: drop (stale-nag guard)
-                }
-            }
-        }
-
-        rows.sort_by(|a, b| {
-            a.kind
-                .cmp(&b.kind)
-                .then_with(|| a.ts.cmp(&b.ts))
-                .then_with(|| a.name.cmp(&b.name))
-        });
-        rows
-    }
-
     /// `needs_queue()` filtered for the operator panel: a `MailQuestion` row is
     /// agent-to-agent mail traffic (`acme-web -> fno-peer: ...`), real signal
     /// for a live badge/sprite but not a question addressed to the operator.
@@ -2326,65 +2141,6 @@ impl View {
         }
     }
 
-    /// The yard crowd: every roster agent as `(name, eye, team)`,
-    /// the eye derived from that row's own badge/need reading at render time
-    /// and the team read off the same wire field the sideline orders by.
-    /// This is the whole multi-citizen surface - one glyph each, no sprite,
-    /// so any density including Slim can hold it.
-    fn yard_crowd(&self) -> Vec<(&str, crate::sprites::Eye, u32)> {
-        let queue = self.needs_queue();
-        self.layout
-            .agents
-            .iter()
-            .map(|a| {
-                let need = queue.iter().find(|r| r.name == a.name).map(|r| r.kind);
-                (
-                    a.name.as_str(),
-                    yard_eye(a, need),
-                    a.role_level.unwrap_or(0),
-                )
-            })
-            .collect()
-    }
-
-    /// The identity payload for a citizen, joined by name the same
-    /// way the needs fold joins: first match on a display name. A
-    /// display-name collision degrades to whichever citizen the fold listed
-    /// first - noted, not fixed here.
-    fn yard_identity(&self, name: &str) -> Option<&crate::yard_overlay::YardItem> {
-        self.yard_fold
-            .as_ref()
-            .and_then(|f| f.iter().find(|c| c.name == name))
-    }
-
-    /// The selected yard citizen's name, for re-anchoring the
-    /// spotlight across a layout push: the crowd follows `layout.agents`
-    /// order, so a scrape that removes or reorders rows before the cursor
-    /// would silently move the spotlight onto a different citizen (the same
-    /// index-vs-identity trap the sideline cursor re-anchors out of).
-    fn yard_selected_name(&self) -> Option<String> {
-        // The None-check first: this runs on every layout push (set_layout
-        // captures the name before the swap), so a closed yard must not pay
-        // the crowd build.
-        let yv = self.yard.as_ref()?;
-        let crowd = self.yard_crowd();
-        crowd
-            .get(yv.sel.min(crowd.len().saturating_sub(1)))
-            .map(|(name, _, _)| (*name).to_string())
-    }
-
-    /// The yard overlay's footer state, same three shapes as the
-    /// needs fold's.
-    fn yard_footer(&self) -> NeedsFooter {
-        if self.yard_degraded {
-            NeedsFooter::Degraded
-        } else if self.yard_fold.is_none() {
-            NeedsFooter::Folding
-        } else {
-            NeedsFooter::AsOf
-        }
-    }
-
     /// The identity of the currently-selected overlay row (MINE or needs), for
     /// re-anchoring the cursor across a layout push or fold merge (AC3-UI).
     fn answers_selected_id(&self) -> Option<NeedsOverlayId> {
@@ -2422,7 +2178,6 @@ impl View {
     fn open_create(&mut self) {
         self.selector = None;
         self.answers = None;
-        self.yard = None;
         self.search = None;
         self.rename = None;
         self.move_pick = None;
@@ -2443,7 +2198,6 @@ impl View {
     fn open_recruit(&mut self) {
         self.selector = None;
         self.answers = None;
-        self.yard = None;
         self.search = None;
         self.rename = None;
         self.create = None;
@@ -2465,7 +2219,6 @@ impl View {
     fn open_confirm(&mut self, action: ConfirmAction) {
         self.selector = None;
         self.answers = None;
-        self.yard = None;
         self.search = None;
         // A half-typed workspace name is dropped too (gemini review): the
         // confirm owns the bottom row, and resuming a hidden create overlay
@@ -2496,7 +2249,6 @@ impl View {
     fn open_move_to(&mut self, tab: TabId) {
         self.selector = None;
         self.answers = None;
-        self.yard = None;
         self.search = None;
         self.move_pick = None;
         self.attach_place = None;
@@ -2722,7 +2474,6 @@ impl View {
     fn overlay_open(&self) -> bool {
         self.menu_usurping_open()
             || self.answers.is_some()
-            || self.yard.is_some()
             || self.peek.is_some()
             || self.digest.is_some()
             || self.backlog_board.is_some()
@@ -2734,7 +2485,7 @@ impl View {
     /// text inputs (rename/create/recruit/search/peek_input/nav, whose typed
     /// buffer the menu would orphan) and overlays that own live keys routed
     /// after row_menu (answers dispatches PaneAnswer digits and goto/close on
-    /// Enter; yard takes n/N/q; digest swallows its next key dismissing
+    /// Enter; digest swallows its next key dismissing
     /// itself). None of those is cleared on menu-open, so a menu over one
     /// steals its keys. `peek` is the one deliberate absence: the menu-open
     /// path clears peek itself, so the two can never stack - a right-press
@@ -2758,7 +2509,6 @@ impl View {
             || self.peek_input.is_some()
             || self.nav.is_some()
             || self.answers.is_some()
-            || self.yard.is_some()
             || self.digest.is_some()
             || self.backlog_board.is_some()
             || self.org_board.is_some()
@@ -3556,6 +3306,7 @@ impl View {
             DisplayRow::Blank
             | DisplayRow::CardRule
             | DisplayRow::TableHead
+            | DisplayRow::NeedNote(_)
             | DisplayRow::TableEmpty => None,
         }
     }
@@ -3893,6 +3644,10 @@ impl View {
             DisplayRow::Agent(a) => Some(agent_hit(a, self.layout.active_squad)),
             // A `~` header cycles its own view state, exactly like a squad
             // name row: inert to the selector, clickable.
+            // The pinned Needs input header has no fold state: a click closes it.
+            DisplayRow::Header { key, .. } if *key == SectionKey::Group("@needs-input".into()) => {
+                Some(ChromeHit::NeedInput)
+            }
             DisplayRow::Header { key, .. } => Some(ChromeHit::CycleSection(key.clone())),
             // The idle fold toggles its squad's idle expansion: actionable
             // (click and Enter), so not inert.
@@ -3905,6 +3660,7 @@ impl View {
             DisplayRow::Blank
             | DisplayRow::CardRule
             | DisplayRow::TableHead
+            | DisplayRow::NeedNote(_)
             | DisplayRow::TableEmpty => None,
             // The `+` footer opens the name-input overlay.
             DisplayRow::NewSquad if self.term.0 < MIN_ROWS_FOR_STATUS => Some(ChromeHit::Notice(
@@ -4182,10 +3938,6 @@ impl View {
         // Capture the selected needs-row identity against the OLD layout, before
         // the swap, so the cursor can re-anchor to the same item afterward.
         let needs_prev = self.answers_selected_id();
-        // Same capture for the yard spotlight: the crowd recomputes
-        // from layout.agents, so the selection must follow the citizen, not
-        // the slot.
-        let yard_prev = self.yard_selected_name();
         // Same, for the sideline cursor when the table is status-sorted:
         // a scrape tick that flips one badge RE-ORDERS the rows, so preserving
         // only the numeric index would silently move the cursor onto a different
@@ -4224,25 +3976,6 @@ impl View {
         // in range. An emptied queue keeps the overlay open in its "nothing
         // needs you" state (AC4-EDGE) rather than closing under the user.
         self.reanchor_answers(needs_prev);
-        // Yard spotlight re-anchors by citizen name: identity first,
-        // index clamp the fallback, so the sprite never jumps animals when a
-        // scrape reorders the roster under an open yard.
-        if self.yard.is_some() {
-            // crowd borrows the whole view (rows by reference), so the
-            // position lookup and the clamp bound resolve before the mut
-            // borrow of the selection.
-            let (found, last) = {
-                let crowd = self.yard_crowd();
-                (
-                    yard_prev.and_then(|name| crowd.iter().position(|(n, _, _)| *n == name)),
-                    crowd.len().saturating_sub(1),
-                )
-            };
-            if let Some(yv) = self.yard.as_mut() {
-                let prev = yv.sel;
-                yv.sel = found.unwrap_or(prev).min(last);
-            }
-        }
         // Navigator re-clamps its cursor when a scrape tick reorders/removes rows
         // under it (AC1-FR/AC2-EDGE): the rows recompute from self.layout
         // on every access, so after a push a past-the-end cursor would draw no
@@ -4880,15 +4613,6 @@ impl View {
                 // two lanes, which a flat `sel + 1` no longer can.
                 Some(projection.selected_line(sel)),
             );
-        } else if let Some(yv) = &self.yard {
-            // The yard: the fleet as F[no]nimals. The
-            // crowd is one eye glyph per roster citizen (each glyph computed
-            // from that row's own badge/need values); the spotlight is ONE
-            // 12-column sprite for the selected citizen, its eye from the
-            // same reading, its species/rarity/team/first-sighting from the
-            // identity fold. A failed fold degrades to readings-only, never
-            // blocks, never guesses a species.
-            self.draw_yard(yv, &mut cells, rows, cols);
         } else if let Some(picker) = &self.move_pick {
             // move picker: `move tab to:` / `move pane to:` + one
             // numbered line per candidate squad.
@@ -5023,7 +4747,7 @@ impl View {
         let viewport_w = dims.1.saturating_sub(chrome::Chrome::FRAME_COLS);
         let body_w = chrome.min_inner_w().max(40).min(viewport_w).max(1);
         let text = format!("{name}_");
-        let line = format!("{text:<body_w$}");
+        let line = TLine::line(TextStyle::Item, format!("{text:<body_w$}"));
         layout_lines_overlay(origin, dims, &chrome, &[line], None, OverlayAnchor::Center)
     }
 
@@ -5187,45 +4911,6 @@ impl View {
         }
         let layout = self.confirm_overlay_layout(rows, action);
         draw_overlay_layout(cells, rows, cols, &layout, &self.theme);
-    }
-
-    /// Build the move-tab picker overlay lines: a header plus one
-    /// numbered line per candidate squad, the number being the digit that
-    /// selects it. A candidate that vanished from the catalog since open still
-    /// renders (labelled) - the digit is re-validated on press, and the server
-    /// refuses a stale id regardless.
-    fn move_pick_lines(&self, picker: &MovePick) -> Vec<String> {
-        const W: usize = 40;
-        let command = match &picker.src {
-            MoveSrc::Tab(_) => "move tab to:",
-            MoveSrc::Pane(_) => "move pane to:",
-            MoveSrc::Row { .. } => "move session to:",
-            MoveSrc::Folder { .. } => "add folder:",
-        };
-        let mut lines = vec![pad_to(&format!(" {command}"), W)];
-        for (i, &sid) in picker.squads.iter().enumerate() {
-            let folder = workspace_folder::folder_label(&picker.src, sid);
-            let name = folder.as_deref().unwrap_or_else(|| {
-                self.layout
-                    .squads
-                    .iter()
-                    .find(|s| s.id == sid)
-                    .map(|s| s.name.as_str())
-                    .unwrap_or("(gone)")
-            });
-            // Only the first nine are digit-addressable; the rest get a blank
-            // gutter, so the drawn numbering never promises a key that does
-            // not exist.
-            let ord = if i < 9 {
-                (i + 1).to_string()
-            } else {
-                " ".into()
-            };
-            lines.push(pad_to(&format!("   {ord} {name}"), W));
-        }
-        lines.push(pad_to(" hjkl/arrows move · enter move here", W));
-        lines.push(pad_to(" 1-9 move to first nine · esc/q cancel", W));
-        lines
     }
 
     /// The tab-bar spans in paint order: the active squad's name (inert), its
@@ -5543,6 +5228,7 @@ impl View {
             Density::Regular => {
                 let (rows, depths) = self.tree_rows_with_depths();
                 let (rows, depths) = self.sort_agent_runs(rows, depths);
+                let (rows, depths) = self.pin_needs(rows, depths);
                 self.card_rows(rows, depths)
             }
             Density::Slim => {
@@ -5561,9 +5247,12 @@ impl View {
                         kept_depths.push(d);
                     }
                 }
-                (kept_rows, kept_depths)
+                self.pin_needs(kept_rows, kept_depths)
             }
-            Density::Extended => self.table_rows_with_depths(),
+            Density::Extended => {
+                let (rows, depths) = self.table_rows_with_depths();
+                self.pin_needs(rows, depths)
+            }
         }
     }
 
@@ -5895,6 +5584,9 @@ enum DisplayRow<'a> {
     /// a header with nothing under it reads as a stalled table, so the empty
     /// state is stated rather than implied.
     TableEmpty,
+    /// A line of the pinned Needs input section that is not an agent row: an
+    /// open question. Inert; the question is answered from the bell panel.
+    NeedNote(String),
     /// The top-K idle fold: a squad with more live idle rows than the
     /// cap folds the overflow behind this one row. `hidden` is the foldable
     /// count (the idle rows past the cap, always > 0 when this row is emitted).
@@ -6001,6 +5693,7 @@ fn row_is_inert(drow: &DisplayRow) -> bool {
             | DisplayRow::CardMetrics(..)
             | DisplayRow::CardRule
             | DisplayRow::TableHead
+            | DisplayRow::NeedNote(_)
             | DisplayRow::TableEmpty
     )
 }
@@ -6200,6 +5893,9 @@ enum ChromeHit {
     /// The strip row's view word (`Agents  Messages`, R15): switch the
     /// sideline to that view.
     TopRow(crate::view_store::SidelineView),
+    /// The `N need input` count on the strip row: opens or closes the
+    /// pinned Needs input section.
+    NeedInput,
     Bell(bell::Hit),
     /// Owned, not `&'static`: an in-flight card's notice carries the
     /// server-computed `where_hint` (v18), which is per-card data.
@@ -6546,12 +6242,6 @@ const MINE_CAP: usize = 10;
 /// Re-open cache: a fold younger than this is reused instantly (mashing
 /// `prefix+a` never re-shells - Perspective B).
 const NEEDS_CACHE_TTL: Duration = Duration::from_secs(5);
-/// The yard's re-open cache. Longer than the needs fold's because
-/// the identity leg pays a full Python interpreter start plus an archive
-/// parse for data that is nearly static (species and album history change
-/// on merge cadence, not keystroke cadence).
-const YARD_CACHE_TTL: Duration = Duration::from_secs(60);
-
 /// Default fold window: the last 24h (the fold also windows server-side).
 const NEEDS_WINDOW_SECS: u64 = 24 * 60 * 60;
 
@@ -6802,54 +6492,6 @@ pub(crate) enum NeedsFooter {
     Folding,
     Degraded,
     AsOf,
-}
-
-/// The yard overlay's open state: the crowd cursor plus the open
-/// timestamp that drives frame cycling.
-struct YardSel {
-    sel: usize,
-    opened_at: Instant,
-}
-
-/// The yard's line builder moved into the module named for it; the alias
-/// keeps the one call site and its tests reading the same as before.
-#[cfg(test)]
-use crate::yard_overlay::overlay_lines as yard_overlay_lines;
-
-/// The yard overlay body width: the 12-column sprite plus a label margin,
-/// padded to a block rectangle like the needs overlay.
-pub(crate) const YARD_OVERLAY_W: usize = 48;
-/// Frame period for the flavour leg: frames advance on a timer, never on a
-/// state change (a pose carries no reading, which is exactly why cycling it
-/// is legal where cycling the eye would not be).
-const YARD_FRAME_MS: u128 = 800;
-
-/// The sprite's eye for a roster row - the binding that keeps a
-/// sprite honest. Computed at render time from the same values the row
-/// itself renders (badge, joined need kind, the open-PR fact); there is no
-/// stored eye field anywhere. A gift outranks every mood: the PR is open
-/// and waiting on the operator. `DoneUnseen` without a PR reads as
-/// attention for the same reason it sits in the needs-me queue - the worker
-/// finished and nobody has looked. No badge and no need is NO READING:
-/// [`crate::sprites::Eye::Reserved`], rendered dim, never as content.
-fn yard_eye(a: &AgentRow, need: Option<NeedKind>) -> crate::sprites::Eye {
-    use crate::sprites::Eye;
-    if a.pr.is_some() {
-        return Eye::Gift;
-    }
-    match need {
-        Some(
-            NeedKind::Question
-            | NeedKind::Decision
-            | NeedKind::MailQuestion
-            | NeedKind::BlockedAnswerable
-            | NeedKind::BlockedFocusOnly
-            | NeedKind::DoneUnseen,
-        ) => Eye::Attention,
-        Some(NeedKind::ReviewWedged | NeedKind::BudgetStop) => Eye::Faded,
-        None if !a.exited && a.badge == Some(AgentBadge::Working) => Eye::Working,
-        None => Eye::Reserved,
-    }
 }
 
 /// The navigator overlay content width: labels truncate to it and pad
@@ -7133,11 +6775,6 @@ async fn attach_and_run(
     let (questions_tx, mut questions_rx) = questions::fold_channel();
     let (questions_index_tx, mut questions_index_rx) = questions::index_channel();
 
-    // the yard identity fold leg, same shape as the needs fold -
-    // off the UI loop, gen-tagged, one in flight. `None` = fold failed.
-    let (yard_tx, mut yard_rx) =
-        tokio::sync::mpsc::unbounded_channel::<(u64, Option<Vec<crate::yard_overlay::YardItem>>)>();
-
     // The org fold leg: one channel, three halves, each half single-flight
     // on its own stamp; no generation to supersede.
     let (org_fold_tx, mut org_fold_rx) =
@@ -7278,16 +6915,6 @@ async fn attach_and_run(
         // task 2.3: kick a queued answer; refresh the projection and index.
         questions::maybe_kick(&mut view, &questions_tx, &questions_index_tx);
         questions::kick_action(&mut view, &question_act_tx, &link_tx);
-        if view.yard_want && !view.yard_inflight {
-            view.yard_want = false;
-            view.yard_inflight = true;
-            let tx = yard_tx.clone();
-            let gen = view.yard_gen;
-            tokio::spawn(async move {
-                let result = crate::yard_overlay::fold_now().await;
-                let _ = tx.send((gen, result));
-            });
-        }
         if let Some(want) = view.org.take_want(&view.layout.agents) {
             crate::org_overlay::spawn_folds(want, org_fold_tx.clone());
         }
@@ -7741,28 +7368,6 @@ async fn attach_and_run(
                 }
                 if let Err(e) = compositor.draw(&view.compose()) {
                     break Err(format!("draw: {e}"));
-                }
-            }
-            Some((gen, result)) = yard_rx.recv() => {
-                // the identity fold landed; same merge discipline as
-                // the needs fold - gen-guarded, degraded-loud on None, never
-                // blocking, never cached from a failure.
-                view.yard_inflight = false;
-                if gen == view.yard_gen && view.yard.is_some() {
-                    match result {
-                        Some(items) => {
-                            view.yard_fold = Some(items);
-                            view.yard_degraded = false;
-                            view.yard_fold_at = Some(Instant::now());
-                        }
-                        None => {
-                            view.yard_fold = Some(Vec::new());
-                            view.yard_degraded = true;
-                        }
-                    }
-                    if let Err(e) = compositor.draw(&view.compose()) {
-                        break Err(format!("draw: {e}"));
-                    }
                 }
             }
             Some(result) = org_fold_rx.recv() => {
@@ -8609,26 +8214,6 @@ async fn dispatch_event(
                 view.needs_want = true;
             }
         }
-        Event::OpenYard => {
-            // open the yard. Always opens - an empty roster renders
-            // "the yard is empty - nothing was dispatched", the true failure
-            // state, rather than staying hidden. The identity fold merges in
-            // when it lands; the overlay never blocks on it.
-            view.yard = Some(YardSel {
-                sel: 0,
-                opened_at: Instant::now(),
-            });
-            view.yard_esc.clear();
-            view.yard_gen = view.yard_gen.wrapping_add(1);
-            let fresh = view
-                .yard_fold_at
-                .is_some_and(|t| t.elapsed() < YARD_CACHE_TTL);
-            view.yard_degraded = false;
-            if !fresh {
-                view.yard_fold = None;
-                view.yard_want = true;
-            }
-        }
         Event::OpenFeed => feed_view::toggle(view, sock_w).await?,
         Event::OpenReview => backlog_board::pr_review::toggle_split(view, sock_w).await?,
         Event::FocusFeed => feed_view::focus(view, sock_w).await?,
@@ -8938,6 +8523,7 @@ async fn apply_hit(
             crate::view_store::SidelineView::Backlog => View::open(view),
             crate::view_store::SidelineView::Org => org_board::open(view),
         },
+        ChromeHit::NeedInput => view.needs_open = !view.needs_open,
         ChromeHit::Bell(hit) => bell::apply_hit(view, hit),
         ChromeHit::Cmds(cmds) => {
             for cmd in cmds {
@@ -10043,44 +9629,6 @@ async fn move_pick_keys(
 /// cost against a held key or a paste. (gemini review, MEDIUM)
 const MAX_SEARCH_QUERY: usize = 256;
 
-/// Yard-overlay key routing: `n`/`N` (and j/k, folded arrows) move
-/// the spotlight over the crowd, `q`/Esc close. Any other key is consumed -
-/// an open modal owns the keyboard and never leaks a byte into a pane (the
-/// answer-overlay invariant).
-async fn yard_keys(
-    view: &mut View,
-    bytes: &[u8],
-    _sock_w: &mut (impl tokio::io::AsyncWrite + Unpin),
-) -> Result<StdinFlow, String> {
-    let mut esc = std::mem::take(&mut view.yard_esc);
-    let keys = fold_selector_keys(&mut esc, bytes);
-    view.yard_esc = esc;
-    let len = view.layout.agents.len();
-    for &k in &keys {
-        let Some(yv) = view.yard.as_mut() else {
-            break; // closed mid-chunk
-        };
-        if len == 0 {
-            // The empty yard: any key dismisses it, like the needs overlay's
-            // "nothing needs you".
-            view.yard = None;
-            view.yard_gen = view.yard_gen.wrapping_add(1);
-            break;
-        }
-        yv.sel = yv.sel.min(len - 1);
-        match k {
-            b'n' | b'j' => yv.sel = (yv.sel + 1) % len,
-            b'N' | b'k' => yv.sel = (yv.sel + len - 1) % len,
-            0x1b | b'q' => {
-                view.yard = None;
-                view.yard_gen = view.yard_gen.wrapping_add(1);
-            }
-            _ => {}
-        }
-    }
-    Ok(StdinFlow::Continue)
-}
-
 /// Write raw bytes (BEL, ModeSync escapes) straight to the terminal.
 fn raw_out(bytes: &[u8]) -> std::io::Result<()> {
     let mut out = std::io::stdout().lock();
@@ -10144,6 +9692,10 @@ mod keys_modal_tests;
 #[path = "client_tests/ground_tests.rs"]
 mod ground_tests;
 
+#[cfg(test)]
+#[path = "client_tests/text_hierarchy_tests.rs"]
+mod text_hierarchy_tests;
+
 #[path = "client/org_block.rs"]
 mod org_block;
 
@@ -10170,6 +9722,8 @@ use agent_group::agent_hit;
 mod hold;
 #[path = "client/machine_tree.rs"]
 mod machine_tree;
+#[path = "client/needs_queue.rs"]
+mod needs_queue;
 
 #[path = "client/header_band.rs"]
 mod header_band;

@@ -1,26 +1,24 @@
 //! The client loop's frame timer: when to wake an otherwise idle terminal
 //! (nothing else redraws there) so a timed animation advances. Three sources:
-//! the yard overlay's spotlight, the Working-row spin, and the metrics
-//! skeleton's breathe. Re-armed each loop pass; with none running there is no
-//! deadline and no wakeup.
+//! the Working-row spin, the metrics skeleton's breathe and the need-input pulse. Re-armed each loop pass; with none running
+//! there is no deadline and no wakeup.
 
 use super::*;
 
 impl View {
     pub(super) fn frame_deadline(&self) -> Option<Instant> {
-        let yard = self
-            .yard
-            .as_ref()
-            .map(|yv| (yv.opened_at, YARD_FRAME_MS as u64));
         let spin = crate::lattice::spin_epoch()
             .filter(|_| self.working_row_on_screen())
             .map(|t0| (t0, crate::lattice::SPIN_FRAME_MS));
         let breathe = crate::lattice::spin_epoch()
             .filter(|_| self.breathe_on_screen())
             .map(|t0| (t0, crate::lattice::SPIN_FRAME_MS));
-        yard.into_iter()
-            .chain(spin)
+        let pulse = crate::lattice::spin_epoch()
+            .filter(|_| self.need_input_on_screen())
+            .map(|t0| (t0, crate::lattice::SPIN_FRAME_MS));
+        spin.into_iter()
             .chain(breathe)
+            .chain(pulse)
             .map(|(t0, step)| next_boundary(t0, step))
             .min()
     }
@@ -44,6 +42,14 @@ impl View {
                     .skip(self.sideline_offset())
                     .take(self.sideline_visible_rows())
                     .any(|r| matches!(r, DisplayRow::Agent(a) if working(a)))
+    }
+
+    /// The strip row paints the need-input count only in the Agents view,
+    /// and only while something needs input.
+    fn need_input_on_screen(&self) -> bool {
+        (self.sideline_full || self.panel_w() > 0)
+            && self.sideline_view == crate::view_store::SidelineView::Agents
+            && self.need_input_count() > 0
     }
 
     /// A CardMetrics row with an unserved field in the scroll window: its

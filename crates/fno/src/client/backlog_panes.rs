@@ -5,10 +5,11 @@
 //! title rows (`backlog_style::paint_title_row`); no region draws a frame.
 
 use super::backlog_board::{cursor_card_id, filter_bar_lines, render, BoardView, PaneDoc};
-use super::backlog_style::{self, BLine, BRole, BSeg};
+use super::backlog_style;
 use super::node_detail::{self, Sel};
 use crate::chrome;
 use crate::proto::{cell_flags, Cell, Color};
+use crate::text_style::{TLine, TSeg, TextStyle};
 use crate::theme::Theme;
 
 /// The three region rectangles one host rect lays out as. One home for the
@@ -119,10 +120,10 @@ pub(crate) fn paint(
     // the same way the title rows already do, so the side pane never reads
     // as ready to act while typing lands somewhere else.
     let hint = hint_lines(b, focus_pane, w);
-    let hint: Vec<BLine> = if owner {
+    let hint: Vec<TLine> = if owner {
         hint
     } else {
-        hint.into_iter().map(BLine::dimmed).collect()
+        hint.into_iter().map(TLine::dimmed).collect()
     };
     let hint_h = if h >= 6 { hint.len().min(4) } else { 0 };
     let laid_out = regions(rect, hint_h, seam_w);
@@ -130,7 +131,7 @@ pub(crate) fn paint(
     // The filter bar: the capped two-row cell wrap, unframed, carrying the
     // board's one esc chip on its top-right (it owned the framed title row
     // before the frames left).
-    let bar_body: Vec<BLine> = b
+    let bar_body: Vec<TLine> = b
         .body
         .as_ref()
         .map(|board| filter_bar_lines(b, board, w))
@@ -164,7 +165,7 @@ pub(crate) fn paint(
     });
     // The board pane wears the cursor band while the board owns the
     // keyboard and no drill-down took it; an inactive board keeps its plain
-    // selection glyph, never the band. The band rides the cached BLine
+    // selection glyph, never the band. The band rides the cached TLine
     // (line.band), so an unowned board strips it before the panel paint.
     let band_on = owner && !focus_pane;
     backlog_style::paint_title_row(
@@ -222,7 +223,7 @@ pub(crate) fn paint(
     let is_empty_node = node.is_empty();
     let dfollow_pre = b.detail_lines_cached(dkey, || {
         if is_empty_node {
-            return (vec![BLine::meta("no card under the cursor")], None);
+            return (vec![TLine::meta("no card under the cursor")], None);
         }
         let sel = b.detail.as_ref().map(|d| d.sel);
         node_detail::pane_lines(b, &node, sel, detail_inner_w)
@@ -415,15 +416,15 @@ pub(crate) fn sync_doc(b: &mut BoardView) {
 /// The list view's flat body: each lane's shown cells in column order as
 /// one list, a dim sub-header per column, one row per card. The follow
 /// index tracks the cursor card.
-pub(crate) fn list_lines(b: &BoardView, w: usize) -> (Vec<BLine>, Option<usize>) {
+pub(crate) fn list_lines(b: &BoardView, w: usize) -> (Vec<TLine>, Option<usize>) {
     let Some(board) = b.body.as_ref() else {
-        return (vec![BLine::plain("reading board...")], None);
+        return (vec![TLine::plain("reading board...")], None);
     };
-    let mut lines: Vec<BLine> = Vec::new();
+    let mut lines: Vec<TLine> = Vec::new();
     let mut follow: Option<usize> = None;
     for (li, lane) in board.lanes.iter().enumerate() {
         if board.lanes.len() > 1 {
-            lines.push(BLine::head(trunc_line(&format!("{}", lane.title), w)));
+            lines.push(TLine::head(trunc_line(&format!("{}", lane.title), w)));
         }
         for name in b.layout.columns.iter() {
             let Some(cell) = lane.cells.iter().find(|c| &c.column == name) else {
@@ -432,7 +433,7 @@ pub(crate) fn list_lines(b: &BoardView, w: usize) -> (Vec<BLine>, Option<usize>)
             if cell.cards.is_empty() {
                 continue;
             }
-            lines.push(BLine::meta(trunc_line(&cell.column.to_string(), w)));
+            lines.push(TLine::meta(trunc_line(&cell.column.to_string(), w)));
             for (ri, card) in cell.cards.iter().enumerate() {
                 let sel = li == b.lane
                     && *name
@@ -450,18 +451,18 @@ pub(crate) fn list_lines(b: &BoardView, w: usize) -> (Vec<BLine>, Option<usize>)
                     " "
                 };
                 let mark = if sel { "\u{25b8}" } else { " " };
-                let mut line = BLine::of(&[
-                    BSeg {
+                let mut line = TLine::of(&[
+                    TSeg {
                         text: format!("{mark}{glyph} "),
-                        role: BRole::Body,
+                        role: TextStyle::Item,
                     },
-                    BSeg {
+                    TSeg {
                         text: card.id.clone(),
-                        role: BRole::Label,
+                        role: TextStyle::Badge,
                     },
-                    BSeg {
+                    TSeg {
                         text: format!(" {}", card.title),
-                        role: BRole::Body,
+                        role: TextStyle::Item,
                     },
                 ]);
                 line.band = sel;
@@ -643,7 +644,7 @@ mod tests {
 /// The two-row hint: words wrap onto two rows; a word that fits in neither
 /// drops whole, no marker.
 pub(crate) fn hint_rows(text: &str, w: usize) -> Vec<String> {
-    BLine::meta(text)
+    TLine::meta(text)
         .wrap(w.max(1))
         .iter()
         .map(|l| l.text.trim_end().to_string())
@@ -687,7 +688,7 @@ fn enter_word(b: &BoardView) -> String {
 /// press away. Key words read bold, the text plain; neither dims here - the
 /// caller ([`paint`]) flattens the whole sheet to the title rows' dim role
 /// when the pane does not own typing.
-pub(crate) fn hint_lines(b: &BoardView, detail_focus: bool, w: usize) -> Vec<BLine> {
+pub(crate) fn hint_lines(b: &BoardView, detail_focus: bool, w: usize) -> Vec<TLine> {
     let text = if detail_focus {
         format!(
             "j/k scroll \u{b7} tab link \u{b7} enter {} \u{b7} y copy id \u{b7} Y copy cmd \u{b7} PgUp/PgDn scroll \u{b7} esc board \u{b7} b blueprint \u{b7} t target \u{b7} A lead \u{b7} c comment \u{b7} ? keys",
@@ -697,31 +698,31 @@ pub(crate) fn hint_lines(b: &BoardView, detail_focus: bool, w: usize) -> Vec<BLi
         "hjkl move \u{b7} [ ] lane \u{b7} L lanes \u{b7} Tab list/kanban \u{b7} / search \u{b7} f filter \u{b7} enter details \u{b7} c cols \u{b7} b blueprint \u{b7} t target \u{b7} A lead \u{b7} T/K/J rank \u{b7} F full \u{b7} esc close \u{b7} ? keys"
         .to_string()
     };
-    let mut sheet = BLine {
+    let mut sheet = TLine {
         text: String::new(),
         roles: Vec::new(),
-        default_role: BRole::Body,
+        default_role: TextStyle::Item,
         band: false,
         join: crate::chrome::Join::Line,
     };
     for (i, part) in text.split(" \u{b7} ").enumerate() {
         if i > 0 {
-            sheet.push_line(BLine::plain(" \u{b7} "));
+            sheet.push_line(TLine::plain(" \u{b7} "));
         }
         match part.split_once(' ') {
             Some((k, rest)) => {
-                sheet.push_line(BLine::head(k));
-                sheet.push_line(BLine::plain(format!(" {rest}")));
+                sheet.push_line(TLine::head(k));
+                sheet.push_line(TLine::plain(format!(" {rest}")));
             }
-            None => sheet.push_line(BLine::head(part)),
+            None => sheet.push_line(TLine::head(part)),
         }
     }
-    let mut rows: Vec<BLine> = sheet.wrap(w.max(1));
+    let mut rows: Vec<TLine> = sheet.wrap(w.max(1));
     const HINT_MAX_ROWS: usize = 4;
     if rows.len() > HINT_MAX_ROWS {
         let keep = w.saturating_sub(7);
         let last = &mut rows[HINT_MAX_ROWS - 1];
-        *last = BLine::plain(format!(
+        *last = TLine::plain(format!(
             "{} ? keys",
             last.text.chars().take(keep).collect::<String>()
         ));

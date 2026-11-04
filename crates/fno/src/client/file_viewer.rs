@@ -12,7 +12,7 @@ use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use super::backlog_style::{to_body_line, BLine};
+use super::backlog_style::to_body_line;
 use super::input_folds::{fold_modal_keys, ModalKey};
 use super::node_detail::backlog_md::md_lines;
 use super::overlay_paint::{draw_overlay_layout, family_b_origin, OverlayAnchor, OverlayLayout};
@@ -20,6 +20,7 @@ use super::*;
 use crate::chrome;
 use crate::open_router::ViewerShape;
 use crate::popup::Anchor;
+use crate::text_style::TLine;
 
 const DEFAULT_PCT: u16 = 40;
 const STEP_PCT: i16 = 5;
@@ -324,7 +325,7 @@ struct FileViewer {
     /// The markdown body rendered at the last paint width. Paint paths hold
     /// `&View`, so the cache sits in a `RefCell`; nothing re-enters it while
     /// a borrow is out, and a resize re-renders once.
-    md: RefCell<Option<(usize, Vec<BLine>)>>,
+    md: RefCell<Option<(usize, Vec<TLine>)>>,
     esc: Vec<u8>,
 }
 
@@ -541,7 +542,7 @@ struct Window {
 
 /// The markdown body rendered at the paint width, cached per width; none for
 /// other bodies.
-fn rendered<'a>(v: &'a FileViewer, plan: &Plan) -> Option<std::cell::Ref<'a, [BLine]>> {
+fn rendered<'a>(v: &'a FileViewer, plan: &Plan) -> Option<std::cell::Ref<'a, [TLine]>> {
     let Body::Markdown { src, .. } = &v.body else {
         return None;
     };
@@ -558,7 +559,7 @@ fn rendered<'a>(v: &'a FileViewer, plan: &Plan) -> Option<std::cell::Ref<'a, [BL
         .ok()
 }
 
-fn window(v: &FileViewer, plan: &Plan, md: Option<&[BLine]>) -> Window {
+fn window(v: &FileViewer, plan: &Plan, md: Option<&[TLine]>) -> Window {
     let mut rows = Vec::new();
     if let Some(rendered) = md.filter(|r| !r.is_empty()) {
         let first = v.scroll.min(rendered.len() - 1);
@@ -601,7 +602,11 @@ fn window(v: &FileViewer, plan: &Plan, md: Option<&[BLine]>) -> Window {
                 " ".repeat(g + 1)
             };
             let mut row = chrome::BodyLine::plain(format!("{gutter}{piece}"));
-            row.segs = vec![(0, g + 1, crate::theme::Role::BodyDim)];
+            row.segs = vec![(
+                0,
+                g + 1,
+                crate::theme::Role::Text(crate::text_style::TextStyle::Meta),
+            )];
             if v.target == Some(i) {
                 row.sel_span = Some((g + 1, piece.chars().count().max(1)));
             }
@@ -611,9 +616,9 @@ fn window(v: &FileViewer, plan: &Plan, md: Option<&[BLine]>) -> Window {
     Window { rows, started }
 }
 
-fn layout(plan: &Plan, v: &FileViewer, md: Option<&[BLine]>) -> OverlayLayout {
+fn layout(plan: &Plan, v: &FileViewer, md: Option<&[TLine]>) -> OverlayLayout {
     let win = window(v, plan, md);
-    let total = md.map_or_else(|| v.count(), <[BLine]>::len);
+    let total = md.map_or_else(|| v.count(), <[TLine]>::len);
     let first = v.scroll.min(total.saturating_sub(1));
     let has_scroll = first > 0 || first + win.started < total;
     let mut body = win.rows;

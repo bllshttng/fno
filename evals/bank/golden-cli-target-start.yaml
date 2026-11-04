@@ -1,0 +1,19 @@
+# Grade-only: no worker, so a head run of this task costs nothing. A bare
+# `fno do target start` refuses and prints its usage; the grade reads that line.
+id: golden-cli-target-start
+tier: capability
+grade:
+  - kind: exit
+    command: "fno do target start 2>&1 | grep -Fq 'fno do target start <node'"
+    expect: 0
+timeout_minutes: 5
+tags: [golden]
+covers: ["crates/fno-agents/src/backlog/"]
+golden:
+  source: {kind: correction, ref: "24508275:wrong_assumption"}
+  quote: "wait why is this being built in ~/code/footnote/footnote"
+  expected: "fno do target start <node> prints its usage."
+  rule: "AGENTS.md principle 0: enter a dedicated feature worktree before editing, generating or committing."
+  failure_type: dead-command
+  cost: rework
+  outcome: failed

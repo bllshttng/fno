@@ -110,7 +110,7 @@ OUT="$(run_hook "$CANON2" "$OK_PAYLOAD")"
 RC=$?
 [[ $RC -eq 0 ]] && pass "create with a pre-made worktree exits 0" || fail "create exit was $RC"
 [[ "$OUT" == "$WT2" ]] && pass "stdout carries the worktree path" || fail "stdout was '$OUT'"
-LATCH_FOUND="$(find "$TMP_BASE/state/latches" "$HOME/.fno/latches" -maxdepth 1 -name '.worktree-create-capsess-done' 2>/dev/null)"
+LATCH_FOUND="$(find "$TMP_BASE/state/latches" "$HOME/.fno/state/latches" "$HOME/.fno/latches" -maxdepth 1 -name '.worktree-create-capsess-done' 2>/dev/null)"
 [[ -z "$LATCH_FOUND" ]] && pass "latch deleted by its writer" || fail "latch survived: $LATCH_FOUND"
 
 # --- a payload with no session_id is never counted ---------------------------

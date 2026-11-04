@@ -24,7 +24,10 @@ use std::path::{Path, PathBuf};
 pub fn run(_args: &[String]) -> i32 {
     let payload: Value = serde_json::from_str(super::read_stdin().trim()).unwrap_or(Value::Null);
     let cwd = payload_cwd(&payload);
-    if allows(&payload, &crate::paths_cli::worktrees_base(&cwd)) {
+    let legacy = crate::paths_cli::legacy_worktrees_base_for(&cwd);
+    if allows(&payload, &crate::paths_cli::worktrees_base(&cwd))
+        || legacy.as_deref().is_some_and(|base| allows(&payload, base))
+    {
         let out = json!({
             "hookSpecificOutput": {
                 "hookEventName": "PermissionRequest",

@@ -1,14 +1,14 @@
 //! The Messages tab: three columns over the full terminal - the flat chat
 //! list of agents and channels, the selected agent's chats, and the
 //! selected conversation as a two-sided bubble thread. The model is the
-//! `mail-threads` projection; painting runs through the sideline's BLine
+//! `mail-threads` projection; painting runs through the sideline's TLine
 //! path; keys and mouse mirror org_board. The strip row
 //! (`Agents  Messages`) is the sideline's, not this module's.
 
-use super::backlog_style::{BLine, BRole, BSeg};
 use super::*;
 use crate::messages_model::MessagesSnapshot;
 use crate::org_model::OrgTree;
+use crate::text_style::{TLine, TSeg, TextStyle};
 use crate::view_store::SidelineView;
 use serde_json::Value;
 use std::collections::HashSet;
@@ -16,8 +16,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 static NEXT_MESSAGES_GEN: AtomicU64 = AtomicU64::new(0);
 
-fn seg(text: impl Into<String>, role: BRole) -> BSeg {
-    BSeg {
+fn seg(text: impl Into<String>, role: TextStyle) -> TSeg {
+    TSeg {
         text: text.into(),
         role,
     }
@@ -28,13 +28,13 @@ fn seg(text: impl Into<String>, role: BRole) -> BSeg {
 /// One tab cell of a strip: the label padded one space each side, so the
 /// active cell paints as a full inverted block (the active mux tab's look).
 /// Inactive cells keep the same width, so the click spans never move.
-fn tab_seg(label: &str, active: bool, focused: bool) -> BSeg {
+fn tab_seg(label: &str, active: bool, focused: bool) -> TSeg {
     let role = if active {
-        BRole::Tab
+        TextStyle::Tab
     } else if focused {
-        BRole::Body
+        TextStyle::Item
     } else {
-        BRole::Meta
+        TextStyle::Meta
     };
     seg(format!(" {label} "), role)
 }
@@ -70,7 +70,7 @@ fn column_band(focused: bool, theme: &crate::theme::Theme) -> (Color, Color, u8)
 /// painted cell moved the terminal cursor and overwrote the next row, so
 /// no output line ever carries one. The harness's `<pasted_content>` wrapper
 /// lines are transport, not words the user typed, so they never paint.
-fn body_lines(text: &str, w: usize, role: BRole) -> Vec<BLine> {
+fn body_lines(text: &str, w: usize, role: TextStyle) -> Vec<TLine> {
     let inner = w.saturating_sub(BODY_INDENT.len()).max(1);
     let mut out = Vec::new();
     for para in text
@@ -84,7 +84,7 @@ fn body_lines(text: &str, w: usize, role: BRole) -> Vec<BLine> {
         {
             continue;
         }
-        for mut line in BLine::of(&[seg(para, role)]).wrap(inner) {
+        for mut line in TLine::of(&[seg(para, role)]).wrap(inner) {
             line.text.insert_str(0, BODY_INDENT);
             line.roles.splice(0..0, [role; BODY_INDENT.len()]);
             out.push(line);
@@ -101,8 +101,8 @@ fn bubble_w(w: usize) -> usize {
 }
 
 /// The time under a burst's last message, on that message's side.
-fn time_line(ts_time: String, right: bool, w: usize) -> BLine {
-    let mut line = BLine::meta(ts_time);
+fn time_line(ts_time: String, right: bool, w: usize) -> TLine {
+    let mut line = TLine::meta(ts_time);
     if right {
         flush_right(std::slice::from_mut(&mut line), w);
     }
@@ -111,7 +111,7 @@ fn time_line(ts_time: String, right: bool, w: usize) -> BLine {
 
 /// The reader's own side: each line, trimmed, ends at the pane's right
 /// edge.
-fn flush_right(block: &mut [BLine], w: usize) {
+fn flush_right(block: &mut [TLine], w: usize) {
     for line in block {
         let start = line.text.len() - line.text.trim_start().len();
         // A blank body line trims to nothing; its end never precedes start.
@@ -122,11 +122,11 @@ fn flush_right(block: &mut [BLine], w: usize) {
         );
         line.text = line.text[start..end].to_string();
         line.roles = line.roles.iter().skip(lead).take(kept).copied().collect();
-        let used: usize = line.text.chars().map(super::backlog_style::char_w).sum();
+        let used: usize = line.text.chars().map(crate::text_style::char_w).sum();
         let pad = w.saturating_sub(used);
         line.text.insert_str(0, &" ".repeat(pad));
         line.roles
-            .splice(0..0, std::iter::repeat_n(BRole::Body, pad));
+            .splice(0..0, std::iter::repeat_n(TextStyle::Item, pad));
     }
 }
 
@@ -163,18 +163,18 @@ fn agent_label(p: &Value) -> Option<String> {
     }
 }
 
-fn push_blank(lines: &mut Vec<BLine>, owners: &mut Vec<Option<usize>>) {
+fn push_blank(lines: &mut Vec<TLine>, owners: &mut Vec<Option<usize>>) {
     if lines.last().is_some_and(|l| l.text.is_empty()) {
         return;
     }
-    lines.push(BLine::meta(""));
+    lines.push(TLine::meta(""));
     owners.push(None);
 }
 
 /// Close a burst: its last message's HH:MM, on that message's side, at
 /// the body's right edge (`w` less the two-column margin).
 fn push_time(
-    lines: &mut Vec<BLine>,
+    lines: &mut Vec<TLine>,
     owners: &mut Vec<Option<usize>>,
     ts: &str,
     right: bool,
@@ -718,7 +718,7 @@ impl MessagesBoard {
         &self,
         w: usize,
         split: (usize, usize),
-    ) -> (Vec<BLine>, Vec<BLine>, Vec<BLine>) {
+    ) -> (Vec<TLine>, Vec<TLine>, Vec<TLine>) {
         let (tree_w, part_w) = split;
         let tree = self.tree_column(tree_w);
         let chats = self.chats_column(part_w);
@@ -729,14 +729,14 @@ impl MessagesBoard {
     /// Column 1: the filter row (item 5), the All filter's tab strip, then
     /// the active list. Band rides the cursor row; `a`/`b` switch the
     /// filter, `s` toggles the sort shown in the strip.
-    fn tree_column(&self, w: usize) -> Vec<BLine> {
+    fn tree_column(&self, w: usize) -> Vec<TLine> {
         let wrap_w = w.saturating_sub(2).max(1);
-        let mut lines: Vec<BLine> = Vec::new();
+        let mut lines: Vec<TLine> = Vec::new();
         let focused = self.col == Col::Tree;
-        let filter_row = BLine::of(&[
-            seg("a", BRole::Meta),
+        let filter_row = TLine::of(&[
+            seg("a", TextStyle::Meta),
             tab_seg("All", self.filter == ListFilter::All, focused),
-            seg(" \u{b7} b", BRole::Meta),
+            seg(" \u{b7} b", TextStyle::Meta),
             tab_seg("Broadcasts", self.filter == ListFilter::Broadcasts, focused),
         ]);
         lines.push(filter_row);
@@ -746,30 +746,30 @@ impl MessagesBoard {
                 SortMode::Alpha => "a-z",
             };
             let agents_active = self.list_tab == ListTab::Agents;
-            let strip = BLine::of(&[
+            let strip = TLine::of(&[
                 tab_seg(
                     &format!("Agents \u{b7} {sort_word}"),
                     agents_active,
                     focused,
                 ),
-                seg("|", BRole::Meta),
+                seg("|", TextStyle::Meta),
                 tab_seg("Archive", !agents_active, focused),
             ]);
             lines.push(strip);
         }
         let error = self.snapshot.error_line(board_now());
         if !error.is_empty() {
-            lines.extend(BLine::meta(error).wrap(wrap_w));
+            lines.extend(TLine::meta(error).wrap(wrap_w));
         }
         if self.snapshot.projection.is_none() {
             if self.inflight {
                 // Skeleton rows (item 1): the list's shape before the read
                 // lands.
                 for _ in 0..3 {
-                    lines.push(BLine::meta("\u{b7} \u{b7} \u{b7} \u{b7} \u{b7}"));
+                    lines.push(TLine::meta("\u{b7} \u{b7} \u{b7} \u{b7} \u{b7}"));
                 }
             } else {
-                lines.extend(BLine::meta("(not read yet - opening gathers once)").wrap(wrap_w));
+                lines.extend(TLine::meta("(not read yet - opening gathers once)").wrap(wrap_w));
             }
         }
         let rows = self.tree_rows();
@@ -777,20 +777,28 @@ impl MessagesBoard {
             && self.list_tab == ListTab::Archive
             && !rows.iter().any(|r| matches!(r, TreeRow::Agent { .. }))
         {
-            lines.extend(BLine::meta("(no archived agents)").wrap(wrap_w));
+            lines.extend(TLine::meta("(no archived agents)").wrap(wrap_w));
         }
         if self.filter == ListFilter::Broadcasts && rows.is_empty() {
-            lines.extend(BLine::meta("(no broadcast groups)").wrap(wrap_w));
+            lines.extend(TLine::meta("(no broadcast groups)").wrap(wrap_w));
         }
-        lines.push(BLine::meta(""));
+        lines.push(TLine::meta(""));
         for (i, row) in rows.iter().enumerate() {
             let mut line = match row {
-                TreeRow::Channel(scope) => {
-                    BLine::of(&[seg(format!("fleet:{}", channel_label(scope)), BRole::Label)])
-                }
-                TreeRow::Agent { name, live, .. } => BLine::of(&[
-                    seg("  ", BRole::Meta),
-                    seg(name.clone(), if *live { BRole::Body } else { BRole::Meta }),
+                TreeRow::Channel(scope) => TLine::of(&[seg(
+                    format!("fleet:{}", channel_label(scope)),
+                    TextStyle::Badge,
+                )]),
+                TreeRow::Agent { name, live, .. } => TLine::of(&[
+                    seg("  ", TextStyle::Meta),
+                    seg(
+                        name.clone(),
+                        if *live {
+                            TextStyle::Item
+                        } else {
+                            TextStyle::Meta
+                        },
+                    ),
                 ]),
             };
             line.band = i == self.cursors[0];
@@ -802,17 +810,17 @@ impl MessagesBoard {
     /// Column 2: the tab strip, then the active tab's rows. Placeholders
     /// wrap to the column's width (item 4); a system arm shows its display
     /// label (item 5).
-    fn chats_column(&self, w: usize) -> Vec<BLine> {
+    fn chats_column(&self, w: usize) -> Vec<TLine> {
         let wrap_w = w.saturating_sub(2).max(1);
         let focused = self.col == Col::Chats;
-        let strip = BLine::of(&[
+        let strip = TLine::of(&[
             tab_seg("Chats", self.col2 == ChatTab::Chats, focused),
             tab_seg("System", self.col2 == ChatTab::System, focused),
             tab_seg("Archive", self.col2 == ChatTab::Archive, focused),
         ]);
-        let mut lines = vec![strip, BLine::meta("")];
+        let mut lines = vec![strip, TLine::meta("")];
         if self.sel_agent.is_none() {
-            lines.extend(BLine::meta("(select an agent in column 1)").wrap(wrap_w));
+            lines.extend(TLine::meta("(select an agent in column 1)").wrap(wrap_w));
             return lines;
         }
         let rows = self.active_chat_rows();
@@ -822,39 +830,43 @@ impl MessagesBoard {
                 ChatTab::System => "(no system mail)",
                 ChatTab::Archive => "(no archived chats)",
             };
-            lines.extend(BLine::meta(empty).wrap(wrap_w));
+            lines.extend(TLine::meta(empty).wrap(wrap_w));
             return lines;
         }
         for (i, row) in rows.iter().enumerate() {
             let mut line = match row {
-                ChatRow::SystemEntry { arm } => {
-                    BLine::of(&[seg("  ", BRole::Meta), seg(display_label(arm), BRole::Body)])
-                }
+                ChatRow::SystemEntry { arm } => TLine::of(&[
+                    seg("  ", TextStyle::Meta),
+                    seg(display_label(arm), TextStyle::Item),
+                ]),
                 ChatRow::Thread {
                     partner,
                     last,
                     unread,
                     stuck,
                     ..
-                } => BLine::of(&[
+                } => TLine::of(&[
                     // Two slots: `!` (a sent message waits on the sender)
                     // never hides `*` (unread for the reader).
-                    seg(if *stuck { "!" } else { " " }, BRole::Warn),
-                    seg(if *unread { "*" } else { " " }, BRole::Meta),
-                    seg(partner.clone(), BRole::Body),
-                    seg(format!(" \u{b7} {last}"), BRole::Meta),
+                    seg(if *stuck { "!" } else { " " }, TextStyle::ERROR),
+                    seg(if *unread { "*" } else { " " }, TextStyle::Meta),
+                    seg(partner.clone(), TextStyle::Item),
+                    seg(format!(" \u{b7} {last}"), TextStyle::Meta),
                 ]),
                 ChatRow::YouThread {
                     name,
                     last_ts,
                     unread,
                     ..
-                } => BLine::of(&[
+                } => TLine::of(&[
                     // The same two slots as a thread row, so names line up.
-                    seg(" ", BRole::Warn),
-                    seg(if *unread { "*" } else { " " }, BRole::Meta),
-                    seg(name.clone(), BRole::Body),
-                    seg(format!(" \u{b7} {}", Self::ts_time(last_ts)), BRole::Meta),
+                    seg(" ", TextStyle::ERROR),
+                    seg(if *unread { "*" } else { " " }, TextStyle::Meta),
+                    seg(name.clone(), TextStyle::Item),
+                    seg(
+                        format!(" \u{b7} {}", Self::ts_time(last_ts)),
+                        TextStyle::Meta,
+                    ),
                 ]),
             };
             line.band = i == self.cursors[1];
@@ -884,9 +896,9 @@ impl MessagesBoard {
 
     /// Column 3's title: the other party's display name plus the info and
     /// more affordances (item 10).
-    fn thread_title(&self) -> BLine {
+    fn thread_title(&self) -> TLine {
         let Some(sel) = self.sel_thread.as_deref() else {
-            return BLine::meta("Thread");
+            return TLine::meta("Thread");
         };
         if let Some(sid) = sel.strip_prefix("you:") {
             let name = self
@@ -894,13 +906,13 @@ impl MessagesBoard {
                 .map(|t| text_of(t, "name").to_string())
                 .unwrap_or_else(|| sid.get(..8).unwrap_or(sid).to_string());
             let name_role = if self.col == Col::Thread {
-                BRole::Head
+                TextStyle::Title
             } else {
-                BRole::Body
+                TextStyle::Item
             };
-            return BLine::of(&[
+            return TLine::of(&[
                 seg(name, name_role),
-                seg("  [i]  ...".to_string(), BRole::Meta),
+                seg("  [i]  ...".to_string(), TextStyle::Meta),
             ]);
         }
         let name = if let Some(scope) = sel.strip_prefix("channel:") {
@@ -927,13 +939,13 @@ impl MessagesBoard {
         };
         // The focused column's title is bold; elsewhere it reads plain.
         let name_role = if self.col == Col::Thread {
-            BRole::Head
+            TextStyle::Title
         } else {
-            BRole::Body
+            TextStyle::Item
         };
-        let title = BLine::of(&[
+        let title = TLine::of(&[
             seg(name, name_role),
-            seg("  [i]  ...".to_string(), BRole::Meta),
+            seg("  [i]  ...".to_string(), TextStyle::Meta),
         ]);
         title
     }
@@ -946,7 +958,7 @@ impl MessagesBoard {
     /// label per run of consecutive same-sender rows, and the body only -
     /// no envelopes, no delivered-header lines (item 9 runs, item 12
     /// padding).
-    pub(crate) fn thread_lines(&self, w: usize) -> (Vec<BLine>, Vec<Option<usize>>) {
+    pub(crate) fn thread_lines(&self, w: usize) -> (Vec<TLine>, Vec<Option<usize>>) {
         let title = self.thread_title();
         if let Some(sid) = self
             .sel_thread
@@ -959,14 +971,14 @@ impl MessagesBoard {
         let mut owners: Vec<Option<usize>> = vec![None];
         let wrap_w = w.saturating_sub(2).min(((w * 7) / 10).max(12)).max(1);
         let Some(_sel) = self.sel_thread.as_deref() else {
-            let wrapped = BLine::meta("(select a chat in column 2)").wrap(wrap_w);
+            let wrapped = TLine::meta("(select a chat in column 2)").wrap(wrap_w);
             owners.extend(std::iter::repeat(None).take(wrapped.len()));
             lines.extend(wrapped);
             return (lines, owners);
         };
         let rows = self.conversation_rows();
         if rows.is_empty() {
-            let wrapped = BLine::meta("(no messages)").wrap(wrap_w);
+            let wrapped = TLine::meta("(no messages)").wrap(wrap_w);
             owners.extend(std::iter::repeat(None).take(wrapped.len()));
             lines.extend(wrapped);
             return (lines, owners);
@@ -1003,16 +1015,16 @@ impl MessagesBoard {
                 // The name line is the envelope's formal structure, so it
                 // paints in the label color, distinct from the dim meta and
                 // the bold subject under it.
-                block.push(BLine::of(&[seg(sender.clone(), BRole::Label)]));
+                block.push(TLine::of(&[seg(sender.clone(), TextStyle::Badge)]));
             }
             run_key = Some(key.to_string());
             // The sender's --subject rides the row; a headline line under
             // the sender, only when one was given.
             let subject = text_of(r, "subject");
             if !subject.is_empty() {
-                block.extend(body_lines(subject, width, BRole::Head));
+                block.extend(body_lines(subject, width, TextStyle::Title));
             }
-            block.extend(body_lines(text_of(r, "body"), width, BRole::Body));
+            block.extend(body_lines(text_of(r, "body"), width, TextStyle::Item));
             // A sent row says what the recipient's harness did with it, and
             // a stuck one names the key that moves it.
             if let Some((text, role)) = right.then(|| state_line(r)).flatten() {
@@ -1037,14 +1049,14 @@ impl MessagesBoard {
     /// right, then the assistant's reply on the left, one item at a time,
     /// with the same burst clock and wrap idioms `thread_lines` uses. Owners index
     /// ITEMS (two bubbles per item), so the cursor indexes `item = cur/2`.
-    fn you_thread_lines(&self, w: usize, sid: &str) -> (Vec<BLine>, Vec<Option<usize>>) {
+    fn you_thread_lines(&self, w: usize, sid: &str) -> (Vec<TLine>, Vec<Option<usize>>) {
         let title = self.thread_title();
         let mut lines = vec![title];
         let mut owners: Vec<Option<usize>> = vec![None];
         let wrap_w = w.saturating_sub(2).max(1);
         let items = self.you_items(sid);
         if items.is_empty() {
-            let wrapped = BLine::meta("(no You items)").wrap(wrap_w);
+            let wrapped = TLine::meta("(no You items)").wrap(wrap_w);
             owners.extend(std::iter::repeat(None).take(wrapped.len()));
             lines.extend(wrapped);
             return (lines, owners);
@@ -1069,8 +1081,8 @@ impl MessagesBoard {
             // The operator's typed turn, flush right under its own Me label.
             if !typed.is_empty() {
                 push_blank(&mut lines, &mut owners);
-                let mut block = vec![BLine::of(&[seg("Me", BRole::Label)])];
-                block.extend(body_lines(typed, bubble_w(wrap_w), BRole::Body));
+                let mut block = vec![TLine::of(&[seg("Me", TextStyle::Badge)])];
+                block.extend(body_lines(typed, bubble_w(wrap_w), TextStyle::Item));
                 flush_right(&mut block, wrap_w);
                 for mut line in block {
                     line.band = selected;
@@ -1081,11 +1093,11 @@ impl MessagesBoard {
             // The assistant's reply, under the session's name.
             if !reply.is_empty() {
                 push_blank(&mut lines, &mut owners);
-                let mut label = BLine::of(&[seg(agent_name.clone(), BRole::Label)]);
+                let mut label = TLine::of(&[seg(agent_name.clone(), TextStyle::Badge)]);
                 label.band = selected;
                 lines.push(label);
                 owners.push(Some(item_index));
-                for mut line in body_lines(reply, wrap_w, BRole::Body) {
+                for mut line in body_lines(reply, wrap_w, TextStyle::Item) {
                     line.band = selected;
                     lines.push(line);
                     owners.push(Some(item_index));
@@ -1804,7 +1816,7 @@ fn copy_bubble(view: &mut View, whole_body: bool) {
 /// The line under a sent message: its delivery state, and for a stuck one
 /// the cause and the keys that act on it. Submit or retry comes first; copy
 /// and paste by hand is the last rung, offered once a retry failed too.
-fn state_line(r: &Value) -> Option<(String, BRole)> {
+fn state_line(r: &Value) -> Option<(String, TextStyle)> {
     let to = match text_of(r, "to") {
         "" => "the recipient",
         to => to,
@@ -1820,10 +1832,13 @@ fn state_line(r: &Value) -> Option<(String, BRole)> {
         "" => None,
         "accepted-new-turn" => Some((
             format!("{delivered}: {to} took it as a new turn"),
-            BRole::Meta,
+            TextStyle::Meta,
         )),
-        "accepted-steer" => Some((format!("{delivered}: {to} read it mid-turn"), BRole::Meta)),
-        "parked" => Some(("parked \u{b7} enter submit".to_string(), BRole::Meta)),
+        "accepted-steer" => Some((
+            format!("{delivered}: {to} read it mid-turn"),
+            TextStyle::Meta,
+        )),
+        "parked" => Some(("parked \u{b7} enter submit".to_string(), TextStyle::Meta)),
         "failed" => {
             let cause = if reason.is_empty() {
                 String::new()
@@ -1837,9 +1852,9 @@ fn state_line(r: &Value) -> Option<(String, BRole)> {
                 ("failed", " \u{b7} r retry")
             };
             let keys = keys.trim_start().replace(' ', "\u{a0}");
-            Some((format!("{head}{cause} {keys}"), BRole::Warn))
+            Some((format!("{head}{cause} {keys}"), TextStyle::ERROR))
         }
-        word => Some((word.to_string(), BRole::Meta)),
+        word => Some((word.to_string(), TextStyle::Meta)),
     }
 }
 

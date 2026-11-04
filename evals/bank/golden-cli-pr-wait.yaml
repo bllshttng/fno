@@ -1,0 +1,19 @@
+# Grade-only: no worker, so a head run of this task costs nothing. The watcher
+# a rule names must still take --until settled at the head.
+id: golden-cli-pr-wait
+tier: capability
+grade:
+  - kind: exit
+    command: "fno do pr --help 2>&1 | grep -Fq 'wait <pr> [--until settled'"
+    expect: 0
+timeout_minutes: 5
+tags: [golden]
+covers: ["crates/fno-agents/src/pr_status/"]
+golden:
+  source: {kind: reaction-approve, ref: "15d4a0e8-9bc0-43e7-872c-5ffba998f1dc:03d508c1-1b8e-4da2-9de7-98f47125f6d8"}
+  quote: "fno do pr wait 2079 --until settled --timeout 30m"
+  expected: "fno do pr wait takes --until settled."
+  rule: "skills/target: the CI watcher is fno do pr wait; never gh pr checks --watch."
+  failure_type: dead-command
+  cost: rework
+  outcome: passed
