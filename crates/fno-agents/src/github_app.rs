@@ -3,7 +3,7 @@
 //! fleet's poll surfaces never drain the operator's user token. The app is
 //! machine-global config in `~/.fno/config.toml`:
 //! `github.app_id`, `github.app_installation_id`, and `github.app_key_path`
-//! (default `~/.fno/secrets/fnodotdev-app.pem`, mode 0600). With no app
+//! (default `~/.fno/secrets/github-app.pem`, mode 0600). With no app
 //! configured nothing changes: every caller keeps the user token.
 //!
 //! The key and the token are never logged and never reach argv: the mint
@@ -130,13 +130,13 @@ fn config_string(keys: &[&str]) -> Option<String> {
 }
 
 fn default_key_path() -> PathBuf {
-    let fallback = std::env::temp_dir().join("fnodotdev-app.pem");
+    let fallback = std::env::temp_dir().join("github-app.pem");
     std::env::var_os("HOME")
         .map(|home| {
             PathBuf::from(home)
                 .join(".fno")
                 .join("secrets")
-                .join("fnodotdev-app.pem")
+                .join("github-app.pem")
         })
         .unwrap_or(fallback)
 }
@@ -384,8 +384,8 @@ mod tests {
         std::fs::write(&pem_path, generated_pem()).expect("write pem");
         (
             AppConfig {
-                app_id: "5608104".to_string(),
-                installation_id: "178478391".to_string(),
+                app_id: "1111111".to_string(),
+                installation_id: "2222222".to_string(),
                 key_path: pem_path.clone(),
             },
             dir.join("token-cache.json"),
@@ -399,7 +399,7 @@ mod tests {
         let pem = generated_pem();
         std::fs::write(dir.join("k.pem"), &pem).unwrap();
         let der = read_key_der(&dir.join("k.pem")).expect("key read");
-        let jwt = sign_jwt(&der, "5608104", 1_700_000_000_000).expect("sign");
+        let jwt = sign_jwt(&der, "1111111", 1_700_000_000_000).expect("sign");
         let parts: Vec<&str> = jwt.split('.').collect();
         assert_eq!(parts.len(), 3, "compact JWT");
         let claims = String::from_utf8(
@@ -408,7 +408,7 @@ mod tests {
                 .unwrap(),
         )
         .unwrap();
-        assert!(claims.contains("\"iss\":\"5608104\""), "{claims}");
+        assert!(claims.contains("\"iss\":\"1111111\""), "{claims}");
         assert!(claims.contains("\"iat\":1699999940"), "{claims}");
         assert!(claims.contains("\"exp\":1700000480"), "{claims}");
         // The signature verifies under the public half of the same key.
@@ -438,7 +438,7 @@ mod tests {
         let seen_jwt = Mutex::new(String::new());
         let token = token_from(Some(cfg), &cache, 1_700_000_000_000, |cfg, _now| {
             *posts.lock().unwrap() += 1;
-            assert_eq!(cfg.installation_id, "178478391");
+            assert_eq!(cfg.installation_id, "2222222");
             let jwt = sign_jwt(&read_key_der(&cfg.key_path).unwrap(), &cfg.app_id, _now)
                 .expect("test sign");
             *seen_jwt.lock().unwrap() = jwt.clone();
