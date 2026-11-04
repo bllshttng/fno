@@ -248,60 +248,31 @@ GRAPH_BLOCKED="$TMPDIR_PACK/graph-blocked.yaml"
 GRAPH_BLOCKED_STATUS=unavailable
 if [[ -f "${GRAPH_PATH%.json}.db" ]]; then
   # The read goes through the store api. The raw `rows` op keeps fields the
-  # typed nodes op drops, so the blocked_count arm stays live.
-  if GRAPH_BLOCKED_REPORT="$(
-    GRAPH_TARGET="$GRAPH_PATH" \
-      python3 <<'PY'
-import json
-import os
-import subprocess
-import sys
-
-try:
-    proc = subprocess.run(
-        [os.environ.get("FNO_AGENTS_FRONT") or "fno", "backlog", "script-door", "rows", "--graph", os.environ["GRAPH_TARGET"]],
-        capture_output=True, text=True, check=True,
-    )
-    rows = json.loads(proc.stdout)
-except Exception as exc:
-    sys.stderr.write(
-        "autocorrect-pack: the store cannot be read through the store api (%s)\n" % (exc,)
-    )
-    sys.exit(1)
-
-lines = []
-for row in rows:
-    if not isinstance(row, dict):
-        continue
-    status = row.get("status") or row.get("_status")
-    blocked_count = row.get("blocked_count") or 0
-    if status != "blocked" and not (
-        isinstance(blocked_count, (int, float)) and blocked_count > 0
-    ):
-        continue
-    node_id = row.get("id")
-    if not node_id:
-        continue
-    lines.append(
-        "  - node_id: %s\n"
-        "    title: %s\n"
-        "    blocked_count: %s\n"
-        "    last_blocked_reason: %s"
-        % (
-            node_id,
-            json.dumps(row.get("title")),
-            blocked_count,
-            json.dumps(row.get("last_blocked_reason")),
-        )
-    )
-if lines:
-    sys.stdout.write("\n".join(lines) + "\n")
-PY
-  )"; then
+  # typed nodes op drops, so the blocked_count arm stays live. An empty
+  # response is a failed read, not an empty graph: the old json.loads raised
+  # on it, and the packet's reader must not read silence as good news.
+  if ! GRAPH_ROWS="$("${FNO_AGENTS_FRONT:-fno}" backlog script-door rows --graph "$GRAPH_PATH" 2>/dev/null)" \
+     || [[ -z "$GRAPH_ROWS" ]]; then
+    echo "autocorrect-pack: the store cannot be read through the store api" >&2
+    GRAPH_BLOCKED_STATUS=failed
+  elif ! GRAPH_BLOCKED_REPORT="$(printf '%s\n' "$GRAPH_ROWS" | jq -r '
+    (if type == "array" then . else [] end)
+    | map(select(
+        (((.status // ._status) // "") == "blocked")
+        or ((((.blocked_count // 0) | type) == "number") and ((.blocked_count // 0) > 0))
+      ))
+    | map(select(((.id // "") != "")))
+    | map("  - node_id: " + .id
+      + "\n    title: " + (.title | tojson)
+      + "\n    blocked_count: " + ((.blocked_count // 0) | tostring)
+      + "\n    last_blocked_reason: " + ((.last_blocked_reason // null) | tojson))
+    | join("\n")
+  ' 2>/dev/null)"; then
+    echo "autocorrect-pack: the store cannot be read through the store api" >&2
+    GRAPH_BLOCKED_STATUS=failed
+  else
     GRAPH_BLOCKED_STATUS=ok
     printf '%s\n' "$GRAPH_BLOCKED_REPORT" >> "$GRAPH_BLOCKED"
-  else
-    GRAPH_BLOCKED_STATUS=failed
   fi
 fi
 
