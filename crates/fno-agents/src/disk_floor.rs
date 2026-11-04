@@ -39,16 +39,15 @@ pub(crate) fn disk_floor_term(free_gb: Option<f64>, floor_gb: f64) -> Option<Str
     None
 }
 
-/// Run the janitor because free space crossed the floor. Returns the sweep
-/// note, or `None` when the floor holds or a sweep ran inside the gap.
-pub fn sweep_when_low(home: &AgentsHome, free_gb: Option<f64>, floor_gb: f64) -> Option<String> {
-    disk_floor_term(free_gb, floor_gb)?;
-    crate::reclaim::run_low_disk_sweep(home, LOW_DISK_SWEEP_GAP)
-}
+/// What a refused spawn tells the caller about the janitor.
+pub const JANITOR_NOTE: &str = "the daemon janitor (fno doctor reclaim --apply) runs now that free space is under the floor, at most once per 10 minutes; run it by hand to free space sooner";
 
-/// The daemon arm: read the volume each tick and sweep when it is low.
+/// The daemon arm: read the volume each tick and run the janitor when it is
+/// under the floor. Runs on the off-loop sweep thread, never on a spawn.
 pub fn maybe_sweep(home: &AgentsHome, floor_gb: f64) {
-    let _ = sweep_when_low(home, free_disk_gb(home.root()), floor_gb);
+    if disk_floor_term(free_disk_gb(home.root()), floor_gb).is_some() {
+        let _ = crate::reclaim::run_low_disk_sweep(home, LOW_DISK_SWEEP_GAP);
+    }
 }
 
 #[cfg(test)]
@@ -66,18 +65,9 @@ mod tests {
 
     #[test]
     fn gate_refuses_under_the_floor_and_names_floor_and_janitor() {
-        let _env = crate::reclaim::tests::ENV_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
         let td = tempfile::tempdir().unwrap();
         let home = AgentsHome::at(td.path());
-        std::env::set_var("FNO_RECLAIM_STATE_ROOT", td.path());
-        // A fresh stamp keeps the test from sweeping the real machine.
-        let stamp = crate::state_layout::place(td.path(), "reclaim");
-        std::fs::create_dir_all(&stamp).unwrap();
-        std::fs::write(stamp.join("low-disk-last-run"), b"").unwrap();
         let refusal = crate::spawn_gate::check_disk_floor(&home, 1e12).unwrap_err();
-        std::env::remove_var("FNO_RECLAIM_STATE_ROOT");
         let receipt = refusal.receipt.expect("receipt");
         assert_eq!(receipt["reason"], "disk_floor");
         assert_eq!(receipt["min_free_disk_gb"], 1e12);
