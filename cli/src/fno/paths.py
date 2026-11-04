@@ -508,35 +508,50 @@ class _SettingsFacts:
             node = node.get(part)
         return node
 
+    def _str(self, dotted: str) -> Optional[str]:
+        """A path-shaped receipt value; anything but a string reads unset.
+
+        The door is fail-open and carries raw JSON, so a wrong-typed config
+        value (``paths.inbox_path = 42``) arrives as an int. The old model
+        refused it loudly; the door contract answers nulls instead of
+        guesses, so the resolver keeps its built-in default.
+        """
+        value = self._at(dotted)
+        return value if isinstance(value, str) else None
+
+    def _bool(self, dotted: str) -> bool:
+        value = self._at(dotted)
+        return value if isinstance(value, bool) else False
+
     @property
     def state_dir(self) -> Optional[str]:
-        value = self._at("state_dir")
+        value = self._str("state_dir")
         return value if value not in (None, "") else "~/.fno/"
 
     @property
     def paths(self) -> Any:
         return SimpleNamespace(
-            **{key: self._at(key) for key in _PATH_KEYS}
+            **{key: self._str(key) for key in _PATH_KEYS}
         )
 
     @property
     def obsidian(self) -> Any:
         return SimpleNamespace(
-            enabled=self._at("obsidian_enabled") or False,
-            vault=self._at("obsidian_vault"),
+            enabled=self._bool("obsidian_enabled"),
+            vault=self._str("obsidian_vault"),
         )
 
     @property
     def post_merge(self) -> Any:
         return SimpleNamespace(
-            parking_lot_path=self._at("post_merge_parking_lot_path"),
-            maintainer_marker=self._at("post_merge_maintainer_marker"),
+            parking_lot_path=self._str("post_merge_parking_lot_path"),
+            maintainer_marker=self._str("post_merge_maintainer_marker"),
         )
 
     @property
     def project(self) -> Any:
-        return SimpleNamespace(id=self._at("project_id"))
-def _settings_key() -> tuple:
+        return SimpleNamespace(id=self._str("project_id"))
+def _settings_key() -> "tuple[Any, ...]":
     """Declaration + content fingerprint (docs/path-config.md 'Settings cache
     key'). A same-key edit reparses with no explicit cache clear.
     """
@@ -554,7 +569,7 @@ def _settings_key() -> tuple:
 
 
 @cache
-def _settings_at(key: tuple) -> _SettingsFacts:
+def _settings_at(key: "tuple[Any, ...]") -> _SettingsFacts:
     """One settings-read receipt for a declaration key, cached per process.
 
     The door spawn is the cost a keyed cache hides: every settings-backed
@@ -563,12 +578,14 @@ def _settings_at(key: tuple) -> _SettingsFacts:
     root = key[-1]
     from fno import rust_binary
     binary = rust_binary.find_dev_binary()
-    # The door sees Python's own resolved root: one answer, no re-derivation
-    # drift between the two resolvers (the explicit parking-lot root wins).
+    # Ambient reads send no root: the door resolves it and honors the
+    # FNO_CONFIG pin (the pin is the whole config world). The explicit-root
+    # call (the load_settings_for_repo twin) sends the root and walks that
+    # repo unpinned.
     receipt = rust_binary.settings_read(
-        binary=binary, root=str(root or key[5])
+        binary=binary, root=str(root) if root else None
     )
-    return _SettingsFacts(receipt.get("paths") if receipt else None)
+    return _SettingsFacts(receipt)
 
 
 def _settings(root: Optional[str] = None) -> _SettingsFacts:
@@ -1745,8 +1762,8 @@ def config_file() -> Path:
 
     One door read (cached) carries both the source and the values.
     """
-    _settings()
-    actual = _settings()._r.get("source")
+    facts = _settings()
+    actual = facts._r.get("source")
     if actual is not None:
         return Path(actual)
     return root_state_file("config.toml")

@@ -469,11 +469,16 @@ fn door_global_path() -> PathBuf {
 
 /// config_cli::settings_yaml_locations + prefer_toml + candidate_paths: the
 /// ordered candidates, config.toml over its settings.yaml sibling per dir,
-/// canonical root second, global last; a FNO_CONFIG pin is the whole chain.
-fn door_candidates(root: &std::path::Path) -> Vec<PathBuf> {
-    let pin = std::env::var_os("FNO_CONFIG").filter(|v| !v.is_empty());
-    if let Some(pin) = pin {
-        return vec![PathBuf::from(pin)];
+/// canonical root second, global last. A FNO_CONFIG pin is the whole chain
+/// only on the ambient walk (`pinned=true`); an explicit root walks unpinned,
+/// the way load_settings_for_repo read a foreign repo's config
+/// (config_cli::chain_at).
+fn door_candidates_pinned(root: &std::path::Path, pinned: bool) -> Vec<PathBuf> {
+    if pinned {
+        let pin = std::env::var_os("FNO_CONFIG").filter(|v| !v.is_empty());
+        if let Some(pin) = pin {
+            return vec![PathBuf::from(pin)];
+        }
     }
     let mut yaml_locations = vec![root.join(".fno").join("settings.yaml")];
     if std::env::var("FNO_NO_CANONICAL_CONFIG").as_deref() != Ok("1") {
@@ -604,35 +609,45 @@ fn door_layer(path: &std::path::Path) -> Value {
 /// only (config_cli::aliased_layers minus the readback warnings, which the
 /// receipt never needed).
 fn door_layers(root: &std::path::Path) -> Vec<(PathBuf, Value)> {
+    door_layers_pinned(root, true)
+}
+
+fn door_layers_pinned(root: &std::path::Path, pinned: bool) -> Vec<(PathBuf, Value)> {
     let mut out = Vec::new();
-    for path in door_candidates(root) {
+    for path in door_candidates_pinned(root, pinned) {
         if !path.is_file() {
             continue;
         }
-        let doc = door_layer(&path);
-        if doc.is_object() && !doc.as_object().unwrap().is_empty() {
+        // Per-layer unwrap, config_cli::aliased_layers's order (the envelope
+        // lifts in its own layer, so a higher flat layer wins per key). An
+        // empty TOML table stays a layer (it decides `source`); a Null parse
+        // (empty YAML) is dropped, protecting the merge.
+        let doc = door_unwrap(door_layer(&path));
+        if doc.is_object() {
             out.push((path, doc));
         }
     }
     out
 }
-/// The receipt's `paths` fact set: layered merge over the vendored walk,
-/// `config.local.toml` allowlist leaf layered in, envelope unwrapped, then
-/// the resolver's keys projected flat. No defaults here: an unset key reads
-/// null and the Python caller applies the model default (the fail-open
-/// contract - a refused read answers nulls, not guesses). `source` is the
-/// highest-priority layer that existed and parsed (the `loaded_from` fact).
+/// The receipt's `paths` fact set: layered merge over the vendored walk
+/// (each layer envelope-unwrapped at its own layer, config_cli's order),
+/// `config.local.toml` allowlist leaf layered in, then the resolver's keys
+/// projected flat. No defaults here: an unset key reads null and the Python
+/// caller applies the model default (the fail-open contract - a refused read
+/// answers nulls, not guesses). `source` is the highest-priority layer that
+/// existed and parsed (the `loaded_from` fact).
 pub(crate) fn paths_facts(root: Option<&std::path::Path>) -> Value {
+    let pinned = root.is_none();
     let root = match root {
         Some(p) => p.to_path_buf(),
         None => door_repo_root(),
     };
-    let layers = door_layers(&root);
+    let layers = door_layers_pinned(&root, pinned);
     let mut merged = Value::Object(serde_json::Map::new());
     for (_path, parsed) in layers.iter().rev() {
         door_deep_merge(&mut merged, parsed);
     }
-    if let Some(top) = door_candidates(&root).first().cloned() {
+    if let Some(top) = door_candidates_pinned(&root, pinned).first().cloned() {
         if let Some(local) = top.parent().map(|dir| dir.join("config.local.toml")) {
             if local.is_file() && !local.is_symlink() {
                 let parsed = read_flat(&local);
@@ -642,7 +657,6 @@ pub(crate) fn paths_facts(root: Option<&std::path::Path>) -> Value {
             }
         }
     }
-    let merged = door_unwrap(merged);
     let at = |dotted: &str| -> Value {
         dotted
             .split('.')
