@@ -22,12 +22,15 @@ pub(crate) fn open_pr_term(open: Option<usize>, cap: u32) -> Option<String> {
 /// Only a seat that starts new delivery work counts: its seed is the target
 /// command and its node has no PR yet.
 fn is_new_target_seat(input: &GateInput, node_has_pr: impl Fn(&str) -> bool) -> bool {
-    let seeded = input
+    // The `execute` phase also holds fix, tdd and do seats; only the target
+    // command opens new delivery work.
+    let command = input
         .seed
         .as_deref()
-        .and_then(crate::spawn_phase::seed_phase);
-    let phase = input.session_phase.as_deref().or(seeded);
-    if phase != Some("execute") {
+        .and_then(|s| s.split_whitespace().next())
+        .and_then(crate::provider::parse_command_token)
+        .map(|(command, _)| command);
+    if command != Some("target") {
         return false;
     }
     !input.node.as_deref().is_some_and(node_has_pr)
