@@ -109,7 +109,7 @@ pub fn render(t: &Table, w: usize, h: usize) -> Vec<String> {
         if f.audit_only { "  [audit queue]" } else { "" }
     );
     let mut out = vec![head];
-    let body_rows = h.saturating_sub(3);
+    let body_rows = h.saturating_sub(4);
     let top = t.sel.saturating_sub(body_rows.saturating_sub(1));
     // 59 columns of fixed fields precede the text; one more keeps the last
     // column clear of the wrap edge.
@@ -131,9 +131,14 @@ pub fn render(t: &Table, w: usize, h: usize) -> Vec<String> {
             line
         });
     }
-    while out.len() < h.saturating_sub(1) {
+    while out.len() < h.saturating_sub(2) {
         out.push(String::new());
     }
+    // The question the selected decision answered, so the pair reads as one.
+    out.push(match shown.get(t.sel).and_then(|r| r.question.as_deref()) {
+        Some(q) => format!("\x1b[2mquestion: {}\x1b[0m", fit(q, w.saturating_sub(10))),
+        None => String::new(),
+    });
     out.push("\x1b[2mj/k move  l lane  s state  a author  u audit queue  r retract  o overrule  v reviewed  q quit\x1b[0m".to_string());
     out
 }
@@ -261,6 +266,7 @@ mod tests {
             lane: "law".into(),
             ts: ts.into(),
             decision: "ship it".into(),
+            question: Some("why ship?".into()),
             authority_source: Some("operator".into()),
             ..Default::default()
         }
@@ -296,6 +302,7 @@ mod tests {
         assert_eq!(lines.len(), 10);
         assert!(lines[0].contains("2 of 2"));
         assert!(lines[1].starts_with("\x1b[7m"));
+        assert!(lines[8].contains("question: why ship?"));
         assert!(lines[9].contains("q quit"));
     }
 }

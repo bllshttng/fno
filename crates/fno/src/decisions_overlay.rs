@@ -35,6 +35,11 @@ pub struct DecisionRow {
     pub lane: String,
     #[serde(default)]
     pub number: Option<String>,
+    /// The outstanding question this decision answered, when it has one.
+    #[serde(default)]
+    pub question_id: Option<String>,
+    #[serde(default)]
+    pub question: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
