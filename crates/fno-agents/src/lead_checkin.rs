@@ -1388,8 +1388,7 @@ fn collect_readings(ctx: &Ctx, beat: &Beat, since: Option<&str>) -> Vec<Reading>
         }
     });
     take_reading(&mut readings, beat_started, "laws", || {
-        // Advisory: an unreadable decision store leaves the beat line out.
-        crate::law_recheck::collect(true).or_else(|_| Ok(Value::Null))
+        crate::law_recheck::collect(true)
     });
     take_reading(&mut readings, beat_started, "machine", {
         let events_paths = events_paths.clone();
@@ -1736,8 +1735,7 @@ fn build_data(readings: &[Reading], scope: &str) -> Map<String, Value> {
         }
     }
     let failed: Vec<&Reading> = readings.iter().filter(|r| !r.ok).collect();
-    let ok = readings.iter().filter(|r| r.ok && r.name != "laws").count();
-    data.insert("coverage".into(), json!(ok));
+    data.insert("coverage".into(), json!(readings.len() - failed.len()));
     data.insert(
         "readers_failed".into(),
         json!(failed.iter().map(|r| r.name).collect::<Vec<_>>()),
