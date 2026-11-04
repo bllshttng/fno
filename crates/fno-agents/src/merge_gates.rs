@@ -106,27 +106,29 @@ fn stub_manifest_path(root: &Path, node_id: &str) -> PathBuf {
 }
 
 /// The node-side half of the stub-manifest gate, pure over graph entries: the
-/// `dep=contract` node this PR closes, or None. The graph read degrades to
-/// None (the default hard merge path), exactly as the Python `dep` did.
-pub(crate) fn contract_node_for_pr(entries: &[Value], pr: u64) -> Option<String> {
+/// `dep=contract` node this PR closes, or None. PR numbers are per-repo and
+/// the graph store is global, so a ref whose pr_url names another repo never
+/// answers (the shared-number specimen the ledger leg fixed); a ref with no
+/// url, or one naming this checkout's remote, does. The graph read degrades
+/// to None (the default hard merge path), exactly as the Python `dep` did.
+pub(crate) fn contract_node_for_pr(entries: &[Value], pr: u64, slug: &str) -> Option<String> {
     for entry in entries {
         let dep = entry.get("dep").and_then(Value::as_str);
         if dep != Some("contract") {
             continue;
         }
-        let numbers = pr_numbers_of(entry);
-        if numbers.contains(&pr) {
+        let answers = pr_refs_of(entry).iter().any(|r| {
+            r.number == pr
+                && match r.url.as_deref() {
+                    None => true,
+                    Some(url) => pr_url_names_this_repo(url, slug),
+                }
+        });
+        if answers {
             return entry.get("id").and_then(Value::as_str).map(str::to_owned);
         }
     }
     None
-}
-
-/// Every PR number a graph row carries: the persisted `pr_number` field plus
-/// the `additional_prs` entries. A contract dependent whose PR is recorded
-/// only in `additional_prs` must still be found or the gate is bypassed.
-fn pr_numbers_of(entry: &Value) -> Vec<u64> {
-    pr_refs_of(entry).into_iter().map(|r| r.number).collect()
 }
 
 /// One PR a graph row records, with the URL it names when it names one.
@@ -233,7 +235,8 @@ pub(crate) fn stub_manifest_blocker(root: &Path, node_id: &str) -> Option<Blocke
 /// The whole stub-manifest gate over graph entries. An unreadable store
 /// degrades to clear (never block a normal merge on our own read).
 pub(crate) fn stub_manifest_gate(root: &Path, entries: &[Value], pr: u64) -> Option<Blocker> {
-    contract_node_for_pr(entries, pr).and_then(|node| stub_manifest_blocker(root, &node))
+    let slug = origin_slug(root);
+    contract_node_for_pr(entries, pr, &slug).and_then(|node| stub_manifest_blocker(root, &node))
 }
 
 /// Whether a path is documentation (loopcheck's own classifier; one copy).
@@ -278,20 +281,19 @@ pub(crate) fn plan_fidelity_blocker<P: Probes>(probes: &P, cwd: &Path, pr: u64) 
 /// with no pr_url answers next. A row whose pr_url names another repo never
 /// answers (the fnh/fno-web PR 70 specimen: another repo's plan refused a
 /// merge here). A missing or broken ledger is None: no signal, no gate.
-fn ledger_plan_path(cwd: &Path, pr: u64) -> Option<String> {
+/// Whether a pr_url names this checkout's remote. GitHub spells the pair as
+/// the path segment before `/pull/`, so the match is segment-tight: a
+/// prefix-sibling repo (`org/fno` vs `org/fno-web`) never contains-matches.
+fn pr_url_names_this_repo(url: &str, slug: &str) -> bool {
+    !slug.is_empty() && url.contains(&format!("/{slug}/pull/"))
+}
+
+/// The `owner/name` slug this checkout's origin names, empty when
+/// unresolvable. One shell so the ledger leg and the graph leg of the
+/// merge-gate scoping cannot disagree about which remote answered.
+fn origin_slug(cwd: &Path) -> String {
     use std::process::Command;
 
-    // Read-only: the ledger is global (the Python writer appends to the
-    // same file), so an undeclared test process answers None, the same
-    // no-signal shape as a missing ledger, instead of reading the
-    // operator's real history.
-    if cfg!(test) && !crate::paths::test_root_declared() {
-        return None;
-    }
-    let rows = crate::loopcheck::ledger_file_rows(&crate::paths_cli::ledger_json(cwd));
-    if rows.is_empty() {
-        return None;
-    }
     let origin = Command::new("git")
         .args(["config", "--get", "remote.origin.url"])
         .current_dir(cwd)
@@ -303,7 +305,22 @@ fn ledger_plan_path(cwd: &Path, pr: u64) -> Option<String> {
     // same pair in ssh, https, and .git-suffixed spellings. Compare the
     // normalized pair, never the raw url: a substring test on the raw form
     // never matches and every scoping election falls to first-match.
-    let slug = repo_slug_from_origin(&origin).unwrap_or_default();
+    repo_slug_from_origin(&origin).unwrap_or_default()
+}
+
+fn ledger_plan_path(cwd: &Path, pr: u64) -> Option<String> {
+    // Read-only: the ledger is global (the Python writer appends to the
+    // same file), so an undeclared test process answers None, the same
+    // no-signal shape as a missing ledger, instead of reading the
+    // operator's history.
+    if cfg!(test) && !crate::paths::test_root_declared() {
+        return None;
+    }
+    let rows = crate::loopcheck::ledger_file_rows(&crate::paths_cli::ledger_json(cwd));
+    if rows.is_empty() {
+        return None;
+    }
+    let slug = origin_slug(cwd);
     let matches: Vec<&Value> = rows
         .iter()
         .filter(|row| row.get("pr_number").and_then(Value::as_u64) == Some(pr))
@@ -312,11 +329,9 @@ fn ledger_plan_path(cwd: &Path, pr: u64) -> Option<String> {
         .iter()
         .copied()
         .find(|row| {
-            !slug.is_empty()
-                && row
-                    .get("pr_url")
-                    .and_then(Value::as_str)
-                    .is_some_and(|url| url.contains(&slug))
+            row.get("pr_url")
+                .and_then(Value::as_str)
+                .is_some_and(|url| pr_url_names_this_repo(url, &slug))
         })
         .or_else(|| {
             // An unmarked row keeps the first-match fail-open shape; a row
@@ -1632,12 +1647,12 @@ mod tests {
         })];
         for pr in [7u64, 42, 99, 105] {
             assert_eq!(
-                contract_node_for_pr(&entries, pr).as_deref(),
+                contract_node_for_pr(&entries, pr, "o/r").as_deref(),
                 Some("x-3333"),
                 "pr {pr} must match"
             );
         }
-        assert_eq!(contract_node_for_pr(&entries, 8), None);
+        assert_eq!(contract_node_for_pr(&entries, 8, "o/r"), None);
     }
 
     #[test]
@@ -1789,7 +1804,7 @@ mod tests {
         let fnh_row = json!({
             "pr_number": 70,
             "pr_url": "https://github.com/fnodotdev/fnh/pull/70",
-            "plan_path": "/fnh/node-x-41e1/plan.md",
+            "plan_path": "/fnh/plan.md",
         });
 
         // The specimen: only the other repo's row exists. It names another
@@ -1826,6 +1841,92 @@ mod tests {
         assert_eq!(
             ledger_plan_path(repo.path(), 70).as_deref(),
             Some("/web/chosen.md")
+        );
+
+        // A prefix-sibling repo's url contains this slug as a substring but
+        // names a different path segment; it never reads as a match.
+        write_ledger(json!([json!({
+            "pr_number": 70,
+            "pr_url": "https://github.com/fnodotdev/fno-web/pull/70",
+            "plan_path": "/web/plan.md",
+        })]));
+        let sibling = tempfile::tempdir().unwrap();
+        let status = std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(sibling.path())
+            .status()
+            .expect("git runs");
+        assert!(status.success(), "git init failed");
+        let status = std::process::Command::new("git")
+            .args([
+                "config",
+                "remote.origin.url",
+                "git@github.com:fnodotdev/fno.git",
+            ])
+            .current_dir(sibling.path())
+            .status()
+            .expect("git runs");
+        assert!(status.success(), "git config failed");
+        let sibling_ledger = crate::paths_cli::ledger_json(sibling.path());
+        std::fs::create_dir_all(sibling_ledger.parent().unwrap()).unwrap();
+        std::fs::write(
+            &sibling_ledger,
+            serde_json::to_string(&json!({ "entries": [json!({
+                "pr_number": 70,
+                "pr_url": "https://github.com/fnodotdev/fno-web/pull/70",
+                "plan_path": "/web/plan.md",
+            })] }))
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(ledger_plan_path(sibling.path(), 70), None);
+    }
+
+    /// The graph twin of the ledger scoping rule: the store is global, so a
+    /// contract node whose pr_url names another repo never answers a shared
+    /// number. A url-less node keeps the fail-open answer.
+    #[test]
+    fn a_contract_node_of_another_repo_never_answers_a_shared_pr_number() {
+        let ours = json!({
+            "id": "x-bbbb",
+            "dep": "contract",
+            "pr_number": 70,
+            "pr_url": "https://github.com/fnodotdev/fno-web/pull/70",
+        });
+        let foreign = json!({
+            "id": "x-aaaa",
+            "dep": "contract",
+            "pr_number": 70,
+            "pr_url": "https://github.com/fnodotdev/fnh/pull/70",
+        });
+        let slug = "fnodotdev/fno-web";
+
+        // Only the foreign node: silent.
+        assert_eq!(
+            contract_node_for_pr(&[foreign.clone()], 70, slug),
+            None,
+            "a foreign repo's contract node never answers"
+        );
+
+        // Ours answers, whatever order the rows hold.
+        assert_eq!(
+            contract_node_for_pr(&[foreign.clone(), ours.clone()], 70, slug).as_deref(),
+            Some("x-bbbb")
+        );
+        assert_eq!(
+            contract_node_for_pr(&[ours, foreign], 70, slug).as_deref(),
+            Some("x-bbbb")
+        );
+
+        // A url-less node keeps the fail-open answer.
+        let bare = json!({
+            "id": "x-cccc",
+            "dep": "contract",
+            "pr_number": 70,
+        });
+        assert_eq!(
+            contract_node_for_pr(&[bare], 70, slug).as_deref(),
+            Some("x-cccc")
         );
     }
 }
