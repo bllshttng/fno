@@ -208,58 +208,6 @@ else
     fail "malformed binding degrades to absent; got: $OUT"
 fi
 
-# ── 3. One payload-preparation entry for both substrates ──────────────────
-
-# The block renders natively, so this section needs the checkout's own binary;
-# shards without it skip honestly rather than read absence as pass or fail.
-if PYTHONPATH="$REPO_ROOT/cli/src" python3 -c "from fno.rust_binary import find_dev_binary; import sys; sys.exit(0 if find_dev_binary() else 1)"; then
-MINTED_BINDING="$BOUND/.fno/artifacts/handoff/task-context-${NODE}.json"
-PAYLOAD_CHECK="$(REPO_ROOT="$REPO_ROOT" FNO_TASK_CONTEXT_FILE="$MINTED_BINDING" \
-PYTHONPATH="$REPO_ROOT/cli/src" python3 - "$BOUND/PLAN.md" <<'PY'
-import json, os
-from fno.agents.spawn_payload import BREVITY_MARKER, prepare_spawn_payload
-
-original = "Work the node; report at the boundary."
-payload, measures = prepare_spawn_payload(original)
-assert payload.startswith(original), "original normalized message must stay the prefix"
-assert BREVITY_MARKER in payload, "brevity guidance still rides once"
-assert payload.count("<task-context ") == 1, "binding block must ride exactly once"
-assert "- Do not widen scope beyond the plan" in payload, "declared constraint missing"
-assert measures["task_context"] is True, "measures must record the carry"
-assert measures["payload_bytes"] == len(payload.encode()), "payload bytes must measure the actual payload"
-
-# The same entry serves the pane substrate: identical output, byte for byte.
-payload2, measures2 = prepare_spawn_payload(original)
-assert payload2 == payload and measures2 == measures, "pane/non-pane payloads diverged"
-
-# A payload that already carries the block never grows a second one.
-again, _ = prepare_spawn_payload(payload)
-assert again.count("<task-context ") == 1, "block duplicated on re-preparation"
-
-# Without a binding, the entry degrades to the historical brevity-only shape.
-os.environ.pop("FNO_TASK_CONTEXT_FILE", None)
-plain, plain_measures = prepare_spawn_payload(original)
-assert "<task-context " not in plain and plain_measures["task_context"] is False
-
-# A corrupt or missing binding loads as UNSET (no block), never fabricated.
-os.environ["FNO_TASK_CONTEXT_FILE"] = "/nonexistent/task-context.json"
-broken_payload, broken_measures = prepare_spawn_payload(original)
-assert "<task-context " not in broken_payload and broken_measures["task_context"] is False
-
-# Source contents never ride the payload.
-assert "plan bytes" not in payload and "# plan" not in payload, "source contents leaked"
-print("PAYLOAD_OK")
-PY
-)"
-if [[ "$PAYLOAD_CHECK" == *"PAYLOAD_OK"* ]]; then
-    pass "one payload entry: once-only carry, prefix preserved, corrupt=unset"
-else
-    fail "one payload entry contract; output: $PAYLOAD_CHECK"
-fi
-else
-    echo "  SKIP: payload entry (no dev binary; the block renders natively)"
-fi
-
 echo
 echo "passed: $PASS  failed: $FAIL"
 [[ "$FAIL" == "0" ]] || exit 1

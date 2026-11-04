@@ -117,20 +117,24 @@
     "pr_basis": "Why `pr` reads the way it does: `node` (read off the node), `no-node` (the row works no node), `no-pr` (the node has no PR, or the graph does not hold the node), `graph-unreadable` (the graph read failed; the list still renders)."
   },
   "python_only": {
-    "$comment": "Keys the Python serializer emits on top of `required`. Add one only when the Rust projection genuinely CANNOT answer the same question, never because it was easier. The reachability triple was briefly listed here, which was the wrong call and is worth recording: a triple emitted Python-side only was missing from the daemon projection that the mux table and fleetview read, while peek and the daemon's own census comment both sent readers to `fno agents list` to find it. Both serializers now emit it from the same `fno agents truth --json` probe. Which serializer answers `fno agents list` today: the Rust daemon projection, because `list` is in RUST_CLIENT_COMMANDS (cli/src/fno/agents/rust_runtime.py:151) and auto-routes to the Rust client; the wire carries the rust_only keys (liveness, liveness_basis, liveness_measured_at, pid, harness_title) as the positive marker. The Python `serialize_entry` serves no list; it feeds the field-coverage lint. Earlier revisions of this comment (measured 2026-08-20) claimed the reverse and sent a reader building an operator-facing column toward the serializer nobody was reading. `dnd` (x-481e) meets the bar the triple did not: it is the remaining time on a busy-mode hold, read from a clock whose directory is resolved by fno's own path config (`fno.paths.state_dir()`), which the daemon does not load. The daemon emits the raw `delivery_policy` it stores, which answers 'is mail held'; `dnd` answers 'until when' and only the config-aware side can. No table renders it; it rides `--json` only. Four values, and a consumer must handle all four: a duration (`~4m`, `~30s`) for a timed hold; `held` for a policy with no expiry recorded; `?` when the clock could not be read, which is NOT the same as no hold and must never render as the empty cell; and null when mail is flowing despite the flag, which is the lapsed-hold case.",
+    "$comment": "Keys the Python serializer emits on top of `required`. Add one only when the Rust projection genuinely CANNOT answer the same question, never because it was easier. The reachability triple was briefly listed here, which was the wrong call and is worth recording: a triple emitted Python-side only was missing from the daemon projection that the mux table and fleetview read, while peek and the daemon's own census comment both sent readers to `fno agents list` to find it. Both serializers now emit it from the same `fno agents truth --json` probe. Which serializer answers `fno agents list` today: the Rust daemon projection, because `list` is in RUST_CLIENT_COMMANDS (cli/src/fno/agents/rust_runtime.py:151) and auto-routes to the Rust client; the wire carries the rust_only keys (liveness, liveness_basis, liveness_measured_at, pid, harness_title) as the positive marker. The Python `serialize_entry` serves no list; it feeds the field-coverage lint. Earlier revisions of this comment (measured 2026-08-20) claimed the reverse and sent a reader building an operator-facing column toward the serializer nobody was reading. `dnd` (x-481e) meets the bar the triple did not: it is the remaining time on a busy-mode hold, read from a clock whose directory is resolved by fno's own path config (`fno.paths.state_dir()`), which the daemon does not load. The daemon emits the raw `delivery_policy` it stores, which answers 'is mail held'; `dnd` answers 'until when' and only the config-aware side can. No table renders it; it rides `--json` only. Four values, and a consumer must handle all four: a duration (`~4m`, `~30s`) for a timed hold; `held` for a policy with no expiry recorded; `?` when the clock could not be read, which is NOT the same as no hold and must never render as the empty cell; and null when mail is flowing despite the flag, which is the lapsed-hold case. The serializer that emitted it died with the cli/src/fno/agents package port (2026-11); `dnd` has no emitter and no row reader since, and this block stays as the projection's history.",
     "keys": [
       "dnd"
     ]
   },
   "storage_only": {
-    "$comment": "AgentEntry fields intentionally omitted from the list-row projection. The field's registry.py docstring owns the reason; do not duplicate those rationales here.",
+    "$comment": "RegistryEntry fields intentionally omitted from the list-row projection. The field's state.rs doc comment owns the reason; do not duplicate those rationales here.",
     "keys": [
       "account_record_id",
       "adopted_by_session",
       "aliases",
       "cc_session_id",
+      "claude_session_uuid",
+      "codex_session_id",
       "exited_at",
+      "extra",
       "fno_id",
+      "gemini_session_id",
       "git_grant",
       "granted_writable_roots",
       "harness_args",
@@ -140,6 +144,8 @@
       "launch_account",
       "launch_account_source",
       "last_report_at",
+      "legacy_claude_short_id",
+      "legacy_provider",
       "lineage_reason",
       "mcp_channel_id",
       "messaging_socket_path",

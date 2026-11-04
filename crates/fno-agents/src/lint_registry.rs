@@ -153,15 +153,15 @@ fn run_field_coverage(rest: &[String], home: &AgentsHome, json: bool, live: bool
 }
 
 fn source_field_coverage(root: &Path) -> SourceReport {
-    let registry_py = root.join("cli/src/fno/agents/registry.py");
+    let state_rs = root.join("crates/fno-agents/src/state.rs");
     let schema_path = root.join("schemas/agents-list-row.json");
     let (Ok(body), Ok(schema_text)) = (
-        std::fs::read_to_string(&registry_py),
+        std::fs::read_to_string(&state_rs),
         std::fs::read_to_string(&schema_path),
     ) else {
         return SourceReport {
             status: "unmeasured".into(),
-            detail: format!("unreadable: {}", registry_py.display()),
+            detail: format!("unreadable: {}", state_rs.display()),
             declared: Vec::new(),
             required: Vec::new(),
             known_gaps: Vec::new(),
@@ -247,54 +247,41 @@ struct SourceReport {
     uncovered: Vec<String>,
 }
 
-/// `class AgentEntry` block's annotated names, scanned off the lines.
-/// Docstring regions are skipped: a prose line at class-body indent can
-/// otherwise read as an annotation (the registry docstring carries
-/// "only the first is monotone:" mid-sentence).
+/// The `pub struct RegistryEntry` block's field names, scanned off the
+/// lines of `crates/fno-agents/src/state.rs`: the Rust struct is the
+/// canonical row shape now that the Python `AgentEntry` twin is gone. Doc
+/// comments and serde attributes ride their own lines and never read as
+/// fields.
 fn declared_entry_fields(body: &str) -> Vec<String> {
     let mut fields: Vec<String> = Vec::new();
     let mut inside = false;
-    let mut in_docstring = false;
     for line in body.lines() {
         let trimmed = line.trim_start();
-        if !in_docstring && trimmed.starts_with("class AgentEntry") {
-            inside = true;
-            continue;
-        }
         if !inside {
+            if trimmed.starts_with("pub struct RegistryEntry") {
+                inside = true;
+            }
             continue;
         }
-        if trimmed.starts_with("class ") && !trimmed.starts_with("class AgentEntry") {
+        if trimmed == "}" {
             break;
         }
-        let quote_count = trimmed.matches("\"\"\"").count();
-        if quote_count % 2 == 1 {
-            in_docstring = !in_docstring;
+        let Some(rest) = trimmed.strip_prefix("pub ") else {
             continue;
-        }
-        if in_docstring {
+        };
+        let Some(colon) = rest.find(':') else {
             continue;
-        }
-        let plain = line.trim_end();
-        if plain.starts_with("    ") && !plain.starts_with("        ") {
-            let rest = plain.trim_start();
-            if let Some(colon) = rest.find(':') {
-                let name = rest[..colon].trim();
-                let is_name = !name.is_empty()
-                    && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-                    && name
-                        .chars()
-                        .next()
-                        .map(|c| c.is_ascii_lowercase() || c == '_')
-                        .unwrap_or(false);
-                let is_annot =
-                    rest[colon + 1..].contains('=') || rest[colon + 1..].trim_end().len() > 0;
-                if is_name && is_annot && !rest[colon + 1..].trim().is_empty() {
-                    if !fields.iter().any(|f| f == name) {
-                        fields.push(name.to_string());
-                    }
-                }
-            }
+        };
+        let name = rest[..colon].trim();
+        let is_name = !name.is_empty()
+            && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+            && name
+                .chars()
+                .next()
+                .map(|c| c.is_ascii_lowercase() || c == '_')
+                .unwrap_or(false);
+        if is_name && !fields.iter().any(|f| f == name) {
+            fields.push(name.to_string());
         }
     }
     fields
@@ -639,4 +626,44 @@ fn repo_root_for_lint() -> Option<std::path::PathBuf> {
         }
     }
     Some(cwd)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The scanner reads a Rust `pub struct` body, not a Python class: every
+    /// `pub <name>:` line declares, doc comments and serde attributes do not,
+    /// and the bare closing brace ends the scan.
+    #[test]
+    fn declared_entry_fields_scans_the_rust_struct() {
+        let body = r#"
+/// One registry row.
+#[derive(Serialize)]
+pub struct RegistryEntry {
+    pub name: String,
+    /// A doc comment never declares.
+    #[serde(default)]
+    pub aliases: Vec<String>,
+    pub cwd: String,
+    pub nested: Option<Inner>,
+    pub fn_shape_ignored: fn() -> u8,
+}
+
+pub struct NotThisOne {
+    pub excluded: String,
+}
+"#;
+        let fields = declared_entry_fields(body);
+        assert_eq!(
+            fields,
+            vec![
+                "name".to_string(),
+                "aliases".to_string(),
+                "cwd".to_string(),
+                "nested".to_string(),
+                "fn_shape_ignored".to_string(),
+            ]
+        );
+    }
 }

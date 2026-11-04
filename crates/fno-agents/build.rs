@@ -42,7 +42,6 @@ fn main() {
     sync_module_copy("rules");
     sync_module_copy("repo_identity");
     sync_module_copy("glob");
-    sync_merge_posture();
     sync_ambient_vocab();
     sync_model_reach();
     sync_tombstones();
@@ -209,13 +208,12 @@ fn check_generated_copy(path: &Path, bytes: &[u8], produce: bool) {
     write_if_different(path, bytes);
 }
 
-/// PRODUCE the downstream copies of the capability table instead of checking
-/// them.
+/// PRODUCE the downstream copy of the capability table instead of checking
+/// it.
 ///
 /// `harness_capabilities.rs` `include_str!`s the canonical TOML, so the Rust
-/// tree owns it. Two byte copies hang off it, both generated per build:
-/// `cli/src/fno/agents/harness_capabilities.toml` (loaded as Python package
-/// data) and `crates/fno/src/harness_capabilities.toml` (`include_str!`ed by
+/// tree owns it. One byte copy hangs off it, generated per build:
+/// `crates/fno/src/harness_capabilities.toml` (`include_str!`ed by
 /// the mux's registry reader). The fno crate stays copy-fed rather than
 /// dep-fed on purpose: the two crates publish to crates.io independently
 /// (the crates-publish workflow states the order is irrelevant because fno
@@ -226,7 +224,7 @@ fn check_generated_copy(path: &Path, bytes: &[u8], produce: bool) {
 /// rust-ci generated-copies dirty-tree step is the tripwire for a copy
 /// edited by hand.
 ///
-/// No-op when `cli/` or the sibling crate is absent: that is the `cargo
+/// No-op when the sibling crate is absent: that is the `cargo
 /// package` / crates.io tarball case, where the crate must still build
 /// (`publish = true`).
 fn sync_harness_capabilities() {
@@ -236,11 +234,6 @@ fn sync_harness_capabilities() {
         return;
     };
     let Some(root) = repo_root() else { return };
-    let cli_copy = root.join("cli/src/fno/agents/harness_capabilities.toml");
-    if !cli_copy.is_file() {
-        return;
-    }
-    write_if_different(&cli_copy, &bytes);
     let mux_copy = root.join("crates/fno/src/harness_capabilities.toml");
     if !mux_copy.is_file() {
         return;
@@ -454,27 +447,6 @@ fn sync_module_copy(name: &str) {
     write_if_different(&copy, out.as_bytes());
 }
 
-/// PRODUCE the downstream copy of the merge-posture carrier table.
-///
-/// Same shape as [`sync_harness_capabilities`]: the canonical TOML lives in
-/// this crate (`merge_posture.rs` `include_str!`s it), and the Python package
-/// reads a byte copy as package data so a binary-less interpreter still
-/// resolves the carrier vocabulary. The only copy is the Python tree's, so
-/// this is one write, not two.
-fn sync_merge_posture() {
-    println!("cargo:rerun-if-changed=src/merge_posture.toml");
-    let canonical = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/merge_posture.toml");
-    let Ok(bytes) = std::fs::read(&canonical) else {
-        return;
-    };
-    let Some(root) = repo_root() else { return };
-    let cli_copy = root.join("cli/src/fno/agents/merge_posture.toml");
-    if !cli_copy.is_file() {
-        return;
-    }
-    write_if_different(&cli_copy, &bytes);
-}
-
 /// PRODUCE the downstream copy of the ambient vocabulary.
 ///
 /// The crate owns `src/ambient_vocab.toml` (`test_env.rs` `include_str!`s
@@ -536,15 +508,12 @@ fn sync_model_reach() {
     write_if_different(&fno_copy, &bytes);
 }
 
-/// Render the registry schema version and writer floor from their single owner,
-/// then project the Python copy.
+/// Render the registry schema version and writer floor from their single
+/// owner.
 ///
 /// `src/registry_schema.toml` owns both values. `state.rs` `include!`s
-/// the generated constants, and registry.py reads the projected byte copy
-/// `cli/src/fno/agents/registry_schema.toml` as package data, so a bump is
-/// one edit in one file. This replaces the parity script that compared two
-/// independent literals; the rust-ci generated-copies dirty-tree step is the
-/// tripwire for a hand edit to the projected copy.
+/// the generated constants, so a bump is one edit in one file. This replaces
+/// the parity script that compared two independent literals.
 fn sync_registry_schema() {
     println!("cargo:rerun-if-changed=src/registry_schema.toml");
     let canonical = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/registry_schema.toml");
@@ -572,13 +541,6 @@ fn sync_registry_schema() {
         ),
     )
     .expect("generated registry_schema.rs must be writable");
-
-    let Some(root) = repo_root() else { return };
-    let cli_copy = root.join("cli/src/fno/agents/registry_schema.toml");
-    if !cli_copy.is_file() {
-        return;
-    }
-    write_if_different(&cli_copy, text.as_bytes());
 }
 
 /// CHECK `src/events_limits.toml` against the Python-owned event schema.

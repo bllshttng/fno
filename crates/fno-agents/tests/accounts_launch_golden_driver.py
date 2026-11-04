@@ -153,39 +153,13 @@ def dispatch_block(case: dict, workdir: Path) -> dict:
 
 
 def run_case(case: dict, tmp: Path) -> dict:
-    from fno.adapters.providers import managed
-    from fno.agents import account_env, dispatch
-
-    for k in [k for k in os.environ if k.startswith(("FNO_", "CLAUDE_"))]:
-        del os.environ[k]
-    os.environ.pop("MISSING_TOKEN", None)
-    if case["op"] == "credentials":
-        (tmp / "config.toml").write_text("", encoding="utf-8")
-        os.environ.update(HOME=str(tmp / "home"), FNO_CONFIG=str(tmp / "config.toml"))
-        os.chdir(tmp)
-        env, decision = account_env.compose_worker_credentials(
-            case.get("account_env"), case.get("route_env"), case["base"],
-            account_id=case.get("account_id"),
-        )
-        return {"env": env, "decision": vars(decision)}
-    if case["op"] == "seal":
-        roots = {"HOME": str(tmp / "home"), "FNO_AGENTS_HOME": str(tmp / "agents"),
-                 "FNO_STATE_DIR": str(tmp / "state"), "FNO_CLAIMS_ROOT": str(tmp / "claims")}
-        for name in case.get("unset", []):
-            roots.pop(name)
-        os.environ.update(roots)
-        env = {k: v.replace("{HOME}", roots["HOME"]) for k, v in case["env"].items()}
-        return {"env": account_env.seal_state_root(env)}
-    store, _ = lay_down(case, tmp)
-    os.environ.update(HOME=str(tmp / "home"), FNO_CONFIG=str(tmp / "config.toml"),
-                      FNO_STATE_DIR=str(tmp / "state"), USER="tester")
-    managed._run_security = lambda args: subprocess.CompletedProcess(args, 44, "", "")
-    sys.platform = "darwin"
-    os.chdir(tmp)
-    if case["op"] == "dispatch":
-        return dispatch_block(case, tmp)
-    env = {k: v.replace("{TMP}", str(tmp)) for k, v in case["env"].items()}
-    return {"account": dispatch._account_id_for_env(env)}
+    # The Python legs this oracle froze (`fno.agents.account_env`,
+    # `fno.agents.dispatch`) were deleted with the agents package; the native
+    # accounts surfaces own the shapes now. The goldens are frozen at their
+    # committed bytes - re-freezing is not possible from this tree.
+    raise SystemExit(
+        "capture: the accounts launch oracle is native; these goldens are frozen"
+    )
 
 
 def main() -> int:
