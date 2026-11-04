@@ -111,7 +111,9 @@ pub fn render(t: &Table, w: usize, h: usize) -> Vec<String> {
     let mut out = vec![head];
     let body_rows = h.saturating_sub(3);
     let top = t.sel.saturating_sub(body_rows.saturating_sub(1));
-    let text_w = w.saturating_sub(48);
+    // 59 columns of fixed fields precede the text; one more keeps the last
+    // column clear of the wrap edge.
+    let text_w = w.saturating_sub(60);
     for (i, r) in shown.iter().enumerate().skip(top).take(body_rows) {
         let line = format!(
             "{} {} {} {} {} {} {}",
