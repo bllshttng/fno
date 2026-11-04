@@ -236,12 +236,6 @@ def oracle_ref(repo_path: str) -> str:
 def load_oracle_modules() -> None:
     import types
 
-    import fno.harness_identity as harness_identity
-
-    def fixture_attester(env=None):  # noqa: ANN001 - the resolver's signature
-        return (os.environ.get("FNO_FIXTURE_ATTESTER", ""), "env_only")
-
-    harness_identity.resolve_attester_identity = fixture_attester
     for module_name, repo_path in ORACLE_LEGS:
         source = subprocess.run(
             ["git", "show", f"{oracle_ref(repo_path)}:{repo_path}"],

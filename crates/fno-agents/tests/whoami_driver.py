@@ -1,40 +1,25 @@
 #!/usr/bin/env python3
-"""Live oracle for the whoami family port (step 2 of the port protocol,
-docs/architecture/dual-implementation-inventory.md).
+"""The whoami case table and fixture builder.
 
-Two modes:
-
-  --case NAME ROOT  build case NAME's fixture under ROOT, run the Python
-                    whoami leg there through the real top-level app, and
-                    relay (stdout, stderr, exit code) byte-verbatim. The
-                    parity test invokes this under FNO_CAPTURE_GOLDEN=1 to
-                    freeze goldens from the old leg on the same fixture the
-                    native side runs.
-  --capture DIR     run every case in a fresh tempdir and freeze the
-                    normalized (stdout, stderr, exit) triples into DIR.
-                    Refuses once cli/src/fno/agent is deleted: a golden can
-                    only be captured while the old leg runs.
-
-The case table below is the single source both legs share. Identity env is
-scrubbed then stamped per case, so every identity-bearing enrichment (model,
-context, role, registry agent name, mail unread) floors to absent except the
-lines a case stamps explicitly. Stamps name ONE harness family per case, and
-the one ambiguity case contradicts a single family with two ids: the process
-walk proves a family, never a value, so those two shapes answer identically
-under any ancestry.
+The parity test (whoami_parity.rs) asks this file for the case table
+(--list) and builds each case's fixture through it (--fixture); the native
+binary runs the cases itself. The goldens froze the Python leg's bytes
+through this file's old --case/--capture modes; that leg left with the
+residue port, and the frozen goldens are the contract now (a golden can
+only be captured while the oracle leg runs). The parity test floors the
+child env to HOME and PATH plus each case's stamps, so every
+identity-bearing enrichment (model, context, role, registry agent name,
+mail unread) answers from the stamps alone. Stamps name ONE harness family
+per case, and the one ambiguity case contradicts a single family with two
+ids: the process walk proves a family, never a value, so those two shapes
+answer identically under any ancestry.
 """
 from __future__ import annotations
 
 import json
-import os
-import subprocess
 import sys
-import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
-
-REPO = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(REPO / "cli" / "src"))
 
 # --- fixture bodies (the deleted cli/tests/unit/fixtures/agent shapes) ----
 
@@ -264,43 +249,6 @@ CASES: tuple[Case, ...] = (
 )
 
 
-def scrubbed_env(home: Path, stamps: dict[str, str]) -> dict[str, str]:
-    """The host env minus every name the render reads for identity, plus the
-    case stamps and a fixture-scoped HOME. The scrub list is read from the
-    same tables the resolver reads, so a new marker cannot leak into a
-    golden."""
-    from fno.harness_identity import (
-        AMBIENT_IDENTITY_ENV,
-        HARNESS_SESSION_MARKERS,
-        LEGACY_HARNESS_SESSION_MARKERS,
-    )
-
-    env = dict(os.environ)
-    for marker, _family in (*HARNESS_SESSION_MARKERS, *LEGACY_HARNESS_SESSION_MARKERS):
-        env.pop(marker, None)
-    # The ambient table is wider than the markers (companion/transcript
-    # lineage names a hosted session inherits); every one of them is
-    # identity-adjacent, so all of them go.
-    for name in AMBIENT_IDENTITY_ENV:
-        env.pop(name, None)
-    for name in (
-        "FNO_AGENT_SELF",
-        "FNO_WORKER_NAME",
-        "FNO_ROUTE_PROVIDER",
-        "FNO_HARNESS_SESSION_ID",
-        "FNO_BUS_DIR",
-        "FNO_CONFIG",
-        "FNO_STATE_DIR",
-        "FNO_CODEX_SESSIONS_DIR",
-        "FNO_TEST_HERMETIC",
-    ):
-        env.pop(name, None)
-    env["HOME"] = str(home)
-    env["PYTHONPATH"] = str(REPO / "cli" / "src")
-    env.update(stamps)
-    return env
-
-
 def build_fixture(case: Case, root: Path) -> Path:
     """Materialize the case's project (and fake home) under root."""
     project = root / "project"
@@ -331,73 +279,7 @@ def build_fixture(case: Case, root: Path) -> Path:
     return project
 
 
-def run_case(case: Case, root: Path) -> tuple[str, str, int]:
-    """Run one case in this process: build the fixture, chdir, invoke the
-    real app, return (stdout, stderr, exit code)."""
-    project = build_fixture(case, root)
-    env = scrubbed_env(root / "fake_home", case.env)
-    os.environ.clear()
-    os.environ.update(env)
-    os.chdir(project)
-    from typer.testing import CliRunner
-
-    from fno.cli import app
-
-    argv = [str(root / "does-not-exist.md") if a == "<MISSING>" else a for a in case.argv]
-    result = CliRunner().invoke(app, argv)
-    return result.stdout, result.stderr, result.exit_code
-
-
-def normalize(text: str, root: Path) -> str:
-    """Fold what the host owns, never what the contract owns: the fixture
-    path (in resolved and raw spellings, and macOS's /private prefix), and
-    the PyYAML parser detail in the malformed-state refusal, whose wording
-    is the YAML library's, not the command's."""
-    resolved = str(root.resolve())
-    for token in (f"/private{resolved}", resolved, str(root)):
-        text = text.replace(token, "<FIXTURE>")
-    marker = "error: malformed state file: "
-    idx = text.find(marker)
-    if idx != -1:
-        anchor = text.find("<FIXTURE>", idx)
-        if anchor != -1:
-            tail = text.find(": ", anchor)
-            if tail != -1:
-                text = text[:tail] + ": <REASON>\n"
-    return text
-
-
-def capture(golden_dir: Path) -> None:
-    """Freeze every case from the live leg. Refuses when the leg is gone."""
-    try:
-        import fno.agent.state  # noqa: F401
-    except ImportError:
-        sys.exit("capture refused: the Python whoami leg is deleted")
-    golden_dir.mkdir(parents=True, exist_ok=True)
-    for case in CASES:
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            proc = subprocess.run(
-                [sys.executable, str(Path(__file__).resolve()), "--case", case.name, str(root)],
-                capture_output=True,
-                text=True,
-            )
-        out = normalize(proc.stdout, root)
-        err = normalize(proc.stderr, root)
-        (golden_dir / f"{case.name}.out").write_text(out, encoding="utf-8")
-        (golden_dir / f"{case.name}.err").write_text(err, encoding="utf-8")
-        (golden_dir / f"{case.name}.exit").write_text(f"{proc.returncode}\n", encoding="utf-8")
-        print(f"{case.name}: exit {proc.returncode}, {len(out)}B out, {len(err)}B err")
-
-
 def main() -> None:
-    if len(sys.argv) >= 4 and sys.argv[1] == "--case":
-        out, err, code = run_case(
-            next(c for c in CASES if c.name == sys.argv[2]), Path(sys.argv[3])
-        )
-        sys.stdout.write(out)
-        sys.stderr.write(err)
-        sys.exit(code)
     if len(sys.argv) >= 4 and sys.argv[1] == "--fixture":
         case = next(c for c in CASES if c.name == sys.argv[2])
         build_fixture(case, Path(sys.argv[3]))
@@ -417,13 +299,7 @@ def main() -> None:
             )
         )
         return
-    if len(sys.argv) == 3 and sys.argv[1] == "--capture":
-        capture(Path(sys.argv[2]))
-        return
-    sys.exit(
-        "usage: whoami_driver.py --case NAME ROOT | --capture GOLDEN_DIR"
-        " | --list | --fixture NAME ROOT"
-    )
+    sys.exit("usage: whoami_driver.py --list | --fixture NAME ROOT")
 
 
 if __name__ == "__main__":

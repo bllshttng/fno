@@ -3,7 +3,7 @@
 
 The COMPLETE roster of harnesses footnote supports lives in
 Rust, as ``KNOWN_HARNESSES`` in ``crates/fno-agents/src/provider.rs`` (the
-Python tuple copy is gone; ``fno.harness_names`` proxies the binary). This
+Python copy is gone). This
 gate parses that same const out of the Rust SOURCE - stdlib only, no package
 install, no Rust build, no network - and holds every shipped evidence
 surface as a SUBSET of it, every one-sided difference NAMED, never counted:
