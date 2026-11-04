@@ -78,26 +78,6 @@ _SERIAL_TEST_SUFFIXES = frozenset(
             "test_ac3hp_concurrent_writes_never_surface_corruption"
         ),
         (
-            "tests/agents/test_follow_signal.py::"
-            "test_subprocess_follow_clean_sigint_exit"
-        ),
-        (
-            "tests/agents/test_codex_signal_handling.py::"
-            "test_create_sigint_mid_stream_propagates_and_releases_child"
-        ),
-        (
-            "tests/agents/test_pane_journeys.py::"
-            "test_late_codex_identity_composes_across_every_peer_surface"
-        ),
-        (
-            "tests/agents/test_harness_capability_parity.py::"
-            "test_resolved_rows_match_between_readers"
-        ),
-        (
-            "tests/agents/test_send.py::"
-            "test_dispatch_send_registry_stamp_lock_is_bounded_after_hosted_delivery"
-        ),
-        (
             "tests/unit/test_graph_read_race.py::"
             "test_ac3fr_no_false_negative_under_concurrent_writes"
         ),
@@ -391,11 +371,8 @@ def _reap_session_processes(tmp_path_factory):
 def _stub_codex_cli_version(monkeypatch):
     """Never let a test's codex-argv build reach the real ``codex --version``.
 
-    ``_codex_cli_version`` shells out with a bare ``subprocess.run`` (not the
-    guarded ``_codex._subprocess_popen`` seam ``_block_live_provider_exec``
-    covers), and it is ``functools.lru_cache``-memoized per process - so an
-    unstubbed first call would both exec whatever real ``codex`` happens to be
-    on the developer's PATH and then pin that version's answer for the rest
+    An unstubbed first call would both exec whatever real ``codex`` happens to
+    be on the developer's PATH and then pin that version's answer for the rest
     of the pytest run, making --dangerously-bypass-hook-trust presence
     host-dependent. Pin to a known-supporting version; a test that needs a
     different answer overrides this per-test (monkeypatch order: test wins).
@@ -404,9 +381,6 @@ def _stub_codex_cli_version(monkeypatch):
     here, not in agents/, because every codex argv build probes the version,
     and tests outside agents/ build codex argvs too.
     """
-    from fno.agents import mux_spawn
-
-    monkeypatch.setattr(mux_spawn, "_codex_cli_version", lambda: (0, 148, 0))
     monkeypatch.setenv("FNO_CODEX_VERSION", "0.148.0")
 
 
@@ -446,11 +420,11 @@ def _block_live_provider_exec(request, monkeypatch, tmp_path_factory):
     launchctl command resolved outside the tmp tree is blocked in EVERY test,
     smoke included - only the provider half stands down for smoke.
     """
-    # Real-provider smoke tests (@pytest.mark.smoke, run nightly by
-    # provider-smoke.yml) intentionally exec the real binary; never guard
-    # those (codex P2 review). Per-PR CI excludes `-m smoke`. The launchctl
-    # check below applies regardless: a smoke test may exec a real provider
-    # but still must not touch the operator's launchd domain.
+    # Real-provider smoke tests (@pytest.mark.smoke) intentionally exec the
+    # real binary; never guard those (codex P2 review). Per-PR CI excludes
+    # `-m smoke`. The launchctl check below applies regardless: a smoke test
+    # may exec a real provider but still must not touch the operator's
+    # launchd domain.
     guard_providers = not request.node.get_closest_marker("smoke")
 
     import shutil
@@ -965,44 +939,6 @@ def _no_live_evidence_gate(monkeypatch):
         return real_command_call(command, payload, **kwargs)
 
     monkeypatch.setattr(rust_binary, "command_call", _passthrough)
-
-
-@pytest.fixture(autouse=True)
-def _hermetic_reap_receipt(monkeypatch):
-    """Hermetic default for the removal-receipt transport.
-
-    The registry choke point stages a removal receipt by asking the Rust
-    receipt builder through `fno.agents.spawn_axes_client.spawn_axes_call`,
-    and in a dev environment that resolver can find a real installed binary.
-    The default answers from the payload's own row and refuses a row with no
-    harness session identity; tests that need a different answer re-stub
-    `fno.agents.spawn_axes_client.spawn_axes_call` and win.
-    """
-    from fno.agents.spawn_axes_client import spawn_axes_call as real_call
-
-    def _answer(payload):
-        ask = payload.get("reap_receipt")
-        if ask is None:
-            return real_call(payload)
-        row = ask.get("row") or {}
-        harness = (row.get("harness") or "").strip()
-        sid = (row.get("harness_session_id") or "").strip()
-        if not harness or not sid:
-            return {"refused": "missing harness session identity"}
-        return {
-            "file": f"{harness}-{sid}.json",
-            "receipt": {
-                "row_name": row.get("name"),
-                "harness": harness,
-                "harness_session_id": sid,
-                "resume": f"claude --resume {sid}",
-                "removed_by": ask.get("removed_by"),
-            },
-        }
-
-    import fno.agents.spawn_axes_client as spawn_axes_client_module
-
-    monkeypatch.setattr(spawn_axes_client_module, "spawn_axes_call", _answer)
 
 
 @pytest.fixture(autouse=True)

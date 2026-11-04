@@ -10,20 +10,20 @@ While it is on, each machine gets a band at the top of the tree, and the active 
 
 This machine's band holds the ordinary tree from the server's layout. Other machines' rows come from `fno agents fleet top --machines`. The mux reads it off the UI loop every 15 seconds while the toggle is on. A failed read keeps the last good bands, so a row does not vanish because the primary blinked. A machine with no beat yet still gets its own band, which reads `offline`. With fewer than two machines there is no layer. Nothing connects to another machine until you open a row.
 
-The fleet map carries less than the layout, so a far row joins its band by the nearest fact it has:
+The fleet map carries less than the layout, so a remote row joins its band by the nearest fact it has:
 
-| Group | A far row joins |
+| Group | A remote row joins |
 |---|---|
-| workspace | its project, nested under its parent seat. The fleet map carries no workspace |
+| workspace | the workspace its own machine's mux files it under, else its project. Seats nest under their parent seat |
 | lead | the first seat up its parent chain that holds a role |
 | cwd | the last part of its cwd |
-| status | Working while it writes, else Completed. The fleet map has no needs-input state |
+| status | Needs input while its own machine's badge reads blocked, else Working while it writes, else Completed |
 | harness | its harness |
 | none | its machine band, with no band below it |
 
-The Created and Modified sorts read a far row's start and last-message times, so recency orders far rows too. A pin is a keep mark on the machine that runs the session. The fleet map does not carry it, so a far row never sorts as pinned, and `ctrl+t` on a far row refuses.
+The Created and Modified sorts read a remote row's start and last-message times, so recency orders remote rows too. A pin is a keep mark on the machine that runs the session. The fleet map carries it, so a pinned remote row sorts first like a local one. `ctrl+t` on a remote row runs `fno agents reap --keep` on that machine over ssh. The new pin shows at the next beat, up to 75 seconds later. A machine whose beat is stale raises no needs-input alert, because you cannot act on it from here.
 
-A remote row is named `name@host`. Peek and mail already route that address. Its card paints the bare name, and its third line reads `remote · host · state` with the context percent after it. The state is `working` while the seat writes, `idle 3m` with the time since its last message, or `offline 2m` once its machine's beat is stale.
+A remote row is named `name@host`. Peek and mail already route that address. It paints the same three lines as a local row: the name, then the model, cost and times, then the context, compaction and token counts with the last line the session wrote. Under a machine band the row says no `remote` and no machine name, because the band already says it. A count its own machine has no reading for stays hidden. A card never shows a zero it did not read. The activity ramp stays blank on a remote row, because it needs a reading every five seconds and the beat comes every 60 seconds. A stale machine reads `offline` on its band. A list that shows a remote row away from its band, such as the portal picker, names the machine in the `name@host` address.
 
 ## Open a row
 
@@ -31,7 +31,7 @@ A remote row opens the way a paneless local row opens: in a portal. See [portals
 
 The client sends `ReachRemote` with the row's host, key and name, and the server takes the same portal reach a local row takes. The reach keeps one viewer per row: opening a row that a portal already shows focuses that portal. Only the seat's child differs: `fno mux serve --link <key> --host <host>` in place of an attach. A host or key that starts with `-` would read as an ssh option, so the server refuses it. A server older than v121 cannot parse the command, so the client refuses first and says to update the mux server.
 
-The seat is named `name@host` and its portal stores that name as its key. Closing the portal closes the link and leaves the session running on its host. The seat is an ordinary pane, so the keeper holds it across a client quit and a server restart. See [pane keeper](pane-keeper.md). It has no registry row, so the fleet map does not publish it as a session on this machine. A restored portal whose seat did not survive cannot refill from this machine's registry, so open the row again.
+The seat is named `name@host` and its portal stores that name as its key. The pane title keeps that name and wears the remote glyph `⇄` in front of it. Closing the portal closes the link and leaves the session running on its host. The seat is an ordinary pane, so the keeper holds it across a client quit and a server restart. See [pane keeper](pane-keeper.md). It has no registry row, so the fleet map does not publish it as a session on this machine. A restored portal whose seat did not survive cannot refill from this machine's registry, so open the row again.
 
 ## The two kinds of row
 

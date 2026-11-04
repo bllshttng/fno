@@ -933,6 +933,11 @@ impl Core {
                 project_root: None,
             })
         }
+        if !cfg!(test) {
+            crate::workspace_sidecar::publish(&crate::agents_view::runtime_home(), &out, |sid| {
+                self.session.squad(sid).and_then(|sq| sq.name.clone())
+            });
+        }
         out
     }
 

@@ -188,6 +188,16 @@ for row in "${MATRIX[@]}"; do
   fi
 done
 
+# The var-list twin: the hook's five model vars and the Rust scrub's five
+# keys must stay one list, or a new tier lands in one and not the other.
+RUST_KEYS="$(sed -n 's/^    "\([A-Z_]*\)",$/\1/p' "$REPO_ROOT/crates/fno-agents/src/model_env_scrub.rs")"
+SHELL_KEYS="$(sed -n 's/^  \([A-Z][A-Z_]*\)$/\1/p' "$HOOK")"
+[[ "$(printf '%s\n' "$RUST_KEYS")" == "$(printf '%s\n' "$SHELL_KEYS")" ]] \
+    && pass "MODEL_ENV_VARS and MODEL_ENV_KEYS are the same list" \
+    || fail "model var lists drifted: rust=[$RUST_KEYS] shell=[$SHELL_KEYS]"
+[[ -n "$RUST_KEYS" ]] || fail "rust key slice came back empty (format changed?)"
+[[ -n "$SHELL_KEYS" ]] || fail "shell var slice came back empty (format changed?)"
+
 echo ""
 echo "attest-model: $PASS passed, $FAIL failed"
 [[ $FAIL -eq 0 ]]

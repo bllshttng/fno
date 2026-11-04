@@ -1184,9 +1184,10 @@ pub(crate) fn validate_inputs(
     Ok(())
 }
 
-/// Ambient harness session markers, highest precedence first. Mirrors
-/// `cli/src/fno/harness_identity.py::HARNESS_SESSION_MARKERS` so the
-/// Rust writer tags a claim with the same harness the Python resolver would.
+/// Ambient harness session markers, highest precedence first. The shell twin
+/// is `detect_provider()` in `hooks/helpers/init-target-state.sh`: the same
+/// order, the same non-blank rule; the `shell_marker_twin_matches_table`
+/// test pins the pair.
 pub(crate) const HARNESS_SESSION_MARKERS: &[(&str, &str)] = &[
     ("CODEX_THREAD_ID", "codex"),
     ("CLAUDE_CODE_SESSION_ID", "claude"),
