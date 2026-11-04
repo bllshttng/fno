@@ -284,7 +284,6 @@ fn der_len(len: usize) -> Vec<u8> {
 }
 
 fn sign_jwt(pkcs8_der: &[u8], app_id: &str, now_ms: i64) -> Result<String, String> {
-    use base64::Engine as _;
     let key = ring::signature::RsaKeyPair::from_pkcs8(pkcs8_der)
         .map_err(|e| format!("key rejected: {e}"))?;
     let now_s = now_ms / 1000;
