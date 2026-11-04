@@ -383,6 +383,15 @@ dual_owner_kinds = {
     # that field also feeds the tracked events_schema.json projection,
     # which only a cargo build can regenerate.
     "session_pane_rebound",
+    # The lineage trio: the Python session-report emitters are deleted and
+    # session_report.rs is the sole emitter (the transition classification,
+    # the worker's cwd heal, and its failure notice). schema.yaml still
+    # names the legacy python/agents sources because that field feeds the
+    # tracked events_schema.json projection, which only a cargo build can
+    # regenerate.
+    "session_transition_classified",
+    "session_cwd_healed",
+    "session_cwd_heal_failed",
     # session_id_restamped: the Python SessionStart restamp
     # (register_session.py) and the org init --rebind-from repair
     # (lead_rebind.rs) write the same row shape: one row's harness session

@@ -15,6 +15,7 @@ use ratatui_core::style::{Modifier, Style as RtStyle};
 use unicode_width::UnicodeWidthChar;
 
 use crate::ratatui_blit::{rt_color, rt_modifier};
+use crate::text_style::TextStyle;
 use crate::theme::{self, Role, Theme};
 
 use super::{write_msg, ClientMsg, StdinFlow, View, MAX_MAIL_TEXT};
@@ -4424,7 +4425,7 @@ impl Launcher {
                 sl.cwd_line.x,
                 sl.cwd_line.y,
                 label,
-                role_style(Role::PanelHead, &view.theme),
+                role_style(Role::Text(TextStyle::Title), &view.theme),
             );
             let facts_w = inner_w.saturating_sub(FACTS_VALUE_X).max(1);
             for (i, (_, line)) in wrap_message(&text, facts_w)
@@ -4436,7 +4437,7 @@ impl Launcher {
                     sl.cwd_line.x + FACTS_VALUE_X as u16,
                     sl.cwd_line.y + i as u16,
                     line,
-                    role_style(Role::PanelBody, &view.theme),
+                    role_style(Role::Text(TextStyle::Item), &view.theme),
                 );
             }
         }
@@ -4454,9 +4455,9 @@ impl Launcher {
             let style = if *f == self.focus {
                 role_style(Role::ChipFocus, &view.theme)
             } else if never {
-                role_style(Role::BodyDim, &view.theme)
+                role_style(Role::Text(TextStyle::Meta), &view.theme)
             } else {
-                role_style(Role::PanelBody, &view.theme)
+                role_style(Role::Text(TextStyle::Item), &view.theme)
             };
             paint_chip(
                 &mut buf,
@@ -4468,7 +4469,7 @@ impl Launcher {
             if *f != Focus::Plus && *f != Focus::Worktree {
                 let caret_x = r.x + r.width - 1;
                 buf[(caret_x, r.y)].set_char('\u{25be}');
-                buf[(caret_x, r.y)].set_style(role_style(Role::PanelMeta, &view.theme));
+                buf[(caret_x, r.y)].set_style(role_style(Role::Text(TextStyle::Meta), &view.theme));
             }
         }
         // The editor: prompt gutter, wrapped rows, and on an empty draft the
@@ -4490,9 +4491,9 @@ impl Launcher {
             // Shell mode paints its own glyph in the accent role so the
             // mode is visible before the first keystroke lands.
             let (glyph, glyph_role) = if self.shell {
-                ("! ", Role::BodyAccent)
+                ("! ", Role::Text(TextStyle::Section))
             } else {
-                ("\u{276f} ", Role::BodyDim)
+                ("\u{276f} ", Role::Text(TextStyle::Meta))
             };
             buf.set_string(
                 sl.message.x,
@@ -4510,7 +4511,7 @@ impl Launcher {
                     sl.message.x + PROMPT_GUTTER as u16,
                     sl.message.y,
                     placeholder,
-                    role_style(Role::PanelMeta, &view.theme),
+                    role_style(Role::Text(TextStyle::Meta), &view.theme),
                 );
             }
         }
@@ -4526,7 +4527,7 @@ impl Launcher {
                 r.x + r.width - 1,
                 r.y,
                 "\u{00d7}",
-                role_style(Role::PanelMeta, &view.theme),
+                role_style(Role::Text(TextStyle::Meta), &view.theme),
             );
         }
         // Keybar row: [cancel] while pending, then the key rule; the

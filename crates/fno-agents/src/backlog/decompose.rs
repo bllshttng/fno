@@ -185,6 +185,87 @@ fn separate_plan_path(base: &str, slug: &str) -> String {
     }
 }
 
+/// The epic doc as an Obsidian frontmatter link, per the vault
+/// frontmatter-link rule: `[[stem]]` when no other note in the vault shares
+/// the stem, `[[vault-rel-path]]` (no `.md`, no leading slash) when one does.
+/// None when the doc sits outside the configured vault or none resolves - the
+/// scaffold then keeps a quoted plain path. Same candidate chain as
+/// `vault_dir_with_home`: `<cwd>/.fno/config.toml`, then `<home>/.fno/config.toml`.
+fn source_doc_wikilink(epic_base: &str, cwd: &Path, home: Option<&Path>) -> Option<String> {
+    let mut candidates: Vec<PathBuf> = vec![cwd.join(".fno/config.toml")];
+    if let Some(h) = home {
+        candidates.push(h.join(".fno/config.toml"));
+    }
+    let vault = crate::finalize::resolve_obsidian_vault(&candidates)?;
+    let vroot = crate::finalize::resolve_vault_root(&vault, home)?;
+    let doc = absolute_epic_path(epic_base, cwd, home)?;
+    // Canonicalize both sides so the repo-root `internal -> ~/c3po/internal`
+    // symlink resolves onto the vault the link names.
+    let doc = doc.canonicalize().unwrap_or(doc);
+    let root = vroot.canonicalize().unwrap_or(vroot);
+    let rel = doc.strip_prefix(&root).ok()?;
+    let stem = rel.file_stem()?.to_string_lossy().into_owned();
+    // The doc itself is always one match; a second `<stem>.md` anywhere in
+    // the vault forces the unambiguous path form.
+    if count_stem_matches(&root, &format!("{stem}.md"), 2) == 1 {
+        return Some(format!("[[{stem}]]"));
+    }
+    let rel_no_md = rel.with_extension("").to_string_lossy().replace('\\', "/");
+    Some(format!("[[{rel_no_md}]]"))
+}
+
+/// Expand `~/` against home and a relative path against cwd; None when the
+/// expansion is impossible or the base is empty.
+fn absolute_epic_path(epic_base: &str, cwd: &Path, home: Option<&Path>) -> Option<PathBuf> {
+    if epic_base.is_empty() {
+        return None;
+    }
+    if epic_base == "~" {
+        return home.map(Path::to_path_buf);
+    }
+    if let Some(rest) = epic_base.strip_prefix("~/") {
+        return home.map(|h| h.join(rest));
+    }
+    let p = Path::new(epic_base);
+    Some(if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        cwd.join(p)
+    })
+}
+
+/// Count files named `name` anywhere under `root`, skipping dot-directories
+/// plus `node_modules`/`target`, stopping at `cap` matches (the caller wants
+/// "exactly one", and the doc itself is already one).
+fn count_stem_matches(root: &Path, name: &str, cap: usize) -> usize {
+    let mut count = 0;
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if file_type.is_dir() {
+                let dir_name = entry.file_name();
+                let dir_name = dir_name.to_string_lossy();
+                if dir_name.starts_with('.') || dir_name == "node_modules" || dir_name == "target" {
+                    continue;
+                }
+                stack.push(entry.path());
+            } else if file_type.is_file() && entry.file_name().to_string_lossy() == name {
+                count += 1;
+                if count >= cap {
+                    return count;
+                }
+            }
+        }
+    }
+    count
+}
+
 /// The group slug of a child node, or None when it is not a group child of
 /// `base`. Identity is the durable `group_slug` field; legacy children fall
 /// back to their plan_path shape (the `#group-<slug>` fragment or the
@@ -1231,7 +1312,8 @@ const WHY_STUB: &str = "<!-- Why (from epic): transcribe the epic's intent line 
 fn scaffold_separate_plan(
     group: &NormalizedGroup,
     epic_id: &str,
-    source_doc: &str,
+    source_doc_field: &str,
+    source_doc_prose: &str,
     why_digest: &str,
     adopted: &[(String, String)],
     created: Option<&str>,
@@ -1277,8 +1359,8 @@ fn scaffold_separate_plan(
          {created_date}\ndifficulty: low\nconsolidation:\n  # <!-- Consolidation: run the \
          step 2d gate against this child and record one outcome with a reason per id \
          considered. -->\n  outcome: proceed_alone\n  proceed_alone_against: []\nparent_epic: \
-         {epic_id}\nsource_doc: {source_doc}\n---\n\n# {title}\n\n## Why (from epic)\n\n\
-         {why_block}\n\n## Context\n\nGroup child of epic `{epic_id}` (see `{source_doc}`). \
+         {epic_id}\nsource_doc: {source_doc_field}\n---\n\n# {title}\n\n## Why (from epic)\n\n\
+         {why_block}\n\n## Context\n\nGroup child of epic `{epic_id}` (see {source_doc_prose}). \
          Covers wave(s) {waves} of the epic's Execution Strategy. This is a self-contained \
          quick-plan for a fresh-context builder; pull scope detail from the named waves and \
          the epic's `## File Ownership Map`.\n\n{coverage_block}## Changes\n\n<!-- Seeded \
@@ -2293,6 +2375,13 @@ fn decompose_post_steps(
     // canonical already on disk), then write the self-contained stub.
     let mut scaffolded: Vec<String> = Vec::new();
     let source_doc = out.base.clone();
+    // One link resolution per decomposition, not per child: the epic doc is
+    // the same for every scaffold this run writes.
+    let source_doc_link = source_doc_wikilink(
+        &source_doc,
+        &std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+        std::env::var_os("HOME").map(PathBuf::from).as_deref(),
+    );
     let id_by_slug: std::collections::BTreeMap<&str, &str> = out
         .results
         .iter()
@@ -2359,10 +2448,18 @@ fn decompose_post_steps(
                 continue;
             }
         }
+        let source_doc_field = match &source_doc_link {
+            Some(link) => format!("\"{link}\""),
+            None => format!("\"{source_doc}\""),
+        };
+        let source_doc_prose = source_doc_link
+            .clone()
+            .unwrap_or_else(|| format!("`{source_doc}`"));
         let body = scaffold_separate_plan(
             grp,
             &out.epic_id,
-            &source_doc,
+            &source_doc_field,
+            &source_doc_prose,
             &why_digest,
             &adopted_nodes,
             None,
@@ -2932,5 +3029,91 @@ mod tests {
             "g"
         )
         .is_none());
+    }
+
+    // The scaffold must write source_doc as an Obsidian wikilink.
+    // Each test builds a throwaway vault tree and passes explicit home/cwd,
+    // so nothing touches the environment or the real vault.
+
+    fn wiki_home(tag: &str) -> PathBuf {
+        let base = std::env::temp_dir().join(format!("fno-decompose-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join(".fno")).unwrap();
+        std::fs::write(
+            base.join(".fno/config.toml"),
+            "[obsidian]\nenabled = true\nvault = \"c3po\"\n",
+        )
+        .unwrap();
+        base
+    }
+
+    fn wiki_note(dir: &Path, rel: &str) -> PathBuf {
+        let doc = dir.join(rel);
+        std::fs::create_dir_all(doc.parent().unwrap()).unwrap();
+        std::fs::write(&doc, "# epic\n").unwrap();
+        doc
+    }
+
+    #[test]
+    fn source_doc_wikilink_unique_stem_links_by_name() {
+        let home = wiki_home("uniq");
+        let doc = wiki_note(&home.join("c3po"), "notes/epic.md");
+        assert_eq!(
+            source_doc_wikilink(&doc.to_string_lossy(), &home, Some(&home)),
+            Some("[[epic]]".to_string())
+        );
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn source_doc_wikilink_duplicate_stem_links_by_vault_path() {
+        let home = wiki_home("dup");
+        let doc = wiki_note(&home.join("c3po"), "notes/epic.md");
+        wiki_note(&home.join("c3po"), "deep/epic.md");
+        assert_eq!(
+            source_doc_wikilink(&doc.to_string_lossy(), &home, Some(&home)),
+            Some("[[notes/epic]]".to_string())
+        );
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn source_doc_wikilink_outside_vault_returns_none() {
+        let home = wiki_home("out");
+        let other =
+            std::env::temp_dir().join(format!("fno-decompose-outside-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&other);
+        std::fs::create_dir_all(&other).unwrap();
+        let doc = wiki_note(&other, "epic.md");
+        assert_eq!(
+            source_doc_wikilink(&doc.to_string_lossy(), &home, Some(&home)),
+            None
+        );
+        let _ = std::fs::remove_dir_all(&other);
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn source_doc_wikilink_missing_or_disabled_vault_returns_none() {
+        let home = wiki_home("off");
+        std::fs::write(
+            home.join(".fno/config.toml"),
+            "[obsidian]\nenabled = false\nvault = \"c3po\"\n",
+        )
+        .unwrap();
+        let doc = wiki_note(&home.join("c3po"), "notes/epic.md");
+        assert_eq!(
+            source_doc_wikilink(&doc.to_string_lossy(), &home, Some(&home)),
+            None
+        );
+        let bare = std::env::temp_dir().join(format!("fno-decompose-bare-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&bare);
+        std::fs::create_dir_all(&bare).unwrap();
+        assert_eq!(
+            source_doc_wikilink(&doc.to_string_lossy(), &bare, Some(&bare)),
+            None
+        );
+        let _ = std::fs::remove_dir_all(&bare);
+        let _ = std::fs::remove_dir_all(&home);
     }
 }

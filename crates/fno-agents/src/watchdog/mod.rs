@@ -296,11 +296,6 @@ pub(crate) fn branch_commit_count(cwd: &str) -> Option<i64> {
     String::from_utf8_lossy(&out.stdout).trim().parse().ok()
 }
 
-fn help_tag_re() -> &'static regex::Regex {
-    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    RE.get_or_init(|| regex::Regex::new(r"(?i)<help(?:\s([^>]*))?>").expect("help tag regex"))
-}
-
 /// `(?<![\w.])\.git[/\\]`: the `regex` crate has no lookbehind, so the guard is
 /// a scan of each hit's preceding character.
 fn names_git_dir(evidence: &str) -> bool {
@@ -332,23 +327,23 @@ pub(crate) fn sandbox_denial_text(facts: Option<&TailFacts>) -> Option<String> {
     } else {
         &facts.last_text
     };
-    let tag = help_tag_re().captures(text)?;
-    let attributes = shlex::split(tag.get(1).map_or("", |m| m.as_str()))?;
-    let evidence = attributes
-        .iter()
-        .find_map(|value| {
-            let (key, val) = value.split_once('=')?;
-            key.eq_ignore_ascii_case("evidence")
-                .then(|| val.to_string())
-        })
-        .unwrap_or_default();
+    // The shared distress parser (distress::extract_help_distress), not a
+    // private regex: a tag inside a code span or fence is blanked there, so
+    // an escaped or illustrated tag no longer reads as distress - the same
+    // rule the stop hook already applies. Behavior change recorded in the
+    // PR body.
+    let distress = crate::distress::extract_help_distress(text)?;
+    let evidence = distress.evidence().unwrap_or_default().to_string();
     if evidence.is_empty()
         || !evidence.contains("Operation not permitted")
         || !names_git_dir(&evidence)
     {
         return None;
     }
-    Some(tag[0].to_string())
+    let Some((start, end)) = crate::distress::help_open_span(text) else {
+        return None;
+    };
+    Some(text[start..end].to_string())
 }
 
 /// Classify a Codex Git denial only when both reaping guards are clear.

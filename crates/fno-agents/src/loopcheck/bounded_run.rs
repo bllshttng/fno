@@ -226,6 +226,13 @@ impl GhReadError {
         Self::failed(read, String::new())
     }
 
+    /// Test seam: a caller outside the loopcheck module tree (pr_info's
+    /// assembly tests) fabricates a refused read without spawning a stub gh.
+    #[cfg(test)]
+    pub(crate) fn for_test(read: &str, stderr_tail: &str) -> Self {
+        Self::failed(read, stderr_tail.to_string())
+    }
+
     /// The one-line cause a caller appends when a fallback also failed: the
     /// read name and the stderr tail, or the read name alone when the tail
     /// is empty (a parse failure renders with no stderr to quote).

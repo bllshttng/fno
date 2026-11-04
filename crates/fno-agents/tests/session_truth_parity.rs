@@ -3,8 +3,9 @@
 //! field for field, with `now_s` pinned, on a cold read and again on warm
 //! cursors. The golden set carries the unknown handle (AC1, AC4).
 //!
-//! parity-stage: differential
-//! parity-oracle: fno.agents.session_truth.resolve_session_truth
+//! parity-stage: characterization
+//! parity-oracle: fno.agents.session_truth.resolve_session_truth (deleted
+//! Python twin; the committed goldens pin its answers, no differential run)
 
 use fno_agents::session_truth::cursor::TruthCursors;
 use fno_agents::session_truth::{resolve_payload, Stores};

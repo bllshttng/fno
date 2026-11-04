@@ -14,11 +14,12 @@ fail() { echo "  FAIL: $1"; FAILS=$((FAILS + 1)); }
 
 make_repo() {
     local root="$1"
-    mkdir -p "$root/cli/src/fno/company" "$root/cli/src/fno/agents" \
+    mkdir -p "$root/cli/src/fno/company" "$root/cli/src/fno/config" \
         "$root/agents" "$root/skills" "$root/plugins"
     printf 'class WorkOrderRef:\n    pass\n' > "$root/cli/src/fno/company/contracts.py"
-    printf 'from fno.company.contracts import WorkOrderRef\n' \
-        > "$root/cli/src/fno/agents/role.py"
+    # The positive control's edge: core -> platform, downward and legal.
+    printf 'from fno.paths import repo_root\n' \
+        > "$root/cli/src/fno/company/wiring.py"
 }
 
 echo "== mode help is discoverable =="
@@ -42,13 +43,13 @@ grep -Eq <<<"$out" '[0-9]+ layers, [0-9]+ modules, 0 violations' \
 
 printf 'value = 1\n' > "$CLEAN/cli/src/fno/unmapped.py"
 out="$(bash "$CHECK" --strict "$CLEAN" 2>&1)"; rc=$?
-grep -q <<<"$out" '3 layers, 2 modules, 0 violations' \
+grep -q <<<"$out" '2 layers, 2 modules, 0 violations' \
     && ok "coverage excludes unmapped modules" || fail "coverage over-counts: $out"
 
 echo "== a broken scan fails closed =="
 BROKEN="$TMP/broken"
 make_repo "$BROKEN"
-printf 'class RoleRow:\n    pass\n' > "$BROKEN/cli/src/fno/agents/role.py"
+printf 'class WiringOnly:\n    pass\n' > "$BROKEN/cli/src/fno/company/wiring.py"
 out="$(bash "$CHECK" --strict "$BROKEN" 2>&1)"; rc=$?
 [[ $rc -eq 2 ]] && ok "missing control exits two" || fail "expected exit 2, got $rc: $out"
 grep -q <<<"$out" "positive control failed" \
@@ -62,22 +63,22 @@ make_repo "$VIOLATION"
 {
     printf '%s\n' '# padding' '# padding' '# padding' '# padding' '# padding'
     printf '%s\n' '# padding' '# padding' '# padding' '# padding' '# padding' '# padding'
-    printf '%s\n' 'from fno.agents.role import resolve_current_repo_slug'
-} > "$VIOLATION/cli/src/fno/company/contracts.py"
+    printf '%s\n' 'from fno.company.contracts import resolve_current_repo_slug'
+} > "$VIOLATION/cli/src/fno/config/spy.py"
 out="$(bash "$CHECK" --strict "$VIOLATION" 2>&1)"; rc=$?
 [[ $rc -eq 1 ]] && ok "prohibited edge exits one" || fail "expected exit 1, got $rc: $out"
 grep -q <<<"$out" \
-    'cli/src/fno/company/contracts.py:12: L1 core -> L5 runtime / from fno.agents.role import resolve_current_repo_slug' \
+    'cli/src/fno/config/spy.py:12: L0 platform -> L1 core / from fno.company.contracts import resolve_current_repo_slug' \
     && ok "finding carries exact evidence" || fail "exact evidence missing: $out"
-grep -q <<<"$out" 'layer cycle: L1 core -> L5 runtime -> L1 core' \
+grep -q <<<"$out" 'layer cycle: L0 platform -> L1 core -> L0 platform' \
     && ok "declared-layer cycle is printed" || fail "cycle missing: $out"
 
 echo "== baseline mode holds the exact finding set and ratchets downward =="
 FIXTURE_BASELINE="$TMP/fixture-baseline.txt"
 cat > "$FIXTURE_BASELINE" <<'EOF'
 # Human-readable fixture baseline.
-cli/src/fno/company/contracts.py: L1 core -> L5 runtime / from fno.agents.role import resolve_current_repo_slug
-layer cycle: L1 core -> L5 runtime -> L1 core
+cli/src/fno/config/spy.py: L0 platform -> L1 core / from fno.company.contracts import resolve_current_repo_slug
+layer cycle: L0 platform -> L1 core -> L0 platform
 EOF
 out="$(bash "$CHECK" --baseline --baseline-file "$FIXTURE_BASELINE" "$VIOLATION" 2>&1)"; rc=$?
 [[ $rc -eq 0 ]] && ok "unchanged baseline exits zero" || fail "baseline failed: $out"
@@ -88,28 +89,28 @@ grep -q <<<"$out" 'baseline holds: 1 prohibited dependency and 1 cycle' \
 # line column, so the row survives the shift with no regeneration.
 {
     for _ in {1..12}; do echo '# padding'; done
-    echo 'from fno.agents.role import resolve_current_repo_slug'
-} > "$VIOLATION/cli/src/fno/company/contracts.py"
+    echo 'from fno.company.contracts import resolve_current_repo_slug'
+} > "$VIOLATION/cli/src/fno/config/spy.py"
 out="$(bash "$CHECK" --baseline --baseline-file "$FIXTURE_BASELINE" "$VIOLATION" 2>&1)"; rc=$?
 [[ $rc -eq 0 ]] && ok "line move above the import keeps the baseline green" \
     || fail "line-key churn: a comment insertion forced a regeneration: $out"
 
-printf '\nfrom fno.agents.events import emit\n' >> "$VIOLATION/cli/src/fno/company/contracts.py"
+printf '\nfrom fno.company.contracts import emit\n' >> "$VIOLATION/cli/src/fno/config/spy.py"
 out="$(bash "$CHECK" --baseline --baseline-file "$FIXTURE_BASELINE" "$VIOLATION" 2>&1)"; rc=$?
 [[ $rc -eq 1 ]] && ok "new violation fails baseline" || fail "new violation escaped: $out"
 grep -q <<<"$out" 'new or changed violation' \
     && ok "new violation is diagnosed" || fail "new diagnosis missing: $out"
 
 sed 's/resolve_current_repo_slug/ChangedResolver/' \
-    "$VIOLATION/cli/src/fno/company/contracts.py" > "$TMP/changed-contracts.py"
-sed '$d' "$TMP/changed-contracts.py" > "$VIOLATION/cli/src/fno/company/contracts.py"
+    "$VIOLATION/cli/src/fno/config/spy.py" > "$TMP/changed-spy.py"
+sed '$d' "$TMP/changed-spy.py" > "$VIOLATION/cli/src/fno/config/spy.py"
 out="$(bash "$CHECK" --baseline --baseline-file "$FIXTURE_BASELINE" "$VIOLATION" 2>&1)"; rc=$?
 [[ $rc -eq 1 ]] && ok "changed violation fails baseline" || fail "changed violation escaped: $out"
 grep -q <<<"$out" 'new or changed violation' \
     && grep -q <<<"$out" 'resolved or changed baseline entry' \
     && ok "changed violation shows both halves" || fail "changed diagnosis incomplete: $out"
 
-printf 'class WorkOrderRef:\n    pass\n' > "$VIOLATION/cli/src/fno/company/contracts.py"
+printf 'class SpyOnly:\n    pass\n' > "$VIOLATION/cli/src/fno/config/spy.py"
 out="$(bash "$CHECK" --baseline --baseline-file "$FIXTURE_BASELINE" "$VIOLATION" 2>&1)"; rc=$?
 [[ $rc -eq 1 ]] && ok "reduction needs baseline update" || fail "stale baseline passed: $out"
 grep -q <<<"$out" 'resolved or changed baseline entry' \
@@ -130,15 +131,15 @@ out="$(bash "$CHECK" --baseline --baseline-file "$FIXTURE_BASELINE" "$VIOLATION"
 echo "== ImportFrom aliases and package-relative imports cannot bypass the map =="
 ALIASES="$TMP/aliases"
 make_repo "$ALIASES"
-printf 'from fno import agents\n' > "$ALIASES/cli/src/fno/company/contracts.py"
-printf 'from .. import agents\n' > "$ALIASES/cli/src/fno/company/__init__.py"
+printf 'from fno.company import WorkOrderRef\n' > "$ALIASES/cli/src/fno/config/__init__.py"
+printf 'from ..company import WorkOrderRef\n' > "$ALIASES/cli/src/fno/config/_rel.py"
 out="$(bash "$CHECK" --strict "$ALIASES" 2>&1)"; rc=$?
 [[ $rc -eq 1 ]] && ok "alias forms exit one" || fail "expected exit 1, got $rc: $out"
-grep -q <<<"$out" 'cli/src/fno/company/contracts.py:1: L1 core -> L5 runtime / from fno import agents' \
+grep -q <<<"$out" 'cli/src/fno/config/__init__.py:1: L0 platform -> L1 core / from fno.company import WorkOrderRef' \
     && ok "absolute package alias caught" || fail "absolute alias missed: $out"
-[[ "$(echo "$out" | grep -c 'cli/src/fno/company/contracts.py:1: L1 core -> L5 runtime')" -eq 1 ]] \
+[[ "$(echo "$out" | grep -c 'cli/src/fno/config/__init__.py:1: L0 platform -> L1 core')" -eq 1 ]] \
     && ok "absolute alias emits one finding" || fail "absolute alias duplicated: $out"
-grep -q <<<"$out" 'cli/src/fno/company/__init__.py:1: L1 core -> L5 runtime / from .. import agents' \
+grep -q <<<"$out" 'cli/src/fno/config/_rel.py:1: L0 platform -> L1 core / from ..company import WorkOrderRef' \
     && ok "relative package alias caught" || fail "relative alias missed: $out"
 
 echo "== the public fno.company facade is part of the core layer =="

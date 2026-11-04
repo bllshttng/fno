@@ -13,6 +13,9 @@ types:
   - id: context-bloat
     cost: rework
     description: The change grows text loaded at every session start.
+  - id: dead-command
+    cost: rework
+    description: A command a rule tells agents to run no longer runs at the head.
   - id: duplicate-work
     cost: rework
     description: The work rebuilds or refiles something that already exists.
@@ -43,6 +46,9 @@ types:
   - id: unverified-claim
     cost: rework
     description: The agent reports a result it did not check.
+  - id: unverified-premise
+    cost: rework
+    description: The agent builds on a premise it did not measure.
   - id: wrong-assumption
     cost: rework
     description: The agent infers a fact it should read or ask for.

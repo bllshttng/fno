@@ -62,7 +62,7 @@ pub enum Door {
 pub fn pane_argv(remote: &proto::RemoteRow) -> Result<Vec<String>, String> {
     let bad = |word: &str| word.is_empty() || word.starts_with('-');
     if bad(&remote.host) || bad(&remote.key) {
-        return Err(format!("no far row at {}/{}", remote.host, remote.key));
+        return Err(format!("no remote row at {}/{}", remote.host, remote.key));
     }
     let exe = std::env::current_exe()
         .map(|path| path.to_string_lossy().into_owned())

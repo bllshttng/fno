@@ -1675,6 +1675,9 @@ pub(crate) fn run_with_release(
     // the grace the caller handed in. The daemon and the command both resolve
     // grace against the process cwd, so this reads the same config ladder
     // without a new parameter threaded through every caller.
+    let stopped_retire_s =
+        crate::agents_config::stopped_retire_secs(&std::env::current_dir().unwrap_or_default())
+            as i64;
     let open_work_retire_s =
         crate::agents_config::open_work_retire_secs(&std::env::current_dir().unwrap_or_default())
             as i64;
@@ -1926,7 +1929,18 @@ pub(crate) fn run_with_release(
                     .or_else(|| report_age(e, now))
                     .is_some_and(|a| a > crate::gc::SPAWN_IDLE_RETIRE_SECS)
         );
-        if e.origin.as_deref() == Some("operator") && !done_quiet {
+        // A stopped operator row with no open node falls through: the corpse
+        // probe below, which reads the live roster, decides whether it is
+        // really dead. An open node keeps the row where it was.
+        let stopped_status = matches!(
+            e.status,
+            crate::AgentStatus::Orphaned
+                | crate::AgentStatus::Exited
+                | crate::AgentStatus::PermanentDead
+        );
+        let stopped_free = stopped_status
+            && matches!(staged_row, Some((verdict, _)) if !matches!(verdict.work, WorkState::Open { .. }));
+        if e.origin.as_deref() == Some("operator") && !done_quiet && !stopped_free {
             summary.kept_operator.push(id);
             continue;
         }
@@ -2341,6 +2355,9 @@ pub(crate) fn run_with_release(
                 .is_some_and(node_route::NodeSource::is_transcript),
             node_held_elsewhere,
             open_work_retire_s,
+            // Stopped: a terminal registry status, or a proven corpse (a
+            // claude row absent from a known `claude agents --json` roster).
+            stopped_retire_s: (corpse || stopped_status).then_some(stopped_retire_s),
             eval_finished: crate::eval_reap::is_finished_eval_row(
                 &e.name,
                 Some(sid),
@@ -3030,7 +3047,11 @@ pub(crate) fn run_with_release(
                     format!("node {node} {status}; recorded merge_status merged")
                 }
             }
-            _ => "done".to_string(), // unreachable: only AllDone and the released Open arms retire
+            WorkState::NoProvenance if crate::gc::stopped_stale(&probed) => format!(
+                "stopped, quiet past {}s; no node, open PR or live claim",
+                probed.stopped_retire_s.unwrap_or_default()
+            ),
+            _ => "done".to_string(), // a released no-provenance row
         };
         // The release rides the audit line: what was ruled, how old
         // the hold was, an unconfirmed stop named as such, and an unread
