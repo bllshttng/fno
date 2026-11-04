@@ -218,9 +218,9 @@ pub(crate) struct Settings {
     /// documented escape hatch.
     pub(crate) self_review_required: Option<bool>,
     /// config.review.posture: the named rung of the review ladder.
-    /// None = unset, which resolves through the legacy inference (mirroring
-    /// `fno.config.resolve_review_posture`) or the shipped self_review floor.
-    /// A value the ladder does not carry stays None here: the Python loader
+    /// None = unset, which resolves through the legacy inference (the shape
+    /// the deleted Python resolver set) or the shipped self_review floor.
+    /// A value the ladder does not carry stays None here: the native loader
     /// rejects the same config, so nothing that loads can disagree.
     pub(super) posture: Option<String>,
     /// config.review.github_approval_satisfies (default true): a non-author

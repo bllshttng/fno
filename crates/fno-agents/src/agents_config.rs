@@ -1493,9 +1493,9 @@ pub fn review_optional_apps(cwd: &Path) -> Vec<String> {
 /// POSTURE (may we merge at all); these decide HOW, once something has already
 /// decided to.
 ///
-/// Both mirror `fno.config.AutoMergeBlock`, which is the source of truth;
-/// `cli/tests/test_config_schema_drift.py` fails when the allowlist here drifts
-/// from the model's. Both degrade to the value `finalize` hardcoded before it
+/// Both mirror the model's AutoMergeBlock (the fields.json/config_schema.json
+/// pair in the fno crate; the agreement test in config_cli/model holds the
+/// tables together). Both degrade to the value `finalize` hardcoded before it
 /// read config at all, so a malformed file is never worse than the old behavior.
 ///
 /// One known parity edge: a NON-STRING value
