@@ -1388,7 +1388,8 @@ fn collect_readings(ctx: &Ctx, beat: &Beat, since: Option<&str>) -> Vec<Reading>
         }
     });
     take_reading(&mut readings, beat_started, "laws", || {
-        crate::law_recheck::collect(true)
+        // Advisory: an unreadable decision store leaves the beat line out.
+        crate::law_recheck::collect(true).or_else(|_| Ok(Value::Null))
     });
     take_reading(&mut readings, beat_started, "machine", {
         let events_paths = events_paths.clone();
