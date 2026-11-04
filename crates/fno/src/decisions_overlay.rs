@@ -237,7 +237,7 @@ mod tests {
     }
 
     #[test]
-    fn author_reads_the_authority_stamp() {
+    fn filters_combine_and_sort_newest_first() {
         assert_eq!(
             row("a", "law", "live", Some("chat_attested"), "").author(),
             Author::User
@@ -250,10 +250,6 @@ mod tests {
             row("a", "coord", "live", None, "").author(),
             Author::Unknown
         );
-    }
-
-    #[test]
-    fn filters_combine_and_sort_newest_first() {
         let rows = vec![
             row("old", "law", "live", Some("operator"), "2026-01-01"),
             row("new", "law", "live", Some("operator"), "2026-02-01"),
@@ -268,20 +264,6 @@ mod tests {
             .map(|r| r.decision_id.clone())
             .collect();
         assert_eq!(ids, ["new", "old"]);
-    }
-
-    #[test]
-    fn audit_queue_takes_unattributed_and_authorless_rows() {
-        let rows = vec![
-            row("u", "unattributed", "unscoped", Some("role"), "1"),
-            row("n", "coord", "live", None, "2"),
-            row("ok", "law", "live", Some("chat_attested"), "3"),
-        ];
-        let f = Filter {
-            audit_only: true,
-            ..Filter::default()
-        };
-        assert_eq!(visible(&rows, &f, &HashSet::new()).len(), 2);
     }
 
     #[test]

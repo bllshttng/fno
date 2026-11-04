@@ -263,16 +263,11 @@ mod tests {
     }
 
     #[test]
-    fn keys_parse_arrows_and_letters() {
-        assert_eq!(parse_key(b"\x1b[B"), Key::Down);
+    fn selection_clamps_when_a_filter_narrows_the_list() {
         assert_eq!(parse_key(b"r"), Key::Retract);
         assert_eq!(parse_key(b"z"), Key::Other);
-    }
-
-    #[test]
-    fn selection_clamps_when_a_filter_narrows_the_list() {
         let mut t = table();
-        t.apply(Key::Down);
+        t.apply(parse_key(b"\x1b[B"));
         assert_eq!(t.sel, 1);
         t.apply(Key::State);
         assert_eq!(t.sel, 0);
