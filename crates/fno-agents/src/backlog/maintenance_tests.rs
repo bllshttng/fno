@@ -533,7 +533,8 @@ fn the_rename_sweep_rewrites_open_rows_through_the_alias_and_skips_claimed() {
     let claimed: BTreeSet<String> = ["x-old-open".to_string()].into();
     let applied = cands.apply(&mut ents, &claimed);
     assert_eq!(ents[0]["pr_url"], json!(old), "a claimed node is left");
-    assert_eq!(applied.renames.len(), 0);
+    assert_eq!(ents[1]["pr_url"], json!(new2), "an unclaimed node rewrites");
+    assert_eq!(applied.renames.len(), 1);
 
     let free = BTreeSet::new();
     let applied = cands.apply(&mut ents, &free);
@@ -543,5 +544,7 @@ fn the_rename_sweep_rewrites_open_rows_through_the_alias_and_skips_claimed() {
         ents[2]["pr_url"],
         json!("https://github.com/bllshttng/fno/pull/1")
     );
-    assert_eq!(applied.renames.len(), 2);
+    // The second apply only rewrites the node still carrying the old url;
+    // a row the first apply moved matches neither old_url nor changes.
+    assert_eq!(applied.renames.len(), 1);
 }
