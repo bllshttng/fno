@@ -452,7 +452,7 @@ fn pr_url_to_stamp(
     }
     if let Some(repo) = args.repo.as_deref().filter(|r| !is_repo_slug(r)) {
         eprintln!(
-            "fno backlog done: --repo '{repo}' is not an owner/name slug (expected <owner>/<repo>, e.g. bllshttng/fno)"
+            "fno backlog done: --repo '{repo}' is not an owner/name slug (expected <owner>/<repo>, e.g. fnodotdev/fno)"
         );
         return Err(2);
     }

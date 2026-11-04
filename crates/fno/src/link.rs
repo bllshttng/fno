@@ -934,8 +934,8 @@ mod tests {
     #[test]
     fn finds_a_bare_url() {
         assert_eq!(
-            urls("see https://github.com/bllshttng/fno/pull/700 now"),
-            ["https://github.com/bllshttng/fno/pull/700"]
+            urls("see https://github.com/fnodotdev/fno/pull/700 now"),
+            ["https://github.com/fnodotdev/fno/pull/700"]
         );
     }
 

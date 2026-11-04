@@ -12,7 +12,7 @@ struct Registry {
 }
 
 struct Fake {
-    /// What `marketplace add bllshttng/fno` checks out.
+    /// What `marketplace add fnodotdev/fno` checks out.
     release_root: PathBuf,
     homes: HashMap<PathBuf, Registry>,
     calls: Vec<(PathBuf, Vec<String>)>,
@@ -310,7 +310,7 @@ fn release_replaces_the_legacy_dev_identity_and_reads_fresh() {
             "codex plugin list --json",
             "codex plugin remove fno@footnote-dev --json",
             "codex plugin marketplace remove footnote-dev --json",
-            "codex plugin marketplace add bllshttng/fno --ref stable --json",
+            "codex plugin marketplace add fnodotdev/fno --ref stable --json",
             "codex plugin marketplace upgrade fno --json",
             "codex plugin add fno@fno --json",
             "codex plugin marketplace list --json",
