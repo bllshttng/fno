@@ -214,7 +214,8 @@ fn few_graded_heldout_rows_read_underpowered_never_propose() {
     assert!(v.get("accept").is_none());
 }
 
-/// One repeat's grades per task, `passes` of 10 passing.
+/// One repeat's grades per task, `passes` of 10 passing. The row helper
+/// above writes no repeat_index, so these rows carry their own.
 fn repeat_rows(
     cohort: &str,
     task: &str,
@@ -224,14 +225,16 @@ fn repeat_rows(
 ) -> Vec<String> {
     (0..10)
         .map(|i| {
-            row(
-                task,
-                i < passes_of_10,
-                cohort,
-                "m-base",
-                "ok",
-                usage.clone(),
-            )
+            let mut v = json!({
+                "ts": "2026-10-20T12:00:00Z", "task_id": task, "tier": "capability",
+                "pass": i < passes_of_10, "status": "graded", "lane_status": "ok",
+                "experiment_id": cohort, "bank_rev": PIN, "repeat_index": rep,
+                "observed_model": "m-base",
+            });
+            if !usage.is_null() {
+                v["usage"] = usage.clone();
+            }
+            v.to_string()
         })
         .collect()
 }

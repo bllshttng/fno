@@ -157,7 +157,6 @@ impl AaSkip {
 pub(crate) struct AaFloor {
     pub(crate) cohort: String,
     pub(crate) tasks: usize,
-    pub(crate) sd_points: f64,
     pub(crate) floor_points: f64,
 }
 
@@ -198,10 +197,10 @@ pub(crate) fn aa_floor(
     for cohort in cohorts {
         let mut deltas = Vec::new();
         for task in tasks {
-            let at = |m: &BTreeMap<&str, BTreeMap<&str, (usize, usize)>>| {
-                m.get(cohort).and_then(|t| t.get(task.as_str()))
-            };
-            if let (Some((ga, pa)), Some((gb, pb))) = (at(&rep0), at(&rep1)) {
+            if let (Some((ga, pa)), Some((gb, pb))) = (
+                rep0.get(cohort).and_then(|t| t.get(task.as_str())),
+                rep1.get(cohort).and_then(|t| t.get(task.as_str())),
+            ) {
                 if *ga > 0 && *gb > 0 {
                     deltas.push(*pa as f64 / *ga as f64 - *pb as f64 / *gb as f64);
                 }
@@ -230,7 +229,6 @@ pub(crate) fn aa_floor(
     Ok(AaFloor {
         cohort: cohort.to_string(),
         tasks: n,
-        sd_points: spread * 100.0,
         floor_points: mdd(spread, n, repeats) * 100.0,
     })
 }
@@ -259,7 +257,7 @@ pub(crate) fn power_block(
     let vals: Vec<f64> = paired.deltas.iter().map(|d| d.3).collect();
     let ci = bootstrap_ci(&vals, rng, RESAMPLES).map(|(lo, hi)| json!([lo * 100.0, hi * 100.0]));
     let ci_excludes_zero = matches!(&ci, Some(arr) if {
-        let lo = arr.first().and_then(Value::as_f64);
+        let lo = arr.get(0).and_then(Value::as_f64);
         let hi = arr.get(1).and_then(Value::as_f64);
         lo.is_some_and(|v| v > 0.0) || hi.is_some_and(|v| v < 0.0)
     });
