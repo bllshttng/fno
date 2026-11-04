@@ -1736,7 +1736,8 @@ fn build_data(readings: &[Reading], scope: &str) -> Map<String, Value> {
         }
     }
     let failed: Vec<&Reading> = readings.iter().filter(|r| !r.ok).collect();
-    data.insert("coverage".into(), json!(readings.len() - failed.len()));
+    let ok = readings.iter().filter(|r| r.ok && r.name != "laws").count();
+    data.insert("coverage".into(), json!(ok));
     data.insert(
         "readers_failed".into(),
         json!(failed.iter().map(|r| r.name).collect::<Vec<_>>()),
