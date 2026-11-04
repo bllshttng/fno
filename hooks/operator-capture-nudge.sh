@@ -98,66 +98,39 @@ if [[ $rc -ne 0 ]]; then
     exit 0
 fi
 
-printf '%s' "$payload" | python3 -c '
-import json
-import sys
-
-raw = sys.stdin.read()
-
+printf '%s' "$payload" | jq -Rsr '
+def isint: type == "number" and . == floor;
 # Take the first object that LOOKS LIKE THIS PAYLOAD, not the first that
 # merely parses: the command shares stdout with whatever preamble the deployed
 # fno prints, and a preamble can carry a brace. "depth" present is the
-# marker; an unreadable payload is a REPORT, never silence.
-payload = None
-decoder = json.JSONDecoder()
-saw_object = False
-at = raw.find("{")
-while at >= 0:
-    try:
-        candidate, _ = decoder.raw_decode(raw[at:])
-    except ValueError:
-        candidate = None
-    if isinstance(candidate, dict):
-        saw_object = True
-        if "depth" in candidate:
-            payload = candidate
-            break
-    at = raw.find("{", at + 1)
-
-if payload is None:
-    if saw_object:
-        print("## Operator capture")
-        print()
-        print("read returned a JSON object with no depth key; run `fno inbox operator status` directly.")
-    sys.exit(0)
-
-depth = payload.get("depth")
-if not isinstance(depth, int) or depth <= 0:
-    sys.exit(0)
-
-age = payload.get("oldest_age_s")
-age_text = f", oldest {age}s old" if isinstance(age, int) else ""
-excerpt = payload.get("oldest_excerpt") or ""
-print(f"## Operator capture: {depth} undispositioned operator turn(s){age_text}")
-print()
-# Machine turns capture already refused, named so the depth reads as
-# filtered, not lucky: a silent filter that drops a real operator turn
-# would be worse than the noise it removes.
-skipped = payload.get("skipped")
-if isinstance(skipped, dict) and skipped:
-    total = sum(v for v in skipped.values() if isinstance(v, int))
-    detail = ", ".join(
-        f"{k}={v}" for k, v in sorted(skipped.items()) if isinstance(v, int)
-    )
-    if total:
-        print(f"Skipped at capture: {total} machine turn(s) ({detail})")
-        print()
-print("Disposition each before the tick ends: record with `fno backlog idea "
-      "--source-kind operator_request`, `fno backlog capture add`, or `fno "
-      "inbox law set`, then `fno inbox operator ack <turn-id> --outcome "
-      "law:<id>|capture:<fu-id>|node:<id>|nothing`.")
-if excerpt:
-    print()
-    print(f"Oldest: {excerpt}")
+# marker; an unreadable payload is a REPORT, never silence. Offsets walk
+# codepoints, so a non-ASCII preamble cannot skew a slice.
+explode as $c
+| ($c | indices(123)) as $opens
+| ($c | indices(125)) as $closes
+| [ $opens[] as $i
+    | first($closes[] | select(. > $i) as $j
+        | ($c[$i:$j + 1] | implode | try fromjson catch null)
+        | select(. != null)) // null
+    | select(type == "object") ] as $objs
+| (first($objs[] | select(has("depth"))) // null) as $p
+| if $p == null then
+    if ($objs | length) > 0 then
+      "## Operator capture\n\nread returned a JSON object with no depth key; run `fno inbox operator status` directly."
+    else empty end
+  elif ($p.depth | isint | not) or $p.depth <= 0 then empty
+  else
+    (if ($p.oldest_age_s | isint) then ", oldest \($p.oldest_age_s)s old" else "" end) as $age
+    | ($p.oldest_excerpt | if . == null or . == false or . == "" then "" else tostring end) as $excerpt
+    | ($p.skipped | if type == "object" then
+        [to_entries | sort_by(.key)[] | select(.value | isint)] else [] end) as $sk
+    | ([$sk[].value] | add // 0) as $total
+    | "## Operator capture: \($p.depth) undispositioned operator turn(s)\($age)\n"
+      + (if $total != 0 then
+          "\nSkipped at capture: \($total) machine turn(s) (\([$sk[] | "\(.key)=\(.value)"] | join(", ")))\n"
+        else "" end)
+      + "\nDisposition each before the tick ends: record with `fno backlog idea --source-kind operator_request`, `fno backlog capture add`, or `fno inbox law set`, then `fno inbox operator ack <turn-id> --outcome law:<id>|capture:<fu-id>|node:<id>|nothing`."
+      + (if $excerpt != "" then "\n\nOldest: \($excerpt)" else "" end)
+  end
 '
 exit 0

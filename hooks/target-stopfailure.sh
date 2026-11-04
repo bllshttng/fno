@@ -18,15 +18,8 @@ STATUS=$(grep '^status:' "$STATE_FILE" 2>/dev/null | awk '{print $2}')
 
 INPUT=$(cat)
 
-# Parse both fields in a single python3 call
-read -r ERROR_TYPE STATUS_CODE < <(printf '%s\n' "$INPUT" | python3 -c "
-import sys, json
-try:
-    data = json.load(sys.stdin)
-    print(data.get('error_type', 'unknown'), data.get('status_code', '0'))
-except Exception:
-    print('unknown 0')
-" 2>/dev/null || echo "unknown 0")
+# Parse both fields in a single jq call
+read -r ERROR_TYPE STATUS_CODE < <(printf '%s\n' "$INPUT" | jq -r '"\(.error_type // "unknown") \(.status_code // "0")"' 2>/dev/null || echo "unknown 0")
 
 # Circuit breaker: increment consecutive_same_error
 # Normalize error into a signature for duplicate detection
