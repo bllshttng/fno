@@ -1989,9 +1989,9 @@ pub(crate) fn run_with_release(
                 e.harness_session_id.as_deref().unwrap_or("").trim(),
                 e.launch_account.as_deref(),
             );
-        // An exited row skips the corpse demand: the exit is the death fact,
-        // and the roster lists a finished session forever.
-        if !is_spawn && !exited && !adopted_finished(e) && !adopted_terminal && !done_quiet {
+        // An exited row no roster lists live skips the corpse demand.
+        let unlisted = crate::gc_adopt::exited_unlisted(e, &agents_memo, agents_read);
+        if !is_spawn && !unlisted && !adopted_terminal && !done_quiet {
             let corpse_probe = crate::gc_adopt::origin_corpse(e, quiet, &agents_memo, agents_read);
             // An adopted bg row falls through as a live row judged like a
             // spawn one, never as a corpse: only a row the corpse probe
