@@ -941,10 +941,16 @@ mod tests {
         assert_eq!(crit[1].tag, RubricTag::Principle);
 
         let load = |name: &str, body: String| load_task(&write_task(dir.path(), name, &body));
-        // AC1-EDGE: regression tier refuses, naming id and file.
+        // AC1-EDGE: regression tier refuses, naming id and file. The check
+        // must parse first, so the case carries criteria: the tier refusal
+        // is task-level and fires after check parsing.
         let err = load(
             "reg.yaml",
-            body("    path: decision.md\n", "regression", ""),
+            body(
+                &format!("    path: decision.md\n{criteria}"),
+                "regression",
+                "",
+            ),
         )
         .unwrap_err();
         assert!(
