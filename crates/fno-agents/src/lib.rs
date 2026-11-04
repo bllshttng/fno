@@ -185,6 +185,7 @@ pub mod delivery_completion;
 pub mod delivery_eval;
 pub mod digest;
 pub mod discovered_sessions;
+pub mod disk_floor;
 pub mod dispatch_credit;
 pub mod dispatch_harness;
 pub mod disposition_gate;

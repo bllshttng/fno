@@ -2205,7 +2205,7 @@ mod tests {
             "status": "done",
             "title": "feed marker node",
             "pr_number": 1395,
-            "pr_url": "https://github.com/bllshttng/fno/pull/1395",
+            "pr_url": "https://github.com/fnodotdev/fno/pull/1395",
             "created_at": "2026-09-01T08:00:00Z",
             "cwd": "/workspace/node-project",
             "source_session_id": "s-do",
@@ -2291,7 +2291,7 @@ mod tests {
         let shipped = ship_rows.iter().find(|r| r.kind == "node_shipped").unwrap();
         assert_eq!(
             shipped.url.as_deref(),
-            Some("https://github.com/bllshttng/fno/pull/1395"),
+            Some("https://github.com/fnodotdev/fno/pull/1395"),
             "the ship row carries the PR URL the provenance action opens"
         );
         let newest_two = filter_rows(
