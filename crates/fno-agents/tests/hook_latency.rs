@@ -1235,7 +1235,11 @@ fn hook_budget_bash_pretooluse_dispatch() {
         },
         |code, stdout, stderr| {
             assert_eq!(code, 0, "{stderr}");
-            assert_eq!(stdout.trim(), "{}", "git status must allow: {stdout} {stderr}");
+            assert_eq!(
+                stdout.trim(),
+                "{}",
+                "git status must allow: {stdout} {stderr}"
+            );
         },
     );
 
