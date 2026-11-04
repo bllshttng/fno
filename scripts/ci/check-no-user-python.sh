@@ -3,8 +3,9 @@
 #
 # The user path is what an installed plugin runs: hooks/, skills/,
 # plugins/buddy/ and the user-path scripts named below. In it this counts
-# every python start: a `python`/`python3` command word, `run-python.sh`,
-# `FNO_PYTHON`, a `.py` file run as a command, and each tracked `.py` file
+# every python start: a `python`/`python3` command word, an absolute-path
+# start like `/usr/bin/python3`, `run-python.sh`, `FNO_PYTHON`, a `.py` file
+# run as a command, and each tracked `.py` file
 # itself (one unit per file; its own lines are not scanned). Comment lines,
 # markdown, tests/ trees, and a line marked `user-project-python` (the
 # user's own project deps, never fno's) do not count.
@@ -37,7 +38,8 @@ cd "$ROOT" || exit 2
 FILES="$(git ls-files -- hooks skills plugins/buddy \
     scripts/validate-plan.sh 'scripts/lib/worktree-*.sh' scripts/lib/worktree_occupancy.py \
     scripts/lib/skill_discovery.py scripts/setup.sh 'scripts/memory/*.sh' \
-    scripts/autocorrect-review.sh scripts/speculate-compare.sh scripts/save-session.py 2>/dev/null \
+    scripts/autocorrect-review.sh scripts/autocorrect-pack.sh scripts/autocorrect-triage.sh \
+    scripts/speculate-compare.sh scripts/save-session.py 2>/dev/null \
     | grep -v -E '(^|/)(tests?|evals)/|\.test\.[a-z]+$|\.(md|ya?ml|tsv)$')" || FILES=""
 
 # One hit per line: "path<TAB>line". A .py file is one hit at line 0.
@@ -45,6 +47,7 @@ SCAN='
     /^[[:space:]]*(#|\/\/)/ { next }
     /user-project-python/ { next }
     /(^|[^A-Za-z0-9_.\/-])python3?([[:space:]]|$|["\047);|&])/ \
+      || /\/(usr\/)?bin\/python3?([[:space:]]|$|["\047);|&])/ \
       || /run-python\.sh/ || /FNO_PYTHON/ \
       || /(^[[:space:]]*|exec[[:space:]]+|\$\()"?[$A-Za-z0-9_{}\/.-]*\.py"?([[:space:]]|$)/ {
         print f "\t" NR
