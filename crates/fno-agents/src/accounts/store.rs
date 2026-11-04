@@ -440,6 +440,35 @@ pub fn verify_slot(harness: &str, expected: &str, host: &dyn Host) -> Result<boo
     })
 }
 
+/// The claude Keychain items that do not read back `expected`, by the names
+/// the vault uses (`scoped-keychain`, `unscoped-keychain`). Empty off the
+/// Keychain, where one file holds the credential.
+pub fn slot_items_off(expected: &str, host: &dyn Host) -> Result<Vec<&'static str>, StoreError> {
+    if !host.keychain_slot() {
+        return Ok(Vec::new());
+    }
+    let account = keychain_account();
+    let items = [
+        ("unscoped-keychain", UNSCOPED_SERVICE.to_string()),
+        ("scoped-keychain", scoped_service(&claude_slot_dir())?),
+    ];
+    let mut off = Vec::new();
+    for (name, service) in items {
+        let out = host.security(&args(&[
+            "find-generic-password",
+            "-s",
+            &service,
+            "-a",
+            &account,
+            "-w",
+        ]))?;
+        if out.code != 0 || out.stdout.trim() != expected.trim() {
+            off.push(name);
+        }
+    }
+    Ok(off)
+}
+
 /// `codex login status` against the slot's home: `ok` is `None` when codex
 /// could not answer, with the reason.
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -27,9 +27,11 @@ use std::time::Duration;
 
 const HELP: &str = "Usage: fno config accounts use [OPTIONS] PROVIDER_ID
 
-  Set the active account (default scope: project).
+  Set the active account. One command is the whole switch: a dead stored login
+  runs the browser login first.
 
-      --scope TEXT  project|global  [default: project]
+      --scope TEXT  project|global  [default: global from a terminal,
+                    project otherwise]
       --login       Sign in again before the switch (managed claude only): the
                     two-step vault login, one browser login per Keychain item.";
 
@@ -54,6 +56,10 @@ pub struct SwitchResult {
     pub verification: &'static str,
     pub reason: Option<String>,
     pub pinned_by: Vec<u32>,
+    /// The account the slot named before this switch.
+    pub outgoing: Option<String>,
+    /// What the pre-switch vault sync skipped, e.g. `skipped expired: scoped-keychain`.
+    pub sync_note: Option<String>,
 }
 
 impl SwitchResult {
@@ -64,6 +70,25 @@ impl SwitchResult {
             verification: "structural",
             reason: None,
             pinned_by: Vec::new(),
+            outgoing: None,
+            sync_note: None,
+        }
+    }
+}
+
+/// The vault's answer: the receipt verdict, plus a note when the vault skipped
+/// part of the slot (`skipped expired: scoped-keychain`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VaultAnswer {
+    pub verdict: String,
+    pub note: Option<String>,
+}
+
+impl VaultAnswer {
+    pub fn verdict(verdict: impl Into<String>) -> Self {
+        VaultAnswer {
+            verdict: verdict.into(),
+            note: None,
         }
     }
 }
@@ -87,8 +112,8 @@ fn store_err(e: StoreError) -> SwitchError {
 /// Everything the switch reaches outside the store files and the slot.
 pub trait Outside {
     /// `provider-cap vault <action>` under the held switch mutex: `refresh`
-    /// with the record id, or `sync`. `Ok` is the receipt's verdict.
-    fn vault(&self, action: &str, root: &Path, id: Option<&str>) -> Result<String, String>;
+    /// with the record id, or `sync`. `Ok` is the receipt's verdict and note.
+    fn vault(&self, action: &str, root: &Path, id: Option<&str>) -> Result<VaultAnswer, String>;
     /// The interactive vault login with inherited stdio; its exit code.
     fn login(&self, root: &Path, id: &str) -> i32;
     /// Both stdin and stdout are a terminal, so a browser login can run.
@@ -108,14 +133,14 @@ pub struct SystemOutside {
 }
 
 impl Outside for SystemOutside {
-    fn vault(&self, action: &str, root: &Path, id: Option<&str>) -> Result<String, String> {
+    fn vault(&self, action: &str, root: &Path, id: Option<&str>) -> Result<VaultAnswer, String> {
         crate::claude_vault::run_action(action, root, id, true)
-            .map(|(_, verdict)| verdict)
+            .map(|(_, verdict, note)| VaultAnswer { verdict, note })
             .map_err(|reason| format!("provider-cap vault {action}: {reason}"))
     }
     fn login(&self, root: &Path, id: &str) -> i32 {
         match crate::claude_vault::run_action("login", root, Some(id), false) {
-            Ok((code, verdict)) => {
+            Ok((code, verdict, _)) => {
                 println!("provider-cap vault login: {verdict}");
                 code
             }
@@ -257,17 +282,17 @@ fn capture_outgoing(
     root: &Path,
     host: &dyn Host,
     outside: &dyn Outside,
-) -> Result<(), SwitchError> {
+) -> Result<Option<String>, SwitchError> {
     if outgoing.harness == "claude" {
-        let verdict = outside
+        let answer = outside
             .vault("sync", root, None)
             .map_err(SwitchError::Store)?;
-        if verdict != "written" && verdict != "unchanged" {
+        if answer.verdict != "written" && answer.verdict != "unchanged" {
             return Err(SwitchError::Store(
                 "Claude vault sync refused before overwrite. The slot was not touched".to_string(),
             ));
         }
-        return Ok(());
+        return Ok(answer.note);
     }
     let blobs: Vec<String> = store::read_slot_blob(&outgoing.harness, None, host)
         .map_err(store_err)?
@@ -275,7 +300,7 @@ fn capture_outgoing(
         .into_iter()
         .collect();
     if blobs.len() != 1 {
-        return Ok(());
+        return Ok(None);
     }
     store::write_snapshot(
         root,
@@ -287,7 +312,7 @@ fn capture_outgoing(
         outside.now(),
     )
     .map_err(store_err)?;
-    Ok(())
+    Ok(None)
 }
 
 /// `managed.switch`: materialize `target` into its CLI's slot under the
@@ -320,11 +345,13 @@ fn switch_locked(
 ) -> Result<SwitchResult, SwitchError> {
     let id = target.id.as_str();
     let harness = target.harness.as_str();
+    let mut refresh_verdict = String::new();
     if harness == "claude" {
-        let verdict = outside
+        refresh_verdict = outside
             .vault("refresh", root, Some(id))
-            .map_err(SwitchError::Store)?;
-        if verdict == "dead" {
+            .map_err(SwitchError::Store)?
+            .verdict;
+        if refresh_verdict == "dead" {
             return Err(SwitchError::NeedsLogin(format!(
                 "stored credential for '{id}' is spent (invalid_grant); the slot was not touched"
             )));
@@ -340,6 +367,19 @@ fn switch_locked(
     if target_blob.trim().is_empty() {
         return Err(SwitchError::Store(format!(
             "credential snapshot for '{id}' is empty; refusing to materialize"
+        )));
+    }
+    // A refresh that was not possible while default-dir sessions are live
+    // answers `live-owner`; the snapshot may then be long expired, and writing
+    // it into the slot would stamp an account that cannot sign in.
+    if harness == "claude"
+        && refresh_verdict != "refreshed"
+        && refresh_verdict != "fresh"
+        && crate::claude_vault::blob_expired(&target_blob)
+    {
+        return Err(SwitchError::NeedsLogin(format!(
+            "stored credential for '{id}' is expired (refresh: {refresh_verdict}); \
+             the slot was not touched"
         )));
     }
 
@@ -372,25 +412,38 @@ fn switch_locked(
     // A tainted stamp means the slot may hold another account by now, so
     // capturing it would poison the stamped account's snapshot.
     let rollback_blob = store::read_slot_blob(harness, None, host).map_err(store_err)?;
+    let mut sync_note = None;
     if let Some(outgoing) = outgoing_id
         .as_deref()
         .and_then(|out| records.iter().find(|r| r.id == out))
     {
         if !store::slot_tainted(root, harness) {
-            capture_outgoing(outgoing, root, host, outside)?;
+            sync_note = capture_outgoing(outgoing, root, host, outside)?;
         }
     }
 
     store::write_slot_blob(harness, &target_blob, None, host).map_err(store_err)?;
 
-    if !store::verify_slot(harness, &target_blob, host).map_err(store_err)? {
+    let items_off = if harness == "claude" {
+        store::slot_items_off(&target_blob, host).map_err(store_err)?
+    } else {
+        Vec::new()
+    };
+    if !items_off.is_empty()
+        || !store::verify_slot(harness, &target_blob, host).map_err(store_err)?
+    {
         let (tail, _) = if harness == "codex" {
             rollback_codex_slot(rollback_blob.as_deref(), root, host)
         } else {
             rollback_materialized_slot(harness, rollback_blob.as_deref(), host)
         };
+        let which = if items_off.is_empty() {
+            String::new()
+        } else {
+            format!(": {} does not read back '{id}'", items_off.join(", "))
+        };
         return Err(SwitchError::Store(format!(
-            "switch to '{id}' failed verification (stored token may be stale/revoked); {tail}"
+            "switch to '{id}' failed verification{which} (stored token may be stale/revoked); {tail}"
         )));
     }
 
@@ -490,6 +543,8 @@ fn switch_locked(
         verification,
         reason: verification_reason,
         pinned_by,
+        outgoing: outgoing_id,
+        sync_note,
         ..SwitchResult::landed(id)
     })
 }
@@ -546,15 +601,56 @@ fn print_switched(record: &Record, result: &SwitchResult, run: &mut Run) {
         run.out(&format!(
             "Materialized managed account '{active}' into the slot (verified)."
         ));
+        if result.slot_changed {
+            run.out(&format!("  unscoped: {active}"));
+            run.out(&format!("  scoped: {active}"));
+        }
+    }
+    if let Some(note) = &result.sync_note {
+        run.err(&format!(
+            "warning: the outgoing account's login was not fully saved ({note}); sign it in \
+             again before you switch back to it"
+        ));
+    }
+    for line in bill_report(
+        &record.harness,
+        active,
+        result.outgoing.as_deref(),
+        &result.pinned_by,
+    ) {
+        run.out(&line);
     }
     if !result.pinned_by.is_empty() {
         run.err(&format!(
-            "warning: swapped under {} live {} session(s); they keep their in-memory auth, and \
-             a token refresh from one may overwrite the slot",
-            result.pinned_by.len(),
+            "warning: sessions that were already running keep the credential they loaded; a \
+             token refresh from one may overwrite the slot, so the slot is marked tainted \
+             until `fno config accounts reconcile-slot {}` proves it",
             record.harness
         ));
     }
+}
+
+/// Which live sessions now bill to `new`: a header, then one line per pid.
+/// Empty when no session was live.
+pub fn bill_report(harness: &str, new: &str, old: Option<&str>, pids: &[u32]) -> Vec<String> {
+    if pids.is_empty() {
+        return Vec::new();
+    }
+    let noun = if pids.len() == 1 {
+        "session"
+    } else {
+        "sessions"
+    };
+    let was = old.filter(|o| !o.is_empty() && *o != new);
+    let mut lines = vec![match was {
+        Some(old) => format!(
+            "{} live {harness} {noun} now bill to '{new}' (were '{old}')",
+            pids.len()
+        ),
+        None => format!("{} live {harness} {noun} now bill to '{new}'", pids.len()),
+    }];
+    lines.extend(pids.iter().map(|pid| format!("  pid {pid}")));
+    lines
 }
 
 /// The `use` command: the checks, the switch for a managed record, then the
@@ -595,7 +691,7 @@ pub fn use_account(
     if scope == Scope::Global && !scope_records.iter().any(|r| r.id == id) {
         return run.fail(&format!(
             "error: account '{id}' is not declared in the global config; declare it there first \
-             or set the pointer per project."
+             or set the pointer per project with `--scope project`."
         ));
     }
 
@@ -623,14 +719,33 @@ pub fn use_account(
                 if !outside.terminal() {
                     let flag = if login { " --login" } else { "" };
                     return run.fail(&format!(
-                        "{msg} Run in a terminal: fno config accounts use {id}{flag}"
+                        "{msg} Run in a terminal: fno config accounts use {id}{flag}\n  or, by \
+                         hand: {}",
+                        crate::accounts::reconcile::slot_switch_remedy(id)
                     ));
                 }
+                let outgoing = crate::accounts::slot::active_slot_id(
+                    &record.harness,
+                    Some(root.as_path()),
+                    &root,
+                )
+                .ok()
+                .flatten();
                 if outside.login(&root, id) != 0 {
                     run.code = 1;
                     return run;
                 }
-                SwitchResult::landed(id)
+                // The login rewrote the slot under whatever sessions are live.
+                let pinned_by = store::pinning_sessions_for(&record.harness, host)
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|p| p.pid)
+                    .collect();
+                SwitchResult {
+                    outgoing,
+                    pinned_by,
+                    ..SwitchResult::landed(id)
+                }
             }
             Err(SwitchError::Store(msg)) => return run.fail(&format!("switch failed: {msg}")),
             Err(SwitchError::Interrupted(note)) => {
@@ -734,7 +849,16 @@ pub fn run_with(args: &[String], cwd: &Path, host: &dyn Host, outside: &dyn Outs
         run.code = 2;
         return run;
     };
-    let scope_word = scope.unwrap_or_else(|| "project".to_string());
+    // A terminal switch is the whole switch: it moves the global pointer. A
+    // caller with no terminal keeps the project default.
+    let scope_word = scope.unwrap_or_else(|| {
+        if outside.terminal() {
+            "global"
+        } else {
+            "project"
+        }
+        .to_string()
+    });
     use_account(
         &id,
         &scope_word,

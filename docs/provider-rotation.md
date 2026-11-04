@@ -332,10 +332,9 @@ It is deliberately **not** a `clear-taint` command, and it will not act on anyth
 An unreachable profile endpoint, a malformed response, a slot `security` could not read, a principal matching no registered account, or one matching two of them each leave the stamp, the snapshots, and the taint byte-identical, and exit non-zero naming which of those happened.
 Clearing a taint without proof would file one account's usage under another's name, which is worse than staying `unknown`.
 
-It also refuses with `slot-pinned` while a session that was pinning when the taint was written is still alive.
-Proving the principal proves it now, and that session was launched under the outgoing account, so its next token refresh can overwrite the slot with that account's credential.
-The taint marker records those sessions for exactly this check: a session started after the switch already read the new credential and never blocks a repair, which matters because on the shared slot the pinning session is usually the account being proven.
-Each is recorded as a pid *and* its start time, because pids are reused and a recycled one wearing a dead session's number would hold the repair open permanently.
+Live sessions do not block the proof. A busy fleet has twenty or more claude pids alive at once, and waiting for all of them to exit meant the slot was never proven.
+The proof binds to the bytes it read instead. The credential is read once, proven through the profile endpoint, and read again before the snapshot is written and again before the taint clears. If a session rewrote the slot in between, the outcome is `slot-changed` and the taint stays set.
+When the reconcile lands under live sessions, it prints how many now bill to the proven account and their pids, the same report `fno config accounts use` prints.
 Reading the slot also ignores any ambient `CLAUDE_CONFIG_DIR`, since a worker pinned to another account exports it and reconciliation would otherwise prove the pinned account and stamp it onto the canonical slot.
 On macOS the shared slot has two Keychain items, scoped and unscoped, and a stale one can sit beside a live one holding a different account.
 The on-disk `~/.claude/.credentials.json` is a third source: the usage probe reads it first even on macOS, so a stale file bearer could otherwise prove out and have its quota reported while the Keychain account occupies the slot.
