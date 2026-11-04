@@ -904,6 +904,12 @@ describe("opencode hooks.json host", () => {
     }
     names.delete("OPENCODE_SESSION_ID")
     names.delete("TARGET_SESSION_ID")
+    // The vocab table's fno-plumbing names are scrub targets at the spawn
+    // boundary, not foreign harness markers; they were never plugin-scrubbed.
+    names.delete("FNO_HARNESS_NAME")
+    names.delete("FNO_HARNESS_SESSION_ID")
+    names.delete("FNO_AGENT_SUBSTRATE")
+    names.delete("FNO_NODE_REASON")
     expect(names.size).toBeGreaterThan(4)
     for (const name of names) {
       expect(FOREIGN_SESSION_MARKERS).toContain(name)
