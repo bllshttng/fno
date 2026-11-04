@@ -106,27 +106,29 @@ fn stub_manifest_path(root: &Path, node_id: &str) -> PathBuf {
 }
 
 /// The node-side half of the stub-manifest gate, pure over graph entries: the
-/// `dep=contract` node this PR closes, or None. The graph read degrades to
-/// None (the default hard merge path), exactly as the Python `dep` did.
-pub(crate) fn contract_node_for_pr(entries: &[Value], pr: u64) -> Option<String> {
+/// `dep=contract` node this PR closes, or None. PR numbers are per-repo and
+/// the graph store is global, so a ref whose pr_url names another repo never
+/// answers (the shared-number specimen the ledger leg fixed); a ref with no
+/// url, or one naming this checkout's remote, does. The graph read degrades
+/// to None (the default hard merge path), exactly as the Python `dep` did.
+pub(crate) fn contract_node_for_pr(entries: &[Value], pr: u64, slug: &str) -> Option<String> {
     for entry in entries {
         let dep = entry.get("dep").and_then(Value::as_str);
         if dep != Some("contract") {
             continue;
         }
-        let numbers = pr_numbers_of(entry);
-        if numbers.contains(&pr) {
+        let answers = pr_refs_of(entry).iter().any(|r| {
+            r.number == pr
+                && match r.url.as_deref() {
+                    None => true,
+                    Some(url) => pr_url_names_this_repo(url, slug),
+                }
+        });
+        if answers {
             return entry.get("id").and_then(Value::as_str).map(str::to_owned);
         }
     }
     None
-}
-
-/// Every PR number a graph row carries: the persisted `pr_number` field plus
-/// the `additional_prs` entries. A contract dependent whose PR is recorded
-/// only in `additional_prs` must still be found or the gate is bypassed.
-fn pr_numbers_of(entry: &Value) -> Vec<u64> {
-    pr_refs_of(entry).into_iter().map(|r| r.number).collect()
 }
 
 /// One PR a graph row records, with the URL it names when it names one.
@@ -233,7 +235,8 @@ pub(crate) fn stub_manifest_blocker(root: &Path, node_id: &str) -> Option<Blocke
 /// The whole stub-manifest gate over graph entries. An unreadable store
 /// degrades to clear (never block a normal merge on our own read).
 pub(crate) fn stub_manifest_gate(root: &Path, entries: &[Value], pr: u64) -> Option<Blocker> {
-    contract_node_for_pr(entries, pr).and_then(|node| stub_manifest_blocker(root, &node))
+    let slug = origin_slug(root);
+    contract_node_for_pr(entries, pr, &slug).and_then(|node| stub_manifest_blocker(root, &node))
 }
 
 /// Whether a path is documentation (loopcheck's own classifier; one copy).
@@ -274,23 +277,23 @@ pub(crate) fn plan_fidelity_blocker<P: Probes>(probes: &P, cwd: &Path, pr: u64) 
 
 /// The plan_path bound to this PR's delivery row in the ledger, or None.
 /// PR numbers are per-repo and the ledger is global, so when several rows
-/// match, the one whose pr_url names this checkout's remote wins; otherwise
-/// the first match answers (fail-open, as the Python did). A missing or
-/// broken ledger is None: no signal, no gate.
-fn ledger_plan_path(cwd: &Path, pr: u64) -> Option<String> {
+/// match, the one whose pr_url names this checkout's remote wins; a row
+/// with no pr_url answers next. A row whose pr_url names another repo never
+/// answers (the fnh/fno-web PR 70 specimen: another repo's plan refused a
+/// merge here). A missing or broken ledger is None: no signal, no gate.
+/// Whether a pr_url names this checkout's remote. GitHub spells the pair as
+/// the path segment before `/pull/`, so the match is segment-tight: a
+/// prefix-sibling repo (`org/fno` vs `org/fno-web`) never contains-matches.
+fn pr_url_names_this_repo(url: &str, slug: &str) -> bool {
+    !slug.is_empty() && url.contains(&format!("/{slug}/pull/"))
+}
+
+/// The `owner/name` slug this checkout's origin names, empty when
+/// unresolvable. One shell so the ledger leg and the graph leg of the
+/// merge-gate scoping cannot disagree about which remote answered.
+fn origin_slug(cwd: &Path) -> String {
     use std::process::Command;
 
-    // Read-only: the ledger is global (the Python writer appends to the
-    // same file), so an undeclared test process answers None, the same
-    // no-signal shape as a missing ledger, instead of reading the
-    // operator's real history.
-    if cfg!(test) && !crate::paths::test_root_declared() {
-        return None;
-    }
-    let rows = crate::loopcheck::ledger_file_rows(&crate::paths_cli::ledger_json(cwd));
-    if rows.is_empty() {
-        return None;
-    }
     let origin = Command::new("git")
         .args(["config", "--get", "remote.origin.url"])
         .current_dir(cwd)
@@ -302,7 +305,22 @@ fn ledger_plan_path(cwd: &Path, pr: u64) -> Option<String> {
     // same pair in ssh, https, and .git-suffixed spellings. Compare the
     // normalized pair, never the raw url: a substring test on the raw form
     // never matches and every scoping election falls to first-match.
-    let slug = repo_slug_from_origin(&origin).unwrap_or_default();
+    repo_slug_from_origin(&origin).unwrap_or_default()
+}
+
+fn ledger_plan_path(cwd: &Path, pr: u64) -> Option<String> {
+    // Read-only: the ledger is global (the Python writer appends to the
+    // same file), so an undeclared test process answers None, the same
+    // no-signal shape as a missing ledger, instead of reading the
+    // operator's history.
+    if cfg!(test) && !crate::paths::test_root_declared() {
+        return None;
+    }
+    let rows = crate::loopcheck::ledger_file_rows(&crate::paths_cli::ledger_json(cwd));
+    if rows.is_empty() {
+        return None;
+    }
+    let slug = origin_slug(cwd);
     let matches: Vec<&Value> = rows
         .iter()
         .filter(|row| row.get("pr_number").and_then(Value::as_u64) == Some(pr))
@@ -311,13 +329,19 @@ fn ledger_plan_path(cwd: &Path, pr: u64) -> Option<String> {
         .iter()
         .copied()
         .find(|row| {
-            !slug.is_empty()
-                && row
-                    .get("pr_url")
-                    .and_then(Value::as_str)
-                    .is_some_and(|url| url.contains(&slug))
+            row.get("pr_url")
+                .and_then(Value::as_str)
+                .is_some_and(|url| pr_url_names_this_repo(url, &slug))
         })
-        .or_else(|| matches.first().copied());
+        .or_else(|| {
+            // An unmarked row keeps the first-match fail-open shape; a row
+            // that names another repo never does.
+            matches.iter().copied().find(|row| {
+                row.get("pr_url")
+                    .and_then(Value::as_str)
+                    .is_none_or(str::is_empty)
+            })
+        });
     picked.and_then(|row| {
         row.get("plan_path")
             .and_then(Value::as_str)
@@ -1642,12 +1666,12 @@ mod tests {
         })];
         for pr in [7u64, 42, 99, 105] {
             assert_eq!(
-                contract_node_for_pr(&entries, pr).as_deref(),
+                contract_node_for_pr(&entries, pr, "o/r").as_deref(),
                 Some("x-3333"),
                 "pr {pr} must match"
             );
         }
-        assert_eq!(contract_node_for_pr(&entries, 8), None);
+        assert_eq!(contract_node_for_pr(&entries, 8, "o/r"), None);
     }
 
     #[test]
@@ -1730,5 +1754,224 @@ mod tests {
             .find(|l| l.starts_with("why_user:"))
             .expect("why_user line");
         assert_eq!(why, "why_user: taste");
+    }
+
+    /// The specimen behind the scoping rule: the ledger is global and fnh
+    /// PR 70 exists, so a fno-web checkout asking about its own PR 70 saw
+    /// fnh's plan answer and the fidelity gate refused the wrong PR. A row
+    /// whose pr_url names another repo never answers; a slug-matching row or
+    /// a row with no pr_url still does.
+    #[test]
+    fn a_foreign_repos_pr_url_never_answers_a_shared_pr_number() {
+        let _lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+
+        // Saved-env guard: other tests read these pins, so restore, not remove.
+        // Claiming hermetic manufactures the fence's claim, so every root the
+        // fence judges must be pinned under std::env::temp_dir() here: the CI
+        // cargo job exports FNO_AGENTS_HOME=$RUNNER_TEMP/fno-agents for the
+        // whole job, and an unpinned claim made the fence refuse that ambient
+        // value (the cli-ci red this test shipped).
+        struct Pins {
+            hermetic: Option<std::ffi::OsString>,
+            state: Option<std::ffi::OsString>,
+            agents_home: Option<std::ffi::OsString>,
+            spaces: Option<std::ffi::OsString>,
+            fno_home: Option<std::ffi::OsString>,
+        }
+        impl Drop for Pins {
+            fn drop(&mut self) {
+                match &self.hermetic {
+                    Some(v) => std::env::set_var("FNO_TEST_HERMETIC", v),
+                    None => std::env::remove_var("FNO_TEST_HERMETIC"),
+                }
+                match &self.state {
+                    Some(v) => std::env::set_var("FNO_STATE_DIR", v),
+                    None => std::env::remove_var("FNO_STATE_DIR"),
+                }
+                match &self.agents_home {
+                    Some(v) => std::env::set_var("FNO_AGENTS_HOME", v),
+                    None => std::env::remove_var("FNO_AGENTS_HOME"),
+                }
+                match &self.spaces {
+                    Some(v) => std::env::set_var("FNO_SPACES_DIR", v),
+                    None => std::env::remove_var("FNO_SPACES_DIR"),
+                }
+                match &self.fno_home {
+                    Some(v) => std::env::set_var("FNO_HOME", v),
+                    None => std::env::remove_var("FNO_HOME"),
+                }
+            }
+        }
+        let _pins = Pins {
+            hermetic: std::env::var_os("FNO_TEST_HERMETIC"),
+            state: std::env::var_os("FNO_STATE_DIR"),
+            agents_home: std::env::var_os("FNO_AGENTS_HOME"),
+            spaces: std::env::var_os("FNO_SPACES_DIR"),
+            fno_home: std::env::var_os("FNO_HOME"),
+        };
+        std::env::set_var("FNO_TEST_HERMETIC", "1");
+        let state = tempfile::tempdir().unwrap();
+        std::env::set_var("FNO_STATE_DIR", state.path());
+        std::env::set_var("FNO_AGENTS_HOME", state.path().join("agents-home"));
+        std::env::set_var("FNO_SPACES_DIR", state.path().join("spaces"));
+        std::env::set_var("FNO_HOME", state.path().join("fno-home"));
+
+        // The checkout: fno-web origin, so the slug is fnodotdev/fno-web.
+        let repo = tempfile::tempdir().unwrap();
+        for args in [
+            ["init", "-q"].as_slice(),
+            [
+                "config",
+                "remote.origin.url",
+                "git@github.com:fnodotdev/fno-web.git",
+            ]
+            .as_slice(),
+        ] {
+            let status = std::process::Command::new("git")
+                .args(args)
+                .current_dir(repo.path())
+                .status()
+                .expect("git runs");
+            assert!(status.success(), "git {args:?} failed");
+        }
+
+        let ledger_path = crate::paths_cli::ledger_json(repo.path());
+        std::fs::create_dir_all(ledger_path.parent().unwrap()).unwrap();
+        let write_ledger = |entries: serde_json::Value| {
+            std::fs::write(
+                &ledger_path,
+                serde_json::to_string(&json!({ "entries": entries })).unwrap(),
+            )
+            .unwrap();
+        };
+        let fnh_row = json!({
+            "pr_number": 70,
+            "pr_url": "https://github.com/fnodotdev/fnh/pull/70",
+            "plan_path": "/fnh/plan.md",
+        });
+
+        // The specimen: only the other repo's row exists. It names another
+        // repo, so it never answers and the gate stays silent.
+        write_ledger(json!([fnh_row]));
+        assert_eq!(ledger_plan_path(repo.path(), 70), None);
+
+        // An unresolvable origin cannot prove any pr_url is ours, so a row
+        // that carries one stays silent there too.
+        let bare = tempfile::tempdir().unwrap();
+        write_ledger(json!([fnh_row]));
+        assert_eq!(ledger_plan_path(bare.path(), 70), None);
+
+        // A row with no pr_url may answer: unmarked provenance keeps the old
+        // first-match fail-open shape.
+        write_ledger(json!([
+            fnh_row,
+            json!({"pr_number": 70, "plan_path": "/web/plan.md"})
+        ]));
+        assert_eq!(
+            ledger_plan_path(repo.path(), 70).as_deref(),
+            Some("/web/plan.md")
+        );
+
+        // The slug match outranks the rest, whatever order the rows hold.
+        write_ledger(json!([
+            fnh_row,
+            json!({
+                "pr_number": 70,
+                "pr_url": "https://github.com/fnodotdev/fno-web/pull/70",
+                "plan_path": "/web/chosen.md",
+            }),
+        ]));
+        assert_eq!(
+            ledger_plan_path(repo.path(), 70).as_deref(),
+            Some("/web/chosen.md")
+        );
+
+        // A prefix-sibling repo's url contains this slug as a substring but
+        // names a different path segment; it never reads as a match.
+        write_ledger(json!([json!({
+            "pr_number": 70,
+            "pr_url": "https://github.com/fnodotdev/fno-web/pull/70",
+            "plan_path": "/web/plan.md",
+        })]));
+        let sibling = tempfile::tempdir().unwrap();
+        let status = std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(sibling.path())
+            .status()
+            .expect("git runs");
+        assert!(status.success(), "git init failed");
+        let status = std::process::Command::new("git")
+            .args([
+                "config",
+                "remote.origin.url",
+                "git@github.com:fnodotdev/fno.git",
+            ])
+            .current_dir(sibling.path())
+            .status()
+            .expect("git runs");
+        assert!(status.success(), "git config failed");
+        let sibling_ledger = crate::paths_cli::ledger_json(sibling.path());
+        std::fs::create_dir_all(sibling_ledger.parent().unwrap()).unwrap();
+        std::fs::write(
+            &sibling_ledger,
+            serde_json::to_string(&json!({ "entries": [json!({
+                "pr_number": 70,
+                "pr_url": "https://github.com/fnodotdev/fno-web/pull/70",
+                "plan_path": "/web/plan.md",
+            })] }))
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(ledger_plan_path(sibling.path(), 70), None);
+    }
+
+    /// The graph twin of the ledger scoping rule: the store is global, so a
+    /// contract node whose pr_url names another repo never answers a shared
+    /// number. A url-less node keeps the fail-open answer.
+    #[test]
+    fn a_contract_node_of_another_repo_never_answers_a_shared_pr_number() {
+        let ours = json!({
+            "id": "x-bbbb",
+            "dep": "contract",
+            "pr_number": 70,
+            "pr_url": "https://github.com/fnodotdev/fno-web/pull/70",
+        });
+        let foreign = json!({
+            "id": "x-aaaa",
+            "dep": "contract",
+            "pr_number": 70,
+            "pr_url": "https://github.com/fnodotdev/fnh/pull/70",
+        });
+        let slug = "fnodotdev/fno-web";
+
+        // Only the foreign node: silent.
+        assert_eq!(
+            contract_node_for_pr(&[foreign.clone()], 70, slug),
+            None,
+            "a foreign repo's contract node never answers"
+        );
+
+        // Ours answers, whatever order the rows hold.
+        assert_eq!(
+            contract_node_for_pr(&[foreign.clone(), ours.clone()], 70, slug).as_deref(),
+            Some("x-bbbb")
+        );
+        assert_eq!(
+            contract_node_for_pr(&[ours, foreign], 70, slug).as_deref(),
+            Some("x-bbbb")
+        );
+
+        // A url-less node keeps the fail-open answer.
+        let bare = json!({
+            "id": "x-cccc",
+            "dep": "contract",
+            "pr_number": 70,
+        });
+        assert_eq!(
+            contract_node_for_pr(&[bare], 70, slug).as_deref(),
+            Some("x-cccc")
+        );
     }
 }

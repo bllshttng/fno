@@ -673,6 +673,7 @@ fn run_request(
             crate::gc_sweep::StopObservation::Unproven,
             false,
             false,
+            false,
             &stop,
             &crate::pane_stop::run_mux_pane_kill,
             seams.surface_removal,

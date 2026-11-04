@@ -1,0 +1,19 @@
+# Capability task: step 1 reads the last assistant turn that hit the cache.
+# The fixture holds a warm turn, a malformed line, a later warmer turn, and
+# a cold last turn. The stats come from the warmer turn, never the cold one.
+id: cache-stats-last-warm-turn
+tier: capability
+prompt: |
+  Run step 1 ("Get Cache Stats") of skills/cache-keepalive/SKILL.md in this
+  checkout. Use evals/fixtures/cache-keepalive/transcript.jsonl as the
+  transcript instead of searching ~/.claude/projects. Write the step's
+  output, unchanged, to evals/fixtures/cache-keepalive/stats.txt.
+grade:
+  - kind: exit
+    command: "grep -qx 'CACHE_READ=900' evals/fixtures/cache-keepalive/stats.txt"
+  - kind: exit
+    command: "grep -qx 'TOTAL_CTX=910' evals/fixtures/cache-keepalive/stats.txt"
+  - kind: exit
+    command: "grep -qx 'MODEL=claude-new' evals/fixtures/cache-keepalive/stats.txt"
+timeout_minutes: 10
+tags: [golden, cache-keepalive]

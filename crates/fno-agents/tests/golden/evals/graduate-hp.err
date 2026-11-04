@@ -1,4 +1,1 @@
-Usage: fno-py doctor evals [OPTIONS] COMMAND [ARGS]...
-Try 'fno-py doctor evals --help' for help.
-
-Error: No such option: --bank
+usage: fno-agents evals <command> [options] (run | trend | report | macro | export | qualify | graduate | grade | candidates | drafts | gate-retry | events)

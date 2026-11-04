@@ -14,7 +14,7 @@ The motivation was measured redundancy: on the `fno-claim` plan, the folder appr
 
 ## Single-doc lifecycle
 
-The plan document's frontmatter `status` field tracks which pipeline stage the plan is in. Progression is monotonic - backward transitions are rejected by `validate_transition` in `skills/blueprint/scripts/mutate_doc.py`, over the status ladder the `fno do plan parse` door serves.
+The plan document's frontmatter `status` field tracks which pipeline stage the plan is in. Progression is monotonic - backward transitions are rejected by `fno do plan mutate` (`crates/fno-agents/src/plan_doc/mutate.rs`), over the status ladder the `fno do plan parse` door serves.
 
 ```
 design → ready → in_progress → reviewing → shipping → shipped

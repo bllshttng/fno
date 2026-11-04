@@ -18,7 +18,7 @@ You receive:
 
 ## Output
 
-Features written to `~/.fno/graph.json` via `roadmap-tasks.py add`, one at a time. Each feature gets an `ab-` ID, size, priority, blocked_by deps, and optional batch assignment.
+Features written to `~/.fno/graph.json` via `fno backlog add`, one at a time. Each feature gets an `ab-` ID, size, priority, blocked_by deps, and optional batch assignment.
 
 ## Process
 
@@ -26,7 +26,7 @@ Features written to `~/.fno/graph.json` via `roadmap-tasks.py add`, one at a tim
 
 ```bash
 # Read existing done features from graph (avoid duplication)
-python3 "${SCRIPTS_DIR}/roadmap-tasks.py" status --all
+fno backlog status --all
 
 # Read domain profiles from config.toml if available
 cat .fno/config.toml 2>/dev/null || cat ~/.fno/config.toml 2>/dev/null
@@ -88,7 +88,7 @@ For each feature, estimate target dispatch size:
 | M | Multi-file, new endpoint, component | 2-4 | 1-3 hours |
 | L | Cross-module, migration, subsystem | 5+ | 3+ hours |
 
-Include `--size` in every `roadmap-tasks.py add` call.
+Include `--size` in every `fno backlog add` call.
 
 Also estimate complexity points for tracking:
 
@@ -117,7 +117,7 @@ Ask the code index (docs/code-index-providers.md) to check file overlap between 
 First, create the roadmap parent node:
 
 ```bash
-python3 "${SCRIPTS_DIR}/roadmap-tasks.py" add \\
+fno backlog add \\
   "Roadmap: ${VISION_TITLE}" \\
   --type roadmap \\
   --project "${PROJECT_NAME}" \\
@@ -129,7 +129,7 @@ python3 "${SCRIPTS_DIR}/roadmap-tasks.py" add \\
 Capture the roadmap's `ab-` ID from output. Then write each feature atomically:
 
 ```bash
-python3 "${SCRIPTS_DIR}/roadmap-tasks.py" add \\
+fno backlog add \\
   "Setup JWT authentication" \\
   --type feature \\
   --parent "${ROADMAP_AB_ID}" \\
@@ -150,10 +150,10 @@ Use `--size` with S/M/L based on the size estimation from Step 3b.
 ### Step 5: Validate
 
 ```bash
-python3 "${SCRIPTS_DIR}/roadmap-tasks.py" validate --roadmap-id "${ROADMAP_ID}"
+fno backlog status --roadmap-id "${ROADMAP_ID}"
 ```
 
-If validation finds errors (cycles, dangling refs), fix and re-validate.
+Check that every feature you wrote is listed and that each `--blocked-by` id names a feature in this roadmap. Fix a dangling or circular blocker with `fno backlog update <id> blocked_by=<ids>`, then read the status again.
 
 ## Edge Cases
 

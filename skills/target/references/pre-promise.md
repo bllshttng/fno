@@ -26,25 +26,21 @@ Skip the entire step silently when:
 
 Mechanic:
 
-```python
-import json, subprocess
+```bash
+MAPS="$(fno inbox peers --json)"
+# Opt-in by design: no peers configured means no recap.
+[ "$(printf '%s' "$MAPS" | jq '.peers | length')" -gt 0 ] || exit 0
+PATTERNS="$(printf '%s' "$MAPS" | jq -c '.surface_patterns')"
 
-maps = json.loads(subprocess.run(["fno", "inbox", "peers", "--json"],
-                                 capture_output=True, text=True, check=True).stdout)
-peers = maps["peers"]
-patterns = maps["surface_patterns"]
-if not peers:
-    raise SystemExit(0)  # opt-in by design
+# messaged_peers from the plan frontmatter (a quick plan is the file itself;
+# a folder plan reads 00-INDEX.md). Absent reads as an empty list. The same
+# field name runs across /think, /blueprint, and /target.
+MESSAGED="$(fno do plan parse "$PLAN_PATH" | jq -c '.frontmatter.messaged_peers // []')"
 
-# Read messaged_peers from plan frontmatter (if quick plan: the file itself;
-# if folder plan: 00-INDEX.md). Fields not yet present -> empty list.
-# Same field name used across /think, /blueprint, and /target for consistency.
-messaged_peers = read_messaged_peers(plan_path)
-
-# Resolve the diff: files changed in the merged PR body. For single-project
-# plans this is the merge commit; for cross-project finals, it's the union
-# of every project's merge commit captured in `urls:` on the plan stamp.
-changed_files = git_diff_changed_files(merge_commit_or_union)
+# The files the merged PR changed. A single-project plan reads the merge
+# commit; a cross-project final reads the union of every project's merge
+# commit in the plan stamp's `urls:`.
+CHANGED_FILES="$(git diff --name-only "$MERGE_COMMIT^" "$MERGE_COMMIT")"
 ```
 
 For each changed file, find which surface name(s) it matches, then find

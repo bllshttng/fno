@@ -401,6 +401,7 @@ pub fn gc_sweep_release(
         &crate::daemon::rm_take_worktree,
         false,
         Some(release),
+        None,
     );
     summary.settled_do_rows = settled
         .into_iter()
@@ -427,7 +428,8 @@ pub fn gc_sweep_dry_run(home: &AgentsHome, grace_secs: i64) -> gc_sweep::GcSumma
     let store = std::cell::RefCell::new(gc_sweep::HarnessStoreIndex::default());
     // The rehearsal reads the same PR states the real arm would read, so its
     // prediction holds when applied. Read-only; cached per PR per pass.
-    let mut summary = gc_sweep::run(
+    let preview = dry_surface_preview();
+    let mut summary = gc_sweep::run_with_release(
         home,
         &emitter,
         grace_secs,
@@ -442,6 +444,9 @@ pub fn gc_sweep_dry_run(home: &AgentsHome, grace_secs: i64) -> gc_sweep::GcSumma
         &crate::claude_roster::read_all_agents,
         &gc_sweep::production_tree_probe,
         &crate::daemon::rm_take_worktree,
+        false,
+        None,
+        Some(&preview),
     );
     summary.settled_do_rows = planned
         .into_iter()
@@ -498,7 +503,8 @@ pub fn gc_sweep_done_only(
 pub fn gc_sweep_done_only_dry_run(home: &AgentsHome, grace_secs: i64) -> gc_sweep::GcSummary {
     let emitter = EventEmitter::new(std::path::PathBuf::new(), "daemon");
     let store = std::cell::RefCell::new(gc_sweep::HarnessStoreIndex::default());
-    gc_sweep::run_done_only(
+    let preview = dry_surface_preview();
+    gc_sweep::run_with_release(
         home,
         &emitter,
         grace_secs,
@@ -513,7 +519,25 @@ pub fn gc_sweep_done_only_dry_run(home: &AgentsHome, grace_secs: i64) -> gc_swee
         &crate::claude_roster::read_all_agents,
         &gc_sweep::production_tree_probe,
         &crate::daemon::rm_take_worktree,
+        true,
+        None,
+        Some(&preview),
     )
+}
+
+/// The dry runs' read-only removal preview: the same roster union and squad
+/// store the live effects read, each read at most once per pass and only
+/// when a row reaches the gate.
+fn dry_surface_preview() -> impl Fn(&crate::state::RegistryEntry) -> bool {
+    let union = std::cell::OnceCell::new();
+    let members = std::cell::OnceCell::new();
+    move |e| {
+        crate::gc_native::surface_provably_clear(
+            e,
+            union.get_or_init(crate::claude_roster::read_all_agents_union),
+            members.get_or_init(crate::gc_inventory::read_mux_members),
+        )
+    }
 }
 
 // --- the orphan process sweep -----------------------------------------------

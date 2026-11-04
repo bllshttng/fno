@@ -211,6 +211,7 @@ fn ac3_edge_a_changed_hold_refuses_the_release() {
         &|_| None,
         false,
         Some(&release),
+        None,
     );
 
     assert!(summary.retired.is_empty(), "{:?}", summary.retired);

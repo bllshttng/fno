@@ -46,7 +46,7 @@ HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$HOOK_DIR/../scripts/lib/with-timeout.sh" 2>/dev/null || exit 0
 
 # Detect the harness and read the SAME session-id env the rest of fno resolves
-# on (harness_identity.HARNESS_SESSION_MARKERS): claude uses CLAUDE_CODE_SESSION_ID,
+# on (claims.rs HARNESS_SESSION_MARKERS): claude uses CLAUDE_CODE_SESSION_ID,
 # not CLAUDE_SESSION_ID (the old name here was unset, so claude never registered).
 if [[ -n "${GEMINI_PROJECT_DIR:-}" ]]; then
     HARNESS="gemini"; SESSION_ID="${GEMINI_SESSION_ID:-}"

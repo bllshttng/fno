@@ -18,7 +18,7 @@ const COMMAND_MATRIX_REL: &str = "docs/harnesses/command-matrix.md";
 
 /// The full harness roster: the one list, `provider::KNOWN_HARNESSES`. The
 /// renderer reads the const rather than keeping a second roster; before the
-/// one-roster move it parsed the Python tuple in `harness_names.py`, which
+/// one-roster move it parsed the deleted Python roster tuple, which
 /// no longer carries one.
 fn known_harnesses() -> Vec<String> {
     crate::provider::KNOWN_HARNESSES

@@ -35,7 +35,7 @@ pub enum Claim {
 
 /// The leaves this classifier never claims: their families port in their
 /// own children and the wheel keeps answering them.
-const FOREIGN_LEAVES: &[&str] = &["evals", "test", "route", "observer", "fanout"];
+const FOREIGN_LEAVES: &[&str] = &["test", "route", "observer", "fanout"];
 
 pub fn classify(args: &[OsString]) -> Option<Claim> {
     if args.first()?.to_str()? != "doctor" {
@@ -46,6 +46,15 @@ pub fn classify(args: &[OsString]) -> Option<Claim> {
         None => Some(Claim::Home(vec![])),
         Some("bundle") | Some("plugin-file") => Some(Claim::Home(args[1..].to_vec())),
         Some(word) if FOREIGN_LEAVES.contains(&word) => None,
+        Some("evals") => {
+            // The pure transport leaf: the tail rides byte-verbatim to the
+            // evals dispatch (the deleted Python leaf inserted no flags),
+            // and a bare leaf passes the word alone so the door prints its
+            // own usage.
+            let mut argv = vec![OsString::from("evals")];
+            argv.extend(args[2..].iter().cloned());
+            Some(Claim::AgentsExec("fno doctor evals", argv))
+        }
         Some("intel") => Some(Claim::AgentsExec(
             "fno doctor intel",
             vec![OsString::from("intel")],
@@ -873,6 +882,10 @@ fn cost_check_report() -> i32 {
 mod tests {
     use super::bounded_command_for;
 
+    fn os(args: &[&str]) -> Vec<std::ffi::OsString> {
+        args.iter().map(std::ffi::OsString::from).collect()
+    }
+
     /// The Python CLI declares no --context-audit, so a fall-through exits 2.
     #[test]
     fn context_audit_is_claimed_natively() {
@@ -884,6 +897,36 @@ mod tests {
             super::classify(&argv).is_some(),
             "a fall-through exits 2: the Python CLI declares no --context-audit"
         );
+    }
+
+    /// The evals leaf claims natively now (the Python forwarder died with
+    /// the residue port): the tail rides to the dispatch byte-verbatim, a
+    /// bare leaf passes the word alone, and the other foreign leaves stay
+    /// with their families.
+    #[test]
+    fn the_evals_leaf_claims_and_the_tail_rides_verbatim() {
+        let Some(super::Claim::AgentsExec(label, argv)) =
+            super::classify(&os(&["doctor", "evals", "report", "--history", "h.jsonl"]))
+        else {
+            panic!("doctor evals must claim");
+        };
+        assert_eq!(label, "fno doctor evals");
+        let words: Vec<String> = argv
+            .iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(words, ["evals", "report", "--history", "h.jsonl"]);
+        let Some(super::Claim::AgentsExec(_, argv)) = super::classify(&os(&["doctor", "evals"]))
+        else {
+            panic!("bare doctor evals must claim");
+        };
+        assert_eq!(argv.len(), 1, "a bare leaf passes the word alone");
+        for foreign in ["test", "route", "observer", "fanout"] {
+            assert!(
+                super::classify(&os(&["doctor", foreign])).is_none(),
+                "{foreign} stays with its family"
+            );
+        }
     }
 
     /// The deleted Python transport's contract (its

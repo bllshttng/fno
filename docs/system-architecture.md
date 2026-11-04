@@ -70,8 +70,8 @@ graph TB
     end
 
     subgraph "Scripts Layer"
-        VAL["Validation<br/>validate-plan.sh<br/>validate-test-first.sh<br/>validate-roadmap.sh<br/>scan-antipatterns.sh"]
-        ORC["Orchestration<br/>orchestrator.py<br/>run-target-loop.sh"]
+        VAL["Validation<br/>validate-plan.sh<br/>validate-test-first.sh<br/>scan-antipatterns.sh"]
+        ORC["Orchestration<br/>fno-agents wave<br/>run-target-loop.sh"]
         MET["Metrics<br/>register-task.py"]
     end
 
@@ -225,7 +225,7 @@ graph LR
     end
 
     subgraph "Heavy - /execute waves"
-        OP_IN["Plan path<br/>(00-INDEX.md)"] --> OP_PARSE["Parse waves<br/>(orchestrator.py)"]
+        OP_IN["Plan path<br/>(00-INDEX.md)"] --> OP_PARSE["Parse waves<br/>(fno-agents wave ready)"]
         OP_PARSE --> OP_W1["Wave 1<br/>(sequential)"]
         OP_W1 --> OP_W2["Wave 2<br/>(parallel subagents)"]
         OP_W2 --> OP_WN["Wave N..."]
@@ -485,7 +485,7 @@ Degradation is resolved per wave at dispatch time, not stamped into the session 
 
 ## Wave Orchestration Engine
 
-The orchestrator (`skills/execute/orchestrator.py`) parses `00-INDEX.md` and dispatches tasks to agents.
+`fno-agents wave ready` (`crates/fno-agents/src/wave_ready.rs`) parses the plan and prints the tasks `/execute waves` dispatches to agents.
 
 ### 00-INDEX.md Format
 
@@ -516,9 +516,9 @@ Tasks are routed to specialized agent profiles based on keywords in the task des
 
 ### Hidden Shared Output Protection
 
-The orchestrator detects when parallel tasks would write to shared paths and downgrades those waves to sequential execution:
+`fno-agents wave ready` finds parallel tasks that write to one shared path. It serializes the overlapping tasks in wave order, and the rest of the wave stays parallel. The roots are `HIDDEN_SHARED_OUTPUT_ROOTS` in `crates/fno-agents/src/backlog/collision.rs`:
 
-```python
+```text
 HIDDEN_SHARED_OUTPUT_ROOTS = (
     ".fno/",
     ".codex/agents/",

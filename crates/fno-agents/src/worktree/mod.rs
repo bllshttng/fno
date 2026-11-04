@@ -44,7 +44,7 @@ use std::path::{Path, PathBuf};
 
 /// The live-status vocabulary a registry row must carry for a session to own
 /// its tree. Shared with `OWNERSHIP_LIVE_STATUSES`
-/// (cli/src/fno/harness_identity.py); the parity corpus pins the split.
+/// (crates/fno-agents/src/identity.rs); the parity corpus pins the split.
 pub const OWNERSHIP_LIVE_STATUSES: [&str; 6] =
     ["spawning", "ready", "idle", "busy", "live", "restarting"];
 

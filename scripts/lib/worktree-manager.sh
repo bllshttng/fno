@@ -232,10 +232,10 @@ _wtm_detect_setup_cmd() {
     elif [[ -f "$dir/bun.lockb" ]]; then echo "bun install"
     elif [[ -f "$dir/uv.lock" || -f "$dir/pyproject.toml" ]]; then
         if command -v uv >/dev/null 2>&1; then echo "uv sync"
-        else echo "python3 -m venv .venv && .venv/bin/pip install -e ."
+        else echo "python3 -m venv .venv && .venv/bin/pip install -e ." # user-project-python
         fi
     elif [[ -f "$dir/requirements.txt" ]]; then
-        echo "python3 -m venv .venv && .venv/bin/pip install -r requirements.txt"
+        echo "python3 -m venv .venv && .venv/bin/pip install -r requirements.txt" # user-project-python
     elif [[ -f "$dir/Cargo.toml" ]]; then echo "cargo build"
     else
         echo ""

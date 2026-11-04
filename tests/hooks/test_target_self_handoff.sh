@@ -49,21 +49,19 @@ if [[ -z "$PYTHON_CLI" ]]; then
   exit 0
 fi
 
-FNO() { (cd "$TMP" && PYTHONPATH="${REPO_ROOT}/cli/src" $PYTHON_CLI -m fno.cli "$@"); }
-# Claims run in fno-agents; the resolver picks the same binary the wheel uses.
-CLAIM() {
-  local bin
-  bin="$(PYTHONPATH="${REPO_ROOT}/cli/src" $PYTHON_CLI -c \
-    'from fno.rust_binary import resolve_binary; print(resolve_binary() or "")')"
-  (cd "$TMP" && "${bin:-fno-agents}" claim "$@")
-}
+# The receipts and the claims both run binary-direct in fno-agents; the
+# resolver picks the same binary the wheel uses.
+CLAIM_BIN="$(PYTHONPATH="${REPO_ROOT}/cli/src" $PYTHON_CLI -c \
+  'from fno.rust_binary import resolve_binary; print(resolve_binary() or "")')"
+FNO() { (cd "$TMP" && "${CLAIM_BIN:-fno-agents}" resume-receipt "$@"); }
+CLAIM() { (cd "$TMP" && "${CLAIM_BIN:-fno-agents}" claim "$@"); }
 node_of() { python3 -c "import sys,json; print(json.load(sys.stdin)['identity']['node'])"; }
 field() { python3 -c "import sys,json; d=json.load(sys.stdin); v=d.get('$1',''); print(v if not isinstance(v,(dict,list)) else json.dumps(v))"; }
 
 # Runs validate in the CURRENT shell (not a command substitution) so VAL_RC
 # propagates. Sets globals VAL (stdout json) and VAL_RC (exit code).
 run_validate() {
-  VAL="$(FNO_CLAIMS_ROOT="$CLAIMS_HOME" FNO resume receipt validate \
+  VAL="$(FNO_CLAIMS_ROOT="$CLAIMS_HOME" FNO validate \
       --node "$NODE" --session s1 --claims-root "$CLAIMS_HOME" "$@" 2>/dev/null)"; VAL_RC=$?
 }
 
@@ -94,7 +92,7 @@ write_receipt() {
   # $1=head override (default HEAD1), $2=extra args
   local head="${1:-$HEAD1}"
   local extra="${2:-}"
-  FNO_CLAIMS_ROOT="$CLAIMS_HOME" FNO resume receipt write \
+  FNO_CLAIMS_ROOT="$CLAIMS_HOME" FNO write \
     --node "$NODE" --session s1 --phase do --generation 2 \
     --repo testrepo --worktree "$TMP" --branch feature/x-test \
     --head "$head" --next-command "/fno:execute waves" --next-target "$NODE" \
@@ -103,7 +101,7 @@ write_receipt() {
 
 # ── S1: write + show + validate ok ───────────────────────────────────────────
 write_receipt
-SHOW_NODE="$(FNO resume receipt show --node "$NODE" 2>/dev/null | node_of)"
+SHOW_NODE="$(FNO show --node "$NODE" 2>/dev/null | node_of)"
 [[ "$SHOW_NODE" == "$NODE" ]] && pass "S1a: show loads receipt for $NODE" || fail "S1a: show returned '$SHOW_NODE'"
 run_validate
 if [[ "$VAL_RC" -eq 0 ]] && printf '%s' "$VAL" | field ok | grep -q True; then
@@ -196,7 +194,7 @@ fi
 # assert the validate verdict carries the recorded pr_create key.
 git -C "$TMP" commit -q --allow-empty -m s9 >/dev/null
 HEAD9="$(git -C "$TMP" rev-parse HEAD)"
-FNO_CLAIMS_ROOT="$CLAIMS_HOME" FNO resume receipt write \
+FNO_CLAIMS_ROOT="$CLAIMS_HOME" FNO write \
   --node "$NODE" --session s1 --phase review --generation 3 \
   --repo testrepo --worktree "$TMP" --branch feature/x-test \
   --head "$HEAD9" --next-command "/fno:ship pr create" --next-target "$NODE" \

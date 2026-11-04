@@ -3473,7 +3473,7 @@ fn view_picker(command: &str, json: bool, url: bool) -> i32 {
 }
 
 /// The first-eight short form of a session id, matching Python's
-/// `fno.harness_identity.canonical_handle` closely enough for DISPLAY (the
+/// `canonical_handle` (crates/fno-agents/src/identity.rs) closely enough for DISPLAY (the
 /// resolver never consumes this spelling, so the ses_ case rule that matters
 /// for addressing is not load-bearing here).
 fn short_handle(session_id: &str) -> String {

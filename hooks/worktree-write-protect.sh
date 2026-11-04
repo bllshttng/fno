@@ -21,19 +21,16 @@ _approve() {
 _block() {
     _guard_mark worktree-write-protect block 2>/dev/null || true
     local reason="$1"
-    if command -v jq >/dev/null 2>&1; then
-        jq -nc --arg reason "$reason" '{
-            decision: "block",
-            reason: $reason,
-            hookSpecificOutput: {
-                hookEventName: "PreToolUse",
-                permissionDecision: "deny",
-                permissionDecisionReason: $reason
-            }
-        }'
-    else
-        python3 -c 'import json,sys; r=sys.argv[1]; print(json.dumps({"decision":"block","reason":r,"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":r}}))' "$reason"
-    fi
+    # Only a jq parse reaches a block (no jq approves below), so jq is here.
+    jq -nc --arg reason "$reason" '{
+        decision: "block",
+        reason: $reason,
+        hookSpecificOutput: {
+            hookEventName: "PreToolUse",
+            permissionDecision: "deny",
+            permissionDecisionReason: $reason
+        }
+    }'
     exit 0
 }
 
@@ -45,23 +42,6 @@ if command -v jq >/dev/null 2>&1; then
     CWD="$(printf '%s' "$PAYLOAD" | jq -er '.cwd | select(type == "string" and length > 0)' 2>/dev/null || true)"
     PATCH_COMMAND="$(printf '%s' "$PAYLOAD" | jq -er '.tool_input.command | select(type == "string" and length > 0)' 2>/dev/null || true)"
     FILE_PATH="$(printf '%s' "$PAYLOAD" | jq -er '.tool_input.file_path | select(type == "string" and length > 0)' 2>/dev/null || true)"
-elif command -v python3 >/dev/null 2>&1; then
-    _json_field() {
-        printf '%s' "$PAYLOAD" | python3 -c '
-import json, sys
-try:
-    payload = json.load(sys.stdin)
-    key = sys.argv[1]
-    value = payload.get("cwd") if key == "cwd" else payload.get("tool_input", {}).get(key)
-    if isinstance(value, str) and value:
-        print(value)
-except Exception:
-    pass
-' "$1" 2>/dev/null || true
-    }
-    CWD="$(_json_field cwd)"
-    PATCH_COMMAND="$(_json_field command)"
-    FILE_PATH="$(_json_field file_path)"
 else
     _approve
 fi

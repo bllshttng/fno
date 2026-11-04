@@ -616,7 +616,9 @@ fn list_installation_repos(token: &str) -> Result<Vec<String>, String> {
     Ok(repos)
 }
 
-fn expand_tilde(path: &Path) -> PathBuf {
+/// Rust path handling never expands `~`, so a configured `~/...` key path
+/// resolves against HOME here.
+pub(crate) fn expand_tilde(path: &Path) -> PathBuf {
     let Some(text) = path.to_str() else {
         return path.to_path_buf();
     };

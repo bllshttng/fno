@@ -11,10 +11,10 @@
 # FNO_ var added to source neutralises without editing this file.
 prefixes = ["FNO_", "TARGET_"]
 
-# Harness session identity, ported from fno.harness_identity's
-# AMBIENT_IDENTITY_ENV derivation (HARNESS_SESSION_MARKERS plus the
-# self-markers). A change to that derivation edits this section in the same
-# PR; the classify golden fails the build when the two drift.
+# Harness session identity, the canonical scrub table (the resolver's
+# session markers plus the self-set and companion lineage names). A change
+# to the set edits this section in the same PR; the classify golden fails
+# the build when the two drift.
 identity_markers = [
     "FNO_HARNESS_NAME",
     "FNO_HARNESS_SESSION_ID",
@@ -106,6 +106,8 @@ ambient_names = [
     "GIT_COMMITTER_EMAIL",
     "VISUAL",
     "HELP_ROUTING_BLESS",
+    "BUDDY_HOME",
+    "BUDDY_KEY",
 ]
 
 # Read by source but NOT ambient state: the process needs these to run.
@@ -117,6 +119,7 @@ environment = [
     "USERNAME",
     "TERM",
     "COLORTERM",
+    "COLUMNS",
     "TERM_PROGRAM",
     "__CFBundleIdentifier",
     "PYTHONPATH",

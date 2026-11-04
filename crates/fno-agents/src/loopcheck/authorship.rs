@@ -41,7 +41,7 @@ pub(crate) fn default_attestation_origin() -> AttestationOrigin {
 /// attester with no author session is `Unmeasured` (a concrete session
 /// attested, the comparison failed - the shape of an author's own re-read
 /// from a cwd without the manifest), and an absent or empty attester is
-/// `Unknown` (no evidence at all; an empty id is what harness_identity
+/// `Unknown` (no evidence at all; an empty id is what an identity
 /// returns when no harness marker is in the env, so this bucket is where an
 /// author's own bare-lane self-review would land).
 pub(crate) fn classify_attestation_origin(

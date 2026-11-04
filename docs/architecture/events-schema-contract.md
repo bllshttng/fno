@@ -191,7 +191,7 @@ and dispatches as follows:
 
 | Helper available? | PREV_NONCE | Path |
 |---|---|---|
-| yes | non-empty | helper-call (`verify_child_promise`); rc=0 advance, rc=1 BLOCK with helper diagnostic, rc=2 BLOCK with substrate diagnostic |
+| yes | non-empty | helper-call (`fno-agents verify-evidence child-promise`); rc=0 advance, rc=1 BLOCK with helper diagnostic, rc=2 BLOCK with substrate diagnostic |
 | no  | any       | inline-grep fallback + stderr WARN (helper unsourceable) |
 | yes | empty     | inline-grep fallback + stderr WARN (legacy target session predating the producer-nonce write) |
 
@@ -206,7 +206,7 @@ the operator's signal of substrate degradation.
   `scripts/lib/verify-event-evidence.sh` into the bundled binary in US1.
   Returns rc=0 (match), rc=1 (missing OR nonce mismatch),
   rc=2 (substrate failure). Diagnostics go to stderr.
-- **Python (in-package parallel)**: `verify_child_promise(session_id, nonce, events_path)` in `cli/src/fno/events/verify_child_promise.py`. Returns `tuple[Literal[True], None]` on match, or `tuple[Literal[False], ChildPromiseError]` on failure. The error key is one of `child_promise_missing`, `child_promise_nonce_mismatch`, or `events_unreadable`. The Python error keys map one-to-one to the fno-agents command's stderr substrings.
+- **The door**: `fno-agents verify-evidence child-promise` is the one reader (the Python in-package parallel deleted with the events package residue). The error keys `child_promise_missing`, `child_promise_nonce_mismatch`, and `events_unreadable` map one-to-one to the door's stderr substrings.
 
 ### `verification_receipt`
 

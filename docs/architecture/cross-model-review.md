@@ -24,7 +24,7 @@ The retired panel's per-agent routing key `config.review.agent_routes` refuses w
 Identity-free entries form one composite gate satisfied by an explicit clean `peer` attestation pinned to current HEAD.
 An entry with its own `identity`, or a review block with shared `peer_identity`, retains the legacy GitHub-posting carrier and requires that login to have reviewed.
 
-The author's model is a proxy for its invoking harness, resolved from the ambient env markers in the shared precedence `CODEX_THREAD_ID` > `CLAUDE_CODE_SESSION_ID` > `CODEX_SESSION_ID` > `GEMINI_SESSION_ID` (`harness_identity.py`, mirrored in `claims.rs`). A peer's effective family comes from its route provider when it names one, else its bare provider:
+The author's model is a proxy for its invoking harness, resolved from the ambient env markers in the shared precedence `CODEX_THREAD_ID` > `CLAUDE_CODE_SESSION_ID` > `CODEX_SESSION_ID` > `GEMINI_SESSION_ID` (`HARNESS_SESSION_MARKERS` in `crates/fno-agents/src/claims.rs`). A peer's effective family comes from its route provider when it names one, else its bare provider:
 
 | Input | Family |
 |---|---|

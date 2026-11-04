@@ -195,6 +195,8 @@ enabled = false
 host = "https://us.i.posthog.com"
 # Env var holding the PostHog project token.
 token_env = "FNO_POSTHOG_PROJECT_TOKEN"
+# Path to the PostHog project token file (mode 0600); token_env wins when set; a leading ~ expands against $HOME.
+token_file = "~/.fno/secrets/posthog-project-token"
 
 [attention]
 # Kill switch for the attention arm (question pages and sinks; default on).
@@ -877,3 +879,11 @@ app_id = ""
 app_installation_id = ""
 # Path to the GitHub App private key PEM (default ~/.fno/secrets/github-app.pem, mode 0600); a leading ~ expands against $HOME.
 app_key_path = "~/.fno/secrets/github-app.pem"
+
+[questions.judge]
+# Max questions the judge takes per run.
+batch = 10
+# Arm the question judge: when true, judge runs read the question board and decide open questions against the law record.
+enabled = false
+# Model the judge dispatches verdicts with.
+model = "sonnet"

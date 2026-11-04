@@ -1,7 +1,7 @@
 //! The owned-caller proof, native.
 //!
 //! The complete port of Python's `resolve_self_identity`
-//! (`cli/src/fno/claims/self_identity.py`) and its `harness_identity`
+//! (`cli/src/fno/claims/self_identity.py`, deleted) and its identity
 //! resolver: marker tables, the fno stamp, canonical/vendor consistency, the
 //! proven/ambiguous elimination ladder, the process-tree attester walk, the
 //! cwd-keyed spawn record, and the collision checks. The spawn door consumes

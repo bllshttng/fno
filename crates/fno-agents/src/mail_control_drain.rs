@@ -61,7 +61,7 @@ pub fn parse_args(rest: &[String]) -> Result<DrainArgs, String> {
 }
 
 /// The three mailbox address forms one session answers to
-/// (`harness_identity.canonical_handle` / `session_identity_key` /
+/// (`canonical_handle` / `session_identity_key` /
 /// `legacy_suffix_handle`).
 fn address_forms(session: &str) -> Vec<String> {
     let lowered = if session.starts_with("ses_") {

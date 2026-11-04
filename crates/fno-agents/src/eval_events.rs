@@ -2,11 +2,13 @@
 //! event, so trend and alert views can read it. PostHog files OTLP records as
 //! logs, and its trend insights read events, so this posts to the capture
 //! batch route and not through the OTLP arm. Off unless
-//! `[telemetry.eval_events] enabled = true` and the token env is set. The
-//! event carries an allowlist of identifiers and never free text.
+//! `[telemetry.eval_events] enabled = true` and a token is set, through
+//! `token_env` or the `token_file` read. The event carries an allowlist of
+//! identifiers and never free text.
 
 use crate::otlp_export::{self, ExportState};
 use serde_json::{json, Map, Value};
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -18,6 +20,7 @@ const LOOKBACK_S: i64 = 86_400;
 const MAX_BATCH: usize = 1000;
 const DEFAULT_HOST: &str = "https://us.i.posthog.com";
 const DEFAULT_TOKEN_ENV: &str = "FNO_POSTHOG_PROJECT_TOKEN";
+const DEFAULT_TOKEN_FILE: &str = "~/.fno/secrets/posthog-project-token";
 /// One shared id, because an eval attempt has no person behind it.
 const DISTINCT_ID: &str = "fno-evals";
 const MAX_VALUE_LEN: usize = 128;
@@ -69,16 +72,58 @@ pub fn resolve(cwd: &Path) -> Resolved {
         ));
     }
     let token_env = read("token_env", DEFAULT_TOKEN_ENV);
-    let token = std::env::var(&token_env).unwrap_or_default();
-    if token.trim().is_empty() {
-        return Resolved::Refused(format!("token env {token_env} is unset or empty"));
-    }
+    let token_file = read("token_file", DEFAULT_TOKEN_FILE);
+    let token = match token_from_env_or_file(&token_env, &token_file) {
+        Ok(token) => token,
+        Err(reason) => return Resolved::Refused(reason),
+    };
     let base = base.trim_end_matches('/');
     Resolved::On(Config {
         url: format!("{base}/batch/"),
         host: base.trim_start_matches("https://").to_string(),
         token: token.trim().to_string(),
     })
+}
+
+/// The env var wins while it holds a token; otherwise the token file is read
+/// fresh, so a daemon beat picks up a rotated token without a restart. The
+/// file must be mode 0600: group or other bits refuse the read.
+fn token_from_env_or_file(token_env: &str, token_file: &str) -> Result<String, String> {
+    if let Ok(from_env) = std::env::var(token_env) {
+        if !from_env.trim().is_empty() {
+            return Ok(from_env);
+        }
+    }
+    let path = crate::github_app::expand_tilde(Path::new(token_file));
+    let meta = match std::fs::metadata(&path) {
+        Ok(meta) => meta,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err(format!(
+                "token env {token_env} is unset or empty and token file {} is missing",
+                path.display()
+            ));
+        }
+        Err(e) => {
+            return Err(format!(
+                "token env {token_env} is unset or empty and token file {} is unreadable: {e}",
+                path.display()
+            ));
+        }
+    };
+    if meta.permissions().mode() & 0o077 != 0 {
+        return Err(format!(
+            "token file {} must be mode 0600 (run chmod 600 {})",
+            path.display(),
+            path.display()
+        ));
+    }
+    let body = std::fs::read_to_string(&path)
+        .map_err(|e| format!("token file {} is unreadable: {e}", path.display()))?;
+    let token = body.trim();
+    if token.is_empty() {
+        return Err(format!("token file {} is empty", path.display()));
+    }
+    Ok(token.to_string())
 }
 
 /// A row value ships only when it reads as an identifier. A cohort is a typed
@@ -490,6 +535,17 @@ mod tests {
         ));
 
         std::fs::write(&cfg, "[telemetry.eval_events]\nenabled = true\n").unwrap();
+        // The token file default resolves against the real HOME, so the gate
+        // pins token_file at an absent temp path: no run reads a live secret.
+        let token_path = dir.path().join("absent-token");
+        std::fs::write(
+            &cfg,
+            format!(
+                "[telemetry.eval_events]\nenabled = true\ntoken_file = \"{}\"\n",
+                token_path.display()
+            ),
+        )
+        .unwrap();
         assert!(
             matches!(resolve(dir.path()), Resolved::Refused(ref m) if m.contains("FNO_POSTHOG_PROJECT_TOKEN"))
         );
@@ -505,6 +561,69 @@ mod tests {
                 Some(v) => std::env::set_var(key, v),
                 None => std::env::remove_var(key),
             }
+        }
+    }
+
+    /// The token file arm: a 0600 file feeds the token while the env var is
+    /// unset, a loose mode refuses with the chmod, a rotation is picked up on
+    /// the next read, and the env var still wins when both hold a token.
+    #[test]
+    fn token_file_feeds_the_token_and_env_still_wins() {
+        static ENV_LOCK: std::sync::LazyLock<&'static std::sync::Mutex<()>> =
+            std::sync::LazyLock::new(crate::claims::test_env_lock);
+        let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let saved = std::env::var_os("FNO_POSTHOG_PROJECT_TOKEN");
+        std::env::remove_var("FNO_POSTHOG_PROJECT_TOKEN");
+        let saved_cfg = std::env::var_os("FNO_CONFIG");
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().join("config.toml");
+        let file = dir.path().join("ph-token");
+        std::env::set_var("FNO_CONFIG", &cfg);
+
+        std::fs::write(&file, "  ph-tok \n").unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).unwrap();
+        std::fs::write(
+            &cfg,
+            format!(
+                "[telemetry.eval_events]\nenabled = true\ntoken_file = \"{}\"\n",
+                file.display()
+            ),
+        )
+        .unwrap();
+        match resolve(dir.path()) {
+            Resolved::On(c) => assert_eq!(c.token, "ph-tok", "surrounding space trims"),
+            _ => panic!("a 0600 token file resolves on"),
+        }
+
+        // A loose mode gates the read and names the fix.
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(
+            matches!(resolve(dir.path()), Resolved::Refused(ref m) if m.contains("chmod 600")),
+            "a loose token file refuses"
+        );
+
+        // The read is fresh, so a rotated token lands on the next beat.
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).unwrap();
+        std::fs::write(&file, "ph-rotated\n").unwrap();
+        match resolve(dir.path()) {
+            Resolved::On(c) => assert_eq!(c.token, "ph-rotated"),
+            _ => panic!("a rotated token file is read fresh"),
+        }
+
+        // The env var wins when both channels hold a token.
+        std::env::set_var("FNO_POSTHOG_PROJECT_TOKEN", "tok");
+        match resolve(dir.path()) {
+            Resolved::On(c) => assert_eq!(c.token, "tok"),
+            _ => panic!("the env var outranks the token file"),
+        }
+
+        if let Some(v) = saved {
+            std::env::set_var("FNO_POSTHOG_PROJECT_TOKEN", v);
+        }
+        match saved_cfg {
+            Some(v) => std::env::set_var("FNO_CONFIG", v),
+            None => std::env::remove_var("FNO_CONFIG"),
         }
     }
 }

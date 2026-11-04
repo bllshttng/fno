@@ -469,7 +469,7 @@ function toClaudeTool(tool) {
 // Foreign session markers a shell.env hook blanks (the resolver reads only
 // nonblank values), so a session spawned under another harness cannot
 // inherit its identity. The pairs live in
-// cli/src/fno/harness_identity.py (HARNESS_SESSION_MARKERS +
+// crates/fno-agents/src/claims.rs (HARNESS_SESSION_MARKERS +
 // LEGACY_HARNESS_SESSION_MARKERS + SELF_SET_HARNESS_MARKERS minus this
 // harness's own); a bun test reads that file and fails when this list
 // drifts.
@@ -480,7 +480,7 @@ const FOREIGN_SESSION_MARKERS = [
   "GEMINI_SESSION_ID",
   "CLAUDE_SESSION_ID",
   "CLAUDECODE",
-  // The extra identity table in harness_identity.py (_EXTRA_IDENTITY_NAMES)
+  // The family table in claims.rs (AMBIENT_IDENTITY_FAMILIES)
   // minus fno's own TARGET_SESSION_ID: live-journey finding - inherited
   // CODEX_COMPANION_* names resolved a clean opencode session as claude.
   "CLAUDECODE_SESSION_ID",

@@ -188,30 +188,16 @@ case "$event" in
     # no better in the other direction: a findings fence followed by an
     # empty "excluded files" fence would read clean. The verdict is clean
     # only when EVERY fence in the message parses to an empty list.
-    findings="$(printf '%s' "$message" | python3 -c '
-import json, re, sys
-text = sys.stdin.read()
-fences = re.findall(r"```json\s*(.*?)```", text, re.DOTALL)
-if not fences:
-    print("absent")
-    sys.exit(0)
-parsed = []
-for body in fences:
-    try:
-        data = json.loads(body)
-    except Exception:
-        print("absent")
-        sys.exit(0)
-    if not isinstance(data, list):
-        print("absent")
-        sys.exit(0)
-    parsed.append(data)
-if len(parsed) == 1:
-    print(json.dumps(parsed[0], separators=(",", ":")))
-elif all(data == [] for data in parsed):
-    print("[]")
-else:
-    print("ambiguous")
+    findings="$(printf '%s' "$message" | jq -Rsr '
+[match("```json\\s*(.*?)```"; "gp") | .captures[0].string] as $fences
+| if ($fences | length) == 0 then "absent"
+  else
+    [ $fences[] | (try fromjson catch "\u0000bad") ] as $parsed
+    | if any($parsed[]; type != "array") then "absent"
+      elif ($parsed | length) == 1 then $parsed[0] | tojson
+      elif all($parsed[]; . == []) then "[]"
+      else "ambiguous" end
+  end
 ' 2>/dev/null || echo "absent")"
     if [[ "$findings" == "[]" ]]; then
       findings_payload="[]"

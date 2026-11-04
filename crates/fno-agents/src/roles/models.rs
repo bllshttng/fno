@@ -1,6 +1,7 @@
 //! The role-definition schema, checked over raw JSON. A port of the
-//! pydantic contracts in `fno.roles.models` and `fno.company.contracts`
-//! as far as discovery reads them: every model is frozen and refuses
+//! pydantic contracts in `fno.roles.models` and the deleted
+//! `fno.company.contracts` (the Rust contract owners are `delivery_eval.rs`
+//! and `plan_schema.rs`) as far as discovery reads them: every model is frozen and refuses
 //! unknown fields, every `NonEmptyStr` trims and must stay non-empty, and
 //! the scalar fields accept pydantic's lax-mode inputs (a bool from `1`,
 //! `"yes"` or `1.0`, an int from `"2"` or `2.0`), so a document valid

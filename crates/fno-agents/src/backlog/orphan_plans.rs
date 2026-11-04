@@ -2,7 +2,7 @@
 //! whose `plan_path` never got bound, and (with `--apply`) bind them.
 //!
 //! Client-side and daemon-free, like [`crate::graph_get`]: both plan write
-//! paths already TRY to bind at write time (`mutate_doc.py::_sync_graph_status`
+//! paths already TRY to bind at write time (`plan_doc::mutate::sync_graph`
 //! on blueprint, `target_cli.py::_bind_node_plan_path` on target init), and
 //! each try is one best-effort subprocess with a 30s timeout that warns and
 //! moves on. Nothing ever retries what those drop, and no reader compared a

@@ -184,11 +184,10 @@ jobs:
 
       - name: Command matrix fresh
         if: ${{ !cancelled() }}
-        working-directory: cli
         run: |
           set -euo pipefail
-          uv run fno-py doctor harness-matrix --write
-          git diff --exit-code -- ../docs/harnesses/command-matrix.md
+          fno-agents harness-matrix --write --root "$GITHUB_WORKSPACE"
+          git diff --exit-code -- docs/harnesses/command-matrix.md
 
       # hooks/write-gate.sh refuses edits only to generated copies
       # that generated-artifacts.tsv or skill-bundles.yaml names. The census
@@ -525,11 +524,6 @@ jobs:
         timeout-minutes: 5
         run: bash scripts/ci/check-tests-hermetic-events.sh
 
-      - name: identity precedence-primitive caller ratchet
-        if: ${{ !cancelled() }}
-        timeout-minutes: 5
-        run: bash scripts/ci/check-identity-stamp-sites.sh
-
       - name: hook source identity
         if: ${{ !cancelled() }}
         timeout-minutes: 5
@@ -575,6 +569,14 @@ jobs:
         if: ${{ !cancelled() }}
         timeout-minutes: 5
         run: bash scripts/ci/check-preamble-budget.sh
+
+      # The user path (hooks, skills, buddy, user-path scripts) starts no new
+      # Python; each file is held to its shrink-only row in
+      # scripts/ci/user-python-debt.tsv.
+      - name: No new Python on the user path
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: bash scripts/ci/check-no-user-python.sh
 
       # A tracked source file over 5,000 lines is shrink-only relative to the
       # merge base; the refusal names the module-per-question remedy. The

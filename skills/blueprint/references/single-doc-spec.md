@@ -46,7 +46,7 @@ Every other section (problem, design rationale, open questions) is optional cont
 design → ready → in_progress → reviewing → shipping → shipped
 ```
 
-Enforced by `validate_transition(old, new)` in `skills/blueprint/scripts/mutate_doc.py`, over the status ladder the `fno do plan parse` door serves. Backward transitions raise `StatusTransitionError`. `coerce_status_from_yaml` reads an unquoted YAML boolean (`True`/`False`) that a bash writer can emit as its lowercase word.
+Enforced by `fno-agents plan-cli mutate` (`crates/fno-agents/src/plan_doc/mutate.rs`), over the `STATUS_PROGRESSION` ladder the `fno do plan parse` door serves. A `ready` plan refuses with exit 1 unless `--rewrite` is set, and a plan past blueprint refuses with exit 1 even then. `coerce_status` reads an unquoted YAML boolean (`True`/`False`) that a bash writer can emit as its lowercase word.
 
 **Valid transition examples:**
 
@@ -69,8 +69,8 @@ Enforced by `validate_transition(old, new)` in `skills/blueprint/scripts/mutate_
 
 `BLUEPRINT_WRITE_ALLOWLIST` in `crates/fno-agents/src/plan_doc/cli.rs`, served to the mutation script by the `fno do plan parse` door:
 
-```python
-BLUEPRINT_WRITE_ALLOWLIST = frozenset({
+```rust
+pub const BLUEPRINT_WRITE_ALLOWLIST: &[&str] = &[
     "Execution Strategy",
     "File Ownership Map",
     "Five questions",
@@ -82,10 +82,11 @@ BLUEPRINT_WRITE_ALLOWLIST = frozenset({
     "consolidation",
     "difficulty",
     "join",
-})
+    "carveouts",
+];
 ```
 
-`assert_blueprint_can_write(section_name)` raises `OwnershipViolation` on any name outside the set. This is checked before each section write, not only at the end. Future skill additions must define their own allowlist constants. The set widens only for a field a validator requires blueprint to write (`consolidation` for the 2026-08-17 gate, `difficulty` for the 2026-08-26 gate); each widening updates the exact-set pin in `cli/tests/unit/plan/test_ownership.py` in the same PR.
+The blueprint writer refuses any name outside the set with exit 2. This is checked before each section write, not only at the end. Future skill additions must define their own allowlist constants. The set widens only for a field a validator requires blueprint to write. Examples are `consolidation` for the 2026-08-17 gate and `difficulty` for the 2026-08-26 gate. Each widening updates the exact-set pin in `crates/fno-agents/src/plan_doc/cli_tests.rs` in the same PR.
 
 ## Atomic mutation contract
 
