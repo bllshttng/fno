@@ -132,6 +132,15 @@ fn flatten_envelopes(text: &str) -> (Vec<Value>, usize) {
 /// rule is prove_it's, applied at its call site, because law rows carry
 /// `decision` and no `text` at all.
 pub fn derive_rows(rows: Vec<Value>, damaged: usize) -> Index {
+    derive_rows_with(rows, damaged, true)
+}
+
+/// `derive_rows` that keeps date-expired laws, so `law recheck` can write the receipt.
+pub fn derive_rows_unguarded(rows: Vec<Value>, damaged: usize) -> Index {
+    derive_rows_with(rows, damaged, false)
+}
+
+fn derive_rows_with(rows: Vec<Value>, damaged: usize, apply_date_guard: bool) -> Index {
     let is_decision = |row: &Value| {
         matches!(
             row.get("_event_type").and_then(Value::as_str),
@@ -150,8 +159,26 @@ pub fn derive_rows(rows: Vec<Value>, damaged: usize) -> Index {
                 .to_lowercase();
             id.is_empty() || !retired.contains_key(&id)
         })
+        .filter(|row| !apply_date_guard || !date_guard_fired(row, &chrono::Utc::now().to_rfc3339()))
         .collect();
     Index { rows, damaged }
+}
+
+/// True when a `guard: {kind: "date", at}` has passed; event and set guards need `law recheck`.
+pub fn date_guard_fired(row: &Value, now_rfc3339: &str) -> bool {
+    let Some(guard) = row.get("guard").filter(|g| g.is_object()) else {
+        return false;
+    };
+    if guard.get("kind").and_then(Value::as_str) != Some("date") {
+        return false;
+    }
+    let (Some(at), Ok(now)) = (
+        guard.get("at").and_then(Value::as_str),
+        chrono::DateTime::parse_from_rfc3339(now_rfc3339),
+    ) else {
+        return false;
+    };
+    chrono::DateTime::parse_from_rfc3339(at).is_ok_and(|at| at <= now)
 }
 
 /// The retirement map behind `derive_rows`, exposed for readers that render

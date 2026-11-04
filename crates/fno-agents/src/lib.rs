@@ -311,6 +311,7 @@ pub mod law_filters;
 pub mod law_firings;
 pub mod law_match;
 pub mod law_pr_shape;
+pub mod law_recheck;
 pub mod law_renew;
 pub mod law_restore;
 pub mod law_when;
