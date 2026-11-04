@@ -459,6 +459,11 @@ fi
 "$FNO" mux tab rename --server "$SERVER" "${W[@]}" --tab 2 --name alerts >/dev/null
 "$FNO" mux tab rename --server "$SERVER" "${W[@]}" --tab 3 --name docs >/dev/null
 
+# The machines shot reads the remote row's highlight: focus the seat pane,
+# so the chosen band lands on the remote row the seat folds into.
+if [ -n "$REMOTE_PANE" ]; then
+  "$FNO" mux pane focus --server "$SERVER" "${PANES[5]}" >/dev/null
+fi
 # The registry rows that name each pane's harness, model and state. The
 # fence directory at agents/registry.json marks the table as the owner: the
 # rows live in the graph store's registry table, and the document envelope

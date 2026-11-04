@@ -74,9 +74,12 @@ impl View {
             // One session, one row: the seat twin folds into the
             // remote row appended below, so an open portal's pane never
             // paints twice in the catalog.
-            for a in self.layout.agents.iter().filter(|a| {
-                a.squad == Some(s.id) && !(a.portal.is_some() && twin_names.contains(&a.name))
-            }) {
+            for a in self
+                .layout
+                .agents
+                .iter()
+                .filter(|a| a.squad == Some(s.id) && !twin_names.contains(&a.name))
+            {
                 let label = match self.agent_tab_context(a.squad, a.tab) {
                     Some(TabContext::Named(name)) => format!("{} › {}", a.name, name),
                     Some(TabContext::Ordinal(n)) => format!("{} › {} ·{n}", s.name, a.name),
@@ -99,7 +102,7 @@ impl View {
         for a in self.layout.agents.iter().filter(|a| {
             let orphan =
                 !matches!(a.squad, Some(id) if self.layout.squads.iter().any(|s| s.id == id));
-            orphan && !(a.portal.is_some() && twin_names.contains(&a.name))
+            orphan && !twin_names.contains(&a.name)
         }) {
             out.push(orphan_row(a, self.layout.active_squad));
         }

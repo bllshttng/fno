@@ -101,15 +101,16 @@ pub(super) fn twin_label(remote_name: &str) -> String {
     format!("{} {remote_name}", crate::proto::REMOTE_GLYPH)
 }
 
-/// The local twin of a remote row: the seat pane a reach named with the
-/// address, painted as a bare-pane row (`remote: None, portal: Some`).
+/// The local twin of a remote row: the pane whose registered name is the
+/// glyph form of the row's address (`pane_label` leads a `name@host` name
+/// with the glyph, so any seat of that session carries the label).
 /// `None` when no such pane exists: the portal never opened, or closed.
 pub(super) fn portal_twin<'a>(view: &'a View, remote: &RemoteRow) -> Option<&'a AgentRow> {
     let label = twin_label(&remote.name);
     view.layout
         .agents
         .iter()
-        .find(|a| a.remote.is_none() && a.portal.is_some() && a.name == label)
+        .find(|a| a.remote.is_none() && a.name == label)
 }
 
 /// Turning the toggle off drops the bands at once, so no remote row outlives it.
@@ -412,9 +413,7 @@ impl View {
                     .into_iter()
                     .zip(d)
                     .filter(|(row, _)| {
-                        !matches!(row, DisplayRow::Agent(a) if
-                            a.remote.is_none() && a.portal.is_some()
-                                && twins.contains(&a.name))
+                        !matches!(row, DisplayRow::Agent(a) if a.remote.is_none() && twins.contains(&a.name))
                     })
                     .unzip();
                 // One indent under the machine, the same step the remote bands take.
