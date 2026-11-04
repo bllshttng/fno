@@ -5,8 +5,11 @@
 //! fno-agents-daemon                    # start (foreground); lazy-exits when idle
 //! fno-agents-daemon --home <dir>       # name the home in argv; must agree with
 //!                                      # FNO_AGENTS_HOME or the daemon refuses
-//! fno-agents-daemon --once             # run recovery + serve until idle/SIGTERM
 //! ```
+//! Any other argv refuses (exit 2) before the runtime builds: the daemon
+//! takes no subcommands, so a caller that mis-resolved the daemon binary (a
+//! merge-gate hop that fell back to current_exe) fails loud instead
+//! of booting a resident daemon wearing the hop's argv.
 //! The client lazy-starts this detached on first need; running it directly is
 //! for debugging and for the Python wrapper's explicit `daemon` sub-mode.
 
@@ -26,6 +29,18 @@ fn main() {
     ) {
         fno_agents::version::print_version(fno_agents::json_output::requested(&args));
         return;
+    }
+
+    // Any argv the daemon does not own is a caller that resolved this binary
+    // by mistake (a merge-gate hop execed `fno-agents-daemon pr-worktree`;
+    // the old silent ignore booted a full resident daemon with that argv).
+    // Refuse before the runtime builds.
+    if let Some(bad) = first_unknown_arg(&args) {
+        eprintln!(
+            "fno-agents-daemon: unknown argument {bad:?}; the daemon takes no subcommands \
+             (client doors live in fno-agents) - refusing to start"
+        );
+        std::process::exit(2);
     }
 
     // Test harnesses may launch children with SIGTERM blocked. The daemon owns
@@ -197,9 +212,28 @@ fn main() {
     }
 }
 
+/// The first argument the daemon does not own, or None when every argument
+/// is one of: `--home <dir>` (the value travels with the flag), `--home=<dir>`.
+/// `version` and its spellings are matched earlier and never reach here. A
+/// dangling `--home` stays legal (env-only start, as before).
+fn first_unknown_arg(args: &[String]) -> Option<&str> {
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        if a == "--home" {
+            it.next();
+            continue;
+        }
+        if a.starts_with("--home=") {
+            continue;
+        }
+        return Some(a);
+    }
+    None
+}
+
 /// The value of `--home <path>` (or `--home=<path>`) from the daemon's argv,
-/// or `None` when absent. Other argv is not ours to judge (the `version`
-/// subcommand is matched earlier; anything else is ignored as today).
+/// or `None` when absent. `version` is matched earlier; every other argument
+/// is refused by `first_unknown_arg` before this runs.
 fn parse_home_arg(args: &[String]) -> Option<String> {
     let mut it = args.iter();
     while let Some(a) = it.next() {
