@@ -823,11 +823,19 @@ mod tests {
             })
             .to_string()
         };
-        let mut text = span("r-a", "block", "2026-10-29T00:00:00Z");
+        // Spans land relative to now, never on authored dates: the report's
+        // 7d window moves with the clock, and a hardcoded span falls out of
+        // it the week after the test was written.
+        let days_ago = |d: i64| {
+            (chrono::Utc::now() - chrono::Duration::days(d))
+                .format("%Y-%m-%dT00:00:00Z")
+                .to_string()
+        };
+        let mut text = span("r-a", "block", &days_ago(1));
         text.push('\n');
-        text.push_str(&span("r-a", "warn", "2026-10-28T00:00:00Z"));
+        text.push_str(&span("r-a", "warn", &days_ago(2)));
         text.push('\n');
-        text.push_str(&span("r-b", "warn", "2026-10-20T00:00:00Z"));
+        text.push_str(&span("r-b", "warn", &days_ago(10)));
         text.push('\n');
         std::fs::write(&journal, text).unwrap();
 
