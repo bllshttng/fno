@@ -27,6 +27,9 @@ const RITUAL_TIMEOUT_CAP_S: f64 = 135.0;
 /// A real merge took about 120s; head attempts ran 115-128s under load.
 pub(crate) const MERGE_FLOOR_S: f64 = 150.0;
 const READ_BUDGET_S: f64 = 30.0;
+/// A fleet budget hold at or above this pauses the sweep: every read would
+/// answer refused. The merge leg holds at the same threshold.
+const GH_HOLD_SKIP_S: f64 = 10.0;
 
 #[derive(Debug, Default)]
 pub(crate) struct TickResult {
@@ -41,6 +44,8 @@ pub(crate) struct TickResult {
     pub quota_remaining: Option<i64>,
     pub quota_reset: Option<String>,
     pub quota_unknown: bool,
+    /// The fleet budget hold that paused the sweep, seconds left.
+    pub budget_hold_s: Option<f64>,
 }
 
 #[derive(Debug, Clone)]
@@ -97,6 +102,19 @@ pub(crate) struct SweepOpts {
     pub max_retries: i64,
     pub graphql_min_remaining: i64,
     pub dispatch_deadline: Option<Instant>,
+    /// Rich reads skip a row polled within this window; 0 turns the floor off.
+    pub min_repoll_s: i64,
+}
+
+/// The `last_polled_at` cutoff a repoll floor of `floor_s` implies, or `None`
+/// when `now_iso` does not parse (the floor then stays off for this tick).
+fn repoll_cutoff(now_iso: &str, floor_s: i64) -> Option<String> {
+    if floor_s <= 0 {
+        return None;
+    }
+    let now = chrono::DateTime::parse_from_rfc3339(now_iso).ok()?;
+    let stamp = now - chrono::Duration::seconds(floor_s);
+    Some(stamp.format("%Y-%m-%dT%H:%M:%SZ").to_string())
 }
 
 fn ritual_timeout() -> f64 {
@@ -306,6 +324,24 @@ pub(crate) fn sweep(
             ..Default::default()
         });
     }
+    // A fleet budget hold pauses the whole sweep: every listing and rich read
+    // would answer refused, and a refused read would poison the row it
+    // touched. Rows keep their last-known states; the next tick retries.
+    let hold = match seams.gh_backoff_left() {
+        Err(DoorError::Cut) => {
+            seams.release_lock(TICK_CLAIM_KEY, &holder);
+            return Err(DoorError::Cut);
+        }
+        Err(DoorError::Failed(_)) => 0.0,
+        Ok(left) => left,
+    };
+    if hold > GH_HOLD_SKIP_S {
+        seams.release_lock(TICK_CLAIM_KEY, &holder);
+        return Ok(TickResult {
+            budget_hold_s: Some(hold),
+            ..Default::default()
+        });
+    }
     let result = run_sweep(seams, entries, opts, &holder);
     seams.release_lock(TICK_CLAIM_KEY, &holder);
     result
@@ -471,6 +507,7 @@ fn run_sweep(
     let candidates: Vec<Candidate> = ranked.into_iter().map(|(_, c)| c).collect();
 
     let (mut acted, mut skipped, mut scanned, mut read_failures) = (0, 0, 0, 0);
+    let cutoff = repoll_cutoff(now, opts.min_repoll_s);
 
     // The dispatch pass bills the shared GraphQL pool; a drained bucket stalls
     // each query for its full timeout. An unreadable instrument PROCEEDS. A
@@ -538,6 +575,21 @@ fn run_sweep(
             skipped += 1;
             continue;
         }
+        // The repoll floor: the listing leg already answered this row's state,
+        // so a rich read inside the window buys nothing. The LRU order above
+        // spreads the stale rows across ticks; this is what makes the order a
+        // bound instead of a hint.
+        if let Some(cutoff) = &cutoff {
+            let stamp = [store.get(&key), delivery.get(&key)]
+                .into_iter()
+                .flatten()
+                .filter_map(|row| row.get("last_polled_at").and_then(Value::as_str))
+                .max();
+            if stamp.is_some_and(|s| s >= cutoff.as_str()) {
+                skipped += 1;
+                continue;
+            }
+        }
         if opts.dispatch_deadline.is_some_and(|d| {
             d.saturating_duration_since(Instant::now()).as_secs_f64() < READ_FLOOR_S
         }) {
@@ -584,7 +636,10 @@ fn run_sweep(
             eprintln!("pr-watch: delivery state persist failed: {err}");
         }
         seams.release_lock(&pr_lock, holder);
-        step?;
+        if step? {
+            clock::note("sweep", "budget hold: read pass ended early".to_string());
+            break;
+        }
     }
 
     store.persist().map_err(DoorError::Failed)?;
@@ -652,7 +707,7 @@ fn one_candidate(
     scan: &mut ScanCounts,
     acted: &mut i64,
     skipped: &mut i64,
-) -> Result<(), DoorError> {
+) -> Result<bool, DoorError> {
     let pr = cand.pr;
     let now = opts.now_iso.as_str();
     let mut rec = delivery
@@ -674,6 +729,18 @@ fn one_candidate(
         Ok(obs) => obs,
         Err(DoorError::Cut) => return Err(DoorError::Cut),
         Err(DoorError::Failed(reason)) => {
+            // The instrument is down, not the PR: every later read fails the
+            // same way, and a poisoned row would retry first forever. The
+            // entry stamp above already throttles the retry through the floor.
+            if reason.contains("budget_refused") || reason.contains("API rate limit exceeded") {
+                eprintln!("pr-watch: gh budget holds at PR #{pr}; ending the read pass");
+                seams.emit(
+                    "pr_watch_skipped",
+                    json!({"pr": pr, "reason": "budget-hold"}),
+                );
+                scan.publish();
+                return Ok(true);
+            }
             eprintln!("pr-watch: gh query failed for PR #{pr}: {reason}");
             failed.insert(key.to_string());
             scan.read_failures += 1;
@@ -684,7 +751,7 @@ fn one_candidate(
             }
             set_field(&mut rec, "last_read_failed", json!(true));
             delivery.put(key, rec);
-            return Ok(());
+            return Ok(false);
         }
     };
     if let Some(map) = rec.as_object_mut() {
@@ -735,7 +802,7 @@ fn one_candidate(
         if reason == "no-checkout" && is_terminal(&obs.state) {
             mark_handled(delivery, key, &obs.state);
         }
-        return Ok(());
+        return Ok(false);
     }
 
     let mut entry = match entry {
@@ -746,7 +813,7 @@ fn one_candidate(
                                   "merge_dispatched": false, "retries": 0, "parked": null,
                                   "last_polled_at": now});
             store.set(key, baseline).map_err(DoorError::Failed)?;
-            return Ok(());
+            return Ok(false);
         }
         None if obs.state == "MERGED" => {
             // Terminal rows never live in the cache, but a merged candidate
@@ -758,7 +825,7 @@ fn one_candidate(
         }
         None => {
             mark_handled(delivery, key, "CLOSED");
-            return Ok(());
+            return Ok(false);
         }
     };
 
@@ -771,7 +838,7 @@ fn one_candidate(
         Ok(()) => {}
     }
     if truthy_str(&entry, "parked") {
-        return Ok(());
+        return Ok(false);
     }
     let repo_dir = cand.repo_dir.clone().unwrap_or_default();
     let merge_ready = obs.state == "MERGED"
@@ -865,7 +932,7 @@ fn one_candidate(
                         }
                         *skipped += 1;
                         drop_terminal(store, dropped, key, "MERGED");
-                        return Ok(());
+                        return Ok(false);
                     }
                     if outcome == "disabled" {
                         // auto_run opt-in is off: a deliberate no-op. Park so the
@@ -881,7 +948,7 @@ fn one_candidate(
                         );
                         *skipped += 1;
                         drop_terminal(store, dropped, key, "MERGED");
-                        return Ok(());
+                        return Ok(false);
                     }
                     ok = matches!(outcome, "dispatched" | "routed-warm");
                     if ok {
@@ -967,7 +1034,7 @@ fn one_candidate(
     } else if store.get(key).is_some() {
         store.put(key, entry);
     }
-    Ok(())
+    Ok(false)
 }
 
 /// One granted row of the durable-grant queue.
@@ -1311,6 +1378,9 @@ mod tests {
         tracked: BTreeMap<String, String>,
         obs: Option<Observation>,
         read_fails: bool,
+        read_fail_reason: Option<String>,
+        reads: RefCell<usize>,
+        hold: f64,
         live: bool,
         reviewers: Vec<String>,
         fire: Option<Fire>,
@@ -1351,8 +1421,14 @@ mod tests {
         }
         fn read_pr(&self, _: &Candidate, _: &[String], _: f64) -> Result<Observation, DoorError> {
             if self.read_fails {
-                return Err(DoorError::Failed("gh down".to_string()));
+                *self.reads.borrow_mut() += 1;
+                let why = self
+                    .read_fail_reason
+                    .clone()
+                    .unwrap_or_else(|| "gh down".to_string());
+                return Err(DoorError::Failed(why));
             }
+            *self.reads.borrow_mut() += 1;
             Ok(self.obs.clone().unwrap())
         }
         fn graphql_remaining(&self) -> (Option<i64>, Option<String>) {
@@ -1384,7 +1460,7 @@ mod tests {
             Ok(self.frozen.clone())
         }
         fn gh_backoff_left(&self) -> Result<f64, DoorError> {
-            Ok(0.0)
+            Ok(self.hold)
         }
         fn merge(&self, _: i64, _: &Path) -> Result<Value, DoorError> {
             Ok(self.merge_receipt.clone().unwrap())
@@ -1425,6 +1501,7 @@ mod tests {
                 max_retries: 2,
                 graphql_min_remaining: 200,
                 dispatch_deadline: None,
+                min_repoll_s: 1200,
             }
         }
     }
@@ -1527,7 +1604,13 @@ mod tests {
             }),
             ..Default::default()
         };
-        sweep(&failing, rig.entries(), &rig.opts()).unwrap();
+        // The repoll floor treats a same-instant second sweep as the same
+        // tick; park-at-cap needs the next one, two floors later.
+        let next_opts = SweepOpts {
+            now_iso: "2026-11-01T02:00:00Z".to_string(),
+            ..rig.opts()
+        };
+        sweep(&failing, rig.entries(), &next_opts).unwrap();
         assert_eq!(rig.disk()[KEY]["parked"], json!("retries-exhausted"));
         assert_eq!(failing.notices.borrow().len(), 1);
     }
@@ -1617,6 +1700,132 @@ mod tests {
             .clone();
         assert_eq!(receipt["failed"], json!([KEY]));
         assert_eq!(receipt["merge_scan"]["scanned"], json!(0));
+    }
+
+    #[test]
+    fn a_fresh_polled_row_skips_its_rich_read_inside_the_repoll_floor() {
+        let rig = rig();
+        rig.seed(
+            json!({KEY: {"last_seen_state": "OPEN", "last_review_ts": "2026-10-01T00:00:00Z",
+                              "retries": 0, "parked": null, "merge_dispatched": false,
+                              "last_polled_at": "2026-11-01T00:00:00Z"}}),
+        );
+        let fake = Fake {
+            obs: Some(open_obs(Some("2026-11-01T00:30:00Z"))),
+            reviewers: vec!["bot".into()],
+            ..Default::default()
+        };
+        let result = sweep(&fake, rig.entries(), &rig.opts()).unwrap();
+        assert_eq!(result.acted, 0);
+        assert_eq!(*fake.reads.borrow(), 0);
+        assert!(!kinds(&fake).contains(&"pr_watch_dispatched".to_string()));
+        assert_eq!(
+            rig.disk()[KEY]["last_review_ts"],
+            json!("2026-10-01T00:00:00Z")
+        );
+    }
+
+    #[test]
+    fn a_stale_row_pays_its_rich_read_when_the_floor_has_passed() {
+        let rig = rig();
+        rig.seed(
+            json!({KEY: {"last_seen_state": "OPEN", "last_review_ts": "2026-10-01T00:00:00Z",
+                              "retries": 0, "parked": null, "merge_dispatched": false,
+                              "last_polled_at": "2026-10-31T20:00:00Z"}}),
+        );
+        let fake = Fake {
+            obs: Some(open_obs(Some("2026-11-01T00:30:00Z"))),
+            reviewers: vec!["bot".into()],
+            fire: Some(Fire {
+                ok: true,
+                is_error: false,
+            }),
+            ..Default::default()
+        };
+        let result = sweep(&fake, rig.entries(), &rig.opts()).unwrap();
+        assert_eq!(result.acted, 1);
+        assert_eq!(*fake.reads.borrow(), 1);
+        assert!(kinds(&fake).contains(&"pr_watch_dispatched".to_string()));
+    }
+
+    #[test]
+    fn a_zero_floor_turns_the_repoll_bound_off() {
+        let rig = rig();
+        rig.seed(
+            json!({KEY: {"last_seen_state": "OPEN", "last_review_ts": "2026-10-01T00:00:00Z",
+                              "retries": 0, "parked": null, "merge_dispatched": false,
+                              "last_polled_at": "2026-11-01T00:00:00Z"}}),
+        );
+        let fake = Fake {
+            obs: Some(open_obs(Some("2026-11-01T00:30:00Z"))),
+            reviewers: vec!["bot".into()],
+            ..Default::default()
+        };
+        let opts = SweepOpts {
+            min_repoll_s: 0,
+            ..rig.opts()
+        };
+        let fake = Fake {
+            obs: Some(open_obs(Some("2026-11-01T00:30:00Z"))),
+            reviewers: vec!["bot".into()],
+            fire: Some(Fire {
+                ok: true,
+                is_error: false,
+            }),
+            ..Default::default()
+        };
+        let result = sweep(&fake, rig.entries(), &opts).unwrap();
+        assert_eq!(result.acted, 1);
+        assert_eq!(*fake.reads.borrow(), 1);
+    }
+
+    #[test]
+    fn a_budget_hold_pauses_the_sweep_before_any_read() {
+        let rig = rig();
+        rig.seed(json!({KEY: {"last_seen_state": "OPEN"}}));
+        let fake = Fake {
+            hold: 45.0,
+            ..Default::default()
+        };
+        let result = sweep(&fake, rig.entries(), &rig.opts()).unwrap();
+        assert_eq!(result.budget_hold_s, Some(45.0));
+        assert_eq!(*fake.reads.borrow(), 0);
+        assert!(kinds(&fake).is_empty());
+        assert_eq!(rig.disk()[KEY]["last_seen_state"], json!("OPEN"));
+    }
+
+    #[test]
+    fn a_budget_refused_read_ends_the_pass_and_keeps_the_row_clean() {
+        let rig = rig();
+        rig.seed(json!({
+            "o/r#7": {"last_seen_state": "OPEN"},
+            "o/r#8": {"last_seen_state": "OPEN"},
+        }));
+        let fake = Fake {
+            read_fails: true,
+            read_fail_reason: Some("pr-status gh outcome=budget_refused: held".to_string()),
+            ..Default::default()
+        };
+        let entries = vec![
+            json!({"id": "n1", "cwd": rig.repo, "pr_number": 7,
+                    "pr_url": "https://github.com/o/r/pull/7"}),
+            json!({"id": "n2", "cwd": rig.repo, "pr_number": 8,
+                    "pr_url": "https://github.com/o/r/pull/8"}),
+        ];
+        sweep(&fake, entries, &rig.opts()).unwrap();
+        assert_eq!(*fake.reads.borrow(), 1);
+        assert!(kinds(&fake).contains(&"pr_watch_tick".to_string()));
+        assert_eq!(rig.disk()["o/r#7"]["last_seen_state"], json!("OPEN"));
+    }
+
+    #[test]
+    fn the_repoll_cutoff_parses_and_fails_open() {
+        assert_eq!(
+            repoll_cutoff("2026-11-01T00:00:00Z", 1200).as_deref(),
+            Some("2026-10-31T23:40:00Z")
+        );
+        assert_eq!(repoll_cutoff("2026-11-01T00:00:00Z", 0), None);
+        assert_eq!(repoll_cutoff("not-a-stamp", 1200), None);
     }
 
     #[test]
