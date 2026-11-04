@@ -469,8 +469,11 @@ mod tests {
     fn set_accepts_the_github_app_keys() {
         let dir = tempfile::tempdir().expect("tempdir");
         let pin = dir.path().join("config.toml");
-        // The only FNO_CONFIG writer in the test tree: the pin routes the
-        // global write at a temp file so no real home is touched.
+        // The pin routes the global write at a temp file so no real home is
+        // touched. Other tests read FNO_CONFIG ambient under this lock.
+        let _env = crate::digest_overlay::ENVIRONMENT_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         std::env::set_var("FNO_CONFIG", &pin);
         let items = vec![
             ("github.app_id".to_string(), "1".to_string()),
