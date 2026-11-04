@@ -181,7 +181,7 @@ pub fn open_pane(session: &str) {
 }
 
 /// The reviewed-marks sidecar, beside the mux's other sidecars.
-fn store_path() -> std::path::PathBuf {
+pub(crate) fn store_path() -> std::path::PathBuf {
     #[cfg(not(test))]
     return crate::proto::mux_sidecar_path("decisions-reviewed.json");
     #[cfg(test)]

@@ -12,7 +12,7 @@ use serde::Deserialize;
 use std::collections::HashSet;
 
 /// One decision as `fno backlog decisions --json` lists it.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, serde::Serialize)]
 pub struct DecisionRow {
     pub decision_id: String,
     #[serde(default)]

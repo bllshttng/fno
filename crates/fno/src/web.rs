@@ -820,6 +820,7 @@ fn router(state: AppState) -> Router {
         .route("/team", get(team))
         .route("/command", get(command))
         .route("/command/model.json", get(command_model))
+        .route("/command/decisions.json", get(command_decisions))
         .route("/command/answer/{id}", post(command_answer))
         .route("/trace", get(trace))
         .route("/trace/model.json", get(trace_model))
@@ -1208,6 +1209,31 @@ async fn command_model(Query(q): Query<WsQuery>, State(st): State<AppState>) -> 
     // A read-only bridge shows the question drawer with no answer controls.
     model["writable"] = serde_json::json!(st.writable);
     json_response(&model)
+}
+
+/// `GET /command/decisions.json`: every recorded decision plus the ids the
+/// user marked reviewed. Read-only: a retract or an overrule needs the user's
+/// own terminal, so the page links to the table and writes nothing.
+async fn command_decisions(Query(q): Query<WsQuery>, State(st): State<AppState>) -> Response {
+    if !token_ok(q.t.as_deref(), &st.token) {
+        return unauthorized();
+    }
+    let read = tokio::task::spawn_blocking(|| {
+        crate::decisions_overlay::load().map(|rows| {
+            let reviewed =
+                crate::decisions_overlay::load_reviewed(&crate::decisions_table::store_path());
+            serde_json::json!({"decisions": rows, "reviewed": reviewed})
+        })
+    })
+    .await;
+    match read {
+        Ok(Ok(body)) => json_response(&body),
+        Ok(Err(e)) => plain_status(StatusCode::BAD_GATEWAY, &e),
+        Err(_) => plain_status(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "the decisions read failed",
+        ),
+    }
 }
 
 async fn refresh_command(st: AppState) {
@@ -3443,6 +3469,9 @@ console.log("theme store: 9 cases ok");
         assert!(reply.contains("cache-control: no-store"), "{reply}");
         assert!(reply.contains("\"host\":\"bb16\""), "{reply}");
         assert!(reply.contains("\"questions_error\":\"x\""), "{reply}");
+        assert!(ask("/command/decisions.json")
+            .await
+            .starts_with("HTTP/1.1 401"));
         assert!(ask("/command").await.starts_with("HTTP/1.1 401"));
         let reply = ask("/command?t=right").await;
         assert!(reply.contains("data-current=\"command\""), "{reply}");
