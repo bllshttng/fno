@@ -42,8 +42,12 @@ pub(crate) fn other_owned_scopes(
 
 /// The default blueprint-subagent ceiling when no provider budget applies
 /// (no new config key: a registry row is barred, so the default is a named
-/// Rust constant). One per lead: law d-6eb2cbbd.
-pub(crate) const DEFAULT_BLUEPRINT_CEILING: usize = 1;
+/// Rust constant). Two per lead, with one always running: law d-c100e5ec.
+pub(crate) const DEFAULT_BLUEPRINT_CEILING: usize = 2;
+
+/// The starts a beat still names when plans ready gate the rest, so a lead
+/// with none running always has a blueprint going.
+pub(crate) const BLUEPRINT_FLOOR_STARTS: usize = 1;
 
 /// The check-in's blueprint reading: this session's live blueprint
 /// subagents against the ceiling, then which unplanned nodes to start and
@@ -55,9 +59,10 @@ pub(crate) const DEFAULT_BLUEPRINT_CEILING: usize = 1;
 /// arrive through the seam (arguments, not ambient reads) so the unit tests
 /// need no claims directory. A failed source is this reading's error, never
 /// a zero: an unreadable claim list read as `running 0` would name starts
-/// past the ceiling. Starts also wait until plans ready fall below the
-/// lead's worker slots - a blueprint nobody can build is the exact spend the
-/// wake meter exists to name. `other_owned` is the fold's owner read, the
+/// past the ceiling. Past the first start, starts wait until plans ready fall
+/// below the lead's worker slots - a blueprint nobody can build is the exact
+/// spend the wake meter exists to name; a gated beat with none running still
+/// names one. `other_owned` is the fold's owner read, the
 /// nodes a deeper live team holds: the scope line counts owned active with
 /// it, so the starts and target-ready lines answer with the same one and a
 /// child of another lead's team never prints. An unread map is this
@@ -113,12 +118,11 @@ pub(crate) fn r_blueprint(
     }
     let provider = std::env::var("FNO_ROUTE_PROVIDER").unwrap_or_default();
     let provider_cap = crate::spawn_gate_lanes::provider_subagents_cap(cwd, &provider);
-    // A provider budget can only lower the one-per-lead ceiling, never raise it.
-    let (ceiling, ceiling_source) = match provider_cap {
-        Some(cap) if cap < DEFAULT_BLUEPRINT_CEILING => {
-            (cap, format!("agents.provider_limits.{provider}.subagents"))
-        }
-        _ => (DEFAULT_BLUEPRINT_CEILING, "one per lead".to_string()),
+    let ceiling = blueprint_ceiling(provider_cap);
+    let ceiling_source = if ceiling < DEFAULT_BLUEPRINT_CEILING {
+        format!("agents.provider_limits.{provider}.subagents")
+    } else {
+        "two per lead".to_string()
     };
     let plans_ready = crate::lead_checkin::board_queue(board, "undispatched")
         .ok()
@@ -149,7 +153,7 @@ pub(crate) fn r_blueprint(
         ),
     };
     let open = if gate_reason.is_some() {
-        0
+        BLUEPRINT_FLOOR_STARTS.min(ceiling).saturating_sub(running)
     } else {
         ceiling.saturating_sub(running)
     };
@@ -157,6 +161,7 @@ pub(crate) fn r_blueprint(
     match &gate_reason {
         Some(reason) => candidates
             .iter()
+            .skip(open)
             .for_each(|id| skips.push(json!({"id": id, "reason": reason}))),
         None => candidates.iter().skip(open).for_each(|id| {
             skips.push(json!({"id": id, "reason": format!("at ceiling {running} of {ceiling}")}))
@@ -204,7 +209,7 @@ pub(crate) struct BlueprintWait {
 }
 
 /// The ceiling fold the check-in runs: a provider budget can only lower the
-/// one-per-lead ceiling, never raise it. One function so the stop check and
+/// two-per-lead ceiling, never raise it. One function so the stop check and
 /// the check-in cannot drift.
 pub(crate) fn blueprint_ceiling(provider_cap: Option<usize>) -> usize {
     match provider_cap {
@@ -342,8 +347,8 @@ mod tests {
     }
 
     /// The happy path: 4 unplanned candidates, running 0, ceiling capped to
-    /// one per lead even under a higher provider budget: only the first id in
-    /// board order starts, the rest skip at the ceiling.
+    /// two per lead: the first two ids in board order start, the rest skip at
+    /// the ceiling.
     #[test]
     fn r_blueprint_starts_up_to_the_ceiling_in_board_order() {
         let dir = std::env::temp_dir().join(format!("fno-bp-happy-{}", std::process::id()));
@@ -366,26 +371,26 @@ mod tests {
         )
         .unwrap();
         assert_eq!(reading["running"], 0);
-        assert_eq!(reading["ceiling"], 1);
-        assert_eq!(reading["ceiling_source"], "one per lead");
+        assert_eq!(reading["ceiling"], 2);
+        assert_eq!(reading["ceiling_source"], "two per lead");
         assert_eq!(reading["plans_ready"], 0);
         assert_eq!(reading["slots"], 4);
-        assert_eq!(reading["starts"], json!(["x-1"]), "{reading}");
+        assert_eq!(reading["starts"], json!(["x-1", "x-2"]), "{reading}");
         assert_eq!(
             reading["skips"],
             json!([
-                {"id": "x-2", "reason": "at ceiling 0 of 1"},
-                {"id": "x-3", "reason": "at ceiling 0 of 1"},
-                {"id": "x-4", "reason": "at ceiling 0 of 1"}
+                {"id": "x-3", "reason": "at ceiling 0 of 2"},
+                {"id": "x-4", "reason": "at ceiling 0 of 2"}
             ]),
             "{reading}"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// AC6: plans ready at or above slots stops every start.
+    /// Plans ready at or above slots still names one start when none runs,
+    /// and none when one already runs.
     #[test]
-    fn r_blueprint_skips_everything_when_build_slots_are_the_bottleneck() {
+    fn r_blueprint_starts_one_when_build_slots_are_the_bottleneck() {
         let dir = std::env::temp_dir().join(format!("fno-bp-bottl-{}", std::process::id()));
         let reading = blueprint_reading(
             &dir,
@@ -401,20 +406,34 @@ mod tests {
         )
         .unwrap();
         assert_eq!(reading["running"], 0);
-        assert_eq!(reading["starts"], json!([]));
-        assert_eq!(reading["skips"].as_array().unwrap().len(), 3);
+        assert_eq!(reading["starts"], json!(["x-1"]), "{reading}");
+        assert_eq!(reading["skips"].as_array().unwrap().len(), 2);
         assert_eq!(
             reading["skips"][0]["reason"],
             "plans ready 5 / slots 4: build slots are the bottleneck",
             "{reading}"
         );
+        let running = blueprint_reading(
+            &dir,
+            "",
+            unplanned_board(
+                &[("x-1", "high"), ("x-2", "high"), ("x-3", "high")],
+                Some(5),
+            ),
+            Some("sess-1"),
+            vec!["blueprint-session:sess-1".into()],
+            Ok(4),
+            "high",
+        )
+        .unwrap();
+        assert_eq!(running["starts"], json!([]), "{running}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// AC8: an unreadable undispatched queue reads plans ready unmeasured,
-    /// and no candidate starts on an unmeasured gate.
+    /// and only the floor start names on an unmeasured gate.
     #[test]
-    fn r_blueprint_skips_everything_when_plans_ready_unmeasured() {
+    fn r_blueprint_starts_only_the_floor_when_plans_ready_unmeasured() {
         let dir = std::env::temp_dir().join(format!("fno-bp-unmeas-{}", std::process::id()));
         let reading = blueprint_reading(
             &dir,
@@ -426,7 +445,7 @@ mod tests {
             "high",
         )
         .unwrap();
-        assert_eq!(reading["starts"], json!([]), "{reading}");
+        assert_eq!(reading["starts"], json!(["x-1"]), "{reading}");
         assert_eq!(
             reading["skips"][0]["reason"],
             "plans ready unmeasured: the board names no undispatched count",
@@ -598,8 +617,8 @@ mod tests {
     /// default holds with no cap at all.
     #[test]
     fn the_stop_check_ceiling_folds_the_provider_cap_and_never_raises_the_default() {
-        assert_eq!(blueprint_ceiling(None), 1);
-        assert_eq!(blueprint_ceiling(Some(3)), 1);
+        assert_eq!(blueprint_ceiling(None), 2);
+        assert_eq!(blueprint_ceiling(Some(3)), 2);
         assert_eq!(blueprint_ceiling(Some(1)), 1);
     }
 

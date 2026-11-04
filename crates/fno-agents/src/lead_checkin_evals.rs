@@ -115,6 +115,16 @@ pub(crate) fn lines(readings: &[Reading]) -> Vec<String> {
         // and the line must not hide it.
         None => line.push_str(" last run unmeasured,"),
     }
+    if let Some(gate) = reading.value.get("gate_main").filter(|g| g.is_object()) {
+        let lanes = gate["lanes"].as_i64().unwrap_or(0);
+        line.push_str(&format!(
+            " gate-main {} rows {:.0}% pass {lanes} lane{} {:.0}d ago,",
+            gate["rows"].as_i64().unwrap_or(0),
+            gate["pass_rate"].as_f64().unwrap_or(0.0) * 100.0,
+            if lanes == 1 { "" } else { "s" },
+            gate["age_days"].as_f64().unwrap_or(0.0),
+        ));
+    }
     if let Some(window) = reading.value.get("window_days").and_then(Value::as_i64) {
         line.push_str(&format!(" window {window}d,"));
     }
@@ -166,6 +176,19 @@ mod tests {
                 "evals: regression pass 88%, flakes 1, last run 6d ago, window 7d, ALARM 1 REGRESSED 2"
                     .to_string()
             ]
+        );
+    }
+
+    #[test]
+    fn the_gate_main_run_reads_beside_the_weekly_bank() {
+        let payload = json!({
+            "regression_pass_rate": 1.0, "flake_count": 0, "regression_alarm": [],
+            "regressed": [], "window_days": 7, "age_days": 2.3, "stale": false, "never_ran": false,
+            "gate_main": {"day": "2026-11-02", "rows": 72, "pass_rate": 0.9444, "lanes": 2, "age_days": 0.6},
+        });
+        assert_eq!(
+            lines(&[Reading::took("evals", payload)]),
+            vec!["evals: regression pass 100%, flakes 0, last run 2d ago, gate-main 72 rows 94% pass 2 lanes 1d ago, window 7d".to_string()]
         );
     }
 

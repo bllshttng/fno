@@ -122,7 +122,14 @@ fn held(paint: &PaintCache, root: &Path, slug: &str, pr: u64, sha: &str) -> Opti
         return Some(false);
     }
     let probes = crate::authorized_merge::RealProbes;
-    match crate::merge_gates::visual_approval_blocker(&probes, root, pr, sha) {
+    verdict(crate::merge_gates::visual_approval_blocker(&probes, root, pr, sha).as_ref())
+}
+
+/// The gate's reading as a hold verdict. Only a held `visual_approval`
+/// cancels; an unknown read (unreadable file list, rate-limited gh) is no
+/// verdict and acts on nothing.
+fn verdict(blocker: Option<&crate::authorized_merge::Blocker>) -> Option<bool> {
+    match blocker {
         None => Some(false),
         Some(b) if b.code == "visual_approval" => Some(true),
         Some(_) => None,
@@ -180,7 +187,9 @@ fn pass_repo(root: &Path, slug: &str, path: &Path, paint: &PaintCache) -> Result
                 continue;
             }
             let runs = &crate::ci_tier::act(root, &[(pr, list)], action, "look_hold")[0]["runs"];
-            let data = json!({"slug": slug, "pr": pr, "sha": sha, "runs": runs});
+            // Only a held visual_approval acts; the row names it so a cancel
+            // traces to the blocker it read.
+            let data = json!({"slug": slug, "pr": pr, "sha": sha, "runs": runs, "blocker": "visual_approval"});
             emitter
                 .emit(kind, &data)
                 .map_err(|e| format!("{kind} row did not land: {e}"))?;
@@ -247,6 +256,20 @@ mod tests {
         );
         // An unreadable gate neither holds nor releases.
         assert_eq!(decide(&head, &HashSet::new(), None), (vec![], vec![]));
+    }
+
+    #[test]
+    fn an_unknown_gate_reading_is_no_verdict() {
+        use crate::authorized_merge::Blocker;
+        let unknown = Blocker::unknown("visual_paint_paths_unknown", "file list unreadable");
+        assert_eq!(verdict(Some(&unknown)), None);
+        let held = Blocker::held("visual_approval", "look");
+        assert_eq!(verdict(Some(&held)), Some(true));
+        assert_eq!(
+            verdict(Some(&Blocker::held("review_not_posted", "x"))),
+            None
+        );
+        assert_eq!(verdict(None), Some(false));
     }
 
     #[test]

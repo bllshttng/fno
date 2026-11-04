@@ -28,7 +28,7 @@ Watts and GPU are null today. The mux meter's `macmon` child is their only reade
 
 ## Who owns a machine
 
-The beat reads `fleet.owner` from the global config, else `$USER`. It reads `fleet.role`, else `worker`. It reads `fleet.name` as the display name, else null, and a reader then shows the host.
+The beat reads the owner from the one person resolver: the user a [user certificate](multiplayer.md#the-user-certificate) proves, else `fleet.owner` from the global config, else `$USER`. It reads `fleet.role`, else `worker`. It reads `fleet.name` as the display name, else null, and a reader then shows the host.
 
 ```toml
 [fleet]

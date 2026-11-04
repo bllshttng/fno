@@ -280,3 +280,60 @@ fn all_contracts_in_one_declaration() {
     unmeasured_when_any_scored_row_lacks_usage();
     measured_cost_with_prices();
 }
+
+#[test]
+fn gate_main_summary_folds_the_newest_day_across_both_seats() {
+    let tmp = TempDir::new().unwrap();
+    let row = |cohort: &str, pass: bool, lane: &str, ts: &str| {
+        let mut v: Value = serde_json::from_str(&lane_row(
+            "t",
+            pass,
+            cohort,
+            "graded",
+            "ok",
+            Value::Null,
+            "m",
+        ))
+        .unwrap();
+        v["requested_lane"] = json!(lane);
+        v["ts"] = json!(ts);
+        v.to_string()
+    };
+    let h = write_history(
+        &tmp,
+        &[
+            row(
+                "gate-main-2026-09-14-ab",
+                true,
+                "old",
+                "2026-09-14T01:00:00Z",
+            ),
+            row(
+                "gate-main-2026-09-15-ab",
+                true,
+                "zai-flash",
+                "2026-09-15T01:00:00Z",
+            ),
+            row(
+                "gate-main-2026-09-15-ab",
+                false,
+                "zai-flash",
+                "2026-09-15T01:05:00Z",
+            ),
+            row(
+                "gate-main-2026-09-15-ab-lead",
+                true,
+                "opus",
+                "2026-09-15T02:00:00Z",
+            ),
+            row("gate-head-xyz", true, "head", "2026-09-15T03:00:00Z"),
+        ],
+    );
+    let now = chrono::DateTime::parse_from_rfc3339(NOW).unwrap().into();
+    let s = super::gate_main_summary(&h, now);
+    assert_eq!(s["day"], "2026-09-15");
+    assert_eq!(s["rows"], 3);
+    assert_eq!(s["lanes"], 2);
+    assert!((s["pass_rate"].as_f64().unwrap() - 2.0 / 3.0).abs() < 1e-9);
+    assert_eq!(super::gate_main_summary("/nonexistent", now), Value::Null);
+}

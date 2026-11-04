@@ -576,6 +576,62 @@ fn overlaps(base_paths: &[String], pr_paths: &[String]) -> Vec<String> {
     base.intersection(&pr).map(|p| (*p).to_string()).collect()
 }
 
+/// True when every changed line of a Rust file's patch is a `//` comment or
+/// blank. Any other file type, or an empty patch (binary, oversized), reads
+/// false: only a positive reading releases the hold. A line inside a
+/// multi-line string literal that starts with `//` would read as a comment;
+/// no paint file holds one.
+fn patch_is_comment_only(file: &str, patch: &str) -> bool {
+    if !file.ends_with(".rs") || patch.is_empty() {
+        return false;
+    }
+    let mut changed = false;
+    for line in patch.lines() {
+        let Some(body) = line
+            .strip_prefix('+')
+            .or_else(|| line.strip_prefix('-'))
+            .filter(|_| !line.starts_with("+++") && !line.starts_with("---"))
+        else {
+            continue;
+        };
+        let body = body.trim();
+        if body.is_empty() {
+            continue;
+        }
+        if !body.starts_with("//") {
+            return false;
+        }
+        changed = true;
+    }
+    changed
+}
+
+/// Whether every touched paint file changed by comment lines only. A rename
+/// or an unreadable patch list reads false, so the hold stays.
+fn comment_only_on<P: Probes>(probes: &P, cwd: &Path, pr: u64, touched: &[&str]) -> bool {
+    let args = vec![
+        "api".to_string(),
+        format!("repos/{{owner}}/{{repo}}/pulls/{pr}/files"),
+        "--paginate".to_string(),
+        "--jq".to_string(),
+        ".[] | {f: .filename, s: .status, p: (.patch // \"\")} | @json".to_string(),
+    ];
+    let Ok((true, stdout)) = probes.run_gh(cwd, &args) else {
+        return false;
+    };
+    let rows: Vec<Value> = stdout
+        .lines()
+        .filter_map(|l| serde_json::from_str(l).ok())
+        .collect();
+    touched.iter().all(|path| {
+        rows.iter().any(|row| {
+            row["f"].as_str() == Some(path)
+                && row["s"].as_str() == Some("modified")
+                && patch_is_comment_only(path, row["p"].as_str().unwrap_or(""))
+        })
+    })
+}
+
 /// The visual-approval gate: a PR whose changed files touch a configured
 /// paint path holds until an ANSWERED question page names the PR, or a
 /// role-recorded decision row transcribes the user's chat or board approval
@@ -611,6 +667,10 @@ pub(crate) fn visual_approval_blocker<P: Probes>(
         .map(String::as_str)
         .collect();
     if touched.is_empty() {
+        return None;
+    }
+    // A diff of comment lines changes no pixel, so a look would judge nothing.
+    if comment_only_on(probes, cwd, pr, &touched) {
         return None;
     }
     // Ruling: a declared main-repair node IS the red-main fix; its lane
@@ -666,6 +726,16 @@ pub(crate) fn visual_approval_blocker<P: Probes>(
          records the approval. Pass each shot with --image.",
         touched.join(", ")
     );
+    if touched.iter().any(|f| is_public_copy(f)) {
+        detail.push_str(
+            "; this PR changes public copy (README or docs/images). Before the page \
+             reaches the user, brief a fresh subagent as the target developer, told \
+             nothing else, and have it answer in writing: what does this show, would \
+             it make you install fno, and what number or claim here hurts. Put the \
+             answer on the question page. A 'hurts' answer sends the change back \
+             before the user sees it",
+        );
+    }
     match (node_id.as_deref(), shots.as_slice()) {
         (Some(node), []) => detail.push_str(&format!(
             "; no shots at internal/fno/mux/{node}-*.png: capture them first, then \
@@ -691,6 +761,12 @@ pub(crate) fn visual_approval_blocker<P: Probes>(
         }
     }
     Some(Blocker::held("visual_approval", detail))
+}
+
+/// The public front page a reader meets before any install: the README and
+/// its images. Landing copy lives in the docs tree and takes the same path.
+fn is_public_copy(path: &str) -> bool {
+    path == "README.md" || path.starts_with("docs/images/")
 }
 
 /// How many earlier commits of the PR the carry walks, newest first.
@@ -738,7 +814,7 @@ fn approval_carries<P: Probes>(
         .rev()
         .filter(|sha| sha.as_str() != head)
         .take(CARRY_WALK)
-        .find(|sha| texts.iter().any(|text| text.contains(sha.as_str())))
+        .find(|sha| texts.iter().any(|text| text_names_head(text, sha)))
     else {
         return false;
     };
@@ -786,7 +862,7 @@ fn adds_no_paint_surface(was: &BTreeSet<String>, now: &BTreeSet<String>) -> bool
 fn declined_after(declines: &[String], newer: &[&str]) -> bool {
     declines
         .iter()
-        .any(|text| newer.iter().any(|sha| text.contains(sha)))
+        .any(|text| newer.iter().any(|sha| text_names_head(text, sha)))
 }
 
 /// The paint files the PR's three-dot compare against the base changes at
@@ -1335,13 +1411,13 @@ fn law_approval_texts<P: Probes>(probes: &P, cwd: &Path, pr: u64) -> Vec<String>
         .collect()
 }
 
-/// True when a live `chat_attested` law row names this PR and the exact full
-/// head sha. Head-scoped like the role row: a push voids it.
+/// True when a live `chat_attested` law row names this PR and the head sha,
+/// full or as a ten-character prefix. Head-scoped like the role row: a push voids it.
 pub(crate) fn law_chat_clears_pr<P: Probes>(probes: &P, cwd: &Path, pr: u64, head: &str) -> bool {
     !head.is_empty()
         && law_approval_texts(probes, cwd, pr)
             .iter()
-            .any(|text| text.contains(head))
+            .any(|text| text_names_head(text, head))
 }
 
 /// The `owner/name` pair a remote url names, normalized across the ssh
@@ -1367,6 +1443,32 @@ pub(crate) fn repo_slug_from_origin(url: &str) -> Option<String> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn readme_and_doc_images_are_public_copy_and_other_docs_are_not() {
+        assert!(is_public_copy("README.md"));
+        assert!(is_public_copy("docs/images/target-run.gif"));
+        assert!(!is_public_copy("docs/architecture/pr-status-verdict.md"));
+        assert!(!is_public_copy("crates/fno/README.md"));
+        assert!(path_matches_paint(
+            "docs/images/target-run.gif",
+            &["docs/images/**".to_string()]
+        ));
+    }
+
+    #[test]
+    fn a_paint_diff_of_comments_only_skips_the_look() {
+        let comments = "@@ -1,2 +1,2 @@\n ctx\n-// a busy box\n+// a busy machine\n+\n";
+        assert!(patch_is_comment_only("a.rs", comments));
+        let code = "@@ -1 +1 @@\n-let a = \"box\"; // c\n+let a = \"machine\"; // c\n";
+        assert!(!patch_is_comment_only("a.rs", code));
+        let mixed = "@@ -1 +1 @@\n-// old\n+// new\n+draw();\n";
+        assert!(!patch_is_comment_only("a.rs", mixed));
+        // Only Rust files read as comments; an html `//` is script code.
+        assert!(!patch_is_comment_only("page.html", comments));
+        // An empty patch (binary, oversized) never releases the hold.
+        assert!(!patch_is_comment_only("a.rs", ""));
+    }
 
     #[test]
     fn mux_shots_scans_node_prefix_and_shots_folder() {
@@ -1492,6 +1594,11 @@ mod tests {
     fn a_decline_after_the_approved_commit_voids_the_carry() {
         let declines = vec!["May PR 9 merge? answer 2 at c3".to_string()];
         assert!(declined_after(&declines, &["c3", "c4"]));
+        let spelled = vec!["May PR 9 merge? answer 2 at 0123456789".to_string()];
+        assert!(declined_after(
+            &spelled,
+            &["0123456789abcdef0123456789abcdef01234567"]
+        ));
         assert!(!declined_after(&declines, &["c4"]));
         assert!(!declined_after(&[], &["c3"]));
     }

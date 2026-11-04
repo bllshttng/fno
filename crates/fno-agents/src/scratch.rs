@@ -290,8 +290,8 @@ const REMEDIES: &[Remedy] = &[
     remedy!("vault_doc", "Vault doc append", "none: vault writes", "medium", report_only),
     remedy!("config", "Config probe", "none: one-off", "medium", report_only),
     remedy!("copy_for_diff", "Copy a file at a revision to compare sides",
-        "no command today: fno do show <rev>:<path> and fno do diff <rev-a> <rev-b> -- <path>, worktree-Bash safe (rank 12)", "medium",
-        ["do", "--help"], r"(?im)^\s*show\s"),
+        "existing: fno do show <rev>:<path> and fno do diff <rev-a> <rev-b> -- <path>, worktree-Bash safe", "medium",
+        ["do", "show", "--help"], r"(?m)^Usage: fno do show <rev>:<path>"),
 ];
 
 const UNKNOWN_REMEDY: Remedy = remedy!(
