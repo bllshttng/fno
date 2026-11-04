@@ -196,8 +196,8 @@ jobs:
           count="$(jq '.collisions | length' "$RUNNER_TEMP/collisions.json")"
           if [ "$count" -gt 0 ]; then
             echo "### File collisions with other open PRs" >> "$GITHUB_STEP_SUMMARY"
-            jq -r '.collisions[] | "- #\(.pr): \(.shared | join(\", \"))"' "$RUNNER_TEMP/collisions.json" >> "$GITHUB_STEP_SUMMARY"
-            jq -r '.collisions[] | "::notice title=File collision with PR #\(.pr)::\(.shared | join(\", \"))"' "$RUNNER_TEMP/collisions.json"
+            jq -r '.collisions[] | "- #\(.pr): \(.shared | join(", "))"' "$RUNNER_TEMP/collisions.json" >> "$GITHUB_STEP_SUMMARY"
+            jq -r '.collisions[] | "::notice title=File collision with PR #\(.pr)::\(.shared | join(", "))"' "$RUNNER_TEMP/collisions.json"
           else
             echo "no open PR shares a changed file with this PR" >> "$GITHUB_STEP_SUMMARY"
           fi
