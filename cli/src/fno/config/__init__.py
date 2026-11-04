@@ -2423,7 +2423,7 @@ class AgentsBlock(SweepKeys):
         falls back to the default (4.0 RAM floor, 20.0 disk floor, 90.0 swap
         ceiling)."""
         defaults = {"min_free_gb": 4.0, "min_free_disk_gb": 20.0}
-        return _finite_or(v, defaults.get(info.field_name, 90.0))
+        return _finite_or(v, defaults.get(info.field_name or "", 90.0))
 
     @field_validator("max_load_per_cpu", mode="before")
     @classmethod

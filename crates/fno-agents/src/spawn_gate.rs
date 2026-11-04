@@ -2444,7 +2444,7 @@ fn check_ram_floor(floor_gb: f64, max_swap_pct: f64) -> Result<(), Refusal> {
 /// Disk check: refuse a new build worker while the data volume holds less
 /// than `agents.min_free_disk_gb`. The refusal names the janitor; the daemon
 /// runs it off the spawn path, because a sweep deletes tens of GB and a
-/// foreground verb never waits on that. Hard like the memory axis: `--force`
+/// foreground command never waits on that. Hard like the memory axis: `--force`
 /// does not lift it. Shares the memory axis's exit code; the receipt reason
 /// `disk_floor` tells them apart.
 pub(crate) fn check_disk_floor(
