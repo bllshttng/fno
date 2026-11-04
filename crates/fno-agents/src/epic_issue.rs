@@ -61,13 +61,15 @@ fn checklist_rows<'a>(rows: &'a [Value], epic_id: &str) -> Vec<&'a Value> {
         .collect()
 }
 
+fn one_line(title: &str) -> String {
+    title.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// A title in issue-body markdown. It is private text going to a public
+/// page: `<` could open a marker or a tag, and `@name` would notify a
+/// stranger. An issue title is plain text, so it takes [`one_line`] only.
 fn clean_title(title: &str) -> String {
-    // A title is private text going to a public page: `<` could open a
-    // marker or a tag, and `@name` would notify a stranger.
-    title
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
+    one_line(title)
         .replace('<', "&lt;")
         .replace('@', "@\u{200b}")
 }
@@ -183,7 +185,7 @@ pub(crate) fn sync_epic(
         None => match find_issue(gh, id)? {
             Some(n) => (n, true),
             None => {
-                let title = clean_title(text(epic, "title"));
+                let title = one_line(text(epic, "title"));
                 let number = gh
                     .create_issue(repo, &title, &initial_body(epic, &checklist))
                     .map_err(|e| e.to_string())?;
@@ -361,8 +363,8 @@ mod tests {
     #[derive(Default)]
     struct Hub {
         bodies: Vec<String>,
+        titles: Vec<String>,
         creates: usize,
-        edits: usize,
     }
 
     struct FakeGh(Arc<Mutex<Hub>>);
@@ -380,11 +382,11 @@ mod tests {
                 ("issue", "create") => {
                     hub.creates += 1;
                     hub.bodies.push(arg("--body"));
+                    hub.titles.push(arg("--title"));
                     let url = format!("https://github.com/o/r/issues/{}\n", hub.bodies.len());
                     (0, url, String::new())
                 }
                 ("issue", "edit") => {
-                    hub.edits += 1;
                     let n: usize = args[2].parse().unwrap();
                     hub.bodies[n - 1] = arg("--body");
                     (0, String::new(), String::new())
@@ -439,7 +441,7 @@ mod tests {
     #[test]
     fn one_pass_opens_one_issue_with_a_line_per_public_child() {
         let hub = Arc::new(Mutex::new(Hub::default()));
-        let epic = epic(json!({}));
+        let epic = epic(json!({"title": "Ship Vec<T>  work"}));
         let rows = vec![
             epic.clone(),
             child("kid-1", "First", json!({"pr_number": 12})),
@@ -473,6 +475,9 @@ mod tests {
             "- [ ] First · @visitor-1 · #12\n- [x] Second · #9\n- [ ] Third · @owner"
         );
         assert!(!body.contains("Local only"), "{body}");
+        // The issue title is plain text; only the body copy is escaped.
+        assert_eq!(hub.lock().unwrap().titles[0], "Ship Vec<T> work");
+        assert!(body.contains("\"Ship Vec&lt;T> work\""), "{body}");
         // An epic whose children are all local opens nothing.
         let alone = sync_epic(&tracker(&hub), "o/r", &rows[..1], &epic, &[], None);
         assert_eq!(alone, Ok(None));
