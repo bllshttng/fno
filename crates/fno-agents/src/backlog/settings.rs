@@ -405,6 +405,278 @@ pub fn dispatch_commands_from_config() -> (Vec<String>, Vec<String>) {
     )
 }
 
+// ---------------------------------------------------------------------------
+// The settings-read receipt's `paths` fact set: a vendored loader replay.
+//
+// Production rule: fno-agents never links fno (the fno edge is a
+// dev-dependency, and the publish gate blocks a real one), so the walk the
+// Python loader ran re-authors here. Every helper names its canonical twin in
+// crates/fno/src/config_cli, and the unit test at the bottom pins this whole
+// projection against that loader across layered fixtures. Drift between the
+// two fails CI, which is the drift-detection the dual-implementation
+// inventory asks of a vendored copy.
+// ---------------------------------------------------------------------------
+
+/// The `paths.*` leaves the Python resolver consumes, bare-keyed in the
+/// receipt. All default to null, like the model.
+const PATH_KEYS: [&str; 15] = [
+    "worktrees_base",
+    "spaces_dir",
+    "retro_pending_dir",
+    "postmortems_dir",
+    "operator_lane",
+    "observer_reports_dir",
+    "memory_dir",
+    "ledger_json",
+    "inbox_path",
+    "hook_logs_dir",
+    "handoffs_dir",
+    "fleet_dir",
+    "evals_history",
+    "bus_dir",
+    "briefs_dir",
+];
+
+/// config_cli::canonical_repo_root's twin of the Python loader's
+/// `_canonical_root_from_gitfile`: the main working tree from a linked
+/// worktree's `.git` pointer file, no subprocess. None on a plain checkout.
+fn door_canonical_root(root: &std::path::Path) -> Option<PathBuf> {
+    let git = root.join(".git");
+    if git.is_dir() {
+        return None;
+    }
+    let text = std::fs::read_to_string(&git).ok()?;
+    for line in text.lines() {
+        if let Some(gitdir) = line.strip_prefix("gitdir:") {
+            let idx = gitdir.find("/.git/worktrees/")?;
+            return Some(PathBuf::from(gitdir[..idx].trim()));
+        }
+    }
+    None
+}
+
+/// config_cli::global_settings_path: FNO_GLOBAL_SETTINGS_PATH when set, else
+/// ~/.fno/settings.yaml.
+fn door_global_path() -> PathBuf {
+    match std::env::var_os("FNO_GLOBAL_SETTINGS_PATH") {
+        Some(v) if !v.is_empty() => PathBuf::from(v),
+        _ => match std::env::var_os("HOME") {
+            Some(home) => PathBuf::from(home).join(".fno").join("settings.yaml"),
+            None => PathBuf::from("/.fno/settings.yaml"),
+        },
+    }
+}
+
+/// config_cli::settings_yaml_locations + prefer_toml + candidate_paths: the
+/// ordered candidates, config.toml over its settings.yaml sibling per dir,
+/// canonical root second, global last; a FNO_CONFIG pin is the whole chain.
+fn door_candidates(root: &std::path::Path) -> Vec<PathBuf> {
+    let pin = std::env::var_os("FNO_CONFIG").filter(|v| !v.is_empty());
+    if let Some(pin) = pin {
+        return vec![PathBuf::from(pin)];
+    }
+    let mut yaml_locations = vec![root.join(".fno").join("settings.yaml")];
+    if std::env::var("FNO_NO_CANONICAL_CONFIG").as_deref() != Ok("1") {
+        if let Some(canonical) = door_canonical_root(root) {
+            let path = canonical.join(".fno").join("settings.yaml");
+            if !yaml_locations.contains(&path) {
+                yaml_locations.push(path);
+            }
+        }
+    }
+    yaml_locations.push(door_global_path());
+    let mut out: Vec<PathBuf> = Vec::new();
+    for path in yaml_locations {
+        let toml = path.with_file_name("config.toml");
+        if !out.contains(&toml) {
+            out.push(toml);
+        }
+        if !out.contains(&path) {
+            out.push(path);
+        }
+    }
+    out
+}
+
+/// config_cli::repo_root: FNO_REPO_ROOT, then git toplevel, then cwd.
+fn door_repo_root() -> PathBuf {
+    if let Some(pin) = std::env::var_os("FNO_REPO_ROOT") {
+        if !pin.is_empty() {
+            return PathBuf::from(pin);
+        }
+    }
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    if let Ok(out) = std::process::Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .current_dir(&cwd)
+        .output()
+    {
+        if out.status.success() {
+            let line = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if !line.is_empty() {
+                return PathBuf::from(line);
+            }
+        }
+    }
+    cwd
+}
+/// config_cli::deep_merge, byte for byte: the over layer wins per leaf, and
+/// a null in the over layer never wipes an object below it.
+fn door_deep_merge(base: &mut Value, over: &Value) {
+    match (base, over) {
+        (Value::Object(base_map), Value::Object(over_map)) => {
+            for (key, value) in over_map {
+                match base_map.get_mut(key) {
+                    Some(existing) if existing.is_object() && value.is_object() => {
+                        door_deep_merge(existing, value);
+                    }
+                    Some(existing) if existing.is_object() && value.is_null() => {}
+                    _ => {
+                        base_map.insert(key.clone(), value.clone());
+                    }
+                }
+            }
+        }
+        (slot, value) => *slot = value.clone(),
+    }
+}
+
+/// config_cli::unwrap_config_dict: a legacy top-level `config:` block lifts
+/// to the top level, its leaves winning over stray same-named keys.
+fn door_unwrap(raw: Value) -> Value {
+    let map = match raw.as_object() {
+        Some(map) => map.clone(),
+        None => return raw,
+    };
+    let wrapped = match map.get("config").and_then(|c| c.as_object()) {
+        Some(wrapped) => wrapped.clone(),
+        None => return raw,
+    };
+    let mut rest = Value::Object(map.into_iter().filter(|(k, _)| k != "config").collect());
+    door_deep_merge(&mut rest, &Value::Object(wrapped));
+    rest
+}
+
+/// config_cli::worktree_local_override against WORKTREE_LOCAL_KEYS (just
+/// "project.id"): the local file reduced to its allowlisted leaves.
+fn door_worktree_local(parsed: &Value) -> Option<Value> {
+    let project = parsed.get("project")?.as_object()?;
+    let id = project.get("id")?;
+    Some(serde_json::json!({ "project": { "id": id.clone() } }))
+}
+
+/// One parsed layer with the alias pass the Python loader ran per layer,
+/// reduced to the arm that touches the receipt's key set: a legacy
+/// config:-wrapped file's top-level `project.id` lifts into the wrapped
+/// block when the wrapped block has none (config_cli::alias_legacy_keys).
+fn door_layer(path: &std::path::Path) -> Value {
+    let mut doc = read_flat(path);
+    let (has_config, top_project_id) = {
+        let map = match doc.as_object() {
+            Some(map) => map,
+            None => return doc,
+        };
+        let has_config = map.get("config").map(|c| c.is_object()).unwrap_or(false);
+        let top_id = map
+            .get("project")
+            .and_then(|p| p.get("id"))
+            .filter(|v| !v.is_null())
+            .cloned();
+        (has_config, top_id)
+    };
+    if let (true, Some(id)) = (has_config, top_project_id) {
+        if let Some(config) = doc.get_mut("config").and_then(Value::as_object_mut) {
+            let cfg_project = config
+                .entry("project")
+                .or_insert_with(|| Value::Object(serde_json::Map::new()));
+            if let Some(slot) = cfg_project.as_object_mut() {
+                let absent = slot.get("id").map(|v| v.is_null()).unwrap_or(true);
+                if absent {
+                    slot.insert("id".to_string(), id);
+                }
+            }
+        }
+    }
+    doc
+}
+
+/// The aliased layers, highest priority first: existing parseable candidates
+/// only (config_cli::aliased_layers minus the readback warnings, which the
+/// receipt never needed).
+fn door_layers(root: &std::path::Path) -> Vec<(PathBuf, Value)> {
+    let mut out = Vec::new();
+    for path in door_candidates(root) {
+        if !path.is_file() {
+            continue;
+        }
+        let doc = door_layer(&path);
+        if doc.is_object() && !doc.as_object().unwrap().is_empty() {
+            out.push((path, doc));
+        }
+    }
+    out
+}
+/// The receipt's `paths` fact set: layered merge over the vendored walk,
+/// `config.local.toml` allowlist leaf layered in, envelope unwrapped, then
+/// the resolver's keys projected flat. No defaults here: an unset key reads
+/// null and the Python caller applies the model default (the fail-open
+/// contract - a refused read answers nulls, not guesses). `source` is the
+/// highest-priority layer that existed and parsed (the `loaded_from` fact).
+pub(crate) fn paths_facts(root: Option<&std::path::Path>) -> Value {
+    let root = match root {
+        Some(p) => p.to_path_buf(),
+        None => door_repo_root(),
+    };
+    let layers = door_layers(&root);
+    let mut merged = Value::Object(serde_json::Map::new());
+    for (_path, parsed) in layers.iter().rev() {
+        door_deep_merge(&mut merged, parsed);
+    }
+    if let Some(top) = door_candidates(&root).first().cloned() {
+        if let Some(local) = top.parent().map(|dir| dir.join("config.local.toml")) {
+            if local.is_file() && !local.is_symlink() {
+                let parsed = read_flat(&local);
+                if let Some(layer) = door_worktree_local(&parsed) {
+                    door_deep_merge(&mut merged, &layer);
+                }
+            }
+        }
+    }
+    let merged = door_unwrap(merged);
+    let at = |dotted: &str| -> Value {
+        dotted
+            .split('.')
+            .try_fold(&merged, |node, part| node.get(part))
+            .cloned()
+            .unwrap_or(Value::Null)
+    };
+    let mut out = serde_json::Map::new();
+    out.insert(
+        "source".to_string(),
+        layers
+            .first()
+            .map(|(path, _)| Value::String(path.to_string_lossy().into_owned()))
+            .unwrap_or(Value::Null),
+    );
+    out.insert("state_dir".to_string(), at("state_dir"));
+    out.insert("project_id".to_string(), at("project.id"));
+    out.insert("obsidian_enabled".to_string(), at("obsidian.enabled"));
+    out.insert("obsidian_vault".to_string(), at("obsidian.vault"));
+    out.insert(
+        "post_merge_parking_lot_path".to_string(),
+        at("post_merge.parking_lot_path"),
+    );
+    out.insert(
+        "post_merge_maintainer_marker".to_string(),
+        at("post_merge.maintainer_marker"),
+    );
+    for key in PATH_KEYS {
+        let value = at(&format!("paths.{key}"));
+        out.insert(key.to_string(), value);
+    }
+    Value::Object(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -524,6 +796,141 @@ mod tests {
         match prior {
             Some(v) => std::env::set_var("FNO_CONFIG", v),
             None => std::env::remove_var("FNO_CONFIG"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod paths_facts_tests {
+    use super::*;
+
+    /// The receipt's configured values must equal the golden-pinned loader's
+    /// (fno::config_cli::model::validate_layer_list) at every key the fixture
+    /// sets, unset keys must read null (the Python caller owns defaults), and
+    /// a refused config must fail open to nulls. This is the drift gate for
+    /// the vendored replay above: if the two walks diverge, CI fails here.
+    #[test]
+    fn the_receipt_projection_matches_the_config_cli_loader() {
+        let _guard = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        let dot = repo.join(".fno");
+        std::fs::create_dir_all(&dot).unwrap();
+        // Highest-priority layer (config.toml): the flat shape.
+        std::fs::write(
+            dot.join("config.toml"),
+            "[paths]\ninbox_path = \"~/roadmap-inbox\"\n\
+             [obsidian]\nvault = \"myvault\"\n\
+             [post_merge]\nparking_lot_path = \"project-lot.md\"\n\
+             maintainer_marker = \"#jc\"\n\n\
+             [project]\nid = \"proj-one\"\n",
+        )
+        .unwrap();
+        // Lower-priority layer (settings.yaml): the legacy config: envelope
+        // (the unwrap must lift it or state_dir reads null).
+        std::fs::write(
+            dot.join("settings.yaml"),
+            "schema_version: 1\nconfig:\n  state_dir: /tmp/door-state/\n  obsidian:\n    enabled: true\n",
+        )
+        .unwrap();
+        let empty_global = dir.path().join("empty-global.yaml");
+        std::fs::write(&empty_global, "").unwrap();
+        let mut prior: Vec<(String, Option<std::ffi::OsString>)> = Vec::new();
+        for key in [
+            "FNO_CONFIG",
+            "FNO_GLOBAL_SETTINGS_PATH",
+            "FNO_REPO_ROOT",
+            "FNO_STATE_DIR",
+        ] {
+            prior.push((key.to_string(), std::env::var_os(key)));
+        }
+        for (key, _) in &prior {
+            std::env::remove_var(key);
+        }
+        std::env::set_var("FNO_GLOBAL_SETTINGS_PATH", &empty_global);
+        std::env::set_var("FNO_REPO_ROOT", &repo);
+
+        let door = paths_facts(None);
+        let expected: &[(&str, Value)] = &[
+            (
+                "source",
+                Value::String(dot.join("config.toml").to_string_lossy().into_owned()),
+            ),
+            ("state_dir", Value::String("/tmp/door-state/".to_string())),
+            ("project_id", Value::String("proj-one".to_string())),
+            ("obsidian_enabled", Value::Bool(true)),
+            ("obsidian_vault", Value::String("myvault".to_string())),
+            (
+                "post_merge_parking_lot_path",
+                Value::String("project-lot.md".to_string()),
+            ),
+            (
+                "post_merge_maintainer_marker",
+                Value::String("#jc".to_string()),
+            ),
+            ("inbox_path", Value::String("~/roadmap-inbox".to_string())),
+        ];
+        for (key, want) in expected {
+            assert_eq!(door.get(*key), Some(want), "door key {key}");
+        }
+        // Unset keys read null (the model defaults live on the Python side).
+        for key in ["fleet_dir", "evals_history"] {
+            assert_eq!(door.get(*key), Some(&Value::Null), "unset key {key}");
+        }
+
+        // The loader oracle over the same layers: every value the fixture
+        // sets must match the door at the same key.
+        let layers = door_layers(&repo);
+        let mut merged = Value::Object(serde_json::Map::new());
+        for (_path, parsed) in layers.iter().rev() {
+            door_deep_merge(&mut merged, parsed);
+        }
+        let outcome = fno::config_cli::model::validate_layer_list(&layers, true, &|_| {
+            "unreadable".to_string()
+        });
+        let validated = outcome.result.expect("fixture validates");
+        let at = |dotted: &str| -> Value {
+            dotted
+                .split('.')
+                .try_fold(&validated, |node, part| node.get(part))
+                .cloned()
+                .unwrap_or(Value::Null)
+        };
+        for (key, dotted) in [
+            ("state_dir", "state_dir"),
+            ("project_id", "project.id"),
+            ("obsidian_enabled", "obsidian.enabled"),
+            ("obsidian_vault", "obsidian.vault"),
+            ("post_merge_parking_lot_path", "post_merge.parking_lot_path"),
+            (
+                "post_merge_maintainer_marker",
+                "post_merge.maintainer_marker",
+            ),
+            ("inbox_path", "paths.inbox_path"),
+        ] {
+            assert_eq!(
+                door.get(*key),
+                Some(&at(dotted)),
+                "door vs loader at {dotted}"
+            );
+        }
+
+        // A pinned config that fails to parse: the door fails open to nulls.
+        let garbage = dir.path().join("garbage.toml");
+        std::fs::write(&garbage, "not [valid toml =".repeat(1)).unwrap();
+        std::env::set_var("FNO_CONFIG", &garbage);
+        let door = paths_facts(None);
+        assert_eq!(door.get("source"), Some(&Value::Null));
+        assert_eq!(door.get("state_dir"), Some(&Value::Null));
+        assert_eq!(door.get("inbox_path"), Some(&Value::Null));
+
+        for (key, value) in prior {
+            match value {
+                Some(v) => std::env::set_var(&key, v),
+                None => std::env::remove_var(&key),
+            }
         }
     }
 }
