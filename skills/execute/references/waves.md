@@ -209,8 +209,7 @@ fi
 # row and stays unfiltered.
 WORKER_BAND="${FNO_WORKER_BAND:-}"
 if [[ -z "$WORKER_BAND" && -n "$NODE_ID" && -f ".fno/join-briefs/${NODE_ID}.md" ]]; then
-    WORKER=$(fno agents whoami 2>/dev/null | python3 -c \
-        "import json,sys; print(json.load(sys.stdin).get('name') or '')" 2>/dev/null || true)
+    WORKER=$(fno agents registry whoami 2>/dev/null | jq -r '.name // ""' 2>/dev/null || true)
     if [[ -n "$WORKER" ]]; then
         WORKER_BAND=$(awk -F'|' -v w="$WORKER" \
             '{cell = tolower($2); gsub(/ /, "", cell); want = tolower(w); gsub(/ /, "", want); if (cell == want && cell != "") {gsub(/ /, "", $3); print $3; exit}}' \
