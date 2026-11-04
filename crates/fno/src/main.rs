@@ -1556,13 +1556,19 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
         return Role::DoPr;
     }
     // The whole `do resume` group claims natively (the Python forwarder and
-    // its only child group die in this port); the tail rides byte-verbatim
-    // to the receipts door, which owns its own write/validate/show routing
-    // and refusals, and answers the bare group with its usage.
+    // its only child group die in this port); the tail rides to the receipts
+    // door, which owns its own write/validate/show routing and refusals, and
+    // answers the bare group with its usage. The leaf spelling's `receipt`
+    // token names the door, not the door's argv, so it drops from the tail.
     if args.first().and_then(|a| a.to_str()) == Some("do")
         && args.get(1).and_then(|a| a.to_str()) == Some("resume")
     {
-        return Role::DoResumeReceipt(args[2..].to_vec());
+        let skip = if args.get(2).and_then(|a| a.to_str()) == Some("receipt") {
+            3
+        } else {
+            2
+        };
+        return Role::DoResumeReceipt(args[skip..].to_vec());
     }
     // The bare `fno pr` legacy spelling claims natively too: the wheel's
     // hidden lazy entry points at the deleted Python pr_app, so a claim here
