@@ -353,25 +353,25 @@ mod tests {
     fn pr_create_needs_a_closure_marker_on_a_node_branch() {
         let dir = tempfile::tempdir().unwrap();
         let fake = Fake {
-            branch: Some("feature/x-c166-port".into()),
-            node_ids: vec!["x-c166".into()],
+            branch: Some("feature/x-aaaa-port".into()),
+            node_ids: vec!["x-aaaa".into()],
             ..Fake::default()
         };
         let c = ctx(dir.path(), &fake);
         let verdict = |cmd: &str| judge_with(&bash(cmd), &c);
         let refusal = verdict("gh pr create --title t --body \"$BODY\"").expect("refused");
         assert!(
-            refusal.contains("x-c166") && refusal.contains("FNO_PR_CLOSURE_OK=1"),
+            refusal.contains("x-aaaa") && refusal.contains("FNO_PR_CLOSURE_OK=1"),
             "{refusal}"
         );
         assert_eq!(verdict("FNO_PR_CLOSURE_OK=1 gh pr create -t t"), None);
-        assert_eq!(verdict("gh pr create -t t --body \"Fixes x-c166\""), None);
+        assert_eq!(verdict("gh pr create -t t --body \"Fixes x-aaaa\""), None);
         assert!(verdict("gh pr create -t t --body \"FNO_PR_CLOSURE_OK=1\"").is_some());
         // A body file is judged on its own trailer; a missing one allows.
         std::fs::write(dir.path().join("body.md"), "no trailer").unwrap();
         let denied = verdict("gh pr create -t t --body-file body.md").expect("refused");
         assert!(denied.contains("the body file body.md exists"), "{denied}");
-        std::fs::write(dir.path().join("ok.md"), "Fixes x-c166\n").unwrap();
+        std::fs::write(dir.path().join("ok.md"), "Fixes x-aaaa\n").unwrap();
         assert_eq!(verdict("gh pr create -t t --body-file ok.md"), None);
         assert_eq!(verdict("gh pr create -t t -F missing.md"), None);
         // A file another segment writes first is not judged stale.
