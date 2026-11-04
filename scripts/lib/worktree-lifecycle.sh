@@ -397,35 +397,42 @@ _wt_pids() {
 # "__MISSING__" (cwd no longer exists on disk - the final-pass mode). This
 # closes the pr-watch loop: the sweep that archives a pr-merged-<n> worktree
 # is the same sweep that retires its now-dangling job record.
+# Lexical absolute path, like os.path.abspath: no symlink resolution, `.`
+# and `..` folded, no trailing slash.
+_wt_abspath() {
+    local p="$1" part out=""
+    [[ "$p" == /* ]] || p="$PWD/$p"
+    local IFS=/
+    for part in $p; do
+        case "$part" in
+            ''|.) ;;
+            ..) out="${out%/*}" ;;
+            *) out="$out/$part" ;;
+        esac
+    done
+    printf '%s' "${out:-/}"
+}
+
 _reap_job_candidates() {
-    local selector="$1" canonical="$2"
-    command -v python3 >/dev/null 2>&1 || return 0
-    python3 - "$selector" "$canonical" <<'PY' 2>/dev/null
-import glob, json, os, sys
-selector, canonical = sys.argv[1], sys.argv[2]
-DEAD = {"done", "stopped", "failed"}
-canon = os.path.abspath(canonical) if canonical else ""
-for sj in glob.glob(os.path.expanduser("~/.claude/jobs/*/state.json")):
-    try:
-        with open(sj) as f:
-            d = json.load(f)
-    except Exception:
-        continue
-    if d.get("state") not in DEAD:
-        continue
-    cwd = d.get("cwd") or ""
-    if not cwd:
-        continue
-    acwd = os.path.abspath(cwd)
-    if canon and acwd == canon:          # never reap a job pointed at canonical
-        continue
-    if selector == "__MISSING__":
-        if os.path.isdir(cwd):
+    local selector="$1" canonical="$2" sj cwd acwd canon=""
+    command -v jq >/dev/null 2>&1 || return 0
+    [[ -n "$canonical" ]] && canon="$(_wt_abspath "$canonical")"
+    for sj in "$HOME"/.claude/jobs/*/state.json; do
+        [[ -f "$sj" ]] || continue
+        cwd="$(jq -r 'select(type == "object" and (.state | IN("done", "stopped", "failed")))
+            | .cwd | select(type == "string" and . != "")' "$sj" 2>/dev/null)" || continue
+        [[ -n "$cwd" ]] || continue
+        acwd="$(_wt_abspath "$cwd")"
+        # never reap a job pointed at canonical
+        [[ -n "$canon" && "$acwd" == "$canon" ]] && continue
+        if [[ "$selector" == "__MISSING__" ]]; then
+            [[ -d "$cwd" ]] && continue
+        elif [[ "$acwd" != "$(_wt_abspath "$selector")" ]]; then
             continue
-    elif acwd != os.path.abspath(selector):
-        continue
-    print(os.path.basename(os.path.dirname(sj)))
-PY
+        fi
+        sj="${sj%/state.json}"
+        printf '%s\n' "${sj##*/}"
+    done
 }
 
 # Best-effort retire the dead job records for a selector. Never fails the sweep
@@ -1015,13 +1022,14 @@ case "${1:-status}" in
         # Cross-references the agents registry (real session names + measured
         # live/exited status) instead of `.fno/target-state.md`'s owner_pid,
         # which names the short-lived `fno do target init` CLI invocation and
-        # reads as dead within seconds of session start - see
-        # scripts/lib/worktree-status.py for the verified specimen.
-        if command -v python3 >/dev/null 2>&1; then
-            python3 "${_WT_LIFECYCLE_DIR}/worktree-status.py" --repo "$(pwd)" "$@"
+        # reads as dead within seconds of session start
+        # (crates/fno-agents/src/worktree/status.rs).
+        _wt_status_bin="${FNO_AGENTS_BIN:-$(command -v fno-agents 2>/dev/null)}"
+        if [[ -n "$_wt_status_bin" && -x "$_wt_status_bin" ]]; then
+            "$_wt_status_bin" worktree-status --repo "$(pwd)" "$@"
         else
-            echo "worktree status: python3 not found" >&2
-            exit 1
+            echo "worktree status: the fno-agents binary was not found; run \`fno doctor update --rust\`." >&2
+            exit 127
         fi
         ;;
 

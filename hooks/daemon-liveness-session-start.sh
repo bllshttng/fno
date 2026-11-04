@@ -26,23 +26,16 @@ BIN="$(fno_agents_bin "$ROOT")"
 [[ -z "$BIN" ]] && exit 0
 
 SOCK="${FNO_AGENTS_HOME:-${HOME:-}/.fno/agents}/supervisor.sock"
-DOWN="$(python3 - "$SOCK" <<'PYEOF'
-import socket
-import sys
-
-path = sys.argv[1]
-s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-s.settimeout(1)
-try:
-    s.connect(path)
-except (FileNotFoundError, ConnectionRefusedError):
-    print("down")
-except OSError:
-    pass
-finally:
-    s.close()
-PYEOF
-)"
+# A missing socket file reads down with no connect at all. A socket file
+# that refuses the connect is a stale one a dead daemon left behind; `nc -U`
+# connects, sends nothing (stdin is /dev/null) and closes. No nc says
+# nothing, like any other probe failure.
+DOWN=""
+if [[ ! -e "$SOCK" ]]; then
+    DOWN="down"
+elif [[ -S "$SOCK" ]] && command -v nc >/dev/null 2>&1; then
+    nc -U -w 1 "$SOCK" </dev/null >/dev/null 2>&1 || DOWN="down"
+fi
 
 [[ "$DOWN" == "down" ]] || exit 0
 

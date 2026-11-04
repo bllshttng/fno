@@ -78,6 +78,18 @@ EOF
   : > "$AGENTSLOG"
   cat > "${bindir}/fno-agents" <<EOF
 #!/usr/bin/env bash
+if [[ "\${1:-} \${2:-}" == "hook pr-attribution" ]]; then
+  # A built binary lexes for real. Without one, strip quoted spans and look
+  # for an unquoted operator: enough for the cases below.
+  real="${REPO_ROOT}/crates/fno-agents/target/debug/fno-agents"
+  [[ -x "\$real" ]] && answer="\$("\$real" hook pr-attribution "\$3" 2>/dev/null)" && [[ -n "\$answer" ]] && { echo "\$answer"; exit 0; }
+  cmd="\${3//\\\\\$'\n'/}"
+  bare="\$(printf '%s' "\$cmd" | sed -E "s/'[^']*'//g; s/\"[^\"]*\"//g")"
+  if [[ "\$bare" == "gh pr create"* && "\$bare" != *[\;\&\|\(\)\\\`]* && "\$bare" != *\$'\n'* ]]; then echo bare
+  elif [[ "\$cmd" == *"gh pr create"* ]]; then echo compound
+  else echo other; fi
+  exit 0
+fi
 if [[ "\${1:-} \${2:-}" == "do pr" ]]; then
   echo "\$*" >> "${CALLLOG}"
   [[ "\${3:-}" == "bind-created" ]] || exit 0

@@ -65,7 +65,7 @@ Input ("feature" or path/to/plan)
 | Aspect | `flat` (default) | `waves` (alias `/fno:operator`) |
 |--------|------------------|--------------------|
 | Weight | Lightweight, in-session | Heavy, multi-agent |
-| Orchestration | Reads 00-INDEX.md, runs waves inline | Spawns subagent per task via orchestrator.py |
+| Orchestration | Reads 00-INDEX.md, runs waves inline | Spawns subagent per task via `fno-agents wave ready` |
 | Resume | `--resume`, `--retry <id>` | STATE.md based |
 | Best for | Small-to-medium plans | Large plans with parallel waves |
 
@@ -471,33 +471,25 @@ Read or write any key with `fno config get|set|unset <key>` (atomic, schema-chec
 }
 ```
 
-## Orchestrator CLI
+## Wave CLI
 
-The operator skill includes a Python orchestrator for wave-based execution.
-
-**File**: `skills/execute/orchestrator.py`
+`fno-agents wave` serves the wave commands `/execute waves` calls. The code is in `crates/fno-agents/src/wave_ready.rs`.
 
 ```bash
-# Show help
-python skills/execute/orchestrator.py --help
+# Print the dispatchable tasks as JSON
+fno-agents wave ready path/to/plan.md [--state STATE.md] [--node <id>] [--band <band>]
 
-# Execute a plan
-python skills/execute/orchestrator.py path/to/00-INDEX.md
+# Emit a task boundary event and settle the task claim
+fno-agents wave emit-boundary task_done --task 2.1 --outcome SUCCESS
 
-# Run a single agent with tags
-python skills/execute/orchestrator.py --agent "Build React component" --tags ui,frontend
+# Check PRODUCT.md before an impeccable dispatch
+fno-agents wave product-gate --repo . --plan path/to/plan.md --stages craft,polish
+
+# Print the project constraints section for a dispatch prompt
+fno-agents wave constraints
 ```
 
-### Agent Routing
-
-The orchestrator routes tasks to specialized agents based on keywords in the task description:
-
-| Keywords | Routed Agent |
-|----------|-------------|
-| frontend, react, ui, component, tailwind | `frontend-executor` (impeccable pipeline) |
-| backend, api, supabase, auth, database | `archer` (default) |
-| devops, docker, ci/cd, deploy, terraform | `archer` (default) |
-| etl, pipeline, data, analytics | `archer` (default) |
+Executor choice is in [executor-resolution](../skills/execute/references/executor-resolution.md).
 
 ---
 

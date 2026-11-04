@@ -2510,7 +2510,7 @@ fn a_role_chat_approval_clears_the_paint_hold_only_at_its_head() {
 }
 
 #[test]
-fn a_chat_attested_law_row_or_a_board_decision_clears_the_paint_hold_at_its_head() {
+fn a_chat_attested_law_row_or_a_board_answer_clears_the_paint_hold_at_its_head() {
     let tmp = std::env::temp_dir().join(format!("xf5ec-gate-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&tmp);
     std::fs::create_dir_all(tmp.join(".fno")).unwrap();
@@ -2558,6 +2558,22 @@ fn a_chat_attested_law_row_or_a_board_decision_clears_the_paint_hold_at_its_head
         &format!("Approved: PR 8 at {head}"),
         "user in chat: Approved",
     ));
+    assert!(!law_clears(&fake, &head));
+
+    // The question board records the user's own answer as operator law in
+    // the law lane (attested_by question-board): the question text names
+    // the PR and the abbreviated head it asked about, the answer approves.
+    let board_law = |answer: &str| {
+        format!(
+            r#"{{"decisions":[{{"decision_id":"d-board-law","subject":"x-paint","authority_source":"operator","attested_by":"question-board","lifecycle":"live","lane":"law","question_id":"q-1","trace":{{"comms":"question","recipient_kind":"user"}},"question":"visual approval PR 7 at aaaaaaaaaa: which look?","decision":"{answer}"}}]}}"#
+        )
+        .into_bytes()
+    };
+    fake.decisions_stdout = Some(board_law("Approve PR 7 at aaaaaaaaaa as shot."));
+    assert!(law_clears(&fake, &head));
+    // A push voids it, and a decline is an answer that holds.
+    assert!(!law_clears(&fake, &pushed));
+    fake.decisions_stdout = Some(board_law("Hold for changes"));
     assert!(!law_clears(&fake, &head));
 
     // A board answer lands as a node decision whose question names the PR

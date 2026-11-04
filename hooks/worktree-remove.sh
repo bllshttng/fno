@@ -29,14 +29,7 @@ if [[ -f "$_CBD_LIB_DIR/cargo-build-dir.sh" ]]; then
 fi
 
 INPUT=$(cat)
-WORKTREE_PATH=$(printf '%s' "$INPUT" | python3 -c "
-import sys, json
-try:
-    data = json.load(sys.stdin)
-    print(data.get('worktree_path', ''))
-except Exception:
-    print('')
-" 2>/dev/null || echo "")
+WORKTREE_PATH=$(printf '%s' "$INPUT" | jq -r '.worktree_path // empty' 2>/dev/null || echo "")
 
 [[ -n "$WORKTREE_PATH" ]] || exit 0
 
