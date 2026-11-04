@@ -541,13 +541,14 @@ mod tests {
 
     struct FakeJudge {
         hurdle_passes: bool,
+        principle_passes: bool,
         fault: Option<String>,
     }
 
     impl super::super::rubric::Judge for FakeJudge {
         fn panel(
             &self,
-            _ask: &super::super::rubric::RubricAsk,
+            ask: &super::super::rubric::RubricAsk,
         ) -> Vec<super::super::rubric::LaneVerdict> {
             let cell = |lane: &str, passed: bool| super::super::rubric::LaneVerdict {
                 lane: lane.into(),
@@ -564,7 +565,11 @@ mod tests {
                     },
                 ];
             }
-            vec![cell("zai", self.hurdle_passes), cell("codex", true)]
+            let zai_passes = match ask.criterion.tag {
+                super::super::bank::RubricTag::Hurdle => self.hurdle_passes,
+                super::super::bank::RubricTag::Principle => self.principle_passes,
+            };
+            vec![cell("zai", zai_passes), cell("codex", true)]
         }
     }
 
@@ -574,6 +579,7 @@ mod tests {
         std::fs::write(dir.path().join("w.md"), "action: crates/x\n").unwrap();
         let judge = FakeJudge {
             hurdle_passes: false,
+            principle_passes: true,
             fault: None,
         };
         let r = grade_rubric(
@@ -598,6 +604,7 @@ mod tests {
         // A failing principle drops one cell: 3 of 4 clean cells pass.
         let judge = FakeJudge {
             hurdle_passes: true,
+            principle_passes: false,
             fault: None,
         };
         let r = grade_rubric(
@@ -612,6 +619,7 @@ mod tests {
         // AC2-EDGE: a faulting judge is a missing result, never a pass.
         let judge = FakeJudge {
             hurdle_passes: true,
+            principle_passes: true,
             fault: Some("timed out".into()),
         };
         let r = grade_rubric(
