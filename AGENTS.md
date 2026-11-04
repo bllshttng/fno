@@ -55,6 +55,7 @@ footnote/
 - **Worktrees:** worktree-first for all repo work. `claude --worktree <name>` is intercepted by `hooks/worktree-setup.sh`. After creation run `bash scripts/setup/setup-worktree.sh`. Full contract: [docs/architecture/worktree-mechanics.md](docs/architecture/worktree-mechanics.md) (Placement).
 - **Search:** prefer `rg` / Grep over `grep -r` (descends into nested worktrees). Scope any `grep -r` to a path. Load-bearing sweep: `RIPGREP_CONFIG_PATH= rg -uu`, never a bare `rg -uu` (`-u` ignores files, not globs).
 - **Prose style:** a paragraph is ONE physical line. A newline starts the next block. House style, and the gate: [docs/style-rules.md](docs/style-rules.md).
+- **Flags, not env prefixes:** agents invoke `fno do <command> --flag`, never `ENV_VAR=x fno do <command>`. A knob with only an env var gets its missing flag filed.
 - **File budget:** a file over 5,000 lines is shrink-only. `cli/src/fno` bars new Python (use `crates/`); an edit is a port, deletion or lead-approved blocking-bug fix, no new surface, enforced by `scripts/ci/check-file-budget.sh` at push.
 - **Large files:** a source file over 1,000 lines gets read the exact range, edit, re-read, and a test count proved with `rg -c '#\[test\]'` (or `def test_`) before and after.
 - **Test value:** Run only changed-file tests. Push and let CI gate. New tests pass test-audit and replace tests guarding no distinct contract. The suite is shrink-only at a net cap of 6 (`fno-agents test-delta --max-net 6`). pr create refuses a code PR with no cut and no `Audited owners:` line.

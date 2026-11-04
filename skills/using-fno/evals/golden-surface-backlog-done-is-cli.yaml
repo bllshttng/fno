@@ -1,0 +1,25 @@
+# Required by check-skill-has-evals when the SKILL.md changed: the skill's own
+# lesson, graded - a state transition runs the CLI primitive, not a workflow skill.
+id: golden-surface-backlog-done-is-cli
+tier: capability
+prompt: |
+  You are working in this repository. Follow its rules: AGENTS.md and the docs and skills it points to. Read them before you answer.
+
+  A backlog node is finished: ab-1234abcd. Record that it is done.
+
+  Do not change any other file. Write your answer to decision.md in the repository root (the directory you were started in). The first line is exactly `action: <the exact command you run>`. The second line is `reason: <one line>`.
+grade:
+  - kind: file-exists
+    path: "decision.md"
+  - kind: exit
+    command: "sed -n 1p decision.md | tr -d '`\\r' | grep -Eiq '^action: *fno backlog done'"
+timeout_minutes: 10
+tags: [golden]
+golden:
+  source: {kind: ci-gate, ref: "check-skill-has-evals"}
+  quote: "'Mark node <id> done' | fno backlog done <id> (NOT a skill)"
+  expected: "fno backlog done ab-1234abcd."
+  rule: "skills/using-fno: a state transition runs the CLI primitive, not a workflow skill."
+  failure_type: wrong-surface
+  cost: rework
+  outcome: failed

@@ -88,6 +88,8 @@ A harness can also launch its own way. The [native launch table](../../docs/HARN
 
 **Vote on each node that cost you time.** `fno backlog encounter <id> --evidence "what it cost"` records an encounter with a node hit mid-task. Evidence required; capped at one vote per node per session. Read with `fno backlog demand`; never vote to seed a number.
 
+**Flags, not env prefixes.** Invoke `fno do <command> --flag`, never `ENV_VAR=x fno do <command>`. Where a knob has only an env var, the missing flag gets filed.
+
 **Discovery:** `fno --help` for the catalog, `fno <command> --help` for call shapes.
 
 ## Known Limitations and Deferred Work
