@@ -131,6 +131,10 @@ fn tagged_crate_targets(root: &Path) -> Vec<PathBuf> {
     // Tagged by CACHEDIR.TAG, never name-matched: cli/src/fno/target and
     // friends are source dirs (a name-based sweep deleted 66 of them once).
     let mut found = Vec::new();
+    let root_target = root.join("target");
+    if root_target.join("CACHEDIR.TAG").is_file() {
+        found.push(root_target);
+    }
     if let Ok(entries) = std::fs::read_dir(root.join("crates")) {
         for entry in entries.flatten() {
             let target = entry.path().join("target");
@@ -413,6 +417,40 @@ fn untracked_worktree_targets() -> Vec<PathBuf> {
                 continue;
             }
             found.extend(tagged_crate_targets(&path));
+        }
+    }
+    found
+}
+
+fn done_node_worktree_targets() -> Vec<PathBuf> {
+    // Cargo output under a REGISTERED worktree whose node reads done or
+    // superseded, in every repo under ~/.fno/worktrees (the other lane sees
+    // only unregistered trees of the current repo). The done-node reap gate
+    // decides: no live claim, no live session, past the grace window, no
+    // conflicts. A tree it holds (dirty, open node) keeps its target/. The
+    // git probes run only for trees that carry a tagged target.
+    let mut found = Vec::new();
+    let Ok(repos) = std::fs::read_dir(dirs_home().join(".fno/worktrees")) else {
+        return found;
+    };
+    for repo in repos.flatten() {
+        let Ok(trees) = std::fs::read_dir(repo.path()) else {
+            continue;
+        };
+        for tree in trees.flatten() {
+            let path = tree.path();
+            if !path.join(".git").exists() {
+                continue;
+            }
+            let targets = tagged_crate_targets(&path);
+            if targets.is_empty() {
+                continue;
+            }
+            let verdict =
+                crate::worktree_reapable::reapable_opts(&path.to_string_lossy(), false, true);
+            if verdict.reapable && verdict.reason == "done-node" {
+                found.extend(targets);
+            }
         }
     }
     found
@@ -944,6 +982,7 @@ fn run_reclaim_lanes(
         Lane::new("leaked_test_homes", leaked_test_homes()),
         Lane::new("stale_test_scratch", stale_test_scratch()),
         Lane::new("untracked_worktree_targets", untracked_worktree_targets()),
+        Lane::new("done_node_worktree_targets", done_node_worktree_targets()),
     ];
     for lane in &mut lanes {
         lane.bytes = lane.paths.iter().map(|p| tree_bytes(p)).sum();
