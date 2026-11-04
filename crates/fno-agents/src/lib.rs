@@ -108,6 +108,8 @@ pub mod census;
 pub mod census_reads;
 pub mod chats;
 pub mod check_supersession;
+pub mod chokepoint;
+pub mod chokepoint_events;
 pub mod ci_cadence;
 pub mod ci_front;
 pub mod ci_tier;

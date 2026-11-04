@@ -826,11 +826,7 @@ mod tests {
             })
             .to_string()
         };
-        let ago = |days: i64| {
-            (chrono::Utc::now() - chrono::Duration::days(days))
-                .format("%Y-%m-%dT%H:%M:%SZ")
-                .to_string()
-        };
+        let ago = |days: i64| (chrono::Utc::now() - chrono::Duration::days(days)).to_rfc3339();
         let mut text = span("r-a", "block", &ago(1));
         text.push('\n');
         text.push_str(&span("r-a", "warn", &ago(2)));
