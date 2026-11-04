@@ -826,11 +826,13 @@ mod tests {
             })
             .to_string()
         };
-        let mut text = span("r-a", "block", "2026-10-29T00:00:00Z");
+        // Relative to now: fixed dates age out of the 7d window.
+        let days_ago = |d: i64| (chrono::Utc::now() - chrono::Duration::days(d)).to_rfc3339();
+        let mut text = span("r-a", "block", &days_ago(1));
         text.push('\n');
-        text.push_str(&span("r-a", "warn", "2026-10-28T00:00:00Z"));
+        text.push_str(&span("r-a", "warn", &days_ago(2)));
         text.push('\n');
-        text.push_str(&span("r-b", "warn", "2026-10-20T00:00:00Z"));
+        text.push_str(&span("r-b", "warn", &days_ago(14)));
         text.push('\n');
         std::fs::write(&journal, text).unwrap();
 
