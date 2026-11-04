@@ -34,6 +34,7 @@ fn main() {
     sync_module_copy("live_store_fence");
     sync_module_copy("role_migration");
     sync_module_copy("store_conn");
+    sync_module_copy("chokepoint");
     sync_module_copy("otel_read");
     sync_module_copy("registry_read");
     sync_module_copy("effect_map");

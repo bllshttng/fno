@@ -3396,17 +3396,11 @@ pub(crate) fn lock_path(path: &Path) -> PathBuf {
 /// Registry readers and writers use this one path across languages; per-file
 /// state records continue to use [`lock_path`].
 /// Open (creating if needed) the lock sidecar and take an exclusive advisory
-/// lock, blocking until acquired. The returned `File` holds the lock until it
-/// is unlocked or dropped.
-pub(crate) fn acquire_exclusive(lock_file: &Path) -> Result<File, StateError> {
-    let file = OpenOptions::new()
-        .create(true)
-        .read(true)
-        .write(true)
-        .truncate(false)
-        .open(lock_file)?;
-    file.lock()?;
-    Ok(file)
+/// lock, waiting at most the registry-state row's bound. The returned guard
+/// holds the lock until it is unlocked or dropped.
+pub(crate) fn acquire_exclusive(lock_file: &Path) -> Result<crate::chokepoint::Held, StateError> {
+    crate::chokepoint::take(&crate::chokepoint::REGISTRY_STATE, lock_file)
+        .map_err(|refused| StateError::Io(refused.into()))
 }
 
 /// Try to take the exclusive sidecar lock without interrupting startup
@@ -3432,18 +3426,9 @@ pub(crate) fn try_lock_path_exclusive(path: &Path) -> Result<Option<File>, State
 /// Open (creating if needed) the lock sidecar and take a shared advisory lock,
 /// blocking until acquired. Multiple readers share; an exclusive writer
 /// excludes them. Same sidecar target as [`acquire_exclusive`].
-fn acquire_shared(lock_file: &Path) -> Result<File, StateError> {
-    if let Some(parent) = lock_file.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let file = OpenOptions::new()
-        .create(true)
-        .read(true)
-        .write(true)
-        .truncate(false)
-        .open(lock_file)?;
-    file.lock_shared()?;
-    Ok(file)
+fn acquire_shared(lock_file: &Path) -> Result<crate::chokepoint::Held, StateError> {
+    crate::chokepoint::take_shared(&crate::chokepoint::REGISTRY_STATE, lock_file)
+        .map_err(|refused| StateError::Io(refused.into()))
 }
 
 fn read_json<T: for<'de> Deserialize<'de>>(mut file: &File) -> Result<T, StateError> {

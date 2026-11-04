@@ -10,6 +10,7 @@ crates/fno-agents/src/event_store/events_schema.json	cli/src/fno/events/schema.y
 crates/fno/src/notify_dispatch.rs	crates/fno-agents/src/notify_dispatch.rs	cargo build --manifest-path crates/fno-agents/Cargo.toml
 crates/fno/src/event_store/events_schema.json	crates/fno-agents/src/event_store/events_schema.json	FNO_SYNC_EVENTS_SCHEMA=1 cargo build --manifest-path crates/fno-agents/Cargo.toml
 crates/fno/src/live_store_fence.rs	crates/fno-agents/src/live_store_fence.rs	cargo build --manifest-path crates/fno-agents/Cargo.toml
+crates/fno/src/chokepoint.rs	crates/fno-agents/src/chokepoint.rs	cargo build --manifest-path crates/fno-agents/Cargo.toml
 crates/fno/src/store_conn.rs	crates/fno-agents/src/store_conn.rs	cargo build --manifest-path crates/fno-agents/Cargo.toml
 crates/fno/src/provider_key.rs	crates/fno-agents/src/provider_key.rs	cargo build --manifest-path crates/fno-agents/Cargo.toml
 crates/fno/src/effect_map.rs	crates/fno-agents/src/effect_map.rs	cargo build --manifest-path crates/fno-agents/Cargo.toml

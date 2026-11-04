@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 /// One spelling's row: (spelling, usage tail), the pr_front help shape.
 const HELP_ROWS: &[(&str, &str)] = &[(
     "status <sha|main|pr> [--watch] [--interval 60] [--timeout 15m]",
-    "One CI verdict at one commit: a hex sha, `main` (its head sha), or a PR number (its head sha; all-digits reads as a PR number). Prints a JSON line {target, kind, sha, verdict, settled, green, checks} with one checks row per workflow {name, status, conclusion, created_at}, newest 100 runs at that sha. Per workflow the newest run decides while it is in flight (pending); the newest completed run decides once it lands: fail or cancel reads red, success reads green; no rows at that sha reads pending, never green. exit 0 green, 1 red, 2 pending (with --watch: still unsettled at --timeout), 3 unresolvable target, 4 read failed. --watch re-reads every --interval seconds until settled or the bound, one stderr line per poll; it never cancels runs (do pr wait owns that).",
+    "One CI verdict at one commit: a hex sha, `main` (its head sha), or a PR number (its head sha; all-digits reads as a PR number). Prints a JSON line {target, kind, sha, verdict, merge_check, settled, green, checks} with one checks row per workflow {name, status, conclusion, created_at}, newest 100 runs at that sha. Per workflow the newest run decides while it is in flight (pending); the newest completed run decides once it lands: fail or cancel reads red, success reads green; no rows at that sha reads pending, never green. merge_check is the per-merge answer: only the push-event rows of guards and rust-ci at that sha, green when both succeeded, red on a failure, pending while one runs, unverified when one is cancelled or missing; it means compiled and guarded, never that the suite passed, and it leaves verdict and the exit codes alone. exit 0 green, 1 red, 2 pending (with --watch: still unsettled at --timeout), 3 unresolvable target, 4 read failed. --watch re-reads every --interval seconds until settled or the bound, one stderr line per poll; it never cancels runs (do pr wait owns that).",
 )];
 
 fn print_help() {
@@ -228,6 +228,50 @@ pub(crate) fn verdict_from_runs(runs: &[Value]) -> (String, bool, Vec<Value>) {
     (verdict.to_string(), verdict == "green", checks)
 }
 
+/// The workflows that run on every main push, one run per sha, with no
+/// path filter. They are the per-merge check; cli-ci stays the coalesced
+/// batch and release gate and is not read here.
+const MERGE_CHECK_WORKFLOWS: &[&str] = &["guards", "rust-ci"];
+
+/// The per-merge check at one sha: `green`, `red`, `pending` or
+/// `unverified`. Reads only push-event rows of [`MERGE_CHECK_WORKFLOWS`], the
+/// newest per workflow. A failure reads red before anything else; a run in
+/// flight reads pending; a cancelled or missing workflow reads unverified,
+/// never green, because nobody finished testing that commit.
+pub(crate) fn merge_check(runs: &[Value]) -> &'static str {
+    let mut folds: Vec<(&str, &Value, Option<&Value>)> = Vec::new();
+    crate::main_ci::fold_page(
+        &mut folds,
+        runs.iter()
+            .filter(|run| run.get("event").and_then(Value::as_str) == Some("push")),
+    );
+    let mut red = false;
+    let mut pending = false;
+    let mut unverified = false;
+    for name in MERGE_CHECK_WORKFLOWS {
+        let Some((_, newest, _)) = folds.iter().find(|(seen, _, _)| seen == name) else {
+            unverified = true;
+            continue;
+        };
+        if newest.get("status").and_then(Value::as_str) != Some("completed") {
+            pending = true;
+        } else if newest.get("conclusion").and_then(Value::as_str) == Some("cancelled") {
+            unverified = true;
+        } else if !matches!(crate::pr_push::rest_bucket(newest), "pass" | "skipping") {
+            red = true;
+        }
+    }
+    if red {
+        "red"
+    } else if pending {
+        "pending"
+    } else if unverified {
+        "unverified"
+    } else {
+        "green"
+    }
+}
+
 /// One dispatch of `do ci status [tail...]`, with `args = argv[2..]`.
 pub fn run(args: &[String]) -> i32 {
     let Some(sub) = args.first() else {
@@ -322,6 +366,7 @@ pub fn run(args: &[String]) -> i32 {
                 "kind": sha.1,
                 "sha": sha.0,
                 "verdict": verdict,
+                "merge_check": merge_check(&runs),
                 "settled": settled,
                 "green": green,
                 "checks": checks,
@@ -503,6 +548,50 @@ mod tests {
         let (verdict, green, _) = verdict_from_runs(&runs);
         assert_eq!(verdict, "red");
         assert!(!green);
+    }
+
+    #[test]
+    fn merge_check_reads_green_while_the_batch_run_is_cancelled() {
+        let runs = vec![
+            run_row("guards", "completed", "success", "2026-10-25T00:00:00Z"),
+            run_row("rust-ci", "completed", "success", "2026-10-25T00:00:00Z"),
+            run_row("cli-ci", "completed", "cancelled", "2026-10-25T00:00:00Z"),
+        ];
+        assert_eq!(merge_check(&runs), "green");
+        assert_eq!(verdict_from_runs(&runs).0, "red");
+    }
+
+    #[test]
+    fn merge_check_never_reads_green_on_a_cancelled_missing_or_pr_row() {
+        let cancelled = vec![
+            run_row("guards", "completed", "success", "2026-10-25T00:00:00Z"),
+            run_row("rust-ci", "completed", "cancelled", "2026-10-25T00:00:00Z"),
+        ];
+        assert_eq!(merge_check(&cancelled), "unverified");
+        assert_eq!(merge_check(&[]), "unverified");
+        let mut pr_row = run_row("rust-ci", "completed", "success", "2026-10-25T00:00:00Z");
+        pr_row["event"] = json!("pull_request");
+        let runs = vec![
+            run_row("guards", "completed", "success", "2026-10-25T00:00:00Z"),
+            pr_row,
+        ];
+        assert_eq!(merge_check(&runs), "unverified");
+    }
+
+    #[test]
+    fn merge_check_ranks_red_over_pending() {
+        let runs = vec![
+            run_row("guards", "completed", "failure", "2026-10-25T00:00:00Z"),
+            run_row("rust-ci", "in_progress", "", "2026-10-25T00:00:00Z"),
+        ];
+        assert_eq!(merge_check(&runs), "red");
+        let runs = vec![run_row(
+            "rust-ci",
+            "in_progress",
+            "",
+            "2026-10-25T00:00:00Z",
+        )];
+        assert_eq!(merge_check(&runs), "pending");
     }
 
     #[test]
