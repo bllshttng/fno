@@ -409,7 +409,8 @@ mod tests {
         )
         .unwrap();
         assert!(claims.contains("\"iss\":\"5608104\""), "{claims}");
-        assert!(claims.contains("\"iat\":1699999999"), "{claims}");
+        assert!(claims.contains("\"iat\":1699999940"), "{claims}");
+        assert!(claims.contains("\"exp\":1700000480"), "{claims}");
         // The signature verifies under the public half of the same key.
         use rsa::pkcs1::DecodeRsaPrivateKey;
         use rsa::traits::PublicKeyParts;
