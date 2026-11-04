@@ -239,7 +239,11 @@ fn ours(passes: &[Value]) -> HashSet<u64> {
 
 /// The runs another row names as cancelled at this slug: a look hold owns
 /// its rerun, and a wait cancel answered a red the head already carries.
-fn named_cancels(path: &Path, slug: &str, since_ms: i64) -> Result<HashSet<u64>, String> {
+pub(crate) fn named_cancels(
+    path: &Path,
+    slug: &str,
+    since_ms: i64,
+) -> Result<HashSet<u64>, String> {
     let mut named = HashSet::new();
     for kind in ["look_hold_cancel", "ci_wait_cancel"] {
         for row in rows_of(path, kind, slug, since_ms)? {
