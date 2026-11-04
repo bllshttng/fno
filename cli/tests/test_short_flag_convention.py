@@ -19,8 +19,7 @@ runtime import of the (lazily loaded) command tree and cannot be fooled by
 deferred sub-apps.
 
 Covers ACs 1 (Python side), 2 (global register), 3 (no collisions + pins).
-The Rust-path side of AC1 and AC4/AC5 live in the Rust crate tests and in
-``tests/agents/test_cmd_ask.py``.
+The Rust-path side of AC1 and AC4/AC5 lives in the Rust crate tests.
 """
 from __future__ import annotations
 

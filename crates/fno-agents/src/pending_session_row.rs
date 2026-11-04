@@ -143,6 +143,25 @@ pub(crate) fn park(payload: &Value) -> Result<Value, String> {
     Ok(json!({ "parked": parked }))
 }
 
+/// The report path's in-process open arm: what the retired Python
+/// `_flush_pending_session_row` reached through `command_call`, minus the
+/// subprocess. Same contract: a row with nothing parked, or a node the
+/// graph does not carry, answers and moves on - never an error.
+pub(crate) fn open_parked_for(
+    registry: &Path,
+    graph: &Path,
+    name: &str,
+    session_id: &str,
+) -> Result<Value, String> {
+    open(&json!({
+        "action": "open",
+        "name": name,
+        "session_id": session_id,
+        "graph": graph.display().to_string(),
+        "registry": registry.display().to_string(),
+    }))
+}
+
 /// Open the parked row. Reads the row's provenance (`node`, `effort`,
 /// `harness`, the parked payload), appends the node's sessions row through
 /// the idempotent [`api::session_open_parked`], and clears the park - in

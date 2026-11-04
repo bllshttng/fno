@@ -8,8 +8,14 @@ use unicode_width::UnicodeWidthStr;
 
 mod observer_rows;
 
-use super::backlog_style::BLine;
 use super::*;
+use crate::text_style::TLine;
+
+/// A snapshot freezes the need-input pulse on one beat, so a still shot can
+/// show each frame. The live client never sets it.
+pub(super) static PULSE_PIN: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+pub(super) const PULSE_ON: u8 = 1;
+pub(super) const PULSE_OFF: u8 = 2;
 
 /// The sideline Table's five columns: status word, name, message, PR, age.
 /// Width ranking (operator, 2026-09-20): name first, message second, status
@@ -348,6 +354,117 @@ impl View {
         out
     }
 
+    /// Rows and questions waiting on the user: local blocked rows, remote
+    /// blocked rows, and open questions. Local rows fold the same state
+    /// function as every section rollup, so they equal the sum of the
+    /// section counts.
+    pub(super) fn need_input_count(&self) -> usize {
+        let local = self
+            .layout
+            .agents
+            .iter()
+            .filter(|a| agent_lattice_state(a) == LatticeState::Blocked)
+            .count();
+        local + self.machine_tree.blocked_remote() + self.open_question_count()
+    }
+
+    /// Columns the strip's count label covers, for the tap map. Zero when
+    /// the label does not paint (nothing needs input, or another view).
+    pub(super) fn need_input_label_cols(&self) -> usize {
+        let need = self.need_input_count();
+        if need == 0 || self.sideline_view != crate::view_store::SidelineView::Agents {
+            return 0;
+        }
+        let limit = self
+            .sideline_paint_w()
+            .saturating_sub(1)
+            .min(self.term.1 as usize);
+        let stop = self
+            .top_row_spans()
+            .first()
+            .map_or(limit, |s| s.0.saturating_sub(1))
+            .min(limit);
+        format!(" {need} need input").chars().count().min(stop)
+    }
+
+    /// The pinned Needs input section: a header, the blocked rows (this
+    /// machine, then remote machines), and one line per open question. The
+    /// rows also stay in their groups below, so a click never lands on a
+    /// row that moved.
+    pub(super) fn pin_needs<'a>(
+        &'a self,
+        rows: Vec<DisplayRow<'a>>,
+        depths: Vec<usize>,
+    ) -> (Vec<DisplayRow<'a>>, Vec<usize>) {
+        if !self.needs_open || self.need_input_count() == 0 {
+            return (rows, depths);
+        }
+        let blocked = |a: &&AgentRow| agent_lattice_state(a) == LatticeState::Blocked;
+        let agents: Vec<&AgentRow> = self
+            .layout
+            .agents
+            .iter()
+            .filter(blocked)
+            .chain(self.machine_tree.rows().filter(blocked))
+            .collect();
+        let questions: Vec<String> = self.questions_merged().map_or_else(Vec::new, |fold| {
+            fold.items
+                .iter()
+                .filter(|q| q.state == "open" && !q.settled)
+                .map(|q| q.title.clone())
+                .collect()
+        });
+        let mut out = vec![DisplayRow::Header {
+            label: "Needs input".into(),
+            rollup: vec![(LatticeState::Blocked, agents.len() + questions.len())],
+            key: SectionKey::Group("@needs-input".into()),
+            view: SectionView::Expanded,
+        }];
+        let mut out_depths = vec![0];
+        for a in agents {
+            out.push(DisplayRow::Agent(a));
+            out_depths.push(0);
+        }
+        for title in questions {
+            out.push(DisplayRow::NeedNote(title));
+            out_depths.push(0);
+        }
+        out.push(DisplayRow::Blank);
+        out_depths.push(0);
+        out.extend(rows);
+        out_depths.extend(depths);
+        (out, out_depths)
+    }
+
+    /// Open questions the user can answer, one per question across machines.
+    pub(super) fn open_question_count(&self) -> usize {
+        self.questions_merged().map_or(0, |fold| {
+            fold.items
+                .iter()
+                .filter(|q| q.state == "open" && !q.settled)
+                .count()
+        })
+    }
+
+    /// The glyph beside the count: it alternates on the spin clock while
+    /// anything needs input, so the count catches the eye without moving a
+    /// row. A space holds the cell on the off beat.
+    pub(super) fn need_input_pulse(&self) -> char {
+        match PULSE_PIN.load(std::sync::atomic::Ordering::Relaxed) {
+            PULSE_ON => return '\u{25B2}',
+            PULSE_OFF => return ' ',
+            _ => {}
+        }
+        match crate::lattice::spin_epoch() {
+            Some(t0)
+                if (t0.elapsed().as_millis() as u64 / crate::lattice::SPIN_FRAME_MS) % 2 == 0 =>
+            {
+                '\u{25B2}'
+            }
+            _ => ' ',
+        }
+    }
+
     /// Paint the strip row at the slice's row 0: `Agents  Messages`
     /// right-aligned. The active word wears the brand accent with an
     /// underline and the resting word sits muted, so the pair reads as tabs
@@ -355,20 +472,14 @@ impl View {
     pub(super) fn paint_top_row(&self, cells: &mut [Cell], cols: usize, text_w: usize) {
         let limit = text_w.min(cols.saturating_sub(1));
         let rest_fg = crate::theme::dim_fg(&self.theme);
-        // The count folds the same state function as every section rollup,
-        // so it always equals the sum of the section ▲ counts.
-        let need = self
-            .layout
-            .agents
-            .iter()
-            .filter(|a| agent_lattice_state(a) == LatticeState::Blocked)
-            .count();
+        let need = self.need_input_count();
         if need > 0 && self.sideline_view == crate::view_store::SidelineView::Agents {
             let stop = self
                 .top_row_spans()
                 .first()
                 .map_or(limit, |s| s.0.saturating_sub(1));
-            for (col, ch) in format!(" {need} need input").chars().enumerate() {
+            let mark = self.need_input_pulse();
+            for (col, ch) in format!("{mark}{need} need input").chars().enumerate() {
                 if col >= stop.min(limit) {
                     break;
                 }
@@ -452,7 +563,7 @@ impl View {
                     );
                 }
             } else {
-                let msg = BLine::meta("backlog off (pref)");
+                let msg = TLine::meta("backlog off (pref)");
                 let lines = [msg];
                 backlog_style::paint_panel(
                     cells,
@@ -719,6 +830,9 @@ impl View {
                     ))
                 }
                 DisplayRow::TableEmpty => Some(("  no agents".to_string(), cell_flags::DIM)),
+                DisplayRow::NeedNote(t) => {
+                    Some((crate::chrome::clip(&format!("  ? {t}"), text_w), 0))
+                }
                 // The card separator (the operator's 2026-10-04 spacing
                 // mockup): one dim dashed rule, full width.
                 DisplayRow::CardRule => Some(("\u{2504}".repeat(text_w), cell_flags::DIM)),
@@ -997,6 +1111,7 @@ impl View {
             | DisplayRow::NewSquad
             | DisplayRow::Blank
             | DisplayRow::TableEmpty
+            | DisplayRow::NeedNote(_)
             | DisplayRow::CardDetail(..)
             | DisplayRow::CardMetrics(..)
             | DisplayRow::CardRule

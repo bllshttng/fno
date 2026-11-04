@@ -2,14 +2,14 @@
 //! GRAPH and HEALTH. Each painter returns lines with their tap targets, so
 //! a tap routes to what the frame drew.
 
-use super::backlog_style::{BLine, BRole, BSeg};
 use super::org_board::{host_key, lead_key, seat_key, Item};
 use super::org_seats::{Fleet, Lead, Machine, Seat, STATUS_ORDER};
+use crate::text_style::{TLine, TSeg, TextStyle};
 use std::ops::Range;
 
 /// One painted line plus the column ranges a tap on it selects.
 pub(crate) struct Line {
-    pub(crate) line: BLine,
+    pub(crate) line: TLine,
     pub(crate) taps: Vec<(Range<usize>, String)>,
 }
 
@@ -26,23 +26,20 @@ impl Line {
 /// counted in display columns.
 #[derive(Default)]
 pub(crate) struct Lb {
-    segs: Vec<BSeg>,
+    segs: Vec<TSeg>,
     taps: Vec<(Range<usize>, String)>,
     col: usize,
     band: bool,
 }
 
 impl Lb {
-    pub(crate) fn s(mut self, text: impl Into<String>, role: BRole) -> Self {
+    pub(crate) fn s(mut self, text: impl Into<String>, role: TextStyle) -> Self {
         let text = text.into();
-        self.col += text
-            .chars()
-            .map(super::backlog_style::char_w)
-            .sum::<usize>();
-        self.segs.push(BSeg { text, role });
+        self.col += text.chars().map(crate::text_style::char_w).sum::<usize>();
+        self.segs.push(TSeg { text, role });
         self
     }
-    pub(crate) fn k(mut self, text: impl Into<String>, role: BRole, key: &str) -> Self {
+    pub(crate) fn k(mut self, text: impl Into<String>, role: TextStyle, key: &str) -> Self {
         let start = self.col;
         self = self.s(text, role);
         self.taps.push((start..self.col, key.to_string()));
@@ -58,7 +55,7 @@ impl Lb {
         self
     }
     pub(crate) fn done(self) -> Line {
-        let mut line = BLine::of(&self.segs);
+        let mut line = TLine::of(&self.segs);
         line.band = self.band;
         Line {
             line,
@@ -71,7 +68,7 @@ pub(crate) fn blank() -> Line {
     Lb::default().done()
 }
 pub(crate) fn meta(text: impl Into<String>) -> Line {
-    Lb::default().s(text, BRole::Meta).done()
+    Lb::default().s(text, TextStyle::Meta).done()
 }
 
 /// Pad or cut to `n` columns; a cut ends in an ellipsis.
@@ -119,19 +116,19 @@ pub(crate) fn glyph(status: &str) -> &'static str {
         _ => "\u{25cc}",
     }
 }
-pub(crate) fn status_role(status: &str) -> BRole {
+pub(crate) fn status_role(status: &str) -> TextStyle {
     match status {
-        "blocked" => BRole::Head,
-        "writing" => BRole::Head,
-        "parked" => BRole::Body,
-        _ => BRole::Meta,
+        "blocked" => TextStyle::Title,
+        "writing" => TextStyle::Title,
+        "parked" => TextStyle::Item,
+        _ => TextStyle::Meta,
     }
 }
-pub(crate) fn name_role(s: &Seat) -> BRole {
+pub(crate) fn name_role(s: &Seat) -> TextStyle {
     if s.role.is_some() {
-        BRole::Head
+        TextStyle::Title
     } else {
-        BRole::Body
+        TextStyle::Item
     }
 }
 /// The seat's model, else the basis of the gap.
@@ -150,13 +147,16 @@ pub(crate) fn rule(title: &str, width: usize) -> Line {
     let head = format!(" \u{2500}\u{2500} {title} ");
     let rest = width.saturating_sub(head.chars().count());
     Lb::default()
-        .s(head, BRole::Head)
-        .s("\u{2500}".repeat(rest), BRole::Meta)
+        .s(head, TextStyle::Title)
+        .s("\u{2500}".repeat(rest), TextStyle::Meta)
         .done()
 }
-pub(crate) fn kv(key: &str, value: impl Into<String>, role: BRole) -> Line {
+pub(crate) fn kv(key: &str, value: impl Into<String>, role: TextStyle) -> Line {
     Lb::default()
-        .s(format!("   {}", fit(&format!("{key}:"), 12)), BRole::Meta)
+        .s(
+            format!("   {}", fit(&format!("{key}:"), 12)),
+            TextStyle::Meta,
+        )
         .s(value, role)
         .done()
 }
@@ -236,7 +236,7 @@ pub(crate) fn explorer(
     feed_count: Option<usize>,
     width: usize,
 ) -> Vec<Line> {
-    let mut out = vec![Lb::default().s(" Explorer", BRole::Head).done()];
+    let mut out = vec![Lb::default().s(" Explorer", TextStyle::Title).done()];
     let tree: Vec<&Entry> = entries
         .iter()
         .filter(|e| !matches!(e.item, Item::Feed | Item::System))
@@ -264,7 +264,7 @@ pub(crate) fn explorer(
             (Item::Root, f) => (
                 "Fleet".to_string(),
                 f.map(|f| f.seats().count()),
-                BRole::Head,
+                TextStyle::Title,
                 None,
             ),
             (Item::Host(m), Some(f)) => {
@@ -272,7 +272,7 @@ pub(crate) fn explorer(
                 (
                     format!("\u{25a0} {}", m.host),
                     Some(m.leads.iter().map(|p| p.seats.len()).sum::<usize>()),
-                    BRole::Body,
+                    TextStyle::Item,
                     None,
                 )
             }
@@ -282,7 +282,7 @@ pub(crate) fn explorer(
                 (
                     format!("{} {}", if ex { "\u{25be}" } else { "\u{203a}" }, lead.name),
                     Some(lead.seats.len()),
-                    if ex { BRole::Body } else { BRole::Meta },
+                    if ex { TextStyle::Item } else { TextStyle::Meta },
                     None,
                 )
             }
@@ -294,14 +294,14 @@ pub(crate) fn explorer(
         };
         let used = 1 + pre.chars().count() + if seat.is_some() { 2 } else { 0 };
         let mut lb = Lb::default()
-            .s(if on { "\u{25b6}" } else { " " }, BRole::Head)
-            .s(pre, BRole::Meta);
+            .s(if on { "\u{25b6}" } else { " " }, TextStyle::Title)
+            .s(pre, TextStyle::Meta);
         if let Some(seat) = seat {
             lb = lb.s(format!("{} ", glyph(seat.status)), status_role(seat.status));
         }
         lb = lb.s(fit(&label, width.saturating_sub(used + 4)), role).s(
             count.map(|n| format!("{n:>3} ")).unwrap_or_default(),
-            BRole::Meta,
+            TextStyle::Meta,
         );
         out.push(lb.whole(&e.key).band(on).done());
     }
@@ -313,11 +313,11 @@ pub(crate) fn explorer(
         let on = sel == key;
         out.push(
             Lb::default()
-                .s(if on { "\u{25b6}" } else { " " }, BRole::Head)
-                .s(fit(label, width.saturating_sub(5)), BRole::Head)
+                .s(if on { "\u{25b6}" } else { " " }, TextStyle::Title)
+                .s(fit(label, width.saturating_sub(5)), TextStyle::Title)
                 .s(
                     count.map_or_else(|| "  ? ".to_string(), |n| format!("{n:>3} ")),
-                    BRole::Meta,
+                    TextStyle::Meta,
                 )
                 .whole(key)
                 .band(on)
@@ -330,11 +330,17 @@ pub(crate) fn explorer(
 /// The tab strip plus the scope it reads. Each tab is a tap target
 /// `tab/<n>`.
 pub(crate) fn header(fleet: &Fleet, item: &Item, tab: crate::view_store::OrgTab) -> Line {
-    let mut lb = Lb::default().s(" ", BRole::Meta);
+    let mut lb = Lb::default().s(" ", TextStyle::Meta);
     for (i, t) in crate::view_store::OrgTab::ALL.into_iter().enumerate() {
         let label = format!(" {} ", t.word());
-        let role = if t == tab { BRole::Tab } else { BRole::Meta };
-        lb = lb.k(label, role, &format!("tab/{i}")).s(" ", BRole::Meta);
+        let role = if t == tab {
+            TextStyle::Tab
+        } else {
+            TextStyle::Meta
+        };
+        lb = lb
+            .k(label, role, &format!("tab/{i}"))
+            .s(" ", TextStyle::Meta);
     }
     let scope = match item {
         Item::Host(m) => format!("machine {}", fleet.machines[*m].host),
@@ -344,7 +350,7 @@ pub(crate) fn header(fleet: &Fleet, item: &Item, tab: crate::view_store::OrgTab)
         ),
         _ => "fleet \u{b7} every machine".into(),
     };
-    lb.s(format!("  {scope}"), BRole::Body).done()
+    lb.s(format!("  {scope}"), TextStyle::Item).done()
 }
 
 pub(crate) fn table(rows: &[Row], sel: &str, width: usize, now: u64, in_lead: bool) -> Vec<Line> {
@@ -363,7 +369,7 @@ pub(crate) fn table(rows: &[Row], sel: &str, width: usize, now: u64, in_lead: bo
                     fit("State", W[4]),
                     fit("Age", W[5])
                 ),
-                BRole::Head,
+                TextStyle::Title,
             )
             .done(),
         meta(format!(" {}", "\u{2500}".repeat(width.saturating_sub(2)))),
@@ -397,15 +403,15 @@ pub(crate) fn table(rows: &[Row], sel: &str, width: usize, now: u64, in_lead: bo
             let runtime = r.s.harness.as_deref().unwrap_or("not published");
             out.push(
                 Lb::default()
-                    .s(" ", BRole::Meta)
-                    .s(format!("{} ", fit(&lead, W[0] - 1)), BRole::Meta)
+                    .s(" ", TextStyle::Meta)
+                    .s(format!("{} ", fit(&lead, W[0] - 1)), TextStyle::Meta)
                     .s(format!("{} ", glyph(r.s.status)), status_role(r.s.status))
                     .s(fit(&r.s.name, W[1] - 2), name_role(r.s))
-                    .s(format!("{} ", fit(runtime, W[2] - 1)), BRole::Meta)
-                    .s(format!("{} ", fit(&model(r.s), W[3] - 1)), BRole::Meta)
+                    .s(format!("{} ", fit(runtime, W[2] - 1)), TextStyle::Meta)
+                    .s(format!("{} ", fit(&model(r.s), W[3] - 1)), TextStyle::Meta)
                     .s(fit(r.s.status, W[4]), status_role(r.s.status))
-                    .s(format!("{} ", fit(&age, W[5] - 1)), BRole::Body)
-                    .s(fit(&last, now_w), BRole::Meta)
+                    .s(format!("{} ", fit(&age, W[5] - 1)), TextStyle::Item)
+                    .s(fit(&last, now_w), TextStyle::Meta)
                     .whole(&key)
                     .band(key == sel)
                     .done(),
@@ -442,17 +448,17 @@ pub(crate) fn recent(rows: &[Row], width: usize, now: u64) -> Vec<Line> {
                 .replace('T', " ");
         out.push(
             Lb::default()
-                .s(" \u{25a0} ", BRole::Meta)
-                .s(format!("{stamp}Z"), BRole::Body)
-                .s(format!(" \u{b7} #{}", i + 1), BRole::Meta)
+                .s(" \u{25a0} ", TextStyle::Meta)
+                .s(format!("{stamp}Z"), TextStyle::Item)
+                .s(format!(" \u{b7} #{}", i + 1), TextStyle::Meta)
                 .whole(&key)
                 .done(),
         );
         out.push(
             Lb::default()
-                .s("   ", BRole::Meta)
+                .s("   ", TextStyle::Meta)
                 .s(r.s.name.clone(), name_role(r.s))
-                .s(" \u{b7} ", BRole::Meta)
+                .s(" \u{b7} ", TextStyle::Meta)
                 .s(r.s.status, status_role(r.s.status))
                 .s(
                     format!(
@@ -461,7 +467,7 @@ pub(crate) fn recent(rows: &[Row], width: usize, now: u64) -> Vec<Line> {
                         r.p.name,
                         ago(r.s.last_message_at.as_deref(), now).unwrap_or_default()
                     ),
-                    BRole::Meta,
+                    TextStyle::Meta,
                 )
                 .whole(&key)
                 .done(),
@@ -492,7 +498,7 @@ pub(crate) fn recent(rows: &[Row], width: usize, now: u64) -> Vec<Line> {
 }
 
 fn state_counts(rows: &[Row]) -> Line {
-    let mut lb = Lb::default().s(format!("   {}", fit("state:", 12)), BRole::Meta);
+    let mut lb = Lb::default().s(format!("   {}", fit("state:", 12)), TextStyle::Meta);
     let mut first = true;
     for w in STATUS_ORDER {
         let n = rows.iter().filter(|r| r.s.status == w).count();
@@ -544,7 +550,7 @@ pub(crate) fn overview(
             } else {
                 hosts.join(" \u{b7} ")
             },
-            BRole::Body,
+            TextStyle::Item,
         ),
         kv(
             "shape",
@@ -554,7 +560,7 @@ pub(crate) fn overview(
                 count(rows.len(), "session"),
                 rows.iter().filter(|r| r.s.role.is_some()).count()
             ),
-            BRole::Body,
+            TextStyle::Item,
         ),
         state_counts(rows),
         blank(),
@@ -569,17 +575,17 @@ pub(crate) fn overview(
                     .unwrap_or_else(|| r.s.short.clone());
             out.push(
                 Lb::default()
-                    .s("   ", BRole::Meta)
+                    .s("   ", TextStyle::Meta)
                     .s(format!("{} ", glyph(r.s.status)), status_role(r.s.status))
                     .s(fit(&r.s.name, 14), name_role(r.s))
-                    .s(fit(&title, width.saturating_sub(30)), BRole::Meta)
+                    .s(fit(&title, width.saturating_sub(30)), TextStyle::Meta)
                     .s(
                         fit(
                             &ago(r.s.last_message_at.as_deref(), now)
                                 .unwrap_or_else(|| "not published".into()),
                             12,
                         ),
-                        BRole::Meta,
+                        TextStyle::Meta,
                     )
                     .whole(&r.key())
                     .done(),
@@ -591,17 +597,21 @@ pub(crate) fn overview(
             let w = g.iter().filter(|r| r.s.status == "writing").count();
             out.push(
                 Lb::default()
-                    .s("   \u{25a0} ", BRole::Meta)
-                    .s(fit(&g[0].p.name, 16), BRole::Body)
-                    .s(fit(&g[0].m.host, 12), BRole::Meta)
-                    .s(fit(&count(g.len(), "session"), 14), BRole::Body)
+                    .s("   \u{25a0} ", TextStyle::Meta)
+                    .s(fit(&g[0].p.name, 16), TextStyle::Item)
+                    .s(fit(&g[0].m.host, 12), TextStyle::Meta)
+                    .s(fit(&count(g.len(), "session"), 14), TextStyle::Item)
                     .s(
                         if w > 0 {
                             format!("{w} writing")
                         } else {
                             "idle".into()
                         },
-                        if w > 0 { BRole::Head } else { BRole::Meta },
+                        if w > 0 {
+                            TextStyle::Title
+                        } else {
+                            TextStyle::Meta
+                        },
                     )
                     .whole(&lead_key(g[0].m, g[0].p))
                     .done(),
@@ -632,15 +642,15 @@ pub(crate) fn graph(
         _ => "Fleet".into(),
     };
     let mut out = vec![Lb::default()
-        .s(" ", BRole::Meta)
-        .s(title, BRole::Head)
+        .s(" ", TextStyle::Meta)
+        .s(title, TextStyle::Title)
         .s(
             "  one column per lead \u{b7} leads on top \u{b7} big groups wrap",
-            BRole::Meta,
+            TextStyle::Meta,
         )
         .done()];
     // A column is a list of cells; a cell is (text, role, tap key).
-    type Cell = Vec<(String, BRole, String)>;
+    type Cell = Vec<(String, TextStyle, String)>;
     let mut cols: Vec<Vec<Cell>> = Vec::new();
     for g in leads(rows) {
         let pkey = lead_key(g[0].m, g[0].p);
@@ -653,12 +663,20 @@ pub(crate) fn graph(
             };
             let mut col: Vec<Cell> = vec![vec![(
                 fit(&head, BW),
-                if c == 0 { BRole::Body } else { BRole::Meta },
+                if c == 0 {
+                    TextStyle::Item
+                } else {
+                    TextStyle::Meta
+                },
                 pkey.clone(),
             )]];
             for r in chunk {
                 let key = r.key();
-                let edge = if key == sel { BRole::Head } else { BRole::Meta };
+                let edge = if key == sel {
+                    TextStyle::Title
+                } else {
+                    TextStyle::Meta
+                };
                 let bar = "\u{2500}".repeat(BW - 2);
                 col.push(vec![(format!("\u{250c}{bar}\u{2510}"), edge, key.clone())]);
                 col.push(vec![
@@ -675,7 +693,7 @@ pub(crate) fn graph(
                     ("\u{2502}".into(), edge, key.clone()),
                     (
                         fit(&format!(">_ {}", model(r.s)), BW - 2),
-                        BRole::Meta,
+                        TextStyle::Meta,
                         key.clone(),
                     ),
                     ("\u{2502}".into(), edge, key.clone()),
@@ -689,14 +707,14 @@ pub(crate) fn graph(
         out.push(meta(" \u{2502}"));
         let h = band.iter().map(Vec::len).max().unwrap_or(0);
         for y in 0..h {
-            let mut lb = Lb::default().s(" \u{2502} ", BRole::Meta);
+            let mut lb = Lb::default().s(" \u{2502} ", TextStyle::Meta);
             for col in band {
                 let cell = col.get(y).cloned().unwrap_or_default();
                 let w: usize = cell.iter().map(|(t, _, _)| t.chars().count()).sum();
                 for (t, role, key) in cell {
                     lb = lb.k(t, role, &key);
                 }
-                lb = lb.s(" ".repeat(COLW.saturating_sub(w)), BRole::Meta);
+                lb = lb.s(" ".repeat(COLW.saturating_sub(w)), TextStyle::Meta);
             }
             out.push(lb.done());
         }
@@ -719,11 +737,11 @@ pub(crate) fn sampled(m: &Machine) -> Option<&str> {
 
 pub(crate) fn not_sampled() -> Line {
     Lb::default()
-        .s(" health ", BRole::Body)
-        .s("not sampled", BRole::Head)
+        .s(" health ", TextStyle::Item)
+        .s("not sampled", TextStyle::Title)
         .s(
             " \u{b7} no health check runs on this snapshot; not a healthy verdict",
-            BRole::Meta,
+            TextStyle::Meta,
         )
         .done()
 }
@@ -756,7 +774,7 @@ pub(crate) fn health(
                     Some(v) => format!("{v} \u{b7} beat {} ago", dur(m.age_s)),
                     None => "not sampled".into(),
                 },
-                BRole::Body,
+                TextStyle::Item,
             ));
         }
     }
@@ -795,9 +813,9 @@ pub(crate) fn health(
                 .s(
                     fit(&format!("{} {text}", hit.len()), 30),
                     if hit.is_empty() {
-                        BRole::Meta
+                        TextStyle::Meta
                     } else {
-                        BRole::Body
+                        TextStyle::Item
                     },
                 )
                 .s(
@@ -809,7 +827,7 @@ pub(crate) fn health(
                         },
                         width.saturating_sub(36),
                     ),
-                    BRole::Meta,
+                    TextStyle::Meta,
                 )
                 .done(),
         );
@@ -819,7 +837,7 @@ pub(crate) fn health(
     for m in machines {
         out.push(
             Lb::default()
-                .s("   \u{25a0} ", BRole::Meta)
+                .s("   \u{25a0} ", TextStyle::Meta)
                 .s(
                     fit(
                         &format!(
@@ -830,7 +848,7 @@ pub(crate) fn health(
                         ),
                         34,
                     ),
-                    BRole::Body,
+                    TextStyle::Item,
                 )
                 .s(
                     format!(
@@ -840,7 +858,7 @@ pub(crate) fn health(
                         m.cpu
                             .map_or_else(|| "not sampled".into(), |c| format!("{c:.0}%"))
                     ),
-                    BRole::Meta,
+                    TextStyle::Meta,
                 )
                 .whole(&host_key(m))
                 .done(),

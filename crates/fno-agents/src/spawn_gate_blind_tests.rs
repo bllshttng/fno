@@ -20,11 +20,11 @@ impl Drop for AgentSelfFixture {
 }
 
 /// The shared admission fixture's payload for one verdict, as the probe
-/// would print it: the same file the Python suite pins, so these tests
+/// would print it: the one fixture both readers pin, so these tests
 /// cannot grow their own reading.
 fn fixture_payload(verdict: &str) -> String {
     let fixture_path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../cli/tests/agents/fixtures/spawn_gate_admission.json");
+        .join("tests/fixtures/spawn_gate/spawn_gate_admission.json");
     let doc: serde_json::Value = serde_json::from_str(
         &std::fs::read_to_string(&fixture_path)
             .expect("the shared fixture must exist beside the Python suite"),

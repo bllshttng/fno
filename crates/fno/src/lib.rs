@@ -289,6 +289,8 @@ mod test_keeper_cleanup;
 #[cfg(all(test, feature = "full"))]
 pub(crate) mod test_owner;
 #[cfg(feature = "full")]
+pub mod text_style;
+#[cfg(feature = "full")]
 pub mod theme;
 #[cfg(feature = "full")]
 pub mod theme_import;
@@ -325,6 +327,8 @@ pub mod wizard;
 pub mod wizard_term;
 #[cfg(feature = "full")]
 pub mod wordmark;
+#[cfg(feature = "full")]
+pub mod workspace_sidecar;
 #[cfg(feature = "full")]
 pub mod worktree_door;
 #[cfg(feature = "full")]

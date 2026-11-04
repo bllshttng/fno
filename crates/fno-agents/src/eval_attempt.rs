@@ -313,6 +313,7 @@ pub(crate) fn bank_same(dir: &str, a: &str, b: &str) -> bool {
             b,
             "--",
             "evals/bank",
+            ":(glob)skills/*/evals/*.yaml",
             ":(exclude)evals/bank/cohorts.yaml",
             ":(exclude)evals/bank/failure-types.yaml",
         ])

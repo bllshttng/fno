@@ -85,9 +85,9 @@ if _env_truthy "${CLAUDE_CODE_USE_BEDROCK:-}" || _env_truthy "${CLAUDE_CODE_USE_
   exit 0
 fi
 
-# The five model vars, one list with the Python MODEL_ENV_KEYS
-# (cli/src/fno/agents/model_routing.py); a Python test pins the two lists
-# equal, so a new tier cannot land in one and not the other.
+# The five model vars, one list with the Rust MODEL_ENV_KEYS
+# (crates/fno-agents/src/model_env_scrub.rs), so a new tier cannot land in
+# one and not the other.
 MODEL_ENV_VARS=(
   ANTHROPIC_MODEL
   ANTHROPIC_DEFAULT_OPUS_MODEL

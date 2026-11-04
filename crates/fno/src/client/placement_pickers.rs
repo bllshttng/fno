@@ -129,8 +129,8 @@ impl View {
         self.clear_peek();
         // The new-portal row is the LAST row, so the cursor starts at the open
         // count - zero open portals leaves cursor 0, the only row there is.
-        let far = self.machine_tree.rows().find(|a| a.name == id);
-        let remote = far.and_then(|a| a.remote.clone());
+        let remote_row = self.machine_tree.rows().find(|a| a.name == id);
+        let remote = remote_row.and_then(|a| a.remote.clone());
         self.portal_pick = Some(PortalPick {
             id,
             remote,
@@ -189,9 +189,12 @@ impl View {
     /// drawn numbering therefore never lies about what a digit will do, which is
     /// the property that lets the list be uncapped and the digit accelerator
     /// stay nine-wide without the two contradicting each other.
-    pub(crate) fn attach_place_lines(&self, picker: &AttachPlace) -> Vec<String> {
+    pub(crate) fn attach_place_lines(&self, picker: &AttachPlace) -> Vec<TLine> {
         const W: usize = 54;
-        let mut lines = vec![pad_to(" attach placement", W)];
+        let mut lines = vec![TLine::line(
+            TextStyle::Title,
+            pad_to(" attach placement", W),
+        )];
         for (i, &sid) in picker.squads.iter().enumerate() {
             let name = self
                 .layout
@@ -207,20 +210,23 @@ impl View {
             } else {
                 " ".into()
             };
-            lines.push(pad_to(&format!("   {ord} {name}"), W));
+            lines.push(TLine::parts(&[
+                (&format!("   {ord} "), TextStyle::Meta),
+                (&pad_to(name, W - 5), TextStyle::Item),
+            ]));
         }
         // Two lines, not three: enter/t and space/. are each one action under
         // two keys, so they collapse to one entry apiece. The split row spells
         // `shift+HJKL` rather than a bare `HJKL`, naming the modifier in words
         // so it reads as "hjkl, held with shift" rather than an unrelated set
         // of four capital-letter bindings.
-        lines.push(pad_to(
-            " arrows/hjkl move · 1-9 jump · shift+arrows/HJKL split",
-            W,
+        lines.push(TLine::line(
+            TextStyle::Hint,
+            pad_to(" arrows/hjkl move · 1-9 jump · shift+arrows/HJKL split", W),
         ));
-        lines.push(pad_to(
-            " enter/t new tab in › · space/. here · esc/q cancel",
-            W,
+        lines.push(TLine::line(
+            TextStyle::Hint,
+            pad_to(" enter/t new tab in › · space/. here · esc/q cancel", W),
         ));
         lines
     }
@@ -252,12 +258,15 @@ impl View {
     /// index space stays reachable through the cursor keys the footer names -
     /// the index column shows the true `0..=255` address, the gutter only ever
     /// hides a jump no key produces.
-    pub(crate) fn portal_pick_lines(&self, _pick: &PortalPick) -> Vec<String> {
+    pub(crate) fn portal_pick_lines(&self, _pick: &PortalPick) -> Vec<TLine> {
         // 62, not the attach picker's 54: the footer names four axes on ONE
         // line and pad_to would ellipsize it at 54.
         const W: usize = 62;
         let rows = self.open_portal_rows();
-        let mut lines = vec![pad_to(" portal placement", W)];
+        let mut lines = vec![TLine::line(
+            TextStyle::Title,
+            pad_to(" portal placement", W),
+        )];
         for (i, (a, idx)) in rows.iter().enumerate() {
             let ord = if i < 9 {
                 (i + 1).to_string()
@@ -269,23 +278,40 @@ impl View {
                 Some(TabContext::Named(name)) => format!("·{name}  "),
                 None => String::new(),
             };
-            lines.push(pad_to(&format!("   {ord} ◫{idx}  {tab}{}", a.name), W));
+            lines.push(
+                TLine::parts(&[
+                    (&format!("   {ord} "), TextStyle::Meta),
+                    (&format!("◫{idx}  "), TextStyle::Badge),
+                    (&tab, TextStyle::Meta),
+                    (&a.name, TextStyle::Item),
+                ])
+                .pad_to(W),
+            );
         }
         let ord = if rows.len() < 9 {
             (rows.len() + 1).to_string()
         } else {
             " ".into()
         };
-        lines.push(pad_to(&format!("   {ord} +   new portal"), W));
-        lines.push(pad_to(
-            " arrows/hjkl move · 1-9 jump · enter place · esc/q cancel",
-            W,
+        lines.push(
+            TLine::parts(&[
+                (&format!("   {ord} "), TextStyle::Meta),
+                ("+   new portal", TextStyle::Item),
+            ])
+            .pad_to(W),
+        );
+        lines.push(TLine::line(
+            TextStyle::Hint,
+            pad_to(
+                " arrows/hjkl move · 1-9 jump · enter place · esc/q cancel",
+                W,
+            ),
         ));
         // The commit axis on the + row, one line below the navigation footer:
         // neither line exceeds W, so nothing ellipsizes.
-        lines.push(pad_to(
-            " on + new portal: shift+arrows/HJKL split · t new tab",
-            W,
+        lines.push(TLine::line(
+            TextStyle::Hint,
+            pad_to(" on + new portal: shift+arrows/HJKL split · t new tab", W),
         ));
         lines
     }

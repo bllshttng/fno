@@ -200,12 +200,10 @@ pub(super) const PR_VIEW_FIELDS: &str =
 pub(super) const PR_VIEW_FIELDS_GRAPHQL: &str =
     "state,number,headRefName,headRefOid,mergeable,mergeStateStatus,baseRefName,author,url";
 
-/// The stop gate's set plus the four the info payload maps but the gate
-/// never reads: body, mergedAt, mergeCommit, autoMergeRequest. The info op's
-/// fallback asks for THIS set - asking for the gate's would promise keys the
-/// read never fetched, and a body mapped from an absent key reads as a real
-/// empty body downstream. Routing still rides the outside-the-set fields
-/// (url is the first); the drift test pins both supersets.
+/// The info fallback's former field set, kept as the drift test's anchor:
+/// the slice set in pr_info extends it with `statusCheckRollup`, and the
+/// drift tests pin both supersets against the adapter's metadata routing.
+#[cfg(test)]
 pub(crate) const PR_INFO_FALLBACK_FIELDS: &str =
     "state,number,headRefName,headRefOid,mergeable,mergeStateStatus,baseRefName,author,url,body,mergedAt,mergeCommit,autoMergeRequest";
 

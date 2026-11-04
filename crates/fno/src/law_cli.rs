@@ -15,7 +15,7 @@ use std::process::{Command, Stdio};
 /// The commands the native surface serves. The Python `fno inbox law` group
 /// forwards here instead of holding its own write path.
 pub const NATIVE_LAW_SUBCOMMANDS: &[&str] = &[
-    "set", "stage", "match", "retract", "restore", "renew", "history",
+    "set", "stage", "match", "retract", "restore", "renew", "history", "recheck",
 ];
 
 /// Classify `fno inbox law <sub> ...` for the front door: `Some(rest)` runs
@@ -128,13 +128,13 @@ pub fn run(args: &[OsString]) -> i32 {
             // tty - the one credential a piped lane can never carry.
             law_exec(&request, Attended::Yes)
         }
-        "history" => {
+        "history" | "recheck" => {
             let argv: Vec<String> = rest
                 .iter()
                 .filter_map(|a| a.to_str().map(str::to_owned))
                 .collect();
             let request = serde_json::json!({
-                "mode": "history",
+                "mode": sub,
                 "argv": argv,
             })
             .to_string();
@@ -142,7 +142,7 @@ pub fn run(args: &[OsString]) -> i32 {
         }
         _ => {
             eprintln!(
-                "error: expected a subcommand (set | stage | match | retract | restore | renew | history)"
+                "error: expected a subcommand (set | stage | match | retract | restore | renew | history | recheck)"
             );
             2
         }

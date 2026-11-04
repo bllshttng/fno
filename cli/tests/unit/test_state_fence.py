@@ -72,13 +72,3 @@ def test_a_worktrees_git_file_counts_as_a_checkout(
     assert state_fence.running_from_source() == root
 
     state_fence.running_from_source.cache_clear()
-
-
-def test_the_registry_still_reaches_the_discriminator_under_its_own_name(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """`registry._running_from_source` is the hook existing tests patch. The
-    lift must not quietly break it into a second, unpatchable copy."""
-    import fno.agents.registry as reg
-
-    assert reg._running_from_source is state_fence.running_from_source

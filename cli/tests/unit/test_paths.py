@@ -229,7 +229,7 @@ def test_unknown_template_variable_rejected(
 
 
 # ---------------------------------------------------------------------------
-# AC1-EDGE: fleet_dir, postmortems_dir, worktrees_base, memory_dir all derive from state_dir
+# AC1-EDGE: postmortems_dir, memory_dir all derive from state_dir
 # ---------------------------------------------------------------------------
 
 
@@ -245,18 +245,14 @@ def test_all_global_dirs_derive_from_custom_state_dir(
     )
 
     from fno.paths import (
-        fleet_dir,
         global_events_json,
         ledger_json,
         memory_dir,
         postmortems_dir,
-        worktrees_base,
     )
 
     base = Path(custom_dir).resolve()
-    assert fleet_dir() == base / "fleet"
     assert postmortems_dir() == base / "db" / "postmortems"
-    assert worktrees_base() == base / "worktrees"
     assert memory_dir() == base / "memory"
     # The ledger answers through the layout table's db/history/ row; the root
     # spelling only until the mover (or this first resolve) renames it in.
@@ -420,33 +416,3 @@ def test_migrate_from_checkout_refuses_the_state_root(
     assert migrate_from_checkout(old, new) is False
     assert old.exists()
     assert not (state / "MOVED-TO").exists()
-
-
-def test_agents_registry_path_follows_declared_agents_home(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """AC1-HP: with FNO_AGENTS_HOME declared, a bare write_registry lands in
-    the declared home, never the config state_dir (the 2026-09-27 probe
-    overwrote the live registry through exactly this gap)."""
-    from fno.agents.registry import AgentEntry, write_registry
-
-    _set_settings(
-        monkeypatch,
-        tmp_path,
-        f"schema_version: 1\nconfig:\n  state_dir: '{tmp_path / '.fno'}'\n",
-    )
-    declared = tmp_path / "other" / "agents"
-    declared.mkdir(parents=True)
-    monkeypatch.setenv("FNO_AGENTS_HOME", str(declared))
-
-    entry = AgentEntry(
-        name="leader",
-        cwd="/tmp/x",
-        log_path="/tmp/x/log",
-        harness="claude",
-        harness_session_id="aaaaaaaa-0000-0000-0000-111111111111",
-    )
-    write_registry([entry])
-
-    assert (declared / "registry.json").exists()
-    assert not (tmp_path / ".fno" / "agents" / "registry.json").exists()

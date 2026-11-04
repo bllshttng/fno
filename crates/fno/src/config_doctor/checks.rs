@@ -718,7 +718,7 @@ pub fn run_doctor(out: &mut String) -> i32 {
         ),
         (
             "worktrees_base",
-            super::state_child(&settings, "worktrees_base", "worktrees"),
+            super::state_child(&settings, "worktrees_base", "spaces/worktrees"),
         ),
         (
             "memory_dir",
