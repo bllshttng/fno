@@ -354,6 +354,22 @@ pub(crate) async fn stop_confirmed(pid: u32, started: Option<u64>) -> bool {
 const MODEL_REFUSAL: &str =
     "-H footnote needs a model: pass it after the fence, `-- -m <provider>/<model>`";
 
+/// The permission mode a footnote spawn names after the `--` fence
+/// (`--permission-mode X`, `--permission-mode=X`). An unset flag keeps the
+/// harness default; the mode only ever rides an explicit ask.
+pub fn fenced_permission_mode(params: &Value) -> Option<String> {
+    let args: Vec<&str> = params
+        .get("harness_args")
+        .and_then(Value::as_array)?
+        .iter()
+        .filter_map(Value::as_str)
+        .collect();
+    args.iter().enumerate().find_map(|(i, a)| match *a {
+        "--permission-mode" => args.get(i + 1).map(|m| m.to_string()),
+        a => a.strip_prefix("--permission-mode=").map(str::to_string),
+    })
+}
+
 /// The model a footnote spawn names after the `--` fence (`-m X`,
 /// `--model X`, `--model=X`). The spawn door retired `--model`, so the
 /// fenced harness argv is the one place a caller still names it.
@@ -407,7 +423,15 @@ pub fn dispatch_once(
     let dir = transcript::session_dir(&transcript::sessions_root(), cwd, &sid);
     let record = transcript::transcript_file(&dir, &sid);
     let node = params.get("node").and_then(Value::as_str);
-    let mode = params.get("permission_mode").and_then(Value::as_str);
+    // The CLI folds a `--permission-mode` typed before the fence into
+    // harness_args, so the fenced spelling is the one a spawn still carries.
+    // No flag anywhere keeps the harness default.
+    let fenced_mode = fenced_permission_mode(params);
+    let mode = params
+        .get("permission_mode")
+        .and_then(Value::as_str)
+        .filter(|m| !m.is_empty())
+        .or(fenced_mode.as_deref());
     let spec = match launch_spec(
         "create",
         &sid,
