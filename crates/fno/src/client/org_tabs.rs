@@ -347,7 +347,7 @@ pub(crate) fn header(fleet: &Fleet, item: &Item, tab: crate::view_store::OrgTab)
     lb.s(format!("  {scope}"), BRole::Body).done()
 }
 
-pub(crate) fn table(rows: &[Row], sel: &str, width: usize, now: u64, in_lead: bool) -> Vec<Line> {
+pub(crate) fn table(rows: &[Row], sel: &str, width: usize, now: u64) -> Vec<Line> {
     const W: [usize; 6] = [18, 14, 10, 14, 9, 7];
     let fixed: usize = W.iter().sum::<usize>() + 1;
     let now_w = width.saturating_sub(fixed).max(8);
@@ -368,8 +368,22 @@ pub(crate) fn table(rows: &[Row], sel: &str, width: usize, now: u64, in_lead: bo
             .done(),
         meta(format!(" {}", "\u{2500}".repeat(width.saturating_sub(2)))),
     ];
+    // A machine is named once, by its fold, so a far lead reads like a near
+    // one. Under one machine the scope line already names it.
+    let many = rows.iter().any(|r| r.m.id != rows[0].m.id);
+    let mut machine: Option<&str> = None;
     for (gi, group) in leads(rows).into_iter().enumerate() {
-        if gi > 0 {
+        let m = group[0].m;
+        if many && machine != Some(m.id.as_str()) {
+            machine = Some(m.id.as_str());
+            out.push(
+                Lb::default()
+                    .s(" \u{25a0} ", BRole::Meta)
+                    .s(m.host.clone(), BRole::Head)
+                    .whole(&host_key(m))
+                    .done(),
+            );
+        } else if gi > 0 {
             out.push(meta(format!(
                 " {}",
                 "\u{2508}".repeat(width.saturating_sub(2))
@@ -379,10 +393,8 @@ pub(crate) fn table(rows: &[Row], sel: &str, width: usize, now: u64, in_lead: bo
             let key = r.key();
             let lead = if i > 0 {
                 String::new()
-            } else if in_lead {
-                r.p.name.clone()
             } else {
-                format!("{}@{}", r.p.name, r.m.host)
+                r.p.name.clone()
             };
             let age = epoch(r.s.started_at.as_deref())
                 .map(|t| dur(now as i64 - t))
@@ -644,7 +656,11 @@ pub(crate) fn graph(
     let mut cols: Vec<Vec<Cell>> = Vec::new();
     for g in leads(rows) {
         let pkey = lead_key(g[0].m, g[0].p);
-        let label = format!("{}@{}", g[0].p.name, g[0].m.host);
+        // Only the fleet scope mixes machines with no fold to name them.
+        let label = match item {
+            Item::Host(_) | Item::Lead(..) | Item::Seat(..) => g[0].p.name.clone(),
+            _ => format!("{}@{}", g[0].p.name, g[0].m.host),
+        };
         for (c, chunk) in g.chunks(CAP).enumerate() {
             let head = if c == 0 {
                 format!("\u{2261} {label}")

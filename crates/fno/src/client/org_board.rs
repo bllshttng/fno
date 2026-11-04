@@ -363,9 +363,7 @@ impl OrgBoard {
                 };
                 let rows = t::scope(f, &item);
                 let body = match self.tab {
-                    OrgTab::Table => {
-                        t::table(&rows, &self.key, width, now, matches!(item, Item::Lead(..)))
-                    }
+                    OrgTab::Table => t::table(&rows, &self.key, width, now),
                     OrgTab::Recent => t::recent(&rows, width, now),
                     OrgTab::Overview => t::overview(f, &item, &rows, width, now),
                     OrgTab::Graph => t::graph(f, &item, &rows, &self.key, width),

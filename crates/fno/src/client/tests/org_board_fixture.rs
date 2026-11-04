@@ -85,6 +85,29 @@ fn keys_walk_the_tabs_and_go_up_from_a_lead() {
 }
 
 #[test]
+fn the_table_names_each_machine_once_in_its_fold() {
+    let mut view = opened(fleet_json(), Vec::new());
+    let b = view.org_board.as_mut().unwrap();
+    b.tab = OrgTab::Table;
+    let fleet = text(&b.frame(None, 200, 80, now()).right);
+    for host in ["iMac2D2", "bb16"] {
+        assert_eq!(
+            fleet.matches(&format!("\u{25a0} {host}")).count(),
+            1,
+            "{fleet}"
+        );
+        assert!(!fleet.contains(&format!("@{host}")), "{fleet}");
+    }
+    b.select("host/m-imac");
+    let one = text(&b.frame(None, 200, 80, now()).right);
+    assert!(one.contains("machine iMac2D2"), "{one}");
+    assert!(
+        !one.contains("@iMac2D2") && !one.contains("\u{25a0} iMac2D2"),
+        "the scope line alone names the machine: {one}"
+    );
+}
+
+#[test]
 fn a_remote_seat_names_its_attach_command_and_only_its_relay_keys() {
     let mut map = fleet_json();
     // im-0's machine runs a daemon that publishes no seat facts.
