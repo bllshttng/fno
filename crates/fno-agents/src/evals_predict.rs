@@ -326,6 +326,11 @@ fn halves_power(
             e.1 += r.pass as usize;
         }
     }
+    let all_tasks: BTreeSet<String> = map_e.keys().chain(map_l.keys()).cloned().collect();
+    for t in all_tasks {
+        map_l.entry(t.clone()).or_insert((0, 0));
+        map_e.entry(t).or_insert((0, 0));
+    }
     let p = crate::evals_power::paired(&map_e, &map_l);
     let mut rng = Rng(SEED);
     crate::evals_power::power_block(&p, &mut rng, 1, None, None)

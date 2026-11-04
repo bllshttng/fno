@@ -117,10 +117,11 @@ fn climb_of(tmp: &TempDir, lines: &[String], prices: Option<Value>) -> Value {
             // Quoted: a bare 40-digit pin parses as a YAML number, and the
             // loader demands a string.
             "bank_rev: '{PIN}'\ntrain: [t1, t2]\nvalidation: []\nqualification: [{q}]\n",
-            q = (0..20)
-                .map(|i| format!("h{i:02}"))
-                .collect::<Vec<_>>()
-                .join(", ")
+            q = {
+                let mut v: Vec<String> = vec!["h1".into(), "h2".into(), "h3".into(), "h4".into()];
+                v.extend((0..20).map(|i| format!("h{i:02}")));
+                v.join(", ")
+            }
         ),
     )
     .unwrap();
@@ -280,8 +281,8 @@ fn an_aa_measured_floor_reads_regression_where_the_fixed_bar_reads_propose() {
     assert_eq!(v["noise_source"], "aa_measured", "{}", v);
     assert_eq!(v["noise_floor"].as_f64().unwrap().round(), 8.0, "{}", v);
     assert_eq!(v["heldout"]["power"]["verdict"], "beats_noise", "{}", v);
-    // The same rows under the fixed bar stay a tie arm: the trial is
-    // cheaper but its lower bound sits under base minus 15 points.
+    // One-repeat baseline: no rep-1 rows pair, so the floor reads the
+    // preregistered bar and the payload records the skip beside it.
     let lines2: Vec<String> = base
         .iter()
         .enumerate()
