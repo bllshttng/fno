@@ -245,8 +245,8 @@ mod tests {
         let text = strip_paths("Fix crates/fno-agents/src/evals/bank.rs so tests.rs reads ok");
         assert!(!text.contains(".rs") && !text.contains("crates/"), "{text}");
         assert_eq!(
-            fixes_id("subject\n\nFixes x-5b5f\n").as_deref(),
-            Some("x-5b5f")
+            fixes_id("subject\n\nFixes ab-12cd\n").as_deref(),
+            Some("ab-12cd")
         );
     }
 }
