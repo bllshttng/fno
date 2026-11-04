@@ -142,6 +142,11 @@ fn a_remote_seat_names_its_attach_command_and_only_its_relay_keys() {
         page.contains("fno agents session attach 00000064 on iMac2D2"),
         "{page}"
     );
+    assert!(
+        page.contains("   space peeks \u{b7} P opens a viewer pane")
+            && !page.contains("another machine"),
+        "a far seat's hint reads like a near one's: {page}"
+    );
     for field in ["model:", "started:", "cwd:", "context:"] {
         let line = page.lines().find(|l| l.contains(field)).unwrap();
         assert!(line.contains("not published"), "{line}");

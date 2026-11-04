@@ -198,7 +198,7 @@ pub(crate) fn seat(m: &Machine, p: &Lead, s: &Seat, width: usize, now: u64) -> V
             "   no pane here carries this session: run the terminal command \u{b7} u goes up to the lead"
         }
         (None, false) => {
-            "   this seat runs on another machine: space peeks \u{b7} P opens a viewer pane \u{b7} u goes up to the lead"
+            "   space peeks \u{b7} P opens a viewer pane \u{b7} u goes up to the lead"
         }
     }));
     out
