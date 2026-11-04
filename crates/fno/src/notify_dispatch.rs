@@ -353,7 +353,12 @@ fn toast_script(app: Option<&str>, title: &str, message: &str) -> String {
         esc(title)
     );
     match app {
-        Some(app) => format!("tell application \"{app}\" to {show}"),
+        // Only a running app is told: `tell` on a closed one launches it. A
+        // terminal with no Apple-event dictionary (Warp, WezTerm, Hyper)
+        // errors, so the handler falls back to the plain toast, never none.
+        Some(app) => format!(
+            "try\nif application \"{app}\" is running then\ntell application \"{app}\" to {show}\nelse\n{show}\nend if\non error\n{show}\nend try"
+        ),
         None => show,
     }
 }

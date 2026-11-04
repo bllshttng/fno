@@ -358,7 +358,12 @@ fn toast_script(app: Option<&str>, title: &str, message: &str) -> String {
         esc(title)
     );
     match app {
-        Some(app) => format!("tell application \"{app}\" to {show}"),
+        // Only a running app is told: `tell` on a closed one launches it. A
+        // terminal with no Apple-event dictionary (Warp, WezTerm, Hyper)
+        // errors, so the handler falls back to the plain toast, never none.
+        Some(app) => format!(
+            "try\nif application \"{app}\" is running then\ntell application \"{app}\" to {show}\nelse\n{show}\nend if\non error\n{show}\nend try"
+        ),
         None => show,
     }
 }
@@ -551,7 +556,7 @@ mod tests {
     fn toast_script_escapes_and_names_the_app() {
         assert_eq!(
             toast_script(Some("iTerm"), "a\"b", "c\\d"),
-            "tell application \"iTerm\" to display notification \"c\\\\d\" with title \"a\\\"b\""
+            "try\nif application \"iTerm\" is running then\ntell application \"iTerm\" to display notification \"c\\\\d\" with title \"a\\\"b\"\nelse\ndisplay notification \"c\\\\d\" with title \"a\\\"b\"\nend if\non error\ndisplay notification \"c\\\\d\" with title \"a\\\"b\"\nend try"
         );
         assert!(toast_script(None, "t", "m").starts_with("display notification"));
     }
