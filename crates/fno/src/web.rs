@@ -3512,9 +3512,7 @@ console.log("theme store: 9 cases ok");
         assert!(reply.contains("cache-control: no-store"), "{reply}");
         assert!(reply.contains("\"host\":\"bb16\""), "{reply}");
         assert!(reply.contains("\"questions_error\":\"x\""), "{reply}");
-        assert!(ask("/hq/decisions.json")
-            .await
-            .starts_with("HTTP/1.1 401"));
+        assert!(ask("/hq/decisions.json").await.starts_with("HTTP/1.1 401"));
         assert!(ask("/hq").await.starts_with("HTTP/1.1 401"));
         let reply = ask("/hq?t=right").await;
         assert!(reply.contains("data-current=\"hq\""), "{reply}");
