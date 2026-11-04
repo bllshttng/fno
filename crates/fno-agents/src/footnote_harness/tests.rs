@@ -147,6 +147,76 @@ fn the_launcher_refuses_a_login_endpoint_and_a_missing_binary() {
     assert!(reg.find("fx-plan").is_none());
 }
 
+/// A fenced `--permission-mode` rides the launch spec (the evals lane's
+/// spelling); a spawn without the flag carries no mode, so the harness
+/// default stands and bypass is never a default.
+#[test]
+fn a_fenced_permission_mode_rides_the_launch_spec() {
+    let tmp = tempfile::tempdir().unwrap();
+    // The guard holds the crate's env lock for the rest of the test.
+    let _home = crate::AgentsHomeEnvGuard::set(&tmp.path().join("agents-home"));
+    let home = AgentsHome::from_env();
+    let seen = tmp.path().join("spec.json");
+    let bin = crate::write_exec_stub(
+        tmp.path(),
+        "footnote",
+        &format!("#!/bin/sh\ncat > '{}'\nexit 2\n", seen.display()),
+    );
+    let vars = [
+        ("FNO_FOOTNOTE_BIN", bin.to_str().unwrap().to_string()),
+        (
+            "ANTHROPIC_BASE_URL",
+            "https://api.z.ai/api/anthropic".to_string(),
+        ),
+        ("ANTHROPIC_AUTH_TOKEN", "k".to_string()),
+        ("ZAI_API_KEY", "zk".to_string()),
+    ];
+    let saved: Vec<_> = vars
+        .iter()
+        .map(|(k, _)| (*k, std::env::var_os(k)))
+        .collect();
+    for (k, v) in &vars {
+        std::env::set_var(k, v);
+    }
+    // With no env endpoint, the model id's prefix picks the provider record.
+    std::env::remove_var("ANTHROPIC_BASE_URL");
+    let fenced = dispatch_once(
+        &home,
+        "fx-fenced",
+        "hi",
+        "tester",
+        tmp.path(),
+        Some("zai/glm-test"),
+        None,
+        &serde_json::json!({"harness_args": ["--permission-mode", "bypassPermissions"]}),
+    );
+    let spec: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&seen).unwrap()).unwrap();
+    let bare = dispatch_once(
+        &home,
+        "fx-bare",
+        "hi",
+        "tester",
+        tmp.path(),
+        Some("zai/glm-test"),
+        None,
+        &serde_json::json!({}),
+    );
+    let bare_spec: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&seen).unwrap()).unwrap();
+    for (k, v) in saved {
+        match v {
+            Some(v) => std::env::set_var(k, v),
+            None => std::env::remove_var(k),
+        }
+    }
+    assert_eq!(fenced.exit_code, 2, "{}", fenced.stderr);
+    assert_eq!(bare.exit_code, 2, "{}", bare.stderr);
+    assert_eq!(spec["permission_mode"], "bypassPermissions");
+    assert_eq!(spec["model"], "glm-test");
+    assert!(bare_spec["permission_mode"].is_null());
+}
+
 /// The pane spec is the launch spec in a file only its owner reads, because
 /// it carries the endpoint key. A missing model refuses before any write. A
 /// caller-assigned id names the TUI's first session, so the spec carries it and
