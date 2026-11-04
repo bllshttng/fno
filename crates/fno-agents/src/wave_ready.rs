@@ -896,11 +896,7 @@ pub(crate) fn constraints_section(settings: &[PathBuf]) -> String {
 }
 
 fn run_constraints() -> i32 {
-    let mut settings = vec![PathBuf::from(".fno/settings.yaml")];
-    if let Some(home) = std::env::var_os("HOME") {
-        settings.push(PathBuf::from(home).join(".claude/fno/settings.yaml"));
-    }
-    let section = constraints_section(&settings);
+    let section = constraints_section(&[PathBuf::from(".fno/settings.yaml")]);
     if !section.is_empty() {
         println!("{section}");
     }
