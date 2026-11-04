@@ -244,8 +244,7 @@ pub(crate) fn retro(scope: &str, cwd: &Path, cleared: &PendingSuccession, id: &s
         let log = std::fs::File::create(&log_path).ok()?;
         let stderr = log.try_clone().ok()?;
         std::process::Command::new(exe)
-            .args(["intel", "--windows", "--session", &session, "--write"])
-            .arg(&dir)
+            .args(retro_args(&session, &dir))
             .stdin(Stdio::null())
             .stdout(log)
             .stderr(stderr)
@@ -268,6 +267,18 @@ pub(crate) fn retro(scope: &str, cwd: &Path, cleared: &PendingSuccession, id: &s
             }),
         );
     }
+}
+
+/// The intel child's argv. `--read` makes a hand-off grade parts 3 to 5; the
+/// daemon's backfill arm omits it and keeps the mechanical fold only.
+fn retro_args(session: &str, dir: &Path) -> Vec<std::ffi::OsString> {
+    let mut args: Vec<std::ffi::OsString> = ["intel", "--windows", "--session", session, "--write"]
+        .into_iter()
+        .map(Into::into)
+        .collect();
+    args.push(dir.as_os_str().to_owned());
+    args.push("--read".into());
+    args
 }
 
 fn retro_unmeasured(scope: &str, id: &str, reason: &str) {
@@ -405,6 +416,28 @@ mod tests {
             raw.matches("team_succession_retro_unmeasured").count(),
             1,
             "{raw}"
+        );
+    }
+
+    /// A hand-off grades its retro: the intel child ends `--write <dir> --read`.
+    #[test]
+    fn the_retro_child_argv_ends_with_write_dir_and_read() {
+        let args = retro_args("sess-old", Path::new("/e/lead-fno-sess-old"));
+        let args: Vec<_> = args
+            .iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            args,
+            [
+                "intel",
+                "--windows",
+                "--session",
+                "sess-old",
+                "--write",
+                "/e/lead-fno-sess-old",
+                "--read"
+            ]
         );
     }
 

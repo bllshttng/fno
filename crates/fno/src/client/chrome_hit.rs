@@ -26,6 +26,10 @@ impl View {
         }
         let top = self.sideline_top();
         if row as usize + 1 == top && pw > 0 && (col as usize) < pw.saturating_sub(1) {
+            let need_w = self.need_input_label_cols();
+            if need_w > 0 && (col as usize) < need_w {
+                return Some(ChromeHit::NeedInput);
+            }
             for (start, w, view) in self.top_row_spans() {
                 if (col as usize) >= start && (col as usize) < start + w {
                     return Some(ChromeHit::TopRow(view));
