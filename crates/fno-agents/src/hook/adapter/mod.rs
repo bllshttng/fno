@@ -131,6 +131,24 @@ mod tests {
         }
     }
 
+    /// A codex PermissionRequest carries no message, so the adapter names
+    /// the tool the session waits on; a payload message still wins.
+    #[test]
+    fn codex_permission_request_names_the_waiting_tool() {
+        let bare = normalize(
+            "codex",
+            "PermissionRequest",
+            &json!({"session_id": "s-1", "tool_name": "Bash"}),
+        );
+        assert_eq!(bare.message, "waiting on approval to run Bash");
+        let said = normalize(
+            "codex",
+            "PermissionRequest",
+            &json!({"session_id": "s-1", "tool_name": "Bash", "message": "rm -rf x"}),
+        );
+        assert_eq!(said.message, "rm -rf x");
+    }
+
     /// The plugin-hosted harnesses carry the served `provider/model`, the
     /// permission text and the tool name through the one shared reader.
     #[test]

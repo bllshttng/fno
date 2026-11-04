@@ -1,8 +1,8 @@
-"""Integration tests for scripts/lint/no-cross-skill-runtime-calls.sh.
+"""Integration tests for scripts/lint/check-skill-reach.sh.
 
 - the real repo state passes the lint
-- a Skill() call, a path escape, or a missing fno requirement fails it
-- the Skill() error names file:line and recommends Read or Task/Agent
+- a missing fno requirement fails it
+- a toolbag that omits a skill fails it and names the skill
 """
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-LINT = REPO_ROOT / "scripts" / "lint" / "no-cross-skill-runtime-calls.sh"
+LINT = REPO_ROOT / "scripts" / "lint" / "check-skill-reach.sh"
 
 
 _CLEAN_SKILL_FRONTMATTER = textwrap.dedent(
@@ -65,39 +65,23 @@ def _make_skill(tmp_root: Path, name: str, skill_md: str) -> Path:
 # ---------------------------------------------------------------------------
 
 
-def test_skill_runtime_call_fails(tmp_path):
-    """A Skill() call in any *.md inside a driver skill fails the lint with
-    a line-pinpoint error and a fix recommendation."""
+def test_toolbag_omitting_a_skill_fails(tmp_path):
+    """A skill dir the toolbag never names as fno:<name> fails the lint, and a
+    Skill() call in target's text no longer does."""
     skill_md = _CLEAN_SKILL_FRONTMATTER.replace(
         "Body content. No forbidden patterns.",
-        'Body content. Then we Skill("blueprint", "...") at runtime.',
+        'Body content. Then we Skill("fno:fix") at runtime.',
     )
-    _make_skill(tmp_path, "target", skill_md)
+    target = _make_skill(tmp_path, "target", skill_md)
+    _make_skill(tmp_path, "fix", "---\nname: fix\n---\nbody\n")
+    _make_skill(tmp_path, "tdd", "---\nname: tdd\n---\nbody\n")
+    (target / "references").mkdir()
+    (target / "references" / "toolbag.md").write_text("| `fno:fix` | red | green |\n")
     result = _run(["bash", str(LINT), "--root", str(tmp_path)])
     assert result.returncode != 0
-    # AC3-UI: file:line:match output for navigation
-    assert "skills/target/SKILL.md:" in result.stderr
-    # AC3-UI: fix recommendation
-    assert "Read" in result.stderr
-    assert "Task/Agent" in result.stderr
-
-
-# ---------------------------------------------------------------------------
-# AC2-ERR: path-escape failure
-# ---------------------------------------------------------------------------
-
-
-def test_shared_path_escape_fails(tmp_path):
-    """A `../../_shared/X.md` link in a driver skill fails the lint."""
-    skill_md = _CLEAN_SKILL_FRONTMATTER.replace(
-        "Body content. No forbidden patterns.",
-        "See [auto-merge](../../_shared/auto-merge.md).",
-    )
-    _make_skill(tmp_path, "target", skill_md)
-    result = _run(["bash", str(LINT), "--root", str(tmp_path)])
-    assert result.returncode != 0
-    assert "cross-skill path escape" in result.stderr
-    assert "bundled references/ or agents/" in result.stderr
+    assert "does not name fno:tdd" in result.stderr
+    assert "does not name fno:fix" not in result.stderr
+    assert "Skill(" not in result.stderr
 
 
 # ---------------------------------------------------------------------------

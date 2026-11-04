@@ -26,7 +26,12 @@ pub(crate) fn normalize_with_root(
 ) -> HookEvent {
     let session_id = str_field(payload, "session_id");
     let tool = str_field(payload, "tool_name");
-    let message = str_field(payload, "message");
+    let message = match str_field(payload, "message") {
+        m if m.is_empty() && event == "PermissionRequest" && !tool.is_empty() => {
+            format!("waiting on approval to run {tool}")
+        }
+        m => m,
+    };
     let mut model = str_field(payload, "to_model");
     let mut effort = effort_field(payload);
     // The payload wins when it carries the axes; a Stop fire with none reads
