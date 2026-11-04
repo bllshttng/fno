@@ -358,6 +358,9 @@ crates/fno-agents/src/plans_path.rs
 # plan_carry.rs tests build a per-project Claude settings fixture (the same
 # Claude's-own-config class as plans_path.rs); footnote state never lands there.
 crates/fno-agents/src/plan_carry.rs
+# evals/runner.rs copies the project's own .claude config tree into a golden
+# tree (the rules a worker reads); it reads that tree and writes no footnote state there.
+crates/fno-agents/src/evals/runner.rs
 crates/fno-agents/src/law_match.rs
 crates/fno-agents/src/mail_cli/send/resolve.rs
 crates/fno-agents/src/client_commands.rs

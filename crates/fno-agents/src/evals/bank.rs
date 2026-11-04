@@ -7,7 +7,7 @@
 //! always-pass. The goldens pin the bytes.
 
 pub const VALID_TIERS_REPR: &str = "('capability', 'regression')";
-pub const VALID_CHECK_KINDS_REPR: &str = "('exit', 'file-exists', 'grep', 'tool-budget')";
+pub const VALID_CHECK_KINDS_REPR: &str = "('exit', 'file-exists', 'grep', 'tool-budget', 'tests')";
 
 pub const COHORTS_FILENAME: &str = "cohorts.yaml";
 
@@ -20,6 +20,26 @@ pub struct GradeCheck {
     pub path: Option<String>,
     pub pattern: Option<String>,
     pub max_tool_calls: Option<i64>,
+    pub tests: Option<TestsSpec>,
+}
+
+/// A `tests` check: re-apply the real fix's test files, run the named ids, and
+/// pass only when every fail-to-pass and pass-to-pass id reads ok.
+#[derive(Clone, Debug)]
+pub struct TestsSpec {
+    pub tests_ref: String,
+    pub test_files: Vec<String>,
+    pub package: String,
+    pub f2p: Vec<String>,
+    pub p2p: Vec<String>,
+}
+
+impl TaskSpec {
+    /// A work-product task grades the fix's tests, so its fixture is the fix's
+    /// parent commit and `--ref` varies only the rules a worker reads.
+    pub fn is_work_product(&self) -> bool {
+        self.grade.iter().any(|c| c.tests.is_some())
+    }
 }
 
 /// Why a task exists: the real case it came from and the rule it holds. A
@@ -147,6 +167,7 @@ pub fn load_task(path: &std::path::Path) -> Result<TaskSpec, BankError> {
         checks.push(parse_check(item, &id, path, i)?);
     }
     warn_if_decorative(&id, path, &checks);
+    let work_product = checks.iter().any(|c| c.tests.is_some());
     let timeout = map.get(serde_yaml_ng::Value::String("timeout_minutes".into()));
     let timeout = timeout.and_then(|v| v.as_i64()).unwrap_or(15);
     require(
@@ -171,6 +192,19 @@ pub fn load_task(path: &std::path::Path) -> Result<TaskSpec, BankError> {
         Some(raw) => Some(parse_golden(raw, &id, path)?),
         None => None,
     };
+    if work_product {
+        require(
+            golden.is_some(),
+            format!("task '{id}' ({where_}): a tests task requires a golden block (it runs in a sealed tree)"),
+        )?;
+        let qualified = map.get(serde_yaml_ng::Value::String("qualified".into()));
+        require(
+            qualified.and_then(|q| q.as_mapping()).is_some_and(|q| {
+                q.contains_key(serde_yaml_ng::Value::String("gold_rev".into()))
+            }),
+            format!("task '{id}' ({where_}): a tests task requires a qualified block written by a green gold solve"),
+        )?;
+    }
     Ok(TaskSpec {
         id,
         golden,
@@ -273,7 +307,10 @@ fn parse_check(
     let kind = map.get(serde_yaml_ng::Value::String("kind".into()));
     let kind = kind.and_then(|v| v.as_str()).unwrap_or("");
     require(
-        kind == "exit" || kind == "file-exists" || kind == "grep" || kind == "tool-budget",
+        matches!(
+            kind,
+            "exit" | "file-exists" | "grep" | "tool-budget" | "tests"
+        ),
         format!("{where_prefix}: kind must be one of {VALID_CHECK_KINDS_REPR}, got '{kind}'"),
     )?;
     if kind == "exit" {
@@ -292,7 +329,11 @@ fn parse_check(
             path: None,
             pattern: None,
             max_tool_calls: None,
+            tests: None,
         });
+    }
+    if kind == "tests" {
+        return parse_tests(map, kind, &where_prefix);
     }
     if kind == "tool-budget" {
         let max = map.get(serde_yaml_ng::Value::String("max_tool_calls".into()));
@@ -310,6 +351,7 @@ fn parse_check(
             path: None,
             pattern: None,
             max_tool_calls: Some(max),
+            tests: None,
         });
     }
     let fpath = map.get(serde_yaml_ng::Value::String("path".into()));
@@ -326,6 +368,7 @@ fn parse_check(
             path: Some(fpath.to_string()),
             pattern: None,
             max_tool_calls: None,
+            tests: None,
         });
     }
     let pattern = map.get(serde_yaml_ng::Value::String("pattern".into()));
@@ -341,6 +384,73 @@ fn parse_check(
         path: Some(fpath.to_string()),
         pattern: Some(pattern.to_string()),
         max_tool_calls: None,
+        tests: None,
+    })
+}
+
+fn parse_tests(
+    map: &serde_yaml_ng::Mapping,
+    kind: &str,
+    where_prefix: &str,
+) -> Result<GradeCheck, BankError> {
+    let text = |key: &str| {
+        map.get(serde_yaml_ng::Value::String(key.into()))
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .unwrap_or("")
+            .to_string()
+    };
+    let list = |key: &str| -> Vec<String> {
+        map.get(serde_yaml_ng::Value::String(key.into()))
+            .and_then(|v| v.as_sequence())
+            .map(|seq| {
+                seq.iter()
+                    .filter_map(|t| t.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let runner = text("runner");
+    require(
+        runner == "cargo",
+        format!("{where_prefix}: kind=tests runner must be 'cargo', got '{runner}'"),
+    )?;
+    let tests_ref = text("tests_ref");
+    require(
+        (7..=40).contains(&tests_ref.len()) && tests_ref.chars().all(|c| c.is_ascii_hexdigit()),
+        format!(
+            "{where_prefix}: kind=tests requires tests_ref as a 7-to-40 hex sha, got '{tests_ref}'"
+        ),
+    )?;
+    let package = text("package");
+    require(
+        !package.is_empty(),
+        format!("{where_prefix}: kind=tests requires a non-empty package"),
+    )?;
+    let test_files = list("test_files");
+    require(
+        !test_files.is_empty(),
+        format!("{where_prefix}: kind=tests requires a non-empty test_files list"),
+    )?;
+    let f2p = list("f2p");
+    require(
+        !f2p.is_empty(),
+        format!("{where_prefix}: kind=tests requires a non-empty f2p list"),
+    )?;
+    Ok(GradeCheck {
+        kind: kind.to_string(),
+        command: None,
+        expect: 0,
+        path: None,
+        pattern: None,
+        max_tool_calls: None,
+        tests: Some(TestsSpec {
+            tests_ref,
+            test_files,
+            package,
+            f2p,
+            p2p: list("p2p"),
+        }),
     })
 }
 
@@ -490,6 +600,51 @@ mod tests {
             "{0}",
             err.0
         );
+    }
+
+    #[test]
+    fn a_tests_task_loads_and_each_missing_field_refuses_naming_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let task = |check: &str, extra: &str| {
+            format!(
+                "id: wp-1\ntier: capability\ngrade:\n  - kind: tests\n{check}timeout_minutes: 5\n{extra}"
+            )
+        };
+        let check = "    runner: cargo\n    tests_ref: abc1234\n    package: p\n    test_files: [c/src/tests.rs]\n    f2p: [m::a]\n    p2p: [m::b]\n";
+        let golden = "golden:\n  source: {kind: fix-pr, ref: abc1234}\n  expected: e\n  rule: r\n  failure_type: wrong-assumption\n  outcome: failed\n";
+        let qualified = "qualified: {gold_rev: abc1234}\n";
+        let load = |body: String| load_task(&write_task(dir.path(), "t.yaml", &body));
+
+        let spec = load(task(check, &format!("{golden}{qualified}")))
+            .unwrap()
+            .grade
+            .remove(0)
+            .tests
+            .unwrap();
+        assert_eq!(
+            (spec.f2p, spec.p2p),
+            (vec!["m::a".into()], vec!["m::b".into()])
+        );
+        for (drop, want) in [
+            ("    f2p: [m::a]\n", "non-empty f2p"),
+            ("    test_files: [c/src/tests.rs]\n", "test_files"),
+            ("    tests_ref: abc1234\n", "7-to-40 hex sha"),
+        ] {
+            let err = load(task(
+                &check.replace(drop, ""),
+                &format!("{golden}{qualified}"),
+            ))
+            .unwrap_err();
+            assert!(err.0.contains(want) && err.0.contains("wp-1"), "{}", err.0);
+        }
+        assert!(load(task(check, qualified))
+            .unwrap_err()
+            .0
+            .contains("golden block"));
+        assert!(load(task(check, golden))
+            .unwrap_err()
+            .0
+            .contains("qualified block"));
     }
 
     #[test]
