@@ -8736,6 +8736,10 @@ event_types:
     description: "The user's look cleared at the head, so the look_hold arm reran the runs it had cancelled there."
     sources: [daemon]
     data: {required: [slug, pr, sha, runs]}
+  - name: test_hold_rerun
+    description: "A lifted test hold reran the cancelled runs of an open PR head that had no run in flight and no failure."
+    sources: [daemon]
+    data: {required: [slug, pr, sha, runs]}
   - name: ci_wait_cancel
     description: "A wait or cadence red-cancel of a head's runs still in flight: the failing checks that caused the red verdict, the head, the PR, and each run's cancel result."
     sources: [rust, daemon]
