@@ -246,8 +246,11 @@ pub(crate) fn check(
         Ok(v) => v,
         // A repeated key would silently discard the earlier value; YAML 1.2
         // refuses the document, so name it as the defect it is.
-        Err(e) if e.to_string().starts_with("duplicate entry with key") => {
-            let key = e.to_string().split('"').nth(1).unwrap_or("?").to_string();
+        // A nested key's error carries its path first: `consolidation: duplicate ...`.
+        Err(e) if e.to_string().contains("duplicate entry with key") => {
+            let msg = e.to_string();
+            let tail = &msg[msg.find("duplicate entry with key").unwrap_or(0)..];
+            let key = tail.split('"').nth(1).unwrap_or("?").to_string();
             return vec![format!("E\tfrontmatter has more than one `{key}:` line - a repeated key silently discards the earlier value")];
         }
         // The frontmatter check already errors on this; never double-report.
