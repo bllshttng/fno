@@ -1139,12 +1139,11 @@ mod table_agreement_tests {
         let mut problems: Vec<String> = Vec::new();
         for (model, node) in fields["models"].as_object().expect("models table") {
             // SettingsModel is the schema's root: json_schema renders it as
-            // top-level properties, never as a $def.
-            let root = schema["json_schema"]
-                .get("properties")
-                .and_then(Value::as_object);
+            // top-level properties, never as a $def, so the root object
+            // itself plays the $def role.
+            let root_object = schema.get("json_schema").cloned();
             let def = if model == "SettingsModel" {
-                root.map(|m| Value::Object(m.clone()))
+                root_object
             } else {
                 defs.get(model).cloned()
             };
