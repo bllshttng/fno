@@ -505,7 +505,8 @@ fn the_rename_sweep_rewrites_open_rows_through_the_alias_and_skips_claimed() {
         ),
         node(
             "x-old-done",
-            json!({"status": "done", "pr_number": 1,
+            json!({"status": "done", "completed_at": "2026-11-01T00:00:00Z",
+                   "pr_number": 1,
                    "pr_url": "https://github.com/bllshttng/fno/pull/1"}),
         ),
     ];
