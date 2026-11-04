@@ -182,7 +182,7 @@ flowchart TD
 | **Platform env var** | `CLAUDE_PLUGIN_ROOT` | `GEMINI_PROJECT_DIR` | `CODEX_PLUGIN_ROOT` |
 | **Instructions file** | `CLAUDE.md` | `GEMINI.md` | `AGENTS.md` |
 | **Plugin manifest** | `.claude-plugin/plugin.json` | `gemini-extension.json` | `.codex-plugin/plugin.json` |
-| **Skill invocation** | `Skill` tool | `activate_skill` tool | `$skill-name` auto-loading |
+| **Skill invocation** | `Skill` tool | `activate_skill` tool | `$fno:<name>` expansion; mid-run, open the skill's `SKILL.md` (opencode: the native `skill` tool) |
 | **Subagent dispatch** | `Agent` tool | Sequential main-thread only | Project-scoped custom agents (`.codex/agents/*.toml`) |
 
 ## Architecture Decisions

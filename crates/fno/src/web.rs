@@ -3048,13 +3048,16 @@ eq(reversed.map((r) => r.depth), [0, 1], "and sits one step in");
 // repo's issues/new, and the upvote names the card id only.
 const reqUrl = requestIssueUrl("o/r", "fno-request");
 eq(reqUrl.origin + reqUrl.pathname, "https://github.com/o/r/issues/new", "the request link base");
-eq(reqUrl.searchParams.get("label"), "fno-request", "the request label param");
+eq(reqUrl.searchParams.get("labels"), "fno-request", "the request label param");
 eq(reqUrl.searchParams.get("template"), "fno-request.yml", "the template param");
 const upUrl = upvoteIssueUrl("o/r", "fno-request", "c-ab12");
 eq(upUrl.origin + upUrl.pathname, "https://github.com/o/r/issues/new", "the upvote link base");
 eq(upUrl.searchParams.get("title"), "Upvote c-ab12", "the upvote sends the card id only");
 eq(upUrl.searchParams.get("labels"), "fno-request", "the upvote label param");
-console.log("snapshot page helpers: 38 cases ok");
+const takeUrl = takeIssueUrl("o/r", "fno-request", "c-ab12");
+eq(takeUrl.searchParams.get("title"), "Take c-ab12", "the take sends the card id only");
+eq(takeUrl.searchParams.get("labels"), "fno-request", "the take label param");
+console.log("snapshot page helpers: 40 cases ok");
 // The board shortcuts: every key the ? sheet advertises, the typing guard,
 // the Escape unwind order, and the copied-id toast line.
 const M = { meta: false, ctrl: false };
@@ -3178,6 +3181,7 @@ console.log("theme store: 9 cases ok");
                 "themeAttr",
                 "requestIssueUrl",
                 "upvoteIssueUrl",
+                "takeIssueUrl",
             ]
             .iter()
             .map(|name| lift_js_fn(BACKLOG_PAGE, name))
@@ -3207,7 +3211,7 @@ console.log("theme store: 9 cases ok");
                 let stdout = String::from_utf8_lossy(&o.stdout);
                 let stderr = String::from_utf8_lossy(&o.stderr);
                 assert!(
-                    stdout.contains("snapshot page helpers: 38 cases ok"),
+                    stdout.contains("snapshot page helpers: 40 cases ok"),
                     "the shipped snapshot helpers did not clear every case:\n{stdout}{stderr}"
                 );
                 assert!(

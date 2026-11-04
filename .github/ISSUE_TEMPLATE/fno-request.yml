@@ -1,0 +1,16 @@
+name: Request, upvote or take
+description: Ask for something, back a card on the public board, or take one.
+title: "Request: "
+labels: ["fno-request"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A maintainer reads every request before it joins the backlog. A title of `Upvote <id>` backs that card. A title of `Take <id>` holds that card for you once a maintainer approves it. Leave the title as the board link set it.
+  - type: textarea
+    id: details
+    attributes:
+      label: Details
+      description: For a new request, say what breaks or is missing and who hits it. Leave this empty for an upvote or a take. Do not paste secrets.
+    validations:
+      required: false

@@ -62,7 +62,7 @@ pub(super) const STRUCTURAL_STEPS: &[(&str, &str, &str)] = &[
     ("Skill bundles freshness check", ".", "bash scripts/lint/check-skill-bundles-fresh.sh"),
     ("Hook exec bits", ".", "bash scripts/ci/check-hook-exec-bit.sh"),
     ("No ${REPO_ROOT}/scripts in skills", ".", "bash scripts/lint/no-repo-root-scripts-in-skills.sh"),
-    ("Marketplace-readiness lint (no Skill calls, no path escapes, fno declared)", ".", "bash scripts/lint/no-cross-skill-runtime-calls.sh"),
+    ("Skill-reach lint (toolbag names every skill, fno declared)", ".", "bash scripts/lint/check-skill-reach.sh"),
     ("No unwrapped lib scripts", ".", "bash scripts/lint/no-unwrapped-lib-scripts.sh"),
     ("pin-skill generator self-test", ".", "bash tests/test-pin-skill.sh"),
     ("Repo-root shell-out drift guard (clone-only allowlist)", ".", "crates/fno/target/debug/fno doctor lint shellout-drift"),
