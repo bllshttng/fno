@@ -757,6 +757,7 @@ pub mod watch;
 pub mod watch_expiry;
 pub mod watchdog;
 pub mod wave;
+pub mod wave_ready;
 pub mod whoami;
 pub mod worked_nodes;
 pub mod worker_wake;
