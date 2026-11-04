@@ -110,6 +110,7 @@ TARGET_SESSION_ID	ambient
 TASK_DO_TTL_HOURS	ambient
 TASK_LOCK_TTL_HOURS	ambient
 TERM	environment
+TERM_PROGRAM	environment
 TMPDIR	environment
 TOTALLY_UNKNOWN_VAR	unclassified
 USER	environment
@@ -126,3 +127,4 @@ XDG_DATA_HOME	ambient
 XDG_RUNTIME_DIR	environment
 XDG_STATE_HOME	environment
 ZDOTDIR	ambient
+__CFBundleIdentifier	environment

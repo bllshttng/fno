@@ -33,6 +33,13 @@ grade:                      # >=1 mechanical check; a gradeless task is rejected
     path: "out/report.md"
   - kind: tool-budget       # the worker's claude transcript must hold at most N tool calls
     max_tool_calls: 120     # a missing transcript (codex, opencode, or a lane account with its own CLAUDE_CONFIG_DIR) fails as unmeasured
+  - kind: tests             # a work-product golden: the fix's own tests must pass (see Work-product goldens)
+    runner: cargo
+    tests_ref: 1a2b3c4d     # the fix commit; its test files are re-applied before grading
+    test_files: [crates/x/src/m/tests.rs]
+    package: x
+    f2p: [m::tests::new_case]   # fail-to-pass: fail before the fix, pass after
+    p2p: [m::tests::old_case]   # pass-to-pass: pass before and after
 timeout_minutes: 20
 tags: [cli, greenfield]
 ```
@@ -140,6 +147,20 @@ Every golden runs one one-shot worker, so no eval runs a lead or a worker pair. 
 Mine them with `fno doctor event corrections --by role --source user`, then read the rows on a `lead:` seat. On 2026-11-02 the store held 49 typed user corrections on lead sessions. Most reduce to nothing. 'no i pasted it already' states a fact about the moment, and no rule in the repo can answer it. If a row's answer is findable in the repo and the wrong act has a mechanical lure, keep it.
 
 `golden-lead-review-stays-inline` is the first. It comes from an L2 lead who misrouted a review, and AGENTS.md holds the rule. Lead goldens carry the `lead` tag and stay out of `gate` until a main run gives them a baseline.
+
+### Work-product goldens
+
+A decision golden grades what a worker says. A work-product golden grades what a worker builds. It takes a merged fix and asks a fresh worker to make the same fix from the backlog node's text, with every file name removed. The grade is the fix's own tests.
+
+The task fixture is the fix commit's parent. The grader overwrites the fix's test files from `tests_ref`, so a worker cannot edit the tests. It then runs the named ids with `cargo test --exact`. Every f2p id and every p2p id must read `ok`. An id with no result line fails the check and the failure names the id. The p2p list stops a worker from passing by deleting the code under test.
+
+`--ref` on a work-product task keeps the parent as the fixture. It replaces only the rules a worker reads (`AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `.claude`, `skills`, `agents`, `commands`, `hooks`). `bank_rev` records the `--ref` sha and `fixture_rev` records the parent, so `report --predict` still joins on the rules tree.
+
+Mine candidates with `fno doctor evals candidates --source fix-pr`. The miner lists a `fix` commit that changes both a separate test file under `src/` and a source file. A fix whose tests sit inline in the changed file is not listed, because re-applying that file also re-applies the fix.
+
+Mint a draft with `fno doctor evals drafts --from-commit <sha>`. The mint runs the crate's tests at the parent and at the fix. It sets f2p to the tests in the fix's test files that pass only with the fix. It sets p2p to the ones that pass in both. Then it runs the fix three times in a sealed tree. Every f2p id must pass all three. The draft lands in `<state>/evals/golden-drafts/work-product/` with a `qualified:` block. The bank loader refuses a tests task that has no `qualified:` block or no `golden:` block.
+
+Only the `cargo` runner exists. A pytest runner waits until a pytest candidate set shows a useful qualify rate.
 
 ## Do scores predict outcomes
 

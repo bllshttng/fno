@@ -1,9 +1,10 @@
 //! One Bash PreToolUse entry for the guards that share the same payload.
 //!
-//! Keep the former registration order. Rust guards run in-process; the three
-//! Python guards keep their existing owners and run as children with the same
-//! stdin and environment. A denial from any guard is returned after all six
-//! have recorded their decision. The guardrail preset owns whether a guard
+//! Keep the former registration order. Rust guards run in-process. The
+//! git-protection guard keeps its Python owner and runs as a child with the
+//! same stdin and environment, and only when the command text can name `git`
+//! or `gh`. A denial from any guard is returned after all have recorded
+//! their decision. The guardrail preset owns whether a guard
 //! runs at all: a preset-disabled guard answers nothing and emits no row.
 
 use serde_json::Value;
@@ -36,15 +37,9 @@ pub fn run(_args: &[String]) -> i32 {
     let events_pin = crate::state_path::resolve("events", &cwd);
 
     if crate::agents_config::preset_runs(preset, "bg-process") {
-        if let Some(root) = plugin_root.as_deref() {
-            if let Some(reason) =
-                run_python_guard(&root, "bg-process-guard.py", &raw, events_pin.as_deref())
-            {
-                refusals.push(reason);
-            }
-        } else {
-            eprintln!("pretooluse-bash: plugin root unavailable; skipping bg-process-guard");
-        }
+        let bg_refusal = super::bg_process_guard::judge(&payload);
+        super::emit_guard_decision(&cwd, "bg-process-guard", "Bash", bg_refusal.is_some());
+        refusals.extend(bg_refusal);
     }
 
     if crate::agents_config::preset_runs(preset, "bin-install") {
@@ -54,7 +49,13 @@ pub fn run(_args: &[String]) -> i32 {
     }
 
     if crate::agents_config::preset_runs(preset, "git-protection") {
-        if let Some(root) = plugin_root.as_deref() {
+        let command = payload
+            .pointer("/tool_input/command")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if !git_protection_may_refuse(command) {
+            super::emit_guard_decision(&cwd, "git-protection", "Bash", false);
+        } else if let Some(root) = plugin_root.as_deref() {
             if let Some(reason) =
                 run_python_guard(&root, "git-protection.py", &raw, events_pin.as_deref())
             {
@@ -72,18 +73,9 @@ pub fn run(_args: &[String]) -> i32 {
     }
 
     if crate::agents_config::preset_runs(preset, "recursive-grep") {
-        if let Some(root) = plugin_root.as_deref() {
-            if let Some(reason) = run_python_guard(
-                &root,
-                "recursive-grep-guard.py",
-                &raw,
-                events_pin.as_deref(),
-            ) {
-                refusals.push(reason);
-            }
-        } else {
-            eprintln!("pretooluse-bash: plugin root unavailable; skipping recursive-grep-guard");
-        }
+        let grep_refusal = super::recursive_grep_guard::judge(&payload);
+        super::emit_guard_decision(&cwd, "recursive-grep-guard", "Bash", grep_refusal.is_some());
+        refusals.extend(grep_refusal);
     }
 
     let test = if crate::agents_config::preset_runs(preset, "test-run") {
@@ -252,6 +244,20 @@ fn record_launch(payload: &Value, cwd: &Path) {
     }
 }
 
+/// A necessary condition for any git-protection refusal: the guard splits the
+/// command into shell tokens, and a token is its raw characters minus quotes
+/// and escapes. Every deny path needs a `git` or `gh` token, and one survives
+/// stripping `"`, `'` and `\` and lowercasing. False means the Python guard
+/// cannot refuse, so it does not start.
+fn git_protection_may_refuse(command: &str) -> bool {
+    let flat: String = command
+        .chars()
+        .filter(|c| !matches!(c, '"' | '\'' | '\\'))
+        .flat_map(char::to_lowercase)
+        .collect();
+    flat.contains("git") || flat.contains("gh")
+}
+
 fn run_python_guard(
     root: &Path,
     script: &str,
@@ -365,6 +371,19 @@ fn refuse_floor_setter(cmd: &str) -> Option<String> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod git_gate_tests {
+    use super::git_protection_may_refuse;
+
+    #[test]
+    fn the_text_check_is_a_necessary_condition_for_a_git_token() {
+        assert!(git_protection_may_refuse("g\"\"it push origin main"));
+        assert!(git_protection_may_refuse("GH pr merge 1"));
+        assert!(git_protection_may_refuse("g\\it status"));
+        assert!(!git_protection_may_refuse("ls -la /tmp"));
+    }
 }
 
 #[cfg(test)]

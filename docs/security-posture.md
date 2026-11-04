@@ -50,6 +50,13 @@ For Claude-hosted workers whose PreToolUse hooks run footnote's plugin, there is
 
 What the guard does not cover: an effect hidden inside a script or a raw `curl` (the Bash rows match leading command tokens). It also does not cover a harness whose PreToolUse hooks footnote does not wire (codex, opencode, pi, agy). The merge effect stays with `authorized-merge` and git-protection. The tool list remains the outer boundary. The effect guard narrows what a hooked tool call can do inside it.
 
+## Code scanning dispositions
+
+CodeQL runs as GitHub default setup, which takes no config file. A rule class judged not to apply is therefore dismissed per alert, with the reason below.
+
+- **`rust/hard-coded-cryptographic-value` (8 alerts, 447-454).** False positive. The query reads the parameter name `nonce` in `verify_child_promise` as key material. The value is a session promise token that the code compares by equality with a stored journal string. No cipher, key or MAC consumes it. All eight hits are test literals (`crates/fno-agents/tests/verify_evidence_parity.rs`, and the `#[cfg(test)]` module in `crates/fno-agents/src/verify_evidence.rs`). Dismissal reason: `used in tests`.
+- **`rust/command-line-injection` (1 alert, 446).** False positive. The attention API clears an item with an argv vector, never a shell. The `id` must match an open item from `fno-agents needs --items --json`. The `--answer` value is taken verbatim by the clear command. The route needs a bearer sink token and binds to 127.0.0.1. Dismissal reason: `false positive`.
+
 ## Future considerations
 
 Two horizon items are tracked in the backlog with explicit "do not scope" tags:

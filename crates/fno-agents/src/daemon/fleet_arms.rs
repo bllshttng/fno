@@ -338,6 +338,11 @@ impl FleetArms {
                 // receipt in reclaim.rs.
                 crate::reclaim::maybe_run_daily(&home);
                 crate::reclaim::maybe_run_cargo_hourly(&home);
+                // Free space under the floor runs the janitor now, not on its clock.
+                crate::disk_floor::maybe_sweep(
+                    &home,
+                    crate::agents_config::min_free_disk_gb(&grace_cwd),
+                );
             });
         }
         crate::orphan_reap::maybe_sweep(

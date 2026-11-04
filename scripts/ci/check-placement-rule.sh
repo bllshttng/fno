@@ -64,7 +64,7 @@
 #      harness (an env marker alone is inheritable and can mislabel a claude
 #      session as codex). A string prefix match on the harness's own file;
 #      footnote state never lands there.
-#      through hooks/bg-process-guard.py. That corpus is the only source of
+#      through crates/fno-agents/src/hook/bg_process_guard.rs. That corpus is the only source of
 #      the commands agents actually write, and it found three false refusals
 #      that eight rounds of hand-written cases missed. Read-only rglob over
 #      the harness's data; footnote stores nothing there, and a missing root
@@ -358,6 +358,9 @@ crates/fno-agents/src/plans_path.rs
 # plan_carry.rs tests build a per-project Claude settings fixture (the same
 # Claude's-own-config class as plans_path.rs); footnote state never lands there.
 crates/fno-agents/src/plan_carry.rs
+# evals/runner.rs copies the project's own .claude config tree into a golden
+# tree (the rules a worker reads); it reads that tree and writes no footnote state there.
+crates/fno-agents/src/evals/runner.rs
 crates/fno-agents/src/law_match.rs
 crates/fno-agents/src/mail_cli/send/resolve.rs
 crates/fno-agents/src/client_commands.rs

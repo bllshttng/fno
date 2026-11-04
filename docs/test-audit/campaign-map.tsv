@@ -1429,7 +1429,6 @@ K8	crates/fno/src/view_store.rs	rs	23
 K8	crates/fno/src/vt.rs	rs	22
 K8	crates/fno/src/web.rs	rs	35
 K8	crates/fno/src/wordmark.rs	rs	2
-K8	crates/fno/src/yard_overlay.rs	rs	5
 K8	crates/fno/tests/agent_edge_e2e.rs	rs	7
 K8	crates/fno/tests/agent_launcher_client_e2e.rs	rs	19
 K8	crates/fno/tests/agent_launcher_journey.rs	rs	7
@@ -1758,7 +1757,6 @@ K10	cli/tests/unit/test_whoami_agent_name.py	py	4
 K10	cli/tests/unit/test_whoami_context_line.py	py	4
 K10	cli/tests/unit/test_worker_external.py	py	14
 K10	cli/tests/unit/test_writable_dirs.py	py	33
-K10	cli/tests/unit/test_yard.py	py	13
 K10	crates/fno-agents/src/additional_prs.rs	rs	13
 K10	crates/fno-agents/src/adopt_carry.rs	rs	2
 K10	crates/fno-agents/src/agent_lock.rs	rs	3

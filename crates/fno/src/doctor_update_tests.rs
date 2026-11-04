@@ -660,3 +660,16 @@ fn last_green_is_the_newest_rev_carrying_the_published_crates_rev() {
     let err = last_green_rev(&repo, "0123456789abcdef").unwrap_err();
     assert!(err.contains("0123456789ab"), "{err}");
 }
+
+#[test]
+fn capture_paths_are_unique_and_exclusive() {
+    let a = capture_tag("fno-test");
+    let b = capture_tag("fno-test");
+    assert_ne!(a, b);
+    let path = std::env::temp_dir().join(format!("{a}.out"));
+    let _ = std::fs::remove_file(&path);
+    create_exclusive(&path).unwrap();
+    // A file already at the path (or a planted symlink) fails the open.
+    assert!(create_exclusive(&path).is_err());
+    let _ = std::fs::remove_file(&path);
+}

@@ -1167,7 +1167,7 @@ mod tests {
         GhOut {
             ok: true,
             code: 0,
-            stdout: r#"{"number": 931, "author": {"login": "bllshttng"}, "headRefOid": "abc123", "url": "https://github.com/bllshttng/fno/pull/931"}"#.to_string(),
+            stdout: r#"{"number": 931, "author": {"login": "bllshttng"}, "headRefOid": "abc123", "url": "https://github.com/fnodotdev/fno/pull/931"}"#.to_string(),
             stderr: String::new(),
         }
     }
