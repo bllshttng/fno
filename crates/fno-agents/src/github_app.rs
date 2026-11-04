@@ -105,7 +105,7 @@ fn app_config() -> Option<AppConfig> {
 
 /// Rust path handling never expands `~`, so a configured `~/...` key path
 /// resolves against HOME here.
-fn expand_tilde(path: &Path) -> PathBuf {
+pub(crate) fn expand_tilde(path: &Path) -> PathBuf {
     let Some(text) = path.to_str() else {
         return path.to_path_buf();
     };

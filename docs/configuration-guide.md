@@ -76,6 +76,7 @@ Keys live in a flat `config.toml` (`.fno/config.toml` project-local, `~/.fno/con
 | `telemetry.eval_events.enabled` | bool | `false` | advanced | Send each eval run to PostHog as an event (default off). |
 | `telemetry.eval_events.host` | str | `https://us.i.posthog.com` | advanced | PostHog ingest host, https only. |
 | `telemetry.eval_events.token_env` | str | `FNO_POSTHOG_PROJECT_TOKEN` | advanced | Env var holding the PostHog project token. |
+| `telemetry.eval_events.token_file` | str | `~/.fno/secrets/posthog-project-token` | advanced | Path to the PostHog project token file (mode 0600); token_env wins when set; a leading ~ expands against $HOME. |
 | `attention.enabled` | bool | `true` | advanced | Kill switch for the attention arm (question pages and sinks; default on). |
 | `attention.sinks` | list[dict[str, Any]] | `[]` | advanced | Push sinks for open questions: a list of tables with name, type (ntfy or webhook), url, topic, token_env, answer_base_url and body (title-only or full). |
 | `research.output_dir` | str (optional) | _(none)_ | advanced | Landing dir for the `fno do research` doc deliverable (brief + sources sidecar); vault area, not repo-relative. Unset => ship fails loud (never guesses). |
