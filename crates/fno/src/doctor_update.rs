@@ -145,6 +145,23 @@ pub(crate) fn parse_args(rest: &[std::ffi::OsString]) -> Result<Flags, String> {
     Ok(f)
 }
 
+/// A capture-file tag unique per call: pid plus a process-wide counter, so
+/// concurrent calls in one process never share a path.
+pub(crate) fn capture_tag(prefix: &str) -> String {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    format!("{prefix}-{}-{n}", std::process::id())
+}
+
+/// Create a capture file that must not already exist: O_EXCL fails on a
+/// planted file or symlink in a shared temp dir instead of following it.
+pub(crate) fn create_exclusive(path: &Path) -> std::io::Result<std::fs::File> {
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+}
+
 /// One blocking subprocess with captured output, NO bound: the installer
 /// shape. The deleted exec waited forever, so the port does too; probes keep
 /// their timeouts, installs keep none.
@@ -153,11 +170,7 @@ fn run_captured(
     args: &[String],
     input: Option<&str>,
 ) -> Result<(i32, String, String), String> {
-    let tag = format!(
-        "fno-doctor-update-{}-{}",
-        std::process::id(),
-        Instant::now().elapsed().as_nanos()
-    );
+    let tag = capture_tag("fno-doctor-update");
     let tmp = |suffix: &str| std::env::temp_dir().join(format!("{tag}.{suffix}"));
     let out_path = tmp("out");
     let err_path = tmp("err");
@@ -166,14 +179,14 @@ fn run_captured(
         let _ = std::fs::remove_file(p);
     };
     let mut command = crate::process_admission::std_command(bin);
-    command.args(args).stdout(
-        std::fs::File::create(&out_path).map_err(|e| format!("{}: {e}", out_path.display()))?,
-    );
-    command.stderr(
-        std::fs::File::create(&err_path).map_err(|e| format!("{}: {e}", err_path.display()))?,
-    );
+    command
+        .args(args)
+        .stdout(create_exclusive(&out_path).map_err(|e| format!("{}: {e}", out_path.display()))?);
+    command
+        .stderr(create_exclusive(&err_path).map_err(|e| format!("{}: {e}", err_path.display()))?);
     if input.is_some() {
-        std::fs::write(&in_path, input.unwrap_or_default())
+        create_exclusive(&in_path)
+            .and_then(|mut f| f.write_all(input.unwrap_or_default().as_bytes()))
             .map_err(|e| format!("{}: {e}", in_path.display()))?;
         let f = std::fs::File::open(&in_path).map_err(|e| format!("{}: {e}", in_path.display()))?;
         command.stdin(Stdio::from(f));
@@ -206,11 +219,7 @@ fn run_bounded(
     bound: Duration,
     input: Option<&str>,
 ) -> Result<(i32, String, String), String> {
-    let tag = format!(
-        "fno-doctor-update-{}-{}",
-        std::process::id(),
-        Instant::now().elapsed().as_nanos()
-    );
+    let tag = capture_tag("fno-doctor-update");
     let tmp = |suffix: &str| std::env::temp_dir().join(format!("{tag}.{suffix}"));
     let out_path = tmp("out");
     let err_path = tmp("err");
@@ -219,14 +228,14 @@ fn run_bounded(
         let _ = std::fs::remove_file(p);
     };
     let mut command = crate::process_admission::std_command(bin);
-    command.args(args).stdout(
-        std::fs::File::create(&out_path).map_err(|e| format!("{}: {e}", out_path.display()))?,
-    );
-    command.stderr(
-        std::fs::File::create(&err_path).map_err(|e| format!("{}: {e}", err_path.display()))?,
-    );
+    command
+        .args(args)
+        .stdout(create_exclusive(&out_path).map_err(|e| format!("{}: {e}", out_path.display()))?);
+    command
+        .stderr(create_exclusive(&err_path).map_err(|e| format!("{}: {e}", err_path.display()))?);
     if input.is_some() {
-        std::fs::write(&in_path, input.unwrap_or_default())
+        create_exclusive(&in_path)
+            .and_then(|mut f| f.write_all(input.unwrap_or_default().as_bytes()))
             .map_err(|e| format!("{}: {e}", in_path.display()))?;
         let f = std::fs::File::open(&in_path).map_err(|e| format!("{}: {e}", in_path.display()))?;
         command.stdin(Stdio::from(f));
