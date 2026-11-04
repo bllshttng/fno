@@ -830,4 +830,57 @@ mod tests {
         assert!(ids(&view, "regressions").is_empty());
         assert_eq!(view["breaking"], json!(false));
     }
+
+    #[test]
+    fn the_power_line_prints_beside_the_rates_and_a_one_repeat_side_reads_preregistered() {
+        // AC3-shaped fixture: 8 tasks, 3 flips from always_fail to
+        // always_pass, 5 constant. No repeat_index rows, so the A/A pick
+        // reads preregistered.
+        let mut rows = Vec::new();
+        let fixtures: [(&str, [bool; 3], [bool; 3]); 8] = [
+            ("f1", [false; 3], [true; 3]),
+            ("f2", [false; 3], [true; 3]),
+            ("f3", [false; 3], [true; 3]),
+            ("c1", [true; 3], [true; 3]),
+            ("c2", [true; 3], [true; 3]),
+            ("c3", [true; 3], [true; 3]),
+            ("c4", [true; 3], [true; 3]),
+            ("c5", [true; 3], [true; 3]),
+        ];
+        for (task, a, b) in fixtures {
+            rows.extend(three("a", task, a));
+            rows.extend(three("b", task, b));
+        }
+        let h = history(&rows);
+        let parsed = read_rows(h.path().to_str().unwrap(), None, None);
+        let view = fold(&parsed, "a", "b", 3, &BTreeSet::new()).unwrap();
+        let text = render(&view);
+        assert!(text.contains("Power:"), "{text}");
+        assert!(text.contains("5 constant"), "{text}");
+        assert!(text.contains("smallest detectable"), "{text}");
+        assert_eq!(view["breaking"], json!(false));
+        // AC4: side a carries one grade per task and no repeat-1 rows, so
+        // no A/A cohort pairs and the floor reads preregistered.
+        let mut rows2 = Vec::new();
+        let one: [(&str, bool, bool); 6] = [
+            ("t1", true, true),
+            ("t2", true, true),
+            ("t3", false, false),
+            ("t4", false, true),
+            ("t5", false, false),
+            ("t6", false, false),
+        ];
+        for (task, ap, bp) in one {
+            rows2.push(("a", task, ap, "graded"));
+            for _ in 0..3 {
+                rows2.push(("b", task, bp, "graded"));
+                rows2.push(("b", task, bp, "graded"));
+            }
+        }
+        let h2 = history(&rows2);
+        let parsed2 = read_rows(h2.path().to_str().unwrap(), None, None);
+        let view2 = fold(&parsed2, "a", "b", 3, &BTreeSet::new()).unwrap();
+        assert_eq!(view2["power"]["noise_source"], "preregistered");
+        assert_eq!(view2["power"]["aa"], Value::Null);
+    }
 }
