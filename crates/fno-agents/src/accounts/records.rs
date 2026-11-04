@@ -60,6 +60,7 @@ pub const AGENTS_RESERVED_KEYS: &[&str] = &[
     "max_load_per_cpu",
     "pane_group_max",
     "min_free_gb",
+    "min_free_disk_gb",
     "max_swap_pct",
     "naming",
     "orphan_reap_after_seconds",
