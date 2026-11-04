@@ -23,7 +23,7 @@ const USAGE: &str =
     "usage: fno mux serve --snapshot --server <name> --out <path> [--squad <name>] \
 [--theme dark|light|macchiato] [--format html|svg|png] [--size <cols>x<rows> [--fit]] [--peer <cols>x<rows>] \
 [--font <family>] [--message <fmail-id>] [--edge backlog|messages-tree|messages-part|org|dock=<size>] \
-[--view bell|bell-wide|bell-full|feed|row-menu|hover|cursor|tab-menu|sideline-menu|composer|split-menu|settings|keys|org-block|org-table|org-recent|org-overview|org-graph|org-health|org-seat|org-feed|org-system|messages-tree|messages-chats|messages-thread|messages-system|messages-archive|backlog-list|backlog-kanban|review-diff|review-panel|review-panel-drag|navigator-pr|navigator-model|navigator-menu|feed-detail|question-detail|connections|connections-use|needs|dock|machines]";
+[--view bell|bell-wide|bell-full|feed|row-menu|hover|cursor|tab-menu|sideline-menu|composer|split-menu|settings|keys|org-block|org-table|org-recent|org-overview|org-graph|org-health|org-seat|org-feed|org-system|org-remote|org-peek|org-spawn|org-keys|messages-tree|messages-chats|messages-thread|messages-system|messages-archive|backlog-list|backlog-kanban|review-diff|review-panel|review-panel-drag|navigator-pr|navigator-model|navigator-menu|feed-detail|question-detail|connections|connections-use|needs|dock|machines]";
 
 #[derive(Debug, PartialEq)]
 pub enum Format {
@@ -95,6 +95,12 @@ pub enum ViewKind {
     OrgSeat,
     OrgFeed,
     OrgSystem,
+    /// A seat on another machine with its relay keys, its peek page, the
+    /// spawn prompt open on that machine, and the board's keys page.
+    OrgRemote,
+    OrgPeek,
+    OrgSpawn,
+    OrgKeys,
     /// The Messages board with focus on column 1, 2 or 3.
     MessagesTree,
     MessagesChats,
@@ -181,6 +187,65 @@ fn select_modal_line(view: &mut View) -> Result<(), String> {
         .ok_or_else(|| "the modal painted no body text to select".to_string())
 }
 
+/// Select the first seat on another machine, then open what the shot names
+/// the way its key does. A peek page is the runner's own message fed in, so
+/// no shot reaches over ssh.
+fn remote_shot(
+    runtime: &tokio::runtime::Runtime,
+    view: &mut View,
+    kind: Option<&ViewKind>,
+) -> Result<(), String> {
+    use super::org_board::{host_key, seat_key, Act, Done, OrgMsg};
+    let b = view.org_board.as_mut().ok_or("org view did not open")?;
+    let remote = b.fleet.as_ref().and_then(|f| {
+        let m = f.machines.iter().find(|m| !m.local)?;
+        m.leads.iter().find_map(|p| {
+            let s = p.seats.iter().find(|s| s.local.is_none())?;
+            Some((
+                host_key(m),
+                seat_key(m, p, s),
+                s.short.clone(),
+                m.host.clone(),
+                s.harness.clone().unwrap_or_default(),
+            ))
+        })
+    });
+    let (host, seat, short, on, agent) = remote.ok_or(
+        "org view has no seat on another machine: shoot a root whose fleet map \
+has one (scripts/ops/mux-demo-snapshot.sh seeds one)",
+    )?;
+    let spawn = kind == Some(&ViewKind::OrgSpawn);
+    b.select(if spawn { &host } else { &seat });
+    let gen = b.gen;
+    let typed: &[&[u8]] = match kind {
+        Some(ViewKind::OrgSpawn) => &[b"s", b"fix the flaky login test"],
+        Some(ViewKind::OrgKeys) => &[b"?"],
+        _ => &[],
+    };
+    let mut sink = tokio::io::sink();
+    for bytes in typed {
+        runtime.block_on(super::org_board::keys(view, bytes, &mut sink))?;
+    }
+    if kind == Some(&ViewKind::OrgPeek) {
+        let lines = [
+            format!("peer {short}: agent={agent} short_id={short} recorded_cwd=~/code/checkout"),
+            "user: fix the retry budget in the payments client".into(),
+            "assistant: The budget resets on every reconnect, so a flapping link retries forever."
+                .into(),
+            "assistant: Moving the reset to the first good response, then a test for the flap."
+                .into(),
+        ];
+        let done = Done {
+            act: Act::Peek,
+            label: format!("peek {short}@{on}"),
+            key: seat,
+            result: Ok(lines.into()),
+        };
+        super::org_board::apply(view, gen, OrgMsg::Action(done));
+    }
+    Ok(())
+}
+
 fn parse_view(v: &str) -> Option<ViewKind> {
     match v {
         "bell" => Some(ViewKind::Bell),
@@ -208,6 +273,10 @@ fn parse_view(v: &str) -> Option<ViewKind> {
         "org-seat" => Some(ViewKind::OrgSeat),
         "org-feed" => Some(ViewKind::OrgFeed),
         "org-system" => Some(ViewKind::OrgSystem),
+        "org-remote" => Some(ViewKind::OrgRemote),
+        "org-peek" => Some(ViewKind::OrgPeek),
+        "org-spawn" => Some(ViewKind::OrgSpawn),
+        "org-keys" => Some(ViewKind::OrgKeys),
         "messages-tree" => Some(ViewKind::MessagesTree),
         "messages-chats" => Some(ViewKind::MessagesChats),
         "messages-thread" => Some(ViewKind::MessagesThread),
@@ -325,7 +394,7 @@ pub fn parse(tail: &[OsString]) -> Result<SnapshotArgs, String> {
             "--view" => {
                 let v = value()?;
                 view = Some(parse_view(&v).ok_or_else(|| {
-                    format!("fno mux serve --snapshot: unknown view {v:?}; use bell, bell-wide, bell-full, feed, row-menu, tab-menu, sideline-menu, composer, split-menu, settings, keys, org-block, org-table, org-recent, org-overview, org-graph, org-health, org-seat, org-feed, org-system, messages-tree, messages-chats, messages-thread, messages-system, messages-archive, messages-you, messages-you-thread, backlog-list, backlog-kanban, review-diff, review-panel, review-panel-drag, navigator-pr, navigator-menu, navigator-model, feed-detail, question-detail, connections-use or connections")
+                    format!("fno mux serve --snapshot: unknown view {v:?}; use bell, bell-wide, bell-full, feed, row-menu, tab-menu, sideline-menu, composer, split-menu, settings, keys, org-block, org-table, org-recent, org-overview, org-graph, org-health, org-seat, org-feed, org-system, org-remote, org-peek, org-spawn, org-keys, messages-tree, messages-chats, messages-thread, messages-system, messages-archive, messages-you, messages-you-thread, backlog-list, backlog-kanban, review-diff, review-panel, review-panel-drag, navigator-pr, navigator-menu, navigator-model, feed-detail, question-detail, connections-use or connections")
                 })?)
             }
             tok @ ("--server" | "--session") => {
@@ -1143,7 +1212,11 @@ shoot from a host where the lanes command answers"
             | ViewKind::OrgHealth
             | ViewKind::OrgSeat
             | ViewKind::OrgFeed
-            | ViewKind::OrgSystem,
+            | ViewKind::OrgSystem
+            | ViewKind::OrgRemote
+            | ViewKind::OrgPeek
+            | ViewKind::OrgSpawn
+            | ViewKind::OrgKeys,
         ) => {
             // The org view at one tab or page: open it the way the key
             // does, run one synchronous fleet read, then select what the
@@ -1186,6 +1259,12 @@ shoot a root whose fleet map has seats \
                 Some(ViewKind::OrgSeat) => b.select(&first),
                 Some(ViewKind::OrgFeed) => b.select("feed"),
                 Some(ViewKind::OrgSystem) => b.select("system"),
+                Some(
+                    ViewKind::OrgRemote
+                    | ViewKind::OrgPeek
+                    | ViewKind::OrgSpawn
+                    | ViewKind::OrgKeys,
+                ) => remote_shot(&runtime, &mut view, kind)?,
                 _ => {}
             }
         }
@@ -1448,6 +1527,10 @@ mod tests {
             ("org-seat", ViewKind::OrgSeat),
             ("org-feed", ViewKind::OrgFeed),
             ("org-system", ViewKind::OrgSystem),
+            ("org-remote", ViewKind::OrgRemote),
+            ("org-peek", ViewKind::OrgPeek),
+            ("org-spawn", ViewKind::OrgSpawn),
+            ("org-keys", ViewKind::OrgKeys),
             ("messages-tree", ViewKind::MessagesTree),
             ("messages-chats", ViewKind::MessagesChats),
             ("messages-thread", ViewKind::MessagesThread),
@@ -1488,7 +1571,7 @@ mod tests {
         let e = parse_extra(&["--view", "nonesuch"]).expect_err("unknown view names the options");
         assert!(
             e.contains(
-                "bell, bell-wide, bell-full, feed, row-menu, tab-menu, sideline-menu, composer, split-menu, settings, keys, org-block, org-table, org-recent, org-overview, org-graph, org-health, org-seat, org-feed, org-system, messages-tree, messages-chats, messages-thread, messages-system, messages-archive, messages-you, messages-you-thread, backlog-list, backlog-kanban, review-diff, review-panel, review-panel-drag, navigator-pr, navigator-menu, navigator-model, feed-detail, question-detail, connections-use or connections"
+                "bell, bell-wide, bell-full, feed, row-menu, tab-menu, sideline-menu, composer, split-menu, settings, keys, org-block, org-table, org-recent, org-overview, org-graph, org-health, org-seat, org-feed, org-system, org-remote, org-peek, org-spawn, org-keys, messages-tree, messages-chats, messages-thread, messages-system, messages-archive, messages-you, messages-you-thread, backlog-list, backlog-kanban, review-diff, review-panel, review-panel-drag, navigator-pr, navigator-menu, navigator-model, feed-detail, question-detail, connections-use or connections"
             ),
             "{e}"
         );

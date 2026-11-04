@@ -86,6 +86,12 @@ fn normalize_matches_the_python_leg() {
             "normalize_payload_untouched",
             &["spawn", "hi", "--", "codex", "-m", "x"],
         ),
+        // The cross-host relay's shape: `--name @host` stripped and the
+        // parent edge appended after the prompt.
+        (
+            "normalize_relayed_parent_edge",
+            &["spawn", "--cwd", "/code", "hi", "--spawned-by", "s-parent"],
+        ),
     ];
     for (name, input) in cases {
         let case = golden(name);
