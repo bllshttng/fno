@@ -44,7 +44,7 @@ Every other harness has its own page under [harnesses/](harnesses/). [HARNESSES.
 
 ### The CLI alone
 
-`curl -fsSL fno.sh | sh`, `uv tool install fno`, `pip install fno`, or `brew install fnodotdev/fno/fno` each install the published PyPI wheel. The wheel bundles the complete set: the Rust `fno` front door, the three `fno-agents` binaries, and the Python CLI (`fno-py`). `cargo install fno` is the source route. It builds the Rust front door with your Rust toolchain. The front door bootstraps the Python CLI on first use.
+`curl -fsSL fno.sh | sh`, `uv tool install fno`, `pip install fno`, or `brew install bllshttng/fno/fno` each install the published PyPI wheel. The wheel bundles the complete set: the Rust `fno` front door, the three `fno-agents` binaries, and the Python CLI (`fno-py`). `cargo install fno` is the source route. It builds the Rust front door with your Rust toolchain. The front door bootstraps the Python CLI on first use.
 
 ### Local clone
 

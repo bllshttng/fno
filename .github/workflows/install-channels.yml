@@ -125,7 +125,7 @@ jobs:
             runs-on: macos-15
             expect: pass
             node: ''
-            readme: ['brew install fnodotdev/fno/fno']
+            readme: ['brew install bllshttng/fno/fno']
           - id: cargo
             runs-on: ubuntu-24.04
             expect: pass

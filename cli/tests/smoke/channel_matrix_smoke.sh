@@ -548,7 +548,7 @@ row_brew() {
   # 900s: a cold brew install (auto-update + bottles + pip) fits well under
   # it, and it stays 600s clear of the 1500s row watchdog, so a stalled fetch
   # scores as an honest fail here instead of a row hang.
-  run_capture_bounded 900 brew install fnodotdev/fno/fno
+  run_capture_bounded 900 brew install bllshttng/fno/fno
   if [ "$RC" -ne 0 ]; then
     miss "brew-install" "rc=$RC: $(printf '%s' "$OUT" | tail -2 | tr '\n' ' ')"
     return 0
