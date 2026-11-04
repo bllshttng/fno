@@ -161,6 +161,20 @@ fn run_door(row: &DecisionRow, action: &Action) {
     let _ = prompt("press enter");
 }
 
+/// Open the table in a new pane of `session`, off the UI loop. The pane's
+/// own terminal is what the law door reads as the operator proof.
+pub fn open_pane(session: &str) {
+    let mut command = crate::process_admission::tokio_command(crate::server::fno_bin());
+    command
+        .args(["mux", "pane", "run", "--session", session])
+        .args(["--", "fno", "inbox", "decisions", "--table"])
+        .stdin(std::process::Stdio::null())
+        .kill_on_drop(true);
+    tokio::spawn(async move {
+        let _ = crate::process_admission::tokio_output(&mut command).await;
+    });
+}
+
 /// The reviewed-marks sidecar, beside the mux's other sidecars.
 fn store_path() -> std::path::PathBuf {
     #[cfg(not(test))]
