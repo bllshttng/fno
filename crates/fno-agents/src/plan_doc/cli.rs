@@ -44,6 +44,7 @@ pub fn run(args: &[String]) -> i32 {
         "brief" => run_brief(rest),
         "parse" => run_parse(rest),
         "mutate" => super::mutate::run(rest),
+        "consolidation" => super::consolidation::run(rest),
         "validate" => run_validate(rest),
         "folder-audit" => run_folder_audit(rest),
         "rung" => run_rung(rest),

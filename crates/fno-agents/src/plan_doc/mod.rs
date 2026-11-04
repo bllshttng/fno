@@ -4,6 +4,7 @@
 pub mod brief;
 pub mod cli;
 pub mod codec;
+pub mod consolidation;
 pub mod criteria;
 pub mod doc;
 pub mod exec_validate;
