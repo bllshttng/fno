@@ -76,12 +76,20 @@ fn fixes_id(message: &str) -> Option<String> {
 }
 
 fn node_text(id: &str) -> Result<String, String> {
-    let out = std::process::Command::new("fno")
-        .args(["backlog", "get", id])
-        .output()
-        .map_err(|e| format!("fno backlog get {id}: {e}"))?;
-    let node: Value = serde_json::from_slice(&out.stdout)
-        .map_err(|_| format!("node {id} did not resolve (fno backlog get)"))?;
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let query = crate::backlog::RowQuery {
+        fields: Some(["id", "title", "details"].map(str::to_string).into()),
+        ..Default::default()
+    };
+    let rows = crate::graph_store::read_rows_where(
+        &crate::backlog::settings::graph_path_at(Some(&cwd)),
+        &query,
+    )
+    .map_err(|e| format!("cannot read the backlog graph: {e}"))?;
+    let node = rows
+        .iter()
+        .find(|n| n.get("id").and_then(Value::as_str) == Some(id))
+        .ok_or_else(|| format!("node {id} did not resolve in the backlog graph"))?;
     let field = |k: &str| node.get(k).and_then(Value::as_str).unwrap_or("").trim();
     if field("title").is_empty() {
         return Err(format!("node {id} has no title"));
