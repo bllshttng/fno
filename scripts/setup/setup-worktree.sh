@@ -73,7 +73,7 @@ fi
 # directory conjured at it. On 2026-09-03 nine such directories sat under
 # <repo>/worktrees/, which .claude/rules/worktrees.md forbids outright: a test
 # mock printed that path and this script built each one, symlink farm and all.
-# Worktrees live at <repo>/.claude/worktrees/<name> or ~/.fno/worktrees/<name>,
+# Worktrees live at <repo>/.claude/worktrees/<name> or ~/.fno/spaces/worktrees/<repo>/<name>,
 # and every real caller creates the tree before linking into it, so an absent
 # directory means the caller is wrong about where it is.
 #

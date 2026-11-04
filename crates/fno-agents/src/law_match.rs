@@ -969,7 +969,8 @@ fn is_pr_subject(s: &str) -> bool {
 /// `footnote` where every node says `fno`: stamp and node must agree or the
 /// stage matcher and the filter answer different questions about one row.
 /// Adds one rung the Python resolver lacks: fno-managed worktrees at
-/// `~/.fno/worktrees/<repo>/<name>`, attributed through the `<repo>` segment
+/// `~/.fno/spaces/worktrees/<repo>/<name>` (or the pre-fold
+/// `~/.fno/worktrees/<repo>/<name>`), attributed through the `<repo>` segment
 /// like the conductor layout, so a law recorded from a worktree session
 /// stamps the parent repo's project instead of refusing.
 pub(crate) fn resolve_project(
@@ -992,9 +993,13 @@ pub(crate) fn resolve_project(
             }
         }
     }
-    // ~/.fno/worktrees/<repo>/... and conductor workspaces/<repo>/... map the
+    // ~/.fno/{spaces/,}worktrees/<repo>/... and conductor workspaces/<repo>/... map the
     // repo segment through the settings basename.
-    for marker in ["/.fno/worktrees/", "/workspaces/"] {
+    for marker in [
+        "/.fno/spaces/worktrees/",
+        "/.fno/worktrees/",
+        "/workspaces/",
+    ] {
         if let Some((_, rest)) = p.split_once(marker) {
             if let Some(repo) = rest.split(sep).next().filter(|s| !s.is_empty()) {
                 if let Some(slug) = project_by_repo_basename(repo, sources) {

@@ -210,6 +210,10 @@ pub(crate) fn worktrees_base() -> PathBuf {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     crate::paths_cli::worktrees_base(&cwd)
 }
+pub(crate) fn legacy_worktrees_base() -> Option<PathBuf> {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    crate::paths_cli::legacy_worktrees_base_for(&cwd)
+}
 pub(crate) fn sorted_json(value: &serde_json::Value) -> String {
     fn write_sorted(v: &serde_json::Value, out: &mut String) {
         match v {

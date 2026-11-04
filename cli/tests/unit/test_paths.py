@@ -229,7 +229,7 @@ def test_unknown_template_variable_rejected(
 
 
 # ---------------------------------------------------------------------------
-# AC1-EDGE: fleet_dir, postmortems_dir, worktrees_base, memory_dir all derive from state_dir
+# AC1-EDGE: postmortems_dir, memory_dir all derive from state_dir
 # ---------------------------------------------------------------------------
 
 
@@ -245,18 +245,14 @@ def test_all_global_dirs_derive_from_custom_state_dir(
     )
 
     from fno.paths import (
-        fleet_dir,
         global_events_json,
         ledger_json,
         memory_dir,
         postmortems_dir,
-        worktrees_base,
     )
 
     base = Path(custom_dir).resolve()
-    assert fleet_dir() == base / "fleet"
     assert postmortems_dir() == base / "db" / "postmortems"
-    assert worktrees_base() == base / "worktrees"
     assert memory_dir() == base / "memory"
     # The ledger answers through the layout table's db/history/ row; the root
     # spelling only until the mover (or this first resolve) renames it in.
