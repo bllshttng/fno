@@ -1474,3 +1474,211 @@ fn card_model_names_the_family_alone_only_at_its_newest_version() {
         .card_detail_text(&v.layout.agents[1], 0, 60)
         .starts_with("opus"));
 }
+
+// ---- x-9b4d: a remote row behaves like a local one ----
+
+/// Two sessions on iMac2D2: orla idle, mercedes writing. One machine beat.
+fn remote_fleet() -> serde_json::Value {
+    serde_json::json!({"machines": [
+        {"host": "iMac2D2", "local": false, "fresh": true, "age_s": 3, "sessions": [
+            {"name": "orla", "harness": "claude", "project": "fno"},
+            {"name": "mercedes", "harness": "claude", "project": "fno", "status": "writing"},
+        ]},
+    ]})
+}
+
+/// The same beat with the seats in swapped arrival order, so a held index
+/// lands on the neighbor.
+fn remote_fleet_mercedes_first() -> serde_json::Value {
+    serde_json::json!({"machines": [
+        {"host": "iMac2D2", "local": false, "fresh": true, "age_s": 3, "sessions": [
+            {"name": "mercedes", "harness": "claude", "project": "fno", "status": "writing"},
+            {"name": "orla", "harness": "claude", "project": "fno"},
+        ]},
+    ]})
+}
+
+/// The portal seat pane an open remote portal paints: a bare-pane row whose
+/// registered name is the `name@host` address, so `pane_label` leads with the
+/// remote glyph, and the seat is an open portal (pane 0).
+pub(crate) fn seat_twin() -> AgentRow {
+    let mut t = agent_row(
+        &format!("{} mercedes@iMac2D2", crate::proto::REMOTE_GLYPH),
+        7,
+        None,
+        false,
+    );
+    t.portal = Some(0);
+    t
+}
+
+/// Toggle on, one fleet read applied, agents as given. The layered shape
+/// every remote-row test reads.
+fn machines_view(agents: Vec<AgentRow>) -> View {
+    let mut v = wide_view(agents);
+    machine_tree::set_on(&mut v, true);
+    machine_tree::apply(&mut v, Ok(remote_fleet()));
+    v
+}
+
+/// The x-9b4d fixture: the toggle on, orla and mercedes on iMac2D2, and the
+/// open portal's seat pane (pane 7) holding focus.
+pub(crate) fn remote_machines_view() -> View {
+    let mut v = machines_view(vec![seat_twin()]);
+    v.layout.focus = 7;
+    v
+}
+
+fn painted_agent_at(v: &View, name: &str) -> usize {
+    v.painted_rows()
+        .iter()
+        .position(|r| matches!(r, DisplayRow::Agent(a) if a.name == name))
+        .unwrap_or_else(|| panic!("{name} paints"))
+}
+
+/// The full-width surface band a chosen (or hovered, or cursor) list row
+/// wears, read straight off the composed frame.
+fn row_is_banded(v: &View, display_i: usize) -> bool {
+    let frame = v.compose();
+    let cols = frame.cols as usize;
+    let text_w = v.sideline_paint_w().saturating_sub(1);
+    let row = display_i - v.sideline_offset() + 1; // the strip row owns row 0
+    frame.cells[row * cols..row * cols + text_w]
+        .iter()
+        .all(|c| c.bg == Color::Indexed(0))
+}
+
+#[test]
+fn the_open_remote_row_is_the_chosen_row() {
+    // AC1-HP x-9b4d: with mercedes@iMac2D2's portal seat focused, the remote
+    // row reads chosen and wears the band; orla next door stays plain. The
+    // bare-pane twin never paints (AC3-HP's fold), so the focus pane resolves
+    // to the remote row.
+    let v = remote_machines_view();
+    let mercedes = painted_agent_at(&v, "mercedes@iMac2D2");
+    let orla = painted_agent_at(&v, "orla@iMac2D2");
+    assert_eq!(
+        v.agent_row_index_for_pane(7),
+        Some(mercedes),
+        "the focus pane resolves to the remote row, not a twin"
+    );
+    assert!(
+        v.painted_rows()
+            .iter()
+            .all(|r| !matches!(r, DisplayRow::Agent(a) if a.name.contains("mercedes@iMac2D2") && a.pane_id == Some(7))),
+        "the twin never paints"
+    );
+    assert!(
+        row_is_banded(&v, mercedes),
+        "mercedes wears the chosen band"
+    );
+    assert!(!row_is_banded(&v, orla), "orla is not highlit");
+}
+
+#[test]
+fn a_focused_local_pane_without_a_twin_keeps_its_chosen_row() {
+    // AC2-EDGE: the predicate never invents a remote pairing. A plain local
+    // row hosting the focus pane stays the chosen row, twin set or not.
+    let mut v = machines_view(vec![agent_row("w1", 5, None, false)]);
+    v.layout.focus = 5;
+    let w1 = painted_agent_at(&v, "w1");
+    assert_eq!(v.agent_row_index_for_pane(5), Some(w1));
+    assert!(row_is_banded(&v, w1), "w1 wears the chosen band");
+}
+
+#[test]
+fn one_session_one_row() {
+    // AC3-HP x-9b4d (closes x-8fef): the open portal's seat pane folds into
+    // the remote row, so the session paints exactly one row and no row
+    // carries the remote glyph.
+    let v = remote_machines_view();
+    let rows = v.painted_rows();
+    let mercedes = rows
+        .iter()
+        .filter(|r| matches!(r, DisplayRow::Agent(a) if a.name.contains("mercedes")))
+        .count();
+    assert_eq!(mercedes, 1, "one row per session");
+    assert!(
+        rows.iter().all(
+            |r| !matches!(r, DisplayRow::Agent(a) if a.name.starts_with(crate::proto::REMOTE_GLYPH))
+        ),
+        "no glyph-named twin row paints"
+    );
+}
+
+#[test]
+fn held_highlights_survive_the_twin_layout_push() {
+    // AC4-EDGE + unknown 1 measured: before the fold, adding the seat twin in
+    // a layout push shifted every remote row down one, and BOTH held
+    // highlights are index-held (the selector re-anchors by name only in
+    // Extended density; hover only clears past the end), so the band landed
+    // on orla. With the twin folded, the push moves nothing.
+    let mut v = machines_view(vec![]);
+    v.layout.focus = 7;
+    let mercedes = painted_agent_at(&v, "mercedes@iMac2D2");
+    v.hover_row = Some(mercedes);
+    v.selector = Some(mercedes);
+    // The portal seat pane appears in a later layout push.
+    v.set_layout(LayoutView {
+        squads: vec![meta(1, "footnote", 2, 1), meta(2, "notes", 1, 0)],
+        active_squad: 1,
+        panes: vec![
+            (
+                10,
+                Rect {
+                    x: 0,
+                    y: 0,
+                    rows: 29,
+                    cols: 35,
+                },
+            ),
+            (
+                11,
+                Rect {
+                    x: 36,
+                    y: 0,
+                    rows: 29,
+                    cols: 36,
+                },
+            ),
+        ],
+        focus: 7,
+        area: (29, 72),
+        agents: vec![seat_twin()],
+        focus_node: None,
+    });
+    let after = painted_agent_at(&v, "mercedes@iMac2D2");
+    assert_eq!(after, mercedes, "the twin never shifts the remote rows");
+    assert_eq!(v.hover_row, Some(mercedes), "hover stays on mercedes");
+    assert_eq!(
+        v.selected_agent_name().as_deref(),
+        Some("mercedes@iMac2D2"),
+        "the selector stays on mercedes"
+    );
+}
+
+#[test]
+fn the_selector_follows_mercedes_through_a_fleet_re_sort() {
+    // AC4-EDGE: a fleet read that re-sorts the band moves the selector by
+    // identity (any density), and a hover whose row moved away clears
+    // instead of drifting onto the neighbor.
+    let mut v = remote_machines_view();
+    let mercedes = painted_agent_at(&v, "mercedes@iMac2D2");
+    v.selector = Some(mercedes);
+    v.hover_row = Some(mercedes);
+    machine_tree::apply(&mut v, Ok(remote_fleet_mercedes_first()));
+    let after = painted_agent_at(&v, "mercedes@iMac2D2");
+    assert_ne!(
+        after, mercedes,
+        "the re-sort moved mercedes under the held index"
+    );
+    assert_eq!(
+        v.selected_agent_name().as_deref(),
+        Some("mercedes@iMac2D2"),
+        "the selector follows mercedes by name"
+    );
+    assert_eq!(
+        v.hover_row, None,
+        "a hover whose row moved away clears instead of drifting"
+    );
+}

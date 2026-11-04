@@ -418,3 +418,52 @@ async fn ctrl_o_then_x_on_a_stopped_navigator_row_removes_it_like_the_sideline()
     assert_eq!(from_nav, decode_cmds(buf));
     assert_eq!(from_nav.len(), 1, "one RemoveAgent, nothing else");
 }
+
+// ---- x-9b4d: prefix+f reaches another machine's sessions ----
+
+#[test]
+fn find_lists_a_remote_row_by_its_name() {
+    // AC5-HP x-9b4d: prefix+f on `mercedes` [all] lists the remote session;
+    // its seat twin never leaks in as a second row.
+    let v = crate::client::tests::sideline_table_tests::sideline_card_tests::remote_machines_view();
+    let nav = NavView {
+        query: "mercedes".into(),
+        state_filter: None,
+        cursor: 0,
+    };
+    let rows = v.nav_filtered(&nav);
+    assert_eq!(
+        rows.len(),
+        1,
+        "one row: the remote session, not its seat twin"
+    );
+    assert_eq!(rows[0].label, "mercedes@iMac2D2");
+    assert!(
+        matches!(rows[0].hit, ChromeHit::OpenRemote(ref remote) if remote.host == "iMac2D2"),
+        "Enter opens the remote row's portal"
+    );
+}
+
+#[test]
+fn find_with_the_toggle_off_lists_the_seat_pane_as_it_is() {
+    // AC6-EDGE: with the toggle off there is no fleet read and no remote
+    // rows, so find lists the seat pane as the local pane it is, as before.
+    let mut twin = crate::client::tests::sideline_table_tests::sideline_card_tests::seat_twin();
+    twin.portal = Some(0);
+    let v = wide_view(vec![twin]);
+    let nav = NavView {
+        query: "mercedes".into(),
+        state_filter: None,
+        cursor: 0,
+    };
+    let rows = v.nav_filtered(&nav);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        rows[0].label,
+        format!("{} mercedes@iMac2D2", crate::proto::REMOTE_GLYPH)
+    );
+    assert!(
+        matches!(rows[0].hit, ChromeHit::Cmds(ref cs) if cs.iter().any(|c| matches!(c, Command::FocusPane(7)))),
+        "the seat pane focuses as a local pane"
+    );
+}

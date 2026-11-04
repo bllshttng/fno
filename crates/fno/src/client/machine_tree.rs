@@ -95,6 +95,23 @@ impl MachineTree {
     }
 }
 
+/// The glyph form of a remote row's address: the label its portal seat pane
+/// carries (`pane_label` leads a `name@host` registered name with the glyph).
+pub(super) fn twin_label(remote_name: &str) -> String {
+    format!("{} {remote_name}", crate::proto::REMOTE_GLYPH)
+}
+
+/// The local twin of a remote row: the seat pane a reach named with the
+/// address, painted as a bare-pane row (`remote: None, portal: Some`).
+/// `None` when no such pane exists: the portal never opened, or closed.
+pub(super) fn portal_twin<'a>(view: &'a View, remote: &RemoteRow) -> Option<&'a AgentRow> {
+    let label = twin_label(&remote.name);
+    view.layout
+        .agents
+        .iter()
+        .find(|a| a.remote.is_none() && a.portal.is_some() && a.name == label)
+}
+
 /// Turning the toggle off drops the bands at once, so no remote row outlives it.
 pub(super) fn set_on(view: &mut View, on: bool) {
     view.machine_tree = MachineTree {
@@ -126,7 +143,27 @@ pub(super) fn apply(view: &mut View, read: Result<Value, String>) {
     view.machine_tree.inflight = false;
     match read {
         Ok(map) if view.machine_tree.on && map.get("error").is_none() => {
+            // Captured against the old bands: the selector follows the row's
+            // identity through the swap (any density), and a hover whose row
+            // moved away clears instead of drifting onto the neighbor.
+            let held = view.selected_agent_name();
+            let hover_held = view.hover_row.and_then(|i| {
+                view.display_rows().get(i).and_then(|r| match r {
+                    DisplayRow::Agent(a) => Some(a.name.clone()),
+                    _ => None,
+                })
+            });
             view.machine_tree.bands = fold(&map);
+            view.reanchor_selector(held);
+            if let Some(hr) = view.hover_row {
+                let now_at = view.display_rows().get(hr).and_then(|r| match r {
+                    DisplayRow::Agent(a) => Some(a.name.clone()),
+                    _ => None,
+                });
+                if now_at != hover_held {
+                    view.hover_row = None;
+                }
+            }
         }
         Ok(_) | Err(_) => {}
     }
@@ -358,11 +395,28 @@ impl View {
         if !tree.layered() {
             return self.local_rows_with_depths();
         }
+        // One session, one row: a seat twin folds into its remote row, so
+        // an open portal never shifts the rows a held highlight points at.
+        let twins: std::collections::HashSet<String> = tree
+            .bands
+            .iter()
+            .filter(|b| !b.local)
+            .flat_map(|b| &b.seats)
+            .map(|seat| twin_label(&seat.row.name))
+            .collect();
         let (mut out, mut depths) = (Vec::new(), Vec::new());
         for band in &tree.bands {
             let (rows, band_depths, states): (Vec<_>, Vec<_>, Vec<_>) = if band.local {
                 let (rows, d) = self.local_rows_with_depths();
-                // One indent under the machine, the same step the remote bands take.
+                let (rows, d): (Vec<_>, Vec<_>) = rows
+                    .into_iter()
+                    .zip(d)
+                    .filter(|(row, _)| {
+                        !matches!(row, DisplayRow::Agent(a) if
+                            a.remote.is_none() && a.portal.is_some()
+                                && twins.contains(&a.name))
+                    })
+                    .unzip(); // One indent under the machine, the same step the remote bands take.
                 let rows = rows.into_iter().map(|row| match row {
                     DisplayRow::Header {
                         label,

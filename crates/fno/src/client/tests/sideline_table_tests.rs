@@ -8,7 +8,7 @@ use super::*;
 mod sideline_name_fit_tests;
 
 #[path = "sideline_card_tests.rs"]
-mod sideline_card_tests;
+pub(super) mod sideline_card_tests;
 
 #[test]
 fn list_layout_paints_the_same_cells_as_an_untouched_view() {
