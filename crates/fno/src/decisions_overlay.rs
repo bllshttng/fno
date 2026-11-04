@@ -140,8 +140,7 @@ pub fn parse(stdout: &[u8]) -> Result<Vec<DecisionRow>, String> {
         .map_err(|e| format!("malformed decisions listing: {e}"))
 }
 
-/// Read every decision, off the UI loop. A typed string reason on failure,
-/// so the panel says which failure fired.
+/// Read every decision, off the UI loop; the `Err` text names the failure.
 pub async fn fetch_all() -> Result<Vec<DecisionRow>, String> {
     let mut command = crate::process_admission::tokio_command(crate::server::fno_bin());
     command
@@ -170,8 +169,7 @@ pub async fn fetch_all() -> Result<Vec<DecisionRow>, String> {
     parse(&output.stdout)
 }
 
-/// What the user can do to one row. Each variant renders to the argv a pane
-/// runs; none runs from the client.
+/// What the user can do to one row; each renders to an argv a pane runs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
     Retract { reason: String },
