@@ -567,7 +567,7 @@ def _update_signpost() -> None:
     raise typer.Exit(code=2)
 
 
-def _native_family_signpost(name: str, command: str) -> "click.Command":
+def _native_family_signpost(name: str, command: str):
     """The no-front-door spelling for a family the Rust front door owns: the
     menu keeps the name advertised, and this leaf only names what installs
     the door that answers it."""
@@ -595,7 +595,7 @@ _whoami_signpost_command = _native_family_signpost("whoami", "fno whoami status"
 _doctor_signpost_command = _native_family_signpost("doctor", "fno doctor")
 
 
-def _evals_signpost() -> "click.Command":
+def _evals_signpost():
     """The root `evals` spelling retired with its forwarder: this leaf keeps
     the hidden real root on `help --all` and teaches the same move the front
     door's root refusal teaches."""

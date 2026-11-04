@@ -2044,7 +2044,7 @@ fn main() {
                 println!("Durable typed resume receipts (evidence, never write authority).");
                 println!("To revive an agent SESSION by id, use `fno agents resume <session-id>`");
                 println!("(or `fno agents adopt <session-id>` to register it without resuming).");
-                println!("{}", fno_agents::resume_receipt::door::USAGE);
+                println!("usage: fno do resume receipt write|validate|show [options]");
                 std::process::exit(0);
             }
             // The retired flag spelling maps to the door's name; the deleted
