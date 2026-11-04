@@ -19,6 +19,7 @@ Keys live in a flat `config.toml` (`.fno/config.toml` project-local, `~/.fno/con
 | `paths.worktrees_base` | str (optional) | _(none)_ | never | Override base dir for worktrees. |
 | `paths.cargo_targets_base` | str (optional) | _(none)_ | never | Cargo build base: where cargo intermediates land, as <base>/{workspace-path-hash} via CARGO_BUILD_BUILD_DIR (default ~/.fno/cargo-build). Each checkout hashes to its own dir, so parallel builds never share the cargo artifact lock; the checkout's target/ keeps only final binaries. |
 | `paths.memory_dir` | str (optional) | _(none)_ | never | Override path to the memory dir. |
+| `repo_aliases` | dict[str, str] | `{}` | advanced | Rename map old = "new" between owner/repo slugs. A PR url recorded under a repo's former name binds in the merge gate and heals in the sweep leg; GitHub's own redirect (GET /repos/old answers the new full_name) seeds the same map through the gh-facts cache, so the config row is the offline override, never a requirement. Specimen: bllshttng/fno = "fnodotdev/fno". |
 | `paths.hook_logs_dir` | str (optional) | _(none)_ | never | Override path to hook logs. |
 | `paths.inbox_path` | str (optional) | _(none)_ | never | Override path to the capture-tier inbox/parking-lot file. |
 | `paths.handoffs_dir` | str (optional) | _(none)_ | never | Override path to the handoffs dir. |

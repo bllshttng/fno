@@ -600,6 +600,7 @@ fn heals_leg_persist(
                 h.pr_url.as_deref(),
                 None,
                 h.rebind,
+                &super::pr_link::repo_alias_map(None),
             );
             if result.outcome == "bound" && !result.bound_ids().is_empty() {
                 kept.push(json!({
@@ -752,9 +753,17 @@ fn bind_claims(
     repo: Option<&str>,
     dry_run: bool,
 ) -> (Option<String>, Vec<String>) {
+    // A claimed node carrying old-name refs binds through the rename alias,
+    // not a cross-repo refusal: the plain comparison reads a pre-rename url
+    // as a foreign repo.
+    let ref_slugs = entries
+        .iter()
+        .flat_map(super::merge_evidence::node_pr_refs)
+        .filter_map(|(_, url)| super::pr_link::repo_slug_from_url(url.as_deref()));
+    let aliases = super::pr_link::aliases_with_probe(None, repo, ref_slugs);
     if dry_run {
         let mut rows = entries.clone();
-        let result = bind_pr_rows(&mut rows, claims, pr_number, pr_url, repo, false);
+        let result = bind_pr_rows(&mut rows, claims, pr_number, pr_url, repo, false, &aliases);
         let out = (result.refusal.clone(), result.bound_ids());
         *entries = rows;
         return out;
@@ -766,7 +775,7 @@ fn bind_claims(
         None,
         None,
         |working| {
-            let result = bind_pr_rows(working, claims, pr_number, pr_url, repo, false);
+            let result = bind_pr_rows(working, claims, pr_number, pr_url, repo, false, &aliases);
             outcome = (result.refusal.clone(), result.bound_ids());
             if result.refusal.is_some() {
                 return Ok(false);

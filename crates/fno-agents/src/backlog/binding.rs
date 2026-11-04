@@ -4,7 +4,7 @@
 //! cannot leave a partial binding behind.
 
 use serde_json::{json, Value};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use super::merge_evidence::node_pr_refs;
 use super::node_ref::find_node_index;
@@ -54,6 +54,7 @@ pub(crate) fn bind_pr_rows(
     pr_url: Option<&str>,
     repo: Option<&str>,
     rebind: bool,
+    aliases: &BTreeMap<String, String>,
 ) -> PrRowBindResult {
     if claimed_ids.is_empty() {
         return PrRowBindResult::refused("no closure claims to bind");
@@ -76,7 +77,7 @@ pub(crate) fn bind_pr_rows(
                          unverifiable cross-repo claim"
                     ));
                 };
-                if !existing_repo.eq_ignore_ascii_case(our) {
+                if !crate::backlog::pr_link::same_repo_slug(&existing_repo, our, aliases) {
                     return PrRowBindResult::refused(format!(
                         "{nid} already carries a {existing_repo} PR ref; \
                          this PR is {our} - refusing a cross-repo claim"
@@ -248,7 +249,15 @@ mod tests {
     fn an_unknown_claim_refuses_before_any_row_changes() {
         let mut entries = vec![node(json!({}))];
         let claimed = vec!["x-aaaa".to_string(), "x-missing".to_string()];
-        let result = bind_pr_rows(&mut entries, &claimed, 7, None, None, false);
+        let result = bind_pr_rows(
+            &mut entries,
+            &claimed,
+            7,
+            None,
+            None,
+            false,
+            &BTreeMap::new(),
+        );
         assert_eq!(result.outcome, "refused");
         assert_eq!(result.refusal.as_deref(), Some("unknown node: x-missing"));
         assert!(entries[0].get("pr_number").is_none(), "no partial binding");
@@ -261,7 +270,15 @@ mod tests {
             "pr_url": "https://github.com/other/repo/pull/3",
         }))];
         let claimed = vec!["x-aaaa".to_string()];
-        let result = bind_pr_rows(&mut entries, &claimed, 7, None, Some("o/r"), false);
+        let result = bind_pr_rows(
+            &mut entries,
+            &claimed,
+            7,
+            None,
+            Some("o/r"),
+            false,
+            &BTreeMap::new(),
+        );
         assert_eq!(result.outcome, "refused");
         assert!(result.refusal.unwrap().contains("cross-repo claim"));
     }
@@ -274,7 +291,15 @@ mod tests {
             "additional_prs": [{"number": 7, "url": url, "merge_status": "closed"}],
         })];
         let claimed = vec!["x-aaaa".to_string()];
-        let result = bind_pr_rows(&mut entries, &claimed, 7, Some(url), None, true);
+        let result = bind_pr_rows(
+            &mut entries,
+            &claimed,
+            7,
+            Some(url),
+            None,
+            true,
+            &BTreeMap::new(),
+        );
         assert_eq!(result.bindings[0].action, "filled_primary");
         assert_eq!(entries[0]["pr_number"], 7);
         assert_eq!(entries[0]["additional_prs"], json!([]));
@@ -296,6 +321,7 @@ mod tests {
             Some("https://github.com/o/r/pull/7"),
             Some("o/r"),
             false,
+            &BTreeMap::new(),
         );
         assert_eq!(result.outcome, "bound", "{:?}", result.refusal);
         assert_eq!(result.bindings[0].action, "filled_primary");
@@ -323,11 +349,34 @@ mod tests {
             Some("https://github.com/o/r/pull/9"),
             Some("o/r"),
             true,
+            &BTreeMap::new(),
         );
         assert_eq!(result.outcome, "bound");
         assert_eq!(result.bindings[0].action, "appended_additional");
         assert_eq!(entries[0]["pr_number"], 9);
         assert!(entries[0]["merge_status"].is_null());
         assert_eq!(entries[0]["additional_prs"][0]["number"], 2);
+    }
+
+    #[test]
+    fn an_old_name_ref_binds_through_the_rename_alias() {
+        let mut entries = vec![node(json!({
+            "pr_number": 3,
+            "pr_url": "https://github.com/bllshttng/fno/pull/3",
+        }))];
+        let claimed = vec!["x-aaaa".to_string()];
+        let mut aliases = BTreeMap::new();
+        aliases.insert("bllshttng/fno".to_string(), "fnodotdev/fno".to_string());
+        let result = bind_pr_rows(
+            &mut entries,
+            &claimed,
+            7,
+            Some("https://github.com/fnodotdev/fno/pull/7"),
+            Some("fnodotdev/fno"),
+            false,
+            &aliases,
+        );
+        assert_eq!(result.outcome, "bound", "{:?}", result.refusal);
+        assert_eq!(result.bindings[0].action, "appended_additional");
     }
 }
