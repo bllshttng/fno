@@ -244,17 +244,21 @@ pub struct ListRow {
     pub branch: Option<String>,
 }
 
-/// Worktrees under the canonical worktrees base or the legacy
+/// Worktrees under the canonical worktrees base, the pre-fold
+/// `<state>/worktrees` (no override set) or the legacy
 /// `<repo>/.claude/worktrees`, matching the deleted list_worktrees.
 pub fn list_worktrees(repo_root: &Path) -> Vec<ListRow> {
     let repo_root = resolve_lenient(repo_root);
     let base = super::worktrees_base();
     let legacy = repo_root.join(".claude").join("worktrees");
+    let pre_fold = super::legacy_worktrees_base();
     let rows = porcelain(&repo_root).unwrap_or_default();
     let mut out = Vec::new();
     for (branch, path) in rows {
         let p = PathBuf::from(&path);
-        let under = is_under(&p, &base) || is_under(&p, &legacy);
+        let under = is_under(&p, &base)
+            || is_under(&p, &legacy)
+            || pre_fold.as_deref().is_some_and(|b| is_under(&p, b));
         if !under {
             continue;
         }

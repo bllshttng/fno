@@ -120,7 +120,8 @@ fn mission_active_count() -> i64 {
 /// (harness-native) and `<base>/<repo>/<name>/.fno/target-state.md`
 /// (fno-managed); deduped by canonical path.
 pub(crate) fn auto_merge_armed_manifests() -> BTreeMap<String, i64> {
-    let mut bases: Vec<PathBuf> = vec![super::state_dir().join("worktrees")];
+    let state = super::state_dir();
+    let mut bases: Vec<PathBuf> = vec![state.join("spaces/worktrees"), state.join("worktrees")];
     let repo = super::resolve_source(None);
     if let Some(repo) = repo {
         bases.push(repo.join(".claude/worktrees"));

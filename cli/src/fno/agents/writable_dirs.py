@@ -33,7 +33,7 @@ A worker writes its plan, not the operator's notes.
 **What the state-root grant actually covers, stated rather than implied.**
 ``--add-dir`` is recursive, so granting the state root grants everything under
 it. On the default layout that includes ``worktrees_base``
-(``~/.fno/worktrees``), which is every sibling worker's checkout. It also
+(``~/.fno/spaces/worktrees``), which is every sibling worker's checkout. It also
 includes the files that sit DIRECTLY at that root: ``config.toml`` and
 ``settings.yaml`` alongside ``graph.json``
 (``docs/state-root-inventory.md``). So a worker a config gate refused can, in

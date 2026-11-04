@@ -388,6 +388,7 @@ fn untracked_worktree_targets() -> Vec<PathBuf> {
     let repo_name = repo.file_name().unwrap_or_default().to_string_lossy();
     let bases = [
         repo.join(".claude/worktrees"),
+        home.join(".fno/spaces/worktrees").join(repo_name.as_ref()),
         home.join(".fno/worktrees").join(repo_name.as_ref()),
     ];
     for base in bases {

@@ -8,7 +8,7 @@
 [doctor]   briefs_dir: <FIXTURE>/state/briefs  (config.paths.briefs_dir default)
 [doctor]   fleet_dir: <FIXTURE>/state/fleet  (config.paths.fleet_dir default)
 [doctor]   postmortems_dir: <FIXTURE>/state/postmortems  (config.paths.postmortems_dir default)
-[doctor]   worktrees_base: <FIXTURE>/state/worktrees  (config.paths.worktrees_base default)
+[doctor]   worktrees_base: <FIXTURE>/state/spaces/worktrees  (config.paths.worktrees_base default)
 [doctor]   memory_dir: <FIXTURE>/state/memory  (config.paths.memory_dir default)
 [doctor]   hook_logs_dir: <FIXTURE>/state/hook-logs  (config.paths.hook_logs_dir default)
 
