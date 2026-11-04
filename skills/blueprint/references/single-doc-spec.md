@@ -86,7 +86,7 @@ pub const BLUEPRINT_WRITE_ALLOWLIST: &[&str] = &[
 ];
 ```
 
-The blueprint writer refuses any name outside the set with exit 2. This is checked before each section write, not only at the end. Future skill additions must define their own allowlist constants. The set widens only for a field a validator requires blueprint to write (`consolidation` for the 2026-08-17 gate, `difficulty` for the 2026-08-26 gate); each widening updates the exact-set pin in `crates/fno-agents/src/plan_doc/cli_tests.rs` in the same PR.
+The blueprint writer refuses any name outside the set with exit 2. This is checked before each section write, not only at the end. Future skill additions must define their own allowlist constants. The set widens only for a field a validator requires blueprint to write. Examples are `consolidation` for the 2026-08-17 gate and `difficulty` for the 2026-08-26 gate. Each widening updates the exact-set pin in `crates/fno-agents/src/plan_doc/cli_tests.rs` in the same PR.
 
 ## Atomic mutation contract
 

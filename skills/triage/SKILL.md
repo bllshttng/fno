@@ -24,20 +24,11 @@ duplicate detection.
 - **Cycles are dropped automatically.** If a proposed dependency would
   create a cycle (A blocks B, B blocks A), validation drops the offending
   edge and logs the conflict.
-- **Project-scoped by default.** Triage filters to the current repo's
-  project (matched by canonical repo root, stable across worktrees).
-  Pass `all` to triage across every project or `--project <name>` to
-  target a specific one. Matches the scoping of `fno backlog
-  next`/`ready`.
+- **Project-scoped by default.** Triage filters to the current repo's project, matched by canonical repo root and stable across worktrees. Pass `all` to triage every project, or `--project <name>` for one. It matches the scoping of `fno backlog next` and `fno backlog ready`.
 
 ## Setup
 
-Project scoping requires at least one node registered to the current repo.
-The first `/blueprint` with auto-intake (or a manual `fno backlog intake`)
-stores the canonical repo root as the node's `cwd` and derives a project
-name from the repo directory basename. Subsequent triage runs from the
-same repo — including from any git worktree of it — auto-detect that
-project.
+Project scoping requires at least one node registered to the current repo. The first `/blueprint` with auto-intake, or a manual `fno backlog intake`, stores the canonical repo root as the node's `cwd`. It derives a project name from the repo directory basename. Later triage runs from the same repo, or from any git worktree of it, detect that project.
 
 If no project is detected (no adopted node yet for this repo), triage
 falls through to `all projects` and prints a hint in the scope line so

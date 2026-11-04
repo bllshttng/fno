@@ -129,7 +129,7 @@ For every kept finding, open the cited `file:line` and check the finding's verba
 
 An incremental round narrows scope only to the increment since the last reviewed head, and the narrowing is earned, never assumed. Resolve the prior head from the attestation journal: the newest `review_attestation` row with `verdict: pass` on this branch whose `head_sha` differs from the current HEAD is the prior round.
 
-Read it with one plain argv jq call, with the three values written in literally: `jq -Rrn --arg branch <branch> --arg head <head-sha> -f <filter-file> <events-path>`. A worktree session's Bash isolation refuses shell expansion and command substitution (docs/architecture/worktree-mechanics.md), so write the filter below to a file in a gitignored state directory (`.fno/tmp/` is fine) rather than inlining it. `<events-path>` is the events journal (`.fno/events.jsonl`, linked to canonical from every worktree; `printenv FNO_EVENTS_PATH` when the environment names one). Empty output means no prior round.
+Read it with one plain argv jq call, with the three values written in literally: `jq -Rrn --arg branch <branch> --arg head <head-sha> -f <filter-file> <events-path>`. A worktree session's Bash isolation refuses shell expansion and command substitution (docs/architecture/worktree-mechanics.md). So write the filter below to a file in a gitignored state directory, such as `.fno/tmp/`, and never inline it. `<events-path>` is the events journal, `.fno/events.jsonl`, linked to canonical from every worktree. When the environment names `FNO_EVENTS_PATH`, read the path with `printenv FNO_EVENTS_PATH`. Empty output means no prior round.
 
 ```jq
 [inputs | select(contains("review_attestation")) | fromjson? | (.data // {})
