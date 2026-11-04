@@ -3042,6 +3042,8 @@ pub(crate) fn run_with_release(
                     format!("node {node} is {status}, not active work")
                 } else if crate::gc::past_idle_hour(&probed) {
                     format!("idle past the hour on {node} {status}")
+                } else if crate::gc::stopped_stale(&probed) {
+                    format!("stopped, quiet; transcript names {node} {status}, a witness")
                 } else {
                     format!("node {node} {status}; recorded merge_status merged")
                 }
