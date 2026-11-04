@@ -374,6 +374,12 @@ pub(crate) fn table(rows: &[Row], sel: &str, width: usize, now: u64) -> Vec<Line
     let mut machine: Option<&str> = None;
     for (gi, group) in leads(rows).into_iter().enumerate() {
         let m = group[0].m;
+        if gi > 0 {
+            out.push(meta(format!(
+                " {}",
+                "\u{2508}".repeat(width.saturating_sub(2))
+            )));
+        }
         if many && machine != Some(m.id.as_str()) {
             machine = Some(m.id.as_str());
             out.push(
@@ -383,11 +389,6 @@ pub(crate) fn table(rows: &[Row], sel: &str, width: usize, now: u64) -> Vec<Line
                     .whole(&host_key(m))
                     .done(),
             );
-        } else if gi > 0 {
-            out.push(meta(format!(
-                " {}",
-                "\u{2508}".repeat(width.saturating_sub(2))
-            )));
         }
         for (i, r) in group.iter().enumerate() {
             let key = r.key();
