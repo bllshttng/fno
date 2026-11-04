@@ -182,6 +182,8 @@ pub(crate) fn fold(
     let mut counts_b: BTreeMap<&str, usize> = BTreeMap::new();
     let (mut pass_a, mut den_a, mut pass_b, mut den_b) = (0, 0, 0, 0);
     let mut breaking = false;
+    let mut map_a: BTreeMap<String, (usize, usize)> = BTreeMap::new();
+    let mut map_b: BTreeMap<String, (usize, usize)> = BTreeMap::new();
     for task in tasks {
         let (sa, sb) = (
             fold_side(&rows_a, task, repeats),
@@ -189,6 +191,8 @@ pub(crate) fn fold(
         );
         *counts_a.entry(sa.status.name()).or_default() += 1;
         *counts_b.entry(sb.status.name()).or_default() += 1;
+        map_a.insert(task.to_string(), (sa.grades.min(repeats), sa.passes));
+        map_b.insert(task.to_string(), (sb.grades.min(repeats), sb.passes));
         pass_a += sa.passes;
         den_a += sa.grades.min(repeats);
         pass_b += sb.passes;
@@ -212,6 +216,16 @@ pub(crate) fn fold(
         }
     }
     let rate = |p: usize, d: usize| json!({"passes": p, "grades": d});
+    let p = crate::evals_power::paired(&map_a, &map_b);
+    let informative: BTreeSet<String> = p.deltas.iter().map(|d| d.0.clone()).collect();
+    let aa = crate::evals_power::aa_floor(&rows_a, &informative, repeats);
+    let mut rng = crate::evals_power::Rng(crate::evals_power::SEED);
+    let power = match aa.as_ref() {
+        Ok(f) => crate::evals_power::power_block(&p, &mut rng, repeats, Some(f), None),
+        Err(skip) => {
+            crate::evals_power::power_block(&p, &mut rng, repeats, None, Some(skip.clone()))
+        }
+    };
     Ok(json!({
         "a": {"name": a, "revs": revs(&rows_a), "counts": counts_a, "pass_rate": rate(pass_a, den_a)},
         "b": {"name": b, "revs": revs(&rows_b), "counts": counts_b, "pass_rate": rate(pass_b, den_b)},
@@ -223,6 +237,7 @@ pub(crate) fn fold(
         "errors": lists[ERRORS],
         "unproved": lists[UNPROVED],
         "breaking": breaking,
+        "power": power,
     }))
 }
 
@@ -348,8 +363,41 @@ fn render(view: &Value) -> String {
         };
         out.push(format!("Pass rate {key}: {p}/{d} ({pct})"));
     }
+    if view["power"].is_object() {
+        let p = &view["power"];
+        let n_info = p["paired"]["tasks_informative"].as_u64().unwrap_or(0);
+        let n_const = p["paired"]["tasks_constant"].as_u64().unwrap_or(0);
+        if n_info == 0 {
+            out.push(format!(
+                "Power: underpowered, 0 informative tasks ({n_const} constant), smallest detectable unmeasured"
+            ));
+        } else {
+            power_line(p, &mut out);
+        }
+    }
     out.extend(lane_lines(view));
     out.join("\n")
+}
+
+fn power_line(p: &Value, out: &mut Vec<String>) {
+    let n_info = p["paired"]["tasks_informative"].as_u64().unwrap_or(0);
+    let n_const = p["paired"]["tasks_constant"].as_u64().unwrap_or(0);
+    let mean = p["paired"]["mean_delta_points"].as_f64().unwrap_or(0.0);
+    let ci = p["paired"]["ci95_points"].as_array();
+    let (lo, hi) = match ci {
+        Some(a) => (
+            a.first().and_then(Value::as_f64).unwrap_or(0.0),
+            a.get(1).and_then(Value::as_f64).unwrap_or(0.0),
+        ),
+        None => (0.0, 0.0),
+    };
+    let mdd = p["mdd_points"].as_f64().unwrap_or(0.0);
+    let floor = p["noise_floor_points"].as_f64().unwrap_or(0.0);
+    let src = p["noise_source"].as_str().unwrap_or("preregistered");
+    let verdict = p["verdict"].as_str().unwrap_or_default();
+    out.push(format!(
+        "Power: paired delta {mean:+.1} points over {n_info} informative tasks ({n_const} constant), 95% CI [{lo:+.1}, {hi:+.1}], smallest detectable {mdd:.1} points, noise floor {floor:.1} points ({src}): {verdict}"
+    ));
 }
 
 pub(crate) fn run(args: &CompareArgs) -> i32 {
