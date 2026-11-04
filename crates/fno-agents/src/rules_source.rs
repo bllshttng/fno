@@ -826,11 +826,15 @@ mod tests {
             })
             .to_string()
         };
-        let mut text = span("r-a", "block", "2026-10-29T00:00:00Z");
+        let ago = |days: i64| {
+            (chrono::Utc::now() - chrono::Duration::days(days))
+                .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+        };
+        let mut text = span("r-a", "block", &ago(1));
         text.push('\n');
-        text.push_str(&span("r-a", "warn", "2026-10-28T00:00:00Z"));
+        text.push_str(&span("r-a", "warn", &ago(2)));
         text.push('\n');
-        text.push_str(&span("r-b", "warn", "2026-10-20T00:00:00Z"));
+        text.push_str(&span("r-b", "warn", &ago(14)));
         text.push('\n');
         std::fs::write(&journal, text).unwrap();
 
