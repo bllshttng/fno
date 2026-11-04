@@ -723,8 +723,9 @@ pub(crate) fn visual_approval_blocker<P: Probes>(
          look clears, then reruns them. The user's look is the only clear: an answered question page naming the PR and its head sha, or a role-recorded \
          decision whose text names the PR and its head sha (`fno backlog decide <node> \
          'Approved: PR {pr} at {head}' --authority role --rationale 'user in chat: \
-         <the user's words>'`). For a board answer, cite the answered page that names \
-         the PR instead (`--rationale 'user answered <q-id> on the board'`). When the \
+         <the user's words>'`). An answer the user left on a board question \
+         whose text names the PR and head sha records itself as law and clears \
+         this gate; never transcribe a board answer as 'user in chat'. When the \
          paint edits rename identifiers only and every rendered string stays \
          byte-identical, record the ruling instead (`--rationale 'identifier-only \
          paint diff: <what renamed>; <a rendered string that proves no pixel \
@@ -1431,12 +1432,14 @@ fn role_approval_texts<P: Probes>(probes: &P, cwd: &Path, pr: u64, node: &str) -
     texts
 }
 
-/// The text of every live `chat_attested` law row that approves this PR, at
-/// any head. The worker the user spoke to records the user's words as law
-/// (`fno inbox law set`), and the lead who owns the gate cannot re-record an
-/// approval it never witnessed. The row must carry the user's words (a
-/// `user in chat` rationale or a stored `quote`), name the PR, and open with
-/// an approve word; the head test stays with the caller.
+/// The text of every live law row that approves this PR, at any head: the
+/// chat-attested row the worker the user spoke to records (`fno inbox law
+/// set`), or the operator law the question board records for the user's own
+/// board answer (`attested_by: question-board`, read by
+/// `board_approval_text`). The lead who owns the gate cannot re-record an
+/// approval it never witnessed. A chat row must carry the user's words (a
+/// `user in chat` rationale or a stored `quote`); either row must name the
+/// PR and open with an approve word; the head test stays with the caller.
 fn law_approval_texts<P: Probes>(probes: &P, cwd: &Path, pr: u64) -> Vec<String> {
     let Some(payload) = decisions_payload(
         probes,
@@ -1455,31 +1458,45 @@ fn law_approval_texts<P: Probes>(probes: &P, cwd: &Path, pr: u64) -> Vec<String>
     ) else {
         return Vec::new();
     };
-    payload
+    let mut texts = Vec::new();
+    for row in payload
         .get("decisions")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
-        .filter(|row| {
-            row.get("authority_source").and_then(Value::as_str) == Some("chat_attested")
-                && row.get("lifecycle").and_then(Value::as_str) == Some("live")
-                && (row_is_chat_attested(row)
-                    || row
-                        .get("quote")
-                        .and_then(Value::as_str)
-                        .is_some_and(|q| !q.trim().is_empty()))
-                && row
-                    .get("decision")
+    {
+        // The board's own law row: the question text names the PR and the
+        // head it asked about, and the answer picks the approve option.
+        if let Some(text) = board_approval_text(row, pr) {
+            texts.push(text);
+            continue;
+        }
+        let chat_cleared = row.get("authority_source").and_then(Value::as_str)
+            == Some("chat_attested")
+            && row.get("lifecycle").and_then(Value::as_str) == Some("live")
+            && (row_is_chat_attested(row)
+                || row
+                    .get("quote")
                     .and_then(Value::as_str)
-                    .is_some_and(answer_approves)
-        })
-        .map(row_text)
-        .filter(|text| page_names_pr(text, pr))
-        .collect()
+                    .is_some_and(|q| !q.trim().is_empty()))
+            && row
+                .get("decision")
+                .and_then(Value::as_str)
+                .is_some_and(answer_approves);
+        if chat_cleared {
+            let text = row_text(row);
+            if page_names_pr(&text, pr) {
+                texts.push(text);
+            }
+        }
+    }
+    texts
 }
 
-/// True when a live `chat_attested` law row names this PR and the head sha,
-/// full or as a ten-character prefix. Head-scoped like the role row: a push voids it.
+/// True when a live law row that approves this PR (chat-attested, or the
+/// question board's own operator-law row for the user's board answer) names
+/// the head sha, full or as a ten-character prefix. Head-scoped like the
+/// role row: a push voids it.
 pub(crate) fn law_chat_clears_pr<P: Probes>(probes: &P, cwd: &Path, pr: u64, head: &str) -> bool {
     !head.is_empty()
         && law_approval_texts(probes, cwd, pr)
