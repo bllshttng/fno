@@ -221,6 +221,7 @@ pub mod executor_route;
 pub mod fallback_chain;
 pub mod family_doors;
 pub mod feed;
+pub mod feedback;
 pub mod finalize;
 pub mod finalize_run_summary;
 pub mod first_check;

@@ -194,6 +194,7 @@ cost	KEEP	cost	7	single-leaf group
 delivery evaluate	KEEP	delivery evaluate	7	single-leaf group
 do ci status	T1	do ci status	0
 do delivery evaluate	T1	do delivery evaluate	7
+do feedback	T1	do feedback	0
 do pr attestation retract	T1	do pr attestation retract	0
 do pr base-check	T1	do pr base-check	0
 do pr base-lineage-check	T1	do pr base-lineage-check	6
