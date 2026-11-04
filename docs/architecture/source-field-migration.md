@@ -87,8 +87,7 @@ never get migrated will continue to read correctly forever via
 
 - The `source` field name itself stays. Only the value vocabulary
   shifts.
-- The `roadmap-tasks.py` shim retains its argument vocabulary; only
-  internal symbols moved.
+- The `roadmap-tasks.py` shim (since deleted, use `fno backlog`) kept its argument vocabulary. Only internal symbols moved.
 - The `status` enum, the lifecycle phrase
   (`intake -> triage -> ready/next -> done`), and every other graph
   schema field are unchanged.

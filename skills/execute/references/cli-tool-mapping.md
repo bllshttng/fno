@@ -34,7 +34,6 @@ When this skill references Claude Code tools, use the equivalent on your platfor
 | Action | Claude Code | Gemini CLI | Codex CLI |
 |--------|------------|------------|-----------|
 | Backlog task management | `fno backlog ...` | `fno backlog ...` | `fno backlog ...` |
-| Roadmap validation | `bash scripts/validate-roadmap.sh` | `bash scripts/validate-roadmap.sh` | `bash scripts/validate-roadmap.sh` |
 
 ## Session Loop (Stop Hook)
 

@@ -185,5 +185,5 @@ Several extensions were considered and deliberately deferred:
 
 ## Related Docs
 
-- `docs/architecture/megawalk-pipeline.md` - graduation context; how `roadmap-tasks.py` manages graph node lifecycle alongside stamps.
+- `docs/architecture/megawalk-pipeline.md` - graduation context. It shows how the backlog graph managed node lifecycle alongside stamps.
 - `docs/guides/reading-shipped-plans.md` - practical how-to for browsing the plans folder and reading stamp fields.

@@ -24,7 +24,6 @@
 #       subprocess call on every `fno doctor` invocation.
 #   - test_*.py                       - sandboxed tests
 #   - scripts/metrics/*.py            - standalone analysis scripts (not in CLI)
-#   - scripts/discovery-brief.py      - standalone script with docstring reference
 #
 # Bash (entire-file or pattern exclusions):
 #   - scripts/lib/paths.sh            - the generated stub

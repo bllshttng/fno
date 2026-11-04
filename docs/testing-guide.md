@@ -71,14 +71,12 @@ Three validation scripts enforce structural and process rules:
 |--------|---------|
 | `validate-test-first.sh` | PreToolUse hook that blocks build/start commands when no recent test run detected (checks `.fno/.last-test-run` marker) |
 | `validate-plan.sh` | Plan format validation, antipattern scanning, stub detection |
-| `validate-roadmap.sh` | Roadmap structure validation - checks `00-INDEX.md` format and task references |
 
 ### Python Utilities
 
 | Script | Purpose |
 |--------|---------|
 | `crates/fno-agents/src/wave_ready.rs` | Wave verbs behind `fno-agents wave` |
-| `scripts/roadmap-tasks.py` | Task lifecycle management - status tracking, dependency resolution |
 | `scripts/metrics/register-task.py` | Task registration for metrics tracking |
 | `scripts/metrics/session-cost.py` | Session cost calculation and reporting |
 
@@ -182,9 +180,6 @@ Last, and it is the one a control does not save you from: believe the reading on
 
 # Validate a plan file for format issues and antipatterns
 ./scripts/validate-plan.sh path/to/plan-directory
-
-# Validate roadmap structure
-./scripts/validate-roadmap.sh path/to/roadmap
 
 # Scan for antipatterns in plans
 ./scripts/scan-antipatterns.sh path/to/plan-directory

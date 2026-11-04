@@ -110,7 +110,6 @@ scripts/diagnostics/graphql-quota-soak.py	delete-by x-8b53	dev or CI tooling (a 
 scripts/diagnostics/guard-corpus-sweep.py	delete-by x-8b53	dev or CI tooling (a CI script, schema row or tombstone names it); off the user path
 scripts/diagnostics/occupancy-readers.py	delete-by x-8b53	dev or CI tooling (a CI script, schema row or tombstone names it); off the user path
 scripts/diagnostics/verify-spawn-contract.py	delete	no caller; the docs/architecture/node-provenance.md line goes with it
-scripts/discovery-brief.py	delete	the x-dff1 parent ports it to fno-agents and deletes it
 scripts/docs/generate-otel-schema.py	delete-by x-8b53	CI or build tooling that reads cli/ or runs under the dev venv; never on the user path
 scripts/evals/keyless_smoke.py	delete-by x-8b53	CI or build tooling that reads cli/ or runs under the dev venv; never on the user path
 scripts/lib/bundle-frontmatter.py	delete-by x-8b53	CI or build tooling that reads cli/ or runs under the dev venv; never on the user path
@@ -124,9 +123,7 @@ scripts/probes/reap-receipt-stop-probe.py	delete	no caller; the gc_sweep.rs doc 
 scripts/regen-generated-copies.py	delete-by x-8b53	CI or build tooling that reads cli/ or runs under the dev venv; never on the user path
 scripts/release/draft-release-notes.py	keep	release.yml runs it in CI only; never on the user path
 scripts/release/update-homebrew-formula.py	keep	release.yml runs it in CI only; never on the user path
-scripts/roadmap-tasks.py	delete	the x-dff1 parent ports it to fno-agents and deletes it
 scripts/sync-codex-agents.py	delete-by x-8b53	CI or build tooling that reads cli/ or runs under the dev venv; never on the user path
-scripts/triage.py	delete	the x-dff1 parent ports it to fno-agents and deletes it
 tests/agents/test_frontend_executor.py	delete-by x-8b53	pytest-only coverage of retired Python surfaces; goes with the Python test tree
 tests/agents/test_frontend_executor_smoke.py	delete-by x-8b53	pytest-only coverage of retired Python surfaces; goes with the Python test tree
 tests/hooks/test_codex_lead_continuation_classifier.py	delete	covers codex-lead-continuation-smoke.py only

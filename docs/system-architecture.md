@@ -70,7 +70,7 @@ graph TB
     end
 
     subgraph "Scripts Layer"
-        VAL["Validation<br/>validate-plan.sh<br/>validate-test-first.sh<br/>validate-roadmap.sh<br/>scan-antipatterns.sh"]
+        VAL["Validation<br/>validate-plan.sh<br/>validate-test-first.sh<br/>scan-antipatterns.sh"]
         ORC["Orchestration<br/>fno-agents wave<br/>run-target-loop.sh"]
         MET["Metrics<br/>register-task.py"]
     end
