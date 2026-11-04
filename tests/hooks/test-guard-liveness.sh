@@ -180,15 +180,16 @@ if [[ -z "${FNO_AGENTS_BIN:-}" ]]; then
         fi
     done
 fi
-if [[ -n "${FNO_AGENTS_BIN:-}" ]] || command -v fno-agents >/dev/null 2>&1; then
+if [[ -n "${FNO_AGENTS_BIN:-}" ]]; then
     expect_row "bpg allows a bounded command" bg-process-guard allow \
         '{"tool_name":"Bash","tool_input":{"command":"head -c 1M /dev/zero > /dev/null"}}' bash "pretooluse-bash-dispatch.sh"
     expect_row "bpg denies an unbounded yes" bg-process-guard block \
         '{"tool_name":"Bash","tool_input":{"command":"yes"}}' bash "pretooluse-bash-dispatch.sh"
 else
-    # No fno-agents build on this runner: the dispatch can only answer {}.
+    # No checkout build of fno-agents here. An installed binary may predate
+    # the in-process guard and answer {}, so only a checkout build counts.
     # The Rust unit tests and the hook-latency order test own these rows.
-    printf '[liveness] SKIP: bpg rows need an fno-agents binary (none built here)\n'
+    printf '[liveness] SKIP: bpg rows need a checkout fno-agents build (none here)\n'
 fi
 
 # ── law-authority-gate.py: gone ───────────────────────────────────────────────
