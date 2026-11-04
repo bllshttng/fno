@@ -1435,11 +1435,13 @@ fn role_approval_texts<P: Probes>(probes: &P, cwd: &Path, pr: u64, node: &str) -
 /// The text of every live law row that approves this PR, at any head: the
 /// chat-attested row the worker the user spoke to records (`fno inbox law
 /// set`), or the operator law the question board records for the user's own
-/// board answer (`attested_by: question-board`, read by
-/// `board_approval_text`). The lead who owns the gate cannot re-record an
-/// approval it never witnessed. A chat row must carry the user's words (a
-/// `user in chat` rationale or a stored `quote`); either row must name the
-/// PR and open with an approve word; the head test stays with the caller.
+/// board answer. The lead who owns the gate cannot re-record an approval it
+/// never witnessed. A chat row must carry the user's words (a `user in
+/// chat` rationale or a stored `quote`), name the PR, and open with an
+/// approve word. A board row reads through `board_approval_text`, which
+/// identifies it by trace (comms question, recipient user), authority and
+/// question id, not by `attested_by`; its question text names the PR and
+/// its answer must approve. The head test stays with the caller.
 fn law_approval_texts<P: Probes>(probes: &P, cwd: &Path, pr: u64) -> Vec<String> {
     let Some(payload) = decisions_payload(
         probes,
