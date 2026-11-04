@@ -132,6 +132,10 @@ pub enum ViewKind {
     Needs,
     /// The sideline list with the first agent's reply dock open under it.
     Dock,
+    /// The Decisions tab over a fixed set of rows, two of them unattributed.
+    Decisions,
+    /// The bell panel with the audit queue row on top of its All tab.
+    BellAudit,
 }
 
 /// The seeded demo mail id a Messages view opens on when no --message
@@ -210,6 +214,8 @@ fn parse_view(v: &str) -> Option<ViewKind> {
         "yard" => Some(ViewKind::Yard),
         "needs" => Some(ViewKind::Needs),
         "dock" => Some(ViewKind::Dock),
+        "decisions" => Some(ViewKind::Decisions),
+        "bell-audit" => Some(ViewKind::BellAudit),
         _ => None,
     }
 }
@@ -790,9 +796,15 @@ shoot a root whose chats store has rows (scripts/ops/mux-demo-snapshot.sh seeds 
     // one, then compose. Menus build from the layout the server sent, so
     // they need no gather.
     match kind {
-        Some(ViewKind::Bell) | Some(ViewKind::BellWide) | Some(ViewKind::BellFull) => {
+        Some(ViewKind::Bell)
+        | Some(ViewKind::BellWide)
+        | Some(ViewKind::BellFull)
+        | Some(ViewKind::BellAudit) => {
             let gen = crate::client::bell::open(&mut view);
-            let projection = runtime.block_on(crate::messages_model::gather());
+            let mut projection = runtime.block_on(crate::messages_model::gather());
+            if let (Some(ViewKind::BellAudit), Ok(Value::Object(m))) = (kind, &mut projection) {
+                m.insert("decision_facts".into(), serde_json::json!({"audit": 3}));
+            }
             // Same refusal as the messages board: an announcements-less
             // gather paints the bell as "nothing here", a shot with nothing
             // to judge (law d-9f18c4d5).
@@ -1173,6 +1185,16 @@ pr_number (scripts/ops/mux-demo-snapshot.sh seeds one)",
         | Some(ViewKind::MessagesYou)
         | Some(ViewKind::MessagesYouThread)
         | None => {}
+        Some(ViewKind::Decisions) => {
+            let rows = serde_json::from_value(serde_json::json!([
+                {"decision_id":"d-1","decision":"Ship the Decisions tab whole","subject":"x-7145","decided_by":"jc","authority_source":"operator","quote":"build all of it","ts":"2026-11-03T09:00:00Z","lifecycle":"live","lane":"law","question":"Split the node into three PRs?"},
+                {"decision_id":"d-2","decision":"Hold CI until the ranked PRs land","subject":"ci","decided_by":"iris","authority_source":"role","ts":"2026-11-02T15:30:00Z","lifecycle":"live","lane":"coord"},
+                {"decision_id":"d-3","decision":"Retry the push after the rate limit","subject":"push","ts":"2026-10-30T11:00:00Z","lifecycle":"expired","lane":"unattributed"},
+                {"decision_id":"d-4","decision":"Use the shared pane for retract","subject":"mux","ts":"2026-10-28T08:15:00Z","lifecycle":"live","lane":"unattributed"}
+            ]))
+            .map_err(|e| e.to_string())?;
+            crate::client::decisions_view::open_rows(&mut view, rows);
+        }
     }
     crate::lattice::freeze_spin();
     Ok(view.compose())
@@ -1368,6 +1390,8 @@ mod tests {
             ("yard", ViewKind::Yard),
             ("needs", ViewKind::Needs),
             ("dock", ViewKind::Dock),
+            ("decisions", ViewKind::Decisions),
+            ("bell-audit", ViewKind::BellAudit),
         ] {
             let args = parse_extra(&["--view", name]).expect(name);
             assert_eq!(args.view, Some(kind), "{name}");

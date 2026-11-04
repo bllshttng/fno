@@ -14,10 +14,14 @@ pub(crate) struct DecisionsBoard {
 }
 
 pub(crate) fn open(view: &mut View) {
-    let rows = match load() {
-        Ok(rows) => rows,
-        Err(e) => return view.set_notice(format!("decisions: {e}")),
-    };
+    match load() {
+        Ok(rows) => open_rows(view, rows),
+        Err(e) => view.set_notice(format!("decisions: {e}")),
+    }
+}
+
+/// Open the tab on `rows`; the snapshot shoots it on a fixed set.
+pub(crate) fn open_rows(view: &mut View, rows: Vec<crate::decisions_overlay::DecisionRow>) {
     view.panel_on = true;
     view.messages_board = None;
     view.backlog_board = None;
