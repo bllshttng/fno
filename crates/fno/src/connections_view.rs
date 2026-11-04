@@ -1924,13 +1924,10 @@ impl ConnectionsView {
                 self.cursor_row.set(Some(out.len()));
             }
             let mark = if i == w.pick { ">" } else { " " };
-            out.push(format!("  {mark} {}   {}", row.title(), reach.join(" ")));
+            out.push(format!("  {mark} {:<20} {}", row.title(), reach.join(" ")));
         }
         out.push(String::new());
-        out.push(
-            "type: search   Tab/Ctrl-N: next   Ctrl-P: prev   Enter: pick   Esc: cancel"
-                .to_string(),
-        );
+        out.push("type: search  Tab: next  Ctrl-P: prev  Enter: pick  Esc: cancel".to_string());
     }
 
     fn render_order(&self, out: &mut Vec<String>) {

@@ -125,6 +125,9 @@ pub enum ViewKind {
     /// The connections overlay with the `u` confirm staged on the first
     /// account that is not active.
     ConnectionsUse,
+    /// The connections overlay with the add wizard open on its provider
+    /// picker.
+    ConnectionsAdd,
     /// The yard overlay on its first citizen.
     Yard,
     /// The needs-me overlay with its first row picked, after the same
@@ -207,6 +210,7 @@ fn parse_view(v: &str) -> Option<ViewKind> {
         "question-detail" => Some(ViewKind::QuestionDetail),
         "connections" => Some(ViewKind::Connections),
         "connections-use" => Some(ViewKind::ConnectionsUse),
+        "connections-add" => Some(ViewKind::ConnectionsAdd),
         "yard" => Some(ViewKind::Yard),
         "needs" => Some(ViewKind::Needs),
         "dock" => Some(ViewKind::Dock),
@@ -980,7 +984,9 @@ questions (scripts/ops/mux-demo-snapshot.sh seeds one)",
             view.apply_questions_fold(questions);
             view.answers = Some(0);
         }
-        Some(kind @ (ViewKind::Connections | ViewKind::ConnectionsUse)) => {
+        Some(
+            kind @ (ViewKind::Connections | ViewKind::ConnectionsUse | ViewKind::ConnectionsAdd),
+        ) => {
             view.open_connections();
             let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
             runtime.block_on(crate::connections_view::load_all(tx, view.conn_gen));
@@ -1014,6 +1020,9 @@ shoot a root whose config lists accounts (scripts/ops/mux-demo-snapshot.sh seeds
                 cv.acct_sel = cv.accounts.iter().position(|a| !a.active).unwrap_or(0);
                 cv.render_with(&view.layout.agents, usize::MAX);
                 cv.on_key(b'u');
+            }
+            if *kind == ViewKind::ConnectionsAdd {
+                cv.on_key(b'a');
             }
         }
         Some(ViewKind::OrgBlock) => {
@@ -1365,6 +1374,7 @@ mod tests {
             ("question-detail", ViewKind::QuestionDetail),
             ("connections", ViewKind::Connections),
             ("connections-use", ViewKind::ConnectionsUse),
+            ("connections-add", ViewKind::ConnectionsAdd),
             ("yard", ViewKind::Yard),
             ("needs", ViewKind::Needs),
             ("dock", ViewKind::Dock),
