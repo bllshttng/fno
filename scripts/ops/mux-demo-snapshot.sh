@@ -443,37 +443,45 @@ run() { # run <args...> : start a pane, record its id
 }
 
 W=(--workspace checkout)
+# The seat a remote session opens in: no registry row, and the registered name
+# is the session's name@host address. With --remote-pane it spawns first, so
+# the shot's focus lands on the seat and the chosen band lands on the remote
+# row the seat folds into.
+if [ -n "$REMOTE_PANE" ]; then
+  run --cwd "$ROOT/code/checkout" -- \
+    env FNO_AGENT_SELF=kestrel@imac2d2 sh -c "$(show remote)"
+  run --cwd "$ROOT/code/checkout" --tab 1 --at "${PANES[0]}" --split right -- \
+    sh -c "$(show codex)"
+  RUN_AT="${PANES[1]}"
+else
+  run --cwd "$ROOT/code/checkout" -- sh -c "$(show codex)"
+  RUN_AT="${PANES[0]}"
+fi
 # The first tab stays the active one, so the three-pane tab comes first.
-run --cwd "$ROOT/code/checkout" -- sh -c "$(show codex)"
-run --cwd "$ROOT/code/checkout" --tab 1 --at "${PANES[0]}" --split right -- sh -c "$(show claude)"
-run --cwd "$ROOT/code/checkout" --tab 1 --at "${PANES[0]}" --split down -- sh -c "$(show opencode)"
+run --cwd "$ROOT/code/checkout" --tab 1 --at "$RUN_AT" --split right -- sh -c "$(show claude)"
+run --cwd "$ROOT/code/checkout" --tab 1 --at "$RUN_AT" --split down -- sh -c "$(show opencode)"
 run --cwd "$ROOT/code/checkout" -- sh -c "$(show pi)"
 run --cwd "$ROOT/code/checkout" -- sh -c "$(show docs)"
-# The seat a remote session opens in: no registry row, and the registered name
-# is the session's name@host address.
+# The registry seed skips the seat pane: its row count shifts by one.
+SEED_OFF=0
 if [ -n "$REMOTE_PANE" ]; then
-  run --cwd "$ROOT/code/checkout" --tab 1 --at "${PANES[2]}" --split right -- \
-    env FNO_AGENT_SELF=kestrel@imac2d2 sh -c "$(show remote)"
+  SEED_OFF=1
 fi
 "$FNO" mux tab rename --server "$SERVER" "${W[@]}" --tab 1 --name agents >/dev/null
 "$FNO" mux tab rename --server "$SERVER" "${W[@]}" --tab 2 --name alerts >/dev/null
 "$FNO" mux tab rename --server "$SERVER" "${W[@]}" --tab 3 --name docs >/dev/null
 
-# The machines shot reads the remote row's highlight: focus the seat pane,
-# so the chosen band lands on the remote row the seat folds into.
-if [ -n "$REMOTE_PANE" ]; then
-  "$FNO" mux pane focus --server "$SERVER" "${PANES[5]}" >/dev/null
-fi
 # The registry rows that name each pane's harness, model and state. The
 # fence directory at agents/registry.json marks the table as the owner: the
 # rows live in the graph store's registry table, and the document envelope
 # they fold into rides beside them in registry_meta. A seed that writes rows
 # without the envelope reads as InvalidData, i.e. no registry at all.
-python3 - "$ROOT/.fno/db/graph.db" "$SERVER" "$ROOT/code/checkout" "${SIDS[@]}" "${PANES[@]}" <<'PY'
+python3 - "$ROOT/.fno/db/graph.db" "$SERVER" "$ROOT/code/checkout" "$SEED_OFF" "${SIDS[@]}" "${PANES[@]}" <<'PY'
 import json, sys, datetime
-db, server, cwd = sys.argv[1:4]
-sids = sys.argv[4:7]
-ids = [int(p) for p in sys.argv[7:]]
+db, server, cwd, seed_off = sys.argv[1:5]
+sids = sys.argv[5:8]
+ids = [int(p) for p in sys.argv[8:]]
+off = int(seed_off)
 now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 def row(name, harness, model, pane, state, sid=None):
     return {"harness_session_id": sid} | {
@@ -496,12 +504,12 @@ def thread(name, harness, how, attach=None):
         "mux": None,
     } | ({} if attach is None else {"attach_id": attach})
 agents = [
-    row("archer", "codex", "gpt-6-sol", ids[0], "working", sids[1]),
-    row("scout", "claude", "opus", ids[1], "done", sids[0]),
-    row("reviewer", "opencode", "zen", ids[2], "working", sids[2]),
+    row("archer", "codex", "gpt-6-sol", ids[0 + off], "working", sids[1]),
+    row("scout", "claude", "opus", ids[1 + off], "done", sids[0]),
+    row("reviewer", "opencode", "zen", ids[2 + off], "working", sids[2]),
     # Blocked, so the strip's need-input count and the Input word render.
-    row("pager", "pi", "glm-5", ids[3], "blocked"),
-    row("scribe", "claude", "sonnet", ids[4], "done"),
+    row("pager", "pi", "glm-5", ids[3 + off], "blocked"),
+    row("scribe", "claude", "sonnet", ids[4 + off], "done"),
     # Paneless threads, so the sideline shows the other states too.
     # Leads dispatch and never host a pane: attachable thread rows.
     thread("rowan", "claude", "idle", attach="demo-lead-1") | {"role_level": 1, "role_scope": "payments"},
