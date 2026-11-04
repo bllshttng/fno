@@ -176,8 +176,6 @@ pub(crate) struct AskRequest {
     pub(crate) question: String,
     #[serde(default)]
     pub(crate) subject: Option<String>,
-    #[serde(default)]
-    pub(crate) node: Option<String>,
     pub(crate) laws: Vec<LawRow>,
 }
 
@@ -301,23 +299,22 @@ pub(crate) fn one_line(text: &str, cap: usize) -> String {
 
 /// The exact tier of `_live_law_hits`, ported unchanged. Words are the
 /// `[a-z0-9]+` runs of the lowercased question; a law hits when its subject
-/// casefold equals a named subject/node, or (only when NO subject was named)
+/// casefold equals the named subject, or (only when NO subject was named)
 /// every `-` part of a law subject with two or more parts is in the words.
+/// A law keyed on a node id never hits: the node is where a question is
+/// filed, not what it rules on, and one answered ask must not close the node
+/// to every later question.
 fn exact_tier(req: &AskRequest) -> Vec<ExactHit> {
     let question_lower = req.question.to_lowercase();
     let words: BTreeSet<&str> = question_lower
         .split(|c: char| !c.is_ascii_alphanumeric())
         .filter(|t| !t.is_empty())
         .collect();
-    let named: Vec<String> = [req.subject.as_deref(), req.node.as_deref()]
-        .into_iter()
-        .flatten()
-        .map(|s| s.to_lowercase())
-        .collect();
+    let named: Vec<String> = req.subject.iter().map(|s| s.to_lowercase()).collect();
     let mut hits: Vec<ExactHit> = Vec::new();
     for law in &req.laws {
         let key = law.subject.as_deref().unwrap_or("").trim();
-        if key.is_empty() {
+        if key.is_empty() || matches_node_id_shape(&key.to_lowercase()) {
             continue;
         }
         let parts: Vec<String> = key.to_lowercase().split('-').map(str::to_owned).collect();
@@ -3136,6 +3133,20 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_law_keyed_on_a_node_never_refuses_a_later_ask_on_that_node() {
+        let laws = vec![law("d-aaaa1111", "x-aaaa", "HQ.", "2026-11-04T03:00:00Z")];
+        let mut req = ask_req(
+            "Which table do the decisions use? x-aaaa",
+            None,
+            Some("x-aaaa"),
+        );
+        req.laws = laws.clone();
+        assert!(ask_answer(&req).exact.is_empty());
+        req.subject = Some("x-aaaa".to_owned());
+        assert!(ask_answer(&req).exact.is_empty());
+    }
+
+    #[test]
     fn token_rows() {
         let got = tokens("x-1111 pr-1847 cf6a file-budget added");
         let want: BTreeSet<String> = ["added", "budget", "file"]
@@ -3195,11 +3206,10 @@ pub(crate) mod tests {
         );
     }
 
-    fn ask_req(question: &str, subject: Option<&str>, node: Option<&str>) -> AskRequest {
+    fn ask_req(question: &str, subject: Option<&str>, _node: Option<&str>) -> AskRequest {
         AskRequest {
             question: question.to_owned(),
             subject: subject.map(str::to_owned),
-            node: node.map(str::to_owned),
             laws: fixture_laws(),
         }
     }
