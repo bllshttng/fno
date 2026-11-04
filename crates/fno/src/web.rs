@@ -45,7 +45,7 @@ pub(crate) const PAGE: &str = include_str!("web_page.html");
 /// ([`crate::backlog_model`]) through `/backlog/model.json` and
 /// `/backlog/node.json` and computes nothing the model already answered.
 pub(crate) const BACKLOG_PAGE: &str = include_str!("web_backlog.html");
-pub(crate) const COMMAND_PAGE: &str = include_str!("web_command.html");
+pub(crate) const HQ_PAGE: &str = include_str!("web_hq.html");
 const TRACE_PAGE: &str = include_str!("web_trace.html");
 /// The house stylesheet the backlog and command pages share. The CSP allows
 /// inline style only, so [`house`] writes it into each page's `<style>`.
@@ -168,7 +168,7 @@ struct AppState {
     /// /rundown then never republishes through the fallback path, so a
     /// project-isolated bridge cannot overwrite the global page.
     rundown_republish: bool,
-    command: Arc<crate::web_command::CommandCache>,
+    hq: Arc<crate::web_hq::HqCache>,
     /// True when the bound address is loopback, so the backlog page may act.
     /// Computed from the bound address, never from `--bind` text.
     writable: bool,
@@ -771,7 +771,7 @@ async fn run(args: WebArgs, socket: PathBuf) -> i32 {
         token,
         rundown_html,
         rundown_republish,
-        command: Default::default(),
+        hq: Default::default(),
         writable,
         invites: crate::web_invites::read_invites(&std::env::current_dir().unwrap_or_default())
             .map(Arc::new),
@@ -818,9 +818,12 @@ fn router(state: AppState) -> Router {
         .route("/backlog/act", post(backlog_act))
         .route("/rundown", get(team))
         .route("/team", get(team))
-        .route("/command", get(command))
-        .route("/command/model.json", get(command_model))
-        .route("/command/answer/{id}", post(command_answer))
+        .route("/hq", get(hq))
+        .route("/hq/model.json", get(hq_model))
+        .route("/hq/answer/{id}", post(hq_answer))
+        .route("/command", get(command_redirect))
+        .route("/command/model.json", get(command_model_redirect))
+        .route("/command/answer/{id}", post(command_answer_redirect))
         .route("/trace", get(trace))
         .route("/trace/model.json", get(trace_model))
         .route("/ws", get(ws_handler))
@@ -1103,12 +1106,37 @@ async fn backlog(Query(q): Query<WsQuery>, State(st): State<AppState>) -> Respon
     html_response(with_nav(&page, NavPage::Backlog))
 }
 
-/// `GET /command`: the command center page; it reads `/command/model.json`.
-async fn command(Query(q): Query<WsQuery>, State(st): State<AppState>) -> Response {
+/// `GET /hq`: the HQ page; it reads `/hq/model.json`.
+async fn hq(Query(q): Query<WsQuery>, State(st): State<AppState>) -> Response {
     if !token_ok(q.t.as_deref(), &st.token) {
         return unauthorized();
     }
-    html_response(with_nav(&house(COMMAND_PAGE), NavPage::Command))
+    html_response(with_nav(&house(HQ_PAGE), NavPage::Hq))
+}
+
+/// A 308 to the same query on `target`, a path relative to the old URL so a
+/// mount prefix survives. The old `/command` URLs forward to `/hq`.
+fn moved_to_hq(target: &str, query: Option<String>) -> Response {
+    let location = match query {
+        Some(q) if !q.is_empty() => format!("{target}?{q}"),
+        _ => target.to_string(),
+    };
+    (StatusCode::PERMANENT_REDIRECT, [(header::LOCATION, location)]).into_response()
+}
+
+async fn command_redirect(axum::extract::RawQuery(q): axum::extract::RawQuery) -> Response {
+    moved_to_hq("hq", q)
+}
+
+async fn command_model_redirect(axum::extract::RawQuery(q): axum::extract::RawQuery) -> Response {
+    moved_to_hq("../hq/model.json", q)
+}
+
+async fn command_answer_redirect(
+    axum::extract::Path(id): axum::extract::Path<String>,
+    axum::extract::RawQuery(q): axum::extract::RawQuery,
+) -> Response {
+    moved_to_hq(&format!("../../hq/answer/{id}"), q)
 }
 
 #[derive(serde::Deserialize)]
@@ -1122,7 +1150,7 @@ async fn trace(Query(q): Query<TraceQuery>, State(st): State<AppState>) -> Respo
     if !token_ok(q.t.as_deref(), &st.token) {
         return unauthorized();
     }
-    html_response(with_nav(&house(TRACE_PAGE), NavPage::Command))
+    html_response(with_nav(&house(TRACE_PAGE), NavPage::Hq))
 }
 
 /// `GET /trace/model.json`: the fold for `node`, read per request.
@@ -1192,25 +1220,25 @@ async fn team(Query(q): Query<WsQuery>, State(st): State<AppState>) -> Response 
     .await
 }
 
-/// `GET /command/model.json`: the first read waits; later reads answer from the cache.
-async fn command_model(Query(q): Query<WsQuery>, State(st): State<AppState>) -> Response {
+/// `GET /hq/model.json`: the first read waits; later reads answer from the cache.
+async fn hq_model(Query(q): Query<WsQuery>, State(st): State<AppState>) -> Response {
     if !token_ok(q.t.as_deref(), &st.token) {
         return unauthorized();
     }
-    st.command
+    st.hq
         .first
-        .get_or_init(|| refresh_command(st.clone()))
+        .get_or_init(|| refresh_hq(st.clone()))
         .await;
-    if st.command.claim_refresh().await {
-        tokio::spawn(refresh_command(st.clone()));
+    if st.hq.claim_refresh().await {
+        tokio::spawn(refresh_hq(st.clone()));
     }
-    let mut model = st.command.model().await;
+    let mut model = st.hq.model().await;
     // A read-only bridge shows the question drawer with no answer controls.
     model["writable"] = serde_json::json!(st.writable);
     json_response(&model)
 }
 
-async fn refresh_command(st: AppState) {
+async fn refresh_hq(st: AppState) {
     let inputs = model_inputs(&st).await;
     let (fleet, questions) = tokio::join!(
         crate::client::org_seats::read_fleet(),
@@ -1218,7 +1246,7 @@ async fn refresh_command(st: AppState) {
     );
     let measured_at = chrono::Utc::now().timestamp().max(0) as u64;
     let agents = layout_agents(&st.snap).unwrap_or_default();
-    st.command
+    st.hq
         .record(fleet, questions, &inputs, measured_at, &agents)
         .await;
 }
@@ -1527,12 +1555,12 @@ async fn backlog_act(
     act_response(ok, &notice)
 }
 
-/// `POST /command/answer/{id}?t=<token>`: answer one open question from the
+/// `POST /hq/answer/{id}?t=<token>`: answer one open question from the
 /// drawer. The refusals come in this order, and each one starts no process:
 /// loopback bind, token, same origin, body shape, the question, the invite.
 /// Then the answer door writes the one row. The route never records a
 /// decision itself.
-async fn command_answer(
+async fn hq_answer(
     axum::extract::Path(id): axum::extract::Path<String>,
     Query(q): Query<WsQuery>,
     State(st): State<AppState>,
@@ -1568,7 +1596,7 @@ async fn command_answer(
     };
     // The page only offers a question it already holds, so the cache answers
     // the node. A question the cache has not seen yet takes one fold read.
-    let node = match st.command.question_node(&id).await {
+    let node = match st.hq.question_node(&id).await {
         Some(node) => node,
         None => match crate::needs_overlay::questions_now().await {
             Ok(fold) => match fold.items.iter().find(|i| i.id == id) {
@@ -1596,7 +1624,7 @@ async fn command_answer(
     };
     match crate::needs_overlay::answer_as(&id, pick, "command_page", Some(&person)).await {
         Ok(receipt) => {
-            tokio::spawn(refresh_command(st.clone()));
+            tokio::spawn(refresh_hq(st.clone()));
             let receipt = serde_json::from_str::<serde_json::Value>(&receipt)
                 .unwrap_or_else(|_| serde_json::json!({ "recorded": true }));
             json_response(&receipt)
@@ -1690,7 +1718,7 @@ enum NavPage {
     Live,
     Backlog,
     Team,
-    Command,
+    Hq,
 }
 
 fn token_ok(supplied: Option<&str>, expected: &str) -> bool {
@@ -1801,7 +1829,7 @@ fn nav_fragment(current: NavPage) -> String {
         NavPage::Live => "live",
         NavPage::Backlog => "backlog",
         NavPage::Team => "rundown",
-        NavPage::Command => "command",
+        NavPage::Hq => "hq",
     };
     let link = |p: NavPage| {
         if p == current {
@@ -1847,7 +1875,7 @@ fn nav_fragment(current: NavPage) -> String {
         link(NavPage::Live),
         link(NavPage::Backlog),
         link(NavPage::Team),
-        link(NavPage::Command),
+        link(NavPage::Hq),
     )
 }
 
@@ -2095,7 +2123,7 @@ mod tests {
             token: Arc::<str>::from("right"),
             rundown_html: dir.join("lead.html"),
             rundown_republish: true,
-            command: Default::default(),
+            hq: Default::default(),
             writable: true,
             invites: None,
             model: Default::default(),
@@ -2381,7 +2409,7 @@ mod tests {
 
         assert!(!PAGE.contains("\"/backlog?t="));
         assert!(!PAGE.contains("\"/team?t="));
-        assert!(!PAGE.contains("\"/command?t="));
+        assert!(!PAGE.contains("\"/hq?t="));
         assert!(!PAGE.contains("${location.host}/ws"));
         assert!(PAGE.contains("<!--fno-nav-->"));
         assert!(PAGE.contains("const base = document.querySelector(\"nav.fno-nav\").dataset.base;"));
@@ -2678,7 +2706,7 @@ console.log("framePacer: 12 cases ok");
             token: Arc::<str>::from("right"),
             rundown_html: dir.join("lead.html"),
             rundown_republish: true,
-            command: Default::default(),
+            hq: Default::default(),
             writable: true,
             invites: None,
             model: Default::default(),
@@ -3210,7 +3238,7 @@ console.log("theme store: 9 cases ok");
             (NavPage::Live, "live"),
             (NavPage::Backlog, "backlog"),
             (NavPage::Team, "rundown"),
-            (NavPage::Command, "command"),
+            (NavPage::Hq, "hq"),
         ] {
             let frag = nav_fragment(page);
             // The CSS selector also names the attribute; count the link tags.
@@ -3362,7 +3390,7 @@ console.log("theme store: 9 cases ok");
             token: Arc::<str>::from("right"),
             rundown_html: dir.join("lead.html"),
             rundown_republish: false,
-            command: Default::default(),
+            hq: Default::default(),
             writable: true,
             invites: None,
             model: Default::default(),
@@ -3397,26 +3425,26 @@ console.log("theme store: 9 cases ok");
     }
 
     #[tokio::test]
-    async fn router_gates_command_model_on_the_token_and_drops_fleet() {
+    async fn router_gates_hq_model_on_the_token_and_drops_fleet() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
         let (tx, _) = broadcast::channel(4);
         let (_shutdown_tx, shutdown) = tokio::sync::watch::channel(false);
-        let command = Arc::new(crate::web_command::CommandCache::default());
+        let hq = Arc::new(crate::web_hq::HqCache::default());
         // A recorded, spent first read: the route spawns no fleet read.
         let fleet = serde_json::json!({"machines": [{"host": "bb16", "sessions": []}]});
         let none = backlog_model::Inputs::default();
-        command
+        hq
             .record(Ok(fleet), Err("x".into()), &none, 1, &[])
             .await;
-        command.first.set(()).unwrap();
+        hq.first.set(()).unwrap();
         let state = AppState {
             tx,
             snap: Arc::new(Mutex::new(Snapshot::default())),
             token: Arc::<str>::from("right"),
-            rundown_html: std::env::temp_dir().join("fno-web-command-lead.html"),
+            rundown_html: std::env::temp_dir().join("fno-web-hq-lead.html"),
             rundown_republish: false,
-            command,
+            hq,
             writable: true,
             invites: None,
             model: Default::default(),
@@ -3436,15 +3464,21 @@ console.log("theme store: 9 cases ok");
             stream.read_to_string(&mut reply).await.unwrap();
             reply
         };
-        let reply = ask("/command/model.json").await;
-        assert!(reply.starts_with("HTTP/1.1 401"), "{reply}");
+        let reply = ask("/command?t=right&question=q-1").await;
+        assert!(reply.starts_with("HTTP/1.1 308"), "{reply}");
+        assert!(reply.contains("location: hq?t=right&question=q-1"), "{reply}");
         let reply = ask("/command/model.json?t=right").await;
+        assert!(reply.starts_with("HTTP/1.1 308"), "{reply}");
+        assert!(reply.contains("location: ../hq/model.json?t=right"), "{reply}");
+        let reply = ask("/hq/model.json").await;
+        assert!(reply.starts_with("HTTP/1.1 401"), "{reply}");
+        let reply = ask("/hq/model.json?t=right").await;
         assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
         assert!(reply.contains("cache-control: no-store"), "{reply}");
         assert!(reply.contains("\"host\":\"bb16\""), "{reply}");
         assert!(reply.contains("\"questions_error\":\"x\""), "{reply}");
-        assert!(ask("/command").await.starts_with("HTTP/1.1 401"));
-        let reply = ask("/command?t=right").await;
+        assert!(ask("/hq").await.starts_with("HTTP/1.1 401"));
+        let reply = ask("/hq?t=right").await;
         assert!(reply.contains("data-current=\"command\""), "{reply}");
         let reply = ask("/fleet?t=right").await;
         assert!(reply.starts_with("HTTP/1.1 404"), "{reply}");
@@ -3463,7 +3497,7 @@ console.log("theme store: 9 cases ok");
             token: Arc::<str>::from("right"),
             rundown_html: std::env::temp_dir().join("fno-web-trace-lead.html"),
             rundown_republish: false,
-            command: Arc::new(crate::web_command::CommandCache::default()),
+            hq: Arc::new(crate::web_hq::HqCache::default()),
             writable: false,
             invites: None,
             model: Default::default(),
@@ -3857,7 +3891,7 @@ console.log("theme store: 9 cases ok");
             token: Arc::<str>::from("right"),
             rundown_html: std::env::temp_dir().join("fno-web-answer-lead.html"),
             rundown_republish: true,
-            command: Default::default(),
+            hq: Default::default(),
             writable,
             invites: invites.map(Arc::new),
             model: Default::default(),
@@ -3880,32 +3914,32 @@ console.log("theme store: 9 cases ok");
             async move { raw_request(addr, &head, body).await }
         };
         let (addr, server) = serve_state(answer_state(true, None)).await;
-        let reply = post(addr, "", "/command/answer/q-1?t=wrong", body).await;
+        let reply = post(addr, "", "/hq/answer/q-1?t=wrong", body).await;
         assert!(reply.starts_with("HTTP/1.1 401"), "{reply}");
         let reply = post(
             addr,
             "Origin: https://evil.example\r\n",
-            "/command/answer/q-1?t=right",
+            "/hq/answer/q-1?t=right",
             body,
         )
         .await;
         assert!(reply.starts_with("HTTP/1.1 403"), "{reply}");
         assert!(reply.contains("Origin does not match Host"), "{reply}");
-        let reply = post(addr, "", "/command/answer/q-1?t=right", br#"{"option":0}"#).await;
+        let reply = post(addr, "", "/hq/answer/q-1?t=right", br#"{"option":0}"#).await;
         assert!(reply.starts_with("HTTP/1.1 400"), "{reply}");
         let reply = post(
             addr,
             "",
-            "/command/answer/q-1?t=right",
+            "/hq/answer/q-1?t=right",
             br#"{"delegate":true}"#,
         )
         .await;
         assert!(reply.starts_with("HTTP/1.1 400"), "{reply}");
-        let reply = post(addr, "", "/command/answer/a%2Fb?t=right", body).await;
+        let reply = post(addr, "", "/hq/answer/a%2Fb?t=right", body).await;
         assert!(reply.starts_with("HTTP/1.1 400"), "{reply}");
         server.abort();
         let (addr, server) = serve_state(answer_state(false, None)).await;
-        let reply = post(addr, "", "/command/answer/q-1?t=right", body).await;
+        let reply = post(addr, "", "/hq/answer/q-1?t=right", body).await;
         assert!(reply.starts_with("HTTP/1.1 403"), "{reply}");
         assert!(reply.contains("read-only"), "{reply}");
         server.abort();
@@ -3926,7 +3960,7 @@ console.log("theme store: 9 cases ok");
         let get = |login: Option<&str>, host: String| {
             let login = login.map_or(String::new(), |l| format!("Tailscale-User-Login: {l}\r\n"));
             let head = format!(
-                "GET /command?t=right HTTP/1.1\r\nHost: {host}\r\n{login}Connection: close\r\n\r\n"
+                "GET /hq?t=right HTTP/1.1\r\nHost: {host}\r\n{login}Connection: close\r\n\r\n"
             );
             async move { raw_request(addr, &head, b"").await }
         };
@@ -3941,14 +3975,14 @@ console.log("theme store: 9 cases ok");
         assert!(reply.starts_with("HTTP/1.1 200"), "local user: {reply}");
         // A proxy that rewrote Host to loopback still shows a forwarding header.
         let head = format!(
-            "GET /command?t=right HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nX-Forwarded-For: 100.64.0.9\r\nConnection: close\r\n\r\n",
+            "GET /hq?t=right HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nX-Forwarded-For: 100.64.0.9\r\nConnection: close\r\n\r\n",
             addr.port()
         );
         let reply = raw_request(addr, &head, b"").await;
         assert!(reply.starts_with("HTTP/1.1 403"), "proxied: {reply}");
         server.abort();
         let (addr, server) = serve_state(answer_state(true, None)).await;
-        let head = "GET /command?t=right HTTP/1.1\r\nHost: machine.tail1.ts.net\r\nTailscale-User-Login: eve@example.com\r\nConnection: close\r\n\r\n";
+        let head = "GET /hq?t=right HTTP/1.1\r\nHost: machine.tail1.ts.net\r\nTailscale-User-Login: eve@example.com\r\nConnection: close\r\n\r\n";
         let reply = raw_request(addr, head, b"").await;
         assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
         server.abort();
@@ -3972,7 +4006,7 @@ console.log("theme store: 9 cases ok");
             token: Arc::<str>::from("right"),
             rundown_html: dir.join("lead.html"),
             rundown_republish: true,
-            command: Default::default(),
+            hq: Default::default(),
             writable: true,
             invites: None,
             model: Default::default(),
@@ -4066,7 +4100,7 @@ console.log("theme store: 9 cases ok");
             token: Arc::<str>::from("right"),
             rundown_html: dir.join("lead.html"),
             rundown_republish: true,
-            command: Default::default(),
+            hq: Default::default(),
             writable: true,
             invites: None,
             model: Default::default(),

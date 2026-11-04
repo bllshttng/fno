@@ -1,4 +1,4 @@
-//! `POST /command/answer/{id}`: the pure half of the question drawer's answer.
+//! `POST /hq/answer/{id}`: the pure half of the question drawer's answer.
 //! The route in `web.rs` orders the checks; this module holds the parts that
 //! need no listener. The write itself is the answer door
 //! (`fno-agents needs --answer ... --sink command_page`), spawned through

@@ -1,4 +1,4 @@
-//! The command center fold: the fleet map, the backlog rows and this mux's
+//! The HQ fold: the fleet map, the backlog rows and this mux's
 //! agent rows become machines, the leads on each machine, and seats.
 
 use crate::backlog_model::Inputs;

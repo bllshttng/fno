@@ -1,4 +1,4 @@
-//! `/command/model.json`: the org view's fleet fold as JSON. The bridge keeps
+//! `/hq/model.json`: the org view's fleet fold as JSON. The bridge keeps
 //! the last good read and refreshes it off the request path.
 
 use std::path::Path;
@@ -15,7 +15,7 @@ use crate::needs_overlay::QuestionsFold;
 pub(crate) const REFRESH_AFTER: Duration = Duration::from_secs(60);
 
 #[derive(Default)]
-pub(crate) struct CommandCache {
+pub(crate) struct HqCache {
     state: tokio::sync::Mutex<Cached>,
     /// The first read: every request before it waits on the same one.
     pub(crate) first: tokio::sync::OnceCell<()>,
@@ -33,7 +33,7 @@ struct Cached {
     read_at: Option<Instant>,
 }
 
-impl CommandCache {
+impl HqCache {
     /// True when the caller should start a refresh. Claiming stamps the
     /// attempt, so a burst of reads starts one and a lost refresh retries.
     pub(crate) async fn claim_refresh(&self) -> bool {
@@ -283,7 +283,7 @@ mod tests {
     }
 
     async fn read(
-        cache: &CommandCache,
+        cache: &HqCache,
         fleet: Result<Value, String>,
         qs: Result<QuestionsFold, String>,
         at: u64,
@@ -292,7 +292,7 @@ mod tests {
     }
 
     async fn read_with_agents(
-        cache: &CommandCache,
+        cache: &HqCache,
         fleet: Result<Value, String>,
         qs: Result<QuestionsFold, String>,
         at: u64,
@@ -314,7 +314,7 @@ mod tests {
     #[tokio::test]
     async fn two_machine_fold_serializes_every_seat_and_question_host() {
         let qs = questions(&[None, Some("iMac2D2"), Some("iMac2D2"), Some("answered")]);
-        let m = read(&CommandCache::default(), Ok(two_machines()), Ok(qs), 100).await;
+        let m = read(&HqCache::default(), Ok(two_machines()), Ok(qs), 100).await;
         let seats = |i: usize| {
             m["machines"][i]["leads"][0]["seats"]
                 .as_array()
@@ -369,7 +369,7 @@ mod tests {
         }];
         let qs = questions(&[None]);
         let m = read_with_agents(
-            &CommandCache::default(),
+            &HqCache::default(),
             Ok(two_machines()),
             Ok(qs),
             100,
@@ -381,7 +381,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_failed_read_names_its_reason_and_keeps_the_last_good_fold() {
-        let cache = CommandCache::default();
+        let cache = HqCache::default();
         let fail = |r: &str| Err::<Value, String>(r.into());
         let m = read(&cache, fail("no primary"), Ok(questions(&[None])), 1).await;
         assert_eq!(m["machines"], json!([]));

@@ -1,4 +1,4 @@
-//! The org view: the fleet command center. The explorer on the left lists
+//! The org view: HQ, the fleet command surface. The explorer on the left lists
 //! the fleet, its machines, the leads on each machine and the open lead's seats;
 //! the right pane shows a tab over the selection, or a seat, feed or system
 //! page. Every seat comes from the fleet map, so the other machine's seats
@@ -671,7 +671,7 @@ pub(crate) async fn keys(
             ModalKey::Byte(b'W') => {
                 let bridge = crate::web::live_bridge(&view.session);
                 let host = crate::agents_view::hostname();
-                let notice = match command_url(bridge, crate::link::is_remote_session(), &host) {
+                let notice = match hq_url(bridge, crate::link::is_remote_session(), &host) {
                     Err(e) => e,
                     // Off-loop: a slow browser launch must not stall input.
                     Ok(url) => {
@@ -725,10 +725,10 @@ pub(crate) async fn keys(
     }
     Ok(StdinFlow::Continue)
 }
-/// The bridge's `/command` URL for `W`, or why it opens nothing. Over ssh a
+/// The bridge's `/hq` URL for `W`, or why it opens nothing. Over ssh a
 /// loopback bridge is unreachable from the user's browser, and a wide one is
 /// reached by this machine's name.
-pub(crate) fn command_url(
+pub(crate) fn hq_url(
     bridge: Result<crate::web::LiveBridge, String>,
     remote: bool,
     host: &str,
@@ -743,7 +743,7 @@ pub(crate) fn command_url(
         true => b.base.replace("127.0.0.1", host),
         false => b.base,
     };
-    Ok(format!("{base}/command?t={}", b.token))
+    Ok(format!("{base}/hq?t={}", b.token))
 }
 
 /// Enter attaches, space peeks, `x` stops and `P` opens the portal picker.
