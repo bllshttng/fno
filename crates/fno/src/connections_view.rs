@@ -1893,11 +1893,17 @@ impl ConnectionsView {
     /// catalog rows, with a mark on each provider that has an account.
     fn render_provider_step(&self, w: &Wizard, out: &mut Vec<String>) {
         use crate::provider_picker::Entry;
-        out.push(format!("  search: {}_", w.query));
+        let mut search = Spans::default();
+        search
+            .add("  search: ", type_scale::META)
+            .add(&format!("{}_", w.query), type_scale::BODY);
+        self.push_spans(out, search);
         out.push(String::new());
         let rows = crate::provider_picker::entries(self.catalog.as_ref(), &w.query);
         if rows.is_empty() {
-            out.push("  no provider matches".to_string());
+            let mut none = Spans::default();
+            none.add("  no provider matches", type_scale::META);
+            self.push_spans(out, none);
         }
         let connected: std::collections::HashSet<String> =
             self.accounts.iter().map(provider_key).collect();
@@ -1912,7 +1918,9 @@ impl ConnectionsView {
             };
             if head != section {
                 section = head;
-                out.push(format!("  {head}"));
+                let mut line = Spans::default();
+                line.add(&format!("  {head}"), type_scale::HEADING);
+                self.push_spans(out, line);
             }
             if i == w.pick {
                 self.cursor_row.set(Some(out.len()));
@@ -1923,11 +1931,21 @@ impl ConnectionsView {
                 Entry::Local(s) => s.key,
             };
             let dot = if connected.contains(key) { "●" } else { " " };
-            out.push(format!("  {mark} {dot} {}", row.title()));
+            let mut line = Spans::default();
+            line.add(&format!("  {mark} {dot} "), type_scale::BODY)
+                .add(row.title(), type_scale::BODY);
+            self.push_spans(out, line);
         }
         out.push(String::new());
-        out.push("  ● connected account".to_string());
-        out.push("type: search  Tab: next  Ctrl-P: prev  Enter: pick  Esc: cancel".to_string());
+        let mut legend = Spans::default();
+        legend.add("  ● connected account", type_scale::META);
+        self.push_spans(out, legend);
+        let mut keys = Spans::default();
+        keys.add(
+            "type: search  Tab: next  Ctrl-P: prev  Enter: pick  Esc: cancel",
+            type_scale::META,
+        );
+        self.push_spans(out, keys);
     }
 
     fn render_order(&self, out: &mut Vec<String>) {
