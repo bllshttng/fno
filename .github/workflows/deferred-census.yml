@@ -34,6 +34,9 @@ on:
       - crates/fno-agents/src/test_smoke_registry.rs
       - .github/workflows/deferred-census.yml
 
+permissions:
+  contents: read
+
 jobs:
   census:
     runs-on: ubuntu-24.04
