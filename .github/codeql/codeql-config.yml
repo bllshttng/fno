@@ -1,0 +1,20 @@
+# CodeQL advanced-setup configuration. Default setup takes no config file,
+# so this file only takes effect once the repository's code scanning is
+# switched from default setup to advanced setup; until then the
+# CODEQL_ADVANCED_SETUP repo variable keeps .github/workflows/codeql.yml
+# skipped.
+#
+# rust/cleartext-logging is excluded wholesale instead of per-alert.
+# Measured over the 404 open hits on 2026-11-04: every source expression is
+# an identifier printed to the user's own terminal (account arguments,
+# session ids, uuids, account names). The twelve hits naming a secret,
+# password, certificate or key are test assertion messages or a count of
+# secrets left behind. No hit writes key material to a log file.
+paths-ignore:
+  - "crates/*/tests/**"
+  - "cli/tests/**"
+  - "**/fixtures/**"
+
+query-filters:
+  - exclude:
+      id: rust/cleartext-logging
