@@ -1557,15 +1557,20 @@ const PUBLIC_COLUMNS: [(&str, &str); 4] = [
     ("Done", "Shipped"),
 ];
 
-fn is_public_in(e: &Value, project: &str) -> bool {
+/// May this row's title leave the owner's store: not marked `public: false`,
+/// and not an imported request the owner never flipped public.
+pub(crate) fn is_publishable(e: &Value) -> bool {
     is_dict(e)
         && e.get("public") != Some(&Value::Bool(false))
-        && project_key(e) == project
         // The quarantine default-deny: an imported request row publishes
         // only when the owner flipped it public. backlog_snapshot.rs
         // select_public_rows holds the fno-side twin of this rule.
         && (e.get("source_kind").and_then(Value::as_str) != Some("external_request")
             || e.get("public") == Some(&Value::Bool(true)))
+}
+
+fn is_public_in(e: &Value, project: &str) -> bool {
+    is_publishable(e) && project_key(e) == project
 }
 
 fn public_columns<'a>(

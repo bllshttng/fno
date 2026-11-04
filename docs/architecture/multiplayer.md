@@ -203,6 +203,33 @@ An unset `store.remote_url` keeps today's behavior: each machine polls for itsel
 
 Leases and rows key by the machine's GitHub login (`gh_login` reads it once per machine and caches it for an hour), exactly as `gh-budget:fleet:<login>` does. Two accounts on one primary hold two leases and read two sets of rows. Each account's refusal hold is its own. A host whose login is unreadable (a token env in the process, gh broken) polls per machine and skips the shared rows. Its local ledger alone catches its refusals. A login read lags `gh auth switch` by up to an hour. A shared row carries the GitHub facts only: the verdict, the check counts and the optional reviews. A follower drops the fields the poller composed from its own journal and graph. The row then reads `ready: false` with the blocker `status_shared`. `fno do pr status` never serves a shared row, so its `ready` and merge fields always come from this host. The waits and the daemon pollers read only the verdict and the settled flag, so they follow. A shared row serves as a status verdict, so write access to the primary is trust, as it is for [review attestations](#what-moves-to-the-primary). A PR that only one host reads saves nothing. The lease moves no request from one host to another, so there is no arm that polls a follower's PRs. The saving is the overlap: reads of one PR by two hosts inside one TTL. The `pr status` and `pr wait` spend notes count it. `, {n} served from poller <host>` is the number of rows this process took from the poller. `, published {m}` is the number it shared. The loop-check adapter and the review count in `pr wait --until reviewed` do not use the shared rows.
 
+## Shared epics on GitHub
+
+Each person keeps their own store, so nodes stay local. A shared epic publishes one GitHub issue, and that issue is the one page everyone reads. The mark `share=github` on an epic turns it on, and it is off by default. Set it with `fno backlog update <epic> --set share=github`. The mark has no link to `store.share_backlog`. That key moves your whole backlog between your own machines. This mark publishes one epic's titles on a public page.
+
+The heal pass runs the sync (`crates/fno-agents/src/epic_issue.rs`). It runs once per pr-watch tick, so every `pr_watch.interval_seconds` (600 by default), and only while `auto_heal.enabled` is true. The first pass opens one issue in the project's origin repo and stores its number on the epic as `epic_issue`. Set `epic_issue=<n>` by hand to adopt an issue you already opened. Set `epic_issue=null` to open a new one. A pass can open an issue and then fail to write the number. The next pass finds that issue by its hidden `<!-- fno-epic:<id> -->` line, so no second issue opens.
+
+fno writes only between `<!-- fno-epic-checklist -->` and `<!-- /fno-epic-checklist -->`. Write above or below them as you like. If one marker is missing, or the two are out of order, the pass leaves the body alone and names the damage on stderr.
+
+Each child gets one line:
+
+```
+- [ ] <title> · @<handle> · #<PR>
+```
+
+`[x]` marks a done child. The handle is the holder of the child's live node claim. A `github:<login>` holder prints that login. Any other holder is a session on your machine, so the line names the login your `gh` is signed in as. A child with no claim has no handle. A child with no PR has no `#`. A child has no line in four cases:
+
+- its `public` field is false,
+- it is an imported request that you have not made public,
+- another node contains it, because it ships with that node, or
+- it is closed without being done, as a superseded or won't-do node.
+
+A title is private text on a public page. fno writes `<` as `&lt;` and puts a zero-width space after `@`, so a title cannot open a tag or notify a stranger. An epic keeps syncing for 2 days after it closes, so its last checkbox lands.
+
+When the GitHub App is set, the edit shows the fnodotdev bot. Set `github.app_id`, `github.app_installation_id` and `github.app_key_path` in `~/.fno/config.toml`. The installation needs Issues write. Without the App, your own `gh` token makes the edit.
+
+When the node's parent epic has an `epic_issue`, `fno do pr create` adds one line to the body file. The line is `Refs #<n>`. When no other published child of the epic is still open, the line is `Closes #<n>`, and the merge closes the issue. A body that already names the issue gets no second line. A `public: false` child never counts as open, because the issue never shows it.
+
 ## Failure: the primary is unreachable
 
 A claim command refuses. The error names the URL and the key, and says nothing was written locally. It also names each address it tried, as `resolve <host>` or `connect <ip:port>`, so a broken name reads apart from a down primary. A hotspot that breaks MagicDNS is the first case: set `store.remote_addrs` to the primary's Tailscale IP. A request that timed out can still have reached the primary, so a retry by the same holder is the safe next step. A 4xx reply, such as a bad token, is named as a refusal and never read as an outage. `fno backlog next` refuses selection. `fno do target init` writes a cancel signal with `store_unreachable` and owns no node. A running worker finishes its turn: at its stop, loop-check reads the unreachable renewal and allows the stop, so the worker holds. The machine claims no new work until the network returns. To work alone, unset the key.

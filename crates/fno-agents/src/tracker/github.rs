@@ -20,12 +20,19 @@ pub trait GhRun: Send + Sync {
     fn run(&self, args: &[String]) -> Result<(i32, String, String), String>;
 }
 
-struct RealGh;
+/// `as_app` puts the GitHub App installation token on the gh child, for the
+/// writes that must show the App as the actor.
+struct RealGh {
+    as_app: bool,
+}
 
 impl GhRun for RealGh {
     fn run(&self, args: &[String]) -> Result<(i32, String, String), String> {
         let mut cmd = std::process::Command::new("gh");
         cmd.args(args);
+        if self.as_app {
+            crate::github_app::inject(&mut cmd, std::ffi::OsStr::new("gh"));
+        }
         match crate::bounded_cmd::output_with_timeout_result(cmd, 30) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(
                 "gh binary not found on PATH; install GitHub CLI to use the github tracker backend"
@@ -77,6 +84,20 @@ pub fn parse_github_id(id: &str) -> Result<(String, String, i64), TrackerError> 
     ))
 }
 
+/// `owner/repo`, before it reaches a gh argv.
+fn require_repo(repo: &str) -> Result<(), TrackerError> {
+    static REPO_RE: OnceLock<regex::Regex> = OnceLock::new();
+    let repo_re =
+        REPO_RE.get_or_init(|| regex::Regex::new(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$").unwrap());
+    if repo_re.is_match(repo) {
+        Ok(())
+    } else {
+        Err(TrackerError::Backend(format!(
+            "not a GitHub repo: {repo:?} (expected owner/repo)"
+        )))
+    }
+}
+
 /// stderr fragments gh emits when an issue does not exist (vs. a network or
 /// auth failure, which surfaces as `Backend` so the caller can degrade).
 fn not_found_stderr(stderr: &str) -> bool {
@@ -119,8 +140,14 @@ impl GitHubTracker {
             std::env::var("FNO_TRACKER_GITHUB_REPO")
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
-            Box::new(RealGh),
+            Box::new(RealGh { as_app: false }),
         )
+    }
+
+    /// A tracker scoped to `repo` whose gh calls ride the App token. With no
+    /// App configured `inject` leaves the child on the user's token.
+    pub fn as_app(repo: &str) -> Self {
+        Self::new(Some(repo.to_string()), Box::new(RealGh { as_app: true }))
     }
 
     pub fn new(default_repo: Option<String>, gh: Box<dyn GhRun>) -> Self {
@@ -149,14 +176,7 @@ impl GitHubTracker {
         approved_label: &str,
         limit: u32,
     ) -> Result<Vec<RequestIssue>, TrackerError> {
-        static REPO_RE: OnceLock<regex::Regex> = OnceLock::new();
-        let repo_re = REPO_RE
-            .get_or_init(|| regex::Regex::new(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$").unwrap());
-        if !repo_re.is_match(repo) {
-            return Err(TrackerError::Backend(format!(
-                "not a GitHub repo: {repo:?} (expected owner/repo)"
-            )));
-        }
+        require_repo(repo)?;
         static LABEL_RE: OnceLock<regex::Regex> = OnceLock::new();
         let label_re =
             LABEL_RE.get_or_init(|| regex::Regex::new(r"^[A-Za-z0-9._ -]{1,50}$").unwrap());
@@ -244,6 +264,74 @@ impl GitHubTracker {
                 })
             })
             .collect())
+    }
+
+    /// Open one issue and return its number. `gh issue create` prints the new
+    /// issue's URL on its last stdout line.
+    pub fn create_issue(&self, repo: &str, title: &str, body: &str) -> Result<i64, TrackerError> {
+        require_repo(repo)?;
+        let (rc, out, err) = self.run_gh(
+            vec![
+                "issue".into(),
+                "create".into(),
+                "-R".into(),
+                repo.to_string(),
+                "--title".into(),
+                title.to_string(),
+                "--body".into(),
+                body.to_string(),
+            ],
+            repo,
+        )?;
+        if rc != 0 {
+            return Err(TrackerError::Backend(format!(
+                "gh issue create failed for {repo}: {}",
+                err.trim()
+            )));
+        }
+        let url = out
+            .lines()
+            .rev()
+            .find(|l| !l.trim().is_empty())
+            .unwrap_or("");
+        url.trim()
+            .rsplit_once("/issues/")
+            .and_then(|(_, n)| n.parse::<i64>().ok())
+            .filter(|n| *n > 0)
+            .ok_or_else(|| {
+                TrackerError::Backend(format!(
+                    "gh issue create for {repo} printed no issue URL: {:?}",
+                    out.trim()
+                ))
+            })
+    }
+
+    /// Replace one issue's body.
+    pub fn edit_issue_body(&self, repo: &str, number: i64, body: &str) -> Result<(), TrackerError> {
+        require_repo(repo)?;
+        let id = format!("{repo}#{number}");
+        let (rc, _out, err) = self.run_gh(
+            vec![
+                "issue".into(),
+                "edit".into(),
+                number.to_string(),
+                "-R".into(),
+                repo.to_string(),
+                "--body".into(),
+                body.to_string(),
+            ],
+            &id,
+        )?;
+        if rc != 0 {
+            if not_found_stderr(&err) {
+                return Err(TrackerError::NotFound(id));
+            }
+            return Err(TrackerError::Backend(format!(
+                "gh issue edit failed for {id}: {}",
+                err.trim()
+            )));
+        }
+        Ok(())
     }
 }
 
