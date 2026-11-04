@@ -579,7 +579,7 @@ pub(super) fn portal_replay_placement(placement: &PanePlacement, portal_idx: u8)
 /// or a row on another machine, which its seat shows through the link.
 pub(super) enum ReachKey<'a> {
     Row(&'a str),
-    Far(&'a crate::proto::RemoteRow),
+    Remote(&'a crate::proto::RemoteRow),
 }
 
 impl Core {
@@ -606,8 +606,8 @@ impl Core {
         idx
     }
 
-    /// A far row's reach: the same portal path a local paneless row takes.
-    pub(super) fn reach_far(
+    /// A remote row's reach: the same portal path a local paneless row takes.
+    pub(super) fn reach_remote(
         &mut self,
         client_id: u64,
         view: (u64, TabId),
@@ -623,7 +623,7 @@ impl Core {
             return Flow::Continue;
         };
         let explicit = placement.portal.is_some();
-        let key = ReachKey::Far(remote);
+        let key = ReachKey::Remote(remote);
         self.reach_portal(client_id, view, vp, portal, key, placement, explicit)
     }
 
@@ -708,11 +708,11 @@ impl Core {
             || placement.at.is_some()
             || placement.tab.is_some()
             || !matches!(placement.target, PaneTarget::CurrentRoute);
-        // A far row has no registry row here. It stands in as a row that
+        // A remote row has no registry row here. It stands in as a row that
         // carries only its `name@host`, which is also the key its portal
         // stores, and its seat runs the link instead of a tier argv.
         let (row, link) = match key {
-            ReachKey::Far(remote) => match crate::mux_link::pane_argv(remote) {
+            ReachKey::Remote(remote) => match crate::mux_link::pane_argv(remote) {
                 Ok(argv) => {
                     let row = RegistryAgent {
                         name: remote.name.clone(),
@@ -832,7 +832,7 @@ impl Core {
         let staged_plan_ms = self.reentry_verdict.as_ref().map(|v| v.plan_ms);
         // The tier's argv is built server-side, where the row set lives: the
         // client's reach command is tier-blind by design.
-        let far = link.is_some();
+        let through_link = link.is_some();
         let argv = match (link, tier) {
             (Some(argv), _) => argv,
             (None, Reach::Drive) => {
@@ -855,7 +855,7 @@ impl Core {
             (None, Reach::Locate) => locate_argv(&row),
         };
         let mechanism = match (&tier, staged_plan_ms) {
-            _ if far => "link",
+            _ if through_link => "link",
             (Reach::Drive, None) => "attach-direct",
             (Reach::Drive, Some(_)) if argv.iter().any(|a| a == "respawn" || a == "--resume") => {
                 "relaunch"

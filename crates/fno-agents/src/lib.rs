@@ -231,6 +231,7 @@ pub mod fleet_law;
 pub mod fleet_load;
 pub mod fleet_state;
 pub mod fleet_task;
+pub mod fleet_workspace;
 pub mod flight_gate;
 pub(crate) mod fnod;
 pub mod footnote_harness;

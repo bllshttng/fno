@@ -23,7 +23,7 @@ const USAGE: &str =
     "usage: fno mux serve --snapshot --server <name> --out <path> [--squad <name>] \
 [--theme dark|light|macchiato] [--format html|svg|png] [--size <cols>x<rows> [--fit]] [--peer <cols>x<rows>] \
 [--font <family>] [--message <fmail-id>] [--edge backlog|messages-tree|messages-part|org|dock=<size>] \
-[--view bell|bell-wide|bell-full|feed|row-menu|hover|cursor|tab-menu|sideline-menu|composer|split-menu|settings|keys|org-block|org-table|org-recent|org-overview|org-graph|org-health|org-seat|org-feed|org-system|messages-tree|messages-chats|messages-thread|messages-system|messages-archive|backlog-list|backlog-kanban|review-diff|review-panel|review-panel-drag|navigator-pr|navigator-model|navigator-menu|feed-detail|question-detail|connections|connections-use|yard|needs|dock]";
+[--view bell|bell-wide|bell-full|feed|row-menu|hover|cursor|tab-menu|sideline-menu|composer|split-menu|settings|keys|org-block|org-table|org-recent|org-overview|org-graph|org-health|org-seat|org-feed|org-system|messages-tree|messages-chats|messages-thread|messages-system|messages-archive|backlog-list|backlog-kanban|review-diff|review-panel|review-panel-drag|navigator-pr|navigator-model|navigator-menu|feed-detail|question-detail|connections|connections-use|yard|needs|dock|machines]";
 
 #[derive(Debug, PartialEq)]
 pub enum Format {
@@ -72,6 +72,9 @@ pub enum ViewKind {
     /// The which-key table, opened FROM settings: the printed key labels
     /// (`ctrl+b`) live here.
     Keys,
+    /// The sideline with the other-machines layer on, after one synchronous
+    /// read of the fleet map like the live loop's first one.
+    Machines,
     /// The expanded org fold block on the sideline (the prefix+C surface),
     /// with one inline machine fold so the lines carry real readings.
     OrgBlock,
@@ -213,6 +216,7 @@ fn parse_view(v: &str) -> Option<ViewKind> {
         "yard" => Some(ViewKind::Yard),
         "needs" => Some(ViewKind::Needs),
         "dock" => Some(ViewKind::Dock),
+        "machines" => Some(ViewKind::Machines),
         _ => None,
     }
 }
@@ -1032,6 +1036,20 @@ shoot a root whose config lists accounts (scripts/ops/mux-demo-snapshot.sh seeds
                 cv.on_key(b'u');
             }
         }
+        Some(ViewKind::Machines) => {
+            // A fleet map with fewer than two machines paints no layer, so
+            // that shot is a plain sideline and refuses.
+            super::machine_tree::set_on(&mut view, true);
+            let read = runtime.block_on(super::org_seats::read_fleet());
+            super::machine_tree::apply(&mut view, read);
+            if !view.machine_tree.layered() {
+                return Err(
+                    "machine layer rendered empty: fleet top answered fewer than two machines; \
+shoot a root whose fleet map has a second machine (scripts/ops/mux-demo-snapshot.sh seeds one)"
+                        .into(),
+                );
+            }
+        }
         Some(ViewKind::OrgBlock) => {
             // The prefix+C fold runs expanded-only in a reading: flip the
             // same state the key flips, then run the fold and the gate
@@ -1385,6 +1403,7 @@ mod tests {
             ("yard", ViewKind::Yard),
             ("needs", ViewKind::Needs),
             ("dock", ViewKind::Dock),
+            ("machines", ViewKind::Machines),
         ] {
             let args = parse_extra(&["--view", name]).expect(name);
             assert_eq!(args.view, Some(kind), "{name}");

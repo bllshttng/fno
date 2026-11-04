@@ -7,6 +7,11 @@ fn roster_worker(session_id: &str, pid: u32, repl_pid: u32) -> crate::claude_ros
         .unwrap()
 }
 
+/// A home with no keep marker and no workspace file.
+fn no_home() -> crate::paths::AgentsHome {
+    crate::paths::AgentsHome::at("/nonexistent/marks-home")
+}
+
 fn row(name: &str, status: AgentStatus) -> RegistryEntry {
     RegistryEntry {
         name: name.into(),
@@ -208,6 +213,7 @@ fn worker_rows_carry_seat_facts_and_null_when_unread() {
         &Map::new(),
         &BTreeMap::new(),
         &HashSet::new(),
+        &Marks::read(&no_home()),
     );
     let seat = out.iter().find(|r| r["name"] == "sorrel").unwrap();
     assert_eq!(seat["model"], "sonnet");
@@ -227,10 +233,98 @@ fn worker_rows_carry_seat_facts_and_null_when_unread() {
         "cwd",
         "project",
         "context_pct",
+        "workspace",
+        "needs_input",
+        "pinned",
+        "cost_cents",
+        "tokens",
+        "compactions",
     ] {
         assert!(stray[key].is_null(), "{key}: {}", stray[key]);
     }
     assert!(serde_json::to_string(stray).is_ok());
+}
+
+/// The marks a sideline sorts, groups and prices a card on: the workspace and
+/// the counts the mux server filed, a blocked badge as needs-input, and a keep
+/// mark as the pin. A row with none of them reads false and null, never a
+/// guessed name or a zero.
+#[test]
+fn worker_rows_carry_the_sideline_marks() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = crate::paths::AgentsHome::at(dir.path());
+    let (pinned_sid, bare_sid) = (
+        "aaaa1111-2222-3333-4444-555566667777",
+        "bbbb1111-2222-3333-4444-555566667777",
+    );
+    let now = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let sidecar = crate::fleet_workspace::path(&home);
+    std::fs::create_dir_all(sidecar.parent().unwrap()).unwrap();
+    std::fs::write(
+        sidecar,
+        json!({
+            "at": now,
+            "by_session": {pinned_sid: "fno"},
+            "meters": {pinned_sid: {"cost_cents": 42, "tokens": 9000, "compactions": null}},
+        })
+        .to_string(),
+    )
+    .unwrap();
+    crate::keep_mark::set(&home, pinned_sid, "sorrel").unwrap();
+
+    let mut asking = row("sorrel", AgentStatus::Live);
+    asking.harness_session_id = Some(pinned_sid.into());
+    asking.inside_leg = Some(crate::state::InsideLegReport {
+        state: crate::state::InsideLegState::Blocked,
+        seq: 1,
+        received_at: crate::daemon::now_rfc3339_like(),
+        ttl_ms: Some(90_000),
+        ..Default::default()
+    });
+    let mut idle = row("ines", AgentStatus::Live);
+    idle.harness_session_id = Some(bare_sid.into());
+    let worker = |entry: usize, sid: &str| Worker {
+        source: "fno",
+        name: format!("w{entry}"),
+        harness: "claude".into(),
+        substrate: "pane".into(),
+        pid: None,
+        session_pid: None,
+        stored_status: "live".into(),
+        status_basis: None,
+        session_id: Some(sid.into()),
+        spawned_by: None,
+        entry: Some(entry),
+    };
+    let c = Census {
+        workers: vec![worker(0, pinned_sid), worker(1, bare_sid)],
+        ..Default::default()
+    };
+    let out = worker_rows(
+        &c,
+        &[asking, idle],
+        &HashMap::new(),
+        crate::truth_probe::BatchOutcome::Measured,
+        &Map::new(),
+        &BTreeMap::new(),
+        &HashSet::new(),
+        &Marks::read(&home),
+    );
+    let by = |name: &str| out.iter().find(|r| r["name"] == name).unwrap();
+    let (asking, idle) = (by("sorrel"), by("ines"));
+    assert_eq!(asking["workspace"], "fno");
+    assert_eq!(asking["needs_input"], true);
+    assert_eq!(asking["pinned"], true);
+    assert_eq!(asking["cost_cents"], 42);
+    assert_eq!(asking["tokens"], 9000);
+    assert!(asking["compactions"].is_null(), "no reading is no zero");
+    assert!(idle["cost_cents"].is_null() && idle["tokens"].is_null());
+    assert!(idle["workspace"].is_null(), "no workspace was filed");
+    assert_eq!(idle["needs_input"], false);
+    assert_eq!(idle["pinned"], false);
 }
 
 /// AC7-HP and AC8-ERR: a read worker shows its trailing refusals and its
@@ -297,6 +391,7 @@ fn the_row_takes_the_registry_name_it_joins() {
         &Map::new(),
         &BTreeMap::new(),
         &HashSet::new(),
+        &Marks::read(&no_home()),
     );
     let joined = &out[0];
     assert_eq!(joined["name"], "lenore");
@@ -369,6 +464,7 @@ fn the_status_column_says_blocked_over_a_fresh_transcript_age() {
         &Map::new(),
         &BTreeMap::new(),
         &blocked,
+        &Marks::read(&no_home()),
     );
     assert_eq!(out[0]["status"], "blocked");
     assert_eq!(

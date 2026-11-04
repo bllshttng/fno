@@ -204,6 +204,14 @@ jobs:
           for size in 200x56 120x40; do
             bash scripts/ops/mux-demo-snapshot.sh --out "shots/sideline-${size}.png" --format png --size "$size" --fit
           done
+          # The other-machines layer: the second machine's rows by workspace
+          # and by status, where a remote row pins first and a blocked one bands
+          # under Needs input. The band sits below this machine's, so the
+          # frame is taller than the rest.
+          for group in workspace status; do
+            bash scripts/ops/mux-demo-snapshot.sh --out "shots/machines-${group}.png" --format png --view machines --group "$group" --remote-pane --size 200x72 --fit
+            bash scripts/ops/mux-demo-snapshot.sh --out "shots/machines-${group}-light.png" --format png --view machines --group "$group" --remote-pane --theme light --size 200x72 --fit
+          done
           # Two windows on one tab: the active big window fills, the same
           # window under the smallest policy letterboxes, and a small
           # observer crops a tab the big peer sized.

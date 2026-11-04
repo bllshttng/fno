@@ -9411,7 +9411,7 @@ impl Core {
                 Flow::Continue
             }
             Command::ReachRemote { remote, placement } => {
-                self.reach_far(client_id, view, vp, &remote, &placement)
+                self.reach_remote(client_id, view, vp, &remote, &placement)
             }
             Command::AttachAgent { id, placement } => {
                 // The portal reach routes BEFORE the attach-shaped
