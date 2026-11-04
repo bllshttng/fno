@@ -5502,8 +5502,8 @@ impl View {
             Density::Regular => {
                 let (rows, depths) = self.tree_rows_with_depths();
                 let (rows, depths) = self.sort_agent_runs(rows, depths);
-                let (rows, depths) = self.card_rows(rows, depths);
-                self.pin_needs(rows, depths)
+                let (rows, depths) = self.pin_needs(rows, depths);
+                self.card_rows(rows, depths)
             }
             Density::Slim => {
                 let (rows, depths) = self.tree_rows_with_depths();

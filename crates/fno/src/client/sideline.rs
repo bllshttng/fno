@@ -11,6 +11,12 @@ mod observer_rows;
 use super::backlog_style::BLine;
 use super::*;
 
+/// A snapshot freezes the need-input pulse on one beat, so a still shot can
+/// show each frame. The live client never sets it.
+pub(super) static PULSE_PIN: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+pub(super) const PULSE_ON: u8 = 1;
+pub(super) const PULSE_OFF: u8 = 2;
+
 /// The sideline Table's five columns: status word, name, message, PR, age.
 /// Width ranking (operator, 2026-09-20): name first, message second, status
 /// third. The status words are shortened (operator, 2026-09-21, longest is
@@ -442,6 +448,11 @@ impl View {
     /// anything needs input, so the count catches the eye without moving a
     /// row. A space holds the cell on the off beat.
     pub(super) fn need_input_pulse(&self) -> char {
+        match PULSE_PIN.load(std::sync::atomic::Ordering::Relaxed) {
+            PULSE_ON => return '\u{25B2}',
+            PULSE_OFF => return ' ',
+            _ => {}
+        }
         match crate::lattice::spin_epoch() {
             Some(t0)
                 if (t0.elapsed().as_millis() as u64 / crate::lattice::SPIN_FRAME_MS) % 2 == 0 =>
