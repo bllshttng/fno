@@ -225,6 +225,54 @@ fn parse_cursor(raw: &str) -> Result<[String; 6], String> {
     Ok(out)
 }
 
+/// One `decision_recorded` row per decision in the index that `rows` does not
+/// already carry. The journal holds only some decisions (66 of about 3000 on
+/// the machine this was measured on); the index holds every lane, so the
+/// feed reads both and keys on the decision id.
+fn decision_rows_from(index: &[Value], have: &std::collections::HashSet<String>) -> Vec<FeedRow> {
+    index
+        .iter()
+        .filter(|r| !crate::law_match::is_retraction_row(r))
+        .filter_map(|r| {
+            let id = s_field(r, "decision_id").filter(|id| !have.contains(id))?;
+            let ts = s_field(r, "ts")?;
+            let subject = s_field(r, "subject").unwrap_or_default();
+            let decision = s_field(r, "decision").unwrap_or_default();
+            let title = if subject.is_empty() {
+                decision
+            } else {
+                format!("{subject}: {decision}")
+            };
+            let (session_id, actor) = split_actor(s_field(r, "decided_by"));
+            Some(FeedRow {
+                ts,
+                kind: "decision_recorded".into(),
+                session_id,
+                title: one_line(&title),
+                r#ref: Some(id),
+                actor,
+                ..FeedRow::default()
+            })
+        })
+        .collect()
+}
+
+/// `rows` plus the index decisions the journal missed, ascending by ts. A
+/// failed index read leaves `rows` as it was.
+fn with_index_decisions(mut rows: Vec<FeedRow>) -> Vec<FeedRow> {
+    let Ok((index, _)) = crate::law_match::all_decision_rows() else {
+        return rows;
+    };
+    let have: std::collections::HashSet<String> = rows
+        .iter()
+        .filter(|r| r.kind == "decision_recorded")
+        .filter_map(|r| r.r#ref.clone())
+        .collect();
+    rows.extend(decision_rows_from(&index, &have));
+    rows.sort_by(|a, b| a.ts.cmp(&b.ts));
+    rows
+}
+
 /// The pure projection: questions text + graph entries + removals + the
 /// agents journal's spawn events + the team events (both journals) ->
 /// ordered rows. Ascending by ts, so a consumer reads history forward and
@@ -1964,6 +2012,7 @@ pub(crate) fn collect_window(
         &main_raw,
         None,
     );
+    let rows = with_index_decisions(rows);
     let rows = filter_rows(
         rows,
         &Page::default(),
@@ -2074,6 +2123,11 @@ pub async fn run_feed(rest: &[String], home: &AgentsHome) -> i32 {
         &main_raw,
         node_set.as_deref(),
     );
+    let rows = if node_set.is_none() && !leg_skipped(&args.pre, QUESTION_KINDS) {
+        with_index_decisions(rows)
+    } else {
+        rows
+    };
     if skipped_lines > 0 {
         eprintln!("fno-agents feed: skipped {skipped_lines} malformed question line(s)");
     }
@@ -2273,6 +2327,20 @@ mod tests {
         assert_eq!(decided.session_id, None);
         assert_eq!(decided.actor.as_deref(), Some("fno agents stale-escalate"));
         assert_eq!(decided.node.as_deref(), Some("x-1111"));
+
+        // Index decisions the journal missed join the feed once, retractions never.
+        let index: Vec<Value> = [
+            r#"{"decision_id":"d-1","decision":"stands","subject":"s","ts":"2026-09-03T09:00:00Z"}"#,
+            r#"{"decision_id":"d-2","decision":"ship it","subject":"law","ts":"2026-09-04T09:00:00Z","decided_by":"jc"}"#,
+        ]
+        .iter()
+        .map(|s| serde_json::from_str(s).unwrap())
+        .collect();
+        let have = std::collections::HashSet::from(["d-1".to_string()]);
+        let extra = decision_rows_from(&index, &have);
+        assert_eq!(extra.len(), 1);
+        assert_eq!(extra[0].r#ref.as_deref(), Some("d-2"));
+        assert_eq!(extra[0].title, "law: ship it");
 
         let questions = [
             r#"{"ts":"2026-09-02T17:00:00Z","type":"operator_question","source":"t","data":{"question_id":"q-1","question":"ask"}}"#,
