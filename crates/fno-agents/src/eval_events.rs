@@ -574,6 +574,7 @@ mod tests {
         let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let saved = std::env::var_os("FNO_POSTHOG_PROJECT_TOKEN");
         std::env::remove_var("FNO_POSTHOG_PROJECT_TOKEN");
+        let saved_cfg = std::env::var_os("FNO_CONFIG");
         let dir = tempfile::tempdir().unwrap();
         let cfg = dir.path().join("config.toml");
         let file = dir.path().join("ph-token");
@@ -619,6 +620,10 @@ mod tests {
 
         if let Some(v) = saved {
             std::env::set_var("FNO_POSTHOG_PROJECT_TOKEN", v);
+        }
+        match saved_cfg {
+            Some(v) => std::env::set_var("FNO_CONFIG", v),
+            None => std::env::remove_var("FNO_CONFIG"),
         }
     }
 }
