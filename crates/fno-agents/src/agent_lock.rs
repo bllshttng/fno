@@ -61,7 +61,7 @@ pub(crate) fn holder_note(home: &AgentsHome, name: &str) -> String {
 /// True when `pid` names a live process. `EPERM` means it exists under another
 /// uid, so that counts as alive.
 ///
-/// `stamp_holder` cannot clear a stamp when its own `set_len` fails, so a
+/// `chokepoint::stamp` cannot clear a stamp when its own `set_len` fails, so a
 /// previous holder's line can outlive it. Naming a dead pid is the
 /// 31-hour-corpse misreading this stamp exists to end, told with more
 /// authority than the bare mtime ever had, so the reader drops it.
@@ -97,35 +97,6 @@ pub(crate) fn pid_is_gone(pid: u64, recorded_start: Option<u64>) -> bool {
         }
         None => false,
     }
-}
-
-/// Write this process as the lock's holder, in the shape the Python reader
-/// (`fno.agents.lock._read_holder`) parses.
-///
-/// Truncating is the load-bearing half, and it is the half that can fail on
-/// its own: a `set_len` error returns here with an earlier holder's line still
-/// in the file. `holder_note` covers that residue by dropping a stamp whose
-/// pid is dead. Best-effort throughout: the flock is held either way and the
-/// stamp is diagnostic only.
-fn stamp_holder(file: &std::fs::File, name: &str) {
-    use std::io::{Seek, SeekFrom, Write};
-
-    let mut handle = file;
-    if handle.set_len(0).is_err() {
-        return;
-    }
-    let _ = handle.seek(SeekFrom::Start(0));
-    let line = serde_json::json!({
-        "pid": std::process::id(),
-        "name": name,
-        // Python writes `datetime.now(timezone.utc).isoformat()`, so microseconds
-        // and a `+00:00` offset. A bare `...SZ` here rendered the SAME holder
-        // line in two shapes depending on which language took the lock, under a
-        // module header claiming byte-compatibility.
-        "acquired_at": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Micros, false),
-    });
-    let _ = writeln!(handle, "{}", line);
-    let _ = handle.flush();
 }
 
 impl AgentLock {
@@ -181,11 +152,16 @@ impl AgentLock {
                         file = open()?;
                         continue;
                     }
-                    stamp_holder(&file, name);
+                    crate::chokepoint::stamp(&file, crate::chokepoint::AGENT_ASK.name, name);
                     return Ok(Self { _file: file });
                 }
                 Err(_) => {
                     if Instant::now() >= deadline {
+                        let _ = crate::chokepoint::report_expiry(
+                            &crate::chokepoint::AGENT_ASK,
+                            &path,
+                            timeout,
+                        );
                         return Err(());
                     }
                     std::thread::sleep(Duration::from_millis(25));

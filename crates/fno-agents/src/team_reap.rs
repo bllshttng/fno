@@ -7,7 +7,6 @@
 //! is removed.
 
 use std::fs;
-use std::os::fd::AsRawFd;
 use std::path::Path;
 
 use chrono::{DateTime, Utc};
@@ -351,12 +350,8 @@ pub(crate) fn vacate(
         fs::create_dir_all(parent)
             .map_err(|e| format!("cannot create {}: {e}", parent.display()))?;
     }
-    let lock = fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&lock_path)
-        .map_err(|e| format!("cannot open {}: {e}", lock_path.display()))?;
-    unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) };
+    let lock = crate::chokepoint::take(&crate::chokepoint::TEAM_REAP, &lock_path)
+        .map_err(|e| e.to_string())?;
     let result = (|| {
         let content = fs::read_to_string(manifest_path)
             .map_err(|e| format!("cannot read {}: {e}", manifest_path.display()))?;
@@ -387,7 +382,7 @@ pub(crate) fn vacate(
         );
         Ok(cleared)
     })();
-    unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_UN) };
+    drop(lock);
     result
 }
 

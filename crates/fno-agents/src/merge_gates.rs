@@ -733,6 +733,16 @@ pub(crate) fn visual_approval_blocker<P: Probes>(
          records the approval. Pass each shot with --image.",
         touched.join(", ")
     );
+    if touched.iter().any(|f| is_public_copy(f)) {
+        detail.push_str(
+            "; this PR changes public copy (README or docs/images). Before the page \
+             reaches the user, brief a fresh subagent as the target developer, told \
+             nothing else, and have it answer in writing: what does this show, would \
+             it make you install fno, and what number or claim here hurts. Put the \
+             answer on the question page. A 'hurts' answer sends the change back \
+             before the user sees it",
+        );
+    }
     match (node_id.as_deref(), shots.as_slice()) {
         (Some(node), []) => detail.push_str(&format!(
             "; no shots at internal/fno/mux/{node}-*.png: capture them first, then \
@@ -799,6 +809,12 @@ fn paint_patch<P: Probes>(probes: &P, cwd: &Path, pr: u64, file: &str) -> Option
     .collect();
     let (ok, out) = probes.run_gh(cwd, &args).ok()?;
     (ok && !out.trim().is_empty()).then_some(out)
+}
+
+/// The public front page a reader meets before any install: the README and
+/// its images. Landing copy lives in the docs tree and takes the same path.
+fn is_public_copy(path: &str) -> bool {
+    path == "README.md" || path.starts_with("docs/images/")
 }
 
 /// How many earlier commits of the PR the carry walks, newest first.
@@ -1494,6 +1510,18 @@ pub(crate) fn repo_slug_from_origin(url: &str) -> Option<String> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn readme_and_doc_images_are_public_copy_and_other_docs_are_not() {
+        assert!(is_public_copy("README.md"));
+        assert!(is_public_copy("docs/images/target-run.gif"));
+        assert!(!is_public_copy("docs/architecture/pr-status-verdict.md"));
+        assert!(!is_public_copy("crates/fno/README.md"));
+        assert!(path_matches_paint(
+            "docs/images/target-run.gif",
+            &["docs/images/**".to_string()]
+        ));
+    }
 
     #[test]
     fn a_paint_diff_of_comments_only_skips_the_look() {

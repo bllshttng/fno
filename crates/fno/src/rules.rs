@@ -560,7 +560,7 @@ fn heads_up(rule: &Rule, now: chrono::NaiveDate) -> String {
         return String::new();
     }
     let renew = match &rule.law {
-        Some(law) => format!("fno inbox law set <subject> --supersedes {law}"),
+        Some(law) => format!("fno inbox law renew {law} --until <date>"),
         None => "move its expires date".to_string(),
     };
     format!(" (ends {end}; renew: {renew})")

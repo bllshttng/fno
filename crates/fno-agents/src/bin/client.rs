@@ -137,6 +137,7 @@ const ALL_CLIENT_ACTIONS: &[&str] = &[
 ];
 
 fn main() {
+    fno_agents::chokepoint_events::install();
     let args: Vec<String> = std::env::args().skip(1).collect();
     // First, so a proxied gh call pays no other arm; transport-only.
     if let Some(code) = fno_agents::pr_status::adapter::gh_transport_door(&args) {
@@ -197,6 +198,11 @@ fn main() {
     }
     if args.first() == Some(&"do".to_string()) && args.get(1) == Some(&"ci".to_string()) {
         std::process::exit(fno_agents::ci_front::run(&args[2..]));
+    }
+    if args.first().map(String::as_str) == Some("do")
+        && matches!(args.get(1).map(String::as_str), Some("show" | "diff"))
+    {
+        std::process::exit(fno_agents::rev_front::run(&args[1..]));
     }
     // gh-cache, target-status: the early transport arms; client_transport.rs
     // holds their bodies and comments. worktree-reapable and launch-workdir
