@@ -141,7 +141,6 @@ pub mod client;
 pub mod client_commands;
 pub mod client_render;
 pub mod client_transport;
-pub mod codex_skills;
 pub mod codex_ask;
 pub mod codex_converge;
 pub mod codex_daemon_readiness;
@@ -156,6 +155,7 @@ pub mod codex_inject;
 /// [`CodexRoute`] in its signature.
 pub mod codex_posture;
 pub mod codex_route;
+pub mod codex_skills;
 pub mod codex_store;
 pub mod codex_thread;
 mod codex_thread_entry;
