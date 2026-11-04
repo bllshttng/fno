@@ -145,12 +145,16 @@ pub(crate) fn parse_args(rest: &[std::ffi::OsString]) -> Result<Flags, String> {
     Ok(f)
 }
 
-/// A capture-file tag unique per call: pid plus a process-wide counter, so
-/// concurrent calls in one process never share a path.
+/// A capture-file tag unique per call: pid, wall clock and a process-wide
+/// counter. Concurrent calls never share a path, and a recycled pid never
+/// lands on a file an earlier process leaked.
 pub(crate) fn capture_tag(prefix: &str) -> String {
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    format!("{prefix}-{}-{n}", std::process::id())
+    let wall = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    format!("{prefix}-{}-{wall}-{n}", std::process::id())
 }
 
 /// Create a capture file that must not already exist: O_EXCL fails on a
