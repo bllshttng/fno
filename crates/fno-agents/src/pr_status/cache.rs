@@ -33,6 +33,35 @@ pub(crate) fn ttl() -> u64 {
     raw.parse::<u64>().map(|v| v.max(1)).unwrap_or(60)
 }
 
+/// How long a settled row serves the head-pinned poll path. A row minted
+/// for head H carries a concluded verdict that cannot change except by a
+/// manual re-run on that same head; a push mints a new key and misses at
+/// once, so a PR's review/fix plateau costs one refresh per settled TTL
+/// instead of one per TTL. The spend journal names this plateau the fleet's
+/// top spender (2026-11-03: `do pr` at 60 percent of live requests, most
+/// rows re-reading settled heads every 60 s).
+const SETTLED_TTL_S: u64 = 600;
+
+fn settled_ttl() -> u64 {
+    let raw = std::env::var("FNO_PR_STATUS_SETTLED_TTL").unwrap_or_default();
+    raw.parse::<u64>()
+        .map(|v| v.max(1))
+        .unwrap_or(SETTLED_TTL_S)
+}
+
+/// The age one row answers under. `pinned` marks a caller bound to the
+/// row's head (the wait's `require_head`, or a read that just minted the
+/// key from its own head read): it may take the settled long TTL. An
+/// unpinned read - the human status command, which wants the PR's current
+/// truth whatever the head - keeps the short TTL.
+fn row_ttl(row: &Value, pinned: bool) -> f64 {
+    if pinned && row.pointer("/output/settled").and_then(Value::as_bool) == Some(true) {
+        settled_ttl() as f64
+    } else {
+        ttl() as f64
+    }
+}
+
 /// The one dir resolver: the shared config helper already folds the env
 /// override and the state root; the door hands it the payload's cwd.
 fn cache_dir(cwd: &Path) -> Option<PathBuf> {
@@ -325,7 +354,7 @@ fn cached_status_via(
             > 0
     {
         if let Some(row) = newest_row(&dir, &slug_key, &pr.to_string()) {
-            let stale = now - num(&row, "ts") >= ttl() as f64;
+            let stale = now - num(&row, "ts") >= row_ttl(&row, require_head.is_some());
             // A stale row serves degraded either way; a fresh one must be
             // minted for the required head, or the ride-out would lie
             // settled about a head the push already superseded.
@@ -390,7 +419,7 @@ fn cached_status_via(
     );
     if !refresh {
         if let Some(row) = read_row(&dir, &key) {
-            if now - num(&row, "ts") < ttl() as f64 {
+            if now - num(&row, "ts") < row_ttl(&row, true) {
                 if let Some(answer) = serve(&row, false) {
                     return into_answer(answer, probe.calls.load(Ordering::SeqCst));
                 }
@@ -408,7 +437,7 @@ fn cached_status_via(
         .filter(|v| v.is_object());
     if !refresh {
         if let Some(row) = read_row(&dir, &key) {
-            if now_secs() - num(&row, "ts") < ttl() as f64 {
+            if now_secs() - num(&row, "ts") < row_ttl(&row, true) {
                 if let Some(answer) = serve(&row, false) {
                     return into_answer(answer, probe.calls.load(Ordering::SeqCst));
                 }
@@ -605,7 +634,8 @@ fn fresh_serve(
     require_head: Option<&str>,
 ) -> Option<(i32, String, String)> {
     let row = newest_row(dir, slug_key, pr)?;
-    if now - num(&row, "ts") >= ttl() as f64 {
+    let pinned = require_head.is_some();
+    if now - num(&row, "ts") >= row_ttl(&row, pinned) {
         return None;
     }
     if !serve_head_ok(&row, require_head) {
@@ -909,6 +939,30 @@ mod tests {
         assert_eq!(code, 0);
         assert!(stdout.contains("\"head\":\"aaaaaaaa1111\""), "{stdout}");
         assert!(stdout.contains("\"cached\":true"), "{stdout}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A settled row answers its head-pinned waiter far past the short TTL:
+    /// the plateau serve is the wait's bargain. The same row refuses an
+    /// unpinned read at the short TTL, so the interactive command keeps its
+    /// freshness contract.
+    #[test]
+    fn a_settled_row_outlives_the_short_ttl_only_for_a_pinned_caller() {
+        let dir = temp_cache_dir("settledttl");
+        let row = json!({
+            "ts": now_secs() - 120.0,
+            "exit": 0,
+            "output": {"head": "aaaaaaaa1111", "verdict": "green", "settled": true, "green": true},
+        });
+        write_row(&dir, "Owner--Repo-42-aaaaaaaa1111", &row);
+        let (_, stdout, _) =
+            fresh_serve(&dir, "Owner--Repo", "42", now_secs(), Some("aaaaaaaa1111"))
+                .expect("a 120s-old settled row answers its pinned waiter");
+        assert!(stdout.contains("\"verdict\":\"green\""), "{stdout}");
+        assert!(
+            fresh_serve(&dir, "Owner--Repo", "42", now_secs(), None).is_none(),
+            "an unpinned read keeps the short TTL"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
