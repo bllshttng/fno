@@ -471,16 +471,21 @@ fn open_prs(p: &Paths, d: &Deps, slug: &str) -> Option<Vec<Pr>> {
     Some(prs)
 }
 
-/// The files a PR changes. None on a failed read, so a blip never records a
-/// head as ungated.
-fn head_files(p: &Paths, d: &Deps, slug: &str, number: u64) -> Option<Vec<String>> {
-    let endpoint = format!("repos/{slug}/pulls/{number}/files?per_page=100");
-    let out = (d.run)(
-        &["gh", "api", "--paginate", &endpoint, "--jq", ".[].filename"],
-        p.repo,
-    )
-    .filter(|r| r.ok)?;
-    Some(out.stdout.lines().map(str::to_string).collect())
+/// Lifts the evals gate's RunProbe seam onto the shared GhProbe shape
+/// pr_file_paths takes: cwd passes through, argv converts, None (a spawn
+/// that could not run at all) reads as a failed call.
+struct DepsProbe<'a> {
+    run: RunProbe<'a>,
+}
+
+impl crate::pr_status_facts::GhProbe for DepsProbe<'_> {
+    fn run_gh(&self, cwd: &Path, args: &[String]) -> Result<(bool, String, String), String> {
+        let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        match (self.run)(&refs, cwd) {
+            Some(r) => Ok((r.ok, r.stdout.clone(), r.stderr.clone())),
+            None => Err("gh spawn failed".to_string()),
+        }
+    }
 }
 
 fn is_covered(file: &str, covers: &[String]) -> bool {
@@ -500,7 +505,8 @@ fn main_covers(p: &Paths) -> Vec<String> {
 /// A head is gated by a skill, agent, hook, command or bank change, or by a
 /// change some task's `covers:` names. None when the file read failed.
 fn head_is_gated(p: &Paths, d: &Deps, slug: &str, pr: &Pr, covers: &[String]) -> Option<bool> {
-    let files = head_files(p, d, slug, pr.number)?;
+    let probe = DepsProbe { run: d.run };
+    let files = crate::pr_status::lists::pr_file_paths(&probe, &p.repo, slug, pr.number).ok()?;
     let gated = touches_gated_path(&files.iter().map(String::as_str).collect::<Vec<_>>());
     Some(gated || files.iter().any(|f| is_covered(f, covers)))
 }
@@ -1125,7 +1131,9 @@ fn launch_head(
             state.heads.insert(pr.sha.clone(), disposition);
         }
     };
-    let Some(files) = head_files(p, d, slug, pr.number) else {
+    let probe = DepsProbe { run: d.run };
+    let Some(files) = crate::pr_status::lists::pr_file_paths(&probe, &p.repo, slug, pr.number).ok()
+    else {
         return format!("head {} files unread", short(&pr.sha));
     };
     // An unreadable bank at the head is red, never green: a PR that broke
@@ -1486,7 +1494,18 @@ mod tests {
                         self.posts.borrow_mut().push(format!("{state} {desc}"));
                         ok("{}")
                     }
-                    ["gh", "api", "--paginate", ..] => ok(&self.files),
+                    // The paginated pr_file_paths read asks one plain page
+                    // at a time; the fixture keeps the --jq line shape and
+                    // the arm wraps it into the rows the read parses.
+                    ["gh", "api", e] if e.contains("/files?") => {
+                        let rows: Vec<Value> = self
+                            .files
+                            .lines()
+                            .filter(|l| !l.is_empty())
+                            .map(|f| serde_json::json!({"filename": f}))
+                            .collect();
+                        ok(&Value::Array(rows).to_string())
+                    }
                     ["gh", "api", _] => {
                         // The real-git world heads the PR at main, so the
                         // worktree add has a revision it can check out.
