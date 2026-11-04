@@ -1929,17 +1929,17 @@ pub(crate) fn run_with_release(
                     .or_else(|| report_age(e, now))
                     .is_some_and(|a| a > crate::gc::SPAWN_IDLE_RETIRE_SECS)
         );
-        // A stopped operator row with no open node falls through: the corpse
-        // probe below, which reads the live roster, decides whether it is
-        // really dead. An open node keeps the row where it was.
-        let stopped_status = matches!(
+        // A stopped operator row with no open node falls through to the
+        // stopped arm. An open node keeps the row; a node read only from the
+        // transcript is a witness.
+        let exited = matches!(
             e.status,
-            crate::AgentStatus::Orphaned
-                | crate::AgentStatus::Exited
-                | crate::AgentStatus::PermanentDead
+            crate::AgentStatus::Exited | crate::AgentStatus::PermanentDead
         );
+        let stopped_status = exited || e.status == crate::AgentStatus::Orphaned;
         let stopped_free = stopped_status
-            && matches!(staged_row, Some((verdict, _)) if !matches!(verdict.work, WorkState::Open { .. }));
+            && matches!(staged_row, Some((verdict, _)) if !matches!(verdict.work, WorkState::Open { .. })
+                || verdict.route.source.is_some_and(node_route::NodeSource::is_transcript));
         if e.origin.as_deref() == Some("operator") && !done_quiet && !stopped_free {
             summary.kept_operator.push(id);
             continue;
@@ -1989,7 +1989,9 @@ pub(crate) fn run_with_release(
                 e.harness_session_id.as_deref().unwrap_or("").trim(),
                 e.launch_account.as_deref(),
             );
-        if !is_spawn && !adopted_finished(e) && !adopted_terminal && !done_quiet {
+        // An exited row skips the corpse demand: the exit is the death fact,
+        // and the roster lists a finished session forever.
+        if !is_spawn && !exited && !adopted_finished(e) && !adopted_terminal && !done_quiet {
             let corpse_probe = crate::gc_adopt::origin_corpse(e, quiet, &agents_memo, agents_read);
             // An adopted bg row falls through as a live row judged like a
             // spawn one, never as a corpse: only a row the corpse probe
@@ -2344,10 +2346,7 @@ pub(crate) fn run_with_release(
             peer_drives_pr,
             pr_settled,
             origin_corpse: corpse,
-            registry_terminal: matches!(
-                e.status,
-                crate::AgentStatus::Exited | crate::AgentStatus::PermanentDead
-            ),
+            registry_terminal: exited,
             // Transcript mentions are witnesses, not ownership.
             worked_node: !verdict
                 .route
