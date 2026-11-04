@@ -928,6 +928,8 @@ pub(crate) struct View {
     /// events leg. Rendered as its own row kind, ranked ahead of the rest of
     /// THEY NEED YOU.
     questions_fold: Option<crate::needs_overlay::QuestionsFold>,
+    /// The pinned Needs input section is open (a tap on the strip count).
+    needs_open: bool,
     /// The question pages index, read in-process: the bell's fast seed.
     questions_index: Option<crate::needs_overlay::QuestionsFold>,
     questions_degraded: bool,
@@ -2028,6 +2030,7 @@ impl View {
             mine_action: None,
             mine_acting: false,
             questions_fold: None,
+            needs_open: false,
             questions_index: None,
             questions_degraded: false,
             questions_degraded_reason: None,
@@ -3610,6 +3613,7 @@ impl View {
             DisplayRow::Blank
             | DisplayRow::CardRule
             | DisplayRow::TableHead
+            | DisplayRow::NeedNote(_)
             | DisplayRow::TableEmpty => None,
         }
     }
@@ -3959,6 +3963,7 @@ impl View {
             DisplayRow::Blank
             | DisplayRow::CardRule
             | DisplayRow::TableHead
+            | DisplayRow::NeedNote(_)
             | DisplayRow::TableEmpty => None,
             // The `+` footer opens the name-input overlay.
             DisplayRow::NewSquad if self.term.0 < MIN_ROWS_FOR_STATUS => Some(ChromeHit::Notice(
@@ -5597,7 +5602,8 @@ impl View {
             Density::Regular => {
                 let (rows, depths) = self.tree_rows_with_depths();
                 let (rows, depths) = self.sort_agent_runs(rows, depths);
-                self.card_rows(rows, depths)
+                let (rows, depths) = self.card_rows(rows, depths);
+                self.pin_needs(rows, depths)
             }
             Density::Slim => {
                 let (rows, depths) = self.tree_rows_with_depths();
@@ -5949,6 +5955,9 @@ enum DisplayRow<'a> {
     /// a header with nothing under it reads as a stalled table, so the empty
     /// state is stated rather than implied.
     TableEmpty,
+    /// A line of the pinned Needs input section that is not an agent row: an
+    /// open question. Inert; the question is answered from the bell panel.
+    NeedNote(String),
     /// The top-K idle fold: a squad with more live idle rows than the
     /// cap folds the overflow behind this one row. `hidden` is the foldable
     /// count (the idle rows past the cap, always > 0 when this row is emitted).
@@ -6055,6 +6064,7 @@ fn row_is_inert(drow: &DisplayRow) -> bool {
             | DisplayRow::CardMetrics(..)
             | DisplayRow::CardRule
             | DisplayRow::TableHead
+            | DisplayRow::NeedNote(_)
             | DisplayRow::TableEmpty
     )
 }
@@ -6254,6 +6264,9 @@ enum ChromeHit {
     /// The strip row's view word (`Agents  Messages`, R15): switch the
     /// sideline to that view.
     TopRow(crate::view_store::SidelineView),
+    /// The `N need input` count on the strip row: opens or closes the
+    /// pinned Needs input section.
+    NeedInput,
     Bell(bell::Hit),
     /// Owned, not `&'static`: an in-flight card's notice carries the
     /// server-computed `where_hint` (v18), which is per-card data.
@@ -8992,6 +9005,7 @@ async fn apply_hit(
             crate::view_store::SidelineView::Backlog => View::open(view),
             crate::view_store::SidelineView::Org => org_board::open(view),
         },
+        ChromeHit::NeedInput => view.needs_open = !view.needs_open,
         ChromeHit::Bell(hit) => bell::apply_hit(view, hit),
         ChromeHit::Cmds(cmds) => {
             for cmd in cmds {

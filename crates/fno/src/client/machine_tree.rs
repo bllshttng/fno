@@ -63,6 +63,16 @@ impl MachineTree {
         }
     }
 
+    /// Far rows reading blocked. Zero while the toggle is off.
+    pub(super) fn blocked_remote(&self) -> usize {
+        if !self.on {
+            return 0;
+        }
+        self.rows()
+            .filter(|r| r.badge == Some(AgentBadge::Blocked))
+            .count()
+    }
+
     /// The rows this tree painted, for a menu action to resolve at execution time.
     pub(super) fn rows(&self) -> impl Iterator<Item = &AgentRow> {
         self.bands
@@ -234,7 +244,11 @@ fn remote_row(seat: &Value, host: &str, state: String) -> AgentRow {
         // the name.
         model: text(seat, "model"),
         context_used_pct: seat["context_pct"].as_u64().map(|pct| pct.min(100) as u8),
-        badge: (text(seat, "status").as_deref() == Some("writing")).then_some(AgentBadge::Working),
+        badge: match text(seat, "status").as_deref() {
+            Some("writing") => Some(AgentBadge::Working),
+            Some("blocked") => Some(AgentBadge::Blocked),
+            _ => None,
+        },
         // The Created and Modified sorts read these, so a far row orders by
         // its own times inside a band.
         started_at: stamp(seat, "started_at"),
