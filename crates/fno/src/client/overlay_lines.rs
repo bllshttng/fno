@@ -28,7 +28,7 @@ pub(crate) fn nav_overlay_lines(rows: &[NavRow], nav: &NavView) -> Vec<TLine> {
         Some(PaneState::Empty) => "empty",
     };
     let mut lines = vec![TLine::parts(&[
-        (" find › ", TextStyle::Meta),
+        (" find › ", TextStyle::Section),
         (&nav.query, TextStyle::Value),
         (&format!("   [{chip}]"), TextStyle::Badge),
     ])
