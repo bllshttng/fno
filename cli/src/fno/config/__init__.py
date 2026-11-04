@@ -2237,6 +2237,8 @@ class AgentsBlock(SweepKeys):
     )
     pane_group_max: int = 4
     min_free_gb: float = 4.0
+    # free-disk floor (GB) on the data volume; <= 0 disables.
+    min_free_disk_gb: float = 20.0
     # swap ceiling (percent used) beside min_free_gb; <= 0 disables.
     max_swap_pct: float = 90.0
     # Deprecated and ignored since 2026-09-09: admission decides on the
@@ -2413,13 +2415,15 @@ class AgentsBlock(SweepKeys):
             )
         return self
 
-    @field_validator("min_free_gb", "max_swap_pct", mode="before")
+    @field_validator("min_free_gb", "min_free_disk_gb", "max_swap_pct", mode="before")
     @classmethod
     def _coerce_ram_floor_terms(cls, v: object, info: ValidationInfo) -> object:
-        """Coerce a non-numeric RAM-floor term to its default; never raise.
+        """Coerce a non-numeric resource-floor term to its default; never raise.
         <= 0 is a VALID value (guard disabled), so only unparseable input
-        falls back to the default (4.0 floor, 90.0 swap ceiling)."""
-        return _finite_or(v, 4.0 if info.field_name == "min_free_gb" else 90.0)
+        falls back to the default (4.0 RAM floor, 20.0 disk floor, 90.0 swap
+        ceiling)."""
+        defaults = {"min_free_gb": 4.0, "min_free_disk_gb": 20.0}
+        return _finite_or(v, defaults.get(info.field_name, 90.0))
 
     @field_validator("max_load_per_cpu", mode="before")
     @classmethod
