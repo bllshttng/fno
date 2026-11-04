@@ -144,6 +144,8 @@ Each row then has one idle window (`gc.rs` `idle_window`). The clock is the tran
 | origin `spawn` | 1 hour (law d-e3defbb7) |
 | every other skill session, and a row with no transcript | 1 day (law d-defa43c7) |
 
+A row whose every node is done waits at most 1800 s, whatever its origin (law d-b01ffede, `gc.rs` `DONE_NODE_IDLE_RETIRE_SECS`). A shorter window above still wins.
+
 A row with no transcript wrote nothing a brainstorm keeps. The sweep reads it as a failed start, and it ages on the report clock.
 
 Measured on 2026-11-04 on the laptop: 63 stopped rows. 31 had no transcript jsonl, 4 ended in a promise, and 28 had no promise.
@@ -243,7 +245,7 @@ A `kept tree` keeps its source. When no session holds it, its build output is re
 
 Three lines mean the sweep acted on a retire decision and hit a refusal.
 
-- `kept {id} (stop refused: {reason})`: the confirmed stop refused, so the row stays for retry on the next pass (`gc_sweep.rs` `run_with_release`). On a claude row with no death evidence, the reason names the missing evidence. After `claude stop` exits 0, the arm polls two witnesses for up to 15 s (`gc_claude_stop.rs` `stop_claude_confirmed`). The witnesses are the daemon roster and the `claude agents` state. A supervisor that tears the session down late no longer wedges the row for a whole tick.
+- `kept {id} (stop refused: {reason})`: the confirmed stop refused, so the row stays for retry on the next pass (`gc_sweep.rs` `run_with_release`). On a claude row with no death evidence, the reason names the missing evidence. After `claude stop` exits 0, the arm polls two witnesses for up to 15 s (`gc_claude_stop.rs` `stop_claude_confirmed`). The witnesses are the daemon roster and the `claude agents` state. A supervisor that tears the session down late no longer wedges the row for a whole tick. A pane row on a harness with no session reader (opencode, pi, agy) answers from its transcript age (`pane_stop.rs` `quiet_session_holder`). Quiet past 1200 s, with the row's process already proven dead, the stop goes through. Inside that window the row stays.
 - `prune failed {id} ({reason})`: the tree removal did not confirm (`gc_sweep.rs` `RetireRefusal`).
 - `settle refused {node} ({reason})`: the settle write refused, named and never silent (`gc_sweep.rs` `settle_stale_do_rows_with`).
 
