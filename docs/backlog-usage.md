@@ -631,7 +631,7 @@ Spam control is a second label. Create an approval label, `fno-approved` by defa
 
 Never list the approval label in any issue template, yours or your organization's. A template that applies it lets a visitor approve their own issue. If a template file names the label, the import refuses to run.
 
-The import command is `fno backlog add requests`. It is a dry run by default and prints each filing before anything is written. Pass `--apply` to write. It reads the local graph and GitHub and writes only to the graph. It never writes to GitHub: no comment, no label, no close.
+The import command is `fno backlog add requests`. It is a dry run by default and prints each filing before anything is written. Pass `--apply` to write. It reads the local graph, the claim store and GitHub. It writes only to the graph and, for takes, the claim store. It never writes to GitHub: no comment, no label, no close.
 
 Four limits hold on every run:
 
@@ -645,3 +645,19 @@ An imported row is born `idea`, priority `p3`, marked private, tagged `external-
 One caution: a difficulty makes an imported row a candidate for autonomous dispatch. Rewrite the row before you set one.
 
 An upvote becomes an encounter on the card, shown on the board and in the panel's demand line. Outside votes stay out of `fno backlog demand` and out of the board's ordering.
+
+### Take a card
+
+A contributor can take a card. The Take link in the detail panel of an open card that nobody holds opens an issue titled `Take <id>`. The title carries the card id and nothing else.
+
+The import treats a take like a request. It needs the request label and your approval label. On `--apply` an approved take becomes a claim on the node, held by `github:<login>` for 24 hours. Every dispatcher skips a node under a live claim, so the fleet leaves the card alone. The board marks the card claimed.
+
+Each import run renews the claim while the issue stays open and keeps both labels. Run the import on a schedule, at least once a day, to keep takes alive. A run that no longer sees the issue releases the claim. A run that reads a full page of `--limit` issues releases nothing, because it cannot see the issues past the page.
+
+A take ends in one of three ways:
+
+- The issue closes, or you remove a label. The next import run releases the claim.
+- The contributor opens a pull request that closes the take issue. The steward tags the node `take-delivered`, releases the claim and adds a note with the credit trailer. The fleet builds the node from its own plan. The import never grants a node that carries the tag.
+- No import run renews the claim for 24 hours. The claim goes stale and the node is free.
+
+One login holds at most `--max-per-author` takes (3). The import refuses a take on a node that another holder already holds, and the receipt names the holder.
