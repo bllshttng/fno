@@ -1487,13 +1487,15 @@ fn remote_fleet() -> serde_json::Value {
     ]})
 }
 
-/// The same beat with the seats in swapped arrival order, so a held index
-/// lands on the neighbor.
-fn remote_fleet_mercedes_first() -> serde_json::Value {
+/// The same band a beat later: a new seat arrived, so mercedes moves under
+/// any ordering the bucket sorts by (arrival order or the fleet beat's own
+/// seat sort).
+fn remote_fleet_after_a_beat() -> serde_json::Value {
     serde_json::json!({"machines": [
         {"host": "iMac2D2", "local": false, "fresh": true, "age_s": 3, "sessions": [
-            {"name": "mercedes", "harness": "claude", "project": "fno", "status": "writing"},
+            {"name": "aaron", "harness": "claude", "project": "fno"},
             {"name": "orla", "harness": "claude", "project": "fno"},
+            {"name": "mercedes", "harness": "claude", "project": "fno", "status": "writing"},
         ]},
     ]})
 }
@@ -1608,14 +1610,14 @@ fn one_session_one_row() {
 
 #[test]
 fn the_selector_follows_mercedes_through_a_fleet_re_sort() {
-    // AC4-EDGE: a fleet read that re-sorts the band moves the selector by
+    // AC4-EDGE: a fleet read that reshapes the band moves the selector by
     // identity (any density), and a hover whose row moved away clears
     // instead of drifting onto the neighbor.
     let mut v = remote_machines_view();
     let mercedes = painted_agent_at(&v, "mercedes@iMac2D2");
     v.selector = Some(mercedes);
     v.hover_row = Some(mercedes);
-    machine_tree::apply(&mut v, Ok(remote_fleet_mercedes_first()));
+    machine_tree::apply(&mut v, Ok(remote_fleet_after_a_beat()));
     let after = painted_agent_at(&v, "mercedes@iMac2D2");
     assert_ne!(
         after, mercedes,
