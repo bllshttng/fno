@@ -1142,6 +1142,16 @@ pub(crate) fn status_payload<P: GhProbe>(
         "github_blockers": github_merge.get("blockers").and_then(Value::as_array).cloned().unwrap_or_default(),
         "covered_head": head_sha,
     });
+    // The gate row this read already has rides the ask, so the walk never
+    // answers pending or red from a stale absence: present object = a row,
+    // null = no row at this head. This is the seam the hole ran through: the
+    // composer had the PENDING fact and never handed it to the decision. A
+    // projection with no rollup key omits the key entirely, so the walk's
+    // tri-state probes instead of asserting a no-row from a payload that
+    // never said one.
+    if let Some(rollup) = pr_json.get("statusCheckRollup").and_then(Value::as_array) {
+        receipt_ask["evals_gate"] = evals_gate_fact(rollup).unwrap_or(Value::Null);
+    }
     // This read already paid the hold-check probe above; the preview reuses
     // the answer instead of spawning the command a second time. The key is
     // present only on a clean probe: a crashed or unasked probe must let the

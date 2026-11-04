@@ -35,10 +35,12 @@ struct Fake {
     optional_unresolved: Option<Option<i64>>,
     /// Rerun-recovery answer for the PR under decision.
     rerun_recovered: Option<bool>,
-    /// The evals gate red answer for the PR under decision; `None` (the
-    /// default) reads no gate red, so every pre-existing test keeps its
-    /// behavior.
-    evals_gate_red: Option<String>,
+    /// The evals gate row for the PR under decision; `None` (the default)
+    /// reads no gate row, so every pre-existing test keeps its behavior.
+    evals_gate_row: Option<EvalsGateRead>,
+    /// The expectation probe's answer; `None` (the default) reads false, so
+    /// a head with no gate row merges unless a test seats the expectation.
+    evals_gate_expected: Option<bool>,
     /// The coverage verdict's exit for the PR under decision, armed into
     /// `coverage_verdict`; None reads 0.
     coverage_exit: Option<i32>,
@@ -376,12 +378,16 @@ impl Probes for Fake {
             },
             rerun_recovered: if mine { self.rerun_recovered } else { None },
             rerun_failures: None,
-            evals_gate_red: if mine {
-                self.evals_gate_red.clone()
+            evals_gate_row: if mine {
+                self.evals_gate_row.clone()
             } else {
                 None
             },
         }
+    }
+
+    fn evals_gate_expected(&self, _cwd: &Path, _facts: &PrFacts) -> bool {
+        self.evals_gate_expected.unwrap_or(false)
     }
     fn covered_head(&self, _cwd: &Path, _pr: u64, _pr_head: &str) -> Option<String> {
         self.covered_head.clone()
@@ -493,6 +499,7 @@ fn request(effect: Effect) -> Request {
         supplied_dispatch_hold: None,
         supplied_review_hold: None,
         supplied_facts: None,
+        supplied_evals_gate: None,
     }
 }
 
@@ -512,9 +519,11 @@ fn granted_decisions() -> Vec<u8> {
 fn a_red_evals_gate_holds_a_green_ci_merge_as_its_own_fact() {
     let fake = Fake {
         checks: Some("green".to_string()),
-        evals_gate_red: Some(
-            "no result. Clear: fno-agents evals gate-retry abc123. Cause: limit".to_string(),
-        ),
+        evals_gate_row: Some(EvalsGateRead {
+            state: "FAILURE".to_string(),
+            description: "no result. Clear: fno-agents evals gate-retry abc123. Cause: limit"
+                .to_string(),
+        }),
         ..clean()
     };
     let outcome = run(
@@ -548,21 +557,140 @@ fn a_red_evals_gate_holds_a_green_ci_merge_as_its_own_fact() {
 }
 
 /// The payload-to-decision seam: `evals_gate` FAILURE and ERROR read red;
-/// SUCCESS and PENDING never do.
+/// SUCCESS never does. The row carries every state now, so PENDING rides
+/// too and only the walks decide what it holds.
 #[test]
 fn parse_checks_read_reads_the_evals_gate_fact() {
     let red = parse_checks_read(
         br#"{"verdict": "green", "evals_gate": {"state": "FAILURE", "description": "no result. Clear: fno-agents evals gate-retry abc. Cause: limit"}}"#,
     );
-    assert!(red.evals_gate_red.is_some(), "{:?}", red.evals_gate_red);
+    assert!(red.evals_gate_red().is_some(), "{:?}", red.evals_gate_row);
     let errored = parse_checks_read(br#"{"verdict": "green", "evals_gate": {"state": "ERROR", "description": "posting failed"}}"#);
-    assert!(errored.evals_gate_red.is_some());
+    assert!(errored.evals_gate_red().is_some());
     let fine = parse_checks_read(
         br#"{"verdict": "green", "evals_gate": {"state": "SUCCESS", "description": "gate goldens pass"}}"#,
     );
-    assert!(fine.evals_gate_red.is_none());
+    assert!(fine.evals_gate_red().is_none());
     let absent = parse_checks_read(br#"{"verdict": "green"}"#);
-    assert!(absent.evals_gate_red.is_none());
+    assert!(absent.evals_gate_red().is_none());
+    let queued = parse_checks_read(
+        br#"{"verdict": "green", "evals_gate": {"state": "PENDING", "description": "queued for the gate goldens"}}"#,
+    );
+    assert!(
+        queued.evals_gate_red().is_none(),
+        "{:?}",
+        queued.evals_gate_row
+    );
+    assert!(queued.evals_gate_pending(), "{:?}", queued.evals_gate_row);
+    assert!(!fine.evals_gate_pending());
+    assert!(!absent.evals_gate_pending());
+}
+
+// ── pending and missing-but-expected hold the merge door ──────────────
+
+/// docs/evals.md "The merge door" says pending holds; a merge landed
+/// through this exact hole while the gate read PENDING "queued for the
+/// gate goldens". CI green + a pending gate holds, naming the wait and
+/// the stuck-pending clearing command; the preview answers alike.
+#[test]
+fn a_pending_evals_gate_holds_a_green_ci_merge() {
+    let fake = Fake {
+        checks: Some("green".to_string()),
+        evals_gate_row: Some(EvalsGateRead {
+            state: "PENDING".to_string(),
+            description: "queued for the gate goldens".to_string(),
+        }),
+        ..clean()
+    };
+    let outcome = run(
+        &fake,
+        &Request {
+            require_checks: true,
+            ..request(Effect::Merge)
+        },
+    );
+    assert_eq!(outcome.word(), "held", "{}", outcome.detail());
+    let detail = outcome.detail();
+    assert!(detail.contains("evals gate pending"), "{}", detail);
+    assert!(
+        detail.contains("gate-retry"),
+        "the hold names the stuck-pending remedy: {}",
+        detail
+    );
+    assert!(
+        !detail.contains("checks are"),
+        "the hold is the gate's, never the CI verdict's: {}",
+        detail
+    );
+
+    let blockers = preview_blockers(&fake, &preview_request(7));
+    let codes: Vec<&str> = blockers.iter().map(|b| b.code.as_str()).collect();
+    assert!(
+        codes.contains(&"evals_gate_pending"),
+        "the preview names the pending hold: {:?}",
+        codes
+    );
+}
+
+/// A gated head with no gate status at all holds: the daemon never reached
+/// the head (the tick never reached it) or its status was lost. The expectation
+/// probe - gated diff, seated baseline - is what separates this from a
+/// machine the gate does not run on.
+#[test]
+fn a_gated_head_with_no_gate_status_holds_its_merge() {
+    let fake = Fake {
+        checks: Some("green".to_string()),
+        evals_gate_expected: Some(true),
+        ..clean()
+    };
+    let outcome = run(
+        &fake,
+        &Request {
+            require_checks: true,
+            ..request(Effect::Merge)
+        },
+    );
+    assert_eq!(outcome.word(), "held", "{}", outcome.detail());
+    let detail = outcome.detail();
+    assert!(detail.contains("no evals/gate status"), "{}", detail);
+    assert!(
+        detail.contains("gate-retry"),
+        "the hold names the clearing command: {}",
+        detail
+    );
+
+    let blockers = preview_blockers(&fake, &preview_request(7));
+    let codes: Vec<&str> = blockers.iter().map(|b| b.code.as_str()).collect();
+    assert!(
+        codes.contains(&"evals_gate_missing"),
+        "the preview names the missing-status hold: {:?}",
+        codes
+    );
+}
+
+/// First install (no seated baseline) and an ungated diff both answer
+/// false on the expectation probe: no gate row reads authorized, effect
+/// and preview alike. The door never holds a head the gate cannot judge.
+#[test]
+fn an_ungated_or_baselineless_head_merges_with_no_gate_status() {
+    // Default Fake: no gate row, expectation false.
+    let fake = clean();
+    let outcome = run(
+        &fake,
+        &Request {
+            require_checks: true,
+            ..request(Effect::Merge)
+        },
+    );
+    assert_eq!(outcome.word(), "merged", "{}", outcome.detail());
+
+    let blockers = preview_blockers(&fake, &preview_request(7));
+    let codes: Vec<&str> = blockers.iter().map(|b| b.code.as_str()).collect();
+    assert!(
+        !codes.iter().any(|c| c.starts_with("evals_gate")),
+        "no gate blocker on a head the gate cannot judge: {:?}",
+        codes
+    );
 }
 
 // ── the head-scoped operator merge grant ──────────────────────────────
@@ -1678,6 +1806,35 @@ fn the_command_refuses_a_payload_that_names_no_effect() {
         .expect("a well-formed payload parses");
     assert_eq!(ok.effect, Effect::Arm);
     assert_eq!(ok.pr, Some(7));
+}
+
+/// The receipt ask's gate key parses tri-state: absent probes, null reads
+/// "no row at this head", an object carries the row. The hole this closes
+/// was the ask never carrying the key at all.
+#[test]
+fn the_receipt_ask_parses_the_evals_gate_key_tri_state() {
+    let absent = parse_request(&json!({"cwd": "/tmp", "effect": "preview"}))
+        .expect("a well-formed payload parses");
+    assert_eq!(absent.supplied_evals_gate, None);
+
+    let no_row = parse_request(&json!({
+        "cwd": "/tmp", "effect": "preview", "verdict": "green", "evals_gate": Value::Null
+    }))
+    .expect("a well-formed payload parses");
+    assert_eq!(no_row.supplied_evals_gate, Some(None));
+
+    let row = parse_request(&json!({
+        "cwd": "/tmp", "effect": "preview", "verdict": "green",
+        "evals_gate": {"state": "PENDING", "description": "queued for the gate goldens"}
+    }))
+    .expect("a well-formed payload parses");
+    assert_eq!(
+        row.supplied_evals_gate,
+        Some(Some(EvalsGateRead {
+            state: "PENDING".to_string(),
+            description: "queued for the gate goldens".to_string(),
+        }))
+    );
 }
 
 fn preview_request(pr: u64) -> Request {

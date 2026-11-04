@@ -506,6 +506,39 @@ fn main_covers(p: &Paths) -> Vec<String> {
         .collect()
 }
 
+/// The merge door's expectation answer: does this head owe an evals/gate
+/// status? The same map the tick reads decides it - the five gated prefixes,
+/// or a `covers:` prefix of main's bank - and only once the worker seat has
+/// a baseline. A first install holds nobody on a check it cannot run yet.
+/// A machine with no gate state at all reads as first install, so a merge
+/// from a non-daemon machine keeps today's pass. Fail-open by construction:
+/// an unread bank answers an empty map, a missing state answers no baseline.
+pub(crate) fn head_owes_status(repo: &Path, history: &Path, files: &[String]) -> bool {
+    let dir = state_dir(history);
+    let Some(state) = std::fs::read_to_string(dir.join("state.json"))
+        .ok()
+        .and_then(|t| serde_json::from_str::<State>(&t).ok())
+    else {
+        return false;
+    };
+    if state.worker.baseline.is_none() {
+        return false;
+    }
+    let ref_bank = dir.join("ref-main").join("evals").join("bank");
+    let bank = if ref_bank.is_dir() {
+        ref_bank
+    } else {
+        repo.join("evals").join("bank")
+    };
+    let covers = crate::evals::bank::discover_bank(&bank)
+        .unwrap_or_default()
+        .into_iter()
+        .flat_map(|t| t.covers)
+        .collect::<Vec<_>>();
+    touches_gated_path(&files.iter().map(String::as_str).collect::<Vec<_>>())
+        || files.iter().any(|f| is_covered(f, &covers))
+}
+
 /// A head is gated by a skill, agent, hook, command or bank change, or by a
 /// change some task's `covers:` names. None when the file read failed.
 fn head_is_gated(p: &Paths, d: &Deps, slug: &str, pr: &Pr, covers: &[String]) -> Option<bool> {
@@ -1654,6 +1687,39 @@ mod tests {
         assert!(argv.contains("--tag golden --repeat 3"), "{argv}");
         assert!(argv.contains("--ref mainsha"), "{argv}");
         assert!(w.posts.borrow().is_empty());
+    }
+
+    /// The merge door's expectation probe: the tick's own precondition,
+    /// answered from the same state and the same covers map. A head the
+    /// daemon cannot judge (no baseline yet, no gate state at all) owes no
+    /// status, so the door never holds it.
+    #[test]
+    fn the_merge_door_expects_a_status_only_for_a_gated_head_with_a_seated_baseline() {
+        let w = World::new("skills/x/SKILL.md\n");
+        let gated = vec!["skills/x/SKILL.md".to_string()];
+        let ungated = vec!["cli/src/fno/whatever.py".to_string()];
+        // First install: no gate state at all reads no baseline -> no debt.
+        assert!(!head_owes_status(w.dir.path(), &w.history(), &gated));
+
+        // A seated baseline + a gated diff owes a status.
+        w.state(|s| s.worker.baseline = Some("base".into()));
+        assert!(head_owes_status(w.dir.path(), &w.history(), &gated));
+
+        // The same baseline + an ungated diff owes none.
+        assert!(!head_owes_status(w.dir.path(), &w.history(), &ungated));
+
+        // A covered prefix from the checkout's own bank owes one too (the
+        // ref slot is absent here, so the checkout bank is the map).
+        std::fs::write(
+            w.dir.path().join("evals/bank/c1.yaml"),
+            "id: c1\ntier: capability\nprompt: p\ngrade:\n  - kind: file-exists\n    path: x\ntags: [gate]\ncovers: [\"crates/fno-agents/src/pr_status/\"]\n",
+        )
+        .unwrap();
+        assert!(head_owes_status(
+            w.dir.path(),
+            &w.history(),
+            &["crates/fno-agents/src/pr_status/compose.rs".to_string()]
+        ));
     }
 
     #[test]
