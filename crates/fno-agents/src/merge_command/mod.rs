@@ -1282,18 +1282,24 @@ fn resolve_agents_bin() -> Option<PathBuf> {
 
 /// The hop target for a caller whose own exe is `exe`: itself, unless that exe
 /// IS the resident daemon binary, in which case the client sibling beside it.
-/// `command_call`, `native_claim` and `worker_rows` all exec this path, and
-/// the daemon entrypoint ignores unknown argv, so returning the daemon path
-/// here once booted a FULL RESIDENT DAEMON wearing the hop's argv
-/// (`fno-agents-daemon pr-worktree`) that went on to win the freed singleton
-/// and serve as the control plane (observed 2026-11-03). A missing sibling
-/// keeps None, so every hop takes its missing-binary refusal naming
-/// FNO_AGENTS_BIN instead of ever exec'ing the daemon.
+/// `command_call`, `native_claim` and `worker_rows` all exec this path.
+/// Returning the daemon path here once booted a FULL RESIDENT DAEMON wearing
+/// the hop's argv (`fno-agents-daemon pr-worktree`) that went on to win the
+/// freed singleton and serve as the control plane (observed 2026-11-03); the
+/// daemon entrypoint now refuses such argv outright, so a daemon path would
+/// turn every hop into that refusal. A missing sibling keeps None, so every
+/// hop takes its missing-binary refusal naming FNO_AGENTS_BIN instead.
 fn hop_client_bin(exe: &Path) -> Option<PathBuf> {
     if !is_daemon_exe(exe) {
         return Some(exe.to_path_buf());
     }
-    let sibling = exe.with_file_name("fno-agents");
+    let exe_name = exe.file_name().and_then(|n| n.to_str()).unwrap_or_default();
+    let sibling_name = if exe_name.ends_with(".exe") {
+        "fno-agents.exe"
+    } else {
+        "fno-agents"
+    };
+    let sibling = exe.with_file_name(sibling_name);
     sibling.is_file().then_some(sibling)
 }
 
@@ -1851,5 +1857,15 @@ mod hop_client_bin_tests {
         let client = std::path::Path::new("/opt/x/bin/fno-agents");
         assert_eq!(hop_client_bin(client), Some(client.to_path_buf()));
         assert!(!is_daemon_exe(client));
+    }
+
+    #[test]
+    fn the_windows_exe_spelling_hops_to_the_exe_client_sibling() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let daemon = dir.path().join("fno-agents-daemon.exe");
+        touch(&daemon);
+        let client = dir.path().join("fno-agents.exe");
+        touch(&client);
+        assert_eq!(hop_client_bin(&daemon), Some(client));
     }
 }

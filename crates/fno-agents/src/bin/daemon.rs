@@ -34,8 +34,10 @@ fn main() {
     // Any argv the daemon does not own is a caller that resolved this binary
     // by mistake (a merge-gate hop execed `fno-agents-daemon pr-worktree`;
     // the old silent ignore booted a full resident daemon with that argv).
-    // Refuse before the runtime builds.
-    if let Some(bad) = first_unknown_arg(&args) {
+    // Refuse before the runtime builds, with the usage beside the cause.
+    let (home_arg, unknown) = parse_daemon_args(&args);
+    if let Some(bad) = unknown {
+        eprintln!("usage: fno-agents-daemon [--home <dir>] | version [--json]");
         eprintln!(
             "fno-agents-daemon: unknown argument {bad:?}; the daemon takes no subcommands \
              (client doors live in fno-agents) - refusing to start"
@@ -85,7 +87,7 @@ fn main() {
     // DISAGREES with the env is a daemon about to serve a home nobody expects,
     // so refuse it loudly rather than silently prefer one. No --home keeps the
     // env-only behavior (a daemon started by hand for debugging).
-    if let Some(home_arg) = parse_home_arg(&args) {
+    if let Some(home_arg) = home_arg {
         let env_home = AgentsHome::from_env();
         if !fno_agents::paths::same_path(std::path::Path::new(&home_arg), env_home.root()) {
             eprintln!(
@@ -212,39 +214,26 @@ fn main() {
     }
 }
 
-/// The first argument the daemon does not own, or None when every argument
-/// is one of: `--home <dir>` (the value travels with the flag), `--home=<dir>`.
-/// `version` and its spellings are matched earlier and never reach here. A
-/// dangling `--home` stays legal (env-only start, as before).
-fn first_unknown_arg(args: &[String]) -> Option<&str> {
+/// One walk over the daemon's argv: the `--home` value when present, and the
+/// first argument the daemon does not own. `version` and its spellings are
+/// matched earlier and never reach here. A dangling `--home` stays legal
+/// (env-only start, as before). The flag and its value travel through the
+/// same walk, so the gate's accept set and the home extract cannot drift.
+fn parse_daemon_args(args: &[String]) -> (Option<String>, Option<&str>) {
+    let mut home = None;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         if a == "--home" {
-            it.next();
+            home = it.next().cloned();
             continue;
-        }
-        if a.starts_with("--home=") {
-            continue;
-        }
-        return Some(a);
-    }
-    None
-}
-
-/// The value of `--home <path>` (or `--home=<path>`) from the daemon's argv,
-/// or `None` when absent. `version` is matched earlier; every other argument
-/// is refused by `first_unknown_arg` before this runs.
-fn parse_home_arg(args: &[String]) -> Option<String> {
-    let mut it = args.iter();
-    while let Some(a) = it.next() {
-        if a == "--home" {
-            return it.next().cloned();
         }
         if let Some(v) = a.strip_prefix("--home=") {
-            return Some(v.to_string());
+            home = Some(v.to_string());
+            continue;
         }
+        return (home, Some(a));
     }
-    None
+    (home, None)
 }
 
 /// The dir the daemon runs in for life. A worktree gets reaped under a live
