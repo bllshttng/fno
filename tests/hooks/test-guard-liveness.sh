@@ -180,10 +180,16 @@ if [[ -z "${FNO_AGENTS_BIN:-}" ]]; then
         fi
     done
 fi
-expect_row "bpg allows a bounded command" bg-process-guard allow \
-    '{"tool_name":"Bash","tool_input":{"command":"head -c 1M /dev/zero > /dev/null"}}' bash "pretooluse-bash-dispatch.sh"
-expect_row "bpg denies an unbounded yes" bg-process-guard block \
-    '{"tool_name":"Bash","tool_input":{"command":"yes"}}' bash "pretooluse-bash-dispatch.sh"
+if [[ -n "${FNO_AGENTS_BIN:-}" ]] || command -v fno-agents >/dev/null 2>&1; then
+    expect_row "bpg allows a bounded command" bg-process-guard allow \
+        '{"tool_name":"Bash","tool_input":{"command":"head -c 1M /dev/zero > /dev/null"}}' bash "pretooluse-bash-dispatch.sh"
+    expect_row "bpg denies an unbounded yes" bg-process-guard block \
+        '{"tool_name":"Bash","tool_input":{"command":"yes"}}' bash "pretooluse-bash-dispatch.sh"
+else
+    # No fno-agents build on this runner: the dispatch can only answer {}.
+    # The Rust unit tests and the hook-latency order test own these rows.
+    printf '[liveness] SKIP: bpg rows need an fno-agents binary (none built here)\n'
+fi
 
 # ── law-authority-gate.py: gone ───────────────────────────────────────────────
 # main deleted the guard wholesale in the law-recording collapse (363ab7b16);
