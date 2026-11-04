@@ -288,9 +288,8 @@ pub(super) async fn run_sweep_command(action: SweepAction) -> SweepMsg {
             60
         }
     };
-    // The counts probe reads both populations at once, so the modal waits for
-    // the slower read, not the sum.
     let probe = action == SweepAction::Counts;
+    // Both counts read at once: the modal waits for the slower, not the sum.
     let (pruned, reaped) = tokio::join!(run_json("prune", args, apply_secs), async {
         if probe {
             run_json("reap", reap_args(true), 60).await.ok()
@@ -314,8 +313,7 @@ fn retired_count(receipt: &serde_json::Value) -> usize {
     receipt["retired"].as_array().map_or(0, Vec::len)
 }
 
-/// `fno agents registry reap --json`, dry-run or applied: the one reaper the
-/// daemon runs, so the modal's count is what the tap retires.
+/// The daemon's reaper, so the modal's count is what the tap retires.
 fn reap_args(dry_run: bool) -> Vec<String> {
     let mut args: Vec<String> = ["agents", "registry", "reap", "--json"]
         .map(String::from)
