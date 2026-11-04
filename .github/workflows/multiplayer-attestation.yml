@@ -17,6 +17,9 @@ on:
       - docs/guides/multiplayer-test.md
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   two-machine-attestation:
     runs-on: ubuntu-24.04

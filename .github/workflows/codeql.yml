@@ -1,0 +1,55 @@
+name: CodeQL
+
+# Advanced-setup CodeQL analysis. The job is skipped until the repository's
+# code scanning is switched from default setup to advanced setup and the
+# CODEQL_ADVANCED_SETUP repo variable is set to true: an advanced-setup
+# upload fails while default setup still owns scanning, so a push between
+# merge and the switch must not run this job. Pushes and a weekly schedule
+# only, never pull requests: CI slots are the bottleneck, and a PR-time
+# upload would collide with the default-setup scanner.
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '23 4 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    if: vars.CODEQL_ADVANCED_SETUP == 'true'
+    name: analyze ${{ matrix.language }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      security-events: write
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        # The languages default setup scans today, read off
+        # code-scanning/default-setup on 2026-11-04; javascript and
+        # typescript fold into javascript-typescript in advanced setup.
+        language:
+          - actions
+          - javascript-typescript
+          - python
+          - ruby
+          - rust
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+          config-file: ./.github/codeql/codeql-config.yml
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "language:${{ matrix.language }}"
