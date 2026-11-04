@@ -68,6 +68,7 @@ pub(crate) fn run(
         command.env_remove(crate::pr_status::quota::PROXY_DIR_ENV);
         command.env_remove(crate::pr_status::quota::PROXY_DEPTH_ENV);
     }
+    crate::github_app::inject(&mut command, std::ffi::OsStr::new(program));
     command.stdin(Stdio::null());
     command.stdout(Stdio::piped());
     command.stderr(Stdio::piped());

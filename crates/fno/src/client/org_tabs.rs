@@ -236,7 +236,7 @@ pub(crate) fn explorer(
     feed_count: Option<usize>,
     width: usize,
 ) -> Vec<Line> {
-    let mut out = vec![Lb::default().s(" Explorer", TextStyle::Title).done()];
+    let mut out = vec![Lb::default().s(" HQ", TextStyle::Title).done()];
     let tree: Vec<&Entry> = entries
         .iter()
         .filter(|e| !matches!(e.item, Item::Feed | Item::System))

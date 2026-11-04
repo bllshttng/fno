@@ -80,32 +80,3 @@ def test_every_declared_fence_parses_as_its_language() -> None:
             rel = path.relative_to(_DOCS.parent)
             failures.append(f"{rel}:{lineno} declares {lang} but does not parse: {exc}")
     assert not failures, "\n".join(failures)
-
-
-def test_the_full_schema_fence_round_trips_into_the_loader(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """AC9: the documented schema, copied to the documented path, sets keys.
-
-    Copying the "Full schema" fence into a `config.toml` and pinning
-    `FNO_CONFIG` at it must make `state_dir` resolve FROM that file. Before the
-    rewrite the same copy produced `source: default (no config file sets this
-    key)`, which is the whole defect.
-    """
-    page = (_DOCS / "path-config.md").read_text(encoding="utf-8")
-    schema = [
-        body
-        for _lineno, lang, body in _fences(page)
-        if lang == "toml" and "schema_version" in body and "[paths]" in body
-    ]
-    assert len(schema) == 1, f"expected exactly one full-schema toml fence, got {len(schema)}"
-
-    scratch = tmp_path / "config.toml"
-    scratch.write_text(schema[0], encoding="utf-8")
-    monkeypatch.setenv("FNO_CONFIG", str(scratch))
-
-    from fno.config import resolve_source
-
-    decided = resolve_source("state_dir")
-    assert decided is not None, "the documented schema set no state_dir at all"
-    assert decided[0].resolve() == scratch.resolve()

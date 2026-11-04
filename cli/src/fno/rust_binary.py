@@ -236,18 +236,26 @@ def style_word_count(text: str) -> int:
     return int(receipt.get("word_count") or 0)
 
 
-def settings_read(detect: Optional[str] = None) -> Optional[dict]:
+def settings_read(
+    detect: Optional[str] = None,
+    root: Optional[str] = None,
+    binary: Optional[Path] = None,
+) -> Optional[dict]:
     """One settings fact-set read through the door; None when it fails.
 
     The receipt carries the node-id knobs (``prefix``, ``hex_width``), the
-    config ``candidates``, the work-map ``projects`` pairs, and the optional
-    cwd -> project ``project`` answer. Callers are fail-open resolvers, so a
-    door failure reads as None and the caller keeps its legacy default.
+    config ``candidates``, the work-map ``projects`` pairs, the optional
+    cwd -> project ``project`` answer, and the ``paths`` fact set the path
+    resolvers consume. Callers are fail-open resolvers, so a door failure
+    reads as None and the caller keeps its legacy default. A checkout build
+    answers before an installed copy (the ``command_call`` rule).
     """
     import json
 
-    request = json.dumps({"detect": detect}) if detect is not None else "{}"
-    err, receipt = call_binary_json("state", ["settings-read"], input_text=request)
+    request = json.dumps({"detect": detect, "root": root})
+    err, receipt = call_binary_json(
+        "state", ["settings-read"], input_text=request, binary=binary
+    )
     if err or not isinstance(receipt, dict):
         return None
     return receipt

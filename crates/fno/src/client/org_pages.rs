@@ -367,7 +367,7 @@ pub(crate) fn keys_help() -> Vec<Line> {
         "   space P          peek or view a seat on another machine, over ssh",
         "   s                start a seat on the selected machine \u{b7} esc cancels the prompt",
         "   r                review the PR diff of a seat whose node has a PR",
-        "   W opens the web command page \u{b7} F full screen \u{b7} V cycle views \u{b7} ? keys \u{b7} esc close",
+        "   W opens the HQ web page \u{b7} F full screen \u{b7} V cycle views \u{b7} ? keys \u{b7} esc close",
     ]
     .into_iter()
     .map(meta)

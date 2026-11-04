@@ -7,6 +7,9 @@ concurrency:
   group: tracker-live
   cancel-in-progress: false
 
+permissions:
+  contents: read
+
 jobs:
   journey:
     runs-on: ubuntu-24.04

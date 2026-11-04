@@ -62,18 +62,28 @@ pub(crate) fn ours(rows: &[Value], slug: &str, sha: &str) -> HashSet<u64> {
         .iter()
         .filter(|r| word(r, "/data/slug") == slug && word(r, "/data/sha") == sha);
     for row in mine {
-        let landed = row
-            .pointer("/data/runs")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
+        let posts = || {
+            row.pointer("/data/runs")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+        };
+        let landed = posts()
             .filter(|p| p["ok"] == json!(true))
             .filter_map(|p| p["run"].as_u64());
         match row.get("type").and_then(Value::as_str) {
             Some(CANCEL_EVENT) => ours.extend(landed),
-            Some(RELEASE_EVENT) => landed.for_each(|run| {
-                ours.remove(&run);
-            }),
+            Some(RELEASE_EVENT) => {
+                landed.for_each(|run| {
+                    ours.remove(&run);
+                });
+                // GitHub never retries some runs (the PR-named one); without
+                // this the release repeats the refused rerun every tick.
+                let refused = posts().filter(|p| word(p, "/error").contains("cannot be retried"));
+                for run in refused.filter_map(|p| p["run"].as_u64()) {
+                    ours.remove(&run);
+                }
+            }
             _ => {}
         }
     }
@@ -117,7 +127,13 @@ fn touches_paint(paint: &PaintCache, root: &Path, slug: &str, pr: u64, sha: &str
 
 /// The visual-approval gate at `sha`. A head that touches no paint path
 /// answers from the cache, so only paint heads read the gate.
-fn held(paint: &PaintCache, root: &Path, slug: &str, pr: u64, sha: &str) -> Option<bool> {
+pub(crate) fn held(
+    paint: &PaintCache,
+    root: &Path,
+    slug: &str,
+    pr: u64,
+    sha: &str,
+) -> Option<bool> {
     if !touches_paint(paint, root, slug, pr, sha)? {
         return Some(false);
     }
@@ -281,6 +297,8 @@ mod tests {
             row(CANCEL_EVENT, "aaa", 5, true),
             row(RELEASE_EVENT, "aaa", 5, true),
             row(CANCEL_EVENT, "bbb", 3, true),
+            row(CANCEL_EVENT, "aaa", 6, true),
+            json!({"type": RELEASE_EVENT, "data": {"slug": "o/r", "sha": "aaa", "runs": [{"run": 6, "ok": false, "error": "This workflow run cannot be retried (HTTP 403)"}]}}),
         ];
         let ours = ours(&rows, "o/r", "aaa");
         assert_eq!(ours, HashSet::from([1]));

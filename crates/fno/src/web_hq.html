@@ -3,10 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>fno command</title>
+<title>fno hq</title>
 <style>
 /* fno-house */
-/* The command page in the house style: monochrome ink on the theme tokens,
+/* The HQ page in the house style: monochrome ink on the theme tokens,
    square edges, mono type. Hue carries state only. The table and drawer rules
    below still use the older names, which alias the tokens. */
 :root{--writing:var(--green);--parked:var(--yellow);--quiet:var(--violet);--unknown:var(--overlay1);--ok:var(--green);--link:var(--blue);--font-ui:var(--mono);--font-data:var(--mono)}
@@ -48,7 +48,7 @@ tbody tr{cursor:pointer}tbody tr:hover,tbody tr:focus-visible{background:var(--b
 </style>
 </head>
 <body>
-<header class="controls bar"><span class="mark">Ｆ<b>[no]</b> command</span><span id="age">fno fleet · reading</span>
+<header class="controls bar"><span class="mark">Ｆ<b>[no]</b> hq</span><span id="age">fno fleet · reading</span>
   <span class="lbl">state</span><div class="counts" id="counts"></div>
   <span class="lbl">view</span><div class="seg" role="tablist" aria-label="View"><button role="tab" id="tab-synapse" aria-selected="true">synapse</button><button role="tab" id="tab-table" aria-selected="false">table</button><button role="tab" id="tab-decisions" aria-selected="false">decisions</button></div></header>
 <div class="wrap">
@@ -188,7 +188,7 @@ function answerSection(q) {
     note.removeAttribute("role");
     let res = null, text = "";
     try {
-      res = await fetch((nav ? nav.dataset.base : "./") + "command/answer/" + encodeURIComponent(q.id) + "?t=" + encodeURIComponent(token), {method: "POST", headers: {"content-type": "application/json"}, body: JSON.stringify(body)});
+      res = await fetch((nav ? nav.dataset.base : "./") + "hq/answer/" + encodeURIComponent(q.id) + "?t=" + encodeURIComponent(token), {method: "POST", headers: {"content-type": "application/json"}, body: JSON.stringify(body)});
       text = (await res.text()).trim();
     } catch (e) { text = String(e.message || e); }
     if (res && res.ok) {
@@ -766,8 +766,8 @@ let canAnswer = false, lastModel = null;
 const answered = new Set();
 const nav = document.querySelector("nav.fno-nav");
 const token = new URLSearchParams(location.search).get("t") || "";
-const url = (nav ? nav.dataset.base : "./") + "command/model.json?t=" + encodeURIComponent(token);
-const decUrl = (nav ? nav.dataset.base : "./") + "command/decisions.json?t=" + encodeURIComponent(token);
+const url = (nav ? nav.dataset.base : "./") + "hq/model.json?t=" + encodeURIComponent(token);
+const decUrl = (nav ? nav.dataset.base : "./") + "hq/decisions.json?t=" + encodeURIComponent(token);
 let decRows = [], decReviewed = new Set();
 const decWho = (r) => ["chat_attested", "operator"].includes(r.authority_source) ? "user" : r.authority_source ? "agent" : "?";
 function decSelect(id, label, values) {
@@ -806,7 +806,7 @@ async function load() {
   canAnswer = model.writable === true;
   lastModel = model;
   header(model); banners(model); waiting(model); machines(model); seats(model);
-  // A /command?question=<id> link opens that card once, after the first read.
+  // A /hq?question=<id> link opens that card once, after the first read.
   if (wantQuestion) {
     const id = wantQuestion;
     wantQuestion = null;

@@ -243,7 +243,6 @@ pub mod footprint_cause;
 pub mod friction;
 pub mod gate_probes;
 pub mod gc;
-pub mod gc_adopt;
 pub mod gc_claude_stop;
 pub mod gc_inventory;
 pub mod gc_native;
@@ -261,6 +260,7 @@ pub mod gh_spend;
 pub mod git_paths;
 #[cfg(test)]
 mod git_test_helpers;
+pub mod github_app;
 pub mod glob;
 pub mod golden_drafter;
 pub mod graph_get;
@@ -530,6 +530,7 @@ pub mod quiet_retire;
 pub mod reader_cost;
 pub mod readiness;
 pub mod real_session;
+pub(crate) mod reap_evidence;
 pub mod reap_release;
 pub mod reap_render;
 pub mod receipt;
@@ -1991,6 +1992,9 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // user's look clears (look_hold.rs).
     "look_hold_cancel",
     "look_hold_release",
+    // The reruns a lifted test hold posts on open PRs left with only
+    // cancelled runs (test_hold.rs).
+    "test_hold_rerun",
     // A wait or cadence red-cancel of a head's runs in flight
     // (pr_status/wait.rs), with the failing checks that caused it.
     "ci_wait_cancel",

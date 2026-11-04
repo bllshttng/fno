@@ -37,8 +37,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: harness-launch-docs-${{ github.ref }}
-  cancel-in-progress: true
+  group: harness-launch-docs-${{ github.event_name == 'push' && github.sha || github.head_ref || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   render:

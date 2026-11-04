@@ -507,6 +507,30 @@ pub(crate) fn read_pr<P: GhProbe>(
         }));
     }
 
+    // A stale refs/pull/N/head (GitHub can leave it behind a branch push
+    // after a repo transfer) makes the conflict read answer against an old
+    // head. When mergeable says NO, ask the pull ref once; a divergence
+    // travels as pull_head_stale so the verdict names the remedy, not a
+    // fake conflict.
+    let mut pull_head_stale: Value = Value::Null;
+    if pulls.get("mergeable") == Some(&Value::Bool(false)) {
+        let read = probe.run_gh(
+            cwd,
+            &[
+                "api".to_string(),
+                "--jq".to_string(),
+                ".object.sha".to_string(),
+                format!("repos/{slug}/git/refs/pull/{pr}/head"),
+            ],
+        );
+        if let Ok((true, stdout, _)) = read {
+            let ref_sha = stdout.trim().to_string();
+            if !ref_sha.is_empty() && ref_sha != sha {
+                pull_head_stale = json!({"ref_sha": ref_sha, "head_sha": sha});
+            }
+        }
+    }
+
     Ok(json!({
         "number": pulls.get("number").cloned().unwrap_or(Value::Null),
         "state": map_pr_state(&pulls),
@@ -516,6 +540,9 @@ pub(crate) fn read_pr<P: GhProbe>(
         "mergeable": map_mergeable(pulls.get("mergeable").unwrap_or(&Value::Null)),
         "mergeStateStatus": pulls.get("mergeable_state").cloned().unwrap_or(Value::Null),
         "baseRefName": pulls.pointer("/base/ref").cloned().unwrap_or(Value::Null),
+        // The stale-pull-ref story the merge blocker names (null = not stale
+        // or unread).
+        "pull_head_stale": pull_head_stale,
         // The fields facts_from_pulls needs, so the walk parses facts from
         // this projection instead of spawning `fno do pr info`.
         "html_url": pulls.get("html_url").cloned().unwrap_or(Value::Null),
@@ -1015,6 +1042,7 @@ pub(crate) fn status_payload<P: GhProbe>(
             "mergeStateStatus": pr_json.get("mergeStateStatus").cloned().unwrap_or(Value::Null),
             "baseRefName": pr_json.get("baseRefName").cloned().unwrap_or(Value::Null),
             "mergeable": pr_json.get("mergeable").cloned().unwrap_or(Value::Null),
+            "pull_head_stale": pr_json.get("pull_head_stale").cloned().unwrap_or(Value::Null),
             "rollup": rollup,
         });
         let out = crate::pr_status_facts::run_op("status-merge-blocker", &op_payload);

@@ -15,6 +15,7 @@
 //! An unreadable instrument is `Unknown`, never a clear answer.
 
 use serde_json::{json, Value};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -2497,7 +2498,16 @@ pub(crate) fn pr_bound_entry(cwd: &Path, pr: u64) -> Option<Value> {
     let store = GraphStore::new(&graph_path);
     let entries = backlog_api::rows(&store).ok()?;
     let here = crate::pr_list::origin_slug(cwd, None).ok();
-    let at = pr_bound_index(&entries, pr, here.as_deref())?;
+    // A node filed under the repo's former name carries old-name refs; seed
+    // the alias map (one bounded probe per unknown old slug, cached) before
+    // the bind read, or the gate refuses a PR it should bind.
+    let ref_slugs = entries
+        .iter()
+        .flat_map(crate::merge_gates::pr_refs_of)
+        .filter_map(|r| crate::backlog::pr_link::repo_slug_from_url(r.url.as_deref()));
+    let aliases =
+        crate::backlog::pr_link::aliases_with_probe(Some(cwd), here.as_deref(), ref_slugs);
+    let at = pr_bound_index(&entries, pr, here.as_deref(), &aliases)?;
     entries.into_iter().nth(at)
 }
 
@@ -2505,9 +2515,16 @@ pub(crate) fn pr_bound_entry(cwd: &Path, pr: u64) -> Option<Value> {
 /// repositories, and `additional_prs` may name any of them, so a ref whose
 /// URL names a repository other than `here` belongs to that repository. A
 /// ref with no URL, or no known `here`, still binds by number.
-pub(crate) fn pr_bound_index(entries: &[Value], pr: u64, here: Option<&str>) -> Option<usize> {
+pub(crate) fn pr_bound_index(
+    entries: &[Value],
+    pr: u64,
+    here: Option<&str>,
+    aliases: &BTreeMap<String, String>,
+) -> Option<usize> {
     let ours = |url: Option<&str>| match (here, crate::backlog::pr_link::repo_slug_from_url(url)) {
-        (Some(here), Some(theirs)) => theirs.eq_ignore_ascii_case(here),
+        (Some(here), Some(theirs)) => {
+            crate::backlog::pr_link::same_repo_slug(&theirs, here, aliases)
+        }
         _ => true,
     };
     let bound = |primary: bool| {

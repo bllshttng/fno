@@ -315,7 +315,7 @@ pub mod web;
 #[cfg(feature = "full")]
 pub(crate) mod web_answer;
 #[cfg(feature = "full")]
-pub(crate) mod web_command;
+pub(crate) mod web_hq;
 #[cfg(feature = "full")]
 pub(crate) mod web_invites;
 #[cfg(feature = "full")]
