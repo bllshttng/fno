@@ -12,7 +12,7 @@ The placement rule fires as context. The project rule `worktree-first` (`.fno-ru
 
 **The worktree root is config-driven via `config.paths.worktrees_base`. Set nothing and the defaults work.**
 
-- **Unset (OSS-neutral default):** harness-native `<repo>/.claude/worktrees/<name>` (gitignored, search-clean). No config needed. Where the external allocator is the default (a harness with no native transition), worktrees land at `<state_dir>/spaces/worktrees/<repo>/<name>`. Checkouts already under the older `<state_dir>/worktrees` base stay listed, allowed and reaped; nothing moves them.
+- **Unset (OSS-neutral default):** harness-native `<repo>/.claude/worktrees/<name>` (gitignored, search-clean). No config needed. Where the external allocator is the default (a harness with no native transition), worktrees land at `<state_dir>/spaces/worktrees/<repo>/<name>`. Checkouts already under the older `<state_dir>/worktrees` base stay listed, allowed and reaped. Nothing moves them.
 - **`config.paths.worktrees_base: <dir>`:** worktrees land at `<dir>/<repo>/<name>` (`<repo>` = the checkout's base name).
 - **`worktree.use_conductor_canonical: true` is DEPRECATED:** acts as `worktrees_base = ~/conductor/workspaces`. Prefer `worktrees_base`.
 - Cargo output lives in TWO places per checkout. Final binaries sit in `crates/*/target`. Intermediates land in the fno build base (`paths.cargo_targets_base`, default `~/.fno/cargo-build`). With the env unset: `~/.cargo/build`. Lane `cargo_build_dirs` sweeps both hourly for every repo on the base, by `CACHEDIR.TAG`, base and member fingerprint, never by name. Never name-match target dirs: `cli/src/fno/target`, `skills/target`, and `tests/target` are source dirs. A 2026-09-02 name-based sweep deleted 66 across 26 worktrees.
