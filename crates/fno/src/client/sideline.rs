@@ -430,7 +430,11 @@ impl View {
                         rows.saturating_sub(self.bottom_row_is_chrome() as usize) - 1,
                     );
                 }
-            } else if self.sideline_view == crate::view_store::SidelineView::Messages {
+            } else if matches!(
+                self.sideline_view,
+                crate::view_store::SidelineView::Messages
+                    | crate::view_store::SidelineView::Decisions
+            ) {
                 // A full-surface view: the compose overlay paints it across
                 // the whole terminal, so the column keeps only the strip.
             } else if let Some(b) = &self.backlog_board {

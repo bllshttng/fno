@@ -52,7 +52,7 @@ impl Table {
         visible(&self.rows, &self.filter, &self.reviewed)
     }
 
-    fn selected(&self) -> Option<&DecisionRow> {
+    pub(crate) fn selected(&self) -> Option<&DecisionRow> {
         self.shown().get(self.sel).copied()
     }
 

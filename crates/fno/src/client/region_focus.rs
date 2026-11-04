@@ -26,7 +26,7 @@ impl View {
     /// A full-screen board owns unconditionally: it covers every cell, so no
     /// pane is reachable to hold the keyboard under it.
     pub(crate) fn input_owner(&self) -> RegionOwner {
-        if self.messages_board.is_some() {
+        if self.messages_board.is_some() || self.decisions_board.is_some() {
             return RegionOwner::Board;
         }
         if self.board_full && (self.backlog_board.is_some() || self.org_board.is_some()) {
@@ -291,6 +291,10 @@ pub(super) async fn mouse_pre_pass(
         // report routes to the sideline's own handlers - the dock first,
         // then the hit path a normal-mode sideline click runs (clamped into
         // the panel's column space) - and no byte ever reaches a pane.
+        if view.decisions_board.is_some() {
+            decisions_view::mouse(view, rep, sock_w).await?;
+            continue;
+        }
         if view.messages_board.is_some() {
             if view.launcher.is_some() && agent_launcher::launcher_mouse(view, rep, sock_w).await? {
                 continue;

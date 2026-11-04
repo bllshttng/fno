@@ -27,6 +27,7 @@ pub(super) fn compose_cursor(view: &View, launcher_cursor: Option<(u16, u16)>) -
         && view.aux.is_none()
         && !((view.backlog_board.is_some() || view.org_board.is_some())
             && (view.board_full || view.input_owner() == region_focus::RegionOwner::Board))
+        && view.decisions_board.is_none()
         && view.messages_board.is_none();
     if !overlays_closed {
         return (0, 0, false);

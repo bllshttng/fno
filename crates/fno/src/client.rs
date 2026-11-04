@@ -1039,6 +1039,7 @@ pub(crate) struct View {
     /// The backlog board overlay, when open (one at a time).
     backlog_board: Option<backlog_board::BoardView>,
     messages_board: Option<messages_view::MessagesBoard>,
+    decisions_board: Option<decisions_view::DecisionsBoard>,
     bell: bell::Panel,
     org_board: Option<org_board::OrgBoard>,
     org_generation: u64,
@@ -1833,6 +1834,7 @@ mod overlay_lines;
 #[cfg(test)]
 pub(crate) use overlay_lines::nav_overlay_lines;
 pub(crate) use overlay_lines::{humanize_age, humanize_ago, nav_agent_tokens, peek_overlay_lines};
+mod decisions_view;
 mod messages_view;
 mod org_board;
 pub(crate) mod org_pages;
@@ -2074,6 +2076,7 @@ impl View {
             observers: Vec::new(),
             backlog_board: None,
             messages_board: None,
+            decisions_board: None,
             bell: bell::Panel::initial(),
             org_board: None,
             org_generation: 0,
@@ -5030,6 +5033,8 @@ impl View {
             org_board::paint(self, &mut cells, rows, cols, cols, rows);
         } else if self.messages_board.is_some() {
             messages_view::paint_full(self, &mut cells, rows, cols);
+        } else if self.decisions_board.is_some() {
+            decisions_view::paint_full(self, &mut cells, rows, cols);
         }
 
         // Terminal cursor: the composer sheet's editor while it is open (the
@@ -8778,9 +8783,7 @@ async fn dispatch_event(
                 view.cycle_section(key);
             }
         }
-        Event::ShowKeys => {
-            view.open_keys_modal();
-        }
+        Event::ShowKeys => view.open_keys_modal(),
         Event::OpenBacklogBoard => View::open(view),
         Event::ShareFocusedPane => share_flow::chord(view),
         Event::CycleSidelineView => backlog_board::cycle_sideline_view(view),
@@ -8791,15 +8794,12 @@ async fn dispatch_event(
         Event::OpenConnections => {
             execute_aux_action(view, AuxAction::OpenConnections, sock_w).await?;
         }
-        Event::OpenDecisions => crate::decisions_table::open_pane(&view.session),
+        Event::OpenDecisions => decisions_view::open(view),
         Event::OpenSweepThreads => {
             execute_aux_action(view, AuxAction::OpenSweep, sock_w).await?;
         }
         Event::LiftHold => hold::lift(view).await,
-        Event::OpenSidelineMenu => {
-            // The footer `menu` button's popup, on the keyboard.
-            view.open_sideline_menu(Anchor::Center);
-        }
+        Event::OpenSidelineMenu => view.open_sideline_menu(Anchor::Center), // the footer `menu` popup
         Event::OpenCreate => view.open_create(), // the `+ new workspace` name input
         Event::BlockJump(dir) => {
             write_msg(
@@ -8988,9 +8988,7 @@ async fn apply_hit(
             crate::view_store::SidelineView::Messages => messages_view::open(view),
             crate::view_store::SidelineView::Backlog => View::open(view),
             crate::view_store::SidelineView::Org => org_board::open(view),
-            crate::view_store::SidelineView::Decisions => {
-                crate::decisions_table::open_pane(&view.session)
-            }
+            crate::view_store::SidelineView::Decisions => decisions_view::open(view),
         },
         ChromeHit::Bell(hit) => bell::apply_hit(view, hit),
         ChromeHit::Cmds(cmds) => {

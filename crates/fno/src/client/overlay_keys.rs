@@ -154,6 +154,9 @@ pub(super) async fn route(
         }
         return Some(sideline::route_launcher_keys(view, scanner, bytes, sock_w).await);
     }
+    if view.decisions_board.is_some() {
+        return Some(super::decisions_view::route_keys(view, scanner, bytes, sock_w).await);
+    }
     if view.messages_board.is_some() {
         // The Messages tab is a full-surface view: it owns the keyboard
         // unconditionally while open, the same rule a full-screen board keeps.
@@ -196,6 +199,11 @@ pub(super) async fn flush_released_chord(
             return super::agent_launcher::launcher_keys(view, chunk, sock_w)
                 .await
                 .map(|_| ());
+        }
+    } else if view.decisions_board.is_some() {
+        if let crate::keys::Event::Forward(chunk) = &event {
+            super::decisions_view::keys(view, chunk);
+            return Ok(());
         }
     } else if view.messages_board.is_some() {
         if let crate::keys::Event::Forward(chunk) = &event {
