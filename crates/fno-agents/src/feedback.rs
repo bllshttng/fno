@@ -20,7 +20,7 @@ use std::sync::OnceLock;
 /// 7,000 answered 500, 9,000 answered 414.
 const LINK_MAX_CHARS: usize = 6000;
 const LABEL: &str = "from-fno";
-const DEFAULT_REPO: &str = "bllshttng/fno";
+const DEFAULT_REPO: &str = "fnodotdev/fno";
 
 const HELP: &str = "Draft a redacted upstream issue (nothing is filed)
 
