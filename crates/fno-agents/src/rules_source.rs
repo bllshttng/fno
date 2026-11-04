@@ -826,11 +826,18 @@ mod tests {
             })
             .to_string()
         };
-        let mut text = span("r-a", "block", "2026-10-29T00:00:00Z");
+        // The cutoff anchors to wall-clock, so the stamps are now-relative:
+        // fixed dates age out of the 7d window and redden the test on a
+        // later calendar day.
+        let ts = |days_ago: i64| {
+            (chrono::Utc::now() - chrono::Duration::days(days_ago))
+                .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+        };
+        let mut text = span("r-a", "block", &ts(1));
         text.push('\n');
-        text.push_str(&span("r-a", "warn", "2026-10-28T00:00:00Z"));
+        text.push_str(&span("r-a", "warn", &ts(2)));
         text.push('\n');
-        text.push_str(&span("r-b", "warn", "2026-10-20T00:00:00Z"));
+        text.push_str(&span("r-b", "warn", &ts(12)));
         text.push('\n');
         std::fs::write(&journal, text).unwrap();
 
