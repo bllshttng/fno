@@ -1556,14 +1556,14 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     {
         return Role::DoPr;
     }
-    // The `do resume receipt` leaf claims natively (the Python forwarder
-    // dies in this port); the tail rides byte-verbatim to the receipts door,
-    // which owns its own write/validate/show routing and refusals.
+    // The whole `do resume` group claims natively (the Python forwarder and
+    // its only child group die in this port); the tail rides byte-verbatim
+    // to the receipts door, which owns its own write/validate/show routing
+    // and refusals, and answers the bare group with its usage.
     if args.first().and_then(|a| a.to_str()) == Some("do")
         && args.get(1).and_then(|a| a.to_str()) == Some("resume")
-        && args.get(2).and_then(|a| a.to_str()) == Some("receipt")
     {
-        return Role::DoResumeReceipt(args[3..].to_vec());
+        return Role::DoResumeReceipt(args[2..].to_vec());
     }
     // The bare `fno pr` legacy spelling claims natively too: the wheel's
     // hidden lazy entry points at the deleted Python pr_app, so a claim here
@@ -2033,6 +2033,20 @@ fn main() {
         )),
         Role::WhoamiLedger(rest) => std::process::exit(fno::agents_history::run(&rest)),
         Role::DoResumeReceipt(rest) => {
+            // The bare group and its help spellings answer here, not at the
+            // door: the deleted typer help carried the revive teaching, and
+            // a lost operator needs it more than a usage line.
+            if rest.is_empty()
+                || rest
+                    .iter()
+                    .all(|a| matches!(a.to_str().as_deref(), Some("-h") | Some("--help")))
+            {
+                println!("Durable typed resume receipts (evidence, never write authority).");
+                println!("To revive an agent SESSION by id, use `fno agents resume <session-id>`");
+                println!("(or `fno agents adopt <session-id>` to register it without resuming).");
+                println!("{}", fno_agents::resume_receipt::door::USAGE);
+                std::process::exit(0);
+            }
             // The retired flag spelling maps to the door's name; the deleted
             // Python alias accepted it for one release (verb-wording:
             // allow).
@@ -2602,9 +2616,12 @@ mod tests {
             ),
             Role::DoResumeReceipt(os(&["show", "--node", "x-1"]))
         );
-        // A bare `do resume` (no receipt leaf) stays with the wheel: the
-        // retired-root teaching refuses there, not at the receipts door.
-        assert_eq!(decide_role(&os(&["do", "resume"]), false), Role::Forward);
+        // The bare group claims too: the wheel's resume group died with the
+        // forwarder, so a claim here keeps the spelling answering its help.
+        assert_eq!(
+            decide_role(&os(&["do", "resume"]), false),
+            Role::DoResumeReceipt(os(&[]))
+        );
     }
 
     #[test]

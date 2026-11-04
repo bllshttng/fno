@@ -82,7 +82,22 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
     ),
     # Individual commands (plain functions wrapped as single-command apps) -
     # `fno whoami`, its cost/ledger leaves and the whole `fno doctor` family
-    # answer natively at the Rust front door; no Python rows remain.
+    # answer natively at the Rust front door; the rows below keep the
+    # advertised names (and the hidden real root `evals`) on the menu, and
+    # their leaves signpost the front door.
+    "evals": (
+        "fno.rust_binary:_evals_signpost_command",
+        "Golden-task efficacy evals (run / report / diff)",
+        {"hidden": True},
+    ),
+    "whoami": (
+        "fno.rust_binary:_whoami_signpost_command",
+        "Operating-stack summary: project + fleet + walker + session + harness.",
+    ),
+    "doctor": (
+        "fno.rust_binary:_doctor_signpost_command",
+        "Install health, config doctor, evals and lint (the Rust front's command).",
+    ),
     "update": (
         "fno.rust_binary:_update_signpost",
         "The updater is native: the Rust front door answers `update` and `doctor update`.",

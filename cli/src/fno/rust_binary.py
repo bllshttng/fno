@@ -566,6 +566,59 @@ def _update_signpost() -> None:
     )
     raise typer.Exit(code=2)
 
+
+def _native_family_signpost(name: str, verb: str) -> "click.Command":
+    """The no-front-door spelling for a family the Rust front door owns: the
+    menu keeps the name advertised, and this leaf only names what installs
+    the door that answers it."""
+    # Lazy click/typer imports: same reason as _update_signpost.
+    import click
+    import typer
+
+    def _cb(**_kwargs: object) -> None:
+        typer.echo(
+            f"fno: the {name} family is native to the Rust front door; install it from the source checkout with "
+            f"`cargo install --locked --path <src>/crates/fno`, then re-run `{verb}`."
+        )
+        raise typer.Exit(code=2)
+
+    return click.Command(
+        name,
+        callback=_cb,
+        params=[click.Argument(("argv",), nargs=-1, type=str, required=False)],
+        context_settings={"ignore_unknown_options": True, "allow_interspersed_args": True},
+        help=f"The {name} family is native: the Rust front door answers it.",
+    )
+
+
+_whoami_signpost_command = _native_family_signpost("whoami", "fno whoami status")
+_doctor_signpost_command = _native_family_signpost("doctor", "fno doctor")
+
+
+def _evals_signpost() -> "click.Command":
+    """The root `evals` spelling retired with its forwarder: this leaf keeps
+    the hidden real root on `help --all` and teaches the same move the front
+    door's root refusal teaches."""
+    # Lazy click/typer imports: same reason as _update_signpost.
+    import click
+    import typer
+
+    def _cb(**_kwargs: object) -> None:
+        typer.echo("fno evals is now fno doctor evals")
+        raise typer.Exit(code=2)
+
+    return click.Command(
+        "evals",
+        callback=_cb,
+        params=[click.Argument(("argv",), nargs=-1, type=str, required=False)],
+        context_settings={"ignore_unknown_options": True, "allow_interspersed_args": True},
+        help="The evals family moved: `fno doctor evals` answers it.",
+    )
+
+
+_evals_signpost_command = _evals_signpost()
+
+
 class FrontTimeout(CommandUnavailable):
     """The law door gave no answer in time. A retry meets the same wait."""
 
