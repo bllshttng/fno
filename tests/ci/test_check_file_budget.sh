@@ -141,6 +141,12 @@ lines 5 t > evals/harness-fit/run/new.py
 lines 5 t > evals/fixtures/new.py
 lines 5 t > scripts/release/new.py
 commit
+# A silent setup failure would leave HEAD == BASE, and the empty diff prints
+# the same ok line: assert the files landed before the case can pass.
+for p in plugins/hermes/promise-tag-reader/new.py evals/harness-fit/run/new.py \
+         evals/fixtures/new.py scripts/release/new.py; do
+  git cat-file -e "HEAD:$p" || { printf 'FAIL: setup lost %s\n' "$p" >&2; FAIL=$((FAIL + 1)); }
+done
 check 'each allowed home admits a new .py' 0 \
   'cli/src/fno added +0, net +0, budget 30'
 
