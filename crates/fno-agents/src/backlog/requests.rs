@@ -3,19 +3,20 @@
 //! Reads open GitHub issues carrying both the request label and the
 //! maintainer-applied approval label through the tracker's `list_labeled`,
 //! and files each as an intake row with `source_kind: external_request` and
-//! `public: false`, or records an upvote as an external encounter on an
-//! already-published row. Visitor text is quarantined: the sanitized title
+//! `public: false`, records an upvote as an external encounter on an
+//! already-published row, or grants a take as a day-long node claim.
+//! Visitor text is quarantined: the sanitized title
 //! carries no markup, the body rides inside an envelope whose header alone
 //! fills the session-prompt excerpt, and nothing is written to GitHub. Dry
 //! run by default; `--apply` writes through one `locked_mutate`, so the
 //! title gate, the idea cap and the done-evidence rule all hold here too.
 
-use serde_json::{json, Value};
-use std::collections::BTreeSet;
+use serde_json::{json, Map, Value};
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-const DEFAULT_LABEL: &str = "fno-request";
-const DEFAULT_APPROVED_LABEL: &str = "fno-approved";
+pub(crate) const DEFAULT_LABEL: &str = "fno-request";
+pub(crate) const DEFAULT_APPROVED_LABEL: &str = "fno-approved";
 const DEFAULT_LIMIT: usize = 100;
 const DEFAULT_MAX_NEW: usize = 20;
 const DEFAULT_MAX_OPEN: usize = 50;
@@ -28,6 +29,13 @@ const EXTERNAL_KIND: &str = "external_request";
 const EXTERNAL_TAG: &str = "external-request";
 /// The board card id an upvote issue names: `Upvote c-ab12`.
 const UPVOTE_TITLE: &str = r"^Upvote ([a-z][a-z0-9]{0,7}-[0-9a-f]{4,8})$";
+/// The board card id a take issue names: `Take c-ab12`. The PR steward reads
+/// the same pattern to link a take's pull request to its node.
+pub(crate) const TAKE_TITLE: &str = r"^Take ([a-z][a-z0-9]{0,7}-[0-9a-f]{4,8})$";
+/// The steward tags a node whose take arrived as a pull request. It also
+/// releases the claim so the fleet can build the node; the tag stops the
+/// import from granting the same take again.
+pub(crate) const TAKE_DELIVERED_TAG: &str = "take-delivered";
 /// A GitHub login, or the `unknown` placeholder.
 const LOGIN_PATTERN: &str = r"^[A-Za-z0-9-]{1,39}$";
 
@@ -185,6 +193,10 @@ pub fn run(args: &[String]) -> i32 {
         return 2;
     }
 
+    let held = live_node_claims();
+    if let Err(e) = &held {
+        eprintln!("requests: takes are skipped: {e}");
+    }
     let graph = super::settings::graph_path();
     let mut retry = 0u8;
     let outcome = loop {
@@ -232,7 +244,15 @@ pub fn run(args: &[String]) -> i32 {
                 .display()
                 .to_string()
         });
-        let mut outcome = apply_issues(&mut rows, &issues, &repo, &project, &cwd, &parsed.limits);
+        let mut outcome = apply_issues(
+            &mut rows,
+            &issues,
+            &repo,
+            &project,
+            &cwd,
+            &parsed.limits,
+            held.as_ref().ok(),
+        );
         outcome.dry_run = !parsed.apply;
         if parsed.apply {
             match crate::graph_store::locked_mutate(
@@ -258,6 +278,11 @@ pub fn run(args: &[String]) -> i32 {
             break outcome;
         }
     };
+    let mut outcome = outcome;
+    if parsed.apply {
+        let written = write_claims(&outcome.claims, None);
+        outcome.receipt.extend(written);
+    }
     print_receipt(&outcome, &parsed);
     0
 }
@@ -273,7 +298,11 @@ fn help_text() -> String {
      \n\
      Reads open issues carrying both the request label (default fno-request)\n\
      and the approval label (default fno-approved, applied by hand by a\n\
-     maintainer), then files each as an intake row or records an upvote.\n\
+     maintainer), then files each as an intake row, records an upvote, or\n\
+     grants a take. An issue titled `Take <id>` holds that node for its\n\
+     author for a day. Each run renews the take while the issue stays open\n\
+     and approved, and releases it once the issue leaves the list. A login\n\
+     holds at most --max-per-author takes.\n\
      Dry run by default: pass --apply to write. The import never writes to\n\
      GitHub. Visitor text is quarantined in the row's details; accept a\n\
      request by rewriting it in your own words, never by promoting it."
@@ -286,7 +315,7 @@ fn positive_usize(raw: &str) -> Option<usize> {
 
 /// `owner/repo` out of the project root's origin remote, through the
 /// publish command's parser.
-fn origin_repo(root: &Path) -> Option<String> {
+pub(crate) fn origin_repo(root: &Path) -> Option<String> {
     let out = std::process::Command::new("git")
         .args(["remote", "get-url", "origin"])
         .current_dir(root)
@@ -352,11 +381,46 @@ fn names_whole_word(haystack: &str, needle: &str) -> bool {
     false
 }
 
+/// A live `node:` claim as the import reads it. A take claim also names the
+/// issue it came from, so a later run can tell when that issue has left the
+/// open, approved list.
+#[derive(Clone)]
+struct Held {
+    holder: String,
+    take: Option<(String, i64)>,
+}
+
+type HeldClaims = BTreeMap<String, Held>;
+
+/// The issue one take came from, and who opened it.
+struct TakeIssue<'a> {
+    repo: &'a str,
+    number: i64,
+    holder: &'a str,
+}
+
+/// A claim write the import decided on. The decision is pure over the rows
+/// and the held claims; `run` performs it after the graph write lands.
+enum ClaimOp {
+    Grant {
+        node: String,
+        holder: String,
+        repo: String,
+        issue: i64,
+    },
+    Release {
+        node: String,
+        holder: String,
+    },
+}
+
 struct Outcome {
     rows: Vec<Value>,
     receipt: Vec<String>,
+    claims: Vec<ClaimOp>,
     filed: usize,
     votes: usize,
+    takes: usize,
     skipped: usize,
     dry_run: bool,
 }
@@ -371,16 +435,21 @@ fn apply_issues(
     project: &str,
     cwd: &str,
     limits: &Limits,
+    held: Option<&HeldClaims>,
 ) -> Outcome {
     let mut outcome = Outcome {
         rows: rows.clone(),
         receipt: Vec::new(),
+        claims: Vec::new(),
         filed: 0,
         votes: 0,
+        takes: 0,
         skipped: 0,
         dry_run: true,
     };
+    let mut held_now: Option<HeldClaims> = held.cloned();
     let upvote_re = regex::Regex::new(UPVOTE_TITLE).expect("static regex");
+    let take_re = regex::Regex::new(TAKE_TITLE).expect("static regex");
     let login_re = regex::Regex::new(LOGIN_PATTERN).expect("static regex");
     let mut known_ids: BTreeSet<String> = rows
         .iter()
@@ -404,6 +473,38 @@ fn apply_issues(
                 Ok(()) => {
                     outcome.votes += 1;
                     outcome.receipt.push(format!("vote {target}"));
+                }
+                Err(reason) => {
+                    outcome.skipped += 1;
+                    outcome
+                        .receipt
+                        .push(format!("skipped issue {}: {reason}", issue.number));
+                }
+            }
+            continue;
+        }
+        if let Some(target) = take_re
+            .captures(&issue.title)
+            .and_then(|c| c.get(1))
+            .map(|m| m.as_str())
+        {
+            let take = TakeIssue {
+                repo,
+                number: issue.number,
+                holder: &voter_key,
+            };
+            let verdict = match (login, held_now.as_mut()) {
+                ("unknown", _) => Err("the issue has no usable author login".to_string()),
+                (_, None) => Err("live claim state is unavailable".to_string()),
+                (_, Some(held)) => {
+                    record_take(rows, target, project, &take, held, limits.max_per_author)
+                }
+            };
+            match verdict {
+                Ok(claim) => {
+                    outcome.takes += 1;
+                    outcome.claims.push(claim);
+                    outcome.receipt.push(format!("take {target} by {login}"));
                 }
                 Err(reason) => {
                     outcome.skipped += 1;
@@ -511,6 +612,25 @@ fn apply_issues(
         outcome.filed += 1;
         outcome.receipt.push(format!("filed {minted}"));
     }
+    // A held take whose issue is no longer on the open, approved list was
+    // closed or lost its label. A full page proves nothing about the issues
+    // past it, so the release waits for a run that sees the whole list.
+    if let Some(held) = held.filter(|_| issues.len() < limits.limit) {
+        for (node, h) in held {
+            let Some((take_repo, number)) = &h.take else {
+                continue;
+            };
+            if take_repo == repo && !issues.iter().any(|i| i.number == *number) {
+                outcome.receipt.push(format!(
+                    "release {node}: issue {number} is closed or lost its labels"
+                ));
+                outcome.claims.push(ClaimOp::Release {
+                    node: node.clone(),
+                    holder: h.holder.clone(),
+                });
+            }
+        }
+    }
     outcome.rows = rows.clone();
     outcome
 }
@@ -527,16 +647,7 @@ fn record_upvote(
     link: &str,
     issue: i64,
 ) -> Result<(), String> {
-    let Some(row) = rows.iter().find(|r| {
-        crate::graph_store::entry_id(r) == Some(target)
-            && r.get("project").and_then(Value::as_str) == Some(project)
-    }) else {
-        return Err(format!("no such open public row {target}"));
-    };
-    let open = in_open_set(row) && would_publish(row);
-    if !open {
-        return Err(format!("{target} is not an open public row"));
-    }
+    open_public_row(rows, target, project)?;
     let record = json!({
         "created_at": crate::graph_store::now_isoformat(),
         "evidence": format!("Upvote from the public board, {link}"),
@@ -553,6 +664,151 @@ fn record_upvote(
             .unwrap_or("the vote did not land")
             .to_string())
     }
+}
+
+/// Every live `node:` claim with its holder and, for a take, the issue it
+/// came from. `Err` when the claim store cannot be read.
+fn live_node_claims() -> Result<HeldClaims, String> {
+    let records = crate::claims::list(Some("node:"), None, false)?;
+    Ok(records
+        .iter()
+        .filter_map(|rec| {
+            let node = rec.key.strip_prefix("node:")?;
+            let meta = &rec.metadata;
+            let take = (meta.get("take").and_then(Value::as_bool) == Some(true))
+                .then(|| {
+                    Some((
+                        meta.get("repo")?.as_str()?.to_string(),
+                        meta.get("issue")?.as_i64()?,
+                    ))
+                })
+                .flatten();
+            Some((
+                node.to_string(),
+                Held {
+                    holder: rec.holder.clone(),
+                    take,
+                },
+            ))
+        })
+        .collect())
+}
+
+/// Write the decided claims. A grant is a `node:` claim with no pid, a day's
+/// lease and no session id: a session id would tie the take to the session
+/// that ran the import, and the claim would read stale the moment that
+/// session ended. Running the import again renews a grant.
+fn write_claims(ops: &[ClaimOp], events_dir: Option<&Path>) -> Vec<String> {
+    ops.iter()
+        .map(|op| match op {
+            ClaimOp::Grant {
+                node,
+                holder,
+                repo,
+                issue,
+            } => {
+                let mut meta = Map::new();
+                meta.insert("take".into(), Value::Bool(true));
+                meta.insert("repo".into(), json!(repo));
+                meta.insert("issue".into(), json!(issue));
+                let opts = crate::claims::AcquireOpts {
+                    pid_unavailable: true,
+                    ttl_ms: Some(crate::claims::MAX_TTL_MS),
+                    reason: Some(format!("take of {node} from {repo}#{issue}")),
+                    metadata: Some(meta),
+                    pid_provenance: Some("ambient".to_string()),
+                    identity: Some((String::new(), "github".to_string())),
+                    events_dir: events_dir.map(Path::to_path_buf),
+                    ..Default::default()
+                };
+                match crate::claims::acquire(&format!("node:{node}"), holder, opts) {
+                    crate::claims::AcquireOutcome::Acquired(_) => {
+                        format!("claimed {node} for {holder}")
+                    }
+                    crate::claims::AcquireOutcome::HeldByOther { holder, .. } => {
+                        format!("skipped take {node}: taken by {holder}")
+                    }
+                    crate::claims::AcquireOutcome::Error(e) => {
+                        format!("skipped take {node}: {e}")
+                    }
+                }
+            }
+            ClaimOp::Release { node, holder } => {
+                match crate::claims::release(&format!("node:{node}"), holder, None, events_dir) {
+                    Ok(()) => format!("released {node} from {holder}"),
+                    Err(e) => format!("kept {node}: {e}"),
+                }
+            }
+        })
+        .collect()
+}
+
+/// The named card, when it is a live open row of this project that would
+/// publish. `Err` carries the one skip reason the receipt names.
+fn open_public_row<'a>(
+    rows: &'a [Value],
+    target: &str,
+    project: &str,
+) -> Result<&'a Value, String> {
+    let Some(row) = rows.iter().find(|r| {
+        crate::graph_store::entry_id(r) == Some(target)
+            && r.get("project").and_then(Value::as_str) == Some(project)
+    }) else {
+        return Err(format!("no such open public row {target}"));
+    };
+    if !(in_open_set(row) && would_publish(row)) {
+        return Err(format!("{target} is not an open public row"));
+    }
+    Ok(row)
+}
+
+/// One take, when the named card is an open public row nobody else holds and
+/// the login is under its ceiling. A repeat by the same holder renews. `held`
+/// takes the grant too, so two takes in one run cannot both win a node.
+fn record_take(
+    rows: &[Value],
+    target: &str,
+    project: &str,
+    take: &TakeIssue,
+    held: &mut HeldClaims,
+    max_per_login: usize,
+) -> Result<ClaimOp, String> {
+    let row = open_public_row(rows, target, project)?;
+    let delivered = row
+        .get("tags")
+        .and_then(Value::as_array)
+        .is_some_and(|tags| tags.iter().any(|t| t.as_str() == Some(TAKE_DELIVERED_TAG)));
+    if delivered {
+        return Err(format!("{target} already has a delivered take"));
+    }
+    match held.get(target) {
+        Some(other) if other.holder != take.holder => {
+            return Err(format!("taken by {}", other.holder));
+        }
+        Some(_) => {}
+        None => {
+            let mine = held.values().filter(|h| h.holder == take.holder).count();
+            if mine >= max_per_login {
+                return Err(format!(
+                    "{} is at the take ceiling ({max_per_login})",
+                    take.holder
+                ));
+            }
+        }
+    }
+    held.insert(
+        target.to_string(),
+        Held {
+            holder: take.holder.to_string(),
+            take: Some((take.repo.to_string(), take.number)),
+        },
+    );
+    Ok(ClaimOp::Grant {
+        node: target.to_string(),
+        holder: take.holder.to_string(),
+        repo: take.repo.to_string(),
+        issue: take.number,
+    })
 }
 
 /// The public board's open set (the same vocabulary the public projection
@@ -716,6 +972,7 @@ fn print_receipt(outcome: &Outcome, parsed: &Parsed) {
                 "dry_run": outcome.dry_run,
                 "filed": outcome.filed,
                 "votes": outcome.votes,
+                "takes": outcome.takes,
                 "skipped": outcome.skipped,
                 "results": results,
             }))
@@ -727,7 +984,7 @@ fn print_receipt(outcome: &Outcome, parsed: &Parsed) {
         println!("{line}");
     }
     println!(
-        "{}: {} filed, {} votes, {} skipped",
+        "{}: {} filed, {} votes, {} takes, {} skipped",
         if outcome.dry_run {
             "dry run"
         } else {
@@ -735,6 +992,7 @@ fn print_receipt(outcome: &Outcome, parsed: &Parsed) {
         },
         outcome.filed,
         outcome.votes,
+        outcome.takes,
         outcome.skipped
     );
     if outcome.dry_run {
@@ -746,6 +1004,19 @@ fn print_receipt(outcome: &Outcome, parsed: &Parsed) {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// The import with no claim store: takes are skipped, the rest runs as
+    /// it always did.
+    fn import(
+        rows: &mut Vec<Value>,
+        issues: &[crate::tracker::github::RequestIssue],
+        repo: &str,
+        project: &str,
+        cwd: &str,
+        limits: &Limits,
+    ) -> Outcome {
+        apply_issues(rows, issues, repo, project, cwd, limits, None)
+    }
 
     fn issue(
         number: i64,
@@ -832,7 +1103,7 @@ mod tests {
 
         // A request files; a rerun of the same issue is a skip, and so is
         // the steward's URL form of the same origin.
-        let mut out = apply_issues(
+        let mut out = import(
             &mut rows,
             &[issue(7, "Add [dark](http://x) mode", "please", "Visitor-1")],
             repo,
@@ -869,7 +1140,7 @@ mod tests {
             assert_eq!(encs[0]["voter_kind"], "external");
         }
         let after_first = out.rows.clone();
-        out = apply_issues(
+        out = import(
             &mut rows.clone(),
             &[issue(7, "Add [dark](http://x) mode", "please", "Visitor-1")],
             repo,
@@ -892,7 +1163,7 @@ mod tests {
                 Value::String("https://github.com/o/r/issues/7".into()),
             );
         }
-        let out2 = apply_issues(
+        let out2 = import(
             &mut with_url,
             &[issue(7, "Add [dark](http://x) mode", "please", "Visitor-1")],
             repo,
@@ -904,7 +1175,7 @@ mod tests {
 
         // An upvote lands on an open public row once; a second vote from the
         // same voter is refused; a private row takes none.
-        let mut out3 = apply_issues(
+        let mut out3 = import(
             &mut rows,
             &[issue(3, "Upvote c-ab12", "", "Visitor-1")],
             repo,
@@ -928,7 +1199,7 @@ mod tests {
                 .contains("please"),
             "the evidence holds no issue body"
         );
-        out3 = apply_issues(
+        out3 = import(
             &mut rows.clone(),
             &[
                 issue(4, "Upvote c-ab12", "", "Visitor-2"),
@@ -948,7 +1219,7 @@ mod tests {
         {
             obj.insert("public".into(), Value::Bool(false));
         }
-        let out4 = apply_issues(
+        let out4 = import(
             &mut private,
             &[issue(6, "Upvote c-ab12", "", "Visitor-3")],
             repo,
@@ -966,7 +1237,7 @@ mod tests {
             max_open: 50,
             max_per_author: 3,
         };
-        let out5 = apply_issues(
+        let out5 = import(
             &mut fresh,
             &[
                 issue(11, "First ask", "b", "a1"),
@@ -988,7 +1259,7 @@ mod tests {
         let author_issues: Vec<_> = (21..=24)
             .map(|n| issue(n, &format!("Ask number {n}"), "b", "chatty"))
             .collect();
-        let out6 = apply_issues(
+        let out6 = import(
             &mut per_author_rows,
             &author_issues,
             repo,
@@ -1010,5 +1281,186 @@ mod tests {
         let refusal = template_refusal_in(dir.path(), "fno-approved");
         assert!(refusal.is_some());
         assert!(template_refusal_in(dir.path(), "fno-other").is_none());
+    }
+
+    fn held_by(holder: &str) -> Held {
+        Held {
+            holder: holder.to_string(),
+            take: None,
+        }
+    }
+
+    #[test]
+    fn a_take_claims_an_open_public_node_once_and_holds_its_ceilings() {
+        let project = "p";
+        let limits = Limits {
+            limit: 100,
+            max_new: 20,
+            max_open: 50,
+            max_per_author: 2,
+        };
+        let mut rows: Vec<Value> = ["c-ab12", "c-cd34", "c-ef56", "c-7777"]
+            .iter()
+            .map(|id| board_row(id, project))
+            .collect();
+        let mut delivered = board_row("c-0a0b", project);
+        delivered["tags"] = json!([TAKE_DELIVERED_TAG]);
+        rows.push(delivered);
+        let mut private = board_row("c-1111", project);
+        private["public"] = json!(false);
+        rows.push(private);
+        let mut held = HeldClaims::new();
+        held.insert("c-cd34".to_string(), held_by("target-session:s1"));
+        let out = apply_issues(
+            &mut rows,
+            &[
+                issue(1, "Take c-ab12", "", "Visitor-1"),
+                issue(2, "Take c-ab12", "", "Visitor-2"),
+                issue(3, "Take c-cd34", "", "Visitor-2"),
+                issue(4, "Take c-ef56", "", "Visitor-1"),
+                issue(5, "Take c-0a0b", "", "Visitor-1"),
+                issue(6, "Take c-1111", "", "Visitor-3"),
+                issue(7, "Take zz-9999", "", "Visitor-3"),
+                issue(9, "Take c-7777", "", "Visitor-1"),
+            ],
+            "o/r",
+            project,
+            "/tmp/p",
+            &limits,
+            Some(&held),
+        );
+        let granted: Vec<(&str, &str)> = out
+            .claims
+            .iter()
+            .filter_map(|op| match op {
+                ClaimOp::Grant { node, holder, .. } => Some((node.as_str(), holder.as_str())),
+                ClaimOp::Release { .. } => None,
+            })
+            .collect();
+        assert_eq!(
+            granted,
+            [
+                ("c-ab12", "github:visitor-1"),
+                ("c-ef56", "github:visitor-1")
+            ],
+            "{:?}",
+            out.receipt
+        );
+        assert_eq!((out.takes, out.skipped, out.filed), (2, 6, 0));
+        for want in [
+            "skipped issue 2: taken by github:visitor-1",
+            "skipped issue 3: taken by target-session:s1",
+            "skipped issue 5: c-0a0b already has a delivered take",
+            "skipped issue 6: c-1111 is not an open public row",
+            "skipped issue 7: no such open public row zz-9999",
+            "skipped issue 9: github:visitor-1 is at the take ceiling (2)",
+        ] {
+            assert!(
+                out.receipt.iter().any(|l| l == want),
+                "{want}: {:?}",
+                out.receipt
+            );
+        }
+        assert_eq!(out.rows.len(), rows.len(), "a take writes no graph row");
+
+        let blind = import(
+            &mut rows,
+            &[issue(10, "Take c-ab12", "", "Visitor-1")],
+            "o/r",
+            project,
+            "/tmp/p",
+            &limits,
+        );
+        assert!(blind.claims.is_empty());
+        assert!(blind.receipt[0].ends_with("live claim state is unavailable"));
+
+        // A held take whose issue left the list is released. A full page
+        // proves nothing about the issues past it, so it releases nothing.
+        let mut gone = HeldClaims::new();
+        gone.insert(
+            "c-ab12".to_string(),
+            Held {
+                holder: "github:visitor-4".to_string(),
+                take: Some(("o/r".to_string(), 99)),
+            },
+        );
+        let released = apply_issues(
+            &mut rows,
+            &[],
+            "o/r",
+            project,
+            "/tmp/p",
+            &limits,
+            Some(&gone),
+        );
+        assert!(matches!(released.claims[..], [ClaimOp::Release { .. }]));
+        assert_eq!(
+            released.receipt,
+            ["release c-ab12: issue 99 is closed or lost its labels"]
+        );
+        let full_page = Limits {
+            limit: 0,
+            max_new: 20,
+            max_open: 50,
+            max_per_author: 2,
+        };
+        let kept = apply_issues(
+            &mut rows,
+            &[],
+            "o/r",
+            project,
+            "/tmp/p",
+            &full_page,
+            Some(&gone),
+        );
+        assert!(kept.claims.is_empty());
+    }
+
+    #[test]
+    fn a_granted_take_reads_live_to_selection_with_no_session_on_the_record() {
+        let _guard = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let prior = std::env::var_os("FNO_CLAIMS_ROOT");
+        let root = tempfile::tempdir().unwrap();
+        std::env::set_var("FNO_CLAIMS_ROOT", root.path());
+        let grant = ClaimOp::Grant {
+            node: "c-ab12".to_string(),
+            holder: "github:visitor-1".to_string(),
+            repo: "o/r".to_string(),
+            issue: 7,
+        };
+        let lines = write_claims(&[grant], Some(root.path()));
+        let ids = crate::backlog::next::live_claimed_node_ids();
+        let held = live_node_claims();
+        let (_, record) = crate::claims::status("node:c-ab12", None);
+        let release = ClaimOp::Release {
+            node: "c-ab12".to_string(),
+            holder: "github:visitor-1".to_string(),
+        };
+        let released = write_claims(&[release], Some(root.path()));
+        let after = crate::backlog::next::live_claimed_node_ids();
+        match prior {
+            Some(value) => std::env::set_var("FNO_CLAIMS_ROOT", value),
+            None => std::env::remove_var("FNO_CLAIMS_ROOT"),
+        }
+
+        assert_eq!(lines, ["claimed c-ab12 for github:visitor-1"]);
+        assert!(
+            ids.unwrap().contains("c-ab12"),
+            "selection must see the take"
+        );
+        let held = held.unwrap();
+        let (repo, issue) = held["c-ab12"]
+            .take
+            .as_ref()
+            .expect("a take names its issue");
+        assert_eq!((repo.as_str(), *issue), ("o/r", 7));
+        assert!(
+            record.expect("the claim row").session_id.is_none(),
+            "a session id would stale the take when the importing session ends"
+        );
+        assert_eq!(released, ["released c-ab12 from github:visitor-1"]);
+        assert!(!after.unwrap().contains("c-ab12"));
     }
 }
