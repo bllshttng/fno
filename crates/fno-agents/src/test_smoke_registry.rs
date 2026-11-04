@@ -49,7 +49,6 @@ pub(super) const STRUCTURAL_STEPS: &[(&str, &str, &str)] = &[
     ("placement rule", ".", "bash scripts/ci/check-placement-rule.sh"),
     ("No residual old-name patterns (rename guard)", ".", "bash scripts/rename/residual-check.sh"),
     ("No stale skill refs (consolidation audit)", ".", "bash scripts/ci/check-no-stale-skill-refs.sh"),
-    ("Company function-agnosticism check", ".", "bash scripts/ci/check-company-function-agnostic.sh"),
     ("Plugin function-agnosticism check", ".", "bash scripts/ci/check-plugins-function-agnostic.sh"),
     ("Company module boundary self-test", ".", "bash tests/ci/test_check_company_boundaries.sh"),
     ("Company module boundary check", ".", "bash scripts/ci/check-company-boundaries.sh --baseline"),

@@ -946,7 +946,6 @@ mod tests {
         std::fs::create_dir_all(&start).unwrap();
         let root = repo_root(&start).unwrap();
         assert_eq!(root, tmp.path());
-        assert!(repo_root(&std::env::temp_dir()).is_none() || true);
     }
 
     #[test]

@@ -103,7 +103,7 @@ These five move or remove state around sessions. None stops or removes a session
 4. attended: `kept {id} (attended: ...)`
 5. policy `gc_decide`, in order: a live claim, an open PR the session drives, a brainstorm, then the idle window
 6. live descendant: `kept {id} (live descendant: {child})`, skipped for a terminal row
-7. apply freshness re-check: `kept {id} (active: ...)` or `kept {id} (probe unread: ...)`
+7. freshness re-check, in the dry run too: `kept {id} (active: ...)` or `kept {id} (probe unread: ...)`
 8. the stop gate and receipt stage: the `needs live stop`, `stop refused` and `no resumable receipt` lines
 9. the dry-run unverified gate: the `dry-run did not evaluate` line
 10. the tree verdict, then the commit: `kept tree {id} (...)` lines, then the retire lines. At commit the open-PR guard keeps a driver row whose node still records an open PR (`gc_open_pr_guard.rs` `hold_open_pr_reaps`)
@@ -122,7 +122,7 @@ The `held` line is the trap. The line reads `held {id} (needs live stop: {reason
 
 The guard exists because of one incident. On 2026-09-08 a dry run promised 9 retirements, and the real run retired 0 (`gc_sweep.rs` `needs_live_stop`).
 
-The rehearsal has a second honest hold: `held {id} (dry-run did not evaluate: {gate}; apply may still refuse)`. A dry-run row whose remaining gate needs a mutation is named where it stands. It is never planted into `retired` or `pruned`, so neither count can read a promise the run did not evaluate (`gc_sweep.rs` `run_with_release`). The apply run can still refuse that gate: the dry-run report says `apply may still refuse`, naming the uncertainty.
+The rehearsal has a second honest hold: `held {id} (dry-run did not evaluate: {gate}; apply may still refuse)`. A dry-run row whose remaining gate needs a mutation is named where it stands. It is never planted into `retired` or `pruned`, so neither count can read a promise the run did not evaluate (`gc_sweep.rs` `run_with_release`). The apply run can still refuse that gate: the dry-run report says `apply may still refuse`, naming the uncertainty. One row shape skips the hold. It is a claude row with no pane and no mux ref, absent from the claude roster union, with no live squad member. For that row the live surface removal reads already-absent and the mux retirement reads not-applicable, and neither acts. The dry run reads the same two sources without acting (`gc_native.rs` `surface_provably_clear`), so it lists the row under `retired`, as the live sweep will.
 
 If the dry run prints a `held` line, run the real command and read its verdict.
 
@@ -215,6 +215,8 @@ The line reads `kept {id} (probe unread: {detail})`. The fresh re-read of the ro
 The detail names the in-process witness that answered instead. The registry row's `inside_leg.seq` is the quiet witness: the daemon writes it in process on every turn report, so no subprocess can time it out. `no inside-leg report on the row` means the row carries no report at all, so the witness cannot speak. `inside-leg seq moved {old} -> {new}` means a new turn report landed between classification and the re-read: the session woke up, and the keep is real. `a live working report is on the row` means the last report reads `working` and its ttl agrees, a turn plausibly in flight, never quiet, until the badge ages out. When the seq is unchanged and the classification age measured quiet, the row retires, the witness answers where the probe starved (`gc_sweep.rs` `run_with_release`).
 
 The cure is patience, not a ruling: the next sweep's probe usually answers, and the row retires then.
+
+One row shape can never answer: no transcript at classification, no pid, no pane and no inside-leg report. No witness is left that can lift the hold. Once its clock passes one day, the row retires instead (`gc_sweep.rs` `PROBE_UNREAD_RETIRE_AFTER_S`). The clock is the row's `created_at`. A hand-started row can carry an empty `created_at`, so the clock then reads `exited_at`, and the hold line names the basis `row exited`. The dry run makes the same read-only re-read, so it lists the same probe-unread rows the live sweep keeps.
 
 ### graph unreadable
 

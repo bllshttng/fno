@@ -126,26 +126,15 @@ LAYERS = (
         "platform",
         (
             "fno.paths",
-            "fno.events",
+            # The events store client: the events package's Python residue
+            # port left this module as the package's only Python reader.
+            "fno.events.store_client",
             # Leaf utilities with callers on both sides of the runtime boundary.
             # Declared, not merely moved: an undeclared module is unmapped, and
             # the scan skips unmapped modules entirely, so relocating code
             # without adding it here would clear a finding while leaving the
             # dependency in place.
-            "fno.harness_identity",
-            "fno.harness_names",
             "fno.rust_binary",
-            # The registry table door: claims, identity and agents all read
-            # the registry through it.
-            "fno.registry_door",
-        ),
-    ),
-    (
-        1,
-        "core",
-        (
-            "fno.company",
-            "fno.company.contracts",
         ),
     ),
 )

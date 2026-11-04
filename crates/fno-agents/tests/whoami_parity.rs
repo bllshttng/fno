@@ -2,13 +2,13 @@
 //! parity-oracle: fno.agent.cli.whoami_command
 //!
 //! Characterization for the whoami family, frozen against goldens captured
-//! from the Python render (`cli/src/fno/agent/cli.py`, deleted in the same
-//! change) through tests/whoami_driver.py before that leg died. The case
-//! table lives in the driver; this file asks it for the table (`--list`),
-//! the fixtures (`--fixture`), and, under FNO_CAPTURE_GOLDEN=1 only, the
-//! old leg's bytes (`--case`) so a re-capture asserts Rust==old at freeze
-//! time. The old leg is gone now, so capture mode refuses (a golden can
-//! only be captured while the oracle leg runs).
+//! from the Python leg (the `cli/src/fno/agent/cli.py` render, then the
+//! `whoami_leaves` group) through tests/whoami_driver.py before that leg
+//! died with the residue port. The case table lives in the driver; this
+//! file asks it for the table (`--list`) and the fixtures (`--fixture`),
+//! and runs the cases through the native binary itself. The oracle leg is
+//! gone, so capture mode refuses (a golden can only be captured while the
+//! oracle leg runs).
 //!
 //! Two folds apply on both sides of a comparison. The fixture root folds to
 //! `<FIXTURE>` in all its spellings (raw, canonicalized, macOS's /private
@@ -17,7 +17,7 @@
 //! is byte-exact, including the `False`/`True` gate values and the rc=4
 //! ambiguity refusal.
 
-use common::{assert_golden, capture_mode, Golden};
+use common::{assert_golden, Golden};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -175,40 +175,6 @@ fn whoami_matches_the_python_goldens() {
             exit,
             streams: vec![stdout, stderr],
         };
-        let oracle = if capture_mode() {
-            run_oracle(root, case)
-        } else {
-            None
-        };
-        if capture_mode() && oracle.is_none() {
-            continue;
-        }
-        assert_golden("whoami", &case.name, &rust, oracle);
+        assert_golden("whoami", &case.name, &rust, None);
     }
-}
-
-/// The old leg's bytes for one case, through the driver. None when the
-/// interpreter is absent (capture skips, never fails).
-fn run_oracle(root: &Path, case: &Case) -> Option<Golden> {
-    let interpreter = std::env::var("FNO_PYTHON").unwrap_or_else(|_| "python3".to_string());
-    let mut cmd = Command::new(interpreter);
-    cmd.arg(repo_root().join("crates/fno-agents/tests/whoami_driver.py"))
-        .args(["--case", &case.name])
-        .arg(root)
-        .env_clear();
-    cmd.env("HOME", root.join("fake_home"));
-    if let Some(path) = std::env::var_os("PATH") {
-        cmd.env("PATH", path);
-    }
-    for (k, v) in &case.env {
-        cmd.env(k, v);
-    }
-    let out = cmd.output().ok()?;
-    Some(Golden {
-        exit: out.status.code(),
-        streams: vec![
-            fold_malformed_reason(&normalize(&String::from_utf8_lossy(&out.stdout), root)),
-            fold_malformed_reason(&normalize(&String::from_utf8_lossy(&out.stderr), root)),
-        ],
-    })
 }

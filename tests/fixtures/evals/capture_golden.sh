@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Capture (and re-freeze) the evals goldens by driving the Python leaf.
+# Capture (and re-freeze) the evals goldens by driving the native dispatch.
 # Run from the repo root:
 #
 #   bash tests/fixtures/evals/capture_golden.sh
@@ -9,18 +9,18 @@
 # byte-identical (the FNO_CAPTURE_GOLDEN convention: new equals old before
 # anything freezes).
 #
-# Provenance: this capture runs the Python leg (cli/src/fno/evals/) through
-# the source tree (`uv run --project cli fno-py doctor evals ...`) BEFORE the
-# port deletes it, so the goldens carry the Python leaf's exact bytes. The
-# characterization test re-derives every fixture through the same leaf after
-# the port (the leaf forwards the native dispatch), so the frozen bytes pin
-# the leaf contract across the language move.
+# Provenance: the goldens froze the Python forwarding leaf's bytes BEFORE
+# the residue port deleted it, then re-froze through the fno-agents binary
+# when the capture went door-direct (the leaf inserted no flags, so only the
+# three graduate usage refusals changed - the typer usage lines became the
+# door's own). The characterization test re-derives every fixture through
+# the same binary, so the frozen bytes pin the dispatch contract.
 #
 # Determinism: the fixture base is FIXED, every fixture commit pins
 # author/committer dates, the fold cases read history rows stamped far in
 # the past (outside every stale window), and the fixture config.toml
 # points state, worktrees and history inside FIXBASE. Each golden masks the
-# fixture base as FIXTURE and the Python warnings site prefix as WARNING:.
+# fixture base as FIXTURE.
 set -euo pipefail
 
 ROOT="$(git rev-parse --show-toplevel)"
@@ -33,13 +33,18 @@ rm -rf "$FIXBASE"
 trap 'rm -rf "$FIXBASE"' EXIT
 mkdir -p "$GOLDENS" "$FIXBASE/state" "$FIXBASE/wtbase"
 
-# The deployed fno-agents binary answers the native doors the leaf calls
-# (evals-trend, evals-attempt, evals-macro). find_dev_binary needs a build in
-# THIS checkout, which the capture never performs, so the deployed binary is
-# the door that resolves.
+# The fno-agents binary IS the dispatch: the deleted Python leaf exec'd it
+# byte-verbatim, so the capture drives it directly. find_dev_binary needs a
+# build in THIS checkout, which the capture never performs, so the caller
+# pins the binary (the parity test passes CARGO_BIN_EXE_fno-agents; a local
+# re-freeze takes the dev build or the deployed binary).
 AGENTS_BIN="${FNO_CAPTURE_AGENTS_BIN:-$(command -v fno-agents || true)}"
+if [ -z "$AGENTS_BIN" ]; then
+  echo "capture_golden.sh: no fno-agents binary found; set FNO_CAPTURE_AGENTS_BIN" >&2
+  exit 2
+fi
 
-# The leaf, driven through the source tree. Hermetic: the fixture settings
+# The dispatch door, driven binary-direct. Hermetic: the fixture settings
 # file is the only config, state lands in FIXBASE, and the canonical config
 # never merges.
 fno_leaf() {
@@ -49,10 +54,8 @@ fno_leaf() {
       FNO_CONFIG="$FIXBASE/config.toml" \
       FNO_STATE_DIR="$FIXBASE/state" \
       FNO_NO_CANONICAL_CONFIG=1 \
-      FNO_AGENTS_BIN="${AGENTS_BIN:-/nonexistent-fno-agents}" \
-      PYTHONWARNINGS=always \
-      PYTHONHASHSEED=0 \
-      uv run --project "$ROOT/cli" fno-py doctor evals "$@" )
+      FNO_AGENTS_BIN="$AGENTS_BIN" \
+      "$AGENTS_BIN" evals "$@" )
 }
 
 # The shared byte mask: the fixture base, and every rfc3339 wall-clock
@@ -170,18 +173,14 @@ write_settings() {
 }
 write_settings
 
-# Warm the project venv before the first case: uv's first run creates the
-# environment and its bootstrap lines would otherwise land in a golden.
-uv run --project "$ROOT/cli" fno-py --help > /dev/null 2>&1 || true
-
-# Warm the fixture env too: the CLI's first-run path-migration line under a
-# fresh state dir would otherwise land in the first case's stderr.
+# Warm the fixture env once: the first case run creates FIXBASE subpaths the
+# fixture config names, and a cold mkdir would land in the first golden.
 ( cd "$ROOT" && env -u FNO_TASK_CONTEXT_FILE -u FNO_CLAIMS_ROOT -u FNO_EVENTS_PATH \
     -u FNO_HOME -u FNO_REPO_ROOT \
     FNO_CONFIG="$FIXBASE/config.toml" \
     FNO_STATE_DIR="$FIXBASE/state" \
     FNO_NO_CANONICAL_CONFIG=1 \
-    uv run --project "$ROOT/cli" fno-py doctor evals --help > /dev/null 2>&1 ) || true
+    "$AGENTS_BIN" evals --help > /dev/null 2>&1 ) || true
 
 ## ── run: refusals ─────────────────────────────────────────────────────────
 

@@ -883,20 +883,33 @@ describe("opencode hooks.json host", () => {
     rmSync(dir, { recursive: true, force: true })
   })
 
-  test("FOREIGN_SESSION_MARKERS covers harness_identity.py's marker tables", () => {
-    const py = readFileSync(
-      join(import.meta.dir, "..", "..", "src", "fno", "harness_identity.py"),
+  test("FOREIGN_SESSION_MARKERS covers claims.rs's marker tables", () => {
+    const rs = readFileSync(
+      join(import.meta.dir, "..", "..", "..", "crates", "fno-agents", "src", "claims.rs"),
       "utf8",
     )
-    // The marker tables themselves (HARNESS_SESSION_MARKERS,
-    // LEGACY_HARNESS_SESSION_MARKERS, SELF_SET_HARNESS_MARKERS) plus the
-    // extra identity table further down; TARGET_SESSION_ID stays out (fno's
-    // own plumbing, legitimately inherited by a launched worker).
-    const tables = py.split("\n").slice(116, 191).join("\n")
+    // The marker tables (HARNESS_SESSION_MARKERS, LEGACY_HARNESS_SESSION_MARKERS)
+    // plus the family table (AMBIENT_IDENTITY_FAMILIES) in claims.rs, and the
+    // identity_markers table in ambient_vocab.toml; TARGET_SESSION_ID stays
+    // out (fno's own plumbing, legitimately inherited by a launched worker).
+    const vocab = readFileSync(
+      join(import.meta.dir, "..", "..", "..", "crates", "fno-agents", "src", "ambient_vocab.toml"),
+      "utf8",
+    )
+    const markerSection = vocab.match(/^identity_markers = \[\n([\s\S]*?)\]/m)
     const names = new Set()
-    for (const m of tables.matchAll(/\("([A-Z_]+)", "[a-z]+"\)/g)) names.add(m[1])
+    for (const m of rs.matchAll(/\("([A-Z_]+)", "[a-z]+"\)/g)) names.add(m[1])
+    if (markerSection) {
+      for (const m of markerSection[1].matchAll(/"([A-Z][A-Z0-9_]+)"/g)) names.add(m[1])
+    }
     names.delete("OPENCODE_SESSION_ID")
     names.delete("TARGET_SESSION_ID")
+    // The vocab table's fno-plumbing names are scrub targets at the spawn
+    // boundary, not foreign harness markers; they were never plugin-scrubbed.
+    names.delete("FNO_HARNESS_NAME")
+    names.delete("FNO_HARNESS_SESSION_ID")
+    names.delete("FNO_AGENT_SUBSTRATE")
+    names.delete("FNO_NODE_REASON")
     expect(names.size).toBeGreaterThan(4)
     for (const name of names) {
       expect(FOREIGN_SESSION_MARKERS).toContain(name)

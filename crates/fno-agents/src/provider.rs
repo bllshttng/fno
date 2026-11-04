@@ -1938,9 +1938,9 @@ impl Provider for GrokProvider {
 }
 
 /// The COMPLETE harness roster: every harness footnote supports, dispatch or
-/// not. This is the one list - Python's `fno.harness_names` proxies
-/// it through the [`crate::harness_roster`] command instead of carrying a tuple
-/// copy, and `scripts/ci/check-harness-roster-parity.py` holds every evidence
+/// not. This is the one list - the [`crate::harness_roster`] command serves
+/// it to every reader instead of carrying a tuple copy, and
+/// `scripts/ci/check-harness-roster-parity.py` holds every evidence
 /// surface (setup docs, `for_name` arms, adapter rows) as a subset of it. A
 /// name may sit here without a [`for_name`] arm (hermes, openclaw: docs-only
 /// hosts); every [`KNOWN_PROVIDERS`] name MUST be here (test-enforced).
