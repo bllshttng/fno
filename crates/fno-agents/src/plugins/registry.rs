@@ -17,7 +17,6 @@ use crate::roles::models::{
     self, format_instant, lax_bool, object, only_fields, parse_instant, required_str, Instant,
 };
 use serde_json::{json, Value};
-use std::fs::File;
 use std::path::{Path, PathBuf};
 
 /// The registry is present but cannot be trusted. It never reads as empty:
@@ -319,7 +318,7 @@ pub struct Store {
 }
 
 /// The held flock; dropping the file releases it.
-pub struct Held(#[allow(dead_code)] File);
+pub struct Held(#[allow(dead_code)] crate::chokepoint::Held);
 
 impl Store {
     pub fn at_root(root: &Path) -> Store {
@@ -338,13 +337,11 @@ impl Store {
         }
         let mut lock_path = self.path.clone().into_os_string();
         lock_path.push(".lock");
-        let file = std::fs::OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .write(true)
-            .open(PathBuf::from(lock_path))?;
-        file.lock()?;
-        Ok(Held(file))
+        let held = crate::chokepoint::take(
+            &crate::chokepoint::PLUGIN_REGISTRY,
+            &PathBuf::from(lock_path),
+        )?;
+        Ok(Held(held))
     }
 
     /// A missing file is a fresh install; a present but unreadable,

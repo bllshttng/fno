@@ -12,11 +12,12 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-/// The ledger the flow aggregate reads. Under test the proto root is not
-/// compiled, so point at a path that reads as absent: no ledger, no rows.
+/// The ledger the flow aggregate reads, through the layout row. Under test
+/// the proto root is not compiled, so point at a path that reads as absent:
+/// no ledger, no rows.
 #[cfg(not(test))]
 fn ledger_path() -> PathBuf {
-    crate::proto::mux_sidecar_root().join("ledger.json")
+    crate::state_layout::place(&crate::proto::mux_sidecar_root(), "ledger.json")
 }
 
 #[cfg(test)]
@@ -1395,10 +1396,14 @@ pub fn node(inp: &Inputs, id: &str) -> Option<NodeView> {
                     .find(|a| a.harness_session_id.as_deref() == Some(sid))
             });
             let (action, reason, command) = session_reach(joined, sid, node_cwd.as_deref());
-            let model = s
-                .get("observed_model")
-                .and_then(|m| m.get("model"))
-                .and_then(Value::as_str)
+            // The live seat's model answers first: it is what runs now.
+            let model = joined
+                .and_then(|a| a.model.as_deref())
+                .or_else(|| {
+                    s.get("observed_model")
+                        .and_then(|m| m.get("model"))
+                        .and_then(Value::as_str)
+                })
                 .or_else(|| s.get("model").and_then(Value::as_str))
                 .map(str::to_string);
             SessionView {

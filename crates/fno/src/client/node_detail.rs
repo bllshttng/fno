@@ -10,9 +10,9 @@
 //! reason, never a stale launch.
 
 use super::backlog_board::{rule, BoardView};
-use super::backlog_style::{BLine, BRole, BSeg};
 use super::*;
 use crate::backlog_model::{session_action, SessionAction};
+use crate::text_style::{TLine, TSeg, TextStyle};
 
 pub(crate) fn resolve_session(
     view: &View,
@@ -88,8 +88,120 @@ pub(crate) async fn press_session(
     }
     Ok(())
 }
+
+/// A session row no registry row joins: the detail offers its revive.
+fn revivable(s: &crate::backlog_model::SessionView) -> bool {
+    s.action == "none" && s.agent.is_none() && s.session_id.is_some()
+}
+
+/// A dead session the registry lacks: adopt writes its row, then a portal
+/// reach runs the server's re-entry plan (respawn or a background resume,
+/// then attach). Never a foreground resume pane.
+async fn revive(
+    view: &mut View,
+    sid: &str,
+    sock: &mut (impl tokio::io::AsyncWrite + Unpin),
+) -> Result<(), String> {
+    let args = ["adopt".to_string(), sid.to_string()];
+    let bin = crate::digest_overlay::fno_agents_bin();
+    let (ok, name) = crate::backlog_write::run_command_in(bin, &args, None).await;
+    if !ok {
+        view.set_notice(format!("revive refused: {name}"));
+        return Ok(());
+    }
+    view.backlog_board = None;
+    view.org_board = None;
+    view.region_owner = super::region_focus::RegionOwner::Pane;
+    super::backlog_board::set_sideline_view(view, crate::view_store::SidelineView::Agents);
+    let placement = crate::proto::PanePlacement {
+        portal: Some(0),
+        ..crate::proto::PanePlacement::default()
+    };
+    let cmd = crate::proto::Command::AttachAgent {
+        id: name.clone(),
+        placement,
+    };
+    write_msg(sock, &ClientMsg::Command(cmd))
+        .await
+        .map_err(|e| format!("revive send failed: {e}"))?;
+    view.set_notice(format!("reviving {name}"));
+    Ok(())
+}
 #[path = "backlog_md.rs"]
 pub(crate) mod backlog_md;
+
+thread_local! {
+    /// The open detail's session rows the last compose painted: (screen row,
+    /// session index). A click reads them; the client holds one view.
+    static SESSION_ROWS: std::cell::RefCell<Vec<(usize, usize)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Park where the painted session rows sit. `lines` is the scrolled window
+/// painted from `top` for `h` rows, or `None` when no detail is open. The
+/// painter shifts a long window up to keep `follow` in view; the rows shift
+/// with it.
+pub(crate) fn record_session_rows(
+    lines: Option<&[TLine]>,
+    follow: Option<usize>,
+    (top, h): (usize, usize),
+) {
+    let at = lines.and_then(|lines| {
+        let shift = match follow {
+            Some(f) if lines.len() > h && h > 0 => f.saturating_sub(h - 1).min(lines.len() - h),
+            _ => 0,
+        };
+        let head = lines.iter().position(|l| l.text == "sessions")?;
+        // The head, its rule and the column header come before the rows.
+        let first = head + 3;
+        let rows = lines
+            .get(first..)?
+            .iter()
+            .take_while(|l| l.text.starts_with("  "));
+        Some(
+            rows.enumerate()
+                .filter(|(j, _)| first + j >= shift)
+                .map(|(j, _)| (top + first + j - shift, j))
+                .filter(|(row, _)| *row < top + h)
+                .collect::<Vec<_>>(),
+        )
+    });
+    SESSION_ROWS.with(|r| *r.borrow_mut() = at.unwrap_or_default());
+}
+
+/// A click on a painted session row: select it and open it, as Enter does.
+pub(crate) async fn click_session(
+    view: &mut View,
+    row: u16,
+    sock_w: &mut (impl tokio::io::AsyncWrite + Unpin),
+) -> Result<bool, String> {
+    let hit = SESSION_ROWS.with(|r| {
+        let rows = r.borrow();
+        rows.iter()
+            .find(|(at, _)| *at == row as usize)
+            .map(|(_, j)| *j)
+    });
+    let Some(j) = hit else {
+        return Ok(false);
+    };
+    let Some(b) = view.backlog_board.as_mut().filter(|b| b.review.is_none()) else {
+        return Ok(false);
+    };
+    let at = b
+        .detail
+        .as_ref()
+        .zip(b.inputs.as_ref())
+        .and_then(|(o, inputs)| {
+            let nv = crate::backlog_model::node(inputs, &o.node_id)?;
+            sel_list(&nv).iter().position(|s| *s == Sel::Session(j))
+        });
+    let (Some(at), Some(o)) = (at, b.detail.as_mut()) else {
+        return Ok(false);
+    };
+    o.sel = at;
+    activate(view, sock_w).await?;
+    Ok(true)
+}
 /// One selectable row of the drill-down: a link to another node, or a
 /// session row.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -187,14 +299,14 @@ pub(crate) fn pane_lines(
     node_id: &str,
     sel_arg: Option<usize>,
     w: usize,
-) -> (Vec<BLine>, Option<usize>) {
-    let mut lines: Vec<BLine> = Vec::new();
+) -> (Vec<TLine>, Option<usize>) {
+    let mut lines: Vec<TLine> = Vec::new();
     let Some(inputs) = b.inputs.as_ref() else {
-        return (vec![BLine::meta("reading board...")], None);
+        return (vec![TLine::meta("reading board...")], None);
     };
     let Some(view) = crate::backlog_model::node(inputs, node_id) else {
         return (
-            vec![BLine::meta(format!("no node {node_id} in the board read"))],
+            vec![TLine::meta(format!("no node {node_id} in the board read"))],
             None,
         );
     };
@@ -209,18 +321,18 @@ pub(crate) fn pane_lines(
     // Title: the id (accent), the title (bold), and the status/priority pill.
     let status = view.card.status.clone().unwrap_or_else(|| "none".into());
     let prio = view.card.priority.clone().unwrap_or_else(|| "none".into());
-    let title = BLine::of(&[
-        BSeg {
+    let title = TLine::of(&[
+        TSeg {
             text: view.card.id.clone(),
-            role: BRole::Label,
+            role: TextStyle::Badge,
         },
-        BSeg {
+        TSeg {
             text: format!("  {}", view.card.title),
-            role: BRole::Head,
+            role: TextStyle::Title,
         },
-        BSeg {
+        TSeg {
             text: format!("  [{} {}]", status, prio),
-            role: BRole::Pill,
+            role: TextStyle::Badge,
         },
     ]);
     lines.push(title);
@@ -229,7 +341,7 @@ pub(crate) fn pane_lines(
         Some(lead) => format!("{} (L{})", lead.name, lead.level),
         None => "none".into(),
     };
-    lines.push(BLine::meta(format!(
+    lines.push(TLine::meta(format!(
         "{} \u{b7} {} \u{b7} {} \u{b7} {} \u{b7} {} \u{b7} lead: {}",
         status,
         view.card.project.as_deref().unwrap_or("none"),
@@ -238,18 +350,18 @@ pub(crate) fn pane_lines(
         view.difficulty.as_deref().unwrap_or("none"),
         lead
     )));
-    lines.push(BLine::plain(String::new()));
+    lines.push(TLine::plain(String::new()));
     // Field lines: the label dim (the accent-dim slot is the id's, so a
     // field label reads as the meta rank) and the value plain.
     let field = |label: &str, value: String| {
-        BLine::of(&[
-            BSeg {
+        TLine::of(&[
+            TSeg {
                 text: format!("{label}:"),
-                role: BRole::Meta,
+                role: TextStyle::Meta,
             },
-            BSeg {
+            TSeg {
                 text: format!(" {}", value),
-                role: BRole::Body,
+                role: TextStyle::Item,
             },
         ])
     };
@@ -277,9 +389,9 @@ pub(crate) fn pane_lines(
         view.cwd.clone().unwrap_or_else(|| "none".into()),
     ));
     for f in &view.unavailable {
-        lines.push(BLine::meta(format!("{}: {}", f.feature, f.reason)));
+        lines.push(TLine::meta(format!("{}: {}", f.feature, f.reason)));
     }
-    lines.push(BLine::plain(String::new()));
+    lines.push(TLine::plain(String::new()));
 
     // Links section: the parent first, then one row per id under each bold
     // heading, selectable.
@@ -297,8 +409,8 @@ pub(crate) fn pane_lines(
             continue;
         }
         any_links = true;
-        lines.push(BLine::head(format!("{name} ({}):", group.len())));
-        lines.push(BLine::meta(rule(w)));
+        lines.push(TLine::head(format!("{name} ({}):", group.len())));
+        lines.push(TLine::meta(rule(w)));
         for l in group.iter() {
             let marker = if k == sel {
                 follow = Some(lines.len());
@@ -310,26 +422,26 @@ pub(crate) fn pane_lines(
             };
             let col = l.column.clone().unwrap_or_default();
             let title = l.title.clone().unwrap_or_default();
-            lines.push(BLine::of(&[
-                BSeg {
+            lines.push(TLine::of(&[
+                TSeg {
                     text: format!("{marker} "),
-                    role: BRole::Body,
+                    role: TextStyle::Item,
                 },
-                BSeg {
+                TSeg {
                     text: l.id.clone(),
-                    role: BRole::Label,
+                    role: TextStyle::Badge,
                 },
-                BSeg {
+                TSeg {
                     text: format!(" {} {}", col, title),
-                    role: BRole::Body,
+                    role: TextStyle::Item,
                 },
             ]));
         }
     }
     if !any_links {
-        lines.push(BLine::head("links"));
-        lines.push(BLine::meta(rule(w)));
-        lines.push(BLine::meta("none"));
+        lines.push(TLine::head("links"));
+        lines.push(TLine::meta(rule(w)));
+        lines.push(TLine::meta("none"));
     }
     if !view.prs.is_empty() {
         let pr: Vec<String> = view
@@ -340,57 +452,73 @@ pub(crate) fn pane_lines(
                 None => format!("#{}", p.number),
             })
             .collect();
-        lines.push(BLine::of(&[
-            BSeg {
+        lines.push(TLine::of(&[
+            TSeg {
                 text: "prs:".into(),
-                role: BRole::Meta,
+                role: TextStyle::Meta,
             },
-            BSeg {
+            TSeg {
                 text: format!(" {}", pr.join(", ")),
-                role: BRole::Body,
+                role: TextStyle::Item,
             },
         ]));
     }
-    lines.push(BLine::plain(String::new()));
+    lines.push(TLine::plain(String::new()));
 
-    // Session section: bold header + thin rule, then the phase table.
-    lines.push(BLine::head("sessions"));
-    lines.push(BLine::meta(rule(w)));
-    lines.push(BLine::meta(format!(
-        "{:<9} {:<7} {:<9} {}",
-        "phase", "harness", "model", "action"
-    )));
+    // Session section: bold header + thin rule, then one row per session,
+    // cut to one screen row so a click maps to it. Enter or a click opens
+    // the row; a dead row revives in place.
+    lines.push(TLine::head("sessions"));
+    lines.push(TLine::meta(rule(w)));
+    lines.push(
+        TLine::meta(format!(
+            "  {:<8} {:<14} {:<10} {:<16} {:<11} {}",
+            "phase", "model", "machine", "name", "started", "action"
+        ))
+        .trunc(w),
+    );
+    // Only a session the local roster joins has a known machine: this one.
+    let here = crate::agents_view::hostname();
+    let here = here.split('.').next().unwrap_or("-").to_string();
     for s in view.sessions.iter() {
-        let marker = if k == sel {
+        if k == sel {
             follow = Some(lines.len());
-            k += 1;
-            " "
-        } else {
-            k += 1;
-            " "
-        };
+        }
+        k += 1;
+        // A session the registry lacks revives through adopt, then a reach.
         let action = match s.action.as_str() {
+            _ if revivable(s) => "revive".to_string(),
             "none" => s.reason.clone().unwrap_or_else(|| "none".into()),
             other => other.to_string(),
         };
-        lines.push(BLine::plain(format!(
-            "{marker} {:<8} {:<7} {:<9} {}",
-            s.phase.as_deref().unwrap_or("-"),
-            s.harness.as_deref().unwrap_or("-"),
-            s.model.as_deref().unwrap_or("-"),
-            action
-        )));
-        if let Some(sid) = s.session_id.as_deref() {
-            lines.push(BLine::meta(sid.to_string()));
-        }
-        if let Some(cmd) = s.command.as_deref() {
-            lines.push(BLine::meta(format!("$ {cmd}")));
-        }
+        let cut = |text: Option<&str>, n: usize| -> String {
+            text.unwrap_or("-").chars().take(n).collect()
+        };
+        let model = s.model.as_deref();
+        let machine = s.agent.as_ref().map(|_| here.as_str());
+        let name = s.agent.as_deref().or(s.session_id.as_deref());
+        // `2026-11-02T14:19:00Z` reads `11-02 14:19`.
+        let started = s
+            .started_at
+            .as_deref()
+            .and_then(|t| Some(format!("{} {}", t.get(5..10)?, t.get(11..16)?)));
+        lines.push(
+            TLine::plain(format!(
+                "  {:<8} {:<14} {:<10} {:<16} {:<11} {}",
+                cut(s.phase.as_deref(), 8),
+                cut(model, 14),
+                cut(machine, 10),
+                cut(name, 16),
+                started.as_deref().unwrap_or("-"),
+                action
+            ))
+            .trunc(w),
+        );
     }
     if view.sessions.is_empty() {
-        lines.push(BLine::meta("sessions: none"));
+        lines.push(TLine::meta("sessions: none"));
     }
-    lines.push(BLine::plain(String::new()));
+    lines.push(TLine::plain(String::new()));
 
     // The comment thread: bold header + thin rule, oldest first, replies
     // indented under their heads; the ask state rides as a mark. Note-kind
@@ -415,13 +543,13 @@ pub(crate) fn pane_lines(
         .iter()
         .filter(|n| n.state.as_deref() == Some("open"))
         .count();
-    lines.push(BLine::head(format!(
+    lines.push(TLine::head(format!(
         "comments ({}, {} open) \u{b7} decisions ({})",
         thread.len(),
         open,
         view.decisions.len()
     )));
-    lines.push(BLine::meta(rule(w)));
+    lines.push(TLine::meta(rule(w)));
     for note in &thread {
         let mark = match note.state.as_deref() {
             Some("open") => "\u{25cb}",
@@ -441,7 +569,7 @@ pub(crate) fn pane_lines(
         if let Some(refer) = &note.state_ref {
             row.push_str(&format!(" \u{b7} {refer}"));
         }
-        lines.push(BLine::plain(row));
+        lines.push(TLine::plain(row));
         // Who wrote it, shown in the thread and copyable.
         let mut who: Vec<String> = Vec::new();
         if let Some(name) = &note.agent_name {
@@ -457,17 +585,17 @@ pub(crate) fn pane_lines(
             who.push(format!("on {working}"));
         }
         if !who.is_empty() {
-            lines.push(BLine::plain(format!(
+            lines.push(TLine::plain(format!(
                 "{indent}      \u{b7} {}",
                 who.join(" \u{b7} ")
             )));
         }
     }
-    lines.push(BLine::plain(String::new()));
+    lines.push(TLine::plain(String::new()));
     // Document section: the node's markdown plan when readable, else its
     // details text.
-    lines.push(BLine::head("document"));
-    lines.push(BLine::meta(rule(w)));
+    lines.push(TLine::head("document"));
+    lines.push(TLine::meta(rule(w)));
     let doc = b.doc.as_ref().filter(|d| d.node_id == node_id);
     match (&view.plan_path, doc) {
         (Some(path), Some(d)) if d.error.is_empty() => {
@@ -478,7 +606,7 @@ pub(crate) fn pane_lines(
                 .map(|d| d.error.clone())
                 .filter(|e| !e.is_empty())
                 .unwrap_or_else(|| "still loading".into());
-            lines.push(BLine::meta(format!("plan: {path} (unreadable: {reason})")));
+            lines.push(TLine::meta(format!("plan: {path} (unreadable: {reason})")));
             render_details(&view, w, &mut lines);
         }
         (None, _) => render_details(&view, w, &mut lines),
@@ -497,17 +625,17 @@ pub(crate) fn pane_lines(
 }
 
 /// The details text wrapped as plain lines, or `details: none`.
-fn render_details(view: &crate::backlog_model::NodeView, w: usize, out: &mut Vec<BLine>) {
+fn render_details(view: &crate::backlog_model::NodeView, w: usize, out: &mut Vec<TLine>) {
     let text = view.details.as_ref().and_then(|d| d.as_str()).unwrap_or("");
     if text.trim().is_empty() {
-        out.push(BLine::meta("details: none"));
+        out.push(TLine::meta("details: none"));
         return;
     }
     let mut wrapped: Vec<String> = Vec::new();
     for para in text.split('\n') {
         wrap_line(para, w, &mut wrapped);
     }
-    out.extend(wrapped.into_iter().map(BLine::plain));
+    out.extend(wrapped.into_iter().map(TLine::plain));
 }
 
 /// Word-wrap one paragraph into lines of at most `w` display columns on
@@ -580,7 +708,8 @@ fn note_age(ts: &Option<String>) -> String {
 /// drills in, a session launches through the hit cascade, a dim row
 /// answers with its reason), `b` plans, `t` launches the node as a target
 /// through the prefilled launcher, and `A` asks the lead (the board's own
-/// sends). `c` posts a user comment on the node's thread.
+/// sends). `c` posts a user comment on the node's thread, and `d` opens the
+/// review of the node's PR diff.
 pub(crate) async fn detail_keys(
     view: &mut View,
     bytes: &[u8],
@@ -636,6 +765,7 @@ pub(crate) async fn detail_keys(
             ModalKey::Byte(b'y') => copy_sel(view, false),
             ModalKey::Byte(b'Y') => copy_sel(view, true),
             ModalKey::Byte(b'c') => backlog_board::begin_comment(view),
+            ModalKey::Byte(b'd') => backlog_board::pr_review::open_from_detail(view),
             ModalKey::Byte(b'?') => {
                 if let Some(b) = view.backlog_board.as_mut() {
                     b.keys_overlay = !b.keys_overlay;
@@ -755,6 +885,10 @@ async fn activate(
             let Some(s) = nv.sessions.get(*i) else {
                 return Ok(());
             };
+            // Only a detail row revives: a dead session the registry lacks.
+            if let (true, Some(sid)) = (revivable(s), s.session_id.as_deref()) {
+                return revive(view, sid, sock_w).await;
+            }
             press_session(
                 view,
                 s.session_id.as_deref(),

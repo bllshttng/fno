@@ -8,6 +8,7 @@ use crate::authorized_merge::{
     node_carries_tag, pr_bound_entry, Blocker, PrFacts, ProbeOutcome, Probes, MAIN_REPAIR_TAG,
 };
 use crate::loopcheck::coverage_gate::{refusal_line, GateState};
+use crate::visual_screen;
 use serde_json::Value;
 use std::collections::BTreeSet;
 use std::io::Write;
@@ -576,6 +577,62 @@ fn overlaps(base_paths: &[String], pr_paths: &[String]) -> Vec<String> {
     base.intersection(&pr).map(|p| (*p).to_string()).collect()
 }
 
+/// True when every changed line of a Rust file's patch is a `//` comment or
+/// blank. Any other file type, or an empty patch (binary, oversized), reads
+/// false: only a positive reading releases the hold. A line inside a
+/// multi-line string literal that starts with `//` would read as a comment;
+/// no paint file holds one.
+fn patch_is_comment_only(file: &str, patch: &str) -> bool {
+    if !file.ends_with(".rs") || patch.is_empty() {
+        return false;
+    }
+    let mut changed = false;
+    for line in patch.lines() {
+        let Some(body) = line
+            .strip_prefix('+')
+            .or_else(|| line.strip_prefix('-'))
+            .filter(|_| !line.starts_with("+++") && !line.starts_with("---"))
+        else {
+            continue;
+        };
+        let body = body.trim();
+        if body.is_empty() {
+            continue;
+        }
+        if !body.starts_with("//") {
+            return false;
+        }
+        changed = true;
+    }
+    changed
+}
+
+/// Whether every touched paint file changed by comment lines only. A rename
+/// or an unreadable patch list reads false, so the hold stays.
+fn comment_only_on<P: Probes>(probes: &P, cwd: &Path, pr: u64, touched: &[&str]) -> bool {
+    let args = vec![
+        "api".to_string(),
+        format!("repos/{{owner}}/{{repo}}/pulls/{pr}/files"),
+        "--paginate".to_string(),
+        "--jq".to_string(),
+        ".[] | {f: .filename, s: .status, p: (.patch // \"\")} | @json".to_string(),
+    ];
+    let Ok((true, stdout)) = probes.run_gh(cwd, &args) else {
+        return false;
+    };
+    let rows: Vec<Value> = stdout
+        .lines()
+        .filter_map(|l| serde_json::from_str(l).ok())
+        .collect();
+    touched.iter().all(|path| {
+        rows.iter().any(|row| {
+            row["f"].as_str() == Some(path)
+                && row["s"].as_str() == Some("modified")
+                && patch_is_comment_only(path, row["p"].as_str().unwrap_or(""))
+        })
+    })
+}
+
 /// The visual-approval gate: a PR whose changed files touch a configured
 /// paint path holds until an ANSWERED question page names the PR, or a
 /// role-recorded decision row transcribes the user's chat or board approval
@@ -613,6 +670,16 @@ pub(crate) fn visual_approval_blocker<P: Probes>(
     if touched.is_empty() {
         return None;
     }
+    // Comments and code names cannot move a pixel, so a look would judge
+    // nothing. The code diff alone clears the gate: no shots, no ruling, no
+    // question. Every unreadable patch keeps the hold.
+    if comment_only_on(probes, cwd, pr, &touched)
+        || touched.iter().all(|f| {
+            paint_patch(probes, cwd, pr, f).is_some_and(|p| visual_screen::names_only_patch(&p))
+        })
+    {
+        return None;
+    }
     // Ruling: a declared main-repair node IS the red-main fix; its lane
     // already merges through red, so the look holds nothing. Fail toward
     // holding: only a positive tag on the bound node exempts.
@@ -632,6 +699,7 @@ pub(crate) fn visual_approval_blocker<P: Probes>(
         || node_id
             .as_deref()
             .is_some_and(|node| role_chat_clears_pr(probes, cwd, pr, head, node))
+        || law_chat_clears_pr(probes, cwd, pr, head)
         || approval_carries(
             probes,
             cwd,
@@ -665,6 +733,16 @@ pub(crate) fn visual_approval_blocker<P: Probes>(
          records the approval. Pass each shot with --image.",
         touched.join(", ")
     );
+    if touched.iter().any(|f| is_public_copy(f)) {
+        detail.push_str(
+            "; this PR changes public copy (README or docs/images). Before the page \
+             reaches the user, brief a fresh subagent as the target developer, told \
+             nothing else, and have it answer in writing: what does this show, would \
+             it make you install fno, and what number or claim here hurts. Put the \
+             answer on the question page. A 'hurts' answer sends the change back \
+             before the user sees it",
+        );
+    }
     match (node_id.as_deref(), shots.as_slice()) {
         (Some(node), []) => detail.push_str(&format!(
             "; no shots at internal/fno/mux/{node}-*.png: capture them first, then \
@@ -675,21 +753,68 @@ pub(crate) fn visual_approval_blocker<P: Probes>(
              page has no shots key: bind the node, then re-read status",
         ),
         (Some(node), shots) => {
-            let short = head.chars().take(8).collect::<String>();
             let mux = crate::escalation::vault_dir_with_home(&root, home.as_deref(), "mux");
-            let shots: Vec<PathBuf> = shots.iter().map(|s| mux.join(s)).collect();
-            detail.push_str(&file_visual_question(
-                &root,
-                pr,
-                head,
-                &short,
-                node,
-                &touched.join(", "),
-                &shots,
-            ));
+            let doc = std::fs::read_to_string(root.join("docs/architecture/mux-design-system.md"))
+                .unwrap_or_default();
+            let headings = visual_screen::rule_headings(&doc);
+            let remedy = format!(
+                "run `fno-agents visual critique-prep {node}`, then the `design-critic` skill on \
+                 {node}-critique.json, fix every high finding, and re-read status at the new head"
+            );
+            match visual_screen::read_critique(&mux, node, head, &headings) {
+                visual_screen::CritiqueRead::Missing => detail.push_str(&format!(
+                    "; no design critique at this head, so the gate files no page: {remedy}"
+                )),
+                visual_screen::CritiqueRead::Unfilled(why) => detail.push_str(&format!(
+                    "; the design critique is not usable ({why}), so the gate files no page: {remedy}"
+                )),
+                visual_screen::CritiqueRead::High(high) => detail.push_str(&format!(
+                    "; the design critic left {} high finding(s), so the gate files no page: {}; fix \
+                     each, then {remedy}",
+                    high.len(),
+                    high.join("; ")
+                )),
+                visual_screen::CritiqueRead::Ready(c) => {
+                    let mut images: Vec<PathBuf> = shots.iter().map(|s| mux.join(s)).collect();
+                    images.extend(c.views.iter().filter_map(|v| v.boxed.as_ref()).map(|b| mux.join(b)));
+                    detail.push_str(&file_visual_question(
+                        &root,
+                        pr,
+                        head,
+                        node,
+                        &touched.join(", "),
+                        &visual_screen::critique_summary(&c),
+                        &images,
+                    ));
+                }
+            }
         }
     }
     Some(Blocker::held("visual_approval", detail))
+}
+
+/// The unified-diff patch GitHub holds for one changed file of the PR.
+/// `None` when the read fails or GitHub sent no patch (binary, too large).
+fn paint_patch<P: Probes>(probes: &P, cwd: &Path, pr: u64, file: &str) -> Option<String> {
+    let filter = format!(".[] | select(.filename == \"{file}\") | .patch // empty");
+    let args: Vec<String> = [
+        "api",
+        &format!("repos/{{owner}}/{{repo}}/pulls/{pr}/files"),
+        "--paginate",
+        "--jq",
+        &filter,
+    ]
+    .iter()
+    .map(|s| (*s).to_string())
+    .collect();
+    let (ok, out) = probes.run_gh(cwd, &args).ok()?;
+    (ok && !out.trim().is_empty()).then_some(out)
+}
+
+/// The public front page a reader meets before any install: the README and
+/// its images. Landing copy lives in the docs tree and takes the same path.
+fn is_public_copy(path: &str) -> bool {
+    path == "README.md" || path.starts_with("docs/images/")
 }
 
 /// How many earlier commits of the PR the carry walks, newest first.
@@ -731,12 +856,13 @@ fn approval_carries<P: Probes>(
         node.map(|n| role_approval_texts(probes, cwd, pr, n))
             .unwrap_or_default(),
     );
+    texts.extend(law_approval_texts(probes, cwd, pr));
     let Some(approved) = commits
         .iter()
         .rev()
         .filter(|sha| sha.as_str() != head)
         .take(CARRY_WALK)
-        .find(|sha| texts.iter().any(|text| text.contains(sha.as_str())))
+        .find(|sha| texts.iter().any(|text| text_names_head(text, sha)))
     else {
         return false;
     };
@@ -784,7 +910,7 @@ fn adds_no_paint_surface(was: &BTreeSet<String>, now: &BTreeSet<String>) -> bool
 fn declined_after(declines: &[String], newer: &[&str]) -> bool {
     declines
         .iter()
-        .any(|text| newer.iter().any(|sha| text.contains(sha)))
+        .any(|text| newer.iter().any(|sha| text_names_head(text, sha)))
 }
 
 /// The paint files the PR's three-dot compare against the base changes at
@@ -838,7 +964,7 @@ fn vault_root(cwd: &Path) -> PathBuf {
 /// The mux captures for one node's PR: `internal/<project>/mux/<node>-*.png`
 /// top level, plus files inside a `<node>-shots/` folder, as vault-relative
 /// embed names. Sorted, so the embedded list is stable.
-fn mux_shots(root: &Path, home: Option<&Path>, node: &str) -> Vec<String> {
+pub(crate) fn mux_shots(root: &Path, home: Option<&Path>, node: &str) -> Vec<String> {
     let dir = crate::escalation::vault_dir_with_home(root, home, "mux");
     let Ok(read) = std::fs::read_dir(&dir) else {
         return Vec::new();
@@ -890,13 +1016,31 @@ fn visual_page_filed(root: &Path, pr: u64, head: &str) -> bool {
 /// class word, and prose after it reads as no class, refusing the very
 /// page this gate files. The shots ride `--image`, so
 /// the page shows them under its Screens heading.
-fn visual_question_markdown(pr: u64, head: &str, short: &str, node: &str, files: &str) -> String {
+fn visual_question_markdown(
+    pr: u64,
+    head: &str,
+    short: &str,
+    node: &str,
+    files: &str,
+    summary: &str,
+) -> String {
+    let changed = if summary.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "## What the critic checked and left\n\
+             The design critic read the main and PR shots against the mux design system. \
+             A red box frames each changed region under Screens.\n\
+             {summary}\n\n"
+        )
+    };
     format!(
         "---\n\
          recommend: 1\n\
          why_user: taste\n\
          ---\n\n\
          May PR {pr} merge as painted? ({node} at {short})\n\n\
+         {changed}\
          ## Blocked because\n\
          The visual-approval gate holds PR {pr} at head {head}: its diff touches the \
          paint surface the config lists ({files}). The user's look is the only clear.\n\n\
@@ -933,11 +1077,12 @@ fn file_visual_question(
     root: &Path,
     pr: u64,
     head: &str,
-    short: &str,
     node: &str,
     files: &str,
+    summary: &str,
     shots: &[PathBuf],
 ) -> String {
+    let short = head.chars().take(8).collect::<String>();
     if visual_page_filed(root, pr, head) {
         return format!("; the question page for PR {pr} at {short} is already filed");
     }
@@ -945,7 +1090,7 @@ fn file_visual_question(
         "fno-visual-ask-{pr}-{short}-{}.md",
         std::process::id()
     ));
-    let markdown = visual_question_markdown(pr, head, short, node, files);
+    let markdown = visual_question_markdown(pr, head, &short, node, files, summary);
     if let Err(e) = std::fs::write(&path, markdown) {
         return format!("; the question could not be staged: {e}");
     }
@@ -1172,33 +1317,80 @@ pub(crate) fn role_chat_clears_pr<P: Probes>(
     !head.is_empty()
         && role_approval_texts(probes, cwd, pr, node)
             .iter()
-            .any(|text| text.contains(head))
+            .any(|text| text_names_head(text, head))
+}
+
+/// One `fno backlog decisions ... --json` read; None when the read fails.
+fn decisions_payload<P: Probes>(probes: &P, cwd: &Path, args: &[&str]) -> Option<Value> {
+    let args: Vec<String> = args.iter().map(|s| (*s).to_string()).collect();
+    let Some((Some(0), out, _)) = probes.fno_shell(cwd, &args).ok() else {
+        return None;
+    };
+    serde_json::from_slice::<Value>(&out).ok()
+}
+
+/// The text names the head: the full sha, or a hex token of at least ten
+/// characters that begins it. A question card abbreviates the head it asks
+/// about, and the user's answer on the board inherits that spelling.
+fn text_names_head(text: &str, head: &str) -> bool {
+    !head.is_empty()
+        && (text.contains(head)
+            || text
+                .split(|c: char| !c.is_ascii_hexdigit())
+                .any(|t| t.len() >= 10 && head.starts_with(t)))
+}
+
+/// A board answer recorded as a decision: the user answered a question the
+/// board put to them, so the row carries the question text that names the PR
+/// and head, and the answer text that picks the approve option. The page
+/// stays open when its close is lost; the decision still holds the answer.
+fn board_approval_text(row: &Value, pr: u64) -> Option<String> {
+    let trace = row.get("trace")?;
+    let from_board = trace.get("comms").and_then(Value::as_str) == Some("question")
+        && trace.get("recipient_kind").and_then(Value::as_str) == Some("user");
+    let question = row.get("question").and_then(Value::as_str)?;
+    let answer = row.get("decision").and_then(Value::as_str)?;
+    // The asking team may close its own question with a role, team, agent or
+    // beastmode answer. Only the user's own answer (no authority stamp, or
+    // an operator or quoted chat stamp) is a look.
+    let by_user = match row.get("authority_source").and_then(Value::as_str) {
+        None | Some("operator") => true,
+        Some("chat_attested") => row
+            .get("quote")
+            .and_then(Value::as_str)
+            .is_some_and(|q| !q.trim().is_empty()),
+        Some(_) => false,
+    };
+    (from_board
+        && by_user
+        && row.get("question_id").is_some()
+        && answer_approves(answer)
+        && page_names_pr(question, pr))
+    .then(|| question.to_string())
 }
 
 /// The text of every live role row on this node that approves this PR, at
 /// any head: one decisions read, so a caller can test many heads with it.
+/// A board answer on the node counts too (see `board_approval_text`).
 fn role_approval_texts<P: Probes>(probes: &P, cwd: &Path, pr: u64, node: &str) -> Vec<String> {
     // Subject-scoped and uncapped: a capped newest-first read of the whole
     // lane loses an approval once enough other rows land after it.
-    let args: Vec<String> = [
-        "backlog",
-        "decisions",
-        node,
-        "--lane",
-        "unattributed",
-        "--state",
-        "all",
-        "--limit",
-        "0",
-        "--json",
-    ]
-    .iter()
-    .map(|s| (*s).to_string())
-    .collect();
-    let Some((Some(0), out, _)) = probes.fno_shell(cwd, &args).ok() else {
-        return Vec::new();
-    };
-    let Ok(payload) = serde_json::from_slice::<Value>(&out) else {
+    let Some(payload) = decisions_payload(
+        probes,
+        cwd,
+        &[
+            "backlog",
+            "decisions",
+            node,
+            "--lane",
+            "unattributed",
+            "--state",
+            "all",
+            "--limit",
+            "0",
+            "--json",
+        ],
+    ) else {
         return Vec::new();
     };
     let approved: Vec<String> = approving_pages(&vault_root(cwd), pr)
@@ -1206,25 +1398,93 @@ fn role_approval_texts<P: Probes>(probes: &P, cwd: &Path, pr: u64, node: &str) -
         .map(|(id, _)| id)
         .filter(|id| !id.is_empty())
         .collect();
+    let rows = payload
+        .get("decisions")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten();
+    let mut texts = Vec::new();
+    for row in rows {
+        if row.get("subject").and_then(Value::as_str) != Some(node) {
+            continue;
+        }
+        if let Some(text) = board_approval_text(row, pr) {
+            texts.push(text);
+            continue;
+        }
+        let live = matches!(
+            row.get("lifecycle").and_then(Value::as_str),
+            Some("live") | Some("unscoped")
+        );
+        if row.get("authority_source").and_then(Value::as_str) == Some("role")
+            && live
+            && (row_is_chat_attested(row)
+                || row_cites_any(row, &approved)
+                || row_attests_identifier_only(row))
+        {
+            let text = row_text(row);
+            if page_names_pr(&text, pr) {
+                texts.push(text);
+            }
+        }
+    }
+    texts
+}
+
+/// The text of every live `chat_attested` law row that approves this PR, at
+/// any head. The worker the user spoke to records the user's words as law
+/// (`fno inbox law set`), and the lead who owns the gate cannot re-record an
+/// approval it never witnessed. The row must carry the user's words (a
+/// `user in chat` rationale or a stored `quote`), name the PR, and open with
+/// an approve word; the head test stays with the caller.
+fn law_approval_texts<P: Probes>(probes: &P, cwd: &Path, pr: u64) -> Vec<String> {
+    let Some(payload) = decisions_payload(
+        probes,
+        cwd,
+        &[
+            "backlog",
+            "decisions",
+            "--lane",
+            "law",
+            "--state",
+            "live",
+            "--limit",
+            "0",
+            "--json",
+        ],
+    ) else {
+        return Vec::new();
+    };
     payload
         .get("decisions")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
         .filter(|row| {
-            row.get("authority_source").and_then(Value::as_str) == Some("role")
-                && row.get("subject").and_then(Value::as_str) == Some(node)
-                && matches!(
-                    row.get("lifecycle").and_then(Value::as_str),
-                    Some("live") | Some("unscoped")
-                )
+            row.get("authority_source").and_then(Value::as_str) == Some("chat_attested")
+                && row.get("lifecycle").and_then(Value::as_str) == Some("live")
                 && (row_is_chat_attested(row)
-                    || row_cites_any(row, &approved)
-                    || row_attests_identifier_only(row))
+                    || row
+                        .get("quote")
+                        .and_then(Value::as_str)
+                        .is_some_and(|q| !q.trim().is_empty()))
+                && row
+                    .get("decision")
+                    .and_then(Value::as_str)
+                    .is_some_and(answer_approves)
         })
         .map(row_text)
         .filter(|text| page_names_pr(text, pr))
         .collect()
+}
+
+/// True when a live `chat_attested` law row names this PR and the head sha,
+/// full or as a ten-character prefix. Head-scoped like the role row: a push voids it.
+pub(crate) fn law_chat_clears_pr<P: Probes>(probes: &P, cwd: &Path, pr: u64, head: &str) -> bool {
+    !head.is_empty()
+        && law_approval_texts(probes, cwd, pr)
+            .iter()
+            .any(|text| text_names_head(text, head))
 }
 
 /// The `owner/name` pair a remote url names, normalized across the ssh
@@ -1250,6 +1510,32 @@ pub(crate) fn repo_slug_from_origin(url: &str) -> Option<String> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn readme_and_doc_images_are_public_copy_and_other_docs_are_not() {
+        assert!(is_public_copy("README.md"));
+        assert!(is_public_copy("docs/images/target-run.gif"));
+        assert!(!is_public_copy("docs/architecture/pr-status-verdict.md"));
+        assert!(!is_public_copy("crates/fno/README.md"));
+        assert!(path_matches_paint(
+            "docs/images/target-run.gif",
+            &["docs/images/**".to_string()]
+        ));
+    }
+
+    #[test]
+    fn a_paint_diff_of_comments_only_skips_the_look() {
+        let comments = "@@ -1,2 +1,2 @@\n ctx\n-// a busy box\n+// a busy machine\n+\n";
+        assert!(patch_is_comment_only("a.rs", comments));
+        let code = "@@ -1 +1 @@\n-let a = \"box\"; // c\n+let a = \"machine\"; // c\n";
+        assert!(!patch_is_comment_only("a.rs", code));
+        let mixed = "@@ -1 +1 @@\n-// old\n+// new\n+draw();\n";
+        assert!(!patch_is_comment_only("a.rs", mixed));
+        // Only Rust files read as comments; an html `//` is script code.
+        assert!(!patch_is_comment_only("page.html", comments));
+        // An empty patch (binary, oversized) never releases the hold.
+        assert!(!patch_is_comment_only("a.rs", ""));
+    }
 
     #[test]
     fn mux_shots_scans_node_prefix_and_shots_folder() {
@@ -1375,6 +1661,11 @@ mod tests {
     fn a_decline_after_the_approved_commit_voids_the_carry() {
         let declines = vec!["May PR 9 merge? answer 2 at c3".to_string()];
         assert!(declined_after(&declines, &["c3", "c4"]));
+        let spelled = vec!["May PR 9 merge? answer 2 at 0123456789".to_string()];
+        assert!(declined_after(
+            &spelled,
+            &["0123456789abcdef0123456789abcdef01234567"]
+        ));
         assert!(!declined_after(&declines, &["c4"]));
         assert!(!declined_after(&[], &["c3"]));
     }
@@ -1407,8 +1698,14 @@ mod tests {
         // The ask door's asker-decides refusal reads why_user as exactly one
         // class word; prose after the word reads as no class and would
         // refuse the page this gate files.
-        let page =
-            visual_question_markdown(3036, "05ea5bcccc12", "05ea5bcc", "x-aaaa", "client/tab.rs");
+        let page = visual_question_markdown(
+            3036,
+            "05ea5bcccc12",
+            "05ea5bcc",
+            "x-aaaa",
+            "client/tab.rs",
+            "",
+        );
         let why = page
             .lines()
             .find(|l| l.starts_with("why_user:"))

@@ -420,7 +420,7 @@ impl AgentsHome {
         self.root.join("supervisor.sock")
     }
 
-    /// The directory a devcontainer box mounts to reach the daemon: it holds
+    /// The directory a devcontainer sandbox mounts to reach the daemon: it holds
     /// a hard link to `supervisor_sock()` that the daemon re-creates at
     /// every bind, and nothing else from the home.
     pub fn sandbox_sock_dir(&self) -> PathBuf {

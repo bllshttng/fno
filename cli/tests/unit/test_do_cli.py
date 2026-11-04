@@ -4,7 +4,7 @@ import click
 import typer.main
 
 
-def test_do_advertises_exactly_four_direct_children() -> None:
+def test_do_advertises_exactly_three_direct_children() -> None:
     from fno.do_cli import do_app
 
     command = typer.main.get_command(do_app)
@@ -16,10 +16,10 @@ def test_do_advertises_exactly_four_direct_children() -> None:
     # family ported native: the front door claims the whole `do target`,
     # `do state`, and `do phase` groups and `do pr stub-manifest`. `loops`
     # joined them when the fleet family ported: the front's fleet route
-    # claims `do loops` and execs the fno-agents loops door itself.
+    # claims `do loops` and execs the fno-agents loops door itself. `plan`
+    # left with the plan port: the front door claims `do plan` whole.
     assert set(command.list_commands(context)) == {
         "delivery",
-        "plan",
         "pr",
         "resume",
     }

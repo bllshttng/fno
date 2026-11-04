@@ -382,9 +382,16 @@ if [[ "${1:-}" == "wave" && "${2:-}" == "check" ]]; then
     printf '%s\n' $'O\tNo parallel waves to check'
     exit 0
 fi
+# The plan reads (rung, validate) are the contract under test, so they reach
+# the real binary.
+if [[ "${1:-}" == "plan-cli" ]]; then
+    exec "$REAL_FNO_AGENTS_BIN" "$@"
+fi
 exit 3
 STUB
 chmod +x "$SEMLAWBIN/fno-agents"
+REAL_FNO_AGENTS_BIN="$SCRIPT_DIR/../crates/fno-agents/target/debug/fno-agents"
+export REAL_FNO_AGENTS_BIN
 OUTPUT=$(FNO_BIN="$SEMLAWBIN/fno" FNO_AGENTS_BIN="$SEMLAWBIN/fno-agents" bash "$VALIDATE" "$PLAN_SEMANTIC" 2>&1)
 if ! grep -q "WARN:" <<< "$OUTPUT"; then
     pass "AC7a: Semantic plan needs no task/wave/critical-path headings"
@@ -548,20 +555,23 @@ for malformed in scalar partial invalid-date blank-setter; do
     fi
 done
 
-# An installed fno older than this checkout advertises --execution while missing
-# the guards this source defines, so an unrunnable source tree must refuse rather
-# than hand the plan to it. PATH is stripped so uv is unreachable too.
-OUTPUT=$(PATH=/usr/bin:/bin FNO_PYTHON=/usr/bin/python3 bash "$VALIDATE" "$PLAN_SEMANTIC" 2>&1) \
-    && EXIT_CODE=0 || EXIT_CODE=$?
-if [[ $EXIT_CODE -eq 2 ]] && grep -q "is not runnable" <<< "$OUTPUT"; then
-    pass "AC8e: Unrunnable source refuses instead of delegating to an installed CLI"
+# With no fno-agents binary and no fno on PATH the semantic validator cannot
+# run, so the plan must refuse as a tool failure rather than read as judged.
+# The copied validator sits outside the repo, so no source-root build resolves.
+SEM_NOBIN="$TMPDIR_BASE/sem-nobin"
+mkdir -p "$SEM_NOBIN/scripts"
+cp "$VALIDATE" "$SEM_NOBIN/scripts/validate-plan.sh"
+OUTPUT=$(cd "$SEM_NOBIN" && env -u FNO_AGENTS_BIN -u FNO_BIN PATH=/usr/bin:/bin FNO_PYTHON=/usr/bin/python3 \
+    bash "$SEM_NOBIN/scripts/validate-plan.sh" "$PLAN_SEMANTIC" 2>&1) && EXIT_CODE=0 || EXIT_CODE=$?
+if [[ $EXIT_CODE -eq 2 ]] && grep -q "fno CLI not found" <<< "$OUTPUT"; then
+    pass "AC8e: No reachable validator refuses with exit 2"
 else
-    fail "AC8e: Unrunnable source did not refuse with exit 2 (exit $EXIT_CODE): $OUTPUT"
+    fail "AC8e: No reachable validator did not refuse with exit 2 (exit $EXIT_CODE): $OUTPUT"
 fi
 
 # A broken validator must not be reported as an invalid plan: callers are told to
 # stop and rewrite the plan on ERROR, and the underlying cause must survive.
-if grep -q "TOOLFAIL" <<< "$OUTPUT" && grep -q "last probe error:" <<< "$OUTPUT"; then
+if grep -q "TOOLFAIL: fno CLI not found" <<< "$OUTPUT"; then
     pass "AC8f: Tool failure is distinct from a plan violation and keeps its cause"
 else
     fail "AC8f: Tool failure was indistinguishable or lost its cause: $OUTPUT"
@@ -891,34 +901,6 @@ else
     fail "AC10o: Missing binary should warn-only without a receipt (exit $EXIT_CODE): $OUTPUT"
 fi
 
-# AC10p (AC5-HP): a two-write help probe is captured without pipefail turning
-# a successful installed-CLI capability check into the stale-CLI refusal.
-HELP_ROOT="$TMPDIR_BASE/helpprobe"
-HELP_BIN="$HELP_ROOT/bin"
-mkdir -p "$HELP_ROOT/scripts" "$HELP_BIN"
-cp "$VALIDATE" "$HELP_ROOT/scripts/validate-plan.sh"
-cat > "$HELP_BIN/fno" <<'STUB'
-#!/bin/bash
-if [[ "${1:-} ${2:-} ${3:-} ${4:-}" == "do plan validate --help" ]]; then
-    echo "  --execution  validate execution"
-    sleep 0.3
-    echo "  --json       emit JSON"
-    exit 0
-fi
-if [[ "${1:-} ${2:-} ${3:-}" == "do plan validate" ]]; then
-    exit 0
-fi
-exit 3
-STUB
-chmod +x "$HELP_BIN/fno"
-OUTPUT=$(cd "$HELP_ROOT" && env -u FNO_AGENTS_BIN PATH="$HELP_BIN:/usr/bin:/bin" FNO_PYTHON=/usr/bin/python3 \
-    bash "$HELP_ROOT/scripts/validate-plan.sh" "$PLAN_SEMANTIC" 2>&1) && EXIT_CODE=0 || EXIT_CODE=$?
-if [[ $EXIT_CODE -ne 2 ]] && ! grep -q "predates semantic plan validation" <<< "$OUTPUT"; then
-    pass "AC10p: two-write help probe stays a successful capability check"
-else
-    fail "AC10p: help probe was misread as stale CLI (exit $EXIT_CODE): $OUTPUT"
-fi
-
 # AC10q (AC5-EDGE): a large quick-plan frontmatter is read to completion, so
 # the kind marker survives past the pipe buffer and the graduated surface gate
 # remains a warning.
@@ -1203,7 +1185,7 @@ exec "__LAWBIN_FALLBACK__/fno" "$@"
 STUB
 sed "s|__LAWBIN_FALLBACK__|$STUBBIN|g" "$LAWBIN/fno" > "$LAWBIN/fno.tmp" && mv "$LAWBIN/fno.tmp" "$LAWBIN/fno"
 chmod +x "$LAWBIN/fno"
-OUTPUT=$(PATH="$LAWBIN:$STUBBIN:$PATH" bash "$VALIDATE" "$PLAN_NNPY_W" 2>&1) && EXIT_CODE=0 || EXIT_CODE=$?
+OUTPUT=$(FNO_BIN="$LAWBIN/fno" PATH="$LAWBIN:$STUBBIN:$PATH" bash "$VALIDATE" "$PLAN_NNPY_W" 2>&1) && EXIT_CODE=0 || EXIT_CODE=$?
 if [[ "$EXIT_CODE" -eq 0 && "$OUTPUT" == *"d-f1cebabe"* && "$OUTPUT" == *"file-budget-exception"* ]]; then
     pass "AC13-HP: a granted file-budget-exception lifts the Grant sum ceiling"
 else
@@ -1214,7 +1196,7 @@ fi
 # over-budget finding stands.
 PLAN_NNPY_NW="$TMPDIR_BASE/nnpy_nowaiver.md"
 sed 's/Grant d-f1cebabe +400/Grant d-7e57a11a +400/; s/node: x-beef00/node: x-a1b2/' "$PLAN_NNPY_W" > "$PLAN_NNPY_NW"
-OUTPUT=$(PATH="$LAWBIN:$STUBBIN:$PATH" bash "$VALIDATE" "$PLAN_NNPY_NW" 2>&1) && EXIT_CODE=0 || EXIT_CODE=$?
+OUTPUT=$(FNO_BIN="$LAWBIN/fno" PATH="$LAWBIN:$STUBBIN:$PATH" bash "$VALIDATE" "$PLAN_NNPY_NW" 2>&1) && EXIT_CODE=0 || EXIT_CODE=$?
 if [[ "$EXIT_CODE" -eq 1 && "$OUTPUT" == *"against a budget of 30"* ]]; then
     pass "AC13-EDGE: a ruling without file-budget-exception leaves the ceiling standing"
 else

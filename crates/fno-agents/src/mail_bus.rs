@@ -12,6 +12,7 @@
 //! ([`crate::machine_key::check`]), so a row edited on the primary, or one
 //! that claims a host whose pinned key did not sign it, never lands.
 
+use crate::mail::address::normalize_host;
 use crate::store_remote::{Remote, Reply, SqlValue};
 
 /// How long a pending row waits for its host before the expire leg flips it.
@@ -46,17 +47,6 @@ const ADDED_COLUMNS: [(&str, &str); 2] = [
     ("pubkey", "ALTER TABLE fno_mail_bus ADD COLUMN pubkey TEXT"),
     ("sig", "ALTER TABLE fno_mail_bus ADD COLUMN sig TEXT"),
 ];
-
-/// Hosts compare equal across machines that spell themselves differently
-/// (`iMac2D2.local` from gethostname, `imac2d2` from a user typing). One
-/// normalizer runs on write and on pull (operator ruling, 2026-10-10).
-pub fn normalize_host(raw: &str) -> String {
-    let lower = raw.trim().to_ascii_lowercase();
-    match lower.strip_suffix(".local") {
-        Some(base) if !base.is_empty() => base.to_string(),
-        _ => lower,
-    }
-}
 
 /// A unique bus msg_id. 12 hex like the Python bus ids (`fmail-…`), minted
 /// from clock, pid and a process-lifetime counter, hashed: no rand
@@ -272,14 +262,21 @@ fn rows_from_reply(reply: &Reply) -> Vec<BusRow> {
         .collect()
 }
 
-/// The pending rows addressed to `host`, oldest first. The host argument is
-/// already normalized by the caller (the same normalizer the write ran).
-pub fn fetch_pending(remote: &Remote, host: &str) -> Result<Vec<BusRow>, String> {
+/// The pending rows addressed to any of `hosts`, oldest first. Each host is
+/// already normalized by the caller (the same normalizer the write ran). A row
+/// stays keyed to the label it was sent to, because the signature covers that
+/// label; a machine that was renamed pulls under every label it has held.
+pub fn fetch_pending(remote: &Remote, hosts: &[String]) -> Result<Vec<BusRow>, String> {
+    if hosts.is_empty() {
+        return Ok(Vec::new());
+    }
+    let marks = vec!["?"; hosts.len()].join(",");
     let sql = format!(
         "SELECT {PENDING_COLUMNS} FROM fno_mail_bus \
-WHERE to_host = ? AND status = 'pending' ORDER BY seq"
+WHERE to_host IN ({marks}) AND status = 'pending' ORDER BY seq"
     );
-    let reply = remote.execute(&sql, &[SqlValue::Text(host.to_string())])?;
+    let args: Vec<SqlValue> = hosts.iter().cloned().map(SqlValue::Text).collect();
+    let reply = remote.execute(&sql, &args)?;
     Ok(rows_from_reply(&reply))
 }
 
@@ -424,8 +421,14 @@ mod tests {
             )
             .unwrap();
         let home = tempfile::tempdir().unwrap();
+        // A rename keeps the old label in the pull set, newest first.
+        assert_eq!(crate::mail_arm::held_hosts(home.path(), "bb16"), ["bb16"]);
+        assert_eq!(
+            crate::mail_arm::held_hosts(home.path(), "m2-mbp"),
+            ["m2-mbp", "bb16"]
+        );
         let mut injected = Vec::new();
-        let rows = fetch_pending(remote, "r2d2").unwrap();
+        let rows = fetch_pending(remote, &["old-r2d2".to_string(), "r2d2".to_string()]).unwrap();
         assert!(rows.iter().all(|r| r.pubkey.is_some() && r.sig.is_some()));
         let delivered = crate::mail_arm::pull_rows_with(remote, rows, home.path(), &mut |row| {
             injected.push(row.msg_id.clone());

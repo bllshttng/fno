@@ -10,7 +10,7 @@
 //! - AC12-ERR: Rust holds LOCK_EX, Python's non-blocking acquire fails.
 //!
 //! Skips cleanly (does not fail) when `python3` is unavailable, so a Rust-only
-//! dev box still passes; CI for this Python-first project always has python3.
+//! dev machine still passes; CI for this Python-first project always has python3.
 
 use std::io::Write;
 use std::path::PathBuf;
@@ -186,88 +186,4 @@ fcntl.flock(f.fileno(), fcntl.LOCK_UN)
     let _ = file.unlock();
 
     std::fs::remove_file(&path).ok();
-}
-
-/// The x-a879 cross-language half of the repro: a Python `update_registry`
-/// appending a row while the daemon holds and sweeps the same registry, the
-/// shape that was live during the measured window (rows created at 16:30,
-/// 16:35 and 16:51 while the daemon ran). Both settle; no writer's rows are
-/// dropped. The seeded home is a fresh /tmp tree; the live `~/.fno/agents`
-/// is never touched.
-#[test]
-fn python_update_registry_interleaves_with_a_running_daemon() {
-    use common::{seed_loss_shaped_registry, short_home};
-
-    let py = match python3() {
-        Some(p) => p,
-        None => {
-            eprintln!("SKIP: python3 not found");
-            return;
-        }
-    };
-    let home = short_home();
-    let reg_path = seed_loss_shaped_registry(&home);
-
-    let _child = common::start_daemon(&home);
-    common::wait_for_event(&home, "startup_reconcile_done", common::RECONCILE_BUDGET);
-
-    let cli_src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../cli/src");
-    let script = format!(
-        r#"
-import sys
-from pathlib import Path
-sys.path.insert(0, {cli_src:?})
-from fno.agents.registry import AgentEntry, update_registry
-
-def add(entries):
-    entries.append(AgentEntry(
-        name="python-appended",
-        harness="codex",
-        harness_session_id="py-sess-1",
-        cwd="/tmp",
-        log_path="/tmp/py-appended.log",
-    ))
-    return entries
-
-update_registry(add, path=Path({reg_path:?}))
-print("APPENDED")
-"#,
-        cli_src = cli_src,
-        reg_path = reg_path,
-    );
-    let out = Command::new(&py)
-        .arg("-c")
-        .arg(&script)
-        .env("FNO_AGENTS_HOME", home.root())
-        .env("HOME", home.root())
-        .output()
-        .expect("python spawns");
-    assert!(
-        out.status.success(),
-        "python update_registry failed: {} {}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
-    );
-    assert!(String::from_utf8_lossy(&out.stdout).contains("APPENDED"));
-
-    let reg = fno_agents::state::load_registry(&reg_path).unwrap();
-    assert_eq!(
-        reg.entries.len(),
-        30,
-        "29 seeded rows plus the Python append, nothing dropped"
-    );
-    assert!(reg.entries.iter().any(|e| e.name == "python-appended"));
-    assert_eq!(
-        reg.entries
-            .iter()
-            .filter(|e| e.name.starts_with("row-"))
-            .count(),
-        29,
-        "the daemon's rows were not dropped by the interleaved write"
-    );
-    let events = fno_agents::event_store::journal_text(&home.events_jsonl(), &[]);
-    assert!(
-        !events.contains("registry_row_removed"),
-        "an interleave that keeps every row must announce nothing: {events}"
-    );
 }

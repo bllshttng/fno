@@ -1,10 +1,8 @@
 state_dir=<FIXTURE>/envstate
 graph_json=<FIXTURE>/envstate/db/graph.json
-ledger_json=<FIXTURE>/envstate/ledger.json
+ledger_json=<FIXTURE>/envstate/db/history/ledger.json
 briefs_dir=<FIXTURE>/envstate/briefs
-fleet_dir=<FIXTURE>/envstate/fleet
-postmortems_dir=<FIXTURE>/envstate/postmortems
-worktrees_base=<FIXTURE>/envstate/worktrees
+postmortems_dir=<FIXTURE>/envstate/db/postmortems
 memory_dir=<FIXTURE>/envstate/memory
 hook_logs_dir=<FIXTURE>/envstate/hook-logs
 space_dir=<FIXTURE>/envstate/spaces/<FIXTURE_SLUG>-proj

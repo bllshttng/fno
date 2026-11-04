@@ -9,7 +9,7 @@ use serde_json::{json, Map, Value};
 use crate::decision_trace::{actor_kind_from_authority, emit_span_to, new_span_id, Trace};
 use crate::law_match::{
     all_decision_rows, attended_terminal, evidence_repo_root, is_retraction_row, mint_decision_id,
-    now_iso, project_events_journal, text_cap, WAIVER_SUBJECT_PREFIX,
+    now_iso, project_events_journal, text_cap, UNATTRIBUTED_CALLER, WAIVER_SUBJECT_PREFIX,
 };
 
 // ---------------------------------------------------------------------------
@@ -49,6 +49,12 @@ pub(crate) enum DecideIdentity {
     Ambient,
     #[cfg_attr(not(test), expect(dead_code))]
     Forced(Option<&'static str>),
+}
+
+/// The canonical handle of the agent session this process runs as, `None`
+/// when the caller is no agent session.
+pub(crate) fn ambient_agent_handle() -> Option<String> {
+    DecideIdentity::Ambient.agent()
 }
 
 impl DecideIdentity {
@@ -106,7 +112,7 @@ fn ambient_role_covers(handle: &str, subject: &str) -> bool {
 /// The role-scope rule: the caller holds a team, and a subject that names a
 /// node (by id or slug) must sit inside one of the caller's territories. A
 /// topic subject names no node, so holding a team is enough there.
-fn role_covers_subject(
+pub(crate) fn role_covers_subject(
     mine: &[crate::territory::Team],
     subject: &str,
     entries: &[Value],
@@ -518,13 +524,15 @@ fn decide_graduation_or_guidance(
 pub fn run_decide_reindex(_argv: &[String]) -> i32 {
     // A backfill cannot degrade: an unreadable store must not read as done.
     let graph_path = crate::graph_get::default_graph_path();
-    if let Err(e) = crate::decision_index::read_store_rows(&graph_path, &decisions_jsonl_path()) {
+    if let Err(e) = crate::decision_index::read_store_rows_raw(&graph_path, &decisions_jsonl_path())
+    {
         eprintln!("backlog decide-reindex: failed: {e}");
         return 1;
     }
     let repaired = compact_decisions_index();
-    let (rows, _) = crate::decision_index::read_store_rows(&graph_path, &decisions_jsonl_path())
-        .unwrap_or((Vec::new(), 0));
+    let (rows, _) =
+        crate::decision_index::read_store_rows_raw(&graph_path, &decisions_jsonl_path())
+            .unwrap_or((Vec::new(), 0));
     let mut known: std::collections::BTreeSet<(String, String)> =
         rows.iter().map(decision_index_key).collect();
     let prior_keys = known.clone();
@@ -1249,7 +1257,7 @@ pub(crate) fn resolve_decider_lanes(
             return Err(DecideRefusal::RefusedAuthority {
                 agent: agent
                     .clone()
-                    .unwrap_or_else(|| "unattributed-caller".to_string()),
+                    .unwrap_or_else(|| UNATTRIBUTED_CALLER.to_string()),
                 origin: Some(o.to_string()),
             });
         }
@@ -1289,7 +1297,7 @@ pub(crate) fn resolve_decider_lanes(
         return Err(DecideRefusal::UnattributedAuthority);
     }
     Ok(DecideProvenance {
-        decided_by: "unattributed-caller".to_string(),
+        decided_by: UNATTRIBUTED_CALLER.to_string(),
         authority_source: authority_source.map(str::to_string),
         attested_by: None,
         relayed_by: decided_by

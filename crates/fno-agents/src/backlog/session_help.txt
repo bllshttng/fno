@@ -6,7 +6,10 @@ Commands:
   add        Stamp a node with a lifecycle phase record (idempotent, append-only).
              --origin fills started_at from the named session's transcript and
              first-fills the node's origin session (never overwrites).
-  open       Hold node:<id> under blueprint-session:<id> for this session's planner.
-  close      Close the blueprint phase with one identity-guarded completion receipt.
+  open       Hold node:<id> under blueprint-session:<id> for this session's
+             planner. --phase think|blueprint (default blueprint) names the
+             phase the planner runs; a fresh plan doc refuses a second one.
+  close      Close the planner phase (--phase think|blueprint, default
+             blueprint) with one identity-guarded completion receipt.
   backfill   Fill missing session starts and ends from transcripts and merge commits.
   reap-open  Reap one exact open session row after the observer proves session death.

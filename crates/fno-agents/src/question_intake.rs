@@ -531,20 +531,32 @@ fn run_append(req: &IntakeRequest) -> IntakeAnswer {
 }
 
 /// Who asked, for the card: the handle and session the row already carries,
-/// plus the registry name and harness and this machine's host name.
+/// plus the registry name and harness and this machine's host name. The
+/// handle fills from the registry row when the ask carried none, and with
+/// neither the key is omitted: a written null once blanked every question
+/// page on the reading machine (needs_overlay parses origin.handle).
 fn origin_of(req: &IntakeRequest, home: &AgentsHome) -> Option<Value> {
     let session = req.session_id.as_deref().filter(|s| !s.is_empty())?;
     let rows = crate::state::load_registry(&home.registry_json())
         .map(|r| r.entries)
         .unwrap_or_default();
     let row = crate::lead_state::find_by_session(&rows, session, None);
-    Some(json!({
-        "handle": req.asker,
-        "session_id": session,
-        "name": row.map(|r| r.name.clone()),
-        "harness": row.and_then(|r| r.harness.clone()),
-        "host": crate::claims::hostname(),
-    }))
+    let name = row.map(|r| r.name.clone());
+    let handle = req
+        .asker
+        .as_deref()
+        .filter(|h| !h.is_empty())
+        .map(str::to_string)
+        .or_else(|| name.clone().filter(|n| !n.is_empty()));
+    let mut origin = Map::new();
+    if let Some(handle) = handle {
+        origin.insert("handle".into(), json!(handle));
+    }
+    origin.insert("session_id".into(), json!(session));
+    origin.insert("name".into(), json!(name));
+    origin.insert("harness".into(), json!(row.and_then(|r| r.harness.clone())));
+    origin.insert("host".into(), json!(crate::claims::hostname()));
+    Some(Value::Object(origin))
 }
 
 /// The dual write of one `operator_question` envelope: the project journal
@@ -637,7 +649,6 @@ pub fn run_intake(req: &IntakeRequest, home: &AgentsHome) -> IntakeAnswer {
     let law_verdict = crate::law_match::ask_answer(&crate::law_match::AskRequest {
         question: req.question.clone(),
         subject: req.subject.clone(),
-        node: req.node.clone(),
         laws: req.laws.clone(),
     });
     if (!law_verdict.exact.is_empty() && !retraction_ask) || law_verdict.nearby_refusal.is_some() {
@@ -2079,5 +2090,43 @@ stops
             "{:?}",
             answer.lines
         );
+    }
+
+    #[test]
+    fn origin_handle_fills_from_registry_when_asker_absent() {
+        // The ask carried no asker; the registry row for the asking session
+        // fills the handle, so a mirrored copy never carries handle: null.
+        let home = tmp_home("origin-fill");
+        let registry = home.registry_json();
+        std::fs::write(
+            &registry,
+            r#"{"schema_version":1,"agents":[{"name":"t-two","cwd":"/repo/fno","session_id":"s1","harness":"codex"}]}"#,
+        )
+        .unwrap();
+        let root = tmp_root("origin-fill");
+        let req = IntakeRequest {
+            asker: None,
+            ..req("", &root)
+        };
+        let origin = origin_of(&req, &home).expect("session present, origin builds");
+        assert_eq!(origin["handle"], json!("t-two"));
+        assert_eq!(origin["name"], json!("t-two"));
+        assert_eq!(origin["session_id"], json!("s1"));
+    }
+
+    #[test]
+    fn origin_omits_handle_key_when_no_asker_and_no_registry_row() {
+        // With no asker and no registry row, the key is omitted rather than
+        // written null: the reading client parses handle as a bare type and
+        // a written null once blanked every question page.
+        let home = tmp_home("origin-omit");
+        let root = tmp_root("origin-omit");
+        let req = IntakeRequest {
+            asker: None,
+            ..req("", &root)
+        };
+        let origin = origin_of(&req, &home).expect("session present, origin builds");
+        assert!(origin.get("handle").is_none(), "no null handle: {origin}");
+        assert_eq!(origin["session_id"], json!("s1"));
     }
 }

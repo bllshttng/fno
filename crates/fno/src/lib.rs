@@ -47,6 +47,10 @@ pub mod bootstrap;
 #[cfg(feature = "full")]
 pub mod build_drift;
 #[cfg(feature = "full")]
+pub mod chokepoint;
+#[cfg(feature = "full")]
+pub mod chokepoint_events;
+#[cfg(feature = "full")]
 pub mod chrome;
 #[cfg(feature = "full")]
 pub mod claude_fallback;
@@ -144,6 +148,8 @@ pub mod mouse;
 #[cfg(feature = "full")]
 pub mod mux_cli;
 #[cfg(feature = "full")]
+pub mod mux_link;
+#[cfg(feature = "full")]
 pub mod mux_rows;
 #[cfg(feature = "full")]
 pub mod needs_overlay;
@@ -183,6 +189,8 @@ mod path_migration_tests;
 pub mod paths_route;
 #[cfg(feature = "full")]
 pub mod popup;
+#[cfg(feature = "full")]
+pub mod pr_diff;
 #[cfg(feature = "full")]
 pub mod process_admission;
 pub mod product_boundary;
@@ -277,6 +285,8 @@ mod test_keeper_cleanup;
 #[cfg(all(test, feature = "full"))]
 pub(crate) mod test_owner;
 #[cfg(feature = "full")]
+pub mod text_style;
+#[cfg(feature = "full")]
 pub mod theme;
 #[cfg(feature = "full")]
 pub mod theme_import;
@@ -313,6 +323,8 @@ pub mod wizard;
 pub mod wizard_term;
 #[cfg(feature = "full")]
 pub mod wordmark;
+#[cfg(feature = "full")]
+pub mod workspace_sidecar;
 #[cfg(feature = "full")]
 pub mod worktree_door;
 #[cfg(feature = "full")]

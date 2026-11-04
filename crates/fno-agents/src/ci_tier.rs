@@ -85,12 +85,21 @@ pub(crate) fn head_of(runs: &[Value]) -> Head {
     head
 }
 
-/// The tier for one pass over ranked PRs and their heads.
-pub(crate) fn plan(ranked: &[(Rank, Head)], slots: usize) -> Plan {
+/// The tier for one pass over ranked PRs and their heads. `approved` names
+/// the PRs whose visual approval is pinned to the head under test: their CI
+/// cannot restart by a push, so the tier never cancels one and reruns its
+/// cancelled runs at once, outside the slot count.
+pub(crate) fn plan(ranked: &[(Rank, Head)], slots: usize, approved: &HashSet<u64>) -> Plan {
     let mut plan = Plan::default();
     for ((.., pr), head) in ranked {
         let idle = head.in_flight.is_empty();
         if idle && (head.cancelled.is_empty() || head.failed) {
+            continue;
+        }
+        if approved.contains(pr) {
+            if idle {
+                plan.rerun.push((*pr, head.cancelled.clone()));
+            }
             continue;
         }
         if plan.active.len() < slots {
@@ -151,7 +160,7 @@ fn node_rank(pull: &Value, entries: &[Value]) -> (bool, u8) {
     )
 }
 
-type Repo = (Vec<(Rank, Head)>, Vec<Value>, usize);
+type Repo = (Vec<(Rank, Head)>, Vec<Value>, usize, Vec<(u64, String)>);
 
 /// The open PRs, ranked, each with its head's runs; the same order as
 /// `{pr, branch}` rows; and the gate runs in flight.
@@ -170,24 +179,31 @@ fn read_repo(root: &Path) -> Result<Repo, String> {
         }
     }
     prs.sort();
-    let (mut ranked, mut order) = (Vec::new(), Vec::new());
+    let (mut ranked, mut order, mut shas) = (Vec::new(), Vec::new(), Vec::new());
     for (pr, sha, branch) in prs {
         order.push(json!({"pr": pr.3, "branch": branch}));
         ranked.push((pr, head_of(&runs_of(root, &format!("head_sha={sha}"))?)));
+        shas.push((pr.3, sha));
     }
     let mut gates = HashSet::new();
     for status in ["queued", "in_progress"] {
         let runs = runs_of(root, &format!("status={status}"))?;
         gates.extend(runs.iter().filter(|r| is_gate(r)).map(id));
     }
-    Ok((ranked, order, gates.len()))
+    Ok((ranked, order, gates.len(), shas))
 }
 
-/// POST `action` on each run; the journal records what gh refused.
-pub(crate) fn act(root: &Path, list: &[(u64, Vec<u64>)], action: &str) -> Vec<Value> {
+/// POST `action` on each run; the journal records what gh refused. A cancel
+/// journals its caller first: `actor` names the arm.
+pub(crate) fn act(root: &Path, list: &[(u64, Vec<u64>)], action: &str, actor: &str) -> Vec<Value> {
     let post = |run: &u64| {
-        let path = format!("repos/{{owner}}/{{repo}}/actions/runs/{run}/{action}");
-        match crate::pr_push::gh_api("gh", root, &path, &["-X", "POST"]) {
+        let sent = if action == "cancel" {
+            crate::pr_push::cancel_run("gh", root, *run, actor)
+        } else {
+            let path = format!("repos/{{owner}}/{{repo}}/actions/runs/{run}/{action}");
+            crate::pr_push::gh_api("gh", root, &path, &["-X", "POST"]).map(|_| ())
+        };
+        match sent {
             Ok(_) => json!({"run": run, "ok": true}),
             Err(e) => json!({"run": run, "ok": false, "error": e}),
         }
@@ -291,9 +307,18 @@ pub(crate) fn hold_reason(pass_row: &Value, branch: &str, now_ms: i64) -> Option
     ))
 }
 
-/// The refusal for a push of `branch` from `cwd`, or None to push. A held
-/// push writes one `ci_tier_held` row, which the arm wakes from.
+fn tier_on(root: &Path) -> bool {
+    crate::agents_config::config_value_deep(root, &["ci_tier", "enabled"]).and_then(|v| v.as_bool())
+        == Some(true)
+}
+
+/// The refusal for a push of `branch` from `cwd`, or None to push. A tier
+/// that is off never holds. A held push writes one `ci_tier_held` row,
+/// which the arm wakes from.
 pub(crate) fn push_hold(cwd: &Path, branch: &str) -> Option<String> {
+    if !tier_on(cwd) {
+        return None;
+    }
     let home = AgentsHome::from_env_opt()?;
     let slug = crate::pr_status::cache::git_slug(cwd)?;
     let path = crate::daemon::global_events_path(&home);
@@ -310,9 +335,133 @@ pub(crate) fn push_hold(cwd: &Path, branch: &str) -> Option<String> {
     Some(sentence)
 }
 
+/// The status payload's tier fact for a cancelled-only head. `fresh` is a
+/// `ci_tier_pass` row of this slug under FRESH_MS old: the row is the only
+/// proof a keeper ran on this machine recently, and a keeper on another
+/// machine never writes this journal. A live keeper reruns the cancelled
+/// runs when the PR's tier slot frees, so the remedy is hold. Without one,
+/// the orphaned runs would sit red forever, so the remedy is the rerun
+/// itself; runs a look hold cancelled are not orphaned, because the look
+/// arm reruns its own once the look clears.
+pub(crate) fn stranded_fact_pure(
+    enabled: bool,
+    fresh: bool,
+    cancelled: &[u64],
+    look_named: &[u64],
+) -> Value {
+    let owned: HashSet<u64> = look_named.iter().copied().collect();
+    let orphaned: Vec<u64> = cancelled
+        .iter()
+        .copied()
+        .filter(|run| !owned.contains(run))
+        .collect();
+    let runs = json!(orphaned);
+    if fresh {
+        return json!({
+            "live": true,
+            "remedy": "hold",
+            "enabled": enabled,
+            "cancelled_runs": runs,
+            "note": "the CI-tier keeper ran on this machine in the last 20 minutes; it reruns the cancelled runs when the PR's tier slot frees",
+        });
+    }
+    if orphaned.is_empty() && !owned.is_empty() {
+        return json!({
+            "live": false,
+            "remedy": "hold",
+            "enabled": enabled,
+            "cancelled_runs": json!([]),
+            "note": "a look hold cancelled the runs at this head, and the look arm reruns its own once the look clears; hold for the look",
+        });
+    }
+    let why = if enabled {
+        "ci_tier.enabled is true but no ci_tier_pass row landed in the last 20 minutes"
+    } else {
+        "ci_tier.enabled is false and no ci_tier_pass row landed in the last 20 minutes"
+    };
+    json!({
+        "live": false,
+        "remedy": "rerun",
+        "enabled": enabled,
+        "cancelled_runs": runs,
+        "note": format!("no CI-tier keeper ran on this machine in the last 20 minutes ({why}), so a tier hold never resolves here. Rerun each cancelled run: gh run rerun <run-id>"),
+    })
+}
+
+/// The run ids a look-hold cancel row names at this slug and sha, inside the
+/// 30-day window the look arm reruns within. A wait cancel cannot appear
+/// here: it answers a red the head carries, and a red head never reaches the
+/// cancelled-only caller.
+fn look_named_cancels(
+    path: &Path,
+    slug: &str,
+    sha: &str,
+    since_ms: i64,
+) -> Result<HashSet<u64>, String> {
+    let mut named = HashSet::new();
+    for row in rows_of(path, crate::look_hold::CANCEL_EVENT, slug, since_ms)? {
+        if word(&row, "/data/sha") != sha {
+            continue;
+        }
+        for post in row
+            .pointer("/data/runs")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default()
+        {
+            if post.get("ok").and_then(Value::as_bool) == Some(true) {
+                if let Some(run) = post.get("run").and_then(Value::as_u64) {
+                    named.insert(run);
+                }
+            }
+        }
+    }
+    Ok(named)
+}
+
+/// The live read behind `stranded_fact_pure`: the repo's config, this
+/// machine's journal, and the head's cancelled runs. Every read fails open
+/// to what it can prove; the caller gates on the cancelled-only shape.
+pub(crate) fn stranded_fact(root: &Path, slug: &str, sha: &str) -> Value {
+    let enabled = crate::agents_config::config_value_deep(root, &["ci_tier", "enabled"])
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let now = crate::ci_cadence::millis_now();
+    let journal = AgentsHome::from_env_opt().map(|home| crate::daemon::global_events_path(&home));
+    let fresh = journal
+        .as_ref()
+        .map(|path| {
+            rows_of(path, PASS_EVENT, slug, now - FRESH_MS)
+                .map(|rows| !rows.is_empty())
+                .unwrap_or(false)
+        })
+        .unwrap_or(false);
+    let look_named = journal
+        .as_ref()
+        .and_then(|path| {
+            look_named_cancels(path, slug, sha, now - crate::look_hold::WINDOW_MS).ok()
+        })
+        .unwrap_or_default();
+    let cancelled = runs_of(root, &format!("head_sha={sha}"))
+        .map(|runs| head_of(&runs).cancelled)
+        .unwrap_or_default();
+    // Journal sets iterate in hash order; the fact's id arrays must not flap
+    // between reads.
+    let mut look_named: Vec<u64> = look_named.into_iter().collect();
+    look_named.sort_unstable();
+    stranded_fact_pure(enabled, fresh, &cancelled, &look_named)
+}
+
 /// Wake each held push once, when its hold clears against `pass_row`. A
-/// wake covers every older hold of the same branch.
-fn wake_held(path: &Path, slug: &str, pass_row: &Value, now_ms: i64) -> Result<(), String> {
+/// wake covers every older hold of the same branch. With `off` set the tier
+/// is switched off: every hold clears and no pass row is read.
+fn wake_held(
+    path: &Path,
+    slug: &str,
+    pass_row: &Value,
+    now_ms: i64,
+    off: bool,
+) -> Result<(), String> {
     // A hold can outlast a day below a full tier.
     let since = now_ms - 7 * DAY_MS;
     let key = |r: &Value| {
@@ -353,15 +502,19 @@ fn wake_held(path: &Path, slug: &str, pass_row: &Value, now_ms: i64) -> Result<(
     let slots = data["slots"].as_u64().unwrap_or(0) as usize;
     // Every woken session pushes before the next pass, so wake in rank
     // order and only as many as the free slots, at least one.
-    let mut budget = slots.saturating_sub(active).max(1);
+    let mut budget = if off {
+        usize::MAX
+    } else {
+        slots.saturating_sub(active).max(1)
+    };
     let mut order: Vec<_> = due.into_iter().collect();
     order.sort_by_key(|(b, _)| ranked.iter().position(|r| r == b));
     let emitter = crate::events::EventEmitter::new(path.to_path_buf(), "daemon");
     for (branch, (held_ms, held)) in order {
-        if hold_reason(pass_row, &branch, now_ms).is_some() {
+        if !off && hold_reason(pass_row, &branch, now_ms).is_some() {
             continue;
         }
-        let open = ranked.contains(&branch.as_str());
+        let open = off || ranked.contains(&branch.as_str());
         if open && budget == 0 {
             continue;
         }
@@ -372,10 +525,17 @@ fn wake_held(path: &Path, slug: &str, pass_row: &Value, now_ms: i64) -> Result<(
         let sid = held.pointer("/data/session_id").and_then(Value::as_str);
         if let Some(sid) = sid.filter(|_| open) {
             budget -= 1;
-            let text = format!(
-                "The CI tier has a free slot for PR #{pr} ({branch}). Run fno do pr push again \
-                 to push the commits it held."
-            );
+            let text = if off {
+                format!(
+                    "The CI tier is off, so PR #{pr} ({branch}) no longer waits. Run fno do pr \
+                     push again to push the commits it held."
+                )
+            } else {
+                format!(
+                    "The CI tier has a free slot for PR #{pr} ({branch}). Run fno do pr push \
+                     again to push the commits it held."
+                )
+            };
             let mut runner = crate::burn_watch::run_command;
             let (delivered, via) =
                 crate::burn_watch::wake_with_text(sid, false, &text, "ci-tier", &mut runner);
@@ -394,8 +554,29 @@ fn wake_held(path: &Path, slug: &str, pass_row: &Value, now_ms: i64) -> Result<(
     Ok(())
 }
 
+/// The PRs whose head carries a pinned visual approval. Only a head with
+/// runs to act on reads the gate, and a head with no paint path costs one
+/// cached files read.
+fn approved_heads(
+    root: &Path,
+    slug: &str,
+    ranked: &[(Rank, Head)],
+    shas: &[(u64, String)],
+) -> HashSet<u64> {
+    static PAINT: std::sync::OnceLock<crate::look_hold::PaintCache> = std::sync::OnceLock::new();
+    let paint = PAINT.get_or_init(Default::default);
+    let open = |head: &Head| !head.in_flight.is_empty() || !head.cancelled.is_empty();
+    ranked
+        .iter()
+        .zip(shas)
+        .filter(|((_, head), _)| open(head))
+        .filter(|(_, (pr, sha))| crate::look_hold::approved_at_head(paint, root, slug, *pr, sha))
+        .map(|(_, (pr, _))| *pr)
+        .collect()
+}
+
 fn pass_repo(root: &Path, slug: &str, path: &Path) -> Result<(), String> {
-    let (mut ranked, order, gates) = read_repo(root)?;
+    let (mut ranked, order, gates, shas) = read_repo(root)?;
     let now = crate::ci_cadence::millis_now();
     let passes = rows_of(path, PASS_EVENT, slug, now - DAY_MS)?;
     let ours = ours(&passes);
@@ -405,10 +586,11 @@ fn pass_repo(root: &Path, slug: &str, path: &Path) -> Result<(), String> {
     }
     // Each merge-queue-gate run in flight holds one slot.
     let slots = SIZE.saturating_sub(gates);
-    let plan = plan(&ranked, slots);
-    let cancelled = act(root, &plan.cancel, "cancel");
+    let approved = approved_heads(root, slug, &ranked, &shas);
+    let plan = plan(&ranked, slots, &approved);
+    let cancelled = act(root, &plan.cancel, "cancel", "ci_tier");
     // A full rerun: a cancelled run has no failed job for rerun-failed-jobs.
-    let rerun = act(root, &plan.rerun, "rerun");
+    let rerun = act(root, &plan.rerun, "rerun", "ci_tier");
     let data = json!({"slug": slug, "slots": slots, "gates": gates, "active": plan.active,
         "ranked": order, "cancelled": cancelled, "rerun": rerun});
     let pass_row = json!({"ts": chrono::Utc::now().to_rfc3339(), "data": data});
@@ -428,23 +610,39 @@ fn pass_repo(root: &Path, slug: &str, path: &Path) -> Result<(), String> {
             .emit(PASS_EVENT, &data)
             .map_err(|e| format!("{PASS_EVENT} row did not land: {e}"))?;
     }
-    wake_held(path, slug, &pass_row, now)
+    wake_held(path, slug, &pass_row, now, false)
 }
 
 pub(crate) fn run_pass(home: &AgentsHome) -> Result<(), String> {
     let path = crate::daemon::global_events_path(home);
     let mut slugs = HashSet::new();
+    let mut off: Vec<String> = Vec::new();
     for root in crate::daemon::worktree_sweep::registry_repo_roots(home) {
         let root = Path::new(&root);
-        let on = crate::agents_config::config_value_deep(root, &["ci_tier", "enabled"]);
-        if on.and_then(|v| v.as_bool()) != Some(true) {
+        let Some(slug) = crate::pr_status::cache::git_slug(root) else {
+            continue;
+        };
+        if !tier_on(root) {
+            off.push(slug);
             continue;
         }
         // Two clones of one repo are one tier.
-        let slug = crate::pr_status::cache::git_slug(root).filter(|s| slugs.insert(s.clone()));
-        let Some(slug) = slug else { continue };
+        if !slugs.insert(slug.clone()) {
+            continue;
+        }
         if let Err(e) = pass_repo(root, &slug, &path) {
             eprintln!("ci-tier: {slug}: {e}");
+        }
+    }
+    // A push held before the switch went off must not wait on a pass that
+    // will never come. A repo with any clone still on keeps its tier.
+    let now = crate::ci_cadence::millis_now();
+    let mut done = HashSet::new();
+    for slug in off.into_iter().filter(|s| !slugs.contains(s)) {
+        if done.insert(slug.clone()) {
+            if let Err(e) = wake_held(&path, &slug, &Value::Null, now, true) {
+                eprintln!("ci-tier: {slug}: {e}");
+            }
         }
     }
     Ok(())
@@ -488,6 +686,18 @@ mod tests {
     }
 
     #[test]
+    fn a_tier_switched_off_never_holds_a_push() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().join(".fno");
+        std::fs::create_dir_all(&cfg).unwrap();
+        std::fs::write(cfg.join("config.toml"), "[ci_tier]\nenabled = false\n").unwrap();
+        assert!(!tier_on(dir.path()));
+        assert_eq!(push_hold(dir.path(), "feature/x"), None);
+        std::fs::write(cfg.join("config.toml"), "[ci_tier]\nenabled = true\n").unwrap();
+        assert!(tier_on(dir.path()));
+    }
+
+    #[test]
     fn only_a_tier_own_cancel_reruns_and_a_named_one_never_does() {
         let own: HashSet<u64> = [10, 11].into();
         let named: HashSet<u64> = [11, 30].into();
@@ -524,12 +734,29 @@ mod tests {
             (pr(6, 2), head(&[60], &[], false, 1, 5)),
             (pr(7, 3), head(&[], &[90], false, 0, 1)),
         ];
-        let plan = plan(&ranked, 2);
+        let plan = plan(&ranked, 2, &HashSet::new());
         // Green 1 and idle red 4 hold no slot.
         assert_eq!(plan.active, vec![2, 3]);
         assert_eq!(plan.rerun, vec![(3, vec![70])]);
         // 5 has 80 percent passed; 7 waits with nothing to cancel.
         assert_eq!(plan.cancel, vec![(6, vec![60])]);
+    }
+
+    #[test]
+    fn an_approved_head_keeps_its_run_and_reruns_outside_the_slot_count() {
+        let ranked = vec![
+            (pr(1, 0), head(&[10], &[], false, 0, 3)),
+            (pr(2, 1), head(&[20], &[], false, 0, 3)),
+            (pr(3, 2), head(&[], &[30], false, 0, 3)),
+            (pr(4, 2), head(&[40], &[], false, 0, 3)),
+        ];
+        let approved: HashSet<u64> = [2, 3].into();
+        let plan = plan(&ranked, 1, &approved);
+        // 1 takes the one slot. 2 is approved so it keeps its run, 3 is
+        // approved so its cancelled run reruns, and only 4 is cancelled.
+        assert_eq!(plan.active, vec![1]);
+        assert_eq!(plan.cancel, vec![(4, vec![40])]);
+        assert_eq!(plan.rerun, vec![(3, vec![30])]);
     }
 
     #[test]
@@ -552,5 +779,40 @@ mod tests {
         }
         assert_eq!(hold_reason(&row(5, 3, &[1, 3]), "b4", now), None);
         assert_eq!(hold_reason(&row(20, 2, &[1, 3]), "b4", now), None);
+    }
+
+    #[test]
+    fn a_fresh_pass_row_holds_and_an_absent_keeper_names_the_rerun() {
+        let fact = stranded_fact_pure(true, true, &[70], &[]);
+        assert_eq!(fact["remedy"], "hold");
+        assert_eq!(fact["live"], json!(true));
+        assert_eq!(fact["cancelled_runs"], json!([70]));
+        // The stranded shape carries the config state and the rerun remedy
+        // with the concrete command, whatever the config says.
+        for enabled in [true, false] {
+            let fact = stranded_fact_pure(enabled, false, &[70, 71], &[]);
+            assert_eq!(fact["remedy"], "rerun");
+            assert_eq!(fact["live"], json!(false));
+            assert_eq!(fact["enabled"], json!(enabled));
+            assert_eq!(fact["cancelled_runs"], json!([70, 71]));
+            let note = fact["note"].as_str().unwrap();
+            assert!(note.contains("gh run rerun"), "{note}");
+            assert!(note.contains("this machine"), "{note}");
+        }
+    }
+
+    #[test]
+    fn look_owned_cancels_never_become_a_rerun_remedy() {
+        // Every cancel belongs to the look arm: the remedy stays hold, and
+        // no run id rides as the worker's to rerun.
+        let fact = stranded_fact_pure(false, false, &[70, 71], &[70, 71]);
+        assert_eq!(fact["remedy"], "hold");
+        assert_eq!(fact["cancelled_runs"], json!([]));
+        let note = fact["note"].as_str().unwrap();
+        assert!(note.contains("look hold"), "{note}");
+        // A mixed head reruns only the orphaned ids.
+        let fact = stranded_fact_pure(false, false, &[70, 71], &[70]);
+        assert_eq!(fact["remedy"], "rerun");
+        assert_eq!(fact["cancelled_runs"], json!([71]));
     }
 }

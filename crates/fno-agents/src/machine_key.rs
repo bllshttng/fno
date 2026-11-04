@@ -10,6 +10,10 @@
 //! one key the user holds, which sqld checks with `--auth-jwt-key-file`.
 //! sqld ignores `sub` and grants full access to a token with no access
 //! claim, so the token does not limit what a machine may write.
+//!
+//! The same user key signs a user certificate: one user name bound to one
+//! machine key. A machine that holds its own certificate signs the wide law
+//! it records, and binds peer wide law only when that user key proves it.
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64;
 use base64::Engine;
@@ -26,6 +30,10 @@ pub fn key_path(root: &Path) -> PathBuf {
 
 pub fn pins_path(root: &Path) -> PathBuf {
     root.join("machine_pins.json")
+}
+
+pub fn cert_path(root: &Path) -> PathBuf {
+    root.join("user_cert.txt")
 }
 
 pub struct MachineKey {
@@ -104,7 +112,9 @@ fn generate() -> Result<Vec<u8>, String> {
 /// the target, so a reader never sees half a key.
 fn write_private(path: &Path, bytes: &[u8], replace: bool) -> std::io::Result<()> {
     let target = if replace {
-        path.with_extension("pk8.new")
+        let mut sibling = path.as_os_str().to_owned();
+        sibling.push(".new");
+        PathBuf::from(sibling)
     } else {
         path.to_path_buf()
     };
@@ -258,10 +268,118 @@ pub fn mint_token(key: &MachineKey, machine: &str, issued_at: u64) -> String {
     format!("{signing_input}.{signature}")
 }
 
-const USAGE: &str = "usage: fno-agents mail-remote key <show|rotate|pin <host> <public-key>|token <user-key-file> <machine>>";
+/// The tag a certificate signature covers, so a certificate never reads as
+/// a store token the same user key signed.
+const CERT_TAG: &[u8] = b"fno-user-cert-v1\n";
 
-/// `fno-agents mail-remote key ...`: read, rotate and pin machine keys, and
-/// mint a machine's store token.
+/// What a user certificate binds: a user name and user key to one machine key.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UserCert {
+    pub user: String,
+    pub user_key: String,
+    pub machine_key: String,
+}
+
+/// A certificate line, `<payload>.<signature>`, both base64url: the user
+/// key's signature over the user name and `machine_key`.
+pub fn mint_cert(user_key: &MachineKey, user: &str, machine_key: &str, issued_at: u64) -> String {
+    let payload = serde_json::json!({
+        "v": 1,
+        "user": user,
+        "user_key": user_key.public_key(),
+        "machine_key": machine_key,
+        "iat": issued_at,
+    })
+    .to_string();
+    let signed = [CERT_TAG, payload.as_bytes()].concat();
+    format!("{}.{}", B64.encode(&payload), user_key.sign(&signed))
+}
+
+/// The certificate a line carries, when the user key it names signed it.
+/// The user key is self-asserted: a reader decides whether to trust it.
+pub fn read_cert(line: &str) -> Option<UserCert> {
+    let (payload, signature) = line.trim().split_once('.')?;
+    let bytes = B64.decode(payload).ok()?;
+    let value: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    if value.get("v") != Some(&serde_json::json!(1)) {
+        return None;
+    }
+    let field = |key: &str| value.get(key)?.as_str().map(str::to_string);
+    let cert = UserCert {
+        user: field("user").filter(|u| crate::identity::is_sender_token(u))?,
+        user_key: field("user_key")?,
+        machine_key: field("machine_key")?,
+    };
+    verify(&cert.user_key, &[CERT_TAG, &bytes].concat(), signature).then_some(cert)
+}
+
+/// The certificate installed under `root`, with its line, when its user key
+/// signed it. It may name an older machine key: `rotate` leaves it in place.
+pub fn installed_cert(root: &Path) -> Option<(String, UserCert)> {
+    let line = std::fs::read_to_string(cert_path(root)).ok()?;
+    let line = line.trim().to_string();
+    read_cert(&line).map(|cert| (line, cert))
+}
+
+/// Install `line` at `path` when it verifies and names `own_key`. A refusal
+/// writes nothing.
+fn install_cert(path: &Path, line: &str, own_key: &str) -> Result<String, String> {
+    let cert = read_cert(line).ok_or_else(|| {
+        "the certificate does not verify: the user key it names did not sign it".to_string()
+    })?;
+    if cert.machine_key != own_key {
+        return Err(format!(
+            "the certificate is for machine key {}, but this machine's key is {}. Mint one \
+             for this machine where the user key lives: fno-agents mail-remote key certify \
+             <user-key-file> {} {own_key}",
+            fingerprint(&cert.machine_key),
+            fingerprint(own_key),
+            cert.user
+        ));
+    }
+    write_private(path, format!("{}\n", line.trim()).as_bytes(), true)
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok(format!(
+        "installed: this machine is {} (user key {})\n",
+        cert.user,
+        fingerprint(&cert.user_key)
+    ))
+}
+
+/// The `show` line for the installed certificate.
+fn cert_line(root: &Path, own_key: &str) -> String {
+    match installed_cert(root) {
+        Some((_, cert)) if cert.machine_key == own_key => format!(
+            "user: {} (user key {})\n",
+            cert.user,
+            fingerprint(&cert.user_key)
+        ),
+        Some((_, cert)) => format!(
+            "user: {} (user key {}), but the certificate names machine key {}; it signs \
+             nothing until a new one is installed\n",
+            cert.user,
+            fingerprint(&cert.user_key),
+            fingerprint(&cert.machine_key)
+        ),
+        None if cert_path(root).exists() => format!(
+            "no user certificate: {} does not verify\n",
+            cert_path(root).display()
+        ),
+        None => "no user certificate\n".to_string(),
+    }
+}
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+const USAGE: &str = "usage: fno-agents mail-remote key <show|rotate|pin <host> <public-key>|token <user-key-file> <machine>|certify <user-key-file> <user> <machine-public-key>|cert <certificate>>";
+
+/// `fno-agents mail-remote key ...`: read, rotate and pin machine keys, mint
+/// a machine's store token, and mint and install user certificates.
 pub fn run(args: &[String]) -> i32 {
     let home = crate::paths::AgentsHome::from_env();
     let root = home.root().to_path_buf();
@@ -274,6 +392,7 @@ pub fn run(args: &[String]) -> i32 {
                 key.public_key(),
                 fingerprint(&key.public_key())
             );
+            out.push_str(&cert_line(&root, &key.public_key()));
             for (host, key) in &pins {
                 out.push_str(&format!(
                     "pinned {host}: {key} (key {})\n",
@@ -287,17 +406,27 @@ pub fn run(args: &[String]) -> i32 {
             .map_err(|e| e.to_string())
             .and_then(|()| MachineKey::rotate(&key_path(&root)))
             .map(|key| {
-                format!(
+                let mut out = format!(
                     "new key {} (key {}). Each peer refuses it until the user runs there: \
                      fno-agents mail-remote key pin {} {}\n",
                     key.public_key(),
                     fingerprint(&key.public_key()),
-                    crate::mail_bus::normalize_host(&crate::claims::hostname()),
+                    crate::mail::address::normalize_host(&crate::claims::hostname()),
                     key.public_key()
-                )
+                );
+                if let Some((_, cert)) = installed_cert(&root) {
+                    out.push_str(&format!(
+                        "The user certificate names the old key, so wide law refuses here \
+                         until a new one is installed: fno-agents mail-remote key certify \
+                         <user-key-file> {} {}\n",
+                        cert.user,
+                        key.public_key()
+                    ));
+                }
+                out
             }),
         ["pin", host, public_key] => {
-            let host = crate::mail_bus::normalize_host(host);
+            let host = crate::mail::address::normalize_host(host);
             pin(&pins_path(&root), &host, public_key)
                 .map(|()| format!("pinned {host} to key {}\n", fingerprint(public_key)))
         }
@@ -309,10 +438,7 @@ pub fn run(args: &[String]) -> i32 {
                 let raw = B64.decode(key.public_key()).map_err(|e| e.to_string())?;
                 std::fs::write(&pem_path, public_pem(&raw))
                     .map_err(|e| format!("{}: {e}", pem_path.display()))?;
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_secs())
-                    .unwrap_or(0);
+                let now = now_secs();
                 eprintln!(
                     "{} the user key {}; sqld checks tokens with --auth-jwt-key-file {}. \
                      Set the token below as store.remote_token on {machine} only.",
@@ -323,6 +449,37 @@ pub fn run(args: &[String]) -> i32 {
                 Ok(format!("{}\n", mint_token(&key, machine, now)))
             })
         }
+        ["certify", user_key, user, machine_key] => {
+            if !crate::identity::is_sender_token(user) {
+                Err(format!(
+                    "{user:?} is not a plain user name (letters, digits, '-', '_', '.')"
+                ))
+            } else if B64.decode(machine_key).map(|k| k.len()) != Ok(32) {
+                Err(format!(
+                    "{machine_key:?} is not a base64url Ed25519 public key; \
+                     `fno-agents mail-remote key show` prints it on that machine"
+                ))
+            } else {
+                let path = Path::new(user_key);
+                let created = !path.exists();
+                MachineKey::load_or_create(path).map(|key| {
+                    eprintln!(
+                        "{} the user key {} (user key {}). Keep it off the fleet. On the \
+                         machine with key {}, run: fno-agents mail-remote key cert <line>",
+                        if created { "created" } else { "read" },
+                        path.display(),
+                        fingerprint(&key.public_key()),
+                        fingerprint(machine_key)
+                    );
+                    format!("{}\n", mint_cert(&key, user, machine_key, now_secs()))
+                })
+            }
+        }
+        ["cert", line] => home
+            .ensure_root()
+            .map_err(|e| e.to_string())
+            .and_then(|()| own())
+            .and_then(|key| install_cert(&cert_path(&root), line, &key.public_key())),
         _ => {
             eprintln!("{USAGE}");
             return 2;
@@ -412,5 +569,56 @@ mod tests {
         let token = mint_token(&rotated, "imac", 1);
         let (input, sig) = token.rsplit_once('.').unwrap();
         assert!(verify(&pk2, input.as_bytes(), sig));
+    }
+
+    #[test]
+    fn a_user_certificate_installs_only_for_this_machine_key_and_proves_the_user() {
+        use crate::claims::EnvVarGuard;
+        let _lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let _home = EnvVarGuard::set(crate::paths::HOME_ENV, dir.path().to_str().unwrap());
+        let user_key = MachineKey::load_or_create(&dir.path().join("user.pk8")).unwrap();
+        let own_key = own().unwrap().public_key();
+        let other = MachineKey::load_or_create(&dir.path().join("other.pk8")).unwrap();
+        let argv = |words: &[&str]| words.iter().map(|w| w.to_string()).collect::<Vec<_>>();
+
+        // A certificate for another machine key refuses, naming both keys,
+        // and writes nothing.
+        let foreign = mint_cert(&user_key, "jason", &other.public_key(), 1);
+        assert_eq!(run(&argv(&["cert", foreign.as_str()])), 1);
+        assert!(!cert_path(dir.path()).exists());
+        let error = install_cert(&cert_path(dir.path()), &foreign, &own_key).unwrap_err();
+        assert!(
+            error.contains(&fingerprint(&other.public_key()))
+                && error.contains(&fingerprint(&own_key)),
+            "{error}"
+        );
+        // A whole payload with one field edited keeps every key, so only the
+        // signature check can refuse it.
+        let (payload, sig) = foreign.split_once('.').unwrap();
+        let text = String::from_utf8(B64.decode(payload).unwrap()).unwrap();
+        let edited = text.replace("\"jason\"", "\"mallory\"");
+        assert_ne!(text, edited);
+        assert!(read_cert(&format!("{}.{sig}", B64.encode(&edited))).is_none());
+        assert!(read_cert(&foreign).is_some());
+        assert!(crate::identity::proven_user().is_none());
+
+        // This machine's certificate installs, proves the user, and shows.
+        let mine = mint_cert(&user_key, "jason", &own_key, 1);
+        assert_eq!(run(&argv(&["cert", mine.as_str()])), 0);
+        let proven = crate::identity::proven_user().expect("the installed certificate proves");
+        assert_eq!(proven.user, "jason");
+        assert_eq!(
+            crate::identity::trusted_user_key(),
+            Some(user_key.public_key())
+        );
+        assert_eq!(crate::identity::person(), "jason");
+        let shown = cert_line(dir.path(), &own_key);
+        assert!(
+            shown.contains("jason") && shown.contains(&fingerprint(&user_key.public_key())),
+            "{shown}"
+        );
     }
 }

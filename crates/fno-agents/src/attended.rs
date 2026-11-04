@@ -75,7 +75,7 @@ fn is_spawn_seed_turn(text: &str, seed: &str) -> bool {
 /// The bus index both arms classify with, read off the state root the way
 /// `liveness_sweep` reads it.
 fn bus_for(home: &crate::paths::AgentsHome) -> BusIndex {
-    BusIndex::load(&crate::intel::bus_log_path(
+    BusIndex::load(&crate::mail_paths::bus_log_path(
         home.root().parent().unwrap_or(home.root()),
     ))
 }

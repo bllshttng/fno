@@ -144,6 +144,70 @@ fn shared_identity_ids(identities: &BTreeMap<String, AccountBinding>) -> BTreeSe
         .collect()
 }
 
+/// The vendor a record bills when it is not its harness's own: a route's
+/// first segment, a Bedrock switch in the env, or the vendor that owns the
+/// env's base URL. None means the harness default, so a plain record's row
+/// stays as it was.
+fn record_provider(
+    route: Option<&str>,
+    env: Option<&BTreeMap<String, String>>,
+    vendor: &dyn Fn(&str) -> Option<String>,
+) -> Option<String> {
+    let head = route
+        .map(|r| r.replace(',', "/"))
+        .and_then(|r| r.split('/').next().map(|v| v.trim().to_string()))
+        .filter(|v| !v.is_empty());
+    if head.is_some() {
+        return head;
+    }
+    let env = env?;
+    if ["CLAUDE_CODE_USE_BEDROCK", "AWS_BEARER_TOKEN_BEDROCK"]
+        .iter()
+        .any(|k| env.contains_key(*k))
+    {
+        return Some("bedrock".to_string());
+    }
+    ["ANTHROPIC_BASE_URL", "OPENAI_BASE_URL"]
+        .iter()
+        .find_map(|k| env.get(*k).filter(|u| !u.is_empty()))
+        .and_then(|url| vendor(url))
+}
+
+/// A claude login's plan, read from its saved blob: `subscriptionType`, then
+/// the multiplier `rateLimitTier` ends on (`max` + `default_claude_max_20x`
+/// reads `Max 20x`).
+fn claude_plan(blob: &Value) -> Option<String> {
+    let oauth = blob.get("claudeAiOauth")?;
+    let sub = oauth.get("subscriptionType")?.as_str()?.trim();
+    let mut chars = sub.chars();
+    let mut plan: String = chars.next()?.to_uppercase().chain(chars).collect();
+    let mult = oauth
+        .get("rateLimitTier")
+        .and_then(Value::as_str)
+        .and_then(|tier| tier.rsplit('_').next())
+        .filter(|m| {
+            m.len() > 1 && m.ends_with('x') && m[..m.len() - 1].bytes().all(|b| b.is_ascii_digit())
+        });
+    if let Some(mult) = mult {
+        plan.push(' ');
+        plan.push_str(mult);
+    }
+    Some(plan)
+}
+
+/// The plan a row names: the record's own `plan` key, else the tier its saved
+/// claude login carries.
+fn record_plan(record: &Record, root: &Path) -> Option<String> {
+    if let Some(plan) = record.extra.get("plan").and_then(Value::as_str) {
+        return Some(plan.trim().to_string()).filter(|p| !p.is_empty());
+    }
+    if record.auth != "managed" || record.harness != "claude" {
+        return None;
+    }
+    let text = std::fs::read_to_string(store::blob_path(root, &record.id)).ok()?;
+    claude_plan(&serde_json::from_str(&text).ok()?)
+}
+
 fn rows(
     accounts: &Accounts,
     cwd: &Path,
@@ -157,7 +221,7 @@ fn rows(
         .iter()
         .map(|record| {
             let u = usage_age(state_path, &record.id, ttl, now);
-            json!({
+            let mut row = json!({
                 "id": record.id,
                 "name": record.name,
                 "harness": record.harness,
@@ -170,7 +234,28 @@ fn rows(
                 "usage_age_s": u.age,
                 "usage_ttl_seconds": seconds_json(u.ttl),
                 "usage_stale": u.stale,
-            })
+            });
+            if record.config_dir.is_some() {
+                row["spawn_only"] = json!(true);
+            }
+            let vendor = |url: &str| crate::accounts::credentials::vendor_for_endpoint(cwd, url);
+            if let Some(provider) =
+                record_provider(record.route.as_deref(), record.env.as_ref(), &vendor)
+            {
+                row["provider"] = json!(provider);
+            }
+            // The email the saved login proved at sign-in, never a config label.
+            if let Some(email) = (record.auth == "managed")
+                .then(|| binding::record_principal(&record.id, root))
+                .flatten()
+                .and_then(|p| p.email)
+            {
+                row["email"] = json!(email);
+            }
+            if let Some(plan) = record_plan(record, root) {
+                row["plan"] = json!(plan);
+            }
+            row
         })
         .collect();
     Value::Array(rows)
@@ -325,5 +410,43 @@ pub fn run(args: &[String]) -> i32 {
             eprintln!("error: {e}");
             1
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_route_or_a_base_url_names_the_provider_and_a_plain_key_names_none() {
+        let env = |pairs: &[(&str, &str)]| -> BTreeMap<String, String> {
+            pairs
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect()
+        };
+        let vendor = |url: &str| url.contains("z.ai").then(|| "zai".to_string());
+        let got = |route, env| record_provider(route, env, &vendor);
+        assert_eq!(got(Some("deepseek/v3"), None).as_deref(), Some("deepseek"));
+        let zai = env(&[("ANTHROPIC_BASE_URL", "https://z.ai.example/anthropic")]);
+        assert_eq!(got(None, Some(&zai)).as_deref(), Some("zai"));
+        let bedrock = env(&[("CLAUDE_CODE_USE_BEDROCK", "1")]);
+        assert_eq!(got(None, Some(&bedrock)).as_deref(), Some("bedrock"));
+        let plain = env(&[("ANTHROPIC_API_KEY", "k")]);
+        assert_eq!(got(None, Some(&plain)), None);
+        assert_eq!(got(Some(" "), None), None);
+    }
+
+    #[test]
+    fn a_saved_claude_login_names_its_plan_and_tier() {
+        let blob = |sub: &str, tier: &str| json!({"claudeAiOauth": {"subscriptionType": sub, "rateLimitTier": tier}});
+        let max = blob("max", "default_claude_max_20x");
+        assert_eq!(claude_plan(&max).as_deref(), Some("Max 20x"));
+        let pro = blob("pro", "default_claude_ai");
+        assert_eq!(claude_plan(&pro).as_deref(), Some("Pro"));
+        assert_eq!(
+            claude_plan(&json!({"claudeAiOauth": {"accessToken": "t"}})),
+            None
+        );
     }
 }

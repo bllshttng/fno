@@ -778,15 +778,31 @@ pub(crate) fn stamp_guard(ctx: &PushCtx, remote_branch: &str) {
 /// failed cancel is said on stderr, never blocks the push.
 fn cancel_runs(ctx: &PushCtx, runs: &[u64]) {
     for id in runs {
-        if let Err(err) = gh_api(
-            &ctx.gh_bin,
-            &ctx.cwd,
-            &format!("repos/{{owner}}/{{repo}}/actions/runs/{id}/cancel"),
-            &["-X", "POST"],
-        ) {
+        if let Err(err) = cancel_run(&ctx.gh_bin, &ctx.cwd, *id, "pr_push") {
             eprintln!("pr-push: cancel of run {id} failed ({err}); pushing anyway");
         }
     }
+}
+
+/// POST one run cancel after a `ci_cancel_intent` row names the caller. The
+/// row lands first: a cancel with no row is a run that dies with no actor on
+/// record. With a journal home and no row, the cancel does not go out.
+pub(crate) fn cancel_run(gh_bin: &str, cwd: &Path, run: u64, actor: &str) -> Result<(), String> {
+    if let Some(home) = crate::paths::AgentsHome::from_env_opt() {
+        let row = json!({
+            "slug": crate::pr_status::cache::git_slug(cwd),
+            "run": run,
+            "actor": actor,
+            "session_id": crate::claims::resolve_identity().0,
+            "pid": std::process::id(),
+            "host": crate::claims::hostname(),
+        });
+        crate::events::EventEmitter::new(crate::daemon::global_events_path(&home), "rust")
+            .emit("ci_cancel_intent", &row)
+            .map_err(|e| format!("the ci_cancel_intent row did not land ({e}); cancel withheld"))?;
+    }
+    let path = format!("repos/{{owner}}/{{repo}}/actions/runs/{run}/cancel");
+    gh_api(gh_bin, cwd, &path, &["-X", "POST"]).map(|_| ())
 }
 
 /// Record the push in the hook's stamp dir, so a hand push that follows
@@ -1087,6 +1103,7 @@ pub(crate) fn default_stamps_dir() -> PathBuf {
 #[derive(Clone, Copy)]
 enum PreflightMode {
     Full,
+    Fmt,
     Skipped,
     Absent,
 }
@@ -1095,10 +1112,77 @@ impl PreflightMode {
     fn label(self) -> &'static str {
         match self {
             PreflightMode::Full => "full",
+            PreflightMode::Fmt => "fmt",
             PreflightMode::Skipped => "skipped",
             PreflightMode::Absent => "absent",
         }
     }
+}
+
+/// Rustfmt toolchain the CI fmt leg pins. Keep in lockstep with
+/// `RUSTFMT_TOOLCHAIN` in `.github/workflows/rust-ci.yml`.
+const PINNED_FMT: &str = "1.94.1";
+/// Crates whose own `cargo fmt --check` a CI leg runs.
+const FMT_CRATES: [&str; 2] = ["crates/fno-agents", "crates/fno"];
+
+/// The crates in `FMT_CRATES` that `changed` (one repo-relative path per
+/// line) touches with a `.rs` file.
+fn fmt_crates(changed: &str) -> Vec<&'static str> {
+    FMT_CRATES
+        .iter()
+        .copied()
+        .filter(|c| {
+            changed
+                .lines()
+                .any(|l| l.ends_with(".rs") && l.starts_with(&format!("{c}/")))
+        })
+        .collect()
+}
+
+/// The focused pre-push check every push owes when full preflight is off: a
+/// one-minute `cargo fmt --check` on each crate the push changed. A red here
+/// would otherwise cost a full CI round. A missing pinned toolchain skips
+/// with a note, never a false red.
+fn fmt_gate(git_bin: &str, cwd: &Path) -> Option<(PreflightMode, bool, String)> {
+    let read = |args: &[&str]| {
+        run_labeled("pr-push-fmt", git_bin, args, cwd, READ_TIMEOUT)
+            .ok()
+            .filter(|(ok, _, _)| *ok)
+            .map(|(_, out, _)| out)
+    };
+    let crates = fmt_crates(&read(&["diff", "--name-only", "origin/main...HEAD"])?);
+    if crates.is_empty() {
+        return None;
+    }
+    let root = PathBuf::from(read(&["rev-parse", "--show-toplevel"])?.trim());
+    let installed = run_labeled(
+        "pr-push-fmt",
+        "rustup",
+        &["toolchain", "list"],
+        cwd,
+        READ_TIMEOUT,
+    )
+    .map(|(_, out, _)| out.contains(PINNED_FMT))
+    .unwrap_or(false);
+    if !installed {
+        eprintln!("pr-push: pinned rustfmt {PINNED_FMT} not installed; fmt check skipped");
+        return None;
+    }
+    let toolchain = format!("+{PINNED_FMT}");
+    for c in crates {
+        let (ok, out, err) = run_labeled(
+            "pr-push-fmt",
+            "cargo",
+            &[&toolchain, "fmt", "--all", "--check"],
+            &root.join(c),
+            PREFLIGHT_TIMEOUT,
+        )
+        .unwrap_or((false, String::new(), "cargo fmt spawn failed".to_string()));
+        if !ok {
+            return Some((PreflightMode::Fmt, false, format!("{c}:\n{out}{err}")));
+        }
+    }
+    Some((PreflightMode::Fmt, true, String::new()))
 }
 
 /// `<repo root>/scripts/ci/preflight.sh`, present and executable. The root
@@ -1688,6 +1772,12 @@ pub fn run_push(argv: &[String]) -> i32 {
             }
             None => (PreflightMode::Absent, true),
         }
+    } else if let Some((mode, ok, report)) = fmt_gate(&git, &cwd) {
+        if !ok {
+            eprintln!("pr-push: cargo fmt --check is red; nothing pushed");
+            eprint!("{report}");
+        }
+        (mode, ok)
     } else {
         (PreflightMode::Skipped, true)
     };
@@ -1737,6 +1827,14 @@ mod tests {
     use super::*;
     use crate::write_exec_stub as write_exec;
     use std::process::Command;
+
+    #[test]
+    fn fmt_crates_names_only_crates_with_changed_rs_files() {
+        let changed = "crates/fno-agents/src/a.rs\ncrates/fno/Cargo.toml\nREADME.md\n";
+        assert_eq!(fmt_crates(changed), vec!["crates/fno-agents"]);
+        assert!(fmt_crates("crates/fno/src/b.rs\n").contains(&"crates/fno"));
+        assert!(fmt_crates("docs/x.md\ncrates/fno/Cargo.toml\n").is_empty());
+    }
 
     #[test]
     fn guarded_push_refuses_a_protected_branch_and_runs_no_push() {

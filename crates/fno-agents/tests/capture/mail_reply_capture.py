@@ -145,7 +145,6 @@ def base_env(root: Path, bindir: Path) -> dict:
         "FNO_CLAUDE_PROJECTS_DIR",
         "FNO_CLAUDE_SESSIONS_DIR",
         "FNO_CLAUDE_DAEMON_DIR",
-        "FNO_INBOX_ROOT",
         "FNO_INBOX_KNOWN_PROJECTS",
         "FNO_MAIL_BODY_WARN",
         "FNO_MAIL_BODY_REFUSE",
@@ -163,12 +162,14 @@ def base_env(root: Path, bindir: Path) -> dict:
 
 
 def seed_registry(root: Path, agents: list[dict]) -> None:
-    sys.path.insert(0, str(CLI_SRC))
-    from fno.agents.registry import SCHEMA_VERSION
+    import tomllib
+
+    schema_toml = REPO / "crates" / "fno-agents" / "src" / "registry_schema.toml"
+    schema_version = tomllib.loads(schema_toml.read_text(encoding="utf-8"))["version"]
 
     doc = {
-        "schema_version": SCHEMA_VERSION,
-        "min_writer_version": SCHEMA_VERSION,
+        "schema_version": schema_version,
+        "min_writer_version": schema_version,
         "agents": agents,
     }
     home = root / "agents-home"
@@ -251,7 +252,7 @@ def seed_project_thread(root: Path, env: dict) -> str:
 
     Runs in a venv-python subprocess: the driver's bare interpreter lacks the
     venv's site-packages, and the store import needs it. The child env
-    carries the fixture's FNO_INBOX_ROOT pin.
+    carries the fixture's FNO_BUS_DIR pin.
     """
     code = (
         f"import sys; sys.path.insert(0, {str(CLI_SRC)!r})\n"
@@ -443,18 +444,17 @@ def run_case(case: dict, bindir: Path) -> None:
             (root / ".fno").mkdir(parents=True, exist_ok=True)
             (root / ".fno" / "settings.yaml").write_text(f"project: {project}\n")
             (root / "inbox").mkdir(parents=True, exist_ok=True)
-            env["FNO_INBOX_ROOT"] = str(root / "inbox")
             env["FNO_INBOX_KNOWN_PROJECTS"] = project
             if case.get("parent_thread"):
                 # The seeding helper runs in THIS process, which resolves the
-                # inbox root from os.environ, not from the child's env dict.
-                saved = (os.environ.get("FNO_INBOX_ROOT"), os.environ.get("FNO_INBOX_KNOWN_PROJECTS"))
-                os.environ["FNO_INBOX_ROOT"] = env["FNO_INBOX_ROOT"]
+                # bus from os.environ, not from the child's env dict.
+                saved = (os.environ.get("FNO_BUS_DIR"), os.environ.get("FNO_INBOX_KNOWN_PROJECTS"))
+                os.environ["FNO_BUS_DIR"] = str(root / "inbox" / ".bus")
                 os.environ["FNO_INBOX_KNOWN_PROJECTS"] = project
                 try:
                     parent = seed_project_thread(root, env)
                 finally:
-                    for key, value in (("FNO_INBOX_ROOT", saved[0]), ("FNO_INBOX_KNOWN_PROJECTS", saved[1])):
+                    for key, value in (("FNO_BUS_DIR", saved[0]), ("FNO_INBOX_KNOWN_PROJECTS", saved[1])):
                         if value is None:
                             os.environ.pop(key, None)
                         else:

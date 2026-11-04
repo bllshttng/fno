@@ -2336,7 +2336,7 @@ pub(crate) fn read_memory(floor_gb: f64, max_swap_pct: f64) -> MemoryReading {
 /// tunes first. The swap term fires only while the machine is ALSO swapping
 /// in: macOS keeps swap allocated after pressure ends (an idle app can hold
 /// tens of GB until it exits), so allocation alone refused every spawn on a
-/// box with no paging at all.
+/// machine with no paging at all.
 pub(crate) fn ram_floor_term(
     avail: Option<f64>,
     floor_gb: f64,
@@ -2376,7 +2376,7 @@ pub(crate) fn ram_floor_term(
 /// means something ELSE is eating the machine. `<= 0` disables a term; an
 /// unreadable term skips (fail open, as before). Both readings ride every
 /// verdict: a floor that only speaks on refusal cannot be audited, and a
-/// passing gate must not look like a healthy box.
+/// passing gate must not look like a healthy machine.
 /// The pass-path RAM readings line, pure so the note prefix is testable:
 /// it starts [`NOTE`], never the `spawn-gate: ` verdict marker, because
 /// these readings ride ADMITTED spawns too.
@@ -3492,7 +3492,7 @@ MemAvailable:    8000000 kB\n";
     #[test]
     fn fixture_rows() {
         let fixture_path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../cli/tests/agents/fixtures/gate_escape_spawn_cap_parity.json");
+            .join("tests/fixtures/spawn_gate/gate_escape_spawn_cap_parity.json");
         let raw = std::fs::read_to_string(&fixture_path)
             .unwrap_or_else(|e| panic!("read fixture {}: {e}", fixture_path.display()));
         let fixture: serde_json::Value = serde_json::from_str(&raw).unwrap();
@@ -3505,7 +3505,7 @@ MemAvailable:    8000000 kB\n";
         }
 
         let fixture_path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../cli/tests/agents/fixtures/spawn_gate_admission.json");
+            .join("tests/fixtures/spawn_gate/spawn_gate_admission.json");
         let raw = std::fs::read_to_string(&fixture_path)
             .expect("the shared fixture must exist beside the Python suite");
         let doc: serde_json::Value = serde_json::from_str(&raw).expect("fixture is JSON");
@@ -4028,7 +4028,7 @@ Swapouts: 3444531.\n";
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         let fixture_path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../cli/tests/agents/fixtures/spawn_gate_slot_agreement.json");
+            .join("tests/fixtures/spawn_gate/spawn_gate_slot_agreement.json");
         let raw = std::fs::read_to_string(&fixture_path)
             .unwrap_or_else(|e| panic!("read fixture {}: {e}", fixture_path.display()));
         let fixture: serde_json::Value = serde_json::from_str(&raw).unwrap();

@@ -27,7 +27,7 @@ pub struct ObserveArgs {
 }
 
 /// `user from <ssh client address>` over ssh, else the user name alone.
-fn default_name() -> String {
+pub(crate) fn default_name() -> String {
     let user = std::env::var("USER").unwrap_or_default();
     match std::env::var("SSH_CONNECTION")
         .ok()
@@ -45,10 +45,10 @@ fn quits(bytes: &[u8]) -> bool {
 
 /// Raw mode and the alternate screen for the life of the watch, undone on
 /// every exit path.
-struct Screen;
+pub(crate) struct Screen;
 
 impl Screen {
-    fn enter() -> Result<Screen, String> {
+    pub(crate) fn enter() -> Result<Screen, String> {
         crossterm::terminal::enable_raw_mode().map_err(|e| format!("terminal raw mode: {e}"))?;
         let mut out = std::io::stdout();
         let _ = out.write_all(b"\x1b[?1049h\x1b[?25l\x1b[2J");
@@ -67,7 +67,7 @@ impl Drop for Screen {
 }
 
 /// Typed bytes, read on a thread because a tty read cannot be cancelled.
-fn spawn_keys() -> mpsc::UnboundedReceiver<Vec<u8>> {
+pub(crate) fn spawn_keys() -> mpsc::UnboundedReceiver<Vec<u8>> {
     let (tx, rx) = mpsc::unbounded_channel();
     std::thread::spawn(move || {
         let mut stdin = std::io::stdin();

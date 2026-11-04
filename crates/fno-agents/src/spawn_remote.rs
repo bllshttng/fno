@@ -11,8 +11,9 @@
 //! `--cwd` or `--add-dir` value names a path ON THE TARGET HOST: the relay
 //! forwards byte-verbatim and the remote command validates.
 
-use crate::mail_bus::normalize_host;
-use crate::mail_remote::{fno_binary, split_target, target_error};
+use crate::mail::address::normalize_host;
+use crate::mail::address::{split_target, target_error};
+use crate::mail_remote::fno_binary;
 use std::ffi::OsString;
 use std::process::Command;
 
@@ -108,7 +109,7 @@ fn parent_edge_args(session: Option<&str>) -> Vec<String> {
 /// Binary-direct entry from `fno-agents spawn-remote <tail...>`, where the
 /// tail is the spawn argv after the command word.
 pub fn run(args: &[String]) -> i32 {
-    let local_host = crate::claims::hostname();
+    let local_host = crate::name_ledger::local_bus_host();
     let plan = match spawn_plan(args, &local_host) {
         Ok(plan) => plan,
         Err(e) => {
@@ -244,7 +245,7 @@ mod tests {
         let line = crate::mail_remote::ssh_argv("mbp3", &words).join(" ");
         assert!(line.contains("'--spawned-by' 's-parent'"));
         // No resolved session adds no words: the relay stays byte-verbatim
-        // and the far row keeps its refusal reason.
+        // and the remote row keeps its refusal reason.
         let mut plain = spawn_plan(
             &["--name".to_string(), "@mbp3".to_string(), "hi".to_string()],
             "imac2d2",

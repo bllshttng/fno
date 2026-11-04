@@ -99,6 +99,13 @@ impl InputField {
         events
     }
 
+    /// The text with a bar at the cursor, for a host that paints its own row.
+    pub(crate) fn display(&self) -> String {
+        let mut shown = self.text.clone();
+        shown.insert(self.byte_at(self.cursor), '\u{258f}');
+        shown
+    }
+
     pub(crate) fn row(&self, label: &str) -> PopupRow {
         PopupRow::Input {
             label: label.to_string(),
@@ -141,6 +148,7 @@ pub(crate) fn back_row() -> PopupRow {
 mod tests {
     use super::*;
     use crate::popup::{Anchor, Popup};
+    use crate::text_style::TextStyle;
     use crate::theme::Role;
 
     #[test]
@@ -176,7 +184,11 @@ mod tests {
             Role::BodyCursor,
             "cursor cell before the placeholder"
         );
-        assert_eq!(line.roles[ph], Role::PanelMeta, "placeholder is dimmed");
+        assert_eq!(
+            line.roles[ph],
+            Role::Text(TextStyle::Meta),
+            "placeholder is dimmed"
+        );
     }
 }
 

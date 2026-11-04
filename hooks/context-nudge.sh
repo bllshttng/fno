@@ -331,15 +331,15 @@ fi
 # band, defeating the once-per-band anti-nag. Worst case a worktree worker's
 # latch vanishes when the worktree archives. Global + transcript-keyed closes it.
 #
-# They live in a `latches/` SUBDIR of that state dir, not its top level. Four
+# They live in a `state/latches/` SUBDIR of that state dir, not its top level. Four
 # files per session per band at the root buried it: 395 of 527 entries, with no
 # deleter, six days after this hook landed. The location resolves through the
 # same door as every other path (`fno config paths shell-stub`), so an overridden
 # `config.state_dir` moves the latches with it; hardcoding a new
-# `$HOME/.fno/latches` would repeat the bug one directory down.
+# `$HOME/.fno/state/latches` would repeat the bug one directory down.
 _stub="$(with_timeout "$NUDGE_BUDGET" fno config paths shell-stub 2>/dev/null || true)"
 [ -n "$_stub" ] && [ -f "$_stub" ] && . "$_stub" 2>/dev/null
-LATCH_DIR="${LATCHES_DIR:-${STATE_DIR:-$HOME/.fno}/latches}"
+LATCH_DIR="${LATCHES_DIR:-${STATE_DIR:-$HOME/.fno}/state/latches}"
 mkdir -p "$LATCH_DIR" 2>/dev/null || true
 
 # The writer owns the lifetime. A latch is keyed to a session id, so once that

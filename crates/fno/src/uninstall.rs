@@ -836,10 +836,9 @@ pub fn run_uninstall(opts: Opts) -> i32 {
         }
     }
     if opts.purge {
-        let worktrees = std::fs::read_dir(state.join("worktrees"))
-            .into_iter()
-            .flatten()
-            .flatten()
+        let worktrees = [state.join("spaces/worktrees"), state.join("worktrees")]
+            .iter()
+            .flat_map(|base| std::fs::read_dir(base).into_iter().flatten().flatten())
             .flat_map(|repo| {
                 std::fs::read_dir(repo.path())
                     .into_iter()

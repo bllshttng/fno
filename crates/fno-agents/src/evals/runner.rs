@@ -169,6 +169,24 @@ fn git_in(dir: &std::path::Path, args: &[&str]) -> Result<String, String> {
 /// in memory.
 const ANSWER_KEY_PATHS: [&str; 2] = ["evals/bank", "evals/fixtures/metrics"];
 
+/// A skill's golden tasks sit beside it in `skills/<name>/evals/*.yaml`, so they
+/// are answer keys too. Case directories deeper in `evals/` stay.
+fn remove_skill_task_files(tree: &std::path::Path) {
+    let Ok(skills) = std::fs::read_dir(tree.join("skills")) else {
+        return;
+    };
+    for skill in skills.flatten() {
+        let Ok(files) = std::fs::read_dir(skill.path().join("evals")) else {
+            continue;
+        };
+        for f in files.flatten().map(|f| f.path()) {
+            if f.is_file() && f.extension().is_some_and(|e| e == "yaml") {
+                let _ = std::fs::remove_file(f);
+            }
+        }
+    }
+}
+
 /// Where sealed trees live: the temp dir, so no `$HOME` file sits on the
 /// worker's ancestor path. None of it may sit inside `$HOME`, which the fence
 /// denies as a whole.
@@ -267,6 +285,7 @@ fn fill_sealed_tree(
     for key in ANSWER_KEY_PATHS {
         let _ = std::fs::remove_dir_all(dir.join(key));
     }
+    remove_skill_task_files(dir);
     // An empty template: a user's template can carry hooks that name real paths.
     git_in(dir, &["init", "-q", "--template="])?;
     // The fence denies the user's git config, so the worker's git reads these.
@@ -476,10 +495,18 @@ const SEALED_WORKER_ENV: [(&str, &str); 5] = [
     ("RIPGREP_CONFIG_PATH", ""),
 ];
 
+/// The permission mode an unattended footnote evals lane runs in. The other
+/// lane doors run headless workers bypassed (the claude one-shot and opencode
+/// pass their skip flag, zcode defaults its yolo mode), so the footnote lane
+/// matches them through its launch spec. A footnote spawn without the flag
+/// keeps the harness default; the mode is never a default.
+const FOOTNOTE_LANE_PERMISSION_MODE: &str = "bypassPermissions";
+
 /// The spawn argv: the substrate's own --timeout is the first guard; a
 /// lane is a complete coordinate (its harness wins over the provider
 /// default, and its route/account ride along). `--` fences the prompt, or
-/// with `harness_flags` fences those and the prompt sits before it.
+/// with `harness_flags` (or a footnote lane model or permission mode) fences
+/// those and the prompt sits before it.
 fn spawn_argv(
     name: &str,
     workdir: &str,
@@ -511,7 +538,18 @@ fn spawn_argv(
             argv.push(l.account.clone());
         }
     }
-    if harness_flags.is_empty() {
+    // The footnote harness reads its model only from fenced args, so a lane
+    // model that stays outside the fence makes the spawn refuse with
+    // "needs a model".
+    let lane_model = lane
+        .filter(|l| l.harness == "footnote" && !l.model.is_empty())
+        .map(|l| l.model.clone());
+    // The unattended footnote lane runs bypassed like every other lane door;
+    // the mode rides the fence so the launch spec carries it.
+    let lane_mode = lane
+        .filter(|l| l.harness == "footnote")
+        .map(|_| FOOTNOTE_LANE_PERMISSION_MODE);
+    if harness_flags.is_empty() && lane_model.is_none() && lane_mode.is_none() {
         argv.push("--".into());
         argv.push(prompt.into());
     } else {
@@ -519,6 +557,14 @@ fn spawn_argv(
         // prompt sits before it. run_task sends no flags with a dash-led prompt.
         argv.push(prompt.into());
         argv.push("--".into());
+        if let Some(m) = lane_model {
+            argv.push("-m".into());
+            argv.push(m);
+        }
+        if let Some(m) = lane_mode {
+            argv.push("--permission-mode".into());
+            argv.push(m.to_string());
+        }
         argv.extend_from_slice(harness_flags);
     }
     argv
@@ -661,7 +707,7 @@ fn default_spawn(
                 } else {
                     err_text
                 };
-                let last = tail.trim().lines().last().unwrap_or("").to_string();
+                let last = failure_line(&tail);
                 return SpawnResult {
                     ok: false,
                     reason: format!("spawn exit {code}: {last}"),
@@ -688,6 +734,45 @@ fn default_spawn(
     }
 }
 
+/// Words that mark a line as the cause of a failed launch.
+const CAUSE_WORDS: [&str; 9] = [
+    "error",
+    "429",
+    "limit",
+    "exhaust",
+    "denied",
+    "refused",
+    "not found",
+    "unavailable",
+    "failed",
+];
+
+/// The line that names why a spawn exited non-zero. Claude prints
+/// `[claude-code:...]` diagnostics on runs that succeed too (an SDK side
+/// query on a routed model id), and a trailing hint can follow the real
+/// error. Take the last non-diagnostic line that reads as a cause, else the
+/// last non-diagnostic line, else the last line.
+fn failure_line(text: &str) -> String {
+    let lines: Vec<&str> = text.trim().lines().collect();
+    let plain: Vec<&str> = lines
+        .iter()
+        .copied()
+        .filter(|l| !l.trim_start().starts_with("[claude-code:"))
+        .collect();
+    let reads_as_cause = |l: &&str| {
+        let low = l.to_lowercase();
+        CAUSE_WORDS.iter().any(|w| low.contains(w))
+    };
+    plain
+        .iter()
+        .rev()
+        .find(|l| reads_as_cause(l))
+        .or(plain.last())
+        .or(lines.last())
+        .map(|l| l.to_string())
+        .unwrap_or_default()
+}
+
 /// A resolved lane coordinate from the native inventory (route_gather):
 /// the same fold `agents.profiles.*.lanes` joins against, never a second
 /// model/effort enum.
@@ -705,7 +790,35 @@ pub struct LaneRow {
 /// declared lanes (the Python repr shape, single quotes).
 pub fn resolve_lane(name: &str) -> Result<LaneRow, String> {
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-    lane_from_inventory(&crate::route_gather::inventory(&cwd), name)
+    let lane = lane_from_inventory(&crate::route_gather::inventory(&cwd), name)?;
+    if lane.harness == "claude" && !lane.account.is_empty() {
+        if let Ok(accounts) = crate::accounts::records::load(None, &cwd) {
+            let ids: Vec<&str> = accounts
+                .records
+                .iter()
+                .filter(|r| r.harness == "claude")
+                .map(|r| r.id.as_str())
+                .collect();
+            lane_account_check(&lane, &ids)?;
+        }
+    }
+    Ok(lane)
+}
+
+/// A claude lane's `account` must name a registered record. A route such as
+/// `zai/...` is a vendor, not an account: naming it as one made every spawn on
+/// the lane exit 2 after the gate had already queued its trials.
+fn lane_account_check(lane: &LaneRow, claude_ids: &[&str]) -> Result<(), String> {
+    if claude_ids.contains(&lane.account.as_str()) {
+        return Ok(());
+    }
+    Err(format!(
+        "lane '{}' names account '{}', which is not a registered claude account ({}); \
+         drop `account` from its routing.models row or register it",
+        lane.name,
+        lane.account,
+        claude_ids.join(", ")
+    ))
 }
 
 fn lane_from_inventory(inv: &serde_json::Value, name: &str) -> Result<LaneRow, String> {
@@ -765,6 +878,17 @@ fn lane_evidence(
     crate::eval_attempt::observe(&payload)
 }
 
+/// The harness a run spawns on: the lane row's, else the CLI arg. The history
+/// row records this same value, so a lane-driven run is not stamped null.
+fn seat_harness<'a>(
+    lane: Option<&'a LaneRow>,
+    worker_provider: Option<&'a str>,
+) -> Option<&'a str> {
+    lane.map(|l| l.harness.as_str())
+        .filter(|h| !h.is_empty())
+        .or(worker_provider)
+}
+
 /// The run loop: per (repeat, attempt): fresh disposable worktree ->
 /// optional worker -> mechanical grade -> history row -> worktree removed.
 /// Every attempt persists with a unique identity and structured
@@ -789,10 +913,7 @@ pub fn run_task(
     let timeout_s = std::cmp::max(1, task.timeout_minutes.saturating_mul(60));
     let mut results: Vec<RunResult> = Vec::new();
     let run_id = uuid_v4();
-    let spawn_harness = lane
-        .map(|l| l.harness.as_str())
-        .filter(|h| !h.is_empty())
-        .or(worker_provider);
+    let spawn_harness = seat_harness(lane, worker_provider);
     for i in 0..repeat {
         let started = std::time::Instant::now();
         let started_wall = std::time::SystemTime::now()
@@ -957,7 +1078,7 @@ pub fn run_task(
             "obs": obs,
             "bank_rev": bank_rev,
             "tree_hash": tree,
-            "worker_provider": worker_provider,
+            "worker_provider": spawn_harness,
             "variant": variant,
             "experiment_id": experiment_id,
         });
@@ -1098,6 +1219,28 @@ mod tests {
     }
 
     #[test]
+    fn a_failure_reason_skips_the_claude_code_diagnostic_line() {
+        let err = "429 quota exhausted\n[claude-code:unrecognized_model] {\"model\":\"m\"}\n";
+        assert_eq!(failure_line(err), "429 quota exhausted");
+        assert_eq!(failure_line("[claude-code:x] y"), "[claude-code:x] y");
+        let hinted = "Error: usage limit reached (429)\nrun with --help\n[claude-code:z] q\n";
+        assert_eq!(failure_line(hinted), "Error: usage limit reached (429)");
+        assert_eq!(failure_line(""), "");
+    }
+
+    #[test]
+    fn a_claude_lane_naming_an_unregistered_account_is_refused_by_name() {
+        let lane = LaneRow {
+            name: "zai-flash".into(),
+            account: "zai".into(),
+            ..LaneRow::default()
+        };
+        assert!(lane_account_check(&lane, &["makers", "zai"]).is_ok());
+        let err = lane_account_check(&lane, &["makers", "readyrule"]).unwrap_err();
+        assert!(err.contains("'zai'") && err.contains("makers, readyrule"));
+    }
+
+    #[test]
     fn a_lane_resolves_from_the_inventory_rows_and_a_miss_names_the_declared_ones() {
         let inv = serde_json::json!({"rows": [
             {"name": "zai-flash", "harness": "claude", "route": "zai/glm", "account": "zai"},
@@ -1114,6 +1257,19 @@ mod tests {
         );
         let miss = lane_from_inventory(&inv, "nope").err().unwrap();
         assert!(miss.contains("['codex-luna', 'zai-flash']"), "{miss}");
+    }
+
+    #[test]
+    fn a_lane_run_stamps_the_lane_harness_not_the_cli_arg() {
+        let lane = LaneRow {
+            harness: "claude".into(),
+            ..Default::default()
+        };
+        assert_eq!(seat_harness(Some(&lane), None), Some("claude"));
+        assert_eq!(seat_harness(Some(&lane), Some("codex")), Some("claude"));
+        let bare = LaneRow::default();
+        assert_eq!(seat_harness(Some(&bare), Some("codex")), Some("codex"));
+        assert_eq!(seat_harness(None, None), None);
     }
 
     #[test]
@@ -1345,5 +1501,71 @@ mod tests {
         assert!(argv.contains(&"--route".to_string()));
         assert!(argv.contains(&"zai/glm".to_string()));
         assert!(argv.contains(&"--account".to_string()));
+    }
+
+    #[test]
+    fn a_footnote_lane_model_crosses_the_fence_as_minus_m() {
+        let lane = LaneRow {
+            name: "fn".into(),
+            harness: "footnote".into(),
+            model: "glm-5.3-flash".into(),
+            ..Default::default()
+        };
+        let argv = spawn_argv(
+            "n",
+            "/tmp/wt",
+            60,
+            Some("footnote"),
+            Some(&lane),
+            "run it",
+            &[],
+        );
+        let fence = argv.iter().position(|a| a == "--").unwrap();
+        assert_eq!(
+            argv[fence - 1],
+            "run it",
+            "the prompt sits before the fence"
+        );
+        assert_eq!(&argv[fence + 1..fence + 3], &["-m", "glm-5.3-flash"]);
+        // The unattended footnote lane runs bypassed like every other lane
+        // door: the mode rides the fence so the launch spec carries it.
+        assert_eq!(
+            &argv[fence + 3..fence + 5],
+            &["--permission-mode", "bypassPermissions"]
+        );
+        // The model is footnote-only: another harness's lane model never rides.
+        let claude_lane = LaneRow {
+            name: "c".into(),
+            harness: "claude".into(),
+            model: "glm-5.3-flash".into(),
+            ..Default::default()
+        };
+        let argv = spawn_argv(
+            "n",
+            "/tmp/wt",
+            60,
+            Some("claude"),
+            Some(&claude_lane),
+            "p",
+            &[],
+        );
+        assert_eq!(argv.last().unwrap(), "p", "no fence shape without a model");
+        assert!(!argv.contains(&"-m".to_string()));
+        // The mode is footnote-only too: another harness's lane never carries
+        // it (each door owns its own unattended posture).
+        assert!(!argv.contains(&"--permission-mode".to_string()));
+        // A footnote lane with no model still gets the fence for the mode.
+        let bare = LaneRow {
+            name: "fn2".into(),
+            harness: "footnote".into(),
+            ..Default::default()
+        };
+        let argv = spawn_argv("n", "/tmp/wt", 60, Some("footnote"), Some(&bare), "p", &[]);
+        let fence = argv.iter().position(|a| a == "--").unwrap();
+        assert_eq!(
+            &argv[fence + 1..fence + 3],
+            &["--permission-mode", "bypassPermissions"]
+        );
+        assert!(!argv.contains(&"-m".to_string()));
     }
 }

@@ -357,7 +357,7 @@ event_types:
           description: "Human-readable provenance on a settle row: why the row exists (the invocation died unanswered) and that no review ran. Present only on output_contract lost."
         model:
           type: string
-          description: "The model that ANSWERED, read from the attesting session's own transcript at emit via observed_model_for_session (cli/src/fno/provenance/observed.py, the platform provenance leaf) - claude's assistant message.model rows with synthetic notices skipped, codex's turn_context.payload.model. Stamped by the emit chokepoint (fno doctor event emit), never supplied by the caller: a --data value disagreeing with the transcript is refused, the same rule attester_session_id follows and for the same reason. Empty means NOT OBSERVABLE (no ambient harness, unreadable transcript, no model row yet), never proof of the primary model. This field used to record ANTHROPIC_MODEL - the model the session ASKED for - which a dedicated node measured naming a model that did not answer on four sessions in one day, because a non-Anthropic name over an unset base URL silently falls back to the primary Anthropic model. Events emitted before this change may carry that claim or the literal `unobserved` (a claim made and refused); both are legacy values a reader must not treat as an observation. Not read by loop-check; this is the audit trail a capability floor would need."
+          description: "The model that ANSWERED, read from the attesting session's own transcript at emit via the native observed-model read (crates/fno-agents/src/event_context.rs) - claude's assistant message.model rows with synthetic notices skipped, codex's turn_context.payload.model. Stamped by the emit chokepoint (fno doctor event emit), never supplied by the caller: a --data value disagreeing with the transcript is refused, the same rule attester_session_id follows and for the same reason. Empty means NOT OBSERVABLE (no ambient harness, unreadable transcript, no model row yet), never proof of the primary model. This field used to record ANTHROPIC_MODEL - the model the session ASKED for - which a dedicated node measured naming a model that did not answer on four sessions in one day, because a non-Anthropic name over an unset base URL silently falls back to the primary Anthropic model. Events emitted before this change may carry that claim or the literal `unobserved` (a claim made and refused); both are legacy values a reader must not treat as an observation. Not read by loop-check; this is the audit trail a capability floor would need."
         provider:
           type: string
           description: "The endpoint host the attesting session was pointed at (host only, derived from ANTHROPIC_BASE_URL at emit; scheme, path, and any userinfo are stripped so no key material lands here). Empty means not observable from the environment - the default Anthropic endpoint, or a lane that does not route via env. Same best-effort caveat as model."
@@ -4496,7 +4496,7 @@ event_types:
           description: "Target session identifier."
         reason:
           type: string
-          enum: [DonePRGreen, DoneUnreviewed, DoneAdvisory, DoneDelivery, DoneBatched, DoneAwaitingMerge, DoneAwaitingReview, DonePlanned, NoWork, Budget, NoProgress, HeldOnQuestion, Interrupted, Aborted]
+          enum: [DonePRGreen, DoneUnreviewed, DoneAdvisory, DoneDelivery, DoneBatched, DoneAwaitingMerge, DoneAwaitingReview, DoneAwaitingRuling, DonePlanned, NoWork, Budget, NoProgress, HeldOnQuestion, Interrupted, Aborted]
           description: "TerminationReason enum value."
         axis:
           type: string
@@ -4887,10 +4887,13 @@ event_types:
           description: "Optional. Executed evidence rows (cmd, exit code, output head) backing a code fact the ruling asserts. Listed by the reader projection before this declaration existed; declared here so the schema and the projection agree."
         scope:
           type: string
-          description: "Optional. Who the law governs: `global`, `project:<slug>`, `machine:<id>` or `person:<name>`. A row with no scope reads as project:fno, because every row recorded before this field existed was recorded in fno. The law door stamps the recording session's project by default; widening is an explicit --global, --machine or --person, because law is never inherited by silence. A global law, or one naming another machine or person, needs a stated fleet.owner. Readers filter to global plus the session's project, machine id and person, and fail open with a named reason when the project cannot be resolved."
+          description: "Optional. Who the law governs: `global`, `project:<slug>`, `machine:<id>` or `user:<name>` (older rows read `person:<name>`). A row with no scope reads as project:fno, because every row recorded before this field existed was recorded in fno. The law door stamps the recording session's project by default; widening is an explicit --global, --machine or --user, because law is never inherited by silence. A global law, or one naming another machine or user, needs a user certificate on the recording machine, which signs the row (user_cert, user_sig). Readers filter to global plus the session's project, machine id and user, and fail open with a named reason when the project cannot be resolved. A machine with a user certificate binds a wide row recorded since 2026-11-03 only when its own user key signed it."
         paths:
           type: array
           description: "Optional. Repo-relative globs. A live law with paths becomes a pre-tool rule on Edit and Write of a matching file, printed once per session (hooks/rules-dispatch.sh)."
+        when:
+          type: object
+          description: "Optional. When the law is on. `from` is `{kind: date, at}` or `{kind: event, node_id}` and keeps the law off until it starts; once started it stays started. `while` is a list of `{cmd}` and the law is on only while every command exits 0. `window` is `{start, end}` in HH:MM machine-local time and may wrap midnight. All three must pass. An unreadable reading keeps the last answer, and with none the law stays on."
         trace:
           type: object
           description: "Optional. The traced-decision envelope (shape: decision_span.trace). The answer row carries span_id = decision_id and parent_span_id = the question_id it answers, so one query on trace_id reads the whole chain."
@@ -4908,8 +4911,8 @@ event_types:
       properties:
         span_kind:
           type: string
-          enum: [ask, route, correction, block, nudge, notify, merge_landed, merge_armed, merge_requested, merged_outside_fno, rule]
-          description: "The hop this row records: ask (a worker asked its lead), route (the lead answered itself or escalated), correction (a later ruling overturns a span), block (a guard refused a chat ask that skipped the route span, or an event_rules row blocked a Stop, attrs rule/matched_event), nudge and notify (an event_rules row fired once per matched event or sent the operator an FYI, attrs rule/matched_event), merge_landed and merge_armed (the merge owner recorded a Merged or Armed outcome, attrs pr/repo/head/path/grant), merge_requested (the gh proxy or the PostToolUse hook saw a merge argv, attrs pr/repo/path), merged_outside_fno (reconcile closed a node whose merge the journal never saw, attrs pr/repo/merged_at/merge_sha), rule (fno::rules::decide fired a rule at a hook or door, attrs rule/law/event/verdict/tool). More values land as later surfaces adopt the envelope."
+          enum: [ask, route, correction, block, nudge, notify, merge_landed, merge_armed, merge_requested, merged_outside_fno, merge_freeze_set, merge_freeze_cleared, rule]
+          description: "The hop this row records: ask (a worker asked its lead), route (the lead answered itself or escalated), correction (a later ruling overturns a span), block (a guard refused a chat ask that skipped the route span, or an event_rules row blocked a Stop, attrs rule/matched_event), nudge and notify (an event_rules row fired once per matched event or sent the operator an FYI, attrs rule/matched_event), merge_landed and merge_armed (the merge owner recorded a Merged or Armed outcome, attrs pr/repo/head/path/grant), merge_requested (the gh proxy or the PostToolUse hook saw a merge argv, attrs pr/repo/path), merged_outside_fno (reconcile closed a node whose merge the journal never saw, attrs pr/repo/merged_at/merge_sha), merge_freeze_set and merge_freeze_cleared (the merge freeze was set or lifted, attrs repo/lift, and for a set subject/set_by/pin_sha/pin_prs), rule (fno::rules::decide fired a rule at a hook or door, attrs rule/law/event/verdict/tool). More values land as later surfaces adopt the envelope."
         trace:
           type: object
           required: [trace_id, span_id, actor_kind, comms]
@@ -8444,9 +8447,9 @@ event_types:
           description: "What remained of the fire's aggregate budget when the drain started. Near zero means the pre-drain reads had already spent the fire."
     consumers: [operator]
   # The agents family's legacy flat-kind telemetry, envelope-mapped by
-  # fno.agents.events.emit with the channel identity (source agents). These
-  # kinds predate their schema entries; the entries carry no required data
-  # so every historical shape lands, and the data stays open.
+  # the Rust emitter (crates/fno-agents/src/events.rs) with the channel
+  # identity (source agents). These kinds predate their schema entries; the
+  # entries carry no required data, so every historical shape lands.
   - name: agent_ask_started
     description: "An fno-agents ask RPC started."
     sources: [daemon, agents]
@@ -8737,6 +8740,10 @@ event_types:
     description: "A wait or cadence red-cancel of a head's runs still in flight: the failing checks that caused the red verdict, the head, the PR, and each run's cancel result."
     sources: [rust, daemon]
     data: {required: [slug, pr, head, cause, runs]}
+  - name: ci_cancel_intent
+    description: "Written before any Actions run cancel POST: the arm that asks (actor), the run, the session, pid and host. A run cancelled by the API with no such row came from a caller that predates this row."
+    sources: [rust, daemon]
+    data: {required: [slug, run, actor, session_id, pid, host]}
   - name: merge_queue_entry
     description: "authorized_merge queued a PR head in place of merging it, because merge_queue.enabled is on. The merge queue arm lands it in a batch tested on main."
     sources: [daemon, rust]

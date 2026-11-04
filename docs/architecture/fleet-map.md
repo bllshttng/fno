@@ -12,6 +12,8 @@ fno agents fleet top --machines --since 10m
 
 A machine whose newest beat is older than `--since` (default 5m) shows `offline` with its age. With `store.remote_url` unset, this machine shows alone and the output names the missing key.
 
+The mux sideline reads this map to group rows by machine and open a session on another one: see [remote sessions](mux-remote-sessions.md).
+
 ## How rows get there
 
 Each daemon beats every 60 seconds. One beat writes this machine's `fleet_machine` row and replaces its own `fleet_session` rows, in one transaction on the primary. A session's `age_s` is the whole seconds since its last activity. A row has one writer: the machine it names. The beat reads numbers the daemon already keeps. CPU, verdict and memory pressure come from the newest `machine_sample` journal row. Memory used and the cap come from the capacity state file. The beat samples nothing itself. An unreachable primary logs once and never blocks the tick.
@@ -20,11 +22,13 @@ The same beat replaces this machine's `fleet_seat` rows. A seat row holds the fu
 
 The beat also replaces this machine's `fleet_turn` rows and its `fleet_machine_facts` row, on the same rules. A turn row holds the session's last message, its last prompt, its user turn count and its progress. The beat reads the prompt, the count and the message off the session's transcript, for claude and codex. The read resumes where the last beat stopped. A message keeps its paragraphs and is cut at 1,200 characters, and a prompt is cut at 600. Other harnesses fall back to the `top` row's message, which is short and on one line, and their prompt and count read null. The progress comes from the `top` row. The facts row holds the display name and the provider lanes: each lane's cap, live count and whether it is full. A lane never carries the names of the sessions that hold it. This text goes to the primary at `store.remote_url`, and the web command page shows it in the session drawer. A read failure on either table joins `seat_error`.
 
+The beat also replaces this machine's `fleet_mark` rows, on the same rules. A mark row holds the facts a sideline sorts, groups and prices a card on. They are the session's workspace name, whether it needs input, and whether you pinned it. They also include its cost in cents, its token count and its compaction count. The needs-input flag is the blocked word of the badge lattice the daemon already folds. The pin is the keep mark that `fno agents reap --keep` writes. Only the mux server resolves a session to a workspace, and only it serves the counts. It writes both to `fleet/workspaces.json` under the agents home, and the beat forwards them. The server refreshes the file only while a client is attached to it. A file older than five minutes reads as nothing filed, and the sideline then groups that session by its project and hides the counts. A count the server has no reading for is null, never zero. A machine whose daemon predates the table reads all six as null. A read failure joins `seat_error`.
+
 Watts and GPU are null today. The mux meter's `macmon` child is their only reader, and it does not run on the daemon side. Booted simulators are not sampled: `xcrun simctl list devices booted` took over 120 seconds on one machine.
 
 ## Who owns a machine
 
-The beat reads `fleet.owner` from the global config, else `$USER`. It reads `fleet.role`, else `worker`. It reads `fleet.name` as the display name, else null, and a reader then shows the host.
+The beat reads the owner from the one person resolver: the user a [user certificate](multiplayer.md#the-user-certificate) proves, else `fleet.owner` from the global config, else `$USER`. It reads `fleet.role`, else `worker`. It reads `fleet.name` as the display name, else null, and a reader then shows the host.
 
 ```toml
 [fleet]

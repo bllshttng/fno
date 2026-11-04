@@ -29,13 +29,14 @@ FIXSLUG="$(printf '%s' "$FIXCWD" | tr '/.' '--')"
 mkdir -p "$tmp/bin" "$FIXCWD" "$tmp/projects/$FIXSLUG" "$tmp/codex/2026/07/20" "$tmp/home"
 # Run from a cwd that is NOT a known project: project confinement (defect 1) is
 # N/A outside a project, so this test exercises machine-wide adoption. The confined path (same-project adopt,
-# foreign refuse) is covered by cli/tests/agents/test_store_fallback_confinement.py.
+# foreign refuse) is covered by the heal-token legs of
+# crates/fno-agents/tests/registry_commands_parity.rs.
 cd "$tmp" || { echo "FAIL: could not enter tmp"; exit 1; }
 
 # Shim `fno` to this worktree's source. `mux` never
 # forwards: the Python front execs the `fno` on PATH for that command, which is
 # this shim again, and the recursion runs until the runner kills it. attach
-# reaches the mux through `fno mux thread`, so the shim answers as a box with
+# reaches the mux through `fno mux thread`, so the shim answers as a machine with
 # no live mux server.
 restore_fno() {
   cat > "$tmp/bin/fno" <<EOF

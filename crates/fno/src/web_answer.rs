@@ -165,14 +165,17 @@ mod tests {
     fn web_answer_origin_must_match_host_when_sent() {
         let with = |origin: Option<&str>| {
             let mut h = HeaderMap::new();
-            h.insert(header::HOST, HeaderValue::from_static("box.tail1.ts.net"));
+            h.insert(
+                header::HOST,
+                HeaderValue::from_static("machine.tail1.ts.net"),
+            );
             if let Some(o) = origin {
                 h.insert(header::ORIGIN, HeaderValue::from_str(o).unwrap());
             }
             same_origin(&h)
         };
         assert!(with(None).is_ok());
-        assert!(with(Some("https://box.tail1.ts.net")).is_ok());
+        assert!(with(Some("https://machine.tail1.ts.net")).is_ok());
         assert!(with(Some("https://evil.example")).is_err());
         assert!(with(Some("null")).is_err());
     }

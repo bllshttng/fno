@@ -1263,13 +1263,11 @@ pub fn converge(r: Runner, home: &Path, req: &Request) -> Result<Converged, Conv
     let owned = owned_dir(home);
     fs::create_dir_all(&owned)
         .map_err(|e| ConvergeError::new("convergence-lock", e.to_string()))?;
-    let lock = fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(owned.join("plugin-channel.lock"))
-        .map_err(|e| ConvergeError::new("convergence-lock", e.to_string()))?;
-    lock.lock()
-        .map_err(|e| ConvergeError::new("convergence-lock", e.to_string()))?;
+    let _lock = crate::chokepoint::take(
+        &crate::chokepoint::CODEX_CONVERGE,
+        &owned.join("plugin-channel.lock"),
+    )
+    .map_err(|e| ConvergeError::new("convergence-lock", e.to_string()))?;
 
     let state = collect(r, home)?;
     let snapshot = Snapshot {

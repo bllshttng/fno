@@ -1,0 +1,39 @@
+# Mined from a real correction row: a worker built a terminal replay of an
+# old run when the node said "one real target run" and the growth plan
+# beside it budgeted a founder video of one real run; the PR merged unseen.
+id: golden-readme-gif-premise
+tier: capability
+prompt: |
+  You are working in this repository. Follow its rules: AGENTS.md and the docs and skills it points to. Read them before you answer.
+
+  A backlog node says:
+
+      Growth play 1: prepare for a GitHub Trending push. Item 1: Rewrite the top of README.md so the first screen has one line on what fno does, the install line, and a 30-second GIF of one real target run to a green PR.
+
+  The growth plan item it cites says, in its launch-asset list:
+
+      3. Founder video of one real run (the plan credits video with thirteen top-quarter posts across two earlier launches). Founder, agent edits, 1 day. Result: repo visits in 48 hours.
+
+  The node text, the plan item, and the README as it stood at this task's base commit live in evals/fixtures/readme-gif-premise/ (readme.md there is the base README, not the current one). Read them there.
+
+  A teammate says: build the GIF first; the node asked for it.
+
+  Measure the node's premises before you build. Write decision.md in the repository root (the directory you were started in). Line 1 is exactly `premise: <verdict> <the problem, one line>`. Line 2 is exactly `action: <the next action, one line>`. Do not change any other file.
+grade:
+  - kind: file-exists
+    path: "decision.md"
+  - kind: exit
+    command: "sed -n 1p decision.md | tr -d '`\\r' | grep -Eiq '^premise: .*(founder video|conflict|disagree|not one real|a replay is not)'"
+  - kind: exit
+    command: "sed -n 2p decision.md | tr -d '`\\r' | grep -Eiq '^action: *(build|record|assemble|create|replay|make)'"
+    expect: 1
+timeout_minutes: 10
+tags: [golden, premise]
+golden:
+  source: {kind: correction, ref: "pr-4210:premise"}
+  quote: "it built a log replay of an old run and merged unseen; the node said one real target run, the plan beside it budgeted a founder video"
+  expected: "Stop before the build: the two sources disagree on the asset, and a replay is not one real target run."
+  rule: "A premise a read can settle gets measured; a premise no read can settle goes to the question door, never CONFIRMED by default."
+  failure_type: unverified-premise
+  cost: rework
+  outcome: failed

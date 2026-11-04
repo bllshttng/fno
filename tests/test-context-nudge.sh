@@ -128,10 +128,12 @@ export REGISTRY_SEED_BIN="$AGENTS_BIN"
 source "$REPO_ROOT/tests/helpers/registry-seed.sh"
 # Seed at this writer's schema. HOME is the sandbox, so this IS the shared
 # registry, and a source-built writer refuses to raise it from an older one.
-REG_V="$(PYTHONPATH="$FNO_SRC" "$FNO_PYTHON" -c 'from fno.agents.registry import SCHEMA_VERSION; print(SCHEMA_VERSION)')"
+# The schema version's owner is the canonical TOML (crates/fno-agents); the
+# Python constant's module is deleted.
+REG_V="$(sed -n 's/^version = //p' "$REPO_ROOT/crates/fno-agents/src/registry_schema.toml" | tr -d ' ')"
 export REG_V
 # Pin the optional-hook budget: this suite tests nudge LOGIC, and the runner's
-# load (four shards, one box) is a property of the shard, not of the code. A
+# load (four shards, one machine) is a property of the shard, not of the code. A
 # busy-tier 1s bound fired twice on AC20's probe (2026-10-05, three runs) and
 # read as probe silence, which is indistinguishable here from a real death.
 # The tiers keep ruling in production; FNO_HOOK_BUDGET_SECS is unset there.
@@ -143,7 +145,7 @@ trap 'rm -rf "$SBX" "$BINDIR"' EXIT
 mkdir -p "$SBX/.fno/agents"
 printf 'schema_version: 1\nconfig:\n  state_dir: %s/.fno/\n' "$SBX" > "$SBX/.fno/settings.yaml"
 touch "$SBX/.fno/.path-migration-done"   # prevent [setup] state_dir re-migration
-LATCHES="$SBX/.fno/latches"               # latches live in a subdir, not the root
+LATCHES="$SBX/.fno/state/latches"               # latches live in a subdir, not the root
 mkdir -p "$LATCHES"
 printf '[target.handoff]\nlead_used_pct_trigger = 40\nused_pct_trigger = 50\n' > "$SBX/.fno/config.toml"
 export FNO_CONFIG="$SBX/.fno/settings.yaml"
@@ -786,9 +788,9 @@ cp "$SBX/.fno/config.toml" "$ALT_STATE/config.toml" 2>/dev/null || true
 cp -R "$SBX/.fno/agents" "$ALT_STATE/agents" 2>/dev/null || true
 rm -rf "$LATCHES"
 ( export FNO_CONFIG="$SBX/alt-settings.yaml"; run_hook "$(payload "$SBX/lt.jsonl")" \
-  ; find "$ALT_STATE/latches" -maxdepth 1 -type f -name '.context-nudge-*' 2>/dev/null | wc -l | tr -d ' ' > "$SBX/alt-count" )
+  ; find "$ALT_STATE/state/latches" -maxdepth 1 -type f -name '.context-nudge-*' 2>/dev/null | wc -l | tr -d ' ' > "$SBX/alt-count" )
 alt_count="$(cat "$SBX/alt-count" 2>/dev/null || echo 0)"
-home_count=$(find "$SBX/.fno/latches" -maxdepth 1 -type f -name '.context-nudge-*' 2>/dev/null | wc -l | tr -d ' ')
+home_count=$(find "$SBX/.fno/state/latches" -maxdepth 1 -type f -name '.context-nudge-*' 2>/dev/null | wc -l | tr -d ' ')
 [ "$alt_count" -gt 0 ] && ok "latch: follows an overridden config.state_dir" \
   || bad "latch: nothing under the overridden state_dir (found $alt_count)"
 assert_eq "latch: overridden state_dir writes nothing under \$HOME/.fno" "$home_count" "0"

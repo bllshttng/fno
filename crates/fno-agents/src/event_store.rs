@@ -2370,6 +2370,11 @@ pub struct ArmTickReduction {
     /// An arm with no newest tick inside the active window has no tick there,
     /// so the caller derives `ticked` from this without a second scan.
     pub max_ts: Vec<(String, i64)>,
+    /// Each tick arm's newest `(arm, ts_ms)` whose row counts as active
+    /// (`acted` nonzero, or its skip explains). Sorted by arm. The caller
+    /// slices this to its own active window, so one reduction serves any
+    /// starvation threshold without a per-threshold scan.
+    pub max_active_ts: Vec<(String, i64)>,
     /// Arms holding a row in the active window whose `acted` is nonzero or
     /// whose skip explains. Sorted.
     pub active_arms: Vec<String>,
@@ -2390,6 +2395,38 @@ fn skip_ok_sql(failure_skips: &[&str]) -> String {
         .collect::<Vec<_>>()
         .join(", ");
     format!("{skip} IS NULL OR {skip} NOT IN ({list})")
+}
+
+/// The store's max rowid (`seq` is the rowid), or 0 when the store is empty
+/// or unreadable. O(1): the rowid max is the last row of the main btree.
+pub fn store_max_seq(store: &Path) -> Result<i64, String> {
+    let conn = open_read(&store)?;
+    let max: Option<i64> = conn
+        .query_row("SELECT MAX(seq) FROM events", [], |r| r.get(0))
+        .map_err(|e| e.to_string())?;
+    Ok(max.unwrap_or(0))
+}
+
+/// The rows past a seq boundary: `(seq, line)` in seq order, empty when the
+/// store is unreadable. A rowid range scan, so the incremental fold's tail
+/// read costs only the rows it folds.
+pub fn store_tail_rows(store: &Path, last: i64) -> Vec<(i64, String)> {
+    let Ok(conn) = open_read(store) else {
+        return Vec::new();
+    };
+    let Ok(mut stmt) = conn.prepare("SELECT seq, line FROM events WHERE seq > ?1 ORDER BY seq")
+    else {
+        return Vec::new();
+    };
+    let mut rows = Vec::new();
+    if let Ok(mut walk) = stmt.query(params![last]) {
+        while let Ok(Some(row)) = walk.next() {
+            if let (Ok(seq), Ok(line)) = (row.get::<_, i64>(0), row.get::<_, String>(1)) {
+                rows.push((seq, line));
+            }
+        }
+    }
+    rows
 }
 
 /// Reduce the arms window of one journal. `None` when the journal has no
@@ -2417,20 +2454,30 @@ pub fn reduce_arm_ticks(
     if !store_has_events(&conn).unwrap_or(false) {
         return None;
     }
-    // One GROUP BY pass over the whole window holds every arm's newest and
-    // newest-ok. No early exit is exact: an arm's newest row can sit anywhere
-    // in the window, so a walk that stops once the arms seen so far each hold
-    // both maxima (true after the first ok row) drops every older arm, and the
-    // readout calls exactly those arms UNOBSERVED. The scalar aggregate keeps
-    // the pass cheap: three json_extracts per row, no line materialized.
+    // One GROUP BY pass over the whole window holds every arm's newest,
+    // newest-ok, and newest-active ts. No early exit is exact: an arm's
+    // newest row can sit anywhere in the window, so a walk that stops once
+    // the arms seen so far each hold both maxima (true after the first ok
+    // row) drops every older arm, and the readout calls exactly those arms
+    // UNOBSERVED. The scalar aggregate keeps the pass cheap: three
+    // json_extracts per row, no line materialized. The active GLOBs are the
+    // byte-cheap predicates the DISTINCT scan used (a string value quoting
+    // `"acted":1` could only false-positive toward not-starved, the
+    // conservative side of the mark); the window here is the arms window,
+    // which any active window inside it slices by ts.
     let maxima_sql = format!(
         "SELECT json_extract(line, '$.data.arm') AS arm, MAX(ts_ms), \
-         MAX(CASE WHEN {} THEN ts_ms END) \
+         MAX(CASE WHEN {} THEN ts_ms END), \
+         MAX(CASE WHEN line GLOB '*\"acted\":[1-9]*' \
+                   OR (line GLOB '*\"skip_reason\":\"*\"*' \
+                       AND line NOT GLOB '*\"skip_reason\":\"starved\"*') \
+                  THEN ts_ms END) \
          FROM events WHERE type = ?1 AND ts_ms >= ?2 GROUP BY arm",
         skip_ok_sql(failure_skips),
     );
     let mut max_ts: std::collections::HashMap<String, i64> = Default::default();
     let mut max_ok_ts: std::collections::HashMap<String, i64> = Default::default();
+    let mut max_active_ts: std::collections::HashMap<String, i64> = Default::default();
     {
         let mut stmt = conn.prepare(&maxima_sql).ok()?;
         let mut walk = stmt.query(params![tick_type, since_ms]).ok()?;
@@ -2442,29 +2489,20 @@ pub fn reduce_arm_ticks(
             let max: i64 = row.get(1).ok()?;
             max_ts.insert(arm.clone(), max);
             if let Some(max_ok) = row.get::<_, Option<i64>>(2).ok()? {
-                max_ok_ts.insert(arm, max_ok);
+                max_ok_ts.insert(arm.clone(), max_ok);
+            }
+            if let Some(max_active) = row.get::<_, Option<i64>>(3).ok()? {
+                max_active_ts.insert(arm, max_active);
             }
         }
     }
-    // Arms with an active row in the active window, from one byte-cheap GLOB
-    // scan: a string value quoting `"acted":1` could only false-positive
-    // toward not-starved, the conservative side of the mark. The extract
-    // runs on matching rows only, and the scan covers the whole window, so
-    // the maxima scan above never truncates this verdict.
-    const ACTIVE_SQL: &str = "SELECT DISTINCT json_extract(line, '$.data.arm') FROM events \
-         WHERE type = ?1 AND ts_ms >= ?2 \
-         AND (line GLOB '*\"acted\":[1-9]*' \
-              OR (line GLOB '*\"skip_reason\":\"*\"*' \
-                  AND line NOT GLOB '*\"skip_reason\":\"starved\"*'))";
+    // Arms with an active row in the active window, sliced off the maxima:
+    // an arm's newest active row inside the whole window at or after the
+    // active bound is exactly a row the DISTINCT scan would have found.
     let mut active: std::collections::HashSet<String> = Default::default();
-    {
-        let mut stmt = conn.prepare(ACTIVE_SQL).ok()?;
-        let mut found = stmt.query(params![tick_type, active_since_ms]).ok()?;
-        while let Some(row) = found.next().ok()? {
-            let arm: Option<String> = row.get(0).ok()?;
-            if let Some(arm) = arm {
-                active.insert(arm);
-            }
+    for (arm, ts) in &max_active_ts {
+        if *ts >= active_since_ms {
+            active.insert(arm.clone());
         }
     }
     let mut rows: Vec<(i64, String)> = Vec::new();
@@ -2529,11 +2567,14 @@ pub fn reduce_arm_ticks(
     }
     let mut max_pairs: Vec<(String, i64)> = max_ts.into_iter().collect();
     max_pairs.sort();
+    let mut max_active_pairs: Vec<(String, i64)> = max_active_ts.into_iter().collect();
+    max_active_pairs.sort();
     let mut active: Vec<String> = active.into_iter().collect();
     active.sort();
     Some(ArmTickReduction {
         rows,
         max_ts: max_pairs,
+        max_active_ts: max_active_pairs,
         active_arms: active,
     })
 }

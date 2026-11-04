@@ -83,6 +83,7 @@ pub(crate) mod lifecycle_target;
 mod mouse_route;
 mod pane_scroll;
 use pane_scroll::{wheel_gate, WheelGateState};
+pub(crate) mod links;
 mod notice;
 pub(crate) mod observers;
 mod open_link;
@@ -598,6 +599,8 @@ pub(crate) enum CoreMsg {
     },
     /// (v116) A passive client tags itself as an observer of one pane.
     Observe(u64, crate::proto::ObserverHello),
+    /// (v121) A passive client takes the link role for one pane.
+    Link(u64, crate::proto::LinkHello),
     /// The off-loop launcher task's terminal update, routed back so it is
     /// sent from the core loop (which owns `clients`). Trusted origin (a
     /// server task, not a client), so it is NOT in the passive gate - the
@@ -1548,6 +1551,7 @@ pub(crate) struct Core {
     /// joined at publish time into card routes / `where_hint`.
     backlog_holders: HashMap<String, String>,
     observers: observers::Tags,
+    links: links::Links,
     /// The graph join from the off-loop graph reader (node prs, driving
     /// sessions, per-session node bindings); joined at layout time into
     /// `AgentRow.pr` (the peek header's `PR #N` label), `AgentRow.pr_session_short`
@@ -7807,7 +7811,7 @@ impl Core {
                 let msg = self.layout_msg_for(c.view, &rects, focus, area);
                 let modes = self
                     .panes
-                    .get(&focus)
+                    .get(&self.links.pane(c.id).unwrap_or(focus))
                     .map(|e| e.vt.modes())
                     .unwrap_or_default();
                 (msg, modes, rects)
@@ -8803,8 +8807,8 @@ impl Core {
             .clients
             .iter()
             .map(|c| {
-                let tab = self.viewed_tab(c.view)?;
-                self.panes.get(&tab.focus).map(|e| e.vt.modes())
+                let focus = self.modes_pane(c.id, c.view)?;
+                self.panes.get(&focus).map(|e| e.vt.modes())
             })
             .collect();
         let mut dead = Vec::new();
@@ -9406,6 +9410,9 @@ impl Core {
                 }
                 Flow::Continue
             }
+            Command::ReachRemote { remote, placement } => {
+                self.reach_remote(client_id, view, vp, &remote, &placement)
+            }
             Command::AttachAgent { id, placement } => {
                 // The portal reach routes BEFORE the attach-shaped
                 // gates: `id` is an 8-hex attach id for a claude row but a
@@ -9429,37 +9436,21 @@ impl Core {
                     return self.open_transient_view(client_id, view, vp, &id, &placement);
                 }
                 if placement.wants_portal() {
-                    // An explicit index wins over "any". `portal_new` names no
-                    // index BECAUSE the caller must not choose one: allocating
-                    // here, where reaches are handled one at a time, is what
-                    // makes two clients opening a portal at once safe.
-                    let portal = match placement.portal_target() {
-                        Some(idx) => idx,
-                        // A full space refuses visibly. Repointing an
-                        // occupied index is the silent wrong action the other
-                        // placement refusals exist to prevent.
-                        None => match self.next_free_portal() {
-                            Some(idx) => idx,
-                            None => {
-                                self.notice(
-                                    client_id,
-                                    "all 256 portal indices are live; close one first",
-                                );
-                                return Flow::Continue;
-                            }
-                        },
+                    let Some(portal) = self.portal_index_for(client_id, &placement) else {
+                        return Flow::Continue;
                     };
                     // `portal` names an index the CALLER chose;
                     // `thread_pane` folds to 0 without the caller naming any,
                     // and that default reach is allowed to go home to a held
                     // seat that names the row.
                     let portal_explicit = placement.portal.is_some();
+                    let key = portal_reach::ReachKey::Row(&id);
                     return self.reach_portal(
                         client_id,
                         view,
                         vp,
                         portal,
-                        &id,
+                        key,
                         &placement,
                         portal_explicit,
                     );
@@ -10439,7 +10430,7 @@ impl Core {
                 // (mail to an EXITED row is legal - it queues durable; an external
                 // row is refused), sanitize the text (blank/over-cap refused,
                 // never truncated), then shell `fno agents mail send` off-loop.
-                match self.resolve_lifecycle_target(&name, None) {
+                match self.mail_target(&name) {
                     Err(msg) => self.notice(client_id, msg),
                     Ok(_) => match sanitize_mail_text(&text) {
                         Err(msg) => self.notice(client_id, msg),
@@ -10562,19 +10553,16 @@ impl Core {
         // bridge holds no write half so it never sends these; this makes the
         // guarantee hold for ANY (0,0) attacher, not by the bridge's discipline
         // alone. Resize is already neutralized (its dims are ignored for a passive
-        // client); Detach/Gone/Query/etc. are not mutations and pass through.
+        // client); Detach/Gone/Query/etc. pass. A link client passes for its own pane.
         let mutating_sender = match &msg {
             CoreMsg::Input { id, .. }
             | CoreMsg::Command { id, .. }
             | CoreMsg::Mouse { id, .. }
             | CoreMsg::BlockNav { id, .. }
-            // Search moves the shared scroll + highlight for every co-viewer
-            //, the same shared-state mutation as BlockNav; a read-only
-            // observer must never jump everyone's viewport.
-            | CoreMsg::Search { id, .. }
-            // PaneScroll/PaneScrollEdge move the shared scroll for every
-            // co-viewer, the same shared-state mutation as BlockNav; a
+            // Search and PaneScroll/PaneScrollEdge move the shared scroll for
+            // every co-viewer, the same shared-state mutation as BlockNav; a
             // read-only observer must never move anyone's viewport.
+            | CoreMsg::Search { id, .. }
             | CoreMsg::PaneScroll { id, .. }
             | CoreMsg::PaneScrollEdge { id, .. }
             // PaneAnswer injects a keystroke into a pane PTY; a
@@ -10590,10 +10578,8 @@ impl Core {
             CoreMsg::PaneInput(request) => Some(request.id),
             _ => None,
         };
-        if let Some(id) = mutating_sender {
-            if self.is_passive(id) {
-                return Flow::Continue;
-            }
+        if mutating_sender.is_some_and(|id| self.is_passive(id) && !self.links.may_send(id, &msg)) {
+            return Flow::Continue;
         }
         // The window-size policy follows the client that last acted. The peek
         // refresh timer sends a Command with no human behind it, and a
@@ -10725,6 +10711,7 @@ impl Core {
                 Flow::Continue
             }
             CoreMsg::Observe(id, hello) => self.observe(id, hello),
+            CoreMsg::Link(id, hello) => self.link(id, hello),
             CoreMsg::AgentLaunchUpdate { id, update, retry } => {
                 self.agent_launch_update(id, update, retry);
                 Flow::Continue

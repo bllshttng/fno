@@ -244,8 +244,7 @@ pub(crate) fn retro(scope: &str, cwd: &Path, cleared: &PendingSuccession, id: &s
         let log = std::fs::File::create(&log_path).ok()?;
         let stderr = log.try_clone().ok()?;
         std::process::Command::new(exe)
-            .args(["intel", "--windows", "--session", &session, "--write"])
-            .arg(&dir)
+            .args(retro_args(&session, &dir))
             .stdin(Stdio::null())
             .stdout(log)
             .stderr(stderr)
@@ -268,6 +267,18 @@ pub(crate) fn retro(scope: &str, cwd: &Path, cleared: &PendingSuccession, id: &s
             }),
         );
     }
+}
+
+/// The intel child's argv. `--read` makes a hand-off grade parts 3 to 5; the
+/// daemon's backfill arm omits it and keeps the mechanical fold only.
+fn retro_args(session: &str, dir: &Path) -> Vec<std::ffi::OsString> {
+    let mut args: Vec<std::ffi::OsString> = ["intel", "--windows", "--session", session, "--write"]
+        .into_iter()
+        .map(Into::into)
+        .collect();
+    args.push(dir.as_os_str().to_owned());
+    args.push("--read".into());
+    args
 }
 
 fn retro_unmeasured(scope: &str, id: &str, reason: &str) {
@@ -408,6 +419,28 @@ mod tests {
         );
     }
 
+    /// A hand-off grades its retro: the intel child ends `--write <dir> --read`.
+    #[test]
+    fn the_retro_child_argv_ends_with_write_dir_and_read() {
+        let args = retro_args("sess-old", Path::new("/e/lead-fno-sess-old"));
+        let args: Vec<_> = args
+            .iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            args,
+            [
+                "intel",
+                "--windows",
+                "--session",
+                "sess-old",
+                "--write",
+                "/e/lead-fno-sess-old",
+                "--read"
+            ]
+        );
+    }
+
     /// AC3-EDGE: a predecessor row still live over the scope names itself in
     /// the unproven row.
     #[test]
@@ -455,7 +488,7 @@ mod tests {
         assert!(raw.contains("vellum"), "{raw}");
         assert!(raw.contains("Alder paused since 10:00"), "{raw}");
         // The mail rides by name (to_kind name), addressed to the old lead.
-        let bus = std::fs::read_to_string(home.path().join("bus/messages.jsonl")).unwrap();
+        let bus = std::fs::read_to_string(home.path().join("db/mail/bus/messages.jsonl")).unwrap();
         let row: serde_json::Value = serde_json::from_str(bus.lines().last().unwrap()).unwrap();
         assert_eq!(row["to"], json!("alder"));
         assert_eq!(row["to_kind"], json!("name"));
@@ -480,7 +513,7 @@ mod tests {
             ],
         });
         taken_over("x-aaaa,x-bbbb", &pending, &human);
-        let bus = std::fs::read_to_string(home.path().join("bus/messages.jsonl")).unwrap();
+        let bus = std::fs::read_to_string(home.path().join("db/mail/bus/messages.jsonl")).unwrap();
         let rows: Vec<serde_json::Value> = bus
             .lines()
             .map(|l| serde_json::from_str(l).unwrap())

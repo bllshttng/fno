@@ -291,7 +291,7 @@ async fn registry_birth_since(cwd: &str, since_secs: u64) -> BirthCheck {
 /// minted worker name, the harness and the picked branch. Its one JSON
 /// answer settles the launch: a `workdir` replaces the request's cwd, a
 /// `hold` names why nothing may launch, and a transport failure refuses the
-/// same way - never a silent fall-back to the cwd the box promised to leave.
+/// same way - never a silent fall-back to the cwd the launch promised to leave.
 /// The bound is its own 150s (the ensure leg inside the command may itself
 /// spend 120s), not the spawn's 75s deadline.
 async fn resolve_launch_workdir(req: &mut AgentLaunchRequest) -> Result<(), String> {
@@ -497,7 +497,7 @@ impl super::Core {
             // answer replaces req.cwd before the argv is built, a `hold` is
             // a definitive no-birth refusal, and a transport failure refuses
             // the same way - never a silent fall-back to the project cwd the
-            // box promised to leave.
+            // launch promised to leave.
             if req.worktree {
                 if let Err(reason) = resolve_launch_workdir(&mut req).await {
                     let _ = core_tx
@@ -677,7 +677,8 @@ impl super::Core {
             },
         };
         eff.portal = explicit.then_some(portal_idx);
-        self.reach_portal(client_id, view, vp, portal_idx, name, &eff, explicit);
+        let key = super::portal_reach::ReachKey::Row(name);
+        self.reach_portal(client_id, view, vp, portal_idx, key, &eff, explicit);
     }
 }
 

@@ -1639,7 +1639,7 @@ fn recovery_orphan_pid_sweep_does_not_condemn_every_row_sharing_an_empty_short_i
 
 #[test]
 fn idle_exit_fires_on_terminal_rows_with_no_live_worker() {
-    // The exact defect box: a registry of TERMINAL rows (the roster an
+    // The exact defect shape: a registry of TERMINAL rows (the roster an
     // established machine always has) with no live socket and no live pid
     // must let the daemon exit. Registry emptiness never held here.
     let home = short_home("idle-terminal");

@@ -54,6 +54,35 @@ const MAX_TASK_WALL_S: f64 = 180.0;
 const NEW_HEADS_PER_TICK: usize = 10;
 const DEFAULT_DAILY_USD: f64 = 15.0;
 const DEFAULT_LANE: &str = "zai-flash";
+/// The user's zai-peak ruling: Monday to Friday, 06:00 to 10:00 UTC, zai burns
+/// credits at twice the rate, so the gate keeps its runs off zai then.
+fn zai_peak(now: DateTime<Utc>) -> bool {
+    use chrono::{Datelike, Timelike};
+    now.weekday().num_days_from_monday() < 5 && (6..10).contains(&now.hour())
+}
+
+/// True when `lane` rides zai, read from the routing inventory. A lane the
+/// inventory does not list is no zai lane.
+fn lane_is_zai(repo: &Path, lane: &str) -> bool {
+    crate::route_gather::inventory(repo)
+        .get("rows")
+        .and_then(Value::as_array)
+        .and_then(|rows| rows.iter().find(|r| r["name"].as_str() == Some(lane)))
+        .is_some_and(|r| {
+            r["account"].as_str() == Some("zai")
+                || r["route"].as_str().is_some_and(|v| v.starts_with("zai/"))
+        })
+}
+
+/// True when a gate run on `lane` waits for the peak window to end.
+pub(crate) fn zai_peak_hold(repo: &Path, lane: &str, now: DateTime<Utc>) -> bool {
+    zai_peak(now) && lane_is_zai(repo, lane)
+}
+
+/// Runs once when the main lane gives up with no grade, so a capped lane does
+/// not leave the day without graded rows.
+const FALLBACK_LANE: &str = "claude-sonnet-5";
+const FALLBACK_SUFFIX: &str = "-fallback";
 
 /// Who does the work a cohort grades. Spend is each gate row of the day at its
 /// seat's attempt price, because a row's usage has no price until a manifest
@@ -134,6 +163,9 @@ struct SeatState {
     main_tried: Option<String>,
     #[serde(default)]
     main_failure: Option<MainFailure>,
+    /// The cohort whose fallback run was launched. One fallback per cohort.
+    #[serde(default)]
+    fallback_tried: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -287,6 +319,25 @@ fn slow_tasks(rows: &[Value], baseline: &str) -> BTreeSet<String> {
         .collect()
 }
 
+/// A task file's repo-relative path: `evals/bank/<id>.yaml`, or
+/// `skills/<name>/evals/<id>.yaml` for a task a skill carries.
+fn repo_relative_task(source: &std::path::Path) -> String {
+    let tail = |n: usize| {
+        let parts: Vec<_> = source.iter().rev().take(n).collect();
+        parts
+            .iter()
+            .rev()
+            .map(|c| c.to_string_lossy())
+            .collect::<Vec<_>>()
+            .join("/")
+    };
+    let skill_local = source
+        .parent()
+        .and_then(|d| d.file_name())
+        .is_some_and(|n| n == "evals");
+    tail(if skill_local { 4 } else { 3 })
+}
+
 /// The `gate` goldens among `tasks`. A golden added to main after the head
 /// branched has no fixture there, and would read as a regression.
 fn gate_tasks(
@@ -301,7 +352,7 @@ fn gate_tasks(
         .filter(|t| t.tags.iter().any(|tag| tag == GATE_TAG) && !t.is_demoted())
         .filter(|t| !slow.contains(&t.id))
         .filter(|t| {
-            let spec = format!("{sha}:evals/bank/{}.yaml", t.id);
+            let spec = format!("{sha}:{}", repo_relative_task(&t.source_path));
             (d.run)(&["git", "cat-file", "-e", &spec], p.repo).is_some_and(|r| r.ok)
         })
         .map(|t| t.id.clone())
@@ -596,12 +647,23 @@ fn main_seat(
 ) -> (String, bool) {
     let cohort = format!("{day}{}", seat.suffix);
     let s = state.seat(seat);
+    let mut fallback = false;
     if s.main_tried.as_deref() == Some(cohort.as_str()) {
         match s.main_failure.as_ref().filter(|f| f.cohort == cohort) {
             None => return (format!("main {cohort} tried"), true),
             Some(f) if f.tries >= MAIN_MAX_TRIES => {
-                let note = format!("main {cohort} gave up after {} tries: {}", f.tries, f.cause);
-                return (note, true);
+                if s.fallback_tried.as_deref() == Some(cohort.as_str()) {
+                    let note =
+                        format!("main {cohort} gave up after {} tries: {}", f.tries, f.cause);
+                    return (note, true);
+                }
+                // A config cause (no lead lane, bank unread) is no lane outage.
+                if !f.cause.starts_with("wrote no grade") {
+                    let note =
+                        format!("main {cohort} gave up after {} tries: {}", f.tries, f.cause);
+                    return (note, true);
+                }
+                fallback = true;
             }
             Some(f) if d.now.timestamp() < f.next_try => {
                 return (format!("main {cohort} waits to retry: {}", f.cause), true);
@@ -612,9 +674,21 @@ fn main_seat(
     if !can_launch {
         return ("main held by the spawn gate".into(), false);
     }
-    let lane = match seat_lane(p.repo, seat) {
-        Ok(lane) => lane,
-        Err(cause) => return (main_failed(d, state, seat, &cohort, cause), false),
+    let lane = if fallback {
+        FALLBACK_LANE.to_string()
+    } else {
+        match seat_lane(p.repo, seat) {
+            Ok(lane) => lane,
+            Err(cause) => return (main_failed(d, state, seat, &cohort, cause), false),
+        }
+    };
+    if zai_peak_hold(p.repo, &lane, d.now) {
+        return (format!("main {cohort} waits out the zai peak"), true);
+    }
+    let run_cohort = if fallback {
+        format!("{cohort}{FALLBACK_SUFFIX}")
+    } else {
+        cohort.clone()
     };
     if !fetch(p, d, "main") {
         return ("main fetch failed".into(), false);
@@ -655,22 +729,26 @@ fn main_seat(
         ("--tag", seat.tag),
         MAIN_WORKERS,
         &lane,
-        &cohort,
+        &run_cohort,
         &sha,
         arg_bank.as_ref(),
     );
-    state.seat(seat).main_tried = Some(cohort.clone());
+    if fallback {
+        state.seat(seat).fallback_tried = Some(cohort.clone());
+    } else {
+        state.seat(seat).main_tried = Some(cohort.clone());
+    }
     match (d.spawn)(&argv, p.repo, &p.state_dir.join(MAIN_LOG)) {
         Ok(pid) => {
             state.main_run = Some(MainRun {
-                cohort: cohort.clone(),
+                cohort: run_cohort.clone(),
                 pid,
                 started: d.now.timestamp(),
                 seat: seat.name.into(),
             });
             // Saved at once: a tick killed here must not launch a second run.
             save_state(&p.state_dir, state);
-            (format!("main {cohort} launched"), false)
+            (format!("main {run_cohort} launched on {lane}"), false)
         }
         Err(e) => {
             let cause = format!("launch failed: {e}");
@@ -709,12 +787,57 @@ fn log_tail(log: &Path) -> String {
         .collect()
 }
 
+/// True when the evals tree (bank, fixtures, runner) differs between any bank
+/// rev the older cohort ran at and any the newer one did. A compare across such
+/// a change measures the harder bank, not the pipeline. Only a git diff that
+/// exits 1 counts: a rev git cannot read leaves the compare as it was.
+fn bank_moved(p: &Paths, d: &Deps, rows: &[Value], older: &str, newer: &str) -> bool {
+    let revs = |cohort: &str| -> BTreeSet<String> {
+        rows.iter()
+            .filter(|r| row_cohort(r) == cohort)
+            .filter_map(|r| r["bank_rev"].as_str())
+            .map(str::to_string)
+            .collect()
+    };
+    let new_revs = revs(newer);
+    revs(older).iter().any(|old| {
+        new_revs.iter().any(|new| {
+            old != new
+                && (d.run)(
+                    &[
+                        "git",
+                        "diff",
+                        "--quiet",
+                        old,
+                        new,
+                        "--",
+                        "evals",
+                        "crates/fno-agents/src/evals",
+                    ],
+                    p.repo,
+                )
+                .is_some_and(|r| r.code == Some(1))
+        })
+    })
+}
+
 /// A cohort with no grade is no baseline. A real one is compared to the one
-/// before, and that compare is the number the bank exists to print.
+/// before, and that compare is the number the bank exists to print. When the
+/// bank changed between the two, the new cohort starts a fresh baseline and no
+/// compare runs: every golden the harder bank fails would file a regression.
 fn finish_main(p: &Paths, d: &Deps, state: &mut State, seat: &Seat, cohort: &str) -> String {
     let graded = read_rows(&p.history.to_string_lossy(), None, None)
         .iter()
         .any(|r| r.experiment_id.as_deref() == Some(cohort) && crate::evals_trend::is_scored(r));
+    if cohort.ends_with(FALLBACK_SUFFIX) {
+        // A fallback lane measures a different seat: it is never a baseline.
+        let tail = log_tail(&p.state_dir.join(MAIN_LOG));
+        return if graded {
+            format!("main {cohort} graded on the fallback lane; no baseline, no compare")
+        } else {
+            format!("main {cohort} wrote no grade: {tail}")
+        };
+    }
     if !graded {
         let tail = log_tail(&p.state_dir.join(MAIN_LOG));
         return main_failed(d, state, seat, cohort, format!("wrote no grade: {tail}"));
@@ -725,6 +848,11 @@ fn finish_main(p: &Paths, d: &Deps, state: &mut State, seat: &Seat, cohort: &str
     let Some(previous) = previous else {
         return format!("main {cohort} is the first baseline");
     };
+    if bank_moved(p, d, &history_rows(p.history), &previous, cohort) {
+        return format!(
+            "main {cohort}: the bank changed since {previous}; new baseline, no compare"
+        );
+    }
     let Ok(view) = compare(&ref_bank(p, "main"), p.history, &previous, cohort, None) else {
         return format!("main {cohort} compare failed");
     };
@@ -936,6 +1064,9 @@ fn launch_head(
     }
     let cohort = format!("gate-head-{}", short(&pr.sha));
     let lane = config_lane(p.repo);
+    if zai_peak_hold(p.repo, &lane, d.now) {
+        return format!("head {} waits out the zai peak", short(&pr.sha));
+    }
     let argv = run_argv(
         p,
         ("--task", &tasks.join(",")),
@@ -1222,6 +1353,12 @@ mod tests {
                             stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
                         })
                     }
+                    ["git", "diff", "--quiet", ..] => Some(Run {
+                        ok: false,
+                        code: Some(1),
+                        stdout: String::new(),
+                        stderr: String::new(),
+                    }),
                     ["git", "worktree", ..] => {
                         // Fallback mode: the gate reads the checkout bank.
                         Some(Run {
@@ -1369,7 +1506,17 @@ mod tests {
             w.tick(false, at(tries));
         }
         w.tick(true, at(3));
-        assert_eq!(w.spawns.borrow().len(), MAIN_MAX_TRIES as usize);
+        assert_eq!(w.spawns.borrow().len(), MAIN_MAX_TRIES as usize + 1);
+        let fallback = w.spawns.borrow()[MAIN_MAX_TRIES as usize].join(" ");
+        assert!(fallback.contains("--lane claude-sonnet-5"), "{fallback}");
+        assert!(fallback.contains("-fallback"), "{fallback}");
+        w.tick(false, at(3));
+        w.tick(true, at(4));
+        assert_eq!(
+            w.spawns.borrow().len(),
+            MAIN_MAX_TRIES as usize + 1,
+            "one fallback per cohort"
+        );
         let state = load_state(&dir);
         assert!(
             state.last_note.contains("gave up after 3 tries"),
@@ -1377,6 +1524,19 @@ mod tests {
             state.last_note
         );
         assert!(state.worker.baseline.is_none());
+    }
+
+    #[test]
+    fn zai_peak_is_monday_to_friday_0600_to_1000_utc() {
+        let at = |s: &str| DateTime::parse_from_rfc3339(s).unwrap().with_timezone(&Utc);
+        assert!(zai_peak(at("2026-11-02T06:00:00Z")), "Monday 06:00 opens");
+        assert!(zai_peak(at("2026-11-06T09:59:00Z")), "Friday 09:59 holds");
+        assert!(!zai_peak(at("2026-11-02T10:00:00Z")), "10:00 closes");
+        assert!(!zai_peak(at("2026-11-02T05:59:00Z")), "before 06:00");
+        assert!(
+            !zai_peak(at("2026-11-07T07:00:00Z")),
+            "Saturday is off peak"
+        );
     }
 
     #[test]
@@ -1399,6 +1559,40 @@ mod tests {
         assert_eq!(state.worker.baseline.as_deref(), Some(cohort.as_str()));
         assert!(state.worker.main_failure.is_none());
         assert_eq!(w.spawns.borrow().len(), 1);
+    }
+
+    #[test]
+    fn a_main_run_after_a_bank_change_resets_the_baseline_and_compares_nothing() {
+        let w = World::new("crates/x.rs\n");
+        let now = Utc::now()
+            .date_naive()
+            .and_hms_opt(1, 0, 0)
+            .unwrap()
+            .and_utc();
+        w.state(|s| s.worker.baseline = Some("old".into()));
+        w.tick(true, now);
+        let cohort = load_state(&state_dir(&w.history()))
+            .worker
+            .main_tried
+            .unwrap();
+        std::fs::create_dir_all(w.history().parent().unwrap()).unwrap();
+        let mut f = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(w.history())
+            .unwrap();
+        for (cohort, rev, pass) in [("old", "aaa", true), (cohort.as_str(), "bbb", false)] {
+            let row = json!({"task_id": "g2", "tier": "capability", "pass": pass,
+                "status": "graded", "variant": "v1", "experiment_id": cohort, "bank_rev": rev});
+            writeln!(f, "{row}").unwrap();
+        }
+        drop(f);
+        w.tick(false, now);
+        let state = load_state(&state_dir(&w.history()));
+        assert_eq!(state.worker.baseline.as_deref(), Some(cohort.as_str()));
+        assert!(!state_dir(&w.history())
+            .join(format!("compare-{cohort}.json"))
+            .exists());
     }
 
     #[test]

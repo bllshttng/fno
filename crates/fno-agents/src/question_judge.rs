@@ -263,12 +263,10 @@ fn law_candidates(row: &Value, laws: &[LawRow]) -> Vec<String> {
         .get("subject")
         .and_then(Value::as_str)
         .map(str::to_string);
-    let node = row.get("node").and_then(Value::as_str).map(str::to_string);
     let ask = |subject: Option<String>| {
         crate::law_match::ask_answer(&AskRequest {
             question: format!("{title} {body}"),
             subject,
-            node: node.clone(),
             laws: laws.to_vec(),
         })
     };

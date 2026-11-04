@@ -31,7 +31,6 @@ use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::Write;
-use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 
 /// Terminal for the vacancy and join reads. Orphaned is the reversible
@@ -47,6 +46,21 @@ pub(crate) fn is_terminal(row: &RegistryEntry) -> bool {
         row.status,
         crate::AgentStatus::Exited | crate::AgentStatus::Failed | crate::AgentStatus::PermanentDead
     )
+}
+
+/// The served harness fact (law d-10a72d88: a session never ends, and harness
+/// facts are served, never stored): this session's transcript moved inside
+/// the attention window, so the session is live whatever its stored row
+/// says. The stored word is a snapshot a sweep can stamp over a writing
+/// session (measured 2026-11-03: `pid_proven` exited over a lead whose
+/// transcript kept moving), and a lead read that refuses on it locks a live
+/// lead out of its own check-in. Claude-shaped by construction: another
+/// harness has no transcript seam here and keeps the stored-status read. The
+/// age seam arrives injected, the way `org_vacancies` takes it, so a test
+/// reads no machine state; the window is the one the served STATUS word
+/// uses, so the gates refuse on no fresher evidence than the operator sees.
+pub(crate) fn served_live(session: &str, transcript_age_s: &dyn Fn(&str) -> Option<i64>) -> bool {
+    transcript_age_s(session).is_some_and(|age| (age as f64) < crate::daemon::STALE_ATTENTION_S)
 }
 
 /// The one name join `mail_envelope.rs` renders addresses with: filter the
@@ -651,14 +665,10 @@ pub(crate) fn with_manifest_lock<T>(
         fs::create_dir_all(parent)
             .map_err(|e| format!("cannot create {}: {e}", parent.display()))?;
     }
-    let lock = fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&lock_path)
-        .map_err(|e| format!("cannot open {}: {e}", lock_path.display()))?;
-    unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) };
+    let lock = crate::chokepoint::take(&crate::chokepoint::LEAD_STATE, &lock_path)
+        .map_err(|e| e.to_string())?;
     let result = f();
-    unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_UN) };
+    drop(lock);
     result
 }
 

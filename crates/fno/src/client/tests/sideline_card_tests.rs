@@ -396,6 +396,37 @@ fn card_slug_drops_node_and_model_and_the_node_taps_open() {
     a.model = Some("claude-opus-5-5".into());
     a.harness = Some("claude".into());
     assert_eq!(card_line::slug(&a, &[]), "t-cards-org");
+    // A row from another machine paints its bare name under the machine band.
+    let mut remote_row = agent_row("t-turn-control@bb16", 6, None, false);
+    remote_row.remote = Some(crate::proto::RemoteRow {
+        host: "bb16".into(),
+        key: "k".into(),
+        name: remote_row.name.clone(),
+    });
+    assert_eq!(card_line::slug(&remote_row, &[]), "t-turn-control");
+    // It paints the lines a local row paints, from the counts its own machine
+    // served: no word about the machine, and nothing that pulses for a field
+    // that will never land.
+    let mut local_row = agent_row("t-turn-control", 6, None, false);
+    for row in [&mut remote_row, &mut local_row] {
+        row.harness = Some("claude".into());
+        row.context_used_pct = Some(19);
+        row.compaction_count = Some(2);
+        row.session_tokens = Some(90_000);
+    }
+    let graph = card_line::CardGraph::Activity;
+    let line = card_line::metrics(&remote_row, graph, 0, Some("tail"), 60);
+    assert_eq!(
+        line,
+        card_line::metrics(&local_row, graph, 0, Some("tail"), 60)
+    );
+    assert!(
+        line.contains("19%") && line.contains("2c") && line.ends_with("tail"),
+        "{line}"
+    );
+    assert!(!line.contains("remote") && !line.contains("bb16"), "{line}");
+    remote_row.compaction_count = None;
+    assert!(!card_line::has_loading(&remote_row, graph, 0));
     // Identity fields share a right-aligned line and remain whole tap fields.
     a.context_used_pct = Some(28);
     assert_eq!(card_line::node_span(&a, 30), Some(24..30));

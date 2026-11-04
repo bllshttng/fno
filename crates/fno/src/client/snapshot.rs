@@ -22,8 +22,8 @@ use serde_json::Value;
 const USAGE: &str =
     "usage: fno mux serve --snapshot --server <name> --out <path> [--squad <name>] \
 [--theme dark|light|macchiato] [--format html|svg|png] [--size <cols>x<rows> [--fit]] [--peer <cols>x<rows>] \
-[--font <family>] [--message <fmail-id>] \
-[--view bell|bell-wide|bell-full|feed|row-menu|hover|cursor|tab-menu|sideline-menu|composer|split-menu|settings|keys|org-block|org-table|org-recent|org-overview|org-graph|org-health|org-seat|org-feed|org-system|messages-tree|messages-chats|messages-thread|messages-system|messages-archive|backlog-list|backlog-kanban|navigator-pr|navigator-model|navigator-menu|feed-detail|question-detail|connections|yard|needs]";
+[--font <family>] [--message <fmail-id>] [--edge backlog|messages-tree|messages-part|org|dock=<size>] \
+[--view bell|bell-wide|bell-full|feed|row-menu|hover|cursor|tab-menu|sideline-menu|composer|split-menu|settings|keys|org-block|org-table|org-recent|org-overview|org-graph|org-health|org-seat|org-feed|org-system|messages-tree|messages-chats|messages-thread|messages-system|messages-archive|backlog-list|backlog-kanban|review-diff|review-panel|review-panel-drag|navigator-pr|navigator-model|navigator-menu|feed-detail|question-detail|connections|connections-use|yard|needs|dock|machines]";
 
 #[derive(Debug, PartialEq)]
 pub enum Format {
@@ -57,6 +57,13 @@ pub enum ViewKind {
     Cursor,
     /// The tab-strip context menu on the first tab.
     TabMenu,
+    /// The sideline with the pinned Needs input section open, as a tap on the
+    /// strip count opens it.
+    NeedsInput,
+    /// The sideline strip with the need-input pulse frozen on its lit beat.
+    NeedsInputPulseOn,
+    /// The same strip frozen on its dark beat.
+    NeedsInputPulseOff,
     /// The sideline menu popup.
     SidelineMenu,
     /// The new-agent composer sheet, with a seeded draft so the editor text
@@ -72,6 +79,9 @@ pub enum ViewKind {
     /// The which-key table, opened FROM settings: the printed key labels
     /// (`ctrl+b`) live here.
     Keys,
+    /// The sideline with the other-machines layer on, after one synchronous
+    /// read of the fleet map like the live loop's first one.
+    Machines,
     /// The expanded org fold block on the sideline (the prefix+C surface),
     /// with one inline machine fold so the lines carry real readings.
     OrgBlock,
@@ -96,6 +106,12 @@ pub enum ViewKind {
     MessagesYou,
     /// The board on the newest You thread's detail, pairs right and left.
     MessagesYouThread,
+    /// The PR review overlay over the fixture diff, with two staged comments.
+    ReviewDiff,
+    /// The PR review as a right split beside the chat panes.
+    ReviewPanel,
+    /// The review split mid-drag at 60 percent, its edge in the accent.
+    ReviewPanelDrag,
     /// The backlog board full screen in list view, details pane beside it.
     BacklogList,
     /// The backlog board full screen in kanban view, details pane beside it.
@@ -116,11 +132,18 @@ pub enum ViewKind {
     /// The connections overlay (prefix+A) on its Accounts tab, with the
     /// reads the live open kicks run inline.
     Connections,
+    /// The connections overlay with the `u` confirm staged on the first
+    /// account that is not active.
+    ConnectionsUse,
+    /// The sweep-threads choice modal over a staged fleet's counts.
+    Sweep,
     /// The yard overlay on its first citizen.
     Yard,
     /// The needs-me overlay with its first row picked, after the same
     /// questions gather the bell shots run.
     Needs,
+    /// The sideline list with the first agent's reply dock open under it.
+    Dock,
 }
 
 /// The seeded demo mail id a Messages view opens on when no --message
@@ -162,6 +185,9 @@ fn parse_view(v: &str) -> Option<ViewKind> {
         "row-menu" => Some(ViewKind::RowMenu),
         "hover" => Some(ViewKind::Hover),
         "cursor" => Some(ViewKind::Cursor),
+        "needs-input" => Some(ViewKind::NeedsInput),
+        "needs-input-pulse-on" => Some(ViewKind::NeedsInputPulseOn),
+        "needs-input-pulse-off" => Some(ViewKind::NeedsInputPulseOff),
         "tab-menu" => Some(ViewKind::TabMenu),
         "sideline-menu" => Some(ViewKind::SidelineMenu),
         "composer" => Some(ViewKind::Composer),
@@ -184,6 +210,9 @@ fn parse_view(v: &str) -> Option<ViewKind> {
         "messages-archive" => Some(ViewKind::MessagesArchive),
         "messages-you" => Some(ViewKind::MessagesYou),
         "messages-you-thread" => Some(ViewKind::MessagesYouThread),
+        "review-diff" => Some(ViewKind::ReviewDiff),
+        "review-panel" => Some(ViewKind::ReviewPanel),
+        "review-panel-drag" => Some(ViewKind::ReviewPanelDrag),
         "backlog-list" => Some(ViewKind::BacklogList),
         "backlog-kanban" => Some(ViewKind::BacklogKanban),
         "navigator-pr" => Some(ViewKind::NavigatorPr),
@@ -191,9 +220,13 @@ fn parse_view(v: &str) -> Option<ViewKind> {
         "navigator-menu" => Some(ViewKind::NavigatorMenu),
         "feed-detail" => Some(ViewKind::FeedDetail),
         "question-detail" => Some(ViewKind::QuestionDetail),
+        "sweep" => Some(ViewKind::Sweep),
         "connections" => Some(ViewKind::Connections),
+        "connections-use" => Some(ViewKind::ConnectionsUse),
         "yard" => Some(ViewKind::Yard),
         "needs" => Some(ViewKind::Needs),
+        "dock" => Some(ViewKind::Dock),
+        "machines" => Some(ViewKind::Machines),
         _ => None,
     }
 }
@@ -224,6 +257,9 @@ pub struct SnapshotArgs {
     /// The client-local surface to open before composing, for shots of a
     /// bell panel or a menu no server frame ever carries.
     pub view: Option<ViewKind>,
+    /// Splits held at a dragged size, as `name=size` pairs: the state a live
+    /// drag leaves, so a shot can show a mid-drag frame.
+    pub edges: Vec<(String, usize)>,
 }
 
 /// True when a `serve` tail asks for a snapshot rather than the web bridge.
@@ -244,6 +280,7 @@ pub fn parse(tail: &[OsString]) -> Result<SnapshotArgs, String> {
     let mut font = None;
     let mut message = None;
     let mut view = None;
+    let mut edges: Vec<(String, usize)> = Vec::new();
     let mut it = tail.iter();
     while let Some(a) = it.next() {
         let a = a.to_str().ok_or_else(|| USAGE.to_string())?;
@@ -267,10 +304,21 @@ pub fn parse(tail: &[OsString]) -> Result<SnapshotArgs, String> {
             }
             "--out" => out = Some(PathBuf::from(value()?)),
             "--message" => message = Some(value()?),
+            "--edge" => {
+                let v = value()?;
+                let pair = v
+                    .split_once('=')
+                    .and_then(|(n, s)| Some((n.to_string(), s.parse::<usize>().ok()?)))
+                    .filter(|(n, _)| super::edge_drag::Edge::from_name(n).is_some())
+                    .ok_or_else(|| {
+                        format!("fno mux serve --snapshot: --edge wants backlog|messages-tree|messages-part|org|dock=<size>, got {v:?}")
+                    })?;
+                edges.push(pair);
+            }
             "--view" => {
                 let v = value()?;
                 view = Some(parse_view(&v).ok_or_else(|| {
-                    format!("fno mux serve --snapshot: unknown view {v:?}; use bell, bell-wide, bell-full, feed, row-menu, tab-menu, sideline-menu, composer, split-menu, settings, keys, org-block, org-table, org-recent, org-overview, org-graph, org-health, org-seat, org-feed, org-system, messages-tree, messages-chats, messages-thread, messages-system, messages-archive, messages-you, messages-you-thread, backlog-list, backlog-kanban, navigator-pr, navigator-menu, navigator-model, feed-detail, question-detail or connections")
+                    format!("fno mux serve --snapshot: unknown view {v:?}; use bell, bell-wide, bell-full, feed, row-menu, tab-menu, sideline-menu, composer, split-menu, settings, keys, org-block, org-table, org-recent, org-overview, org-graph, org-health, org-seat, org-feed, org-system, messages-tree, messages-chats, messages-thread, messages-system, messages-archive, messages-you, messages-you-thread, backlog-list, backlog-kanban, review-diff, review-panel, review-panel-drag, navigator-pr, navigator-menu, navigator-model, feed-detail, question-detail, connections-use or connections")
                 })?)
             }
             tok @ ("--server" | "--session") => {
@@ -347,6 +395,7 @@ session text, run scripts/ops/mux-demo-snapshot.sh"
         font,
         message,
         view,
+        edges,
     })
 }
 
@@ -373,6 +422,7 @@ pub fn run(args: SnapshotArgs) -> i32 {
         chrome,
         args.message.as_deref(),
         args.view.as_ref(),
+        &args.edges,
     );
     match frame.and_then(|f| write(&f, &args)) {
         Ok(()) => {
@@ -559,6 +609,24 @@ fn find_chrome() -> Option<PathBuf> {
         .find(|p| p.is_file())
 }
 
+/// The split views open the fixture review beside the panes; the drag view
+/// holds its edge mid-drag at 60 percent.
+fn split_fixture(view: &mut View, kind: Option<&ViewKind>) {
+    if matches!(
+        kind,
+        Some(ViewKind::ReviewPanel | ViewKind::ReviewPanelDrag)
+    ) {
+        view.viewer.review = review_fixture().ok();
+    }
+    if matches!(kind, Some(ViewKind::ReviewPanelDrag)) {
+        view.viewer.dragging_at(60);
+    }
+}
+
+fn review_fixture() -> Result<super::backlog_board::pr_review::Review, String> {
+    super::backlog_board::pr_review::fixture(include_str!("tests/fixtures/pr_review.diff"))
+}
+
 /// Everything one observer attach delivers before it goes quiet.
 struct Observed {
     layout: LayoutView,
@@ -574,16 +642,20 @@ fn live_frame(
     chrome: crate::theme::Theme,
     message: Option<&str>,
     kind: Option<&ViewKind>,
+    edges: &[(String, usize)],
 ) -> Result<Frame, String> {
     let socket = proto::socket_path(server)?;
     let runtime = tokio::runtime::Runtime::new().map_err(|e| format!("runtime: {e}"))?;
     let cwd = std::env::current_dir()
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_default();
-    // A sizing client reports the content area, as a real client does.
-    let dims = size
-        .filter(|_| fit)
-        .map(|t| View::new(t, server.into(), LayoutView::default()).content_dims());
+    // A sizing client reports the content area, as a real client does. The
+    // review split takes its columns before the server sizes the panes.
+    let dims = size.filter(|_| fit).map(|t| {
+        let mut sizing = View::new(t, server.into(), LayoutView::default());
+        split_fixture(&mut sizing, kind);
+        sizing.content_dims()
+    });
     // The peer attaches first and stays until the shot is composed.
     let _peer = peer
         .map(|t| View::new(t, server.into(), LayoutView::default()).content_dims())
@@ -632,6 +704,11 @@ fn live_frame(
             view.term
         }
     };
+    for (name, size) in edges {
+        if let Some(edge) = super::edge_drag::Edge::from_name(name) {
+            view.edge_sizes.set(edge, *size);
+        }
+    }
     runtime.block_on(super::backlog_board::fold_once(&mut view));
     // The Messages board gathers via a client-side subprocess and the
     // snapshot has no event loop, so the tab would paint empty. --message
@@ -806,17 +883,69 @@ shoot a root seeded with questions, mail or backlog activity \
         Some(ViewKind::QuestionDetail) => {
             // The same gather the bell shots run, then the page the bell
             // opens on a row.
+            // The live bell reads the index first and the projection after, so
+            // a failed projection read leaves the index row on the page.
+            if let Some(index) = runtime.block_on(super::questions::questions_index_now()) {
+                view.apply_questions_index(index);
+            }
             let questions = runtime.block_on(crate::needs_overlay::questions_now());
             view.apply_questions_fold(questions);
-            let id = super::bell::first_question_id(&view).ok_or(
-                "question-detail: no open question to show; shoot a root seeded with \
+            // FNO_SNAPSHOT_QUESTION names the question to open: an id, a bare
+            // id or a number like Q3554. Unset, the first open question opens.
+            let want = std::env::var("FNO_SNAPSHOT_QUESTION").ok();
+            let id = match want.as_deref() {
+                Some(want) => view
+                    .questions_merged()
+                    .and_then(|f| {
+                        f.items
+                            .into_iter()
+                            .find(|q| {
+                                q.id == want
+                                    || q.id.split('@').next() == Some(want)
+                                    || q.number.as_deref() == Some(want)
+                            })
+                            .map(|q| q.id)
+                    })
+                    .ok_or_else(|| format!("question-detail: no question matches {want:?}"))?,
+                None => super::bell::first_question_id(&view).ok_or(
+                    "question-detail: no open question to show; shoot a root seeded with \
 questions (scripts/ops/mux-demo-snapshot.sh seeds one)",
-            )?;
+                )?,
+            };
             view.open_detail_on(&id);
             if let Some(d) = &view.question_detail {
                 d.wait_decoded(Duration::from_secs(10));
             }
             select_modal_line(&mut view)?;
+        }
+        Some(ViewKind::Dock) => {
+            let (i, name) = view
+                .display_rows()
+                .iter()
+                .enumerate()
+                .find_map(|(i, r)| match r {
+                    super::DisplayRow::Agent(a) => Some((i, a.name.clone())),
+                    _ => None,
+                })
+                .ok_or("no agent rows to dock a reply under")?;
+            let seq = view.open_peek(i, name);
+            if let Some(p) = view.peek.as_mut().filter(|p| p.seq == seq) {
+                p.body = Some(
+                    [
+                        "  you: can you take the checkout retry next?",
+                        "  agent: yes, reading the queue worker first.",
+                        "  agent: the retry loop swallows the 429, fixing that now.",
+                        "  you: thanks, ping me when the PR is up.",
+                    ]
+                    .map(String::from)
+                    .to_vec(),
+                );
+            }
+            // The dock needs a sideline at least MIN_DOCK_W wide; the demo
+            // root's default is narrower, so the peek would center instead.
+            view.sideline_width = view.sideline_width.max(48);
+            view.peek_docked = true;
+            view.peek_input = Some((String::new(), String::from("on it")));
         }
         Some(ViewKind::RowMenu) => {
             let i = view
@@ -836,6 +965,23 @@ questions (scripts/ops/mux-demo-snapshot.sh seeds one)",
             } else {
                 view.selector = i;
             }
+        }
+        Some(kind @ (ViewKind::NeedsInputPulseOn | ViewKind::NeedsInputPulseOff)) => {
+            if view.need_input_count() == 0 {
+                return Err("nothing needs input, so the pulse would shoot empty".to_string());
+            }
+            let beat = if matches!(kind, ViewKind::NeedsInputPulseOn) {
+                super::sideline::PULSE_ON
+            } else {
+                super::sideline::PULSE_OFF
+            };
+            super::sideline::PULSE_PIN.store(beat, std::sync::atomic::Ordering::Relaxed);
+        }
+        Some(ViewKind::NeedsInput) => {
+            if view.need_input_count() == 0 {
+                return Err("nothing needs input, so the section would shoot empty".to_string());
+            }
+            view.needs_open = true;
         }
         Some(ViewKind::SplitMenu) => {
             let i = view
@@ -857,6 +1003,19 @@ questions (scripts/ops/mux-demo-snapshot.sh seeds one)",
         Some(ViewKind::Keys) => {
             view.open_keys_modal();
         }
+        Some(ViewKind::Sweep) => {
+            view.aux = Some(super::sweep_scope::build_sweep_modal(
+                &super::sweep_scope::SweepCounts {
+                    tabs: 6,
+                    used: 4,
+                    dead: 3,
+                    squads: 2,
+                    stopped: 41,
+                    ..Default::default()
+                },
+            ));
+            view.aux_esc.clear();
+        }
         Some(ViewKind::Yard) => {
             view.yard = Some(super::YardSel {
                 sel: 0,
@@ -868,7 +1027,7 @@ questions (scripts/ops/mux-demo-snapshot.sh seeds one)",
             view.apply_questions_fold(questions);
             view.answers = Some(0);
         }
-        Some(ViewKind::Connections) => {
+        Some(kind @ (ViewKind::Connections | ViewKind::ConnectionsUse)) => {
             view.open_connections();
             let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
             runtime.block_on(crate::connections_view::load_all(tx, view.conn_gen));
@@ -895,6 +1054,25 @@ questions (scripts/ops/mux-demo-snapshot.sh seeds one)",
                 return Err(
                     "connections view rendered empty: this root registers no accounts; \
 shoot a root whose config lists accounts (scripts/ops/mux-demo-snapshot.sh seeds them)"
+                        .into(),
+                );
+            }
+            if *kind == ViewKind::ConnectionsUse {
+                cv.acct_sel = cv.accounts.iter().position(|a| !a.active).unwrap_or(0);
+                cv.render_with(&view.layout.agents, usize::MAX);
+                cv.on_key(b'u');
+            }
+        }
+        Some(ViewKind::Machines) => {
+            // A fleet map with fewer than two machines paints no layer, so
+            // that shot is a plain sideline and refuses.
+            super::machine_tree::set_on(&mut view, true);
+            let read = runtime.block_on(super::org_seats::read_fleet());
+            super::machine_tree::apply(&mut view, read);
+            if !view.machine_tree.layered() {
+                return Err(
+                    "machine layer rendered empty: fleet top answered fewer than two machines; \
+shoot a root whose fleet map has a second machine (scripts/ops/mux-demo-snapshot.sh seeds one)"
                         .into(),
                 );
             }
@@ -972,6 +1150,18 @@ shoot a root whose fleet map has seats \
                 Some(ViewKind::OrgSystem) => b.select("system"),
                 _ => {}
             }
+        }
+        Some(ViewKind::ReviewDiff) => {
+            View::open(&mut view);
+            let review = review_fixture()?;
+            view.backlog_board
+                .as_mut()
+                .ok_or("the backlog board did not open")?
+                .review = Some(review);
+        }
+        Some(ViewKind::ReviewPanel | ViewKind::ReviewPanelDrag) => {
+            review_fixture()?;
+            split_fixture(&mut view, kind);
         }
         Some(ViewKind::BacklogList) | Some(ViewKind::BacklogKanban) => {
             // The V-cycle backlog board, full screen so the board and
@@ -1202,6 +1392,9 @@ mod tests {
             ("row-menu", ViewKind::RowMenu),
             ("hover", ViewKind::Hover),
             ("cursor", ViewKind::Cursor),
+            ("needs-input", ViewKind::NeedsInput),
+            ("needs-input-pulse-on", ViewKind::NeedsInputPulseOn),
+            ("needs-input-pulse-off", ViewKind::NeedsInputPulseOff),
             ("tab-menu", ViewKind::TabMenu),
             ("sideline-menu", ViewKind::SidelineMenu),
             ("composer", ViewKind::Composer),
@@ -1224,6 +1417,9 @@ mod tests {
             ("messages-archive", ViewKind::MessagesArchive),
             ("messages-you", ViewKind::MessagesYou),
             ("messages-you-thread", ViewKind::MessagesYouThread),
+            ("review-diff", ViewKind::ReviewDiff),
+            ("review-panel", ViewKind::ReviewPanel),
+            ("review-panel-drag", ViewKind::ReviewPanelDrag),
             ("backlog-list", ViewKind::BacklogList),
             ("backlog-kanban", ViewKind::BacklogKanban),
             ("navigator-pr", ViewKind::NavigatorPr),
@@ -1231,9 +1427,13 @@ mod tests {
             ("navigator-menu", ViewKind::NavigatorMenu),
             ("feed-detail", ViewKind::FeedDetail),
             ("question-detail", ViewKind::QuestionDetail),
+            ("sweep", ViewKind::Sweep),
             ("connections", ViewKind::Connections),
+            ("connections-use", ViewKind::ConnectionsUse),
             ("yard", ViewKind::Yard),
             ("needs", ViewKind::Needs),
+            ("dock", ViewKind::Dock),
+            ("machines", ViewKind::Machines),
         ] {
             let args = parse_extra(&["--view", name]).expect(name);
             assert_eq!(args.view, Some(kind), "{name}");
@@ -1248,7 +1448,7 @@ mod tests {
         let e = parse_extra(&["--view", "nonesuch"]).expect_err("unknown view names the options");
         assert!(
             e.contains(
-                "bell, bell-wide, bell-full, feed, row-menu, tab-menu, sideline-menu, composer, split-menu, settings, keys, org-block, org-table, org-recent, org-overview, org-graph, org-health, org-seat, org-feed, org-system, messages-tree, messages-chats, messages-thread, messages-system, messages-archive, messages-you, messages-you-thread, backlog-list, backlog-kanban, navigator-pr, navigator-menu, navigator-model, feed-detail, question-detail or connections"
+                "bell, bell-wide, bell-full, feed, row-menu, tab-menu, sideline-menu, composer, split-menu, settings, keys, org-block, org-table, org-recent, org-overview, org-graph, org-health, org-seat, org-feed, org-system, messages-tree, messages-chats, messages-thread, messages-system, messages-archive, messages-you, messages-you-thread, backlog-list, backlog-kanban, review-diff, review-panel, review-panel-drag, navigator-pr, navigator-menu, navigator-model, feed-detail, question-detail, connections-use or connections"
             ),
             "{e}"
         );

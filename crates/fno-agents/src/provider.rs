@@ -31,7 +31,7 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use crate::envelope::{Envelope, JsonEnvelope, NoEnvelope};
+use crate::mail::frame::{Envelope, JsonEnvelope, NoEnvelope};
 use crate::readiness::{
     AgyReadinessDetector, CodexReadinessDetector, GeminiReadinessDetector,
     OpencodeReadinessDetector, ReadinessDetector,
@@ -429,9 +429,9 @@ impl ProviderWithPty for ClaudeInteractiveProvider {
 // ---------------------------------------------------------------------------
 
 /// Codex provider. Argv mirrors codex.py (`codex exec --json ...` /
-/// `codex exec resume <id> --json ...`); the stream parser is pinned to the
-/// codex 0.130 JSONL vocabulary captured in
-/// `cli/tests/agents/fixtures/codex-jsonl-sample.jsonl`.
+/// `codex exec resume <id> --json ...`); the stream parser pins the codex
+/// 0.130 JSONL vocabulary (thread.started / item.completed / agent_message
+/// rows), asserted by this module's own tests.
 pub struct CodexProvider;
 
 /// The command-token shape every reader shares: a leading `/` or `$`
@@ -1071,7 +1071,7 @@ fn parse_codex_line(line: &str) -> ParsedEvent {
 /// Gemini provider. Argv mirrors gemini.py
 /// (`gemini --skip-trust -p <msg> --output-format json --session-id <uuid>` /
 /// `... --resume <uuid>`). The parser consumes gemini's single JSON document
-/// (pinned to `cli/tests/agents/fixtures/gemini-json-sample.json`).
+/// (pinned to `tests/fixtures/gemini-json-sample.json`).
 pub struct GeminiProvider;
 
 impl GeminiProvider {

@@ -12,6 +12,7 @@
 use crate::cursor;
 use crate::keys::KeymapWarning;
 use crate::proto::{cell_flags, Color};
+use crate::text_style::TextStyle;
 
 /// One mux chrome theme. `terminal` is the only theme with `inherit: true`: it
 /// renders Default + flags so nothing clashes with the user's emulator and every
@@ -72,7 +73,7 @@ pub struct Theme {
 
 /// How a framed cell is colored, resolved against a [`Theme`] by [`cell_style`].
 /// Body roles cover modal content; the rest are chrome the frame adds.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Role {
     Border,
     Title,
@@ -93,54 +94,67 @@ pub enum Role {
     /// theme's text color becomes the ground and its base color the text,
     /// checkbox included ([`cursor::cursor_style`]).
     BodyFocus,
-    /// A plain-body popup's emphasis text (the key column, a section
-    /// heading): the theme's brand accent, bold, on the plain ground - never
-    /// a band. `brand` survives the `terminal` inherit branch (the field
-    /// doc), so the emphasis reads under every theme.
-    BodyAccent,
     /// The cursor row of a plain-body popup: a filled band on the plain
     /// ground: the one cursor ([`cursor::cursor_style`]).
     BodyCursor,
-    /// A disabled (greyed) body entry: present but inert to arrow, Enter, and
-    /// click. DIM under `terminal`, the theme's `dim` color under a named theme.
-    BodyDim,
     ScrollTrack,
     /// The `Ｆ[no]` brand mark's `[no]`: the reverse-video stamp. Off-white
     /// label on a dark theme, ink label on a light one.
     Stamp,
     ScrollThumb,
-    /// A body cell on the theme ground: plain text on the terminal's own bg,
-    /// under EVERY theme. The old body was an INVERSE block, which read as
-    /// one pale fill under a named theme (the emulator's fg swapped in as
-    /// bg), so no view carries it any more.
-    #[default]
-    PanelBody,
-    /// A backlog panel's heading (lane name, column header, section label,
-    /// node title): the theme's bold fg slot - the terminal's own fg with
-    /// BOLD carrying the rank - on the terminal's own bg.
-    PanelHead,
-    /// A backlog panel's handle (node id) or field label: the emulator's
-    /// index-3 accent slot, so no hard color enters under any theme.
-    PanelLabel,
-    /// A backlog panel's meta line: the emulator's index-8 dim slot. Index
-    /// 8, not the DIM flag: DIM washes the default fg out on a light
-    /// terminal, while index 8 stays a readable gray under both.
-    PanelMeta,
-    /// A pill: the bracketed `status · priority` token on a detail title
-    /// line. The emulator's index-3 accent slot, on the terminal's own bg.
-    PanelPill,
-    /// The active tab of a panel's tab strip: the terminal's own pair,
-    /// swapped (INVERSE), the same look as the active mux tab.
-    PanelTab,
-    /// A thin rule under a heading or lane name: the index-8 dim slot.
-    PanelRule,
-    /// A panel line that needs the reader (a failed delivery): the
-    /// emulator's index-1 red slot, on the terminal's own bg.
-    PanelWarn,
+    /// One level of the shared text hierarchy ([`TextStyle`]): resolved
+    /// above the theme split, palette-following under every theme but
+    /// `Section`, which rides the brand accent.
+    Text(TextStyle),
+    /// A status badge (`[ACTIVE]`): a filled block in the theme's accent,
+    /// bold, so the one marked row reads before any text on it.
+    Badge,
+    /// A level meter's fill, by how full it is: the emulator's green, amber
+    /// and red slots ([`type_scale::level`]).
+    LevelOk,
+    LevelWarn,
+    LevelHigh,
     /// A literal-color span (the colors tab's swatches). The color IS the
     /// content, so it resolves above the theme split and never shifts with
     /// the theme.
     Swatch(Color),
+}
+
+impl Default for Role {
+    fn default() -> Self {
+        Role::Text(TextStyle::Item)
+    }
+}
+
+/// The type levels a body view paints with, by meaning, so views that share
+/// a level share its look. Each name is a [`Role`]; the theme resolves it.
+pub mod type_scale {
+    use super::Role;
+    use crate::text_style::TextStyle;
+
+    /// A group's title (a provider, a section): the strongest text.
+    pub const HEADING: Role = Role::Text(TextStyle::Title);
+    /// The name of one item in a group (an account): bold.
+    pub const NAME: Role = Role::Text(TextStyle::Title);
+    /// A value the reader compares across rows (a percent): bold.
+    pub const STRONG: Role = Role::Text(TextStyle::Title);
+    /// Plain text on the ground.
+    pub const BODY: Role = Role::Text(TextStyle::Item);
+    /// Detail and key hints: the dim slot.
+    pub const META: Role = Role::Text(TextStyle::Meta);
+    /// A status badge on the one marked row.
+    pub const BADGE: Role = Role::Badge;
+    /// A warning the reader must act on.
+    pub const WARN: Role = Role::Text(TextStyle::ERROR);
+
+    /// A meter fill's level for `pct` used: amber over 70, red over 90.
+    pub fn level(pct: u32) -> Role {
+        match pct {
+            p if p > 90 => Role::LevelHigh,
+            p if p > 70 => Role::LevelWarn,
+            _ => Role::LevelOk,
+        }
+    }
 }
 
 impl Theme {
@@ -216,25 +230,26 @@ pub fn cell_style(role: Role, t: &Theme) -> (Color, Color, u8) {
     if let Role::Swatch(c) = role {
         return (c, Color::Default, 0);
     }
-    // The backlog panel's slots sit above the theme split and stay
-    // palette-following under EVERY theme: attributes plus emulator-palette
-    // indexes, never a fixed color. A named theme's `title` is a fixed Rgb -
-    // pale blue on a light terminal is the exact wash-out the Solarized Light
-    // screenshots showed - while an index resolves through whatever palette
-    // the emulator runs, so the same render reads on dark and light both.
+    // The text levels sit above the theme split and stay palette-following
+    // under EVERY theme: attributes plus emulator-palette indexes, never a
+    // fixed color. A named theme's `title` is a fixed Rgb - pale blue on a
+    // light terminal is the exact wash-out the Solarized Light screenshots
+    // showed - while an index resolves through whatever palette the emulator
+    // runs, so the same render reads on dark and light both.
     match role {
-        Role::PanelBody => return (Color::Default, Color::Default, 0),
-        // The heading rides the theme's bold fg slot: the terminal's own fg
-        // with BOLD carrying the rank - never a fixed color that can wash
-        // out on a disagreeing palette.
-        Role::PanelHead => return (Color::Default, Color::Default, cell_flags::BOLD),
-        Role::PanelLabel | Role::PanelPill => return (Color::Indexed(3), Color::Default, 0),
-        Role::PanelWarn => return (Color::Indexed(1), Color::Default, 0),
-        Role::PanelTab => return (Color::Default, Color::Default, cell_flags::INVERSE),
-        // Index 8, not the DIM flag: the merged band evidence showed DIM
-        // washing the default fg out on a light terminal, while index 8 stays
-        // a readable gray under both.
-        Role::PanelMeta | Role::PanelRule => return (Color::Indexed(8), Color::Default, 0),
+        Role::Text(style) => return style.resolve(t),
+        Role::LevelOk => return (Color::Indexed(2), Color::Default, 0),
+        Role::LevelWarn => return (Color::Indexed(3), Color::Default, 0),
+        Role::LevelHigh => return (Color::Indexed(1), Color::Default, 0),
+        // INVERSE over the accent fg: the accent becomes the fill and the
+        // terminal's own bg the text, so the badge reads on dark and light.
+        Role::Badge => {
+            return (
+                t.brand,
+                Color::Default,
+                cell_flags::INVERSE | cell_flags::BOLD,
+            )
+        }
         // The focused composer chip resolves above the theme split too: the
         // terminal's own pair, swapped, is the fill - visible under every
         // theme and every emulator ground.
@@ -261,15 +276,11 @@ pub fn cell_style(role: Role, t: &Theme) -> (Color, Color, u8) {
             // chips read as one selected row. Only the ACTIVE tab is
             // filled; an inactive one is plain dim text.
             Role::Tab(false) => (Color::Default, Color::Default, cell_flags::DIM),
-            Role::BodyDim | Role::Subtitle | Role::Footer | Role::ScrollTrack => (
+            Role::Subtitle | Role::Footer | Role::ScrollTrack => (
                 Color::Default,
                 Color::Default,
                 cell_flags::INVERSE | cell_flags::DIM,
             ),
-            // Amber under `terminal` too: `brand` survives the inherit branch
-            // (see the field doc), so the key column and section headings
-            // carry the accent under every theme.
-            Role::BodyAccent => (t.brand, Color::Default, cell_flags::BOLD),
             // The mark's stamp is plain reverse video under `terminal`: the
             // emulator's own pair is the stamp.
             Role::Stamp => (Color::Default, Color::Default, cell_flags::INVERSE),
@@ -284,14 +295,9 @@ pub fn cell_style(role: Role, t: &Theme) -> (Color, Color, u8) {
         };
     }
     // Named theme: chrome takes explicit colors on the default bg; the body
-    // rides the theme ground (PanelBody resolved above the split), so
+    // rides the theme ground (the Text levels resolve above the split), so
     // content reads in the emulator's own colors under every theme.
     match role {
-        Role::BodyAccent => (t.brand, Color::Default, cell_flags::BOLD),
-        // background. The inverse block it used to sit on turned the light
-        // `dim` into the BACKGROUND, so the row rendered light-on-light and
-        // near invisible under every named theme (the screenshot review).
-        Role::BodyDim => (t.dim, Color::Default, 0),
         Role::Border => (t.border, Color::Default, 0),
         Role::Title => (t.title, Color::Default, cell_flags::BOLD),
         Role::Chip => (t.chip, Color::Default, cell_flags::BOLD),
@@ -308,9 +314,9 @@ pub fn cell_style(role: Role, t: &Theme) -> (Color, Color, u8) {
         // swap makes the label the background and the terminal's own fg the
         // letters, which is what a reverse-video stamp is.
         Role::Stamp => (t.stamp, Color::Default, cell_flags::INVERSE),
-        // The panel slots resolved above the theme split; unreachable keeps
+        // The text levels resolved above the theme split; unreachable keeps
         // a future role from silently inheriting a body style.
-        _ => unreachable!("panel roles resolve above the theme split"),
+        _ => unreachable!("text roles resolve above the theme split"),
     }
 }
 
@@ -766,10 +772,9 @@ mod tests {
             Role::Tab(true),
             Role::Tab(false),
             Role::Footer,
-            Role::PanelBody,
+            Role::Text(TextStyle::Item),
             Role::BodySel,
             Role::BodyCursor,
-            Role::BodyDim,
             Role::ScrollTrack,
             Role::ScrollThumb,
             Role::Stamp,
@@ -902,10 +907,10 @@ mod tests {
                 "{n} focused chip carries INVERSE"
             );
             // A focused chip must not read like its neighbors: unfocused
-            // chips ride PanelBody (default video) under every theme.
+            // chips ride Text(Item) (default video) under every theme.
             assert_ne!(
                 cell_style(Role::ChipFocus, &t),
-                cell_style(Role::PanelBody, &t),
+                cell_style(Role::Text(TextStyle::Item), &t),
                 "{n} focused vs unfocused chip"
             );
         }
@@ -927,12 +932,16 @@ mod tests {
             theme_gruvbox(),
         ] {
             for role in [
-                Role::PanelBody,
-                Role::PanelHead,
-                Role::PanelLabel,
-                Role::PanelMeta,
-                Role::PanelPill,
-                Role::PanelRule,
+                Role::Text(TextStyle::Item),
+                Role::Text(TextStyle::Title),
+                Role::Text(TextStyle::Section),
+                Role::Text(TextStyle::Value),
+                Role::Text(TextStyle::Badge),
+                Role::Text(TextStyle::Meta),
+                Role::Text(TextStyle::Hint),
+                Role::Text(TextStyle::OK),
+                Role::Text(TextStyle::WARN),
+                Role::Text(TextStyle::ERROR),
             ] {
                 let (fg, bg, flags) = cell_style(role, &t);
                 assert_eq!(
@@ -947,7 +956,7 @@ mod tests {
                     t.name
                 );
                 assert!(
-                    flags & cell_flags::DIM == 0 || role == Role::PanelMeta,
+                    flags & cell_flags::DIM == 0 || role == Role::Text(TextStyle::Meta),
                     "unexpected DIM on {role:?} under {}",
                     t.name
                 );
@@ -968,7 +977,7 @@ mod tests {
             theme_tokyo_night(),
             theme_gruvbox(),
         ] {
-            for role in [Role::BodySel, Role::BodyCursor, Role::BodyDim] {
+            for role in [Role::BodySel, Role::BodyCursor, Role::Text(TextStyle::Meta)] {
                 let (_, _, flags) = cell_style(role, &t);
                 assert!(
                     flags & cell_flags::INVERSE == 0,
@@ -980,21 +989,72 @@ mod tests {
     }
 
     #[test]
-    fn panel_hierarchy_roles_are_distinct_under_both_theme_kinds() {
-        // The whole point of the hierarchy: head, label, meta and body must
-        // resolve to DIFFERENT styles, or every line reads at one weight
-        // again (the defect the user reported).
-        for t in [theme_terminal(), theme_footnote_superscript()] {
-            let head = cell_style(Role::PanelHead, &t);
-            let label = cell_style(Role::PanelLabel, &t);
-            let meta = cell_style(Role::PanelMeta, &t);
-            let body = cell_style(Role::PanelBody, &t);
-            assert_ne!(head, body, "head vs body under {}", t.name);
-            assert_ne!(label, body, "label vs body under {}", t.name);
-            assert_ne!(meta, body, "meta vs body under {}", t.name);
-            assert_ne!(head, label, "head vs label under {}", t.name);
-            assert_ne!(head, meta, "head vs meta under {}", t.name);
-            assert_ne!(label, meta, "label/pill vs meta under {}", t.name);
+    fn text_levels_are_distinct_and_carry_their_weight_under_every_theme() {
+        // The whole point of the hierarchy: the levels resolve to DIFFERENT
+        // styles, or every line reads at one weight again (the defect the
+        // user reported). Title and Value share the bold default fg by
+        // design: one heads a view, the other marks a field's value.
+        for t in [
+            theme_terminal(),
+            theme_footnote_superscript(),
+            theme_footnote_paper(),
+            theme_catppuccin(),
+            theme_tokyo_night(),
+            theme_gruvbox(),
+        ] {
+            let style = |l: TextStyle| cell_style(Role::Text(l), &t);
+            let bold = |l: TextStyle| style(l).2 & cell_flags::BOLD != 0;
+            for l in [TextStyle::Title, TextStyle::Section, TextStyle::Value] {
+                assert!(bold(l), "{l:?} is bold under {}", t.name);
+            }
+            for l in [
+                TextStyle::Item,
+                TextStyle::Meta,
+                TextStyle::Hint,
+                TextStyle::Badge,
+            ] {
+                assert!(!bold(l), "{l:?} is not bold under {}", t.name);
+            }
+            assert_eq!(
+                style(TextStyle::Item).2,
+                0,
+                "Item has no flag under {}",
+                t.name
+            );
+            assert_eq!(
+                style(TextStyle::Meta).0,
+                Color::Indexed(8),
+                "Meta is the dim slot"
+            );
+            assert_eq!(
+                style(TextStyle::Hint).0,
+                Color::Indexed(8),
+                "Hint is the dim slot"
+            );
+            assert_ne!(
+                style(TextStyle::Hint),
+                style(TextStyle::Meta),
+                "Hint is italic"
+            );
+            let all = [
+                TextStyle::Title,
+                TextStyle::Section,
+                TextStyle::Item,
+                TextStyle::Meta,
+                TextStyle::Hint,
+                TextStyle::Badge,
+                TextStyle::Tab,
+                TextStyle::OK,
+                TextStyle::ERROR,
+            ];
+            for (i, a) in all.iter().enumerate() {
+                for b in &all[i + 1..] {
+                    assert_ne!(style(*a), style(*b), "{a:?} vs {b:?} under {}", t.name);
+                }
+            }
+            // WARN and Badge both ride the accent slot: urgency is the
+            // caller's word, the color is the palette's amber.
+            assert_eq!(style(TextStyle::WARN), style(TextStyle::Badge));
         }
     }
 
@@ -1011,16 +1071,20 @@ mod tests {
             theme_gruvbox(),
         ] {
             for role in [
-                Role::PanelBody,
-                Role::PanelHead,
-                Role::PanelLabel,
-                Role::PanelMeta,
-                Role::PanelPill,
-                Role::PanelRule,
+                Role::Text(TextStyle::Item),
+                Role::Text(TextStyle::Title),
+                Role::Text(TextStyle::Section),
+                Role::Text(TextStyle::Value),
+                Role::Text(TextStyle::Badge),
+                Role::Text(TextStyle::Meta),
+                Role::Text(TextStyle::Hint),
+                Role::Text(TextStyle::OK),
+                Role::Text(TextStyle::WARN),
+                Role::Text(TextStyle::ERROR),
             ] {
                 let (fg, bg, flags) = cell_style(role, &t);
                 assert!(
-                    !matches!(fg, Color::Rgb(..)),
+                    !matches!(fg, Color::Rgb(..)) || role == Role::Text(TextStyle::Section),
                     "{role:?} fg must stay palette-following under {}",
                     t.name
                 );

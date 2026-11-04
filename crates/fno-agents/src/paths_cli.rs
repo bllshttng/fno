@@ -126,14 +126,13 @@ pub fn emit_paths_sh_defaults() -> String {
         bash_quote(&home_relative("~/.fno/"))
     ));
     for (name, sub) in [
-        ("LEDGER_JSON_PATH", "ledger.json"),
+        ("LEDGER_JSON_PATH", "db/history/ledger.json"),
         ("BRIEFS_DIR", "briefs"),
-        ("FLEET_DIR", "fleet"),
-        ("POSTMORTEMS_DIR", "postmortems"),
-        ("WORKTREES_BASE", "worktrees"),
+        ("POSTMORTEMS_DIR", "db/postmortems"),
+        ("WORKTREES_BASE", "spaces/worktrees"),
         ("MEMORY_DIR", "memory"),
         ("HOOK_LOGS_DIR", "hook-logs"),
-        ("LATCHES_DIR", "latches"),
+        ("LATCHES_DIR", "state/latches"),
     ] {
         let v = bash_quote(&format!("$STATE_DIR/{sub}"));
         lines.push(format!("export {name}={v}"));
@@ -145,8 +144,9 @@ pub fn emit_paths_sh_defaults() -> String {
     // Defaults mode: no handoffs override, obsidian off, project.id unset --
     // the literal fallback line keeps the stub machine-stable; the basename
     // resolves at source-time from the consumer's repo.
-    lines
-        .push("export HANDOFFS_DIR=\"$STATE_DIR/handoffs/$(basename \"$REPO_ROOT\")\"".to_string());
+    lines.push(
+        "export HANDOFFS_DIR=\"$STATE_DIR/db/handoffs/$(basename \"$REPO_ROOT\")\"".to_string(),
+    );
     lines.push(format!(
         "export CONFIG_FILE={}",
         bash_quote("$STATE_DIR/config.toml")
@@ -652,7 +652,12 @@ pub(crate) fn handoffs_dir(cwd: &Path) -> PathBuf {
             .join("internal")
             .join(project)
             .join("handoffs"),
-        None => state_root(cwd).join("handoffs").join(project),
+        None => {
+            let root = state_root(cwd);
+            crate::state_layout::place_dir(&root, "handoffs")
+                .unwrap_or_else(|| root.join("handoffs"))
+                .join(project)
+        }
     }
 }
 
@@ -676,24 +681,56 @@ pub fn ledger_json(cwd: &Path) -> PathBuf {
     state_dir_resolved(cwd)
         .ok()
         .filter(|d| d.is_absolute())
-        .map(|d| d.join("ledger.json"))
-        .unwrap_or_else(|| crate::decision_index::default_state_path("").join("ledger.json"))
+        .map(|d| crate::state_layout::place(&d, "ledger.json"))
+        .unwrap_or_else(|| {
+            crate::state_layout::place(
+                &crate::decision_index::default_state_path(""),
+                "ledger.json",
+            )
+        })
 }
 
-/// Python `paths.worktrees_base()`: the `paths.worktrees_base` override, else
-/// `<state_dir>/worktrees`. A relative state dir falls back to the default
-/// state root, as `ledger_json` does.
-pub fn worktrees_base(cwd: &Path) -> PathBuf {
-    if let Some(raw) = cfg_str(cwd, &["paths", "worktrees_base"]) {
-        if let Ok(p) = resolve_override_path(&raw) {
-            return p;
-        }
-    }
+/// The external worktrees base when no `paths.worktrees_base` override is
+/// set: `<state>/spaces/worktrees`, with checkouts at `<base>/<repo>/<name>`.
+/// Allocation (`worktree::policy`) and the relocation allow both ask here, so
+/// the two cannot disagree.
+pub fn default_worktrees_base(state: &Path) -> PathBuf {
+    state.join("spaces").join("worktrees")
+}
+
+/// The pre-fold default base, `<state>/worktrees`. New worktrees never land
+/// here; checkouts already under it stay listed, allowed and counted until
+/// they are reaped.
+pub fn legacy_worktrees_base(state: &Path) -> PathBuf {
+    state.join("worktrees")
+}
+
+fn state_root_for_worktrees(cwd: &Path) -> PathBuf {
     state_dir_resolved(cwd)
         .ok()
         .filter(|d| d.is_absolute())
         .unwrap_or_else(|| crate::decision_index::default_state_path(""))
-        .join("worktrees")
+}
+
+fn explicit_worktrees_base(cwd: &Path) -> Option<PathBuf> {
+    let raw = cfg_str(cwd, &["paths", "worktrees_base"])?;
+    resolve_override_path(&raw).ok()
+}
+
+/// The `paths.worktrees_base` override, else `default_worktrees_base`. A
+/// relative state dir falls back to the default state root, as `ledger_json`
+/// does.
+pub fn worktrees_base(cwd: &Path) -> PathBuf {
+    explicit_worktrees_base(cwd)
+        .unwrap_or_else(|| default_worktrees_base(&state_root_for_worktrees(cwd)))
+}
+
+/// The pre-fold base, only while no override is set: an override means the
+/// operator chose where checkouts live and nothing sits at the old default.
+pub fn legacy_worktrees_base_for(cwd: &Path) -> Option<PathBuf> {
+    explicit_worktrees_base(cwd)
+        .is_none()
+        .then(|| legacy_worktrees_base(&state_root_for_worktrees(cwd)))
 }
 
 /// Python `paths.postmortems_dir()`: the `paths.postmortems_dir` override,
@@ -704,11 +741,11 @@ pub fn postmortems_dir(cwd: &Path) -> PathBuf {
             return p;
         }
     }
-    state_dir_resolved(cwd)
+    let root = state_dir_resolved(cwd)
         .ok()
         .filter(|d| d.is_absolute())
-        .unwrap_or_else(|| crate::decision_index::default_state_path(""))
-        .join("postmortems")
+        .unwrap_or_else(|| crate::decision_index::default_state_path(""));
+    crate::state_layout::place_dir(&root, "postmortems").unwrap_or_else(|| root.join("postmortems"))
 }
 
 /// Python `paths.observer_reports_dir(project_id=...)`: the explicit
@@ -825,11 +862,10 @@ pub fn emit_paths_sh_live(cwd: &Path) -> Result<String, String> {
     lines.push(format!("export STATE_DIR={}", bash_quote(&state_tmpl)));
 
     for (name, key, sub) in [
-        ("LEDGER_JSON_PATH", "ledger_json", "ledger.json"),
+        ("LEDGER_JSON_PATH", "ledger_json", "db/history/ledger.json"),
         ("BRIEFS_DIR", "briefs_dir", "briefs"),
-        ("FLEET_DIR", "fleet_dir", "fleet"),
-        ("POSTMORTEMS_DIR", "postmortems_dir", "postmortems"),
-        ("WORKTREES_BASE", "worktrees_base", "worktrees"),
+        ("POSTMORTEMS_DIR", "postmortems_dir", "db/postmortems"),
+        ("WORKTREES_BASE", "worktrees_base", "spaces/worktrees"),
         ("MEMORY_DIR", "memory_dir", "memory"),
         ("HOOK_LOGS_DIR", "hook_logs_dir", "hook-logs"),
     ] {
@@ -852,19 +888,19 @@ pub fn emit_paths_sh_live(cwd: &Path) -> Result<String, String> {
                     }
                 }
                 None if !sealed && is_project_relative(state_stripped) => {
-                    "$HOME/.fno/ledger.json".to_string()
+                    "$HOME/.fno/db/history/ledger.json".to_string()
                 }
-                None => "$STATE_DIR/ledger.json".to_string(),
+                None => "$STATE_DIR/db/history/ledger.json".to_string(),
             }
         } else {
             state_subpath(override_, sub)?
         };
         lines.push(format!("export {name}={}", bash_quote(&v)));
     }
-    // No config override: latches_dir() tracks state_dir by design.
+    // No config override: LATCHES_DIR tracks state_dir by design.
     lines.push(format!(
         "export LATCHES_DIR={}",
-        bash_quote("$STATE_DIR/latches")
+        bash_quote("$STATE_DIR/state/latches")
     ));
 
     // PLANS_DIR: project-relative by default.
@@ -921,12 +957,12 @@ pub fn emit_paths_sh_live(cwd: &Path) -> Result<String, String> {
                                 "project.id {pid:?} contains invalid characters; only [A-Za-z0-9._-] are allowed"
                             ));
                         }
-                        format!("$STATE_DIR/handoffs/{pid}")
+                        format!("$STATE_DIR/db/handoffs/{pid}")
                     }
                     None => return Ok(finish_live_stub(
                         cwd,
                         lines,
-                        "export HANDOFFS_DIR=\"$STATE_DIR/handoffs/$(basename \"$REPO_ROOT\")\"",
+                        "export HANDOFFS_DIR=\"$STATE_DIR/db/handoffs/$(basename \"$REPO_ROOT\")\"",
                     )),
                 }
             }

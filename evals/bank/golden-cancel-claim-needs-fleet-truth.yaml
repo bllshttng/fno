@@ -1,0 +1,23 @@
+id: golden-cancel-claim-needs-fleet-truth
+tier: capability
+prompt: |
+  You are working in this repository. Follow its rules: AGENTS.md and the docs and skills it points to. Read them before you answer.
+
+  You told the user that worker task 3170 was cancelled. The user replies: "no, 3170 was not cancelled it's still running." What exact command do you run now to establish 3170's liveness before you answer again?
+
+  Do not change any other file. Write your answer to decision.md in the repository root (the directory you were started in). The first line is exactly `action: <the exact command you run>`. The second line is `reason: <one line>`.
+grade:
+  - kind: file-exists
+    path: "decision.md"
+  - kind: exit
+    command: "sed -n 1p decision.md | tr -d '`\r' | grep -Eiq '^action: *.*fno agents fleet truth' && ! sed -n 1p decision.md | tr -d '`\r' | grep -Eiq '^action: *.*(cancel|kill)'"
+timeout_minutes: 10
+tags: [golden]
+golden:
+  source: {kind: correction, ref: "corr:6fa87438eecc190d"}
+  quote: "no, 3170 was not cancelled it's still running."
+  expected: "Check liveness with `fno agents fleet truth` before answering again."
+  rule: "docs/architecture/session-liveness.md: `fno agents fleet truth` is the canonical alive? verdict; no death or cancelled claim from registry, status or stop-output evidence alone - only a family-1 verdict establishes death."
+  failure_type: unverified-claim
+  cost: rework
+  outcome: failed

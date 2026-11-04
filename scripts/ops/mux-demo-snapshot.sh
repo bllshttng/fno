@@ -3,7 +3,7 @@
 #
 #   scripts/ops/mux-demo-snapshot.sh --out shot.svg [--theme light] [--format png] [--size 200x60]
 #       [--window-size smallest|latest|largest] [--peer 120x40] [--no-fit]
-#       [--hold] [--group <axis>]
+#       [--hold] [--group <axis>] [--remote-pane]
 #
 # Builds a throwaway server in a temp state root: its own config, graph,
 # agent registry, view prefs and socket dir. It seeds invented backlog nodes,
@@ -27,12 +27,15 @@ PANES=()
 # shoots as a passive observer so the shot crops instead of resizing the tab.
 # --hold arms a daemon reserve on the demo's breaker record, so the status row
 # shows the fleet hold. --group <axis> sets the sideline's group-by axis
-# (workspace, team, cwd, status, harness).
+# (workspace, team, cwd, status, harness). --remote-pane adds a fourth pane to
+# the first tab that shows a session on another machine, so its title wears the
+# remote glyph.
 ARGS=()
 FIT=(--fit)
 PREV=""
 HOLD=""
 GROUP=""
+REMOTE_PANE=""
 for a in "$@"; do
   if [ "$PREV" = "--out" ]; then
     mkdir -p -- "$(dirname -- "$a")"
@@ -45,6 +48,8 @@ for a in "$@"; do
     :
   elif [ "$a" = "--hold" ]; then
     HOLD=1
+  elif [ "$a" = "--remote-pane" ]; then
+    REMOTE_PANE=1
   elif [ "$a" = "--no-fit" ]; then
     FIT=()
   else
@@ -146,23 +151,29 @@ mkdir -p "$ROOT/mux" "$ROOT/agents" "$ROOT/code/checkout" "$ROOT/text" "$ROOT/.f
     'id = "studio"' \
     'name = "Studio"' \
     'harness = "claude"' \
-    'auth = "oauth_dir"' \
-    'credentials_source = "~/.claude-studio"' \
+    'auth = "managed"' \
     'priority = 10' \
     '[[accounts.records]]' \
     'id = "night-shift"' \
     'name = "Night shift"' \
     'harness = "claude"' \
-    'auth = "oauth_dir"' \
-    'credentials_source = "~/.claude-night"' \
+    'auth = "managed"' \
     'priority = 20' \
     '[[accounts.records]]' \
     'id = "codex-lab"' \
     'name = "Codex lab"' \
     'harness = "codex"' \
-    'auth = "oauth_dir"' \
-    'credentials_source = "~/.codex-lab"' \
-    'priority = 30'
+    'auth = "managed"' \
+    'plan = "Pro"' \
+    'priority = 30' \
+    '[[accounts.records]]' \
+    'id = "glm-key"' \
+    'name = "GLM key"' \
+    'harness = "claude"' \
+    'auth = "api_key"' \
+    'env = { ANTHROPIC_BASE_URL = "https://api.z.ai/api/anthropic", ANTHROPIC_API_KEY = "demo-placeholder" }' \
+    'plan = "GLM Coding Plan Max"' \
+    'priority = 40'
   if [ -n "${FNO_DEMO_PY_SOURCE:-}" ]; then
     printf '[dev]\nsource = "%s"\n' "$FNO_DEMO_PY_SOURCE"
   fi
@@ -199,6 +210,11 @@ export PATH
 exec "$REAL_AGENTS" "\$@"
 SH
 chmod +x "$ROOT/fleetbin/fno-agents"
+# The managed demo records would read the macOS Keychain, and its unscoped
+# item is the real login on this machine. This shim answers every Keychain
+# read with not-found, so the shot never touches a real credential.
+printf '#!/bin/sh\nexit 44\n' >"$ROOT/fleetbin/security"
+chmod +x "$ROOT/fleetbin/security"
 export PATH="$ROOT/fleetbin:$PATH"
 export FNO_AGENTS_BIN="$ROOT/fleetbin/fno-agents"
 # The claims legacy lock takes a FILESYSTEM root; a fresh root carries the
@@ -233,9 +249,32 @@ usage = {
                     "windows": [win("5h", 4.0, 15800), win("weekly", 22.0, 475200)]},
     "codex-lab": {"probed_at": now - 120, "source": "session-log",
                   "windows": [win("5h", 12.0, 9600), win("weekly", 9.0, 518400)]},
+    "glm-key": {"probed_at": now - 180, "source": "api-quota",
+                "windows": [win("5h", 71.0, 3600)]},
 }
 with open(f"{root}/.fno/state/provider-runtime-state.json", "w") as f:
     json.dump({"schema_version": 2, "usage": usage}, f)
+# Saved logins for the managed records: invented principals and tiers, and
+# tokens that sign in nowhere. The row reads its plan and email from these.
+import os
+logins = {
+    "studio": ("claude", "ada@studio.example", {"subscriptionType": "max", "rateLimitTier": "default_claude_max_20x"}),
+    "night-shift": ("claude", "night@ops.example", {"subscriptionType": "pro", "rateLimitTier": "default_claude_ai"}),
+    "codex-lab": ("codex", "lab@codex.example", None),
+}
+for rid, (harness, email, tier) in logins.items():
+    d = f"{root}/.fno/providers/{rid}"
+    os.makedirs(d, exist_ok=True)
+    meta = {"harness": harness, "account_id": rid, "captured_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now - 2 * 86400)), "kind": "keychain",
+            "principal": {"account_uuid": f"acc-{rid}", "organization_uuid": "org-demo", "email": email}}
+    with open(f"{d}/meta.json", "w") as f:
+        json.dump(meta, f)
+    blob = {"claudeAiOauth": dict({"accessToken": f"demo-{rid}", "refreshToken": f"demo-{rid}"}, **tier)} if tier else {"tokens": {}}
+    with open(f"{d}/blob", "w") as f:
+        json.dump(blob, f)
+# A managed record reads as active from the slot stamp, not the pointer.
+with open(f"{root}/.fno/providers/.active-claude", "w") as f:
+    f.write("studio")
 stamp = lambda t: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t))
 if hold:
     with open(f"{root}/.fno/agents/fleet-stop.json", "w") as f:
@@ -383,8 +422,15 @@ ${E}[1m> document the refund audit log${E}[0m
 
   Drafting docs/refunds.md from the new schema.
 EOF
+cat >"$ROOT/text/remote.txt" <<EOF
+${E}[1m> add a refund endpoint behind the payments flag${E}[0m
+
+  Edited src/payments/refund.ts (+24 -3).
+${E}[32m  1 file changed${E}[0m
+EOF
 : >"$ROOT/text/pi.foot"
 : >"$ROOT/text/docs.foot"
+: >"$ROOT/text/remote.foot"
 
 # Each pane prints its text, hides the cursor, and prints it again on every
 # resize, so the sizing attach below lands on a full screen.
@@ -403,6 +449,12 @@ run --cwd "$ROOT/code/checkout" --tab 1 --at "${PANES[0]}" --split right -- sh -
 run --cwd "$ROOT/code/checkout" --tab 1 --at "${PANES[0]}" --split down -- sh -c "$(show opencode)"
 run --cwd "$ROOT/code/checkout" -- sh -c "$(show pi)"
 run --cwd "$ROOT/code/checkout" -- sh -c "$(show docs)"
+# The seat a remote session opens in: no registry row, and the registered name
+# is the session's name@host address.
+if [ -n "$REMOTE_PANE" ]; then
+  run --cwd "$ROOT/code/checkout" --tab 1 --at "${PANES[2]}" --split right -- \
+    env FNO_AGENT_SELF=kestrel@imac2d2 sh -c "$(show remote)"
+fi
 "$FNO" mux tab rename --server "$SERVER" "${W[@]}" --tab 1 --name agents >/dev/null
 "$FNO" mux tab rename --server "$SERVER" "${W[@]}" --tab 2 --name alerts >/dev/null
 "$FNO" mux tab rename --server "$SERVER" "${W[@]}" --tab 3 --name docs >/dev/null
@@ -529,8 +581,10 @@ def ts(mins_ago):
     return (now - datetime.timedelta(minutes=mins_ago)).strftime("%Y-%m-%dT%H:%M:%SZ")
 MUX_LEAD = "a0d1e2f3-demo-mux-lead"
 FLEET_LEAD = "b1e2f3a4-demo-fleet-lead"
-def seat(name, harness, model, project, status, mins, sid=None, node=None, role=None, short=None, parent=None):
+def seat(name, harness, model, project, status, mins, sid=None, node=None, role=None, short=None, parent=None, workspace=None, needs=None, pinned=None, cost=None, tokens=None, compactions=None, tail=None):
     return {
+        "workspace": workspace, "needs_input": needs, "pinned": pinned,
+        "cost_cents": cost, "tokens": tokens, "compactions": compactions, "last_message": tail,
         "name": name, "session": short or (sid or name)[:8], "harness": harness, "node": node,
         "status": status, "age_s": mins * 60, "rss_mb": 410.0,
         "parent": parent[:8] if parent else None,
@@ -556,9 +610,9 @@ local = [
     seat("reviewer", "opencode", "zen", "search", "parked", 9, sid=sids[2], node=ids[2], parent=sids[1]),
 ]
 remote = [
-    seat("kestrel", "claude", "sonnet", "payments", "writing", 3, sid="4a1b2c3d-remote-0001", node=ids[6], parent=MUX_LEAD),
-    seat("heron", "codex", "gpt-6-sol", "payments", "quiet", 44, sid="5b2c3d4e-remote-0002", node=ids[8], parent=FLEET_LEAD),
-    seat("ibis", "opencode", "zen", "search", "writing", 5, sid="6c3d4e5f-remote-0003", node=ids[3], parent=MUX_LEAD),
+    seat("kestrel", "claude", "sonnet", "payments", "writing", 3, sid="4a1b2c3d-remote-0001", node=ids[6], parent=MUX_LEAD, workspace="payments-api", needs=False, pinned=True, cost=412, tokens=184000, compactions=1, tail="Edited src/payments/refund.ts +24 -3"),
+    seat("heron", "codex", "gpt-6-sol", "payments", "quiet", 44, sid="5b2c3d4e-remote-0002", node=ids[8], parent=FLEET_LEAD, workspace="payments-api", needs=True, pinned=False, cost=126, tokens=52000, compactions=3, tail="Keep the legacy webhook, or drop it with the refund rewrite?"),
+    seat("ibis", "opencode", "zen", "search", "writing", 5, sid="6c3d4e5f-remote-0003", node=ids[3], parent=MUX_LEAD, workspace="search-index", needs=False, pinned=False, cost=88, tokens=41000, tail="Reindexing products: 12,408 of 30,000"),
     {"name": "plover", "session": "7d4e5f60", "harness": "claude", "node": None,
      "status": "unknown", "age_s": None, "rss_mb": None, "parent": None},
 ]
@@ -584,7 +638,7 @@ def ts(mins_ago):
 
 # Chats store: from/to join the registry rows above, so threads resolve to
 # seeded agents. The fleet: broadcast lands on the bell's Announcements tab.
-chats = f"{root}/.fno/chats"
+chats = f"{root}/.fno/db/mail/chats"
 
 def msg(i, mins_ago, frm, to, body):
     return {"type": "message", "kind": "send", "v": 1, "id": f"fmail-demo-{i}",

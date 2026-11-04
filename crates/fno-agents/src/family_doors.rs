@@ -11,6 +11,7 @@ pub fn client_dispatch(args: &[String]) -> Option<i32> {
         Some("target-gates") => Some(crate::target_gates::run(&args[1..])),
         Some("state-cli") => Some(crate::state::cli::run(&args[1..])),
         Some("stub-manifest") => Some(crate::stub_manifest::run(&args[1..])),
+        Some("plan-cli") => Some(crate::plan_doc::cli::run(&args[1..])),
         _ => None,
     }
 }

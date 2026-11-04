@@ -4,6 +4,12 @@
 # row starts passing, its job FAILS and names the flip, so every repair PR
 # turns its own row. Runs daily, on every workflow_dispatch, and on any PR
 # that touches an install surface (no branches filter, so stacked PRs run it).
+# README.md is deliberately NOT a trigger: a README-only PR would pay the
+# full clean-runner matrix for a proof that takes seconds. The proof that
+# every advertised install command has an expect: pass row
+# (scripts/ci/check-readme-install-commands.sh) runs as a guards.yml step on
+# every PR instead; the matrix keeps the readme-commands row for the runs it
+# still fires on.
 name: install-channels
 
 on:
@@ -22,7 +28,6 @@ on:
       - 'scripts/setup.sh'
       - 'scripts/preflight.sh'
       - 'skills/tdd/SKILL.md'
-      - 'README.md'
       - '.github/workflows/install-channels.yml'
       - 'cli/tests/smoke/channel_matrix_smoke.sh'
       - 'scripts/ci/check-readme-install-commands.sh'

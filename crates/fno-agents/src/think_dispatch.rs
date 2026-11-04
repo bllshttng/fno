@@ -664,6 +664,9 @@ fn spawn_think_worker(req: &SpawnRequest) -> Result<String, SpawnError> {
     };
     let mut argv = vec!["--harness".to_string(), resolved.harness.clone()];
     argv.extend(substrate_lane_flags(&resolved.substrate));
+    // The node guard only arms on an explicit --node. Without it a spawned
+    // /think bypasses the plan-fresh gate and the planner-held refusal.
+    argv.extend(["--node".to_string(), req.node_id.clone()]);
     match req.node_cwd.as_deref() {
         Some(cwd) => argv.extend(["--cwd".to_string(), cwd.to_string()]),
         None => argv.push("--fresh".to_string()),

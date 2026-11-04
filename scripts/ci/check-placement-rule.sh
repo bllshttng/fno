@@ -316,13 +316,6 @@ add_violation() {
 # ---------------------------------------------------------------------------
 
 CLAUDE_ALLOWLIST=$(cat <<'EOF'
-cli/src/fno/agents/discover.py
-cli/src/fno/agents/format.py
-cli/src/fno/agents/harnesses/_claude_session_registry.py
-cli/src/fno/agents/harnesses/claude.py
-cli/src/fno/agents/model_routing.py
-cli/src/fno/agents/registry.py
-cli/src/fno/agents/spawn_gate.py
 crates/fno/src/config_doctor/checks.rs
 crates/fno/src/doctor/report.rs
 crates/fno/src/doctor/report/advisors.rs
@@ -350,7 +343,7 @@ crates/fno-agents/src/context_audit.rs
 crates/fno-agents/src/observer/fold.rs
 crates/fno-agents/src/footprint_cause.rs
 cli/src/fno/paths.py
-cli/src/fno/provenance/resolver.py
+crates/fno-agents/src/transcript_resolve.rs
 crates/fno-agents/src/scoreboard/views.rs
 crates/fno/src/setup_autowire.rs
 crates/fno/src/setup_autowire_tests.rs
@@ -432,7 +425,6 @@ scripts/install-autocorrect-cron.sh
 scripts/install-corrections-git-hook.sh
 scripts/lib/config.sh
 scripts/lib/corrections-lock.sh
-scripts/lib/mission-emit.sh
 scripts/lib/worktree-lifecycle.sh
 scripts/lib/worktree-manager.sh
 scripts/lib/worktree_occupancy.py

@@ -1895,7 +1895,8 @@ fn list_row_key_set_matches_shared_contract() {
     let ctx = test_ctx(home.clone(), PathBuf::from("fno-agents-worker"));
     let req = Request::new(1, "agent.list", json!({}));
 
-    let response = handle_list_with_truth(&ctx, &req, per_handle(|_handle| probe("working")));
+    let response =
+        list_rows::handle_list_with_truth(&ctx, &req, per_handle(|_handle| probe("working")));
     let result = response.result().unwrap();
     let row = &result["agents"][0];
     assert_eq!(row["context_used_pct"], 26);
@@ -1929,7 +1930,7 @@ fn list_row_key_set_matches_shared_contract() {
     .unwrap();
     let mut contradicting = probe("working").unwrap();
     contradicting.observed_model = json!({"kind": "observed", "model": "glm-5.3-flash"});
-    let response = handle_list_with_truth(
+    let response = list_rows::handle_list_with_truth(
         &ctx,
         &req,
         per_handle(|_handle| Some(contradicting.clone())),
@@ -1947,7 +1948,8 @@ fn list_row_key_set_matches_shared_contract() {
     // Suffix-only difference is a MATCH: the marker stays null.
     let mut agreeing = probe("working").unwrap();
     agreeing.observed_model = json!({"kind": "observed", "model": "glm-5.3"});
-    let response = handle_list_with_truth(&ctx, &req, per_handle(|_handle| Some(agreeing.clone())));
+    let response =
+        list_rows::handle_list_with_truth(&ctx, &req, per_handle(|_handle| Some(agreeing.clone())));
     let row = &response.result().unwrap()["agents"][0];
     assert_eq!(row["requested_model"], "glm-5.3[1m]");
     assert_eq!(row["model_substituted"], Value::Null);
@@ -2018,7 +2020,7 @@ fn list_rows_sort_in_the_shared_attention_order() {
         .as_array()
         .expect("rows is an array")
         .clone();
-    rows.sort_by(|a, b| attention_sort_key(a).cmp(&attention_sort_key(b)));
+    rows.sort_by(|a, b| list_rows::attention_sort_key(a).cmp(&list_rows::attention_sort_key(b)));
     let got: Vec<&str> = rows
         .iter()
         .map(|r| r["name"].as_str().expect("row has a name"))
@@ -2072,7 +2074,7 @@ fn list_renders_family1_truth_instead_of_stored_registry_status() {
     let ctx = test_ctx(home.clone(), PathBuf::from("fno-agents-worker"));
     let req = Request::new(1, "agent.list", json!({"status": "writing"}));
 
-    let response = handle_list_with_truth(
+    let response = list_rows::handle_list_with_truth(
         &ctx,
         &req,
         per_handle(|_handle| probe_with_verdict("working", "reachable")),
@@ -2104,7 +2106,7 @@ fn list_applies_cheap_filters_before_family1_subprocesses() {
     let req = Request::new(1, "agent.list", json!({"provider": "openai"}));
     let seen = std::cell::RefCell::new(Vec::new());
 
-    let response = handle_list_with_truth(
+    let response = list_rows::handle_list_with_truth(
         &ctx,
         &req,
         per_handle(|handle| {
@@ -2138,7 +2140,7 @@ fn list_pays_exactly_one_batch_call_for_the_whole_page() {
     let req = Request::new(1, "agent.list", json!({"all": true}));
     let calls = std::cell::RefCell::new(Vec::new());
 
-    let response = handle_list_with_truth(&ctx, &req, |handles: &[String]| {
+    let response = list_rows::handle_list_with_truth(&ctx, &req, |handles: &[String]| {
         calls.borrow_mut().push(handles.to_vec());
         let map = handles
             .iter()
@@ -2169,7 +2171,7 @@ fn list_row_the_batch_did_not_answer_renders_exactly_as_an_unanswered_row() {
     let ctx = test_ctx(home.clone(), PathBuf::from("fno-agents-worker"));
     let req = Request::new(1, "agent.list", json!({"all": true}));
 
-    let response = handle_list_with_truth(&ctx, &req, |handles: &[String]| {
+    let response = list_rows::handle_list_with_truth(&ctx, &req, |handles: &[String]| {
         // Answers for the first handle only; the second is simply missing.
         let map = handles
             .iter()

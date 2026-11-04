@@ -282,7 +282,7 @@ fn session_join(
     spaces: &Path,
 ) -> HashMap<String, (Vec<String>, Option<String>, Option<u64>)> {
     let mut join = HashMap::new();
-    let ledger = fno_dir.join("ledger.json");
+    let ledger = crate::state_layout::place(fno_dir, "ledger.json");
     if let Ok(raw) = std::fs::read_to_string(&ledger) {
         if let Ok(doc) = serde_json::from_str::<Value>(&raw) {
             if let Some(entries) = doc.get("entries").and_then(|v| v.as_array()) {
@@ -348,44 +348,6 @@ fn session_join(
         }
     }
     join
-}
-
-/// The bus log path, mirroring `fno.paths.bus_dir`'s order every bus reader
-/// shares: FNO_BUS_DIR, then FNO_INBOX_ROOT, then the `config.paths.bus_dir`
-/// override (tilde-expanded; `{vault}`/`{project}` templates are not), else
-/// `<fno>/bus/messages.jsonl`. org_board.rs keeps its own env-only copy and
-/// documents the template gap there.
-pub(crate) fn bus_log_path(fno_dir: &Path) -> PathBuf {
-    if let Some(dir) = std::env::var("FNO_BUS_DIR").ok().filter(|v| !v.is_empty()) {
-        return PathBuf::from(dir).join("messages.jsonl");
-    }
-    if let Some(root) = std::env::var("FNO_INBOX_ROOT")
-        .ok()
-        .filter(|v| !v.is_empty())
-    {
-        return PathBuf::from(root).join(".bus").join("messages.jsonl");
-    }
-    if let Ok(cwd) = std::env::current_dir() {
-        if let Some(dir) = crate::agents_config::config_lookup(&cwd, &["paths", "bus_dir"])
-            .and_then(|v| v.as_str().map(str::to_string))
-            .filter(|s| !s.trim().is_empty())
-        {
-            return crate::cargo_build_dirs::expand_home(Path::new(&dir)).join("messages.jsonl");
-        }
-    }
-    fno_dir.join("bus").join("messages.jsonl")
-}
-
-/// The bus DIRECTORY under `fno_dir`, the shape the mail-front leaves read:
-/// `bus_log_path`'s parent, or `<fno_dir>/bus` when the log path has none.
-/// Callers must pass the PYTHON state root (`agents_config::state_dir`),
-/// mirroring `fno.paths.bus_dir`'s final fallback - not the agents home,
-/// which `FNO_STATE_DIR` does not move.
-pub(crate) fn bus_dir_of(fno_dir: &Path) -> PathBuf {
-    bus_log_path(fno_dir)
-        .parent()
-        .map(std::path::Path::to_path_buf)
-        .unwrap_or_else(|| fno_dir.join("bus"))
 }
 
 pub(crate) fn ts_secs(ts: &str) -> Option<u64> {
@@ -1367,6 +1329,7 @@ fn project_roots(name: &str, cwd: &Path, fno_dir: &Path) -> Result<Vec<PathBuf>,
         .to_string();
     let mut roots: Vec<PathBuf> = vec![path.clone()];
     if !basename.is_empty() {
+        roots.push(fno_dir.join("spaces/worktrees").join(&basename));
         roots.push(fno_dir.join("worktrees").join(&basename));
     }
     if let Some(base) = crate::agents_config::config_lookup(&path, &["paths", "worktrees_base"])
@@ -1411,7 +1374,7 @@ fn fold_all(
     events_journal: &Path,
     scorecard: Option<(HashMap<String, String>, Vec<Value>)>,
 ) -> Report {
-    let bus = BusIndex::load(&bus_log_path(fno_dir));
+    let bus = BusIndex::load(&crate::mail_paths::bus_log_path(fno_dir));
     let spaces = crate::paths::spaces_root_opt().unwrap_or_else(|| fno_dir.join("spaces"));
     let join = session_join(fno_dir, &spaces);
     let events = read_events(&fno_dir.join("events.jsonl"));

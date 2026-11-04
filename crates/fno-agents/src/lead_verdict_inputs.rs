@@ -151,7 +151,14 @@ pub(crate) fn resolve_scope(
     explicit_scope: Option<&str>,
     registry_path: &Path,
 ) -> Result<String, String> {
-    with_live_grants(|grants| resolve_scope_in(explicit_scope, registry_path, grants))
+    with_live_grants(|grants| {
+        resolve_scope_in(
+            explicit_scope,
+            registry_path,
+            grants,
+            &crate::team_reap::transcript_age_now,
+        )
+    })
 }
 
 /// Call `f` with the grant receipts this machine holds.
@@ -262,6 +269,7 @@ fn resolve_scope_in(
     explicit_scope: Option<&str>,
     registry_path: &Path,
     grants: &Grants,
+    transcript_age_s: &dyn Fn(&str) -> Option<i64>,
 ) -> Result<String, String> {
     if let Some(raw) = explicit_scope {
         let canonical = crate::territory::canonical_scope(raw.trim());
@@ -285,15 +293,23 @@ fn resolve_scope_in(
             "cannot resolve the caller's team: no registry row names session {session}"
         ));
     };
-    if matches!(row.status, AgentStatus::Failed) {
+    // A stored terminal word refuses only a session the harness is not
+    // writing: the sweep can stamp `exited` over a live session (measured
+    // 2026-11-03 on a lead whose transcript kept moving), and the check-in
+    // is the one command that session runs from inside itself.
+    let served_live = crate::lead_state::served_live(&session, transcript_age_s);
+    if matches!(row.status, AgentStatus::Failed) && !served_live {
         return Err(format!(
             "the registry row for {session} is failed, a terminal state"
         ));
     }
-    if let crate::row_verdict::RowVerdict::Finished(why) = crate::row_verdict::fno_verdict(row) {
-        return Err(format!(
-            "the registry row for {session} is finished ({why}), a terminal state"
-        ));
+    if !served_live {
+        if let crate::row_verdict::RowVerdict::Finished(why) = crate::row_verdict::fno_verdict(row)
+        {
+            return Err(format!(
+                "the registry row for {session} is finished ({why}), a terminal state"
+            ));
+        }
     }
     let stamped = row
         .role_scope
@@ -1281,6 +1297,39 @@ mod tests {
         fs::remove_dir_all(&dir).ok();
     }
 
+    /// The measured 2026-11-03 refusal: the sweep stamped `exited` over a
+    /// live lead (`pid_proven` on a stale row pid) and the check-in refused
+    /// a session that was mid-turn running the command. A transcript moving
+    /// inside the attention window is the served harness fact (law
+    /// d-10a72d88: a session never ends, harness facts are served), so it
+    /// outranks the stored word at BOTH terminal arms; a quiet transcript
+    /// keeps the stored word's veto.
+    #[test]
+    fn a_transcript_moving_inside_the_window_overrides_a_stored_terminal_word() {
+        let _guard = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = tmp("served-live");
+        let exited = teamed_row(serde_json::json!({
+            "status": "exited",
+            "exited_at": "2026-11-03T12:00:22Z",
+        }));
+        let path = write_registry(&dir, serde_json::json!([exited]));
+        let fresh = |_: &str| Some(30);
+        let quiet = |_: &str| Some(10_000);
+        with_teamed_identity(|| {
+            let scope =
+                resolve_scope_in(None, &path, &grants(&dir, vec![]), &fresh).expect("writing");
+            assert_eq!(scope, crate::territory::canonical_scope("probe fleet"));
+        });
+        with_teamed_identity(|| {
+            let err = resolve_scope_in(None, &path, &grants(&dir, vec![]), &quiet)
+                .expect_err("a quiet transcript keeps the stored word's veto");
+            assert!(err.contains("terminal"), "{err}");
+        });
+        fs::remove_dir_all(&dir).expect("tmp cleaned");
+    }
+
     fn grants(dir: &Path, laws: Vec<Value>) -> Grants<'static> {
         let root: &'static Path = Box::leak(dir.join("spaces").into_boxed_path());
         let laws: &'static dyn Fn() -> Result<crate::decision_index::Index, String> =
@@ -1297,6 +1346,13 @@ mod tests {
             vacated_at: &|_: &str| None,
             promoted_at: &|_: &str| None,
         }
+    }
+
+    /// The seam most refusal tests want: no transcript resolves, so a stored
+    /// terminal word keeps its veto (the pre-fix behavior).
+    fn no_transcript(session: &str) -> Option<i64> {
+        let _ = session;
+        None
     }
 
     /// The user said "muriel leads fno-web too" to a lead that already holds a
@@ -1439,7 +1495,7 @@ mod tests {
             law("someone-else", "user in chat: promote someone-else"),
         ] {
             with_teamed_identity(|| {
-                resolve_scope_in(None, &path, &grants(&dir, vec![refused]))
+                resolve_scope_in(None, &path, &grants(&dir, vec![refused]), &no_transcript)
                     .expect_err("no grant names this row");
             });
         }
@@ -1448,7 +1504,8 @@ mod tests {
             "user in chat: promote lead-a792 over fno-books",
         );
         with_teamed_identity(|| {
-            let scope = resolve_scope_in(None, &path, &grants(&dir, vec![granted])).expect("heals");
+            let scope = resolve_scope_in(None, &path, &grants(&dir, vec![granted]), &no_transcript)
+                .expect("heals");
             assert_eq!(scope, crate::territory::canonical_scope("fno-books"));
         });
         let healed = crate::state::load_registry(&path).unwrap();
@@ -1459,7 +1516,8 @@ mod tests {
         let mut after_done = grants(&dir, vec![law("lead-a792", "user in chat: promote")]);
         after_done.vacated_at = &later;
         with_teamed_identity(|| {
-            resolve_scope_in(None, &spent, &after_done).expect_err("a vacated role stays vacated");
+            resolve_scope_in(None, &spent, &after_done, &no_transcript)
+                .expect_err("a vacated role stays vacated");
         });
         fs::remove_dir_all(&dir).ok();
     }
@@ -1486,7 +1544,7 @@ mod tests {
             "ts": "2026-10-28T12:00:00Z",
         });
         with_teamed_identity(|| {
-            resolve_scope_in(None, &path, &grants(&dir, vec![law])).expect("heals");
+            resolve_scope_in(None, &path, &grants(&dir, vec![law]), &no_transcript).expect("heals");
         });
         let healed = crate::state::load_registry(&path).unwrap();
         assert_eq!(healed.entries[0].role_level, Some(2));
@@ -1523,8 +1581,8 @@ mod tests {
         manifest("someone-else");
         let path = write_registry(&dir, serde_json::json!([unstamped()]));
         with_teamed_identity(|| {
-            let err =
-                resolve_scope_in(None, &path, &grants(&dir, vec![])).expect_err("no user grant");
+            let err = resolve_scope_in(None, &path, &grants(&dir, vec![]), &no_transcript)
+                .expect_err("no user grant");
             assert!(err.contains("unstamped"), "{err}");
             assert!(!err.contains(&["attended", " shell"].concat()), "{err}");
         });
@@ -1535,12 +1593,13 @@ mod tests {
         rival["pid"] = serde_json::json!(std::process::id());
         let contested = write_registry(&dir, serde_json::json!([unstamped(), rival]));
         with_teamed_identity(|| {
-            resolve_scope_in(None, &contested, &grants(&dir, vec![]))
+            resolve_scope_in(None, &contested, &grants(&dir, vec![]), &no_transcript)
                 .expect_err("a live rival holds the territory");
         });
         let path = write_registry(&dir, serde_json::json!([unstamped()]));
         with_teamed_identity(|| {
-            let scope = resolve_scope_in(None, &path, &grants(&dir, vec![])).expect("heals");
+            let scope = resolve_scope_in(None, &path, &grants(&dir, vec![]), &no_transcript)
+                .expect("heals");
             assert_eq!(scope, crate::territory::canonical_scope("fno-books"));
         });
         let healed = crate::state::load_registry(&path).unwrap();

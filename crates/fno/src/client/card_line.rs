@@ -137,7 +137,8 @@ pub enum CardGraph {
 /// a dash for the activity cell - never a fabricated flat line - and a
 /// bare pane or an exited row's unserved fields hide instead of pulsing.
 pub(super) fn metric_cells(a: &AgentRow, mode: CardGraph) -> [MetricCell; 4] {
-    let reportable = !a.exited && matches!(a.harness.as_deref(), Some("claude" | "codex"));
+    let reportable =
+        !a.exited && a.remote.is_none() && matches!(a.harness.as_deref(), Some("claude" | "codex"));
     let codex = a.harness.as_deref() == Some("codex");
     let field = |value: Option<String>, hidden: bool| {
         if hidden {
@@ -396,11 +397,21 @@ pub(super) fn model_label(a: &AgentRow) -> Option<String> {
         .filter(|m| !m.is_empty())
 }
 
+/// The name a row paints. A row from another machine sits under that
+/// machine's band, so it drops the `@host` its address carries.
+pub(super) fn shown_name(a: &AgentRow) -> &str {
+    a.remote
+        .as_ref()
+        .and_then(|r| a.name.strip_suffix(r.host.as_str())?.strip_suffix('@'))
+        .unwrap_or(&a.name)
+}
+
 /// The card's name: the worker name without the node and model the card
 /// now shows in their own columns. `t-<node>-opus` keeps only `t`, so it
 /// reads `t-<node slug>` when the board knows the node; with no slug, it
 /// keeps the node rather than show a bare prefix.
 pub(super) fn slug(a: &AgentRow, backlog: &[BacklogCard]) -> String {
+    let name = shown_name(a);
     let model_tokens: Vec<&str> = a
         .model
         .as_deref()
@@ -418,10 +429,10 @@ pub(super) fn slug(a: &AgentRow, backlog: &[BacklogCard]) -> String {
         }
     };
     let Some(node) = a.node.as_deref().filter(|n| !n.is_empty()) else {
-        return strip_model(&a.name);
+        return strip_model(name);
     };
     let bare = node.replace('-', "");
-    let parts: Vec<&str> = a.name.split('-').collect();
+    let parts: Vec<&str> = name.split('-').collect();
     let node_parts: Vec<&str> = node.split('-').collect();
     let mut kept: Vec<&str> = Vec::new();
     let mut i = 0;
@@ -436,7 +447,7 @@ pub(super) fn slug(a: &AgentRow, backlog: &[BacklogCard]) -> String {
         }
     }
     if kept.len() == parts.len() {
-        return strip_model(&a.name);
+        return strip_model(name);
     }
     let rest = strip_model(&kept.join("-"));
     if rest.contains('-') {
@@ -450,7 +461,7 @@ pub(super) fn slug(a: &AgentRow, backlog: &[BacklogCard]) -> String {
     {
         Some(s) if !s.is_empty() && rest.is_empty() => s.to_string(),
         Some(s) if !s.is_empty() => format!("{rest}-{s}"),
-        _ => strip_model(&a.name),
+        _ => strip_model(name),
     }
 }
 

@@ -15,6 +15,7 @@ use fno_agents::paths::AgentsHome;
 use std::time::Duration;
 
 fn main() {
+    fno_agents::chokepoint_events::install();
     // `version [--json]`: report the baked-in build rev so `fno doctor update` can
     // verify this bin is the SAME build as its triad siblings, not just present.
     // Execs cheaply and returns without touching a running daemon or the runtime.
@@ -39,10 +40,13 @@ fn main() {
     }
 
     // Env mutation is only sound while the process is single-threaded: fill
-    // the build-dir env before the runtime below spawns threads, so the heal lane's `fno doctor update` and every
-    // other child inherits it even when the daemon's parent passed no value.
-    // The server start is best-effort and detached; the watch tick re-ensures
-    // it every 300s, so a boot-time failure costs nothing.
+    // the build-dir env before the runtime below spawns threads, so the heal
+    // lane's `fno doctor update` and every other child inherits it even when
+    // the daemon's parent passed no value. Only a footnote-checkout cwd
+    // earns the fill; a daemon started from a foreign repo keeps its
+    // children's build env untouched (the install path re-resolves its own
+    // value). The server start is best-effort and detached; the watch tick
+    // re-ensures it every 300s, so a boot-time failure costs nothing.
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     fno_agents::cargo_build_dirs::fill_build_dir_env(&cwd);
     fno_agents::cargo_build_dirs::fill_sccache_env(&cwd);

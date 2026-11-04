@@ -267,7 +267,9 @@ fn state_dir_worktrees(merged: &Map<String, Value>) -> PathBuf {
         .and_then(Value::as_str)
         .filter(|s| !s.is_empty())
         .unwrap_or("~/.fno/");
-    resolve_lenient(&expanduser(&expandvars(state)).join("worktrees"))
+    resolve_lenient(&crate::paths_cli::default_worktrees_base(&expanduser(
+        &expandvars(state),
+    )))
 }
 
 fn conductor_base() -> PathBuf {

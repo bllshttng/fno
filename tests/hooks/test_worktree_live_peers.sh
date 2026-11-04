@@ -28,7 +28,7 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 # The carrier caches at `$SCRIPT_DIR/../.fno/.worktree-stranded-cache.json` and
 # claims its refresh window at `../.fno/.worktree-stranded-refresh-stamp`. Both
 # paths are built from the script's own location, so running the repo's copy
-# writes those two files into the repo's own `.fno`. On a developer box that is
+# writes those two files into the repo's own `.fno`. On a developer machine that is
 # the live checkout state root. The poisoned-HOME canary caught exactly this on
 # CI, as ADDED under `<checkout>/.fno`, which is what it is for.
 #

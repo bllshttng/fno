@@ -30,6 +30,10 @@ const PROCESS_RUNAWAY_FACTOR: f64 = 2.0;
 const MEMORY_RUNAWAY_FRACTION: f64 = 0.5;
 /// The kernel's critical level in `kern.memorystatus_vm_pressure_level` (1 normal, 2 warning, 4 critical).
 const MEMORY_PRESSURE_CRITICAL: u64 = 4;
+/// Free GiB on the root filesystem below which spawn admission brakes. Cargo
+/// builds and shot renders write GBs each, so a worker started under this
+/// floor fills the disk before it can finish.
+pub const DISK_RUNAWAY_FREE_GB: f64 = 5.0;
 /// Notice titles. The arm's runaway leg keys off the runaway one.
 pub const RUNAWAY_TITLE: &str = "Machine overloaded";
 pub const HOT_TITLE: &str = "Machine busy";
@@ -109,6 +113,17 @@ pub fn decide(
         .processes
         .zip(baseline.filter(|base| *base > 0))
         .is_some_and(|(processes, base)| processes as f64 > PROCESS_RUNAWAY_FACTOR * base as f64);
+    if let Some(free) = sample
+        .disk_free_gb
+        .filter(|free| *free < DISK_RUNAWAY_FREE_GB)
+    {
+        return (
+            "runaway".into(),
+            format!(
+                "Machine out of disk: {free:.1} GB free (fine is over {DISK_RUNAWAY_FREE_GB:.0} GB); run fno doctor reclaim --apply"
+            ),
+        );
+    }
     if memory_runaway || process_runaway {
         let reason = if memory_runaway {
             match memory.as_ref() {
@@ -885,7 +900,7 @@ pub fn maybe_tick(arm: &Arm, home: AgentsHome) {
                 }),
             );
         }
-        // Whose load the box is in, from the one footprint answerer the
+        // Whose load the machine is in, from the one footprint answerer the
         // spawn CPU axis already reads: unreadable or fleet-majority keeps
         // today's path, a minority share is outside load.
         let admission = crate::spawn_gate::fleet_admission();
@@ -1086,6 +1101,19 @@ mod tests {
             throttle_minutes: 30,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn low_free_disk_reads_runaway() {
+        let mut s = sample(Some(0.1), Some(1.0));
+        s.disk_free_gb = Some(3.4);
+        let (verdict, reason) = decide(&s, 0.9, 10.0, None);
+        assert_eq!(verdict, "runaway");
+        assert!(reason.contains("out of disk: 3.4 GB free"), "{reason}");
+        s.disk_free_gb = Some(40.0);
+        assert_ne!(decide(&s, 0.9, 10.0, None).0, "runaway");
+        s.disk_free_gb = None;
+        assert_ne!(decide(&s, 0.9, 10.0, None).0, "runaway");
     }
 
     #[test]

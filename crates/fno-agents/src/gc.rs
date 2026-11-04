@@ -160,6 +160,12 @@ pub struct GcRow {
     /// origin ruling's one idle hour: a configured window may tighten the
     /// hour, never loosen it.
     pub open_work_retire_s: i64,
+    /// `Some(window)` only for a STOPPED row: the registry status reads
+    /// orphaned, exited or permanent-dead. The window comes from
+    /// `agents.reap.stopped_retire_s`. A stopped row with no open node,
+    /// no open PR and no live claim retires once quiet past it, whatever its
+    /// origin. `None` for a live row.
+    pub stopped_retire_s: Option<i64>,
     /// A live or suspect work-claim names this session as its holder: the
     /// claim's holder process answered the pid probe. The row is never
     /// reaped as unattended while it holds one. `None` when
@@ -356,11 +362,14 @@ pub fn gc_decide(row: &GcRow, grace_secs: i64) -> (GcAction, Option<KeepReason>)
     // The done rule outranks the operator shield: an operator origin is
     // often a guess (a mint that saw no spawner), and a row whose every node
     // is done and that sat quiet past the hour has nothing left to protect.
-    if row.origin.as_deref() == Some("operator") && !past_idle_hour(row) {
+    if row.origin.as_deref() == Some("operator") && !past_idle_hour(row) && !stopped_stale(row) {
         return (GcAction::Keep, Some(KeepReason::Operator));
     }
     if row.teamed {
         return (GcAction::Keep, Some(KeepReason::Teamed));
+    }
+    if stopped_stale(row) {
+        return (GcAction::Retire, None);
     }
     // A terminal eval attempt is finished work by definition: the attempt was
     // run once (`--once`), classified, and recorded in the evals history.
@@ -609,6 +618,21 @@ pub fn past_idle_hour(row: &GcRow) -> bool {
     (fleet || done_worked)
         && row.live_claim.is_none()
         && idle_age_s(row).is_some_and(|age| age > SPAWN_IDLE_RETIRE_SECS)
+}
+
+/// A stopped row that has sat quiet past its window with nothing left to
+/// protect: no open node, no open PR, no live claim, no cascade hold. The
+/// clock is the transcript's quiet age (its mtime), else the report clock,
+/// so a row with no `last_message_at` still has an age.
+pub fn stopped_stale(row: &GcRow) -> bool {
+    let Some(window) = row.stopped_retire_s else {
+        return false;
+    };
+    !matches!(row.work, WorkState::Open { .. })
+        && row.live_claim.is_none()
+        && row.open_pr.is_none()
+        && row.confirm_hold.is_none()
+        && idle_age_s(row).is_some_and(|age| age > window)
 }
 
 /// The unresolved-transcript arm both idle gates share: a release reads the
@@ -1635,13 +1659,13 @@ pub fn maybe_retirement_sweep(
         // one `retire_holds` row beside the tick, so a fleet question reads
         // the event stream instead of parsing bucket counts. Zero holds
         // writes nothing.
-        if !summary.holds.is_empty() {
+        let holds: Vec<&gc_sweep::Hold> = summary.holds.iter().chain(roster.holds.iter()).collect();
+        if !holds.is_empty() {
             let _ = journal.append(
                 "retire_holds",
                 serde_json::json!({
                     "scheduler": "daemon",
-                    "holds": summary
-                        .holds
+                    "holds": holds
                         .iter()
                         .map(|h| {
                             serde_json::json!({
@@ -2390,7 +2414,7 @@ mod tests {
         let path = dir.join("events.jsonl");
         let _ = std::fs::remove_file(&path);
         let emitter = EventEmitter::new(path.clone(), "daemon");
-        // A threshold of zero would reap every orphan on the box; None must
+        // A threshold of zero would reap every orphan on the machine; None must
         // hold it back anyway.
         let reaped = orphan_sweep(&emitter, Duration::from_secs(0), None);
         assert_eq!(reaped, 0);
@@ -2471,6 +2495,7 @@ mod tests {
             bg_fno_invoked: false,
             registry_terminal: false,
             open_work_retire_s: crate::agents_config::DEFAULT_OPEN_WORK_RETIRE_SECS as i64,
+            stopped_retire_s: None,
             live_claim: None,
             worked_node: true,
             node_held_elsewhere: None,
@@ -2488,6 +2513,58 @@ mod tests {
             work: WorkState::NoProvenance,
             transcript_age_s: Some(GRACE + 1),
             ..retiring()
+        }
+    }
+
+    fn stopped_operator() -> GcRow {
+        GcRow {
+            origin: Some("operator".into()),
+            work: WorkState::NoProvenance,
+            transcript_age_s: Some(86_401),
+            stopped_retire_s: Some(86_400),
+            ..retiring()
+        }
+    }
+
+    #[test]
+    fn a_stopped_operator_row_retires_after_the_stopped_window() {
+        assert_eq!(
+            gc_decide(&stopped_operator(), GRACE),
+            (GcAction::Retire, None)
+        );
+        // Age falls to the report clock when the transcript never resolved.
+        let no_transcript = GcRow {
+            transcript_age_s: None,
+            report_age_s: Some(86_401),
+            ..stopped_operator()
+        };
+        assert_eq!(gc_decide(&no_transcript, GRACE).0, GcAction::Retire);
+        for keep in [
+            GcRow {
+                transcript_age_s: Some(86_400),
+                ..stopped_operator()
+            },
+            GcRow {
+                stopped_retire_s: None,
+                ..stopped_operator()
+            },
+            GcRow {
+                live_claim: Some("held".into()),
+                ..stopped_operator()
+            },
+            GcRow {
+                work: WorkState::Open {
+                    node: "x-1".into(),
+                    status: "in_progress".into(),
+                },
+                ..stopped_operator()
+            },
+            GcRow {
+                open_pr: Some(("x-1".into(), 7)),
+                ..stopped_operator()
+            },
+        ] {
+            assert_eq!(gc_decide(&keep, GRACE).0, GcAction::Keep);
         }
     }
 
@@ -3227,6 +3304,7 @@ mod tests {
             bg_fno_invoked: false,
             registry_terminal: false,
             open_work_retire_s: crate::agents_config::DEFAULT_OPEN_WORK_RETIRE_SECS as i64,
+            stopped_retire_s: None,
             live_claim: None,
             worked_node: true,
             node_held_elsewhere: None,

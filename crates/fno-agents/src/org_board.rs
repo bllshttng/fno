@@ -1043,8 +1043,10 @@ pub fn read_board(opts: &BoardOpts) -> Value {
                                     (row.session.clone(), holder, row.ts.clone())
                                 })
                                 .collect();
-                            let answered =
-                                queues::mail_answered_since(&bus_live_log_path(), &mail_candidates);
+                            let answered = queues::mail_answered_since(
+                                &crate::mail_paths::live_bus_log(),
+                                &mail_candidates,
+                            );
 
                             let mut sessions: Vec<String> = Vec::new();
                             for (session, holder, _) in &mail_candidates {
@@ -1379,29 +1381,6 @@ pub fn read_board(opts: &BoardOpts) -> Value {
         }
     }
 
-    // Mirrors `bus/log.py::bus_dir`'s env overrides only, not its
-    // `config.paths.bus_dir` template override - a documented gap: an
-    // operator who relocates the bus via config gets a mail-check that
-    // never sees mail there, degrading to "still shows unanswered" rather
-    // than a wrong answer.
-    fn bus_live_log_path() -> PathBuf {
-        if let Some(dir) = std::env::var("FNO_BUS_DIR").ok().filter(|v| !v.is_empty()) {
-            return PathBuf::from(dir).join("messages.jsonl");
-        }
-        if let Some(root) = std::env::var("FNO_INBOX_ROOT")
-            .ok()
-            .filter(|v| !v.is_empty())
-        {
-            return PathBuf::from(root).join(".bus").join("messages.jsonl");
-        }
-        let home = crate::paths::AgentsHome::from_env();
-        home.root()
-            .parent()
-            .unwrap_or_else(|| home.root())
-            .join("bus")
-            .join("messages.jsonl")
-    }
-
     // The fleet-task read: a local questions.jsonl fold, sub-millisecond,
     // so it runs inline instead of taking a budget slice or a thread. An
     // unreadable store degrades the queue, never the board; catch_unwind
@@ -1699,7 +1678,7 @@ pub(crate) fn default_needs_sources(home: &crate::paths::AgentsHome) -> (Vec<Pat
     let global_events = fno_dir.join("events.jsonl");
     let questions = fno_dir.join("questions.jsonl");
     let project_events = PathBuf::from(".fno").join("events.jsonl");
-    let ledger = fno_dir.join("ledger.json");
+    let ledger = crate::state_layout::place(&fno_dir, "ledger.json");
     (vec![project_events, global_events, questions], ledger)
 }
 

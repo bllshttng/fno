@@ -2199,6 +2199,15 @@ fn a_paint_pr_holds_until_an_answered_page_names_it() {
     // A paint file the approval never showed is a new look and holds.
     fake.gh_routes = routes("crates/fno/src/client/theme.rs\ncrates/fno/src/client/splash.rs\n");
     assert!(crate::merge_gates::visual_approval_blocker(&fake, &tmp, 7, &pushed).is_some());
+    // An approval that spells the approved head as a ten-character prefix
+    // carries the same way.
+    fake.gh_routes = routes("crates/fno/src/client/theme.rs\n");
+    std::fs::write(&page, approved(&format!("PR 7 at {}", &head[..10]))).unwrap();
+    assert!(
+        crate::merge_gates::visual_approval_blocker(&fake, &tmp, 7, &pushed).is_none(),
+        "a short-sha approval carries to the new head"
+    );
+    std::fs::write(&page, approved(&format!("PR 7 at head {head}"))).unwrap();
     fake.gh_routes.clear();
     // The page archives into done/; the approval must not lapse.
     let donedir = qdir.join("done");
@@ -2215,8 +2224,8 @@ fn a_paint_pr_holds_until_an_answered_page_names_it() {
     assert!(crate::merge_gates::visual_approval_blocker(&off, &bare, 7, &head).is_none());
     assert!(off.gh_calls.borrow().is_empty());
     // A checkout that carries the mux client arms the built-in paint list
-    // with no config key: a stock footnote tree holds its own UI PRs. An
-    // explicit empty list is still the opt-out.
+    // with no config key: a stock footnote tree holds its own UI PRs, and a
+    // config list cannot opt a client tree out.
     let stock = std::env::temp_dir().join(format!("xc129-stock-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&stock);
     std::fs::create_dir_all(stock.join("crates/fno/src/client")).unwrap();
@@ -2231,7 +2240,16 @@ fn a_paint_pr_holds_until_an_answered_page_names_it() {
         "[merge]\nvisual_paint_paths = []\n",
     )
     .unwrap();
-    assert!(crate::merge_gates::visual_approval_blocker(&armed, &stock, 7, &head).is_none());
+    // A machine config cannot disarm or narrow the list in a client tree.
+    let held = crate::merge_gates::visual_approval_blocker(&armed, &stock, 7, &head)
+        .expect("config does not change what holds in a footnote tree");
+    assert_eq!(held.code, "visual_approval");
+    let mut keymap_only = clean();
+    keymap_only.gh_output = "crates/fno/src/digest_overlay.rs\n".to_string();
+    assert!(
+        crate::merge_gates::visual_approval_blocker(&keymap_only, &stock, 7, &head).is_none(),
+        "digest_overlay.rs renders nothing, so it holds no PR"
+    );
     std::fs::remove_dir_all(&tmp).ok();
     std::fs::remove_dir_all(&bare).ok();
     std::fs::remove_dir_all(&stock).ok();
@@ -2458,5 +2476,85 @@ fn a_role_chat_approval_clears_the_paint_hold_only_at_its_head() {
         .into_bytes(),
     );
     assert!(crate::merge_gates::visual_approval_blocker(&fake, &tmp, 7, &head).is_none());
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
+#[test]
+fn a_chat_attested_law_row_or_a_board_decision_clears_the_paint_hold_at_its_head() {
+    let tmp = std::env::temp_dir().join(format!("xf5ec-gate-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(tmp.join(".fno")).unwrap();
+    let head: String = "a".repeat(40);
+    let pushed: String = "b".repeat(40);
+    let mut fake = clean();
+    let law = |authority: &str, decision: &str, rationale: &str| {
+        format!(
+            r#"{{"decisions":[{{"decision_id":"d-xf5ec","subject":"visual approval PR 7","authority_source":"{authority}","lifecycle":"live","decision":"{decision}","rationale":"{rationale}"}}]}}"#
+        )
+        .into_bytes()
+    };
+    let law_clears =
+        |fake: &Fake, head: &str| crate::merge_gates::law_chat_clears_pr(fake, &tmp, 7, head);
+    // The worker the user spoke to recorded the user's words as law.
+    fake.decisions_stdout = Some(law(
+        "chat_attested",
+        &format!("Approved: PR 7 at {head}; merge when green."),
+        "user in chat: Approved",
+    ));
+    assert!(law_clears(&fake, &head));
+    // A push voids it, a bare agent row never counts, and a row with no
+    // user words or a decline holds.
+    assert!(!law_clears(&fake, &pushed));
+    fake.decisions_stdout = Some(law(
+        "agent",
+        &format!("Approved: PR 7 at {head}"),
+        "user in chat: Approved",
+    ));
+    assert!(!law_clears(&fake, &head));
+    fake.decisions_stdout = Some(law(
+        "chat_attested",
+        &format!("Approved: PR 7 at {head}"),
+        "the lead judges it good",
+    ));
+    assert!(!law_clears(&fake, &head));
+    fake.decisions_stdout = Some(law(
+        "chat_attested",
+        &format!("Hold: PR 7 at {head}"),
+        "user in chat: hold it",
+    ));
+    assert!(!law_clears(&fake, &head));
+    fake.decisions_stdout = Some(law(
+        "chat_attested",
+        &format!("Approved: PR 8 at {head}"),
+        "user in chat: Approved",
+    ));
+    assert!(!law_clears(&fake, &head));
+
+    // A board answer lands as a node decision whose question names the PR
+    // and an abbreviated head; the page stayed open.
+    let board = |answer: &str, comms: &str| {
+        format!(
+            r#"{{"decisions":[{{"decision_id":"d-board","subject":"x-paint","lifecycle":"unscoped","question_id":"q-1","trace":{{"comms":"{comms}","recipient_kind":"user"}},"question":"Approve the look of PR 7 (node x-paint, head aaaaaaaaaa)?","decision":"{answer}"}}]}}"#
+        )
+        .into_bytes()
+    };
+    let clears = |fake: &Fake, head: &str| {
+        crate::merge_gates::role_chat_clears_pr(fake, &tmp, 7, head, "x-paint")
+    };
+    fake.decisions_stdout = Some(board("Approve; merge when green.", "question"));
+    assert!(clears(&fake, &head));
+    assert!(!clears(&fake, &pushed));
+    fake.decisions_stdout = Some(board("Hold for changes", "question"));
+    assert!(!clears(&fake, &head));
+    fake.decisions_stdout = Some(board("Approve", "coordination"));
+    assert!(!clears(&fake, &head));
+    // The asking team closing its own question with a role answer is no look.
+    fake.decisions_stdout = Some(
+        String::from_utf8(board("Approve", "question"))
+            .unwrap()
+            .replace(r#""lifecycle""#, r#""authority_source":"role","lifecycle""#)
+            .into_bytes(),
+    );
+    assert!(!clears(&fake, &head));
     std::fs::remove_dir_all(&tmp).ok();
 }

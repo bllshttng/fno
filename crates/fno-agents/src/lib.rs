@@ -35,7 +35,7 @@
 //! - [`provider`]: [`provider::Provider`] + [`provider::ProviderWithPty`] traits
 //!   (LD8) and the three impls ([`provider::ClaudeProvider`] shellout,
 //!   [`provider::CodexProvider`] / [`provider::GeminiProvider`] PTY-managed).
-//! - [`envelope`]: [`envelope::Envelope`] structural anti-injection wrapper (LD15).
+//! - [`mail::frame`]: [`mail::frame::Envelope`] structural anti-injection wrapper (LD15).
 //! - [`screen`]: the terminal-grid construction behind [`readiness::ScreenView`]
 //!   (the per-CLI [`readiness::ReadinessDetector`] impls now live in
 //!   [`readiness`]).
@@ -108,6 +108,8 @@ pub mod census;
 pub mod census_reads;
 pub mod chats;
 pub mod check_supersession;
+pub mod chokepoint;
+pub mod chokepoint_events;
 pub mod ci_cadence;
 pub mod ci_front;
 pub mod ci_tier;
@@ -193,7 +195,6 @@ pub mod duration;
 pub mod effect_gate;
 pub mod effect_map;
 pub mod effort_surface;
-pub mod envelope;
 pub mod escalation;
 pub mod eval_attempt;
 pub mod eval_events;
@@ -230,6 +231,7 @@ pub mod fleet_law;
 pub mod fleet_load;
 pub mod fleet_state;
 pub mod fleet_task;
+pub mod fleet_workspace;
 pub mod flight_gate;
 pub(crate) mod fnod;
 pub mod footnote_harness;
@@ -305,8 +307,14 @@ pub mod launch_exec;
 pub mod launch_flags;
 pub mod launch_record;
 pub mod launch_workdir;
+pub mod law_filters;
+pub mod law_firings;
 pub mod law_match;
+pub mod law_pr_shape;
+pub mod law_recheck;
+pub mod law_renew;
 pub mod law_restore;
+pub mod law_when;
 pub mod lead_answers;
 pub mod lead_checkin;
 pub(crate) mod lead_checkin_beat_budget;
@@ -316,6 +324,7 @@ pub mod lead_checkin_lineup;
 pub mod lead_checkin_machine;
 pub mod lead_escalation;
 pub mod lead_eval;
+pub(crate) mod lead_eval_grade;
 pub mod lead_goal;
 pub mod lead_history;
 pub mod lead_hygiene;
@@ -337,6 +346,7 @@ pub mod ledger_axes;
 pub(crate) mod ledger_register;
 pub(crate) mod ledger_workers;
 mod lifecycle_child;
+pub mod link_dial;
 pub mod lint_registry;
 pub mod list_render;
 pub mod list_row;
@@ -361,17 +371,18 @@ pub mod machine_load;
 pub mod machine_mail;
 pub mod machine_sample;
 pub mod machine_watch;
+pub mod mail;
 pub mod mail_arm;
 pub mod mail_backfill;
 pub mod mail_bus;
 pub mod mail_cli;
 pub mod mail_control_drain;
-pub mod mail_delivery_state;
 pub mod mail_envelope;
 pub mod mail_header;
 pub mod mail_hold;
 pub mod mail_inject;
 pub mod mail_notify_self;
+pub mod mail_paths;
 pub mod mail_receipt;
 pub mod mail_remote;
 pub mod mail_teach;
@@ -415,6 +426,7 @@ pub mod node_reading;
 pub mod node_route;
 pub mod node_seed;
 pub mod notice_route;
+pub mod notify_dispatch;
 pub mod nudge;
 pub mod numbers;
 pub mod observer;
@@ -551,6 +563,7 @@ pub mod resume_wake;
 pub mod retask;
 pub(crate) mod retired_lead;
 pub mod retro;
+pub mod rev_front;
 pub mod review_capability;
 pub mod review_doors;
 pub mod review_findings;
@@ -603,6 +616,7 @@ pub mod session_names_fold;
 pub(crate) mod session_origin;
 pub(crate) mod session_receipt;
 pub mod session_report;
+pub mod session_role;
 pub mod session_start_bytes;
 pub mod session_truth;
 pub mod silence_sweep;
@@ -626,6 +640,7 @@ pub mod spawn_gate_admission;
 pub mod spawn_gate_command;
 pub mod spawn_gate_forced;
 pub mod spawn_gate_lanes;
+pub(crate) mod spawn_gate_probe;
 pub(crate) mod spawn_gate_queue;
 pub mod spawn_gate_reservations;
 pub(crate) mod spawn_gate_slots;
@@ -648,6 +663,7 @@ pub mod stale_spaces;
 pub mod stalls;
 pub mod state;
 pub mod state_layout;
+mod state_layout_merge;
 pub mod state_layout_sqlite;
 pub mod state_path;
 pub mod state_root_drift;
@@ -720,6 +736,7 @@ pub mod tick_ledger;
 pub mod tool_activity;
 pub mod tracker;
 pub mod transcript_activity;
+pub mod transcript_resolve;
 pub mod transcript_turns;
 pub mod truth_cli;
 pub mod truth_probe;
@@ -729,6 +746,7 @@ pub mod usage_refresh;
 pub mod verify_advise;
 pub mod verify_evidence;
 pub mod version;
+pub mod visual_screen;
 pub mod wait;
 pub mod wake_meter;
 pub mod wake_name;
@@ -1974,6 +1992,7 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // A wait or cadence red-cancel of a head's runs in flight
     // (pr_status/wait.rs), with the failing checks that caused it.
     "ci_wait_cancel",
+    "ci_cancel_intent",
     // A PR queued in place of a merge, and the merge queue arm's acts
     // (merge_queue.rs).
     "merge_queue_entry",
@@ -2116,6 +2135,13 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // The same failure the Python identification arm emits: the manifest
     // rebind at a promoted row's first self-identification did not land.
     "role_manifest_arm_failed",
+    // The session-report lineage port (session_report.rs): the daemon's
+    // classification of a differing reported session id (succession or
+    // branch fork), and the cwd heal it attempts, or fails, on the
+    // reporting worker's own row.
+    "session_transition_classified",
+    "session_cwd_healed",
+    "session_cwd_heal_failed",
     // Ordered exit teardown (daemon-emitted, inside-out E3.3): a claude row with
     // an inside-leg report is going Exited; the completion is published before
     // the registry clears the report (AC-X2-4).

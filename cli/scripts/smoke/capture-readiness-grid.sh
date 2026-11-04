@@ -12,7 +12,12 @@
 # PROMPT_GLYPHS if it differs.
 #
 # Usage:
-#   READINESS_SMOKE=1 bash scripts/smoke/capture-readiness-grid.sh <harness>
+#   READINESS_SMOKE=1 bash scripts/smoke/capture-readiness-grid.sh <harness> -- <interactive argv...>
+#
+# The interactive argv rides in after `--`, rendered by the Rust caller from
+# the packaged capability table (the same `interactive_create` lane the pane
+# arm launches). Runnable by hand: with no `--` argv the script prints a
+# usage line and exits 2.
 #
 # A faithful grid render needs `pyte` (pip install pyte); without it the script
 # falls back to a naive ANSI strip that does NOT handle cursor save/restore
@@ -22,11 +27,11 @@
 # hosts (and the default test run) skip it. It NEVER sends input to the CLI; it
 # only observes startup, then SIGTERMs the child. Safe to abort with Ctrl-C.
 #
-# Outputs (per provider) under cli/tests/agents/fixtures/:
+# Outputs (per provider) under crates/fno-agents/tests/fixtures/readiness-grid/:
 #   readiness-grid-<provider>.txt   — rendered visible screen
 #   readiness-grid-<provider>.hex   — hexdump of the last non-blank line
 #
-# Exit codes: 0 ok/skip, 14 provider not on PATH, 11 empty capture.
+# Exit codes: 0 ok/skip, 2 usage, 14 provider not on PATH, 11 empty capture.
 
 set -euo pipefail
 
@@ -36,6 +41,21 @@ if [[ "${READINESS_SMOKE:-0}" != "1" ]]; then
 fi
 
 PROVIDER="${1:-codex}"
+shift || true
+
+PANE_ARGV=()
+while [[ $# -gt 0 ]]; do
+    if [[ "$1" == "--" ]]; then
+        shift
+        PANE_ARGV=("$@")
+        break
+    fi
+    shift
+done
+if [[ ${#PANE_ARGV[@]} -eq 0 ]]; then
+    echo "usage: capture-readiness-grid.sh <harness> -- <interactive argv...> (the interactive_create argv rides after --; the Rust readiness instrument renders it)" >&2
+    exit 2
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CLI_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
@@ -51,29 +71,12 @@ else
     exit 14
 fi
 
-if ! PYTHONPATH="${CLI_ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" "${PYTHON_CMD[@]}" - "$PROVIDER" <<'PY'
-import sys
-
-from fno.agents.harness_map import is_declared
-
-harness = sys.argv[1]
-if not is_declared(harness):
-    print(
-        f"capture-readiness-grid: harness '{harness}' declares no capability row",
-        file=sys.stderr,
-    )
-    raise SystemExit(2)
-PY
-then
-    exit 2
-fi
-
 if ! command -v "$PROVIDER" >/dev/null 2>&1; then
     echo "capture-readiness-grid: $PROVIDER CLI not on PATH" >&2
     exit 14
 fi
 
-FIX_DIR="${CLI_ROOT}/tests/agents/fixtures"
+FIX_DIR="${CLI_ROOT}/../crates/fno-agents/tests/fixtures/readiness-grid"
 mkdir -p "$FIX_DIR"
 
 OUT_TXT="${FIX_DIR}/readiness-grid-${PROVIDER}.txt"
@@ -81,20 +84,13 @@ OUT_HEX="${FIX_DIR}/readiness-grid-${PROVIDER}.hex"
 
 # Spawn the CLI under a PTY, read ~4s of startup output, render it through a
 # terminal-state parser, and dump the visible screen + last non-blank line. The
-# child is SIGTERM'd after the read window; no input is ever sent.
-CAP_TXT="$(PROVIDER="$PROVIDER" PYTHONPATH="${CLI_ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" "${PYTHON_CMD[@]}" - "$PROVIDER" "$CLI_ROOT" <<'PY'
+# child is SIGTERM'd after the read window; no input is ever sent. Stdlib only:
+# the argv comes in from the Rust caller, so no fno import stays here.
+CAP_TXT="$(PROVIDER="$PROVIDER" "${PYTHON_CMD[@]}" - "$PROVIDER" "${PANE_ARGV[@]}" <<'PY'
 import os, pty, select, signal, sys, time
-from pathlib import Path
 
 provider = sys.argv[1]
-cli_root = sys.argv[2]
-sys.path.insert(0, os.path.join(cli_root, "src"))
-from fno.agents.mux_spawn import build_pane_argv
-
-# Interactive composer mode (no -p / exec one-shot): we want the idle prompt.
-# The capability table and pane argv builder are the only sources of harness
-# forms; this pinner must not grow a second provider map.
-argv = build_pane_argv(provider, "", Path.cwd(), None)
+argv = sys.argv[2:]
 
 pid, fd = pty.fork()
 if pid == 0:  # child

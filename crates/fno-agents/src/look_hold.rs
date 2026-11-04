@@ -15,14 +15,14 @@ use crate::paths::AgentsHome;
 
 const INTERVAL: Duration = Duration::from_secs(120);
 // A look can wait weeks; GitHub reruns a run only for 30 days.
-const WINDOW_MS: i64 = 30 * 24 * 3_600_000;
+pub(crate) const WINDOW_MS: i64 = 30 * 24 * 3_600_000;
 pub(crate) const CANCEL_EVENT: &str = "look_hold_cancel";
 pub(crate) const RELEASE_EVENT: &str = "look_hold_release";
 /// The workflow a held head keeps when `merge.visual_shot_workflows` is
 /// unset: footnote's cheap build (fmt, check) and the shots the user looks at.
 const SHOT_WORKFLOWS: &str = "rust-ci.yml";
 
-type PaintCache = Arc<Mutex<HashMap<String, bool>>>;
+pub(crate) type PaintCache = Arc<Mutex<HashMap<String, bool>>>;
 
 #[derive(Default)]
 pub struct Arm {
@@ -94,36 +94,60 @@ pub(crate) fn decide(head: &Head, ours: &HashSet<u64>, held: Option<bool>) -> (V
     }
 }
 
-/// The visual-approval gate at `sha`. A head that touches no paint path
-/// answers from the cache, so only paint heads read the gate.
-fn held(paint: &PaintCache, root: &Path, slug: &str, pr: u64, sha: &str) -> Option<bool> {
+/// Whether the head touches a paint path. A head's changed files never
+/// change, so each head costs one files read. None when the list is unread.
+fn touches_paint(paint: &PaintCache, root: &Path, slug: &str, pr: u64, sha: &str) -> Option<bool> {
     let probes = crate::authorized_merge::RealProbes;
     let key = format!("{slug}#{pr}@{sha}");
     let mut cache = paint.lock().unwrap_or_else(|e| e.into_inner());
-    let touches = match cache.get(&key) {
-        Some(touches) => *touches,
-        None => {
-            let files = crate::merge_gates::pr_file_paths(&probes, root, pr)?;
-            let paths = crate::agents_config::visual_paint_paths(root);
-            let touches = files
-                .iter()
-                .any(|f| crate::merge_gates::path_matches_paint(f, &paths));
-            if cache.len() > 2_000 {
-                cache.clear();
-            }
-            cache.insert(key, touches);
-            touches
-        }
-    };
-    drop(cache);
-    if !touches {
+    if let Some(touches) = cache.get(&key) {
+        return Some(*touches);
+    }
+    let files = crate::merge_gates::pr_file_paths(&probes, root, pr)?;
+    let paths = crate::agents_config::visual_paint_paths(root);
+    let touches = files
+        .iter()
+        .any(|f| crate::merge_gates::path_matches_paint(f, &paths));
+    if cache.len() > 2_000 {
+        cache.clear();
+    }
+    cache.insert(key, touches);
+    Some(touches)
+}
+
+/// The visual-approval gate at `sha`. A head that touches no paint path
+/// answers from the cache, so only paint heads read the gate.
+fn held(paint: &PaintCache, root: &Path, slug: &str, pr: u64, sha: &str) -> Option<bool> {
+    if !touches_paint(paint, root, slug, pr, sha)? {
         return Some(false);
     }
-    match crate::merge_gates::visual_approval_blocker(&probes, root, pr, sha) {
+    let probes = crate::authorized_merge::RealProbes;
+    verdict(crate::merge_gates::visual_approval_blocker(&probes, root, pr, sha).as_ref())
+}
+
+/// The gate's reading as a hold verdict. Only a held `visual_approval`
+/// cancels; an unknown read (unreadable file list, rate-limited gh) is no
+/// verdict and acts on nothing.
+fn verdict(blocker: Option<&crate::authorized_merge::Blocker>) -> Option<bool> {
+    match blocker {
         None => Some(false),
         Some(b) if b.code == "visual_approval" => Some(true),
         Some(_) => None,
     }
+}
+
+/// True when the head paints and the user's look is pinned to it. The CI
+/// tier spares such a PR: a push cannot restart its CI, because a new
+/// commit voids the pin.
+pub(crate) fn approved_at_head(
+    paint: &PaintCache,
+    root: &Path,
+    slug: &str,
+    pr: u64,
+    sha: &str,
+) -> bool {
+    touches_paint(paint, root, slug, pr, sha) == Some(true)
+        && held(paint, root, slug, pr, sha) == Some(false)
 }
 
 fn pass_repo(root: &Path, slug: &str, path: &Path, paint: &PaintCache) -> Result<(), String> {
@@ -162,8 +186,10 @@ fn pass_repo(root: &Path, slug: &str, path: &Path, paint: &PaintCache) -> Result
             if list.is_empty() {
                 continue;
             }
-            let runs = &crate::ci_tier::act(root, &[(pr, list)], action)[0]["runs"];
-            let data = json!({"slug": slug, "pr": pr, "sha": sha, "runs": runs});
+            let runs = &crate::ci_tier::act(root, &[(pr, list)], action, "look_hold")[0]["runs"];
+            // Only a held visual_approval acts; the row names it so a cancel
+            // traces to the blocker it read.
+            let data = json!({"slug": slug, "pr": pr, "sha": sha, "runs": runs, "blocker": "visual_approval"});
             emitter
                 .emit(kind, &data)
                 .map_err(|e| format!("{kind} row did not land: {e}"))?;
@@ -230,6 +256,20 @@ mod tests {
         );
         // An unreadable gate neither holds nor releases.
         assert_eq!(decide(&head, &HashSet::new(), None), (vec![], vec![]));
+    }
+
+    #[test]
+    fn an_unknown_gate_reading_is_no_verdict() {
+        use crate::authorized_merge::Blocker;
+        let unknown = Blocker::unknown("visual_paint_paths_unknown", "file list unreadable");
+        assert_eq!(verdict(Some(&unknown)), None);
+        let held = Blocker::held("visual_approval", "look");
+        assert_eq!(verdict(Some(&held)), Some(true));
+        assert_eq!(
+            verdict(Some(&Blocker::held("review_not_posted", "x"))),
+            None
+        );
+        assert_eq!(verdict(None), Some(false));
     }
 
     #[test]

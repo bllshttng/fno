@@ -4,21 +4,24 @@
 //! page. Every seat comes from the fleet map, so the other machine's seats
 //! show beside this one's.
 
-use super::backlog_style::{BLine, BRole};
 use super::org_seats::{Fleet, FleetInputs, Lead, Machine, Seat};
 use super::org_tabs::{Entry, Lb, Line};
 use super::*;
+use crate::text_style::{TLine, TextStyle};
 use crate::view_store::{OrgTab, SidelineView};
 
 pub(crate) type OrgTx = tokio::sync::mpsc::UnboundedSender<(u64, OrgMsg)>;
 
 pub(crate) enum OrgMsg {
     Gather(FleetInputs),
+    /// The sideline machine layer's own fleet read.
+    Machines(Result<serde_json::Value, String>),
 }
 
 pub(crate) fn apply(view: &mut View, gen: u64, msg: OrgMsg) {
     match msg {
         OrgMsg::Gather(inputs) => apply_fold(view, gen, inputs),
+        OrgMsg::Machines(read) => super::machine_tree::apply(view, read),
     }
 }
 
@@ -26,6 +29,21 @@ pub(crate) fn apply(view: &mut View, gen: u64, msg: OrgMsg) {
 const LEFT: usize = 34;
 /// Below this width the explorer paints alone.
 const MIN_SPLIT: usize = 80;
+/// Narrowest either pane may get when the divider moves.
+const MIN_PANE: usize = 20;
+
+/// The explorer's width at `width`: the held size, else the default.
+pub(super) fn explorer_w(width: usize, sizes: &super::edge_drag::EdgeSizes) -> usize {
+    explorer_bounds(width).map_or(LEFT, |(lo, hi)| {
+        sizes.resolve(super::edge_drag::Edge::OrgExplorer, LEFT, lo, hi)
+    })
+}
+
+/// The explorer's width range at `width`, or `None` when the board is too
+/// narrow to split and so has no divider to move.
+pub(super) fn explorer_bounds(width: usize) -> Option<(usize, usize)> {
+    (width >= MIN_SPLIT).then(|| (MIN_PANE, width.saturating_sub(MIN_PANE + 1).max(MIN_PANE)))
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Item {
@@ -85,8 +103,8 @@ fn title(text: &str, width: usize) -> Line {
     let head = format!("\u{2500} {text} ");
     let rest = width.saturating_sub(head.chars().count());
     Lb::default()
-        .s(head, BRole::Head)
-        .s("\u{2500}".repeat(rest), BRole::Meta)
+        .s(head, TextStyle::Title)
+        .s("\u{2500}".repeat(rest), TextStyle::Meta)
         .done()
 }
 
@@ -281,6 +299,7 @@ impl OrgBoard {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn frame(
         &self,
         questions: Option<&crate::needs_overlay::QuestionsFold>,
@@ -288,8 +307,21 @@ impl OrgBoard {
         body_h: usize,
         now: u64,
     ) -> Frame {
+        self.frame_with(questions, width, body_h, now, LEFT)
+    }
+
+    /// [`Self::frame`] with the explorer at `left` columns when the right
+    /// pane shows beside it.
+    pub(crate) fn frame_with(
+        &self,
+        questions: Option<&crate::needs_overlay::QuestionsFold>,
+        width: usize,
+        body_h: usize,
+        now: u64,
+        left: usize,
+    ) -> Frame {
         let split = width >= MIN_SPLIT;
-        let explorer_w = if split { LEFT } else { width };
+        let explorer_w = if split { left } else { width };
         let explorer = super::org_tabs::explorer(
             self.fleet.as_ref(),
             &self.entries(),
@@ -308,13 +340,13 @@ impl OrgBoard {
                 right: Vec::new(),
             };
         }
-        let (mut right, body) = self.right(questions, width - LEFT - 1, now);
+        let (mut right, body) = self.right(questions, width - left - 1, now);
         let avail = body_h.saturating_sub(right.len());
         let start = self.scroll.min(body.len().saturating_sub(avail));
         right.extend(body.into_iter().skip(start).take(avail));
         Frame {
             explorer,
-            right_x: Some(LEFT + 1),
+            right_x: Some(left + 1),
             right,
         }
     }
@@ -403,12 +435,13 @@ impl OrgBoard {
         height: usize,
         row: usize,
         col: usize,
+        left: usize,
     ) -> Option<String> {
         let body_h = height.saturating_sub(1);
         if row >= body_h {
             return None;
         }
-        let frame = self.frame(questions, width, body_h, now());
+        let frame = self.frame_with(questions, width, body_h, now(), left);
         let line = match frame.right_x {
             Some(x) if col >= x => {
                 return frame.right.get(row)?.tap_at(col - x).map(str::to_string)
@@ -436,6 +469,7 @@ pub(crate) fn open(view: &mut View) {
     super::backlog_board::set_sideline_view(view, SidelineView::Org);
 }
 pub(crate) fn maybe_kick(view: &mut View, tx: &OrgTx) {
+    super::machine_tree::maybe_kick(view, tx);
     let Some(b) = view.org_board.as_mut() else {
         return;
     };
@@ -505,9 +539,10 @@ pub(crate) fn paint(
     }
     let body_h = height - 1;
     let now = now();
-    let frame = b.frame(view.questions_fold.as_ref(), width, body_h, now);
+    let left = explorer_w(width, &view.edge_sizes);
+    let frame = b.frame_with(view.questions_fold.as_ref(), width, body_h, now, left);
     let explorer_w = frame.right_x.map_or(width, |x| x - 1);
-    let lines: Vec<BLine> = frame.explorer.into_iter().map(|l| l.line).collect();
+    let lines: Vec<TLine> = frame.explorer.into_iter().map(|l| l.line).collect();
     super::backlog_style::paint_panel_at(
         cells,
         rows,
@@ -521,7 +556,7 @@ pub(crate) fn paint(
         &view.theme,
     );
     if let Some(x) = frame.right_x {
-        let divider = vec![BLine::meta("\u{2502}"); body_h];
+        let divider = vec![TLine::meta("\u{2502}"); body_h];
         super::backlog_style::paint_panel_at(
             cells,
             rows,
@@ -534,7 +569,7 @@ pub(crate) fn paint(
             None,
             &view.theme,
         );
-        let lines: Vec<BLine> = frame.right.into_iter().map(|l| l.line).collect();
+        let lines: Vec<TLine> = frame.right.into_iter().map(|l| l.line).collect();
         super::backlog_style::paint_panel_at(
             cells,
             rows,
@@ -559,8 +594,8 @@ pub(crate) fn paint(
         &[{
             let (keys, state) = b.footer_parts(focused, width, now);
             Lb::default()
-                .s(keys, BRole::Body)
-                .s(state, BRole::Meta)
+                .s(keys, TextStyle::Item)
+                .s(state, TextStyle::Meta)
                 .done()
                 .line
         }],
@@ -622,6 +657,17 @@ pub(crate) async fn keys(
                 crate::view_store::save_board_full(view.board_full);
             }
             ModalKey::Byte(b'?') => b.keys_help = !b.keys_help,
+            ModalKey::Byte(b'r') => {
+                let target = b.seat().and_then(|(m, _, s)| {
+                    let work = s.work.as_ref()?;
+                    let url = work.pr_url.clone()?;
+                    Some((work.id.clone(), url, s.name.clone(), m.host.clone()))
+                });
+                if let Some((node, url, seat, machine)) = target {
+                    super::node_link::open_review(view, node, &url, seat, machine);
+                    return Ok(StdinFlow::Continue);
+                }
+            }
             ModalKey::Byte(b'W') => {
                 let bridge = crate::web::live_bridge(&view.session);
                 let host = crate::agents_view::hostname();
@@ -772,6 +818,7 @@ pub(crate) async fn mouse(
             height,
             rep.row as usize,
             rep.col as usize,
+            explorer_w(width, &view.edge_sizes),
         )
     }) else {
         return Ok(());
