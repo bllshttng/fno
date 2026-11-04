@@ -3623,6 +3623,9 @@ class MuxBlock(BaseModel):
     # The prefix key, as a spec the Rust client parses (`C-a`, `Ctrl-a`, `^a`, or
     # a bare printable char). None keeps the built-in Ctrl-b.
     prefix: Optional[str] = None
+    # A named key set read by the Rust client: `tmux` (the shipped table) or
+    # `zellij`. Its rows sit under `keys`, so a `[mux.keys]` row always wins.
+    preset: Optional[str] = None
     # Per-action rebinds: `{action_id: key_spec}`, e.g. `{"detach": "D"}`. The
     # action ids are stable and listed by `prefix+?`; an unknown id is refused
     # (and reported), never silently dropped.

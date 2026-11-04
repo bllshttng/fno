@@ -128,6 +128,66 @@ fn terminal_twin(b: u8) -> Option<&'static str> {
     }
 }
 
+/// The rows of a named key set. `tmux` is the shipped table, so it adds none.
+///
+/// `zellij` maps Zellij's pane-mode letters (`r` new pane right, `d` new pane
+/// down) because a prefix mux has one flat key space and Zellij has modes: its
+/// tab mode reuses `n`, `x` and `r`, and its session mode puts detach on `d`.
+/// Only the pane-mode letters the shipped table can hold without moving a
+/// third action are kept. The displaced actions get free keys: detach moves to
+/// `Q` (the example the config doc already uses), rerun-block to `u`.
+fn preset_rows(name: &str) -> Option<&'static [(&'static str, &'static str)]> {
+    match name {
+        "tmux" => Some(&[]),
+        "zellij" => Some(&[
+            ("split-right", "r"),
+            ("split-down", "d"),
+            ("rerun-block", "u"),
+            ("detach", "Q"),
+        ]),
+        _ => None,
+    }
+}
+
+/// Put a preset's rows under the user's `[mux.keys]` rows, so the user wins.
+///
+/// A preset row is dropped when the user names the same action, or when the
+/// user's rows already claim its key: the resolver would otherwise refuse one
+/// of the two, and it picks by table order rather than by who asked.
+pub fn with_preset(
+    preset: Option<&str>,
+    user: Vec<(String, String)>,
+) -> (Vec<(String, String)>, Vec<KeymapWarning>) {
+    let Some(name) = preset
+        .map(|p| p.trim().to_ascii_lowercase())
+        .filter(|p| !p.is_empty())
+    else {
+        return (user, Vec::new());
+    };
+    let Some(rows) = preset_rows(&name) else {
+        return (
+            user,
+            vec![KeymapWarning(format!(
+                "config.mux.preset: no such preset {name:?} (tmux or zellij); keeping tmux"
+            ))],
+        );
+    };
+    let claimed: Vec<u8> = user
+        .iter()
+        .filter_map(|(_, spec)| parse_key(spec))
+        .collect();
+    let mut merged: Vec<(String, String)> = rows
+        .iter()
+        .filter(|(action, spec)| {
+            !user.iter().any(|(a, _)| a == action)
+                && parse_key(spec).map_or(true, |b| !claimed.contains(&b))
+        })
+        .map(|(a, k)| (a.to_string(), k.to_string()))
+        .collect();
+    merged.extend(user);
+    (merged, Vec::new())
+}
+
 /// Build a [`Keymap`] from raw config strings, reporting every entry it had to
 /// reject. Pure, so the resolution rules are testable without a config file.
 ///
@@ -2462,6 +2522,44 @@ mod tests {
         assert_eq!(rebinds_json(&free), r#"{"detach":"Q"}"#);
         let home = resolve_rebind_with(p, &free.rebinds, "detach", b'd').unwrap();
         assert!(home.rebinds.is_empty(), "the shipped key drops the rebind");
+    }
+
+    #[test]
+    fn preset_rows_resolve_and_user_rows_win() {
+        let key = |m: &Keymap, a: &str| m.rebinds.iter().find(|(x, _)| x == a).map(|(_, k)| *k);
+
+        // tmux is the shipped table: no rows, no warning.
+        let (rows, warn) = with_preset(Some("tmux"), Vec::new());
+        assert!(rows.is_empty() && warn.is_empty());
+
+        // zellij resolves clean: the four rows move two actions off their keys
+        // and two onto them, so a swap-shaped set must survive the resolver.
+        let (rows, warn) = with_preset(Some("Zellij"), Vec::new());
+        assert!(warn.is_empty(), "{warn:?}");
+        let (map, warn) = resolve_keymap(None, &rows);
+        assert!(warn.is_empty(), "{warn:?}");
+        assert_eq!(key(&map, "split-right"), Some(b'r'));
+        assert_eq!(key(&map, "split-down"), Some(b'd'));
+        assert_eq!(key(&map, "detach"), Some(b'Q'));
+        assert_eq!(key(&map, "rerun-block"), Some(b'u'));
+
+        // A user row on the same action wins; a user row on a preset key
+        // takes that key and the preset row steps aside without a warning.
+        let user = vec![
+            ("detach".to_string(), "Z".to_string()),
+            ("search".to_string(), "u".to_string()),
+        ];
+        let (rows, _) = with_preset(Some("zellij"), user);
+        let (map, warn) = resolve_keymap(None, &rows);
+        assert!(warn.iter().all(|w| !w.0.contains("preset")), "{warn:?}");
+        assert_eq!(key(&map, "detach"), Some(b'Z'));
+        assert_eq!(key(&map, "search"), Some(b'u'));
+        assert_eq!(key(&map, "rerun-block"), None, "preset row yielded");
+
+        // An unknown name keeps the shipped table and says why.
+        let (rows, warn) = with_preset(Some("screen"), Vec::new());
+        assert!(rows.is_empty());
+        assert!(warn[0].0.contains("no such preset"), "{warn:?}");
     }
 
     #[test]

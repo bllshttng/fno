@@ -1129,7 +1129,7 @@ fn comment_thread_renders_in_order_with_marks() {
 // D5: a detail field's label reads dim and its value stays normal.
 #[test]
 fn detail_field_labels_go_dim_and_values_stay_normal() {
-    use crate::client::backlog_style::BRole;
+    use crate::text_style::TextStyle;
     let mut v = key_view(board_with(board_inputs()));
     focus_card(&mut v.backlog_board.as_mut().expect("board"), Some("x-1"));
     open_detail(&mut v);
@@ -1141,11 +1141,15 @@ fn detail_field_labels_go_dim_and_values_stay_normal() {
         .expect("the kind field line");
     let colon = field.find(':').expect("label ends with a colon");
     assert!(
-        field.roles[..=colon].iter().all(|&r| r == BRole::Meta),
+        field.roles[..=colon].iter().all(|&r| r == TextStyle::Meta),
         "label chars go dim, got {:?}",
         &field.roles[..=colon]
     );
-    assert_eq!(field.roles[colon + 2], BRole::Body, "value stays normal");
+    assert_eq!(
+        field.roles[colon + 2],
+        TextStyle::Item,
+        "value stays normal"
+    );
     let sid = "4d4ea752-1063-4515-8366-b9946ed8f64d";
     let adopt = format!("$ fno agents registry adopt {sid}");
     assert!(

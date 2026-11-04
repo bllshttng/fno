@@ -1329,6 +1329,7 @@ fn project_roots(name: &str, cwd: &Path, fno_dir: &Path) -> Result<Vec<PathBuf>,
         .to_string();
     let mut roots: Vec<PathBuf> = vec![path.clone()];
     if !basename.is_empty() {
+        roots.push(fno_dir.join("spaces/worktrees").join(&basename));
         roots.push(fno_dir.join("worktrees").join(&basename));
     }
     if let Some(base) = crate::agents_config::config_lookup(&path, &["paths", "worktrees_base"])

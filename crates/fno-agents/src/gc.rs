@@ -1659,13 +1659,13 @@ pub fn maybe_retirement_sweep(
         // one `retire_holds` row beside the tick, so a fleet question reads
         // the event stream instead of parsing bucket counts. Zero holds
         // writes nothing.
-        if !summary.holds.is_empty() {
+        let holds: Vec<&gc_sweep::Hold> = summary.holds.iter().chain(roster.holds.iter()).collect();
+        if !holds.is_empty() {
             let _ = journal.append(
                 "retire_holds",
                 serde_json::json!({
                     "scheduler": "daemon",
-                    "holds": summary
-                        .holds
+                    "holds": holds
                         .iter()
                         .map(|h| {
                             serde_json::json!({

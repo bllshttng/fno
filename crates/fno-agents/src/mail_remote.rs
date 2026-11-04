@@ -661,14 +661,14 @@ fn queue_and_report(
 }
 
 /// The ssh relay: exec, inherit stdio, pass the exit code through.
-fn relay(host: &str, words: &[String]) -> i32 {
+pub(crate) fn relay(host: &str, words: &[String]) -> i32 {
     let argv = ssh_argv(host, words);
     let mut cmd = Command::new(&argv[0]);
     cmd.args(&argv[1..]);
     match cmd.status() {
         Ok(status) => status.code().unwrap_or(1),
         Err(e) => {
-            eprintln!("fno agents mail: ssh to {host} failed: {e}");
+            eprintln!("fno agents: ssh to {host} failed: {e}");
             1
         }
     }

@@ -41,7 +41,6 @@ if [[ -d "$root/crates/fno/src/client" ]]; then
     "crates/fno/src/band_remap.rs"
     "crates/fno/src/chrome.rs"
     "crates/fno/src/connections_view.rs"
-    "crates/fno/src/digest_overlay.rs"
     "crates/fno/src/feed_overlay.rs"
     "crates/fno/src/frame_ansi.rs"
     "crates/fno/src/frame_html.rs"
@@ -65,7 +64,11 @@ if [[ -d "$root/crates/fno/src/client" ]]; then
   )
 fi
 
-if [[ -f "$config" ]]; then
+if [[ ${#builtin[@]} -gt 0 ]]; then
+  # The mux client tree always reads the built-in list, as the gate does, so
+  # no machine's config changes what holds.
+  printf '%s\n' "${builtin[@]}" > "$patterns_file"
+elif [[ -f "$config" ]]; then
   # Through the cli project env, not bare python3: tomllib needs 3.11+, the
   # cli package pins that floor, and runners and workstations both already
   # carry uv for it. The gate skips a config it cannot parse and falls to its

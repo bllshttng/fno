@@ -41,6 +41,18 @@ The blocked_by link routes the node. It stays unblocked until the code PR merges
 
 The doc PR holds at merge for the user's look. The user sees real screenshots on the Footnote Visual Log before the doc merges. This is the same hold a UI PR takes.
 
+## Before a paint PR asks for the look
+
+A PR that touches a paint path holds for the user's look. Run the design critic first, so the user judges taste, not defects. Do these steps in this order:
+
+1. Shoot main and the PR head under the dark and the light theme. Save the shots in the vault `mux` folder as `<node>-*.png`.
+2. Run `fno-agents visual critique-prep <node>`. It pairs the shots and writes `<node>-critique.json` at the PR head.
+3. Run the `design-critic` skill on the node. On Claude, the `fno:design-critic` agent loads it. Codex and opencode load the skill directly, because they cannot run a plugin agent type. It fills the findings against `docs/architecture/mux-design-system.md`.
+4. Fix every `high` finding. Push, then shoot again, run prep again and run the critic again at the new head.
+5. When no `high` finding stays open, stop. The `visual_approval` gate files the look page itself and lists what the critic checked and left.
+
+When the paint diff changes only comments or code names, skip all five steps. The gate clears that diff without shots.
+
 ## Preflight before a push (opt-in rehearsal, decided by policy)
 
 Distinct from the environment preflight in Step 3g (working-tree / deps / auth

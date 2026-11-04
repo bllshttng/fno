@@ -84,7 +84,9 @@ fn fleet_beacon_seats_and_turns_join_their_sessions() {
         "status_age_s": 53.4, "role": "L1 fno", "session_id": "aaaa1111-2222",
         "model": "opus", "model_basis": "registry", "started_at": "2026-10-23T09:00:00Z",
         "last_message": "private turn text", "last_message_at": "2026-10-23T10:00:00Z",
-        "cwd": "/w/fno", "project": "fno", "context_pct": 41, "progress": "advancing"
+        "cwd": "/w/fno", "project": "fno", "context_pct": 41, "progress": "advancing",
+        "workspace": "footnote", "needs_input": true, "pinned": false,
+        "cost_cents": 412, "tokens": 90000
     }], "lanes": [
         {"provider": "anthropic", "cap": 4, "count": 6, "full": true, "holders": ["sorrel"]},
         {"provider": null, "unreadable": "gate probe unreadable"}
@@ -122,6 +124,14 @@ fn fleet_beacon_seats_and_turns_join_their_sessions() {
             &[],
         )
         .unwrap();
+    primary
+        .remote
+        .execute(
+            "INSERT INTO fleet_mark (machine_id, name, workspace, pinned, cost_cents, beat_at) \
+             VALUES ('mac-b', 'w2', 'stale workspace', 1, 999, 940)",
+            &[],
+        )
+        .unwrap();
 
     let fleet = read(&primary.remote).unwrap();
     assert_eq!(fleet.seat_error, None);
@@ -147,6 +157,12 @@ fn fleet_beacon_seats_and_turns_join_their_sessions() {
         ("last_prompt", json!("ship it")),
         ("user_turns", json!(3)),
         ("progress", json!("advancing")),
+        ("workspace", json!("footnote")),
+        ("needs_input", json!(true)),
+        ("pinned", json!(false)),
+        ("cost_cents", json!(412)),
+        ("tokens", json!(90000)),
+        ("compactions", json!(null)),
     ] {
         assert_eq!(seat[key], want, "{key}");
     }
@@ -159,6 +175,16 @@ fn fleet_beacon_seats_and_turns_join_their_sessions() {
     let old = &map["machines"][1]["sessions"][0];
     assert!(old["model"].is_null() && old["cwd"].is_null(), "{old}");
     assert!(old["last_prompt"].is_null(), "{old}");
+    for key in [
+        "workspace",
+        "needs_input",
+        "pinned",
+        "cost_cents",
+        "tokens",
+        "compactions",
+    ] {
+        assert!(old[key].is_null(), "{key}: {old}");
+    }
     assert!(map["machines"][1]["display_name"].is_null());
     assert_eq!(map["machines"][1]["lanes"], json!([]));
 }

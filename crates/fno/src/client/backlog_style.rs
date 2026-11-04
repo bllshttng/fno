@@ -4,269 +4,11 @@
 //! attributes and palette-following slots (never hard colors, never
 //! INVERSE) and every backlog surface inherits it.
 
-use super::super::chrome::{self, Join};
+use super::super::chrome;
 use super::super::cursor::cursor_style;
 use super::super::theme::{cell_style, Role, Theme};
 use crate::proto::{cell_flags, Cell};
-
-/// What a piece of backlog text is. The mapping through [`role_of`] is the
-/// whole style policy: the surfaces pick segments; the policy picks styles.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum BRole {
-    Head,
-    Label,
-    Meta,
-    Body,
-    Pill,
-    /// The active tab cell of a tab strip (inverted).
-    Tab,
-    /// A line that needs the reader, such as a failed delivery.
-    Warn,
-    /// A diff's added and removed lines.
-    Added,
-    Removed,
-}
-
-/// One styled segment.
-#[derive(Clone)]
-pub(crate) struct BSeg {
-    pub(crate) text: String,
-    pub(crate) role: BRole,
-}
-
-/// One styled line: flattened text plus a per-char role walk, and - when
-/// this is the cursor's row - the explicit highlight band pair the
-/// sideline wears (a real fg/bg pair, zero DIM inside the band).
-#[derive(Clone, Debug)]
-pub(crate) struct BLine {
-    pub(crate) text: String,
-    pub(crate) roles: Vec<BRole>,
-    /// The role for chars past the role walk (whole-line constructors).
-    pub(crate) default_role: BRole,
-    pub(crate) band: bool,
-    /// How this line follows the one above; a wrapped line joins back on copy.
-    pub(crate) join: Join,
-}
-
-/// Helper: append one segment's chars.
-fn push_seg(text: &mut String, roles: &mut Vec<BRole>, seg: &BSeg) {
-    for ch in seg.text.chars() {
-        text.push(ch);
-        roles.push(seg.role);
-    }
-}
-
-impl BLine {
-    /// Split into lines of at most `w` display columns, breaking after the
-    /// last space that fits, or mid-word when none does. Each char keeps its
-    /// role.
-    pub(crate) fn wrap(self, w: usize) -> Vec<BLine> {
-        let w = w.max(1);
-        let chars: Vec<char> = self.text.chars().collect();
-        if chars.iter().map(|c| char_w(*c)).sum::<usize>() <= w {
-            return vec![self];
-        }
-        let piece = |from: usize, to: usize, join: Join| BLine {
-            text: chars[from..to].iter().collect(),
-            roles: self
-                .roles
-                .get(from..to.min(self.roles.len()))
-                .unwrap_or_default()
-                .to_vec(),
-            default_role: self.default_role,
-            band: self.band,
-            join,
-        };
-        let mut out = Vec::new();
-        let mut join = Join::Line;
-        let (mut start, mut used, mut space) = (0usize, 0usize, None);
-        let mut i = 0usize;
-        while i < chars.len() {
-            let cw = char_w(chars[i]);
-            if used + cw > w && i > start {
-                let soft = space.filter(|&s| s > start);
-                let cut = soft.unwrap_or(i);
-                out.push(piece(start, cut, join));
-                join = if soft.is_some() {
-                    Join::Space
-                } else {
-                    Join::Seam
-                };
-                start = cut;
-                used = chars[start..i].iter().map(|c| char_w(*c)).sum();
-                space = None;
-                continue;
-            }
-            if chars[i] == ' ' {
-                space = Some(i + 1);
-            }
-            used += cw;
-            i += 1;
-        }
-        out.push(piece(start, chars.len(), join));
-        out
-    }
-
-    /// Build from segments.
-    pub(crate) fn of(segs: &[BSeg]) -> BLine {
-        let mut text = String::new();
-        let mut roles = Vec::new();
-        for seg in segs {
-            push_seg(&mut text, &mut roles, seg);
-        }
-        BLine {
-            text,
-            roles,
-            default_role: BRole::Body,
-            band: false,
-            join: Join::Line,
-        }
-    }
-
-    /// A plain body line.
-    pub(crate) fn plain(s: impl Into<String>) -> BLine {
-        BLine {
-            text: s.into(),
-            roles: Vec::new(),
-            default_role: BRole::Body,
-            band: false,
-            join: Join::Line,
-        }
-    }
-
-    /// An all-meta line (summary, query, errors).
-    pub(crate) fn meta(s: impl Into<String>) -> BLine {
-        BLine {
-            text: s.into(),
-            roles: Vec::new(),
-            default_role: BRole::Meta,
-            band: false,
-            join: Join::Line,
-        }
-    }
-
-    /// An all-head line (lane names).
-    pub(crate) fn head(s: impl Into<String>) -> BLine {
-        BLine {
-            text: s.into(),
-            roles: Vec::new(),
-            default_role: BRole::Head,
-            band: false,
-            join: Join::Line,
-        }
-    }
-
-    /// Append another line's chars and roles. Text and roles grow in
-    /// lockstep: a merged-in plain line contributes no role entries, so the
-    /// walk pads the gap with that line's default role - without this, every
-    /// later column's roles shift and a header's style lands mid-word.
-    pub(crate) fn push_line(&mut self, other: BLine) {
-        self.text.push_str(&other.text);
-        self.roles.extend(other.roles);
-        let chars = self.text.chars().count();
-        while self.roles.len() < chars {
-            self.roles.push(other.default_role);
-        }
-    }
-
-    /// Pad with spaces to `w` display columns.
-    pub(crate) fn pad_to(self, w: usize) -> BLine {
-        let mut line = self;
-        let used: usize = line.text.chars().map(char_w).sum();
-        for _ in used..w {
-            line.text.push(' ');
-            line.roles.push(line.default_role);
-        }
-        line
-    }
-
-    /// Flatten every char to `Meta`, the same dim slot [`paint_title_row`]
-    /// gives an unfocused title: the hint reads as inert chrome while its
-    /// pane does not hold the keyboard, instead of looking equally ready to
-    /// act as a focused one's. Clearing `roles` is enough - paint_bline
-    /// falls back to `default_role` past the role walk's end, the same way
-    /// [`BLine::meta`] leaves it empty.
-    pub(crate) fn dimmed(mut self) -> BLine {
-        self.roles.clear();
-        self.default_role = BRole::Meta;
-        self
-    }
-}
-
-impl std::fmt::Display for BLine {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.text)
-    }
-}
-
-/// A styled line reads as its text, so string-shaped call sites (tests,
-/// notices) keep working unchanged.
-impl std::ops::Deref for BLine {
-    type Target = str;
-
-    fn deref(&self) -> &str {
-        &self.text
-    }
-}
-
-impl PartialEq<&str> for BLine {
-    fn eq(&self, other: &&str) -> bool {
-        self.text == *other
-    }
-}
-
-impl PartialEq<String> for BLine {
-    fn eq(&self, other: &String) -> bool {
-        self.text == *other
-    }
-}
-
-/// Display width of one char (fullwidth = 2, else 1).
-pub(crate) fn char_w(ch: char) -> usize {
-    unicode_width::UnicodeWidthChar::width(ch)
-        .unwrap_or(1)
-        .max(1)
-}
-
-impl BLine {
-    /// Truncate to `w` display columns; wide glyphs never straddle the cut.
-    pub(crate) fn trunc(self, w: usize) -> BLine {
-        let mut used = 0usize;
-        let cut = self
-            .text
-            .char_indices()
-            .find(|(_, ch)| {
-                used += char_w(*ch);
-                used > w
-            })
-            .map(|(i, _)| i)
-            .unwrap_or(self.text.len());
-        let keep = self.text[..cut].chars().count();
-        BLine {
-            text: self.text[..cut].to_string(),
-            roles: self.roles.into_iter().take(keep).collect(),
-            default_role: self.default_role,
-            band: self.band,
-            join: self.join,
-        }
-    }
-}
-
-/// The policy: one role becomes one theme role. A char with no segment
-/// role defaults to the plain panel body.
-pub(crate) fn role_of(role: BRole) -> Role {
-    match role {
-        BRole::Head => Role::PanelHead,
-        BRole::Label => Role::PanelLabel,
-        BRole::Meta => Role::PanelMeta,
-        BRole::Body => Role::PanelBody,
-        BRole::Pill => Role::PanelPill,
-        BRole::Tab => Role::PanelTab,
-        BRole::Warn => Role::PanelWarn,
-        BRole::Added => Role::Swatch(crate::proto::Color::Indexed(2)),
-        BRole::Removed => Role::Swatch(crate::proto::Color::Indexed(1)),
-    }
-}
+use crate::text_style::{char_w, TLine, TextStyle};
 
 /// One painted node-id span in screen cells, recorded at paint time so a
 /// press routes to what the last frame actually drew (the esc-chip
@@ -339,13 +81,13 @@ fn node_id_shape(s: &str) -> bool {
 /// each maximal Label-role run whose text is node-id shaped and fully
 /// painted (a run the width cut in half is no tap target, and its id
 /// would not be the id the text shows).
-fn record_node_spans(r: usize, c0: usize, w: usize, line: &BLine, roles: &[Role]) {
+fn record_node_spans(r: usize, c0: usize, w: usize, line: &TLine, roles: &[Role]) {
     NODE_SPANS.with(|c| {
         let mut slot = c.borrow_mut();
         let Some(spans) = slot.as_mut() else {
             return;
         };
-        let label = role_of(BRole::Label);
+        let label = TextStyle::Badge.role();
         let mut col = c0;
         let mut runs: Vec<(usize, String)> = Vec::new();
         let mut open = false;
@@ -376,14 +118,26 @@ fn record_node_spans(r: usize, c0: usize, w: usize, line: &BLine, roles: &[Role]
 }
 /// Compress the per-char walk into `(start, len, theme Role)` spans for the
 /// chrome's per-char role resolution; unroled chars stay Body.
-pub(crate) fn to_body_line(line: &BLine) -> chrome::BodyLine {
+pub(crate) fn to_body_line(line: &TLine) -> chrome::BodyLine {
     let mut segs: Vec<(usize, usize, Role)> = Vec::new();
     let mut i = 0usize;
     let total = line.text.chars().count();
     while i < total {
-        let role = role_of(line.roles.get(i).copied().unwrap_or(line.default_role));
+        let role = line
+            .roles
+            .get(i)
+            .copied()
+            .unwrap_or(line.default_role)
+            .role();
         let start = i;
-        while i < total && role_of(line.roles.get(i).copied().unwrap_or(line.default_role)) == role
+        while i < total
+            && line
+                .roles
+                .get(i)
+                .copied()
+                .unwrap_or(line.default_role)
+                .role()
+                == role
         {
             i += 1;
         }
@@ -391,7 +145,7 @@ pub(crate) fn to_body_line(line: &BLine) -> chrome::BodyLine {
     }
     let mut body_line = chrome::BodyLine::plain(line.text.clone());
     body_line.segs = segs;
-    body_line.pad_role = role_of(line.default_role);
+    body_line.pad_role = line.default_role.role();
     body_line.join = line.join;
     body_line
 }
@@ -408,7 +162,7 @@ pub(crate) fn paint_panel(
     top: usize,
     text_w: usize,
     area_h: usize,
-    lines: &[BLine],
+    lines: &[TLine],
     follow: Option<usize>,
     theme: &Theme,
 ) {
@@ -441,7 +195,7 @@ pub(crate) fn paint_panel(
     for (i, line) in lines[start..start + visible].iter().enumerate() {
         let r = top + i;
         let band = line.band && r < rows;
-        let roles_for_paint: Vec<Role> = line.roles.iter().map(|&br| role_of(br)).collect();
+        let roles_for_paint: Vec<Role> = line.roles.iter().map(|&br| br.role()).collect();
         paint_bline(
             cells,
             rows,
@@ -476,7 +230,7 @@ pub(crate) fn paint_panel_at(
     top: usize,
     text_w: usize,
     area_h: usize,
-    lines: &[BLine],
+    lines: &[TLine],
     follow: Option<usize>,
     theme: &Theme,
 ) {
@@ -499,7 +253,7 @@ pub(crate) fn paint_panel_banded(
     rows: usize,
     cols: usize,
     (x0, top, text_w, area_h): (usize, usize, usize, usize),
-    lines: &[BLine],
+    lines: &[TLine],
     follow: Option<usize>,
     band: (crate::proto::Color, crate::proto::Color, u8),
     theme: &Theme,
@@ -529,7 +283,7 @@ pub(crate) fn paint_panel_banded(
     let visible = lines.len().min(area_h);
     for (i, line) in lines[start..start + visible].iter().enumerate() {
         let r = top + i;
-        let roles: Vec<Role> = line.roles.iter().map(|&br| role_of(br)).collect();
+        let roles: Vec<Role> = line.roles.iter().map(|&br| br.role()).collect();
         paint_bline(cells, rows, cols, r, x0, text_w, line, &roles, theme);
         if line.band && r < rows {
             let (fg, bg, flags) = band;
@@ -543,7 +297,7 @@ pub(crate) fn paint_panel_banded(
     }
 }
 
-/// Paint one BLine's chars by display column, then plain-pad the tail with
+/// Paint one TLine's chars by display column, then plain-pad the tail with
 /// default cells so stale pane content never bleeds through.
 fn paint_bline(
     cells: &mut [Cell],
@@ -552,7 +306,7 @@ fn paint_bline(
     r: usize,
     c0: usize,
     w: usize,
-    line: &BLine,
+    line: &TLine,
     roles: &[Role],
     theme: &Theme,
 ) {
@@ -569,7 +323,7 @@ fn paint_bline(
             roles
                 .get(j)
                 .copied()
-                .unwrap_or_else(|| role_of(line.default_role)),
+                .unwrap_or_else(|| line.default_role.role()),
             theme,
         );
         cells[r * cols + sc] = Cell {
@@ -673,7 +427,7 @@ pub(crate) fn paint_title_row(
             sc += char_w(ch);
         }
     } else {
-        let line = BLine::meta(text);
+        let line = TLine::meta(text);
         paint_bline(
             cells,
             rows,
@@ -682,7 +436,7 @@ pub(crate) fn paint_title_row(
             left,
             width,
             &line,
-            &[Role::PanelMeta],
+            &[Role::Text(TextStyle::Meta)],
             theme,
         );
     }
