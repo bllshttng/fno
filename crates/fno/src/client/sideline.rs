@@ -346,7 +346,7 @@ impl View {
         out
     }
 
-    /// Rows and questions waiting on the user: local blocked rows, far
+    /// Rows and questions waiting on the user: local blocked rows, remote
     /// blocked rows, and open questions. Local rows fold the same state
     /// function as every section rollup, so they equal the sum of the
     /// section counts.
@@ -380,7 +380,7 @@ impl View {
     }
 
     /// The pinned Needs input section: a header, the blocked rows (this
-    /// machine, then far machines), and one line per open question. The
+    /// machine, then remote machines), and one line per open question. The
     /// rows also stay in their groups below, so a click never lands on a
     /// row that moved.
     pub(super) fn pin_needs<'a>(

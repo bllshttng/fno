@@ -63,7 +63,7 @@ impl MachineTree {
         }
     }
 
-    /// Far rows reading blocked. Zero while the toggle is off.
+    /// Remote rows reading blocked. Zero while the toggle is off.
     pub(super) fn blocked_remote(&self) -> usize {
         if !self.on {
             return 0;
