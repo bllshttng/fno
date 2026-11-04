@@ -509,7 +509,11 @@ fn checks_from_rollup(gh: &Value) -> Option<Value> {
     let rollup = gh.get("statusCheckRollup")?.as_array()?;
     let generic = crate::pr_status::generic_ci_rollup(rollup);
     let (verdict, _code, counts) = crate::pr_status::verdict_for(&generic);
-    let rows: Vec<Value> = generic
+    // Rows read the same deduped set the counts read: supersession keeps the
+    // latest row per name, so a stale ci row never sits beside its rerun.
+    let deduped = crate::check_supersession::latest_per_name(&Value::Array(generic.clone()));
+    let deduped = deduped.as_array().cloned().unwrap_or_default();
+    let rows: Vec<Value> = deduped
         .iter()
         .take(CHECK_ROWS_CAP)
         .map(|check| {
@@ -551,7 +555,7 @@ fn checks_from_rollup(gh: &Value) -> Option<Value> {
         "verdict": verdict,
         "counts": counts,
         "rows": rows,
-        "rows_truncated": generic.len() > CHECK_ROWS_CAP,
+        "rows_truncated": deduped.len() > CHECK_ROWS_CAP,
     }))
 }
 
@@ -803,8 +807,9 @@ mod tests {
         let checks = checks_from_rollup(&gh).expect("a rollup array maps");
         assert_eq!(checks.get("verdict").and_then(Value::as_str), Some("red"));
         let counts = checks.get("counts").expect("counts ride");
-        assert_eq!(counts.get("total").and_then(Value::as_i64), Some(2));
+        assert_eq!(counts.get("total").and_then(Value::as_i64), Some(3));
         assert_eq!(counts.get("pass").and_then(Value::as_i64), Some(1));
+        assert_eq!(counts.get("fail").and_then(Value::as_i64), Some(1));
         assert_eq!(
             checks.get("rows").and_then(Value::as_array).map(Vec::len),
             Some(3)
