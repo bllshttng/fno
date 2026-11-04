@@ -419,13 +419,15 @@ fn the_planner_routes_retire_and_rm_the_harness_session() {
     assert!(
         bases
             .iter()
-            .any(|b| *b == "planning finished on n-plan-a: node superseded"),
+            .any(|b| b.starts_with("node n-plan-a superseded; idle ")
+                && b.ends_with("past the 1200s window")),
         "{bases:?}"
     );
     assert!(
         bases
             .iter()
-            .any(|b| *b == "planning halted on n-plan-b: turn ended with no plan"),
+            .any(|b| b.starts_with("node n-plan-b ready; idle ")
+                && b.ends_with("past the 1200s window")),
         "{bases:?}"
     );
     let log = fake_a.argv_log();

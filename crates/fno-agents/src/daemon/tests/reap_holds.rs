@@ -26,10 +26,10 @@ fn assert_hold_line(summary: &GcSummary, dry_run: bool, id: &str, needle: &str) 
     assert!(line.contains(needle), "line for {id}: {line}");
 }
 
-/// AC2-HP: one row held under each of sources disagree, transcript
-/// unresolved, open do row and needs live stop in one dry run; every hold
-/// line found by its id carries `[held ` and an age basis, and the summary's
-/// `holds` projection answers for all four.
+/// AC2-HP: rows whose sources disagree, whose transcript is unresolved or
+/// that carry an open do row hold nothing now. The one hold left is the
+/// claude row a dry run cannot promise a stop for, and its line carries
+/// an age and a basis.
 #[test]
 fn ac2_hp_every_hold_line_carries_an_age_and_basis() {
     let home = tmp_home("gc-ac2-hp");
@@ -103,73 +103,49 @@ fn ac2_hp_every_hold_line_carries_an_age_and_basis() {
     );
 
     let ids: Vec<&str> = summary.holds.iter().map(|h| h.id.as_str()).collect();
-    assert_eq!(ids.len(), 4, "holds: {:?}", summary.holds);
-    for (id, reason, basis) in [
-        ("confrow", "sources disagree", "transcript quiet"),
-        ("turow", "transcript unresolved", "row created"),
-        ("odrrow", "open do row", "transcript quiet"),
-        ("nlsrow", "needs live stop", "transcript quiet"),
-    ] {
-        let h = find_hold(&summary, id);
-        assert!(h.reason.contains(reason), "{id}: {:?}", h);
-        assert!(h.age_s.is_some(), "{id}: {:?}", h);
-        assert_eq!(h.age_basis, basis, "{id}: {:?}", h);
-        // The TU line renders main's x-1b90 clock (`for {age}`); the other
-        // holds render the [held ...] suffix.
-        if id == "turow" {
-            assert_hold_line(&summary, true, id, "transcript unresolved for");
+    assert_eq!(ids, vec!["nlsrow"], "holds: {:?}", summary.holds);
+    let h = find_hold(&summary, "nlsrow");
+    assert_eq!(h.reason, "needs live stop", "{h:?}");
+    assert!(h.age_s.is_some(), "{h:?}");
+    assert_eq!(h.age_basis, "transcript quiet", "{h:?}");
+    assert_hold_line(&summary, true, "nlsrow", "[held ");
+}
+
+/// A summary holding one row under `needs live stop`, the hold the dry run
+/// still produces, with the given clock.
+fn staged_stop_hold(id: &str, age_s: Option<i64>) -> GcSummary {
+    let mut summary = GcSummary::default();
+    summary.needs_live_stop.push((
+        id.to_string(),
+        "no terminal roster state and no dead pid".into(),
+    ));
+    summary.holds.push(crate::gc_sweep::Hold {
+        id: id.to_string(),
+        reason: "needs live stop",
+        detail: "no terminal roster state and no dead pid".into(),
+        age_s,
+        age_basis: if age_s.is_some() {
+            "transcript quiet"
         } else {
-            assert_hold_line(&summary, true, id, "[held ");
-        }
-    }
+            "unmeasured"
+        },
+        escalated: false,
+    });
+    summary
 }
 
 /// AC2-ESC: a hold aged 3001s past a 3000s threshold is escalated in the
-/// JSON and its text line names the release command. Both sit inside the idle
-/// hour, past which a spawn row retires instead of holding.
+/// JSON and its text line names the release command.
 #[test]
 fn ac2_esc_escalated_hold_names_the_release_command() {
-    let home = tmp_home("gc-ac2-esc");
-    let emitter = EventEmitter::new(home.events_jsonl(), "daemon");
-    state::update_registry(&home.registry_json(), |r| {
-        let mut row = ask_row("esc-row", None);
-        row.short_id = "escrow".into();
-        row.node = Some("x-cccc".into());
-        row.harness_session_id = Some("sess-esc".into());
-        row.origin = Some("spawn".into());
-        r.entries.push(row);
-    })
-    .unwrap();
-
-    let graph = graph_read(
-        &[("sess-esc", "x-aaaa", "done"), ("x-cccc", "x-cccc", "done")],
-        &[],
-    );
-    let mut summary = gc_sweep::run(
-        &home,
-        &emitter,
-        900,
-        true,
-        7,
-        &move |_| graph.clone(),
-        &|_| None,
-        &uniform_ages(3001),
-        &|_| true,
-        &|_| crate::daemon::CascadeOutcome::NotApplicable,
-        &|_e| crate::daemon::CascadeOutcome::NotApplicable,
-        &no_agents,
-        &|_| (None, None),
-        &|_| None,
-    );
+    let mut summary = staged_stop_hold("escrow", Some(3001));
     summary.mark_escalated(std::time::Duration::from_secs(3000));
 
     let h = find_hold(&summary, "escrow");
-    assert_eq!(h.reason, "sources disagree");
-    assert_eq!(h.age_s, Some(3001));
     assert!(h.escalated, "{h:?}");
     let text = crate::reap_render::render_reap(&summary, false, true);
     assert!(
-        text.contains(&format!("fno agents reap --release escrow")),
+        text.contains("fno agents reap --release escrow"),
         "text: {text}"
     );
     let json_text = crate::reap_render::render_reap(&summary, true, true);
@@ -177,52 +153,18 @@ fn ac2_esc_escalated_hold_names_the_release_command() {
         json_text.contains("\"escalated\":true"),
         "json: {json_text}"
     );
-    let h2 = find_hold(&summary, "escrow");
-    assert!(h2.escalated, "{h2:?}");
 }
 
-/// AC2-EDGE: a `transcript unresolved` row whose `created_at` does not
-/// parse is `unmeasured` and never escalates.
+/// AC2-EDGE: a hold with no clock is `unmeasured` and never escalates.
 #[test]
 fn ac2_edge_unmeasured_hold_never_escalates() {
-    let home = tmp_home("gc-ac2-unmeasured");
-    let emitter = EventEmitter::new(home.events_jsonl(), "daemon");
-    state::update_registry(&home.registry_json(), |r| {
-        let mut row = ask_row("unm-row", None);
-        row.short_id = "unmrow".into();
-        row.harness_session_id = Some("sess-unm".into());
-        row.origin = Some("spawn".into());
-        row.created_at = "not-a-stamp".into();
-        r.entries.push(row);
-    })
-    .unwrap();
-
-    let graph = graph_read(&[("sess-unm", "N1", "done")], &[]);
-    let mut summary = gc_sweep::run(
-        &home,
-        &emitter,
-        900,
-        true,
-        7,
-        &move |_| graph.clone(),
-        &|_| None,
-        &staged_ages_at(crate::daemon::now_epoch_secs(), &|_| None),
-        &|_| true,
-        &|_| crate::daemon::CascadeOutcome::NotApplicable,
-        &|_e| crate::daemon::CascadeOutcome::NotApplicable,
-        &no_agents,
-        &|_| (None, None),
-        &|_| None,
-    );
+    let mut summary = staged_stop_hold("unmrow", None);
     summary.mark_escalated(std::time::Duration::from_secs(5400));
 
     let h = find_hold(&summary, "unmrow");
-    assert!(h.age_s.is_none(), "{h:?}");
     assert_eq!(h.age_basis, "unmeasured");
     assert!(!h.escalated, "{h:?}");
-    // The projection carries the unmeasured basis even though the TU line
-    // renders main's clock.
-    assert_hold_line(&summary, true, "unmrow", "transcript unresolved for");
+    assert_hold_line(&summary, true, "unmrow", "[held unmeasured]");
 }
 
 // ── x-e3cc change 3: the release command applies a ruling through the
@@ -287,9 +229,8 @@ fn ac3_edge_a_changed_hold_refuses_the_release() {
     );
 }
 
-/// A release matched to a no-provenance hold lifts it. The row then answers
-/// to its idle clock like a released planner: inside the hour it keeps as
-/// active, and the release is not refused.
+/// AC3-ERR: the command refuses a row inside its idle window (it holds
+/// nothing), and a hold below the threshold names the threshold.
 #[test]
 fn ac3_err_the_command_refuses_a_fresh_hold_below_the_threshold() {
     let (dir, home) = staged_graph_home();
@@ -317,70 +258,14 @@ fn ac3_err_the_command_refuses_a_fresh_hold_below_the_threshold() {
     let code = crate::reap_release::run(&home, dir.path(), "freshrow");
     assert_eq!(code, 2);
 
-    // The refusal line, asserted through its builder so the wording is
-    // pinned without capturing stderr.
-    let mut dry = gc_sweep_dry_run(&home, 900);
-    dry.mark_escalated(std::time::Duration::from_secs(5400));
-    let hold = dry.holds.iter().find(|h| h.id == "freshrow").unwrap();
+    let mut staged = staged_stop_hold("freshrow", Some(60));
+    staged.mark_escalated(std::time::Duration::from_secs(5400));
+    let hold = find_hold(&staged, "freshrow");
     assert!(!hold.escalated);
     let message = crate::reap_release::fresh_hold_refusal(hold, 5400);
     assert!(
         message.contains("below agents.hold_escalate_after_s"),
         "{message}"
-    );
-}
-
-/// AC3-ERR, open work: an escalated `sources disagree` hold whose witness
-/// node reads ready refuses; a release never retires open work.
-#[test]
-fn ac3_err_the_command_refuses_a_not_done_witness() {
-    let (dir, home) = staged_graph_home();
-    let sessions_node = json!({
-        "id": "x-84b2",
-        "status": "ready",
-        "additional_prs": [],
-        "sessions": [open_do_row("claude", "sess-wit")],
-    });
-    let registry_node = json!({
-        "id": "x-cccc",
-        "status": "done",
-        "merge_status": "merged",
-        "additional_prs": [],
-        "sessions": [],
-    });
-    stage_graph(dir.path(), json!([sessions_node, registry_node]));
-    // The hold must escalate inside the idle hour: past it a spawn row
-    // retires instead of holding.
-    std::fs::create_dir_all(dir.path().join(".fno")).unwrap();
-    std::fs::write(
-        dir.path().join(".fno/config.toml"),
-        "[agents]\nhold_escalate_after_s = 3000\n",
-    )
-    .unwrap();
-    let created = (chrono::Utc::now() - chrono::Duration::seconds(3300))
-        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    state::update_registry(&home.registry_json(), |r| {
-        let mut row = ask_row("wit-row", None);
-        row.short_id = "witrow".into();
-        row.node = Some("x-cccc".into());
-        row.harness_session_id = Some("sess-wit".into());
-        row.origin = Some("spawn".into());
-        row.created_at = created.clone();
-        r.entries.push(row);
-    })
-    .unwrap();
-
-    let code = crate::reap_release::run(&home, dir.path(), "witrow");
-    assert_eq!(code, 2);
-    // And the refusal names the open node through the pure builder.
-    let mut dry = gc_sweep_dry_run(&home, 900);
-    dry.mark_escalated(std::time::Duration::from_secs(5400));
-    let hold = dry.holds.iter().find(|h| h.id == "witrow").unwrap();
-    assert_eq!(hold.reason, "sources disagree");
-    let refusal = crate::reap_release::witness_refusal(&home, hold).unwrap();
-    assert!(
-        refusal.contains("x-84b2 reads ready; a release never retires open work"),
-        "{refusal}"
     );
 }
 

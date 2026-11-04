@@ -726,13 +726,13 @@ mod tests {
         // test into the paths.rs guard, and a dangling route dir is just a
         // lookup miss, which is what this test wants.
         assert!(
-            receipt.resume.ends_with("-m 'glm-5.3-flash[1m]'"),
+            receipt.resume.ends_with("--route 'zai/glm-5.3-flash[1m]'"),
             "{}",
             receipt.resume
         );
         assert_eq!(
             receipt.resume_argv.last().map(String::as_str),
-            Some("glm-5.3-flash[1m]")
+            Some("zai/glm-5.3-flash[1m]")
         );
     }
 

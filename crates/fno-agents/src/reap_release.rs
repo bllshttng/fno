@@ -59,15 +59,6 @@ pub fn run(home: &AgentsHome, cwd: &Path, handle: &str) -> i32 {
         return 2;
     }
 
-    // A `sources disagree` release never retires open work: both witness
-    // nodes must read done on the live graph.
-    if hold.reason == "sources disagree" {
-        if let Some(refusal) = witness_refusal(home, &hold) {
-            eprintln!("{refusal}");
-            return 2;
-        }
-    }
-
     let release = Release {
         handle: hold.id.clone(),
         reason: hold.reason.to_string(),
@@ -136,34 +127,6 @@ pub(crate) fn fresh_hold_refusal(hold: &gc_sweep::Hold, threshold_s: u64) -> Str
         hold.reason,
         threshold_s
     )
-}
-
-/// The witness refusal for a `sources disagree` release: a witness whose
-/// node still carries ACTIVE work names itself and refuses. Done and the
-/// inactive NODE statuses (deferred, idea, gc.rs INACTIVE_NODE_STATUSES)
-/// are not open work - a node parked at deferred is exactly the shape the
-/// session-shaped releases already retire onto - so they release.
-/// The witnesses ride the hold detail as `sessions <node> vs registry
-/// <node>`.
-pub(crate) fn witness_refusal(home: &AgentsHome, hold: &gc_sweep::Hold) -> Option<String> {
-    let (a, b) = hold.detail.split_once(" vs ")?;
-    let statuses = gc_sweep::read_graph_node_states(home);
-    for side in [a, b] {
-        let node = side.split_whitespace().last()?;
-        let status = statuses
-            .as_ref()
-            .and_then(|s| s.get(node))
-            .map(|(status, _, _)| status.as_str())
-            .unwrap_or("unknown");
-        let parked = crate::gc::INACTIVE_NODE_STATUSES.contains(&status);
-        if status != "done" && !parked {
-            return Some(format!(
-                "{}: {node} reads {status}; a release never retires open work",
-                hold.id
-            ));
-        }
-    }
-    None
 }
 
 /// The registry row a handle names: name, short id, or session id.

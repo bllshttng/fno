@@ -1603,7 +1603,8 @@ mod tests {
             e.origin = Some("spawn".into());
             e.harness = Some("codex".into());
             e.harness_session_id = Some("s-h1".into());
-            // Inside the idle hour, so the unfinished-plan hold still holds.
+            // The fixture has no transcript the age probe can read, so the
+            // planner holds as probe unread.
             e.created_at = (chrono::Utc::now() - chrono::Duration::seconds(1800))
                 .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
             e.status = crate::AgentStatus::Exited;
@@ -1644,10 +1645,7 @@ mod tests {
         let holds = holds_row["data"]["holds"].as_array().expect("holds list");
         assert_eq!(holds.len(), 1, "{holds_row}");
         assert_eq!(holds[0]["id"], "bp-x-h1-a");
-        assert_eq!(
-            holds[0]["reason"],
-            "planning assignment not finished by this session"
-        );
+        assert_eq!(holds[0]["reason"], "probe unread");
         assert_eq!(holds_row["data"]["scheduler"], "daemon");
         let _ = std::fs::remove_dir_all(dir.path());
     }
