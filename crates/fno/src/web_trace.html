@@ -177,11 +177,11 @@ function waiting(m) {
     const r = el("div", "row wait");
     r.append(el("b", null, w.question));
     const a = el("a", null, "open the question");
-    a.href = q("command", {t: token, question: w.id});
+    a.href = q("hq", {t: token, question: w.id});
     r.append(a);
     const ol = el("ol", "opts");
     for (const o of w.options || []) ol.append(el("li", null, o.text));
-    r.append(ol, el("span", "sub", "the answer goes through the /command question card"));
+    r.append(ol, el("span", "sub", "the answer goes through the /hq question card"));
     return r;
   }));
 }

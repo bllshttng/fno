@@ -1411,7 +1411,7 @@ pub(crate) fn default_bindings() -> Vec<KeyBinding> {
             "org-view",
             OpenOrgView,
             Global,
-            "org view (fleet, machines, leads, seats)",
+            "HQ: org view (fleet, machines, leads, seats)",
         ),
         b(
             b'q',

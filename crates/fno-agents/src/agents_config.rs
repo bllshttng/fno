@@ -1422,7 +1422,7 @@ const BUILTIN_VISUAL_PAINT_PATHS: &[&str] = &[
     "crates/fno/src/splash.rs",
     "crates/fno/src/theme.rs",
     "crates/fno/src/web_backlog.html",
-    "crates/fno/src/web_command.html",
+    "crates/fno/src/web_hq.html",
     "crates/fno/src/web_page.html",
     "crates/fno/src/web_trace.html",
     "crates/fno/src/wordmark.rs",
