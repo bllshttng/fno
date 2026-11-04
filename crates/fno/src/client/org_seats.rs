@@ -1,4 +1,4 @@
-//! The command center fold: the fleet map, the backlog rows and this mux's
+//! The HQ fold: the fleet map, the backlog rows and this mux's
 //! agent rows become machines, the leads on each machine, and seats.
 
 use crate::backlog_model::Inputs;
@@ -116,6 +116,9 @@ pub(crate) struct Machine {
     pub(crate) mem_used: Option<f64>,
     pub(crate) cap: Option<i64>,
     pub(crate) takes_work: bool,
+    /// The person the machine's beat names: a stated display name, never
+    /// proof.
+    pub(crate) owner: Option<String>,
     /// The machine's configured name. Null means the page shows the host.
     pub(crate) display_name: Option<String>,
     pub(crate) lanes: Vec<Lane>,
@@ -323,6 +326,7 @@ pub(crate) fn fold(map: &Value, backlog: &Inputs, agents: &[AgentRow], measured_
                 mem_used: m["mem_used"].as_f64(),
                 cap: m["cap"].as_i64(),
                 takes_work: m["takes_work"].as_bool().unwrap_or(false),
+                owner: text(m, "owner"),
                 display_name: text(m, "display_name"),
                 lanes: serde_json::from_value(m["lanes"].clone()).unwrap_or_default(),
                 leads,

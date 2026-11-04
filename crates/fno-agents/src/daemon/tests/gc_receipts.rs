@@ -177,171 +177,6 @@ fn staged_sweep(
     )
 }
 
-/// AC4-HP, the epic's VERIFICATION three-row marker. Row A is named on a
-/// done node and owns a clean linked worktree: it retires with its basis,
-/// its tree is pruned, and the branch-shaped protections (transcript on
-/// disk, no graph mutation) hold. Row B is named on one done and one
-/// open node: kept, naming the open node. Row C is named nowhere and
-/// exited: the registry's terminal stamp is its finished marker, so it
-/// retires past the idle hour like a reported-done row.
-#[test]
-fn ac4_hp_three_row_marker_retires_prunes_and_names_every_keep() {
-    let home = tmp_home("gc-ac4");
-    let emitter = EventEmitter::new(home.events_jsonl(), "daemon");
-    let transcripts = tempfile::tempdir().unwrap();
-    let a_path = quiet_transcript(transcripts.path(), "a.jsonl", 2 * 3600);
-    // B is kept as open-work stale: its age must sit inside the origin
-    // ruling's one idle hour, not merely past the old grace.
-    let b_path = quiet_transcript(transcripts.path(), "b.jsonl", 1800);
-    let c_path = quiet_transcript(transcripts.path(), "c.jsonl", 2 * 3600);
-    state::update_registry(&home.registry_json(), |r| {
-        let mut a = ask_row("row-a", None);
-        a.short_id = "rowa".into();
-        a.harness = Some("claude".into());
-        a.harness_session_id = Some("sess-a".into());
-        a.origin = Some("spawn".into());
-        // A hosted worker, not a one-shot ask: the row owns its worktree.
-        a.host_mode = Some(state::HOST_MODE_INTERACTIVE.into());
-        // A linked worktree: `.git` is a file.
-        let wt = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(wt.path()).unwrap();
-        std::fs::write(wt.path().join(".git"), "gitdir: /x/worktrees/a\n").unwrap();
-        a.cwd = wt.keep().to_string_lossy().into_owned();
-        r.entries.push(a);
-        let mut b = ask_row("row-b", None);
-        b.short_id = "rowb".into();
-        b.harness_session_id = Some("sess-b".into());
-        b.origin = Some("spawn".into());
-        r.entries.push(b);
-        let mut c = ask_row("row-c", None);
-        c.short_id = "rowc".into();
-        c.harness_session_id = Some("sess-c".into());
-        c.origin = Some("spawn".into());
-        r.entries.push(c);
-    })
-    .unwrap();
-
-    let summary = staged_sweep(
-        &home,
-        &emitter,
-        900,
-        graph_read(
-            &[
-                ("sess-a", "N1", "done"),
-                ("sess-b", "N2", "done"),
-                ("sess-b", "N3", "in_review"),
-            ],
-            &[],
-        ),
-        &|e| match e.harness_session_id.as_deref() {
-            Some("sess-a") => Some(vec![a_path.clone()]),
-            Some("sess-b") => Some(vec![b_path.clone()]),
-            Some("sess-c") => Some(vec![c_path.clone()]),
-            _ => None,
-        },
-        &|name| {
-            // A's tree: clean and merged; B and C own nothing removable.
-            let _ = name;
-            (Some(true), Some(true))
-        },
-    );
-
-    assert_eq!(
-        summary.retired,
-        vec![
-            (
-                "rowa".to_string(),
-                "every named node done: N1 (via sessions; merge_status: N1:unrecorded)".to_string()
-            ),
-            ("rowc".to_string(), "done".to_string()),
-        ],
-        "{:?}",
-        summary.retired
-    );
-    assert_eq!(summary.pruned.len(), 1, "{:?}", summary.pruned);
-    assert_eq!(
-        summary.kept_open_work_stale,
-        vec![(
-            "rowb".to_string(),
-            "N3".to_string(),
-            "in_review".to_string(),
-            "sessions".to_string()
-        )]
-    );
-    assert!(
-        summary.kept_no_provenance.is_empty(),
-        "{:?}",
-        summary.kept_no_provenance
-    );
-    // The retired vocabulary: none of the exit-stamp words appears.
-    let rendered = format!("{summary:?}");
-    for word in [
-        "exited_at",
-        "not-terminal",
-        "contradicted",
-        "within-grace",
-        "uncorroborated",
-        "backstop",
-    ] {
-        assert!(!rendered.contains(word), "{word} leaked: {rendered}");
-    }
-    // The receipt survived (the resumable handle), and the other rows stayed.
-    let reg = state::load_registry(&home.registry_json()).unwrap();
-    assert!(reg.entries.iter().all(|e| e.name != "row-a"));
-    assert!(reg.entries.iter().any(|e| e.name == "row-b"));
-    assert!(reg.entries.iter().all(|e| e.name != "row-c"));
-    let receipts = home.root().join("reap-receipts");
-    assert!(
-        receipts.join("claude-sess-a.json").exists(),
-        "the resume handle must be durable before the row leaves"
-    );
-    assert!(
-        !summary
-            .kept_no_receipt
-            .iter()
-            .any(|(_, reason)| reason.contains("registry write refused")),
-        "{:?}",
-        summary.kept_no_receipt
-    );
-
-    // AC4-EDGE: touch A's transcript and rerun as a fresh home - the same
-    // row shape with a fresh transcript is ACTIVE, nothing retires.
-    let home2 = tmp_home("gc-ac4-active");
-    let emitter2 = EventEmitter::new(home2.events_jsonl(), "daemon");
-    let fresh = quiet_transcript(transcripts.path(), "a-fresh.jsonl", 10);
-    state::update_registry(&home2.registry_json(), |r| {
-        let mut a = ask_row("row-a", None);
-        a.short_id = "rowa".into();
-        a.harness_session_id = Some("sess-a".into());
-        a.origin = Some("spawn".into());
-        r.entries.push(a);
-    })
-    .unwrap();
-    let summary = staged_sweep(
-        &home2,
-        &emitter2,
-        900,
-        graph_read(&[("sess-a", "N1", "done")], &[]),
-        &|_| Some(vec![fresh.clone()]),
-        &|_| (Some(true), Some(true)),
-    );
-    let [(row, age)] = summary.kept_active.as_slice() else {
-        panic!("expected one kept-active row: {:?}", summary.kept_active);
-    };
-    assert_eq!(row, "rowa");
-    // The transcript was stamped now-10s; a loaded runner measures the write
-    // a second or two later, so pin the RANGE (fresh, inside the 900s grace),
-    // never the wall-clock instant.
-    assert!(
-        *age >= 10 && *age < 900,
-        "age {age} should read fresh, got {summary:?}"
-    );
-    assert!(summary.retired.is_empty());
-    assert!(summary.pruned.is_empty());
-    let reg = state::load_registry(&home2.registry_json()).unwrap();
-    assert!(reg.entries.iter().any(|e| e.name == "row-a"));
-}
-
 /// A clean-and-merged worktree the callback could not remove reads as a
 /// prune ATTEMPT, not a prune SUCCESS: `Kept` never populates `pruned`, and
 /// `None` (no linked worktree) reads as its own reason. Neither ever
@@ -618,16 +453,16 @@ fn ac4_err_graph_unreadable_and_stop_refusal_keep_every_row() {
     assert!(reg.entries.iter().any(|e| e.name == "row-a"));
 }
 
-/// Locked Decision 1, one table, two rows: every named node done but one
-/// carrying an OPEN do row for this session keeps the row and names the
-/// node, and the same row with its do entry closed (absent from
-/// open_do, the seam model of a closed row) retires by name with
-/// kept_open_do_row empty. The exact (short_id, node) identity must
-/// land on each side; a count assertion alone would pass on an unrelated
-/// row. The sweep never settles graph rows on a retirement.
+/// A stale open do row on a done node no longer holds a row: inside its
+/// idle hour the spawn row keeps as active, and past the hour it retires by
+/// name with the do row still open. The sweep never settles graph rows on a
+/// retirement.
 #[test]
-fn an_open_do_row_on_a_done_node_holds_the_retirement_and_a_closed_one_retires_by_name() {
-    for (open_do, expect_retired) in [(&[("sess-d", "N1")][..], false), (&[][..], true)] {
+fn a_stale_open_do_row_keeps_nothing_past_the_window() {
+    for (open_do, expect_retired) in [
+        (&[("sess-d", "N1")][..], false),
+        (&[("sess-d", "N1")][..], true),
+    ] {
         let home = tmp_home("gc-open-do");
         let emitter = EventEmitter::new(home.events_jsonl(), "daemon");
         let transcripts = tempfile::tempdir().unwrap();
@@ -673,21 +508,17 @@ fn an_open_do_row_on_a_done_node_holds_the_retirement_and_a_closed_one_retires_b
             assert!(!reg.entries.iter().any(|e| e.name == "row-d"));
         } else {
             assert!(summary.retired.is_empty());
-            assert_eq!(
-                summary.kept_open_do_row,
-                vec![("rowd".to_string(), "N1".to_string())]
-            );
+            assert_eq!(summary.kept_active, vec![("rowd".to_string(), 1800)]);
             let reg = state::load_registry(&home.registry_json()).unwrap();
             assert!(reg.entries.iter().any(|e| e.name == "row-d"));
         }
     }
 }
 
-/// The origin and team protections, and the tree buckets on a retired row.
-/// The operator row sits on open work: on done work quiet past the hour the
-/// done rule retires it.
+/// A team keeps its row, and so does a brainstorm: an operator row whose
+/// transcript ran no fno skill. A dirty tree never pins a retired row.
 #[test]
-fn operator_and_teamed_rows_never_retire_and_tree_buckets_only_keep_trees() {
+fn teamed_and_brainstorm_rows_keep_and_tree_buckets_only_keep_trees() {
     let home = tmp_home("gc-protect");
     let emitter = EventEmitter::new(home.events_jsonl(), "daemon");
     let transcripts = tempfile::tempdir().unwrap();
@@ -753,7 +584,13 @@ fn operator_and_teamed_rows_never_retire_and_tree_buckets_only_keep_trees() {
         },
         &|_| None,
     );
-    assert_eq!(summary.kept_operator, vec!["rowo".to_string()]);
+    assert_eq!(
+        summary.kept_other,
+        vec![(
+            "rowo".to_string(),
+            crate::gc::KeepReason::Brainstorm.as_str().to_string()
+        )]
+    );
     assert_eq!(summary.kept_teamed, vec!["rowk".to_string()]);
     assert_eq!(
         summary
@@ -1053,189 +890,6 @@ fn a_row_without_a_located_transcript_records_failed_resume_evidence() {
     assert_eq!(
         resume["outcome"], "failed",
         "no located transcript: the op must read failed, not confirmed: {effects:?}"
-    );
-}
-
-/// x-5aef AC4-HP/AC4-EDGE over the PRODUCTION graph read: two bp- workers,
-/// both named on a node at `ready`, both quiet past grace. Only the one
-/// whose own blueprint row carries `ended_at` retires; the other keeps with
-/// the unclosed node named. This is the quiet-replanner trap: a previous
-/// blueprint moved the node to ready, and the completion must not be
-/// inherited by a worker that never closed its assignment.
-#[test]
-fn a_planner_retires_only_on_its_own_closed_assignment() {
-    use crate::daemon::CascadeOutcome;
-
-    let (dir, home) = staged_graph_home();
-    let emitter = EventEmitter::new(home.events_jsonl(), "daemon");
-    let planning_row = |sid: &str, ended: Option<&str>| {
-        let mut row = json!({
-            "phase": "blueprint",
-            "harness": "codex",
-            "session_id": sid,
-            "started_at": "2026-09-01T00:00:00Z",
-        });
-        if let Some(at) = ended {
-            row["ended_at"] = json!(at);
-        }
-        row
-    };
-    stage_graph(
-        dir.path(),
-        json!([{
-            "id": "x-4hp",
-            "status": "ready",
-            "sessions": [
-                planning_row("planner-unclosed", None),
-                planning_row("planner-closed", Some("2026-09-02T00:00:00Z")),
-            ],
-        }]),
-    );
-    for (name, sid) in [
-        ("bp-x-4hp-a", "planner-unclosed"),
-        ("bp-x-4hp-b", "planner-closed"),
-    ] {
-        crate::state::update_registry(&home.registry_json(), |r| {
-            let mut e = state::RegistryEntry::default();
-            e.name = name.into();
-            e.short_id = name.into();
-            e.origin = Some("spawn".into());
-            e.harness = Some("codex".into());
-            e.harness_session_id = Some(sid.into());
-            e.created_at = "2026-09-01T00:00:00Z".into();
-            r.entries.push(e);
-        })
-        .unwrap();
-    }
-    let store = home.root().join("store");
-    std::fs::create_dir_all(&store).unwrap();
-    let quiet = quiet_transcript(&store, "q.jsonl", 2 * 3600);
-    let summary = gc_sweep::run(
-        &home,
-        &emitter,
-        900,
-        false,
-        7,
-        &crate::gc_sweep::read_graph_entries,
-        &move |_| Some(vec![quiet.clone()]),
-        // The unclosed planner sits inside the idle hour, so its keep holds.
-        &|entries: &[&state::RegistryEntry]| {
-            entries
-                .iter()
-                .map(|e| {
-                    let age = if e.name == "bp-x-4hp-a" {
-                        1800
-                    } else {
-                        2 * 3600
-                    };
-                    (crate::gc::row_handle(e), Some(age))
-                })
-                .collect()
-        },
-        &|_| true,
-        &|_| CascadeOutcome::Removed,
-        &|_e| crate::daemon::CascadeOutcome::NotApplicable,
-        &no_agents,
-        &|_| (Some(true), Some(true)),
-        &|_| None,
-    );
-    assert_eq!(summary.retired.len(), 1, "{:?}", summary.retired);
-    assert_eq!(summary.retired[0].0, "bp-x-4hp-b", "{:?}", summary.retired);
-    assert!(
-        summary
-            .kept_planning_unclosed
-            .iter()
-            .any(|(id, node)| id == "bp-x-4hp-a" && node == "x-4hp"),
-        "{:?}",
-        summary.kept_planning_unclosed
-    );
-    assert!(
-        state::load_registry(&home.registry_json())
-            .unwrap()
-            .entries
-            .iter()
-            .any(|e| e.name == "bp-x-4hp-a"),
-        "the unclosed planner keeps its row"
-    );
-}
-
-/// d-81c6da7e AC3-HP: a planner whose node has a `plan_path` that names a
-/// MISSING file holds neither finished marker. The row keeps, the hold
-/// names the node and its status, and the reason is what escalates and
-/// what a release answers.
-#[test]
-fn a_planner_whose_plan_file_is_missing_keeps_and_holds() {
-    use crate::daemon::CascadeOutcome;
-
-    let (dir, home) = staged_graph_home();
-    let emitter = EventEmitter::new(home.events_jsonl(), "daemon");
-    let plan_file = dir.path().join("plans").join("gone.md");
-    stage_graph(
-        dir.path(),
-        json!([{
-            "id": "x-m3hp",
-            "status": "idea",
-            "plan_path": plan_file.display().to_string(),
-            "sessions": [{
-                "phase": "blueprint",
-                "harness": "codex",
-                "session_id": "s-m3",
-                "started_at": "2026-09-01T00:00:00Z",
-            }],
-        }]),
-    );
-    crate::state::update_registry(&home.registry_json(), |r| {
-        let mut e = state::RegistryEntry::default();
-        e.name = "bp-x-m3hp".into();
-        e.short_id = "bp-x-m3hp".into();
-        e.origin = Some("spawn".into());
-        e.harness = Some("codex".into());
-        e.harness_session_id = Some("s-m3".into());
-        e.created_at = "2026-09-01T00:00:00Z".into();
-        r.entries.push(e);
-    })
-    .unwrap();
-    let store = home.root().join("store");
-    std::fs::create_dir_all(&store).unwrap();
-    let quiet = quiet_transcript(&store, "q.jsonl", 2 * 3600);
-    let summary = gc_sweep::run(
-        &home,
-        &emitter,
-        900,
-        false,
-        7,
-        &crate::gc_sweep::read_graph_entries,
-        &move |_| Some(vec![quiet.clone()]),
-        // Inside the idle hour, so the unfinished-plan keep holds.
-        &uniform_ages(1800),
-        &|_| true,
-        &|_| CascadeOutcome::Removed,
-        &|_e| crate::daemon::CascadeOutcome::NotApplicable,
-        &no_agents,
-        &|_| (Some(true), Some(true)),
-        &|_| None,
-    );
-    assert_eq!(summary.retired.len(), 0, "{:?}", summary.retired);
-    assert!(
-        summary
-            .kept_planning_unclosed
-            .iter()
-            .any(|(id, node)| id == "bp-x-m3hp" && node == "x-m3hp"),
-        "{:?}",
-        summary.kept_planning_unclosed
-    );
-    let hold = summary
-        .holds
-        .iter()
-        .find(|h| h.id == "bp-x-m3hp")
-        .expect("a hold for the unfinished planner");
-    assert_eq!(
-        hold.reason,
-        "planning assignment not finished by this session"
-    );
-    assert_eq!(
-        hold.detail,
-        "x-m3hp idea: no close and no plan written by this session"
     );
 }
 
@@ -2814,6 +2468,7 @@ fn stage_direct(
         None,
         crate::gc_sweep::RetireMode::Apply,
         crate::gc_sweep::StopObservation::Unproven,
+        false,
         false,
         false,
         stop,

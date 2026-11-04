@@ -236,18 +236,26 @@ def style_word_count(text: str) -> int:
     return int(receipt.get("word_count") or 0)
 
 
-def settings_read(detect: Optional[str] = None) -> Optional[dict]:
+def settings_read(
+    detect: Optional[str] = None,
+    root: Optional[str] = None,
+    binary: Optional[Path] = None,
+) -> Optional[dict]:
     """One settings fact-set read through the door; None when it fails.
 
     The receipt carries the node-id knobs (``prefix``, ``hex_width``), the
-    config ``candidates``, the work-map ``projects`` pairs, and the optional
-    cwd -> project ``project`` answer. Callers are fail-open resolvers, so a
-    door failure reads as None and the caller keeps its legacy default.
+    config ``candidates``, the work-map ``projects`` pairs, the optional
+    cwd -> project ``project`` answer, and the ``paths`` fact set the path
+    resolvers consume. Callers are fail-open resolvers, so a door failure
+    reads as None and the caller keeps its legacy default. A checkout build
+    answers before an installed copy (the ``command_call`` rule).
     """
     import json
 
-    request = json.dumps({"detect": detect}) if detect is not None else "{}"
-    err, receipt = call_binary_json("state", ["settings-read"], input_text=request)
+    request = json.dumps({"detect": detect, "root": root})
+    err, receipt = call_binary_json(
+        "state", ["settings-read"], input_text=request, binary=binary
+    )
     if err or not isinstance(receipt, dict):
         return None
     return receipt
@@ -565,6 +573,75 @@ def _update_signpost() -> None:
         "`cargo install --locked --path <src>/crates/fno`, then re-run `fno doctor update`."
     )
     raise typer.Exit(code=2)
+
+
+def _native_family_signpost(name: str, command: str):
+    """The no-front-door spelling for a family the Rust front door owns: the
+    menu keeps the name advertised, and this leaf only names what installs
+    the door that answers it."""
+    # Lazy click/typer imports: same reason as _update_signpost.
+    import click
+    import typer
+
+    def _cb(**_kwargs: object) -> None:
+        typer.echo(
+            f"fno: the {name} family is native to the Rust front door; install it from the source checkout with "
+            f"`cargo install --locked --path <src>/crates/fno`, then re-run `{command}`."
+        )
+        raise typer.Exit(code=2)
+
+    return click.Command(
+        name,
+        callback=_cb,
+        params=[click.Argument(("argv",), nargs=-1, type=str, required=False)],
+        context_settings={"ignore_unknown_options": True, "allow_interspersed_args": True},
+        help=f"The {name} family is native: the Rust front door answers it.",
+    )
+
+
+def _signpost_or_none(maker, *args):
+    """Build a signpost command, or None under the bare-interpreter law.
+
+    This module is imported by interpreters with no typer (the crates-side
+    integration tests, CI guard lanes running system python); the lazy
+    imports inside the signposts exist for them. None is unreachable from
+    the CLI: cli.py imports typer before these rows resolve.
+    """
+    try:
+        return maker(*args)
+    except ImportError:
+        return None
+
+
+_whoami_signpost_command = _signpost_or_none(
+    _native_family_signpost, "whoami", "fno whoami status"
+)
+_doctor_signpost_command = _signpost_or_none(_native_family_signpost, "doctor", "fno doctor")
+
+
+def _evals_signpost():
+    """The root `evals` spelling retired with its forwarder: this leaf keeps
+    the hidden real root on `help --all` and teaches the same move the front
+    door's root refusal teaches."""
+    # Lazy click/typer imports: same reason as _update_signpost.
+    import click
+    import typer
+
+    def _cb(**_kwargs: object) -> None:
+        typer.echo("fno evals is now fno doctor evals")
+        raise typer.Exit(code=2)
+
+    return click.Command(
+        "evals",
+        callback=_cb,
+        params=[click.Argument(("argv",), nargs=-1, type=str, required=False)],
+        context_settings={"ignore_unknown_options": True, "allow_interspersed_args": True},
+        help="The evals family moved: `fno doctor evals` answers it.",
+    )
+
+
+_evals_signpost_command = _signpost_or_none(_evals_signpost)
+
 
 class FrontTimeout(CommandUnavailable):
     """The law door gave no answer in time. A retry meets the same wait."""

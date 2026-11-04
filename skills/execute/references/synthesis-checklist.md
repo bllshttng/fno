@@ -78,14 +78,13 @@ Subagents run in fresh context with no memory of prior phases. They cannot look 
 
 Before spawning each subagent, append project constraints to its prompt:
 
-1. Call `orchestrator.get_project_constraints_section()`
-2. If non-empty, append to the subagent's task description
+1. Run `fno-agents wave constraints`
+2. If it prints anything, append that to the subagent's task description
 3. This ensures agents operate within project boundaries (e.g., "solo founder" prevents over-engineering)
 
-```python
-from orchestrator import get_project_constraints_section
-constraints = get_project_constraints_section()
-# Append to task prompt: task_description + constraints
+```bash
+CONSTRAINTS=$(fno-agents wave constraints)
+# Append to task prompt: task_description + "$CONSTRAINTS"
 ```
 
-If no constraints exist (empty string returned), skip - no error, no empty section.
+If no constraints exist (empty output), skip - no error, no empty section.

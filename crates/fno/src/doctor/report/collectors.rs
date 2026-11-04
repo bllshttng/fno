@@ -316,28 +316,16 @@ fn unknown_components() -> Vec<Value> {
         .collect()
 }
 
-/// The deployed CLI's FIELD_META keyset, read through the installed Python
-/// (this is the one diagnostic crossing that keeps the schema fingerprint
-/// honest; recorded in rust-python-seam.md).
+/// The deployed CLI's schema-key table: the running binary's embedded
+/// fields.json `field_meta` keys (no Python exec; the crossing this was is
+/// retired with the config family).
 fn deployed_config_keys() -> Option<Vec<String>> {
-    let python = super::wheel_python()?;
-    let output = Command::new(&python)
-        .args([
-            "-c",
-            "import json; from fno.config.registry import FIELD_META; print(json.dumps(sorted(FIELD_META)))",
-        ])
-        .output()
-        .ok()?;
-    if output.status.code() != Some(0) {
-        return None;
-    }
-    let keys: Vec<String> =
-        serde_json::from_str(String::from_utf8_lossy(&output.stdout).trim()).ok()?;
-    Some(keys)
+    Some(crate::config_cli::model::field_meta_keys())
 }
 
-/// The source checkout's FIELD_META keys, parsed from the committed
-/// registry.py (`git show HEAD:...`), without importing it.
+/// The source checkout's schema-key table: the committed fields.json in the
+/// checkout's crates tree (`git show`), skipped when there is no checkout
+/// (the old registry.py heuristic skipped the same way).
 fn source_config_keys(source: Option<&Path>) -> Option<Vec<String>> {
     let source = source?;
     let output = Command::new("git")
@@ -345,91 +333,26 @@ fn source_config_keys(source: Option<&Path>) -> Option<Vec<String>> {
             "-C",
             &source.to_string_lossy(),
             "show",
-            "HEAD:./src/fno/config/registry.py",
+            "HEAD:./crates/fno/src/config_cli/model/fields.json",
         ])
         .output()
         .ok()?;
     if output.status.code() != Some(0) || output.stdout.is_empty() {
         return None;
     }
-    let text = String::from_utf8_lossy(&output.stdout).into_owned();
-    parse_field_meta_keys(&text)
-}
-
-/// Extract FIELD_META's string keys from registry.py source: find the
-/// assignment, then collect the top-level string keys of its dict literal.
-/// None (skip) when the shape is not a flat literal of constant keys.
-fn parse_field_meta_keys(text: &str) -> Option<Vec<String>> {
-    let mut keys: BTreeSet<String> = BTreeSet::new();
-    let mut assigned = false;
-    for line in text.lines() {
-        let trimmed = line.trim_start();
-        let is_assign = trimmed.starts_with("FIELD_META")
-            && (trimmed["FIELD_META".len()..].trim_start().starts_with('=')
-                || trimmed.contains("FIELD_META:"));
-        if !is_assign {
-            continue;
-        }
-        let Some(brace) = line.find('{') else {
-            continue;
-        };
-        let mut depth = 0i32;
-        let mut current = String::new();
-        let mut in_string = false;
-        let mut escaped = false;
-        for ch in line[brace..].chars() {
-            if in_string {
-                if escaped {
-                    escaped = false;
-                } else if ch == '\\' {
-                    escaped = true;
-                } else if ch == '"' {
-                    in_string = false;
-                }
-                current.push(ch);
-                continue;
-            }
-            match ch {
-                '"' => {
-                    in_string = true;
-                    current.push(ch);
-                }
-                '{' | '(' | '[' => {
-                    depth += 1;
-                    current.clear();
-                }
-                '}' | ')' | ']' => {
-                    depth -= 1;
-                    if depth == 0 && !current.is_empty() {
-                        keys.insert(current.trim_matches('"').to_string());
-                        current.clear();
-                    }
-                    current.clear();
-                    if depth == 0 && ch == '}' {
-                        assigned = true;
-                        break;
-                    }
-                }
-                ',' if depth == 1 => {
-                    let key = current.trim().trim_matches('"').to_string();
-                    if !key.is_empty() {
-                        keys.insert(key);
-                    }
-                    current.clear();
-                }
-                ':' => current.clear(),
-                c if !c.is_whitespace() => current.push(c),
-                _ => {}
-            }
-        }
-        if assigned {
-            break;
-        }
-    }
-    if !assigned {
-        return None;
-    }
-    Some(keys.into_iter().collect())
+    let parsed: serde_json::Value =
+        serde_json::from_str(String::from_utf8_lossy(&output.stdout).trim()).ok()?;
+    let mut keys: Vec<String> = parsed["field_meta"]
+        .as_array()
+        .map(|rows| {
+            rows.iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    keys.sort();
+    Some(keys)
 }
 
 fn installed_pkg_dir() -> Option<PathBuf> {

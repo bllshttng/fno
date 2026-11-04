@@ -1,12 +1,12 @@
 //! parity-stage: characterization
-//! parity-oracle: cli/src/fno/pr_watch/cli.py:heal
+//! parity-oracle: gone (cli/src/fno/pr_watch died with the Python runtime; the
+//! committed goldens under tests/golden/pr-watch-heal/ stay as the frozen
+//! contract)
 //!
 //! Characterization for the pr-watch heal port: the Rust command
 //! (`fno-agents pr-watch heal`) is pinned by the frozen goldens under
 //! tests/golden/pr-watch-heal/. The goldens freeze the live Python leaf's
-//! bytes; this change replaced that body with a forward, so capture mode
-//! replays the fixture oracle (`tests/fixtures/pr_watch_heal/oracle.py`)
-//! rather than a surviving leg, and the frozen files are the contract.
+//! bytes from while it lived; the frozen files are the contract.
 //!
 //! Seven fixture states: the watcher disabled, a bounce pending its first
 //! tick, a held single-flight, the plain cure, the missing-plist cure (the
@@ -20,15 +20,11 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use common::{assert_golden, capture_mode, python_executable, slug, Golden};
+use common::{assert_golden, slug, Golden};
 
 mod common;
 
 /// Repo `cli/src` so Python can import the real `fno` package.
-fn pythonpath() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../cli/src")
-}
-
 /// Case directories and the bounce's gui uid are the only machine-dependent
 /// parts of the readout; timestamps ride no stdout.
 fn masked(text: &str, dir: &Path) -> String {
@@ -206,27 +202,6 @@ fn rust_leg(dir: &Path, case: &Case) -> Golden {
 }
 
 /// The old leg through its replay oracle, capture mode only.
-fn python_oracle(dir: &Path, case: &Case) -> Golden {
-    let oracle_script =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pr_watch_heal/oracle.py");
-    let mut cmd = Command::new(python_executable());
-    cmd.arg(&oracle_script);
-    cmd.arg("--case").arg(dir);
-    for (k, v) in pin_env(dir, case) {
-        cmd.env(k, v);
-    }
-    cmd.env("PYTHONPATH", pythonpath());
-    cmd.current_dir(dir);
-    let out = cmd.output().expect("oracle runs");
-    // stdout + exit are the pinned contract: interpreter stderr is this
-    // machine's noise.
-    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
-    Golden {
-        exit: Some(out.status.code().unwrap_or(-1)),
-        streams: vec![stdout],
-    }
-}
-
 fn cases() -> Vec<Case> {
     vec![
         Case {
@@ -321,17 +296,7 @@ fn pr_watch_heal_goldens() {
             exit: rust.exit,
             streams: rust.streams.into_iter().map(|s| masked(&s, &dir)).collect(),
         };
-        let oracle = capture_mode().then(|| {
-            let golden = python_oracle(&dir, &case);
-            Golden {
-                exit: golden.exit,
-                streams: golden
-                    .streams
-                    .into_iter()
-                    .map(|s| masked(&s, &dir))
-                    .collect(),
-            }
-        });
+        let oracle = None;
         assert_golden("pr-watch-heal", case.label, &rust, oracle);
     }
 }

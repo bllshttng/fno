@@ -11,11 +11,10 @@ When invoked with no arguments, use AskUserQuestion wizard:
 2. **Plan by path** — you have a plan file or folder ready
 3. **Pick from backlog** — run `/triage` inline and propose the top-ranked pending node from `~/.fno/graph.json` with rationale. Requires the `triage` skill.
 
-For option 3, run the triage flow (v2 preferred; the shim forwards through when `fno` is on PATH and falls back to the in-repo module otherwise):
+For option 3, run the triage flow:
 
 ```bash
-(fno backlog triage context 2>/dev/null \
-   || python3 scripts/triage.py context) > /tmp/triage-ctx.json
+fno backlog triage context > /tmp/triage-ctx.json
 # Spawn triage subagent to produce proposal JSON, validate it, then pick
 # the first ready node (no open blockers, highest priority) as the top
 # recommendation.

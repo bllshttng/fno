@@ -239,7 +239,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${PLUGIN_ROOT}/hooks/lib/run-python.sh\" \"${PLUGIN_ROOT}/scripts/save-session.py\" || { rc=$?; [ $rc -eq 127 ] || exit $rc; echo '{\"systemMessage\":\"fno hook save-session.py exited 127: a file or command is missing, and this hook did not run. An update can delete the plugin folder this session uses. Start a new session.\"}'; }"
+            "command": "FNO_HOOK_CONTEXT=1 bash \"${PLUGIN_ROOT}/hooks/save-session.sh\" || { rc=$?; [ $rc -eq 127 ] || exit $rc; echo '{\"systemMessage\":\"fno hook save-session.sh exited 127: a file or command is missing, and this hook did not run. An update can delete the plugin folder this session uses. Start a new session.\"}'; }"
           },
           {
             "type": "command",

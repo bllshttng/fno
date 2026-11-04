@@ -40,6 +40,7 @@ fn stage(
         StopObservation::Unproven,
         false,
         false,
+        false,
         &|_| true,
         &|_, _| Ok(true),
         &|_| CascadeOutcome::Removed,

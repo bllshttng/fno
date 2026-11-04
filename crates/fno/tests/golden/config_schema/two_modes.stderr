@@ -1,0 +1,1 @@
+error: pick at most one of --json-schema / --markdown / --wizard-plan / --toml

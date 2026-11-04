@@ -1738,6 +1738,9 @@ fn parse_plugin_install_args(args: &[String]) -> PluginInstallArgs {
 }
 
 pub fn run_plugin_install(args: &[String]) -> i32 {
+    if args.first().map(String::as_str) == Some("--codex-skills") {
+        return crate::codex_skills::run(&args[1..]);
+    }
     let PluginInstallArgs {
         mode,
         source,

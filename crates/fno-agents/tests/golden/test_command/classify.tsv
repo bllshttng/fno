@@ -3,6 +3,8 @@ ANTHROPIC_API_KEY	ambient
 ANTHROPIC_AUTH_TOKEN	ambient
 ANTHROPIC_BASE_URL	ambient
 ANTHROPIC_MODEL	ambient
+BUDDY_HOME	ambient
+BUDDY_KEY	ambient
 CARGO	environment
 CARGO_BUILD_BUILD_DIR	ambient
 CARGO_HOME	environment
@@ -32,6 +34,7 @@ CODEX_SHELL	ambient
 CODEX_THREAD_ID	ambient
 COLORFGBG	ambient
 COLORTERM	environment
+COLUMNS	environment
 CRON_JOB	environment
 DATABASE_URL	ambient
 EDITOR	ambient

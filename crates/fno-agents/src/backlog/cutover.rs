@@ -621,13 +621,22 @@ fn session_ids(entry: &Value) -> std::collections::BTreeSet<String> {
 
 const COLLISIONS_HELP: &str =
     "Usage: fno backlog collisions check PLAN_PATH [--self-id ID] [--json]
+       fno backlog collisions prs [--pr N | PLAN_PATH] [--json]
 
-Check a plan against all pending nodes for file collisions.
+`check` compares a plan against all pending nodes for file collisions.
 
-Options:
+`prs` lists the open PRs that share a changed file with this PR or plan.
+It reads GitHub through the shared pr_status reads and never blocks: a
+finding exits 0, and an unread answer notes the reason and exits 0.
+
+Options (check):
   --self-id ID  Skip this node ID when comparing
   -J, --json    Emit structured JSON instead of human text
-  -h, --help    Print help
+
+Options (prs):
+  --pr N       Compare this PR's changed files
+  -J, --json   Emit JSON rows instead of human text
+  -h, --help   Print help
 ";
 
 pub fn run_collisions(tail: &[String]) -> i32 {
@@ -638,6 +647,9 @@ pub fn run_collisions(tail: &[String]) -> i32 {
     // the plan path and the real path read as an extra argument.
     let tail = match tail.split_first() {
         Some((action, rest)) if action == "check" => rest,
+        Some((action, rest)) if action == "prs" => {
+            return run_collisions_prs(rest, &crate::pr_status_facts::RealGhProbe);
+        }
         _ => tail,
     };
     let mut it = tail.iter();
@@ -752,6 +764,166 @@ pub fn run_collisions(tail: &[String]) -> i32 {
         println!("  recommended: {}", action_word(c));
         println!("  rationale: {}", c.rationale);
         println!();
+    }
+    0
+}
+
+/// One `prs` surface: the changed files to compare, from `--pr N` (GitHub)
+/// or a plan path (its Files-to-Modify tables).
+fn collisions_prs_files<P: crate::pr_status_facts::GhProbe>(
+    pr: Option<u64>,
+    plan_path: Option<&str>,
+    probe: &P,
+    cwd: &Path,
+    slug: &str,
+) -> Result<Vec<String>, String> {
+    match (pr, plan_path) {
+        (Some(n), _) => crate::pr_status::lists::pr_file_paths(probe, cwd, slug, n),
+        (None, Some(path)) => {
+            let files = super::collision::parse_files_to_modify(Path::new(path));
+            if files.is_empty() {
+                Err(format!(
+                    "UNEVALUATED: {path} states no file surface, so nothing was compared. \
+                     Add a '## Files to Modify' or '## File Ownership Map' table."
+                ))
+            } else {
+                Ok(files.into_iter().collect())
+            }
+        }
+        (None, None) => Err("give --pr N or a plan path".to_string()),
+    }
+}
+
+/// The open PRs (other than `self_pr`) that share a changed file, through
+/// the shared `list_pulls` + `pr_file_paths` reads. Notes name every PR
+/// whose own read failed; an unread answer never becomes a finding.
+fn collisions_prs_rows<P: crate::pr_status_facts::GhProbe>(
+    my_files: &[String],
+    probe: &P,
+    cwd: &Path,
+    slug: &str,
+    self_pr: Option<u64>,
+) -> (Vec<Value>, Vec<String>) {
+    let mut notes: Vec<String> = Vec::new();
+    let (rows, truncated) =
+        match crate::pr_status::lists::list_pulls(probe, cwd, slug, "open", 100, 20) {
+            Ok(pair) => pair,
+            Err(reason) => {
+                notes.push(format!("the open-PR list is unread: {reason}"));
+                return (Vec::new(), notes);
+            }
+        };
+    if truncated {
+        notes.push("the open-PR list stopped at its page ceiling; later PRs unread".to_string());
+    }
+    let mut found: Vec<Value> = Vec::new();
+    for row in &rows {
+        let Some(number) = row.get("number").and_then(Value::as_u64) else {
+            continue;
+        };
+        if Some(number) == self_pr {
+            continue;
+        }
+        let their_files = match crate::pr_status::lists::pr_file_paths(probe, cwd, slug, number) {
+            Ok(paths) => paths,
+            Err(reason) => {
+                notes.push(format!("PR #{number}'s files are unread: {reason}"));
+                continue;
+            }
+        };
+        let shared: Vec<String> = my_files
+            .iter()
+            .filter(|f| their_files.contains(f))
+            .cloned()
+            .collect();
+        if !shared.is_empty() {
+            found.push(json!({"pr": number, "shared": shared}));
+        }
+    }
+    (found, notes)
+}
+
+fn run_collisions_prs<P: crate::pr_status_facts::GhProbe>(tail: &[String], probe: &P) -> i32 {
+    let mut pr: Option<u64> = None;
+    let mut plan_path: Option<String> = None;
+    let mut json_out = false;
+    let mut it = tail.iter();
+    while let Some(arg) = it.next() {
+        let (flag, inline) = match arg.split_once('=') {
+            Some((f, v)) if f.starts_with("--") => (f, Some(v.to_string())),
+            _ => (arg.as_str(), None),
+        };
+        match flag {
+            "-h" | "--help" => {
+                print!("{COLLISIONS_HELP}");
+                return 0;
+            }
+            "--pr" => {
+                let raw = inline.or_else(|| it.next().cloned()).unwrap_or_default();
+                match raw.parse::<u64>() {
+                    Ok(n) => pr = Some(n),
+                    Err(_) => {
+                        eprintln!("--pr needs a PR number, got {raw:?}");
+                        return 2;
+                    }
+                }
+            }
+            "-J" | "--json" => json_out = true,
+            other if other.starts_with('-') && other.len() > 1 => {
+                eprintln!("No such option: {other}");
+                return 2;
+            }
+            _ if plan_path.is_none() => plan_path = Some(arg.clone()),
+            _ => {
+                eprintln!("Got unexpected extra argument ({arg})");
+                return 2;
+            }
+        }
+    }
+    if pr.is_none() && plan_path.is_none() {
+        eprintln!("collisions prs: give --pr N or a plan path.");
+        return 2;
+    }
+    if pr.is_some() && plan_path.is_some() {
+        eprintln!("collisions prs: --pr and a plan path are exclusive; pick one surface.");
+        return 2;
+    }
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let Some(slug) = crate::backlog::pr_link::resolve_current_repo_slug(cwd.to_str()) else {
+        // No slug, no read. The action notes and passes; it never blocks.
+        eprintln!("collisions prs: could not resolve owner/repo from the origin remote");
+        return 0;
+    };
+    let my_files = match collisions_prs_files(pr, plan_path.as_deref(), probe, &cwd, &slug) {
+        Ok(files) => files,
+        Err(reason) => {
+            eprintln!("collisions prs: {reason}");
+            return 0;
+        }
+    };
+    let (found, notes) = collisions_prs_rows(&my_files, probe, &cwd, &slug, pr);
+    for note in &notes {
+        eprintln!("collisions prs: {note}");
+    }
+    if json_out {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({ "collisions": found }))
+                .unwrap_or_else(|_| "{}".into())
+        );
+        return 0;
+    }
+    if found.is_empty() {
+        println!("No open PR shares a changed file.");
+        return 0;
+    }
+    for row in &found {
+        let number = row["pr"].as_u64().unwrap_or(0);
+        let shared = row["shared"].as_array().cloned().unwrap_or_default();
+        println!("#{number} shares {} changed file(s)", shared.len());
+        for f in &shared {
+            println!("  {f}");
+        }
     }
     0
 }
@@ -2430,5 +2602,67 @@ mod tests {
             note.starts_with("lockfile left (live foreign holder)"),
             "{note}"
         );
+    }
+
+    use super::{collisions_prs_files, collisions_prs_rows};
+    use serde_json::json;
+    use std::collections::BTreeMap;
+    use std::path::Path;
+
+    struct FakeGhProbe {
+        answers: BTreeMap<String, String>,
+    }
+
+    impl crate::pr_status_facts::GhProbe for FakeGhProbe {
+        fn run_gh(&self, _cwd: &Path, args: &[String]) -> Result<(bool, String, String), String> {
+            let endpoint = args.get(1).cloned().unwrap_or_default();
+            match self.answers.get(&endpoint) {
+                Some(body) => Ok((true, body.clone(), String::new())),
+                None => Ok((
+                    false,
+                    String::new(),
+                    format!("no fake answer for {endpoint}"),
+                )),
+            }
+        }
+    }
+
+    #[test]
+    fn a_plan_file_shared_by_an_open_pr_names_that_pr() {
+        // AC1: the `prs` surface takes a plan, reads every open PR through
+        // the shared paginated reads, and names the PR that shares a file.
+        let dir = TempDir::new().unwrap();
+        let plan = dir.path().join("plan.md");
+        std::fs::write(
+            &plan,
+            "# P\n\n## Files to Modify\n\n| File | Action |\n|---|---|\n| `crates/x.rs` | Modify |\n",
+        )
+        .unwrap();
+        let plan_str = plan.to_str().unwrap();
+        let probe = FakeGhProbe {
+            answers: BTreeMap::from([
+                (
+                    "repos/o/r/pulls?state=open&per_page=100&page=1".to_string(),
+                    "[{\"number\":101,\"state\":\"open\"},{\"number\":202,\"state\":\"open\"}]"
+                        .to_string(),
+                ),
+                (
+                    "repos/o/r/pulls/101/files?per_page=100&page=1".to_string(),
+                    "[{\"filename\":\"crates/x.rs\"},{\"filename\":\"other.rs\"}]".to_string(),
+                ),
+                (
+                    "repos/o/r/pulls/202/files?per_page=100&page=1".to_string(),
+                    "[{\"filename\":\"unrelated.rs\"}]".to_string(),
+                ),
+            ]),
+        };
+        let my_files =
+            collisions_prs_files(None, Some(plan_str), &probe, Path::new("."), "o/r").unwrap();
+        assert_eq!(my_files, vec!["crates/x.rs"]);
+        let (rows, notes) = collisions_prs_rows(&my_files, &probe, Path::new("."), "o/r", None);
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert_eq!(rows[0]["pr"], 101);
+        assert_eq!(rows[0]["shared"], json!(["crates/x.rs"]));
+        assert!(notes.is_empty());
     }
 }

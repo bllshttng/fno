@@ -149,57 +149,40 @@ fi
 mkdir -p "$MEMORY_DIR"
 
 # Parse candidate JSON, slugify name, compute target path.
-PARSED_OUTPUT=$(MEM_DIR="$MEMORY_DIR" CANDIDATE="$CANDIDATE_JSON" python3 - <<'PYEOF'
-import os, json, re, sys
-try:
-    c = json.loads(os.environ["CANDIDATE"])
-except Exception as e:
-    print(f"ERR: invalid JSON: {e}")
-    sys.exit(1)
-t = c.get("type", "")
-n = c.get("name", "")
-d = c.get("description", "")
-b = c.get("body", "")
-# All four fields must be STRINGS, not merely truthy. A non-string body (e.g.
-# {"body": {"oops": 1}}) passes a bare truthiness check but raises TypeError at
-# sys.stdout.write(b) AFTER the header lines are out - partial output the shell
-# must never mistake for a successful parse (codex P2 on PR #435). Reject it
-# here with a structured ERR instead.
-bad = [k for k, v in (("type", t), ("name", n), ("description", d), ("body", b))
-       if not isinstance(v, str)]
-if bad:
-    print(f"ERR: non-string field(s): {', '.join(bad)} (type/name/description/body must all be strings)")
-    sys.exit(1)
-if t not in ("feedback", "project", "reference", "user") or not n or not d or not b:
-    missing = [k for k, v in (("name", n), ("description", d), ("body", b)) if not v]
-    if t not in ("feedback", "project", "reference", "user"):
-        print(f"ERR: invalid type {t!r} (must be one of feedback|project|reference|user)")
-    else:
-        print(f"ERR: missing required field(s): {', '.join(missing)}")
-    sys.exit(1)
-slug = re.sub(r'[^a-z0-9_]+', '_', n.lower()).strip('_')
-target = os.path.join(os.environ["MEM_DIR"], f"{t}_{slug}.md")
-print(f"TYPE:{t}")
-print(f"NAME:{n}")
-print(f"DESC:{d}")
-print(f"SLUG:{slug}")
-print(f"TARGET:{target}")
-sys.stdout.write("BODY:\n")
-sys.stdout.write(b)
-PYEOF
-) || PARSE_RC=$?
-# The python validator exits 1 on a bad candidate AND prints a structured
-# `ERR:` line to stdout (captured above). Without a guard, `set -e` aborts the
-# assignment here BEFORE the loop below surfaces that ERR - the caller then
-# sees a SILENT exit 1 (cv-c97d73e3). But a blanket `|| true` over-corrects:
-# it also masks system failures (python3 missing = 127, interpreter crash) and
-# would let a parser that died AFTER partial output read as a successful parse
-# (gemini medium + codex P2 on PR #435). So: capture the rc, let ONLY the
-# structured-rejection path (rc=1, ERR line present) flow into the loop, and
-# abort on anything else with the real exit code.
+# Slurped, so exactly one JSON value must arrive: empty input or trailing data
+# is an invalid candidate, the same as a parse failure.
+PARSED_OUTPUT=$(printf '%s' "$CANDIDATE_JSON" | MEM_DIR="$MEMORY_DIR" jq -sj --arg q "'" '
+if length != 1 then "ERR: invalid JSON: expected exactly one JSON value\n" else .[0] |
+    def field($k): if type == "object" and has($k) then .[$k] else "" end;
+    def repr: $q + . + $q;
+    (field("type")) as $t | (field("name")) as $n | (field("description")) as $d | (field("body")) as $b
+    # All four fields must be STRINGS, not merely truthy: a non-string body would
+    # otherwise reach the BODY line as JSON text and write a broken memory file.
+    | [["type", $t], ["name", $n], ["description", $d], ["body", $b]
+       | select((.[1] | type) != "string") | .[0]] as $bad
+    | if ($bad | length) > 0 then
+        "ERR: non-string field(s): \($bad | join(", ")) (type/name/description/body must all be strings)\n"
+      elif ($t | IN("feedback", "project", "reference", "user") | not) then
+        "ERR: invalid type \($t | repr) (must be one of feedback|project|reference|user)\n"
+      elif $n == "" or $d == "" or $b == "" then
+        "ERR: missing required field(s): \([["name", $n], ["description", $d], ["body", $b]] | map(select(.[1] == "") | .[0]) | join(", "))\n"
+      else
+        ($n | ascii_downcase | gsub("[^a-z0-9_]+"; "_") | gsub("^_+|_+$"; "")) as $slug
+        | "TYPE:\($t)\nNAME:\($n)\nDESC:\($d)\nSLUG:\($slug)\nTARGET:\($ENV.MEM_DIR | rtrimstr("/"))/\($t)_\($slug).md\nBODY:\n" + $b
+      end
+end') || PARSE_RC=$?
 PARSE_RC="${PARSE_RC:-0}"
+if [[ "$PARSE_RC" -ne 0 && "$PARSE_RC" -ne 127 ]]; then
+    # jq refused the text itself: a structured rejection, not a crash.
+    PARSED_OUTPUT="ERR: invalid JSON: jq could not parse the candidate"
+    PARSE_RC=1
+fi
+[[ "$PARSED_OUTPUT" == ERR:* ]] && PARSE_RC=1
+# A bad candidate is a structured `ERR:` line (rc=1) that the loop below
+# surfaces. Anything else nonzero is a system failure (jq missing = 127) and
+# aborts with the real exit code rather than reading as a parse.
 if [[ "$PARSE_RC" -ne 0 && "$PARSE_RC" -ne 1 ]]; then
-    log "candidate parser failed unexpectedly (rc=$PARSE_RC; python3 missing or interpreter failure?)"
+    log "candidate parser failed unexpectedly (rc=$PARSE_RC; jq missing?)"
     exit "$PARSE_RC"
 fi
 
@@ -224,9 +207,8 @@ while IFS= read -r line; do
 done <<< "$PARSED_OUTPUT"
 
 # The loop exits 1 the moment it sees a structured `ERR:` line, so reaching
-# here with a nonzero PARSE_RC means python died with rc=1 (an uncaught
-# exception also exits 1) AFTER emitting partial output but WITHOUT a
-# structured ERR. Partial headers + a truncated body must never be treated as
+# here with a nonzero PARSE_RC means the parser failed AFTER emitting
+# partial output but WITHOUT a structured ERR. Partial headers + a truncated body must never be treated as
 # a successful parse - that would write a broken memory file and flip the
 # memory gate on a crash (codex P2 on PR #435).
 if [[ "$PARSE_RC" -ne 0 ]]; then

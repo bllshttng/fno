@@ -33,7 +33,7 @@ A sixth entry on an allowlist facing a surface that size is the same defect with
 `FNO_*` and `TARGET_*` are swept as **classes**. A 125th `FNO_*` var added to source neutralises without editing the module.
 `TARGET_*` earns the same treatment because a live `/target` session exports `TARGET_INPUT`, `TARGET_PLAN_PATH`, `TARGET_SIZE` and more, so a suite run inside one inherits that session's parameters.
 
-Session identity is **imported** from `harness_identity.AMBIENT_IDENTITY_ENV`, never retyped.
+Session identity is **read** from `identity_markers` in `crates/fno-agents/src/ambient_vocab.toml`, never retyped.
 That tuple is already derived from `HARNESS_SESSION_MARKERS` because a hand-maintained copy had previously lost `CLAUDE_SESSION_ID`.
 
 Everything else is a short, justified list, and `cli/tests/unit/test_ambient_surface.py` is what keeps it from rotting: it walks every env read in `cli/src` and `crates`, and fails on a name classified neither `ambient` nor `environment`, naming the file that reads it.

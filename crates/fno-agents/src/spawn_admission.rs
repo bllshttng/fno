@@ -88,6 +88,7 @@ const SPAWN_VALUE_FLAGS_EXTRA: &[&str] = &[
     "--wait",
     "--prompt-file",
     "--mux-session",
+    "--spawned-by",
 ];
 
 pub(crate) const HARNESS_FLAGS: &[&str] = &["--harness", "-H"];

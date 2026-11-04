@@ -26,7 +26,7 @@ if [[ ! -f "$SETTINGS" ]]; then
     exit 0
 fi
 
-ENABLED=$(python3 -c "import json,sys; v=json.load(sys.stdin).get('cacheKeepalive', False); print(str(v).lower())" < "$SETTINGS" 2>/dev/null || echo "false")
+ENABLED=$(jq -r '(.cacheKeepalive // false) | tostring | ascii_downcase' < "$SETTINGS" 2>/dev/null || echo "false")
 if [[ "$ENABLED" != "true" ]]; then
     exit 0
 fi

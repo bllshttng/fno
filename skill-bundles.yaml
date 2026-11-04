@@ -64,15 +64,6 @@ bundles:
         dest: scripts/lib/events-lock.sh
       - source: scripts/lib/events.sh
         dest: scripts/lib/events.sh
-      # schema.yaml: events-validate.sh self-locates the bundled schema via
-      # ../../cli/src/fno/events/schema.yaml from its own dir. In the canonical
-      # plugin that climbs to <plugin>/cli/src/...; in the BUNDLED skill
-      # (scripts/lib/ inside skills/target/) it climbs to
-      # skills/target/cli/src/..., so co-locate the schema there at the matching
-      # relative path or the portable-skill path (no `fno` CLI, foreign cwd)
-      # cannot find it.
-      - source: cli/src/fno/events/schema.yaml
-        dest: cli/src/fno/events/schema.yaml
       # phase-verifier.sh + blocked-taxonomy.sh entries removed (ab-d0337fbc):
       # the phase machine and BLOCKED taxonomy died with the wedge.
       # graph-resolve.sh: sourced from references/init-state.md to
@@ -124,7 +115,7 @@ bundles:
       - source: skills/target/references/verification-patterns.md
         dest: references/verification-patterns.md
 
-  # Cluster router: /execute. Mode bodies (references/flat.md, references/waves.md), orchestrator.py,
+  # Cluster router: /execute. Mode bodies (references/flat.md, references/waves.md),
   # scripts/, and the wave-orchestration references are canonical in the folder.
   # Only the shared Multi-CLI tool mapping comes from /target.
   - skill: execute

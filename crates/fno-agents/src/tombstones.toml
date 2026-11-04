@@ -16,11 +16,12 @@
 # Four top-level groups whose every leaf scored zero in `command-callers.py
 # --dead`: no skill, doc, script, hook, or cli/src argv named any of them.
 # Confirmed by a second whole-repo walk sharing no code with that tool.
-# The implementation packages stay where live code imports them
-# (`fno.company.contracts` still is); what is gone is the invocable
-# surface. The wake signal reader later left with its family's Rust port,
-# so the wake entry below names where its one live read went.
-"company" = "nothing - the company campaign commands had no caller anywhere. `fno.company.contracts` is still imported by the graph, plan, and delivery code; only the CLI surface was removed"
+# The implementation packages left with the residue port (the contract
+# lives in crates/fno-agents/src/delivery_eval.rs and plan_schema.rs);
+# what was already gone is the invocable surface. The wake signal reader
+# later left with its family's Rust port, so the wake entry below names
+# where its one live read went.
+"company" = "nothing - the company campaign commands had no caller anywhere, and the contracts module left with the residue port; the contract lives in crates/fno-agents/src/delivery_eval.rs and plan_schema.rs"
 "log" = "`fno doctor event emit` - the per-worktree progress log had no reader and no caller outside its own test"
 "reality-check" = "nothing - the external-reality probes had no caller. The `gh` probe's job is done by `fno do pr status <n>`"
 "wake" = "nothing - the wake-signal ADMIN commands had no caller. The read survives as the fno-agents binary's hidden `wake-signals` op (scripts/lib/wake-signals.sh reads kind=question signals through it); nothing writes wake signals anymore, so the write path is gone with the port"

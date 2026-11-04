@@ -23,7 +23,6 @@ fn every_lead_injection_template_and_rendered_succession_uses_role_vocabulary() 
         "hooks/context-nudge.sh",
         "hooks/session-start.sh",
         "hooks/lead-postcompact-reinject.sh",
-        "cli/src/fno/config/_lead.py",
         "crates/fno-agents/src/lead_checkin.rs",
         "crates/fno-agents/src/loopcheck.rs",
         "crates/fno-agents/src/team_settle.rs",

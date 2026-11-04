@@ -181,39 +181,9 @@ if [[ "$TOOL_NAME" =~ ^(Bash|Shell|exec_command)$ \
   _BARE_GH_CREATE=0
   _GH_ATTRIBUTION="other"
   _GH_ATTRIBUTION_RC=0
-  if command -v python3 >/dev/null 2>&1; then
-    _GH_ATTRIBUTION_CODE='
-import shlex
-import sys
-
-source = sys.argv[1].replace("\\\r\n", "").replace("\\\n", "")
-try:
-    lexer = shlex.shlex(source, posix=True, punctuation_chars=";&|()`\n")
-    lexer.whitespace = " \t\r"
-    lexer.whitespace_split = True
-    lexer.commenters = ""
-    tokens = list(lexer)
-except ValueError:
-    print("invalid")
-    raise SystemExit(0)
-
-def is_create_at(index):
-    return tokens[index:index + 3] == ["gh", "pr", "create"]
-
-positions = [i for i in range(len(tokens) - 2) if is_create_at(i)]
-operators = {
-    token for token in tokens
-    if token and all(char in ";&|()`\n" for char in token)
-}
-if positions == [0] and not operators:
-    print("bare")
-elif positions:
-    print("compound")
-else:
-    print("other")
-'
+  if [[ -n "$AGENTS_BIN" ]]; then
     _GH_ATTRIBUTION="$(with_timeout "${FNO_PR_ATTRIBUTION_TIMEOUT:-2}" \
-      python3 -c "$_GH_ATTRIBUTION_CODE" "$TOOL_COMMAND")"
+      "$AGENTS_BIN" hook pr-attribution "$TOOL_COMMAND")"
     _GH_ATTRIBUTION_RC=$?
   else
     _GH_ATTRIBUTION_RC=127

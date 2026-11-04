@@ -6,8 +6,7 @@ cd "$(git rev-parse --show-toplevel)/cli"
 # throwaway venv, so an inherited PYTHONPATH pointing at src/ silently redirects
 # all of them to the source tree. preflight.sh exports exactly that, which is
 # why this file has twice reported a wheel defect that only existed in its own
-# environment. It cuts both ways: src/fno/events/schema.yaml exists, so the
-# schema assertions would PASS from source even if the wheel shipped nothing.
+# environment.
 unset PYTHONPATH
 [ -z "${PYTHONPATH:-}" ] || { echo "FAIL: PYTHONPATH survived unset (readonly?); refusing to smoke against a contaminated sys.path"; exit 1; }
 uv sync --quiet
@@ -23,14 +22,6 @@ out=$("$TMPDIR_INSTALL/venv/bin/fno-py" --version 2>&1 || true)
 echo "$out" | grep -qE '[0-9]+\.[0-9]+\.[0-9]+'
 echo "PASS: uv build produces installable wheel"
 
-# The events schema must SHIP inside the wheel as `fno/events/schema.yaml`
-# (ordinary package data under src/fno; no force-include). The native build
-# and schema gate consume the same data, including from an installed wheel.
-PKG_SCHEMA=$("$TMPDIR_INSTALL/venv/bin/python" -c \
-  "import fno.events as e, os; print(os.path.join(os.path.dirname(e.__file__), 'schema.yaml'))")
-test -f "$PKG_SCHEMA" || { echo "FAIL: wheel did not ship fno/events/schema.yaml"; exit 1; }
-echo "PASS: wheel ships in-package schema.yaml"
-
 # ab-18563bcc US5: the wheel must carry LICENSE + NOTICE (Apache-2.0 is declared
 # in pyproject.toml, but the texts must ship in the distribution). The build
 # hook force-includes them under fno/_licenses/ from the repo root (direct
@@ -45,18 +36,6 @@ echo "PASS: wheel ships LICENSE + NOTICE under fno/_licenses/"
 
 # Import + schema-load from an EMPTY cwd with every schema/project env var
 # unset - exercises ONLY the in-package fallback, not a dev-tree walk-up.
-# Wrapped in `if (...)` rather than a bare subshell + `rc=$?`: under `set -e`
-# a failing standalone subshell aborts the script before the capture, so the
-# custom FAIL diagnostic would never print on a regression.
-EMPTY_CWD=$(mktemp -d)
-if ( cd "$EMPTY_CWD"
-     env -u FNO_REPO_ROOT -u CLAUDE_PLUGIN_ROOT -u EVENTS_SCHEMA_PATH \
-       "$TMPDIR_INSTALL/venv/bin/python" -c \
-       "import fno.events as e, pathlib, yaml; schema = yaml.safe_load((pathlib.Path(e.__file__).parent / 'schema.yaml').read_text()); assert schema.get('event_types'), 'empty schema'" ); then
-  rm -rf "$EMPTY_CWD"
-  echo "PASS: packaged event schema loads from empty cwd"
-else
-  rm -rf "$EMPTY_CWD"
-  echo "FAIL: packaged event schema did not load from empty cwd"
-  exit 1
-fi
+# The events schema left the wheel with the events package residue port: it
+# lives beside its Rust readers in crates/fno-agents/src/event_store/, so
+# there is no in-package schema to load here.

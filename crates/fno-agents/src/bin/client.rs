@@ -224,7 +224,7 @@ fn main() {
     ) {
         std::process::exit(fno_agents::harness_reader::transport_doors(&args));
     }
-    // `harness-roster`: Python's fno.harness_names one-roster JSON read.
+    // `harness-roster`: the one-roster JSON read.
     if args.first().map(String::as_str) == Some("harness-roster") {
         std::process::exit(fno_agents::harness_roster::run_harness_roster(&args[1..]));
     }
@@ -649,7 +649,13 @@ async fn run(args: Vec<String>) -> i32 {
     // command; an unknown command falls through to its normal error path. The scan
     // stops at an `--argv`/`--` boundary so a `--help` inside a spawn/host argv
     // payload reaches the spawned command instead of being captured here.
-    if is_help_request(&args[1..]) {
+    // A leaf that rides `status` as its first argument parses its own
+    // `--help`; the status usage line would answer for the wrong command.
+    let status_leaf = command == "status"
+        && args
+            .get(1)
+            .is_some_and(|a| STATUS_LEAVES_WITH_HELP.contains(&a.as_str()));
+    if !status_leaf && is_help_request(&args[1..]) {
         // A command with a full help body owns its --help; the one-line table
         // entry stays for the top-level list.
         if let Some(body) = command_help(command) {
@@ -4556,6 +4562,21 @@ fn exit_code_for(code: ErrorCode) -> i32 {
 fn warns_on_daemon_drift(command: &str) -> bool {
     matches!(command, "list" | "rm")
 }
+
+/// The `status --<leaf>` arguments whose leaf parses its own `--help`.
+const STATUS_LEAVES_WITH_HELP: &[&str] = &[
+    "--register",
+    "--name",
+    "--whoami",
+    "--registry-repair",
+    "--heal-token",
+    "--pane-identity",
+    "--watch",
+    "--truth",
+    "--peek",
+    "--team",
+    "--role",
+];
 
 /// True when `--help`/`-h` appears in the command's OWN options, i.e. before an
 /// `--argv`/`--` payload boundary. A `--help` after that boundary belongs to a

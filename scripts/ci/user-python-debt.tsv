@@ -1,0 +1,5 @@
+# Python starts left on the user path (hooks/, skills/, plugins/buddy/, user-path scripts).
+# Shrink-only: scripts/ci/check-no-user-python.sh refuses a file over its row, a counted
+# file with no row, and a row above the live count. Lower or remove a row from the
+# guard's own --print output, never raise one by hand. A .py file counts 1.
+# Columns: path, ceiling, owner (the effort that retires it).

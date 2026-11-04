@@ -332,10 +332,9 @@ It is deliberately **not** a `clear-taint` command, and it will not act on anyth
 An unreachable profile endpoint, a malformed response, a slot `security` could not read, a principal matching no registered account, or one matching two of them each leave the stamp, the snapshots, and the taint byte-identical, and exit non-zero naming which of those happened.
 Clearing a taint without proof would file one account's usage under another's name, which is worse than staying `unknown`.
 
-It also refuses with `slot-pinned` while a session that was pinning when the taint was written is still alive.
-Proving the principal proves it now, and that session was launched under the outgoing account, so its next token refresh can overwrite the slot with that account's credential.
-The taint marker records those sessions for exactly this check: a session started after the switch already read the new credential and never blocks a repair, which matters because on the shared slot the pinning session is usually the account being proven.
-Each is recorded as a pid *and* its start time, because pids are reused and a recycled one wearing a dead session's number would hold the repair open permanently.
+Live sessions do not block the proof. A busy fleet has twenty or more claude pids alive at once, and waiting for all of them to exit meant the slot was never proven.
+The proof binds to the bytes it read instead. The credential is read once, proven through the profile endpoint, and read again before the snapshot is written and again before the taint clears. If a session rewrote the slot in between, the outcome is `slot-changed` and the taint stays set.
+When the reconcile lands under live sessions, it prints how many now bill to the proven account and their pids, the same report `fno config accounts use` prints.
 Reading the slot also ignores any ambient `CLAUDE_CONFIG_DIR`, since a worker pinned to another account exports it and reconciliation would otherwise prove the pinned account and stamp it onto the canonical slot.
 On macOS the shared slot has two Keychain items, scoped and unscoped, and a stale one can sit beside a live one holding a different account.
 The on-disk `~/.claude/.credentials.json` is a third source: the usage probe reads it first even on macOS, so a stale file bearer could otherwise prove out and have its quota reported while the Keychain account occupies the slot.
@@ -841,33 +840,13 @@ trips first wins. v0 attribution math is approximate
 to bound damage. Exact per-segment math (rate card x tokens per
 segment) is deferred to Spec 2.5.
 
-### Per-turn Attribution Sidecar
+### Per-turn Attribution
 
-`cli/src/fno/turn_attribution.py` owns
-`.fno/turn-attribution.jsonl`. Each line records one assistant
-turn with the active provider and any normalized error class:
-
-```jsonl
-{"turn_index":0,"ts":"2026-05-05T01:23:45Z","provider_id":"claude-anthropic","error_class":null}
-{"turn_index":1,"ts":"2026-05-05T01:24:48Z","provider_id":"claude-openrouter","error_class":"provider_5xx"}
-```
-
-Writes serialize via `fcntl.LOCK_EX` so concurrent dispatchers can't
-tear the JSONL. Writes are non-blocking on failure: a turn that can't
-write the stamp continues and the sidecar's missing entries fall back
-to active-at-compute attribution at downstream read time.
-
-The sidecar feeds:
-
-- The stop hook's per-turn provider summary (logged at completion)
-- `fno config accounts list` per-session per-provider spend (deferred to 2.5)
-
-### State Files Owned by Spec 2
-
-| File | Owner | Reset on |
-|---|---|---|
-| `.fno/turn-attribution.jsonl` | dispatch layer | session boundary (gitignored, re-created per session) |
-| `~/.fno/config.toml.lock` | save_providers, the Rust `accounts/writer.rs` | n/a (lock file, content irrelevant) |
+The per-turn sidecar (`turn_attribution.py`, `.fno/turn-attribution.jsonl`) retired with the
+Python dispatch layer: it had no writer or reader left. Per-provider attribution computes
+from session facts at read time (active-at-compute with the same fallback the sidecar's
+readers used). `~/.fno/config.toml.lock` stays: save_providers, the Rust
+`accounts/writer.rs`, n/a (lock file, content irrelevant).
 
 ---
 
@@ -1412,7 +1391,7 @@ separate post-hoc layer).
 | size `M` | `diverse_preferred` |
 | size `S` / unknown | `portable` |
 
-The effective kinds start from the session's ambient harness (`resolve_harness_identity`), and an implementer with no ledger row yet is that same harness. A codex session with cross-model off reads `[codex]` and can never satisfy high assurance on its own. That is the honest reading under law d-d4b4293e. Review runs in the session that did the work. The only way to hand that session a different family was a spawned review session.
+The effective kinds start from the session's ambient harness (the route-slot resolve door), and an implementer with no ledger row yet is that same harness. A codex session with cross-model off reads `[codex]` and can never satisfy high assurance on its own. That is the honest reading under law d-d4b4293e. Review runs in the session that did the work. The only way to hand that session a different family was a spawned review session.
 
 `assess_assurance(policy, ...)` turns the *effective reviewer kinds* (what the
 panel will genuinely dispatch to) into a verdict with a single load-bearing

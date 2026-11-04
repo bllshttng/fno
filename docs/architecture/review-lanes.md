@@ -37,7 +37,7 @@ A lane is how a review is triggered. This is about how WIDE it is allowed to be,
 
 `config.agents.provider_limits.<provider>` (renamed from `max_lanes`) is a `ProviderBudget` record. `lanes` caps concurrent spawned workers on that account, and `subagents` caps in-session fan-out. The built-in zai budget is `lanes = 5, subagents = 1`, because that account is shared. A provider absent from the table is uncapped in both dimensions, which is what a dedicated account gets.
 
-`fno.config.assert_subagent_budget` is the fan-out-neutral guard. Any skill that DECLARES a dispatch width in its text calls it before dispatching (`fno config assert-subagent-budget --width <n>`). A refusal names the provider, the width and the budget. The default review lane needs no such check - it runs inline and dispatches zero review subagents, so a budget of 1 costs it nothing. The retired panel's route-substitution branch is gone with the panel. Under that branch a low budget made `sigma` unavailable and resolved it to `code-review`. Now the lane IS the default on every harness. A configured `sigma` name is refused at init, and the refusal names the lane. The gate never consumes a name the route cannot produce.
+`fno config assert-subagent-budget` (native in `crates/fno/src/config_cli/`) is the fan-out-neutral guard. Any skill that DECLARES a dispatch width in its text calls it before dispatching (`fno config assert-subagent-budget --width <n>`). A refusal names the provider, the width and the budget. The default review lane needs no such check - it runs inline and dispatches zero review subagents, so a budget of 1 costs it nothing. The retired panel's route-substitution branch is gone with the panel. Under that branch a low budget made `sigma` unavailable and resolved it to `code-review`. Now the lane IS the default on every harness. A configured `sigma` name is refused at init, and the refusal names the lane. The gate never consumes a name the route cannot produce.
 
 One boundary stays, stated rather than papered over. A native subagent is a harness-internal Task call. fno never observes it. The guard is a DECLARATION check plus the skill text that carries it, not a hard cap on a native dispatch. Total prevention needs a harness hook that does not exist. Where fno routes the dispatch (spawn, the owned lane), the budget is a real cap.
 
@@ -563,7 +563,7 @@ The release never names a holder, and `--holder` is optional on the command for 
 | `fno do pr status <n>` | `ready` goes false, `ready_blockers` names the layer, and `review_activity` reports both probes whether or not they blocked |
 | `fno do pr merge <n>` | refuses beside the plan hold and BEFORE the `auto_merge` gate |
 | the auto-merge lane | the same refusal: it is not a separate caller, it is `run_merge` with `auto_merge.enabled`, and it is the caller with no judgment to fall back on |
-| a bare `gh pr merge` via `hooks/git-protection.py` | denies coarsely, reading the claims directory directly |
+| a bare `gh pr merge` via the git-protection hook | denies coarsely, reading the claims directory directly |
 
 The hook reads files rather than shelling a third `fno` probe. The two vetoes above it already spend 25s each. The harness hook budget is 60s, and the margin is under 6s. A killed hook emits no verdict at all.
 
@@ -604,7 +604,7 @@ The command cannot assert coverage without performing the reads. There is no `--
 
 That pre-empts the aggregate-that-overstates-its-inputs shape at the field that becomes a bypass on the day anything enforces it.
 
-A bare `gh pr merge` from an agent tool call is a fourth reader of the same predicate. The merge hook in `hooks/git-protection.py` shells the hidden `fno do pr coverage-check` command. That command evaluates the guard's coverage check (the native `review-coverage check` operand) without the recompute. A PreToolUse hook has a 60s harness budget and the Rust producer is budgeted in minutes. The invariant between the two surfaces is one-directional by design. The hook never allows what the guard refuses. When the row is missing or stale the hook denies where `fno do pr merge` can still allow after recomputing. Absence denies. A named instrument failure (exit 4) fails open. Both surfaces refuse with one sentence, pinned character for character by the coverage_gate parity goldens.
+A bare `gh pr merge` from an agent tool call is a fourth reader of the same predicate. The merge hook in `crates/fno-agents/src/hook/git_protection/merge_gate.rs` starts the hidden `fno do pr coverage-check` command. That command evaluates the guard's coverage check (the native `review-coverage check` operand) without the recompute. A PreToolUse hook has a 60s harness budget and the Rust producer is budgeted in minutes. The invariant between the two surfaces is one-directional by design. The hook never allows what the guard refuses. When the row is missing or stale the hook denies where `fno do pr merge` can still allow after recomputing. Absence denies. A named instrument failure (exit 4) fails open. Both surfaces refuse with one sentence, pinned character for character by the coverage_gate parity goldens.
 
 ### The GitHub status is a projection, not a latch
 

@@ -78,8 +78,7 @@ _block() {
             }
         }'
     else
-        python3 -c 'import json,sys; r=sys.argv[1]; print(json.dumps({"decision":"block","reason":r,"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":r}}))' "$reason" 2>/dev/null \
-            || printf '{"decision":"block","reason":"%s"}\n' "$reason"
+        printf '{"decision":"block","reason":"%s"}\n' "$reason"
     fi
     exit 0
 }
@@ -91,7 +90,7 @@ PAYLOAD="$(cat)"
 # the parse (and the `fno` call behind it) for every other write.
 [[ "$PAYLOAD" == *".md"* ]] || _approve
 
-# ── 2. Parse (jq -> python3 -> approve) ───────────────────────────────────────
+# ── 2. Parse (jq -> approve) ──────────────────────────────────────────────────
 # Five newline-separated fields; `content` and `command` are flattened to one
 # line each with \x1f standing in for the newlines we still need to inspect
 # (tab and space are IFS-whitespace and would collapse empty fields).
@@ -104,20 +103,6 @@ if command -v jq >/dev/null 2>&1; then
             (.cwd // ""),
             (.tool_input.content // "" | gsub("\n";"")),
             (.tool_input.command // "" | gsub("\n";""))' 2>/dev/null
-    )
-elif command -v python3 >/dev/null 2>&1; then
-    { read -r TOOL; read -r FILE_PATH; read -r PAYLOAD_CWD; read -r CONTENT; read -r COMMAND; } < <(
-        printf '%s' "$PAYLOAD" | python3 -c '
-import sys, json
-try:
-    d = json.load(sys.stdin); ti = d.get("tool_input") or {}
-    print(d.get("tool_name") or "")
-    print(ti.get("file_path") or "")
-    print(d.get("cwd") or "")
-    print((ti.get("content") or "").replace("\n", "\x1f"))
-    print((ti.get("command") or "").replace("\n", "\x1f"))
-except Exception:
-    pass' 2>/dev/null
     )
 else
     _approve

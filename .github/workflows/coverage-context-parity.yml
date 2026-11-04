@@ -24,7 +24,7 @@ on:
     paths: *parity_paths
 
 concurrency:
-  group: coverage-context-parity-${{ github.head_ref || github.ref }}
+  group: coverage-context-parity-${{ github.event_name == 'push' && github.sha || github.head_ref || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:

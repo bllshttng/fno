@@ -1714,7 +1714,7 @@ impl RegistryEntry {
 
     /// Two-way sync of `harness`/`harness_session_id` with the legacy
     /// per-provider identity fields, the Rust mirror of Python's
-    /// `harness_identity.sync_harness_aliases` + the registry harness back-fill.
+    /// the deleted Python `sync_harness_aliases` + the registry harness back-fill.
     /// Applied at load so a Rust reader of a legacy row and a Python reader of a
     /// Rust-minted canonical row both resolve. `harness` adopts `provider` when
     /// absent (provider is always set; harness is identity-only, never gates the

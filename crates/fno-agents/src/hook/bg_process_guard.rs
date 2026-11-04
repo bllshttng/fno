@@ -129,6 +129,26 @@ fn is_punct(c: char) -> bool {
 /// quoted string stays part of that string. `None` on an open quote or a
 /// trailing escape, which the caller turns into an allow.
 pub(super) fn shlex_tokens(text: &str) -> Option<Vec<String>> {
+    shlex_lex(
+        text,
+        Lex {
+            punct: true,
+            comments: false,
+        },
+    )
+}
+
+/// The two `shlex` knobs the guards disagree on. `punct: false` is
+/// `shlex.split` (a newline is whitespace, operators stay inside words);
+/// `comments: true` makes an unquoted `#` drop the rest of the line.
+#[derive(Clone, Copy)]
+pub(super) struct Lex {
+    pub punct: bool,
+    pub comments: bool,
+}
+
+/// The one shell lexer behind [`shlex_tokens`], with its knobs exposed.
+pub(super) fn shlex_lex(text: &str, opts: Lex) -> Option<Vec<String>> {
     #[derive(Clone, Copy)]
     enum State {
         Word,
@@ -136,13 +156,25 @@ pub(super) fn shlex_tokens(text: &str) -> Option<Vec<String>> {
         Double,
         Escape { in_double: bool },
     }
+    let is_space = |c: char| matches!(c, ' ' | '\t' | '\r') || (!opts.punct && c == '\n');
+    let is_punct = |c: char| opts.punct && is_punct(c);
     let chars: Vec<char> = text.chars().collect();
+    let skip_comment = |mut i: usize| {
+        while i < chars.len() && chars[i] != '\n' {
+            i += 1;
+        }
+        i
+    };
     let mut out = Vec::new();
     let mut i = 0;
     while i < chars.len() {
         let c = chars[i];
-        if matches!(c, ' ' | '\t' | '\r') {
+        if is_space(c) {
             i += 1;
+            continue;
+        }
+        if opts.comments && c == '#' {
+            i = skip_comment(i);
             continue;
         }
         if is_punct(c) {
@@ -161,8 +193,12 @@ pub(super) fn shlex_tokens(text: &str) -> Option<Vec<String>> {
             match state {
                 State::Word => match chars.get(i).copied() {
                     None => break,
-                    Some(ch) if matches!(ch, ' ' | '\t' | '\r') => {
+                    Some(ch) if is_space(ch) => {
                         i += 1;
+                        break;
+                    }
+                    Some('#') if opts.comments => {
+                        i = skip_comment(i);
                         break;
                     }
                     Some(ch) if is_punct(ch) => break,

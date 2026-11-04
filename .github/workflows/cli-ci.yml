@@ -1,16 +1,13 @@
 name: cli-ci
 
 # PR re-pushes share a group keyed by head_ref and cancel their own running
-# run. Main pushes share one group keyed by ref. The running main run always
-# finishes, and the newest push replaces the pending one, so a burst of merges
-# queues at most two runs and the tip is the commit that tests. A group keyed
-# by sha ran every merge in full: the runs piled up against the PR runs and
-# main never settled. Cancelling the running main run instead starves main:
-# merges land faster than the suite finishes, so no main run ever completes.
-# The repo is user-owned, so GitHub has no merge queue for it: this coalesced
-# main run and the fno merge queue are the batch that runs every lane.
+# run. A main push keys by sha, so every merge keeps its own settled run and
+# a burst of merges never cancels the run before it. The enterprise plan
+# gives main enough slots to run them side by side. The repo is user-owned,
+# so GitHub has no merge queue for it: the main run and the fno merge queue
+# are the batch that runs every lane.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.sha || github.head_ref || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 on:
@@ -70,6 +67,9 @@ on:
     paths: *cli_ci_paths
   schedule:
     - cron: '17 9 * * *'
+
+permissions:
+  contents: read
 
 # Every workflow's Linux jobs pin ubuntu-24.04. On 2026-10-25 ubuntu-latest
 # moved to 26.04, and its runners hit "Disk quota exceeded" under this
@@ -756,8 +756,11 @@ jobs:
     # warm run says otherwise. History: the cold release build of fno-agents
     # outgrew 10m once the crate grew the native decisions listing, then
     # outgrew 15m twice on 2026-10-08 under fleet load, dying inside cargo
-    # before any budget ran each time.
-    timeout-minutes: 20
+    # before any budget ran each time. 2026-11-04: the residue port grew the
+    # crate again and nine branch runs died at this cap before the save step
+    # could land a warm tree, so the cap moved to 25m to give one cold run
+    # room to save.
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
@@ -797,10 +800,9 @@ jobs:
         # so the latency step below pays a cache hit instead of a second
         # full compile of the crate (x-ed99: the double build outgrew the
         # 15m cap on cold runners). The copy onto PATH installs the build
-        # for the freshness step below: `fno doctor harness-matrix` execs
-        # the *installed* binary by design (resolve_installed_binary), and
-        # the freshness verdict is only honest when that binary was built
-        # from this checkout.
+        # for the freshness steps below: the matrix regen execs the binary
+        # this checkout just built, so the freshness verdict is only honest
+        # when that binary carries the checkout's capability table.
         run: |
           cargo test --release --manifest-path crates/fno-agents/Cargo.toml --no-run --test hook_latency
           # Runner-only: replayed locally this overwrites the deployed binary
@@ -833,7 +835,7 @@ jobs:
           key: ${{ runner.os }}-cargo-latency-${{ hashFiles('crates/fno-agents/Cargo.lock', 'crates/fno/Cargo.lock') }}
       - name: Generated copies match their sources
         run: |
-          (cd cli && uv run fno-py doctor harness-matrix --write)
+          crates/fno-agents/target/release/fno-agents harness-matrix --write --root "$GITHUB_WORKSPACE"
           awk -F'\t' '!/^#/ && ($3 ~ /^cargo build --manifest-path crates\/fno-agents/ || $3 ~ /harness-matrix --write/) && $1 != "docs/harnesses/command-matrix.md" { print $1 }' \
             generated-artifacts.tsv > "$RUNNER_TEMP/generated-paths.txt"
           cat "$RUNNER_TEMP/generated-paths.txt"
@@ -984,8 +986,8 @@ jobs:
         # minutes, not after the 26-minute integration shard. The package clean
         # above still makes this binary and the tests share one fresh source
         # build. Dependencies stay cached.
-        # The PATH copy installs the build for the freshness step below:
-        # `fno doctor harness-matrix` execs the *installed* binary by design.
+        # The PATH copy installs the build for the freshness step below: the
+        # matrix regen execs the binary this checkout just built.
         run: |
           cargo build --bin fno-agents
           # Runner-only: replayed locally this overwrites the deployed binary
@@ -997,16 +999,15 @@ jobs:
         # The ONE freshness gate for every build-generated copy. build.rs
         # regenerates the capability copies, the merge-posture copy,
         # events_limits.toml, and the registry-schema copy on every build;
-        # `fno doctor harness-matrix --write` renders the capability doc (and
-        # the command doc, whose own cheap freshness step lives in guards.yml
-        # because it also reads skills/*/SKILL.md). A committed copy that
-        # drifted from its source (a hand edit, a forgotten rebuild) shows up
-        # here as a dirty tree - which is the wrong-merge class the retired
-        # *-fresh.sh scripts checked, at one step instead of four.
+        # the fno-agents binary's `harness-matrix --write` renders the
+        # capability doc (and the command doc, whose own cheap freshness step
+        # lives in guards.yml because it also reads skills/*/SKILL.md). A
+        # committed copy that drifted from its source (a hand edit, a
+        # forgotten rebuild) shows up here as a dirty tree - which is the
+        # wrong-merge class the retired *-fresh.sh scripts checked, at one
+        # step instead of four.
         run: |
-          # fno-py, not fno: the project env's console script is fno-py and a
-          # bare `fno` on PATH is a stale installed tool, not this checkout.
-          (cd cli && uv run fno-py doctor harness-matrix --write)
+          crates/fno-agents/target/debug/fno-agents harness-matrix --write --root "$GITHUB_WORKSPACE"
           git diff --exit-code -- \
             crates/fno/src/harness_capabilities.toml \
             cli/src/fno/tombstones.toml \
@@ -1032,22 +1033,12 @@ jobs:
         # already triggers for Rust source changes.
         run: bash scripts/tests/test_preflight_parity.sh
 
-      - name: Reviewer descriptor parity check
-        # The reviewer table is declared in Python (config validator + init
-        # capability refusal) and in Rust (the stop gate's blocked reason). A
-        # Rust-only invocation edit never touches cli/**, so cli-ci's smoke
-        # registry would not fire - this leg is what catches it. Pure text
-        # extraction; no binary needed.
-        run: bash scripts/ci/check-reviewer-descriptor-parity.sh
-
-      - name: Review app login + marker parity check (x-0eaf)
-        # The review-App login set is declared three times (Rust BOT_PROFILES,
-        # Python _OPTIONAL_BOTS, Python _KNOWN_REVIEW_APP_LOGINS); the Rust
-        # profiles also carry the usage_markers the refusal classifier reads.
-        # A login on one side only is an App one path honors and another cannot
-        # explain; a profile without an explicit usage_markers is an undecided
-        # refusal shape (AC10 - "no marker matched" must never read as "did not
-        # refuse"). Pure text extraction; no binary needed.
+      - name: Bot-profile marker completeness check
+        # The review-App login set is single-sourced in Rust BOT_PROFILES (the
+        # Python optional-apps and reviewer-descriptor halves died with the
+        # config family). A profile without an explicit usage_markers is an
+        # undecided refusal shape (AC10 - "no marker matched" must never read
+        # as "did not refuse"). Pure text extraction; no binary needed.
         run: bash scripts/ci/check-review-app-parity.sh
 
       - name: Parity-test provenance check

@@ -510,6 +510,8 @@ An open do row wedges its node `in_progress`. The in-progress status hides the r
    If any leg comes back other than `ok` the receipt status is `degraded` and the command exits non-zero, and the worker names the leg in its report - a scheduler log nobody reads is not a signal.
 2. One Sonnet worker for the judgment calls, working from a fixed allowlist of reversible levers, finishing by mailing a one-screen report that leads with the mechanical outcomes.
 
+The maintain pass carries a repo-rename sweep. An open node's PR url recorded under the repo's former name rewrites in place, primary or additional. The alias comes from config `[repo_aliases]` or GitHub's own redirect answer, cached in gh-facts. Closed rows keep their history.
+
 A UTC-day claim, not the scheduler, enforces once-a-day, so a double-fire or a manual run on a day that already groomed is a no-op (`already-ran`, zero subprocesses).
 That makes the cadence boring to install:
 

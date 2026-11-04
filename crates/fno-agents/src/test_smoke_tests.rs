@@ -234,7 +234,6 @@ fn company_boundary_gate_family_has_registered_callers() {
     for required in [
         "scripts/ci/check-company-boundaries.sh",
         "tests/ci/test_check_company_boundaries.sh",
-        "scripts/ci/check-company-function-agnostic.sh",
         "scripts/ci/check-plugins-function-agnostic.sh",
     ] {
         assert!(

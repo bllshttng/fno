@@ -188,7 +188,7 @@ fn ac2_a_merged_answer_stamps_and_settles() {
 fn ac2_edge_an_open_or_unreadable_answer_holds() {
     for answer in [Some(gc_sweep::PrState::Open), None] {
         let (_dir, home, emitter, _quiet, t) = stamp_test_setup("x-stamp");
-        // Inside the idle hour, so the open-do-row keep still holds.
+        // Inside the spawn row's idle hour, so the row keeps as active.
         let recent = quiet_transcript(t.path(), "recent.jsonl", 1800);
         let mut read = |_path: &str, _cwd: &str| answer;
         let summary = settle_staged_then_run(
@@ -199,16 +199,12 @@ fn ac2_edge_an_open_or_unreadable_answer_holds() {
         );
 
         assert!(summary.settled_do_rows.is_empty());
-        assert_eq!(
-            summary.kept_open_do_row,
-            vec![("row-stamp".to_string(), "x-stamp".to_string())]
+        assert!(!summary.retired.iter().any(|(id, _)| id == "row-stamp"));
+        assert!(
+            summary.kept_active.iter().any(|(id, _)| id == "row-stamp"),
+            "kept_active: {:?}",
+            summary.kept_active
         );
-        let hold = summary
-            .holds
-            .iter()
-            .find(|hold| hold.id == "row-stamp")
-            .expect("the held row carries a hold");
-        assert_eq!(hold.detail, "additional_prs: 1 of 1 not recorded merged");
     }
 }
 

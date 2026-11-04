@@ -47,9 +47,12 @@ def _operator_shell_identity(monkeypatch):
     that harness while any of its markers survives. A test that wants an agent
     session sets the markers it needs itself.
     """
-    from fno.harness_identity import AMBIENT_IDENTITY_ENV
+    import tomllib
 
-    for name in AMBIENT_IDENTITY_ENV:
+    vocab = Path(__file__).resolve().parents[2] / "crates/fno-agents/src/ambient_vocab.toml"
+    markers = tomllib.loads(vocab.read_text(encoding="utf-8"))["identity_markers"]
+
+    for name in markers:
         monkeypatch.delenv(name, raising=False)
     # A mux worker pane exports the claude theme; a bg_create test must not
     # inherit a settings file from the shell that ran pytest.
@@ -733,28 +736,6 @@ def _config_search_ceiling(tmp_path_factory: pytest.TempPathFactory):
     )
     yield
     os.environ["FNO_CONFIG_SEARCH_ROOT"] = previous
-
-
-@pytest.fixture(autouse=True)
-def _reset_config_state() -> None:
-    """Reset the config state a keyed cache cannot key on.
-
-    The settings and repo-root caches key on their declaration, so entries
-    cannot leak between tests and there is nothing to clear. But
-    ``config._loaded_from`` is a module global holding only the most recent
-    load, and paths.config_file() reports it (Finding 3), so reset it or the
-    first config_file() read in a test reports the previous test's settings
-    file. The merged-global-config cache read_global_block serves from keeps
-    the same reset for the same reason.
-    """
-    from fno import config as _cfg
-    _cfg._loaded_from = None  # reset loaded_from tracker (Finding 3)
-    try:
-        from fno.config_io import clear_global_merged_cache
-
-        clear_global_merged_cache()
-    except Exception:
-        pass
 
 
 @pytest.fixture

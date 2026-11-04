@@ -78,18 +78,20 @@ REGISTRY="$tmp/home/.fno/agents/registry.json"
 fail() { echo "FAIL: $1"; exit 1; }
 
 # The registry is a table in graph.db and registry.json is only its migration
-# fence, so every read and reset goes through the registry-commit door.
+# fence, so every read and reset goes through the registry-commit door: one
+# JSON payload on stdin, one JSON answer on stdout.
 reg_rows() {
-  "$VENV_PY" -c 'import json, sys; from pathlib import Path
-from fno.registry_door import read_registry_rows
-print(json.dumps(read_registry_rows(Path(sys.argv[1]))))' "${1:-$REGISTRY}"
+  printf '{"path": "%s", "op": "read"}' "${1:-$REGISTRY}" \
+    | "$BIN" registry-commit | jq '.document.agents'
 }
 reg_clear() {
-  "$VENV_PY" -c 'import sys; from pathlib import Path
-from fno.registry_door import commit_registry_document, read_registry_document
-path = Path(sys.argv[1])
-document, revision = read_registry_document(path)
-commit_registry_document(path, {"schema_version": document["schema_version"], "agents": [], "replace": True}, revision)' "${1:-$REGISTRY}" \
+  local payload
+  payload="$(printf '{"path": "%s", "op": "read"}' "${1:-$REGISTRY}" \
+    | "$BIN" registry-commit \
+    | jq -c --arg p "${1:-$REGISTRY}" \
+      '{path: $p, schema_version: .document.schema_version, agents: [], replace: true, revision: .revision}')" \
+    || fail "could not read the registry table"
+  printf '%s' "$payload" | "$BIN" registry-commit > /dev/null \
     || fail "could not reset the registry table"
 }
 

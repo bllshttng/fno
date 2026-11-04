@@ -1014,6 +1014,28 @@
     "title": "GateBlock",
     "type": "object"
    },
+   "GithubBlock": {
+    "description": "GitHub App identity (nested under ``config.github``).",
+    "properties": {
+     "app_id": {
+      "default": "",
+      "title": "App Id",
+      "type": "string"
+     },
+     "app_installation_id": {
+      "default": "",
+      "title": "App Installation Id",
+      "type": "string"
+     },
+     "app_key_path": {
+      "default": "~/.fno/secrets/github-app.pem",
+      "title": "App Key Path",
+      "type": "string"
+     }
+    },
+    "title": "GithubBlock",
+    "type": "object"
+   },
    "GroomBlock": {
     "description": "Daily backlog-grooming pass settings (nested under 'config.groom').\n\nwave 2: `fno backlog groom` (`spawn_worker` in\n   crates/fno-agents/src/backlog/groom.rs) previously spawned with no enable key at all, so it\n   could not be turned off. Default ``True`` matches the spawner's CURRENT\n   effective behavior (it always ran) - shipping this gate changes nothing\n   for an existing user until they explicitly disable it.\n   ",
     "properties": {
@@ -1257,6 +1279,28 @@
      }
     },
     "title": "JoinBlock",
+    "type": "object"
+   },
+   "JudgeBlock": {
+    "description": "Question judge dispatch (nested under ``config.questions.judge``).",
+    "properties": {
+     "batch": {
+      "default": 10,
+      "title": "Batch",
+      "type": "integer"
+     },
+     "enabled": {
+      "default": false,
+      "title": "Enabled",
+      "type": "boolean"
+     },
+     "model": {
+      "default": "sonnet",
+      "title": "Model",
+      "type": "string"
+     }
+    },
+    "title": "JudgeBlock",
     "type": "object"
    },
    "KeepGoingBlock": {
@@ -2178,6 +2222,16 @@
      }
     },
     "title": "ProviderBudget",
+    "type": "object"
+   },
+   "QuestionsBlock": {
+    "description": "Question judge settings (nested under ``config.questions``).",
+    "properties": {
+     "judge": {
+      "$ref": "#/$defs/JudgeBlock"
+     }
+    },
+    "title": "QuestionsBlock",
     "type": "object"
    },
    "QuotaBlock": {
@@ -3258,7 +3312,7 @@
     "type": "object"
    },
    "TelemetryEvalEventsBlock": {
-    "description": "Eval runs as PostHog events. ``token_env`` names the env var holding the project token.",
+    "description": "Eval runs as PostHog events. ``token_env`` names the env var holding the project token; ``token_file`` names a mode-0600 file holding it, read at each beat.",
     "properties": {
      "enabled": {
       "default": false,
@@ -3273,6 +3327,11 @@
      "token_env": {
       "default": "FNO_POSTHOG_PROJECT_TOKEN",
       "title": "Token Env",
+      "type": "string"
+     },
+     "token_file": {
+      "default": "~/.fno/secrets/posthog-project-token",
+      "title": "Token File",
       "type": "string"
      }
     },
@@ -3604,6 +3663,13 @@
     "title": "Plans Filename",
     "type": "string"
    },
+   "repo_aliases": {
+    "additionalProperties": {
+     "type": "string"
+    },
+    "title": "Repo Aliases",
+    "type": "object"
+   },
    "branch": {
     "$ref": "#/$defs/BranchBlock"
    },
@@ -3793,6 +3859,12 @@
    "accounts": {
     "$ref": "#/$defs/AccountsBlock"
    },
+   "github": {
+    "$ref": "#/$defs/GithubBlock"
+   },
+   "questions": {
+    "$ref": "#/$defs/QuestionsBlock"
+   },
    "schema_version": {
     "default": 1,
     "title": "Schema Version",
@@ -3829,6 +3901,15 @@
    "question": "",
    "default_source": "default",
    "doc": "Plan/design-doc filename template: strftime codes plus {slug} and {node} placeholders; must render to a bare *.md name."
+  },
+  {
+   "path": "repo_aliases",
+   "type": "dict[str, str]",
+   "default": {},
+   "wizard": "advanced",
+   "question": "",
+   "default_source": "default",
+   "doc": "Rename map `old = \"new\"` between owner/repo slugs. A PR url recorded under a repo's former name binds in the merge gate and heals in the sweep leg; GitHub's own redirect (GET /repos/old answers the new full_name) seeds the same map through the gh-facts cache, so the config row is the offline override, never a requirement. Specimen: `bllshttng/fno = \"fnodotdev/fno\"`."
   },
   {
    "path": "branch.prefix",
@@ -4423,6 +4504,15 @@
    "question": "",
    "default_source": "",
    "doc": "Env var holding the PostHog project token."
+  },
+  {
+   "path": "telemetry.eval_events.token_file",
+   "type": "str",
+   "default": "~/.fno/secrets/posthog-project-token",
+   "wizard": "advanced",
+   "question": "",
+   "default_source": "",
+   "doc": "Path to the PostHog project token file (mode 0600); token_env wins when set; a leading ~ expands against $HOME."
   },
   {
    "path": "attention.enabled",
@@ -6902,6 +6992,60 @@
    "question": "",
    "default_source": "",
    "doc": "Provider-rotation failover: {max_swaps_per_phase}."
+  },
+  {
+   "path": "github.app_id",
+   "type": "str",
+   "default": "",
+   "doc": "GitHub App id; with github.app_installation_id it arms App-installation token minting for GitHub API calls.",
+   "wizard": "never",
+   "question": "",
+   "default_source": ""
+  },
+  {
+   "path": "github.app_installation_id",
+   "type": "str",
+   "default": "",
+   "doc": "GitHub App installation id; required beside github.app_id before the App path mints tokens.",
+   "wizard": "never",
+   "question": "",
+   "default_source": ""
+  },
+  {
+   "path": "github.app_key_path",
+   "type": "str",
+   "default": "~/.fno/secrets/github-app.pem",
+   "doc": "Path to the GitHub App private key PEM (default ~/.fno/secrets/github-app.pem, mode 0600); a leading ~ expands against $HOME.",
+   "wizard": "never",
+   "question": "",
+   "default_source": ""
+  },
+  {
+   "path": "questions.judge.batch",
+   "type": "int",
+   "default": 10,
+   "doc": "Max questions the judge takes per run.",
+   "wizard": "never",
+   "question": "",
+   "default_source": ""
+  },
+  {
+   "path": "questions.judge.enabled",
+   "type": "bool",
+   "default": false,
+   "doc": "Arm the question judge: when true, judge runs read the question board and decide open questions against the law record.",
+   "wizard": "never",
+   "question": "",
+   "default_source": ""
+  },
+  {
+   "path": "questions.judge.model",
+   "type": "str",
+   "default": "sonnet",
+   "doc": "Model the judge dispatches verdicts with.",
+   "wizard": "never",
+   "question": "",
+   "default_source": ""
   },
   {
    "path": "schema_version",

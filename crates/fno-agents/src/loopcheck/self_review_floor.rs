@@ -17,14 +17,12 @@ pub(super) const REVIEW_ORDER: &str = "close every finding, commit and push firs
      review and attest at the final head (`bash skills/review/scripts/emit-attestation.sh \
      <reviewer>` is recovery if a confirmed clean native review hook failed)";
 
-/// The non-interactive invocation that satisfies each local reviewer, mirroring
-/// the `invocation` field of `_RESOLVABLE_REVIEWERS` in
-/// `cli/src/fno/config/__init__.py`. A block message that names a reviewer
-/// without naming how to run it is only half a remedy.
+/// The non-interactive invocation that satisfies each local reviewer. A block
+/// message that names a reviewer without naming how to run it is only half a
+/// remedy.
 ///
-/// Two languages, one table: kept honest by
-/// `scripts/ci/check-reviewer-descriptor-parity.sh`, not by a comment asking a
-/// human to remember.
+/// This table is the sole owner of the invocations since the Python
+/// descriptor table retired with the config family.
 /// The fourth element encodes per-harness command overrides as
 /// `"harness=command;harness=command"`, empty when the scalar invocation is the only
 /// rendering - which is now every row: the machinery recommendation is the
@@ -37,8 +35,7 @@ pub(super) const REVIEW_ORDER: &str = "close every finding, commit and push firs
 /// is refused at init by the native capability door (`review-level
 /// capability`) with the same replacement in the refusal. No `--fix` in any
 /// hint: a fix pass moves HEAD
-/// and voids the attestation the round just earned. Kept honest against the
-/// Python descriptor table by check-reviewer-descriptor-parity.sh.
+/// and voids the attestation the round just earned.
 pub(super) const REVIEWER_INVOCATIONS: &[(&str, &str, bool, &str)] = &[
     ("sigma", "/fno:review", false, ""),
     ("code-review", "/fno:review", false, ""),
@@ -47,11 +44,9 @@ pub(super) const REVIEWER_INVOCATIONS: &[(&str, &str, bool, &str)] = &[
 
 /// The `requires` capability each built-in local reviewer demands, beside
 /// REVIEWER_INVOCATIONS so the descriptor union the review gate builds
-/// reads both columns under the same parity guard. Source of truth: the
-/// `requires` fields of `_RESOLVABLE_REVIEWERS` in
-/// `cli/src/fno/config/__init__.py`; kept honest by
-/// `scripts/ci/check-reviewer-descriptor-parity.sh`, not by a comment asking
-/// a human to remember. `pub(crate)`: the review gate's descriptor builder
+/// reads both columns under the same guard. This table is the sole owner of
+/// the `requires` fields since the Python descriptor table retired with the
+/// config family. `pub(crate)`: the review gate's descriptor builder
 /// iterates it as the built-in roster.
 pub(crate) const REVIEWER_BUILTIN_REQUIRES: &[(&str, &str)] = &[
     ("sigma", "retired"),
@@ -59,8 +54,9 @@ pub(crate) const REVIEWER_BUILTIN_REQUIRES: &[(&str, &str)] = &[
     ("declare", "none"),
 ];
 
-/// `(invocation, is_self_cert, per_harness)`. The flag mirrors the Python
-/// descriptor's `asserts` field: a surface that names `declare` without saying
+/// `(invocation, is_self_cert, per_harness)`. The self-cert flag marks the
+/// reviewer a surface may cite to clear a gate without an independent pass:
+/// a surface that names `declare` without saying
 /// it asserts nothing invites an operator to clear a review gate with no review
 /// behind it. `pub(crate)`: the review-capability renderer reads the same
 /// row for the `code-review` base spelling.

@@ -64,11 +64,13 @@ const SUPERVISOR_WIDE_FNO_KEYS: &[&str] = &[
     "FNO_EVENTS_PATH",
     "FNO_FOOTNOTE_BIN",
     "FNO_FRONT_DOOR",
+    "FNO_GITHUB_APP",
     "FNO_GH_BUDGET_TEST_ARMED",
     "FNO_GH_CORE_RESERVE",
     "FNO_GH_FACTS_DIR",
     "FNO_GH_PROXY_DEPTH",
     "FNO_GH_PROXY_DIR",
+    "FNO_GITHUB_APP",
     "FNO_GLOBAL_SETTINGS_PATH",
     "FNO_HOME",
     "FNO_KEEP_GOING",
@@ -465,7 +467,7 @@ pub fn guard_birth_for_plan(env: &std::collections::BTreeMap<String, String>) {
 }
 
 /// The seed provenance group, by name. The Rust side never imports the Python
-/// tuple; the names are the wire contract (`SEED_PROVENANCE_KEYS` in cli/src/fno/harness_identity.py).
+/// tuple; the names are the wire contract (`SEED_PROVENANCE_KEYS` in `pane_spawn/env_wrap.rs`).
 pub(crate) const SEED_PROVENANCE_KEYS: [&str; 6] = [
     "FNO_SEED_PROV_SEED_B64",
     "FNO_SEED_PROV_FROM",

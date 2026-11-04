@@ -155,6 +155,7 @@ pub mod codex_inject;
 /// [`CodexRoute`] in its signature.
 pub mod codex_posture;
 pub mod codex_route;
+pub mod codex_skills;
 pub mod codex_store;
 pub mod codex_thread;
 mod codex_thread_entry;
@@ -243,7 +244,6 @@ pub mod footprint_cause;
 pub mod friction;
 pub mod gate_probes;
 pub mod gc;
-pub mod gc_adopt;
 pub mod gc_claude_stop;
 pub mod gc_inventory;
 pub mod gc_native;
@@ -261,6 +261,7 @@ pub mod gh_spend;
 pub mod git_paths;
 #[cfg(test)]
 mod git_test_helpers;
+pub mod github_app;
 pub mod glob;
 pub mod golden_drafter;
 pub mod graph_get;
@@ -432,6 +433,7 @@ pub mod notify_dispatch;
 pub mod nudge;
 pub mod numbers;
 pub mod observer;
+pub mod occupancy_classify;
 pub mod occupancy_login;
 pub mod opencode_ask;
 pub mod opencode_config;
@@ -530,6 +532,7 @@ pub mod quiet_retire;
 pub mod reader_cost;
 pub mod readiness;
 pub mod real_session;
+pub(crate) mod reap_evidence;
 pub mod reap_release;
 pub mod reap_render;
 pub mod receipt;
@@ -758,6 +761,7 @@ pub mod watch;
 pub mod watch_expiry;
 pub mod watchdog;
 pub mod wave;
+pub mod wave_ready;
 pub mod whoami;
 pub mod worked_nodes;
 pub mod worker_wake;
@@ -1171,13 +1175,11 @@ mod tests {
     fn known_event_kinds_documented_in_schema_yaml() {
         use std::collections::BTreeSet;
 
-        let Some(root) = repo_root_for_test() else {
-            return;
-        };
-        let schema_path = root.join("cli/src/fno/events/schema.yaml");
+        let schema_path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/event_store/schema.yaml");
         if !schema_path.is_file() {
-            // The crates.io tarball case, and only that case: no `cli/` tree
-            // to read. A parse failure below is NOT swallowed the same way.
+            // The crates.io tarball case cannot trigger: the schema ships in
+            // the manifest tree now. A parse failure below is NOT swallowed.
             return;
         }
         let text = std::fs::read_to_string(&schema_path).expect("read schema.yaml");
@@ -1197,29 +1199,10 @@ mod tests {
             .collect();
         assert!(
             missing.is_empty(),
-            "KNOWN_EVENT_KINDS entries missing from cli/src/fno/events/schema.yaml: {}\n\
+            "KNOWN_EVENT_KINDS entries missing from src/event_store/schema.yaml: {}\n\
              Add an event_types entry for each, or drop the kind from the registry.",
             missing.join(", ")
         );
-    }
-
-    /// Repo root for a test that reads across the tree, or `None` off a checkout.
-    fn repo_root_for_test() -> Option<std::path::PathBuf> {
-        let out = std::process::Command::new("git")
-            .args(["rev-parse", "--show-toplevel"])
-            .current_dir(env!("CARGO_MANIFEST_DIR"))
-            .output()
-            .ok()?;
-        if !out.status.success() {
-            return None;
-        }
-        let top = String::from_utf8(out.stdout).ok()?;
-        let top = top.trim();
-        if top.is_empty() {
-            None
-        } else {
-            Some(std::path::PathBuf::from(top))
-        }
     }
 
     #[test]
@@ -1525,10 +1508,10 @@ mod tests {
             }
         }
 
-        // The allowed files: production binary repair (install_verify), six
+        // The allowed files: production binary repair (install_verify), seven
         // production dir modes (paths, fleet_incident, chats, the
         // session-state pin dir, the mcp sidecar's socket-parent tightening,
-        // the daemon's sandbox socket dir),
+        // the daemon's sandbox socket dir, the saved-sessions dir),
         // two dir-mode
         // restores in tests (claims, operator_turns); the bin test target
         // cannot see a cfg(test) lib fn (client_tests); and the plan writer's
@@ -1546,6 +1529,7 @@ mod tests {
             ("chats.rs", 1),
             ("mcp/sidecar.rs", 1),
             ("daemon/sandbox_host.rs", 1),
+            ("hook/save_session.rs", 1),
         ];
         let allowed_counts: std::collections::HashMap<&str, usize> =
             ALLOWED.iter().copied().collect();
@@ -1991,6 +1975,9 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // user's look clears (look_hold.rs).
     "look_hold_cancel",
     "look_hold_release",
+    // The reruns a lifted test hold posts on open PRs left with only
+    // cancelled runs (test_hold.rs).
+    "test_hold_rerun",
     // A wait or cadence red-cancel of a head's runs in flight
     // (pr_status/wait.rs), with the failing checks that caused it.
     "ci_wait_cancel",
@@ -2201,7 +2188,7 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     "style_refusal",
     // NOTE: the a2a status-breakpoint kinds (task_started/task_done/blocked/
     // run_summary) are NOT registered here. They are Python-defined in
-    // cli/src/fno/events/schema.yaml; the parity gate partitions names (a kind
+    // src/event_store/schema.yaml; the parity gate partitions names (a kind
     // in both the Python schema and this Rust registry is a COLLISION). finalize
     // emits run_summary via a custom envelope writer (not the registered
     // `.emit()` path), so the production-emit-kind guard does not require it.
@@ -2346,7 +2333,7 @@ pub fn emit_schema_json() -> serde_json::Value {
             "additionalProperties": false
         },
         "event_kinds": KNOWN_EVENT_KINDS,
-        // Generated from cli/src/fno/events/schema.yaml's limits block by
+        // Generated from src/event_store/schema.yaml's limits block by
         // build.rs. Emitting it makes the value the compiled binary
         // actually carries observable, so a regenerated file the code never
         // reads cannot pass for a fix. The parity gate diffs only `envelope`,

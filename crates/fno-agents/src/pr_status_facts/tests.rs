@@ -51,6 +51,22 @@ fn block_rows() {
     );
     assert_eq!(out["blockers"], json!(["not_mergeable_conflicting"]));
 
+    // A stale refs/pull/N/head mimics the conflict: the remedy replaces it.
+    let out = merge_blocker(
+        &probes,
+        &json!({
+            "merge_state": "clean",
+            "mergeable": "CONFLICTING",
+            "cwd": "/repo",
+            "pull_head_stale": {"ref_sha": "aaa", "head_sha": "bbb"},
+        }),
+    );
+    assert_eq!(out["blockers"], json!(["stale_pull_head_ref"]));
+    assert!(out["source"]
+        .as_str()
+        .map(|s| s.contains("close and reopen"))
+        .unwrap_or(false));
+
     // Still computing: fail closed, exactly like the pre-port conjunction.
     let out = merge_blocker(
         &probes,

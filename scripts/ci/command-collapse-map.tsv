@@ -181,7 +181,6 @@ config build-dir	T1	config build-dir	0
 config doctor	T1	config doctor	20
 config get	KEEP	config get	69	deliberate readability slack for a high-traffic distinct operation
 config history	T1	config history	1
-config paths	T1	config paths	36
 config project	T1	config project	9
 config rm	T1	config rm	0
 config route	T1	config route	16
@@ -226,9 +225,6 @@ do pr verify	T1	do pr verify	13
 do pr wait	T1	do pr wait	0
 do pr watch	T1	do pr watch	3
 do research	T1	do research	18
-do resume receipt show	T1	do resume receipt show	1
-do resume receipt validate	T1	do resume receipt validate	3
-do resume receipt write	T1	do resume receipt write	2
 do review classify	T1	do review classify	8
 do review resolve-level	T1	do review resolve-level	10
 do think dispatch	T1	do think dispatch	4

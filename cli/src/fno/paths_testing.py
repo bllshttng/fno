@@ -17,9 +17,9 @@ def use_tmpdir(monkeypatch: object, tmp_path: Path) -> Path:
     """Point state_dir and settings file at tmp_path.
 
     Writes a minimal settings.yaml so paths.X() resolves cleanly, then sets
-    ``FNO_CONFIG`` at the tmp file. The settings cache keys on its declaration
-    (``fno.config._settings_key``), so every reader resolves the tmp root with
-    no function swap, including one that bound ``load_settings`` at import.
+    ``FNO_CONFIG`` at the tmp file. The settings receipt cache keys on its
+    declaration (``fno.paths._settings_key``), so every reader resolves the
+    tmp root with no function swap.
 
     Returns the path to the tmp settings file for further customization
     (caller can overwrite it before calling paths.X()).
@@ -54,7 +54,6 @@ def _assert_state_landed(tmp_state: Path) -> None:
     Silence was the whole defect, so this is a receipt, not a comment.
     """
     from fno import paths
-    from fno.config import _load_settings_at
 
     shown, escaped = {}, False
     for name in ("state_dir", "graph_json"):
@@ -64,10 +63,10 @@ def _assert_state_landed(tmp_state: Path) -> None:
             escaped |= p != tmp_state and tmp_state not in p.parents
         except Exception as exc:  # a refused fence is a failed receipt too
             shown[name], escaped = f"<{type(exc).__name__}: {exc}>", True
-    # The probe WARMS the cache, whose key is the declaration and not the file
-    # content, so a caller that overwrites the settings file would read the
-    # warm minimal copy instead.
-    _load_settings_at.cache_clear()
+    # The probe WARMS the receipt cache, whose key is the declaration, so a
+    # caller that overwrites the settings file would read the warm minimal
+    # copy instead; drop the cache so later reads re-spawn the door.
+    paths._settings_at.cache_clear()
     if escaped:
         raise RuntimeError(
             "use_tmpdir: resolved state escaped the fixture root. "

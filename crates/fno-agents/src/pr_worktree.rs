@@ -59,7 +59,7 @@ pub fn resolve(cwd: &Path, branch: &str) -> Result<PathBuf, String> {
         .ok_or_else(|| format!("no local worktree on PR branch {branch}"))
 }
 
-fn resolve_pr_with_timeout(
+pub(crate) fn resolve_pr_with_timeout(
     cwd: &Path,
     pr: &str,
     gh_bin: &str,

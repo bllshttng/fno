@@ -40,7 +40,7 @@ fn a_live_working_report_blocks_the_tick_retirement() {
             })
             .collect()
     };
-    let summary = run_probe_unread_sweep(&home, &emitter, &age_seam);
+    let summary = run_probe_unread_sweep(&home, &emitter, &age_seam, false, None);
     assert_eq!(summary.retired.len(), 0, "{:?}", summary.retired);
     let (id, detail) = summary
         .kept_probe_unread
@@ -88,7 +88,7 @@ fn an_unanswered_re_read_after_a_new_turn_holds_by_name() {
             })
             .collect()
     };
-    let summary = run_probe_unread_sweep(&home, &emitter, &age_seam);
+    let summary = run_probe_unread_sweep(&home, &emitter, &age_seam, false, None);
     assert_eq!(summary.retired.len(), 0, "{:?}", summary.retired);
     let (id, detail) = summary
         .kept_probe_unread
@@ -107,6 +107,92 @@ fn an_unanswered_re_read_after_a_new_turn_holds_by_name() {
         .expect("a hold rides the bucket");
     assert_eq!(hold.reason, "probe unread");
     assert!(summary.kept_active.is_empty(), "{:?}", summary.kept_active);
+}
+
+/// The 2026-11-04 specimen: a hand-started row with an empty created_at, an
+/// exit stamp, no pid, no inside-leg report and no transcript the probe can
+/// read. Past one day on its exit clock nothing can lift the hold, so the
+/// live sweep retires it; a fresh exit still holds by name. The dry run makes
+/// the same re-read, so it predicts the live split instead of promising both.
+#[test]
+fn a_row_no_witness_can_lift_retires_past_a_day_and_the_dry_run_agrees() {
+    let (dir, home) = staged_probe_unread_home();
+    let session = |sid: &str| {
+        json!({
+            "phase": "execute",
+            "harness": "claude",
+            "session_id": sid,
+            "started_at": "2026-09-01T00:00:00Z",
+            "ended_at": "2026-09-01T01:00:00Z",
+        })
+    };
+    stage_graph(
+        dir.path(),
+        json!([{
+            "id": "x-u1",
+            "status": "done",
+            "sessions": [session("s-u1"), session("s-u2")],
+        }]),
+    );
+    let emitter = EventEmitter::new(home.events_jsonl(), "daemon");
+    let ago = |s: i64| {
+        (chrono::Utc::now() - chrono::Duration::seconds(s))
+            .format("%Y-%m-%dT%H:%M:%SZ")
+            .to_string()
+    };
+    crate::state::update_registry(&home.registry_json(), |r| {
+        let template = r.entries[0].clone();
+        r.entries.clear();
+        for (name, sid, exited) in [
+            ("t-old", "s-u1", ago(2 * 86_400)),
+            ("t-new", "s-u2", ago(3 * 3_600)),
+        ] {
+            let mut e = template.clone();
+            e.name = name.into();
+            e.short_id = name.into();
+            e.harness_session_id = Some(sid.into());
+            e.created_at = String::new();
+            e.inside_leg = None;
+            e.status = crate::AgentStatus::Exited;
+            // The live specimens carry their last report stamp; it is the
+            // classifier's clock when no transcript answers.
+            e.last_report_at = Some(exited.clone());
+            e.exited_at = Some(exited);
+            r.entries.push(e);
+        }
+    })
+    .unwrap();
+    let unread = |entries: &[&state::RegistryEntry]| {
+        entries
+            .iter()
+            .map(|e| (crate::gc::row_handle(e), None))
+            .collect()
+    };
+    let held = |s: &GcSummary| -> Vec<String> {
+        s.kept_probe_unread
+            .iter()
+            .map(|(id, _)| id.clone())
+            .collect()
+    };
+    let ids =
+        |s: &GcSummary| -> Vec<String> { s.retired.iter().map(|(id, _)| id.clone()).collect() };
+    // Unpreviewed, the rehearsal names the surface gate it cannot apply.
+    let blind = run_probe_unread_sweep(&home, &emitter, &unread, true, None);
+    assert!(ids(&blind).is_empty(), "{blind:?}");
+    let clear = |_: &state::RegistryEntry| true;
+    let dry = run_probe_unread_sweep(&home, &emitter, &unread, true, Some(&clear));
+    assert_eq!(held(&dry), vec!["t-new".to_string()], "{dry:?}");
+    assert!(dry.dry_run_unverified.is_empty(), "{dry:?}");
+    let live = run_probe_unread_sweep(&home, &emitter, &unread, false, None);
+    assert_eq!(held(&live), vec!["t-new".to_string()], "{live:?}");
+    assert_eq!(ids(&live), vec!["t-old".to_string()], "{:?}", live.retired);
+    assert_eq!(
+        ids(&dry),
+        ids(&live),
+        "the previewed dry run predicts the live sweep"
+    );
+    let hold = live.holds.iter().find(|h| h.id == "t-new").expect("hold");
+    assert_eq!(hold.age_basis, "row exited");
 }
 
 /// AC4-EDGE: a `bp-` row whose planning set is EMPTY retires through
@@ -161,9 +247,7 @@ fn a_bp_row_with_an_empty_planning_set_retires_on_the_session_basis() {
     );
     assert_eq!(summary.retired.len(), 1, "{:?}", summary.retired);
     assert!(
-        summary.retired[0]
-            .1
-            .contains("node x-a75f is idea, not active work"),
+        summary.retired[0].1.starts_with("node x-a75f idea; idle "),
         "{:?}",
         summary.retired[0].1
     );
@@ -222,12 +306,14 @@ fn run_probe_unread_sweep(
     home: &AgentsHome,
     emitter: &EventEmitter,
     age_seam: &dyn Fn(&[&state::RegistryEntry]) -> std::collections::HashMap<String, Option<i64>>,
+    dry_run: bool,
+    surface_preview: Option<&dyn Fn(&state::RegistryEntry) -> bool>,
 ) -> GcSummary {
-    gc_sweep::run(
+    gc_sweep::run_with_release(
         home,
         emitter,
         900,
-        false,
+        dry_run,
         7,
         &crate::gc_sweep::read_graph_entries,
         &|_| Some(vec![]),
@@ -238,5 +324,8 @@ fn run_probe_unread_sweep(
         &no_agents,
         &|_| (Some(true), Some(true)),
         &|_| None,
+        false,
+        None,
+        surface_preview,
     )
 }
