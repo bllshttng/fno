@@ -578,14 +578,6 @@ fn run_child(root: &Path, spec: &Case) -> Golden {
     }
 }
 
-/// The capture-mode oracle: the Python leg through the driver's `--case`
-/// door. The driver owns every fixture and env pin, so the caller passes a
-/// minimal env; the driver normalizes its own paths to `<TMP>`.
-/// Repo `cli/src` so Python can import the real `fno` package.
-fn python_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../cli/src")
-}
-
 #[test]
 fn review_capability_golden_parity() {
     let root =

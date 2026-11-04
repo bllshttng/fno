@@ -24,19 +24,9 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use common::{assert_golden, make_script, slug, Golden};
+use common::{make_script, slug, Golden};
 
 mod common;
-
-/// Repo `cli/src` so Python can import the real `fno` package.
-
-/// The only moving parts: the fixture root and the launchd uid in bounce
-/// messages. Both legs mint them from the same pins.
-fn masked(text: &str, dir: &Path) -> String {
-    let uid = regex::Regex::new(r"gui/\d+").unwrap();
-    let rooted = text.replace(&dir.display().to_string(), "<CASE>");
-    uid.replace_all(&rooted, "gui/<UID>").into_owned()
-}
 
 /// What the launchctl stub answers, exported as `FNO_STUB_*` env so both
 /// legs' subprocesses see the same fake.
@@ -65,8 +55,6 @@ impl Default for LaunchCtl {
 struct Case {
     label: &'static str,
     mode: Mode,
-    interval: i64,
-    model: bool,
     stdin: Option<&'static str>,
     legacy: bool,
     /// Replace the LaunchAgents dir with a file: the write-failed shape.
@@ -77,7 +65,6 @@ struct Case {
 }
 
 enum Mode {
-    Install { dry_run: bool, no_activate: bool },
     Ensure,
     Uninstall { unload_only: bool },
 }
@@ -232,27 +219,6 @@ fn case_args(case: &Case) -> Vec<String> {
             }
             argv
         }
-        Mode::Install {
-            dry_run,
-            no_activate,
-        } => {
-            let mut argv: Vec<String> = Vec::new();
-            if *dry_run {
-                argv.push("--dry-run".to_string());
-            }
-            if case.interval > 0 {
-                argv.push("--interval".to_string());
-                argv.push(case.interval.to_string());
-            }
-            if case.model {
-                argv.push("--model".to_string());
-                argv.push("zz".to_string());
-            }
-            if *no_activate {
-                argv.push("--no-activate".to_string());
-            }
-            argv
-        }
         Mode::Ensure => vec!["--ensure".to_string()],
     }
 }
@@ -314,8 +280,6 @@ fn ensure_retires_the_legacy_plist_from_disk() {
     let case = Case {
         label: "ensure legacy disk check",
         mode: Mode::Ensure,
-        interval: 0,
-        model: false,
         stdin: None,
         legacy: true,
         agents_dir_is_file: false,
@@ -343,8 +307,6 @@ fn uninstall_removes_the_plist_from_disk() {
     let case = Case {
         label: "uninstall disk check",
         mode: Mode::Uninstall { unload_only: false },
-        interval: 0,
-        model: false,
         stdin: None,
         legacy: false,
         agents_dir_is_file: false,
@@ -382,8 +344,6 @@ fn unload_only_unloads_but_keeps_the_plist() {
     let case = Case {
         label: "unload only disk check",
         mode: Mode::Uninstall { unload_only: true },
-        interval: 0,
-        model: false,
         stdin: None,
         legacy: false,
         agents_dir_is_file: false,
@@ -414,8 +374,6 @@ fn uninstall_reports_a_failed_removal() {
     let case = Case {
         label: "uninstall failed removal check",
         mode: Mode::Uninstall { unload_only: false },
-        interval: 0,
-        model: false,
         stdin: None,
         legacy: false,
         agents_dir_is_file: false,
