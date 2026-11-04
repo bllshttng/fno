@@ -19,6 +19,19 @@ FAILURES=0
 # Shared fixtures
 # -------------------------------------------------------------------
 
+# The pass reads PR state through `fno do pr info` (REST), not `gh pr view`.
+make_stub_fno() {
+    local stub_dir="$1" pr_state="$2" merged_at_json="$3"
+    cat > "$stub_dir/fno" <<STUB
+#!/usr/bin/env bash
+case "\$*" in
+    "do pr info "*) printf '%s' '{"state":"$pr_state","merged_at":$merged_at_json}' ;;
+    *) echo "stub fno: unmatched args: \$*" >&2; exit 1 ;;
+esac
+STUB
+    chmod +x "$stub_dir/fno"
+}
+
 make_stub_gh() {
     local stub_dir="$1"
     local merged_at="${2:-2026-05-05T01:00:00Z}"
@@ -59,6 +72,7 @@ case "\$*" in
 esac
 STUB
     chmod +x "$stub_dir/gh"
+    make_stub_fno "$stub_dir" "$pr_state" "$merged_at_json"
 }
 
 make_stub_gh_no_late_signal() {
@@ -91,6 +105,7 @@ case "\$*" in
 esac
 STUB
     chmod +x "$stub_dir/gh"
+    make_stub_fno "$stub_dir" "$pr_state" "\"$merged_at\""
 }
 
 # -------------------------------------------------------------------
