@@ -690,7 +690,7 @@ pub fn render_report(report: &Value) -> String {
     lines.push(if armed {
         "  arm: on (questions.judge.enabled = true).".to_string()
     } else {
-        "  arm: off. Turn it on in config.toml: [questions.judge] enabled = true".to_string()
+        "  arm: off. Run: fno config set -g questions.judge.enabled=true".to_string()
     });
     lines.join("\n")
 }
