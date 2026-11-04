@@ -34,6 +34,8 @@ pub(super) struct Detail {
     pub(super) scroll: usize,
     /// `a` picked "agents decide": Enter hands the question to the team.
     pub(super) delegate: bool,
+    /// The decision that answered this question, when the index holds one.
+    pub(super) decision: Option<String>,
     /// The first `X` armed archive-all; the second sends it.
     pub(super) archive_armed: bool,
     /// The screenshots the ask attached.
@@ -110,6 +112,7 @@ impl Detail {
             notice: None,
             scroll: 0,
             delegate: false,
+            decision: None,
             archive_armed: false,
             shots,
             pixels,
@@ -187,6 +190,9 @@ fn question_page(
         s.push_str(&format!(
             "projection unavailable: {reason}; this page shows what the index holds\n\n"
         ));
+    }
+    if let Some(decision) = d.decision.as_deref() {
+        s.push_str(&format!("decision: {decision}\n\n"));
     }
     let asker = item.asker.as_ref();
     let origin = item.origin.as_ref();
@@ -1253,8 +1259,10 @@ impl View {
         let merged = self.questions_merged();
         let fold = merged.as_ref().unwrap_or(&empty);
         self.question_detail = Detail::open(fold, id);
+        let decision = super::bell::decision_for(self, id);
         if let Some(d) = &mut self.question_detail {
             d.degraded = self.questions_degraded_reason.clone();
+            d.decision = decision;
         }
     }
 

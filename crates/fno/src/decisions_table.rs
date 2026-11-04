@@ -20,6 +20,7 @@ pub enum Key {
     Retract,
     Overrule,
     Review,
+    Goto,
     Quit,
     Other,
 }
@@ -35,6 +36,7 @@ pub fn parse_key(b: &[u8]) -> Key {
         b"r" => Key::Retract,
         b"o" => Key::Overrule,
         b"v" => Key::Review,
+        b"g" => Key::Goto,
         b"q" | b"\x03" | b"\x04" => Key::Quit,
         _ => Key::Other,
     }
@@ -139,7 +141,7 @@ pub fn render(t: &Table, w: usize, h: usize) -> Vec<String> {
         Some(q) => format!("\x1b[2mquestion: {}\x1b[0m", fit(q, w.saturating_sub(10))),
         None => String::new(),
     });
-    out.push("\x1b[2mj/k move  l lane  s state  a author  u audit queue  r retract  o overrule  v reviewed  q quit\x1b[0m".to_string());
+    out.push("\x1b[2mj/k move  l lane  s state  a author  u audit queue  r retract  o overrule  v reviewed  g question  q quit\x1b[0m".to_string());
     out
 }
 

@@ -129,6 +129,27 @@ impl Filter {
     }
 }
 
+/// What the alerts panel and the question page need from the decision index:
+/// the audit queue size, and for each answered question the decision text.
+pub fn bell_facts() -> serde_json::Value {
+    let reviewed = load_reviewed(&crate::decisions_table::store_path());
+    let rows = load().unwrap_or_default();
+    let f = Filter {
+        audit_only: true,
+        ..Filter::default()
+    };
+    let by_question: serde_json::Map<String, serde_json::Value> = rows
+        .iter()
+        .filter(|r| r.lifecycle == "live")
+        .filter_map(|r| {
+            let q = r.question_id.as_deref()?;
+            let date = r.ts.get(..10).unwrap_or(&r.ts);
+            Some((q.to_string(), format!("{} ({date})", r.decision).into()))
+        })
+        .collect();
+    serde_json::json!({"audit": visible(&rows, &f, &reviewed).len(), "by_question": by_question})
+}
+
 /// The rows a filter admits, newest first.
 pub fn visible<'a>(
     rows: &'a [DecisionRow],

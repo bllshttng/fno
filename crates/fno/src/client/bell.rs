@@ -47,6 +47,8 @@ enum Row {
     Header(String),
     Question(String),
     Clear(usize),
+    /// Decisions with no recorded author and no review mark; a tap opens the audit queue.
+    Audit(usize),
     Announcement(String),
     Info(String),
 }
@@ -56,6 +58,7 @@ pub(super) enum Hit {
     Toggle,
     Focus,
     Clear,
+    Audit,
     Question(String),
     Tab(Tab),
 }
@@ -161,6 +164,13 @@ pub(crate) fn toggle(view: &mut View) {
 /// catches it.
 const BELL_GLYPH: char = '\u{f0f3}';
 
+/// The decision that answered `question_id`, from the last alerts read.
+pub(super) fn decision_for(view: &View, question_id: &str) -> Option<String> {
+    let facts = view.bell.projection.as_ref()?.get("decision_facts")?;
+    let text = facts.get("by_question")?.get(question_id)?;
+    text.as_str().map(str::to_string)
+}
+
 pub(crate) fn button_label(view: &View) -> String {
     let mut label = String::from(BELL_GLYPH);
     let count = ready_count(view);
@@ -234,7 +244,14 @@ pub(crate) fn maybe_kick(view: &mut View, tx: &Tx) {
     let generation = panel.generation;
     let tx = tx.clone();
     tokio::spawn(async move {
-        let _ = tx.send((generation, crate::messages_model::gather().await));
+        let mut result = crate::messages_model::gather().await;
+        if let Ok(Value::Object(map)) = &mut result {
+            let facts = tokio::task::spawn_blocking(crate::decisions_overlay::bell_facts)
+                .await
+                .unwrap_or_default();
+            map.insert("decision_facts".into(), facts);
+        }
+        let _ = tx.send((generation, result));
     });
 }
 
@@ -386,6 +403,16 @@ fn all_rows(view: &View) -> Vec<Row> {
         )));
     } else if view.questions_merged().is_none() {
         out.push(Row::Info("loading questions...".into()));
+    }
+    let audit = view
+        .bell
+        .projection
+        .as_ref()
+        .and_then(|p| p.pointer("/decision_facts/audit"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    if audit > 0 {
+        out.push(Row::Audit(audit as usize));
     }
     let mut stream: Vec<(i64, Vec<Row>)> = Vec::new();
     for q in view
@@ -583,6 +610,7 @@ pub(super) fn hit(view: &View, row: u16, col: u16) -> Option<ChromeHit> {
     match all.get(start + row as usize - 1)? {
         Row::Question(id) => Some(ChromeHit::Bell(Hit::Question(id.clone()))),
         Row::Clear(_) => Some(ChromeHit::Bell(Hit::Clear)),
+        Row::Audit(_) => Some(ChromeHit::Bell(Hit::Audit)),
         _ => Some(ChromeHit::Bell(Hit::Focus)),
     }
 }
@@ -670,6 +698,7 @@ pub(crate) fn apply_hit(view: &mut View, hit: Hit) {
             view.question_acting = true;
         }
         Hit::Clear => {}
+        Hit::Audit => super::decisions_view::open_audit(view),
         Hit::Question(id) => view.open_detail_on(&id),
     }
 }
@@ -864,6 +893,7 @@ pub(crate) fn keys(view: &mut View, bytes: &[u8]) {
                 let selected = view.bell.selected;
                 match rows(view).get(selected).cloned() {
                     Some(Row::Question(id)) => view.open_detail_on(&id),
+                    Some(Row::Audit(_)) => super::decisions_view::open_audit(view),
                     Some(Row::Clear(_)) if !view.question_acting => {
                         view.question_clear_settled = true;
                         view.question_acting = true;
@@ -981,6 +1011,11 @@ pub(crate) fn draw(view: &View, cells: &mut [Cell], rows_n: usize, cols: usize) 
                     )
                 }
                 Row::Clear(n) => (format!("Clear all {n} answered"), view.theme.brand, true),
+                Row::Audit(n) => (
+                    format!("{n} decisions have no author: open the audit queue"),
+                    view.theme.brand,
+                    true,
+                ),
                 Row::Announcement(s) => (format!("• {s}"), Color::Default, false),
                 Row::Info(s) => (s.clone(), crate::theme::dim_fg(&view.theme), false),
             };

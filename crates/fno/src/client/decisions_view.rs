@@ -34,6 +34,14 @@ pub(crate) fn open(view: &mut View) {
     super::backlog_board::set_sideline_view(view, SidelineView::Decisions);
 }
 
+/// The alerts row's tap: open the tab on the audit queue.
+pub(crate) fn open_audit(view: &mut View) {
+    open(view);
+    if let Some(b) = view.decisions_board.as_mut() {
+        b.table.apply(Key::Audit);
+    }
+}
+
 /// Paint the style codes `render` emits (reset, bold, dim, reverse) into one
 /// row of cells.
 fn paint_ansi(row: &mut [Cell], line: &str) {
@@ -120,6 +128,11 @@ pub(crate) fn keys(view: &mut View, bytes: &[u8]) {
                 let _ = mark_reviewed(&store_path(), &id);
                 b.table.reviewed.insert(id);
                 b.table.apply(Key::Other);
+            }
+        }
+        Key::Goto => {
+            if let Some(q) = b.table.selected().and_then(|r| r.question_id.clone()) {
+                view.open_detail_on(&q);
             }
         }
         Key::Retract | Key::Overrule => {
