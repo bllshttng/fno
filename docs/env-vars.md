@@ -352,6 +352,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `TASK_DO_TTL_HOURS` | rs | unclear: crates/fno-agents/src/graph_store.rs:1046 |
 | `TASK_LOCK_TTL_HOURS` | rs | unclear: cli/src/fno/graph/_constants.py:331 |
 | `TERM` | rs | Terminal type; a Rust front terminal capability check reads it. |
+| `TERM_PROGRAM` | rs | Names the user's terminal app. The macOS desk toast tells that app, so the alert wears its icon. |
 | `TMPDIR` | py+rs | Temp base (events writer); the session-state entry falls back to it for the runtime pin dir when XDG_RUNTIME_DIR is unset (session_state.rs). |
 | `USER` | rs | unclear: crates/fno-agents/src/accounts/store.rs:280 |
 | `USERNAME` | rs | unclear: crates/fno-agents/src/accounts/store.rs:280 |
