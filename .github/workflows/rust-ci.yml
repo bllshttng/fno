@@ -25,7 +25,7 @@ on:
     paths:
       - crates/**
       - schemas/**
-      - cli/src/fno/events/schema.yaml
+      - crates/fno-agents/src/event_store/schema.yaml
       - scripts/ci/preflight.sh
       - scripts/tests/stress-rust-e2e-concurrency.sh
       - cli/src/fno/config/__init__.py

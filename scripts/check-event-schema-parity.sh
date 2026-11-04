@@ -171,21 +171,42 @@ PYEOF
 }
 
 # ---------------------------------------------------------------------------
-# Step 2: Python emit-schema
+# Step 2: native schema projection
 # ---------------------------------------------------------------------------
-echo "check-event-schema-parity: running python -m fno.events --emit-schema..."
+echo "check-event-schema-parity: running the native schema projection..."
 
 if [[ -n "$TEST_PYTHON_SCHEMA" ]]; then
     PYTHON_SCHEMA_JSON="$TEST_PYTHON_SCHEMA"
 else
+    # The projection is a binary read now: the Python entry point that exec'd
+    # it deleted with the events package residue. It ran the FNO binary's
+    # `doctor event schema-projection`, so resolve the same way the deleted
+    # store_client.resolve_native_bin did: FNO_BIN first, then this
+    # checkout's own build, then PATH.
+    PROJECTION_BIN="${FNO_BIN:-}"
+    if [[ -z "$PROJECTION_BIN" ]]; then
+        for profile in debug release; do
+            candidate="$REPO_ROOT/crates/fno/target/$profile/fno"
+            if [[ -x "$candidate" ]]; then
+                PROJECTION_BIN="$candidate"
+                break
+            fi
+        done
+    fi
+    if [[ -z "$PROJECTION_BIN" ]] && command -v fno &>/dev/null; then
+        PROJECTION_BIN="$(command -v fno)"
+    fi
+    if [[ -z "$PROJECTION_BIN" ]]; then
+        echo "ERROR: no fno binary; the native schema projection cannot run" >&2
+        exit 1
+    fi
     PYTHON_STDERR_TMP="$(mktemp)"
     if ! PYTHON_SCHEMA_JSON="$(
-        cd "$REPO_ROOT"
-        with_timeout 30 "$PYTHON3" -m fno.events --emit-schema 2>"$PYTHON_STDERR_TMP"
+        with_timeout 30 "$PROJECTION_BIN" doctor event schema-projection 2>"$PYTHON_STDERR_TMP"
     )"; then
         # An empty stderr here usually means the 30s bound fired rather than the
         # emitter erroring: a SIGKILLed process writes nothing on its way out.
-        echo "ERROR: python -m fno.events --emit-schema failed (or exceeded its 30s bound)" >&2
+        echo "ERROR: the native schema projection failed (or exceeded its 30s bound)" >&2
         echo "  stderr: $(head -5 "$PYTHON_STDERR_TMP")" >&2
         rm -f "$PYTHON_STDERR_TMP"
         exit 1
@@ -193,11 +214,11 @@ else
     rm -f "$PYTHON_STDERR_TMP"
 
     if ! "$PYTHON3" -c "import json,sys; json.loads(sys.argv[1])" "$PYTHON_SCHEMA_JSON" 2>/dev/null; then
-        echo "ERROR: python emit-schema output is not valid JSON" >&2
+        echo "ERROR: schema projection output is not valid JSON" >&2
         exit 1
     fi
 fi
-echo "  python emit-schema: OK"
+echo "  native schema projection: OK"
 
 # Extract python envelope and event_types
 PYTHON_ENVELOPE="$("$PYTHON3" -c "import json,sys; d=json.loads(sys.argv[1]); print(json.dumps(d['envelope']))" "$PYTHON_SCHEMA_JSON")"
@@ -575,7 +596,7 @@ fi
 # synthetic emit-schemas but not a schema.yaml).
 if [[ "$RUST_AVAILABLE" == "true" && -z "$TEST_RUST_SCHEMA" ]]; then
     echo "check-event-schema-parity: checking registry completeness (KNOWN_EVENT_KINDS subset of schema.yaml)..."
-    SCHEMA_YAML="$REPO_ROOT/cli/src/fno/events/schema.yaml"
+    SCHEMA_YAML="$REPO_ROOT/crates/fno-agents/src/event_store/schema.yaml"
     _REGISTRY_STATUS=0
     RUST_SCHEMA_JSON="$RUST_SCHEMA_JSON" SCHEMA_YAML="$SCHEMA_YAML" "$PYTHON3" - <<'PYEOF' || _REGISTRY_STATUS=$?
 import json, os, sys

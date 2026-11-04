@@ -220,7 +220,7 @@ cp "$PREFLIGHT_SRC" "$FIX/scripts/ci/preflight.sh"
 # The lib dir ships as a unit: events-validate.sh sources its sibling
 # fno-python.sh for interpreter resolution.
 cp "$REPO_ROOT/scripts/lib/events-validate.sh" "$REPO_ROOT/scripts/lib/fno-python.sh" "$FIX/scripts/lib/"
-cp "$REPO_ROOT/cli/src/fno/events/schema.yaml" "$FIX/cli/src/fno/events/schema.yaml"
+cp "$REPO_ROOT/crates/fno-agents/src/event_store/schema.yaml" "$FIX/cli/src/fno/events/schema.yaml"
 # Tracker gate stubs: the real gates need the full cli project and a live
 # registry; this fixture exercises preflight's orchestration (verdicts,
 # receipts, locks), so the gates stub green and honor POISON like the uv stub.

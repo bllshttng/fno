@@ -51,9 +51,8 @@ path = "src/fno/__init__.py"
 [tool.hatch.build.targets.wheel]
 packages = ["src/fno"]
 
-# The canonical events schema ships inside the wheel as fno/events/schema.yaml.
-# It is ordinary package data under src/fno, so both wheel and sdist carry it.
-# Native schema projections are generated from this same source.
+# The events schema lives beside its Rust readers in crates/fno-agents/src/event_store/;
+# the wheel ships no schema.
 [tool.hatch.build.targets.wheel.hooks.custom]
 path = "hatch_build.py"
 

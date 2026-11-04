@@ -998,10 +998,11 @@ def parse_task_result(output: str) -> Optional[TaskResult]:
 
 
 # Barrier vocabulary: a worker return classified for the deterministic fan-in
-# count in fno.events.verify_child_promise.tally_fan_in. The two files connect
-# through this (task_id, kind) tuple, NOT a cross-package import - orchestrator
-# stays free of `fno.*` imports so `python skills/execute/orchestrator.py --help`
-# runs under the ambient python that lacks the fno package.
+# count the Rust evidence door tallies (`fno-agents verify-evidence
+# child-promise`). The two files connect through this (task_id, kind) tuple,
+# NOT a cross-package import - orchestrator stays free of `fno.*` imports so
+# `python skills/execute/orchestrator.py --help` runs under the ambient python
+# that lacks the fno package.
 #   kind "completed"       -> SUCCESS | DONE_WITH_CONCERNS
 #   kind "failed"          -> FAILED | BLOCKED (unresolved; the barrier must not release)
 #   kind "runtime_failed"  -> runtime-observed death (signal/error/context-limit/

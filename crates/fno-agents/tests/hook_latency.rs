@@ -569,7 +569,7 @@ fn stop_payload(sid: &str, message: Option<&str>) -> Value {
 
 #[test]
 fn stop_decision_schema_carries_the_correlation_contract() {
-    let schema = include_str!("../../../cli/src/fno/events/schema.yaml");
+    let schema = include_str!("../src/event_store/schema.yaml");
     let stop_schema = schema
         .split("- name: stop_decision")
         .nth(1)

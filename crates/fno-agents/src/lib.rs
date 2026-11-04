@@ -1168,10 +1168,11 @@ mod tests {
         let Some(root) = repo_root_for_test() else {
             return;
         };
-        let schema_path = root.join("cli/src/fno/events/schema.yaml");
+        let schema_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src/event_store/schema.yaml");
         if !schema_path.is_file() {
-            // The crates.io tarball case, and only that case: no `cli/` tree
-            // to read. A parse failure below is NOT swallowed the same way.
+            // The crates.io tarball case cannot trigger: the schema ships in
+            // the manifest tree now. A parse failure below is NOT swallowed.
             return;
         }
         let text = std::fs::read_to_string(&schema_path).expect("read schema.yaml");
@@ -1191,7 +1192,7 @@ mod tests {
             .collect();
         assert!(
             missing.is_empty(),
-            "KNOWN_EVENT_KINDS entries missing from cli/src/fno/events/schema.yaml: {}\n\
+            "KNOWN_EVENT_KINDS entries missing from src/event_store/schema.yaml: {}\n\
              Add an event_types entry for each, or drop the kind from the registry.",
             missing.join(", ")
         );
@@ -2195,7 +2196,7 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     "style_refusal",
     // NOTE: the a2a status-breakpoint kinds (task_started/task_done/blocked/
     // run_summary) are NOT registered here. They are Python-defined in
-    // cli/src/fno/events/schema.yaml; the parity gate partitions names (a kind
+    // src/event_store/schema.yaml; the parity gate partitions names (a kind
     // in both the Python schema and this Rust registry is a COLLISION). finalize
     // emits run_summary via a custom envelope writer (not the registered
     // `.emit()` path), so the production-emit-kind guard does not require it.
@@ -2340,7 +2341,7 @@ pub fn emit_schema_json() -> serde_json::Value {
             "additionalProperties": false
         },
         "event_kinds": KNOWN_EVENT_KINDS,
-        // Generated from cli/src/fno/events/schema.yaml's limits block by
+        // Generated from src/event_store/schema.yaml's limits block by
         // build.rs. Emitting it makes the value the compiled binary
         // actually carries observable, so a regenerated file the code never
         // reads cannot pass for a fix. The parity gate diffs only `envelope`,

@@ -44,7 +44,7 @@ pub const SCHEMA_VERSION: i64 = 2;
 pub const EPHEMERAL_SUFFIX: &str = ".ephemeral";
 
 /// Event types the schema declares `retention: ephemeral`. Kept equal to
-/// `cli/src/fno/events/schema.yaml` by the same parity test; flip the class in
+/// `src/event_store/schema.yaml` by the same parity test; flip the class in
 /// both places or the two write boundaries route differently.
 pub const EPHEMERAL_EVENT_TYPES: &[&str] = &[
     "claim_acquired",
