@@ -109,6 +109,7 @@ crossing	crates/fno/src/attention_api.rs	crate::server::fno_bin(),
 crossing	crates/fno/src/backlog_write.rs	let mut command = crate::process_admission::tokio_command(crate::server::fno_bin());
 crossing	crates/fno/src/client/agent_launcher.rs	let bin = crate::server::fno_bin().to_string_lossy().into_owned();
 crossing	crates/fno/src/client/config_set.rs	let mut command = crate::process_admission::tokio_command(crate::server::fno_bin());
+crossing	crates/fno/src/client/org_actions.rs	let mut cmd = crate::process_admission::tokio_command(crate::server::fno_bin());
 crossing	crates/fno/src/client/sweep_scope.rs	let mut command = crate::process_admission::tokio_command(crate::server::fno_bin());
 crossing	crates/fno/src/client/update_menu.rs	let mut command = crate::process_admission::tokio_command(crate::server::fno_bin());
 crossing	crates/fno/src/client/update_menu.rs	let mut command = crate::process_admission::tokio_command(crate::server::fno_bin());
