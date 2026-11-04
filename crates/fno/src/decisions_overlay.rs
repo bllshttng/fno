@@ -68,8 +68,7 @@ impl DecisionRow {
         self.quote.as_deref().is_some_and(|q| !q.trim().is_empty())
     }
 
-    /// The audit queue: rows with no user quote that sit in the
-    /// `unattributed` lane or carry no authority.
+    /// The audit queue: rows in the `unattributed` lane or with no authority.
     pub fn needs_audit(&self) -> bool {
         self.lane == "unattributed" || self.author() == Author::Unknown
     }
