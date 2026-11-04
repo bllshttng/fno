@@ -176,6 +176,32 @@ jobs:
           cargo build --locked
           cargo build --locked --manifest-path ../fno-agents/Cargo.toml
 
+      - name: Flag file collisions with other open PRs
+        # The bell-shots build is gated on the bell surface, so this step
+        # builds the binary itself when the step above skipped it; the job's
+        # cargo cache makes that incremental. A fork PR's token is
+        # read-only, so the summary and one notice per colliding PR are the
+        # whole delivery (no comment), and the action notes and exits 0 on
+        # an unread answer. continue-on-error keeps a refused or slow read
+        # from reding the job.
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        working-directory: crates/fno-agents
+        run: |
+          if [ ! -x target/debug/fno-agents ]; then
+            cargo build --locked
+          fi
+          target/debug/fno-agents backlog collisions prs --pr "${{ github.event.pull_request.number }}" --json > "$RUNNER_TEMP/collisions.json"
+          count="$(jq '.collisions | length' "$RUNNER_TEMP/collisions.json")"
+          if [ "$count" -gt 0 ]; then
+            echo "### File collisions with other open PRs" >> "$GITHUB_STEP_SUMMARY"
+            jq -r '.collisions[] | "- #\(.pr): \(.shared | join(", "))"' "$RUNNER_TEMP/collisions.json" >> "$GITHUB_STEP_SUMMARY"
+            jq -r '.collisions[] | "::notice title=File collision with PR #\(.pr)::\(.shared | join(", "))"' "$RUNNER_TEMP/collisions.json"
+          else
+            echo "no open PR shares a changed file with this PR" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
       - name: Shoot the bell and Messages views
         if: env.shoot == '1'
         env:
