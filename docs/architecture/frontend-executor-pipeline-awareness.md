@@ -230,7 +230,6 @@ otherwise proceed without the prerequisite.
 | `skills/blueprint/SKILL.md` | PRODUCT.md prereq check + `impeccable_stages` validator |
 | `skills/execute/references/waves.md` | Dispatch-time PRODUCT.md re-check + iteration ceiling |
 | `skills/execute/references/executor-resolution.md` | `impeccable_stages` override documentation |
-| `tests/agents/test_frontend_executor.py` | BDD tests: stage selection, verdict, finding classification |
 | `tests/blueprint/test_product_md_check.py` | /blueprint gate tests |
 | `CLAUDE.md` | Executor table updated; audit/sigma-review boundary documented |
 
