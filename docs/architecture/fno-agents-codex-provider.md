@@ -24,6 +24,10 @@ The `--yolo` flag is provider-agnostic in spec but a no-op for claude (`claude -
 
 ## Module layout
 
+The layout below is the design-time Python implementation, deleted by the
+Rust port; the live door is `crates/fno-agents`, and the capture script's
+fixture lands in `crates/fno-agents/tests/fixtures/codex-jsonl/` now.
+
 ```
 cli/src/fno/agents/
 ├── cli.py                       ← --yolo flag wiring

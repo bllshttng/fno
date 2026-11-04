@@ -1297,7 +1297,7 @@ mod tests {
     #[test]
     fn dispatch_timeout_exceeds_required_harness_binding_window() {
         let contract: toml::Value = toml::from_str(include_str!(
-            "../../../cli/src/fno/agents/harness_capabilities.toml"
+            "../../fno-agents/src/harness_capabilities.toml"
         ))
         .unwrap();
         let max_binding_ms = contract["harness"]

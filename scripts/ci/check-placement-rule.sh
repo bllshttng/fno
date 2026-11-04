@@ -316,13 +316,6 @@ add_violation() {
 # ---------------------------------------------------------------------------
 
 CLAUDE_ALLOWLIST=$(cat <<'EOF'
-cli/src/fno/agents/discover.py
-cli/src/fno/agents/format.py
-cli/src/fno/agents/harnesses/_claude_session_registry.py
-cli/src/fno/agents/harnesses/claude.py
-cli/src/fno/agents/model_routing.py
-cli/src/fno/agents/registry.py
-cli/src/fno/agents/spawn_gate.py
 crates/fno/src/config_doctor/checks.rs
 crates/fno/src/doctor/report.rs
 crates/fno/src/doctor/report/advisors.rs

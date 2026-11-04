@@ -45,7 +45,9 @@ mod wire_version;
 mod workspace_folder;
 use wire_version::{server_has_pane_scroll, server_has_splitdir, split_skew_notice};
 
-use sweep_scope::{build_sweep_modal, parse_sweep_receipt, sweep_apply_args, SweepCounts};
+use sweep_scope::{begin_sweep_apply, build_sweep_modal, run_sweep_command, SweepCounts};
+#[cfg(test)]
+use sweep_scope::{parse_sweep_receipt, sweep_apply_args};
 
 use self::rename_overlay::RenameTarget;
 pub use row_menu::SplitOpens;
@@ -1297,6 +1299,8 @@ enum SweepScope {
     Named,
     /// The bare prune: stale squad rows, gated behind their own row.
     Squads,
+    /// Stopped session rows, retired by the registry reaper.
+    Stopped,
 }
 
 /// A sweep command the run loop should spawn: a counts probe for the choice
@@ -1315,6 +1319,7 @@ enum SweepMsg {
         closed: usize,
         reaped: usize,
         removed: usize,
+        stopped: usize,
     },
     Failed(String),
 }
@@ -1754,6 +1759,7 @@ pub(crate) enum AuxAction {
     SweepBoth,
     SweepNamed,
     SweepSquads,
+    SweepStopped,
     Detach,
     ToggleHoverFocus,
     /// Flip one experimental toggle, then rebuild the open sidebar menu.
@@ -1863,66 +1869,6 @@ use messages_reply::peek_keys;
 #[cfg(test)]
 use update_menu::build_sideline_menu;
 use update_menu::{build_update_modal, UpdateProbe};
-
-/// The operator tapped a choice: the modal named the counts, so the tap IS
-/// the confirmation. Queue the apply for the run loop (or say why not).
-fn begin_sweep_apply(view: &mut View, scope: SweepScope) {
-    view.aux = None;
-    if view.sweep_inflight {
-        view.set_notice("a sweep is already running".into());
-    } else {
-        view.sweep_action = Some(SweepAction::Apply(scope));
-    }
-}
-
-/// Run one `mux workspace prune` command off the UI thread: a `--dry-run --json`
-/// probe for the choice modal's counts, or a scoped apply whose JSON receipt
-/// becomes the notice. Bounded so a wedged server cannot hold the UI loop's
-/// sweep slot forever; the counts parse fails loud rather than opening a
-/// modal with fabricated zeros.
-async fn run_sweep_command(action: SweepAction) -> SweepMsg {
-    let mut command = crate::process_admission::tokio_command(crate::server::fno_bin());
-    let mut args = vec![
-        "mux".to_string(),
-        "workspace".to_string(),
-        "prune".to_string(),
-        "--json".to_string(),
-    ];
-    let apply_secs = match action {
-        SweepAction::Counts => {
-            args.push("--dry-run".to_string());
-            10
-        }
-        SweepAction::Apply(scope) => {
-            sweep_apply_args(scope, &mut args);
-            // Each folded tab is one control roundtrip; a big workspace
-            // sweep legitimately outlasts a modal probe.
-            60
-        }
-    };
-    command
-        .args(&args)
-        .stdin(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .kill_on_drop(true);
-    let fut = crate::process_admission::tokio_output(&mut command);
-    let output = match tokio::time::timeout(Duration::from_secs(apply_secs), fut).await {
-        Ok(Ok(o)) => o,
-        Ok(Err(e)) => return SweepMsg::Failed(format!("prune spawn failed: {e}")),
-        Err(_) => return SweepMsg::Failed("prune timed out".into()),
-    };
-    if !output.status.success() {
-        return SweepMsg::Failed(format!(
-            "prune exited {}",
-            output.status.code().unwrap_or(-1)
-        ));
-    }
-    let parsed: serde_json::Value = match serde_json::from_slice(&output.stdout) {
-        Ok(v) => v,
-        Err(e) => return SweepMsg::Failed(format!("prune output unparseable ({e})")),
-    };
-    parse_sweep_receipt(action, &parsed)
-}
 
 impl View {
     fn new(term: (u16, u16), session: String, layout: LayoutView) -> Self {
@@ -7864,9 +7810,9 @@ async fn attach_and_run(
                             ));
                         }
                     }
-                    SweepMsg::Applied { closed, reaped, removed } => {
+                    SweepMsg::Applied { closed, reaped, removed, stopped } => {
                         view.set_notice(format!(
-                            "swept: closed {closed} tab(s), reaped {reaped} dead member(s), removed {removed} workspace row(s)"
+                            "swept: closed {closed} tab(s), reaped {reaped} dead member(s), removed {removed} workspace row(s), retired {stopped} stopped session(s)"
                         ));
                     }
                     SweepMsg::Failed(reason) => {
@@ -8946,6 +8892,7 @@ async fn execute_aux_action(
         }
         AuxAction::SweepNamed => begin_sweep_apply(view, SweepScope::Named),
         AuxAction::SweepSquads => begin_sweep_apply(view, SweepScope::Squads),
+        AuxAction::SweepStopped => begin_sweep_apply(view, SweepScope::Stopped),
         AuxAction::OpenConnections => {
             // close the MENU and open the Connections modal in its
             // loading state; arm the first read (the run loop spawns it).

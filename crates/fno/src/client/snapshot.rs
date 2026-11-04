@@ -125,6 +125,8 @@ pub enum ViewKind {
     /// The connections overlay with the `u` confirm staged on the first
     /// account that is not active.
     ConnectionsUse,
+    /// The sweep-threads choice modal over a staged fleet's counts.
+    Sweep,
     /// The needs-me overlay with its first row picked, after the same
     /// questions gather the bell shots run.
     Needs,
@@ -203,6 +205,7 @@ fn parse_view(v: &str) -> Option<ViewKind> {
         "navigator-menu" => Some(ViewKind::NavigatorMenu),
         "feed-detail" => Some(ViewKind::FeedDetail),
         "question-detail" => Some(ViewKind::QuestionDetail),
+        "sweep" => Some(ViewKind::Sweep),
         "connections" => Some(ViewKind::Connections),
         "connections-use" => Some(ViewKind::ConnectionsUse),
         "needs" => Some(ViewKind::Needs),
@@ -966,6 +969,19 @@ questions (scripts/ops/mux-demo-snapshot.sh seeds one)",
         Some(ViewKind::Keys) => {
             view.open_keys_modal();
         }
+        Some(ViewKind::Sweep) => {
+            view.aux = Some(super::sweep_scope::build_sweep_modal(
+                &super::sweep_scope::SweepCounts {
+                    tabs: 6,
+                    used: 4,
+                    dead: 3,
+                    squads: 2,
+                    stopped: 41,
+                    ..Default::default()
+                },
+            ));
+            view.aux_esc.clear();
+        }
         Some(ViewKind::Needs) => {
             let questions = runtime.block_on(crate::needs_overlay::questions_now());
             view.apply_questions_fold(questions);
@@ -1354,6 +1370,7 @@ mod tests {
             ("navigator-menu", ViewKind::NavigatorMenu),
             ("feed-detail", ViewKind::FeedDetail),
             ("question-detail", ViewKind::QuestionDetail),
+            ("sweep", ViewKind::Sweep),
             ("connections", ViewKind::Connections),
             ("connections-use", ViewKind::ConnectionsUse),
             ("needs", ViewKind::Needs),

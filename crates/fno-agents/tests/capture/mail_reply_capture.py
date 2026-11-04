@@ -162,12 +162,14 @@ def base_env(root: Path, bindir: Path) -> dict:
 
 
 def seed_registry(root: Path, agents: list[dict]) -> None:
-    sys.path.insert(0, str(CLI_SRC))
-    from fno.agents.registry import SCHEMA_VERSION
+    import tomllib
+
+    schema_toml = REPO / "crates" / "fno-agents" / "src" / "registry_schema.toml"
+    schema_version = tomllib.loads(schema_toml.read_text(encoding="utf-8"))["version"]
 
     doc = {
-        "schema_version": SCHEMA_VERSION,
-        "min_writer_version": SCHEMA_VERSION,
+        "schema_version": schema_version,
+        "min_writer_version": schema_version,
         "agents": agents,
     }
     home = root / "agents-home"

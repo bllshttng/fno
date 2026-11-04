@@ -4,9 +4,6 @@ platform layer no longer drags the runtime in at import time."""
 from __future__ import annotations
 
 import os
-import subprocess
-import sys
-from pathlib import Path
 
 import pytest
 
@@ -41,23 +38,6 @@ def test_the_complete_roster_carries_the_evidence_backed_hosts(monkeypatch):
         "footnote",
         "muse",
     }
-    from fno.agents.harness_map import known_harnesses
-
-    # The capability-backed roster stays at eleven; the wider names ride the
-    # roster only, which is the asymmetry this change exists to declare.
-    assert set(known_harnesses()) == {
-        "claude",
-        "codex",
-        "gemini",
-        "agy",
-        "opencode",
-        "pi",
-        "cursor-agent",
-        "grok",
-        "zcode",
-        "footnote",
-        "muse",
-    }
 
     # The door mechanics, folded under the test-delta declaration cap: the
     # roster resolves once per process (two calls, one object) and a failed
@@ -80,27 +60,6 @@ def test_the_complete_roster_carries_the_evidence_backed_hosts(monkeypatch):
     assert hn.known_harnesses() is hn.known_harnesses()
     assert calls == ["harness-roster"]
     assert hn.known_providers() == ("alpha",)
-
-    # The agents CLI consumes this exported name, not known_providers() directly.
-    # Resolve it in a fresh process so package import/cache state cannot mask the
-    # old-binary payload used by the reported mail-by-name failure.
-    repo_src = Path(__file__).resolve().parents[3] / "cli" / "src"
-    env = dict(os.environ, PYTHONPATH=str(repo_src))
-    result = subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            "import fno.harness_names as hn; "
-            "hn.call_binary_json = lambda *a, **k: (None, {'known': ['alpha'], 'providers': ['alpha'], 'spawn': ['alpha']}); "
-            "from fno.agents.harnesses import READABLE_PROVIDERS; "
-            "print(READABLE_PROVIDERS)",
-        ],
-        env=env,
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    assert result.stdout.strip() == "('alpha',)"
 
     monkeypatch.setattr(
         hn, "call_binary_json", lambda *a, **k: ("fno-agents binary not found", None)

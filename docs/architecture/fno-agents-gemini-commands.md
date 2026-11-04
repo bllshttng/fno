@@ -24,6 +24,9 @@ No new top-level commands. The `--harness gemini` value is the only user-visible
 
 ## Module layout
 
+The Python legs, their fixtures and their tests retired with the agents package (2026-11-03); the Rust daemon now serves the same surfaces. The layout below is the record of that port, kept because the behavior contracts it names still read from the Rust legs.
+
+
 ```
 cli/src/fno/agents/
 ├── dispatch.py                  # + _gemini_create_path / _gemini_followup_path,
@@ -128,7 +131,7 @@ _GEMINI_KEYS = {
 }
 ```
 
-The smoke script `scripts/smoke/capture-gemini-json.sh` regenerates the fixture against a live gemini binary. The drift-detector test (`test_pinned_keys_match_fixture`) fails loudly if `_GEMINI_KEYS` diverges from the captured shape.
+The smoke script `cli/scripts/smoke/capture-gemini-json.sh` regenerated the fixture against a live gemini binary; the script and the fixture retired with the agents package (2026-11-03). The drift-detector contract (`test_pinned_keys_match_fixture`) moved with the Rust gemini reader.
 
 ### Reachability probe
 
