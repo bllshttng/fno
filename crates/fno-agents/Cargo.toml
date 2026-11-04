@@ -149,7 +149,7 @@ serde_json = "1"
 proptest = "1"
 # github_app tests generate a throwaway RSA key at test time, so no key
 # material is committed and the sign/verify chain runs end to end.
-rsa = "0.9"
+rsa = { version = "0.9", features = ["pem"] }
 rand = "0.8"
 # The lead-lifecycle fixtures stamp a fresh manifest created_at (same
 # version/features as the main dependency, so nothing new compiles).

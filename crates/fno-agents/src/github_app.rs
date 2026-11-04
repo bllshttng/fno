@@ -362,6 +362,8 @@ fn notice_fallback_once(reason: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::Engine as _;
+    use std::os::unix::fs::PermissionsExt;
     use std::sync::Mutex;
 
     fn env_lock() -> &'static Mutex<()> {
@@ -375,7 +377,8 @@ mod tests {
         use rsa::pkcs1::EncodeRsaPrivateKey;
         let mut rng = rand::rngs::OsRng;
         let key = rsa::RsaPrivateKey::new(&mut rng, 2048).expect("keygen");
-        key.to_pkcs1_pem(rsa::pkcs1::LineEnding::LF).to_string()
+        key.to_pkcs1_pem(rsa::pkcs1::LineEnding::LF)
+            .expect("encode pem")
     }
 
     fn temp_cfg(dir: &Path) -> (AppConfig, PathBuf) {
@@ -418,7 +421,7 @@ mod tests {
         let sig = base64::engine::general_purpose::URL_SAFE_NO_PAD
             .decode(parts[2])
             .unwrap();
-        ring::signature::RsaPublicKeyComponents::new(&n, &e)
+        ring::signature::RsaPublicKeyComponents { n: &n, e: &e }
             .verify(&ring::signature::RSA_PKCS1_SHA256, msg.as_bytes(), &sig)
             .expect("signature verifies");
     }
