@@ -145,8 +145,8 @@ pub const APPROVED_TOP_LEVEL: &[&str] = &[
 
 /// The folders a `dir` row may carry: the ruled fold set. `sessions` is
 /// absent (it parks; it does not fold) and `worktrees` is absent (the ruled
-/// relocation changes the allocation default only; live checkouts never
-/// move). A new name here is a new top-level folder on every machine.
+/// relocation changes the allocation default to `spaces/worktrees` only;
+/// live checkouts never move). A new name here is a new top-level folder on every machine.
 pub const FOLD_CANDIDATES: &[&str] = &[
     "announce-cursors",
     "attention",
@@ -185,8 +185,15 @@ pub const FOLD_CANDIDATES: &[&str] = &[
 /// Fold candidates whose children can be held by an open flock. The mover
 /// will not fold one while a regular-file child's lock is held; the row
 /// reports pending and the next daemon-start pass retries.
-const LOCK_BEARING_FOLDERS: &[&str] =
-    &["bus", "claim-aux", "flight", "fleet", "locks", "mail-hold"];
+const LOCK_BEARING_FOLDERS: &[&str] = &[
+    "bus",
+    "claim-aux",
+    "flight",
+    "fleet",
+    "locks",
+    "mail-hold",
+    "migrations",
+];
 
 /// Fold candidates that drain instead of folding: each child's absolute
 /// path is recorded elsewhere (a route-settings file is named in an agent
@@ -2254,6 +2261,30 @@ mod tests {
         assert!(out[0].status.is_pending(), "{:?}", out[0].status);
         assert!(root.join("bus/messages.jsonl").exists());
         assert!(!root.join("db/mail/bus").exists());
+        clean(&root);
+    }
+
+    #[test]
+    fn the_install_group_folds_and_a_held_migrations_lock_defers_only_its_row() {
+        let root = tmp_root("installgroup");
+        std::fs::create_dir_all(root.join("bin/github-cli")).unwrap();
+        std::fs::write(root.join("bin/github-cli/gh"), "#!/bin/sh\n").unwrap();
+        std::fs::create_dir_all(root.join("latches")).unwrap();
+        std::fs::write(root.join("latches/.context-nudge-a"), "1").unwrap();
+        std::fs::create_dir_all(root.join("migrations")).unwrap();
+        std::fs::write(root.join("migrations/role-vocabulary-v2.done"), "1\n").unwrap();
+        let lock = std::fs::File::create(root.join("migrations/role-vocabulary-v2.lock")).unwrap();
+        lock.lock().unwrap();
+        migrate(&root, true);
+        assert!(root.join("install/bin/github-cli/gh").exists());
+        assert!(root.join("state/latches/.context-nudge-a").exists());
+        assert!(root.join("migrations/role-vocabulary-v2.done").exists());
+        assert!(!root.join("install/migrations").exists());
+        drop(lock);
+        migrate(&root, true);
+        assert!(root
+            .join("install/migrations/role-vocabulary-v2.done")
+            .exists());
         clean(&root);
     }
 
