@@ -274,9 +274,10 @@ pub(crate) fn plan_fidelity_blocker<P: Probes>(probes: &P, cwd: &Path, pr: u64) 
 
 /// The plan_path bound to this PR's delivery row in the ledger, or None.
 /// PR numbers are per-repo and the ledger is global, so when several rows
-/// match, the one whose pr_url names this checkout's remote wins; otherwise
-/// the first match answers (fail-open, as the Python did). A missing or
-/// broken ledger is None: no signal, no gate.
+/// match, the one whose pr_url names this checkout's remote wins; a row
+/// with no pr_url answers next. A row whose pr_url names another repo never
+/// answers (the fnh/fno-web PR 70 specimen: another repo's plan refused a
+/// merge here). A missing or broken ledger is None: no signal, no gate.
 fn ledger_plan_path(cwd: &Path, pr: u64) -> Option<String> {
     use std::process::Command;
 
@@ -317,7 +318,15 @@ fn ledger_plan_path(cwd: &Path, pr: u64) -> Option<String> {
                     .and_then(Value::as_str)
                     .is_some_and(|url| url.contains(&slug))
         })
-        .or_else(|| matches.first().copied());
+        .or_else(|| {
+            // An unmarked row keeps the first-match fail-open shape; a row
+            // that names another repo never does.
+            matches.iter().copied().find(|row| {
+                row.get("pr_url")
+                    .and_then(Value::as_str)
+                    .is_none_or(str::is_empty)
+            })
+        });
     picked.and_then(|row| {
         row.get("plan_path")
             .and_then(Value::as_str)
@@ -1711,5 +1720,112 @@ mod tests {
             .find(|l| l.starts_with("why_user:"))
             .expect("why_user line");
         assert_eq!(why, "why_user: taste");
+    }
+
+    /// The specimen behind the scoping rule: the ledger is global and fnh
+    /// PR 70 exists, so a fno-web checkout asking about its own PR 70 saw
+    /// fnh's plan answer and the fidelity gate refused the wrong PR. A row
+    /// whose pr_url names another repo never answers; a slug-matching row or
+    /// a row with no pr_url still does.
+    #[test]
+    fn a_foreign_repos_pr_url_never_answers_a_shared_pr_number() {
+        let _lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+
+        // Saved-env guard: other tests read these pins, so restore, not remove.
+        struct Pins {
+            hermetic: Option<std::ffi::OsString>,
+            state: Option<std::ffi::OsString>,
+        }
+        impl Drop for Pins {
+            fn drop(&mut self) {
+                match &self.hermetic {
+                    Some(v) => std::env::set_var("FNO_TEST_HERMETIC", v),
+                    None => std::env::remove_var("FNO_TEST_HERMETIC"),
+                }
+                match &self.state {
+                    Some(v) => std::env::set_var("FNO_STATE_DIR", v),
+                    None => std::env::remove_var("FNO_STATE_DIR"),
+                }
+            }
+        }
+        let _pins = Pins {
+            hermetic: std::env::var_os("FNO_TEST_HERMETIC"),
+            state: std::env::var_os("FNO_STATE_DIR"),
+        };
+        std::env::set_var("FNO_TEST_HERMETIC", "1");
+        let state = tempfile::tempdir().unwrap();
+        std::env::set_var("FNO_STATE_DIR", state.path());
+
+        // The checkout: fno-web origin, so the slug is fnodotdev/fno-web.
+        let repo = tempfile::tempdir().unwrap();
+        for args in [
+            ["init", "-q"].as_slice(),
+            [
+                "config",
+                "remote.origin.url",
+                "git@github.com:fnodotdev/fno-web.git",
+            ]
+            .as_slice(),
+        ] {
+            let status = std::process::Command::new("git")
+                .args(args)
+                .current_dir(repo.path())
+                .status()
+                .expect("git runs");
+            assert!(status.success(), "git {args:?} failed");
+        }
+
+        let ledger_path = crate::paths_cli::ledger_json(repo.path());
+        std::fs::create_dir_all(ledger_path.parent().unwrap()).unwrap();
+        let write_ledger = |entries: serde_json::Value| {
+            std::fs::write(
+                &ledger_path,
+                serde_json::to_string(&json!({ "entries": entries })).unwrap(),
+            )
+            .unwrap();
+        };
+        let fnh_row = json!({
+            "pr_number": 70,
+            "pr_url": "https://github.com/fnodotdev/fnh/pull/70",
+            "plan_path": "/fnh/node-x-41e1/plan.md",
+        });
+
+        // The specimen: only the other repo's row exists. It names another
+        // repo, so it never answers and the gate stays silent.
+        write_ledger(json!([fnh_row]));
+        assert_eq!(ledger_plan_path(repo.path(), 70), None);
+
+        // An unresolvable origin cannot prove any pr_url is ours, so a row
+        // that carries one stays silent there too.
+        let bare = tempfile::tempdir().unwrap();
+        write_ledger(json!([fnh_row]));
+        assert_eq!(ledger_plan_path(bare.path(), 70), None);
+
+        // A row with no pr_url may answer: unmarked provenance keeps the old
+        // first-match fail-open shape.
+        write_ledger(json!([
+            fnh_row,
+            json!({"pr_number": 70, "plan_path": "/web/plan.md"})
+        ]));
+        assert_eq!(
+            ledger_plan_path(repo.path(), 70).as_deref(),
+            Some("/web/plan.md")
+        );
+
+        // The slug match outranks the rest, whatever order the rows hold.
+        write_ledger(json!([
+            fnh_row,
+            json!({
+                "pr_number": 70,
+                "pr_url": "https://github.com/fnodotdev/fno-web/pull/70",
+                "plan_path": "/web/chosen.md",
+            }),
+        ]));
+        assert_eq!(
+            ledger_plan_path(repo.path(), 70).as_deref(),
+            Some("/web/chosen.md")
+        );
     }
 }
