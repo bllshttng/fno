@@ -2,12 +2,12 @@
 //! schema table. `fno config setup plan` (setup_cmds) prints its wizard plan
 //! through [`wizard_plan`].
 //!
-//! `config_schema.json` is generated from the pydantic `SettingsModel` plus
-//! its presentation registry (`cd cli && uv run python -m
-//! fno.config.schema_gen --write`), and the drift test regenerates it and
-//! compares, so the model stays the one source. This module only renders:
-//! the JSON Schema, the Markdown reference, the example TOML, and the wizard
-//! plan, byte for byte as the Python generators printed them.
+//! `config_schema.json` is hand-edited source (the pydantic `schema_gen`
+//! generator and its drift gate are gone with the config family; the
+//! fields.json agreement test in config_cli/model holds the two tables
+//! together). This module only renders: the JSON Schema, the Markdown
+//! reference, the example TOML, and the wizard plan, byte for byte as the
+//! Python generators printed them.
 
 use serde_json::{Map, Value};
 use std::ffi::OsString;

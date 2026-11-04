@@ -5,10 +5,13 @@
 //! schema table (`config_schema.json` `json_schema`: types, enums, bounds),
 //! with each pydantic `field_validator` and `model_validator` ported as one
 //! Rust function keyed by model and field (`validators_*.rs`). Field order,
-//! defaults and default factories come from `fields.json`, which the oracle
-//! driver (`tests/config_load_driver.py --emit-fields`) emits from pydantic:
-//! the schema table sorts keys and drops factories, and both decide the
-//! refusal order and the defaults dump.
+//! defaults and default factories come from `fields.json`; the schema table
+//! sorts keys and drops factories, and both decide the refusal order and the
+//! defaults dump. Both tables are edited by hand now (the pydantic generator
+//! and its drift gate are gone with the config family); the unit test at the
+//! bottom of this file is the agreement check between them, so a new key is
+//! one entry in each plus a validator in `validators_*.rs` when it needs
+//! one.
 //!
 //! The rules are pydantic v2's lax mode as the goldens froze it: a bool
 //! takes `yes`/`off`/0/1, an int takes a whole float and a numeric string, a
@@ -637,6 +640,26 @@ pub fn field_default(model: &str, field: &str) -> Option<Value> {
 
 /// A default-constructed `model`, dumped: every field with a default, in
 /// field order.
+/// The schema fingerprint's key set: the `field_meta` rows of the embedded
+/// fields.json, sorted. The doctor reads the deployed binary's table here and
+/// the checkout's committed file through `git show` (collectors.rs); the
+/// Python `FIELD_META` exec this replaces crossed the seam for one list.
+pub fn field_meta_keys() -> Vec<String> {
+    let table: Value = serde_json::from_str(FIELDS).expect("fields.json parses");
+    table["field_meta"]
+        .as_array()
+        .map(|rows| {
+            let mut keys: Vec<String> = rows
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect();
+            keys.sort();
+            keys
+        })
+        .unwrap_or_default()
+}
+
 pub fn model_defaults(model: &str) -> Value {
     let mut out = Map::new();
     for field in models()
@@ -1094,4 +1117,62 @@ fn drop_from_toml(path: &Path, text: &str) -> Vec<&'static str> {
         return Vec::new();
     }
     removed
+}
+
+#[cfg(test)]
+mod table_agreement_tests {
+    use super::*;
+
+    /// The schema tables are hand-edited source now (the pydantic generator is
+    /// gone with the config family). This is the check that keeps the two
+    /// tables agreeing: every field fields.json carries, config_schema.json's
+    /// json_schema carries as a property of the same model, and the reverse
+    /// within shared models. A key added to one table only fails here and
+    /// names the key.
+    #[test]
+    fn fields_json_and_config_schema_agree_on_every_block() {
+        let fields: Value = serde_json::from_str(FIELDS).expect("fields.json parses");
+        let schema: Value = serde_json::from_str(SCHEMA).expect("config_schema.json parses");
+        let defs = schema["json_schema"]["$defs"]
+            .as_object()
+            .expect("$defs table");
+        let mut problems: Vec<String> = Vec::new();
+        for (model, node) in fields["models"].as_object().expect("models table") {
+            let Some(def) = defs.get(model) else {
+                problems.push(format!(
+                    "fields.json model {model} has no config_schema.json $defs entry"
+                ));
+                continue;
+            };
+            let Some(props) = def.get("properties").and_then(Value::as_object) else {
+                problems.push(format!("$defs {model} carries no properties table"));
+                continue;
+            };
+            let field_names: Vec<&str> = node["fields"]
+                .as_array()
+                .expect("fields list")
+                .iter()
+                .filter_map(|f| f["name"].as_str())
+                .collect();
+            for name in &field_names {
+                if !props.contains_key(*name) {
+                    problems.push(format!(
+                        "fields.json {model}.{name} has no config_schema.json property"
+                    ));
+                }
+            }
+            for name in props.keys() {
+                if !field_names.contains(name) {
+                    problems.push(format!(
+                        "config_schema.json $defs {model}.{name} has no fields.json field"
+                    ));
+                }
+            }
+        }
+        assert!(
+            problems.is_empty(),
+            "schema tables disagree:\n{}",
+            problems.join("\n")
+        );
+    }
 }

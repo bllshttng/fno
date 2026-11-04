@@ -84,9 +84,6 @@ python_version = "3.11"
 [[tool.mypy.overrides]]
 module = [
     "fno.paths",
-    "fno.config",
-    "fno.config.*",
-    "fno.config_io",
 ]
 disallow_any_generics = true
 disallow_subclassing_any = true
