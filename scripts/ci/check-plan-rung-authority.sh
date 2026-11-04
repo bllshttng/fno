@@ -625,6 +625,16 @@ while IFS= read -r reader; do
                 || true
         )"
     fi
+    if [ "$reader" = "crates/fno-agents/src/wave_ready.rs" ]; then
+        # wave_ready's "status" literals: the schema-error field it DROPS from
+        # the frontmatter report, the `agents claim status` argv, and the
+        # graph task row's status. None reads the plan's `status:` key.
+        matches="$(
+            printf '%s\n' "$matches" \
+                | grep -vE '!= Some\("status"\)|"claim", "status"|row\.get\("status"\)' \
+                || true
+        )"
+    fi
     if [ -n "$matches" ]; then
         fm_status="${fm_status}${reader}:
 ${matches}

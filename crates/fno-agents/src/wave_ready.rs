@@ -250,8 +250,8 @@ fn prose_targets(plan_text: &str, task_id: &str) -> Vec<String> {
         }
         if let Some(item) = line.strip_prefix("- ").or_else(|| line.strip_prefix("* ")) {
             let mut item = item;
-            for verb in ["Create:", "Modify:", "Update:", "Delete:"] {
-                if let Some(rest) = item.strip_prefix(verb) {
+            for action in ["Create:", "Modify:", "Update:", "Delete:"] {
+                if let Some(rest) = item.strip_prefix(action) {
                     item = rest;
                     break;
                 }
@@ -712,7 +712,7 @@ pub(crate) fn manifest_node(cwd: &Path) -> String {
     String::new()
 }
 
-/// The settle verb for a boundary outcome, or None for a stray spelling: an
+/// The task status a boundary outcome settles to, or None for a stray spelling: an
 /// unknown outcome settles nothing, because mapping strays to the give-back
 /// would release a finished task's claim mid-flight.
 pub(crate) fn settle_status(outcome: &str) -> Option<&'static str> {
