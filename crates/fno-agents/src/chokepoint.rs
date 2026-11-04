@@ -119,6 +119,8 @@ pub struct Refused {
     pub holder_pid: Option<u64>,
     pub holder_alive: bool,
     pub hold_age_secs: Option<i64>,
+    /// The chokepoint row the stamped holder took the lock under.
+    pub holder_op: Option<String>,
     pub waiter_pid: u32,
     pub io_error: Option<String>,
 }
@@ -163,6 +165,7 @@ impl Refused {
             "holder_pid": self.holder_pid,
             "holder_alive": self.holder_alive,
             "hold_age_secs": self.hold_age_secs,
+            "holder_op": self.holder_op,
             "waiter_pid": self.waiter_pid,
         })
     }
@@ -263,6 +266,55 @@ fn read_holder(path: &Path) -> (Option<u64>, Option<i64>) {
     (value.get("pid").and_then(serde_json::Value::as_u64), age)
 }
 
+/// A hold this old is a stall worth naming, whoever waits on it.
+const LONG_HOLD_SECS: i64 = 30;
+
+/// The stamped holder's chokepoint row and acquire time, for the long-hold
+/// line and the expiry event.
+fn read_stamp_fields(path: &Path) -> (Option<String>, Option<String>) {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return (None, None);
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(text.lines().next().unwrap_or(""))
+    else {
+        return (None, None);
+    };
+    let field = |key: &str| {
+        value
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string)
+    };
+    (field("chokepoint"), field("acquired_at"))
+}
+
+/// Name a live holder that has kept the lock past [`LONG_HOLD_SECS`], once per
+/// hold: a `.longhold` sidecar remembers the acquire time already named, so a
+/// queue of waiters prints one line, not one each.
+fn note_long_hold(refused: &Refused, acquired_at: Option<&str>) -> bool {
+    let (Some(pid), Some(age), Some(at)) = (refused.holder_pid, refused.hold_age_secs, acquired_at)
+    else {
+        return false;
+    };
+    if !refused.holder_alive || age < LONG_HOLD_SECS {
+        return false;
+    }
+    let marker = PathBuf::from(format!("{}.longhold", refused.path.display()));
+    if std::fs::read_to_string(&marker).is_ok_and(|seen| seen.trim() == at) {
+        return false;
+    }
+    if std::fs::write(&marker, at).is_err() {
+        return false;
+    }
+    eprintln!(
+        "chokepoint {}: {} held {age}s by pid {pid} (op {})",
+        refused.row,
+        refused.path.display(),
+        refused.holder_op.as_deref().unwrap_or("unknown")
+    );
+    true
+}
+
 /// Build the refusal for a wait that ran out, probe the stamped holder, and
 /// journal one event. `BoundedLock` and `AgentLock` poll their own deadline and
 /// call this when it passes.
@@ -277,6 +329,7 @@ fn report_expiry_to(
     sink: Option<Sink>,
 ) -> Refused {
     let (holder_pid, hold_age_secs) = read_holder(path);
+    let (holder_op, acquired_at) = read_stamp_fields(path);
     let refused = Refused {
         row: row.name,
         path: path.to_path_buf(),
@@ -284,9 +337,11 @@ fn report_expiry_to(
         holder_pid,
         holder_alive: holder_pid.is_some_and(pid_alive),
         hold_age_secs,
+        holder_op,
         waiter_pid: std::process::id(),
         io_error: None,
     };
+    let _ = note_long_hold(&refused, acquired_at.as_deref());
     // A sink that itself waits on a chokepoint must not journal its own expiry.
     thread_local! {
         static IN_SINK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
@@ -361,6 +416,7 @@ fn take_within(
         holder_pid: None,
         holder_alive: false,
         hold_age_secs: None,
+        holder_op: None,
         waiter_pid: std::process::id(),
         io_error: Some(error.to_string()),
     };
@@ -458,6 +514,37 @@ mod tests {
         };
         assert!(!dead.holder_alive);
         assert!(dead.to_string().contains("is dead"), "{dead}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_hold_past_thirty_seconds_is_named_once_with_its_op() {
+        let dir = std::env::temp_dir().join(format!("fno-longhold-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("long.lock");
+        let bound = Duration::from_millis(50);
+        let held = take_within(&WEDGE, &path, bound, "", false, None).unwrap();
+        let old = (chrono::Utc::now() - chrono::Duration::seconds(120))
+            .to_rfc3339_opts(chrono::SecondsFormat::Micros, false);
+        std::fs::write(
+            &path,
+            format!(
+                "{{\"pid\": {}, \"chokepoint\": \"graph-store\", \"acquired_at\": \"{old}\"}}\n",
+                std::process::id()
+            ),
+        )
+        .unwrap();
+        let refused = take_within(&WEDGE, &path, bound, "", false, None).unwrap_err();
+        assert_eq!(refused.holder_op.as_deref(), Some("graph-store"));
+        assert_eq!(refused.event_data()["holder_op"], "graph-store");
+        let (_, at) = read_stamp_fields(&path);
+        assert!(
+            !note_long_hold(&refused, at.as_deref()),
+            "the first wait already named it"
+        );
+        let marker = PathBuf::from(format!("{}.longhold", path.display()));
+        assert_eq!(std::fs::read_to_string(&marker).unwrap().trim(), old);
+        drop(held);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
