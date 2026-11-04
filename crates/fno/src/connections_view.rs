@@ -3204,7 +3204,7 @@ mod tests {
                     ]
                 );
             }
-            other => panic!("expected Run, got {other:?}"),
+            _ => panic!("expected a Run intent"),
         }
 
         let mut v = ready_view();
