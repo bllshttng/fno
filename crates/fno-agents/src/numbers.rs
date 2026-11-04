@@ -34,9 +34,8 @@ const INSERT: &str = "INSERT OR IGNORE INTO fno_numbers \
 SELECT ?1, COALESCE(MAX(num), 0) + 1, ?2, ?3, ?4, strftime('%s','now') \
 FROM fno_numbers WHERE kind = ?1 AND store = ?3";
 
-/// A node number skips every value that already names a node: `x-1477` is a
-/// real hash, so the 1477th `x` node takes `x-1478`. One typed token then
-/// reads one node. `substr(?1, 3)` strips the `n:` off the kind.
+/// A node number skips every value that already names a node: an all-digit
+/// hash is a real id, so the node due that number takes the next free one. One typed token then reads one node. `substr(?1, 3)` strips the `n:` off the kind.
 const NODE_INSERT: &str = "INSERT OR IGNORE INTO fno_numbers \
 (kind, num, key, store, host, created_at) \
 SELECT ?1, (WITH RECURSIVE c(n) AS (\
@@ -122,7 +121,7 @@ fn open_write_at(graph: &Path) -> Result<Connection, String> {
     Ok(conn)
 }
 
-/// The counter a node id counts in: `n:x` for `x-cba7`. Each prefix counts
+/// The counter a node id counts in: `n:x` for `x-aaaa`. Each prefix counts
 /// alone, so `x-15` and `fb-15` are two nodes.
 fn node_kind(id: &str) -> Option<String> {
     let (prefix, tail) = id.split_once('-')?;
@@ -427,8 +426,8 @@ fn is_question_or_decision(hash: &str) -> bool {
     hash.len() == 10 && (hash.starts_with("d-") || hash.starts_with("q-"))
 }
 
-/// A node id sits inside paths (`worktrees/x-cba7`), branch names
-/// (`feature/x-cba7-slug`), backticked commands and URLs. Only a hash that
+/// A node id sits inside paths (`worktrees/x-aaaa`), branch names
+/// (`feature/x-aaaa-slug`), backticked commands and URLs. Only a hash that
 /// stands alone between spaces and sentence punctuation gets a number beside it.
 fn standalone(text: &str, span: std::ops::Range<usize>) -> bool {
     let before = text[..span.start].chars().next_back();
@@ -740,7 +739,7 @@ mod tests {
         assert_eq!(found("x-3").as_deref(), Some("x-bbbb"));
         assert_eq!(found("fb-1").as_deref(), Some("fb-cccc"));
         assert_eq!(found("x-2"), None);
-        assert_eq!(found("x-cba7"), None);
+        assert_eq!(found("x-aaaa"), None);
     }
 
     #[test]
@@ -755,15 +754,15 @@ mod tests {
 
     #[test]
     fn a_node_number_beside_a_path_or_branch_is_left_alone() {
-        let held = HashMap::from([("x-cba7".to_string(), "x-12".to_string())]);
+        let held = HashMap::from([("x-aaaa".to_string(), "x-12".to_string())]);
         assert_eq!(
-            annotate_with("take x-cba7, then x-cba7.", &held),
-            "take x-12 (x-cba7), then x-12 (x-cba7)."
+            annotate_with("take x-aaaa, then x-aaaa.", &held),
+            "take x-12 (x-aaaa), then x-12 (x-aaaa)."
         );
         for kept in [
-            "worktrees/footnote/x-cba7/crates",
-            "feature/x-cba7-numbers",
-            "run `fno backlog get x-cba7`",
+            "worktrees/footnote/x-aaaa/crates",
+            "feature/x-aaaa-numbers",
+            "run `fno backlog get x-aaaa`",
         ] {
             assert_eq!(annotate_with(kept, &held), kept);
         }
