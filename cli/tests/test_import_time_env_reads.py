@@ -111,10 +111,16 @@ def _all_import_time_reads() -> dict[str, list[str]]:
 
 def test_the_probe_sees_the_opt_in_seams():
     """Positive control: the walker must find the documented opt-in read,
-    or the guard below is green while measuring nothing."""
-    found = _all_import_time_reads()
-    missing = {"FNO_CODEX_LIVE"} - set(found)
-    assert not missing, f"env-read probe found nothing for {sorted(missing)}; the walker is stale"
+    or the guard below is green while measuring nothing. The live-journey
+    modules that read one at import are deleted, so the control feeds the
+    walker a synthetic module instead of scanning for a tree subject."""
+    snippet = ast.parse(
+        "import os\n"
+        "FNO_CODEX_LIVE = os.environ.get('FNO_CODEX_LIVE')\n",
+        filename="<opt-in control>",
+    )
+    reads = _import_time_reads(snippet)
+    assert any(name == "FNO_CODEX_LIVE" for _, name in reads), reads
 
 
 def test_no_test_module_reads_an_ambient_env_at_import():

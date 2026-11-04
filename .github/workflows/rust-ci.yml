@@ -31,10 +31,6 @@ on:
       - cli/src/fno/config/__init__.py
       - cli/src/fno/pr/_reviews.py
       - cli/src/fno/review_capability.py
-      - cli/src/fno/agents/spawn_gate.py
-      - cli/src/fno/agents/registry.py
-      - cli/src/fno/agents/store_fallback.py
-      - cli/src/fno/agents/mux_spawn.py
       - .github/workflows/rust-ci.yml
 
 jobs:

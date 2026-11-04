@@ -19,7 +19,6 @@ merge-queue-gate.yml
 multiplayer-attestation.yml
 release.yml
 pitfalls.yml
-provider-smoke.yml
 release-binaries.yml
 release-wheels.yml
 review-coverage-gate.yml

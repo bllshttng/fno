@@ -2131,6 +2131,13 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // The same failure the Python identification arm emits: the manifest
     // rebind at a promoted row's first self-identification did not land.
     "role_manifest_arm_failed",
+    // The session-report lineage port (session_report.rs): the daemon's
+    // classification of a differing reported session id (succession or
+    // branch fork), and the cwd heal it attempts, or fails, on the
+    // reporting worker's own row.
+    "session_transition_classified",
+    "session_cwd_healed",
+    "session_cwd_heal_failed",
     // Ordered exit teardown (daemon-emitted, inside-out E3.3): a claude row with
     // an inside-leg report is going Exited; the completion is published before
     // the registry clears the report (AC-X2-4).

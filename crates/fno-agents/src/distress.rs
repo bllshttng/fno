@@ -110,6 +110,11 @@ impl HelpDistress {
     pub(crate) fn class(&self) -> HelpClass {
         self.class
     }
+    /// The parsed `evidence` attribute, read-only: the watchdog's sandbox
+    /// verdict matches on it without re-parsing the tag.
+    pub(crate) fn evidence(&self) -> Option<&str> {
+        self.evidence.as_deref()
+    }
 }
 
 /// The one constructor for callers outside this module: the stuck row the
