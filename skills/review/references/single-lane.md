@@ -129,26 +129,13 @@ For every kept finding, open the cited `file:line` and check the finding's verba
 
 An incremental round narrows scope only to the increment since the last reviewed head, and the narrowing is earned, never assumed. Resolve the prior head from the attestation journal: the newest `review_attestation` row with `verdict: pass` on this branch whose `head_sha` differs from the current HEAD is the prior round.
 
-Write the helper below to a file in a gitignored state directory (`.fno/tmp/` is fine) and run it as a plain argv call: `python3 <file> <events-path> <branch> <head-sha>`. A worktree session's Bash isolation refuses shell expansion and command substitution (docs/architecture/worktree-mechanics.md), so the helper is never inlined into a shell command. `<events-path>` is the events journal (`.fno/events.jsonl`, linked to canonical from every worktree; `printenv FNO_EVENTS_PATH` when the environment names one). Empty output means no prior round.
+Read it with one plain argv jq call, with the three values written in literally: `jq -Rrn --arg branch <branch> --arg head <head-sha> -f <filter-file> <events-path>`. A worktree session's Bash isolation refuses shell expansion and command substitution (docs/architecture/worktree-mechanics.md), so write the filter below to a file in a gitignored state directory (`.fno/tmp/` is fine) rather than inlining it. `<events-path>` is the events journal (`.fno/events.jsonl`, linked to canonical from every worktree; `printenv FNO_EVENTS_PATH` when the environment names one). Empty output means no prior round.
 
-```python
-import json, sys
-path, branch, head = sys.argv[1], sys.argv[2], sys.argv[3]
-best = ""
-for line in open(path, encoding="utf-8"):
-    if "review_attestation" not in line:
-        continue
-    try:
-        row = json.loads(line)
-    except ValueError:
-        continue
-    data = row.get("data") or {}
-    if data.get("verdict") != "pass" or data.get("branch") != branch:
-        continue
-    sha = data.get("head_sha") or ""
-    if sha and sha != head:
-        best = sha
-print(best)
+```jq
+[inputs | select(contains("review_attestation")) | fromjson? | (.data // {})
+  | select(.verdict == "pass" and .branch == $branch)
+  | (.head_sha // "") | select(. != "" and . != $head)]
+| last // ""
 ```
 
 With `PRIOR_HEAD` resolved, read it into the scope decision with the same file-based shape (write any multi-step decision as a script, run it plainly):
