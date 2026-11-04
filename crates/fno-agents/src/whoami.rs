@@ -3,8 +3,7 @@
 //! (`cli/src/fno/agent/`) is deleted in the same change that lands this;
 //! the goldens under `tests/golden/whoami/` freeze its bytes.
 //!
-//! Three layers load independently: fleet (glob of `<state>/fleet/*/00-INDEX.md`
-//! naming this project), walker (`.fno/megawalk-state.md`), session
+//! Two layers load independently: walker (`.fno/megawalk-state.md`), session
 //! (`.fno/target-state.md`, else `.fno/session-state.md`). The state-file
 //! dialect is YAML's block-mapping subset that manifests and mission files
 //! actually carry: scalars, quoted strings, bools, ints, nulls, nested
@@ -79,7 +78,9 @@ pub fn run(args: &[String]) -> i32 {
             }
             (_, "--json") | (_, "-J") => opts.json_output = true,
             (_, "--no-walker") => opts.no_walker = true,
-            (_, "--no-fleet") => opts.no_fleet = true,
+            // Accepted and ignored: the fleet layer is gone, the flag stays so
+            // existing callers keep working.
+            (_, "--no-fleet") => {}
             (_, "--state-file") => {
                 i += 1;
                 match args.get(i) {
@@ -134,7 +135,6 @@ struct Options {
     json_output: bool,
     state_file: Option<PathBuf>,
     no_walker: bool,
-    no_fleet: bool,
 }
 
 /// The layer suppressions: a suppressed layer renders as absent, the same
@@ -143,24 +143,12 @@ fn drop_layers(mut state: AgentContext, opts: &Options) -> AgentContext {
     if opts.no_walker {
         state.walker = None;
     }
-    if opts.no_fleet {
-        state.fleet = None;
-    }
     state
 }
 
 // -------------------------------------------------------------------------
 // State layer
 // -------------------------------------------------------------------------
-
-struct FleetState {
-    mission_id: String,
-    title: Option<String>,
-    status: String,
-    wave_current: Option<i64>,
-    wave_total: Option<i64>,
-    path: PathBuf,
-}
 
 struct WalkerState {
     session_id: Option<String>,
@@ -183,7 +171,6 @@ struct SessionState {
 struct AgentContext {
     project_root: PathBuf,
     harness: String,
-    fleet: Option<FleetState>,
     walker: Option<WalkerState>,
     session: Option<SessionState>,
     detected_paths: Vec<PathBuf>,
@@ -204,7 +191,6 @@ fn load_agent_context(
     let mut detected: Vec<PathBuf> = Vec::new();
     let project_root = detect_project_root(&mut warnings);
     let harness = detect_harness(home);
-    let fleet = load_fleet_state(&project_root, &mut warnings, &mut detected);
     let walker = load_walker_state(&project_root, &mut warnings, &mut detected);
     let mut session = load_session_state(
         &project_root,
@@ -234,7 +220,6 @@ fn load_agent_context(
     Ok(AgentContext {
         project_root,
         harness,
-        fleet,
         walker,
         session,
         detected_paths: detected,
@@ -474,127 +459,6 @@ fn int_or_none(value: &Value) -> Option<i64> {
     }
 }
 
-fn state_dir() -> PathBuf {
-    if let Some(dir) = std::env::var_os("FNO_STATE_DIR") {
-        return PathBuf::from(dir);
-    }
-    // The fno state root, not the agents root: HOME/.fno.
-    let base = std::env::var_os("HOME").unwrap_or_default();
-    PathBuf::from(base).join(".fno")
-}
-
-fn load_fleet_state(
-    project_root: &Path,
-    warnings: &mut Vec<String>,
-    detected: &mut Vec<PathBuf>,
-) -> Option<FleetState> {
-    let fleet_root = state_dir().join("fleet");
-    if !fleet_root.exists() {
-        return None;
-    }
-    let abs_root = project_root
-        .canonicalize()
-        .unwrap_or_else(|_| project_root.to_path_buf());
-    let mut indexes: Vec<PathBuf> = std::fs::read_dir(&fleet_root)
-        .ok()?
-        .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| p.is_dir())
-        .map(|d| d.join("00-INDEX.md"))
-        .filter(|p| p.exists())
-        .collect();
-    indexes.sort();
-    for index_file in indexes {
-        let fields = match parse_state_file(&index_file) {
-            Ok(f) => f,
-            Err(StateError::Malformed { path, .. }) => {
-                let name = path.file_name().map(|n| n.to_string_lossy().into_owned());
-                if let Some(name) = name {
-                    warnings.push(format!("fleet: malformed {name}, skipping"));
-                }
-                continue;
-            }
-            Err(_) => continue,
-        };
-        let status = fields
-            .get("status")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default()
-            .to_ascii_lowercase();
-        if status != "running" && status != "paused" {
-            continue;
-        }
-        let projects = match fields.get("projects") {
-            Some(Value::Object(map)) => map.clone(),
-            _ => continue,
-        };
-        let mut matched: Option<String> = None;
-        for proj in projects.values() {
-            let path_str = match proj {
-                Value::Object(m) => m
-                    .get("cwd")
-                    .or_else(|| m.get("path"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default()
-                    .to_string(),
-                Value::String(s) => s.clone(),
-                _ => continue,
-            };
-            if path_str.is_empty() {
-                continue;
-            }
-            let expanded = expand_tilde(&path_str);
-            if let Ok(resolved) = Path::new(&expanded).canonicalize() {
-                if resolved == abs_root {
-                    matched = Some(path_str);
-                    break;
-                }
-            }
-        }
-        if let Some(_) = matched {
-            detected.push(index_file.clone());
-            let mission_id = fields
-                .get("mission_id")
-                .and_then(|v| v.as_str())
-                .map(str::to_string)
-                .unwrap_or_else(|| {
-                    index_file
-                        .parent()
-                        .map(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
-                        .flatten()
-                        .unwrap_or_default()
-                });
-            return Some(FleetState {
-                mission_id,
-                title: fields
-                    .get("title")
-                    .and_then(|v| v.as_str())
-                    .map(str::to_string),
-                status: if status == "paused" {
-                    "paused".into()
-                } else {
-                    "running".into()
-                },
-                wave_current: fields.get("wave_current").and_then(int_or_none),
-                wave_total: fields.get("wave_total").and_then(int_or_none),
-                path: index_file,
-            });
-        }
-    }
-    None
-}
-
-fn expand_tilde(path: &str) -> String {
-    if let Some(rest) = path.strip_prefix("~/") {
-        if let Some(home) = std::env::var_os("HOME") {
-            return PathBuf::from(home)
-                .join(rest)
-                .to_string_lossy()
-                .into_owned();
-        }
-    }
-    path.to_string()
-}
-
 fn load_walker_state(
     project_root: &Path,
     warnings: &mut Vec<String>,
@@ -806,18 +670,6 @@ fn whoami_render(opts: &Options, home: &AgentsHome) -> i32 {
     if let Some(v) = &state.visitor {
         println!("visitor: {v}");
     }
-    if let Some(fleet) = &state.fleet {
-        let wave = match (fleet.wave_current, fleet.wave_total) {
-            (Some(c), Some(t)) => format!(" - wave {c}/{t}"),
-            _ => String::new(),
-        };
-        let title = fleet
-            .title
-            .as_ref()
-            .map(|t| format!(" ({t})"))
-            .unwrap_or_default();
-        println!("fleet:    {}{title}{wave}", fleet.mission_id);
-    }
     if let Some(walker) = &state.walker {
         let phase = walker
             .phase
@@ -1007,21 +859,6 @@ fn status_render(opts: &Options, home: &AgentsHome) -> i32 {
             walker.session_id.as_deref().unwrap_or("(unknown)"),
             walker.in_flight,
             walker.done
-        );
-    }
-    if let Some(fleet) = &state.fleet {
-        println!(
-            "fleet:    {} status={} wave={}/{}",
-            fleet.mission_id,
-            fleet.status,
-            fleet
-                .wave_current
-                .map(|v| v.to_string())
-                .unwrap_or_else(|| "None".into()),
-            fleet
-                .wave_total
-                .map(|v| v.to_string())
-                .unwrap_or_else(|| "None".into()),
         );
     }
     if !tail.events.is_empty() {
@@ -1234,23 +1071,9 @@ fn ctx_to_jsonable(state: &AgentContext) -> Map<String, Value> {
         Value::String(state.project_root.to_string_lossy().into_owned()),
     );
     payload.insert("harness".into(), Value::String(state.harness.clone()));
-    payload.insert(
-        "fleet".into(),
-        state
-            .fleet
-            .as_ref()
-            .map(|f| {
-                json!({
-                    "mission_id": f.mission_id,
-                    "title": f.title,
-                    "status": f.status,
-                    "wave_current": f.wave_current,
-                    "wave_total": f.wave_total,
-                    "path": f.path.to_string_lossy(),
-                })
-            })
-            .unwrap_or(Value::Null),
-    );
+    // Always null: the layer read megatron mission indexes nothing writes.
+    // The key stays so a consumer of the JSON shape keeps parsing.
+    payload.insert("fleet".into(), Value::Null);
     payload.insert(
         "walker".into(),
         state

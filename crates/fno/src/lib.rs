@@ -264,8 +264,6 @@ pub mod spawn_journal;
 #[cfg(feature = "full")]
 pub mod splash;
 #[cfg(feature = "full")]
-pub mod sprites;
-#[cfg(feature = "full")]
 pub mod squad;
 #[cfg(feature = "full")]
 pub mod squad_cascade;
@@ -284,6 +282,8 @@ pub mod templates;
 mod test_keeper_cleanup;
 #[cfg(all(test, feature = "full"))]
 pub(crate) mod test_owner;
+#[cfg(feature = "full")]
+pub mod text_style;
 #[cfg(feature = "full")]
 pub mod theme;
 #[cfg(feature = "full")]
@@ -325,8 +325,6 @@ pub mod wordmark;
 pub mod workspace_sidecar;
 #[cfg(feature = "full")]
 pub mod worktree_door;
-#[cfg(feature = "full")]
-pub mod yard_overlay;
 
 #[cfg(feature = "full")]
 pub mod doctor;

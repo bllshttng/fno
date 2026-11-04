@@ -4,6 +4,7 @@
 //! stays put.
 
 use super::*;
+use crate::text_style::{TLine, TextStyle};
 
 const PEEK_OVERLAY_W: usize = 72;
 
@@ -16,7 +17,7 @@ const NAV_OVERLAY_W: usize = 54;
 /// always shows WHY it hit - a row that appears arbitrary reads as a bug. An
 /// empty result renders a single `no matches` line (the key handler BELs).
 /// `rows` is pre-filtered; `cursor` is pre-clamped.
-pub(crate) fn nav_overlay_lines(rows: &[NavRow], nav: &NavView) -> Vec<String> {
+pub(crate) fn nav_overlay_lines(rows: &[NavRow], nav: &NavView) -> Vec<TLine> {
     let chip = match nav.state_filter {
         None => "all",
         Some(PaneState::Blocked) => "blocked",
@@ -26,12 +27,17 @@ pub(crate) fn nav_overlay_lines(rows: &[NavRow], nav: &NavView) -> Vec<String> {
         Some(PaneState::Idle) => "idle",
         Some(PaneState::Empty) => "empty",
     };
-    let mut lines = vec![pad_to(
-        &format!(" find › {}   [{chip}]", nav.query),
-        NAV_OVERLAY_W,
-    )];
+    let mut lines = vec![TLine::parts(&[
+        (" find › ", TextStyle::Section),
+        (&nav.query, TextStyle::Value),
+        (&format!("   [{chip}]"), TextStyle::Badge),
+    ])
+    .pad_to(NAV_OVERLAY_W)];
     if rows.is_empty() {
-        lines.push(pad_to("   no matches", NAV_OVERLAY_W));
+        lines.push(TLine::line(
+            TextStyle::Hint,
+            pad_to("   no matches", NAV_OVERLAY_W),
+        ));
         return lines;
     }
     let q = nav.query.to_lowercase();
@@ -52,10 +58,13 @@ pub(crate) fn nav_overlay_lines(rows: &[NavRow], nav: &NavView) -> Vec<String> {
                 None => r.label.clone(),
             }
         };
-        lines.push(pad_to(
-            &format!("   {} {}", nav_glyph(r.state), label),
-            NAV_OVERLAY_W,
-        ));
+        lines.push(
+            TLine::parts(&[
+                (&format!("   {} ", nav_glyph(r.state)), TextStyle::Meta),
+                (&label, TextStyle::Item),
+            ])
+            .pad_to(NAV_OVERLAY_W),
+        );
     }
     lines
 }
@@ -127,9 +136,12 @@ pub(crate) fn peek_overlay_lines(
     peek: &PeekView,
     reply: Option<&str>,
     now_secs: u64,
-) -> Vec<String> {
+) -> Vec<TLine> {
     let Some(a) = agent else {
-        return vec![pad_to(" peek · row gone", PEEK_OVERLAY_W)];
+        return vec![TLine::line(
+            TextStyle::Hint,
+            pad_to(" peek · row gone", PEEK_OVERLAY_W),
+        )];
     };
     // Sanitize every external-sourced line (transcript body, scraped reason)
     // before it becomes overlay cells (codex review): `fno agents peek` reads
@@ -172,7 +184,11 @@ pub(crate) fn peek_overlay_lines(
             row_meter::up_cell(a.started_at, now_secs)
         ));
     }
-    let mut lines = vec![pad_to(&header, PEEK_OVERLAY_W)];
+    let mut lines = vec![TLine::line(
+        TextStyle::Title,
+        pad_to(&header, PEEK_OVERLAY_W),
+    )];
+    let styled = |style: TextStyle, text: &str| TLine::line(style, pad_to(text, PEEK_OVERLAY_W));
     if let Some(reason) = a.reason.as_deref().filter(|s| !s.is_empty()) {
         let mut wrapped = Vec::new();
         wrap_line(
@@ -181,36 +197,36 @@ pub(crate) fn peek_overlay_lines(
             &mut wrapped,
         );
         for wl in wrapped {
-            lines.push(pad_to(&format!("   {wl}"), PEEK_OVERLAY_W));
+            lines.push(styled(TextStyle::WARN, &format!("   {wl}")));
         }
     }
     // answerable block: prompt + numbered options, mirroring the needs-me
     // overlay's body so a blocked peek reads identically. Digit answers (US3)
     // act on exactly these options.
     if let Some(ans) = &a.answerable {
-        lines.push(pad_to("", PEEK_OVERLAY_W));
+        lines.push(styled(TextStyle::Item, ""));
         if !ans.prompt.is_empty() {
-            lines.push(pad_to(
+            lines.push(styled(
+                TextStyle::Value,
                 &format!("   {}", ans.prompt.replace('\n', " ")),
-                PEEK_OVERLAY_W,
             ));
         }
         for o in &ans.options {
-            lines.push(pad_to(
+            lines.push(styled(
+                TextStyle::Item,
                 &format!("     {}. {}", o.idx, o.label),
-                PEEK_OVERLAY_W,
             ));
         }
     }
-    lines.push(pad_to("", PEEK_OVERLAY_W)); // divider before the transcript
+    lines.push(styled(TextStyle::Item, "")); // divider before the transcript
     match &peek.body {
-        None => lines.push(pad_to("   loading…", PEEK_OVERLAY_W)),
-        Some(body) if body.is_empty() => lines.push(pad_to("   no activity yet", PEEK_OVERLAY_W)),
+        None => lines.push(styled(TextStyle::Hint, "   loading…")),
+        Some(body) if body.is_empty() => lines.push(styled(TextStyle::Hint, "   no activity yet")),
         Some(body) => {
             for l in body {
-                lines.push(pad_to(
+                lines.push(styled(
+                    TextStyle::Item,
                     &format!(" {}", sanitize_peek_line(l)),
-                    PEEK_OVERLAY_W,
                 ));
             }
         }
@@ -219,55 +235,27 @@ pub(crate) fn peek_overlay_lines(
     // footer swaps by row state (attach is a dead end on an exited row - the bug
     // US6 closes - so it becomes `r respawn`; `m reply` shows in both).
     match reply {
-        Some(buf) => lines.push(pad_to(
-            &format!(" reply: {buf}_ (⏎ send · esc cancel)"),
-            PEEK_OVERLAY_W,
-        )),
-        None => lines.push(pad_to(
+        Some(buf) => lines.push(
+            TLine::parts(&[
+                (" reply: ", TextStyle::Meta),
+                (buf, TextStyle::Value),
+                ("_ (⏎ send · esc cancel)", TextStyle::Hint),
+            ])
+            .pad_to(PEEK_OVERLAY_W),
+        ),
+        None => lines.push(styled(
+            TextStyle::Hint,
             if a.exited {
                 " j/k peek · m reply · r respawn · esc back"
             } else {
                 " j/k peek · digit answers · m reply · ⏎ attach · esc back"
             },
-            PEEK_OVERLAY_W,
         )),
     }
     lines
 }
 
 impl View {
-    /// Paint the yard: the crowd, and the picked citizen's spotlight. The
-    /// caption names that citizen, so it is the yard's cursor row.
-    pub(super) fn draw_yard(&self, yv: &YardSel, cells: &mut [Cell], rows: usize, cols: usize) {
-        let (origin, dims) = self.overlay_viewport();
-        let crowd = self.yard_crowd();
-        let sel = yv.sel.min(crowd.len().saturating_sub(1));
-        let identity = crowd
-            .get(sel)
-            .and_then(|(name, _, _)| self.yard_identity(name));
-        let frame = (yv.opened_at.elapsed().as_millis() / YARD_FRAME_MS)
-            % crate::sprites::FRAME_COUNT as u128;
-        let (lines, cursor) = crate::yard_overlay::overlay_lines_cursor(
-            &crowd,
-            sel,
-            identity,
-            frame as usize,
-            self.yard_footer(),
-        );
-        let chrome = chrome::Chrome::new("the yard", Anchor::Center).footer("n/N pick · q close");
-        draw_lines_overlay(
-            cells,
-            rows,
-            cols,
-            origin,
-            dims,
-            &chrome,
-            &lines,
-            &self.theme,
-            cursor,
-        );
-    }
-
     /// Paint the connections modal. The modal reports the line its fill covers.
     pub(super) fn draw_connections(
         &self,
@@ -326,4 +314,64 @@ impl View {
             draw_overlay_layout(cells, rows, cols, &layout, &self.theme);
         }
     }
+}
+
+/// The workspace peek body: everything the layout already holds for
+/// one squad - its origin, its tabs (the active one marked), and its member
+/// rows with their states. Pure and local; no wire round trip.
+pub(super) fn squad_peek_lines(layout: &LayoutView, sid: u64) -> Vec<String> {
+    let Some(s) = layout.squads.iter().find(|s| s.id == sid) else {
+        return vec!["workspace is no longer here".into()];
+    };
+    let mut out = vec![
+        format!("origin  {}", s.canonical_cwd),
+        format!("tabs    {} · panes {}", s.tabs.len(), s.panes),
+    ];
+    for (i, t) in s.tabs.iter().enumerate() {
+        let marker = if i == s.active_tab { "*" } else { " " };
+        let label = if t.name.is_empty() {
+            format!("tab {}", i + 1)
+        } else {
+            t.name.clone()
+        };
+        out.push(format!("{marker} {label}"));
+    }
+    let members: Vec<&AgentRow> = layout
+        .agents
+        .iter()
+        .filter(|a| a.squad == Some(sid))
+        .collect();
+    if members.is_empty() {
+        out.push("members none".into());
+        return out;
+    }
+    out.push("members".into());
+    for a in members {
+        let state = if a.exited {
+            "exited"
+        } else {
+            // The one state vocabulary (pane_state + the nav filter words): a
+            // finished-but-unseen member is `done`, not `idle`.
+            match pane_state(a.badge, a.seen, a.pane_activity) {
+                PaneState::Blocked => "blocked",
+                PaneState::Working => "working",
+                PaneState::DoneUnseen => "done",
+                // NOT "unread": that word names output nobody has
+                // looked at, which is `DoneUnseen` - a different row, filed
+                // under "done". A filter typed as `unread` would then return
+                // rows with no liveness reading and EXCLUDE every row that
+                // actually has unseen output, which is this branch's own
+                // defect: a word standing in for a fact it does not name.
+                PaneState::Unmeasured => "unmeasured",
+                PaneState::Idle => "idle",
+                PaneState::Empty => "empty",
+            }
+        };
+        let pane = a
+            .pane_id
+            .map(|p| format!(" · pane {p}"))
+            .unwrap_or_default();
+        out.push(format!("  {} · {state}{pane}", a.name));
+    }
+    out
 }

@@ -1471,6 +1471,7 @@ fn decide_gate(
     rules_gate(config_cwd, &input)?;
     let floor_gb = agents_config::min_free_gb(config_cwd);
     let swap_cap = agents_config::max_swap_pct(config_cwd);
+    let disk_floor_gb = agents_config::min_free_disk_gb(config_cwd);
     // AC7: the retired trigger (max_load_per_cpu) is not read here;
     // the CPU axis consumes the payload's admission, which the Python decider
     // computed from its own config read.
@@ -1599,7 +1600,8 @@ fn decide_gate(
         // the session runs remotely, so there is nothing local to protect
         // (the cloud-substrate ruling, recorded on the node).
         if charges_local_memory(substrate) {
-            check_ram_floor(floor_gb, swap_cap).inspect_err(|_| guard.release())?;
+            check_host_floors(floor_gb, swap_cap, disk_floor_gb)
+                .inspect_err(|_| guard.release())?;
         }
         eprintln!(
             "{}",
@@ -1781,7 +1783,8 @@ fn decide_gate(
                 // The memory axis is hard: --force passes the soft limits only.
                 // Cloud is exempt (zero local footprint; the cloud-substrate ruling).
                 if charges_local_memory(substrate) {
-                    check_ram_floor(floor_gb, swap_cap).inspect_err(|_| guard.release())?;
+                    check_host_floors(floor_gb, swap_cap, disk_floor_gb)
+                        .inspect_err(|_| guard.release())?;
                 }
                 eprintln!(
                     "{}",
@@ -2018,7 +2021,7 @@ fn decide_gate(
                             // that queued 5 minutes must not dispatch into a tight machine).
                             // Cloud skips it: zero local footprint (the cloud-substrate ruling).
                             if charges_local_memory(substrate) {
-                                check_ram_floor(floor_gb, swap_cap)
+                                check_host_floors(floor_gb, swap_cap, disk_floor_gb)
                                     .inspect_err(|_| guard.release())?;
                             }
                             // Stamped only once the floor actually answered, so a
@@ -2436,6 +2439,43 @@ fn check_ram_floor(floor_gb: f64, max_swap_pct: f64) -> Result<(), Refusal> {
         }
         None => Ok(()),
     }
+}
+
+/// Disk check: refuse a new build worker while the data volume holds less
+/// than `agents.min_free_disk_gb`. The refusal names the janitor; the daemon
+/// runs it off the spawn path, because a sweep deletes tens of GB and a
+/// foreground command never waits on that. Hard like the memory axis: `--force`
+/// does not lift it. Shares the memory axis's exit code; the receipt reason
+/// `disk_floor` tells them apart.
+pub(crate) fn check_disk_floor(
+    home: &crate::paths::AgentsHome,
+    floor_gb: f64,
+) -> Result<(), Refusal> {
+    let free = crate::disk_floor::free_disk_gb(home.root());
+    let Some(term) = crate::disk_floor::disk_floor_term(free, floor_gb) else {
+        return Ok(());
+    };
+    let janitor = crate::disk_floor::JANITOR_NOTE;
+    eprintln!(
+        "spawn-gate: {term}; refusing to spawn. The disk axis is hard: --force does not lift it. \
+         {janitor}. To change the limit: set agents.min_free_disk_gb in ~/.fno/config.toml."
+    );
+    Err(Refusal::with_receipt(
+        EXIT_RAM_REFUSED,
+        serde_json::json!({
+            "status": "refused",
+            "reason": "disk_floor",
+            "free_disk_gb": free,
+            "min_free_disk_gb": floor_gb,
+            "janitor": janitor,
+        }),
+    ))
+}
+
+/// Both resource floors a local build worker is held to: RAM, then disk.
+fn check_host_floors(floor_gb: f64, swap_cap: f64, disk_floor_gb: f64) -> Result<(), Refusal> {
+    check_ram_floor(floor_gb, swap_cap)?;
+    check_disk_floor(&crate::paths::AgentsHome::from_env(), disk_floor_gb)
 }
 
 /// Change 3: the payload's `admission` object, computed by the ONE

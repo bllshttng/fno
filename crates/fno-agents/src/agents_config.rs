@@ -1082,6 +1082,9 @@ pub const DEFAULT_MAX_LIVE: u32 = 3;
 pub const DEFAULT_MAX_LIVE_PER_TERRITORY: u32 = 4;
 /// Default available-RAM floor (GB) for spawn preflight. `<= 0` disables.
 pub const DEFAULT_MIN_FREE_GB: f64 = 4.0;
+/// Default free-disk floor (GB) on the data volume. A fleet of builds once
+/// filled it to 153 MiB. `<= 0` disables.
+pub const DEFAULT_MIN_FREE_DISK_GB: f64 = 20.0;
 /// Default swap-pressure ceiling (percent used) for spawn preflight: available
 /// RAM can read six times its floor while the kernel is paging to a nearly
 /// full swap device. `<= 0` disables.
@@ -1175,6 +1178,15 @@ pub fn min_free_gb(cwd: &Path) -> f64 {
     resolve_agents_value(cwd, "min_free_gb")
         .and_then(|raw| raw.parse::<f64>().ok())
         .unwrap_or(DEFAULT_MIN_FREE_GB)
+}
+
+/// Resolve `agents.min_free_disk_gb`: spawn refuses a build worker below it
+/// and the janitor runs when free space crosses it. `<= 0` disables;
+/// unparseable falls back to [`DEFAULT_MIN_FREE_DISK_GB`].
+pub fn min_free_disk_gb(cwd: &Path) -> f64 {
+    resolve_agents_value(cwd, "min_free_disk_gb")
+        .and_then(|raw| raw.parse::<f64>().ok())
+        .unwrap_or(DEFAULT_MIN_FREE_DISK_GB)
 }
 
 /// Resolve `agents.max_swap_pct`: spawn refuses when swap used is at or above
@@ -1456,7 +1468,6 @@ const BUILTIN_VISUAL_PAINT_PATHS: &[&str] = &[
     "crates/fno/src/band_remap.rs",
     "crates/fno/src/chrome.rs",
     "crates/fno/src/connections_view.rs",
-    "crates/fno/src/digest_overlay.rs",
     "crates/fno/src/feed_overlay.rs",
     "crates/fno/src/frame_ansi.rs",
     "crates/fno/src/frame_html.rs",
@@ -1469,14 +1480,12 @@ const BUILTIN_VISUAL_PAINT_PATHS: &[&str] = &[
     "crates/fno/src/ratatui_blit.rs",
     "crates/fno/src/sideline_color.rs",
     "crates/fno/src/splash.rs",
-    "crates/fno/src/sprites.rs",
     "crates/fno/src/theme.rs",
     "crates/fno/src/web_backlog.html",
     "crates/fno/src/web_command.html",
     "crates/fno/src/web_page.html",
     "crates/fno/src/web_trace.html",
     "crates/fno/src/wordmark.rs",
-    "crates/fno/src/yard_overlay.rs",
     "README.md",
     "docs/images/**",
 ];
@@ -1489,11 +1498,19 @@ const BUILTIN_DOCS_TREE_PAINT_PATHS: &[&str] = &["fno-sh-docs/**"];
 
 /// Resolve `merge.visual_paint_paths`, the render-surface paths whose PRs
 /// hold for the user's visual approval until an answered question page names
-/// the PR at its head. A configured list wins, and an explicit empty list disarms the
-/// gate. With no key in any tier, a checkout that carries the mux client gets
-/// the built-in paint list, so a stock footnote tree holds its own UI PRs;
-/// any other project stays disarmed until it names its paint surface here.
+/// the PR at its head. A checkout that carries the mux client always gets the
+/// built-in paint list, so every machine reads the same list for footnote's
+/// own PRs and a local config cannot change what holds. Any other project
+/// reads its configured list, where an explicit empty list disarms the gate,
+/// and stays disarmed until it names its paint surface here.
 pub fn visual_paint_paths(cwd: &Path) -> Vec<String> {
+    let root = crate::paths::canonical_repo_root(cwd).unwrap_or_else(|| cwd.to_path_buf());
+    if root.join(BUILTIN_VISUAL_PAINT_ANCHOR).is_dir() {
+        return BUILTIN_VISUAL_PAINT_PATHS
+            .iter()
+            .map(|p| (*p).to_string())
+            .collect();
+    }
     let configured = resolve(cwd, |t| {
         t.get("merge")?
             .as_table()?
@@ -1509,13 +1526,7 @@ pub fn visual_paint_paths(cwd: &Path) -> Vec<String> {
         _ => Vec::new(),
     });
     configured.unwrap_or_else(|| {
-        let root = crate::paths::canonical_repo_root(cwd).unwrap_or_else(|| cwd.to_path_buf());
-        if root.join(BUILTIN_VISUAL_PAINT_ANCHOR).is_dir() {
-            BUILTIN_VISUAL_PAINT_PATHS
-                .iter()
-                .map(|p| (*p).to_string())
-                .collect()
-        } else if root.join(BUILTIN_DOCS_TREE_ANCHOR).is_dir() {
+        if root.join(BUILTIN_DOCS_TREE_ANCHOR).is_dir() {
             BUILTIN_DOCS_TREE_PAINT_PATHS
                 .iter()
                 .map(|p| (*p).to_string())

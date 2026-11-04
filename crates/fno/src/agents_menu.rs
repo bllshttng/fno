@@ -205,7 +205,6 @@ const AUDIT: &[Node] = &[
     command("bash-census", &["bash-census"], "Bash-call shares and top command tables over transcripts."),
     command("honesty-sweep", &["honesty-sweep"], "Declared-vs-measured sweep over declared populations."),
     command("evals-macro", &["evals-macro"], "The macro-eval failure-pattern leaderboard."),
-    command("yard", &["yard"], "The yard identity fold per registry citizen."),
     command("drive-authority", &["drive-authority"], "Whether an operator holds a gate-hardening drive window."),
     command("stale-escalate", &["stale-escalate"], "Reconcile the stale-row question to the measured fleet."),
     command("friction-escalate", &["friction-escalate"], "Reconcile one watchdog-friction question to the fleet."),

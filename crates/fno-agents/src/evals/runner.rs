@@ -169,6 +169,24 @@ fn git_in(dir: &std::path::Path, args: &[&str]) -> Result<String, String> {
 /// in memory.
 const ANSWER_KEY_PATHS: [&str; 2] = ["evals/bank", "evals/fixtures/metrics"];
 
+/// A skill's golden tasks sit beside it in `skills/<name>/evals/*.yaml`, so they
+/// are answer keys too. Case directories deeper in `evals/` stay.
+fn remove_skill_task_files(tree: &std::path::Path) {
+    let Ok(skills) = std::fs::read_dir(tree.join("skills")) else {
+        return;
+    };
+    for skill in skills.flatten() {
+        let Ok(files) = std::fs::read_dir(skill.path().join("evals")) else {
+            continue;
+        };
+        for f in files.flatten().map(|f| f.path()) {
+            if f.is_file() && f.extension().is_some_and(|e| e == "yaml") {
+                let _ = std::fs::remove_file(f);
+            }
+        }
+    }
+}
+
 /// Where sealed trees live: the temp dir, so no `$HOME` file sits on the
 /// worker's ancestor path. None of it may sit inside `$HOME`, which the fence
 /// denies as a whole.
@@ -197,7 +215,7 @@ fn home_dir() -> std::path::PathBuf {
 }
 
 /// Write `ref_name`'s files (or only `paths` of them) into `dest`.
-fn extract_ref(
+pub(super) fn extract_ref(
     repo_root: &std::path::Path,
     ref_name: &str,
     paths: &[&str],
@@ -229,6 +247,45 @@ fn extract_ref(
     Ok(())
 }
 
+/// The paths a golden worker reads as instructions. A work-product task keeps
+/// its fixture and takes only these from `--ref`, so a skill or rule change
+/// varies the tree while the code to fix stays fixed.
+const RULES_PATHS: [&str; 8] = [
+    "AGENTS.md",
+    "CLAUDE.md",
+    "GEMINI.md",
+    ".claude",
+    "skills",
+    "agents",
+    "commands",
+    "hooks",
+];
+
+/// Lay `rules_ref`'s rules paths over the tree. A path the ref lacks is skipped.
+fn apply_rules(
+    repo_root: &std::path::Path,
+    rules_ref: &str,
+    dir: &std::path::Path,
+) -> Result<(), String> {
+    let listed = git_in(
+        repo_root,
+        &[
+            ["ls-tree", "--name-only", rules_ref, "--"].as_slice(),
+            RULES_PATHS.as_slice(),
+        ]
+        .concat(),
+    )?;
+    let present: Vec<&str> = listed.lines().collect();
+    for path in &present {
+        let _ = std::fs::remove_dir_all(dir.join(path));
+        let _ = std::fs::remove_file(dir.join(path));
+    }
+    if present.is_empty() {
+        return Ok(());
+    }
+    extract_ref(repo_root, rules_ref, &present, dir)
+}
+
 /// A golden's tree: `ref_name`'s files as one commit in a new repo. A worktree
 /// names the real repo in its `.git` file, and any parent commit holds the
 /// rules and the answer keys one `git show` away, so this tree has neither.
@@ -237,6 +294,7 @@ fn make_sealed_tree(
     repo_root: &std::path::Path,
     ref_name: &str,
     overlay_ref: Option<&str>,
+    rules_ref: Option<&str>,
     tag: &str,
     base: &std::path::Path,
 ) -> Result<(std::path::PathBuf, String), String> {
@@ -246,7 +304,7 @@ fn make_sealed_tree(
         .unwrap_or(0);
     let path = base.join(format!("{tag}-{}-{millis}", std::process::id()));
     std::fs::create_dir_all(&path).map_err(|e| e.to_string())?;
-    let built = fill_sealed_tree(repo_root, ref_name, overlay_ref, &path);
+    let built = fill_sealed_tree(repo_root, ref_name, overlay_ref, rules_ref, &path);
     if built.is_err() {
         let _ = std::fs::remove_dir_all(&path);
     }
@@ -257,9 +315,13 @@ fn fill_sealed_tree(
     repo_root: &std::path::Path,
     ref_name: &str,
     overlay_ref: Option<&str>,
+    rules_ref: Option<&str>,
     dir: &std::path::Path,
 ) -> Result<String, String> {
     extract_ref(repo_root, ref_name, &[], dir)?;
+    if let Some(rules) = rules_ref {
+        apply_rules(repo_root, rules, dir)?;
+    }
     if let Some(overlay) = overlay_ref {
         let _ = std::fs::remove_dir_all(dir.join(OVERLAY_PATH));
         extract_ref(repo_root, overlay, &[OVERLAY_PATH], dir)?;
@@ -267,6 +329,7 @@ fn fill_sealed_tree(
     for key in ANSWER_KEY_PATHS {
         let _ = std::fs::remove_dir_all(dir.join(key));
     }
+    remove_skill_task_files(dir);
     // An empty template: a user's template can carry hooks that name real paths.
     git_in(dir, &["init", "-q", "--template="])?;
     // The fence denies the user's git config, so the worker's git reads these.
@@ -888,8 +951,19 @@ pub fn run_task(
     experiment_id: Option<&str>,
     overlay_ref: Option<&str>,
 ) -> Vec<RunResult> {
-    let checkout_ref = variant_ref.to_string();
-    let bank_rev = git_rev(repo_root, &checkout_ref);
+    // A work-product task checks out its fix's parent whatever `--ref` says;
+    // `--ref` then names only the rules tree the worker reads.
+    let work_product = task.is_work_product();
+    let checkout_ref = if work_product {
+        task.repo_fixture.clone()
+    } else {
+        variant_ref.to_string()
+    };
+    let rules_ref = (work_product && variant_ref != task.repo_fixture).then_some(variant_ref);
+    let bank_rev = git_rev(repo_root, variant_ref);
+    let fixture_rev = work_product
+        .then(|| git_rev(repo_root, &checkout_ref))
+        .flatten();
     let overlay_rev = overlay_ref.and_then(|r| git_rev(repo_root, r));
     let timeout_s = std::cmp::max(1, task.timeout_minutes.saturating_mul(60));
     let mut results: Vec<RunResult> = Vec::new();
@@ -917,7 +991,14 @@ pub fn run_task(
         if golden {
             let overlay = overlay_rev.as_deref().or(overlay_ref);
             match sealed_base(&std::env::temp_dir(), &home_dir()).and_then(|base| {
-                make_sealed_tree(repo_root, &checkout_ref, overlay, &task.id, &base)
+                make_sealed_tree(
+                    repo_root,
+                    &checkout_ref,
+                    overlay,
+                    rules_ref,
+                    &task.id,
+                    &base,
+                )
             }) {
                 Err(e) => {
                     reason =
@@ -1065,6 +1146,9 @@ pub fn run_task(
         });
         if let Some(rev) = &overlay_rev {
             row["overlay_rev"] = json!(rev);
+        }
+        if let Some(rev) = &fixture_rev {
+            row["fixture_rev"] = json!(rev);
         }
         if let Some(golden) = &task.golden {
             row["failure_type"] = json!(golden.failure_type);
@@ -1282,6 +1366,59 @@ mod tests {
     }
 
     #[test]
+    fn a_rules_ref_replaces_only_the_rules_paths_of_the_fixture_tree() {
+        let repo = tempfile::tempdir().unwrap();
+        let base = tempfile::tempdir().unwrap();
+        let git = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+                .args(args)
+                .current_dir(repo.path())
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "{args:?}");
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        };
+        let put = |rel: &str, body: &str| {
+            let p = repo.path().join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, body).unwrap();
+        };
+        git(&["init", "-q"]);
+        put("AGENTS.md", "old rules");
+        put("src/lib.rs", "parent code");
+        git(&["add", "."]);
+        git(&["commit", "-q", "-m", "parent"]);
+        let fixture = git(&["rev-parse", "HEAD"]);
+        put("AGENTS.md", "new rules");
+        put("skills/s/SKILL.md", "new skill");
+        put("src/lib.rs", "later code");
+        git(&["add", "."]);
+        git(&["commit", "-q", "-m", "variant"]);
+        let variant = git(&["rev-parse", "HEAD"]);
+
+        let (tree, _) = make_sealed_tree(
+            repo.path(),
+            &fixture,
+            None,
+            Some(variant.as_str()),
+            "wp",
+            base.path(),
+        )
+        .unwrap();
+        let read = |rel: &str| std::fs::read_to_string(tree.join(rel)).unwrap();
+        assert_eq!(read("AGENTS.md"), "new rules");
+        assert_eq!(read("skills/s/SKILL.md"), "new skill");
+        assert_eq!(
+            read("src/lib.rs"),
+            "parent code",
+            "the work stays the fixture"
+        );
+        let missing = make_sealed_tree(repo.path(), "0000000", None, None, "wp", base.path());
+        assert!(missing.is_err(), "an unresolved fixture is never a tree");
+    }
+
+    #[test]
     fn the_provider_default_rides_when_no_lane_names_a_harness() {
         let argv = spawn_argv("n", "/tmp/wt", 60, Some("codex"), None, "p", &[]);
         assert!(argv
@@ -1353,8 +1490,15 @@ mod tests {
         git(&["commit", "-q", "-m", "new"]);
         let new = git(&["rev-parse", "HEAD"]);
 
-        let (tree, head) =
-            make_sealed_tree(&repo, &old, Some(new.as_str()), "golden-x", base.path()).unwrap();
+        let (tree, head) = make_sealed_tree(
+            &repo,
+            &old,
+            Some(new.as_str()),
+            None,
+            "golden-x",
+            base.path(),
+        )
+        .unwrap();
 
         let in_tree = |args: &[&str]| {
             let out = std::process::Command::new("git")

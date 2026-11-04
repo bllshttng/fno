@@ -22,6 +22,7 @@
 //! has no Python launcher to translate a knob into an env var.
 
 use crate::proto;
+use crate::text_style::{TLine, TextStyle};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -1458,7 +1459,7 @@ pub fn fno_agents_bin_auto() -> Option<PathBuf> {
 
 /// Turn a `fno-agents digest --json` stdout blob into overlay lines. `None`
 /// when the JSON is unparseable or the fold produced no `lines` (fail-quiet).
-fn lines_from_json(stdout: &str) -> Option<Vec<String>> {
+fn lines_from_json(stdout: &str) -> Option<Vec<TLine>> {
     let v: serde_json::Value = serde_json::from_str(stdout.trim()).ok()?;
     let arr = v.get("lines")?.as_array()?;
     let lines: Vec<String> = arr
@@ -1474,23 +1475,23 @@ fn lines_from_json(stdout: &str) -> Option<Vec<String>> {
 
 /// Frame the fold lines with a header + dismiss hint, padded to a common width
 /// so the inverse-video block is a clean rectangle.
-fn decorate(mut body: Vec<String>) -> Vec<String> {
+pub(crate) fn decorate(body: Vec<String>) -> Vec<TLine> {
     let mut out = Vec::with_capacity(body.len() + 2);
-    out.push("while you were gone".to_string());
-    out.append(&mut body);
-    out.push("(any key to dismiss)".to_string());
-    let width = out.iter().map(|l| l.chars().count()).max().unwrap_or(0);
-    for line in &mut out {
-        let pad = width - line.chars().count();
-        line.push_str(&" ".repeat(pad));
-    }
-    out
+    out.push(TLine::line(TextStyle::Title, "while you were gone"));
+    out.extend(body.into_iter().map(TLine::plain));
+    out.push(TLine::line(TextStyle::Hint, "(any key to dismiss)"));
+    let width = out
+        .iter()
+        .map(|l| l.text.chars().count())
+        .max()
+        .unwrap_or(0);
+    out.into_iter().map(|l| l.pad_to(width)).collect()
 }
 
 /// The full attach-time decision. Returns overlay lines, or `None` to render
 /// nothing. Fail-open at every step: a disabled knob, a too-recent detach, an
 /// unknown cwd, a missing/slow/empty `fno-agents` all yield `None`.
-pub async fn on_attach(session: &str, focused_cwd: &str) -> Option<Vec<String>> {
+pub async fn on_attach(session: &str, focused_cwd: &str) -> Option<Vec<TLine>> {
     let cwd = Path::new(focused_cwd);
     if !attach_digest_enabled(cwd) {
         return None;
@@ -1714,9 +1715,9 @@ mod tests {
         let w = lines[0].chars().count();
         assert!(lines.iter().all(|l| l.chars().count() == w));
 
-        assert_eq!(lines_from_json(r#"{"lines":[]}"#), None);
-        assert_eq!(lines_from_json("not json"), None);
-        assert_eq!(lines_from_json(r#"{"no_lines":1}"#), None);
+        assert!(lines_from_json(r#"{"lines":[]}"#).is_none());
+        assert!(lines_from_json("not json").is_none());
+        assert!(lines_from_json(r#"{"no_lines":1}"#).is_none());
     }
 
     #[test]

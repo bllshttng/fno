@@ -941,11 +941,6 @@ def state_dir() -> Path:
     return _guard_state_path(_resolve(settings.state_dir))
 
 
-def github_cli_proxy_dir() -> Path:
-    """Installed worker-only `gh` proxy directory."""
-    return state_dir() / "bin" / "github-cli"
-
-
 def locks_dir() -> Path:
     """Advisory-lock sidecar directory: the layout table's ``locks`` row
     (``state/locks`` once the fold ran).
@@ -1566,15 +1561,6 @@ def briefs_dir() -> Path:
     return state_dir() / "briefs"
 
 
-def fleet_dir() -> Path:
-    """Return the fleet directory."""
-    settings = _settings()
-    override = settings.paths.fleet_dir
-    if override is not None:
-        return _guard_state_path(_resolve(override))
-    return state_dir() / "fleet"
-
-
 def postmortems_dir() -> Path:
     """Return the postmortems directory."""
     settings = _settings()
@@ -1582,15 +1568,6 @@ def postmortems_dir() -> Path:
     if override is not None:
         return _guard_state_path(_resolve(override))
     return Path(_plan_path_door(["state", "path", "dir", "postmortems", "--root", str(state_dir())]))
-
-
-def worktrees_base() -> Path:
-    """Return the worktrees base directory."""
-    settings = _settings()
-    override = settings.paths.worktrees_base
-    if override is not None:
-        return _guard_state_path(_resolve(override))
-    return state_dir() / "worktrees"
 
 
 def memory_dir() -> Path:

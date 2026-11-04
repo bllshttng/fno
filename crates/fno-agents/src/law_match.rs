@@ -49,6 +49,9 @@ enum MatchRequest {
     /// is 0 restored, 1 recorded-but-index-failed, 3 refused.
     #[serde(rename = "restore")]
     Restore(RecordDoorRequest),
+    /// The premise re-check: `argv` is the `fno inbox law recheck` command line.
+    #[serde(rename = "recheck")]
+    Recheck(RecordDoorRequest),
     /// The renew door: `argv` is the `fno inbox law renew` command line.
     /// Same ownership as `restore`: stdout carries the new id.
     #[serde(rename = "renew")]
@@ -969,7 +972,8 @@ fn is_pr_subject(s: &str) -> bool {
 /// `footnote` where every node says `fno`: stamp and node must agree or the
 /// stage matcher and the filter answer different questions about one row.
 /// Adds one rung the Python resolver lacks: fno-managed worktrees at
-/// `~/.fno/worktrees/<repo>/<name>`, attributed through the `<repo>` segment
+/// `~/.fno/spaces/worktrees/<repo>/<name>` (or the pre-fold
+/// `~/.fno/worktrees/<repo>/<name>`), attributed through the `<repo>` segment
 /// like the conductor layout, so a law recorded from a worktree session
 /// stamps the parent repo's project instead of refusing.
 pub(crate) fn resolve_project(
@@ -992,9 +996,13 @@ pub(crate) fn resolve_project(
             }
         }
     }
-    // ~/.fno/worktrees/<repo>/... and conductor workspaces/<repo>/... map the
+    // ~/.fno/{spaces/,}worktrees/<repo>/... and conductor workspaces/<repo>/... map the
     // repo segment through the settings basename.
-    for marker in ["/.fno/worktrees/", "/workspaces/"] {
+    for marker in [
+        "/.fno/spaces/worktrees/",
+        "/.fno/worktrees/",
+        "/workspaces/",
+    ] {
         if let Some((_, rest)) = p.split_once(marker) {
             if let Some(repo) = rest.split(sep).next().filter(|s| !s.is_empty()) {
                 if let Some(slug) = project_by_repo_basename(repo, sources) {
@@ -1326,6 +1334,9 @@ pub(crate) struct RecordDoor {
     from: Option<String>,
     whiles: Vec<String>,
     between: Option<String>,
+    /// The end condition (`--until`); filters say where the rule holds.
+    guard: Option<Value>,
+    /// Main's date-only `--until` form: the day the rule file expires.
     until: Option<String>,
 }
 
@@ -1338,7 +1349,64 @@ pub(crate) enum Widen {
     User(Option<String>),
 }
 
-const RECORD_USAGE: &str = "usage: fno inbox law set <subject> [decision] [--decision-file f|-] [--rationale s] [--option s]... [--supersedes d-x] [--graduation k] [--graduation-ref r] [--read cmd]... [--global | --machine[=<id>] | --user[=<name>]] [--paths glob,glob] [--from date:<when>|event:<node>] [--while <cmd>]... [--between HH:MM-HH:MM] [--until YYYY-MM-DD] [--strength inform|warn|require-ack|block] [--quote <the user's words>] [--filter <key>=<value>]... [--not <key>=<value>]...";
+const RECORD_USAGE: &str = "usage: fno inbox law set <subject> [decision] [--decision-file f|-] [--rationale s] [--option s]... [--supersedes d-x] [--graduation k] [--graduation-ref r] [--read cmd]... [--global | --machine[=<id>] | --user[=<name>]] [--paths glob,glob] [--from date:<when>|event:<node>] [--while <cmd>]... [--between HH:MM-HH:MM] [--until YYYY-MM-DD|date:<when>|for:<30m|2h|1d>|event:<node>|set:<node>,<node>] [--strength inform|warn|require-ack|block] [--quote <the user's words>] [--filter <key>=<value>]... [--not <key>=<value>]...";
+/// The `--until` grammar: `date`/`for` fix an instant now, `event` waits for one node,
+/// `set` freezes node ids and drains as they close. `count` refuses (no counter yet).
+pub(crate) fn parse_guard(spec: &str, now: chrono::DateTime<chrono::Utc>) -> Result<Value, String> {
+    let spec = spec.trim();
+    let bad = |why: &str| format!("--until {spec:?}: {why}\n{RECORD_USAGE}");
+    let Some((kind, rest)) = spec.split_once(':') else {
+        return Err(bad("expected date:, for:, event: or set:"));
+    };
+    let rest = rest.trim();
+    match kind {
+        "date" => {
+            let at = if let Ok(t) = chrono::DateTime::parse_from_rfc3339(rest) {
+                t.with_timezone(&chrono::Utc)
+            } else if let Ok(d) = chrono::NaiveDate::parse_from_str(rest, "%Y-%m-%d") {
+                d.and_hms_opt(0, 0, 0)
+                    .map(|n| n.and_utc())
+                    .ok_or_else(|| bad("bad date"))?
+            } else {
+                return Err(bad("date takes RFC 3339 or YYYY-MM-DD (midnight UTC)"));
+            };
+            Ok(json!({"kind": "date", "at": at.to_rfc3339()}))
+        }
+        "for" => {
+            let (num, unit) = rest.split_at(rest.len().saturating_sub(1));
+            let n: i64 = num
+                .parse()
+                .map_err(|_| bad("duration is <N>m, <N>h or <N>d"))?;
+            let span = match unit {
+                "m" => chrono::Duration::minutes(n),
+                "h" => chrono::Duration::hours(n),
+                "d" => chrono::Duration::days(n),
+                _ => return Err(bad("duration is <N>m, <N>h or <N>d")),
+            };
+            if n <= 0 {
+                return Err(bad("duration must be positive"));
+            }
+            Ok(json!({"kind": "date", "at": (now + span).to_rfc3339()}))
+        }
+        "event" if matches_node_id_shape(&rest.to_lowercase()) => {
+            Ok(json!({"kind": "event", "node_id": rest}))
+        }
+        "set" => {
+            let ids: Vec<&str> = rest
+                .split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .collect();
+            if ids.is_empty() || !ids.iter().all(|i| matches_node_id_shape(&i.to_lowercase())) {
+                return Err(bad("set takes comma-separated node ids"));
+            }
+            Ok(json!({"kind": "set", "node_ids": ids}))
+        }
+        "count" => Err(bad("count guards are not supported yet")),
+        _ => Err(bad("expected date:, for:, event: or set:")),
+    }
+}
+
 const RETRACT_USAGE: &str = "usage: fno inbox law retract <subject-or-decision-id> --reason <why> [--authority operator|chat_attested] [--quote <the user's words>]";
 const HISTORY_USAGE: &str = "usage: fno inbox law history <subject-or-decision-id>";
 
@@ -1362,6 +1430,7 @@ fn parse_record_door(args: &[String]) -> Result<RecordDoor, String> {
         from: None,
         whiles: Vec::new(),
         between: None,
+        guard: None,
         until: None,
     };
     let mut widened_by: Vec<String> = Vec::new();
@@ -1418,7 +1487,14 @@ fn parse_record_door(args: &[String]) -> Result<RecordDoor, String> {
             "--while" => door.whiles.push(take(&mut i)?),
             "--between" => door.between = Some(take(&mut i)?),
             "--until" => {
-                door.until = Some(crate::law_renew::parse_until(&take(&mut i)?)?);
+                let spec = take(&mut i)?;
+                // A bare YYYY-MM-DD is the rule-file expiry day and a date guard.
+                if let Ok(day) = crate::law_renew::parse_until(&spec) {
+                    door.guard = Some(parse_guard(&format!("date:{day}"), chrono::Utc::now())?);
+                    door.until = Some(day);
+                } else {
+                    door.guard = Some(parse_guard(&spec, chrono::Utc::now())?);
+                }
             }
             "--global" => {
                 // An inline value parses like a bool flag should: --global=false
@@ -1909,6 +1985,16 @@ pub(crate) fn record_door_write(door: RecordDoor, decision: String, caller: &Cal
             Err(gate) => return door_refuse(&gate.message),
         }
     }
+    // A --read the gate did not store still runs and is kept for `law recheck`.
+    if read_rows.is_none() && !door.reads.is_empty() {
+        let root = evidence_repo_root();
+        let mut runner =
+            |cmd: &str, root: &std::path::Path| crate::evidence::shell_run(cmd, root, 20);
+        match crate::evidence::run_reads(&door.reads, &root, &mut runner) {
+            Ok(rows) => read_rows = Some(rows),
+            Err(gate) => return door_refuse(&gate.message),
+        }
+    }
     // A waiver subject is operator-evidence-only.
     if (door.subject == WAIVER_SUBJECT_PREFIX
         || door
@@ -2046,6 +2132,14 @@ pub(crate) fn record_door_write(door: RecordDoor, decision: String, caller: &Cal
     }
     if let Some(rows) = &read_rows {
         data["reads"] = json!(rows);
+        let readings: Vec<Value> = rows
+            .iter()
+            .map(|r| json!({"cmd": r["cmd"], "exit": r["exit"], "out_head": r["out_head"]}))
+            .collect();
+        data["expiry_ref"] = json!({"kind": "reading", "reads": readings});
+    }
+    if let Some(guard) = &door.guard {
+        data["guard"] = guard.clone();
     }
     let mut filters = serde_json::Map::new();
     for (prefix, pairs) in [("", &door.filters), ("not_", &door.not_filters)] {
@@ -3026,6 +3120,9 @@ pub fn run_law_match_str(input: &str) -> i32 {
         MatchRequest::History(r) => {
             return run_history_read(&r.argv);
         }
+        MatchRequest::Recheck(r) => {
+            return crate::law_recheck::run_recheck(&r.argv);
+        }
         MatchRequest::Restore(r) => {
             return crate::law_restore::run_restore(&r.argv);
         }
@@ -3500,6 +3597,7 @@ pub(crate) mod scope_tests {
             from: None,
             whiles: Vec::new(),
             between: None,
+            guard: None,
             until: None,
         }
     }

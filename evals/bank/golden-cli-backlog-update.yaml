@@ -1,0 +1,19 @@
+# Grade-only: no worker, so a head run of this task costs nothing. `fno backlog
+# update` is the one way a rule lets an agent change a node.
+id: golden-cli-backlog-update
+tier: capability
+grade:
+  - kind: exit
+    command: "fno backlog --help 2>&1 | grep -Eq '^ +update '"
+    expect: 0
+timeout_minutes: 5
+tags: [golden]
+covers: ["crates/fno-agents/src/backlog/"]
+golden:
+  source: {kind: reaction-approve, ref: "8eb74e9e-88ae-47bb-b3cc-8ffc7379591f:ff091289-6bbc-4a39-aa9b-b10fb0d8abf1"}
+  quote: "fno backlog update x-7291 --priority p2"
+  expected: "fno backlog update <id> --priority p2 is a command the binary lists."
+  rule: "AGENTS.md: never edit graph.db directly. Mutate through fno backlog only."
+  failure_type: dead-command
+  cost: rework
+  outcome: passed

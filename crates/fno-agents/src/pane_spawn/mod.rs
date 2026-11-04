@@ -102,6 +102,8 @@ pub struct PaneContext {
     pub split: Option<String>,
     pub tab: Option<String>,
     pub at: Option<String>,
+    /// The named cell a split halves (`--from`); the mux resolves it.
+    pub from: Option<String>,
     /// The bounded lane's stable `id:<n>` tab token.
     pub tab_id: Option<String>,
     /// A `--pane <id>` attach: start the worker inside this already-placed,
@@ -153,6 +155,7 @@ impl PaneContext {
             split: None,
             tab: None,
             at: None,
+            from: None,
             tab_id: None,
             pane: None,
             worker_name: String::new(),
@@ -209,6 +212,7 @@ impl PaneContext {
             split: opt_str("split"),
             tab: opt_str("tab"),
             at: opt_str("at"),
+            from: opt_str("from"),
             tab_id: opt_str("tab_id"),
             pane: params.get("pane").and_then(Value::as_u64),
             worker_name: params
@@ -865,12 +869,16 @@ pub fn pane_run_args(ctx: &PaneContext, session: &str, name: &str, plan: &ArmPla
         // one Rust parser owns env identity (the Python arm's note).
         args.extend(["at".to_string(), at.clone()]);
     }
+    if let Some(from) = &ctx.from {
+        args.extend(["--from".to_string(), from.clone()]);
+    }
     if let Some(tab_id) = &ctx.tab_id {
         args.extend(["--tab".to_string(), tab_id.trim().to_string()]);
     }
     if ctx.bounded_placement
         && ctx.split.is_none()
         && ctx.at.is_none()
+        && ctx.from.is_none()
         && ctx.tab.is_none()
         && ctx.tab_id.is_none()
     {

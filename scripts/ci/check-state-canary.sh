@@ -92,6 +92,8 @@ RUNNER_OWNED = {
 # in the receipt, because a green resting on a silent ignore list is the thing
 # this script refuses.
 PRUNED_TOPLEVEL = {"worktrees"}
+# New external worktrees land one level down, under spaces/worktrees.
+PRUNED_SPACES = {"worktrees"}
 
 roots, snapshot = sys.argv[1:3], os.path.realpath(sys.argv[3])
 checkout_root = os.path.realpath(roots[1])
@@ -106,6 +108,11 @@ for root in roots:
                 if name in PRUNED_TOPLEVEL:
                     pruned.append(os.path.join(dirpath, name))
             dirnames[:] = [d for d in dirnames if d not in PRUNED_TOPLEVEL]
+        elif os.path.realpath(dirpath) == os.path.join(root_real, "spaces"):
+            for name in sorted(dirnames):
+                if name in PRUNED_SPACES:
+                    pruned.append(os.path.join(dirpath, name))
+            dirnames[:] = [d for d in dirnames if d not in PRUNED_SPACES]
         # realpath the DIRECTORY, never the entry: a root that is itself a
         # symlink still dedups, while an entry symlink keeps its own identity.
         dir_real = os.path.realpath(dirpath)

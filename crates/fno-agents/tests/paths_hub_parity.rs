@@ -99,7 +99,7 @@ fn rust_leg(root: &Path, proj: &Path) -> String {
         .arg("-c")
         .arg(
             "source \"$1\"; printf '%s\\n' \"$STATE_DIR\" \"$LEDGER_JSON_PATH\" \"$BRIEFS_DIR\" \
-             \"$FLEET_DIR\" \"$POSTMORTEMS_DIR\" \"$WORKTREES_BASE\" \"$MEMORY_DIR\" \"$HOOK_LOGS_DIR\"",
+             \"$POSTMORTEMS_DIR\" \"$MEMORY_DIR\" \"$HOOK_LOGS_DIR\"",
         )
         .arg("paths_hub")
         .arg(&stub_path)
@@ -116,7 +116,7 @@ fn rust_leg(root: &Path, proj: &Path) -> String {
         .lines()
         .map(str::to_string)
         .collect();
-    assert_eq!(stub_values.len(), 8, "stub printed {stub_values:?}");
+    assert_eq!(stub_values.len(), 6, "stub printed {stub_values:?}");
     let graph = fno_agents::backlog::settings::graph_path();
     let space = fno_agents::paths::space_dir(proj);
     let registry = fno::agents_view::registry_path();
@@ -125,11 +125,9 @@ fn rust_leg(root: &Path, proj: &Path) -> String {
         ("graph_json", graph.to_string_lossy().into_owned()),
         ("ledger_json", stub_values[1].clone()),
         ("briefs_dir", stub_values[2].clone()),
-        ("fleet_dir", stub_values[3].clone()),
-        ("postmortems_dir", stub_values[4].clone()),
-        ("worktrees_base", stub_values[5].clone()),
-        ("memory_dir", stub_values[6].clone()),
-        ("hook_logs_dir", stub_values[7].clone()),
+        ("postmortems_dir", stub_values[3].clone()),
+        ("memory_dir", stub_values[4].clone()),
+        ("hook_logs_dir", stub_values[5].clone()),
         ("space_dir", space.to_string_lossy().into_owned()),
         (
             "agents_registry_path",

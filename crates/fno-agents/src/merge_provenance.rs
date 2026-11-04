@@ -198,6 +198,24 @@ pub fn record_outcome(request: &Request, facts: &PrFacts, outcome: &Outcome) {
     write_span(&journal, span_kind, trace_for(session, source), attrs);
 }
 
+/// The freeze history: one span when a merge freeze is set
+/// (`merge_freeze_set`) and one when it is cleared (`merge_freeze_cleared`),
+/// so a later fold can pair them into intervals. The freeze record itself
+/// dies on clear, so the journal is the only history. Written to the journal
+/// of the payload's `cwd`, else the process cwd's project journal. A failed
+/// write never moves the receipt; it names itself on stderr.
+pub(crate) fn record_freeze(span_kind: &str, cwd: Option<&str>, attrs: Map<String, Value>) {
+    if !recording_enabled() {
+        return;
+    }
+    let journal = match cwd {
+        Some(c) if !c.is_empty() => crate::law_match::project_events_journal_in(Path::new(c)),
+        _ => crate::law_match::project_events_journal(),
+    };
+    let session = crate::identity::ambient_agent_handle();
+    write_span(&journal, span_kind, trace_for(session, "verb"), attrs);
+}
+
 /// The merge intent in a gh argv: `Some(Some(n))` names the PR,
 /// `Some(None)` is a bare `pr merge` (gh resolves the number itself),
 /// `None` is not a merge argv. Reads the tail after the last `gh` word, so

@@ -23,7 +23,7 @@ const USAGE: &str =
     "usage: fno mux serve --snapshot --server <name> --out <path> [--squad <name>] \
 [--theme dark|light|macchiato] [--format html|svg|png] [--size <cols>x<rows> [--fit]] [--peer <cols>x<rows>] \
 [--font <family>] [--message <fmail-id>] [--edge backlog|messages-tree|messages-part|org|dock=<size>] \
-[--view bell|bell-wide|bell-full|feed|row-menu|hover|cursor|tab-menu|sideline-menu|composer|split-menu|settings|keys|org-block|org-table|org-recent|org-overview|org-graph|org-health|org-seat|org-feed|org-system|messages-tree|messages-chats|messages-thread|messages-system|messages-archive|backlog-list|backlog-kanban|review-diff|review-panel|review-panel-drag|navigator-pr|navigator-model|navigator-menu|feed-detail|question-detail|connections|connections-use|yard|needs|dock|machines]";
+[--view bell|bell-wide|bell-full|feed|row-menu|hover|cursor|tab-menu|sideline-menu|composer|split-menu|settings|keys|org-block|org-table|org-recent|org-overview|org-graph|org-health|org-seat|org-feed|org-system|messages-tree|messages-chats|messages-thread|messages-system|messages-archive|backlog-list|backlog-kanban|review-diff|review-panel|review-panel-drag|navigator-pr|navigator-model|navigator-menu|feed-detail|question-detail|connections|connections-use|needs|dock|machines]";
 
 #[derive(Debug, PartialEq)]
 pub enum Format {
@@ -57,6 +57,13 @@ pub enum ViewKind {
     Cursor,
     /// The tab-strip context menu on the first tab.
     TabMenu,
+    /// The sideline with the pinned Needs input section open, as a tap on the
+    /// strip count opens it.
+    NeedsInput,
+    /// The sideline strip with the need-input pulse frozen on its lit beat.
+    NeedsInputPulseOn,
+    /// The same strip frozen on its dark beat.
+    NeedsInputPulseOff,
     /// The sideline menu popup.
     SidelineMenu,
     /// The new-agent composer sheet, with a seeded draft so the editor text
@@ -130,8 +137,6 @@ pub enum ViewKind {
     ConnectionsUse,
     /// The sweep-threads choice modal over a staged fleet's counts.
     Sweep,
-    /// The yard overlay on its first citizen.
-    Yard,
     /// The needs-me overlay with its first row picked, after the same
     /// questions gather the bell shots run.
     Needs,
@@ -178,6 +183,9 @@ fn parse_view(v: &str) -> Option<ViewKind> {
         "row-menu" => Some(ViewKind::RowMenu),
         "hover" => Some(ViewKind::Hover),
         "cursor" => Some(ViewKind::Cursor),
+        "needs-input" => Some(ViewKind::NeedsInput),
+        "needs-input-pulse-on" => Some(ViewKind::NeedsInputPulseOn),
+        "needs-input-pulse-off" => Some(ViewKind::NeedsInputPulseOff),
         "tab-menu" => Some(ViewKind::TabMenu),
         "sideline-menu" => Some(ViewKind::SidelineMenu),
         "composer" => Some(ViewKind::Composer),
@@ -213,7 +221,6 @@ fn parse_view(v: &str) -> Option<ViewKind> {
         "sweep" => Some(ViewKind::Sweep),
         "connections" => Some(ViewKind::Connections),
         "connections-use" => Some(ViewKind::ConnectionsUse),
-        "yard" => Some(ViewKind::Yard),
         "needs" => Some(ViewKind::Needs),
         "dock" => Some(ViewKind::Dock),
         "machines" => Some(ViewKind::Machines),
@@ -956,6 +963,23 @@ questions (scripts/ops/mux-demo-snapshot.sh seeds one)",
                 view.selector = i;
             }
         }
+        Some(kind @ (ViewKind::NeedsInputPulseOn | ViewKind::NeedsInputPulseOff)) => {
+            if view.need_input_count() == 0 {
+                return Err("nothing needs input, so the pulse would shoot empty".to_string());
+            }
+            let beat = if matches!(kind, ViewKind::NeedsInputPulseOn) {
+                super::sideline::PULSE_ON
+            } else {
+                super::sideline::PULSE_OFF
+            };
+            super::sideline::PULSE_PIN.store(beat, std::sync::atomic::Ordering::Relaxed);
+        }
+        Some(ViewKind::NeedsInput) => {
+            if view.need_input_count() == 0 {
+                return Err("nothing needs input, so the section would shoot empty".to_string());
+            }
+            view.needs_open = true;
+        }
         Some(ViewKind::SplitMenu) => {
             let i = view
                 .display_rows()
@@ -988,12 +1012,6 @@ questions (scripts/ops/mux-demo-snapshot.sh seeds one)",
                 },
             ));
             view.aux_esc.clear();
-        }
-        Some(ViewKind::Yard) => {
-            view.yard = Some(super::YardSel {
-                sel: 0,
-                opened_at: Instant::now(),
-            });
         }
         Some(ViewKind::Needs) => {
             let questions = runtime.block_on(crate::needs_overlay::questions_now());
@@ -1365,6 +1383,9 @@ mod tests {
             ("row-menu", ViewKind::RowMenu),
             ("hover", ViewKind::Hover),
             ("cursor", ViewKind::Cursor),
+            ("needs-input", ViewKind::NeedsInput),
+            ("needs-input-pulse-on", ViewKind::NeedsInputPulseOn),
+            ("needs-input-pulse-off", ViewKind::NeedsInputPulseOff),
             ("tab-menu", ViewKind::TabMenu),
             ("sideline-menu", ViewKind::SidelineMenu),
             ("composer", ViewKind::Composer),
@@ -1400,7 +1421,6 @@ mod tests {
             ("sweep", ViewKind::Sweep),
             ("connections", ViewKind::Connections),
             ("connections-use", ViewKind::ConnectionsUse),
-            ("yard", ViewKind::Yard),
             ("needs", ViewKind::Needs),
             ("dock", ViewKind::Dock),
             ("machines", ViewKind::Machines),

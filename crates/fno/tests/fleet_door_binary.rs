@@ -29,10 +29,9 @@ fn fleet_doors_exec_fno_agents_with_their_action_words() {
     stub(&agents, "#!/bin/sh\nprintf '%s' \"$*\" > \"$RECORD\"\n");
     stub(&worker, "#!/bin/sh\necho 'pass a lane' >&2\nexit 2\n");
 
-    let cases: [(&[&str], &str); 4] = [
+    let cases: [(&[&str], &str); 3] = [
         (&["do", "loops", "status"], "loops status"),
         (&["loops", "status"], "loops status"),
-        (&["agents", "yard"], "census yard"),
         (
             &["agents", "autonomy", "status"],
             "spawn-overlay autonomy status",

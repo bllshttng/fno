@@ -119,3 +119,56 @@ pub(super) async fn commit(
     }
     Ok(())
 }
+
+impl View {
+    /// Build the move-tab picker overlay lines: a header plus one
+    /// numbered line per candidate squad, the number being the digit that
+    /// selects it. A candidate that vanished from the catalog since open still
+    /// renders (labelled) - the digit is re-validated on press, and the server
+    /// refuses a stale id regardless.
+    pub(super) fn move_pick_lines(&self, picker: &MovePick) -> Vec<TLine> {
+        const W: usize = 40;
+        let command = match &picker.src {
+            MoveSrc::Tab(_) => "move tab to:",
+            MoveSrc::Pane(_) => "move pane to:",
+            MoveSrc::Row { .. } => "move session to:",
+            MoveSrc::Folder { .. } => "add folder:",
+        };
+        let mut lines = vec![TLine::line(
+            TextStyle::Title,
+            pad_to(&format!(" {command}"), W),
+        )];
+        for (i, &sid) in picker.squads.iter().enumerate() {
+            let folder = workspace_folder::folder_label(&picker.src, sid);
+            let name = folder.as_deref().unwrap_or_else(|| {
+                self.layout
+                    .squads
+                    .iter()
+                    .find(|s| s.id == sid)
+                    .map(|s| s.name.as_str())
+                    .unwrap_or("(gone)")
+            });
+            // Only the first nine are digit-addressable; the rest get a blank
+            // gutter, so the drawn numbering never promises a key that does
+            // not exist.
+            let ord = if i < 9 {
+                (i + 1).to_string()
+            } else {
+                " ".into()
+            };
+            lines.push(TLine::parts(&[
+                (&format!("   {ord} "), TextStyle::Meta),
+                (&pad_to(name, W - 5), TextStyle::Item),
+            ]));
+        }
+        lines.push(TLine::line(
+            TextStyle::Hint,
+            pad_to(" hjkl/arrows move · enter move here", W),
+        ));
+        lines.push(TLine::line(
+            TextStyle::Hint,
+            pad_to(" 1-9 move to first nine · esc/q cancel", W),
+        ));
+        lines
+    }
+}

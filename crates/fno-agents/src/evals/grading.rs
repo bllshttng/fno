@@ -3,6 +3,10 @@
 //! construction: no model in the pass/fail path. The same worktree
 //! end-state always grades the same.
 
+/// The directory holding a build of the graded ref's `fno-agents` pair. The
+/// gate sets it; a grader's `fno` then runs that build and not the deployed one.
+pub const HEAD_BIN_ENV: &str = "FNO_EVALS_HEAD_BIN";
+
 pub struct CheckResult {
     pub kind: String,
     pub passed: bool,
@@ -34,27 +38,30 @@ pub fn grade(
     base_ref: Option<&str>,
 ) -> GradeOutcome {
     let timeout_s = std::cmp::max(1, task.timeout_minutes.saturating_mul(60));
-    grade_checks(&task.grade, workdir, timeout_s, base_ref)
+    grade_checks(&task.grade, workdir, timeout_s, base_ref, None)
 }
 
 /// Grade a check list against a directory. A metric case calls this with the
 /// golden's own checks, so the proof covers the grader the golden runs.
+/// `bin_dir` leads the grader's PATH: a proof case puts a stub binary there.
 pub fn grade_checks(
     checks: &[super::bank::GradeCheck],
     workdir: &std::path::Path,
     timeout_s: i64,
     base_ref: Option<&str>,
+    bin_dir: Option<&std::path::Path>,
 ) -> GradeOutcome {
     let mut results: Vec<CheckResult> = Vec::new();
     for check in checks {
         match check.kind.as_str() {
-            "exit" => results.push(grade_exit(check, workdir, timeout_s, base_ref)),
+            "exit" => results.push(grade_exit(check, workdir, timeout_s, base_ref, bin_dir)),
             "file-exists" => results.push(grade_file_exists(check, workdir)),
             "tool-budget" => results.push(grade_tool_budget(
                 check,
                 &crate::claude_drive::claude_projects_dir()
                     .join(crate::claude_ask::claude_cwd_slug(workdir)),
             )),
+            "tests" => results.push(super::tests_grade::grade(check, workdir, timeout_s)),
             _ => results.push(grade_grep(check, workdir)),
         }
     }
@@ -73,6 +80,7 @@ fn grade_exit(
     workdir: &std::path::Path,
     timeout_s: i64,
     base_ref: Option<&str>,
+    bin_dir: Option<&std::path::Path>,
 ) -> CheckResult {
     let command = check.command.clone().unwrap_or_default();
     let mut cmd = std::process::Command::new("sh");
@@ -85,6 +93,23 @@ fn grade_exit(
         .stderr(std::process::Stdio::null());
     if let Some(r) = base_ref {
         cmd.env("FNO_EVALS_BASE_REF", r);
+    }
+    // The gate builds the ref's binaries and names their directory here. Only
+    // the grader's `fno` follows it: the runner and a worker keep the deployed
+    // pair, so the run itself is never head code.
+    if let Some(dir) = std::env::var_os(HEAD_BIN_ENV) {
+        let dir = std::path::Path::new(&dir);
+        cmd.env("FNO_AGENTS_BIN", dir.join("fno-agents"));
+        cmd.env("FNO_AGENTS_WORKER", dir.join("fno-agents-worker"));
+    }
+    if let Some(dir) = bin_dir {
+        let mut dirs = vec![dir.to_path_buf()];
+        dirs.extend(std::env::split_paths(
+            &std::env::var_os("PATH").unwrap_or_default(),
+        ));
+        if let Ok(joined) = std::env::join_paths(dirs) {
+            cmd.env("PATH", joined);
+        }
     }
     match spawn_wait_timeout(&mut cmd, timeout_s) {
         WaitOutcome::Done(code) => {
@@ -218,7 +243,7 @@ fn collect_jsonl(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
     }
 }
 
-enum WaitOutcome {
+pub(super) enum WaitOutcome {
     Done(i32),
     TimedOut,
     Failed(String),
@@ -226,7 +251,7 @@ enum WaitOutcome {
 
 /// Spawn the command and wait up to *timeout_s*; a timed-out child is
 /// killed (the Python subprocess timeout semantics).
-fn spawn_wait_timeout(cmd: &mut std::process::Command, timeout_s: i64) -> WaitOutcome {
+pub(super) fn spawn_wait_timeout(cmd: &mut std::process::Command, timeout_s: i64) -> WaitOutcome {
     match cmd.spawn() {
         Err(e) => WaitOutcome::Failed(e.to_string()),
         Ok(mut child) => {
@@ -262,6 +287,7 @@ mod tests {
             path: None,
             pattern: None,
             max_tool_calls: Some(max),
+            tests: None,
         }
     }
 

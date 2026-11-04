@@ -717,11 +717,15 @@ jobs:
           bash scripts/ci/check-package-path-escapes.sh --self-test
           bash scripts/ci/check-package-path-escapes.sh
 
-      # From skill-local-evals.yml.
-      - name: No skills/<name>/evals/ dead convention
+      # A changed SKILL.md carries an eval case in skills/<name>/evals/, which
+      # `fno doctor evals run` and `claude plugin eval` both read.
+      - name: Changed skills carry an eval
         if: ${{ !cancelled() }}
         timeout-minutes: 5
-        run: bash scripts/ci/check-no-skill-local-evals.sh
+        env:
+          PR_BASE_REF: ${{ github.base_ref || 'main' }}
+          SKILL_EVALS_BASE_SHA: ${{ github.event_name == 'push' && github.event.before || '' }}
+        run: bash scripts/ci/check-skill-has-evals.sh
 
       # The growth-studio pack declares its scenarios in plugin.yaml, and pack
       # verification only checks that each command is runnable - it never

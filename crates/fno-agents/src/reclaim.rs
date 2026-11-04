@@ -392,6 +392,7 @@ fn untracked_worktree_targets() -> Vec<PathBuf> {
     let repo_name = repo.file_name().unwrap_or_default().to_string_lossy();
     let bases = [
         repo.join(".claude/worktrees"),
+        home.join(".fno/spaces/worktrees").join(repo_name.as_ref()),
         home.join(".fno/worktrees").join(repo_name.as_ref()),
     ];
     for base in bases {
@@ -868,6 +869,37 @@ pub fn maybe_run_cargo_hourly(home: &AgentsHome) {
     }
     let lane = cargo_build_dirs_lane(home, true, false);
     let _ = std::fs::write(&stamp, format!("{}\n", lane.note));
+}
+
+/// The low-disk sweep: the full lane set, apply, run because free space
+/// crossed `agents.min_free_disk_gb` rather than because a clock came due.
+/// One stamp gates the spawn refusal and the daemon arm, so a burst of
+/// refused spawns sweeps once per `gap`. Returns the line the refusal quotes,
+/// or `None` when a sweep already ran inside the gap. The uv prune is skipped:
+/// it waits on uv's cache lock and the gate must not stall behind it.
+pub(crate) fn run_low_disk_sweep(home: &AgentsHome, gap: Duration) -> Option<String> {
+    let stamp =
+        crate::state_layout::place(&reclaim_state_root(home), "reclaim").join("low-disk-last-run");
+    let recent = std::fs::metadata(&stamp)
+        .ok()
+        .and_then(|meta| meta.modified().ok())
+        .and_then(|m| m.elapsed().ok())
+        .is_some_and(|age| age < gap);
+    if recent {
+        return None;
+    }
+    if let Some(dir) = stamp.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    std::fs::write(&stamp, b"").ok()?;
+    let (_rc, summary) = run_reclaim_lanes(home, true, false, false, false);
+    emit_sweep_event(home, &summary);
+    Some(format!(
+        "janitor ran (fno doctor reclaim --apply): {:.1}GB measured across {} lane(s), receipt {}",
+        summary.total_bytes as f64 / 1e9,
+        summary.lane_count,
+        receipt_path(home).display()
+    ))
 }
 
 /// What one sweep did, carried from the lane run to the daemon's event.

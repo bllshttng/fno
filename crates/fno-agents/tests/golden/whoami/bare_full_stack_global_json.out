@@ -1,17 +1,9 @@
 {
   "detected_paths": [
-    "<FIXTURE>/fake_home/.fno/fleet/fleet-fixture-001/00-INDEX.md",
     "<FIXTURE>/project/.fno/megawalk-state.md",
     "<FIXTURE>/project/.fno/target-state.md"
   ],
-  "fleet": {
-    "mission_id": "fleet-fixture-001",
-    "path": "<FIXTURE>/fake_home/.fno/fleet/fleet-fixture-001/00-INDEX.md",
-    "status": "running",
-    "title": "Fixture mission",
-    "wave_current": 2,
-    "wave_total": 4
-  },
+  "fleet": null,
   "harness": "claude",
   "harness_session_id": null,
   "mail_handle": null,
