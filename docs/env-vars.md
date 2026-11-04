@@ -109,6 +109,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_E2E_DROP_RESIZE_FRAME` | rs | E2E fault seam: with `FNO_E2E` set, drops the first n (default 1) keeper resize frames the server sends, holding panes at their pre-change sizes the way a full keeper frame queue or a pre-ResizeAck keeper build would; the 1s grid reconciliation pass then converges the diff. |
 | `FNO_E2E_PTY_OUTPUT_DELAY_MS` | rs | unclear: crates/fno/src/pty.rs:1873 |
 | `FNO_EVALS_GRADER` | rs | set on an eval grade command: the cargo run door admits its test binary instead of refusing it as an agent test |
+| `FNO_EVALS_HEAD_BIN` | rs | The change gate sets it to the directory of a fresh fno-agents build. An eval grader's `fno` then runs that build and not the deployed one. |
 | `FNO_EVALS_SEALED` | rs | a sealed golden worker's spawn: drops the state grants |
 | `FNO_EVENTS_PATH` | py+rs | Redirects the agents journal (events.jsonl) to one file; the hermetic guard honors it on both legs. |
 | `FNO_FOOTNOTE_BIN` | rs | The `footnote` harness binary `-H footnote` launches, built from bllshttng/fnh; unset, fno-agents looks beside its own executable, then on PATH. |

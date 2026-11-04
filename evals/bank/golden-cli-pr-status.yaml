@@ -1,0 +1,19 @@
+# Grade-only: no worker, so a head run of this task costs nothing. It asks one
+# question of the binary the head built: does the command a rule names still run?
+id: golden-cli-pr-status
+tier: capability
+grade:
+  - kind: exit
+    command: "fno do pr --help 2>&1 | grep -Fq 'status <pr>|main'"
+    expect: 0
+timeout_minutes: 5
+tags: [golden]
+covers: ["crates/fno-agents/src/pr_status/"]
+golden:
+  source: {kind: reaction-approve, ref: "0aea1458-811f-4ad3-89c9-93a957d7d556:d5d5d014-ceee-486b-8623-e1cb924cf0b8"}
+  quote: "fno do pr status 1522"
+  expected: "fno do pr status <pr> is a command the binary lists."
+  rule: "skills/target: read a PR's CI with fno do pr status, one verdict; not hand-rolled jq."
+  failure_type: dead-command
+  cost: rework
+  outcome: passed

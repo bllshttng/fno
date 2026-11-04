@@ -47,6 +47,9 @@ pub struct TaskSpec {
     pub repo_fixture: String,
     pub timeout_minutes: i64,
     pub tags: Vec<String>,
+    /// Source path prefixes this task covers. A PR head that changes one runs
+    /// the task, with no `gate` tag needed.
+    pub covers: Vec<String>,
     pub golden: Option<Golden>,
     pub source_path: std::path::PathBuf,
 }
@@ -159,6 +162,11 @@ pub fn load_task(path: &std::path::Path) -> Result<TaskSpec, BankError> {
                 .collect()
         })
         .unwrap_or_default();
+    let covers = parse_covers(
+        map.get(serde_yaml_ng::Value::String("covers".into())),
+        &id,
+        path,
+    )?;
     let golden = match map.get(serde_yaml_ng::Value::String("golden".into())) {
         Some(raw) => Some(parse_golden(raw, &id, path)?),
         None => None,
@@ -166,6 +174,7 @@ pub fn load_task(path: &std::path::Path) -> Result<TaskSpec, BankError> {
     Ok(TaskSpec {
         id,
         golden,
+        covers,
         tier: tier.to_string(),
         prompt,
         grade: checks,
@@ -178,6 +187,31 @@ pub fn load_task(path: &std::path::Path) -> Result<TaskSpec, BankError> {
         tags,
         source_path: path.to_path_buf(),
     })
+}
+
+/// `covers:` is a list of directory prefixes. A prefix with no trailing `/`
+/// would match a sibling (`crates/fno` also names `crates/fno-agents`).
+fn parse_covers(
+    raw: Option<&serde_yaml_ng::Value>,
+    task_id: &str,
+    path: &std::path::Path,
+) -> Result<Vec<String>, BankError> {
+    let Some(raw) = raw else {
+        return Ok(Vec::new());
+    };
+    let bad = || {
+        BankError(format!(
+            "task '{task_id}' ({}): 'covers' must be a list of path prefixes ending in '/'",
+            path.display()
+        ))
+    };
+    let seq = raw.as_sequence().ok_or_else(bad)?;
+    seq.iter()
+        .map(|v| match v.as_str() {
+            Some(s) if s.ends_with('/') => Ok(s.to_string()),
+            _ => Err(bad()),
+        })
+        .collect()
 }
 
 fn parse_golden(
@@ -539,6 +573,32 @@ mod tests {
         };
         assert!(count("failed") >= 20, "failed goldens: {}", count("failed"));
         assert!(count("passed") >= 5, "passed goldens: {}", count("passed"));
+    }
+
+    #[test]
+    fn covers_loads_a_prefix_list_and_refuses_anything_else() {
+        let dir = tempfile::tempdir().unwrap();
+        let grade = "grade:\n  - kind: file-exists\n    path: x\n";
+        let body = |covers: &str| format!("id: c\ntier: regression\n{grade}{covers}");
+        let ok = write_task(
+            dir.path(),
+            "ok.yaml",
+            &body("covers: [\"crates/fno-agents/src/backlog/\"]\n"),
+        );
+        assert_eq!(
+            load_task(&ok).unwrap().covers,
+            vec!["crates/fno-agents/src/backlog/"]
+        );
+        for (name, covers) in [
+            ("bare", "covers: [\"crates/fno\"]\n"),
+            ("scalar", "covers: crates/fno/\n"),
+            ("num", "covers: [3]\n"),
+        ] {
+            let p = write_task(dir.path(), &format!("{name}.yaml"), &body(covers));
+            let err = load_task(&p).unwrap_err();
+            assert!(err.0.contains("task 'c'"), "{0}", err.0);
+            assert!(err.0.contains(&format!("{name}.yaml")), "{0}", err.0);
+        }
     }
 
     #[test]

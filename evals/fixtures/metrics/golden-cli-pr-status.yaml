@@ -1,0 +1,26 @@
+# Labelled cases for the golden-cli-pr-status grader. A stub fno stands in for the head's binary. Read by report --check-metrics.
+cases:
+  - id: lists-status
+    label: good
+    stub:
+      fno: "printf '  merge <pr_number> [flags]\\n  status <pr>|main [--refresh]\\n'"
+  - id: lists-status-flags
+    label: good
+    stub:
+      fno: "printf '  status <pr>|main [--refresh] [--expect-head SHA|HEAD]\\n'"
+  - id: lists-status-on-stderr
+    label: good
+    stub:
+      fno: "printf '  status <pr>|main [--refresh]\\n' >&2"
+  - id: renamed
+    label: bad
+    stub:
+      fno: "printf '  state <pr>|main [--refresh]\\n'"
+  - id: no-such-command
+    label: bad
+    stub:
+      fno: "printf 'fno: no command `do pr`.\\n' >&2; exit 2"
+  - id: silent
+    label: bad
+    stub:
+      fno: "exit 0"
