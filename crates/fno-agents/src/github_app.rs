@@ -131,10 +131,12 @@ fn inject_with(cmd: &mut Command, token: Option<&str>) -> bool {
 /// the guard reads, then config, then the repo resolution (a bounded git
 /// read), then the installation resolution (network).
 fn injection_decision(cmd: &Command) -> Option<String> {
-    decision_with(cmd, resolve_installation_auth)
+    let cfg = app_config()?;
+    decision_with(&cfg, cmd, resolve_installation_auth)
 }
 
 fn decision_with(
+    cfg: &AppConfig,
     cmd: &Command,
     resolve: impl Fn(&AppConfig, &str) -> Option<InstallAuth>,
 ) -> Option<String> {
@@ -147,10 +149,9 @@ fn decision_with(
     if std::env::var("FNO_GITHUB_APP").as_deref() == Ok("0") {
         return None;
     }
-    let cfg = app_config()?;
     let repo = target_repo(cmd)?;
     let owner = repo.split('/').next()?;
-    let auth = resolve(&cfg, owner)?;
+    let auth = resolve(cfg, owner)?;
     auth.sees(&repo).then_some(auth.token)
 }
 
@@ -984,6 +985,11 @@ mod tests {
         std::env::remove_var("GH_TOKEN");
         std::env::remove_var("GITHUB_TOKEN");
         std::env::remove_var("FNO_GITHUB_APP");
+        // A throwaway config: the decision must read the config handed to
+        // it, never the machine's own ~/.fno/config.toml, so the test is
+        // hermetic on a runner with no app configured.
+        let dir = tempfile::tempdir().unwrap();
+        let (cfg, _cache) = temp_cfg(dir.path());
         let visible = InstallAuth {
             token: "ghs_visible".to_string(),
             repos: vec!["fnodotdev/fno".to_string()],
@@ -995,7 +1001,7 @@ mod tests {
         let mut api = Command::new("gh");
         api.args(["api", "repos/fnodotdev/fno/pulls"]);
         assert_eq!(
-            decision_with(&api, resolve_visible).as_deref(),
+            decision_with(&cfg, &api, resolve_visible).as_deref(),
             Some("ghs_visible")
         );
         // A repo outside the installation's list keeps the child's own auth.
@@ -1007,21 +1013,25 @@ mod tests {
         };
         let mut foreign = Command::new("gh");
         foreign.args(["api", "repos/bllshttng/fno-books/pulls"]);
-        assert_eq!(decision_with(&foreign, resolve_foreign), None);
+        assert_eq!(decision_with(&cfg, &foreign, resolve_foreign), None);
         // A command with no resolvable repo never asks the resolver.
         let mut unknown = Command::new("gh");
         unknown.args(["pr", "view", "377"]);
         assert_eq!(
-            decision_with(&unknown, |_: &AppConfig, _: &str| -> Option<InstallAuth> {
-                panic!("no repo must not resolve")
-            }),
+            decision_with(
+                &cfg,
+                &unknown,
+                |_: &AppConfig, _: &str| -> Option<InstallAuth> {
+                    panic!("no repo must not resolve")
+                }
+            ),
             None
         );
         // An operator-exported token outranks the app before any resolution.
         std::env::set_var("GH_TOKEN", "operator-token");
         let resolve_panic =
             |_: &AppConfig, _: &str| -> Option<InstallAuth> { panic!("guards precede resolution") };
-        assert_eq!(decision_with(&api, resolve_panic), None);
+        assert_eq!(decision_with(&cfg, &api, resolve_panic), None);
         std::env::remove_var("GH_TOKEN");
     }
 
