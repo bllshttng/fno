@@ -353,4 +353,7 @@ Keys live in a flat `config.toml` (`.fno/config.toml` project-local, `~/.fno/con
 | `github.app_id` | str | `` | never | GitHub App id; with github.app_installation_id it arms App-installation token minting for GitHub API calls. |
 | `github.app_installation_id` | str | `` | never | GitHub App installation id; required beside github.app_id before the App path mints tokens. |
 | `github.app_key_path` | str | `~/.fno/secrets/github-app.pem` | never | Path to the GitHub App private key PEM (default ~/.fno/secrets/github-app.pem, mode 0600); a leading ~ expands against $HOME. |
+| `questions.judge.batch` | int | `10` | never | Max questions the judge takes per run. |
+| `questions.judge.enabled` | bool | `false` | never | Arm the question judge: when true, judge runs read the question board and decide open questions against the law record. |
+| `questions.judge.model` | str | `sonnet` | never | Model the judge dispatches verdicts with. |
 | `schema_version` | int | `1` | never | Settings schema version; managed by fno, not hand-set. |

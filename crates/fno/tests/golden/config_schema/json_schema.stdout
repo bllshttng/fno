@@ -1280,6 +1280,28 @@
       "title": "JoinBlock",
       "type": "object"
     },
+    "JudgeBlock": {
+      "description": "Question judge dispatch (nested under ``config.questions.judge``).",
+      "properties": {
+        "batch": {
+          "default": 10,
+          "title": "Batch",
+          "type": "integer"
+        },
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "model": {
+          "default": "sonnet",
+          "title": "Model",
+          "type": "string"
+        }
+      },
+      "title": "JudgeBlock",
+      "type": "object"
+    },
     "KeepGoingBlock": {
       "description": "Autonomous keep-going engine settings (nested under 'config.keep_going').\n\nThe opt-in for the autonomous keep-going engine : when enabled, the\nautonomous ``/fno:ship pr merged`` ritual classifies each surviving carve-out\nfollow-up and DISPATCHES the next unit of work (a ``/think``, a ``/target``,\nor just a filed node) instead of only closing the merged node. This is what\nkeeps the autonomous loop moving without a human in the seat.\n\nDefault ``False`` (same posture as ``config.auto_continue`` /\n``config.think_spawn``): shipping this changes nothing until the operator\narms it - false-enabled (background workers dispatched against the operator's\nintent) is the dangerous direction, so a malformed block fails safe to\ndisabled rather than breaking the whole settings load.\n\nThe firehose ceiling is NOT a knob here: it deliberately reuses\n``config.think_spawn.daily_cap`` (the same per-install per-day counter\n``fno do think dispatch`` bumps) so think + target dispatches share ONE budget -\na single ceiling on total autonomous fan-out per day. The classify + dispatch\nlogic lives in the native retro keep-going engine (crates/fno-agents/src/retro/keep_going.rs).",
       "properties": {
@@ -2199,6 +2221,16 @@
         }
       },
       "title": "ProviderBudget",
+      "type": "object"
+    },
+    "QuestionsBlock": {
+      "description": "Question judge settings (nested under ``config.questions``).",
+      "properties": {
+        "judge": {
+          "$ref": "#/$defs/JudgeBlock"
+        }
+      },
+      "title": "QuestionsBlock",
       "type": "object"
     },
     "QuotaBlock": {
@@ -3751,8 +3783,18 @@
     "project": {
       "$ref": "#/$defs/ProjectBlock"
     },
+    "questions": {
+      "$ref": "#/$defs/QuestionsBlock"
+    },
     "recovery": {
       "$ref": "#/$defs/RecoveryBlock"
+    },
+    "repo_aliases": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "title": "Repo Aliases",
+      "type": "object"
     },
     "research": {
       "$ref": "#/$defs/ResearchBlock"

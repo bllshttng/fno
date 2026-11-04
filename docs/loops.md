@@ -130,7 +130,7 @@ Start: daemon fires, every 600s. End: a `control_plane_tick` receipt lands in th
 
 ### question_judge
 
-Start: daemon fires, every 3600s. End: a `control_plane_tick` receipt lands in the journal. If it looks wrong, run `fno inbox outstanding judge --report`. If the row reads `unarmed`, set `questions.judge.enabled = true` in config.toml.
+Start: daemon fires, every 3600s. End: a `control_plane_tick` receipt lands in the journal. If it looks wrong, run `fno inbox outstanding judge --report`. If the row reads `unarmed`, arm it with `fno config set questions.judge.enabled true`.
 
 ### attention
 
