@@ -1332,8 +1332,7 @@ pub(crate) struct RecordDoor {
     from: Option<String>,
     whiles: Vec<String>,
     between: Option<String>,
-    /// The end condition (`--until`), parsed at record time. Separate from
-    /// scope: the guard says when the rule ends, the filters say where it holds.
+    /// The end condition (`--until`); filters say where the rule holds.
     guard: Option<Value>,
     /// Main's date-only `--until` form: the day the rule file expires.
     until: Option<String>,
@@ -1349,10 +1348,8 @@ pub(crate) enum Widen {
 }
 
 const RECORD_USAGE: &str = "usage: fno inbox law set <subject> [decision] [--decision-file f|-] [--rationale s] [--option s]... [--supersedes d-x] [--graduation k] [--graduation-ref r] [--read cmd]... [--global | --machine[=<id>] | --user[=<name>]] [--paths glob,glob] [--from date:<when>|event:<node>] [--while <cmd>]... [--between HH:MM-HH:MM] [--until YYYY-MM-DD|date:<when>|for:<30m|2h|1d>|event:<node>|set:<node>,<node>] [--strength inform|warn|require-ack|block] [--quote <the user's words>] [--filter <key>=<value>]... [--not <key>=<value>]...";
-/// The guard grammar of `--until`. A rule holds until its guard fires.
-/// `date` and `for` resolve to a fixed instant now; `event` waits for one
-/// node to close; `set` freezes the node ids now and drains as they close.
-/// A count guard needs a merge counter that does not exist yet, so it refuses.
+/// The `--until` grammar: `date`/`for` fix an instant now, `event` waits for one node,
+/// `set` freezes node ids and drains as they close. `count` refuses (no counter yet).
 pub(crate) fn parse_guard(spec: &str, now: chrono::DateTime<chrono::Utc>) -> Result<Value, String> {
     let spec = spec.trim();
     let bad = |why: &str| format!("--until {spec:?}: {why}\n{RECORD_USAGE}");
@@ -1981,8 +1978,7 @@ pub(crate) fn record_door_write(door: RecordDoor, decision: String, caller: &Cal
             Err(gate) => return door_refuse(&gate.message),
         }
     }
-    // A --read the gate did not store (no code claim, or an operator caller)
-    // still runs and is kept: it is the reading `law recheck` compares against.
+    // A --read the gate did not store still runs and is kept for `law recheck`.
     if read_rows.is_none() && !door.reads.is_empty() {
         let root = evidence_repo_root();
         let mut runner =

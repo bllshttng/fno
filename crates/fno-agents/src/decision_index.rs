@@ -135,9 +135,7 @@ pub fn derive_rows(rows: Vec<Value>, damaged: usize) -> Index {
     derive_rows_with(rows, damaged, true)
 }
 
-/// `derive_rows` that keeps a law whose date guard has fired. `fno inbox law
-/// recheck` reads this form, so it can write the receipt the derivation would
-/// otherwise hide.
+/// `derive_rows` that keeps date-expired laws, so `law recheck` can write the receipt.
 pub fn derive_rows_unguarded(rows: Vec<Value>, damaged: usize) -> Index {
     derive_rows_with(rows, damaged, false)
 }
@@ -166,10 +164,7 @@ fn derive_rows_with(rows: Vec<Value>, damaged: usize, apply_date_guard: bool) ->
     Index { rows, damaged }
 }
 
-/// A rule holds until its guard fires. A `date` guard is pure, so the index
-/// derivation retires the row itself: `guard: {kind: "date", at: <RFC 3339>}`.
-/// Event and set guards need the graph, and a reading needs a shell, so
-/// `fno inbox law recheck` evaluates those.
+/// True when a `guard: {kind: "date", at}` has passed; event and set guards need `law recheck`.
 pub fn date_guard_fired(row: &Value, now_rfc3339: &str) -> bool {
     let Some(guard) = row.get("guard").filter(|g| g.is_object()) else {
         return false;

@@ -396,8 +396,7 @@ pub(crate) fn truncate_chars(s: &str, n: usize) -> String {
     s.chars().take(n).collect()
 }
 
-/// The stored head of a read's stdout. A recheck compares against this same
-/// shape, so the stored row and the fresh reading can never differ by form.
+/// The stored head of a read's stdout; a recheck compares in this same form.
 pub(crate) fn out_head(stdout: &str) -> String {
     let head = stdout
         .lines()
