@@ -1,0 +1,26 @@
+# Labelled cases for the golden-cli-pr-wait grader. A stub fno stands in for the head's binary. Read by report --check-metrics.
+cases:
+  - id: lists-wait
+    label: good
+    stub:
+      fno: "printf '  wait <pr> [--until settled|red|green|review] [--timeout 15m]\\n'"
+  - id: lists-wait-after-status
+    label: good
+    stub:
+      fno: "printf '  status <pr>|main\\n  wait <pr> [--until settled|red]\\n'"
+  - id: lists-wait-on-stderr
+    label: good
+    stub:
+      fno: "printf '  wait <pr> [--until settled]\\n' >&2"
+  - id: until-dropped
+    label: bad
+    stub:
+      fno: "printf '  wait <pr> [--timeout 15m]\\n'"
+  - id: wait-removed
+    label: bad
+    stub:
+      fno: "printf '  status <pr>|main\\n'"
+  - id: no-such-command
+    label: bad
+    stub:
+      fno: "printf 'fno: no command `do pr`.\\n' >&2; exit 2"
