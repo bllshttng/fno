@@ -480,7 +480,11 @@ struct DepsProbe<'a> {
 
 impl crate::pr_status_facts::GhProbe for DepsProbe<'_> {
     fn run_gh(&self, cwd: &Path, args: &[String]) -> Result<(bool, String, String), String> {
-        let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        // GhProbe args carry no program word (RealGhProbe adds gh); the
+        // RunProbe seam sees the full argv, so restore the head it drops.
+        let mut refs: Vec<&str> = Vec::with_capacity(args.len() + 1);
+        refs.push("gh");
+        refs.extend(args.iter().map(String::as_str));
         match (self.run)(&refs, cwd) {
             Some(r) => Ok((r.ok, r.stdout.clone(), r.stderr.clone())),
             None => Err("gh spawn failed".to_string()),
