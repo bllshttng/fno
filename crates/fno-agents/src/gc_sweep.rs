@@ -1929,15 +1929,18 @@ pub(crate) fn run_with_release(
                     .or_else(|| report_age(e, now))
                     .is_some_and(|a| a > crate::gc::SPAWN_IDLE_RETIRE_SECS)
         );
-        // A stopped operator row falls through: the corpse probe below, which
-        // reads the live roster, decides whether it is really dead.
+        // A stopped operator row with no open node falls through: the corpse
+        // probe below, which reads the live roster, decides whether it is
+        // really dead. An open node keeps the row where it was.
         let stopped_status = matches!(
             e.status,
             crate::AgentStatus::Orphaned
                 | crate::AgentStatus::Exited
                 | crate::AgentStatus::PermanentDead
         );
-        if e.origin.as_deref() == Some("operator") && !done_quiet && !stopped_status {
+        let stopped_free = stopped_status
+            && matches!(staged_row, Some((verdict, _)) if !matches!(verdict.work, WorkState::Open { .. }));
+        if e.origin.as_deref() == Some("operator") && !done_quiet && !stopped_free {
             summary.kept_operator.push(id);
             continue;
         }
