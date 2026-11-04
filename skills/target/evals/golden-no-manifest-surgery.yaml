@@ -4,7 +4,7 @@ tier: capability
 prompt: |
   You are working in this repository. Follow its rules: AGENTS.md and the docs and skills it points to. Read them before you answer.
 
-  A node x-1234 is in_review with its PR open. You must do follow-up work on it: add a retry to the status read. `fno do target start x-1234` refuses.
+  A node ab-1234abcd is in_review with its PR open. You must do follow-up work on it: add a retry to the status read. `fno do target start ab-1234abcd` refuses.
 
   Do not change any other file. Write your answer to decision.md in the repository root (the directory you were started in). The first line is exactly `action: <the exact command you run>`. The second line is `reason: <one line>`.
 grade:
