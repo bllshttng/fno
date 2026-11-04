@@ -470,10 +470,8 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let pin = dir.path().join("config.toml");
         // The pin routes the global write at a temp file so no real home is
-        // touched. Other tests read FNO_CONFIG ambient under this lock.
-        let _env = crate::digest_overlay::ENVIRONMENT_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        // touched; the env lock serializes against the other FNO_CONFIG pins.
+        let _env = crate::digest_overlay::ENVIRONMENT_LOCK.lock();
         std::env::set_var("FNO_CONFIG", &pin);
         let items = vec![
             ("github.app_id".to_string(), "1".to_string()),
@@ -487,6 +485,33 @@ mod tests {
         assert_eq!(results.len(), 3);
         let written = std::fs::read_to_string(&pin).expect("config written");
         assert!(written.contains("app_installation_id = \"42\""));
+        std::env::remove_var("FNO_CONFIG");
+    }
+
+    /// The question judge (crates/fno-agents/src/question_judge.rs) reads
+    /// questions.judge.enabled, questions.judge.model and questions.judge.batch
+    /// from the global config; one `config set -g` batch must accept all three,
+    /// with enabled landing as a TOML bool (the judge reads as_bool) and batch
+    /// as an int.
+    #[test]
+    fn set_accepts_the_question_judge_keys() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pin = dir.path().join("config.toml");
+        // The pin routes the global write at a temp file so no real home is
+        // touched; the env lock serializes against the other FNO_CONFIG pins.
+        let _env = crate::digest_overlay::ENVIRONMENT_LOCK.lock();
+        std::env::set_var("FNO_CONFIG", &pin);
+        let items = vec![
+            ("questions.judge.enabled".to_string(), "true".to_string()),
+            ("questions.judge.model".to_string(), "haiku".to_string()),
+            ("questions.judge.batch".to_string(), "5".to_string()),
+        ];
+        let results = set_values(&items, "global", None).expect("set accepts the judge keys");
+        assert_eq!(results.len(), 3);
+        let written = std::fs::read_to_string(&pin).expect("config written");
+        assert!(written.contains("enabled = true"));
+        assert!(written.contains("batch = 5"));
+        assert!(written.contains("model = \"haiku\""));
         std::env::remove_var("FNO_CONFIG");
     }
 }
