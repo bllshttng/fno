@@ -36,7 +36,15 @@ if [[ $input =~ $session ]]; then
   printf '0' > "$f.hits" 2>/dev/null
   export BUDDY_KEY="$key"
 fi
-# The renderer ships in fno-agents. Without it the status line stays empty rather than failing.
-command -v fno-agents >/dev/null 2>&1 || exit 0
 export BUDDY_HOME="$dir"
-printf '%s' "$input" | exec fno-agents hook buddy-statusline
+# The renderer ships in fno-agents. A plugin update can land before the binary that knows this
+# arm, so a missing or failed renderer falls back to the user's own line: the buddy hides, the
+# user's status line never goes blank.
+if command -v fno-agents >/dev/null 2>&1 \
+    && rendered=$(printf '%s' "$input" | fno-agents hook buddy-statusline 2>/dev/null) && [[ -n $rendered ]]; then
+  printf '%s\n' "$rendered"
+  exit 0
+fi
+own=$(jq -r 'select(.statusLine.type == "command") | .statusLine.command // empty' "$dir/inner.json" 2>/dev/null)
+[[ -n $own ]] && printf '%s' "$input" | exec /bin/sh -c "$own"
+exit 0
