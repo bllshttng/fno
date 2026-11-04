@@ -607,11 +607,8 @@ fn door_layer(path: &std::path::Path) -> Value {
 
 /// The aliased layers, highest priority first: existing parseable candidates
 /// only (config_cli::aliased_layers minus the readback warnings, which the
-/// receipt never needed).
-fn door_layers(root: &std::path::Path) -> Vec<(PathBuf, Value)> {
-    door_layers_pinned(root, true)
-}
-
+/// receipt never needed). `pinned` walks the FNO_CONFIG pin alone; an
+/// unpinned walk expands the full candidate chain at that root.
 fn door_layers_pinned(root: &std::path::Path, pinned: bool) -> Vec<(PathBuf, Value)> {
     let mut out = Vec::new();
     for path in door_candidates_pinned(root, pinned) {
@@ -896,7 +893,7 @@ mod paths_facts_tests {
 
         // The loader oracle over the same layers: every value the fixture
         // sets must match the door at the same key.
-        let layers = door_layers(&repo);
+        let layers = door_layers_pinned(&repo, true);
         let mut merged = Value::Object(serde_json::Map::new());
         for (_path, parsed) in layers.iter().rev() {
             door_deep_merge(&mut merged, parsed);
