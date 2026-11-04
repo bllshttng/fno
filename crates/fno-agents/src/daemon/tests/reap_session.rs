@@ -73,183 +73,6 @@ fn x2774_sweep_at(
     )
 }
 
-/// The wall-clock wrapper: each pass reads its own now, as before the
-/// injected-clock variant existed.
-fn x2774_sweep(
-    home: &AgentsHome,
-    emitter: &EventEmitter,
-    grace: i64,
-    dry_run: bool,
-    transcripts: impl Fn(&state::RegistryEntry) -> Option<Vec<std::path::PathBuf>>,
-    agents: crate::claude_roster::ClaudeAgentsSnapshot,
-) -> GcSummary {
-    x2774_sweep_at(
-        home,
-        emitter,
-        grace,
-        dry_run,
-        crate::daemon::now_epoch_secs(),
-        transcripts,
-        agents,
-    )
-}
-
-/// Change 1 + 2: a spawn row whose node reads in_review and whose harness
-/// state reads done retires with a basis naming the session state, and the
-/// agent_row_reaped event carries it. `working` keeps; a failed roster read
-/// keeps (fail closed).
-#[test]
-fn x2774_terminal_harness_state_releases_an_open_work_row() {
-    let (dir, home) = staged_graph_home();
-    let emitter = EventEmitter::new(home.events_jsonl(), "daemon");
-    let transcripts = tempfile::tempdir().unwrap();
-    let quiet = quiet_transcript(transcripts.path(), "q.jsonl", 2 * 3600);
-    // Inside the origin ruling's one idle hour: the age the open-work
-    // keep legs stage, past the old grace but inside the retire hour.
-    let young = quiet_transcript(transcripts.path(), "young.jsonl", 1800);
-    stage_graph(
-        dir.path(),
-        json!([x2774_open_node("N1", "in_review", &["s-term"])]),
-    );
-    state::update_registry(&home.registry_json(), |r| {
-        r.entries.push(x2774_spawn("row-term", "t-term", "s-term"));
-    })
-    .unwrap();
-    let picks = |e: &state::RegistryEntry| match e.harness_session_id.as_deref() {
-        Some("s-term") => Some(vec![quiet.clone()]),
-        _ => None,
-    };
-    let young_picks = |e: &state::RegistryEntry| match e.harness_session_id.as_deref() {
-        Some("s-term") => Some(vec![young.clone()]),
-        _ => None,
-    };
-
-    // The inverse FIRST (a dry run mutates nothing, and the apply pass below
-    // retires the row): a working state keeps under open work, and the keep
-    // names the reader (change 4).
-    let working_agents = crate::claude_roster::ClaudeAgentsSnapshot::known(vec![
-        crate::claude_roster::ClaudeAgentRow::new("t-term", Some("working")),
-    ]);
-    let summary = x2774_sweep(&home, &emitter, 900, true, young_picks, working_agents);
-    assert!(summary.retired.is_empty(), "{summary:?}");
-    assert_eq!(
-        summary.kept_open_work_stale,
-        vec![(
-            "t-term".to_string(),
-            "N1".to_string(),
-            "in_review".to_string(),
-            "sessions".to_string()
-        )]
-    );
-
-    // A roster read that fails outright keeps everything (change 1).
-    let unreadable = crate::claude_roster::ClaudeAgentsSnapshot::unknown("staged: unreadable");
-    let summary = x2774_sweep(&home, &emitter, 900, true, young_picks, unreadable);
-    assert!(summary.retired.is_empty(), "{summary:?}");
-    assert_eq!(summary.kept_open_work_stale.len(), 1, "{summary:?}");
-
-    // Terminal roster state: the row retires on the session question. APPLY
-    // mode, run LAST: the basis is an effect-outcome artifact, so
-    // the claim is proved where the effects run - and the retirement drops
-    // the row from the registry.
-    let done_agents = crate::claude_roster::ClaudeAgentsSnapshot::known(vec![
-        crate::claude_roster::ClaudeAgentRow::new("t-term", Some("done")),
-    ]);
-    let summary = x2774_sweep(&home, &emitter, 900, false, picks, done_agents);
-    assert_eq!(summary.retired.len(), 1, "{summary:?}");
-    assert!(
-        summary.retired[0]
-            .1
-            .starts_with("session terminal: harness state done (via sessions); node N1 in_review"),
-        "basis names the session state: {summary:?}"
-    );
-    // The reaper ended the session whose manifest bound the node; the node
-    // itself survives the pass untouched: the sweep's session-end writes
-    // fill session rows only, so a close reads only from the gated close
-    // paths (the plan's ship promise checked against merged refs).
-    let rows = crate::graph_store::read_rows(&dir.path().join("graph.json")).unwrap();
-    let n1 = rows.iter().find(|e| e["id"] == "N1").unwrap();
-    assert_eq!(
-        n1["status"], "in_review",
-        "the reaper never closes the node whose session it ends"
-    );
-    assert!(
-        n1.get("completed_at").map(|v| v.is_null()).unwrap_or(true),
-        "no completion stamp appears on a reaped session's node"
-    );
-    std::fs::remove_dir_all(home.root()).ok();
-}
-
-/// Change 3: one node, two spawn rows. Older quiet, newer live: the OLDER
-/// retires naming the live peer, the newer keeps under active. Both quiet:
-/// neither retires on the supersession path.
-#[test]
-fn x2774_supersession_and_its_fail_closed_corner() {
-    let (dir, home) = staged_graph_home();
-    let emitter = EventEmitter::new(home.events_jsonl(), "daemon");
-    let transcripts = tempfile::tempdir().unwrap();
-    let quiet = quiet_transcript(transcripts.path(), "old.jsonl", 2 * 3600);
-    let fresh = quiet_transcript(transcripts.path(), "new.jsonl", 100);
-    stage_graph(
-        dir.path(),
-        json!([x2774_open_node("N1", "in_review", &["s-old", "s-new"])]),
-    );
-    state::update_registry(&home.registry_json(), |r| {
-        let mut older = x2774_spawn("row-old", "t-old", "s-old");
-        older.created_at = "2026-09-09T22:00:00Z".into();
-        let mut newer = x2774_spawn("row-new", "t-new", "s-new");
-        newer.created_at = "2026-09-09T23:00:00Z".into();
-        r.entries.push(older);
-        r.entries.push(newer);
-    })
-    .unwrap();
-    let older_quiet = |e: &state::RegistryEntry| match e.harness_session_id.as_deref() {
-        Some("s-old") => Some(vec![quiet.clone()]),
-        Some("s-new") => Some(vec![fresh.clone()]),
-        _ => None,
-    };
-    let summary = x2774_sweep(&home, &emitter, 900, false, older_quiet, no_agents());
-    assert_eq!(
-        summary.retired,
-        vec![(
-            "t-old".to_string(),
-            "superseded on N1 by live peer row-new (created 2026-09-09T23:00:00Z)".to_string()
-        )],
-        "{summary:?}"
-    );
-    assert_eq!(
-        summary.kept_open_work_stale,
-        vec![(
-            "t-new".to_string(),
-            "N1".to_string(),
-            "in_review".to_string(),
-            "sessions".to_string()
-        )],
-        "the live newest row keeps under its own open-work shield: {summary:?}"
-    );
-
-    // Both quiet and INSIDE the idle hour: the peer's 1800 s transcript
-    // is past the grace, so it is not a live peer and neither row retires
-    // on the supersession path - both keep under their open-work shields.
-    let young = quiet_transcript(transcripts.path(), "young.jsonl", 1800);
-    let both_quiet = |e: &state::RegistryEntry| match e.harness_session_id.as_deref() {
-        Some("s-old") | Some("s-new") => Some(vec![young.clone()]),
-        _ => None,
-    };
-    // Run 1 (acting) retired and removed t-old; restore it for the
-    // both-quiet world.
-    state::update_registry(&home.registry_json(), |r| {
-        let mut older = x2774_spawn("row-old", "t-old", "s-old");
-        older.created_at = "2026-09-09T22:00:00Z".into();
-        r.entries.push(older);
-    })
-    .unwrap();
-    let summary = x2774_sweep(&home, &emitter, 900, false, both_quiet, no_agents());
-    assert!(summary.retired.is_empty(), "{summary:?}");
-    assert_eq!(summary.kept_open_work_stale.len(), 2, "{summary:?}");
-    std::fs::remove_dir_all(home.root()).ok();
-}
-
 /// Change 5: one staged world judged twice. Dry and acting agree row for
 /// row on every read-only policy hold, and the permitted divergences are
 /// each asserted by name: dry_run_unverified (dry only: rows with
@@ -321,10 +144,6 @@ fn x2774_dry_and_acting_agree_row_for_row() {
     let now = crate::daemon::now_epoch_secs();
     let dry = x2774_sweep_at(&home, &emitter, 900, true, now, &picks, roster.clone());
     let acting = x2774_sweep_at(&home, &emitter, 900, false, now, &picks, roster);
-    assert_eq!(
-        dry.kept_open_work_stale, acting.kept_open_work_stale,
-        "open-work bucket agrees"
-    );
     // The bucket's second element is the transcript age. Both passes judged
     // the staged world against ONE injected now, so the tuples agree byte
     // for byte; per-pass wall reads flaked here when a row crossed a second
@@ -332,10 +151,6 @@ fn x2774_dry_and_acting_agree_row_for_row() {
     assert_eq!(
         dry.kept_active, acting.kept_active,
         "active bucket agrees row for row"
-    );
-    assert_eq!(
-        dry.kept_no_provenance, acting.kept_no_provenance,
-        "provenance bucket agrees"
     );
     assert_eq!(
         dry.kept_open_do_row, acting.kept_open_do_row,

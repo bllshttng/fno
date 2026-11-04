@@ -124,6 +124,7 @@ pub(crate) fn run(call: Call<'_>) -> Result<Output, DoorError> {
     for (key, value) in call.env {
         command.env(key, value);
     }
+    crate::github_app::inject(&mut command, std::ffi::OsStr::new(call.program));
     {
         use std::os::unix::process::CommandExt;
         command.process_group(0);

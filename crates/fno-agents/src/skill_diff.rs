@@ -651,8 +651,8 @@ pub fn build_prompt(
     history: &[Map<String, Value>],
 ) -> String {
     let driver_note = if DRIVER_SKILLS.contains(&skill_id) {
-        "\nThis is a DRIVER skill: your diff must not introduce a self-containment \
-         CI violation - no ${REPO_ROOT}/scripts/ refs, no ../../ path escapes.\n"
+        "\nThis is a DRIVER skill: your diff must not introduce a CI \
+         violation - no ${REPO_ROOT}/scripts/ refs.\n"
     } else {
         ""
     };

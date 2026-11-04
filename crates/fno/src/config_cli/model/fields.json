@@ -16,6 +16,10 @@
      "default": "%Y%m%d-{slug}-{node}.md"
     },
     {
+     "name": "repo_aliases",
+     "default": {}
+    },
+    {
      "name": "branch",
      "default": {
       "prefix": "fno"
@@ -3022,6 +3026,7 @@
   "state_dir",
   "plans_dir",
   "plans_filename",
+  "repo_aliases",
   "branch.prefix",
   "paths.ledger_json",
   "paths.evals_history",

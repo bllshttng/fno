@@ -200,7 +200,9 @@ pub(crate) fn hold_open_pr_reaps(
         let Some(order) = to_retire.get(&name) else {
             continue;
         };
-        if order.released || order.via_release || order.pr_settled_live {
+        // A session-shaped release never lifts this guard: a finished session
+        // that still owns an open PR is the driver the PR waits on.
+        if order.via_release || order.pr_settled_live {
             continue;
         }
         let order_id = order.id.clone();

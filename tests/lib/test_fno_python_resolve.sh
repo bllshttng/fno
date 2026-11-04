@@ -4,8 +4,9 @@
 # Guards scripts/lib/fno-python.sh, the interpreter resolver for the
 # `-m fno.<mod>` helpers. The bug it exists for: a bare `python3 -m fno.<mod>`
 # runs under whatever python is first on PATH, and one without fno's deps dies
-# inside fno.paths on `import fno.config` - so the helper's work is dropped
-# while the caller (which often sends stderr to a log) reports nothing.
+# inside fno.paths on its first wheel dependency import - so the helper's work
+# is dropped while the caller (which often sends stderr to a log) reports
+# nothing.
 
 set -uo pipefail
 
@@ -20,15 +21,16 @@ fail() { printf 'FAIL - %s\n' "$1"; FAILURES=$((FAILURES + 1)); }
 source "${REPO_ROOT}/scripts/lib/fno-python.sh"
 
 # --- 1. The resolved interpreter can actually load the module that broke ------
-# This is the load-bearing assertion: `import fno.config` is the exact import
-# that dropped ledger rows. Only meaningful when a checkout venv exists (the
-# canonical one, since a linked worktree carries cli/src but no cli/.venv).
+# This is the load-bearing assertion: `import fno.paths` is the exact import
+# class that dropped ledger rows (a module whose import pulls the wheel's
+# dependencies). Only meaningful when a checkout venv exists (the canonical
+# one, since a linked worktree carries cli/src but no cli/.venv).
 CANONICAL="$(git worktree list --porcelain | awk 'NR==1{sub(/^worktree /,"");print}')"
 if [[ -x "${CANONICAL}/cli/.venv/bin/python3" ]]; then
     ( fno_python_init "$REPO_ROOT"
-      "$FNO_PYTHON" -c "import fno.config" 2>/dev/null ) \
-        && pass "resolved interpreter imports fno.config" \
-        || fail "resolved interpreter cannot import fno.config (ledger rows would be dropped)"
+      "$FNO_PYTHON" -c "import fno.paths" 2>/dev/null ) \
+        && pass "resolved interpreter imports fno.paths" \
+        || fail "resolved interpreter cannot import fno.paths (ledger rows would be dropped)"
 
     ( fno_python_init "$REPO_ROOT"; [[ "$FNO_PYTHON" != "python3" ]] ) \
         && pass "resolves a real path, not bare python3, inside a checkout" \

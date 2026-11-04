@@ -779,79 +779,6 @@ pub fn retire_interval_s(cwd: &Path, grace_secs: u64) -> u64 {
 /// specimen was over three hours old; a younger deps binary may be a live run.
 pub const DEFAULT_ORPHAN_MIN_ELAPSED_SECS: u64 = 900;
 
-/// Default open-work retire window (change 2): an OPEN-work row whose
-/// transcript has been quiet this long is no longer evidenced by its node.
-/// Well above the 900 s retire grace on purpose - an open node is a real
-/// claim until a full day of silence says otherwise - and resolvable from
-/// `agents.reap.open_work_retire_s`.
-pub const DEFAULT_OPEN_WORK_RETIRE_SECS: u64 = 86_400;
-
-/// Resolve `agents.reap.open_work_retire_s` for the registry sweep, same
-/// precedence + fail-open degrade as [`retire_grace_secs`]: an unparseable or
-/// zero value degrades to the default rather than reaping every open row on
-/// a config typo. `$FNO_AGENTS_OPEN_WORK_RETIRE_SECS` is a global test/tuning
-/// override.
-pub fn open_work_retire_secs(cwd: &Path) -> u64 {
-    if let Some(v) = non_empty_env("FNO_AGENTS_OPEN_WORK_RETIRE_SECS")
-        .and_then(|s| s.to_str().and_then(|s| s.trim().parse::<u64>().ok()))
-        .filter(|v| *v > 0)
-    {
-        return v;
-    }
-    resolve(cwd, table_open_work_retire_s).unwrap_or(DEFAULT_OPEN_WORK_RETIRE_SECS)
-}
-
-fn table_open_work_retire_s(t: &toml::Table) -> Option<u64> {
-    t.get("agents")?
-        .as_table()?
-        .get("reap")?
-        .as_table()?
-        .get("open_work_retire_s")?
-        .as_integer()
-        .and_then(|i| u64::try_from(i).ok())
-        .filter(|v| *v > 0)
-}
-
-#[cfg(test)]
-pub(crate) fn read_open_work_retire_s(content: &str) -> Option<u64> {
-    table_open_work_retire_s(&parse_config(content)?)
-}
-
-/// Default quiet time before a stopped session row with no node, no open PR
-/// and no live claim retires: one day, resolvable from
-/// `agents.reap.stopped_retire_s`.
-pub const DEFAULT_STOPPED_RETIRE_SECS: u64 = 86_400;
-
-/// Resolve `agents.reap.stopped_retire_s`, same precedence and fail-open
-/// degrade as [`open_work_retire_secs`]: a zero or unparseable value falls
-/// back to the default, never to "retire every stopped row now".
-/// `$FNO_AGENTS_STOPPED_RETIRE_SECS` is a test/tuning override.
-pub fn stopped_retire_secs(cwd: &Path) -> u64 {
-    if let Some(v) = non_empty_env("FNO_AGENTS_STOPPED_RETIRE_SECS")
-        .and_then(|s| s.to_str().and_then(|s| s.trim().parse::<u64>().ok()))
-        .filter(|v| *v > 0)
-    {
-        return v;
-    }
-    resolve(cwd, table_stopped_retire_s).unwrap_or(DEFAULT_STOPPED_RETIRE_SECS)
-}
-
-fn table_stopped_retire_s(t: &toml::Table) -> Option<u64> {
-    t.get("agents")?
-        .as_table()?
-        .get("reap")?
-        .as_table()?
-        .get("stopped_retire_s")?
-        .as_integer()
-        .and_then(|i| u64::try_from(i).ok())
-        .filter(|v| *v > 0)
-}
-
-#[cfg(test)]
-pub(crate) fn read_stopped_retire_s(content: &str) -> Option<u64> {
-    table_stopped_retire_s(&parse_config(content)?)
-}
-
 /// Resolve `test.orphan_min_elapsed_seconds` for the orphan-reap sweep, same
 /// precedence + fail-open degrade as [`retire_grace_secs`].
 pub fn orphan_min_elapsed_secs(cwd: &Path) -> u64 {
@@ -1566,9 +1493,9 @@ pub fn review_optional_apps(cwd: &Path) -> Vec<String> {
 /// POSTURE (may we merge at all); these decide HOW, once something has already
 /// decided to.
 ///
-/// Both mirror `fno.config.AutoMergeBlock`, which is the source of truth;
-/// `cli/tests/test_config_schema_drift.py` fails when the allowlist here drifts
-/// from the model's. Both degrade to the value `finalize` hardcoded before it
+/// Both mirror the model's AutoMergeBlock (the fields.json/config_schema.json
+/// pair in the fno crate; the agreement test in config_cli/model holds the
+/// tables together). Both degrade to the value `finalize` hardcoded before it
 /// read config at all, so a malformed file is never worse than the old behavior.
 ///
 /// One known parity edge: a NON-STRING value
@@ -2361,18 +2288,6 @@ mod tests {
     }
 
     #[test]
-    fn stopped_retire_s_reads_the_reap_table_and_rejects_zero() {
-        assert_eq!(
-            read_stopped_retire_s("[agents.reap]\nstopped_retire_s = 7200\n"),
-            Some(7200)
-        );
-        assert_eq!(
-            read_stopped_retire_s("[agents.reap]\nstopped_retire_s = 0\n"),
-            None
-        );
-    }
-
-    #[test]
     fn reader_knobs_rows() {
         let cfg = "[mux]\nnotify_on_blocked = false\nnotify_on_done = true\n";
         assert_eq!(read_mux_bool(cfg, "notify_on_blocked"), Some(false));
@@ -2399,26 +2314,6 @@ mod tests {
 
         let cfg = "[mux]\nnotify_on_done = true\n";
         assert_eq!(read_mux_bool(cfg, "notify_on_done"), Some(true));
-
-        assert_eq!(
-            read_open_work_retire_s("[agents.reap]\nopen_work_retire_s = 3600\n"),
-            Some(3600)
-        );
-        // No block, wrong block, sibling key: all absence.
-        assert_eq!(read_open_work_retire_s("schema_version = 1\n"), None);
-        assert_eq!(
-            read_open_work_retire_s("[reap]\nopen_work_retire_s = 3600\n"),
-            None
-        );
-        // Zero and negative coerce to None, so the resolver's default wins.
-        assert_eq!(
-            read_open_work_retire_s("[agents.reap]\nopen_work_retire_s = 0\n"),
-            None
-        );
-        assert_eq!(
-            open_work_retire_secs(Path::new("/nonexistent-open-work")),
-            DEFAULT_OPEN_WORK_RETIRE_SECS
-        );
 
         assert_eq!(read_max_cargo_runs("[test]\nmax_cargo_runs = 3\n"), Some(3));
         // No block, wrong type, 0, negative: all absence, so the default wins.
