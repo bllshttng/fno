@@ -1992,6 +1992,9 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // user's look clears (look_hold.rs).
     "look_hold_cancel",
     "look_hold_release",
+    // The reruns a lifted test hold posts on open PRs left with only
+    // cancelled runs (test_hold.rs).
+    "test_hold_rerun",
     // A wait or cadence red-cancel of a head's runs in flight
     // (pr_status/wait.rs), with the failing checks that caused it.
     "ci_wait_cancel",
