@@ -9,9 +9,7 @@
 //! each action's argv to a pane and does not spawn it from the client.
 
 use serde::Deserialize;
-use std::time::Duration;
-
-const SHELLOUT_TIMEOUT: Duration = Duration::from_secs(20);
+use std::collections::HashSet;
 
 /// One decision as `fno backlog decisions --json` lists it.
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -118,17 +116,21 @@ impl Filter {
         self.audit_only = !self.audit_only;
     }
 
-    pub fn admits(&self, r: &DecisionRow) -> bool {
+    pub fn admits(&self, r: &DecisionRow, reviewed: &HashSet<String>) -> bool {
         self.lane.is_none_or(|l| r.lane == l)
             && self.state.is_none_or(|s| r.lifecycle == s)
             && self.author.is_none_or(|a| r.author() == a)
-            && (!self.audit_only || r.needs_audit())
+            && (!self.audit_only || (r.needs_audit() && !reviewed.contains(&r.decision_id)))
     }
 }
 
 /// The rows a filter admits, newest first.
-pub fn visible<'a>(rows: &'a [DecisionRow], f: &Filter) -> Vec<&'a DecisionRow> {
-    let mut v: Vec<&DecisionRow> = rows.iter().filter(|r| f.admits(r)).collect();
+pub fn visible<'a>(
+    rows: &'a [DecisionRow],
+    f: &Filter,
+    reviewed: &HashSet<String>,
+) -> Vec<&'a DecisionRow> {
+    let mut v: Vec<&DecisionRow> = rows.iter().filter(|r| f.admits(r, reviewed)).collect();
     v.sort_by(|a, b| b.ts.cmp(&a.ts));
     v
 }
@@ -139,10 +141,10 @@ pub fn parse(stdout: &[u8]) -> Result<Vec<DecisionRow>, String> {
         .map_err(|e| format!("malformed decisions listing: {e}"))
 }
 
-/// Read every decision, off the UI loop; the `Err` text names the failure.
-pub async fn fetch_all() -> Result<Vec<DecisionRow>, String> {
-    let mut command = crate::process_admission::tokio_command(crate::server::fno_bin());
-    command
+/// Read every decision through the one CLI reader; the `Err` text names the
+/// failure.
+pub fn load() -> Result<Vec<DecisionRow>, String> {
+    let output = std::process::Command::new(crate::server::fno_bin())
         .args([
             "backlog",
             "decisions",
@@ -153,11 +155,7 @@ pub async fn fetch_all() -> Result<Vec<DecisionRow>, String> {
             "--json",
         ])
         .stdin(std::process::Stdio::null())
-        .kill_on_drop(true);
-    let fut = crate::process_admission::tokio_output(&mut command);
-    let output = tokio::time::timeout(SHELLOUT_TIMEOUT, fut)
-        .await
-        .map_err(|_| "the decisions read timed out".to_string())?
+        .output()
         .map_err(|e| format!("cannot spawn fno: {e}"))?;
     if !output.status.success() {
         return Err(format!(
@@ -166,6 +164,26 @@ pub async fn fetch_all() -> Result<Vec<DecisionRow>, String> {
         ));
     }
     parse(&output.stdout)
+}
+
+/// The ids the user marked reviewed; a missing or unreadable file is empty.
+pub fn load_reviewed(path: &std::path::Path) -> HashSet<String> {
+    std::fs::read(path)
+        .ok()
+        .and_then(|b| serde_json::from_slice::<HashSet<String>>(&b).ok())
+        .unwrap_or_default()
+}
+
+/// Add `id` to the reviewed set and write it back.
+pub fn mark_reviewed(path: &std::path::Path, id: &str) -> std::io::Result<()> {
+    let mut set = load_reviewed(path);
+    set.insert(id.to_string());
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let mut ids: Vec<_> = set.into_iter().collect();
+    ids.sort();
+    std::fs::write(path, serde_json::to_vec(&ids).unwrap_or_default())
 }
 
 /// What the user can do to one row; each renders to an argv a pane runs.
@@ -243,7 +261,7 @@ mod tests {
         let mut f = Filter::default();
         f.cycle_lane();
         f.cycle_state();
-        let ids: Vec<_> = visible(&rows, &f)
+        let ids: Vec<_> = visible(&rows, &f, &HashSet::new())
             .iter()
             .map(|r| r.decision_id.clone())
             .collect();
@@ -261,7 +279,7 @@ mod tests {
             audit_only: true,
             ..Filter::default()
         };
-        assert_eq!(visible(&rows, &f).len(), 2);
+        assert_eq!(visible(&rows, &f, &HashSet::new()).len(), 2);
     }
 
     #[test]
@@ -285,6 +303,20 @@ mod tests {
             ),
             ["inbox", "law", "set", "subj", "new", "--supersedes", "d-1"]
         );
+    }
+
+    #[test]
+    fn reviewed_marks_leave_the_audit_queue() {
+        let rows = vec![row("u", "unattributed", "unscoped", Some("role"), "1")];
+        let f = Filter {
+            audit_only: true,
+            ..Filter::default()
+        };
+        let dir = std::env::temp_dir().join(format!("fno-dec-{}", std::process::id()));
+        let path = dir.join("reviewed.json");
+        mark_reviewed(&path, "u").unwrap();
+        assert!(visible(&rows, &f, &load_reviewed(&path)).is_empty());
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
