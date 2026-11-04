@@ -196,26 +196,28 @@ pub enum Action {
 /// The argv for `action` on `row`, after `fno`. An overrule records the new
 /// text on the same subject and marks the old id superseded.
 pub fn action_argv(row: &DecisionRow, action: &Action) -> Vec<String> {
-    let s = |v: &str| v.to_string();
-    match action {
-        Action::Retract { reason } => vec![
-            s("inbox"),
-            s("law"),
-            s("retract"),
-            row.decision_id.clone(),
-            s("--reason"),
-            reason.clone(),
-        ],
-        Action::Overrule { new_text } => vec![
-            s("inbox"),
-            s("law"),
-            s("set"),
-            row.subject.clone(),
-            new_text.clone(),
-            s("--supersedes"),
-            row.decision_id.clone(),
-        ],
-    }
+    let words = |w: &[&str]| w.iter().map(|v| v.to_string()).collect::<Vec<_>>();
+    let law = row.lane == "law";
+    let (mut argv, rest) = match action {
+        Action::Retract { reason } if law => (
+            words(&["inbox", "law", "retract", &row.decision_id]),
+            words(&["--reason", reason]),
+        ),
+        Action::Retract { reason } => (
+            words(&["backlog", "decide-retract", &row.decision_id]),
+            words(&["--reason", reason, "--authority", "operator"]),
+        ),
+        Action::Overrule { new_text } if law => (
+            words(&["inbox", "law", "set", &row.subject, new_text]),
+            words(&["--supersedes", &row.decision_id]),
+        ),
+        Action::Overrule { new_text } => (
+            words(&["inbox", "decide", &row.subject, new_text]),
+            words(&["--supersedes", &row.decision_id, "--authority", "operator"]),
+        ),
+    };
+    argv.extend(rest);
+    argv
 }
 
 #[cfg(test)]
@@ -302,6 +304,42 @@ mod tests {
                 }
             ),
             ["inbox", "law", "set", "subj", "new", "--supersedes", "d-1"]
+        );
+        let c = row("d-2", "coord", "live", Some("role"), "1");
+        assert_eq!(
+            action_argv(
+                &c,
+                &Action::Retract {
+                    reason: "wrong".into()
+                }
+            ),
+            [
+                "backlog",
+                "decide-retract",
+                "d-2",
+                "--reason",
+                "wrong",
+                "--authority",
+                "operator"
+            ]
+        );
+        assert_eq!(
+            action_argv(
+                &c,
+                &Action::Overrule {
+                    new_text: "new".into()
+                }
+            ),
+            [
+                "inbox",
+                "decide",
+                "subj",
+                "new",
+                "--supersedes",
+                "d-2",
+                "--authority",
+                "operator"
+            ]
         );
     }
 

@@ -142,7 +142,8 @@ fn prompt(label: &str) -> Option<String> {
     let mut line = String::new();
     std::io::stdin().read_line(&mut line).ok()?;
     let line = line.trim().to_string();
-    (!line.is_empty()).then_some(line)
+    // A leading dash would read as a door flag.
+    (!line.is_empty() && !line.starts_with('-')).then_some(line)
 }
 
 /// Run the law door on `row` with this terminal inherited.
