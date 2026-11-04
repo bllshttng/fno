@@ -159,9 +159,12 @@ pub(crate) fn newest_typed_turn_age_s(
 /// The sweep's one-row gate: `Some(hold)` when the row's transcript
 /// carries a typed turn inside the window. A row the age seam already
 /// reads fresh (`quiet`) skips the read - `kept_active` holds it.
+/// The bus is the sweep's one cell: the log and its rotations run to tens
+/// of megabytes, and a parse per row made one pass take minutes.
 pub(crate) fn sweep_hold(
     id: &str,
     home: &crate::paths::AgentsHome,
+    bus: &std::cell::OnceCell<BusIndex>,
     hits: Option<Vec<PathBuf>>,
     sid: &str,
     quiet: bool,
@@ -174,7 +177,8 @@ pub(crate) fn sweep_hold(
         return None;
     }
     let hits = hits?;
-    let typed_age = newest_typed_turn_age_s(&hits, &bus_for(home), sid, now, spawn_payload)?;
+    let bus = bus.get_or_init(|| bus_for(home));
+    let typed_age = newest_typed_turn_age_s(&hits, bus, sid, now, spawn_payload)?;
     (typed_age <= WINDOW_SECS).then(|| crate::gc_sweep::Hold {
         id: id.to_string(),
         reason: "attended",

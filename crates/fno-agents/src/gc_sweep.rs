@@ -1598,8 +1598,9 @@ pub(crate) fn run_with_release(
         return summary; // empty registry -> nothing to sweep
     }
     let graph = read_graph(home);
+    let bus = std::cell::OnceCell::new();
     let now = crate::daemon::now_epoch_secs();
-    // One claims read per sweep: the global root plus every distinct row
+    // One claims read per sweep:the global root plus every distinct row
     // cwd's local store. A live or suspect record names its holder
     // session, keyed through the record's `session_id` stamp (never the
     // holder string, a credential). An unreadable root reads as no facts.
@@ -1793,6 +1794,7 @@ pub(crate) fn run_with_release(
         if let Some(hold) = crate::attended::sweep_hold(
             &id,
             home,
+            &bus,
             hits.clone(),
             sid,
             matches!(age, Some(a) if *a <= grace_secs),
