@@ -730,6 +730,18 @@ fn run(a: &Args, gh: Gh) -> i32 {
             if a.check_only {
                 return 0;
             }
+            if let Some(line) = crate::epic_issue::body_ref_line(&a.cwd, &body) {
+                let sep = if body.ends_with('\n') { "" } else { "\n" };
+                let added = std::fs::OpenOptions::new()
+                    .append(true)
+                    .open(&a.body_file)
+                    .and_then(|mut f| {
+                        std::io::Write::write_all(&mut f, format!("{sep}\n{line}\n").as_bytes())
+                    });
+                if let Err(e) = added {
+                    eprintln!("pr-create: warning: could not add `{line}` to the body file: {e}");
+                }
+            }
             let cmd: Vec<String> = vec![
                 "gh".to_string(),
                 "pr".to_string(),
