@@ -201,6 +201,7 @@ pub mod proto_pane;
 #[cfg(feature = "full")]
 pub mod proto_slot;
 pub mod provider_key;
+pub mod provider_picker;
 #[cfg(feature = "full")]
 pub mod pty;
 #[cfg(feature = "full")]
@@ -264,8 +265,6 @@ pub mod spawn_journal;
 #[cfg(feature = "full")]
 pub mod splash;
 #[cfg(feature = "full")]
-pub mod sprites;
-#[cfg(feature = "full")]
 pub mod squad;
 #[cfg(feature = "full")]
 pub mod squad_cascade;
@@ -327,8 +326,6 @@ pub mod wordmark;
 pub mod workspace_sidecar;
 #[cfg(feature = "full")]
 pub mod worktree_door;
-#[cfg(feature = "full")]
-pub mod yard_overlay;
 
 #[cfg(feature = "full")]
 pub mod doctor;

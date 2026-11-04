@@ -45,8 +45,7 @@ pub const ORG_TTL: Duration = Duration::from_secs(60);
 /// a Python process.
 const SHELLOUT_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Fifteen seconds, not the yard's sixty. The yard renders identity, which
-/// does not move; this renders load, which does.
+/// Fifteen seconds: this renders load, which moves.
 ///
 /// The floor is the same measurement: a TTL under the read's own 8.07s cost
 /// means every open refetches and every reading is already stale on arrival,
@@ -1133,7 +1132,7 @@ impl Panel {
 }
 
 /// Resolve the `fno` binary through the server's one resolver, exactly as
-/// the yard leg does. A second resolver with different semantics would let
+/// the other legs do. A second resolver with different semantics would let
 /// this panel degrade on a checkout where every sibling leg still works.
 fn fno_bin() -> PathBuf {
     crate::server::fno_bin()

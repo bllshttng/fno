@@ -983,7 +983,10 @@ fn rank_band(rank: Option<f64>) -> u8 {
 /// overlay consumes: node id -> claim holder, for claims whose `state` is
 /// `"live"` under a `node:` / `dispatch:` key. Only `"live"` counts
 /// as in-flight (Locked 2); the sweep's other states (`stale`/`suspect`/...)
-/// never flip a card. `None` on unparseable output so the caller keeps its
+/// never flip a card. The one exception is a contributor's take: a day's
+/// lease held by a `github:` login with no process behind it, which the
+/// sweep reads `suspect` and which still marks the node taken. `None` on
+/// unparseable output so the caller keeps its
 /// last-good sweep — a flaky tick must not downgrade in-flight cards.
 ///
 /// The mux deliberately parses only this pinned JSON verdict: claim YAML,
@@ -993,9 +996,7 @@ pub fn live_claims_from_sweep(stdout: &str) -> Option<HashMap<String, String>> {
     let arr = v.get("claims")?.as_array()?;
     let mut live: HashMap<String, String> = HashMap::new();
     for c in arr {
-        if c.get("state").and_then(|s| s.as_str()) != Some("live") {
-            continue;
-        }
+        let state = c.get("state").and_then(|s| s.as_str());
         let Some(key) = c.get("key").and_then(|k| k.as_str()) else {
             continue;
         };
@@ -1004,6 +1005,11 @@ pub fn live_claims_from_sweep(stdout: &str) -> Option<HashMap<String, String>> {
             .and_then(|h| h.as_str())
             .unwrap_or_default()
             .to_string();
+        let is_take =
+            state == Some("suspect") && key.starts_with("node:") && holder.starts_with("github:");
+        if state != Some("live") && !is_take {
+            continue;
+        }
         // A node held by both a `dispatch:` and a `node:` claim keeps the
         // `node:` holder (the worker session) for display; either alone
         // marks the id in-flight.
@@ -2465,13 +2471,16 @@ mod tests {
             {"key":"dispatch:x-a","state":"live","holder":"dispatch-node:9","host":"h","pid":9},
             {"key":"dispatch:x-b","state":"live","holder":"advance:2","host":"h","pid":2},
             {"key":"node:x-c","state":"stale","holder":"gone","host":"h","pid":3},
-            {"key":"node:x-d","state":"suspect","holder":"maybe","host":"h","pid":4}
+            {"key":"node:x-d","state":"suspect","holder":"maybe","host":"h","pid":4},
+            {"key":"node:x-e","state":"suspect","holder":"github:visitor-1","host":"h"}
         ]}"#;
         let live = live_claims_from_sweep(stdout).unwrap();
-        // Only live claims count; node: holder preferred over dispatch:.
-        assert_eq!(live.len(), 2);
+        // Only live claims count, and a contributor's take; node: holder
+        // preferred over dispatch:.
+        assert_eq!(live.len(), 3);
         assert_eq!(live["x-a"], "target-session:abc");
         assert_eq!(live["x-b"], "advance:2");
+        assert_eq!(live["x-e"], "github:visitor-1");
         // Unparseable output is None (keep last-good), not an empty map.
         assert!(live_claims_from_sweep("not json").is_none());
         assert!(live_claims_from_sweep(r#"{"no_claims":1}"#).is_none());

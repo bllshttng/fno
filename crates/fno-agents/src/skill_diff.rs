@@ -651,8 +651,8 @@ pub fn build_prompt(
     history: &[Map<String, Value>],
 ) -> String {
     let driver_note = if DRIVER_SKILLS.contains(&skill_id) {
-        "\nThis is a DRIVER skill: your diff must not introduce a self-containment \
-         CI violation - no ${REPO_ROOT}/scripts/ refs, no ../../ path escapes.\n"
+        "\nThis is a DRIVER skill: your diff must not introduce a CI \
+         violation - no ${REPO_ROOT}/scripts/ refs.\n"
     } else {
         ""
     };
@@ -930,7 +930,7 @@ fn blob_hash(repo_root: &Path, rel_path: &str) -> String {
 
 /// Every project name in the workspace work-map (redaction guard input). A
 /// malformed work-map must not uncap redaction, so errors read as no names.
-fn project_names(cwd: &Path) -> Vec<String> {
+pub(crate) fn project_names(cwd: &Path) -> Vec<String> {
     let mut names = Vec::new();
     if let Some(work) = crate::agents_config::config_lookup(cwd, &["work"])
         .and_then(|v| v.get("workspaces").and_then(|w| w.as_table()).cloned())

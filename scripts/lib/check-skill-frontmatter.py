@@ -2,7 +2,7 @@
 """check-skill-frontmatter.py -- validate a skill's frontmatter declares
 a required binary dependency.
 
-Used by ``scripts/lint/no-cross-skill-runtime-calls.sh`` (the
+Used by ``scripts/lint/check-skill-reach.sh`` (the
 marketplace-readiness lint) to verify each driver skill's SKILL.md has
 ``metadata.requires.binaries`` containing the named binary (default ``fno``).
 

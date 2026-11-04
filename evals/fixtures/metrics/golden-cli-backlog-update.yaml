@@ -1,0 +1,26 @@
+# Labelled cases for the golden-cli-backlog-update grader. A stub fno stands in for the head's binary. Read by report --check-metrics.
+cases:
+  - id: lists-update
+    label: good
+    stub:
+      fno: "printf '  find     Search node text   text\\n  update   Change node fields   node|rank|priority\\n'"
+  - id: update-first
+    label: good
+    stub:
+      fno: "printf '  update   Change node fields\\n'"
+  - id: update-on-stderr
+    label: good
+    stub:
+      fno: "printf '  update   Change node fields\\n' >&2"
+  - id: update-removed
+    label: bad
+    stub:
+      fno: "printf '  find     Search node text   text\\n  get      Read one node\\n'"
+  - id: update-mentioned-in-prose
+    label: bad
+    stub:
+      fno: "printf 'run fno backlog update to change a node\\n'"
+  - id: no-such-command
+    label: bad
+    stub:
+      fno: "printf 'fno: no command `backlog`.\\n' >&2; exit 2"

@@ -1,0 +1,26 @@
+# Labelled cases for the golden-cli-backlog-find grader. A stub fno stands in for the head's binary. Read by report --check-metrics.
+cases:
+  - id: lists-find
+    label: good
+    stub:
+      fno: "printf '  get      Read one node\\n  find     Search node text   text\\n'"
+  - id: find-first
+    label: good
+    stub:
+      fno: "printf '  find     Search node text\\n'"
+  - id: find-on-stderr
+    label: good
+    stub:
+      fno: "printf '  find     Search node text\\n' >&2"
+  - id: find-removed
+    label: bad
+    stub:
+      fno: "printf '  get      Read one node\\n  update   Change node fields\\n'"
+  - id: find-mentioned-in-prose
+    label: bad
+    stub:
+      fno: "printf 'run fno backlog find first\\n'"
+  - id: no-such-command
+    label: bad
+    stub:
+      fno: "printf 'fno: no command `backlog`.\\n' >&2; exit 2"

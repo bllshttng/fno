@@ -230,6 +230,7 @@ NATIVE_SERVED_LEAVES = frozenset({
     "doctor observer replay",
     "doctor observer sweep",
     "do ci status",
+    "do feedback",
     "do review resolve-level",
     "do review post-dispositions",
     "do review classify",

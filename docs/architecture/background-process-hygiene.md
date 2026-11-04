@@ -32,9 +32,9 @@ A process that can never end on its own is a different defect from an ordinary c
 | one `grep -rn --include=*.py`, PPID 1, 64% CPU | no. Reported by the sweep. |
 | background Bash tasks that outlived their session | no. Reported by the sweep. |
 
-One of three. That number is the honest coverage of the preventive layer, and the sweep is what covers the rest. One marked exception landed since: the recursive cache walk is refusable too. When the repository holds a CACHEDIR.TAG-confirmed Cargo cache, `hooks/recursive-grep-guard.py` refuses a recursive `grep` at the Bash boundary. That is the shape that burns cores walking nested worktree build artifacts.
+One of three. That number is the honest coverage of the preventive layer, and the sweep is what covers the rest. One marked exception landed since: the recursive cache walk is refusable too. When the repository holds a CACHEDIR.TAG-confirmed Cargo cache, `crates/fno-agents/src/hook/recursive_grep_guard.rs` refuses a recursive `grep` at the Bash boundary. That is the shape that burns cores walking nested worktree build artifacts.
 
-## The guard: `hooks/bg-process-guard.py`
+## The guard: `crates/fno-agents/src/hook/bg_process_guard.rs`
 
 A PreToolUse hook on Bash, wired on both the claude and codex lanes. It denies a command that can never end and carries no time bound in the same segment.
 
