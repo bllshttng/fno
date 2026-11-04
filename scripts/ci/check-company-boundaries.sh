@@ -139,14 +139,6 @@ LAYERS = (
             "fno.rust_binary",
         ),
     ),
-    (
-        1,
-        "core",
-        (
-            "fno.company",
-            "fno.company.contracts",
-        ),
-    ),
 )
 
 root = Path(sys.argv[1]).resolve()
