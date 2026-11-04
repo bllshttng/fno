@@ -460,6 +460,15 @@
       "doc": "Env var holding the PostHog project token."
     },
     {
+      "path": "telemetry.eval_events.token_file",
+      "type": "str",
+      "default": "~/.fno/secrets/posthog-project-token",
+      "tier": "advanced",
+      "question": "",
+      "default_source": "",
+      "doc": "Path to the PostHog project token file (mode 0600); token_env wins when set; a leading ~ expands against $HOME."
+    },
+    {
       "path": "attention.enabled",
       "type": "bool",
       "default": true,
