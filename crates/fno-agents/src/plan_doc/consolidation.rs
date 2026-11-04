@@ -133,7 +133,9 @@ fn valid_expiry_ref(r: &Value) -> bool {
 /// The node's decisions as the check reads them. `Err` carries the finished
 /// T or W line: an unread index is never an empty one.
 fn decisions(node: &str) -> Result<Value, String> {
-    let mut cmd = std::process::Command::new("fno");
+    // This binary's own backlog door: a hook or CI shell may have no `fno`.
+    let exe = std::env::current_exe().unwrap_or_else(|_| "fno-agents".into());
+    let mut cmd = std::process::Command::new(exe);
     cmd.args([
         "backlog",
         "decisions",

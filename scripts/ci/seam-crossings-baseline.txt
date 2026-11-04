@@ -70,7 +70,6 @@ crossing	crates/fno-agents/src/pane_spawn/mod.rs	let bin = fno_bin().to_string_l
 crossing	crates/fno-agents/src/pane_stop.rs	let output = std::process::Command::new(crate::scrape::fno_bin())
 crossing	crates/fno-agents/src/pane_stop.rs	let mut child = std::process::Command::new(crate::scrape::fno_bin())
 crossing	crates/fno-agents/src/peek.rs	let bin = crate::scrape::fno_bin();
-crossing	crates/fno-agents/src/plan_doc/consolidation.rs	let mut cmd = std::process::Command::new("fno");
 crossing	crates/fno-agents/src/plan_doc/mutate.rs	let mut cmd = std::process::Command::new("fno");
 crossing	crates/fno-agents/src/post_merge/ritual.rs	let mut cmd = Command::new(crate::scrape::fno_bin());
 crossing	crates/fno-agents/src/post_merge/ritual.rs	let mut cmd = Command::new(crate::scrape::fno_bin());
