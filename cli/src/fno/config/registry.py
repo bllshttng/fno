@@ -751,6 +751,10 @@ FIELD_META: dict[str, Meta] = {
     "accounts.quota.defer_horizon_minutes": Meta("never", "How far ahead a quota-window reset is still worth deferring for."),
     "accounts.quota.pick_on_launch": Meta("never", "Pick the least-loaded account at spawn time instead of pinning one."),
     "accounts.failover": Meta("never", "Provider-rotation failover: {max_swaps_per_phase}."),
+    # --- config.github.* ---
+    "github.app_id": Meta("never", "GitHub App id; with github.app_installation_id it arms App-installation token minting for GitHub API calls."),
+    "github.app_installation_id": Meta("never", "GitHub App installation id; required beside github.app_id before the App path mints tokens."),
+    "github.app_key_path": Meta("never", "Path to the GitHub App private key PEM (default ~/.fno/secrets/github-app.pem, mode 0600); a leading ~ expands against $HOME."),
 }
 
 

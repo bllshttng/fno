@@ -160,3 +160,49 @@ def test_bash_get_config_defaults_match_model() -> None:
                     )
     assert checked > 0, "no modeled get_config defaults found to check (guard inert?)"
     assert not mismatches, "bash/model default drift:\n" + "\n".join(mismatches)
+
+
+def test_native_set_accepts_github_app_keys(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The compiled front door's `config set -g` accepts the three github.*
+    keys in one batch and lands them in the global config.toml.
+
+    The schema guards above prove the model side; this proves the writer side
+    reads the same table, the way the GitHub App token path needs it to.
+    """
+    import subprocess
+    import tomllib
+
+    from tests.unit._front_dev import front_dev_binary
+
+    front = front_dev_binary()
+    if front is None:
+        pytest.skip("compiled fno front door not present (build with `cargo build -p fno`)")
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    for key in ("FNO_CONFIG", "FNO_GLOBAL_SETTINGS_PATH", "FNO_STATE_DIR"):
+        monkeypatch.delenv(key, raising=False)
+
+    keys = {
+        "github.app_id": "1",
+        "github.app_installation_id": "42",
+        "github.app_key_path": "~/.fno/secrets/github-app.pem",
+    }
+    proc = subprocess.run(
+        [str(front), "config", "set", "-g", *[f"{k}={v}" for k, v in keys.items()]],
+        capture_output=True,
+        text=True,
+        cwd=str(home),
+        timeout=120,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stderr or proc.stdout
+
+    config = tomllib.loads((home / ".fno" / "config.toml").read_text())
+    assert config["github"] == {
+        "app_id": "1",
+        "app_installation_id": "42",
+        "app_key_path": "~/.fno/secrets/github-app.pem",
+    }

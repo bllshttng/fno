@@ -3877,6 +3877,22 @@ class CiTierBlock(BaseModel):
     enabled: bool = False
 
 
+class GithubBlock(BaseModel):
+    """GitHub App identity (nested under ``config.github``).
+
+    ``app_id`` and ``app_installation_id`` together arm the App token path:
+    GitHub API traffic then mints short-lived installation tokens instead of
+    spending the user token's hourly quota. ``app_key_path`` is the private
+    key PEM; a leading ``~`` expands against ``$HOME``.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    app_id: str = ""
+    app_installation_id: str = ""
+    app_key_path: str = "~/.fno/secrets/github-app.pem"
+
+
 class ConfigBlock(BaseModel):
     """Top-level config block (nested under 'config:' in settings.yaml)."""
 
@@ -3946,6 +3962,7 @@ class ConfigBlock(BaseModel):
     status_fanout: StatusFanoutConfig = Field(default_factory=StatusFanoutConfig)
     lead: LeadBlock = Field(default_factory=LeadBlock)
     accounts: AccountsBlock = Field(default_factory=AccountsBlock)
+    github: GithubBlock = Field(default_factory=GithubBlock)
 
     @model_validator(mode="before")
     @classmethod
