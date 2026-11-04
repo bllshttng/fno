@@ -423,6 +423,28 @@ pub fn annotate(text: &str) -> String {
     annotate_with(text, &held)
 }
 
+fn is_question_or_decision(hash: &str) -> bool {
+    hash.len() == 10 && (hash.starts_with("d-") || hash.starts_with("q-"))
+}
+
+/// A node id sits inside paths (`worktrees/x-cba7`), branch names
+/// (`feature/x-cba7-slug`), backticked commands and URLs. Only a hash that
+/// stands alone between spaces and sentence punctuation gets a number beside it.
+fn standalone(text: &str, span: std::ops::Range<usize>) -> bool {
+    let before = text[..span.start].chars().next_back();
+    let after = text[span.end..].chars().next();
+    let after_next = text[span.end..].chars().nth(1);
+    let open = before.is_none_or(|c| c.is_whitespace() || matches!(c, '(' | '[' | '"' | '\''));
+    let close = match after {
+        None => true,
+        Some(c) if c.is_whitespace() => true,
+        Some(',' | ';' | ':' | ')' | ']' | '"' | '\'') => true,
+        Some('.') => after_next.is_none_or(char::is_whitespace),
+        _ => false,
+    };
+    open && close
+}
+
 fn annotate_with(text: &str, held: &HashMap<String, String>) -> String {
     static HASH: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     let hash = HASH.get_or_init(|| {
@@ -436,7 +458,11 @@ fn annotate_with(text: &str, held: &HashMap<String, String>) -> String {
     for found in hash.find_iter(text) {
         out.push_str(&text[last..found.start()]);
         match held.get(found.as_str()) {
-            Some(number) if !text[..found.start()].ends_with('(') => {
+            Some(number)
+                if !text[..found.start()].ends_with('(')
+                    && (is_question_or_decision(found.as_str())
+                        || standalone(text, found.range())) =>
+            {
                 out.push_str(&format!("{number} ({})", found.as_str()));
             }
             _ => out.push_str(found.as_str()),
@@ -518,11 +544,24 @@ pub fn sweep(
             let _ = SCHEMA.set(());
         }
         let missing = unnumbered(&conn, keys, remote.host());
-        if !missing.is_empty() {
-            // A bound per beat keeps the backfill under the reply wait.
-            mint_remote(remote, &missing[..missing.len().min(MINT_BATCH)], host)?;
+        let (nodes, rest): (Vec<String>, Vec<String>) = missing
+            .into_iter()
+            .partition(|key| key.starts_with(NODE_KIND));
+        // A bound per beat keeps the backfill under the reply wait.
+        if !rest.is_empty() {
+            mint_remote(remote, &rest[..rest.len().min(MINT_BATCH)], host)?;
         }
-        pull(remote, &conn)
+        // Nodes mint in their own transaction: their insert reads the
+        // primary's `nodes` table, and a primary without it must not stop
+        // the decision and question counts.
+        let nodes_result = if nodes.is_empty() {
+            Ok(())
+        } else {
+            mint_remote(remote, &nodes[..nodes.len().min(MINT_BATCH)], host)
+        };
+        let pulled = pull(remote, &conn);
+        nodes_result?;
+        pulled
     })();
     match outcome {
         Err(error) if crate::store_remote::is_unreachable(&error) => Ok(0),
@@ -712,6 +751,22 @@ mod tests {
             "see Q3 (q-0000abcd) and q-ffffffff"
         );
         assert_eq!(annotate_with("Q3 (q-0000abcd)", &held), "Q3 (q-0000abcd)");
+    }
+
+    #[test]
+    fn a_node_number_beside_a_path_or_branch_is_left_alone() {
+        let held = HashMap::from([("x-cba7".to_string(), "x-12".to_string())]);
+        assert_eq!(
+            annotate_with("take x-cba7, then x-cba7.", &held),
+            "take x-12 (x-cba7), then x-12 (x-cba7)."
+        );
+        for kept in [
+            "worktrees/footnote/x-cba7/crates",
+            "feature/x-cba7-numbers",
+            "run `fno backlog get x-cba7`",
+        ] {
+            assert_eq!(annotate_with(kept, &held), kept);
+        }
     }
 
     #[test]
