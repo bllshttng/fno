@@ -3312,7 +3312,7 @@
     "type": "object"
    },
    "TelemetryEvalEventsBlock": {
-    "description": "Eval runs as PostHog events. ``token_env`` names the env var holding the project token.",
+    "description": "Eval runs as PostHog events. ``token_env`` names the env var holding the project token; ``token_file`` names a mode-0600 file holding it, read at each beat.",
     "properties": {
      "enabled": {
       "default": false,
@@ -3327,6 +3327,11 @@
      "token_env": {
       "default": "FNO_POSTHOG_PROJECT_TOKEN",
       "title": "Token Env",
+      "type": "string"
+     },
+     "token_file": {
+      "default": "~/.fno/secrets/posthog-project-token",
+      "title": "Token File",
       "type": "string"
      }
     },
@@ -4499,6 +4504,15 @@
    "question": "",
    "default_source": "",
    "doc": "Env var holding the PostHog project token."
+  },
+  {
+   "path": "telemetry.eval_events.token_file",
+   "type": "str",
+   "default": "~/.fno/secrets/posthog-project-token",
+   "wizard": "advanced",
+   "question": "",
+   "default_source": "",
+   "doc": "Path to the PostHog project token file (mode 0600); token_env wins when set; a leading ~ expands against $HOME."
   },
   {
    "path": "attention.enabled",

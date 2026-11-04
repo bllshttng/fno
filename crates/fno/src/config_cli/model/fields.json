@@ -1048,7 +1048,8 @@
      "default": {
       "enabled": false,
       "host": "https://us.i.posthog.com",
-      "token_env": "FNO_POSTHOG_PROJECT_TOKEN"
+      "token_env": "FNO_POSTHOG_PROJECT_TOKEN",
+      "token_file": "~/.fno/secrets/posthog-project-token"
      }
     }
    ]
@@ -2406,6 +2407,10 @@
     {
      "name": "token_env",
      "default": "FNO_POSTHOG_PROJECT_TOKEN"
+    },
+    {
+     "name": "token_file",
+     "default": "~/.fno/secrets/posthog-project-token"
     }
    ]
   },
@@ -3159,6 +3164,7 @@
   "telemetry.eval_events.enabled",
   "telemetry.eval_events.host",
   "telemetry.eval_events.token_env",
+  "telemetry.eval_events.token_file",
   "attention.enabled",
   "attention.sinks",
   "research.output_dir",

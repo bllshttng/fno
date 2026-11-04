@@ -124,8 +124,8 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_GH_FACTS_DIR` | rs | Overrides the directory the `gh-cache` command reads and writes its permanent fact rows from; default `<state_dir>/cache/gh-facts`. |
 | `FNO_GH_PROXY_DEPTH` | rs | unclear: crates/fno-agents/src/pr_status/proxy.rs:146 |
 | `FNO_GH_PROXY_DIR` | rs | Names the directory holding the `gh` proxy shim. The Python front sets it for its subprocesses (prepend the shim to PATH), and the Rust transport consult reads it to stand down when a spawned `gh` resolves into it (unknown always means charge). |
-| `FNO_GLOBAL_SETTINGS_PATH` | py+rs | unclear: crates/fno-agents/src/claude_roster.rs:516 |
 | `FNO_GITHUB_APP` | rs | Set to `0` to turn the GitHub App installation token off for one run: the inject decision (crates/fno-agents/src/github_app.rs) reads it before every token install, and any other value keeps the app path on. |
+| `FNO_GLOBAL_SETTINGS_PATH` | py+rs | unclear: crates/fno-agents/src/claude_roster.rs:516 |
 | `FNO_GRAPH_JSON` | rs | Names the stable graph store anchor; the SQLite store is the `.db` sibling. Every footnote launch names it: the headless, thread and both pane lanes set it to the launch resolution (a declared `FNO_STATE_DIR`/`FNO_CONFIG` sandbox anchored at the child's cwd wins, an inherited value survives when no sandbox is declared, and the porcelain answer is the fallback). |
 | `FNO_GUARD_TRACE` | rs | unclear: crates/fno-agents/src/hook/lead_guard.rs:25 |
 | `FNO_HARNESS` | rs | The arming session's harness, the fallback a new lead manifest names when the holder row carries none. |
@@ -201,6 +201,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_PLANS_DIR` | rs | Overrides the plans content dir the native `doctor lint plan-filenames` check scans; the check otherwise resolves through the sibling plan-dir door, then the vault plans dir. |
 | `FNO_PLANS_DIRS_CACHE_DIR` | rs | Overrides the plans-dirs cache directory the `state plans-dirs` command reads and writes; default `<state_dir>/cache/plans-dirs-v1.txt`. |
 | `FNO_PLATFORM` | rs | unclear: crates/fno-agents/src/hook/lead_guard.rs:400 |
+| `FNO_POSTHOG_PROJECT_TOKEN` | rs | The PostHog project token env for the eval events arm: `telemetry.eval_events.token_env` names it (default this constant), and the var wins over `telemetry.eval_events.token_file`. |
 | `FNO_PROBE_FNO` | rs | Names the fno porcelain the isolated live journey drives; the default is the PATH `fno`, and the override exists so a probe run can exercise a specific checkout. |
 | `FNO_PROBE_MODEL` | rs | The model the isolated live journey spawns with (`--model`). A model-borrowing harness such as footnote needs it, and a strict routing config refuses a spawn without it. |
 | `FNO_PROBE_PROVIDER` | rs | The provider the isolated live journey spawns with: `--provider` on claude, the `--model` prefix (`<provider>/<model>`) on footnote and opencode. The probe copies only this provider's `model_routing.providers` record into the isolated config. |
