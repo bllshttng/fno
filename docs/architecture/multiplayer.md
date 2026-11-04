@@ -34,7 +34,7 @@ The primary is the coverage authority, so write access to it is review authority
 
 The tables that move are listed in `SHARED_TABLES` in `crates/fno-agents/src/backlog_share.rs`. The content version, the sync cursor and the search index stay local in `graph.db`. A new table in neither list fails a test.
 
-Reads stay local. This machine's `graph.db` is a replica. Every 5 seconds, one daemon arm per machine sends the outbox and then applies the primary's change log. `fno agents claim backlog sync` does both at once.
+Reads stay local. This machine's `graph.db` is a replica. Every 5 seconds, one daemon arm per machine sends the outbox and then applies the primary's change log. An unreachable primary holds the next attempt for 60 seconds, and a clean attempt lifts the hold. `fno agents claim backlog sync` does both at once.
 
 Every backlog write opens through one seam, `backlog::open_connection`. With the key on, triggers there copy each row change into the local `backlog_outbox`, in the writer's own transaction. The commit stays local, so no writer holds the graph lock across the network. A flush then sends the outbox to the primary in one request, as one transaction. Each update and delete matches every old column of its row. Each insert must not collide. The same request adds one row to the primary's change log. The flush takes its own lock file, never the graph lock. A write through `mutate_rows` flushes right after the graph lock drops. The daemon flushes every other write within 5 seconds.
 
