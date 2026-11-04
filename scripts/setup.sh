@@ -7,8 +7,17 @@ source "$ROOT_DIR/scripts/lib/codex_utils.sh"
 PROVIDER=""
 CODEX_SKILLS_ROOT=""
 SKILLS_SOURCE="auto"
-PYTHON="${FNO_PYTHON:-python3}"
-SKILL_DISCOVERY_PY="$ROOT_DIR/scripts/lib/skill_discovery.py"
+# The one skill-discovery engine (crates/fno-agents/src/codex_skills.rs).
+# A bootstrap can run before fno is installed: then nothing is curated, the
+# probe reads no plugin, and setup links the development aliases.
+skill_discovery() {
+  if command -v fno-agents >/dev/null 2>&1; then
+    fno-agents plugin-install --codex-skills "$@"
+  elif [[ "$1" == "probe" ]]; then
+    echo "Codex: fno-agents not installed; skill discovery reads no plugin" >&2
+    echo "plugin="
+  fi
+}
 
 usage() {
   cat <<USAGE
@@ -87,13 +96,13 @@ setup_codex() {
   # Real directories and shared sources are never touched; every removal
   # prints its restore line.
   echo "Codex: curating $skills_root"
-  "$PYTHON" "$SKILL_DISCOVERY_PY" curate --repo "$ROOT_DIR" --root "$skills_root" --apply
+  skill_discovery curate --repo "$ROOT_DIR" --root "$skills_root" --apply
 
   local plugin_line plugin_path plugin_version probe_args=()
   if [[ -n "${CODEX_PLUGIN_CACHE:-}" ]]; then
     probe_args=(--cache "$CODEX_PLUGIN_CACHE")
   fi
-  plugin_line="$("$PYTHON" "$SKILL_DISCOVERY_PY" probe --repo "$ROOT_DIR" "${probe_args[@]+${probe_args[@]}}")"
+  plugin_line="$(skill_discovery probe --repo "$ROOT_DIR" "${probe_args[@]+${probe_args[@]}}")"
   plugin_path="$(sed -n 's/^plugin=//p' <<< "$plugin_line")"
   plugin_version="$(sed -n 's/^version=//p' <<< "$plugin_line")"
 
@@ -121,7 +130,7 @@ setup_codex() {
     echo "Codex: installed plugin ${plugin_version:-?} at ${plugin_path:-?} is the single skill source"
     echo "Codex: removed $removed source aliases (restore with --skills-source development)"
     # Names the plugin does not ship are reported, never silently missing.
-    "$PYTHON" "$SKILL_DISCOVERY_PY" inventory --repo "$ROOT_DIR" --root "$skills_root" "${probe_args[@]+${probe_args[@]}}" \
+    skill_discovery inventory --repo "$ROOT_DIR" --root "$skills_root" "${probe_args[@]+${probe_args[@]}}" \
       | awk '$2 == "absent-from-plugin" { print "Codex: [gap] " $1 " is not in the installed plugin; reinstall to restore" }'
   else
     # `plugin--fno--<skill>` matches doctor.sh's plugin-link convention and keeps
