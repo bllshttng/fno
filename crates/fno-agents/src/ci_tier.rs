@@ -60,11 +60,22 @@ fn is_gate(run: &Value) -> bool {
     word(run, "/name") == "merge-queue-gate" || word(run, "/path").ends_with("merge-queue-gate.yml")
 }
 
+/// A run GitHub fired itself, on no workflow file: default-setup code
+/// scanning names its path `dynamic/...` and its event `dynamic`. GitHub
+/// refuses run and job retry for one, so a cancelled dynamic run comes back
+/// only by a new push, which restarts every check on the head. The tier
+/// never cancels what it cannot rerun, so a dynamic run is left out of the
+/// fold: no cancel, no rerun, no slot.
+fn is_dynamic(run: &Value) -> bool {
+    word(run, "/event") == "dynamic"
+}
+
 /// Fold one head's `workflow_runs` to its latest run per workflow. A
 /// merge-queue-gate run is left out: the tier never cancels or reruns one.
+/// So is a dynamic run.
 pub(crate) fn head_of(runs: &[Value]) -> Head {
     let mut latest: BTreeMap<&str, &Value> = BTreeMap::new();
-    for run in runs.iter().filter(|r| !is_gate(r)) {
+    for run in runs.iter().filter(|r| !is_gate(r) && !is_dynamic(r)) {
         let slot = latest.entry(word(run, "/name")).or_insert(run);
         if id(run) > id(slot) {
             *slot = run;
@@ -723,8 +734,33 @@ mod tests {
             run(12, "b", "completed", "success"),
             run(13, "c", "completed", "cancelled"),
             json!({"id": 14, "name": "merge-queue-gate", "status": "queued"}),
+            // A dynamic run fires on no workflow file and GitHub refuses its
+            // retry, so neither its cancel nor its rerun may reach the plan.
+            json!({"id": 15, "name": "PR #4471", "path": "dynamic/github-code-scanning/codeql",
+                "event": "dynamic", "status": "completed", "conclusion": "cancelled"}),
+            json!({"id": 16, "name": "PR #4470", "path": "dynamic/github-code-scanning/codeql",
+                "event": "dynamic", "status": "in_progress"}),
         ];
         assert_eq!(head_of(&runs), head(&[11], &[13], false, 1, 3));
+    }
+
+    #[test]
+    fn a_dynamic_run_never_enters_the_tier_economy() {
+        // GitHub's default-setup scanners fire dynamic runs and refuse their
+        // retry, so cancelling one strands the head behind a check only a
+        // fresh push restores. The fold leaves one out: a PR whose only run
+        // is dynamic takes no slot and nothing is cancelled, and a tier
+        // member's cancelled dynamic run is never rerun.
+        let dynamic = |id: u64, status: &str, conclusion: &str| {
+            json!({"id": id, "name": "PR #9", "path": "dynamic/github-code-scanning/codeql",
+                "event": "dynamic", "status": status, "conclusion": conclusion})
+        };
+        let waiting = (pr(9, 2), head_of(&[dynamic(60, "in_progress", "")]));
+        let member = (pr(1, 0), head_of(&[dynamic(61, "completed", "cancelled")]));
+        let plan = plan(&[member, waiting], 2, &HashSet::new());
+        assert!(plan.active.is_empty());
+        assert!(plan.cancel.is_empty());
+        assert!(plan.rerun.is_empty());
     }
 
     #[test]
