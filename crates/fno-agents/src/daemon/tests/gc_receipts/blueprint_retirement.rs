@@ -145,7 +145,7 @@ fn a_row_no_witness_can_lift_retires_past_a_day_and_the_dry_run_agrees() {
         r.entries.clear();
         for (name, sid, exited) in [
             ("t-old", "s-u1", ago(2 * 86_400)),
-            ("t-new", "s-u2", ago(3_600)),
+            ("t-new", "s-u2", ago(3 * 3_600)),
         ] {
             let mut e = template.clone();
             e.name = name.into();
@@ -154,6 +154,9 @@ fn a_row_no_witness_can_lift_retires_past_a_day_and_the_dry_run_agrees() {
             e.created_at = String::new();
             e.inside_leg = None;
             e.status = crate::AgentStatus::Exited;
+            // The live specimens carry their last report stamp; it is the
+            // classifier's clock when no transcript answers.
+            e.last_report_at = Some(exited.clone());
             e.exited_at = Some(exited);
             r.entries.push(e);
         }
