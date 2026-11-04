@@ -923,6 +923,10 @@ mod tests {
         run(&work, &["remote", "add", "origin", &origin_arg]);
         run(&work, &["commit", "--allow-empty", "-m", "base"]);
         run(&work, &["push", "-q", "origin", "main"]);
+        run(&work, &["checkout", "-q", "-b", "feature"]);
+        std::fs::write(work.join("b.txt"), "x").unwrap();
+        run(&work, &["add", "b.txt"]);
+        run(&work, &["commit", "-q", "-m", "feature"]);
         run(&work, &["push", "-q", "origin", "HEAD:refs/pull/7/head"]);
         run(&work, &["fetch", "-q", "origin"]);
         let git_sha = {
