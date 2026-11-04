@@ -867,3 +867,11 @@ probe_ttl_seconds = 300
 defer_horizon_minutes = 60
 # Pick the least-loaded account at spawn time instead of pinning one.
 pick_on_launch = false
+
+[github]
+# GitHub App id; with github.app_installation_id it arms App-installation token minting for GitHub API calls.
+app_id = ""
+# GitHub App installation id; required beside github.app_id before the App path mints tokens.
+app_installation_id = ""
+# Path to the GitHub App private key PEM (default ~/.fno/secrets/github-app.pem, mode 0600); a leading ~ expands against $HOME.
+app_key_path = "~/.fno/secrets/github-app.pem"
