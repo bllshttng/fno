@@ -96,6 +96,8 @@ The gated table: one row per arm the readout can show. The scheduler cell is the
 
 Under the table, four notes. First, `evals`, `stranded` and `recovery` have no `KNOWN_ARMS` row, so the readout shows them only after they tick and never reads them `UNOBSERVED`. Second, `stranded`, `recovery` and `watchdog` run one tick in three on staggered slots of the 600 s tick. Their effective cadence is one run per 1800 s. Third, the daemon runs work that writes no arm row: the worktree sweep, the merge reaper, orphan sweeps, the terminal-stop sweep, and liveness. [reaping-faq.md](../reaping-faq.md) holds that list. Fourth, [loops.md](../loops.md) is generated from this same arm list and carries each loop's arming key and live state. When a row reads red, run `fno agents loop control table`.
 
+The sweep's per-PR rich read is bounded: one row no more often than every two intervals, default 20 minutes. The cheap listing leg already answered that row's state. The least-recently-read order spreads the pool across the window. A fleet budget hold above 10 s pauses the read pass outright. A refused read ends the pass early and never marks the row stale.
+
 ## Stopping things safely
 
 A launchd agent is stopped by its uninstall command or `launchctl bootout`, never by killing the tick pid mid-phase. The next fire is already scheduled. The daemon is restarted, never killed, because workers survive a graceful restart. A keeper is never killed by hand while its child lives. A pty keeper kill ends the session. A store keeper ends by idle exit or `fno agents session restart`.
