@@ -64,7 +64,7 @@
 #      harness (an env marker alone is inheritable and can mislabel a claude
 #      session as codex). A string prefix match on the harness's own file;
 #      footnote state never lands there.
-#      through hooks/bg-process-guard.py. That corpus is the only source of
+#      through crates/fno-agents/src/hook/bg_process_guard.rs. That corpus is the only source of
 #      the commands agents actually write, and it found three false refusals
 #      that eight rounds of hand-written cases missed. Read-only rglob over
 #      the harness's data; footnote stores nothing there, and a missing root
