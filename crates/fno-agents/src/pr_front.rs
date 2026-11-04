@@ -454,7 +454,7 @@ mod repo_refusal_tests {
 
     #[test]
     fn a_matching_or_absent_repo_passes() {
-        let same = argv(&["52", "--repo=BLLSHTTNG/fno"]);
+        let same = argv(&["52", "--repo=FNODOTDEV/fno"]);
         assert!(repo_refusal("status", &same, Some("fnodotdev/fno")).is_none());
         assert!(repo_refusal("status", &argv(&["52"]), None).is_none());
     }
