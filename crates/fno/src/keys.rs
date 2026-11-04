@@ -558,6 +558,9 @@ pub enum Event {
     /// `sweep threads` row, on the keyboard. The modal still asks before
     /// anything is reaped.
     OpenSweepThreads,
+    /// Open the Decisions table (prefix+Z) in a new pane, so its law-door
+    /// actions run on a real terminal.
+    OpenDecisions,
     /// Lift the machine-wide fleet hold the status row names (prefix+U),
     /// when the machine armed it.
     LiftHold,
@@ -1336,6 +1339,13 @@ pub(crate) fn default_bindings() -> Vec<KeyBinding> {
             FocusFeed,
             Global,
             "focus the activity feed (arrows, enter)",
+        ),
+        b(
+            b'Z',
+            "decisions",
+            OpenDecisions,
+            Global,
+            "decisions table (audit, retract, overrule)",
         ),
         b(
             b'm',
@@ -2231,6 +2241,7 @@ mod tests {
         // T sweep threads - case pairs with s/a, per the h/H convention.
         assert_eq!(scan_all(&[b"\x02S"]), vec![Event::OpenSettings]);
         assert_eq!(scan_all(&[b"\x02A"]), vec![Event::OpenConnections]);
+        assert_eq!(scan_all(&[b"\x02Z"]), vec![Event::OpenDecisions]);
         assert_eq!(scan_all(&[b"\x02T"]), vec![Event::OpenSweepThreads]);
         assert_eq!(scan_all(&[b"\x02X"]), vec![Event::ShareFocusedPane]);
         // ... and the lowercase halves still mean what they meant.

@@ -8791,6 +8791,18 @@ async fn dispatch_event(
         Event::OpenConnections => {
             execute_aux_action(view, AuxAction::OpenConnections, sock_w).await?;
         }
+        Event::OpenDecisions => {
+            let mut command = crate::process_admission::tokio_command(crate::server::fno_bin());
+            command
+                .args(["mux", "pane", "run", "--session"])
+                .arg(&view.session)
+                .args(["--", "fno", "inbox", "decisions", "--table"])
+                .stdin(std::process::Stdio::null())
+                .kill_on_drop(true);
+            tokio::spawn(async move {
+                let _ = crate::process_admission::tokio_output(&mut command).await;
+            });
+        }
         Event::OpenSweepThreads => {
             execute_aux_action(view, AuxAction::OpenSweep, sock_w).await?;
         }
