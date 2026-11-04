@@ -96,6 +96,8 @@ mod event_signals;
 #[cfg(feature = "full")]
 pub mod event_store;
 #[cfg(feature = "full")]
+pub mod decisions_overlay;
+#[cfg(feature = "full")]
 pub mod feed_overlay;
 #[cfg(feature = "full")]
 pub(crate) mod first_check;
