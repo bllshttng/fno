@@ -924,6 +924,7 @@ mod tests {
         run(&work, &["commit", "--allow-empty", "-m", "base"]);
         run(&work, &["push", "-q", "origin", "main"]);
         run(&work, &["push", "-q", "origin", "HEAD:refs/pull/7/head"]);
+        run(&work, &["fetch", "-q", "origin"]);
         let git_sha = {
             let out = Command::new("git")
                 .args(["rev-parse", "HEAD"])
