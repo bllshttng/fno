@@ -85,6 +85,10 @@ pub const EXIT_NODE_OCCUPIED: i32 = 92;
 /// flipping or expiring the rule (`event_rules.<id>` config, expiry, or a
 /// lifted cap), never by `--force`.
 pub const EXIT_RULE_REFUSED: i32 = 93;
+/// The repo holds more open PRs than `agents.max_open_prs`: a new target
+/// seat waits. Work on a node that already has a PR is exempt, and
+/// `--force` does not lift it.
+pub const EXIT_OPEN_PR_CAP: i32 = 94;
 
 /// The prefix every PASS-path gate line carries. Only a refusal may start
 /// `spawn-gate: ` - the verdict line and the refusal sentences - so the
@@ -1469,6 +1473,7 @@ fn decide_gate(
     // The rule engine's read of this spawn: a block refuses on the `rule`
     // axis (exit 93), a warn prints and the spawn proceeds.
     rules_gate(config_cwd, &input)?;
+    crate::spawn_gate_open_prs::open_pr_gate(config_cwd, &input)?;
     let floor_gb = agents_config::min_free_gb(config_cwd);
     let swap_cap = agents_config::max_swap_pct(config_cwd);
     let disk_floor_gb = agents_config::min_free_disk_gb(config_cwd);

@@ -58,6 +58,7 @@ pub const AGENTS_RESERVED_KEYS: &[&str] = &[
     "max_live_per_territory",
     "max_fleet_cpu_share",
     "max_load_per_cpu",
+    "max_open_prs",
     "pane_group_max",
     "min_free_gb",
     "min_free_disk_gb",

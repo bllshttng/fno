@@ -2131,15 +2131,15 @@ via = ["hooks/session-state.sh", "hooks/codex-hooks.json", "crates/fno-agents/sr
 
 # PreToolUse is the load-bearing entry: a goal-mode continuation is a
 # user-role row, so UserPromptSubmit never fires and the goal leg is only
-# visible through its tool calls. PermissionRequest is NOT wired: the
-# payload shape was never captured, so this row names no blocked producer.
-# `blocked = "none"` is the screen-rung hand-off: the daemon sweep reads it
-# and scrapes rows this harness reports hooks for, because the manifest
-# carries the blocked rules (auth_wall, trust_prompt, approval_prompt,
-# question_prompt) the hook lane cannot state.
+# visible through its tool calls. PermissionRequest fires before codex waits
+# on an approval (learn.chatgpt.com/docs/hooks), so it is the blocked
+# producer; the next PreToolUse or Stop clears it. No codex hook covers
+# `request_user_input`, so the screen rung keeps the manifest's
+# question_prompt, auth_wall and trust_prompt rules.
 [harness.codex.hooks.session_state.wiring]
 events = { UserPromptSubmit = "working", PreToolUse = "working", Stop = "done" }
-blocked = "none"
+blocked = "PermissionRequest"
+screen_backstop = true
 
 [harness.footnote.hooks.session_state]
 state = "supported"

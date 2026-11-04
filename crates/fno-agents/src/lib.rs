@@ -642,6 +642,7 @@ pub mod spawn_gate_admission;
 pub mod spawn_gate_command;
 pub mod spawn_gate_forced;
 pub mod spawn_gate_lanes;
+pub(crate) mod spawn_gate_open_prs;
 pub(crate) mod spawn_gate_probe;
 pub(crate) mod spawn_gate_queue;
 pub mod spawn_gate_reservations;
