@@ -406,6 +406,8 @@ pub struct KeeperPty {
     // can block against a keeper whose child stopped reading, so it never
     // runs on the core loop.
     frame_tx: std::sync::mpsc::SyncSender<Vec<u8>>,
+    // A private handle on the wire socket for Drop only (see the Drop impl).
+    shutdown: std::os::unix::net::UnixStream,
 }
 
 impl LocalPty {
@@ -1413,6 +1415,9 @@ fn wire_keeper(
     let exited = Arc::new(AtomicBool::new(false));
     let reader_done = Arc::new(AtomicBool::new(false));
     let read_half = stream.try_clone().expect("clone keeper stream");
+    let shutdown = stream
+        .try_clone()
+        .expect("clone keeper stream for shutdown");
     spawn_keeper_reader(
         read_half,
         pane_id,
@@ -1444,6 +1449,7 @@ fn wire_keeper(
         exited,
         reader_done,
         frame_tx,
+        shutdown,
     }
 }
 
@@ -1578,6 +1584,17 @@ impl KeeperPty {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
         while !self.exited.load(Ordering::Acquire) {
             if std::time::Instant::now() >= deadline {
+                // A keeper that has not answered the Kill inside the grace
+                // window is wedged, not slow. The pane is closing either way:
+                // SIGKILL the child so it cannot outlive its pane, and leave
+                // the socket shutdown to Drop, which frees the reader.
+                if let Some(pid) = self.child_pid {
+                    // SAFETY: one signal to one pid; an already-dead pid
+                    // fails harmlessly with ESRCH.
+                    unsafe {
+                        libc::kill(pid as libc::pid_t, libc::SIGKILL);
+                    }
+                }
                 return;
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
@@ -1596,6 +1613,9 @@ impl KeeperPty {
         let exited = Arc::new(AtomicBool::new(false));
         let reader_done = Arc::new(AtomicBool::new(false));
         let read_half = stream.try_clone().expect("clone keeper test stream");
+        let shutdown = stream
+            .try_clone()
+            .expect("clone keeper test shutdown stream");
         let (out_tx, _out_rx) = tokio::sync::mpsc::channel(64);
         let (exit_tx, _exit_rx) = tokio::sync::mpsc::channel(4);
         spawn_keeper_reader(
@@ -1625,7 +1645,21 @@ impl KeeperPty {
             exited,
             reader_done,
             frame_tx,
+            shutdown,
         }
+    }
+}
+
+/// Dropping a keeper connection releases the pane's server-side descriptors
+/// even when the keeper never closes its end. The reader thread blocks in
+/// read() and owns no other exit cue: without this, a keeper that misses the
+/// Kill frame (wedged, mid-handshake) would hold the descriptor until the
+/// keeper process itself dies. Shutdown wakes the reader on every drop, and
+/// on the hand-off release path it is exactly the hangup a keeper survives
+/// (pane_release.rs), which today only lands when the server process exits.
+impl Drop for KeeperPty {
+    fn drop(&mut self) {
+        let _ = self.shutdown.shutdown(std::net::Shutdown::Both);
     }
 }
 
@@ -2306,6 +2340,29 @@ fn spawn_reader(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn keeper_drop_shuts_the_socket_down_and_frees_the_reader() {
+        let (server_side, mut peer) = std::os::unix::net::UnixStream::pair().unwrap();
+        let keeper = KeeperPty::for_test(server_side, None);
+        let reader_done = keeper.reader_done.clone();
+        assert!(!reader_done.load(Ordering::Acquire));
+        // The Drop impl must shut the whole socket down: a wedged keeper
+        // never closes its end, so without the shutdown the reader thread
+        // parks in read() forever and the pane's descriptor leaks (the
+        // fd-exhaustion class this file's Drop impl exists for).
+        drop(keeper);
+        let mut buf = [0u8; 16];
+        assert_eq!(peer.read(&mut buf).unwrap(), 0);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while !reader_done.load(Ordering::Acquire) && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(
+            reader_done.load(Ordering::Acquire),
+            "the reader thread must exit when the KeeperPty drops"
+        );
+    }
 
     #[test]
     fn keeper_shape_rows() {

@@ -500,9 +500,19 @@ pub(super) async fn serve(
     let accept_conns = conns_alive.clone();
     tokio::spawn(async move {
         let mut next_id: u64 = 1;
+        // Descriptor starvation is a STATE, not an event stream: while it
+        // holds, every accept fails, and a 100ms retry would log ten lines
+        // a second for as long as the famine holds. Log the two edges once,
+        // retry at 1s inside the state, and stay silent between; other
+        // accept errors keep today's 100ms + line.
+        let mut starved = false;
         loop {
             match listener.accept().await {
                 Ok((stream, _)) => {
+                    if starved {
+                        starved = false;
+                        eprintln!("fno mux: accept recovered after fd exhaustion");
+                    }
                     let id = next_id;
                     next_id += 1;
                     // Peer pid names WHICH client process this is (the e2e
@@ -524,8 +534,18 @@ pub(super) async fn serve(
                     });
                 }
                 Err(e) => {
-                    eprintln!("fno mux: accept failed: {e}");
-                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    let famine =
+                        matches!(e.raw_os_error(), Some(libc::EMFILE) | Some(libc::ENFILE));
+                    if famine {
+                        if !starved {
+                            starved = true;
+                            eprintln!("fno mux: accept starved: {e}; retrying every second until a descriptor frees");
+                        }
+                        tokio::time::sleep(Duration::from_secs(1)).await;
+                    } else {
+                        eprintln!("fno mux: accept failed: {e}");
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                    }
                 }
             }
         }
