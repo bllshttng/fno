@@ -426,6 +426,8 @@ printf '{\n  "id": "probe-abcd",\n  "title": "portal stopped"\n}\n'
     listener.set_nonblocking(true).unwrap();
     let (stop, rx) = std::sync::mpsc::channel();
     let session = "eeeeeeee-1111-2222-3333-444455556666";
+    let mouse_leaks = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let observed_mouse = mouse_leaks.clone();
     let thread = std::thread::spawn(move || {
         use fno::proto::{read_msg_sync, write_msg_sync, ClientMsg, ServerMsg};
         while rx.try_recv().is_err() {
@@ -484,6 +486,9 @@ printf '{\n  "id": "probe-abcd",\n  "title": "portal stopped"\n}\n'
             while rx.try_recv().is_err() {
                 match read_msg_sync::<_, ClientMsg>(&mut stream) {
                     Ok(ClientMsg::Detach) | Err(fno::proto::ProtoError::Closed) => return,
+                    Ok(ClientMsg::Mouse { .. }) => {
+                        observed_mouse.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    }
                     Err(fno::proto::ProtoError::Io(error))
                         if matches!(
                             error.kind(),
@@ -496,7 +501,7 @@ printf '{\n  "id": "probe-abcd",\n  "title": "portal stopped"\n}\n'
             return;
         }
     });
-    let _peer = Peer {
+    let mut peer = Peer {
         stop,
         thread: Some(thread),
         socket: scratch.main_sock(),
@@ -542,6 +547,7 @@ printf '{\n  "id": "probe-abcd",\n  "title": "portal stopped"\n}\n'
         );
         std::thread::sleep(Duration::from_millis(20));
     }
+    h.type_bytes(b"\x1b[<0;100;7M\x1b[<0;100;7m");
     h.type_bytes(b"portal stopped\r");
     h.wait_screen(15, |s| s.contains("report: graph is busy"));
     assert!(
@@ -603,5 +609,13 @@ printf '{\n  "id": "probe-abcd",\n  "title": "portal stopped"\n}\n'
             .lines()
             .count(),
         4
+    );
+    h.type_bytes(b"\x02d");
+    assert!(h.wait_exit(10).success());
+    peer.thread.take().unwrap().join().unwrap();
+    assert_eq!(
+        mouse_leaks.load(std::sync::atomic::Ordering::Relaxed),
+        0,
+        "report mouse input must not reach the pane"
     );
 }
