@@ -1103,7 +1103,7 @@ mod tests {
         write_task(
             dir.path(),
             "newer.yaml",
-            "id: newer\ntier: capability\ngrade:\n  - kind: rubric\n",
+            "id: newer\ntier: capability\ngrade:\n  - kind: quantum\n",
         );
         let (tasks, skipped) = discover_bank_tolerant(dir.path()).unwrap();
         let ids: Vec<&str> = tasks.iter().map(|t| t.id.as_str()).collect();

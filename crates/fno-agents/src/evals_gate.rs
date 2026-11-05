@@ -2221,7 +2221,7 @@ mod tests {
         w.with_baseline();
         std::fs::write(
             w.dir.path().join("evals/bank/r1.yaml"),
-            "id: r1\ntier: capability\nprompt: p\ngrade:\n  - kind: rubric\n    rubric: grade me\ntags: [gate]\n",
+            "id: r1\ntier: capability\nprompt: p\ngrade:\n  - kind: quantum\n    quantum: grade me\ntags: [gate]\n",
         )
         .unwrap();
         w.tick(true, Utc::now());
