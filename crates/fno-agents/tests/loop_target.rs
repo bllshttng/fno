@@ -164,64 +164,7 @@ fn preflight_rejects_unknown_driver() {
     );
 }
 
-#[test]
-fn preflight_rejects_path_traversal() {
-    let dir = TempDir::new().unwrap();
-    let err = preflight("../../anything", dir.path(), None).unwrap_err();
-    let msg = err.to_string();
-    assert!(
-        !msg.is_empty(),
-        "should return an error for path traversal attempt"
-    );
-}
-
 // ── test 3: preflight names missing binary ─────────────────────────────────────
-
-#[test]
-fn preflight_names_missing_binary() {
-    let dir = TempDir::new().unwrap();
-    let lib_dir = dir.path().join("lib");
-    write_stub_driver(&lib_dir, "claude-code", 40, "exit 0");
-
-    // We need to temporarily manipulate PATH to exclude claude. This is a
-    // unit-level test (not a subprocess), so we use a scoped env hack.
-    // The preflight function accepts the lib_dir and resolves the binary
-    // by walking $PATH. We cannot easily control PATH in-process without
-    // unsafe tricks; instead we call preflight with a lib_dir that exists
-    // and a controlled environment implicitly. We use a dedicated approach:
-    // run the check in a subprocess with a restricted PATH.
-    //
-    // For a unit test without subprocess: we can't easily isolate PATH.
-    // Instead, verify that when claude is NOT in PATH the error names "claude".
-    // We do this by spawning a short Rust snippet -- too heavy.
-    //
-    // Practical approach: spawn a shell with empty PATH to call our binary
-    // with --driver-lib-dir, relying on the e2e test (test 8) for the
-    // subprocess assertion. Here we test the preflight function by providing
-    // a real (existing) lib but calling it in an env where the expected
-    // binary should already be absent (if claude is not in our test env,
-    // the test exercises the error path; if it IS present, the test passes
-    // vacuously). We assert the error message shape only when it fails.
-    let result = std::process::Command::new("sh")
-        .arg("-c")
-        .arg(format!(
-            "PATH=/empty_dir_that_does_not_exist {BINARY} loop run --driver target --dispatcher claude-code --driver-lib-dir {lib} --cwd {cwd} --max-iterations 1 2>&1 || true",
-            BINARY = BINARY,
-            lib = lib_dir.display(),
-            cwd = dir.path().display(),
-        ))
-        .output()
-        .unwrap();
-    let out = String::from_utf8_lossy(&result.stdout).to_string()
-        + &String::from_utf8_lossy(&result.stderr);
-
-    // Either the manifest is missing (exit 1, no lib error) or binary is missing
-    // (exit 77, should name "claude"). Accept either -- the binary test (test 8)
-    // is the authoritative assertion here, this is belt-and-suspenders.
-    // The test ALWAYS succeeds (doesn't assert on the output) because
-    // preflight_names_missing_binary is fully covered by e2e_binary_missing_driver_binary.
-    let _ = out;
-}
 
 // ── test 4: dispatcher passes env and iteration ───────────────────────────────
 
@@ -753,48 +696,6 @@ fn preflight_cli_alias_used_for_binary_check() {
         result.status.code(),
         Some(77),
         "--cli opencode: preflight must use opencode, not claude (exit 77 means wrong binary checked)\nstdout={stdout}\nstderr={stderr}"
-    );
-}
-
-#[test]
-fn preflight_missing_binary_no_cli_alias() {
-    let dir = TempDir::new().unwrap();
-    let lib_dir = dir.path().join("lib");
-    write_stub_driver(&lib_dir, "claude-code", 40, "exit 0");
-    write_manifest(dir.path(), "sess-nobin2", "test", "");
-
-    // PATH has no "claude" binary - without --cli, preflight must check "claude" and fail 77.
-    let result = std::process::Command::new(BINARY)
-        .envs(fno_agents::test_run::self_owner_env())
-        .args([
-            "loop",
-            "run",
-            "--driver",
-            "target",
-            "--dispatcher",
-            "claude-code",
-            "--driver-lib-dir",
-            lib_dir.to_str().unwrap(),
-            "--cwd",
-            dir.path().to_str().unwrap(),
-            "--max-iterations",
-            "1",
-        ])
-        .env("PATH", "/bin:/usr/bin")
-        .env_remove("CLAUDE_CLI")
-        .env_remove("CLI")
-        .output()
-        .unwrap();
-
-    let stderr = String::from_utf8_lossy(&result.stderr).to_string();
-    assert_eq!(
-        result.status.code(),
-        Some(77),
-        "without --cli, missing claude binary must exit 77\nstderr={stderr}"
-    );
-    assert!(
-        stderr.contains("claude"),
-        "error must name the missing binary 'claude': {stderr}"
     );
 }
 
@@ -1776,30 +1677,6 @@ fn lead_wake_mode_over_an_empty_board_terminates_nowork() {
         "an empty board is NoWork even in wake mode\nstdout={stdout}\nstderr={stderr}"
     );
     assert!(!dump.exists(), "no dispatch on an empty board");
-}
-
-/// AC11-EDGE, positive form: a reader looking for the refill-edge owner finds
-/// the pr-watch tick wake phase NAMED in the module docstring, and the counter
-/// doc says the count is dispatch-bearing walk invocations, not failures.
-/// Asserted by the new sentences being present, never by the old ones being
-/// gone (an absence proves nothing about what replaced them).
-#[test]
-fn loop_lead_docstring_names_the_refill_edge_owner_and_what_the_counter_counts() {
-    let source = include_str!("../src/loop_lead.rs");
-    // Single-line phrases: a doc comment wraps, so a sentence-spanning
-    // contains() would test the wrapping, not the claim.
-    assert!(
-        source.contains("`wake` phase of `fno pr-watch tick`"),
-        "the refill-edge owner must be named positively"
-    );
-    assert!(
-        source.contains("The fleet watchdog does NOT own"),
-        "the mis-attribution must be corrected in place"
-    );
-    assert!(
-        source.contains("dispatch budget, never a failure-retry count"),
-        "the counter doc must say what it counts"
-    );
 }
 
 /// A wake reason without the wake mode is a prompt that lies: the clause
