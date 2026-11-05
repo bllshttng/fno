@@ -1185,17 +1185,24 @@ fn ship_batch(domain: &str, base: &str, title: Option<&str>, root: &Path) -> Shi
                 };
             }
         }
+        // `pr create` appends the epic-issue line for a lone child; a batch
+        // PR owns several children, so it carries one line per epic here.
+        let mut body = batch_pr_body(&batch);
+        match crate::graph_store::read_rows_strict(&super::settings::graph_path()) {
+            Ok(rows) => {
+                let ids = member_ids(&batch);
+                let refs: Vec<&str> = ids.iter().map(String::as_str).collect();
+                for line in crate::epic_issue::batch_ref_lines(&rows, &refs, &body) {
+                    body.push_str(&format!("\n{line}\n"));
+                }
+            }
+            Err(e) => {
+                eprintln!("batch.ship: warning: no epic issue lines, the graph read failed: {e}")
+            }
+        }
         let mut create_cmd = std::process::Command::new("gh");
         create_cmd.args([
-            "pr",
-            "create",
-            "--title",
-            &pr_title,
-            "--body",
-            &batch_pr_body(&batch),
-            "--base",
-            base,
-            "--head",
+            "pr", "create", "--title", &pr_title, "--body", &body, "--base", base, "--head",
             &branch,
         ]);
         create_cmd.current_dir(&wt);
