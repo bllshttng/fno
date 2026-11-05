@@ -5936,11 +5936,15 @@ fn attention_key(a: &AgentRow, need: Option<NeedKind>) -> (u8, u8, std::cmp::Rev
 /// measurement nothing took, on the surface this branch exists to fix. The
 /// label carries it instead, and it asserts only that the rows are hidden.
 ///
+/// A pinned row never folds: the pin is the operator's promise that the row
+/// leads its workspace, and a fold would hide it behind `+N more`.
+///
 /// This predicate is display density, not truth. Attention states (`Blocked`,
 /// `Working`, `DoneUnseen`) are enumerated by exclusion on purpose - a state
 /// added later does not fold, so a new signal fails VISIBLE, never hidden.
 fn is_idle_row(a: &AgentRow) -> bool {
     !a.exited
+        && !a.pinned
         && matches!(
             pane_state(a.badge, a.seen, a.pane_activity),
             PaneState::Idle | PaneState::Empty | PaneState::Unmeasured

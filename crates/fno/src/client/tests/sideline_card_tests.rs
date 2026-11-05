@@ -135,6 +135,15 @@ fn card_pinned_rows_lead_the_workspace_with_workers_flat() {
 }
 
 #[test]
+fn a_pinned_idle_row_never_folds_behind_the_idle_cap() {
+    let idle = agent_row("quiet", 4, None, false);
+    let mut pinned = agent_row("quiet-pinned", 5, None, false);
+    pinned.pinned = true;
+    assert!(is_idle_row(&idle));
+    assert!(!is_idle_row(&pinned));
+}
+
+#[test]
 fn card_group_by_lead_nests_workers_under_their_lead() {
     let mut lead = agent_row("zed-lead", 4, Some(AgentBadge::Working), false);
     lead.harness_session_id = Some("sess-lead".into());

@@ -542,11 +542,13 @@ agents = [
 # workers and one unpinned lead. The names sort atlas, orion, vega, so a
 # name sort that ignored pins would open on the unpinned row.
 if os.environ.get("FNO_DEMO_FLATPINS"):
+    # Working, so no idle fold hides a row the shot exists to show.
+    live = {"inside_leg": {"state": "working", "seq": 1, "received_at": now}}
     def lead(name, sid):
-        return thread(name, "claude", "idle", attach="demo-" + name) | {
+        return thread(name, "claude", "idle", attach="demo-" + name) | live | {
             "role_level": 1, "role_scope": "payments", "harness_session_id": sid}
     def worker(name, parent_sid, sid):
-        return thread(name, "codex", "idle", attach="demo-" + name) | {
+        return thread(name, "codex", "idle", attach="demo-" + name) | live | {
             "lineage_kind": "child", "spawned_by_session": parent_sid,
             "harness_session_id": sid}
     agents += [
