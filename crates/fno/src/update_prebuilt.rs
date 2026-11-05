@@ -270,7 +270,7 @@ pub(crate) fn parse_sha_line(text: &str) -> Option<String> {
     (hex.len() == 64 && hex.chars().all(|c| c.is_ascii_hexdigit())).then_some(hex)
 }
 
-fn curl_to(url: &str, dest: &Path) -> Result<(), String> {
+pub(crate) fn curl_to(url: &str, dest: &Path) -> Result<(), String> {
     let out = crate::process_admission::std_command("curl")
         .args(["-fsSL", "--max-time", FETCH_SECS, "-o"])
         .arg(dest)
@@ -317,8 +317,16 @@ pub(crate) fn fetch(crates_rev: &str, staging_parent: &Path) -> Result<PathBuf, 
 }
 
 fn fetch_into(crates_rev: &str, platform: &str, staging: &Path) -> Result<PathBuf, String> {
-    let url = asset_url(crates_rev, platform);
-    let tarball = staging.join(asset_name(crates_rev, platform));
+    let unpacked = download_verified(&asset_url(crates_rev, platform), staging)?;
+    proves_rev(&unpacked, crates_rev)?;
+    Ok(unpacked)
+}
+
+/// Fetch `<url>.sha256` and `<url>`, check the digest, and unpack the
+/// tarball into `<staging>/bin`. The bin-cache leg and the tagged-release leg
+/// (release_install.rs) share it; each proves the unpacked build its own way.
+pub(crate) fn download_verified(url: &str, staging: &Path) -> Result<PathBuf, String> {
+    let tarball = staging.join("fno.tar.gz");
     let sha_file = staging.join("tarball.sha256");
     curl_to(&format!("{url}.sha256"), &sha_file)?;
     curl_to(&url, &tarball)?;
@@ -349,7 +357,6 @@ fn fetch_into(crates_rev: &str, platform: &str, staging: &Path) -> Result<PathBu
             String::from_utf8_lossy(&out.stderr).trim()
         ));
     }
-    proves_rev(&unpacked, crates_rev)?;
     Ok(unpacked)
 }
 

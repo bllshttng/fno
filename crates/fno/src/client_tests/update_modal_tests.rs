@@ -80,7 +80,7 @@ fn release_newer_shows_menu_row_and_modal_upgrade_entry() {
     let labels = entry_labels(&modal);
     let i = labels
         .iter()
-        .position(|l| l == "upgrade now: uv tool upgrade fno")
+        .position(|l| l == "upgrade now: fno update")
         .expect("upgrade entry");
     assert_eq!(modal.actions[i], AuxAction::UpgradeRelease(Channel::Uv));
 }
@@ -106,10 +106,7 @@ fn release_newer_with_stale_rows_orders_upgrade_before_restart() {
     );
     assert_eq!(
         entry_labels(&modal),
-        vec![
-            "upgrade now: uv tool upgrade fno",
-            "restart now (keeps panes)"
-        ]
+        vec!["upgrade now: fno update", "restart now (keeps panes)"]
     );
 }
 
@@ -118,8 +115,8 @@ fn release_newer_with_stale_rows_orders_upgrade_before_restart() {
 fn release_degraded_and_current_render_one_header_and_no_action() {
     for (release, want) in [
         (
-            ReleaseOutcome::Degraded("uv tool list --outdated: exit 2".into()),
-            "release check failed: uv tool list --outdated: exit 2",
+            ReleaseOutcome::Degraded("GitHub latest release: curl exited 6".into()),
+            "release check failed: GitHub latest release: curl exited 6",
         ),
         (
             ReleaseOutcome::Current {
@@ -1080,14 +1077,12 @@ fn release_newer_renders_release_body_notes() {
             _ => None,
         })
         .collect();
-    assert!(headers.contains(&"release 0.4.0 -> 0.4.1 (uv)"));
+    assert!(headers
+        .contains(&"release 0.4.0 -> 0.4.1 (uv wheel; fno update moves it to ~/.fno/install/bin)"));
     assert!(row_labels(&modal).contains(&"- 42 merged pull requests since v0.4.0.".to_string()));
     assert!(headers.contains(&"mux"));
     assert!(row_labels(&modal).contains(&"- Portals open operator-owned windows".to_string()));
-    assert_eq!(
-        entry_labels(&modal),
-        vec!["upgrade now: uv tool upgrade fno"]
-    );
+    assert_eq!(entry_labels(&modal), vec!["upgrade now: fno update"]);
     assert_eq!(modal.actions, vec![AuxAction::UpgradeRelease(Channel::Uv)]);
 }
 

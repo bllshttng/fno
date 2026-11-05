@@ -215,6 +215,8 @@ pub mod registry_label;
 #[cfg(feature = "full")]
 pub mod registry_read;
 #[cfg(feature = "full")]
+pub(crate) mod release_install;
+#[cfg(feature = "full")]
 pub mod remote_target;
 #[cfg(feature = "full")]
 pub mod repo_lint;

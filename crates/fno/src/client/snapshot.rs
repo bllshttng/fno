@@ -153,6 +153,10 @@ pub enum ViewKind {
     ConnectionsAddLocal,
     /// The sweep-threads choice modal over a staged fleet's counts.
     Sweep,
+    /// The update modal on a wheel install a newer release can move.
+    UpdateWheel,
+    /// The update modal on a binary install with a newer release.
+    UpdateBinary,
     /// The needs-me overlay with its first row picked, after the same
     /// questions gather the bell shots run.
     Needs,
@@ -299,6 +303,8 @@ fn parse_view(v: &str) -> Option<ViewKind> {
         "feed-detail" => Some(ViewKind::FeedDetail),
         "question-detail" => Some(ViewKind::QuestionDetail),
         "sweep" => Some(ViewKind::Sweep),
+        "update-wheel" => Some(ViewKind::UpdateWheel),
+        "update-binary" => Some(ViewKind::UpdateBinary),
         "connections" => Some(ViewKind::Connections),
         "connections-use" => Some(ViewKind::ConnectionsUse),
         "connections-add" => Some(ViewKind::ConnectionsAdd),
@@ -1120,6 +1126,45 @@ questions (scripts/ops/mux-demo-snapshot.sh seeds one)",
             ));
             view.aux_esc.clear();
         }
+        Some(kind @ (ViewKind::UpdateWheel | ViewKind::UpdateBinary)) => {
+            use super::release_check::{Channel, ReleaseNotesSection, ReleaseOutcome};
+            use super::update_menu::{UpdateOutcome, UpdateProbe, UpdateReadiness};
+            let (channel, installed) = match kind {
+                ViewKind::UpdateWheel => (Channel::Uv, "0.4.5"),
+                _ => (Channel::Binary, "0.4.6"),
+            };
+            let probe = UpdateProbe {
+                readiness: UpdateOutcome::Ok(UpdateReadiness {
+                    update_ready: false,
+                    installed_rev: None,
+                    source_rev: None,
+                    installed_version: Some(installed.into()),
+                    source_prs_ahead: None,
+                    changelog: vec![],
+                    release_notes: None,
+                    guidance: "no source checkout and no installed-rev marker; a release install refreshes with `fno update`".into(),
+                    degraded: None,
+                    running: vec![],
+                    running_stale: 0,
+                    source_pin: None,
+                    revisions: None,
+                }),
+                release: ReleaseOutcome::Newer {
+                    channel,
+                    installed: installed.into(),
+                    latest: "0.4.7".into(),
+                    notes: vec![ReleaseNotesSection {
+                        area: "update".into(),
+                        bullets: vec![
+                            "fno update moves a wheel install to ~/.fno/install/bin".into(),
+                            "release tarballs ship a .sha256".into(),
+                        ],
+                    }],
+                },
+            };
+            view.aux = Some(super::update_menu::build_update_modal(Some(&probe)));
+            view.aux_esc.clear();
+        }
         Some(ViewKind::Needs) => {
             let questions = runtime.block_on(crate::needs_overlay::questions_now());
             view.apply_questions_fold(questions);
@@ -1568,6 +1613,8 @@ mod tests {
             ("feed-detail", ViewKind::FeedDetail),
             ("question-detail", ViewKind::QuestionDetail),
             ("sweep", ViewKind::Sweep),
+            ("update-wheel", ViewKind::UpdateWheel),
+            ("update-binary", ViewKind::UpdateBinary),
             ("connections", ViewKind::Connections),
             ("connections-use", ViewKind::ConnectionsUse),
             ("connections-add", ViewKind::ConnectionsAdd),
