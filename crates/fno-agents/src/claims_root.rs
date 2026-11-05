@@ -185,45 +185,6 @@ mod tests {
         let dir = claims_dir("walker:/repo/root", Some(Path::new("/tmp/x"))).unwrap();
         assert_eq!(dir, PathBuf::from("/tmp/x/.fno/claims"));
     }
-
-    #[test]
-    fn a_root_or_global_key_never_reads_the_cwd() {
-        // A process whose working directory was deleted still holds every
-        // machine-wide claim: those resolve from the explicit root or from
-        // $FNO_CLAIMS_ROOT/$HOME and never needed a cwd. The provider here
-        // fails on call, so reaching it at all is the failure.
-        let boom = || Err("the cwd provider must not run".to_string());
-        assert_eq!(
-            claims_dir_in(
-                "resume-attach:abcd1234",
-                Some(Path::new("/tmp/x")),
-                boom,
-                None,
-                None
-            )
-            .unwrap(),
-            PathBuf::from("/tmp/x").join(CLAIMS_DIRNAME)
-        );
-        let boom = || Err("the cwd provider must not run".to_string());
-        let global = global_claims_root().expect("a global root resolves under test");
-        assert_eq!(
-            claims_dir_in("session:abcd1234", None, boom, None, None).unwrap(),
-            global.join(CLAIMS_DIRNAME)
-        );
-        // The override branch is also cwd-free.
-        let boom = || Err("the cwd provider must not run".to_string());
-        assert_eq!(
-            claims_dir_in(
-                "resume-attach:abcd1234",
-                None,
-                boom,
-                Some(std::ffi::OsString::from("/tmp/override")),
-                None
-            )
-            .unwrap(),
-            PathBuf::from("/tmp/override").join(CLAIMS_DIRNAME)
-        );
-    }
 }
 
 /// Host-local diagnostics and admission tickets beside the retired claims

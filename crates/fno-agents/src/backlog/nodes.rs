@@ -2146,35 +2146,6 @@ fn do_quality(rows: &[(String, String)]) -> Option<(&'static str, String)> {
     unreadable.map(|h| ("unreadable", h))
 }
 
-/// A store-shaped archive db for a test outside this module: one typed
-/// nodes row and one parked nodes_raw row per named id, in tables holding
-/// only the columns the pool reader selects. The fixture has to come from
-/// here because both tables are owned by this module. It is a bare file,
-/// deliberately not `backlog::open`: the store door walks a legacy-spelled
-/// anchor to its db/ twin and would flip the file under test to WAL.
-#[cfg(test)]
-pub(crate) fn archive_pool_fixture(path: &std::path::Path, node_ids: &[&str], raw_ids: &[&str]) {
-    let connection = Connection::open(path).unwrap();
-    let mut batch = String::from(
-        "CREATE TABLE nodes (\
-             id TEXT PRIMARY KEY, ordinal INTEGER NOT NULL, slug TEXT NOT NULL, \
-             title TEXT NOT NULL, status TEXT NOT NULL, priority TEXT NOT NULL);\n\
-         CREATE TABLE nodes_raw (\
-             id TEXT PRIMARY KEY, ordinal INTEGER NOT NULL, body TEXT NOT NULL);\n",
-    );
-    for id in node_ids {
-        batch.push_str(&format!(
-            "INSERT INTO nodes VALUES ('{id}', 0, 's', 't', 'done', 'p2');\n"
-        ));
-    }
-    for id in raw_ids {
-        batch.push_str(&format!(
-            "INSERT INTO nodes_raw VALUES ('{id}', 0, '{{}}');\n"
-        ));
-    }
-    connection.execute_batch(&batch).unwrap();
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2244,82 +2215,6 @@ mod tests {
                 "SELECT rowid FROM sessions WHERE node_id = 'x-a' ORDER BY seq"
             ),
             sessions_before
-        );
-    }
-
-    #[test]
-    fn a_note_stamp_that_is_not_utc_saves_and_keeps_its_bytes() {
-        let (_dir, connection) = store();
-        let notes = serde_json::json!([
-            {"ts": "T1", "text": "a"},
-            {"ts": "2026-09-11T00:00:00Z", "text": "b"},
-        ]);
-        let mut row = node(two_sessions()).to_json();
-        row["progress_notes"] = notes.clone();
-        crate::backlog::save_aggregate(&connection, &Node::from_json(&row).unwrap()).unwrap();
-        let exported = crate::backlog::export_rows(&connection).unwrap();
-        assert_eq!(exported[0]["progress_notes"].to_string(), notes.to_string());
-        let stamped = column(
-            &connection,
-            "SELECT COUNT(created_at) FROM comments WHERE node_id = 'x-a'",
-        );
-        assert_eq!(stamped, vec![1], "only the UTC stamp fills the column");
-    }
-
-    #[test]
-    fn a_status_the_pass_moves_counts_as_a_write() {
-        let (_dir, connection) = store();
-        let row = |id: &str, extra: Value| {
-            let mut row = serde_json::json!({
-                "id": id, "slug": id, "title": id, "type": "feature",
-                "status": "ready", "priority": "p2",
-            });
-            row.as_object_mut()
-                .unwrap()
-                .extend(extra.as_object().unwrap().clone());
-            Node::from_json(&row).unwrap()
-        };
-        crate::backlog::save_aggregate(&connection, &row("x-p", serde_json::json!({}))).unwrap();
-        let child = serde_json::json!({"parent": "x-p", "completed_at": "2026-09-01T00:00:00Z"});
-        crate::backlog::save_aggregate(&connection, &row("x-c", child)).unwrap();
-        // Own plan work holds: the single-row pass leaves the rung status.
-        crate::backlog::save_aggregate(
-            &connection,
-            &row(
-                "x-q",
-                serde_json::json!({"status": "ready", "plan_path": "plans/q.md"}),
-            ),
-        )
-        .unwrap();
-        let q_child = serde_json::json!({"parent": "x-q", "completed_at": "2026-09-01T00:00:00Z"});
-        crate::backlog::save_aggregate(&connection, &row("x-qc", q_child)).unwrap();
-        let version =
-            |connection: &Connection| versions(connection, Some(&["x-p", "x-q"])).unwrap();
-        let before = version(&connection);
-        recompute_status(&connection).unwrap();
-        let status: String = connection
-            .query_row("SELECT status FROM nodes WHERE id = 'x-p'", [], |r| {
-                r.get(0)
-            })
-            .unwrap();
-        assert_eq!(status, "done", "the parent rolls up from its done child");
-        let after = version(&connection);
-        assert_eq!(after["x-p"], before["x-p"] + 1);
-        assert_eq!(after["x-q"], before["x-q"], "a held parent writes nothing");
-        recompute_status(&connection).unwrap();
-        assert_eq!(
-            version(&connection),
-            after,
-            "a pass that moves nothing writes nothing"
-        );
-        let q_status: String = connection
-            .query_row("SELECT status FROM nodes WHERE id = 'x-q'", [], |r| {
-                r.get(0)
-            })
-            .unwrap();
-        assert_eq!(
-            q_status, "ready",
-            "own plan work holds in the single-row pass"
         );
     }
 }

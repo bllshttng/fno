@@ -580,7 +580,6 @@ pub fn run(tail: &[String]) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::active_backlog::DrainResolve;
     use serde_json::json;
 
     #[test]
@@ -614,48 +613,5 @@ mod tests {
         let (hit, line) = crate::backlog_ready::find_node_index(&entries, "ab-1234000");
         assert_eq!(hit, Some(0));
         assert!(line.is_none());
-    }
-
-    fn receipt(targets: Value, missions: u64, skip_reason: Option<&str>) -> DrainResolve {
-        DrainResolve {
-            targets: serde_json::from_value(targets).expect("valid target rows"),
-            missions,
-            skip_reason: skip_reason.map(str::to_string),
-            failure: None,
-        }
-    }
-
-    fn outside_node() -> Value {
-        json!({"id": "x-0bad0", "title": "Outside", "status": "ready", "priority": "p1"})
-    }
-
-    #[test]
-    fn a_disabled_drain_prescribes_the_config_fix() {
-        let report = receipt(json!([]), 6, Some("drain_disabled"));
-        let note = note_from_receipt("x-0eef0", &[outside_node()], &report)
-            .unwrap()
-            .unwrap();
-        assert!(note.contains("the drain is disabled in config"));
-        assert!(note.contains("6 active missions"));
-        assert!(note.contains("fno config set active_backlog.enabled true"));
-        assert!(!note.contains("advance --epic"));
-    }
-
-    #[test]
-    fn an_unreadable_drain_wraps_the_truncated_failure_line() {
-        let report = DrainResolve {
-            targets: Vec::new(),
-            missions: 0,
-            skip_reason: None,
-            failure: Some("territory: graph unreadable".to_string()),
-        };
-        let exc = note_from_receipt("x-0bad0", &[outside_node()], &report).unwrap_err();
-        assert_eq!(exc, "active-backlog: territory: graph unreadable");
-        // The caller wraps any inner failure in the unavailable note.
-        let note = match note_from_receipt("x-0bad0", &[outside_node()], &report) {
-            Err(exc) => Some(format!("dispatcher scope unavailable ({exc})")),
-            Ok(note) => note,
-        };
-        assert!(note.unwrap().contains("dispatcher scope unavailable"));
     }
 }

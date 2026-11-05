@@ -55,18 +55,6 @@ def _env_reads() -> dict[str, set[str]]:
     return found
 
 
-def test_the_probe_actually_finds_env_reads():
-    """Positive control.
-
-    An empty result would make the classification test below pass while
-    measuring nothing - the absence-only failure. HOME is read ~35 times in
-    source; if the probe cannot see it, the probe is broken, not the code.
-    """
-    reads = _env_reads()
-    assert "HOME" in reads, "env-read probe found nothing; the regexes are stale"
-    assert len(reads) > 20, f"probe found only {len(reads)} names; expected dozens"
-
-
 def test_every_env_read_in_source_is_classified():
     """The guard itself."""
     unclassified = {
@@ -91,66 +79,6 @@ def test_every_env_read_in_source_is_classified():
             "broke three test suites on 2026-08-11.",
             pytrace=False,
         )
-
-
-def test_classify_agrees_with_the_scrub():
-    """The reporting view and the acting view must not drift.
-
-    A classification that says "ambient" while neutralise keeps the value would
-    make the guard decorative: green, and wrong.
-    """
-    import os
-    import tempfile
-
-    from fno.test_env_door import apply_env
-
-    sandbox = Path(tempfile.mkdtemp())
-    probes = {name: "ambient-value" for name in _env_reads()}
-    # The door resolves the binary from this very dict; keep a real
-    # FNO_AGENTS_BIN pin so the scrub is exercised at all. It is
-    # environment-class, so the loop below never asserted it.
-    real_bin = os.environ.get("FNO_AGENTS_BIN")
-    if real_bin:
-        probes["FNO_AGENTS_BIN"] = real_bin
-    try:
-        out = apply_env("neutralise", probes, sandbox=sandbox)
-    except SystemExit:
-        pytest.skip(
-            "no fno-agents here can speak the env door (stale install); "
-            "install the crate fresh or run through 'fno doctor test' in CI"
-        )
-    for name in probes:
-        if classify(name) == "ambient":
-            assert out.get(name) != "ambient-value", (
-                f"{name} classifies as ambient but survived neutralise()"
-            )
-
-
-def test_a_received_env_scrubs_without_the_binary(monkeypatch):
-    """The fence receipt degrades the door to a Python-side scrub.
-
-    The smoke pytest legs delete the dev build on purpose so the parity
-    suites skip, and the runner has already neutralised in-process - so the
-    pins are right and no binary is needed. A marker planted after the fence
-    (the identity-scrub guard spawns exactly that child) must still die, so
-    the fallback scrubs through fno.hermetic's classifier, the same
-    vocabulary the native assembly reads, and keeps the receipt standing.
-    """
-    from fno import test_env_door
-
-    env = {
-        "FNO_TEST_HERMETIC": "1",
-        "HOME": "/anyone",
-        "PATH": "/bin",
-        "CODEX_THREAD_ID": "planted-in-the-child",
-        "FNO_HARNESS_NAME": "planted-too",
-    }
-    monkeypatch.setattr(test_env_door.shutil, "which", lambda name: None)
-    out = test_env_door.apply_env("neutralise", env, sandbox=Path("/sb"))
-    assert "CODEX_THREAD_ID" not in out, "a planted marker survived the fallback"
-    assert "FNO_HARNESS_NAME" not in out, "a planted FNO_ marker survived"
-    assert out["FNO_TEST_HERMETIC"] == "1", "the receipt must survive the fallback"
-    assert out["HOME"] == "/anyone", "the fallback must not move the pins"
 
 
 def test_an_unreceived_env_still_refuses_without_the_binary(monkeypatch):

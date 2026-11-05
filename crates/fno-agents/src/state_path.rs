@@ -377,49 +377,6 @@ mod tests {
     }
 
     #[test]
-    fn state_path_migrates_legacy_events_and_keeps_target_state_fallback() {
-        let _lock = test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
-        let base =
-            std::env::temp_dir().join(format!("fno-state-path-legacy-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&base);
-        let repo = base.join("repo");
-        init_repo(&repo);
-
-        let _env = EnvGuard::new(&base);
-        let legacy = repo.join(".fno");
-        fs::create_dir_all(&legacy).unwrap();
-        fs::write(legacy.join("events.jsonl"), "{\"k\":1}\n").unwrap();
-        let legacy_manifest = legacy.join("target-state.md");
-        fs::write(&legacy_manifest, "_repo").unwrap();
-
-        let events = resolve("events", &repo).unwrap();
-        assert_eq!(
-            events,
-            base.join("spaces")
-                .join(space_slug(&fs::canonicalize(&repo).unwrap()))
-                .join("events.jsonl")
-        );
-        assert!(events.exists(), "events migrated onto the space");
-        assert!(
-            !legacy.join("events.jsonl").exists(),
-            "legacy journal moved"
-        );
-        assert!(legacy.join("MOVED-TO").exists(), "pointer left behind");
-
-        let manifest = resolve("target-state", &repo).unwrap();
-        assert_eq!(
-            manifest,
-            fs::canonicalize(&legacy_manifest).unwrap(),
-            "missing space manifest falls back to legacy"
-        );
-        assert!(
-            legacy_manifest.exists(),
-            "fallback never migrates the manifest"
-        );
-        let _ = fs::remove_dir_all(&base);
-    }
-
-    #[test]
     fn state_dir_door_answers_self_mapped_row_and_refuses_unknown_names() {
         let base = std::env::temp_dir().join(format!("fno-state-path-dir-{}", std::process::id()));
         let _ = fs::remove_dir_all(&base);

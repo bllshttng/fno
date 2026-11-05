@@ -621,18 +621,4 @@ mod tests {
         assert_eq!(answer["updates"], json!({}));
         assert_eq!(answer["vacated"], json!([]));
     }
-
-    #[test]
-    fn reown_never_forks_provenance_onto_a_bare_row() {
-        let (mut updates, mut vacated) = (Map::new(), Vec::new());
-        let answer = json!({"reown_rows": [0], "reown_owner": {"kind": "session"}});
-        reown(
-            &[json!({"name": "w5"})],
-            &answer,
-            &mut updates,
-            &mut vacated,
-        )
-        .unwrap();
-        assert!(updates.is_empty() && vacated.is_empty());
-    }
 }

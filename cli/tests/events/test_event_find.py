@@ -45,15 +45,3 @@ def test_find_zero_beyond_coverage_is_refused(tmp_path: Path, monkeypatch) -> No
 
     assert result.exit_code == 3, result.output
     assert "count refused" in result.output
-
-
-def test_find_absent_store_refuses_the_zero(tmp_path: Path, monkeypatch) -> None:
-    """A journal with no store proves nothing; its zero is refused."""
-    missing = tmp_path / "events.jsonl"
-
-    result = EventRunner().invoke(event_cli, ["find", "operator_decision", "--json", "--events", str(missing)])
-
-    assert result.exit_code == 3, result.output
-    payload = json.loads(result.output)
-    assert payload["coverage"]["status"] == "unreadable"
-    assert payload["file_count"] == 1

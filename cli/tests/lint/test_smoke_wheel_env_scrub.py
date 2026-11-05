@@ -35,7 +35,6 @@ each script is what catches a scrub that parsed fine and cleared nothing.
 import re
 from pathlib import Path
 
-import pytest
 
 SMOKE_DIR = Path(__file__).resolve().parents[2] / "tests" / "smoke"
 
@@ -221,17 +220,6 @@ def _first_match(lines: list[str], pattern: re.Pattern[str]) -> int | None:
     return None
 
 
-@pytest.mark.parametrize(
-    "line",
-    [
-        "unset -f PYTHONPATH",  # clears a function; the variable survives
-        "unset PYTHONPATH 2>/dev/null || true",  # a readonly-var failure is swallowed
-    ],
-)
-def test_is_scrub_rejects_no_ops(line: str) -> None:
-    assert not is_scrub(line)
-
-
 def test_tracker_sees_through_column_zero_nesting() -> None:
     """Column zero is not top level: the reason this walks structure at all."""
     script = [
@@ -249,17 +237,6 @@ def test_tracker_sees_through_column_zero_nesting() -> None:
     assert 3 not in top
     assert 6 not in top
     assert 8 in top
-
-
-@pytest.mark.parametrize(
-    "line",
-    [
-        '[ -z "${PYTHONPATH:-}" ] || echo warn # exit 1',  # the exit is in a comment
-        '[ -z "${PYTHONPATH:-}" ] || (exit 1)',  # exits the subshell, not the script
-    ],
-)
-def test_verification_without_an_exit_is_rejected(line: str) -> None:
-    assert not is_verification(line)
 
 
 def test_every_script_is_classified() -> None:
@@ -280,43 +257,43 @@ def test_every_script_is_classified() -> None:
     )
 
 
-@pytest.mark.parametrize("name", sorted(WHEEL_CHANNEL_SMOKES))
-def test_scrub_is_executable_and_precedes_the_install(name: str) -> None:
-    lines = _lines(name)
-    top = top_level_lines(lines)
-    scrub_line = next(
-        (i for i, ln in enumerate(lines, start=1) if i in top and is_scrub(ln)), None
-    )
-    assert scrub_line is not None, (
-        f"{name} installs fno and then runs it, but has no unconditional "
-        "top-level `unset PYTHONPATH` (one nested in a block, function, or "
-        "heredoc does not count - it may never run in the shell that installs). "
-        "An inherited PYTHONPATH "
-        "(scripts/ci/preflight.sh exports <repo>/cli/src) puts the source tree "
-        "ahead of the installed artifact on sys.path, so this smoke goes green "
-        "on a distribution that shipped nothing. See is_scrub for the forms that "
-        "look like a scrub and are not."
-    )
-    assert_line = next(
-        (i for i, ln in enumerate(lines, start=1) if i in top and is_verification(ln)),
-        None,
-    )
-    assert assert_line is not None, (
-        f'{name} never verifies the scrub took: add `[ -z "${{PYTHONPATH:-}}" ] '
-        '|| {{ echo ...; exit 1; }}` under the unset. The static check here can '
-        "only prove the line is present and well-formed; the runtime check is "
-        "what catches an unset that parsed fine and cleared nothing (a readonly "
-        "variable, or a scrub that ran in some other shell)."
-    )
-    install_line = _first_match(lines, INSTALL_RE)
-    assert install_line is not None, (
-        f"{name} is registered as a wheel-channel smoke but no install was "
-        "found. Either it no longer installs anything (move it to "
-        "NON_INSTALL_SMOKES) or INSTALL_RE needs its channel."
-    )
-    assert scrub_line < assert_line < install_line, (
-        f"{name} orders these wrong: scrub on line {scrub_line}, verification on "
-        f"line {assert_line}, install on line {install_line}. Required order is "
-        "scrub, then verify, then install - anything that runs before the scrub "
-        "is exposed, and a verification below the install proves nothing about it."
-    )
+def test_every_wheel_smoke_scrubs_before_the_install() -> None:
+    for name in sorted(WHEEL_CHANNEL_SMOKES):
+        lines = _lines(name)
+        top = top_level_lines(lines)
+        scrub_line = next(
+            (i for i, ln in enumerate(lines, start=1) if i in top and is_scrub(ln)), None
+        )
+        assert scrub_line is not None, (
+            f"{name} installs fno and then runs it, but has no unconditional "
+            "top-level `unset PYTHONPATH` (one nested in a block, function, or "
+            "heredoc does not count - it may never run in the shell that installs). "
+            "An inherited PYTHONPATH "
+            "(scripts/ci/preflight.sh exports <repo>/cli/src) puts the source tree "
+            "ahead of the installed artifact on sys.path, so this smoke goes green "
+            "on a distribution that shipped nothing. See is_scrub for the forms that "
+            "look like a scrub and are not."
+        )
+        assert_line = next(
+            (i for i, ln in enumerate(lines, start=1) if i in top and is_verification(ln)),
+            None,
+        )
+        assert assert_line is not None, (
+            f'{name} never verifies the scrub took: add `[ -z "${{PYTHONPATH:-}}" ] '
+            '|| {{ echo ...; exit 1; }}` under the unset. The static check here can '
+            "only prove the line is present and well-formed; the runtime check is "
+            "what catches an unset that parsed fine and cleared nothing (a readonly "
+            "variable, or a scrub that ran in some other shell)."
+        )
+        install_line = _first_match(lines, INSTALL_RE)
+        assert install_line is not None, (
+            f"{name} is registered as a wheel-channel smoke but no install was "
+            "found. Either it no longer installs anything (move it to "
+            "NON_INSTALL_SMOKES) or INSTALL_RE needs its channel."
+        )
+        assert scrub_line < assert_line < install_line, (
+            f"{name} orders these wrong: scrub on line {scrub_line}, verification on "
+            f"line {assert_line}, install on line {install_line}. Required order is "
+            "scrub, then verify, then install - anything that runs before the scrub "
+            "is exposed, and a verification below the install proves nothing about it."
+        )

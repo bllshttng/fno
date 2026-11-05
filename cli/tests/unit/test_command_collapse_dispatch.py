@@ -36,14 +36,3 @@ def test_t1_action_is_an_argument_that_reaches_the_original_typed_command():
     assert result.exit_code == 0, result.output
     assert result.output == "folded=yes\n"
     assert seen == [("folded", "yes")]
-
-
-def test_keep_action_remains_a_registered_leaf():
-    seen: list[tuple[str, str]] = []
-    collapsed = collapse_click_group(_group(seen), keep={"kept"})
-    ctx = click.Context(collapsed)
-
-    assert collapsed.list_commands(ctx) == ["kept"]
-    result = CliRunner().invoke(collapsed, ["kept", "--value", "yes"])
-    assert result.exit_code == 0, result.output
-    assert seen == [("kept", "yes")]

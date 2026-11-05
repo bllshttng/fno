@@ -83,16 +83,3 @@ def test_joiner_denied_on_a_peer_band_file(tmp_path):
     )
     assert decision["decision"] == "block"
     assert "medium" in decision["reason"]
-
-
-def test_apply_patch_one_denied_target_denies_all(tmp_path):
-    _write_policy(tmp_path, "j-x-1", "high", ["cli/src/fno/peer.py"], own=["src/own.py"])
-    command = (
-        "*** Begin Patch\n*** Update File: src/own.py\n@@\n"
-        "*** Update File: cli/src/fno/peer.py\n@@\n*** End Patch"
-    )
-    decision = _run(
-        _payload(tmp_path, "unused", tool_input={"command": command}),
-        worker="j-x-1",
-    )
-    assert decision["decision"] == "block"

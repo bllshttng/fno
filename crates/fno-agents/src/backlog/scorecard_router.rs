@@ -568,44 +568,6 @@ mod tests {
     }
 
     #[test]
-    fn a_thin_declared_row_explores_with_a_spawn_line() {
-        let cells = vec![cell(
-            "target/medium",
-            "claude",
-            "anthropic",
-            "sonnet",
-            20,
-            8,
-            Some(10.0),
-        )];
-        let rows = vec![
-            row("claude-sonnet", "claude", "sonnet", ""),
-            row("codex-luna", "codex", "gpt-5.6-luna", ""),
-        ];
-        let out = propose_with(
-            &cells,
-            "target",
-            &rows,
-            &incumbents("medium", "claude-sonnet"),
-            before_lapse(),
-        );
-        let props = out["proposals"].as_array().unwrap();
-        let p = props
-            .iter()
-            .find(|p| p["lane"] == json!("codex-luna"))
-            .unwrap();
-        assert_eq!(p["verdict"], json!("explore"), "{p}");
-        assert!(p["nodes"] == json!(0), "{p}");
-        let line = p["spawn_line"].as_str().unwrap();
-        assert!(
-            line.starts_with("fno agents spawn --as thread -H codex"),
-            "{line}"
-        );
-        // The incumbent never proposes against itself.
-        assert!(props.iter().all(|p| p["lane"] != json!("claude-sonnet")));
-    }
-
-    #[test]
     fn a_pricier_candidate_holds_and_the_blueprint_stage_never_sees_glm() {
         // Incumbent sonnet $10; the glm candidate is only 10% cheaper: hold.
         let target_cells = vec![

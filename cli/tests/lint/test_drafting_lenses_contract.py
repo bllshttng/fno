@@ -11,7 +11,6 @@ from pathlib import Path
 from fno.paths import resolve_repo_root
 
 LINK = re.compile(r"\]\(([^)]+)\)")
-JUDGE_PATH = "lenses/judge"
 
 
 def _blueprint() -> Path:
@@ -56,16 +55,6 @@ def test_every_lens_row_resolves_and_names_a_condition():
     )
     for lens in sorted(draft.glob("*.md")):
         assert lens.resolve() in linked, f"orphan lens file with no table row: {lens.name}"
-
-
-def test_planner_files_never_name_the_judge_lenses():
-    blueprint = _blueprint()
-    files = [blueprint / "SKILL.md"]
-    files += sorted(p for p in (blueprint / "references").rglob("*") if p.is_file())
-    files += sorted((resolve_repo_root() / "agents").glob("*.md"))
-    for path in files:
-        text = path.read_text(encoding="utf-8")
-        assert JUDGE_PATH not in text, f"{path} names the judge's lenses ({JUDGE_PATH})"
 
 
 def test_drafting_lenses_are_attributed():

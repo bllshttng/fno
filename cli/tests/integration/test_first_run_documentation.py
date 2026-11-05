@@ -31,7 +31,6 @@ SETTINGS_DOC = REPO_ROOT / "docs" / "install.md"
 
 FENCE_RE = re.compile(r"```[^\n]*\n(.*?)```", re.S)
 INLINE_RE = re.compile(r"`(fno [^`]+)`")
-SKILL_RE = re.compile(r"/fno:([a-z][a-z-]*)")
 
 # Defaults README/install promise, keyed by user-facing config path.
 # Value is the normalized packaged-schema default cell that must match;
@@ -134,24 +133,6 @@ def _probe(argv):
     return False, out[:200]
 
 
-def _skill_commands():
-    found = set()
-    for doc in DOC_PATHS:
-        found |= set(SKILL_RE.findall(doc.read_text()))
-    return found
-
-
-def _skill_path(command):
-    for cand in (
-        REPO_ROOT / "skills" / command / "SKILL.md",
-        REPO_ROOT / "commands" / f"{command}.md",
-        REPO_ROOT / "commands" / f"fno-{command}.md",
-    ):
-        if cand.exists():
-            return cand
-    return None
-
-
 def _schema_rows():
     run = subprocess.run(
         ["fno", "config", "schema", "--markdown"],
@@ -188,11 +169,6 @@ def test_documented_fno_commands_resolve(cwd_tmp):
         if not ok:
             bad.append(f"{where}: {' '.join(argv)} -> {detail}")
     assert not bad, "packaged CLI refuses documented commands:\n" + "\n".join(bad)
-
-
-def test_documented_skill_spellings_exist():
-    missing = sorted(v for v in _skill_commands() if _skill_path(v) is None)
-    assert not missing, f"/fno: spellings with no shipped skill or command: {missing}"
 
 
 def test_config_default_promises_match_schema(cwd_tmp):

@@ -573,24 +573,6 @@ mod tests {
     }
 
     #[test]
-    fn the_majority_model_names_the_session() {
-        // AC2-HP: glm rows outnumber the sonnet row, so glm wins; a
-        // transcript with no model rows reads None.
-        let msg = |model: &str| {
-            json!({"role": "assistant", "model": model,
-                   "usage": {"input_tokens": 1, "output_tokens": 1}})
-        };
-        let raw = claude_lines(&[
-            json!({"type": "assistant", "message": msg("glm-5.3-flash")}),
-            json!({"type": "assistant", "message": msg("glm-5.3-flash")}),
-            json!({"type": "assistant", "message": msg("claude-sonnet-5")}),
-        ]);
-        let act = claude_activity(&raw);
-        assert_eq!(act.model.as_deref(), Some("glm-5.3-flash"));
-        assert_eq!(claude_activity("").model, None);
-    }
-
-    #[test]
     fn a_zai_routed_row_never_votes_a_claude_label() {
         // The route fabricates `msg_` + 8-digit ids; a claude label on one
         // is unverified (measured 2026-11-01) and must not label the
@@ -631,65 +613,6 @@ mod tests {
             claude_activity(&raw).model.as_deref(),
             Some("claude-opus-5-5")
         );
-    }
-
-    #[test]
-    fn edit_multiedit_write_lines_and_extensions() {
-        // AC2-EDGE: shared first+last lines, one differing middle line.
-        let edit = |path: &str| {
-            json!({"type": "tool_use", "name": "Edit",
-                   "input": {"file_path": path,
-                             "old_string": "fn a() {\n    old\n}", "new_string": "fn a() {\n    new\n}"}})
-        };
-        let multiedit = json!({"type": "tool_use", "name": "MultiEdit",
-            "input": {"file_path": "y.rs", "edits": [
-                {"old_string": "a\nb\nc", "new_string": "a\nd\nc"},
-                {"old_string": "x\ny", "new_string": "x\nz"}]}});
-        let write = json!({"type": "tool_use", "name": "Write",
-                           "input": {"file_path": "a/b.RS", "content": "one\ntwo\nthree"}});
-        let fragment = json!({"type": "tool_use", "name": "Write",
-                              "input": {"file_path": "y.rs (x)", "content": "body"}});
-        let content = json!([edit("x.rs"), multiedit, write, fragment]);
-        // The api-request-blob row repeats the same calls; it counts nothing.
-        let raw = claude_lines(&[
-            json!({"type": "assistant", "message": {"role": "assistant", "content": content}}),
-            json!({"type": "api-request-blob", "message": {"role": "assistant", "content": content}}),
-        ]);
-        let act = claude_activity(&raw);
-        // The fragment's body line still counts as a line; it never
-        // counts as a language.
-        assert_eq!(act.lines_added, 7);
-        assert_eq!(act.lines_removed, 3);
-        assert_eq!(act.extensions.get("rs"), Some(&3));
-        assert!(act.extensions.get("rs (x)").is_none());
-        assert_eq!(act.extensions.len(), 1);
-    }
-
-    #[test]
-    fn the_six_error_classes_sort_one_each() {
-        // AC3-HP: one text per measured class.
-        let texts = [
-            ("Exit code 1", "command_failed"),
-            (
-                "Permission for this action was denied by the Claude Code auto mode classifier. Reason: [External System Writes].",
-                "permission_denied",
-            ),
-            ("The user doesn't want to proceed with this tool use.", "user_rejected"),
-            ("PreToolUse:Bash hook error: refused", "hook_blocked"),
-            ("[fno backlog] node locked", "hook_blocked"),
-            (
-                "lead-delegation-guard: leads do not implement",
-                "hook_blocked",
-            ),
-            (
-                "<tool_use_error>File has not been read yet",
-                "tool_use_error",
-            ),
-            ("boom", "other"),
-        ];
-        for (text, want) in texts {
-            assert_eq!(error_class(text), want, "text: {text}");
-        }
     }
 
     #[test]

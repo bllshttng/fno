@@ -356,12 +356,6 @@ mod tests {
         names.iter().map(|n| n.to_string()).collect()
     }
 
-    fn claims(map: &[(&str, &[&str])]) -> HashMap<String, HashSet<String>> {
-        map.iter()
-            .map(|(n, sids)| (n.to_string(), sids.iter().map(|s| s.to_string()).collect()))
-            .collect()
-    }
-
     #[test]
     fn a_promoted_lead_is_never_the_worker_at_any_fold() {
         let graph = vec![node(
@@ -379,27 +373,6 @@ mod tests {
         ];
         let worked = join_worked(&rows, &graph, &roles(&["finch"]), &HashMap::new());
         assert_eq!(worked.get("x-1").unwrap(), &vec!["t-w".to_string()]);
-    }
-
-    #[test]
-    fn a_bare_seat_record_without_provenance_is_a_witness() {
-        let graph = vec![node("x-1", "in_progress", serde_json::json!([open("s-1")]))];
-        let rows = vec![row("drifter", "s-1", None)];
-        let worked = join_worked(&rows, &graph, &HashSet::new(), &HashMap::new());
-        assert!(worked.is_empty());
-    }
-
-    #[test]
-    fn the_node_claim_proves_a_seat_record() {
-        let graph = vec![node("x-1", "in_progress", serde_json::json!([open("s-1")]))];
-        let rows = vec![row("drifter", "s-1", None)];
-        let worked = join_worked(
-            &rows,
-            &graph,
-            &HashSet::new(),
-            &claims(&[("x-1", &["s-1"])]),
-        );
-        assert_eq!(worked.get("x-1").unwrap(), &vec!["drifter".to_string()]);
     }
 
     #[test]

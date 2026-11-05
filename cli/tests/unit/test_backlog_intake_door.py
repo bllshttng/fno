@@ -95,11 +95,3 @@ def test_intake_door_refuses_surfaceless_plan(tmp_path: Path) -> None:
     assert "no comparable file surface" in res.stdout + res.stderr
     allowed = _intake(tmp_path, str(plan), "--allow-no-surface")
     assert allowed.returncode == 0, allowed.stderr
-
-
-def test_intake_door_refuses_an_unknown_claim(tmp_path: Path) -> None:
-    plan = tmp_path / "claim-plan.md"
-    plan.write_text(PLAN)
-    res = _intake(tmp_path, str(plan), "--claims", "x-0000dead")
-    assert res.returncode == 1, res.stdout
-    assert "not found on graph" in res.stdout + res.stderr

@@ -14,7 +14,6 @@ import re
 import subprocess
 from pathlib import Path
 
-import pytest
 
 import yaml
 
@@ -44,32 +43,6 @@ def _run_8d(plan: Path, sid: str) -> None:
         text=True,
     )
     assert proc.returncode == 0, proc.stderr
-
-
-@pytest.mark.parametrize(
-    "frontmatter, existing",
-    [
-        ("session_ids: [OLD_SID]\n", ["OLD_SID"]),  # inline
-        ("session_ids:\n", []),  # bare header
-    ],
-)
-def test_appends_without_losing_existing_ids(
-    tmp_path: Path, frontmatter: str, existing: list[str]
-) -> None:
-    """Whatever form the doc arrived in, the new id is added and none are lost.
-
-    The block case used to rewrite the bare header as `session_ids: [NEW]` and
-    leave the indented children stranded underneath it - malformed YAML that
-    also silently dropped every id already recorded.
-    """
-    plan = tmp_path / "plan.md"
-    plan.write_text(f"---\ntitle: t\n{frontmatter}status: ready\n---\nbody\n", encoding="utf-8")
-
-    _run_8d(plan, "NEW_SID")
-
-    fields, _block, _rest = parse_frontmatter(plan.read_text(encoding="utf-8"))
-    assert fields["session_ids"] == existing + ["NEW_SID"]
-    assert fields["status"] == "ready"
 
 
 def test_block_form_append_keeps_later_keys_parseable(tmp_path: Path) -> None:

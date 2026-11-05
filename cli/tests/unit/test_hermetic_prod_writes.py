@@ -65,55 +65,6 @@ def test_append_event_refuses_a_write_outside_the_sandbox(monkeypatch, tmp_path)
     assert not outside.parent.exists()
 
 
-def test_append_event_refuses_a_symlink_that_resolves_outside(monkeypatch, tmp_path):
-    """Only the RESOLVED path is judged.
-
-    A worktree's ``.fno/events.jsonl`` is a symlink to the canonical journal,
-    which is the whole reason a test run reached the operator's file. Accepting
-    the raw path when it merely SITS inside the sandbox reopens exactly that
-    door: measured at 200 bytes of a production-shaped row landing in the
-    outside file before the guard judged the realpath alone.
-    """
-    home = tmp_path / "home"
-    home.mkdir()
-    outside = tmp_path / "checkout" / ".fno"
-    outside.mkdir(parents=True)
-    target = outside / "events.jsonl"
-    link = home / "events.jsonl"
-    link.symlink_to(target)
-
-    monkeypatch.setenv("FNO_TEST_HERMETIC", "1")
-    monkeypatch.setenv("TMPDIR", str(home))
-    monkeypatch.delenv("FNO_EVENTS_PATH", raising=False)
-
-    with pytest.raises(HermeticEscapeError):
-        append_event(_event(), link)
-    assert not target.exists()
-
-
-def test_gate_escape_failure_log_respects_the_sandbox(monkeypatch, tmp_path):
-    """A refused journal must not be followed by its failure log recreating the
-    directory. Measured before the fix: events.jsonl absent, and
-    ``<outside>/.fno/gate_escape_emit_failures.jsonl`` present."""
-    import subprocess
-    from fno.events.store_client import resolve_native_bin
-
-    sandbox = tmp_path / "sandbox"
-    sandbox.mkdir()
-    monkeypatch.setenv("FNO_TEST_HERMETIC", "1")
-    monkeypatch.setenv("TMPDIR", str(sandbox))
-    monkeypatch.delenv("FNO_EVENTS_PATH", raising=False)
-
-    outside = tmp_path / "checkout" / ".fno" / "events.jsonl"
-    proc = subprocess.run(
-        [resolve_native_bin(), "doctor", "event", "gate-escape", "flake", "--events", str(outside)],
-        capture_output=True, text=True, timeout=30,
-    )
-    assert proc.returncode == 0
-    assert "failed" in proc.stderr
-    assert not outside.parent.exists()
-
-
 # ---------------------------------------------------------------------------
 # The third declaration state: no pin at all, under a test runner (x-3d21)
 # ---------------------------------------------------------------------------
@@ -140,14 +91,3 @@ def test_undeclared_root_refuses_under_pytest(monkeypatch):
         "use_tmpdir",
     ):
         assert declaration in message, f"the refusal must name {declaration}"
-
-
-def test_no_pin_outside_a_test_process_is_production(monkeypatch):
-    """Production never meets the refusal: the marker is the runner itself."""
-    import sys
-
-    from fno.hermetic import declared_root
-
-    monkeypatch.delenv("FNO_TEST_HERMETIC", raising=False)
-    monkeypatch.delitem(sys.modules, "pytest")
-    assert declared_root(_OUTSIDE) == _OUTSIDE

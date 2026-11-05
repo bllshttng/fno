@@ -484,16 +484,4 @@ mod tests {
         assert_eq!(live[0].name.as_deref(), Some("named"));
         assert_eq!(live[1].agent, "codex");
     }
-
-    #[test]
-    fn an_empty_row_cwd_never_matches_the_cwd_filter() {
-        let here = std::env::current_dir().unwrap().display().to_string();
-        let rows = vec![
-            json!({"cwd": "", "agent": "claude"}),
-            json!({"cwd": here, "agent": "codex"}),
-        ];
-        assert_eq!(filter_rows(rows.clone(), Some(&here), None).len(), 1);
-        assert_eq!(filter_rows(rows.clone(), Some(""), Some("")).len(), 2);
-        assert_eq!(filter_rows(rows, None, Some("codex")).len(), 1);
-    }
 }

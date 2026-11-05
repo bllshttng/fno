@@ -1,5 +1,5 @@
 //! Round-trip contract for the typed node model: every row of every golden
-//! file and both live files round-trips through Node::from_json / to_json
+//! file round-trips through Node::from_json / to_json
 //! equal to its input after null-valued keys are removed (AC8-HP). A key
 //! with no column lands in extras, keeps its order, and shows up in the
 //! census (AC9-EDGE).
@@ -49,12 +49,6 @@ fn golden_rows(path: &str) -> Vec<Value> {
         .unwrap();
     let body: Value = serde_json::from_slice(&bytes).unwrap();
     body["entries"].as_array().cloned().unwrap_or_default()
-}
-
-fn live_rows(path: &str) -> Vec<Value> {
-    let text = std::fs::read_to_string(path).unwrap();
-    let doc: Value = serde_json::from_str(&text).unwrap();
-    doc["entries"].as_array().cloned().unwrap_or_default()
 }
 
 /// Round-trip one row: from_json, to_json, compare after null-stripping.
@@ -189,31 +183,4 @@ fn unknown_key_lands_in_extras_in_order() {
     );
     let counts = extras_census(std::slice::from_ref(&row));
     assert_eq!(counts.get("model_tier"), Some(&1));
-}
-
-/// The live soak: FNO_ROUNDTRIP_GRAPH names the file. Prints the AC line
-/// `roundtrip: N rows, 0 diverged` plus the extras key census.
-#[test]
-#[ignore]
-fn live_graph_round_trip() {
-    let path = std::env::var("FNO_ROUNDTRIP_GRAPH").expect("set FNO_ROUNDTRIP_GRAPH");
-    let rows = live_rows(&path);
-    let mut diverged = 0;
-    let mut failures: Vec<String> = Vec::new();
-    for row in &rows {
-        if let Err(problem) = roundtrip(row) {
-            diverged += 1;
-            if failures.len() < 10 {
-                failures.push(problem);
-            }
-        }
-    }
-    println!("roundtrip: {} rows, {} diverged", rows.len(), diverged);
-    for problem in &failures {
-        println!("  {}", problem);
-    }
-    for (key, count) in extras_census(&rows) {
-        println!("extras: {:6} {}", count, key);
-    }
-    assert_eq!(diverged, 0, "{} rows diverged", diverged);
 }

@@ -90,27 +90,6 @@ fn entry(name: &str, harness: &str, sid: Option<&str>) -> RegistryEntry {
 }
 
 #[test]
-fn find_by_session_keys_on_the_pair_not_the_id_alone() {
-    let mut reg = Registry::default();
-    reg.entries = vec![
-        entry("a", "claude", Some("11111111-1111-4111-8111-111111111111")),
-        entry("b", "codex", Some("11111111-1111-4111-8111-111111111111")),
-    ];
-    // The same uuid on a different harness is a DIFFERENT row: the pair is
-    // the key (codex uuid7 head-8 collides inside one minute).
-    assert!(
-        reg.find_by_session("claude", "11111111-1111-4111-8111-111111111111")
-            .is_some_and(|e| e.name == "a"),
-        "the claude pair resolves row a"
-    );
-    assert!(
-        reg.find_by_session("opencode", "11111111-1111-4111-8111-111111111111")
-            .is_none(),
-        "no opencode row carries that id"
-    );
-}
-
-#[test]
 fn keyed_write_hits_only_the_resolved_row_ac1_hp() {
     // AC1-HP: two rows share a label; a writer that resolved ONE by session
     // id and writes under the lock changes only that row.

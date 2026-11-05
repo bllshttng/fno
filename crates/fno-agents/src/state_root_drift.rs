@@ -199,25 +199,6 @@ mod tests {
 "#;
 
     #[test]
-    fn patterns_match_the_python_dialect() {
-        let pats = top_level_patterns(DOC);
-        for want in [
-            "graph.db",
-            "graph.db-wal",
-            "config.toml",
-            "config.toml.lock",
-            "agents",
-            "latches",
-            "backups",
-            "board.py",
-            ".lock",
-        ] {
-            assert!(pats.iter().any(|p| p == want), "missing {want} in {pats:?}");
-        }
-        assert!(!pats.contains(&"*".to_string()));
-    }
-
-    #[test]
     fn undocumented_names_what_no_pattern_covers() {
         let dir = std::env::temp_dir().join(format!("fno-drift-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);

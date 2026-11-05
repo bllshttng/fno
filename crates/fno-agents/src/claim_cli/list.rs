@@ -3,8 +3,7 @@
 //! root plus the node-aware root for the prefix), merges the rows under the
 //! Python state priority (first key wins ties), and renders the four output
 //! branches in the Python order: the `--silent-after` report, `--json`, the
-//! empty message, the human rows. The goldens frozen from the Python leaf
-//! (`tests/claim_list_parity.rs`) are the contract.
+//! empty message, the human rows.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

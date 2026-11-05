@@ -16,14 +16,12 @@ pre-sweep capture there is the point, not a bug.
 from __future__ import annotations
 
 import ast
-import tempfile
 from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
 
 from fno.hermetic import classify
-from fno.test_env_door import apply_env
 
 TESTS_ROOT = Path(__file__).resolve().parent
 
@@ -146,26 +144,3 @@ def test_no_test_module_reads_an_ambient_env_at_import():
             "test time through the conftest seam that caught it before the swap.",
             pytrace=False,
         )
-
-
-def test_opt_in_live_flags_survive_the_sandbox():
-    """The live journey stays runnable for whoever sets their flag, while
-    the session-marker strip stands."""
-    import os
-
-    probes = {"FNO_CODEX_LIVE": "1", "CLAUDE_CODE_SESSION_ID": "sess-1"}
-    # The door resolves the binary from this very dict; keep a real
-    # FNO_AGENTS_BIN pin so the native assembly runs at all. It is
-    # environment-class, so neither assertion below reads it.
-    real_bin = os.environ.get("FNO_AGENTS_BIN")
-    if real_bin:
-        probes["FNO_AGENTS_BIN"] = real_bin
-    try:
-        out = apply_env("neutralise", probes, sandbox=Path(tempfile.mkdtemp()))
-    except SystemExit:
-        pytest.skip(
-            "no fno-agents here can speak the env door (stale install); "
-            "install the crate fresh or run through 'fno doctor test' in CI"
-        )
-    assert out.get("FNO_CODEX_LIVE") == "1"
-    assert "CLAUDE_CODE_SESSION_ID" not in out

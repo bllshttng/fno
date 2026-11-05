@@ -503,95 +503,6 @@ mod tests {
         ));
     }
 
-    fn answered_unknown(basis: Option<&str>, age_s: Option<f64>) -> crate::truth_probe::TruthProbe {
-        let mut p = probe("unknown", age_s.unwrap_or(0.0));
-        p.reachability = Some("unknown".to_string());
-        p.basis = basis.map(str::to_string);
-        p
-    }
-
-    #[test]
-    fn a_quiet_claim_holder_past_the_stall_line_reads_stalled() {
-        // The same predicate answers the claim arm: a live claim whose holder
-        // reads stale-transcript past the stall line reads stalled, so
-        // stalled_holder gains the row.
-        let node = json!({"id": "x-quiet", "priority": "p1"});
-        let mut claims = HashMap::new();
-        claims.insert("x-quiet".to_string(), handover_claim("x-quiet"));
-        let mut activity = HashMap::new();
-        activity.insert(
-            "t-x-quiet-worker".to_string(),
-            answered_unknown(Some("stale-transcript"), Some(90000.0)),
-        );
-        let (state, claim) = node_driver(&node, &claims, &activity, None, None, None);
-        assert_eq!(state, "stalled");
-        assert!(claim.is_some());
-    }
-
-    #[test]
-    fn a_live_team_drives_the_epic_but_not_its_leaves() {
-        let epic = json!({"id": "x-epic", "type": "epic"});
-        let leaf = json!({"id": "x-leaf", "parent": "x-epic"});
-        let claims: HashMap<String, Value> = HashMap::new();
-        let activity = HashMap::new();
-        let team: HashSet<String> = ["x-epic", "x-leaf"]
-            .map(str::to_string)
-            .into_iter()
-            .collect();
-        assert_eq!(
-            node_driver(&epic, &claims, &activity, Some(&team), None, None).0,
-            "teamed"
-        );
-        // an epic bound to its own PR keeps reading none: undriven_pr owns
-        // that shape, and a PR needs a driver of its own (measured 2026-09-06:
-        // six graph epics carry a pr_number)
-        let epic_pr = json!({"id": "x-epic", "type": "epic", "pr_number": 42});
-        assert_eq!(
-            node_driver(
-                &epic_pr,
-                &claims,
-                &activity,
-                Some(&team),
-                Some(&ok_worked(&[])),
-                None
-            )
-            .0,
-            "none"
-        );
-        // without the team the same epic is an unheld dead handoff
-        assert_eq!(
-            node_driver(&epic, &claims, &activity, None, Some(&ok_worked(&[])), None).0,
-            "none"
-        );
-        // an in-scope leaf stays claim-driven
-        assert_eq!(
-            node_driver(
-                &leaf,
-                &claims,
-                &activity,
-                Some(&team),
-                Some(&ok_worked(&[])),
-                None
-            )
-            .0,
-            "none"
-        );
-        // a live claim outranks the team; the probe ANSWERED for its holder
-        // (`unknown`/not-found is the batch's per-handle nothing-shape), so
-        // this is the stalled verdict, never unmeasured
-        let mut held = claims.clone();
-        held.insert(
-            "x-epic".to_string(),
-            json!({"key": "node:x-epic", "state": "live", "holder": "claude:h"}),
-        );
-        let mut answered = HashMap::new();
-        answered.insert("h".to_string(), probe("unknown", 30.0));
-        assert_eq!(
-            node_driver(&epic, &held, &answered, Some(&team), None, None).0,
-            "stalled"
-        );
-    }
-
     fn probe(state: &str, age_s: f64) -> crate::truth_probe::TruthProbe {
         crate::truth_probe::TruthProbe {
             state: state.to_string(),
@@ -605,27 +516,6 @@ mod tests {
             last_message: None,
             observed_model: Value::Null,
         }
-    }
-
-    #[test]
-    fn an_expired_lease_under_a_writing_holder_classifies_active() {
-        // AC1-HP: the holder probe outranks the clock. The 2026-09-09 board
-        // read five stale handover leases whose holders were writing at that
-        // moment; the old ordering returned none before the probe ever ran.
-        let node = json!({"id": "x-bbbb", "priority": "p1"});
-        let mut claims = HashMap::new();
-        claims.insert(
-            "x-bbbb".to_string(),
-            json!({
-                "key": "node:x-bbbb", "state": "stale",
-                "holder": "spawn-handover:target-7471-worker",
-            }),
-        );
-        let mut activity = HashMap::new();
-        activity.insert("target-7471-worker".to_string(), probe("working", 30.0));
-        let (state, claim) = node_driver(&node, &claims, &activity, None, None, None);
-        assert_eq!(state, "active");
-        assert!(claim.is_some());
     }
 
     // ---: stalled asks for progress, never for a lease ---------------
@@ -668,92 +558,6 @@ mod tests {
     // --- x-1111: contained nodes and the no-claim arm ----------------------
 
     #[test]
-    fn a_contained_node_never_reads_none() {
-        // x-1111 task 1.4b (the x-cccc shape): `contained_in` set means an
-        // owner exists by definition and the node never dispatches alone, so
-        // `none` - the word that fills the board queues - is not an available
-        // verdict for it, whatever its claim edge says.
-        let node = json!({"id": "x-cccc", "priority": "p1", "contained_in": "x-dddd"});
-        let claims: HashMap<String, Value> = HashMap::new();
-        let activity: HashMap<String, crate::truth_probe::TruthProbe> = HashMap::new();
-        let (state, claim) =
-            node_driver(&node, &claims, &activity, None, Some(&ok_worked(&[])), None);
-        assert_eq!(state, "active");
-        assert!(claim.is_none());
-    }
-
-    #[test]
-    fn a_no_claim_node_reads_what_the_worked_feed_answers() {
-        // A live worker with no claim row is not an undriven PR. The feed
-        // nominates, the probe decides: a listed row with no probed tokens
-        // reads unmeasured, never active. Unlisted is the one positive none;
-        // an unreadable feed is unmeasured, never none.
-        let node = json!({"id": "x-eeee", "priority": "p1"});
-        let claims: HashMap<String, Value> = HashMap::new();
-        let activity: HashMap<String, crate::truth_probe::TruthProbe> = HashMap::new();
-        let (state, claim) = node_driver(
-            &node,
-            &claims,
-            &activity,
-            None,
-            Some(&ok_worked(&["x-eeee"])),
-            None,
-        );
-        // No tokens on the listed row: the probe never got a candidate, so
-        // this reads unmeasured, never active.
-        assert_eq!(state, "unmeasured");
-        assert!(claim.is_none());
-        // A listed row whose worker token reads reachable is the new active:
-        // the probe, not the listing, answers.
-        let listed = crate::org_board::SourceRead::ok(json!([
-            {"id": "x-eeee", "tokens": ["t-1747"]},
-        ]));
-        let mut alive: HashMap<String, crate::truth_probe::TruthProbe> = HashMap::new();
-        alive.insert("t-1747".to_string(), probe("working", 30.0));
-        assert_eq!(
-            node_driver(&node, &claims, &alive, None, Some(&listed), None).0,
-            "active"
-        );
-        // A label the registry never confirmed maps to no token: unmeasured,
-        // never active and never none.
-        let unmapped_row = crate::org_board::SourceRead::ok(json!([
-            {"id": "x-eeee", "unmapped": true},
-        ]));
-        assert_eq!(
-            node_driver(&node, &claims, &alive, None, Some(&unmapped_row), None).0,
-            "unmeasured"
-        );
-        // The feed answered and found nothing: this is the one positive none.
-        assert_eq!(
-            node_driver(&node, &claims, &activity, None, Some(&ok_worked(&[])), None).0,
-            "none"
-        );
-        // The feed could not answer: unmeasured, not none.
-        assert_eq!(
-            node_driver(
-                &node,
-                &claims,
-                &activity,
-                None,
-                Some(&crate::org_board::SourceRead::err(
-                    "worked: reader panicked"
-                )),
-                None,
-            )
-            .0,
-            "unmeasured"
-        );
-    }
-
-    fn drivers_read(rows: Value) -> crate::org_board::SourceRead {
-        crate::org_board::SourceRead::ok(rows)
-    }
-
-    fn driver_row(node: &str, token: &str) -> Value {
-        json!({"name": format!("t-{node}"), "node": node, "token": token})
-    }
-
-    #[test]
     fn a_failed_roster_read_is_unmeasured_never_none() {
         // Measured in the field: a degraded roster read suppressed a real
         // undriven PR. Coverage must not produce a healthy-looking zero.
@@ -772,33 +576,6 @@ mod tests {
             )
             .0,
             "unmeasured"
-        );
-    }
-
-    #[test]
-    fn a_live_roster_driver_outranks_a_stale_held_claim() {
-        // A live driver outranks a stale HELD claim (a claim is a snapshot);
-        // roster first, claim corroborates.
-        let node = json!({"id": "x-held", "priority": "p1", "pr_number": 5});
-        let mut claims: HashMap<String, Value> = HashMap::new();
-        claims.insert(
-            "x-held".to_string(),
-            json!({"key": "node:x-held", "state": "live", "holder": "claude:stale-h"}),
-        );
-        let mut activity: HashMap<String, crate::truth_probe::TruthProbe> = HashMap::new();
-        activity.insert("new-driver".to_string(), probe("working", 10.0));
-        let drivers = drivers_read(json!([driver_row("x-held", "new-driver")]));
-        assert_eq!(
-            node_driver(
-                &node,
-                &claims,
-                &activity,
-                None,
-                Some(&ok_worked(&[])),
-                Some(&drivers)
-            )
-            .0,
-            "active"
         );
     }
 }

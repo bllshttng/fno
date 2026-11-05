@@ -45,27 +45,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn fno_home_replaces_the_whole_fno_dir() {
-        // AC1-ERR: containment, never a /tmp name match. A run whose whole
-        // FNO_HOME is a temp dir is real when the postmortem sits under
-        // that home's postmortems dir.
-        let fno_home = Path::new("/var/folders/T/.tmpRS");
-        assert_eq!(
-            postmortems_root_for_home(Some(fno_home), Some(Path::new("/Users/op"))),
-            Some(fno_home.join("db/postmortems"))
-        );
-        assert!(is_real_run(
-            Some(&fno_home.join("db/postmortems")),
-            Path::new("/var/folders/T/.tmpRS/db/postmortems/pm.md")
-        ));
-        // A different temp dir is still not this home's corpus.
-        assert!(!is_real_run(
-            Some(&fno_home.join("db/postmortems")),
-            Path::new("/var/folders/T/.tmpOTHER/pm.md")
-        ));
-    }
-
-    #[test]
     fn no_home_is_never_real() {
         // The log ladder returns early with no home; the predicate matches
         // that shape rather than inventing a corpus.

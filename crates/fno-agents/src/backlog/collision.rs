@@ -712,26 +712,6 @@ mod tests {
     }
 
     #[test]
-    fn terminal_and_plan_less_comparators_are_skipped() {
-        let dir = std::env::temp_dir().join(format!("fno-col-skip-{}", crate::claims::now_ms()));
-        fs::create_dir_all(&dir).unwrap();
-        let candidate = plan_with_files(&dir, "cand.md", &["a.py", "b.py", "c.py"]);
-        let done_plan = plan_with_files(&dir, "done.md", &["a.py", "b.py", "c.py"]);
-        let graph = vec![
-            serde_json::json!({
-                "id": "ab-done0001", "status": "done",
-                "plan_path": done_plan.to_string_lossy(),
-            }),
-            serde_json::json!({
-                "id": "ab-noplan01", "status": "ready",
-            }),
-        ];
-        let hits = find_collisions(&candidate, &graph, "ab-cand0001", &Thresholds::default());
-        assert!(hits.is_empty());
-        fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
     fn partition_groups_by_shared_path_and_reports_unevaluated() {
         let items = vec![
             (

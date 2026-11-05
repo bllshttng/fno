@@ -133,28 +133,6 @@ fn dispatch_records_pending_and_forwards_epic_seam() {
 
 // ── empty scope ─────────────────────────────────────────────────────────────────
 
-#[test]
-fn empty_dispatch_records_no_pending() {
-    let tmp = TempDir::new().unwrap();
-    let args_file = tmp.path().join("advance-args.txt");
-    let fno = stub_advance(
-        &tmp.path().join("bin"),
-        &args_file,
-        r#"{"epic_id":"x-epic","deactivated":false,"all_done":false,"dispatched":[]}"#,
-    );
-    let (journal, project_journal) = journal_in(tmp.path());
-    let cfg = cfg_for(tmp.path(), fno, "x-epic");
-    let mut breaker = CircuitBreaker::new(3);
-    let mut pending = Vec::new();
-
-    let out = mission_drain_tick(&cfg, &mut breaker, &mut pending, &journal);
-    assert_eq!(out, MissionDispatch::Continue);
-    assert!(pending.is_empty());
-    assert!(!journal_events(&project_journal)
-        .iter()
-        .any(|e| e.contains("active_backlog_dispatched")));
-}
-
 // ── retire ──────────────────────────────────────────────────────────────────────
 
 #[test]

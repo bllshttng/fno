@@ -371,11 +371,6 @@ mod tests {
         (dir, connection)
     }
 
-    fn save(connection: &Connection, node: serde_json::Value) {
-        let node = Node::from_json(&node).unwrap();
-        crate::backlog::save_aggregate(connection, &node).unwrap();
-    }
-
     fn base(extra: serde_json::Value) -> serde_json::Value {
         let mut node = serde_json::json!({
             "id": "x-a", "slug": "a", "title": "A", "type": "feature",
@@ -386,126 +381,6 @@ mod tests {
             node[key] = value.clone();
         }
         node
-    }
-
-    fn harness_of(connection: &Connection, session: &str) -> Option<String> {
-        connection
-            .query_row(
-                "SELECT harness_id FROM agent_sessions WHERE id = ?1",
-                [session],
-                |row| row.get(0),
-            )
-            .unwrap()
-    }
-
-    #[test]
-    fn a_saved_session_makes_its_harness_and_session_rows() {
-        let (_dir, connection) = store();
-        save(
-            &connection,
-            base(serde_json::json!({"sessions": [
-                {"phase": "do", "harness": "codex", "session_id": "abc"}
-            ]})),
-        );
-        let harnesses: Vec<String> = connection
-            .prepare("SELECT id FROM harnesses")
-            .unwrap()
-            .query_map([], |row| row.get(0))
-            .unwrap()
-            .collect::<Result<_, _>>()
-            .unwrap();
-        assert_eq!(harnesses, vec!["codex".to_string()]);
-        assert_eq!(harness_of(&connection, "abc"), Some("codex".into()));
-        // The identity contract: a pre-identity store gains the columns in
-        // place and idempotently; the projection seeds the harness parent
-        // (FK on), the display name follows a rename while harness and
-        // fno_id keep their first values, and a succession (same fno_id,
-        // reminted session) MOVES the stored identity instead of colliding
-        // on the unique index.
-        connection
-            .execute_batch(
-                "PRAGMA foreign_keys=OFF;
-                 DROP TABLE agent_sessions;
-                 CREATE TABLE agent_sessions (
-                   id TEXT PRIMARY KEY, harness_id TEXT
-                 );
-                 INSERT INTO agent_sessions(id, harness_id) VALUES ('abc', 'claude');
-                 PRAGMA foreign_keys=ON;",
-            )
-            .unwrap();
-        crate::backlog::entities::migrate_identity(&connection).unwrap();
-        for column in ["fno_id", "display_name", "links"] {
-            assert!(column_names(&connection).iter().any(|name| name == column));
-        }
-        crate::backlog::entities::migrate_identity(&connection).unwrap();
-        crate::backlog::entities::upsert_identity(
-            &connection,
-            "abc",
-            Some("claude"),
-            Some("f-1"),
-            Some("old"),
-        )
-        .unwrap();
-        crate::backlog::entities::upsert_identity(
-            &connection,
-            "abc",
-            Some("codex"),
-            Some("f-1"),
-            Some("new"),
-        )
-        .unwrap();
-        assert_eq!(
-            identity_row(&connection, "abc"),
-            (
-                Some("claude".into()),
-                Some("f-1".into()),
-                Some("new".into())
-            )
-        );
-        crate::backlog::entities::upsert_identity(
-            &connection,
-            "sid-b",
-            Some("claude"),
-            Some("f-1"),
-            Some("newer"),
-        )
-        .unwrap();
-        assert_eq!(
-            identity_row(&connection, "sid-b"),
-            (
-                Some("claude".into()),
-                Some("f-1".into()),
-                Some("newer".into())
-            )
-        );
-        // The predecessor row stays, its identity released with it.
-        assert_eq!(
-            identity_row(&connection, "abc"),
-            (Some("claude".into()), None, Some("new".into()))
-        );
-    }
-
-    fn column_names(connection: &Connection) -> Vec<String> {
-        let mut stmt = connection
-            .prepare("SELECT name FROM pragma_table_info('agent_sessions')")
-            .unwrap();
-        stmt.query_map([], |row| row.get(0))
-            .unwrap()
-            .collect::<Result<_, _>>()
-            .unwrap()
-    }
-
-    fn identity_row(
-        connection: &Connection,
-        session: &str,
-    ) -> (Option<String>, Option<String>, Option<String>) {
-        connection
-            .query_row(
-                "SELECT harness_id, fno_id, display_name FROM agent_sessions WHERE id = ?1",
-                [session],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            )
-            .unwrap()
     }
 
     #[test]

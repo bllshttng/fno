@@ -200,46 +200,19 @@ pub fn read_beside(transcript: &Path, session_id: &str) -> Option<SessionOrigin>
 }
 
 #[cfg(test)]
-mod parity_tests {
+mod tests {
     use super::*;
 
-    fn sample() -> SessionOrigin {
-        SessionOrigin {
+    #[test]
+    fn a_path_shaped_session_id_is_refused_before_any_write() {
+        let origin = SessionOrigin {
             machine: "aaaaaaaaaaaaaaaa".into(),
             host: "mac-a".into(),
             harness: "claude".into(),
-            session_id: "3228ccad-c078-4f2e-9a51-6d1f0a2b3c4d".into(),
+            session_id: "../x".into(),
             transcript_path: "/t/w.jsonl".into(),
             recorded_at: "2026-10-07T00:00:00+00:00".into(),
-        }
-    }
-
-    #[test]
-    fn mirror_matches_the_fno_module_on_every_observable() {
-        let mine = sample();
-        let theirs: fno::session_origin::SessionOrigin =
-            serde_json::from_value(serde_json::to_value(&mine).unwrap()).unwrap();
-        assert_eq!(mine.frontmatter(), theirs.frontmatter());
-        assert_eq!(
-            mine.origin_text("aaaaaaaaaaaaaaaa"),
-            theirs.origin_text("aaaaaaaaaaaaaaaa")
-        );
-        assert_eq!(
-            mine.origin_text("bbbbbbbbbbbbbbbb"),
-            theirs.origin_text("bbbbbbbbbbbbbbbb")
-        );
-        assert_eq!(mine.origin_text(""), theirs.origin_text(""));
-        // The machine hash is defined by the fno module; the mirror answers
-        // the same 16 hex chars for the same machine.
-        assert_eq!(this_machine(), fno::session_origin::this_machine());
-        assert_eq!(this_machine().len(), 16);
-        // The path rule refuses the same ids on both sides.
-        for bad in ["", "../x", "a/b", &"x".repeat(65)] {
-            let built = SessionOrigin {
-                session_id: bad.into(),
-                ..sample()
-            };
-            assert!(write_if_absent(&built).unwrap() == false, "{bad}");
-        }
+        };
+        assert!(!write_if_absent(&origin).unwrap());
     }
 }

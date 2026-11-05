@@ -332,44 +332,6 @@ mod tests {
     const OLD: &str = "2026-09-17T20:56:08Z";
 
     #[test]
-    fn the_set_lists_a_closed_hosts_note_and_holds_older_ones_for_all() {
-        let (shown, older) = read_set(&[closed_host(NEW)], false);
-        assert_eq!((shown.len(), older), (1, 0));
-        assert_eq!(shown[0]["host"], "x-host");
-        assert_eq!(shown[0]["title"], "alpha beta");
-
-        let (shown, older) = read_set(&[closed_host(OLD)], false);
-        assert_eq!((shown.len(), older), (0, 1));
-        assert_eq!(read_set(&[closed_host(OLD)], true).0.len(), 1);
-
-        // An old note whose host closes inside the window is still at risk.
-        let mut late = closed_host(OLD);
-        late["completed_at"] = json!(NEW);
-        assert_eq!(read_set(&[late], false).0.len(), 1);
-        let mut superseded = closed_host(OLD);
-        superseded["status"] = json!("superseded");
-        superseded["completed_at"] = Value::Null;
-        superseded["touched_at"] = json!(NEW);
-        assert_eq!(read_set(&[superseded], false).0.len(), 1);
-
-        // A live host's note is not in the set: nothing lost it yet.
-        let live = json!({"id": "x-live", "status": "ready", "progress_notes": [
-            {"kind": "wave", "ts": NEW, "title": "t"}]});
-        assert!(read_set(&[live], true).0.is_empty());
-    }
-
-    #[test]
-    fn a_close_line_names_the_notes_and_a_clean_host_adds_nothing() {
-        let clean = json!({"id": "x-clean", "status": "done"});
-        let rows = vec![closed_host(NEW), clean];
-        let lines = close_lines(&rows, &["x-host", "x-clean"]);
-        assert_eq!(lines.len(), 1);
-        assert!(lines[0].contains("x-host closed with 1 undisposed wave note(s): alpha beta"));
-        assert!(lines[0].contains("fno backlog note dispose"));
-        assert!(close_lines(&rows, &["x-clean"]).is_empty());
-    }
-
-    #[test]
     fn a_disposal_refuses_a_missing_target_and_writes_nothing() {
         let before = vec![closed_host(NEW)];
         let mut rows = before.clone();

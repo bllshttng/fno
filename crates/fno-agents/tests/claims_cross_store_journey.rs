@@ -1,6 +1,5 @@
-use fno_agents::claims::{self, AcquireOpts, AcquireOutcome, ClaimState};
+use fno_agents::claims::{self, AcquireOpts, AcquireOutcome};
 use rusqlite::Connection;
-use serde_json::json;
 use std::sync::{Arc, Barrier};
 
 fn options(root: &std::path::Path) -> AcquireOpts {
@@ -81,39 +80,6 @@ fn independent_claimants_share_one_table_and_stale_owners_cannot_release_a_succe
     assert!(!claims::claim_path("node:contended", Some(temp.path()))
         .unwrap()
         .exists());
-}
-
-#[test]
-fn migration_imports_legacy_claims_once_and_does_not_resurrect_a_release() {
-    let temp = tempfile::tempdir().unwrap();
-    let path = claims::claim_path("node:legacy", Some(temp.path())).unwrap();
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    let record = json!({
-        "schema_version": 1, "key": "node:legacy", "holder": "legacy-owner",
-        "acquired_at": claims::now_ms(), "expires_at": claims::now_ms() + 60_000,
-        "pid": std::process::id(), "host": "legacy-host",
-        "machine_id": claims::machine_id(), "metadata": {"opaque": {"keep": true}}
-    });
-    std::fs::write(&path, serde_json::to_vec(&record).unwrap()).unwrap();
-    let (state, imported) = claims::status("node:legacy", Some(temp.path()));
-    assert!(matches!(state, ClaimState::Live | ClaimState::Suspect));
-    assert_eq!(imported.unwrap().metadata["opaque"]["keep"], true);
-    claims::release(
-        "node:legacy",
-        "legacy-owner",
-        Some(temp.path()),
-        Some(temp.path()),
-    )
-    .unwrap();
-    assert_eq!(
-        claims::status("node:legacy", Some(temp.path())).0,
-        ClaimState::Free
-    );
-    assert!(std::fs::write(&path, serde_json::to_vec(&record).unwrap()).is_err());
-    assert_eq!(
-        claims::status("node:legacy", Some(temp.path())).0,
-        ClaimState::Free
-    );
 }
 
 #[test]

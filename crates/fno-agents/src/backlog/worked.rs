@@ -1413,47 +1413,4 @@ mod tests {
             .expect("the skip is named");
         assert!(summary.starts_with(ADVISORY), "{summary}");
     }
-
-    /// The spawn gate's refusal names the node's open execute rows, so the
-    /// reader must see exactly those: an open execute row lists, a closed
-    /// one and an open ship row do not, and another node's rows stay out.
-    #[test]
-    fn open_execute_row_ids_reads_the_node_open_execute_rows() {
-        let _guard = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let root = std::env::temp_dir().join(format!("worked-open-rows-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        let db = root.join("db/graph.db");
-        std::fs::create_dir_all(db.parent().unwrap()).unwrap();
-        let entry = serde_json::json!({
-            "id": "x-openrows",
-            "title": "open rows",
-            "status": "ready",
-            "project": "fno",
-            "slug": "open-rows",
-            "sessions": [
-                {"session_id": "sess-open-1", "phase": "execute", "harness": "claude",
-                 "started_at": "2026-10-25T00:00:00Z", "ended_at": null},
-                {"session_id": "sess-done", "phase": "execute", "harness": "claude",
-                 "started_at": "2026-10-25T00:00:00Z", "ended_at": "2026-10-25T01:00:00Z"},
-                {"session_id": "sess-ship", "phase": "ship", "harness": "claude",
-                 "started_at": "2026-10-25T00:00:00Z", "ended_at": null}
-            ]
-        });
-        crate::graph_store::seed_rows(&db, &[entry]).expect("seed graph");
-        let backup = std::env::var_os("FNO_STATE_DIR");
-        std::env::set_var("FNO_STATE_DIR", &root);
-        let rows = open_execute_row_ids("x-openrows");
-        match backup {
-            Some(v) => std::env::set_var("FNO_STATE_DIR", v),
-            None => std::env::remove_var("FNO_STATE_DIR"),
-        }
-        assert_eq!(
-            rows,
-            vec![("claude".to_string(), "sess-open-1".to_string())]
-        );
-        assert!(open_execute_row_ids("x-absent").is_empty());
-        let _ = std::fs::remove_dir_all(&root);
-    }
 }

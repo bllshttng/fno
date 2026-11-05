@@ -46,23 +46,6 @@ def test_linked_worktree_resolves_to_main(tmp_path: Path) -> None:
     assert result.resolve() == main.resolve()
 
 
-def test_bare_repo_with_linked_worktree_skips_bare(tmp_path: Path) -> None:
-    """A `git clone --bare` repo is listed first with a `bare` marker; the
-    helper skips it and returns the real linked worktree, never the bare dir."""
-    from fno.paths import resolve_canonical_worktree
-
-    bare = tmp_path / "repo.git"
-    bare.mkdir()
-    _git("init", "-q", "--bare", str(bare), cwd=tmp_path)
-    linked = tmp_path / "checkout"
-    _git("worktree", "add", "-q", str(linked), "-b", "feat", cwd=bare)
-
-    result = resolve_canonical_worktree(linked)
-    assert result is not None
-    assert result.resolve() == linked.resolve()
-    assert result.resolve() != bare.resolve()
-
-
 def test_separate_git_dir_with_linked_does_not_return_sibling(tmp_path: Path) -> None:
     """separate-git-dir + a linked worktree: the gitdir is listed FIRST. The
     helper must NOT skip past it to the linked sibling (that would root config

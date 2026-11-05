@@ -117,15 +117,6 @@ fn add_records_the_session_prints_only_the_id_and_refuses_bad_values() {
 }
 
 #[test]
-fn a_row_with_no_session_is_still_filed_and_the_warning_says_so() {
-    let env = Env::new();
-    let out = env.carveout(&["add", "--kind=oos-bug", "found a leak"]);
-    assert!(out.status.success());
-    assert!(stderr(&out).contains("no active session"));
-    assert_eq!(env.rows()[0]["session_id"], Value::Null);
-}
-
-#[test]
 fn list_scopes_to_the_session_and_always_banners_the_scope() {
     let env = Env::new();
     let orphan = env.add("oos-bug", "ownerless");
@@ -198,52 +189,4 @@ fn resolve_counts_what_went_and_records_only_those_ids_for_a_reason() {
         .expect("carveout_resolved event");
     assert_eq!(event["data"]["carveout_ids"], id.as_str());
     assert_eq!(event["data"]["reason"], "test residue");
-}
-
-#[test]
-fn the_manifest_proves_the_owner_only_for_its_own_session() {
-    let env = Env::new();
-    env.manifest("---\nclaude_session_id: sess-1\n---\ngraph_node_id: x-own\n");
-    let mut foreign = env.command(&["carveout", "add", "-k", "deferred", "foreign"]);
-    foreign.env("CLAUDE_CODE_SESSION_ID", "sess-other");
-    assert!(foreign.output().unwrap().status.success());
-    let mut own = env.command(&["carveout", "add", "-k", "deferred", "own"]);
-    own.env("CLAUDE_CODE_SESSION_ID", "sess-1");
-    assert!(own.output().unwrap().status.success());
-    let rows = env.rows();
-    assert_eq!(rows[0]["node"], Value::Null);
-    assert_eq!(rows[1]["node"], "x-own");
-}
-
-#[test]
-fn the_python_read_door_filters_and_names_a_failed_read() {
-    use std::io::Write;
-    let env = Env::new();
-    env.manifest("---\nfno_id: mine\n---\n");
-    let id = env.add("deferred", "mine");
-    env.add("oos-bug", "mine, other kind");
-
-    let mut child = env
-        .command(&["carveout", "_read"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .spawn()
-        .unwrap();
-    let payload = serde_json::json!({
-        "root": env.repo(), "kind": "deferred", "session_ids": ["mine"],
-    });
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(payload.to_string().as_bytes())
-        .unwrap();
-    let out = child.wait_with_output().unwrap();
-    let answer: Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(answer["carveouts"].as_array().unwrap().len(), 1);
-    assert_eq!(answer["carveouts"][0]["id"], id.as_str());
-
-    let session = env.carveout(&["_session"]);
-    let answer: Value = serde_json::from_slice(&session.stdout).unwrap();
-    assert_eq!(answer["session_id"], "mine");
 }

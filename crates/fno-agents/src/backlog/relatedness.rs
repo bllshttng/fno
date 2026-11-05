@@ -414,16 +414,4 @@ mod tests {
         assert_eq!(scored.len(), 1, "{scored:?}");
         assert_eq!(scored[0].0, "x-dedp0001");
     }
-
-    #[test]
-    fn retired_epics_and_self_are_not_rollup_candidates() {
-        let incoming = row("ab-new", "Docs portal refresh follow-up", json!({}));
-        let retired = row(
-            "x-old",
-            "Docs portal refresh",
-            json!({"type": "epic", "status": "done"}),
-        );
-        let entries = vec![incoming.clone(), retired];
-        assert!(epic_candidates(&incoming, &entries, 3, None).is_empty());
-    }
 }

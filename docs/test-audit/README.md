@@ -1,6 +1,6 @@
 # Test-audit campaigns
 
-Running home for footnote's test-cut campaigns: one campaign PR per campaign key, one ledger per campaign in this folder. Method and junk patterns live in the test-audit skill (`skills/test-audit/`). Footnote campaigns run the keep rule below, which replaces the skill's value bar, retention bar and ledger shape. Target: at most 15,447 declarations, half the 30,893 measured at 325d7e4ddb (2026-09-28).
+Running home for footnote's test-cut campaigns: one campaign PR per campaign key, one ledger per campaign in this folder. Method and junk patterns live in the test-audit skill (`skills/test-audit/`). Footnote campaigns run the keep rule below, which replaces the skill's value bar, retention bar and ledger shape. Target: at most 4,895 collected cases, half the 9,793 collected at 7ed2466c8c (2026-11-05). The declaration census reads 9,834 there, so its proxy target is 4,917. The Python ports met the earlier target of 15,447 declarations, half the 30,893 measured at 325d7e4ddb.
 
 ## Census
 
@@ -11,11 +11,19 @@ git ls-files -z '*.py' | xargs -0 grep -hcE '^[[:space:]]*(async )?def test_' | 
 git ls-files -z 'crates/*.rs' | xargs -0 grep -hcE '#\[(tokio::)?test' | awk '{s+=$1} END {print s}'
 ```
 
-At 325d7e4ddb: 19,570 Python declarations in 1,115 files. 11,323 Rust in 772 files. 30,893 total, before parametrize expansion. The Rust command is the prefix form `'#\[(tokio::)?test'`: the `\]`-terminated form misses 92 `#[tokio::test(flavor ...)]` declarations.
+At 7ed2466c8c: 533 Python declarations and 9,301 Rust, 9,834 total. At 325d7e4ddb: 19,570 Python declarations in 1,115 files. 11,323 Rust in 772 files. 30,893 total, before parametrize expansion. The Rust command is the prefix form `'#\[(tokio::)?test'`: the `\]`-terminated form misses 92 `#[tokio::test(flavor ...)]` declarations.
 
 ## Keep rule
 
 One contract, one keeper. The burden sits on the test. A deletion owes no per-test evidence.
+
+Law d-e016ab8e adds these rules:
+
+- Measure collected cases and CI job minutes, not declarations. A fold that keeps every row counts as zero.
+- A parametrize table keeps at most three rows per contract: the happy path, the refusal and one edge.
+- A fail-closed guard keeps one refusal case, not one case per branch or lexer token.
+- When a surface has a real-command or integration test, delete the unit tests of the internals beneath it.
+- Each campaign scope cuts at least half of its collected cases. A ledger can stop short only by naming each kept test's sole contract and its credible failure.
 
 - When its ledger row names the one contract a test alone guards, the test stays. It must also name a credible failure that turns it red. A test that cannot name both is deleted.
 - When several tests guard one contract, keep the strongest boundary (the real command, store or transport). Delete the rest.
@@ -30,21 +38,27 @@ One contract, one keeper. The burden sits on the test. A deletion owes no per-te
 
 ## Campaigns
 
-Ten campaigns, K1 to K10, run in key order, one PR each. Two or three can run at once. The map (`campaign-map.tsv`) is the scope contract: a campaign edits only files its key names, plus its own ledger. Each campaign re-baselines on the origin/main it starts from. The before-count can drift from the one here. The ceiling moves with the recount. A PR's bound is the 3,000 added-line cap, not a declaration split. Expected landing zone is 45 percent kept, about 13,900 declarations.
+Four groups, G1 to G4, one PR each (ruling d-9f158122). G1 runs first and rebuilds the map. G2 to G4 then run together. The map (`campaign-map.tsv`) is the scope contract: a group edits only files its key names, plus its own ledger. Each group re-baselines on the origin/main it starts from.
 
-| Key | Scope | Py | Rust | Total | Files | Ceiling | Ledger |
-|---|---|---:|---:|---:|---:|---:|---|
-| K1 | tooling (CI gates, hooks, lint, skills, repo tests/, goldens, benchmarks) plus config, paths, setup, doctor, update, worktree | 2,675 | 333 | 3,008 | 185 | 1,504 | [k1-campaign.md](k1-campaign.md) |
-| K2 | spawn and dispatch | 2,093 | 518 | 2,611 | 152 | 1,306 | [k2-campaign.md](k2-campaign.md) |
-| K3 | session registry, watchdog, discover, recovery, reap, role | 2,534 | 535 | 3,069 | 163 | 1,535 | [k3-campaign.md](k3-campaign.md) |
-| K4 | harness adapters and providers (cli/src/fno/adapters colocated tests, harnesses, claude/codex Rust) | 1,593 | 669 | 2,262 | 122 | 1,131 | [k4-campaign.md](k4-campaign.md) |
-| K5 | graph store, board, backlog commands, claims, carveouts | 3,547 | 999 | 4,546 | 273 | 2,273 | [k5-campaign.md](k5-campaign.md) |
-| K6 | pr, review, merge, pr_watch, mail, bus, events, relay, inbox, decide | 3,208 | 1,041 | 4,249 | 236 | 2,125 | [k6-campaign.md](k6-campaign.md) |
-| K7 | plan, retro, scoreboard, provenance, evals, target | 1,773 | 476 | 2,249 | 132 | 1,125 | [k7-campaign.md](k7-campaign.md) |
-| K8 | mux crate (all of crates/fno) | 0 | 3,012 | 3,012 | 204 | 1,506 | [k8-campaign.md](k8-campaign.md) |
-| K9 | loopcheck, finalize, daemon, gc, lead, role, lead, heal | 0 | 2,200 | 2,200 | 99 | 1,100 | [k9-campaign.md](k9-campaign.md) |
-| K10 | long tail (everything the other keys did not claim) | 2,147 | 1,540 | 3,687 | 321 | 1,844 | [k10-campaign.md](k10-campaign.md) |
+The path rule classes each `*.py` and `crates/*.rs` file with a declaration. A file belongs to the first group whose rule matches:
+
+1. G4: `^crates/fno/`
+2. G1: any `.py` file, except `cli/src/fno/**`
+3. G3: `loopcheck|loop_|finalize|daemon|gc_|gc/|lead|heal|watchdog|sweep|reap|recovery|pr_|review|merge|mail|bus|event|relay|inbox|plan|retro|scoreboard|provenance|eval|target|ship|ci_`
+4. G1: `backlog|graph|claim|state|node|org_|question|attention|outstanding|law|board|carveout|session|team|fleet|active|orphans|needs|intake|decision|roadmap`
+5. G2: every other `crates/fno-agents` path
+
+`cli/src/fno/paths_testing.py` holds one declaration and stays unmapped as `-`.
+
+| Key | Scope | Collected at 7ed2466c8c | Target | Declarations | Ledger |
+|---|---|---:|---:|---:|---|
+| G1 | graph, backlog, claims and the Python remainder | 1,845 | 922 | 1,838 | [g1-campaign.md](g1-campaign.md) |
+| G2 | spawn, harness adapters, providers, hooks and the rest of fno-agents | 2,704 | 1,352 | 2,752 | g2-campaign.md |
+| G3 | loopcheck, finalize, daemon, lead, PR, review, merge, mail, events, plan and target | 2,511 | 1,255 | 2,499 | g3-campaign.md |
+| G4 | the fno mux crate | 2,733 | 1,366 | 2,744 | g4-campaign.md |
+
+The K1 to K10 campaigns of 2026-09-28 are retired. K1, K2, K8 and K9 kept their ledgers in this folder.
 
 ## Ledgers
 
-Each campaign writes `docs/test-audit/k<N>-campaign.md` and never edits this README. Parallel campaigns share no file. The table above links the ten ledgers once. Ledger shape: a header with the base sha, declarations before and after, and collected cases before and after. Then one row per in-scope test file: `file | before | after | contracts kept`. Name each kept contract once with its credible failure. The preservation spot-check (five kept contracts, one mutation each, keeper goes red) is recorded in the ledger.
+Each group writes `docs/test-audit/g<N>-campaign.md`. Only G1 edits this README. Parallel groups share no file. Ledger shape: a header with the base sha, declarations before and after, and collected cases before and after. Then one row per in-scope test file: `file | before | after | contracts kept`. Name each kept contract once with its credible failure. The preservation spot-check (five kept contracts, one mutation each, keeper goes red) is recorded in the ledger.

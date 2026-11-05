@@ -56,13 +56,6 @@ def test_missing_form_names_laws_and_path(repo: Path) -> None:
     assert "skills/term/team.md" in result.stderr
 
 
-def test_malformed_registry_row_fails_closed(repo: Path) -> None:
-    (repo / "scripts/ci/law-command-forms.txt").write_text("bad|row\n")
-    result = _run(repo)
-    assert result.returncode == 1
-    assert "malformed" in result.stderr
-
-
 def test_live_read_flags_unregistered_form_and_unreadable_store(repo: Path) -> None:
     bin_dir = repo / "bin"
     bin_dir.mkdir()

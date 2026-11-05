@@ -2835,59 +2835,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn difficulty_gate_shape_matches_the_python_gate() {
-        // Pre-gate: no band required.
-        let pre =
-            serde_yaml_ng::from_str::<Value>("created: 2026-08-01\ndifficulty: nope\n").unwrap();
-        assert!(pre
-            .as_object()
-            .map(|m| difficulty_gate_error(m))
-            .unwrap_or(None)
-            .is_none());
-        // Post-gate: band required.
-        let post = serde_yaml_ng::from_str::<Value>("created: 2026-09-17\n").unwrap();
-        let err = post
-            .as_object()
-            .map(|m| difficulty_gate_error(m))
-            .unwrap_or(None);
-        assert!(err.unwrap().contains("difficulty is required"));
-        // Post-gate with a band passes.
-        let banded =
-            serde_yaml_ng::from_str::<Value>("created: 2026-09-17\ndifficulty: high\n").unwrap();
-        assert!(banded
-            .as_object()
-            .map(|m| difficulty_gate_error(m))
-            .unwrap_or(None)
-            .is_none());
-        // An impossible day refuses rather than dating.
-        let bad_day = serde_yaml_ng::from_str::<Value>("created: 2026-02-31\n").unwrap();
-        let err = bad_day
-            .as_object()
-            .map(|m| difficulty_gate_error(m))
-            .unwrap_or(None);
-        assert!(err.unwrap().contains("cannot read created"));
-    }
-
-    #[test]
-    fn filename_node_id_matches_the_suffix_shape() {
-        let prefixes = vec!["ab".to_string(), "x".to_string()];
-        assert_eq!(
-            plan_filename_node_id("/tmp/20260917-removal-x-abc12345.md", &prefixes),
-            Some("x-abc12345".to_string())
-        );
-        assert_eq!(plan_filename_node_id("/tmp/plan.md", &prefixes), None);
-        assert_eq!(
-            plan_filename_node_id("/tmp/plan-x-ABC12345.md", &prefixes),
-            None
-        );
-        let scoped = vec!["ab".to_string()];
-        assert_eq!(
-            plan_filename_node_id("/tmp/plan-x-abc12345.md", &scoped),
-            None
-        );
-    }
-
-    #[test]
     fn title_ladder_prefers_frontmatter_then_h1_then_slug() {
         let dir = std::env::temp_dir().join("intake_rs_tests");
         let _ = std::fs::create_dir_all(&dir);

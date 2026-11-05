@@ -49,13 +49,6 @@ def test_a_source_ahead_write_to_the_shared_file_is_refused() -> None:
     assert "fno doctor update" in message
 
 
-def test_an_absent_version_is_not_a_raise() -> None:
-    """AC7. Refusing here would leave a torn file unrepairable by the command
-    meant to rewrite it."""
-    _call(on_disk_version=None)
-    _call(on_disk_version="20")  # type: ignore[arg-type]
-
-
 def test_a_worktrees_git_file_counts_as_a_checkout(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

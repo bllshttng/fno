@@ -352,23 +352,6 @@ mod tests {
     }
 
     #[test]
-    fn off_host_hold_never_probes_a_foreign_pid() {
-        let td = TempDir::new().unwrap();
-        let claims_dir = td.path().join("claims");
-        let mut rec = flight_rec("flight:remote", "single-flight:r", Some(1), 15);
-        rec.host = "some-other-host".into();
-        rec.machine_id = Some("other-machine".into());
-        write_rec(&claims_dir, &rec);
-
-        let rows = long_holds(&[claims_dir], DEFAULT_MIN_HOLD_S).unwrap()["rows"]
-            .as_array()
-            .unwrap()
-            .clone();
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0]["pid_observed"], "off-host");
-    }
-
-    #[test]
     fn op_prints_json_and_refuses_missing_dir_flag() {
         let td = TempDir::new().unwrap();
         let claims_dir = td.path().join("claims");

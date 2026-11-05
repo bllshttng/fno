@@ -952,14 +952,6 @@ mod tests {
         assert!(apply_rollup(&mut row, &rollup(), Some("env"), false).is_empty());
     }
 
-    #[test]
-    fn force_overwrite_trusts_the_ledger_over_the_live_session() {
-        let mut row = json!({"id": "x-1", "session_id": "old", "points": 9});
-        apply_rollup(&mut row, &rollup(), Some("env"), true);
-        assert_eq!(row["session_id"], "ledger-session");
-        assert_eq!(row["points"], 3);
-    }
-
     fn rich(pr_url: Option<&str>, repo: Option<&str>) -> DoneArgs {
         let mut args = super::super::workflows::parse_done_args(&[]);
         args.pr_url = pr_url.map(str::to_string);

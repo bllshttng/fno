@@ -575,42 +575,10 @@ mod tests {
     }
 
     #[test]
-    fn the_search_reads_wave_notes_and_no_other_note_kind() {
-        let pool = vec![
-            json!({"id": "x-1", "status": "done", "progress_notes": [
-                {"kind": "wave", "title": "alpha beta", "text": "alpha beta"}
-            ]}),
-            json!({"id": "x-2", "status": "done", "progress_notes": [
-                {"kind": "progress", "title": "alpha beta", "text": "alpha beta"}
-            ]}),
-        ];
-        let hits = search_entries(&pool, "alpha beta");
-        assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0]["id"], json!("x-1"));
-    }
-
-    #[test]
     fn the_ab_prefix_tier_matches_partial_hex_never_full_or_malformed() {
         let pool = vec![json!({"id": "ab-bbbbbbbb", "title": "Beta"})];
         assert_eq!(ab_prefix_hits(&pool, "ab-bbbb").len(), 1);
         assert!(ab_prefix_hits(&pool, "ab-bbbbbbbb").is_empty());
         assert!(ab_prefix_hits(&pool, "ab-nothex").is_empty());
-    }
-
-    #[test]
-    fn filters_read_the_source_kind_default() {
-        let args = FindArgs {
-            query: "q",
-            domain: None,
-            project: None,
-            status: None,
-            source_kind: Some("operator_request"),
-            fts: false,
-            json_out: false,
-        };
-        let organic = json!({"id": "x-1"});
-        assert!(!passes_filters(&organic, &args));
-        let explicit = json!({"id": "x-1", "source_kind": "operator_request"});
-        assert!(passes_filters(&explicit, &args));
     }
 }

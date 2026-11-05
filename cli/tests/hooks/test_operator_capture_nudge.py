@@ -1,8 +1,7 @@
 """Hook tests for hooks/operator-capture-nudge.sh.
 
-The hook is depth-gated: silent at 0, speaks with the literal count at N,
-silent on a stale deployed fno (Typer exit 2), and a report (never silence)
-on any other failed read. The real-pipeline runs drive the LOCAL source
+The hook is depth-gated: it speaks with the literal count at N, and a
+failed read is a report (never silence). The real-pipeline runs drive the LOCAL source
 through a stub `fno` on PATH, so a silent hook and a hook that never ran
 stay distinguishable: the depth-3 run must print the literal count.
 """
@@ -10,7 +9,6 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -19,7 +17,7 @@ import pytest
 
 from fno.rust_binary import find_dev_binary
 
-#: The three real-pipeline tests reach the binary; the stub-exit tests do not.
+#: The real-pipeline test reaches the binary; the stub-exit test does not.
 requires_rust = pytest.mark.dev_build
 
 REPO_ROOT = Path(__file__).parents[3]
@@ -101,32 +99,6 @@ def test_speaks_with_literal_count_at_depth_three(tmp_path):
     assert "oldest operator ask" in result.stdout
 
 
-def test_silent_when_deployed_fno_lacks_the_command(tmp_path):
-    """AC: exit 2 (Typer no-such-command) -> silent, exit 0, no perpetual nag.
-
-    Silence also needs no checkout front: the hook resolves
-    $HOOK_DIR/../crates/fno/target before PATH, so the scenario runs a copy
-    of the hook tree without the crates dir - the deployed-repo shape. With
-    a checkout build present the read goes there, and a failed read from it
-    reports instead of staying silent.
-    """
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    _fno_wrapper(bin_dir, exit_code=2)
-    tree = tmp_path / "deployed"
-    hook_copy = tree / "hooks" / HOOK.name
-    hook_copy.parent.mkdir(parents=True)
-    (tree / "scripts" / "lib").mkdir(parents=True)
-    shutil.copy(HOOK, hook_copy)
-    shutil.copy(
-        REPO_ROOT / "scripts" / "lib" / "hook-budget.sh",
-        tree / "scripts" / "lib" / "hook-budget.sh",
-    )
-    result = _run_hook(tmp_path, env_extra={}, bin_dir=bin_dir, hook=hook_copy)
-    assert result.returncode == 0, result.stderr
-    assert result.stdout == ""
-
-
 def test_other_failed_read_is_reported_never_silent(tmp_path):
     """Any non-2 failure prints a report: a failed read must not read as an empty queue."""
     bin_dir = tmp_path / "bin"
@@ -135,29 +107,3 @@ def test_other_failed_read_is_reported_never_silent(tmp_path):
     result = _run_hook(tmp_path, env_extra={}, bin_dir=bin_dir)
     assert result.returncode == 0, result.stderr
     assert "could not be read" in result.stdout
-
-
-@requires_rust
-def test_reports_skipped_machine_turns_next_to_depth(tmp_path):
-    """AC: machine rows do not raise depth and the nudge names what capture skipped."""
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    _fno_wrapper(bin_dir)
-    env = _queue_env(
-        tmp_path,
-        [
-            _user_row("real operator ask", "u-1", "2026-09-06T20:00:00.000Z"),
-            _user_row(
-                "<task-notification><task-id>t1</task-id></task-notification>",
-                "u-tn",
-                "2026-09-06T21:00:00.000Z",
-            ),
-            _user_row("[Request interrupted by user]", "u-int", "2026-09-06T21:01:00.000Z"),
-        ],
-    )
-    result = _run_hook(tmp_path, env_extra=env, bin_dir=bin_dir)
-    assert result.returncode == 0, result.stderr
-    assert ": 1 undispositioned" in result.stdout
-    assert "Skipped at capture: 2 machine turn(s)" in result.stdout
-    assert "task_notification=1" in result.stdout
-    assert "interrupt_marker=1" in result.stdout

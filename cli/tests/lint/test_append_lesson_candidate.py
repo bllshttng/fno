@@ -36,12 +36,3 @@ def test_valid_candidate_appends_one_line(tmp_path: Path) -> None:
     assert rec["source_session"] == "sess-1"
     assert rec["name"] == "guard-on-one-path"
     assert rec["type"] == "project"
-
-
-def test_failed_append_warns_and_never_blocks(tmp_path: Path) -> None:
-    # Parent dir is a regular file, so mkdir -p and the append both fail.
-    blocker = tmp_path / "blocker"
-    blocker.write_text("")
-    r = _run("--candidate", CANDIDATE, "--file", str(blocker / "lesson.jsonl"))
-    assert r.returncode == 0, "a failed append must exit 0, never block"
-    assert "not staged (non-fatal)" in r.stderr

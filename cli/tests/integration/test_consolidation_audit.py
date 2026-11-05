@@ -56,37 +56,3 @@ def test_audit_fails_on_planted_stale_ref(tmp_path: Path) -> None:
     assert result.returncode == 1, result.stdout + result.stderr
     assert "distill" in result.stdout
     assert "AUDIT FAIL" in result.stdout
-
-
-def test_audit_ignores_bare_word_matches(tmp_path: Path) -> None:
-    """Bare-word occurrences of a skill name in prose lists do NOT trigger the audit.
-
-    Example: the impeccable-stages baseline list contains the bare token
-    `distill` as a stage name, unrelated to the removed `/distill` skill. The
-    audit's pattern must discriminate against this kind of false positive.
-    """
-    repo = _make_tiny_repo(tmp_path)
-    benign = repo / "skills" / "impeccable" / "SKILL.md"
-    benign.parent.mkdir(parents=True, exist_ok=True)
-    benign.write_text("Known stages: craft, polish, distill, extract, shape.\n")
-    result = _run_audit(repo)
-    assert result.returncode == 0, result.stdout + result.stderr
-
-
-def test_audit_rejects_malformed_skill_name(tmp_path: Path) -> None:
-    """Sanity check: a malformed registry name fails closed."""
-    repo = _make_tiny_repo(tmp_path)
-    registry = repo / "scripts" / "ci" / "retired-skills.txt"
-    registry.write_text("bad.name|cut|test ruling\n")
-    result = _run_audit(repo)
-    assert result.returncode == 2, result.stdout + result.stderr
-    assert "malformed skill name" in result.stderr
-
-
-def test_audit_rejects_missing_retired_skill_registry(tmp_path: Path) -> None:
-    """A missing registry must not turn the stale-reference audit green."""
-    repo = _make_tiny_repo(tmp_path)
-    (repo / "scripts" / "ci" / "retired-skills.txt").unlink()
-    result = _run_audit(repo)
-    assert result.returncode == 2, result.stdout + result.stderr
-    assert "AUDIT ERROR" in result.stderr

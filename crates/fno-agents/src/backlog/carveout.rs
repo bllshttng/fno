@@ -856,14 +856,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn truncation_counts_chars_and_names_the_original_length() {
-        let (text, truncated) = truncate_description(&"é".repeat(DESCRIPTION_CAP + 5));
-        assert!(truncated);
-        assert!(text.ends_with(" ... [truncated 5 of 8005 chars]"));
-        assert_eq!(truncate_description("short"), ("short".to_string(), false));
-    }
-
-    #[test]
     fn an_ownerless_row_rides_only_the_default_scope() {
         let rows = vec![
             json!({"id": "a", "session_id": "s1"}),

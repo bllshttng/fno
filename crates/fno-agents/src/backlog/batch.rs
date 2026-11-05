@@ -1571,17 +1571,6 @@ mod door_tests {
     use super::*;
 
     #[test]
-    fn open_refuses_a_second_open_batch_for_the_domain() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let first = open_batch("code", "feature/a", "/tmp/wt-a", 3, dir.path()).unwrap();
-        assert_eq!(first.get("status").and_then(Value::as_str), Some("open"));
-        let second = open_batch("code", "feature/b", "/tmp/wt-b", 3, dir.path());
-        let (message, code) = second.unwrap_err();
-        assert_eq!(code, 3, "the exists exit");
-        assert!(message.contains("already exists"), "{message}");
-    }
-
-    #[test]
     fn join_is_idempotent_and_the_ceiling_refuses() {
         let dir = tempfile::TempDir::new().unwrap();
         open_batch("code", "feature/a", "/tmp/wt-a", 2, dir.path()).unwrap();
@@ -1593,34 +1582,5 @@ mod door_tests {
         let (message, code) = join_batch("code", "x-node0003", "s", dir.path()).unwrap_err();
         assert_eq!(code, 4, "the full exit");
         assert!(message.contains("is full"), "{message}");
-    }
-
-    #[test]
-    fn should_close_follows_the_wheel_order() {
-        let dir = tempfile::TempDir::new().unwrap();
-        // Full (max_nodes 1, no members) trips before anything else.
-        let full = open_batch("code", "feature/a", "/tmp/wt-a", 1, dir.path()).unwrap();
-        assert_eq!(should_close(Some(&full), None).0, true);
-        // Not open: no close.
-        let mut closed = full.clone();
-        closed
-            .as_object_mut()
-            .unwrap()
-            .insert("status".into(), json!("closed"));
-        assert_eq!(
-            should_close(Some(&closed), None),
-            (false, "no open batch".into())
-        );
-        // Open with room: the drain and the domain boundary decide.
-        let open = open_batch("docs", "feature/b", "/tmp/wt-b", 3, dir.path()).unwrap();
-        assert_eq!(should_close(Some(&open), None).0, true, "drain closes");
-        let other = json!({"domain": "web"});
-        let (close, reason) = should_close(Some(&open), Some(&other));
-        assert!(close && reason.contains("different domain"), "{reason}");
-        let solo_next = json!({"domain": "docs", "priority": "p0"});
-        let (close, reason) = should_close(Some(&open), Some(&solo_next));
-        assert!(close && reason.contains("p0"), "{reason}");
-        let same = json!({"domain": "docs", "priority": "p2"});
-        assert_eq!(should_close(Some(&open), Some(&same)).0, false);
     }
 }

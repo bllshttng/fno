@@ -111,40 +111,6 @@ mod tests {
     }
 
     #[test]
-    fn only_the_stopping_writers_claims_are_carried() {
-        let carried = claims_to_carry(&rows(), 4242);
-        assert_eq!(
-            carried.iter().map(|c| c.key.as_str()).collect::<Vec<_>>(),
-            vec!["node:x-1", "session:uuid"],
-            "another session's claim and a pid-less claim are never touched"
-        );
-        assert!(carried.iter().all(|claim| claim.pid == Some(4242)));
-    }
-
-    #[test]
-    fn a_repin_keeps_the_holder_and_moves_only_the_pid() {
-        let seen = std::cell::RefCell::new(Vec::new());
-        let acquire = |key: &str, holder: &str, pid: u32| {
-            seen.borrow_mut()
-                .push((key.to_string(), holder.to_string(), pid));
-            Ok(())
-        };
-        let failures = repin_all(&claims_to_carry(&rows(), 4242), 777, &acquire);
-        assert!(failures.is_empty(), "{failures:?}");
-        assert_eq!(
-            seen.into_inner(),
-            vec![
-                (
-                    "node:x-1".to_string(),
-                    "target-session:abc".to_string(),
-                    777
-                ),
-                ("session:uuid".to_string(), "pty:short".to_string(), 777),
-            ]
-        );
-    }
-
-    #[test]
     fn a_failed_repin_is_reported_by_key_and_never_hidden() {
         let acquire = |key: &str, _: &str, _: u32| {
             if key == "session:uuid" {

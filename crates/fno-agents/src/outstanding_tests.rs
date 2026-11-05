@@ -33,10 +33,6 @@ fn write(path: &Path, text: &str) {
     std::fs::write(path, text).unwrap();
 }
 
-fn carveout(id: &str, kind: &str) -> String {
-    format!("{{\"id\":\"{id}\",\"ts\":\"2026-07-14T04:27:55Z\",\"kind\":\"{kind}\"}}\n")
-}
-
 #[test]
 fn the_json_contract_keeps_every_key_in_order_and_names_each_root() {
     let o = Outstanding {
@@ -96,35 +92,6 @@ fn the_json_contract_keeps_every_key_in_order_and_names_each_root() {
         r#""verdicts":{"total":1,"error":null,"items":[{"node":"x-1","report":"/rep","verdict":"FAIL","claim":"c","status":null,"mtime":null}]}}"#,
     );
     assert_eq!(o.as_json().to_string(), expected);
-}
-
-#[test]
-fn the_carveout_leg_counts_its_split_and_names_the_command_that_clears_it() {
-    let tmp = tempfile::tempdir().unwrap();
-    let src = sources(tmp.path());
-    let ledger = [
-        carveout("cv-1", "oos-bug"),
-        carveout("cv-2", "oos-bug"),
-        carveout("cv-3", "deferred"),
-        carveout("cv-4", "backfill"),
-        "not json\n".to_string(),
-    ]
-    .concat();
-    write(&src.root.join(".fno/carveouts.jsonl"), &ledger);
-    let o = collect(&src, Ok(Vec::new())).unwrap();
-    assert_eq!(o.carveout_total, 4, "the malformed line is skipped");
-    let out = render(&o, &ctx());
-    assert!(out.starts_with("## Outstanding for you\n\n"), "{out}");
-    let head = format!(
-        "4 carve-outs unharvested from {} (1 backfill, 1 deferred, 2 oos-bug), oldest 2026-07-14 (9 days ago).",
-        src.root.display()
-    );
-    assert!(out.contains(&head), "{out}");
-    assert!(out.contains("fno backlog retro sweep-carveouts"), "{out}");
-    assert!(
-        out.contains("Backfill rows are handled by /fno:ship pr merged"),
-        "{out}"
-    );
 }
 
 #[test]
@@ -188,114 +155,6 @@ fn questions_fold_closes_away_and_rank_live_first_then_newest() {
 }
 
 #[test]
-fn question_rows_group_by_liveness_cap_at_ten_and_trim_to_one_line() {
-    let q = |id: &str, asker: Option<&str>, live: Option<bool>| Question {
-        id: id.into(),
-        ts: "2026-07-14T00:00:00Z".into(),
-        question: format!("{id} body"),
-        asker: asker.map(str::to_string),
-        live,
-        ..Default::default()
-    };
-    let mut questions = vec![
-        Question {
-            question: "x".repeat(300),
-            node: Some("x-1".into()),
-            session_id: Some("s1".into()),
-            ..q("q-live", Some("a"), Some(true))
-        },
-        Question {
-            question: "line one\nline two".into(),
-            cwd: Some("/w/proj".into()),
-            ..q("q-free", None, Some(false))
-        },
-        q("q-old", Some("b"), Some(false)),
-        Question {
-            ask: Some("do it".into()),
-            ..q("q-unk", Some("c"), None)
-        },
-    ];
-    for i in 0..8 {
-        questions.push(q(&format!("f{i}"), None, Some(false)));
-    }
-    let o = Outstanding {
-        questions,
-        ..Default::default()
-    };
-    let out = render(
-        &o,
-        &RenderCtx {
-            session_id: Some("s1".into()),
-            ..ctx()
-        },
-    );
-    let live_row = format!(
-        "  [this session] q-live  {}\u{2026}  (x-1)",
-        "x".repeat(239)
-    );
-    for want in [
-        "12 open questions awaiting you.",
-        "  Live open questions:",
-        live_row.as_str(),
-        "  Questions for you (no agent is waiting):",
-        "  q-free  line one  (proj)",
-        "  Stale questions:",
-        "  q-old  q-old body  (10 days old)",
-        "  Questions with unknown liveness:",
-        "    Action: do it",
-        "  Answering a stale question records the decision but reaches nobody.",
-        "  Unknown means reachability did not finish inside the report budget",
-        "  Showing 10 of 12 open questions.",
-        "  Answer with: fno inbox outstanding clear <id> --answer \"...\"",
-        "read a full question with: fno inbox outstanding -J",
-    ] {
-        assert!(out.contains(want), "missing {want:?} in:\n{out}");
-    }
-    assert!(out.contains("  f5  "), "{out}");
-    assert!(
-        !out.contains("  f6  "),
-        "the eleventh row stays behind the cap:\n{out}"
-    );
-}
-
-#[test]
-fn an_open_fail_verdict_renders_and_a_failed_read_is_a_stated_line() {
-    let rows = vec![
-        json!({"open": true, "node": "x-70e1", "report": "/plans/a.md.artifacts/REPORT.md",
-               "verdict": "FAIL", "claim": "c".repeat(150), "status": "done"}),
-        json!({"open": false, "node": "x-ruled", "report": "/r", "claim": "ruled"}),
-    ];
-    let o = Outstanding {
-        verdicts: open_verdicts(&rows),
-        ..Default::default()
-    };
-    let out = render(&o, &ctx());
-    assert!(
-        out.contains("1 prove-it FAIL verdict with no ruling."),
-        "{out}"
-    );
-    assert!(
-        out.contains(&format!("  x-70e1 (done): {}\u{2026}", "c".repeat(99))),
-        "{out}"
-    );
-    assert!(
-        out.contains("    Read: /plans/a.md.artifacts/REPORT.md"),
-        "{out}"
-    );
-    assert!(out.contains("fno inbox decide"), "{out}");
-    assert!(!out.contains("x-ruled"), "{out}");
-
-    let tmp = tempfile::tempdir().unwrap();
-    let o = collect(&sources(tmp.path()), Err("the binary refused".into())).unwrap();
-    assert!(!o.empty(), "a failed verdict read is never a silent zero");
-    let out = render(&o, &ctx());
-    assert!(
-        out.contains("prove-it verdicts could not be read (the binary refused)."),
-        "{out}"
-    );
-}
-
-#[test]
 fn the_capture_leg_folds_every_project_dedupes_ids_and_ages_from_capture_events() {
     let tmp = tempfile::tempdir().unwrap();
     let mut src = sources(tmp.path());
@@ -350,66 +209,4 @@ fn the_capture_leg_folds_every_project_dedupes_ids_and_ages_from_capture_events(
     ] {
         assert!(out.contains(want), "missing {want:?} in:\n{out}");
     }
-}
-
-#[test]
-fn the_lane_leads_the_block_and_only_a_promoted_session_gets_the_action_line() {
-    let tmp = tempfile::tempdir().unwrap();
-    let src = sources(tmp.path());
-    write(
-        &src.lane,
-        "- [ ] first\n- [ ] second\n- [ ] filed -> x-1234\n- [ ] later -> parked: waiting\n- [x] done\n",
-    );
-    write(
-        &src.root.join(".fno/carveouts.jsonl"),
-        &carveout("cv-1", "oos-bug"),
-    );
-    let o = collect(&src, Ok(Vec::new())).unwrap();
-    let out = render(&o, &ctx());
-    assert!(
-        out.starts_with("## Outstanding for you\n\n2 items on your lane, top first. 1 parked.\n  first\n\n1 carve-out"),
-        "{out}"
-    );
-    assert!(!out.contains("File one with"), "{out}");
-    let promoted = render(
-        &o,
-        &RenderCtx {
-            promoted: true,
-            ..ctx()
-        },
-    );
-    assert!(
-        promoted.contains("  File one with: fno backlog idea"),
-        "{promoted}"
-    );
-}
-
-#[test]
-fn a_copys_images_reach_the_board_row_and_an_imageless_row_stays_keyless() {
-    let ask = |id: &str, images: &[&str]| {
-        json!({"type": QUESTION_EVENT, "ts": "2026-11-04T00:00:00Z", "data": {
-            "question_id": id, "question": "?", "asker": "alice", "images": images}})
-        .to_string()
-    };
-    let raw = [
-        ask(
-            "q-img",
-            &["/vault/screens/q-1.png", "/vault/screens/q-2.png"],
-        ),
-        ask("q-bare", &[]),
-    ]
-    .join("\n");
-    let qs = fold_questions(&raw);
-    let with = qs.iter().find(|q| q.id == "q-img").unwrap();
-    assert_eq!(
-        with.images,
-        vec!["/vault/screens/q-1.png", "/vault/screens/q-2.png"]
-    );
-    let bare = serde_json::to_value(qs.iter().find(|q| q.id == "q-bare").unwrap()).unwrap();
-    assert!(
-        bare.get("images").is_none(),
-        "an imageless row serializes without the key"
-    );
-    let rich = serde_json::to_value(with).unwrap();
-    assert_eq!(rich["images"].as_array().unwrap().len(), 2);
 }

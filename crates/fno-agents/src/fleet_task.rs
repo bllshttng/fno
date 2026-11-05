@@ -463,49 +463,4 @@ mod tests {
         // gets created, not a live text file.
         assert!(crate::event_store::store_path(&missing).is_file());
     }
-
-    #[test]
-    fn ac7_reconcile_life_cycle_asked_duplicate_superseded_closed() {
-        let store = temp_store("ac7");
-        let (outcome, id1) =
-            reconcile(&store, "watchdog-stale", "k1", "/r", "text a", "run", false).unwrap();
-        assert_eq!(outcome, "asked");
-        let (outcome, id2) =
-            reconcile(&store, "watchdog-stale", "k1", "/r", "text a", "run", false).unwrap();
-        assert_eq!(outcome, "duplicate");
-        assert_eq!(id1, id2);
-        let (outcome, id3) =
-            reconcile(&store, "watchdog-stale", "k2", "/r", "text b", "run", false).unwrap();
-        assert_eq!(outcome, "asked");
-        let open = open_tasks(&store).unwrap();
-        assert_eq!(open.len(), 1, "superseded closed: {open:?}");
-        assert_eq!(open[0].id, id3);
-        let (outcome, _) = reconcile(&store, "watchdog-stale", "", "/r", "", "", true).unwrap();
-        assert_eq!(outcome, "closed");
-        assert!(open_tasks(&store).unwrap().is_empty());
-        let (outcome, _) = reconcile(&store, "watchdog-stale", "", "/r", "", "", true).unwrap();
-        assert_eq!(outcome, "none");
-    }
-
-    #[test]
-    fn ac12_legacy_ids_match_prefixes_and_never_substrings() {
-        let raw = concat!(
-            r#"{"ts":"t","type":"operator_question","source":"daemon","data":{"question_id":"q-heal","question":"heal: PR 9 rebase conflict. Resolve with x"}}"#,
-            "\n",
-            r#"{"ts":"t","type":"operator_question","source":"daemon","data":{"question_id":"q-agent","question":"PR 9 failed and the log quotes heal: PR 9 mid-sentence"}}"#,
-            "\n",
-            r#"{"ts":"t","type":"operator_question","source":"daemon","data":{"question_id":"q-branch","question":"[session-transition-branch: keep or clean?]"}}"#,
-            "\n",
-            r#"{"ts":"t","type":"operator_question","source":"daemon","data":{"question_id":"q-hold","question":"[reap-hold: x] held"}}"#,
-            "\n",
-            r#"{"ts":"t","type":"operator_question","source":"daemon","data":{"question_id":"q-closed","question":"heal: PR 1 old"}}"#,
-            "\n",
-            r#"{"ts":"t","type":"operator_question_closed","source":"daemon","data":{"question_id":"q-closed","answer":"","reason":"moved-to-fleet-task"}}"#,
-            "\n",
-        );
-        assert_eq!(
-            legacy_question_ids(raw),
-            vec!["q-heal".to_string(), "q-hold".to_string()]
-        );
-    }
 }

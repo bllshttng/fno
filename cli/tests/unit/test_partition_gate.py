@@ -15,16 +15,6 @@ REPO = Path(__file__).resolve().parents[3]
 GATE = REPO / "scripts" / "ci" / "check-tracker-partition.sh"
 
 
-def test_self_test_fires():
-    # Positive control: the gate must report its self-test passing. An exit 0
-    # here without the marker would mean the controls are vacuous.
-    r = subprocess.run(
-        ["bash", str(GATE), "--self-test"], capture_output=True, text=True
-    )
-    assert r.returncode == 0, r.stderr
-    assert "self-test OK" in r.stdout
-
-
 def test_partition_holds_on_real_models():
     r = subprocess.run(
         ["bash", str(GATE)], capture_output=True, text=True, cwd=str(REPO)

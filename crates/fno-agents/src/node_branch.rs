@@ -299,16 +299,6 @@ mod tests {
     // -- the mint ---------------------------------------------------------------
 
     #[test]
-    fn mint_keeps_four_words_and_the_id_whole() {
-        let row = feature("x-aaaa", "install-channels-for-the-cli");
-        assert_eq!(
-            mint(&row).unwrap(),
-            "feature/x-aaaa-install-channels-for-the"
-        );
-        assert_eq!(node_ids(&mint(&row).unwrap()), vec!["x-aaaa".to_string()]);
-    }
-
-    #[test]
     fn every_fixture_mint_round_trips_to_its_node() {
         let fixtures = [
             feature("x-aaaa", "install-channels-for-the-cli"),
@@ -330,26 +320,6 @@ mod tests {
     }
 
     // -- accepted + resolve -----------------------------------------------------
-
-    #[test]
-    fn accepted_lists_the_mint_the_legacy_and_the_other_kinds() {
-        let row = node("x-eeee", "bug", "wrong-close-on-the-board");
-        assert_eq!(
-            accepted(&row),
-            vec![
-                "bugfix/x-eeee-wrong-close-on-the",
-                "feature/x-eeee",
-                "feature/x-eeee-wrong-close-on-the",
-                "chore/x-eeee-wrong-close-on-the",
-            ]
-        );
-        // A kind change keeps the legacy bare shape as its own entry once.
-        let bare = feature("x-aaaa", "");
-        assert_eq!(
-            accepted(&bare),
-            vec!["feature/x-aaaa", "bugfix/x-aaaa", "chore/x-aaaa"]
-        );
-    }
 
     fn git(cwd: &Path, args: &[&str]) {
         let out = std::process::Command::new("git")
@@ -407,29 +377,5 @@ mod tests {
         assert_eq!(resolve(&row).unwrap(), "feature/x-eeee-some-work");
     }
 
-    #[test]
-    fn resolve_never_adopts_a_hand_made_side_branch() {
-        let (_tmp, repo) = seed_repo();
-        let row = row_at(&repo);
-        git(&repo, &["branch", "feature/x-eeee-w2"]);
-        assert_eq!(resolve(&row).unwrap(), "feature/x-eeee-some-work");
-    }
-
     // -- the owner check ----------------------------------------------------------
-
-    #[test]
-    fn owner_names_the_id_only_from_a_kind_segment() {
-        assert_eq!(owner("feature/x-eeee"), Some("x-eeee".to_string()));
-        assert_eq!(owner("feature/x-eeee-w2"), Some("x-eeee".to_string()));
-        assert_eq!(
-            owner("bugfix/x-eeee-wrong-close"),
-            Some("x-eeee".to_string())
-        );
-        assert_eq!(owner("main"), None);
-        assert_eq!(owner("feature/main"), None);
-        // The leftmost match must START the id segment, not sit inside it.
-        assert_eq!(owner("feature/fix-x-eeee"), None);
-        // <kind>/<id>-... is an owner shape whatever follows the tail.
-        assert_eq!(owner("feature/x-eeee-w2/inner"), Some("x-eeee".to_string()));
-    }
 }

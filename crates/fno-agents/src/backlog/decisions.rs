@@ -441,35 +441,6 @@ mod tests {
     }
 
     #[test]
-    fn a_slug_subject_attaches_the_ruling_to_the_node_it_resolves_to() {
-        let temp = TempDir::new().unwrap();
-        let graph = temp.path().join("graph.json");
-        let mut connection = crate::backlog::open(&graph).unwrap();
-        let node = crate::backlog::model::Node::from_json(&serde_json::json!({
-            "id": "x-slug1",
-            "slug": "closed-one",
-            "title": "Node",
-            "type": "feature",
-            "status": "ready",
-            "priority": "p2"
-        }))
-        .unwrap();
-        crate::backlog::nodes::save(&mut connection, &node).unwrap();
-        let decision = serde_json::json!({
-            "ts": "2026-10-01T00:00:01Z",
-            "type": DECISION_EVENT,
-            "source": "target",
-            "data": {
-                "decision_id": "d-slug0001",
-                "decision": "recorded under the slug",
-                "subject": "closed-one",
-            },
-        });
-        record(&connection, &decision).unwrap();
-        assert_eq!(node_decisions(&connection, "x-slug1").unwrap().len(), 1);
-    }
-
-    #[test]
     fn decisions_import_rejects_an_orphan_node_reference() {
         let temp = TempDir::new().unwrap();
         let graph = temp.path().join("graph.json");

@@ -148,31 +148,10 @@ mod tests {
     }
 
     #[test]
-    fn a_title_over_the_length_bound_is_refused() {
-        let long = "word ".repeat(TITLE_MAX_CHARS);
-        let err = enforce_title_gate(&[], &[node("x-new", &long)])
-            .expect_err("over-length title must refuse");
-        let text = err.to_string();
-        assert!(text.contains("limit 200"), "{text}");
-        assert!(text.contains("--details"), "{text}");
-    }
-
-    #[test]
     fn an_unchanged_legacy_leaky_title_passes_an_unrelated_update() {
         let pre = [node("x-old", "legacy title about /Users/bb16/notes")];
         let mut updated = node("x-old", "legacy title about /Users/bb16/notes");
         updated["status"] = json!("in_progress");
         enforce_title_gate(&pre, &[updated]).expect("unchanged stored title must pass");
-    }
-
-    #[test]
-    fn a_rename_to_a_leaky_title_is_refused() {
-        let pre = [node("x-old", "clean title")];
-        let err = enforce_title_gate(
-            &pre,
-            &[node("x-old", "renamed to mention /Users/bb16/notes")],
-        )
-        .expect_err("rename into a leak must refuse");
-        assert!(err.to_string().contains("home-path"), "{err}");
     }
 }

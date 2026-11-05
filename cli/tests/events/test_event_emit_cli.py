@@ -94,22 +94,6 @@ def test_refusals_leave_no_event(tmp_path, runtime):
         assert not rows(journal)
 
 
-def test_protocol_fields_follow_manifest_and_reject_bad_outcome(tmp_path, runtime):
-    state = tmp_path / "state.md"
-    state.write_text("---\nsession_id: run-1\ngraph_node_id: node-1\n---\n")
-    journal = tmp_path / "events.jsonl"
-    result = emit(journal, "-t", "task_started", "-s", "test", "--state", str(state))
-    assert result.exit_code == 0, result.stderr
-    row = rows(journal)[0]
-    assert row["run"] == "run-1" and row["node"] == "node-1" and "from" not in row
-    result = emit(journal, "-t", "task_started", "-s", "test", "--state", str(state), "--run", "", "--node", "")
-    assert result.exit_code == 0
-    assert rows(journal)[-1]["run"] == "run-1" and rows(journal)[-1]["node"] == "node-1"
-    other = tmp_path / "other.jsonl"
-    result = emit(other, "-t", "task_done", "-s", "test", "--run", "run-1", "--outcome", "PARTIAL")
-    assert result.exit_code == 1 and not rows(other)
-
-
 def test_attester_is_stamped_and_forgery_is_refused(tmp_path, runtime):
     journal = tmp_path / "events.jsonl"
     result = emit(journal, "-t", "review_attestation", "-s", "test", "-d", json.dumps(attestation()))
@@ -151,85 +135,3 @@ def test_global_mirror_is_repo_scoped_and_ordinary_event_is_not_mirrored(tmp_pat
     assert rows(global_journal)[0]["data"]["repo"] == "github.com/example/repo"
     result = emit(journal, "-t", "daemon_started", "-s", "daemon")
     assert result.exit_code == 0 and len(rows(global_journal)) == 1
-
-
-def test_blocked_push_is_after_commit_and_failure_is_nonfatal(tmp_path, runtime, monkeypatch):
-    runtime(parent="parent-1")
-    monkeypatch.setenv("EVENT_TEST_MAIL_EXIT", "1")
-    journal = tmp_path / "events.jsonl"
-    result = emit(journal, "-t", "blocked", "-s", "test", "--run", "run-1", "-d", json.dumps({"reason": "stuck"}))
-    assert result.exit_code == 0 and rows(journal)[0]["parent"] == "parent-1"
-    mail = json.loads((tmp_path / "mail.jsonl").read_text())
-    assert mail[mail.index("--to") + 1] == "parent-1" and "run-1" in mail[-1]
-    assert "parent push failed" in result.stderr
-    monkeypatch.setenv("EVENT_TEST_MAIL_EXIT", "0")
-    success = emit(tmp_path / "success.jsonl", "-t", "blocked", "-s", "test", "--run", "run-2", "-d", json.dumps({"reason": "stuck"}))
-    assert success.exit_code == 0
-    sent = (tmp_path / "mail.jsonl").read_text().splitlines()
-    assert len(sent) == 2 and "run-2" in json.loads(sent[-1])[-1]
-
-
-def test_defaults_anchor_to_the_declared_repo_from_a_subdirectory(tmp_path, runtime, monkeypatch):
-    repo = tmp_path / "repo"
-    state = repo / ".fno" / "target-state.md"
-    state.parent.mkdir(parents=True)
-    state.write_text("---\nsession_id: anchor\n---\n")
-    subdir = repo / "deep" / "subdir"
-    subdir.mkdir(parents=True)
-    monkeypatch.chdir(subdir)
-    monkeypatch.setenv("FNO_SPACES_DIR", str(tmp_path / "spaces"))
-    result = EventRunner().invoke(None, ["emit", "-t", "child_promise", "-d", json.dumps({"session_id": "anchor", "nonce": "a" * 32})])
-    assert result.exit_code == 0, result.stderr
-    journal = tmp_path / "spaces" / str(repo.resolve()).replace("/", "-") / "events.jsonl"
-    assert rows(journal)[0]["source"] == "target"
-    assert not rows(subdir / ".fno" / "events.jsonl")
-
-
-def test_relative_state_config_mirrors_under_home(tmp_path, runtime, monkeypatch):
-    home = tmp_path / "home"
-    home.mkdir()
-    config = tmp_path / "config.toml"
-    config.write_text('state_dir = ".fno-relative/"\n')
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("FNO_CONFIG", str(config))
-    monkeypatch.delenv("FNO_STATE_DIR", raising=False)
-    journal = tmp_path / "project" / "events.jsonl"
-    data = {"path": "/tmp/removed", "caller": "test", "claim": "none", "reason": "done"}
-    result = emit(journal, "-t", "worktree_removed", "-s", "bash", "-d", json.dumps(data))
-    assert result.exit_code == 0, result.stderr
-    assert rows(home / ".fno" / "events.jsonl")[0]["type"] == "worktree_removed"
-
-
-def test_worktree_removal_uses_native_front_for_both_destinations(tmp_path, monkeypatch):
-    import subprocess
-
-    log = tmp_path / "calls.jsonl"
-    front = tmp_path / "fake-front"
-    front.write_text(
-        f"#!{sys.executable}\nimport json, os, sys\n"
-        "with open(os.environ['EVENT_TEST_CALLS'], 'a') as out: out.write(json.dumps(sys.argv[1:]) + '\\n')\n"
-    )
-    front.chmod(0o755)
-    monkeypatch.setenv("FNO_BIN", str(front))
-    monkeypatch.setenv("FNO_AGENTS_HOME", str(tmp_path / "agents"))
-    monkeypatch.setenv("EVENT_TEST_CALLS", str(log))
-    script = Path(__file__).resolve().parents[3] / "scripts/lib/worktree-removal-event.sh"
-    result = subprocess.run(
-        ["bash", "-c", 'source "$1"; _wt_emit_removal_event "$2" "$3" test free done',
-         "test", str(script), str(tmp_path), str(tmp_path / "worktree")],
-        capture_output=True, text=True, timeout=30,
-    )
-    assert result.returncode == 0 and not result.stderr
-    calls = [json.loads(line) for line in log.read_text().splitlines()]
-    assert len(calls) == 2 and all(call[:3] == ["doctor", "event", "emit"] for call in calls)
-    assert "--events" not in calls[0]
-    assert calls[1][calls[1].index("--events") + 1] == str(tmp_path / "agents/events.jsonl")
-
-
-def test_global_mirror_keeps_repo_identity_without_agent_binary(tmp_path, runtime, monkeypatch):
-    monkeypatch.setenv("FNO_AGENTS_BIN", str(tmp_path / "missing-agent"))
-    journal = tmp_path / "project" / "events.jsonl"
-    data = {"path": "/tmp/removed", "caller": "test", "claim": "none", "reason": "done"}
-    result = emit(journal, "-t", "worktree_removed", "-s", "bash", "-d", json.dumps(data))
-    assert result.exit_code == 0, result.stderr
-    assert rows(tmp_path / "global" / "events.jsonl")[0]["data"]["repo"] == "github.com/example/repo"

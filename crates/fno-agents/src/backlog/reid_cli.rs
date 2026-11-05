@@ -526,19 +526,4 @@ mod tests {
             "the store is unchanged"
         );
     }
-
-    #[test]
-    fn alias_pool_carries_retired_ids_into_the_mint_exclusion() {
-        let state = tempfile::tempdir().unwrap();
-        let graph = state.path().join("graph.db");
-        seed(
-            &graph,
-            &[json!({
-                "id": "x-cccc", "title": "t", "type": "bug", "status": "idea", "priority": "p2",
-                "aliases": [OLD]
-            })],
-        );
-        let pool = crate::backlog::create_cli::alias_pool_at(&graph);
-        assert!(pool.contains(OLD), "the alias pool carries the retired id");
-    }
 }

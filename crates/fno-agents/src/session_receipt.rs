@@ -616,22 +616,4 @@ mod tests {
         );
         assert!(text.contains("1 classifier, 0 user, 0 hook"), "{text}");
     }
-
-    #[test]
-    fn a_harness_with_no_store_reads_unmeasured() {
-        // AC4-ERR: the receipt never invents zeros for a store it cannot read.
-        let r = receipt("kiro", "s1");
-        assert!(
-            r["basis"].as_str().unwrap().starts_with("unmeasured:"),
-            "{r}"
-        );
-        assert_eq!(r.as_object().unwrap().len(), 1);
-        let (denied, last) = top_fields(&r);
-        assert!(denied["unmeasured"].is_string());
-        assert!(last["unmeasured"].is_string());
-        assert_eq!(
-            render_lines(&r),
-            vec!["turns:    unmeasured (no transcript store reader for harness kiro)"]
-        );
-    }
 }

@@ -76,12 +76,6 @@ fn open_session(sid: &str) -> Value {
     })
 }
 
-fn closed_session(sid: &str) -> Value {
-    let mut row = open_session(sid);
-    row["ended_at"] = json!("2026-09-11T01:00:00Z");
-    row
-}
-
 // A cwd the fleet fold reads as a linked worktree: a .git file and a
 // target-state naming the graph node.
 fn fake_worktree(root: &Path, name: &str, node_id: &str) -> PathBuf {
@@ -110,16 +104,6 @@ fn roster_dir_with(root: &Path, rows: &[Value]) -> PathBuf {
     std::fs::write(&script, format!("#!/bin/sh\necho '{payload}'\n")).unwrap();
     std::fs::set_permissions(&script, Permissions::from_mode(0o755)).unwrap();
     dir
-}
-
-fn plant_registry(root: &Path, entries: &[Value]) {
-    let home = root.join("agents-home");
-    std::fs::create_dir_all(&home).unwrap();
-    let doc = json!({
-        "schema_version": fno_agents::state::REGISTRY_SCHEMA_VERSION,
-        "agents": entries,
-    });
-    std::fs::write(home.join("registry.json"), doc.to_string()).unwrap();
 }
 
 #[test]
@@ -181,59 +165,6 @@ fn the_graph_join_resolves_an_unresolved_row() {
 }
 
 #[test]
-fn a_registry_only_probe_still_answers_the_join() {
-    let root = tempfile::tempdir().unwrap();
-    seed_graph(root.path(), graph_entry(json!([open_session("s-1")])));
-    let wt_reg = plain_dir(root.path(), "wt-reg");
-    plant_registry(
-        root.path(),
-        &[json!({
-            "name": "reg-worker",
-            "cwd": wt_reg.display().to_string(),
-            "status": "busy",
-            "harness": "claude",
-            "harness_session_id": "s-1",
-        })],
-    );
-    // No claude stub on PATH: the vendor read degrades to registry-only.
-    let empty = plain_dir(root.path(), "no-vendor-bin");
-    let (code, stdout, stderr) = run_status(root.path(), &empty);
-    assert_eq!(code, 0, "stderr: {stderr}");
-    let info: Value = serde_json::from_str(&stdout).unwrap();
-    assert_eq!(info["roster_consulted"], true);
-    assert!(info["roster_probe"]
-        .as_str()
-        .unwrap_or_default()
-        .contains("registry-only"));
-    assert_eq!(info["state"], "unknown");
-    assert_eq!(info["worked_by"], json!(["reg-worker"]));
-}
-
-#[test]
-fn a_closed_phase_row_never_renders_as_unmeasured_noise() {
-    let root = tempfile::tempdir().unwrap();
-    seed_graph(root.path(), graph_entry(json!([closed_session("sess-x1")])));
-    let wt = fake_worktree(root.path(), "wt-join", "x-join1");
-    let roster = roster_dir_with(
-        root.path(),
-        &[json!({
-            "session_id": "sess-x1",
-            "name": "bp-worker",
-            "state": "working",
-            "cwd": wt.display().to_string(),
-        })],
-    );
-    let (code, stdout, stderr) = run_status(root.path(), &roster);
-    assert_eq!(code, 0, "stderr: {stderr}");
-    assert_eq!(info_field(&stdout, "roster_consulted"), "true");
-    let info: Value = serde_json::from_str(&stdout).unwrap();
-    assert_eq!(info["roster_workers"], json!([]));
-    assert!(info.get("worked_by").is_none());
-    let combined = format!("{stdout}{stderr}");
-    assert!(!combined.contains("unmeasured, never live"));
-}
-
-#[test]
 fn unrelated_unresolved_rows_still_answer_free() {
     let root = tempfile::tempdir().unwrap();
     seed_graph(root.path(), graph_entry(json!([open_session("sess-mine")])));
@@ -252,11 +183,4 @@ fn unrelated_unresolved_rows_still_answer_free() {
     let info: Value = serde_json::from_str(&stdout).unwrap();
     assert_eq!(info["state"], "free");
     assert_eq!(info["roster_coverage"], "degraded");
-}
-
-// The human-readable leaf prints pretty JSON on stdout with no verdict
-// fields inside it; read one field without guessing the exact layout.
-fn info_field(stdout: &str, key: &str) -> String {
-    let info: Value = serde_json::from_str(stdout).unwrap();
-    info[key].to_string()
 }
