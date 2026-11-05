@@ -1,6 +1,6 @@
 # G1 cut ledger: graph, backlog, claims and the Python remainder
 
-Base 7ed2466c8c (origin/main at start). Scope: the 389 files the path rule in the [README](README.md#campaigns) gives G1. That is every `.py` test file outside `cli/src/fno`, plus the `crates/fno-agents` files whose path names a graph, backlog, claim, state, node, org, question, attention, outstanding, law, board, carveout, session, team, fleet, active, orphans, needs, intake, decision or roadmap surface and no G3 word.
+Base 7ed2466c8c (origin/main at start). Scope: the 389 files the path rule in the [README](README.md#campaigns) gives G1. That is every `.py` test file outside `cli/src/fno`. It also holds the `crates/fno-agents` files that match the G1 Rust words and no G3 word.
 
 Before: 1,838 declarations (532 Python, 1,306 Rust) and 1,845 collected cases at base in the cli-ci run 42021471780 logs (540 Python smoke cases, 1,305 Rust). After: 819 declarations (243 Python, 576 Rust). Declarations fell 55 percent. Python collected cases over the scope, read with `fno doctor test <files> --collect-only -q` before and after each slice, fell from 557 to 246. The Rust collected count after is read from the first green CI run of this PR, and the Counts section records it. The target is 922 collected cases or fewer.
 
@@ -8,7 +8,7 @@ Two Python folds keep every check and count as no cut under law d-e016ab8e rule 
 
 ## Method
 
-Seven workers cut disjoint slices: Python unit, the other Python trees, the Rust integration binaries, and four slices of `crates/fno-agents/src`. Each ran the keep rule in the README. Deleted: parity replays whose Python leg is gone, value repeats in one branch, unit tests under a real-command or integration keeper, and extra refusal cases past the one each fail-closed guard keeps. A guard's only test stays. The workers ran no cargo. The lead ran one `cargo check --all-targets` over the crate after the cut and removed the test helpers the cut left dead.
+Seven workers cut disjoint slices: Python unit, the other Python trees, the Rust integration binaries, and four slices of `crates/fno-agents/src`. Each ran the keep rule in the README. Deleted: parity replays whose Python leg is gone, and value repeats in one branch. Also deleted: unit tests under a real-command keeper, and refusal cases past the one each fail-closed guard keeps. A guard's only test stays. The workers ran no cargo. The lead ran one `cargo check --all-targets` over the crate after the cut and removed the test helpers the cut left dead.
 
 The lead put back one case the cut took: `session_origin::a_path_shaped_session_id_is_refused_before_any_write`. It is the one test of `write_if_absent` refusing a path-shaped session id. The parity module that held it before is gone.
 

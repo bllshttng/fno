@@ -1,6 +1,6 @@
 # Test-audit campaigns
 
-Running home for footnote's test-cut campaigns: one campaign PR per campaign key, one ledger per campaign in this folder. Method and junk patterns live in the test-audit skill (`skills/test-audit/`). Footnote campaigns run the keep rule below, which replaces the skill's value bar, retention bar and ledger shape. Target: at most 4,895 collected cases, half the 9,793 collected at 7ed2466c8c (2026-11-05). The declaration census reads 9,834 there, so its proxy target is 4,917. The earlier target of 15,447 declarations, half the 30,893 measured at 325d7e4ddb, was met when the Python ports landed.
+Running home for footnote's test-cut campaigns: one campaign PR per campaign key, one ledger per campaign in this folder. Method and junk patterns live in the test-audit skill (`skills/test-audit/`). Footnote campaigns run the keep rule below, which replaces the skill's value bar, retention bar and ledger shape. Target: at most 4,895 collected cases, half the 9,793 collected at 7ed2466c8c (2026-11-05). The declaration census reads 9,834 there, so its proxy target is 4,917. The Python ports met the earlier target of 15,447 declarations, half the 30,893 measured at 325d7e4ddb.
 
 ## Census
 
