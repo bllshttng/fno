@@ -1,16 +1,18 @@
 //! Is a newer published fno release available for this install? The
 //! update modal's release answer. `fno doctor update --check` reads the
-//! source checkout only, so on a `uv tool install fno` or Homebrew install it
-//! can only degrade. This module asks the package manager that owns the
-//! install instead, and names the one command that upgrades it.
+//! source checkout only, so on a wheel, binary or Homebrew install it can only
+//! degrade. This module asks the newest GitHub release (or Homebrew) instead,
+//! and names the one command that upgrades the install.
 
 use std::path::Path;
 use std::time::Duration;
 
-/// The package manager that owns a release install.
+/// What owns a release install. A uv wheel and the `~/.fno/bin` binary
+/// install both update with `fno update`, which moves the wheel first.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Channel {
     Uv,
+    Binary,
     Brew,
 }
 
@@ -18,13 +20,14 @@ impl Channel {
     pub(crate) fn name(self) -> &'static str {
         match self {
             Channel::Uv => "uv",
+            Channel::Binary => "binary",
             Channel::Brew => "brew",
         }
     }
 
     pub(crate) fn upgrade_argv(self) -> &'static [&'static str] {
         match self {
-            Channel::Uv => &["uv", "tool", "upgrade", "fno"],
+            Channel::Uv | Channel::Binary => &["fno", "update"],
             Channel::Brew => &["brew", "upgrade", "fno"],
         }
     }
@@ -69,8 +72,8 @@ const NOTES_TIMEOUT: Duration = Duration::from_secs(10);
 const NOTES_MAX_BULLETS: usize = 10;
 const NOTES_MAX_SECTIONS: usize = 6;
 
-/// `Some(true)` when the uv receipt installed fno from an index (so
-/// `uv tool upgrade` can move it), `Some(false)` for a directory, path, git,
+/// `Some(true)` when the uv receipt installed fno from an index (a release
+/// wheel `fno update` can move), `Some(false)` for a directory, path, git,
 /// url or editable source, `None` when the receipt has no fno entry.
 pub(crate) fn receipt_is_index(receipt: &str) -> Option<bool> {
     let value: toml::Value = toml::from_str(receipt).ok()?;
@@ -99,33 +102,6 @@ fn strip_ansi(s: &str) -> String {
         }
     }
     out
-}
-
-/// The `(installed, latest)` pair from `uv tool list --outdated`, whose fno
-/// line reads `fno v0.3.1 [latest: 0.3.2]`.
-pub(crate) fn parse_uv_outdated(stdout: &str) -> Result<Option<(String, String)>, String> {
-    let cleaned = strip_ansi(stdout);
-    for line in cleaned.lines().map(str::trim) {
-        if line.split_whitespace().next() != Some("fno") {
-            continue;
-        }
-        let Some(rest) = line.strip_prefix("fno v") else {
-            return Err("unrecognized fno outdated row".into());
-        };
-        let (installed, tail) = rest
-            .split_once(' ')
-            .ok_or_else(|| "missing latest version".to_string())?;
-        let latest = tail
-            .trim()
-            .strip_prefix("[latest: ")
-            .and_then(|value| value.strip_suffix(']'))
-            .ok_or_else(|| "missing latest version".to_string())?;
-        if installed.is_empty() || latest.trim().is_empty() {
-            return Err("empty version in fno outdated row".into());
-        }
-        return Ok(Some((installed.to_string(), latest.trim().to_string())));
-    }
-    Ok(None)
 }
 
 /// The `(installed, latest)` pair from `brew outdated --json=v2`. A tapped
@@ -163,33 +139,38 @@ pub(crate) fn parse_brew_outdated(json: &str) -> Result<Option<(String, String)>
     Ok(None)
 }
 
-/// Fold a uv receipt and the outdated run into an outcome. `outdated` is only
-/// called for an index receipt, so a source install never pays for it.
-pub(crate) async fn uv_outcome<F, Fut>(receipt: Option<&str>, outdated: F) -> ReleaseOutcome
+/// Fold the channel and the newest GitHub release into an outcome. The
+/// read runs only for a channel `fno update` owns, so a source install never
+/// pays for it. GitHub, not PyPI, answers: the wheel stops publishing, and a
+/// wheel user must still see the binary releases.
+pub(crate) async fn github_outcome<F, Fut>(
+    channel: Option<Channel>,
+    installed: &str,
+    latest_tag: F,
+) -> ReleaseOutcome
 where
     F: FnOnce() -> Fut,
     Fut: std::future::Future<Output = Result<String, String>>,
 {
-    let Some(receipt) = receipt else {
+    use crate::release_install::{tag_version, version_key};
+    let Some(channel) = channel else {
         return ReleaseOutcome::NotApplicable;
     };
-    if receipt_is_index(receipt) != Some(true) {
-        return ReleaseOutcome::NotApplicable;
-    }
-    match outdated().await {
-        Err(e) => ReleaseOutcome::Degraded(format!("uv tool list --outdated: {e}")),
-        Ok(stdout) => match parse_uv_outdated(&stdout) {
-            Ok(Some((installed, latest))) => ReleaseOutcome::Newer {
-                channel: Channel::Uv,
-                installed,
-                latest,
-                notes: Vec::new(),
-            },
-            Ok(None) => ReleaseOutcome::Current {
-                channel: Channel::Uv,
-            },
-            Err(e) => ReleaseOutcome::Degraded(format!("uv tool list --outdated: {e}")),
+    let tag = match latest_tag().await {
+        Ok(tag) => tag,
+        Err(e) => return ReleaseOutcome::Degraded(format!("GitHub latest release: {e}")),
+    };
+    match tag_version(&tag) {
+        None => {
+            ReleaseOutcome::Degraded(format!("GitHub latest release: tag {tag} names no version"))
+        }
+        Some(latest) if version_key(&latest) > version_key(installed) => ReleaseOutcome::Newer {
+            channel,
+            installed: installed.to_string(),
+            latest,
+            notes: Vec::new(),
         },
+        Some(_) => ReleaseOutcome::Current { channel },
     }
 }
 
@@ -337,13 +318,12 @@ async fn attach_notes(outcome: ReleaseOutcome) -> ReleaseOutcome {
 /// Runs off the UI loop; every failure degrades, never hangs.
 pub(crate) async fn probe_release() -> ReleaseOutcome {
     let found = tokio::task::spawn_blocking(|| {
-        let brew = crate::bootstrap::resolved_python_script()
+        crate::bootstrap::resolved_python_script()
             .and_then(|p| std::fs::canonicalize(p).ok())
-            .is_some_and(|p| p.to_string_lossy().contains("/Cellar/fno/"));
-        (brew, crate::bootstrap::find_uv())
+            .is_some_and(|p| p.to_string_lossy().contains("/Cellar/fno/"))
     })
     .await;
-    let Ok((brew, uv)) = found else {
+    let Ok(brew) = found else {
         return ReleaseOutcome::NotApplicable;
     };
     if brew {
@@ -365,21 +345,24 @@ pub(crate) async fn probe_release() -> ReleaseOutcome {
         };
         return attach_notes(outcome).await;
     }
-    let Some(uv) = uv else {
-        return ReleaseOutcome::NotApplicable;
-    };
-    let dir = match run(&uv, &["tool", "dir", "--color", "never"], PROBE_TIMEOUT).await {
-        Ok(d) => d.trim().to_string(),
-        Err(e) => return ReleaseOutcome::Degraded(format!("uv tool dir: {e}")),
-    };
-    let receipt = std::fs::read_to_string(Path::new(&dir).join("fno/uv-receipt.toml")).ok();
-    let outcome = uv_outcome(receipt.as_deref(), || async {
-        run(
-            &uv,
-            &["tool", "list", "--outdated", "--color", "never"],
-            PROBE_TIMEOUT,
-        )
-        .await
+    use crate::release_install::InstallChannel;
+    let channel = tokio::task::spawn_blocking(|| match crate::release_install::current_channel() {
+        InstallChannel::Wheel { tool_root } => {
+            std::fs::read_to_string(tool_root.join("uv-receipt.toml"))
+                .ok()
+                .and_then(|r| receipt_is_index(&r))
+                .and_then(|index| index.then_some(Channel::Uv))
+        }
+        InstallChannel::Binary => Some(Channel::Binary),
+        InstallChannel::Other => None,
+    })
+    .await
+    .ok()
+    .flatten();
+    let outcome = github_outcome(channel, env!("CARGO_PKG_VERSION"), || async {
+        tokio::task::spawn_blocking(crate::release_install::latest_release_tag)
+            .await
+            .map_err(|e| e.to_string())?
     })
     .await;
     attach_notes(outcome).await
@@ -388,13 +371,9 @@ pub(crate) async fn probe_release() -> ReleaseOutcome {
 /// Run the channel's upgrade off the UI loop and return one notice line.
 pub(crate) async fn run_upgrade_command(channel: Channel) -> String {
     let argv = channel.upgrade_argv();
-    // The probe may have found uv in an install dir off PATH; spawn that one.
+    // `fno update` runs the same front door this client runs from.
     let program = match channel {
-        Channel::Uv => tokio::task::spawn_blocking(crate::bootstrap::find_uv)
-            .await
-            .ok()
-            .flatten()
-            .unwrap_or_else(|| argv[0].into()),
+        Channel::Uv | Channel::Binary => std::env::current_exe().unwrap_or_else(|_| argv[0].into()),
         Channel::Brew => argv[0].into(),
     };
     let mut command = crate::process_admission::tokio_command(program);
@@ -434,74 +413,55 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn index_receipt_and_outdated_line_read_newer() {
+    async fn a_newer_github_release_reads_newer_and_an_equal_one_current() {
         let receipt = "[tool]\nrequirements = [{ name = \"fno\" }]\n";
         assert_eq!(receipt_is_index(receipt), Some(true));
-        let outcome = uv_outcome(Some(receipt), || async {
-            Ok("graphifyy v0.9.57 [latest: 0.9.63]\nfno v0.3.1 [latest: 0.3.2]\n".to_string())
+        let outcome = github_outcome(Some(Channel::Uv), "0.4.5", || async {
+            Ok("v0.4.6".to_string())
         })
         .await;
         assert_eq!(
             outcome,
             ReleaseOutcome::Newer {
                 channel: Channel::Uv,
-                installed: "0.3.1".into(),
-                latest: "0.3.2".into(),
+                installed: "0.4.5".into(),
+                latest: "0.4.6".into(),
                 notes: Vec::new(),
+            }
+        );
+        let same = github_outcome(Some(Channel::Binary), "0.4.6", || async {
+            Ok("v0.4.6".to_string())
+        })
+        .await;
+        assert_eq!(
+            same,
+            ReleaseOutcome::Current {
+                channel: Channel::Binary
             }
         );
     }
 
     #[tokio::test]
-    async fn directory_receipt_is_not_applicable_and_never_runs_outdated() {
+    async fn a_source_install_is_not_applicable_and_never_reads_github() {
         let receipt = "[tool]\nrequirements = [{ name = \"fno\", directory = \"/x/cli\" }]\n";
         assert_eq!(receipt_is_index(receipt), Some(false));
-        let outcome = uv_outcome(Some(receipt), || async {
-            panic!("uv tool list --outdated must not run for a source install")
+        assert_eq!(receipt_is_index("[tool]\nrequirements = []\n"), None);
+        let outcome = github_outcome(None, "0.4.5", || async {
+            panic!("the GitHub read must not run for a source install")
         })
         .await;
         assert_eq!(outcome, ReleaseOutcome::NotApplicable);
     }
 
     #[tokio::test]
-    async fn failed_outdated_run_degrades_naming_the_command() {
-        let receipt = "[tool]\nrequirements = [{ name = \"fno\" }]\n";
-        let outcome = uv_outcome(Some(receipt), || async { Err("exit 2".to_string()) }).await;
-        match outcome {
-            ReleaseOutcome::Degraded(r) => assert!(r.contains("uv tool list --outdated"), "{r}"),
-            other => panic!("expected Degraded, got {other:?}"),
+    async fn a_failed_or_malformed_github_read_degrades_never_current() {
+        for read in [Err("curl exited 6".to_string()), Ok("nightly".to_string())] {
+            let outcome = github_outcome(Some(Channel::Uv), "0.4.5", || async { read }).await;
+            assert!(
+                matches!(&outcome, ReleaseOutcome::Degraded(r) if r.contains("GitHub latest release")),
+                "{outcome:?}"
+            );
         }
-    }
-
-    #[tokio::test]
-    async fn malformed_uv_fno_row_degrades_instead_of_being_current() {
-        let receipt = "[tool]\nrequirements = [{ name = \"fno\" }]\n";
-        let outcome = uv_outcome(Some(receipt), || async {
-            Ok("fno v0.3.1 [newer: 0.3.2]".to_string())
-        })
-        .await;
-        assert!(
-            matches!(&outcome, ReleaseOutcome::Degraded(reason) if reason.contains("uv tool list --outdated")),
-            "{outcome:?}"
-        );
-    }
-
-    #[tokio::test]
-    async fn current_when_fno_absent_from_outdated_and_missing_receipt_not_applicable() {
-        let receipt = "[tool]\nrequirements = [{ name = \"fno\" }]\n";
-        let outcome = uv_outcome(Some(receipt), || async {
-            Ok("\u{1b}[1mgraphifyy\u{1b}[0m v0.9.57 [latest: 0.9.63]\n".to_string())
-        })
-        .await;
-        assert_eq!(
-            outcome,
-            ReleaseOutcome::Current {
-                channel: Channel::Uv
-            }
-        );
-        let none = uv_outcome(None, || async { Ok(String::new()) }).await;
-        assert_eq!(none, ReleaseOutcome::NotApplicable);
-        assert_eq!(receipt_is_index("[tool]\nrequirements = []\n"), None);
     }
 
     #[test]
@@ -522,15 +482,7 @@ mod tests {
     }
 
     #[test]
-    fn parsers_strip_ansi_and_read_tapped_brew_formula() {
-        assert_eq!(
-            parse_uv_outdated("\u{1b}[1mfno\u{1b}[0m v0.3.1 [latest: 0.3.2]").unwrap(),
-            Some(("0.3.1".into(), "0.3.2".into()))
-        );
-        assert_eq!(
-            parse_uv_outdated("fno v0.3.1 \u{1b}[2m[latest: 0.3.2]\u{1b}[0m").unwrap(),
-            Some(("0.3.1".into(), "0.3.2".into()))
-        );
+    fn brew_parser_reads_a_tapped_formula() {
         let brew = r#"{"formulae":[{"name":"bllshttng/tap/fno","installed_versions":["0.3.1"],"current_version":"0.3.2"}],"casks":[]}"#;
         assert_eq!(
             parse_brew_outdated(brew).unwrap(),
@@ -541,7 +493,8 @@ mod tests {
             None
         );
         assert_eq!(Channel::Brew.upgrade_command(), "brew upgrade fno");
-        assert_eq!(Channel::Uv.upgrade_command(), "uv tool upgrade fno");
+        assert_eq!(Channel::Uv.upgrade_command(), "fno update");
+        assert_eq!(Channel::Binary.upgrade_command(), "fno update");
     }
 
     #[test]
