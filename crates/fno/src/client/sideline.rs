@@ -77,7 +77,7 @@ pub(super) fn head_sorts(card: bool) -> [Option<AgentSortColumn>; 5] {
     }
 }
 
-fn head_label(column: AgentSortColumn) -> &'static str {
+pub(super) fn head_label(column: AgentSortColumn) -> &'static str {
     match column {
         AgentSortColumn::Status => "st",
         AgentSortColumn::Agent => "agent",
@@ -425,23 +425,19 @@ impl View {
         (out, out_depths)
     }
 
-    /// The glyph beside the count: it alternates on the spin clock while
-    /// anything needs input, so the count catches the eye without moving a
-    /// row. A space holds the cell on the off beat.
+    /// The glyph beside the count: it turns through four points on the spin
+    /// clock while anything needs input, so the count catches the eye without
+    /// moving a row or ever blanking its cell.
     pub(super) fn need_input_pulse(&self) -> char {
+        const TURN: [char; 4] = ['\u{25B2}', '\u{25B6}', '\u{25BC}', '\u{25C0}'];
         match PULSE_PIN.load(std::sync::atomic::Ordering::Relaxed) {
-            PULSE_ON => return '\u{25B2}',
-            PULSE_OFF => return ' ',
+            PULSE_ON => return TURN[0],
+            PULSE_OFF => return TURN[2],
             _ => {}
         }
-        match crate::lattice::spin_epoch() {
-            Some(t0)
-                if (t0.elapsed().as_millis() as u64 / crate::lattice::SPIN_FRAME_MS) % 2 == 0 =>
-            {
-                '\u{25B2}'
-            }
-            _ => ' ',
-        }
+        let frame = crate::lattice::spin_epoch()
+            .map_or(0, |t0| t0.elapsed().as_millis() as u64 / crate::lattice::SPIN_FRAME_MS);
+        TURN[frame as usize % TURN.len()]
     }
 
     /// Paint the strip row at the slice's row 0: `Agents  Messages`
@@ -1322,7 +1318,11 @@ impl View {
                     vec![
                         rt_cell(String::new(), Color::Default, cell_flags::DIM, false),
                         rt_cell(
-                            "node · PR".to_string(),
+                            format!(
+                                "by {}{} · node · PR",
+                                head_label(self.agent_sort.column),
+                                arrow(self.agent_sort.column)
+                            ),
                             Color::Default,
                             cell_flags::DIM,
                             true,

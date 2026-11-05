@@ -95,6 +95,8 @@ pub(super) fn pin_agent(view: &mut View, a: &AgentRow) {
     });
 }
 
+/// With `flat` set (the card layout) every agent is its own level: pins lead
+/// the workspace and the active column orders the rest, with no nesting.
 #[allow(clippy::type_complexity)]
 pub(super) fn append_sorted_agent_group<'a>(
     out: &mut Vec<(DisplayRow<'a>, usize)>,
@@ -103,7 +105,25 @@ pub(super) fn append_sorted_agent_group<'a>(
     needs: &HashMap<String, NeedKind>,
     now_secs: u64,
     order: &AgentOrder<'_>,
+    flat: bool,
 ) {
+    if flat {
+        group.sort_by(|(_, a), (_, b)| {
+            compare_agent_rows(
+                a,
+                b,
+                sort,
+                needs.get(a.name.as_str()).copied(),
+                needs.get(b.name.as_str()).copied(),
+                now_secs,
+                order,
+            )
+        });
+        for (rows, _) in group.drain(..) {
+            out.extend(rows.into_iter().map(|(row, _)| (row, 0)));
+        }
+        return;
+    }
     let mut subtrees: Vec<(
         Vec<(Vec<(DisplayRow<'a>, usize)>, &'a AgentRow)>,
         &'a AgentRow,

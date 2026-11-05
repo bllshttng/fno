@@ -112,6 +112,29 @@ fn card_mode_expands_each_agent_into_three_lines_without_padding_rows() {
 }
 
 #[test]
+fn card_pinned_rows_lead_the_workspace_with_workers_flat() {
+    let mut lead = agent_row("zed-lead", 4, Some(AgentBadge::Working), false);
+    lead.harness_session_id = Some("sess-lead".into());
+    let mut worker = agent_row("amy-worker", 5, Some(AgentBadge::Working), false);
+    worker.lineage_kind = Some("child".into());
+    worker.spawned_by_session = Some("sess-lead".into());
+    let mut pinned = agent_row("zoe", 6, Some(AgentBadge::Working), false);
+    pinned.pinned = true;
+    let mut v = card_view(vec![lead, worker, pinned]);
+    v.agent_sort = AgentSort::Squad;
+    let (rows, depths) = v.display_rows_with_depths();
+    let names: Vec<&str> = rows
+        .iter()
+        .filter_map(|r| match r {
+            DisplayRow::Agent(a) => Some(a.name.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(names, vec!["zoe", "amy-worker", "zed-lead"]);
+    assert!(depths.iter().all(|d| *d == 0), "{depths:?}");
+}
+
+#[test]
 fn card_age_sort_orders_workers_inside_a_lead_group() {
     // The user report: sorted by age, a lead's workers read
     // 12m, 12m, 10m, 41m, 23s in the card view. The card path now runs the

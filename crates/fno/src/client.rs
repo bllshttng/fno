@@ -4002,6 +4002,14 @@ impl View {
         let held = self.selected_agent_name();
         self.agent_sort = self.agent_sort.advance();
         view_store::save_prefs(self.density, self.agent_sort);
+        let arrow = match self.agent_sort.direction {
+            SortDirection::Ascending => "\u{2191}",
+            SortDirection::Descending => "\u{2193}",
+        };
+        self.set_notice(format!(
+            "sorted by {} {arrow}",
+            sideline::head_label(self.agent_sort.column)
+        ));
         self.reanchor_selector(held);
     }
 
@@ -5164,6 +5172,7 @@ impl View {
         let order = &AgentOrder {
             manual: &self.manual_order,
         };
+        let flat = self.sideline_layout == sideline_color::SidelineLayout::Card;
         let mut out: Vec<(DisplayRow<'_>, usize)> = Vec::with_capacity(rows.len());
         let mut group = Vec::new();
         let mut iter = rows.into_iter().zip(depths).peekable();
@@ -5181,6 +5190,7 @@ impl View {
                             &needs,
                             now,
                             order,
+                            flat,
                         );
                     }
                 }
@@ -5192,12 +5202,21 @@ impl View {
                         &needs,
                         now,
                         order,
+                        flat,
                     );
                     out.push((row, depth));
                 }
             }
         }
-        append_sorted_agent_group(&mut out, &mut group, self.agent_sort, &needs, now, order);
+        append_sorted_agent_group(
+            &mut out,
+            &mut group,
+            self.agent_sort,
+            &needs,
+            now,
+            order,
+            flat,
+        );
         out.into_iter().unzip()
     }
 
