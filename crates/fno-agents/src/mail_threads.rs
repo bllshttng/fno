@@ -717,23 +717,24 @@ pub fn run_mail_threads(args: &[String]) -> i32 {
             if let Some(stray_root) = crate::mail_paths::live_bus_log().parent() {
                 crate::chats::fold_stray_chats(&chats, stray_root);
             }
-            let mut projection = project_at(&chats, &registry_rows(), now_secs());
-            // Mail between two other machines never reaches this chats
-            // store; the shared bus holds it. No store, or an unreachable
-            // one, leaves the local projection as it is.
+            let registry = registry_rows();
+            let mut projection = project_at(&chats, &registry, now_secs());
+            let (mut here, seen) = crate::mail_arm::local_bus_facts();
+            // Mail this store never saw rides the shared bus. No store, or an
+            // unreachable one, leaves the local projection as it is.
             if let Ok(Some(remote)) = crate::store_remote::configured() {
                 let since = now_secs() as i64 - crate::mail_bus::MAIL_TTL_SECS;
                 match crate::mail_bus::recent_rows(&remote, since, FLEET_ROWS) {
                     Ok(rows) => {
-                        let (mut here, seen) = crate::mail_arm::local_bus_facts();
                         if let Ok(key) = crate::machine_key::own() {
                             here.extend(own_labels(&rows, &key.public_key()));
                         }
-                        fold_fleet_rows(&mut projection, &rows, &here, &seen);
+                        fold_fleet_rows(&mut projection, &rows, &here, &seen, &registry);
                     }
                     Err(e) => eprintln!("mail-threads: shared bus: {e}"),
                 }
             }
+            canonical_hosts(&mut projection, &here);
             println!("{}", serde_json::to_string(&projection).unwrap_or_default());
             0
         }
@@ -754,7 +755,7 @@ fn own_labels(rows: &[crate::mail_bus::FleetRow], own_key: &str) -> Vec<String> 
     let mut labels: Vec<String> = rows
         .iter()
         .filter(|r| !own_key.is_empty() && r.pubkey == own_key)
-        .map(|r| r.from_host.clone())
+        .map(|r| crate::mail::address::normalize_host(&r.from_host))
         .collect();
     labels.sort();
     labels.dedup();
@@ -764,17 +765,20 @@ fn own_labels(rows: &[crate::mail_bus::FleetRow], own_key: &str) -> Vec<String> 
 /// The most bus rows one projection reads from the shared store.
 const FLEET_ROWS: i64 = 2000;
 
-/// Fold the shared bus's rows between two other machines into the
-/// projection: one participant per `name@host`, one thread per pair. The
-/// local chats store already holds a row that names a label this machine
-/// held (`here`), one its pull arm delivered (`seen`), and one it sent (the
-/// sender's mirror keeps the bus id), so each of those is skipped.
+/// Fold the shared bus's rows the local chats store lacks into the
+/// projection: one participant per `name@host`, one thread per pair. Mail to
+/// a label this machine held (`here`) is the pull arm's, stored under a new
+/// id, so it is skipped. So is an id the pull arm delivered (`seen`) or the
+/// store holds (the sender's mirror keeps the bus id). Mail this machine
+/// sent before the mirror kept it still folds, its sender keyed as local.
 pub(crate) fn fold_fleet_rows(
     projection: &mut Value,
     rows: &[crate::mail_bus::FleetRow],
     here: &[String],
     seen: &std::collections::HashSet<String>,
+    registry: &[Value],
 ) {
+    let held = |host: &str| here.contains(&crate::mail::address::normalize_host(host));
     let local_ids: std::collections::HashSet<String> = ["threads", "channels"]
         .iter()
         .filter_map(|k| projection.get(*k).and_then(Value::as_array))
@@ -798,19 +802,26 @@ pub(crate) fn fold_fleet_rows(
     let mut pairs: BTreeMap<(String, String), Vec<Value>> = BTreeMap::new();
     let mut last_seen: BTreeMap<String, String> = BTreeMap::new();
     for r in rows {
-        if here.contains(&r.from_host)
-            || here.contains(&r.to_host)
-            || seen.contains(&r.msg_id)
-            || local_ids.contains(&r.msg_id)
-        {
+        if held(&r.to_host) || seen.contains(&r.msg_id) || local_ids.contains(&r.msg_id) {
             continue;
         }
         let from_name = r
             .from_id
             .rsplit_once('/')
             .map_or(r.from_id.as_str(), |(_, n)| n);
-        let from_key = format!("{from_name}@{}", r.from_host);
-        let to_key = format!("{}@{}", r.to_name, r.to_host);
+        let from_key = if held(&r.from_host) {
+            resolve_key(from_name, registry)
+        } else {
+            format!(
+                "{from_name}@{}",
+                crate::mail::address::normalize_host(&r.from_host)
+            )
+        };
+        let to_key = format!(
+            "{}@{}",
+            r.to_name,
+            crate::mail::address::normalize_host(&r.to_host)
+        );
         let ts = chrono::DateTime::from_timestamp(r.created_at, 0)
             .map(|t| t.format("%Y-%m-%dT%H:%M:%SZ").to_string())
             .unwrap_or_default();
@@ -872,6 +883,143 @@ pub(crate) fn fold_fleet_rows(
                 .and_then(Value::as_str)
                 .cmp(&b.get("last_ts").and_then(Value::as_str))
         });
+    }
+}
+
+/// The one spelling of an agent on another machine: `name@host`, host
+/// normalized. The store keeps a pulled sender as its raw `user:host/name`
+/// stamp (older pulls as `user@host/name`) and an addressee as typed
+/// (`name@iMac2D2.local`). A host this machine held names a local agent, so
+/// it keys by the bare name. `None` when the key is already canonical.
+fn canonical_key(key: &str, here: &[String]) -> Option<String> {
+    let (name, host) = match key.split_once('/') {
+        Some((head, name)) => (name, head.split_once([':', '@'])?.1),
+        None if !key.contains(':') => key.split_once('@')?,
+        None => return None,
+    };
+    if name.is_empty() || host.is_empty() {
+        return None;
+    }
+    let host = crate::mail::address::normalize_host(host);
+    let canon = if here.contains(&host) {
+        name.to_string()
+    } else {
+        format!("{name}@{host}")
+    };
+    (canon != key).then_some(canon)
+}
+
+/// Rewrite every raw remote key in the projection to its canonical form,
+/// then join the participants and the threads the old spellings split.
+fn canonical_hosts(projection: &mut Value, here: &[String]) {
+    let mut renames: BTreeMap<String, String> = BTreeMap::new();
+    let mut note = |k: &str| {
+        if let Some(c) = canonical_key(k, here) {
+            renames.insert(k.to_string(), c);
+        }
+    };
+    let thread_keys = projection["threads"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .flat_map(|t| t["participants"].as_array().into_iter().flatten());
+    let part_keys = projection["participants"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|p| &p["key"]);
+    for k in part_keys.chain(thread_keys).filter_map(Value::as_str) {
+        note(k);
+    }
+    if renames.is_empty() {
+        return;
+    }
+    rename_strings(projection, &renames);
+    let Some(obj) = projection.as_object_mut() else {
+        return;
+    };
+    if let Some(parts) = obj.get_mut("participants").and_then(Value::as_array_mut) {
+        let mut at: BTreeMap<String, usize> = BTreeMap::new();
+        let mut kept: Vec<Value> = Vec::with_capacity(parts.len());
+        for p in parts.drain(..) {
+            let key = p["key"].as_str().unwrap_or_default().to_string();
+            let Some(&i) = at.get(&key) else {
+                at.insert(key, kept.len());
+                kept.push(p);
+                continue;
+            };
+            let (Some(into), Some(from)) = (kept[i].as_object_mut(), p.as_object()) else {
+                continue;
+            };
+            for (field, v) in from {
+                let newer =
+                    field == "last_ts" && v.as_str() > into.get(field).and_then(Value::as_str);
+                let live = field == "live" && v.as_bool() == Some(true);
+                if newer || live || into.get(field).is_none_or(Value::is_null) {
+                    into.insert(field.clone(), v.clone());
+                }
+            }
+        }
+        *parts = kept;
+    }
+    if let Some(threads) = obj.get_mut("threads").and_then(Value::as_array_mut) {
+        let pair = |t: &Value| {
+            let mut ps: Vec<String> = t["participants"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect();
+            ps.sort();
+            ps
+        };
+        let mut at: BTreeMap<Vec<String>, usize> = BTreeMap::new();
+        let mut kept: Vec<Value> = Vec::with_capacity(threads.len());
+        for t in threads.drain(..) {
+            let key = pair(&t);
+            let Some(&i) = at.get(&key) else {
+                at.insert(key, kept.len());
+                kept.push(t);
+                continue;
+            };
+            let later = t["last_ts"].as_str() > kept[i]["last_ts"].as_str();
+            let rows: Vec<Value> = t["rows"].as_array().cloned().unwrap_or_default();
+            if later {
+                kept[i]["chat_id"] = t["chat_id"].clone();
+                kept[i]["last_ts"] = t["last_ts"].clone();
+            }
+            if let Some(into) = kept[i]["rows"].as_array_mut() {
+                into.extend(rows);
+                into.sort_by(|a, b| a["ts"].as_str().cmp(&b["ts"].as_str()));
+            }
+        }
+        kept.sort_by(|a, b| a["last_ts"].as_str().cmp(&b["last_ts"].as_str()));
+        *threads = kept;
+    }
+}
+
+/// Replace every string, and every object key, that `renames` names.
+fn rename_strings(v: &mut Value, renames: &BTreeMap<String, String>) {
+    match v {
+        Value::String(s) => {
+            if let Some(c) = renames.get(s.as_str()) {
+                *s = c.clone();
+            }
+        }
+        Value::Array(items) => items.iter_mut().for_each(|i| rename_strings(i, renames)),
+        Value::Object(map) => {
+            if map.keys().any(|k| renames.contains_key(k)) {
+                let old = std::mem::take(map);
+                for (k, mut item) in old {
+                    rename_strings(&mut item, renames);
+                    map.insert(renames.get(&k).cloned().unwrap_or(k), item);
+                }
+            } else {
+                map.values_mut().for_each(|i| rename_strings(i, renames));
+            }
+        }
+        _ => {}
     }
 }
 
@@ -1806,8 +1954,10 @@ mod tests {
         let _ = std::fs::remove_dir_all(&state);
     }
 
-    /// The shared bus's rows between two other machines land as threads;
-    /// a row naming this machine stays with the local chats store.
+    /// The shared bus's rows the local store lacks land as threads: a
+    /// remote pair, and mail this machine sent with its sender keyed local.
+    /// Mail to this machine, a pulled id and a stored id stay local. Raw
+    /// store keys then fold to one `name@host` participant and one thread.
     #[test]
     fn fleet_rows_fold_remote_pairs_and_skip_this_machine() {
         let row = |id: &str, from: &str, from_host: &str, to: &str, to_host: &str| {
@@ -1823,42 +1973,82 @@ mod tests {
                 ..Default::default()
             }
         };
+        let here = ["mbp".to_string()];
         let mut projection = json!({"participants": [], "threads": []});
         let rows = [
             row("m1", "lenore", "r2d2", "ivy", "imac2d2"),
             row("m2", "ivy", "imac2d2", "lenore", "r2d2"),
             row("m3", "oak", "mbp", "ivy", "imac2d2"),
+            row("m5", "ivy", "imac2d2", "oak", "MBP.local"),
         ];
         let mut projection_with_local = json!({"participants": [], "threads": [
-            {"chat_id": "c", "participants": ["a", "b"], "rows": [{"id": "m2"}]}]});
+            {"chat_id": "c", "participants": ["a", "b"],
+             "rows": [{"id": "m2"}, {"id": "m3"}]}]});
         fold_fleet_rows(
             &mut projection_with_local,
             &rows,
-            &["mbp".to_string()],
+            &here,
             &["m1".to_string()].into_iter().collect(),
+            &[],
         );
         assert_eq!(
             projection_with_local["threads"].as_array().unwrap().len(),
             1,
-            "a delivered id and a locally held id both stay local"
+            "a pulled id, a stored id and mail to this machine all stay local"
         );
-        fold_fleet_rows(
-            &mut projection,
-            &rows,
-            &["mbp".to_string()],
-            &Default::default(),
-        );
+        fold_fleet_rows(&mut projection, &rows, &here, &Default::default(), &[]);
         let threads = projection["threads"].as_array().unwrap();
-        assert_eq!(threads.len(), 1, "one remote pair; the mbp row is local");
-        assert_eq!(threads[0]["rows"].as_array().unwrap().len(), 2);
-        assert_eq!(threads[0]["rows"][0]["from_key"], "lenore@r2d2");
+        assert_eq!(threads.len(), 2, "the remote pair, and oak's sent mail");
+        let pair = threads.iter().find(|t| t["rows"][0]["id"] == "m1").unwrap();
+        assert_eq!(pair["rows"].as_array().unwrap().len(), 2);
+        assert_eq!(pair["rows"][0]["from_key"], "lenore@r2d2");
+        let sent = threads.iter().find(|t| t["rows"][0]["id"] == "m3").unwrap();
+        assert_eq!(sent["participants"], json!(["ivy@imac2d2", "oak"]));
         let keys: Vec<&str> = projection["participants"]
             .as_array()
             .unwrap()
             .iter()
             .filter_map(|p| p["key"].as_str())
             .collect();
-        assert_eq!(keys, ["ivy@imac2d2", "lenore@r2d2"]);
+        assert_eq!(keys, ["ivy@imac2d2", "lenore@r2d2", "oak"]);
+        // Raw store keys for one remote agent join as one row and one thread.
+        let mut store = json!({
+            "participants": [
+                {"key": "bb16:iMac2D2/ivy", "name": "bb16:iMac2D2/ivy", "live": false,
+                 "last_ts": "2"},
+                {"key": "ivy@imac2d2.local", "name": "ivy@imac2d2.local", "live": true,
+                 "last_ts": "1"},
+                {"key": "bb16@imac2d2/ivy", "name": "bb16@imac2d2/ivy", "live": false,
+                 "last_ts": null},
+                {"key": "bb16:mbp/oak", "name": "oak", "live": false},
+                {"key": "fno/pr-nudge", "name": "fno/pr-nudge", "live": false}],
+            "threads": [
+                {"chat_id": "c1", "participants": ["oak", "bb16:iMac2D2/ivy"], "last_ts": "2",
+                 "rows": [{"id": "a", "ts": "2", "from_key": "bb16:iMac2D2/ivy"}]},
+                {"chat_id": "c2", "participants": ["ivy@imac2d2.local", "oak"], "last_ts": "1",
+                 "rows": [{"id": "b", "ts": "1", "to_key": "ivy@imac2d2.local"}]}],
+            "you": [{"from_key": "bb16@imac2d2/ivy"}],
+        });
+        canonical_hosts(&mut store, &here);
+        let keys: Vec<&str> = store["participants"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|p| p["key"].as_str())
+            .collect();
+        assert_eq!(keys, ["ivy@imac2d2", "oak", "fno/pr-nudge"]);
+        assert_eq!(store["participants"][0]["live"], true);
+        assert_eq!(store["participants"][0]["last_ts"], "2");
+        assert_eq!(store["participants"][0]["name"], "ivy@imac2d2");
+        let threads = store["threads"].as_array().unwrap();
+        assert_eq!(threads.len(), 1);
+        assert_eq!(
+            threads[0]["chat_id"], "c1",
+            "the latest thread's chat id stays"
+        );
+        assert_eq!(threads[0]["rows"][0]["id"], "b");
+        assert_eq!(threads[0]["rows"][1]["from_key"], "ivy@imac2d2");
+        assert_eq!(store["you"][0]["from_key"], "ivy@imac2d2");
         // A label this machine's key signed is this machine's, renamed or not.
         let mut old_label = row("m4", "muriel", "bb16", "ivy", "imac2d2");
         old_label.pubkey = "own-key".into();
