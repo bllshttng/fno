@@ -780,6 +780,7 @@ fn list_core_over(
         };
         row["lifecycle"] = json!(lifecycle);
         super::decision_subject::split_into(&mut row);
+        super::decision_subject::cross_fill(&mut row, ent);
         if let Some(name) = decider_name(&row) {
             row["decided_by_name"] = json!(name);
         }
