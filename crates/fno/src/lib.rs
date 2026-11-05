@@ -119,6 +119,8 @@ pub mod inbox_user;
 #[cfg(feature = "full")]
 pub mod join_marker;
 #[cfg(feature = "full")]
+pub mod keybindings_file;
+#[cfg(feature = "full")]
 pub mod keys;
 #[cfg(feature = "full")]
 pub mod lane_colors_panel;

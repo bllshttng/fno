@@ -43,6 +43,8 @@ on:
       - docs/harnesses/capability-matrix.md
       # The cargo job diffs this generated page against its renderer.
       - docs/architecture/help-routing.md
+      # The cargo tests compare this generated page with the key tables.
+      - docs/mux-key-reference.md
       # The cargo job reads its generated-copy path list from this manifest.
       - generated-artifacts.tsv
       # The cargo job compiles this registry into the supervisor classification test.
