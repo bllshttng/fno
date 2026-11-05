@@ -79,7 +79,7 @@ pub(super) async fn run(session: &str, argv: Vec<String>) -> ActionResult {
     match reply {
         Ok(Ok(ServerMsg::PaneSpawned { pane_id, .. })) => ActionResult {
             ok: true,
-            msg: "login pane opened".to_string(),
+            msg: focus_notice(pane_id, &argv),
             pane: Some(pane_id),
         },
         Ok(Ok(other)) => refused(
@@ -93,6 +93,18 @@ pub(super) async fn run(session: &str, argv: Vec<String>) -> ActionResult {
 
 fn control_reason(e: &ControlError) -> String {
     e.to_string()
+}
+
+/// The notice the landing shows. A codex login still owes its register, so
+/// the notice names the r step; the `use --login` and wizard panes finish
+/// the whole job themselves.
+fn focus_notice(pane_id: u64, argv: &[String]) -> String {
+    if argv.len() > 4 && argv[3] == "codex" && argv[4] == "login" {
+        return format!(
+            "login pane {pane_id} focused - finish the login there, then press r in Accounts"
+        );
+    }
+    format!("login pane {pane_id} focused - finish the login there")
 }
 
 fn refused(argv: Vec<String>, reason: String) -> ActionResult {
@@ -120,9 +132,7 @@ pub(super) async fn land(
             if view.connections.is_some() {
                 view.close_connections();
             }
-            view.set_notice(format!(
-                "login pane {pane} focused - finish the login there"
-            ));
+            view.set_notice(result.msg);
             write_msg(sock_w, &ClientMsg::Command(Command::FocusPane(pane)))
                 .await
                 .map_err(|e| format!("focus send failed: {e}"))?;
