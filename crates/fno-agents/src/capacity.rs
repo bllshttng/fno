@@ -174,8 +174,9 @@ pub struct CapacityState {
     pub memory: Option<MemoryFigure>,
     #[serde(default)]
     pub accounts: Vec<AccountRow>,
-    /// The tick's own live registry count, so the gauge never walks the
-    /// registry with a second reader.
+    /// Workers writing right now: the tick's own registry read, narrowed to
+    /// sessions whose transcript moved in the last ten minutes, each counted
+    /// once. Leads are `leads_live`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workers_live: Option<u64>,
     /// Lead rows from the same registry read; `workers_live` excludes them.

@@ -1265,12 +1265,13 @@ shoot a root whose fleet map has a second machine (scripts/ops/mux-demo-snapshot
             // inline where the live panel would spawn them. A fold with no
             // reading paints unknown lines - nothing to judge.
             view.org = crate::org_overlay::Panel::with_detail(true);
-            view.org.toggle();
+            view.org.expand();
             let lanes = runtime.block_on(crate::org_overlay::fold_now());
             let read = lanes.is_some();
             view.org.apply(crate::org_overlay::FoldPart::Lanes(lanes));
             let gate = runtime.block_on(crate::org_overlay::gate_now());
             view.org.apply(crate::org_overlay::FoldPart::Gate(gate));
+            view.open_org_modal();
             if !read {
                 return Err(
                     "org block rendered without a reading: fno doctor lanes returned none; \

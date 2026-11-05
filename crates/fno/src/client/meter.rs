@@ -190,6 +190,13 @@ fn parse_macmon_sample(raw: &[u8], detailed: bool) -> Option<String> {
 /// machine-keyed file the fno-agents tick persists. `None` when missing or
 /// unreadable: the gauge says "cap unknown", never a stale guess.
 pub(crate) fn capacity_state() -> Option<serde_json::value::Value> {
+    // A snapshot has no tick writing the state file: it seeds the state here.
+    if let Some(seed) = std::env::var("FNO_SNAPSHOT_METER")
+        .ok()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+    {
+        return Some(seed);
+    }
     // Under test with no declared home there IS no state to read: the
     // ambient `$HOME/.fno/agents` is the real machine's, and a gauge test
     // must never depend on it.

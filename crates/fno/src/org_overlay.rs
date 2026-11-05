@@ -59,28 +59,10 @@ pub const CACHE_TTL: Duration = Duration::from_secs(15);
 /// team, lanes. The client reserves this many sideline rows for it, so the
 /// height the layout subtracts and the height the painter draws cannot
 /// drift.
-pub const MINIMIZED_ROWS: usize = 5;
+pub const MINIMIZED_ROWS: usize = 3;
 
 /// Readings each sparkline keeps: twelve folds at the TTL is three minutes.
 const HISTORY: usize = 12;
-
-/// The simple glance's second line: where the agents stand against the
-/// limit that decides whether another worker starts.
-fn simple_limit_line(org: &Org) -> String {
-    match (
-        org.arm_num("cpu admission", "share_low"),
-        org.arm_num("cpu admission", "ceiling"),
-    ) {
-        (Some(low), Some(ceiling)) if low > ceiling => format!(
-            "  agents    over their {:.0}% limit, so new workers wait",
-            ceiling * 100.0
-        ),
-        (Some(_), Some(ceiling)) => {
-            format!("  agents    under their {:.0}% limit", ceiling * 100.0)
-        }
-        _ => "  agents    limit unknown".to_string(),
-    }
-}
 
 /// A history as one bar per fold, on a fixed 0-100% scale so a flat low
 /// line never stretches into a full-height graph.
@@ -90,24 +72,6 @@ fn spark(history: &[f64]) -> String {
         .iter()
         .map(|b| BARS[(b.clamp(0.0, 1.0) * 7.0).round() as usize])
         .collect()
-}
-
-/// The glance's team line: leads first, then the workers by how recently
-/// each one did something. A lead count that failed to read is left out,
-/// never shown as zero.
-fn census_line(org: &Org, ages: &[Option<u64>]) -> String {
-    let mut parts = Vec::new();
-    if let Some(leads) = org.census.leads {
-        parts.push(format!("{leads} leads"));
-    }
-    if !ages.is_empty() {
-        parts.push(census_split(ages).render());
-    }
-    if parts.is_empty() {
-        "  team      no workers held".to_string()
-    } else {
-        format!("  team      {}", parts.join(" · "))
-    }
 }
 
 /// The census block: leads are a ROW count, tests is a PROCESS count. `None`
@@ -199,7 +163,7 @@ pub struct CensusSplit {
     pub unknown_age: u32,
 }
 
-const WORKING_MAX_S: u64 = 5 * 60;
+const WORKING_MAX_S: u64 = 10 * 60;
 const IDLE_MAX_S: u64 = 2 * 3600;
 const STALE_MAX_S: u64 = 8 * 3600;
 
@@ -407,6 +371,9 @@ pub struct Panel {
     busy_history: Vec<f64>,
     /// Memory used fraction per landed fold, oldest first.
     mem_history: Vec<f64>,
+    /// The learned capacity state, re-read each time a gate reading lands, so
+    /// the sideline glance and the bottom bar read one source.
+    capacity: Option<serde_json::Value>,
 }
 
 impl Panel {
@@ -426,6 +393,16 @@ impl Panel {
     /// slow fold again.
     pub fn toggle(&mut self) {
         self.expanded = !self.expanded;
+    }
+
+    /// Expand in place and stay expanded: the org modal opens on this.
+    pub fn expand(&mut self) {
+        self.expanded = true;
+    }
+
+    /// Stop the expanded-only folds. The cached reading survives.
+    pub fn collapse(&mut self) {
+        self.expanded = false;
     }
 
     /// The timer wake for the next refresh, or `None` while a fold is
@@ -551,6 +528,7 @@ impl Panel {
                 self.gate_inflight = false;
                 match result {
                     Ok(gate) => {
+                        self.capacity = crate::client::meter::capacity_state();
                         self.gate = Some(gate);
                         self.gate_error = None;
                         self.gate_retry_at = None;
@@ -581,139 +559,54 @@ impl Panel {
         }
     }
 
-    /// The minimized block: exactly four lines, painted at the bottom of
-    /// the sideline on every frame. Cpu, limit, memory, census.
-    /// Every number carries its unit or its comparand here too; the expanded
-    /// view adds the detail.
-    pub fn minimized_lines(&self, agents: &[AgentRow], text_w: usize) -> Vec<String> {
-        let ages: Vec<Option<u64>> = agents.iter().map(|a| a.last_activity_age_s).collect();
-        let mut lines: Vec<String> = match self.fold.as_ref() {
-            // No machine reading in hand and minimized: the fold is
-            // expanded-only, so nothing is reading. Say where the reading
-            // lives instead of promising activity that is not running.
-            None => vec![
-                "  org     expand for a machine reading".to_string(),
-                String::new(),
-                String::new(),
-            ],
-            Some(org) if !self.detailed => vec![
-                self.simple_cpu_line(org),
-                simple_limit_line(org),
-                self.memory_line(org),
-            ],
-            Some(org) => {
-                let load_line = match (
-                    org.arm_num("cpu admission", "share_low"),
-                    org.arm_num("cpu admission", "capacity_cores"),
-                    org.arm_num("cpu admission", "ceiling"),
-                ) {
-                    (Some(low), Some(cores), Some(ceiling)) => {
-                        // the fleet's attributed share is what decides, so
-                        // that is what renders - never a load average.
-                        let mut l = format!(
-                            "  fleet     {:.0}% of {cores:.0} cores against {:.0}%",
-                            low * 100.0,
-                            ceiling * 100.0
-                        );
-                        if let Some(high) = org.arm_num("cpu admission", "share_high") {
-                            if high > low {
-                                l.push_str(&format!(" up to {:.0}%", high * 100.0));
-                            }
-                        }
-                        if low > ceiling {
-                            // The over verdict names the axis it read, so a busy machine
-                            // is never mistaken for the fleet being over.
-                            l.push_str(&format!(
-                                " · {:.1}x over on fleet_cpu_share",
-                                low / ceiling
-                            ));
-                        }
-                        l
-                    }
-                    _ => format!(
-                        "  fleet     unknown - {}",
-                        org.arm("cpu admission")
-                            .map_or("arm absent", |a| a.reason.as_str())
-                    ),
-                };
-                let cpu_line = match (
-                    org.arm_num("whole-machine cpu", "busy_fraction"),
-                    org.arm_num("whole-machine cpu", "capacity_cores"),
-                ) {
-                    (Some(busy), Some(cores)) => {
-                        format!(
-                            "  cpu       {} {:.0}% busy of {cores:.0} cores",
-                            self.spark(),
-                            busy * 100.0
-                        )
-                    }
-                    _ => "  cpu       unknown".to_string(),
-                };
-                vec![load_line, cpu_line, self.memory_line(org)]
-            }
+    /// The sideline glance: three lines, painted at the bottom of the sideline
+    /// on every frame. `N working · M leads`, then cpu, then memory. The full
+    /// org block lives in the modal (`expanded_lines`).
+    pub fn minimized_lines(&self, _agents: &[AgentRow], text_w: usize) -> Vec<String> {
+        let count = |key: &str| {
+            self.capacity
+                .as_ref()
+                .and_then(|state| state.get(key))
+                .and_then(|v| v.as_u64())
         };
-        let team = self
-            .gate
+        let people = match (count("workers_live"), count("leads_live")) {
+            (Some(workers), Some(leads)) => format!("  {workers} working · {leads} leads"),
+            (Some(workers), None) => format!("  {workers} working"),
+            _ => "  working unknown - no capacity reading".to_string(),
+        };
+        let cpu = match self
+            .fold
             .as_ref()
-            .filter(|g| g.usable())
-            .map(|gate| crate::team_census::census(agents, gate, self.org_tree.as_ref()));
-        lines.push(self.minimized_team_line(team.as_ref(), &ages, text_w));
-        lines.push(self.minimized_lanes_line(team.as_ref(), text_w));
-        lines
-    }
-
-    /// The glance's team line: from the gate reading when one has landed,
-    /// else today's lanes-payload census, else the honest unknown.
-    fn minimized_team_line(
-        &self,
-        team: Option<&crate::team_census::Team>,
-        ages: &[Option<u64>],
-        text_w: usize,
-    ) -> String {
-        if let (Some(gate), Some(team)) = (self.gate.as_ref().filter(|g| g.usable()), team) {
-            let mut segments = crate::team_census::fleet_segments(team, gate);
-            if let Some(word) = self.gate_age_word() {
-                segments.push(word);
-            }
-            return crate::team_census::fit("team", &segments, text_w);
-        }
-        if let Some(error) = self.gate_error.as_ref() {
-            return crate::team_census::fit("team", &[format!("unknown - {error}")], text_w);
-        }
-        match self.fold.as_ref() {
-            Some(org) => census_line(org, ages),
-            None => crate::team_census::fit("team", &["unknown - reading".to_string()], text_w),
-        }
-    }
-
-    /// The glance's lanes line: one segment per provider, `zai 13/16`, with
-    /// the lane's working count beside it.
-    fn minimized_lanes_line(
-        &self,
-        team: Option<&crate::team_census::Team>,
-        text_w: usize,
-    ) -> String {
-        if let Some(team) = team {
-            let mut segments = Vec::new();
-            for lane in &team.providers {
-                match lane.limit {
-                    Some(cap) => segments.push(format!("{} {}/{}", lane.name, lane.occupied, cap)),
-                    None => segments.push(format!("{} {}", lane.name, lane.occupied)),
-                }
-                if lane.working > 0 {
-                    segments.push(format!("{} working", lane.working));
-                }
-            }
-            if !segments.is_empty() {
-                return crate::team_census::fit("lanes", &segments, text_w);
-            }
-        }
-        let word = self
-            .gate_error
+            .and_then(|org| org.arm_num("whole-machine cpu", "busy_fraction"))
+        {
+            Some(busy) => match self
+                .fold
+                .as_ref()
+                .and_then(|org| org.arm_num("whole-machine cpu", "capacity_cores"))
+                .filter(|_| self.detailed)
+            {
+                Some(cores) => format!("  cpu       {:.0}% busy of {cores:.0} cores", busy * 100.0),
+                None => format!("  cpu       {:.0}% busy", busy * 100.0),
+            },
+            None => "  cpu       unknown - open org for a reading".to_string(),
+        };
+        let memory = match self
+            .capacity
             .as_ref()
-            .map(|e| format!("unknown - {e}"))
-            .unwrap_or_else(|| "unknown - reading".to_string());
-        crate::team_census::fit("lanes", &[word], text_w)
+            .and_then(|state| state.get("memory"))
+            .and_then(|m| m.get("used_fraction"))
+            .and_then(|v| v.as_f64())
+        {
+            Some(fraction) => format!("  memory    {:.0}% full", fraction * 100.0),
+            None => match self.fold.as_ref() {
+                Some(org) => self.memory_line(org),
+                None => "  memory    unknown".to_string(),
+            },
+        };
+        [people, cpu, memory]
+            .into_iter()
+            .map(|line| line.chars().take(text_w).collect())
+            .collect()
     }
 
     /// `gate 4.2s` while fresh, `(gate 43s, stale)` past the TTL, `None`
@@ -726,28 +619,6 @@ impl Panel {
         } else {
             format!("gate {secs:.1}s")
         })
-    }
-
-    /// The simple glance's first line: the whole machine, then how much of
-    /// it is ours, so both numbers read on one base. The agents' share is a
-    /// slice of the busy total, never a second total beside it.
-    fn simple_cpu_line(&self, org: &Org) -> String {
-        let busy = org.arm_num("whole-machine cpu", "busy_fraction");
-        let agents = org.arm_num("cpu admission", "share_low");
-        match (busy, agents) {
-            (Some(busy), Some(agents)) => {
-                // Split the ROUNDED numbers so the printed parts add up.
-                let (busy, agents) = ((busy * 100.0).round(), (agents * 100.0).round());
-                format!(
-                    "  CPU       {} {busy:.0}% busy: agents {agents:.0}%, everything else {:.0}%",
-                    self.spark(),
-                    (busy - agents).max(0.0)
-                )
-            }
-            (Some(busy), None) => format!("  CPU       {} {:.0}% busy", self.spark(), busy * 100.0),
-            (None, Some(agents)) => format!("  CPU       agents {:.0}%", agents * 100.0),
-            (None, None) => "  CPU       unknown".to_string(),
-        }
     }
 
     /// Memory in use with its graph: one line in both views, since a full
@@ -1574,68 +1445,50 @@ mod tests {
 
     #[test]
     fn glance_rows() {
-        let lines = opened(live()).minimized_lines(&age_rows(&AC6_AGES), 200);
+        let mut panel = opened(live());
+        panel.capacity = Some(serde_json::json!({
+            "workers_live": 9,
+            "leads_live": 5,
+            "memory": {"used_fraction": 0.64},
+        }));
+        let lines = panel.minimized_lines(&age_rows(&AC6_AGES), 200);
 
         assert_eq!(lines.len(), MINIMIZED_ROWS, "{lines:?}");
-        // The default glance is plain words, with the CPU graph.
         assert_eq!(
-            lines[0],
-            "  CPU       ▇ 80% busy: agents 58%, everything else 22%"
-        );
-        assert_eq!(
-            lines[1],
-            "  agents    over their 50% limit, so new workers wait"
-        );
-        assert_eq!(lines[2], "  memory    ▄ 37% used, 64.9 GB free");
-
-        let mut panel = Panel::with_detail(true);
-        panel.toggle();
-        assert!(panel.take_want(&[]).is_some());
-        panel.apply(FoldPart::Lanes(Some(live())));
-        panel.apply(FoldPart::Lanes(Some(live())));
-        let detail = panel.minimized_lines(&age_rows(&AC6_AGES), 200);
-        assert!(
-            detail[0].contains("58% of 12 cores against 50%"),
-            "{detail:?}"
-        );
-        assert!(detail[0].contains("1.2x"), "{detail:?}");
-        assert!(detail[1].contains("▇▇ 80% busy of 12 cores"), "{detail:?}");
-        assert_eq!(
-            lines[3],
-            "  team      5 leads · 2 working · 2 idle · 1 stale · 1 dead · 1 unknown age"
+            lines,
+            vec![
+                "  9 working · 5 leads",
+                "  cpu       80% busy",
+                "  memory    64% full"
+            ]
         );
 
-        let panel = Panel::default();
+        let mut detailed = Panel::with_detail(true);
+        detailed.toggle();
+        assert!(detailed.take_want(&[]).is_some());
+        detailed.apply(FoldPart::Lanes(Some(live())));
+        let lines = detailed.minimized_lines(&[], 200);
+        assert!(lines[1].contains("80% busy of 12 cores"), "{lines:?}");
 
-        let lines = panel.minimized_lines(&[], 200);
-
+        // No reading at all: every line says unknown, none prints a zero.
+        let lines = Panel::default().minimized_lines(&[], 200);
         assert_eq!(lines.len(), MINIMIZED_ROWS, "{lines:?}");
-        assert!(
-            lines[0].contains("expand for a machine reading"),
-            "{lines:?}"
-        );
-        assert!(
-            !lines[0].contains('0'),
-            "a pending fold must show no counts"
-        );
-        assert!(lines[1].is_empty() && lines[2].is_empty(), "{lines:?}");
+        assert!(lines[0].contains("working unknown"), "{lines:?}");
+        assert!(lines[1].contains("unknown"), "{lines:?}");
+        assert!(lines[2].contains("unknown"), "{lines:?}");
 
-        let mut panel = Panel::default();
-        panel.toggle();
-        assert!(panel.take_want(&[]).is_some());
-        panel.apply(FoldPart::Lanes(None));
+        // A line never runs past the text width.
+        let lines = panel.minimized_lines(&[], 10);
+        assert!(lines.iter().all(|l| l.chars().count() <= 10), "{lines:?}");
 
-        // Minimized, a failure reads as the same honest pointer (nothing is
-        // retrying while minimized); the fold-failed words live in the
-        // expanded view, where the retry actually runs.
-        let lines = panel.minimized_lines(&[], 200);
-
-        assert!(
-            lines[0].contains("expand for a machine reading"),
-            "{lines:?}"
-        );
-        let expanded = panel.expanded_lines(&[], 200, 40).join("\n");
-
+        // A failed fold leaves the glance at unknown; the fold-failed words
+        // live in the modal, where the retry runs.
+        let mut failed = Panel::default();
+        failed.toggle();
+        assert!(failed.take_want(&[]).is_some());
+        failed.apply(FoldPart::Lanes(None));
+        assert!(failed.minimized_lines(&[], 200)[1].contains("unknown"));
+        let expanded = failed.expanded_lines(&[], 200, 40).join("\n");
         assert!(expanded.contains("fold failed"), "{expanded:?}");
     }
 

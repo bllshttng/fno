@@ -512,12 +512,11 @@ pub enum Event {
     /// Open the backlog board (prefix+O).
     OpenBacklogBoard,
     CycleSidelineView,
-    /// (redefined by) Toggle the org block on the left
-    /// sideline between its three-line glance and the full reading: load
-    /// against the cap, what saturates the machine, the working/idle/dead
-    /// census, and the lane advisor's own answer. The block is always
-    /// visible; this only expands or collapses it, and the client's view
-    /// layer interprets that, not here.
+    /// (redefined by) Open the org modal: the full reading of load against
+    /// the cap, what saturates the machine, the working/idle/dead census,
+    /// and the lane advisor's own answer. The left sideline keeps only its
+    /// three-line glance; the client's view layer interprets the key, not
+    /// here.
     OpenTeam,
     /// Open or close the Org board view in one press: the sideline's org
     /// board (fleet, machines, leads, seats), from any sideline view. From Org it
@@ -1404,7 +1403,7 @@ pub(crate) fn default_bindings() -> Vec<KeyBinding> {
             "org",
             OpenTeam,
             Global,
-            "the org block (load, census, lanes)", // minimize/expand, sideline
+            "the org modal (load, census, lanes)",
         ),
         b(
             b'G',

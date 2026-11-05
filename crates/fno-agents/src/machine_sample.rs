@@ -381,7 +381,9 @@ pub fn read(
     let live = crate::spawn_gate::live_rows(&home.registry_json(), &mut warnings);
     sample.live_rows = Some(live.len() as u64);
     sample.leads = Some(live.iter().filter(|row| row.role_level.is_some()).count() as u64);
-    sample.workers = Some(live.iter().filter(|row| row.role_level.is_none()).count() as u64);
+    let worker_rows: Vec<&crate::state::RegistryEntry> =
+        live.iter().filter(|row| row.role_level.is_none()).collect();
+    sample.workers = Some(working_count(&worker_rows, &transcript_age_any));
     #[cfg(target_os = "macos")]
     {
         if let Ok(out) = std::process::Command::new("vm_stat").output() {
@@ -835,6 +837,59 @@ pub(crate) fn maybe_capture_process_snapshot(
     Ok(true)
 }
 
+/// How recent a transcript write must be for its session to count as working.
+/// The mux census reads the same ten minutes (`org_overlay::working_max_s`).
+const WORKING_WINDOW_S: i64 = 600;
+
+/// Seconds since a claude session's transcript was last written, searched
+/// under the ambient projects dir and every isolated account's dir, so two
+/// config dirs listing one transcript give one answer.
+fn transcript_age_any(session: &str) -> Option<i64> {
+    let mut bases = vec![crate::claude_drive::claude_projects_dir()];
+    bases.extend(
+        crate::claude_roster::isolated_account_dirs()
+            .into_iter()
+            .map(|(_, dir)| dir.join("projects")),
+    );
+    let path = bases
+        .iter()
+        .find_map(|base| crate::claude_drive::find_transcript_in(base, session))?;
+    let modified = std::fs::metadata(path).ok()?.modified().ok()?;
+    SystemTime::now()
+        .duration_since(modified)
+        .ok()
+        .map(|d| d.as_secs() as i64)
+}
+
+/// The live rows that are working: each session once, and a claude session
+/// only when its transcript was written inside the window. A codex or
+/// opencode row has no transcript seam here yet, so a live row of those
+/// harnesses counts; that overcounts a quiet one until the seam lands.
+pub(crate) fn working_count(
+    rows: &[&crate::state::RegistryEntry],
+    age: &dyn Fn(&str) -> Option<i64>,
+) -> u64 {
+    let mut seen = std::collections::HashSet::new();
+    rows.iter()
+        .filter(|row| {
+            let key = row
+                .harness_session_id
+                .as_deref()
+                .unwrap_or(row.name.as_str());
+            if !seen.insert(key.to_string()) {
+                return false;
+            }
+            match (row.harness_name(), row.harness_session_id.as_deref()) {
+                ("claude", Some(session)) => {
+                    age(session).is_some_and(|secs| secs < WORKING_WINDOW_S)
+                }
+                ("claude", None) => false,
+                _ => true,
+            }
+        })
+        .count() as u64
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -949,5 +1004,30 @@ mod tests {
         let max_live: u32 = digits.parse().unwrap();
         assert!(max_live >= 1, "the band floor is 1, got {max_live}");
         assert!(line.ends_with("band default)"));
+    }
+
+    #[test]
+    fn working_counts_each_session_once_inside_the_window() {
+        let row = |name: &str, harness: &str, session: &str| {
+            let mut entry = crate::state::RegistryEntry::default();
+            entry.name = name.into();
+            entry.harness = Some(harness.into());
+            entry.harness_session_id = Some(session.into());
+            entry
+        };
+        let rows = vec![
+            row("fresh", "claude", "s-fresh"),
+            row("fresh-twin", "claude", "s-fresh"),
+            row("quiet", "claude", "s-quiet"),
+            row("no-transcript", "claude", "s-none"),
+            row("codex-one", "codex", "c-1"),
+        ];
+        let refs: Vec<&crate::state::RegistryEntry> = rows.iter().collect();
+        let age = |session: &str| match session {
+            "s-fresh" => Some(30),
+            "s-quiet" => Some(WORKING_WINDOW_S),
+            _ => None,
+        };
+        assert_eq!(working_count(&refs, &age), 2);
     }
 }
