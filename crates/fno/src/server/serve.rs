@@ -557,9 +557,20 @@ pub(super) async fn serve(
     pane_reap_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut owner_check_tick = tokio::time::interval(Duration::from_secs(1));
     owner_check_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    // The fleet sidecar refresh: only a client render carried the publish,
+    // so a machine with no attached client stopped writing and the beat read
+    // the file stale after five minutes. The timer keeps an unattended
+    // machine publishing; the throttle inside the publish coalesces this
+    // with the client-render writes (x-acf8).
+    let mut sidecar_tick = tokio::time::interval(crate::workspace_sidecar::every());
+    sidecar_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     // `interval`'s first tick is immediate; consume it so the first scan lands
     // after one interval instead of duplicating startup's known-live state.
+    // For the sidecar the same consumption also skips a boot-time write from
+    // a core whose squads have not synced yet (an empty map would clobber a
+    // still-fresh file from the previous server run).
     pane_reap_tick.tick().await;
+    sidecar_tick.tick().await;
 
     // Build-drift retirement: the watch stats its own executable
     // off-loop every 5th tick and retires through Flow::Shutdown only on a
@@ -791,6 +802,12 @@ pub(super) async fn serve(
                     cause = "owner-gone";
                     break Flow::Shutdown;
                 }
+            }
+            // The sidecar publish rides `agent_rows`; with no client no
+            // render runs, so this timer is the only writer left on an
+            // unattended machine (x-acf8).
+            _ = sidecar_tick.tick() => {
+                core.agent_rows();
             }
             // On grace with no client, shut down owner-bound sandboxes and
             // explicit test servers through Flow::Shutdown. Replicate the
