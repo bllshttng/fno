@@ -244,8 +244,13 @@ fn install_tag(tag: &str, want: &str, platform: &str, bin: &Path) -> Result<(), 
     result
 }
 
-/// Remove the uv tool once the binary `fno` no longer forwards to Python:
-/// `fno --version` must answer with `FNO_PY` on a stub that refuses. uv
+/// The argv the front door still forwarded to `fno-py` when the move
+/// shipped. Each must answer with `FNO_PY` on a refusing stub before the uv
+/// tool goes: a forward that finds no `fno-py` reinstalls the wheel over the
+/// move.
+const FORWARD_PROBES: [&[&str]; 3] = [&["--version"], &["--help"], &["inbox", "outstanding"]];
+
+/// Remove the uv tool once the binary `fno` no longer forwards to Python. uv
 /// deletes the entrypoint links on uninstall, so they are made again after.
 fn retire_uv_tool(tool_root: &Path, bin: &Path) -> Result<String, String> {
     let receipt = tool_root.join("uv-receipt.toml");
@@ -254,20 +259,30 @@ fn retire_uv_tool(tool_root: &Path, bin: &Path) -> Result<String, String> {
     };
     let stub_dir = tempfile::tempdir().map_err(|e| format!("tempdir: {e}"))?;
     let stub = stub_dir.path().join("fno-py");
-    std::fs::write(&stub, "#!/bin/sh\nexit 97\n")
-        .map_err(|e| format!("{}: {e}", stub.display()))?;
+    let reached = stub_dir.path().join("reached");
+    std::fs::write(
+        &stub,
+        format!("#!/bin/sh\n: > '{}'\nexit 97\n", reached.display()),
+    )
+    .map_err(|e| format!("{}: {e}", stub.display()))?;
     use std::os::unix::fs::PermissionsExt;
     let _ = std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755));
-    let answered = crate::process_admission::std_command(bin.join("fno"))
-        .arg("--version")
-        .env("FNO_PY", &stub)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|s| s.success());
-    if !answered {
-        return Ok("keeping the uv tool: `fno --version` still needs fno-py".to_string());
+    let forwards = FORWARD_PROBES.iter().find(|argv| {
+        crate::process_admission::std_command(bin.join("fno"))
+            .args(argv.iter())
+            .env("FNO_PY", &stub)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_err()
+            || reached.exists()
+    });
+    if let Some(argv) = forwards {
+        return Ok(format!(
+            "keeping the uv tool: `fno {}` still needs fno-py",
+            argv.join(" ")
+        ));
     }
     let uv = crate::bootstrap::find_uv().ok_or("uv is not on PATH")?;
     let links = receipt_links(&text);
