@@ -217,6 +217,8 @@ Each child gets one line:
 - [ ] <title> · @<handle> · #<PR>
 ```
 
+Each child line also ends with a hidden `<!-- fno:<id> -->` comment that names the node. A reader sees nothing. A teammate's fno reads it, as [Team mode](#team-mode) shows. A line that a `/claim` added with no node has no comment.
+
 `[x]` marks a done child. The handle is the holder of the child's live node claim. A `github:<login>` holder prints that login. Any other holder is a session on your machine, so the line names the login your `gh` is signed in as. A child with no claim has no handle. A child with no PR has no `#`. A child has no line in four cases:
 
 - its `public` field is false,
@@ -241,6 +243,24 @@ Before the pass adds a line, it compares the title with every line. The exact ma
 One login holds at most 3 open claims on an issue, the same limit as claim issues. The fourth `/claim` gets one reply and no line. `/release` on the first line of a comment frees every claim of that login on the issue. `/release <title>` frees one.
 
 A claim has a 7 day clock (`STALE_AFTER_DAYS` in `epic_issue.rs`). A claim turns stale after 7 days. If its login has an open PR with `Refs #<n>` or `Closes #<n>` on a line of its own, the claim stays live. A stale line reads `· stale`, and the pass releases its node claim. A new `/claim` on a stale line moves it to the new login. A PR from the holder adds `#<PR>` to the line and keeps the claim. The claim store caps a node claim at 24 hours, so the pass renews each live `/claim` node claim on every tick. If the heal pass is off for more than 24 hours, the node claims lapse and the lines go free. Comment `/claim` again to take one back. A child that turns done frees its claim at once. The stale rule covers `/claim` holds only. A claim from a claim issue keeps its own rules.
+
+## Team mode
+
+Team mode lets a second person work the same backlog with no shared store. Each person runs their own fno and keeps their own graph. GitHub is the one shared surface. A teammate is a person with write access to the repo who merges their own PRs. [Shared epics on GitHub](#shared-epics-on-github) and [Claim a line by comment](#claim-a-line-by-comment) describe the issue and the claim. This section adds the teammate's steps.
+
+1. The owner shares an epic. The heal pass opens the issue and keeps its checklist.
+2. The teammate comments `/claim <title>` on the issue. A title that matches an owner child takes that node. The line shows the teammate's login, and the owner's fleet stops getting the node.
+3. The teammate runs `fno backlog add requests --epic <n>` in a checkout of the repo. The command first lists the nodes it will file. Add `--apply` to write them.
+4. The teammate's fleet builds the node from the teammate's own graph.
+5. The teammate's PR carries `Fixes <id>` and `Refs #<n>`.
+
+The import in step 3 reads the checklist and keeps each line that passes three tests. The line ends with the hidden id comment. It shows the login your `gh` is signed in as, and case does not matter. It is open and not stale. Each kept line becomes a local node with the owner's id, status `ready`, `epic_issue: <n>` and `origin_evidence: github:<repo>#<n>`. The node is private. The import reads the issue and writes only your graph. It writes nothing to GitHub. It needs your login, and a `GH_TOKEN` or `GITHUB_TOKEN` variable hides that login, so unset the variable for this command.
+
+A second run files nothing. A local node that already holds the id with other evidence stays as it is, and the receipt names both evidence values. A `/claim` that matched no owner child has no node and no id comment, so the import files nothing for it. File your own node for that work.
+
+The node keeps the owner's id on purpose. One `Fixes <id>` line then names the same node on both machines, and no id map exists. `fno do pr create` reads `epic_issue` from the node before it looks at a parent, so a teammate's node gets `Refs #<n>`. It never gets `Closes`, because only the owner knows which child is last. When the last open line merges, close the issue by hand.
+
+Spawn, laws and mail do not cross between people. Spawning a worker on a teammate's machine is not supported. A worker runs against the graph of the machine that spawns it, and each person's graph is their own.
 
 ## Failure: the primary is unreachable
 
