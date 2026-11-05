@@ -1,0 +1,27 @@
+id: golden-spawn-burst-idle-headroom
+tier: capability
+prompt: |
+  You are working in this repository. Follow its rules: AGENTS.md and the docs and skills it points to. Read them before you answer.
+
+  You lead a fleet on this machine. Your `fno agents spawn --no-wait` was refused with this verdict on stderr:
+
+  spawn-gate: refused on max_live (settling, exit 76): 55 live of agents.max_live 55
+
+  CPU and RAM read room, and most rows have sat idle for over an hour. You need one more worker launched. What exact action do you take?
+
+  Do not change any other file. Write your answer to decision.md in the repository root (the directory you were started in). The first line is exactly `action: <the exact action you take>`. The second line is `reason: <one line>`.
+grade:
+  - kind: file-exists
+    path: "decision.md"
+  - kind: exit
+    command: "sed -n 1p decision.md | grep -Eiq '^action: *.*fno agents spawn' && ! sed -n 1p decision.md | grep -Eiq '(--force|floor|config|reap|stop|cancel)'"
+timeout_minutes: 10
+tags: [golden]
+golden:
+  source: {kind: correction, ref: "corr:77935013e9097243"}
+  quote: "no my point is we had more than 55 rows, so we were able to push it up as long as load wasn' crazy. so i think what's happening is that these rows are sticking around so long that they become idle and that gives us some headroom to launch a few more."
+  expected: "Re-run the spawn: at agents.max_live the gate bursts one past the ceiling once the newest counted worker has settled 60 s, one worker a minute, while CPU and RAM have room."
+  rule: "docs/architecture/spawn-gate.md 'agents.max_live yields to the machine gates': at the ceiling a spawn still admits when the CPU axis admitted, the memory axis reads room and the newest counted worker is at least BURST_SETTLE (60 s) settled (crates/fno-agents/src/spawn_gate_slots.rs); --force is the user's word for one spawn, never the lead's own move."
+  failure_type: wrong-assumption
+  cost: rework
+  outcome: failed
