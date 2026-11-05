@@ -42,6 +42,9 @@ pub(super) async fn route(
         // never leak to a pane.
         return Some(keys_modal_keys(view, scanner, bytes, sock_w).await);
     }
+    if let Some(flow) = super::key_grid::footer_keys(view, bytes) {
+        return Some(flow);
+    }
     if view.row_menu.is_some() {
         // US2: the row context menu consumes keys while open (arrows walk
         // the entries + grid, Enter runs, Esc/q close) - never leaks to a pane.
