@@ -6,13 +6,13 @@ Before: 2,750 Rust declarations at base, measured with the census commands at RE
 
 ## The finding: the G4 keep-rule floor
 
-The G4 surface is at its keep-rule floor. The first pass cut 3,014 to 2,409 (605 declarations, 20.1 percent) and stopped at its AC5-EDGE: the rule blocks further folding without deleting sole guards of fail-closed paths. Post-audit work folded more families (client_tests.rs and server_tests.rs fold plans were staged and the mechanical families absorbed). This second pass applied the newer d-e016ab8e rules that postdate the first pass, and three measured sweeps found the floor:
+The G4 surface is at its keep-rule floor. The first pass cut 3,014 to 2,409 (605 declarations, 20.1 percent) and stopped at its AC5-EDGE. That rule blocks further folding without deleting sole guards of fail-closed paths. Post-audit work folded more families (client_tests.rs and server_tests.rs fold plans were staged and the mechanical families absorbed). This second pass applied the newer d-e016ab8e rules that postdate the first pass. Three measured sweeps found the floor:
 
 - Whole-body hash over all 2,733 test fns: zero duplicate bodies after the four rename twins came out.
 - Near-body hash over each fn's first 500 normalized chars: zero collision groups.
-- Same-name sweep across the crate: four pairs. Two were real duplicates (the rename family moved verbatim to client/tests/rename_tests.rs and the parent copies stayed; cut). Two were production twins that each keep their own guard: strip_ansi_rows in vt.rs and bootstrap.rs test two different strip_ansi functions (bytes vs str), and the two click_rows tests guard different surfaces.
+- Same-name sweep across the crate: four pairs. Two were real duplicates (the rename family moved verbatim to client/tests/rename_tests.rs, and the parent copies stayed). Two were production twins that each keep their own guard. strip_ansi_rows in vt.rs and bootstrap.rs test two different strip_ansi functions (bytes vs str). The two click_rows tests guard different surfaces.
 
-Every kept test names its sole contract and its credible failure in-file, in an incident-tagged comment (x-tagged). That naming is what the stop-short clause of the README requires, and it is how this ledger stops short of the half target.
+Every kept test names its sole contract and its credible failure in-file, in an incident-tagged comment (x-tagged). That naming is what the stop-short clause of the README requires. It is how this ledger stops short of the half target.
 
 ## Cuts
 
@@ -26,9 +26,11 @@ Eleven cuts, all measured:
 
 ## Method
 
-The pass re-baselined the census at aa9a1f7e4d and ranked owners by declarations. Audits read the ranked owners in full: mux_cli.rs, main.rs, client_tests.rs (index plus the per-gesture families), server_tests.rs (index plus the open_here, diff_pane, resume, template, recruit and persist families), portal_tests.rs, agents_view.rs and sideline_card_tests.rs. The keep-rule readings that produced no cut: the main.rs classifier rows are user-facing byte pins; the parity and e2e binaries in crates/fno/tests/ are the strongest boundary for their surfaces (characterization goldens whose oracle legs are dead, per the README rule that keeps user-facing bytes and generated freshness); org_fold_live stays a deliberate live probe whose CI entry still compiles it. The doctor verdict fold kept every row, so it counts as zero toward any coverage claim under d-e016ab8e rule 1.
+The pass re-baselined the census at aa9a1f7e4d and ranked owners by declarations. Audits read the ranked owners in full: mux_cli.rs, main.rs, client_tests.rs, server_tests.rs, portal_tests.rs, agents_view.rs and sideline_card_tests.rs. The client_tests read covered the per-gesture families (index plus x7683, selector_x, nav_goto, rename, move, answer and peek arms). The server_tests read covered open_here, diff_pane, resume, template, recruit and persist.
 
-Local collection and test runs stayed blocked by the fleet hold. The compile gate ran once over the crate (see Verification) and CI owns the collected-case count.
+The keep-rule readings that produced no cut: the main.rs classifier rows are user-facing byte pins. The parity and e2e binaries in crates/fno/tests/ are the strongest boundary for their surfaces (characterization goldens whose oracle legs are dead). The README rule keeps user-facing bytes and generated freshness. org_fold_live stays a deliberate live probe whose CI entry still compiles it. The doctor verdict fold kept every row, so it counts as zero toward any coverage claim under d-e016ab8e rule 1.
+
+Local collection and test runs stayed blocked by the fleet hold. The compile gate ran once over the crate (see Verification). CI owns the collected-case count.
 
 ## Counts
 
@@ -37,11 +39,11 @@ Local collection and test runs stayed blocked by the fleet hold. The compile gat
 | Declarations (crates/fno, Rust) | 2,750 | 2,739 |
 | Collected cases | 2,733 (at 7ed2466c8c, README) | pending: first CI run |
 
-The half target (1,366 collected) is not reached and cannot be reached by honest deletion: the floor section above is the stop-short proof the README asks for.
+The half target (1,366 collected) is not reached and cannot be reached by honest deletion. The floor section above is the stop-short proof the README asks for.
 
 ## Verification
 
-`cargo check --all-targets` ran once over the crate after the cut, per the G1 discipline. Local test runs stayed barred by the fleet hold, so the keeper spot-check is pending the first CI run of this PR; the ledger's keeper mutations are recorded when it lands.
+`cargo check --all-targets` ran once over the crate after the cut, per the G1 discipline. Local test runs stay barred by the fleet hold. The keeper spot-check is pending the first CI run of this PR. The ledger records the keeper mutations when it lands.
 
 ## Files
 
