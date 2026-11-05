@@ -79,6 +79,7 @@ pub(super) const STRUCTURAL_STEPS: &[(&str, &str, &str)] = &[
     ("smoke duration reporter self-test", ".", "bash tests/ci/test_smoke_duration_report.sh"),
     ("workflow timeout-comment guard", ".", "bash scripts/ci/check-workflow-timeout-comments.sh"),
     ("hookagg window harness", ".", "python3 scripts/release/test_hookagg_window.py"),
+    ("python ledger self-test", ".", "bash tests/ci/test_check_python_ledger.sh"),
 ];
 
 /// Shell harnesses discovery finds but smoke must not run yet (the

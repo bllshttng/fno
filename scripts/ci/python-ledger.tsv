@@ -22,12 +22,8 @@ crates/fno-agents/tests/fixtures/coverage_gate/capture_driver.py	delete-by pytho
 crates/fno-agents/tests/fixtures/merge_command/capture_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
 crates/fno-agents/tests/fixtures/post_merge/capture_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
 crates/fno-agents/tests/fixtures/post_merge/cases_ritual.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
-crates/fno-agents/tests/fixtures/pr_watch_heal/oracle.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
-crates/fno-agents/tests/fixtures/pr_watch_install/oracle.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
-crates/fno-agents/tests/fixtures/pr_watch_refresh/oracle.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
 crates/fno-agents/tests/fixtures/pr_watch_status/oracle.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
 crates/fno-agents/tests/fixtures/relay_transcript/capture_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
-crates/fno-agents/tests/fixtures/research/capture_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
 crates/fno-agents/tests/fixtures/scoreboard/scoreboard_golden_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
 crates/fno-agents/tests/fixtures/scratch/copy_for_diff/paths_slice.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
 crates/fno-agents/tests/fixtures/scratch/events/attest_prov.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
@@ -37,17 +33,14 @@ crates/fno-agents/tests/fixtures/scratch/gate_wait/wait_spawn_9fd0.py	delete-by 
 crates/fno-agents/tests/fixtures/scratch/graph/kids.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
 crates/fno-agents/tests/fixtures/scratch/liveness/liveness.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
 crates/fno-agents/tests/fixtures/skill_diff/capture_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
-crates/fno-agents/tests/fixtures/think_dispatch/capture_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
 crates/fno-agents/tests/fixtures/tracker/capture_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
 crates/fno-agents/tests/fixtures/worktree/capture_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
 crates/fno-agents/tests/paths_hub_golden_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
-crates/fno-agents/tests/review_capability_golden_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
 crates/fno-agents/tests/review_findings_golden_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
 crates/fno-agents/tests/review_invocation_golden_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
 crates/fno-agents/tests/whoami_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
 crates/fno/tests/config_cli_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
 crates/fno/tests/config_doctor_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
-crates/fno/tests/config_load_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
 crates/fno/tests/config_set_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
 crates/fno/tests/fake_fno_agents.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
 evals/fixtures/golden/few-comments/retry.py	keep	harbor task data the eval harness runs, not fno code
@@ -89,7 +82,6 @@ evals/harness-fit/run/setaside_run0.py	keep	harbor task data the eval harness ru
 evals/harness-fit/run/status.py	keep	harbor task data the eval harness runs, not fno code
 plugins/hermes/promise-tag-reader/__init__.py	keep	the Hermes host loads Python plugins only
 plugins/hermes/promise-tag-reader/reader.py	keep	the Hermes host loads Python plugins only
-scripts/analysis/graph-write-gate-audit.py	delete-by python-cli-retirement	dev or CI tooling (a CI script, schema row or tombstone names it); off the user path
 scripts/ci/check-agent-field-population-contract.py	delete-by python-cli-retirement	CI or build tooling that reads cli/ or runs under the dev venv; never on the user path
 scripts/ci/check-decision-graduation.py	delete-by python-cli-retirement	CI or build tooling that reads cli/ or runs under the dev venv; never on the user path
 scripts/ci/check-harness-roster-parity.py	delete-by python-cli-retirement	CI or build tooling that reads cli/ or runs under the dev venv; never on the user path
@@ -114,21 +106,14 @@ scripts/lib/check-skill-frontmatter.py	delete-by python-cli-retirement	CI or bui
 scripts/lib/parse-bundle-manifest.py	delete-by python-cli-retirement	CI or build tooling that reads cli/ or runs under the dev venv; never on the user path
 scripts/mail-bus-lag.py	delete	no caller; the docs/architecture/multiplayer.md line goes with it
 scripts/metrics/completion-summary.py	delete	no caller; its test and test_smoke_registry.rs row and reachable-paths-baseline row go with it
-scripts/metrics/prompt_prefix_cache_probe.py	delete	no caller; its reachable-paths-baseline rows go with it
 scripts/migrate-events-shape.py	delete-by python-cli-retirement	dev or CI tooling (a CI script, schema row or tombstone names it); off the user path
 scripts/probes/reap-receipt-stop-probe.py	delete	no caller; the gc_sweep.rs doc comment naming it goes with it
 scripts/regen-generated-copies.py	delete-by python-cli-retirement	CI or build tooling that reads cli/ or runs under the dev venv; never on the user path
 scripts/release/draft-release-notes.py	keep	release.yml runs it in CI only; never on the user path
+scripts/release/hookagg.py	keep	hook-latency sample aggregation; its window unit test is a smoke-registry row; CI only, never on the user path
+scripts/release/test_hookagg_window.py	keep	unit tests for hookagg.py; the smoke registry runs it; CI only
 scripts/release/update-homebrew-formula.py	keep	release.yml runs it in CI only; never on the user path
 scripts/sync-codex-agents.py	delete-by python-cli-retirement	CI or build tooling that reads cli/ or runs under the dev venv; never on the user path
-tests/agents/test_frontend_executor.py	delete-by python-cli-retirement	pytest-only coverage of retired Python surfaces; goes with the Python test tree
-tests/agents/test_frontend_executor_smoke.py	delete-by python-cli-retirement	pytest-only coverage of retired Python surfaces; goes with the Python test tree
-tests/hooks/test_codex_lead_continuation_classifier.py	delete	covers codex-lead-continuation-smoke.py only
-tests/hooks/test_git_protection_push.py	delete-by git-protection-port	covers the git-protection hook; goes with it (drop its test_smoke_registry.rs row)
-tests/hooks/test_merge_guard_coverage.py	delete-by git-protection-port	covers the git-protection hook; goes with it (drop its test_smoke_registry.rs row)
-tests/hooks/test_merge_guard_review_hold.py	delete-by git-protection-port	covers the git-protection hook; goes with it (drop its test_smoke_registry.rs row)
-tests/hooks/test_merge_guard_stacked_base.py	delete-by git-protection-port	covers the git-protection hook; goes with it (drop its test_smoke_registry.rs row)
-tests/hooks/test_merge_guard_worktree.py	delete-by git-protection-port	covers the git-protection hook; goes with it (drop its test_smoke_registry.rs row)
 tests/metrics/test_completion_summary_path.py	delete	covers completion-summary.py only
 tests/spec/test_impeccable_stages_validator.py	delete-by python-cli-retirement	pytest-only coverage of retired Python surfaces; goes with the Python test tree
 tests/spec/test_product_md_check.py	delete-by python-cli-retirement	pytest-only coverage of retired Python surfaces; goes with the Python test tree

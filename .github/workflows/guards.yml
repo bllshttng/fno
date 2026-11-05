@@ -578,6 +578,14 @@ jobs:
         timeout-minutes: 5
         run: bash scripts/ci/check-no-user-python.sh
 
+      # Every tracked .py outside cli/ has one verdict row in
+      # scripts/ci/python-ledger.tsv, and every row names a live file; keep
+      # rows must sit inside check-file-budget.sh's PY_ALLOWED homes.
+      - name: Python ledger is complete
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: bash scripts/ci/check-python-ledger.sh
+
       # A tracked source file over 5,000 lines is shrink-only relative to the
       # merge base; the refusal names the module-per-question remedy. The
       # waiver is read live from the PR that owns the checked commit, so push,
