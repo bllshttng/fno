@@ -492,6 +492,7 @@ const GLOBAL_CHORD_PREFIX: &[u8] = b"\x1b[1;7";
 /// bytes are NEVER re-encoded (AC2-UI).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event {
+    Report,
     Forward(Vec<u8>),
     Cmd(Command),
     /// Digit tab jump: select the tab at this 1-BASED ordinal - the
@@ -1542,6 +1543,7 @@ pub(crate) fn default_bindings() -> Vec<KeyBinding> {
             Global,
             "grab work (dispatch next ready)",
         ),
+        b(b'!', "report", Report, Global, "report a problem"),
         b(b'd', "detach", Detach, Global, "detach"),
     ]
 }

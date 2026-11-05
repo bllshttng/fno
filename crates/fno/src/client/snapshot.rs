@@ -23,7 +23,7 @@ const USAGE: &str =
     "usage: fno mux serve --snapshot --server <name> --out <path> [--squad <name>] \
 [--theme dark|light|macchiato] [--format html|svg|png] [--size <cols>x<rows> [--fit]] [--peer <cols>x<rows>] \
 [--keys-footer] [--font <family>] [--message <fmail-id>] [--edge backlog|messages-tree|messages-part|org|dock=<size>] \
-[--view bell|bell-wide|bell-full|feed|row-menu|hover|cursor|tab-menu|sideline-menu|composer|split-menu|settings|keys|keys-tags|org-block|org-table|org-recent|org-overview|org-graph|org-health|org-seat|org-feed|org-system|org-remote|org-peek|org-spawn|org-keys|messages-tree|messages-chats|messages-thread|messages-system|messages-archive|backlog-list|backlog-kanban|review-diff|review-panel|review-panel-drag|navigator-pr|navigator-model|navigator-menu|feed-detail|question-detail|connections|connections-use|needs|dock|machines]";
+[--view report|bell|bell-wide|bell-full|feed|row-menu|hover|cursor|tab-menu|sideline-menu|composer|split-menu|settings|keys|keys-tags|org-block|org-table|org-recent|org-overview|org-graph|org-health|org-seat|org-feed|org-system|org-remote|org-peek|org-spawn|org-keys|messages-tree|messages-chats|messages-thread|messages-system|messages-archive|backlog-list|backlog-kanban|review-diff|review-panel|review-panel-drag|navigator-pr|navigator-model|navigator-menu|feed-detail|question-detail|connections|connections-use|needs|dock|machines]";
 
 #[derive(Debug, PartialEq)]
 pub enum Format {
@@ -37,6 +37,7 @@ pub enum Format {
 /// flips the same state the live keys flip, then paints.
 #[derive(Debug, PartialEq)]
 pub enum ViewKind {
+    Report,
     /// The notifications bell panel, with one synchronous gather like the
     /// live panel's `maybe_kick`.
     Bell,
@@ -284,6 +285,7 @@ fn parse_view(v: &str) -> Option<ViewKind> {
         "composer" => Some(ViewKind::Composer),
         "split-menu" => Some(ViewKind::SplitMenu),
         "settings" => Some(ViewKind::Settings),
+        "report" => Some(ViewKind::Report),
         "keys" => Some(ViewKind::Keys),
         "keys-tags" => Some(ViewKind::KeysTags),
         "org-block" => Some(ViewKind::OrgBlock),
@@ -1168,6 +1170,7 @@ questions (scripts/ops/mux-demo-snapshot.sh seeds one)",
             view.aux = Some(view.build_settings_modal());
             view.aux_esc.clear();
         }
+        Some(ViewKind::Report) => super::report::open(&mut view),
         Some(ViewKind::Keys) => {
             view.open_keys_modal();
         }
@@ -1685,6 +1688,7 @@ mod tests {
             ("composer", ViewKind::Composer),
             ("split-menu", ViewKind::SplitMenu),
             ("settings", ViewKind::Settings),
+            ("report", ViewKind::Report),
             ("keys", ViewKind::Keys),
             ("keys-tags", ViewKind::KeysTags),
             ("org-block", ViewKind::OrgBlock),

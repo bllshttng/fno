@@ -379,3 +379,208 @@ fn a_lone_esc_closes_the_row_selector() {
     h.type_bytes(b"q\r");
     h.wait_screen(15, |s| s.contains("not found"));
 }
+
+#[test]
+fn mux_report_files_context_and_keeps_text_after_a_refusal() {
+    use std::io::Write;
+    use std::os::unix::fs::PermissionsExt;
+    let scratch = Scratch::new("report");
+    let door = scratch.0.join("report-door");
+    std::fs::write(
+        &door,
+        r#"#!/bin/sh
+if [ "$1 $2" != 'backlog idea' ]; then exit 0; fi
+printf '%s\n' "$@" > "$RECORD_DIR/argv"
+cat > "$RECORD_DIR/body"
+echo call >> "$RECORD_DIR/calls"
+if [ -e "$RECORD_DIR/delay" ]; then exec sleep 30; fi
+if [ ! -e "$RECORD_DIR/allow" ]; then echo 'report: graph is busy' >&2; exit 3; fi
+printf '{\n  "id": "probe-abcd",\n  "title": "portal stopped"\n}\n'
+"#,
+    )
+    .unwrap();
+    std::fs::set_permissions(&door, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let config_root = scratch.0.join("config-root");
+    std::fs::create_dir_all(config_root.join(".fno")).unwrap();
+    std::fs::write(
+        config_root.join(".fno/config.toml"),
+        "[mux]\nreport_parent = \"probe-aaaa\"\n",
+    )
+    .unwrap();
+    struct Peer {
+        stop: std::sync::mpsc::Sender<()>,
+        thread: Option<std::thread::JoinHandle<()>>,
+        socket: std::path::PathBuf,
+    }
+    impl Drop for Peer {
+        fn drop(&mut self) {
+            let _ = self.stop.send(());
+            if let Some(thread) = self.thread.take() {
+                let _ = thread.join();
+            }
+            let _ = std::fs::remove_file(&self.socket);
+        }
+    }
+    let listener = std::os::unix::net::UnixListener::bind(scratch.main_sock()).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let (stop, rx) = std::sync::mpsc::channel();
+    let session = "eeeeeeee-1111-2222-3333-444455556666";
+    let thread = std::thread::spawn(move || {
+        use fno::proto::{read_msg_sync, write_msg_sync, ClientMsg, ServerMsg};
+        while rx.try_recv().is_err() {
+            let Ok((mut stream, _)) = listener.accept() else {
+                std::thread::sleep(Duration::from_millis(20));
+                continue;
+            };
+            stream.set_nonblocking(false).unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_millis(200)))
+                .unwrap();
+            let Ok(message) = read_msg_sync::<_, ClientMsg>(&mut stream) else {
+                continue;
+            };
+            if matches!(message, ClientMsg::Query) {
+                let _ = write_msg_sync(
+                    &mut stream,
+                    &ServerMsg::Info {
+                        session: "main".into(),
+                        clients: 0,
+                        squads: 1,
+                        panes: 1,
+                    },
+                );
+                continue;
+            }
+            let ClientMsg::Attach {
+                rows, cols, cwd, ..
+            } = message
+            else {
+                continue;
+            };
+            let row = fno::proto::AgentRow {
+                name: "feedback-row".into(),
+                squad: Some(1),
+                pane_id: Some(1),
+                node: Some("probe-bbbb".into()),
+                harness_session_id: Some(session.into()),
+                ..Default::default()
+            };
+            let layout: ServerMsg = serde_json::from_value(serde_json::json!({"Layout": {
+                "squads": [{"id": 1, "name": "report", "canonical_cwd": cwd, "tabs": [{"id": 1, "name": "shell"}], "active_tab": 0, "panes": 1}],
+                "active_squad": 1, "panes": [[1, {"x": 0, "y": 0, "rows": rows, "cols": cols}]], "focus": 1, "area": [rows, cols], "agents": [row]
+            }})).unwrap();
+            let mut pane = fno::vt::Pane::new(rows, cols);
+            pane.feed(b"report-frame-evidence\r\n$ ");
+            write_msg_sync(&mut stream, &layout).unwrap();
+            write_msg_sync(
+                &mut stream,
+                &ServerMsg::Frame {
+                    pane_id: 1,
+                    frame: pane.frame(),
+                },
+            )
+            .unwrap();
+            while rx.try_recv().is_err() {
+                match read_msg_sync::<_, ClientMsg>(&mut stream) {
+                    Ok(ClientMsg::Detach) | Err(fno::proto::ProtoError::Closed) => return,
+                    Err(fno::proto::ProtoError::Io(error))
+                        if matches!(
+                            error.kind(),
+                            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                        ) => {}
+                    Ok(_) => {}
+                    Err(_) => return,
+                }
+            }
+            return;
+        }
+    });
+    let _peer = Peer {
+        stop,
+        thread: Some(thread),
+        socket: scratch.main_sock(),
+    };
+    let mut h = ClientHarness::spawn_sized_with(
+        &scratch,
+        30,
+        120,
+        &[
+            ("FNO_BIN", door.to_str().unwrap()),
+            ("RECORD_DIR", scratch.0.to_str().unwrap()),
+            ("FNO_REPO_ROOT", config_root.to_str().unwrap()),
+        ],
+    );
+    h.wait_screen(15, |s| {
+        s.contains("feedback-row") && s.contains("report-frame-evidence")
+    });
+    for (name, text) in [
+        ("main.log", "server-log-evidence"),
+        ("client.log", "client-log-evidence"),
+    ] {
+        writeln!(
+            std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(scratch.0.join(name))
+                .unwrap(),
+            "{text}"
+        )
+        .unwrap();
+    }
+    h.type_bytes(b"\x02!");
+    h.wait_screen(5, |s| s.contains("report a problem"));
+    h.type_bytes(b"portal stopped\r");
+    h.wait_screen(15, |s| s.contains("report: graph is busy"));
+    assert!(
+        h.screen().contains("portal stopped"),
+        "a refusal keeps the draft"
+    );
+    std::fs::write(scratch.0.join("delay"), "").unwrap();
+    h.type_bytes(b"\r");
+    h.wait_screen(15, |s| s.contains("timed out after 10s"));
+    assert!(
+        h.screen().contains("portal stopped"),
+        "a timeout keeps the draft"
+    );
+    std::fs::remove_file(scratch.0.join("delay")).unwrap();
+    std::fs::write(scratch.0.join("allow"), "").unwrap();
+    h.type_bytes(b"\t\r");
+    h.wait_screen(15, |s| {
+        s.contains("probe-abcd") && !s.contains("report a problem")
+    });
+    let argv = std::fs::read_to_string(scratch.0.join("argv")).unwrap();
+    let args: Vec<_> = argv.lines().collect();
+    assert!(args.windows(2).any(|w| w == ["--type", "feature"]));
+    assert!(args
+        .windows(2)
+        .any(|w| w == ["--source-kind", "operator_request"]));
+    assert!(args.windows(2).any(|w| w == ["--parent", "probe-aaaa"]));
+    assert!(args.windows(2).any(|w| w == ["--difficulty", "medium"]));
+    let body = std::fs::read_to_string(scratch.0.join("body")).unwrap();
+    for evidence in [
+        "portal stopped",
+        "report-frame-evidence",
+        "feedback-row",
+        session,
+        "probe-bbbb",
+        "server-log-evidence",
+        "client-log-evidence",
+        env!("FNO_MUX_GIT_REV"),
+    ] {
+        assert!(
+            body.contains(evidence),
+            "missing report evidence {evidence}: {body}"
+        );
+    }
+    h.type_bytes(b"\x02!");
+    h.wait_screen(5, |s| s.contains("report a problem"));
+    h.type_bytes(b"\x1b");
+    h.wait_screen(5, |s| !s.contains("report a problem"));
+    assert_eq!(
+        std::fs::read_to_string(scratch.0.join("calls"))
+            .unwrap()
+            .lines()
+            .count(),
+        3
+    );
+}
