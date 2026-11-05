@@ -207,43 +207,52 @@ fn mutations_hold_the_lock_file_the_watcher_takes() {
     let _ = std::fs::remove_dir_all(paths.state.parent().unwrap());
 }
 
+/// Seed the cause fixture, sweep with the given probes, and return the
+/// report, the store, and the committed journal, then remove the tempdir.
+fn run_cause_sweep(
+    tag: &str,
+    reason: &str,
+    head: (&'static str, &'static str, &'static str),
+    checks: Result<bool, &'static str>,
+    worktree: Result<bool, &'static str>,
+) -> (SweepReport, Value, String, Paths) {
+    let paths = tmp_paths(tag);
+    fixture_cause(&paths, reason, None, 2);
+    let ctx = ctx_probes(paths.clone(), head, checks, worktree);
+    let r = sweep(&ctx).unwrap();
+    let data: Value =
+        serde_json::from_str(&std::fs::read_to_string(&paths.state).unwrap()).unwrap();
+    let events = crate::events::committed_journal_text(&paths.events);
+    (r, data, events, paths)
+}
+
 #[test]
 fn sweep_lifts_a_checks_red_park_only_when_checks_read_green() {
     // Green lifts, with the cause on the event; red and a probe error hold.
-    let paths = tmp_paths("cause-checks-green");
-    fixture_cause(&paths, "checks-red", None, 2);
-    let ctx = ctx_probes(
-        paths.clone(),
+    let (r, data, events, paths) = run_cause_sweep(
+        "cause-checks-green",
+        "checks-red",
         ("head1", "feature", "OPEN"),
         Ok(false),
         Ok(false),
     );
-    let r = sweep(&ctx).unwrap();
     assert_eq!(r.unparked, 1);
-    let data: Value =
-        serde_json::from_str(&std::fs::read_to_string(&paths.state).unwrap()).unwrap();
     assert!(data["owner/repo#101"]["parked"].is_null());
     assert_eq!(data["owner/repo#101"]["retries"], json!(0));
-    let events = crate::events::committed_journal_text(&paths.events);
     assert!(events.contains("\"cause\":\"checks-cleared\""), "{events}");
     assert!(events.contains("\"by\":\"sweep\""), "{events}");
     let _ = std::fs::remove_dir_all(paths.state.parent().unwrap());
 
     for checks in [Ok(true), Err("gh down")] {
-        let paths = tmp_paths("cause-checks-hold");
-        fixture_cause(&paths, "checks-red", None, 2);
-        let ctx = ctx_probes(
-            paths.clone(),
+        let (r, data, events, paths) = run_cause_sweep(
+            "cause-checks-hold",
+            "checks-red",
             ("head1", "feature", "OPEN"),
             checks,
             Ok(false),
         );
-        let r = sweep(&ctx).unwrap();
         assert_eq!(r.unparked, 0);
-        let data: Value =
-            serde_json::from_str(&std::fs::read_to_string(&paths.state).unwrap()).unwrap();
         assert_eq!(data["owner/repo#101"]["parked"], json!("checks-red"));
-        let events = crate::events::committed_journal_text(&paths.events);
         assert!(!events.contains("pr_watch_unparked"), "{events}");
         let _ = std::fs::remove_dir_all(paths.state.parent().unwrap());
     }
@@ -252,17 +261,14 @@ fn sweep_lifts_a_checks_red_park_only_when_checks_read_green() {
 #[test]
 fn a_worktree_park_lifts_when_clear_and_holds_on_probe_error() {
     for reason in ["worktree_head_mismatch", "worktree_dirty"] {
-        let paths = tmp_paths("cause-worktree");
-        fixture_cause(&paths, reason, None, 2);
-        let ctx = ctx_probes(
-            paths.clone(),
+        let (r, _, events, paths) = run_cause_sweep(
+            "cause-worktree",
+            reason,
             ("head1", "feature", "OPEN"),
             Ok(true),
             Ok(true),
         );
-        let r = sweep(&ctx).unwrap();
         assert_eq!(r.unparked, 1, "{reason}");
-        let events = crate::events::committed_journal_text(&paths.events);
         assert!(
             events.contains("\"cause\":\"worktree-cleared\""),
             "{events}"
@@ -270,18 +276,14 @@ fn a_worktree_park_lifts_when_clear_and_holds_on_probe_error() {
         let _ = std::fs::remove_dir_all(paths.state.parent().unwrap());
     }
     // A probe error lifts nothing, the rule the head probe keeps.
-    let paths = tmp_paths("cause-worktree-err");
-    fixture_cause(&paths, "worktree_head_mismatch", None, 2);
-    let ctx = ctx_probes(
-        paths.clone(),
+    let (r, data, _, paths) = run_cause_sweep(
+        "cause-worktree-err",
+        "worktree_head_mismatch",
         ("head1", "feature", "OPEN"),
         Ok(true),
         Err("git exploded"),
     );
-    let r = sweep(&ctx).unwrap();
     assert_eq!(r.unparked, 0);
-    let data: Value =
-        serde_json::from_str(&std::fs::read_to_string(&paths.state).unwrap()).unwrap();
     assert_eq!(
         data["owner/repo#101"]["parked"],
         json!("worktree_head_mismatch")
@@ -296,28 +298,38 @@ fn the_age_rule_reads_parked_at_then_the_poll_stamp_and_unpark_clears_it() {
     // lifted on the first sweep. The park's own stamp governs now; a row
     // parked before the stamp shipped keeps the poll stamp; an unpark
     // clears the stamp beside the park.
-    let paths = tmp_paths("age-parked-at-hold");
-    fixture_cause(&paths, "retries-exhausted", Some(1), 30);
-    let r = sweep(&ctx_ans(paths.clone(), "head1", "OPEN")).unwrap();
+    let (r, _, events, paths) = run_cause_sweep(
+        "age-parked-at-hold",
+        "retries-exhausted",
+        ("head1", "feature", "OPEN"),
+        Ok(true),
+        Ok(false),
+    );
     assert_eq!(
         r.unparked, 0,
         "a young parked_at holds despite stale last_polled_at"
     );
-    let events = crate::events::committed_journal_text(&paths.events);
     assert!(!events.contains("pr_watch_unparked"), "{events}");
     let _ = std::fs::remove_dir_all(paths.state.parent().unwrap());
 
-    let paths = tmp_paths("age-parked-at-lift");
-    fixture_cause(&paths, "retries-exhausted", Some(25), 30);
-    let r = sweep(&ctx_ans(paths.clone(), "head1", "OPEN")).unwrap();
+    let (r, _, events, paths) = run_cause_sweep(
+        "age-parked-at-lift",
+        "retries-exhausted",
+        ("head1", "feature", "OPEN"),
+        Ok(true),
+        Ok(false),
+    );
     assert_eq!(r.unparked, 1);
-    let events = crate::events::committed_journal_text(&paths.events);
     assert!(events.contains("\"cause\":\"max-age\""), "{events}");
     let _ = std::fs::remove_dir_all(paths.state.parent().unwrap());
 
-    let paths = tmp_paths("age-legacy");
-    fixture_cause(&paths, "retries-exhausted", None, 30);
-    let r = sweep(&ctx_ans(paths.clone(), "head1", "OPEN")).unwrap();
+    let (r, _, _, paths) = run_cause_sweep(
+        "age-legacy",
+        "retries-exhausted",
+        ("head1", "feature", "OPEN"),
+        Ok(true),
+        Ok(false),
+    );
     assert_eq!(r.unparked, 1, "the legacy stamp still carries the age arm");
     let _ = std::fs::remove_dir_all(paths.state.parent().unwrap());
 
