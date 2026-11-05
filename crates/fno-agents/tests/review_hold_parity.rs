@@ -353,7 +353,12 @@ fn check_dirty_worktree() {
 }
 
 #[test]
-fn check_head_mismatch() {
+fn check_worktree_head_position() {
+    // The fake gh answers the PR head as the fixture repo's own HEAD, so a
+    // commit on main puts the worktree one clean commit behind the PR head:
+    // the merge lands what the branch already contains, and the check
+    // clears. A commit made in the worktree runs the other way: the branch
+    // holds a commit the PR head lacks, and the check still blocks.
     let fx = fixture("repo");
     fs::write(fx.repo.join("file.txt"), "v2\n").unwrap();
     git(&fx.repo, &["commit", "-qam", "c1"]);
@@ -367,7 +372,27 @@ fn check_head_mismatch() {
             "feat/a",
         ],
     );
-    assert_case(&fx, "check head mismatch", &["check", "41"], &[]);
+    assert_case(&fx, "check worktree behind pr head", &["check", "41"], &[]);
+
+    let fx = fixture("repo");
+    git(
+        &fx.repo,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            fx.root.join("wt2").to_str().unwrap(),
+            "feat/a",
+        ],
+    );
+    fs::write(fx.root.join("wt2").join("file.txt"), "local\n").unwrap();
+    git(&fx.root.join("wt2"), &["commit", "-qam", "local c1"]);
+    assert_case(
+        &fx,
+        "check worktree ahead of pr head",
+        &["check", "41"],
+        &[],
+    );
 }
 
 #[test]
