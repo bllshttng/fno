@@ -1937,7 +1937,7 @@ pub fn meta_rows() -> Vec<(String, String, KeySection)> {
         if key_for(action).is_none() {
             rows.push((
                 "-".into(),
-                format!("{label} (no default chord; rebind via config.mux.keys.{action})"),
+                format!("{label} (no default chord; set \"{action}\" in keybindings.json)"),
                 KeySection::Panes,
             ));
         }
