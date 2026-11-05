@@ -784,6 +784,11 @@ fn live_frame(
     // card-graph config latches here the way attach_and_run does.
     view.card_graph = crate::digest_overlay::card_graph(Path::new(&cwd));
     view.frames = seen.frames;
+    let detailed = crate::digest_overlay::load_readout_detailed(Path::new(&cwd));
+    if let Some(text) = super::meter::snapshot_meter_text(detailed) {
+        view.resource_meter_on = true;
+        view.resource_meter_text = Some(text);
+    }
     view.term = match size {
         Some(t) => t,
         None => {
