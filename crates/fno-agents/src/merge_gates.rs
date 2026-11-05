@@ -910,7 +910,9 @@ fn approval_carries<P: Probes>(
         .skip(1)
         .map(String::as_str)
         .collect();
-    if declined_after(&declining_pages(root, pr), &newer) {
+    let mut declines = declining_pages(root, pr);
+    declines.extend(law_decline_texts(probes, cwd, pr));
+    if declined_after(&declines, &newer) {
         return false;
     }
     match (
@@ -1370,6 +1372,20 @@ fn text_names_head(text: &str, head: &str) -> bool {
 /// and head, and the answer text that picks the approve option. The page
 /// stays open when its close is lost; the decision still holds the answer.
 fn board_approval_text(row: &Value, pr: u64) -> Option<String> {
+    let (question, answer) = board_user_answer(row, pr)?;
+    answer_approves(answer).then(|| question.to_string())
+}
+
+/// A board answer naming the PR that does not pick the approve option: the
+/// decline a carried approval must honor when it was answered on another
+/// machine and left no page in this vault.
+fn board_decline_text(row: &Value, pr: u64) -> Option<String> {
+    let (question, answer) = board_user_answer(row, pr)?;
+    (!answer_approves(answer)).then(|| question.to_string())
+}
+
+/// `(question, answer)` of a question-board row the user answered about this PR.
+fn board_user_answer(row: &Value, pr: u64) -> Option<(&str, &str)> {
     let trace = row.get("trace")?;
     let from_board = trace.get("comms").and_then(Value::as_str) == Some("question")
         && trace.get("recipient_kind").and_then(Value::as_str) == Some("user");
@@ -1386,12 +1402,36 @@ fn board_approval_text(row: &Value, pr: u64) -> Option<String> {
             .is_some_and(|q| !q.trim().is_empty()),
         Some(_) => false,
     };
-    (from_board
-        && by_user
-        && row.get("question_id").is_some()
-        && answer_approves(answer)
-        && page_names_pr(question, pr))
-    .then(|| question.to_string())
+    (from_board && by_user && row.get("question_id").is_some() && page_names_pr(question, pr))
+        .then_some((question, answer))
+}
+
+/// Board declines of this PR in the law lane, at any head.
+fn law_decline_texts<P: Probes>(probes: &P, cwd: &Path, pr: u64) -> Vec<String> {
+    let Some(payload) = decisions_payload(
+        probes,
+        cwd,
+        &[
+            "backlog",
+            "decisions",
+            "--lane",
+            "law",
+            "--state",
+            "live",
+            "--limit",
+            "0",
+            "--json",
+        ],
+    ) else {
+        return Vec::new();
+    };
+    payload
+        .get("decisions")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|row| board_decline_text(row, pr))
+        .collect()
 }
 
 /// The text of every live role row on this node that approves this PR, at
@@ -1711,6 +1751,22 @@ mod tests {
         ));
         assert!(!declined_after(&declines, &["c4"]));
         assert!(!declined_after(&[], &["c3"]));
+        // A decline answered on another machine arrives as a board row, not a page.
+        let board = |answer: &str| {
+            json!({
+                "trace": {"comms": "question", "recipient_kind": "user"},
+                "question_id": "q-1",
+                "question": "May PR 9 merge at 0123456789?",
+                "decision": answer,
+            })
+        };
+        let text = board_decline_text(&board("Hold for changes"), 9).unwrap();
+        assert!(declined_after(
+            &[text],
+            &["0123456789abcdef0123456789abcdef01234567"]
+        ));
+        assert!(board_decline_text(&board("Approve"), 9).is_none());
+        assert!(board_decline_text(&board("Hold for changes"), 8).is_none());
     }
 
     #[test]
