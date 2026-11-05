@@ -82,14 +82,6 @@ fn fit(s: &str, n: usize) -> String {
     out
 }
 
-fn who(r: &DecisionRow) -> &'static str {
-    match r.author() {
-        Author::User => "user",
-        Author::Agent => "agent",
-        Author::Unknown => "?",
-    }
-}
-
 /// The screen as lines, `h` rows of at most `w` columns. The selected row is
 /// reverse video and every other style is bold or dim, so the table reads the
 /// same on a light and a dark ground.
@@ -113,18 +105,20 @@ pub fn render(t: &Table, w: usize, h: usize) -> Vec<String> {
     let mut out = vec![head];
     let body_rows = h.saturating_sub(4);
     let top = t.pick.saturating_sub(body_rows.saturating_sub(1));
-    // 59 columns of fixed fields precede the text; one more keeps the last
+    // 82 columns of fixed fields precede the text; one more keeps the last
     // column clear of the wrap edge.
-    let text_w = w.saturating_sub(60);
+    let text_w = w.saturating_sub(83);
     for (i, r) in shown.iter().enumerate().skip(top).take(body_rows) {
         let line = format!(
-            "{} {} {} {} {} {} {}",
+            "{} {} {} {} {} {} {} {} {}",
             fit(&r.lifecycle, 10),
             fit(&r.lane, 12),
             fit(r.ts.get(..10).unwrap_or(&r.ts), 10),
-            fit(who(r), 5),
+            fit(&r.decider(), 10),
             if r.has_quote() { "Q" } else { " " },
-            fit(&r.subject, 14),
+            fit(&r.subject_node, 9),
+            fit(&r.subject_pr, 6),
+            fit(r.describes(), 16),
             fit(&r.decision, text_w),
         );
         out.push(if i == t.pick {

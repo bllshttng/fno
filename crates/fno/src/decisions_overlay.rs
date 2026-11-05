@@ -40,6 +40,18 @@ pub struct DecisionRow {
     pub question_id: Option<String>,
     #[serde(default)]
     pub question: Option<String>,
+    /// The registered name of the deciding session; absent for a label or an
+    /// id the registry no longer holds.
+    #[serde(default)]
+    pub decided_by_name: Option<String>,
+    /// The subject split by kind: a node id, a PR ref, or free text. The
+    /// reader fills these for every row, old ones included.
+    #[serde(default)]
+    pub subject_node: String,
+    #[serde(default)]
+    pub subject_pr: String,
+    #[serde(default)]
+    pub subject_text: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -64,6 +76,34 @@ impl DecisionRow {
             Some("chat_attested") | Some("operator") => Author::User,
             Some(s) if !s.is_empty() => Author::Agent,
             _ => Author::Unknown,
+        }
+    }
+
+    /// Who decided, as a person reads it: the session's name, else the
+    /// stamped label (an old row may hold only an id), else the author class.
+    pub fn decider(&self) -> String {
+        match (&self.decided_by_name, self.decided_by.as_deref()) {
+            (Some(n), _) if !n.is_empty() => n.clone(),
+            (_, Some(d)) if !d.is_empty() => d.chars().take(8).collect(),
+            _ => match self.author() {
+                Author::User => "user",
+                Author::Agent => "agent",
+                Author::Unknown => "?",
+            }
+            .to_string(),
+        }
+    }
+
+    /// The description column: the free text, else the whole subject when the
+    /// listing came from a reader that did not split it.
+    pub fn describes(&self) -> &str {
+        if self.subject_text.is_empty()
+            && self.subject_node.is_empty()
+            && self.subject_pr.is_empty()
+        {
+            &self.subject
+        } else {
+            &self.subject_text
         }
     }
 

@@ -71,7 +71,7 @@ tbody tr{cursor:pointer}tbody tr:hover,tbody tr:focus-visible{background:var(--b
   </section>
   <section class="tablewrap" id="view-decisions" hidden aria-label="Decisions">
     <div class="ttools"><select id="dec-lane" aria-label="Lane"></select><select id="dec-state" aria-label="State"></select><select id="dec-author" aria-label="Author"></select><label><input type="checkbox" id="dec-audit"> audit queue</label><span id="dec-count"></span></div>
-    <div class="tscroll"><table id="dec-table"><colgroup><col style="width:9%"><col style="width:10%"><col style="width:9%"><col style="width:6%"><col style="width:3%"><col style="width:13%"><col style="width:26%"><col style="width:24%"></colgroup><thead><tr><th>state</th><th>lane</th><th>date</th><th>who</th><th>Q</th><th>subject</th><th>decision</th><th>question</th></tr></thead><tbody id="dec-body"></tbody></table></div>
+    <div class="tscroll"><table id="dec-table"><colgroup><col style="width:7%"><col style="width:8%"><col style="width:8%"><col style="width:9%"><col style="width:3%"><col style="width:8%"><col style="width:6%"><col style="width:13%"><col style="width:21%"><col style="width:17%"></colgroup><thead><tr><th>state</th><th>lane</th><th>date</th><th>who</th><th>Q</th><th>node</th><th>PR</th><th>description</th><th>decision</th><th>question</th></tr></thead><tbody id="dec-body"></tbody></table></div>
   </section>
 </div>
 <aside class="drawer" id="drawer" aria-hidden="true" aria-label="Seat details">
@@ -769,6 +769,7 @@ const token = new URLSearchParams(location.search).get("t") || "";
 const url = (nav ? nav.dataset.base : "./") + "hq/model.json?t=" + encodeURIComponent(token);
 const decUrl = (nav ? nav.dataset.base : "./") + "hq/decisions.json?t=" + encodeURIComponent(token);
 let decRows = [], decReviewed = new Set();
+const decName = (r) => r.decided_by_name || (r.decided_by ? r.decided_by.slice(0, 8) : decWho(r));
 const decWho = (r) => ["chat_attested", "operator"].includes(r.authority_source) ? "user" : r.authority_source ? "agent" : "?";
 function decSelect(id, label, values) {
   const s = document.getElementById(id);
@@ -782,7 +783,7 @@ function decPaint() {
   document.getElementById("dec-count").textContent = shown.length > cap ? "newest " + cap + " of " + shown.length : shown.length + " of " + decRows.length;
   document.getElementById("dec-body").replaceChildren(...shown.slice(0, cap).map((r) => {
     const tr = el("tr");
-    for (const v of [r.lifecycle, r.lane, (r.ts || "").slice(0, 10), decWho(r), r.quote ? "Q" : "", r.subject, r.decision, r.question || ""]) tr.append(el("td", null, v));
+    for (const v of [r.lifecycle, r.lane, (r.ts || "").slice(0, 10), decName(r), r.quote ? "Q" : "", r.subject_node || "", r.subject_pr || "", (r.subject_node || r.subject_pr || r.subject_text) ? r.subject_text : (r.subject || ""), r.decision, r.question || ""]) tr.append(el("td", null, v));
     tr.children[2].style.whiteSpace = "nowrap";
     return tr;
   }));
