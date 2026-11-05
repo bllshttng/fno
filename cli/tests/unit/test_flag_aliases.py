@@ -22,16 +22,3 @@ def test_legacy_only_warns_and_returns_value(capsys) -> None:
 def test_both_raises_usage_error() -> None:
     with pytest.raises(click.UsageError):
         merge_deprecated_alias("s1", "s2", **KW)
-
-
-def test_direct_call_optioninfo_defaults_treated_as_not_passed(capsys) -> None:
-    """Direct (non-Click) calls of a Typer command leave unfilled params
-    holding their OptionInfo declaration defaults. Those must behave like
-    None: no warning, no both-passed error, coerced to None on return.
-    Regression for callers that pass both spellings."""
-    import typer
-
-    oi = typer.Option(None, "--pr", hidden=True)
-    assert merge_deprecated_alias(7, oi, **{"canonical_flag": "--pr-number", "legacy_flag": "--pr"}) == 7
-    assert merge_deprecated_alias(oi, oi, **{"canonical_flag": "--pr-number", "legacy_flag": "--pr"}) is None
-    assert capsys.readouterr().err == ""

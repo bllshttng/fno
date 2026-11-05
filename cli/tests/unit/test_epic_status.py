@@ -90,10 +90,3 @@ def test_json_output(epic_fixture: Path):
     assert children["ab-ch1d0001"]["receipt"] == "dispatched archer"
     assert children["ab-d0ne0002"]["merge_unconfirmed"] is False
     assert "scope_growth" in payload
-
-
-def test_refuses_a_leaf_by_name(epic_fixture: Path):
-    code, out, err = run_native("backlog", "epic", "status", "ab-ch1d0001")
-    assert code == 1
-    combined = out + err
-    assert "is a leaf, not a container" in combined

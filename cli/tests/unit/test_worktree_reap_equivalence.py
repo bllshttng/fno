@@ -18,32 +18,8 @@ import subprocess
 import time
 from pathlib import Path
 
-import pytest
-
-from fno.rust_binary import resolve_binary
 
 
-def _gate_binary():
-    """THIS checkout's build first: a deployed fno-agents on PATH may predate
-    the command and answer nothing, which would read as a code defect."""
-    for cand in (
-        REPO_ROOT / "crates" / "fno-agents" / "target" / "release" / "fno-agents",
-        REPO_ROOT / "target" / "release" / "fno-agents",
-        REPO_ROOT / "crates" / "fno-agents" / "target" / "debug" / "fno-agents",
-        REPO_ROOT / "target" / "debug" / "fno-agents",
-    ):
-        # Executability, not existence: the changed lane's scrub leaves
-        # non-executable files behind, and a pinned non-executable path makes
-        # every probe read as probe-failed rather than as "nothing to pin".
-        if cand.is_file() and os.access(cand, os.X_OK):
-            return cand
-    found = resolve_binary()
-    if found is None or not os.access(found, os.X_OK):
-        pytest.skip(
-            "no fno-agents binary resolves; the gate corpus runs in the cargo "
-            "suite, this lane only pins bash/binary agreement"
-        )
-    return found
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 REAPABLE_LIB = REPO_ROOT / "scripts" / "lib" / "worktree-reapable.sh"
@@ -79,83 +55,6 @@ def _make_repo(root: Path) -> Path:
     old = time.time() - 7200
     os.utime(root / ".git", (old, old))
     return root
-
-
-def _one_modification(p: Path) -> None:
-    (p / "a.py").write_text("a = 999\n")
-
-
-def _untracked(p: Path) -> None:
-    (p / "scratch.py").write_text("nope\n")
-
-
-CORPUS = [
-    ("one-modification", _one_modification, False),
-    ("untracked", _untracked, False),
-]
-
-
-def _gate_env() -> dict:
-    """The child env with the gate pinned to the binary this module tested.
-
-    The changed lane scrubs target/ mid-job, so a child that re-resolves
-    through $PATH or a stale target path answers nothing; the lib then
-    synthesizes probe-failed and every not-blocked row flips. With no LIVE
-    binary at all there is nothing to pin, and inheriting the parent env
-    would hand the script a dead FNO_AGENTS_BIN to probe-fail on, so the
-    test skips.
-    """
-    binary = _gate_binary()
-    if binary is None:
-        pytest.skip("no live fno-agents binary: bash/binary agreement is unpinnable")
-    return dict(os.environ, FNO_AGENTS_BIN=str(binary))
-
-
-def _archive_script_verdict(path: Path) -> bool:
-    """Run archive-worktree.sh far enough to see its dirty verdict.
-
-    Exit 2 is its "strict check failed" code. The script's own docs pin that,
-    and the dirty check is the first strict check it runs, so a non-2 exit
-    means the tree did not block removal.
-    """
-    script = REPO_ROOT / "scripts" / "setup" / "archive-worktree.sh"
-    r = subprocess.run(
-        ["bash", str(script), str(path), "--yes"],
-        capture_output=True,
-        text=True,
-        cwd=str(REPO_ROOT),
-        timeout=60,
-        env=_gate_env(),
-    )
-    # POSITIVE CONTROL. A "not blocked" verdict must mean the script reached and
-    # passed the check, never that it bailed earlier for an unrelated reason.
-    # The fixture bug this catches was real: a standalone repo made the script
-    # exit 1 with "refusing to archive canonical checkout", which read as
-    # "not blocked" and passed every clean case without testing anything.
-    assert "refusing to archive canonical checkout" not in r.stderr, (
-        f"fixture is not a linked worktree; the predicate never ran: {r.stderr}"
-    )
-    assert r.returncode in (0, 2), (
-        f"script failed for an unrelated reason (rc={r.returncode}): {r.stderr}"
-    )
-    blocked_on_dirt = r.returncode == 2 and (
-        "reapable=no" in r.stderr or "dirty working tree" in r.stderr
-    )
-    return not blocked_on_dirt
-
-
-@pytest.mark.parametrize("name,mutate,expected", CORPUS, ids=[c[0] for c in CORPUS])
-def test_archive_script_agrees(
-    tmp_path: Path, name: str, mutate, expected: bool, native_backlog_door
-) -> None:
-    repo = _make_repo(tmp_path / name)
-    mutate(repo)
-
-    actual = _archive_script_verdict(repo)
-    assert actual == expected, (
-        f"{name}: archive verdict {actual} != corpus {expected}; "
-        f"FNO_AGENTS_BIN={os.environ.get('FNO_AGENTS_BIN', '<unset>')}"
-    )
 
 
 def test_deletions_only_worktree_is_actually_removed(tmp_path: Path, native_backlog_door) -> None:

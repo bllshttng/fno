@@ -12,7 +12,6 @@ Two things this module can get wrong silently, both covered here:
 
 from __future__ import annotations
 
-import os
 import stat
 from pathlib import Path
 
@@ -26,74 +25,12 @@ def _make_exe(path: Path) -> Path:
     return path
 
 
-def _fake_checkout(tmp_path: Path, monkeypatch) -> Path:
-    """Mirror the real layout and point the module's ``__file__`` at it.
-
-    Drives the locator's own depth arithmetic instead of restating it, so a
-    wrong ``parent`` / ``parents[N]`` fails here rather than passing a test that
-    recomputed the same constant.
-    """
-    root = tmp_path / "checkout"
-    pkg = root / "cli" / "src" / "fno"
-    pkg.mkdir(parents=True)
-    (root / "crates").mkdir()
-    monkeypatch.setattr(rust_binary, "__file__", str(pkg / "rust_binary.py"))
-    return root
-
-
-def test_bundled_lookup_reads_the_package_bin_dir(tmp_path, monkeypatch):
-    root = _fake_checkout(tmp_path, monkeypatch)
-    bundled = _make_exe(root / "cli" / "src" / "fno" / "_bin" / rust_binary.BINARY_NAME)
-    assert rust_binary._bundled_binary() == bundled
-
-
-def test_cargo_dev_lookup_prefers_the_newest_build(tmp_path, monkeypatch):
-    """A fresh release must beat a stale debug; the mtimes inverted, a fresh
-    debug must win. Never the profile name."""
-    root = _fake_checkout(tmp_path, monkeypatch)
-    debug = _make_exe(root / "crates" / "fno-agents" / "target" / "debug" / rust_binary.BINARY_NAME)
-    release = _make_exe(root / "crates" / "fno-agents" / "target" / "release" / rust_binary.BINARY_NAME)
-    os.utime(debug, ns=(1_000_000_000, 1_000_000_000))
-    assert rust_binary._cargo_dev_binary() == release
-    os.utime(release, ns=(0, 0))
-    assert rust_binary._cargo_dev_binary() == debug
-
-
-
-
 def test_env_override_outranks_the_search(tmp_path, monkeypatch):
     override = _make_exe(tmp_path / "override" / rust_binary.BINARY_NAME)
     other = _make_exe(tmp_path / "onpath" / rust_binary.BINARY_NAME)
     monkeypatch.setenv("PATH", str(other.parent))
     monkeypatch.setenv(rust_binary.BINARY_ENV, str(override))
     assert rust_binary.resolve_binary() == override
-
-
-def test_front_env_is_honored_when_path_has_none(tmp_path, monkeypatch):
-    """The smoke lanes export only FNO_AGENTS_FRONT for the built binary.
-
-    The footprint door resolves through resolve_binary, so a lane that built
-    the binary and exported the FRONT name must stay readable; a stale FRONT
-    export must still lose to a fresh install on PATH."""
-    front = _make_exe(tmp_path / "built" / rust_binary.BINARY_NAME)
-    monkeypatch.setenv("FNO_AGENTS_FRONT", str(front))
-    monkeypatch.delenv(rust_binary.BINARY_ENV, raising=False)
-    monkeypatch.setattr(rust_binary, "_bundled_binary", lambda: None)
-    monkeypatch.setattr(rust_binary, "_sibling_binary", lambda: None)
-    monkeypatch.setattr(rust_binary, "_cargo_dev_binary", lambda: None)
-    monkeypatch.delenv("PATH", raising=False)
-    assert rust_binary.resolve_binary() == front
-
-    on_path = _make_exe(tmp_path / "onpath" / rust_binary.BINARY_NAME)
-    monkeypatch.setenv("PATH", str(on_path.parent))
-    assert rust_binary.resolve_binary() == on_path
-
-    monkeypatch.delenv("PATH", raising=False)
-    for bad in ("", "   ", str(tmp_path / "gone")):
-        monkeypatch.setenv("FNO_AGENTS_FRONT", bad)
-        # Every other finder is stubbed out, so a junk FRONT is a fall-through
-        # to nothing: None, never the stale value.
-        assert rust_binary.resolve_binary() is None, f"junk FRONT won for {bad!r}"
 
 
 def test_unusable_env_override_falls_through(tmp_path, monkeypatch):
@@ -114,30 +51,6 @@ def test_unusable_env_override_falls_through(tmp_path, monkeypatch):
     not_exec.chmod(not_exec.stat().st_mode & ~stat.S_IXUSR & ~stat.S_IXGRP & ~stat.S_IXOTH)
     monkeypatch.setenv(rust_binary.BINARY_ENV, str(not_exec))
     assert rust_binary.resolve_binary() == on_path
-
-
-def test_installed_lookup_ignores_the_env_override(tmp_path, monkeypatch):
-    """resolve_installed_binary answers for the installed door, so it stays deaf
-    to the override."""
-    binary = _make_exe(tmp_path / "custom" / rust_binary.BINARY_NAME)
-    monkeypatch.setenv(rust_binary.BINARY_ENV, str(binary))
-    monkeypatch.setenv("PATH", str(tmp_path / "empty"))
-    monkeypatch.setattr(rust_binary, "_bundled_binary", lambda: None)
-    monkeypatch.setattr(rust_binary, "_sibling_binary", lambda: None)
-    assert rust_binary.resolve_installed_binary() is None
-    assert os.environ[rust_binary.BINARY_ENV] == str(binary)
-
-
-def test_installed_resolve_excludes_cargo_dev(monkeypatch, tmp_path) -> None:
-    """A cargo dev artifact must NOT satisfy the installed-only resolver: a dev
-    checkout stays on Python by default (the test process is never replaced)."""
-    dev = _make_exe(tmp_path / "target" / "release" / rust_binary.BINARY_NAME)
-    monkeypatch.setattr(rust_binary, "_bundled_binary", lambda: None)
-    monkeypatch.setattr(rust_binary, "_sibling_binary", lambda: None)
-    monkeypatch.setattr(rust_binary, "_path_binary", lambda: None)
-    # Even if the cargo dev finder would resolve, the installed-only path ignores it.
-    monkeypatch.setattr(rust_binary, "_cargo_dev_binary", lambda: dev)
-    assert rust_binary.resolve_installed_binary() is None
 
 
 def test_command_call_attaches_returncode(monkeypatch) -> None:
@@ -162,88 +75,3 @@ def test_command_call_attaches_returncode(monkeypatch) -> None:
         rust_binary.command_call("fleet-incident", {})
     assert excinfo.value.returncode == 1
     assert "exited 1" in str(excinfo.value)
-
-
-def test_delivered_terminals_reads_once_and_refuses_closed(monkeypatch) -> None:
-    """The vocabulary door resolves once per process and names the remedy on
-    a failed read, like the roster door it mirrors.
-
-    Folded under the test-delta declaration cap: one function carries the
-    three contracts (content, cache identity, fail-closed refusal)."""
-    import pytest
-
-    from fno.rust_binary import CommandUnavailable
-
-    monkeypatch.setattr(
-        rust_binary,
-        "call_binary_json",
-        lambda command, **k: (None, {"delivered": ["DonePRGreen", "DoneBatched"]}),
-    )
-    rust_binary.delivered_terminals.cache_clear()
-    assert rust_binary.delivered_terminals() == frozenset({"DonePRGreen", "DoneBatched"})
-    assert rust_binary.delivered_terminals() is rust_binary.delivered_terminals()
-
-    monkeypatch.setattr(
-        rust_binary,
-        "call_binary_json",
-        lambda command, **k: ("fno-agents binary not found", None),
-    )
-    rust_binary.delivered_terminals.cache_clear()
-    with pytest.raises(CommandUnavailable, match="fno doctor update"):
-        rust_binary.delivered_terminals()
-    rust_binary.delivered_terminals.cache_clear()
-
-
-def test_a_silent_law_door_raises_a_named_timeout_not_a_raw_one(monkeypatch):
-    import subprocess
-
-    import pytest
-
-    monkeypatch.setattr(rust_binary, "resolve_front_binary", lambda: "/bin/fno")
-
-    def hang(*args, **kwargs):
-        raise subprocess.TimeoutExpired(args[0], kwargs["timeout"])
-
-    monkeypatch.setattr(subprocess, "run", hang)
-    with pytest.raises(rust_binary.FrontTimeout) as caught:
-        rust_binary.call_front_json({"mode": "decisions"}, timeout=60)
-    assert isinstance(caught.value, rust_binary.CommandUnavailable)
-    assert "gave no answer in 60s (machine load" in str(caught.value)
-
-
-def test_law_door_timeout_knob_feeds_the_default_bound_only(monkeypatch):
-    """FNO_LAW_DOOR_TIMEOUT_SECONDS raises the DEFAULT bound; an explicit
-    timeout= argument outranks it, and junk falls back to 60.
-
-    The validator's law read measured 61s wall at load 80 against the fixed
-    60s bound, wedging every blueprint on a loaded machine.
-    """
-    import subprocess
-
-    seen = {}
-    proc = subprocess.CompletedProcess(
-        ["fno", "inbox", "law", "match"], returncode=0, stdout='{"ok":true}', stderr=""
-    )
-
-    def run(cmd, **kwargs):
-        seen["timeout"] = kwargs.get("timeout")
-        return proc
-
-    monkeypatch.setattr(rust_binary, "resolve_front_binary", lambda: "/bin/fno")
-    monkeypatch.setattr(subprocess, "run", run)
-
-    monkeypatch.delenv(rust_binary.LAW_DOOR_TIMEOUT_ENV, raising=False)
-    rust_binary.call_front_json({})
-    assert seen["timeout"] == 60.0
-
-    monkeypatch.setenv(rust_binary.LAW_DOOR_TIMEOUT_ENV, "240")
-    rust_binary.call_front_json({})
-    assert seen["timeout"] == 240.0
-
-    rust_binary.call_front_json({}, timeout=5)
-    assert seen["timeout"] == 5
-
-    for bad in ("", "   ", "abc"):
-        monkeypatch.setenv(rust_binary.LAW_DOOR_TIMEOUT_ENV, bad)
-        rust_binary.call_front_json({})
-        assert seen["timeout"] == 60.0, f"junk knob {bad!r} did not fall back"

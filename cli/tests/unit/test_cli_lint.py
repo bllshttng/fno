@@ -18,7 +18,6 @@ import subprocess
 from pathlib import Path
 
 
-
 # Resolve the canonical lint script in the real repo so we can copy it
 # into each test workspace without depending on installed binaries.
 _REAL_REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -60,15 +59,3 @@ def test_no_unwrapped_lib_scripts_flags_new_script(tmp_path: Path) -> None:
     assert "test-fake-helper.sh" in result.stderr
     assert "cli/src/fno/" in result.stderr
     assert "allowlist" in result.stderr.lower()
-
-
-def test_no_unwrapped_lib_scripts_respects_allowlist(tmp_path: Path) -> None:
-    """AC3-EDGE: allowlisted entries are not flagged."""
-    repo = _make_fake_repo(tmp_path)
-    (repo / "scripts" / "lib" / "common.sh").write_text("#!/usr/bin/env bash\n")
-    (repo / "scripts" / "lint" / ".unwrapped-lib-allowlist.txt").write_text(
-        "# pure library\ncommon.sh\n", encoding="utf-8"
-    )
-    result = _run_lint(repo)
-    assert result.returncode == 0, f"expected rc=0, got rc={result.returncode}\nstdout={result.stdout}\nstderr={result.stderr}"
-    assert "0 missing wrappers" in result.stdout

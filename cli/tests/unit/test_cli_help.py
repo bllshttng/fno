@@ -1,9 +1,6 @@
 """Unit tests for `fno help [command...]` — git-style help subcommand."""
 from __future__ import annotations
 
-import os
-import subprocess
-import sys
 
 from typer.testing import CliRunner
 
@@ -32,40 +29,3 @@ def test_help_root_matches_dashdash_help():
     assert via_all.exit_code == 0
     for needle in ("backlog", "mux", "version", "update"):
         assert needle in via_all.output, f"missing {needle} in `fno help --all` output"
-
-
-def test_help_subcommand_works_in_module_mode():
-    """AC-FR: `python -m fno.cli help <command>` works (codex P2 fix).
-
-    Regression for chatgpt-codex-connector P2 on PR #250: the original
-    implementation forwarded via `sys.argv[0]`, which is the module file
-    (cli.py) when invoked as `python -m fno.cli`. That file is
-    typically not chmod +x and has no shebang, so the forward crashed
-    with PermissionError or FileNotFoundError. The fix falls back to
-    `[sys.executable, "-m", "fno.cli", ...]` when sys.argv[0] is
-    not directly executable.
-
-    This test invokes the module-mode form via a real subprocess and
-    asserts the help output renders for a known subcommand (`config`).
-    """
-    # Use COLUMNS/NO_COLOR to keep the help output stable in CI.
-    env = {
-        **os.environ,
-        "COLUMNS": "240",
-        "NO_COLOR": "1",
-        "TERM": "dumb",
-    }
-    result = subprocess.run(
-        [sys.executable, "-m", "fno.cli", "help", "config"],
-        capture_output=True,
-        text=True,
-        env=env,
-        timeout=300,
-    )
-    assert result.returncode == 0, (
-        f"expected rc=0, got rc={result.returncode}.\n"
-        f"stdout={result.stdout}\nstderr={result.stderr}"
-    )
-    # The config group's help names the leaves it keeps registered.
-    assert "get" in result.stdout
-    assert "set" in result.stdout

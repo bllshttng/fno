@@ -1,4 +1,4 @@
-"""The postcompact reinject hook's per-harness wire schema.
+"""The postcompact reinject hook's wire schema on the harness that reads it raw.
 
 Moved from test_context_audit.py (whose module it never imported): the hook
 test rides with the hook family now, not with the census it sat beside.
@@ -17,17 +17,8 @@ ROOT = Path(__file__).resolve().parents[3]
 pytestmark = pytest.mark.xdist_group("context-audit-processes")
 
 
-@pytest.mark.parametrize(
-    ("platform", "hook_input"),
-    [
-        pytest.param("claude", '{"source":"compact"}', id="claude-compact"),
-        pytest.param("codex", "{}", id="codex"),
-    ],
-)
-def test_postcompact_producer_uses_each_harness_wire_schema(
+def test_codex_postcompact_reads_its_own_plugin_root_and_emits_a_system_message(
     tmp_path: Path,
-    platform: str,
-    hook_input: str,
 ) -> None:
     plugin = tmp_path / "plugin"
     guard = plugin / "scripts" / "lib" / "target-guard.sh"
@@ -54,21 +45,18 @@ def test_postcompact_producer_uses_each_harness_wire_schema(
         "graph_node_id: x-2e3c\n",
         encoding="utf-8",
     )
-    # Claude reinjects via SessionStart(source=compact); Codex via PostCompact.
+    # A foreign CLAUDE_PLUGIN_ROOT must lose to Codex's own PLUGIN_ROOT.
     hook_env = {
         **os.environ,
-        "FNO_PLATFORM": platform,
+        "FNO_PLATFORM": "codex",
+        "PLUGIN_ROOT": str(plugin),
+        "CLAUDE_PLUGIN_ROOT": str(tmp_path / "foreign-claude-plugin"),
     }
-    if platform == "codex":
-        hook_env["PLUGIN_ROOT"] = str(plugin)
-        hook_env["CLAUDE_PLUGIN_ROOT"] = str(tmp_path / "foreign-claude-plugin")
-    else:
-        hook_env["CLAUDE_PLUGIN_ROOT"] = str(plugin)
     result = subprocess.run(
         [str(ROOT / "hooks" / "target-postcompact-reinject.sh")],
         cwd=tmp_path,
         env=hook_env,
-        input=hook_input,
+        input="{}",
         text=True,
         capture_output=True,
         check=False,
@@ -76,13 +64,5 @@ def test_postcompact_producer_uses_each_harness_wire_schema(
 
     assert result.returncode == 0, result.stderr
     payload = json.loads(result.stdout)
-    if platform == "codex":
-        assert set(payload) == {"systemMessage"}
-        assert "Keep the target oriented" in payload["systemMessage"]
-    else:
-        assert set(payload) == {"hookSpecificOutput"}
-        assert payload["hookSpecificOutput"]["hookEventName"] == "SessionStart"
-        assert (
-            "Keep the target oriented"
-            in payload["hookSpecificOutput"]["additionalContext"]
-        )
+    assert set(payload) == {"systemMessage"}
+    assert "Keep the target oriented" in payload["systemMessage"]

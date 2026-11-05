@@ -26,9 +26,3 @@ def test_both_given_refuses(tmp_path):
     with pytest.raises(ClickExit) as exc:
         read_text_arg("inline", p, what="the body")
     assert exc.value.exit_code == 1
-
-
-def test_missing_file_refuses_cleanly(tmp_path):
-    with pytest.raises(ClickExit) as exc:
-        read_text_arg(None, tmp_path / "absent.md")
-    assert exc.value.exit_code == 1

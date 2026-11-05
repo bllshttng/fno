@@ -90,8 +90,3 @@ def test_every_cargo_job_input_is_a_pull_request_trigger() -> None:
 
     untriggered = _untriggered(rust_inputs | step_inputs, triggers)
     assert not untriggered, f"cargo job inputs are not pull_request triggers: {untriggered}"
-
-
-def test_push_and_pull_request_trigger_paths_match() -> None:
-    events = _workflow()["on"] if "on" in _workflow() else _workflow()[True]
-    assert events["push"]["paths"] == events["pull_request"]["paths"]

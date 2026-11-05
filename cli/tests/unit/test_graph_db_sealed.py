@@ -23,9 +23,6 @@ ALLOWLIST = {
     "events/store_client.py": "read-only event store (events.db beside a journal), never graph.db",
 }
 
-# A file that touches the graph row store names it: the db path is derived
-# beside the graph or spelled out.
-GRAPH_DB_HINTS = re.compile(r"graph\.db|with_extension\([\"']db[\"']\)|database_path\(")
 
 SQLITE_USE = re.compile(r"import sqlite3|sqlite3\.connect")
 

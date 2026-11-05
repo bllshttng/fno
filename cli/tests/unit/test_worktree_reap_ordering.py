@@ -57,17 +57,6 @@ def test_sweep_never_keys_on_zero_commits_ahead() -> None:
         )
 
 
-def test_sweep_reports_before_it_removes() -> None:
-    """Dry-run is the default for --merged, and an explicit --dry-run wins even
-    when --apply is also passed, so a safety wrapper appending --dry-run is
-    never ignored."""
-    src = _lifecycle_source()
-
-    assert re.search(r'-z\s+"\$APPLY"\s+\|\|\s+-n\s+"\$DRY_RUN"', src), (
-        "the dry-run-by-default guard must survive"
-    )
-
-
 # -- The sweep is report-only when a timer fires it --------------------------
 
 

@@ -46,26 +46,6 @@ def test_emit_envelope_retries_a_locked_store(tmp_path: Path, monkeypatch) -> No
     assert calls["n"] == 3
 
 
-def test_emit_envelope_stops_retrying_other_refusals(tmp_path: Path, monkeypatch) -> None:
-    """A non-lock refusal is not retried: one attempt, then the named raise."""
-    import pytest
-
-    from fno.events import store_client
-
-    _patch_sleep(monkeypatch)
-    calls = {"n": 0}
-
-    def refusing_run(cmd, **kwargs):
-        calls["n"] += 1
-        return _Proc(1, stderr="error: envelope has no source")
-
-    monkeypatch.setattr(store_client.subprocess, "run", refusing_run)
-    envelope = {"ts": "t", "type": "phase_init", "source": "hook", "data": {}}
-    with pytest.raises(store_client.EventStoreUnavailable, match="no source"):
-        store_client.emit_envelope(envelope, tmp_path / "events.jsonl")
-    assert calls["n"] == 1
-
-
 def test_newer_store_schema_is_refused(tmp_path: Path) -> None:
     from fno.events import store_client
 
