@@ -216,7 +216,7 @@ pub fn build_argv_create(
     // no collision. Empty/None = unchanged argv.
     if let Some(d) = add_dir.filter(|d| !d.is_empty()) {
         argv.push("--add-dir".to_string());
-        argv.push(d.to_string());
+        argv.push(crate::claude_ask::resolve_grant_root(d));
     }
     // fno's computed writable-dir set, published by the Python spawn seam.
     // Without it a worker on this lane cannot write ~/.fno/claims, so it takes

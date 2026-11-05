@@ -912,10 +912,20 @@ pub fn state_dirs_from_env() -> Vec<String> {
         .map(|raw| {
             raw.split(if cfg!(windows) { ';' } else { ':' })
                 .filter(|s| !s.is_empty())
-                .map(str::to_string)
+                .map(resolve_grant_root)
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// A grant root with its symlinks resolved. codex 0.166 refuses to start a
+/// shell when a writable root has a symlink component (the worktree's
+/// `internal` link into the vault), so every root rides in resolved form. A
+/// root that does not exist yet stays as given.
+pub(crate) fn resolve_grant_root(dir: &str) -> String {
+    std::fs::canonicalize(dir)
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| dir.to_string())
 }
 
 /// Render the argv for `claude --bg` (`_build_argv`). When `use_stdin`, the
@@ -3515,6 +3525,28 @@ fn create(
 mod tests {
     use super::*;
     use std::fs;
+
+    #[cfg(unix)]
+    #[test]
+    fn a_grant_root_behind_a_symlink_is_granted_in_resolved_form() {
+        let base = fs::canonicalize(std::env::temp_dir())
+            .unwrap()
+            .join(format!("fno-grant-root-{}", std::process::id()));
+        let vault = base.join("vault/plans");
+        fs::create_dir_all(&vault).unwrap();
+        std::os::unix::fs::symlink(base.join("vault"), base.join("internal")).unwrap();
+        let through_link = base.join("internal/plans");
+        assert_eq!(
+            resolve_grant_root(through_link.to_str().unwrap()),
+            vault.to_string_lossy()
+        );
+        let missing = base.join("absent");
+        assert_eq!(
+            resolve_grant_root(missing.to_str().unwrap()),
+            missing.to_string_lossy()
+        );
+        fs::remove_dir_all(&base).unwrap();
+    }
 
     #[test]
     fn headless_output_format_lands_after_effort_before_passthrough() {

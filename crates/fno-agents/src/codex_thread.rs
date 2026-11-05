@@ -580,7 +580,7 @@ pub fn attach_codex_thread_state_dirs(params: &mut Value) {
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty())
     {
-        roots.insert(0, add_dir.to_string());
+        roots.insert(0, crate::claude_ask::resolve_grant_root(add_dir));
     }
     if !roots.is_empty() {
         params["state_dirs"] = Value::from(roots);
