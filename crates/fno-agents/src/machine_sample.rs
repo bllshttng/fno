@@ -841,8 +841,7 @@ pub(crate) fn maybe_capture_process_snapshot(
 /// the same ten minutes the mux census reads (`org_overlay::working_max_s`).
 const WORKING_WINDOW_S: i64 = 600;
 
-/// Seconds since a claude transcript was written, searched in the ambient
-/// projects dir and every account dir.
+/// Seconds since a claude transcript was written, in any account dir.
 fn transcript_age_any(session: &str) -> Option<i64> {
     let mut bases = vec![crate::claude_drive::claude_projects_dir()];
     bases.extend(
@@ -858,9 +857,8 @@ fn transcript_age_any(session: &str) -> Option<i64> {
     Some(age.as_secs() as i64)
 }
 
-/// Live rows that are working, each session once. Claude needs a recent
-/// transcript; codex and opencode have no transcript seam yet, so a live row
-/// of those counts.
+/// Working rows, each session once. Claude needs a recent transcript; codex
+/// and opencode have no transcript seam yet, so a live row counts.
 pub(crate) fn working_count(
     rows: &[&crate::state::RegistryEntry],
     age: &dyn Fn(&str) -> Option<i64>,

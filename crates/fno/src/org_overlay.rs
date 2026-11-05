@@ -559,9 +559,8 @@ impl Panel {
         }
     }
 
-    /// The sideline glance: three lines, painted at the bottom of the sideline
-    /// on every frame. `N working · M leads`, then cpu, then memory. The full
-    /// org block lives in the modal (`expanded_lines`).
+    /// The sideline glance: `N working · M leads`, cpu, memory. The full
+    /// block lives in the modal (`expanded_lines`).
     pub fn minimized_lines(&self, _agents: &[AgentRow], text_w: usize) -> Vec<String> {
         let count = |key: &str| {
             self.capacity
