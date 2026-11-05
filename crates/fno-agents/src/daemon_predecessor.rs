@@ -39,6 +39,26 @@ pub fn capture(home: &AgentsHome, pid_alive: impl Fn(u32, Option<u64>) -> bool) 
     );
 }
 
+/// Write the dated start line and, when the predecessor died unseen, the
+/// death line and the `daemon_died_unexpectedly` event. stderr is append-only
+/// across every start, so one dated line per start splits it into one segment
+/// per pid and a death can be placed in time.
+pub fn announce_start(home: &AgentsHome, emitter: &crate::events::EventEmitter) {
+    let pid = std::process::id();
+    eprintln!(
+        "fno-agents-daemon: started pid={pid} at {}",
+        chrono::Utc::now().to_rfc3339()
+    );
+    if let Some(death) = unexpected_death(home, pid) {
+        eprintln!(
+            "fno-agents-daemon: predecessor pid={} died without daemon_exited; quiet {}s; exit code unrecoverable",
+            death["old_pid"],
+            death["quiet_secs"].as_i64().unwrap_or(-1)
+        );
+        let _ = emitter.emit("daemon_died_unexpectedly", &death);
+    }
+}
+
 /// The `daemon_died_unexpectedly` payload, when the captured predecessor left
 /// a `daemon_started` in the events log with no `daemon_exited` after it.
 pub fn unexpected_death(home: &AgentsHome, new_pid: u32) -> Option<Value> {

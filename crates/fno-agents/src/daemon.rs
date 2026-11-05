@@ -934,18 +934,6 @@ pub(crate) fn live_liveness_prober(
     }
 }
 
-/// Terminal-stop sweep: `claude stop` any fire-and-forget `claude --bg`
-/// worker that `finalize` marked terminal. finalize (running as the worker's own
-/// child) cannot self-exit it, so this daemon sweep — external to every worker —
-/// runs the shipped stop on its behalf. A clean stop settles the session `(done)`
-/// and is never Claude-daemon-respawned; roster-presence itself excludes owned-PTY
-/// panes and operator terminals (never `claude --bg` daemon jobs), so a present +
-/// marked job is exactly a done fire-and-forget bg worker.
-///
-/// Cheap in steady state: no markers -> one dir stat, no roster load. A stop
-/// failure leaves the marker for the next tick (retry); a marker whose session is
-/// already gone is dropped as stale.
-
 /// Is `pid` still OUR worker, not a recycled PID? True iff the process exists,
 /// we may signal it, AND its current start time matches `recorded`
 ///. If a start time is unavailable on either side (`None` — lookup
@@ -1080,8 +1068,6 @@ pub async fn bind_supervisor_socket(
         return Err(DaemonError::AlreadyRunning(home.supervisor_sock()));
     }
 
-    // The lock is ours, so the previous holder named in the file is gone or
-    // never was; read it before the content below overwrites it.
     crate::daemon_predecessor::capture(home, pid_is_ours);
 
     // Record the holder in the lockfile CONTENT: pid plus start time,
@@ -1381,20 +1367,7 @@ pub async fn run(home: AgentsHome, opts: DaemonOptions) -> Result<(), DaemonErro
         let _ = emitter.emit("daemon_exe_fingerprint_unavailable", &json!({}));
     }
     let pid_start_time = process_start_time(std::process::id());
-    // stderr is append-only across every daemon start; a dated line per start
-    // splits it into one segment per pid so a death can be placed in time.
-    eprintln!(
-        "fno-agents-daemon: started pid={} at {}",
-        std::process::id(),
-        chrono::Utc::now().to_rfc3339()
-    );
-    if let Some(death) = crate::daemon_predecessor::unexpected_death(&home, std::process::id()) {
-        eprintln!(
-            "fno-agents-daemon: predecessor pid={} died without daemon_exited; log quiet for {}s; exit code unrecoverable",
-            death["old_pid"], death["quiet_secs"]
-        );
-        let _ = emitter.emit("daemon_died_unexpectedly", &death);
-    }
+    crate::daemon_predecessor::announce_start(&home, &emitter);
     let _ = emitter.emit(
         "daemon_started",
         &json!({
