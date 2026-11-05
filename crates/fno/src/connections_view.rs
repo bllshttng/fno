@@ -2950,6 +2950,8 @@ mod tests {
         let mut v = ready_view();
         v.on_key(b'a');
         assert!(v.captures_text());
+        // The opening pick follows the selected account's catalog row; pin it.
+        v.wizard.as_mut().unwrap().pick = 0;
         let mut esc = Vec::new();
         let keys = crate::client::fold_text_field_keys_for_test(
             &mut esc,
