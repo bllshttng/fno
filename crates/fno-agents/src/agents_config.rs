@@ -2922,6 +2922,7 @@ mod tests {
                 "{pattern} is missing from scripts/ci/paint-paths-select.sh"
             );
             let on_disk = pattern.strip_suffix("/**").unwrap_or(pattern);
+            let on_disk = on_disk.strip_prefix('/').unwrap_or(on_disk);
             assert!(
                 repo.join(on_disk).exists(),
                 "{pattern} names nothing in the tree: a rename left a dead paint entry"

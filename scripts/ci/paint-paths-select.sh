@@ -4,7 +4,8 @@
 # config tier a runner can see, and answers whether the PR's changed files
 # touch a listed path. The matcher mirrors the gate's path_matches_paint
 # (crates/fno-agents/src/merge_gates.rs): `dir/**` matches at a path boundary,
-# a pattern with no slash matches a basename, anything else matches exactly.
+# a leading `/` anchors at the repo root, a pattern with no slash matches a
+# basename, anything else matches exactly.
 # An explicit empty list, or a non-list value, disarms, like the gate. A
 # missing config, an unparseable one, or one with no key falls back to the
 # built-in mux client list, as the gate does where that tree exists. An
@@ -59,7 +60,7 @@ if [[ -d "$root/crates/fno/src/client" ]]; then
     "crates/fno/src/web_page.html"
     "crates/fno/src/web_trace.html"
     "crates/fno/src/wordmark.rs"
-    "README.md"
+    "/README.md"
     "docs/images/**"
   )
 fi
@@ -121,6 +122,8 @@ def matches(path: str, pattern: str) -> bool:
     if pattern.endswith("/**"):
         prefix = pattern[: -len("/**")].rstrip("/")
         return path == prefix or path.startswith(prefix + "/")
+    if pattern.startswith("/"):
+        return path == pattern[1:]
     if "/" not in pattern:
         return path.rsplit("/", 1)[-1] == pattern
     return path == pattern
