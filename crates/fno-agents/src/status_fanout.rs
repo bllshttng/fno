@@ -1652,7 +1652,10 @@ pub fn run_tick_command(args: &[String]) -> i32 {
         println!("status-fanout: another tick holds the lock; skipped");
         return 0;
     }
-    // The daemon ticks every few seconds: an idle pass prints nothing.
+    // The daemon ticks every few seconds: an idle pass prints nothing. A
+    // skipped sink is named in every mode: the line is the one signal a
+    // hand-run tick gives for a url that never resolves (the skip writes no
+    // errors row).
     if dry_run && result.sinks.is_empty() {
         if !result.undeliverable_sinks.is_empty() {
             println!(
@@ -1662,7 +1665,7 @@ pub fn run_tick_command(args: &[String]) -> i32 {
         } else {
             println!("status-fanout: no enabled sinks (no-op)");
         }
-    } else if dry_run && !result.undeliverable_sinks.is_empty() {
+    } else if !result.undeliverable_sinks.is_empty() {
         println!(
             "status-fanout: skipped (url unresolved): {}",
             result.undeliverable_sinks.join(", ")

@@ -846,4 +846,33 @@ fn fanout_adapter_and_template_cases_match_the_captured_goldens() {
             ],
         },
     );
+
+    // The mixed-set CLI case, NON-dry: a deliverable sink routed to a type
+    // the journal never emits (so no webhook child fires) beside an
+    // unresolved url_env sink. The tick must name the skipped sink on
+    // stdout in every mode - the line is the only signal a hand-run tick
+    // gives for a url that never resolves (the skip writes no errors row).
+    let cfg = sb.root.join("mixed.toml");
+    std::fs::write(
+        &cfg,
+        "[[status_sinks]]\nname = \"quiet\"\ntype = \"json-webhook\"\nurl = \"https://example.invalid/hook\"\nevents = [\"never_emitted\"]\n\n[[status_sinks]]\nname = \"broken\"\ntype = \"json-webhook\"\nurl_env = \"NOPE_ENV\"\nevents = [\"blocked\"]\n",
+    )
+    .unwrap();
+    let out = std::process::Command::new(bin)
+        .args(["status", "--fanout", "tick"])
+        .current_dir(&sb.root)
+        .env("FNO_CONFIG", &cfg)
+        .envs(fno_agents::test_run::self_owner_env())
+        .output()
+        .unwrap();
+    assert_fanout_golden(
+        "cli status fanout tick names a skipped sink",
+        &Golden {
+            exit: out.status.code(),
+            streams: vec![
+                String::from_utf8_lossy(&out.stdout).to_string(),
+                String::from_utf8_lossy(&out.stderr).to_string(),
+            ],
+        },
+    );
 }
