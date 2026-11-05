@@ -43,12 +43,26 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        # No `ref:` argument: a workflow_call checkout taking an input-ref
+        # argument is the untrusted-checkout source of the cache-poisoning
+        # findings, so the pin step below applies inputs.ref through plain git
+        # instead, and checkout keeps the caller's sha when ref is empty.
         with:
-          ref: ${{ inputs.ref }}
+          fetch-depth: 0
           # Full history: build.rs bakes in the last commit that touched
           # crates/. A shallow clone has one commit, so the binaries would
           # report HEAD and `fno update` would judge them stale forever.
-          fetch-depth: 0
+
+      - name: Pin build ref
+        if: inputs.ref != ''
+        # Plain-git pin: fetches exactly that commit from origin and detaches
+        # on it, so the build runs the pinned source with no action-level ref.
+        env:
+          REF: ${{ inputs.ref }}
+        run: |
+          set -euo pipefail
+          git fetch origin "$REF"
+          git checkout --detach "$REF"
 
       - name: Stamp release version
         if: inputs.version != ''
@@ -59,11 +73,13 @@ jobs:
         # that predates the PEP 440 -> semver Cargo conversion, writing a PEP
         # 440 version into Cargo.toml where cargo refuses to parse it.
         shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
           git fetch --depth=1 origin "${{ github.sha }}"
           git show "${{ github.sha }}:scripts/release/sync-version.sh" > scripts/release/sync-version.sh
-          bash scripts/release/sync-version.sh "${{ inputs.version }}"
+          bash scripts/release/sync-version.sh "$VERSION"
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
