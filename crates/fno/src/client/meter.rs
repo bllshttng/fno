@@ -129,6 +129,17 @@ async fn stream_macmon(
     }
 }
 
+/// The bar's own cpu figure (`45%`), so the sideline glance prints the
+/// number the bar prints and the two can never disagree.
+pub(super) fn cpu_figure(text: &str) -> Option<&str> {
+    let head = text
+        .strip_prefix("cpu ")
+        .or_else(|| text.strip_prefix("CPU "))?;
+    let figure = head.split_whitespace().next()?;
+    figure.strip_suffix('%')?.parse::<f64>().ok()?;
+    Some(figure)
+}
+
 /// A snapshot has no macmon stream: `FNO_SNAPSHOT_METER` seeds the row.
 pub(super) fn snapshot_meter_text(detailed: bool) -> Option<String> {
     let state = capacity_state()?;

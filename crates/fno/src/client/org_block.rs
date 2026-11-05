@@ -48,9 +48,13 @@ impl View {
         if self.sideline_view != crate::view_store::SidelineView::Agents {
             return (0, Vec::new());
         }
-        let mut lines = self
-            .org
-            .minimized_lines(&self.layout.agents, self.org_text_w());
+        let mut lines = self.org.minimized_lines(
+            &self.layout.agents,
+            self.org_text_w(),
+            self.resource_meter_text
+                .as_deref()
+                .and_then(super::meter::cpu_figure),
+        );
         lines.extend(self.observer_lines(self.org_text_w()));
         let available = term_rows
             .saturating_sub(1)

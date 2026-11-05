@@ -1274,7 +1274,15 @@ shoot a root whose fleet map has a second machine (scripts/ops/mux-demo-snapshot
             };
             let read = lanes.is_some();
             view.org.apply(crate::org_overlay::FoldPart::Lanes(lanes));
-            let gate = runtime.block_on(crate::org_overlay::gate_now());
+            // `FNO_SNAPSHOT_GATE` seeds the spawn-gate answer the way
+            // `FNO_SNAPSHOT_LANES` seeds the fold: the live probe is a
+            // child that can time out on a busy shooting host.
+            let gate = match std::env::var("FNO_SNAPSHOT_GATE") {
+                Ok(raw) => {
+                    serde_json::from_str(&raw).map_err(|e| format!("FNO_SNAPSHOT_GATE: {e}"))
+                }
+                Err(_) => runtime.block_on(crate::org_overlay::gate_now()),
+            };
             view.org.apply(crate::org_overlay::FoldPart::Gate(gate));
             view.open_org_modal();
             if !read {

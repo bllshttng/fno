@@ -582,22 +582,32 @@ impl Panel {
 
     /// The sideline glance: `N working · M leads`, cpu, memory. The full
     /// block lives in the modal (`expanded_lines`).
-    pub fn minimized_lines(&self, _agents: &[AgentRow], text_w: usize) -> Vec<String> {
-        let cpu = match self
-            .fold
-            .as_ref()
-            .and_then(|org| org.arm_num("whole-machine cpu", "busy_fraction"))
-        {
-            Some(busy) => match self
+    pub fn minimized_lines(
+        &self,
+        _agents: &[AgentRow],
+        text_w: usize,
+        bar_cpu: Option<&str>,
+    ) -> Vec<String> {
+        let cpu = match bar_cpu {
+            Some(figure) => format!("  cpu       {figure} busy"),
+            None => match self
                 .fold
                 .as_ref()
-                .and_then(|org| org.arm_num("whole-machine cpu", "capacity_cores"))
-                .filter(|_| self.detailed)
+                .and_then(|org| org.arm_num("whole-machine cpu", "busy_fraction"))
             {
-                Some(cores) => format!("  cpu       {:.0}% busy of {cores:.0} cores", busy * 100.0),
-                None => format!("  cpu       {:.0}% busy", busy * 100.0),
+                Some(busy) => match self
+                    .fold
+                    .as_ref()
+                    .and_then(|org| org.arm_num("whole-machine cpu", "capacity_cores"))
+                    .filter(|_| self.detailed)
+                {
+                    Some(cores) => {
+                        format!("  cpu       {:.0}% busy of {cores:.0} cores", busy * 100.0)
+                    }
+                    None => format!("  cpu       {:.0}% busy", busy * 100.0),
+                },
+                None => "  cpu       unknown".to_string(),
             },
-            None => "  cpu       unread (key C)".to_string(),
         };
         let memory = match self
             .capacity
@@ -1460,18 +1470,21 @@ mod tests {
             "leads_live": 5,
             "memory": {"used_fraction": 0.64},
         }));
-        let lines = panel.minimized_lines(&[], 200);
+        let lines = panel.minimized_lines(&[], 200, None);
         assert_eq!(lines.len(), MINIMIZED_ROWS, "{lines:?}");
         assert_eq!(lines[0], "  9 working · 5 leads");
         assert_eq!(lines[1], "  cpu       80% busy");
         assert_eq!(lines[2], "  memory    64% full");
-        let narrow = panel.minimized_lines(&[], 10);
+        // The bar's own figure wins over the fold, so the two never differ.
+        let barred = panel.minimized_lines(&[], 200, Some("45%"));
+        assert_eq!(barred[1], "  cpu       45% busy");
+        let narrow = panel.minimized_lines(&[], 10, None);
         assert!(narrow.iter().all(|l| l.chars().count() <= 10), "{narrow:?}");
 
         // No reading at all: every line says unknown, none prints a zero.
-        let lines = Panel::default().minimized_lines(&[], 200);
+        let lines = Panel::default().minimized_lines(&[], 200, None);
         assert!(lines[0].contains("working unknown"), "{lines:?}");
-        assert!(lines[1].contains("unread") && lines[2].contains("unknown"));
+        assert!(lines[1].contains("unknown") && lines[2].contains("unknown"));
 
         // A failed fold leaves the glance unknown; the modal says why.
         let mut failed = Panel::default();
