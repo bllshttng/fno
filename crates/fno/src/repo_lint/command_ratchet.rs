@@ -1,14 +1,17 @@
 //! `fno doctor lint command-ratchet`: hold the command surface down against
 //! `scripts/ci/command-baseline.txt`. Ported from `cli/src/fno/lint_command_ratchet.py`
 //! (deleted). The Rust half is live: the typed clap tree plus the fno-agents
-//! leaf. Recorded departure, loud by design: the fno-py registry half cannot
-//! outlive the Python runtime it imports, so that half is pinned by the
-//! committed manifests now - every collapse-map row and every
-//! command-collapse-flags row must appear in the baseline, and the count cap
-//! (menu-caps) keeps holding the groups. A Python leaf is added or removed by
-//! editing the map, the flags file and the baseline in the same PR, which is
-//! the merge-conflict-as-review-moment shape the ratchet always had.
+//! binary's own verb surface (`agents_surface`), defended row-by-row in both
+//! directions - a verb cannot be added or deleted silently. Recorded
+//! departure, loud by design: the fno-py registry half cannot outlive the
+//! Python runtime it imports, so that half is pinned by the committed
+//! manifests now - every collapse-map row and every command-collapse-flags
+//! row must appear in the baseline, and the count cap (menu-caps) keeps
+//! holding the groups. A Python leaf is added or removed by editing the map,
+//! the flags file and the baseline in the same PR, which is the
+//! merge-conflict-as-review-moment shape the ratchet always had.
 
+use super::agents_surface::{self, AgentsSurface};
 use super::Invocation;
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -174,6 +177,18 @@ fn update_baseline(root: &Path) -> i32 {
     for row in carried {
         leaves.insert(row_path(&row));
     }
+    // The fno-agents half regenerates live from the client source, so a
+    // surface change carries its rows in the same PR.
+    let surface = match AgentsSurface::read(root) {
+        Ok(surface) => surface,
+        Err(message) => {
+            eprintln!("{message}");
+            return 1;
+        }
+    };
+    for row in surface.rows() {
+        leaves.insert(row);
+    }
     let mut rows: Vec<String> = leaves.into_iter().collect();
     rows.sort();
     let header = "# Known command surface held by the CI ratchet.\n\
@@ -245,6 +260,75 @@ pub fn run(inv: &Invocation) -> i32 {
                 .to_string(),
         );
     }
+    // The fno-agents half: the binary's own verb surface, the two readings
+    // cross-checked against the committed record of the deliberate hidden
+    // verbs, and the baseline rows defended in both directions.
+    let mut agents_ok_note = String::new();
+    match AgentsSurface::read(&inv.root) {
+        Ok(surface) => {
+            let hidden = surface.hidden();
+            let live_rows = surface.rows();
+            let (added_agents, removed_agents) =
+                agents_surface::baseline_drift(&live_rows, &baseline);
+            if !added_agents.is_empty() {
+                failed = true;
+                lines.push(format!(
+                    "command-ratchet: FAIL - the fno-agents surface drifted from {BASELINE_REL}"
+                ));
+                lines.push(format!(
+                    "  Added (dispatched, no baseline row): {}",
+                    added_agents.join(", ")
+                ));
+                lines.push(
+                    "    A verb cannot be added silently. Regenerate the baseline in the same PR \
+                     and add a PR-body line:  command-exception: <rationale>"
+                        .to_string(),
+                );
+            }
+            if !removed_agents.is_empty() {
+                failed = true;
+                lines.push(format!(
+                    "  Removed (baseline row, no dispatch): {}",
+                    removed_agents.join(", ")
+                ));
+                lines.push(
+                    "    A verb cannot be deleted silently either: the row goes in the same PR \
+                     that removes it. If the removal is right, delete the rows and regenerate."
+                        .to_string(),
+                );
+            }
+            match std::fs::read_to_string(inv.root.join(agents_surface::HIDDEN_REL)) {
+                Ok(text) => match agents_surface::hidden_rows(&text) {
+                    Ok(rows) => {
+                        for failure in surface.drift(&rows) {
+                            failed = true;
+                            lines.push(failure);
+                        }
+                    }
+                    Err(line) => {
+                        failed = true;
+                        lines.push(line);
+                    }
+                },
+                Err(e) => {
+                    failed = true;
+                    lines.push(format!(
+                        "agents-surface: cannot read {}: {e}",
+                        agents_surface::HIDDEN_REL
+                    ));
+                }
+            }
+            agents_ok_note = format!(
+                "; fno-agents surface: {} row(s), {} hidden verb(s) recorded",
+                live_rows.len(),
+                hidden.len()
+            );
+        }
+        Err(message) => {
+            failed = true;
+            lines.push(message);
+        }
+    }
     if failed {
         for line in &lines {
             eprintln!("{line}");
@@ -253,10 +337,11 @@ pub fn run(inv: &Invocation) -> i32 {
     }
     let n_hidden = baseline.iter().filter(|r| r.contains(" !")).count();
     println!(
-        "command-ratchet: ok ({} baseline leaves, {n_hidden} hidden-option row(s); \
+        "command-ratchet: ok ({} baseline leaves, {n_hidden} hidden-option row(s){}; \
          the Rust half is live against the typed tree; the fno-py registry half is \
          pinned by the committed manifests now)",
-        baseline.len()
+        baseline.len(),
+        agents_ok_note
     );
     0
 }

@@ -1,0 +1,102 @@
+# Deliberately operator-invisible verbs on the fno-agents binary: a dispatched
+# verb the unknown-command refusal never names. The ruling that owns this
+# surface (2026-09-25: hidden top-level verbs retire into nested groups) is
+# carried by the fno-agents debt row in scripts/ci/menu-caps-debt.tsv; until a
+# verb folds, its invisibility is deliberate and recorded here, one row per
+# verb with the reason. Shrink-only: a row whose verb becomes refusal-named,
+# folds into a group, or disappears must go in the same PR. The command ratchet
+# refuses a dispatched-but-unrecorded verb and a stale row alike.
+attest	daemon-free report door; binary-direct like finalize
+backlog	door for the fno-agents backlog CLI; internal callers only
+backlog-orphan-plans	door: the SessionStart reconcile sweep execs here
+chats	table door under review_doors::dispatch; read model
+claude-birth-exec	door: the fleet's claude birth exec path (revive-proof rides as an argument)
+commands	door: prints the command surface for harness scripts
+context-run	door: context runner transport
+corrections-verify	door: autocorrect verdicts read back by the updater
+day	door: the inbox relay reaches it via resolve_binary; no advertised fno agents day spelling
+delivery-evaluate	door: delivery evaluation transport (fno do pr evidence reads it back)
+do	door: the do/pr front pair (do pr, do ci, do show, do diff route through pr_front/ci_front/rev_front)
+evals	door: the doctor evals family's binary leg
+evals-arm	door: per-arm eval reads for the doctor evals family
+evals-attempt	door: per-attempt eval reads for the doctor evals family
+evals-trend	door: trend reads for the doctor evals family
+executor-route	door: the executor parser door; bodies in executor_route.rs
+fleet-task	like component-verdict: no advertised fno command
+gh	transport door: a proxied gh call pays no other arm
+gh-adapter	transport door: the gh adapter purposes (coverage, discretionary)
+gh-cache	transport door: gh cache read
+harness-roster	door: harness roster read
+hook	door: hook plumbing transport
+intel	door: fno doctor intel shells here through resolve_binary
+lead-rundown	table door under review_doors::dispatch; org JSON reader
+lead-shape	door: the org shape shell invokes the binary directly
+lead-state	door: the org shape shell and escalate's client invoke the binary directly
+machine-mail-send	door: binary-direct mail transport for the events and note Python adapters
+mail	door: the fno-agents mail CLI for internal callers
+mail-backfill	door: events bus backfill transport
+mail-envelope	door: origin-record leaf mail send and reply call
+mail-hold	door: mail hold transport
+mail-notify-self	door: mail notification transport
+mail-receipt	door: mail receipt read transport
+mail-record	door: origin-record leaf mail send and reply call
+mail-remote	door: cross-host relay, binary-direct like mail-inject
+mail-teach	door: mail teaching transport
+mail-threads	door: mail thread reads, unregistered like team-fold
+node-bind	table door under review_doors::dispatch
+org-fold	table door under review_doors::dispatch; fold and claims cannot disagree about a held node
+org-remote	door: cross-machine relay, binary-direct like mail-remote
+org-vacancies	table door under review_doors::dispatch; comment claims registered but the refusal list disagrees - read before folding
+pane-rebind	door: pane rebind transport
+pending-session-row	door: pending session row read
+permission-tokens	door: permission token reads, one authoritative copy
+plan-cli	family door: the plan CLI leaf, hidden like stub-manifest
+pr	door: the pr front door (pr_front)
+pr-base-check	table door under pr_door::run_command
+pr-base-lineage-check	table door under pr_door::run_command
+pr-body-check	table door under pr_door::run_command
+pr-closure-parse	produce door: pr_closure run_command alternation
+pr-closure-render	produce door: pr_closure run_command alternation
+pr-create	table door under pr_door::run_command
+pr-merge-result-check	table door under pr_door::run_command
+pr-park	door: pr park transport
+pr-push	door: push transport; public callers keep fno do pr list through the Python adapter
+pr-rebase	door: rebase transport, binary-direct like pr-body-check
+pr-verify	table door under pr_door::run_command
+pr-watch	door: the pr watch install and status doors
+pr-worktree	door: PR-scoped callers resolve the local checkout from the head branch; transport-only
+question-clear	door: question clear transport
+question-intake	door: question intake transport
+registry-commit	door: registry commit transport
+release-notes	door: release notes best-effort transport; the payload never blocks on it
+research	table door under review_doors::dispatch
+resume-receipt	door: resume receipt transport
+review-level	table door under review_doors::dispatch
+review-policy	table door under review_doors::dispatch
+revival-check	door: revival gate read; starts nothing
+sandbox-probe	door: calls the probe in process and owns the exit-85 refusal
+scoreboard	door: scoreboard read
+select-read	door: passthroughs invoke the binary directly
+session-backfill	door: session backfill transport
+spawn-remote	door: cross-machine relay, binary-direct like mail-remote
+stalls	door: fno doctor stalls shells here through resolve_binary
+state-cli	family door: the state CLI leaf, hidden like stub-manifest
+state-root	door: state-root transport
+stub-manifest	family door: the stub manifest leaf, hidden like plan-cli
+style-check	door: fno doctor lint style forwards here; the parity sets never see it
+surface-check	door: scripts/validate-plan.sh shells here and reads the line protocol back
+sync-canonical	door: the post-merge canonical sync; binary-first like canonical-check
+target-blast-check	table door under review_doors::dispatch
+target-gates	family door: the target gates leaf, hidden like stub-manifest
+target-init	table door under review_doors::dispatch
+target-start	table door under review_doors::dispatch
+target-status	transport door: target status read
+terminals	door: terminals read
+test-delta	door: PR creation reads this inventory for its body; binary-direct
+think-dispatch	table door under review_doors::dispatch
+think-inspect	family door: think inspect leaf (review_doors::dispatch)
+update-journal	door: update journal transport, one payload in one receipt out
+visual	table door under review_doors::dispatch; critique prep
+wave	door: the wave dispatcher (fno-agents wave ready)
+worked-nodes	door: one payload in, one receipt out, one verdict
+worker-wake	door: the Stop hook's wake transport; starts nothing, never lazy-starts

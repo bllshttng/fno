@@ -14,6 +14,7 @@
 //! selftest's injection path; the Python selftest drove the module API the
 //! same way).
 
+pub mod agents_surface;
 pub mod command_ratchet;
 pub mod seam_crossings;
 pub mod shellout_drift;

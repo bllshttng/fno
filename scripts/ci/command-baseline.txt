@@ -32,32 +32,545 @@
 # (same shape as `command-exception:`; removals are free and need no line).
 #
 # Scope: the hidden-option coverage is fno-py only. The Rust front's COMMANDS are
-# read from its dispatchers and cross-checked against the live binary, but its
-# FLAGS are not enumerated, so a hidden flag on a mux command is invisible to this
-# gate. The lint output names that boundary on every green run.
+#
+# The fno-agents rows are enumerated live from the binary's own dispatch
+# source and defended in both directions (agents_surface): a verb cannot be
+# added or deleted silently. A dispatched verb the unknown-command refusal
+# does not name is operator-invisible; its deliberate invisibility is
+# recorded in scripts/ci/agents-hidden-verbs.tsv. The hidden verbs retire
+# into nested groups per the fno-agents debt row in menu-caps-debt.tsv; a
+# fold PR regenerates this file in the same change.
+agents adopt
+agents announce
+agents ask
+agents attach
+agents attest
+agents authorized-merge
+agents bash-census
+agents capabilities
+agents census
+agents claim acquire
+agents claim list
+agents claim reap
+agents claim refresh
+agents claim release
+agents claim session-pid
+agents claim status
+agents codex-session-for-pid
+agents compaction
+agents digest
+agents discovered-json
+agents distress-scan
+agents distress-verdicts
+agents drive-authority
+agents evals-macro
+agents fallback-chain
+agents feed
+agents finalize
+agents fleet-incident
+agents friction-escalate
+agents gate-status
+agents harness probe
+agents heal-token
+agents history
+agents honesty-sweep
+agents incident
+agents judge
+agents kill-check
+agents lead-checkin
+agents lead-history
+agents lead-rundown
+agents list
+agents liveness
+agents logs
+agents loop
+agents loop-check
+agents loops
+agents mail ack
+agents mail drain
+agents mail drain-self
+agents mail hold
+agents mail hold-release
+agents mail list
+agents mail pane-prepare
+agents mail reply
+agents mail seed-provenance
+agents mail send
+agents mail sent
+agents mail show
+agents mail status
+agents mail team
+agents mail triage
+agents mail unread
+agents mail withdraw
+agents mail-teach
+agents name
+agents needs
+agents org-fold
+agents org-vacancies
+agents orphans
+agents pane-identity
+agents peek
+agents permission-tokens
+agents probe-run
+agents prove-it-verdicts
+agents provider-cap
+agents reap
+agents reconcile
+agents recover
+agents register
+agents registry-json
+agents registry-repair
+agents rename
+agents report
+agents restart
+agents resume
+agents retask
+agents review-coverage
+agents revival-check
+agents rm
+agents role
+agents roles ls
+agents route-slot
+agents sandbox-probe
+agents select-read
+agents session-start-bytes
+agents spawn
+agents spawn-axes
+agents spawn-gate
+agents spawn-guard
+agents spawn-overlay
+agents stale-escalate
+agents status
+agents stop
+agents subscribe
+agents sweep
+agents target-family
+agents team
+agents test-run
+agents top
+agents trace
+agents transcript
+agents truth
+agents verify-evidence
+agents wait
+agents watch
+agents watchdog
+agents whoami
+agents worked-nodes
 backlog
 backlog advance
+backlog album
+backlog annotate add
+backlog annotate list
+backlog annotate resolve
+backlog archive
+backlog backfill-deferred-kind
+backlog bases
+backlog board
+backlog carveout add
+backlog carveout list
+backlog carveout resolve
+backlog carveout update
+backlog collisions check
+backlog contain
+backlog cost
+backlog decompose
+backlog defer
+backlog demand
+backlog dispatch-lanes
 backlog done
+backlog encounter
 backlog get
+backlog groom
+backlog intake
+backlog join
+backlog lane-fill
+backlog maintain
+backlog migrate-difficulty
+backlog migrate-priorities
+backlog migrate-updated-at
 backlog next
+backlog note
+backlog project-root
+backlog provenance
+backlog queue
 backlog queued
+backlog rank
+backlog ready
+backlog relatedness build
+backlog relatedness get
+backlog remove
+backlog render-views
+backlog reopen
+backlog retract
+backlog retro drain-postmortems
+backlog retro run
+backlog retro sweep-carveouts
+backlog roadmap
+backlog session add
+backlog session backfill
+backlog session close
+backlog session open
+backlog session reap-open
+backlog status
+backlog supersede
+backlog triage
+backlog unarchive
+backlog unclaim
+backlog undefer
+backlog undispatched
+backlog unqueue
+backlog unsupersede
+backlog version
+backlog view
+backlog worked
 bundle
+bundle check
+bundle lint
 config
 config accounts
+config active-backlog
+config assert-subagent-budget
+config build-dir
+config doctor
 config get
+config history
+config plugin
+config project
+config rm
+config route
+config routing
+config schema
 config set
+config status-sinks
+config unset
 cost
 delivery evaluate
 do
+do ci status
+do delivery evaluate
+do feedback
+do pr attestation retract
+do pr base-check
+do pr base-lineage-check
+do pr bind-created
+do pr closure-trailer
+do pr coverage-check
+do pr coverage-publish
+do pr coverage-waive
+do pr create
+do pr evidence-check
+do pr evidence-required
+do pr global-receipt-events-path
+do pr graphql-exec
+do pr heal
+do pr hold-check
+do pr info
+do pr list
+do pr logs
+do pr merge
+do pr merge-result-check
+do pr next-receipt-generation
+do pr publish-review
+do pr push
+do pr rebase
+do pr review-hold
+do pr ritual
+do pr status
+do pr sync-canonical
+do pr verify
+do pr wait
+do pr watch
+do research
+do review classify
+do review invocations
+do review post-dispositions
+do review resolve-level
+do think dispatch
+do think inspect
 doctor
+doctor bundle
+doctor evals export
+doctor evals grade
+doctor evals graduate
+doctor evals macro
+doctor evals qualify
+doctor evals report
+doctor evals run
+doctor evals trend
+doctor event
+doctor harness
+doctor harness-matrix
+doctor intel
+doctor observer judge
+doctor observer replay
+doctor observer sweep
+doctor plugin-file
+doctor route
+doctor stalls
+doctor test
+doctor update
 evals
+evals export
+evals grade
+evals graduate
+evals macro
+evals qualify
+evals report
+evals run
+evals trend
 fno-agents
+fno-agents active-backlog-receipt
+fno-agents adopt
+fno-agents announce
+fno-agents ask
+fno-agents attach
+fno-agents attest
+fno-agents authorized-merge
+fno-agents backlog
+fno-agents backlog-orphan-plans
+fno-agents bash-census
+fno-agents board
+fno-agents canonical-check
+fno-agents census
+fno-agents chats
+fno-agents claim
+fno-agents claim acquire
+fno-agents claim backlog
+fno-agents claim birth
+fno-agents claim export
+fno-agents claim flight-acquire
+fno-agents claim flight-release
+fno-agents claim lane-acquire
+fno-agents claim lane-count
+fno-agents claim lane-reconcile
+fno-agents claim lane-release
+fno-agents claim list
+fno-agents claim long-holds
+fno-agents claim queue
+fno-agents claim read-path
+fno-agents claim reap
+fno-agents claim refresh
+fno-agents claim release
+fno-agents claim release-stopped
+fno-agents claim review-hold
+fno-agents claim root
+fno-agents claim session-pid
+fno-agents claim status
+fno-agents claim sweep
+fno-agents claude-birth-exec
+fno-agents claude-birth-exec revive-proof
+fno-agents codex-assign-project
+fno-agents commands
+fno-agents compaction
+fno-agents component-verdict
+fno-agents context-run
+fno-agents corrections-verify
+fno-agents day
+fno-agents delivery-evaluate
+fno-agents detect
+fno-agents digest
+fno-agents distress-scan
+fno-agents do
+fno-agents do ci
+fno-agents do diff
+fno-agents do pr
+fno-agents do show
+fno-agents drive
+fno-agents drive-authority
+fno-agents evals
+fno-agents evals-arm
+fno-agents evals-attempt
+fno-agents evals-macro
+fno-agents evals-trend
+fno-agents evidence-gate
+fno-agents executor-route
+fno-agents fallback-chain
+fno-agents feed
+fno-agents finalize
+fno-agents fleet-incident
+fno-agents fleet-task
+fno-agents gh
+fno-agents gh-adapter
+fno-agents gh-cache
+fno-agents grid
+fno-agents harness-roster
+fno-agents help
+fno-agents honesty-sweep
+fno-agents hook
+fno-agents host
+fno-agents intel
+fno-agents judge
+fno-agents kill-check
+fno-agents lead-checkin
+fno-agents lead-escalation-text
+fno-agents lead-history
+fno-agents lead-rundown
+fno-agents lead-shape
+fno-agents lead-state
+fno-agents list
+fno-agents logs
+fno-agents loop
+fno-agents loop-check
+fno-agents loops
+fno-agents machine-mail-send
+fno-agents mail
+fno-agents mail-backfill
+fno-agents mail-envelope
+fno-agents mail-hold
+fno-agents mail-inject
+fno-agents mail-notify-self
+fno-agents mail-receipt
+fno-agents mail-record
+fno-agents mail-remote
+fno-agents mail-teach
+fno-agents mail-threads
+fno-agents manifest-eval
+fno-agents manifest-for-session
+fno-agents name-codes
+fno-agents name-mint
+fno-agents name-parse
+fno-agents needs
+fno-agents node-bind
+fno-agents node-origin
+fno-agents node-route
+fno-agents notify-watch
+fno-agents org-fold
+fno-agents org-remote
+fno-agents org-vacancies
+fno-agents orphan-reap
+fno-agents pane-rebind
+fno-agents pending-session-row
+fno-agents permission-tokens
+fno-agents plan-cli
+fno-agents plugin-install
+fno-agents pr
+fno-agents pr-base-check
+fno-agents pr-base-lineage-check
+fno-agents pr-body-check
+fno-agents pr-closure-parse
+fno-agents pr-closure-render
+fno-agents pr-create
+fno-agents pr-heal
+fno-agents pr-heal list
+fno-agents pr-merge-result-check
+fno-agents pr-park
+fno-agents pr-push
+fno-agents pr-rebase
+fno-agents pr-verify
+fno-agents pr-watch
+fno-agents pr-worktree
+fno-agents probe-run
+fno-agents promote
+fno-agents prove-it-verdicts
+fno-agents provider-cap
+fno-agents publish-review
+fno-agents question-clear
+fno-agents question-intake
+fno-agents reap
+fno-agents reclaim
+fno-agents reconcile
+fno-agents recover
+fno-agents reentry-plan
+fno-agents registry-commit
+fno-agents registry-json
+fno-agents release-notes
+fno-agents rename
+fno-agents report
+fno-agents research
+fno-agents restart
+fno-agents resume
+fno-agents resume-argv
+fno-agents resume-receipt
+fno-agents review-coverage
+fno-agents review-level
+fno-agents review-policy
+fno-agents review-start
+fno-agents review-summary
+fno-agents revival-check
+fno-agents rm
+fno-agents roster-reap
+fno-agents route-slot
+fno-agents sandbox-probe
+fno-agents scoreboard
+fno-agents scratch
+fno-agents select-read
+fno-agents session-backfill
+fno-agents session-start-bytes
+fno-agents source-pin
+fno-agents spawn
+fno-agents spawn-axes
+fno-agents spawn-gate
+fno-agents spawn-overlay
+fno-agents spawn-remote
+fno-agents stalls
+fno-agents state
+fno-agents state-cli
+fno-agents state-root
+fno-agents status
+fno-agents stop
+fno-agents stub-manifest
+fno-agents style-check
+fno-agents subscribe
+fno-agents surface-check
+fno-agents sync-canonical
+fno-agents target-blast-check
+fno-agents target-gates
+fno-agents target-init
+fno-agents target-start
+fno-agents target-status
+fno-agents task-context-gate
+fno-agents task-context-payload
+fno-agents task-context-prepare
+fno-agents task-context-revalidate
+fno-agents task-context-show
+fno-agents task-context-stage
+fno-agents team-fold
+fno-agents team-orphans
+fno-agents term-ledger
+fno-agents term-shape
+fno-agents term-state
+fno-agents terminals
+fno-agents territory-rows
+fno-agents territory-verdict
+fno-agents test-delta
+fno-agents test-run
+fno-agents test-run doctor
+fno-agents test-run env
+fno-agents test-run sweep
+fno-agents think-dispatch
+fno-agents think-inspect
+fno-agents trace
+fno-agents update-journal
+fno-agents verify-evidence
+fno-agents version
+fno-agents visual
+fno-agents wait
+fno-agents wave
+fno-agents worked-nodes
+fno-agents worker-wake
 help
 mux
 paths
+paths handoff
 plan
+plan brief
+plan folder-audit
+plan graduate
+plan migrate-keys
+plan path
+plan reconcile-status
+plan rung
+plan set-expected
+plan stamp
+plan sync
+plan validate
 pr-watch
 resume
+resume receipt show
+resume receipt validate
+resume receipt write
 uninstall
 update
 version
