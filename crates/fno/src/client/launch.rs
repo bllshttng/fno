@@ -20,7 +20,8 @@ pub(super) struct TerminalGuard {
 /// The emergency terminal restore for the SIGTERM handler, written with a
 /// raw `write(2)`: OSC color reset, leave the alternate screen, show the
 /// cursor. Async-signal-safe: a fixed byte string, no allocation.
-const EMERGENCY_RESTORE: &[u8] = b"\x1b]111\x1b\\\x1b]110\x1b\\\x1b]104\x1b\\\x1b[?1049l\x1b[?25h";
+const EMERGENCY_RESTORE: &[u8] =
+    b"\x1b]111\x1b\\\x1b]110\x1b\\\x1b]112\x1b\\\x1b]104\x1b\\\x1b[?1049l\x1b[?25h";
 
 extern "C" fn sigterm_restore(_: libc::c_int) {
     unsafe {
