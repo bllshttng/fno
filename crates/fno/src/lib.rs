@@ -61,6 +61,8 @@ pub mod cli_hooks;
 #[cfg(feature = "full")]
 pub mod client;
 #[cfg(feature = "full")]
+pub mod mux_log;
+#[cfg(feature = "full")]
 pub mod clipboard;
 #[cfg(feature = "full")]
 pub mod command_names;
