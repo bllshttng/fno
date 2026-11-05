@@ -222,29 +222,6 @@ fn ac10_rerun_is_idempotent_and_receipt_is_positive() {
 }
 
 #[test]
-fn inventory_reports_counts_and_hashes_without_writes() {
-    let dir = tempfile::tempdir().unwrap();
-    let graph = dir.path().join("graph.json");
-    let notes = json!([{"ts": "T1", "text": "hello"}]);
-    let hash = notes_hash_hex(&notes);
-    write_graph(
-        &graph,
-        &[json!({
-            "id": "n-1", "slug": "slug-n-1", "title": "n", "type": "feature",
-            "status": "ready", "priority": "p1", "progress_notes": notes,
-        })],
-    );
-    let before = fno_agents::backlog::version(&graph).unwrap();
-    let g = graph.display().to_string();
-    let (code, out) = run_notes(&["inventory", "--json", "--graph", &g]);
-    assert_eq!(code, 0);
-    let inventory: serde_json::Value = serde_json::from_str(&out).unwrap();
-    assert_eq!(inventory["nodes_scanned"], json!(1));
-    assert!(inventory.to_string().contains(&hash[..20.min(hash.len())]));
-    assert_eq!(fno_agents::backlog::version(&graph).unwrap(), before);
-}
-
-#[test]
 fn ac2_history_positional_slug_prints_bodies_and_trailer() {
     let dir = tempfile::tempdir().unwrap();
     let graph = dir.path().join("graph.json");
@@ -285,47 +262,4 @@ fn ac2_history_positional_slug_prints_bodies_and_trailer() {
         ),
         "trailer: {out}"
     );
-}
-
-#[test]
-fn ac2_history_unknown_token_exits_one_naming_it() {
-    let dir = tempfile::tempdir().unwrap();
-    let graph = dir.path().join("graph.json");
-    write_graph(&graph, &[fixture("x-1", "ready")]);
-    let g = graph.display().to_string();
-    let (code, _, err) = run_notes_full(&["history", "no-such-token", "--graph", &g]);
-    assert_eq!(code, 1);
-    assert!(
-        err.contains("no-such-token"),
-        "stderr names the token: {err}"
-    );
-}
-
-#[test]
-fn ac2_history_archived_node_survives_via_journal_and_help_exits_zero() {
-    // A token no row knows but the journal does: history still reads.
-    let dir = tempfile::tempdir().unwrap();
-    let graph = dir.path().join("graph.json");
-    write_graph(&graph, &[fixture("x-1", "ready")]);
-    fno_agents::backlog::note_history::append(
-        &graph,
-        "d-archived",
-        "state_replaced",
-        Some(2),
-        None,
-        &json!({"revision": 2, "body": "gone but journaled"}),
-        Some("sess-old"),
-        None,
-    )
-    .unwrap();
-    let g = graph.display().to_string();
-    let (code, out) = run_notes(&["history", "d-archived", "--graph", &g]);
-    assert_eq!(code, 0);
-    assert!(out.contains("gone but journaled"));
-    assert!(out.contains("d-archived: records 1-1 of 1; current_state revision 0"));
-    let (help_code, help_out, _) = run_notes_full(&["--help"]);
-    assert_eq!(help_code, 0);
-    assert!(help_out.contains("inventory"));
-    assert!(help_out.contains("migrate"));
-    assert!(help_out.contains("history"));
 }

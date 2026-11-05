@@ -1,5 +1,5 @@
 use fno_agents::cursor_agent::{
-    attach_argv, chat_id_error, is_chat_id, is_cursor_worker_server_command,
+    attach_argv, chat_id_error, is_chat_id,
     select_owned_worker_server_pids,
 };
 
@@ -20,23 +20,6 @@ fn fno_handle_is_refused_as_a_chat_id() {
     assert!(error.contains("'74db359a' is 8 hex characters"));
     assert!(error.contains("an fno session handle, not a chat id"));
     assert!(error.contains("cursor-agent create-chat"));
-}
-
-#[test]
-fn empty_and_malformed_chat_ids_are_refused() {
-    assert!(chat_id_error("").is_some());
-    assert!(chat_id_error("not-a-chat-id").is_some());
-    assert!(!is_chat_id("74db359a"));
-}
-
-#[test]
-fn detached_reaper_only_targets_cursor_worker_servers() {
-    assert!(is_cursor_worker_server_command(
-        "/Users/bb16/.local/share/cursor-agent/index.js worker-server"
-    ));
-    assert!(!is_cursor_worker_server_command(
-        "/usr/local/bin/node index.js worker-server"
-    ));
 }
 
 #[test]

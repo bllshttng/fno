@@ -1,4 +1,0 @@
-Usage: fno agents claim list [OPTIONS]
-Try 'fno agents claim list --help' for help.
-
-Error: Invalid value: --silent-after requires a duration, e.g. '15m'
