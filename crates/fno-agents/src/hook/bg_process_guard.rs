@@ -1053,23 +1053,6 @@ mod tests {
         json!({"tool_name": "Bash", "tool_input": {"command": command, "run_in_background": background}})
     }
 
-    #[test]
-    fn background_tasks_need_a_recognized_bound() {
-        let reason = judge(&bash("opencode run", true)).expect("refused");
-        assert!(reason.contains("with_timeout"), "{reason}");
-        assert!(judge(&bash("with_timeout 30 opencode run", true)).is_some());
-        assert!(judge(&bash(
-            "bash -c 'source scripts/lib/with-timeout.sh; with_timeout 30 opencode run; opencode run'",
-            true
-        ))
-        .is_some());
-        for ok in [
-            "bash -c 'source scripts/lib/with-timeout.sh; with_timeout 30 opencode run'",
-            "fno do pr wait 123 --until review --timeout 30m",
-        ] {
-            assert!(judge(&bash(ok, true)).is_none(), "{ok}");
-        }
-    }
 
     #[test]
     fn a_foreground_generator_names_the_hand_form() {

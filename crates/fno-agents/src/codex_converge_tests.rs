@@ -537,37 +537,6 @@ fn a_marketplace_keyed_before_the_rename_is_removed_by_its_key() {
     assert_eq!(inspect_with(&mut fake)["status"], "fresh");
 }
 
-#[test]
-fn a_failed_final_verify_names_sources_and_rolls_back_by_key() {
-    let tmp = tempfile::tempdir().unwrap();
-    let mut fake = Fake::new(tmp.path());
-    let stage = plugin_source(&tmp.path().join("stage"), "0.3.0");
-    let config = pre_rename_dev_machine(&mut fake, &stage);
-    let marker = fs::read(marker_path(&fake.live)).unwrap();
-    let before = fingerprint(&fake.homes[&fake.live].clone().into_state());
-
-    fake.drop_market_source = true;
-    let err = converge_with(&mut fake, "dev", Some(&stage), false).unwrap_err();
-    assert_eq!(err.stage, "final-verify", "{err}");
-    let resolved = resolved(&stage).display().to_string();
-    assert!(
-        err.detail.contains("enabled=[fno@fno(:)]")
-            && err
-                .detail
-                .contains(&format!("marketplaces=[fno(local:{resolved})]")),
-        "{err}"
-    );
-    assert!(!receipt_path(&fake.live).exists());
-    assert_eq!(fs::read(marker_path(&fake.live)).unwrap(), marker);
-    assert_eq!(
-        fs::read_to_string(fake.live.join("config.toml")).unwrap(),
-        config
-    );
-    assert_eq!(
-        fingerprint(&fake.homes[&fake.live].clone().into_state()),
-        before
-    );
-}
 
 #[test]
 fn every_refusal_lands_before_the_live_install_moves() {

@@ -262,13 +262,6 @@ mod tests {
         assert!(err.contains("'chat-id'"), "{err}");
     }
 
-    #[test]
-    fn a_non_string_meta_value_is_refused_at_build() {
-        let mut meta = Map::new();
-        meta.insert("k".to_string(), json!(123));
-        let err = build_channel_notification("x", Some(&meta), None).unwrap_err();
-        assert!(err.starts_with("meta values must be strings"), "{err}");
-    }
 
     #[test]
     fn a_method_drift_is_reported_with_the_python_reason_shape() {

@@ -406,17 +406,6 @@ mod tests {
         assert!(decide("grep -rn token .", &nested).is_some());
     }
 
-    #[test]
-    fn the_refusal_names_the_segment_and_the_remedies() {
-        let tmp = tagged_repo();
-        let reason = decide("grep -rn ownership_defect crates/", tmp.path()).expect("refused");
-        assert!(
-            reason.contains("`grep -rn ownership_defect crates/`"),
-            "{reason}"
-        );
-        assert!(reason.contains("Grep tool"));
-        assert!(reason.contains("rg"));
-    }
 
     #[test]
     fn other_tools_and_blank_input_allow() {

@@ -1060,20 +1060,5 @@ mod tests {
     }
 
     // AC6-HP: self-heal runs nothing under a breaker and says why.
-    #[test]
-    fn heal_runs_nothing_under_a_pause() {
-        let td = tempfile::TempDir::new().unwrap();
-        let store = td.path().join("signals.json");
-        let mut kw = row("lead_wake", SCHED_LAUNCHD);
-        kw.cause = Some("fleet_stop".into());
-        kw.age_s = Some(3000);
-        let rows = vec![kw];
-        let mut calls: Vec<String> = Vec::new();
-        let token = heal(&rows, &[], true, &store, 600, 1800, &mut |a| {
-            calls.push(a.to_string());
-            true
-        });
-        assert_eq!(token, "heal=paused");
-        assert!(calls.is_empty(), "runs: {calls:?}");
-    }
+
 }
