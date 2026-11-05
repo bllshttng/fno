@@ -24,8 +24,7 @@ pub(crate) const OPEN_MARKER: &str = "<!-- fno-epic-checklist -->";
 pub(crate) const CLOSE_MARKER: &str = "<!-- /fno-epic-checklist -->";
 /// A finished epic keeps syncing this long, so its last checkbox lands.
 const FINISHED_GRACE_DAYS: i64 = 2;
-/// A `/claim` this old with no PR that writes `Refs #<issue>` reads `stale`,
-/// and its node claim is released.
+/// A `/claim` this old with no `Refs #<issue>` PR reads `stale` and is released.
 const STALE_AFTER_DAYS: i64 = 7;
 const RECORD_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -444,8 +443,7 @@ mod tests {
         bodies: Vec<String>,
         titles: Vec<String>,
         creates: usize,
-        /// Comments on issue 1 as `(login, body)`; a comment's id is its
-        /// position plus one.
+        /// Comments on issue 1 as `(login, body)`; an id is position plus one.
         comments: Vec<(String, String)>,
         replies: Vec<String>,
     }
