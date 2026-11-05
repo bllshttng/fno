@@ -463,6 +463,47 @@ pub(crate) fn body_ref_line(cwd: &Path, body: &str) -> Option<String> {
     }
 }
 
+/// One `ref_line` per distinct issue among a batch PR's members, in member
+/// order. A batch merge closes every member at once, so an epic counts as
+/// finished when its only open published children ride this batch; two
+/// members of the same epic still share one line. A filed claim only refs
+/// its own issue.
+pub(crate) fn batch_ref_lines(rows: &[Value], members: &[&str], body: &str) -> Vec<String> {
+    let ids: std::collections::HashSet<&str> = members.iter().copied().collect();
+    let mut lines = Vec::new();
+    let mut emitted = std::collections::HashSet::new();
+    for node in members {
+        let Some(row) = rows.iter().find(|r| text(r, "id") == *node) else {
+            continue;
+        };
+        let (number, last) = match recorded_issue(row) {
+            Some(number) => (number, false),
+            None => {
+                let parent = text(row, "parent");
+                let Some(epic) = rows.iter().find(|r| text(r, "id") == parent) else {
+                    continue;
+                };
+                let Some(number) = recorded_issue(epic) else {
+                    continue;
+                };
+                let last = !checklist_rows(rows, parent)
+                    .iter()
+                    .any(|r| !ids.contains(text(r, "id")) && !is_done(r));
+                (number, last)
+            }
+        };
+        if names_issue(body, number) || !emitted.insert(number) {
+            continue;
+        }
+        lines.push(if last {
+            format!("Closes #{number}")
+        } else {
+            format!("Refs #{number}")
+        });
+    }
+    lines
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -561,6 +602,20 @@ mod tests {
         row.as_object_mut()
             .unwrap()
             .extend(extra.as_object().unwrap().clone());
+        row
+    }
+
+    fn epic2(extra: Value) -> Value {
+        let mut row = json!({"id": "epic2", "title": "Second epic", "share": "github"});
+        row.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        row
+    }
+
+    fn child_of(id: &str, title: &str, parent: &str, extra: Value) -> Value {
+        let mut row = child(id, title, extra);
+        row["parent"] = json!(parent);
         row
     }
 
@@ -717,6 +772,54 @@ mod tests {
         assert_eq!(
             ref_line(&filed, "own-1a2b", "Fixes own-1a2b\nrefs #7\n"),
             None
+        );
+    }
+
+    #[test]
+    fn a_batch_body_carries_one_line_per_epic_and_closes_only_a_finished_checklist() {
+        let rows = vec![
+            epic(json!({"epic_issue": 7})),
+            epic2(json!({"epic_issue": 9})),
+            child("kid-1", "One", json!({})),
+            child("kid-2", "Two", json!({})),
+            child("kid-3", "Three", json!({"status": "done"})),
+            child_of("kid-4", "Other epic", "epic2", json!({})),
+            child("kid-5", "Blocked by CI", json!({"status": "blocked"})),
+        ];
+        // The shared epic keeps Refs while kid-2 and kid-5 stay open; epic2's
+        // only child rides this batch, so its merge completes that checklist.
+        assert_eq!(
+            batch_ref_lines(&rows, &["kid-1", "kid-4"], "batch body"),
+            vec!["Refs #7".to_string(), "Closes #9".to_string()]
+        );
+        // Every open child of the shared epic rides this batch, so its merge
+        // finishes the checklist and the line closes the issue.
+        let mut rows = rows;
+        rows[5]["status"] = json!("done");
+        rows[6]["status"] = json!("done");
+        assert_eq!(
+            batch_ref_lines(&rows, &["kid-1", "kid-2"], "batch body"),
+            vec!["Closes #7".to_string()]
+        );
+        // One line per issue even when two members share the epic; an issue
+        // the body already names adds no line.
+        assert_eq!(
+            batch_ref_lines(&rows, &["kid-1", "kid-2", "kid-1"], "Intro\nrefs #7\n"),
+            Vec::<String>::new()
+        );
+        // A filed claim refs its own issue even as the only member; an epic
+        // without an issue adds none.
+        let filed = [
+            json!({"id": "own-1a2b", "title": "Claimed", "epic_issue": 8}),
+            child("kid-6", "Unpublished epic", json!({})),
+        ];
+        let mut rows = rows;
+        rows[0].as_object_mut().unwrap().remove("epic_issue");
+        rows.push(filed[0].clone());
+        rows.push(filed[1].clone());
+        assert_eq!(
+            batch_ref_lines(&rows, &["own-1a2b", "kid-6"], "batch body"),
+            vec!["Refs #8".to_string()]
         );
     }
 
