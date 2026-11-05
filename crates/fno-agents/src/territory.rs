@@ -1163,9 +1163,6 @@ pub fn territory_rows(config_cwd: &Path, registry_path: &Path) -> Vec<Value> {
 mod moved_scope_tests {
     use super::*;
     use serde_json::json;
-    fn node(id: &str, status: &str, priority: &str) -> Value {
-        json!({"id": id, "slug": id, "status": status, "priority": priority, "type": "feature"})
-    }
 
 
     #[test]

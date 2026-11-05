@@ -756,20 +756,6 @@ enum HostedCiResult {
     Stale,
 }
 
-#[cfg(test)]
-impl HostedCiResult {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::NotConfigured => "not_configured",
-            Self::Unavailable => "unavailable",
-            Self::Pending => "pending",
-            Self::Failed => "failed",
-            Self::Passed => "passed",
-            Self::Stale => "stale",
-        }
-    }
-}
-
 pub(crate) fn hosted_workflow_state(cwd: &Path) -> WorkflowState {
     let workflows = cwd.join(".github/workflows");
     let metadata = match std::fs::metadata(&workflows) {
@@ -1161,54 +1147,4 @@ pub fn run_verify_evidence(args: &[String]) -> i32 {
 /// Test-friendly variant: returns (exit_code, stdout, stderr) without printing.
 pub fn run_verify_evidence_capture(args: &[String]) -> (i32, String, String) {
     run(args)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::io::Write;
-
-
-    fn receipt_event(ts: &str, candidate_sha: &str, mode: &str, result: &str) -> Value {
-        json!({
-            "ts": ts,
-            "type": "verification_receipt",
-            "source": "target",
-            "data": {
-                "candidate_sha": candidate_sha,
-                "command": ["scripts/ci/preflight.sh", "--force"],
-                "environment": {"host": "h", "platform": "p", "runner": "scripts/ci/preflight.sh"},
-                "scope": [
-                    "smoke",
-                    "rustfmt:fno-agents",
-                    "rustfmt:fno",
-                    "cargo-test:fno-agents-unit",
-                    "cargo-test:fno-agents-e2e",
-                    "cargo-test:fno-unit",
-                    "cargo-test:fno-e2e",
-                    "squads-leak-guard:fno"
-                ],
-                "started_at": "2026-07-26T01:00:00Z",
-                "finished_at": "2026-07-26T01:00:01Z",
-                "mode": mode,
-                "result": result,
-                "producer": {"kind": "preflight", "id": "h:1"},
-                "generation": 1,
-                "steps_expected": 8,
-                "steps_executed": 8
-            }
-        })
-    }
-
-    /// A receipt whose scope carries the legs preflight really emits today.
-    /// `receipt_event` pins the old six, so every existing test passed while the
-    /// gate rejected a green preflight on this path - the scope length was the
-    /// thing under test and nothing exercised a longer one.
-    fn receipt_event_with_scope(scope: Vec<&str>) -> Value {
-        let mut event = receipt_event("2026-07-26T01:00:02Z", "abc", "full", "passed");
-        event["data"]["scope"] = json!(scope);
-        event
-    }
-
-
 }

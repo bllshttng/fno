@@ -1163,11 +1163,3 @@ pub fn run_kill_check_capture(args: &[String]) -> (i32, String, String) {
     let out = run(args);
     (out.code, out.stdout, out.stderr)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::fs;
-
-
-}

@@ -1277,7 +1277,7 @@ mod done_probe_tests {
     use std::time::Duration;
     // Config-root parsing and the gh-quota classifier stayed with the session
     // side in loopcheck; these tests cover them through the same facade.
-    use crate::loopcheck::{coverage_adapter, is_graphql_read, value_as_probe_list};
+    use crate::loopcheck::{coverage_adapter, is_graphql_read};
 
     fn fm(body: &str) -> String {
         format!("---\ntitle: t\n{body}\n---\n\n# doc\n")
@@ -1494,7 +1494,6 @@ mod done_probe_tests {
         assert!(matches!(eval(&plan), ProbeGate::Absent));
     }
 
-
     #[test]
     fn multibyte_stderr_is_truncated_without_panicking() {
         // String::drain panics off a char boundary; probe stderr routinely
@@ -1570,7 +1569,6 @@ mod done_probe_tests {
     // tests/loop_check.rs, which drives the real settings merge rather than a
     // hand-built probe list. A unit-level twin would assert strictly less.
 
-
     #[test]
     fn quota_promised_done_check_uses_the_fixed_coverage_adapter() {
         assert_eq!(coverage_adapter("fno-gh-loopcheck"), "fno-gh-coverage");
@@ -1626,7 +1624,6 @@ mod acceptance_evidence_tests {
         }
     }
 
-
     #[test]
     fn validation_refuses_a_missing_probe_by_name() {
         let decl = decl_of(&fm(
@@ -1638,7 +1635,6 @@ mod acceptance_evidence_tests {
         let why = validate_bindings(&bindings, 1).unwrap_err();
         assert!(why.contains("AC1-HP") && why.contains("missing"), "{why}");
     }
-
 
     #[test]
     fn session_gate_refuses_a_required_plan_with_no_done_binding() {

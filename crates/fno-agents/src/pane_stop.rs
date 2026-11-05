@@ -1077,40 +1077,8 @@ mod tests {
 
     // ──: the precheck separates gone, recycled, foreign ──────────
 
-    /// A pane row shaped like the measured one: harness set, pid recorded,
-    /// no start time (the shape every live pane row carries).
-    fn x58a5_row(pid: Option<u32>, start: Option<u64>) -> RegistryEntry {
-        let mut e = pane_row(pid, Some(("main", 1991)));
-        e.harness = Some("codex".into());
-        e.pid_start_time = start;
-        e
-    }
-
 
     // ──: the stop resolves its target by session ─────────────────
-
-    /// A swept pane row shaped like the stout-tapir case: harness claude,
-    /// pid and start time wiped by the sweep, and when `exited` the
-    /// Exited+stamp pair that proves the recorded process dead.
-    fn x1530_row(exited: bool) -> RegistryEntry {
-        let mut e = pane_row(None, Some(("main", 1991)));
-        e.harness = Some("claude".into());
-        e.pid_start_time = None;
-        if exited {
-            e.status = crate::AgentStatus::Exited;
-            e.exited_at = Some("2026-09-21T16:40:00Z".into());
-        }
-        e
-    }
-
-    /// A live pane sighting that hosts a holder pid.
-    fn x1530_sighting(child: u32) -> PaneSighting {
-        PaneSighting {
-            session: "main".into(),
-            pane_id: 2034,
-            child_pid: Some(child),
-        }
-    }
 
 
     /// Every `holder_from_lsof` branch: a Held path wins, a Failed path

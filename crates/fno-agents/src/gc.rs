@@ -1512,27 +1512,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// A roster seam whose only keeps read `roster unreadable`, the
-    /// enumeration-failed shape the arm must name on the tick.
-    fn unreadable_roster_sweep(
-        _home: &AgentsHome,
-        _cwd: &Path,
-        _grace_secs: i64,
-        _scope: crate::agents_config::RosterScope,
-    ) -> crate::roster_reap::RosterReapSummary {
-        crate::roster_reap::RosterReapSummary {
-            instrument_unread: true,
-            kept: vec![crate::roster_reap::RosterJudgement {
-                short_id: String::new(),
-                node: None,
-                reason: "roster unreadable: test stub".to_string(),
-                retired: false,
-                class: "contested",
-            }],
-            ..Default::default()
-        }
-    }
-
 
     #[test]
     fn manual_reap_command_argv_includes_used_shells() {

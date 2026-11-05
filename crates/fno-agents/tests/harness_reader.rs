@@ -3,7 +3,7 @@
 //! declarations, the watch-lease journey cell, the isolation nonce pair, and
 //! the live spawn's substrate and provider route.
 
-use fno_agents::harness_capabilities::{HarnessContract, ProbeDecl, JOURNEY_KEYS};
+use fno_agents::harness_capabilities::{HarnessContract, ProbeDecl};
 use fno_agents::harness_reader::{
     isolated_provider_config, probe_route_args, probe_substrate, retry_marker, wait_for_ci_cell,
     LineVerdict,
@@ -114,7 +114,6 @@ fn every_convicted_pattern_matches_its_denial() {
         );
     }
 }
-
 
 #[test]
 fn restart_viewport_is_unprobeable_on_this_nodes_own_constraint() {
