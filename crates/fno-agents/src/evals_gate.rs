@@ -1826,6 +1826,8 @@ mod tests {
             )
             .unwrap();
             w.with_baseline();
+            // The covering task grades only when the baseline answers it too.
+            w.rows("base", "c1", [true, true, true]);
             w.tick(true, Utc::now());
             let spawns = w.spawns.borrow();
             let argv = spawns.first().map(|a| a.join(" ")).unwrap_or_default();
