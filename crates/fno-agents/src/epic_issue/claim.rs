@@ -1,17 +1,13 @@
 //! The `/claim` door on a shared epic's GitHub issue.
 //!
-//! A person with no write access and no fno can still reserve a piece of the
-//! epic: they comment `/claim <title>` on the issue. The heal pass reads the
-//! comments after a cursor stored on the epic and turns each into a checklist
-//! line. The checklist keeps one writer, the pass in [`super`]; this module
-//! only decides.
-//!
-//! A title that matches an owner child takes that node through
-//! [`record_take`], so the claim store stays the one answer to who holds a
-//! node. Any other title becomes a line with no node, because nodes stay in
-//! each person's own store. The checklist is re-rendered from graph rows on
-//! every pass, so a line with no row would vanish; the epic row therefore
-//! keeps both kinds in `epic_claims`, and the last comment id read in
+//! A person with no write access and no fno reserves a piece of the epic by
+//! commenting `/claim <title>`. The heal pass reads the comments after a
+//! cursor and turns each into a checklist line; the pass in [`super`] stays the
+//! one writer of the body, and this module only decides. A title that matches
+//! an owner child takes that node through [`record_take`], so the claim store
+//! stays the one answer to who holds a node. Any other title becomes a line
+//! with no node. The checklist is re-rendered from graph rows each pass, so
+//! the epic row keeps both kinds in `epic_claims` and the cursor in
 //! `epic_claim_cursor`.
 
 use super::{checklist_rows, clean_title, is_done, is_login, names_issue, pos_int, text};
@@ -168,11 +164,6 @@ enum Step {
     Done(Option<String>),
     /// The pass ran out of model calls. The comment waits for the next pass.
     Defer,
-}
-
-struct Cand {
-    title: String,
-    clause: String,
 }
 
 struct State<'a> {
@@ -348,29 +339,16 @@ impl<'a> State<'a> {
             stale: false,
             pr: None,
         };
-        match self
-            .ledger
-            .iter()
-            .position(|e| e.node.as_deref() == Some(node.as_str()))
-        {
-            Some(p) => self.ledger[p] = entry,
-            None => self.ledger.push(entry),
-        }
+        self.ledger.retain(|e| e.node.as_deref() != Some(&node));
+        self.ledger.push(entry);
         Step::Done(None)
     }
 
     fn claim_line(&mut self, idx: usize, login: &str) -> Step {
-        let (mine, stale, owner, name) = {
-            let e = &self.ledger[idx];
-            (
-                e.login.eq_ignore_ascii_case(login),
-                e.stale,
-                e.login.clone(),
-                clean_title(&e.title),
-            )
-        };
-        if !mine && !stale {
-            return held_reply(login, &name, &owner);
+        let e = &self.ledger[idx];
+        let mine = e.login.eq_ignore_ascii_case(login);
+        if !mine && !e.stale {
+            return held_reply(login, &clean_title(&e.title), &e.login);
         }
         if !mine && self.at_ceiling(login) {
             return self.ceiling(login);
@@ -384,31 +362,23 @@ impl<'a> State<'a> {
         Step::Done(None)
     }
 
-    /// Every line a new title could repeat, with what the reply says about it.
-    fn candidates(&self) -> Vec<Cand> {
-        let kids = self.kids.iter().map(|k| Cand {
-            title: clean_title(text(k, "title")),
-            clause: if is_done(k) {
-                "is done".to_string()
-            } else {
-                match self.held.get(text(k, "id")) {
-                    Some(h) => format!("is held by {}", who(&h.holder)),
-                    None => "is free. Comment /claim with that exact title to take it".to_string(),
-                }
-            },
+    /// Every line a new title could repeat, as `(title, what the reply says)`.
+    fn candidates(&self) -> Vec<(String, String)> {
+        let kids = self.kids.iter().map(|k| {
+            let clause = match (is_done(k), self.held.get(text(k, "id"))) {
+                (true, _) => "is done".to_string(),
+                (_, Some(h)) => format!("is held by {}", who(&h.holder)),
+                _ => "is free. Comment /claim with that exact title to take it".to_string(),
+            };
+            (clean_title(text(k, "title")), clause)
         });
-        let own = self
-            .ledger
-            .iter()
-            .filter(|e| e.node.is_none())
-            .map(|e| Cand {
-                title: clean_title(&e.title),
-                clause: if e.stale {
-                    "is stale. Comment /claim with that exact title to take it".to_string()
-                } else {
-                    format!("is held by {}", e.login)
-                },
-            });
+        let own = self.ledger.iter().filter(|e| e.node.is_none()).map(|e| {
+            let clause = match e.stale {
+                true => "is stale. Comment /claim with that exact title to take it".to_string(),
+                false => format!("is held by {}", e.login),
+            };
+            (clean_title(&e.title), clause)
+        });
         kids.chain(own).collect()
     }
 
@@ -422,14 +392,13 @@ impl<'a> State<'a> {
                 return Step::Defer;
             }
             self.judge_calls += 1;
-            let names: Vec<String> = cands.iter().map(|c| c.title.clone()).collect();
+            let names: Vec<String> = cands.iter().map(|(t, _)| t.clone()).collect();
             match (self.i.judge)(title, &names) {
                 Ok(Some(k)) if k < cands.len() => {
+                    let (line, clause) = &cands[k];
                     return reply(format!(
-                        "@{login} `{}` looks like `{}`, which {}. No line was added.",
-                        clean_title(title),
-                        cands[k].title,
-                        cands[k].clause
+                        "@{login} `{}` looks like `{line}`, which {clause}. No line was added.",
+                        clean_title(title)
                     ));
                 }
                 Ok(_) => {}
