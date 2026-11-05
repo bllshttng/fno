@@ -1808,7 +1808,7 @@ mod bottom_row;
 mod scroll_mode;
 
 use input_folds::{
-    fold_modal_keys, fold_nav_input, fold_search_input, fold_selector_keys,
+    fold_modal_keys, fold_nav_input, fold_overlay_keys, fold_search_input, fold_selector_keys,
     fold_selector_keys_with_split_arrows, ModalKey, NavKey, SearchKey,
 };
 
@@ -8826,13 +8826,6 @@ async fn fetch_peek(
     .map_err(|e| format!("peek send failed: {e}"))
 }
 
-/// Peek-overlay keys: j/k (and folded arrows) peek the adjacent agent
-/// row (fresh seq, stale bodies dropped by the seq guard); Esc/q closes back to
-/// the selector with its cursor synced to the peeked row (AC2-UI). Digit answers
-/// (US3) and attach (US4) are added by later stories; until then those keys are
-/// swallowed - no key in peek mode ever reaches a pane (the prefix-layer
-/// invariant). The catalog is re-read per key so a scrape tick that removed the
-/// peeked row re-anchors or closes (never a panic on a dropped index).
 /// Route keys to the Connections modal. Pure state changes run through
 /// the modal's own reducer ([`ConnectionsView::on_key`]); the intents that touch
 /// the world (close, refresh) are executed here. The run loop redraws after this
@@ -8844,7 +8837,11 @@ async fn connections_keys(
 ) -> Result<StdinFlow, String> {
     use crate::connections_view::ConnIntent;
     let mut esc = std::mem::take(&mut view.conn_esc);
-    let keys = fold_selector_keys(&mut esc, bytes);
+    let text = view
+        .connections
+        .as_ref()
+        .is_some_and(|cv| cv.captures_text());
+    let keys = fold_overlay_keys(&mut esc, bytes, text);
     view.conn_esc = esc;
     for &k in &keys {
         // Closed mid-chunk: swallow the rest, never forward to a pane.
