@@ -4658,7 +4658,20 @@ impl View {
             format!("name    {name}{caret}"),
             format!("folder  {}", self.create_folder_row(name)),
         ];
-        let lines = rows.map(|t| TLine::line(TextStyle::Item, format!("{t:<body_w$}")));
+        // A long name or path keeps its tail, where the caret is, so the row
+        // never pushes the border off the frame.
+        let fit = |t: String| {
+            let limit = body_w.saturating_sub(4).max(2);
+            let n = t.chars().count();
+            let t = if n > limit {
+                let tail: String = t.chars().skip(n - (limit - 1)).collect();
+                format!("…{tail}")
+            } else {
+                t
+            };
+            format!("{t:<body_w$}")
+        };
+        let lines = rows.map(|t| TLine::line(TextStyle::Item, fit(t)));
         layout_lines_overlay(origin, dims, &chrome, &lines, None, OverlayAnchor::Center)
     }
 
