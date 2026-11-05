@@ -1058,6 +1058,14 @@ impl Ritual {
             self.step("judgment", SKIPPED, &format!("reason={reason}; {inputs}"));
             return;
         }
+        if self.node_ids.iter().all(|n| n.is_empty()) {
+            self.step(
+                "judgment",
+                SKIPPED,
+                &format!("reason=no-bound-node; no pm-r worker spawned; {inputs}"),
+            );
+            return;
+        }
         let spawned = self.spawn_judgment(deferred, files, lines);
         if spawned {
             self.step("judgment", OK, &format!("spawned headless; {inputs}"));
