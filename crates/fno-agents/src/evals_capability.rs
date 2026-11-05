@@ -155,7 +155,8 @@ pub(crate) fn tick(
     let mut argv = argv.to_vec();
     if let Some(i) = argv.iter().position(|a| a == "--lane") {
         let lane = argv.get(i + 1).cloned().unwrap_or_default();
-        let routed = crate::evals_gate::lane_with_room(leg.repo, &lane, now);
+        let routed =
+            crate::evals_gate::lane_with_room(leg.repo, &lane, now, &crate::evals_gate::real_room);
         if routed != lane {
             argv[i + 1] = routed;
         }
