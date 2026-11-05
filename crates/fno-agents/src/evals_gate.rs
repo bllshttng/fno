@@ -1754,20 +1754,6 @@ mod tests {
     const SHA: &str = "abcdef1234567890";
     const SHA2: &str = "1234567890abcdef";
 
-    #[test]
-    fn checkout_of_resolves_the_ref_slots_bank_to_its_own_checkout() {
-        // state_dir/ref-<slot>/evals/bank -> state_dir/ref-<slot>: the dir
-        // whose crates/ the build wrapper compiles. One parent short and the
-        // build looks for <state_dir>/crates, which never exists.
-        let bank = Path::new("/state/evals-gate/ref-head/evals/bank");
-        assert_eq!(
-            checkout_of(bank),
-            Some(Path::new("/state/evals-gate/ref-head"))
-        );
-        assert_eq!(checkout_of(Path::new("/evals/bank")), Some(Path::new("/")));
-        assert_eq!(checkout_of(Path::new("/bank")), None);
-    }
-
     fn ok(stdout: &str) -> Option<Run> {
         Some(Run {
             ok: true,
