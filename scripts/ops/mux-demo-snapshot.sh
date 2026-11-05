@@ -227,6 +227,13 @@ mkdir -p "$ROOT/claimroot/.fno/claims"
 # HOME too, for every process: the server reads harness rosters under it,
 # and a real home would list real sessions in the sideline.
 export HOME="$ROOT"
+# The keys-tags view shows a preset row and a user row, so it needs a file.
+# Only that view gets one: a preset would move key hints in every other shot.
+case " $* " in
+  *" --view keys-tags "*)
+    printf '{\n  "preset": "zellij",\n  "split-up": "}"\n}\n' >"$ROOT/.fno/keybindings.json"
+    ;;
+esac
 unset FNO_SERVER FNO_SESSION FNO_PANE FNO_OWNER_BIRTH
 # Under an owner session the server lives as long as its owner. Left alone,
 # the owner is the first short-lived `pane run`, and the server shuts down

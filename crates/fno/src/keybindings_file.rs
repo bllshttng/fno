@@ -207,7 +207,7 @@ pub enum Origin {
 impl Origin {
     pub fn tag(self) -> &'static str {
         match self {
-            Origin::BuiltIn => "built-in",
+            Origin::BuiltIn => "",
             Origin::Preset => "preset",
             Origin::Yours => "yours",
         }

@@ -223,11 +223,11 @@ jobs:
           # demo script points at its fleet shim; PATH backs any bare call.
           export PATH="$PWD/crates/fno-agents/target/debug:$PATH"
           mkdir -p shots
-          for view in bell bell-wide bell-full messages-tree messages-chats messages-thread messages-system messages-archive backlog-list backlog-kanban review-diff review-panel review-panel-drag navigator-pr navigator-model navigator-menu feed-detail question-detail org-table org-recent org-overview org-graph org-health org-seat org-feed org-system needs-input needs-input-pulse-on needs-input-pulse-off org-remote org-peek org-spawn org-keys keys; do
+          for view in bell bell-wide bell-full messages-tree messages-chats messages-thread messages-system messages-archive backlog-list backlog-kanban review-diff review-panel review-panel-drag navigator-pr navigator-model navigator-menu feed-detail question-detail org-table org-recent org-overview org-graph org-health org-seat org-feed org-system needs-input needs-input-pulse-on needs-input-pulse-off org-remote org-peek org-spawn org-keys keys keys-tags; do
             bash scripts/ops/mux-demo-snapshot.sh --out "shots/${view}.png" --format png --view "$view" --size 200x56 --fit
           done
           # The selection paints with the theme's sel surface: shoot it light too.
-          for view in bell-wide feed-detail question-detail review-diff review-panel needs-input needs-input-pulse-on needs-input-pulse-off keys; do
+          for view in bell-wide feed-detail question-detail review-diff review-panel needs-input needs-input-pulse-on needs-input-pulse-off keys keys-tags; do
             bash scripts/ops/mux-demo-snapshot.sh --out "shots/${view}-light.png" --format png --view "$view" --theme light --size 200x56 --fit
           done
           # The review's gutter narrows below 80 columns: shoot it at the edge.
