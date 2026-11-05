@@ -16,11 +16,11 @@ pub(super) struct Report {
 impl Report {
     fn new(context: String, parent: Option<String>) -> Self {
         Self {
-            field: InputField::new("What went wrong?", 240),
+            field: InputField::new("", 240),
             feature: false,
             context,
             parent,
-            notice: "Includes this screen, focused row, build and recent logs.".into(),
+            notice: "Includes screen, focused row, build and up to 40 lines per log. Submits to the backlog.".into(),
             pending: None,
         }
     }
@@ -69,7 +69,7 @@ impl Report {
         .footer(if self.pending.is_some() {
             "filing…"
         } else {
-            "Tab type  ·  Enter file  ·  Esc cancel"
+            "Tab type  ·  Enter submit  ·  Esc cancel"
         })
         .plain_body()
     }
