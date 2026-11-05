@@ -106,9 +106,10 @@ pub fn drop_noops(preset: Option<&str>, rows: Vec<(String, String)>) -> Vec<(Str
     rows.into_iter()
         .filter(|(action, spec)| {
             let action = action.trim().to_ascii_lowercase();
-            let same = base.iter().find(|(a, _)| *a == action).and_then(|(_, k)| {
-                Some(keys::parse_key(k)? == keys::parse_key(spec)?)
-            });
+            let same = base
+                .iter()
+                .find(|(a, _)| *a == action)
+                .and_then(|(_, k)| Some(keys::parse_key(k)? == keys::parse_key(spec)?));
             same != Some(true)
         })
         .collect()
@@ -292,7 +293,10 @@ mod tests {
         assert_eq!(get("split-up"), None, "unbound rows stay out");
         // Fed back through the resolver, a spelled-out starter changes nothing.
         let rows = drop_noops(l.preset.as_deref(), l.rows);
-        assert!(rows.is_empty(), "a spelled-out starter restates only defaults: {rows:?}");
+        assert!(
+            rows.is_empty(),
+            "a spelled-out starter restates only defaults: {rows:?}"
+        );
         let (entries, w) = keys::with_preset(l.preset.as_deref(), rows);
         let (map, warnings) = keys::resolve_keymap(None, &entries);
         assert!(w.is_empty() && warnings.is_empty(), "{w:?} {warnings:?}");
