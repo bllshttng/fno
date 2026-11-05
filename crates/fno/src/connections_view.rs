@@ -2960,6 +2960,12 @@ mod tests {
         for k in keys {
             v.on_key(k);
         }
+        // Typed letters still reach the query through the same fold.
+        let mut esc = Vec::new();
+        assert_eq!(
+            crate::client::fold_text_field_keys_for_test(&mut esc, b"jk\x1b[Z"),
+            vec![b'j', b'k', 0x10]
+        );
         let w = v.wizard.as_ref().unwrap();
         assert_eq!(w.query, "");
         // Two Down then two Up lands back on the start row.
