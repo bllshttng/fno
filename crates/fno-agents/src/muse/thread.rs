@@ -181,6 +181,8 @@ pub fn dispatch_thread(
         std::thread::sleep(Duration::from_millis(100));
     }
     let pid = child.id();
+    // The host runs unwaited; the daemon drain reaps it by pid on exit.
+    crate::orphan_reap::release_child(pid);
     let entry = RegistryEntry {
         name: name.to_string(),
         short_id: sid.clone(),

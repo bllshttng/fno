@@ -1685,7 +1685,7 @@ pub(crate) enum AuxAction {
     /// `--mux`, never `--force`: the modal named what survives, and the tap
     /// is the confirmation.
     RestartAgents,
-    /// Queue the channel's release upgrade (`uv tool upgrade fno`).
+    /// Queue the channel's release upgrade (`fno update`, `brew upgrade fno`).
     UpgradeRelease(release_check::Channel),
     /// Probe `mux workspace prune --dry-run` once and open the centered
     /// sweep-threads choice modal from its counts. Every scope of the prune

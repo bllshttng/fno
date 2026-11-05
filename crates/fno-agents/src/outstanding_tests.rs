@@ -383,3 +383,33 @@ fn the_lane_leads_the_block_and_only_a_promoted_session_gets_the_action_line() {
         "{promoted}"
     );
 }
+
+#[test]
+fn a_copys_images_reach_the_board_row_and_an_imageless_row_stays_keyless() {
+    let ask = |id: &str, images: &[&str]| {
+        json!({"type": QUESTION_EVENT, "ts": "2026-11-04T00:00:00Z", "data": {
+            "question_id": id, "question": "?", "asker": "alice", "images": images}})
+        .to_string()
+    };
+    let raw = [
+        ask(
+            "q-img",
+            &["/vault/screens/q-1.png", "/vault/screens/q-2.png"],
+        ),
+        ask("q-bare", &[]),
+    ]
+    .join("\n");
+    let qs = fold_questions(&raw);
+    let with = qs.iter().find(|q| q.id == "q-img").unwrap();
+    assert_eq!(
+        with.images,
+        vec!["/vault/screens/q-1.png", "/vault/screens/q-2.png"]
+    );
+    let bare = serde_json::to_value(qs.iter().find(|q| q.id == "q-bare").unwrap()).unwrap();
+    assert!(
+        bare.get("images").is_none(),
+        "an imageless row serializes without the key"
+    );
+    let rich = serde_json::to_value(with).unwrap();
+    assert_eq!(rich["images"].as_array().unwrap().len(), 2);
+}

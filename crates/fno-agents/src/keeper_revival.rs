@@ -522,7 +522,11 @@ pub(crate) fn launch_keeper(spec: &LaunchSpec) -> Result<u32, String> {
     command.env("FNO_AGENT_SESSION_ID", &spec.session_id);
     command
         .spawn()
-        .map(|child| child.id())
+        .map(|child| {
+            let pid = child.id();
+            crate::orphan_reap::release_child(pid);
+            pid
+        })
         .map_err(|e| format!("spawn {}: {e}", spec.argv[0]))
 }
 

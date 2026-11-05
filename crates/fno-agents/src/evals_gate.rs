@@ -200,6 +200,9 @@ impl State {
 struct Pr {
     number: u64,
     sha: String,
+    /// GitHub's own word that the PR sits in the auto-merge queue (`auto_merge`
+    /// non-null on the REST pull row). The disarm sweep reads only armed rows.
+    armed: bool,
 }
 
 struct Deps<'a> {
@@ -466,11 +469,82 @@ fn open_prs(p: &Paths, d: &Deps, slug: &str) -> Option<Vec<Pr>> {
             Some(Pr {
                 number: r.get("number")?.as_u64()?,
                 sha: r.pointer("/head/sha")?.as_str()?.to_string(),
+                armed: r.get("auto_merge").is_some_and(|v| !v.is_null()),
             })
         })
         .collect();
     prs.sort_by_key(|pr| pr.number);
     Some(prs)
+}
+
+/// Disarms every queue-armed PR whose head's gate reads red, pending, or
+/// missing at a gated head. GitHub enforces only the ruleset's required
+/// checks (main requires one, stacked-base-guard), so an armed PR merges
+/// past a gate the queue never waits on: a green-checked PR landed 87
+/// seconds after its gate went red. The tick posts the status, then this
+/// sweep pulls the armed PR out of the queue; the worker's own merge door
+/// re-lands it when the gate settles. One line per disarm, into the tick
+/// note; a failed disarm retries next tick.
+fn disarm_sweep(p: &Paths, d: &Deps, slug: &str, prs: &[Pr]) -> Vec<String> {
+    let mut notes = Vec::new();
+    for pr in prs.iter().filter(|pr| pr.armed) {
+        let Some(word) = gate_word_at(p, d, slug, pr) else {
+            continue;
+        };
+        let argv = [
+            "gh",
+            "pr",
+            "merge",
+            &pr.number.to_string(),
+            "--disable-auto",
+        ];
+        let ok = (d.run)(&argv, p.repo).is_some_and(|r| r.ok);
+        notes.push(format!(
+            "disarmed pr {} at {} ({word}, {})",
+            pr.number,
+            short(&pr.sha),
+            if ok {
+                "queue removed"
+            } else {
+                "gh refused; retries next tick"
+            }
+        ));
+    }
+    notes
+}
+
+/// The gate's word at an armed PR's head, from the live combined status:
+/// FAILURE/ERROR reads red, PENDING reads pending, and an absent context
+/// reads missing only on a head that owes a status (the same fail-open
+/// probe the merge door holds on). None leaves the arm alone.
+fn gate_word_at(p: &Paths, d: &Deps, slug: &str, pr: &Pr) -> Option<&'static str> {
+    let endpoint = format!("repos/{slug}/commits/{}/status", pr.sha);
+    let out = (d.run)(&["gh", "api", &endpoint], p.repo).filter(|r| r.ok)?;
+    let status: Value = serde_json::from_str(&out.stdout).ok()?;
+    // The REST status states are GitHub's own lowercase words; the door
+    // uppercases every state read, and the arms below speak the same
+    // uppercase words.
+    let state = status
+        .get("statuses")?
+        .as_array()?
+        .iter()
+        .find(|s| s.get("context").and_then(Value::as_str) == Some(CONTEXT))
+        .and_then(|s| s.get("state"))
+        .and_then(Value::as_str)
+        .map(str::to_uppercase);
+    match state.as_deref() {
+        Some("FAILURE") | Some("ERROR") => return Some("red"),
+        Some("PENDING") => return Some("pending"),
+        // A settled-green gate keeps its arm; only a genuinely absent
+        // context falls through to the missing check.
+        Some(_) => return None,
+        None => {}
+    }
+    // Absent context: hold only when the head actually owes a status, so an
+    // ungated diff (the SKIP disposition) never pulls its PR out of the queue.
+    let probe = DepsProbe { run: d.run };
+    let files = crate::pr_status::lists::pr_file_paths(&probe, p.repo, slug, pr.number).ok()?;
+    head_owes_status(p.repo, p.history, &files).then_some("missing")
 }
 
 /// Lifts the evals gate's RunProbe seam onto the shared GhProbe shape
@@ -664,7 +738,7 @@ fn with_build(p: &Paths, slot: &str, root: &Path, argv: Vec<String>) -> Vec<Stri
 
 /// The checkout a bank dir sits in: `<root>/evals/bank`.
 fn checkout_of(bank: &Path) -> Option<&Path> {
-    bank.parent()?.parent()?.parent()
+    bank.parent()?.parent()
 }
 
 /// TOML writes the budget as a float or an integer; a string read alone missed both.
@@ -1328,14 +1402,22 @@ fn tick_with(p: &Paths, d: &Deps, can_launch: bool) -> String {
     }
     let mut state = load_state(&p.state_dir);
     let main_note = main_leg(p, d, &mut state, can_launch, daily_usd);
-    let head_note = match crate::stacked_base_stamp::origin_slug(p.repo, d.run) {
+    let (head_note, disarm_notes) = match crate::stacked_base_stamp::origin_slug(p.repo, d.run) {
         Some(slug) => match open_prs(p, d, &slug) {
-            Some(prs) => head_leg(p, d, &mut state, &slug, &prs, can_launch, daily_usd),
-            None => "open PR read failed".into(),
+            Some(prs) => {
+                let note = head_leg(p, d, &mut state, &slug, &prs, can_launch, daily_usd);
+                let disarms = disarm_sweep(p, d, &slug, &prs);
+                (note, disarms)
+            }
+            None => ("open PR read failed".into(), Vec::new()),
         },
-        None => "origin slug unread".into(),
+        None => ("origin slug unread".into(), Vec::new()),
     };
-    let note = format!("{main_note}; {head_note}");
+    let mut note = format!("{main_note}; {head_note}");
+    if !disarm_notes.is_empty() {
+        note.push_str("; ");
+        note.push_str(&disarm_notes.join("; "));
+    }
     state.last_note = note.clone();
     save_state(&p.state_dir, &state);
     note
@@ -1355,7 +1437,13 @@ fn spawn_detached(argv: &[String], cwd: &Path, log: &Path) -> Result<u32, String
         .stdout(out)
         .stderr(err);
     crate::evals_arm::setsid_hook(&mut cmd);
-    cmd.spawn().map(|c| c.id()).map_err(|e| e.to_string())
+    cmd.spawn()
+        .map(|c| {
+            let pid = c.id();
+            crate::orphan_reap::release_child(pid);
+            pid
+        })
+        .map_err(|e| e.to_string())
 }
 
 /// One pass of both legs. The daemon's tick calls this first, and it never
@@ -1445,6 +1533,12 @@ mod tests {
         real_git: bool,
         files: String,
         files_b: String,
+        /// PR 7 sits in GitHub's auto-merge queue (`auto_merge` non-null).
+        armed: bool,
+        /// The state the combined-status read answers for the evals/gate
+        /// context; empty means the context is absent.
+        gate_status: String,
+        disarms: RefCell<Vec<String>>,
     }
 
     impl World {
@@ -1475,6 +1569,9 @@ mod tests {
                 real_git: false,
                 files: files.into(),
                 files_b: String::new(),
+                armed: false,
+                gate_status: String::new(),
+                disarms: RefCell::default(),
             }
         }
 
@@ -1500,6 +1597,13 @@ mod tests {
             git(&["init", "-b", "main"]);
             git(&["config", "user.email", "t@t"]);
             git(&["config", "user.name", "t"]);
+            // g1 is in both commits, so the checkout's bank and the head's bank
+            // both carry its covers line.
+            std::fs::write(
+                w.dir.path().join("evals/bank/g1.yaml"),
+                format!("id: g1\ntier: capability\nprompt: p\ngrade:\n  - kind: file-exists\n    path: x\ntags: [{GATE_TAG}]\ncovers: [\"crates/x/\"]\n"),
+            )
+            .unwrap();
             git(&["add", "evals"]);
             git(&["commit", "-m", "x"]);
             let x = String::from_utf8_lossy(&git(&["rev-parse", "HEAD"]).stdout)
@@ -1617,6 +1721,17 @@ mod tests {
                             .collect();
                         ok(&Value::Array(rows).to_string())
                     }
+                    ["gh", "api", e] if e.contains("/status") => {
+                        // GitHub's REST commit-status states are lowercase.
+                        let statuses = if self.gate_status.is_empty() {
+                            Vec::new()
+                        } else {
+                            vec![
+                                json!({"context": CONTEXT, "state": self.gate_status, "description": "fixture"}),
+                            ]
+                        };
+                        ok(&json!({"statuses": statuses}).to_string())
+                    }
                     ["gh", "api", _] => {
                         // The real-git world heads the PR at main, so the
                         // worktree add has a revision it can check out.
@@ -1634,13 +1749,24 @@ mod tests {
                         } else {
                             SHA.to_string()
                         };
+                        let auto_merge = if self.armed {
+                            json!({"merge_method": "squash"})
+                        } else {
+                            Value::Null
+                        };
                         let mut prs = vec![json!({"number": 7,
+                            "auto_merge": auto_merge,
                             "head": {"sha": head, "repo": {"full_name": "o/r"}}})];
                         if !self.files_b.is_empty() {
                             prs.push(json!({"number": 8,
+                                "auto_merge": Value::Null,
                                 "head": {"sha": SHA2, "repo": {"full_name": "o/r"}}}));
                         }
                         ok(&Value::Array(prs).to_string())
+                    }
+                    ["gh", "pr", "merge", n, "--disable-auto"] => {
+                        self.disarms.borrow_mut().push(n.to_string());
+                        ok("{}")
                     }
                     _ => ok("mainsha\n"),
                 }
@@ -1750,6 +1876,21 @@ mod tests {
         assert!(argv.contains("--bank"), "{argv}");
         assert!(argv.contains(&format!("--ref {y}")), "{argv}");
         assert_eq!(w.adds.borrow().len(), 1, "one worktree add");
+    }
+
+    #[test]
+    fn a_covered_crate_head_builds_the_checkout_it_read_the_bank_from() {
+        let w = World::new_git("crates/x/a.rs\n");
+        w.with_baseline();
+        w.tick(true, Utc::now());
+        let spawns = w.spawns.borrow();
+        assert_eq!(spawns.len(), 1, "one head launch");
+        let slot = state_dir(&w.history()).join("ref-head");
+        let argv = spawns[0].join(" ");
+        assert!(
+            argv.contains(&format!("gate-build {} ", slot.display())),
+            "{argv}"
+        );
     }
 
     #[test]
@@ -2300,5 +2441,69 @@ mod tests {
 
     fn dir_of(w: &World) -> PathBuf {
         state_dir(&w.history())
+    }
+
+    // ── the disarm sweep ─────────────────────────────────────────────────
+
+    /// An armed PR whose gate reads ungreen comes out of the queue: the
+    /// ruleset requires only stacked-base-guard, so the queue would merge
+    /// past the gate (FAILURE and PENDING alike).
+    #[test]
+    fn an_armed_pr_with_an_ungreen_gate_disarms() {
+        for (state, word) in [("failure", "red"), ("pending", "pending")] {
+            let mut w = World::new("docs/x.md");
+            w.with_baseline();
+            w.armed = true;
+            w.gate_status = state.into();
+            let note = w.tick(true, Utc::now());
+            assert_eq!(
+                w.disarms.borrow().as_slice(),
+                &["7".to_string()],
+                "{state}: {note}"
+            );
+            assert!(note.contains("disarmed pr 7"), "{state}: {note}");
+            assert!(note.contains(&format!("({word}")), "{state}: {note}");
+        }
+    }
+
+    /// A settled-green gate keeps its arm, and so does an ungated head
+    /// with no status at all: nothing to protect the queue from, and a
+    /// disarm would strand a mergeable PR for nothing.
+    #[test]
+    fn an_armed_pr_with_a_green_gate_or_an_ungated_head_stays_armed() {
+        let mut w = World::new("docs/x.md");
+        w.with_baseline();
+        w.armed = true;
+        w.gate_status = "success".into();
+        let note = w.tick(true, Utc::now());
+        assert!(w.disarms.borrow().is_empty(), "{note}");
+
+        // Absent context on the same ungated head: the missing gate is not
+        // this PR's fact.
+        let mut w = World::new("docs/x.md");
+        w.with_baseline();
+        w.armed = true;
+        let note = w.tick(true, Utc::now());
+        assert!(w.disarms.borrow().is_empty(), "{note}");
+    }
+
+    /// A gated head with no status pulls its armed PR out of the queue:
+    /// the daemon never reached the head, and the queue would not wait for
+    /// a status the ruleset does not require. An unarmed PR never enters
+    /// the sweep - the disarm only answers an arm the queue could act on.
+    #[test]
+    fn a_missing_gate_status_at_a_gated_head_disarms_and_an_unarmed_pr_is_never_touched() {
+        let mut w = World::new("evals/bank/g3.yaml");
+        w.with_baseline();
+        w.armed = true;
+        let note = w.tick(true, Utc::now());
+        assert_eq!(w.disarms.borrow().as_slice(), &["7".to_string()], "{note}");
+        assert!(note.contains("(missing"), "{note}");
+
+        let mut w = World::new("docs/x.md");
+        w.with_baseline();
+        w.gate_status = "failure".into();
+        let note = w.tick(true, Utc::now());
+        assert!(w.disarms.borrow().is_empty(), "{note}");
     }
 }
