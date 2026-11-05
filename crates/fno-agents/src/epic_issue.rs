@@ -786,10 +786,11 @@ mod tests {
             child_of("kid-4", "Other epic", "epic2", json!({})),
             child("kid-5", "Blocked by CI", json!({"status": "blocked"})),
         ];
-        // The members are not the only open children, so the shared epic refs.
+        // The shared epic keeps Refs while kid-2 and kid-5 stay open; epic2's
+        // only child rides this batch, so its merge completes that checklist.
         assert_eq!(
             batch_ref_lines(&rows, &["kid-1", "kid-4"], "batch body"),
-            vec!["Refs #7".to_string(), "Refs #9".to_string()]
+            vec!["Refs #7".to_string(), "Closes #9".to_string()]
         );
         // Every open child of the shared epic rides this batch, so its merge
         // finishes the checklist and the line closes the issue.
