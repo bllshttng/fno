@@ -1,20 +1,20 @@
-//! The fno-agents binary's verb surface for the command ratchet.
+//! The fno-agents binary's command surface for the command ratchet.
 //!
 //! Two independent readings of one surface, cross-checked:
-//! - the dispatch: every verb the client answers, read from the dispatcher's
+//! - the dispatch: every command the client answers, read from the dispatcher's
 //!   own source - the run-region scan menu-caps also counts with, the main()
 //!   argv doors, the gh transport door, the `family_doors` table, the
 //!   `pr_door`/`review_doors`/`client_transport`/`pr_closure` delegate
 //!   tables, and the claim family's op arms in `claim_commands.rs`;
 //! - the refusal: `ALL_CLIENT_ACTIONS`, the exact slice the
-//!   unknown-command error prints, so the refusal can never name a verb
+//!   unknown-command error prints, so the refusal can never name a command
 //!   nothing dispatches.
 //!
-//! A dispatched verb the refusal does not name is operator-invisible. The
-//! ruling that owns this surface (2026-09-25: hidden top-level verbs retire
+//! A dispatched command the refusal does not name is operator-invisible. The
+//! ruling that owns this surface (2026-09-25: hidden top-level commands retire
 //! into nested groups) is carried by `menu-caps-debt.tsv`'s fno-agents row;
-//! until a verb folds, its invisibility is deliberate and recorded in
-//! `scripts/ci/agents-hidden-verbs.tsv`, one row per verb with a reason.
+//! until a command folds, its invisibility is deliberate and recorded in
+//! `scripts/ci/agents-hidden-commands.tsv`, one row per command with a reason.
 //!
 //! Declared boundary: the scan reaches one level of dispatch tables, not the
 //! deeper group CLIs (`backlog::cli`, the mail family's own parser, the
@@ -36,9 +36,9 @@ const PR_DOOR_REL: &str = "crates/fno-agents/src/pr_door.rs";
 const REVIEW_DOORS_REL: &str = "crates/fno-agents/src/review_doors.rs";
 const TRANSPORT_REL: &str = "crates/fno-agents/src/client_transport.rs";
 const GH_ADAPTER_REL: &str = "crates/fno-agents/src/pr_status/adapter.rs";
-pub const HIDDEN_REL: &str = "scripts/ci/agents-hidden-verbs.tsv";
+pub const HIDDEN_REL: &str = "scripts/ci/agents-hidden-commands.tsv";
 
-/// Pinned sub-verb seams: baseline rows the scanner asserts exist in the
+/// Pinned sub-command seams: baseline rows the scanner asserts exist in the
 /// client source by their distinctive spellings. A seam the source no longer
 /// matches is a removed sub-surface; the ratchet refuses until the row goes
 /// in the same PR that removed it. A NEW seam is invisible to this list -
@@ -67,7 +67,7 @@ const SEAMS: &[(&str, &str)] = &[
 
 /// One cross-checked reading of the binary's surface.
 pub struct AgentsSurface {
-    /// Every dispatched verb: run-region arms, argv doors, delegate tables,
+    /// Every dispatched command: run-region arms, argv doors, delegate tables,
     /// the gh door, plus the help/version spellings menu-caps inserts.
     pub top: BTreeSet<String>,
     /// The `ALL_CLIENT_ACTIONS` slice: what the unknown-command refusal
@@ -233,18 +233,18 @@ impl AgentsSurface {
         })
     }
 
-    /// The verbs the dispatch answers but the refusal does not name.
+    /// The commands the dispatch answers but the refusal does not name.
     pub fn hidden(&self) -> BTreeSet<String> {
         self.top.difference(&self.registered).cloned().collect()
     }
 
     /// The baseline rows the live surface earns: the binary leaf, one row per
-    /// dispatched verb, the claim family's ops, and the seams.
+    /// dispatched command, the claim family's ops, and the seams.
     pub fn rows(&self) -> Vec<String> {
         let mut rows: BTreeSet<String> = BTreeSet::new();
         rows.insert("fno-agents".to_string());
-        for verb in &self.top {
-            rows.insert(format!("fno-agents {verb}"));
+        for command in &self.top {
+            rows.insert(format!("fno-agents {command}"));
         }
         for op in &self.claim_ops {
             rows.insert(format!("fno-agents claim {op}"));
@@ -255,38 +255,38 @@ impl AgentsSurface {
         rows.into_iter().collect()
     }
 
-    /// The cross-checks between the two readings and the hidden-verb record.
+    /// The cross-checks between the two readings and the hidden-command record.
     /// Each refusal names the row and the fix.
     pub fn drift(&self, hidden_rows: &BTreeMap<String, String>) -> Vec<String> {
         let mut failures = Vec::new();
-        for verb in &self.hidden() {
-            if !hidden_rows.contains_key(verb) {
+        for command in &self.hidden() {
+            if !hidden_rows.contains_key(command) {
                 failures.push(format!(
-                    "agents-surface: `{verb}` dispatches but the refusal never names it, and \
+                    "agents-surface: `{command}` dispatches but the refusal never names it, and \
                      {HIDDEN_REL} has no row. Record the deliberate invisibility as \
-                     `{verb}<TAB><why it has no operator surface>`, register the spelling, or \
-                     remove the verb in the same PR."
+                     `{command}<TAB><why it has no operator surface>`, register the spelling, or \
+                     remove the command in the same PR."
                 ));
             }
         }
-        for verb in hidden_rows.keys() {
-            let stale = if let Some(op) = verb.strip_prefix("claim ") {
+        for command in hidden_rows.keys() {
+            let stale = if let Some(op) = command.strip_prefix("claim ") {
                 !self.claim_ops.contains(op) || self.claim_refusal_ops.iter().any(|r| r == op)
             } else {
-                !self.top.contains(verb) || self.registered.contains(verb)
+                !self.top.contains(command) || self.registered.contains(command)
             };
             if stale {
                 failures.push(format!(
-                    "agents-surface: {HIDDEN_REL} row `{verb}` is stale - the verb now \
+                    "agents-surface: {HIDDEN_REL} row `{command}` is stale - the command now \
                      dispatches registered, no longer dispatches, or its op is refusal-named. \
-                     Delete the row in the same PR that changed the verb."
+                     Delete the row in the same PR that changed the command."
                 ));
             }
         }
-        for verb in &self.registered {
-            if !self.top.contains(verb) {
+        for command in &self.registered {
+            if !self.top.contains(command) {
                 failures.push(format!(
-                    "agents-surface: the refusal names `{verb}` but no dispatch arm answers it. \
+                    "agents-surface: the refusal names `{command}` but no dispatch arm answers it. \
                      A refused command must never read as registered: restore the arm, remove \
                      the spelling from ALL_CLIENT_ACTIONS, or land it in the retired pointer."
                 ));
@@ -303,7 +303,7 @@ impl AgentsSurface {
         for row in &self.missing_seams {
             failures.push(format!(
                 "agents-surface: seam row `fno-agents {row}` has no matching dispatch shape in \
-                 the client source. The sub-verb was removed or re-spelled: delete its baseline \
+                 the client source. The sub-command was removed or re-spelled: delete its baseline \
                  row in the same PR, or fix the seam pattern."
             ));
         }
@@ -311,7 +311,7 @@ impl AgentsSurface {
     }
 }
 
-/// Parse `agents-hidden-verbs.tsv`: `path<TAB>reason`, comments skipped.
+/// Parse `agents-hidden-commands.tsv`: `path<TAB>reason`, comments skipped.
 pub fn hidden_rows(text: &str) -> Result<BTreeMap<String, String>, String> {
     let mut rows = BTreeMap::new();
     for (n, line) in text.lines().enumerate() {
@@ -334,8 +334,8 @@ pub fn hidden_rows(text: &str) -> Result<BTreeMap<String, String>, String> {
     Ok(rows)
 }
 
-/// The two-sided baseline check for the fno-agents rows: verbs the binary
-/// dispatches that no baseline row defends, and rows whose verb is gone.
+/// The two-sided baseline check for the fno-agents rows: commands the binary
+/// dispatches that no baseline row defends, and rows whose command is gone.
 pub fn baseline_drift(live: &[String], baseline: &[String]) -> (Vec<String>, Vec<String>) {
     let live: BTreeSet<String> = live.iter().cloned().collect();
     let baseline_agents: BTreeSet<String> = baseline
@@ -367,7 +367,7 @@ mod tests {
             seams: vec!["claim birth".to_string()],
             missing_seams: vec!["test-run env".to_string()],
         };
-        // A hidden verb with no recorded row refuses, naming the fix.
+        // A hidden command with no recorded row refuses, naming the fix.
         let rows = hidden_rows("claim sweep\thidden transport\n").unwrap();
         let failures = surface.drift(&rows);
         assert!(
@@ -449,10 +449,13 @@ mod tests {
             .map(str::to_string)
             .collect();
         let (added, removed) = baseline_drift(&surface.rows(), &baseline_rows);
-        assert!(added.is_empty(), "verbs missing baseline rows: {added:?}");
+        assert!(
+            added.is_empty(),
+            "commands missing baseline rows: {added:?}"
+        );
         assert!(
             removed.is_empty(),
-            "baseline rows with no verb: {removed:?}"
+            "baseline rows with no command: {removed:?}"
         );
         let _ = surface;
     }

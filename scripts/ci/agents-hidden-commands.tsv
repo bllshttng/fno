@@ -1,11 +1,11 @@
-# Deliberately operator-invisible verbs on the fno-agents binary: a dispatched
-# verb the unknown-command refusal never names. The ruling that owns this
-# surface (2026-09-25: hidden top-level verbs retire into nested groups) is
+# Deliberately operator-invisible commands on the fno-agents binary: a dispatched
+# command the unknown-command refusal never names. The ruling that owns this
+# surface (2026-09-25: hidden top-level commands retire into nested groups) is
 # carried by the fno-agents debt row in scripts/ci/menu-caps-debt.tsv; until a
-# verb folds, its invisibility is deliberate and recorded here, one row per
-# verb with the reason. Shrink-only: a row whose verb becomes refusal-named,
+# command folds, its invisibility is deliberate and recorded here, one row per
+# command with the reason. Shrink-only: a row whose command becomes refusal-named,
 # folds into a group, or disappears must go in the same PR. The command ratchet
-# refuses a dispatched-but-unrecorded verb and a stale row alike.
+# refuses a dispatched-but-unrecorded command and a stale row alike.
 attest	daemon-free report door; binary-direct like finalize
 backlog	door for the fno-agents backlog CLI; internal callers only
 backlog-orphan-plans	door: the SessionStart reconcile sweep execs here

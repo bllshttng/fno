@@ -1,8 +1,8 @@
 //! `fno doctor lint command-ratchet`: hold the command surface down against
 //! `scripts/ci/command-baseline.txt`. Ported from `cli/src/fno/lint_command_ratchet.py`
 //! (deleted). The Rust half is live: the typed clap tree plus the fno-agents
-//! binary's own verb surface (`agents_surface`), defended row-by-row in both
-//! directions - a verb cannot be added or deleted silently. Recorded
+//! binary's own command surface (`agents_surface`), defended row-by-row in both
+//! directions - a command cannot be added or deleted silently. Recorded
 //! departure, loud by design: the fno-py registry half cannot outlive the
 //! Python runtime it imports, so that half is pinned by the committed
 //! manifests now - every collapse-map row and every command-collapse-flags
@@ -76,7 +76,7 @@ fn row_path(row: &str) -> String {
 }
 
 /// The manifest contracts over the Python half: each collapse-map row's
-/// projection (the leaf verbatim on a KEEP tier, else the group head) and
+/// projection (the leaf commandatim on a KEEP tier, else the group head) and
 /// every collapse-flags row must appear in the baseline.
 fn manifest_drift(root: &Path, baseline: &[String]) -> Vec<String> {
     let mut drift: Vec<String> = Vec::new();
@@ -288,9 +288,9 @@ pub fn run(inv: &Invocation) -> i32 {
                 .to_string(),
         );
     }
-    // The fno-agents half: the binary's own verb surface, the two readings
+    // The fno-agents half: the binary's own command surface, the two readings
     // cross-checked against the committed record of the deliberate hidden
-    // verbs, and the baseline rows defended in both directions.
+    // commands, and the baseline rows defended in both directions.
     let mut agents_ok_note = String::new();
     match AgentsSurface::read(&inv.root) {
         Ok(surface) => {
@@ -308,7 +308,7 @@ pub fn run(inv: &Invocation) -> i32 {
                     added_agents.join(", ")
                 ));
                 lines.push(
-                    "    A verb cannot be added silently. Regenerate the baseline in the same PR \
+                    "    A command cannot be added silently. Regenerate the baseline in the same PR \
                      and add a PR-body line:  command-exception: <rationale>"
                         .to_string(),
                 );
@@ -320,7 +320,7 @@ pub fn run(inv: &Invocation) -> i32 {
                     removed_agents.join(", ")
                 ));
                 lines.push(
-                    "    A verb cannot be deleted silently either: the row goes in the same PR \
+                    "    A command cannot be deleted silently either: the row goes in the same PR \
                      that removes it. If the removal is right, delete the rows and regenerate."
                         .to_string(),
                 );
@@ -347,7 +347,7 @@ pub fn run(inv: &Invocation) -> i32 {
                 }
             }
             agents_ok_note = format!(
-                "; fno-agents surface: {} row(s), {} hidden verb(s) recorded",
+                "; fno-agents surface: {} row(s), {} hidden command(s) recorded",
                 live_rows.len(),
                 hidden.len()
             );

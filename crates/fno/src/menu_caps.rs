@@ -177,7 +177,7 @@ fn arms_at_top_level(lines: &[&str], arm: &Regex) -> BTreeSet<String> {
 
 /// The fno-agents binary's top-level commands, read from its dispatcher.
 /// Shared with the command ratchet, whose surface rows defend each of these
-/// verbs by name.
+/// commands by name.
 pub(crate) fn fno_agents_commands(source: &str) -> Result<BTreeSet<String>, String> {
     let text = strip_comments(source);
     let arm = Regex::new(r#"(?:Some\(\s*)?"([a-z][a-z0-9-]*)"\s*(?:\)\s*)?(?:\||=>)"#)

@@ -37,10 +37,10 @@
 # gate. The lint output names that boundary on every green run.
 #
 # The fno-agents rows are enumerated live from the binary's own dispatch
-# source and defended in both directions (agents_surface): a verb cannot be
-# added or deleted silently. A dispatched verb the unknown-command refusal
+# source and defended in both directions (agents_surface): a command cannot be
+# added or deleted silently. A dispatched command the unknown-command refusal
 # does not name is operator-invisible; its deliberate invisibility is
-# recorded in scripts/ci/agents-hidden-verbs.tsv. The hidden verbs retire
+# recorded in scripts/ci/agents-hidden-commands.tsv. The hidden commands retire
 # into nested groups per the fno-agents debt row in menu-caps-debt.tsv; a
 # fold PR regenerates this file in the same change.
 backlog
