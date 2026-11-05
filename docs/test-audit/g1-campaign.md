@@ -51,7 +51,7 @@ Files deleted with their tests: thirteen golden dirs under `crates/fno-agents/te
 | `crates/fno-agents/src/attention_arm.rs` | 14 | 5 | spent budget defers (overrun); lost copy of open question is false close (wrong close); two questions deliver pages and index (delivery break); unreadable graph delivers nothing (fail-open); ticked option settles (answer lost) |
 | `crates/fno-agents/src/org_fold.rs` | 14 | 5 | fold counts whole scope; unresolved names scope; sweep not run reads unreadable; old unclaimed ready node stuck, held never; ok fold carries epic load and cap |
 | `crates/fno-agents/tests/graph_keeper_socket.rs` | 14 | 5 | serves reads, ops and shutdown over the socket (protocol break); concurrent spawns settle on one keeper, losers exit 3 (two keepers on one store); concurrent idea commits survive note writes (lost update); shutdown mid-commit never loses an ok reply (an acked write is lost); ready board refuses unreadable claims (unreadable reads as free) |
-| `cli/tests/unit/test_paths.py` | 13 | 3 | unknown {var} rejected (fails if the template silently passes); traversal project.id rejected (fails if internal/<id> escapes); FNO_STATE_DIR moves the state root (fails if a sealed worker reads a foreign graph) |
+| `cli/tests/unit/test_paths.py` | 13 | 3 | unknown {var} rejected (fails if the template silently passes); traversal project.id rejected (fails if a vault path escapes its root); FNO_STATE_DIR moves the state root (fails if a sealed worker reads a foreign graph) |
 | `crates/fno-agents/src/backlog/api/tests.rs` | 13 | 5 | cursor paging (page skip); failed mutation keeps version (version drift); status via patch door (door bypass); primary PR stamp mismatch refused (wrong PR bound); comment thread rules (state break) |
 | `cli/tests/lint/test_check_pitfalls.py` | 12 | 3 | over-cap + unreadable budget verdict reported; title naming a shipped command refused; graduates-to with no node refused |
 | `cli/tests/lint/test_check_preamble_budget.py` | 12 | 4 | ceiling is strict > (off-by-one); missing fixed root fails loud; every frontmatter parses strictly (agent description lost); unbanked file cut refused |
@@ -104,7 +104,7 @@ Files deleted with their tests: thirteen golden dirs under `crates/fno-agents/te
 | `tests/spec/test_product_md_check.py` | 7 | 2 | PRODUCT.md present: no warning; missing: prerequisites written |
 | `cli/benchmarks/test_measure_fno.py` | 6 | 1 | decision-rule boundaries |
 | `cli/tests/unit/test_gate_escape_command.py` | 6 | 2 | unknown reason fails loud and writes nothing; a manual tag lands one row |
-| `cli/tests/unit/test_inbox_path.py` | 6 | 2 | default resolves to internal parking-lot.md; obsidian on with no internal/ stays in .fno |
+| `cli/tests/unit/test_inbox_path.py` | 6 | 2 | default resolves to the vault parking-lot.md; obsidian on with no vault link stays in .fno |
 | `cli/tests/unit/test_prove_it.py` | 6 | 2 | the validator selftest (14 cases) passes; a PASS with no marked probe is REFUSED and named |
 | `cli/tests/unit/test_target_denominator.py` | 6 | 2 | --deliverables stamps the manifest; a newline-injected value is refused before the write |
 | `cli/tests/unit/test_workflow_authority_contract.py` | 6 | 2 | agent skill obeys confirm-decision.sh; triage mutations sit after the approval boundary |
