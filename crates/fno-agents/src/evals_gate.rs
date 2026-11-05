@@ -18,7 +18,9 @@
 //!
 //! **Head leg.** An open same-repo PR whose head touches a gated path gets a
 //! pending `evals/gate` status, then one run of the `gate` goldens at that
-//! head, one PR at a time. A newer head kills the older run. The head runs on
+//! head, one PR at a time. A head whose gated hits are all bank files grades
+//! only the goldens it changed, so a goldens-only PR fits the 20-minute wall.
+//! A newer head kills the older run. The head runs on
 //! the worker seat and pays one side only: it compares to the worker
 //! baseline. Until a first baseline exists the
 //! leg posts nothing, so a fresh install holds no PR on a check it cannot do.
@@ -29,6 +31,7 @@
 //! cause and the clearing command.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -41,6 +44,13 @@ use crate::gate_probes::RunProbe;
 
 const CONTEXT: &str = "evals/gate";
 const GATED_PATHS: [&str; 5] = ["skills/", "agents/", "hooks/", "commands/", "evals/bank/"];
+/// The gated prefixes minus the bank: these paths have no per-golden
+/// `covers:` granularity, so a diff that hits one selects the whole tier.
+const TIER_PATHS: [&str; 4] = ["skills/", "agents/", "hooks/", "commands/"];
+/// The bank prefix. A diff whose gated hits are all bank files changed the
+/// measurement, not the system under test, so it grades only the goldens it
+/// touched instead of the whole tier.
+const BANK_PATH: &str = "evals/bank/";
 const GATE_TAG: &str = "gate";
 const GOLDEN_TAG: &str = "golden";
 const LEAD_TAG: &str = "lead";
@@ -251,6 +261,12 @@ fn touches_gated_path(files: &[&str]) -> bool {
         .any(|f| GATED_PATHS.iter().any(|p| f.get(..p.len()) == Some(*p)))
 }
 
+fn touches_tier_path(files: &[&str]) -> bool {
+    files
+        .iter()
+        .any(|f| TIER_PATHS.iter().any(|p| f.get(..p.len()) == Some(*p)))
+}
+
 /// FNV-1a over the route config. One hash decides a change, and a new binary
 /// must read the same value, which the std hasher does not promise.
 fn route_hash(repo: &Path) -> String {
@@ -347,8 +363,12 @@ fn repo_relative_task(source: &std::path::Path) -> String {
     tail(if skill_local { 4 } else { 3 })
 }
 
-/// The `gate` goldens among `tasks`. A golden added to main after the head
-/// branched has no fixture there, and would read as a regression.
+/// The goldens a head grades. A skill, agent, hook or command change selects
+/// the whole `gate` tier; a crate-only diff selects the tasks whose `covers:`
+/// it touches; a bank edit changes the measurement, not the system under
+/// test, so it grades only the goldens the head touched. A golden added to
+/// main after the head branched has no fixture there, and would read as a
+/// regression.
 fn gate_tasks(
     tasks: &[crate::evals::bank::TaskSpec],
     files: &[String],
@@ -357,15 +377,20 @@ fn gate_tasks(
     d: &Deps,
     p: &Paths,
 ) -> Vec<crate::evals::bank::TaskSpec> {
-    // The `gate` set runs for a skill, agent, hook, command or bank change. A
-    // crate-only diff runs only the tasks whose `covers:` it touches.
     let gated = touches_gated_path(&files.iter().map(String::as_str).collect::<Vec<_>>());
+    let tier = touches_tier_path(&files.iter().map(String::as_str).collect::<Vec<_>>());
+    let changed: BTreeSet<String> = files
+        .iter()
+        .filter(|f| f.starts_with(BANK_PATH))
+        .cloned()
+        .collect();
     tasks
         .iter()
         .filter(|t| !t.is_demoted())
         .filter(|t| {
-            (gated && t.tags.iter().any(|tag| tag == GATE_TAG))
+            (gated && tier && t.tags.iter().any(|tag| tag == GATE_TAG))
                 || files.iter().any(|f| is_covered(f, &t.covers))
+                || changed.contains(&repo_relative_task(&t.source_path))
         })
         .filter(|t| !slow.contains(&t.id))
         .filter(|t| {
@@ -626,13 +651,41 @@ fn fetch(p: &Paths, d: &Deps, refspec: &str) -> bool {
     (d.run)(&["git", "fetch", "--quiet", "origin", refspec], p.repo).is_some_and(|r| r.ok)
 }
 
+const REF_LOG: &str = "ref-checkout.log";
+
+/// Slot plumbing fails silently into `None` at the caller; a line in this log
+/// keeps the next wedge diagnosable from the state dir alone.
+fn log_ref_failure(p: &Paths, d: &Deps, line: &str) {
+    let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(p.state_dir.join(REF_LOG))
+    else {
+        return;
+    };
+    let _ = writeln!(f, "[{}] {}", d.now.to_rfc3339(), line);
+}
+
+/// True when the repo can resolve `sha` as a commit.
+fn commit_present(p: &Paths, d: &Deps, sha: &str) -> bool {
+    let spec = format!("{sha}^{{commit}}");
+    (d.run)(&["git", "cat-file", "-e", &spec], p.repo).is_some_and(|r| r.ok)
+}
+
 /// The checkout of `sha` the gate reads the bank at: a detached worktree
 /// under the state dir, one fixed slot per leg, reused when the slot already
 /// sits at that sha. The repo the daemon runs from can sit behind the ref,
-/// and a tag read from its working tree misses a golden the ref added. None
-/// on any plumbing failure; callers then read the checkout's own bank, which
-/// is the behavior this replaces.
-fn ref_checkout(p: &Paths, d: &Deps, slot: &str, sha: &str) -> Option<PathBuf> {
+/// and a tag read from its working tree misses a golden the ref added. A sha
+/// the repo has never fetched (a head pushed from another machine) is fetched
+/// from `refspec` before the add. None on any plumbing failure; callers then
+/// read the checkout's own bank, which is the behavior this replaces.
+fn ref_checkout(
+    p: &Paths,
+    d: &Deps,
+    slot: &str,
+    sha: &str,
+    refspec: Option<&str>,
+) -> Option<PathBuf> {
     let dir = p.state_dir.join(format!("ref-{slot}"));
     let bank = dir.join("evals").join("bank");
     let dir_str = dir.to_string_lossy().into_owned();
@@ -642,14 +695,38 @@ fn ref_checkout(p: &Paths, d: &Deps, slot: &str, sha: &str) -> Option<PathBuf> {
     {
         return Some(dir);
     }
-    let _ = (d.run)(&["git", "worktree", "remove", "--force", &dir_str], p.repo);
+    // Double force: git holds an `initializing` lock on the worktree it
+    // builds and drops it when the add lands; an add killed midway leaves
+    // the lock, and a locked slot refuses a single-force remove, so every
+    // later rebuild failed with "no checkout". The gate owns its slots.
+    let _ = (d.run)(
+        &["git", "worktree", "remove", "--force", "--force", &dir_str],
+        p.repo,
+    );
     (d.run)(&["git", "worktree", "prune"], p.repo);
-    (d.run)(
+    // Both legs fetch the ref they grade before this point; the guard keeps a
+    // sha only GitHub knows from failing the add anyway.
+    if !commit_present(p, d, sha) {
+        if let Some(refspec) = refspec {
+            if !fetch(p, d, refspec) {
+                log_ref_failure(p, d, &format!("fetch {refspec} failed for {sha}"));
+            }
+        }
+    }
+    let added = (d.run)(
         &["git", "worktree", "add", "--detach", &dir_str, sha],
         p.repo,
-    )
-    .filter(|r| r.ok)
-    .map(|_| dir)
+    );
+    match &added {
+        Some(r) if !r.ok => log_ref_failure(
+            p,
+            d,
+            &format!("worktree add {slot} at {}: {}", sha, r.stderr.trim()),
+        ),
+        None => log_ref_failure(p, d, &format!("worktree add {slot} at {sha}: spawn failed")),
+        _ => {}
+    }
+    added.filter(|r| r.ok).map(|_| dir)
 }
 
 fn run_argv(
@@ -883,7 +960,8 @@ fn main_seat(
         return ("main rev unread".into(), false);
     };
     // The golden set is read at the sha the run grades, not at the checkout.
-    let arg_bank = ref_checkout(p, d, "main", &sha).map(|root| root.join("evals").join("bank"));
+    let arg_bank =
+        ref_checkout(p, d, "main", &sha, Some("main")).map(|root| root.join("evals").join("bank"));
     let bank_dir = arg_bank
         .clone()
         .unwrap_or_else(|| p.repo.join("evals").join("bank"));
@@ -1231,7 +1309,8 @@ fn launch_head(
         return format!("head {} fetch failed", short(&pr.sha));
     }
     // The gate-tagged set is read at the head sha: the checkout can sit behind it.
-    let arg_bank = ref_checkout(p, d, "head", &pr.sha).map(|root| root.join("evals").join("bank"));
+    let arg_bank = ref_checkout(p, d, "head", &pr.sha, Some(&refspec))
+        .map(|root| root.join("evals").join("bank"));
     let bank_dir = arg_bank
         .clone()
         .unwrap_or_else(|| p.repo.join("evals").join("bank"));
@@ -2227,5 +2306,197 @@ mod tests {
         w.gate_status = "failure".into();
         let note = w.tick(true, Utc::now());
         assert!(w.disarms.borrow().is_empty(), "{note}");
+    }
+
+    #[test]
+    fn tier_paths_plus_the_bank_make_up_the_gated_paths() {
+        for p in TIER_PATHS {
+            assert!(GATED_PATHS.contains(&p), "{p} must stay gated");
+        }
+        let bank: Vec<_> = GATED_PATHS
+            .iter()
+            .filter(|p| !TIER_PATHS.contains(p))
+            .collect();
+        assert_eq!(bank, [&BANK_PATH]);
+    }
+
+    #[test]
+    fn a_bank_only_head_grades_its_changed_goldens_and_leaves_the_tier_out() {
+        let w = World::new("evals/bank/g1.yaml\nevals/fixtures/metrics/g1.yaml\n");
+        std::fs::write(
+            w.dir.path().join("evals/bank/g5.yaml"),
+            "id: g5\ntier: capability\nprompt: p\ngrade:\n  - kind: file-exists\n    path: x\ntags: [gate]\n",
+        )
+        .unwrap();
+        w.with_baseline();
+        w.tick(true, Utc::now());
+        let spawns = w.spawns.borrow();
+        assert_eq!(spawns.len(), 1, "one head launch");
+        let argv = spawns[0].join(" ");
+        assert!(argv.contains("--task g1 "), "{argv}");
+        assert!(!argv.contains("g5"), "{argv}");
+        let posts = w.posts.borrow();
+        assert_eq!(posts.len(), 1, "pending only: {posts:?}");
+        assert!(posts[0].starts_with("state=pending"), "{posts:?}");
+    }
+
+    #[test]
+    fn a_skills_head_still_selects_the_whole_gate_tier() {
+        let w = World::new("skills/x/SKILL.md\n");
+        std::fs::write(
+            w.dir.path().join("evals/bank/g5.yaml"),
+            "id: g5\ntier: capability\nprompt: p\ngrade:\n  - kind: file-exists\n    path: x\ntags: [gate]\n",
+        )
+        .unwrap();
+        w.with_baseline();
+        w.tick(true, Utc::now());
+        let spawns = w.spawns.borrow();
+        assert_eq!(spawns.len(), 1, "one head launch");
+        let argv = spawns[0].join(" ");
+        assert!(argv.contains("--task g1,g5 "), "{argv}");
+    }
+
+    #[test]
+    fn ref_checkout_fetches_a_sha_the_repo_lacks_and_skips_it_when_present() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = dir.path().join("state");
+        std::fs::create_dir_all(&state).unwrap();
+        let fetches: RefCell<Vec<String>> = RefCell::default();
+        let present = RefCell::new(true);
+        let add_ok = RefCell::new(true);
+        let run = |args: &[&str], _: &Path| -> Option<Run> {
+            match args {
+                ["git", "cat-file", "-e", ..] => Some(Run {
+                    ok: *present.borrow(),
+                    code: None,
+                    stdout: String::new(),
+                    stderr: String::new(),
+                }),
+                ["git", "fetch", "--quiet", "origin", rs] => {
+                    fetches.borrow_mut().push(rs.to_string());
+                    ok("")
+                }
+                ["git", "worktree", "add", ..] => Some(Run {
+                    ok: *add_ok.borrow(),
+                    code: None,
+                    stdout: String::new(),
+                    stderr: "fatal: no".into(),
+                }),
+                _ => ok(""),
+            }
+        };
+        let spawn = |_: &[String], _: &Path, _: &Path| -> Result<u32, String> { Ok(1) };
+        let alive = |_: u32| true;
+        let kill = |_: u32| {};
+        let paths = Paths {
+            history: &dir.path().join("h.jsonl"),
+            fno_bin: "fno",
+            repo: dir.path(),
+            state_dir: state.clone(),
+            graph: None,
+        };
+        let d = Deps {
+            run: &run,
+            spawn: &spawn,
+            alive: &alive,
+            kill: &kill,
+            now: Utc::now(),
+        };
+        let slot_sha = "0123456789abcdef0123456789abcdef01234567";
+
+        // The repo already has the sha: no fetch runs.
+        let got = ref_checkout(&paths, &d, "head", slot_sha, Some("pull/7/head"));
+        assert!(got.is_some(), "present sha checks out");
+        assert!(fetches.borrow().is_empty(), "no fetch when present");
+
+        // The repo lacks the sha: the refspec fetch runs, then the add lands.
+        *present.borrow_mut() = false;
+        fetches.borrow_mut().clear();
+        let got = ref_checkout(&paths, &d, "head", slot_sha, Some("pull/7/head"));
+        assert!(got.is_some(), "fetched sha checks out");
+        assert_eq!(fetches.borrow().as_slice(), ["pull/7/head"]);
+
+        // No refspec: no fetch is attempted, and the add still runs.
+        fetches.borrow_mut().clear();
+        let got = ref_checkout(&paths, &d, "head", slot_sha, None);
+        assert!(got.is_some());
+        assert!(fetches.borrow().is_empty());
+
+        // A failed add leaves the cause in the ref-checkout log.
+        *add_ok.borrow_mut() = false;
+        let got = ref_checkout(&paths, &d, "head", slot_sha, Some("pull/7/head"));
+        assert!(got.is_none(), "a failed add reads as no checkout");
+        let log = std::fs::read_to_string(state.join(REF_LOG)).unwrap();
+        assert!(log.contains("worktree add head"), "{log}");
+        assert!(log.contains("fatal: no"), "{log}");
+    }
+
+    #[test]
+    fn a_leaked_add_lock_no_longer_wedges_the_slot_rebuild() {
+        // The wedge this heals: git holds an `initializing` lock on the
+        // worktree it builds and drops it when the add lands; an add killed
+        // midway leaves it, and a locked slot refuses `worktree remove
+        // --force`, so every later rebuild failed with "no checkout".
+        let w = World::new_git("skills/x/SKILL.md\ncrates/x/a.rs\n");
+        w.with_baseline();
+        w.tick(true, Utc::now());
+        let common = String::from_utf8_lossy(
+            &std::process::Command::new("git")
+                .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
+                .current_dir(w.dir.path())
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .trim()
+        .to_string();
+        let admin = Path::new(&common).join("worktrees").join("ref-head");
+        assert!(admin.join("gitdir").exists(), "slot admin entry exists");
+        std::fs::write(admin.join("locked"), "initializing").unwrap();
+
+        // Advance main: the next head sha forces a rebuild of the slot.
+        let git = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .args(args)
+                .current_dir(w.dir.path())
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "git {args:?} failed: {} {}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            );
+        };
+        git(&["checkout", "-q", "main"]);
+        std::fs::write(
+            w.dir.path().join("evals/bank/g6.yaml"),
+            "id: g6\ntier: capability\nprompt: p\ngrade:\n  - kind: file-exists\n    path: x\ntags: [gate]\n",
+        )
+        .unwrap();
+        git(&["add", "evals"]);
+        git(&["commit", "-q", "-m", "z"]);
+
+        w.tick(true, Utc::now());
+        assert_eq!(
+            w.adds.borrow().len(),
+            2,
+            "the rebuild ran: {:?}",
+            w.adds.borrow()
+        );
+        let spawns = w.spawns.borrow();
+        assert_eq!(spawns.len(), 2, "the head launched");
+        let posts = w.posts.borrow();
+        assert!(
+            posts.iter().all(|p| p.starts_with("state=pending")),
+            "no failure posted: {posts:?}"
+        );
+        assert!(!admin.join("locked").exists(), "the leaked lock is gone");
+        assert!(
+            !Path::new(&common)
+                .join("worktrees/ref-head/locked")
+                .exists(),
+            "the leaked lock did not come back"
+        );
     }
 }
