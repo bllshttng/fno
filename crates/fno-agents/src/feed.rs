@@ -269,7 +269,7 @@ fn with_index_decisions(mut rows: Vec<FeedRow>) -> Vec<FeedRow> {
         .filter_map(|r| r.r#ref.clone())
         .collect();
     rows.extend(decision_rows_from(&index, &have));
-    rows.sort_by(|a, b| a.ts.cmp(&b.ts));
+    rows.sort_by(|a, b| order_key(a).cmp(&order_key(b)));
     rows
 }
 

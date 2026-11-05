@@ -230,9 +230,10 @@ pub fn run() -> i32 {
             Key::Quit => return 0,
             Key::Review => {
                 if let Some(id) = t.selected().map(|r| r.decision_id.clone()) {
-                    let _ = mark_reviewed(&store, &id);
-                    t.reviewed.insert(id);
-                    t.apply(Key::Other);
+                    if mark_reviewed(&store, &id).is_ok() {
+                        t.reviewed.insert(id);
+                        t.apply(Key::Other);
+                    }
                 }
             }
             Key::Retract | Key::Overrule => {

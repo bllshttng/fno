@@ -133,7 +133,10 @@ impl Filter {
 /// the audit queue size, and for each answered question the decision text.
 pub fn bell_facts() -> serde_json::Value {
     let reviewed = load_reviewed(&crate::decisions_table::store_path());
-    let rows = load().unwrap_or_default();
+    let rows = match load() {
+        Ok(rows) => rows,
+        Err(e) => return serde_json::json!({ "error": e }),
+    };
     let f = Filter {
         audit_only: true,
         ..Filter::default()
@@ -225,7 +228,10 @@ pub fn mark_reviewed(path: &std::path::Path, id: &str) -> std::io::Result<()> {
     }
     let mut ids: Vec<_> = set.into_iter().collect();
     ids.sort();
-    std::fs::write(path, serde_json::to_vec(&ids).unwrap_or_default())
+    // Write beside the file and rename, so a crash never leaves it truncated.
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, serde_json::to_vec(&ids).unwrap_or_default())?;
+    std::fs::rename(&tmp, path)
 }
 
 /// What the user can do to one row; each renders to an argv a pane runs.

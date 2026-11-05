@@ -122,9 +122,13 @@ pub(crate) fn keys(view: &mut View, bytes: &[u8]) {
         }
         Key::Review => {
             if let Some(id) = b.table.selected().map(|r| r.decision_id.clone()) {
-                let _ = mark_reviewed(&store_path(), &id);
-                b.table.reviewed.insert(id);
-                b.table.apply(Key::Other);
+                match mark_reviewed(&store_path(), &id) {
+                    Ok(()) => {
+                        b.table.reviewed.insert(id);
+                        b.table.apply(Key::Other);
+                    }
+                    Err(e) => view.set_notice(format!("review mark not saved: {e}")),
+                }
             }
         }
         Key::Goto => {

@@ -188,6 +188,12 @@ fn decision_facts(view: &View) -> Option<&Value> {
 /// The Decisions tab: every decision from the last index read, newest first.
 /// A row that answered a question opens that question's page.
 fn decision_rows(view: &View) -> Vec<Row> {
+    if let Some(e) = decision_facts(view)
+        .and_then(|f| f.get("error"))
+        .and_then(Value::as_str)
+    {
+        return vec![Row::Info(format!("decisions unavailable: {e}"))];
+    }
     let Some(rows) = decision_facts(view)
         .and_then(|f| f.get("rows"))
         .and_then(Value::as_array)
