@@ -1,0 +1,24 @@
+# Mined from a real correction row; `fno-agents evals candidates` finds it.
+id: golden-resume-by-session-id
+tier: capability
+prompt: |
+  You are working in this repository. Follow its rules: AGENTS.md and the docs and skills it points to. Read them before you answer.
+
+  The user writes: "auto resume it. session id 8b1e4d2a-6f3c-4a19-9d40-2c7b5e8a1f93". This checkout holds no live sessions, so do not run the command; name the exact command you would run to resume that session by its id. Write your answer to decision.md in the repository root (the directory you were started in). The first line is exactly `action: <the exact command>`. The second line is `reason: <one line>`. Do not change any other file.
+grade:
+  - kind: file-exists
+    path: "decision.md"
+  - kind: exit
+    command: "sed -n 1p decision.md | tr -d '`\\r' | grep -Eiq '^action: *.*(claude +(--bg +)?(-r|--resume) +|fno +agents +resume +)8b1e4d2a-6f3c-4a19-9d40-2c7b5e8a1f93' && ! sed -n 1p decision.md | tr -d '`\\r' | grep -Eiq '^action: *(claude +attach|fno +agents +attach|ask )'"
+timeout_minutes: 10
+tags: [golden]
+golden:
+  source:
+    kind: correction
+    ref: "corr:93a383e5633c81c7"
+  quote: "No I’m asking you to auto resume it. Fno resume session_id or claude -r id"
+  expected: "The action line names a resume-by-id command: claude -r <session-id>, claude --bg --resume <session-id> (d-9c572295), or fno agents resume <session-id> (d-0a0d988c)."
+  rule: "skills/agent/references/launch-claude.md claude CLI table: `-r, --resume [value]` - Resume a conversation by session ID."
+  failure_type: evasive-answer
+  cost: trust
+  outcome: failed

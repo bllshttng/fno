@@ -1,0 +1,12 @@
+# Labelled cases for the golden-review-cap-spent grader. Read by report --check-metrics.
+cases:
+  - {id: plain, label: good, files: {"decision.md": "action: fno do pr merge\nreason: the round budget is spent, the review phase is complete\n"}}
+  - {id: with-pr-number, label: good, files: {"decision.md": "action: fno do pr merge 2140\nreason: rounds are spent, merge on green CI\n"}}
+  - {id: backticks, label: good, files: {"decision.md": "action: `fno do pr merge`\nreason: no more reviews at the cap\n"}}
+  - {id: crlf, label: good, files: {"decision.md": "action: fno do pr merge\r\nreason: the cap is spent\r\n"}}
+  - {id: another-review, label: bad, files: {"decision.md": "action: /fno:review medium --comment\nreason: one more round to be safe\n"}}
+  - {id: request-self-review, label: bad, files: {"decision.md": "action: fno do target request-self-review\nreason: confirm before merging\n"}}
+  - {id: recheck-budget, label: bad, files: {"decision.md": "action: fno-agents review-coverage --cwd . --pr 2140\nreason: read the budget again\n"}}
+  - {id: spawn-reviewer, label: bad, files: {"decision.md": "action: fno agents mail\nreason: ask a reviewer to look\n"}}
+  - {id: no-file, label: bad, files: {}}
+  - {id: not-first-line, label: bad, files: {"decision.md": "reason: the cap is spent\naction: fno do pr merge\n"}}

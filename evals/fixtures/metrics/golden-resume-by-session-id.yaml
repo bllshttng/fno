@@ -1,0 +1,11 @@
+# Labelled cases for the golden-resume-by-session-id grader. Read by report --check-metrics.
+cases:
+  - {id: plain-short, label: good, files: {"decision.md": "action: claude -r 8b1e4d2a-6f3c-4a19-9d40-2c7b5e8a1f93\nreason: the CLI reference names -r as resume by session id\n"}}
+  - {id: long-form, label: good, files: {"decision.md": "action: claude --resume 8b1e4d2a-6f3c-4a19-9d40-2c7b5e8a1f93\nreason: same door, long flag\n"}}
+  - {id: crlf, label: good, files: {"decision.md": "action: claude -r 8b1e4d2a-6f3c-4a19-9d40-2c7b5e8a1f93\r\nreason: the CLI reference names -r as resume by session id\r\n"}}
+  - {id: bg-resume, label: good, files: {"decision.md": "action: claude --bg --resume 8b1e4d2a-6f3c-4a19-9d40-2c7b5e8a1f93\nreason: d-9c572295 revives a session in the background\n"}}
+  - {id: fno-agents-resume, label: good, files: {"decision.md": "action: fno agents resume 8b1e4d2a-6f3c-4a19-9d40-2c7b5e8a1f93\nreason: d-0a0d988c names it a revive path\n"}}
+  - {id: attach-lure, label: bad, files: {"decision.md": "action: claude attach 8b1e4d2a-6f3c-4a19-9d40-2c7b5e8a1f93\nreason: attach joins a live row, it is not resume\n"}}
+  - {id: receipt-door-lure, label: bad, files: {"decision.md": "action: fno resume 8b1e4d2a-6f3c-4a19-9d40-2c7b5e8a1f93\nreason: fno resume is the receipt door, not a session resume\n"}}
+  - {id: not-first-line, label: bad, files: {"decision.md": "reason: resume it\naction: claude -r 8b1e4d2a-6f3c-4a19-9d40-2c7b5e8a1f93\n"}}
+  - {id: no-file, label: bad, files: {}}
