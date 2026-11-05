@@ -175,7 +175,10 @@ fn write_trace(
     trace["truth"] = fact(data, "reason");
     trace["right_action"] = missing("not labeled");
     trace["layer_verdict"] = missing("not labeled");
-    trace["profile_id"] = missing("profile pass not run");
+    trace["profile_id"] = observed(
+        json!(crate::evals_profile::id(state)?),
+        "local_seeded_user_hash",
+    );
     for key in ["node", "model", "harness", "effort", "session_id"] {
         if trace.get(key).is_none() || trace[key]["value"].is_null() {
             trace[key] = fact(data, key);
@@ -436,6 +439,7 @@ fn daily(state: &Path) -> Result<Value, String> {
     let source = crate::finalize::corrections_log_path(home.as_deref())
         .unwrap_or_else(|| state.join("logs/corrections.log"));
     let seeded = import_seed(state, &source)?;
+    crate::evals_profile::local(state, None)?;
     let repo = crate::evals::canonical_repo_root();
     let journal = state.join("events.jsonl");
     let local = pass(state, &journal, &repo, &[])?;
