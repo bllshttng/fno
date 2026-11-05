@@ -371,7 +371,15 @@ pub fn tick(remote: &Remote) {
             )
         }
         Ok(_) => {}
-        Err(e) => eprintln!("mail-carrier: {e}"),
+        // A down primary fails every beat; say each distinct error once.
+        Err(e) => {
+            static LAST: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+            let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
+            if *last != e {
+                eprintln!("mail-carrier: {e}");
+                *last = e;
+            }
+        }
     }
 }
 
