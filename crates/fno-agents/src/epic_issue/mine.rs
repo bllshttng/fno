@@ -261,8 +261,8 @@ fn print(out: &Outcome, apply: bool, json: bool) {
     for line in &out.receipt {
         println!("{line}");
     }
-    let verb = if apply { "imported" } else { "dry run" };
-    println!("{verb}: {} filed, {} skipped", out.filed, out.skipped);
+    let state = if apply { "imported" } else { "dry run" };
+    println!("{state}: {} filed, {} skipped", out.filed, out.skipped);
     if !apply {
         println!("dry run: nothing was written; pass --apply to import");
     }
