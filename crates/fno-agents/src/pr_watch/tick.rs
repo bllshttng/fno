@@ -847,7 +847,14 @@ fn phase_merge(t: &mut Tick, slice: f64) -> Result<(), DoorError> {
     clock::note("merge", format!("queue={}", queue.len()));
     let mut counts = QueueCounts::default();
     let store = state::default_store_path(&t.cwd);
-    dispatch::run_execute_queue(&t.live, &queue, &store, t.retries, &mut counts)?;
+    dispatch::run_execute_queue(
+        &t.live,
+        &queue,
+        &store,
+        t.retries,
+        &chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+        &mut counts,
+    )?;
     let starved = counts.budget > 0 && counts.executed + counts.held + counts.failed == 0;
     let verdicts = out.get("verdicts").cloned().unwrap_or(json!({}));
     let int = |v: Option<&Value>, d: i64| v.and_then(Value::as_i64).unwrap_or(d);

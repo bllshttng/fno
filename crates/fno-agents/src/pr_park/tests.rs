@@ -68,6 +68,19 @@ fn ctx(paths: Paths) -> Ctx {
 /// A probe whose answer is fixed per construction; the sweep test moves the
 /// head by building a fresh Ctx with the next answer.
 fn ctx_ans(paths: Paths, head: &'static str, state: &'static str) -> Ctx {
+    ctx_probes(paths, (head, "feature", state), Ok(true), Ok(false))
+}
+
+/// A Ctx with every probe injectable: the head answers `(sha, branch, state)`
+/// for the open row, the checks probe answers red-or-not, the worktree probe
+/// answers clear-or-not. The defaults read "still red" and "still mismatched",
+/// the answers a cause park that has not cleared gives.
+fn ctx_probes(
+    paths: Paths,
+    head: (&'static str, &'static str, &'static str),
+    checks: Result<bool, &'static str>,
+    worktree: Result<bool, &'static str>,
+) -> Ctx {
     Ctx {
         paths,
         slug: "owner/repo".to_string(),
@@ -79,12 +92,30 @@ fn ctx_ans(paths: Paths, head: &'static str, state: &'static str) -> Ctx {
         })],
         head: Box::new(move |pr| {
             if pr == 101 {
-                Ok((head.to_string(), state.to_string()))
+                Ok((head.0.to_string(), head.1.to_string(), head.2.to_string()))
             } else {
                 Err("probe failed".to_string())
             }
         }),
+        checks_red: Box::new(move |_| checks.map_err(|e| e.to_string())),
+        worktree_clear: Box::new(move |_, _| worktree.map_err(|e| e.to_string())),
     }
+}
+
+/// One open row parked `reason`, with the `parked_at` stamp and the
+/// `last_polled_at` stamp aged independently so the two age arms hold apart.
+/// `parked_age_h` of `None` seeds a row parked before the stamp shipped.
+fn fixture_cause(paths: &Paths, reason: &str, parked_age_h: Option<u64>, polled_age_h: u64) {
+    let mut body = json!({
+        "last_seen_state": "OPEN",
+        "retries": 1,
+        "parked": reason,
+        "last_polled_at": iso_hours_ago(polled_age_h),
+    });
+    if let Some(h) = parked_age_h {
+        body["parked_at"] = json!(iso_hours_ago(h));
+    }
+    write(&paths.state, &json!({"owner/repo#101": body}).to_string());
 }
 
 fn tmp_paths(tag: &str) -> Paths {
@@ -159,6 +190,7 @@ fn sweep_unparks_on_head_change_and_holds_on_same_head() {
     assert!(data["owner/repo#101"]["parked"].is_null());
     let events = crate::events::committed_journal_text(&paths.events);
     assert!(events.contains("\"by\":\"sweep\""), "{events}");
+    assert!(events.contains("\"cause\":\"head-moved\""), "{events}");
     let _ = std::fs::remove_dir_all(paths.state.parent().unwrap());
 }
 
@@ -172,5 +204,130 @@ fn mutations_hold_the_lock_file_the_watcher_takes() {
     let _ = unpark(&ctx(paths.clone()), Some("owner/repo#101"), false).unwrap();
     assert!(crate::gh_budget::lock_path(&paths.state).exists());
     assert!(crate::gh_budget::lock_path(&paths.delivery).exists());
+    let _ = std::fs::remove_dir_all(paths.state.parent().unwrap());
+}
+
+#[test]
+fn sweep_lifts_a_checks_red_park_only_when_checks_read_green() {
+    // Green lifts, with the cause on the event; red and a probe error hold.
+    let paths = tmp_paths("cause-checks-green");
+    fixture_cause(&paths, "checks-red", None, 2);
+    let ctx = ctx_probes(
+        paths.clone(),
+        ("head1", "feature", "OPEN"),
+        Ok(false),
+        Ok(false),
+    );
+    let r = sweep(&ctx).unwrap();
+    assert_eq!(r.unparked, 1);
+    let data: Value =
+        serde_json::from_str(&std::fs::read_to_string(&paths.state).unwrap()).unwrap();
+    assert!(data["owner/repo#101"]["parked"].is_null());
+    assert_eq!(data["owner/repo#101"]["retries"], json!(0));
+    let events = crate::events::committed_journal_text(&paths.events);
+    assert!(events.contains("\"cause\":\"checks-cleared\""), "{events}");
+    assert!(events.contains("\"by\":\"sweep\""), "{events}");
+    let _ = std::fs::remove_dir_all(paths.state.parent().unwrap());
+
+    for checks in [Ok(true), Err("gh down")] {
+        let paths = tmp_paths("cause-checks-hold");
+        fixture_cause(&paths, "checks-red", None, 2);
+        let ctx = ctx_probes(
+            paths.clone(),
+            ("head1", "feature", "OPEN"),
+            checks,
+            Ok(false),
+        );
+        let r = sweep(&ctx).unwrap();
+        assert_eq!(r.unparked, 0);
+        let data: Value =
+            serde_json::from_str(&std::fs::read_to_string(&paths.state).unwrap()).unwrap();
+        assert_eq!(data["owner/repo#101"]["parked"], json!("checks-red"));
+        let events = crate::events::committed_journal_text(&paths.events);
+        assert!(!events.contains("pr_watch_unparked"), "{events}");
+        let _ = std::fs::remove_dir_all(paths.state.parent().unwrap());
+    }
+}
+
+#[test]
+fn a_worktree_park_lifts_when_clear_and_holds_on_probe_error() {
+    for reason in ["worktree_head_mismatch", "worktree_dirty"] {
+        let paths = tmp_paths("cause-worktree");
+        fixture_cause(&paths, reason, None, 2);
+        let ctx = ctx_probes(
+            paths.clone(),
+            ("head1", "feature", "OPEN"),
+            Ok(true),
+            Ok(true),
+        );
+        let r = sweep(&ctx).unwrap();
+        assert_eq!(r.unparked, 1, "{reason}");
+        let events = crate::events::committed_journal_text(&paths.events);
+        assert!(
+            events.contains("\"cause\":\"worktree-cleared\""),
+            "{events}"
+        );
+        let _ = std::fs::remove_dir_all(paths.state.parent().unwrap());
+    }
+    // A probe error lifts nothing, the rule the head probe keeps.
+    let paths = tmp_paths("cause-worktree-err");
+    fixture_cause(&paths, "worktree_head_mismatch", None, 2);
+    let ctx = ctx_probes(
+        paths.clone(),
+        ("head1", "feature", "OPEN"),
+        Ok(true),
+        Err("git exploded"),
+    );
+    let r = sweep(&ctx).unwrap();
+    assert_eq!(r.unparked, 0);
+    let data: Value =
+        serde_json::from_str(&std::fs::read_to_string(&paths.state).unwrap()).unwrap();
+    assert_eq!(
+        data["owner/repo#101"]["parked"],
+        json!("worktree_head_mismatch")
+    );
+    let _ = std::fs::remove_dir_all(paths.state.parent().unwrap());
+}
+
+#[test]
+fn the_age_rule_reads_parked_at_then_the_poll_stamp_and_unpark_clears_it() {
+    // A merge-queue row never refreshes last_polled_at, so on main its park
+    // age read hours of queue silence and every retries-exhausted park
+    // lifted on the first sweep. The park's own stamp governs now; a row
+    // parked before the stamp shipped keeps the poll stamp; an unpark
+    // clears the stamp beside the park.
+    let paths = tmp_paths("age-parked-at-hold");
+    fixture_cause(&paths, "retries-exhausted", Some(1), 30);
+    let r = sweep(&ctx_ans(paths.clone(), "head1", "OPEN")).unwrap();
+    assert_eq!(
+        r.unparked, 0,
+        "a young parked_at holds despite stale last_polled_at"
+    );
+    let events = crate::events::committed_journal_text(&paths.events);
+    assert!(!events.contains("pr_watch_unparked"), "{events}");
+    let _ = std::fs::remove_dir_all(paths.state.parent().unwrap());
+
+    let paths = tmp_paths("age-parked-at-lift");
+    fixture_cause(&paths, "retries-exhausted", Some(25), 30);
+    let r = sweep(&ctx_ans(paths.clone(), "head1", "OPEN")).unwrap();
+    assert_eq!(r.unparked, 1);
+    let events = crate::events::committed_journal_text(&paths.events);
+    assert!(events.contains("\"cause\":\"max-age\""), "{events}");
+    let _ = std::fs::remove_dir_all(paths.state.parent().unwrap());
+
+    let paths = tmp_paths("age-legacy");
+    fixture_cause(&paths, "retries-exhausted", None, 30);
+    let r = sweep(&ctx_ans(paths.clone(), "head1", "OPEN")).unwrap();
+    assert_eq!(r.unparked, 1, "the legacy stamp still carries the age arm");
+    let _ = std::fs::remove_dir_all(paths.state.parent().unwrap());
+
+    let paths = tmp_paths("manual-unpark-stamp");
+    fixture_cause(&paths, "checks-red", Some(3), 3);
+    let n = unpark(&ctx(paths.clone()), Some("owner/repo#101"), false).unwrap();
+    assert_eq!(n, 1);
+    let data: Value =
+        serde_json::from_str(&std::fs::read_to_string(&paths.state).unwrap()).unwrap();
+    assert!(data["owner/repo#101"]["parked"].is_null());
+    assert!(data["owner/repo#101"]["parked_at"].is_null());
     let _ = std::fs::remove_dir_all(paths.state.parent().unwrap());
 }
