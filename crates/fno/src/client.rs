@@ -2640,11 +2640,7 @@ impl View {
             return Some(self.confirm_overlay_layout(rows, action));
         }
         if let Some(name) = &self.create {
-            return Some(self.name_modal_layout(
-                "new workspace",
-                name,
-                Some(&self.create_hint(name)),
-            ));
+            return Some(self.create_modal_layout(name));
         }
         if let Some((target, name)) = &self.rename {
             let noun = match target {
@@ -4642,6 +4638,38 @@ impl View {
         let text = format!("{name}_");
         let line = TLine::line(TextStyle::Item, format!("{text:<body_w$}"));
         layout_lines_overlay(origin, dims, &chrome, &[line], None, OverlayAnchor::Center)
+    }
+
+    /// The new-workspace form: the name row, then the folder row. Each row
+    /// is a `label  value` line; the caret sits on the field that takes keys.
+    fn create_modal_layout(&self, name: &str) -> OverlayLayout {
+        let (origin, dims) = self.overlay_viewport();
+        let viewport_w = dims.1.saturating_sub(chrome::Chrome::FRAME_COLS);
+        let chrome = chrome::Chrome::new("new workspace", Anchor::Center)
+            .footer(self.create_hint())
+            .fit_to(viewport_w);
+        let body_w = chrome.min_inner_w().max(40).min(viewport_w).max(1);
+        let caret = if self.folder_pick.path.is_some() {
+            ""
+        } else {
+            "_"
+        };
+        let rows = [
+            format!("name    {name}{caret}"),
+            format!("folder  {}", self.create_folder_row(name)),
+        ];
+        let lines = rows.map(|t| TLine::line(TextStyle::Item, format!("{t:<body_w$}")));
+        layout_lines_overlay(origin, dims, &chrome, &lines, None, OverlayAnchor::Center)
+    }
+
+    fn draw_create_modal(&self, cells: &mut [Cell], rows: usize, cols: usize, name: &str) {
+        if rows > 0 {
+            for c in 0..cols {
+                cells[(rows - 1) * cols + c] = Cell::default();
+            }
+        }
+        let layout = self.create_modal_layout(name);
+        draw_overlay_layout(cells, rows, cols, &layout, &self.theme);
     }
 
     fn draw_name_modal(
