@@ -68,17 +68,59 @@ fn read_rows(path: &Path) -> Result<Vec<Value>, String> {
         .collect()
 }
 
-fn snapshot(data: &Value, resolver: &crate::context_run::SessionTranscripts) -> Value {
+fn transcript_key(data: &Value) -> String {
+    json!([data["session_id"], data["harness"], data["source_file"]]).to_string()
+}
+
+struct TranscriptEvidence {
+    resolver: crate::context_run::SessionTranscripts,
+    key: String,
+    rows: Result<Vec<Value>, String>,
+    bypassed: std::collections::BTreeSet<String>,
+}
+
+impl Default for TranscriptEvidence {
+    fn default() -> Self {
+        Self {
+            resolver: Default::default(),
+            key: String::new(),
+            rows: Err("transcript unavailable".into()),
+            bypassed: Default::default(),
+        }
+    }
+}
+
+impl TranscriptEvidence {
+    fn prepare(&mut self, data: &Value) {
+        let key = transcript_key(data);
+        if key == self.key {
+            return;
+        }
+        self.rows = Err("transcript unavailable".into());
+        self.bypassed.clear();
+        let rows = transcript(data, &self.resolver)
+            .ok_or_else(|| "transcript unavailable".to_string())
+            .and_then(|p| read_rows(&p));
+        if let Ok(rows) = &rows {
+            self.bypassed = bypassed_turns(rows);
+        }
+        self.rows = rows;
+        self.key = key;
+    }
+    fn rows(&mut self, data: &Value) -> Result<&[Value], &str> {
+        self.prepare(data);
+        self.rows.as_deref().map_err(String::as_str)
+    }
+}
+
+fn snapshot(data: &Value, evidence: &mut TranscriptEvidence) -> Value {
     let empty = |reason: &str| {
         json!({"tool_calls":missing(reason),"claims":missing(reason),
         "context_percent":missing(reason),"compaction_count":missing(reason)})
     };
-    let Some(path) = transcript(data, resolver) else {
-        return empty("transcript unavailable");
-    };
-    let rows = match read_rows(&path) {
+    let rows = match evidence.rows(data) {
         Ok(rows) => rows,
-        Err(e) => return empty(&e),
+        Err(e) => return empty(e),
     };
     let turn = data["turn"].as_str().unwrap_or("");
     let boundary = rows.iter().position(|r| row_matches(r, turn)).or_else(|| {
@@ -152,13 +194,7 @@ fn snapshot(data: &Value, resolver: &crate::context_run::SessionTranscripts) -> 
         "model":readings.model.to_json(),"effort":readings.effort.to_json()})
 }
 
-fn write_trace(
-    state: &Path,
-    kind: &str,
-    key: &str,
-    data: &Value,
-    resolver: &crate::context_run::SessionTranscripts,
-) -> Result<bool, String> {
+fn trace_id(kind: &str, key: &str, data: &Value) -> String {
     let failure = if kind == "seed_correction" {
         key
     } else {
@@ -172,16 +208,26 @@ fn write_trace(
     } else {
         data["session_id"].clone()
     };
-    let id = blake3::hash(format!("{kind}|{session}|{failure}").as_bytes())
+    blake3::hash(format!("{kind}|{session}|{failure}").as_bytes())
         .to_hex()
-        .to_string();
+        .to_string()
+}
+
+fn write_trace(
+    state: &Path,
+    kind: &str,
+    key: &str,
+    data: &Value,
+    evidence: &mut TranscriptEvidence,
+) -> Result<bool, String> {
+    let id = trace_id(kind, key, data);
     let dir = state.join("evals/traces");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let path = dir.join(format!("{id}.json"));
     if path.exists() {
         return Ok(false);
     }
-    let mut trace = snapshot(data, resolver);
+    let mut trace = snapshot(data, evidence);
     trace["id"] = json!(id);
     trace["signal_kind"] = json!(kind);
     trace["source_ref"] = observed(json!(key), "source_identity");
@@ -224,15 +270,12 @@ fn write_trace(
     )
 }
 
-fn routed_around(data: &Value, resolver: &crate::context_run::SessionTranscripts) -> bool {
-    let Some(rows) = transcript(data, resolver).and_then(|p| read_rows(&p).ok()) else {
-        return false;
-    };
-    let turn = data["turn"].as_str().unwrap_or("");
-    let mut calls = std::collections::BTreeMap::new();
-    let mut blocked = None;
-    let mut retries = std::collections::BTreeSet::new();
-    let mut following = 0;
+fn bypassed_turns(rows: &[Value]) -> std::collections::BTreeSet<String> {
+    let mut calls = std::collections::BTreeMap::<String, (Value, usize)>::new();
+    let mut pending = Vec::<(Value, String, usize)>::new();
+    let mut refused = std::collections::BTreeSet::new();
+    let mut proven = std::collections::BTreeSet::new();
+    let mut step = 0usize;
     for row in rows {
         for block in row
             .pointer("/message/content")
@@ -240,31 +283,47 @@ fn routed_around(data: &Value, resolver: &crate::context_run::SessionTranscripts
             .into_iter()
             .flatten()
         {
-            let id = block["id"].as_str().unwrap_or("");
             if block["type"] == "tool_use" {
-                let call = json!([block["name"], block["input"]]);
-                calls.insert(id.to_string(), call.clone());
-                if let Some(original) = &blocked {
-                    following += 1;
-                    if following > 10 {
-                        return false;
-                    }
-                    if original == &call {
-                        retries.insert(id.to_string());
-                    }
-                }
+                let Some(id) = block["id"].as_str().filter(|id| !id.is_empty()) else {
+                    continue;
+                };
+                step += 1;
+                pending.retain(|(_, _, start)| step.saturating_sub(*start) <= 10);
+                calls.insert(
+                    id.to_string(),
+                    (json!([block["name"], block["input"]]), step),
+                );
             }
-            if block["type"] == "tool_result" {
-                let result_id = block["tool_use_id"].as_str().unwrap_or("");
-                if result_id == turn && block["is_error"] == true {
-                    blocked = calls.get(result_id).cloned();
-                } else if retries.contains(result_id) && block["is_error"] != true {
-                    return true;
+            if block["type"] != "tool_result" {
+                continue;
+            }
+            let Some(id) = block["tool_use_id"].as_str() else {
+                continue;
+            };
+            let Some((call, requested)) = calls.get(id) else {
+                continue;
+            };
+            if block["is_error"] == true {
+                if refused.insert(id.to_string()) {
+                    pending.push((call.clone(), id.to_string(), step));
+                }
+            } else {
+                for (original, blocked, start) in &pending {
+                    if requested > start && step.saturating_sub(*start) <= 10 && call == original {
+                        proven.insert(blocked.clone());
+                    }
                 }
             }
         }
     }
-    false
+    proven
+}
+
+fn routed_around(data: &Value, evidence: &mut TranscriptEvidence) -> bool {
+    evidence.prepare(data);
+    data["turn"]
+        .as_str()
+        .is_some_and(|turn| evidence.bypassed.contains(turn))
 }
 
 fn pass(state: &Path, journal: &Path, repo: &Path, prs: &[Value]) -> Result<Value, String> {
@@ -291,8 +350,14 @@ fn pass(state: &Path, journal: &Path, repo: &Path, prs: &[Value]) -> Result<Valu
         ..Default::default()
     };
     // Unsettled refusals are revisited: the successful call may arrive after yesterday's watermark.
-    let rows = crate::event_store::query_events(journal, &query)?;
-    let resolver = crate::context_run::SessionTranscripts::default();
+    let mut rows = crate::event_store::query_events(journal, &query)?;
+    rows.sort_by_cached_key(|event| {
+        serde_json::from_str::<Value>(&event.line)
+            .ok()
+            .map(|v| transcript_key(&v["data"]))
+            .unwrap_or_default()
+    });
+    let mut evidence = TranscriptEvidence::default();
     let mut count = 0;
     let mut last = after;
     for event in rows {
@@ -312,7 +377,7 @@ fn pass(state: &Path, journal: &Path, repo: &Path, prs: &[Value]) -> Result<Valu
             {
                 Some("user_correction")
             }
-            "agent_corrected" if machine && routed_around(&data, &resolver) => {
+            "agent_corrected" if machine && routed_around(&data, &mut evidence) => {
                 Some("refusal_bypassed")
             }
             "termination" => match data["reason"]
@@ -333,7 +398,13 @@ fn pass(state: &Path, journal: &Path, repo: &Path, prs: &[Value]) -> Result<Valu
             _ => None,
         };
         if let Some(kind) = kind {
-            count += u64::from(write_trace(state, kind, &event.event_id, &data, &resolver)?);
+            count += u64::from(write_trace(
+                state,
+                kind,
+                &event.event_id,
+                &data,
+                &mut evidence,
+            )?);
         }
         last = last.max(event.seq);
     }
@@ -342,8 +413,19 @@ fn pass(state: &Path, journal: &Path, repo: &Path, prs: &[Value]) -> Result<Valu
     for revert in reverts {
         let data = json!({"quote":revert.quote,"reason":"repository revert","node":null});
         let key = revert.source_ref;
-        count += u64::from(write_trace(state, "revert", &key, &data, &resolver)?);
+        count += u64::from(write_trace(state, "revert", &key, &data, &mut evidence)?);
     }
+    count += write_closed(state, prs, &mut evidence)?;
+    std::fs::write(mark, last.to_string()).map_err(|e| e.to_string())?;
+    Ok(json!({"new":count}))
+}
+
+fn write_closed(
+    state: &Path,
+    prs: &[Value],
+    evidence: &mut TranscriptEvidence,
+) -> Result<u64, String> {
+    let mut count = 0;
     for pr in prs {
         if !pr["closedAt"].is_string() || !pr["mergedAt"].is_null() {
             continue;
@@ -352,16 +434,9 @@ fn pass(state: &Path, journal: &Path, repo: &Path, prs: &[Value]) -> Result<Valu
             return Err("closed PR row has no url".into());
         };
         let data = json!({"quote":pr["title"],"reason":"PR closed without merge","node":pr["node_id"],"pr":url});
-        count += u64::from(write_trace(
-            state,
-            "closed_unmerged",
-            url,
-            &data,
-            &resolver,
-        )?);
+        count += u64::from(write_trace(state, "closed_unmerged", url, &data, evidence)?);
     }
-    std::fs::write(mark, last.to_string()).map_err(|e| e.to_string())?;
-    Ok(json!({"new":count}))
+    Ok(count)
 }
 
 pub fn run(args: &[String]) -> i32 {
@@ -401,7 +476,7 @@ fn import_seed(state: &Path, log: &Path) -> Result<usize, String> {
     let text = std::fs::read_to_string(&seed).map_err(|e| e.to_string())?;
     let pattern = regex::Regex::new(r#"^- "(.+)" \(x\d+, ([0-9a-f]+), signal=(\w+)"#)
         .expect("seed row pattern");
-    let resolver = crate::context_run::SessionTranscripts::default();
+    let mut evidence = TranscriptEvidence::default();
     let mut count = 0;
     for (index, line) in text.lines().enumerate() {
         let fields: Vec<_> = line.splitn(5, " | ").collect();
@@ -411,13 +486,25 @@ fn import_seed(state: &Path, log: &Path) -> Result<usize, String> {
         let Some(caps) = pattern.captures(body.trim()) else {
             return Err(format!("unparseable frozen S2 row {}", index + 1));
         };
+        let key = format!("seed:{index}:{}", blake3::hash(line.as_bytes()));
+        if dir
+            .join(format!(
+                "{}.json",
+                trace_id("seed_correction", &key, &Value::Null)
+            ))
+            .exists()
+        {
+            count += 1;
+            continue;
+        }
         let prefix = &caps[2];
         let found = seed_transcript(prefix);
         let mut data = json!({"quote":&caps[1],"logged_at":stamp,"session_id":prefix});
         if let Some((sid, path)) = found {
             data["session_id"] = json!(sid);
             data["harness"] = json!("claude");
-            if let Ok(rows) = read_rows(&path) {
+            data["source_file"] = json!(path);
+            if let Ok(rows) = evidence.rows(&data) {
                 let flat = |t: &str| t.split_whitespace().collect::<Vec<_>>().join(" ");
                 let quote = flat(&caps[1]);
                 let matching: Vec<_> = rows
@@ -434,10 +521,8 @@ fn import_seed(state: &Path, log: &Path) -> Result<usize, String> {
                     data["ts_turn"] = row["timestamp"].clone();
                 }
             }
-            data["source_file"] = json!(path);
         }
-        let key = format!("seed:{index}:{}", blake3::hash(line.as_bytes()));
-        write_trace(state, "seed_correction", &key, &data, &resolver)?;
+        write_trace(state, "seed_correction", &key, &data, &mut evidence)?;
         count += 1;
     }
     Ok(count)
@@ -491,10 +576,8 @@ fn daily(state: &Path) -> Result<Value, String> {
     }
     let prs: Vec<Value> =
         serde_json::from_slice(&out.stdout).map_err(|e| format!("closed PR list: {e}"))?;
-    let remote = pass(state, &journal, &repo, &prs)?;
-    Ok(
-        json!({"new":local["new"].as_u64().unwrap_or(0)+remote["new"].as_u64().unwrap_or(0),"seed":seeded}),
-    )
+    let remote = write_closed(state, &prs, &mut TranscriptEvidence::default())?;
+    Ok(json!({"new":local["new"].as_u64().unwrap_or(0)+remote,"seed":seeded}))
 }
 
 #[derive(Default)]
@@ -772,7 +855,7 @@ mod tests {
                 "seed_correction",
                 &key,
                 &json!({"session_id":"newly-resolved-full-session"}),
-                &crate::context_run::SessionTranscripts::default()
+                &mut TranscriptEvidence::default()
             )
             .unwrap(),
             "enrichment cannot change a seed identity"
