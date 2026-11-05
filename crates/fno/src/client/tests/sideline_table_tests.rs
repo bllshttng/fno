@@ -905,19 +905,46 @@ fn top_row(v: &View) -> String {
 #[test]
 fn agents_tab_strip_counts_rows_that_need_input() {
     let mk = |name: &str, pane: u64, b: AgentBadge| agent_row(name, pane, Some(b), false);
-    let mut far = mk("b2", 6, AgentBadge::Blocked);
-    far.cwd_base = Some("/tmp/other".into());
-    let v = wide_view(vec![
-        mk("b1", 4, AgentBadge::Blocked),
-        far,
-        mk("d1", 5, AgentBadge::Done),
-    ]);
-    let row = top_row(&v);
-    assert!(row.starts_with(" 2 need input"), "{row:?}");
-    let rollup = section_rollup(v.layout.agents.iter().map(agent_lattice_state));
-    assert_eq!(rollup.first(), Some(&(LatticeState::Blocked, 2)));
+    let now = crate::agents_view::rfc3339_like_to_secs("2027-01-15T08:00:00Z").unwrap();
+    for harness in ["claude", "opencode", "codex", "agy", "pi"] {
+        let raw = serde_json::json!({"schema_version": 6, "agents": [{
+            "name": "parked", "cwd": "/tmp", "status": "live", "harness": harness,
+            "inside_leg": {"state": "working", "seq": 1,
+                           "received_at": "2027-01-15T07:59:30Z", "ttl_ms": 120000},
+            "screen_state": {"state": "blocked", "rule": "permission_prompt", "seq": 1,
+                             "at": "2027-01-15T07:59:30Z", "ttl_ms": 120000}
+        }]})
+        .to_string();
+        let rows = crate::agents_view::derive_rows(&raw, now).unwrap();
+        let mut far = mk("b2", 6, AgentBadge::Blocked);
+        far.cwd_base = Some("/tmp/other".into());
+        let mut v = wide_view(vec![
+            agent_row("parked", 4, rows[0].badge, false),
+            far,
+            mk("d1", 5, AgentBadge::Done),
+        ]);
+        let row = top_row(&v);
+        assert!(row.starts_with(" 2 need input"), "{harness}: {row:?}");
+        let rollup = section_rollup(v.layout.agents.iter().map(agent_lattice_state));
+        assert_eq!(rollup.first(), Some(&(LatticeState::Blocked, 2)));
+        v.needs_open = true;
+        assert_eq!(
+            v.display_rows()
+                .iter()
+                .filter(|r| matches!(r, DisplayRow::Agent(a) if a.name == "parked"))
+                .count(),
+            2,
+            "{harness}: parked row stays in its group and Needs input"
+        );
+        if harness == "claude" {
+            crate::frame_html::write_shot(
+                &v.compose(),
+                "parked-permission-blocked",
+                "Parked permission prompt appears in Needs input and its group",
+            );
+        }
+    }
 
-    // No Blocked row: no count, and the view words sit where they sat.
     let calm = wide_view(vec![mk("d1", 5, AgentBadge::Done)]);
     let row = top_row(&calm);
     let start = calm.top_row_spans()[0].0;
