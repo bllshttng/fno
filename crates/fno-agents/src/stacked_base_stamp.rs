@@ -86,6 +86,16 @@ pub(crate) fn runner<'a>(
     git_bin: &'a str,
     gh_bin: &'a str,
 ) -> impl Fn(&[&str], &Path) -> Option<Run> + 'a {
+    runner_with(git_bin, gh_bin, &run_probe)
+}
+
+/// The same seam with the probe's own bound: `exec` decides the timeout, so
+/// the gate's slot plumbing outlives the 30-second probe kill.
+pub(crate) fn runner_with<'a>(
+    git_bin: &'a str,
+    gh_bin: &'a str,
+    exec: &'a dyn Fn(Command) -> Option<Run>,
+) -> impl Fn(&[&str], &Path) -> Option<Run> + 'a {
     move |args: &[&str], dir: &Path| {
         let bin = match args[0] {
             "git" => git_bin,
@@ -94,7 +104,7 @@ pub(crate) fn runner<'a>(
         };
         let mut cmd = Command::new(bin);
         cmd.args(&args[1..]).current_dir(dir);
-        run_probe(cmd)
+        exec(cmd)
     }
 }
 
