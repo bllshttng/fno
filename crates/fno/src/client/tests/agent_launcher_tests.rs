@@ -1371,6 +1371,31 @@ fn pill_rows() {
         "the message excludes the flag"
     );
 
+    for prefix in ["--", "—", "+"] {
+        let (mut v, _fx) = pill_view(&_lock);
+        let argv = launch_argv(&mut v, format!("explain {prefix}foo bar\r").as_bytes());
+        assert_eq!(
+            argv,
+            vec!["--foo", "bar"],
+            "{prefix} forwards a canonical flag"
+        );
+        assert_eq!(v.launcher.as_ref().unwrap().draft.message, "explain ");
+    }
+    for prefix in ["—", "+", "--"] {
+        let (mut v, _fx) = pill_view(&_lock);
+        let l = v.launcher.as_mut().unwrap();
+        l.draft.message = "do later".into();
+        l.draft.cursor_chars = 3;
+        let argv = launch_argv(&mut v, format!("{prefix}ag\rvalue\r").as_bytes());
+        assert_eq!(argv, vec!["--agent", "value"]);
+        assert_eq!(v.launcher.as_ref().unwrap().draft.message, "do later");
+    }
+    for text in ["well—being", "C++"] {
+        let (mut v, _fx) = pill_view(&_lock);
+        assert!(launch_argv(&mut v, format!("{text}\r").as_bytes()).is_empty());
+        assert_eq!(v.launcher.as_ref().unwrap().draft.message, text);
+    }
+
     // AC10-EDGE: `--model x` committed reads the model chip x and stores no
     // pill; the argv carries no --model element.
     let (mut v, _fx) = pill_view(&_lock);
@@ -1429,42 +1454,46 @@ fn pill_rows() {
 fn the_flags_picker_lists_the_harness_launch_flags() {
     // AC10-HP: `--` at a word start opens the picker over the harness's
     // launch_flags; its rows carry AddPill with the parsed value arity.
-    let (mut v, _lock, _fx) = pill_harness_view();
-    let mut sock: Vec<u8> = Vec::new();
-    let rt = tokio::runtime::Runtime::new().unwrap();
-    rt.block_on(async {
-        let _ = super::agent_launcher::launcher_keys(&mut v, b"--", &mut sock).await;
-    });
-    let l = v.launcher.as_ref().unwrap();
-    let picker = l.picker.as_ref().expect("the flags picker opened");
-    assert_eq!(picker.field, super::agent_launcher::Focus::Plus);
-    let (rows, actions) = super::agent_launcher::picker_rows(
-        l,
-        super::agent_launcher::Focus::Plus,
-        &v.launcher_catalog,
-        &v.backlog,
-    );
-    let labels: Vec<String> = rows
-        .iter()
-        .filter_map(|r| match r {
-            crate::popup::PopupRow::Entry { label, .. } => Some(label.clone()),
-            _ => None,
-        })
-        .collect();
-    assert!(
-        labels.iter().any(|l| l == "--agent <agent>"),
-        "the captured flags list: {labels:?}"
-    );
-    assert!(
-        actions.iter().any(|a| matches!(
-            a,
-            Some(super::agent_launcher::PickerAction::AddPill {
-                flag,
-                picks_value
-            }) if flag == "--agent" && *picks_value
-        )),
-        "the flag row commits AddPill"
-    );
+    let (_seed, _lock, _seed_fx) = pill_harness_view();
+    for prefix in ["--", "—", "+"] {
+        let (mut v, _fx) = pill_view(&_lock);
+        let mut sock: Vec<u8> = Vec::new();
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let _ =
+                super::agent_launcher::launcher_keys(&mut v, prefix.as_bytes(), &mut sock).await;
+        });
+        let l = v.launcher.as_ref().unwrap();
+        let picker = l.picker.as_ref().expect("the flags picker opened");
+        assert_eq!(picker.field, super::agent_launcher::Focus::Plus);
+        let (rows, actions) = super::agent_launcher::picker_rows(
+            l,
+            super::agent_launcher::Focus::Plus,
+            &v.launcher_catalog,
+            &v.backlog,
+        );
+        let labels: Vec<String> = rows
+            .iter()
+            .filter_map(|r| match r {
+                crate::popup::PopupRow::Entry { label, .. } => Some(label.clone()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            labels.iter().any(|l| l == "--agent <agent>"),
+            "the captured flags list: {labels:?}"
+        );
+        assert!(
+            actions.iter().any(|a| matches!(
+                a,
+                Some(super::agent_launcher::PickerAction::AddPill {
+                    flag,
+                    picks_value
+                }) if flag == "--agent" && *picks_value
+            )),
+            "the flag row commits AddPill"
+        );
+    }
 }
 
 #[test]
@@ -1606,7 +1635,7 @@ fn shell_mode_keys_glyph_and_placeholders() {
     v.launcher_catalog = catalog(&[("claude", true, true)]);
     sync_catalog(&mut v);
     assert_eq!(v.launcher.as_ref().unwrap().focus, Focus::Message);
-    assert_painted(&v, '\u{276f}', "prompt \u{b7} flags");
+    assert_painted(&v, '\u{276f}', "prompt \u{b7} +flag");
 
     // AC1: the `!` is consumed as the mode switch.
     type_message(&mut v, "!");
@@ -1646,7 +1675,7 @@ fn shell_mode_keys_glyph_and_placeholders() {
         assert!(!l.shell, "the empty-line Backspace left shell mode");
         assert!(l.draft.message.is_empty());
     }
-    assert_painted(&v, '\u{276f}', "prompt \u{b7} flags");
+    assert_painted(&v, '\u{276f}', "prompt \u{b7} +flag");
 
     // Folded from the retired newline test: ^j inserts a newline in the
     // message and Enter never fires from inside it.

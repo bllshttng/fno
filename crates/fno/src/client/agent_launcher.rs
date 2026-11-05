@@ -611,17 +611,6 @@ fn commit_verbatim_pill(l: &mut Launcher) {
     add_pill(l, word, true);
 }
 
-/// Remove the typed `--word` from the message (the picker-pick commit
-/// path); unlike the verbatim Space commit it never commits on its own.
-fn commit_typed_flag_word(l: &mut Launcher) {
-    let has_flag_word = trailing_word(&l.draft.message)
-        .map(|w| w.starts_with("--"))
-        .unwrap_or(false);
-    if has_flag_word {
-        cut_trailing_word(l);
-    }
-}
-
 /// Drop the message's trailing `--word` and park the cursor there.
 fn cut_trailing_word(l: &mut Launcher) {
     let Some(word) = trailing_word(&l.draft.message) else {
@@ -1792,14 +1781,11 @@ pub(crate) async fn launcher_keys(
                         // A disabled or header row: the picker stays open.
                     }
                     LKey::Char(' ') if picker.field == Focus::Plus => {
-                        // Space commits the typed text as a verbatim flag:
-                        // the filter is the word after the dashes the
-                        // message still holds. An empty filter is no flag:
-                        // the picker closes and the dashes stay typed.
+                        // Space commits the filter as a canonical flag.
+                        // An empty filter closes the picker without a flag.
                         let filter = std::mem::take(&mut picker.filter);
                         l.picker = None;
                         if !filter.is_empty() {
-                            cut_trailing_word(l);
                             add_pill(l, format!("--{filter}"), true);
                         }
                     }
@@ -2068,7 +2054,7 @@ pub(crate) async fn launcher_keys(
                 } else {
                     None
                 };
-                let dash_anchor = if c == '-' {
+                let flag_anchor = if matches!(c, '-' | '—' | '+') {
                     view.launcher.as_ref().and_then(|l| pills_anchor(l, view))
                 } else {
                     None
@@ -2116,17 +2102,26 @@ pub(crate) async fn launcher_keys(
                                 Focus::Message,
                             );
                         }
-                        Focus::Message if c == '-' && !l.draft.pill_value_capture => {
-                            // The second dash of a word-start `--` opens the
-                            // flags picker; the typed text stays in the
-                            // message until a pick or a Space commits it.
-                            let opens = trailing_word(&l.draft.message) == Some("-");
+                        Focus::Message
+                            if matches!(c, '-' | '—' | '+') && !l.draft.pill_value_capture =>
+                        {
+                            let before: String =
+                                l.draft.message.chars().take(l.draft.cursor_chars).collect();
+                            let opens = if c == '-' {
+                                before.ends_with('-')
+                                    && before.split_whitespace().last() == Some("-")
+                            } else {
+                                before.chars().last().is_none_or(char::is_whitespace)
+                            };
                             if opens {
+                                if c == '-' {
+                                    backspace(&mut l.draft);
+                                }
                                 open_picker_at(
                                     l,
                                     &view.launcher_catalog,
                                     &view.backlog,
-                                    dash_anchor,
+                                    flag_anchor,
                                     Focus::Plus,
                                 );
                             } else {
@@ -3637,7 +3632,7 @@ pub(crate) fn show_steps(l: &mut Launcher, title: String, lines: Vec<String>, an
 pub(crate) fn open_help(l: &mut Launcher, anchor: Anchor) {
     let lines = [
         "enter: launch \u{b7} ctrl+j: launch from any chip \u{b7} shift+enter: force launch",
-        "--: flag picker \u{b7} type --flag value + space: free-hand pill",
+        "+flag or —flag: flag picker \u{b7} --flag also works",
         "--force: force past admission and the spawn gate (journaled)",
         "@: pick a backlog node into the prompt",
         "!: run a shell line in a pane",
@@ -3854,10 +3849,7 @@ pub(crate) fn apply_picker_action(
             }
         }
         PickerAction::AddPill { flag, picks_value } => {
-            // A flag pick removes the typed `--word` from the message and
-            // adds the pill; a value-taking flag opens value capture. The
-            // flag spelling loses any ` <value>` suffix the picker showed.
-            commit_typed_flag_word(l);
+            // A value-taking flag opens value capture after the pick.
             add_pill(l, flag, picks_value);
         }
         // Drilled back into by commit_picker_action; a direct commit here
@@ -4547,7 +4539,7 @@ impl Launcher {
                 let placeholder = if self.shell {
                     format!("shell command in {}", self.draft.cwd())
                 } else {
-                    "prompt \u{b7} flags \u{b7} @ node \u{b7} ! shell \u{b7} ? help".to_string()
+                    "prompt \u{b7} +flag \u{b7} @ node \u{b7} ! shell \u{b7} ? help".to_string()
                 };
                 buf.set_string(
                     sl.message.x + PROMPT_GUTTER as u16,
