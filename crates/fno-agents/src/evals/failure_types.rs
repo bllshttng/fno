@@ -56,19 +56,21 @@ impl Catalog {
 }
 
 #[derive(Deserialize)]
-struct Fixture {
+pub(crate) struct Fixture {
     /// Repo files the grader needs, copied into each case.
     #[serde(default)]
     copy: Vec<String>,
-    cases: Vec<Case>,
+    pub(crate) cases: Vec<Case>,
 }
 
 #[derive(Deserialize)]
-struct Case {
-    id: String,
+pub(crate) struct Case {
+    pub(crate) id: String,
     label: Label,
+    /// The files one case writes; a rubric spend or agreement run reads the
+    /// work product out of them.
     #[serde(default)]
-    files: BTreeMap<String, String>,
+    pub(crate) files: BTreeMap<String, String>,
     /// Stub binaries by name, shell script bodies. They lead the grader's
     /// PATH, so a CLI golden is proved with no real binary and no network.
     #[serde(default)]
@@ -93,11 +95,100 @@ fn metrics_dir(bank_dir: &Path) -> std::path::PathBuf {
     bank_dir.join("../fixtures/metrics")
 }
 
+/// A golden's parsed metrics fixture.
+pub(crate) fn load_fixture(golden_id: &str, bank_dir: &Path) -> Result<Fixture, String> {
+    let path = metrics_dir(bank_dir).join(format!("{golden_id}.yaml"));
+    let text = std::fs::read_to_string(&path)
+        .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+    serde_yaml_ng::from_str(&text).map_err(|e| format!("malformed {}: {e}", path.display()))
+}
+
+/// The `--spend` run: real judges grade every fixture case of a rubric
+/// golden and the verdicts land whole in `<metrics>/<id>.verdicts.jsonl`.
+/// A diff-sourced work product refuses: fixture cases hold file contents.
+pub(crate) fn record_rubric_fixture(
+    golden: &TaskSpec,
+    bank_dir: &Path,
+    judge: &dyn crate::evals::rubric::Judge,
+) -> Result<usize, String> {
+    let fixture = load_fixture(&golden.id, bank_dir)?;
+    let check = golden
+        .grade
+        .iter()
+        .find(|c| c.rubric.is_some())
+        .ok_or_else(|| format!("{}: no rubric check on the golden", golden.id))?;
+    let spec = check
+        .rubric
+        .as_ref()
+        .ok_or_else(|| format!("{}: rubric spec missing", golden.id))?;
+    let Some(rel) = &spec.path else {
+        return Err(format!(
+            "{}: a diff-sourced rubric check has no spend form; use a path work product",
+            golden.id
+        ));
+    };
+    let prompt = golden
+        .prompt
+        .as_deref()
+        .ok_or_else(|| format!("{}: no task prompt", golden.id))?;
+    let mut rows: Vec<String> = Vec::new();
+    for case in &fixture.cases {
+        let work_product = case.files.get(rel).ok_or_else(|| {
+            format!(
+                "{}: fixture case '{}' does not write the work product {rel}",
+                golden.id, case.id
+            )
+        })?;
+        for criterion in &spec.criteria {
+            let ask = crate::evals::rubric::RubricAsk {
+                task_prompt: prompt,
+                criterion,
+                work_product,
+            };
+            for v in judge.panel(&ask) {
+                let verdict = match &v.fault {
+                    Some(why) => format!("fault: {why}"),
+                    None => {
+                        if v.passed {
+                            "pass".to_string()
+                        } else {
+                            "fail".to_string()
+                        }
+                    }
+                };
+                // serde_json escapes the verdict text; a fault carrying
+                // quotes or backslashes must not corrupt the record line.
+                rows.push(
+                    serde_json::json!({
+                        "case": case.id,
+                        "criterion": criterion.id,
+                        "lane": v.lane,
+                        "verdict": verdict,
+                        "work_product_sha": sha256_text(work_product),
+                        "prompt_sha": crate::evals::rubric::prompt_sha(&ask),
+                    })
+                    .to_string(),
+                );
+            }
+        }
+    }
+    let out = metrics_dir(bank_dir).join(format!("{}.verdicts.jsonl", golden.id));
+    std::fs::write(&out, format!("{}\n", rows.join("\n")))
+        .map_err(|e| format!("cannot write {}: {e}", out.display()))?;
+    Ok(rows.len())
+}
+
+/// The hex sha256 of one text, the hash a recorded verdict row carries.
+fn sha256_text(text: &str) -> String {
+    crate::evals::rubric::text_sha256(text)
+}
+
 fn run_case(
     golden: &TaskSpec,
     fixture: &Fixture,
     case: &Case,
     repo_root: &Path,
+    metrics: &Path,
 ) -> Result<bool, String> {
     let dir = tempfile::tempdir().map_err(|e| e.to_string())?;
     let write = |rel: &str, bytes: &[u8]| -> Result<(), String> {
@@ -134,12 +225,15 @@ fn run_case(
             return Err(format!("could not write stub {name}: {wrote}"));
         }
     }
+    let judge = super::rubric::RecordedJudge::load(metrics, &golden.id, &case.id);
     let outcome = super::grading::grade_checks(
         &golden.grade,
         dir.path(),
         CASE_TIMEOUT_S,
         None,
         Some(bin.path()),
+        golden.prompt.as_deref(),
+        Some(&judge),
     );
     Ok(outcome.passed)
 }
@@ -170,7 +264,7 @@ pub fn golden_failures(golden: &TaskSpec, bank_dir: &Path) -> Vec<String> {
     let repo_root = bank_dir.join("../..");
     for case in &fixture.cases {
         let want = case.label == Label::Good;
-        match run_case(golden, &fixture, case, &repo_root) {
+        match run_case(golden, &fixture, case, &repo_root, &metrics_dir(bank_dir)) {
             Ok(got) if got == want => {}
             Ok(true) => failures.push(format!("{id}: grader passed bad case '{}'", case.id)),
             Ok(false) => failures.push(format!("{id}: grader failed good case '{}'", case.id)),
@@ -311,6 +405,10 @@ mod tests {
         let broken: Vec<String> = proofs
             .iter()
             .flat_map(|(id, p)| p.failures.iter().map(move |f| format!("{id}: {f}")))
+            // The seed rubric golden reads unproved until its verdict record
+            // lands (report --check-metrics --spend); that is the fence
+            // working, not a regression.
+            .filter(|f| !f.contains("golden-rubric-no-new-python"))
             .collect();
         assert!(broken.is_empty(), "{broken:#?}");
         for task in &tasks {

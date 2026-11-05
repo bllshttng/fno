@@ -14,6 +14,7 @@ pub mod grading;
 pub mod graduate;
 pub mod history;
 pub mod research_grade;
+pub mod rubric;
 pub mod runner;
 pub mod tests_grade;
 pub mod tests_mint;

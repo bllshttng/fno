@@ -11,12 +11,14 @@
 //! result, or `unmeasured`.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
+use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::evals::bank::TaskSpec;
 use crate::evals::failure_types::{prove, Catalog, Proof};
+use crate::evals::rubric::Judge as _;
 use crate::evals_trend::{cohort_score, is_scored, lane_excludes, read_rows, Row};
 
 const EXIT_REGRESSED: i32 = 1;
@@ -540,8 +542,11 @@ pub(crate) fn run_failure_report(
     0
 }
 
-/// `report --check-metrics`: exit 0 when every type is proved, else 1.
-pub(crate) fn run_check_metrics(bank: &Path, json_out: bool) -> i32 {
+/// `report --check-metrics [--spend]`: exit 0 when every type is proved,
+/// else 1. `--spend` runs the real judges over the rubric goldens' fixture
+/// cases first and records the verdicts the proof reads; without it the
+/// proof reads recorded verdicts and never spends.
+pub(crate) fn run_check_metrics(bank: &Path, json_out: bool, spend: bool) -> i32 {
     let (tasks, catalog) = match load_catalog(bank) {
         Ok(loaded) => loaded,
         Err(e) => {
@@ -549,6 +554,15 @@ pub(crate) fn run_check_metrics(bank: &Path, json_out: bool) -> i32 {
             return EXIT_USAGE;
         }
     };
+    if spend {
+        match spend_rubric_verdicts(&tasks, bank) {
+            Ok(count) => println!("recorded {count} verdicts"),
+            Err(e) => {
+                eprintln!("evals check-metrics --spend: {e}");
+                return EXIT_USAGE;
+            }
+        }
+    }
     let proofs = prove(&catalog, &tasks, bank);
     if json_out {
         let view: serde_json::Map<String, Value> = proofs
@@ -578,6 +592,304 @@ pub(crate) fn run_check_metrics(bank: &Path, json_out: bool) -> i32 {
     } else {
         EXIT_REGRESSED
     }
+}
+
+/// The `--spend` leg: real judges over every rubric golden's fixture cases,
+/// verdicts recorded whole per golden. The refusal names the config key.
+fn spend_rubric_verdicts(tasks: &[TaskSpec], bank: &Path) -> Result<usize, String> {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let cache_root = crate::evals::history_path()
+        .parent()
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let judge = match crate::evals::rubric::SpawnJudge::from_config(&cwd, &cache_root) {
+        Ok(Some(judge)) => judge,
+        Ok(None) => {
+            return Err("no judge configured: set config.evals.rubric.judges to two lane names from different vendors".into())
+        }
+        Err(e) => return Err(e),
+    };
+    let rubric_goldens: Vec<&TaskSpec> = tasks
+        .iter()
+        .filter(|t| t.grade.iter().any(|c| c.rubric.is_some()))
+        .collect();
+    if rubric_goldens.is_empty() {
+        return Err("no rubric golden in the bank".into());
+    }
+    let mut total = 0usize;
+    for golden in &rubric_goldens {
+        match crate::evals::failure_types::record_rubric_fixture(golden, bank, &judge) {
+            Ok(n) => {
+                println!("{}: recorded {} verdicts", golden.id, n);
+                total += n;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(total)
+}
+
+/// One user label: which golden's criterion over which case, and the
+/// verdict a human gave.
+#[derive(Deserialize)]
+struct LabelRow {
+    golden: String,
+    criterion: String,
+    case: String,
+    label: String,
+}
+
+/// The user-labelled pairs the agreement read needs:
+/// `[{golden, criterion, case, label: pass|fail}, ...]`.
+fn parse_labels(path: &str) -> Result<Vec<LabelRow>, String> {
+    let text = std::fs::read_to_string(path).map_err(|e| format!("cannot read {path}: {e}"))?;
+    let rows: Vec<LabelRow> =
+        serde_yaml_ng::from_str(&text).map_err(|e| format!("malformed {path}: {e}"))?;
+    for (i, row) in rows.iter().enumerate() {
+        let bad = |field: &str| {
+            format!(
+                "{path}[{i}]: {} requires a non-empty '{}'",
+                row.golden, field
+            )
+        };
+        if row.golden.is_empty() || row.criterion.is_empty() || row.case.is_empty() {
+            return Err(bad("golden/criterion/case"));
+        }
+        if row.label != "pass" && row.label != "fail" {
+            return Err(format!(
+                "{path}[{i}]: label must be 'pass' or 'fail', got '{}'",
+                row.label
+            ));
+        }
+    }
+    Ok(rows)
+}
+
+/// `report --judge-agreement <labels.yaml>`: the judges answer every
+/// labelled pair, the tally prints per judge lane (n, raw agreement,
+/// Cohen's kappa), and the exit reads the bar: proved only at n >= 100,
+/// agreement >= 0.90 and kappa >= 0.80, every lane.
+pub(crate) fn run_judge_agreement(labels_path: &str, bank: &Path, json_out: bool) -> i32 {
+    let labels = match parse_labels(labels_path) {
+        Ok(rows) => rows,
+        Err(e) => {
+            eprintln!("evals judge-agreement: {e}");
+            return EXIT_USAGE;
+        }
+    };
+    if labels.is_empty() {
+        eprintln!("evals judge-agreement: {labels_path} names no labelled pair");
+        return EXIT_USAGE;
+    }
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let cache_root = crate::evals::history_path()
+        .parent()
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let judge = match crate::evals::rubric::SpawnJudge::from_config(&cwd, &cache_root) {
+        Ok(Some(judge)) => judge,
+        Ok(None) => {
+            eprintln!("no judge configured: set config.evals.rubric.judges");
+            return EXIT_USAGE;
+        }
+        Err(e) => {
+            eprintln!("evals judge-agreement: {e}");
+            return EXIT_USAGE;
+        }
+    };
+    let tasks = match crate::evals::bank::discover_bank(bank) {
+        Ok(tasks) => tasks,
+        Err(e) => {
+            eprintln!("evals judge-agreement: {e}");
+            return EXIT_USAGE;
+        }
+    };
+    let by_id: std::collections::BTreeMap<&str, &TaskSpec> =
+        tasks.iter().map(|t| (t.id.as_str(), t)).collect();
+    let mut scored: Vec<(String, bool, bool)> = Vec::new();
+    let mut fault_lines: Vec<String> = Vec::new();
+    for row in &labels {
+        let Some(task) = by_id.get(row.golden.as_str()) else {
+            eprintln!("judge-agreement: unknown golden '{}'", row.golden);
+            return EXIT_USAGE;
+        };
+        let Some(check) = task.grade.iter().find(|c| c.rubric.is_some()) else {
+            eprintln!("judge-agreement: {} carries no rubric check", task.id);
+            return EXIT_USAGE;
+        };
+        let spec = check.rubric.as_ref().unwrap();
+        let Some(rel) = &spec.path else {
+            eprintln!(
+                "{} is diff-sourced; the agreement run needs a path work product",
+                task.id
+            );
+            return EXIT_USAGE;
+        };
+        let fixture = crate::evals::failure_types::load_fixture(&row.golden, bank);
+        let Ok(fixture) = fixture else {
+            eprintln!(
+                "evals judge-agreement: cannot read the {} fixture",
+                row.golden
+            );
+            return EXIT_USAGE;
+        };
+        let case = fixture.cases.iter().find(|c| c.id == row.case);
+        let Some(case) = case else {
+            eprintln!(
+                "judge-agreement: {} names unknown case '{}'",
+                row.golden, row.case
+            );
+            return EXIT_USAGE;
+        };
+        let wp = case.files.get(rel);
+        let Some(wp) = wp else {
+            eprintln!(
+                "judge-agreement: case '{}' does not write {}",
+                row.case, rel
+            );
+            return EXIT_USAGE;
+        };
+        let Some(prompt) = task.prompt.as_deref() else {
+            eprintln!("judge-agreement: {} has no task prompt", task.id);
+            return EXIT_USAGE;
+        };
+        let Some(criterion) = spec.criteria.iter().find(|c| c.id == row.criterion) else {
+            eprintln!(
+                "judge-agreement: {} names unknown criterion '{}'",
+                task.id, row.criterion
+            );
+            return EXIT_USAGE;
+        };
+        let ask = crate::evals::rubric::RubricAsk {
+            task_prompt: prompt,
+            criterion,
+            work_product: wp,
+        };
+        for v in judge.panel(&ask) {
+            match &v.fault {
+                Some(why) => fault_lines.push(format!(
+                    "{} / {} / {} judge '{}': {}",
+                    row.golden, row.case, row.criterion, v.lane, why
+                )),
+                None => scored.push((v.lane.clone(), row.label == "pass", v.passed)),
+            }
+        }
+    }
+    let tallies = crate::evals::rubric::tally_lanes(&scored);
+    if json_out {
+        let view = json!({
+            "lanes": tallies.iter().map(|t| json!({
+                "lane": t.lane,
+                "n": t.n,
+                "agreement": t.agreement(),
+                "kappa": t.kappa,
+            })).collect::<Vec<_>>(),
+            "faults": fault_lines,
+            "proved": crate::evals::rubric::agreement_proved(&tallies),
+        });
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&view).unwrap_or_default()
+        );
+    }
+    if !json_out {
+        for t in &tallies {
+            let kappa = t
+                .kappa
+                .map(|k| format!("{k:.3}"))
+                .unwrap_or_else(|| "none".into());
+            println!(
+                "{}: n={} agreement={:.3} kappa={kappa}",
+                t.lane,
+                t.n,
+                t.agreement().unwrap_or(0.0)
+            );
+        }
+        if !fault_lines.is_empty() {
+            println!("judge faults: {}", fault_lines.len());
+            for line in &fault_lines {
+                println!("  {line}");
+            }
+        }
+    }
+    if crate::evals::rubric::agreement_proved(&tallies) {
+        return 0;
+    }
+    let n: u32 = tallies.iter().map(|t| t.n).sum();
+    if n < crate::evals::rubric::MIN_LABELS as u32 {
+        println!(
+            "unproved: {n} of {} labels",
+            crate::evals::rubric::MIN_LABELS
+        );
+        return EXIT_REGRESSED;
+    }
+    println!(
+        "unproved: agreement below {:.2} or kappa below {:.2} on a lane",
+        crate::evals::rubric::PASS_AGREEMENT,
+        crate::evals::rubric::PASS_KAPPA
+    );
+    EXIT_REGRESSED
+}
+
+/// `report --draft-labels <labels.yaml>`: the (case, criterion) pairs the
+/// labels file has not labelled yet, verdicts hidden (no judge runs).
+pub(crate) fn run_draft_labels(labels_path: &str, bank: &Path) -> i32 {
+    let labels = match parse_labels(labels_path) {
+        Ok(rows) => rows,
+        Err(e) => {
+            eprintln!("evals draft-labels: {e}");
+            return EXIT_USAGE;
+        }
+    };
+    let tasks = match crate::evals::bank::discover_bank(bank) {
+        Ok(tasks) => tasks,
+        Err(e) => {
+            eprintln!("evals draft-labels: {e}");
+            return EXIT_USAGE;
+        }
+    };
+    let rubric_goldens: Vec<&TaskSpec> = tasks
+        .iter()
+        .filter(|t| t.grade.iter().any(|c| c.rubric.is_some()))
+        .collect();
+    if rubric_goldens.is_empty() {
+        eprintln!("no rubric golden in the bank");
+        return EXIT_USAGE;
+    }
+    for golden in &rubric_goldens {
+        let fixture = crate::evals::failure_types::load_fixture(&golden.id, bank);
+        let Ok(fixture) = fixture else {
+            eprintln!("draft-labels: cannot read the {} fixture", golden.id);
+            continue;
+        };
+        let Some(check) = golden.grade.iter().find(|c| c.rubric.is_some()) else {
+            continue;
+        };
+        let Some(spec) = check.rubric.as_ref() else {
+            continue;
+        };
+        let labelled: std::collections::BTreeSet<(String, String)> = labels
+            .iter()
+            .filter(|r| r.golden == golden.id)
+            .map(|r| (r.case.clone(), r.criterion.clone()))
+            .collect();
+        let mut count = 0usize;
+        let mut lines: Vec<String> = Vec::new();
+        for case in &fixture.cases {
+            for criterion in &spec.criteria {
+                let pair = (case.id.clone(), criterion.id.clone());
+                if !labelled.contains(&pair) {
+                    count += 1;
+                    lines.push(format!("  {} x {}", case.id, criterion.id));
+                }
+            }
+        }
+        println!("{}: {} unlabelled pairs", golden.id, count);
+        for line in &lines {
+            println!("{line}");
+        }
+    }
+    0
 }
 
 #[cfg(test)]
