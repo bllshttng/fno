@@ -69,6 +69,7 @@ pub(crate) struct Case {
     label: Label,
     /// The files one case writes; a rubric spend or agreement run reads the
     /// work product out of them.
+    #[serde(default)]
     pub(crate) files: BTreeMap<String, String>,
     /// Stub binaries by name, shell script bodies. They lead the grader's
     /// PATH, so a CLI golden is proved with no real binary and no network.
