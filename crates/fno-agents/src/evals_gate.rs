@@ -564,8 +564,8 @@ fn fetch(p: &Paths, d: &Deps, refspec: &str) -> bool {
 /// One owner: the swap holds an exclusive flock on `ref-<slot>.lock`, so two
 /// ticks cannot interleave a remove with an add, and a tick that finds the
 /// lock held skips the slot for its pass. An add a killed tick left mid-write
-/// locks the slot "initializing" in git's eyes, so the remove takes a second
-/// force and overrides that lock instead of failing here on every later tick.
+/// locks the slot "initializing", so the remove takes a second force: it
+/// overrides that lock instead of failing here on every later tick.
 fn ref_checkout(p: &Paths, d: &Deps, slot: &str, sha: &str) -> Option<PathBuf> {
     let dir = p.state_dir.join(format!("ref-{slot}"));
     let bank = dir.join("evals").join("bank");
@@ -1109,7 +1109,7 @@ fn wrote_rows(p: &Paths, cohort: &str) -> bool {
 
 /// True when the baseline cohort has grade rows for every selected task. The
 /// compare folds rows to the run's tasks first, so a baseline that predates a
-/// golden the head graded answers no rows, and the compare errs on that side.
+/// golden the head graded errs the compare on that side.
 fn baseline_covers(rows: &[Value], baseline: &str, tasks: &[String]) -> bool {
     tasks.iter().all(|task| {
         rows.iter().any(|r| {
@@ -1172,10 +1172,9 @@ fn settle_head_run(p: &Paths, d: &Deps, state: &mut State, slug: &str, prs: &[Pr
                 Some(&run.tasks),
             ) {
                 Ok(view) => verdict(&view, &run.sha),
-                // A baseline that predates a golden the head graded answers
-                // the compare with no rows. That is a machine gap, not a head
-                // defect: pending, and the head re-runs once a baseline
-                // covers the selection.
+                // A baseline that predates a golden the head graded is a
+                // machine gap, not a head defect: pending, and the head
+                // re-runs once a baseline covers the selection.
                 Err(_) if !baseline_covers(&history_rows(p.history), baseline, &run.tasks) => (
                     "pending",
                     "waiting for a gate-main baseline that covers the tasks at this head"
@@ -1258,10 +1257,8 @@ fn launch_head(
     let builds = tasks.iter().any(|t| !t.covers.is_empty())
         && files.iter().any(|f| f.starts_with("crates/"));
     let tasks: Vec<String> = tasks.into_iter().map(|t| t.id).collect();
-    // A baseline that predates a golden the head graded answers the compare
-    // with no rows. Launching only spends the run to read pending at settle:
-    // wait for a main run that covers the selection, and the queued
-    // disposition carries the PR's pending status until then.
+    // Launching only spends the run to read pending at settle; wait for a
+    // main run that covers the selection instead.
     if !baseline_covers(&rows, baseline, &tasks) {
         return format!(
             "head {} waits for a baseline covering its tasks",
@@ -1294,9 +1291,8 @@ fn launch_head(
     );
     if builds {
         let Some(root) = arg_bank.as_deref().and_then(checkout_of) else {
-            // The deployed binary must never grade this head, and a failed
-            // slot swap heals by the next tick: skip instead of spending a
-            // terminal red on plumbing, and the queued disposition retries.
+            // A failed slot swap heals by the next tick: skip instead of
+            // spending a terminal red on plumbing.
             return format!(
                 "head {} has no checkout to build; the next tick retries",
                 short(&pr.sha)
@@ -1686,31 +1682,6 @@ mod tests {
                 s.worker.main_tried = Some(tried);
             });
         }
-        /// Strikes one cohort's rows from the history: the shape a reaped or
-        /// rotated history file leaves the baseline in.
-        fn drop_cohort(&self, cohort: &str) {
-            let kept: Vec<String> = std::fs::read_to_string(self.history())
-                .unwrap()
-                .lines()
-                .filter(|l| !l.contains(&format!("\"experiment_id\":\"{cohort}\"")))
-                .map(String::from)
-                .collect();
-            std::fs::write(self.history(), kept.join("\n") + "\n").unwrap();
-        }
-
-        /// Seeds a baseline whose rows answer none of the head's tasks.
-        fn with_baseline_off_selection(&self) {
-            self.rows("base", "g_other", [true, true, true]);
-            let tried = format!(
-                "gate-main-{}-{}",
-                Utc::now().format("%Y-%m-%d"),
-                route_hash(self.dir.path())
-            );
-            self.state(|s| {
-                s.worker.baseline = Some("base".into());
-                s.worker.main_tried = Some(tried);
-            });
-        }
     }
 
     #[test]
@@ -1720,9 +1691,6 @@ mod tests {
             ("cli/x/a.rs\n", Some("--task c1 "), 1),
             ("skills/s\ncli/x/a.rs\n", Some("--task c1,g1 "), 1),
             ("cli/y/a.rs\n", None, 0),
-            // A baseline that predates the covering task holds the launch:
-            // no run, and only the queue's pending posts.
-            ("crates/x/a.rs\n", None, 1),
         ];
         for (files, task_arg, posted) in cases {
             let w = World::new(files);
@@ -2136,7 +2104,13 @@ mod tests {
         assert_eq!(w.spawns.borrow().len(), 1, "head launched");
         // The baseline's rows vanish mid-run (a reaped history answers this),
         // so the compare folds no rows on the baseline side.
-        w.drop_cohort("base");
+        let kept: Vec<String> = std::fs::read_to_string(w.history())
+            .unwrap()
+            .lines()
+            .filter(|l| !l.contains("\"experiment_id\":\"base\""))
+            .map(String::from)
+            .collect();
+        std::fs::write(w.history(), kept.join("\n") + "\n").unwrap();
         w.tick(false, Utc::now());
         let posts = w.posts.borrow();
         let post = posts.last().cloned().unwrap();
@@ -2186,7 +2160,16 @@ mod tests {
     #[test]
     fn a_head_its_baseline_cannot_cover_waits_instead_of_spending_a_run() {
         let w = World::new("skills/x/SKILL.md\n");
-        w.with_baseline_off_selection();
+        w.rows("base", "g_other", [true, true, true]);
+        let tried = format!(
+            "gate-main-{}-{}",
+            Utc::now().format("%Y-%m-%d"),
+            route_hash(w.dir.path())
+        );
+        w.state(|s| {
+            s.worker.baseline = Some("base".into());
+            s.worker.main_tried = Some(tried);
+        });
         w.tick(true, Utc::now());
         let posts = w.posts.borrow();
         assert_eq!(posts.len(), 1, "only the queue's pending posts");
