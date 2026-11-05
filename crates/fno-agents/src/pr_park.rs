@@ -7,8 +7,13 @@
 //! with 17 finished delivery records cluttering the list above them.
 //! This command is the ONE reader that can change a park record: `list` buckets
 //! every parked row (open / finished / foreign), `unpark` clears one or all
-//! open rows, `sweep` un-parks an open row whose PR head moved since it was
-//! parked or whose park passed 24 hours, and marks finished rows handled.
+//! open rows, and `sweep` is the automatic lifter. The sweep re-checks each
+//! open park by its cause every run: a `checks-red` park lifts when the
+//! checks read green again, a `worktree_head_mismatch` or `worktree_dirty`
+//! park lifts when its branch worktree reads clear at the current PR head,
+//! a head that moved lifts any park, and a park whose own `parked_at` stamp
+//! passed 24 hours lifts regardless. Cause and head lifts name themselves in
+//! the `cause` field of the `pr_watch_unparked` event.
 //!
 //! The store stays the Python watcher's files, written with the same atomic
 //! tmp+rename; there is no second schema. Un-parks emit `pr_watch_unparked`
@@ -32,6 +37,13 @@ const HANDLED: &str = "handled";
 /// Who the sweep names in `pr_watch_unparked`.
 const BY_SWEEP: &str = "sweep";
 const BY_MANUAL: &str = "manual";
+
+/// Why the sweep lifted a park: the optional `cause` field on
+/// `pr_watch_unparked`, one word per sweep arm.
+const CAUSE_HEAD_MOVED: &str = "head-moved";
+const CAUSE_MAX_AGE: &str = "max-age";
+const CAUSE_CHECKS_CLEARED: &str = "checks-cleared";
+const CAUSE_WORKTREE_CLEARED: &str = "worktree-cleared";
 
 /// The files this command reads and writes. Paths are injectable so the Python
 /// caller can pass its config-resolved ones; the daemon uses [`Paths::from_home`].
@@ -114,8 +126,14 @@ pub(crate) struct Ctx {
     pub slug: String,
     /// The backlog graph rows, for PR-to-node resolution.
     pub entries: Vec<Value>,
-    /// One PR facts probe: `(head_sha, pr_state)` or the probe error.
-    pub head: Box<dyn Fn(u64) -> Result<(String, String), String>>,
+    /// One PR facts probe: `(head_sha, head_ref, pr_state)` or the error.
+    pub head: Box<dyn Fn(u64) -> Result<(String, String, String), String>>,
+    /// Does PR `pr` read red right now? `Ok(false)` is the answer a
+    /// checks-red park lifts on.
+    pub checks_red: Box<dyn Fn(u64) -> Result<bool, String>>,
+    /// Is the branch worktree clean at `pr_head` with nothing in flight?
+    /// `Ok(true)` is the answer a worktree park lifts on.
+    pub worktree_clear: Box<dyn Fn(&str, &str) -> Result<bool, String>>,
 }
 
 impl Ctx {
@@ -132,10 +150,33 @@ impl Ctx {
             paths,
             slug,
             entries,
-            head: Box::new(move |pr| {
-                let facts = crate::authorized_merge::RealProbes.pr_facts(&probe_cwd, Some(pr))?;
-                Ok((facts.head_sha, facts.state))
-            }),
+            head: {
+                let probe_cwd = probe_cwd.clone();
+                Box::new(move |pr| {
+                    let facts =
+                        crate::authorized_merge::RealProbes.pr_facts(&probe_cwd, Some(pr))?;
+                    Ok((facts.head_sha, facts.head_ref, facts.state))
+                })
+            },
+            checks_red: {
+                let probe_cwd = probe_cwd.clone();
+                Box::new(move |pr| {
+                    let checks =
+                        Probes::checks_read(&crate::authorized_merge::RealProbes, &probe_cwd, pr);
+                    Ok(checks.verdict == "red")
+                })
+            },
+            worktree_clear: {
+                let probe_cwd = probe_cwd.clone();
+                Box::new(move |branch, pr_head| {
+                    let reading =
+                        crate::pr_status::reviews::review_activity(&probe_cwd, branch, pr_head);
+                    Ok(reading
+                        .get("blocker")
+                        .and_then(Value::as_str)
+                        .map_or(true, |b| b.is_empty()))
+                })
+            },
         }
     }
 }
@@ -179,7 +220,8 @@ pub(crate) struct Row {
     pub node: String,
     pub node_status: String,
     pub pr_state: String,
-    /// Hours since `last_polled_at`; `-1` when the stamp is absent/unreadable.
+    /// Hours since the park stamp (`parked_at`, else `last_polled_at`); `-1`
+    /// when neither stamp is readable.
     pub age_hours: i64,
     pub parked_head: String,
     pub bucket: &'static str,
@@ -365,7 +407,14 @@ pub(crate) fn list_rows(ctx: &Ctx) -> Vec<Row> {
         .map(|stored| {
             let pr_state = entry_str(&stored.entry, "last_seen_state");
             let (node, node_status) = node_for(&ctx.entries, &stored.slug, stored.pr);
-            let age_hours = parse_rfc3339_unix(&entry_str(&stored.entry, "last_polled_at"))
+            // Park age, on the same stamp the sweep ages on.
+            let stamp = entry_str(&stored.entry, "parked_at");
+            let stamp = if stamp.is_empty() {
+                entry_str(&stored.entry, "last_polled_at")
+            } else {
+                stamp
+            };
+            let age_hours = parse_rfc3339_unix(&stamp)
                 .map(|t| (now_secs() as i64 - t as i64) / 3600)
                 .unwrap_or(-1);
             let b = bucket(&stored, &ctx.slug, &pr_state);
@@ -402,13 +451,16 @@ fn row_json(row: &Row) -> Value {
     })
 }
 
-/// Clear `parked`, reset `retries`, and emit one `pr_watch_unparked` row per
-/// changed entry, writing each touched file through the same tmp+rename the
-/// Python store uses. `pred` selects whole entries by key.
+/// Clear `parked`, reset `retries`, clear `parked_at`, and emit one
+/// `pr_watch_unparked` row per changed entry, writing each touched file
+/// through the same tmp+rename the Python store uses. `pred` selects whole
+/// entries by key; `cause` names the sweep arm that lifted the row and rides
+/// the event (a manual unpark names none).
 fn unpark_where(
     paths: &Paths,
     pred: &dyn Fn(&str, &Value, bool) -> bool,
     by: &str,
+    cause: Option<&str>,
 ) -> Result<usize, String> {
     let mut changed = 0usize;
     for path in [&paths.state, &paths.delivery] {
@@ -434,6 +486,7 @@ fn unpark_where(
             }
             entry["parked"] = Value::Null;
             entry["retries"] = json!(0);
+            entry["parked_at"] = Value::Null;
             touched += 1;
             if let Some(pr) = split_key(key).map(|(_, n)| n) {
                 unparked_prs.push(pr);
@@ -448,6 +501,9 @@ fn unpark_where(
                 let mut fields = Map::new();
                 fields.insert("pr".to_string(), json!(pr));
                 fields.insert("by".to_string(), json!(by));
+                if let Some(cause) = cause {
+                    fields.insert("cause".to_string(), json!(cause));
+                }
                 let _ = EventEmitter::new(&paths.events, "pr-park")
                     .emit_fields("pr_watch_unparked", fields);
             }
@@ -482,6 +538,7 @@ pub(crate) fn unpark(ctx: &Ctx, key: Option<&str>, all_open: bool) -> Result<usi
             }
         },
         BY_MANUAL,
+        None,
     )
 }
 
@@ -522,29 +579,26 @@ pub(crate) fn sweep(ctx: &Ctx) -> Result<SweepReport, String> {
         if bucket(stored, &ctx.slug, &pr_state) != "open" {
             continue;
         }
-        let age_hours = parse_rfc3339_unix(&entry_str(&stored.entry, "last_polled_at"))
+        // The park's own clock governs the age arm. Rows parked before the
+        // stamp shipped carry none and keep the poll stamp, which is the age
+        // main measured.
+        let stamp = entry_str(&stored.entry, "parked_at");
+        let stamp = if stamp.is_empty() {
+            entry_str(&stored.entry, "last_polled_at")
+        } else {
+            stamp
+        };
+        let age_hours = parse_rfc3339_unix(&stamp)
             .map(|t| now_secs().saturating_sub(t) / 3600)
             .unwrap_or(0);
-        let parked_head = entry_str(&stored.entry, "parked_head");
-        if parked_head.is_empty() {
-            // Baseline round: record the head, then judge from the next
-            // sweep on. Over the age bound the head is moot.
-            if age_hours < PARK_MAX_AGE_HOURS as u64 {
-                if let Ok((head, _)) = (ctx.head)(stored.pr) {
-                    record_parked_head(&ctx.paths, &stored.key, &head)?;
-                }
-            } else {
-                do_unpark(&ctx.paths, &stored.key, BY_SWEEP)?;
-                report.unparked += 1;
-            }
-            continue;
-        }
         if age_hours >= PARK_MAX_AGE_HOURS as u64 {
-            do_unpark(&ctx.paths, &stored.key, BY_SWEEP)?;
+            do_unpark(&ctx.paths, &stored.key, BY_SWEEP, Some(CAUSE_MAX_AGE))?;
             report.unparked += 1;
             continue;
         }
-        let Ok((head, state)) = (ctx.head)(stored.pr) else {
+        let parked_head = entry_str(&stored.entry, "parked_head");
+        // The head and the cause probes read the row's world once per sweep.
+        let Ok((head, branch, state)) = (ctx.head)(stored.pr) else {
             // An unreadable probe measures nothing; stay parked.
             continue;
         };
@@ -554,16 +608,56 @@ pub(crate) fn sweep(ctx: &Ctx) -> Result<SweepReport, String> {
             report.handled += 1;
             continue;
         }
+        // A park whose cause cleared lifts here, before the head arms: the
+        // cause is the thing that parked the row, so its answer decides
+        // first. A probe error lifts nothing, the rule the head probe keeps.
+        match entry_str(&stored.entry, "parked").as_str() {
+            "checks-red" => match (ctx.checks_red)(stored.pr) {
+                Ok(false) => {
+                    do_unpark(
+                        &ctx.paths,
+                        &stored.key,
+                        BY_SWEEP,
+                        Some(CAUSE_CHECKS_CLEARED),
+                    )?;
+                    report.unparked += 1;
+                    continue;
+                }
+                Ok(true) | Err(_) => {}
+            },
+            "worktree_head_mismatch" | "worktree_dirty" => {
+                match (ctx.worktree_clear)(&branch, &head) {
+                    Ok(true) => {
+                        do_unpark(
+                            &ctx.paths,
+                            &stored.key,
+                            BY_SWEEP,
+                            Some(CAUSE_WORKTREE_CLEARED),
+                        )?;
+                        report.unparked += 1;
+                        continue;
+                    }
+                    Ok(false) | Err(_) => {}
+                }
+            }
+            _ => {}
+        }
+        if parked_head.is_empty() {
+            // Baseline round: record the head, then judge from the next
+            // sweep on.
+            record_parked_head(&ctx.paths, &stored.key, &head)?;
+            continue;
+        }
         if head != parked_head {
-            do_unpark(&ctx.paths, &stored.key, BY_SWEEP)?;
+            do_unpark(&ctx.paths, &stored.key, BY_SWEEP, Some(CAUSE_HEAD_MOVED))?;
             report.unparked += 1;
         }
     }
     Ok(report)
 }
 
-fn do_unpark(paths: &Paths, key: &str, by: &str) -> Result<(), String> {
-    unpark_where(paths, &|k, _e, _from_delivery| k == key, by)?;
+fn do_unpark(paths: &Paths, key: &str, by: &str, cause: Option<&str>) -> Result<(), String> {
+    unpark_where(paths, &|k, _e, _from_delivery| k == key, by, cause)?;
     Ok(())
 }
 

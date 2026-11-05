@@ -1132,16 +1132,63 @@ fn worktree_probe(
     }
     let local_head = matched.head.clone().unwrap_or_default();
     if !pr_head.is_empty() && !local_head.is_empty() && local_head != pr_head {
-        return (
-            Some(WORKTREE_HEAD_MISMATCH),
-            format!(
-                "{} is at {local_head} but the PR would merge {pr_head}; the local branch is not what this merge lands",
-                matched.path
-            ),
-            reading,
-        );
+        // A clean worktree whose HEAD is an ancestor of the PR head ships
+        // nothing less than the PR: the merge lands what the branch already
+        // contains. Only a commit the merge would drop stays a mismatch, and
+        // a missing object is a probe failure, never a pass.
+        match local_head_is_ancestor(&matched.path, &local_head, pr_head) {
+            Ok(true) => reading["behind_pr_head"] = json!(true),
+            Ok(false) => {
+                return (
+                    Some(WORKTREE_HEAD_MISMATCH),
+                    format!(
+                        "{} is at {local_head} but the PR would merge {pr_head}; the local branch is not what this merge lands",
+                        matched.path
+                    ),
+                    reading,
+                )
+            }
+            Err(note) => {
+                return (
+                    Some(WORKTREE_PROBE_FAILED),
+                    format!("worktree probe could not read {}: {note}", matched.path),
+                    reading,
+                )
+            }
+        }
     }
     (None, String::new(), reading)
+}
+
+/// `Ok(true)` when `local_head` is an ancestor of `pr_head`: git's own
+/// merge-base answer, exit 0. Exit 1 reads `Ok(false)`; any other exit is
+/// `Err` with git's first stderr line, which the probe reports as a probe
+/// failure.
+fn local_head_is_ancestor(path: &str, local_head: &str, pr_head: &str) -> Result<bool, String> {
+    let out = std::process::Command::new("git")
+        .args([
+            "-C",
+            path,
+            "merge-base",
+            "--is-ancestor",
+            local_head,
+            pr_head,
+        ])
+        .output()
+        .map_err(|e| format!("git merge-base could not run: {e}"))?;
+    match out.status.code() {
+        Some(0) => Ok(true),
+        Some(1) => Ok(false),
+        _ => {
+            let note = String::from_utf8_lossy(&out.stderr);
+            let note = note
+                .trim()
+                .lines()
+                .next()
+                .unwrap_or("git merge-base failed");
+            Err(note.to_string())
+        }
+    }
 }
 
 /// The matched worktree's bound target manifest, through the shared reader:
@@ -1333,8 +1380,7 @@ mod overtaken_ts_tests {
     fn an_unparseable_timestamp_still_overtakes_by_string_compare() {
         // The Python pin this port carried: a malformed line fails quiet
         // and the lexical order decides, so "zzz" is after "aaa" whatever
-        // the parse says - and a lexically earlier garbage ts does not
-        // overtake.
+        // the parse says - and a lexically earlier garbage ts does not overtake.
         assert!(ts_after("zzz", "aaa", None));
         assert!(!ts_after("aaa", "zzz", None));
     }
@@ -1354,5 +1400,115 @@ mod overtaken_ts_tests {
             "2026-10-01T23:00:00Z",
             base
         ));
+    }
+}
+
+/// The worktree probe's ancestor rule, on a real git repo: an ancestor
+/// worktree reads clear with `behind_pr_head`, an ahead worktree still
+/// mismatches, and a missing PR head object is a probe failure.
+#[cfg(test)]
+mod worktree_probe_tests {
+    use super::*;
+    use std::process::Command;
+
+    fn run_git(dir: &Path, args: &[&str]) {
+        let out = Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .expect("git runs");
+        assert!(
+            out.status.success(),
+            "git {:?} failed: {}",
+            args,
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    /// A repo whose `feat` branch carries base -> pr-commit, plus a linked
+    /// worktree on branch `wt-branch`. `at` places the worktree: `ancestor`
+    /// checks it out at the base commit, `ahead` lets it commit one past the
+    /// PR head. Returns the tempdir, the worktree branch, and the PR head sha.
+    fn fixture(at: &str) -> (tempfile::TempDir, String, String) {
+        let temp = tempfile::tempdir().unwrap();
+        let repo = temp.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        run_git(&repo, &["init", "-q", "-b", "main"]);
+        run_git(&repo, &["config", "user.email", "t@t"]);
+        run_git(&repo, &["config", "user.name", "t"]);
+        std::fs::write(repo.join("f.txt"), "one\n").unwrap();
+        run_git(&repo, &["add", "f.txt"]);
+        run_git(&repo, &["commit", "-q", "-m", "base"]);
+        run_git(&repo, &["checkout", "-q", "-b", "feat"]);
+        std::fs::write(repo.join("f.txt"), "two\n").unwrap();
+        run_git(&repo, &["commit", "-q", "-a", "-m", "pr commit"]);
+        let pr_head = {
+            let out = Command::new("git")
+                .args(["rev-parse", "feat"])
+                .current_dir(&repo)
+                .output()
+                .unwrap();
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        };
+        if at == "ahead" {
+            run_git(
+                &repo,
+                &["worktree", "add", "-q", "-b", "wt-branch", "wt", "feat"],
+            );
+            std::fs::write(repo.join("wt/f.txt"), "three\n").unwrap();
+            run_git(&repo, &["-C", "wt", "add", "-A"]);
+            run_git(
+                &repo,
+                &["-C", "wt", "commit", "-q", "-m", "unpushed commit"],
+            );
+        } else {
+            run_git(
+                &repo,
+                &["worktree", "add", "-q", "-b", "wt-branch", "wt", "main"],
+            );
+        }
+        (temp, "wt-branch".to_string(), pr_head)
+    }
+
+    /// The claims read inside review_activity must not see the machine's
+    /// global claims root, so the hold leg answers Free hermetically.
+    fn with_hermetic_claims<T>(f: impl FnOnce() -> T) -> T {
+        let saved = std::env::var_os("FNO_CLAIMS_ROOT");
+        let temp = tempfile::tempdir().unwrap();
+        std::env::set_var("FNO_CLAIMS_ROOT", temp.path());
+        let out = f();
+        match saved {
+            Some(v) => std::env::set_var("FNO_CLAIMS_ROOT", v),
+            None => std::env::remove_var("FNO_CLAIMS_ROOT"),
+        }
+        out
+    }
+
+    #[test]
+    fn a_clean_ancestor_worktree_is_not_a_mismatch() {
+        let (temp, branch, pr_head) = fixture("ancestor");
+        with_hermetic_claims(|| {
+            let reading = review_activity(temp.path().join("repo").as_path(), &branch, &pr_head);
+            assert_eq!(reading["blocker"], "", "{}", reading);
+            assert_eq!(reading["worktree"]["behind_pr_head"], true, "{}", reading);
+        });
+    }
+
+    #[test]
+    fn an_ahead_worktree_still_mismatches_and_a_missing_object_fails_closed() {
+        let (temp, branch, pr_head) = fixture("ahead");
+        with_hermetic_claims(|| {
+            let repo = temp.path().join("repo");
+            // The worktree holds one commit the PR head lacks: still a mismatch.
+            let reading = review_activity(repo.as_path(), &branch, &pr_head);
+            assert_eq!(reading["blocker"], WORKTREE_HEAD_MISMATCH, "{}", reading);
+            // A PR head the local repo has never seen is a probe failure, never a pass.
+            let reading = review_activity(
+                repo.as_path(),
+                &branch,
+                "0123456789abcdef0123456789abcdef01234567",
+            );
+            assert_eq!(reading["blocker"], WORKTREE_PROBE_FAILED, "{}", reading);
+        });
     }
 }

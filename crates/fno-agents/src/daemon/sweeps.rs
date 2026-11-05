@@ -112,11 +112,12 @@ pub fn stale_sweep(
     outcome
 }
 
-/// Park sweep on a 10-minute floor: un-parks open rows whose PR head moved since
-/// the park baseline or whose park passed 24 hours, and marks finished rows
-/// handled. The command inside (`fno-agents pr-park sweep`) is idempotent on an
-/// untouched store, so a re-run costs one head probe per open row and
-/// changes nothing.
+/// Park sweep on a 10-minute floor: un-parks open rows whose park cause cleared
+/// (checks green again, worktree clear again), whose PR head moved since the
+/// park baseline, or whose park passed 24 hours from its parked_at stamp, and
+/// marks finished rows handled. The command inside (`fno-agents pr-park sweep`)
+/// is idempotent on an untouched store, so a re-run costs one head probe per
+/// open row and changes nothing.
 ///
 /// Emits one `park_sweep` event per run INCLUDING a quiet or skipped run: a
 /// tick that stays silent cannot be told from a tick that never ran. The run

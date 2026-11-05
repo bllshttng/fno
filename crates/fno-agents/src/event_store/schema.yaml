@@ -6507,7 +6507,7 @@ event_types:
           description: "Why the PR was parked: 'closed', 'max-age', 'retries-exhausted', or decide()'s park reason."
 
   - name: pr_watch_unparked
-    description: "A parked PR resumes polling: retries reset to 0, either by hand (fno-agents pr-park unpark, the lead row's verb) or by the sweep (head moved or 24h old)."
+    description: "A parked PR resumes polling: retries reset to 0, either by hand (fno-agents pr-park unpark, the lead row's verb) or by the sweep, which lifts a park whose cause cleared (checks green again, worktree clear again), whose PR head moved, or whose park passed 24h from its parked_at stamp."
     sources: [pr-park, daemon]
     data:
       required: [pr, by]
@@ -6518,9 +6518,13 @@ event_types:
         by:
           type: string
           description: "Who un-parked it: 'manual' (fno-agents pr-park unpark) or 'sweep'."
+        cause:
+          type: string
+          enum: [head-moved, max-age, checks-cleared, worktree-cleared]
+          description: "The sweep arm that lifted the park: 'head-moved', 'max-age', 'checks-cleared', or 'worktree-cleared'. Absent on a manual unpark."
 
   - name: park_sweep
-    description: "The daemon's park sweep on its 10-minute floor: fno-agents pr-park sweep ran over the registry's repo roots, un-parking open rows whose PR head moved or whose park passed 24h, and marking finished rows handled. Emitted for every run including a zero-count one, so a quiet run is never mistaken for a sweep that did not run."
+    description: "The daemon's park sweep on its 10-minute floor: fno-agents pr-park sweep ran over the registry's repo roots, un-parking open rows whose park cause cleared (checks green again, worktree clear again), whose PR head moved, or whose park passed 24h from its parked_at stamp, and marking finished rows handled. Emitted for every run including a zero-count one, so a quiet run is never mistaken for a sweep that did not run."
     sources: [daemon]
     data:
       required: [outcome]

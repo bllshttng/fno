@@ -869,6 +869,7 @@ fn one_candidate(
         }
         Verdict::Park(reason) => {
             set_field(&mut entry, "parked", json!(reason));
+            set_field(&mut entry, "parked_at", json!(now));
             if !terminal {
                 store.set(key, entry.clone()).map_err(DoorError::Failed)?;
             } else if reason == "closed" {
@@ -1014,6 +1015,7 @@ fn one_candidate(
                     } else {
                         if retries >= opts.max_retries {
                             set_field(&mut entry, "parked", json!("retries-exhausted"));
+                            set_field(&mut entry, "parked_at", json!(now));
                         }
                         store.set(key, entry.clone()).map_err(DoorError::Failed)?;
                         if retries >= opts.max_retries {
@@ -1083,6 +1085,7 @@ pub(crate) fn run_execute_queue(
     queue: &[QueueRow],
     store_path: &Path,
     max_retries: i64,
+    now_iso: &str,
     counts: &mut QueueCounts,
 ) -> Result<(), DoorError> {
     let holder = format!("pr-watch-merge:{}", std::process::id());
@@ -1116,6 +1119,7 @@ pub(crate) fn run_execute_queue(
             &slug,
             &mut store,
             max_retries,
+            now_iso,
             &mut slowest,
             counts,
         );
@@ -1144,6 +1148,7 @@ fn one_merge(
     slug: &str,
     store: &mut Store,
     max_retries: i64,
+    now_iso: &str,
     slowest: &mut f64,
     counts: &mut QueueCounts,
 ) -> Result<(), DoorError> {
@@ -1256,6 +1261,7 @@ fn one_merge(
                     bare.split(':').next().unwrap_or(bare)
                 };
                 set_field(&mut entry, "parked", json!(park));
+                set_field(&mut entry, "parked_at", json!(now_iso));
                 set_field(
                     &mut entry,
                     "parked_head",
@@ -1276,6 +1282,7 @@ fn one_merge(
             );
             if prior + 1 >= max_retries {
                 set_field(&mut entry, "parked", json!("retries-exhausted"));
+                set_field(&mut entry, "parked_at", json!(now_iso));
                 store.set(&row.key, entry).map_err(DoorError::Failed)?;
                 seams.emit(
                     "pr_watch_parked",
@@ -1894,7 +1901,15 @@ mod tests {
 
     fn drain(rig: &Rig, fake: &Fake) -> QueueCounts {
         let mut counts = QueueCounts::default();
-        run_execute_queue(fake, &[queue_row(rig)], &rig.store(), 2, &mut counts).unwrap();
+        run_execute_queue(
+            fake,
+            &[queue_row(rig)],
+            &rig.store(),
+            2,
+            "2026-11-05T00:00:00Z",
+            &mut counts,
+        )
+        .unwrap();
         counts
     }
 
@@ -1924,6 +1939,10 @@ mod tests {
         assert_eq!(drain(&rig, &fake).held, 1);
         assert_eq!(rig.disk()[KEY]["parked"], json!("checks-red"));
         assert_eq!(rig.disk()[KEY]["parked_head"], json!("abc"));
+        assert!(
+            !rig.disk()[KEY]["parked_at"].is_null(),
+            "the park stamps its own clock"
+        );
         assert_eq!(rig.disk()[KEY]["retries"], json!(1));
     }
 
