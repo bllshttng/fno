@@ -2351,7 +2351,10 @@ event_types:
           description: "Pid of the daemon reporting the death."
         quiet_secs:
           type: integer
-          description: "Seconds between the last write to events.jsonl and this start; the span the arms ticked nothing."
+          description: "Seconds from the predecessor's last daemon-sourced event to this start; an upper bound on the span the arms ticked nothing."
+        last_daemon_event_ts:
+          type: string
+          description: "Timestamp of the last daemon-sourced event the predecessor wrote."
         exit_code_recovered:
           type: boolean
           description: "Always false today: the daemon is detached, so no parent survives to read the exit status."
