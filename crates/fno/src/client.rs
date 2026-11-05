@@ -35,6 +35,7 @@ use tokio::sync::mpsc;
 use crate::agents_view::{lineage_layout, lineage_parent};
 use crate::chrome;
 
+mod login_pane;
 mod move_pick;
 mod open_chooser;
 mod open_link;
@@ -1183,9 +1184,9 @@ pub(crate) struct View {
     conn_gen: u64,
     /// A mutation/login command wanted by a keypress; the run loop spawns
     /// it at loop top (the sender lives there, out of the stdin handler) and
-    /// clears this. `(argv, child-env, is_login)`: `is_login` runs `fno mux pane
-    /// run` (opens the login pane, keeps the pending notice), else a single-flight
-    /// mutation guarded by `ConnectionsView::acting`.
+    /// clears this. `(argv, child-env, is_login)`: `is_login` opens the login
+    /// pane on the wire and focuses it on landing; else a single-flight
+    /// mutation runs under `ConnectionsView::acting`.
     #[allow(clippy::type_complexity)]
     conn_action: Option<(Vec<String>, Vec<(String, String)>, bool)>,
     /// The last `fno doctor update --check` probe's outcome, or
@@ -6823,8 +6824,9 @@ async fn attach_and_run(
         if let Some((argv, env, is_login)) = view.conn_action.take() {
             let tx = conn_act_tx.clone();
             let gen = view.conn_gen;
+            let session = view.session.clone();
             tokio::spawn(async move {
-                let result = crate::connections_view::run_command_env(argv, env).await;
+                let result = login_pane::run_or_command(&session, argv, env, is_login).await;
                 let _ = tx.send((gen, result, is_login));
             });
         }
@@ -7418,26 +7420,25 @@ async fn attach_and_run(
                 }
             }
             Some((gen, result, is_login)) = conn_act_rx.recv() => {
-                // a mutation/login command finished. Clear the single-flight
-                // guard UNCONDITIONALLY (the subprocess has exited, whatever the
-                // modal's read-gen), so a manual R during the mutation can never
-                // wedge `acting` on nor let a second write overlap this one. The
-                // notice + re-read are still gen-guarded: a stale/closed result
-                // shows nothing (never optimistic state).
+                // a mutation/login command finished: clear the single-flight
+                // guard unconditionally (the subprocess exited), so a manual R
+                // during it can never wedge `acting` on. Stale results show
+                // nothing (never optimistic state).
                 if let Some(cv) = view.connections.as_mut() {
                     cv.acting = false;
                 }
-                if gen == view.conn_gen && view.connections.is_some() {
+                if is_login {
+                    // The landing closes the modal, focuses the pane, and
+                    // draws; a refusal gen-guards into the modal's notice.
+                    if let Err(e) =
+                        login_pane::land(&mut view, &mut sock_w, gen, result, &mut compositor)
+                            .await
+                    {
+                        break Err(e);
+                    }
+                } else if gen == view.conn_gen && view.connections.is_some() {
                     if let Some(cv) = view.connections.as_mut() {
-                        if is_login {
-                            // The login pane spawn: on failure name it; on success
-                            // keep the reducer's "login pane opened - press r" notice.
-                            if !result.ok {
-                                cv.notice = Some(result.msg);
-                            }
-                        } else {
-                            cv.notice = Some(result.msg);
-                        }
+                        cv.notice = Some(result.msg);
                     }
                     view.rearm_connections_read();
                     if let Err(e) = compositor.draw(&view.compose()) {
@@ -8866,9 +8867,8 @@ async fn connections_keys(
                 view.conn_action = Some((argv, env, false));
             }
             ConnIntent::SpawnLogin(argv) => {
-                // Opens the login pane via `fno mux pane run`; the reducer already
-                // recorded the pending row + notice. Marked is_login so a success
-                // keeps that notice.
+                // Stash for the run loop to spawn on the wire; the landing
+                // focuses the pane.
                 view.conn_action = Some((argv, Vec::new(), true));
             }
             ConnIntent::SetActiveAccount(account) => {
