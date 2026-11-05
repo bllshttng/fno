@@ -158,36 +158,22 @@ pub(super) fn paint_bottom(
 const MIN_ROWS: u16 = 16;
 const MIN_COLS: u16 = 40;
 
-fn open_footer_mut(view: &mut View) -> Option<&mut bool> {
-    if view.backlog_board.is_some() {
-        view.backlog_board.as_mut().map(|b| &mut b.keys_footer)
-    } else if view.org_board.is_some() {
-        view.org_board.as_mut().map(|b| &mut b.keys_footer)
-    } else if view.messages_board.is_some() {
-        view.messages_board.as_mut().map(|b| &mut b.keys_footer)
-    } else {
-        Some(&mut view.keys_footer)
-    }
+/// Every footer flag, the boards first and the agents list last.
+fn flags(view: &mut View) -> [Option<&mut bool>; 4] {
+    [
+        view.backlog_board.as_mut().map(|b| &mut b.keys_footer),
+        view.org_board.as_mut().map(|b| &mut b.keys_footer),
+        view.messages_board.as_mut().map(|b| &mut b.keys_footer),
+        Some(&mut view.keys_footer),
+    ]
 }
 
-fn footer_is_open(view: &View) -> bool {
-    view.keys_footer
-        || view.backlog_board.as_ref().is_some_and(|b| b.keys_footer)
-        || view.org_board.as_ref().is_some_and(|b| b.keys_footer)
-        || view.messages_board.as_ref().is_some_and(|b| b.keys_footer)
+fn footer_is_open(view: &mut View) -> bool {
+    flags(view).iter().flatten().any(|f| **f)
 }
 
 fn close_footers(view: &mut View) {
-    view.keys_footer = false;
-    if let Some(b) = view.backlog_board.as_mut() {
-        b.keys_footer = false;
-    }
-    if let Some(b) = view.org_board.as_mut() {
-        b.keys_footer = false;
-    }
-    if let Some(b) = view.messages_board.as_mut() {
-        b.keys_footer = false;
-    }
+    flags(view).into_iter().flatten().for_each(|f| *f = false);
 }
 
 /// `^B ?`: the footer grid of the view in focus when the terminal has room,
@@ -199,7 +185,7 @@ pub(super) fn toggle(view: &mut View) {
     }
     if footer_is_open(view) {
         close_footers(view);
-    } else if let Some(open) = open_footer_mut(view) {
+    } else if let Some(open) = flags(view).into_iter().flatten().next() {
         *open = true;
     }
 }
