@@ -157,7 +157,7 @@ pub(crate) fn read_reverts(repo: &Path, out: &mut Vec<Candidate>) {
     let mut cmd = std::process::Command::new("git");
     cmd.arg("-C")
         .arg(repo)
-        .args(["log", "--no-merges", "--grep=^Revert", "--format=%h %s"]);
+        .args(["log", "--no-merges", "--grep=^Revert", "--format=%H %s"]);
     let Ok(output) = crate::bounded_cmd::output_with_timeout_result(cmd, 30) else {
         return;
     };

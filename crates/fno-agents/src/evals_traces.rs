@@ -189,7 +189,9 @@ fn write_trace(
         .into_iter()
         .find(|key| !data[*key].is_null())
         .unwrap_or("quote");
-    trace["trigger"] = if data[trigger].is_null() {
+    trace["trigger"] = if kind == "user_correction" && data["quote"].is_null() {
+        missing("the correction quote was scrubbed")
+    } else if data[trigger].is_null() {
         observed(json!(kind), "source_signal")
     } else {
         fact(data, trigger)
@@ -212,6 +214,10 @@ fn write_trace(
     }
     trace["created_at"] = json!(chrono::Utc::now().to_rfc3339());
     crate::correction_detect::scrub_value(&mut trace, &mut Default::default());
+    trace["id"] = json!(id);
+    if kind == "revert" && key.len() == 40 && key.bytes().all(|b| b.is_ascii_hexdigit()) {
+        trace["source_ref"] = observed(json!(key), "git_commit");
+    }
     create_once(
         &path,
         &serde_json::to_vec_pretty(&trace).map_err(|e| e.to_string())?,
@@ -300,7 +306,10 @@ fn pass(state: &Path, journal: &Path, repo: &Path, prs: &[Value]) -> Result<Valu
             continue;
         }
         let kind = match event.r#type.as_str() {
-            "agent_corrected" if crate::evals_drafts::typed_correction(&data).is_some() => {
+            "agent_corrected"
+                if data["corrected_by"] == "user"
+                    && matches!(data["kind"].as_str(), Some("correct" | "reject")) =>
+            {
                 Some("user_correction")
             }
             "agent_corrected" if machine && routed_around(&data, &resolver) => {
@@ -332,7 +341,7 @@ fn pass(state: &Path, journal: &Path, repo: &Path, prs: &[Value]) -> Result<Valu
     crate::evals_candidates::read_reverts(repo, &mut reverts);
     for revert in reverts {
         let data = json!({"quote":revert.quote,"reason":"repository revert","node":null});
-        let key = format!("{}:{}", repo.display(), revert.source_ref);
+        let key = revert.source_ref;
         count += u64::from(write_trace(state, "revert", &key, &data, &resolver)?);
     }
     for pr in prs {
@@ -566,19 +575,29 @@ mod tests {
                 .join("\n"),
         )
         .unwrap();
-        for (id, path) in [("one", transcript), ("missing", tmp.path().join("gone"))] {
+        for (id, path) in [
+            ("one", transcript),
+            ("missing", tmp.path().join("gone")),
+            ("scrubbed", tmp.path().join("scrubbed-gone")),
+        ] {
             append(
                 &journal,
                 "agent_corrected",
                 json!({"correction_id":id, "corrected_by":"user", "kind":"correct",
-                "quote":"no, prove it", "quote_status":"kept", "session_id":id, "harness":"claude", "turn":"turn-1", "source_file":path}),
+                "quote":if id=="scrubbed" { Value::Null } else { json!("no, prove it") }, "quote_status":if id=="scrubbed" { "dropped" } else { "kept" }, "session_id":id, "harness":"claude", "turn":"turn-1", "source_file":path}),
             );
         }
         assert_eq!(
             pass(tmp.path(), &journal, tmp.path(), &[]).unwrap()["new"],
-            2
+            3
         );
         let rows = traces(tmp.path());
+        let scrubbed = rows
+            .iter()
+            .find(|r| r["session_id"]["value"] == "scrubbed")
+            .unwrap();
+        assert!(scrubbed["trigger"]["value"].is_null());
+        assert_eq!(scrubbed["trigger"]["basis"], "unmeasured");
         let found = rows
             .iter()
             .find(|r| r["tool_calls"]["value"].is_array())
@@ -696,6 +715,21 @@ mod tests {
         git(&["revert", "--no-edit", "HEAD"]);
         let receipt = pass(tmp.path(), &journal, tmp.path(), &prs).unwrap();
         assert_eq!(receipt["new"], 7);
+        let revert = traces(tmp.path())
+            .into_iter()
+            .find(|r| r["signal_kind"] == "revert")
+            .unwrap();
+        assert_eq!(
+            revert["source_ref"]["value"]
+                .as_str()
+                .unwrap()
+                .rsplit(':')
+                .next()
+                .unwrap()
+                .len(),
+            40,
+            "revert identity needs the full commit hash"
+        );
         let budget = traces(tmp.path())
             .into_iter()
             .find(|r| r["signal_kind"] == "budget")
