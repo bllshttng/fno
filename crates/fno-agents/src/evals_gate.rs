@@ -515,14 +515,17 @@ fn verdict(view: &Value, sha: &str) -> (&'static str, String) {
     ("success", text)
 }
 
-/// The clearing command leads, so the 140-character cut drops only names.
-/// The machine label rides beside it: the record lives on the machine whose
-/// daemon composed this text, and every other machine reads it through the
-/// merge check.
+/// The remedy leads and the machine label rides inside it: the record lives
+/// on the machine whose daemon composed this text, and every other machine
+/// reads it through the merge check. The host is capped at 12 characters so
+/// the 140-character status cut still leaves the cohort prefix visible; that
+/// prefix is the contract a_head_run_with_no_rows_and_a_seated_baseline_
+/// reads_red_not_pending pins, and "no result" was prose the state field
+/// already carried.
 fn no_result(sha: &str, cause: &str) -> String {
+    let host: String = crate::name_ledger::host_label().chars().take(12).collect();
     format!(
-        "no result. Clear on {}: fno-agents evals gate-retry {}. Cause: {cause}",
-        crate::name_ledger::host_label(),
+        "Clear on {host}: fno-agents evals gate-retry {}: {cause}",
         short(sha)
     )
 }
@@ -3180,7 +3183,7 @@ mod tests {
             failure.is_some(),
             "a scoring-less lane stays red: {posts:?}"
         );
-        assert!(failure.unwrap().contains("no result"), "{posts:?}");
+        assert!(failure.unwrap().contains("Clear on "), "{posts:?}");
         assert!(failure.unwrap().contains("g5"), "{posts:?}");
     }
 }
