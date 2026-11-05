@@ -79,7 +79,15 @@ impl View {
             .expanded_lines(&self.layout.agents, text_w, max_lines);
         super::AuxPopup {
             popup: Popup::new(
-                lines.into_iter().map(PopupRow::Header).collect(),
+                // The headline is the one bold line; the rows read plain.
+                lines
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, line)| match i {
+                        0 => PopupRow::Header(line),
+                        _ => PopupRow::Text(line),
+                    })
+                    .collect(),
                 Anchor::Center,
             )
             .title("org")
