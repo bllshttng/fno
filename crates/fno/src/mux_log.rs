@@ -129,7 +129,7 @@ pub fn append(path: &Path, level: &str, message: &str) {
 }
 
 pub fn flush(path: &Path) {
-    if let Ok(mut logs) = logs().lock() {
+    if let Some(mut logs) = LOGS.get().and_then(|logs| logs.lock().ok()) {
         if let Some(record) = logs.get_mut(path) {
             record.flush(path);
         }
@@ -218,6 +218,16 @@ pub fn tail(path: &Path, lines: usize) -> String {
     selected.join("\n")
 }
 
+/// The last `fno mux: shutting down (...)` line in the server's log, read
+/// from the log tail so a long-lived log costs a bounded read.
+pub(crate) fn last_shutdown_line(log: &std::path::Path) -> Option<String> {
+    tail(log, usize::MAX)
+        .lines()
+        .rev()
+        .find(|line| line.contains("fno mux: shutting down"))
+        .map(str::to_string)
+}
+
 #[macro_export]
 macro_rules! mux_log {
     ($level:ident; $($arg:tt)*) => { $crate::mux_log::server(stringify!($level), &format!($($arg)*)) };
@@ -231,6 +241,17 @@ mod tests {
     fn mux_log_collapses_repeats_and_follows_another_writers_rotation() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("client.log");
+        let shutdown = dir.path().join("shutdown.log");
+        let mut unicode = format!("{}\nfno mux: shutting down (probe)\n", "é".repeat(40_000));
+        while unicode.is_char_boundary(unicode.len() - 65_536) {
+            unicode.push('\n');
+        }
+        std::fs::write(&shutdown, unicode).unwrap();
+        assert!(
+            last_shutdown_line(&shutdown)
+                .is_some_and(|line| line.contains("shutting down (probe)")),
+            "shutdown cause survives a UTF-8 tail boundary"
+        );
         for _ in 0..10_000 {
             append(&path, "warn", "same failure");
         }

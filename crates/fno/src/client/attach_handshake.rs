@@ -3,6 +3,7 @@
 use std::time::Duration;
 
 use super::{LayoutView, View};
+use crate::mux_log::last_shutdown_line;
 use crate::proto::{read_msg, ProtoError, ServerMsg};
 
 /// The typed shape of one failure: the server accepted the attach and then
@@ -186,17 +187,4 @@ pub(super) async fn attach_once_more(path: &std::path::Path) -> Result<i32, Stri
             Err(e) => return Err(e),
         }
     }
-}
-
-/// The last `fno mux: shutting down (...)` line in the server's log, read
-/// from the log tail so a long-lived log costs a bounded read.
-fn last_shutdown_line(log: &std::path::Path) -> Option<String> {
-    let data = std::fs::read(log).ok()?;
-    let tail = &data[data.len().saturating_sub(65_536)..];
-    std::str::from_utf8(tail)
-        .ok()?
-        .lines()
-        .rev()
-        .find(|l| l.contains("fno mux: shutting down"))
-        .map(str::to_string)
 }

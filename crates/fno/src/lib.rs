@@ -61,8 +61,6 @@ pub mod cli_hooks;
 #[cfg(feature = "full")]
 pub mod client;
 #[cfg(feature = "full")]
-pub mod mux_log;
-#[cfg(feature = "full")]
 pub mod clipboard;
 #[cfg(feature = "full")]
 pub mod command_names;
@@ -157,6 +155,8 @@ pub mod mouse;
 pub mod mux_cli;
 #[cfg(feature = "full")]
 pub mod mux_link;
+#[cfg(feature = "full")]
+pub mod mux_log;
 #[cfg(feature = "full")]
 pub mod mux_rows;
 #[cfg(feature = "full")]
