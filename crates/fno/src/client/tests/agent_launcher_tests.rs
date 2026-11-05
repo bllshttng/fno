@@ -1387,6 +1387,14 @@ fn pill_rows() {
     );
 
     let (mut v, _fx) = pill_view(&_lock);
+    let argv = launch_argv(&mut v, b"--permission-mode default\r");
+    assert!(
+        argv.is_empty(),
+        "permission pins its chip rather than an extra flag: {argv:?}"
+    );
+    assert_eq!(v.launcher.as_ref().unwrap().draft.permission, "default");
+
+    let (mut v, _fx) = pill_view(&_lock);
     v.launcher.as_mut().unwrap().draft.pill_value_capture = false;
     v.launcher
         .as_mut()
@@ -1490,9 +1498,16 @@ fn a_chip_owned_typed_flag_still_refuses_at_submit() {
 #[test]
 fn where_picker_lists_local_and_the_placement_rows() {
     // AC4-HP: the Where picker lists Local (checked) under `Run on`, then
-    // the four placement rows under `Open as` - no Cloud, Remote Control or
-    // SSH row, because no such substrate exists in the door.
-    let mut v = view_with_launcher();
+    // known fleet hosts, then the four placement rows under `Open as`.
+    let mut v = plain_view();
+    super::machine_tree::set_on(&mut v, true);
+    super::machine_tree::apply(
+        &mut v,
+        Ok(serde_json::json!({"machines": [
+            {"host": "remote-box", "local": false, "fresh": true, "age_s": 1, "sessions": []}
+        ]})),
+    );
+    open(&mut v);
     v.launcher_catalog = catalog(&[("claude", true, true)]);
     sync_catalog(&mut v);
     let l = v.launcher.as_ref().unwrap();
@@ -1511,6 +1526,7 @@ fn where_picker_lists_local_and_the_placement_rows() {
         vec![
             "[Run on]",
             "Local",
+            "remote-box",
             "[Open as]",
             "thread",
             "thread split beside",
@@ -1522,7 +1538,10 @@ fn where_picker_lists_local_and_the_placement_rows() {
     // The Local row carries the check and no action (there is nothing to
     // switch to).
     let local_action = actions[1].clone();
-    assert!(local_action.is_none());
+    assert_eq!(
+        local_action,
+        Some(super::agent_launcher::PickerAction::RunOn(None))
+    );
     // Committing split beside records the placement; request() turns it
     // into --substrate thread --portal N --split right.
     let mut l = v.launcher.take().unwrap();
@@ -1544,6 +1563,35 @@ fn where_picker_lists_local_and_the_placement_rows() {
         "the Where chip shows the picked view: {:?}",
         l.chip_label(Focus::Where, &v.launcher_catalog)
     );
+    let mut l = v.launcher.take().unwrap();
+    super::agent_launcher::apply_picker_action(
+        &mut l,
+        &v.launcher_catalog,
+        super::agent_launcher::PickerAction::RunOn(Some("remote-box".into())),
+        2,
+        Focus::Where,
+    );
+    assert_eq!(l.draft.request(1).host.as_deref(), Some("remote-box"));
+    assert!(l
+        .chip_label(Focus::Where, &v.launcher_catalog)
+        .starts_with("remote-box"));
+    let (session, _version) = wire_fixture_at(121);
+    v.session = session;
+    l.draft.worktree = Some(false);
+    v.launcher = Some(l);
+    let mut sock = Vec::new();
+    tokio::runtime::Runtime::new().unwrap().block_on(async {
+        super::agent_launcher::launcher_keys(&mut v, b"\r", &mut sock)
+            .await
+            .unwrap();
+    });
+    assert!(
+        sock.is_empty(),
+        "an older server must never receive a remote launch"
+    );
+    assert!(
+        matches!(&v.launcher.as_ref().unwrap().phase, Phase::Refused { reason, .. } if reason.contains("does not support remote launches"))
+    );
 }
 
 #[test]
@@ -1558,7 +1606,7 @@ fn shell_mode_keys_glyph_and_placeholders() {
     v.launcher_catalog = catalog(&[("claude", true, true)]);
     sync_catalog(&mut v);
     assert_eq!(v.launcher.as_ref().unwrap().focus, Focus::Message);
-    assert_painted(&v, '\u{276f}', "prompt \u{b7} -- flags");
+    assert_painted(&v, '\u{276f}', "prompt \u{b7} flags");
 
     // AC1: the `!` is consumed as the mode switch.
     type_message(&mut v, "!");
@@ -1598,7 +1646,7 @@ fn shell_mode_keys_glyph_and_placeholders() {
         assert!(!l.shell, "the empty-line Backspace left shell mode");
         assert!(l.draft.message.is_empty());
     }
-    assert_painted(&v, '\u{276f}', "prompt \u{b7} -- flags");
+    assert_painted(&v, '\u{276f}', "prompt \u{b7} flags");
 
     // Folded from the retired newline test: ^j inserts a newline in the
     // message and Enter never fires from inside it.

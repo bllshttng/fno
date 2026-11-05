@@ -122,11 +122,13 @@ fn composer_from_sidebar_opens_the_centered_sheet_with_full_values() {
     let mut h = ClientHarness::spawn_sized_with(&scratch, 24, 120, &env_refs);
     wait_input(&mut h);
     open_composer(&mut h);
-    let screen = h.wait_screen(10, |s| s.contains("new agent"));
+    let screen = h.wait_screen(10, |s| {
+        s.contains("new agent") && s.contains("prompt \u{b7} flags") && s.contains("auto")
+    });
     assert!(screen.contains("new agent"), "sheet title: {screen}");
     // The chip row paints before any catalog read lands.
     assert!(
-        screen.contains("Local") && screen.contains("prompt \u{b7} -- flags"),
+        screen.contains("Local") && screen.contains("prompt \u{b7} flags"),
         "the Where chip and the placeholder paint: {screen}"
     );
     assert!(
@@ -159,7 +161,9 @@ fn project_picker_lists_projects_and_enter_never_launches() {
     // Wait out the facts probe so the Branch/Worktree chips (painted while
     // facts are unread) no longer sit between Project and the input; this
     // scratch is not a git repo, so the pair hides once the probe lands.
-    h.wait_screen(35, |s| !s.contains("worktree"));
+    h.wait_screen(35, |s| {
+        s.contains("prompt \u{b7} flags") && s.contains("auto") && !s.contains("worktree")
+    });
     // Shift-Tab from the input lands on the Directory chip; Enter drops its
     // picker (title `directory`).
     type_and_settle(&mut h, b"\x1b[Z");
@@ -341,7 +345,9 @@ fn where_chip_opens_the_local_and_placement_picker() {
     // Wait out the facts probe so the Branch/Worktree chips (painted while
     // facts are unread) no longer sit between Project and the input; this
     // scratch is not a git repo, so the pair hides once the probe lands.
-    h.wait_screen(15, |s| !s.contains("worktree"));
+    h.wait_screen(35, |s| {
+        s.contains("prompt \u{b7} flags") && s.contains("auto") && !s.contains("worktree")
+    });
     // BackTab BackTab walks Message -> Project -> Where.
     type_and_settle(&mut h, b"\x1b[Z\x1b[Z");
     type_and_settle(&mut h, b"\r");

@@ -230,3 +230,59 @@ fn cannot_fire_refusal_covers_every_stage_arm() {
     // The verdict only decides a command seed.
     assert!(cannot_fire_refusal("plain prose seed", "claude", Some("missing")).is_none());
 }
+
+#[test]
+fn prompt_file_is_read_before_the_worker_name_is_minted() {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    let home = tempfile::tempdir().unwrap();
+    let run = |tail: &[&str], seed: Option<&[u8]>| {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_fno-agents"))
+            .current_dir(home.path())
+            .env_clear()
+            .envs(fno_agents::test_run::self_owner_env())
+            .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+            .env("HOME", home.path())
+            .env("FNO_HOME", home.path())
+            .env("FNO_AGENTS_HOME", home.path())
+            .args(["spawn", "--harness", "composer-missing-harness"])
+            .args(tail)
+            .stdin(if seed.is_some() {
+                Stdio::piped()
+            } else {
+                Stdio::null()
+            })
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        if let Some(seed) = seed {
+            child.stdin.take().unwrap().write_all(seed).unwrap();
+        }
+        child.wait_with_output().unwrap()
+    };
+    let result = run(&["--prompt-file", "-"], Some(b"Check the composer launch"));
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert_eq!(result.status.code(), Some(2), "{stderr}");
+    assert!(
+        stderr.contains("unknown harness 'composer-missing-harness'"),
+        "the seeded spawn reaches harness admission: {stderr}"
+    );
+    assert!(
+        !stderr.contains("no node slug or prompt"),
+        "stdin seeds the worker name: {stderr}"
+    );
+    for inline in ["--message=", "--message=inline"] {
+        let result = run(&["--prompt-file", "-", inline], None);
+        let stderr = String::from_utf8_lossy(&result.stderr);
+        assert_eq!(
+            result.status.code(),
+            Some(1),
+            "two prompt sources refuse: {stderr}"
+        );
+        assert!(stderr.contains("provide the prompt once"), "{stderr}");
+    }
+    let missing = run(&["--name", "t-probe", "--prompt-file"], None);
+    assert_eq!(missing.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&missing.stderr).contains("--prompt-file needs a value"));
+}

@@ -367,7 +367,7 @@ headless = "argv-add-dir"
 # paneless start.
 [harness.codex.thread]
 carries = ["model", "yolo", "permission_mode", "effort", "add_dir"]
-passthrough = ["-c", "--config", "--add-dir", "-m", "--model"]
+passthrough = ["-c", "--config", "--add-dir", "-m", "--model", "--effort", "--permission-mode"]
 
 [harness.codex.permission_response.allow_once]
 supported = true

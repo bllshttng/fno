@@ -241,6 +241,7 @@ pub(crate) enum Phase {
 pub(crate) struct Launcher {
     pub draft: LaunchDraft,
     pub recent_models: Vec<RecentModelChoice>,
+    pub machines: Vec<String>,
     /// The active tab.
     pub focus: Focus,
     pub phase: Phase,
@@ -321,6 +322,7 @@ pub(crate) enum PickerAction {
     InsertNode(String),
     /// Set the placement.
     Place(Placement),
+    RunOn(Option<String>),
     /// The Model list's `more` row: rebuild the picker over the harness's
     /// full catalog tail, Esc stepping back to the main list.
     OpenMore,
@@ -432,6 +434,7 @@ pub(crate) struct LaunchDraft {
     pub effort: String,
     pub permission: String,
     pub placement: Placement,
+    pub host: Option<String>,
     /// The portal index a thread placement opens through, resolved from the
     /// live layout when the placement is picked (next free index).
     pub placement_portal: u8,
@@ -468,6 +471,9 @@ impl LaunchDraft {
 
     /// The draft cwd's facts row, when the catalog probe landed one.
     fn facts<'a>(&self, catalog: &'a Option<CatalogOutcome>) -> Option<&'a ProjectFacts> {
+        if self.host.is_some() {
+            return None;
+        }
         match catalog {
             Some(CatalogOutcome::Ok(_, _, facts)) => facts.iter().find(|f| f.cwd == self.cwd()),
             _ => None,
@@ -523,6 +529,7 @@ impl LaunchDraft {
             revision: self.revision,
             cwd: self.cwd(),
             harness: self.harness(),
+            host: self.host.clone(),
             substrate: substrate.to_string(),
             model: if !self.route.is_empty() && !native_model_pin {
                 None
@@ -584,7 +591,10 @@ fn non_empty(s: &str) -> Option<String> {
 /// pin their chip instead (`--model`), or the launch refuses them exactly
 /// as today (`--cwd`).
 fn pill_is_chip_owned(flag: &str) -> bool {
-    matches!(flag, "--model" | "--effort" | "--harness")
+    matches!(
+        flag,
+        "--model" | "--effort" | "--harness" | "--permission-mode"
+    )
 }
 
 /// Commit a `--word` the user typed in the message: remove the word, add
@@ -672,6 +682,7 @@ fn apply_chip_pin(l: &mut Launcher, flag: &str, value: &str) {
             l.draft.route.clear();
         }
         "--effort" => l.draft.effort = value.to_string(),
+        "--permission-mode" => l.draft.permission = value.to_string(),
         "--harness" => {
             if let Some(idx) = l.draft.harnesses.iter().position(|h| h == value) {
                 l.draft.harness_idx = idx;
@@ -734,6 +745,7 @@ pub(crate) fn open(view: &mut View) {
         None => Launcher {
             draft: fresh_draft(view),
             recent_models: Vec::new(),
+            machines: Vec::new(),
             focus: Focus::Message,
             phase: Phase::Editing,
             armed: None,
@@ -759,6 +771,7 @@ pub(crate) fn open(view: &mut View) {
             };
         }
     }
+    launcher.machines = view.machine_tree.destinations();
     view.launcher = Some(launcher);
     // A fresh open starts with a fresh esc carry: a lone ESC stranded in the
     // retained dock's carry must never close the reopened dock.
@@ -949,6 +962,7 @@ fn fresh_draft(view: &View) -> LaunchDraft {
         effort: String::new(),
         permission: String::new(),
         placement: Placement::default(),
+        host: None,
         placement_portal: 0,
         pills: Vec::new(),
         pill_value_capture: false,
@@ -1114,7 +1128,7 @@ async fn submit(
     // (env var, then api_key_file) refuses pre-wire naming the env var.
     // The draft stays intact; rows with no key_env are not checked, and
     // the spawn door stays the final gate.
-    if !l.draft.provider.is_empty() {
+    if l.draft.host.is_none() && !l.draft.provider.is_empty() {
         let needle = l
             .draft
             .model_row
@@ -1161,7 +1175,9 @@ async fn submit(
             .map(|f| f.policy.clone()),
         _ => None,
     };
-    let worktree = if matches!(&policy, Some(Ok(w)) if w == "never") {
+    let worktree = if l.draft.host.is_some() {
+        explicit
+    } else if matches!(&policy, Some(Ok(w)) if w == "never") {
         Some(false)
     } else {
         // A failed policy read is as good as an unread one: the default
@@ -1191,6 +1207,14 @@ async fn submit(
         l.phase = Phase::Refused {
             request_id,
             reason: "the connected mux server does not support provider pins or extra launch flags; reconnect to a server running current fno".to_string(),
+        };
+        return Ok(());
+    }
+    if request.host.is_some() && !wire_at_least(&view.session, 122) {
+        l.phase = Phase::Refused {
+            request_id,
+            reason: "the mux server does not support remote launches; reconnect to current fno"
+                .into(),
         };
         return Ok(());
     }
@@ -3252,11 +3276,24 @@ pub(crate) fn picker_rows(
             }
         }
         Focus::Where => {
-            // Run on: today only Local. Cloud, Remote Control and SSH name
-            // no substrate in the door yet, so there are no rows to offer.
             rows.push(PopupRow::Header("Run on".to_string()));
             actions.push(None);
-            push_entry(&mut rows, &mut actions, "\u{2713}", "Local", "", true, None);
+            for host in std::iter::once(None).chain(l.machines.iter().cloned().map(Some)) {
+                let label = host.as_deref().unwrap_or("Local");
+                push_entry(
+                    &mut rows,
+                    &mut actions,
+                    if l.draft.host == host {
+                        "\u{2713}"
+                    } else {
+                        "\u{2022}"
+                    },
+                    label,
+                    "",
+                    true,
+                    Some(PickerAction::RunOn(host.clone())),
+                );
+            }
             // Open as: the placement (the view a thread shows through).
             rows.push(PopupRow::Header("Open as".to_string()));
             actions.push(None);
@@ -3783,6 +3820,10 @@ pub(crate) fn apply_picker_action(
                 insert_char(&mut l.draft, c);
             }
         }
+        PickerAction::RunOn(host) => {
+            l.draft.host = host;
+            l.draft.bump();
+        }
         PickerAction::Place(p) => {
             l.draft.placement = p;
             l.draft.placement_portal = portal;
@@ -4012,10 +4053,11 @@ impl Launcher {
         let d = &self.draft;
         match f {
             Focus::Where => {
+                let host = d.host.as_deref().unwrap_or("Local");
                 if d.placement == Placement::default() {
-                    "Local".to_string()
+                    host.to_string()
                 } else {
-                    format!("Local \u{b7} {}", d.placement.label())
+                    format!("{host} \u{b7} {}", d.placement.label())
                 }
             }
             Focus::Project => d
@@ -4505,7 +4547,7 @@ impl Launcher {
                 let placeholder = if self.shell {
                     format!("shell command in {}", self.draft.cwd())
                 } else {
-                    "prompt \u{b7} -- flags \u{b7} @ node \u{b7} ! shell \u{b7} ? help".to_string()
+                    "prompt \u{b7} flags \u{b7} @ node \u{b7} ! shell \u{b7} ? help".to_string()
                 };
                 buf.set_string(
                     sl.message.x + PROMPT_GUTTER as u16,
