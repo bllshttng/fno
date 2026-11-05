@@ -55,6 +55,7 @@ struct Parsed {
     label: String,
     approved_label: String,
     limits: Limits,
+    epic: Option<i64>,
     apply: bool,
     json: bool,
 }
@@ -71,6 +72,7 @@ pub fn run(args: &[String]) -> i32 {
             max_open: DEFAULT_MAX_OPEN,
             max_per_author: DEFAULT_MAX_PER_AUTHOR,
         },
+        epic: None,
         apply: false,
         json: false,
     };
@@ -123,6 +125,16 @@ pub fn run(args: &[String]) -> i32 {
                     None => return 2,
                 }
             }
+            "--epic" => match take(&mut i, "--epic") {
+                Some(v) => match v.parse::<i64>().ok().filter(|n| *n > 0) {
+                    Some(n) => parsed.epic = Some(n),
+                    None => {
+                        eprintln!("requests: --epic needs an issue number, got {v:?}");
+                        return 2;
+                    }
+                },
+                None => return 2,
+            },
             "--apply" => parsed.apply = true,
             a if crate::json_output::is_flag(a) => parsed.json = true,
             other => {
@@ -186,6 +198,16 @@ pub fn run(args: &[String]) -> i32 {
             }
         }
     };
+    if let Some(number) = parsed.epic {
+        return crate::epic_issue::import_claimed(&crate::epic_issue::ImportArgs {
+            project: &project,
+            repo: &repo,
+            number,
+            cwd: &project_cwd(&project),
+            apply: parsed.apply,
+            json: parsed.json,
+        });
+    }
     if let Some(offending) = template_refusal(&project, &parsed.approved_label) {
         eprintln!(
             "requests: {} names the approval label {:?}; a visitor could \
@@ -241,12 +263,7 @@ pub fn run(args: &[String]) -> i32 {
                 return 1;
             }
         };
-        let cwd = super::settings::project_root(&project).unwrap_or_else(|| {
-            std::env::current_dir()
-                .unwrap_or_default()
-                .display()
-                .to_string()
-        });
+        let cwd = project_cwd(&project);
         let mut outcome = apply_issues(
             &mut rows,
             &issues,
@@ -297,7 +314,7 @@ fn help_text() -> String {
      \x20   fno backlog add requests [--project <slug>] [--repo <owner/repo>]\n\
      \x20       [--label <name>] [--approved-label <name>] [--limit <n>]\n\
      \x20       [--max-new <n>] [--max-open <n>] [--max-per-author <n>]\n\
-     \x20       [--apply] [--json]\n\
+     \x20       [--epic <n>] [--apply] [--json]\n\
      \n\
      Reads open issues carrying both the request label (default fno-request)\n\
      and the approval label (default fno-approved, applied by hand by a\n\
@@ -306,10 +323,25 @@ fn help_text() -> String {
      author for a day. Each run renews the claim while the issue stays open\n\
      and approved, and releases it once the issue leaves the list. A login\n\
      holds at most --max-per-author claims.\n\
+     \n\
+     With --epic <n> the import reads the checklist on shared epic issue <n>\n\
+     instead. It files each open line that names your GitHub login as a local\n\
+     node under the owner's id. Run it after you /claim a line on that issue.\n\
+     \n\
      Dry run by default: pass --apply to write. The import never writes to\n\
      GitHub. Visitor text is quarantined in the row's details; accept a\n\
      request by rewriting it in your own words, never by promoting it."
         .to_string()
+}
+
+/// The project's root, else the directory the command runs in.
+fn project_cwd(project: &str) -> String {
+    super::settings::project_root(project).unwrap_or_else(|| {
+        std::env::current_dir()
+            .unwrap_or_default()
+            .display()
+            .to_string()
+    })
 }
 
 fn positive_usize(raw: &str) -> Option<usize> {

@@ -7,9 +7,14 @@
 //! read. The heal pass calls [`run_pass`] beside the PR steward, and
 //! `pr create` calls [`ref_line`] so each child PR points back at the issue.
 //! A `/claim` comment on the issue adds a line, and a claim with no PR goes
-//! stale after [`STALE_AFTER_DAYS`]; the `claim` module decides both.
+//! stale after [`STALE_AFTER_DAYS`]; the `claim` module decides both. Each
+//! owner line ends with a hidden id marker, and the `mine` module reads it back
+//! so a teammate's own fno can file the node it claimed.
 
 mod claim;
+mod mine;
+
+pub(crate) use mine::{run as import_claimed, Args as ImportArgs};
 
 use crate::backlog::projections::{is_publishable, project_key};
 use crate::claims::ClaimRecord;
