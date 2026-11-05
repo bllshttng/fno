@@ -3,17 +3,7 @@
 /// Integration tests for loop_target.rs (TargetQueue, run_loop_command) and
 /// loop_dispatch.rs (ShelloutDispatcher, preflight, driver_default_max).
 ///
-/// Test naming mirrors the acceptance criteria in the task spec:
-///   1. target_queue_parses_manifest
-///   2. preflight_rejects_unknown_driver
-///   3. preflight_names_missing_binary
-///   4. dispatcher_passes_env_and_iteration
-///   5. driver_default_max_sources_lib
-///   6. e2e_binary_happy_path (AC1-HP proxy)
-///   7. e2e_binary_iteration_ceiling (AC1-EDGE)
-///   8. e2e_binary_missing_driver_binary
-///   9. e2e_binary_megawalk_rejected
-///  10. e2e_resume_no_duplicate_session (AC1-FR groundwork)
+/// Test naming mirrors the acceptance criteria in the task spec.
 use fno_agents::loop_dispatch::preflight;
 use fno_agents::loop_runtime::Queue;
 use fno_agents::loop_target::TargetQueue;
