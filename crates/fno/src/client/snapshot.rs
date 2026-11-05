@@ -1266,6 +1266,7 @@ shoot a root whose fleet map has a second machine (scripts/ops/mux-demo-snapshot
             // reading paints unknown lines - nothing to judge.
             view.org = crate::org_overlay::Panel::with_detail(true);
             view.org.expand();
+            view.org.load_capacity();
             let seeded = std::env::var("FNO_SNAPSHOT_LANES").ok();
             let lanes = match seeded.and_then(|path| std::fs::read(path).ok()) {
                 Some(raw) => crate::org_overlay::parse(&raw),
