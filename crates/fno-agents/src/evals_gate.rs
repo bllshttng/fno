@@ -26,9 +26,11 @@
 //! The runs are detached, and the tick never waits on one. A later tick reads
 //! the history rows, so a daemon restart loses no run. Plumbing never reads as
 //! a pass: no result by the limit, or a spent budget, is red and names the
-//! cause and the clearing command.
+//! cause and the clearing command. A baseline the compare cannot answer reads
+//! pending, never red: the head re-runs once a main run covers its tasks.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -558,17 +560,39 @@ fn fetch(p: &Paths, d: &Deps, refspec: &str) -> bool {
 /// and a tag read from its working tree misses a golden the ref added. None
 /// on any plumbing failure; callers then read the checkout's own bank, which
 /// is the behavior this replaces.
+///
+/// One owner: the swap holds an exclusive flock on `ref-<slot>.lock`, so two
+/// ticks cannot interleave a remove with an add, and a tick that finds the
+/// lock held skips the slot for its pass. An add a killed tick left mid-write
+/// locks the slot "initializing" in git's eyes, so the remove takes a second
+/// force and overrides that lock instead of failing here on every later tick.
 fn ref_checkout(p: &Paths, d: &Deps, slot: &str, sha: &str) -> Option<PathBuf> {
     let dir = p.state_dir.join(format!("ref-{slot}"));
     let bank = dir.join("evals").join("bank");
     let dir_str = dir.to_string_lossy().into_owned();
+    let _ = std::fs::create_dir_all(&p.state_dir);
+    let lock = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(p.state_dir.join(format!("ref-{slot}.lock")))
+        .ok()?;
+    // NB: no blocking wait. A holder wedged mid-swap would stall the whole
+    // pass; skipping hands the slot to the next tick instead.
+    let locked = unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    if locked != 0 {
+        return None;
+    }
     if bank.is_dir()
         && (d.run)(&["git", "-C", &dir_str, "rev-parse", "HEAD"], p.repo)
             .is_some_and(|r| r.ok && r.stdout.trim() == sha)
     {
         return Some(dir);
     }
-    let _ = (d.run)(&["git", "worktree", "remove", "--force", &dir_str], p.repo);
+    let _ = (d.run)(
+        &["git", "worktree", "remove", "--force", "--force", &dir_str],
+        p.repo,
+    );
     (d.run)(&["git", "worktree", "prune"], p.repo);
     (d.run)(
         &["git", "worktree", "add", "--detach", &dir_str, sha],
@@ -1075,6 +1099,18 @@ fn wrote_rows(p: &Paths, cohort: &str) -> bool {
         .any(|r| row_cohort(r) == cohort)
 }
 
+/// True when the baseline cohort has grade rows for every selected task. The
+/// compare folds rows to the run's tasks first, so a baseline that predates a
+/// golden the head graded answers no rows, and the compare errs on that side.
+fn baseline_covers(rows: &[Value], baseline: &str, tasks: &[String]) -> bool {
+    tasks.iter().all(|task| {
+        rows.iter().any(|r| {
+            row_cohort(r) == baseline
+                && r.get("task_id").and_then(Value::as_str) == Some(task.as_str())
+        })
+    })
+}
+
 /// The in-flight head run: drop it when its head moved, read it when done.
 fn settle_head_run(p: &Paths, d: &Deps, state: &mut State, slug: &str, prs: &[Pr]) {
     let Some(run) = state.head_run.clone() else {
@@ -1128,15 +1164,28 @@ fn settle_head_run(p: &Paths, d: &Deps, state: &mut State, slug: &str, prs: &[Pr
                 Some(&run.tasks),
             ) {
                 Ok(view) => verdict(&view, &run.sha),
+                // A baseline that predates a golden the head graded answers
+                // the compare with no rows. That is a machine gap, not a head
+                // defect: pending, and the head re-runs once a baseline
+                // covers the selection.
+                Err(_) if !baseline_covers(&history_rows(p.history), baseline, &run.tasks) => (
+                    "pending",
+                    "waiting for a gate-main baseline that covers the tasks at this head"
+                        .to_string(),
+                ),
                 Err(e) => ("failure", no_result(&run.sha, &e)),
             }
         }
-        (None, false) => ("failure", no_result(&run.sha, "no baseline")),
+        (None, false) => (
+            "pending",
+            "waiting for a first gate-main baseline".to_string(),
+        ),
     };
-    // A dropped POST keeps the run, so the next tick posts it. Pending
-    // forever is how a green PR never merges.
+    let disposition = if status == "pending" { QUEUED } else { DONE };
+    // A dropped POST keeps the run, so the next tick posts it. A terminal
+    // post clears the run; a pending one requeues the head for the next tick.
     if post_status(p, d, slug, &run.sha, status, &text) {
-        state.heads.insert(run.sha.clone(), DONE.into());
+        state.heads.insert(run.sha.clone(), disposition.into());
         state.head_run = None;
     }
 }
@@ -1201,6 +1250,16 @@ fn launch_head(
     let builds = tasks.iter().any(|t| !t.covers.is_empty())
         && files.iter().any(|f| f.starts_with("crates/"));
     let tasks: Vec<String> = tasks.into_iter().map(|t| t.id).collect();
+    // A baseline that predates a golden the head graded answers the compare
+    // with no rows. Launching only spends the run to read pending at settle:
+    // wait for a main run that covers the selection, and the queued
+    // disposition carries the PR's pending status until then.
+    if !baseline_covers(&rows, baseline, &tasks) {
+        return format!(
+            "head {} waits for a baseline covering its tasks",
+            short(&pr.sha)
+        );
+    }
     if spent_today(&rows, d.now) + cost > daily_usd {
         finish(
             "failure",
@@ -1227,10 +1286,13 @@ fn launch_head(
     );
     if builds {
         let Some(root) = arg_bank.as_deref().and_then(checkout_of) else {
-            // The deployed binary must never grade this head.
-            let cause = no_result(&pr.sha, "no checkout of the head to build");
-            finish("failure", &cause, DONE.into());
-            return format!("head {} has no checkout to build", short(&pr.sha));
+            // The deployed binary must never grade this head, and a failed
+            // slot swap heals by the next tick: skip instead of spending a
+            // terminal red on plumbing, and the queued disposition retries.
+            return format!(
+                "head {} has no checkout to build; the next tick retries",
+                short(&pr.sha)
+            );
         };
         argv = with_build(p, "head", root, argv);
     }
@@ -1604,6 +1666,31 @@ mod tests {
                 s.worker.main_tried = Some(tried);
             });
         }
+        /// Strikes one cohort's rows from the history: the shape a reaped or
+        /// rotated history file leaves the baseline in.
+        fn drop_cohort(&self, cohort: &str) {
+            let kept: Vec<String> = std::fs::read_to_string(self.history())
+                .unwrap()
+                .lines()
+                .filter(|l| !l.contains(&format!("\"experiment_id\":\"{cohort}\"")))
+                .map(String::from)
+                .collect();
+            std::fs::write(self.history(), kept.join("\n") + "\n").unwrap();
+        }
+
+        /// Seeds a baseline whose rows answer none of the head's tasks.
+        fn with_baseline_off_selection(&self) {
+            self.rows("base", "g_other", [true, true, true]);
+            let tried = format!(
+                "gate-main-{}-{}",
+                Utc::now().format("%Y-%m-%d"),
+                route_hash(self.dir.path())
+            );
+            self.state(|s| {
+                s.worker.baseline = Some("base".into());
+                s.worker.main_tried = Some(tried);
+            });
+        }
     }
 
     #[test]
@@ -1613,9 +1700,9 @@ mod tests {
             ("cli/x/a.rs\n", Some("--task c1 "), 1),
             ("skills/s\ncli/x/a.rs\n", Some("--task c1,g1 "), 1),
             ("cli/y/a.rs\n", None, 0),
-            // A crate head needs a build, and with no checkout to build the
-            // deployed binary must not grade it: red, no launch.
-            ("crates/x/a.rs\n", None, 2),
+            // A baseline that predates the covering task holds the launch:
+            // no run, and only the queue's pending posts.
+            ("crates/x/a.rs\n", None, 1),
         ];
         for (files, task_arg, posted) in cases {
             let w = World::new(files);
@@ -1634,9 +1721,6 @@ mod tests {
             }
             let posts = w.posts.borrow();
             assert_eq!(posts.len(), posted, "{files}: {posts:?}");
-            if posted == 2 {
-                assert!(posts[1].starts_with("state=failure"), "{files}: {posts:?}");
-            }
         }
     }
 
@@ -1666,6 +1750,9 @@ mod tests {
         )
         .trim()
         .to_string();
+        // The baseline answers the whole selection, so the launch guard lets
+        // the head through and the test stays about the sha the bank is read at.
+        w.rows("base", "g3", [true, true, true]);
         w.with_baseline();
         w.tick(true, Utc::now());
         let spawns = w.spawns.borrow();
@@ -2019,6 +2106,169 @@ mod tests {
             note.contains("-lead held: 2.10 USD over the daily budget"),
             "{note}"
         );
+    }
+
+    #[test]
+    fn a_baseline_that_predates_the_head_tasks_requeues_pending_not_red() {
+        let w = World::new("skills/x/SKILL.md\n");
+        w.with_baseline();
+        w.tick(true, Utc::now());
+        assert_eq!(w.spawns.borrow().len(), 1, "head launched");
+        // The baseline's rows vanish mid-run (a reaped history answers this),
+        // so the compare folds no rows on the baseline side.
+        w.drop_cohort("base");
+        w.tick(false, Utc::now());
+        let posts = w.posts.borrow();
+        let post = posts.last().cloned().unwrap();
+        assert!(post.contains("state=pending"), "{post}");
+        assert!(post.contains("waiting for a gate-main baseline"), "{post}");
+        let state = load_state(&dir_of(&w));
+        assert_eq!(state.heads.get(SHA).map(String::as_str), Some(QUEUED));
+        assert!(state.head_run.is_none(), "the pending requeues the head");
+
+        // The next tick holds the launch instead of spending it again, and
+        // posts nothing new: one pending, no red, no run, until a baseline
+        // covers the selection.
+        w.tick(true, Utc::now());
+        assert_eq!(w.spawns.borrow().len(), 1, "no second spend");
+        assert_eq!(w.posts.borrow().len(), 1, "no new posts");
+    }
+
+    #[test]
+    fn a_head_run_with_no_rows_and_a_seated_baseline_reads_red_not_pending() {
+        let w = World::new("skills/x/SKILL.md\n");
+        w.with_baseline();
+        w.tick(true, Utc::now());
+        // The baseline covers the selection but the run wrote no rows: the
+        // missing side is the head cohort, a real run failure, and stays red.
+        w.tick(false, Utc::now());
+        let post = w.posts.borrow().last().cloned().unwrap();
+        assert!(post.contains("state=failure"), "{post}");
+        assert!(post.contains("gate-head-abcdef123456"), "{post}");
+        assert!(post.contains("gate-retry"), "{post}");
+    }
+
+    #[test]
+    fn a_head_settled_with_no_baseline_at_all_reads_pending_and_requeues() {
+        let w = World::new("skills/x/SKILL.md\n");
+        w.with_baseline();
+        w.tick(true, Utc::now());
+        w.state(|s| s.worker.baseline = None);
+        w.tick(false, Utc::now());
+        let post = w.posts.borrow().last().cloned().unwrap();
+        assert!(post.contains("state=pending"), "{post}");
+        assert!(post.contains("first gate-main baseline"), "{post}");
+        let state = load_state(&dir_of(&w));
+        assert_eq!(state.heads.get(SHA).map(String::as_str), Some(QUEUED));
+        assert!(state.head_run.is_none());
+    }
+
+    #[test]
+    fn a_head_its_baseline_cannot_cover_waits_instead_of_spending_a_run() {
+        let w = World::new("skills/x/SKILL.md\n");
+        w.with_baseline_off_selection();
+        w.tick(true, Utc::now());
+        let posts = w.posts.borrow();
+        assert_eq!(posts.len(), 1, "only the queue's pending posts");
+        assert!(posts[0].contains("state=pending"), "{posts:?}");
+        drop(posts);
+        assert!(w.spawns.borrow().is_empty(), "no run spent");
+        let state = load_state(&dir_of(&w));
+        assert_eq!(state.heads.get(SHA).map(String::as_str), Some(QUEUED));
+    }
+
+    #[test]
+    fn a_slot_locked_by_a_dead_add_heals_and_checks_out_the_fetched_sha() {
+        let w = World::new_git("skills/x/SKILL.md\n");
+        let y = String::from_utf8_lossy(
+            &std::process::Command::new("git")
+                .args(["rev-parse", "main"])
+                .current_dir(w.dir.path())
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .trim()
+        .to_string();
+        let slot = dir_of(&w).join("ref-main");
+        let run = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .args(args)
+                .current_dir(w.dir.path())
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "git {args:?} failed: {} {}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            );
+        };
+        run(&[
+            "worktree",
+            "add",
+            "--detach",
+            slot.to_str().unwrap(),
+            "HEAD",
+        ]);
+        // The lock a killed `worktree add` leaves: without the double force
+        // this remove fails and the slot poisons every later tick.
+        run(&["worktree", "lock", slot.to_str().unwrap()]);
+        w.tick(true, Utc::now());
+        let adds = w.adds.borrow();
+        assert_eq!(adds.len(), 1, "the slot was re-added: {adds:?}");
+        assert_eq!(adds[0], slot.to_string_lossy(), "{adds:?}");
+        drop(adds);
+        let head = String::from_utf8_lossy(
+            &std::process::Command::new("git")
+                .args(["-C", slot.to_str().unwrap(), "rev-parse", "HEAD"])
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .trim()
+        .to_string();
+        assert_eq!(head, y, "the healed slot sits at the fetched sha");
+    }
+
+    #[test]
+    fn a_slot_swapped_by_a_concurrent_owner_is_skipped_for_the_tick() {
+        let w = World::new("crates/x.rs\n");
+        std::fs::write(
+            w.dir.path().join("evals/bank/c1.yaml"),
+            "id: c1\ntier: regression\ngrade:\n  - kind: file-exists\n    path: x\ncovers: [\"crates/x/\"]\n",
+        )
+        .unwrap();
+        w.with_baseline();
+        // The baseline answers the covering task too, so the launch reaches
+        // the slot: the test stays about the busy-slot skip, not the guard.
+        w.rows("base", "c1", [true, true, true]);
+        let lock = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(dir_of(&w).join("ref-head.lock"))
+            .unwrap();
+        assert_eq!(
+            unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+            0,
+            "the test takes the slot lock first"
+        );
+        w.tick(true, Utc::now());
+        {
+            let posts = w.posts.borrow();
+            assert_eq!(posts.len(), 1, "the queue's pending only: {posts:?}");
+        }
+        assert!(w.adds.borrow().is_empty(), "no swap under a foreign lock");
+        assert!(w.spawns.borrow().is_empty(), "no launch on a busy slot");
+        let state = load_state(&dir_of(&w));
+        assert_eq!(state.heads.get(SHA).map(String::as_str), Some(QUEUED));
+        drop(lock);
+
+        // With the lock released the same head launches on the next tick.
+        w.tick(true, Utc::now());
+        assert_eq!(w.spawns.borrow().len(), 1, "launched once the slot frees");
+        assert_eq!(w.adds.borrow().len(), 1, "the slot was seated");
     }
 
     fn dir_of(w: &World) -> PathBuf {
