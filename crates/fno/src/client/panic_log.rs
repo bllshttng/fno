@@ -39,22 +39,25 @@ mod tests {
     #[test]
     fn mux_log_client_panic_is_kept_and_reported_only_after_restore() {
         const NAME: &str = "client::panic_log::tests::mux_log_client_panic_is_kept_and_reported_only_after_restore";
-        if std::env::var_os("FNO_MUX_PANIC_PROBE").is_some() {
+        if let Some(observation) = std::env::var_os("FNO_MUX_PANIC_PROBE") {
+            let log = crate::mux_log::client_path();
+            std::fs::create_dir_all(log.parent().unwrap()).unwrap();
             install();
             let result = std::panic::catch_unwind(|| panic!("mux panic probe"));
             assert!(result.is_err());
             after_restore();
+            std::fs::copy(log, observation).unwrap();
             return;
         }
         let dir = tempfile::tempdir().unwrap();
         let output = std::process::Command::new(std::env::current_exe().unwrap())
             .args(["--exact", NAME, "--nocapture"])
-            .env("FNO_MUX_PANIC_PROBE", "1")
+            .env("FNO_MUX_PANIC_PROBE", dir.path().join("observed.log"))
             .env("FNO_MUX_DIR", dir.path())
             .output()
             .unwrap();
         assert!(output.status.success());
-        let path = dir.path().join("client.log");
+        let path = dir.path().join("observed.log");
         assert!(path.exists(), "the panic must survive in client.log");
         let log = std::fs::read_to_string(path).unwrap();
         assert!(log.contains("mux panic probe"));

@@ -157,7 +157,7 @@ pub(super) fn poll(view: &mut View) -> bool {
                 Ok(result) => Some(result),
                 Err(tokio::sync::oneshot::error::TryRecvError::Closed) => Some((
                     false,
-                    "The report command stopped; your text is kept.".into(),
+                    "The report command stopped. Your text is kept.".into(),
                 )),
                 Err(_) => None,
             }
