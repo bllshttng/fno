@@ -207,17 +207,20 @@ fn mutations_hold_the_lock_file_the_watcher_takes() {
     let _ = std::fs::remove_dir_all(paths.state.parent().unwrap());
 }
 
-/// Seed the cause fixture, sweep with the given probes, and return the
-/// report, the store, and the committed journal, then remove the tempdir.
+/// Seed the cause fixture with its two clock ages, sweep with the given
+/// probes, and return the report, the store, and the committed journal.
+/// The caller removes the tempdir.
 fn run_cause_sweep(
     tag: &str,
     reason: &str,
+    parked_age_h: Option<u64>,
+    polled_age_h: u64,
     head: (&'static str, &'static str, &'static str),
     checks: Result<bool, &'static str>,
     worktree: Result<bool, &'static str>,
 ) -> (SweepReport, Value, String, Paths) {
     let paths = tmp_paths(tag);
-    fixture_cause(&paths, reason, None, 2);
+    fixture_cause(&paths, reason, parked_age_h, polled_age_h);
     let ctx = ctx_probes(paths.clone(), head, checks, worktree);
     let r = sweep(&ctx).unwrap();
     let data: Value =
@@ -232,6 +235,8 @@ fn sweep_lifts_a_checks_red_park_only_when_checks_read_green() {
     let (r, data, events, paths) = run_cause_sweep(
         "cause-checks-green",
         "checks-red",
+        None,
+        2,
         ("head1", "feature", "OPEN"),
         Ok(false),
         Ok(false),
@@ -247,6 +252,8 @@ fn sweep_lifts_a_checks_red_park_only_when_checks_read_green() {
         let (r, data, events, paths) = run_cause_sweep(
             "cause-checks-hold",
             "checks-red",
+            None,
+            2,
             ("head1", "feature", "OPEN"),
             checks,
             Ok(false),
@@ -264,6 +271,8 @@ fn a_worktree_park_lifts_when_clear_and_holds_on_probe_error() {
         let (r, _, events, paths) = run_cause_sweep(
             "cause-worktree",
             reason,
+            None,
+            2,
             ("head1", "feature", "OPEN"),
             Ok(true),
             Ok(true),
@@ -279,6 +288,8 @@ fn a_worktree_park_lifts_when_clear_and_holds_on_probe_error() {
     let (r, data, _, paths) = run_cause_sweep(
         "cause-worktree-err",
         "worktree_head_mismatch",
+        None,
+        2,
         ("head1", "feature", "OPEN"),
         Ok(true),
         Err("git exploded"),
@@ -301,6 +312,8 @@ fn the_age_rule_reads_parked_at_then_the_poll_stamp_and_unpark_clears_it() {
     let (r, _, events, paths) = run_cause_sweep(
         "age-parked-at-hold",
         "retries-exhausted",
+        Some(1),
+        30,
         ("head1", "feature", "OPEN"),
         Ok(true),
         Ok(false),
@@ -315,6 +328,8 @@ fn the_age_rule_reads_parked_at_then_the_poll_stamp_and_unpark_clears_it() {
     let (r, _, events, paths) = run_cause_sweep(
         "age-parked-at-lift",
         "retries-exhausted",
+        Some(25),
+        30,
         ("head1", "feature", "OPEN"),
         Ok(true),
         Ok(false),
@@ -326,6 +341,8 @@ fn the_age_rule_reads_parked_at_then_the_poll_stamp_and_unpark_clears_it() {
     let (r, _, _, paths) = run_cause_sweep(
         "age-legacy",
         "retries-exhausted",
+        None,
+        30,
         ("head1", "feature", "OPEN"),
         Ok(true),
         Ok(false),
