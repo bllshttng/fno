@@ -603,6 +603,17 @@ printf '{\n  "id": "probe-abcd",\n  "title": "portal stopped"\n}\n'
     h.wait_screen(5, |s| s.contains("report a problem"));
     h.type_bytes(b"\x1b");
     h.wait_screen(5, |s| !s.contains("report a problem"));
+    h.type_bytes(b"\x02!");
+    let screen = h.wait_screen(5, |s| s.contains("report a problem"));
+    let (row, line) = screen
+        .lines()
+        .enumerate()
+        .find(|(_, line)| line.contains("report a problem"))
+        .unwrap();
+    let at = line.find("esc").expect("the report paints an esc chip");
+    let col = line[..at].chars().count() + 2;
+    h.type_bytes(format!("\x1b[<0;{col};{}M\x1b[<0;{col};{}m", row + 1, row + 1).as_bytes());
+    h.wait_screen(5, |s| !s.contains("report a problem"));
     assert_eq!(
         std::fs::read_to_string(scratch.0.join("calls"))
             .unwrap()
