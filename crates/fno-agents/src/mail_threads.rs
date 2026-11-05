@@ -717,7 +717,20 @@ pub fn run_mail_threads(args: &[String]) -> i32 {
             if let Some(stray_root) = crate::mail_paths::live_bus_log().parent() {
                 crate::chats::fold_stray_chats(&chats, stray_root);
             }
-            let projection = project_at(&chats, &registry_rows(), now_secs());
+            let mut projection = project_at(&chats, &registry_rows(), now_secs());
+            // Mail between two other machines never reaches this chats
+            // store; the shared bus holds it. No store, or an unreachable
+            // one, leaves the local projection as it is.
+            if let Ok(Some(remote)) = crate::store_remote::configured() {
+                let since = now_secs() as i64 - crate::mail_bus::MAIL_TTL_SECS;
+                match crate::mail_bus::recent_rows(&remote, since, FLEET_ROWS) {
+                    Ok(rows) => {
+                        let (here, seen) = crate::mail_arm::local_bus_facts();
+                        fold_fleet_rows(&mut projection, &rows, &here, &seen);
+                    }
+                    Err(e) => eprintln!("mail-threads: shared bus: {e}"),
+                }
+            }
             println!("{}", serde_json::to_string(&projection).unwrap_or_default());
             0
         }
@@ -728,6 +741,120 @@ pub fn run_mail_threads(args: &[String]) -> i32 {
             eprintln!("usage: fno-agents mail-threads [--format json | details --session <id> | journal-reply --to <name> --to-session <id> --in-reply-to <msg-id> | retry <msg-id>]");
             2
         }
+    }
+}
+
+/// The most bus rows one projection reads from the shared store.
+const FLEET_ROWS: i64 = 2000;
+
+/// Fold the shared bus's rows between two other machines into the
+/// projection: one participant per `name@host`, one thread per pair. The
+/// local chats store already holds a row that names a label this machine
+/// held (`here`), one its pull arm delivered (`seen`), and one it sent (the
+/// sender's mirror keeps the bus id), so each of those is skipped.
+pub(crate) fn fold_fleet_rows(
+    projection: &mut Value,
+    rows: &[crate::mail_bus::FleetRow],
+    here: &[String],
+    seen: &std::collections::HashSet<String>,
+) {
+    let local_ids: std::collections::HashSet<String> = ["threads", "channels"]
+        .iter()
+        .filter_map(|k| projection.get(*k).and_then(Value::as_array))
+        .flatten()
+        .chain(
+            projection
+                .get("system")
+                .and_then(Value::as_object)
+                .into_iter()
+                .flat_map(|m| m.values()),
+        )
+        .filter_map(|t| {
+            t.get("rows")
+                .and_then(Value::as_array)
+                .or_else(|| t.as_array())
+        })
+        .flatten()
+        .filter_map(|r| r.get("id").and_then(Value::as_str))
+        .map(str::to_string)
+        .collect();
+    let mut pairs: BTreeMap<(String, String), Vec<Value>> = BTreeMap::new();
+    let mut last_seen: BTreeMap<String, String> = BTreeMap::new();
+    for r in rows {
+        if here.contains(&r.from_host)
+            || here.contains(&r.to_host)
+            || seen.contains(&r.msg_id)
+            || local_ids.contains(&r.msg_id)
+        {
+            continue;
+        }
+        let from_name = r
+            .from_id
+            .rsplit_once('/')
+            .map_or(r.from_id.as_str(), |(_, n)| n);
+        let from_key = format!("{from_name}@{}", r.from_host);
+        let to_key = format!("{}@{}", r.to_name, r.to_host);
+        let ts = chrono::DateTime::from_timestamp(r.created_at, 0)
+            .map(|t| t.format("%Y-%m-%dT%H:%M:%SZ").to_string())
+            .unwrap_or_default();
+        for key in [&from_key, &to_key] {
+            let seen = last_seen.entry(key.clone()).or_default();
+            if *seen < ts {
+                *seen = ts.clone();
+            }
+        }
+        let body = crate::mail_header::display_body(&r.payload);
+        let row = json!({
+            "id": r.msg_id,
+            "ts": ts,
+            "from": from_name,
+            "from_key": from_key,
+            "to_key": to_key,
+            "to": to_key,
+            "summary": crate::mail_header::summary_of(&body),
+            "subject": Some(&r.subject).filter(|s| !s.is_empty()),
+            "body": body,
+            "state": r.status,
+            "system": false,
+        });
+        let pair = if from_key <= to_key {
+            (from_key, to_key)
+        } else {
+            (to_key, from_key)
+        };
+        pairs.entry(pair).or_default().push(row);
+    }
+    let Some(obj) = projection.as_object_mut() else {
+        return;
+    };
+    if let Some(parts) = obj.get_mut("participants").and_then(Value::as_array_mut) {
+        let known: std::collections::HashSet<String> = parts
+            .iter()
+            .filter_map(|p| p.get("key").and_then(Value::as_str))
+            .map(str::to_string)
+            .collect();
+        for (key, ts) in last_seen.into_iter().filter(|(k, _)| !known.contains(k)) {
+            parts.push(
+                json!({"key": key, "name": key, "live": false, "system": false,
+                "last_ts": ts}),
+            );
+        }
+    }
+    if let Some(threads) = obj.get_mut("threads").and_then(Value::as_array_mut) {
+        for ((a, b), rows) in pairs {
+            let last_ts = rows.last().and_then(|r| r.get("ts")).cloned();
+            threads.push(json!({
+                "chat_id": crate::chats::chat_id_for_pair(&a, &b),
+                "participants": [a, b],
+                "rows": rows,
+                "last_ts": last_ts,
+            }));
+        }
+        threads.sort_by(|a, b| {
+            a.get("last_ts")
+                .and_then(Value::as_str)
+                .cmp(&b.get("last_ts").and_then(Value::as_str))
+        });
     }
 }
 
@@ -1660,5 +1787,60 @@ mod tests {
             None
         );
         let _ = std::fs::remove_dir_all(&state);
+    }
+
+    /// The shared bus's rows between two other machines land as threads;
+    /// a row naming this machine stays with the local chats store.
+    #[test]
+    fn fleet_rows_fold_remote_pairs_and_skip_this_machine() {
+        let row = |id: &str, from: &str, from_host: &str, to: &str, to_host: &str| {
+            crate::mail_bus::FleetRow {
+                msg_id: id.into(),
+                from_id: format!("bb16:{from_host}/{from}"),
+                from_host: from_host.into(),
+                to_name: to.into(),
+                to_host: to_host.into(),
+                payload: "hello".into(),
+                created_at: 1_790_000_000,
+                status: "delivered".into(),
+                ..Default::default()
+            }
+        };
+        let mut projection = json!({"participants": [], "threads": []});
+        let rows = [
+            row("m1", "lenore", "r2d2", "ivy", "imac2d2"),
+            row("m2", "ivy", "imac2d2", "lenore", "r2d2"),
+            row("m3", "oak", "mbp", "ivy", "imac2d2"),
+        ];
+        let mut projection_with_local = json!({"participants": [], "threads": [
+            {"chat_id": "c", "participants": ["a", "b"], "rows": [{"id": "m2"}]}]});
+        fold_fleet_rows(
+            &mut projection_with_local,
+            &rows,
+            &["mbp".to_string()],
+            &["m1".to_string()].into_iter().collect(),
+        );
+        assert_eq!(
+            projection_with_local["threads"].as_array().unwrap().len(),
+            1,
+            "a delivered id and a locally held id both stay local"
+        );
+        fold_fleet_rows(
+            &mut projection,
+            &rows,
+            &["mbp".to_string()],
+            &Default::default(),
+        );
+        let threads = projection["threads"].as_array().unwrap();
+        assert_eq!(threads.len(), 1, "one remote pair; the mbp row is local");
+        assert_eq!(threads[0]["rows"].as_array().unwrap().len(), 2);
+        assert_eq!(threads[0]["rows"][0]["from_key"], "lenore@r2d2");
+        let keys: Vec<&str> = projection["participants"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|p| p["key"].as_str())
+            .collect();
+        assert_eq!(keys, ["ivy@imac2d2", "lenore@r2d2"]);
     }
 }

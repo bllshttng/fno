@@ -351,6 +351,56 @@ ORDER BY seq DESC LIMIT 1",
         .map(|h| normalize_host(h)))
 }
 
+/// One bus row as the Messages projection shows it, any status.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct FleetRow {
+    pub msg_id: String,
+    pub from_id: String,
+    pub from_host: String,
+    pub to_name: String,
+    pub to_host: String,
+    pub payload: String,
+    pub subject: String,
+    pub created_at: i64,
+    pub status: String,
+}
+
+/// The newest `limit` rows written at or after `since` (epoch seconds), on
+/// every host, oldest first. The Messages tab reads them to show the mail
+/// other machines exchange.
+pub fn recent_rows(remote: &Remote, since: i64, limit: i64) -> Result<Vec<FleetRow>, String> {
+    let reply = remote.execute(
+        "SELECT msg_id, from_id, from_host, to_name, to_host, payload, subject, created_at, status \
+FROM fno_mail_bus WHERE created_at >= ? ORDER BY seq DESC LIMIT ?",
+        &[SqlValue::Integer(since), SqlValue::Integer(limit)],
+    )?;
+    let mut rows: Vec<FleetRow> = reply
+        .rows
+        .iter()
+        .filter_map(|v| {
+            let text = |i: usize| {
+                v.get(i)
+                    .and_then(|x| x.text())
+                    .unwrap_or_default()
+                    .to_string()
+            };
+            Some(FleetRow {
+                msg_id: v.first()?.text()?.to_string(),
+                from_id: text(1),
+                from_host: text(2),
+                to_name: text(3),
+                to_host: text(4),
+                payload: text(5),
+                subject: text(6),
+                created_at: v.get(7)?.integer()?,
+                status: text(8),
+            })
+        })
+        .collect();
+    rows.reverse();
+    Ok(rows)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
