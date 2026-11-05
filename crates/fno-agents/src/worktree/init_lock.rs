@@ -63,6 +63,13 @@ pub(crate) fn release(repo_hint: &Path, wt: &Path, min_age: Duration) -> bool {
     std::fs::remove_file(&lock).is_ok()
 }
 
+/// Release a stale `initializing` lock on the worktree at `cwd` before a
+/// removal; a younger or foreign lock stays.
+pub(crate) fn release_stale(cwd: &str) {
+    let wt = Path::new(cwd);
+    release(wt, wt, STALE_AFTER);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
