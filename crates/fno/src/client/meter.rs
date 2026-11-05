@@ -106,7 +106,7 @@ async fn stream_macmon(
                         };
                         let mut text = cpu;
                         text.push_str(&memory_segment(state.as_ref(), detailed));
-                        text.push_str(&capacity_segment(state.as_ref()));
+                        text.push_str(&capacity_segment(state.as_ref(), detailed));
                         text
                     }
                     None => "meter: sensor unavailable".into(),
@@ -230,7 +230,7 @@ fn memory_segment(state: Option<&serde_json::Value>, detailed: bool) -> String {
 /// The capacity segment: workers live, the learned cap under its ceiling,
 /// then each visible account's windows. No state renders "cap unknown" and
 /// no number (AC6).
-fn capacity_segment(state: Option<&serde_json::Value>) -> String {
+fn capacity_segment(state: Option<&serde_json::Value>, detailed: bool) -> String {
     let Some(state) = state else {
         return " · cap unknown".into();
     };
@@ -247,22 +247,30 @@ fn capacity_segment(state: Option<&serde_json::Value>) -> String {
     } else {
         format!("cap {effective}")
     };
-    let mut line = match state.get("workers_live").and_then(|v| v.as_u64()) {
-        Some(workers) => {
-            let leads = state
-                .get("leads_live")
-                .and_then(|v| v.as_u64())
-                .map(|n| format!(", {n} leads"))
-                .unwrap_or_default();
-            format!(" · this machine {workers} workers{leads} of {cap}")
-        }
-        None => format!(" · this machine {cap}"),
+    let workers = state.get("workers_live").and_then(|v| v.as_u64());
+    let leads = state.get("leads_live").and_then(|v| v.as_u64());
+    let mut line = match workers {
+        Some(n) => format!(" · {n} working"),
+        None => String::new(),
     };
+    if let Some(n) = leads {
+        line.push_str(&format!(" · {n} leads"));
+    }
+    if !detailed {
+        return line + &account_segments(state);
+    }
+    line.push_str(&format!(" · this machine {cap}"));
     if let Some(reason) = state.get("reason").and_then(|v| v.as_str()) {
         if !reason.is_empty() {
             line.push_str(&format!(", {reason}"));
         }
     }
+    line + &account_segments(state)
+}
+
+/// Each visible account's windows or month spend.
+fn account_segments(state: &serde_json::Value) -> String {
+    let mut line = String::new();
     if let Some(accounts) = state.get("accounts").and_then(|v| v.as_array()) {
         for account in accounts {
             if account.get("show").and_then(|v| v.as_bool()) != Some(true) {
@@ -392,10 +400,10 @@ mod tests {
 
         // No state at all: the cap reads unknown and no memory number
         // renders, the never-a-zero contract (AC6).
-        assert_eq!(capacity_segment(None), " · cap unknown");
+        assert_eq!(capacity_segment(None, false), " · cap unknown");
         assert_eq!(memory_segment(None, false), "");
         let bare = json!({"ceiling": 23});
-        assert_eq!(capacity_segment(Some(&bare)), " · cap unknown");
+        assert_eq!(capacity_segment(Some(&bare), false), " · cap unknown");
         assert_eq!(memory_segment(Some(&bare), false), "");
     }
 
@@ -419,10 +427,13 @@ mod tests {
                     {"window": "5h", "used_tokens": 9}]},
             ],
         });
-        let line = capacity_segment(Some(&state));
+        let line = capacity_segment(Some(&state), false);
+        assert!(line.contains(" · 10 working · 5 leads"), "{line}");
+        assert!(!line.contains("cap"), "{line}");
+        let full = capacity_segment(Some(&state), true);
         assert!(
-            line.contains("this machine 10 workers, 5 leads of cap 14 (ceiling 23), CPU-bound"),
-            "{line}"
+            full.contains("10 working · 5 leads · this machine cap 14 (ceiling 23), CPU-bound"),
+            "{full}"
         );
         assert!(line.contains("zai 5h 62%, wk 1.1M tok"), "{line}");
         // The formatter's other shapes, pinned on the same rendered line's
