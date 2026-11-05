@@ -582,14 +582,21 @@ fn spawn_argv(
             argv.push(l.account.clone());
         }
     }
-    // A lane model crosses the fence for every harness: a claude lane whose
-    // model stays behind falls back to the CLI's own default, which put opus
-    // on a target lane. The footnote harness reads its model only from
-    // fenced args, so a model outside the fence makes the spawn refuse with
-    // "needs a model"; claude reads the same fence.
+    // A lane model crosses the fence: the footnote harness reads its model
+    // only from fenced args, and an unrouted claude lane whose model stays
+    // behind falls back to the CLI default, which put opus on a target lane.
+    // A routed lane already carries its model through --route. Each harness
+    // spells the flag its own way: claude refuses `-m`.
     let lane_model = lane
-        .filter(|l| !l.model.is_empty())
-        .map(|l| l.model.clone());
+        .filter(|l| !l.model.is_empty() && (l.harness == "footnote" || l.route.is_empty()))
+        .map(|l| {
+            let flag = if l.harness == "footnote" {
+                "-m"
+            } else {
+                "--model"
+            };
+            (flag, l.model.clone())
+        });
     // The unattended footnote lane runs bypassed like every other lane door;
     // the mode rides the fence so the launch spec carries it.
     let lane_mode = lane
@@ -603,8 +610,8 @@ fn spawn_argv(
         // prompt sits before it. run_task sends no flags with a dash-led prompt.
         argv.push(prompt.into());
         argv.push("--".into());
-        if let Some(m) = lane_model {
-            argv.push("-m".into());
+        if let Some((flag, m)) = lane_model {
+            argv.push(flag.into());
             argv.push(m);
         }
         if let Some(m) = lane_mode {
@@ -1679,7 +1686,20 @@ mod tests {
             &[],
         );
         let fence = argv.iter().position(|a| a == "--").unwrap();
-        assert_eq!(&argv[fence + 1..fence + 3], &["-m", "claude-sonnet-5"]);
+        // claude spells it --model and exits 1 on `-m`.
+        assert_eq!(&argv[fence + 1..fence + 3], &["--model", "claude-sonnet-5"]);
+        assert!(!argv.contains(&"-m".to_string()));
+        // A routed claude lane already carries its model: nothing crosses.
+        let routed = LaneRow {
+            name: "z".into(),
+            harness: "claude".into(),
+            model: "glm-5.3-flash[1m]".into(),
+            route: "zai/glm-5.3-flash[1m]".into(),
+            ..Default::default()
+        };
+        let argv = spawn_argv("n", "/tmp/wt", 60, Some("claude"), Some(&routed), "p", &[]);
+        assert!(!argv.contains(&"--model".to_string()));
+        assert!(!argv.contains(&"-m".to_string()));
         // The mode is footnote-only too: another harness's lane never carries
         // it (each door owns its own unattended posture).
         assert!(!argv.contains(&"--permission-mode".to_string()));
