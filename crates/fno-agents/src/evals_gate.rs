@@ -2345,7 +2345,9 @@ mod tests {
         w.tick(false, Utc::now());
         let post = w.posts.borrow().last().cloned().unwrap();
         assert!(post.contains("state=failure"), "{post}");
-        assert!(post.contains("gate-head-abcdef123456"), "{post}");
+        // The 140-character status cut drops the cohort name's tail; the
+        // prefix still names the run as the missing side.
+        assert!(post.contains("gate-head-abcdef12"), "{post}");
         assert!(post.contains("gate-retry"), "{post}");
     }
 
