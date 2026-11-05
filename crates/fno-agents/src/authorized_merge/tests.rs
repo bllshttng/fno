@@ -2386,7 +2386,7 @@ fn a_paint_pr_holds_until_an_answered_page_names_it() {
     // A paint file the approval never showed is a new look and holds.
     fake.gh_routes = routes("crates/fno/src/client/theme.rs\ncrates/fno/src/client/splash.rs\n");
     assert!(crate::merge_gates::visual_approval_blocker(&fake, &tmp, 7, &pushed).is_some());
-    // An approval that spells the approved head as a ten-character prefix
+    // An approval that spells the approved head as a short hex prefix
     // carries the same way.
     fake.gh_routes = routes("crates/fno/src/client/theme.rs\n");
     std::fs::write(&page, approved(&format!("PR 7 at {}", &head[..10]))).unwrap();
