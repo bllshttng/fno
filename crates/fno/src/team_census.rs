@@ -366,10 +366,14 @@ fn provider_readings(gate: &GateReading, rows: &[AgentRow]) -> Vec<ProviderCount
 
 /// The fleet team line's segments: occupancy first, then the group's
 /// non-zero answers, then the fleet-only buckets.
-pub fn fleet_segments(team: &Team, gate: &GateReading) -> Vec<String> {
+/// `working` is the capacity reader's count, the one number the bar and the
+/// headline print: when it is known the slots figure takes it, so the line
+/// never shows a second count from the registry's member list.
+pub fn fleet_segments(team: &Team, gate: &GateReading, working: Option<u64>) -> Vec<String> {
+    let live = working.unwrap_or(u64::from(team.counts.live));
     let live_word = match gate.max_live {
-        Some(max) => format!("{} of {} slots", team.counts.live, max),
-        None => format!("{} slots", team.counts.live),
+        Some(max) => format!("{live} of {max} slots"),
+        None => format!("{live} slots"),
     };
     let mut segs = vec![live_word];
     if !team.tests_known {
@@ -385,7 +389,7 @@ pub fn fleet_segments(team: &Team, gate: &GateReading) -> Vec<String> {
     if team.reserved > 0 {
         segs.push(format!("{} reserved", team.reserved));
     }
-    if team.observed > 0 {
+    if team.observed > 0 && working.is_none() {
         segs.push(format!("{} observed", team.observed));
     }
     if let Some(un) = &team.unattributed {
@@ -679,7 +683,7 @@ mod tests {
             !unowned_text.contains("merged"),
             "the unowned line never claims a merge: {unowned_text}"
         );
-        let fleet = fit("team", &fleet_segments(&team, &gate), 200);
+        let fleet = fit("team", &fleet_segments(&team, &gate, None), 200);
         assert!(fleet.contains("1 reserved"), "{fleet}");
         assert!(!fleet.contains("0 live"), "{fleet}");
 
@@ -713,9 +717,14 @@ mod tests {
         let team = census(&rows, &gate, None);
         assert!(!team.tests_known);
         assert_eq!(team.counts.testing, 0);
-        let fleet = fit("team", &fleet_segments(&team, &gate), 200);
+        let fleet = fit("team", &fleet_segments(&team, &gate, None), 200);
         assert!(fleet.contains("testing unknown"), "{fleet}");
         assert!(fleet.contains("1 of 3 slots"), "{fleet}");
+        let fed = fit("team", &fleet_segments(&team, &gate, Some(2)), 200);
+        assert!(
+            fed.contains("2 of 3 slots"),
+            "the capacity count feeds the line: {fed}"
+        );
 
         let line = fit(
             "team",

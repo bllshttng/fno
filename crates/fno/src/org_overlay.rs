@@ -972,7 +972,14 @@ impl Panel {
         match self.gate.as_ref() {
             Some(gate) if gate.usable() => {
                 let team = crate::team_census::census(agents, gate, self.org_tree.as_ref());
-                let mut segments = crate::team_census::fleet_segments(&team, gate);
+                let mut segments = crate::team_census::fleet_segments(
+                    &team,
+                    gate,
+                    self.capacity
+                        .as_ref()
+                        .and_then(|state| state.get("workers_live"))
+                        .and_then(|v| v.as_u64()),
+                );
                 if let Some(word) = self.gate_age_word() {
                     segments.push(word);
                 }
