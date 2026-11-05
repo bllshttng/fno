@@ -516,9 +516,13 @@ fn verdict(view: &Value, sha: &str) -> (&'static str, String) {
 }
 
 /// The clearing command leads, so the 140-character cut drops only names.
+/// The machine label rides beside it: the record lives on the machine whose
+/// daemon composed this text, and every other machine reads it through the
+/// merge check.
 fn no_result(sha: &str, cause: &str) -> String {
     format!(
-        "no result. Clear: fno-agents evals gate-retry {}. Cause: {cause}",
+        "no result. Clear on {}: fno-agents evals gate-retry {}. Cause: {cause}",
+        crate::name_ledger::host_label(),
         short(sha)
     )
 }
@@ -1693,6 +1697,21 @@ pub(crate) fn tick(
     tick_with(&paths, &deps, can_launch);
 }
 
+/// The zero-match answer. Heads on this machine but not this sha is a true
+/// negative; no heads at all means this machine likely never ran the gate, so
+/// the line points at the status that names the owner.
+fn zero_match_line(record_here: bool, prefix: &str, found: usize) -> String {
+    let count = format!("gate-retry: {found} heads match {prefix}");
+    if record_here {
+        count
+    } else {
+        format!(
+            "{count} - no evals-gate record on this machine; the gate status at \
+             the head names the machine that owns it"
+        )
+    }
+}
+
 /// `fno-agents evals gate-retry <sha>`: forget a head, so the next tick runs it
 /// again and posts a fresh status.
 pub(crate) fn retry(rest: &[String]) -> i32 {
@@ -1709,7 +1728,10 @@ pub(crate) fn retry(rest: &[String]) -> i32 {
         .cloned()
         .collect();
     let [sha] = found.as_slice() else {
-        eprintln!("gate-retry: {} heads match {prefix}", found.len());
+        eprintln!(
+            "{}",
+            zero_match_line(!state.heads.is_empty(), prefix, found.len())
+        );
         return 1;
     };
     state.heads.insert(sha.clone(), QUEUED.into());
@@ -2385,7 +2407,24 @@ mod tests {
         let post = w.posts.borrow().last().cloned().unwrap();
         assert!(post.contains("state=failure"), "{post}");
         assert!(post.contains("gate-retry abcdef123456"), "{post}");
+        assert!(post.contains("Clear on "), "{post}");
         assert!(post.contains("20-minute limit"), "{post}");
+    }
+
+    #[test]
+    fn a_zero_match_retry_names_the_cross_machine_record_when_this_machine_has_none() {
+        // A store with heads but not this sha is a true negative; a store with
+        // no heads at all means the record likely lives on the machine whose
+        // daemon ran the gate, so the line points there.
+        let bare = zero_match_line(true, "abcdef1", 0);
+        assert!(bare.contains("gate-retry: 0 heads match abcdef1"), "{bare}");
+        assert!(!bare.contains("no evals-gate record"), "{bare}");
+        let hint = zero_match_line(false, "abcdef1", 0);
+        assert!(hint.contains("gate-retry: 0 heads match abcdef1"), "{hint}");
+        assert!(
+            hint.contains("no evals-gate record on this machine"),
+            "{hint}"
+        );
     }
 
     #[test]
