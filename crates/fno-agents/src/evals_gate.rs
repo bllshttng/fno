@@ -136,6 +136,10 @@ struct HeadRun {
     pid: u32,
     started: i64,
     tasks: Vec<String>,
+    /// Bank task files the head-leg read could not parse (a check kind
+    /// newer than this binary), named in the pending post and the verdict.
+    #[serde(default)]
+    skipped: Vec<String>,
     /// The run built the head first, so a slow build can read as the cause.
     #[serde(default)]
     built: bool,
@@ -428,6 +432,15 @@ fn no_result(sha: &str, cause: &str) -> String {
 
 fn short(sha: &str) -> &str {
     sha.get(..12).unwrap_or(sha)
+}
+
+/// The clause a status line gains when the head's bank carried files this
+/// binary could not read, so a green verdict names what it did not grade.
+fn skip_suffix(skipped: &[String]) -> String {
+    if skipped.is_empty() {
+        return String::new();
+    }
+    format!("; unread bank task(s) skipped: {}", skipped.join(", "))
 }
 
 fn post_status(p: &Paths, d: &Deps, slug: &str, sha: &str, state: &str, text: &str) -> bool {
@@ -1265,6 +1278,8 @@ fn settle_head_run(p: &Paths, d: &Deps, state: &mut State, slug: &str, prs: &[Pr
     let disposition = if status == "pending" { QUEUED } else { DONE };
     // A dropped POST keeps the run, so the next tick posts it. A terminal
     // post clears the run; a pending one requeues the head for the next tick.
+    let skip_note = skip_suffix(&run.skipped);
+    let text = format!("{text}{skip_note}");
     if post_status(p, d, slug, &run.sha, status, &text) {
         state.heads.insert(run.sha.clone(), disposition.into());
         state.head_run = None;
@@ -1293,8 +1308,23 @@ fn launch_head(
         .unwrap_or_else(|| p.repo.join("evals").join("bank"));
     let rows = history_rows(p.history);
     let slow = slow_tasks(&rows, baseline);
+    // An unreadable bank at the head is red, never green: a PR that broke
+    // its bank file must not pass for want of tasks. A check kind newer
+    // than this binary is the one exception: the readable tasks still run,
+    // and the unread files are named in the pending post and the verdict.
+    let (tasks, skipped) = match crate::evals::bank::discover_bank_tolerant(&bank_dir) {
+        Ok((tasks, skipped)) => (tasks, skipped),
+        Err(e) => {
+            let text = no_result(&pr.sha, &format!("bank unread at the head: {}", e.0));
+            if post_status(p, d, slug, &pr.sha, "failure", &text) {
+                state.heads.insert(pr.sha.clone(), DONE.into());
+            }
+            return format!("head {} bank unread", short(&pr.sha));
+        }
+    };
     let mut finish = |status: &str, text: &str, disposition: String| {
-        if post_status(p, d, slug, &pr.sha, status, text) {
+        let text = format!("{text}{}", skip_suffix(&skipped));
+        if post_status(p, d, slug, &pr.sha, status, &text) {
             state.heads.insert(pr.sha.clone(), disposition);
         }
     };
@@ -1303,19 +1333,7 @@ fn launch_head(
     else {
         return format!("head {} files unread", short(&pr.sha));
     };
-    // An unreadable bank at the head is red, never green: a PR that broke
-    // its bank file must not pass for want of tasks.
-    let tasks = match crate::evals::bank::discover_bank(&bank_dir) {
-        Ok(tasks) => gate_tasks(&tasks, &files, &pr.sha, &slow, d, p),
-        Err(e) => {
-            finish(
-                "failure",
-                &no_result(&pr.sha, &format!("bank unread at the head: {}", e.0)),
-                DONE.into(),
-            );
-            return format!("head {} bank unread", short(&pr.sha));
-        }
-    };
+    let tasks = gate_tasks(&tasks, &files, &pr.sha, &slow, d, p);
     if tasks.is_empty() {
         finish(
             "success",
@@ -1354,6 +1372,20 @@ fn launch_head(
     if zai_peak_hold(p.repo, &lane, d.now) {
         return format!("head {} waits out the zai peak", short(&pr.sha));
     }
+    // Posted here, not earlier: only a launch attempt that reaches the
+    // spawn names the skips, so an early return neither repeats the post
+    // on retry nor supersedes it within the same attempt.
+    let skip_note = skip_suffix(&skipped);
+    if !skipped.is_empty() {
+        post_status(
+            p,
+            d,
+            slug,
+            &pr.sha,
+            "pending",
+            &format!("run in flight{skip_note}"),
+        );
+    }
     let mut argv = run_argv(
         p,
         ("--task", &tasks.join(",")),
@@ -1383,6 +1415,7 @@ fn launch_head(
                 pid,
                 started: d.now.timestamp(),
                 tasks,
+                skipped: skipped.clone(),
                 built: builds,
             });
             save_state(&p.state_dir, state);
@@ -2100,6 +2133,36 @@ mod tests {
         other.tick(true, Utc::now());
         assert!(other.posts.borrow().is_empty());
         assert!(other.spawns.borrow().is_empty());
+    }
+
+    #[test]
+    fn a_head_with_a_newer_check_kind_runs_the_rest_and_names_the_skip() {
+        let w = World::new("skills/x/SKILL.md\n");
+        w.with_baseline();
+        std::fs::write(
+            w.dir.path().join("evals/bank/r1.yaml"),
+            "id: r1\ntier: capability\nprompt: p\ngrade:\n  - kind: rubric\n    rubric: grade me\ntags: [gate]\n",
+        )
+        .unwrap();
+        w.tick(true, Utc::now());
+        let argv = w.spawns.borrow()[0].join(" ");
+        assert!(argv.contains("--task g1"), "{argv}");
+        assert!(!argv.contains("g1,r1"), "{argv}");
+        assert!(
+            w.posts
+                .borrow()
+                .iter()
+                .any(|p| p.contains("state=pending") && p.contains("skipped: r1.yaml")),
+            "{0:?}",
+            w.posts.borrow()
+        );
+        let cohort = format!("gate-head-{}", short(SHA));
+        w.rows(&cohort, "g1", [true, true, true]);
+        w.tick(false, Utc::now());
+        let post = w.posts.borrow().last().cloned().unwrap();
+        assert!(post.contains("state=success"), "{post}");
+        assert!(post.contains("0 regressed"), "{post}");
+        assert!(post.contains("skipped: r1.yaml"), "{post}");
     }
 
     #[test]
