@@ -1367,9 +1367,10 @@ pub(crate) fn sha_names_head(token: &str, head: &str) -> bool {
 /// The text names the head: the full sha, or a hex token that prefixes it.
 fn text_names_head(text: &str, head: &str) -> bool {
     !head.is_empty()
-        && text
-            .split(|c: char| !c.is_ascii_hexdigit())
-            .any(|t| sha_names_head(t, head))
+        && (text.contains(head)
+            || text
+                .split(|c: char| !c.is_ascii_hexdigit())
+                .any(|t| sha_names_head(t, head)))
 }
 
 /// A board answer recorded as a decision: the user answered a question the
