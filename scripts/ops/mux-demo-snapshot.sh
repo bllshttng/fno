@@ -3,7 +3,7 @@
 #
 #   scripts/ops/mux-demo-snapshot.sh --out shot.svg [--theme light] [--format png] [--size 200x60]
 #       [--window-size smallest|latest|largest] [--peer 120x40] [--no-fit]
-#       [--hold] [--group <axis>] [--remote-pane]
+#       [--hold] [--group <axis>] [--remote-pane] [--flat-pins] [--sort <col:dir>]
 #
 # Builds a throwaway server in a temp state root: its own config, graph,
 # agent registry, view prefs and socket dir. It seeds invented backlog nodes,
@@ -36,6 +36,8 @@ PREV=""
 HOLD=""
 GROUP=""
 REMOTE_PANE=""
+FNO_DEMO_FLATPINS=""
+FNO_DEMO_SORT=""
 for a in "$@"; do
   if [ "$PREV" = "--out" ]; then
     mkdir -p -- "$(dirname -- "$a")"
@@ -44,8 +46,12 @@ for a in "$@"; do
     export FNO_MUX_WINDOW_SIZE="$a"
   elif [ "$PREV" = "--group" ]; then
     GROUP="$a"
-  elif [ "$a" = "--window-size" ] || [ "$a" = "--group" ]; then
+  elif [ "$PREV" = "--sort" ]; then
+    FNO_DEMO_SORT="$a"
+  elif [ "$a" = "--window-size" ] || [ "$a" = "--group" ] || [ "$a" = "--sort" ]; then
     :
+  elif [ "$a" = "--flat-pins" ]; then
+    FNO_DEMO_FLATPINS=1
   elif [ "$a" = "--hold" ]; then
     HOLD=1
   elif [ "$a" = "--remote-pane" ]; then
@@ -57,6 +63,7 @@ for a in "$@"; do
   fi
   PREV="$a"
 done
+export FNO_DEMO_FLATPINS FNO_DEMO_SORT
 # bash 3.2 (stock macOS) reads an empty array under set -u as unbound.
 set -- ${ARGS[@]+"${ARGS[@]}"}
 
@@ -484,7 +491,7 @@ fi
 # they fold into rides beside them in registry_meta. A seed that writes rows
 # without the envelope reads as InvalidData, i.e. no registry at all.
 python3 - "$ROOT/.fno/db/graph.db" "$SERVER" "$ROOT/code/checkout" "$SEED_OFF" "${SIDS[@]}" "${PANES[@]}" <<'PY'
-import json, sys, datetime
+import json, os, sys, datetime
 db, server, cwd, seed_off = sys.argv[1:5]
 sids = sys.argv[5:8]
 ids = [int(p) for p in sys.argv[8:]]
@@ -525,6 +532,26 @@ agents = [
     thread("indexer", "claude", "unmeasured"),
     thread("migrator", "opencode", "exited"),
 ]
+# --flat-pins adds the pin-order fixture: two pinned leads with
+# workers and one unpinned lead. The names sort atlas, orion, vega, so a
+# name sort that ignored pins would open on the unpinned row.
+if os.environ.get("FNO_DEMO_FLATPINS"):
+    def lead(name, sid):
+        return thread(name, "claude", "idle", attach="demo-" + name) | {
+            "role_level": 1, "role_scope": "payments", "harness_session_id": sid}
+    def worker(name, parent_sid, sid):
+        return thread(name, "codex", "idle", attach="demo-" + name) | {
+            "lineage_kind": "child", "spawned_by_session": parent_sid,
+            "harness_session_id": sid}
+    agents += [
+        lead("atlas", "demo-sid-atlas"),
+        worker("atlas-w1", "demo-sid-atlas", "demo-sid-atlas-w1"),
+        lead("orion", "demo-sid-orion"),
+        worker("orion-w1", "demo-sid-orion", "demo-sid-orion-w1"),
+        worker("orion-w2", "demo-sid-orion", "demo-sid-orion-w2"),
+        lead("vega", "demo-sid-vega"),
+        worker("vega-w1", "demo-sid-vega", "demo-sid-vega-w1"),
+    ]
 import sqlite3
 conn = sqlite3.connect(db)
 # The registry rides the graph store the commands migrated to .fno/db. Its
@@ -785,6 +812,28 @@ if [ -n "${FNO_DEMO_PIN:-}" ]; then
   mkdir -p "$FNO_AGENTS_HOME/keep"
   printf '{"session_id":"%s","name":"scout","set_at":"2026-10-28T12:00:00Z","set_by":"human"}' \
     "${SIDS[0]}" >"$FNO_AGENTS_HOME/keep/${SIDS[0]}.json"
+fi
+
+# --flat-pins pins the orion and vega leads (see the registry seed).
+if [ -n "${FNO_DEMO_FLATPINS:-}" ]; then
+  mkdir -p "$FNO_AGENTS_HOME/keep"
+  for n in orion vega; do
+    printf '{"session_id":"demo-sid-%s","name":"%s","set_at":"2026-10-28T12:00:00Z","set_by":"human"}' \
+      "$n" "$n" >"$FNO_AGENTS_HOME/keep/demo-sid-$n.json"
+  done
+fi
+
+# --sort <column>:<direction> (for example age:descending) sets the
+# sideline's sort column, the way the sort control persists it.
+if [ -n "${FNO_DEMO_SORT:-}" ]; then
+  python3 - "$FNO_AGENTS_HOME/mux-view.json" "$FNO_DEMO_SORT" <<'PY'
+import json, os, sys
+path, spec = sys.argv[1:3]
+column, direction = spec.split(":")
+data = json.load(open(path)) if os.path.exists(path) else {}
+data["sort"] = {"column": column, "direction": direction}
+json.dump(data, open(path, "w"))
+PY
 fi
 
 sleep 6

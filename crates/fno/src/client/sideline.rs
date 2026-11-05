@@ -77,7 +77,22 @@ pub(super) fn head_sorts(card: bool) -> [Option<AgentSortColumn>; 5] {
     }
 }
 
-pub(super) fn head_label(column: AgentSortColumn) -> &'static str {
+/// A sort column's whole word, for the card head and the sort notice, where
+/// the table's short head labels would read cryptic.
+pub(super) fn sort_name(column: AgentSortColumn) -> &'static str {
+    match column {
+        AgentSortColumn::Status => "status",
+        AgentSortColumn::Agent => "agent",
+        AgentSortColumn::LastMessage => "last message",
+        AgentSortColumn::Pr => "pr",
+        AgentSortColumn::Age => "age",
+        AgentSortColumn::Created => "created",
+        AgentSortColumn::Modified => "modified",
+        AgentSortColumn::Manual => "manual",
+    }
+}
+
+fn head_label(column: AgentSortColumn) -> &'static str {
     match column {
         AgentSortColumn::Status => "st",
         AgentSortColumn::Agent => "agent",
@@ -1319,11 +1334,21 @@ impl View {
                     vec![
                         rt_cell(String::new(), Color::Default, cell_flags::DIM, false),
                         rt_cell(
-                            format!(
-                                "by {}{} · node · PR",
-                                head_label(self.agent_sort.column),
-                                arrow(self.agent_sort.column)
-                            ),
+                            {
+                                // The sort rides whole; the node and PR caption
+                                // joins it only where the name cell has room.
+                                let sort = format!(
+                                    "sort: {} {}",
+                                    sort_name(self.agent_sort.column),
+                                    arrow(self.agent_sort.column)
+                                );
+                                let full = format!("{sort} \u{b7} node \u{b7} PR");
+                                if full.chars().count() <= name_w {
+                                    full
+                                } else {
+                                    sort
+                                }
+                            },
                             Color::Default,
                             cell_flags::DIM,
                             true,

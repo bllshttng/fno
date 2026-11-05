@@ -4007,8 +4007,8 @@ impl View {
             SortDirection::Descending => "\u{2193}",
         };
         self.set_notice(format!(
-            "sorted by {} {arrow}",
-            sideline::head_label(self.agent_sort.column)
+            "sort: {} {arrow}",
+            sideline::sort_name(self.agent_sort.column)
         ));
         self.reanchor_selector(held);
     }
