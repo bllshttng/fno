@@ -182,7 +182,7 @@ flowchart TD
 | **Platform env var** | `CLAUDE_PLUGIN_ROOT` | `GEMINI_PROJECT_DIR` | `CODEX_PLUGIN_ROOT` |
 | **Instructions file** | `CLAUDE.md` | `GEMINI.md` | `AGENTS.md` |
 | **Plugin manifest** | `.claude-plugin/plugin.json` | `gemini-extension.json` | `.codex-plugin/plugin.json` |
-| **Skill invocation** | `Skill` tool | `activate_skill` tool | `$skill-name` auto-loading |
+| **Skill invocation** | `Skill` tool | `activate_skill` tool | `$fno:<name>` expansion; mid-run, open the skill's `SKILL.md` (opencode: the native `skill` tool) |
 | **Subagent dispatch** | `Agent` tool | Sequential main-thread only | Project-scoped custom agents (`.codex/agents/*.toml`) |
 
 ## Architecture Decisions
@@ -294,7 +294,6 @@ Run these checks after changing the Codex adapter or hook surface:
 ```bash
 python3 scripts/sync-codex-agents.py --check
 bash scripts/test-sync-codex-agents.sh
-bash scripts/test-parallel-wave-conflicts.sh
 bash scripts/test_stop_hook_events.sh
 bash tests/test-target-state-recovery.sh
 ```

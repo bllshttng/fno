@@ -1,8 +1,8 @@
 # Footnote marketplace plugin
 
-This tree is generated from main at source commit `ccb4fa5305f86acf4e98983080f9087abe8a06d8`. Do not edit this branch.
+This tree is generated from main at source commit `7634f9e7c4af73755647001cd6bcd07e64883ff4`. Do not edit this branch.
 
-Source and contributions: https://github.com/bllshttng/fno/tree/main
+Source and contributions: https://github.com/fnodotdev/fno/tree/main
 
 Runtime: install `fno` and `fno-agents` on PATH with https://fno.sh before using the plugin.
 

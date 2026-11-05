@@ -20,7 +20,7 @@ Four readings are absences and lower nothing: `no-transcript`, `not-file-backed`
 
 Both stores lied, in both directions, on 2026-08-15. Eight roster rows claimed `working` while their transcripts had not moved in 30 or more minutes. The fno registry called a working session exited and a removed one live. `claude agents --json` inverted on a capped lane, calling the capped row working and the productive one stopped. The transcript, keyed by session id, was right every time.
 
-The transcript directory name is the launch cwd, so it is never derivable from a repo or worktree name. Resolution goes through `fno.provenance.resolver`, which is content-aware across every project dir. A missing transcript renders as a fact (`ghost`, or an unknown age), never as fresh.
+The transcript directory name is the launch cwd, so it is never derivable from a repo or worktree name. Resolution goes through `crates/fno-agents/src/transcript_resolve.rs`, which is content-aware across every project dir. A missing transcript renders as a fact (`ghost`, or an unknown age), never as fresh.
 
 ## The decision table
 

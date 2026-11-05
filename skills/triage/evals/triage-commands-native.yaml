@@ -1,0 +1,22 @@
+# Capability task: every triage step runs the native command. The skill once
+# fell back to a Python shim; the shim is gone, so a fallback is a dead path.
+id: triage-commands-native
+tier: capability
+prompt: |
+  Read skills/triage/SKILL.md in this checkout; do not run triage. Write to
+  evals/fixtures/triage/commands.txt the exact commands the skill runs for
+  its context, validate and apply steps, one command per line, with the
+  file paths the skill names.
+grade:
+  - kind: exit
+    command: "grep -q '^fno backlog triage context' evals/fixtures/triage/commands.txt"
+  - kind: exit
+    command: "grep -q '^fno backlog triage validate /tmp/triage-proposal.json' evals/fixtures/triage/commands.txt"
+  - kind: exit
+    command: "grep -q '^fno backlog triage apply /tmp/triage-cleaned.json' evals/fixtures/triage/commands.txt"
+  - kind: exit
+    # No step falls back to a Python program.
+    command: "grep -q 'python' evals/fixtures/triage/commands.txt"
+    expect: 1
+timeout_minutes: 10
+tags: [golden, triage]

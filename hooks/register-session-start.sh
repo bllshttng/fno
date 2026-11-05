@@ -21,9 +21,9 @@
 #
 # Hook contract: NEVER blocks session start. Every path is bounded by the
 # shared wall-clock helper (a missing helper exits 0 - same as
-# inside-leg-report.sh); the pane-worker restamp is the one Python leg left,
-# and it swallows any error into a `session_register_failed` event (AC7-ERR).
-# stdout stays empty so this hook contributes nothing to the session preamble.
+# inside-leg-report.sh); every leg runs in the Rust daemon, which swallows
+# any failure into a fail-soft event (AC7-ERR). stdout stays empty so this
+# hook contributes nothing to the session preamble.
 #
 # Harness coverage: the SAME script reports for every harness fno has a
 # session-start hook surface for - claude (hooks/context-hooks.json), codex
@@ -46,7 +46,7 @@ HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$HOOK_DIR/../scripts/lib/with-timeout.sh" 2>/dev/null || exit 0
 
 # Detect the harness and read the SAME session-id env the rest of fno resolves
-# on (harness_identity.HARNESS_SESSION_MARKERS): claude uses CLAUDE_CODE_SESSION_ID,
+# on (claims.rs HARNESS_SESSION_MARKERS): claude uses CLAUDE_CODE_SESSION_ID,
 # not CLAUDE_SESSION_ID (the old name here was unset, so claude never registered).
 if [[ -n "${GEMINI_PROJECT_DIR:-}" ]]; then
     HARNESS="gemini"; SESSION_ID="${GEMINI_SESSION_ID:-}"
@@ -88,19 +88,6 @@ if [[ -n "${FNO_AGENT_SELF:-}" ]]; then
     # attached) must read /dev/null instead of hanging on the terminal.
     STDIN_SRC="/dev/null"; [[ ! -t 0 ]] && STDIN_SRC="/dev/stdin"
     with_timeout 2 "$BIN" "${ARGS[@]}" >/dev/null 2>&1 <"$STDIN_SRC" || true
-    # Pane substrate ALSO keeps the bounded Python restamp: the report above
-    # already binds the row's mux ref to this pane (the `--wait-row` flag is
-    # the same pane-worker marker both paths key on), and the Python leg's
-    # remaining job here is opening a parked pending graph row. Panes are the
-    # rare substrate; every other lane stays on the thin command alone.
-    if [[ "${FNO_AGENT_ROW_PENDING:-}" == "${FNO_AGENT_SELF:-}" ]]; then
-        PY_ARGS=(--harness "$HARNESS" --agent-self "$FNO_AGENT_SELF" --cwd "$REPO_ROOT")
-        [[ -n "$SESSION_ID" ]] && PY_ARGS+=(--session-id "$SESSION_ID")
-        cd "$REPO_ROOT" 2>/dev/null || true
-        source "$HOOK_DIR/../scripts/lib/fno-python.sh"
-        fno_python_init "$HOOK_DIR/.."
-        with_timeout 12 "$FNO_PYTHON" -B -m fno.agents.register_session "${PY_ARGS[@]}" >/dev/null 2>&1 </dev/null || true
-    fi
     exit 0
 fi
 

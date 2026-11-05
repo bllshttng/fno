@@ -1,17 +1,17 @@
 {
   "name": "fno",
   "displayName": "Footnote",
-  "version": "0.4.6-dev.20261103",
+  "version": "0.4.6-dev.20261105",
   "description": "Set the targets. Your agents do the rest. Say F[no] to mostly done.",
   "author": {
     "name": "Jason Noah Choi"
   },
-  "homepage": "https://github.com/bllshttng/fno#readme",
-  "repository": "https://github.com/bllshttng/fno",
+  "homepage": "https://github.com/fnodotdev/fno#readme",
+  "repository": "https://github.com/fnodotdev/fno",
   "icon": "./assets/footnote-icon.svg",
-  "documentationUrl": "https://github.com/bllshttng/fno/tree/main/docs",
-  "supportUrl": "https://github.com/bllshttng/fno/issues",
-  "privacyPolicyUrl": "https://github.com/bllshttng/fno/blob/main/PRIVACY.md",
+  "documentationUrl": "https://github.com/fnodotdev/fno/tree/main/docs",
+  "supportUrl": "https://github.com/fnodotdev/fno/issues",
+  "privacyPolicyUrl": "https://github.com/fnodotdev/fno/blob/main/PRIVACY.md",
   "license": "Apache-2.0",
   "keywords": [
     "workflow",

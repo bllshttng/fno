@@ -55,7 +55,7 @@ The rest of this page is about the other half.
 
 **Layer 1 is fno's own data.** One key moves all of it. A project-local `<repo>/.fno/config.toml` setting `state_dir` deep-merges over the per-user global, winning that key while inheriting every other default. Every `paths.*` derives from `state_dir` (`cli/src/fno/paths.py`). The graph, the ledger, the briefs, the agent registry (`agents_registry_path`, whose fallback is `state_dir() / "agents" / "registry.json"`) and the mail bus all move together.
 
-**Layer 2 is the harness substrate.** One claude daemon namespace for the whole box, plus codex app-servers owned by ChatGPT.app and a VS Code extension. fno never spawned those processes and cannot stop them. There is nothing for `state_dir` to move.
+**Layer 2 is the harness substrate.** One claude daemon namespace for the whole machine, plus codex app-servers owned by ChatGPT.app and a VS Code extension. fno never spawned those processes and cannot stop them. There is nothing for `state_dir` to move.
 
 So an isolated environment is isolated about data and not about identity. A session started inside one shares the machine's daemon namespace with every other session on that machine. An ambient identity marker crosses the boundary untouched.
 
@@ -69,7 +69,7 @@ Three failures on one machine in one day, all on the layer-2 vector:
 
 None of these is exotic. Each is an environment variable outliving the process that set it, which is what environment variables do. A receipt reading "isolated environment" rules all three out to anyone who reads it. `fno config project init` prints what moved and what did not, so the next person reads a true sentence instead of a reassuring one.
 
-The remedy for layer 2 is provenance, not isolation. `resolve_owned_identity` (`cli/src/fno/harness_identity.py`) proves ownership from the process tree instead of picking by precedence order. When it cannot prove one, it refuses rather than guessing. Durable stamp sites reach the native owned-caller proof in `crates/fno-agents/src/spawn_context.rs`, which supplies the process-tree prover. The registry collider stays at the one init-time command that owns a registry row. Hoisting it into the shared resolver broke that: a session then refused its own row whenever the walk failed.
+The remedy for layer 2 is provenance, not isolation. The owned-caller proof in `crates/fno-agents/src/spawn_context.rs` proves ownership from the process tree instead of picking by precedence order (the deleted Python `resolve_owned_identity` did the same). When it cannot prove one, it refuses rather than guessing. The registry collider stays at the one init-time command that owns a registry row. Hoisting it into the shared resolver broke that: a session then refused its own row whenever the walk failed.
 
 The discriminator is the raw primitive's own docstring. If the resolved harness or session id ends up WRITTEN to a durable record, it is a stamp and uses the owned path. Those records: a claim, a mail record, an event, an agent-state row, a registry row, a role grant, a decision record, a graph session record. A caller that only reads to display or branch keeps the precedence primitive.
 
@@ -117,7 +117,7 @@ ls /tmp/cc-daemon-$(id -u)/
 python3 -c 'import hashlib,os,sys; print(hashlib.sha256(os.path.abspath(sys.argv[1]).encode()).hexdigest()[:8])' ~/.claude
 ```
 
-The listed directory is that digest. Point `CLAUDE_CONFIG_DIR` at a second directory and start a background session (`claude --bg '<task>'`). A second directory appears, named for that second path's digest. That is the measurement: on the box this ran on, one entry before and two after, each matching its own digest.
+The listed directory is that digest. Point `CLAUDE_CONFIG_DIR` at a second directory and start a background session (`claude --bg '<task>'`). A second directory appears, named for that second path's digest. That is the measurement: on the machine this ran on, one entry before and two after, each matching its own digest.
 
 So layer-2 isolation is partially achievable for claude. A distinct `CLAUDE_CONFIG_DIR` gets a distinct daemon namespace, distinct `bg-spare` processes, and a distinct control socket.
 

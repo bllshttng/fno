@@ -1,6 +1,6 @@
 # Org view
 
-Press prefix+G to open the org view, and press it again to return to the agents list. Prefix+V still cycles Agents, Backlog and Org. The view is the fleet's command center. It shows every machine on the fleet map, the leads on each machine and the live sessions that report to them.
+Press prefix+G to open the org view, and press it again to return to the agents list. Prefix+V still cycles Agents, Backlog and Org. The view is HQ. It shows every machine on the fleet map, the leads on each machine and the live sessions that report to them.
 
 ## Shape
 

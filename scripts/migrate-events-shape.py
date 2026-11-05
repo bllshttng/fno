@@ -3,7 +3,7 @@
 
 Rewrites every row of every events.jsonl in the repo from
 ``{timestamp, source, type, data}`` (legacy) to
-``{ts, type, source, data}`` (canonical, per cli/src/fno/events/schema.yaml).
+``{ts, type, source, data}`` (canonical, per crates/fno-agents/src/event_store/schema.yaml).
 
 Walks:
   - <root>/.fno/events.jsonl

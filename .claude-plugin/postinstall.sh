@@ -33,7 +33,7 @@ trap 'rc=$?; printf "installer exit %s\n" "$rc"' EXIT
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CLI_DIR="$(dirname "$SCRIPT_DIR")/cli"
-FNO_RELEASE_REPO="${FNO_RELEASE_REPO:-bllshttng/fno}"
+FNO_RELEASE_REPO="${FNO_RELEASE_REPO:-fnodotdev/fno}"
 
 # Shared channel/version math (stable|rc|nightly detection, spelling-tolerant
 # version match, wheel-platform glob). Absent the helper, fall back to the
@@ -361,6 +361,17 @@ fi
 finish_success() {
   bash "$(dirname "$SCRIPT_DIR")/scripts/ensure-global-dir.sh" || true
 }
+
+# `fno update` moved this machine to the binary install. A uv install here
+# would relink the wheel's entrypoints over the move, so the binary install
+# owns updates and this run only wires and sets up.
+FNO_BINARY_DIR="${FNO_STATE_DIR:-$HOME/.fno}/install/bin"
+if [[ "$(cat "${FNO_STATE_DIR:-$HOME/.fno}/install/channel" 2>/dev/null)" == "binary" && -x "$FNO_BINARY_DIR/fno" ]]; then
+  log "binary install at $FNO_BINARY_DIR; skipping the uv wheel install (fno update updates it)."
+  wire_and_setup "$FNO_BINARY_DIR/fno"
+  finish_success
+  exit 0
+fi
 
 # No uv: delegate to the one installer that provisions it (scripts/install/fno.sh
 # chains Astral's standalone uv), pinned to this plugin's channel so the wheel

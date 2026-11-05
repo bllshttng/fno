@@ -177,18 +177,37 @@ def discovery(repo, skills_root, plugin_cache):
     stale cache is named with its digest gap and the supported repair;
     a private cache is never repaired here (docs/HARNESSES.md).
     """
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
-    import skill_discovery as sd
+    import hashlib
+    import subprocess
+    from types import SimpleNamespace
 
-    repo, skills_root, plugin_cache = Path(repo), Path(skills_root), Path(plugin_cache)
-    plugin = sd.find_installed_plugin(plugin_cache.expanduser())
-    sources = sd.source_skills(repo)
-    rows = sd.inventory(repo, skills_root, plugin)
+    def engine(*argv):
+        return subprocess.run(
+            ["fno-agents", "plugin-install", "--codex-skills", *argv, "--repo", str(repo),
+             "--cache", str(plugin_cache)],
+            capture_output=True, text=True, check=True,
+        ).stdout
+
+    def sha(path):
+        try:
+            return hashlib.sha256(Path(path).read_bytes()).hexdigest()[:16]
+        except OSError:
+            return None
+
+    repo, skills_root, plugin_cache = Path(repo), Path(skills_root), Path(plugin_cache).expanduser()
+    probe = dict(line.split("=", 1) for line in engine("probe").splitlines() if "=" in line)
+    plugin = None
+    if probe.get("plugin"):
+        path = Path(probe["plugin"])
+        rel = json.loads((path / "plugin.json").read_text()).get("skills", "")
+        plugin = SimpleNamespace(path=path, skills_dir=(path / rel.lstrip("./")).resolve())
+    sources = {d.name: d / "SKILL.md" for d in sorted((repo / "skills").iterdir()) if (d / "SKILL.md").is_file()}
+    rows = [SimpleNamespace(**r) for r in json.loads(engine("inventory", "--root", str(skills_root), "--json"))]
     cache_digs: dict[str, str] = {}
     if plugin is not None:
         for p in sorted(plugin.skills_dir.iterdir()):
             if (p / "SKILL.md").is_file():
-                cache_digs[p.name] = sd.sha256_file(p / "SKILL.md") or "-"
+                cache_digs[p.name] = sha(p / "SKILL.md") or "-"
     print(f"repo: {repo}")
     print(f"plugin: {plugin.path if plugin else 'none'}")
     print(f"{'name':<22} {'verdict':<18} {'source-digest':<18} loaded-from")
@@ -198,7 +217,7 @@ def discovery(repo, skills_root, plugin_cache):
         # from an alias row: in installed mode there is no alias and the row
         # digest is None, which would otherwise read every healthy cache
         # copy as stale.
-        src_dig = sd.sha256_file(sources[r.name]) if r.name in sources else None
+        src_dig = sha(sources[r.name]) if r.name in sources else None
         if r.name not in sources and r.alias:
             verdict, loaded = "alias-only", f"{r.source} via {r.alias}"
         elif r.name not in sources:

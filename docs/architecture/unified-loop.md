@@ -313,8 +313,12 @@ The local axis is presence-based: a head-pinned pass counts whether or not the r
 A head-pinned local pass makes coverage known even when the GitHub read failed, so a bot quota outage cannot wedge the autonomous path while a local lane reviewed - that is the PR #214 failure escaped rather than relocated.
 
 A passing PR with coverage 0 or Unknown terminates `DoneUnreviewed` instead of `DonePRGreen`.
-`DoneUnreviewed` is shaped like `DoneAwaitingMerge`: terminal on the first evaluation (no loop iteration spent waiting - that is what keeps the PR #214 wedge from returning), never a ship reason (out of `finalize.SHIP_REASONS`), never arms auto-merge.
+
+`DoneUnreviewed` is shaped like `DoneAwaitingMerge`. It is terminal on the first evaluation, so no loop iteration waits. It is never a ship reason and never arms auto-merge. The first-evaluation stop is what keeps the PR #214 wedge from returning.
+
 The autonomous merge is therefore refused structurally (`should_arm_auto_merge = approved && reason == "DonePRGreen"`); a human or out-of-band merge closes the node via reconcile.
+
+A ruling wait is its own terminal. The question gate's second fire terminates `DoneAwaitingRuling`, not `HeldOnQuestion`. The work sits complete. The only missing input is the user's answer. The terminal is shaped like `DoneAwaitingMerge`: not a ship reason, never arms auto-merge, the node stays open. It classifies clean: stamped terminal, not stuck, circuit-breaker success. A postmortem stops reading "stuck: exited without shipping" on a wait for the user. `HeldOnQuestion` keeps the refusal parks: the dispatch hold and the gh-unauthenticated park. The hold fold reads the machine index beside the three journals. A close the bus beat landed clears the hold without a termination.
 
 The discriminator is coverage, **not** the `attended` manifest field, and the coverage path must not read it. Whether a review verdict exists is a fact about the PR. Who was watching is a fact about the session. They answer different questions. `attended` was also a broken substrate proxy for a while. It read `FNO_AGENT_SELF`, which every spawn substrate injects, pane included. So a pane worker with an operator watching stamped `attended: false`. The spawner now stamps `FNO_AGENT_SUBSTRATE` and the field is honest. That changes nothing here, because coverage still does not read it.
 
@@ -375,7 +379,7 @@ Coverage of the eight reachable merge paths, stated honestly rather than implied
 | `finalize.rs` autonomous `--auto` arm | checked, refuses to arm |
 | a PR update, via `.github/workflows/stacked-base-guard.yml` | checked for same-repo PRs; blocks only once marked a required status check. Fork PRs are skipped: their `GITHUB_TOKEN` cannot post the status |
 | GitHub's `--auto` queue firing later, server-side | covered by the workflow's push-to-`main` sweep, which re-stamps the same status context |
-| an agent-run bare `gh pr merge`, via `hooks/git-protection.py` | checked, denies before the two-factor path so the merge-gate override cannot buy past it |
+| an agent-run bare `gh pr merge`, via the git-protection hook | checked, denies before the two-factor path so the merge-gate override cannot buy past it |
 | the GitHub web / mobile merge button | checked once the ruleset is applied: both contexts are required, so the button refuses an uncovered head |
 | a human's `gh pr merge` in a plain terminal, or an unwired harness | checked once the ruleset is applied: the required `fno/review-coverage` context refuses an uncovered head |
 

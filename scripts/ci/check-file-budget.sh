@@ -40,9 +40,17 @@
 # repair to existing Python, no new command, flag or feature, within the
 # thirty-added-line budget.
 #
+# A NEW .py file may only be born in an allowed home: cli/src/fno (governed by
+# the tally above), plugins/hermes (the plugin host's API is Python),
+# evals/harness-fit and evals/fixtures (harbor runs and task data), and
+# scripts/release (release CI). Any other added .py path is refused. A file
+# that exists at the base keeps its home: only added paths are judged, so the
+# legacy Python scattered outside cli/ is never gated shut on a mere edit.
+#
 # Run: bash scripts/ci/check-file-budget.sh [--quiet]
 # Exit: 0 pass, 1 a refused grow (a grown over-budget file, a new over-budget
-#       production file, or the Python tree over allowance), 2 misuse or an
+#       production file, the Python tree over allowance, or a new .py outside
+#       the allowed homes), 2 misuse or an
 #       unresolvable base ref - a gate that cannot find its base never
 #       reports a pass.
 #
@@ -226,6 +234,26 @@ is_test_path() {
     esac
 }
 
+# Homes where a NEW .py file is legal. cli/src/fno is the shrink-only
+# compatibility shell (the tally above governs it); the rest are hosts with a
+# real reason to speak Python. The trailing slashes keep the match on whole
+# segments, so scripts/release-notes/gen.py does not ride scripts/release/.
+PY_ALLOWED=(
+    'cli/src/fno/'
+    'plugins/hermes/'
+    'evals/harness-fit/'
+    'evals/fixtures/'
+    'scripts/release/'
+)
+
+py_path_allowed() {
+    local p="$1" home
+    for home in "${PY_ALLOWED[@]}"; do
+        [[ "$p" == "$home"* ]] && return 0
+    done
+    return 1
+}
+
 fails=0
 findings="$(mktemp)"
 trap 'rm -f "$findings"' EXIT
@@ -317,6 +345,34 @@ if [[ "$py_net" -ge 0 && "$py_added" -gt "$PY_ADDED_BUDGET" ]]; then
         fails=1
     fi
 fi
+
+# The location rule is its own pass over every .py row, repo-wide: the tally's
+# pathspec filters to cli/src/fno before rename pairing, so a row born outside
+# cli/ never reaches it. A path that exists at BASE keeps its home. A rename's
+# destination is a new path and is judged like any other addition, so a move
+# cannot relocate Python into a disallowed home.
+while IFS= read -r -d '' row; do
+    added="${row%%$'\t'*}"; rest="${row#*$'\t'}"
+    deleted="${rest%%$'\t'*}"; path="${rest#*$'\t'}"
+    if [[ -z "$path" ]]; then
+        IFS= read -r -d '' base_path
+        IFS= read -r -d '' path
+    fi
+    [[ "$added" == "-" ]] && continue            # binary row
+    git cat-file -e "HEAD:$path" 2>/dev/null || continue   # deleted at HEAD
+    git cat-file -e "$BASE:$path" 2>/dev/null && continue   # existed at BASE: keeps its home
+    py_path_allowed "$path" && continue
+    {
+        echo "check-file-budget: $path is a new Python file outside the allowed homes."
+        echo "  A new .py is legal only under: ${PY_ALLOWED[*]}"
+        echo "  cli/src/fno is the shrink-only compatibility shell; plugins/hermes is a"
+        echo "  Python plugin host; evals/harness-fit and evals/fixtures hold harbor runs"
+        echo "  and task data; scripts/release is release CI. Port the tool to crates/"
+        echo "  (Rust is the product) or land it in a home with a reason to be Python. A"
+        echo "  file that exists at the base keeps its home: only added paths are refused."
+    } >> "$findings"
+    fails=1
+done < <(git diff --numstat -z -M "$BASE"..HEAD -- '*.py')
 
 # A worker runs this locally mid-change to learn its number before CI does.
 # Every diff above reads commits, so uncommitted work would print as no growth.

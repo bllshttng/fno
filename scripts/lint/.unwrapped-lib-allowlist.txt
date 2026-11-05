@@ -50,7 +50,6 @@ parse-claims-arg.sh
 # that exercise the helpers in isolation); none has a standalone CLI
 # entry point because callers go through the hook's normal control flow.
 platform-io.sh
-mission-emit.sh
 handoff-generator.sh
 claim-release.sh
 wake-signals.sh
@@ -235,33 +234,17 @@ worktree-cwd-cache.sh
 
 # The shared "which of these rooted processes actually holds the tree?" answer.
 # Sourced by scripts/lib/worktree-lifecycle.sh and scripts/setup/archive-worktree.sh;
-# exposes wt_classify_pids. The bridge is the bash ADAPTER for the classifier
-# beside it (worktree_occupancy.py), which composes session_procs from
-# cli/src on PYTHONPATH and the fno-agents keeper lane; the
-# wrapped entry points users drive are `fno workspace worktree cleanup/archive`.
+# exposes wt_classify_pids, the bash adapter for `fno-agents occupancy-login
+# --classify`; the wrapped entry points users drive are
+# `fno workspace worktree cleanup/archive`.
 # Pure sourcing library; no CLI of its own.
 worktree-occupancy.sh
-
-# The per-hit worktree occupancy classifier (holder vs inert) run AS A SCRIPT
-# by the bridge above: `python scripts/lib/worktree_occupancy.py <wt> <pid>...`.
-# It lives here, not in cli/src/fno, because cli/src is shrink-only net
-# (check-file-budget) and this is sweep-side tooling like worktree-status.py.
-# Its caller is the bridge; no fno command wraps it directly.
-worktree_occupancy.py
 
 # Bounded append-log rotation (.fno/ dir-hygiene). A thin
 # `bash <path> <file> <max_bytes>` helper invoked by hooks/convo-signal-capture.sh
 # to cap convo-signals.jsonl; tests run it directly. Pure utility, not a
 # user-facing fno command.
 rotate-append-log.sh
-
-# Cross-references a worktree path against ~/.fno/agents/registry.json for
-# its real session name + live/exited status. Invoked by
-# scripts/lib/worktree-lifecycle.sh's `status` case, which IS the wrapped
-# entry point (`fno workspace worktree status` -> crates/fno/src/worktree_door.rs);
-# a second wrapper here would be a third opinion on one question.
-# tests/test-worktree-status.sh runs it directly. Pure helper, no CLI of its own.
-worktree-status.py
 
 # Shared post-compaction carrier selection for the two reinject hooks
 # (target-postcompact-reinject.sh and lead-postcompact-reinject.sh) plus
@@ -284,16 +267,10 @@ cargo-rustc-wrapper.sh
 # registry - the wrapped entry point for that population is
 # `fno agents internal registry-json`, so a wrapper here would be a second path around
 # the one registry read. The plan's declared second caller is a future
-# add -A guard in hooks/git-protection.py, which would source it the same way.
+# add -A guard in the git-protection hook, which would source it the same way.
 # Pure sourcing library; no CLI of its own.
 rooted-writers.sh
 
-# The skill-discovery engine behind scripts/setup.sh, scripts/doctor.sh and
-# scripts/diagnostics/codex-skill-load-audit.py. It must run before fno may
-# even be installed (bootstrap-era, plain python3 with a pyyaml degrade), so
-# an fno wrapper would invert the dependency; the bash scripts are the entry
-# points. Pure library + standalone CLI of its own; no fno command wraps it.
-skill_discovery.py
 cargo-build-dir.sh
 
 # The code-index provider detector. Invoked via `bash <path>` by

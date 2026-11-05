@@ -73,7 +73,7 @@ For the one question this diff answers (take it from the plan's `surface:` block
 The other angles ask whether the diff is right. This one asks who else relies on what the diff changed and never saw it change. A staff engineer reads the consumers before the code.
 
 1. Name the surfaces. List each changed thing that a reader outside the changed files can depend on. Kinds: command, flag, output line, file format, config key, event type, exit code, public type, default, capability claim. One line each, in the shape `<surface>: <old> -> <new>`. A diff that changes no such surface writes `surfaces: none` and the angle ends.
-2. Cross-repo contracts first. Another repo breaks silently, and no check in this repo fails. List the sibling repos: `fno config get work.workspaces | python3 "${SKILL_DIR}/scripts/sibling-roots.py" .`. Exit 3 means no workspace lists this repo. Write `siblings: unconfigured` in the report, never `siblings: none`. Fetch each sibling, then grep its remote default branch: `git -C <path> grep -n -F -e <surface> <ref>`. Read `<ref>` from `git -C <path> symbolic-ref --short refs/remotes/origin/HEAD`. A local checkout can sit days behind. With no remote ref, grep `HEAD` and mark that sibling `local` in the report. Also search THIS repo for text that describes a sibling. Examples: a capability table, a vendored schema, a pinned version, a doc that names the sibling. Check each hit against the sibling's current `origin/main`. A claim the sibling no longer makes true is a candidate.
+2. Cross-repo contracts first. Another repo breaks silently, and no check in this repo fails. List the sibling repos: `fno config get work.workspaces | bash "${SKILL_DIR}/scripts/sibling-roots.sh" .`. Exit 3 means no workspace lists this repo. Write `siblings: unconfigured` in the report, never `siblings: none`. Fetch each sibling, then grep its remote default branch: `git -C <path> grep -n -F -e <surface> <ref>`. Read `<ref>` from `git -C <path> symbolic-ref --short refs/remotes/origin/HEAD`. A local checkout can sit days behind. With no remote ref, grep `HEAD` and mark that sibling `local` in the report. Also search THIS repo for text that describes a sibling. Examples: a capability table, a vendored schema, a pinned version, a doc that names the sibling. Check each hit against the sibling's current `origin/main`. A claim the sibling no longer makes true is a candidate.
 3. Then the in-repo readers that no call graph shows. Look at docs, `--help` text, refusal and receipt strings, tests, config defaults and generated copies. Also look at the other language leg of a dual surface (`cli/src/fno` and `crates/` here). A reader that still teaches the old behavior is a candidate.
 4. Name the one fact the change is safe because of. Say how far you proved it. The levels: cited at a line, walked through the failure, or ran code that fails on a false fact. A fact you only stated is `unproven`.
 
@@ -129,26 +129,13 @@ For every kept finding, open the cited `file:line` and check the finding's verba
 
 An incremental round narrows scope only to the increment since the last reviewed head, and the narrowing is earned, never assumed. Resolve the prior head from the attestation journal: the newest `review_attestation` row with `verdict: pass` on this branch whose `head_sha` differs from the current HEAD is the prior round.
 
-Write the helper below to a file in a gitignored state directory (`.fno/tmp/` is fine) and run it as a plain argv call: `python3 <file> <events-path> <branch> <head-sha>`. A worktree session's Bash isolation refuses shell expansion and command substitution (docs/architecture/worktree-mechanics.md), so the helper is never inlined into a shell command. `<events-path>` is the events journal (`.fno/events.jsonl`, linked to canonical from every worktree; `printenv FNO_EVENTS_PATH` when the environment names one). Empty output means no prior round.
+Read it with one plain argv jq call, with the three values written in literally: `jq -Rrn --arg branch <branch> --arg head <head-sha> -f <filter-file> <events-path>`. A worktree session's Bash isolation refuses shell expansion and command substitution (docs/architecture/worktree-mechanics.md). So write the filter below to a file in a gitignored state directory, such as `.fno/tmp/`, and never inline it. `<events-path>` is the events journal, `.fno/events.jsonl`, linked to canonical from every worktree. When the environment names `FNO_EVENTS_PATH`, read the path with `printenv FNO_EVENTS_PATH`. Empty output means no prior round.
 
-```python
-import json, sys
-path, branch, head = sys.argv[1], sys.argv[2], sys.argv[3]
-best = ""
-for line in open(path, encoding="utf-8"):
-    if "review_attestation" not in line:
-        continue
-    try:
-        row = json.loads(line)
-    except ValueError:
-        continue
-    data = row.get("data") or {}
-    if data.get("verdict") != "pass" or data.get("branch") != branch:
-        continue
-    sha = data.get("head_sha") or ""
-    if sha and sha != head:
-        best = sha
-print(best)
+```jq
+[inputs | select(contains("review_attestation")) | fromjson? | (.data // {})
+  | select(.verdict == "pass" and .branch == $branch)
+  | (.head_sha // "") | select(. != "" and . != $head)]
+| last // ""
 ```
 
 With `PRIOR_HEAD` resolved, read it into the scope decision with the same file-based shape (write any multi-step decision as a script, run it plainly):

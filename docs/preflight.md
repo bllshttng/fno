@@ -145,7 +145,7 @@ Preflight runs before a push only at the policy's request. The single decision p
 
 On a stock config the pre-push obligation is the focused checks below, each taking seconds. There is deliberately no wrapper script for them. A new mandatory local runner rebuilds the gate this contract removes, one rung smaller.
 
-- `cargo fmt --check` for rust changes.
+- `cargo fmt --check` for rust changes. `fno do pr push` runs it for you on each of `crates/fno-agents` and `crates/fno` that the push touches, with the CI-pinned rustfmt. A red check exits 1 with nothing pushed, and the receipt reads `preflight=fmt`.
 - `bash scripts/ci/check-file-budget.sh` for source changes. It is the CI gate itself, so its number cannot disagree with CI. It prints the `cli/src/fno` net lines against the allowance, and a line for each over-budget file you touched. Run it after the commit that grows code, not at ship. A cut is cheap before review and expensive after a red check. It counts commits only, and it names any uncommitted change it did not count.
 - The tests covering the diff's blast radius.
 

@@ -292,7 +292,7 @@ Four edges connect nodes, and only the first two gate anything.
 |------|----------|---------|--------|
 | `blocked_by` | `--blocked-by` / `--add-blocker` / `--remove-blocker` | this cannot start until that lands | yes: derives `_status: blocked` |
 | `parent` | `--parent` | this was decomposed into that epic | yes: rollup, epic depth |
-| `contained_in` | `fno backlog contain <owner> <id>...` | this ships inside that node's PR | yes: skipped by both dispatch paths, closed by the owner's merge |
+| `contained_in` | `fno backlog contain <owner> <id>...` (lift out: `contain --release <id>...`) | this ships inside that node's PR | yes: skipped by both dispatch paths, closed by the owner's merge |
 | `source_node_id` | `--source-node`, or captured ambiently | this came *out of* working on that | no |
 | `related` | `--related` | affinity: two sides of the same coin, or work that co-delivers | no |
 
@@ -510,6 +510,8 @@ An open do row wedges its node `in_progress`. The in-progress status hides the r
    If any leg comes back other than `ok` the receipt status is `degraded` and the command exits non-zero, and the worker names the leg in its report - a scheduler log nobody reads is not a signal.
 2. One Sonnet worker for the judgment calls, working from a fixed allowlist of reversible levers, finishing by mailing a one-screen report that leads with the mechanical outcomes.
 
+The maintain pass carries a repo-rename sweep. An open node's PR url recorded under the repo's former name rewrites in place, primary or additional. The alias comes from config `[repo_aliases]` or GitHub's own redirect answer, cached in gh-facts. Closed rows keep their history.
+
 A UTC-day claim, not the scheduler, enforces once-a-day, so a double-fire or a manual run on a day that already groomed is a no-op (`already-ran`, zero subprocesses).
 That makes the cadence boring to install:
 
@@ -623,15 +625,15 @@ Cards whose titles carry a home path or session id are withheld with one warning
 
 ## Take requests from the public board
 
-With `--requests`, `fno backlog publish` renders two links: a header link to a prefilled issue form and an Upvote link on each open card. The links appear only after you pass the flag. On a project whose origin is not a GitHub repo the command refuses and names the reason. The label is `fno-request` by default and `--label` renames it.
+With `--requests`, `fno backlog publish` renders three links. A header link opens a prefilled issue form. Each open card gets an Upvote link. Each open card that nobody holds also gets a Claim link. The links appear only after you pass the flag. On a project whose origin is not a GitHub repo the command refuses and names the reason. The label is `fno-request` by default and `--label` renames it.
 
-The prefilled form comes from an issue form you commit by hand to `.github/ISSUE_TEMPLATE/` in your repo. fno never writes it for you. The form applies the request label to every visitor issue.
+The prefilled form comes from an issue form you commit by hand to `.github/ISSUE_TEMPLATE/` in your repo, named for the label (`fno-request.yml` by default). fno never writes it for you. Publish warns when the file is missing. The form applies the request label to every visitor issue.
 
 Spam control is a second label. Create an approval label, `fno-approved` by default, and apply it by hand to each issue you want imported. Only a maintainer with triage rights can apply a label by hand, so the label is the trust signal. Name yours differently and the import reads it with `--approved-label`.
 
 Never list the approval label in any issue template, yours or your organization's. A template that applies it lets a visitor approve their own issue. If a template file names the label, the import refuses to run.
 
-The import command is `fno backlog add requests`. It is a dry run by default and prints each filing before anything is written. Pass `--apply` to write. It reads the local graph and GitHub and writes only to the graph. It never writes to GitHub: no comment, no label, no close.
+The import command is `fno backlog add requests`. It is a dry run by default and prints each filing before anything is written. Pass `--apply` to write. It reads the local graph, the claim store and GitHub. It writes only to the graph and, for takes, the claim store. It never writes to GitHub: no comment, no label, no close.
 
 Four limits hold on every run:
 
@@ -645,3 +647,19 @@ An imported row is born `idea`, priority `p3`, marked private, tagged `external-
 One caution: a difficulty makes an imported row a candidate for autonomous dispatch. Rewrite the row before you set one.
 
 An upvote becomes an encounter on the card, shown on the board and in the panel's demand line. Outside votes stay out of `fno backlog demand` and out of the board's ordering.
+
+### Claim a card
+
+A contributor can claim a card. The Claim link in the detail panel of an open card that nobody holds opens an issue titled `Claim <id>`. The title carries the card id and nothing else.
+
+The import treats a claim like a request. It needs the request label and your approval label. On `--apply` an approved claim issue becomes a node claim, held by `github:<login>` for 24 hours. Every dispatcher skips a node under a live claim, so the fleet leaves the card alone. The board marks the card claimed.
+
+Each import run renews the claim while the issue stays open and keeps both labels. Run the import on a schedule, at least once a day, to keep claims alive. A run that no longer sees the issue releases the claim. A run that reads a full page of `--limit` issues releases nothing, because it cannot see the issues past the page.
+
+A claim ends in one of three ways:
+
+- The issue closes, or you remove a label. The next import run releases the claim.
+- The contributor opens a pull request that closes the Claim issue. The steward tags the node `claim-delivered`, releases the claim and adds a note with the credit trailer. The fleet builds the node from its own plan. The import never grants a node that carries the tag.
+- No import run renews the claim for 24 hours. The claim goes stale and the node is free.
+
+One login holds at most `--max-per-author` claims (3). The import refuses a claim on a node that another holder already holds, and the receipt names the holder.

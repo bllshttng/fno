@@ -1,0 +1,22 @@
+# Mined from a real correction row; `fno-agents evals candidates` finds it.
+id: golden-no-gnu-timeout
+tier: capability
+prompt: |
+  You are working in this repository. Follow its rules: AGENTS.md and the docs and skills it points to. Read them before you answer.
+
+  Write wait-for-file.sh in the repository root. `sh wait-for-file.sh <path> <seconds>` waits until the path exists. It exits 0 when the path appears, and exits 1 when the seconds run out. Do not change any other file.
+grade:
+  - kind: file-exists
+    path: "wait-for-file.sh"
+  - kind: exit
+    command: "! grep -Eq '(^|[;&|( ])g?timeout[[:space:]]' wait-for-file.sh && touch .golden-ready && sh wait-for-file.sh .golden-ready 5 && ! sh wait-for-file.sh .golden-missing 1"
+timeout_minutes: 10
+tags: [golden]
+golden:
+  source: {kind: correction, ref: "246866bd:workflow_friction"}
+  quote: "not everyone has `timeout` on their computer"
+  expected: "A bounded wait built from shell builtins."
+  rule: "skills/target: never name timeout in a script; a stock macOS ships neither timeout nor gtimeout."
+  failure_type: non-portable-tool
+  cost: rework
+  outcome: failed

@@ -237,7 +237,7 @@ INITIAL_PLAN_PATH="${TARGET_PLAN_PATH:-}"
 unset TARGET_INPUT TARGET_PLAN_PATH
 
 # ── Provider detection ───────────────────────────────────────────────
-# Mirrors HARNESS_SESSION_MARKERS in cli/src/fno/harness_identity.py: session
+# Mirrors HARNESS_SESSION_MARKERS in crates/fno-agents/src/claims.rs: session
 # markers first (non-blank-after-strip, so the *[![:space:]]* glob matches its
 # .strip()), then bare-non-empty plugin-root hints, then the claude default.
 detect_provider() {
@@ -489,6 +489,49 @@ if _is_true "$AUTO_MERGE_APPROVED" && _is_true "$no_external"; then
 fi
 
 # ── Helpers ──────────────────────────────────────────────────────────
+# _resolve_plan_node PLAN REPO_ROOT -> the one node whose plan_path is PLAN.
+# Every holder is collected, then the delivery unit wins: adopted children
+# precede the group child minted for them, so first-match-wins resolved a
+# shared plan to a CONTAINED node that the post-claim containment check then
+# refused. Same rule as the dispatch resolver, deliberately: two resolvers for
+# one question that disagree is worse than either answer. Ambiguous and
+# un-narrowable prints nothing and says so on stderr, because a plan-path
+# bootstrap that resolves to no node otherwise proceeds unclaimed in silence.
+# Any failed read degrades to "no node resolved". jq keeps only rows whose
+# plan basename matches, so realpath runs on a few rows, not the whole board.
+_resolve_plan_node() {
+  local raw_target="$1" repo_root="$2" target rows id plan contained abs
+  local -a match_ids=() unit_ids=()
+  [[ "$raw_target" == /* ]] || raw_target="$repo_root/$raw_target"
+  target="$(realpath "$raw_target" 2>/dev/null || printf '%s' "$raw_target")"
+  rows="$("${FNO_AGENTS_FRONT:-fno}" backlog script-door rows 2>/dev/null)" || return 0
+  while IFS=$'\t' read -r id plan contained; do
+    [[ -n "$plan" ]] || continue
+    [[ "$plan" == /* ]] && abs="$plan" || abs="$repo_root/$plan"
+    [[ "$(realpath "$abs" 2>/dev/null || printf '%s' "$abs")" == "$target" ]] || continue
+    match_ids+=("$id")
+    [[ "$contained" == 0 ]] && unit_ids+=("$id")
+  done < <(printf '%s' "$rows" | jq -r --arg base "${target##*/}" '
+    .[]? | select(type == "object")
+    | select((.plan_path | type) == "string" and .plan_path != "")
+    | select((.plan_path | split("/") | last) == $base)
+    | [(.id // "" | tostring),
+       .plan_path,
+       (if (.contained_in | . == null or . == false or . == "" or . == [] or . == {}) then "0" else "1" end)]
+    | @tsv' 2>/dev/null)
+  if (( ${#match_ids[@]} > 1 && ${#unit_ids[@]} == 1 )); then
+    match_ids=("${unit_ids[@]}")
+  fi
+  if (( ${#match_ids[@]} == 1 )); then
+    printf '%s\n' "${match_ids[0]}"
+  elif (( ${#match_ids[@]} > 1 )); then
+    local shown="${match_ids[*]:0:4}"
+    printf '[init-target-state] note: %d nodes share this plan_path and none is a single delivery unit (%s); resolving to no node, so this session runs UNCLAIMED. Name the node explicitly, or fix the duplicate binding.\n' \
+      "${#match_ids[@]}" "${shown// /, }" >&2
+  fi
+  return 0
+}
+
 ensure_dir() {
   local path="$1"
   mkdir -p "$path" 2>/dev/null && return 0
@@ -681,48 +724,17 @@ if [[ -f "$STATE_FILE" ]]; then
   # resumable, and malformed or unreadable logs preserve the manifest.
   if [[ -z "$_STALE_REASON" && -z "$_STALE_CLAIM_KEY" \
         && -n "$_STALE_SESSION_ID" && -f "$SPACE_DIR/events.jsonl" \
-        && -x "$(command -v python3 2>/dev/null || true)" ]]; then
-    if python3 - "$SPACE_DIR/events.jsonl" "$_STALE_SESSION_ID" "$REPO_ROOT/.fno/.target-cancelled" <<'PYEOF'
-import json
-import sys
-from pathlib import Path
-
-path, session_id, cancel_path = sys.argv[1:]
-try:
-    lines = open(path, encoding="utf-8", errors="replace")
-except OSError:
-    raise SystemExit(1)
-with lines:
-    for line in lines:
-        try:
-            event = json.loads(line)
-        except (json.JSONDecodeError, TypeError):
-            continue
-        data = event.get("data") if isinstance(event, dict) else None
-        if (
-            event.get("type") == "session_finalized"
-            and isinstance(data, dict)
-            and data.get("session_id") == session_id
-            and (
-                data.get("termination_reason") in {
-                    "DonePRGreen",
-                    "DoneAdvisory", "DoneDelivery",
-                    "DoneBatched",
-                    "DoneAwaitingMerge",
-                    "DoneUnreviewed",
-                    "DoneAwaitingReview",
-                    "DonePlanned",
-                    "NoWork",
-                }
-                or (
-                    data.get("termination_reason") == "Interrupted"
-                    and Path(cancel_path).is_file()
-                )
-            )
-        ):
-            raise SystemExit(0)
-raise SystemExit(1)
-PYEOF
+        && -x "$(command -v jq 2>/dev/null || true)" ]]; then
+    _CANCELLED=false
+    [[ -f "$REPO_ROOT/.fno/.target-cancelled" ]] && _CANCELLED=true
+    if jq -nRe --arg sid "$_STALE_SESSION_ID" --argjson cancelled "$_CANCELLED" '
+        first(inputs | fromjson? | select(type == "object" and .type == "session_finalized")
+          | .data | select(type == "object" and .session_id == $sid)
+          | select((.termination_reason | IN("DonePRGreen", "DoneAdvisory", "DoneDelivery",
+                "DoneBatched", "DoneAwaitingMerge", "DoneUnreviewed", "DoneAwaitingReview",
+                "DoneAwaitingRuling", "DonePlanned", "NoWork"))
+              or (.termination_reason == "Interrupted" and $cancelled))
+          | true)' "$SPACE_DIR/events.jsonl" >/dev/null 2>&1
     then
       _STALE_REASON="finalized session $_STALE_SESSION_ID"
     fi
@@ -1378,87 +1390,7 @@ EOF
   if [[ -n "$_GUARD_NODE" ]]; then
     _NODE_ID="$_GUARD_NODE"
   elif [[ -n "$INITIAL_PLAN_PATH" ]] && command -v fno >/dev/null 2>&1; then
-    # Resolve the installed interpreter without creating an environment inside
-    # the plugin. A host without fno's dependencies degrades to unclaimed.
-    _PLUGIN_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-    source "$_PLUGIN_ROOT/scripts/lib/fno-python.sh"
-    fno_python_init "$_PLUGIN_ROOT"
-    _RUNNER=("$FNO_PYTHON" -B)
-    # `2>&1 >` is NOT a typo and the order matters: it points the resolver's
-    # stderr at THIS shell's stderr before stdout is captured, so a traceback
-    # still stays quiet-ish but the deliberate ambiguity note reaches the
-    # operator. Plain `2>/dev/null` discarded that note, which made the previous
-    # fix decorative - the run still proceeded unclaimed in silence.
-    _NODE_ID=$(PLUGIN_ROOT="$_PLUGIN_ROOT" "${_RUNNER[@]}" - "$INITIAL_PLAN_PATH" "$REPO_ROOT" <<'PYEOF' || true
-import os, sys
-
-raw_target, repo_root = sys.argv[1], sys.argv[2]
-# The plugin repo's own checkout backs the import; a bare python3 without it
-# must degrade to "no node resolved", never a traceback that unclaims the run.
-plugin_root = os.environ.get("PLUGIN_ROOT") or repo_root
-sys.path.insert(0, os.path.join(plugin_root, "cli", "src"))
-if not os.path.isabs(raw_target):
-    raw_target = os.path.join(repo_root, raw_target)
-try:
-    target = os.path.realpath(raw_target)
-except OSError:
-    sys.exit(0)
-try:
-    import json
-    import os
-    import subprocess
-
-    # The total fold: a minimal row the typed model would drop can still be
-    # the plan's delivery unit.
-    entries = json.loads(
-        subprocess.run(
-            [os.environ.get("FNO_AGENTS_FRONT") or "fno", "backlog", "script-door", "rows"],
-            capture_output=True, text=True, check=True,
-        ).stdout
-    )
-except Exception:
-    sys.exit(0)
-# Collect ALL holders, then prefer the delivery unit. First-match-wins
-# picked whichever came first in entry order, and adopted children precede the
-# group child that was minted for them - so `--plan-path <shared plan>` resolved
-# to a CONTAINED node, the post-claim containment check refused, and the plan
-# became undispatchable by path even for the node that owns its PR.
-# Same rule as `_resolve_dispatch_node` in target_cli.py, deliberately: two
-# resolvers for one question that disagree is worse than either answer.
-matches = []
-for node in entries:
-    if not isinstance(node, dict):
-        continue
-    plan_path = node.get("plan_path")
-    if not plan_path:
-        continue
-    abs_plan = plan_path if os.path.isabs(plan_path) else os.path.join(repo_root, plan_path)
-    try:
-        if os.path.realpath(abs_plan) == target:
-            matches.append(node)
-    except OSError:
-        pass
-if len(matches) > 1:
-    units = [e for e in matches if not e.get("contained_in")]
-    if len(units) == 1:
-        matches = units
-if len(matches) == 1:
-    print(matches[0].get("id") or "")
-elif len(matches) > 1:
-    # Ambiguous and un-narrowable: two or more UNCONTAINED holders (a shape the
-    # write-site refusal now prevents creating). Print nothing rather than pick
-    # one, matching _resolve_dispatch_node - but say so, because a plan-path
-    # bootstrap that resolves to no node otherwise proceeds unclaimed in total
-    # silence (the stderr note below keys on TARGET_INPUT, which a plan-only
-    # run does not set).
-    sys.stderr.write(
-        "[init-target-state] note: %d nodes share this plan_path and none is a "
-        "single delivery unit (%s); resolving to no node, so this session runs "
-        "UNCLAIMED. Name the node explicitly, or fix the duplicate binding.\n"
-        % (len(matches), ", ".join(str(m.get("id")) for m in matches[:4]))
-    )
-PYEOF
-)
+    _NODE_ID="$(_resolve_plan_node "$INITIAL_PLAN_PATH" "$REPO_ROOT")"
   fi
 
   # Never lose a claim silently: when input was supplied but resolved to no
@@ -1913,7 +1845,7 @@ PYEOF
             fi
           else
             printf 'author: init\nreason: claim_held_by_other\n' > "$STATE_DIR/.target-cancelled"
-            _EVENT_DATA="$(python3 -c 'import json,sys; print(json.dumps({"lane":"target","path":sys.argv[1],"reason":"claim_held_by_other"}))' "$STATE_DIR/.target-cancelled" 2>/dev/null || true)"
+            _EVENT_DATA="$(jq -cn --arg path "$STATE_DIR/.target-cancelled" '{lane: "target", path: $path, reason: "claim_held_by_other"}' 2>/dev/null || true)"
             if [[ -n "$_EVENT_DATA" ]]; then
               fno doctor event emit -t cancel_signal_set -s hook -d "$_EVENT_DATA" >/dev/null 2>&1 || \
                 echo "target: WARNING: cancel signal set but its event was not emitted ($STATE_DIR/.target-cancelled)" >&2
@@ -2018,11 +1950,6 @@ PYEOF
         fi
       fi
       if [[ "${_jt_fm:-manual}" == "auto" ]]; then
-        _jt_root="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
-        if [[ -z "${FNO_PYTHON:-}" && -f "$_jt_root/scripts/lib/fno-python.sh" ]]; then
-          # shellcheck source=/dev/null
-          source "$_jt_root/scripts/lib/fno-python.sh" && fno_python_init "$_jt_root"
-        fi
         _jt_width=""
         _jt_armed_line=""
         if command -v fno >/dev/null 2>&1; then

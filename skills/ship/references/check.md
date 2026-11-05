@@ -74,7 +74,7 @@ fi
 > **Codex bot-login note.** The Codex Cloud reviewer logs in as
 > `chatgpt-codex-connector[bot]` (NOT `openai-codex[bot]` or `codex[bot]`).
 > Searching for `codex[bot]` against `gh api .../reviews` returns zero
-> matches on bllshttng/fno even when the reviewer has posted
+> matches on fnodotdev/fno even when the reviewer has posted
 > comments. Confirmed on PR #248 (sigma-review missed a P2 finding that
 > chatgpt-codex-connector caught) and PR #254 (3 P1 + 2 P2 findings).
 > If `external_reviewer: codex` is set in config.toml without an
@@ -547,7 +547,7 @@ if jq -e '.type == "project"' <<<"$CANDIDATE" >/dev/null 2>&1; then
     bash "${CLAUDE_PLUGIN_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}/scripts/memory/append-lesson-candidate.sh" \
         --session-id "$SESSION_ID" \
         --candidate "$CANDIDATE"
-    # Appends one line to ~/.fno/history/lesson-candidates.jsonl (home-keyed, worktree-
+    # Appends one line to ~/.fno/db/history/lesson-candidates.jsonl (home-keyed, worktree-
     # independent). Promotion into AGENTS.md is a reviewed PR, never automatic.
 fi
 ```

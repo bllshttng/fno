@@ -1,0 +1,24 @@
+# Capability tier: does the /fno:review lane find the readers a change
+# breaks outside the diff? Specimen: fnh shipped a TUI while fno's
+# harness_capabilities.toml kept "No TUI exists"; no review read the reader.
+# The patch renames a CLI flag. No caller of a Python symbol changes, so a
+# caller trace finds nothing. The stale readers are a shell script and a doc.
+# Graded on exact file:line, so a review that lists every file fails.
+id: capability-judgment-blast-radius
+tier: capability
+prompt: |
+  Apply evals/fixtures/judgment-blast-radius/change.patch with `git apply`
+  and commit it. Then review that commit by following
+  skills/review/references/single-lane.md in this checkout, at level
+  medium. Scope every check to evals/fixtures/judgment-blast-radius: skip
+  the repo-wide suites in Phase 0b. Do not run emit-attestation.sh, do not
+  post anything, and do not fix anything. Write the lane's findings array
+  (the JSON payload the lane defines) to review-findings.json at the
+  repo root.
+grade:
+  - kind: file-exists
+    path: review-findings.json
+  - kind: exit
+    command: "python3 -c \"import json; f = json.load(open('review-findings.json')); f = f.get('findings', f) if isinstance(f, dict) else f; hits = {(str(x.get('file', '')).rsplit('/', 1)[-1], int(x.get('line') or 0)) for x in f}; missing = {('nightly.sh', 3), ('README.md', 5)} - hits; assert not missing, missing\""
+timeout_minutes: 20
+tags: [judgment, review]

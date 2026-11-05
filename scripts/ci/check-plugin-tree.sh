@@ -55,16 +55,22 @@ touch "$scratch/tree/overflow/one-too-many"
 expect_refusal '5001 files; maximum is 5000'
 rm -r "$scratch/tree/overflow"
 
-# The actual joined-worker path must judge a denial without uv or bytecode.
+# The packaged joined-worker hook must relay the native judge's denial and
+# start no uv. This job builds no fno-agents, so a stub answers the
+# `hook join-partition-guard` arm with the judge's block shape; the judge's
+# own decisions are unit-tested beside it in crates/fno-agents.
 mkdir -p "$scratch/project/.fno/join-partition" "$scratch/bin" "$scratch/home"
 printf '%s\n' '{"band":"one","deny_edit":["peer.rs"]}' > "$scratch/project/.fno/join-partition/ci-one.json"
 printf '#!/bin/sh\ntouch "%s/uv-called"\nexit 1\n' "$scratch" > "$scratch/bin/uv"
-chmod +x "$scratch/bin/uv"
+printf '#!/bin/sh\n[ "$1 $2" = "hook join-partition-guard" ] || exit 2\ncat > "%s/judge-input"\nprintf '\''%%s\\n'\'' '\''{"decision":"block","reason":"peer.rs","hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"peer.rs"}}'\''\n' "$scratch" > "$scratch/bin/fno-agents"
+chmod +x "$scratch/bin/uv" "$scratch/bin/fno-agents"
 chmod -R a-w "$scratch/tree"
 decision=$(printf '{"cwd":"%s/project","tool_input":{"file_path":"peer.rs"}}' "$scratch" |
     PATH="$scratch/bin:$PATH" HOME="$scratch/home" FNO_WORKER_NAME=ci-one \
+    FNO_AGENTS_BIN="$scratch/bin/fno-agents" \
     bash "$scratch/tree/hooks/join-partition-write-guard.sh")
 jq -e '.decision == "block"' <<<"$decision"
+grep -qF 'peer.rs' "$scratch/judge-input"
 [[ ! -e "$scratch/uv-called" ]]
 "$scratch/plugin-tree" check "$scratch/tree"
 

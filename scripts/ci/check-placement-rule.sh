@@ -35,7 +35,7 @@
 #   1. Reading Claude Code's OWN files: ~/.claude/sessions, ~/.claude/projects
 #      (transcripts), ~/.claude/jobs, .claude/settings.json /
 #      settings.local.json (Claude Code's config, not footnote's state), and
-#      scripts/save-session.py's read of the ~/.claude/.session-context.json
+#      hook/save_session.rs's read of the ~/.claude/.session-context.json
 #      statusline sidecar (its OWN transcript writes were re-homed to
 #      ${FNO_HOME}/saved-sessions - see below - so only the sidecar READ remains).
 #      crates/fno/src/cli_hooks.rs WRITES ~/.claude/settings.json for the same reason
@@ -64,7 +64,7 @@
 #      harness (an env marker alone is inheritable and can mislabel a claude
 #      session as codex). A string prefix match on the harness's own file;
 #      footnote state never lands there.
-#      through hooks/bg-process-guard.py. That corpus is the only source of
+#      through crates/fno-agents/src/hook/bg_process_guard.rs. That corpus is the only source of
 #      the commands agents actually write, and it found three false refusals
 #      that eight rounds of hand-written cases missed. Read-only rglob over
 #      the harness's data; footnote stores nothing there, and a missing root
@@ -158,6 +158,10 @@
 #      same census: it stages reap receipts and measures resume evidence off
 #      that transcript tree, and its test stages one under a tmp HOME.
 #      Footnote stores nothing there.
+#      occupancy_classify.rs names Claude Code's own shell-snapshots dir to
+#      spot an orphaned Bash-tool shell by its argv, and reads
+#      ~/.claude/jobs/<job>/state.json to tell a live job from a dead one.
+#      Read-only; footnote stores nothing there.
 #      scratch.rs is the scratch-shape sweep: its whole subject IS
 #      Claude Code's own ~/.claude/jobs/<job>/tmp tree, read-only rglob for
 #      authored py/sh scratch; it writes only the global events journal
@@ -243,16 +247,17 @@
 #      the various watermark files, insights.md) - only corrections.log and
 #      corrections-rejected.log were in scope (see skills/autocorrect/SKILL.md).
 #
-# Carveout cv-8dc3c6dc (RESOLVED): git-protection.py's state
+# Carveout cv-8dc3c6dc (RESOLVED): the git-protection hook's state
 # (git-protection.json + approve_no_verify.flag) and save-session.py's
 # transcripts used to write under the harness state dir. Both were re-homed
 # to ${FNO_HOME:-~/.fno} in the git-protection-hook re-home change:
-#   - hooks/git-protection.py is now OFF this allowlist entirely - it writes
+#   - the hook (now crates/fno-agents/src/hook/git_protection/) is OFF this allowlist entirely - it writes
 #     nothing under the harness dir and holds no reference to it, so CI
 #     enforces the placement rule for it with no exception.
-#   - scripts/save-session.py stays listed above under category (1): its
-#     transcript WRITES moved to ${FNO_HOME}/saved-sessions, and its only remaining
-#     reference is the legitimate READ of Claude Code's own statusline sidecar.
+#   - crates/fno-agents/src/hook/save_session.rs (the save-session port) stays
+#     listed above under category (1): its transcript WRITES go to
+#     ${FNO_HOME}/saved-sessions, and its only remaining reference is the
+#     legitimate READ of Claude Code's own statusline sidecar.
 #
 #      The native doctor family (the 2026-10 port of the deleted
 #      cli/src/fno/doctor.py) reads the harness's own surfaces in three
@@ -316,13 +321,6 @@ add_violation() {
 # ---------------------------------------------------------------------------
 
 CLAUDE_ALLOWLIST=$(cat <<'EOF'
-cli/src/fno/agents/discover.py
-cli/src/fno/agents/format.py
-cli/src/fno/agents/harnesses/_claude_session_registry.py
-cli/src/fno/agents/harnesses/claude.py
-cli/src/fno/agents/model_routing.py
-cli/src/fno/agents/registry.py
-cli/src/fno/agents/spawn_gate.py
 crates/fno/src/config_doctor/checks.rs
 crates/fno/src/doctor/report.rs
 crates/fno/src/doctor/report/advisors.rs
@@ -350,7 +348,7 @@ crates/fno-agents/src/context_audit.rs
 crates/fno-agents/src/observer/fold.rs
 crates/fno-agents/src/footprint_cause.rs
 cli/src/fno/paths.py
-cli/src/fno/provenance/resolver.py
+crates/fno-agents/src/transcript_resolve.rs
 crates/fno-agents/src/scoreboard/views.rs
 crates/fno/src/setup_autowire.rs
 crates/fno/src/setup_autowire_tests.rs
@@ -365,6 +363,9 @@ crates/fno-agents/src/plans_path.rs
 # plan_carry.rs tests build a per-project Claude settings fixture (the same
 # Claude's-own-config class as plans_path.rs); footnote state never lands there.
 crates/fno-agents/src/plan_carry.rs
+# evals/runner.rs copies the project's own .claude config tree into a golden
+# tree (the rules a worker reads); it reads that tree and writes no footnote state there.
+crates/fno-agents/src/evals/runner.rs
 crates/fno-agents/src/law_match.rs
 crates/fno-agents/src/mail_cli/send/resolve.rs
 crates/fno-agents/src/client_commands.rs
@@ -392,6 +393,8 @@ crates/fno-agents/src/receipt.rs
 crates/fno-agents/src/register.rs
 crates/fno-agents/src/roster_reap.rs
 crates/fno-agents/src/scratch.rs
+crates/fno-agents/src/occupancy_classify.rs
+crates/fno-agents/src/hook/save_session.rs
 crates/fno-agents/src/session_start_bytes.rs
 crates/fno-agents/src/state.rs
 crates/fno-agents/src/stream_worker.rs
@@ -425,6 +428,7 @@ scripts/ci/check-no-internal-refs.sh
 scripts/ci/check-no-stale-skill-refs.sh
 scripts/ci/check-placement-rule.sh
 scripts/diagnostics/guard-corpus-sweep.py
+scripts/release/hookagg.py
 scripts/corrections-log-init.sh
 scripts/corrections-migrate-to-fno.sh
 scripts/ensure-global-dir.sh
@@ -432,10 +436,8 @@ scripts/install-autocorrect-cron.sh
 scripts/install-corrections-git-hook.sh
 scripts/lib/config.sh
 scripts/lib/corrections-lock.sh
-scripts/lib/mission-emit.sh
 scripts/lib/worktree-lifecycle.sh
 scripts/lib/worktree-manager.sh
-scripts/lib/worktree_occupancy.py
 scripts/lint/no-invalid-events.sh
 scripts/metrics/port-order.sh
 scripts/migrate-events-shape.py
@@ -444,7 +446,6 @@ scripts/setup/archive-worktree.sh
 scripts/setup/setup-worktree.sh
 scripts/setup/worktree-create-hook.sh
 scripts/worktree-lifecycle.sh
-scripts/save-session.py
 EOF
 )
 

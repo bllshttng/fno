@@ -141,7 +141,9 @@ fi
    without one is fine: the `what-if` brief asks that question against source.
 2-index. **Ask the code index** - every plan, before the premise check. Run `bash "${SKILL_DIR}/scripts/lib/code-index-detect.sh"` and list every symbol, command, flag, file and prior-art claim the node or doc makes. Ask the first `ready` `symbol` provider about each code claim and the first `ready` `semantic` provider about each prior-art claim. Run the manifest's `ask` argv under its `timeout_secs` with `{term}` replaced. When the manifest has a `fresh` probe, run it. Write the `code_index:` frontmatter block (`main_sha`, one provider entry with `status:` and `fresh:`) and the `## Existence audit` table as the plan's first section. An index answers only for the files it indexed. Ask it about the claims on that surface, and open every hit: a hit on another surface is not an answer. For a claim the index does not cover, take the verdict from the AGENTS.md search convention. Say in the evidence cell that the index did not cover it. Verdicts read `exists at <file:line>`, `exists as <other name> at <file:line>`, or `absent after <exact command>`. If neither an index nor a search settles a claim, the verdict reads `unanswered: <why>`. Confirm an `absent` verdict, and every verdict from a provider with `fresh: no` or `unknown`, with the AGENTS.md search convention before you write it. `docs/graph-search.md` says why an index never makes a zero trustworthy. A provider that errors or times out is recorded `status: error` and the step continues. With no provider present, write one line saying so and continue. Never build an index during a blueprint. The Code Index Audit gate ([references/blueprint-gates.md](references/blueprint-gates.md#code-index-audit-every-plan---step-2-index)) refuses a post-gate plan that skipped this. After the index and `rg` sweep, name exact source line ranges and read only those ranges. A whole-file read needs a stated reason in the plan's Existence audit.
 
-2a. **Verify the premise** - applies to node-seeded and raw-prose input; a supplied design doc already carries cited findings. Read the node's `dispatch-brief` field (`dispatch_brief`) first when present; it is confirmed scope and known files or commands, not an ignore list or a fence. Then read the whole node with `fno backlog get <id>`, including `dispatch_brief` and `progress_notes`; a later correcting note wins over the details. When a plan is bound, add `--plan <path>`. Run `fno backlog freshness <id>` before you measure the claim. Its `shipped`, `partly_shipped` and `changed` verdicts are warnings that name the PRs to read before designing. Each reading is recorded as an event, and v1 never halts. Name the one claim the plan rests on (what a line does, a count, a stall). Measure it again at its source, with a positive control, before writing. When it holds, cite the reading in Context. When it does not, record the real reading with `fno backlog note <id> "<reading>"`, then plan the real defect or halt and say the node is wrong. A plan on a premise nobody re-measured sends a worker after a defect that does not exist.
+2a. **Verify the premise** - applies to node-seeded and raw-prose input. A supplied design doc already carries cited findings. When the node carries a `dispatch-brief` field (`dispatch_brief`), read it first. It is confirmed scope and known files or commands, not an ignore list or a fence. Then read the whole node with `fno backlog get <id>`, including `dispatch_brief` and `progress_notes`. A later correcting note wins over the details. When a plan is bound, add `--plan <path>`. Run `fno backlog freshness <id>` before you measure the claim. Its `shipped`, `partly_shipped` and `changed` verdicts are warnings that name the PRs to read before designing. Each reading is recorded as an event, and v1 never halts. Name the one claim the plan rests on (what a line does, a count, a stall). Measure it again at its source, with a positive control, before writing. When it holds, cite the reading in Context. When it does not, record the real reading with `fno backlog note <id> "<reading>"`, then plan the real defect or halt and say the node is wrong. A plan on a premise nobody re-measured sends a worker after a defect that does not exist. Reach for `fno:verify-footnotes` and run its Premises section over the full premise list. Each claim gets one falsifiable sentence, a declared denominator, a refuse arm plus a positive control, and a CONFIRMED, REFUTED, PARTIAL or UNMEASURED verdict.
+
+Then read what already moves on the same files. Run `fno backlog collisions prs <plan>`: the shared `list_pulls` + `pr_file_paths` reads through one fno-agents read, and it notes, never blocks. Run `fno agents claim list` and read each live `node:` claim's plan. Cite every overlap in Context, or write that no overlap was found and name the commands. When an open PR can hold the same files, pair `fno backlog collisions check` (step 3a, pending plans only) with `collisions prs`.
 
 2a-bis. **The five questions** - answer them BEFORE designing, each as a named thing or the word `none`, into a `## Five questions` section: who hits this and what it costs them today (a named person, a sourced cost); which existing command, skill or config it extends; which case the design will not cover; what could be deleted; which existing module already implements this or could be extended. For the last one, ask the `symbol` provider step 2-index found; otherwise run `rg` for the node's key symbols and read `docs/architecture/dual-implementation-inventory.md`. The schema lives in [references/quick-template.md](references/quick-template.md). The pass criteria stay in the judge's own lens files. This skill never links them and never copies them here, so a plan cannot learn to write to its judge. The drafting lenses, and the rule that the grader's own files stay unread while drafting: [references/product-lenses.md](references/product-lenses.md). An answer that changes the deliverable changes the plan; that is the point of asking before designing. Step 3's judge call grades the answers. The rulings this step runs inside: a ruling surfaced in the stage block (`## Law governing blueprint`) or owed an entry in `decisions_acknowledged` is fixed - the blueprint obeys it and neither re-derives it nor re-asks it. A directive from the user or the lead with no ruling behind it gets exactly one challenge: name the alternative, ask once with the cost of each side, then follow the answer; a second challenge on the same subject in the same session is a violation of this rule, not diligence. A blueprint that concludes the node should be superseded or narrowed writes that as a question row (`fno inbox outstanding ask --question-file <file> --node <id>`, which lists it in `fno inbox outstanding`; the port refuses a question whose file carries no what, why, two options, recommendation with its reason, or a reversible one with no `why_user:` - the context fields come from the template in `docs/architecture/attention-items.md` "Asking with context") and closes its session with `--summary`; it never records the decision itself.
 
@@ -175,16 +177,16 @@ fi
 2e. **Name the routes and the unknowns before the tasks** - every plan, after 2d and before any task or wave exists. A blueprint does not tell the worker how to build it. It names the routes the worker can take and the facts nobody has measured yet. `/target` measures those facts before it writes code. Two misses had one shape. One plan said to forward a call to Python, and the code went through the front door. Another plan guessed which callers read a cache and missed two. Each plan settled a fact it never measured. Write three sections:
 
    - **`## Routes`.** Two or three candidate routes, numbered. Each route names what rules it out: the measured fact that kills it. Rule out on sight a route that lets code write an illegal state. Do the same for a route that gives one fact two writers. Do not pick one. `/target` appends the `chosen: <n> - <why>` line after it measures. When only one route is honest, write it and add `only route: <why no other exists>`.
-   - **`## Unknowns`.** Write one line per fact the plan depends on but did not measure. The form is `- [ ] <question> - measure: <how>`. Examples are the callers of a symbol, the path the code takes, a count, and a cause. A fact you measured in discovery or 2b-bis is not an unknown. Cite it in Context with its source. When every fact is measured, write `none: <why>` instead. `fno do pr create` refuses (exit 6) while one `- [ ]` line stays open.
+   - **`## Unknowns`.** Write one line per fact the plan depends on but did not measure. The form is `- [ ] <question> - measure: <how>`. Examples are the callers of a symbol, the path the code takes, a count, and a cause. A fact you measured in discovery or 2b-bis is not an unknown. Cite it in Context with its source. When every fact is measured, write `none: <why>` instead. `fno do pr create` refuses (exit 6) while one `- [ ]` line stays open. A fact only the user can settle (a law conflict, a product call) is not a `- [ ]` line. File it with `fno inbox outstanding ask --question-file <file> --node <id>` and cite the question id in Context.
    - **`## Done`.** State the deliverable as a measured number, and give the command that measures it. Declare that command in frontmatter `done_probes:` so the stop gate reads it, under the probe rules in [the done_probes gate](references/blueprint-gates.md).
 
-   Then cut the tasks. A task names the files it expects to touch and the unknown it depends on, never the route. A plan that changes prose, docs or config values only writes one route and `none:` under Unknowns. A supplied design doc whose `## Architecture` already lists routes cites it under `## Routes` and does not repeat it.
+   Then cut the tasks. A task names the files it expects to touch and the unknown it depends on, never the route. A plan that changes prose, docs or config values only writes one route and `none:` under Unknowns. A supplied design doc whose `## Architecture` already lists routes cites it under `## Routes` and does not repeat it. A plan with a UI question shows its options as a rendered visual mockup (an artifact page or images), never an ASCII text block.
 
 3. **Write** the plan.
 
    - **A design doc was supplied** (mutate-in-place, the common path): keep its
-     existing path unchanged - `mutate_doc.py` writes back to the same file
-     (`os.replace` onto the resolved path), so an already-node-bearing name is
+     existing path unchanged - `fno-agents plan-cli mutate` writes back to the same file
+     (an atomic rename onto the resolved path), so an already-node-bearing name is
      preserved as-is and the `-<node-id>` suffix is never dropped or duplicated
      into `…--.md` (US4). Do NOT rename a supplied doc.
    - **Creating fresh** (no design doc): write to the path printed by
@@ -211,7 +213,9 @@ fi
    runtime surface inference (overridable via `FNO_EXECUTOR_OVERRIDE`).
 
    **Enrich the Execution Strategy before it becomes executable.**
-   Run `mutate_doc.py` with `--draft`; it produces the deterministic wave/task skeleton while keeping a design-status document in `design`.
+
+   Run `fno-agents plan-cli mutate "$PLAN_PATH" --draft`. It produces the deterministic wave/task skeleton and keeps a design-status document in `design`.
+
    On the full-context main thread, replace every placeholder and populate each task's `surface`, concrete `verify` command, and `acceptance` list from the design and inspected codebase.
 
    **Then ask the join posture.** The trigger is every plan that carries an `## Execution Strategy`. One question, one key: `join: manual | auto   # default manual`.
@@ -222,12 +226,11 @@ fi
 
    Full body: [references/blueprint-gates.md](references/blueprint-gates.md#join-posture-step-3-every-plan-carrying-an-execution-strategy).
 
-   Then validate the exact saved file before collision checking or intake. `mutate_doc.py` runs through the same interpreter ladder `validate-plan.sh` uses (`FNO_PYTHON`, then the source checkout's `cli/.venv`): a bare `python3` dies with `ModuleNotFoundError: No module named 'pydantic'` right after the validator prints PASS on machines whose system python lacks it (reproduced 2026-09-11). Resolve the interpreter once, then chain:
+   Then validate the exact saved file before collision checking or intake:
 
    ```bash
-   FINALIZE_PY="${FNO_PYTHON:-$( [[ -x "$(dirname "$SKILL_DIR")/../cli/.venv/bin/python" ]] && echo "$(dirname "$SKILL_DIR")/../cli/.venv/bin/python" || echo python3 )}"
    bash "${SKILL_DIR}/scripts/validate-plan.sh" "$PLAN_PATH" \
-     && "$FINALIZE_PY" "${SKILL_DIR}/scripts/mutate_doc.py" "$PLAN_PATH" --finalize
+     && fno-agents plan-cli mutate "$PLAN_PATH" --finalize
    fno doctor observer judge --plan "$PLAN_PATH" --node "${CLAIMS_ID:-}" || true
    ```
 
@@ -312,69 +315,18 @@ fi
    NODE_READBACK="$(mktemp)"
    test -s "${CLOSE_RECEIPT:-}" || { echo "Blueprint close refused: no close receipt." >&2; exit 2; }
    fno backlog get "$NODE_ID" >"$NODE_READBACK"
-   python3 - "$CLOSE_RECEIPT" "$NODE_READBACK" "$PLAN_PATH" <<'PY'
-   import json
-   import re
-   import sys
-
-   receipt = json.load(open(sys.argv[1]))
-   node = json.load(open(sys.argv[2]))
-   plan_path = sys.argv[3]
-   entry = next(
-       (
-           row for row in node.get("sessions", [])
-           if row.get("phase") == "blueprint"
-           and row.get("harness") == receipt.get("harness")
-           and row.get("session_id") == receipt.get("session_id")
-           and row.get("ended_at")
-       ),
-       None,
-   )
-   if entry is None:
-       print("Blueprint close refused: exact blueprint session entry was not read back.", file=sys.stderr)
-       raise SystemExit(2)
-
-   # The close readback is the one place that sees both the doc and the node
-   # after the projection ran: every blocker the plan declares must have
-   # landed on the adopted node's blocked_by. Intake warns and skips (a bulk
-   # intake of historical plans must not fail on a sibling that was never
-   # filed); a close refuses instead, naming the id and the repair command.
-   declared = []
-   with open(plan_path, encoding="utf-8") as f:
-       lines = f.read().splitlines()
-   if lines and lines[0].strip() == "---":
-       in_blockers = False
-       for line in lines[1:]:
-           if line.strip() == "---":
-               break
-           m = re.match(r"^blocked_by:\s*(.*)$", line)
-           if m:
-               tail = m.group(1).strip()
-               if tail.startswith("[") and tail.endswith("]"):
-                   declared += [v.strip().strip("'\"") for v in tail[1:-1].split(",") if v.strip()]
-                   in_blockers = False
-               elif tail:
-                   declared.append(tail.strip("'\""))
-                   in_blockers = False
-               else:
-                   in_blockers = True
-           elif in_blockers and re.match(r"^\s*-\s+\S", line):
-               declared.append(line.split("-", 1)[1].strip().strip("'\""))
-           elif line.strip() and not line.startswith((" ", "\t")):
-               in_blockers = False
-
-   missing = [bid for bid in declared if bid not in (node.get("blocked_by") or [])]
-   if missing:
-       print(
-           "Blueprint close refused: the plan declares blocker(s) the adopted "
-           f"node does not carry: {', '.join(missing)}. Repair with "
-           f"`fno backlog update {node.get('id')} blocked_by+=<id>` (or fix "
-           "the plan's blocked_by), then re-run the close.",
-           file=sys.stderr,
-       )
-       raise SystemExit(2)
-   print("blueprint close readback: matched")
-   PY
+   # The exact blueprint session entry the close wrote: same harness, same full session id, ended.
+   jq -e --slurpfile r "$CLOSE_RECEIPT" '[.sessions[]? | select(.phase == "blueprint" and .harness == $r[0].harness and .session_id == $r[0].session_id and .ended_at)] | length > 0' "$NODE_READBACK" >/dev/null \
+     || { echo "Blueprint close refused: exact blueprint session entry was not read back." >&2; exit 2; }
+   # The close readback is the one place that sees both the doc and the node after the projection ran.
+   # Every blocker the plan declares must have landed on the adopted node's blocked_by.
+   # Intake warns and skips; a close refuses, naming the id and the repair command.
+   MISSING="$(fno do plan parse "$PLAN_PATH" | jq -r --slurpfile n "$NODE_READBACK" '(.frontmatter.blocked_by // []) | (if type == "array" then . else [.] end) | map(tostring) - ($n[0].blocked_by // []) | join(", ")')"
+   if [ -n "$MISSING" ]; then
+     echo "Blueprint close refused: the plan declares blocker(s) the adopted node does not carry: $MISSING. Repair with: fno backlog update $NODE_ID blocked_by+=<id> (or fix the plan's blocked_by), then re-run the close." >&2
+     exit 2
+   fi
+   echo "blueprint close readback: matched"
    ```
 
    Plan binding is artifact-only and never claims that the Blueprint phase completed.
@@ -392,7 +344,7 @@ kind: quick-plan
 created: <YYYY-MM-DD>      # required; the consolidation gate reads it
 difficulty: <low|medium|high> # required for plans created after 2026-08-26
 join: <manual|auto>        # who hands out the remaining waves; the join-posture gate asks
-# carveouts: forbidden     # set when the plan says one PR, no follow-up nodes; fno.plan.fidelity refuses a PR that declares an exclusion
+# carveouts: forbidden     # set when the plan says one PR, no follow-up nodes; the fidelity gate refuses a PR that declares an exclusion
 # claims: ab-XXXXXXXX      # only when the input was an ab-id
 # executor: tdd            # transcribed from a Locked Decision, if any
 consolidation:             # step 2d, exactly one outcome (see 2d above)
@@ -550,11 +502,11 @@ Modifiers are composable in any order: `/blueprint quick greenfield rewrite <doc
 
 ### Script invocation
 
-The mutation is implemented in `skills/blueprint/scripts/mutate_doc.py`.
+The mutation is implemented in `crates/fno-agents/src/plan_doc/mutate.rs`.
 Arguments mirror the modifiers above:
 
 ```bash
-python3 skills/blueprint/scripts/mutate_doc.py <doc-path> \
+fno-agents plan-cli mutate <doc-path> \
   [--mode greenfield|brownfield|auto] \
   [--rewrite] \
   [--draft | --finalize] \
@@ -566,7 +518,7 @@ python3 skills/blueprint/scripts/mutate_doc.py <doc-path> \
 Exit codes:
 - `0` success
 - `1` doc already at status:ready without --rewrite; or the argument is not a path or names a missing file (remedy: `fno do plan path`)
-- `2` section ownership violation
+- `2` section ownership violation, or a bad argument (the usage line names it)
 - `3` frontmatter status missing / invalid
 
 ### Section ownership
@@ -586,7 +538,7 @@ Any attempt to write outside this allowlist exits 2. Author-owned sections (Over
 
 ### Acceptance criteria compilation
 
-The `## Acceptance Criteria` section is **source**: authors and native plan modes have creative freedom in how they phrase a criterion. Blueprint compiles that source into strict execution semantics through one canonical compiler (`cli/src/fno/plan/criteria.py`), the same implementation the mutation script, the semantic validator, and the worker-brief generator all call.
+The `## Acceptance Criteria` section is **source**: authors and native plan modes have creative freedom in how they phrase a criterion. Blueprint compiles that source into strict execution semantics through one canonical compiler (`crates/fno-agents/src/plan_doc/criteria.rs`). The mutation script, the semantic validator, and the worker-brief generator all call it.
 
 Accepted source shapes (container syntax alone does not decide validity; a candidate is valid when it yields a non-empty statement):
 

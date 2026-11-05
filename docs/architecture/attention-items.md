@@ -26,7 +26,7 @@ A machine chore whose row names the command that clears it is a `fleet_task`, no
 
 ## The ten context fields and the readiness gate
 
-The context fields: `asker`, `node`, `blocked_because`, `options_rationale`, `recommendation` (the pick, its reason, its downside), `options` (each with next, pros and cons), `unknowns`, `reversible`, `cost_if_wrong`, `meanwhile`. `reversible` is `yes`, `costly`, or `no`. A question missing a required field is `ready: false`, and `fno-agents needs --items --json` prints the `missing` list so the asker can re-ask with the fields. If the row has a `person`, the `asker` object carries it: the asking machine's `fleet.owner`, else its login name. It is a display name, never proof, and no gate reads it.
+The context fields: `asker`, `node`, `blocked_because`, `options_rationale`, `recommendation` (the pick, its reason, its downside), `options` (each with next, pros and cons), `unknowns`, `reversible`, `cost_if_wrong`, `meanwhile`. `reversible` is `yes`, `costly`, or `no`. A question missing a required field is `ready: false`, and `fno-agents needs --items --json` prints the `missing` list so the asker can re-ask with the fields. If the row has a `person`, the `asker` object carries it: the user the asking machine's certificate proves, else its `fleet.owner`, else its login name. On a question row it is display only, and no gate reads it.
 
 ## Who asks: the ladder, by default
 
@@ -175,7 +175,7 @@ A one-shot reader with no tools reads a batch of open questions beside the recor
 
 A deny class never reads `decided`, whatever the reader says. A question with no class goes to the reader, which must name one. Most open questions carry no class, so holding them would leave nothing to measure. A decided verdict on the reader's class counts under `decided_on_read_class`, because that class has no filer behind it.
 
-Turn it on in `config.toml` with `enabled = true` under `[questions.judge]`. `fno config set` refuses this key, because the `[questions]` table sits outside the config model. It is off by default because it spends tokens. It runs each hour. `questions.judge.model` (default `sonnet`) and `questions.judge.batch` (default 10) tune it. `fno inbox outstanding judge --once` runs one batch by hand.
+Turn it on with `fno config set -g questions.judge.enabled=true`. It is off by default because it spends tokens. It runs each hour. `questions.judge.model` (default `sonnet`) and `questions.judge.batch` (default 10) tune it. `fno inbox outstanding judge --once` runs one batch by hand.
 
 Read it with `fno inbox outstanding judge --report --since 24h`. `agreement` compares each decided verdict with the answer the row later got, and each miss goes into the next prompt as a correction. `board_writes` counts closes by a judge run and must read 0.
 
@@ -205,9 +205,9 @@ Every path requires a bearer token that matches a configured sink's `token_env` 
 
 An accepted answer appends the same `attention_answer` row the arm writes. The authority stays `sink`. The idempotency key and any Tailscale Serve identity header ride the row as provenance. The endpoint then runs the same `fno inbox outstanding clear` the mux overlay runs. First answer wins. A retry under the same `idempotency_key` replays the receipt and lands no second row. A different key lands a superseded marker that changes nothing. When a clear fails, the row stays durable. The question then needs a terminal close, and the arm retries its own lane.
 
-## The command page answer
+## The HQ page answer
 
-The question drawer on `/command` answers in place. `POST /command/answer/{id}?t=<token>` takes one of `{"option": n}`, `{"words": "..."}` or `{"done": true}`. A page cannot delegate: that key is refused. The route never writes a row itself. It starts the same door the mux uses, `fno-agents needs --answer <id> --sink command_page --email <login>`, so the writer stays `append_answer_row` and first answer wins.
+The question drawer on `/hq` answers in place. `POST /hq/answer/{id}?t=<token>` takes one of `{"option": n}`, `{"words": "..."}` or `{"done": true}`. A page cannot delegate: that key is refused. The route never writes a row itself. It starts the same door the mux uses, `fno-agents needs --answer <id> --sink command_page --email <login>`, so the writer stays `append_answer_row` and first answer wins.
 
 The row carries `sink: command_page`, `authority: sink`, `email`, `person` and `machine_id`. An invite has no name beyond the login, so `person` is the login. The reply ladder reads every unsuperseded row whatever its sink, so the arm clears the question and delivers on its next beat.
 

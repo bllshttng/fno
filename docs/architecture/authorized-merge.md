@@ -114,6 +114,10 @@ Heal's apply pass ends with one steward walk over the same open-PR pages it alre
 
 Per outside, non-bot PR the steward takes one action per pass, tracked in stage files at `cache/pr-steward/<owner>/<repo>--<pr>.json` inside the state root. With no stage: it reads the PR comments once. When no earlier steward marker is there, it posts the issue-first comment asking the contributor to open an issue and link it with `Closes #<n>`. It then reads the PR body for the issue link: a URL, an `owner/repo#<n>` shorthand, or a bare `#<n>` that is not a self-reference. It files the issue as an intake node with `fno backlog idea --source-kind from_observation`. The origin evidence is the issue URL, and the details carry a `Co-authored-by` credit trailer. Later passes hand the pull request diff, the linked issue, the contributor identity and a capped backlog-find view to a tool-less reader model. The view arrives as `UNTRUSTED` nonce-fenced blocks. The reader returns one verdict: `pursue`, `decline`, or `needs_clarity` with a sanitized question. The note lands on the intake node and, for `needs_clarity`, the question is posted to the PR. Every comment carries an HTML marker, so a rebuilt or wiped stage file costs at most one comments read and never a duplicate comment.
 
+A pull request can close a claim issue instead. The issue title is `Claim <id>`, its author is the pull request's author, and a maintainer applied both labels. The steward then links the pull request to node `<id>` and mints no `Outside issue` node. It tags the node `claim-delivered`, releases the contributor's claim and adds a note. The pull request still never merges. The fleet builds the node from its own plan and credits the contributor with a `Co-authored-by` trailer.
+
+Each pass also checks every outside pull request that has a node. When the node is done and its merge status reads merged, the steward posts one comment. The comment holds the merged pull request link and the `fno-pr-steward:merged` marker. The steward then closes the outside pull request. A marker already on the pull request means the comment is not posted again and only the close is retried. This is the close step the outside-contributions law asks for.
+
 ## The merge freeze
 
 A merge freeze holds a release window. The team sets it, and only the user lifts it. The code is `merge_freeze.rs`. With `store.remote_url` set, the record lives in the primary's `merge_freeze` table, so a freeze set on one machine holds a merge made from any other. Without it, the record lives in `merge-freeze.json` in the agents home, beside the fleet breaker. If the primary holds no record, a machine with a primary still reads its local file, so a freeze an older build wrote keeps holding. An unreachable primary holds the merge. The lift is a ruling, so it reaches another machine only through the shared backlog (`store.share_backlog`).
@@ -161,6 +165,18 @@ revert_after_minutes = 10   # default 10
 Each minute the arm reads main's verdict through the gate's own cached reading. If a red head stays red past the window, is a `Merge pull request #N` commit, and has a green first parent, it is the culprit. The hold stops further merges once main reads red, so the red head is usually that merge. The arm then files a node tagged `main-repair`. It opens a PR that reverts the merge (`git revert -m 1`) and names that node. It asks the author of PR N to re-land the change with the fix. The revert needs one CI run. A fix forward can wait behind a flaky test and a CI queue: on 2026-10-26 main stayed red about 3 hours that way.
 
 The arm refuses to guess. If the parent run is red, cancelled or missing, or the head is not a PR merge, it journals `ambiguous` and opens nothing. A red whose failing checks all sit on heal's flake ledger journals `flaky`. Every outcome is one `main_revert_check` row per red head, so a daemon restart never opens a second revert. The arm never merges the revert. The owner merges it through this gate.
+
+### A check for every merge
+
+Every push to main runs `guards` and `rust-ci` in a group keyed by the commit sha, so no merge's run replaces another's. Together they take about 14 runner minutes. `fno do ci status <sha>` reads their push rows into `merge_check`: `green`, `red`, `pending`, or `unverified` for a cancelled or missing run. On 2026-11-03, 10 of the 10 newest failed `cli-ci` push runs had both lanes green. So `merge_check: green` means the commit compiled and passed the guards. It never means the suite passed, and it does not allow a release. The coalesced `cli-ci` run stays the batch and release gate, and `verdict` still reads it.
+
+To list rollback candidates, walk the first parents and print the field:
+
+```bash
+for sha in $(git log --first-parent --format=%h -n 20 origin/main); do
+  echo "$sha $(fno do ci status "$sha" | jq -r .merge_check)"
+done
+```
 
 ## The merge queue
 

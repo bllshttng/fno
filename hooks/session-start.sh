@@ -322,7 +322,7 @@ if [[ -f "${SCRIPT_DIR}/spawn-seed-provenance-session-start.sh" ]]; then
 fi
 
 # 8. orphan sweep — processes that outlived whatever started them. The
-#    counterpart to hooks/bg-process-guard.py: the guard refuses a process that
+#    counterpart to the bg-process-guard hook entry: the guard refuses a process that
 #    can never end, this reports the ones that already survived, and it is the
 #    only layer that reaches a test fixture, a non-Claude harness, or a hook
 #    that leaked its own work.

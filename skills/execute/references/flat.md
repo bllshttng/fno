@@ -94,7 +94,7 @@ A change that commits needs no emit. The PostToolUse commit hook (`hooks/diff-bu
 
 ```bash
 # BLOCKED when a change cannot proceed (also the <help> path):
-python3 "${SKILL_DIR:-skills/execute}/orchestrator.py" --emit-boundary blocked \
+fno-agents wave emit-boundary blocked \
   --task "<n>" --data '{"reason":"<why>"}'
 ```
 

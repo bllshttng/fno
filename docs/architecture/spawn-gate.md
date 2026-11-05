@@ -2,6 +2,8 @@
 
 There is ONE spawn gate: `crates/fno-agents/src/spawn_gate.rs`, with the lane axes in `spawn_gate_lanes.rs`. Every door asks the same gate: pane, routed, account, and the native bg/headless arms. Python's `cli/src/fno/agents/spawn_gate.py` is a TRANSPORT over the `fno-agents spawn-gate` command. It carries the caller's identity in. It carries the refusal out, as data. This doc carries the long stories from the docstrings. The code keeps its prose short. The mux's own revival door asks through `crates/fno/src/server/revival_gate.rs`: the resume gesture and the held-pane focus ask in `gate` mode with `hold: false` (the command releases the mutex before it answers), and the workspace restore asks once in `probe` mode and spends the headroom it grants.
 
+The org block's gate reading has its own door: `agent.gate-probe` on the daemon socket (`crates/fno-agents/src/spawn_gate_probe.rs`). The daemon answers `probe` mode from a per-cwd cache refreshed every 60 s. The probe is one daemon-side compute, never one spawned `fno-agents spawn-gate` child per mux client per refresh. The probe's child reads have no timeout. A caller that arrives while a compute runs serves its stale entry instead of queueing behind it. With no entry yet, the daemon refuses and the client falls back to the spawn for one refresh. The same answer shape the command prints on stdout rides the socket.
+
 ## The command contract
 
 `fno-agents spawn-gate` reads one JSON payload on stdin. It writes one JSON answer on stdout. The command exits 0 whenever it produced an ANSWER, including a refusal. A refusal is data. The caller decides what to do with it. The gate's own prose (`spawn queued: ...` during a 240-second queue) streams on stderr.
@@ -95,6 +97,8 @@ One table is shared by both trees. It lives in `cli/src/fno/agents/spawn_gate.py
 - 89 review session. A seed or label that names review causes a permanent refusal. The refusal runs before `--force` and the `FNO_SPAWN_GATE=0` bypass. Run the inline fno review lane.
 - 90 and 91, the fleet-incident check pair (`fleet_incident.rs`).
 - 92 node occupied. Fleet top shows a positively-live worker on the spawn's node, claimed or not. The refusal names the worker. The fn-6206 incident was the hole. fork-6206 held no claim, `claim status` read free, and a second spawn double-seated the node and its PR. The arm sits ahead of `--force` and the human exemption, beside the quota walls. A collision is not busyness. A succession passes: the departing caller's own row is excluded. An unreadable roster refuses closed under the same exit with reason `node_occupancy_unknown`. The refusal names the broken read and the `--force` bypass. The arm runs for node-bearing spawns only, never a plain one. Waiting cannot help a named worker. Retask or reap it.
+- 93 rule refused. The rule engine's `door:spawn` read blocked the spawn.
+- 94 open-PR cap. The repo can hold at most `agents.max_open_prs` open PRs (default 20, `0` disables). Above that, the gate holds a new `/fno:target` seat and the refusal names the count. A seat whose node already has a PR, and any seed that is not the target command, still runs. `--force` does not lift it. An unreadable count passes.
 
 ## Overriding the learned cap
 

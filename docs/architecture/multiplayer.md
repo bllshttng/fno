@@ -16,6 +16,8 @@ Run the primary on a private network such as Tailscale, and never bind it to a L
 
 The claim keys that decide dispatch move: `node:`, `dispatch:`, and `reconcile:` (`SHARED_PREFIXES` in `crates/fno-agents/src/claim_store.rs`). Every statement runs the same SQL on either store, so the local and remote legs cannot drift. Each claim is one conditional statement on the primary, and no decision reads a copy.
 
+Planning holds the node too. A think or a blueprint takes `node:<id>` under the planner holder, `blueprint-session:<session id>`, for its whole run. The key reaches the primary, so a planner seated on another machine sees it. The spawn guard and the planner door refuse a second planner. The refusal names the node's plan doc path, the doc's date, the holder's host, and the next command, `next: /fno:target <node>`. A plan doc inside the freshness window refuses a second think the same way. Past the window the think prints one warning and proceeds. The override doors are `/fno:blueprint <doc>` and `/fno:target <node>`.
+
 Two `gh-budget:` row shapes live there too. `gh-budget:fleet` is the shared GitHub refusal hold, and `gh-budget:poller` is the status poller lease, described in [One GitHub poller](#one-github-poller). On a shared primary both key by the machine's GitHub login (`gh-budget:fleet:<login>`, `gh-budget:poller:<login>`). So two accounts on one primary never share a hold or a lease. The bare forms stay machine-local on a stock install. Neither row decides dispatch.
 
 Every other claim stays local. `build:cargo`, `test:`, `session:`, `worker:` and `flight:` name resources of one machine. A cargo lock shared across machines serializes builds that never touch each other.
@@ -32,7 +34,7 @@ The primary is the coverage authority, so write access to it is review authority
 
 The tables that move are listed in `SHARED_TABLES` in `crates/fno-agents/src/backlog_share.rs`. The content version, the sync cursor and the search index stay local in `graph.db`. A new table in neither list fails a test.
 
-Reads stay local. This machine's `graph.db` is a replica. Every 5 seconds, one daemon arm per machine sends the outbox and then applies the primary's change log. `fno agents claim backlog sync` does both at once.
+Reads stay local. This machine's `graph.db` is a replica. Every 5 seconds, one daemon arm per machine sends the outbox and then applies the primary's change log. An unreachable primary holds the next attempt for 60 seconds, and a clean attempt lifts the hold. `fno agents claim backlog sync` does both at once.
 
 Every backlog write opens through one seam, `backlog::open_connection`. With the key on, triggers there copy each row change into the local `backlog_outbox`, in the writer's own transaction. The commit stays local, so no writer holds the graph lock across the network. A flush then sends the outbox to the primary in one request, as one transaction. Each update and delete matches every old column of its row. Each insert must not collide. The same request adds one row to the primary's change log. The flush takes its own lock file, never the graph lock. A write through `mutate_rows` flushes right after the graph lock drops. The daemon flushes every other write within 5 seconds.
 
@@ -129,6 +131,28 @@ Know the limit. sqld reads no machine from the token: it ignores the `sub` claim
 
 Host spellings normalize on write and on pull. Lowercase, and a trailing `.local` drops, so `iMac2D2.local` and `imac2d2` are one host. The two-machine walk-through is the same throwaway-primary drill as [the shared backlog](#start-sharing).
 
+### The user certificate
+
+The same user key proves who records a wide law. A wide law is a global law, or a law bound to a machine or a user. Where the user key lives, mint a certificate for each machine. `fno-agents mail-remote key show` on that machine prints its key.
+
+```bash
+fno-agents mail-remote key certify ~/keys/fleet-user.pk8 jason <machine public key>
+```
+
+The certificate prints on stdout as one line. It binds the user name to that one machine key, and the user key signs it. Install it on that machine:
+
+```bash
+fno-agents mail-remote key cert <line>
+```
+
+`cert` refuses a certificate for another machine key and names both key fingerprints. It writes `user_cert.txt` beside `machine_key.pk8`, owner-only. `show` then prints the user name and the user key fingerprint. Do this on each machine, and every `show` prints the same user key fingerprint.
+
+A certified machine signs each law and retraction it records. The row carries the certificate and the machine key's signature. The signature covers every field except `subject`, because a node rename rewrites the subject in place. The law door lets a certified machine record a wide law, and refuses one on a machine with no certificate.
+
+A certified machine also checks the wide law it reads. A wide row recorded since 2026-11-03 needs proof from its own user key to bind there. It withholds a peer's unsigned row and a row another user key signed, and `fno backlog decisions` names the withheld count on stderr. A retraction or a supersession of a proven wide law needs the same proof, so an unsigned row cannot retire signed law. A project law needs no proof (operator ruling d-e9f3c5e2). An older row reads as legacy and binds as it always did. A machine with no certificate reads every row as before.
+
+Know the limits. The certificate trusts one user key, so a second person's wide law never binds a certified machine. It cannot revoke one machine: a new user key and a new certificate on every machine revoke them all. A forger can still write a row dated before 2026-11-03, because every store token has full write access. A chat-attested law proves that the machine owner's key signed it, not that the user typed it. After `key rotate`, the certificate names the old machine key. Wide writes then refuse until a new certificate is installed, and the read check keeps the same user key. A wide law recorded here after 2026-11-03 but before the certificate carries no signature, so the machine withholds it once the certificate installs. Record it again.
+
 ## Questions
 
 A question asked on one machine shows on every machine of the store. The code is `crates/fno-agents/src/question_bus.rs`. The event store stays on each machine. Two tables on the primary carry this section: `fleet_question` holds the questions, `fleet_question_answer` holds the answers recorded on copies. Neither joins `SHARED_TABLES`.
@@ -179,6 +203,45 @@ An unset `store.remote_url` keeps today's behavior: each machine polls for itsel
 
 Leases and rows key by the machine's GitHub login (`gh_login` reads it once per machine and caches it for an hour), exactly as `gh-budget:fleet:<login>` does. Two accounts on one primary hold two leases and read two sets of rows. Each account's refusal hold is its own. A host whose login is unreadable (a token env in the process, gh broken) polls per machine and skips the shared rows. Its local ledger alone catches its refusals. A login read lags `gh auth switch` by up to an hour. A shared row carries the GitHub facts only: the verdict, the check counts and the optional reviews. A follower drops the fields the poller composed from its own journal and graph. The row then reads `ready: false` with the blocker `status_shared`. `fno do pr status` never serves a shared row, so its `ready` and merge fields always come from this host. The waits and the daemon pollers read only the verdict and the settled flag, so they follow. A shared row serves as a status verdict, so write access to the primary is trust, as it is for [review attestations](#what-moves-to-the-primary). A PR that only one host reads saves nothing. The lease moves no request from one host to another, so there is no arm that polls a follower's PRs. The saving is the overlap: reads of one PR by two hosts inside one TTL. The `pr status` and `pr wait` spend notes count it. `, {n} served from poller <host>` is the number of rows this process took from the poller. `, published {m}` is the number it shared. The loop-check adapter and the review count in `pr wait --until reviewed` do not use the shared rows.
 
+## Shared epics on GitHub
+
+Each person keeps their own store, so nodes stay local. A shared epic publishes one GitHub issue, and that issue is the one page everyone reads. The mark `share=github` on an epic turns it on, and it is off by default. Set it with `fno backlog update <epic> --set share=github`. The mark has no link to `store.share_backlog`. That key moves your whole backlog between your own machines. This mark publishes one epic's titles on a public page.
+
+The heal pass runs the sync (`crates/fno-agents/src/epic_issue.rs`). It runs once per pr-watch tick, so every `pr_watch.interval_seconds` (600 by default), and only while `auto_heal.enabled` is true. The first pass opens one issue in the project's origin repo and stores its number on the epic as `epic_issue`. Set `epic_issue=<n>` by hand to adopt an issue you already opened. Set `epic_issue=null` to open a new one. A pass can open an issue and then fail to write the number. The next pass finds that issue by its hidden `<!-- fno-epic:<id> -->` line, so no second issue opens.
+
+fno writes only between `<!-- fno-epic-checklist -->` and `<!-- /fno-epic-checklist -->`. Write above or below them as you like. If one marker is missing, or the two are out of order, the pass leaves the body alone and names the damage on stderr.
+
+Each child gets one line:
+
+```
+- [ ] <title> · @<handle> · #<PR>
+```
+
+`[x]` marks a done child. The handle is the holder of the child's live node claim. A `github:<login>` holder prints that login. Any other holder is a session on your machine, so the line names the login your `gh` is signed in as. A child with no claim has no handle. A child with no PR has no `#`. A child has no line in four cases:
+
+- its `public` field is false,
+- it is an imported request that you have not made public,
+- another node contains it, because it ships with that node, or
+- it is closed without being done, as a superseded or won't-do node.
+
+A title is private text on a public page. fno writes `<` as `&lt;` and puts a zero-width space after `@`, so a title cannot open a tag or notify a stranger. An epic keeps syncing for 2 days after it closes, so its last checkbox lands.
+
+When the GitHub App is set, the edit shows the fnodotdev bot. Set `github.app_id`, `github.app_installation_id` and `github.app_key_path` in `~/.fno/config.toml`. The installation needs Issues write. Without the App, your own `gh` token makes the edit.
+
+When the node's parent epic has an `epic_issue`, `fno do pr create` adds one line to the body file. The line is `Refs #<n>`. When no other published child of the epic is still open, the line is `Closes #<n>`, and the merge closes the issue. A body that already names the issue gets no second line. A `public: false` child never counts as open, because the issue never shows it.
+
+### Claim a line by comment
+
+Anyone can reserve a piece of the epic with a comment on the issue. The comment needs no write access and no fno. Put `/claim <title>` on the first line of the comment. A comment that starts any other way is ignored, and so is a `/claim` on an issue that is not a shared epic issue. The heal pass reads the new comments on each tick. It stores the last comment it read on the epic as `epic_claim_cursor`, so each comment counts once. The first pass opens the issue, so claims work from the second pass.
+
+A title that matches an owner child, ignoring case and punctuation, takes that node. The holder is `github:<login>`, the line shows the login, and the fleet stops getting that node. Any other title adds a line with that login and no node, because nodes stay in each person's own store. The epic row keeps both kinds in `epic_claims`. The checklist is drawn from graph rows, so a line with no row vanishes without that list.
+
+Before the pass adds a line, it compares the title with every line. The exact match runs first. A small model runs second (haiku, no tools). It reads the new title and the lines as untrusted text and returns one line number or none. On a match the pass adds no line. It posts one reply that names the matching line and its holder. A model that fails or refuses never blocks a claim, and the line is added. Each reply ends with a hidden `<!-- fno-claim-reply:<comment id> -->` line, so a comment gets one answer.
+
+One login holds at most 3 open claims on an issue, the same limit as claim issues. The fourth `/claim` gets one reply and no line. `/release` on the first line of a comment frees every claim of that login on the issue. `/release <title>` frees one.
+
+A claim has a 7 day clock (`STALE_AFTER_DAYS` in `epic_issue.rs`). A claim turns stale after 7 days. If its login has an open PR with `Refs #<n>` or `Closes #<n>` on a line of its own, the claim stays live. A stale line reads `· stale`, and the pass releases its node claim. A new `/claim` on a stale line moves it to the new login. A PR from the holder adds `#<PR>` to the line and keeps the claim. The claim store caps a node claim at 24 hours, so the pass renews each live `/claim` node claim on every tick. If the heal pass is off for more than 24 hours, the node claims lapse and the lines go free. Comment `/claim` again to take one back. A child that turns done frees its claim at once. The stale rule covers `/claim` holds only. A claim from a claim issue keeps its own rules.
+
 ## Failure: the primary is unreachable
 
 A claim command refuses. The error names the URL and the key, and says nothing was written locally. It also names each address it tried, as `resolve <host>` or `connect <ip:port>`, so a broken name reads apart from a down primary. A hotspot that breaks MagicDNS is the first case: set `store.remote_addrs` to the primary's Tailscale IP. A request that timed out can still have reached the primary, so a retry by the same holder is the safe next step. A 4xx reply, such as a bad token, is named as a refusal and never read as an outage. `fno backlog next` refuses selection. `fno do target init` writes a cancel signal with `store_unreachable` and owns no node. A running worker finishes its turn: at its stop, loop-check reads the unreachable renewal and allows the stop, so the worker holds. The machine claims no new work until the network returns. To work alone, unset the key.
@@ -193,11 +256,11 @@ A machine that stays offline past its lease loses the claim, and a peer can take
 
 ## The person beside the machine
 
-Decision rows, question rows and the mail `from_id` name a person and a machine. Every decision door and question door stamps `person` and `machine_id` into the row's data. `crates/fno-agents/src/identity.rs` holds the one resolver: `fleet.owner` from `~/.fno/config.toml`, else `$USER`, else `$LOGNAME`. The fleet beacon's `owner` column and the user part of the mail `from_id` read the same resolver. The mail label takes the person only as a plain token: ASCII letters, digits, `-`, `_` and `.`. A display name such as `Jason Smith` keeps the login name there, because the reply parser routes only a token. `machine_id` is the claim store's machine id. A machine with no readable id writes no `machine_id` key, and the hostname never stands in for it.
+Decision rows, question rows and the mail `from_id` name a person and a machine. Every decision door and question door stamps `person` and `machine_id` into the row's data. `crates/fno-agents/src/identity.rs` holds the one resolver: the user that [the user certificate](#the-user-certificate) proves, else `fleet.owner` from `~/.fno/config.toml`, else `$USER`, else `$LOGNAME`. The fleet beacon's `owner` column and the user part of the mail `from_id` read the same resolver. The mail label takes the person only as a plain token: ASCII letters, digits, `-`, `_` and `.`. A display name such as `Jason Smith` keeps the login name there, because the reply parser routes only a token. `machine_id` is the claim store's machine id. A machine with no readable id writes no `machine_id` key, and the hostname never stands in for it.
 
-The person is a display name the owner states. It is never proof (operator ruling d-e9f3c5e2). One gate reads its presence (user ruling d-2a01fdf1). Until `fleet.owner` is stated, the law door refuses a global law and a law that names another machine or person. [decision-record.md](decision-record.md#law-carries-a-scope) names the scopes. `decided_by` keeps its meaning: the session handle, a stated name, `operator` or `unattributed-caller`. A signed machine key will prove the person later. A caller that already set `person` keeps its value.
+A stated `fleet.owner` is a display name. It is never proof (operator ruling d-e9f3c5e2), so no gate reads it. The law door's wide gate reads the user certificate. With no certificate, the door refuses a global law and a law that names another machine or user. [decision-record.md](decision-record.md#law-carries-a-scope) names the scopes. `decided_by` keeps its meaning: the session handle, a stated name, `operator` or `unattributed-caller`. A caller that already set `person` keeps its value.
 
-Set the name by hand under `[fleet]`, as `owner = "<name>"`. `fno config set fleet.owner` refuses the key until the config registry ports. With the key unset, one person on several machines reads as one name, because the login name is the same on each. A changed token-shaped `fleet.owner` changes the raw mail head to `<person>@<host>`. Update `agents.remote.raw_senders` on every peer that lists the old head in the same change.
+Set the name by hand under `[fleet]`, as `owner = "<name>"`. A certificate's user name outranks it. `fno config set fleet.owner` refuses the key until the config registry ports. With the key unset, one person on several machines reads as one name, because the login name is the same on each. A changed token-shaped `fleet.owner`, or a certificate's user name, changes the raw mail head to `<person>@<host>`. Update `agents.remote.raw_senders` on every peer that lists the old head in the same change.
 
 ## Test it
 
