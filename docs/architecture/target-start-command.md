@@ -51,7 +51,7 @@ The allowance no longer re-runs the parent. It forks a child with the given scop
 On macOS, a Trash wrapper named `rm` on `PATH` can reject cleanup of `.claim-err` or `.init.lock` in a restricted terminal. Init can leave a partial manifest after that error. A live claim does not make that failed admission valid.
 
 1. Read the live claim with `fno agents claim status node:<node> --json` and identify your session with `fno whoami`. Confirm that the claim and partial manifest belong to your session before recovery.
-2. If both records belong to your session, archive the partial manifest through the native state command. Then retry with system tools first on `PATH`. Replace the placeholders below with the manifest path printed by init and the node id.
+2. If both records belong to your session, archive the partial manifest through the native state command. Then retry with system tools first on `PATH`. Replace the placeholders below with the partial manifest path and the node id.
 
 ```bash
 export PATH="/usr/bin:/bin:/usr/sbin:/sbin:$PATH"

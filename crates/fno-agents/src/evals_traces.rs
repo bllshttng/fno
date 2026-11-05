@@ -124,9 +124,13 @@ fn snapshot(data: &Value, evidence: &mut TranscriptEvidence) -> Value {
     };
     let turn = data["turn"].as_str().unwrap_or("");
     let boundary = rows.iter().position(|r| row_matches(r, turn)).or_else(|| {
-        let stamp = data["ts_turn"].as_str()?;
-        rows.iter()
-            .position(|r| r["timestamp"].as_str().is_some_and(|ts| ts >= stamp))
+        let stamp = crate::event_store::parse_rfc3339_ms(data["ts_turn"].as_str()?)?;
+        rows.iter().position(|r| {
+            r["timestamp"]
+                .as_str()
+                .and_then(crate::event_store::parse_rfc3339_ms)
+                .is_some_and(|ts| ts >= stamp)
+        })
     });
     let Some(boundary) = boundary else {
         return empty("failure turn not found in transcript");
@@ -135,6 +139,7 @@ fn snapshot(data: &Value, evidence: &mut TranscriptEvidence) -> Value {
     let mut readings = HarnessReadings::empty(harness);
     let mut entries = Vec::new();
     let mut compactions = 0;
+    let mut windows = std::collections::BTreeMap::new();
     let mut percent = missing("no turn-bounded usage and window reading");
     for row in &rows[..boundary] {
         readings.observe(row);
@@ -151,18 +156,26 @@ fn snapshot(data: &Value, evidence: &mut TranscriptEvidence) -> Value {
             _ => return empty("no transcript entry reader for this harness"),
         }
         if let Some(usage) = crate::context_window::parse_usage_record(row) {
-            let window = crate::context_window::window_reading(&usage.model, Path::new("."));
+            percent = missing("the latest usage has no provable context window");
             // Routed Astra windows require a harness receipt; the declared model window is insufficient.
-            if !crate::context_window::is_astra_model(&usage.model) {
+            if !usage.model.trim().is_empty()
+                && !crate::context_window::is_astra_model(&usage.model)
+            {
+                let window = *windows.entry(usage.model.clone()).or_insert_with(|| {
+                    crate::context_window::window_reading(&usage.model, Path::new(".")).tokens
+                });
                 if let Some(p) = usage
                     .used_tokens()
-                    .and_then(|used| crate::context_window::used_percent(used, window.tokens))
+                    .and_then(|used| crate::context_window::used_percent(used, window))
                 {
                     percent = observed(json!(p), "transcript_usage_and_model_window");
                 }
             }
         }
         if let Some(info) = row.pointer("/payload/info") {
+            if info.get("last_token_usage").is_some_and(Value::is_object) {
+                percent = missing("the latest usage has no provable context window");
+            }
             if let (Some(used), Some(window)) = (
                 info.pointer("/last_token_usage/input_tokens")
                     .and_then(Value::as_u64),
@@ -236,7 +249,7 @@ fn write_trace(
         .find(|key| !data[*key].is_null())
         .unwrap_or("quote");
     trace["trigger"] = if kind == "user_correction" && data["quote"].is_null() {
-        missing("the correction quote was scrubbed")
+        missing("the correction quote is unavailable")
     } else if data[trigger].is_null() {
         observed(json!(kind), "source_signal")
     } else {
@@ -478,7 +491,14 @@ fn import_seed(state: &Path, log: &Path) -> Result<usize, String> {
         .expect("seed row pattern");
     let mut evidence = TranscriptEvidence::default();
     let mut count = 0;
-    for (index, line) in text.lines().enumerate() {
+    let mut lines: Vec<_> = text.lines().enumerate().collect();
+    lines.sort_by_cached_key(|(_, line)| {
+        pattern
+            .captures(line.splitn(5, " | ").last().unwrap_or(""))
+            .map(|caps| caps[2].to_string())
+            .unwrap_or_default()
+    });
+    for (index, line) in lines {
         let fields: Vec<_> = line.splitn(5, " | ").collect();
         let [stamp, "S2", _, _, body] = fields.as_slice() else {
             return Err(format!("invalid frozen S2 row {}", index + 1));
@@ -839,6 +859,99 @@ mod tests {
             0
         );
     }
+    #[test]
+    fn evals_traces_context_readings_do_not_reuse_unknown_windows_or_compare_clock_strings() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut actual = Vec::new();
+        for (name, model, input, cache) in [
+            ("astra", "gpt-6-astra", 1000, 0),
+            ("missing_model", "", 1000, 0),
+            ("overflow", "claude-sonnet-4-5", u64::MAX, 1),
+        ] {
+            let path = tmp.path().join(format!("{name}.jsonl"));
+            let rows = [
+                json!({"type":"assistant","message":{"model":"claude-sonnet-4-5","usage":{"input_tokens":1000},"content":[]}}),
+                json!({"type":"assistant","message":{"model":model,"usage":{"input_tokens":input,"cache_creation_input_tokens":cache},"content":[]}}),
+                json!({"type":"user","uuid":"failure","message":{"content":"no, prove it"}}),
+            ];
+            std::fs::write(
+                &path,
+                rows.iter()
+                    .map(Value::to_string)
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            )
+            .unwrap();
+            let frame = snapshot(
+                &json!({"session_id":name,"harness":"claude","turn":"failure","source_file":path}),
+                &mut TranscriptEvidence::default(),
+            );
+            assert_eq!(frame["compaction_count"]["value"], 0);
+            actual.push(json!([name, frame["context_percent"]["value"]]));
+        }
+        for (name, info) in [
+            (
+                "codex_missing_window",
+                json!({"last_token_usage":{"input_tokens":100000},"model_context_window":null}),
+            ),
+            ("codex_heartbeat", Value::Null),
+        ] {
+            let path = tmp.path().join(format!("{name}.jsonl"));
+            let rows = [
+                json!({"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":1000},"model_context_window":200000}}}),
+                json!({"type":"event_msg","payload":{"type":"token_count","info":info}}),
+                json!({"type":"response_item","payload":{"id":"failure","type":"message","role":"user","content":[]}}),
+            ];
+            std::fs::write(
+                &path,
+                rows.iter()
+                    .map(Value::to_string)
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            )
+            .unwrap();
+            let frame = snapshot(
+                &json!({"session_id":name,"harness":"codex","turn":"failure","source_file":path}),
+                &mut TranscriptEvidence::default(),
+            );
+            assert_eq!(frame["compaction_count"]["value"], 0);
+            actual.push(json!([name, frame["context_percent"]["value"]]));
+        }
+        let path = tmp.path().join("offsets.jsonl");
+        let rows = [
+            json!({"type":"assistant","timestamp":"2026-11-01T11:00:00+01:00","message":{"content":[{"type":"tool_use","id":"a","name":"Bash","input":{"command":"echo first"}}]}}),
+            json!({"type":"assistant","timestamp":"2026-11-01T13:00:00+02:00","message":{"content":[{"type":"tool_use","id":"b","name":"Bash","input":{"command":"echo second"}}]}}),
+            json!({"type":"user","timestamp":"2026-11-01T12:00:00Z","message":{"content":"no, prove it"}}),
+        ];
+        std::fs::write(
+            &path,
+            rows.iter()
+                .map(Value::to_string)
+                .collect::<Vec<_>>()
+                .join("\n"),
+        )
+        .unwrap();
+        let frame = snapshot(
+            &json!({"session_id":"offsets","harness":"claude","ts_turn":"2026-11-01T12:00:00Z","source_file":path}),
+            &mut TranscriptEvidence::default(),
+        );
+        actual.push(json!([
+            "utc_boundary_calls",
+            frame["tool_calls"]["value"].as_array().unwrap().len()
+        ]));
+        assert_eq!(
+            json!(actual),
+            json!([
+                ["astra", null],
+                ["missing_model", null],
+                ["overflow", null],
+                ["codex_missing_window", null],
+                ["codex_heartbeat", 1],
+                ["utc_boundary_calls", 2]
+            ])
+        );
+    }
+
     #[test]
     fn evals_traces_seed_freezes_only_s2_rows_and_finishes_after_an_interrupted_import() {
         let tmp = tempfile::tempdir().unwrap();
