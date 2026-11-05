@@ -63,10 +63,18 @@ const ANSWER_ADDED_COLUMNS: [(&str, &str); 2] = [
     ),
 ];
 
+const IMAGE_DDL: &str = "CREATE TABLE IF NOT EXISTS fleet_question_image (\
+machine_id TEXT NOT NULL, \
+question_id TEXT NOT NULL, \
+seq INTEGER NOT NULL, \
+name TEXT NOT NULL, \
+bytes BLOB NOT NULL, \
+PRIMARY KEY (machine_id, question_id, seq))";
+
 const NOW: &str = "(SELECT strftime('%s','now'))";
 
 pub fn ensure_schema(remote: &Remote) -> Result<(), String> {
-    remote.script(&format!("{DDL}; {ANSWER_DDL}"))?;
+    remote.script(&format!("{DDL}; {ANSWER_DDL}; {IMAGE_DDL}"))?;
     let reply = remote.execute(
         "SELECT name FROM pragma_table_info('fleet_question_answer')",
         &[],
@@ -231,6 +239,13 @@ pub(crate) struct Beat {
     pub answers_applied: usize,
     pub answers_refused: usize,
     pub refusals_reported: usize,
+    /// Shots this beat shipped to the primary, and ask-time copies that no
+    /// longer read from this machine's disk. A missing shot is counted,
+    /// never silent.
+    pub images_published: usize,
+    pub images_missing: usize,
+    /// Shots a copied question landed on this machine's disk.
+    pub images_materialized: usize,
     pub peer_hosts: Vec<String>,
 }
 
@@ -243,7 +258,8 @@ pub(crate) fn beat(remote: &Remote, me: &Host) -> Result<Beat, String> {
         return Err("no machine id; the question bus needs one".into());
     }
     let published = publish(remote, me)?;
-    let (copied, closed, peer_hosts) = pull(remote, me)?;
+    let (images_published, images_missing) = publish_images(remote, me)?;
+    let (copied, closed, images_materialized, peer_hosts) = pull(remote, me)?;
     let answers_published = publish_answers(remote, me)?;
     let (answers_applied, refused_now) = apply_answers(remote, me)?;
     let answers_refused = refused_now + refuse_failed_doors(remote, me)?;
@@ -258,6 +274,12 @@ pub(crate) fn beat(remote: &Remote, me: &Host) -> Result<Beat, String> {
         ),
         &[SqlValue::Integer(RETAIN_SECS)],
     )?;
+    remote.execute(
+        "DELETE FROM fleet_question_image WHERE NOT EXISTS (\
+SELECT 1 FROM fleet_question f WHERE f.machine_id = fleet_question_image.machine_id \
+AND f.question_id = fleet_question_image.question_id)",
+        &[],
+    )?;
     Ok(Beat {
         published,
         copied,
@@ -266,6 +288,9 @@ pub(crate) fn beat(remote: &Remote, me: &Host) -> Result<Beat, String> {
         answers_applied,
         answers_refused,
         refusals_reported,
+        images_published,
+        images_missing,
+        images_materialized,
         peer_hosts,
     })
 }
@@ -335,6 +360,72 @@ WHERE machine_id = ? AND question_id = ? AND closed_at IS NULL"
             .map_err(|(_, error)| format!("publish: {error}"))?;
     }
     Ok(steps.len())
+}
+
+/// Publish the shots of this machine's own open questions: the ask-time
+/// copies live only on this machine's disk, so a peer can never judge the
+/// paint until the primary holds the bytes. One metadata read decides the
+/// writes, so a quiet beat sends nothing. Returns (shipped, missing).
+fn publish_images(remote: &Remote, me: &Host) -> Result<(usize, usize), String> {
+    let local = fold(&me.index());
+    let reply = remote.execute(
+        "SELECT question_id, seq FROM fleet_question_image WHERE machine_id = ?",
+        &[SqlValue::Text(me.machine.clone())],
+    )?;
+    let shipped: HashSet<(String, i64)> = reply
+        .rows
+        .iter()
+        .filter_map(|r| {
+            let qid = r.first()?.text()?;
+            match r.get(1)? {
+                SqlValue::Integer(seq) => Some((qid.to_string(), *seq)),
+                _ => None,
+            }
+        })
+        .collect();
+    let mine = SqlValue::Text(me.machine.clone());
+    let mut steps: Vec<(String, Vec<SqlValue>)> = Vec::new();
+    let mut missing = 0;
+    for (qid, event) in local.asked.iter().filter(|(_, e)| is_own(e, &me.machine)) {
+        if local.closed.contains_key(qid) {
+            continue;
+        }
+        let Some(images) = event["data"]["images"].as_array() else {
+            continue;
+        };
+        for (i, img) in images.iter().enumerate() {
+            let Some(path) = img.as_str() else { continue };
+            let seq = i as i64;
+            if shipped.contains(&(qid.clone(), seq)) {
+                continue;
+            }
+            let name = Path::new(path)
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            match std::fs::read(path) {
+                Ok(bytes) => steps.push((
+                    "INSERT OR IGNORE INTO fleet_question_image \
+(machine_id, question_id, seq, name, bytes) VALUES (?, ?, ?, ?, ?)"
+                        .to_string(),
+                    vec![
+                        mine.clone(),
+                        SqlValue::Text(qid.clone()),
+                        SqlValue::Integer(seq),
+                        SqlValue::Text(name),
+                        SqlValue::Blob(bytes),
+                    ],
+                )),
+                Err(_) => missing += 1,
+            }
+        }
+    }
+    if !steps.is_empty() {
+        remote
+            .transaction(&steps)
+            .map_err(|(_, error)| format!("publish_images: {error}"))?;
+    }
+    Ok((steps.len(), missing))
 }
 
 /// Publish answers this machine recorded on copies of peer questions: one
@@ -653,8 +744,8 @@ pub(crate) fn copy_id(qid: &str, host: &str) -> String {
 /// Copy new peer questions in, close copies their origin closed, and close
 /// copies whose origin row is gone (closed and aged out while this machine
 /// was away: an origin never deletes an open row). Returns (copied, closed,
-/// peer hosts seen).
-fn pull(remote: &Remote, me: &Host) -> Result<(usize, usize, Vec<String>), String> {
+/// materialized shots, peer hosts seen).
+fn pull(remote: &Remote, me: &Host) -> Result<(usize, usize, usize, Vec<String>), String> {
     let reply = remote.execute(
         &format!(
             "SELECT machine_id, question_id, host, closed_at, close_reason, {CLIMBS_SQL} \
@@ -667,6 +758,7 @@ FROM fleet_question WHERE machine_id != ?"
     let mut seen: HashSet<String> = HashSet::new();
     let mut hosts: Vec<String> = Vec::new();
     let (mut copied, mut closed) = (0, 0);
+    let mut images_materialized = 0;
     for row in &reply.rows {
         let text = |i: usize| row.get(i).and_then(SqlValue::text).unwrap_or_default();
         let (machine, qid, host) = (text(0), text(1), text(2));
@@ -686,6 +778,7 @@ FROM fleet_question WHERE machine_id != ?"
             let Some(mut record) = fetch_record(remote, machine, qid)? else {
                 continue;
             };
+            images_materialized += materialize_images(remote, me, machine, qid, &id, &mut record);
             if let Some(data) = record.get_mut("data").and_then(Value::as_object_mut) {
                 data.insert("question_id".into(), json!(id));
                 data.insert("origin_question_id".into(), json!(qid));
@@ -697,6 +790,7 @@ FROM fleet_question WHERE machine_id != ?"
         } else if !open && local.asked.contains_key(&id) && !local.closed.contains_key(&id) {
             let reason = format!("closed on {host}: {}", text(4));
             crate::provider_cap::append_questions_row(&index, &peer_close(&id, &reason, host))?;
+            drop_copy_files(me, &id);
             closed += 1;
         }
         seen.insert(id);
@@ -708,10 +802,11 @@ FROM fleet_question WHERE machine_id != ?"
         let host = event["data"]["host"].as_str().unwrap_or("its machine");
         let reason = format!("gone from {host}");
         crate::provider_cap::append_questions_row(&index, &peer_close(id, &reason, host))?;
+        drop_copy_files(me, id);
         closed += 1;
     }
     hosts.sort();
-    Ok((copied, closed, hosts))
+    Ok((copied, closed, images_materialized, hosts))
 }
 
 fn fetch_record(remote: &Remote, machine: &str, qid: &str) -> Result<Option<Value>, String> {
@@ -721,6 +816,85 @@ fn fetch_record(remote: &Remote, machine: &str, qid: &str) -> Result<Option<Valu
     )?;
     let text = reply.rows.first().and_then(|r| r.first()?.text());
     Ok(text.and_then(|t| serde_json::from_str(t).ok()))
+}
+
+/// Write a copied question's shots onto this machine's disk under
+/// copy-id-prefixed names, and point the copy's `images` at them, so every
+/// local reader (the projection, the viewer, the board row) reads files
+/// that exist here. A shot whose bytes the primary lacks keeps its origin
+/// path: the vault re-root may still rescue it. Returns how many landed.
+fn materialize_images(
+    remote: &Remote,
+    me: &Host,
+    origin_machine: &str,
+    qid: &str,
+    copy: &str,
+    record: &mut Value,
+) -> usize {
+    let Some(images) = record["data"]["images"].as_array() else {
+        return 0;
+    };
+    if images.is_empty() {
+        return 0;
+    }
+    let screens = me.root.join("screens");
+    if std::fs::create_dir_all(&screens).is_err() {
+        return 0;
+    }
+    let origin: Vec<Value> = images.clone();
+    let mut landed = 0;
+    let mut remapped: Vec<Value> = Vec::with_capacity(images.len());
+    // One read per shot: a question's bytes together can cross the
+    // primary's reply limit, the way fetch_record reads one row at a time.
+    for (i, img) in images.iter().enumerate() {
+        let fallback = img.as_str().unwrap_or_default().to_string();
+        let fetched = remote.execute(
+            "SELECT name, bytes FROM fleet_question_image \
+WHERE machine_id = ? AND question_id = ? AND seq = ?",
+            &[
+                SqlValue::Text(origin_machine.into()),
+                SqlValue::Text(qid.into()),
+                SqlValue::Integer(i as i64),
+            ],
+        );
+        let local = fetched.ok().and_then(|reply| {
+            let row = reply.rows.first()?;
+            let name = row.first()?.text()?;
+            let SqlValue::Blob(bytes) = row.get(1)? else {
+                return None;
+            };
+            let dest = screens.join(format!("{copy}-{}-{name}", i + 1));
+            std::fs::write(&dest, bytes).ok()?;
+            let abs = std::fs::canonicalize(&dest).unwrap_or(dest);
+            Some(abs.to_string_lossy().into_owned())
+        });
+        match local {
+            Some(path) => {
+                landed += 1;
+                remapped.push(json!(path));
+            }
+            None => remapped.push(json!(fallback)),
+        }
+    }
+    if let Some(data) = record.get_mut("data").and_then(Value::as_object_mut) {
+        data.insert("origin_images".into(), json!(origin));
+        data.insert("images".into(), Value::Array(remapped));
+    }
+    landed
+}
+
+/// Delete a copy's materialized screenshots: the copy closed, so nothing
+/// here reads its files any more.
+fn drop_copy_files(me: &Host, copy: &str) {
+    let Ok(entries) = std::fs::read_dir(me.root.join("screens")) else {
+        return;
+    };
+    let prefix = format!("{copy}-");
+    for entry in entries.flatten() {
+        if entry.file_name().to_string_lossy().starts_with(&prefix) {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
 }
 
 fn peer_close(qid: &str, reason: &str, host: &str) -> Value {
@@ -744,7 +918,8 @@ fn write_status(me: &Host, outcome: &Result<Beat, String>) {
         .map(|d| d.as_secs())
         .unwrap_or(0);
     let body = match outcome {
-        Ok(b) => json!({"at": at, "published": b.published, "peer_hosts": b.peer_hosts,
+        Ok(b) => json!({"at": at, "published": b.published, "images_missing": b.images_missing,
+            "peer_hosts": b.peer_hosts,
             "answers_refused": b.answers_refused, "refusals_reported": b.refusals_reported,
             "last_error": null}),
         Err(e) => json!({"at": at, "published": 0, "peer_hosts": [], "last_error": e}),
@@ -1092,5 +1267,116 @@ WHERE name IN ('refused', 'reported_at')",
             )
             .unwrap();
         assert_eq!(reply.rows[0][0], SqlValue::Integer(2));
+    }
+
+    // One declaration for the image-carrier contract: the origin's beat
+    // ships the ask's shots, a copy materializes them under local names,
+    // and the bytes die with the row.
+    #[test]
+    fn a_question_screenshots_cross_machines_and_die_with_the_row() {
+        let primary = test_primary::start();
+        let remote = &primary.remote;
+        ensure_schema(remote).unwrap();
+        let (ta, tb) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let notices = Notices::default();
+        let a = machine("m-A", "hosta", &ta, &notices);
+        let b = machine("m-B", "hostb", &tb, &notices);
+
+        // A asks with two real shots and one path that never existed.
+        let screens = ta.path().join("screens");
+        std::fs::create_dir_all(&screens).unwrap();
+        let one = screens.join("q-9-1-shot.png");
+        let two = screens.join("q-9-2-shot.png");
+        std::fs::write(&one, b"png-one").unwrap();
+        std::fs::write(&two, b"png-two").unwrap();
+        let event = json!({"ts": "2026-10-27T00:00:00Z", "type": "operator_question",
+            "source": "test", "data": {"question_id": "q-9", "question": "judge this paint",
+            "asker": "w1", "images": [one, two, "/gone/q-9-3-shot.png"]}});
+        crate::provider_cap::append_questions_row(&a.index(), &event).unwrap();
+
+        // A's beat ships the record and the readable bytes; the missing
+        // shot is counted, never silent.
+        let shipped = beat(remote, &a).unwrap();
+        assert_eq!(shipped.published, 1);
+        assert_eq!(shipped.images_published, 2);
+        assert_eq!(shipped.images_missing, 1);
+        let rows: Vec<(i64, String, Vec<u8>)> = {
+            let db = primary.db.lock().unwrap();
+            let mut stmt = db
+                .prepare(
+                    "SELECT seq, name, bytes FROM fleet_question_image \
+                 WHERE machine_id = 'm-A' AND question_id = 'q-9' ORDER BY seq",
+                )
+                .unwrap();
+            stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap()
+        };
+        assert_eq!(
+            rows,
+            vec![
+                (0, "q-9-1-shot.png".into(), b"png-one".to_vec()),
+                (1, "q-9-2-shot.png".into(), b"png-two".to_vec()),
+            ]
+        );
+
+        // B's beat copies the question and materializes the shots under
+        // copy-id names; the copy row names the local files and keeps the
+        // origin's paths for provenance.
+        let pulled = beat(remote, &b).unwrap();
+        assert_eq!(pulled.copied, 1);
+        assert_eq!(pulled.images_materialized, 2);
+        let copy = fold(&b.index()).asked["q-9@hosta"].clone();
+        let images: Vec<String> = copy["data"]["images"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p.as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(images.len(), 3);
+        assert_eq!(std::fs::read(&images[0]).unwrap(), b"png-one".to_vec());
+        assert_eq!(std::fs::read(&images[1]).unwrap(), b"png-two".to_vec());
+        assert!(images[0].contains("q-9@hosta-1-"));
+        assert!(images[1].contains("q-9@hosta-2-"));
+        // The unreadable shot keeps its origin path: the vault re-root may
+        // still rescue it, and the provenance array holds every origin path.
+        assert_eq!(images[2], "/gone/q-9-3-shot.png");
+        assert_eq!(
+            copy["data"]["origin_images"][2].as_str(),
+            Some("/gone/q-9-3-shot.png")
+        );
+
+        // A closes; B's copy follows and the materialized files go.
+        let close = json!({"ts": "2026-10-27T00:01:00Z", "type": "operator_question_closed",
+            "source": "test", "data": {"question_id": "q-9", "answer": "yes"}});
+        crate::provider_cap::append_questions_row(&a.index(), &close).unwrap();
+        assert_eq!(beat(remote, &a).unwrap().published, 1);
+        assert_eq!(beat(remote, &b).unwrap().closed, 1);
+        let left: Vec<String> = std::fs::read_dir(tb.path().join("screens"))
+            .unwrap()
+            .filter_map(|e| e.unwrap().file_name().into_string().ok())
+            .filter(|n| n.starts_with("q-9@hosta-"))
+            .collect();
+        assert!(left.is_empty(), "{left:?}");
+
+        // The primary's bytes die with the question row.
+        {
+            let db = primary.db.lock().unwrap();
+            db.execute(
+                "DELETE FROM fleet_question WHERE machine_id = 'm-A' AND question_id = 'q-9'",
+                [],
+            )
+            .unwrap();
+        }
+        beat(remote, &b).unwrap();
+        let left_rows: i64 = {
+            let db = primary.db.lock().unwrap();
+            db.query_row("SELECT COUNT(*) FROM fleet_question_image", [], |r| {
+                r.get(0)
+            })
+            .unwrap()
+        };
+        assert_eq!(left_rows, 0);
     }
 }
