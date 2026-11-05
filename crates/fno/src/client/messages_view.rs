@@ -7,11 +7,12 @@
 
 use super::*;
 use crate::messages_model::MessagesSnapshot;
-use crate::org_model::OrgTree;
 use crate::text_style::{TLine, TSeg, TextStyle};
 use crate::view_store::SidelineView;
 use serde_json::Value;
-use std::collections::HashSet;
+use std::cell::RefCell;
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static NEXT_MESSAGES_GEN: AtomicU64 = AtomicU64::new(0);
@@ -210,8 +211,18 @@ fn display_label(name: &str) -> String {
     name.replace("lead-settle", "lead-settle")
 }
 
-pub(crate) type MessagesTx =
-    tokio::sync::mpsc::UnboundedSender<(u64, Result<Value, String>, Result<OrgTree, String>)>;
+/// What the background poll sends back to the input loop.
+pub(crate) enum MessagesMsg {
+    /// The stat poll found the store unchanged: no read ran.
+    Unchanged,
+    /// A read landed (or failed) at this store fingerprint.
+    Landed {
+        fp: Option<crate::messages_model::Fingerprint>,
+        mail: Result<std::sync::Arc<Value>, String>,
+    },
+}
+
+pub(crate) type MessagesTx = tokio::sync::mpsc::UnboundedSender<(u64, MessagesMsg)>;
 
 /// Which column owns the cursor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -241,7 +252,7 @@ impl Col {
 }
 
 /// Column 2's tab.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum ChatTab {
     Chats,
     System,
@@ -249,7 +260,7 @@ pub(crate) enum ChatTab {
 }
 
 /// Column 1's tab.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum ListTab {
     Agents,
     Archive,
@@ -258,14 +269,14 @@ pub(crate) enum ListTab {
 /// Column 1's filter row (item 5): the agent list, or the broadcast
 /// groups. The groups read as filters only from here, never as unlabeled
 /// rows among the agents.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum ListFilter {
     All,
     Broadcasts,
 }
 
 /// Column 1's sort.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum SortMode {
     Last,
     Alpha,
@@ -294,10 +305,29 @@ pub(crate) struct MessagesBoard {
     pub(crate) keys_footer: bool,
     /// The store fingerprint at the last kick: a changed fingerprint is the
     /// only reason to re-read (item 1).
-    pub(crate) last_fingerprint: Option<(usize, u64, u64)>,
+    pub(crate) last_fingerprint: Option<crate::messages_model::Fingerprint>,
     /// The stat poll's own gate: the fingerprint walk runs at most every 5s.
     pub(crate) last_poll: Option<Instant>,
     esc: Vec<u8>,
+    /// Rows derived from the projection, built once per snapshot version
+    /// and per key. Paint reads them; it never rebuilds the list.
+    derived: RefCell<Derived>,
+    /// The read marks, loaded once per open and kept in step with each
+    /// save, so no paint reads the marks file.
+    marks: RefCell<Option<Rc<BTreeMap<String, String>>>>,
+}
+
+/// The memo behind [`MessagesBoard::tree_rows`] and
+/// [`MessagesBoard::chat_rows`]. Cleared whenever the snapshot version moves.
+#[derive(Default)]
+struct Derived {
+    version: u64,
+    /// Participant key to its first index in the projection's array.
+    part_idx: Option<Rc<HashMap<String, usize>>>,
+    /// Agent key to the indices of the threads it takes part in, in order.
+    agent_threads: Option<Rc<HashMap<String, Vec<usize>>>>,
+    tree: HashMap<(ListFilter, ListTab, SortMode), Rc<Vec<TreeRow>>>,
+    chats: HashMap<(String, ChatTab), Rc<Vec<ChatRow>>>,
 }
 
 impl MessagesBoard {
@@ -325,6 +355,8 @@ impl MessagesBoard {
             last_fingerprint: None,
             last_poll: None,
             esc: Vec::new(),
+            derived: RefCell::new(Derived::default()),
+            marks: RefCell::new(None),
         }
     }
 
@@ -396,7 +428,92 @@ fn text_of<'a>(v: &'a Value, key: &str) -> &'a str {
 
 impl MessagesBoard {
     fn projection(&self) -> Option<&Value> {
-        self.snapshot.projection.as_ref()
+        self.snapshot.projection.as_deref()
+    }
+
+    /// The memo, reset when the snapshot moved since it was filled.
+    fn derived(&self) -> std::cell::RefMut<'_, Derived> {
+        let mut d = self.derived.borrow_mut();
+        if d.version != self.snapshot.version {
+            *d = Derived {
+                version: self.snapshot.version,
+                ..Derived::default()
+            };
+        }
+        d
+    }
+
+    fn participants(&self) -> &[Value] {
+        self.projection()
+            .and_then(|p| p.get("participants"))
+            .and_then(Value::as_array)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
+
+    /// The first participant row with `key`, through the key index.
+    fn participant(&self, key: &str) -> Option<&Value> {
+        let idx = {
+            let mut d = self.derived();
+            d.part_idx
+                .get_or_insert_with(|| {
+                    let mut map = HashMap::new();
+                    for (i, p) in self.participants().iter().enumerate() {
+                        map.entry(text_of(p, "key").to_string()).or_insert(i);
+                    }
+                    Rc::new(map)
+                })
+                .clone()
+        };
+        idx.get(key).and_then(|i| self.participants().get(*i))
+    }
+
+    fn threads(&self) -> &[Value] {
+        self.projection()
+            .and_then(|p| p.get("threads"))
+            .and_then(Value::as_array)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
+
+    /// The indices of the threads `agent` takes part in, in thread order.
+    fn agent_threads(&self, agent: &str) -> Vec<usize> {
+        let idx = {
+            let mut d = self.derived();
+            d.agent_threads
+                .get_or_insert_with(|| {
+                    let mut map: HashMap<String, Vec<usize>> = HashMap::new();
+                    for (i, t) in self.threads().iter().enumerate() {
+                        let parts = t.get("participants").and_then(Value::as_array);
+                        for s in parts.into_iter().flatten().filter_map(Value::as_str) {
+                            let list = map.entry(s.to_string()).or_default();
+                            if list.last() != Some(&i) {
+                                list.push(i);
+                            }
+                        }
+                    }
+                    Rc::new(map)
+                })
+                .clone()
+        };
+        idx.get(agent).cloned().unwrap_or_default()
+    }
+
+    /// The read marks, loaded on first use.
+    fn read_marks(&self) -> Rc<BTreeMap<String, String>> {
+        self.marks
+            .borrow_mut()
+            .get_or_insert_with(|| Rc::new(crate::view_store::load_messages_read_marks()))
+            .clone()
+    }
+
+    /// Save one read mark and keep the in-memory marks in step.
+    fn mark_read(&self, chat_id: &str, ts: &str) {
+        crate::view_store::save_messages_read_mark(chat_id, ts);
+        let mut marks = (*self.read_marks()).clone();
+        marks.insert(chat_id.to_string(), ts.to_string());
+        *self.marks.borrow_mut() = Some(Rc::new(marks));
+        self.derived().chats.clear();
     }
 
     /// True when an ended participant was reaped into a scope's Archive
@@ -447,7 +564,17 @@ impl MessagesBoard {
     /// filter lists the broadcast groups alone; the All filter lists the
     /// agents alone, per the active tab and sort. The groups never sit
     /// unlabeled among the agents again.
-    pub(crate) fn tree_rows(&self) -> Vec<TreeRow> {
+    pub(crate) fn tree_rows(&self) -> Rc<Vec<TreeRow>> {
+        let key = (self.filter, self.list_tab, self.sort_mode);
+        if let Some(rows) = self.derived().tree.get(&key) {
+            return rows.clone();
+        }
+        let rows = Rc::new(self.build_tree_rows());
+        self.derived().tree.insert(key, rows.clone());
+        rows
+    }
+
+    fn build_tree_rows(&self) -> Vec<TreeRow> {
         let mut rows: Vec<TreeRow> = Vec::new();
         if self.filter == ListFilter::Broadcasts {
             if let Some(chans) = self
@@ -484,12 +611,34 @@ impl MessagesBoard {
         // A session the user typed into but no mail ever named still gets a
         // row, so its Me thread stays one step down from an agent.
         if self.list_tab == ListTab::Agents {
+            // One pass over the rows: the ids and names a You thread can
+            // match (the same terms `you_rows_for` reads), so a held check
+            // never rescans every participant per row.
+            let mut ids: HashSet<String> = HashSet::new();
+            let mut names: HashSet<String> = HashSet::new();
+            for r in rows.iter() {
+                let TreeRow::Agent { key, .. } = r else {
+                    continue;
+                };
+                let p = self.participant(key);
+                ids.extend(
+                    [
+                        Some(key.as_str()),
+                        p.map(|p| text_of(p, "session_id")),
+                        p.map(|p| text_of(p, "fno_id")),
+                    ]
+                    .into_iter()
+                    .flatten()
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string),
+                );
+                if let Some(name) = p.map(|p| text_of(p, "name")).filter(|n| !n.is_empty()) {
+                    names.insert(name.to_string());
+                }
+            }
             for t in self.you_threads() {
                 let sid = text_of(t, "session_id");
-                let held = rows.iter().any(|r| {
-                    matches!(r, TreeRow::Agent { key, .. }
-                        if self.you_rows_for(key).iter().any(|y| text_of(y, "session_id") == sid))
-                });
+                let held = ids.contains(sid) || names.contains(text_of(t, "name"));
                 if !held && !sid.is_empty() {
                     let name = match text_of(t, "name") {
                         "" => sid.chars().take(8).collect(),
@@ -517,11 +666,7 @@ impl MessagesBoard {
     /// The user's own threads with one agent: the You rows whose session is
     /// the agent's (its key, session id or fno id), or whose name is its name.
     fn you_rows_for(&self, agent: &str) -> Vec<&Value> {
-        let p = self
-            .projection()
-            .and_then(|p| p.get("participants"))
-            .and_then(Value::as_array)
-            .and_then(|ps| ps.iter().find(|p| text_of(p, "key") == agent));
+        let p = self.participant(agent);
         let ids: Vec<&str> = [
             Some(agent),
             p.map(|p| text_of(p, "session_id")),
@@ -542,7 +687,7 @@ impl MessagesBoard {
     }
 
     /// The selected agent's rows for the active tab.
-    pub(crate) fn active_chat_rows(&self) -> Vec<ChatRow> {
+    pub(crate) fn active_chat_rows(&self) -> Rc<Vec<ChatRow>> {
         self.sel_agent
             .as_deref()
             .map(|a| self.chat_rows(a))
@@ -553,7 +698,17 @@ impl MessagesBoard {
     /// the user's own thread with the agent first (Me), then the pair
     /// threads whose other party is not reaped; the System tab one entry per
     /// system arm; the Archive tab the threads whose other party is reaped.
-    pub(crate) fn chat_rows(&self, agent: &str) -> Vec<ChatRow> {
+    pub(crate) fn chat_rows(&self, agent: &str) -> Rc<Vec<ChatRow>> {
+        let key = (agent.to_string(), self.col2);
+        if let Some(rows) = self.derived().chats.get(&key) {
+            return rows.clone();
+        }
+        let rows = Rc::new(self.build_chat_rows(agent));
+        self.derived().chats.insert(key, rows.clone());
+        rows
+    }
+
+    fn build_chat_rows(&self, agent: &str) -> Vec<ChatRow> {
         let proj = self.projection();
         match self.col2 {
             ChatTab::System => {
@@ -579,7 +734,7 @@ impl MessagesBoard {
             _ => {}
         }
         let mut rows: Vec<ChatRow> = Vec::new();
-        let marks = crate::view_store::load_messages_read_marks();
+        let marks = self.read_marks();
         if self.col2 == ChatTab::Chats {
             let mut mine = self.you_rows_for(agent);
             mine.sort_by(|a, b| text_of(b, "last_ts").cmp(text_of(a, "last_ts")));
@@ -594,17 +749,14 @@ impl MessagesBoard {
                 });
             }
         }
-        if let Some(threads) = proj
-            .and_then(|p| p.get("threads"))
-            .and_then(Value::as_array)
         {
-            for t in threads {
+            let threads = self.threads();
+            for t in self
+                .agent_threads(agent)
+                .into_iter()
+                .filter_map(|i| threads.get(i))
+            {
                 let parts = t.get("participants").and_then(Value::as_array);
-                let has_me =
-                    parts.is_some_and(|ps| ps.iter().filter_map(Value::as_str).any(|s| s == agent));
-                if !has_me {
-                    continue;
-                }
                 let other = parts
                     .map(|ps| {
                         ps.iter()
@@ -613,10 +765,7 @@ impl MessagesBoard {
                             .unwrap_or(agent)
                     })
                     .unwrap_or(agent);
-                let other_row = proj
-                    .and_then(|p| p.get("participants"))
-                    .and_then(Value::as_array)
-                    .and_then(|ps| ps.iter().find(|p| text_of(p, "key") == other));
+                let other_row = self.participant(other);
                 if other_row.is_some_and(|p| bool_of(p, "system")) {
                     continue;
                 }
@@ -658,10 +807,7 @@ impl MessagesBoard {
 
     /// The display name for a participant key, falling back to the raw key.
     pub(super) fn participant_name(&self, key: &str) -> String {
-        let proj = self.projection();
-        proj.and_then(|p| p.get("participants"))
-            .and_then(Value::as_array)
-            .and_then(|ps| ps.iter().find(|p| text_of(p, "key") == key))
+        self.participant(key)
             .and_then(agent_label)
             .unwrap_or_else(|| key.to_string())
     }
@@ -1270,14 +1416,25 @@ pub(crate) fn open_handle(view: &mut View, name: String) {
     }
 }
 
-/// A landed gather: apply under the gen guard. The org tree result rides
-/// the same channel and is not used by the flat chat list.
-pub(crate) fn apply_gather(
-    view: &mut View,
-    gen: u64,
-    mail: Result<Value, String>,
-    _tree: Result<OrgTree, String>,
-) {
+/// One message from the background poll, under the gen guard.
+pub(crate) fn apply(view: &mut View, gen: u64, msg: MessagesMsg) {
+    match msg {
+        MessagesMsg::Unchanged => {
+            if let Some(b) = view.messages_board.as_mut().filter(|b| b.gen == gen) {
+                b.inflight = false;
+            }
+        }
+        MessagesMsg::Landed { fp, mail } => {
+            if let Some(b) = view.messages_board.as_mut().filter(|b| b.gen == gen) {
+                b.last_fingerprint = fp;
+            }
+            apply_gather(view, gen, mail);
+        }
+    }
+}
+
+/// A landed gather: apply under the gen guard.
+pub(crate) fn apply_gather(view: &mut View, gen: u64, mail: Result<std::sync::Arc<Value>, String>) {
     let Some(b) = view.messages_board.as_mut().filter(|b| b.gen == gen) else {
         return;
     };
@@ -1285,7 +1442,6 @@ pub(crate) fn apply_gather(
     let mut notice = None;
     match mail {
         Ok(v) => {
-            crate::messages_model::remember(&v);
             b.snapshot.apply(v);
             if let Some(id) = b.pending_message_id.take() {
                 let target = b.projection().and_then(|projection| {
@@ -1393,24 +1549,35 @@ pub(crate) fn apply_gather(
     }
 }
 
-/// Kick a gather only when the store changed (item 1): the stat walk runs
-/// every 5s; the expensive read fires on a fingerprint change, or when the
-/// board has never read.
+/// Kick a poll at most every 5s (item 1). The poll runs off the input
+/// loop: the stat walk over the store and the transcripts, then the
+/// expensive read only on a fingerprint change, or when the board has never
+/// read. Nothing here touches the disk, so keys stay live while it runs.
 pub(crate) fn maybe_kick(view: &mut View, tx: &MessagesTx) {
-    if let Some(b) = view.messages_board.as_mut() {
-        if b.inflight {
-            return;
-        }
-        let never_read = b.snapshot.projection.is_none();
-        if !never_read
-            && b.last_poll
-                .is_some_and(|t| t.elapsed() < Duration::from_secs(5))
-        {
-            return;
-        }
-        b.last_poll = Some(Instant::now());
-        let fp = crate::messages_model::store_fingerprint();
-        let changed = match (&fp, b.last_fingerprint) {
+    let Some(b) = view.messages_board.as_mut() else {
+        return;
+    };
+    if b.inflight {
+        return;
+    }
+    let never_read = b.snapshot.projection.is_none();
+    if !never_read
+        && b.last_poll
+            .is_some_and(|t| t.elapsed() < Duration::from_secs(5))
+    {
+        return;
+    }
+    b.last_poll = Some(Instant::now());
+    b.inflight = true;
+    let gen = b.gen;
+    let last = b.last_fingerprint;
+    let tx = tx.clone();
+    tokio::spawn(async move {
+        let fp = tokio::task::spawn_blocking(crate::messages_model::store_fingerprint)
+            .await
+            .ok()
+            .flatten();
+        let changed = match (&fp, last) {
             (Some(now), Some(last)) => now != &last,
             // Never kicked: read once to learn the baseline even when the
             // cache is painting.
@@ -1418,21 +1585,17 @@ pub(crate) fn maybe_kick(view: &mut View, tx: &MessagesTx) {
             (None, _) => false,
         };
         if !never_read && !changed {
+            let _ = tx.send((gen, MessagesMsg::Unchanged));
             return;
         }
-        b.inflight = true;
-        b.last_fingerprint = fp;
-        let gen = b.gen;
-        let agents = view.layout.agents.clone();
-        let tx = tx.clone();
-        tokio::spawn(async move {
-            let graph = crate::backlog_view::graph_path();
-            let inputs = crate::org_model::gather(&graph, agents).await;
-            let tree = crate::org_model::derive(&inputs, board_now());
-            let mail = crate::messages_model::gather().await;
-            let _ = tx.send((gen, mail, tree));
-        });
-    }
+        let mail = crate::messages_model::gather()
+            .await
+            .map(std::sync::Arc::new);
+        if let Ok(v) = &mail {
+            crate::messages_model::remember(v);
+        }
+        let _ = tx.send((gen, MessagesMsg::Landed { fp, mail }));
+    });
 }
 
 /// Narrowest any of the three columns may get.
@@ -1667,16 +1830,13 @@ async fn act(
                     last_ts,
                     ..
                 } => {
-                    crate::view_store::save_messages_read_mark(
-                        &format!("you:{session_id}"),
-                        last_ts,
-                    );
+                    b.mark_read(&format!("you:{session_id}"), last_ts);
                     b.sel_thread = Some(format!("you:{session_id}"));
                     b.cursors[2] = b.you_items(session_id).len().saturating_sub(1);
                     b.col = Col::Thread;
                 }
                 ChatRow::Thread { chat_id, ts, .. } => {
-                    crate::view_store::save_messages_read_mark(chat_id, ts);
+                    b.mark_read(chat_id, ts);
                     b.sel_thread = Some(chat_id.clone());
                     b.cursors[2] = b.conversation_rows().len().saturating_sub(1);
                     b.col = Col::Thread;
@@ -1709,13 +1869,10 @@ fn open_detail(view: &mut View) {
         match b.col {
             Col::Tree => b.tree_rows().get(b.cursors[0]).and_then(tree_row_agent_key),
             Col::Chats => b.sel_agent.clone().and_then(|a| {
-                b.chat_rows(&a)
-                    .into_iter()
-                    .nth(b.cursors[1])
-                    .and_then(|row| match row {
-                        ChatRow::Thread { partner_key, .. } => Some(partner_key),
-                        ChatRow::SystemEntry { .. } | ChatRow::YouThread { .. } => None,
-                    })
+                b.chat_rows(&a).get(b.cursors[1]).and_then(|row| match row {
+                    ChatRow::Thread { partner_key, .. } => Some(partner_key.clone()),
+                    ChatRow::SystemEntry { .. } | ChatRow::YouThread { .. } => None,
+                })
             }),
             Col::Thread => b
                 .conversation_rows()

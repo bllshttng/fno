@@ -870,7 +870,7 @@ fn live_frame(
             .and_then(|p| p.get("you"))
             .and_then(Value::as_array)
             .is_none_or(|t| t.is_empty());
-        crate::client::messages_view::apply_gather(&mut view, gen, mail, Err("no org tree".into()));
+        crate::client::messages_view::apply_gather(&mut view, gen, mail.map(std::sync::Arc::new));
         if board_empty || you_empty {
             return Err(
                 "messages board rendered empty: mail-threads returned no threads; \
@@ -906,9 +906,9 @@ shoot a root whose chats store has rows (scripts/ops/mux-demo-snapshot.sh seeds 
             }
         }
         if let (Some(ViewKind::MessagesYouThread), Some(b)) = (kind, view.messages_board.as_mut()) {
-            if let Some(sid) = b.active_chat_rows().into_iter().find_map(|row| match row {
+            if let Some(sid) = b.active_chat_rows().iter().find_map(|row| match row {
                 crate::client::messages_view::ChatRow::YouThread { session_id, .. } => {
-                    Some(session_id)
+                    Some(session_id.clone())
                 }
                 _ => None,
             }) {

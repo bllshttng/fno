@@ -156,6 +156,21 @@ pub(crate) fn held_hosts(home: &std::path::Path, current: &str) -> Vec<String> {
     names
 }
 
+/// Every bus label this machine has held, and the bus ids its pull arm
+/// already delivered here. The Messages projection skips both: the local
+/// chats store holds that mail.
+pub(crate) fn local_bus_facts() -> (Vec<String>, std::collections::HashSet<String>) {
+    let home = home_root();
+    let hosts = held_hosts(&home, &crate::name_ledger::local_bus_host());
+    let seen = std::fs::read_to_string(crate::mail_remote::seen_path(&home))
+        .unwrap_or_default()
+        .lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .collect();
+    (hosts, seen)
+}
+
 fn home_root() -> PathBuf {
     let home = crate::paths::AgentsHome::from_env();
     let _ = home.ensure_root();
