@@ -7420,12 +7420,10 @@ async fn attach_and_run(
                 }
             }
             Some((gen, result, is_login)) = conn_act_rx.recv() => {
-                // a mutation/login command finished. Clear the single-flight
-                // guard UNCONDITIONALLY (the subprocess has exited, whatever the
-                // modal's read-gen), so a manual R during the mutation can never
-                // wedge `acting` on nor let a second write overlap this one. The
-                // notice + re-read are still gen-guarded: a stale/closed result
-                // shows nothing (never optimistic state).
+                // a mutation/login command finished: clear the single-flight
+                // guard unconditionally (the subprocess exited), so a manual R
+                // during it can never wedge `acting` on. Stale results show
+                // nothing (never optimistic state).
                 if let Some(cv) = view.connections.as_mut() {
                     cv.acting = false;
                 }
@@ -8869,9 +8867,8 @@ async fn connections_keys(
                 view.conn_action = Some((argv, env, false));
             }
             ConnIntent::SpawnLogin(argv) => {
-                // Opens the login pane via `fno mux pane run`; the reducer already
-                // recorded the pending row + notice. Marked is_login so a success
-                // keeps that notice.
+                // Stash for the run loop to spawn on the wire; the landing
+                // focuses the pane.
                 view.conn_action = Some((argv, Vec::new(), true));
             }
             ConnIntent::SetActiveAccount(account) => {
