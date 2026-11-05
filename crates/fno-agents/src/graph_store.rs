@@ -1733,14 +1733,24 @@ pub fn work_state(index: &HashMap<String, Vec<(String, String)>>, session_id: &s
     if named.is_empty() {
         return WorkState::NoProvenance;
     }
-    if let Some((node, status)) = named.iter().find(|(_, status)| status != "done") {
-        return WorkState::Open {
+    // A parked or never-started node is not active work: beside a done node
+    // it never holds the session open. Named on parked nodes only, the
+    // session stays Open on the first of them.
+    let parked = |status: &str| crate::gc::INACTIVE_NODE_STATUSES.contains(&status);
+    let open = named
+        .iter()
+        .find(|(_, status)| status != "done" && !parked(status));
+    let done: Vec<String> = named
+        .iter()
+        .filter(|(_, status)| status == "done")
+        .map(|(node, _)| node.clone())
+        .collect();
+    match open.or_else(|| done.is_empty().then(|| &named[0])) {
+        Some((node, status)) => WorkState::Open {
             node: node.clone(),
             status: status.clone(),
-        };
-    }
-    WorkState::AllDone {
-        nodes: named.iter().map(|(node, _)| node.clone()).collect(),
+        },
+        None => WorkState::AllDone { nodes: done },
     }
 }
 
@@ -3723,6 +3733,31 @@ mod tests {
             }
         );
         assert_eq!(work_state(&index, "ses_casekept"), WorkState::NoProvenance);
+
+        // The 2026-11-04 specimen: a worker named on its done node and on an
+        // idea it filed later. The idea is not active work, so the done node
+        // decides; a session named only on parked nodes stays Open.
+        let entries = vec![
+            json!({"id": "N1", "status": "done", "sessions": [
+                {"session_id": "I", "phase": "execute", "ended_at": "2026-11-04T13:00:34Z"}]}),
+            json!({"id": "N8", "status": "idea", "sessions": [
+                {"session_id": "I", "phase": "think", "ended_at": "2026-11-04T13:01:50Z"},
+                {"session_id": "P", "phase": "think"}]}),
+        ];
+        let index = work_index(&entries);
+        assert_eq!(
+            work_state(&index, "I"),
+            WorkState::AllDone {
+                nodes: vec!["N1".into()]
+            }
+        );
+        assert_eq!(
+            work_state(&index, "P"),
+            WorkState::Open {
+                node: "N8".into(),
+                status: "idea".into()
+            }
+        );
 
         // A rebound session: its ended row on N5 comes first in graph order,
         // its open row on N7 is the newest. The open row is the current node.

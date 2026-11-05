@@ -144,7 +144,7 @@ Each row then has one idle window (`gc.rs` `idle_window`). The clock is the tran
 | origin `spawn` | 1 hour (law d-e3defbb7) |
 | every other skill session, and a row with no transcript | 1 day (law d-defa43c7) |
 
-A row whose every node is done waits at most 1800 s, whatever its origin (law d-b01ffede, `gc.rs` `DONE_NODE_IDLE_RETIRE_SECS`). A shorter window above still wins.
+A row whose every node is done waits at most 1800 s, whatever its origin (law d-b01ffede, `gc.rs` `DONE_NODE_IDLE_RETIRE_SECS`). A shorter window above still wins. An `idea` or `deferred` node the session is also named on is not active work, so it never blocks this window (`graph_store.rs` `work_state`).
 
 A row with no transcript wrote nothing a brainstorm keeps. The sweep reads it as a failed start, and it ages on the report clock.
 
@@ -218,7 +218,7 @@ The detail names the in-process witness that answered instead. The registry row'
 
 The cure is patience, not a ruling: the next sweep's probe usually answers, and the row retires then.
 
-One row shape can never answer: no transcript at classification, no pid, no pane and no inside-leg report. No witness is left that can lift the hold. Once its clock passes one day, the row retires instead (`gc_sweep.rs` `PROBE_UNREAD_RETIRE_AFTER_S`). The clock is the row's `created_at`. A hand-started row can carry an empty `created_at`, so the clock then reads `exited_at`, and the hold line names the basis `row exited`. The dry run makes the same read-only re-read, so it lists the same probe-unread rows the live sweep keeps.
+An unread probe is an unknown, and an unknown never keeps a row. When no pid, pane, live working report or seq move lifts the hold, the transcript file on disk decides (`gc_sweep.rs` `transcript_file_age`). A file written inside the grace holds, and the detail reads `the transcript on disk was written {n}s ago`. A quiet file retires the row. When the classify pass read no transcript either, a missing file retires it too: no witness is left that can ever lift the hold. The dry run makes the same read-only re-read, so it lists the same probe-unread rows the live sweep keeps.
 
 ### graph unreadable
 
