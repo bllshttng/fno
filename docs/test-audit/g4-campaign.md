@@ -43,7 +43,7 @@ The half target (1,366 collected) is not reached and cannot be reached by honest
 
 ## Verification
 
-`cargo check --all-targets` ran once over the crate after the cut, per the G1 discipline. Local test runs stay barred by the fleet hold. The keeper spot-check is pending the first CI run of this PR. The ledger records the keeper mutations when it lands.
+`cargo check --all-targets` ran once over the crate after the cut, per the G1 discipline. Local test runs stay barred by the fleet hold. The keeper spot-check is pending the first CI run of this PR. When the first CI run lands, the ledger records the keeper mutations.
 
 ## Files
 
