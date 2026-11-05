@@ -75,3 +75,89 @@ def test_command_call_attaches_returncode(monkeypatch) -> None:
         rust_binary.command_call("fleet-incident", {})
     assert excinfo.value.returncode == 1
     assert "exited 1" in str(excinfo.value)
+
+
+# ── The native-family signposts hand the call to the front door ──
+#
+# A gate-main run resolved fno to this wheel and died on the doctor signpost
+# three times writing no grade while the real front door sat one PATH entry
+# later. The refusal was only true when no door exists, so the signposts exec
+# one first; these tests pin the handoff and the preserved refusal.
+
+def _stub_door(tmp_path, code=0):
+    """A door stand-in that records its argv and exits `code`."""
+    log = tmp_path / "door-argv.txt"
+    stub = tmp_path / "fno"
+    stub.write_text("#!/bin/sh\n" f'printf "%s\\n" "$@" > {log}\n' f"exit {code}\n")
+    stub.chmod(0o755)
+    return stub
+
+
+def test_front_door_handoff_runs_the_door_with_family_and_tail(tmp_path, monkeypatch):
+    stub = _stub_door(tmp_path, code=7)
+    monkeypatch.setattr(rust_binary, "resolve_front_binary", lambda: stub)
+    code = rust_binary.front_door_handoff(["evals", "run", "--tag", "x"], "doctor")
+    assert code == 7
+    assert (tmp_path / "door-argv.txt").read_text().splitlines() == [
+        "doctor",
+        "evals",
+        "run",
+        "--tag",
+        "x",
+    ]
+
+
+def test_front_door_handoff_reads_a_self_launcher_as_no_door(tmp_path, monkeypatch):
+    # PATH's `fno` being an fno-py shim must read as no door: exec-ing it
+    # re-enters the signpost.
+    self_shim = tmp_path / "fno-py-shim"
+    self_shim.write_text("#!/bin/sh\nexit 9\n")
+    self_shim.chmod(0o755)
+    monkeypatch.setattr(rust_binary, "resolve_front_binary", lambda: self_shim)
+    monkeypatch.setattr(rust_binary.sys, "argv", [str(self_shim), "doctor"])
+    assert rust_binary.front_door_handoff(["evals"], "doctor") is None
+
+
+def test_front_door_handoff_answers_none_when_no_door_exists(monkeypatch):
+    monkeypatch.setattr(rust_binary, "resolve_front_binary", lambda: None)
+    assert rust_binary.front_door_handoff(["evals"], "doctor") is None
+
+
+def test_doctor_signpost_hands_off_instead_of_refusing(tmp_path, monkeypatch):
+    from typer.testing import CliRunner
+
+    from fno.cli import app
+
+    stub = _stub_door(tmp_path)
+    monkeypatch.setattr(rust_binary, "resolve_front_binary", lambda: stub)
+    done = CliRunner().invoke(app, ["doctor", "evals", "run", "--tag", "x"])
+    assert done.exit_code == 0, done.output
+    assert (tmp_path / "door-argv.txt").read_text().splitlines() == [
+        "doctor",
+        "evals",
+        "run",
+        "--tag",
+        "x",
+    ]
+
+
+def test_front_door_handoff_falls_back_when_the_door_cannot_exec(tmp_path, monkeypatch):
+    # The other resolve_front_binary callers treat an exec failure as "no
+    # door"; the handoff must too, or a door deleted between the is_file
+    # check and the run tracebacks instead of refusing.
+    stub = tmp_path / "fno"
+    stub.write_text("#!/bin/sh\nexit 0\n")
+    stub.chmod(0o644)
+    monkeypatch.setattr(rust_binary, "resolve_front_binary", lambda: stub)
+    assert rust_binary.front_door_handoff(["evals"], "doctor") is None
+
+
+def test_signpost_refusal_stays_when_no_door_exists(monkeypatch):
+    from typer.testing import CliRunner
+
+    from fno.cli import app
+
+    monkeypatch.setattr(rust_binary, "resolve_front_binary", lambda: None)
+    done = CliRunner().invoke(app, ["doctor", "evals", "run"])
+    assert done.exit_code == 2
+    assert "native to the Rust front door" in done.output
