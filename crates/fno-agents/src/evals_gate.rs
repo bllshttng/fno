@@ -1272,17 +1272,6 @@ fn launch_head(
             state.heads.insert(pr.sha.clone(), disposition);
         }
     };
-    let skip_note = skip_suffix(&skipped);
-    if !skipped.is_empty() {
-        post_status(
-            p,
-            d,
-            slug,
-            &pr.sha,
-            "pending",
-            &format!("run in flight{skip_note}"),
-        );
-    }
     let probe = DepsProbe { run: d.run };
     let Some(files) = crate::pr_status::lists::pr_file_paths(&probe, &p.repo, slug, pr.number).ok()
     else {
@@ -1318,6 +1307,20 @@ fn launch_head(
     let lane = config_lane(p.repo);
     if zai_peak_hold(p.repo, &lane, d.now) {
         return format!("head {} waits out the zai peak", short(&pr.sha));
+    }
+    // Posted here, not earlier: only a launch attempt that reaches the
+    // spawn names the skips, so an early return neither repeats the post
+    // on retry nor supersedes it within the same attempt.
+    let skip_note = skip_suffix(&skipped);
+    if !skipped.is_empty() {
+        post_status(
+            p,
+            d,
+            slug,
+            &pr.sha,
+            "pending",
+            &format!("run in flight{skip_note}"),
+        );
     }
     let mut argv = run_argv(
         p,
