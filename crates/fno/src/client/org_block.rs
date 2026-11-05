@@ -95,7 +95,7 @@ impl View {
         self.aux = Some(self.org_modal_popup());
     }
 
-    /// The fold wanted now. The expanded-only folds rest once the modal is gone.
+    /// The fold wanted now; the expanded-only folds rest once the modal closes.
     pub(super) fn org_want(&mut self) -> Option<crate::org_overlay::Want> {
         if self.org.is_expanded() && !self.org_modal_is_up() {
             self.org.collapse();

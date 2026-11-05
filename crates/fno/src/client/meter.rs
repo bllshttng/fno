@@ -129,9 +129,7 @@ async fn stream_macmon(
     }
 }
 
-/// The meter row a snapshot paints, from the state `FNO_SNAPSHOT_METER` seeds
-/// (a capacity state plus a `cpu` string): a one-shot snapshot has no macmon
-/// stream, so without it no shot shows the row.
+/// A snapshot has no macmon stream: `FNO_SNAPSHOT_METER` seeds the row.
 pub(super) fn snapshot_meter_text(detailed: bool) -> Option<String> {
     let state = capacity_state()?;
     let cpu = state.get("cpu")?.as_str()?;
@@ -189,7 +187,6 @@ fn parse_macmon_sample(raw: &[u8], detailed: bool) -> Option<String> {
 /// machine-keyed file the fno-agents tick persists. `None` when missing or
 /// unreadable: the gauge says "cap unknown", never a stale guess.
 pub(crate) fn capacity_state() -> Option<serde_json::value::Value> {
-    // A snapshot has no tick writing the state file: it seeds the state here.
     if let Some(seed) = std::env::var("FNO_SNAPSHOT_METER")
         .ok()
         .and_then(|raw| serde_json::from_str(&raw).ok())
