@@ -537,6 +537,18 @@ pub(crate) fn cancel_in_flight(
     head: &str,
 ) -> Option<Vec<String>> {
     let short: String = head.chars().take(8).collect();
+    // pr.cancel_red_run = false leaves the runs in flight everywhere: the
+    // wait reads the red verdict as final and cancels nothing (a sharded
+    // suite wants every failure from its one run). The gate sits above the
+    // staleness read, so even a rerun-in-progress red exits red.
+    let cancel_red_run = crate::agents_config::config_lookup(cwd, &["pr", "cancel_red_run"])
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+    if !cancel_red_run {
+        return Some(vec![format!(
+            "wait: red at {short}; pr.cancel_red_run=false leaves the runs in flight"
+        )]);
+    }
     if head.is_empty() {
         return Some(vec![
             "wait: red, but the status names no head; no run cancelled".into(),
@@ -1297,6 +1309,25 @@ exit 1
         let gh = hold_stub_gh(dir.path());
         let answer = cancel_in_flight(gh.to_str().unwrap(), dir.path(), 4254, "abc123");
         assert!(answer.is_none(), "{answer:?}");
+    }
+
+    #[test]
+    fn a_cancel_red_run_false_head_leaves_the_runs_in_flight() {
+        // pr.cancel_red_run = false gates the helper above the staleness
+        // read: the wait reads the red as final, cancels nothing, and
+        // journals no intent row (a sharded suite wants every failure from
+        // its one run).
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".fno")).unwrap();
+        std::fs::write(
+            dir.path().join(".fno/config.toml"),
+            "[pr]\ncancel_red_run = false\n",
+        )
+        .unwrap();
+        let gh = cancel_stub_gh(dir.path());
+        let lines = cancel_in_flight(gh.to_str().unwrap(), dir.path(), 4254, "abc123").unwrap();
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(lines[0].contains("pr.cancel_red_run=false"), "{lines:?}");
     }
 
     /// A fake gh whose only failed check names the outside hold: the wait

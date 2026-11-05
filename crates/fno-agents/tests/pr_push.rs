@@ -437,6 +437,28 @@ fn red_cancel_rows() {
 }
 
 #[test]
+fn a_cancel_red_run_false_head_refuses_instead_of_cancelling() {
+    // pr.cancel_red_run = false restores the old refusal: the red flight
+    // refuses like any other in-flight run, no cancel goes out, and no
+    // bypass row lands (a sharded suite wants every failure from its one run).
+    let (_t, d) = tmpdir();
+    std::fs::create_dir_all(d.join(".fno")).unwrap();
+    std::fs::write(d.join(".fno/config.toml"), "[pr]\ncancel_red_run = false\n").unwrap();
+    std::fs::write(d.join("red-pending"), "").unwrap();
+    let (code, out, err) = run_command(&d, &[]);
+    assert_eq!(code, 2, "{out}\n{err}");
+    assert!(
+        !log_of(&d, "gh.log").contains("cancel"),
+        "no cancel went out"
+    );
+    assert!(!log_of(&d, "git.log").contains("git push"));
+    assert!(
+        !log_of(&d, "fno.log").contains("push_debounce_bypass"),
+        "no bypass row: the refusal is not a bypass"
+    );
+}
+
+#[test]
 fn preflight_rows() {
     let (_t, d) = tmpdir();
     std::fs::write(d.join("pending"), "").unwrap();

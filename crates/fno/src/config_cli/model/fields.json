@@ -478,6 +478,14 @@
      }
     },
     {
+     "name": "pr",
+     "default": {
+      "cancel_red_run": true,
+      "open_ready": true,
+      "wait_wake_minutes": 15
+     }
+    },
+    {
      "name": "pr_watch",
      "default": {
       "enabled": false,
@@ -1738,6 +1746,23 @@
     {
      "name": "enabled",
      "default": false
+    }
+   ]
+  },
+  "PrBlock": {
+   "extra": "ignore",
+   "fields": [
+    {
+     "name": "cancel_red_run",
+     "default": true
+    },
+    {
+     "name": "open_ready",
+     "default": true
+    },
+    {
+     "name": "wait_wake_minutes",
+     "default": 15
     }
    ]
   },
@@ -3320,6 +3345,9 @@
   "auto_merge.require_fresh_ci",
   "auto_merge.conflict_resolution",
   "auto_merge.remediation",
+  "pr.cancel_red_run",
+  "pr.open_ready",
+  "pr.wait_wake_minutes",
   "pr_watch.enabled",
   "pr_watch.interval_seconds",
   "pr_watch.retries",

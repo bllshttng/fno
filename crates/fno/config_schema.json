@@ -2077,6 +2077,29 @@
     "title": "PostMergeBlock",
     "type": "object"
    },
+   "PrBlock": {
+    "description": "Pr command defaults (nested under 'config.pr').\n\ncancel_red_run (default True): gates every red-run cancel site. True\nlets `fno do pr push` cancel a red head's in-flight CI run and push\n(receipt ci=red-cancel), lets `fno do pr wait` cancel on a red\nverdict, and lets the daemon cadence cancel before it wakes the\npusher. False restores the old exit-2 push refusal while a run is\nin flight, reads a red verdict as final, and leaves the runs\nrunning - a sharded suite keeps every failure from its one run. A\nhead whose latest rows are not red always refuses.\n\nopen_ready (default True): master switch for the pr-draft guard that\nholds `gh pr create --draft` to the project's draft law; a broken\nconfig never disables a guard.\n\nwait_wake_minutes (default 15): the minutes `fno do pr wait` waits\nbefore it wakes when --timeout is omitted.",
+    "properties": {
+     "cancel_red_run": {
+      "default": true,
+      "title": "Cancel Red Run",
+      "type": "boolean"
+     },
+     "open_ready": {
+      "default": true,
+      "title": "Open Ready",
+      "type": "boolean"
+     },
+     "wait_wake_minutes": {
+      "default": 15,
+      "minimum": 1,
+      "title": "Wait Wake Minutes",
+      "type": "integer"
+     }
+    },
+    "title": "PrBlock",
+    "type": "object"
+   },
    "PrWatchBlock": {
     "description": "PR-state watcher settings (nested under 'config.pr_watch').\n\nControls the global launchd watcher that polls open-PR backlog nodes\nand fires headless /fno:ship pr check / /fno:ship pr merged.\n\nFields: enabled (operator opt-in, default False); interval_seconds\n(plist StartInterval, default 600); retries (consecutive dispatch\nfailures before a PR parks, default 3); max_age_days (default 14);\nmodel (headless skill-fire model, default claude-haiku-4-5);\ntick_timeout_seconds (wall clock per tick; unset derives\nmax(60, 0.8 * interval_seconds) so launchd never suppresses the next\ntick); graphql_min_remaining (dispatch-pass skip floor on the shared\nGraphQL budget, default 200); wedged_after_ticks (consecutive broken\ntick ends at a fresh watermark before liveness reads wedged, default\n3; one broken tick is transient).",
     "properties": {
@@ -3793,6 +3816,9 @@
    },
    "auto_heal": {
     "$ref": "#/$defs/AutoHealBlock"
+   },
+   "pr": {
+    "$ref": "#/$defs/PrBlock"
    },
    "pr_watch": {
     "$ref": "#/$defs/PrWatchBlock"
@@ -5863,6 +5889,33 @@
    "question": "",
    "default_source": "",
    "doc": "Arm the CI healer: each tick spawns one detached pr-heal --all --apply drive loop over every project root, off the tick's own budget. Default false. Measured 2026-09-16 over 15 red open PRs: 1 push, 3 cancelled-run reruns, 11 escalations, 0 failures inherited from main. Arm with: fno config set auto_heal.enabled true."
+  },
+  {
+   "path": "pr.cancel_red_run",
+   "type": "bool",
+   "default": true,
+   "wizard": "advanced",
+   "question": "",
+   "default_source": "",
+   "doc": "Cancel a red head's in-flight CI runs instead of refusing or waiting them out; default true. False disables every cancel site: `fno do pr push` restores the old exit-2 refusal while a run is in flight, `fno do pr wait` reads a red verdict as final and cancels nothing, and the daemon cadence wakes the pusher without cancelling. A head whose latest rows are not red always refuses."
+  },
+  {
+   "path": "pr.open_ready",
+   "type": "bool",
+   "default": true,
+   "wizard": "advanced",
+   "question": "",
+   "default_source": "",
+   "doc": "Master switch for the pr-draft guard that holds `gh pr create --draft` to the project's draft law; default true, and a broken config never disables a guard."
+  },
+  {
+   "path": "pr.wait_wake_minutes",
+   "type": "int",
+   "default": 15,
+   "wizard": "advanced",
+   "question": "",
+   "default_source": "",
+   "doc": "Minutes `fno do pr wait` waits before it wakes when --timeout is omitted."
   },
   {
    "path": "pr_watch.enabled",

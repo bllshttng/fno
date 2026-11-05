@@ -155,7 +155,7 @@ pub(crate) fn lane_with_room(
 /// no-grade fallback, and a zai window with no room. A fixed sonnet lane,
 /// never the first claude inventory row, which can be opus, and opus never
 /// runs target work.
-const FALLBACK_LANE: &str = "claude-sonnet-5";
+const FALLBACK_LANE: &str = "claude-sonnet-5-5";
 const FALLBACK_SUFFIX: &str = "-fallback";
 
 /// Who does the work a cohort grades. Spend is each gate row of the day at its
@@ -1728,6 +1728,20 @@ mod tests {
     const SHA: &str = "abcdef1234567890";
     const SHA2: &str = "1234567890abcdef";
 
+    #[test]
+    fn checkout_of_resolves_the_ref_slots_bank_to_its_own_checkout() {
+        // state_dir/ref-<slot>/evals/bank -> state_dir/ref-<slot>: the dir
+        // whose crates/ the build wrapper compiles. One parent short and the
+        // build looks for <state_dir>/crates, which never exists.
+        let bank = Path::new("/state/evals-gate/ref-head/evals/bank");
+        assert_eq!(
+            checkout_of(bank),
+            Some(Path::new("/state/evals-gate/ref-head"))
+        );
+        assert_eq!(checkout_of(Path::new("/evals/bank")), Some(Path::new("/")));
+        assert_eq!(checkout_of(Path::new("/bank")), None);
+    }
+
     fn ok(stdout: &str) -> Option<Run> {
         Some(Run {
             ok: true,
@@ -3056,7 +3070,7 @@ mod tests {
             let spawns = w.spawns.borrow();
             assert_eq!(spawns.len(), 1, "the head launched on the fallback");
             let argv = spawns[0].join(" ");
-            assert!(argv.contains("--lane claude-sonnet-5 "), "{argv}");
+            assert!(argv.contains("--lane claude-sonnet-5-5 "), "{argv}");
             if !banned.is_empty() {
                 assert!(!argv.contains(banned), "{argv}");
             }

@@ -702,7 +702,19 @@ pub(crate) fn guarded_push(ctx: &PushCtx, head: &str) -> PushOutcome {
                     // A run still testing a head that already failed holds
                     // the CI slot the fix waits behind (user law
                     // 2026-10-09): cancel it best-effort, journal like a
-                    // bypass, and push.
+                    // bypass, and push. pr.cancel_red_run = false restores
+                    // the old refusal (a sharded suite wants every
+                    // failure from the one run).
+                    let cancel_red_run =
+                        crate::agents_config::config_lookup(&ctx.cwd, &["pr", "cancel_red_run"])
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(true);
+                    if !cancel_red_run {
+                        return PushOutcome::InFlight {
+                            check: flight.check,
+                            job: flight.job,
+                        };
+                    }
                     cancel_runs(ctx, &flight.runs);
                     emit_bypass_row(ctx);
                     ci = "red-cancel";

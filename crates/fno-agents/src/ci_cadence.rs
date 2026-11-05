@@ -164,7 +164,13 @@ pub(crate) fn decide(
 
 /// One line in short sentences: mail send refuses a newline and style-checks
 /// the body, so the log stays behind `fno do pr logs` instead of riding here.
-pub(crate) fn wake_text(pr: u64, sha: &str, offset_s: i64, failing: &[&str]) -> String {
+pub(crate) fn wake_text(
+    pr: u64,
+    sha: &str,
+    offset_s: i64,
+    failing: &[&str],
+    cancel_enabled: bool,
+) -> String {
     let short: String = sha.chars().take(8).collect();
     let mut named = failing
         .iter()
@@ -175,8 +181,13 @@ pub(crate) fn wake_text(pr: u64, sha: &str, offset_s: i64, failing: &[&str]) -> 
     if failing.len() > 3 {
         named.push_str(&format!(" and {} more", failing.len() - 3));
     }
+    let cancel_note = if cancel_enabled {
+        "The daemon cancelled the runs still in flight."
+    } else {
+        "The runs still in flight were left running (pr.cancel_red_run=false)."
+    };
     format!(
-        "Automatic CI notice from the fno daemon. PR {pr} is red at {short}, {} minutes after your push. Failing: {named}. The daemon cancelled the runs still in flight. Read the log with `fno do pr logs {pr}`. Then fix it, commit, and run `fno do pr push --force-ci-cancel`.",
+        "Automatic CI notice from the fno daemon. PR {pr} is red at {short}, {} minutes after your push. Failing: {named}. {cancel_note} Read the log with `fno do pr logs {pr}`. Then fix it, commit, and run `fno do pr push --force-ci-cancel`.",
         offset_s / 60
     )
 }
@@ -396,7 +407,11 @@ fn check_one(
             let Some(sid) = push.session_id.as_deref() else {
                 return ("red_no_session", fields);
             };
-            let text = wake_text(pr, &push.sha, offset_s, &names);
+            let cancel_enabled =
+                crate::agents_config::config_lookup(cwd, &["pr", "cancel_red_run"])
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(true);
+            let text = wake_text(pr, &push.sha, offset_s, &names, cancel_enabled);
             let (delivered, via) =
                 crate::burn_watch::wake_with_text(sid, false, &text, "ci-cadence", runner);
             fields.insert("session_id".into(), json!(sid));
@@ -518,9 +533,15 @@ mod tests {
     fn a_red_on_known_flakes_waits_or_reruns_once_and_any_other_red_is_real() {
         // The real-red wake must pass mail send: one line, house style.
         let names = ["a", "b", "c", "d"];
-        let text = wake_text(42, SHA, 900, &names);
+        let text = wake_text(42, SHA, 900, &names, true);
         assert!(!text.contains('\n') && text.contains("c and 1 more"));
         assert!(crate::backlog::style_check::check(&text, "mail", None).is_empty());
+        // The no-cancel variant names the key so the reader knows why the
+        // runs survived, and passes mail send too.
+        let held = wake_text(42, SHA, 900, &names, false);
+        assert!(held.contains("pr.cancel_red_run=false"));
+        assert!(held.contains("left running"));
+        assert!(crate::backlog::style_check::check(&held, "mail", None).is_empty());
         let flakes: HashSet<String> = ["stress".to_string()].into();
         let flaky = vec![("stress".to_string(), Some(7))];
         assert_eq!(
