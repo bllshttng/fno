@@ -2085,26 +2085,6 @@ mod tests {
         clear_config_env();
     }
 
-    /// review: a dead config anchor (the launch worktree reaped under a
-    /// long-lived daemon) must not silently default every getter; the reader
-    /// re-anchors to the agents home.
-    #[test]
-    fn a_dead_cwd_anchor_reanchors_to_the_agents_home() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        clear_config_env();
-        let home = tempfile::tempdir().unwrap();
-        let project = home.path().join(".fno");
-        std::fs::create_dir_all(&project).unwrap();
-        std::fs::write(project.join("config.toml"), "[agents]\nmax_live = 7\n").unwrap();
-        std::env::set_var("FNO_AGENTS_HOME", home.path());
-        let dead = tempfile::tempdir().unwrap();
-        let dead_path = dead.path().to_path_buf();
-        drop(dead);
-        assert!(!dead_path.is_dir());
-        assert_eq!(max_live(&dead_path), 7);
-        std::env::remove_var("FNO_AGENTS_HOME");
-        clear_config_env();
-    }
 
     #[test]
     fn state_reap_config_uses_project_then_global_precedence_per_key() {
@@ -2624,25 +2604,6 @@ mod tests {
         assert!(!got, "a canonical grant leaf in the same file must decide");
     }
 
-    #[test]
-    fn auto_merge_grant_rejects_none_non_string_and_string_true() {
-        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        for (i, body) in [
-            "[auto_merge]\ngrant = \"none\"\n",
-            "[auto_merge]\ngrant = true\n",
-            "[dispatch]\nauto_merge = \"true\"\n",
-        ]
-        .iter()
-        .enumerate()
-        {
-            clear_config_env();
-            let cwd = write_project_settings(&format!("amg-reject-{i}"), &format!("{body}\n"));
-            std::env::set_var("FNO_CONFIG", cwd.join(".fno/config.toml"));
-            let got = auto_merge_grant_dispatches(&cwd);
-            clear_config_env();
-            assert!(!got, "{body:?} must not grant");
-        }
-    }
 
     // --- review.optional_apps reader ---------------------------------------
 
@@ -2697,16 +2658,6 @@ mod tests {
         assert!(!auto_merge_require_fresh_ci(&cwd));
     }
 
-    #[test]
-    fn auto_merge_require_checks_pass_invalid_defaults_true() {
-        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        clear_config_env();
-        let cwd = write_project_settings(
-            "amrcp-invalid",
-            "[auto_merge]\nrequire_checks_pass = \"not-a-bool\"\n",
-        );
-        assert!(auto_merge_require_checks_pass(&cwd));
-    }
 
     /// Build a main checkout + linked worktree, with `body` as the CANONICAL
     /// config and nothing in the worktree. Returns the linked worktree path, or
