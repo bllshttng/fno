@@ -210,7 +210,7 @@ impl<'a> State<'a> {
             });
         self.ledger = keep;
         for e in gone {
-            if let Some(n) = e.node.filter(|n| ours(&self.held, &e, n)) {
+            if let Some(n) = e.node.clone().filter(|n| ours(&self.held, &e, n)) {
                 self.held.remove(&n);
                 self.ops.push(ClaimOp::Release {
                     node: n,
@@ -338,7 +338,8 @@ impl<'a> State<'a> {
             stale: false,
             pr: None,
         };
-        self.ledger.retain(|e| e.node.as_deref() != Some(&node));
+        self.ledger
+            .retain(|e| e.node.as_deref() != Some(node.as_str()));
         self.ledger.push(entry);
         Step::Done(None)
     }
