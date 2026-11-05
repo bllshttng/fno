@@ -46,7 +46,7 @@ A refusal prints the advisor's own words with no lane number beside them. A dark
 
 ## Team and provider lines
 
-The block's team line answers a second question: not how much machine the fleet holds, but who is holding it. Fleet-wide it reads `team  21 live of fleet cap 23 · 9 working · 2 testing · 1 queued · 3 pr · 1 reserved · 4 observed`. Below it, one line per Lead shows the same counts for that Lead's sessions. The unowned line follows. One line per provider lane shows occupancy and working against the lane cap.
+The block's team line answers a second question: not how much machine the fleet holds, but who is holding it. Fleet-wide it reads `team  21 of 23 slots · 9 working · 2 testing · 1 queued · 3 pr · 1 reserved · 4 observed`. Below it, one line per Lead shows the same counts for that Lead's sessions. The unowned line follows. One line per provider lane shows occupancy and working against the lane cap.
 
 Each count has one authority. Managed membership comes from the spawn-gate probe's registry slot rows. A row the gate does not count as a live slot renders as `observed`, never as live. Working is the census split the block already drew: under five minutes since a row's last activity. Testing and queued come from the probe's test feed. The feed reads the run doors' recorded pids and the queue tickets' waiter pids. It joins them to rows by session id first, then by name. PR counts read the node each session works, merged from the node's PR merge status. Per-Lead membership is the org tree's own join. When two Leads claim the same row, the first Lead in tree order keeps it. A Lead's holder row counts under its own role.
 

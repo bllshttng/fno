@@ -150,8 +150,8 @@ pub struct TopConsumer {
 }
 
 /// The activity census, bucketed from the transcript-derived age the daemon
-/// already stamps on every row it hands the client. Under five minutes is
-/// working; five minutes to two hours idle; two to eight hours stale; past
+/// already stamps on every row it hands the client. Under ten minutes is
+/// working; ten minutes to two hours idle; two to eight hours stale; past
 /// eight hours dead, the reap backlog. A row with no age is its own bucket
 /// and is never folded into a live one.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -395,6 +395,11 @@ impl Panel {
         self.expanded = !self.expanded;
     }
 
+    /// Re-read the capacity state the glance prints.
+    pub fn load_capacity(&mut self) {
+        self.capacity = crate::client::meter::capacity_state();
+    }
+
     /// Expand in place and stay expanded: the org modal opens on this.
     pub fn expand(&mut self) {
         self.expanded = true;
@@ -528,7 +533,7 @@ impl Panel {
                 self.gate_inflight = false;
                 match result {
                     Ok(gate) => {
-                        self.capacity = crate::client::meter::capacity_state();
+                        self.load_capacity();
                         self.gate = Some(gate);
                         self.gate_error = None;
                         self.gate_retry_at = None;
@@ -587,7 +592,7 @@ impl Panel {
                 Some(cores) => format!("  cpu       {:.0}% busy of {cores:.0} cores", busy * 100.0),
                 None => format!("  cpu       {:.0}% busy", busy * 100.0),
             },
-            None => "  cpu       unknown - open org for a reading".to_string(),
+            None => "  cpu       unread (key C)".to_string(),
         };
         let memory = match self
             .capacity
@@ -1034,7 +1039,7 @@ pub async fn fold_now() -> Option<Org> {
 
 /// Parse the command's JSON payload. Fails quiet (returns `None`) on
 /// unparseable output so a torn stdout degrades the overlay, not crashes it.
-fn parse(stdout: &[u8]) -> Option<Org> {
+pub(crate) fn parse(stdout: &[u8]) -> Option<Org> {
     serde_json::from_slice(stdout).ok()
 }
 
@@ -1461,7 +1466,7 @@ mod tests {
         // No reading at all: every line says unknown, none prints a zero.
         let lines = Panel::default().minimized_lines(&[], 200);
         assert!(lines[0].contains("working unknown"), "{lines:?}");
-        assert!(lines[1].contains("unknown") && lines[2].contains("unknown"));
+        assert!(lines[1].contains("unread") && lines[2].contains("unknown"));
 
         // A failed fold leaves the glance unknown; the modal says why.
         let mut failed = Panel::default();

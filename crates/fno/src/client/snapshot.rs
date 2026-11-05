@@ -795,6 +795,7 @@ fn live_frame(
         crate::digest_overlay::load_readout_detailed(Path::new(&cwd)),
     );
     view.resource_meter_on = view.resource_meter_text.is_some();
+    view.org.load_capacity();
     view.term = match size {
         Some(t) => t,
         None => {
@@ -1265,7 +1266,11 @@ shoot a root whose fleet map has a second machine (scripts/ops/mux-demo-snapshot
             // reading paints unknown lines - nothing to judge.
             view.org = crate::org_overlay::Panel::with_detail(true);
             view.org.expand();
-            let lanes = runtime.block_on(crate::org_overlay::fold_now());
+            let seeded = std::env::var("FNO_SNAPSHOT_LANES").ok();
+            let lanes = match seeded.and_then(|path| std::fs::read(path).ok()) {
+                Some(raw) => crate::org_overlay::parse(&raw),
+                None => runtime.block_on(crate::org_overlay::fold_now()),
+            };
             let read = lanes.is_some();
             view.org.apply(crate::org_overlay::FoldPart::Lanes(lanes));
             let gate = runtime.block_on(crate::org_overlay::gate_now());

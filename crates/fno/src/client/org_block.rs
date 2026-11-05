@@ -32,7 +32,7 @@ impl View {
             .saturating_sub(1)
             .saturating_sub(self.bottom_row_is_chrome() as usize);
         if available > block {
-            block
+            block + self.bottom_row_is_chrome() as usize
         } else {
             0
         }
@@ -55,8 +55,9 @@ impl View {
         let available = term_rows
             .saturating_sub(1)
             .saturating_sub(self.bottom_row_is_chrome() as usize);
+        // The strip paints over the last row, so the block stops above it.
         let reserved = if available > lines.len() {
-            lines.len()
+            lines.len() + self.bottom_row_is_chrome() as usize
         } else {
             0
         };
