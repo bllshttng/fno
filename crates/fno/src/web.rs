@@ -2459,7 +2459,7 @@ mod tests {
 const eq = (got, want, what) => {
   if (got !== want) { console.error(`FAIL ${what}: got ${got}, want ${want}`); process.exit(1); }
 };
-const g = (...rows) => rows;
+const g = (...rows) => rows.map((s) => ({ key: s }));
 
 // --- proven scrolls: a non-negative row count ---
 // An unmoved grid evicts nothing, so redrawing one frame stays idempotent.
