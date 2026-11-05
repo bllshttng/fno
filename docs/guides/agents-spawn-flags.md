@@ -18,7 +18,7 @@ Every placement flag needs `--as pane`. Without it the spawn refuses and names t
 
 ## Identity and routing
 
-`--harness/-H` names the CLI binary to launch. The default is the invoking harness, then claude. The declared harnesses get the full lane. Any other binary on PATH also spawns, into a pane with fno as the viewport. Pass its init flags directly; a separate `--` fence is optional. `-H` no longer means headless. For a one-shot use `--as headless`.
+`--harness/-H` names the CLI binary to launch. The default is the invoking harness, then claude. The declared harnesses get the full lane. Any other binary on PATH also spawns, into a pane with fno as the viewport. Pass its init flags directly. A separate `--` fence is optional. `-H` no longer means headless. For a one-shot use `--as headless`.
 
 `--provider/-P` is retired. Name a model vendor through `--route provider/model`. The CLI binary is `--harness/-H`.
 

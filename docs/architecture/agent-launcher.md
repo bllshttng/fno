@@ -26,7 +26,7 @@ Any flag beyond the chips is typed, never a form. Typing `--` at a word start in
 
 ## Shell lines, force, and how refusals read
 
-A `!` on an empty input turns the composer into a one-line shell prompt. The line is the user's own typed command. Its pane run rides the same human admission exemption the user's own attach carries (`PanePlacement.human`, v101). The runaway brake warns instead of refusing, and the fleet census still gates. A `!` line never needs force. With a remote machine selected, shell mode refuses and asks for Local; it never executes that line on the local machine by silently ignoring the destination.
+A `!` on an empty input turns the composer into a one-line shell prompt. The line is the user's own typed command. Its pane run rides the same human admission exemption the user's own attach carries (`PanePlacement.human`, v101). The runaway brake warns instead of refusing, and the fleet census still gates. A `!` line never needs force. Shell mode requires Local. A remote selection refuses before execution.
 
 A refusal shows as one sentence naming the limit and the way out, for example `process limit: machine runaway brake on`. The raw gate text is never painted mid-word. Ctrl-O swaps the raw text in, and the journal row (`composer_shell_refused`, `composer_launch_forced`) always carries it.
 
@@ -39,9 +39,10 @@ Force is a deliberate user gesture. Shift+enter arms it, and so does the `--forc
 - Advanced pins are explicit values only. An empty pin reads as "harness default". The composer never displays an invented resolved value.
 - Routing, provider capacity, permission gates and seed acceptance stay with canonical spawn. The composer renders refusals verbatim.
 - The current mux session is the only draft memory. Esc hides the composer and retains the draft. If the client exits, the draft is lost.
+
 The server forwards explicit harness, model or route, effort and permission picks to spawn as separate argv values. No separate `--` fence is required for typed flags. Spawn reads a file or stdin prompt once before admission and worker-name minting, so a message delivered through the composer can name its worker.
 
-Run on lists the remote machines already known to the fleet tree. A remote launch uses the existing `--name @host` spawn relay. Choose the worktree box explicitly: local project facts do not decide a remote policy. Worktree resolution runs on that host. Its receipt carries `name@host`; the local mux opens a remote portal rather than treating the remote pane id as local. A remote timeout or lost SSH connection remains `Unknown`. Remote choices require a mux server with protocol v122 or later; an older server is refused before submission.
+Run on lists the remote machines already known to the fleet tree. A remote launch uses the existing `--name @host` spawn relay. Choose the worktree box explicitly: local project facts do not decide a remote policy. Worktree resolution runs on that host. Its receipt carries `name@host`. The local mux opens a remote portal. A remote timeout or lost SSH connection remains `Unknown`. Remote choices require a mux server with protocol v122 or later. An older server is refused before submission.
 
 ## Draft and outcome lifetime
 
