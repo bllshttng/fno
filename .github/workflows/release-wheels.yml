@@ -62,7 +62,7 @@ jobs:
         run: |
           set -euo pipefail
           git fetch origin "$REF"
-          git checkout --detach "$REF"
+          git checkout --detach FETCH_HEAD
 
       - name: Stamp release version
         if: inputs.version != ''
