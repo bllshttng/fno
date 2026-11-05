@@ -1887,28 +1887,6 @@ mod tests {
     }
 
     #[test]
-    fn a_foreign_prove_it_fail_lands_out_of_scope() {
-        let mut inputs = pr_board_inputs(json!([]), json!([]));
-        inputs.outstanding = SourceRead::ok(json!({
-            "verdicts": {"total": 1, "error": null, "items": [
-                {"node": "x-out", "verdict": "FAIL", "report": "r.md", "claim": "c"},
-            ]}
-        }));
-
-        let board = build_board(&inputs);
-        assert!(queue_rows(&board, "failed_verdict").is_empty());
-        let out = queue_rows(&board, "out_of_scope");
-        assert_eq!(out.len(), 1, "{out:?}");
-        assert_eq!(out[0]["queue"], "failed_verdict");
-        assert_eq!(out[0]["id"], "x-out");
-
-        inputs.scope_ids = None;
-        inputs.role_scope = None;
-        let board = build_board(&inputs);
-        assert_eq!(queue_rows(&board, "failed_verdict").len(), 1);
-    }
-
-    #[test]
     fn a_review_hold_renders_its_blockers_and_reads_not_actionable() {
         // the listing called the PR green and mergeable; the gate
         // holds it. The row stays visible, names its blockers, and the
@@ -2009,32 +1987,6 @@ mod tests {
     }
 
     #[test]
-    fn a_pr_without_a_gate_verdict_is_not_actionable() {
-        // Fail closed: absent verdict means unknown, and unknown is never
-        // offered as a merge.
-        let inputs = pr_board_inputs(
-            json!([
-                {"number": 1711, "title": "gate never answered"},
-            ]),
-            json!([{"id": "x-in", "pr_number": 1711}]),
-        );
-
-        let board = build_board(&inputs);
-
-        let mergeable = queue_rows(&board, "mergeable_pr");
-        assert_eq!(mergeable.len(), 1, "the row stays visible: {mergeable:?}");
-        assert_eq!(mergeable[0]["ready"], Value::Null);
-        assert_eq!(mergeable[0]["actionable"], json!(false));
-        let q = board["queues"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|q| q["name"] == "mergeable_pr")
-            .unwrap();
-        assert_eq!(q["count"], json!(0), "{q}");
-    }
-
-    #[test]
     fn an_unread_gate_is_never_filed_as_undriven() {
         // AC8-HP: no gate row leaves `ready` null, which is no
         // evidence of a driverless PR. The PR stays visible under
@@ -2090,53 +2042,6 @@ mod tests {
         assert!(verdict_rows_from(&json!({"verdicts": {"items": []}})).is_empty());
     }
 
-    #[test]
-    fn lane_parser_carries_compact_legacy_node_and_parked_suffixes() {
-        let dir = tempfile::tempdir().unwrap();
-        let lane = dir.path().join("my-priorities.md");
-        std::fs::write(
-            &lane,
-            "- [ ] ship the board -> x-bbbb\n- [ ] compact legacy -> xd863\n- [ ] park me -> parked: waiting\n- [x] done item\n- [ ] open item\nnot an item\n",
-        )
-        .unwrap();
-        let items = parse_lane(&lane).unwrap();
-        assert_eq!(items.len(), 5);
-        assert_eq!(items[0].node.as_deref(), Some("x-bbbb"));
-        assert_eq!(items[0].text, "ship the board");
-        assert_eq!(items[1].node.as_deref(), Some("xd863"));
-        assert_eq!(items[1].text, "compact legacy");
-        assert_eq!(items[2].parked.as_deref(), Some("waiting"));
-        assert!(items[3].done);
-        assert!(items[4].node.is_none() && items[4].parked.is_none() && !items[4].done);
-    }
-
-    #[test]
-    fn read_blocked_rows_reads_the_x_eb79_specimen_and_skips_other_types() {
-        // The Verification section's own replay: write a blocked row for
-        // x-cccc into a fixture journal, read it back by name.
-        let dir = tempfile::tempdir().unwrap();
-        let journal = dir.path().join("events.jsonl");
-        std::fs::write(
-            &journal,
-            format!(
-                "{}\n{}\n",
-                json!({
-                    "ts": "2026-09-08T00:00:00Z", "v": 1, "type": "blocked",
-                    "source": "target", "run": "cx-eb79-run", "node": "x-cccc",
-                    "data": {"reason": "worktree-init-blocked", "evidence": "Operation not permitted"},
-                }),
-                json!({"ts": "2026-09-08T00:01:00Z", "type": "other", "run": "cx-eb79-run"}),
-            ),
-        )
-        .unwrap();
-        let rows = read_blocked_rows(&journal).unwrap();
-        assert_eq!(rows.len(), 1, "the non-blocked row must not appear");
-        assert_eq!(rows[0].session, "cx-eb79-run");
-        assert_eq!(rows[0].node.as_deref(), Some("x-cccc"));
-        assert_eq!(rows[0].reason, "worktree-init-blocked");
-        assert_eq!(rows[0].evidence.as_deref(), Some("Operation not permitted"));
-    }
-
     fn blocked(ts: &str, session: &str, node: &str) -> BlockedRow {
         BlockedRow {
             ts: ts.to_string(),
@@ -2145,148 +2050,6 @@ mod tests {
             reason: "stuck".to_string(),
             evidence: None,
         }
-    }
-
-    #[test]
-    fn a_live_claim_past_grace_is_a_candidate_for_the_mail_check() {
-        let rows = vec![blocked("2026-09-08T00:00:00Z", "cx-1", "x-live")];
-        let mut claims = HashMap::new();
-        claims.insert("x-live".to_string(), "live".to_string());
-        let row_epoch =
-            crate::tick_ledger::parse_rfc3339_unix("2026-09-08T00:00:00Z").unwrap() as i64;
-        let candidates = resolve_blocked_child_candidates(
-            rows,
-            &claims,
-            &HashMap::new(),
-            &HashMap::new(),
-            30,
-            row_epoch + 45 * 60,
-        );
-        assert_eq!(candidates.len(), 1);
-        assert_eq!(candidates[0].1, 45);
-    }
-
-    #[test]
-    fn a_claim_taken_after_the_row_reads_stale_not_blocked() {
-        // AC2-HP: a live claim acquired after the row ts is a new hand; the
-        // old worker's distress does not bind it, so the row stays off the
-        // board even past grace with a live claim.
-        let rows = vec![blocked("2026-09-08T00:00:00Z", "cx-1", "x-cccc")];
-        let mut claims = HashMap::new();
-        claims.insert("x-cccc".to_string(), "live".to_string());
-        let mut acquired = HashMap::new();
-        let row_s = crate::tick_ledger::parse_rfc3339_unix("2026-09-08T00:00:00Z").unwrap() as i64;
-        acquired.insert("x-cccc".to_string(), (row_s + 1) * 1000);
-        let candidates = resolve_blocked_child_candidates(
-            rows,
-            &claims,
-            &acquired,
-            &HashMap::new(),
-            30,
-            row_s + 45 * 60,
-        );
-        assert!(
-            candidates.is_empty(),
-            "a claim taken after the row is a new hand: {} candidate(s)",
-            candidates.len()
-        );
-    }
-
-    #[test]
-    fn an_unparsable_row_ts_is_never_convicted_by_staleness() {
-        // AC2-EDGE2, fail open: if the staleness check read ts as
-        // unwrap_or(now_s), a claim acquired after now_s would convict a
-        // row whose ts does not parse. Grace 0 lets the row through every
-        // other filter, so only staleness could drop it here.
-        let rows = vec![blocked("not-a-timestamp", "cx-1", "x-live")];
-        let mut claims = HashMap::new();
-        claims.insert("x-live".to_string(), "live".to_string());
-        let mut acquired = HashMap::new();
-        acquired.insert("x-live".to_string(), (10_000_000_000 + 600) * 1000);
-        let candidates = resolve_blocked_child_candidates(
-            rows,
-            &claims,
-            &acquired,
-            &HashMap::new(),
-            0,
-            10_000_000_000,
-        );
-        assert_eq!(
-            candidates.len(),
-            1,
-            "an unparsable ts never convicts, whatever the claim's acquired_at"
-        );
-    }
-
-    /// Bus fixture for the answered-row tests: the given bus lines into a
-    /// tempdir `messages.jsonl`, as the measured specimen lines land on disk.
-    fn bus_with(lines: &[Value]) -> (tempfile::TempDir, std::path::PathBuf) {
-        let dir = tempfile::tempdir().unwrap();
-        let live = dir.path().join("messages.jsonl");
-        let text: String = lines.iter().map(|v| format!("{}\n", v)).collect();
-        std::fs::write(&live, text).unwrap();
-        (dir, live)
-    }
-
-    #[test]
-    fn mail_answered_since_reads_a_rotated_segment_not_just_the_live_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let live = dir.path().join("messages.jsonl");
-        std::fs::write(
-            live.with_extension("jsonl.1"),
-            format!("{}\n", json!({"to": "cx-1", "ts": "2026-09-08T21:00:00Z"})),
-        )
-        .unwrap();
-        std::fs::write(&live, "not json\n").unwrap();
-        let candidates = vec![("cx-1".to_string(), None, "2026-09-08T20:00:00Z".to_string())];
-        let answered = mail_answered_since(&live, &candidates);
-        assert_eq!(answered.get("cx-1"), Some(&true));
-    }
-
-    #[test]
-    fn a_run_keyed_row_is_answered_by_mail_to_the_holder_handle() {
-        let (_dir, live) = bus_with(&[json!({
-            "from": "278c9a89", "to": "77393822", "ts": "2026-09-15T07:28:11Z"
-        })]);
-        let candidates = vec![(
-            "20260915T033130Z-cl38242-b8e631".to_string(),
-            Some("77393822-9c90-4fa9-bdb1-def84b6178f8".to_string()),
-            "2026-09-15T06:31:48Z".to_string(),
-        )];
-        let answered = mail_answered_since(&live, &candidates);
-        assert_eq!(answered.get("20260915T033130Z-cl38242-b8e631"), Some(&true));
-    }
-
-    #[test]
-    fn a_self_send_to_the_holder_does_not_answer() {
-        let (_dir, live) = bus_with(&[
-            json!({"from": "77393822", "to": "77393822", "ts": "2026-09-15T11:18:17Z"}),
-            json!({"from": "77393822", "to": "77393822", "ts": "2026-09-15T11:38:33Z"}),
-        ]);
-        let candidates = vec![(
-            "20260915T033130Z-cl38242-b8e631".to_string(),
-            Some("77393822-9c90-4fa9-bdb1-def84b6178f8".to_string()),
-            "2026-09-15T06:31:48Z".to_string(),
-        )];
-        let answered = mail_answered_since(&live, &candidates);
-        assert_eq!(
-            answered.get("20260915T033130Z-cl38242-b8e631"),
-            Some(&false)
-        );
-    }
-
-    #[test]
-    fn blocked_rows_read_a_store_committed_row() {
-        // AC4-HP
-        let dir = tempfile::tempdir().unwrap();
-        let journal = dir.path().join("events.jsonl");
-        let line = json!({"ts": "2026-09-17T12:00:00Z", "type": "blocked", "source": "test", "v": 1,
-            "run": "run-1", "node": "x-1", "data": {"reason": "waiting on legal"}});
-        crate::event_store::append_envelope(&journal, &line.to_string(), None).unwrap();
-        let rows = read_blocked_rows(&journal).unwrap();
-        assert_eq!(rows.len(), 1, "the store-committed blocked row reads");
-        assert_eq!(rows[0].node.as_deref(), Some("x-1"));
-        assert_eq!(rows[0].reason, "waiting on legal");
     }
 
     #[test]

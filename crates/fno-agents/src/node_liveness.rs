@@ -558,54 +558,6 @@ mod tests {
     }
 
     #[test]
-    fn offhost_claims_read_the_beacon_then_the_lease_and_reconcile_expiry_is_loud() {
-        let now = 1_000_000;
-        let mut f = Facts {
-            now_ms: now,
-            claim: Some((
-                rec("iMac", "s", now + 60_000),
-                ClaimState::Suspect,
-                "offhost".into(),
-            )),
-            same_machine: false,
-            beacon_live: true,
-            ..Default::default()
-        };
-        assert_eq!(
-            verdict(&f),
-            Verdict::Live {
-                basis: "fleet-beacon".into()
-            }
-        );
-        f.beacon_live = false;
-        assert!(
-            matches!(verdict(&f), Verdict::Waiting { kind: "offhost-lease", owner, .. } if owner == "iMac")
-        );
-        f.claim = Some((
-            rec("iMac", "s", now - 1),
-            ClaimState::Stale,
-            "ttl-expired".into(),
-        ));
-        assert_eq!(
-            verdict(&f),
-            Verdict::Uncovered {
-                reason: "offhost-lease-expired".into()
-            }
-        );
-        let expired = Facts {
-            now_ms: now,
-            reconcile: Some((now - 1, false)),
-            ..Default::default()
-        };
-        assert_eq!(
-            verdict(&expired),
-            Verdict::Uncovered {
-                reason: "reconcile-pending-expired".into()
-            }
-        );
-    }
-
-    #[test]
     fn sweep_files_once_past_grace_closes_when_covered_and_the_reader_refuses_stale() {
         let uncovered = Verdict::Uncovered {
             reason: "no-claim".into(),

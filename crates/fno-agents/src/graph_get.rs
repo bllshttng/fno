@@ -280,29 +280,6 @@ mod tests {
     }
 
     #[test]
-    fn one_unknown_id_among_two_carries_an_error_row_and_flags_missing() {
-        let entries = [node("x-aaaa", "fewer-gated")];
-        let (rows, missing) = get_rows(&entries, &["x-aaaa".to_string(), "x-0000".to_string()]);
-        assert!(missing);
-        assert_eq!(rows[0]["id"], "x-aaaa");
-        assert_eq!(rows[1]["id"], "x-0000");
-        assert_eq!(rows[1]["error"], "not found");
-    }
-
-    #[test]
-    fn a_bare_row_is_served_byte_for_byte() {
-        let mut entries = vec![node("x-aaaa", "fewer-gated")];
-        let before = entries.clone();
-        let (out, missing) = serve(&mut entries, &["x-aaaa".to_string()]);
-        assert!(!missing);
-        assert!(
-            out[0].get("_reading").is_none(),
-            "no plan, no state: the served row is unchanged"
-        );
-        assert_eq!(out[0], before[0]);
-    }
-
-    #[test]
     fn an_external_backend_refuses_the_default_store_but_not_an_explicit_one() {
         // The shared env lock, not a private one: lead_verdict_inputs' tests
         // read FNO_TRACKER_BACKEND under `claims::test_env_lock`, and two

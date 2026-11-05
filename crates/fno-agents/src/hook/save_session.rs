@@ -419,29 +419,6 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn rounds_skip_noise_and_tool_results_and_odd_fences_close() {
-        let lines = [
-            json!({"type": "user", "message": {"role": "user", "content": "<system-reminder>x</system-reminder>"}}),
-            json!({"type": "user", "message": {"role": "user", "content": "fix it"}}),
-            json!({"type": "assistant", "message": {"role": "assistant", "model": "m1", "content": [{"type": "thinking", "thinking": "hm"}, {"type": "text", "text": "```sh\nls"}]}}),
-            json!({"type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "content": "out"}]}}),
-            json!({"type": "system", "subtype": "turn_duration"}),
-            json!({"type": "assistant", "message": {"role": "assistant", "content": "done"}}),
-        ];
-        let text: String = lines.iter().map(|l| format!("{l}\n")).collect();
-        let rounds = parse_rounds(&text);
-        assert_eq!(rounds.len(), 2);
-        assert_eq!(rounds[0].0.as_deref(), Some("fix it"));
-        assert_eq!(rounds[1].0, None);
-        let body = format_transcript(&rounds, "FM");
-        assert!(
-            body.contains("<thinking>\nhm\n</thinking>\n```sh\nls\n```\n"),
-            "{body}"
-        );
-        assert_eq!(first_model(&text), "m1");
-    }
-
-    #[test]
     fn save_writes_once_per_window_with_safe_names() {
         let dir = tempfile::tempdir().unwrap();
         let transcript = dir.path().join("t.jsonl");

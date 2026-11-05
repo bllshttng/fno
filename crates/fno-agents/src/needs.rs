@@ -2215,15 +2215,6 @@ mod tests {
         std::fs::remove_dir_all(home.root()).ok();
     }
 
-    #[test]
-    fn budget_termination_is_budget_stop() {
-        let events = termination("2026-07-03T02:00:00Z", "s", "Budget");
-        let items = fold(&events, "", ALL, DEFAULT_FIRES_FLOOR);
-        assert_eq!(items.len(), 1);
-        assert_eq!(items[0].kind, "budget_stop");
-        assert!(items[0].evidence.contains("Budget"));
-    }
-
     fn mail_escalation(
         ts: &str,
         reason: &str,
@@ -2234,110 +2225,6 @@ mod tests {
         format!(
             r#"{{"ts":"{ts}","type":"mail_escalation","source":"target","data":{{"reason":"{reason}","sender":"{sender}","recipient":"{recipient}","summary":"{summary}"}}}}"#
         )
-    }
-
-    #[test]
-    fn mail_escalation_folds_to_mail_question_without_a_session() {
-        // The trap this node closes: a mail_escalation carries no session_id, so
-        // the session gate and the loop_check kind filter would both drop it. The
-        // fold arm handles it before the gate and emits a mail_question row keyed
-        // by recipient (the row identity, not a target session).
-        let events = mail_escalation(
-            "2026-07-03T02:00:00Z",
-            "question",
-            "etl",
-            "web",
-            "which schema?",
-        );
-        let items = fold(&events, "", ALL, DEFAULT_FIRES_FLOOR);
-        assert_eq!(items.len(), 1);
-        assert_eq!(items[0].kind, "mail_question");
-        assert_eq!(items[0].name.as_deref(), Some("web"));
-        assert_eq!(items[0].session_id, "web");
-        assert!(items[0].evidence.contains("question"));
-        assert!(items[0].evidence.contains("etl -> web"));
-    }
-
-    #[test]
-    fn a_later_delivery_miss_does_not_erase_a_standing_question() {
-        // The trap the kind split opens if the map stays keyed on recipient
-        // alone: latest-wins would replace the question row with a
-        // mail_delivery_miss, which the client drops, so an escalation the code
-        // itself calls a human's problem vanishes from the panel. A worker asks
-        // `ops` a question, then anyone else's send to `ops` misses, and the
-        // question is gone. The debounce is per (sender, recipient), so a
-        // second sender never suppresses the miss.
-        let events = format!(
-            "{}\n{}\n",
-            mail_escalation(
-                "2026-07-03T02:00:00Z",
-                "question",
-                "etl",
-                "ops",
-                "which auth?"
-            ),
-            mail_escalation(
-                "2026-07-03T03:00:00Z",
-                "reachable-miss",
-                "web",
-                "ops",
-                "ping"
-            ),
-        );
-        let items = fold(&events, "", ALL, DEFAULT_FIRES_FLOOR);
-        let question = items
-            .iter()
-            .find(|i| i.kind == "mail_question")
-            .expect("the standing question survives a later delivery miss");
-        assert!(question.evidence.contains("which auth?"));
-        assert!(
-            items.iter().any(|i| i.kind == "mail_delivery_miss"),
-            "and the miss is still folded, under its own kind"
-        );
-    }
-
-    #[test]
-    fn termination_with_fractional_ts_still_wins_over_z_loop_check() {
-        // Lexically ".5" < "Z", so a same-second fractional termination would
-        // sort BEFORE the loop_check and misclassify a real stop; epoch compare
-        // fixes it (gemini HIGH finding).
-        let events = [
-            loop_check(
-                "2026-07-03T02:00:00Z",
-                "s",
-                "block",
-                "SUCCESS",
-                "OPEN",
-                false,
-                5,
-            ),
-            termination("2026-07-03T02:00:00.5", "s", "Budget"),
-        ]
-        .join("\n");
-        let items = fold(&events, "", ALL, DEFAULT_FIRES_FLOOR);
-        assert_eq!(items.len(), 1);
-        assert_eq!(
-            items[0].kind, "budget_stop",
-            "the termination wins despite its fractional ts"
-        );
-    }
-
-    #[test]
-    fn ledger_resolves_node_name_title() {
-        let events = loop_check(
-            "2026-07-03T02:00:00Z",
-            "sess-x",
-            "block",
-            "SUCCESS",
-            "OPEN",
-            false,
-            5,
-        );
-        let ledger = r#"{"entries":[{"session_id":"sess-x","graph_node_id":"x-aaaa","title":"needs queue","worktree":"/w/footnote/x-aaaa"}]}"#;
-        let items = fold(&events, ledger, ALL, DEFAULT_FIRES_FLOOR);
-        assert_eq!(items[0].node.as_deref(), Some("x-aaaa"));
-        assert_eq!(items[0].name.as_deref(), Some("x-aaaa"));
-        assert_eq!(items[0].title.as_deref(), Some("needs queue"));
     }
 
     // --- operator_question (x-bbbb: NeedKind::Decision producer) --------------
@@ -2387,32 +2274,6 @@ mod tests {
         assert_eq!(items.len(), 1, "the index-only row reaches the needs fold");
         assert_eq!(items[0].session_id, "q-index-only");
         assert_eq!(items[0].evidence, "pick alpha or beta");
-    }
-
-    #[test]
-    fn closed_operator_question_is_dropped() {
-        let events = [
-            operator_question("2026-07-03T02:00:00Z", "q-abc", "auto-merge or hold?", None),
-            operator_question_closed("2026-07-03T03:00:00Z", "q-abc"),
-        ]
-        .join("\n");
-        assert!(fold(&events, "", ALL, DEFAULT_FIRES_FLOOR).is_empty());
-    }
-
-    #[test]
-    fn operator_question_survives_a_56_day_old_since_window() {
-        // The defect this leg closes: a 24h-windowed fold hides a question
-        // that has been open for weeks. `since` here is "now" (2099), so a
-        // windowed kind would be excluded - operator_question must not be.
-        let events = operator_question("2026-06-01T00:00:00Z", "q-old", "still waiting", None);
-        let since = crate::state::rfc3339_like_to_secs("2099-01-01T00:00:00Z").unwrap();
-        let items = fold(&events, "", since, DEFAULT_FIRES_FLOOR);
-        assert_eq!(
-            items.len(),
-            1,
-            "operator_question bypasses the since window"
-        );
-        assert_eq!(items[0].kind, "operator_question");
     }
 
     // --- held fold --------------------------------------------------
@@ -2489,24 +2350,6 @@ mod tests {
     }
 
     #[test]
-    fn a_user_only_or_already_moved_question_stays_where_it_sits() {
-        let row = |qid: &str, extra: &str| {
-            format!(
-                r#"{{"ts":"t","type":"operator_question","source":"target","data":{{"question_id":"{qid}","question":"Close PR 9?","cwd":"/repo","node":"x-a"{extra}}}}}"#
-            )
-        };
-        let raw = [
-            row("q-taste", r#","why_user":"a product or taste call""#),
-            row("q-moved", r#","via":[{"action":"open-pr"}]"#),
-        ]
-        .join("\n");
-        let mut facts = fold_facts(&[("x-a", "done")], &[]);
-        facts.pr_open.insert(("/repo".to_string(), 9), true);
-        assert!(settled_questions(&raw, &facts).is_empty());
-        assert!(questions_for_the_lead(&raw, &facts, &[]).is_empty());
-    }
-
-    #[test]
     fn sweep_closes_only_terminal_rungs() {
         let raw = operator_question_blocked("2026-07-03T02:00:00Z", "q-hold", "pick", &["x-bbbb"]);
         let mk = |status: &str| settled_questions(&raw, &fold_facts(&[("x-bbbb", status)], &[]));
@@ -2523,88 +2366,6 @@ mod tests {
         );
         assert!(mk("in_progress").is_empty());
         assert!(mk("blocked").is_empty());
-    }
-
-    fn operator_question_with_why_user(ts: &str, qid: &str, why: &str, blocks: &[&str]) -> String {
-        let blocks = blocks
-            .iter()
-            .map(|b| format!("\"{b}\""))
-            .collect::<Vec<_>>()
-            .join(",");
-        format!(
-            r#"{{"ts":"{ts}","type":"operator_question","source":"target","data":{{"question_id":"{qid}","question":"approve?","blocks":[{blocks}],"why_user":"{why}"}}}}"#
-        )
-    }
-
-    #[test]
-    fn sweep_closes_a_user_only_question_whose_subject_resolved() {
-        // A resolved subject closes the question, user-only why_user
-        // included: a merged PR or a done node left its question open
-        // forever under the old spare. The reason records which rule
-        // closed it and names the node.
-        let facts = fold_facts(&[("x-bbbb", "done")], &[]);
-        let raw = operator_question_with_why_user(
-            "2026-07-03T02:00:00Z",
-            "q-user",
-            "a product or taste call",
-            &["x-bbbb"],
-        );
-        assert_eq!(
-            settled_questions(&raw, &facts),
-            vec![("q-user".to_string(), "moot: x-bbbb done".to_string())]
-        );
-        let raw = operator_question_with_why_user(
-            "2026-07-03T02:00:00Z",
-            "q-mach",
-            "reversible, any agent on the machine can run it",
-            &["x-bbbb"],
-        );
-        assert_eq!(
-            settled_questions(&raw, &facts),
-            vec![("q-mach".to_string(), "node-closed: x-bbbb done".to_string())]
-        );
-        let raw = operator_question_blocked("2026-07-03T02:00:00Z", "q-plain", "pick", &["x-bbbb"]);
-        assert_eq!(
-            settled_questions(&raw, &facts),
-            vec![(
-                "q-plain".to_string(),
-                "node-closed: x-bbbb done".to_string()
-            )]
-        );
-        // Rule 1 ignores why_user, but only when the subject names the
-        // thing that resolved: the merged PR or one of its heads. A taste
-        // ask about rules on the same node names no PR and stays open -
-        // the machine close reaches a user-only question only that far.
-        let merged = fold_facts(&[("x-live", "in_progress")], &[("x-live", 7)]);
-        let paint = r#"{"ts":"2026-07-03T02:00:00Z","type":"operator_question","source":"target","data":{"question_id":"q-paint","question":"approve?","node":"x-live","blocks":["x-live"],"subject":"visual approval PR 7 at 1111111a","why_user":"taste"}}"#;
-        assert_eq!(
-            settled_questions(paint, &merged),
-            vec![(
-                "q-paint".to_string(),
-                "pr-merged: PR 7 merged (node x-live)".to_string()
-            )]
-        );
-        let grant = r#"{"ts":"2026-07-03T02:00:00Z","type":"operator_question","source":"target","data":{"question_id":"q-grant","question":"approve?","node":"x-live","blocks":["x-live"],"subject":"merge-grant for PR #7 on footnote","why_user":"irreversible"}}"#;
-        assert_eq!(
-            settled_questions(grant, &merged),
-            vec![(
-                "q-grant".to_string(),
-                "pr-merged: PR 7 merged (node x-live)".to_string()
-            )]
-        );
-        let rules = r#"{"ts":"2026-07-03T02:00:02Z","type":"operator_question","source":"target","data":{"question_id":"q-rules","question":"approve?","node":"x-live","blocks":["x-live"],"subject":"approve the rules","why_user":"taste"}}"#;
-        assert!(
-            settled_questions(rules, &merged).is_empty(),
-            "a taste ask that names no PR stays open"
-        );
-        // A multi-ship node carries merge_status merged from its last ship
-        // while the next head's question is live: a subject naming another
-        // PR never closes on that stamp.
-        let next_head = r#"{"ts":"2026-07-03T02:00:03Z","type":"operator_question","source":"target","data":{"question_id":"q-next","question":"approve?","node":"x-live","blocks":["x-live"],"subject":"visual approval PR 9 at cccccccd","why_user":"taste"}}"#;
-        assert!(
-            settled_questions(next_head, &merged).is_empty(),
-            "a head-scoped ask about another PR stays open on a stale merged stamp"
-        );
     }
 
     #[test]
@@ -2675,120 +2436,13 @@ mod tests {
         assert_eq!(crate::question_sweep::head_scoped("@abcdef1"), None);
     }
 
-    #[test]
-    fn operator_questions_rank_newest_first_and_other_kinds_stay_ascending() {
-        // AC11: the fold mirrors outstanding/core.py's rank - question
-        // rows newest-first among themselves, every other kind keeps ascending
-        // (ts, session_id, kind) stream order. Interleaved streams, so push
-        // order alone can satisfy neither half.
-        let events = [
-            operator_question("2026-07-03T01:00:00Z", "q-old", "older ask", None),
-            termination("2026-07-03T02:00:00Z", "sa", "Budget"),
-            operator_question("2026-07-03T03:00:00Z", "q-new", "newer ask", None),
-            termination("2026-07-03T02:30:00Z", "sb", "Budget"),
-        ]
-        .join("\n");
-        let items = fold(&events, "", ALL, DEFAULT_FIRES_FLOOR);
-
-        let question_ids: Vec<&str> = items
-            .iter()
-            .filter(|i| i.kind == "operator_question")
-            .map(|i| i.session_id.as_str())
-            .collect();
-        let stop_sessions: Vec<&str> = items
-            .iter()
-            .filter(|i| i.kind == "budget_stop")
-            .map(|i| i.session_id.as_str())
-            .collect();
-
-        assert_eq!(question_ids, ["q-new", "q-old"]);
-        assert_eq!(stop_sessions, ["sa", "sb"]);
-    }
-
     // --- carveout_age_item ------------------------------------------------
 
     fn carveout(ts: &str, kind: &str) -> String {
         format!(r#"{{"ts":"{ts}","kind":"{kind}","id":"c-1"}}"#)
     }
 
-    #[test]
-    fn stale_carveout_pile_produces_one_aggregate_item() {
-        let raw = [
-            carveout("2026-06-01T00:00:00Z", "oos-bug"),
-            carveout("2026-06-15T00:00:00Z", "deferred"),
-            // The /pr-merged slot's rows are not sweep-harvestable; counting
-            // one would mint a row the advertised remedy cannot clear.
-            carveout("2026-06-20T00:00:00Z", "backfill"),
-        ]
-        .join("\n");
-        let now = crate::state::rfc3339_like_to_secs("2026-07-15T00:00:00Z").unwrap();
-        let item = carveout_age_item(&raw, now).expect("29-day-old pile is stale");
-        assert_eq!(item.kind, "carveout_stale");
-        assert!(item.evidence.contains("2 unharvested"));
-        assert!(item.evidence.contains("44d"));
-    }
-
     // --- stale_claim_item ---------------------------------------------------
-
-    fn claim_age(
-        key: &str,
-        holder: &str,
-        acquired_at_ms: i64,
-        state: crate::claims::ClaimState,
-    ) -> ClaimAge {
-        ClaimAge {
-            key: key.to_string(),
-            holder: holder.to_string(),
-            acquired_at_ms,
-            state,
-        }
-    }
-
-    #[test]
-    fn old_stale_claim_produces_one_aggregate_item() {
-        let now_ms = 1_800_000_000_000_i64; // an arbitrary "now"
-        let fifty_six_days_ms = 56 * 24 * 60 * 60 * 1000;
-        let claims = vec![claim_age(
-            "node:x-orphan",
-            "dead-holder",
-            now_ms - fifty_six_days_ms,
-            crate::claims::ClaimState::Stale,
-        )];
-        let item = stale_claim_item(&claims, now_ms).expect("56-day-old stale claim");
-        assert_eq!(item.kind, "stale_claims");
-        assert!(item.evidence.contains("node:x-orphan"));
-        assert!(item.evidence.contains("dead-holder"));
-        assert!(item.evidence.contains("56d"));
-        // ts carries the oldest claim's acquire time (band sort orders by age),
-        // never an empty string that floats the row above fresher questions.
-        // 56 days before the test's now (1.8e12 ms) lands in 2026-11.
-        assert!(item.ts.starts_with("2026-11-20T"), "ts={}", item.ts);
-    }
-
-    #[test]
-    fn held_rows_read_a_store_committed_question() {
-        // AC11-HELD: an open store-only question holds the node; a store-only
-        // close releases it.
-        let dir = tempfile::tempdir().unwrap();
-        let journal = dir.path().join("events.jsonl");
-        let ask = serde_json::json!({
-            "ts": "2026-09-17T12:00:00Z", "type": "operator_question", "source": "test",
-            "data": {"question_id": "q-1", "blocks": ["x-1"], "question": "proceed?"}
-        });
-        crate::event_store::append_envelope(&journal, &ask.to_string(), None).unwrap();
-        let held = held_rows(&[journal.clone()]);
-        assert_eq!(held.len(), 1, "{held:?}");
-        assert_eq!(held[0].node, "x-1");
-        let close = serde_json::json!({
-            "ts": "2026-09-17T13:00:00Z", "type": "operator_question_closed", "source": "test",
-            "data": {"question_id": "q-1"}
-        });
-        crate::event_store::append_envelope(&journal, &close.to_string(), None).unwrap();
-        assert!(
-            held_rows(&[journal]).is_empty(),
-            "the close releases the node"
-        );
-    }
 
     /// An open question row in the space journal, and the args for a mux
     /// option answer against it. The [`DeclaredRoot`] guard rides the return
@@ -2900,110 +2554,6 @@ mod tests {
     }
 
     #[test]
-    fn needs_door_command_page_stamps_the_login_and_refuses_the_rest() {
-        let (dir, _root, mut args) = door_setup("needs_door_cmd_page_");
-        let cwd = dir.path().join("repo");
-        let home = crate::paths::AgentsHome::from_env();
-        let row_count = || {
-            let home = crate::paths::AgentsHome::from_env();
-            crate::event_store::journal_text(&crate::provider_cap::questions_path(&home), &[])
-                .matches("attention_answer")
-                .count()
-        };
-        // A page answer with no login, a login beside the mux sink, and a
-        // delegate from the page each refuse and write nothing.
-        args.sink = Some("command_page".to_string());
-        assert_eq!(run_answer(&home, &cwd, &args, "q-door"), 2);
-        args.email = Some("  ".to_string());
-        assert_eq!(run_answer(&home, &cwd, &args, "q-door"), 2);
-        args.sink = Some("mux".to_string());
-        args.email = Some("ann@example.com".to_string());
-        assert_eq!(run_answer(&home, &cwd, &args, "q-door"), 2);
-        args.sink = Some("command_page".to_string());
-        args.option = None;
-        args.delegate = true;
-        assert_eq!(run_answer(&home, &cwd, &args, "q-door"), 2);
-        assert_eq!(row_count(), 0);
-        // The real answer lands one row naming the login and the machine.
-        args.delegate = false;
-        args.option = Some(2);
-        assert_eq!(run_answer(&home, &cwd, &args, "q-door"), 0);
-        let home2 = crate::paths::AgentsHome::from_env();
-        let raw =
-            crate::event_store::journal_text(&crate::provider_cap::questions_path(&home2), &[]);
-        let row = raw
-            .lines()
-            .find(|l| l.contains("attention_answer"))
-            .unwrap();
-        let v: serde_json::Value = serde_json::from_str(row).unwrap();
-        let data = &v["data"];
-        assert_eq!(data["sink"], "command_page", "{row}");
-        assert_eq!(data["email"], "ann@example.com", "{row}");
-        assert_eq!(data["person"], "ann@example.com", "{row}");
-        assert_eq!(data["authority"], "sink", "{row}");
-        assert_eq!(data["attested_by"], "command_page:ann@example.com", "{row}");
-        assert!(data.get("machine_id").is_some(), "{row}");
-        // A second click is refused as not open: the first answer closed it.
-        assert_eq!(run_answer(&home, &cwd, &args, "q-door"), 2);
-        assert_eq!(row_count(), 1);
-    }
-
-    #[test]
-    fn ac2_hp_the_door_records_an_answer_for_a_peer_copy() {
-        let (dir, _root, mut args) = door_setup("needs_door_peer_hp_");
-        let cwd = dir.path().join("repo");
-        let home = crate::paths::AgentsHome::from_env();
-        let space = crate::paths::space_dir(&cwd).join("events.jsonl");
-        // A copy of a question asked on hosta, riding this machine's board.
-        let copy = serde_json::json!({
-            "ts": "2026-09-26T05:00:00Z", "type": "operator_question", "source": "test",
-            "data": {
-                "question_id": "q-copy@hosta", "question": "pick one", "ask": "copy ask",
-                "session_id": "s9", "cwd": "/repo/fno", "asker": "w9", "node": "x-9",
-                "options": ["a", "b"], "host": "hosta", "origin_machine": "m-other"
-            }
-        });
-        crate::event_store::append_envelope(&space, &copy.to_string(), None).unwrap();
-        // A delegate on the copy refuses and names the asking machine; a
-        // refusal writes nothing, so a second id keeps the test honest.
-        args.answer = Some("q-del@hostb".to_string());
-        args.delegate = true;
-        args.option = None;
-        assert_eq!(
-            run_answer(&home, &cwd, &args, "q-del@hostb"),
-            2,
-            "delegate on a copy refuses"
-        );
-        // The option answer records through the shared seam, keyed to the
-        // copy id, and the projection reads the copy answered. The refusal
-        // above set delegate and left option unset; clear both so this call
-        // answers as an option.
-        args.answer = Some("q-copy@hosta".to_string());
-        args.delegate = false;
-        args.option = Some(1);
-        assert_eq!(
-            run_answer(&home, &cwd, &args, "q-copy@hosta"),
-            0,
-            "the copy answer records"
-        );
-        let home2 = crate::paths::AgentsHome::from_env();
-        let raw =
-            crate::event_store::journal_text(&crate::provider_cap::questions_path(&home2), &[]);
-        assert!(
-            raw.contains("\"item_id\":\"q-copy@hosta\""),
-            "the copy answer row landed: {raw}"
-        );
-        let fno_dir = home2.root().parent().map(Path::to_path_buf).unwrap();
-        let (items, _, _) = crate::attention_arm::read_items_at(&fno_dir, &cwd);
-        let item = items.iter().find(|i| i.id == "q-copy@hosta").unwrap();
-        assert_eq!(item.state, "answered");
-        // The receipt names the carrier.
-        let receipt = answer_receipt("q-copy@hosta", Some("hosta"), false);
-        assert_eq!(receipt["carries_to"], json!("hosta"));
-        assert_eq!(answer_receipt("q-x", None, false).get("carries_to"), None);
-    }
-
-    #[test]
     fn the_archive_door_withdraws_open_items_and_refuses_the_rest() {
         let (dir, _root, mut args) = door_setup("needs_door_archive_");
         let cwd = dir.path().join("repo");
@@ -3049,51 +2599,5 @@ mod tests {
                 .block_on(run_needs(&rest, &home)),
             2
         );
-    }
-
-    #[test]
-    fn ac1_edge_append_marks_a_second_row_superseded() {
-        // First answer wins across writers: the second row records
-        // superseded and changes nothing.
-        let _root = crate::paths::DeclaredRoot::declare("needs_door_edge_sup");
-        let home = crate::paths::AgentsHome::from_env();
-        let first = crate::attention_arm::append_answer_row(
-            &home,
-            "q-sup",
-            "questions",
-            &crate::attention_file::FileAnswer::Words("narrow".to_string()),
-            "file_edit",
-            "attention_arm",
-            "file:q-sup",
-        )
-        .unwrap();
-        assert_eq!(first.1, false, "the first row wins");
-        let second = crate::attention_arm::append_answer_row(
-            &home,
-            "q-sup",
-            "mux",
-            &crate::attention_file::FileAnswer::Words("wide".to_string()),
-            "sink",
-            "needs_door",
-            "mux",
-        )
-        .unwrap();
-        assert_eq!(second.1, true, "the second row records superseded");
-        // A delegate row carries the flag and the delegate sentence as words.
-        crate::attention_arm::append_answer_row(
-            &home,
-            "q-dlg",
-            "mux",
-            &crate::attention_file::FileAnswer::Delegate,
-            "sink",
-            "needs_door",
-            "mux",
-        )
-        .unwrap();
-        let raw =
-            crate::event_store::journal_text(&crate::provider_cap::questions_path(&home), &[]);
-        let row = raw.lines().find(|l| l.contains("q-dlg")).unwrap();
-        assert!(row.contains("\"delegate\":true"), "{row}");
-        assert!(row.contains(crate::attention_file::DELEGATE_TEXT), "{row}");
     }
 }

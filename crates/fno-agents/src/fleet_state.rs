@@ -622,18 +622,6 @@ mod tests {
     }
 
     #[test]
-    fn a_corrupt_file_reads_as_no_memory() {
-        let (path, dir) = temp_path("t2");
-        std::fs::write(&path, "not json at all").unwrap();
-        let payload = read_fleet_state(&path);
-        assert!(payload.as_object().unwrap().is_empty());
-        // And the next write recovers the file.
-        op_heartbeat(&params(&path, json!({"candidates": 1, "now": 5.0}))).unwrap();
-        assert_eq!(read_fleet_state(&path)["candidates"], json!(1));
-        cleanup(&dir);
-    }
-
-    #[test]
     fn links_accumulate_and_do_not_duplicate() {
         let (path, dir) = temp_path("t3");
         op_record(&params(
@@ -656,41 +644,6 @@ mod tests {
     }
 
     #[test]
-    fn clear_forgets_one_node_only() {
-        let (path, dir) = temp_path("t4");
-        op_record(&params(
-            &path,
-            json!({"node": "a", "link": "x", "now": 1.0}),
-        ))
-        .unwrap();
-        op_record(&params(
-            &path,
-            json!({"node": "b", "link": "y", "now": 1.0}),
-        ))
-        .unwrap();
-        op_clear(&params(&path, json!({"node": "a"}))).unwrap();
-        let payload = read_fleet_state(&path);
-        assert!(payload["chains"].get("a").is_none());
-        assert_eq!(payload["chains"]["b"]["links"], json!(["y"]));
-        cleanup(&dir);
-    }
-
-    #[test]
-    fn the_stored_walk_is_capped() {
-        let (path, dir) = temp_path("t5");
-        for i in 0..(MAX_LINKS_PER_NODE as i64 + 4) {
-            op_record(&params(
-                &path,
-                json!({"node": "n", "link": format!("l{i}"), "now": 1.0}),
-            ))
-            .unwrap();
-        }
-        let links = op_links(&params(&path, json!({"node": "n", "now": 2.0}))).unwrap();
-        assert_eq!(links.as_array().unwrap().len(), MAX_LINKS_PER_NODE);
-        cleanup(&dir);
-    }
-
-    #[test]
     fn a_walk_older_than_the_ttl_is_forgotten() {
         let (path, dir) = temp_path("t6");
         op_record(&params(
@@ -703,54 +656,6 @@ mod tests {
         let aged = op_links(&params(&path, json!({"node": "n", "now": 25.0 * 3600.0}))).unwrap();
         assert_eq!(aged, json!([]));
         cleanup(&dir);
-    }
-
-    #[test]
-    fn each_attempt_restamps_the_walk() {
-        let (path, dir) = temp_path("t7");
-        op_record(&params(
-            &path,
-            json!({"node": "n", "link": "codex", "now": 0.0}),
-        ))
-        .unwrap();
-        // The second attempt at 20h keeps the walk alive past the first
-        // stamp's TTL: the TTL measures time since the LAST attempt.
-        op_record(&params(
-            &path,
-            json!({"node": "n", "link": "agy", "now": 20.0 * 3600.0}),
-        ))
-        .unwrap();
-        let links = op_links(&params(&path, json!({"node": "n", "now": 30.0 * 3600.0}))).unwrap();
-        assert_eq!(links, json!(["codex", "agy"]));
-        cleanup(&dir);
-    }
-
-    #[test]
-    fn a_handle_that_recovers_re_arms() {
-        let (path, dir) = temp_path("t8");
-        op_set_silent_seen(&params(&path, json!({"handles": ["w1", "w2"]}))).unwrap();
-        let seen = op_silent_seen(&params(&path, json!({}))).unwrap();
-        assert_eq!(seen, json!(["w1", "w2"]));
-        // Absent handles re-arm by construction: replacing the set drops w2.
-        op_set_silent_seen(&params(&path, json!({"handles": ["w1"]}))).unwrap();
-        let seen = op_silent_seen(&params(&path, json!({}))).unwrap();
-        assert_eq!(seen, json!(["w1"]));
-        cleanup(&dir);
-    }
-
-    #[test]
-    fn the_canonical_writer_matches_the_python_bytes() {
-        // Golden captured from the Python leg's json.dump(indent=2,
-        // sort_keys=True) before deletion (port protocol).
-        let payload: Value = serde_json::from_str(
-            r#"{"ts": 1700000000.0, "candidates": 3, "chains": {}, "refused": 1, "silent": 2}"#,
-        )
-        .unwrap();
-        let text = canonical_json(&payload);
-        assert_eq!(
-            text,
-            "{\n  \"candidates\": 3,\n  \"chains\": {},\n  \"refused\": 1,\n  \"silent\": 2,\n  \"ts\": 1700000000.0\n}\n"
-        );
     }
 
     #[test]

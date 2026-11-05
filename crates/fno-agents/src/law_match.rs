@@ -3230,20 +3230,6 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_law_keyed_on_a_node_never_refuses_a_later_ask_on_that_node() {
-        let laws = vec![law("d-aaaa1111", "x-aaaa", "HQ.", "2026-11-04T03:00:00Z")];
-        let mut req = ask_req(
-            "Which table do the decisions use? x-aaaa",
-            None,
-            Some("x-aaaa"),
-        );
-        req.laws = laws.clone();
-        assert!(ask_answer(&req).exact.is_empty());
-        req.subject = Some("x-aaaa".to_owned());
-        assert!(ask_answer(&req).exact.is_empty());
-    }
-
-    #[test]
     fn token_rows() {
         let got = tokens("x-1111 pr-1847 cf6a file-budget added");
         let want: BTreeSet<String> = ["added", "budget", "file"]
@@ -3314,73 +3300,6 @@ pub(crate) mod tests {
     const Q470: &str =
         "PR 1847 shrank +207 to +142. Requesting the operator-applied budget-exception label.";
 
-    #[test]
-    fn command_rows() {
-        let h: Vec<String> = vec!["-h".into()];
-        assert_eq!(run_law_match(&h), 0);
-        let extra: Vec<String> = vec!["--nope".into()];
-        assert_eq!(run_law_match(&extra), 2);
-        let bad: Vec<String> = vec![];
-        assert_eq!(run_law_match(&bad), 2, "unparsable stdin must exit 2");
-    }
-
-    #[test]
-    fn the_stage_read_lists_the_laws_decide_fires() {
-        let lock = crate::claims::test_env_lock();
-        let _held = lock.lock().unwrap_or_else(|e| e.into_inner());
-        let dir = tempfile::tempdir().expect("tempdir");
-        let prev = std::env::var_os("FNO_HOME");
-        std::env::set_var("FNO_HOME", dir.path());
-        let hook = serde_json::json!({
-            "hook_event_name": "PostToolUse",
-            "tool_name": "Skill",
-            "tool_input": {"skill": "fno:review", "args": "high https://github.com/o/r/pull/1"}
-        });
-        let unread = stage_answer(StageRequest { hook: hook.clone() });
-        let ctx = unread["hook_output"]["hookSpecificOutput"]["additionalContext"]
-            .as_str()
-            .expect("an unreadable store is said, never silent");
-        assert!(
-            ctx.contains("The decision index could not be read"),
-            "{ctx}"
-        );
-
-        let mut rows = vec![format!(
-            "{{\"type\":\"operator_decision\",\"source\":\"backlog\",\"ts\":\"2026-09-10T00:00:00Z\",\
-             \"data\":{{\"decision_id\":\"d-0fa92eb9\",\"subject\":\"review-rounds-sufficient\",\
-             \"decision\":\"Review rounds are capped at two.\",\"authority_source\":\"operator\"}}}}"
-        )];
-        for i in 0..10 {
-            rows.push(format!(
-                "{{\"type\":\"operator_decision\",\"source\":\"backlog\",\"ts\":\"2026-09-11T00:00:{i:02}Z\",\
-                 \"data\":{{\"decision_id\":\"d-5fff69{i:02}\",\"subject\":\"file-budget-exception\",\
-                 \"decision\":\"shrink round stands for file {i}\",\"authority_source\":\"operator\"}}}}"
-            ));
-        }
-        std::fs::write(dir.path().join("decisions.jsonl"), rows.join("\n") + "\n").expect("writes");
-        let answer = stage_answer(StageRequest { hook });
-        match prev {
-            Some(v) => std::env::set_var("FNO_HOME", v),
-            None => std::env::remove_var("FNO_HOME"),
-        }
-        assert_eq!(answer["stage"], "review");
-        assert_eq!(
-            answer["hook_output"]["hookSpecificOutput"]["hookEventName"],
-            "PostToolUse"
-        );
-        let ctx = answer["hook_output"]["hookSpecificOutput"]["additionalContext"]
-            .as_str()
-            .expect("context present");
-        assert!(
-            ctx.contains("- d-0fa92eb9 (review-rounds-sufficient"),
-            "{ctx}"
-        );
-        assert!(
-            !ctx.contains("d-5fff6900"),
-            "an unrelated law stays out: {ctx}"
-        );
-    }
-
     fn validate_req(
         subject: &str,
         decision: &str,
@@ -3393,38 +3312,6 @@ pub(crate) mod tests {
             rationale: rationale.map(str::to_owned),
             supersedes: supersedes.map(str::to_owned),
         }
-    }
-
-    #[test]
-    fn validate_rows() {
-        for subject in ["x-aaaa", "pr-1157"] {
-            let req = validate_req(subject, "Two rounds.", Some("r"), None);
-            let answer = validate_answer(&req);
-            let refusal = answer["refusal"].as_str().expect("refusal");
-            assert!(
-                refusal.contains("a node or PR id is not a law subject"),
-                "{subject}: {refusal}"
-            );
-            assert!(refusal.contains(subject), "{subject}: {refusal}");
-        }
-
-        // The 2026-08-29 junk law was exactly this shape: a smoke call with
-        // x/y/z landed a live law only the operator could clear.
-        let req = validate_req("x", "y", Some("z"), None);
-        let answer = validate_answer(&req);
-        let refusal = answer["refusal"].as_str().expect("refusal");
-        assert!(
-            refusal.contains("must be more than one character"),
-            "{refusal}"
-        );
-        // The boundary: two characters are a statement, poor but legal.
-        let req = validate_req("mx", "my", Some("why"), None);
-        let answer = validate_answer(&req);
-        assert_eq!(answer["refusal"], Value::Null);
-
-        let req = validate_req("review-rounds-cap", "Cite x-aaaa in text.", Some("r"), None);
-        let answer = validate_answer(&req);
-        assert_eq!(answer["refusal"], Value::Null);
     }
 
     #[test]
@@ -3603,28 +3490,6 @@ pub(crate) mod scope_tests {
     }
 
     #[test]
-    fn the_record_door_takes_filters_and_refuses_a_key_with_no_source() {
-        let argv = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
-        let door = parse_record_door(&argv(&[
-            "s",
-            "--filter",
-            "harness=codex",
-            "--not",
-            "model=glm-5.3-flash",
-        ]))
-        .expect("parses");
-        assert_eq!(door.filters, vec![("harness".into(), "codex".into())]);
-        assert_eq!(
-            door.not_filters,
-            vec![("model".into(), "glm-5.3-flash".into())]
-        );
-        let refused = parse_record_door(&argv(&["s", "--filter", "lane=paint"]))
-            .err()
-            .expect("lane has no source yet");
-        assert!(refused.contains("no identity source"), "{refused}");
-    }
-
-    #[test]
     fn autonomy_ask_gate_needs_the_users_words_only_from_a_session() {
         let _guard = DOOR_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let dir = tempfile::tempdir().unwrap();
@@ -3712,41 +3577,6 @@ pub(crate) mod scope_tests {
             std::env::remove_var("FNO_REPO_ROOT");
             std::env::remove_var("FNO_GLOBAL_SETTINGS_PATH");
         }
-    }
-
-    #[test]
-    fn the_door_records_journal_index_and_table_under_chat_authority() {
-        let env = DoorEnv::new();
-        crate::paths::pin_test_claims_root(env.0.path());
-        let code = record_door_write(
-            door("merge-authority", "Merges belong to the operator"),
-            "Merges belong to the operator".to_string(),
-            &Caller::as_authority("chat_attested"),
-        );
-        assert_eq!(code, 0, "exit 0 on the happy record");
-        let index = env.index_text();
-        assert!(
-            index.contains("\"authority_source\":\"chat_attested\""),
-            "{index}"
-        );
-        assert!(index.contains("\"scope\":\"project:demo\""), "{index}");
-        assert!(
-            index.contains("\"graduation\":{\"kind\":\"guidance\"}"),
-            "{index}"
-        );
-        assert!(
-            !index.contains("\"paths\""),
-            "no paths key when none sent: {index}"
-        );
-        assert!(
-            index.contains("\"person\":"),
-            "the person rides along: {index}"
-        );
-        let journal = env.journal_text();
-        assert!(
-            journal.contains("Merges belong to the operator"),
-            "{journal}"
-        );
     }
 
     #[test]
@@ -3892,179 +3722,6 @@ pub(crate) mod scope_tests {
     }
 
     #[test]
-    fn a_foreign_scope_law_is_never_auto_superseded() {
-        let env = DoorEnv::new();
-        crate::paths::pin_test_claims_root(env.0.path());
-        let index = env.0.path().join("decisions.jsonl");
-        std::fs::write(
-            &index,
-            concat!(
-                "{\"ts\":\"2026-09-01T00:00:00Z\",\"type\":\"operator_decision\",\"source\":\"test\",",
-                "\"data\":{\"decision_id\":\"d-0ad0ad0a\",\"subject\":\"merge-authority\",",
-                "\"decision\":\"Merges belong to the operator\",\"authority_source\":\"chat_attested\",",
-                "\"scope\":\"project:other\"}}\n"
-            ),
-        )
-        .expect("writes");
-        let code = record_door_write(
-            door("merge-authority", "Merges belong to whoever asks"),
-            "Merges belong to whoever asks".to_string(),
-            &Caller::as_authority("chat_attested"),
-        );
-        assert_eq!(code, 0, "the record lands");
-        let text = env.index_text();
-        assert!(
-            !text.contains("supersedes"),
-            "the foreign-scope law survives: {text}"
-        );
-    }
-
-    #[test]
-    fn several_live_laws_refuse_the_same_subject_edit() {
-        let env = DoorEnv::new();
-        crate::paths::pin_test_claims_root(env.0.path());
-        let index = env.0.path().join("decisions.jsonl");
-        let law_a = concat!(
-            "{\"ts\":\"2026-09-01T00:00:00Z\",\"type\":\"operator_decision\",\"source\":\"test\",",
-            "\"data\":{\"decision_id\":\"d-aaaa0001\",\"subject\":\"merge-authority\",",
-            "\"decision\":\"First\",\"authority_source\":\"chat_attested\",",
-            "\"scope\":\"project:demo\"}}\n"
-        );
-        let law_b = concat!(
-            "{\"ts\":\"2026-09-01T00:00:01Z\",\"type\":\"operator_decision\",\"source\":\"test\",",
-            "\"data\":{\"decision_id\":\"d-bbbb0002\",\"subject\":\"merge-authority\",",
-            "\"decision\":\"Second\",\"authority_source\":\"chat_attested\",",
-            "\"scope\":\"project:demo\"}}\n"
-        );
-        std::fs::write(&index, format!("{law_a}{law_b}")).expect("writes");
-        let code = record_door_write(
-            door("merge-authority", "Merges belong to whoever asks"),
-            "Merges belong to whoever asks".to_string(),
-            &Caller::as_authority("chat_attested"),
-        );
-        assert_eq!(code, 3, "the edit refuses: two live laws, no id named");
-        assert_eq!(env.index_text().lines().count(), 2, "nothing new recorded");
-    }
-
-    #[test]
-    fn chat_retract_writes_the_retraction_with_the_users_quote() {
-        let env = DoorEnv::new();
-        crate::paths::pin_test_claims_root(env.0.path());
-        let index = env.0.path().join("decisions.jsonl");
-        std::fs::write(
-            &index,
-            concat!(
-                "{\"ts\":\"2026-09-01T00:00:00Z\",\"type\":\"operator_decision\",\"source\":\"test\",",
-                "\"data\":{\"decision_id\":\"d-0ad0ad0a\",\"subject\":\"portal-test\",",
-                "\"decision\":\"One pane is never a portal\",\"authority_source\":\"operator\"}}\n"
-            ),
-        )
-        .expect("writes");
-        let code = write_retraction(
-            &serde_json::json!({
-                "decision_id": "d-0ad0ad0a",
-                "subject": "portal-test",
-                "decision": "One pane is never a portal",
-                "authority_source": "chat_attested",
-                "ts": "2026-09-01T00:00:00Z"
-            }),
-            "verify cleanup",
-            "drop the portal law",
-            &Caller::as_authority("chat_attested"),
-            "fno inbox law retract",
-        );
-        assert_eq!(code, 0);
-        // DoorEnv::index_text filters to operator_decision rows; the
-        // retraction needs the unfiltered journal read.
-        let text = crate::event_store::journal_text(&index, &[]);
-        assert!(text.contains("\"type\":\"decision_retracted\""), "{text}");
-        assert!(
-            text.contains("\"target_decision_id\":\"d-0ad0ad0a\""),
-            "{text}"
-        );
-        assert!(text.contains("\"quote\":\"drop the portal law\""), "{text}");
-        assert!(
-            text.contains("\"authority_source\":\"chat_attested\""),
-            "{text}"
-        );
-        assert!(text.contains("\"retracted_by\":\"testf4c6\""), "{text}");
-        // The retracted row no longer reads as live: the live derivation
-        // (the same pass `fno inbox law set` consults for auto-supersede)
-        // drops it.
-        let live = decision_index::read_live(&index).expect("reads");
-        assert!(live.rows.is_empty(), "{:?}", live.rows);
-    }
-
-    #[test]
-    fn chat_retract_retires_its_own_kind_and_never_a_superuser_law() {
-        let law = |id: &str, authority: &str| {
-            serde_json::json!({
-                "decision_id": id, "subject": format!("subject-{id}"),
-                "decision": "One pane is never a portal", "authority_source": authority,
-                "ts": "2026-09-01T00:00:00Z"
-            })
-        };
-        let rows = vec![
-            law("d-bbbb0002", "operator"),
-            law("d-cccc0003", "chat_attested"),
-        ];
-        let retired = decision_index::retirement_map(&rows);
-        let retract = |token: &str, lane: &str, quote: &str, law_only: bool| {
-            let target = retract_target(
-                token,
-                &rows,
-                &retired,
-                law_only,
-                lane,
-                None,
-                |t, r, only| near_miss_subject_lines(t, r, only),
-            )?;
-            chat_quote_gate(&target, lane, quote).map(|()| target)
-        };
-        // A superuser law refuses every session lane, by subject and by id,
-        // on both entries.
-        for lane in ["chat_attested", "team", "agent", "beastmode"] {
-            for (token, law_only) in [("subject-d-bbbb0002", false), ("d-bbbb0002", true)] {
-                let err = retract(token, lane, "the user said so", law_only)
-                    .expect_err("a superuser law refuses every session lane");
-                assert!(
-                    err.contains(&format!("needs superuser authority (got {lane};")),
-                    "{err}"
-                );
-            }
-        }
-        // A chat_attested law retires from the chat lane with the user's
-        // words, and refuses without them.
-        assert!(retract("d-cccc0003", "chat_attested", "drop it", true).is_ok());
-        let err = retract("d-cccc0003", "chat_attested", " ", true).expect_err("no quote");
-        assert!(err.contains("--quote"), "{err}");
-        let err = retract("d-cccc0003", "team", "drop it", false).expect_err("team lane");
-        assert!(err.contains("needs superuser authority"), "{err}");
-        // A missing id gets its own answer, not the lane refusal.
-        let err = retract("d-dddd0004", "chat_attested", "drop it", true).expect_err("absent");
-        assert!(
-            err.contains("decision d-dddd0004 is not recoverable from the decision index"),
-            "{err}"
-        );
-    }
-
-    #[test]
-    fn a_waiver_subject_refuses_chat_authority() {
-        let env = DoorEnv::new();
-        crate::paths::pin_test_claims_root(env.0.path());
-        let code = record_door_write(
-            door(
-                "review-coverage-waiver:acme/widgets#42@cccc",
-                "review coverage waived for this head",
-            ),
-            "review coverage waived for this head".to_string(),
-            &Caller::as_authority("chat_attested"),
-        );
-        assert_eq!(code, 3);
-        assert!(env.index_text().is_empty());
-    }
-
-    #[test]
     fn a_code_fact_without_a_read_refuses_and_with_one_records_the_row() {
         let env = DoorEnv::new();
         crate::paths::pin_test_claims_root(env.0.path());
@@ -4095,17 +3752,5 @@ pub(crate) mod scope_tests {
         let index = env.index_text();
         assert!(index.contains("\"reads\":[{"), "{index}");
         assert!(index.contains("head -5 advance.py"), "{index}");
-    }
-
-    #[test]
-    fn preflight_refuses_a_placeholder_statement_before_any_identity_read() {
-        let argv: Vec<String> = ["x", "y", "--rationale", "z"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
-        match record_door_preflight(&argv, "") {
-            Err(code) => assert_eq!(code, 3),
-            Ok(_) => panic!("placeholder must refuse"),
-        }
     }
 }

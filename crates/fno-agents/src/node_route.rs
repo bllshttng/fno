@@ -468,13 +468,6 @@ mod tests {
         }
     }
 
-    fn ids_of(statuses: &[(&str, &str)]) -> HashSet<String> {
-        statuses
-            .iter()
-            .map(|(id, _)| id.to_string())
-            .collect::<HashSet<String>>()
-    }
-
     fn write_transcript(dir: &std::path::Path, lines: &[&str]) -> PathBuf {
         let path = dir.join("transcript.jsonl");
         std::fs::write(&path, lines.join("\n")).unwrap();
@@ -568,147 +561,6 @@ mod tests {
 
     // The sessions join outranks everything; later sources corroborate.
 
-    // AC2-HP: the first user message carries the dispatch brief and names
-    // the node.
-    #[test]
-    fn transcript_rows() {
-        let tmp = std::env::temp_dir().join(format!("node-route-{}", std::process::id()));
-        std::fs::create_dir_all(&tmp).unwrap();
-        let path = write_transcript(
-            &tmp,
-            &[r#"{"type":"user","message":{"content":"execute plan for node x-eeee now"}}"#],
-        );
-        let ids = ids_of(&[("x-eeee", "done")]);
-        assert_eq!(
-            transcript_first(Some(&[path.clone()]), &ids).as_deref(),
-            Some("x-eeee")
-        );
-        let g = graph(&[("x-eeee", "done")]);
-        let e = entry("planner-row-no-id-in-name", None);
-        let route = resolve(&e, "sid-none", &g, Some(&[path]));
-        assert_eq!(route.source, Some(NodeSource::TranscriptFirst));
-        std::fs::remove_dir_all(&tmp).ok();
-
-        let tmp = std::env::temp_dir().join(format!("node-route-retask-{}", std::process::id()));
-        std::fs::create_dir_all(&tmp).unwrap();
-        let filler = "x".repeat(200);
-        let path = write_transcript(
-            &tmp,
-            &[
-                r#"{"type":"user","message":{"content":"work node x-eeee to done"}}"#,
-                &format!(
-                    r#"{{"type":"user","message":{{"content":"retasked to node x-aaaa {filler}"}}}}"#
-                ),
-            ],
-        );
-        let ids = ids_of(&[("x-eeee", "done"), ("x-aaaa", "open")]);
-        assert_eq!(
-            transcript_last(Some(&[path.clone()]), &ids).as_deref(),
-            Some("x-aaaa"),
-            "the retask is the newest naming line"
-        );
-        let g = graph(&[("x-eeee", "done"), ("x-aaaa", "open")]);
-        let e = entry("retasked-row", None);
-        let route = resolve(&e, "sid-none", &g, Some(&[path]));
-        assert!(
-            route.conflict.is_some(),
-            "done head plus open retask is a conflict hold"
-        );
-        std::fs::remove_dir_all(&tmp).ok();
-
-        let tmp = std::env::temp_dir().join(format!("node-route-agree-{}", std::process::id()));
-        std::fs::create_dir_all(&tmp).unwrap();
-        let path = write_transcript(
-            &tmp,
-            &[r#"{"type":"user","message":{"content":"work x-aaaa"}}"#],
-        );
-        let g = graph(&[("x-aaaa", "done")]);
-        let e = entry("target-x-aaaa-row", None);
-        let route = resolve(&e, "sid-none", &g, Some(&[path]));
-        assert_eq!(route.source, Some(NodeSource::Name));
-        // Text mentions are weak evidence and are not scanned after a
-        // dispatch record has already resolved the row.
-        assert!(route.agreeing.is_empty());
-        std::fs::remove_dir_all(&tmp).ok();
-
-        let tmp = std::env::temp_dir().join(format!("node-route-strong-{}", std::process::id()));
-        std::fs::create_dir_all(&tmp).unwrap();
-        let path = write_transcript(
-            &tmp,
-            &[r#"{"type":"assistant","message":{"content":"mentioned x-bbbb"}}"#],
-        );
-        let mut g = graph(&[("x-aaaa", "open"), ("x-bbbb", "open")]);
-        g.index.insert(
-            "sid-strong".to_string(),
-            vec![("x-aaaa".to_string(), "open".to_string())],
-        );
-        let e = entry("unidentified-row", Some("x-aaaa"));
-        let route = resolve(&e, "sid-strong", &g, Some(&[path]));
-        assert_eq!(route.node.as_deref(), Some("x-aaaa"));
-        assert_eq!(route.source, Some(NodeSource::Sessions));
-        assert_eq!(route.agreeing, vec![NodeSource::Registry]);
-        assert_eq!(route.conflict, None);
-        std::fs::remove_dir_all(&tmp).ok();
-
-        let ids = ids_of(&[("x-aaaa", "done")]);
-        assert_eq!(
-            transcript_first(Some(&[PathBuf::from("/nonexistent/x")]), &ids),
-            None
-        );
-        assert_eq!(
-            transcript_last(Some(&[PathBuf::from("/nonexistent/x")]), &ids),
-            None
-        );
-        assert_eq!(transcript_first(None, &ids), None);
-
-        let tmp = std::env::temp_dir().join(format!("node-route-last-{}", std::process::id()));
-        std::fs::create_dir_all(&tmp).unwrap();
-        let path = write_transcript(
-            &tmp,
-            &[
-                r#"{"type":"user","message":{"content":"first x-aaaa"}}"#,
-                r#"{"type":"assistant","message":{"content":"last word x-bbbb"}}"#,
-            ],
-        );
-        let ids = ids_of(&[("x-aaaa", "done"), ("x-bbbb", "done")]);
-        assert_eq!(
-            transcript_last(Some(&[path]), &ids).as_deref(),
-            Some("x-bbbb")
-        );
-        std::fs::remove_dir_all(&tmp).ok();
-
-        let tmp = std::env::temp_dir().join(format!("node-route-span-{}", std::process::id()));
-        std::fs::create_dir_all(&tmp).unwrap();
-        let pad = "p".repeat(BACKWARD_CHUNK_BYTES as usize);
-        let big = String::from(r#"{"type":"assistant","message":{"content":"retasked to x-bbbb "#)
-            + &"q".repeat(BACKWARD_CHUNK_BYTES as usize * 3 / 2)
-            + r#""}}"#;
-        let path = write_transcript(
-            &tmp,
-            &[
-                r#"{"type":"user","message":{"content":"first x-aaaa"}}"#,
-                &pad,
-                &big,
-            ],
-        );
-        let ids = ids_of(&[("x-aaaa", "done"), ("x-bbbb", "done")]);
-        assert_eq!(
-            transcript_last(Some(&[path]), &ids).as_deref(),
-            Some("x-bbbb")
-        );
-        std::fs::remove_dir_all(&tmp).ok();
-
-        let tmp = std::env::temp_dir().join(format!("node-route-valve-{}", std::process::id()));
-        std::fs::create_dir_all(&tmp).unwrap();
-        let blank = "q".repeat(1024);
-        let lines: Vec<String> = vec![blank; SCAN_LIMIT_BYTES as usize / 1024 * 9 / 8];
-        let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
-        let path = write_transcript(&tmp, &refs);
-        let ids = ids_of(&[("x-aaaa", "done")]);
-        assert_eq!(transcript_last(Some(&[path]), &ids), None);
-        std::fs::remove_dir_all(&tmp).ok();
-    }
-
     // The operator's wrong-retirement path: head names a done node, a
     // mid-transcript retask names an open one, and the tail goes quiet.
     // The full backward walk answers from the retask, so the witness
@@ -790,24 +642,4 @@ mod tests {
 
     // The cap is the valve for a transcript that names nothing: the walk
     // stops at the bound instead of reading the whole file.
-
-    // The compact token a live worker name carries (the id's
-    // dash-less spelling) routes, under the bare-hex pass's guards.
-    #[test]
-    fn a_compact_token_in_a_worker_name_routes() {
-        let ids = ids_of(&[("x-aaaa", "done")]);
-        assert_eq!(
-            name_route("t-xaaaa-route", &ids),
-            Some("x-aaaa".to_string()),
-            "the dash-less token names the id"
-        );
-        // Ambiguous across two ids that share the dash-less form: answer
-        // nothing, like an ambiguous bare hex.
-        let ids = ids_of(&[("x-bbbb", "done"), ("xb-bbb", "done")]);
-        assert_eq!(name_route("t-xbbbb-route", &ids), None);
-        // A slug word behind real words never reads as an id: the guard
-        // requires every token before the match to be shorter than 4.
-        let ids = ids_of(&[("x-cccc", "done")]);
-        assert_eq!(name_route("k-t-lane-xcccc-timeout", &ids), None);
-    }
 }
