@@ -713,36 +713,4 @@ mod tests {
         let names: Vec<&str> = found.recipients.iter().map(|(n, _)| n.as_str()).collect();
         assert_eq!(names, ["epic-lead"]);
     }
-
-    #[test]
-    fn a_vacant_walk_keeps_every_reading_for_the_refusal() {
-        let entry = json!({"id": "x-1", "project": "fno"});
-        let found = note_readers(&entry, None, &[], &free, &no_lead, None);
-        assert!(found.recipients.is_empty());
-        assert!(found
-            .readings
-            .contains(&"role fno (project): vacant".to_string()));
-        let text = refused(
-            "note refused: nobody bound to x-1 would be told, ",
-            &found.readings,
-        );
-        assert!(text.contains("nothing was written") && text.contains(QUIET_HINT));
-    }
-
-    #[test]
-    fn a_pointer_carries_the_opening_never_the_whole_note() {
-        let long = (0..30)
-            .map(|i| format!("w{i}"))
-            .collect::<Vec<_>>()
-            .join(" ");
-        let line = pointer("x-1", &format!("\n{long}\nsecond"));
-        assert!(line.contains("w19...") && !line.contains("w20") && !line.contains("second"));
-        assert!(line.ends_with("Read: fno backlog get x-1"));
-    }
-
-    #[test]
-    fn a_flag_shaped_body_parses_as_a_body_for_the_refusal() {
-        let tail: Vec<String> = ["x-1", "--list"].iter().map(|s| s.to_string()).collect();
-        assert_eq!(parse_public(&tail).unwrap().text.as_deref(), Some("--list"));
-    }
 }

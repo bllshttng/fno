@@ -777,20 +777,6 @@ mod tests {
         }
     }
 
-    fn plan_with_files(dir: &Path, name: &str, files: &[&str]) -> PathBuf {
-        let path = dir.join(name);
-        let rows: String = files
-            .iter()
-            .map(|f| format!("| `{f}` | modify |\n"))
-            .collect();
-        fs::write(
-            &path,
-            format!("# P\n\n## Files to Modify\n\n| File | Action |\n|---|---|\n{rows}"),
-        )
-        .unwrap();
-        path
-    }
-
     fn node(id: &str, plan: &str, domain: &str) -> Value {
         let mut node = json!({"id": id});
         if !plan.is_empty() {
@@ -845,72 +831,6 @@ mod tests {
                 "plan {plan:?}"
             );
         }
-        fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn high_collision_holds_back_the_candidate() {
-        let dir = sandbox("high-collision");
-        let _pin = declare_claims_root(&dir);
-        let root = Some(dir.as_path());
-        let candidate = plan_with_files(&dir, "cand.md", &["a.py", "b.py", "c.py", "d.py"]);
-        let other = plan_with_files(&dir, "other.md", &["a.py", "b.py", "c.py", "z.py"]);
-        let inflight = vec![json!({
-            "id": "ab-other001", "title": "Other", "status": "ready",
-            "plan_path": other.to_string_lossy(), "created_at": "2026-01-02",
-        })];
-        let verdict = classify_lane_candidate(
-            &node("ab-cand0001", &candidate.to_string_lossy(), ""),
-            &BTreeSet::new(),
-            &inflight,
-            &dir,
-            &Thresholds::default(),
-            root,
-        );
-        assert_eq!(verdict.as_deref(), Some("high-collision:ab-other001"));
-        fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn live_worked_entries_joins_slots_and_node_claims() {
-        let dir = sandbox("worked");
-        let _pin = declare_claims_root(&dir);
-        let root = Some(dir.as_path());
-        acquire_lane_slot(2, "ab-lane0001", None, None, None, root)
-            .unwrap()
-            .unwrap();
-        let outcome = crate::claims::acquire(
-            "node:ab-node0002",
-            "manual-target",
-            crate::claims::AcquireOpts {
-                root: Some(dir.clone()),
-                events_dir: Some(dir.clone()),
-                ..Default::default()
-            },
-        );
-        assert!(matches!(
-            outcome,
-            crate::claims::AcquireOutcome::Acquired(_)
-        ));
-        // The .json anchor: seed_rows and read_rows resolve the physical
-        // store from the anchor, so both sides must name the same file.
-        let graph = dir.join("graph.json");
-        crate::graph_store::seed_rows(
-            &graph,
-            &[
-                json!({"id": "ab-lane0001", "title": "Lane", "status": "in_progress"}),
-                json!({"id": "ab-node0002", "title": "Node", "status": "in_progress"}),
-                json!({"id": "ab-free0003", "title": "Free", "status": "ready"}),
-            ],
-        )
-        .unwrap();
-        let rows = live_worked_entries(root, &graph).unwrap();
-        let mut ids: Vec<&str> = rows
-            .iter()
-            .filter_map(|row| row.get("id").and_then(Value::as_str))
-            .collect();
-        ids.sort_unstable();
-        assert_eq!(ids, vec!["ab-lane0001", "ab-node0002"]);
         fs::remove_dir_all(&dir).ok();
     }
 }

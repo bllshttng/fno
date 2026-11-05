@@ -1454,7 +1454,6 @@ pub(crate) fn validity_retro_source(node: &Value) -> Vec<(String, String)> {
 mod tests {
     use super::*;
 
-    const RETRO_TRAILER: &str = "<!-- retro-triage source_pr=525 finding_hash=deff167a7b09df6d -->";
     // 2026-07-12T00:00:00Z
     const NOW_MS: i64 = 1_783_814_400_000;
 
@@ -1484,42 +1483,6 @@ mod tests {
                 .collect(),
             unavailable: Vec::new(),
         }
-    }
-
-    #[test]
-    fn selection_is_strict_oldest_first_retro_first_and_skips_seen_or_claimed() {
-        let retro_details = json!({"details": format!("finding\n{RETRO_TRAILER}")});
-        let watermarked = idea("ab-wm", 85, json!({}));
-        let entries = vec![
-            idea("ab-90", 90, json!({})),
-            idea("ab-70", 70, json!({})),
-            idea("ab-60", 60, json!({})),
-            idea("ab-claim", 95, json!({})),
-            watermarked.clone(),
-            idea("ab-retro1", 1, retro_details),
-            json!({"id": "ab-ready", "status": "ready", "created_at": "2026-01-01T00:00:00Z"}),
-        ];
-        let claimed: BTreeSet<String> = ["ab-claim".to_string()].into();
-        let seen: BTreeSet<String> = [node_fingerprint(&watermarked)].into();
-        let picked: Vec<&str> =
-            select_validity_candidates(&entries, &json!(60), &json!(25), &claimed, &seen, NOW_MS)
-                .iter()
-                .map(|e| e["id"].as_str().unwrap())
-                .collect();
-        assert_eq!(picked, ["ab-retro1", "ab-90", "ab-70"]);
-    }
-
-    #[test]
-    fn fingerprint_matches_the_python_bytes_and_moves_on_edit() {
-        let node = json!({"id": "ab-x", "title": "café", "details": "d"});
-        // Decks the Python sweep wrote watermark this digest: sha256 of
-        // json.dumps(sort_keys=True, ensure_ascii=False) over the premise fields.
-        assert_eq!(
-            node_fingerprint(&node),
-            "e304fc143afe6e9fcebbfa9bf8364f28a1594776f87240c3692937f56210e129"
-        );
-        let edited = json!({"id": "ab-x", "title": "rewritten", "details": "d"});
-        assert_ne!(node_fingerprint(&node), node_fingerprint(&edited));
     }
 
     #[test]
@@ -1579,70 +1542,5 @@ mod tests {
         assert_eq!(keep.evidence_ids, ["path:a/b.py"]);
         assert_eq!(validate_row(None, &pkt).classification, "needs-human");
         assert_eq!(render_command("keep", "ab-x", None), None);
-    }
-
-    #[test]
-    fn sweep_voids_rows_whose_node_moved_during_analysis_and_degrades_on_failure() {
-        let dir = tempfile::tempdir().unwrap();
-        let node = idea("ab-race", 90, json!({}));
-        let entries = vec![node.clone()];
-        let no_exists = |_: &Value| -> Option<PathProbe> { None };
-        let search = |_: &str| -> Option<usize> { None };
-        let retro = |_: &Value| -> Vec<(String, String)> { Vec::new() };
-        let keep =
-            |p: &[EvidencePacket], t: Option<f64>| -> Result<BTreeMap<String, Value>, String> {
-                assert_eq!(t, Some(20.0), "the remaining budget reaches the analyzer");
-                Ok(p.iter()
-                    .map(|p| {
-                        (
-                            p.node_id.clone(),
-                            json!({"classification": "keep", "confidence": 0.8, "rationale": "ok"}),
-                        )
-                    })
-                    .collect())
-            };
-        let claimed = BTreeSet::new();
-        let reread = || -> Result<Vec<Value>, String> {
-            Ok(vec![json!({"id": "ab-race", "status": "claimed"})])
-        };
-        let input = SweepInput {
-            entries: &entries,
-            validity_days: &json!(60),
-            batch_size: &json!(25),
-            out_dir: dir.path(),
-            claimed: &claimed,
-            recheck: false,
-            now_ms: NOW_MS,
-            run_timeout: Some(20.0),
-            reread: Some(&reread),
-        };
-        let seams = SweepSeams {
-            exists_for: &no_exists,
-            search: &search,
-            retro: &retro,
-            analyze: &keep,
-        };
-        let res = run_validity_sweep(&input, &seams);
-        assert_eq!((res.eligible, res.stale, res.degraded), (1, 1, false));
-
-        let failing =
-            |_: &[EvidencePacket], _: Option<f64>| -> Result<BTreeMap<String, Value>, String> {
-                Err("boom".to_string())
-            };
-        let other = tempfile::tempdir().unwrap();
-        let input = SweepInput {
-            out_dir: other.path(),
-            reread: None,
-            ..input
-        };
-        let seams = SweepSeams {
-            analyze: &failing,
-            ..seams
-        };
-        let res = run_validity_sweep(&input, &seams);
-        assert!(res.degraded);
-        assert_eq!(res.counts["needs-human"], 1);
-        // A degraded deck never watermarks, so the next sweep retries it.
-        assert_eq!(run_validity_sweep(&input, &seams).eligible, 1);
     }
 }

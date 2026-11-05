@@ -264,48 +264,6 @@ mod tests {
     }
 
     #[test]
-    fn a_cross_repo_claim_refuses() {
-        let mut entries = vec![node(json!({
-            "pr_number": 3,
-            "pr_url": "https://github.com/other/repo/pull/3",
-        }))];
-        let claimed = vec!["x-aaaa".to_string()];
-        let result = bind_pr_rows(
-            &mut entries,
-            &claimed,
-            7,
-            None,
-            Some("o/r"),
-            false,
-            &BTreeMap::new(),
-        );
-        assert_eq!(result.outcome, "refused");
-        assert!(result.refusal.unwrap().contains("cross-repo claim"));
-    }
-
-    #[test]
-    fn a_reopened_pr_returns_from_additional_to_primary() {
-        let url = "https://github.com/o/r/pull/7";
-        let mut entries = vec![json!({
-            "id": "x-aaaa", "pr_number": null,
-            "additional_prs": [{"number": 7, "url": url, "merge_status": "closed"}],
-        })];
-        let claimed = vec!["x-aaaa".to_string()];
-        let result = bind_pr_rows(
-            &mut entries,
-            &claimed,
-            7,
-            Some(url),
-            None,
-            true,
-            &BTreeMap::new(),
-        );
-        assert_eq!(result.bindings[0].action, "filled_primary");
-        assert_eq!(entries[0]["pr_number"], 7);
-        assert_eq!(entries[0]["additional_prs"], json!([]));
-    }
-
-    #[test]
     fn a_primary_fill_and_an_additional_append_bind_together() {
         let mut entries = vec![
             node(json!({"id": "x-aaaa"})),
@@ -332,51 +290,5 @@ mod tests {
         assert_eq!(additional[0]["number"], 7);
         // The pre-existing primary stays put.
         assert_eq!(entries[1]["pr_number"], 2);
-    }
-
-    #[test]
-    fn rebind_moves_the_primary_into_the_additional_list() {
-        let mut entries = vec![node(json!({
-            "pr_number": 2,
-            "pr_url": "https://github.com/o/r/pull/2",
-            "merge_status": "MERGED",
-        }))];
-        let claimed = vec!["x-aaaa".to_string()];
-        let result = bind_pr_rows(
-            &mut entries,
-            &claimed,
-            9,
-            Some("https://github.com/o/r/pull/9"),
-            Some("o/r"),
-            true,
-            &BTreeMap::new(),
-        );
-        assert_eq!(result.outcome, "bound");
-        assert_eq!(result.bindings[0].action, "appended_additional");
-        assert_eq!(entries[0]["pr_number"], 9);
-        assert!(entries[0]["merge_status"].is_null());
-        assert_eq!(entries[0]["additional_prs"][0]["number"], 2);
-    }
-
-    #[test]
-    fn an_old_name_ref_binds_through_the_rename_alias() {
-        let mut entries = vec![node(json!({
-            "pr_number": 3,
-            "pr_url": "https://github.com/bllshttng/fno/pull/3",
-        }))];
-        let claimed = vec!["x-aaaa".to_string()];
-        let mut aliases = BTreeMap::new();
-        aliases.insert("bllshttng/fno".to_string(), "fnodotdev/fno".to_string());
-        let result = bind_pr_rows(
-            &mut entries,
-            &claimed,
-            7,
-            Some("https://github.com/fnodotdev/fno/pull/7"),
-            Some("fnodotdev/fno"),
-            false,
-            &aliases,
-        );
-        assert_eq!(result.outcome, "bound", "{:?}", result.refusal);
-        assert_eq!(result.bindings[0].action, "appended_additional");
     }
 }

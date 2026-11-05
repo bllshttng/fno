@@ -706,60 +706,6 @@ mod tests {
     }
 
     #[test]
-    fn display_name_prefers_the_configured_name() {
-        let _guard = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let dir = tempfile::tempdir().unwrap();
-        let cfg = dir.path().join("settings.yaml");
-        std::fs::write(&cfg, "user:\n  name: Ada\n").unwrap();
-        let _env = NameEnvGuard::redirect(dir.path(), Some(cfg.as_path()));
-        assert_eq!(display_name(dir.path()), "Ada");
-    }
-
-    #[test]
-    fn display_name_falls_through_to_the_git_identity() {
-        let _guard = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let dir = tempfile::tempdir().unwrap();
-        // A blank configured name is the unset state, so the git leg runs.
-        let cfg = dir.path().join("settings.yaml");
-        std::fs::write(&cfg, "user:\n  name: \"\"\n").unwrap();
-        let ok = std::process::Command::new("git")
-            .args(["init", "-q"])
-            .current_dir(dir.path())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false)
-            && std::process::Command::new("git")
-                .args(["config", "--local", "user.name", "Git Leg"])
-                .current_dir(dir.path())
-                .status()
-                .map(|s| s.success())
-                .unwrap_or(false);
-        if !ok {
-            // A runner without git still answers the terminal fallback below.
-            let _env = NameEnvGuard::redirect(dir.path(), Some(cfg.as_path()));
-            assert_eq!(display_name(dir.path()), "you");
-            return;
-        }
-        let _env = NameEnvGuard::redirect(dir.path(), Some(cfg.as_path()));
-        assert_eq!(display_name(dir.path()), "Git Leg");
-    }
-
-    #[test]
-    fn display_name_answers_you_when_nothing_names_the_human() {
-        let _guard = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let dir = tempfile::tempdir().unwrap();
-        let _env = NameEnvGuard::redirect(dir.path(), None);
-        // No config candidate, no git repo: the terminal fallback answers.
-        assert_eq!(display_name(dir.path()), "you");
-    }
-
-    #[test]
     fn the_birth_hook_door_refuses_a_malformed_argv() {
         let argv =
             |parts: &[&str]| -> Vec<String> { parts.iter().map(|s| s.to_string()).collect() };

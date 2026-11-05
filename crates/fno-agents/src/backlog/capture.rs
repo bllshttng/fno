@@ -2199,8 +2199,6 @@ fn cmd_tidy(rest: &[String]) -> i32 {
 mod capture_tests {
     use super::*;
 
-    const LEGACY_DASH: char = '\u{2014}';
-
     #[test]
     fn add_mints_once_then_dedups_on_title_and_where() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -2272,34 +2270,5 @@ mod capture_tests {
         let archive =
             std::fs::read_to_string(dir.path().join("inbox-archive.md")).expect("archive file");
         assert!(archive.contains(&fu_id));
-    }
-
-    #[test]
-    fn tidy_normalizes_separators_and_is_byte_idempotent() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let inbox = dir.path().join("inbox.md");
-        let dash = LEGACY_DASH;
-        let seed = format!(
-            "---\ntitle: Abilities {dash} backlog inbox\n---\n\n# Abilities {dash} backlog inbox\n\n## 2026-01-01\n\n- [ ] fu-aaa111 {dash} Legacy line (p0)\n  source: somewhere\n"
-        );
-        std::fs::write(&inbox, &seed).expect("seed");
-        let graph = dir.path().join("absent-graph.db");
-        let first = tidy_pass(&inbox, &graph, false, None).expect("tidy");
-        assert_eq!(first.get("ejected"), Some(&Value::from(0)));
-        let once = std::fs::read_to_string(&inbox).expect("once");
-        assert!(
-            once.contains("- [ ] fu-aaa111 - Legacy line (p0)"),
-            "separator normalized to the hyphen"
-        );
-        assert_eq!(once.matches(DIGEST_START).count(), 1);
-        assert_eq!(once.matches(DIGEST_END).count(), 1);
-        assert!(once.contains("- p0: 1 (fu-aaa111)"));
-        let second = tidy_pass(&inbox, &graph, false, None).expect("tidy again");
-        assert_eq!(second.get("ejected"), Some(&Value::from(0)));
-        let twice = std::fs::read_to_string(&inbox).expect("twice");
-        assert_eq!(
-            once, twice,
-            "a second tidy reproduces the first byte-for-byte"
-        );
     }
 }

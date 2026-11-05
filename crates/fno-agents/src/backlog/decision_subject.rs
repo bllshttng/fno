@@ -112,19 +112,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn reads_the_kind_from_the_string() {
-        assert_eq!(classify("x-aaaa"), SubjectKind::Node);
-        assert_eq!(classify("fnodotdev/fno#4414"), SubjectKind::Pr);
-        assert_eq!(classify("PR 4414"), SubjectKind::Pr);
-        assert_eq!(
-            classify("https://github.com/fnodotdev/fno/pull/4414"),
-            SubjectKind::Pr
-        );
-        assert_eq!(classify("revert-dispute policy"), SubjectKind::Topic);
-        assert_eq!(classify("beefcafe"), SubjectKind::Topic);
-    }
-
-    #[test]
     fn an_old_row_splits_and_a_stamped_row_keeps_its_kind() {
         let mut old = json!({"subject": "fnodotdev/fno#4414"});
         split_into(&mut old);

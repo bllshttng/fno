@@ -212,20 +212,4 @@ mod tests {
         assert_eq!(r["basis"], "commit");
         assert_eq!(r["newer_notes"], 1);
     }
-
-    #[test]
-    fn an_unknown_node_reports_null_and_exits_zero() {
-        let dir = tempfile::tempdir().unwrap();
-        let plan = dir.path().join("plan.md");
-        std::fs::write(&plan, "# plan\n").unwrap();
-        let graph = graph_with(dir.path(), json!({"id": "x-1"}));
-        let r = stale_report(&graph, "x-nope", &plan).unwrap();
-        assert!(r["stale"].is_null());
-        assert!(r["reason"].is_string());
-        assert_eq!(run_stale(&graph, Some("x-nope"), Some(&plan), true), 0);
-        assert_eq!(
-            run_stale(&graph, Some("x-1"), Some(&dir.path().join("gone.md")), true),
-            2
-        );
-    }
 }

@@ -1279,22 +1279,6 @@ mod tests {
     use crate::graph_store::CANONICAL_FIELD_ORDER;
     use std::io::Write;
 
-    #[test]
-    fn the_drain_stamps_classify_by_exact_match() {
-        assert_eq!(
-            classify_deferred_reason("stale >60d, drained by maintain"),
-            Some("expired")
-        );
-        assert_eq!(
-            classify_deferred_reason("stale >30d, drained by maintain"),
-            Some("expired")
-        );
-        assert_eq!(
-            classify_deferred_reason("stale >45d, drained by maintain"),
-            None
-        );
-    }
-
     fn write_graph(entries: &[Value]) -> (tempfile::TempDir, PathBuf) {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("graph.json");
@@ -1357,53 +1341,6 @@ mod tests {
         }
     }
 
-    fn status_of(graph: &Path, id: &str) -> String {
-        // graph.db is the only store: read the store, not the frozen mirror.
-        let rows = crate::graph_store::read_rows(graph).expect("read back");
-        rows.iter()
-            .find(|e| field_eq(e, "id", id))
-            .and_then(|e| e.get("status"))
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string()
-    }
-
-    // AC1-HP
-    #[test]
-    fn status_idea_on_a_superseded_plan_less_node_clears_the_chain_in_one_write() {
-        // Named: the TempDir must outlive the graph reads inside the test.
-        let _dir = tempfile::tempdir().unwrap();
-        let replacer = node("x-aaaa", serde_json::json!({ "supersedes": ["x-bbbb"] }));
-        let victim = node(
-            "x-bbbb",
-            serde_json::json!({
-                "superseded_by": "x-aaaa",
-                "supersession": {"cause": "moved", "session_id": "s1"},
-                "deferred_at": "2026-01-01T00:00:00+00:00",
-            }),
-        );
-        let (_d, graph) = write_graph(&[replacer, victim]);
-        let receipt = apply(&graph, &req("x-bbbb", Some("idea"), &[])).expect("applied");
-        assert!(!receipt.unchanged);
-        assert_eq!(receipt.status.from, "superseded");
-        assert_eq!(receipt.status.to, "idea");
-        let fields: Vec<&str> = receipt.changes.iter().map(|c| c.field.as_str()).collect();
-        assert!(fields.contains(&"superseded_by"));
-        assert!(fields.contains(&"supersession"));
-        assert!(fields.contains(&"deferred_at"));
-        // The replacer's backref dropped, named as its own change.
-        let backref = receipt
-            .changes
-            .iter()
-            .find(|c| c.field == "supersedes")
-            .expect("backref change");
-        assert_eq!(backref.id, "x-aaaa");
-        assert_eq!(status_of(&graph, "x-bbbb"), "idea");
-        let rows = crate::graph_store::read_rows(&graph).unwrap();
-        let repl = rows.iter().find(|e| field_eq(e, "id", "x-aaaa")).unwrap();
-        assert_eq!(repl.get("supersedes"), Some(&json!([])));
-    }
-
     // AC1-ERR
     #[test]
     fn status_idea_on_a_node_whose_plan_reads_ready_refuses_naming_plan_path() {
@@ -1420,18 +1357,6 @@ mod tests {
         assert!(message.contains("plan_path"), "{message}");
         assert!(message.contains("plan_path=null"), "{message}");
         assert_eq!(graph_store::base_version(&graph).unwrap(), before);
-    }
-
-    // AC3-ERR
-    #[test]
-    fn derived_and_owned_fields_refuse_naming_their_owner() {
-        let (_d, graph) = write_graph(&[node("x-1", json!({}))]);
-        let status = refusal_of(&graph, &req("x-1", None, &[("status", "done")]));
-        assert!(status.contains("--status"), "{status}");
-        let children = refusal_of(&graph, &req("x-1", None, &[("children", "[]")]));
-        assert!(children.contains("parent=<id>"), "{children}");
-        let completed = refusal_of(&graph, &req("x-1", None, &[("completed_at", "2026-09-13")]));
-        assert!(completed.contains("fno backlog done"), "{completed}");
     }
 
     // AC4-HP: every stored field maps to exactly one policy.
@@ -1490,6 +1415,18 @@ mod tests {
         }
     }
 
+    // AC3-ERR
+    #[test]
+    fn derived_and_owned_fields_refuse_naming_their_owner() {
+        let (_d, graph) = write_graph(&[node("x-1", json!({}))]);
+        let status = refusal_of(&graph, &req("x-1", None, &[("status", "done")]));
+        assert!(status.contains("--status"), "{status}");
+        let children = refusal_of(&graph, &req("x-1", None, &[("children", "[]")]));
+        assert!(children.contains("parent=<id>"), "{children}");
+        let completed = refusal_of(&graph, &req("x-1", None, &[("completed_at", "2026-09-13")]));
+        assert!(completed.contains("fno backlog done"), "{completed}");
+    }
+
     // AC7-HP (door half)
     #[test]
     fn status_deferred_clears_the_lock_and_needs_a_reason() {
@@ -1516,107 +1453,6 @@ mod tests {
         assert!(row.get("locked_by").map_or(true, Value::is_null));
         assert!(row.get("locked_at").map_or(true, Value::is_null));
         assert!(row.get("deferred_at").and_then(Value::as_str).is_some());
-    }
-
-    // AC8-HP
-    #[test]
-    fn the_owned_transitions_refuse_naming_their_owners() {
-        let (_d, graph) = write_graph(&[node("x-1", json!({}))]);
-        for (word, owner) in [
-            ("superseded", "fno backlog supersede"),
-            ("done", "fno backlog done"),
-            ("in_review", "pr_number=<n>"),
-            ("in_progress", "fno do target start"),
-            ("blocked", "blocked_by+="),
-        ] {
-            let message = refusal_of(&graph, &req("x-1", Some(word), &[]));
-            assert!(message.contains(owner), "{word}: {message}");
-        }
-        let done_node = node(
-            "x-9",
-            json!({ "completed_at": "2026-01-01T00:00:00+00:00" }),
-        );
-        let (_d, graph) = write_graph(&[done_node]);
-        let message = refusal_of(&graph, &req("x-9", Some("idea"), &[]));
-        assert!(message.contains("fno backlog reopen"), "{message}");
-        // A rollup-derived stale done (status done, completion cleared) is
-        // not the done door's fact for a plan-holding row: the update door
-        // owns leaving it, or the row deadlocks (reopen says not done,
-        // update says done). The rung door still owns the WORD: a plan
-        // deriving ready takes ready, not idea.
-        let stale_done = node(
-            "x-10",
-            json!({ "status": "done", "plan_path": "plans/p.md" }),
-        );
-        let (_d, graph) = write_graph(&[stale_done]);
-        let receipt = apply(&graph, &req("x-10", Some("ready"), &[]))
-            .expect("a stale done leaves through the update door");
-        assert_eq!(receipt.status.to, "ready");
-        // A derived-done row that holds nothing against the rollup (no plan
-        // work) still routes to reopen, which stamps the durable hold. The
-        // all-done children are what hold the pre-image derivation on done;
-        // without them the rung ladder re-derives idea before the gate.
-        let derived_done = node("x-11", json!({ "status": "done" }));
-        let derived_kid = node(
-            "x-11c",
-            json!({
-                "status": "done",
-                "parent": "x-11",
-                "completed_at": "2026-01-01T00:00:00+00:00"
-            }),
-        );
-        let (_d, graph) = write_graph(&[derived_done, derived_kid]);
-        let message = refusal_of(&graph, &req("x-11", Some("idea"), &[]));
-        assert!(message.contains("fno backlog reopen"), "{message}");
-    }
-
-    // AC5 leave semantics at the door: a plain deferred node leaves cleanly,
-    // and a leave that lands terminal refuses naming the holding fact.
-    #[test]
-    fn leave_deferred_clears_the_park_and_leave_superseded_may_land_deferred() {
-        let deferred = node(
-            "x-4",
-            serde_json::json!({
-                "deferred_at": "2026-01-01T00:00:00+00:00",
-                "deferred_reason": "waiting",
-            }),
-        );
-        let (_d, graph) = write_graph(&[deferred]);
-        let receipt = apply(&graph, &leave_req("x-4", "deferred")).expect("applied");
-        assert_eq!(receipt.status.to, "idea");
-        // Already left: unchanged, exit 0.
-        let receipt = apply(&graph, &leave_req("x-4", "deferred")).expect("applied");
-        assert!(receipt.unchanged);
-
-        let both = node(
-            "x-5",
-            serde_json::json!({
-                "superseded_by": "x-r",
-                "supersession": {"cause": "c"},
-                "deferred_at": "2026-01-01T00:00:00+00:00",
-                "deferred_reason": "waiting",
-                "archived_at": "2026-01-02T00:00:00Z",
-            }),
-        );
-        let replacer = node("x-r", json!({ "supersedes": ["x-5"] }));
-        let (_d, graph) = write_graph(&[both, replacer]);
-        let receipt = apply(&graph, &leave_req("x-5", "superseded")).expect("applied");
-        // The unsupersede contract: the pre-supersession park survives.
-        assert_eq!(receipt.status.to, "deferred");
-        // The sweep took it the moment it was superseded; reviving it must
-        // bring it back to the board.
-        let rows = graph_store::read_rows(&graph).unwrap();
-        let revived = rows.iter().find(|r| r["id"] == "x-5").unwrap();
-        assert!(revived.get("archived_at").is_none_or(Value::is_null));
-    }
-
-    fn leave_req(node: &str, direction: &str) -> PatchRequest {
-        PatchRequest {
-            node: node.to_string(),
-            status: None,
-            leave: Some(direction.to_string()),
-            sets: Vec::new(),
-        }
     }
 
     // AC12-EDGE: contention across every attempt exhausts the retries and

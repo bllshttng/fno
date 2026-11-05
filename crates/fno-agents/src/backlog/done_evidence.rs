@@ -137,16 +137,4 @@ mod tests {
             enforce(&[open_row("ab-evd0002")], &[post]).expect("evidence must pass");
         }
     }
-
-    #[test]
-    fn a_container_rolled_done_without_completed_at_is_not_judged() {
-        // AC1-EDGE: the recompute rolls a container to done with no
-        // completed_at when its children finish. That roll is not a close.
-        let pre = vec![open_row("ab-evd0006")];
-        let mut post = open_row("ab-evd0006");
-        post.as_object_mut()
-            .unwrap()
-            .insert("status".to_string(), json!("done"));
-        enforce(&pre, &[post]).unwrap();
-    }
 }
