@@ -5,6 +5,7 @@
 //! the fresh pane's id comes back), the Accounts modal closes, and the pane
 //! is focused, which hands keystrokes to the login prompt.
 
+use super::compositor::Compositor;
 use super::{ClientMsg, Command, ServerMsg, View};
 use crate::connections_view::{run_command_env, ActionResult};
 use crate::mux_cli::{control_roundtrip_with_timeouts, ControlError};
@@ -13,6 +14,21 @@ use std::time::Duration;
 
 /// The control deadlines: a wedged server holds the login no longer.
 const CONTROL_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// The conn_action job's runner: a login argv rides the wire PaneRun (so the
+/// fresh pane's id comes back), anything else keeps the subprocess door.
+pub(super) async fn run_or_command(
+    session: &str,
+    argv: Vec<String>,
+    env: Vec<(String, String)>,
+    is_login: bool,
+) -> ActionResult {
+    if is_login {
+        run(session, argv).await
+    } else {
+        run_command_env(argv, env).await
+    }
+}
 
 /// The landing decision, pure so tests can pin it: a pane id in the result
 /// means the pane exists on the server (whatever the modal did in flight),
@@ -97,6 +113,7 @@ pub(super) async fn land(
     sock_w: &mut (impl tokio::io::AsyncWrite + Unpin),
     gen: u64,
     result: ActionResult,
+    compositor: &mut Compositor,
 ) -> Result<(), String> {
     match landing(&result) {
         Landing::FocusPane(pane) => {
@@ -108,7 +125,7 @@ pub(super) async fn land(
             ));
             write_msg(sock_w, &ClientMsg::Command(Command::FocusPane(pane)))
                 .await
-                .map_err(|e| format!("focus send failed: {e}"))
+                .map_err(|e| format!("focus send failed: {e}"))?;
         }
         Landing::ModalNotice => {
             if gen == view.conn_gen {
@@ -117,9 +134,11 @@ pub(super) async fn land(
                 }
                 view.rearm_connections_read();
             }
-            Ok(())
         }
     }
+    compositor
+        .draw(&view.compose())
+        .map_err(|e| format!("draw: {e}"))
 }
 
 /// A pane id in the result means the pane exists on the server, whatever the

@@ -1184,9 +1184,9 @@ pub(crate) struct View {
     conn_gen: u64,
     /// A mutation/login command wanted by a keypress; the run loop spawns
     /// it at loop top (the sender lives there, out of the stdin handler) and
-    /// clears this. `(argv, child-env, is_login)`: `is_login` runs `fno mux pane
-    /// run` (opens the login pane, keeps the pending notice), else a single-flight
-    /// mutation guarded by `ConnectionsView::acting`.
+    /// clears this. `(argv, child-env, is_login)`: `is_login` opens the login
+    /// pane on the wire and focuses it on landing; else a single-flight
+    /// mutation runs under `ConnectionsView::acting`.
     #[allow(clippy::type_complexity)]
     conn_action: Option<(Vec<String>, Vec<(String, String)>, bool)>,
     /// The last `fno doctor update --check` probe's outcome, or
@@ -6826,11 +6826,7 @@ async fn attach_and_run(
             let gen = view.conn_gen;
             let session = view.session.clone();
             tokio::spawn(async move {
-                let result = if is_login {
-                    login_pane::run(&session, argv).await
-                } else {
-                    crate::connections_view::run_command_env(argv, env).await
-                };
+                let result = login_pane::run_or_command(&session, argv, env, is_login).await;
                 let _ = tx.send((gen, result, is_login));
             });
         }
@@ -7434,14 +7430,13 @@ async fn attach_and_run(
                     cv.acting = false;
                 }
                 if is_login {
-                    // The login pane exists once the spawn lands: the landing
-                    // closes the modal and focuses the pane (or, on a refusal,
-                    // gen-guards the reason into the modal's notice).
-                    if let Err(e) = login_pane::land(&mut view, &mut sock_w, gen, result).await {
+                    // The landing closes the modal, focuses the pane, and
+                    // draws; a refusal gen-guards into the modal's notice.
+                    if let Err(e) =
+                        login_pane::land(&mut view, &mut sock_w, gen, result, &mut compositor)
+                            .await
+                    {
                         break Err(e);
-                    }
-                    if let Err(e) = compositor.draw(&view.compose()) {
-                        break Err(format!("draw: {e}"));
                     }
                 } else if gen == view.conn_gen && view.connections.is_some() {
                     if let Some(cv) = view.connections.as_mut() {
