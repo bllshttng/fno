@@ -771,6 +771,8 @@ pub(crate) struct View {
     /// Pending escape bytes in modal mode (arrow/pgup folding), same split-arrow
     /// safety as [`View::sel_esc`].
     keys_modal_esc: Vec<u8>,
+    /// The agents list's `^B ?` footer grid is open.
+    keys_footer: bool,
     /// (US2) The right-click / `m` row context menu over a sideline agent
     /// row: an anchored popup whose entries route to existing commands. `None`
     /// when closed. The target is pinned by name so a layout reshuffle can only
@@ -1282,6 +1284,7 @@ mod feed_detail;
 pub(crate) mod feed_view;
 mod file_viewer;
 mod image_layer;
+mod key_grid;
 mod keys_modal;
 mod needs_view;
 mod questions;
@@ -1870,6 +1873,7 @@ impl View {
             keys_modal: None,
             pane_ids_until: None,
             keys_modal_esc: Vec::new(),
+            keys_footer: false,
             row_menu: None,
             row_menu_esc: Vec::new(),
             aux: None,
@@ -4425,6 +4429,7 @@ impl View {
             self.paint_panes(&mut cells, rows, cols, origin_r, origin_c, now);
         }
         self.draw_bottom_row(&mut cells, rows, cols);
+        key_grid::paint_agents(self, &mut cells, rows, cols);
         // Chrome, not an overlay: after panes, before modals.
         self.draw_feed_panel(&mut cells, rows, cols);
         file_viewer::draw(self, &mut cells, rows, cols);
@@ -8196,9 +8201,7 @@ async fn dispatch_event(
                 view.cycle_section(key);
             }
         }
-        Event::ShowKeys => {
-            view.open_keys_modal();
-        }
+        Event::ShowKeys => key_grid::toggle(view),
         Event::OpenBacklogBoard => View::open(view),
         Event::ShareFocusedPane => share_flow::chord(view),
         Event::CycleSidelineView => backlog_board::cycle_sideline_view(view),
