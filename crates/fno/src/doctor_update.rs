@@ -35,7 +35,7 @@ const SOURCE_PIN_UNAVAILABLE: &str = "the deployed fno-agents could not answer s
 
 const UPDATE_USAGE: &str = "Usage: fno update [--check] [--dry-run|-N] [--force|-F] [--source PATH] [--rust|--no-rust] [--published [REV]]
 
-A release install updates from the newest GitHub release; a wheel install moves to the binary install in ~/.fno/bin first. A source install rebuilds the Python CLI and the Rust binaries from the checkout. `fno doctor update` is the same command.";
+A release install updates from the newest GitHub release; a wheel install moves to the binary install in ~/.fno/install/bin first. A source install rebuilds the Python CLI and the Rust binaries from the checkout. `fno doctor update` is the same command.";
 
 const UPDATE_CLAIM_KEY: &str = "update:fno";
 const UV_INSTALL_ATTEMPTS: u32 = 3;

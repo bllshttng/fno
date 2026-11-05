@@ -1147,7 +1147,7 @@ questions (scripts/ops/mux-demo-snapshot.sh seeds one)",
                     notes: vec![ReleaseNotesSection {
                         area: "update".into(),
                         bullets: vec![
-                            "fno update moves a wheel install to ~/.fno/bin".into(),
+                            "fno update moves a wheel install to ~/.fno/install/bin".into(),
                             "release tarballs ship a .sha256".into(),
                         ],
                     }],

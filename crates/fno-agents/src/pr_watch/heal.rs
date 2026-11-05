@@ -111,7 +111,7 @@ pub(crate) fn leaf_output(args: &[String]) -> (String, i32) {
         .and_then(|v| v.as_integer())
         .filter(|n| *n > 0)
         .unwrap_or(600);
-    let fno_binary = fno_binary.unwrap_or_else(crate::pr_watch::install::default_fno_binary);
+    let fno_binary = fno_binary.unwrap_or_else(crate::pr_watch::install::default_tick_binary);
     let (msg, rc) = refresh::refresh_watcher(
         &launch_agents_dir,
         &fno_binary,

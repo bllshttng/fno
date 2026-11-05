@@ -1,5 +1,5 @@
 //! The release leg of `fno update`: a wheel install moves to the binary
-//! install in `~/.fno/bin`, and a binary install updates from the newest
+//! install in `~/.fno/install/bin`, and a binary install updates from the newest
 //! tagged GitHub release. The wheel stops publishing once Python is gone, so
 //! `uv tool upgrade fno` would strand every wheel user on the last wheel.
 //!
@@ -15,6 +15,11 @@ use std::process::Stdio;
 use crate::model_catalog::state_dir;
 use crate::update_prebuilt::{self, BINARIES};
 
+/// The front door's member name in the tarball and in `bin_dir()`.
+const FRONT_DOOR: &str = BINARIES[3];
+/// The uv tool's package name: its venv is `<uv tool dir>/fno`.
+const UV_TOOL: &str = "fno";
+
 /// Where the running `fno` came from.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum InstallChannel {
@@ -22,14 +27,16 @@ pub(crate) enum InstallChannel {
     Wheel {
         tool_root: PathBuf,
     },
-    /// `~/.fno/bin/fno`.
+    /// `~/.fno/install/bin/fno`.
     Binary,
     Other,
 }
 
-/// The binary install's directory.
+/// The binary install's directory: the state layout's `bin` row, a
+/// subfolder, so the state root grows no top-level entry.
 pub(crate) fn bin_dir() -> PathBuf {
-    state_dir().join("bin")
+    let root = state_dir();
+    crate::state_layout::place_dir(&root, "bin").unwrap_or_else(|| root.join("install/bin"))
 }
 
 fn marker_path() -> PathBuf {
@@ -268,7 +275,7 @@ fn retire_uv_tool(tool_root: &Path, bin: &Path) -> Result<String, String> {
     use std::os::unix::fs::PermissionsExt;
     let _ = std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755));
     let forwards = FORWARD_PROBES.iter().find(|argv| {
-        crate::process_admission::std_command(bin.join("fno"))
+        crate::process_admission::std_command(bin.join(FRONT_DOOR))
             .args(argv.iter())
             .env("FNO_PY", &stub)
             .stdin(Stdio::null())
@@ -309,7 +316,7 @@ fn kept_tool_root() -> Option<PathBuf> {
         .stdin(Stdio::null())
         .output()
         .ok()?;
-    let dir = PathBuf::from(String::from_utf8_lossy(&out.stdout).trim()).join("fno");
+    let dir = PathBuf::from(String::from_utf8_lossy(&out.stdout).trim()).join(UV_TOOL);
     (out.status.success() && dir.join("uv-receipt.toml").is_file()).then_some(dir)
 }
 
@@ -396,7 +403,7 @@ pub(crate) fn update(channel: &InstallChannel, dry_run: bool) -> i32 {
     let mut code = 0;
     let refresh = crate::process_admission::std_command(bin.join("fno-agents"))
         .args(["pr-watch", "refresh", "--caller", "update", "--fno-binary"])
-        .arg(bin.join("fno"))
+        .arg(bin.join(FRONT_DOOR))
         .stdin(Stdio::null())
         .output();
     match refresh {
@@ -416,7 +423,7 @@ pub(crate) fn update(channel: &InstallChannel, dry_run: bool) -> i32 {
         }
     }
     if code == 0 {
-        println!("fno update: done; {} runs {want}. Restart the daemon and mux to run the new code: fno agents session restart --mux. This ends live mux sessions.", bin.join("fno").display());
+        println!("fno update: done; {} runs {want}. Restart the daemon and mux to run the new code: fno agents session restart --mux. This ends live mux sessions.", bin.join(FRONT_DOOR).display());
     }
     code
 }

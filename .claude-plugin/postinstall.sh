@@ -365,7 +365,7 @@ finish_success() {
 # `fno update` moved this machine to the binary install. A uv install here
 # would relink the wheel's entrypoints over the move, so the binary install
 # owns updates and this run only wires and sets up.
-FNO_BINARY_DIR="${FNO_STATE_DIR:-$HOME/.fno}/bin"
+FNO_BINARY_DIR="${FNO_STATE_DIR:-$HOME/.fno}/install/bin"
 if [[ "$(cat "${FNO_STATE_DIR:-$HOME/.fno}/install/channel" 2>/dev/null)" == "binary" && -x "$FNO_BINARY_DIR/fno" ]]; then
   log "binary install at $FNO_BINARY_DIR; skipping the uv wheel install (fno update updates it)."
   wire_and_setup "$FNO_BINARY_DIR/fno"

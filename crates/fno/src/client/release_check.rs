@@ -7,7 +7,7 @@
 use std::path::Path;
 use std::time::Duration;
 
-/// What owns a release install. A uv wheel and the `~/.fno/bin` binary
+/// What owns a release install. A uv wheel and the `~/.fno/install/bin` binary
 /// install both update with `fno update`, which moves the wheel first.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Channel {
@@ -19,7 +19,7 @@ pub(crate) enum Channel {
 impl Channel {
     pub(crate) fn name(self) -> &'static str {
         match self {
-            Channel::Uv => "uv wheel; fno update moves it to ~/.fno/bin",
+            Channel::Uv => "uv wheel; fno update moves it to ~/.fno/install/bin",
             Channel::Binary => "binary",
             Channel::Brew => "brew",
         }

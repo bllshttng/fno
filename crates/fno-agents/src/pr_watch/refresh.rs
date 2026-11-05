@@ -591,7 +591,7 @@ pub(crate) fn leaf_output(args: &[String]) -> (String, i32) {
         .map(PathBuf::from)
         .unwrap_or_else(|| dirs_home().join("Library").join("LaunchAgents"));
     let state_root = crate::pr_watch::status::state_root(&cwd);
-    let fno_binary = fno_binary.unwrap_or_else(crate::pr_watch::install::default_fno_binary);
+    let fno_binary = fno_binary.unwrap_or_else(crate::pr_watch::install::default_tick_binary);
     let (msg, _rc) = refresh_watcher(
         &launch_agents_dir,
         &fno_binary,
