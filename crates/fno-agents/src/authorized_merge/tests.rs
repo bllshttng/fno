@@ -695,9 +695,9 @@ fn an_ungated_or_baselineless_head_merges_with_no_gate_status() {
 
 // ── the gate holds arm too ────────────────────────────────────────────
 
-/// PR 4483 merged through an armed GitHub auto-merge 87 seconds after its
-/// gate went red: the arm effect skips the `require_checks` block, and the
-/// ruleset requires only stacked-base-guard, so nothing held the queue.
+/// An armed GitHub auto-merge merged 87 seconds after its gate went red:
+/// the arm effect skips the `require_checks` block, and the ruleset
+/// requires only stacked-base-guard, so nothing held the queue.
 /// Arming carries `require_checks: false` by design, so the gate holds must
 /// stand outside that flag: a red gate refuses the arm, naming the hold.
 #[test]

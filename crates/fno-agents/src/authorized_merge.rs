@@ -999,7 +999,7 @@ fn decide_observed<P: Probes>(
     // The gate holds stand OUTSIDE `require_checks`: arming runs with that
     // flag hard-coded false, and GitHub enforces only the ruleset's required
     // checks (main's ruleset names one, stacked-base-guard), so an armed PR
-    // would merge past a gate the queue never waits on. PR 4483 merged 87
+    // would merge past a gate the queue never waits on - one merged 87
     // seconds after its gate went red through exactly this hole. Held, never
     // Failed: the cause and clearing command are the daemon's words, and a
     // `gate-retry` clears without a code push.

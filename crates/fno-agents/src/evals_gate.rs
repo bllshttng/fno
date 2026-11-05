@@ -478,11 +478,11 @@ fn open_prs(p: &Paths, d: &Deps, slug: &str) -> Option<Vec<Pr>> {
 /// Disarms every queue-armed PR whose head's gate reads red, pending, or
 /// missing at a gated head. GitHub enforces only the ruleset's required
 /// checks (main requires one, stacked-base-guard), so an armed PR merges
-/// past a gate the queue never waits on: PR 4483 landed 87 seconds after
-/// its gate went red. The tick posts the status, then this sweep pulls the
-/// armed PR out of the queue; the worker's own merge door re-lands it when
-/// the gate settles. One line per disarm, into the tick note; a failed
-/// disarm retries next tick.
+/// past a gate the queue never waits on: a green-checked PR landed 87
+/// seconds after its gate went red. The tick posts the status, then this
+/// sweep pulls the armed PR out of the queue; the worker's own merge door
+/// re-lands it when the gate settles. One line per disarm, into the tick
+/// note; a failed disarm retries next tick.
 fn disarm_sweep(p: &Paths, d: &Deps, slug: &str, prs: &[Pr]) -> Vec<String> {
     let mut notes = Vec::new();
     for pr in prs.iter().filter(|pr| pr.armed) {
@@ -519,14 +519,18 @@ fn gate_word_at(p: &Paths, d: &Deps, slug: &str, pr: &Pr) -> Option<&'static str
     let endpoint = format!("repos/{slug}/commits/{}/status", pr.sha);
     let out = (d.run)(&["gh", "api", &endpoint], p.repo).filter(|r| r.ok)?;
     let status: Value = serde_json::from_str(&out.stdout).ok()?;
+    // The REST status states are GitHub's own lowercase words; the door
+    // uppercases every state read, and the arms below speak the same
+    // uppercase words.
     let state = status
         .get("statuses")?
         .as_array()?
         .iter()
         .find(|s| s.get("context").and_then(Value::as_str) == Some(CONTEXT))
         .and_then(|s| s.get("state"))
-        .and_then(Value::as_str);
-    match state {
+        .and_then(Value::as_str)
+        .map(str::to_uppercase);
+    match state.as_deref() {
         Some("FAILURE") | Some("ERROR") => return Some("red"),
         Some("PENDING") => return Some("pending"),
         // A settled-green gate keeps its arm; only a genuinely absent
@@ -1631,11 +1635,12 @@ mod tests {
                         ok(&Value::Array(rows).to_string())
                     }
                     ["gh", "api", e] if e.contains("/status") => {
+                        // GitHub's REST commit-status states are lowercase.
                         let statuses = if self.gate_status.is_empty() {
                             Vec::new()
                         } else {
                             vec![
-                                json!({"context": CONTEXT, "state": self.gate_status.to_uppercase(), "description": "fixture"}),
+                                json!({"context": CONTEXT, "state": self.gate_status, "description": "fixture"}),
                             ]
                         };
                         ok(&json!({"statuses": statuses}).to_string())
@@ -2136,7 +2141,7 @@ mod tests {
 
     /// An armed PR whose gate reads ungreen comes out of the queue: the
     /// ruleset requires only stacked-base-guard, so the queue would merge
-    /// past the gate (the PR 4483 shape, FAILURE and PENDING alike).
+    /// past the gate (FAILURE and PENDING alike).
     #[test]
     fn an_armed_pr_with_an_ungreen_gate_disarms() {
         for (state, word) in [("failure", "red"), ("pending", "pending")] {
