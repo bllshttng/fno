@@ -549,9 +549,8 @@ fn import_seed(state: &Path, log: &Path) -> Result<usize, String> {
 }
 
 fn seed_transcript(prefix: &str) -> Option<(String, PathBuf)> {
-    let home = std::env::var_os("HOME").map(PathBuf::from)?;
     let mut matches = Vec::new();
-    for project in std::fs::read_dir(home.join(".claude/projects"))
+    for project in std::fs::read_dir(crate::claude_drive::claude_projects_dir())
         .ok()?
         .flatten()
     {
