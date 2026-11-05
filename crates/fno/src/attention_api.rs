@@ -319,19 +319,56 @@ pub fn handle_answer(
             (200, receipt(&row, &sink.name, true))
         }
         Prior::None => {
+            // The clear shells out with id and the answer text as argv, and
+            // both derive from the request, so both pass the argv gate before
+            // the row lands (a refused shape never lands a row).
+            let text = answer_text_of(&item, &req);
+            if let Err(e) = argv_gate(id, &text) {
+                return problem(422, "invalid request", e);
+            }
             let row = answer_row(id, &sink.name, &req, identity, false);
             if let Err(e) = io.append_row(&row) {
                 return problem(500, "row append failed", e);
             }
             // The row is the durable half; a failed clear is logged and the
             // receipt still reads recorded, exactly like the file lane.
-            let text = answer_text_of(&item, &req);
             if let Err(e) = io.clear(id, &text) {
                 eprintln!("fno attention api: clear failed for {id}: {e}");
             }
             (200, receipt(&row, &sink.name, false))
         }
     }
+}
+
+/// The clear core truncates at the intake cap (`question_intake::QUESTION_CAP`,
+/// mirrored in the python events code); the API refuses past the same bound
+/// instead of letting the child truncate silently.
+const ANSWER_CAP: usize = 2000;
+
+/// The argv gate for the clear subprocess. The id is a `q-` slug and the
+/// answer text is prose, but both arrive from the request, so the spawn
+/// refuses anything a command line could misread: a leading `-` (flag
+/// injection), whitespace or control characters in the id (word splitting
+/// on any future shell join), and control characters or overlong text.
+fn argv_gate(id: &str, answer_text: &str) -> Result<(), String> {
+    if id.is_empty() || id.starts_with('-') {
+        return Err(format!("item id {id:?} is not a question id"));
+    }
+    if id.chars().count() > 128 || id.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        return Err(format!(
+            "item id {id:?} is over 128 characters or carries whitespace or control characters"
+        ));
+    }
+    if answer_text.chars().count() > ANSWER_CAP {
+        return Err(format!("answer text is over {ANSWER_CAP} characters"));
+    }
+    if answer_text
+        .chars()
+        .any(|c| c.is_control() && c != '\n' && c != '\t')
+    {
+        return Err("answer text carries control characters".to_string());
+    }
+    Ok(())
 }
 
 /// The `attention_answer` envelope: the arm's row shape plus the endpoint's
@@ -812,6 +849,59 @@ mod tests {
             &answer_body(1, "k"),
         );
         assert_eq!(status, 404);
+    }
+
+    /// The answer text is argv for the clear subprocess: a control character
+    /// 422s before the row lands, and prose with newlines still clears.
+    #[test]
+    fn answer_words_pass_the_argv_gate() {
+        let sinks = vec![sink("phone", "tok-1")];
+
+        let words_body =
+            |words: &str| format!(r#"{{"words": "{words}", "idempotency_key": "k"}}"#).into_bytes();
+        let mut io = MemIo::default();
+        io.items = vec![item_json("q-1", "question", 2)];
+        io.journal = MemIo::asked("q-1");
+        let (status, body) = handle_answer(
+            &mut io,
+            &sinks,
+            "q-1",
+            Some("tok-1"),
+            None,
+            &words_body(r#"bell \u0007 rang"#),
+        );
+        assert_eq!(status, 422, "{body}");
+        assert!(io.rows.is_empty(), "a refused shape never lands a row");
+        assert!(io.clears.is_empty());
+
+        // Multi-line prose passes the gate and clears.
+        let mut io = MemIo::default();
+        io.items = vec![item_json("q-1", "question", 2)];
+        io.journal = MemIo::asked("q-1");
+        let (status, body) = handle_answer(
+            &mut io,
+            &sinks,
+            "q-1",
+            Some("tok-1"),
+            None,
+            &words_body("line one\\nline two"),
+        );
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(io.clears.len(), 1);
+    }
+
+    /// The gate itself: a leading `-`, whitespace, and control characters in
+    /// the id are refused; a plain `q-` slug passes.
+    #[test]
+    fn argv_gate_refuses_flag_shaped_and_control_ids() {
+        assert!(argv_gate("q-abc123", "prose").is_ok());
+        assert!(argv_gate("", "prose").is_err());
+        assert!(argv_gate("--answer", "prose").is_err());
+        assert!(argv_gate("q abc", "prose").is_err());
+        assert!(argv_gate("q-\u{7}x", "prose").is_err());
+        let long = format!("q-{}", "a".repeat(200));
+        assert!(argv_gate(&long, "prose").is_err());
+        assert!(argv_gate("q-abc", &"x".repeat(2001)).is_err());
     }
 
     #[test]
