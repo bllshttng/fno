@@ -211,6 +211,7 @@ pub mod evals_capability;
 pub mod evals_climb;
 pub mod evals_compare;
 pub mod evals_drafts;
+pub mod evals_traces;
 pub mod evals_gate;
 pub mod evals_macro;
 pub mod evals_power;

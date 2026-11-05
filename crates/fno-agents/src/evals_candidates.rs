@@ -153,7 +153,7 @@ fn read_plan_labels(rows: &Path, out: &mut Vec<Candidate>) {
     }
 }
 
-fn read_reverts(repo: &Path, out: &mut Vec<Candidate>) {
+pub(crate) fn read_reverts(repo: &Path, out: &mut Vec<Candidate>) {
     let mut cmd = std::process::Command::new("git");
     cmd.arg("-C")
         .arg(repo)
@@ -387,6 +387,7 @@ fn mine(sources: &Sources) -> Vec<Candidate> {
 }
 
 pub fn run(args: &[String]) -> i32 {
+    if args.first().is_some_and(|a| a == "--traces") { return crate::evals_traces::run(&args[1..]); }
     let limit = match crate::evals::flag_lookup(args, "--limit") {
         None => DEFAULT_LIMIT,
         Some(raw) => match raw.parse::<usize>() {

@@ -37,6 +37,7 @@ pub(super) struct FleetArms {
     symptom_recheck: crate::symptom_recheck::Arm,
     correction_fold: crate::correction_fold::Arm,
     golden_drafts: crate::evals_drafts::Arm,
+    eval_traces: crate::evals_traces::Arm,
     team_ledger: crate::rundown::Arm,
     lead_eval: crate::lead_eval::Arm,
     fleet_beacon: crate::fleet_beacon::Arm,
@@ -139,6 +140,7 @@ impl FleetArms {
             symptom_recheck: crate::symptom_recheck::Arm::default(),
             correction_fold: crate::correction_fold::Arm::default(),
             golden_drafts: crate::evals_drafts::Arm::default(),
+            eval_traces: crate::evals_traces::Arm::default(),
             team_ledger: crate::rundown::Arm::default(),
             lead_eval: crate::lead_eval::Arm::default(),
             fleet_beacon: crate::fleet_beacon::Arm::default(),
@@ -356,6 +358,7 @@ impl FleetArms {
         // Corrections become events: off-loop, byte-budgeted, one in flight.
         crate::correction_fold::maybe_tick(&self.correction_fold, ctx.home.clone());
         crate::evals_drafts::maybe_tick(&self.golden_drafts, ctx.home.clone());
+        crate::evals_traces::maybe_tick(&self.eval_traces, ctx.home.clone());
         // The board render: graph.md plus every configured board target,
         // once per moved version, off every caller's write path.
         crate::board_render_arm::maybe_tick(&self.board_render, ctx.home.clone());
