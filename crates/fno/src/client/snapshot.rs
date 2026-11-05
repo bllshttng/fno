@@ -22,7 +22,7 @@ use serde_json::Value;
 const USAGE: &str =
     "usage: fno mux serve --snapshot --server <name> --out <path> [--squad <name>] \
 [--theme dark|light|macchiato] [--format html|svg|png] [--size <cols>x<rows> [--fit]] [--peer <cols>x<rows>] \
-[--font <family>] [--message <fmail-id>] [--edge backlog|messages-tree|messages-part|org|dock=<size>] \
+[--keys-footer] [--font <family>] [--message <fmail-id>] [--edge backlog|messages-tree|messages-part|org|dock=<size>] \
 [--view bell|bell-wide|bell-full|feed|row-menu|hover|cursor|tab-menu|sideline-menu|composer|split-menu|settings|keys|keys-tags|org-block|org-table|org-recent|org-overview|org-graph|org-health|org-seat|org-feed|org-system|org-remote|org-peek|org-spawn|org-keys|messages-tree|messages-chats|messages-thread|messages-system|messages-archive|backlog-list|backlog-kanban|review-diff|review-panel|review-panel-drag|navigator-pr|navigator-model|navigator-menu|feed-detail|question-detail|connections|connections-use|needs|dock|machines]";
 
 #[derive(Debug, PartialEq)]
@@ -343,6 +343,8 @@ pub struct SnapshotArgs {
     /// The client-local surface to open before composing, for shots of a
     /// bell panel or a menu no server frame ever carries.
     pub view: Option<ViewKind>,
+    /// Open the `^B ?` footer grid over the view, as the chord does.
+    pub keys_footer: bool,
     /// Splits held at a dragged size, as `name=size` pairs: the state a live
     /// drag leaves, so a shot can show a mid-drag frame.
     pub edges: Vec<(String, usize)>,
@@ -366,6 +368,7 @@ pub fn parse(tail: &[OsString]) -> Result<SnapshotArgs, String> {
     let mut font = None;
     let mut message = None;
     let mut view = None;
+    let mut keys_footer = false;
     let mut edges: Vec<(String, usize)> = Vec::new();
     let mut it = tail.iter();
     while let Some(a) = it.next() {
@@ -379,6 +382,7 @@ pub fn parse(tail: &[OsString]) -> Result<SnapshotArgs, String> {
         match a {
             "--snapshot" => {}
             "--fit" => fit = true,
+            "--keys-footer" => keys_footer = true,
             "--font" => {
                 let f = value()?;
                 if f.is_empty() || f.contains(['\'', '"', '<', '>', '&']) {
@@ -481,6 +485,7 @@ session text, run scripts/ops/mux-demo-snapshot.sh"
         font,
         message,
         view,
+        keys_footer,
         edges,
     })
 }
@@ -508,6 +513,7 @@ pub fn run(args: SnapshotArgs) -> i32 {
         chrome,
         args.message.as_deref(),
         args.view.as_ref(),
+        args.keys_footer,
         &args.edges,
     );
     match frame.and_then(|f| write(&f, &args)) {
@@ -738,6 +744,7 @@ fn live_frame(
     chrome: crate::theme::Theme,
     message: Option<&str>,
     kind: Option<&ViewKind>,
+    keys_footer: bool,
     edges: &[(String, usize)],
 ) -> Result<Frame, String> {
     let socket = proto::socket_path(server)?;
@@ -1414,6 +1421,9 @@ pr_number (scripts/ops/mux-demo-snapshot.sh seeds one)",
         | Some(ViewKind::MessagesYou)
         | Some(ViewKind::MessagesYouThread)
         | None => {}
+    }
+    if keys_footer {
+        super::key_grid::toggle(&mut view);
     }
     crate::lattice::freeze_spin();
     Ok(view.compose())
