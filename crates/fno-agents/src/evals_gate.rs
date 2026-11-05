@@ -1423,9 +1423,9 @@ fn settle_head_run(p: &Paths, d: &Deps, state: &mut State, slug: &str, prs: &[Pr
                     let unmeasured = view["regressions"].as_array().is_some_and(|r| r.is_empty())
                         && view["errors"].as_array().is_some_and(|rows| {
                             !rows.is_empty()
-                                && rows.iter().all(|r| {
-                                    r.get("a_grades").and_then(Value::as_u64) == Some(0)
-                                })
+                                && rows
+                                    .iter()
+                                    .all(|r| r.get("a_grades").and_then(Value::as_u64) == Some(0))
                         });
                     if unmeasured {
                         (
