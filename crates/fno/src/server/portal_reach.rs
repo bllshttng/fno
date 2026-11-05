@@ -41,19 +41,6 @@ pub(super) fn same_session_twins(a: &RegistryAgent, b: &RegistryAgent) -> bool {
     sid(a).is_some() && sid(a) == sid(b)
 }
 
-/// The title a claude viewer shows for a thread that has no name yet.
-const UNNAMED_THREAD_TITLE: &str = "Claude Code";
-
-/// The session a claude viewer's OSC title names: the title minus one
-/// leading status glyph token ("✳", "◐", a braille spinner frame).
-pub(super) fn title_session_name(title: &str) -> &str {
-    let t = title.trim();
-    match t.split_once(' ') {
-        Some((glyph, rest)) if !glyph.chars().any(char::is_alphanumeric) => rest.trim(),
-        _ => t,
-    }
-}
-
 /// The (rows, cols) a portal viewer spawns at, so the harness draws its
 /// first frame at the size it will keep. A replaced seat keeps its own size;
 /// a fresh open takes the tab rect; the client terminal only stands in for an
@@ -732,7 +719,11 @@ impl Core {
         };
         // From here the key is the row's id, whatever the caller typed: the
         // portal saves it, and a restart finds the row again by it.
-        let stored_key = row.stored_key();
+        let stored_key = row
+            .harness_session_id
+            .clone()
+            .filter(|id| !id.is_empty())
+            .unwrap_or_else(|| row.stored_key());
         let key = stored_key.as_str();
         // A DEFAULT reach goes home to the held seat that remembers
         // the row. Restore put a shell in the seat and the entry back in the
@@ -1579,152 +1570,30 @@ impl Core {
         (0..=u8::MAX).find(|idx| !self.portals.contains_key(idx) && !self.portal_spawning(*idx))
     }
 
-    /// A claude portal seat follows the session its viewer's OSC title names.
-    ///
-    /// A claude attach TUI can switch sessions inside its own TUI (the
-    /// agent-view arrow) without fno learning it, so the seat's stored row
-    /// goes stale. Every 1s tick: a title naming one free row repoints
-    /// `row_key`, `attached` and the pane name to it; a title naming no
-    /// single free row drops the claim and relabels via
-    /// [`Self::follow_unclaimed_title`], so the border never keeps a stale
-    /// row name. Only claude viewer seats are followed
-    /// (`entry.cmd` gates on the attach program), and a title naming a row
-    /// another portal claims never steals it.
-    pub(super) fn follow_portal_viewer_titles(&mut self) {
-        let viewer_cmd = cmd_from_argv(&attach_base(""));
-        let candidates: Vec<(u8, u64, String)> = self
+    /// Refresh display labels through the stored session identity. Terminal
+    /// titles cannot establish a session switch or revoke an attach mapping.
+    pub(super) fn refresh_portal_viewer_labels(&mut self) {
+        let labels: Vec<(u64, String)> = self
             .portals
-            .iter()
-            .filter_map(|(idx, portal)| {
-                let entry = self.panes.get(&portal.seat)?;
-                if entry.cmd != viewer_cmd {
-                    return None;
-                }
-                let title = title_session_name(entry.vt.osc_title()?);
-                // A glyph-only frame ("◐", mid-spinner) names no session; a
-                // seat must not unclaim onto it.
-                (!title.is_empty() && title.chars().any(char::is_alphanumeric))
-                    .then(|| (*idx, portal.seat, title.to_string()))
+            .values()
+            .filter(|portal| self.portal_seat_is_viewer(portal.seat))
+            .filter_map(|portal| {
+                crate::thread_viewer::row_for_pane(&self.portals, portal.seat, &self.agents)
+                    .map(|row| (portal.seat, row.name.clone()))
             })
             .collect();
         let mut changed = false;
-        for (idx, seat, title) in candidates {
-            let named: Vec<&RegistryAgent> = self
-                .agents
-                .iter()
-                .filter(|a| {
-                    a.mux.is_none()
-                        && !a.exited
-                        && (a.name == title || a.harness_title.as_deref() == Some(title.as_str()))
-                })
-                .collect();
-            // The harness default title, shown by every unnamed thread, is no
-            // evidence the screen switched rows: the seat keeps the id it
-            // holds. Any other title no row goes by still unclaims below.
-            if named.is_empty()
-                && title == UNNAMED_THREAD_TITLE
-                && self
-                    .agents
-                    .iter()
-                    .any(|a| row_answers_key(a, &self.portals[&idx].row_key))
-            {
-                continue;
+        for (seat, name) in labels {
+            if let Some(entry) = self.panes.get_mut(&seat) {
+                if entry.name.as_ref() != Some(&name) {
+                    entry.name = Some(name);
+                    changed = true;
+                }
             }
-            let claim: Option<(String, String)> = match named.as_slice() {
-                [row] => row.attach_id.as_deref().and_then(|id| {
-                    let free = self.live_viewer_portal(row, id, idx).is_none()
-                        && match self.attached.get(id) {
-                            Some(p) => *p == seat || !self.panes.contains_key(p),
-                            None => true,
-                        };
-                    free.then(|| (id.to_string(), row.stored_key()))
-                }),
-                _ => None,
-            };
-            let Some((id, key)) = claim else {
-                self.attached.retain(|_, p| *p != seat);
-                changed |= self.follow_unclaimed_title(idx, seat, &title);
-                continue;
-            };
-            // Skip when the seat already agrees: the one row the title
-            // names is the seated row with the attach mapping in place.
-            let agrees = named.iter().any(|row| {
-                row.attach_id.as_deref() == Some(id.as_str())
-                    && row_answers_key(row, &self.portals[&idx].row_key)
-                    && self.attached.get(&id) == Some(&seat)
-            });
-            if agrees {
-                continue;
-            }
-            self.attached.retain(|_, p| *p != seat);
-            self.attached.insert(id.clone(), seat);
-            let (_, cd) = self.attach_account_ctx(&id);
-            self.portals.get_mut(&idx).expect("candidate idx").row_key = key;
-            self.name_attached_pane(seat, &id, cd.as_deref());
-            self.notice_all(format!("portal {idx} now shows {title}"));
-            changed = true;
         }
         if changed {
             self.push_layout(true);
         }
-    }
-
-    /// The label half of the follow: the screen names `title`, so
-    /// the border always names it marked unclaimed, and the channel follows
-    /// the title to the row's id when exactly one live row goes by it and no
-    /// other portal holds its attach claim - the sideline marks what the
-    /// viewer shows. Any other title (ambiguous, claimed elsewhere) is
-    /// stored marked, so no row wears this seat and a claimant elsewhere
-    /// stays unpoisoned. A portal is a TV
-    /// and every row is a channel: the label never keeps a stale row.
-    fn follow_unclaimed_title(&mut self, idx: u8, seat: u64, title: &str) -> bool {
-        let live_named: Vec<&RegistryAgent> = self
-            .agents
-            .iter()
-            .filter(|a| !a.exited && a.name == title)
-            .collect();
-        let claimed_elsewhere = match live_named.as_slice() {
-            [row] => row
-                .attach_id
-                .as_deref()
-                .is_some_and(|id| match self.attached.get(id) {
-                    Some(p) => *p != seat && self.panes.contains_key(p),
-                    None => false,
-                }),
-            _ => false,
-        };
-        let marked = format!("{title}?");
-        let key = match live_named.as_slice() {
-            [row] if !claimed_elsewhere => row.stored_key(),
-            _ => {
-                // The marked key must answer no row. Only a row with no id
-                // answers by name, so only one named into the marked form
-                // pushes the mark a character deeper.
-                let mut key = marked.clone();
-                while self
-                    .agents
-                    .iter()
-                    .any(|a| !a.exited && row_answers_key(a, &key))
-                {
-                    key.push('?');
-                }
-                key
-            }
-        };
-        let mut changed = false;
-        let portal = self.portals.get_mut(&idx).expect("candidate idx");
-        if portal.row_key != key {
-            portal.row_key = key;
-            changed = true;
-        }
-        if let Some(entry) = self.panes.get_mut(&seat) {
-            if entry.name.as_deref() != Some(marked.as_str()) {
-                entry.name = Some(marked);
-                changed = true;
-                self.notice_all(format!("portal {idx} now shows {title} (unclaimed)"));
-            }
-        }
-        changed
     }
 
     /// One-row-one-viewer, shared by the reach and the landed check: the

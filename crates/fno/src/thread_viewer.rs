@@ -7,11 +7,9 @@ use crate::tree::TabId;
 /// screen pane playing it, and the tab that holds the screen's leaf. A
 /// portal is never a pane and never a tab; the pane is only what plays
 /// now. `row_key` is the channel: the row's id
-/// ([`RegistryAgent::stored_key`]), never its name, so a restart that
-/// renames or retitles the row still finds it. When a claude seat's screen
-/// names no claimable row it holds the screen's title marked unclaimed
-/// (`vellum?`), which no row answers, so [`row_for_pane`] resolves no row
-/// there.
+/// ([`RegistryAgent::stored_key`]) as a legacy fallback. New local portals
+/// prefer the harness session id. Display labels and terminal titles never
+/// select the channel.
 #[derive(Clone)]
 pub(crate) struct Portal {
     pub(crate) row_key: String,

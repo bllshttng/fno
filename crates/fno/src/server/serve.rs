@@ -630,7 +630,7 @@ pub(super) async fn serve(
                 // Deferred repaint requests ride the same 1s pass.
                 core.fire_due_nudges();
                 core.reconcile_grid_sizes();
-                core.follow_portal_viewer_titles();
+                core.refresh_portal_viewer_labels();
                 // Snapshot first: reader completion guarantees all output for
                 // these panes was enqueued before this point. Drain it, then
                 // close exactly the snapshot even if another reader finishes

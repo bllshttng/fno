@@ -52,9 +52,11 @@ The sideline renders `◫N` for the portal showing a row. The server DERIVES tha
 
 Pane ids allocate from zero, so pane 0 is a valid seat. Every portal lookup matches on the `Option` and compares seats for EQUALITY. A truthiness test there is the defect that once made six live workers invisible, and it hides on every other pane id.
 
-## A channel is a key a row answered
+## A channel is a session identity
 
-A claude viewer can switch sessions inside its own TUI, and fno is never told. The server reads the seat's OSC title once a second. A title that names one free row moves the channel, the attach mapping and the pane name to that row. A title that names no single free row drops the attach claim and touches nothing else. The channel only ever holds a key a row answered, so free title text never becomes one. A title naming a row another portal shows never steals it.
+A local portal stores the row's harness session id. Existing stored ids and resume lineage remain readable. The row name and the viewer's OSC title are display labels. Changing either label cannot drop the attach mapping, retune the portal or replace its live viewer.
+
+Reaching the same session focuses its existing viewer and preserves its screen. An explicit reach of another session changes the channel. A session switch inside Claude's TUI supplies no session id to the mux. Its title cannot establish a new portal identity. Use the mux row to select the session the portal should show.
 
 ## Wire
 
