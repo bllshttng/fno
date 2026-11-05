@@ -7,9 +7,14 @@
 //! read. The heal pass calls [`run_pass`] beside the PR steward, and
 //! `pr create` calls [`ref_line`] so each child PR points back at the issue.
 //! A `/claim` comment on the issue adds a line, and a claim with no PR goes
-//! stale after [`STALE_AFTER_DAYS`]; the `claim` module decides both.
+//! stale after [`STALE_AFTER_DAYS`]; the `claim` module decides both. Each
+//! owner line ends with a hidden id marker, and the `mine` module reads it back
+//! so a teammate's own fno can file the node it claimed.
 
 mod claim;
+mod mine;
+
+pub(crate) use mine::{run as import_claimed, Args as ImportArgs};
 
 use crate::backlog::projections::{is_publishable, project_key};
 use crate::claims::ClaimRecord;
@@ -117,6 +122,19 @@ fn render_line(row: &Value, handle: Option<&str>) -> String {
     format!("- [{mark}] {}", parts.join(" · "))
 }
 
+/// The hidden tail of an owner line. It is an HTML comment, so a reader sees
+/// nothing, and it carries the node id alone. An id that could close the
+/// comment never reaches the issue.
+const ID_MARKER_OPEN: &str = "<!-- fno:";
+const ID_MARKER_CLOSE: &str = " -->";
+
+fn is_plain_id(id: &str) -> bool {
+    !id.is_empty()
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+}
+
 /// An owner child's line. A stale `/claim` took its handle from the ledger.
 fn node_line(
     row: &Value,
@@ -125,12 +143,17 @@ fn node_line(
     ledger: &[claim::Entry],
 ) -> String {
     let id = text(row, "id");
-    match ledger
+    let line = match ledger
         .iter()
         .find(|e| e.stale && e.node.as_deref() == Some(id))
     {
         Some(e) => format!("{} · stale", render_line(row, Some(&e.login))),
         None => render_line(row, handle_of(claims, id, owner_login).as_deref()),
+    };
+    if is_plain_id(id) {
+        format!("{line} {ID_MARKER_OPEN}{id}{ID_MARKER_CLOSE}")
+    } else {
+        line
     }
 }
 
@@ -398,15 +421,24 @@ pub(crate) fn run_pass(cwd: &Path, pulls: &[Value], dry_run: bool) -> &'static s
 }
 
 /// The line a child PR's body carries: `Refs #<n>`, or `Closes #<n>` when no
-/// other published child of the epic is still open. None when the node's
-/// parent has no issue, or the body already names it.
+/// other published child of the epic is still open. A node that carries its
+/// own `epic_issue` is a claim filed from a teammate's checklist: it has no
+/// siblings here, so only the owner can tell it is the last, and it always
+/// refs. None when neither the node nor its parent has an issue, or the body
+/// already names it.
 pub(crate) fn ref_line(rows: &[Value], node: &str, body: &str) -> Option<String> {
-    let parent = text(rows.iter().find(|r| text(r, "id") == node)?, "parent");
-    let epic = rows.iter().find(|r| text(r, "id") == parent)?;
-    let number = recorded_issue(epic)?;
-    let last = !checklist_rows(rows, parent)
-        .iter()
-        .any(|r| text(r, "id") != node && !is_done(r));
+    let row = rows.iter().find(|r| text(r, "id") == node)?;
+    let (number, last) = match recorded_issue(row) {
+        Some(number) => (number, false),
+        None => {
+            let parent = text(row, "parent");
+            let epic = rows.iter().find(|r| text(r, "id") == parent)?;
+            let last = !checklist_rows(rows, parent)
+                .iter()
+                .any(|r| text(r, "id") != node && !is_done(r));
+            (recorded_issue(epic)?, last)
+        }
+    };
     if names_issue(body, number) {
         return None;
     }
@@ -543,7 +575,10 @@ mod tests {
     #[test]
     fn one_pass_opens_one_issue_with_a_line_per_public_child() {
         let hub = Arc::new(Mutex::new(Hub::default()));
-        let epic = epic(json!({"title": "Ship Vec<T>  work"}));
+        let epic = epic(json!({
+            "title": "Ship Vec<T>  work",
+            "epic_claims": [{"login": "visitor-2", "title": "Contributor idea", "at": "2026-11-01T00:00:00Z"}],
+        }));
         let rows = vec![
             epic.clone(),
             child("kid-1", "First", json!({"pr_number": 12})),
@@ -572,9 +607,22 @@ mod tests {
             .0
             .trim()
             .to_string();
+        // Each owner line ends with its id in a hidden comment. The visible
+        // text is what it was, and a contributor line has no node to name.
+        assert_eq!(inside.matches("<!-- fno:").count(), 3, "{inside}");
+        assert!(inside.contains("#9 <!-- fno:kid-2 -->\n"), "{inside}");
+        let visible: Vec<&str> = inside
+            .lines()
+            .map(|l| l.split(" <!-- fno:").next().unwrap())
+            .collect();
         assert_eq!(
-            inside,
-            "- [ ] First · @visitor-1 · #12\n- [x] Second · #9\n- [ ] Third · @owner"
+            visible,
+            [
+                "- [ ] First · @visitor-1 · #12",
+                "- [x] Second · #9",
+                "- [ ] Third · @owner",
+                "- [ ] Contributor idea · @visitor-2",
+            ]
         );
         assert!(!body.contains("Local only"), "{body}");
         // The issue title is plain text; only the body copy is escaped.
@@ -662,6 +710,14 @@ mod tests {
         assert_eq!(ref_line(&rows, "kid-1", "Intro\nrefs #7\n"), None);
         rows[0].as_object_mut().unwrap().remove("epic_issue");
         assert_eq!(ref_line(&rows, "kid-1", "body"), None);
+        // A claim filed from a teammate's checklist has no parent here. It
+        // carries its own issue and only refs: the owner knows the last child.
+        let filed = [json!({"id": "own-1a2b", "title": "Claimed", "epic_issue": 7})];
+        assert_eq!(ref_line(&filed, "own-1a2b", "body"), Some("Refs #7".into()));
+        assert_eq!(
+            ref_line(&filed, "own-1a2b", "Fixes own-1a2b\nrefs #7\n"),
+            None
+        );
     }
 
     #[test]
