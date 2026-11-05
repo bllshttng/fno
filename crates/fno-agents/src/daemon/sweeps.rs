@@ -18,6 +18,13 @@ pub(crate) const STALE_SWEEP_INTERVAL_SECS: i64 = 21_600;
 /// moves; the sweep costs one `fno do pr info` per open parked row.
 pub(crate) const PARK_SWEEP_INTERVAL_SECS: i64 = 600;
 
+/// How long between evals-gate settles. A finished gate run grades on this
+/// clock, never on the pr-watch tick's: a fleet-loaded sweep saturates the
+/// tick's budget, and a green run once waited over an hour for a tick with
+/// room. The settle itself costs one state read when nothing is in flight,
+/// so the minute floor spends nothing while the gate sits idle.
+pub(crate) const EVALS_SETTLE_INTERVAL_SECS: i64 = 60;
+
 /// One fleet's stale-sweep reading, parsed from the command's JSON line.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StaleSweepReport {
@@ -197,6 +204,37 @@ pub fn sweep_all_roots(home: &AgentsHome) -> Option<(usize, usize, usize)> {
     Some((unparked, handled, total))
 }
 
+/// The evals-gate settle, on a one-minute floor. NOT dispatch-pause gated,
+/// unlike the sweeps above: the settle never launches a run, it only grades
+/// one that already exited, and pausing bookkeeping is exactly how the
+/// hour-long wait this arm exists to fix came about. A run in flight or a
+/// settled verdict journals one `evals_settle` event, so the minutes
+/// someone waits on a verdict are visible; a fully idle minute stays silent
+/// - its whole cost is the one state read that found nothing. The run
+/// closure returns the settle's note, `"idle"` when nothing is in flight.
+pub fn evals_settle_sweep(
+    home: &AgentsHome,
+    emitter: &EventEmitter,
+    now: i64,
+    run: &dyn Fn() -> String,
+) -> usize {
+    let stamp = home.root().join("evals-settle.stamp");
+    let last = std::fs::read_to_string(&stamp)
+        .ok()
+        .and_then(|s| s.trim().parse::<i64>().ok())
+        .unwrap_or(0);
+    if now.saturating_sub(last) < EVALS_SETTLE_INTERVAL_SECS {
+        return 0;
+    }
+    let note = run();
+    let waited = note != "idle";
+    if waited {
+        let _ = emitter.emit("evals_settle", &json!({"outcome": "ok", "note": note}));
+    }
+    let _ = std::fs::write(&stamp, now.to_string());
+    usize::from(waited)
+}
+
 /// How long between trust-answer passes. A codex pane parked on the
 /// folder-trust modal blocks its worker entirely (one sat six hours), so the
 /// floor is tick magnitude, not the maintenance-sweep minutes.
@@ -267,6 +305,62 @@ pub(crate) fn trust_answer_sweep(
 #[cfg(test)]
 mod trust_sweep_tests {
     use super::*;
+
+    // The settle arm: a run in flight or settled journals one event, a fully
+    // idle minute stays silent but still consumes the stamp, and the 60s
+    // floor holds. Isolated home, no ambient state.
+    #[test]
+    fn the_evals_settle_sweep_journals_waiting_minutes_and_holds_its_floor() {
+        let _lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let home_dir = tempfile::tempdir().unwrap();
+        let saved_home = std::env::var_os("FNO_AGENTS_HOME");
+        std::env::set_var("FNO_AGENTS_HOME", home_dir.path());
+        let events = home_dir.path().join("events-test.jsonl");
+        let emitter = EventEmitter::new(&events, "daemon");
+        let home = AgentsHome::from_env();
+
+        // The floor: a pass inside 60s of the stamp runs nothing.
+        std::fs::write(home.root().join("evals-settle.stamp"), "1_000").unwrap();
+        let quiet = sweeps::evals_settle_sweep(&home, &emitter, 1_000 + 59, &|| "unused".into());
+        assert_eq!(quiet, 0);
+
+        // A waiting minute journals one event carrying the note.
+        let ran = sweeps::evals_settle_sweep(&home, &emitter, 1_000 + 60, &|| {
+            "head abc1234 in flight".into()
+        });
+        assert_eq!(ran, 1);
+        let store = crate::event_store::store_path(&events);
+        let conn = crate::event_store::open_read(&store).unwrap();
+        let line: String = conn
+            .query_row(
+                "SELECT line FROM events WHERE type = 'evals_settle'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("the waiting minute is journaled");
+        assert!(line.contains("in flight"), "{line}");
+
+        // An idle minute consumes the stamp and stays silent: the store read
+        // above found one row, and none is added here.
+        let quiet = sweeps::evals_settle_sweep(&home, &emitter, 1_000 + 120, &|| "idle".into());
+        assert_eq!(quiet, 0);
+        let rows = crate::event_store::query_events(
+            &events,
+            &crate::event_store::EventQuery {
+                types: vec!["evals_settle".to_string()],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(rows.len(), 1, "an idle minute writes no event");
+
+        match saved_home {
+            Some(v) => std::env::set_var("FNO_AGENTS_HOME", v),
+            None => std::env::remove_var("FNO_AGENTS_HOME"),
+        }
+    }
 
     // The auto-answer: a codex pane parked on the folder-trust modal is
     // answered with its pinned key and the attempt is journaled; a claude
