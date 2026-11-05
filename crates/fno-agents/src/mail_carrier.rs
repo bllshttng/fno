@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 pub const RETAIN_SECS: i64 = 7 * 24 * 3600;
 
 /// The most carrier rows one projection reads.
-pub const READ_ROWS: i64 = 4000;
+pub const READ_ROWS: i64 = 10_000;
 
 /// Rows per insert transaction: a first beat carries a week of mail.
 const CHUNK: usize = 200;
@@ -216,12 +216,17 @@ pub(crate) fn local_rows(
 }
 
 /// What this process remembers between beats: the ids already on the
-/// primary, read once, and the newest file time the last walk covered.
+/// primary, re-read hourly so expired ids leave memory, and the newest file
+/// time the last walk covered.
 #[derive(Default)]
 pub(crate) struct Cursor {
     published: Option<HashSet<String>>,
+    read_at: u64,
     walked_at: u64,
 }
+
+/// How often the beat re-reads its own ids from the primary.
+const REREAD_SECS: u64 = 3600;
 
 /// What one beat did.
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -249,7 +254,10 @@ pub(crate) fn beat(remote: &Remote, me: &Me, cursor: &mut Cursor) -> Result<Beat
             &[mine.clone(), SqlValue::Integer(since)],
         )?
         .affected;
-    if cursor.published.is_none() {
+    if cursor.published.is_none() || now.saturating_sub(cursor.read_at) >= REREAD_SECS {
+        if cursor.published.is_none() {
+            cursor.walked_at = 0;
+        }
         let reply = remote.execute(
             "SELECT msg_id FROM fleet_chat WHERE machine_id = ?",
             &[mine],
@@ -260,7 +268,7 @@ pub(crate) fn beat(remote: &Remote, me: &Me, cursor: &mut Cursor) -> Result<Beat
             .filter_map(|r| Some(r.first()?.text()?.to_string()))
             .collect();
         cursor.published = Some(ids);
-        cursor.walked_at = 0;
+        cursor.read_at = now;
     }
     let published = cursor.published.get_or_insert_with(HashSet::new);
     // A file written during the last walk may hold rows that walk missed.
@@ -384,22 +392,30 @@ pub fn tick(remote: &Remote) {
 }
 
 /// The other machines' carried rows of the last 7 days, newest `READ_ROWS`,
-/// oldest first.
+/// oldest first. sqld refuses a reply over its size limit, so a refused read
+/// halves the row count until it fits and keeps the newest rows.
 pub fn read_peer_rows(
     remote: &Remote,
     machine: &str,
     since: i64,
 ) -> Result<Vec<CarrierRow>, String> {
-    let reply = remote.execute(
-        "SELECT machine_id, msg_id, host, owner, from_name, to_name, ts, created_at, subject, \
-body, pubkey, sig FROM fleet_chat WHERE created_at >= ? AND machine_id != ? \
+    let mut limit = READ_ROWS;
+    let reply = loop {
+        let read = remote.execute(
+            "SELECT machine_id, msg_id, host, owner, from_name, to_name, ts, created_at, \
+subject, body, pubkey, sig FROM fleet_chat WHERE created_at >= ? AND machine_id != ? \
 ORDER BY created_at DESC LIMIT ?",
-        &[
-            SqlValue::Integer(since),
-            SqlValue::Text(machine.to_string()),
-            SqlValue::Integer(READ_ROWS),
-        ],
-    )?;
+            &[
+                SqlValue::Integer(since),
+                SqlValue::Text(machine.to_string()),
+                SqlValue::Integer(limit),
+            ],
+        );
+        match read {
+            Err(e) if limit > 1 && e.contains("Response is too large") => limit /= 2,
+            other => break other?,
+        }
+    };
     let mut rows: Vec<CarrierRow> = reply
         .rows
         .iter()
