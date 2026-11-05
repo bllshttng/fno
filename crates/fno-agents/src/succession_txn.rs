@@ -249,6 +249,10 @@ pub(crate) fn retro(scope: &str, cwd: &Path, cleared: &PendingSuccession, id: &s
             .stdout(log)
             .stderr(stderr)
             .spawn()
+            .map(|child| {
+                crate::orphan_reap::release_child(child.id());
+                child
+            })
             .ok()
     });
     if spawned.is_none() {

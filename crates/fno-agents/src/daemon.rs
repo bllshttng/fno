@@ -2486,6 +2486,8 @@ async fn spawn_claude_stream_lane(
     };
     let worker_pid = child.id();
     let worker_pid_start_time = process_start_time(worker_pid);
+    // The worker runs unwaited; the daemon drain reaps it by pid on exit.
+    crate::orphan_reap::release_child(worker_pid);
     drop(child);
 
     // 5. Wait (bounded) for the worker socket to appear, proving the worker bound.
