@@ -569,7 +569,10 @@ impl FleetArms {
                             let fno_bin = crate::scrape::fno_bin().to_string_lossy().into_owned();
                             crate::evals_gate::daemon_settle(&history, &fno_bin, &repo)
                         }
-                        None => "no bank".to_string(),
+                        // No bank anywhere: nothing to settle, ever. Reads
+                        // idle, so the sweep stays silent instead of
+                        // journaling a waiting minute every 60s.
+                        None => "idle".to_string(),
                     }
                 });
             });

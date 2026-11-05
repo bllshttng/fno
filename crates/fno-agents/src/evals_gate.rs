@@ -354,6 +354,8 @@ const SETTLE_LOCK_WALL_S: u64 = 120;
 
 impl SettleLock {
     fn acquire_or_sync(dir: &Path, state: &mut State) -> Option<Self> {
+        // A gate whose first run never saved state has no dir yet.
+        let _ = std::fs::create_dir_all(dir);
         let path = dir.join("settle.lock");
         let holder = std::process::id().to_string();
         for _ in 0..2 {
