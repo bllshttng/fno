@@ -1868,9 +1868,9 @@ fn daemon_settle_with(paths: &Paths, d: &Deps) -> String {
                     Some((slug, prs)) => {
                         settle_head_run(&paths, d, &mut state, &slug, &prs);
                         if state.head_run.is_some() {
-                            notes.push(format!("head {} requeues", short(&run.sha)));
+                            notes.push(format!("head {} held", short(&run.sha)));
                         } else {
-                            notes.push(format!("head {} settled", short(&run.sha)));
+                            notes.push("head settled".into());
                         }
                     }
                     None => notes.push("head pr read failed".into()),
