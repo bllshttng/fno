@@ -102,8 +102,20 @@ pub fn render(t: &Table, w: usize, h: usize) -> Vec<String> {
         },
         if f.audit_only { "  [audit queue]" } else { "" }
     );
-    let mut out = vec![head];
-    let body_rows = h.saturating_sub(4);
+    let columns = format!(
+        "{} {} {} {} {} {} {} {} {}",
+        fit("state", 10),
+        fit("lane", 12),
+        fit("date", 10),
+        fit("who", 10),
+        "Q",
+        fit("node", 9),
+        fit("PR", 6),
+        fit("description", 16),
+        "decision",
+    );
+    let mut out = vec![head, format!("\x1b[1m{columns}\x1b[0m")];
+    let body_rows = h.saturating_sub(5);
     let top = t.pick.saturating_sub(body_rows.saturating_sub(1));
     // 82 columns of fixed fields precede the text; one more keeps the last
     // column clear of the wrap edge.
@@ -300,7 +312,12 @@ mod tests {
         let lines = render(&table(), 100, 10);
         assert_eq!(lines.len(), 10);
         assert!(lines[0].contains("2 of 2"));
-        assert!(lines[1].starts_with("\x1b[7m"));
+        assert!(
+            lines[1].contains("node")
+                && lines[1].contains("PR")
+                && lines[1].contains("description")
+        );
+        assert!(lines[2].starts_with("\x1b[7m"));
         assert!(lines[8].contains("question: why ship?"));
         assert!(lines[9].contains("q quit"));
     }

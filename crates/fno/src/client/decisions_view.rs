@@ -126,7 +126,7 @@ pub(crate) fn paint_full(view: &View, cells: &mut [Cell], rows: usize, cols: usi
         }
     }
     if b.loading && b.table.rows.is_empty() {
-        if let Some(row) = cells.get_mut(2 * cols..3 * cols) {
+        if let Some(row) = cells.get_mut(3 * cols..4 * cols) {
             paint_ansi(row, "loading decisions...");
         }
     }
