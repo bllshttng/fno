@@ -56,7 +56,7 @@ Pane ids allocate from zero, so pane 0 is a valid seat. Every portal lookup matc
 
 A local portal stores the row's harness session id. Existing stored ids and resume lineage remain readable. The row name and the viewer's OSC title are display labels. Changing either label cannot drop the attach mapping, retune the portal or replace its live viewer.
 
-Reaching the same session focuses its existing viewer and preserves its screen. An explicit reach of another session changes the channel. A session switch inside Claude's TUI supplies no session id to the mux. Its title cannot establish a new portal identity. Use the mux row to select the session the portal should show.
+Reaching the same session focuses its existing viewer and preserves its screen. An explicit reach of another session changes the channel. A session switch inside Claude's TUI supplies no session id to the mux. Its title cannot establish a new portal identity. Use the mux row to select the session.
 
 ## Wire
 
