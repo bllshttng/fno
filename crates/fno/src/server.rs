@@ -270,7 +270,7 @@ fn signal_waiter(
     let mut received = 0;
     let result = unsafe { libc::sigwait(&signal_set, &mut received) };
     if result != 0 {
-        eprintln!(
+        crate::mux_log!(error;
             "fno mux: sigwait failed for SIGTERM/SIGINT: {}",
             std::io::Error::from_raw_os_error(result)
         );
@@ -288,7 +288,7 @@ fn signal_waiter(
     let snapshot = match roster.lock() {
         Ok(children) => children.iter().copied().collect::<HashSet<_>>(),
         Err(_) => {
-            eprintln!("fno mux: emergency pane roster lock poisoned");
+            crate::mux_log!(error; "fno mux: emergency pane roster lock poisoned");
             unsafe { libc::_exit(1) }
         }
     };
@@ -309,7 +309,7 @@ fn kill_plain_children(roster: &HashSet<PaneChild>) {
         if result != 0 {
             let error = std::io::Error::last_os_error();
             if error.raw_os_error() != Some(libc::ESRCH) {
-                eprintln!(
+                crate::mux_log!(error;
                     "fno mux: emergency SIGKILL failed for pane child {}: {error}",
                     child.pid
                 );
@@ -334,11 +334,11 @@ fn reap_plain_child(pid: u32) {
             if matches!(error.raw_os_error(), Some(libc::ECHILD | libc::ESRCH)) {
                 return;
             }
-            eprintln!("fno mux: emergency waitpid failed for pane child {pid}: {error}");
+            crate::mux_log!(error; "fno mux: emergency waitpid failed for pane child {pid}: {error}");
             return;
         }
         if Instant::now() >= deadline {
-            eprintln!("fno mux: emergency waitpid timed out for pane child {pid}");
+            crate::mux_log!(error; "fno mux: emergency waitpid timed out for pane child {pid}");
             return;
         }
         std::thread::sleep(Duration::from_millis(10));
@@ -1339,34 +1339,38 @@ pub fn run(socket: PathBuf) -> i32 {
         // Born-0700 (atomic) rather than create-then-tighten (gemini
         // security-medium).
         if let Err(e) = crate::proto::ensure_private_dir(parent) {
-            eprintln!("fno mux: cannot create {}: {e}", parent.display());
+            crate::mux_log!(error; "fno mux: cannot create {}: {e}", parent.display());
             return 1;
         }
+    }
+    if let Err(e) = crate::mux_log::server_init(&socket.with_extension("log")) {
+        crate::mux_log!(error; "fno mux: cannot open server log: {e}");
+        return 1;
     }
     let listener = match bind_or_probe(&socket) {
         Ok(BindOutcome::Bound(l)) => l,
         Ok(BindOutcome::AlreadyRunning) => {
             // Idempotent explicit start: a live server for this session IS
             // the requested end state.
-            eprintln!(
+            crate::mux_log!(info;
                 "fno mux: a server is already running at {}",
                 socket.display()
             );
             return 0;
         }
         Err(e) => {
-            eprintln!("fno mux: cannot bind {}: {e}", socket.display());
+            crate::mux_log!(error; "fno mux: cannot bind {}: {e}", socket.display());
             return 1;
         }
     };
     let _guard = SocketGuard(socket.clone());
     match crate::pty::raise_fd_limit() {
         Ok(Some((before, after))) => {
-            eprintln!("fno mux: open-file limit raised from {before} to {after}");
+            crate::mux_log!(info; "fno mux: open-file limit raised from {before} to {after}");
         }
         Ok(None) => {}
         Err(e) => {
-            eprintln!(
+            crate::mux_log!(error;
                 "fno mux: warn: could not raise the open-file limit: {e}; panes will cap early"
             );
         }
@@ -1380,20 +1384,20 @@ pub fn run(socket: PathBuf) -> i32 {
         crate::proto::version_sidecar_path(&socket),
         crate::proto::PROTO_VERSION.to_string(),
     ) {
-        eprintln!("fno mux: warn: could not write version sidecar: {e}");
+        crate::mux_log!(error; "fno mux: warn: could not write version sidecar: {e}");
     }
 
     // Stamp the server's own pid beside the socket so kill-server
     // can signal a wedged holder without an accepted connection. Format lives
     // in proto's write/read pair; best-effort like `.ver` above.
     if let Err(e) = crate::proto::write_pid_sidecar(&socket) {
-        eprintln!("fno mux: warn: could not write pid sidecar: {e}");
+        crate::mux_log!(error; "fno mux: warn: could not write pid sidecar: {e}");
     }
     if let Some(owner) = &owner {
         if let Err(e) =
             crate::proto::write_owner_sidecar(&socket, owner.pid, owner.birth, &owner.session)
         {
-            eprintln!("fno mux: cannot record sandbox owner lease: {e}");
+            crate::mux_log!(error; "fno mux: cannot record sandbox owner lease: {e}");
             return 1;
         }
     } else {
@@ -1409,7 +1413,7 @@ pub fn run(socket: PathBuf) -> i32 {
         match install_signal_reaper(&socket, signal_tx, Arc::clone(&shutdown_complete)) {
             Ok(roster) => roster,
             Err(e) => {
-                eprintln!("fno mux: cannot install emergency signal reaper: {e}");
+                crate::mux_log!(error; "fno mux: cannot install emergency signal reaper: {e}");
                 return 1;
             }
         };
@@ -1417,7 +1421,7 @@ pub fn run(socket: PathBuf) -> i32 {
     let runtime = match tokio::runtime::Runtime::new() {
         Ok(rt) => rt,
         Err(e) => {
-            eprintln!("fno mux: cannot start runtime: {e}");
+            crate::mux_log!(error; "fno mux: cannot start runtime: {e}");
             return 1;
         }
     };
@@ -2151,11 +2155,7 @@ async fn run_claude_agents_all(
 fn e2e_log(msg: std::fmt::Arguments<'_>) {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     if *ON.get_or_init(|| std::env::var_os("FNO_E2E").is_some()) {
-        let ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis())
-            .unwrap_or(0);
-        eprintln!("fno mux e2e[{ms} pid {}]: {msg}", std::process::id());
+        crate::mux_log!(info; "fno mux e2e[pid {}]: {msg}", std::process::id());
     }
 }
 
@@ -2325,7 +2325,7 @@ impl Core {
                     // global squad store. Keep pane run usable with a clear,
                     // process-local fallback; installed binaries still fail
                     // closed on real persistence errors.
-                    eprintln!("fno mux: pane id persistence unavailable for build-tree binary; using process-local pane ids (set FNO_AGENTS_HOME for persistence)");
+                    crate::mux_log!(error; "fno mux: pane id persistence unavailable for build-tree binary; using process-local pane ids (set FNO_AGENTS_HOME for persistence)");
                     let id = self.next_pane_id;
                     self.next_pane_id = id.saturating_add(1);
                     Ok(id)
@@ -5949,7 +5949,7 @@ impl Core {
     /// Notice every client exactly once that persistence is degraded (AC3-ERR),
     /// then latch silent. The live session is never affected by a failed write.
     fn persist_degraded(&mut self, e: &std::io::Error) {
-        eprintln!("fno mux: squad persistence degraded: {e}");
+        crate::mux_log!(warn; "fno mux: squad persistence degraded: {e}");
         if self.persist_degraded_notified {
             return;
         }
@@ -7717,7 +7717,7 @@ impl Core {
                 // Unreachable while every tab-killing path re-anchors first;
                 // if a future mutation forgets, the symptom is a blank
                 // client - make it diagnosable from the session log.
-                eprintln!("fno mux: dangling view on tab {tid}; re-anchor missed it");
+                crate::mux_log!(error; "fno mux: dangling view on tab {tid}; re-anchor missed it");
                 continue;
             };
             let area = self.tab_area(tid);
@@ -7742,7 +7742,7 @@ impl Core {
                         entry.requested_size = (content.rows, content.cols);
                         if let Err(e) = entry.pty.resize(content.rows, content.cols, 0, 0) {
                             // Grid and kernel winsize would disagree: log it.
-                            eprintln!("fno mux: pty resize failed: {e}");
+                            crate::mux_log!(error; "fno mux: pty resize failed: {e}");
                         }
                         if entry.pty.is_keeper_hosted() {
                             // Applied later, in `drain_pty_output`, once the
@@ -8310,7 +8310,7 @@ impl Core {
             return;
         };
         if c.reliable_tx.try_send(ServerMsg::Copy { text }).is_err() {
-            eprintln!("fno mux: client {client_id} reliable channel wedged on Copy; dropping it");
+            crate::mux_log!(error; "fno mux: client {client_id} reliable channel wedged on Copy; dropping it");
             self.clients.retain(|c| c.id != client_id);
             self.push_layout(true);
         }
@@ -8356,7 +8356,7 @@ impl Core {
                 .is_err()
         };
         if wedged {
-            eprintln!(
+            crate::mux_log!(error;
                 "fno mux: client {client_id} reliable channel wedged on LinkHover; dropping it"
             );
             self.clients.retain(|c| c.id != client_id);
@@ -8480,7 +8480,7 @@ impl Core {
             })
             .is_err()
         {
-            eprintln!(
+            crate::mux_log!(error;
                 "fno mux: client {client_id} reliable channel wedged on SearchResult; dropping it"
             );
             self.clients.retain(|c| c.id != client_id);
@@ -8793,7 +8793,7 @@ impl Core {
             );
             if !ok {
                 let n = failures.fetch_add(1, Ordering::Relaxed) + 1;
-                eprintln!("fno mux: mux_pane_counters emit failed ({n} this session)");
+                crate::mux_log!(error; "fno mux: mux_pane_counters emit failed ({n} this session)");
             }
         });
     }
@@ -12310,7 +12310,7 @@ async fn handle_client(
                 if let Some(reply) = unknown_control_refusal(&value) {
                     let _ = write_msg(&mut stream, &reply).await;
                 } else {
-                    eprintln!("fno mux: initial client message failed to decode: {error}");
+                    crate::mux_log!(error; "fno mux: initial client message failed to decode: {error}");
                     // The refusal above recovers every envelope shape this
                     // build knows. An envelope it cannot interpret at all
                     // must not restore the silent close this branch removed:

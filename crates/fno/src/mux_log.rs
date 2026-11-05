@@ -65,16 +65,22 @@ pub fn client(level: &str, message: &str) {
 pub fn server(level: &str, message: &str) {
     if let Some(path) = SERVER.get() {
         append(path, level, message);
+    } else {
+        let _ = writeln!(
+            std::io::stderr(),
+            "{} {level} {message}",
+            chrono::Utc::now().to_rfc3339()
+        );
     }
 }
 
 pub fn server_init(path: &Path) -> std::io::Result<()> {
-    let _ = SERVER.set(path.to_owned());
     let file = OpenOptions::new()
         .create(true)
         .append(true)
         .mode(0o600)
         .open(path)?;
+    let _ = SERVER.set(path.to_owned());
     redirect_stderr(path, &file)?;
     Ok(())
 }
@@ -203,7 +209,7 @@ pub fn tail(path: &Path, lines: usize) -> String {
 
 #[macro_export]
 macro_rules! mux_log {
-    ($level:expr, $($arg:tt)*) => { $crate::mux_log::server($level, &format!($($arg)*)) };
+    ($level:ident; $($arg:tt)*) => { $crate::mux_log::server(stringify!($level), &format!($($arg)*)) };
 }
 
 #[cfg(test)]

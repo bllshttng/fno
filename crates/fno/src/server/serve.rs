@@ -11,13 +11,13 @@ pub(super) async fn serve(
     owner: Option<OwnerLease>,
 ) -> i32 {
     if let Err(e) = listener.set_nonblocking(true) {
-        eprintln!("fno mux: listener setup failed: {e}");
+        crate::mux_log!(error; "fno mux: listener setup failed: {e}");
         return 1;
     }
     let listener = match tokio::net::UnixListener::from_std(listener) {
         Ok(l) => l,
         Err(e) => {
-            eprintln!("fno mux: listener setup failed: {e}");
+            crate::mux_log!(error; "fno mux: listener setup failed: {e}");
             return 1;
         }
     };
@@ -253,7 +253,7 @@ pub(super) async fn serve(
                             // every row's age at the last good reading.
                             if !latch_wedge_logged {
                                 latch_wedge_logged = true;
-                                eprintln!(
+                                crate::mux_log!(warn;
                                     "fno mux: a fleet truth probe has run over {TRUTH_PROBE_EVERY:?}; \
                                      skipping probes until it exits"
                                 );
@@ -281,14 +281,14 @@ pub(super) async fn serve(
                     Ok(answer) => {
                         if fallback_logged {
                             fallback_logged = false;
-                            eprintln!("fno mux: agent daemon answering again; rows are served");
+                            crate::mux_log!(info; "fno mux: agent daemon answering again; rows are served");
                         }
                         answer
                     }
                     Err(error) => {
                         if !fallback_logged {
                             fallback_logged = true;
-                            eprintln!(
+                            crate::mux_log!(warn;
                                 "fno mux: no agent daemon answering at {} ({error}); reading the registry file directly (degraded fallback, retried every tick)",
                                 agents_view::supervisor_sock_path().display()
                             );
@@ -309,12 +309,12 @@ pub(super) async fn serve(
                                 .await
                                 {
                                     Ok(Ok(_)) => {
-                                        eprintln!("fno mux: started the agent daemon")
+                                        crate::mux_log!(info; "fno mux: started the agent daemon")
                                     }
                                     Ok(Err(e)) => {
-                                        eprintln!("fno mux: agent daemon start failed: {e}")
+                                        crate::mux_log!(error; "fno mux: agent daemon start failed: {e}")
                                     }
-                                    Err(_) => eprintln!(
+                                    Err(_) => crate::mux_log!(error;
                                         "fno mux: agent daemon start failed: timed out after 10s"
                                     ),
                                 }
@@ -524,14 +524,14 @@ pub(super) async fn serve(
                     });
                 }
                 Err(e) => {
-                    eprintln!("fno mux: accept failed: {e}");
+                    crate::mux_log!(error; "fno mux: accept failed: {e}");
                     tokio::time::sleep(Duration::from_millis(100)).await;
                 }
             }
         }
     });
 
-    eprintln!("fno mux: serving {}", socket.display());
+    crate::mux_log!(info; "fno mux: serving {}", socket.display());
 
     // Re-adopt surviving keeper panes BEFORE any attach can restore: this
     // runs synchronously before the loop drains its first CoreMsg, so an
@@ -667,7 +667,7 @@ pub(super) async fn serve(
                         && *core.client_count.borrow() == 0
                         && conns_alive.load(Ordering::Acquire) == 0
                 }) {
-                    eprintln!(
+                    crate::mux_log!(warn;
                         "fno mux: stale-build retire: on-disk binary changed ({} -> {}); \
                          no panes, clients, or connections; retiring so the next \
                          attach spawns the installed build",
@@ -798,7 +798,7 @@ pub(super) async fn serve(
             _ = owner_check_tick.tick(), if owner.is_some() => {
                 if owner.as_ref().is_some_and(|lease| !lease.alive()) {
                     let session = owner.as_ref().map(|lease| lease.session.as_str()).unwrap_or("unknown");
-                    eprintln!("fno mux: sandbox owner {session} is gone; shutting down");
+                    crate::mux_log!(info; "fno mux: sandbox owner {session} is gone; shutting down");
                     cause = "owner-gone";
                     break Flow::Shutdown;
                 }
@@ -818,7 +818,7 @@ pub(super) async fn serve(
                 if *idle_count_rx.borrow() == 0
                     && conns_alive.load(std::sync::atomic::Ordering::Acquire) == 0
                 {
-                    eprintln!("fno mux: idle-exit: no client for grace window");
+                    crate::mux_log!(info; "fno mux: idle-exit: no client for grace window");
                     cause = "idle-exit";
                     break Flow::Shutdown;
                 }
@@ -834,7 +834,7 @@ pub(super) async fn serve(
         ever_attached |= !core.clients.is_empty();
     };
     if flow == Flow::Shutdown {
-        eprintln!(
+        crate::mux_log!(info;
             "fno mux: shutting down ({cause}, {} panes)",
             core.panes.len()
         );
