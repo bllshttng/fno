@@ -1084,13 +1084,21 @@ fn head_leg(
                 .is_some_and(|prefix| prefix == BUDGET_PREFIX)
                 && disposition.get(BUDGET_PREFIX.len()..) != Some(today.as_str())
     };
-    let Some(pr) = prs
+    // One launch loop per tick: a head the baseline cannot cover must not
+    // hold the lane. Each due head is tried in order; a launch ends the
+    // pass, and a head that skips or posts terminal lets the next one go.
+    let due_heads: Vec<&Pr> = prs
         .iter()
-        .find(|pr| state.heads.get(&pr.sha).is_some_and(|h| due(h)))
-    else {
-        return "no head queued".into();
-    };
-    launch_head(p, d, state, slug, pr, &baseline, daily_usd, &today)
+        .filter(|pr| state.heads.get(&pr.sha).is_some_and(|h| due(h)))
+        .collect();
+    let mut note = "no head queued".to_string();
+    for pr in due_heads {
+        note = launch_head(p, d, state, slug, pr, &baseline, daily_usd, &today);
+        if state.head_run.is_some() {
+            return note;
+        }
+    }
+    note
 }
 
 fn wrote_rows(p: &Paths, cohort: &str) -> bool {
@@ -1421,6 +1429,7 @@ mod tests {
     use std::io::Write as _;
 
     const SHA: &str = "abcdef1234567890";
+    const SHA2: &str = "1234567890abcdef";
 
     fn ok(stdout: &str) -> Option<Run> {
         Some(Run {
@@ -1439,6 +1448,7 @@ mod tests {
         adds: RefCell<Vec<String>>,
         real_git: bool,
         files: String,
+        files_b: String,
     }
 
     impl World {
@@ -1468,6 +1478,7 @@ mod tests {
                 adds: RefCell::default(),
                 real_git: false,
                 files: files.into(),
+                files_b: String::new(),
             }
         }
 
@@ -1597,8 +1608,13 @@ mod tests {
                     // at a time; the fixture keeps the --jq line shape and
                     // the arm wraps it into the rows the read parses.
                     ["gh", "api", e] if e.contains("/files?") => {
-                        let rows: Vec<Value> = self
-                            .files
+                        let n = e
+                            .split("/pulls/")
+                            .nth(1)
+                            .and_then(|r| r.split('/').next())
+                            .unwrap_or("7");
+                        let text = if n == "8" { &self.files_b } else { &self.files };
+                        let rows: Vec<Value> = text
                             .lines()
                             .filter(|l| !l.is_empty())
                             .map(|f| serde_json::json!({"filename": f}))
@@ -1622,9 +1638,13 @@ mod tests {
                         } else {
                             SHA.to_string()
                         };
-                        ok(&json!([{"number": 7,
-                            "head": {"sha": head, "repo": {"full_name": "o/r"}}}])
-                        .to_string())
+                        let mut prs = vec![json!({"number": 7,
+                            "head": {"sha": head, "repo": {"full_name": "o/r"}}})];
+                        if !self.files_b.is_empty() {
+                            prs.push(json!({"number": 8,
+                                "head": {"sha": SHA2, "repo": {"full_name": "o/r"}}}));
+                        }
+                        ok(&Value::Array(prs).to_string())
                     }
                     _ => ok("mainsha\n"),
                 }
@@ -2269,6 +2289,30 @@ mod tests {
         w.tick(true, Utc::now());
         assert_eq!(w.spawns.borrow().len(), 1, "launched once the slot frees");
         assert_eq!(w.adds.borrow().len(), 1, "the slot was seated");
+    }
+
+    #[test]
+    fn a_head_the_baseline_cannot_cover_does_not_hold_the_lane() {
+        let mut w = World::new("skills/s\ncrates/x/a.rs\n");
+        std::fs::write(
+            w.dir.path().join("evals/bank/c1.yaml"),
+            "id: c1\ntier: regression\ngrade:\n  - kind: file-exists\n    path: x\ncovers: [\"crates/x/\"]\n",
+        )
+        .unwrap();
+        // Head 7 covers a task the baseline never graded; head 8 is gated and
+        // fully covered. The lane must reach head 8 in the same tick.
+        w.files_b = "skills/s\n".into();
+        w.with_baseline();
+        w.tick(true, Utc::now());
+        let spawns = w.spawns.borrow();
+        assert_eq!(spawns.len(), 1, "the covered head launched");
+        let argv = spawns[0].join(" ");
+        assert!(argv.contains(&format!("--ref {SHA2}")), "{argv}");
+        assert!(argv.contains("--task g1"), "{argv}");
+        drop(spawns);
+        let state = load_state(&dir_of(&w));
+        assert_eq!(state.heads.get(SHA).map(String::as_str), Some(QUEUED));
+        assert_eq!(state.heads.get(SHA2).map(String::as_str), Some(QUEUED));
     }
 
     fn dir_of(w: &World) -> PathBuf {
