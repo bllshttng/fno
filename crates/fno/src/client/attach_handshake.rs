@@ -49,13 +49,20 @@ pub(super) async fn read_preamble<R: tokio::io::AsyncRead + Unpin>(
     let mut busy_said = false;
     let mut stashed_modesync: Vec<u8> = Vec::new();
     loop {
-        let msg = await_attach_reply(
+        let reply = await_attach_reply(
             read_msg::<_, ServerMsg>(&mut *sock_r),
             ATTACH_BUSY_NOTICE,
             &mut busy_said,
             || eprintln!("fno: server is busy, still waiting (Ctrl-C to stop; {log_hint})"),
-        )
-        .await;
+        );
+        tokio::pin!(reply);
+        let msg = tokio::select! {
+            msg = &mut reply => msg,
+            _ = super::health::wait(view.health.deadline()) => {
+                view.health.record();
+                reply.await
+            }
+        };
         match msg {
             Ok(ServerMsg::Layout {
                 squads,
@@ -99,6 +106,7 @@ pub(super) async fn read_preamble<R: tokio::io::AsyncRead + Unpin>(
                         frame.cells.len()
                     ));
                 }
+                view.health.frame(std::time::Instant::now());
                 view.frames.insert(pane_id, frame);
             }
             // Info answers a pre-Attach Query; the v4 control-command replies
