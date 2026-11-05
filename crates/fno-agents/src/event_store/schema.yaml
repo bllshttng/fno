@@ -2337,6 +2337,25 @@ event_types:
           type: string
           description: "Exit reason (e.g. 'sigterm', 'idle', 'error')."
 
+  - name: daemon_died_unexpectedly
+    description: "A replacement daemon found its predecessor gone with no daemon_exited, so the arms it carried stopped ticking until this start."
+    sources: [daemon]
+    data:
+      required: [old_pid]
+      properties:
+        old_pid:
+          type: integer
+          description: "Pid the supervisor lockfile named before this daemon took it."
+        new_pid:
+          type: integer
+          description: "Pid of the daemon reporting the death."
+        quiet_secs:
+          type: integer
+          description: "Seconds between the last write to events.jsonl and this start; the span the arms ticked nothing."
+        exit_code_recovered:
+          type: boolean
+          description: "Always false today: the daemon is detached, so no parent survives to read the exit status."
+
   - name: daemon_idle_pending_exit
     description: "Daemon has no live agents and is counting down to idle exit."
     sources: [daemon]

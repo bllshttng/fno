@@ -1080,6 +1080,10 @@ pub async fn bind_supervisor_socket(
         return Err(DaemonError::AlreadyRunning(home.supervisor_sock()));
     }
 
+    // The lock is ours, so the previous holder named in the file is gone or
+    // never was; read it before the content below overwrites it.
+    crate::daemon_predecessor::capture(home, pid_is_ours);
+
     // Record the holder in the lockfile CONTENT: pid plus start time,
     // so `restart --force` has a SIGKILL target that survives "which daemon
     // owns this". The start time is written alongside because a bare pid is a
@@ -1377,6 +1381,20 @@ pub async fn run(home: AgentsHome, opts: DaemonOptions) -> Result<(), DaemonErro
         let _ = emitter.emit("daemon_exe_fingerprint_unavailable", &json!({}));
     }
     let pid_start_time = process_start_time(std::process::id());
+    // stderr is append-only across every daemon start; a dated line per start
+    // splits it into one segment per pid so a death can be placed in time.
+    eprintln!(
+        "fno-agents-daemon: started pid={} at {}",
+        std::process::id(),
+        chrono::Utc::now().to_rfc3339()
+    );
+    if let Some(death) = crate::daemon_predecessor::unexpected_death(&home, std::process::id()) {
+        eprintln!(
+            "fno-agents-daemon: predecessor pid={} died without daemon_exited; log quiet for {}s; exit code unrecoverable",
+            death["old_pid"], death["quiet_secs"]
+        );
+        let _ = emitter.emit("daemon_died_unexpectedly", &death);
+    }
     let _ = emitter.emit(
         "daemon_started",
         &json!({
