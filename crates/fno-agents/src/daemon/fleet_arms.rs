@@ -102,6 +102,10 @@ pub(super) struct FleetArms {
     // pass reads one mux listing plus one grid per joined pane, so an extra
     // run is cheap; the gate exists so a slow scrape never stacks.
     trust_sweep_in_flight: Arc<std::sync::atomic::AtomicBool>,
+    // Evals-gate settle: same one-in-flight discipline. The pass costs one
+    // state read when the gate is idle, so an extra run is cheap; the gate
+    // exists so a slow compare-and-post never stacks.
+    evals_settle_in_flight: Arc<std::sync::atomic::AtomicBool>,
     // Legacy shell-writer rendezvous sweep: same one-in-flight discipline.
     // The pass is a few read_dir walks over the state root and the spaces,
     // so an extra run is cheap; the gate exists so a machine carrying the
@@ -186,6 +190,7 @@ impl FleetArms {
             park_sweep_in_flight: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             sandbox_ingest_in_flight: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             trust_sweep_in_flight: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            evals_settle_in_flight: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             shell_writers_sweep_in_flight: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
@@ -539,6 +544,36 @@ impl FleetArms {
                         .output()
                         .map(|o| o.status.success())
                         .unwrap_or(false)
+                });
+            });
+        }
+        // Evals-gate settle: grades a finished gate run within a minute of
+        // its exit, on its own minute clock - never inside a pr-watch tick,
+        // whose budget a fleet-loaded sweep saturates (law d-bad5a42f: the
+        // settle is off-loop background work that never blocks foreground).
+        // One-in-flight like its siblings; the pass is one state read when
+        // the gate idles.
+        if !self
+            .evals_settle_in_flight
+            .swap(true, std::sync::atomic::Ordering::SeqCst)
+        {
+            let flag = Arc::clone(&self.evals_settle_in_flight);
+            let home = ctx.home.clone();
+            let emitter = EventEmitter::new(ctx.home.events_jsonl(), "daemon");
+            tokio::task::spawn_blocking(move || {
+                let _gate = SweepGate(flag);
+                sweeps::evals_settle_sweep(&home, &emitter, now_epoch_secs(), &|| {
+                    let history = crate::evals::history_path();
+                    match crate::evals_arm::any_bank_repo() {
+                        Some(repo) => {
+                            let fno_bin = crate::scrape::fno_bin().to_string_lossy().into_owned();
+                            crate::evals_gate::daemon_settle(&history, &fno_bin, &repo)
+                        }
+                        // No bank anywhere: nothing to settle, ever. Reads
+                        // idle, so the sweep stays silent instead of
+                        // journaling a waiting minute every 60s.
+                        None => "idle".to_string(),
+                    }
                 });
             });
         }
