@@ -98,6 +98,17 @@ fn xml_escape(value: &str) -> String {
         .replace('\'', "&apos;")
 }
 
+/// The binary the plist execs when no `--fno-binary` names one: this
+/// fno-agents itself. It answers `do pr watch tick` natively (the `fno` front
+/// door only forwards that argv here), so the agent needs neither `fno-py`
+/// nor a porcelain lookup.
+pub(crate) fn default_tick_binary() -> String {
+    std::env::current_exe().map_or_else(
+        |_| "fno-agents".to_string(),
+        |exe| exe.display().to_string(),
+    )
+}
+
 /// The fixed PATH an agent runs with: the fno binary's own dir when it carries
 /// one, then the cargo bin dir, then the standard install roots. The caller's
 /// env never leaks in - a launchd PATH without the cargo bin failed every tick
@@ -442,7 +453,7 @@ pub fn run(args: &[String]) -> i32 {
     let mut no_activate = false;
     let mut ensure = false;
     let mut interval: i64 = 0;
-    let mut fno_binary = String::from("fno-py");
+    let mut fno_binary = default_tick_binary();
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
         let mut take_value = |flag: &str| match iter.next() {

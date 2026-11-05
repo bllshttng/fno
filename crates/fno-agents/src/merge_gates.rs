@@ -724,15 +724,16 @@ pub(crate) fn visual_approval_blocker<P: Probes>(
             .as_deref()
             .is_some_and(|node| role_chat_clears_pr(probes, cwd, pr, head, node))
         || law_chat_clears_pr(probes, cwd, pr, head)
-        || approval_carries(
-            probes,
-            cwd,
-            &root,
-            pr,
-            head,
-            node_id.as_deref(),
-            &paint_paths,
-        )
+        || (!open_look_names_head(&root, pr, head)
+            && approval_carries(
+                probes,
+                cwd,
+                &root,
+                pr,
+                head,
+                node_id.as_deref(),
+                &paint_paths,
+            ))
     {
         return None;
     }
@@ -849,8 +850,9 @@ const CARRY_WALK: usize = 30;
 /// head, and the approval holds. The newest earlier commit of this PR that
 /// the user approved is the reference, kept on the record for audit. The
 /// hold returns when the user declined a later commit, or when the head
-/// paints a file the approved patch never showed. Every unreadable read
-/// holds.
+/// paints a file the approved patch never showed, or while an open question
+/// page asks about this head (the caller checks that first). Every unreadable
+/// read holds.
 fn approval_carries<P: Probes>(
     probes: &P,
     cwd: &Path,
@@ -1204,6 +1206,25 @@ fn approving_pages(root: &Path, pr: u64) -> Vec<(String, String)> {
             .then_some((front.question_id, text))
         })
         .collect()
+}
+
+/// True when an OPEN question page names the PR at this exact head: the user
+/// has been asked to look at this commit and has not answered. A carried
+/// approval of an earlier commit must not clear it.
+fn open_look_names_head(root: &Path, pr: u64, head: &str) -> bool {
+    let pages = crate::lead_answers::read_question_pages(&crate::escalation::questions_dir(root))
+        .unwrap_or_default();
+    open_page_names_head(pages.iter().map(|(_stem, text)| text.as_str()), pr, head)
+}
+
+fn open_page_names_head<'a>(pages: impl Iterator<Item = &'a str>, pr: u64, head: &str) -> bool {
+    let mut pages = pages;
+    !head.is_empty()
+        && pages.any(|text| {
+            crate::attention_file::parse_page(text).is_some_and(|(front, _)| front.status == "open")
+                && page_names_pr(text, pr)
+                && text_names_head(text, head)
+        })
 }
 
 /// Every ANSWERED question page that names the PR and does not pick the
@@ -1786,6 +1807,24 @@ mod tests {
         ));
         assert!(board_decline_text(&board("Approve"), 9).is_none());
         assert!(board_decline_text(&board("Hold for changes"), 8).is_none());
+    }
+
+    #[test]
+    fn an_open_look_page_for_the_head_stops_the_carry() {
+        let page = |status: &str, text: &str| {
+            format!("---\nquestion_id: q-1\nstatus: {status}\n---\n{text}\n")
+        };
+        let head = "c6e25abe8bfe407ca8a10288046b559cffc2e8c2";
+        let open = page("open", "visual approval PR 4487 at c6e25abe");
+        let answered = page("answered", "visual approval PR 4487 at c6e25abe");
+        let other_head = page("open", "visual approval PR 4487 at 8e974218");
+        let other_pr = page("open", "visual approval PR 4488 at c6e25abe");
+        let names =
+            |pages: &[&String]| open_page_names_head(pages.iter().map(|p| p.as_str()), 4487, head);
+        assert!(names(&[&open]));
+        assert!(!names(&[&answered]));
+        assert!(!names(&[&other_head, &other_pr]));
+        assert!(!names(&[]));
     }
 
     #[test]

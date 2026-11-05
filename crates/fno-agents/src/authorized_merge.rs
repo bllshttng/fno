@@ -995,46 +995,49 @@ fn decide_observed<P: Probes>(
                 })
             }
         }
-        // A red evals gate holds the merge while CI may be green: the gate is
-        // its own fact now, so it owns its hold. Held, never Failed: the
-        // cause and clearing command are the daemon's words, and a
-        // `gate-retry` clears without a code push.
-        if let Some(description) = checks.evals_gate_red() {
-            return Err(Outcome::Held {
-                reason: format!(
-                    "evals gate red at this head: {description} \
-                     CI is judged separately; its runs were never the gate's."
-                ),
-            });
-        }
-        // Pending holds too: docs/evals.md "The merge door" has promised it
-        // since the gate shipped, and a pending gate merged through this hole. Held,
-        // never Failed: the run may still settle green.
-        if checks.evals_gate_pending() {
-            return Err(Outcome::Held {
-                reason: format!(
-                    "evals gate pending at this head: the gate goldens are queued or running. \
-                     The merge waits for the status to settle; CI is judged separately. \
-                     A stuck pending clears with: fno-agents evals gate-retry {}",
-                    short(&facts.head_sha)
-                ),
-            });
-        }
-        // A gated head with no gate status holds: the daemon either never
-        // reached this head (the tick never ran it) or its status was lost. The
-        // expectation probe is fail-open: an unreadable file read never
-        // manufactures the hold. First install passes because the probe
-        // reads no baseline there.
-        if checks.evals_gate_row.is_none() && probes.evals_gate_expected(cwd, &facts) {
-            return Err(Outcome::Held {
-                reason: format!(
-                    "no evals/gate status at this gated head: the diff touches a gated path \
-                     or a covered prefix, and the daemon seat has a baseline, but no status \
-                     was posted. Clear: fno-agents evals gate-retry {}",
-                    short(&facts.head_sha)
-                ),
-            });
-        }
+    }
+    // The gate holds stand OUTSIDE `require_checks`: arming runs with that
+    // flag hard-coded false, and GitHub enforces only the ruleset's required
+    // checks (main's ruleset names one, stacked-base-guard), so an armed PR
+    // would merge past a gate the queue never waits on - one merged 87
+    // seconds after its gate went red through exactly this hole. Held, never
+    // Failed: the cause and clearing command are the daemon's words, and a
+    // `gate-retry` clears without a code push.
+    if let Some(description) = checks.evals_gate_red() {
+        return Err(Outcome::Held {
+            reason: format!(
+                "evals gate red at this head: {description} \
+                 CI is judged separately; its runs were never the gate's."
+            ),
+        });
+    }
+    // Pending holds too: docs/evals.md "The merge door" has promised it
+    // since the gate shipped, and a pending gate merged through this hole. Held,
+    // never Failed: the run may still settle green.
+    if checks.evals_gate_pending() {
+        return Err(Outcome::Held {
+            reason: format!(
+                "evals gate pending at this head: the gate goldens are queued or running. \
+                 The merge waits for the status to settle; CI is judged separately. \
+                 A stuck pending clears with: fno-agents evals gate-retry {}",
+                short(&facts.head_sha)
+            ),
+        });
+    }
+    // A gated head with no gate status holds: the daemon either never
+    // reached this head (the tick never ran it) or its status was lost. The
+    // expectation probe is fail-open: an unreadable file read never
+    // manufactures the hold. First install passes because the probe
+    // reads no baseline there.
+    if checks.evals_gate_row.is_none() && probes.evals_gate_expected(cwd, &facts) {
+        return Err(Outcome::Held {
+            reason: format!(
+                "no evals/gate status at this gated head: the diff touches a gated path \
+                 or a covered prefix, and the daemon seat has a baseline, but no status \
+                 was posted. Clear: fno-agents evals gate-retry {}",
+                short(&facts.head_sha)
+            ),
+        });
     }
 
     let strategy = probes.strategy(cwd);
@@ -1320,42 +1323,39 @@ pub fn preview_walk<P: Probes>(probes: &P, request: &Request, facts: &PrFacts) -
     }
 
     // (9b) the evals gate, beside the verdict: its own fact owns its
-    // blocker, the way the effect path holds on it after the verdict match.
-    // Pending and missing-but-expected hold here too, same codes as the
-    // effect path, so `merge_decision` can never read authorized beside a
-    // gate the doc holds merges on.
-    if request.require_checks {
-        if let Some(description) = checks.evals_gate_red() {
-            blockers.push(Blocker::held(
-                "evals_gate_red",
-                format!(
-                    "evals gate red at this head: {description} \
-                     CI is judged separately; its runs were never the gate's."
-                ),
-            ));
-        }
-        if checks.evals_gate_pending() {
-            blockers.push(Blocker::held(
-                "evals_gate_pending",
-                format!(
-                    "evals gate pending at this head: the gate goldens are queued or running. \
-                     The merge waits for the status to settle; CI is judged separately. \
-                     A stuck pending clears with: fno-agents evals gate-retry {}",
-                    short(&facts.head_sha)
-                ),
-            ));
-        }
-        if checks.evals_gate_row.is_none() && probes.evals_gate_expected(cwd, facts) {
-            blockers.push(Blocker::held(
-                "evals_gate_missing",
-                format!(
-                    "no evals/gate status at this gated head: the diff touches a gated path \
-                     or a covered prefix, and the daemon seat has a baseline, but no status \
-                     was posted. Clear: fno-agents evals gate-retry {}",
-                    short(&facts.head_sha)
-                ),
-            ));
-        }
+    // blocker, so it stands outside `require_checks` like the effect
+    // path's copy - an armed PR (require_checks false) must preview the
+    // same gate blockers its arm refuses on.
+    if let Some(description) = checks.evals_gate_red() {
+        blockers.push(Blocker::held(
+            "evals_gate_red",
+            format!(
+                "evals gate red at this head: {description} \
+                 CI is judged separately; its runs were never the gate's."
+            ),
+        ));
+    }
+    if checks.evals_gate_pending() {
+        blockers.push(Blocker::held(
+            "evals_gate_pending",
+            format!(
+                "evals gate pending at this head: the gate goldens are queued or running. \
+                 The merge waits for the status to settle; CI is judged separately. \
+                 A stuck pending clears with: fno-agents evals gate-retry {}",
+                short(&facts.head_sha)
+            ),
+        ));
+    }
+    if checks.evals_gate_row.is_none() && probes.evals_gate_expected(cwd, facts) {
+        blockers.push(Blocker::held(
+            "evals_gate_missing",
+            format!(
+                "no evals/gate status at this gated head: the diff touches a gated path \
+                 or a covered prefix, and the daemon seat has a baseline, but no status \
+                 was posted. Clear: fno-agents evals gate-retry {}",
+                short(&facts.head_sha)
+            ),
+        ));
     }
 
     // (10) the slot gate, read-only: same precondition (fresh-CI posture,

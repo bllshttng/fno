@@ -564,6 +564,8 @@ pub fn maybe_run_ask(home: &AgentsHome, params: &Value, name: &str) -> Option<i3
         }
     };
     let pid = child.id();
+    // The host runs unwaited; the daemon drain reaps it by pid on exit.
+    crate::orphan_reap::release_child(pid);
     let prior = (entry.status, entry.pid, entry.pid_start_time);
     let _ = update_registry(&home.registry_json(), |reg| {
         let Some(e) = reg.find_mut(&row_name) else {

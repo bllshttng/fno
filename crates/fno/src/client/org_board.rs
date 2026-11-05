@@ -89,6 +89,8 @@ pub(crate) struct OrgBoard {
     inflight: bool,
     last_read: Option<Instant>,
     pub(crate) keys_help: bool,
+    /// The `?` footer grid: this view's keys in place of the one-row bar.
+    pub(crate) keys_footer: bool,
     esc: Vec<u8>,
     /// The action a key queued; the loop's kick runs it off the UI loop.
     queued: Option<Queued>,
@@ -143,6 +145,7 @@ impl OrgBoard {
             inflight: false,
             last_read: None,
             keys_help: false,
+            keys_footer: false,
             esc: Vec::new(),
             queued: None,
             acting: None,
@@ -537,6 +540,20 @@ impl OrgBoard {
         (keys, out)
     }
 
+    /// The grid rows the footer shows while `?` has it open, else none.
+    fn footer_grid(&self, width: usize) -> Vec<TLine> {
+        if self.keys_footer {
+            super::key_grid::grid_rows(super::key_grid::KeyView::Org, width)
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Rows the footer takes: the one-row bar, or the grid.
+    fn footer_h(&self, width: usize) -> usize {
+        self.footer_grid(width).len().max(1)
+    }
+
     /// The key a tap at (row, col) of the board's rect selects.
     fn tap(
         &self,
@@ -547,7 +564,7 @@ impl OrgBoard {
         col: usize,
         left: usize,
     ) -> Option<String> {
-        let body_h = height.saturating_sub(1);
+        let body_h = height.saturating_sub(self.footer_h(width));
         if row >= body_h {
             return None;
         }
@@ -699,7 +716,8 @@ pub(crate) fn paint(
             cells[r * cols + c] = Cell::default();
         }
     }
-    let body_h = height - 1;
+    let grid = b.footer_grid(width);
+    let body_h = height.saturating_sub(grid.len().max(1)).max(1);
     let now = now();
     let left = explorer_w(width, &view.edge_sizes);
     let frame = b.frame_with(view.questions_fold.as_ref(), width, body_h, now, left);
@@ -746,6 +764,21 @@ pub(crate) fn paint(
         );
     }
     let focused = matches!(view.input_owner(), super::region_focus::RegionOwner::Board);
+    if !grid.is_empty() {
+        let grid_h = grid.len().min(height.saturating_sub(body_h));
+        super::backlog_style::paint_panel(
+            cells,
+            rows,
+            cols,
+            body_h,
+            width,
+            grid_h,
+            &grid,
+            None,
+            &view.theme,
+        );
+        return;
+    }
     super::backlog_style::paint_panel(
         cells,
         rows,

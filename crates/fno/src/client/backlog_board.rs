@@ -122,6 +122,9 @@ pub(crate) struct BoardView {
     pub(crate) colpick: Option<ColPick>,
     /// The `?` keys overlay, when open.
     pub(crate) keys_overlay: bool,
+    /// The `?` footer grid: the focused view's keys, one key short of the
+    /// full overlay. `?` toggles it; `*` swaps it for the overlay.
+    pub(crate) keys_footer: bool,
     /// Pending escape bytes in board-key mode (split-arrow safety).
     board_esc: Vec<u8>,
     /// The drill-down overlay, when open (wave 4). `Some` = the detail
@@ -296,6 +299,7 @@ impl BoardView {
             layout: crate::view_store::load_board_layout(),
             colpick: None,
             keys_overlay: false,
+            keys_footer: false,
             board_esc: Vec::new(),
             detail: None,
             detail_esc: Vec::new(),

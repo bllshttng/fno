@@ -22,7 +22,7 @@ use serde_json::Value;
 const USAGE: &str =
     "usage: fno mux serve --snapshot --server <name> --out <path> [--squad <name>] \
 [--theme dark|light|macchiato] [--format html|svg|png] [--size <cols>x<rows> [--fit]] [--peer <cols>x<rows>] \
-[--font <family>] [--message <fmail-id>] [--edge backlog|messages-tree|messages-part|org|dock=<size>] \
+[--keys-footer] [--font <family>] [--message <fmail-id>] [--edge backlog|messages-tree|messages-part|org|dock=<size>] \
 [--view bell|bell-wide|bell-full|feed|row-menu|hover|cursor|tab-menu|sideline-menu|composer|split-menu|settings|keys|keys-tags|org-block|org-table|org-recent|org-overview|org-graph|org-health|org-seat|org-feed|org-system|org-remote|org-peek|org-spawn|org-keys|messages-tree|messages-chats|messages-thread|messages-system|messages-archive|backlog-list|backlog-kanban|review-diff|review-panel|review-panel-drag|navigator-pr|navigator-model|navigator-menu|feed-detail|question-detail|connections|connections-use|needs|dock|machines]";
 
 #[derive(Debug, PartialEq)]
@@ -153,6 +153,10 @@ pub enum ViewKind {
     ConnectionsAddLocal,
     /// The sweep-threads choice modal over a staged fleet's counts.
     Sweep,
+    /// The update modal on a wheel install a newer release can move.
+    UpdateWheel,
+    /// The update modal on a binary install with a newer release.
+    UpdateBinary,
     /// The needs-me overlay with its first row picked, after the same
     /// questions gather the bell shots run.
     Needs,
@@ -307,6 +311,8 @@ fn parse_view(v: &str) -> Option<ViewKind> {
         "feed-detail" => Some(ViewKind::FeedDetail),
         "question-detail" => Some(ViewKind::QuestionDetail),
         "sweep" => Some(ViewKind::Sweep),
+        "update-wheel" => Some(ViewKind::UpdateWheel),
+        "update-binary" => Some(ViewKind::UpdateBinary),
         "connections" => Some(ViewKind::Connections),
         "connections-use" => Some(ViewKind::ConnectionsUse),
         "connections-add" => Some(ViewKind::ConnectionsAdd),
@@ -349,6 +355,8 @@ pub struct SnapshotArgs {
     /// The client-local surface to open before composing, for shots of a
     /// bell panel or a menu no server frame ever carries.
     pub view: Option<ViewKind>,
+    /// Open the `^B ?` footer grid over the view, as the chord does.
+    pub keys_footer: bool,
     /// Splits held at a dragged size, as `name=size` pairs: the state a live
     /// drag leaves, so a shot can show a mid-drag frame.
     pub edges: Vec<(String, usize)>,
@@ -372,6 +380,7 @@ pub fn parse(tail: &[OsString]) -> Result<SnapshotArgs, String> {
     let mut font = None;
     let mut message = None;
     let mut view = None;
+    let mut keys_footer = false;
     let mut edges: Vec<(String, usize)> = Vec::new();
     let mut it = tail.iter();
     while let Some(a) = it.next() {
@@ -385,6 +394,7 @@ pub fn parse(tail: &[OsString]) -> Result<SnapshotArgs, String> {
         match a {
             "--snapshot" => {}
             "--fit" => fit = true,
+            "--keys-footer" => keys_footer = true,
             "--font" => {
                 let f = value()?;
                 if f.is_empty() || f.contains(['\'', '"', '<', '>', '&']) {
@@ -487,6 +497,7 @@ session text, run scripts/ops/mux-demo-snapshot.sh"
         font,
         message,
         view,
+        keys_footer,
         edges,
     })
 }
@@ -514,6 +525,7 @@ pub fn run(args: SnapshotArgs) -> i32 {
         chrome,
         args.message.as_deref(),
         args.view.as_ref(),
+        args.keys_footer,
         &args.edges,
     );
     match frame.and_then(|f| write(&f, &args)) {
@@ -744,6 +756,7 @@ fn live_frame(
     chrome: crate::theme::Theme,
     message: Option<&str>,
     kind: Option<&ViewKind>,
+    keys_footer: bool,
     edges: &[(String, usize)],
 ) -> Result<Frame, String> {
     let socket = proto::socket_path(server)?;
@@ -1165,6 +1178,45 @@ questions (scripts/ops/mux-demo-snapshot.sh seeds one)",
             ));
             view.aux_esc.clear();
         }
+        Some(kind @ (ViewKind::UpdateWheel | ViewKind::UpdateBinary)) => {
+            use super::release_check::{Channel, ReleaseNotesSection, ReleaseOutcome};
+            use super::update_menu::{UpdateOutcome, UpdateProbe, UpdateReadiness};
+            let (channel, installed) = match kind {
+                ViewKind::UpdateWheel => (Channel::Uv, "0.4.5"),
+                _ => (Channel::Binary, "0.4.6"),
+            };
+            let probe = UpdateProbe {
+                readiness: UpdateOutcome::Ok(UpdateReadiness {
+                    update_ready: false,
+                    installed_rev: None,
+                    source_rev: None,
+                    installed_version: Some(installed.into()),
+                    source_prs_ahead: None,
+                    changelog: vec![],
+                    release_notes: None,
+                    guidance: "no source checkout and no installed-rev marker; a release install refreshes with `fno update`".into(),
+                    degraded: None,
+                    running: vec![],
+                    running_stale: 0,
+                    source_pin: None,
+                    revisions: None,
+                }),
+                release: ReleaseOutcome::Newer {
+                    channel,
+                    installed: installed.into(),
+                    latest: "0.4.7".into(),
+                    notes: vec![ReleaseNotesSection {
+                        area: "update".into(),
+                        bullets: vec![
+                            "fno update moves a wheel install to ~/.fno/install/bin".into(),
+                            "release tarballs ship a .sha256".into(),
+                        ],
+                    }],
+                },
+            };
+            view.aux = Some(super::update_menu::build_update_modal(Some(&probe)));
+            view.aux_esc.clear();
+        }
         Some(ViewKind::Needs) => {
             let questions = runtime.block_on(crate::needs_overlay::questions_now());
             view.apply_questions_fold(questions);
@@ -1426,6 +1478,9 @@ pr_number (scripts/ops/mux-demo-snapshot.sh seeds one)",
             crate::client::decisions_view::open_rows(&mut view, rows);
         }
     }
+    if keys_footer {
+        super::key_grid::toggle(&mut view);
+    }
     crate::lattice::freeze_spin();
     Ok(view.compose())
 }
@@ -1624,6 +1679,8 @@ mod tests {
             ("feed-detail", ViewKind::FeedDetail),
             ("question-detail", ViewKind::QuestionDetail),
             ("sweep", ViewKind::Sweep),
+            ("update-wheel", ViewKind::UpdateWheel),
+            ("update-binary", ViewKind::UpdateBinary),
             ("connections", ViewKind::Connections),
             ("connections-use", ViewKind::ConnectionsUse),
             ("connections-add", ViewKind::ConnectionsAdd),

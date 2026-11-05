@@ -576,8 +576,8 @@ fn chord_rows() {
             .expect("route runs");
     });
     assert!(
-        v.keys_modal.is_some(),
-        "^B ? opened the global keybinds modal"
+        v.keys_modal.is_none() && v.backlog_board.as_ref().is_some_and(|b| b.keys_footer),
+        "^B ? opened the board's footer grid, not the modal"
     );
     assert!(
         v.backlog_board

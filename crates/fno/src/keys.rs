@@ -1529,7 +1529,13 @@ pub(crate) fn default_bindings() -> Vec<KeyBinding> {
             Panes,
             "hold to show pane ids",
         ),
-        b(b'?', "show-keys", ShowKeys, Global, "this key table"),
+        b(
+            b'?',
+            "show-keys",
+            ShowKeys,
+            Global,
+            "keys of this view (* for all)",
+        ),
         b(
             b'g',
             "grab-work",

@@ -298,6 +298,31 @@ pub(crate) fn pr_node_ids(home: &AgentsHome, pr: i64, slug: Option<&str>) -> Vec
     scan_pr_nodes(&rows, pr, slug, &aliases)
 }
 
+/// A request minted before its node ids were readable (a renamed repo, an
+/// unbound PR) carries `node_ids: []` forever, and the doneness read holds an
+/// empty list. Re-ask the graph at reap time, so a later alias or binding fix
+/// drains requests already in the journal. `lookup` takes the PR number and
+/// the repo's origin slug.
+fn with_recovered_nodes<'a>(
+    request: &'a MergeCleanupRequest,
+    root: &str,
+    lookup: impl Fn(i64, Option<&str>) -> Vec<String>,
+) -> std::borrow::Cow<'a, MergeCleanupRequest> {
+    if !request.node_ids.is_empty() {
+        return std::borrow::Cow::Borrowed(request);
+    }
+    let slug = crate::pr_list::origin_slug(std::path::Path::new(root), None).ok();
+    let mut ids = lookup(request.pr, slug.as_deref());
+    if ids.is_empty() {
+        return std::borrow::Cow::Borrowed(request);
+    }
+    ids.sort();
+    std::borrow::Cow::Owned(MergeCleanupRequest {
+        node_ids: ids,
+        ..request.clone()
+    })
+}
+
 /// Row names whose cwd IS the merged worktree or whose name targets one of
 /// the closed nodes (`target-<node>-*` through the shared name vocabulary).
 /// Best-effort: any failure reads as no candidates (the daemon's registry
@@ -574,6 +599,7 @@ fn run_request(
     seams: &RequestSeams,
     precomputed: Option<&HashMap<String, Vec<state::RegistryEntry>>>,
 ) -> (u64, bool) {
+    let request = &*with_recovered_nodes(request, root, |pr, slug| pr_node_ids(home, pr, slug));
     // 2. Doneness re-read: every named node must read done, with no recorded
     // merge_status that contradicts the merge. An ABSENT merge_status passes
     // (the gc sweep's rule: unrecorded is not a contradiction - both mint
@@ -1401,6 +1427,24 @@ mod tests {
         crate::event_store::sync(&home.events_jsonl()).unwrap();
         assert!(merge_cleanup_request_repos(&home).contains(&repo_dir.display().to_string()));
         std::fs::remove_dir_all(home.root().parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn empty_node_ids_recover_from_the_graph_at_reap_time() {
+        let mut request = settled_request("/repo/wt");
+        request.node_ids = Vec::new();
+        let seen = std::cell::RefCell::new(None);
+        let got = with_recovered_nodes(&request, "/nonexistent-root", |pr, slug| {
+            *seen.borrow_mut() = Some((pr, slug.map(str::to_string)));
+            vec!["x-b".to_string(), "x-a".to_string()]
+        });
+        assert_eq!(got.node_ids, ["x-a", "x-b"]);
+        assert_eq!(seen.into_inner(), Some((42, None)), "no origin: no slug");
+        let named = settled_request("/repo/wt");
+        let untouched = with_recovered_nodes(&named, "/r", |_, _| {
+            panic!("a request that names its nodes never asks the graph")
+        });
+        assert_eq!(untouched.node_ids, ["x-1"]);
     }
 
     #[test]
