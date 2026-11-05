@@ -411,8 +411,7 @@ impl BoardView {
             return;
         }
         let line = self.paint_stats.borrow_mut().take_line();
-        let path = crate::proto::mux_dir().join("client-warnings.log");
-        super::client_log_append(&path, &line);
+        crate::mux_log::client("info", &line);
     }
 }
 

@@ -80,11 +80,10 @@ fn refused_row(
     })
 }
 
-/// Best-effort, like the pane-close emit: a failed append prints one line
-/// and never blocks the run.
+/// Best-effort: record a failed append without painting over the client.
 fn emit(events: &Path, row: &serde_json::Value) {
     if append_agents_event(events, row).is_err() {
-        eprintln!("fno mux: composer_shell emit failed");
+        crate::mux_log::client("error", "fno mux: composer_shell emit failed");
     }
 }
 
