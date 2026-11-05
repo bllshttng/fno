@@ -161,10 +161,6 @@ pub(super) async fn mouse_pre_pass(
         // entirely. On a terminal that marks releases with Shift, every plain
         // click on a workspace, section or card row would become a no-op, and
         // the reaper would later open a menu nobody asked for.
-        if view.report.is_some() {
-            view.link_hover.clear();
-            continue;
-        }
         let ends_a_drag = matches!(rep.kind, MouseKind::Release(MouseButton::Left))
             && (view.pane_drag.is_some()
                 || view.seam_drag.is_some()
@@ -188,6 +184,10 @@ pub(super) async fn mouse_pre_pass(
             if let StdinFlow::Detach = super::esc_close::tap(view, scanner, sock_w).await? {
                 return Ok(StdinFlow::Detach);
             }
+            continue;
+        }
+        if view.report.is_some() {
+            view.link_hover.clear();
             continue;
         }
         // A pointer action - click/press/wheel/drag, anything but passive hover
