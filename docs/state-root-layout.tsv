@@ -112,6 +112,7 @@ watchdog-sweep.json	state/watchdog-sweep.json	overwrite	daemon
 # mux/ - the mux server owns these; it moves them at its own start.
 mux-view.json	mux/mux-view.json	overwrite	mux
 mux-view.json.lock	mux/mux-view.json.lock	lock	mux
+decisions-reviewed.json	mux/decisions-reviewed.json	overwrite	mux
 squads.json	mux/squads.json	overwrite	mux
 squads.json.lock	mux/squads.json.lock	lock	mux
 session-names.json	mux/session-names.json	overwrite	mux

@@ -287,6 +287,43 @@ fn python_str(v: &Value) -> String {
     }
 }
 
+/// The registered name of the session that recorded `row`, when its stamped
+/// `decided_by` is a session id the registry knows. A label such as
+/// `operator` or an unknown id has no name, and the reader shows it as is.
+fn decider_name(row: &Value) -> Option<String> {
+    use std::sync::OnceLock;
+    static REG: OnceLock<Option<crate::state::Registry>> = OnceLock::new();
+    let id = rows_str(row, "decided_by");
+    if id.is_empty() {
+        return None;
+    }
+    let reg = REG.get_or_init(|| {
+        let home = crate::paths::AgentsHome::from_env_opt()?;
+        crate::state::load_registry_with_counts(&home.registry_json())
+            .ok()
+            .map(|r| r.0)
+    });
+    // The stamp is the 8-character mail id: the head of the session uuid.
+    let held_by = |e: &crate::state::RegistryEntry| {
+        [
+            &e.session_id,
+            &e.claude_session_uuid,
+            &e.codex_session_id,
+            &e.gemini_session_id,
+        ]
+        .into_iter()
+        .flatten()
+        .any(|u| u == id || (id.len() >= 8 && u.starts_with(id)))
+            || (!e.short_id.is_empty() && e.short_id == id)
+    };
+    reg.as_ref()?
+        .entries
+        .iter()
+        .find(|e| held_by(e))
+        .map(|e| e.name.clone())
+        .filter(|n| !n.is_empty())
+}
+
 /// The repository-scoped PR subject parser (`_pr_expiry_ref`): a bare PR
 /// number never proves closure.
 fn pr_expiry_ref(subject: Option<&str>) -> Option<Value> {
@@ -742,6 +779,10 @@ fn list_core_over(
             "live".to_string()
         };
         row["lifecycle"] = json!(lifecycle);
+        super::decision_subject::split_into(&mut row);
+        if let Some(name) = decider_name(&row) {
+            row["decided_by_name"] = json!(name);
+        }
         if let Some(lane) = lane {
             if lane != lane_derived {
                 continue;

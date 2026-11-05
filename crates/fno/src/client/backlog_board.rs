@@ -1237,7 +1237,7 @@ pub(crate) fn cycle_sideline_view(view: &mut View) {
             view.backlog_board = None;
             set_sideline_view(view, crate::view_store::SidelineView::Agents);
         }
-        crate::view_store::SidelineView::Agents => {
+        crate::view_store::SidelineView::Agents | crate::view_store::SidelineView::Decisions => {
             // R15: Messages sits right after Agents in the V cycle.
             super::messages_view::open(view);
         }
@@ -1288,6 +1288,9 @@ fn backlog_board_open_fresh(view: &mut View) {
 /// Point the sideline at `v`, persisting the choice.
 pub(crate) fn set_sideline_view(view: &mut View, v: crate::view_store::SidelineView) {
     view.sideline_view = v;
+    if v != crate::view_store::SidelineView::Decisions {
+        view.decisions_board = None;
+    }
     crate::view_store::save_sideline_view(v);
 }
 

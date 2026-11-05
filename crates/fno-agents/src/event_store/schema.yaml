@@ -4878,6 +4878,9 @@ event_types:
         subject:
           type: string
           description: "Optional. The node, file, or area the decision governs. The recovery key: `fno inbox decisions <subject>` and the graph projection read it."
+        subject_kind:
+          type: string
+          description: "Optional. What the subject names: node, pr, or topic. Stamped by the door beside subject. A row recorded before the stamp has none, and a reader reads the kind from the subject string."
         expiry_ref:
           type: object
           description: "Optional exact coordination closure reference. Node refs name node_id. PR refs name repository and number, with an optional URL."

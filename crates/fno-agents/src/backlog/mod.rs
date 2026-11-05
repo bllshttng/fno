@@ -31,6 +31,7 @@ pub mod comments;
 pub mod costs;
 pub mod create_cli;
 pub mod cutover;
+pub mod decision_subject;
 pub mod decisions;
 pub mod decisions_cli;
 pub mod decompose;

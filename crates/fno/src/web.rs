@@ -820,6 +820,7 @@ fn router(state: AppState) -> Router {
         .route("/team", get(team))
         .route("/hq", get(hq))
         .route("/hq/model.json", get(hq_model))
+        .route("/hq/decisions.json", get(hq_decisions))
         .route("/hq/answer/{id}", post(hq_answer))
         .route("/command", get(command_redirect))
         .route("/command/model.json", get(command_model_redirect))
@@ -1237,6 +1238,31 @@ async fn hq_model(Query(q): Query<WsQuery>, State(st): State<AppState>) -> Respo
     // A read-only bridge shows the question drawer with no answer controls.
     model["writable"] = serde_json::json!(st.writable);
     json_response(&model)
+}
+
+/// `GET /hq/decisions.json`: every recorded decision plus the ids the
+/// user marked reviewed. Read-only: a retract or an overrule needs a real
+/// tty, so the page writes nothing.
+async fn hq_decisions(Query(q): Query<WsQuery>, State(st): State<AppState>) -> Response {
+    if !token_ok(q.t.as_deref(), &st.token) {
+        return unauthorized();
+    }
+    let read = tokio::task::spawn_blocking(|| {
+        crate::decisions_overlay::load().map(|rows| {
+            let reviewed =
+                crate::decisions_overlay::load_reviewed(&crate::decisions_table::store_path());
+            serde_json::json!({"decisions": rows, "reviewed": reviewed})
+        })
+    })
+    .await;
+    match read {
+        Ok(Ok(body)) => json_response(&body),
+        Ok(Err(e)) => plain_status(StatusCode::BAD_GATEWAY, &e),
+        Err(_) => plain_status(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "the decisions read failed",
+        ),
+    }
 }
 
 async fn refresh_hq(st: AppState) {
@@ -3486,6 +3512,7 @@ console.log("theme store: 9 cases ok");
         assert!(reply.contains("cache-control: no-store"), "{reply}");
         assert!(reply.contains("\"host\":\"bb16\""), "{reply}");
         assert!(reply.contains("\"questions_error\":\"x\""), "{reply}");
+        assert!(ask("/hq/decisions.json").await.starts_with("HTTP/1.1 401"));
         assert!(ask("/hq").await.starts_with("HTTP/1.1 401"));
         let reply = ask("/hq?t=right").await;
         assert!(reply.contains("data-current=\"hq\""), "{reply}");

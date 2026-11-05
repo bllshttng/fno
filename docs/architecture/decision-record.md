@@ -241,6 +241,12 @@ Known limits: a forked review skill may not see main-thread hook context. Verifi
 
 `--output PATH` writes the complete requested report, ignoring the display limit. `.json`, `.md`, and `.markdown` infer the format. `--format json|markdown` is explicit, and conflicting or unknown formats are refused. The command prints a positive receipt with the exact path and byte count only after the file is written.
 
+## The Decisions table
+
+`fno inbox decisions --table` shows every recorded decision in one screen. Press prefix+m in the mux to open it full screen. The retract and overrule keys open it in a pane, because the law door needs your terminal. The notifications panel also has a Decisions tab, and each row links to its question. Each row carries state, lane, date, who decided, a quote flag, subject, and text. The keys `l`, `s`, and `a` cycle the lane, state, and author filters. `u` shows the audit queue: unattributed rows and rows with no authority, minus the rows marked reviewed.
+
+`r` retracts the selected row. `o` overrules it with new text. `v` marks it reviewed in `mux/decisions-reviewed.json`. The table runs in a pane so the law door sees a real terminal, which is the operator proof it reads. Law rows go through `fno inbox law retract` and `law set --supersedes`. Other rows go through `fno backlog decide-retract` and `fno inbox decide --supersedes`, both with `--authority operator`.
+
 The upstream provenance seam owns mail-origin classification, stamped carriage, and the law chokepoint. The law command owns law recording and coord-to-law promotion. It owns no human-origin proof. No harness exposes a discriminator. So recording is one user-invoked step. The row says `chat_attested` rather than claiming an origin it cannot show. See `skills/law/LIMITATIONS.md`. This lifecycle feature consumes those seams and owns expiry, retraction, review, export, and law-only reads. It does not add another origin classifier, law command, promotion path, or decision store.
 
 ## The operator conversation queue

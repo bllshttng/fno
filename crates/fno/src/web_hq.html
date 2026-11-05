@@ -38,7 +38,7 @@
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 @media (max-width:640px){.stage{height:62vh}.hint{display:none}.bar{position:static}}@media (max-width:480px){.host{grid-template-columns:88px minmax(0,1fr)}.host canvas{width:88px;height:88px}}
 .tablewrap{border:1px solid var(--surface0);background:var(--mantle)}.ttools{display:flex;flex-wrap:wrap;gap:10px;padding:8px 12px;border-bottom:1px solid var(--surface0);align-items:center}.ttools input{flex:1 1 220px;min-width:0;background:var(--base);border:1px solid var(--surface1);color:var(--text);padding:4px 8px;min-height:26px;font:12px var(--mono)}.ttools input:focus{border-color:var(--text);outline:none}.ttools span{font-size:11.5px;color:var(--overlay1)}
-.tscroll{overflow-x:auto}table{border-collapse:collapse;width:100%;min-width:1060px}th,td{text-align:left;padding:6px 12px;border-bottom:1px solid var(--surface0);vertical-align:top;font-size:12px}th{font-size:11px;color:var(--overlay1);font-weight:700;cursor:pointer;user-select:none;white-space:nowrap;background:var(--mantle)}th:hover{color:var(--text)}th[aria-sort]{color:var(--text)}th[aria-sort]::after{content:" ↓"}th[aria-sort="ascending"]::after{content:" ↑"}
+#dec-table{table-layout:fixed;min-width:0}#dec-table td{overflow-wrap:anywhere}.tscroll{overflow-x:auto}table{border-collapse:collapse;width:100%;min-width:1060px}th,td{text-align:left;padding:6px 12px;border-bottom:1px solid var(--surface0);vertical-align:top;font-size:12px}th{font-size:11px;color:var(--overlay1);font-weight:700;cursor:pointer;user-select:none;white-space:nowrap;background:var(--mantle)}th:hover{color:var(--text)}th[aria-sort]{color:var(--text)}th[aria-sort]::after{content:" ↓"}th[aria-sort="ascending"]::after{content:" ↑"}
 tbody tr{cursor:pointer}tbody tr:hover,tbody tr:focus-visible{background:var(--base)}td .sub{color:var(--overlay1);font-size:11px;margin-top:2px;display:block;max-width:360px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}td.num{font-variant-numeric:tabular-nums;white-space:nowrap}
 .drawer{position:fixed;top:calc(var(--fno-nav-h,0px) + 8px);right:8px;bottom:8px;width:min(440px,calc(100vw - 16px));z-index:20;background:var(--mantle);border:1px solid var(--surface1);transform:translateX(calc(100% + 16px));visibility:hidden;transition:transform .2s ease-out,visibility .2s;display:flex;flex-direction:column;overflow:hidden}.drawer.on{transform:none;visibility:visible}
 .dhead{padding:12px 14px 10px;display:flex;flex-direction:column;gap:6px;border-bottom:1px solid var(--surface0)}.dtop{display:flex;align-items:center;gap:8px}.pill{display:inline-flex;align-items:center;gap:6px;padding:2px 8px;font-size:11.5px;font-weight:700;border:1px solid var(--surface1)}.x{margin-left:auto;width:26px;height:26px;border:1px solid var(--surface1);background:var(--base);color:var(--subtext0);cursor:pointer;font:inherit;font-size:14px;line-height:1}.x:hover{color:var(--text);border-color:var(--text)}
@@ -50,7 +50,7 @@ tbody tr{cursor:pointer}tbody tr:hover,tbody tr:focus-visible{background:var(--b
 <body>
 <header class="controls bar"><span class="mark">Ｆ<b>[no]</b> hq</span><span id="age">fno fleet · reading</span>
   <span class="lbl">state</span><div class="counts" id="counts"></div>
-  <span class="lbl">view</span><div class="seg" role="tablist" aria-label="View"><button role="tab" id="tab-synapse" aria-selected="true">synapse</button><button role="tab" id="tab-table" aria-selected="false">table</button></div></header>
+  <span class="lbl">view</span><div class="seg" role="tablist" aria-label="View"><button role="tab" id="tab-synapse" aria-selected="true">synapse</button><button role="tab" id="tab-table" aria-selected="false">table</button><button role="tab" id="tab-decisions" aria-selected="false">decisions</button></div></header>
 <div class="wrap">
   <div id="banners"></div>
   <section class="fleet" id="machines" aria-label="Machines"><p class="empty">reading the fleet</p></section>
@@ -68,6 +68,10 @@ tbody tr{cursor:pointer}tbody tr:hover,tbody tr:focus-visible{background:var(--b
   <section class="tablewrap" id="view-table" hidden aria-label="Seats">
     <div class="ttools"><input id="filter" type="search" placeholder="Filter by seat, node, title, model, session id" aria-label="Filter seats"><span id="rowcount"></span></div>
     <div class="tscroll"><table><thead><tr id="thead"></tr></thead><tbody id="tbody"></tbody></table></div>
+  </section>
+  <section class="tablewrap" id="view-decisions" hidden aria-label="Decisions">
+    <div class="ttools"><select id="dec-lane" aria-label="Lane"></select><select id="dec-state" aria-label="State"></select><select id="dec-author" aria-label="Author"></select><label><input type="checkbox" id="dec-audit"> audit queue</label><span id="dec-count"></span></div>
+    <div class="tscroll"><table id="dec-table"><colgroup><col style="width:7%"><col style="width:10%"><col style="width:8%"><col style="width:9%"><col style="width:3%"><col style="width:8%"><col style="width:6%"><col style="width:13%"><col style="width:19%"><col style="width:17%"></colgroup><thead><tr><th>state</th><th>lane</th><th>date</th><th>who</th><th>Q</th><th>node</th><th>PR</th><th>description</th><th>decision</th><th>question</th></tr></thead><tbody id="dec-body"></tbody></table></div>
   </section>
 </div>
 <aside class="drawer" id="drawer" aria-hidden="true" aria-label="Seat details">
@@ -376,9 +380,10 @@ const COLS = [
 ];
 let rows = [], hiddenHosts = new Set(), hiddenStates = new Set(), sort = {col: 5, dir: 1}, openKey = null;
 const keyOf = (r) => r.host + "/" + (r.s.session_id || r.s.name);
-for (const [id, view] of [["tab-synapse", "view-synapse"], ["tab-table", "view-table"]]) {
+for (const [id, view] of [["tab-synapse", "view-synapse"], ["tab-table", "view-table"], ["tab-decisions", "view-decisions"]]) {
   document.getElementById(id).onclick = () => {
-    for (const t of ["synapse", "table"]) {
+    if (view === "view-decisions") loadDecisions();
+    for (const t of ["synapse", "table", "decisions"]) {
       document.getElementById("tab-" + t).setAttribute("aria-selected", String("view-" + t === view));
       document.getElementById("view-" + t).hidden = "view-" + t !== view;
     }
@@ -762,6 +767,37 @@ const answered = new Set();
 const nav = document.querySelector("nav.fno-nav");
 const token = new URLSearchParams(location.search).get("t") || "";
 const url = (nav ? nav.dataset.base : "./") + "hq/model.json?t=" + encodeURIComponent(token);
+const decUrl = (nav ? nav.dataset.base : "./") + "hq/decisions.json?t=" + encodeURIComponent(token);
+let decRows = [], decReviewed = new Set();
+const decName = (r) => r.decided_by_name || (r.decided_by ? r.decided_by.slice(0, 8) : decWho(r));
+const decWho = (r) => ["chat_attested", "operator"].includes(r.authority_source) ? "user" : r.authority_source ? "agent" : "?";
+function decSelect(id, label, values) {
+  const s = document.getElementById(id);
+  s.replaceChildren(...["all " + label, ...values].map((v, i) => { const o = el("option", null, v); o.value = i ? v : ""; return o; }));
+  s.onchange = decPaint;
+}
+function decPaint() {
+  const pick = (id) => document.getElementById(id).value, audit = document.getElementById("dec-audit").checked;
+  const shown = decRows.filter((r) => (!pick("dec-lane") || r.lane === pick("dec-lane")) && (!pick("dec-state") || r.lifecycle === pick("dec-state")) && (!pick("dec-author") || decWho(r) === pick("dec-author")) && (!audit || ((r.lane === "unattributed" || decWho(r) === "?") && !decReviewed.has(r.decision_id)))).sort((a, b) => (a.ts < b.ts ? 1 : -1));
+  const cap = 300;
+  document.getElementById("dec-count").textContent = shown.length > cap ? "newest " + cap + " of " + shown.length : shown.length + " of " + decRows.length;
+  document.getElementById("dec-body").replaceChildren(...shown.slice(0, cap).map((r) => {
+    const tr = el("tr");
+    for (const v of [r.lifecycle, r.lane, (r.ts || "").slice(0, 10), decName(r), r.quote ? "Q" : "", r.subject_node || "", r.subject_pr || "", (r.subject_node || r.subject_pr || r.subject_text) ? r.subject_text : (r.subject || ""), r.decision, r.question || ""]) tr.append(el("td", null, v));
+    tr.children[2].style.whiteSpace = "nowrap";
+    return tr;
+  }));
+}
+async function loadDecisions() {
+  let body;
+  try { const res = await fetch(decUrl, {cache: "no-store"}); if (!res.ok) throw new Error(res.status); body = await res.json(); } catch (e) { document.getElementById("dec-count").textContent = "decisions not reachable: " + e.message; return; }
+  decRows = body.decisions || []; decReviewed = new Set(body.reviewed || []);
+  decSelect("dec-lane", "lanes", ["law", "coord", "grant", "unattributed"]);
+  decSelect("dec-state", "states", ["live", "expired", "superseded", "retracted", "retired", "unscoped"]);
+  decSelect("dec-author", "authors", ["user", "agent", "?"]);
+  document.getElementById("dec-audit").onchange = decPaint;
+  decPaint();
+}
 async function load() {
   let res;
   try { res = await fetch(url, {cache: "no-store"}); } catch (e) { res = {ok: false, status: e.message}; }

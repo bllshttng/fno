@@ -253,6 +253,8 @@ pub enum SidelineView {
     Messages,
     Backlog,
     Org,
+    /// A strip word that opens the Decisions table pane; never the painted view.
+    Decisions,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -369,6 +371,12 @@ pub fn load_sideline_view() -> SidelineView {
 /// Persist the sideline view pref. Best-effort like every other write here.
 pub fn save_sideline_view(v: SidelineView) {
     mutate(|file| {
+        // Decisions is a strip word that opens a full-surface board; a restart has no board to show.
+        let v = if v == SidelineView::Decisions {
+            SidelineView::Agents
+        } else {
+            v
+        };
         file.sideline_view = serde_json::to_value(v).ok();
     });
 }

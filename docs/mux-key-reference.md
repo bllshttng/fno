@@ -45,6 +45,7 @@ Each row is one action id. Put the id in `~/.fno/keybindings.json` with a key st
 | `feed` | `e` | `e` | `e` | activity feed |
 | `review-pr` | `I` | `I` | `I` | PR review beside the pane |
 | `feedfocus` | `E` | `E` | `E` | focus the activity feed (arrows, enter) |
+| `decisions` | `m` | `m` | `m` | decisions table (audit, retract, overrule) |
 | `sideline-menu` | `P` | `P` | `P` | sideline menu (palette) |
 | `org` | `C` | `C` | `C` | the org block (load, census, lanes) |
 | `org-view` | `G` | `G` | `G` | HQ: org view (fleet, machines, leads, seats) |
