@@ -1019,7 +1019,8 @@ fn decide_observed<P: Probes>(
             reason: format!(
                 "evals gate pending at this head: the gate goldens are queued or running. \
                  The merge waits for the status to settle; CI is judged separately. \
-                 A stuck pending clears with: fno-agents evals gate-retry {}",
+                 A stuck pending clears with: fno-agents evals gate-retry {} \
+                 (run on the machine the evals/gate status description names)",
                 short(&facts.head_sha)
             ),
         });
@@ -1034,7 +1035,8 @@ fn decide_observed<P: Probes>(
             reason: format!(
                 "no evals/gate status at this gated head: the diff touches a gated path \
                  or a covered prefix, and the daemon seat has a baseline, but no status \
-                 was posted. Clear: fno-agents evals gate-retry {}",
+                 was posted. Clear: fno-agents evals gate-retry {} \
+                 (run on the machine the evals/gate status description names)",
                 short(&facts.head_sha)
             ),
         });
@@ -1341,7 +1343,8 @@ pub fn preview_walk<P: Probes>(probes: &P, request: &Request, facts: &PrFacts) -
             format!(
                 "evals gate pending at this head: the gate goldens are queued or running. \
                  The merge waits for the status to settle; CI is judged separately. \
-                 A stuck pending clears with: fno-agents evals gate-retry {}",
+                 A stuck pending clears with: fno-agents evals gate-retry {} \
+                 (run on the machine the evals/gate status description names)",
                 short(&facts.head_sha)
             ),
         ));
@@ -1352,7 +1355,8 @@ pub fn preview_walk<P: Probes>(probes: &P, request: &Request, facts: &PrFacts) -
             format!(
                 "no evals/gate status at this gated head: the diff touches a gated path \
                  or a covered prefix, and the daemon seat has a baseline, but no status \
-                 was posted. Clear: fno-agents evals gate-retry {}",
+                 was posted. Clear: fno-agents evals gate-retry {} \
+                 (run on the machine the evals/gate status description names)",
                 short(&facts.head_sha)
             ),
         ));
