@@ -706,8 +706,7 @@ fn write_claims(ops: &[ClaimOp], events_dir: Option<&Path>) -> Vec<String> {
 }
 
 /// `marker` names the metadata key a grant carries. The import frees only
-/// `take` grants whose issue left its list, so a `/claim` grant on a shared
-/// epic issue writes `epic_claim` and the import never touches it.
+/// `take` grants, so a `/claim` grant writes `epic_claim` and is never freed.
 pub(crate) fn write_claims_as(
     ops: &[ClaimOp],
     events_dir: Option<&Path>,
@@ -1446,6 +1445,13 @@ mod tests {
             issue: 7,
         };
         let lines = write_claims(&[grant], Some(root.path()));
+        let epic_grant = ClaimOp::Grant {
+            node: "c-cd34".to_string(),
+            holder: "github:visitor-2".to_string(),
+            repo: "o/r".to_string(),
+            issue: 9,
+        };
+        let epic_lines = write_claims_as(&[epic_grant], Some(root.path()), "epic_claim");
         let ids = crate::backlog::next::live_claimed_node_ids();
         let held = held_node_claims();
         let (_, record) = crate::claims::status("node:c-ab12", None);
@@ -1465,6 +1471,9 @@ mod tests {
             ids.unwrap().contains("c-ab12"),
             "selection must see the take"
         );
+        // An epic /claim grant is not a take, so the import never frees it.
+        assert_eq!(epic_lines, ["claimed c-cd34 for github:visitor-2"]);
+        assert!(held.as_ref().unwrap()["c-cd34"].take.is_none());
         let held = held.unwrap();
         let (repo, issue) = held["c-ab12"]
             .take

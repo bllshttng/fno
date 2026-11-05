@@ -84,10 +84,9 @@ pub(super) enum Command {
 }
 
 /// The command a comment carries. Only its first line counts, so a quoted or
-/// chatty comment never claims by accident. The title keeps the characters
-/// `safe_title` allows and nothing else. A title with a link in it claims
-/// nothing: the bot would print it on a public page, where GitHub turns it
-/// into a live link.
+/// chatty comment never claims by accident. The title keeps what `safe_title`
+/// allows. A title with a link claims nothing: the bot would print it on a
+/// public page, where GitHub makes it live.
 pub(super) fn command_of(body: &str) -> Option<Command> {
     let first = body.lines().next()?.trim();
     let argument = |word: &str| {
@@ -118,8 +117,7 @@ fn is_old(at: &str, now: DateTime<Utc>) -> bool {
         .is_ok_and(|t| now.signed_duration_since(t) >= Duration::days(super::STALE_AFTER_DAYS))
 }
 
-/// Open PRs that name the issue on a line of their own, as `(lowercase
-/// author, number)`, lowest number first.
+/// Open PRs naming the issue on a line of their own: `(lowercase author, number)`.
 fn pr_refs(pulls: &[Value], number: i64) -> Vec<(String, i64)> {
     let mut out: Vec<(String, i64)> = pulls
         .iter()
@@ -154,8 +152,8 @@ pub(super) struct ClaimPass {
     pub(super) cursor: Option<i64>,
     /// Releases first, then the fresh grants.
     pub(super) ops: Vec<ClaimOp>,
-    /// Grants for claims the store already holds. Each renews its 24 hour
-    /// lease in place, which is how a 7 day hold outlives the lease cap.
+    /// Claims the store holds: each renews its 24 hour lease in place, so a
+    /// 7 day hold outlives the lease cap.
     pub(super) renewals: Vec<ClaimOp>,
 }
 
@@ -439,10 +437,8 @@ impl<'a> State<'a> {
         }
     }
 
-    /// One grant per live node entry. A claim the store already holds for
-    /// that login renews in place, which writes no audit event and keeps
-    /// `acquired_at`; the rest are fresh grants. A node released in this same
-    /// pass is a fresh grant too, because the release runs first.
+    /// One grant per live node entry. A claim the store holds for that login
+    /// renews in place. A node released this pass is a fresh grant.
     fn renew(&mut self) {
         for e in self.ledger.iter().filter(|e| !e.stale) {
             let Some(n) = &e.node else { continue };
@@ -553,9 +549,8 @@ pub(super) fn claim_pass(i: &ClaimIn) -> Result<ClaimPass, String> {
     })
 }
 
-/// The last line of the model's reply names the match: `MATCH <n>` counts
-/// from 1, `NONE` means no match. Anything else is an error, so a reply that
-/// wandered never adds or blocks a line.
+/// The model's last line is `MATCH <n>` (from 1) or `NONE`. Anything else is
+/// an error, so a reply that wandered never adds or blocks a line.
 pub(super) fn parse_match(out: &str, lines: usize) -> Result<Option<usize>, String> {
     let last = out
         .lines()
@@ -573,10 +568,9 @@ pub(super) fn parse_match(out: &str, lines: usize) -> Result<Option<usize>, Stri
         .ok_or_else(|| format!("the model's last line is not an answer: {last:?}"))
 }
 
-/// The title match behind the exact one: a small model with no tools reads
-/// the new title and the existing lines, all as untrusted data, and returns
-/// an index. The index is the only thing used, so an injected title can
-/// block or add its own line and nothing more.
+/// The title match behind the exact one: a tool-less model reads the new title
+/// and the lines as untrusted data and returns an index. Only the index is
+/// used, so an injected title can block or add its own line and nothing more.
 pub(super) fn model_judge(
     cwd: &Path,
 ) -> impl Fn(&str, &[String]) -> Result<Option<usize>, String> + '_ {
@@ -612,8 +606,8 @@ pub(super) fn model_judge(
 }
 
 /// One epic's `/claim` work for one heal tick: read the comments, perform the
-/// claim writes, store the ledger. Returns the epic row the checklist render
-/// should see, and whether anything changed.
+/// claim writes, store the ledger. Returns the epic row to render, and whether
+/// anything changed.
 pub(super) fn run(
     gh: &GitHubTracker,
     cwd: &Path,

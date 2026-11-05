@@ -761,8 +761,7 @@ mod tests {
         sync_epic(&tracker(&hub), "o/r", &rows, &epic_row, &[], None).unwrap();
         let body = hub.lock().unwrap().bodies[0].clone();
         assert!(body.contains("- [ ] New chooser · @visitor"), "{body}");
-        // The bot's own reply is a comment now. A second pass reads it, skips
-        // it, and changes nothing.
+        // A second pass skips the bot's own reply and changes nothing.
         let again = pass(&hub, &rows, &epic_row, &[], &[], NO_MATCH);
         assert_eq!(again.ledger, first.ledger);
         assert_eq!(hub.lock().unwrap().replies.len(), 1);

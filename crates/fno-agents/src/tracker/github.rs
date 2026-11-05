@@ -343,10 +343,9 @@ impl GitHubTracker {
         Ok(())
     }
 
-    /// Every comment on one issue, oldest first. `id` is the number at the end
-    /// of the comment URL: it only grows, so a cursor can sit on it, which
-    /// GraphQL's opaque node id cannot do. A comment whose URL carries no
-    /// number is dropped. The first value is the issue author's login.
+    /// The issue author's login and every comment, oldest first. `id` is the
+    /// number ending the comment URL: it only grows, so a cursor can sit on it,
+    /// which GraphQL's opaque node id cannot do.
     pub fn list_issue_comments(
         &self,
         repo: &str,
