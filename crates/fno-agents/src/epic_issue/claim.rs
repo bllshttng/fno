@@ -25,9 +25,8 @@ use std::path::Path;
 
 pub(super) const CLAIMS_KEY: &str = "epic_claims";
 pub(super) const CURSOR_KEY: &str = "epic_claim_cursor";
-/// Comments one pass reads per epic. The rest wait for the next pass.
+/// Per epic and pass: comments read, and model calls made. The rest wait.
 const MAX_COMMENTS_PER_PASS: usize = 20;
-/// Model calls one pass makes per epic. A comment that needs one more waits.
 const MAX_JUDGE_CALLS: usize = 3;
 const JUDGE_MODEL: &str = "haiku";
 const JUDGE_TIMEOUT_SECS: u64 = 120;
@@ -473,14 +472,16 @@ impl<'a> State<'a> {
 }
 
 /// One pass over one epic issue's comments. It posts the replies it owes and
-/// returns the ledger, the cursor and the claim writes. The caller performs
-/// the writes, so this stays free of the claim store and the graph.
+/// returns the ledger, cursor and claim writes, which the caller performs.
 pub(super) fn claim_pass(i: &ClaimIn) -> Result<ClaimPass, String> {
-    let comments =
+    let (author, comments) =
         i.gh.list_issue_comments(i.repo, i.number)
             .map_err(|e| e.to_string())?;
+    // Only the issue author's marker counts: the App opened the issue and posts
+    // the replies, so a visitor cannot pre-answer a comment by forging one.
     let answered: HashSet<i64> = comments
         .iter()
+        .filter(|c| c.login == author)
         .flat_map(|c| {
             c.body.split(REPLY_MARKER).skip(1).filter_map(|rest| {
                 rest.split_once(" -->")

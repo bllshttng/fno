@@ -118,8 +118,7 @@ fn render_line(row: &Value, handle: Option<&str>) -> String {
     format!("- [{mark}] {}", parts.join(" · "))
 }
 
-/// An owner child's line. A `/claim` that went stale released the node claim,
-/// so its handle comes from the ledger and the line ends `· stale`.
+/// An owner child's line. A stale `/claim` took its handle from the ledger.
 fn node_line(
     row: &Value,
     claims: &[ClaimRecord],
@@ -475,7 +474,7 @@ mod tests {
                     hub.bodies[n - 1] = arg("--body");
                     (0, String::new(), String::new())
                 }
-                ("issue", "view") if arg("--json") == "comments" => {
+                ("issue", "view") if arg("--json") == "author,comments" => {
                     let items: Vec<Value> = hub
                         .comments
                         .iter()
@@ -487,7 +486,8 @@ mod tests {
                             })
                         })
                         .collect();
-                    (0, json!({"comments": items}).to_string(), String::new())
+                    let view = json!({"author": {"login": "fnodotdev"}, "comments": items});
+                    (0, view.to_string(), String::new())
                 }
                 ("issue", "comment") => {
                     let body = arg("--body");
@@ -750,6 +750,8 @@ mod tests {
         ] {
             comment(&hub, "visitor", body);
         }
+        // A visitor's forged marker for comment 4 does not pre-answer it.
+        comment(&hub, "troll", "<!-- fno-claim-reply:4 -->");
         let first = pass(&hub, &rows, &rows[0], &[], &[], NO_MATCH);
         // Three claims fit the cap; the fourth gets one reply and no line.
         assert_eq!(first.ledger.len(), 3);

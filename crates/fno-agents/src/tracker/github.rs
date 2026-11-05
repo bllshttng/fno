@@ -346,12 +346,12 @@ impl GitHubTracker {
     /// Every comment on one issue, oldest first. `id` is the number at the end
     /// of the comment URL: it only grows, so a cursor can sit on it, which
     /// GraphQL's opaque node id cannot do. A comment whose URL carries no
-    /// number is dropped.
+    /// number is dropped. The first value is the issue author's login.
     pub fn list_issue_comments(
         &self,
         repo: &str,
         number: i64,
-    ) -> Result<Vec<IssueComment>, TrackerError> {
+    ) -> Result<(String, Vec<IssueComment>), TrackerError> {
         require_repo(repo)?;
         let id = format!("{repo}#{number}");
         let (rc, out, err) = self.run_gh(
@@ -362,7 +362,7 @@ impl GitHubTracker {
                 "-R".into(),
                 repo.to_string(),
                 "--json".into(),
-                "comments".into(),
+                "author,comments".into(),
             ],
             &id,
         )?;
@@ -412,7 +412,12 @@ impl GitHubTracker {
             })
             .unwrap_or_default();
         comments.sort_by_key(|c| c.id);
-        Ok(comments)
+        let author = data
+            .pointer("/author/login")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        Ok((author, comments))
     }
 
     /// Post one comment on an issue.
