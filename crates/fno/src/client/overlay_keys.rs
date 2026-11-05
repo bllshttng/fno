@@ -825,11 +825,7 @@ pub(super) async fn answer_keys(
 ) -> Result<StdinFlow, String> {
     let mut esc = std::mem::take(&mut view.ans_esc);
     // arrows -> hjkl twins, except while the add field is open (j would type)
-    let keys = if view.mine_adding.is_some() {
-        fold_text_field_keys(&mut esc, bytes)
-    } else {
-        fold_selector_keys(&mut esc, bytes)
-    };
+    let keys = fold_overlay_keys(&mut esc, bytes, view.mine_adding.is_some());
     view.ans_esc = esc;
     let projection = view.needs_projection();
     // Active squad/tab, captured once (the layout is stable within a key chunk):

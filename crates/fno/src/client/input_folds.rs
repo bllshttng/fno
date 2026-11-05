@@ -517,3 +517,28 @@ pub(super) fn fold_text_field_keys(esc: &mut Vec<u8>, bytes: &[u8]) -> Vec<u8> {
         })
         .collect()
 }
+
+/// The text-field fold while a typed field is open, else the selector fold.
+pub(super) fn fold_overlay_keys(esc: &mut Vec<u8>, bytes: &[u8], text: bool) -> Vec<u8> {
+    if text {
+        fold_text_field_keys(esc, bytes)
+    } else {
+        fold_selector_keys(esc, bytes)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn text_field_fold_maps_arrows_to_motion_not_letters() {
+        let mut esc = Vec::new();
+        assert_eq!(
+            fold_text_field_keys(&mut esc, b"\x1b[B\x1b[B\x1b[C\x1b[D\x1b[A\x1b[Z"),
+            vec![0x0e, 0x0e, 0x10, 0x10]
+        );
+        assert_eq!(fold_text_field_keys(&mut esc, b"jk"), b"jk");
+        assert_eq!(fold_overlay_keys(&mut esc, b"\x1b[B", false), b"j");
+    }
+}
