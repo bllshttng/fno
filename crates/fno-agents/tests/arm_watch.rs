@@ -339,7 +339,6 @@ fn a_stuck_finding_alone_pages_and_dedupes() {
     std::fs::remove_file(&store).ok();
 }
 
-
 /// AC5-EDGE: empty arms and empty findings keep the clear path.
 #[test]
 fn empty_arms_and_empty_findings_stay_clear() {

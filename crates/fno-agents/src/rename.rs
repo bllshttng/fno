@@ -494,7 +494,6 @@ mod tests {
         assert_eq!(title_push(&r, "wren"), None);
     }
 
-
     #[test]
     fn title_push_skips_a_mid_turn_row_whose_quiet_gate_would_hold_the_delivery() {
         let mut r = row("wren", "sess-1");
@@ -502,7 +501,6 @@ mod tests {
         r.status = crate::AgentStatus::Busy;
         assert_eq!(title_push(&r, "wren"), None);
     }
-
 
     #[test]
     fn receipt_names_the_title_push() {

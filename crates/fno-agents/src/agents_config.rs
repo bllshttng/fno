@@ -2085,7 +2085,6 @@ mod tests {
         clear_config_env();
     }
 
-
     #[test]
     fn state_reap_config_uses_project_then_global_precedence_per_key() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -2604,7 +2603,6 @@ mod tests {
         assert!(!got, "a canonical grant leaf in the same file must decide");
     }
 
-
     // --- review.optional_apps reader ---------------------------------------
 
     #[test]
@@ -2657,7 +2655,6 @@ mod tests {
         );
         assert!(!auto_merge_require_fresh_ci(&cwd));
     }
-
 
     /// Build a main checkout + linked worktree, with `body` as the CANONICAL
     /// config and nothing in the worktree. Returns the linked worktree path, or

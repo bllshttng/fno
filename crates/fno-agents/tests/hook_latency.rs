@@ -1081,7 +1081,6 @@ fn latency_stop_target_promise_green() {
     );
 }
 
-
 /// The shared Bash PreToolUse owner preserves the guard contracts and budget.
 #[test]
 #[ignore]

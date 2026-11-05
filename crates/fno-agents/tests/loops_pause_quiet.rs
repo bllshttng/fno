@@ -270,7 +270,6 @@ fn ac5_a_zero_ttl_is_refused_and_writes_no_sentinel() {
     });
 }
 
-
 #[test]
 fn ac6_resume_all_lifts_the_mail_leg() {
     let tmp = TempDir::new().unwrap();
@@ -378,7 +377,6 @@ fn ac7_a_failing_stub_still_lifts_the_sentinel() {
         assert_eq!(breaker["mail"], "armed");
     });
 }
-
 
 #[test]
 fn pause_all_refuses_to_replace_or_clear_an_incident() {

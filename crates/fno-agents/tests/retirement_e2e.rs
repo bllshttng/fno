@@ -337,7 +337,6 @@ fn assignment_recovery_joins_name_and_first_directive_against_the_graph() {
 
 // --- the build pin the audit keys on (x-d2ba) --------------------------------
 
-
 /// The DEPLOYED cohort, not the just-built one: resolve `fno-agents`,
 /// `fno-agents-daemon` and `fno-agents-worker` on `PATH` and compare their
 /// build pins. This is what `reap --verify` actually audits against on a

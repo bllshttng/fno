@@ -160,7 +160,6 @@ fn iteration_ceiling_hit() {
     assert_golden(repo, &plan, "iteration > 3 (cur=5 -> FIRE)");
 }
 
-
 #[test]
 fn iteration_gte_boundary() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -206,7 +205,6 @@ fn stuck_test_hit() {
     assert_golden(repo, &plan, "same_test_failing_for >= 3 (cf=3 -> FIRE)");
 }
 
-
 #[test]
 fn stuck_test_no_verification_block_defaults_zero() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -240,7 +238,6 @@ fn files_outside_over() {
     run_git(repo, &["add", "a.rs", "b.rs", "c.rs"]);
     assert_golden(repo, &plan, "files_outside > 1 (3 outside -> FIRE)");
 }
-
 
 #[test]
 fn files_outside_excludes_plan_path_itself() {
@@ -322,7 +319,6 @@ fn malformed_predicate_warns_and_exits_zero() {
     assert_golden(repo, &plan, "malformed predicate -> WARN + exit 0");
 }
 
-
 #[test]
 fn no_kill_criteria_block_exits_zero() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -385,5 +381,3 @@ fn quick_mode_fenced_kill_criteria() {
         "quick-mode fenced kill_criteria -> FIRE",
     );
 }
-
-

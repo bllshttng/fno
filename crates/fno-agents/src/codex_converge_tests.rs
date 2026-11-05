@@ -537,7 +537,6 @@ fn a_marketplace_keyed_before_the_rename_is_removed_by_its_key() {
     assert_eq!(inspect_with(&mut fake)["status"], "fresh");
 }
 
-
 #[test]
 fn every_refusal_lands_before_the_live_install_moves() {
     let tmp = tempfile::tempdir().unwrap();

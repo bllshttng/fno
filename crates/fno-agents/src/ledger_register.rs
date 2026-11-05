@@ -1418,6 +1418,4 @@ mod tests {
         let url = pr_url_for(dir.path(), Some(358), "git@github.com:o/r.git");
         assert_eq!(url, Some("https://github.com/o/r/pull/358".to_string()));
     }
-
-
 }

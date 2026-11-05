@@ -104,7 +104,6 @@ fn pane_run_parse_plain_lane_unparseable_line() {
     );
 }
 
-
 fn bounded_ctx() -> PaneContext {
     let mut ctx = PaneContext::simple("codex", "/repo");
     ctx.bounded_placement = true;
@@ -188,7 +187,6 @@ fn reconcile_adopts_the_one_candidate() {
     assert_eq!(adopted, 5);
 }
 
-
 #[test]
 fn reconcile_refuses_many_candidates() {
     let mux = FakeMux {
@@ -216,7 +214,6 @@ fn reconcile_ignores_claims_from_other_sessions() {
     let adopted = reconcile("main", "/repo", &registry, &mux).unwrap();
     assert_eq!(adopted, 5);
 }
-
 
 fn pane() -> PaneFacts {
     PaneFacts {

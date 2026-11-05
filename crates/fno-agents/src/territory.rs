@@ -1164,7 +1164,6 @@ mod moved_scope_tests {
     use super::*;
     use serde_json::json;
 
-
     #[test]
     fn a_multi_scope_team_of_epics_compiles_as_the_union() {
         // The Python twin (lead/scope.py) rules a rung-2 SET of epics: the

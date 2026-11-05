@@ -1053,7 +1053,6 @@ mod tests {
         json!({"tool_name": "Bash", "tool_input": {"command": command, "run_in_background": background}})
     }
 
-
     #[test]
     fn a_foreground_generator_names_the_hand_form() {
         let reason = judge(&bash("yes > /dev/null &", false)).expect("refused");

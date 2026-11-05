@@ -1408,7 +1408,6 @@ mod tests {
         assert!(crate::ledger_workers::parse_roster(0, "[{}]", "").is_err());
     }
 
-
     #[test]
     fn hostile_fields_are_escaped() {
         let mut team = base_team();

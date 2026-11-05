@@ -333,7 +333,6 @@ fn writing_after_child_exit_reports_the_exit_code_and_stderr() {
     assert!(error.to_string().contains("dead child"));
 }
 
-
 #[test]
 fn moved_paste_fixtures_keep_measured_payload_and_submission_evidence() {
     for (harness, text) in [

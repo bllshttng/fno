@@ -706,7 +706,6 @@ mod tests {
         );
     }
 
-
     #[test]
     fn compound_refuses_only_the_test_half() {
         let root = footnote_root();
@@ -727,7 +726,6 @@ mod tests {
         assert!(decide("pytest -q 'unclosed", root.path()).is_none());
     }
 
-
     /// AC11-EDGE: the commands the refusal teaches are never themselves
     /// refused, at either door.
     #[test]
@@ -747,6 +745,4 @@ mod tests {
             root.path()
         ).is_none());
     }
-
-
 }

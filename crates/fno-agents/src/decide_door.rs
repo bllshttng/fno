@@ -1450,7 +1450,6 @@ mod tests {
         assert_eq!(after, before, "nothing recorded on a refused write");
     }
 
-
     #[test]
     fn decide_bad_authority_and_graduation_refuse_before_any_write() {
         let env = DoorEnv::new();
@@ -1658,6 +1657,4 @@ mod tests {
             &projects
         ));
     }
-
-
 }

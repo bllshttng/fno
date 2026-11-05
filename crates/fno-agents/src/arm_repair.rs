@@ -1060,5 +1060,4 @@ mod tests {
     }
 
     // AC6-HP: self-heal runs nothing under a breaker and says why.
-
 }

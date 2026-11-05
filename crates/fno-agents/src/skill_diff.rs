@@ -2152,7 +2152,6 @@ mod tests {
         }
     }
 
-
     #[test]
     fn tick_paused_answers_the_word_and_one_loop_tick() {
         let scratch = Scratch::new("paused");

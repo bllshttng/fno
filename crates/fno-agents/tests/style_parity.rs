@@ -432,7 +432,6 @@ fn diff_base_fence_on_untouched_line() {
     );
 }
 
-
 #[test]
 fn diff_base_bad_ref_refuses() {
     let dir = tempfile::TempDir::new().unwrap();
@@ -468,7 +467,6 @@ fn unknown_surface_refuses() {
         "unknown surface refuses",
     );
 }
-
 
 // --- --fix ---
 

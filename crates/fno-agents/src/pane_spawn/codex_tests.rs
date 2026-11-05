@@ -431,7 +431,6 @@ fn passthrough_appends_then_add_dirs_strip() {
     });
 }
 
-
 #[test]
 fn the_launch_cwd_is_pre_trusted_in_the_codex_config() {
     let _guard = CODEX_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());

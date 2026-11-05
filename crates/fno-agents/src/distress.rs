@@ -1273,7 +1273,6 @@ mod tests {
         assert_eq!(declared, stub.to_str().unwrap());
     }
 
-
     #[test]
     fn wait_class_help_skips_the_parent_push_and_question_still_pushes() {
         // A wait-class help appends its row at rung 0 and rung 3 with no

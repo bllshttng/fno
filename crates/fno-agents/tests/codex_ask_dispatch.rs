@@ -439,7 +439,6 @@ fn codex_create_nonzero_exit_without_any_jsonl_exits_11() {
     );
 }
 
-
 // ---------------------------------------------------------------------------
 // AC4-EDGE: validation
 // ---------------------------------------------------------------------------
@@ -558,7 +557,6 @@ fn maybe_run_codex_ask_mismatch_returns_exit_2() {
 // ---------------------------------------------------------------------------
 // ab-cb15ae56: error-path correctness + observability hardening
 // ---------------------------------------------------------------------------
-
 
 /// cv-54a67325 (HIGH): a genuine mid-stream read error (here an invalid-UTF-8
 /// line) before `turn.completed` must NOT be swallowed as a silently-truncated

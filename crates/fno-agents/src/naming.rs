@@ -1018,7 +1018,6 @@ mod tests {
         assert_eq!(n, "ab-t-1");
     }
 
-
     #[test]
     fn required_identity_never_shaves() {
         let long = "n-".to_string() + &"z".repeat(70);

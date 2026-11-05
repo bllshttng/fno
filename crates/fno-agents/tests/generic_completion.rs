@@ -459,7 +459,6 @@ fn generic_completion_ac_d5_inv_valid_incomplete_declaration_uses_legacy_path() 
     assert_eq!(output["termination_reason"], "DoneAdvisory");
 }
 
-
 #[test]
 fn generic_completion_structurally_invalid_explicit_plan_never_falls_through_to_advisory() {
     let invalid_declarations = [
@@ -603,5 +602,3 @@ fn generic_completion_rejects_outer_diagnostics_on_a_passed_verdict() {
         "{output}"
     );
 }
-
-

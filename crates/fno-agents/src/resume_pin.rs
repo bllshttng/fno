@@ -359,7 +359,6 @@ mod tests {
         assert_eq!(pin.source, "registry");
     }
 
-
     #[test]
     fn bare_row_anthropic_birth_pins_the_birth_model() {
         // AC1-EDGE: a bare row born on an Anthropic model (marketing name
@@ -390,7 +389,6 @@ mod tests {
         );
         std::fs::remove_file(&transcript).ok();
     }
-
 
     #[test]
     fn ac1_edge_no_row_no_transcript_refuses_naming_both_reads() {
@@ -439,7 +437,6 @@ mod tests {
         );
         std::fs::remove_file(&transcript).ok();
     }
-
 
     #[test]
     fn append_axes_adds_missing_flags_only() {

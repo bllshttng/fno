@@ -466,7 +466,6 @@ fn a_queued_waiter_stops_on_sigterm() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
-
 /// AC6-HP: a SIGKILLed holder's slot frees at once. The stamped
 /// holder-process lease reads the dead pid as the verdict, so the next
 /// waiter acquires inside 3s instead of timing out against the dead pid.
@@ -624,7 +623,6 @@ fn a_waiter_outlasts_its_own_budget_while_the_holder_runs() {
     );
     let _ = std::fs::remove_dir_all(&root);
 }
-
 
 /// AC7-ERR: a fleet stop written while a waiter queues is read at its
 /// ADMISSION, not only at entry: the waiter exits 90 after the holder

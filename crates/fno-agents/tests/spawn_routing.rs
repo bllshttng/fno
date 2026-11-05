@@ -202,11 +202,9 @@ fn restore_config(old: Option<std::ffi::OsString>) {
 // AC1-HP: ask with unknown name exits 16 (codex path)
 // ---------------------------------------------------------------------------
 
-
 // ---------------------------------------------------------------------------
 // AC1-HP: ask with unknown name exits 16 (gemini path)
 // ---------------------------------------------------------------------------
-
 
 // ---------------------------------------------------------------------------
 // AC2-HP: unknown-name error message is byte-parity with Python
@@ -472,7 +470,6 @@ fn spawn_claude_collision_exits_2() {
 // ---------------------------------------------------------------------------
 // AC4-ERR: dispatch_codex_once - collision check (name already exists)
 // ---------------------------------------------------------------------------
-
 
 // ---------------------------------------------------------------------------
 // AC5-HP: dispatch_gemini_once - happy path (create + reply + teardown)

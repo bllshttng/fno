@@ -3756,7 +3756,6 @@ mod tests {
 
     // --- build_argv / use_stdin_for ---
 
-
     #[test]
     fn argv_rows() {
         assert_eq!(
@@ -3981,7 +3980,6 @@ mod tests {
     // An unset env is today's argv byte-for-byte, so a spawn that never passed
     // through the Python seam is unchanged.
 
-
     // --- envelope byte-parity ---
 
     // --- locate_session ---
@@ -4000,9 +3998,7 @@ mod tests {
 
     // --- read_state_json ---
 
-
     // --- socket round-trip ---
-
 
     // --- wait_for_reply ---
 
@@ -4022,7 +4018,6 @@ mod tests {
     }
 
     // --- ask_followup (live socket + state.json) ---
-
 
     // --- ask-lane control.sock fallback ---
 

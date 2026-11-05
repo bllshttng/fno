@@ -1525,7 +1525,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-
     /// A lead at its share borrows only a seat left over after every floor:
     /// with max_live 16 and leads A=5, B=1, C=1, A borrows the spare sixth
     /// seat. B then starts work and admits, and A's seventh is refused
@@ -1861,7 +1860,6 @@ mod tests {
         assert!(err.contains("fno registry unreadable"), "{err}");
         let _ = std::fs::remove_dir_all(&dir);
     }
-
 
     /// Additive ahead schemas pass; a floor-ahead schema refuses with a
     /// head-pinned receipt and one event per distinct writer/floor/reader.

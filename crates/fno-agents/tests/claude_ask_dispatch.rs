@@ -654,7 +654,6 @@ fn write_bg_session(sessions: &Path, pid: &str, job: &str, sock: &Path) {
 
 // AC7: live session but state.json never transitions -> poll timeout -> exit 15.
 
-
 // AC10: two concurrent followups on the same agent serialize on the per-agent
 // flock (no deadlock); both get a reply.
 #[test]

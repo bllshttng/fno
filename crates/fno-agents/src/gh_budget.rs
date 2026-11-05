@@ -2015,7 +2015,6 @@ mod tests {
         assert_eq!(points_for(&argv(&["auth", "refresh"])), 1);
     }
 
-
     #[test]
     fn core_gate_refuses_at_zero_stands_down_pollers_and_never_outlives_its_reset() {
         // AC3-HP: an exhausted bucket refuses the core read with the

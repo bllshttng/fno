@@ -1031,7 +1031,6 @@ mod tests {
         );
     }
 
-
     #[test]
     fn undisposed_names_site_and_reason_teeth() {
         let dir = tmp_dir("undisp");

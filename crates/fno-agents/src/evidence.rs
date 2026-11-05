@@ -641,7 +641,6 @@ mod tests {
 
     // AC2-ERR: a line past the end names the real length.
 
-
     // AC3-EDGE: an ambiguous bare basename names the count and the remedy.
     #[test]
     fn ambiguous_basename_names_count() {

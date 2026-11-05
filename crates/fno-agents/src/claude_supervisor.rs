@@ -644,7 +644,6 @@ mod tests {
         assert!(!birth_allowed(false, Some(&config_dir), Some(claude_bin)));
     }
 
-
     #[test]
     fn every_fno_registry_key_is_classified_for_the_supervisor() {
         use std::collections::HashSet;

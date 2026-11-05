@@ -3436,7 +3436,6 @@ MemAvailable:    8000000 kB\n";
         }
     }
 
-
     #[test]
     fn lane_rows() {
         // An unknown harness declares nothing at all, which is the only thing

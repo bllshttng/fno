@@ -128,7 +128,6 @@ fn timeout_earns_no_repair() {
     assert!(no_siblings_left(dir.path()));
 }
 
-
 #[test]
 #[cfg(unix)]
 fn exit_137_with_output_is_a_tool_error_not_a_kill() {

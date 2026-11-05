@@ -1512,7 +1512,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-
     #[test]
     fn manual_reap_command_argv_includes_used_shells() {
         // AC5-CLI: the manual command opts in to closing a human's spent
@@ -1795,7 +1794,6 @@ mod tests {
         assert!(is_reapable_orphan(&row, Duration::from_secs(5400), &[]));
     }
 
-
     /// The argv clause matches a TOKEN, not a substring, in both reparable
     /// families: the fno-py entrypoint by basename, and stdio MCP servers by
     /// the `serve --mcp` pair or the codegraph `--liftoff-only` launcher flag
@@ -1861,7 +1859,6 @@ mod tests {
         ));
         assert_eq!(count_mcp_children_of_spares(&table), 1);
     }
-
 
     /// An unreadable registry is not evidence that no worker is live. Reading
     /// it that way would turn one bad file into a fleet-wide kill.

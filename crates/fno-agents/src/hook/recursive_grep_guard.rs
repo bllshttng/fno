@@ -406,7 +406,6 @@ mod tests {
         assert!(decide("grep -rn token .", &nested).is_some());
     }
 
-
     #[test]
     fn other_tools_and_blank_input_allow() {
         assert!(judge(&Value::Null).is_none());

@@ -165,7 +165,6 @@ fn test_source_preflight_trusts_a_graph_done_merged_source_node() {
     assert_eq!(receipt["source_node_id"], json!("x-source"));
 }
 
-
 /// The shared full-transit harness: a codex pane whose /clear send restamps
 /// the registry row (modeling the daemon-side succession), then the real
 /// rename-with-node and tier projection run against the temp registry.

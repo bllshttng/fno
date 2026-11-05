@@ -1074,7 +1074,6 @@ mod tests {
         assert!(m.evaluate(&view("just text, no box")).is_none());
     }
 
-
     #[test]
     fn empty_composite_gate_is_rejected_not_fail_open() {
         // `all = []` is vacuously true and would pin its state on every screen.
@@ -1090,7 +1089,6 @@ mod tests {
             );
         }
     }
-
 
     // ---- E6.3: bundled rule files (claude/codex/gemini) ----
 

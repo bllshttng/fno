@@ -1077,9 +1077,7 @@ mod tests {
 
     // ──: the precheck separates gone, recycled, foreign ──────────
 
-
     // ──: the stop resolves its target by session ─────────────────
-
 
     /// Every `holder_from_lsof` branch: a Held path wins, a Failed path
     /// answers Unmeasured, all-Empty answers NotHeld. One holder pid names

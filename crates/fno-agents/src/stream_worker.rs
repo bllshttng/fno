@@ -2004,7 +2004,6 @@ done
         }
     }
 
-
     #[test]
     fn path_escapes_cwd_denies_in_cwd_symlink_pointing_outside() {
         // codex P1 (PR #484): a symlink INSIDE cwd that points OUTSIDE must be
@@ -2029,7 +2028,6 @@ done
         std::fs::remove_dir_all(&cwd).ok();
         std::fs::remove_dir_all(&outside).ok();
     }
-
 
     #[test]
     fn posture_from_cwd_inherits_project_permissions_allow_and_deny() {

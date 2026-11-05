@@ -1962,7 +1962,6 @@ mod tests {
         std::fs::remove_dir_all(temp.path()).ok();
     }
 
-
     #[test]
     fn bg_resume_refuses_a_copy_stops_it_and_never_touches_the_registry() {
         // A live session answers the bg resume with the measured copy notice.
@@ -2620,7 +2619,6 @@ mod tests {
         assert!(wrapped.contains("hello"), "{wrapped}");
         assert!(!wrapped.contains("from-name=\"fno\""), "{wrapped}");
     }
-
 
     #[test]
     fn live_claude_working_mail_uses_receipts_and_done_refuses_messages() {

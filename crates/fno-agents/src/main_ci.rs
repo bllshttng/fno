@@ -1029,7 +1029,6 @@ mod tests {
         );
     }
 
-
     /// A failure is a verdict, never a rerun victim: a failed run stays red
     /// even while a newer run queues behind it. Only a cancel demotes.
     #[test]

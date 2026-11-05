@@ -262,7 +262,6 @@ mod tests {
         assert!(err.contains("'chat-id'"), "{err}");
     }
 
-
     #[test]
     fn a_method_drift_is_reported_with_the_python_reason_shape() {
         let mut env = build_channel_notification("hi", None, None).unwrap();

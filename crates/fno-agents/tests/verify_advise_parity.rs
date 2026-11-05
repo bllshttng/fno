@@ -84,7 +84,6 @@ fn acs_label_fallback_without_section() {
     assert_parity(mirror_read(&plan), "acs label fallback without section");
 }
 
-
 #[test]
 fn empty_section_falls_back_to_labels() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -134,5 +133,3 @@ fn verdict_nonmatch_none() {
     );
     assert_parity((None, String::new()), "verdict nonmatch -> none");
 }
-
-

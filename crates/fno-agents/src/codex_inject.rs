@@ -702,7 +702,6 @@ fn emit_review_invocation_fields(
     let _ = emitter.emit_fields("review_invocation", fields);
 }
 
-
 #[cfg(test)]
 fn review_start_audit_fields_with_origin(
     thread_id: &str,
@@ -2246,7 +2245,6 @@ mod tests {
         );
     }
 
-
     #[test]
     fn review_invocation_audit_carries_server_message_and_canonical_fields() {
         let fields = review_invocation_event_fields(
@@ -2424,7 +2422,6 @@ mod tests {
         assert_eq!(discover(&socket).await, Err("rpc-error"));
         server.await.unwrap();
     }
-
 
     #[tokio::test]
     async fn dead_socket_connect_reads_no_daemon_not_io_error() {
