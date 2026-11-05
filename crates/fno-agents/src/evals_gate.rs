@@ -2262,11 +2262,12 @@ mod tests {
         assert!(state.head_run.is_none(), "the pending requeues the head");
 
         // The next tick holds the launch instead of spending it again, and
-        // posts nothing new: one pending, no red, no run, until a baseline
-        // covers the selection.
+        // posts nothing beyond the queue's pending and the settle's pending:
+        // no red, no run, until a baseline covers the selection.
+        let posted = w.posts.borrow().len();
         w.tick(true, Utc::now());
         assert_eq!(w.spawns.borrow().len(), 1, "no second spend");
-        assert_eq!(w.posts.borrow().len(), 1, "no new posts");
+        assert_eq!(w.posts.borrow().len(), posted, "no new posts");
     }
 
     #[test]
