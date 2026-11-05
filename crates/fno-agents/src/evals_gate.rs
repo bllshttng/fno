@@ -1416,7 +1416,27 @@ fn settle_head_run(p: &Paths, d: &Deps, state: &mut State, slug: &str, prs: &[Pr
                 &run.cohort,
                 Some(&run.tasks),
             ) {
-                Ok(view) => verdict(&view, &run.sha),
+                Ok(view) => {
+                    // The unmeasured view compare folds for a baseline side
+                    // that holds no rows for the kept tasks is a machine
+                    // gap: pending, never green on an unmeasured grade.
+                    let unmeasured = view["regressions"].as_array().is_some_and(|r| r.is_empty())
+                        && view["errors"].as_array().is_some_and(|rows| {
+                            !rows.is_empty()
+                                && rows.iter().all(|r| {
+                                    r.get("a_grades").and_then(Value::as_u64) == Some(0)
+                                })
+                        });
+                    if unmeasured {
+                        (
+                            "pending",
+                            "waiting for a gate-main baseline that covers the tasks at this head"
+                                .to_string(),
+                        )
+                    } else {
+                        verdict(&view, &run.sha)
+                    }
+                }
                 // A baseline that predates a golden the head graded is a
                 // machine gap, not a head defect: pending, and the head
                 // re-runs once a baseline covers the selection.
@@ -2764,6 +2784,9 @@ mod tests {
             )
             .unwrap();
             w.with_baseline();
+            // The launch guard waits for a baseline that answers the
+            // selection, so the bank's own golden is seated here too.
+            w.rows("base", "g5", [true, true, true]);
             w.tick(true, Utc::now());
             let spawns = w.spawns.borrow();
             assert_eq!(spawns.len(), 1, "{files}: one head launch");
@@ -3047,18 +3070,34 @@ mod tests {
         // it stays red.
         let g5 = "id: g5\ntier: capability\nprompt: p\ngrade:\n  - kind: file-exists\n    path: x\ntags: [gate]\n";
 
+        // The compare's unmeasured view and the verdict it folds to stay
+        // unit contracts. The gate no longer posts them: a launch whose
+        // selection the baseline cannot cover waits, and a baseline that
+        // loses its rows mid-run requeues pending (the requeue test owns
+        // that posting).
         let w = World::new("evals/bank/g5.yaml\n");
         std::fs::write(w.dir.path().join("evals/bank/g5.yaml"), g5).unwrap();
         w.with_baseline();
-        w.tick(true, Utc::now());
-        assert_eq!(w.spawns.borrow().len(), 1, "one head launch");
         w.rows("gate-head-abcdef123456", "g5", [true, true, true]);
-        w.tick(false, Utc::now());
-        let posts = w.posts.borrow();
-        let success = posts.iter().find(|p| p.starts_with("state=success"));
-        assert!(success.is_some(), "no baseline reads green: {posts:?}");
-        assert!(success.unwrap().contains("with no baseline"), "{posts:?}");
-        drop(posts);
+        let view = compare(
+            &w.dir.path().join("evals/bank"),
+            &w.history(),
+            "base",
+            "gate-head-abcdef123456",
+            Some(&["g5".to_string()]),
+        )
+        .unwrap();
+        assert!(
+            view["errors"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|r| r["a_grades"] == 0),
+            "{view}"
+        );
+        let (status, text) = verdict(&view, SHA);
+        assert_eq!(status, "success");
+        assert!(text.contains("with no baseline"), "{text}");
 
         // 4497's shape: the head rows exist but no row scores, while the
         // baseline holds grades for the same task. Red, no result.
