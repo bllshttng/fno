@@ -2446,6 +2446,17 @@ mod tests {
         // The real-git world's g1 carries the covers line, so the launch
         // reaches the build path and the test stays about the busy-slot skip.
         let w = World::new_git("crates/x/a.rs\n");
+        // The real-git fixture heads the PR at main, not at the SHA constant.
+        let head = String::from_utf8_lossy(
+            &std::process::Command::new("git")
+                .args(["rev-parse", "main"])
+                .current_dir(w.dir.path())
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .trim()
+        .to_string();
         w.with_baseline();
         // g3 joins g1 in the head's selection; the baseline answers both.
         w.rows("base", "g3", [true, true, true]);
@@ -2468,7 +2479,7 @@ mod tests {
         assert!(w.adds.borrow().is_empty(), "no swap under a foreign lock");
         assert!(w.spawns.borrow().is_empty(), "no launch on a busy slot");
         let state = load_state(&dir_of(&w));
-        assert_eq!(state.heads.get(SHA).map(String::as_str), Some(QUEUED));
+        assert_eq!(state.heads.get(&head).map(String::as_str), Some(QUEUED));
         drop(lock);
 
         // With the lock released the same head launches on the next tick.
