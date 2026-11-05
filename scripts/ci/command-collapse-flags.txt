@@ -1,5 +1,3 @@
 # Hidden options on argument-dispatched actions, one per line.
-do resume receipt validate !--session
-do resume receipt write !--session
 resume receipt validate !--session
 resume receipt write !--session

@@ -133,7 +133,9 @@ else
 fi
 
 echo "T02: the shipping commit lands a linked skill-commit row"
-# The hook rides the temp repo as its post-commit.
+# The hook rides the temp repo as its post-commit. An init.templateDir that
+# is missing or bare leaves no .git/hooks behind, so make the directory.
+mkdir -p "$REPO/.git/hooks"
 ln -sf "$REPO/hooks/corrections-git-postcommit.sh" "$REPO/.git/hooks/post-commit"
 printf 'placeholder\ncorrected line\n' > "$REPO/skills/target/SKILL.md"
 git -C "$REPO" add skills/target/SKILL.md

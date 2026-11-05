@@ -310,9 +310,7 @@ _accept_route() {
   if out="$( cd "$repo_root" && fno backlog idea "autocorrect ${ref}: ${skill_name} SKILL.md" \
       --details-file "$details_file" --source-kind operator_request \
       --origin-evidence "autocorrect:${ref}" --json 2>/dev/null )"; then
-    minted="$(printf '%s\n' "$out" | python3 -c 'import json,sys
-try: print(json.load(sys.stdin).get("id") or "")
-except Exception: print("")' 2>/dev/null)" || minted=""
+    minted="$(printf '%s\n' "$out" | jq -r '.id // empty' 2>/dev/null)" || minted=""
     if [[ -n "$minted" ]]; then
       echo "autocorrect-triage: shipped-skill diff filed as ${minted} (${ref}); a worker ships it through a PR" >&2
     else

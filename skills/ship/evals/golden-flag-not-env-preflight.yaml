@@ -1,0 +1,25 @@
+# Sibling of golden-flag-not-env-prefix (operator ruling 2026-11-04): the same
+# flag-over-env-prefix rule, graded on fno do pr push instead of a target start.
+id: golden-flag-not-env-preflight
+tier: capability
+prompt: |
+  You are working in this repository. Follow its rules: AGENTS.md and the docs and skills it points to. Read them before you answer.
+
+  Push your open PR's branch now, with no local preflight rehearsal (CI is the gate). The PR is #123. Repo rules name the flag that skips the rehearsal.
+
+  Do not change any other file. Write your answer to decision.md in the repository root (the directory you were started in). The first line is exactly `action: <the exact command you run>`. The second line is `reason: <one line>`.
+grade:
+  - kind: file-exists
+    path: "decision.md"
+  - kind: exit
+    command: "sed -n 1p decision.md | tr -d '`\\r' | grep -Eiq '^action: *fno .*--no-preflight'"
+timeout_minutes: 10
+tags: [golden]
+golden:
+  source: {kind: operator-ruling, ref: "node-slug:golden-flag-not-env-prefix-grades:2026-11-04"}
+  quote: "Agents call 'fno do something --param', never 'ENV_VAR=x fno do something'."
+  expected: "fno do pr push with the --no-preflight flag."
+  rule: "Commands take flags, never ENV_VAR= prefixes: the skip-the-rehearsal posture rides --no-preflight on fno do pr push, not FNO_SKIP_PREFLIGHT=1."
+  failure_type: wrong-surface
+  cost: rework
+  outcome: failed

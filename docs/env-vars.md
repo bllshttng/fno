@@ -58,14 +58,14 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_AGENTS_TIMER_EXE` | rs | Overrides the binary the mail-hold release timer re-enters (mail_hold.rs spawn_release_timer); empty falls through to the process's own executable. A test suite that arms the standard release leg pins a stub here so no timer escapes the sandbox. |
 | `FNO_AGENTS_WORKER` | rs | Marks the process as a footnote worker. |
 | `FNO_AGENTS_WORKER_BIN` | rs | Path to the worker binary. The daemon lazy-start passes it on, so a test harness runs its own build. |
-| `FNO_AGENT_HARNESS` | py+rs | unclear: cli/src/fno/harness_identity.py:77 |
+| `FNO_AGENT_HARNESS` | rs | declared in crates/fno-agents/src/claims.rs (AMBIENT_IDENTITY_NAMES) |
 | `FNO_AGENT_NAME` | rs | Worker name a note's thread row stamps as its agent_name when the writer's live claim carries no spawn-handover holder name (comment_identity, note_cli.rs). |
 | `FNO_AGENT_NO_ROW` | rs | Set by the headless claude lane to the child's own `FNO_AGENT_SELF`. The child's SessionStart report then joins but writes no registry row, so a `claude -p` one-shot never shows in the mux. |
 | `FNO_AGENT_PROVIDER` | rs | Pre-cutover name for `FNO_AGENT_HARNESS`. whoami reads it only when the new name is unset, and prints one rename line on stderr. |
 | `FNO_AGENT_ROW_PENDING` | rs | unclear: crates/fno-agents/src/register.rs:83 |
-| `FNO_AGENT_SELF` | py+rs | unclear: cli/src/fno/agent/cli.py:363 |
+| `FNO_AGENT_SELF` | rs | the registry rows and the mux name the session's self handle |
 | `FNO_AGENT_SESSION` | rs | unclear: crates/fno-agents/src/registry_commands.rs:195 |
-| `FNO_AGENT_SUBSTRATE` | py+rs | Spawn substrate of the calling agent (`pane`, `thread`, `headless`). The init door's work-start dispatch treats any value other than `pane` (unset included) as unattended. Read in crates/fno-agents/src/target_init.rs `substrate_marks_unattended`. |
+| `FNO_AGENT_SUBSTRATE` | rs | Spawn substrate of the calling agent (`pane`, `thread`, `headless`). The init door's work-start dispatch treats any value other than `pane` (unset included) as unattended. Read in crates/fno-agents/src/target_init.rs `substrate_marks_unattended`. |
 | `FNO_ATTEST_DEBUG` | rs | Prints one stderr line naming the pull's slug, row count and primary url. Unset prints nothing; diagnostics only, never the data channel. Read in crates/fno-agents/src/attest.rs `run_pull`. |
 | `FNO_ATTEST_ENV_ONLY` | rs | `1` makes the retract arm's retractor identity resolve as an environment-only witness (no process ancestry), skipping the CLAUDE_CODE_SESSION_ID conflict read; the identity-conflict unit test pins it. Read in crates/fno-agents/src/attest.rs `resolve_retractor_identity`. |
 | `FNO_AUTO_CONTINUE` | rs | Env override of the merge-triggered auto-continue gate; truthy-set membership on the whole value, mirrored exactly from Python. |
@@ -124,13 +124,13 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_GH_FACTS_DIR` | rs | Overrides the directory the `gh-cache` command reads and writes its permanent fact rows from; default `<state_dir>/cache/gh-facts`. |
 | `FNO_GH_PROXY_DEPTH` | rs | unclear: crates/fno-agents/src/pr_status/proxy.rs:146 |
 | `FNO_GH_PROXY_DIR` | rs | Names the directory holding the `gh` proxy shim. The Python front sets it for its subprocesses (prepend the shim to PATH), and the Rust transport consult reads it to stand down when a spawned `gh` resolves into it (unknown always means charge). |
-| `FNO_GLOBAL_SETTINGS_PATH` | py+rs | unclear: crates/fno-agents/src/claude_roster.rs:516 |
 | `FNO_GITHUB_APP` | rs | Set to `0` to turn the GitHub App installation token off for one run: the inject decision (crates/fno-agents/src/github_app.rs) reads it before every token install, and any other value keeps the app path on. |
+| `FNO_GLOBAL_SETTINGS_PATH` | py+rs | unclear: crates/fno-agents/src/claude_roster.rs:516 |
 | `FNO_GRAPH_JSON` | rs | Names the stable graph store anchor; the SQLite store is the `.db` sibling. Every footnote launch names it: the headless, thread and both pane lanes set it to the launch resolution (a declared `FNO_STATE_DIR`/`FNO_CONFIG` sandbox anchored at the child's cwd wins, an inherited value survives when no sandbox is declared, and the porcelain answer is the fallback). |
 | `FNO_GUARD_TRACE` | rs | unclear: crates/fno-agents/src/hook/lead_guard.rs:25 |
 | `FNO_HARNESS` | rs | The arming session's harness, the fallback a new lead manifest names when the holder row carries none. |
-| `FNO_HARNESS_NAME` | py+rs | The caller's harness name in the canonical identity stamp; the hold gate's direct read pairs it with FNO_HARNESS_SESSION_ID to answer whether the caller is the recipient. |
-| `FNO_HARNESS_SESSION_ID` | py+rs | The normalized full harness session id; native context hooks use it when the provider-specific id is absent. |
+| `FNO_HARNESS_NAME` | rs | The caller's harness name in the canonical identity stamp; the hold gate's direct read pairs it with FNO_HARNESS_SESSION_ID to answer whether the caller is the recipient. |
+| `FNO_HARNESS_SESSION_ID` | rs | The normalized full harness session id; native context hooks use it when the provider-specific id is absent. |
 | `FNO_HEALTH_HISTORY` | rs | crates/fno-agents/src/backlog/triage_health.rs (history_path) |
 | `FNO_HOME` | py+rs | Relocates fno's config-free sidecars (plugin-root pointer, push-stamps, corrections log, decision index) and the Rust defaults when no config sets state_dir. Does not move state_dir or the backlog; a store write under FNO_HOME that targets the default store ($HOME/.fno) is refused. Sandbox with FNO_CONFIG (docs/path-config.md). |
 | `FNO_HOOK_CONTEXT` | rs | Set to 1 on every hook command; an fno call that carries it never joins its session to fno. Spawned children have it cleared. |
@@ -201,6 +201,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_PLANS_DIR` | rs | Overrides the plans content dir the native `doctor lint plan-filenames` check scans; the check otherwise resolves through the sibling plan-dir door, then the vault plans dir. |
 | `FNO_PLANS_DIRS_CACHE_DIR` | rs | Overrides the plans-dirs cache directory the `state plans-dirs` command reads and writes; default `<state_dir>/cache/plans-dirs-v1.txt`. |
 | `FNO_PLATFORM` | rs | unclear: crates/fno-agents/src/hook/lead_guard.rs:400 |
+| `FNO_POSTHOG_PROJECT_TOKEN` | rs | The PostHog project token env for the eval events arm: `telemetry.eval_events.token_env` names it (default this constant), and the var wins over `telemetry.eval_events.token_file`. |
 | `FNO_PROBE_FNO` | rs | Names the fno porcelain the isolated live journey drives; the default is the PATH `fno`, and the override exists so a probe run can exercise a specific checkout. |
 | `FNO_PROBE_MODEL` | rs | The model the isolated live journey spawns with (`--model`). A model-borrowing harness such as footnote needs it, and a strict routing config refuses a spawn without it. |
 | `FNO_PROBE_PROVIDER` | rs | The provider the isolated live journey spawns with: `--provider` on claude, the `--model` prefix (`<provider>/<model>`) on footnote and opencode. The probe copies only this provider's `model_routing.providers` record into the isolated config. |
@@ -208,10 +209,12 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_PROCESS_ADMISSION_MAX` | rs | unclear: crates/fno/src/process_admission.rs:533 |
 | `FNO_PR_BASE_LINEAGE_OK` | rs | Set to `stale-acknowledged` by an operator who has judged a stale-base lineage refusal: the base-lineage probe records a gate-escape event and clears instead of refusing. |
 | `FNO_PR_BASE_OK` | rs | Set to `stale-acknowledged` to ship past a stale-base refusal on a deliberately old base; the batch-lane ship guard honors it (the preflight guard reaches it through its BYPASS_ENV constant, which the scanner does not see). |
+| `FNO_PR_CLOSURE_OK` | rs | Set to `1` to open an ad-hoc PR that closes no node: the git-protection hook skips its closure-line refusal on `gh pr create`. An inline assignment prefix on the command counts too. |
 | `FNO_PR_STATUS_CACHE_DIR` | rs | unclear: crates/fno-agents/src/gc.rs:2231 |
 | `FNO_PR_STATUS_SETTLED_TTL` | rs | Overrides the settled-row TTL in seconds (default 600): how long a settled green status row keeps serving a head-pinned wait before the cache re-reads GitHub. |
 | `FNO_PR_STATUS_TTL` | rs | unclear: crates/fno-agents/src/pr_status/cache.rs:32 |
 | `FNO_PR_WATCH_TICK_TIMEOUT` | rs | Seconds the `pr-watch tick` wall backstop allows before the tick exits 75. |
+| `FNO_PUSH_NOW` | rs | Set to `1` to push past the git-protection push debounce. The hook records a `push_debounce_bypass` event. |
 | `FNO_PY` | rs | Overrides the resolved fno-py console script path (tests and nonstandard installs); empty falls through to the resolver legs. The Rust front door honors it ABOVE the cached sentinel, so a study venv can repoint `fno` at its own env (gap-audit 9); set but unusable refuses naming the var. `fno version` names the resolved target on its `python-cli:` line, and `fno version --json` carries it as `python_script`. |
 | `FNO_PY_BACKLOG_FORWARD` | py | Set to the forwarded argv as JSON on the child when fno-py forwards `backlog` to `fno-agents`. A re-entry with the same argv refuses: the binary is older than fno-py and sent the command back, and without the marker each level spawns another (the 2026-11-02 script-door flood). |
 | `FNO_PY_HANDOFF` | py | Set to `1` on the child when fno-py hands a Rust-front command to the `fno` binary. A re-entry with it already set refuses: the PATH `fno` resolved back to fno-py, and without the marker each level spawns another (the 2026-10-02 mux-prune flood). |

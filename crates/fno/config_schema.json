@@ -1281,6 +1281,28 @@
     "title": "JoinBlock",
     "type": "object"
    },
+   "JudgeBlock": {
+    "description": "Question judge dispatch (nested under ``config.questions.judge``).",
+    "properties": {
+     "batch": {
+      "default": 10,
+      "title": "Batch",
+      "type": "integer"
+     },
+     "enabled": {
+      "default": false,
+      "title": "Enabled",
+      "type": "boolean"
+     },
+     "model": {
+      "default": "sonnet",
+      "title": "Model",
+      "type": "string"
+     }
+    },
+    "title": "JudgeBlock",
+    "type": "object"
+   },
    "KeepGoingBlock": {
     "description": "Autonomous keep-going engine settings (nested under 'config.keep_going').\n\nThe opt-in for the autonomous keep-going engine : when enabled, the\nautonomous ``/fno:ship pr merged`` ritual classifies each surviving carve-out\nfollow-up and DISPATCHES the next unit of work (a ``/think``, a ``/target``,\nor just a filed node) instead of only closing the merged node. This is what\nkeeps the autonomous loop moving without a human in the seat.\n\nDefault ``False`` (same posture as ``config.auto_continue`` /\n``config.think_spawn``): shipping this changes nothing until the operator\narms it - false-enabled (background workers dispatched against the operator's\nintent) is the dangerous direction, so a malformed block fails safe to\ndisabled rather than breaking the whole settings load.\n\nThe firehose ceiling is NOT a knob here: it deliberately reuses\n``config.think_spawn.daily_cap`` (the same per-install per-day counter\n``fno do think dispatch`` bumps) so think + target dispatches share ONE budget -\na single ceiling on total autonomous fan-out per day. The classify + dispatch\nlogic lives in the native retro keep-going engine (crates/fno-agents/src/retro/keep_going.rs).",
     "properties": {
@@ -2200,6 +2222,16 @@
      }
     },
     "title": "ProviderBudget",
+    "type": "object"
+   },
+   "QuestionsBlock": {
+    "description": "Question judge settings (nested under ``config.questions``).",
+    "properties": {
+     "judge": {
+      "$ref": "#/$defs/JudgeBlock"
+     }
+    },
+    "title": "QuestionsBlock",
     "type": "object"
    },
    "QuotaBlock": {
@@ -3280,7 +3312,7 @@
     "type": "object"
    },
    "TelemetryEvalEventsBlock": {
-    "description": "Eval runs as PostHog events. ``token_env`` names the env var holding the project token.",
+    "description": "Eval runs as PostHog events. ``token_env`` names the env var holding the project token; ``token_file`` names a mode-0600 file holding it, read at each beat.",
     "properties": {
      "enabled": {
       "default": false,
@@ -3295,6 +3327,11 @@
      "token_env": {
       "default": "FNO_POSTHOG_PROJECT_TOKEN",
       "title": "Token Env",
+      "type": "string"
+     },
+     "token_file": {
+      "default": "~/.fno/secrets/posthog-project-token",
+      "title": "Token File",
       "type": "string"
      }
     },
@@ -3824,6 +3861,9 @@
    },
    "github": {
     "$ref": "#/$defs/GithubBlock"
+   },
+   "questions": {
+    "$ref": "#/$defs/QuestionsBlock"
    },
    "schema_version": {
     "default": 1,
@@ -4464,6 +4504,15 @@
    "question": "",
    "default_source": "",
    "doc": "Env var holding the PostHog project token."
+  },
+  {
+   "path": "telemetry.eval_events.token_file",
+   "type": "str",
+   "default": "~/.fno/secrets/posthog-project-token",
+   "wizard": "advanced",
+   "question": "",
+   "default_source": "",
+   "doc": "Path to the PostHog project token file (mode 0600); token_env wins when set; a leading ~ expands against $HOME."
   },
   {
    "path": "attention.enabled",
@@ -6948,7 +6997,7 @@
    "path": "github.app_id",
    "type": "str",
    "default": "",
-   "doc": "GitHub App id; with github.app_installation_id it arms App-installation token minting for GitHub API calls.",
+   "doc": "GitHub App id; arms App-installation token minting for GitHub API calls. The installation is resolved per repo owner from the app's installations list; a repo whose owner has no installation keeps the user token.",
    "wizard": "never",
    "question": "",
    "default_source": ""
@@ -6957,7 +7006,7 @@
    "path": "github.app_installation_id",
    "type": "str",
    "default": "",
-   "doc": "GitHub App installation id; required beside github.app_id before the App path mints tokens.",
+   "doc": "Optional GitHub App installation id pin; skips the per-owner installation resolution and serves every repo that installation can see.",
    "wizard": "never",
    "question": "",
    "default_source": ""
@@ -6967,6 +7016,33 @@
    "type": "str",
    "default": "~/.fno/secrets/github-app.pem",
    "doc": "Path to the GitHub App private key PEM (default ~/.fno/secrets/github-app.pem, mode 0600); a leading ~ expands against $HOME.",
+   "wizard": "never",
+   "question": "",
+   "default_source": ""
+  },
+  {
+   "path": "questions.judge.batch",
+   "type": "int",
+   "default": 10,
+   "doc": "Max questions the judge takes per run.",
+   "wizard": "never",
+   "question": "",
+   "default_source": ""
+  },
+  {
+   "path": "questions.judge.enabled",
+   "type": "bool",
+   "default": false,
+   "doc": "Arm the question judge: when true, judge runs read the question board and decide open questions against the law record.",
+   "wizard": "never",
+   "question": "",
+   "default_source": ""
+  },
+  {
+   "path": "questions.judge.model",
+   "type": "str",
+   "default": "sonnet",
+   "doc": "Model the judge dispatches verdicts with.",
    "wizard": "never",
    "question": "",
    "default_source": ""

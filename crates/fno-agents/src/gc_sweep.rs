@@ -1421,14 +1421,34 @@ fn report_age(e: &state::RegistryEntry, now: i64) -> Option<i64> {
 /// answered, else seconds since the row's `created_at`, else unmeasured -
 /// and an unmeasured hold never escalates, because a wrong number is not a
 /// clock.
-fn hold_clock(age: Option<i64>, created_at: &str, now: i64) -> (Option<i64>, &'static str) {
+fn hold_clock(age: Option<i64>, e: &state::RegistryEntry, now: i64) -> (Option<i64>, &'static str) {
+    let since =
+        |at: &str| crate::tick_ledger::parse_rfc3339_unix(at).map(|t| (now - t as i64).max(0));
+    // A hand-started row can carry an empty created_at; its exit stamp is
+    // the next stable anchor (last_reconciled_at moves on every probe).
     match age {
         Some(a) => (Some(a), "transcript quiet"),
-        None => match crate::tick_ledger::parse_rfc3339_unix(created_at) {
-            Some(created) => (Some((now - created as i64).max(0)), "row created"),
-            None => (None, "unmeasured"),
+        None => match since(&e.created_at) {
+            Some(s) => (Some(s), "row created"),
+            None => match e.exited_at.as_deref().and_then(since) {
+                Some(s) => (Some(s), "row exited"),
+                None => (None, "unmeasured"),
+            },
         },
     }
+}
+
+/// Seconds since the row's recorded transcript file was last modified, or
+/// `None` when no path is recorded or the file is gone. A stat reads fresher
+/// than the newest timestamped entry, so it errs toward keeping.
+fn transcript_file_age(e: &state::RegistryEntry, now: i64) -> Option<i64> {
+    let path = e.transcript_path.as_deref().filter(|p| !p.is_empty())?;
+    let modified = std::fs::metadata(path).ok()?.modified().ok()?;
+    let secs = modified
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs() as i64;
+    Some((now - secs).max(0))
 }
 
 /// The settle blocker an open-do-row hold names: the same pr_state
@@ -1481,6 +1501,7 @@ pub(crate) fn run(
         prune_tree,
         false,
         None,
+        None,
     )
 }
 
@@ -1521,6 +1542,7 @@ pub(crate) fn run_done_only(
         prune_tree,
         true,
         None,
+        None,
     )
 }
 
@@ -1552,6 +1574,7 @@ pub(crate) fn run_with_release(
     prune_tree: &dyn Fn(&state::RegistryEntry) -> Option<crate::daemon::PruneOutcome>,
     only_done: bool,
     release: Option<&Release>,
+    surface_preview: Option<&dyn Fn(&state::RegistryEntry) -> bool>,
 ) -> GcSummary {
     let mut summary = GcSummary::default();
     // The retention pass runs on EVERY sweep, before the empty-registry early
@@ -1582,8 +1605,9 @@ pub(crate) fn run_with_release(
         return summary; // empty registry -> nothing to sweep
     }
     let graph = read_graph(home);
+    let bus = std::cell::OnceCell::new();
     let now = crate::daemon::now_epoch_secs();
-    // One claims read per sweep: the global root plus every distinct row
+    // One claims read per sweep:the global root plus every distinct row
     // cwd's local store. A live or suspect record names its holder
     // session, keyed through the record's `session_id` stamp (never the
     // holder string, a credential). An unreadable root reads as no facts.
@@ -1771,12 +1795,13 @@ pub(crate) fn run_with_release(
         };
         let sid = e.harness_session_id.as_deref().unwrap_or("").trim();
         let hits = store_matches(e);
-        let (hold_age_s, hold_age_basis) = hold_clock(*age, &e.created_at, now);
+        let (hold_age_s, hold_age_basis) = hold_clock(*age, e, now);
         // K5: a typed user turn inside the attended window. The user is
         // talking to this session.
         if let Some(hold) = crate::attended::sweep_hold(
             &id,
             home,
+            &bus,
             hits.clone(),
             sid,
             matches!(age, Some(a) if *a <= grace_secs),
@@ -1995,8 +2020,10 @@ pub(crate) fn run_with_release(
         // transcript activity. Activity arrived in the window -> keep, and a
         // re-read that cannot resolve (a moved or deleted transcript) keeps
         // too: absence on re-read is not quiet. One stat, on rows already
-        // classified would-retire, so the hot path pays nothing.
-        if !dry_run {
+        // classified would-retire, so the hot path pays nothing. The re-read
+        // only reads, so a dry run makes it too: a rehearsal that skipped it
+        // predicted retirements the live run then kept as probe-unread.
+        {
             // The re-read rides the same age seam: a fresh answer for
             // THIS row, so activity inside the classify-to-apply gap keeps.
             let fresh_age = age_many(&[e]).get(&row_handle(e)).copied().flatten();
@@ -2050,8 +2077,26 @@ pub(crate) fn run_with_release(
                 && e.inside_leg.is_some()
                 && !live_working
                 && fresh_seq == e.inside_leg.as_ref().map(|leg| leg.seq);
+            // An unread probe is an unknown, never a keep: with no pid, pane
+            // or report to lift it, the transcript on disk decides. A file
+            // written inside the grace holds; a quiet one retires; a missing
+            // one retires only when the classify pass read none either.
+            let disk_age = fresh_age
+                .is_none()
+                .then(|| transcript_file_age(e, now))
+                .flatten();
+            let transcript_witness = fresh_age.is_none()
+                && e.pid.is_none()
+                && e.mux.is_none()
+                && !live_working
+                && fresh_seq == e.inside_leg.as_ref().map(|leg| leg.seq)
+                && match disk_age {
+                    Some(a) => a > grace_secs,
+                    None => age.is_none(),
+                };
             let still_quiet = worker_finished(e, fresh_age, grace_secs, None)
                 || quiet_witness
+                || transcript_witness
                 || (session_terminal.is_some()
                     && matches!((fresh_age, age), (Some(now_a), Some(then_a)) if now_a >= then_a));
             if !still_quiet {
@@ -2066,6 +2111,10 @@ pub(crate) fn run_with_release(
                                 "truth probe answered nothing within its bound; a live working report is on the row"
                                     .to_string()
                             }
+                            _ if disk_age.is_some() => format!(
+                                "truth probe answered nothing within its bound; the transcript on disk was written {}s ago",
+                                disk_age.unwrap_or_default()
+                            ),
                             (None, _) => {
                                 "truth probe answered nothing within its bound; no inside-leg report on the row"
                                     .to_string()
@@ -2245,6 +2294,7 @@ pub(crate) fn run_with_release(
             } else {
                 StopObservation::Unproven
             };
+        let dry_surface_clear = dry_run && surface_preview.is_some_and(|preview| preview(e));
         let staged = match stage_session_retirement(
             home,
             e,
@@ -2255,6 +2305,7 @@ pub(crate) fn run_with_release(
                 RetireMode::Apply
             },
             stop_observation,
+            dry_surface_clear,
             released,
             idle_hour_past,
             &stop_on_death,
@@ -2538,6 +2589,7 @@ pub(crate) fn stage_session_retirement(
     ledger_rows: Option<&[Value]>,
     mode: RetireMode,
     stop_observation: StopObservation,
+    dry_surface_clear: bool,
     session_released: bool,
     idle_hour_past: bool,
     stop_confirmed: &dyn Fn(&state::RegistryEntry) -> bool,
@@ -2595,8 +2647,9 @@ pub(crate) fn stage_session_retirement(
         // the rehearsal never fires an effect, and it does not
         // report a row as retiring while a mutation-only gate stands
         // unevaluated between it and a real retirement. The stop gate the
-        // caller already read answers here; the active-surface removal can
-        // only be known by applying it, so the row lands in the sweep's
+        // caller already read answers here. The active-surface removal is
+        // known only when the caller's read-only preview proved both native
+        // effects are no-ops; any other row lands in the sweep's
         // dry_run_unverified bucket - named, never in retired.
         return match stop_observation {
             StopObservation::Unproven => Err(RetireRefusal::StopUnproven(
@@ -2606,9 +2659,11 @@ pub(crate) fn stage_session_retirement(
             )),
             StopObservation::Proven => {
                 receipts.insert(e.name.clone(), receipt);
-                Ok(StagedRetirement::Unverified(
-                    "active-surface removal was not evaluated".into(),
-                ))
+                Ok(if dry_surface_clear {
+                    StagedRetirement::Retired
+                } else {
+                    StagedRetirement::Unverified("active-surface removal was not evaluated".into())
+                })
             }
         };
     }

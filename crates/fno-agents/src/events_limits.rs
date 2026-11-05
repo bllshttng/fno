@@ -1,6 +1,6 @@
 //! The events envelope size limits, generated from the Python-owned schema.
 //!
-//! `cli/src/fno/events/schema.yaml` is canonical: Python reads its `limits`
+//! `src/event_store/schema.yaml` is canonical; the build projects its `limits`
 //! block at runtime (`events/__init__.py`). Rust used to MIRROR the two scalars
 //! as literals linked only by a comment, which is how a bumped limit shipped
 //! half-applied. `build.rs` now renders the block into `events_limits.toml`,

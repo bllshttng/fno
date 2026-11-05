@@ -2939,6 +2939,10 @@ fn run_all_apply(a: &Args, dry_run: bool) -> i32 {
         &mut counts,
         crate::pr_steward::run_pass(&steward_io, steward_io.cwd, &pulls, dry_run),
     );
+    bump(
+        &mut counts,
+        crate::epic_issue::run_pass(steward_io.cwd, &pulls, dry_run),
+    );
     emit_tick_event(
         a,
         &counts,

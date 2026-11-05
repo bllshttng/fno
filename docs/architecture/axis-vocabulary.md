@@ -173,7 +173,7 @@ Workspace and squad are one object under two names. The ruling and its senses ta
 
 ## Recognized and unrecognized harness values
 
-Session-marker detection (`HARNESS_SESSION_MARKERS` in `cli/src/fno/harness_identity.py`) recognizes four harnesses today: `codex`, `claude`, `gemini`, `opencode`. `agy` dispatches through its own adapter (`crates/fno-agents/src/agy_ask.rs`) but has no session marker. `oh-my-pi` and `openclaw` are operator-named harnesses the code does not model yet. They appear in this table as legal vocabulary, not as values any code path recognizes.
+Session-marker detection (`HARNESS_SESSION_MARKERS` in `crates/fno-agents/src/claims.rs`) recognizes four harnesses today: `codex`, `claude`, `gemini`, `opencode`. `agy` dispatches through its own adapter (`crates/fno-agents/src/agy_ask.rs`) but has no session marker. `oh-my-pi` and `openclaw` are operator-named harnesses the code does not model yet. They appear in this table as legal vocabulary, not as values any code path recognizes.
 
 A literal like `agy` or `openclaw` under a provider-named binding is still a defect even though no session marker detects that harness.
 

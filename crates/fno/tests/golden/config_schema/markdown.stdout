@@ -9,6 +9,7 @@ Keys live in a flat `config.toml` (`.fno/config.toml` project-local, `~/.fno/con
 | `state_dir` | str | `~/.fno/` | advanced | Root dir for global fno do state. |
 | `plans_dir` | str | `.fno/plans/` | advanced | Where folder plans are written. |
 | `plans_filename` | str | `%Y%m%d-{slug}-{node}.md` | advanced | Plan/design-doc filename template: strftime codes plus {slug} and {node} placeholders; must render to a bare *.md name. |
+| `repo_aliases` | dict[str, str] | `{}` | advanced | Rename map `old = "new"` between owner/repo slugs. A PR url recorded under a repo's former name binds in the merge gate and heals in the sweep leg; GitHub's own redirect (GET /repos/old answers the new full_name) seeds the same map through the gh-facts cache, so the config row is the offline override, never a requirement. Specimen: `bllshttng/fno = "fnodotdev/fno"`. |
 | `branch.prefix` | str | `fno` | advanced | Prefix for dispatched worktree branches: <prefix>/<slug>-<node>. |
 | `build.agent_freeze` | bool | `false` | never | Agent build freeze: while set, the rustc wrapper's doors refuse an agent session's compile and test run with exit 86 and name CI as the gate; the user's own cargo and the install build still compile. |
 | `paths.ledger_json` | str (optional) | _(none)_ | never | Override path to ledger.json. |
@@ -75,6 +76,7 @@ Keys live in a flat `config.toml` (`.fno/config.toml` project-local, `~/.fno/con
 | `telemetry.eval_events.enabled` | bool | `false` | advanced | Send each eval run to PostHog as an event (default off). |
 | `telemetry.eval_events.host` | str | `https://us.i.posthog.com` | advanced | PostHog ingest host, https only. |
 | `telemetry.eval_events.token_env` | str | `FNO_POSTHOG_PROJECT_TOKEN` | advanced | Env var holding the PostHog project token. |
+| `telemetry.eval_events.token_file` | str | `~/.fno/secrets/posthog-project-token` | advanced | Path to the PostHog project token file (mode 0600); token_env wins when set; a leading ~ expands against $HOME. |
 | `attention.enabled` | bool | `true` | advanced | Kill switch for the attention arm (question pages and sinks; default on). |
 | `attention.sinks` | list[dict[str, Any]] | `[]` | advanced | Push sinks for open questions: a list of tables with name, type (ntfy or webhook), url, topic, token_env, answer_base_url and body (title-only or full). |
 | `research.output_dir` | str (optional) | _(none)_ | advanced | Landing dir for the `fno do research` doc deliverable (brief + sources sidecar); vault area, not repo-relative. Unset => ship fails loud (never guesses). |
@@ -352,5 +354,8 @@ Keys live in a flat `config.toml` (`.fno/config.toml` project-local, `~/.fno/con
 | `github.app_id` | str | `` | never | GitHub App id; with github.app_installation_id it arms App-installation token minting for GitHub API calls. |
 | `github.app_installation_id` | str | `` | never | GitHub App installation id; required beside github.app_id before the App path mints tokens. |
 | `github.app_key_path` | str | `~/.fno/secrets/github-app.pem` | never | Path to the GitHub App private key PEM (default ~/.fno/secrets/github-app.pem, mode 0600); a leading ~ expands against $HOME. |
+| `questions.judge.batch` | int | `10` | never | Max questions the judge takes per run. |
+| `questions.judge.enabled` | bool | `false` | never | Arm the question judge: when true, judge runs read the question board and decide open questions against the law record. |
+| `questions.judge.model` | str | `sonnet` | never | Model the judge dispatches verdicts with. |
 | `schema_version` | int | `1` | never | Settings schema version; managed by fno, not hand-set. |
 

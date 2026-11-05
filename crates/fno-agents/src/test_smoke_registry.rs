@@ -13,7 +13,6 @@ pub(super) const STRUCTURAL_STEPS: &[(&str, &str, &str)] = &[
     ("frontend-craft gate harness", ".", "bash tests/lib/test_frontend_surface.sh\nbash tests/lib/test_infer_has_ui.sh\nbash tests/lib/test_resolve_plan_executor.sh"),
     ("config global-precedence harness", ".", "bash tests/lib/test_config_global_precedence.sh\nbash tests/lib/test_config_plans_chain.sh"),
     ("loop-check shim + immutable manifest harness", ".", "bash tests/hooks/test_loop_check_shim.sh\nbash tests/hooks/test_manifest_immutable.sh\nbash tests/hooks/test_graph_write_protect.sh\nbash tests/hooks/test_worktree_write_protect.sh\nbash tests/hooks/test_plan_location_guard.sh\nbash tests/hooks/test_worktree_live_peers.sh\nbash tests/hooks/test_setup_nudge_session_start.sh\nbash tests/hooks/test_init_target_session_id.sh\nbash tests/hooks/test_agy_stop_hook.sh\nbash tests/hooks/test_check_impl_location.sh"),
-    ("Python hook harnesses (outside both test trees)", ".", "uv run --project cli python -m pytest -q tests/hooks/test_git_protection_push.py tests/hooks/test_merge_guard_worktree.py tests/hooks/test_merge_guard_stacked_base.py"),
     ("worktree lifecycle: remove-hook contract + cwd-anchored liveness + ttyless archive + job reap", ".", "bash tests/hooks/test_worktree_remove_lifecycle.sh"),
     ("in_review dispatch guard", ".", "bash tests/hooks/test_init_in_review_gate.sh"),
     ("born-with-why offer inject harness", ".", "bash tests/hooks/test_born_with_why_offer_inject.sh"),
@@ -50,7 +49,6 @@ pub(super) const STRUCTURAL_STEPS: &[(&str, &str, &str)] = &[
     ("placement rule", ".", "bash scripts/ci/check-placement-rule.sh"),
     ("No residual old-name patterns (rename guard)", ".", "bash scripts/rename/residual-check.sh"),
     ("No stale skill refs (consolidation audit)", ".", "bash scripts/ci/check-no-stale-skill-refs.sh"),
-    ("Company function-agnosticism check", ".", "bash scripts/ci/check-company-function-agnostic.sh"),
     ("Plugin function-agnosticism check", ".", "bash scripts/ci/check-plugins-function-agnostic.sh"),
     ("Company module boundary self-test", ".", "bash tests/ci/test_check_company_boundaries.sh"),
     ("Company module boundary check", ".", "bash scripts/ci/check-company-boundaries.sh --baseline"),
@@ -81,6 +79,7 @@ pub(super) const STRUCTURAL_STEPS: &[(&str, &str, &str)] = &[
     ("smoke duration reporter self-test", ".", "bash tests/ci/test_smoke_duration_report.sh"),
     ("workflow timeout-comment guard", ".", "bash scripts/ci/check-workflow-timeout-comments.sh"),
     ("hookagg window harness", ".", "python3 scripts/release/test_hookagg_window.py"),
+    ("python ledger self-test", ".", "bash tests/ci/test_check_python_ledger.sh"),
 ];
 
 /// Shell harnesses discovery finds but smoke must not run yet (the

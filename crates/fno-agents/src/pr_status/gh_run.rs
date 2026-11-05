@@ -49,6 +49,24 @@ pub(crate) fn run(
     env: EnvOverride,
     timeout: Duration,
 ) -> Result<RunResult, RunError> {
+    let (result, injected) = run_attempt(cmd, cwd, env.clone(), timeout, true)?;
+    if crate::github_app::should_retry_without_app(injected, !result.ok(), &result.stderr) {
+        return run_attempt(cmd, cwd, env, timeout, false).map(|(result, _)| result);
+    }
+    Ok(result)
+}
+
+/// One captured gh read: the command runs under the broker with whatever
+/// auth the injector placed. Returns the result and whether the child
+/// carried an installation token, so the 404 fallback can retry without
+/// it. `allow_app_token: false` skips the injector entirely.
+fn run_attempt(
+    cmd: &[String],
+    cwd: Option<&Path>,
+    env: EnvOverride,
+    timeout: Duration,
+    allow_app_token: bool,
+) -> Result<(RunResult, bool), RunError> {
     let (program, args) = cmd
         .split_first()
         .ok_or_else(|| RunError::Io("run needs at least a program name".to_string()))?;
@@ -61,15 +79,15 @@ pub(crate) fn run(
         for (key, value) in map {
             command.env(key, value);
         }
-        // Keys the map drops must not leak through: the broker's scrubbed
+        // Keys the map drops must not leak to the child: the broker's scrubbed
         // PATH is a replacement, not a patch, so an inherited FNO_REAL_GH
         // would send the child back through the proxy it just escaped.
         command.env_remove("FNO_REAL_GH");
         command.env_remove(crate::pr_status::quota::PROXY_DIR_ENV);
         command.env_remove(crate::pr_status::quota::PROXY_DEPTH_ENV);
     }
-    crate::github_app::inject(&mut command, std::ffi::OsStr::new(program));
-    command.stdin(Stdio::null());
+    let injected =
+        allow_app_token && crate::github_app::inject(&mut command, std::ffi::OsStr::new(program));
     command.stdout(Stdio::piped());
     command.stderr(Stdio::piped());
     use std::os::unix::process::CommandExt;
@@ -118,16 +136,22 @@ pub(crate) fn run(
     let stdout = String::from_utf8_lossy(&stdout_drain.join().unwrap_or_default()).into_owned();
     let stderr = String::from_utf8_lossy(&stderr_drain.join().unwrap_or_default()).into_owned();
     match status {
-        Ok(status) => Ok(RunResult {
-            returncode: status.code().unwrap_or(1),
-            stdout,
-            stderr,
-        }),
-        Err(timeout) => Ok(RunResult {
-            returncode: 124,
-            stdout,
-            stderr: format!("timed out after {:.0}s", timeout.as_secs_f64()),
-        }),
+        Ok(status) => Ok((
+            RunResult {
+                returncode: status.code().unwrap_or(1),
+                stdout,
+                stderr,
+            },
+            injected,
+        )),
+        Err(timeout) => Ok((
+            RunResult {
+                returncode: 124,
+                stdout,
+                stderr: format!("timed out after {:.0}s", timeout.as_secs_f64()),
+            },
+            injected,
+        )),
     }
 }
 

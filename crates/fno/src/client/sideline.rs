@@ -352,10 +352,11 @@ impl View {
         out
     }
 
-    /// Rows and questions waiting on the user: local blocked rows, remote
-    /// blocked rows, and open questions. Local rows fold the same state
-    /// function as every section rollup, so they equal the sum of the
-    /// section counts.
+    /// Agent rows waiting on the user: local blocked rows and remote
+    /// blocked rows. Open questions stay in the notifications panel, where
+    /// they answer (operator, 2026-11-04): a question line here never
+    /// opened anything. Local rows fold the same state function as every
+    /// section rollup, so they equal the sum of the section counts.
     pub(super) fn need_input_count(&self) -> usize {
         let local = self
             .layout
@@ -363,7 +364,7 @@ impl View {
             .iter()
             .filter(|a| agent_lattice_state(a) == LatticeState::Blocked)
             .count();
-        local + self.machine_tree.blocked_remote() + self.open_question_count()
+        local + self.machine_tree.blocked_remote()
     }
 
     /// Columns the strip's count label covers, for the tap map. Zero when
@@ -385,10 +386,11 @@ impl View {
         format!(" {need} need input").chars().count().min(stop)
     }
 
-    /// The pinned Needs input section: a header, the blocked rows (this
-    /// machine, then remote machines), and one line per open question. The
-    /// rows also stay in their groups below, so a click never lands on a
-    /// row that moved.
+    /// The pinned Needs input section: a header, then the blocked rows
+    /// (this machine, then remote machines). Open questions never appear
+    /// here; the notifications panel lists and answers them. The rows also
+    /// stay in their groups below, so a click never lands on a row that
+    /// moved.
     pub(super) fn pin_needs<'a>(
         &'a self,
         rows: Vec<DisplayRow<'a>>,
@@ -405,16 +407,9 @@ impl View {
             .filter(blocked)
             .chain(self.machine_tree.rows().filter(blocked))
             .collect();
-        let questions: Vec<String> = self.questions_merged().map_or_else(Vec::new, |fold| {
-            fold.items
-                .iter()
-                .filter(|q| q.state == "open" && !q.settled)
-                .map(|q| q.title.clone())
-                .collect()
-        });
         let mut out = vec![DisplayRow::Header {
             label: "Needs input".into(),
-            rollup: vec![(LatticeState::Blocked, agents.len() + questions.len())],
+            rollup: vec![(LatticeState::Blocked, agents.len())],
             key: SectionKey::Group("@needs-input".into()),
             view: SectionView::Expanded,
         }];
@@ -423,25 +418,11 @@ impl View {
             out.push(DisplayRow::Agent(a));
             out_depths.push(0);
         }
-        for title in questions {
-            out.push(DisplayRow::NeedNote(title));
-            out_depths.push(0);
-        }
         out.push(DisplayRow::Blank);
         out_depths.push(0);
         out.extend(rows);
         out_depths.extend(depths);
         (out, out_depths)
-    }
-
-    /// Open questions the user can answer, one per question across machines.
-    pub(super) fn open_question_count(&self) -> usize {
-        self.questions_merged().map_or(0, |fold| {
-            fold.items
-                .iter()
-                .filter(|q| q.state == "open" && !q.settled)
-                .count()
-        })
     }
 
     /// The glyph beside the count: it alternates on the spin clock while
@@ -509,6 +490,25 @@ impl View {
                     },
                 };
             }
+        }
+    }
+
+    /// Whether agent row `a` hosts pane `pid`: the one predicate behind the
+    /// chosen-row tests, the pane-menu resolution, the drag re-anchor, the
+    /// focus reveal and the selector seed. A remote row hosts the pane its
+    /// portal twin carries (the seat pane a reach named with the glyph
+    /// address), so the remote row reads chosen, seeded, revealable and
+    /// menu-resolvable while the twin itself stays out of the sideline and
+    /// the navigator: one session, one row.
+    pub(super) fn row_hosts_pane(&self, a: &AgentRow, pid: u64) -> bool {
+        if a.pane_id == Some(pid) {
+            return true;
+        }
+        match &a.remote {
+            Some(remote) => {
+                machine_tree::portal_twin(self, remote).is_some_and(|t| t.pane_id == Some(pid))
+            }
+            None => false,
         }
     }
 
@@ -828,9 +828,6 @@ impl View {
                     ))
                 }
                 DisplayRow::TableEmpty => Some(("  no agents".to_string(), cell_flags::DIM)),
-                DisplayRow::NeedNote(t) => {
-                    Some((crate::chrome::clip(&format!("  ? {t}"), text_w), 0))
-                }
                 // The card separator (the operator's 2026-10-04 spacing
                 // mockup): one dim dashed rule, full width.
                 DisplayRow::CardRule => Some(("\u{2504}".repeat(text_w), cell_flags::DIM)),
@@ -882,7 +879,7 @@ impl View {
             if matches!(drow, DisplayRow::NewSquad) {
                 self.paint_new_squad_footer(cells, r, cols, text_w, panel_w);
             }
-            let chosen = matches!(drow, DisplayRow::Agent(a) if a.pane_id == Some(self.layout.focus) && !a.exited);
+            let chosen = matches!(drow, DisplayRow::Agent(a) if self.row_hosts_pane(a, self.layout.focus) && !a.exited);
             let mut highlit =
                 chosen || self.list_selector() == Some(i) || self.hover_row == Some(i);
             if card {
@@ -895,7 +892,7 @@ impl View {
                 );
             let card_chosen = card_pair
                 && matches!(drow, DisplayRow::Agent(a) | DisplayRow::CardDetail(a) | DisplayRow::CardMetrics(a)
-                    if a.pane_id == Some(self.layout.focus) && !a.exited);
+                    if self.row_hosts_pane(a, self.layout.focus) && !a.exited);
             if card_chosen {
                 // The chosen card fills all 3 lines, full width, hover
                 // included: the chosen fill wins on hover.
@@ -953,7 +950,7 @@ impl View {
                 if let (false, DisplayRow::Agent(a)) = (driven, drow) {
                     let lat = agent_lattice_state(a);
                     let style = lattice_style(lat, self.theme.needs_you, self.theme.ok);
-                    let accent = if a.pane_id == Some(self.layout.focus) && a.exited {
+                    let accent = if self.row_hosts_pane(a, self.layout.focus) && a.exited {
                         self.theme.brand
                     } else {
                         agent_lane_fg(a, lat, style.fg)
@@ -1094,7 +1091,8 @@ impl View {
         // An EXITED focus row is legibly dead: DIM accent on its cells and
         // no band (a dead "you are here" never reads as a live one). A live
         // focus row's band is the overlay's accent highlight.
-        let is_focus = matches!(drow, DisplayRow::Agent(a) if a.pane_id == Some(self.layout.focus));
+        let is_focus =
+            matches!(drow, DisplayRow::Agent(a) if self.row_hosts_pane(a, self.layout.focus));
         let focus_exited = is_focus && matches!(drow, DisplayRow::Agent(a) if a.exited);
         let (mut row_cells, _): (Vec<RtCell>, u8) = match drow {
             // The full-width rows - squad and section bands, sublines, the
@@ -1109,7 +1107,6 @@ impl View {
             | DisplayRow::NewSquad
             | DisplayRow::Blank
             | DisplayRow::TableEmpty
-            | DisplayRow::NeedNote(_)
             | DisplayRow::CardDetail(..)
             | DisplayRow::CardMetrics(..)
             | DisplayRow::CardRule
@@ -1474,7 +1471,7 @@ impl View {
         };
         let line = &mut cells[row * cols..row * cols + text_w];
         let lattice = agent_lattice_state(agent);
-        let status_fg = if agent.pane_id == Some(self.layout.focus) && agent.exited {
+        let status_fg = if self.row_hosts_pane(agent, self.layout.focus) && agent.exited {
             self.theme.brand
         } else {
             agent_lane_fg(
@@ -1497,7 +1494,7 @@ impl View {
         // spans read in the fill's base tone (brand-on-brand text would
         // vanish - the composed contrast test pins this at 3:1).
         let (fill_fg, _, _) = crate::theme::chosen_card_style(&self.theme);
-        let on_chosen_fill = agent.pane_id == Some(self.layout.focus) && !agent.exited;
+        let on_chosen_fill = self.row_hosts_pane(agent, self.layout.focus) && !agent.exited;
         // The name matters most: the node may not start before the slug's
         // end plus one space. It cuts its front, or drops, to fit. A slug
         // clipped to fit is not found whole, and leaves the node no room.

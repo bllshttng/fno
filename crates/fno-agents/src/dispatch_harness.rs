@@ -11,7 +11,7 @@
 //!   builtin `claude` (the decision_source vocabulary is a wire contract the
 //!   spawn receipt carries; the values stay verbatim). Inference folds the
 //!   ambient harness markers from the caller's env mapping the same way
-//!   `fno.harness_identity.resolve_harness_identity` folds them: the
+//!   deleted Python resolver folded them: the
 //!   canonical stamp leads, the vendor fold answers an absent stamp, and a
 //!   contradiction or invalid stamp answers nothing rather than guessing.
 //! - `configured` - `{command?, cwd?}` -> `{harness, note, route}`. The

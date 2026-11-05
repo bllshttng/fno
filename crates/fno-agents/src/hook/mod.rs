@@ -14,6 +14,7 @@ pub mod bin_install_guard;
 pub mod buddy_statusline;
 pub mod diff_budget;
 pub mod edit_integrity;
+pub mod git_protection;
 pub mod join_partition_guard;
 pub mod lead_guard;
 pub mod lead_guard_wire;
@@ -49,6 +50,7 @@ pub fn dispatch(args: &[String]) -> i32 {
         Some("diff-budget") => diff_budget::run(&args[1..]),
         Some("edit-integrity") => edit_integrity::run(&args[1..]),
         Some("effect-guard") => crate::effect_gate::run_hook(&args[1..]),
+        Some("git-protection") => git_protection::run(&args[1..]),
         Some("join-partition-guard") => join_partition_guard::run(&args[1..]),
         Some("lead-guard") => lead_guard::run(&args[1..]),
         Some("pipe-guard") => pipe_guard::run(&args[1..]),
@@ -70,7 +72,7 @@ pub fn dispatch(args: &[String]) -> i32 {
         Some("write-gate") => write_gate::run(&args[1..]),
         other => {
             eprintln!(
-                "fno-agents hook: unknown entry {other:?}; expected bg-process-guard, bin-install-guard, diff-budget, edit-integrity, effect-guard, join-partition-guard, lead-guard, pipe-guard, posttooluse-bash, pretooluse-bash, prompt, recursive-grep-guard, rules, save-session, send-message-guard, session-state, subagent-worktree-guard, task-boundary, test-run-guard, transcript-push, worktree-relocation-allow, write-gate or stop"
+                "fno-agents hook: unknown entry {other:?}; expected bg-process-guard, bin-install-guard, diff-budget, edit-integrity, effect-guard, git-protection, join-partition-guard, lead-guard, pipe-guard, posttooluse-bash, pretooluse-bash, prompt, recursive-grep-guard, rules, save-session, send-message-guard, session-state, subagent-worktree-guard, task-boundary, test-run-guard, transcript-push, worktree-relocation-allow, write-gate or stop"
             );
             2
         }

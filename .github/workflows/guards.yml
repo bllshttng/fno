@@ -184,11 +184,10 @@ jobs:
 
       - name: Command matrix fresh
         if: ${{ !cancelled() }}
-        working-directory: cli
         run: |
           set -euo pipefail
-          uv run fno-py doctor harness-matrix --write
-          git diff --exit-code -- ../docs/harnesses/command-matrix.md
+          fno-agents harness-matrix --write --root "$GITHUB_WORKSPACE"
+          git diff --exit-code -- docs/harnesses/command-matrix.md
 
       # hooks/write-gate.sh refuses edits only to generated copies
       # that generated-artifacts.tsv or skill-bundles.yaml names. The census
@@ -198,6 +197,15 @@ jobs:
         run: |
           bash scripts/tests/check-generated-manifest-selftest.sh
           bash scripts/ci/check-generated-manifest.sh
+
+      # scripts/regen-generated-copies.py is the no-build regen path the
+      # write-gate refusal names. Its selftest watches the two contracts the
+      # plain-copy walk must keep: the spliced notify_dispatch twin is
+      # refused by name, and a copy newer than its source is never moved
+      # backwards.
+      - name: Regen copy script guards (selftest)
+        if: ${{ !cancelled() }}
+        run: bash scripts/tests/test_regen_generated_copies.sh
 
       # x-3d21 R4/R5: a state path built by hand consults nothing, so no env
       # pin, guard or refusal can reach it. The ratchet fails in BOTH
@@ -525,11 +533,6 @@ jobs:
         timeout-minutes: 5
         run: bash scripts/ci/check-tests-hermetic-events.sh
 
-      - name: identity precedence-primitive caller ratchet
-        if: ${{ !cancelled() }}
-        timeout-minutes: 5
-        run: bash scripts/ci/check-identity-stamp-sites.sh
-
       - name: hook source identity
         if: ${{ !cancelled() }}
         timeout-minutes: 5
@@ -583,6 +586,14 @@ jobs:
         if: ${{ !cancelled() }}
         timeout-minutes: 5
         run: bash scripts/ci/check-no-user-python.sh
+
+      # Every tracked .py outside cli/ has one verdict row in
+      # scripts/ci/python-ledger.tsv, and every row names a live file; keep
+      # rows must sit inside check-file-budget.sh's PY_ALLOWED homes.
+      - name: Python ledger is complete
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: bash scripts/ci/check-python-ledger.sh
 
       # A tracked source file over 5,000 lines is shrink-only relative to the
       # merge base; the refusal names the module-per-question remedy. The

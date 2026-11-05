@@ -1,8 +1,8 @@
 //! `fno-agents harness-roster`: the daemon-free JSON read of the one harness
-//! roster. Python's `fno.harness_names` proxies this instead of
-//! carrying a tuple copy of `provider::KNOWN_HARNESSES`; the parity gate
-//! parses the same const out of the Rust source, so a name added in Rust
-//! alone reaches every Python reader.
+//! roster. The wheel's front door proxied this instead of carrying a tuple
+//! copy of `provider::KNOWN_HARNESSES`; the parity gate parses the same
+//! const out of the Rust source, so a name added in Rust alone reaches
+//! every reader.
 //!
 //! Transport-only and unregistered in `ALL_CLIENT_ACTIONS` (the shrink law,
 //! d-fe66560a, allows no new client action): every caller reaches it through

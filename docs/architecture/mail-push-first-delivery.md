@@ -10,7 +10,7 @@ This makes delivery push instead of pull, and closes the matching sender-side ho
 The payload includes each message id and `fno agents mail reply --to <id>` guidance, so the recipient sees the mail without discovering or running a drain command.
 `UserPromptSubmit` already fires every turn, so delivery uses an active boundary that already exists and adds no daemon or poll loop.
 
-**Send (honesty).** The turn-boundary render no longer computes the sent-unclaimed nag: the cancelled Python run never reached that scan once, so the native port drops it and `fno agents mail status` keeps the signal (`sent unclaimed: N`).
+**Send (honesty).** The turn-boundary render carries the sent-unclaimed nag again. The first native port dropped it: the cancelled Python run never reached that scan once. The line is back as one scan behind the landed-read budget. An empty outbox returns before any transcript read, so a session that only reads pays nothing for it. `fno agents mail sent [--unclaimed]` prints the same predicate. There is no `mail status` command.
 Before the push boundary existed, `queued (durable)` was the last thing a sender ever heard, so silence read as delivered; the turn-boundary delivery is what closed that, not the nag line.
 
 ## `fno-agents mail-notify-self` (native hook-output command)
@@ -28,7 +28,7 @@ A live hold (idle or wall) short-circuits before any render or ack, so a busy tu
 There is no notify cursor: `SessionStart` and `UserPromptSubmit` race on the one canonical cursor, and whichever successfully drains first makes the other silent.
 
 - **Inbound:** unread envelopes addressed to the canonical session handle -> complete bodies, ids, and reply guidance inside a hook-owned `<system-reminder>` frame, followed by acknowledgement after flush.
-- **Sent-unclaimed:** no longer part of the boundary path. The status command still computes it (hosted and durable sends not yet proven `landed`, aged past `config.inbox.unclaimed_ttl`, default 1800s) and reports `sent unclaimed: N`. Stat-only; advances no recipient cursor. Porting the scan back into the boundary render is open follow-up work.
+- **Sent-unclaimed:** part of the boundary path again. The render appends one line naming the hosted and durable sends not yet proven `landed`, aged past `config.inbox.unclaimed_ttl` (default 1800s). The scan never advances a recipient cursor. Its only write is the sender-side `landed` bus receipt a proven transcript landing records, so later scans skip the read. The same predicate stays listable with `fno agents mail sent --unclaimed`.
 
 ## Tool-boundary delivery
 

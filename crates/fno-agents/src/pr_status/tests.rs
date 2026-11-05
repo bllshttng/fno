@@ -207,6 +207,24 @@ fn red_fixture_collects_the_golden_failures() {
     );
 }
 
+/// A cancelled run of a GitHub-native (`dynamic/`) workflow cannot be rerun,
+/// so its row is advisory: the verdict stays green and cancels nothing.
+#[test]
+fn cancelled_dynamic_workflow_row_is_advisory() {
+    assert!(is_dynamic_workflow_path(
+        "dynamic/github-code-scanning/codeql"
+    ));
+    assert!(!is_dynamic_workflow_path(".github/workflows/ci.yml"));
+    let rollup = vec![
+        json!({"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}),
+        json!({"name": "Analyze (rust)", "status": "COMPLETED", "conclusion": "CANCELLED", "advisory": true}),
+    ];
+    let generic = generic_ci_rollup(&rollup);
+    assert_eq!(generic.len(), 1);
+    let (verdict, code, _) = verdict_for(&generic);
+    assert_eq!((verdict.as_str(), code), ("green", 0));
+}
+
 /// A red evals/gate status is an eval fact, not a CI failure: the generic
 /// rollup drops it, so the verdict stays green over green check runs, and
 /// the fact extractor reads the newest row for the context.
@@ -602,6 +620,21 @@ fn the_pinned_read_refuses_any_answer_about_another_head() {
     );
     assert!(matched.is_none(), "a match is a pass");
     assert_eq!(open["settled"], json!(true), "a match mutates nothing");
+
+    // A pin spelled as a 7+ hex prefix of the head matches; shorter or
+    // diverging prefixes still mismatch.
+    for pin in ["37deafc", "37DEAFC2A"] {
+        let mut o = open.clone();
+        assert!(
+            crate::pr_status::compose::apply_expect_head(o.as_object_mut().unwrap(), pin).is_none(),
+            "{pin} names the head"
+        );
+    }
+    for pin in ["37deaf", "37deafd", ""] {
+        let mut o = open.clone();
+        crate::pr_status::compose::apply_expect_head(o.as_object_mut().unwrap(), pin);
+        assert_eq!(o["settled"], json!(false), "{pin:?} does not name the head");
+    }
 
     // An unreadable head (a degraded serve) cannot verify the pin: refused.
     let mut degraded = json!({"pr": "9", "head": Value::Null, "settled": false});

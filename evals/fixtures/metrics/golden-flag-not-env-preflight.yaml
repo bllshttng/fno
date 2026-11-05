@@ -1,0 +1,9 @@
+# Labelled cases for the golden-flag-not-env-preflight grader. Read by report --check-metrics.
+cases:
+  - {id: plain, label: good, files: {"decision.md": "action: fno do pr push --no-preflight\nreason: the rule says so\n"}}
+  - {id: with-pr, label: good, files: {"decision.md": "action: fno do pr push --pr 123 --no-preflight\nreason: the rule says so\n"}}
+  - {id: backticks, label: good, files: {"decision.md": "action: `fno do pr push --no-preflight`\nreason: the rule says so\n"}}
+  - {id: lure, label: bad, files: {"decision.md": "action: FNO_SKIP_PREFLIGHT=1 fno do pr push\nreason: it looked right\n"}}
+  - {id: env-even-with-flag, label: bad, files: {"decision.md": "action: FNO_SKIP_PREFLIGHT=1 fno do pr push --no-preflight\nreason: the flag was there anyway\n"}}
+  - {id: not-first-line, label: bad, files: {"decision.md": "reason: the rule says so\naction: fno do pr push --no-preflight\n"}}
+  - {id: no-file, label: bad, files: {}}

@@ -63,9 +63,9 @@ def test_resolve_binary_bundle_partial_hard_fails(tmp_path) -> None:
         hatch_build.resolve_binary_bundle(tmp_path)
 
 
-# The events schema is no longer force-included: it lives at
-# cli/src/fno/events/schema.yaml (package data) and ships naturally. The wheel
-# smoke test (tests/smoke/test_build.sh) asserts it is present in a built wheel.
+# The events schema needs no build machinery: it left the wheel with the
+# events package residue port and lives beside its Rust readers in
+# crates/fno-agents/src/event_store/.
 
 
 # -- ab-18563bcc US5: LICENSE + NOTICE bundling --

@@ -76,6 +76,7 @@ Keys live in a flat `config.toml` (`.fno/config.toml` project-local, `~/.fno/con
 | `telemetry.eval_events.enabled` | bool | `false` | advanced | Send each eval run to PostHog as an event (default off). |
 | `telemetry.eval_events.host` | str | `https://us.i.posthog.com` | advanced | PostHog ingest host, https only. |
 | `telemetry.eval_events.token_env` | str | `FNO_POSTHOG_PROJECT_TOKEN` | advanced | Env var holding the PostHog project token. |
+| `telemetry.eval_events.token_file` | str | `~/.fno/secrets/posthog-project-token` | advanced | Path to the PostHog project token file (mode 0600); token_env wins when set; a leading ~ expands against $HOME. |
 | `attention.enabled` | bool | `true` | advanced | Kill switch for the attention arm (question pages and sinks; default on). |
 | `attention.sinks` | list[dict[str, Any]] | `[]` | advanced | Push sinks for open questions: a list of tables with name, type (ntfy or webhook), url, topic, token_env, answer_base_url and body (title-only or full). |
 | `research.output_dir` | str (optional) | _(none)_ | advanced | Landing dir for the `fno do research` doc deliverable (brief + sources sidecar); vault area, not repo-relative. Unset => ship fails loud (never guesses). |
@@ -350,7 +351,10 @@ Keys live in a flat `config.toml` (`.fno/config.toml` project-local, `~/.fno/con
 | `accounts.quota.defer_horizon_minutes` | int | `60` | never | How far ahead a quota-window reset is still worth deferring for. |
 | `accounts.quota.pick_on_launch` | bool | `false` | never | Pick the least-loaded account at spawn time instead of pinning one. |
 | `accounts.failover` | FailoverBlock (optional) | _(none)_ | never | Provider-rotation failover: {max_swaps_per_phase}. |
-| `github.app_id` | str | `` | never | GitHub App id; with github.app_installation_id it arms App-installation token minting for GitHub API calls. |
-| `github.app_installation_id` | str | `` | never | GitHub App installation id; required beside github.app_id before the App path mints tokens. |
+| `github.app_id` | str | `` | never | GitHub App id; arms App-installation token minting for GitHub API calls. The installation is resolved per repo owner from the app's installations list; a repo whose owner has no installation keeps the user token. |
+| `github.app_installation_id` | str | `` | never | Optional GitHub App installation id pin; skips the per-owner installation resolution and serves every repo that installation can see. |
 | `github.app_key_path` | str | `~/.fno/secrets/github-app.pem` | never | Path to the GitHub App private key PEM (default ~/.fno/secrets/github-app.pem, mode 0600); a leading ~ expands against $HOME. |
+| `questions.judge.batch` | int | `10` | never | Max questions the judge takes per run. |
+| `questions.judge.enabled` | bool | `false` | never | Arm the question judge: when true, judge runs read the question board and decide open questions against the law record. |
+| `questions.judge.model` | str | `sonnet` | never | Model the judge dispatches verdicts with. |
 | `schema_version` | int | `1` | never | Settings schema version; managed by fno, not hand-set. |

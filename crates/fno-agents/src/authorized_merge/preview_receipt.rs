@@ -7,8 +7,8 @@ use std::path::PathBuf;
 use serde_json::Value;
 
 use super::{
-    facts_from_pulls, preview_walk, BlockerClass, Effect, PreviewVerdict, Probes, RealProbes,
-    Request,
+    facts_from_pulls, preview_walk, BlockerClass, Effect, EvalsGateRead, PreviewVerdict, Probes,
+    RealProbes, Request,
 };
 
 /// The preview receipt for one request, in process. The status composer and
@@ -169,5 +169,26 @@ pub(crate) fn parse_request(payload: &Value) -> Result<Request, String> {
             other => Some(other.to_string()),
         }),
         supplied_facts: payload.get("facts").filter(|v| v.is_object()).cloned(),
+        // Present-but-null is a probed "no row at this head", so a row must
+        // stay an object and an unprobed ask omits the key entirely (same
+        // tri-state as the hold answers above).
+        supplied_evals_gate: payload.get("evals_gate").map(|v| {
+            if v.is_null() {
+                None
+            } else {
+                Some(EvalsGateRead {
+                    state: v
+                        .get("state")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_string(),
+                    description: v
+                        .get("description")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_string(),
+                })
+            }
+        }),
     })
 }

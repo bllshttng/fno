@@ -45,6 +45,16 @@ pub(crate) fn keys_modal_with_filter(filter: Option<&str>) -> KeysModal {
         enabled: false,
     });
     events.push(None);
+    // Where the user's overrides live: the answer to "which file do I edit".
+    if let Some(path) = crate::keybindings_file::path() {
+        rows.push(PopupRow::Entry {
+            glyph: "file".into(),
+            label: path.display().to_string(),
+            hint: String::new(),
+            enabled: false,
+        });
+        events.push(None);
+    }
     let bindings = key_bindings();
     for section in [
         KeySection::GlobalNoPrefix,
@@ -66,7 +76,9 @@ pub(crate) fn keys_modal_with_filter(filter: Option<&str>) -> KeysModal {
                 PopupRow::Entry {
                     glyph: kb.disp.to_string(),
                     label: kb.label.to_string(),
-                    hint: String::new(),
+                    hint: crate::keybindings_file::origin(kb.action, kb.key)
+                        .tag()
+                        .to_string(),
                     enabled: true,
                 },
                 Some(kb.event.clone()),

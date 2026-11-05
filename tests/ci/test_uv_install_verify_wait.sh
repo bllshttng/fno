@@ -140,14 +140,15 @@ have crates/fno/src/bootstrap.rs 'install_verified_within(uv, VERIFY_ATTEMPTS, V
 # pin fails until the hook follows it. Without it the four 15-pins still catch
 # a budget change while this fifth consumer silently under-covers. The pin
 # reads the shared constant's definition - one literal, no sibling can shadow
-# it - and both call sites are counted so a bare timeout= literal cannot
-# quietly return.
-have hooks/git_protection_impl.py '_VETO_PROBE_TIMEOUT = 24' "shared veto timeout definition"
-_v=$(grep -c 'timeout=_VETO_PROBE_TIMEOUT' "$REPO/hooks/git_protection_impl.py")
-[ "$_v" -eq 2 ] || fail "expected both veto call sites on _VETO_PROBE_TIMEOUT, found $_v"
-_hook_veto=$(grep -oE '_VETO_PROBE_TIMEOUT = [0-9]+' "$REPO/hooks/git_protection_impl.py" | head -n 1)
+# it - and the one call site reads it, so a bare literal cannot quietly
+# return.
+_gate="$REPO/crates/fno-agents/src/hook/git_protection/merge_gate.rs"
+have crates/fno-agents/src/hook/git_protection/merge_gate.rs 'VETO_PROBE_TIMEOUT: Duration = Duration::from_secs(24)' "shared veto timeout definition"
+_v=$(grep -c 'VETO_PROBE_TIMEOUT)' "$_gate")
+[ "$_v" -eq 1 ] || fail "expected the one veto call site on VETO_PROBE_TIMEOUT, found $_v"
+_hook_veto=$(grep -oE 'VETO_PROBE_TIMEOUT: Duration = Duration::from_secs\([0-9]+' "$_gate" | head -n 1)
 _doc_ceiling=$(grep -oE 'shells `fno` against [0-9]+s' "$REPO/docs/architecture/cli-lazy-imports.md" | head -n 1)
-[ -n "$_hook_veto" ] || fail "git_protection_impl.py lost its shared veto timeout"
+[ -n "$_hook_veto" ] || fail "merge_gate.rs lost its shared veto timeout"
 [ -n "$_doc_ceiling" ] || fail "cli-lazy-imports.md lost its per-invocation sizing line"
 _h=${_hook_veto//[^0-9]/}; _c=${_doc_ceiling//[^0-9]/}
 [ "$_h" -ge "$_c" ] || fail "the veto timeout (${_h}s) sits under the doc's ${_c}s ceiling"

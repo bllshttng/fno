@@ -236,6 +236,15 @@ enum Role {
     /// `fno whoami scoreboard ...`: the telemetry views, native via the
     /// binary-direct `fno-agents scoreboard` door.
     WhoamiScoreboard(Vec<OsString>),
+    /// `fno whoami cost ...`: the session-cost leaf, native via the
+    /// binary-direct `context-run --session-cost` exec.
+    WhoamiCost(Vec<OsString>),
+    /// `fno whoami ledger ...`: the retired history leaf, re-spelled to
+    /// `agents history`.
+    WhoamiLedger(Vec<OsString>),
+    /// `fno do resume receipt ...`: the receipts leaf, native via the
+    /// binary-direct `resume-receipt` door.
+    DoResumeReceipt(Vec<OsString>),
     /// The retired root `fno scoreboard ...`: the move notice the Python
     /// forwarder printed lands on stderr (byte-identical), then the same
     /// exec as `fno whoami scoreboard`.
@@ -319,8 +328,9 @@ enum Role {
     AgentsRoles(Vec<OsString>),
     /// `fno whoami` and `fno whoami status`: the render with the session
     /// receipt (`fno-agents intel --receipt`) appended. The seam runs the
-    /// front door as a marker child; the four leaves other families own
-    /// still forward to the Python leg; see `classify_whoami`.
+    /// front door as a marker child; the context leaf claims at
+    /// `classify_context` and the cost/ledger leaves claim at
+    /// `classify_whoami_leaf`.
     Whoami(Vec<OsString>),
     /// The retired root `fno status ...`: the move notice the Python
     /// forwarder printed lands on stderr (byte-identical), then the same
@@ -737,6 +747,24 @@ fn classify_whoami_scoreboard(args: &[OsString]) -> Option<Vec<OsString>> {
     None
 }
 
+/// `fno whoami cost|ledger ...`: the two leaves other families still owned
+/// claim natively (the Python leaf stubs die in this port). A root `-J`
+/// folds into the tail the way `fno -J whoami status` did.
+fn classify_whoami_leaf(args: &[OsString]) -> Option<(&'static str, Vec<OsString>)> {
+    let root_json = matches!(args.first()?.to_str()?, "-J" | "--json");
+    let args = if root_json { &args[1..] } else { args };
+    if args.first()?.to_str()? != "whoami" {
+        return None;
+    }
+    let (leaf, rest) = match args.get(1)?.to_str()? {
+        "cost" => ("cost", args[2..].to_vec()),
+        "ledger" => ("ledger", args[2..].to_vec()),
+        _ => return None,
+    };
+    let json = root_json.then(|| OsString::from("--json"));
+    Some((leaf, json.into_iter().chain(rest).collect()))
+}
+
 /// The retired root `fno scoreboard ...`: claimed here so the move notice
 /// prints and the native door serves the call, the same shape the retired
 /// root `fno status` took when its destination went native.
@@ -818,15 +846,12 @@ fn classify_skill_diff(args: &[OsString]) -> Option<Vec<OsString>> {
 /// The leaves still owned by other families' Python legs: `fno whoami
 /// ledger|cost` forward to them. `context` answered natively when the diag
 /// family ported; `scoreboard` did when the scoreboard family did.
-const PYTHON_LEAVES: [&str; 2] = ["ledger", "cost"];
-
 /// `fno whoami ...` and the retired root `fno status ...`: the summary
 /// render and the status read, exec'd as `fno-agents spawn-overlay whoami`.
-/// The leaves other families still own (context / ledger / cost) forward to
-/// the Python leg byte-verbatim; the retired `fno status` root prints the
-/// move notice the Python forwarder printed, on the same stream, before the
-/// same exec. A root `-J` before either folds into the group's own `-J`,
-/// byte-for-byte what `fno -J whoami` answered before.
+/// The retired `fno status` root prints the move notice the Python
+/// forwarder printed, on the same stream, before the same exec. A root `-J`
+/// before either folds into the group's own `-J`, byte-for-byte what
+/// `fno -J whoami` answered before.
 fn classify_whoami(args: &[OsString]) -> Option<(Vec<OsString>, bool)> {
     let root_json = matches!(args.first()?.to_str()?, "-J" | "--json");
     let args = if root_json { &args[1..] } else { args };
@@ -842,7 +867,6 @@ fn classify_whoami(args: &[OsString]) -> Option<(Vec<OsString>, bool)> {
                     "--state-file" => i += 1,
                     a if a.starts_with("--state-file=") => {}
                     "status" => return Some((claimed_tail(tail, root_json), false)),
-                    leaf if PYTHON_LEAVES.contains(&leaf) => return None,
                     leaf if leaf.starts_with('-') => {}
                     _ => return Some((claimed_tail(tail, root_json), false)),
                 }
@@ -1404,6 +1428,13 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     if let Some(rest) = classify_whoami_scoreboard(args) {
         return Role::WhoamiScoreboard(rest);
     }
+    if let Some((leaf, rest)) = classify_whoami_leaf(args) {
+        return if leaf == "cost" {
+            Role::WhoamiCost(rest)
+        } else {
+            Role::WhoamiLedger(rest)
+        };
+    }
     if let Some(rest) = classify_root_scoreboard(args) {
         return Role::ScoreboardAlias(rest);
     }
@@ -1523,6 +1554,21 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
         && args.get(1).and_then(|a| a.to_str()) == Some("pr")
     {
         return Role::DoPr;
+    }
+    // The whole `do resume` group claims natively (the Python forwarder and
+    // its only child group die in this port); the tail rides to the receipts
+    // door, which owns its own write/validate/show routing and refusals, and
+    // answers the bare group with its usage. The leaf spelling's `receipt`
+    // token names the door, not the door's argv, so it drops from the tail.
+    if args.first().and_then(|a| a.to_str()) == Some("do")
+        && args.get(1).and_then(|a| a.to_str()) == Some("resume")
+    {
+        let skip = if args.get(2).and_then(|a| a.to_str()) == Some("receipt") {
+            3
+        } else {
+            2
+        };
+        return Role::DoResumeReceipt(args[skip..].to_vec());
     }
     // The bare `fno pr` legacy spelling claims natively too: the wheel's
     // hidden lazy entry points at the deleted Python pr_app, so a claim here
@@ -1985,6 +2031,46 @@ fn main() {
         Role::DoctorUpdate(rest) => std::process::exit(fno::doctor_update::run(&rest)),
         Role::AgentsHistory(rest) => std::process::exit(fno::agents_history::run(&rest)),
         Role::Whoami(rest) => std::process::exit(fno::whoami_seam::run(&rest)),
+        Role::WhoamiCost(rest) => std::process::exit(fno_agents_exec(
+            "fno whoami cost",
+            &["context-run", "--session-cost"],
+            &rest,
+        )),
+        Role::WhoamiLedger(rest) => std::process::exit(fno::agents_history::run(&rest)),
+        Role::DoResumeReceipt(rest) => {
+            // The bare group and its help spellings answer here, not at the
+            // door: the deleted typer help carried the revive teaching, and
+            // a lost operator needs it more than a usage line.
+            if rest.is_empty()
+                || rest
+                    .iter()
+                    .all(|a| matches!(a.to_str().as_deref(), Some("-h") | Some("--help")))
+            {
+                println!("Durable typed resume receipts (evidence, never write authority).");
+                println!("To revive an agent SESSION by id, use `fno agents resume <session-id>`");
+                println!("(or `fno agents adopt <session-id>` to register it without resuming).");
+                println!("usage: fno do resume receipt write|validate|show [options]");
+                std::process::exit(0);
+            }
+            // The retired flag spelling maps to the door's name; the deleted
+            // Python alias accepted it for one release.
+            let legacy = "--next-verb"; // verb-wording: allow (old flag, one release)
+            let argv: Vec<OsString> = rest
+                .iter()
+                .map(|a| match a.to_str() {
+                    Some(s) if s == legacy => OsString::from("--next-command"),
+                    Some(s) if s.starts_with(legacy) && s.contains('=') => {
+                        OsString::from(s.replacen(legacy, "--next-command", 1))
+                    }
+                    _ => a.clone(),
+                })
+                .collect();
+            std::process::exit(fno_agents_exec(
+                "fno do resume receipt",
+                &["resume-receipt"],
+                &argv,
+            ))
+        }
         Role::ContextProbe(rest) => std::process::exit(fno_agents_exec(
             "fno context",
             &["context-run", "--probe"],
@@ -2501,6 +2587,44 @@ mod tests {
         assert_ne!(
             decide_role(&os(&["do", "review", "--help"]), false),
             Role::DoPr
+        );
+    }
+
+    /// The whoami cost/ledger leaves claim natively (the Python leaf stubs
+    /// died with the residue port), and a root `-J` folds into the tail.
+    #[test]
+    fn the_whoami_leaf_claims_answer_native_doors() {
+        assert_eq!(
+            decide_role(&os(&["whoami", "cost", "--json"]), false),
+            Role::WhoamiCost(os(&["--json"]))
+        );
+        assert_eq!(
+            decide_role(&os(&["-J", "whoami", "ledger", "d23c3d68"]), false),
+            Role::WhoamiLedger(os(&["--json", "d23c3d68"]))
+        );
+        // The seam keeps the plain render: neither leaf reaches it.
+        assert_ne!(
+            decide_role(&os(&["whoami", "cost"]), false),
+            Role::Whoami(os(&["cost"]))
+        );
+    }
+
+    /// The `do resume receipt` leaf claims natively; the tail rides to the
+    /// receipts door with the retired flag spelling mapped.
+    #[test]
+    fn the_do_resume_receipt_leaf_claims_with_the_retired_flag_mapped() {
+        assert_eq!(
+            decide_role(
+                &os(&["do", "resume", "receipt", "show", "--node", "x-1"]),
+                false
+            ),
+            Role::DoResumeReceipt(os(&["show", "--node", "x-1"]))
+        );
+        // The bare group claims too: the wheel's resume group died with the
+        // forwarder, so a claim here keeps the spelling answering its help.
+        assert_eq!(
+            decide_role(&os(&["do", "resume"]), false),
+            Role::DoResumeReceipt(os(&[]))
         );
     }
 

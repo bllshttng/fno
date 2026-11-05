@@ -247,6 +247,27 @@ pub(crate) fn cascade_harness_session_result_with(
 /// other mux calls (`crates/fno/src/proto.rs` `DEFAULT_SESSION`).
 pub(crate) const MUX_DEFAULT_SERVER: &str = "main";
 
+/// The dry run's read-only answer to both native removal gates, for the one
+/// row shape it can prove: a claude row with no pane, no mux ref, absent
+/// from the roster union, and no live squad member. Both live effects then
+/// answer already-absent and not-applicable without acting. Every other row
+/// answers false and stays unverified.
+pub(crate) fn surface_provably_clear(
+    e: &RegistryEntry,
+    union: &crate::claude_roster::ClaudeAgentsSnapshot,
+    members: &Result<Vec<(String, String)>, String>,
+) -> bool {
+    if e.harness_name() != "claude" || e.mux.is_some() || e.substrate.as_deref() == Some("pane") {
+        return false;
+    }
+    let Some(short_id) = crate::daemon::roster_death::claude_row_id(e) else {
+        return false;
+    };
+    let sid = e.harness_session_id.as_deref().unwrap_or("");
+    crate::daemon::roster_death::claude_row_provably_absent(Some(union), Some(&short_id))
+        && matches!(members, Ok(m) if !m.iter().any(|(h, s)| h == "claude" && s == sid))
+}
+
 /// Apply the MUX-MEMBER retirement for one row: retire the row's
 /// squad membership from the shared mux store through `fno mux
 /// retire-session`. The live-membership measurement is the squad store,
@@ -469,6 +490,40 @@ mod tests {
         )));
         // A cloud row lives on claude.ai; the local roster has nothing to stop.
         assert!(!stop_precedes_removal(&row("claude", Some("cloud"), None)));
+    }
+
+    #[test]
+    fn the_dry_preview_clears_only_a_roster_absent_claude_row_with_no_member() {
+        let mut e = row("claude", None, None);
+        e.harness_session_id = Some("aaaa1111-2222-3333-4444-555555555555".into());
+        let absent = crate::claude_roster::ClaudeAgentsSnapshot::known(vec![]);
+        let listed = crate::claude_roster::ClaudeAgentsSnapshot::known(vec![
+            crate::claude_roster::ClaudeAgentRow::new("aaaa1111", Some("done")),
+        ]);
+        let none: Result<Vec<(String, String)>, String> = Ok(vec![]);
+        assert!(surface_provably_clear(&e, &absent, &none));
+        // A listed row needs a real `claude rm`; a dry run cannot answer it.
+        assert!(!surface_provably_clear(&e, &listed, &none));
+        let member = Ok(vec![(
+            "claude".into(),
+            e.harness_session_id.clone().unwrap(),
+        )]);
+        assert!(!surface_provably_clear(&e, &absent, &member));
+        assert!(!surface_provably_clear(
+            &e,
+            &absent,
+            &Err("squads.json unreadable".into())
+        ));
+        assert!(!surface_provably_clear(
+            &row("claude", Some("pane"), None),
+            &absent,
+            &none
+        ));
+        assert!(!surface_provably_clear(
+            &row("codex", None, None),
+            &absent,
+            &none
+        ));
     }
 
     #[test]
