@@ -1641,8 +1641,12 @@ mod tests {
             e.origin = Some("spawn".into());
             e.harness = Some("codex".into());
             e.harness_session_id = Some("s-h1".into());
-            // The fixture has no transcript the age probe can read, so the
-            // planner holds as probe unread.
+            // The age probe reads no transcript for this fixture, and the
+            // file on disk was just written, so the planner holds as probe
+            // unread.
+            let transcript = dir.path().join("s-h1.jsonl");
+            std::fs::write(&transcript, "{}\n").unwrap();
+            e.transcript_path = Some(transcript.to_string_lossy().into_owned());
             e.created_at = (chrono::Utc::now() - chrono::Duration::seconds(1800))
                 .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
             e.status = crate::AgentStatus::Exited;
