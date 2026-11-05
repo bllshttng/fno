@@ -2,7 +2,7 @@
 
 Base `aa9a1f7e4d` (origin/main at start). Scope: the 576 files the path rule in the [README](README.md#campaigns) gives G2 - every `crates/fno-agents` path that matches no G3 or G1 Rust word, plus `crates/fno-agents/tests/done_close_note.rs`, which landed after the map was cut.
 
-Before: 2,761 declarations and, because Rust collects one case per declaration, 2,761 collected cases. After: 2,610. The cut is 151 cases, 5.5 percent of the scope. The campaign target is 1,380 (half of the scope's collected cases). The cut stops short of the target: this ledger names each kept contract per the README's stop-short clause, and the roughly 450 files this pass did not reach are the campaign's continuation, which owns the remaining 1,230-case cut.
+The cut stops short of the target. This ledger names each kept contract per the README's stop-short clause. The roughly 450 files this pass did not reach are the campaign's continuation, which owns the remaining 1,230-case cut.
 
 The map's per-file before counts predate my base by nine declarations of drift on five files and one post-map file. The rows below carry the map values.
 
