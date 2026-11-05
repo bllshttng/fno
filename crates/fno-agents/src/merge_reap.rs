@@ -500,6 +500,7 @@ fn remove_tree(worktree: &str, repo_root: &str) -> bool {
     // and base checks as the sweep apply; the sweep reaps whatever an
     // unreadable resolution leaves behind.
     let _ = crate::cargo_build_dirs::remove_for(std::path::Path::new(worktree));
+    crate::worktree::init_lock::release_stale(worktree);
     let removed = std::process::Command::new("git")
         .current_dir(worktree)
         .args(["worktree", "remove", "--force", worktree])
