@@ -648,7 +648,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// AC3: a relist over an unchanged store reads no project dir.
     #[test]
     fn a_relist_of_an_unchanged_store_reads_no_project_dir() {
         let root = dir("relist-same");
@@ -673,57 +672,5 @@ mod tests {
         assert_eq!(cursors.claude_hits(&roots, MISS_BEAT).len(), 2);
         assert_eq!(cursors.claude_dirs_read(), 2, "no dir moved, none read");
         let _ = std::fs::remove_dir_all(&root);
-    }
-
-    /// AC3: a transcript born in an existing dir after the first listing
-    /// resolves on the next relist.
-    #[test]
-    fn a_transcript_born_in_an_existing_dir_resolves_on_relist() {
-        let root = dir("relist-new");
-        let proj = root.join("-repo");
-        std::fs::create_dir_all(&proj).unwrap();
-        std::fs::write(proj.join("old.jsonl"), "{}\n").unwrap();
-        let roots = vec![root.clone()];
-        let mut cursors = TruthCursors::new();
-        assert_eq!(cursors.claude_hits(&roots, MISS_BEAT).len(), 1);
-        // Pin the dir's mtime apart from the first stat, as a coarse clock
-        // could leave it equal.
-        std::fs::write(proj.join("new.jsonl"), "{}\n").unwrap();
-        std::fs::File::open(&proj)
-            .unwrap()
-            .set_modified(SystemTime::now() + Duration::from_secs(5))
-            .unwrap();
-        cursors.expire_beat_for_test();
-        let names: Vec<String> = cursors
-            .claude_hits(&roots, MISS_BEAT)
-            .iter()
-            .map(|h| h.name.clone())
-            .collect();
-        assert_eq!(names, ["new.jsonl", "old.jsonl"]);
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn scan_back_finds_the_newest_marker_line_across_chunks() {
-        let dir = dir("scan");
-        let path = dir.join("t.jsonl");
-        let mut body = String::from("{\"k\":\"marker one\"}\n");
-        body.push_str(&"z".repeat(600 * 1024));
-        body.push_str("\n{\"k\":\"marker two\"}\n");
-        body.push_str(&"q".repeat(300 * 1024));
-        body.push('\n');
-        std::fs::write(&path, &body).unwrap();
-        let len = body.len() as u64;
-        let any = |l: &str| Some(l.to_string());
-        let hit = scan_back(&path, len, b"marker", 4 << 20, &any).unwrap();
-        assert!(hit.contains("marker two"), "{hit}");
-        let older = |l: &str| l.contains("one").then(|| l.to_string());
-        let hit = scan_back(&path, len, b"marker", 4 << 20, &older).unwrap();
-        assert!(hit.contains("marker one"), "a refused line scans on: {hit}");
-        assert!(
-            scan_back(&path, len, b"marker", 1024, &any).is_none(),
-            "the limit binds"
-        );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }

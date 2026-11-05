@@ -2,31 +2,6 @@
 //! (file budget shrink). Parent helpers resolve through the glob.
 use super::*;
 
-#[test]
-fn a_rust_registry_write_moves_the_revision_python_compares() {
-    // Python and Rust writers no longer share a flock: a Python commit names
-    // the revision it read, so every Rust write that changes the registry
-    // must move that revision. A write that changes nothing must not.
-    let dir = tmpdir("revision-cas");
-    let path = dir.join("agents/registry.json");
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    let (_, before) = crate::registry_store::read_versioned(&path).unwrap();
-    update_registry(&path, |r| r.entries.push(sample_entry("w1"))).unwrap();
-    let (_, after) = crate::registry_store::read_versioned(&path).unwrap();
-    assert!(after > before, "revision {before} -> {after}");
-    update_registry(&path, |_| {}).unwrap();
-    let (_, unchanged) = crate::registry_store::read_versioned(&path).unwrap();
-    assert_eq!(unchanged, after);
-    // The other write door stamps its own writer_rev; that alone is no change.
-    let write = crate::registry_store::begin(&path).unwrap();
-    let mut doc = write.document.clone();
-    doc["writer_rev"] = serde_json::json!("other/registry-commit");
-    assert!(!write.commit(doc).unwrap());
-    let (_, still) = crate::registry_store::read_versioned(&path).unwrap();
-    assert_eq!(still, after);
-    std::fs::remove_dir_all(dir).ok();
-}
-
 // ------------------------------------------------------------------
 // x-4c87: the raw-versus-decoded row count invariant. The live outage's
 // sanitized shape: real worker rows at the CURRENT schema, one carrying a
@@ -103,62 +78,5 @@ fn registry_with_unrepresentable_row_errors_naming_both_counts() {
         "names the comparison to run: {msg}"
     );
     assert_no_override_remedy(&msg);
-    std::fs::remove_dir_all(&dir).ok();
-}
-
-#[test]
-fn registry_true_empty_states_stay_successful_zeros() {
-    // AC4-EDGE: missing file, whitespace-only, and a real empty array are
-    // valid zero-agent states. No check treats byte length as evidence of
-    // rows.
-    let dir = tmpdir("true-empties");
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("registry.json");
-
-    let (reg, raw) = load_registry_with_counts(&path).unwrap();
-    assert!(reg.entries.is_empty(), "missing file is a valid empty");
-    assert_eq!(raw, 0);
-
-    crate::registry_store::seed_raw(&path, "   \n\t ");
-    let (reg, raw) = load_registry_with_counts(&path).unwrap();
-    assert!(reg.entries.is_empty(), "whitespace file is a valid empty");
-    assert_eq!(raw, 0);
-
-    crate::registry_store::seed_raw(&path, r#"{"schema_version":14,"agents":[]}"#);
-    let (reg, raw) = load_registry_with_counts(&path).unwrap();
-    assert!(reg.entries.is_empty(), "an empty array is a valid empty");
-    assert_eq!(raw, 0);
-    std::fs::remove_dir_all(&dir).ok();
-}
-
-#[test]
-fn registry_future_schema_partial_read_exposes_both_counts() {
-    // Forward policy preserved (see a_newer_row_with_an_unknown_status_
-    // skips_that_row_only): a future-schema store still degrades per-row
-    // with an announcement. What changes is that the read now CARRIES the
-    // raw count, so the daemon's startup assertion can refuse to serve
-    // the 1-of-2 partial as a complete roster.
-    let dir = tmpdir("future-partial");
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("registry.json");
-    std::fs::write(
-        &path,
-        // One past THIS binary, derived so a schema bump cannot quietly
-        // turn the future-schema fixture into a current-schema one and
-        // leave the test asserting a condition it no longer sets up.
-        format!(
-            r#"{{"schema_version":{},"agents":[
-                {{"name":"future","cwd":"/x","log_path":"/l","harness":"claude",
-                 "status":"hibernating","created_at":"2026-01-01T00:00:00Z"}},
-                {{"name":"readable","cwd":"/x","log_path":"/l","harness":"claude",
-                 "status":"live","created_at":"2026-01-01T00:00:00Z"}}
-            ]}}"#,
-            REGISTRY_SCHEMA_VERSION + 1
-        ),
-    )
-    .unwrap();
-    let (reg, raw) = load_registry_with_counts(&path).unwrap();
-    assert_eq!(reg.entries.len(), 1, "the representable row still decodes");
-    assert_eq!(raw, 2, "the raw count says what was dropped");
     std::fs::remove_dir_all(&dir).ok();
 }

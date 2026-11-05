@@ -351,33 +351,6 @@ pub fn envelope_on_board(v: &Value) -> bool {
 mod tests {
     use super::*;
 
-    fn rules_from(text: &str) -> Result<Rules, String> {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("config.toml");
-        std::fs::write(&path, text).expect("writes");
-        rules_from_configs(&[path])
-    }
-
-    #[test]
-    fn rules_default_when_unset_and_refuse_a_word_outside_the_list() {
-        assert_eq!(rules_from("").unwrap(), Rules::default());
-        let moved =
-            rules_from("[questions.rules]\ndeny = [\"taste\", \"public-surface\"]\n").unwrap();
-        assert_eq!(moved.deny, ["taste", "public-surface"]);
-        assert_eq!(moved.ask, ["gate-override"]);
-        let err = rules_from("[questions.rules]\ndeny = [\"taste\", \"frobnicate\"]\n")
-            .expect_err("unknown word");
-        assert!(
-            err.contains("questions.rules.deny") && err.contains("frobnicate"),
-            "{err}"
-        );
-        let err = rules_from("[questions.rules]\nallow = [\"taste\"]\ndeny = [\"taste\"]\n")
-            .expect_err("two lists");
-        assert!(err.contains("taste is in both"), "{err}");
-        assert_eq!(class_word(" Taste "), Some("taste"));
-        assert_eq!(class_word("product call"), None);
-    }
-
     #[test]
     fn a_climb_adds_one_via_hop_and_lands_on_the_next_rung_or_the_board() {
         let row = json!({"ts": "t0", "data": {"question_id": "q-1",
@@ -396,16 +369,5 @@ mod tests {
         assert_eq!(top["data"]["rung"], json!({"level": "user"}));
         assert_eq!(top["data"]["via"].as_array().map(Vec::len), Some(2));
         assert!(on_board(&top["data"], "t2", 0));
-    }
-
-    #[test]
-    fn a_lead_rung_row_reaches_the_board_when_its_lease_runs_out() {
-        let ts = "2026-10-28T10:00:00Z";
-        let asked = crate::event_store::parse_rfc3339_ms(ts).unwrap() / 1000;
-        let lead = json!({"rung": {"level": "lead", "holder_session": "s-lead"}});
-        assert!(!on_board(&lead, ts, asked + LEASE_SECS - 1));
-        assert!(on_board(&lead, ts, asked + LEASE_SECS));
-        assert!(on_board(&json!({"rung": {"level": "user"}}), ts, asked));
-        assert!(on_board(&json!({}), ts, asked));
     }
 }

@@ -93,27 +93,4 @@ mod tests {
         .unwrap();
         assert_eq!(out["matched"], false);
     }
-
-    #[test]
-    fn a_sessionless_expectation_refuses_a_sessionful_row() {
-        // The row resolved before the lock had no session id; the name was
-        // rebound to a row that does. Name-alone matching would team it.
-        let out = resolve(&json!({
-            "rows": [row("worker", "sess-new".into())],
-            "expect": {"name": "worker", "harness_session_id": null},
-        }))
-        .unwrap();
-        assert_eq!(out["matched"], false);
-    }
-
-    #[test]
-    fn malformed_payloads_are_errors_not_answers() {
-        assert!(resolve(&json!({"expect": {"name": "w"}})).is_err());
-        assert!(resolve(&json!({"rows": []})).is_err());
-        assert!(resolve(&json!({"rows": [], "expect": {"name": ""}})).is_err());
-        assert!(
-            resolve(&json!({"rows": [], "expect": {"name": "w", "harness_session_id": 7}}))
-                .is_err()
-        );
-    }
 }

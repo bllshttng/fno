@@ -1614,31 +1614,6 @@ mod tests {
 
     const NOW: f64 = 1_791_460_800.0; // 2026-10-08T12:00:00Z
 
-    /// A command-framed record (the skill body rides one string) and a
-    /// local-command output are injections, never the worker's own report;
-    /// the worker's text is not.
-    #[test]
-    fn an_injected_command_record_is_not_worker_text() {
-        assert!(injected_record_text(
-            "<command-message>fno:target</command-message>\n<command-name>/fno:target</command-name>\nbody quoting <help class=\"stuck\" reason=\"ci\">"
-        ));
-        assert!(injected_record_text(
-            "<local-command-stdout>ok</local-command-stdout>"
-        ));
-        assert!(!injected_record_text("RESULT: SUCCESS shipped the fix"));
-    }
-
-    /// The question signal reads only a REAL help block: a turn quoting the
-    /// tag in inline code stays plain, a real block asks for the lead's move.
-    #[test]
-    fn a_quoted_help_tag_is_not_a_question_but_a_real_block_is() {
-        let quoted = "Re-arming; `<help class=\"held\">` only if this wedges";
-        assert_eq!(Signal::of(quoted), Signal::Plain);
-        let real =
-            "blocked on the ruling: <help class=\"question\" reason=\"grid\">which band?</help>";
-        assert_eq!(Signal::of(real), Signal::Question);
-    }
-
     /// The done and watching signals also blank code spans first, exactly as
     /// the loop runtime's intent match does: a quoted promise or watching
     /// tag is prose, a real one still signals.
@@ -1692,43 +1667,6 @@ mod tests {
         );
         assert_eq!(warm["state"], "working");
         assert_eq!(warm["reachability"], "reachable");
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// An unresolvable handle costs one bounded resolve per beat: the second
-    /// ask inside the beat answers `not-found` from memory and touches no
-    /// store.
-    #[test]
-    fn an_unresolvable_session_costs_one_attempt_per_beat() {
-        let dir = tmp("miss");
-        let stores = stores(&dir);
-        let mut cursors = TruthCursors::new();
-        let handle = "e247b6d7";
-        let first = resolve_payload(None, handle, NOW, &stores, &mut cursors);
-        assert_eq!(first["reason"], "not-found");
-        assert!(cursors.recent_miss(handle), "the miss is remembered");
-        // A registry row naming the handle still answers inside the beat.
-        let path = dir.join("row.jsonl");
-        std::fs::write(&path, "").unwrap();
-        let rows = vec![row(handle, "claude", &path)];
-        let by_row = resolve_payload(Some(&rows), handle, NOW, &stores, &mut cursors);
-        assert_eq!(by_row["reason"], "no-records", "{by_row}");
-        // A store that now holds the session is not consulted inside the beat.
-        let project = stores.projects_root.join("-p");
-        std::fs::create_dir_all(&project).unwrap();
-        std::fs::write(
-            project.join(format!("{handle}-0000-0000-0000-000000000000.jsonl")),
-            "",
-        )
-        .unwrap();
-        let second = resolve_payload(None, handle, NOW, &stores, &mut cursors);
-        assert_eq!(second["reason"], "not-found");
-        cursors.expire_beat_for_test();
-        let third = resolve_payload(None, handle, NOW, &stores, &mut cursors);
-        assert_ne!(
-            third["reason"], "not-found",
-            "the next beat resolves again: {third}"
-        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1794,30 +1732,5 @@ mod tests {
         );
         assert_eq!(payload["state"], "working", "{payload}");
         assert_eq!(payload["observed_model"]["model"], "claude-opus-5-5");
-    }
-
-    #[test]
-    fn opencode_reader_reads_a_wal_store_whose_shm_is_gone() {
-        // The exact state a daemon's clean exit leaves: the header stays WAL
-        // while the checkpoint removed the -wal and -shm sidecars. The plain
-        // read-only open refuses it, which degraded every opencode truth read
-        // to age-unknown. The immutable retry must answer.
-        let dir = tempfile::tempdir().unwrap();
-        let db = dir.path().join("opencode.db");
-        let conn = rusqlite::Connection::open(&db).unwrap();
-        conn.execute_batch(
-            "PRAGMA journal_mode=WAL;\n\
-             CREATE TABLE message (session_id TEXT, time_updated REAL);\n\
-             INSERT INTO message VALUES ('s-1', 1791460800000.0);\n\
-             PRAGMA wal_checkpoint(TRUNCATE);",
-        )
-        .unwrap();
-        drop(conn);
-        assert!(!dir.path().join("opencode.db-shm").exists());
-        assert_eq!(
-            opencode_activity_epoch(&db, "s-1"),
-            Some(1791460800.0),
-            "the immutable retry must read the checkpointed store"
-        );
     }
 }

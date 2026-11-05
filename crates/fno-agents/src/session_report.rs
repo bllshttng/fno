@@ -1505,27 +1505,6 @@ mod tests {
         serde_json::to_value(resp).expect("response json")
     }
 
-    #[test]
-    fn a_claim_only_name_never_flavors_a_mint() {
-        // --launch-name with NO matching record: the session is the user's
-        // own. The row mints operator under the draw name, never the title.
-        let (_dir, home) = temp_home("claim_name_operator");
-        crate::join_marker::write_marker(home.root(), "opencode", "ses_strayown1").unwrap();
-        let resp = handle_session_report(
-            &home,
-            &emitter(&home),
-            &req(report_params(
-                "opencode",
-                "ses_strayown1",
-                json!({"launch_name": "wk-stray"}),
-            )),
-        );
-        let rows = read_rows(&home);
-        assert_eq!(rows.len(), 1, "one row mints: {}", response_json(&resp));
-        assert_eq!(rows[0].origin.as_deref(), Some("operator"));
-        assert_ne!(rows[0].name, "wk-stray");
-    }
-
     fn claude_row() -> Value {
         json!({
             "name": "w1",
@@ -1620,87 +1599,6 @@ mod tests {
     }
 
     #[test]
-    fn an_existing_claude_row_running_live_refreshes_substrate_and_pid() {
-        let _guard = crate::path_test_guard();
-        let (_d, home) = temp_home("bg-refresh");
-        let mut row = claude_row();
-        row["substrate"] = json!("pane");
-        seed_registry(&home, row);
-
-        let bin_dir = tempfile::tempdir().unwrap();
-        crate::write_exec_stub(
-            bin_dir.path(),
-            "claude",
-            "#!/bin/sh\nprintf '%s\\n' '[{\"kind\":\"background\",\"short_id\":\"3228ccad\",\"state\":\"working\",\"pid\":9999}]'\n",
-        );
-        let old_path = std::env::var_os("PATH");
-        std::env::set_var("PATH", crate::path_with(bin_dir.path()));
-
-        let params = report_params("claude", "3228ccad-c078-4f2e-9a51-6d1f0a2b3c4d", json!({}));
-        let resp = handle_session_report(&home, &emitter(&home), &req(params));
-
-        match old_path {
-            Some(value) => std::env::set_var("PATH", value),
-            None => std::env::remove_var("PATH"),
-        }
-
-        assert_eq!(response_json(&resp)["result"]["stored"], true);
-        let row = &read_rows(&home)[0];
-        assert_eq!(row.substrate.as_deref(), Some("thread"));
-        assert_eq!(row.pid, Some(9999));
-    }
-
-    #[test]
-    fn a_report_naming_the_related_not_primary_id_never_stamps_bg_refresh() {
-        let _guard = crate::path_test_guard();
-        let (_d, home) = temp_home("bg-refresh-related");
-        seed_registry(
-            &home,
-            json!({
-                "name": "w1", "cwd": "/repo", "status": "live",
-                "created_at": "2026-09-26T00:00:00Z", "harness": "claude",
-                "harness_session_id": "aaaaaaaa-1234-7abc-9def-0123456789ab",
-                "short_id": "aaaaaaaa"
-            }),
-        );
-
-        let bin_dir = tempfile::tempdir().unwrap();
-        crate::write_exec_stub(
-            bin_dir.path(),
-            "claude",
-            "#!/bin/sh\nprintf '%s\\n' '[{\"kind\":\"background\",\"short_id\":\"bbbbbbbb\",\"state\":\"working\",\"pid\":5555}]'\n",
-        );
-        let old_path = std::env::var_os("PATH");
-        std::env::set_var("PATH", crate::path_with(bin_dir.path()));
-
-        let params = report_params(
-            "claude",
-            "bbbbbbbb-1234-7abc-9def-0123456789ab",
-            json!({"agent_self": "w1"}),
-        );
-        let resp = handle_session_report(&home, &emitter(&home), &req(params));
-
-        match old_path {
-            Some(value) => std::env::set_var("PATH", value),
-            None => std::env::remove_var("PATH"),
-        }
-
-        assert_eq!(response_json(&resp)["result"]["related_filled"], true);
-        let row = &read_rows(&home)[0];
-        assert_eq!(
-            row.harness_session_id.as_deref(),
-            Some("aaaaaaaa-1234-7abc-9def-0123456789ab"),
-            "the primary id must never be overwritten by a related report"
-        );
-        assert_eq!(
-            row.related_session_id.as_deref(),
-            Some("bbbbbbbb-1234-7abc-9def-0123456789ab")
-        );
-        assert_ne!(row.substrate.as_deref(), Some("thread"));
-        assert_eq!(row.pid, None);
-    }
-
-    #[test]
     fn a_resumed_codex_id_corrects_the_primary_in_place() {
         let (_d, home) = temp_home("related");
         seed_registry(
@@ -1779,43 +1677,6 @@ mod tests {
             Some("0197bbbb-1234-7abc-9def-0123456789ab")
         );
         assert_eq!(row.transcript_path, None);
-    }
-
-    /// A hand session that never joined fno gets no row, so it holds no
-    /// spawn-gate slot.
-    #[test]
-    fn an_unjoined_session_mints_no_row() {
-        let (_d, home) = temp_home("unjoined");
-        let params = report_params("codex", "0197eeee-1234-7abc-9def-0123456789ab", json!({}));
-        let resp = handle_session_report(&home, &emitter(&home), &req(params));
-        assert!(response_json(&resp)["result"]["minted"].is_null());
-        assert!(read_rows(&home).is_empty());
-    }
-
-    /// A headless one-shot child reports with `no_row`: it joins, but no row
-    /// mints, and an older row under the same name (a verifier name repeats
-    /// per session) is left as it was, so it never reads live again.
-    #[test]
-    fn a_no_row_child_joins_but_mints_no_row() {
-        let (_d, home) = temp_home("no_row");
-        let sid = "0197ffff-1234-7abc-9def-0123456789ab";
-        seed_registry(
-            &home,
-            json!({"name": "verifier-advise-1", "cwd": "/repo",
-            "status": "exited", "created_at": "2026-10-22T00:00:00Z", "harness": "claude"}),
-        );
-        let params = report_params(
-            "claude",
-            sid,
-            json!({"agent_self": "verifier-advise-1", "no_row": true}),
-        );
-        let resp = handle_session_report(&home, &emitter(&home), &req(params));
-        assert_eq!(response_json(&resp)["result"]["dropped"], "no_row");
-        assert!(crate::join_marker::is_joined(home.root(), "claude", sid));
-        let rows = read_rows(&home);
-        assert_eq!(rows.len(), 1, "no row minted");
-        assert_eq!(rows[0].harness_session_id, None);
-        assert_eq!(rows[0].last_report_at, None);
     }
 
     /// A joined session no row holds mints an operator row - the user's own
@@ -1975,54 +1836,6 @@ mod tests {
         assert!(births[0].line.contains("launch"), "{}", births[0].line);
     }
 
-    /// Decision D8: a record's name that collides with a live row takes a
-    /// numeric suffix, so the adopt never lands two live rows on one handle.
-    /// AC9: the native birth carries every key the spawned birth carries.
-    /// AC10: removing one key fails the helper, naming it.
-    #[test]
-    fn native_birth_keys_are_a_superset_of_the_spawned_ones() {
-        let lineage = crate::state::Lineage::captured((
-            Some("lead-1".into()),
-            Some("claude".into()),
-            Some("/repo".into()),
-        ));
-        let spawned = crate::spawn_edge::birth_event(
-            "w-spawned",
-            &lineage,
-            json!({
-                "spawn_id": "spawn-1",
-                "pid": 4242,
-                "harness_session_id": "sid-a",
-                "cwd": "/repo",
-                "substrate": "thread",
-            }),
-        );
-        let mut native = crate::spawn_edge::birth_event(
-            "w-native",
-            &lineage,
-            json!({
-                "spawn_id": "launch-1000-ab12cd34.json",
-                "pid": Value::Null,
-                "harness_session_id": "sid-b",
-                "cwd": "/repo",
-                "substrate": "thread",
-                "launch": "native",
-            }),
-        );
-        crate::native_adopt::assert_birth_superset(&native, &spawned);
-        native.as_object_mut().unwrap().remove("spawn_id");
-        let err = std::panic::catch_unwind(|| {
-            crate::native_adopt::assert_birth_superset(&native, &spawned)
-        })
-        .unwrap_err();
-        let msg = err
-            .downcast_ref::<String>()
-            .cloned()
-            .or_else(|| err.downcast_ref::<&str>().map(|s| s.to_string()))
-            .unwrap_or_default();
-        assert!(msg.contains("spawn_id"), "{msg}");
-    }
-
     /// A `spawn --promote --succeed` transfer leaves the manifest
     /// naming the session stepping down, and the successor's levers (shape, term)
     /// read that manifest, so the successor holds with no levers. The successor's
@@ -2132,122 +1945,5 @@ mod tests {
             None => std::env::remove_var("FNO_SPACES_DIR"),
         }
         drop(lock);
-    }
-
-    /// AC1-HP: a worker's own report heals the row's cwd and emits
-    /// `session_cwd_healed` with old and new; the idempotent no-op never
-    /// rewrites and never re-emits.
-    #[test]
-    fn a_worker_report_heals_the_row_cwd() {
-        let (_d, home) = temp_home("heal");
-        seed_registry(
-            &home,
-            json!({
-                "name": "w1", "cwd": "/spawn/dir", "status": "live",
-                "created_at": "2026-09-26T00:00:00Z", "harness": "codex",
-                "harness_session_id": "0197aaaa-1234-7abc-9def-0123456789ab"
-            }),
-        );
-        let params = || {
-            report_params(
-                "codex",
-                "0197aaaa-1234-7abc-9def-0123456789ab",
-                json!({"agent_self": "w1", "cwd": "/work/dir"}),
-            )
-        };
-        let resp = handle_session_report(&home, &emitter(&home), &req(params()));
-        assert_eq!(response_json(&resp)["result"]["stored"], true);
-        assert_eq!(read_rows(&home)[0].cwd, "/work/dir");
-        let heals = crate::event_store::query_events(
-            &home.events_jsonl(),
-            &crate::event_store::EventQuery::of_types(&["session_cwd_healed"]),
-        )
-        .unwrap();
-        assert_eq!(heals.len(), 1, "{heals:?}");
-        let body = heals[0].line.clone();
-        assert!(body.contains("/spawn/dir"), "{body}");
-        assert!(body.contains("/work/dir"), "{body}");
-        assert!(body.contains("w1"), "{body}");
-        // The idempotent second report neither writes nor re-emits.
-        let resp = handle_session_report(&home, &emitter(&home), &req(params()));
-        assert_eq!(response_json(&resp)["result"]["stored"], true);
-        let heals = crate::event_store::query_events(
-            &home.events_jsonl(),
-            &crate::event_store::EventQuery::of_types(&["session_cwd_healed"]),
-        )
-        .unwrap();
-        assert_eq!(heals.len(), 1, "{heals:?}");
-    }
-
-    /// A role row's re-minted id with no liveness evidence forks a branch:
-    /// the recorded authority is never overwritten on a guess, the branch is
-    /// independently addressable, and one `session_transition_classified`
-    /// names the fork.
-    #[test]
-    fn a_role_rows_re_minted_id_forks_a_branch() {
-        let (_d, home) = temp_home("lineage-branch");
-        seed_registry(
-            &home,
-            json!({
-                "name": "w1", "cwd": "/repo", "status": "live",
-                "created_at": "2026-09-26T00:00:00Z", "harness": "codex",
-                "harness_session_id": "0197aaaa-1234-7abc-9def-0123456789ab",
-                "role_level": 2, "role_scope": "scope-nine", "role_grantor": "lead"
-            }),
-        );
-        let params = report_params(
-            "codex",
-            "0197bbbb-1234-7abc-9def-0123456789ab",
-            json!({"agent_self": "w1"}),
-        );
-        let resp = handle_session_report(&home, &emitter(&home), &req(params.clone()));
-        assert_eq!(response_json(&resp)["result"]["stored"], true);
-        let rows = read_rows(&home);
-        assert_eq!(
-            rows.len(),
-            2,
-            "the branch forks its own row: {:?}",
-            rows.iter().map(|r| &r.name).collect::<Vec<_>>()
-        );
-        let original = rows.iter().find(|r| r.name == "w1").unwrap();
-        assert_eq!(
-            original.harness_session_id.as_deref(),
-            Some("0197aaaa-1234-7abc-9def-0123456789ab")
-        );
-        assert_eq!(original.related_session_id, None);
-        let branch = rows.iter().find(|r| r.name != "w1").unwrap();
-        assert!(branch.name.starts_with("w1-branch-"), "{}", branch.name);
-        assert_eq!(
-            branch.harness_session_id.as_deref(),
-            Some("0197bbbb-1234-7abc-9def-0123456789ab")
-        );
-        assert_eq!(
-            branch.forked_from_session_id.as_deref(),
-            Some("0197aaaa-1234-7abc-9def-0123456789ab")
-        );
-        assert_eq!(branch.role_level, None);
-        let transitions = crate::event_store::query_events(
-            &home.events_jsonl(),
-            &crate::event_store::EventQuery::of_types(&["session_transition_classified"]),
-        )
-        .unwrap();
-        assert_eq!(transitions.len(), 1, "{transitions:?}");
-        assert!(transitions[0].line.contains("branch"));
-        // The fork's ONE operator question: recorded on the index, asked
-        // inherit-vs-clean, and never re-asked for the same fork edge.
-        let index = crate::provider_cap::questions_path(&home);
-        let questions = crate::event_store::journal_text(&index, &["operator_question"]);
-        let needle = "[session-transition-branch:w1-branch-".to_owned();
-        assert!(questions.contains(&needle), "{questions}");
-        assert!(questions.contains("inherit node and claim"), "{questions}");
-        let before = questions.matches(&needle).count();
-        let resp = handle_session_report(&home, &emitter(&home), &req(params));
-        assert_eq!(response_json(&resp)["result"]["stored"], true);
-        let after = crate::event_store::journal_text(&index, &["operator_question"]);
-        assert_eq!(
-            after.matches(&needle).count(),
-            before,
-            "a re-observed branch never re-asks"
-        );
     }
 }

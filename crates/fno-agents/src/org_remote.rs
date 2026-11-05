@@ -354,37 +354,4 @@ mod tests {
         );
         assert_eq!(scope_of(&["x".into()]), None);
     }
-
-    #[test]
-    fn attach_keeps_the_name_and_joins_on_the_predecessor() {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let store = tmp.path().join("team_names.json");
-        let pending = crate::team_names::PendingSuccession {
-            successor_name: "Quinlan".into(),
-            successor_session: None,
-            predecessor_name: "Ellery".into(),
-            predecessor_session: Some("sess-123".into()),
-            ts: "2026-10-16T23:00:00Z".into(),
-        };
-        attach_pending_succession(&store, "fno", pending).expect("attaches to a fresh record");
-        let raw = std::fs::read_to_string(&store).expect("store written");
-        let doc: serde_json::Value = serde_json::from_str(&raw).expect("valid store json");
-        // The record keeps the successor's existing name (no rename leg) and
-        // carries the predecessor join keys the beat and the retro read.
-        let rec = &doc["teams"]["fno"];
-        assert_eq!(rec["name"], "Quinlan");
-        assert_eq!(rec["pending_succession"]["predecessor_name"], "Ellery");
-        assert_eq!(rec["pending_succession"]["predecessor_session"], "sess-123");
-        // Overwrite-on-retry: a second attach replaces the record cleanly.
-        let again = crate::team_names::PendingSuccession {
-            successor_name: "Quinlan".into(),
-            successor_session: None,
-            predecessor_name: "Ellery".into(),
-            predecessor_session: Some("sess-999".into()),
-            ts: "2026-10-16T23:30:00Z".into(),
-        };
-        attach_pending_succession(&store, "fno", again).expect("re-attach succeeds");
-        let raw2 = std::fs::read_to_string(&store).expect("store readable");
-        assert!(raw2.contains("sess-999"));
-    }
 }

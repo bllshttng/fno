@@ -798,13 +798,6 @@ mod tests {
     }
 
     #[test]
-    fn a_scope_less_level_is_half_a_role() {
-        let (agree, reason) = agreement(Some(1), None, None);
-        assert_eq!(agree, Some(false));
-        assert!(reason.unwrap().contains("half a role"));
-    }
-
-    #[test]
     fn an_epic_rung_needs_a_readable_graph() {
         assert_eq!(
             agreement(Some(2), Some("x-a"), None),

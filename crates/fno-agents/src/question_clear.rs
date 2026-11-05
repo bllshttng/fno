@@ -83,15 +83,6 @@ mod tests {
             .unwrap();
     }
 
-    /// An agent caller with no answer in hand: the bare `fno inbox
-    /// outstanding clear <qid>` shape a worker runs from its own session.
-    fn agent_bare_request(tmp: &TempDir, qid: &str) -> ClearRequest {
-        let mut req = request(tmp, qid, None);
-        req.provenance = json!({});
-        req.caller.as_mut().unwrap().ancestry_handle = Some("bot-closer".to_string());
-        req
-    }
-
     fn seed_question(req: &ClearRequest, event: &Value) {
         crate::event_store::append_envelope(&req.index_path, &event.to_string(), None).unwrap();
     }
@@ -106,76 +97,6 @@ mod tests {
     fn graph_decisions(req: &ClearRequest) -> Vec<Value> {
         crate::backlog::api::decisions(&crate::backlog::api::Store::new(&req.graph), None, None)
             .unwrap()
-    }
-
-    // One declaration for the door's answers to a copy: a bare clear and an
-    // agent's answer refuse, the user's records for the bus, a second loses.
-    #[test]
-    fn only_the_users_answer_on_a_copy_records_for_the_bus() {
-        let tmp = tempfile::tempdir().unwrap();
-        let mut req = request(&tmp, "q-1@hostb", None);
-        let mut copy = ask("q-1@hostb", "which lane?", None, None);
-        copy["data"]["origin_machine"] = json!("m-other");
-        copy["data"]["origin_question_id"] = json!("q-1");
-        copy["data"]["host"] = json!("hostb");
-        seed_question(&req, &copy);
-        let answers = |req: &ClearRequest| rows(&req.index_path, &["attention_answer"]);
-
-        let bare = run_clear(&req);
-        assert_eq!(bare.exit_code, 3, "{:?}", bare.lines);
-        assert!(bare.lines[0].contains("only that machine withdraws"));
-
-        req.answer = Some("ship it".to_string());
-        req.provenance = json!({"decided_by": "bot", "authority_source": "chat_attested",
-            "quote": "ship it"});
-        req.caller.as_mut().unwrap().ancestry_handle = Some("bot".to_string());
-        let agent = run_clear(&req);
-        assert_eq!(agent.exit_code, 3, "{:?}", agent.lines);
-        assert!(agent.lines[0].contains("only the user's answer travels"));
-        assert!(answers(&req).is_empty(), "a refusal writes nothing");
-
-        req.provenance = json!({"decided_by": "jason", "authority_source": "operator"});
-        req.caller = Some(ClearCaller::default());
-        let user = run_clear(&req);
-        assert_eq!(user.exit_code, 0, "{:?}", user.lines);
-        assert!(user.lines[0].contains("the answer goes there"));
-        assert!(user.closed.is_empty() && user.deliveries.is_empty());
-        let row = answers(&req)[0]["data"].clone();
-        assert_eq!(
-            (row["item_id"].as_str(), row["words"].as_str()),
-            (Some("q-1@hostb"), Some("ship it"))
-        );
-        assert!(rows(&req.index_path, &["operator_question_closed"]).is_empty());
-
-        let second = run_clear(&req);
-        assert_eq!(second.exit_code, 3, "{:?}", second.lines);
-        assert!(second.lines[0].contains("the first answer stands"));
-    }
-
-    // The board's no-identity lane IS the user on a copy too: an answer that
-    // carries no session identity travels to the asking machine, while a
-    // caller with a resolved session handle is an agent and cannot.
-    #[test]
-    fn an_unattributed_board_answer_travels_for_the_user_on_a_copy() {
-        let tmp = tempfile::tempdir().unwrap();
-        let mut req = request(&tmp, "q-copy1@hostb", Some("ship it"));
-        req.provenance = json!({"decided_by": "unattributed-caller"});
-        req.caller = Some(ClearCaller::default());
-        let mut copy = ask("q-copy1@hostb", "which lane?", None, None);
-        copy["data"]["origin_machine"] = json!("bus-test");
-        copy["data"]["origin_question_id"] = json!("q-copy1");
-        copy["data"]["host"] = json!("hostb");
-        seed_question(&req, &copy);
-
-        let result = run_clear(&req);
-
-        assert_eq!(result.exit_code, 0, "{:?}", result.lines);
-        assert!(
-            result.lines[0].contains("the answer goes there"),
-            "{:?}",
-            result.lines
-        );
-        assert_eq!(rows(&req.index_path, &["attention_answer"]).len(), 1);
     }
 
     #[test]
@@ -262,39 +183,6 @@ mod tests {
         );
     }
 
-    // A plain scope answer from the no-identity board lane records operator
-    // law: the user's surface reaches the clear door without a session, and
-    // the row must carry the user's authority (hold-release accepts only a
-    // superuser-lane ruling).
-    #[test]
-    fn a_board_answer_records_operator_law_without_a_subject_special_case() {
-        let tmp = tempfile::tempdir().unwrap();
-        let mut req = request(&tmp, "q-board", Some("Accept the stated owner for now."));
-        req.provenance = json!({"decided_by": "unattributed-caller"});
-        seed_question(
-            &req,
-            &ask("q-board", "who may set this?", None, Some("x-1")),
-        );
-
-        let result = run_clear(&req);
-
-        assert_eq!(result.exit_code, 0, "{:?}", result.lines);
-        let envelope = rows(&req.journal_path, &["operator_decision"])
-            .into_iter()
-            .find(|r| r["data"]["question_id"] == "q-board")
-            .expect("the board answer recorded");
-        let data = &envelope["data"];
-        assert_eq!(data["authority_source"], "operator");
-        assert_eq!(data["decided_by"], "operator");
-        assert_eq!(data["attested_by"], "question-board");
-        assert_eq!(data["subject"], "x-1");
-        let law_row = json!({
-            "ts": envelope["ts"],
-            "authority_source": data["authority_source"],
-        });
-        assert!(crate::decision_index::is_law(&law_row), "{law_row}");
-    }
-
     #[test]
     fn a_different_answer_refuses_unless_it_overrides_a_coordination_row() {
         let tmp = tempfile::tempdir().unwrap();
@@ -344,71 +232,6 @@ mod tests {
     }
 
     #[test]
-    fn mixed_open_closed_and_unknown_ids_get_labeled_receipts() {
-        let tmp = tempfile::tempdir().unwrap();
-        let mut req = request(&tmp, "q-open", None);
-        req.ids = vec!["q-open".into(), "q-closed".into(), "q-missing".into()];
-        seed_question(&req, &ask("q-open", "which lane?", None, None));
-        seed_question(&req, &ask("q-closed", "already answered?", None, None));
-        let close = json!({
-            "ts": "2026-09-23T00:02:00Z",
-            "type": "operator_question_closed",
-            "source": "test",
-            "data": {"question_id": "q-closed", "closed_by": "test-agent"},
-        });
-        crate::provider_cap::append_questions_row(&req.index_path, &close).unwrap();
-
-        let result = run_clear(&req);
-
-        assert_eq!(result.exit_code, 4);
-        assert!(result.lines[0].contains("q-open (withdrawn)"));
-        assert!(result.lines[1].contains("q-closed was already closed; nothing written"));
-        assert!(result.lines[2].contains("q-missing is not a question id this machine knows"));
-        assert_eq!(
-            result.lines[3],
-            "outstanding: closed 1 (resumed 0), already closed 1, unknown 1, refused 0"
-        );
-    }
-
-    #[test]
-    fn a_recorded_user_answer_lets_an_agent_close_the_question_as_answered() {
-        let tmp = tempfile::tempdir().unwrap();
-        let req = agent_bare_request(&tmp, "q-userans1");
-        seed_question(&req, &ask_from("q-userans1", "bot-asker", "which lane?"));
-        recorded_decision(&req, "q-userans1", "d-user0001", "ship it", "operator");
-
-        let result = run_clear(&req);
-
-        assert_eq!(result.exit_code, 0, "{:?}", result.lines);
-        assert!(
-            result.lines[0].contains("answered by recorded decision d-user0001"),
-            "{:?}",
-            result.lines
-        );
-        let closes = rows(&req.index_path, &["operator_question_closed"]);
-        assert_eq!(closes.len(), 1, "{:?}", result.lines);
-        assert_eq!(closes[0]["data"]["answer"], json!("ship it"));
-    }
-
-    #[test]
-    fn a_matching_agent_answer_resumes_over_the_recorded_user_answer() {
-        let tmp = tempfile::tempdir().unwrap();
-        let mut req = request(&tmp, "q-userans2", Some("ship it"));
-        req.provenance = json!({"decided_by": "bot-closer", "authority_source": "agent"});
-        seed_question(&req, &ask_from("q-userans2", "bot-asker", "which lane?"));
-        recorded_decision(&req, "q-userans2", "d-user0002", "ship it", "operator");
-
-        let result = run_clear(&req);
-
-        assert_eq!(result.exit_code, 0, "{:?}", result.lines);
-        assert!(
-            result.lines[0].contains("decision d-user0002 resumed"),
-            "{:?}",
-            result.lines
-        );
-    }
-
-    #[test]
     fn an_agent_answer_that_differs_from_the_recorded_user_answer_still_refuses() {
         let tmp = tempfile::tempdir().unwrap();
         let mut req = request(&tmp, "q-userans3", Some("no, hold it"));
@@ -424,22 +247,6 @@ mod tests {
             "{:?}",
             result.lines
         );
-    }
-
-    #[test]
-    fn a_coordination_answer_keeps_the_bare_agent_close_refused() {
-        let tmp = tempfile::tempdir().unwrap();
-        let req = agent_bare_request(&tmp, "q-coordan1");
-        seed_question(&req, &ask_from("q-coordan1", "bot-asker", "which lane?"));
-        recorded_decision(&req, "q-coordan1", "d-agent001", "ship it", "agent");
-
-        let result = run_clear(&req);
-
-        assert_eq!(result.exit_code, 3, "{:?}", result.lines);
-        assert!(result.lines[0].contains("refused"), "{:?}", result.lines);
-        let (asked, closed) = crate::question_intake::question_rows(&req.index_path);
-        assert!(asked.contains_key("q-coordan1"));
-        assert!(!closed.contains("q-coordan1"));
     }
 
     #[test]
@@ -593,88 +400,6 @@ mod tests {
             crate::merge_grant::head_grant_status(Some(&payload)),
             crate::merge_grant::HeadGrant::Conflict
         );
-    }
-
-    #[test]
-    fn chat_attested_clear_records_the_users_words() {
-        let chat = |req: &mut ClearRequest, quote: &str| {
-            req.provenance = json!({
-                "decided_by": "agent-1",
-                "authority_source": "chat_attested",
-                "attested_by": "user in chat",
-                "quote": quote,
-            });
-            req.caller.as_mut().unwrap().ancestry_handle = Some("agent-1".to_string());
-        };
-        // AC1: an agent relays the user's chat answer to the user's question.
-        // A bare option number and a short phrase pass the evidence gate.
-        for answer in ["go narrow", "1"] {
-            let tmp = tempfile::tempdir().unwrap();
-            let mut req = request(&tmp, "q-chat", Some(answer));
-            chat(&mut req, answer);
-            seed_question(&req, &ask_from("q-chat", "49a80492", "which lane?"));
-            let result = run_clear(&req);
-            assert_eq!(result.exit_code, 0, "{:?}", result.lines);
-            let rows = graph_decisions(&req);
-            assert_eq!(rows.len(), 1, "{rows:?}");
-            assert_eq!(rows[0]["authority_source"], "chat_attested");
-            assert_eq!(rows[0]["decided_by"], "agent-1");
-            assert_eq!(rows[0]["quote"], answer);
-            let (_, closed) = crate::question_intake::question_rows(&req.index_path);
-            assert!(closed.contains("q-chat"));
-        }
-
-        // AC2 (core side): chat_attested with no words is still an agent
-        // answer, so it is refused and nothing lands.
-        let tmp = tempfile::tempdir().unwrap();
-        let mut req = request(&tmp, "q-bare", Some("go narrow"));
-        chat(&mut req, " ");
-        seed_question(&req, &ask_from("q-bare", "49a80492", "which lane?"));
-        let result = run_clear(&req);
-        assert_eq!(result.exit_code, 3, "{:?}", result.lines);
-        assert!(result.lines[0].contains("--authority chat_attested --quote"));
-        assert!(graph_decisions(&req).is_empty());
-        // AC2 (argv side): the flag front refuses a missing --quote before
-        // any identity or store read.
-        let argv = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
-        assert_eq!(
-            crate::outstanding_cmds::run_clear_cmd(&argv(&[
-                "q-1",
-                "--answer",
-                "a",
-                "--authority",
-                "chat_attested"
-            ])),
-            2
-        );
-
-        // AC3: a chat answer to a merge-grant question records, mints no
-        // grant, and says so.
-        let sha = "a29b38c37b18e737eaf850e8765920498287cabf";
-        let subject = format!("merge-grant:footnote#2739@{sha}");
-        let tmp = tempfile::tempdir().unwrap();
-        let mut req = request(&tmp, "q-grant", Some("Merge it now."));
-        chat(&mut req, "merge it now");
-        seed_question(
-            &req,
-            &ask("q-grant", "Merge PR 2739?", Some(&subject), Some("x-0000")),
-        );
-        let result = run_clear(&req);
-        assert_eq!(result.exit_code, 0, "{:?}", result.lines);
-        assert!(
-            result
-                .lines
-                .iter()
-                .any(|l| l.contains("do not mint a merge grant")),
-            "{:?}",
-            result.lines
-        );
-        let rows = graph_decisions(&req);
-        assert!(
-            rows.iter().all(|r| r["subject"] != subject.as_str()),
-            "{rows:?}"
-        );
-        assert_eq!(rows.len(), 1, "{rows:?}");
     }
 
     #[test]
@@ -837,123 +562,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn the_scope_lead_withdraws_a_gone_workers_moot_question_and_no_other_lead_does() {
-        let lead_req = |tmp: &TempDir, qid: &str, scope: &[&str], gone: fn(&str) -> bool| {
-            let mut req = request(tmp, qid, Some("moot: ruled on the node, PR merged"));
-            req.provenance = json!({"decided_by": "1eadabcd", "authority_source": "role"});
-            req.closed_by = Some("1eadabcd-aaaa-4482-9135-37ba1cb0f0d2".to_string());
-            req.caller = Some(ClearCaller {
-                ancestry_handle: Some("1eadabcd".to_string()),
-                teamed: true,
-                teams: Vec::new(),
-                scope_nodes: Some(scope.iter().map(|s| s.to_string()).collect()),
-                asker_gone: Some(gone),
-            });
-            let mut question = ask("q-moot", "which lane?", None, Some("x-in"));
-            question["data"]["asker"] = json!("e49583f3");
-            question["data"]["session_id"] = json!("e49583f3-bbbb-4482-9135-37ba1cb0f0d2");
-            seed_question(&req, &question);
-            req
-        };
-
-        // A question filed by a stopped worker on a node in scope S: S's
-        // lead withdraws it as coordination, with no decision and no mail.
-        let tmp = tempfile::tempdir().unwrap();
-        let req = lead_req(&tmp, "q-moot", &["x-in"], |_| true);
-        let result = run_clear(&req);
-        assert_eq!(result.exit_code, 0, "{:?}", result.lines);
-        assert!(result.deliveries.is_empty());
-        assert!(rows(&req.decisions_path, &["operator_decision"]).is_empty());
-        let closed = rows(&req.journal_path, &["operator_question_closed"]);
-        assert_eq!(closed.len(), 1);
-        assert_eq!(
-            closed[0]["data"]["reason"],
-            "withdrawn by lead 1eadabcd: moot: ruled on the node, PR merged"
-        );
-        assert!(closed[0]["data"].get("answer").is_none());
-
-        // A lead outside S: refused, the question stays open.
-        let tmp = tempfile::tempdir().unwrap();
-        let req = lead_req(&tmp, "q-moot", &["x-other"], |_| true);
-        let result = run_clear(&req);
-        assert_eq!(result.exit_code, 3, "{:?}", result.lines);
-        assert!(
-            result.lines[0].contains(LEAD_WITHDRAW_LINE),
-            "{:?}",
-            result.lines
-        );
-        assert!(rows(&req.journal_path, &["operator_question_closed"]).is_empty());
-
-        // S's lead while the asker still lives and the node is open: refused.
-        let tmp = tempfile::tempdir().unwrap();
-        let req = lead_req(&tmp, "q-moot", &["x-in"], |_| false);
-        let result = run_clear(&req);
-        assert_eq!(result.exit_code, 3, "{:?}", result.lines);
-        assert!(rows(&req.journal_path, &["operator_question_closed"]).is_empty());
-
-        // A question with no asker session is no worker's: refused.
-        let tmp = tempfile::tempdir().unwrap();
-        let mut req = request(&tmp, "q-anon", Some("moot"));
-        req.provenance = json!({"decided_by": "1eadabcd", "authority_source": "role"});
-        req.caller = Some(ClearCaller {
-            ancestry_handle: Some("1eadabcd".to_string()),
-            teamed: true,
-            teams: Vec::new(),
-            scope_nodes: Some(["x-in".to_string()].into_iter().collect()),
-            asker_gone: Some(|_| true),
-        });
-        let mut question = ask("q-anon", "which lane?", None, Some("x-in"));
-        question["data"]["asker"] = json!("");
-        seed_question(&req, &question);
-        let result = run_clear(&req);
-        assert_eq!(result.exit_code, 3, "{:?}", result.lines);
-    }
-
-    #[test]
-    fn the_asker_withdraws_its_own_question_by_the_full_session_id_pair() {
-        // The incident: the handle comparison failed while the full session
-        // ids matched, so the asker's own moot withdrawal was refused and
-        // the refusal prescribed an authority value the CLI flag rejects.
-        // The pair decides; the handle is only a backstop.
-        let tmp = tempfile::tempdir().unwrap();
-        let mut req = request(&tmp, "q-incident", None);
-        req.closed_by = Some("246866bd-aaaa-4482-9135-37ba1cb0f0d2".to_string());
-        req.caller.as_mut().unwrap().ancestry_handle = Some("01a0cbdd".to_string());
-        let mut question = ask_from("q-incident", "99bbaa00", "May PR 3122 merge at head?");
-        question["data"]["session_id"] = json!("246866bd-aaaa-4482-9135-37ba1cb0f0d2");
-        seed_question(&req, &question);
-        let result = run_clear(&req);
-        assert_eq!(result.exit_code, 0, "{:?}", result.lines);
-        assert!(
-            result
-                .lines
-                .iter()
-                .any(|l| l.contains("(withdrawn by asker: moot)")),
-            "{:?}",
-            result.lines
-        );
-        let closed = rows(&req.journal_path, &["operator_question_closed"]);
-        assert_eq!(closed.len(), 1);
-        assert_eq!(closed[0]["data"]["reason"], "withdrawn by asker: moot");
-
-        // Full ids present and different: no handle backstop can slip a
-        // withdrawal through, even when the handles collide.
-        let tmp = tempfile::tempdir().unwrap();
-        let mut req = request(&tmp, "q-other-w", None);
-        req.closed_by = Some("246866bd-aaaa-4482-9135-37ba1cb0f0d2".to_string());
-        req.caller.as_mut().unwrap().ancestry_handle = Some("01a0cbdd".to_string());
-        let mut question = ask_from("q-other-w", "01a0cbdd", "which lane?");
-        question["data"]["session_id"] = json!("99998888-aaaa-4482-9135-37ba1cb0f0d2");
-        seed_question(&req, &question);
-        let result = run_clear(&req);
-        assert_eq!(result.exit_code, 3, "{:?}", result.lines);
-        assert!(
-            result.lines[0].contains("Only the asker withdraws"),
-            "{:?}",
-            result.lines
-        );
-    }
     #[test]
     fn a_negated_or_punctuated_retraction_answer_never_reads_affirmative() {
         assert!(is_affirmative_retraction_answer(

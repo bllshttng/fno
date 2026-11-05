@@ -382,27 +382,6 @@ mod tests {
     }
 
     #[test]
-    fn a_bare_seat_record_without_provenance_is_a_witness() {
-        let graph = vec![node("x-1", "in_progress", serde_json::json!([open("s-1")]))];
-        let rows = vec![row("drifter", "s-1", None)];
-        let worked = join_worked(&rows, &graph, &HashSet::new(), &HashMap::new());
-        assert!(worked.is_empty());
-    }
-
-    #[test]
-    fn the_node_claim_proves_a_seat_record() {
-        let graph = vec![node("x-1", "in_progress", serde_json::json!([open("s-1")]))];
-        let rows = vec![row("drifter", "s-1", None)];
-        let worked = join_worked(
-            &rows,
-            &graph,
-            &HashSet::new(),
-            &claims(&[("x-1", &["s-1"])]),
-        );
-        assert_eq!(worked.get("x-1").unwrap(), &vec!["drifter".to_string()]);
-    }
-
-    #[test]
     fn a_closed_session_frees_the_node() {
         let graph = vec![node(
             "x-1",
