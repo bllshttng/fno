@@ -310,8 +310,6 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `GITHUB_ACTIONS` | rs | Folds the smoke step headers into ::group:: in CI: crates/fno-agents/src/test_smoke.rs |
 | `GITHUB_EVENT_BEFORE` | rs | The hook-tombstones deletion range on a push to main: crates/fno/src/repo_lint.rs. |
 | `GITHUB_TOKEN` | rs | Same as GH_TOKEN for gh_login: presence reads as no machine login, so the keyed rows stay off. |
-| `GIT_CONFIG_GLOBAL` | rs | the VCS tool's own ambient global-config channel; the birth display_name test guard redirects it beside HOME. |
-| `GIT_CONFIG_SYSTEM` | rs | the VCS tool's own ambient system-config channel; the birth display_name test guard redirects it beside HOME. |
 | `GLOBAL_EVENTS_PATH` | rs | unclear: crates/fno-agents/src/hook/stop.rs:462 |
 | `GROK_HOME` | rs | grok's base directory, sessions live under its `sessions` child: crates/fno-agents/src/grok_store.rs:18 |
 | `GROK_SESSION_ID` | rs | fallback session id when a grok Stop payload omits sessionId: crates/fno-agents/src/hook/stop.rs:150 |
