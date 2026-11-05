@@ -298,7 +298,10 @@ fn run_with_options(action: &str, options: Options, external: &dyn External) -> 
             Receipt::new(action, format!("store-unavailable: {reason}"), None),
         );
     }
-    if options.lock_held {
+    // `login` serializes its own writes (under_switch_lock): the interactive
+    // browser wait between them must not hold the switch mutex, or every
+    // later switch answers "another switch is in progress" for minutes.
+    if options.lock_held || action == "login" {
         return execute(action, &options, external);
     }
     let lock_path = options.store.join(".switch.lock");
@@ -312,6 +315,23 @@ fn run_with_options(action: &str, options: Options, external: &dyn External) -> 
         }
     };
     execute(action, &options, external)
+}
+
+/// Run `step` under the switch mutex unless the caller already holds it
+/// (`--lock-held`). Only the vault's store reads and writes serialize here;
+/// the interactive login wait between them runs unlocked.
+fn under_switch_lock<T>(
+    options: &Options,
+    external: &dyn External,
+    step: impl FnOnce(&Options, &dyn External) -> T,
+) -> Result<T, String> {
+    if options.lock_held {
+        return Ok(step(options, external));
+    }
+    let lock_path = options.store.join(".switch.lock");
+    let _lock = crate::chokepoint::take(&crate::chokepoint::CLAUDE_VAULT, &lock_path)
+        .map_err(|refused| refused.to_string())?;
+    Ok(step(options, external))
 }
 
 /// `provider-cap vault <action> --store <store> [--id <id>] [--lock-held]` in
@@ -645,8 +665,23 @@ fn login(options: &Options, external: &dyn External) -> (i32, Receipt) {
         Err(verdict) => return (4, Receipt::new(action, verdict, Some(id.to_string()))),
     };
     // 1. Save the outgoing account first: the logins below overwrite both slot
-    // items, and a credential fno has not saved would be lost.
-    let (code, receipt) = sync(options, external);
+    // items, and a credential fno has not saved would be lost. The mutex
+    // covers this write and the final one; the browser waits between them run
+    // unlocked, so a login never blocks a later switch.
+    let saved = under_switch_lock(options, external, sync);
+    let (code, receipt) = match saved {
+        Ok(pair) => pair,
+        Err(reason) => {
+            return (
+                1,
+                Receipt::new(
+                    action,
+                    format!("lock-unavailable: {reason}"),
+                    Some(id.to_string()),
+                ),
+            )
+        }
+    };
     if !matches!(
         receipt.verdict.as_str(),
         "written" | "unchanged" | "empty-slot" | "unproven"
@@ -659,6 +694,8 @@ fn login(options: &Options, external: &dyn External) -> (i32, Receipt) {
     ];
     let mut finished: Vec<&str> = Vec::new();
     let mut proven: Vec<(String, Principal)> = Vec::new();
+    // Per-service proven blobs, for the final write's still-mine re-read.
+    let mut proven_by_service: Vec<(String, String)> = Vec::new();
     for (step, (service, config_dir)) in readers.into_iter().enumerate() {
         let label = if step == 0 { "unscoped" } else { "scoped" };
         let email = expected_email.as_deref();
@@ -748,44 +785,84 @@ fn login(options: &Options, external: &dyn External) -> (i32, Receipt) {
             }
         }
         finished.push(label);
+        proven_by_service.push((service.to_string(), blob.clone()));
         proven.push((blob, principal));
     }
     // The blob with the later expiry is the live token; write it into the store
-    // so the next `use` is a plain switch.
-    let proven_blobs: Vec<&String> = proven.iter().map(|(blob, _)| blob).collect();
-    let best = newest_blob(&proven_blobs);
-    let (blob, principal) = proven.swap_remove(best);
-    let now = chrono::Utc::now().timestamp() as f64;
-    let mut principal_json = json!({
-        "account_uuid": principal.account_uuid,
-        "organization_uuid": principal.organization_uuid,
-    });
-    if let Some(email) = &principal.email {
-        principal_json["email"] = json!(email);
-    }
-    let store = &options.store;
-    if crate::accounts::store::write_bound_snapshot(store, id, &blob, &principal_json, now).is_err()
-    {
-        return (
+    // so the next `use` is a plain switch. Under the mutex, but only when the
+    // slot still holds what the logins wrote: the wait above was unlocked, so
+    // a concurrent switch could have moved the slot, and stamping over it
+    // would lie about the active account.
+    let outcome = under_switch_lock(
+        options,
+        external,
+        |options: &Options, external: &dyn External| {
+            for (service, proven_blob) in &proven_by_service {
+                match external.keychain(service) {
+                    Ok(Some(current)) if current == *proven_blob => {}
+                    _ => {
+                        return (
+                            1,
+                            Receipt::new(
+                                action,
+                                format!(
+                                    "superseded (the shared login moved during the browser wait); \
+                                 run `fno config accounts use {id} --login` again"
+                                ),
+                                Some(id.to_string()),
+                            ),
+                        );
+                    }
+                }
+            }
+            let proven_blobs: Vec<&String> = proven.iter().map(|(blob, _)| blob).collect();
+            let best = newest_blob(&proven_blobs);
+            let (blob, principal) = proven.swap_remove(best);
+            let now = chrono::Utc::now().timestamp() as f64;
+            let mut principal_json = json!({
+                "account_uuid": principal.account_uuid,
+                "organization_uuid": principal.organization_uuid,
+            });
+            if let Some(email) = &principal.email {
+                principal_json["email"] = json!(email);
+            }
+            let store = &options.store;
+            if crate::accounts::store::write_bound_snapshot(store, id, &blob, &principal_json, now)
+                .is_err()
+            {
+                return (
+                    1,
+                    Receipt::new(action, "store-write-failed", Some(id.to_string())),
+                );
+            }
+            if crate::accounts::store::stamp_active_slot(store, "claude", id).is_err() {
+                return (
+                    1,
+                    Receipt::new(action, "stamp-write-failed", Some(id.to_string())),
+                );
+            }
+            match principal.email.as_deref().or(expected_email.as_deref()) {
+            Some(email) => eprintln!(
+                "Both keychain items hold {id} ({email}). Check usage: fno config accounts usage --refresh"
+            ),
+            None => eprintln!(
+                "Both keychain items hold {id}. Check usage: fno config accounts usage --refresh"
+            ),
+        }
+            (0, Receipt::new(action, "logged-in", Some(id.to_string())))
+        },
+    );
+    match outcome {
+        Ok(pair) => pair,
+        Err(reason) => (
             1,
-            Receipt::new(action, "store-write-failed", Some(id.to_string())),
-        );
-    }
-    if crate::accounts::store::stamp_active_slot(store, "claude", id).is_err() {
-        return (
-            1,
-            Receipt::new(action, "stamp-write-failed", Some(id.to_string())),
-        );
-    }
-    match principal.email.as_deref().or(expected_email.as_deref()) {
-        Some(email) => eprintln!(
-            "Both keychain items hold {id} ({email}). Check usage: fno config accounts usage --refresh"
-        ),
-        None => eprintln!(
-            "Both keychain items hold {id}. Check usage: fno config accounts usage --refresh"
+            Receipt::new(
+                action,
+                format!("lock-unavailable: {reason}"),
+                Some(id.to_string()),
+            ),
         ),
     }
-    (0, Receipt::new(action, "logged-in", Some(id.to_string())))
 }
 
 /// The stored-login verdict for `<id>`, for the daemon's early alert. `None`
@@ -1188,10 +1265,11 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
     use std::os::unix::fs::PermissionsExt;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
     use tempfile::TempDir;
 
-    #[derive(Default, Clone)]
+    #[derive(Clone)]
     struct MockExternal {
         keychain: HashMap<String, Option<String>>,
         // Blobs the mocked logins leave behind, served before the static map.
@@ -1201,10 +1279,45 @@ mod tests {
         profiles: HashMap<String, Result<Principal, ExternalFailure>>,
         refresh: Arc<Mutex<Option<Result<Value, ExternalFailure>>>>,
         live: Vec<LiveClaude>,
+        // Runs inside the fake browser login, so a test can probe the world
+        // exactly where the real login waits on the operator.
+        on_login: Arc<Mutex<Option<Box<dyn Fn() + Send>>>>,
+        // After this many keychain reads the served map swaps to `swap_to`:
+        // the stand-in for a concurrent switch landing mid-login.
+        swap_after_reads: Arc<Mutex<Option<usize>>>,
+        swap_to: Arc<Mutex<HashMap<String, String>>>,
+    }
+
+    impl Default for MockExternal {
+        fn default() -> Self {
+            MockExternal {
+                keychain: HashMap::new(),
+                post_login: Arc::new(Mutex::new(HashMap::new())),
+                login_result: Arc::new(Mutex::new(None)),
+                logins: Arc::new(Mutex::new(Vec::new())),
+                profiles: HashMap::new(),
+                refresh: Arc::new(Mutex::new(None)),
+                live: Vec::new(),
+                on_login: Arc::new(Mutex::new(None)),
+                swap_after_reads: Arc::new(Mutex::new(None)),
+                swap_to: Arc::new(Mutex::new(HashMap::new())),
+            }
+        }
     }
 
     impl External for MockExternal {
         fn keychain(&self, service: &str) -> Result<Option<String>, ExternalFailure> {
+            {
+                let mut left = self.swap_after_reads.lock().unwrap();
+                if let Some(n) = left.as_mut() {
+                    if *n == 1 {
+                        *self.post_login.lock().unwrap() = self.swap_to.lock().unwrap().clone();
+                        *left = None;
+                    } else {
+                        *n -= 1;
+                    }
+                }
+            }
             if let Some(blob) = self.post_login.lock().unwrap().get(service).cloned() {
                 return Ok(Some(blob));
             }
@@ -1239,6 +1352,11 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push((config_dir.map(PathBuf::from), email.map(str::to_string)));
+            let hook = self.on_login.lock().unwrap().take();
+            if let Some(hook) = hook.as_ref() {
+                hook();
+            }
+            *self.on_login.lock().unwrap() = hook;
             self.login_result
                 .lock()
                 .unwrap()
@@ -1556,6 +1674,113 @@ mod tests {
             );
             assert!(!temp.path().join(".active-claude").exists());
         }
+    }
+    #[test]
+    fn login_holds_no_switch_mutex_across_the_browser_wait() {
+        // The browser login waits on the operator for minutes. During exactly
+        // that wait a later switch must be able to take the mutex, so the
+        // hook - running inside the fake browser login - takes it.
+        let temp = TempDir::new().unwrap();
+        let slot = temp.path().join("slot");
+        let who = principal("acct-makers", "org-makers");
+        record(
+            temp.path(),
+            "makers",
+            &who,
+            &blob("dead", "dead-refresh", now_ms() - 1),
+        );
+        let unscoped = blob("m1", "m1-refresh", now_ms() + 1_000);
+        let scoped = blob("m2", "m2-refresh", now_ms() + 2_000);
+        let mut external = MockExternal::default();
+        external
+            .post_login
+            .lock()
+            .unwrap()
+            .insert("Claude Code-credentials".to_string(), unscoped);
+        external
+            .post_login
+            .lock()
+            .unwrap()
+            .insert(scoped_service(&slot).unwrap(), scoped.clone());
+        external.profiles.insert("m1".to_string(), Ok(who.clone()));
+        external.profiles.insert("m2".to_string(), Ok(who));
+        *external.login_result.lock().unwrap() = Some(Ok(()));
+        let lock_path = temp.path().join(".switch.lock");
+        let observed = Arc::new(AtomicBool::new(false));
+        let observed_in_login = observed.clone();
+        let hook_path = lock_path.clone();
+        *external.on_login.lock().unwrap() = Some(Box::new(move || {
+            let file = OpenOptions::new()
+                .create(true)
+                .read(true)
+                .write(true)
+                .open(&hook_path)
+                .unwrap();
+            assert!(
+                file.try_lock().is_ok(),
+                "the browser login wait held the switch mutex"
+            );
+            drop(file);
+            observed_in_login.store(true, Ordering::SeqCst);
+        }));
+        let mut opts = options(temp.path(), &slot, Some("makers"));
+        opts.lock_held = false;
+        let (code, receipt) = run_with_options("login", opts, &external);
+        assert_eq!(code, 0, "verdict {}", receipt.verdict);
+        assert_eq!(receipt.verdict, "logged-in");
+        assert!(
+            observed.load(Ordering::SeqCst),
+            "the in-login hook never ran"
+        );
+    }
+    #[test]
+    fn a_slot_that_moved_during_the_login_wait_is_not_stamped_over() {
+        // The login wait is unlocked, so a concurrent switch can land in it.
+        // The final store write re-reads both services under the mutex and
+        // refuses to stamp `makers` over what the switch put there.
+        let temp = TempDir::new().unwrap();
+        let slot = temp.path().join("slot");
+        let who = principal("acct-makers", "org-makers");
+        let original = blob("dead", "dead-refresh", now_ms() - 1);
+        record(temp.path(), "makers", &who, &original);
+        let unscoped = blob("m1", "m1-refresh", now_ms() + 1_000);
+        let scoped = blob("m2", "m2-refresh", now_ms() + 2_000);
+        let mut external = MockExternal::default();
+        external
+            .post_login
+            .lock()
+            .unwrap()
+            .insert("Claude Code-credentials".to_string(), unscoped);
+        external
+            .post_login
+            .lock()
+            .unwrap()
+            .insert(scoped_service(&slot).unwrap(), scoped.clone());
+        external.profiles.insert("m1".to_string(), Ok(who.clone()));
+        external.profiles.insert("m2".to_string(), Ok(who));
+        *external.login_result.lock().unwrap() = Some(Ok(()));
+        let other = blob("x1", "x1-refresh", now_ms() + 9_000);
+        let mut swap_to = HashMap::new();
+        swap_to.insert("Claude Code-credentials".to_string(), other.clone());
+        swap_to.insert(scoped_service(&slot).unwrap(), other);
+        *external.swap_to.lock().unwrap() = swap_to;
+        // Reads 1-2 are the pre-login sync, 3-4 the post-login proofs; the
+        // 5th is the final write's own re-read, which sees the swapped map.
+        *external.swap_after_reads.lock().unwrap() = Some(5);
+        let mut opts = options(temp.path(), &slot, Some("makers"));
+        opts.lock_held = false;
+        let (code, receipt) = run_with_options("login", opts, &external);
+        assert_eq!(code, 1);
+        assert!(
+            receipt.verdict.starts_with("superseded"),
+            "verdict {}",
+            receipt.verdict
+        );
+        assert!(!temp.path().join(".active-claude").exists());
+        assert_eq!(
+            fs::read_to_string(temp.path().join("makers/blob")).unwrap(),
+            original
+        );
     }
     #[test]
     fn stored_health_scenarios_skip_the_slot_owner_and_judge_the_rest() {
