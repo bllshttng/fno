@@ -476,7 +476,7 @@ fn parse_rubric(
     map: &serde_yaml_ng::Mapping,
     kind: &str,
     where_prefix: &str,
-) -> Result<GradeCheck, BankError> {
+) -> Result<GradeCheck, LoadError> {
     let has_path = map
         .get(serde_yaml_ng::Value::String("path".into()))
         .and_then(|v| v.as_str())
@@ -504,22 +504,22 @@ fn parse_rubric(
     };
     let raw = map.get(serde_yaml_ng::Value::String("criteria".into()));
     let Some(seq) = raw.and_then(|v| v.as_sequence()) else {
-        return Err(BankError(format!(
+        return Err(LoadError::Refusal(BankError(format!(
             "{where_prefix}: kind=rubric requires a non-empty 'criteria' list"
-        )));
+        ))));
     };
     if seq.is_empty() {
-        return Err(BankError(format!(
+        return Err(LoadError::Refusal(BankError(format!(
             "{where_prefix}: kind=rubric requires a non-empty 'criteria' list"
-        )));
+        ))));
     }
     let mut criteria: Vec<RubricCriterion> = Vec::new();
     for (i, item) in seq.iter().enumerate() {
         let row_prefix = format!("{where_prefix} criteria[{i}]");
         let Some(row) = item.as_mapping() else {
-            return Err(BankError(format!(
+            return Err(LoadError::Refusal(BankError(format!(
                 "{row_prefix}: each criterion must be a mapping with id, text and tag"
-            )));
+            ))));
         };
         let field = |key: &str| -> Option<String> {
             row.get(serde_yaml_ng::Value::String(key.into()))
@@ -544,15 +544,15 @@ fn parse_rubric(
             "hurdle" => RubricTag::Hurdle,
             "principle" => RubricTag::Principle,
             _ => {
-                return Err(BankError(format!(
+                return Err(LoadError::Refusal(BankError(format!(
                     "{row_prefix} ({cid}): tag must be one of {VALID_CRITERION_TAGS_REPR}, got '{tag_word}'"
-                )))
+                ))))
             }
         };
         if criteria.iter().any(|c| c.id == cid) {
-            return Err(BankError(format!(
+            return Err(LoadError::Refusal(BankError(format!(
                 "{where_prefix}: duplicate criterion id '{cid}'"
-            )));
+            ))));
         }
         criteria.push(RubricCriterion { id: cid, text, tag });
     }
