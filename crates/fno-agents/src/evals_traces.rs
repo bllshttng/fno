@@ -159,7 +159,20 @@ fn write_trace(
     data: &Value,
     resolver: &crate::context_run::SessionTranscripts,
 ) -> Result<bool, String> {
-    let id = blake3::hash(format!("{kind}|{}|{key}", data["session_id"]).as_bytes())
+    let failure = if kind == "seed_correction" {
+        key
+    } else {
+        data["turn"]
+            .as_str()
+            .filter(|turn| !turn.is_empty())
+            .unwrap_or(key)
+    };
+    let session = if kind == "seed_correction" {
+        Value::Null
+    } else {
+        data["session_id"].clone()
+    };
+    let id = blake3::hash(format!("{kind}|{session}|{failure}").as_bytes())
         .to_hex()
         .to_string();
     let dir = state.join("evals/traces");
@@ -171,8 +184,21 @@ fn write_trace(
     let mut trace = snapshot(data, resolver);
     trace["id"] = json!(id);
     trace["signal_kind"] = json!(kind);
-    trace["trigger"] = fact(data, "quote");
-    trace["truth"] = fact(data, "reason");
+    trace["source_ref"] = observed(json!(key), "source_identity");
+    let trigger = ["quote", "message", "reason"]
+        .into_iter()
+        .find(|key| !data[*key].is_null())
+        .unwrap_or("quote");
+    trace["trigger"] = if data[trigger].is_null() {
+        observed(json!(kind), "source_signal")
+    } else {
+        fact(data, trigger)
+    };
+    trace["truth"] = if data["reason"].is_null() {
+        fact(data, "quote")
+    } else {
+        fact(data, "reason")
+    };
     trace["right_action"] = missing("not labeled");
     trace["layer_verdict"] = missing("not labeled");
     trace["profile_id"] = observed(
@@ -286,7 +312,7 @@ fn pass(state: &Path, journal: &Path, repo: &Path, prs: &[Value]) -> Result<Valu
             {
                 Some("Budget") => Some("budget"),
                 Some("NoProgress") => Some("no_progress"),
-                Some("Aborted") => Some("stuck"),
+                Some("Aborted") => Some("aborted"),
                 _ => None,
             },
             "review_attestation"
@@ -464,7 +490,7 @@ fn daily(state: &Path) -> Result<Value, String> {
 
 #[derive(Default)]
 pub struct Arm {
-    next: std::sync::Mutex<Option<std::time::Instant>>,
+    next: std::sync::Arc<std::sync::Mutex<Option<std::time::Instant>>>,
     in_flight: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
@@ -480,11 +506,14 @@ pub fn maybe_tick(arm: &Arm, home: crate::paths::AgentsHome) {
         *next = Some(std::time::Instant::now() + std::time::Duration::from_secs(86400));
     }
     let flag = std::sync::Arc::clone(&arm.in_flight);
+    let next = std::sync::Arc::clone(&arm.next);
     tokio::task::spawn_blocking(move || {
         let _gate = crate::daemon::SweepGate(flag);
         if let Some(state) = home.root().parent() {
             if let Err(e) = daily(state) {
                 eprintln!("eval traces: {e}");
+                *next.lock().unwrap_or_else(|e| e.into_inner()) =
+                    Some(std::time::Instant::now() + std::time::Duration::from_secs(300));
             }
         }
     });
@@ -542,7 +571,7 @@ mod tests {
                 &journal,
                 "agent_corrected",
                 json!({"correction_id":id, "corrected_by":"user", "kind":"correct",
-                "quote":"no, prove it", "quote_status":"kept", "session_id":"s", "harness":"claude", "turn":"turn-1", "source_file":path}),
+                "quote":"no, prove it", "quote_status":"kept", "session_id":id, "harness":"claude", "turn":"turn-1", "source_file":path}),
             );
         }
         assert_eq!(
@@ -571,6 +600,12 @@ mod tests {
         let mut labeled = found.clone();
         labeled["right_action"] = json!({"value":"run the check","basis":"user_set"});
         std::fs::write(&path, labeled.to_string()).unwrap();
+        append(
+            &journal,
+            "agent_corrected",
+            json!({"correction_id":"duplicate-envelope","corrected_by":"user","kind":"correct",
+            "quote":"no, prove it","quote_status":"kept","session_id":"one","harness":"claude","turn":"turn-1"}),
+        );
         assert_eq!(
             pass(tmp.path(), &journal, tmp.path(), &[]).unwrap()["new"],
             0
@@ -629,8 +664,43 @@ mod tests {
             json!({"number":7,"url":"https://github.com/o/r/pull/7","closedAt":"2026-11-01T00:00:00Z","mergedAt":null}),
             json!({"number":8,"url":"https://github.com/o/r/pull/8","closedAt":"2026-11-01T00:00:00Z","mergedAt":"2026-11-01T00:00:00Z"}),
         ];
+        let git = |args: &[&str]| {
+            let output = std::process::Command::new("git")
+                .current_dir(tmp.path())
+                .args([
+                    "-c",
+                    "core.hooksPath=/dev/null",
+                    "-c",
+                    "user.name=test",
+                    "-c",
+                    "user.email=test@example.org",
+                    "-c",
+                    "commit.gpgsign=false",
+                ])
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        };
+        git(&["init", "-q"]);
+        std::fs::write(tmp.path().join("a"), "one").unwrap();
+        git(&["add", "a"]);
+        git(&["commit", "-qm", "initial"]);
+        std::fs::write(tmp.path().join("a"), "two").unwrap();
+        git(&["add", "a"]);
+        git(&["commit", "-qm", "change"]);
+        git(&["revert", "--no-edit", "HEAD"]);
         let receipt = pass(tmp.path(), &journal, tmp.path(), &prs).unwrap();
-        assert_eq!(receipt["new"], 6);
+        assert_eq!(receipt["new"], 7);
+        let budget = traces(tmp.path())
+            .into_iter()
+            .find(|r| r["signal_kind"] == "budget")
+            .unwrap();
+        assert_eq!(budget["trigger"]["value"], "run ended");
         let kinds: Vec<_> = traces(tmp.path())
             .iter()
             .map(|v| v["signal_kind"].as_str().unwrap().to_string())
@@ -638,12 +708,13 @@ mod tests {
         assert_eq!(
             kinds,
             [
+                "aborted",
                 "budget",
                 "closed_unmerged",
                 "false_claim",
                 "no_progress",
                 "refusal_bypassed",
-                "stuck"
+                "revert"
             ]
         );
         assert_eq!(
@@ -659,6 +730,19 @@ mod tests {
         std::fs::write(&log, text).unwrap();
         assert_eq!(import_seed(tmp.path(), &log).unwrap(), 2);
         assert_eq!(traces(tmp.path()).len(), 2);
+        let line = text.lines().find(|l| l.contains(" | S2 | ")).unwrap();
+        let key = format!("seed:0:{}", blake3::hash(line.as_bytes()));
+        assert!(
+            !write_trace(
+                tmp.path(),
+                "seed_correction",
+                &key,
+                &json!({"session_id":"newly-resolved-full-session"}),
+                &crate::context_run::SessionTranscripts::default()
+            )
+            .unwrap(),
+            "enrichment cannot change a seed identity"
+        );
         let seed = tmp.path().join("evals/traces/seed-s2.log");
         let frozen = std::fs::read(&seed).unwrap();
         assert_eq!(

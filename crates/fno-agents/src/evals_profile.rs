@@ -103,8 +103,8 @@ fn refresh(
         "domain":dominant(domain_counts,"graph_project_domains"),
         "experience_band":missing("harness usage does not measure experience"),
         "build_mode":if harnesses.is_empty() { missing("no typed harness usage") } else if harnesses.len()>1 { derived("multi_harness","correction_fold_typed_turns") } else { derived("single_harness","correction_fold_typed_turns") },
-        "verification_capacity":if decisions.iter().any(|d|d["visual_approval"]==true) { derived("observed_visual_approval","decision_record") } else { missing("no explicit visual approval observed") },
-        "question_tolerance":if decisions.iter().any(|d|d["question"].is_string() && d["answer"].is_string()) { derived("observed_question_answers","decision_record") } else { missing("no explicit question and answer pair observed") },
+        "verification_capacity":if decisions.iter().any(|d|d["subject"].as_str().is_some_and(|s|s.to_ascii_lowercase().starts_with("visual approval")) && d["decision"].as_str().and_then(crate::correction_detect::reaction_rule)==Some("approve")) { derived("observed_visual_approval","decision_record") } else { missing("no explicit visual approval observed") },
+        "question_tolerance":if decisions.iter().any(|d|d["question"].is_string() && d["decision"].as_str().is_some_and(|v|!v.trim().is_empty())) { derived("observed_question_answers","decision_record") } else { missing("no explicit question and answer pair observed") },
     });
     for key in FIELDS {
         if let Some(value) = profile["user_set"].get(key) {
@@ -153,14 +153,14 @@ pub(crate) fn local(state: &Path, update: Option<(&str, &str)>) -> Result<Value,
         .filter_map(|n| n["domain"].as_str().map(str::to_string))
         .collect();
     let journal = crate::decision_index::default_state_path("decisions.jsonl");
-    let records =
-        crate::event_store::query_events(&journal, &crate::event_store::EventQuery::default())?;
-    let decisions: Vec<_> = records
-        .iter()
-        .filter_map(|e| serde_json::from_str::<Value>(&e.line).ok())
-        .map(|v| v.get("data").cloned().unwrap_or(v))
-        .collect();
-    refresh(state, &usage, &domains, &decisions, update)
+    let decisions = crate::decision_index::read_store_live(&graph, &journal)?;
+    if decisions.damaged > 0 {
+        eprintln!(
+            "eval profile: {} damaged decision rows were excluded",
+            decisions.damaged
+        );
+    }
+    refresh(state, &usage, &domains, &decisions.rows, update)
 }
 
 pub fn run(args: &[String]) -> i32 {
@@ -199,7 +199,7 @@ mod tests {
         let usage = json!({"typed_turns":{"2026-11-01|claude|m":20,"2026-11-01|codex|m":10},"seat_turns":{"2026-11-01|worker":30}});
         let domains = ["code".to_string()];
         let decisions = [
-            json!({"question":"how should we proceed?","answer":"continue","visual_approval":true}),
+            json!({"question":"Approve the visual changes?","decision":"approved","subject":"visual approval PR 7 at abc"}),
         ];
         let first = refresh(
             tmp.path(),
