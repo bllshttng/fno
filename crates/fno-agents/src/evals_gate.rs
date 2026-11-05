@@ -277,6 +277,9 @@ struct Pr {
 
 struct Deps<'a> {
     run: RunProbe<'a>,
+    /// The slot plumbing's own probe: the same argv seam with the 10-minute
+    /// slot bound, so a slow worktree add outlives the 30-second probe kill.
+    slot_run: RunProbe<'a>,
     spawn: &'a dyn Fn(&[String], &Path, &Path) -> Result<u32, String>,
     alive: &'a dyn Fn(u32) -> bool,
     kill: &'a dyn Fn(u32),
@@ -713,7 +716,7 @@ fn head_is_gated(p: &Paths, d: &Deps, slug: &str, pr: &Pr, covers: &[String]) ->
 }
 
 fn fetch(p: &Paths, d: &Deps, refspec: &str) -> bool {
-    (d.run)(&["git", "fetch", "--quiet", "origin", refspec], p.repo).is_some_and(|r| r.ok)
+    (d.slot_run)(&["git", "fetch", "--quiet", "origin", refspec], p.repo).is_some_and(|r| r.ok)
 }
 
 const REF_LOG: &str = "ref-checkout.log";
@@ -734,7 +737,7 @@ fn log_ref_failure(p: &Paths, d: &Deps, line: &str) {
 /// True when the repo can resolve `sha` as a commit.
 fn commit_present(p: &Paths, d: &Deps, sha: &str) -> bool {
     let spec = format!("{sha}^{{commit}}");
-    (d.run)(&["git", "cat-file", "-e", &spec], p.repo).is_some_and(|r| r.ok)
+    (d.slot_run)(&["git", "cat-file", "-e", &spec], p.repo).is_some_and(|r| r.ok)
 }
 
 /// The checkout of `sha` the gate reads the bank at: a detached worktree
@@ -763,12 +766,14 @@ fn ref_checkout(
     // Double force: git holds an `initializing` lock on the worktree it
     // builds and drops it when the add lands; an add killed midway leaves
     // the lock, and a locked slot refuses a single-force remove, so every
-    // later rebuild failed with "no checkout". The gate owns its slots.
-    let _ = (d.run)(
+    // later rebuild failed with "no checkout". The gate owns its slots. The
+    // slot calls ride the 10-minute bound: the 30-second probe kill was what
+    // murdered the adds mid-flight and leaked the lock.
+    let _ = (d.slot_run)(
         &["git", "worktree", "remove", "--force", "--force", &dir_str],
         p.repo,
     );
-    (d.run)(&["git", "worktree", "prune"], p.repo);
+    (d.slot_run)(&["git", "worktree", "prune"], p.repo);
     // Both legs fetch the ref they grade before this point; the guard keeps a
     // sha only GitHub knows from failing the add anyway.
     if !commit_present(p, d, sha) {
@@ -778,7 +783,7 @@ fn ref_checkout(
             }
         }
     }
-    let added = (d.run)(
+    let added = (d.slot_run)(
         &["git", "worktree", "add", "--detach", &dir_str, sha],
         p.repo,
     );
@@ -1558,8 +1563,11 @@ pub(crate) fn tick(
             libc::kill(-(pid as i32), libc::SIGKILL);
         }
     };
+    let slot_runner =
+        crate::stacked_base_stamp::runner_with("git", "gh", &crate::gate_probes::run_slot_probe);
     let deps = Deps {
         run: &run,
+        slot_run: &slot_runner,
         spawn: &spawn_detached,
         alive: &crate::evals_arm::pid_alive,
         kill: &kill,
@@ -1869,6 +1877,7 @@ mod tests {
             let room_fn = move |_: &Path, _: DateTime<Utc>| room_v;
             let deps = Deps {
                 run: &run,
+                slot_run: &run,
                 spawn: &spawn,
                 alive: &is_alive,
                 kill: &kill,
@@ -2473,6 +2482,7 @@ mod tests {
         };
         let d = Deps {
             run: &run,
+            slot_run: &run,
             spawn: &spawn,
             alive: &alive,
             kill: &kill,

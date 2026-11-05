@@ -655,6 +655,16 @@ pub(crate) fn run_probe(mut cmd: Command) -> Option<Run> {
     probe_run(&mut cmd, PROBE_TIMEOUT)
 }
 
+/// The gate's slot plumbing outlives the probe bound: a worktree add of this
+/// repo can cross 30 seconds under fleet load, and the kill mid-add is what
+/// left git's own `initializing` lock on the gate's slots. Ten minutes
+/// bounds a hung git without wedging the tick.
+pub(crate) const SLOT_TIMEOUT: Duration = Duration::from_secs(600);
+
+pub(crate) fn run_slot_probe(mut cmd: Command) -> Option<Run> {
+    probe_run(&mut cmd, SLOT_TIMEOUT)
+}
+
 /// The dispatch-hold probe in process: the PR's bound nodes (branch name,
 /// closure trailer, graph back-references), each walked up the hold ladder,
 /// first positive wins. The spawned command's fail-closed contract: a graph
