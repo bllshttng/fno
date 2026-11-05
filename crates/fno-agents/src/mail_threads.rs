@@ -725,7 +725,10 @@ pub fn run_mail_threads(args: &[String]) -> i32 {
                 let since = now_secs() as i64 - crate::mail_bus::MAIL_TTL_SECS;
                 match crate::mail_bus::recent_rows(&remote, since, FLEET_ROWS) {
                     Ok(rows) => {
-                        let (here, seen) = crate::mail_arm::local_bus_facts();
+                        let (mut here, seen) = crate::mail_arm::local_bus_facts();
+                        if let Ok(key) = crate::machine_key::own() {
+                            here.extend(own_labels(&rows, &key.public_key()));
+                        }
                         fold_fleet_rows(&mut projection, &rows, &here, &seen);
                     }
                     Err(e) => eprintln!("mail-threads: shared bus: {e}"),
@@ -742,6 +745,20 @@ pub fn run_mail_threads(args: &[String]) -> i32 {
             2
         }
     }
+}
+
+/// Every label this machine signed a bus row under. A machine renamed
+/// before the held-label file existed still signs with one key, so the key,
+/// not the label, says which rows are this machine's own.
+fn own_labels(rows: &[crate::mail_bus::FleetRow], own_key: &str) -> Vec<String> {
+    let mut labels: Vec<String> = rows
+        .iter()
+        .filter(|r| !own_key.is_empty() && r.pubkey == own_key)
+        .map(|r| r.from_host.clone())
+        .collect();
+    labels.sort();
+    labels.dedup();
+    labels
 }
 
 /// The most bus rows one projection reads from the shared store.
@@ -1842,5 +1859,10 @@ mod tests {
             .filter_map(|p| p["key"].as_str())
             .collect();
         assert_eq!(keys, ["ivy@imac2d2", "lenore@r2d2"]);
+        // A label this machine's key signed is this machine's, renamed or not.
+        let mut old_label = row("m4", "muriel", "bb16", "ivy", "imac2d2");
+        old_label.pubkey = "own-key".into();
+        assert_eq!(own_labels(&[old_label], "own-key"), ["bb16"]);
+        assert!(own_labels(&rows, "own-key").is_empty());
     }
 }

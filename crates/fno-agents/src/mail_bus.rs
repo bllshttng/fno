@@ -363,6 +363,9 @@ pub struct FleetRow {
     pub subject: String,
     pub created_at: i64,
     pub status: String,
+    /// The sending machine's public key; empty from a sender that predates
+    /// signing.
+    pub pubkey: String,
 }
 
 /// The newest `limit` rows written at or after `since` (epoch seconds), on
@@ -370,8 +373,8 @@ pub struct FleetRow {
 /// other machines exchange.
 pub fn recent_rows(remote: &Remote, since: i64, limit: i64) -> Result<Vec<FleetRow>, String> {
     let reply = remote.execute(
-        "SELECT msg_id, from_id, from_host, to_name, to_host, payload, subject, created_at, status \
-FROM fno_mail_bus WHERE created_at >= ? ORDER BY seq DESC LIMIT ?",
+        "SELECT msg_id, from_id, from_host, to_name, to_host, payload, subject, created_at, status, \
+pubkey FROM fno_mail_bus WHERE created_at >= ? ORDER BY seq DESC LIMIT ?",
         &[SqlValue::Integer(since), SqlValue::Integer(limit)],
     )?;
     let mut rows: Vec<FleetRow> = reply
@@ -394,6 +397,7 @@ FROM fno_mail_bus WHERE created_at >= ? ORDER BY seq DESC LIMIT ?",
                 subject: text(6),
                 created_at: v.get(7)?.integer()?,
                 status: text(8),
+                pubkey: text(9),
             })
         })
         .collect();
