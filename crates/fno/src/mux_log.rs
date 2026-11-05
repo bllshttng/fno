@@ -54,6 +54,17 @@ impl Record {
     }
 }
 
+/// Server breadcrumbs share the writer and its timestamps, gated off in production.
+pub(crate) fn server_breadcrumb(msg: std::fmt::Arguments<'_>) {
+    static ON: OnceLock<bool> = OnceLock::new();
+    if *ON.get_or_init(|| std::env::var_os("FNO_E2E").is_some()) {
+        server(
+            "info",
+            &format!("fno mux e2e[pid {}]: {msg}", std::process::id()),
+        );
+    }
+}
+
 pub fn client_path() -> PathBuf {
     crate::proto::mux_dir().join("client.log")
 }

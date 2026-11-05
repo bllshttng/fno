@@ -53,6 +53,7 @@ pub(super) async fn serve(
         out_tx,
         exit_tx,
         self_tx: core_tx.clone(),
+        input_echo: HashMap::new(),
         agents: Vec::new(),
         agents_read_ok: false,
         journal: crate::spawn_journal::JournalCache::load(),
@@ -639,6 +640,7 @@ pub(super) async fn serve(
             }
             _ = pane_reap_tick.tick() => {
                 // Deferred repaint requests ride the same 1s pass.
+                core.poll_input_echo();
                 core.fire_due_nudges();
                 core.reconcile_grid_sizes();
                 core.follow_portal_viewer_titles();
