@@ -299,6 +299,10 @@ pub fn reap_daemon_children() {
         // SAFETY: per-pid waitpid with WNOHANG answers without blocking and
         // reaps only this one child; it cannot take another child's status.
         let rc = unsafe { libc::waitpid(*pid as libc::pid_t, &mut status, libc::WNOHANG) };
+        if rc < 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::EINTR) {
+            // Interrupted before an answer: keep watching, decide next tick.
+            return true;
+        }
         rc == 0
     });
 }
