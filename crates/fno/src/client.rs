@@ -6632,11 +6632,8 @@ async fn attach_and_run(
     let (share_tx, mut share_rx) =
         tokio::sync::mpsc::unbounded_channel::<(u64, share_flow::ShareMsg)>();
     view.share_tx = Some(share_tx);
-    let (messages_tx, mut messages_rx) = tokio::sync::mpsc::unbounded_channel::<(
-        u64,
-        Result<serde_json::Value, String>,
-        Result<crate::org_model::OrgTree, String>,
-    )>();
+    let (messages_tx, mut messages_rx) =
+        tokio::sync::mpsc::unbounded_channel::<(u64, messages_view::MessagesMsg)>();
     let (reply_notice_tx, mut reply_notice_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
     view.reply_notice_tx = Some(reply_notice_tx);
     let (details_tx, mut details_rx) =
@@ -7351,8 +7348,8 @@ async fn attach_and_run(
                     break Err(format!("draw: {e}"));
                 }
             }
-            Some((gen, mail, tree)) = messages_rx.recv() => {
-                messages_view::apply_gather(&mut view, gen, mail, tree);
+            Some((gen, msg)) = messages_rx.recv() => {
+                messages_view::apply(&mut view, gen, msg);
                 if let Err(e) = compositor.draw(&view.compose()) {
                     break Err(format!("draw: {e}"));
                 }

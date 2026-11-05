@@ -2,38 +2,13 @@ use super::*;
 
 pub(in crate::client) fn check_fixture(view: &mut View) {
     use serde_json::json;
-    let lead = crate::proto::AgentRow {
-        name: "finch".into(),
-        role_scope: Some("team".into()),
-        role_level: Some(1),
-        ..Default::default()
-    };
-    let worker = |name: &str, sid: &str, node: &str| crate::proto::AgentRow {
-        name: name.into(),
-        harness_session_id: Some(sid.into()),
-        node: Some(node.into()),
-        ..Default::default()
-    };
-    let inputs = crate::org_model::OrgInputs {
-        backlog: crate::backlog_model::Inputs {
-            rows: vec![json!({"id":"x-1","status":"ready","title":"First",
-                "sessions":[{"session_id":"s1"}]})],
-            agents: vec![lead, worker("first", "s1", "x-1")],
-            ..Default::default()
-        },
-        fold: Ok(
-            json!({"scope_nodes":{"team":{"status":"ok","nodes":[{"id":"x-1"}]}},"owned_scopes":{"x-1":"team"}}),
-        ),
-        measured_at: board_now(),
-    };
-    let tree = crate::org_model::derive(&inputs, board_now());
     open(view);
     let gen = view
         .messages_board
         .as_ref()
         .expect("the fixture opens the board")
         .gen;
-    apply_gather(view, gen, Ok(json!({})), tree);
+    apply_gather(view, gen, Ok(std::sync::Arc::new(json!({}))));
     assert!(view.messages_board.is_some(), "the fixture opens the board");
 }
 
@@ -774,5 +749,62 @@ async fn messages_you_tab_contract() {
         view.messages_board.as_ref().unwrap().cursors[2],
         0,
         "k walks the You thread's items"
+    );
+}
+
+/// A live fleet's volume: thousands of participants and threads. The paint
+/// reads rows built once per landed projection, never per frame, and a
+/// frame stays cheap at this size.
+#[test]
+fn messages_paint_reads_rows_built_once_per_projection() {
+    use serde_json::json;
+    let prefs = tempfile::tempdir().unwrap();
+    crate::view_store::set_test_path(prefs.path());
+    let participants: Vec<_> = (0..3000)
+        .map(|i| {
+            json!({"key":format!("s{i}"),"name":format!("a{i}"),"live":true,
+            "last_ts":format!("2026-10-01T09:{:02}:00Z", i % 60)})
+        })
+        .collect();
+    let threads: Vec<_> = (0..4000)
+        .map(|i| {
+            json!({"chat_id":format!("c{i}"),
+            "participants":[format!("s{}", i % 3000), format!("s{}", (i + 1) % 3000)],
+            "rows":[{"id":format!("m{i}"),"ts":"2026-10-01T09:00:00Z","summary":"hi",
+                "from_key":format!("s{}", i % 3000)}]})
+        })
+        .collect();
+    let you: Vec<_> = (0..12)
+        .map(|i| {
+            json!({"session_id":format!("y{i}"),"name":format!("you{i}"),
+            "last_ts":"2026-10-01T09:00:00Z"})
+        })
+        .collect();
+    let mut b = MessagesBoard::new(0);
+    b.snapshot
+        .apply(json!({"participants":participants,"threads":threads,"you":you}));
+    b.sel_agent = Some("s1".into());
+    let first = b.tree_rows();
+    assert_eq!(first.len(), 3012, "every agent plus each unheld You thread");
+    let started = Instant::now();
+    for _ in 0..30 {
+        let _ = b.columns(200, (50, 50));
+    }
+    assert!(
+        Rc::ptr_eq(&first, &b.tree_rows()),
+        "frames reuse the built rows"
+    );
+    assert_eq!(b.active_chat_rows().len(), 2, "s1's two threads");
+    assert!(
+        started.elapsed() < Duration::from_secs(3),
+        "30 frames took {:?}",
+        started.elapsed()
+    );
+    b.snapshot
+        .apply(json!({"participants":[{"key":"s1","name":"a1","live":true}]}));
+    assert_eq!(
+        b.tree_rows().len(),
+        1,
+        "a landed projection rebuilds the rows"
     );
 }
