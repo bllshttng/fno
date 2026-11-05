@@ -246,6 +246,9 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_SESSION_PID` | rs | The launcher-stamped pid half of the session-proof pair; must be a positive, live pid or the pair is ignored (spawn_context.rs stamp_pid_is_live). |
 | `FNO_SIDECAR_SOCKET` | rs | Overrides the MCP sidecar's socket path (default `$XDG_RUNTIME_DIR/fno/sidecar.sock`, else the state dir's `sidecar.sock`). The client's lazy-start forwards it to the spawned sidecar, so a caller asking for a non-default path never races the default. Set by callers and tests; read at `crates/fno-agents/src/mcp/sidecar.rs` (`socket_path`). |
 | `FNO_SKIP_MIGRATION` | rs | crates/fno/src/path_migration.rs run_if_needed |
+| `FNO_SNAPSHOT_GATE` | rs | The spawn-gate answer a `--view org-block` snapshot paints, as inline JSON. Unset, the snapshot runs the live probe. |
+| `FNO_SNAPSHOT_LANES` | rs | Path to a saved `fno doctor lanes` reading that a `--view org-block` snapshot paints. Unset, the snapshot runs the live fold. |
+| `FNO_SNAPSHOT_METER` | rs | The capacity state a snapshot paints in the meter row, glance and modal, as inline JSON. Unset, the snapshot reads the machine's capacity file. |
 | `FNO_SNAPSHOT_QUESTION` | rs | The question `fno mux serve --snapshot --view question-detail` opens: an id, a bare id or a number like `Q3554`. Unset, the first open question opens. |
 | `FNO_SOURCE` | rs | unclear: crates/fno/src/doctor_update.rs:388 |
 | `FNO_SPACES_DIR` | py+rs | unclear: cli/src/fno/paths.py:299 |
