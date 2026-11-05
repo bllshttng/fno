@@ -17,6 +17,11 @@
 //! An answer the origin cannot take comes back the same way: the origin
 //! stamps `refused` with its reason, and the answering machine's beat tells
 //! the user once and stamps `reported_at`.
+//!
+//! The shots ride a third carrier, `fleet_question_image`: the ask machine's
+//! beat ships each `--image` file's bytes to the primary, and a peer's beat
+//! writes them under copy-id-prefixed names in its own screens dir, so a
+//! copy's `images` always name files that exist on the reading machine.
 
 use crate::store_remote::{Remote, SqlValue};
 use serde_json::{json, Value};
@@ -768,25 +773,38 @@ FROM fleet_question WHERE machine_id != ?"
             hosts.push(host.to_string());
         }
         let remote_climbs: usize = text(5).parse().unwrap_or(0);
-        let stale = local
-            .asked
-            .get(&id)
-            .is_some_and(|copy| climbs(copy) < remote_climbs);
-        if open && (stale || !local.asked.contains_key(&id)) {
+        let local_copy = local.asked.get(&id);
+        let stale = local_copy.is_some_and(|copy| climbs(copy) < remote_climbs);
+        // A copy whose bytes never landed here retries: one small record
+        // read per beat, and it stops once every shot exists locally.
+        let needs_images = local_copy.is_some_and(|copy| {
+            copy["data"]["origin_images"].is_array()
+                && copy["data"]["images"].as_array().is_some_and(|imgs| {
+                    imgs.iter()
+                        .any(|p| p.as_str().is_some_and(|s| !Path::new(s).exists()))
+                })
+        });
+        if open && (stale || !local.asked.contains_key(&id) || needs_images) {
             // The record rides a second read, one row at a time: a full
             // table of records in one reply crosses the primary's reply limit.
             let Some(mut record) = fetch_record(remote, machine, qid)? else {
                 continue;
             };
             images_materialized += materialize_images(remote, me, machine, qid, &id, &mut record);
-            if let Some(data) = record.get_mut("data").and_then(Value::as_object_mut) {
-                data.insert("question_id".into(), json!(id));
-                data.insert("origin_question_id".into(), json!(qid));
-                data.insert("origin_machine".into(), json!(machine));
-                data.insert("host".into(), json!(host));
+            // A retry that changed nothing appends nothing: the journal
+            // would otherwise grow one row per beat while a shot stays
+            // missing.
+            let unchanged = needs_images && local_copy.is_some_and(|prev| *prev == record);
+            if !unchanged {
+                if let Some(data) = record.get_mut("data").and_then(Value::as_object_mut) {
+                    data.insert("question_id".into(), json!(id));
+                    data.insert("origin_question_id".into(), json!(qid));
+                    data.insert("origin_machine".into(), json!(machine));
+                    data.insert("host".into(), json!(host));
+                }
+                crate::provider_cap::append_questions_row(&index, &record)?;
+                copied += 1;
             }
-            crate::provider_cap::append_questions_row(&index, &record)?;
-            copied += 1;
         } else if !open && local.asked.contains_key(&id) && !local.closed.contains_key(&id) {
             let reason = format!("closed on {host}: {}", text(4));
             crate::provider_cap::append_questions_row(&index, &peer_close(&id, &reason, host))?;
@@ -1345,6 +1363,24 @@ WHERE name IN ('refused', 'reported_at')",
         assert_eq!(
             copy["data"]["origin_images"][2].as_str(),
             Some("/gone/q-9-3-shot.png")
+        );
+
+        // A beat that lost the bytes retries: drop the local shots, then
+        // B's next beat re-fetches and re-writes them under the same names.
+        std::fs::remove_file(&images[0]).unwrap();
+        std::fs::remove_file(&images[1]).unwrap();
+        let retried = beat(remote, &b).unwrap();
+        assert_eq!(retried.copied, 1);
+        assert_eq!(retried.images_materialized, 2);
+        assert!(
+            Path::new(&images[0]).exists(),
+            "re-materialized: {}",
+            images[0]
+        );
+        assert!(
+            Path::new(&images[1]).exists(),
+            "re-materialized: {}",
+            images[1]
         );
 
         // A closes; B's copy follows and the materialized files go.
