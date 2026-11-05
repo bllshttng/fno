@@ -18,6 +18,19 @@ trap 'rm -rf "$TMP"' EXIT
 
 REGEN="cargo build --manifest-path crates/fno-agents/Cargo.toml"
 
+# The regen's events-schema projection imports PyYAML, and a runner python3
+# rarely has it. Probe once and pick the interpreter: bare python3 when it
+# can import yaml, else the repo's uv fallback, the same shape
+# check-generated-manifest.sh uses for its bundle parser.
+if python3 -c 'import yaml' >/dev/null 2>&1; then
+    PYRUN=(python3)
+elif command -v uv >/dev/null 2>&1; then
+    PYRUN=(uv run --no-project --with pyyaml python3)
+else
+    printf '[rgc] FAIL: no PyYAML and no uv: nothing here can run the regen\n' >&2
+    exit 1
+fi
+
 # fixture DIR ONLY_GENERIC: the tree slice the regen walks. The spliced owner
 # carries the two // @fno-copy: regions and its test module; the twin holds
 # the spliced bytes a correct cargo build writes.
@@ -42,7 +55,7 @@ fixture() {
 run_regen() {
     local name="$1" want="$2" dir="$3" needle out rc
     shift 3
-    out="$(cd "$dir" && python3 "$SCRIPT" 2>&1)"; rc=$?
+    out="$(cd "$dir" && "${PYRUN[@]}" "$SCRIPT" 2>&1)"; rc=$?
     if [[ $rc -ne $want ]]; then fail "$name: want exit $want got $rc ($out)"; return 1; fi
     for needle in "$@"; do
         if [[ "$out" != *"$needle"* ]]; then fail "$name: output lacks '$needle' ($out)"; return 1; fi
