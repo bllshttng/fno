@@ -2513,6 +2513,8 @@ async fn read_json(args: &[&str], budget: Duration) -> Result<Vec<u8>, String> {
 pub struct ActionResult {
     pub ok: bool,
     pub msg: String,
+    /// The pane a login spawn opened, named so the client can focus it.
+    pub pane: Option<u64>,
 }
 
 /// Run a single-flight `fno <argv>` mutation to completion. Never a read - this
@@ -2540,6 +2542,7 @@ pub async fn run_command_env(argv: Vec<String>, env: Vec<(String, String)>) -> A
             return ActionResult {
                 ok: false,
                 msg: format!("{}: spawn failed: {e}", argv.join(" ")),
+                pane: None,
             }
         }
         Err(_) => {
@@ -2549,6 +2552,7 @@ pub async fn run_command_env(argv: Vec<String>, env: Vec<(String, String)>) -> A
                     "{}: timed out (try the command in a terminal)",
                     argv.join(" ")
                 ),
+                pane: None,
             }
         }
     };
@@ -2564,7 +2568,11 @@ fn action_result(argv: &[String], ok: bool, stderr: &[u8]) -> ActionResult {
             true => format!("{cmd} ok: {tail}"),
             false => format!("{cmd} ok"),
         };
-        return ActionResult { ok, msg };
+        return ActionResult {
+            ok,
+            msg,
+            pane: None,
+        };
     }
     let reason = match tail.split_once(" Run in a terminal: ") {
         Some((why, _)) => format!("{}: {LOGIN_HINT}", why.trim_end_matches('.')),
@@ -2573,6 +2581,7 @@ fn action_result(argv: &[String], ok: bool, stderr: &[u8]) -> ActionResult {
     ActionResult {
         ok,
         msg: format!("{cmd} failed: {reason}"),
+        pane: None,
     }
 }
 

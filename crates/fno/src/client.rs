@@ -35,6 +35,7 @@ use tokio::sync::mpsc;
 use crate::agents_view::{lineage_layout, lineage_parent};
 use crate::chrome;
 
+mod login_pane;
 mod move_pick;
 mod open_chooser;
 mod open_link;
@@ -6825,8 +6826,13 @@ async fn attach_and_run(
         if let Some((argv, env, is_login)) = view.conn_action.take() {
             let tx = conn_act_tx.clone();
             let gen = view.conn_gen;
+            let session = view.session.clone();
             tokio::spawn(async move {
-                let result = crate::connections_view::run_command_env(argv, env).await;
+                let result = if is_login {
+                    login_pane::run(&session, argv).await
+                } else {
+                    crate::connections_view::run_command_env(argv, env).await
+                };
                 let _ = tx.send((gen, result, is_login));
             });
         }
@@ -7429,17 +7435,19 @@ async fn attach_and_run(
                 if let Some(cv) = view.connections.as_mut() {
                     cv.acting = false;
                 }
-                if gen == view.conn_gen && view.connections.is_some() {
+                if is_login {
+                    // The login pane exists once the spawn lands: the landing
+                    // closes the modal and focuses the pane (or, on a refusal,
+                    // gen-guards the reason into the modal's notice).
+                    if let Err(e) = login_pane::land(&mut view, &mut sock_w, gen, result).await {
+                        break Err(e);
+                    }
+                    if let Err(e) = compositor.draw(&view.compose()) {
+                        break Err(format!("draw: {e}"));
+                    }
+                } else if gen == view.conn_gen && view.connections.is_some() {
                     if let Some(cv) = view.connections.as_mut() {
-                        if is_login {
-                            // The login pane spawn: on failure name it; on success
-                            // keep the reducer's "login pane opened - press r" notice.
-                            if !result.ok {
-                                cv.notice = Some(result.msg);
-                            }
-                        } else {
-                            cv.notice = Some(result.msg);
-                        }
+                        cv.notice = Some(result.msg);
                     }
                     view.rearm_connections_read();
                     if let Err(e) = compositor.draw(&view.compose()) {
