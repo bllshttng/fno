@@ -164,10 +164,18 @@
   function css(color, isFg) {
     if (color === "Default" || color == null) return isFg ? "#c5cdd9" : "#0b0e14";
     if (color.Indexed != null) return idxColor(color.Indexed);
-    if (color.Rgb) return `rgb(${color.Rgb[0]},${color.Rgb[1]},${color.Rgb[2]})`;
+    if (color.Rgb) {
+      // Pane data arrives from any local process writing to the mux, so every
+      // component is coerced and clamped to 0..255: a style value carries
+      // digits and commas, nothing injectable.
+      const comp = (v) => {
+        v = Number(v);
+        return Number.isFinite(v) ? Math.min(255, Math.max(0, Math.trunc(v))) : 0;
+      };
+      return `rgb(${comp(color.Rgb[0])},${comp(color.Rgb[1])},${comp(color.Rgb[2])})`;
+    }
     return isFg ? "#c5cdd9" : "#0b0e14";
   }
-  const esc = (s) => s.replace(/[&<>]/g, (c) => c === "&" ? "&amp;" : c === "<" ? "&lt;" : "&gt;");
 
   // flags (mirror proto::cell_flags)
   const BOLD=1, ITALIC=2, UNDERLINE=4, INVERSE=8, DIM=16, WIDE_SPACER=32, SELECTED=64;
@@ -176,12 +184,12 @@
     let fg = css(cell.fg, true), bg = css(cell.bg, false);
     const f = cell.flags | 0;
     if (f & (INVERSE | SELECTED)) { const t = fg; fg = bg; bg = t; }
-    let s = `color:${fg};background:${bg};`;
-    if (f & BOLD) s += "font-weight:bold;";
-    if (f & DIM) s += "opacity:.6;";
-    if (f & ITALIC) s += "font-style:italic;";
-    if (f & UNDERLINE) s += "text-decoration:underline;";
-    return s;
+    const props = [["color", fg], ["background", bg]];
+    if (f & BOLD) props.push(["fontWeight", "bold"]);
+    if (f & DIM) props.push(["opacity", ".6"]);
+    if (f & ITALIC) props.push(["fontStyle", "italic"]);
+    if (f & UNDERLINE) props.push(["textDecoration", "underline"]);
+    return props;
   }
   // Two cells share a run only if they render identically.
   const sameStyle = (a, b) =>
@@ -189,30 +197,50 @@
     JSON.stringify(a.fg) === JSON.stringify(b.fg) &&
     JSON.stringify(a.bg) === JSON.stringify(b.bg);
 
-  // One grid row as styled <span> runs, newline-terminated. `showCur` is off for
-  // the retention copy: a cursor outline frozen into kept output would read as a
-  // live cursor sitting in history.
+  // One grid row as styled <span> runs. Returns { key, paint }: `key` is the
+  // equality signature the scroll-proofing compares (equal keys, equal
+  // rendered row), `paint()` builds a fresh fragment (spans plus the trailing
+  // newline text node pre layout needs) so one row can paint into both the
+  // retained pane and the live pane without sharing nodes. Rows are built as
+  // DOM, never as HTML strings: cell text and colors come from pane data any
+  // local process can influence, so nothing untrusted is handed to innerHTML.
   function renderRow(fr, r, showCur) {
-    let html = "", run = "", runStyle = null, runFlags = null;
+    const runs = [];
+    let run = "", runProps = null, runFlags = null;
     const flush = () => {
-      if (run) html += `<span style="${runStyle}">${esc(run)}</span>`;
-      run = "";
+      if (run) {
+        runs.push({ props: runProps, text: run });
+        run = "";
+      }
     };
     for (let cx = 0; cx < fr.cols; cx++) {
       const cell = fr.cells[r * fr.cols + cx];
       if ((cell.flags | 0) & WIDE_SPACER) continue; // right half of a wide glyph
       if (showCur && r === fr.cursor_row && cx === fr.cursor_col) {
         flush(); runFlags = null;
-        html += `<span class="cur" style="${cellStyle(cell)}">${esc(cell.c)}</span>`;
+        runs.push({ props: cellStyle(cell), text: cell.c, cur: true });
         continue;
       }
       if (runFlags === null || !sameStyle(cell, runFlags)) {
-        flush(); runFlags = cell; runStyle = cellStyle(cell);
+        flush(); runFlags = cell; runProps = cellStyle(cell);
       }
       run += cell.c;
     }
     flush();
-    return html + "\n";
+    const key = JSON.stringify(runs);
+    const paint = () => {
+      const frag = document.createDocumentFragment();
+      for (const run of runs) {
+        const span = document.createElement("span");
+        if (run.cur) span.className = "cur";
+        for (const [prop, value] of run.props) span.style[prop] = value;
+        span.textContent = run.text;
+        frag.append(span);
+      }
+      frag.append(document.createTextNode("\n"));
+      return frag;
+    };
+    return { key, paint };
   }
 
   // The deepest fixed bottom region we will look past. An agent pane keeps an
@@ -260,8 +288,10 @@
     const n = next.length;
     if (!prev || prev.length !== n) return -1; // no previous frame, or resized
     const maxTail = Math.min(MAX_FIXED_TAIL, n - 1);
+    const prevKeys = prev.map((row) => row.key);
+    const nextKeys = next.map((row) => row.key);
     for (let f = 0; f <= maxTail; f++) {
-      const k = scrollWithin(prev, next, n - f);
+      const k = scrollWithin(prevKeys, nextKeys, n - f);
       if (k >= 0) return k;
     }
     return -1;
@@ -334,10 +364,24 @@
   addEventListener("orientationchange", refit);
 
   // One row per element, so the cap can drop the oldest without rebuilding the
-  // rest. Row HTML is already newline-terminated.
-  function pushKept(html) {
-    keptEl.insertAdjacentHTML("beforeend", `<span>${html}</span>`);
+  // rest. Each kept row is painted fresh from its runs, so retention and the
+  // live pane never share nodes.
+  function pushKept(row) {
+    keptEl.append(row.paint());
     while (keptEl.childElementCount > MAX_KEPT_ROWS) keptEl.firstElementChild.remove();
+  }
+
+  // The break rule as a row object, painted fresh on each push.
+  function breakRow() {
+    const paint = () => {
+      const frag = document.createDocumentFragment();
+      const span = document.createElement("span");
+      span.className = "kept-break";
+      span.textContent = BREAK_RULE;
+      frag.append(span, document.createTextNode("\n"));
+      return frag;
+    };
+    return { paint };
   }
 
   function resetKept() {
@@ -379,10 +423,10 @@
         // scrolling, and the rule landed on top of the very first lines. A rule
         // that fires where nothing was lost teaches the operator to ignore it,
         // which costs more than the rule was ever worth.
-        if (rows.indexOf(prevRows[0]) < 0) gapPending = true;
+        if (!rows.some((row) => row.key === prevRows[0].key)) gapPending = true;
       } else if (evicted > 0) {
         if (gapPending) {
-          pushKept(`<span class="kept-break">${esc(BREAK_RULE)}</span>\n`);
+          pushKept(breakRow());
           gapPending = false;
         }
         for (let i = 0; i < evicted; i++) pushKept(prevRows[i]);
@@ -398,7 +442,7 @@
     }
 
     applyFit(fr.cols); // before the write: the type size decides scrollHeight
-    liveEl.innerHTML = live.join("");
+    liveEl.replaceChildren(...live.map((row) => row.paint()));
     // Follow the tail unless the operator had scrolled up to read something.
     if (pinned) screenEl.scrollTop = screenEl.scrollHeight;
   }
@@ -424,7 +468,7 @@
       if (wanted != null && frames.has(wanted)) { current = wanted; wanted = null; }
       else if (wanted == null) current = ids[0];
     }
-    picker.innerHTML = "";
+    picker.replaceChildren();
     if (!ids.length) {
       const span = document.createElement("span");
       span.textContent = "no panes"; span.style.color = "#5c6577"; span.style.fontSize = "12px";
@@ -435,7 +479,12 @@
       const btn = document.createElement("button");
       if (id === current) btn.className = "active";
       const label = a ? a.name : `pane ${id}`;
-      btn.innerHTML = a ? `<span class="dot ${badgeClass(a)}"></span>${esc(label)}` : esc(label);
+      if (a) {
+        const dot = document.createElement("span");
+        dot.className = `dot ${badgeClass(a)}`;
+        btn.append(dot);
+      }
+      btn.append(document.createTextNode(label));
       btn.onclick = () => { current = id; renderPicker(); draw(); };
       picker.appendChild(btn);
     }
