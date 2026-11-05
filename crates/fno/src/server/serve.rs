@@ -534,8 +534,7 @@ pub(super) async fn serve(
                     });
                 }
                 Err(e) => {
-                    let famine =
-                        matches!(e.raw_os_error(), Some(libc::EMFILE) | Some(libc::ENFILE));
+                    let famine = crate::process_admission::no_descriptor_left(&e);
                     if famine {
                         if !starved {
                             starved = true;
