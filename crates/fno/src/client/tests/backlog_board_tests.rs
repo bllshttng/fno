@@ -564,8 +564,11 @@ fn chord_rows() {
                 .expect("route runs");
         assert!(matches!(flow, StdinFlow::Continue));
     });
-    assert!(v.org.is_expanded(), "^B C toggled the org fold");
+    assert!(v.org.is_expanded(), "^B C opened the org fold");
     assert!(v.backlog_board.is_some(), "the board survives the chord");
+    // The org modal holds the keyboard while it is up; close it so the
+    // next chord reaches the board.
+    v.aux = None;
     // `^B ?` opens the GLOBAL keybinds, never the board's own keys overlay
     // (that stays on the bare key).
     let mut scanner = crate::keys::Scanner::default();

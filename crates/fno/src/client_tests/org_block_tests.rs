@@ -28,10 +28,13 @@ fn the_org_block_shrinks_the_sideline_and_yields_when_too_short() {
 
     // The sideline always holds the three-line glance; the full block
     // opens in a modal, so expanding never grows the sideline block.
-    assert_eq!(view.org_block_rows(), 3, "the glance is three lines");
+    // The glance also reserves the bottom chrome row, so its last line
+    // paints above the status strip.
+    let glance = 3 + view.bottom_row_is_chrome() as usize;
+    assert_eq!(view.org_block_rows(), glance, "the glance is three lines");
     let before = view.sideline_visible_rows();
     view.org.toggle();
-    assert_eq!(view.org_block_rows(), 3);
+    assert_eq!(view.org_block_rows(), glance);
     assert_eq!(view.sideline_visible_rows(), before);
 
     // Too short: the block drops, the rows never do. The strip still owns
