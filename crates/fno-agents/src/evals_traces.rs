@@ -583,19 +583,7 @@ fn daily(state: &Path) -> Result<Value, String> {
     let repo = crate::evals::canonical_repo_root();
     let journal = state.join("events.jsonl");
     let local = pass(state, &journal, &repo, &[])?;
-    let mut cmd = std::process::Command::new("fno");
-    cmd.current_dir(&repo)
-        .args(["do", "pr", "list", "--state", "closed"]);
-    let out =
-        crate::bounded_cmd::output_with_timeout_result(cmd, 120).map_err(|e| e.to_string())?;
-    if !out.status.success() {
-        return Err(format!(
-            "closed PR intake: {}",
-            String::from_utf8_lossy(&out.stderr)
-        ));
-    }
-    let prs: Vec<Value> =
-        serde_json::from_slice(&out.stdout).map_err(|e| format!("closed PR list: {e}"))?;
+    let prs = crate::pr_list::rows(&["--state".into(), "closed".into()], &repo)?;
     let remote = write_closed(state, &prs, &mut TranscriptEvidence::default())?;
     Ok(json!({"new":local["new"].as_u64().unwrap_or(0)+remote,"seed":seeded}))
 }
