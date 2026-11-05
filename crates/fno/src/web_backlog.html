@@ -2041,7 +2041,7 @@ function laneKeyOf(card, lanesBy, parents, byId) {
       sline.appendChild(sid);
       if (os.pane != null && !SNAPSHOT) {
         const live = document.createElement("a");
-        live.href = base + "?t=" + encodeURIComponent(t) + "&pane=" + os.pane;
+        live.href = base + "?t=" + encodeURIComponent(t) + "&pane=" + encodeURIComponent(os.pane);
         live.target = "_blank";
         live.rel = "noopener";
         live.textContent = "Open live";
