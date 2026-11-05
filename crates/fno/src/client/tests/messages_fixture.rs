@@ -784,12 +784,19 @@ fn messages_paint_reads_rows_built_once_per_projection() {
     b.snapshot
         .apply(json!({"participants":participants,"threads":threads,"you":you}));
     b.sel_agent = Some("s1".into());
+    let cold = Instant::now();
+    let _ = b.columns(200, (50, 50));
+    let cold = cold.elapsed();
     let first = b.tree_rows();
     assert_eq!(first.len(), 3012, "every agent plus each unheld You thread");
     let started = Instant::now();
     for _ in 0..30 {
         let _ = b.columns(200, (50, 50));
     }
+    eprintln!(
+        "messages paint: first frame {cold:?}, then {:?} a frame",
+        started.elapsed() / 30
+    );
     assert!(
         Rc::ptr_eq(&first, &b.tree_rows()),
         "frames reuse the built rows"
