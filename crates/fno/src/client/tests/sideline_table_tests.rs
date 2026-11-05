@@ -1185,3 +1185,67 @@ fn agents_tab_selector_row_inverts_from_the_theme() {
         "the whole cursor row inverts"
     );
 }
+
+#[test]
+fn parked_prompt_attention_is_readable_on_both_grounds() {
+    let mut failures = Vec::new();
+    for (name, theme) in [
+        ("dark", crate::theme::theme_footnote_superscript()),
+        ("light", crate::theme::theme_footnote_paper()),
+    ] {
+        for banded in [true, false] {
+            let lens = crate::frame_html::theme_by_name(name).unwrap();
+            let pane = if banded { 11 } else { 10 };
+            let mut v = wide_view(vec![agent_row(
+                "parked",
+                pane,
+                Some(AgentBadge::Blocked),
+                false,
+            )]);
+            set_density(&mut v, Density::Extended);
+            v.theme = theme.clone();
+            v.needs_open = true;
+            let frame = v.compose();
+            let count = &frame.cells[..v.need_input_label_cols()];
+            assert!(
+                count.iter().any(|c| c.c.is_ascii_digit()),
+                "count must paint"
+            );
+            let ratio = count
+                .iter()
+                .filter(|c| c.c != ' ')
+                .map(|c| crate::frame_html::contrast_ratio(c, lens))
+                .fold(f64::INFINITY, f64::min);
+            if ratio < 4.5 {
+                failures.push(format!("{name} count: {ratio:.2}:1"));
+            }
+            let mut tokens = 0;
+            for (i, display) in v.display_rows().iter().enumerate() {
+                if !matches!(display, DisplayRow::Agent(a) if a.name == "parked") {
+                    continue;
+                }
+                let y = v.sideline_top() as usize + i - v.sideline_offset();
+                let row = &frame.cells
+                    [y * frame.cols as usize..y * frame.cols as usize + v.panel_w() as usize - 1];
+                for token in row
+                    .windows(5)
+                    .filter(|t| t.iter().map(|c| c.c).eq("Input".chars()))
+                {
+                    tokens += 1;
+                    let ratio = token
+                        .iter()
+                        .map(|c| crate::frame_html::contrast_ratio(c, lens))
+                        .fold(f64::INFINITY, f64::min);
+                    if ratio < 4.5 {
+                        failures.push(format!("{name} Input banded={banded}: {ratio:.2}:1"));
+                    }
+                }
+            }
+            assert_eq!(tokens, 2, "measure the pinned and normal group tokens");
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "attention text must clear 4.5:1: {failures:?}"
+    );
+}
