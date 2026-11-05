@@ -129,18 +129,17 @@ async fn stream_macmon(
     }
 }
 
-/// The meter row a snapshot paints: `FNO_SNAPSHOT_METER` holds a capacity
-/// state as JSON plus a `cpu` string, and the real segment functions render
-/// it. A one-shot snapshot has no macmon stream, so without this the row
-/// never appears in a shot. Unset or unparsable, there is no meter row.
+/// The meter row a snapshot paints, from the state `FNO_SNAPSHOT_METER` seeds
+/// (a capacity state plus a `cpu` string): a one-shot snapshot has no macmon
+/// stream, so without it no shot shows the row.
 pub(super) fn snapshot_meter_text(detailed: bool) -> Option<String> {
-    let raw = std::env::var("FNO_SNAPSHOT_METER").ok()?;
-    let state: serde_json::Value = serde_json::from_str(&raw).ok()?;
-    let cpu = state.get("cpu").and_then(|v| v.as_str())?.to_string();
-    let mut text = cpu;
-    text.push_str(&memory_segment(Some(&state), detailed));
-    text.push_str(&capacity_segment(Some(&state), detailed));
-    Some(text)
+    let state = capacity_state()?;
+    let cpu = state.get("cpu")?.as_str()?;
+    Some(format!(
+        "{cpu}{}{}",
+        memory_segment(Some(&state), detailed),
+        capacity_segment(Some(&state), detailed)
+    ))
 }
 
 /// CPU, watts and GPU only: the memory figure reads from the capacity state,

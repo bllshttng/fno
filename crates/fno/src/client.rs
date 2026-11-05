@@ -6801,7 +6801,7 @@ async fn attach_and_run(
         // task 2.3: kick a queued answer; refresh the projection and index.
         questions::maybe_kick(&mut view, &questions_tx, &questions_index_tx);
         questions::kick_action(&mut view, &question_act_tx, &link_tx);
-        view.sync_org_modal();
+        view.sync_org_modal(false);
         if let Some(want) = view.org.take_want(&view.layout.agents) {
             crate::org_overlay::spawn_folds(want, org_fold_tx.clone());
         }
@@ -7260,7 +7260,7 @@ async fn attach_and_run(
             Some(result) = org_fold_rx.recv() => {
                 // The fold landed; `apply` owns the merge rules.
                 view.org.apply(result);
-                view.sync_org_modal();
+                view.sync_org_modal(true);
                 if let Err(e) = compositor.draw(&view.compose()) {
                     break Err(format!("draw: {e}"));
                 }

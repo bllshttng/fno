@@ -837,13 +837,12 @@ pub(crate) fn maybe_capture_process_snapshot(
     Ok(true)
 }
 
-/// How recent a transcript write must be for its session to count as working.
-/// The mux census reads the same ten minutes (`org_overlay::working_max_s`).
+/// A session counts as working when its transcript moved inside this window,
+/// the same ten minutes the mux census reads (`org_overlay::working_max_s`).
 const WORKING_WINDOW_S: i64 = 600;
 
-/// Seconds since a claude session's transcript was last written, searched
-/// under the ambient projects dir and every isolated account's dir, so two
-/// config dirs listing one transcript give one answer.
+/// Seconds since a claude transcript was written, searched in the ambient
+/// projects dir and every account dir.
 fn transcript_age_any(session: &str) -> Option<i64> {
     let mut bases = vec![crate::claude_drive::claude_projects_dir()];
     bases.extend(
@@ -855,39 +854,30 @@ fn transcript_age_any(session: &str) -> Option<i64> {
         .iter()
         .find_map(|base| crate::claude_drive::find_transcript_in(base, session))?;
     let modified = std::fs::metadata(path).ok()?.modified().ok()?;
-    SystemTime::now()
-        .duration_since(modified)
-        .ok()
-        .map(|d| d.as_secs() as i64)
+    let age = SystemTime::now().duration_since(modified).ok()?;
+    Some(age.as_secs() as i64)
 }
 
-/// The live rows that are working: each session once, and a claude session
-/// only when its transcript was written inside the window. A codex or
-/// opencode row has no transcript seam here yet, so a live row of those
-/// harnesses counts; that overcounts a quiet one until the seam lands.
+/// Live rows that are working, each session once. Claude needs a recent
+/// transcript; codex and opencode have no transcript seam yet, so a live row
+/// of those counts.
 pub(crate) fn working_count(
     rows: &[&crate::state::RegistryEntry],
     age: &dyn Fn(&str) -> Option<i64>,
 ) -> u64 {
     let mut seen = std::collections::HashSet::new();
-    rows.iter()
-        .filter(|row| {
-            let key = row
-                .harness_session_id
-                .as_deref()
-                .unwrap_or(row.name.as_str());
-            if !seen.insert(key.to_string()) {
-                return false;
-            }
-            match (row.harness_name(), row.harness_session_id.as_deref()) {
-                ("claude", Some(session)) => {
-                    age(session).is_some_and(|secs| secs < WORKING_WINDOW_S)
-                }
-                ("claude", None) => false,
-                _ => true,
-            }
-        })
-        .count() as u64
+    let working = |row: &&&crate::state::RegistryEntry| {
+        let session = row.harness_session_id.as_deref();
+        if !seen.insert(session.unwrap_or(row.name.as_str()).to_string()) {
+            return false;
+        }
+        match (row.harness_name(), session) {
+            ("claude", Some(id)) => age(id).is_some_and(|secs| secs < WORKING_WINDOW_S),
+            ("claude", None) => false,
+            _ => true,
+        }
+    };
+    rows.iter().filter(working).count() as u64
 }
 
 #[cfg(test)]

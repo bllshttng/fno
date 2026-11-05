@@ -65,23 +65,28 @@ impl View {
 }
 
 impl View {
-    /// The org modal's rows: the full expanded block, fitted to the modal.
     fn org_modal_popup(&self) -> super::AuxPopup {
         use crate::popup::{Anchor, Popup, PopupRow};
         let text_w = (self.term.1 as usize).saturating_sub(10).clamp(40, 120);
         let max_lines = (self.term.0 as usize).saturating_sub(6).max(8);
-        let rows = self
+        let lines = self
             .org
-            .expanded_lines(&self.layout.agents, text_w, max_lines)
-            .into_iter()
-            .map(PopupRow::Header)
-            .collect();
+            .expanded_lines(&self.layout.agents, text_w, max_lines);
         super::AuxPopup {
-            popup: Popup::new(rows, Anchor::Center)
-                .title("org")
-                .footer("esc close"),
+            popup: Popup::new(
+                lines.into_iter().map(PopupRow::Header).collect(),
+                Anchor::Center,
+            )
+            .title("org")
+            .footer("esc close"),
             actions: Vec::new(),
         }
+    }
+
+    fn org_modal_is_up(&self) -> bool {
+        self.aux
+            .as_ref()
+            .is_some_and(|a| a.popup.chrome.title == "org")
     }
 
     /// Open the org modal and start the expanded-only folds it reads.
@@ -91,16 +96,16 @@ impl View {
         self.aux = Some(self.org_modal_popup());
     }
 
-    /// Redraw the modal from the latest fold, and let the folds rest once the
-    /// modal is gone.
-    pub(super) fn sync_org_modal(&mut self) {
+    /// Let the folds rest once the modal is gone; with `refresh`, redraw the
+    /// modal from the fold that just landed.
+    pub(super) fn sync_org_modal(&mut self, refresh: bool) {
         if !self.org_modal {
             return;
         }
-        if self.aux.is_none() {
+        if !self.org_modal_is_up() {
             self.org_modal = false;
             self.org.collapse();
-        } else {
+        } else if refresh {
             self.aux = Some(self.org_modal_popup());
         }
     }
