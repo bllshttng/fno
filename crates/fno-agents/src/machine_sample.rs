@@ -998,24 +998,23 @@ mod tests {
 
     #[test]
     fn working_counts_each_session_once_inside_the_window() {
-        let row = |name: &str, harness: &str, session: &str| {
-            let mut entry = crate::state::RegistryEntry::default();
-            entry.name = name.into();
-            entry.harness = Some(harness.into());
-            entry.harness_session_id = Some(session.into());
-            entry
+        let row = |harness: &str, session: &str| crate::state::RegistryEntry {
+            name: session.into(),
+            harness: Some(harness.into()),
+            harness_session_id: Some(session.into()),
+            ..Default::default()
         };
-        let rows = vec![
-            row("fresh", "claude", "s-fresh"),
-            row("fresh-twin", "claude", "s-fresh"),
-            row("quiet", "claude", "s-quiet"),
-            row("no-transcript", "claude", "s-none"),
-            row("codex-one", "codex", "c-1"),
+        let rows = [
+            row("claude", "fresh"),
+            row("claude", "fresh"),
+            row("claude", "quiet"),
+            row("claude", "none"),
+            row("codex", "c-1"),
         ];
-        let refs: Vec<&crate::state::RegistryEntry> = rows.iter().collect();
-        let age = |session: &str| match session {
-            "s-fresh" => Some(30),
-            "s-quiet" => Some(WORKING_WINDOW_S),
+        let refs: Vec<_> = rows.iter().collect();
+        let age = |id: &str| match id {
+            "fresh" => Some(30),
+            "quiet" => Some(WORKING_WINDOW_S),
             _ => None,
         };
         assert_eq!(working_count(&refs, &age), 2);

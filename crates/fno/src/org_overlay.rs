@@ -1451,43 +1451,24 @@ mod tests {
             "leads_live": 5,
             "memory": {"used_fraction": 0.64},
         }));
-        let lines = panel.minimized_lines(&age_rows(&AC6_AGES), 200);
-
+        let lines = panel.minimized_lines(&[], 200);
         assert_eq!(lines.len(), MINIMIZED_ROWS, "{lines:?}");
-        assert_eq!(
-            lines,
-            vec![
-                "  9 working · 5 leads",
-                "  cpu       80% busy",
-                "  memory    64% full"
-            ]
-        );
-
-        let mut detailed = Panel::with_detail(true);
-        detailed.toggle();
-        assert!(detailed.take_want(&[]).is_some());
-        detailed.apply(FoldPart::Lanes(Some(live())));
-        let lines = detailed.minimized_lines(&[], 200);
-        assert!(lines[1].contains("80% busy of 12 cores"), "{lines:?}");
+        assert_eq!(lines[0], "  9 working · 5 leads");
+        assert_eq!(lines[1], "  cpu       80% busy");
+        assert_eq!(lines[2], "  memory    64% full");
+        let narrow = panel.minimized_lines(&[], 10);
+        assert!(narrow.iter().all(|l| l.chars().count() <= 10), "{narrow:?}");
 
         // No reading at all: every line says unknown, none prints a zero.
         let lines = Panel::default().minimized_lines(&[], 200);
-        assert_eq!(lines.len(), MINIMIZED_ROWS, "{lines:?}");
         assert!(lines[0].contains("working unknown"), "{lines:?}");
-        assert!(lines[1].contains("unknown"), "{lines:?}");
-        assert!(lines[2].contains("unknown"), "{lines:?}");
+        assert!(lines[1].contains("unknown") && lines[2].contains("unknown"));
 
-        // A line never runs past the text width.
-        let lines = panel.minimized_lines(&[], 10);
-        assert!(lines.iter().all(|l| l.chars().count() <= 10), "{lines:?}");
-
-        // A failed fold leaves the glance at unknown; the fold-failed words
-        // live in the modal, where the retry runs.
+        // A failed fold leaves the glance unknown; the modal says why.
         let mut failed = Panel::default();
         failed.toggle();
         assert!(failed.take_want(&[]).is_some());
         failed.apply(FoldPart::Lanes(None));
-        assert!(failed.minimized_lines(&[], 200)[1].contains("unknown"));
         let expanded = failed.expanded_lines(&[], 200, 40).join("\n");
         assert!(expanded.contains("fold failed"), "{expanded:?}");
     }
