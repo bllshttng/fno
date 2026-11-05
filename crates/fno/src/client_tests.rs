@@ -9401,12 +9401,10 @@ fn wheel_rows() {
         v.bottom_row_is_chrome(),
         "status bar occupies the bottom row"
     );
-    // The org glance reserves one more row above the strip when it shows.
-    let glance_chrome = (v.org_block_rows() > 0) as usize;
     assert_eq!(
         v.sideline_visible_rows(),
-        without - 1 - glance_chrome,
-        "chrome bottom row is not a scroll slot"
+        without - 1 - (v.org_block_rows() > 0) as usize,
+        "chrome bottom row is not a scroll slot (the org glance reserves the strip row)"
     );
     v.status_on = false;
     assert!(
