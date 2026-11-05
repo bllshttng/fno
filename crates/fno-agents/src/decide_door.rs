@@ -935,6 +935,7 @@ decision index. Run `fno backlog decide-reindex` before retrying."
         "graduation": graduation,
     });
     data["subject"] = json!(subject);
+    crate::backlog::decision_subject::stamp(&mut data, &subject);
     if let Some(r) = &expiry_ref {
         data["expiry_ref"] = json!(r);
     }

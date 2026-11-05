@@ -5,26 +5,38 @@
 //! error line and keeps the last good projection.
 
 use serde_json::Value;
+use std::sync::Arc;
 
 /// The last good projection for the process's lifetime: a reopened Messages
 /// tab paints it at once instead of an empty screen (item 1). One row, in a
-/// mutex; the first gather replaces it.
-static CACHE: std::sync::LazyLock<std::sync::Mutex<Option<Value>>> =
+/// mutex; the first gather replaces it. Shared, never deep-copied: a live
+/// projection runs to tens of megabytes, and a copy on the input thread
+/// stalls keys.
+static CACHE: std::sync::LazyLock<std::sync::Mutex<Option<Arc<Value>>>> =
     std::sync::LazyLock::new(|| std::sync::Mutex::new(None));
 
 /// The cached projection, if a read ever landed in this process.
-pub fn cached() -> Option<Value> {
-    CACHE.lock().ok().and_then(|guard| guard.as_ref().cloned())
+pub fn cached() -> Option<Arc<Value>> {
+    CACHE.lock().ok().and_then(|guard| guard.clone())
 }
 
 /// Cache a landed projection for the next open (item 1). Called by the
-/// view's apply_gather, never by the snapshot's own apply - tests apply
-/// fixtures freely without polluting the process-global cache.
-pub(crate) fn remember(projection: &Value) {
-    if let Ok(mut guard) = CACHE.lock() {
-        *guard = Some(projection.clone());
-    }
+/// gather task, never by the snapshot's own apply - tests apply fixtures
+/// freely without polluting the process-global cache. The replaced value
+/// drops here, off the input thread.
+pub(crate) fn remember(projection: &Arc<Value>) {
+    let old = CACHE
+        .lock()
+        .ok()
+        .and_then(|mut guard| guard.replace(projection.clone()));
+    drop(old);
 }
+
+/// The fingerprint the stat poll compares: the chats dir's entry count, the
+/// total length and the newest mtime.
+pub type Fingerprint = (usize, u64, u64);
+
+static NEXT_VERSION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 /// The mail store's change signal (item 1): the chats dir's entry count and
 /// its messages.jsonl files' total length and newest mtime, read every 5s by
@@ -36,7 +48,7 @@ pub(crate) fn remember(projection: &Value) {
 /// The dir resolves through the same ladder `fno-agents chats::chats_dir`
 /// applies (a `paths.chats` config override, else `<state>/chats`); the
 /// mirror lives here because the client crate cannot call the agent crate.
-pub fn store_fingerprint() -> Option<(usize, u64, u64)> {
+pub fn store_fingerprint() -> Option<Fingerprint> {
     let dir = chats_dir()?;
     let rd = std::fs::read_dir(dir).ok()?;
     let mut count = 0usize;
@@ -144,7 +156,10 @@ fn chats_dir() -> Option<std::path::PathBuf> {
 
 #[derive(Debug, Clone, Default)]
 pub struct MessagesSnapshot {
-    pub projection: Option<Value>,
+    pub projection: Option<Arc<Value>>,
+    /// Bumps on every landed projection. Rows derived from the projection
+    /// are built once per version, never once per paint.
+    pub version: u64,
     error: Option<String>,
     error_at: Option<u64>,
 }
@@ -154,14 +169,20 @@ impl MessagesSnapshot {
     pub fn with_cache() -> Self {
         Self {
             projection: cached(),
+            version: next_version(),
             error: None,
             error_at: None,
         }
     }
-    pub fn apply(&mut self, value: Value) {
-        self.projection = Some(value);
+    pub fn apply(&mut self, value: impl Into<Arc<Value>>) {
+        let old = self.projection.replace(value.into());
+        self.version = next_version();
         self.error = None;
-        self.error_at = None
+        self.error_at = None;
+        // The last reference to a large projection takes tens of ms to free.
+        if let Some(old) = old.filter(|old| Arc::strong_count(old) == 1) {
+            std::thread::spawn(move || drop(old));
+        }
     }
     pub fn fail(&mut self, reason: String, now: u64) {
         self.error = Some(reason);
@@ -178,6 +199,10 @@ impl MessagesSnapshot {
             (Some(_), None) => String::new(),
         }
     }
+}
+
+fn next_version() -> u64 {
+    NEXT_VERSION.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
 /// Gather the projection: `fno-agents mail-threads --format json` with

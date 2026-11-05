@@ -644,6 +644,12 @@ impl ConnectionsView {
         }
     }
 
+    /// True while a typed field is open: the add wizard or the new-combo form.
+    /// Arrows must not fold to `hjkl` there, or they type into the field.
+    pub fn captures_text(&self) -> bool {
+        self.wizard.is_some() || self.combo_input.is_some()
+    }
+
     /// Pure key reducer. Returns the intent for the async wrapper to execute.
     /// Task 1.2 handles navigation + refresh + close; later tasks extend the
     /// intent set (actions, wizard, order commit).
@@ -1321,7 +1327,7 @@ impl ConnectionsView {
         ConnIntent::SpawnLogin(argv)
     }
 
-    /// A key in the Provider step: type to search, Ctrl-N/Ctrl-P or Tab to
+    /// A key in the Provider step: type to search, Up/Down (Ctrl-N/Ctrl-P) or Tab to
     /// move, Enter to pick. A popular provider with a login flow keeps its
     /// old kind; the other catalog providers take a key, the local servers
     /// a base URL.
@@ -1942,7 +1948,7 @@ impl ConnectionsView {
         self.push_spans(out, legend);
         let mut keys = Spans::default();
         keys.add(
-            "type: search  Tab: next  Ctrl-P: prev  Enter: pick  Esc: cancel",
+            "type: search  Up/Down or Tab: move  Enter: pick  Esc: cancel",
             type_scale::META,
         );
         self.push_spans(out, keys);
@@ -2945,6 +2951,24 @@ mod tests {
         assert_eq!(v.on_key(b'j'), ConnIntent::Bell);
         assert_eq!(v.on_key(b'R'), ConnIntent::Refresh);
         assert_eq!(v.on_key(0x1b), ConnIntent::Close);
+    }
+
+    // Arrows in the add-account search move the pick and leave the query empty.
+    #[test]
+    fn provider_search_arrows_move_pick_not_query() {
+        let mut v = ready_view();
+        v.on_key(b'a');
+        assert!(v.captures_text());
+        // The opening pick follows the selected account's catalog row; pin it.
+        v.wizard.as_mut().unwrap().pick = 0;
+        // Down Down, Right Right (dropped), Left Left (dropped), Up Up, as the fold emits them.
+        for k in [0x0e, 0x0e, 0x10, 0x10] {
+            v.on_key(k);
+        }
+        let w = v.wizard.as_ref().unwrap();
+        assert_eq!(w.query, "");
+        // Two Down then two Up lands back on the start row.
+        assert_eq!(w.pick, 0);
     }
 
     #[test]

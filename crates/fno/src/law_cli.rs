@@ -153,6 +153,9 @@ pub fn run(args: &[OsString]) -> i32 {
 /// one-shot lane, unattended (a read takes no operator proof). Help rides
 /// argv too; the door's own usage answers it.
 pub fn run_decisions(args: &[OsString]) -> i32 {
+    if args.iter().any(|a| a.to_str() == Some("--table")) {
+        return crate::decisions_table::run();
+    }
     let argv: Vec<String> = args
         .iter()
         .skip(1)

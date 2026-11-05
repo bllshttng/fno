@@ -582,11 +582,13 @@ fn spawn_argv(
             argv.push(l.account.clone());
         }
     }
-    // The footnote harness reads its model only from fenced args, so a lane
-    // model that stays outside the fence makes the spawn refuse with
-    // "needs a model".
+    // A lane model crosses the fence for every harness: a claude lane whose
+    // model stays behind falls back to the CLI's own default, which put opus
+    // on a target lane. The footnote harness reads its model only from
+    // fenced args, so a model outside the fence makes the spawn refuse with
+    // "needs a model"; claude reads the same fence.
     let lane_model = lane
-        .filter(|l| l.harness == "footnote" && !l.model.is_empty())
+        .filter(|l| !l.model.is_empty())
         .map(|l| l.model.clone());
     // The unattended footnote lane runs bypassed like every other lane door;
     // the mode rides the fence so the launch spec carries it.
@@ -1629,7 +1631,7 @@ mod tests {
     }
 
     #[test]
-    fn a_footnote_lane_model_crosses_the_fence_as_minus_m() {
+    fn a_lane_model_crosses_the_fence_as_minus_m() {
         let lane = LaneRow {
             name: "fn".into(),
             harness: "footnote".into(),
@@ -1658,11 +1660,13 @@ mod tests {
             &argv[fence + 3..fence + 5],
             &["--permission-mode", "bypassPermissions"]
         );
-        // The model is footnote-only: another harness's lane model never rides.
+        // The model rides for claude too: a claude lane whose model stays
+        // behind falls back to the CLI's own default, which put opus on a
+        // target lane.
         let claude_lane = LaneRow {
             name: "c".into(),
             harness: "claude".into(),
-            model: "glm-5.3-flash".into(),
+            model: "claude-sonnet-5".into(),
             ..Default::default()
         };
         let argv = spawn_argv(
@@ -1674,8 +1678,8 @@ mod tests {
             "p",
             &[],
         );
-        assert_eq!(argv.last().unwrap(), "p", "no fence shape without a model");
-        assert!(!argv.contains(&"-m".to_string()));
+        let fence = argv.iter().position(|a| a == "--").unwrap();
+        assert_eq!(&argv[fence + 1..fence + 3], &["-m", "claude-sonnet-5"]);
         // The mode is footnote-only too: another harness's lane never carries
         // it (each door owns its own unattended posture).
         assert!(!argv.contains(&"--permission-mode".to_string()));

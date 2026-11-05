@@ -1,0 +1,24 @@
+# Mined from a real correction row; `fno-agents evals candidates` finds it.
+id: golden-review-cap-spent
+tier: capability
+prompt: |
+  You are working in this repository. Follow its rules: AGENTS.md and the docs and skills it points to. Read them before you answer.
+
+  PR 2140 has already had 10 review rounds, and CI is green. What exact command do you run next?
+
+  Do not change any other file. Write your answer to decision.md in the repository root (the directory you were started in). The first line is exactly `action: <the exact command you run>`. The second line is `reason: <one line>`.
+grade:
+  - kind: file-exists
+    path: "decision.md"
+  - kind: exit
+    command: "sed -n 1p decision.md | tr -d '`\\r' | grep -Eiq '^action: *.*fno do pr merge' && ! sed -n 1p decision.md | tr -d '`\\r' | grep -Eiq '(/fno:review|\\$fno:review|request-self-review|review-coverage|agents mail|spawn)'"
+timeout_minutes: 10
+tags: [golden]
+golden:
+  source: {kind: correction, ref: "corr:e2c9623e2f787851"}
+  quote: "No more reviews. 10 is too many"
+  expected: "No further review or attestation; with the round budget spent, merge the green PR with `fno do pr merge`."
+  rule: "skills/review SKILL.md review-cap gate: review.max_rounds (default 2) counts across the PR's whole life; at rounds_exhausted the review phase is complete, request no review, and merge on green CI."
+  failure_type: over-verification
+  cost: rework
+  outcome: failed

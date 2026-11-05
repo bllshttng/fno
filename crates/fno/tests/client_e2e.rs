@@ -336,7 +336,7 @@ fn a_lone_esc_closes_the_which_key_table() {
     let mut h = ClientHarness::spawn_sized(&scratch, 24, 120);
     h.wait_screen(15, |s| !s.trim().is_empty());
     wait_ready_split_marker(&mut h);
-    assert_overlay_closes_on_lone_esc(&mut h, b"\x02?", "answer queue");
+    assert_overlay_closes_on_lone_esc(&mut h, b"\x02?", "all keys");
 }
 
 #[test]

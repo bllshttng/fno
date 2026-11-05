@@ -5,6 +5,14 @@
 //! process timing and asserts the decision (exit code + stdout), the nearest-rank
 //! p90 against its budget, and the exec set against its allowlist.
 //!
+//! Spawn-cost fixtures whose budgets sit under shared-runner noise judge the
+//! runner-adjusted tail instead: a control `fno-agents --version` sample runs
+//! before and after each recorded sample, and the budget/ceiling asserts read
+//! `runner_adjusted_ms`. The runner's own spawn overhead (measured ~60ms p90
+//! raw against ~2ms adjusted on a red run) prices out of the budget, while a
+//! hook that itself grows still grows the adjusted tail, so the gate keeps
+//! catching real regressions.
+//!
 //! Gates: on Linux the tests require an idle runner (`/proc/stat` admission,
 //! three consecutive 2-second readings under 10% CPU busy within 120s) and
 //! capture real execs through `strace -f -qq -e trace=execve`. On macOS the
@@ -540,9 +548,10 @@ struct FixtureSpec<'a> {
     /// identity walk reads; sample_once strips ambient CLAUDE_*/FNO_* vars
     /// the fixture does not pin, so a marker only exists when pinned here.
     extra_env: &'static [(&'static str, &'static str)],
-    /// p90 budget in ms (Linux-gated).
+    /// p90 budget in ms (Linux-gated; runner-adjusted on normalized fixtures).
     budget_p90_ms: f64,
-    /// High-tail ceiling in ms (Linux-gated).
+    /// High-tail ceiling in ms (Linux-gated; on normalized fixtures judged as
+    /// the adjusted p95, which absorbs a short scheduler-outlier burst).
     ceiling_ms: f64,
     /// Exec basenames allowed on the fast path (Linux strace; macOS shim is
     /// partial evidence: every logged name must be in this set).
@@ -660,9 +669,20 @@ fn run_fixture(name: &str, script: &str, spec: &FixtureSpec<'_>, verify: impl Fn
         Some(b.out.join(format!("{name}.trace")))
     };
 
-    // The no-write path returns before registry or manifest I/O, so runner
-    // scheduling and process startup can dominate its measured wall time.
-    let normalize_runner = name == "guard_bash_no_write";
+    // Runner-relative budgets: these hooks return before any heavy I/O, so on
+    // a shared CI runner spawn/scheduling overhead dominates wall time and one
+    // slow window reds a raw budget (measured: a control `fno-agents
+    // --version` read ~60ms p90 raw against ~2ms adjusted in the same pass).
+    // The control read before and after each sample prices that overhead in;
+    // a hook that itself grows still grows the adjusted tail, so the gate
+    // keeps catching real regressions.
+    let normalize_runner = matches!(
+        name,
+        "guard_bash_no_write"
+            | "hook_budget_bash_pretooluse_dispatch_allow"
+            | "hook_budget_bash_pretooluse_dispatch_git"
+            | "hook_budget_bash_pretooluse_dispatch_gh"
+    );
     let control_trace_path = if normalize_runner && !macos {
         Some(b.out.join(format!("{name}-control.trace")))
     } else {

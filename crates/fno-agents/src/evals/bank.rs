@@ -7,7 +7,9 @@
 //! always-pass. The goldens pin the bytes.
 
 pub const VALID_TIERS_REPR: &str = "('capability', 'regression')";
-pub const VALID_CHECK_KINDS_REPR: &str = "('exit', 'file-exists', 'grep', 'tool-budget', 'tests')";
+pub const VALID_CHECK_KINDS_REPR: &str =
+    "('exit', 'file-exists', 'grep', 'tool-budget', 'tests', 'rubric')";
+pub const VALID_CRITERION_TAGS_REPR: &str = "('hurdle', 'principle')";
 
 pub const COHORTS_FILENAME: &str = "cohorts.yaml";
 
@@ -21,6 +23,33 @@ pub struct GradeCheck {
     pub pattern: Option<String>,
     pub max_tool_calls: Option<i64>,
     pub tests: Option<TestsSpec>,
+    pub rubric: Option<RubricSpec>,
+}
+
+/// hurdle: a failed criterion fails the whole check. principle: it only
+/// lowers the criterion pass rate the detail reports.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RubricTag {
+    Hurdle,
+    Principle,
+}
+
+/// One binary criterion: one fact, outcome only, no scale.
+#[derive(Clone, Debug)]
+pub struct RubricCriterion {
+    pub id: String,
+    pub text: String,
+    pub tag: RubricTag,
+}
+
+/// A `rubric` check: judges read one work product (`path`, or the git diff
+/// against the grade base when `diff`) against one-fact criteria. The task
+/// must be capability-tier and carry a prompt: the judge sees it.
+#[derive(Clone, Debug)]
+pub struct RubricSpec {
+    pub path: Option<String>,
+    pub diff: bool,
+    pub criteria: Vec<RubricCriterion>,
 }
 
 /// A `tests` check: re-apply the real fix's test files, run the named ids, and
@@ -192,6 +221,24 @@ fn load_task_typed(path: &std::path::Path) -> Result<TaskSpec, LoadError> {
         checks.push(parse_check(item, &id, path, i)?);
     }
     warn_if_decorative(&id, path, &checks);
+    // A rubric check is judge-graded: it can never sit on a regression task
+    // (a verdict that flips without the tree changing cannot serve
+    // `tier: regression`), and it grades a worker's answer, so the task
+    // needs the prompt the judge reads.
+    if checks.iter().any(|c| c.rubric.is_some()) {
+        require(
+            tier == "capability",
+            format!(
+                "task '{id}' ({where_}): a rubric check requires tier capability, got '{tier}'"
+            ),
+        )?;
+        require(
+            prompt.is_some(),
+            format!(
+                "task '{id}' ({where_}): a rubric check requires a task 'prompt' (the judge reads it)"
+            ),
+        )?;
+    }
     let work_product = checks.iter().any(|c| c.tests.is_some());
     let timeout = map.get(serde_yaml_ng::Value::String("timeout_minutes".into()));
     let timeout = timeout.and_then(|v| v.as_i64()).unwrap_or(15);
@@ -334,7 +381,7 @@ fn parse_check(
     let kind = kind.and_then(|v| v.as_str()).unwrap_or("");
     if !matches!(
         kind,
-        "exit" | "file-exists" | "grep" | "tool-budget" | "tests"
+        "exit" | "file-exists" | "grep" | "tool-budget" | "tests" | "rubric"
     ) {
         return Err(LoadError::UnknownCheckKind(BankError(format!(
             "{where_prefix}: kind must be one of {VALID_CHECK_KINDS_REPR}, got '{kind}'"
@@ -357,10 +404,14 @@ fn parse_check(
             pattern: None,
             max_tool_calls: None,
             tests: None,
+            rubric: None,
         });
     }
     if kind == "tests" {
         return parse_tests(map, kind, &where_prefix);
+    }
+    if kind == "rubric" {
+        return parse_rubric(map, kind, &where_prefix);
     }
     if kind == "tool-budget" {
         let max = map.get(serde_yaml_ng::Value::String("max_tool_calls".into()));
@@ -379,6 +430,7 @@ fn parse_check(
             pattern: None,
             max_tool_calls: Some(max),
             tests: None,
+            rubric: None,
         });
     }
     let fpath = map.get(serde_yaml_ng::Value::String("path".into()));
@@ -396,6 +448,7 @@ fn parse_check(
             pattern: None,
             max_tool_calls: None,
             tests: None,
+            rubric: None,
         });
     }
     let pattern = map.get(serde_yaml_ng::Value::String("pattern".into()));
@@ -412,6 +465,111 @@ fn parse_check(
         pattern: Some(pattern.to_string()),
         max_tool_calls: None,
         tests: None,
+        rubric: None,
+    })
+}
+
+/// `rubric`: one work-product source (`path`, or `diff: true`) and a
+/// criteria list where each row is one binary fact tagged hurdle or
+/// principle. Refusals name the criterion, so a bad row is findable.
+fn parse_rubric(
+    map: &serde_yaml_ng::Mapping,
+    kind: &str,
+    where_prefix: &str,
+) -> Result<GradeCheck, LoadError> {
+    let has_path = map
+        .get(serde_yaml_ng::Value::String("path".into()))
+        .and_then(|v| v.as_str())
+        .is_some_and(|s| !s.trim().is_empty());
+    let diff = map
+        .get(serde_yaml_ng::Value::String("diff".into()))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    require(
+        has_path ^ diff,
+        format!(
+            "{where_prefix}: kind=rubric requires exactly one work-product source, 'path' or 'diff: true'"
+        ),
+    )?;
+    let path = if has_path {
+        Some(
+            map.get(serde_yaml_ng::Value::String("path".into()))
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .trim()
+                .to_string(),
+        )
+    } else {
+        None
+    };
+    let raw = map.get(serde_yaml_ng::Value::String("criteria".into()));
+    let Some(seq) = raw.and_then(|v| v.as_sequence()) else {
+        return Err(LoadError::Refusal(BankError(format!(
+            "{where_prefix}: kind=rubric requires a non-empty 'criteria' list"
+        ))));
+    };
+    if seq.is_empty() {
+        return Err(LoadError::Refusal(BankError(format!(
+            "{where_prefix}: kind=rubric requires a non-empty 'criteria' list"
+        ))));
+    }
+    let mut criteria: Vec<RubricCriterion> = Vec::new();
+    for (i, item) in seq.iter().enumerate() {
+        let row_prefix = format!("{where_prefix} criteria[{i}]");
+        let Some(row) = item.as_mapping() else {
+            return Err(LoadError::Refusal(BankError(format!(
+                "{row_prefix}: each criterion must be a mapping with id, text and tag"
+            ))));
+        };
+        let field = |key: &str| -> Option<String> {
+            row.get(serde_yaml_ng::Value::String(key.into()))
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+        };
+        let cid = field("id")
+            .ok_or_else(|| BankError(format!("{row_prefix}: requires a non-empty 'id'")))?;
+        let text = field("text").ok_or_else(|| {
+            BankError(format!(
+                "{row_prefix} ({cid}): requires a non-empty 'text' (one fact)"
+            ))
+        })?;
+        let tag_word = field("tag").ok_or_else(|| {
+            BankError(format!(
+                "{row_prefix} ({cid}): requires a 'tag' of {VALID_CRITERION_TAGS_REPR}"
+            ))
+        })?;
+        let tag = match tag_word.as_str() {
+            "hurdle" => RubricTag::Hurdle,
+            "principle" => RubricTag::Principle,
+            _ => {
+                return Err(LoadError::Refusal(BankError(format!(
+                    "{row_prefix} ({cid}): tag must be one of {VALID_CRITERION_TAGS_REPR}, got '{tag_word}'"
+                ))))
+            }
+        };
+        if criteria.iter().any(|c| c.id == cid) {
+            return Err(LoadError::Refusal(BankError(format!(
+                "{where_prefix}: duplicate criterion id '{cid}'"
+            ))));
+        }
+        criteria.push(RubricCriterion { id: cid, text, tag });
+    }
+    let spec = RubricSpec {
+        path: path.clone(),
+        diff,
+        criteria,
+    };
+    Ok(GradeCheck {
+        kind: kind.to_string(),
+        command: None,
+        expect: 0,
+        path,
+        pattern: None,
+        max_tool_calls: None,
+        tests: None,
+        rubric: Some(spec),
     })
 }
 
@@ -478,6 +636,7 @@ fn parse_tests(
             f2p,
             p2p: list("p2p"),
         }),
+        rubric: None,
     })
 }
 
@@ -824,6 +983,100 @@ mod tests {
     }
 
     #[test]
+    fn a_rubric_task_loads_with_criteria_and_tags_and_the_format_refuses_naming_id_and_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let criteria = "    criteria:\n      - {id: stays-rust, text: the answer names a crates/ path, tag: hurdle}\n      - {id: no-new-python, text: the answer never adds Python to cli/src/fno, tag: principle}\n";
+        let body = |check: &str, tier: &str, extra: &str| {
+            format!("id: rubric-load\ntier: {tier}\nprompt: answer the question\ngrade:\n  - kind: rubric\n{check}timeout_minutes: 5\n{extra}")
+        };
+        let ok = write_task(
+            dir.path(),
+            "ok.yaml",
+            &body(
+                &format!("    path: decision.md\n{criteria}"),
+                "capability",
+                "golden:\n  source: {kind: revert, ref: r}\n  expected: e\n  rule: r\n  failure_type: wrong-language\n  outcome: failed\n",
+            ),
+        );
+        let check = load_task(&ok).unwrap().grade.remove(0);
+        let rubric = check.rubric.as_ref().unwrap();
+        assert!(rubric.path.as_deref() == Some("decision.md") && !rubric.diff);
+        let crit = rubric.criteria.as_slice();
+        assert_eq!(crit.len(), 2);
+        assert_eq!(crit[0].id, "stays-rust");
+        assert_eq!(crit[0].tag, RubricTag::Hurdle);
+        assert_eq!(crit[1].tag, RubricTag::Principle);
+
+        let load = |name: &str, body: String| load_task(&write_task(dir.path(), name, &body));
+        // AC1-EDGE: regression tier refuses, naming id and file. The check
+        // must parse first, so the case carries criteria: the tier refusal
+        // is task-level and fires after check parsing.
+        let err = load(
+            "reg.yaml",
+            body(
+                &format!("    path: decision.md\n{criteria}"),
+                "regression",
+                "",
+            ),
+        )
+        .unwrap_err();
+        assert!(
+            err.0.contains("task 'rubric-load'") && err.0.contains("reg.yaml"),
+            "{}",
+            err.0
+        );
+        assert!(err.0.contains("requires tier capability"), "{}", err.0);
+        // No prompt refuses.
+        let err = load(
+            "noprompt.yaml",
+            format!(
+                "id: rubric-load\ntier: capability\ngrade:\n  - kind: rubric\n    path: decision.md\n{criteria}timeout_minutes: 5\n"
+            ),
+        )
+        .unwrap_err();
+        assert!(err.0.contains("requires a task 'prompt'"), "{}", err.0);
+        // Neither nor both sources refuse.
+        for (name, src) in [
+            ("nosrc.yaml", ""),
+            ("both.yaml", "    path: decision.md\n    diff: true\n"),
+        ] {
+            let err = load(name, body(src, "capability", "")).unwrap_err();
+            assert!(
+                err.0.contains("exactly one work-product source"),
+                "{}",
+                err.0
+            );
+        }
+    }
+
+    #[test]
+    fn a_rubric_check_with_bad_criteria_refuses_naming_the_row() {
+        let dir = tempfile::tempdir().unwrap();
+        let head = "id: rubric-crit\ntier: capability\nprompt: p\ngrade:\n  - kind: rubric\n    path: w.md\n";
+        let load = |name: &str, criteria: &str| {
+            load_task(&write_task(
+                dir.path(),
+                name,
+                &format!("{head}{criteria}timeout_minutes: 5\n"),
+            ))
+        };
+        let err = load("empty.yaml", "").unwrap_err();
+        assert!(err.0.contains("non-empty 'criteria'"), "{}", err.0);
+        let err = load(
+            "duptag.yaml",
+            "    criteria:\n      - {id: a, text: t, tag: bonus}\n",
+        )
+        .unwrap_err();
+        assert!(err.0.contains("tag must be one of"), "{}", err.0);
+        let err = load(
+            "dup.yaml",
+            "    criteria:\n      - {id: a, text: t, tag: hurdle}\n      - {id: a, text: u, tag: hurdle}\n",
+        )
+        .unwrap_err();
+        assert!(err.0.contains("duplicate criterion id 'a'"), "{}", err.0);
+    }
+
+    #[test]
     fn discover_skips_cohorts_and_sorts_by_id() {
         let dir = tempfile::tempdir().unwrap();
         write_task(
@@ -850,7 +1103,7 @@ mod tests {
         write_task(
             dir.path(),
             "newer.yaml",
-            "id: newer\ntier: capability\ngrade:\n  - kind: rubric\n",
+            "id: newer\ntier: capability\ngrade:\n  - kind: quantum\n",
         );
         let (tasks, skipped) = discover_bank_tolerant(dir.path()).unwrap();
         let ids: Vec<&str> = tasks.iter().map(|t| t.id.as_str()).collect();

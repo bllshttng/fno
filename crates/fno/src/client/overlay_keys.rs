@@ -42,6 +42,9 @@ pub(super) async fn route(
         // never leak to a pane.
         return Some(keys_modal_keys(view, scanner, bytes, sock_w).await);
     }
+    if let Some(flow) = super::key_grid::footer_keys(view, bytes) {
+        return Some(flow);
+    }
     if view.row_menu.is_some() {
         // US2: the row context menu consumes keys while open (arrows walk
         // the entries + grid, Enter runs, Esc/q close) - never leaks to a pane.
@@ -151,6 +154,9 @@ pub(super) async fn route(
         }
         return Some(sideline::route_launcher_keys(view, scanner, bytes, sock_w).await);
     }
+    if view.decisions_board.is_some() {
+        return Some(super::decisions_view::route_keys(view, scanner, bytes, sock_w).await);
+    }
     if view.messages_board.is_some() {
         // The Messages tab is a full-surface view: it owns the keyboard
         // unconditionally while open, the same rule a full-screen board keeps.
@@ -193,6 +199,11 @@ pub(super) async fn flush_released_chord(
             return super::agent_launcher::launcher_keys(view, chunk, sock_w)
                 .await
                 .map(|_| ());
+        }
+    } else if view.decisions_board.is_some() {
+        if let crate::keys::Event::Forward(chunk) = &event {
+            super::decisions_view::keys(view, chunk);
+            return Ok(());
         }
     } else if view.messages_board.is_some() {
         if let crate::keys::Event::Forward(chunk) = &event {
@@ -824,7 +835,8 @@ pub(super) async fn answer_keys(
     sock_w: &mut (impl tokio::io::AsyncWrite + Unpin),
 ) -> Result<StdinFlow, String> {
     let mut esc = std::mem::take(&mut view.ans_esc);
-    let keys = fold_selector_keys(&mut esc, bytes); // arrows -> hjkl twins
+    // arrows -> hjkl twins, except while the add field is open (j would type)
+    let keys = fold_overlay_keys(&mut esc, bytes, view.mine_adding.is_some());
     view.ans_esc = esc;
     let projection = view.needs_projection();
     // Active squad/tab, captured once (the layout is stable within a key chunk):

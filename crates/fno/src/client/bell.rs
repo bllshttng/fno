@@ -40,13 +40,27 @@ pub(crate) struct Panel {
     drag_from: Option<u16>,
     /// The Questions tab's marked rows, sent by `c` and dropped on close.
     pub(super) marks: std::collections::BTreeSet<String>,
+    /// The Decisions tab lists only the decisions with no author, after a tap
+    /// on the audit alert; any tab switch clears it.
+    pub(super) audit_only: bool,
+    /// The channel the loop reads, kept so the decisions board can load off
+    /// the input thread and answer on it.
+    pub(super) tx: Option<Tx>,
 }
+
+/// The generation a decisions-board load answers with; the panel's own
+/// generations count up from zero and never reach it.
+pub(super) const BOARD_GEN: u64 = u64::MAX;
 
 #[derive(Clone)]
 enum Row {
     Header(String),
     Question(String),
     Clear(usize),
+    /// Decisions with no recorded author and no review mark; a tap opens the audit queue.
+    Audit(usize),
+    /// One decision: its line, and the question it answered when it has one.
+    Decision(String, Option<String>),
     Announcement(String),
     Info(String),
 }
@@ -56,6 +70,7 @@ pub(super) enum Hit {
     Toggle,
     Focus,
     Clear,
+    Audit,
     Question(String),
     Tab(Tab),
 }
@@ -67,17 +82,25 @@ pub(super) enum Hit {
 pub(super) enum Tab {
     All,
     Questions,
+    Decisions,
     Announcements,
     System,
 }
 
-const TABS: [Tab; 4] = [Tab::All, Tab::Questions, Tab::Announcements, Tab::System];
+const TABS: [Tab; 5] = [
+    Tab::All,
+    Tab::Questions,
+    Tab::Decisions,
+    Tab::Announcements,
+    Tab::System,
+];
 
 impl Tab {
     fn label(self) -> &'static str {
         match self {
             Tab::All => "All",
             Tab::Questions => "Questions",
+            Tab::Decisions => "Decisions",
             Tab::Announcements => "Announcements",
             Tab::System => "System",
         }
@@ -113,6 +136,8 @@ impl Panel {
             restore: Size::Normal,
             drag_from: None,
             marks: std::collections::BTreeSet::new(),
+            audit_only: false,
+            tx: None,
         }
     }
 }
@@ -135,6 +160,18 @@ pub(crate) fn open(view: &mut View) -> u64 {
     view.feed = None;
     view.region_owner = super::region_focus::RegionOwner::Pane;
     generation
+}
+
+/// Open the panel on its Decisions tab.
+pub(super) fn open_decisions(view: &mut View) {
+    open(view);
+    show_decisions(view, false);
+}
+
+fn show_decisions(view: &mut View, audit_only: bool) {
+    view.bell.tab = Tab::Decisions;
+    view.bell.selected = 0;
+    view.bell.audit_only = audit_only;
 }
 
 pub(crate) fn close(view: &mut View) {
@@ -160,6 +197,50 @@ pub(crate) fn toggle(view: &mut View) {
 /// picture) is a one-line const swap, and the live screenshot step is what
 /// catches it.
 const BELL_GLYPH: char = '\u{f0f3}';
+
+fn decision_facts(view: &View) -> Option<&Value> {
+    view.bell.projection.as_ref()?.get("decision_facts")
+}
+
+/// The Decisions tab: every decision from the last index read, newest first.
+/// A row that answered a question opens that question's page.
+fn decision_rows(view: &View) -> Vec<Row> {
+    if let Some(e) = decision_facts(view)
+        .and_then(|f| f.get("error"))
+        .and_then(Value::as_str)
+    {
+        return vec![Row::Info(format!("decisions unavailable: {e}"))];
+    }
+    let key = if view.bell.audit_only {
+        "audit_rows"
+    } else {
+        "rows"
+    };
+    let Some(rows) = decision_facts(view)
+        .and_then(|f| f.get(key))
+        .and_then(Value::as_array)
+    else {
+        return vec![Row::Info("loading decisions...".into())];
+    };
+    let note = view
+        .bell
+        .audit_only
+        .then(|| Row::Info("decisions with no author; press 3 for all".into()));
+    note.into_iter()
+        .chain(rows.iter().filter_map(|r| {
+            let text = r.get("text")?.as_str()?.to_string();
+            let question = r.get("question_id").and_then(Value::as_str);
+            Some(Row::Decision(text, question.map(str::to_string)))
+        }))
+        .collect()
+}
+
+/// The decision that answered `question_id`, from the last alerts read.
+pub(super) fn decision_for(view: &View, question_id: &str) -> Option<String> {
+    let facts = view.bell.projection.as_ref()?.get("decision_facts")?;
+    let text = facts.get("by_question")?.get(question_id)?;
+    text.as_str().map(str::to_string)
+}
 
 pub(crate) fn button_label(view: &View) -> String {
     let mut label = String::from(BELL_GLYPH);
@@ -218,6 +299,7 @@ pub(crate) fn paint_button(view: &View, cells: &mut [Cell], cols: usize) {
 }
 
 pub(crate) fn maybe_kick(view: &mut View, tx: &Tx) {
+    view.bell.tx.get_or_insert_with(|| tx.clone());
     if view.panel_w() == 0 {
         return;
     }
@@ -234,11 +316,22 @@ pub(crate) fn maybe_kick(view: &mut View, tx: &Tx) {
     let generation = panel.generation;
     let tx = tx.clone();
     tokio::spawn(async move {
-        let _ = tx.send((generation, crate::messages_model::gather().await));
+        let mut result = crate::messages_model::gather().await;
+        if let Ok(Value::Object(map)) = &mut result {
+            let facts = tokio::task::spawn_blocking(crate::decisions_overlay::bell_facts)
+                .await
+                .unwrap_or_default();
+            map.insert("decision_facts".into(), facts);
+        }
+        let _ = tx.send((generation, result));
     });
 }
 
 pub(crate) fn apply(view: &mut View, generation: u64, result: Result<Value, String>) {
+    if generation == BOARD_GEN {
+        super::decisions_view::adopt(view, result);
+        return;
+    }
     let panel = &mut view.bell;
     panel.inflight = false;
     if panel.generation != generation {
@@ -273,6 +366,7 @@ fn mark_seen(projection: &Value) {
 fn rows(view: &View) -> Vec<Row> {
     match view.bell.tab {
         Tab::Questions => question_rows(view),
+        Tab::Decisions => decision_rows(view),
         Tab::Announcements => announcement_rows(view, false),
         Tab::System => announcement_rows(view, true),
         Tab::All => all_rows(view),
@@ -387,6 +481,16 @@ fn all_rows(view: &View) -> Vec<Row> {
     } else if view.questions_merged().is_none() {
         out.push(Row::Info("loading questions...".into()));
     }
+    let audit = view
+        .bell
+        .projection
+        .as_ref()
+        .and_then(|p| p.pointer("/decision_facts/audit"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    if audit > 0 {
+        out.push(Row::Audit(audit as usize));
+    }
     let mut stream: Vec<(i64, Vec<Row>)> = Vec::new();
     for q in view
         .questions_merged()
@@ -495,7 +599,7 @@ fn deduped<'a>(items: Vec<&'a Value>) -> Vec<&'a Value> {
 
 /// The strip's counts, in TABS order. An unread board reads as an ellipsis,
 /// never 0.
-fn tab_counts(view: &View) -> [String; 4] {
+fn tab_counts(view: &View) -> [String; 5] {
     let unread = "…".to_string();
     let open = view.questions_merged().map(|fold| {
         fold.items
@@ -503,12 +607,16 @@ fn tab_counts(view: &View) -> [String; 4] {
             .filter(|q| q.state == "open" && !q.settled)
             .count()
     });
+    let dec = decision_facts(view)
+        .and_then(|f| f.get("total"))
+        .and_then(Value::as_u64)
+        .map_or(unread.clone(), |n| n.to_string());
     let Some((ann, sys)) = split_announcements(view) else {
-        return [unread.clone(), unread.clone(), unread.clone(), unread];
+        return [unread.clone(), unread.clone(), dec, unread.clone(), unread];
     };
     let q = open.map_or(unread.clone(), |n| n.to_string());
     let total = open.unwrap_or(0) + ann + sys;
-    [total.to_string(), q, ann.to_string(), sys.to_string()]
+    [total.to_string(), q, dec, ann.to_string(), sys.to_string()]
 }
 
 fn split_announcements(view: &View) -> Option<(usize, usize)> {
@@ -533,7 +641,7 @@ fn split_announcements(view: &View) -> Option<(usize, usize)> {
 /// Each tab's columns on row 0, for the click mapper. The spans derive from
 /// the same labels the draw paints (pass the one `tab_counts` read), so the
 /// two never drift.
-fn tab_spans(view: &View, counts: &[String; 4]) -> Vec<(Tab, std::ops::Range<usize>)> {
+fn tab_spans(view: &View, counts: &[String; 5]) -> Vec<(Tab, std::ops::Range<usize>)> {
     let width = panel_width(view, view.term.1 as usize);
     let x0 = view.term.1 as usize - width;
     let mut col = x0 + 4;
@@ -583,6 +691,8 @@ pub(super) fn hit(view: &View, row: u16, col: u16) -> Option<ChromeHit> {
     match all.get(start + row as usize - 1)? {
         Row::Question(id) => Some(ChromeHit::Bell(Hit::Question(id.clone()))),
         Row::Clear(_) => Some(ChromeHit::Bell(Hit::Clear)),
+        Row::Audit(_) => Some(ChromeHit::Bell(Hit::Audit)),
+        Row::Decision(_, Some(q)) => Some(ChromeHit::Bell(Hit::Question(q.clone()))),
         _ => Some(ChromeHit::Bell(Hit::Focus)),
     }
 }
@@ -663,6 +773,7 @@ pub(crate) fn apply_hit(view: &mut View, hit: Hit) {
         Hit::Tab(tab) => {
             view.bell.tab = tab;
             view.bell.selected = 0;
+            view.bell.audit_only = false;
         }
         Hit::Focus => {}
         Hit::Clear if !view.question_acting => {
@@ -670,6 +781,7 @@ pub(crate) fn apply_hit(view: &mut View, hit: Hit) {
             view.question_acting = true;
         }
         Hit::Clear => {}
+        Hit::Audit => show_decisions(view, true),
         Hit::Question(id) => view.open_detail_on(&id),
     }
 }
@@ -784,10 +896,12 @@ pub(crate) fn keys(view: &mut View, bytes: &[u8]) {
                 let i = TABS.iter().position(|t| *t == view.bell.tab).unwrap_or(0);
                 view.bell.tab = TABS[(i + 1) % TABS.len()];
                 view.bell.selected = 0;
+                view.bell.audit_only = false;
             }
-            b'1'..=b'4' => {
+            b'1'..=b'5' => {
                 view.bell.tab = TABS[(byte - b'1') as usize];
                 view.bell.selected = 0;
+                view.bell.audit_only = false;
             }
             b'j' => {
                 let len = rows(view).len();
@@ -864,6 +978,8 @@ pub(crate) fn keys(view: &mut View, bytes: &[u8]) {
                 let selected = view.bell.selected;
                 match rows(view).get(selected).cloned() {
                     Some(Row::Question(id)) => view.open_detail_on(&id),
+                    Some(Row::Audit(_)) => show_decisions(view, true),
+                    Some(Row::Decision(_, Some(q))) => view.open_detail_on(&q),
                     Some(Row::Clear(_)) if !view.question_acting => {
                         view.question_clear_settled = true;
                         view.question_acting = true;
@@ -949,7 +1065,7 @@ pub(crate) fn draw(view: &View, cells: &mut [Cell], rows_n: usize, cols: usize) 
                     view.bell.marks.len()
                 )
             } else {
-                "1-4/Tab tab · j/k move · Enter open · space mark · c clear · w wide · F full · q close".to_string()
+                "1-5/Tab tab · j/k move · Enter open · space mark · c clear · w wide · F full · q close".to_string()
             };
             paint(
                 cells,
@@ -981,6 +1097,12 @@ pub(crate) fn draw(view: &View, cells: &mut [Cell], rows_n: usize, cols: usize) 
                     )
                 }
                 Row::Clear(n) => (format!("Clear all {n} answered"), view.theme.brand, true),
+                Row::Audit(n) => (
+                    format!("{n} decisions have no author"),
+                    view.theme.brand,
+                    true,
+                ),
+                Row::Decision(s, q) => (s.clone(), Color::Default, q.is_some()),
                 Row::Announcement(s) => (format!("• {s}"), Color::Default, false),
                 Row::Info(s) => (s.clone(), crate::theme::dim_fg(&view.theme), false),
             };
@@ -1167,6 +1289,7 @@ mod tests {
             [
                 "2".to_string(),
                 "\u{2026}".to_string(),
+                "\u{2026}".to_string(),
                 "1".to_string(),
                 "1".to_string()
             ]
@@ -1174,14 +1297,14 @@ mod tests {
 
         // The strip spans land where the draw paints the labels.
         let spans = tab_spans(&system, &tab_counts(&system));
-        assert_eq!(spans.len(), 4);
+        assert_eq!(spans.len(), 5);
         assert!(spans[0].1.start >= 4, "the glyph keeps its seat");
         assert_eq!(spans[0].0, Tab::All);
-        assert_eq!(spans[3].0, Tab::System);
+        assert_eq!(spans[4].0, Tab::System);
 
-        // Keys switch panels: 1-4 jump, Tab cycles and wraps.
+        // Keys switch panels: 1-5 jump, Tab cycles and wraps.
         let mut v = view_with_announcements(vec![]);
-        keys(&mut v, b"3");
+        keys(&mut v, b"4");
         assert_eq!(v.bell.tab, Tab::Announcements);
         keys(&mut v, b"\t");
         assert_eq!(v.bell.tab, Tab::System);

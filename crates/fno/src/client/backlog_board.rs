@@ -122,6 +122,9 @@ pub(crate) struct BoardView {
     pub(crate) colpick: Option<ColPick>,
     /// The `?` keys overlay, when open.
     pub(crate) keys_overlay: bool,
+    /// The `?` footer grid: the focused view's keys, one key short of the
+    /// full overlay. `?` toggles it; `*` swaps it for the overlay.
+    pub(crate) keys_footer: bool,
     /// Pending escape bytes in board-key mode (split-arrow safety).
     board_esc: Vec<u8>,
     /// The drill-down overlay, when open (wave 4). `Some` = the detail
@@ -296,6 +299,7 @@ impl BoardView {
             layout: crate::view_store::load_board_layout(),
             colpick: None,
             keys_overlay: false,
+            keys_footer: false,
             board_esc: Vec::new(),
             detail: None,
             detail_esc: Vec::new(),
@@ -1233,7 +1237,7 @@ pub(crate) fn cycle_sideline_view(view: &mut View) {
             view.backlog_board = None;
             set_sideline_view(view, crate::view_store::SidelineView::Agents);
         }
-        crate::view_store::SidelineView::Agents => {
+        crate::view_store::SidelineView::Agents | crate::view_store::SidelineView::Decisions => {
             // R15: Messages sits right after Agents in the V cycle.
             super::messages_view::open(view);
         }
@@ -1284,6 +1288,9 @@ fn backlog_board_open_fresh(view: &mut View) {
 /// Point the sideline at `v`, persisting the choice.
 pub(crate) fn set_sideline_view(view: &mut View, v: crate::view_store::SidelineView) {
     view.sideline_view = v;
+    if v != crate::view_store::SidelineView::Decisions {
+        view.decisions_board = None;
+    }
     crate::view_store::save_sideline_view(v);
 }
 

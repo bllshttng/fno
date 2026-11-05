@@ -499,3 +499,46 @@ pub(super) fn fold_nav_input(esc: &mut Vec<u8>, bytes: &[u8]) -> Vec<NavKey> {
     }
     keys
 }
+
+/// The fold for an overlay that has a typed field open. Up, Down and Shift-Tab
+/// become Ctrl-P, Ctrl-N and Ctrl-P, the control bytes the typed-search pickers
+/// already read as "move". The `hjkl` twins of [`fold_selector_keys`] are
+/// wrong here: `j` would type into the field. Left and Right have no meaning in
+/// a field with no cursor, so they drop.
+pub(super) fn fold_text_field_keys(esc: &mut Vec<u8>, bytes: &[u8]) -> Vec<u8> {
+    fold_nav_input(esc, bytes)
+        .into_iter()
+        .filter_map(|k| match k {
+            NavKey::Byte(b) => Some(b),
+            NavKey::Esc => Some(0x1b),
+            NavKey::Up | NavKey::ShiftTab => Some(0x10),
+            NavKey::Down => Some(0x0e),
+            NavKey::Left | NavKey::Right => None,
+        })
+        .collect()
+}
+
+/// The text-field fold while a typed field is open, else the selector fold.
+pub(super) fn fold_overlay_keys(esc: &mut Vec<u8>, bytes: &[u8], text: bool) -> Vec<u8> {
+    if text {
+        fold_text_field_keys(esc, bytes)
+    } else {
+        fold_selector_keys(esc, bytes)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn text_field_fold_maps_arrows_to_motion_not_letters() {
+        let mut esc = Vec::new();
+        assert_eq!(
+            fold_text_field_keys(&mut esc, b"\x1b[B\x1b[B\x1b[C\x1b[D\x1b[A\x1b[Z"),
+            vec![0x0e, 0x0e, 0x10, 0x10]
+        );
+        assert_eq!(fold_text_field_keys(&mut esc, b"jk"), b"jk");
+        assert_eq!(fold_overlay_keys(&mut esc, b"\x1b[B", false), b"j");
+    }
+}

@@ -772,6 +772,8 @@ pub(crate) struct View {
     /// Pending escape bytes in modal mode (arrow/pgup folding), same split-arrow
     /// safety as [`View::sel_esc`].
     keys_modal_esc: Vec<u8>,
+    /// The agents list's `^B ?` footer grid is open.
+    keys_footer: bool,
     /// (US2) The right-click / `m` row context menu over a sideline agent
     /// row: an anchored popup whose entries route to existing commands. `None`
     /// when closed. The target is pinned by name so a layout reshuffle can only
@@ -967,6 +969,7 @@ pub(crate) struct View {
     /// The backlog board overlay, when open (one at a time).
     backlog_board: Option<backlog_board::BoardView>,
     messages_board: Option<messages_view::MessagesBoard>,
+    decisions_board: Option<decisions_view::DecisionsBoard>,
     bell: bell::Panel,
     org_board: Option<org_board::OrgBoard>,
     org_generation: u64,
@@ -1283,6 +1286,7 @@ mod feed_detail;
 pub(crate) mod feed_view;
 mod file_viewer;
 mod image_layer;
+mod key_grid;
 mod keys_modal;
 mod needs_view;
 mod questions;
@@ -1766,6 +1770,7 @@ mod overlay_lines;
 pub(crate) use overlay_lines::nav_overlay_lines;
 use overlay_lines::squad_peek_lines;
 pub(crate) use overlay_lines::{humanize_age, humanize_ago, nav_agent_tokens, peek_overlay_lines};
+mod decisions_view;
 mod messages_view;
 mod org_board;
 pub(crate) mod org_pages;
@@ -1804,7 +1809,7 @@ mod bottom_row;
 mod scroll_mode;
 
 use input_folds::{
-    fold_modal_keys, fold_nav_input, fold_search_input, fold_selector_keys,
+    fold_modal_keys, fold_nav_input, fold_overlay_keys, fold_search_input, fold_selector_keys,
     fold_selector_keys_with_split_arrows, ModalKey, NavKey, SearchKey,
 };
 
@@ -1871,6 +1876,7 @@ impl View {
             keys_modal: None,
             pane_ids_until: None,
             keys_modal_esc: Vec::new(),
+            keys_footer: false,
             row_menu: None,
             row_menu_esc: Vec::new(),
             aux: None,
@@ -1940,6 +1946,7 @@ impl View {
             observers: Vec::new(),
             backlog_board: None,
             messages_board: None,
+            decisions_board: None,
             bell: bell::Panel::initial(),
             org_board: None,
             org_generation: 0,
@@ -2361,17 +2368,8 @@ impl View {
     }
 
     /// Keep the selected modal row inside the scrolled viewport after an arrow
-    /// move, by delegating to the ONE implementation.
-    ///
-    /// This used to hand-roll the scroll arithmetic with `rows.len().min(trows)`,
-    /// the pre-chrome viewport formula. `Popup::viewport_h` now subtracts
-    /// `chrome.rows_overhead()`, so the copy drifted the moment overlays gained
-    /// a frame: on a 24-row terminal it believed it had 24 body rows when it had
-    /// 22, and arrowing far enough parked the highlighted row permanently below
-    /// the fold while Enter still executed it. That is the invisible-Enter-target
-    /// case `follow_sel` exists to prevent, reached through the copy that did not
-    /// get the fix. `clamp_sel_to_view` never drifted because it already routed
-    /// through `viewport_h`.
+    /// move, through `Popup::follow_sel`, the one implementation that knows
+    /// the viewport height net of the overlay chrome.
     fn follow_modal_selection(&mut self) {
         let term = self.term;
         if let Some(m) = self.keys_modal.as_mut() {
@@ -4426,6 +4424,7 @@ impl View {
             self.paint_panes(&mut cells, rows, cols, origin_r, origin_c, now);
         }
         self.draw_bottom_row(&mut cells, rows, cols);
+        key_grid::paint_agents(self, &mut cells, rows, cols);
         // Chrome, not an overlay: after panes, before modals.
         self.draw_feed_panel(&mut cells, rows, cols);
         file_viewer::draw(self, &mut cells, rows, cols);
@@ -4592,6 +4591,8 @@ impl View {
             org_board::paint(self, &mut cells, rows, cols, cols, rows);
         } else if self.messages_board.is_some() {
             messages_view::paint_full(self, &mut cells, rows, cols);
+        } else if self.decisions_board.is_some() {
+            decisions_view::paint_full(self, &mut cells, rows, cols);
         }
 
         // Terminal cursor: the composer sheet's editor while it is open (the
@@ -6633,11 +6634,8 @@ async fn attach_and_run(
     let (share_tx, mut share_rx) =
         tokio::sync::mpsc::unbounded_channel::<(u64, share_flow::ShareMsg)>();
     view.share_tx = Some(share_tx);
-    let (messages_tx, mut messages_rx) = tokio::sync::mpsc::unbounded_channel::<(
-        u64,
-        Result<serde_json::Value, String>,
-        Result<crate::org_model::OrgTree, String>,
-    )>();
+    let (messages_tx, mut messages_rx) =
+        tokio::sync::mpsc::unbounded_channel::<(u64, messages_view::MessagesMsg)>();
     let (reply_notice_tx, mut reply_notice_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
     view.reply_notice_tx = Some(reply_notice_tx);
     let (details_tx, mut details_rx) =
@@ -7357,8 +7355,8 @@ async fn attach_and_run(
                     break Err(format!("draw: {e}"));
                 }
             }
-            Some((gen, mail, tree)) = messages_rx.recv() => {
-                messages_view::apply_gather(&mut view, gen, mail, tree);
+            Some((gen, msg)) = messages_rx.recv() => {
+                messages_view::apply(&mut view, gen, msg);
                 if let Err(e) = compositor.draw(&view.compose()) {
                     break Err(format!("draw: {e}"));
                 }
@@ -8204,9 +8202,7 @@ async fn dispatch_event(
                 view.cycle_section(key);
             }
         }
-        Event::ShowKeys => {
-            view.open_keys_modal();
-        }
+        Event::ShowKeys => key_grid::toggle(view),
         Event::OpenBacklogBoard => View::open(view),
         Event::ShareFocusedPane => share_flow::chord(view),
         Event::CycleSidelineView => backlog_board::cycle_sideline_view(view),
@@ -8217,19 +8213,13 @@ async fn dispatch_event(
         Event::OpenConnections => {
             execute_aux_action(view, AuxAction::OpenConnections, sock_w).await?;
         }
+        Event::OpenDecisions => decisions_view::open(view),
         Event::OpenSweepThreads => {
             execute_aux_action(view, AuxAction::OpenSweep, sock_w).await?;
         }
         Event::LiftHold => hold::lift(view).await,
-        Event::OpenSidelineMenu => {
-            // The footer `menu` button's popup, on the keyboard.
-            view.open_sideline_menu(Anchor::Center);
-        }
-        Event::OpenCreate => {
-            // The `+ new workspace` footer's name-input overlay, on the
-            // keyboard.
-            view.open_create();
-        }
+        Event::OpenSidelineMenu => view.open_sideline_menu(Anchor::Center), // the footer `menu` popup
+        Event::OpenCreate => view.open_create(), // the `+ new workspace` name input
         Event::BlockJump(dir) => {
             write_msg(
                 sock_w,
@@ -8417,6 +8407,7 @@ async fn apply_hit(
             crate::view_store::SidelineView::Messages => messages_view::open(view),
             crate::view_store::SidelineView::Backlog => View::open(view),
             crate::view_store::SidelineView::Org => org_board::open(view),
+            crate::view_store::SidelineView::Decisions => decisions_view::open(view),
         },
         ChromeHit::NeedInput => view.needs_open = !view.needs_open,
         ChromeHit::Bell(hit) => bell::apply_hit(view, hit),
@@ -8840,13 +8831,6 @@ async fn fetch_peek(
     .map_err(|e| format!("peek send failed: {e}"))
 }
 
-/// Peek-overlay keys: j/k (and folded arrows) peek the adjacent agent
-/// row (fresh seq, stale bodies dropped by the seq guard); Esc/q closes back to
-/// the selector with its cursor synced to the peeked row (AC2-UI). Digit answers
-/// (US3) and attach (US4) are added by later stories; until then those keys are
-/// swallowed - no key in peek mode ever reaches a pane (the prefix-layer
-/// invariant). The catalog is re-read per key so a scrape tick that removed the
-/// peeked row re-anchors or closes (never a panic on a dropped index).
 /// Route keys to the Connections modal. Pure state changes run through
 /// the modal's own reducer ([`ConnectionsView::on_key`]); the intents that touch
 /// the world (close, refresh) are executed here. The run loop redraws after this
@@ -8858,7 +8842,11 @@ async fn connections_keys(
 ) -> Result<StdinFlow, String> {
     use crate::connections_view::ConnIntent;
     let mut esc = std::mem::take(&mut view.conn_esc);
-    let keys = fold_selector_keys(&mut esc, bytes);
+    let text = view
+        .connections
+        .as_ref()
+        .is_some_and(|cv| cv.captures_text());
+    let keys = fold_overlay_keys(&mut esc, bytes, text);
     view.conn_esc = esc;
     for &k in &keys {
         // Closed mid-chunk: swallow the rest, never forward to a pane.

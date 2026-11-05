@@ -18,7 +18,9 @@
 //!
 //! **Head leg.** An open same-repo PR whose head touches a gated path gets a
 //! pending `evals/gate` status, then one run of the `gate` goldens at that
-//! head, one PR at a time. A newer head kills the older run. The head runs on
+//! head, one PR at a time. A head whose gated hits are all bank files grades
+//! only the goldens it changed, so a goldens-only PR fits the 20-minute wall.
+//! A newer head kills the older run. The head runs on
 //! the worker seat and pays one side only: it compares to the worker
 //! baseline. Until a first baseline exists the
 //! leg posts nothing, so a fresh install holds no PR on a check it cannot do.
@@ -26,9 +28,12 @@
 //! The runs are detached, and the tick never waits on one. A later tick reads
 //! the history rows, so a daemon restart loses no run. Plumbing never reads as
 //! a pass: no result by the limit, or a spent budget, is red and names the
-//! cause and the clearing command.
+//! cause and the clearing command. A baseline the compare cannot answer reads
+//! pending, never red: the head re-runs once a main run covers its tasks.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::io::Write;
+use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -41,6 +46,13 @@ use crate::gate_probes::RunProbe;
 
 const CONTEXT: &str = "evals/gate";
 const GATED_PATHS: [&str; 5] = ["skills/", "agents/", "hooks/", "commands/", "evals/bank/"];
+/// The gated prefixes minus the bank: these paths have no per-golden
+/// `covers:` granularity, so a diff that hits one selects the whole tier.
+const TIER_PATHS: [&str; 4] = ["skills/", "agents/", "hooks/", "commands/"];
+/// The bank prefix. A diff whose gated hits are all bank files changed the
+/// measurement, not the system under test, so it grades only the goldens it
+/// touched instead of the whole tier.
+const BANK_PATH: &str = "evals/bank/";
 const GATE_TAG: &str = "gate";
 const GOLDEN_TAG: &str = "golden";
 const LEAD_TAG: &str = "lead";
@@ -54,11 +66,12 @@ const MAX_TASK_WALL_S: f64 = 180.0;
 const NEW_HEADS_PER_TICK: usize = 10;
 const DEFAULT_DAILY_USD: f64 = 15.0;
 const DEFAULT_LANE: &str = "zai-flash";
-/// The user's zai-peak ruling: Monday to Friday, 06:00 to 10:00 UTC, zai burns
-/// credits at twice the rate, so the gate keeps its runs off zai then.
-fn zai_peak(now: DateTime<Utc>) -> bool {
-    use chrono::{Datelike, Timelike};
-    now.weekday().num_days_from_monday() < 5 && (6..10).contains(&now.hour())
+/// True when a routing row serves `vendor` by account or route prefix.
+fn row_is_vendor(r: &Value, vendor: &str) -> bool {
+    r["account"].as_str() == Some(vendor)
+        || r["route"]
+            .as_str()
+            .is_some_and(|v| v.starts_with(&format!("{vendor}/")))
 }
 
 /// True when `lane` rides zai, read from the routing inventory. A lane the
@@ -68,20 +81,81 @@ fn lane_is_zai(repo: &Path, lane: &str) -> bool {
         .get("rows")
         .and_then(Value::as_array)
         .and_then(|rows| rows.iter().find(|r| r["name"].as_str() == Some(lane)))
-        .is_some_and(|r| {
-            r["account"].as_str() == Some("zai")
-                || r["route"].as_str().is_some_and(|v| v.starts_with("zai/"))
-        })
+        .is_some_and(|r| row_is_vendor(r, "zai"))
 }
 
-/// True when a gate run on `lane` waits for the peak window to end.
-pub(crate) fn zai_peak_hold(repo: &Path, lane: &str, now: DateTime<Utc>) -> bool {
-    zai_peak(now) && lane_is_zai(repo, lane)
+/// True when every zai record's 5h window reads under `threshold`. Rows sit
+/// in records order (`usage::collect` maps them so). A zai record with no
+/// readable 5h window answers false: a probe that cannot see the window is
+/// exactly the case that moves the run off zai. No zai record is the same
+/// answer - the lane cannot be proven runnable.
+fn zai_window_room(
+    records: &[crate::accounts::records::Record],
+    rows: &[crate::accounts::usage::Row],
+    threshold: f64,
+) -> bool {
+    let mut saw_zai = false;
+    for (record, row) in records.iter().zip(rows.iter()) {
+        let provider = record
+            .route
+            .as_deref()
+            .and_then(crate::spawn_route::parse_target)
+            .map(|(p, _)| p);
+        let key = provider.as_deref().unwrap_or(&record.harness);
+        if key != "zai" {
+            continue;
+        }
+        saw_zai = true;
+        let room = row
+            .entry
+            .get("windows")
+            .and_then(Value::as_array)
+            .and_then(|ws| ws.iter().find(|w| w["label"].as_str() == Some("5h")))
+            .and_then(|w| w["used_pct"].as_f64())
+            .is_some_and(|pct| pct < threshold);
+        if !room {
+            return false;
+        }
+    }
+    saw_zai
 }
 
-/// Runs once when the main lane gives up with no grade, so a capped lane does
-/// not leave the day without graded rows.
-const FALLBACK_LANE: &str = "claude-sonnet-5";
+/// The live room read the lane rule rides: the same probe
+/// `fno config accounts usage` runs, refreshed, folded into
+/// `zai_window_room`. None when the probe cannot answer at all.
+pub(crate) fn real_room(repo: &Path, now: DateTime<Utc>) -> Option<bool> {
+    crate::accounts::usage::report(repo, true, now.timestamp() as f64)
+        .ok()
+        .map(|(records, rows, threshold)| zai_window_room(&records, &rows, threshold))
+}
+
+/// The lane this run rides. A zai lane runs while its 5h window has room
+/// under the quota defer threshold, read through the same probe
+/// `fno config accounts usage` runs; a window at the cap, an unreadable
+/// reading, or a failed probe moves the run to the fixed sonnet fallback
+/// lane (the user's ruling: z.ai usage matters, not the clock). The fallback
+/// is fixed, never the first claude inventory row: that row can be opus, and
+/// opus never runs target work.
+pub(crate) fn lane_with_room(
+    repo: &Path,
+    lane: &str,
+    now: DateTime<Utc>,
+    room: &dyn Fn(&Path, DateTime<Utc>) -> Option<bool>,
+) -> String {
+    if !lane_is_zai(repo, lane) {
+        return lane.to_string();
+    }
+    if room(repo, now) == Some(true) {
+        return lane.to_string();
+    }
+    FALLBACK_LANE.to_string()
+}
+
+/// The lane a run moves to when it cannot ride its own: the main lane's
+/// no-grade fallback, and a zai window with no room. A fixed sonnet lane,
+/// never the first claude inventory row, which can be opus, and opus never
+/// runs target work.
+const FALLBACK_LANE: &str = "claude-sonnet-5-5";
 const FALLBACK_SUFFIX: &str = "-fallback";
 
 /// Who does the work a cohort grades. Spend is each gate row of the day at its
@@ -209,9 +283,15 @@ struct Pr {
 
 struct Deps<'a> {
     run: RunProbe<'a>,
+    /// The slot plumbing's own probe: the same argv seam with the 10-minute
+    /// slot bound, so a slow worktree add outlives the 30-second probe kill.
+    slot_run: RunProbe<'a>,
     spawn: &'a dyn Fn(&[String], &Path, &Path) -> Result<u32, String>,
     alive: &'a dyn Fn(u32) -> bool,
     kill: &'a dyn Fn(u32),
+    /// The zai 5h window read behind `lane_with_room`; `real_room` in
+    /// production, an injected answer in tests.
+    room: &'a dyn Fn(&Path, DateTime<Utc>) -> Option<bool>,
     now: DateTime<Utc>,
 }
 
@@ -253,6 +333,12 @@ fn touches_gated_path(files: &[&str]) -> bool {
     files
         .iter()
         .any(|f| GATED_PATHS.iter().any(|p| f.get(..p.len()) == Some(*p)))
+}
+
+fn touches_tier_path(files: &[&str]) -> bool {
+    files
+        .iter()
+        .any(|f| TIER_PATHS.iter().any(|p| f.get(..p.len()) == Some(*p)))
 }
 
 /// FNV-1a over the route config. One hash decides a change, and a new binary
@@ -351,8 +437,12 @@ fn repo_relative_task(source: &std::path::Path) -> String {
     tail(if skill_local { 4 } else { 3 })
 }
 
-/// The `gate` goldens among `tasks`. A golden added to main after the head
-/// branched has no fixture there, and would read as a regression.
+/// The goldens a head grades. A skill, agent, hook or command change selects
+/// the whole `gate` tier; a crate-only diff selects the tasks whose `covers:`
+/// it touches; a bank edit changes the measurement, not the system under
+/// test, so it grades only the goldens the head touched. A golden added to
+/// main after the head branched has no fixture there, and would read as a
+/// regression.
 fn gate_tasks(
     tasks: &[crate::evals::bank::TaskSpec],
     files: &[String],
@@ -361,15 +451,20 @@ fn gate_tasks(
     d: &Deps,
     p: &Paths,
 ) -> Vec<crate::evals::bank::TaskSpec> {
-    // The `gate` set runs for a skill, agent, hook, command or bank change. A
-    // crate-only diff runs only the tasks whose `covers:` it touches.
     let gated = touches_gated_path(&files.iter().map(String::as_str).collect::<Vec<_>>());
+    let tier = touches_tier_path(&files.iter().map(String::as_str).collect::<Vec<_>>());
+    let changed: BTreeSet<String> = files
+        .iter()
+        .filter(|f| f.starts_with(BANK_PATH))
+        .cloned()
+        .collect();
     tasks
         .iter()
         .filter(|t| !t.is_demoted())
         .filter(|t| {
-            (gated && t.tags.iter().any(|tag| tag == GATE_TAG))
+            (gated && tier && t.tags.iter().any(|tag| tag == GATE_TAG))
                 || files.iter().any(|f| is_covered(f, &t.covers))
+                || changed.contains(&repo_relative_task(&t.source_path))
         })
         .filter(|t| !slow.contains(&t.id))
         .filter(|t| {
@@ -636,33 +731,106 @@ fn head_is_gated(p: &Paths, d: &Deps, slug: &str, pr: &Pr, covers: &[String]) ->
 }
 
 fn fetch(p: &Paths, d: &Deps, refspec: &str) -> bool {
-    (d.run)(&["git", "fetch", "--quiet", "origin", refspec], p.repo).is_some_and(|r| r.ok)
+    (d.slot_run)(&["git", "fetch", "--quiet", "origin", refspec], p.repo).is_some_and(|r| r.ok)
+}
+
+const REF_LOG: &str = "ref-checkout.log";
+
+/// Slot plumbing fails silently into `None` at the caller; a line in this log
+/// keeps the next wedge diagnosable from the state dir alone.
+fn log_ref_failure(p: &Paths, d: &Deps, line: &str) {
+    let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(p.state_dir.join(REF_LOG))
+    else {
+        return;
+    };
+    let _ = writeln!(f, "[{}] {}", d.now.to_rfc3339(), line);
+}
+
+/// True when the repo can resolve `sha` as a commit.
+fn commit_present(p: &Paths, d: &Deps, sha: &str) -> bool {
+    let spec = format!("{sha}^{{commit}}");
+    (d.slot_run)(&["git", "cat-file", "-e", &spec], p.repo).is_some_and(|r| r.ok)
 }
 
 /// The checkout of `sha` the gate reads the bank at: a detached worktree
 /// under the state dir, one fixed slot per leg, reused when the slot already
 /// sits at that sha. The repo the daemon runs from can sit behind the ref,
-/// and a tag read from its working tree misses a golden the ref added. None
-/// on any plumbing failure; callers then read the checkout's own bank, which
-/// is the behavior this replaces.
-fn ref_checkout(p: &Paths, d: &Deps, slot: &str, sha: &str) -> Option<PathBuf> {
+/// and a tag read from its working tree misses a golden the ref added. A sha
+/// the repo has never fetched (a head pushed from another machine) is fetched
+/// from `refspec` before the add. None on any plumbing failure; callers then
+/// read the checkout's own bank, which is the behavior this replaces.
+///
+/// One owner: the swap holds an exclusive flock on `ref-<slot>.lock`, so two
+/// ticks cannot interleave a remove with an add, and a tick that finds the
+/// lock held skips the slot for its pass. An add a killed tick left mid-write
+/// locks the slot "initializing", so the remove takes a second force: it
+/// overrides that lock instead of failing here on every later tick.
+fn ref_checkout(
+    p: &Paths,
+    d: &Deps,
+    slot: &str,
+    sha: &str,
+    refspec: Option<&str>,
+) -> Option<PathBuf> {
     let dir = p.state_dir.join(format!("ref-{slot}"));
     let bank = dir.join("evals").join("bank");
     let dir_str = dir.to_string_lossy().into_owned();
+    let _ = std::fs::create_dir_all(&p.state_dir);
+    let lock = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(p.state_dir.join(format!("ref-{slot}.lock")))
+        .ok()?;
+    // NB: no blocking wait. A holder wedged mid-swap would stall the whole
+    // pass; skipping hands the slot to the next tick instead.
+    let locked = unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    if locked != 0 {
+        return None;
+    }
     if bank.is_dir()
         && (d.run)(&["git", "-C", &dir_str, "rev-parse", "HEAD"], p.repo)
             .is_some_and(|r| r.ok && r.stdout.trim() == sha)
     {
         return Some(dir);
     }
-    let _ = (d.run)(&["git", "worktree", "remove", "--force", &dir_str], p.repo);
-    (d.run)(&["git", "worktree", "prune"], p.repo);
-    (d.run)(
+    // Double force: git holds an `initializing` lock on the worktree it
+    // builds and drops it when the add lands; an add killed midway leaves
+    // the lock, and a locked slot refuses a single-force remove, so every
+    // later rebuild failed with "no checkout". The gate owns its slots. The
+    // slot calls ride the 10-minute bound: the 30-second probe kill was what
+    // murdered the adds mid-flight and leaked the lock.
+    let _ = (d.slot_run)(
+        &["git", "worktree", "remove", "--force", "--force", &dir_str],
+        p.repo,
+    );
+    (d.slot_run)(&["git", "worktree", "prune"], p.repo);
+    // Both legs fetch the ref they grade before this point; the guard keeps a
+    // sha only GitHub knows from failing the add anyway.
+    if !commit_present(p, d, sha) {
+        if let Some(refspec) = refspec {
+            if !fetch(p, d, refspec) {
+                log_ref_failure(p, d, &format!("fetch {refspec} failed for {sha}"));
+            }
+        }
+    }
+    let added = (d.slot_run)(
         &["git", "worktree", "add", "--detach", &dir_str, sha],
         p.repo,
-    )
-    .filter(|r| r.ok)
-    .map(|_| dir)
+    );
+    match &added {
+        Some(r) if !r.ok => log_ref_failure(
+            p,
+            d,
+            &format!("worktree add {slot} at {}: {}", sha, r.stderr.trim()),
+        ),
+        None => log_ref_failure(p, d, &format!("worktree add {slot} at {sha}: spawn failed")),
+        _ => {}
+    }
+    added.filter(|r| r.ok).map(|_| dir)
 }
 
 fn run_argv(
@@ -775,6 +943,21 @@ fn compare(
     let mut rows = read_rows(&history.to_string_lossy(), None, None);
     if let Some(tasks) = tasks {
         rows.retain(|r| tasks.contains(&r.task_id));
+        // A stale baseline holds no rows for the kept tasks (its own main run
+        // can fail on a wedged slot). fold errors on an empty side, so the
+        // unmeasured view verdict() passes is folded here instead. A task
+        // whose head rows exist but score nothing stays red: a lane that
+        // scores nothing is no result.
+        if !rows.iter().any(|r| r.experiment_id.as_deref() == Some(a)) {
+            return Ok(serde_json::json!({
+                "regressions": [],
+                "now_flaky": [],
+                "errors": tasks
+                    .iter()
+                    .map(|t| serde_json::json!({"task": t, "b": "graded", "a_grades": 0}))
+                    .collect::<Vec<_>>(),
+            }));
+        }
     }
     // An unreadable catalog proves nothing unproved, so a regression stays red.
     let unproved = crate::evals::failure_types::unproved_tasks(bank).unwrap_or_default();
@@ -878,9 +1061,7 @@ fn main_seat(
             Err(cause) => return (main_failed(d, state, seat, &cohort, cause), false),
         }
     };
-    if zai_peak_hold(p.repo, &lane, d.now) {
-        return (format!("main {cohort} waits out the zai peak"), true);
-    }
+    let lane = lane_with_room(p.repo, &lane, d.now, d.room);
     let run_cohort = if fallback {
         format!("{cohort}{FALLBACK_SUFFIX}")
     } else {
@@ -896,7 +1077,8 @@ fn main_seat(
         return ("main rev unread".into(), false);
     };
     // The golden set is read at the sha the run grades, not at the checkout.
-    let arg_bank = ref_checkout(p, d, "main", &sha).map(|root| root.join("evals").join("bank"));
+    let arg_bank =
+        ref_checkout(p, d, "main", &sha, Some("main")).map(|root| root.join("evals").join("bank"));
     let bank_dir = arg_bank
         .clone()
         .unwrap_or_else(|| p.repo.join("evals").join("bank"));
@@ -1147,19 +1329,39 @@ fn head_leg(
                 .is_some_and(|prefix| prefix == BUDGET_PREFIX)
                 && disposition.get(BUDGET_PREFIX.len()..) != Some(today.as_str())
     };
-    let Some(pr) = prs
+    // One launch loop per tick: a head the baseline cannot cover must not
+    // hold the lane. Each due head is tried in order; a launch ends the
+    // pass, and a head that skips or posts terminal lets the next one go.
+    let due_heads: Vec<&Pr> = prs
         .iter()
-        .find(|pr| state.heads.get(&pr.sha).is_some_and(|h| due(h)))
-    else {
-        return "no head queued".into();
-    };
-    launch_head(p, d, state, slug, pr, &baseline, daily_usd, &today)
+        .filter(|pr| state.heads.get(&pr.sha).is_some_and(|h| due(h)))
+        .collect();
+    let mut note = "no head queued".to_string();
+    for pr in due_heads {
+        note = launch_head(p, d, state, slug, pr, &baseline, daily_usd, &today);
+        if state.head_run.is_some() {
+            return note;
+        }
+    }
+    note
 }
 
 fn wrote_rows(p: &Paths, cohort: &str) -> bool {
     history_rows(p.history)
         .iter()
         .any(|r| row_cohort(r) == cohort)
+}
+
+/// True when the baseline cohort has grade rows for every selected task. The
+/// compare folds rows to the run's tasks first, so a baseline that predates a
+/// golden the head graded errs the compare on that side.
+fn baseline_covers(rows: &[Value], baseline: &str, tasks: &[String]) -> bool {
+    tasks.iter().all(|task| {
+        rows.iter().any(|r| {
+            row_cohort(r) == baseline
+                && r.get("task_id").and_then(Value::as_str) == Some(task.as_str())
+        })
+    })
 }
 
 /// The in-flight head run: drop it when its head moved, read it when done.
@@ -1214,18 +1416,50 @@ fn settle_head_run(p: &Paths, d: &Deps, state: &mut State, slug: &str, prs: &[Pr
                 &run.cohort,
                 Some(&run.tasks),
             ) {
-                Ok(view) => verdict(&view, &run.sha),
+                Ok(view) => {
+                    // The unmeasured view compare folds for a baseline side
+                    // that holds no rows for the kept tasks is a machine
+                    // gap: pending, never green on an unmeasured grade.
+                    let unmeasured = view["regressions"].as_array().is_some_and(|r| r.is_empty())
+                        && view["errors"].as_array().is_some_and(|rows| {
+                            !rows.is_empty()
+                                && rows
+                                    .iter()
+                                    .all(|r| r.get("a_grades").and_then(Value::as_u64) == Some(0))
+                        });
+                    if unmeasured {
+                        (
+                            "pending",
+                            "waiting for a gate-main baseline that covers the tasks at this head"
+                                .to_string(),
+                        )
+                    } else {
+                        verdict(&view, &run.sha)
+                    }
+                }
+                // A baseline that predates a golden the head graded is a
+                // machine gap, not a head defect: pending, and the head
+                // re-runs once a baseline covers the selection.
+                Err(_) if !baseline_covers(&history_rows(p.history), baseline, &run.tasks) => (
+                    "pending",
+                    "waiting for a gate-main baseline that covers the tasks at this head"
+                        .to_string(),
+                ),
                 Err(e) => ("failure", no_result(&run.sha, &e)),
             }
         }
-        (None, false) => ("failure", no_result(&run.sha, "no baseline")),
+        (None, false) => (
+            "pending",
+            "waiting for a first gate-main baseline".to_string(),
+        ),
     };
-    // A dropped POST keeps the run, so the next tick posts it. Pending
-    // forever is how a green PR never merges.
+    let disposition = if status == "pending" { QUEUED } else { DONE };
+    // A dropped POST keeps the run, so the next tick posts it. A terminal
+    // post clears the run; a pending one requeues the head for the next tick.
     let skip_note = skip_suffix(&run.skipped);
     let text = format!("{text}{skip_note}");
     if post_status(p, d, slug, &run.sha, status, &text) {
-        state.heads.insert(run.sha.clone(), DONE.into());
+        state.heads.insert(run.sha.clone(), disposition.into());
         state.head_run = None;
     }
 }
@@ -1246,7 +1480,8 @@ fn launch_head(
         return format!("head {} fetch failed", short(&pr.sha));
     }
     // The gate-tagged set is read at the head sha: the checkout can sit behind it.
-    let arg_bank = ref_checkout(p, d, "head", &pr.sha).map(|root| root.join("evals").join("bank"));
+    let arg_bank = ref_checkout(p, d, "head", &pr.sha, Some(&refspec))
+        .map(|root| root.join("evals").join("bank"));
     let bank_dir = arg_bank
         .clone()
         .unwrap_or_else(|| p.repo.join("evals").join("bank"));
@@ -1293,6 +1528,14 @@ fn launch_head(
     let builds = tasks.iter().any(|t| !t.covers.is_empty())
         && files.iter().any(|f| f.starts_with("crates/"));
     let tasks: Vec<String> = tasks.into_iter().map(|t| t.id).collect();
+    // Launching only spends the run to read pending at settle; wait for a
+    // main run that covers the selection instead.
+    if !baseline_covers(&rows, baseline, &tasks) {
+        return format!(
+            "head {} waits for a baseline covering its tasks",
+            short(&pr.sha)
+        );
+    }
     if spent_today(&rows, d.now) + cost > daily_usd {
         finish(
             "failure",
@@ -1305,9 +1548,7 @@ fn launch_head(
     }
     let cohort = format!("gate-head-{}", short(&pr.sha));
     let lane = config_lane(p.repo);
-    if zai_peak_hold(p.repo, &lane, d.now) {
-        return format!("head {} waits out the zai peak", short(&pr.sha));
-    }
+    let lane = lane_with_room(p.repo, &lane, d.now, d.room);
     // Posted here, not earlier: only a launch attempt that reaches the
     // spawn names the skips, so an early return neither repeats the post
     // on retry nor supersedes it within the same attempt.
@@ -1333,10 +1574,12 @@ fn launch_head(
     );
     if builds {
         let Some(root) = arg_bank.as_deref().and_then(checkout_of) else {
-            // The deployed binary must never grade this head.
-            let cause = no_result(&pr.sha, "no checkout of the head to build");
-            finish("failure", &cause, DONE.into());
-            return format!("head {} has no checkout to build", short(&pr.sha));
+            // A failed slot swap heals by the next tick: skip instead of
+            // spending a terminal red on plumbing.
+            return format!(
+                "head {} has no checkout to build; the next tick retries",
+                short(&pr.sha)
+            );
         };
         argv = with_build(p, "head", root, argv);
     }
@@ -1436,11 +1679,15 @@ pub(crate) fn tick(
             libc::kill(-(pid as i32), libc::SIGKILL);
         }
     };
+    let slot_runner =
+        crate::stacked_base_stamp::runner_with("git", "gh", &crate::gate_probes::run_slot_probe);
     let deps = Deps {
         run: &run,
+        slot_run: &slot_runner,
         spawn: &spawn_detached,
         alive: &crate::evals_arm::pid_alive,
         kill: &kill,
+        room: &real_room,
         now: Utc::now(),
     };
     tick_with(&paths, &deps, can_launch);
@@ -1477,9 +1724,23 @@ mod tests {
     use crate::gate_probes::Run;
     use serde_json::json;
     use std::cell::RefCell;
-    use std::io::Write as _;
 
     const SHA: &str = "abcdef1234567890";
+    const SHA2: &str = "1234567890abcdef";
+
+    #[test]
+    fn checkout_of_resolves_the_ref_slots_bank_to_its_own_checkout() {
+        // state_dir/ref-<slot>/evals/bank -> state_dir/ref-<slot>: the dir
+        // whose crates/ the build wrapper compiles. One parent short and the
+        // build looks for <state_dir>/crates, which never exists.
+        let bank = Path::new("/state/evals-gate/ref-head/evals/bank");
+        assert_eq!(
+            checkout_of(bank),
+            Some(Path::new("/state/evals-gate/ref-head"))
+        );
+        assert_eq!(checkout_of(Path::new("/evals/bank")), Some(Path::new("/")));
+        assert_eq!(checkout_of(Path::new("/bank")), None);
+    }
 
     fn ok(stdout: &str) -> Option<Run> {
         Some(Run {
@@ -1498,11 +1759,15 @@ mod tests {
         adds: RefCell<Vec<String>>,
         real_git: bool,
         files: String,
+        files_b: String,
         /// PR 7 sits in GitHub's auto-merge queue (`auto_merge` non-null).
         armed: bool,
         /// The state the combined-status read answers for the evals/gate
         /// context; empty means the context is absent.
         gate_status: String,
+        /// The zai 5h window answer `real_room` would give; None is a failed
+        /// probe.
+        room: Option<bool>,
         disarms: RefCell<Vec<String>>,
     }
 
@@ -1533,8 +1798,10 @@ mod tests {
                 adds: RefCell::default(),
                 real_git: false,
                 files: files.into(),
+                files_b: String::new(),
                 armed: false,
                 gate_status: String::new(),
+                room: None,
                 disarms: RefCell::default(),
             }
         }
@@ -1672,8 +1939,13 @@ mod tests {
                     // at a time; the fixture keeps the --jq line shape and
                     // the arm wraps it into the rows the read parses.
                     ["gh", "api", e] if e.contains("/files?") => {
-                        let rows: Vec<Value> = self
-                            .files
+                        let n = e
+                            .split("/pulls/")
+                            .nth(1)
+                            .and_then(|r| r.split('/').next())
+                            .unwrap_or("7");
+                        let text = if n == "8" { &self.files_b } else { &self.files };
+                        let rows: Vec<Value> = text
                             .lines()
                             .filter(|l| !l.is_empty())
                             .map(|f| serde_json::json!({"filename": f}))
@@ -1713,10 +1985,15 @@ mod tests {
                         } else {
                             Value::Null
                         };
-                        ok(&json!([{"number": 7,
+                        let mut prs = vec![json!({"number": 7,
                             "auto_merge": auto_merge,
-                            "head": {"sha": head, "repo": {"full_name": "o/r"}}}])
-                        .to_string())
+                            "head": {"sha": head, "repo": {"full_name": "o/r"}}})];
+                        if !self.files_b.is_empty() {
+                            prs.push(json!({"number": 8,
+                                "auto_merge": Value::Null,
+                                "head": {"sha": SHA2, "repo": {"full_name": "o/r"}}}));
+                        }
+                        ok(&Value::Array(prs).to_string())
                     }
                     ["gh", "pr", "merge", n, "--disable-auto"] => {
                         self.disarms.borrow_mut().push(n.to_string());
@@ -1738,11 +2015,15 @@ mod tests {
                 state_dir: state_dir(&self.history()),
                 graph: None,
             };
+            let room_v = self.room;
+            let room_fn = move |_: &Path, _: DateTime<Utc>| room_v;
             let deps = Deps {
                 run: &run,
+                slot_run: &run,
                 spawn: &spawn,
                 alive: &is_alive,
                 kill: &kill,
+                room: &room_fn,
                 now,
             };
             tick_with(&paths, &deps, true)
@@ -1751,6 +2032,7 @@ mod tests {
         /// A finished main run, so the head leg has its baseline.
         fn with_baseline(&self) {
             self.rows("base", "g1", [true, true, true]);
+            self.rows("base", "g3", [true, true, true]);
             self.rows("base", "g4", [true, true, true]);
             let tried = format!(
                 "gate-main-{}-{}",
@@ -1771,9 +2053,6 @@ mod tests {
             ("cli/x/a.rs\n", Some("--task c1 "), 1),
             ("skills/s\ncli/x/a.rs\n", Some("--task c1,g1 "), 1),
             ("cli/y/a.rs\n", None, 0),
-            // A crate head needs a build, and with no checkout to build the
-            // deployed binary must not grade it: red, no launch.
-            ("crates/x/a.rs\n", None, 2),
         ];
         for (files, task_arg, posted) in cases {
             let w = World::new(files);
@@ -1783,6 +2062,8 @@ mod tests {
             )
             .unwrap();
             w.with_baseline();
+            // The covering task grades only when the baseline answers it too.
+            w.rows("base", "c1", [true, true, true]);
             w.tick(true, Utc::now());
             let spawns = w.spawns.borrow();
             let argv = spawns.first().map(|a| a.join(" ")).unwrap_or_default();
@@ -1792,9 +2073,6 @@ mod tests {
             }
             let posts = w.posts.borrow();
             assert_eq!(posts.len(), posted, "{files}: {posts:?}");
-            if posted == 2 {
-                assert!(posts[1].starts_with("state=failure"), "{files}: {posts:?}");
-            }
         }
     }
 
@@ -1950,19 +2228,6 @@ mod tests {
     }
 
     #[test]
-    fn zai_peak_is_monday_to_friday_0600_to_1000_utc() {
-        let at = |s: &str| DateTime::parse_from_rfc3339(s).unwrap().with_timezone(&Utc);
-        assert!(zai_peak(at("2026-11-02T06:00:00Z")), "Monday 06:00 opens");
-        assert!(zai_peak(at("2026-11-06T09:59:00Z")), "Friday 09:59 holds");
-        assert!(!zai_peak(at("2026-11-02T10:00:00Z")), "10:00 closes");
-        assert!(!zai_peak(at("2026-11-02T05:59:00Z")), "before 06:00");
-        assert!(
-            !zai_peak(at("2026-11-07T07:00:00Z")),
-            "Saturday is off peak"
-        );
-    }
-
-    #[test]
     fn a_main_run_with_a_grade_is_the_baseline_and_ends_the_day() {
         let w = World::new("crates/x.rs\n");
         let now = Utc::now()
@@ -2063,7 +2328,7 @@ mod tests {
         w.with_baseline();
         std::fs::write(
             w.dir.path().join("evals/bank/r1.yaml"),
-            "id: r1\ntier: capability\nprompt: p\ngrade:\n  - kind: rubric\n    rubric: grade me\ntags: [gate]\n",
+            "id: r1\ntier: capability\nprompt: p\ngrade:\n  - kind: quantum\n    quantum: grade me\ntags: [gate]\n",
         )
         .unwrap();
         w.tick(true, Utc::now());
@@ -2224,6 +2489,218 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_baseline_that_predates_the_head_tasks_requeues_pending_not_red() {
+        let w = World::new("skills/x/SKILL.md\n");
+        w.with_baseline();
+        w.tick(true, Utc::now());
+        assert_eq!(w.spawns.borrow().len(), 1, "head launched");
+        // The baseline's rows vanish mid-run (a reaped history answers this),
+        // so the compare folds no rows on the baseline side.
+        let kept: Vec<String> = std::fs::read_to_string(w.history())
+            .unwrap()
+            .lines()
+            .filter(|l| !l.contains("\"experiment_id\":\"base\""))
+            .map(String::from)
+            .collect();
+        std::fs::write(w.history(), kept.join("\n") + "\n").unwrap();
+        w.tick(false, Utc::now());
+        let posts = w.posts.borrow();
+        let post = posts.last().cloned().unwrap();
+        assert!(post.contains("state=pending"), "{post}");
+        assert!(post.contains("waiting for a gate-main baseline"), "{post}");
+        let state = load_state(&dir_of(&w));
+        assert_eq!(state.heads.get(SHA).map(String::as_str), Some(QUEUED));
+        assert!(state.head_run.is_none(), "the pending requeues the head");
+
+        // The next tick holds the launch instead of spending it again, and
+        // posts nothing beyond the queue's pending and the settle's pending:
+        // no red, no run, until a baseline covers the selection.
+        let posted = w.posts.borrow().len();
+        w.tick(true, Utc::now());
+        assert_eq!(w.spawns.borrow().len(), 1, "no second spend");
+        assert_eq!(w.posts.borrow().len(), posted, "no new posts");
+    }
+
+    #[test]
+    fn a_head_run_with_no_rows_and_a_seated_baseline_reads_red_not_pending() {
+        let w = World::new("skills/x/SKILL.md\n");
+        w.with_baseline();
+        w.tick(true, Utc::now());
+        // The baseline covers the selection but the run wrote no rows: the
+        // missing side is the head cohort, a real run failure, and stays red.
+        w.tick(false, Utc::now());
+        let post = w.posts.borrow().last().cloned().unwrap();
+        assert!(post.contains("state=failure"), "{post}");
+        // The 140-character status cut drops the cohort name's tail; the
+        // prefix still names the run as the missing side.
+        assert!(post.contains("gate-head-abcdef12"), "{post}");
+        assert!(post.contains("gate-retry"), "{post}");
+    }
+
+    #[test]
+    fn a_head_settled_with_no_baseline_at_all_reads_pending_and_requeues() {
+        let w = World::new("skills/x/SKILL.md\n");
+        w.with_baseline();
+        w.tick(true, Utc::now());
+        w.state(|s| s.worker.baseline = None);
+        w.tick(false, Utc::now());
+        let post = w.posts.borrow().last().cloned().unwrap();
+        assert!(post.contains("state=pending"), "{post}");
+        assert!(post.contains("first gate-main baseline"), "{post}");
+        let state = load_state(&dir_of(&w));
+        assert_eq!(state.heads.get(SHA).map(String::as_str), Some(QUEUED));
+        assert!(state.head_run.is_none());
+    }
+
+    #[test]
+    fn a_head_its_baseline_cannot_cover_waits_instead_of_spending_a_run() {
+        let w = World::new("skills/x/SKILL.md\n");
+        w.rows("base", "g_other", [true, true, true]);
+        let tried = format!(
+            "gate-main-{}-{}",
+            Utc::now().format("%Y-%m-%d"),
+            route_hash(w.dir.path())
+        );
+        w.state(|s| {
+            s.worker.baseline = Some("base".into());
+            s.worker.main_tried = Some(tried);
+        });
+        w.tick(true, Utc::now());
+        let posts = w.posts.borrow();
+        assert_eq!(posts.len(), 1, "only the queue's pending posts");
+        assert!(posts[0].contains("state=pending"), "{posts:?}");
+        drop(posts);
+        assert!(w.spawns.borrow().is_empty(), "no run spent");
+        let state = load_state(&dir_of(&w));
+        assert_eq!(state.heads.get(SHA).map(String::as_str), Some(QUEUED));
+    }
+
+    #[test]
+    fn a_slot_locked_by_a_dead_add_heals_and_checks_out_the_fetched_sha() {
+        let w = World::new_git("skills/x/SKILL.md\n");
+        let y = String::from_utf8_lossy(
+            &std::process::Command::new("git")
+                .args(["rev-parse", "main"])
+                .current_dir(w.dir.path())
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .trim()
+        .to_string();
+        let slot = dir_of(&w).join("ref-main");
+        let run = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .args(args)
+                .current_dir(w.dir.path())
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "git {args:?} failed: {} {}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            );
+        };
+        run(&[
+            "worktree",
+            "add",
+            "--detach",
+            slot.to_str().unwrap(),
+            "HEAD",
+        ]);
+        // The lock a killed `worktree add` leaves: without the double force
+        // this remove fails and the slot poisons every later tick.
+        run(&["worktree", "lock", slot.to_str().unwrap()]);
+        w.tick(true, Utc::now());
+        let adds = w.adds.borrow();
+        assert_eq!(adds.len(), 1, "the slot was re-added: {adds:?}");
+        assert_eq!(adds[0], slot.to_string_lossy(), "{adds:?}");
+        drop(adds);
+        let head = String::from_utf8_lossy(
+            &std::process::Command::new("git")
+                .args(["-C", slot.to_str().unwrap(), "rev-parse", "HEAD"])
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .trim()
+        .to_string();
+        assert_eq!(head, y, "the healed slot sits at the fetched sha");
+    }
+
+    #[test]
+    fn a_slot_swapped_by_a_concurrent_owner_is_skipped_for_the_tick() {
+        // The real-git world's g1 carries the covers line, so the launch
+        // reaches the build path and the test stays about the busy-slot skip.
+        let w = World::new_git("crates/x/a.rs\n");
+        // The real-git fixture heads the PR at main, not at the SHA constant.
+        let head = String::from_utf8_lossy(
+            &std::process::Command::new("git")
+                .args(["rev-parse", "main"])
+                .current_dir(w.dir.path())
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .trim()
+        .to_string();
+        w.with_baseline();
+        // g3 joins g1 in the head's selection; the baseline answers both.
+        w.rows("base", "g3", [true, true, true]);
+        let lock = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(dir_of(&w).join("ref-head.lock"))
+            .unwrap();
+        assert_eq!(
+            unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+            0,
+            "the test takes the slot lock first"
+        );
+        w.tick(true, Utc::now());
+        {
+            let posts = w.posts.borrow();
+            assert_eq!(posts.len(), 1, "the queue's pending only: {posts:?}");
+        }
+        assert!(w.adds.borrow().is_empty(), "no swap under a foreign lock");
+        assert!(w.spawns.borrow().is_empty(), "no launch on a busy slot");
+        let state = load_state(&dir_of(&w));
+        assert_eq!(state.heads.get(&head).map(String::as_str), Some(QUEUED));
+        drop(lock);
+
+        // With the lock released the same head launches on the next tick.
+        w.tick(true, Utc::now());
+        assert_eq!(w.spawns.borrow().len(), 1, "launched once the slot frees");
+        assert_eq!(w.adds.borrow().len(), 1, "the slot was seated");
+    }
+
+    #[test]
+    fn a_head_the_baseline_cannot_cover_does_not_hold_the_lane() {
+        let mut w = World::new("skills/s\ncrates/x/a.rs\n");
+        std::fs::write(
+            w.dir.path().join("evals/bank/c1.yaml"),
+            "id: c1\ntier: regression\ngrade:\n  - kind: file-exists\n    path: x\ncovers: [\"crates/x/\"]\n",
+        )
+        .unwrap();
+        // Head 7 covers a task the baseline never graded; head 8 is gated and
+        // fully covered. The lane must reach head 8 in the same tick.
+        w.files_b = "skills/s\n".into();
+        w.with_baseline();
+        w.tick(true, Utc::now());
+        let spawns = w.spawns.borrow();
+        assert_eq!(spawns.len(), 1, "the covered head launched");
+        let argv = spawns[0].join(" ");
+        assert!(argv.contains(&format!("--ref {SHA2}")), "{argv}");
+        assert!(argv.contains("--task g1"), "{argv}");
+        drop(spawns);
+        let state = load_state(&dir_of(&w));
+        assert_eq!(state.heads.get(SHA).map(String::as_str), Some(QUEUED));
+        assert_eq!(state.heads.get(SHA2).map(String::as_str), Some(QUEUED));
+    }
+
     fn dir_of(w: &World) -> PathBuf {
         state_dir(&w.history())
     }
@@ -2290,5 +2767,381 @@ mod tests {
         w.gate_status = "failure".into();
         let note = w.tick(true, Utc::now());
         assert!(w.disarms.borrow().is_empty(), "{note}");
+    }
+
+    #[test]
+    fn a_bank_only_head_grades_its_changed_goldens_and_a_skills_head_keeps_the_tier() {
+        // The split the table below rides: the tier prefixes plus the bank
+        // make up the gated set, with the bank the only non-tier entry.
+        for p in TIER_PATHS {
+            assert!(GATED_PATHS.contains(&p), "{p} must stay gated");
+        }
+        assert_eq!(
+            GATED_PATHS
+                .iter()
+                .filter(|p| !TIER_PATHS.contains(p))
+                .count(),
+            1
+        );
+        // (changed files, the task list the launch must carry)
+        for (files, tasks) in [
+            (
+                "evals/bank/g1.yaml\nevals/fixtures/metrics/g1.yaml\n",
+                "--task g1 ",
+            ),
+            ("skills/x/SKILL.md\n", "--task g1,g5 "),
+        ] {
+            let w = World::new(files);
+            std::fs::write(
+                w.dir.path().join("evals/bank/g5.yaml"),
+                "id: g5\ntier: capability\nprompt: p\ngrade:\n  - kind: file-exists\n    path: x\ntags: [gate]\n",
+            )
+            .unwrap();
+            w.with_baseline();
+            // The launch guard waits for a baseline that answers the
+            // selection, so the bank's own golden is seated here too.
+            w.rows("base", "g5", [true, true, true]);
+            w.tick(true, Utc::now());
+            let spawns = w.spawns.borrow();
+            assert_eq!(spawns.len(), 1, "{files}: one head launch");
+            let argv = spawns[0].join(" ");
+            assert!(argv.contains(tasks), "{files}: {argv}");
+            if tasks == "--task g1 " {
+                assert!(!argv.contains("g5"), "{files}: {argv}");
+            }
+        }
+    }
+
+    #[test]
+    fn ref_checkout_fetches_a_sha_the_repo_lacks_and_skips_it_when_present() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = dir.path().join("state");
+        std::fs::create_dir_all(&state).unwrap();
+        let fetches: RefCell<Vec<String>> = RefCell::default();
+        let present = RefCell::new(true);
+        let add_ok = RefCell::new(true);
+        let run = |args: &[&str], _: &Path| -> Option<Run> {
+            match args {
+                ["git", "cat-file", "-e", ..] => Some(Run {
+                    ok: *present.borrow(),
+                    code: None,
+                    stdout: String::new(),
+                    stderr: String::new(),
+                }),
+                ["git", "fetch", "--quiet", "origin", rs] => {
+                    fetches.borrow_mut().push(rs.to_string());
+                    ok("")
+                }
+                ["git", "worktree", "add", ..] => Some(Run {
+                    ok: *add_ok.borrow(),
+                    code: None,
+                    stdout: String::new(),
+                    stderr: "fatal: no".into(),
+                }),
+                _ => ok(""),
+            }
+        };
+        let spawn = |_: &[String], _: &Path, _: &Path| -> Result<u32, String> { Ok(1) };
+        let alive = |_: u32| true;
+        let kill = |_: u32| {};
+        let paths = Paths {
+            history: &dir.path().join("h.jsonl"),
+            fno_bin: "fno",
+            repo: dir.path(),
+            state_dir: state.clone(),
+            graph: None,
+        };
+        let d = Deps {
+            run: &run,
+            slot_run: &run,
+            spawn: &spawn,
+            alive: &alive,
+            kill: &kill,
+            room: &|_: &Path, _: DateTime<Utc>| None,
+            now: Utc::now(),
+        };
+        let slot_sha = "0123456789abcdef0123456789abcdef01234567";
+
+        // The repo already has the sha: no fetch runs.
+        let got = ref_checkout(&paths, &d, "head", slot_sha, Some("pull/7/head"));
+        assert!(got.is_some(), "present sha checks out");
+        assert!(fetches.borrow().is_empty(), "no fetch when present");
+
+        // The repo lacks the sha: the refspec fetch runs, then the add lands.
+        *present.borrow_mut() = false;
+        fetches.borrow_mut().clear();
+        let got = ref_checkout(&paths, &d, "head", slot_sha, Some("pull/7/head"));
+        assert!(got.is_some(), "fetched sha checks out");
+        assert_eq!(fetches.borrow().as_slice(), ["pull/7/head"]);
+
+        // No refspec: no fetch is attempted, and the add still runs.
+        fetches.borrow_mut().clear();
+        let got = ref_checkout(&paths, &d, "head", slot_sha, None);
+        assert!(got.is_some());
+        assert!(fetches.borrow().is_empty());
+
+        // A failed add leaves the cause in the ref-checkout log.
+        *add_ok.borrow_mut() = false;
+        let got = ref_checkout(&paths, &d, "head", slot_sha, Some("pull/7/head"));
+        assert!(got.is_none(), "a failed add reads as no checkout");
+        let log = std::fs::read_to_string(state.join(REF_LOG)).unwrap();
+        assert!(log.contains("worktree add head"), "{log}");
+        assert!(log.contains("fatal: no"), "{log}");
+    }
+
+    #[test]
+    fn a_leaked_add_lock_no_longer_wedges_the_slot_rebuild() {
+        // The wedge this heals: git holds an `initializing` lock on the
+        // worktree it builds and drops it when the add lands; an add killed
+        // midway leaves it, and a locked slot refuses `worktree remove
+        // --force`, so every later rebuild failed with "no checkout".
+        let w = World::new_git("skills/x/SKILL.md\ncrates/x/a.rs\n");
+        w.with_baseline();
+        // g6 joins the selection after main advances; the baseline seats it
+        // so the relaunch the test follows is not held by the coverage guard.
+        w.rows("base", "g6", [true, true, true]);
+        w.tick(true, Utc::now());
+        let common = String::from_utf8_lossy(
+            &std::process::Command::new("git")
+                .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
+                .current_dir(w.dir.path())
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .trim()
+        .to_string();
+        let admin = Path::new(&common).join("worktrees").join("ref-head");
+        assert!(admin.join("gitdir").exists(), "slot admin entry exists");
+        std::fs::write(admin.join("locked"), "initializing").unwrap();
+
+        // Advance main: the next head sha forces a rebuild of the slot.
+        let git = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .args(args)
+                .current_dir(w.dir.path())
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "git {args:?} failed: {} {}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            );
+        };
+        git(&["checkout", "-q", "main"]);
+        std::fs::write(
+            w.dir.path().join("evals/bank/g6.yaml"),
+            "id: g6\ntier: capability\nprompt: p\ngrade:\n  - kind: file-exists\n    path: x\ntags: [gate]\n",
+        )
+        .unwrap();
+        git(&["add", "evals"]);
+        git(&["commit", "-q", "-m", "z"]);
+
+        w.tick(true, Utc::now());
+        assert_eq!(
+            w.adds.borrow().len(),
+            2,
+            "the rebuild ran: {:?}",
+            w.adds.borrow()
+        );
+        let spawns = w.spawns.borrow();
+        assert_eq!(spawns.len(), 2, "the head launched");
+        let posts = w.posts.borrow();
+        assert!(
+            posts.iter().all(|p| p.starts_with("state=pending")),
+            "no failure posted: {posts:?}"
+        );
+        assert!(!admin.join("locked").exists(), "the leaked lock is gone");
+        assert!(
+            !Path::new(&common)
+                .join("worktrees/ref-head/locked")
+                .exists(),
+            "the leaked lock did not come back"
+        );
+    }
+
+    fn usage_record(route: Option<&str>) -> crate::accounts::records::Record {
+        crate::accounts::records::Record {
+            id: "z1".into(),
+            name: "z".into(),
+            harness: "claude".into(),
+            auth: "managed".into(),
+            priority: 0,
+            route_provider_id: None,
+            model_name: None,
+            credentials_source: None,
+            env: None,
+            route: route.map(str::to_string),
+            reset_timezone: None,
+            window_minutes: None,
+            account_id: String::new(),
+            tags: vec![],
+            description: None,
+            config_dir: None,
+            pricing: None,
+            cost_cap_usd_per_session: None,
+            extra: Default::default(),
+        }
+    }
+
+    fn usage_row(windows: Value) -> crate::accounts::usage::Row {
+        crate::accounts::usage::Row {
+            entry: windows,
+            identity: None,
+        }
+    }
+
+    #[test]
+    fn zai_window_room_reads_every_zai_records_5h_window() {
+        let windows = |pct: Value| {
+            json!({"windows": [
+                {"label": "weekly", "used_pct": 10.0},
+                {"label": "5h", "used_pct": pct},
+            ]})
+        };
+        let zai = usage_record(Some("zai/glm-5.3-flash"));
+        let other = usage_record(Some("claude/sonnet-5"));
+        let threshold = 90.0;
+
+        // Room: the 5h window under the threshold. The weekly window and the
+        // non-zai record are ignored.
+        assert!(zai_window_room(
+            &[other.clone(), zai.clone()],
+            &[
+                usage_row(windows(json!(40.0))),
+                usage_row(windows(json!(40.0)))
+            ],
+            threshold
+        ));
+
+        // At the cap: no room.
+        assert!(!zai_window_room(
+            &[zai.clone()],
+            &[usage_row(windows(json!(90.0)))],
+            threshold
+        ));
+
+        // No 5h window at all: the probe cannot prove the lane runnable.
+        assert!(!zai_window_room(
+            &[zai.clone()],
+            &[usage_row(
+                json!({"windows": [{"label": "weekly", "used_pct": 10.0}]})
+            )],
+            threshold
+        ));
+
+        // An unreadable row is no room.
+        assert!(!zai_window_room(
+            &[zai.clone()],
+            &[usage_row(
+                json!({"state": "unknown", "reason": "probe-failed"})
+            )],
+            threshold
+        ));
+
+        // No zai record in the store: no proven room.
+        assert!(!zai_window_room(
+            &[other],
+            &[usage_row(windows(json!(10.0)))],
+            threshold
+        ));
+    }
+
+    #[test]
+    fn a_capped_zai_lane_falls_back_to_the_fixed_sonnet_lane() {
+        // The probe reads no room in both worlds (no account store), so the
+        // lane moves. The fallback is the fixed sonnet lane: never the first
+        // claude inventory row, which can be opus.
+        for (config, banned) in [
+            (
+                "[[routing.models]]\nname = \"zai-flash\"\naccount = \"zai\"\nroute = \"zai/glm-5.3-flash\"\n\n[[routing.models]]\nname = \"claude-opus\"\naccount = \"claude\"\nroute = \"claude/opus-5\"\n\n[[routing.models]]\nname = \"claude-sonnet\"\naccount = \"claude\"\nroute = \"claude/sonnet-5\"\n\n[agents.profiles.role]\nlanes = []\n",
+                "claude-opus",
+            ),
+            (
+                "[[routing.models]]\nname = \"zai-flash\"\naccount = \"zai\"\nroute = \"zai/glm-5.3-flash\"\n\n[agents.profiles.role]\nlanes = []\n",
+                "",
+            ),
+        ] {
+            let w = World::new("skills/x/SKILL.md\n");
+            World::config(w.dir.path(), config);
+            w.with_baseline();
+            w.tick(true, Utc::now());
+            let spawns = w.spawns.borrow();
+            assert_eq!(spawns.len(), 1, "the head launched on the fallback");
+            let argv = spawns[0].join(" ");
+            assert!(argv.contains("--lane claude-sonnet-5-5 "), "{argv}");
+            if !banned.is_empty() {
+                assert!(!argv.contains(banned), "{argv}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_head_task_with_no_baseline_rows_grades_green_and_no_scored_rows_stays_red() {
+        // Two shapes, two verdicts. 4494: the baseline cohort held no rows
+        // for the kept tasks (its own main run failed on the wedged slot),
+        // which folds as the unmeasured case verdict() passes. 4497: every
+        // head row rode a substituted lane, so lane evidence excluded all of
+        // them and nothing scored. A lane that scores nothing is no result:
+        // it stays red.
+        let g5 = "id: g5\ntier: capability\nprompt: p\ngrade:\n  - kind: file-exists\n    path: x\ntags: [gate]\n";
+
+        // The compare's unmeasured view and the verdict it folds to stay
+        // unit contracts. The gate no longer posts them: a launch whose
+        // selection the baseline cannot cover waits, and a baseline that
+        // loses its rows mid-run requeues pending (the requeue test owns
+        // that posting).
+        let w = World::new("evals/bank/g5.yaml\n");
+        std::fs::write(w.dir.path().join("evals/bank/g5.yaml"), g5).unwrap();
+        w.with_baseline();
+        w.rows("gate-head-abcdef123456", "g5", [true, true, true]);
+        let view = compare(
+            &w.dir.path().join("evals/bank"),
+            &w.history(),
+            "base",
+            "gate-head-abcdef123456",
+            Some(&["g5".to_string()]),
+        )
+        .unwrap();
+        assert!(
+            view["errors"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|r| r["a_grades"] == 0),
+            "{view}"
+        );
+        let (status, text) = verdict(&view, SHA);
+        assert_eq!(status, "success");
+        assert!(text.contains("with no baseline"), "{text}");
+
+        // 4497's shape: the head rows exist but no row scores, while the
+        // baseline holds grades for the same task. Red, no result.
+        let w = World::new("evals/bank/g5.yaml\n");
+        std::fs::write(w.dir.path().join("evals/bank/g5.yaml"), g5).unwrap();
+        w.with_baseline();
+        w.rows("base", "g5", [true, true, true]);
+        w.tick(true, Utc::now());
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(w.history())
+            .unwrap();
+        for _ in 0..3 {
+            let row = json!({"task_id": "g5", "tier": "capability", "pass": true,
+                "status": "graded", "variant": "v1", "lane_status": "substituted",
+                "experiment_id": "gate-head-abcdef123456"});
+            writeln!(f, "{row}").unwrap();
+        }
+        drop(f);
+        w.tick(false, Utc::now());
+        let posts = w.posts.borrow();
+        let failure = posts.iter().find(|p| p.starts_with("state=failure"));
+        assert!(
+            failure.is_some(),
+            "a scoring-less lane stays red: {posts:?}"
+        );
+        assert!(failure.unwrap().contains("no result"), "{posts:?}");
+        assert!(failure.unwrap().contains("g5"), "{posts:?}");
     }
 }

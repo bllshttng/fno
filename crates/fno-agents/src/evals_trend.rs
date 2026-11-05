@@ -18,7 +18,7 @@ use serde_json::Map;
 use serde_json::Value;
 
 const EXIT_USAGE: i32 = 2;
-const USAGE: &str = "usage: fno-agents evals-trend --history <jsonl> (--mode report [--since K] [--graduate N] [--json] [--compare A --to B [--repeats N] [--bank DIR] [--prices JSON]] [--by-failure-type [--repeats N] [--bank DIR]] [--check-metrics [--bank DIR]] [--planned <json>] [--qualification <manifest.json>] [--by-cohort [--prices <json>]] [--predict [--bank DIR]] [--climb --baseline C --trial C [--cohorts-yaml P] [--stage V --trial-lane L]] | --mode trend | --mode summary) [--stale-days N] [--now <rfc3339>]";
+const USAGE: &str = "usage: fno-agents evals-trend --history <jsonl> (--mode report [--since K] [--graduate N] [--json] [--compare A --to B [--repeats N] [--bank DIR] [--prices JSON]] [--by-failure-type [--repeats N] [--bank DIR]] [--check-metrics [--bank DIR] [--spend]] [--judge-agreement <labels.yaml>] [--draft-labels <labels.yaml>] [--planned <json>] [--qualification <manifest.json>] [--by-cohort [--prices <json>]] [--predict [--bank DIR]] [--climb --baseline C --trial C [--cohorts-yaml P] [--stage V --trial-lane L]] | --mode trend | --mode summary) [--stale-days N] [--now <rfc3339>]";
 
 /// One history row: the fields the folds read. Absent keys read as the
 /// Python fold read them (missing `variant` is baseline, missing `ts` is
@@ -960,6 +960,9 @@ pub fn run_evals_trend(args: &[String]) -> i32 {
     let mut predict = false;
     let mut by_failure_type = false;
     let mut check_metrics = false;
+    let mut spend = false;
+    let mut judge_agreement: Option<String> = None;
+    let mut draft_labels: Option<String> = None;
     let mut bank: Option<String> = None;
     let mut prices: Option<Value> = None;
     let mut climb = false;
@@ -1074,6 +1077,15 @@ pub fn run_evals_trend(args: &[String]) -> i32 {
             "--predict" => predict = true,
             "--by-failure-type" => by_failure_type = true,
             "--check-metrics" => check_metrics = true,
+            "--spend" => spend = true,
+            "--judge-agreement" => match value("--judge-agreement") {
+                Ok(v) => judge_agreement = Some(v),
+                Err(()) => return EXIT_USAGE,
+            },
+            "--draft-labels" => match value("--draft-labels") {
+                Ok(v) => draft_labels = Some(v),
+                Err(()) => return EXIT_USAGE,
+            },
             "--bank" => match value("--bank") {
                 Ok(v) => bank = Some(v),
                 Err(()) => return EXIT_USAGE,
@@ -1289,8 +1301,19 @@ pub fn run_evals_trend(args: &[String]) -> i32 {
         return 0;
     }
     let bank_dir = crate::evals::resolve_bank_dir(bank);
+    if spend && !check_metrics {
+        eprintln!("evals-trend: --spend is a --check-metrics modifier");
+        eprintln!("{USAGE}");
+        return EXIT_USAGE;
+    }
     if check_metrics {
-        return crate::evals_compare::run_check_metrics(&bank_dir, json_out);
+        return crate::evals_compare::run_check_metrics(&bank_dir, json_out, spend);
+    }
+    if let Some(labels) = &judge_agreement {
+        return crate::evals_compare::run_judge_agreement(labels, &bank_dir, json_out);
+    }
+    if let Some(labels) = &draft_labels {
+        return crate::evals_compare::run_draft_labels(labels, &bank_dir);
     }
     if by_failure_type {
         return crate::evals_compare::run_failure_report(

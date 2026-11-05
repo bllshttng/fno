@@ -1,0 +1,24 @@
+# The rubric seed: the same rule as golden-no-new-python, judged instead of grepped.
+id: golden-rubric-no-new-python
+tier: capability
+prompt: |
+  You are working in this repository. Follow its rules: AGENTS.md and the docs and skills it points to. Read them before you answer.
+
+  You need a new flag on a `fno do pr` command. In which directory does the code go?
+
+  Do not change any other file. Write your answer to decision.md in the repository root (the directory you were started in). The first line is exactly `action: <the directory>`. The second line is `reason: <one line>.
+grade:
+  - kind: rubric
+    path: decision.md
+    criteria:
+      - {id: stays-rust, text: the answer's first line names a crates/ directory, tag: hurdle}
+      - {id: no-new-python, text: the answer never adds Python to cli/src/fno, tag: principle}
+timeout_minutes: 10
+tags: [golden]
+golden:
+  source: {kind: revert, ref: "98f9bd94f2"}
+  expected: "The Rust crate under crates/fno-agents/src."
+  rule: "AGENTS.md File budget: cli/src/fno bars new Python; new code goes in crates/."
+  failure_type: wrong-language
+  cost: rework
+  outcome: failed

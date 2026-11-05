@@ -2337,6 +2337,28 @@ event_types:
           type: string
           description: "Exit reason (e.g. 'sigterm', 'idle', 'error')."
 
+  - name: daemon_died_unexpectedly
+    description: "A replacement daemon found its predecessor gone with no daemon_exited, so the arms it carried stopped ticking until this start."
+    sources: [daemon]
+    data:
+      required: [old_pid]
+      properties:
+        old_pid:
+          type: integer
+          description: "Pid the supervisor lockfile named before this daemon took it."
+        new_pid:
+          type: integer
+          description: "Pid of the daemon reporting the death."
+        quiet_secs:
+          type: integer
+          description: "Seconds from the predecessor's last daemon-sourced event to this start; an upper bound on the span the arms ticked nothing."
+        last_daemon_event_ts:
+          type: string
+          description: "Timestamp of the last daemon-sourced event the predecessor wrote."
+        exit_code_recovered:
+          type: boolean
+          description: "Always false today: the daemon is detached, so no parent survives to read the exit status."
+
   - name: daemon_idle_pending_exit
     description: "Daemon has no live agents and is counting down to idle exit."
     sources: [daemon]
@@ -4856,6 +4878,9 @@ event_types:
         subject:
           type: string
           description: "Optional. The node, file, or area the decision governs. The recovery key: `fno inbox decisions <subject>` and the graph projection read it."
+        subject_kind:
+          type: string
+          description: "Optional. What the subject names: node, pr, or topic. Stamped by the door beside subject. A row recorded before the stamp has none, and a reader reads the kind from the subject string."
         expiry_ref:
           type: object
           description: "Optional exact coordination closure reference. Node refs name node_id. PR refs name repository and number, with an optional URL."

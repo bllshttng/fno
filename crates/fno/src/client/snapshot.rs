@@ -22,7 +22,7 @@ use serde_json::Value;
 const USAGE: &str =
     "usage: fno mux serve --snapshot --server <name> --out <path> [--squad <name>] \
 [--theme dark|light|macchiato] [--format html|svg|png] [--size <cols>x<rows> [--fit]] [--peer <cols>x<rows>] \
-[--font <family>] [--message <fmail-id>] [--edge backlog|messages-tree|messages-part|org|dock=<size>] \
+[--keys-footer] [--font <family>] [--message <fmail-id>] [--edge backlog|messages-tree|messages-part|org|dock=<size>] \
 [--view bell|bell-wide|bell-full|feed|row-menu|hover|cursor|tab-menu|sideline-menu|composer|split-menu|settings|keys|keys-tags|org-block|org-table|org-recent|org-overview|org-graph|org-health|org-seat|org-feed|org-system|org-remote|org-peek|org-spawn|org-keys|messages-tree|messages-chats|messages-thread|messages-system|messages-archive|backlog-list|backlog-kanban|review-diff|review-panel|review-panel-drag|navigator-pr|navigator-model|navigator-menu|feed-detail|question-detail|connections|connections-use|needs|dock|machines]";
 
 #[derive(Debug, PartialEq)]
@@ -162,6 +162,14 @@ pub enum ViewKind {
     Needs,
     /// The sideline list with the first agent's reply dock open under it.
     Dock,
+    /// The Decisions tab over a fixed set of rows, two of them unattributed.
+    Decisions,
+    /// The bell panel with the audit queue row on top of its All tab.
+    BellAudit,
+    /// The bell panel on its Decisions tab.
+    BellDecisions,
+    /// The bell panel after a tap on the audit alert: decisions with no author.
+    BellAuditTab,
 }
 
 /// The seeded demo mail id a Messages view opens on when no --message
@@ -312,6 +320,10 @@ fn parse_view(v: &str) -> Option<ViewKind> {
         "connections-add-local" => Some(ViewKind::ConnectionsAddLocal),
         "needs" => Some(ViewKind::Needs),
         "dock" => Some(ViewKind::Dock),
+        "decisions" => Some(ViewKind::Decisions),
+        "bell-audit" => Some(ViewKind::BellAudit),
+        "bell-decisions" => Some(ViewKind::BellDecisions),
+        "bell-audit-tab" => Some(ViewKind::BellAuditTab),
         "machines" => Some(ViewKind::Machines),
         _ => None,
     }
@@ -343,6 +355,8 @@ pub struct SnapshotArgs {
     /// The client-local surface to open before composing, for shots of a
     /// bell panel or a menu no server frame ever carries.
     pub view: Option<ViewKind>,
+    /// Open the `^B ?` footer grid over the view, as the chord does.
+    pub keys_footer: bool,
     /// Splits held at a dragged size, as `name=size` pairs: the state a live
     /// drag leaves, so a shot can show a mid-drag frame.
     pub edges: Vec<(String, usize)>,
@@ -366,6 +380,7 @@ pub fn parse(tail: &[OsString]) -> Result<SnapshotArgs, String> {
     let mut font = None;
     let mut message = None;
     let mut view = None;
+    let mut keys_footer = false;
     let mut edges: Vec<(String, usize)> = Vec::new();
     let mut it = tail.iter();
     while let Some(a) = it.next() {
@@ -379,6 +394,7 @@ pub fn parse(tail: &[OsString]) -> Result<SnapshotArgs, String> {
         match a {
             "--snapshot" => {}
             "--fit" => fit = true,
+            "--keys-footer" => keys_footer = true,
             "--font" => {
                 let f = value()?;
                 if f.is_empty() || f.contains(['\'', '"', '<', '>', '&']) {
@@ -481,6 +497,7 @@ session text, run scripts/ops/mux-demo-snapshot.sh"
         font,
         message,
         view,
+        keys_footer,
         edges,
     })
 }
@@ -508,6 +525,7 @@ pub fn run(args: SnapshotArgs) -> i32 {
         chrome,
         args.message.as_deref(),
         args.view.as_ref(),
+        args.keys_footer,
         &args.edges,
     );
     match frame.and_then(|f| write(&f, &args)) {
@@ -738,6 +756,7 @@ fn live_frame(
     chrome: crate::theme::Theme,
     message: Option<&str>,
     kind: Option<&ViewKind>,
+    keys_footer: bool,
     edges: &[(String, usize)],
 ) -> Result<Frame, String> {
     let socket = proto::socket_path(server)?;
@@ -851,7 +870,7 @@ fn live_frame(
             .and_then(|p| p.get("you"))
             .and_then(Value::as_array)
             .is_none_or(|t| t.is_empty());
-        crate::client::messages_view::apply_gather(&mut view, gen, mail, Err("no org tree".into()));
+        crate::client::messages_view::apply_gather(&mut view, gen, mail.map(std::sync::Arc::new));
         if board_empty || you_empty {
             return Err(
                 "messages board rendered empty: mail-threads returned no threads; \
@@ -887,9 +906,9 @@ shoot a root whose chats store has rows (scripts/ops/mux-demo-snapshot.sh seeds 
             }
         }
         if let (Some(ViewKind::MessagesYouThread), Some(b)) = (kind, view.messages_board.as_mut()) {
-            if let Some(sid) = b.active_chat_rows().into_iter().find_map(|row| match row {
+            if let Some(sid) = b.active_chat_rows().iter().find_map(|row| match row {
                 crate::client::messages_view::ChatRow::YouThread { session_id, .. } => {
-                    Some(session_id)
+                    Some(session_id.clone())
                 }
                 _ => None,
             }) {
@@ -903,9 +922,33 @@ shoot a root whose chats store has rows (scripts/ops/mux-demo-snapshot.sh seeds 
     // one, then compose. Menus build from the layout the server sent, so
     // they need no gather.
     match kind {
-        Some(ViewKind::Bell) | Some(ViewKind::BellWide) | Some(ViewKind::BellFull) => {
+        Some(ViewKind::Bell)
+        | Some(ViewKind::BellWide)
+        | Some(ViewKind::BellFull)
+        | Some(ViewKind::BellAudit)
+        | Some(ViewKind::BellDecisions)
+        | Some(ViewKind::BellAuditTab) => {
             let gen = crate::client::bell::open(&mut view);
-            let projection = runtime.block_on(crate::messages_model::gather());
+            let mut projection = runtime.block_on(crate::messages_model::gather());
+            if let (
+                Some(ViewKind::BellAudit | ViewKind::BellDecisions | ViewKind::BellAuditTab),
+                Ok(Value::Object(m)),
+            ) = (kind, &mut projection)
+            {
+                m.insert(
+                    "decision_facts".into(),
+                    serde_json::json!({"audit": 3, "total": 4, "audit_rows": [
+                        {"text": "2026-10-30 expired push: Retry after the rate limit", "question_id": null},
+                        {"text": "2026-10-29 live ci: Keep the tier keeper on", "question_id": null},
+                        {"text": "2026-10-28 live mux: Use the shared pane for retract", "question_id": "q-demo-2"}
+                    ], "rows": [
+                        {"text": "2026-11-03 live mux: Ship the Decisions tab whole", "question_id": "q-demo-1"},
+                        {"text": "2026-11-02 live ci: Hold CI until the ranked PRs land", "question_id": null},
+                        {"text": "2026-10-30 expired push: Retry after the rate limit", "question_id": null},
+                        {"text": "2026-10-28 live mux: Use the shared pane for retract", "question_id": "q-demo-2"}
+                    ]}),
+                );
+            }
             // Same refusal as the messages board: an announcements-less
             // gather paints the bell as "nothing here", a shot with nothing
             // to judge (law d-9f18c4d5).
@@ -939,6 +982,15 @@ shoot a root whose chats store has rows (scripts/ops/mux-demo-snapshot.sh seeds 
                 }
                 Some(ViewKind::BellFull) => {
                     view.bell.size = super::bell::Size::Full;
+                }
+                Some(ViewKind::BellDecisions) => {
+                    view.bell.tab = super::bell::Tab::Decisions;
+                    view.bell.size = super::bell::Size::Wide;
+                }
+                Some(ViewKind::BellAuditTab) => {
+                    view.bell.tab = super::bell::Tab::Decisions;
+                    view.bell.size = super::bell::Size::Wide;
+                    view.bell.audit_only = true;
                 }
                 _ => {}
             }
@@ -1414,6 +1466,20 @@ pr_number (scripts/ops/mux-demo-snapshot.sh seeds one)",
         | Some(ViewKind::MessagesYou)
         | Some(ViewKind::MessagesYouThread)
         | None => {}
+        Some(ViewKind::Decisions) => {
+            let node = format!("x-{}", 7145);
+            let rows = serde_json::from_value(serde_json::json!([
+                {"decision_id":"d-1","decision":"Ship the Decisions tab whole","subject":node,"subject_node":node,"subject_pr":"","subject_text":"","decided_by":"jc","authority_source":"operator","quote":"build all of it","ts":"2026-11-03T09:00:00Z","lifecycle":"live","lane":"law","question":"Split the node into three PRs?"},
+                {"decision_id":"d-2","decision":"Hold CI until the ranked PRs land","subject":"fnodotdev/fno#4414","subject_node":"","subject_pr":"#4414","subject_text":"","decided_by":"7c1e9a02-1111-4222-8333-444455556666","decided_by_name":"iris","authority_source":"role","ts":"2026-11-02T15:30:00Z","lifecycle":"live","lane":"coord"},
+                {"decision_id":"d-3","decision":"Retry the push after the rate limit","subject":"push","subject_node":"","subject_pr":"","subject_text":"push","ts":"2026-10-30T11:00:00Z","lifecycle":"expired","lane":"unattributed"},
+                {"decision_id":"d-4","decision":"Use the shared pane for retract","subject":"mux","subject_node":"","subject_pr":"","subject_text":"mux","ts":"2026-10-28T08:15:00Z","lifecycle":"live","lane":"unattributed"}
+            ]))
+            .map_err(|e| e.to_string())?;
+            crate::client::decisions_view::open_rows(&mut view, rows);
+        }
+    }
+    if keys_footer {
+        super::key_grid::toggle(&mut view);
     }
     crate::lattice::freeze_spin();
     Ok(view.compose())
@@ -1622,6 +1688,10 @@ mod tests {
             ("connections-add-local", ViewKind::ConnectionsAddLocal),
             ("needs", ViewKind::Needs),
             ("dock", ViewKind::Dock),
+            ("decisions", ViewKind::Decisions),
+            ("bell-audit", ViewKind::BellAudit),
+            ("bell-decisions", ViewKind::BellDecisions),
+            ("bell-audit-tab", ViewKind::BellAuditTab),
             ("machines", ViewKind::Machines),
         ] {
             let args = parse_extra(&["--view", name]).expect(name);
