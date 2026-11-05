@@ -168,11 +168,26 @@ fn update_baseline(root: &Path) -> i32 {
         if n == 0 || line.trim().is_empty() {
             continue;
         }
-        if let Some(leaf) = line.split('\t').next() {
-            if !leaf.trim().is_empty() {
-                leaves.insert(leaf.trim().to_string());
-            }
+        let fields: Vec<&str> = line.split('\t').collect();
+        if fields.len() < 2 {
+            continue;
         }
+        let leaf = fields[0].trim();
+        // The agents rows are the native binary's old-spelling contract; the
+        // live surface rows below carry that half, so the map rows are skipped
+        // here exactly as manifest_drift skips them.
+        if leaf.is_empty() || leaf.split_whitespace().next() == Some("agents") {
+            continue;
+        }
+        // The baseline holds the projected surface (the leaf itself on KEEP,
+        // the group head otherwise), the same projection manifest_drift
+        // checks; the raw map rows are the registry, not the surface.
+        let projected = if fields[1].trim() == "KEEP" {
+            leaf.to_string()
+        } else {
+            leaf.split_whitespace().next().unwrap_or(leaf).to_string()
+        };
+        leaves.insert(projected);
     }
     for row in carried {
         leaves.insert(row_path(&row));
@@ -191,13 +206,26 @@ fn update_baseline(root: &Path) -> i32 {
     }
     let mut rows: Vec<String> = leaves.into_iter().collect();
     rows.sort();
-    let header = "# Known command surface held by the CI ratchet.\n\
-                  # The Rust half (typed clap tree + fno-agents) is enumerated live; the\n\
-                  # fno-py registry rows are pinned by this file plus the collapse map and\n\
-                  # the collapse-flags file, all edited in the PR that changes a leaf.\n\
-                  # A deliberate addition carries a PR-body line:  command-exception: <rationale>\n";
-    let body = format!("{header}{}\n", rows.join("\n"));
+    // The hand-maintained header carries the load-bearing regeneration
+    // instructions; a regen preserves it and replaces only the row block. A
+    // file with no comment block (first generation) gets the template.
     let path = root.join(BASELINE_REL);
+    let existing = std::fs::read_to_string(&path).unwrap_or_default();
+    let comments: Vec<&str> = existing
+        .lines()
+        .take_while(|l| l.starts_with('#'))
+        .collect();
+    let preserved = comments.join("\n");
+    let header: &str = if comments.is_empty() {
+        "# Known command surface held by the CI ratchet.\n\
+         # The Rust half (typed clap tree + fno-agents) is enumerated live; the\n\
+         # fno-py registry rows are pinned by this file plus the collapse map and\n\
+         # the collapse-flags file, all edited in the PR that changes a leaf.\n\
+         # A deliberate addition carries a PR-body line:  command-exception: <rationale>\n"
+    } else {
+        preserved.as_str()
+    };
+    let body = format!("{header}\n{}\n", rows.join("\n"));
     if std::fs::write(&path, &body).is_err() {
         eprintln!("command-ratchet: cannot write {}", path.display());
         return 1;

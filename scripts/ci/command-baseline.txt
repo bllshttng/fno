@@ -32,6 +32,9 @@
 # (same shape as `command-exception:`; removals are free and need no line).
 #
 # Scope: the hidden-option coverage is fno-py only. The Rust front's COMMANDS are
+# read from its dispatchers and cross-checked against the live binary, but its
+# FLAGS are not enumerated, so a hidden flag on a mux command is invisible to this
+# gate. The lint output names that boundary on every green run.
 #
 # The fno-agents rows are enumerated live from the binary's own dispatch
 # source and defended in both directions (agents_surface): a verb cannot be
@@ -40,286 +43,22 @@
 # recorded in scripts/ci/agents-hidden-verbs.tsv. The hidden verbs retire
 # into nested groups per the fno-agents debt row in menu-caps-debt.tsv; a
 # fold PR regenerates this file in the same change.
-agents adopt
-agents announce
-agents ask
-agents attach
-agents attest
-agents authorized-merge
-agents bash-census
-agents capabilities
-agents census
-agents claim acquire
-agents claim list
-agents claim reap
-agents claim refresh
-agents claim release
-agents claim session-pid
-agents claim status
-agents codex-session-for-pid
-agents compaction
-agents digest
-agents discovered-json
-agents distress-scan
-agents distress-verdicts
-agents drive-authority
-agents evals-macro
-agents fallback-chain
-agents feed
-agents finalize
-agents fleet-incident
-agents friction-escalate
-agents gate-status
-agents harness probe
-agents heal-token
-agents history
-agents honesty-sweep
-agents incident
-agents judge
-agents kill-check
-agents lead-checkin
-agents lead-history
-agents lead-rundown
-agents list
-agents liveness
-agents logs
-agents loop
-agents loop-check
-agents loops
-agents mail ack
-agents mail drain
-agents mail drain-self
-agents mail hold
-agents mail hold-release
-agents mail list
-agents mail pane-prepare
-agents mail reply
-agents mail seed-provenance
-agents mail send
-agents mail sent
-agents mail show
-agents mail status
-agents mail team
-agents mail triage
-agents mail unread
-agents mail withdraw
-agents mail-teach
-agents name
-agents needs
-agents org-fold
-agents org-vacancies
-agents orphans
-agents pane-identity
-agents peek
-agents permission-tokens
-agents probe-run
-agents prove-it-verdicts
-agents provider-cap
-agents reap
-agents reconcile
-agents recover
-agents register
-agents registry-json
-agents registry-repair
-agents rename
-agents report
-agents restart
-agents resume
-agents retask
-agents review-coverage
-agents revival-check
-agents rm
-agents role
-agents roles ls
-agents route-slot
-agents sandbox-probe
-agents select-read
-agents session-start-bytes
-agents spawn
-agents spawn-axes
-agents spawn-gate
-agents spawn-guard
-agents spawn-overlay
-agents stale-escalate
-agents status
-agents stop
-agents subscribe
-agents sweep
-agents target-family
-agents team
-agents test-run
-agents top
-agents trace
-agents transcript
-agents truth
-agents verify-evidence
-agents wait
-agents watch
-agents watchdog
-agents whoami
-agents worked-nodes
 backlog
 backlog advance
-backlog album
-backlog annotate add
-backlog annotate list
-backlog annotate resolve
-backlog archive
-backlog backfill-deferred-kind
-backlog bases
-backlog board
-backlog carveout add
-backlog carveout list
-backlog carveout resolve
-backlog carveout update
-backlog collisions check
-backlog contain
-backlog cost
-backlog decompose
-backlog defer
-backlog demand
-backlog dispatch-lanes
 backlog done
-backlog encounter
 backlog get
-backlog groom
-backlog intake
-backlog join
-backlog lane-fill
-backlog maintain
-backlog migrate-difficulty
-backlog migrate-priorities
-backlog migrate-updated-at
 backlog next
-backlog note
-backlog project-root
-backlog provenance
-backlog queue
 backlog queued
-backlog rank
-backlog ready
-backlog relatedness build
-backlog relatedness get
-backlog remove
-backlog render-views
-backlog reopen
-backlog retract
-backlog retro drain-postmortems
-backlog retro run
-backlog retro sweep-carveouts
-backlog roadmap
-backlog session add
-backlog session backfill
-backlog session close
-backlog session open
-backlog session reap-open
-backlog status
-backlog supersede
-backlog triage
-backlog unarchive
-backlog unclaim
-backlog undefer
-backlog undispatched
-backlog unqueue
-backlog unsupersede
-backlog version
-backlog view
-backlog worked
 bundle
-bundle check
-bundle lint
 config
 config accounts
-config active-backlog
-config assert-subagent-budget
-config build-dir
-config doctor
 config get
-config history
-config plugin
-config project
-config rm
-config route
-config routing
-config schema
 config set
-config status-sinks
-config unset
 cost
 delivery evaluate
 do
-do ci status
-do delivery evaluate
-do feedback
-do pr attestation retract
-do pr base-check
-do pr base-lineage-check
-do pr bind-created
-do pr closure-trailer
-do pr coverage-check
-do pr coverage-publish
-do pr coverage-waive
-do pr create
-do pr evidence-check
-do pr evidence-required
-do pr global-receipt-events-path
-do pr graphql-exec
-do pr heal
-do pr hold-check
-do pr info
-do pr list
-do pr logs
-do pr merge
-do pr merge-result-check
-do pr next-receipt-generation
-do pr publish-review
-do pr push
-do pr rebase
-do pr review-hold
-do pr ritual
-do pr status
-do pr sync-canonical
-do pr verify
-do pr wait
-do pr watch
-do research
-do review classify
-do review invocations
-do review post-dispositions
-do review resolve-level
-do think dispatch
-do think inspect
 doctor
-doctor bundle
-doctor evals export
-doctor evals grade
-doctor evals graduate
-doctor evals macro
-doctor evals qualify
-doctor evals report
-doctor evals run
-doctor evals trend
-doctor event
-doctor harness
-doctor harness-matrix
-doctor intel
-doctor observer judge
-doctor observer replay
-doctor observer sweep
-doctor plugin-file
-doctor route
-doctor stalls
-doctor test
-doctor update
 evals
-evals export
-evals grade
-evals graduate
-evals macro
-evals qualify
-evals report
-evals run
-evals trend
 fno-agents
 fno-agents active-backlog-receipt
 fno-agents adopt
@@ -553,24 +292,9 @@ fno-agents worker-wake
 help
 mux
 paths
-paths handoff
 plan
-plan brief
-plan folder-audit
-plan graduate
-plan migrate-keys
-plan path
-plan reconcile-status
-plan rung
-plan set-expected
-plan stamp
-plan sync
-plan validate
 pr-watch
 resume
-resume receipt show
-resume receipt validate
-resume receipt write
 uninstall
 update
 version
