@@ -1652,7 +1652,11 @@ fn spawn_detached(argv: &[String]) -> std::io::Result<u32> {
             Ok(())
         })
     };
-    cmd.spawn().map(|c| c.id())
+    cmd.spawn().map(|c| {
+        let pid = c.id();
+        crate::orphan_reap::release_child(pid);
+        pid
+    })
 }
 
 /// `--detach`: one pid-file probe, one spawn, one arm row, exit 0. The child

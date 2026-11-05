@@ -910,13 +910,22 @@ pub fn maybe_tick(arm: &Arm, home: crate::paths::AgentsHome) {
         let outcome = run_once(&cwd, &crate::blueprint_judge::default_spawn);
         let (acted, skip, detail) = match outcome {
             Ok(summary) => {
+                if let Some(why) = &summary.reader_failure {
+                    // The tick ledger is not the daemon log; an operator
+                    // greps the log first, so a failed read or wait names
+                    // itself here.
+                    eprintln!("judge: the reader failed: {why}");
+                }
                 let detail = summary
                     .reader_failure
                     .clone()
                     .unwrap_or_else(|| format!("{} verdicts", summary.written));
                 (summary.written as u64, None, detail)
             }
-            Err(why) => (0, Some("error"), why),
+            Err(why) => {
+                eprintln!("judge: the run failed: {why}");
+                (0, Some("error"), why)
+            }
         };
         let journal = crate::loop_runtime::Journal::new_raw(
             home.events_jsonl(),

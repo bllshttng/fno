@@ -2292,32 +2292,6 @@ impl Drop for DaemonClaimGuard {
 }
 
 /// Does the stream worker at `sock` report its `claude -p --resume` child ALIVE?
-/// A dead-on-arrival resume (bad/expired UUID, auth failure) exits immediately,
-/// yet the worker still binds its socket and answers `stream.ping`; querying
-/// `stream.status.child_alive` (backed by `try_wait`) distinguishes "worker up +
-/// child live" from "worker up + child already exited", so a DOA adopt is
-/// rejected instead of registered `live` (AC1-ERR; codex review P2). Bounded so a
-/// wedged worker never hangs the daemon; a timeout reads as not-alive.
-async fn stream_worker_reports_child_alive(sock: &std::path::Path) -> bool {
-    let probe = async {
-        let mut conn = UnixStream::connect(sock).await.ok()?;
-        write_request(&mut conn, &Request::new(1, "stream.status", json!({})))
-            .await
-            .ok()?;
-        let resp = crate::protocol::read_response(&mut conn).await.ok()?;
-        Some(
-            resp.result()
-                .and_then(|r| r.get("child_alive"))
-                .and_then(Value::as_bool)
-                .unwrap_or(false),
-        )
-    };
-    matches!(
-        tokio::time::timeout(Duration::from_secs(STREAM_PROBE_TIMEOUT_S), probe).await,
-        Ok(Some(true))
-    )
-}
-
 /// Spawn (adopt) a claude session as a held stream-json thread under the daemon
 /// (Task 5.1). This is the claude analog of the codex/gemini PTY promote path in
 /// `handle_spawn`: validate -> single-writer guard -> spawn the per-session
@@ -2486,6 +2460,8 @@ async fn spawn_claude_stream_lane(
     };
     let worker_pid = child.id();
     let worker_pid_start_time = process_start_time(worker_pid);
+    // The worker runs unwaited; the daemon drain reaps it by pid on exit.
+    crate::orphan_reap::release_child(worker_pid);
     drop(child);
 
     // 5. Wait (bounded) for the worker socket to appear, proving the worker bound.
@@ -2530,7 +2506,7 @@ async fn spawn_claude_stream_lane(
     //     socket and answers `stream.ping`; `stream.status.child_alive` (try_wait)
     //     catches it so the adopt is rejected, not registered live then silently
     //     orphaned.
-    if !stream_worker_reports_child_alive(&sock).await {
+    if !crate::stream_worker::reports_child_alive(&sock).await {
         best_effort_worker_shutdown(&sock).await;
         let _ = ctx.emitter.emit(
             "agent_create_no_session",
@@ -3138,9 +3114,6 @@ const MAX_INJECT_BODY_BYTES: usize = 16 * 1024 * 1024;
 const SWITCHBOARD_TURN_TIMEOUT_MS: u64 = 120_000;
 /// How often the switchboard polls B's frame log while a turn is in flight.
 const SWITCHBOARD_POLL_MS: u64 = 50;
-/// Bound for the liveness probe (connect + stream.ping). A wedged worker must
-/// not hang the daemon on the probe.
-const STREAM_PROBE_TIMEOUT_S: u64 = 2;
 /// Bound for a fire-and-forget mirror write (connect + write_turn + ack).
 const SWITCHBOARD_MIRROR_TIMEOUT_S: u64 = 5;
 /// Grace added over the per-turn deadline for the OUTER bound on a drive, so a
@@ -3177,7 +3150,11 @@ async fn is_live_stream_thread(sock: &std::path::Path) -> bool {
         Some(!resp.is_err())
     };
     matches!(
-        tokio::time::timeout(Duration::from_secs(STREAM_PROBE_TIMEOUT_S), probe).await,
+        tokio::time::timeout(
+            Duration::from_secs(crate::stream_worker::STREAM_PROBE_TIMEOUT_S),
+            probe,
+        )
+        .await,
         Ok(Some(true))
     )
 }
