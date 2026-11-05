@@ -296,3 +296,6 @@ hook-budget.sh
 # fno command wraps it. (Its only cli/src mention used to be a comment in
 # the deleted Python orphans module, which is what satisfied this lint.)
 loadgen.sh
+# Sourced helpers for the git "initializing" worktree lock (setup and every
+# removal path). A pure library: no fno command wraps it.
+worktree-init-lock.sh
