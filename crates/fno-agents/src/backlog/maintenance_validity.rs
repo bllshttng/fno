@@ -1455,18 +1455,6 @@ mod tests {
     use super::*;
 
     // 2026-07-12T00:00:00Z
-    const NOW_MS: i64 = 1_783_814_400_000;
-
-    fn idea(id: &str, age_days: i64, extra: Value) -> Value {
-        let created = chrono::DateTime::from_timestamp_millis(NOW_MS - age_days * 86_400_000)
-            .unwrap()
-            .to_rfc3339();
-        let mut node = json!({"id": id, "title": id, "status": "idea", "created_at": created});
-        for (k, v) in extra.as_object().unwrap() {
-            node[k] = v.clone();
-        }
-        node
-    }
 
     fn packet(id: &str, items: &[(&str, &str)]) -> EvidencePacket {
         EvidencePacket {

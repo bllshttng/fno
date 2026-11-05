@@ -1781,16 +1781,6 @@ mod tests {
         assert_eq!(queue["error"], "roster timeout");
     }
 
-    fn write_hold_plan(dir: &std::path::Path, hold_frontmatter: &str) -> String {
-        let plan = dir.join("plan.md");
-        std::fs::write(
-            &plan,
-            format!("---\nstatus: ready\n{hold_frontmatter}---\n\n# Held\n"),
-        )
-        .unwrap();
-        plan.display().to_string()
-    }
-
     #[test]
     fn a_budget_kill_and_a_failed_exit_tally_apart_but_both_hold_exit_code_1() {
         let mut inputs = inputs_with(json!([]), json!([]), json!([]));

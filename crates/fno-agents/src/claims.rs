@@ -2144,46 +2144,6 @@ mod tests {
             .collect()
     }
 
-    /// Pins FNO_SPACES_DIR (and FNO_AGENTS_HOME, the state_path EnvGuard
-    /// pattern) so the space-journal fallback resolves inside the test root
-    /// instead of ambient $HOME. Restores both on drop; the env lock keeps a
-    /// threaded sibling test from flipping the pins mid-assert.
-    struct SpacesPinGuard {
-        _lock: std::sync::MutexGuard<'static, ()>,
-        prev_spaces: Option<std::ffi::OsString>,
-        prev_home: Option<std::ffi::OsString>,
-    }
-
-    impl SpacesPinGuard {
-        fn new(td: &Path) -> Self {
-            let lock = crate::claims::test_env_lock()
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            let prev_spaces = std::env::var_os("FNO_SPACES_DIR");
-            let prev_home = std::env::var_os("FNO_AGENTS_HOME");
-            std::env::set_var("FNO_SPACES_DIR", td.join("spaces"));
-            std::env::set_var("FNO_AGENTS_HOME", td.join("agents-home"));
-            Self {
-                _lock: lock,
-                prev_spaces,
-                prev_home,
-            }
-        }
-    }
-
-    impl Drop for SpacesPinGuard {
-        fn drop(&mut self) {
-            match self.prev_spaces.take() {
-                Some(v) => std::env::set_var("FNO_SPACES_DIR", v),
-                None => std::env::remove_var("FNO_SPACES_DIR"),
-            }
-            match self.prev_home.take() {
-                Some(v) => std::env::set_var("FNO_AGENTS_HOME", v),
-                None => std::env::remove_var("FNO_AGENTS_HOME"),
-            }
-        }
-    }
-
     // ---- lease renewal -----------------------------------------
 
     fn replace_fixture(path: &Path, text: &str) -> Result<(), String> {

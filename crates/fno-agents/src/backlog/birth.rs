@@ -646,65 +646,6 @@ mod tests {
         assert_eq!(rank, "autonomy");
     }
 
-    /// Pin the name read away from the developer's own config: HOME and the
-    /// global-settings redirect both feed the candidate walk, and git reads
-    /// `user.name` through its own ambient channel (GIT_CONFIG_GLOBAL,
-    /// GIT_CONFIG_SYSTEM) beside HOME, so both redirect too.
-    struct NameEnvGuard {
-        fno_config: Option<std::ffi::OsString>,
-        global_path: Option<std::ffi::OsString>,
-        home: Option<std::ffi::OsString>,
-        git_config_global: Option<std::ffi::OsString>,
-        git_config_system: Option<std::ffi::OsString>,
-    }
-
-    impl NameEnvGuard {
-        fn redirect(home: &std::path::Path, fno_config: Option<&std::path::Path>) -> Self {
-            let fno_config = fno_config.map(std::path::PathBuf::from);
-            let guard = Self {
-                fno_config: std::env::var_os("FNO_CONFIG"),
-                global_path: std::env::var_os("FNO_GLOBAL_SETTINGS_PATH"),
-                home: std::env::var_os("HOME"),
-                git_config_global: std::env::var_os("GIT_CONFIG_GLOBAL"),
-                git_config_system: std::env::var_os("GIT_CONFIG_SYSTEM"),
-            };
-            std::env::remove_var("FNO_GLOBAL_SETTINGS_PATH");
-            std::env::remove_var("GIT_CONFIG_GLOBAL");
-            std::env::remove_var("GIT_CONFIG_SYSTEM");
-            match &fno_config {
-                Some(p) => std::env::set_var("FNO_CONFIG", p),
-                None => std::env::remove_var("FNO_CONFIG"),
-            }
-            std::env::set_var("HOME", home);
-            guard
-        }
-    }
-
-    impl Drop for NameEnvGuard {
-        fn drop(&mut self) {
-            match &self.fno_config {
-                Some(v) => std::env::set_var("FNO_CONFIG", v),
-                None => std::env::remove_var("FNO_CONFIG"),
-            }
-            match &self.global_path {
-                Some(v) => std::env::set_var("FNO_GLOBAL_SETTINGS_PATH", v),
-                None => std::env::remove_var("FNO_GLOBAL_SETTINGS_PATH"),
-            }
-            match &self.home {
-                Some(v) => std::env::set_var("HOME", v),
-                None => std::env::remove_var("HOME"),
-            }
-            match &self.git_config_global {
-                Some(v) => std::env::set_var("GIT_CONFIG_GLOBAL", v),
-                None => std::env::remove_var("GIT_CONFIG_GLOBAL"),
-            }
-            match &self.git_config_system {
-                Some(v) => std::env::set_var("GIT_CONFIG_SYSTEM", v),
-                None => std::env::remove_var("GIT_CONFIG_SYSTEM"),
-            }
-        }
-    }
-
     #[test]
     fn the_birth_hook_door_refuses_a_malformed_argv() {
         let argv =

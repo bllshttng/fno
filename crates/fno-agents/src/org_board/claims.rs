@@ -81,26 +81,6 @@ mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
 
-    fn claim(key: &str, holder: &str, expires_at: i64) -> crate::claims::ClaimRecord {
-        let now = crate::claims::now_ms();
-        crate::claims::ClaimRecord {
-            schema_version: 1,
-            key: key.into(),
-            holder: holder.into(),
-            acquired_at: now,
-            pid: Some(1),
-            host: "test-host".into(),
-            pid_unavailable: false,
-            expires_at: Some(expires_at),
-            reason: Some(format!("spawn handover window for {key}")),
-            harness: None,
-            session_id: None,
-            pid_provenance: None,
-            machine_id: None,
-            metadata: Default::default(),
-        }
-    }
-
     /// A claims dir whose state root (`graph.db` home) is private to the test.
     fn scan_dir(tag: &str) -> PathBuf {
         let root = std::env::temp_dir().join(format!("kb-claims-{tag}-{}", std::process::id()));

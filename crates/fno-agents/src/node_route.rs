@@ -468,12 +468,6 @@ mod tests {
         }
     }
 
-    fn write_transcript(dir: &std::path::Path, lines: &[&str]) -> PathBuf {
-        let path = dir.join("transcript.jsonl");
-        std::fs::write(&path, lines.join("\n")).unwrap();
-        path
-    }
-
     // AC1-HP: the name route resolves what the reverse join missed.
     #[test]
     fn route_rows() {

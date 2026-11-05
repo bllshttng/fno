@@ -356,12 +356,6 @@ mod tests {
         names.iter().map(|n| n.to_string()).collect()
     }
 
-    fn claims(map: &[(&str, &[&str])]) -> HashMap<String, HashSet<String>> {
-        map.iter()
-            .map(|(n, sids)| (n.to_string(), sids.iter().map(|s| s.to_string()).collect()))
-            .collect()
-    }
-
     #[test]
     fn a_promoted_lead_is_never_the_worker_at_any_fold() {
         let graph = vec![node(

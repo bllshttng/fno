@@ -2113,12 +2113,6 @@ mod tests {
         )
     }
 
-    fn termination(ts: &str, session: &str, reason: &str) -> String {
-        format!(
-            r#"{{"ts":"{ts}","type":"termination","source":"hook","data":{{"session_id":"{session}","reason":"{reason}"}}}}"#
-        )
-    }
-
     // The whole default window: since=0 lets every fixture ts through.
     const ALL: u64 = 0;
 
@@ -2215,34 +2209,7 @@ mod tests {
         std::fs::remove_dir_all(home.root()).ok();
     }
 
-    fn mail_escalation(
-        ts: &str,
-        reason: &str,
-        sender: &str,
-        recipient: &str,
-        summary: &str,
-    ) -> String {
-        format!(
-            r#"{{"ts":"{ts}","type":"mail_escalation","source":"target","data":{{"reason":"{reason}","sender":"{sender}","recipient":"{recipient}","summary":"{summary}"}}}}"#
-        )
-    }
-
     // --- operator_question (x-bbbb: NeedKind::Decision producer) --------------
-
-    fn operator_question(ts: &str, qid: &str, question: &str, node: Option<&str>) -> String {
-        let node_field = node
-            .map(|n| format!(r#","node":"{n}""#))
-            .unwrap_or_default();
-        format!(
-            r#"{{"ts":"{ts}","type":"operator_question","source":"target","data":{{"question_id":"{qid}","question":"{question}"{node_field}}}}}"#
-        )
-    }
-
-    fn operator_question_closed(ts: &str, qid: &str) -> String {
-        format!(
-            r#"{{"ts":"{ts}","type":"operator_question_closed","source":"target","data":{{"question_id":"{qid}"}}}}"#
-        )
-    }
 
     #[test]
     fn question_index_is_a_default_source_and_ask_is_folded_as_evidence() {
@@ -2437,10 +2404,6 @@ mod tests {
     }
 
     // --- carveout_age_item ------------------------------------------------
-
-    fn carveout(ts: &str, kind: &str) -> String {
-        format!(r#"{{"ts":"{ts}","kind":"{kind}","id":"c-1"}}"#)
-    }
 
     // --- stale_claim_item ---------------------------------------------------
 

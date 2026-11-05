@@ -281,20 +281,4 @@ mod tests {
         let get = env(&[("FNO_PANE", "7"), ("FNO_SERVER", "main")]);
         assert_eq!(from_parts(get, &table, 40), None);
     }
-
-    fn rows(v: &[(u32, u32, &str)]) -> Vec<ProcRow> {
-        v.iter()
-            .map(|&(pid, ppid, command)| crate::census::test_proc_row(pid, ppid, command))
-            .collect()
-    }
-
-    fn pane(session: &str, pane_id: u64, child: u32, cwd: &str) -> PaneRow {
-        PaneRow {
-            session: session.into(),
-            pane_id,
-            child_pid: child,
-            cwd: cwd.into(),
-            alt_cwd: String::new(),
-        }
-    }
 }

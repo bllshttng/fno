@@ -1425,18 +1425,6 @@ fn print_branch_breakdown(path: &Path, session_id: &str) {
 mod tests {
     use super::*;
 
-    fn row(pid: u32, ppid: u32, command: &str, rss_kb: u64) -> ProcRow {
-        ProcRow {
-            pid,
-            ppid,
-            state: 'S',
-            elapsed_s: 1,
-            cpu_pct: 1.0,
-            rss_kb,
-            command: command.into(),
-        }
-    }
-
     /// The ported `fno.cost._session_cost` parse, characterized end to end on
     /// a small transcript: usage accumulation, (message id, requestId) dedup,
     /// subagent and user-vs-mail classification, the context-size halving

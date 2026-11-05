@@ -12,10 +12,6 @@ fn node(id: &str, extra: Value) -> Value {
     n
 }
 
-fn ids<T>(items: &[T], f: impl Fn(&T) -> &str) -> Vec<String> {
-    items.iter().map(|i| f(i).to_string()).collect()
-}
-
 fn do_node(id: &str, extra: Value) -> Value {
     let mut n = node(
         id,

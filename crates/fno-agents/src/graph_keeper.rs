@@ -3567,13 +3567,6 @@ mod tests {
         })
     }
 
-    /// Seed graph.db with the exact fixture rows.
-    fn seeded(dir: &tempfile::TempDir, entries: &str) -> PathBuf {
-        let graph = dir.path().join("graph.json");
-        seed_rows(&graph, entries);
-        graph
-    }
-
     /// The seed row has no status, so it rides the raw carry until the
     /// first commit moves it into nodes. The move must not restart the
     /// row's version at the value the second writer's begin saw.
@@ -3839,25 +3832,6 @@ mod tests {
             !reply["result"]["version"].as_str().unwrap_or("").is_empty(),
             "the version rides the reply"
         );
-    }
-
-    fn seed_render_store(graph: &Path) -> String {
-        graph_store::locked_mutate(
-            graph,
-            graph_store::MutateInput {
-                entries: vec![json!({
-                    "id": "x-rend", "title": "Render me", "slug": "x-rend",
-                    "type": "feature", "status": "idea", "priority": "p2",
-                    "created_at": "2026-09-11T00:00:00+00:00"
-                })],
-                canonical_path: None,
-                base_version: graph_store::base_version(graph).unwrap(),
-                plan_rungs: None,
-            },
-            Duration::from_secs(2),
-        )
-        .unwrap();
-        crate::backlog::version(graph).unwrap()
     }
 }
 /// Live pids advertising a store keeper whose graph tree (file AND parent

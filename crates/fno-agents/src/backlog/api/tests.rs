@@ -6,7 +6,6 @@
 
 use super::*;
 use serde_json::{json, Map, Value};
-use std::ffi::OsString;
 use std::sync::MutexGuard;
 use tempfile::TempDir;
 
@@ -93,62 +92,6 @@ fn store_pair() -> (ClaimsRootPin, TempDir, TempDir, Store, Store) {
     let first_store = arm(&first_dir);
     let second_store = arm(&second_dir);
     (pin, first_dir, second_dir, first_store, second_store)
-}
-
-/// A claims root pinned for the whole test body, with one live node claim:
-/// the holder of record reads from the claim store at parse time, so a
-/// claimed-filter or holder assertion needs this seeded, never the row's
-/// retired mirror fields.
-struct ClaimsFixture {
-    _guard: MutexGuard<'static, ()>,
-    _root: TempDir,
-    previous: Vec<(&'static str, Option<OsString>)>,
-}
-
-impl ClaimsFixture {
-    fn new() -> Self {
-        let guard = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        let root = tempfile::tempdir().unwrap();
-        let names = std::iter::once("FNO_CLAIMS_ROOT")
-            .chain(crate::claims::AMBIENT_IDENTITY_NAMES.iter().copied())
-            .chain(std::iter::once("CLAUDE_SESSION_ID"));
-        let mut previous = Vec::new();
-        for name in names {
-            previous.push((name, std::env::var_os(name)));
-            std::env::remove_var(name);
-        }
-        std::env::set_var("FNO_CLAIMS_ROOT", root.path());
-        std::env::set_var("CLAUDE_CODE_SESSION_ID", "s-1");
-        match crate::claims::acquire(
-            "node:ab-one",
-            "target-session:s-1",
-            crate::claims::AcquireOpts {
-                root: Some(root.path().to_path_buf()),
-                ..Default::default()
-            },
-        ) {
-            crate::claims::AcquireOutcome::Acquired(_) => {}
-            other => panic!("fixture node claim failed: {other:?}"),
-        };
-        Self {
-            _guard: guard,
-            _root: root,
-            previous,
-        }
-    }
-}
-
-impl Drop for ClaimsFixture {
-    fn drop(&mut self) {
-        for (name, value) in self.previous.drain(..) {
-            match value {
-                Some(value) => std::env::set_var(name, value),
-                None => std::env::remove_var(name),
-            }
-        }
-    }
 }
 
 // -- queries ----------------------------------------------------------------

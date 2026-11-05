@@ -984,24 +984,6 @@ mod tests {
         );
     }
 
-    /// One swept row per node id, shaped as `claim_sweep_payload_from_records`
-    /// returns them.
-    fn swept(rows: &[(&str, &str, &str)]) -> BTreeMap<String, Value> {
-        rows.iter()
-            .map(|(id, state, holder)| {
-                (
-                    id.to_string(),
-                    json!({
-                        "key": format!("node:{id}"),
-                        "state": state,
-                        "holder": holder,
-                        "basis": "live",
-                    }),
-                )
-            })
-            .collect()
-    }
-
     #[test]
     fn a_sweep_that_did_not_run_reads_unreadable_never_no_record() {
         let fold = fold_one(
@@ -1056,12 +1038,6 @@ mod tests {
         let line = stuck_line(&v);
         assert!(line.contains("2 ready over 60m with no worker"));
         assert!(!line.contains("x-3") && !line.contains("x-4"));
-    }
-
-    /// One fold shaped as `fold_one` returns it, under a caller-chosen scope.
-    fn fold_of(rows: &[Value]) -> Value {
-        json!({"status": "ok", "total": rows.len(), "counts": {},
-               "nodes": rows, "omitted": 0})
     }
 
     /// An ok fold carries its scope's epic load and the configured cap;
@@ -1126,12 +1102,5 @@ mod tests {
             scope["ideas"],
             json!([{"scope": "epic:e-1", "open_ideas": 1, "full": false}])
         );
-    }
-
-    fn team_row(name: &str, scope: &str, level: i64, status: &str) -> Value {
-        json!({
-            "name": name, "status": status, "role_scope": scope, "role_level": level,
-            "cwd": "/repo/p", "harness": "claude", "created_at": "2026-09-07T00:00:00Z"
-        })
     }
 }

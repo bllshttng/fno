@@ -143,15 +143,6 @@ fn decode(bytes: &[u8], path: &Path) -> Result<Store, String> {
     Ok(store)
 }
 
-#[cfg(test)]
-fn write(path: &Path, store: &Store) -> Result<(), String> {
-    let lock = crate::state::acquire_exclusive(&crate::state::lock_path(path))
-        .map_err(|e| e.to_string())?;
-    let out = crate::state::write_json_atomic(path, store).map_err(|e| e.to_string());
-    let _ = lock.unlock();
-    out
-}
-
 /// Read-modify-write under the exclusive sidecar lock, the registry's own
 /// contract (`state::update_registry`): a check-in naming, a settle effect
 /// and the daemon prune all mutate this file, and two writers that each

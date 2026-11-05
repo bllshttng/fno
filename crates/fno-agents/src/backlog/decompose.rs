@@ -2831,21 +2831,6 @@ fn fanout_spawn_think(child: &Value, why_digest: &str, lane: &'static str) -> Fa
 mod tests {
     use super::*;
 
-    fn grp(slug: &str, deps: &[&str]) -> NormalizedGroup {
-        NormalizedGroup {
-            slug: slug.to_string(),
-            title: format!("Group {slug}"),
-            waves: String::new(),
-            blocked_by_groups: deps.iter().map(|s| s.to_string()).collect(),
-            project: None,
-            cwd: None,
-            dep: "hard".to_string(),
-            stub_against: None,
-            needs_think: false,
-            adopt: Vec::new(),
-        }
-    }
-
     #[test]
     fn an_explicit_cap_over_the_ceiling_refuses() {
         let default = Some((4, "the default 4"));

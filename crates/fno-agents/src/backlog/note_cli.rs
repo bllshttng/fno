@@ -1234,12 +1234,6 @@ mod tests {
 
     // -- import route -----------------------------------------------------
 
-    fn fixture(name: &str) -> (tempfile::TempDir, std::path::PathBuf) {
-        let dir = tempfile::TempDir::new().unwrap();
-        let graph = dir.path().join(name);
-        (dir, graph)
-    }
-
     fn comment_graph() -> (tempfile::TempDir, std::path::PathBuf) {
         let dir = tempfile::tempdir().unwrap();
         let graph = dir.path().join("graph.json");
@@ -1272,12 +1266,6 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         std::env::set_var("FNO_CLAIMS_ROOT", root.path());
         (guard, root)
-    }
-
-    fn sh(script: &str) -> std::process::Command {
-        let mut command = std::process::Command::new("sh");
-        command.args(["-c", script]);
-        command
     }
 
     #[test]

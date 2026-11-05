@@ -2042,16 +2042,6 @@ mod tests {
         assert!(verdict_rows_from(&json!({"verdicts": {"items": []}})).is_empty());
     }
 
-    fn blocked(ts: &str, session: &str, node: &str) -> BlockedRow {
-        BlockedRow {
-            ts: ts.to_string(),
-            session: session.to_string(),
-            node: Some(node.to_string()),
-            reason: "stuck".to_string(),
-            evidence: None,
-        }
-    }
-
     #[test]
     fn blocked_rows_err_on_a_broken_store() {
         // AC4-ERR
