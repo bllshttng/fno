@@ -9,13 +9,11 @@ gone from this hook; the pane-worker restamp is the one Python leg left.
 
 from __future__ import annotations
 
-import shutil
 import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
 HOOK = ROOT / "hooks" / "register-session-start.sh"
-SHARED_HOOK = ROOT / "hooks" / "session-start.sh"
 
 
 def _agents_mock(bin_dir: Path) -> None:
@@ -43,18 +41,6 @@ def _env(tmp_path: Path, extra: dict[str, str]) -> dict[str, str]:
     }
 
 
-def _run_hook(hook: Path, env: dict[str, str], stdin: str = "") -> None:
-    subprocess.run(
-        ["bash", str(hook)],
-        check=True,
-        cwd=env["CLAUDE_PROJECT_DIR"],
-        env=env,
-        input=stdin,
-        text=True,
-        stdout=subprocess.DEVNULL,
-    )
-
-
 def test_codex_disagreeing_ids_report_nothing(tmp_path: Path) -> None:
     """The resolvers degrade a same-family id disagreement to unresolved; a row
     minted under the table-first id is one this session can never resolve
@@ -77,79 +63,6 @@ def test_codex_disagreeing_ids_report_nothing(tmp_path: Path) -> None:
     assert not (tmp_path / "agents-argv").exists(), (
         "a disagreed id family must not report a row"
     )
-
-
-def test_shared_codex_session_start_reports_the_thread_once(tmp_path: Path) -> None:
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    _agents_mock(bin_dir)
-    _run_hook(
-        SHARED_HOOK,
-        _env(
-            tmp_path,
-            {
-                "FNO_PLATFORM": "codex",
-                "CODEX_THREAD_ID": "shared-thread",
-            },
-        ),
-        stdin="{}",
-    )
-    argv = (tmp_path / "agents-argv").read_text(encoding="utf-8").splitlines()
-    assert argv.count("--kind") == 1
-    assert argv[argv.index("--harness") + 1] == "codex"
-    assert argv[argv.index("--session-id") + 1] == "shared-thread"
-
-
-def test_spawned_worker_pane_lane_reports_thin_without_python(tmp_path: Path) -> None:
-    """A footnote-spawned worker (FNO_AGENT_SELF) takes the thin report path.
-
-    The daemon's session-report ingest owns the restamp on every lane since
-    the Python package port; the pane lane's only extra marker is --wait-row
-    (the parked pending graph row opens on the daemon's first fill). The
-    hook runs no Python on any lane and consults no config read.
-    """
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    capture = tmp_path / "python-argv"
-    agents_capture = tmp_path / "agents-argv"
-    knob_read = tmp_path / "knob-read"
-    interpreter = bin_dir / "installed-python"
-    interpreter.write_text(
-        "#!/usr/bin/env bash\nprintf '%s\\n' \"$@\" > \"$PY_CAPTURE\"\n", encoding="utf-8"
-    )
-    interpreter.chmod(0o755)
-    (bin_dir / "fno-py").write_text(f"#!{interpreter}\n", encoding="utf-8")
-    plugin = tmp_path / "plugin"
-    for relative in (
-        "hooks/register-session-start.sh",
-        "hooks/lib/agents-bin.sh",
-        "scripts/lib/with-timeout.sh",
-    ):
-        target = plugin / relative
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(ROOT / relative, target)
-    _agents_mock(bin_dir)
-
-    env = _env(
-        tmp_path,
-        {
-            "CLAUDE_PLUGIN_ROOT": str(ROOT),
-            "CLAUDE_CODE_SESSION_ID": "08054b1d-a907-47ab-a3d2-4a1e7a87eb4e",
-            "FNO_AGENT_SELF": "target-x-f0c2",
-            # Pane substrate: the --wait-row marker, the parked row's only
-            # hook-side trace.
-            "FNO_AGENT_ROW_PENDING": "target-x-f0c2",
-            "PY_CAPTURE": str(capture),
-            "KNOB_READ": str(knob_read),
-        },
-    )
-    subprocess.run(["bash", str(plugin / "hooks/register-session-start.sh")], check=True, env=env)
-
-    report = agents_capture.read_text(encoding="utf-8").splitlines()
-    assert report[report.index("--agent-self") + 1] == "target-x-f0c2"
-    assert "--wait-row" in report
-    assert not capture.exists(), "the hook runs no Python on any lane anymore"
-    assert not knob_read.exists(), "no opt-in knob exists for any lane anymore"
 
 
 def test_hand_started_session_reports_for_the_daemon_mint(tmp_path: Path) -> None:

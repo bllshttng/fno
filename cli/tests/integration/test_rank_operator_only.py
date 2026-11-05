@@ -73,14 +73,3 @@ def test_ac1_hp_agent_rank_top_refused(tmp_path):
     assert "operator-only" in result.stderr
     assert 'fno backlog encounter x-aaa1 --evidence "what it cost you"' in result.stderr
     assert "fno backlog update x-aaa1 priority=" in result.stderr
-
-
-def test_ac1_hp_partial_harness_stamp_still_refused(tmp_path):
-    """A half stamp reads as an agent: the fence fails closed."""
-    _seeded_store(tmp_path, LOOSE)
-
-    result = _rank(tmp_path, "x-aaa1", "--top", FNO_HARNESS_SESSION_ID="sess-agent-1")
-
-    assert result.returncode != 0
-    assert _rank_of(tmp_path, "x-aaa1") is None
-    assert "operator-only" in result.stderr

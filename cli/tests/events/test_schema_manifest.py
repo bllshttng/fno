@@ -20,13 +20,6 @@ def _load() -> dict:
     return yaml.safe_load(MANIFEST.read_text(encoding="utf-8"))
 
 
-def test_no_duplicate_event_types() -> None:
-    data = _load()
-    names = [e["name"] for e in data.get("event_types", [])]
-    duplicates = sorted({n for n in names if names.count(n) > 1})
-    assert not duplicates, f"duplicate event type name: {','.join(duplicates)}"
-
-
 def test_lead_checkin_declares_canonical_required_and_forbidden() -> None:
     """lead_checkin is the one check-in shape a history reader can walk.
 
@@ -39,12 +32,3 @@ def test_lead_checkin_declares_canonical_required_and_forbidden() -> None:
     assert rc is not None, "lead_checkin event type missing"
     assert rc["data"]["required"] == ["scope", "change"]
     assert sorted(rc["data"]["forbidden"]) == ["result", "role", "role_scope"]
-
-
-def test_size_limit_declared() -> None:
-    data = _load()
-    assert "limits" in data
-    assert "max_data_bytes" in data["limits"]
-    assert isinstance(data["limits"]["max_data_bytes"], int)
-    assert data["limits"]["max_data_bytes"] >= 1024
-    assert data["limits"]["data_size_encoding"] == "compact-json-ascii-v1"

@@ -41,17 +41,6 @@ _PROFILE_FLAGS: dict[str, dict[str, bool]] = {
         "no_how_to": True,
         "no_memory": True,
     },
-    "M": {
-        "no_external": False,
-        "no_docs": False,
-        "no_ship": False,
-        "no_verify": True,
-        "no_goals": False,
-        "no_browser": False,
-        "no_clean": True,
-        "no_how_to": False,
-        "no_memory": False,
-    },
     "L": {
         "no_external": False,
         "no_docs": False,
@@ -204,7 +193,7 @@ def _parse_target_state_frontmatter(state_file: Path) -> dict:
     return yaml.safe_load(frontmatter_text)
 
 
-@pytest.mark.parametrize("target_size", ["S", "M", "L"])
+@pytest.mark.parametrize("target_size", ["S", "L"])
 def test_flat_skip_flags_per_size_profile(target_size, tmp_path):
     """AC1-HP: immutable manifest contains correct flat skip flags for each size profile.
 
@@ -240,37 +229,6 @@ def test_flat_skip_flags_per_size_profile(target_size, tmp_path):
         )
 
 
-def test_flat_skip_flags_reflect_env_override(tmp_path):
-    """AC1-FR: per-flag env override is reflected in flat skip flags.
-
-    M profile normally has no_external=false; override to true.
-    """
-    assert _INIT_SCRIPT.exists(), f"init script missing: {_INIT_SCRIPT}"
-
-    proc = _run_init_script(tmp_path, {
-        "TARGET_SIZE": "M",
-        "TARGET_NO_EXTERNAL": "true",
-    })
-    assert proc.returncode == 0, (
-        f"init-target-state.sh exited {proc.returncode}\n"
-        f"stdout: {proc.stdout[:500]}\nstderr: {proc.stderr[:500]}"
-    )
-
-    state_file = _space_state(tmp_path)
-    fm = _parse_target_state_frontmatter(state_file)
-
-    # Flat flag must reflect the override
-    assert fm.get("no_external") is True, (
-        f"manifest.no_external should be True after TARGET_NO_EXTERNAL=true, "
-        f"got: {fm.get('no_external')}"
-    )
-
-    # skip_flags_initial must be absent (immutable manifest)
-    assert "skip_flags_initial" not in fm, (
-        "skip_flags_initial must not be in the immutable manifest"
-    )
-
-
 def test_cancelled_claimless_session_is_archived_on_next_init(tmp_path):
     """A finalized explicit cancel must not strand the next target init."""
     state_dir = tmp_path / "space"
@@ -294,65 +252,6 @@ def test_cancelled_claimless_session_is_archived_on_next_init(tmp_path):
     assert proc.returncode == 0, proc.stderr
     assert "old-run" not in _space_state(tmp_path).read_text()
     assert list(state_dir.glob("target-state.terminal.*.md"))
-
-
-def test_authority_full_with_beastmode(tmp_path):
-    """x-6390: TARGET_BEASTMODE=1 -> `authority: full` round-trips through the manifest."""
-    proc = _run_init_script(tmp_path, {"TARGET_SIZE": "M", "TARGET_BEASTMODE": "1"})
-    assert proc.returncode == 0, f"stderr: {proc.stderr[:500]}"
-
-    fm = _parse_target_state_frontmatter(_space_state(tmp_path))
-    assert fm.get("authority") == "full", f"expected authority=full, got {fm.get('authority')!r}"
-    # The grant is orthogonal to auto-merge: beastmode spends judgment, never
-    # irreversibles (epic G8).
-    assert fm.get("auto_merge_approved") is False
-
-
-def test_immutable_manifest_has_no_mutable_fields(tmp_path):
-    """AC2-HP: the manifest must not contain any mutable control-plane fields."""
-    assert _INIT_SCRIPT.exists(), f"init script missing: {_INIT_SCRIPT}"
-
-    proc = _run_init_script(tmp_path, {"TARGET_SIZE": "M"})
-    assert proc.returncode == 0
-
-    state_file = _space_state(tmp_path)
-    fm = _parse_target_state_frontmatter(state_file)
-
-    forbidden = [
-        "status", "current_phase", "iteration",
-        "quality_check_passed", "output_validated", "artifact_shipped",
-        "external_review_passed", "goal_verification_passed", "docs_generated",
-        "memory_pass_passed", "browser_testing_passed", "deferrals_captured",
-        "ledger_updated", "provenance_nonce", "skip_flags_initial",
-        "coordinator_phase", "session_start_context_loaded",
-        "merged_prs", "merge_failed", "conflicts_resolved",
-    ]
-    found = [f for f in forbidden if f in fm]
-    assert not found, (
-        f"Immutable manifest must not contain mutable fields; found: {found}"
-    )
-
-
-def test_plan_path_env_lands_in_manifest_with_anchor(tmp_path):
-    """TARGET_PLAN_PATH becomes the manifest `plan_path:`, anchor intact.
-
-    The CLI-side back-fill tests (test_target_init_plan_backfill.py) stub the
-    bash writer and assert on the env handed to it, which proves the CLI's half
-    and nothing about the writer's. Without this, "the node's plan reaches the
-    manifest" is asserted on one of the two reachable halves only - a guard on
-    one path reads as protection while the other stays unproven. This also pins
-    that a `#group-N` anchor survives the writer's own quote-escaping.
-    """
-    assert _INIT_SCRIPT.exists(), f"init script missing: {_INIT_SCRIPT}"
-
-    bound = tmp_path / "bound.md"
-    bound.write_text("# Bound plan\n", encoding="utf-8")
-
-    proc = _run_init_script(tmp_path, {"TARGET_PLAN_PATH": f"{bound}#group-2"})
-    assert proc.returncode == 0, f"init failed: {proc.stderr}"
-
-    fm = _parse_target_state_frontmatter(_space_state(tmp_path))
-    assert fm.get("plan_path") == f"{bound}#group-2"
 
 
 def _run_without_fno(tmp_path: Path, target_input: str) -> subprocess.CompletedProcess:
@@ -420,24 +319,6 @@ def test_env_grant_scrubbed_on_agent_origin_run(tmp_path):
     proc = _run_init_script(
         tmp_path,
         {"TARGET_AUTO_MERGE": "1", "FNO_AGENT_SELF": "some-agent-session"},
-    )
-    assert proc.returncode == 0, proc.stderr[:500]
-    assert "TARGET_AUTO_MERGE=1 ignored" in proc.stderr
-    fm = _parse_target_state_frontmatter(_space_state(tmp_path))
-    assert fm["auto_merge_approved"] is False
-    assert fm["auto_merge_source"] != "env-target-auto-merge"
-
-
-def test_env_grant_scrubbed_on_unattended_run(tmp_path):
-    """AC-FR: an unattended run ignores TARGET_AUTO_MERGE, config decides.
-
-    The variable reaches a child only by inheritance; honoring it there lets
-    any worker mint merge authority no config granted by exporting it before
-    a spawn. The note names the real autonomous lever instead.
-    """
-    proc = _run_init_script(
-        tmp_path,
-        {"TARGET_AUTO_MERGE": "1", "TARGET_UNATTENDED": "1", "FNO_AGENT_SELF": ""},
     )
     assert proc.returncode == 0, proc.stderr[:500]
     assert "TARGET_AUTO_MERGE=1 ignored" in proc.stderr

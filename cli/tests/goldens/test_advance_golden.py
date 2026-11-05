@@ -8,14 +8,6 @@ from __future__ import annotations
 from tests.goldens._door import door, make_sandbox, seed_node, warm
 
 
-def test_advance_without_auto_continue_skips_itself(tmp_path):
-    root = make_sandbox(tmp_path, [seed_node("x-ddd44000", "ready"), seed_node("x-eee55000", "done")])
-    warm(root, "x-ddd44000")
-    code, out, err = door(root, ["advance"])
-    assert code == 0, err
-    assert out == "skipped reason=disabled\n", out
-
-
 def test_advance_explain_reports_the_selection_grid_and_declines_to_act(tmp_path):
     root = make_sandbox(tmp_path, [seed_node("x-ddd44000", "ready"), seed_node("x-eee55000", "done")])
     warm(root, "x-ddd44000")

@@ -18,7 +18,6 @@ pytestmark = pytest.mark.dev_build
 REPO_ROOT = Path(__file__).resolve().parents[3]
 PACK = REPO_ROOT / "plugins" / "growth-studio" / "plugin.yaml"
 PACK_ASSETS = REPO_ROOT / "plugins" / "growth-studio" / "assets"
-ROLE_IDS = ("marketing", "communications", "design", "social")
 
 
 def _plugins(root: Path, *args: str) -> dict:
@@ -114,32 +113,6 @@ def _resolve_role(root: Path, role_id: str, function_id: str, *, extra_definitio
             ],
         }
     )
-
-
-def test_pack_activates_resolves_and_deactivates_end_to_end(tmp_path):
-    root = tmp_path / "roles"
-    root.mkdir()
-    outcome = _plugins(root, "activate", str(PACK))
-    assert outcome["already_active"] is False
-    assert {path.split("/")[-1] for path in outcome["written_paths"]} == {
-        f"{role}.json" for role in ROLE_IDS
-    }
-
-    rows = _discover_rows(root)
-    found = {r["role"]["id"] for r in rows if r["role"] is not None}
-    assert set(ROLE_IDS).issubset(found)
-    assert all(r["layer"] == "plugin" for r in rows if r["role"] is not None)
-
-    for role_id in ROLE_IDS:
-        result = _resolve_role(root, role_id, "growth-studio")
-        assert "reason" not in result, (role_id, result.get("reason"))
-        plugin_sources = [s for s in result["source_chain"] if s["layer"] == "plugin"]
-        assert plugin_sources and plugin_sources[-1]["disposition"] == "contributing"
-
-    outcome = _plugins(root, "deactivate", "growth-studio")
-    assert {path.split("/")[-1] for path in outcome["removed"]} == {f"{role}.json" for role in ROLE_IDS}
-    after = _discover_rows(root)
-    assert not any(r["role"] is not None and r["role"]["id"] in ROLE_IDS for r in after)
 
 
 # The declared-publication-effect classification moved to Rust

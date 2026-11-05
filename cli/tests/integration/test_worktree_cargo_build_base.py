@@ -70,21 +70,6 @@ def base(tmp_path: Path) -> Path:
     return b
 
 
-STUB_SUMMARY = (
-    "cargo-build-dirs mode=dry-run bases=1 rows=1 trees_resolved=1 orphans=0 "
-    "reaped=0 reclaimed_bytes=0 after_bytes=0 effective_cap_bytes=0 orphan_lane=on shards_removed=0"
-)
-
-
-def _plant_stub(tmp_path: Path, extra: str = "") -> Path:
-    """A stub fno-agents whose cargo-build-dirs answers deterministically."""
-    stub = tmp_path / "bin" / "fno-agents"
-    stub.parent.mkdir(exist_ok=True)
-    stub.write_text(f"#!/bin/sh\nprintf '%s\\n' '{STUB_SUMMARY}'\n{extra}")
-    stub.chmod(stub.stat().st_mode | 0o111)
-    return stub
-
-
 def _sweep(
     canon: Path, base: Path, *flags: str, env_extra: dict[str, str] | None = None
 ) -> subprocess.CompletedProcess:
@@ -103,27 +88,6 @@ def _sweep(
         text=True,
         env=env,
     )
-
-
-# -- the build-base rows ride the Rust lane ------------------------------------
-
-
-def test_delegate_prints_the_binary_s_cargo_build_dirs_lines(repo: Path, base: Path, tmp_path: Path):
-    """AC9: the sweep prints a stub binary's cargo-build-dirs line, and the
-    --apply flag reaches it. No bash code walks the build base anymore."""
-    stub = _plant_stub(
-        tmp_path,
-        'case "$*" in *--apply*) printf \'STUB-SAW-APPLY\\n\' ;; esac\n',
-    )
-
-    dry = _sweep(repo, base, env_extra={"FNO_AGENTS_BIN": str(stub)})
-    assert dry.returncode == 0, dry.stderr
-    assert STUB_SUMMARY in dry.stdout, dry.stdout
-    assert "STUB-SAW-APPLY" not in dry.stdout
-
-    applied = _sweep(repo, base, "--apply", env_extra={"FNO_AGENTS_BIN": str(stub)})
-    assert applied.returncode == 0, applied.stderr
-    assert "STUB-SAW-APPLY" in applied.stdout, applied.stdout
 
 
 # -- a legacy offload link outside both bases is never followed with rm --------

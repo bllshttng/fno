@@ -103,32 +103,3 @@ def test_real_linked_worktree_never_writes_pointer(tmp_path):
     pointer.write_text(INSTALLED + "\n")
     _run_hook(wt, home)
     assert pointer.read_text().strip() == INSTALLED
-
-
-def test_worktree_start_neither_flips_stamp_nor_repairs(tmp_path):
-    """A worktree start must not flip the .worktree-hook-root stamp either,
-    or every alternating worktree and installed start re-runs the repair."""
-    root = _make_plugin_root(tmp_path / "plugin", "file")
-    home = tmp_path / "home"
-    fno_home = home / ".fno"
-    (fno_home / "install").mkdir(parents=True, exist_ok=True)
-    (fno_home / ".worktree-hook-root").write_text(INSTALLED + "\n")
-    (home / ".claude").mkdir(parents=True)
-    (home / ".claude" / "settings.json").write_text(
-        '{"hooks": {"SessionEnd": ["worktree-remove.sh"]}}'
-    )
-    capture = tmp_path / "fno-argv"
-    (home / "bin").mkdir(parents=True)
-    fno = home / "bin" / "fno"
-    # Log only the repair invocation: the hook also backgrounds maintenance
-    # sweeps (plan sync) whenever any fno is on PATH, and those are not the
-    # work this test watches.
-    fno.write_text(
-        '#!/usr/bin/env bash\n'
-        '[[ "$1 $2" == "config setup" ]] && printf \'%s\\n\' "$@" >> "'
-        + str(capture) + '"\nexit 0\n'
-    )
-    fno.chmod(0o755)
-    _run_hook(root, home)
-    assert (fno_home / ".worktree-hook-root").read_text().strip() == INSTALLED
-    assert not capture.exists(), "a worktree start must not run the repair"

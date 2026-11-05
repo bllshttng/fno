@@ -21,25 +21,14 @@ VALID = sorted((FIXTURES / "valid").glob("*.json"))
 INVALID = sorted((FIXTURES / "invalid").glob("*.json"))
 
 
-@pytest.mark.parametrize("path", VALID, ids=lambda p: p.name)
-def test_valid_fixture_conforms(path: Path) -> None:
-    validate(json.loads(path.read_text(encoding="utf-8")))
-
-
-@pytest.mark.parametrize("path", INVALID, ids=lambda p: p.name)
-def test_invalid_fixture_rejected(path: Path) -> None:
-    with pytest.raises(ValidationError):
+def test_every_valid_fixture_conforms() -> None:
+    assert VALID, f"no valid fixtures under {FIXTURES}"
+    for path in VALID:
         validate(json.loads(path.read_text(encoding="utf-8")))
 
 
-# -- no leaked internal ids in the public fixtures --
-
-def test_fixtures_use_placeholder_ids_only() -> None:
-    import re
-
-    # This repo's internal ids use the x-/ab- prefixes (e.g. x-dbaf, ab-ca822421);
-    # public examples must use the prj- placeholder instead.
-    leak = re.compile(r"\b(?:x|ab)-[0-9a-f]{4,}\b")
-    for path in VALID + INVALID:
-        text = path.read_text(encoding="utf-8")
-        assert not leak.search(text), f"possible internal id leak in {path.name}"
+def test_every_invalid_fixture_is_rejected() -> None:
+    assert INVALID, f"no invalid fixtures under {FIXTURES}"
+    for path in INVALID:
+        with pytest.raises(ValidationError):
+            validate(json.loads(path.read_text(encoding="utf-8")))

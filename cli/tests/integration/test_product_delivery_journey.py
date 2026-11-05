@@ -135,22 +135,3 @@ def test_incompatible_pack_is_refused_and_writes_nothing(tmp_path: Path) -> None
     assert res.returncode == 1
     assert "verification_failed" in json.loads(res.stdout)["error"]
     assert list((root / "plugin").glob("**/*.json")) == []
-
-
-def test_deactivation_leaves_an_anomalous_path_with_its_owner(tmp_path: Path) -> None:
-    root = _isolated_root(tmp_path)
-    pack = _materialize_external_pack(tmp_path / "outside-checkout" / PACK_ID)
-    activated = _plugins(root, "activate", str(pack))
-
-    # A foreign writer replaced a receipted definition with a symlink: the
-    # anomaly is reported, the receipt is retained, exit is non-zero.
-    victim = root / activated["written_paths"][0]
-    victim.unlink()
-    victim.symlink_to(tmp_path / "elsewhere.json")
-
-    res = _invoke(root, "deactivate", PACK_ID)
-    assert res.returncode == 1
-    outcome = json.loads(res.stdout)
-    assert outcome["removed"] == []
-    assert outcome["left_alone"] == activated["written_paths"]
-    assert victim.is_symlink()

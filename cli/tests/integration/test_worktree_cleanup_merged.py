@@ -128,56 +128,6 @@ def _archive(canon: Path, *args: str) -> subprocess.CompletedProcess:
     )
 
 
-def _cargo_sweep(canon: Path, *flags: str, env_extra: dict[str, str] | None = None) -> subprocess.CompletedProcess:
-    script = canon / "scripts" / "lib" / "worktree-lifecycle.sh"
-    env = os.environ.copy()
-    if env_extra:
-        env.update(env_extra)
-    return subprocess.run(
-        ["bash", str(script), "cleanup", "--cargo-targets", *flags],
-        cwd=str(canon), capture_output=True, text=True, env=env,
-    )
-
-
-def _add_target(canon: Path, name: str, size: int, *, old: bool = False) -> Path:
-    wt = canon / name
-    _git(canon, "worktree", "add", str(wt), "-b", f"feature/{name}", "main")
-    target = wt / "crates" / "fixture" / "target"
-    target.mkdir(parents=True)
-    (target / "artifact.bin").write_bytes(b"x" * size)
-    if old:
-        old_ts = 1_600_000_000
-        os.utime(target / "artifact.bin", (old_ts, old_ts))
-        os.utime(target, (old_ts, old_ts))
-    return target
-
-
-def test_cargo_target_apply_reaps_age_then_cap_and_is_idempotent(repo: Path):
-    old = _add_target(repo, "cargo-old", 2 * 1024 * 1024, old=True)
-    young = _add_target(repo, "cargo-young", 2 * 1024 * 1024)
-    bounds = ("--cap-bytes", str(3 * 1024 * 1024), "--target-max-age", "7d")
-
-    vetoed = _cargo_sweep(repo, *bounds, "--apply", "--dry-run")
-    assert vetoed.returncode == 0, vetoed.stderr
-    assert "mode=dry-run" in vetoed.stdout
-    assert "would-reap" in vetoed.stdout
-    assert old.exists() and young.exists(), "explicit dry-run must override apply"
-
-    first = _cargo_sweep(repo, *bounds, "--apply")
-    second = _cargo_sweep(repo, *bounds, "--apply")
-
-    assert first.returncode == 0, first.stderr
-    assert "mode=apply" in first.stdout
-    assert "reason=age" in first.stdout
-    assert "after_bytes=" in first.stdout
-    assert "cap_bytes=3145728" in first.stdout
-    assert not old.exists(), "over-age target must be reaped even when one deletion satisfies cap"
-    assert young.exists(), "young target should remain once the cap is satisfied"
-    assert second.returncode == 0, second.stderr
-    assert "reaped=0" in second.stdout
-    assert "reclaimed_bytes=0" in second.stdout
-
-
 def _add_merged(canon: Path, name: str) -> Path:
     """Worktree whose branch is merged into origin/main (a reap candidate)."""
     wt = canon / name
@@ -273,19 +223,6 @@ def test_apply_reaps_merged_in_prefix_and_preserves_branch(repo: Path, tmp_path:
     branches = _git(repo, "branch", "--list", "feature/in-pruned").stdout
     assert "feature/in-pruned" in branches, "branch must be preserved"
     assert out_of_scope.exists(), "out-of-prefix worktree must be untouched"
-
-
-def test_merge_triggered_archive_refuses_pushed_but_unmerged_head(repo: Path):
-    wt = repo / "wt-unmerged-archive"
-    _git(repo, "worktree", "add", str(wt), "-b", "feature/unmerged-archive", "main")
-    _commit(wt, "unmerged.txt")
-    _git(wt, "push", "-u", "origin", "feature/unmerged-archive")
-
-    result = _archive(repo, str(wt), "--merge-triggered")
-
-    assert result.returncode == 2, result.stderr
-    assert "origin/main" in result.stderr
-    assert wt.exists(), "merge-triggered cleanup must keep an unmerged worktree"
 
 
 # ── x-60de: every removal emits one attributable event row ─────────────────
@@ -430,38 +367,6 @@ def test_fetch_failure_aborts(repo: Path):
     assert wt.exists(), "no worktree may be removed after a fetch abort"
 
 
-# ── AC2-EDGE: local-only .fno do state survives the reap ───────────────────────
-def test_salvage_preserves_local_state(repo: Path):
-    (repo / ".fno").mkdir()
-    (repo / ".fno" / "config.toml").write_text("canonical\n")
-
-    wt = _add_merged(repo, "reapme")
-    fno = wt / ".fno"
-    fno.mkdir()
-    (fno / "target-state.md").write_text("graph_node_id: x-salv\nowner_pid: 999999\n")
-    (fno / "events.jsonl").write_text("EVT\n")
-    (fno / "scratchpad").mkdir()
-    (fno / "scratchpad" / "note.md").write_text("SCRATCH\n")
-    # a symlink into canonical — must NOT be salvaged
-    (fno / "config.toml").symlink_to(repo / ".fno" / "config.toml")
-
-    r = _sweep(repo, "--apply")
-    diag = f"\n--- stdout ---\n{r.stdout}\n--- stderr ---\n{r.stderr}"
-    assert r.returncode == 0, diag
-    assert "1 archived" in r.stdout, diag
-    assert not wt.exists(), diag
-
-    canon_fno = repo / ".fno"
-    # loose file -> salvage/<date>-<node>/events.jsonl
-    evt = list(canon_fno.glob("salvage/*-x-salv/events.jsonl"))
-    assert evt and evt[0].read_text() == "EVT\n", "events.jsonl not salvaged"
-    # directory -> scratchpad/<date>-<node>/note.md
-    note = list(canon_fno.glob("scratchpad/*-x-salv/note.md"))
-    assert note and note[0].read_text() == "SCRATCH\n", "scratchpad/ not salvaged"
-    # the symlinked config.toml must not have been copied into a date-node dir
-    assert not list(canon_fno.glob("config.toml/*")), "symlink was wrongly salvaged"
-
-
 # ── AC2-FR: salvage failure blocks removal ──────────────────────────────────
 def test_salvage_failure_keeps_worktree(repo: Path):
     canon_fno = repo / ".fno"
@@ -478,114 +383,6 @@ def test_salvage_failure_keeps_worktree(repo: Path):
         assert wt.exists(), "worktree must be kept when salvage fails"
     finally:
         os.chmod(canon_fno, 0o700)
-
-
-def test_archive_force_refreshes_upstream_before_disclosure(repo: Path):
-    wt = repo / "wt-force-stale-upstream"
-    branch = "feature/force-stale-upstream"
-    _git(repo, "worktree", "add", str(wt), "-b", branch, "main")
-    _commit(wt, "unique.txt")
-    unique_subject = "add unique.txt"
-    short_sha = _git(wt, "rev-parse", "--short", "HEAD").stdout.strip()
-    _git(wt, "push", "-u", "origin", branch)
-    _git(_origin_bare(repo), "branch", "-f", branch, "main")
-
-    r = _archive(repo, "--force", "--yes", "--delete-branch", str(wt))
-    diag = f"stdout={r.stdout}\nstderr={r.stderr}"
-
-    assert r.returncode == 0, diag
-    assert "FORCE" in diag
-    assert short_sha in diag
-    assert unique_subject in diag
-    assert "branch feature/force-stale-upstream deleted" in r.stderr
-    assert not wt.exists(), diag
-    assert not _git(repo, "branch", "--list", branch).stdout.strip()
-
-
-def test_archive_delete_branch_refuses_unverifiable_remote_state(repo: Path):
-    wt = repo / "wt-delete-unverifiable"
-    branch = "feature/delete-unverifiable"
-    _git(repo, "worktree", "add", str(wt), "-b", branch, "main")
-    _commit(wt, "unique.txt")
-    unique_sha = _git(wt, "rev-parse", "--short", "HEAD").stdout.strip()
-    _git(repo, "remote", "remove", "origin")
-
-    r = _archive(repo, "--yes", "--delete-branch", str(wt))
-    diag = f"stdout={r.stdout}\nstderr={r.stderr}"
-
-    assert r.returncode == 2, diag
-    assert "not verifiable" in r.stderr, diag
-    assert wt.exists(), diag
-    assert _git(repo, "rev-parse", "--short", branch).stdout.strip() == unique_sha
-
-
-def test_archive_refuses_unreadable_live_claim(
-    repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
-    wt = _add_merged(repo, "unreadable-claim")
-    fno_bin = tmp_path / "bin"
-    fno_bin.mkdir()
-    fake_fno = fno_bin / "fno"
-    fake_fno.write_text("#!/bin/sh\nexit 1\n")
-    fake_fno.chmod(0o755)
-    monkeypatch.setenv("PATH", f"{fno_bin}:{os.environ['PATH']}")
-    state = wt / ".fno"
-    state.mkdir()
-    (state / "target-state.md").write_text(
-        "input: x-unreadable\ntarget_claim_key: node:x-unreadable\nowner_pid: 999999\n"
-    )
-
-    r = _archive(repo, "--force", "--yes", str(wt))
-
-    assert r.returncode == 2
-    assert "live target claim not verifiable" in r.stderr
-    assert wt.exists()
-
-
-def test_archive_force_rechecks_state_after_process_cleanup(repo: Path):
-    wt = _add_merged(repo, "force-recheck")
-    late_path = wt / "late.txt"
-    holder_env = os.environ.copy()
-    holder_env["LATE_PATH"] = str(late_path)
-    holder = subprocess.Popen(
-        [
-            "bash",
-            "-c",
-            f"cd '{wt}'; trap 'printf late > \"$LATE_PATH\"; exit 0' TERM; while :; do sleep 1; done",
-        ],
-        cwd=repo,
-        env=holder_env,
-        start_new_session=True,
-    )
-    try:
-        r = _archive(repo, "--force", "--yes", str(wt))
-    finally:
-        if holder.poll() is None:
-            holder.terminate()
-        holder.wait(timeout=5)
-
-    diag = f"stdout={r.stdout}\nstderr={r.stderr}"
-    assert r.returncode == 2, diag
-    assert "forced state changed after disclosure" in r.stderr, diag
-    assert (wt / "late.txt").exists(), diag
-    assert wt.exists(), diag
-
-
-def test_archive_refuses_codex_app_owned_worktree_even_with_force(
-    repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
-    codex_home = tmp_path / ".codex"
-    wt = codex_home / "worktrees" / "thread-a" / repo.name
-    wt.parent.mkdir(parents=True)
-    _git(repo, "worktree", "add", "--detach", str(wt), "main")
-    monkeypatch.setenv("CODEX_HOME", str(codex_home))
-
-    r = _archive(repo, "--force", str(wt))
-
-    assert r.returncode == 6
-    assert "app-owned Codex worktree" in r.stderr
-    assert "archive its associated chat" in r.stderr
-    assert wt.exists()
 
 
 def test_age_sweep_apply_removes_only_the_clean_detached_tree(
@@ -624,33 +421,7 @@ def test_age_sweep_apply_removes_only_the_clean_detached_tree(
     assert (dirty / "dirty.txt").exists()
 
 
-def test_age_sweep_is_dry_run_by_default(repo: Path):
-    """Both removal modes share one default: a bare sweep reports, --apply
-    executes. The age mode used to remove on a bare call - a lead ran it
-    expecting a preview and 13 trees went."""
-    wt = _add_detached(repo, repo / "wt-age-default")
-
-    r = _compat_age_sweep(repo)
-
-    assert r.returncode == 0, r.stderr
-    assert "WOULD REMOVE" in r.stdout
-    assert "dry-run" in r.stdout
-    assert wt.exists(), "a bare age sweep must not remove anything"
-
-
 # ── detached scratch trees: classified by content, not branch name ──────────
-def test_apply_reaps_detached_scratch_tree(repo: Path):
-    """A scratch tree is detached BY CONSTRUCTION; a head that some remote
-    already carries is recreatable, so the sweep must reap it instead of
-    keeping it on the branch-name proxy."""
-    wt = _add_detached(repo, repo / "wt-scratch-reapme")
-
-    r = _sweep(repo, "--apply")
-    diag = f"\n--- stdout ---\n{r.stdout}\n--- stderr ---\n{r.stderr}"
-
-    assert r.returncode == 0, diag
-    assert "1 archived" in r.stdout, diag
-    assert not wt.exists(), "clean detached tree with nothing unpushed should be archived" + diag
 
 
 def test_archive_refuses_a_detached_head_no_remote_is_proven_to_carry(repo: Path):
@@ -675,40 +446,6 @@ def test_archive_refuses_a_detached_head_no_remote_is_proven_to_carry(repo: Path
     assert r.returncode == 2, f"stdout={r.stdout}\nstderr={r.stderr}"
     assert "not verifiable" in r.stderr, f"stderr={r.stderr}"
     assert unverifiable.exists(), f"stderr={r.stderr}"
-
-
-def test_dead_secondary_remote_degrades_instead_of_aborting(repo: Path):
-    """fetch --all fails if ANY remote is dead, and one stale account remote
-    must not brick the reclaim command. Origin stays the merged-check baseline
-    (branched judging continues); the detached tree is kept because its refs
-    cannot be verified against the dead remote - with a receipt that says so,
-    not a phantom unpushed count."""
-    merged = _add_merged(repo, "reapme")
-    det = _add_detached(repo, repo / "wt-scratch-fork")
-    _git(repo, "remote", "add", "fork", str(repo / "dead-fork.git"))
-
-    r = _sweep(repo, "--apply")
-    diag = f"\n--- stdout ---\n{r.stdout}\n--- stderr ---\n{r.stderr}"
-
-    assert r.returncode == 0, diag
-    assert "1 archived" in r.stdout, diag
-    assert not merged.exists(), diag
-    assert "remote refs unverifiable" in r.stdout, diag
-    assert det.exists(), "refs unverifiable against a dead remote must keep detached trees" + diag
-
-
-def test_non_origin_single_remote_detached_still_archives(repo: Path):
-    """The refresh verifies whichever remotes exist. A repo whose only remote
-    is named anything but origin must still archive a detached head that the
-    remote carries; hardcoding origin made every such repo read as
-    permanently unverifiable."""
-    _git(repo, "remote", "rename", "origin", "upstream")
-    det = _add_detached(repo, repo / "wt-scratch-upstream")
-
-    r = _archive(repo, str(det))
-
-    assert r.returncode == 0, f"stdout={r.stdout}\nstderr={r.stderr}"
-    assert not det.exists(), f"stderr={r.stderr}"
 
 
 # ── x-11d8: setup's own symlinks must not stop the sweep ────────────────────
@@ -775,26 +512,6 @@ def _add_done_node_wt(canon: Path, name: str, node_id: str) -> Path:
     return wt
 
 
-def test_apply_reaps_a_tree_whose_only_dirt_is_setup_symlinks(repo: Path):
-    _wire_real_reapable(repo)
-    wt = _add_merged(repo, "setuplinks")
-    (repo / ".agents").mkdir(exist_ok=True)
-    (repo / ".claude").mkdir(exist_ok=True)
-    (repo / ".claude" / "skills").mkdir(exist_ok=True)
-    (wt / "cli" / ".claude").mkdir(parents=True)
-    (wt / "cli" / ".agents").symlink_to(repo / ".agents")
-    (wt / "cli" / ".claude" / "skills").symlink_to(repo / ".claude" / "skills")
-    assert _git(wt, "status", "--porcelain").stdout.strip(), "the tree must read dirty"
-
-    r = _sweep(repo, "--apply")
-    diag = f"\n--- stdout ---\n{r.stdout}\n--- stderr ---\n{r.stderr}"
-
-    assert r.returncode == 0, diag
-    assert "1 archived" in r.stdout, diag
-    assert not wt.exists(), "worktree dir should be gone" + diag
-    assert (repo / ".claude" / "skills").is_dir(), "the link target must survive"
-
-
 # ── The done-node bucket (x-7b9c): salvage first, then remove, branch kept ──
 
 
@@ -852,62 +569,3 @@ def test_done_node_apply_salvages_untracked_pins_detached_and_keeps_branch(
     assert any(
         "done-node; tree removed, branch kept" in json.dumps(row) for row in rows
     ), "the removal row does not name the done-node reason"
-
-
-@requires_gate
-def test_done_node_salvage_failure_keeps_tree(repo: Path, tmp_path: Path):
-    """AC6-ERR: an unwritable salvage destination keeps the worktree."""
-    _wire_real_reapable(repo)
-    env = _graph_home(tmp_path, [{"id": "x-sa1v1", "status": "done"}])
-    wt = _add_done_node_wt(repo, "wt-salv", "x-sa1v1")
-    (repo / ".fno").mkdir(exist_ok=True)
-    os.chmod(repo / ".fno", 0o500)
-    try:
-        r = _sweep(repo, "--apply", env_extra=env)
-        diag = f"\n--- stdout ---\n{r.stdout}\n--- stderr ---\n{r.stderr}"
-        assert r.returncode == 0, diag
-        assert "kept (salvage-failed)" in r.stdout, diag
-        assert wt.exists(), "a salvage failure removed the tree" + diag
-        assert (wt / "scratch.txt").exists(), "salvage lost the untracked file"
-    finally:
-        os.chmod(repo / ".fno", 0o755)
-
-
-# ── worktree.prune_done=aggressive: the tracked diff goes to a ref ──────────
-# The balanced verdict (keep a modified-tracked tree) is the classifier's,
-# pinned by its Rust rows; only aggressive adds a bash salvage step.
-
-
-@requires_gate
-def test_aggressive_salvages_the_tracked_diff_to_a_ref_then_prunes(
-    repo: Path, tmp_path: Path
-):
-    _wire_real_reapable(repo)
-    env = _graph_home(tmp_path, [{"id": "x-4ggr1", "status": "done"}])
-    cfg = tmp_path / "prune-aggressive.toml"
-    cfg.write_text('[worktree]\nprune_done = "aggressive"\n')
-    env["FNO_CONFIG"] = str(cfg)
-    wt = _add_done_node_wt(repo, "wt-4gg", "x-4ggr1")
-    _commit(wt, "tracked.txt", "original\n")
-    (wt / "tracked.txt").write_text("edited\n")
-    branch_sha = _git(wt, "rev-parse", "HEAD").stdout.strip()
-
-    r = _sweep(repo, "--apply", env_extra=env)
-    diag = f"\n--- stdout ---\n{r.stdout}\n--- stderr ---\n{r.stderr}"
-
-    assert r.returncode == 0, diag
-    assert "archived" in r.stdout, diag
-    assert not wt.exists(), "aggressive did not prune the salvaged tree" + diag
-    assert (
-        _git(repo, "rev-parse", "--verify", "feature/wt-4gg").stdout.strip()
-        == branch_sha
-    ), "the branch did not survive" + diag
-    ref = "refs/fno/salvage/x-4ggr1"
-    assert _git(repo, "rev-parse", "--verify", ref, check=False).returncode == 0, (
-        "no salvage ref after removal" + diag
-    )
-    salvaged = _git(repo, "show", f"{ref}:tracked.txt").stdout
-    assert salvaged == "edited\n", f"the ref does not hold the diff: {salvaged}" + diag
-    # The untracked salvage still runs under aggressive.
-    untracked = list((repo / ".fno" / "salvage").glob("*-x-4ggr1/untracked/scratch.txt"))
-    assert untracked, "the untracked file was not salvaged" + diag

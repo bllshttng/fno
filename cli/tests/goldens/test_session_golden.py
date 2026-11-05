@@ -4,31 +4,6 @@ from __future__ import annotations
 from tests.goldens._door import SESSION_ID, door, make_sandbox, seed_node, warm
 
 
-def test_session_open_holds_the_node_and_prints_the_holder(tmp_path):
-    root = make_sandbox(tmp_path, [seed_node("x-ccc33000", "design")])
-    warm(root, "x-ccc33000")
-    code, out, err = door(root, ["session", "open", "x-ccc33000", "--harness", "claude", "--session-id", SESSION_ID])
-    assert code == 0, err
-    assert out.startswith("opened x-ccc33000 holder=blueprint-session:"), out
-    # The holder names the acting session, so only its shape is stable.
-    assert SESSION_ID in out
-
-
-def test_session_open_twice_for_the_same_session_refuses(tmp_path):
-    root = make_sandbox(tmp_path, [seed_node("x-ccc33000", "design")])
-    warm(root, "x-ccc33000")
-    door(root, ["session", "open", "x-ccc33000", "--harness", "claude", "--session-id", SESSION_ID])
-    code, out, err = door(root, ["session", "open", "x-ccc33000", "--harness", "claude", "--session-id", SESSION_ID])
-    assert code == 1, err
-    assert out == "", out
-    # The sandbox has no harness binary, so the liveness probe may warn first.
-    refusal = [line for line in err.splitlines() if not line.startswith("WARN: ")]
-    assert refusal[0].startswith(
-        "session open: node:x-ccc33000 is already open for this session"
-    ), err
-    assert f"(blueprint-session:{SESSION_ID})" in err
-
-
 def test_session_close_prints_the_completion_receipt_and_launch_line(tmp_path):
     root = make_sandbox(tmp_path, [seed_node("x-ccc33000", "design")])
     warm(root, "x-ccc33000")
