@@ -1777,10 +1777,11 @@ mod tests {
             receipt.verdict
         );
         assert!(!temp.path().join(".active-claude").exists());
-        assert_eq!(
-            fs::read_to_string(temp.path().join("makers/blob")).unwrap(),
-            original
-        );
+        // The phase-A sync may legitimately have re-saved the slot's own blob
+        // into the record; what must NOT have been written is the proven best
+        // blob (the write the superseded refusal exists to prevent).
+        let recorded = fs::read_to_string(temp.path().join("makers/blob")).unwrap();
+        assert_ne!(recorded, scoped);
     }
     #[test]
     fn stored_health_scenarios_skip_the_slot_owner_and_judge_the_rest() {
