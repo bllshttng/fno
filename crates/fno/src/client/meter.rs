@@ -240,9 +240,16 @@ fn capacity_segment(state: Option<&serde_json::Value>) -> String {
     ) else {
         return " · cap unknown".into();
     };
+    // The cap is the learned limit; the ceiling is named only when the cap
+    // sits under it, so an unconstrained "24 of 24" never reads as full.
+    let cap = if effective < ceiling {
+        format!("cap {effective} (ceiling {ceiling})")
+    } else {
+        format!("cap {effective}")
+    };
     let mut line = match state.get("workers_live").and_then(|v| v.as_u64()) {
-        Some(workers) => format!(" · workers {workers} live, cap {effective} of {ceiling}"),
-        None => format!(" · cap {effective} of {ceiling}"),
+        Some(workers) => format!(" · this machine {workers} live of {cap}"),
+        None => format!(" · this machine {cap}"),
     };
     if let Some(reason) = state.get("reason").and_then(|v| v.as_str()) {
         if !reason.is_empty() {
@@ -406,7 +413,7 @@ mod tests {
         });
         let line = capacity_segment(Some(&state));
         assert!(
-            line.contains("workers 15 live, cap 14 of 23, CPU-bound"),
+            line.contains("this machine 15 live of cap 14 (ceiling 23), CPU-bound"),
             "{line}"
         );
         assert!(line.contains("zai 5h 62%, wk 1.1M tok"), "{line}");

@@ -368,7 +368,7 @@ fn provider_readings(gate: &GateReading, rows: &[AgentRow]) -> Vec<ProviderCount
 /// non-zero answers, then the fleet-only buckets.
 pub fn fleet_segments(team: &Team, gate: &GateReading) -> Vec<String> {
     let live_word = match gate.max_live {
-        Some(max) => format!("{}/{} live", team.counts.live, max),
+        Some(max) => format!("{} live of fleet cap {}", team.counts.live, max),
         None => format!("{} live", team.counts.live),
     };
     let mut segs = vec![live_word];
@@ -709,12 +709,12 @@ mod tests {
         assert_eq!(team.counts.testing, 0);
         let fleet = fit("team", &fleet_segments(&team, &gate), 200);
         assert!(fleet.contains("testing unknown"), "{fleet}");
-        assert!(fleet.contains("1/3 live"), "{fleet}");
+        assert!(fleet.contains("1 live of fleet cap 3"), "{fleet}");
 
         let line = fit(
             "team",
             &[
-                "21/23 live".to_string(),
+                "21 live of fleet cap 23".to_string(),
                 "9 working".to_string(),
                 "2 testing".to_string(),
                 "1 queued".to_string(),
@@ -724,7 +724,7 @@ mod tests {
         assert!(line.starts_with("  team "), "{line}");
         assert!(line.ends_with('…'), "{line}");
         assert!(!line.contains("2 te"), "no digit group split: {line}");
-        assert!(line.contains("21/23 live"), "{line}");
+        assert!(line.contains("21 live of fleet cap 23"), "{line}");
 
         // AC5-CAP: with more Leads than the budget, the dimmest rest folds
         // into one summary line and the live books stay balanced.

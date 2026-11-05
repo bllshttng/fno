@@ -117,7 +117,7 @@ impl View {
 
 // `draw_sideline` paints at `panel_w - 1` (the divider column is not text). An
 // org line fitted to the full panel width lost its last character to that
-// clip: `team 0/3 live · 1 observed` painted as `· 1 observe`. Sweep the
+// clip: `team 0 live of fleet cap 3 · 1 observed` painted as `· 1 observe`. Sweep the
 // panel width so some width lands a fitted line exactly on the boundary.
 #[test]
 fn a_fitted_org_line_paints_whole_at_every_panel_width() {

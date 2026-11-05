@@ -234,6 +234,7 @@ impl Effective {
                     reason,
                     render_clock(since)
                 ),
+                _ if self.cap >= self.ceiling => format!("effective cap {}", self.cap),
                 _ => format!("effective cap {} of {}", self.cap, self.ceiling),
             },
             false => format!(
