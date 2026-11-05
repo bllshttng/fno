@@ -319,6 +319,14 @@ pub(crate) fn hold_check_flow(pr: i64, cwd: &Path) -> FlowResult {
     };
     let rows = match worker_rows(&base) {
         Ok(rows) => rows,
+        Err(error) if error == STORE_EXEC_TIMEOUT => {
+            hold_unknown(
+                &mut flow,
+                pr,
+                &format!("dispatch-hold-unknown: backlog graph read failed: {error}"),
+            );
+            return flow;
+        }
         Err(error) => {
             hold_refusal(
                 &mut flow,
@@ -600,6 +608,10 @@ fn hold_graph_path(cwd: &Path) -> PathBuf {
     crate::org_board::scope::graph_json_path(cwd)
 }
 
+/// The rows-read timeout message; `hold_check_flow` reads it as an unknown,
+/// never as an unreadable graph.
+const STORE_EXEC_TIMEOUT: &str = "store-exec timed out after 60s";
+
 /// One graph rows read through the same worker door the Python leg used:
 /// `fno-agents-worker --store-exec --graph <path>`, the api rows request on
 /// stdin, the `{ok, result|error}` envelope on stdout.
@@ -636,7 +648,7 @@ fn worker_rows(cwd: &Path) -> Result<Vec<Value>, String> {
         );
     }
     let output = wait_output_with_timeout(child, Duration::from_secs(60))
-        .ok_or_else(|| "store-exec timed out after 60s".to_string())?;
+        .ok_or_else(|| STORE_EXEC_TIMEOUT.to_string())?;
     if !output.status.success() {
         return Err(format!(
             "fno-agents-worker exited {}: {}",
