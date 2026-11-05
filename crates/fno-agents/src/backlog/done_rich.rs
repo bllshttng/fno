@@ -45,7 +45,7 @@ Completion flags:
       --force-overwrite   Overwrite rollup fields instead of filling empty ones.
   -h, --help              Print help.
 
-The close flags and the completion flags are separate paths.
+The close flags pair with --note only; the other completion flags are a separate path.
 Reverse a close with `fno backlog reopen <id> --reason ...`.
 Exit codes: 2 usage, 3 refused, 4 outage, 5 awaiting merge, 6 promise unmet.
 ";

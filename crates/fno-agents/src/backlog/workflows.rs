@@ -53,6 +53,19 @@ impl DoneArgs {
             || self.link.is_some()
             || self.note.is_some()
     }
+
+    /// The completion flags that never join the close path. `--note` is the
+    /// one exception: a forced close of a PR-less epic (every ship merged on
+    /// a child) needs the note to carry its completion evidence past the
+    /// close seam.
+    fn rich_beside_note(&self) -> bool {
+        self.backfill
+            || self.force_overwrite
+            || self.pr.is_some()
+            || self.pr_url.is_some()
+            || self.repo.is_some()
+            || self.link.is_some()
+    }
 }
 
 fn take_value(args: &[String], i: &mut usize) -> Option<String> {
@@ -679,10 +692,10 @@ pub fn run_done(tail: &[String]) -> i32 {
     }
     let close_flags = args.close_flags();
     let rich_flags = args.rich_flags();
-    if close_flags && rich_flags {
+    if close_flags && args.rich_beside_note() {
         eprintln!(
-            "Error: the close flags (--force/--reason/--skip-stamp) and the \
-             completion flags (--pr/--pr-url/--link/--note/--backfill/--force-overwrite) \
+            "Error: the close flags (--force/--reason/--skip-stamp) pair with \
+             --note only; the other completion flags (--pr/--pr-url/--link/--repo/--backfill/--force-overwrite) \
              are separate paths. A deliberate half-ship closes on the id alone: \
              `fno backlog done <id> --force --reason ...`"
         );
@@ -841,6 +854,14 @@ fn close_node(args: &DoneArgs, task_id: &str) -> i32 {
         }
         apply_completion_fields(&mut rows[idx], evidence_present);
         let obj = rows[idx].as_object_mut().expect("row is an object");
+        if let Some(note) = args
+            .note
+            .as_deref()
+            .map(str::trim)
+            .filter(|n| !n.is_empty())
+        {
+            obj.insert("completion_note".into(), json!(note));
+        }
         if rollup.cost_usd.is_some() && obj.get("cost_usd").and_then(Value::as_f64).is_none() {
             obj.insert("cost_usd".into(), json!(rollup.cost_usd));
         }
