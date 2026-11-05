@@ -794,7 +794,11 @@ fn messages_paint_reads_rows_built_once_per_projection() {
         Rc::ptr_eq(&first, &b.tree_rows()),
         "frames reuse the built rows"
     );
-    assert_eq!(b.active_chat_rows().len(), 2, "s1's two threads");
+    assert_eq!(
+        b.active_chat_rows().len(),
+        4,
+        "s1 sits in threads 0, 1, 3000, 3001"
+    );
     assert!(
         started.elapsed() < Duration::from_secs(3),
         "30 frames took {:?}",
