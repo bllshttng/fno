@@ -303,13 +303,23 @@ fn decider_name(row: &Value) -> Option<String> {
             .ok()
             .map(|r| r.0)
     });
+    // The stamp is the 8-character mail id: the head of the session uuid.
+    let held_by = |e: &crate::state::RegistryEntry| {
+        [
+            &e.session_id,
+            &e.claude_session_uuid,
+            &e.codex_session_id,
+            &e.gemini_session_id,
+        ]
+        .into_iter()
+        .flatten()
+        .any(|u| u == id || (id.len() >= 8 && u.starts_with(id)))
+            || (!e.short_id.is_empty() && e.short_id == id)
+    };
     reg.as_ref()?
         .entries
         .iter()
-        .find(|e| {
-            crate::daemon::entry_holds_session(e, id)
-                || (!e.short_id.is_empty() && e.short_id == id)
-        })
+        .find(|e| held_by(e))
         .map(|e| e.name.clone())
         .filter(|n| !n.is_empty())
 }
