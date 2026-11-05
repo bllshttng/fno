@@ -1804,8 +1804,13 @@ mod scroll_mode;
 
 use input_folds::{
     fold_modal_keys, fold_nav_input, fold_search_input, fold_selector_keys,
-    fold_selector_keys_with_split_arrows, ModalKey, NavKey, SearchKey,
+    fold_selector_keys_with_split_arrows, fold_text_field_keys, ModalKey, NavKey, SearchKey,
 };
+
+#[cfg(test)]
+pub(crate) fn fold_text_field_keys_for_test(esc: &mut Vec<u8>, bytes: &[u8]) -> Vec<u8> {
+    fold_text_field_keys(esc, bytes)
+}
 
 mod composer_draft;
 
@@ -8850,7 +8855,15 @@ async fn connections_keys(
 ) -> Result<StdinFlow, String> {
     use crate::connections_view::ConnIntent;
     let mut esc = std::mem::take(&mut view.conn_esc);
-    let keys = fold_selector_keys(&mut esc, bytes);
+    let keys = if view
+        .connections
+        .as_ref()
+        .is_some_and(|cv| cv.captures_text())
+    {
+        fold_text_field_keys(&mut esc, bytes)
+    } else {
+        fold_selector_keys(&mut esc, bytes)
+    };
     view.conn_esc = esc;
     for &k in &keys {
         // Closed mid-chunk: swallow the rest, never forward to a pane.

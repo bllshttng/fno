@@ -7128,6 +7128,17 @@ fn client_compose_ignores_stale_frames_and_clips_overflow() {
 }
 
 #[test]
+fn text_field_fold_maps_arrows_to_motion_not_letters() {
+    let mut esc = Vec::new();
+    assert_eq!(
+        fold_text_field_keys(&mut esc, b"\x1b[B\x1b[B\x1b[C\x1b[D\x1b[A\x1b[Z"),
+        vec![0x0e, 0x0e, 0x10, 0x10]
+    );
+    // Typed letters pass through untouched.
+    assert_eq!(fold_text_field_keys(&mut esc, b"jk"), b"jk");
+}
+
+#[test]
 fn selector_fold_rows() {
     // Gemini medium: an arrow sequence split across reads must fold into
     // one nav key - never a bare-Esc close plus leaked tail bytes.

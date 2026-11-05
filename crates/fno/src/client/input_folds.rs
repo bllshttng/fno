@@ -499,3 +499,21 @@ pub(super) fn fold_nav_input(esc: &mut Vec<u8>, bytes: &[u8]) -> Vec<NavKey> {
     }
     keys
 }
+
+/// The fold for an overlay that has a typed field open. Up, Down and Shift-Tab
+/// become Ctrl-P, Ctrl-N and Ctrl-P, the control bytes the typed-search pickers
+/// already read as "move". The `hjkl` twins of [`fold_selector_keys`] are
+/// wrong here: `j` would type into the field. Left and Right have no meaning in
+/// a field with no cursor, so they drop.
+pub(super) fn fold_text_field_keys(esc: &mut Vec<u8>, bytes: &[u8]) -> Vec<u8> {
+    fold_nav_input(esc, bytes)
+        .into_iter()
+        .filter_map(|k| match k {
+            NavKey::Byte(b) => Some(b),
+            NavKey::Esc => Some(0x1b),
+            NavKey::Up | NavKey::ShiftTab => Some(0x10),
+            NavKey::Down => Some(0x0e),
+            NavKey::Left | NavKey::Right => None,
+        })
+        .collect()
+}
