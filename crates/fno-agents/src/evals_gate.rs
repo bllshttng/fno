@@ -1381,7 +1381,8 @@ fn settle_head_run(p: &Paths, d: &Deps, state: &mut State, slug: &str, prs: &[Pr
         save_state(&p.state_dir, state);
         return;
     }
-    let over = d.now.timestamp() - run.started > HEAD_LIMIT_S;
+    // A run that exited is graded on its rows, however late the settle tick comes.
+    let over = alive && d.now.timestamp() - run.started > HEAD_LIMIT_S;
     if alive && !over {
         return;
     }
@@ -2386,6 +2387,19 @@ mod tests {
         assert!(post.contains("state=failure"), "{post}");
         assert!(post.contains("gate-retry abcdef123456"), "{post}");
         assert!(post.contains("20-minute limit"), "{post}");
+
+        let w = World::new("skills/x/SKILL.md\n");
+        w.with_baseline();
+        w.tick(true, now);
+        w.rows(
+            &format!("gate-head-{}", short(SHA)),
+            "g1",
+            [true, true, true],
+        );
+        w.tick(false, now + chrono::Duration::seconds(HEAD_LIMIT_S + 600));
+        assert!(w.kills.borrow().is_empty());
+        let post = w.posts.borrow().last().cloned().unwrap();
+        assert!(post.contains("state=success"), "{post}");
     }
 
     #[test]
