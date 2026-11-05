@@ -34,6 +34,7 @@ use tokio::sync::{mpsc, oneshot, watch, Notify};
 
 use crate::agents_view::{self, RegistryAgent};
 use crate::backlog_view;
+use crate::mux_log::server_breadcrumb as e2e_log;
 use crate::proto::{
     bind_or_probe, check_attach_version, err_code, read_msg, write_msg, AgentBadge,
     AgentNoPaneReason, AnchoredLayoutSpec, BacklogCard, BindOutcome, BlockDir, BlockSel, CardState,
@@ -78,6 +79,7 @@ mod first_attach;
 mod fresh_attach;
 mod grid_reconcile;
 mod human_input;
+mod input_echo;
 mod keeper_adopt;
 pub(crate) mod lifecycle_target;
 mod mouse_route;
@@ -1494,6 +1496,7 @@ pub(crate) struct Core {
     /// Latest registry-derived agent rows (4a-G2), stored raw; the pane-exit
     /// fact and squad assignment are joined at layout time, where the live
     /// pane set and the squad catalog live.
+    input_echo: HashMap<u64, input_echo::EchoWatch>,
     agents: Vec<RegistryAgent>,
     /// The last `AgentRows` reader's registry+roster read succeeded.
     /// Starts false (no read yet = unknown), so the registry-absence death
@@ -2146,17 +2149,6 @@ async fn run_claude_agents_all(
         return None;
     }
     crate::agents_view::parse_claude_agents(&String::from_utf8_lossy(&output.stdout), tracked)
-}
-
-/// CI diagnostics: timestamped breadcrumbs for the e2e server log
-/// (`<session>.log`, dumped by the test harness on a wait_screen timeout).
-/// FNO_E2E-gated so a production server writes none of it; the gate is
-/// latched once so the hot call sites (push_layout) never re-read the env.
-fn e2e_log(msg: std::fmt::Arguments<'_>) {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    if *ON.get_or_init(|| std::env::var_os("FNO_E2E").is_some()) {
-        crate::mux_log!(info; "fno mux e2e[pid {}]: {msg}", std::process::id());
-    }
 }
 
 /// Whether `node` (an id or slug) names a READY card in the server's backlog
