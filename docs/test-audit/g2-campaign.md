@@ -1,6 +1,7 @@
 # G2 cut ledger: spawn, harness adapters, providers, hooks and the rest of fno-agents
 
-Base `aa9a1f7e4d` (origin/main at start). Scope: the 576 files the path rule in the [README](README.md#campaigns) gives G2 - every `crates/fno-agents` path that matches no G3 or G1 Rust word, plus `crates/fno-agents/tests/done_close_note.rs`, which landed after the map was cut.
+Base `aa9a1f7e4d` (origin/main at start). Scope: the 576 files the path rule in the [README](README.md#campaigns) gives G2.
+That is every `crates/fno-agents` path matching no G3 or G1 Rust word, plus `crates/fno-agents/tests/done_close_note.rs`, which landed after the map was cut.
 
 The cut stops short of the target. This ledger names each kept contract per the README's stop-short clause. The roughly 450 files this pass did not reach are the campaign's continuation, which owns the remaining 1,230-case cut.
 
