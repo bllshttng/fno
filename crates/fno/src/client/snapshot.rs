@@ -1415,8 +1415,9 @@ pr_number (scripts/ops/mux-demo-snapshot.sh seeds one)",
         | Some(ViewKind::MessagesYouThread)
         | None => {}
         Some(ViewKind::Decisions) => {
+            let node = format!("x-{}", 7145);
             let rows = serde_json::from_value(serde_json::json!([
-                {"decision_id":"d-1","decision":"Ship the Decisions tab whole","subject":"x-7145","subject_node":"x-7145","subject_pr":"","subject_text":"","decided_by":"jc","authority_source":"operator","quote":"build all of it","ts":"2026-11-03T09:00:00Z","lifecycle":"live","lane":"law","question":"Split the node into three PRs?"},
+                {"decision_id":"d-1","decision":"Ship the Decisions tab whole","subject":node,"subject_node":node,"subject_pr":"","subject_text":"","decided_by":"jc","authority_source":"operator","quote":"build all of it","ts":"2026-11-03T09:00:00Z","lifecycle":"live","lane":"law","question":"Split the node into three PRs?"},
                 {"decision_id":"d-2","decision":"Hold CI until the ranked PRs land","subject":"fnodotdev/fno#4414","subject_node":"","subject_pr":"#4414","subject_text":"","decided_by":"7c1e9a02-1111-4222-8333-444455556666","decided_by_name":"iris","authority_source":"role","ts":"2026-11-02T15:30:00Z","lifecycle":"live","lane":"coord"},
                 {"decision_id":"d-3","decision":"Retry the push after the rate limit","subject":"push","subject_node":"","subject_pr":"","subject_text":"push","ts":"2026-10-30T11:00:00Z","lifecycle":"expired","lane":"unattributed"},
                 {"decision_id":"d-4","decision":"Use the shared pane for retract","subject":"mux","subject_node":"","subject_pr":"","subject_text":"mux","ts":"2026-10-28T08:15:00Z","lifecycle":"live","lane":"unattributed"}

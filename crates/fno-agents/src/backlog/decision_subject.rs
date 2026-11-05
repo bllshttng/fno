@@ -113,7 +113,7 @@ mod tests {
 
     #[test]
     fn reads_the_kind_from_the_string() {
-        assert_eq!(classify("x-7145"), SubjectKind::Node);
+        assert_eq!(classify("x-aaaa"), SubjectKind::Node);
         assert_eq!(classify("fnodotdev/fno#4414"), SubjectKind::Pr);
         assert_eq!(classify("PR 4414"), SubjectKind::Pr);
         assert_eq!(
@@ -130,8 +130,8 @@ mod tests {
         split_into(&mut old);
         assert_eq!(old["subject_pr"], "#4414");
         assert_eq!(old["subject_node"], "");
-        let mut stamped = json!({"subject": "x-7145", "subject_kind": "topic"});
+        let mut stamped = json!({"subject": "x-aaaa", "subject_kind": "topic"});
         split_into(&mut stamped);
-        assert_eq!(stamped["subject_text"], "x-7145");
+        assert_eq!(stamped["subject_text"], "x-aaaa");
     }
 }
