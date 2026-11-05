@@ -98,6 +98,17 @@ fn xml_escape(value: &str) -> String {
         .replace('\'', "&apos;")
 }
 
+/// The `fno` the plist execs when no `--fno-binary` names one: the front door
+/// beside this binary (every install lands them together), else bare `fno`.
+/// `fno do pr watch tick` is native, so the agent never needs `fno-py`.
+pub(crate) fn default_fno_binary() -> String {
+    std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|dir| dir.join("fno")))
+        .filter(|fno| fno.is_file())
+        .map_or_else(|| "fno".to_string(), |fno| fno.display().to_string())
+}
+
 /// The fixed PATH an agent runs with: the fno binary's own dir when it carries
 /// one, then the cargo bin dir, then the standard install roots. The caller's
 /// env never leaks in - a launchd PATH without the cargo bin failed every tick
@@ -442,7 +453,7 @@ pub fn run(args: &[String]) -> i32 {
     let mut no_activate = false;
     let mut ensure = false;
     let mut interval: i64 = 0;
-    let mut fno_binary = String::from("fno-py");
+    let mut fno_binary = default_fno_binary();
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
         let mut take_value = |flag: &str| match iter.next() {
@@ -722,6 +733,12 @@ mod tests {
         assert!(!glob_match_postmerge("com.fno.postmerge.plist.bak"));
         assert!(!glob_match_postmerge("sh.fno.pr-watcher.plist"));
         assert!(!glob_match_postmerge("com.fno.postmerge"));
+    }
+
+    #[test]
+    fn the_default_binary_is_the_front_door_never_fno_py() {
+        let fno = default_fno_binary();
+        assert!(fno == "fno" || fno.ends_with("/fno"), "{fno}");
     }
 
     #[test]
