@@ -230,14 +230,18 @@
     const key = JSON.stringify(runs);
     const paint = () => {
       const frag = document.createDocumentFragment();
+      // One wrapper span per row: the kept pane's cap counts child elements,
+      // so a row must be exactly one element or the trim would orphan runs.
+      const rowEl = document.createElement("span");
       for (const run of runs) {
         const span = document.createElement("span");
         if (run.cur) span.className = "cur";
         for (const [prop, value] of run.props) span.style[prop] = value;
         span.textContent = run.text;
-        frag.append(span);
+        rowEl.append(span);
       }
-      frag.append(document.createTextNode("\n"));
+      rowEl.append(document.createTextNode("\n"));
+      frag.append(rowEl);
       return frag;
     };
     return { key, paint };
