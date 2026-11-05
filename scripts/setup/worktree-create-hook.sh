@@ -133,13 +133,23 @@ fi
 # branch. Without this check, re-running `claude --worktree X` after
 # removing X fails with "a branch named worktree-X already exists". Attach
 # to the existing branch; user can rename the old one aside to start fresh.
+ADD_RC=0
 if git show-ref --verify --quiet "refs/heads/$BRANCH_NAME"; then
     echo "    Branch $BRANCH_NAME already exists; attaching (to start fresh instead, rename" >&2
     echo "    the old branch out of the way: git branch -m $BRANCH_NAME $BRANCH_NAME-old)" >&2
-    git worktree add "$WORKTREE_PATH" "$BRANCH_NAME" >&2
+    git worktree add "$WORKTREE_PATH" "$BRANCH_NAME" >&2 || ADD_RC=$?
 else
-    git worktree add -b "$BRANCH_NAME" "$WORKTREE_PATH" "$BASE" >&2
+    git worktree add -b "$BRANCH_NAME" "$WORKTREE_PATH" "$BASE" >&2 || ADD_RC=$?
 fi
+# A killed or crashed add leaves git's "initializing" lock, on failure or not;
+# a finished add already dropped it and this is a no-op.
+_INIT_LOCK_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" 2>/dev/null && pwd)/worktree-init-lock.sh"
+if [[ -f "$_INIT_LOCK_LIB" ]]; then
+    # shellcheck source=../lib/worktree-init-lock.sh
+    source "$_INIT_LOCK_LIB"
+    wt_release_init_lock "$WORKTREE_PATH" || true
+fi
+[ "$ADD_RC" -eq 0 ] || exit "$ADD_RC"
 
 # Run the canonical setup script inside the new worktree if it exists.
 # The script handles internal/ symlink, .fno/ state linking, .claude/

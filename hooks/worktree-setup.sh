@@ -158,6 +158,18 @@ else
     wt_link() { echo "Note: $_WT_LIB missing; shared state not linked" >&2; }
 fi
 
+# A killed or crashed `git worktree add` leaves git's "initializing" lock, which
+# makes the tree unremovable. Release it on every exit of an add; a finished add
+# already dropped it and this is a no-op.
+_WT_INIT_LOCK_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/scripts/lib/worktree-init-lock.sh"
+if [[ -f "$_WT_INIT_LOCK_LIB" ]]; then
+    # shellcheck source=../scripts/lib/worktree-init-lock.sh
+    source "$_WT_INIT_LOCK_LIB"
+    _wt_release_init_lock() { wt_release_init_lock "$1" 2>/dev/null || true; }
+else
+    _wt_release_init_lock() { :; }
+fi
+
 # 0. Worktree relocation: the RESOLVED policy decides, never a raw config
 # read. `fno agents workspace worktree policy` - the same resolver
 # `worktree ensure` uses - is the one location answer, so an explicit
@@ -211,14 +223,17 @@ if [[ -n "$RELOCATE_BASE" && -n "$NAME_FROM_INPUT" ]]; then
                 fi
                 git -C "$MAIN_REPO" worktree add "$CANONICAL" "$BRANCH_NAME" >&2 || {
                     echo "Worktree redirect failed; leaving in place at $WORKTREE_PATH" >&2
+                    _wt_release_init_lock "$CANONICAL"
                     CANONICAL=""
                 }
             else
                 git -C "$MAIN_REPO" worktree add -b "$BRANCH_NAME" "$CANONICAL" "$BASE" >&2 || {
                     echo "Worktree redirect failed; leaving in place at $WORKTREE_PATH" >&2
+                    _wt_release_init_lock "$CANONICAL"
                     CANONICAL=""
                 }
             fi
+            [[ -z "$CANONICAL" ]] || _wt_release_init_lock "$CANONICAL"
         fi
 
         # Best-effort: remove Claude Code's default-location worktree if

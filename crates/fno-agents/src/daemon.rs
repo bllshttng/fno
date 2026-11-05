@@ -726,6 +726,9 @@ fn rm_take_worktree_with(
 
 pub(crate) fn rm_take_worktree(entry: &state::RegistryEntry) -> Option<PruneOutcome> {
     rm_take_worktree_with(entry, &worktree_gate, &|cwd| {
+        // A dead setup's stale `initializing` lock makes the remove refuse.
+        let path = std::path::Path::new(cwd);
+        crate::worktree::init_lock::release(path, path, crate::worktree::init_lock::STALE_AFTER);
         // Run git FROM the worktree: the daemon's own cwd is usually not a
         // repository, and `git worktree remove` needs one to resolve against.
         // A forced self-removal from inside the leaf is allowed by git.
