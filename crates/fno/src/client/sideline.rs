@@ -11,8 +11,8 @@ mod observer_rows;
 use super::*;
 use crate::text_style::TLine;
 
-/// A snapshot freezes the need-input pulse on one beat, so a still shot can
-/// show each frame. The live client never sets it.
+/// A snapshot freezes the need-input mark on one point of its turn (up for
+/// ON, down for OFF), so a still shot can show two frames. The live client never sets it.
 pub(super) static PULSE_PIN: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
 pub(super) const PULSE_ON: u8 = 1;
 pub(super) const PULSE_OFF: u8 = 2;
@@ -435,8 +435,9 @@ impl View {
             PULSE_OFF => return TURN[2],
             _ => {}
         }
-        let frame = crate::lattice::spin_epoch()
-            .map_or(0, |t0| t0.elapsed().as_millis() as u64 / crate::lattice::SPIN_FRAME_MS);
+        let frame = crate::lattice::spin_epoch().map_or(0, |t0| {
+            t0.elapsed().as_millis() as u64 / crate::lattice::SPIN_FRAME_MS
+        });
         TURN[frame as usize % TURN.len()]
     }
 
