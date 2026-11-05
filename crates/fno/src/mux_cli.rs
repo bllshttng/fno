@@ -5287,13 +5287,20 @@ mod tests {
 
     #[test]
     fn pane_help_names_the_two_pane_reference_forms() {
-        // The command-position help request renders the pane group's help now
-        // (clap); its after_help carries the pane reference line. The run
-        // tail's own -h reaches the same text, plus the worker flag contract.
+        // The pane group help's byte pins, one table: the command-position
+        // help request renders the pane group's help now (clap); its
+        // after_help carries the pane reference line. The run tail's own -h
+        // reaches the same text, plus the worker flag contract. The send
+        // contract's DEFAULT is the surprising half, so the help must state
+        // it: an operator who only learns `--raw` exists still does not know
+        // what a plain send now carries.
         let group = crate::cli_args::pane_group_help();
         assert!(group.contains("<pane-id>"), "{group}");
         assert!(group.contains("<session>:<pane-id>"), "{group}");
         assert!(group.contains("--session overrides"), "{group}");
+        assert!(group.contains("--raw"), "{group}");
+        assert!(group.contains("<fno_mail>"), "{group}");
+        assert!(group.contains("option prompt"), "{group}");
         let tail = parse_pane_args(&op_of("run"), &os(&["--help"])).unwrap_err();
         for help in [group, tail] {
             assert!(help.contains("--worker"), "{help}");
@@ -6097,16 +6104,28 @@ mod tests {
             .contains(r#""max_panes":4"#));
     }
     #[test]
-    fn parse_tab_sel_grammar() {
+    fn parse_tab_sel_reads_ordinals_and_explicit_forms() {
+        // The one `--tab` grammar table: a bare integer is the 1-based
+        // ordinal the UI shows; `ordinal:` is its explicit spelling; `id:` is
+        // the stable id; `active`/`new` and bare names round out the forms;
+        // a malformed ordinal names the token it read.
         assert_eq!(parse_tab_sel("active").unwrap(), TabSel::Active);
         assert_eq!(parse_tab_sel("new").unwrap(), TabSel::New);
         assert_eq!(parse_tab_sel("3").unwrap(), TabSel::Index(3));
-        assert_eq!(parse_tab_sel("id:7").unwrap(), TabSel::Id(7));
+        assert_eq!(parse_tab_sel("ordinal:4").unwrap(), TabSel::Index(4));
         assert_eq!(
-            parse_tab_sel("name:bee").unwrap(),
-            TabSel::Name("bee".into())
+            parse_tab_sel("ordinal:x").unwrap_err(),
+            "--tab ordinal: needs a number, got \"x\""
         );
-        assert_eq!(parse_tab_sel("bee").unwrap(), TabSel::Name("bee".into()));
+        assert_eq!(parse_tab_sel("id:27").unwrap(), TabSel::Id(27));
+        assert_eq!(
+            parse_tab_sel("name:targets").unwrap(),
+            TabSel::Name("targets".into())
+        );
+        assert_eq!(
+            parse_tab_sel("targets").unwrap(),
+            TabSel::Name("targets".into())
+        );
     }
 
     #[test]
@@ -6374,19 +6393,6 @@ mod tests {
     }
 
     #[test]
-    fn mux_pane_send_help_names_the_envelope_default_and_the_raw_opt_out() {
-        // The DEFAULT is the surprising half, so the help must state it. An
-        // operator who only learns `--raw` exists still does not know what a
-        // plain send now carries.
-        // The pane group's help is clap's now; its after_help text carries
-        // the send contract.
-        let err = crate::cli_args::pane_group_help();
-        assert!(err.contains("--raw"), "{err}");
-        assert!(err.contains("<fno_mail>"), "{err}");
-        assert!(err.contains("option prompt"), "{err}");
-    }
-
-    #[test]
     fn submit_confirmation_requires_a_positive_changed_frame() {
         assert!(!positive_post_submit_marker("", ""));
         assert!(!positive_post_submit_marker("seed", ""));
@@ -6396,10 +6402,14 @@ mod tests {
     }
 
     #[test]
-    fn mux_pane_guarded_send_not_idle_maps_to_target_not_idle_exit() {
-        // A guarded send the server refuses (pane's turn not takeable) must
-        // carry its own exit code so a mail sender demotes to durable rather
-        // than the generic error, and never miscalls a stalled paste delivered.
+    fn mux_pane_send_error_exit_rows() {
+        // The send-path error-code table: a guarded send the server refuses
+        // (pane's turn not takeable) carries its own exit code so a mail
+        // sender demotes to durable rather than the generic error, and never
+        // miscalls a stalled paste delivered; DND and the identity refusal
+        // keep their own exits (an earlier draft fed code 14 here, which
+        // passed with the DND arm deleted); every other error class still
+        // collapses to the generic error code.
         let refused = ServerMsg::Err {
             code: err_code::TARGET_NOT_IDLE,
             msg: "receiving agent not idle".into(),
@@ -6408,23 +6418,11 @@ mod tests {
             render_reply(refused, false, false, None),
             EXIT_TARGET_NOT_IDLE
         );
-        // A different error class still collapses to the generic error code.
-        let other = ServerMsg::Err {
-            code: err_code::DEAD_PANE,
-            msg: "no such pane".into(),
-        };
-        assert_eq!(render_reply(other, false, false, None), EXIT_ERROR);
-    }
-
-    #[test]
-    fn mux_pane_dnd_refusal_has_a_distinct_exit() {
         let dnd = ServerMsg::Err {
             code: err_code::TARGET_DND,
             msg: "target is DND; use fno agents mail send to queue durable".into(),
         };
         assert_eq!(render_reply(dnd, false, false, None), EXIT_TARGET_DND);
-        // The identity refusal keeps its own exit: an earlier draft fed code 14
-        // here, which passed with the DND arm deleted.
         let identity = ServerMsg::Err {
             code: err_code::TARGET_IDENTITY_MISMATCH,
             msg: "target identity mismatch".into(),
@@ -6433,6 +6431,11 @@ mod tests {
             render_reply(identity, false, false, None),
             EXIT_TARGET_IDENTITY_MISMATCH
         );
+        let other = ServerMsg::Err {
+            code: err_code::DEAD_PANE,
+            msg: "no such pane".into(),
+        };
+        assert_eq!(render_reply(other, false, false, None), EXIT_ERROR);
     }
 
     #[test]
@@ -6562,20 +6565,16 @@ mod tests {
         let c = session_check("old", VersionVerdict::Stale);
         assert_eq!(c.verdict, Verdict::Warn);
         assert!(c.remedy.as_deref().unwrap().contains("kill-server old"));
-    }
-    #[test]
-    fn squad_store_verdict_rows() {
+
+        // AC3-UI: N>0 prunable -> warn naming the count + the prune remedy; a
+        // Warn never flips doctor's exit non-zero (only Fail does).
         let c = squad_store_verdict(0, 0);
         assert_eq!(c.verdict, Verdict::Na);
         assert_eq!(c.name, "workspace store (squads.json)");
         assert!(c.remedy.is_none());
-
         let c = squad_store_verdict(7, 0);
         assert_eq!(c.verdict, Verdict::Ok);
         assert!(c.detail.contains("7 workspace(s), none orphaned"));
-
-        // AC3-UI: N>0 prunable -> warn naming the count + the prune remedy; a
-        // Warn never flips doctor's exit non-zero (only Fail does).
         let c = squad_store_verdict(137, 124);
         assert_eq!(c.verdict, Verdict::Warn);
         assert!(c.detail.contains("124 orphaned"));
@@ -6599,16 +6598,14 @@ mod tests {
         assert_eq!(render_doctor(&checks, &[], false), EXIT_ERROR);
     }
     #[test]
-    fn doctor_copy_degraded_without_a_clipboard_tool() {
-        // AC6-EDGE: no local tool -> copy flagged degraded (Warn), before the
-        // user ever hits AC2-ERR. A present tool is Ok.
+    fn doctor_check_verdict_rows_env() {
+        // AC6-EDGE: no local clipboard tool -> copy flagged degraded (Warn)
+        // with the OSC 52 fallback detail, before the user ever hits AC2-ERR;
+        // a present tool is Ok. The env sniffs warn on missing color or
+        // terminal info and pass real values.
         assert_eq!(clipboard_check(None).verdict, Verdict::Warn);
         assert!(clipboard_check(None).detail.contains("OSC 52 fallback"));
         assert_eq!(clipboard_check(Some("pbcopy")).verdict, Verdict::Ok);
-    }
-
-    #[test]
-    fn doctor_truecolor_and_terminal_env_sniffs() {
         assert_eq!(truecolor_check("truecolor").verdict, Verdict::Ok);
         assert_eq!(truecolor_check("24bit").verdict, Verdict::Ok);
         assert_eq!(truecolor_check("").verdict, Verdict::Warn);
@@ -6896,65 +6893,13 @@ mod tests {
             1,
             "LD1: the command must never be re-sent while a reply may still be coming"
         );
-    }
-
-    #[test]
-    fn control_unanswered_exits_control_unanswered_not_error() {
-        // The dispatch path (pane run/send/kill) must map Unanswered to its
-        // own exit code, distinct from EXIT_ERROR, so a caller can tell "no
-        // reply" from every other control failure.
-        let sock = control_test_sock("exit-code");
-        let _ = std::fs::remove_file(&sock);
-        let listener = std::os::unix::net::UnixListener::bind(&sock).unwrap();
-        let server = std::thread::spawn(move || {
-            let (mut s, _) = listener.accept().unwrap();
-            let _msg: ClientMsg = read_msg_sync(&mut s).unwrap();
-            std::thread::sleep(Duration::from_secs(1));
-        });
-
-        let stream = std::os::unix::net::UnixStream::connect(&sock).unwrap();
-        let result = send_control(
-            stream,
-            ControlCommand::PaneLs,
-            Duration::from_millis(50),
-            Duration::from_millis(150),
-            "test-session",
-        );
-        server.join().unwrap();
-        let _ = std::fs::remove_file(&sock);
-
-        let exit = match result {
-            Err(ControlError::Unanswered(_)) => EXIT_CONTROL_UNANSWERED,
-            Err(ControlError::Fatal(_)) => EXIT_ERROR,
-            Err(ControlError::FatalCode { .. }) => EXIT_ERROR,
-            Ok(_) => EXIT_OK,
-        };
-        assert_eq!(exit, EXIT_CONTROL_UNANSWERED);
+        // The dispatch path maps Unanswered to its own exit code, distinct
+        // from EXIT_ERROR, so a caller can tell "no reply" from every other
+        // control failure.
         assert_ne!(EXIT_CONTROL_UNANSWERED, EXIT_ERROR);
     }
 
     // -- ordinal translation + human rendering ---------------------
-
-    #[test]
-    fn parse_tab_sel_reads_ordinals_and_explicit_forms() {
-        // A bare integer is the 1-based ordinal the UI shows; `ordinal:` is
-        // its explicit spelling; `id:` stays the stable id.
-        assert_eq!(parse_tab_sel("3").unwrap(), TabSel::Index(3));
-        assert_eq!(parse_tab_sel("ordinal:4").unwrap(), TabSel::Index(4));
-        assert_eq!(
-            parse_tab_sel("ordinal:x").unwrap_err(),
-            "--tab ordinal: needs a number, got \"x\""
-        );
-        assert_eq!(parse_tab_sel("id:27").unwrap(), TabSel::Id(27));
-        assert_eq!(
-            parse_tab_sel("name:targets").unwrap(),
-            TabSel::Name("targets".into())
-        );
-        assert_eq!(
-            parse_tab_sel("targets").unwrap(),
-            TabSel::Name("targets".into())
-        );
-    }
 
     #[test]
     fn human_tab_render_label_prefers_name_then_ordinal() {
