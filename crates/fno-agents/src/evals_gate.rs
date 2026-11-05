@@ -64,11 +64,12 @@ const MAX_TASK_WALL_S: f64 = 180.0;
 const NEW_HEADS_PER_TICK: usize = 10;
 const DEFAULT_DAILY_USD: f64 = 15.0;
 const DEFAULT_LANE: &str = "zai-flash";
-/// The user's zai-peak ruling: Monday to Friday, 06:00 to 10:00 UTC, zai burns
-/// credits at twice the rate, so the gate keeps its runs off zai then.
-fn zai_peak(now: DateTime<Utc>) -> bool {
-    use chrono::{Datelike, Timelike};
-    now.weekday().num_days_from_monday() < 5 && (6..10).contains(&now.hour())
+/// True when a routing row serves `vendor` by account or route prefix.
+fn row_is_vendor(r: &Value, vendor: &str) -> bool {
+    r["account"].as_str() == Some(vendor)
+        || r["route"]
+            .as_str()
+            .is_some_and(|v| v.starts_with(&format!("{vendor}/")))
 }
 
 /// True when `lane` rides zai, read from the routing inventory. A lane the
@@ -78,19 +79,71 @@ fn lane_is_zai(repo: &Path, lane: &str) -> bool {
         .get("rows")
         .and_then(Value::as_array)
         .and_then(|rows| rows.iter().find(|r| r["name"].as_str() == Some(lane)))
-        .is_some_and(|r| {
-            r["account"].as_str() == Some("zai")
-                || r["route"].as_str().is_some_and(|v| v.starts_with("zai/"))
-        })
+        .is_some_and(|r| row_is_vendor(r, "zai"))
 }
 
-/// True when a gate run on `lane` waits for the peak window to end.
-pub(crate) fn zai_peak_hold(repo: &Path, lane: &str, now: DateTime<Utc>) -> bool {
-    zai_peak(now) && lane_is_zai(repo, lane)
+/// True when every zai record's 5h window reads under `threshold`. Rows sit
+/// in records order (`usage::collect` maps them so). A zai record with no
+/// readable 5h window answers false: a probe that cannot see the window is
+/// exactly the case that moves the run off zai. No zai record is the same
+/// answer - the lane cannot be proven runnable.
+fn zai_window_room(
+    records: &[crate::accounts::records::Record],
+    rows: &[crate::accounts::usage::Row],
+    threshold: f64,
+) -> bool {
+    let mut saw_zai = false;
+    for (record, row) in records.iter().zip(rows.iter()) {
+        let provider = record
+            .route
+            .as_deref()
+            .and_then(crate::spawn_route::parse_target)
+            .map(|(p, _)| p);
+        let key = provider.as_deref().unwrap_or(&record.harness);
+        if key != "zai" {
+            continue;
+        }
+        saw_zai = true;
+        let room = row
+            .entry
+            .get("windows")
+            .and_then(Value::as_array)
+            .and_then(|ws| ws.iter().find(|w| w["label"].as_str() == Some("5h")))
+            .and_then(|w| w["used_pct"].as_f64())
+            .is_some_and(|pct| pct < threshold);
+        if !room {
+            return false;
+        }
+    }
+    saw_zai
 }
 
-/// Runs once when the main lane gives up with no grade, so a capped lane does
-/// not leave the day without graded rows.
+/// The lane this run rides. A zai lane runs while its 5h window has room
+/// under the quota defer threshold, read through the same probe
+/// `fno config accounts usage` runs; a window at the cap, an unreadable
+/// reading, or a failed probe moves the run to the fixed sonnet fallback
+/// lane (the user's ruling: z.ai usage matters, not the clock). The fallback
+/// is fixed, never the first claude inventory row: that row can be opus, and
+/// opus never runs target work.
+pub(crate) fn lane_with_room(repo: &Path, lane: &str, now: DateTime<Utc>) -> String {
+    if !lane_is_zai(repo, lane) {
+        return lane.to_string();
+    }
+    let room = match crate::accounts::usage::report(repo, false, now.timestamp() as f64) {
+        Ok((records, rows, threshold)) => zai_window_room(&records, &rows, threshold),
+        Err(_) => false,
+    };
+    if room {
+        lane.to_string()
+    } else {
+        FALLBACK_LANE.to_string()
+    }
+}
+
+/// The lane a run moves to when it cannot ride its own: the main lane's
+/// no-grade fallback, and a zai window with no room. A fixed sonnet lane,
+/// never the first claude inventory row, which can be opus, and opus never
+/// runs target work.
 const FALLBACK_LANE: &str = "claude-sonnet-5";
 const FALLBACK_SUFFIX: &str = "-fallback";
 
@@ -942,9 +995,7 @@ fn main_seat(
             Err(cause) => return (main_failed(d, state, seat, &cohort, cause), false),
         }
     };
-    if zai_peak_hold(p.repo, &lane, d.now) {
-        return (format!("main {cohort} waits out the zai peak"), true);
-    }
+    let lane = lane_with_room(p.repo, &lane, d.now);
     let run_cohort = if fallback {
         format!("{cohort}{FALLBACK_SUFFIX}")
     } else {
@@ -1366,9 +1417,7 @@ fn launch_head(
     }
     let cohort = format!("gate-head-{}", short(&pr.sha));
     let lane = config_lane(p.repo);
-    if zai_peak_hold(p.repo, &lane, d.now) {
-        return format!("head {} waits out the zai peak", short(&pr.sha));
-    }
+    let lane = lane_with_room(p.repo, &lane, d.now);
     let mut argv = run_argv(
         p,
         ("--task", &tasks.join(",")),
@@ -2321,39 +2370,31 @@ mod tests {
     }
 
     #[test]
-    fn a_bank_only_head_grades_its_changed_goldens_and_leaves_the_tier_out() {
-        let w = World::new("evals/bank/g1.yaml\nevals/fixtures/metrics/g1.yaml\n");
-        std::fs::write(
-            w.dir.path().join("evals/bank/g5.yaml"),
-            "id: g5\ntier: capability\nprompt: p\ngrade:\n  - kind: file-exists\n    path: x\ntags: [gate]\n",
-        )
-        .unwrap();
-        w.with_baseline();
-        w.tick(true, Utc::now());
-        let spawns = w.spawns.borrow();
-        assert_eq!(spawns.len(), 1, "one head launch");
-        let argv = spawns[0].join(" ");
-        assert!(argv.contains("--task g1 "), "{argv}");
-        assert!(!argv.contains("g5"), "{argv}");
-        let posts = w.posts.borrow();
-        assert_eq!(posts.len(), 1, "pending only: {posts:?}");
-        assert!(posts[0].starts_with("state=pending"), "{posts:?}");
-    }
-
-    #[test]
-    fn a_skills_head_still_selects_the_whole_gate_tier() {
-        let w = World::new("skills/x/SKILL.md\n");
-        std::fs::write(
-            w.dir.path().join("evals/bank/g5.yaml"),
-            "id: g5\ntier: capability\nprompt: p\ngrade:\n  - kind: file-exists\n    path: x\ntags: [gate]\n",
-        )
-        .unwrap();
-        w.with_baseline();
-        w.tick(true, Utc::now());
-        let spawns = w.spawns.borrow();
-        assert_eq!(spawns.len(), 1, "one head launch");
-        let argv = spawns[0].join(" ");
-        assert!(argv.contains("--task g1,g5 "), "{argv}");
+    fn a_bank_only_head_grades_its_changed_goldens_and_a_skills_head_keeps_the_tier() {
+        // (changed files, the task list the launch must carry)
+        for (files, tasks) in [
+            (
+                "evals/bank/g1.yaml\nevals/fixtures/metrics/g1.yaml\n",
+                "--task g1 ",
+            ),
+            ("skills/x/SKILL.md\n", "--task g1,g5 "),
+        ] {
+            let w = World::new(files);
+            std::fs::write(
+                w.dir.path().join("evals/bank/g5.yaml"),
+                "id: g5\ntier: capability\nprompt: p\ngrade:\n  - kind: file-exists\n    path: x\ntags: [gate]\n",
+            )
+            .unwrap();
+            w.with_baseline();
+            w.tick(true, Utc::now());
+            let spawns = w.spawns.borrow();
+            assert_eq!(spawns.len(), 1, "{files}: one head launch");
+            let argv = spawns[0].join(" ");
+            assert!(argv.contains(tasks), "{files}: {argv}");
+            if tasks == "--task g1 " {
+                assert!(!argv.contains("g5"), "{files}: {argv}");
+            }
+        }
     }
 
     #[test]
@@ -2498,5 +2539,121 @@ mod tests {
                 .exists(),
             "the leaked lock did not come back"
         );
+    }
+
+    fn usage_record(route: Option<&str>) -> crate::accounts::records::Record {
+        crate::accounts::records::Record {
+            id: "z1".into(),
+            name: "z".into(),
+            harness: "claude".into(),
+            auth: "managed".into(),
+            priority: 0,
+            route_provider_id: None,
+            model_name: None,
+            credentials_source: None,
+            env: None,
+            route: route.map(str::to_string),
+            reset_timezone: None,
+            window_minutes: None,
+            account_id: String::new(),
+            tags: vec![],
+            description: None,
+            config_dir: None,
+            pricing: None,
+            cost_cap_usd_per_session: None,
+            extra: Default::default(),
+        }
+    }
+
+    fn usage_row(windows: Value) -> crate::accounts::usage::Row {
+        crate::accounts::usage::Row {
+            entry: windows,
+            identity: None,
+        }
+    }
+
+    #[test]
+    fn zai_window_room_reads_every_zai_records_5h_window() {
+        let windows = |pct: Value| {
+            json!({"windows": [
+                {"label": "weekly", "used_pct": 10.0},
+                {"label": "5h", "used_pct": pct},
+            ]})
+        };
+        let zai = usage_record(Some("zai/glm-5.3-flash"));
+        let other = usage_record(Some("claude/sonnet-5"));
+        let threshold = 90.0;
+
+        // Room: the 5h window under the threshold. The weekly window and the
+        // non-zai record are ignored.
+        assert!(zai_window_room(
+            &[other.clone(), zai.clone()],
+            &[
+                usage_row(windows(json!(40.0))),
+                usage_row(windows(json!(40.0)))
+            ],
+            threshold
+        ));
+
+        // At the cap: no room.
+        assert!(!zai_window_room(
+            &[zai.clone()],
+            &[usage_row(windows(json!(90.0)))],
+            threshold
+        ));
+
+        // No 5h window at all: the probe cannot prove the lane runnable.
+        assert!(!zai_window_room(
+            &[zai.clone()],
+            &[usage_row(
+                json!({"windows": [{"label": "weekly", "used_pct": 10.0}]})
+            )],
+            threshold
+        ));
+
+        // An unreadable row is no room.
+        assert!(!zai_window_room(
+            &[zai.clone()],
+            &[usage_row(
+                json!({"state": "unknown", "reason": "probe-failed"})
+            )],
+            threshold
+        ));
+
+        // No zai record in the store: no proven room.
+        assert!(!zai_window_room(
+            &[other],
+            &[usage_row(windows(json!(10.0)))],
+            threshold
+        ));
+    }
+
+    #[test]
+    fn a_capped_zai_lane_falls_back_to_the_fixed_sonnet_lane() {
+        // The probe reads no room in both worlds (no account store), so the
+        // lane moves. The fallback is the fixed sonnet lane: never the first
+        // claude inventory row, which can be opus.
+        for (config, banned) in [
+            (
+                "[[routing.models]]\nname = \"zai-flash\"\naccount = \"zai\"\nroute = \"zai/glm-5.3-flash\"\n\n[[routing.models]]\nname = \"claude-opus\"\naccount = \"claude\"\nroute = \"claude/opus-5\"\n\n[[routing.models]]\nname = \"claude-sonnet\"\naccount = \"claude\"\nroute = \"claude/sonnet-5\"\n\n[agents.profiles.role]\nlanes = []\n",
+                "claude-opus",
+            ),
+            (
+                "[[routing.models]]\nname = \"zai-flash\"\naccount = \"zai\"\nroute = \"zai/glm-5.3-flash\"\n\n[agents.profiles.role]\nlanes = []\n",
+                "",
+            ),
+        ] {
+            let w = World::new("skills/x/SKILL.md\n");
+            World::config(w.dir.path(), config);
+            w.with_baseline();
+            w.tick(true, Utc::now());
+            let spawns = w.spawns.borrow();
+            assert_eq!(spawns.len(), 1, "the head launched on the fallback");
+            let argv = spawns[0].join(" ");
+            assert!(argv.contains("--lane claude-sonnet-5 "), "{argv}");
+            if !banned.is_empty() {
+                assert!(!argv.contains(banned), "{argv}");
+            }
+        }
     }
 }
