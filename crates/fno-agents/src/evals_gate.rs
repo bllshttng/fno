@@ -714,7 +714,7 @@ fn with_build(p: &Paths, slot: &str, root: &Path, argv: Vec<String>) -> Vec<Stri
 
 /// The checkout a bank dir sits in: `<root>/evals/bank`.
 fn checkout_of(bank: &Path) -> Option<&Path> {
-    bank.parent()?.parent()?.parent()
+    bank.parent()?.parent()
 }
 
 /// TOML writes the budget as a float or an integer; a string read alone missed both.
@@ -1522,6 +1522,13 @@ mod tests {
             git(&["init", "-b", "main"]);
             git(&["config", "user.email", "t@t"]);
             git(&["config", "user.name", "t"]);
+            // g1 is in both commits, so the checkout's bank and the head's bank
+            // both carry its covers line.
+            std::fs::write(
+                w.dir.path().join("evals/bank/g1.yaml"),
+                format!("id: g1\ntier: capability\nprompt: p\ngrade:\n  - kind: file-exists\n    path: x\ntags: [{GATE_TAG}]\ncovers: [\"crates/x/\"]\n"),
+            )
+            .unwrap();
             git(&["add", "evals"]);
             git(&["commit", "-m", "x"]);
             let x = String::from_utf8_lossy(&git(&["rev-parse", "HEAD"]).stdout)
@@ -1787,6 +1794,21 @@ mod tests {
         assert!(argv.contains("--bank"), "{argv}");
         assert!(argv.contains(&format!("--ref {y}")), "{argv}");
         assert_eq!(w.adds.borrow().len(), 1, "one worktree add");
+    }
+
+    #[test]
+    fn a_covered_crate_head_builds_the_checkout_it_read_the_bank_from() {
+        let w = World::new_git("crates/x/a.rs\n");
+        w.with_baseline();
+        w.tick(true, Utc::now());
+        let spawns = w.spawns.borrow();
+        assert_eq!(spawns.len(), 1, "one head launch");
+        let slot = state_dir(&w.history()).join("ref-head");
+        let argv = spawns[0].join(" ");
+        assert!(
+            argv.contains(&format!("gate-build {} ", slot.display())),
+            "{argv}"
+        );
     }
 
     #[test]
