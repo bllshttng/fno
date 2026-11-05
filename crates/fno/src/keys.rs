@@ -136,7 +136,7 @@ fn terminal_twin(b: u8) -> Option<&'static str> {
 /// Only the pane-mode letters the shipped table can hold without moving a
 /// third action are kept. The displaced actions get free keys: detach moves to
 /// `Q` (the example the config doc already uses), rerun-block to `u`.
-fn preset_rows(name: &str) -> Option<&'static [(&'static str, &'static str)]> {
+pub(crate) fn preset_rows(name: &str) -> Option<&'static [(&'static str, &'static str)]> {
     match name {
         "tmux" => Some(&[]),
         "zellij" => Some(&[

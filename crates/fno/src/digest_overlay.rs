@@ -619,9 +619,9 @@ mod theme_role_override_tests {
 /// [`crate::keys::resolve_keymap`], which is pure.
 pub fn keymap(cwd: &Path) -> (crate::keys::Keymap, Vec<crate::keys::KeymapWarning>) {
     let prefix = mux_str(cwd, "prefix");
-    let (entries, read_warnings) = mux_keys_table(cwd);
-    let (entries, preset_warnings) =
-        crate::keys::with_preset(mux_str(cwd, "preset").as_deref(), entries);
+    let (entries, preset, read_warnings) = keybinding_rows(cwd);
+    crate::keybindings_file::set_active_preset(preset.as_deref());
+    let (entries, preset_warnings) = crate::keys::with_preset(preset.as_deref(), entries);
     let (map, mut warnings) = crate::keys::resolve_keymap(prefix.as_deref(), &entries);
     warnings.extend(preset_warnings);
     // Read-time problems first: a file that would not parse explains every
@@ -635,13 +635,74 @@ pub fn keymap(cwd: &Path) -> (crate::keys::Keymap, Vec<crate::keys::KeymapWarnin
     (map, warnings)
 }
 
-/// The file the settings key page edits: `$FNO_CONFIG` when it pins one,
-/// else this checkout's `.fno/config.toml`, the file `fno config set
-/// --local` writes.
+/// The key rows and preset the mux runs on, plus what stopped the reader.
+///
+/// `keybindings.json` wins whenever it exists. The retired `[mux.keys]` and
+/// `mux.preset` in config.toml are read only when it does not: they move into
+/// a new `keybindings.json` once, and after that a leftover copy is ignored
+/// with a notice naming the file to edit instead.
+fn keybinding_rows(
+    cwd: &Path,
+) -> (
+    Vec<(String, String)>,
+    Option<String>,
+    Vec<crate::keys::KeymapWarning>,
+) {
+    use crate::keybindings_file as kb;
+    let legacy = |cwd: &Path| {
+        let (rows, warnings) = mux_keys_table(cwd);
+        (rows, mux_str(cwd, "preset"), warnings)
+    };
+    let Some(path) = kb::path() else {
+        return legacy(cwd);
+    };
+    match kb::load(&path) {
+        Ok(Some(loaded)) => {
+            let (old_rows, old_preset, _) = legacy(cwd);
+            let mut warnings = loaded.warnings;
+            if !old_rows.is_empty() || old_preset.is_some() {
+                warnings.push(crate::keys::KeymapWarning(format!(
+                    "config.toml mux.keys and mux.preset are retired; edit {}",
+                    path.display()
+                )));
+            }
+            (loaded.rows, loaded.preset, warnings)
+        }
+        Ok(None) => {
+            let (rows, preset, mut warnings) = legacy(cwd);
+            if rows.is_empty() && preset.is_none() {
+                return (rows, preset, warnings);
+            }
+            // Read once, moved, retired: the file now holds what config.toml
+            // held, so the next launch reads the file and this branch is gone.
+            let written = path
+                .parent()
+                .map_or(Ok(()), std::fs::create_dir_all)
+                .and_then(|()| std::fs::write(&path, kb::sparse(preset.as_deref(), &rows)));
+            warnings.push(crate::keys::KeymapWarning(match written {
+                Ok(()) => format!(
+                    "moved mux.keys and mux.preset to {}; delete them from config.toml",
+                    path.display()
+                ),
+                Err(e) => format!(
+                    "cannot move mux.keys to {} ({e}); read from config.toml",
+                    path.display()
+                ),
+            }));
+            (rows, preset, warnings)
+        }
+        Err(w) => (Vec::new(), None, vec![w]),
+    }
+}
+
+/// The file the settings key page edits: `keybindings.json`, with a starter
+/// written first when none exists. Falls back to the checkout's
+/// `.fno/config.toml` only when no global location resolves.
 pub(crate) fn keys_file_path(cwd: &Path) -> PathBuf {
-    match non_empty_env("FNO_CONFIG") {
-        Some(explicit) => PathBuf::from(explicit),
-        None => project_root(cwd).join(".fno").join("config.toml"),
+    let preset = mux_str(cwd, "preset").unwrap_or_else(|| "tmux".into());
+    match crate::keybindings_file::ensure_starter(&preset) {
+        Ok(path) => path,
+        Err(_) => project_root(cwd).join(".fno").join("config.toml"),
     }
 }
 
