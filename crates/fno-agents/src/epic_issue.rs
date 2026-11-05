@@ -117,6 +117,19 @@ fn render_line(row: &Value, handle: Option<&str>) -> String {
     format!("- [{mark}] {}", parts.join(" · "))
 }
 
+/// The hidden tail of an owner line. It is an HTML comment, so a reader sees
+/// nothing, and it carries the node id alone. An id that could close the
+/// comment never reaches the issue.
+const ID_MARKER_OPEN: &str = "<!-- fno:";
+const ID_MARKER_CLOSE: &str = " -->";
+
+fn is_plain_id(id: &str) -> bool {
+    !id.is_empty()
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+}
+
 /// An owner child's line. A stale `/claim` took its handle from the ledger.
 fn node_line(
     row: &Value,
@@ -125,12 +138,17 @@ fn node_line(
     ledger: &[claim::Entry],
 ) -> String {
     let id = text(row, "id");
-    match ledger
+    let line = match ledger
         .iter()
         .find(|e| e.stale && e.node.as_deref() == Some(id))
     {
         Some(e) => format!("{} · stale", render_line(row, Some(&e.login))),
         None => render_line(row, handle_of(claims, id, owner_login).as_deref()),
+    };
+    if is_plain_id(id) {
+        format!("{line} {ID_MARKER_OPEN}{id}{ID_MARKER_CLOSE}")
+    } else {
+        line
     }
 }
 
@@ -543,7 +561,10 @@ mod tests {
     #[test]
     fn one_pass_opens_one_issue_with_a_line_per_public_child() {
         let hub = Arc::new(Mutex::new(Hub::default()));
-        let epic = epic(json!({"title": "Ship Vec<T>  work"}));
+        let epic = epic(json!({
+            "title": "Ship Vec<T>  work",
+            "epic_claims": [{"login": "visitor-2", "title": "Contributor idea", "at": "2026-11-01T00:00:00Z"}],
+        }));
         let rows = vec![
             epic.clone(),
             child("kid-1", "First", json!({"pr_number": 12})),
@@ -572,9 +593,22 @@ mod tests {
             .0
             .trim()
             .to_string();
+        // Each owner line ends with its id in a hidden comment. The visible
+        // text is what it was, and a contributor line has no node to name.
+        assert_eq!(inside.matches("<!-- fno:").count(), 3, "{inside}");
+        assert!(inside.contains("#9 <!-- fno:kid-2 -->\n"), "{inside}");
+        let visible: Vec<&str> = inside
+            .lines()
+            .map(|l| l.split(" <!-- fno:").next().unwrap())
+            .collect();
         assert_eq!(
-            inside,
-            "- [ ] First · @visitor-1 · #12\n- [x] Second · #9\n- [ ] Third · @owner"
+            visible,
+            [
+                "- [ ] First · @visitor-1 · #12",
+                "- [x] Second · #9",
+                "- [ ] Third · @owner",
+                "- [ ] Contributor idea · @visitor-2",
+            ]
         );
         assert!(!body.contains("Local only"), "{body}");
         // The issue title is plain text; only the body copy is escaped.
