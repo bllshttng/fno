@@ -2759,7 +2759,7 @@ mod tests {
             let spawns = w.spawns.borrow();
             assert_eq!(spawns.len(), 1, "the head launched on the fallback");
             let argv = spawns[0].join(" ");
-            assert!(argv.contains("--lane claude-sonnet-5 "), "{argv}");
+            assert!(argv.contains("--lane claude-sonnet-5-5 "), "{argv}");
             if !banned.is_empty() {
                 assert!(!argv.contains(banned), "{argv}");
             }
