@@ -1087,7 +1087,11 @@ fn settle_main_run(p: &Paths, d: &Deps, state: &mut State) -> Option<String> {
     } else {
         &WORKER
     };
-    Some(finish_main(p, d, state, seat, &run.cohort))
+    let note = finish_main(p, d, state, seat, &run.cohort);
+    // Same self-persistence as the head settle: the minute arm has no
+    // trailing save, and an unpersisted grade would repeat.
+    save_state(&p.state_dir, state);
+    Some(note)
 }
 
 fn main_leg(p: &Paths, d: &Deps, state: &mut State, can_launch: bool, daily_usd: f64) -> String {
@@ -1584,6 +1588,9 @@ fn settle_head_run(p: &Paths, d: &Deps, state: &mut State, slug: &str, prs: &[Pr
     if post_status(p, d, slug, &run.sha, status, &text) {
         state.heads.insert(run.sha.clone(), disposition.into());
         state.head_run = None;
+        // The settle persists itself: the minute arm has no trailing save,
+        // and an unpersisted settle would re-grade and re-post each minute.
+        save_state(&p.state_dir, state);
     }
 }
 

@@ -1870,6 +1870,10 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // 24h, marking finished rows handled. Emitted even on a quiet or skipped
     // run, so a quiet run cannot be mistaken for a sweep that never ran.
     "park_sweep",
+    // Evals-gate settle (daemon-emitted): the one-minute arm graded a
+    // finished gate run outside the pr-watch tick, or a run is in flight
+    // under it. A fully idle minute stays silent by design.
+    "evals_settle",
     // A parked PR resumed polling (pr-park-emitted): retries reset, by hand
     // (the lead row's command) or by the sweep.
     "pr_watch_unparked",

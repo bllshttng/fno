@@ -322,7 +322,7 @@ mod trust_sweep_tests {
         let home = AgentsHome::from_env();
 
         // The floor: a pass inside 60s of the stamp runs nothing.
-        std::fs::write(home.root().join("evals-settle.stamp"), "1_000").unwrap();
+        std::fs::write(home.root().join("evals-settle.stamp"), "1000").unwrap();
         let quiet = sweeps::evals_settle_sweep(&home, &emitter, 1_000 + 59, &|| "unused".into());
         assert_eq!(quiet, 0);
 

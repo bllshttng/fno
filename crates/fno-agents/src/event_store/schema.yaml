@@ -6538,6 +6538,18 @@ event_types:
           type: integer
         total:
           type: integer
+  - name: evals_settle
+    description: "The daemon's evals-gate settle arm graded a finished gate run on its one-minute floor, outside the pr-watch tick whose budget a fleet-loaded sweep saturates, or journaled a minute spent waiting on a run in flight. A fully idle minute stays silent by design: its whole cost is the one state read that found nothing."
+    sources: [daemon]
+    data:
+      required: [outcome, note]
+      properties:
+        outcome:
+          type: string
+          description: "'ok' on a waiting or acting minute; the arm emits nothing when the gate sits idle."
+        note:
+          type: string
+          description: "The settle's own note: a verdict landed, a run in flight, a head held, or a read failure."
   - name: trust_prompt_answered
     description: "The daemon answered a fno-spawned codex pane's folder-trust modal itself: the modal's first option trusts the worker's own launch cwd. One event per attempt; sent names whether the keystroke landed. Every other parked prompt (approvals, permissions) stays report-only."
     sources: [daemon]
