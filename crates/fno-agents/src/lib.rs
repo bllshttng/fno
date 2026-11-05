@@ -178,6 +178,7 @@ pub mod corrections_verify;
 pub mod cursor_agent;
 pub mod cutover;
 pub mod daemon;
+pub mod daemon_predecessor;
 pub mod day;
 pub mod decide_door;
 pub mod decision_index;
@@ -1916,6 +1917,9 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // Daemon lifecycle (daemon-emitted)
     "daemon_started",
     "daemon_exited",
+    // A replacement daemon found its predecessor gone with no daemon_exited:
+    // names the old pid and how long the log had been quiet.
+    "daemon_died_unexpectedly",
     "daemon_idle_pending_exit",
     // Drift retirement (daemon-emitted): the daemon measured its own
     // build drifted and, at a quiet tick with no live worker, retired through

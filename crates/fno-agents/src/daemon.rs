@@ -934,18 +934,6 @@ pub(crate) fn live_liveness_prober(
     }
 }
 
-/// Terminal-stop sweep: `claude stop` any fire-and-forget `claude --bg`
-/// worker that `finalize` marked terminal. finalize (running as the worker's own
-/// child) cannot self-exit it, so this daemon sweep — external to every worker —
-/// runs the shipped stop on its behalf. A clean stop settles the session `(done)`
-/// and is never Claude-daemon-respawned; roster-presence itself excludes owned-PTY
-/// panes and operator terminals (never `claude --bg` daemon jobs), so a present +
-/// marked job is exactly a done fire-and-forget bg worker.
-///
-/// Cheap in steady state: no markers -> one dir stat, no roster load. A stop
-/// failure leaves the marker for the next tick (retry); a marker whose session is
-/// already gone is dropped as stale.
-
 /// Is `pid` still OUR worker, not a recycled PID? True iff the process exists,
 /// we may signal it, AND its current start time matches `recorded`
 ///. If a start time is unavailable on either side (`None` — lookup
@@ -1079,6 +1067,8 @@ pub async fn bind_supervisor_socket(
     if !lock_held {
         return Err(DaemonError::AlreadyRunning(home.supervisor_sock()));
     }
+
+    crate::daemon_predecessor::capture(home, pid_is_ours);
 
     // Record the holder in the lockfile CONTENT: pid plus start time,
     // so `restart --force` has a SIGKILL target that survives "which daemon
@@ -1377,6 +1367,7 @@ pub async fn run(home: AgentsHome, opts: DaemonOptions) -> Result<(), DaemonErro
         let _ = emitter.emit("daemon_exe_fingerprint_unavailable", &json!({}));
     }
     let pid_start_time = process_start_time(std::process::id());
+    crate::daemon_predecessor::announce_start(&home, &emitter);
     let _ = emitter.emit(
         "daemon_started",
         &json!({
