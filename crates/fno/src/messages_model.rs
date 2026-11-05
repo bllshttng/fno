@@ -49,31 +49,44 @@ static NEXT_VERSION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64
 /// applies (a `paths.chats` config override, else `<state>/chats`); the
 /// mirror lives here because the client crate cannot call the agent crate.
 pub fn store_fingerprint() -> Option<Fingerprint> {
-    let dir = chats_dir()?;
-    let rd = std::fs::read_dir(dir).ok()?;
-    let mut count = 0usize;
-    let mut total_len = 0u64;
-    let mut newest = 0u64;
-    for entry in rd.flatten() {
-        count += 1;
-        let Ok(meta) = entry.path().join("messages.jsonl").metadata() else {
-            continue;
-        };
-        total_len += meta.len();
-        newest = newest.max(
-            meta.modified()
-                .ok()
-                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|d| d.as_secs())
-                .unwrap_or(0),
-        );
-    }
+    let (mut count, mut total_len, mut newest) = chats_facts(&chats_dir()?)?;
     if let Some(transcripts) = transcript_facts() {
         count += transcripts.0;
         total_len += transcripts.1;
         newest = newest.max(transcripts.2);
     }
     Some((count, total_len, newest))
+}
+
+/// The chats store's facts, plus the mail carrier's stamp beside it: the
+/// daemon rewrites `../carrier/stamp` when another machine's mail moves, the
+/// one change on the primary a stat walk can see.
+fn chats_facts(dir: &std::path::Path) -> Option<Fingerprint> {
+    let rd = std::fs::read_dir(dir).ok()?;
+    let stamp = dir.parent().map(|mail| mail.join("carrier").join("stamp"));
+    let mut count = 0usize;
+    let mut total_len = 0u64;
+    let mut newest = 0u64;
+    let files = rd
+        .flatten()
+        .map(|entry| Some(entry.path().join("messages.jsonl")));
+    for path in files.chain([stamp]) {
+        count += 1;
+        let Some(meta) = path.and_then(|p| p.metadata().ok()) else {
+            continue;
+        };
+        total_len += meta.len();
+        newest = newest.max(mtime_secs(&meta));
+    }
+    Some((count, total_len, newest))
+}
+
+fn mtime_secs(meta: &std::fs::Metadata) -> u64 {
+    meta.modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 /// The claude projects dir's transcript facts as `(count, total len, newest
@@ -101,13 +114,7 @@ fn transcript_facts() -> Option<(usize, u64, u64)> {
             }
             count += 1;
             total_len += meta.len();
-            newest = newest.max(
-                meta.modified()
-                    .ok()
-                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                    .map(|d| d.as_secs())
-                    .unwrap_or(0),
-            );
+            newest = newest.max(mtime_secs(&meta));
         }
     }
     Some((count, total_len, newest))
@@ -231,5 +238,23 @@ pub async fn gather() -> Result<Value, String> {
         )),
         Ok(Ok(output)) => serde_json::from_slice(&output.stdout)
             .map_err(|e| format!("mail-threads invalid JSON: {e}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// Another machine's mail never touches the local chats files; the
+    /// carrier's stamp beside them is what moves the fingerprint.
+    #[test]
+    fn the_carrier_stamp_moves_the_fingerprint() {
+        let root = tempfile::tempdir().unwrap();
+        let chats = root.path().join("mail").join("chats");
+        std::fs::create_dir_all(chats.join("chat-1")).unwrap();
+        std::fs::write(chats.join("chat-1").join("messages.jsonl"), "{}\n").unwrap();
+        let before = super::chats_facts(&chats).unwrap();
+        let carrier = root.path().join("mail").join("carrier");
+        std::fs::create_dir_all(&carrier).unwrap();
+        std::fs::write(carrier.join("stamp"), "1 1790000000 7").unwrap();
+        assert_ne!(super::chats_facts(&chats).unwrap(), before);
     }
 }

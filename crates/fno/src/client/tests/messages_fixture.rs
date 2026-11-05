@@ -435,6 +435,16 @@ async fn messages_reply_board_contracts() {
     );
     view.layout.agents.truncate(1);
     view.layout.panes.truncate(1);
+    // Mail between two agents of another machine opens no composer.
+    super::super::messages_reply::open(
+        &mut view,
+        json!({"id":"m0","from_key":"ivy@imac2d2","to_key":"oak@imac2d2","origin":"carrier"}),
+    );
+    assert!(!super::super::messages_reply::active(&view));
+    assert_eq!(
+        view.notice.as_ref().map(|(text, _)| text.as_str()),
+        Some("this mail is on another machine; reply with: fno mail send ivy@imac2d2")
+    );
     super::super::messages_reply::open(
         &mut view,
         json!({"id":"m1","from_key":"s-c","to_key":"s1","summary":"Ship it."}),

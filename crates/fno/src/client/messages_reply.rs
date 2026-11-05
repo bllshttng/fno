@@ -92,6 +92,13 @@ pub(super) fn open(view: &mut View, row: Value) {
         view.set_notice("reply: message has no sender or receiver session".into());
         return;
     }
+    // Two agents of another machine: no session here to journal into.
+    if text(&row, "origin") == "carrier" {
+        view.set_notice(format!(
+            "this mail is on another machine; reply with: fno mail send {sender_key}"
+        ));
+        return;
+    }
     let sender = Endpoint {
         name: board.participant_name(&sender_key),
         session: sender_key,
