@@ -11310,7 +11310,6 @@ async fn xdcff_answer_keys_enter_no_pane_id_sends_nothing() {
     assert_eq!(v.answers, None, "Enter still closes the overlay");
 }
 
-
 #[tokio::test]
 async fn move_to_keys_enter_sends_one_reorder_with_the_computed_delta() {
     // (x-cf97) The typed ordinal is 1-based, the delta is computed against
@@ -11577,9 +11576,6 @@ async fn mouse_scroll_disarms_the_resize_repeat_window() {
         other => panic!("bare H after a scroll should forward, not resize, got {other:?}"),
     }
 }
-
-
-
 
 // ---- x-96e8: squad-management selector context keys ----
 
