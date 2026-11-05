@@ -22,10 +22,13 @@ const EVERY: Duration = Duration::from_secs(30);
 /// The cadence the rewrite throttle and the server's refresh timer share.
 /// `FNO_SIDECAR_EVERY_MS` shortens it for the e2e that proves an unattended
 /// machine keeps publishing (the same seam shape as `FNO_IDLE_EXIT_GRACE_MS`).
+/// A zero or unparseable value reads as the default: zero would panic the
+/// timer and make the throttle write on every render.
 pub(crate) fn every() -> Duration {
     std::env::var("FNO_SIDECAR_EVERY_MS")
         .ok()
-        .and_then(|v| v.parse().ok())
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|ms| *ms > 0)
         .map(Duration::from_millis)
         .unwrap_or(EVERY)
 }

@@ -561,7 +561,7 @@ pub(super) async fn serve(
     // so a machine with no attached client stopped writing and the beat read
     // the file stale after five minutes. The timer keeps an unattended
     // machine publishing; the throttle inside the publish coalesces this
-    // with the client-render writes (x-acf8).
+    // with the client-render writes.
     let mut sidecar_tick = tokio::time::interval(crate::workspace_sidecar::every());
     sidecar_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     // `interval`'s first tick is immediate; consume it so the first scan lands
@@ -805,7 +805,7 @@ pub(super) async fn serve(
             }
             // The sidecar publish rides `agent_rows`; with no client no
             // render runs, so this timer is the only writer left on an
-            // unattended machine (x-acf8).
+            // unattended machine.
             _ = sidecar_tick.tick() => {
                 core.agent_rows();
             }

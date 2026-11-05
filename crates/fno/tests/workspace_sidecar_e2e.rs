@@ -1,8 +1,7 @@
-//! x-acf8: the fleet sidecar must keep refreshing on a machine with no
-//! attached client. The beat ages the file out at 300s (`MAX_AGE_S`), and
-//! before the server timer only a client render carried the write, so an
-//! unattended machine stopped publishing and far rows fell back to project
-//! grouping.
+//! The fleet sidecar must keep refreshing on a machine with no attached
+//! client. The beat ages the file out at 300s (`MAX_AGE_S`), and before the
+//! server timer only a client render carried the write, so an unattended
+//! machine stopped publishing and far rows fell back to project grouping.
 
 mod common;
 use common::{spawn_server, Scratch};
