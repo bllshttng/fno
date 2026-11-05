@@ -65,6 +65,11 @@ pub struct Question {
     /// the stamp, so old rows render byte-identical.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub person: Option<String>,
+    /// The shots a visual-approval question carries: absolute paths on this
+    /// machine once the bus materializes a copy's bytes. Absent on an
+    /// imageless row, so old rows render byte-identical.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
@@ -406,6 +411,7 @@ pub fn fold_questions(raw: &str) -> Vec<Question> {
                                 opt_str(data, "host").unwrap_or_else(|| "another machine".into())
                             }),
                         person: opt_str(data, "person"),
+                        images: str_list(data, "images"),
                     },
                 );
             }
