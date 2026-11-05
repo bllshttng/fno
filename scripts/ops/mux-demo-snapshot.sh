@@ -3,7 +3,7 @@
 #
 #   scripts/ops/mux-demo-snapshot.sh --out shot.svg [--theme light] [--format png] [--size 200x60]
 #       [--window-size smallest|latest|largest] [--peer 120x40] [--no-fit]
-#       [--hold] [--group <axis>] [--remote-pane] [--flat-pins] [--sort <col:dir>]
+#       [--hold] [--group <axis>] [--remote-pane] [--flat-pins] [--sort <col:dir>] [--layout list] [--lead-nesting]
 #
 # Builds a throwaway server in a temp state root: its own config, graph,
 # agent registry, view prefs and socket dir. It seeds invented backlog nodes,
@@ -38,6 +38,8 @@ GROUP=""
 REMOTE_PANE=""
 FNO_DEMO_FLATPINS=""
 FNO_DEMO_SORT=""
+FNO_DEMO_LAYOUT=""
+FNO_DEMO_LEAD_NESTING=""
 for a in "$@"; do
   if [ "$PREV" = "--out" ]; then
     mkdir -p -- "$(dirname -- "$a")"
@@ -48,8 +50,12 @@ for a in "$@"; do
     GROUP="$a"
   elif [ "$PREV" = "--sort" ]; then
     FNO_DEMO_SORT="$a"
-  elif [ "$a" = "--window-size" ] || [ "$a" = "--group" ] || [ "$a" = "--sort" ]; then
+  elif [ "$PREV" = "--layout" ]; then
+    FNO_DEMO_LAYOUT="$a"
+  elif [ "$a" = "--window-size" ] || [ "$a" = "--group" ] || [ "$a" = "--sort" ] || [ "$a" = "--layout" ]; then
     :
+  elif [ "$a" = "--lead-nesting" ]; then
+    FNO_DEMO_LEAD_NESTING=1
   elif [ "$a" = "--flat-pins" ]; then
     FNO_DEMO_FLATPINS=1
   elif [ "$a" = "--hold" ]; then
@@ -63,7 +69,7 @@ for a in "$@"; do
   fi
   PREV="$a"
 done
-export FNO_DEMO_FLATPINS FNO_DEMO_SORT
+export FNO_DEMO_FLATPINS FNO_DEMO_SORT FNO_DEMO_LAYOUT FNO_DEMO_LEAD_NESTING
 # bash 3.2 (stock macOS) reads an empty array under set -u as unbound.
 set -- ${ARGS[@]+"${ARGS[@]}"}
 
@@ -825,13 +831,17 @@ fi
 
 # --sort <column>:<direction> (for example age:descending) sets the
 # sideline's sort column, the way the sort control persists it.
-if [ -n "${FNO_DEMO_SORT:-}" ]; then
-  python3 - "$FNO_AGENTS_HOME/mux-view.json" "$FNO_DEMO_SORT" <<'PY'
+# --lead-nesting turns on the group-by-lead toggle the same way.
+if [ -n "${FNO_DEMO_SORT:-}" ] || [ -n "${FNO_DEMO_LEAD_NESTING:-}" ]; then
+  python3 - "$FNO_AGENTS_HOME/mux-view.json" "${FNO_DEMO_SORT:-}" "${FNO_DEMO_LEAD_NESTING:-}" <<'PY'
 import json, os, sys
-path, spec = sys.argv[1:3]
-column, direction = spec.split(":")
+path, spec, nesting = sys.argv[1:4]
 data = json.load(open(path)) if os.path.exists(path) else {}
-data["sort"] = {"column": column, "direction": direction}
+if spec:
+    column, direction = spec.split(":")
+    data["sort"] = {"column": column, "direction": direction}
+if nesting:
+    data["group_by_lead"] = True
 json.dump(data, open(path, "w"))
 PY
 fi

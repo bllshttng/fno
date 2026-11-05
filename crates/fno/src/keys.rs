@@ -561,6 +561,9 @@ pub enum Event {
     /// Show or hide the card's `node · PR` header row (prefix+Y). The header
     /// shows at every width now; this is the operator's off switch.
     ToggleCardHead,
+    /// Nest workers under their lead in the card layout (prefix+u).
+    /// Persisted. Cards sit flat by default; the list layout always nests.
+    ToggleGroupByLead,
     /// Show/hide the status row (prefix+s). Client-local (US4, AC4-FR).
     ToggleStatus,
     /// Reveal each visible pane's stable id while the key repeats.
@@ -1491,6 +1494,13 @@ pub(crate) fn default_bindings() -> Vec<KeyBinding> {
             ToggleCardHead,
             Global,
             "show or hide the card header row",
+        ),
+        b(
+            b'u',
+            "toggle-group-by-lead",
+            ToggleGroupByLead,
+            Global,
+            "nest workers under their lead in cards",
         ),
         b(b's', "toggle-status", ToggleStatus, Global, "toggle status"),
         b(

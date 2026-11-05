@@ -734,6 +734,9 @@ pub(crate) struct View {
     machine_tree: machine_tree::MachineTree,
     /// The card's `node · PR` header row switch (prefix+Y), persisted.
     show_card_head: bool,
+    /// Nest workers under their lead in the card layout (prefix+u),
+    /// persisted. Off = flat cards; the list layout always nests.
+    group_by_lead: bool,
     /// The manual reorder sequence (agent names in display order) behind the
     /// Manual sort column, persisted.
     manual_order: Vec<String>,
@@ -1714,6 +1717,8 @@ pub(crate) enum AuxAction {
     ToggleExperimental(experimental::Flag),
     Share(share_flow::Act),
     OpenBacklogView,
+    /// Nest workers under their lead in the card layout (the prefix+u toggle).
+    ToggleGroupByLead,
     /// Flip the sideline's row shape (list <-> card) live: swap the view's
     /// in-memory layout, persist `sideline.layout` through the CLI, then
     /// invalidate the palette cache. A failed save keeps the in-memory shape
@@ -1842,6 +1847,7 @@ impl View {
         let (density, agent_sort, stored_width) = view_store::load_prefs();
         let agent_group = view_store::load_agent_group();
         let show_card_head = view_store::load_card_head();
+        let group_by_lead = view_store::load_group_by_lead();
         let manual_order = view_store::load_manual_order();
         // The stored intent, resolved once. Deliberately NOT clamped to
         // the current terminal here: `panel_w` clamps transiently on every paint,
@@ -1864,6 +1870,7 @@ impl View {
             agent_group,
             machine_tree: machine_tree::MachineTree::load(),
             show_card_head,
+            group_by_lead,
             manual_order,
             status_on: true,
             resource_meter_on: false,
@@ -4013,6 +4020,17 @@ impl View {
         self.reanchor_selector(held);
     }
 
+    /// Flip lead nesting for the card layout and say which way it went.
+    /// Pure local state, like the sort cycle.
+    fn toggle_group_by_lead(&mut self) {
+        let held = self.selected_agent_name();
+        self.group_by_lead = !self.group_by_lead;
+        view_store::save_group_by_lead(self.group_by_lead);
+        let word = if self.group_by_lead { "on" } else { "off" };
+        self.set_notice(format!("group by lead: {word}"));
+        self.reanchor_selector(held);
+    }
+
     /// The name of the agent the selector rests on, if it rests on an agent row.
     /// The re-anchor identity across a re-order: a row INDEX means nothing once
     /// the sort key changes, so the cursor has to follow the agent instead.
@@ -5172,7 +5190,8 @@ impl View {
         let order = &AgentOrder {
             manual: &self.manual_order,
         };
-        let flat = self.sideline_layout == sideline_color::SidelineLayout::Card;
+        let flat =
+            self.sideline_layout == sideline_color::SidelineLayout::Card && !self.group_by_lead;
         let mut out: Vec<(DisplayRow<'_>, usize)> = Vec::with_capacity(rows.len());
         let mut group = Vec::new();
         let mut iter = rows.into_iter().zip(depths).peekable();
@@ -8180,6 +8199,7 @@ async fn dispatch_event(
             view_store::save_agent_group(view.agent_group);
             view.set_notice(format!("grouping by {}", view.agent_group.word()));
         }
+        Event::ToggleGroupByLead => view.toggle_group_by_lead(),
         Event::ToggleCardHead => {
             // Pure local state: the head row is one display row, and the
             // scroll math reads painted_rows() every pass.
@@ -8626,6 +8646,10 @@ async fn execute_aux_action(
         AuxAction::Detach => {
             view.aux = None;
             return Ok(DispatchFlow::Detach);
+        }
+        AuxAction::ToggleGroupByLead => {
+            view.aux = None;
+            view.toggle_group_by_lead();
         }
         AuxAction::LiftHold => hold::lift(view).await,
         AuxAction::ToggleExperimental(flag) => experimental::toggle(view, flag),

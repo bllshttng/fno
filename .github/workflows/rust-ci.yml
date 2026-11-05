@@ -244,6 +244,13 @@ jobs:
               bash scripts/ops/mux-demo-snapshot.sh --out "shots/sideline-pins-${sort%%:*}-${theme}.png" --format png --theme "$theme" --size 200x56 --fit --flat-pins --sort "$sort"
             done
           done
+          # Cards flat is the default above. Rows nest under their lead, the
+          # toggle turns nesting on for cards, and its menu row.
+          for theme in dark light; do
+            bash scripts/ops/mux-demo-snapshot.sh --out "shots/sideline-rows-nested-${theme}.png" --format png --theme "$theme" --size 200x56 --fit --flat-pins --layout list
+            bash scripts/ops/mux-demo-snapshot.sh --out "shots/sideline-cards-nested-${theme}.png" --format png --theme "$theme" --size 200x56 --fit --flat-pins --lead-nesting
+            bash scripts/ops/mux-demo-snapshot.sh --out "shots/sideline-menu-lead-toggle-${theme}.png" --format png --theme "$theme" --size 200x56 --fit --flat-pins --view sideline-menu
+          done
           # The other-machines layer: the second machine's rows by workspace
           # and by status, where a remote row pins first and a blocked one bands
           # under Needs input. The band sits below this machine's, so the
