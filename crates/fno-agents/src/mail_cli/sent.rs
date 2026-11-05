@@ -217,6 +217,51 @@ pub fn run_sent(args: &[String]) -> i32 {
     0
 }
 
+/// The turn-boundary nag: one line naming the mail `handle` sent that no
+/// recipient has picked up, or None when the outbox is empty or everything
+/// landed. The scan is `sent_unclaimed` at the `inbox.unclaimed_ttl`,
+/// exactly the predicate `--unclaimed` prints, so the line counts what the
+/// outbox counts. Cheap when nothing is unclaimed: an empty outbox returns
+/// before any transcript read, and candidate reads carry the landed budget.
+pub(crate) fn nag_line(bus: &Path, handle: &str) -> Option<String> {
+    let now = now_secs();
+    let all = dedupe_last_wins(read_bus(bus));
+    let unclaimed = sent_unclaimed(
+        &all,
+        handle,
+        inbox_ttl(&["inbox", "unclaimed_ttl"], DEFAULT_UNCLAIMED_TTL),
+        now,
+        bus,
+    );
+    if unclaimed.is_empty() {
+        return None;
+    }
+    let mut seen: Vec<String> = Vec::new();
+    for m in &unclaimed {
+        let to = str_field(m, "to", "?");
+        if !seen.contains(&to) {
+            seen.push(to);
+        }
+    }
+    let extra = seen.len().saturating_sub(3);
+    let mut who = seen
+        .iter()
+        .take(3)
+        .map(|n| crate::mail_control_drain::defang(n))
+        .collect::<Vec<_>>()
+        .join(", ");
+    if extra > 0 {
+        who.push_str(&format!(", +{extra} more"));
+    }
+    let n = unclaimed.len();
+    let noun = if n == 1 { "message" } else { "messages" };
+    let age_min = age_minutes(&str_field(&unclaimed[0], "ts", ""), now);
+    Some(format!(
+        "{n} {noun} to {who} handed {age_min}m ago, not in transcript - \
+         they are mid-loop, ESC to steer"
+    ))
+}
+
 /// The nag predicate: sent by this handle, not retracted, not already proven
 /// landed, drainless deliveries excluded, younger than the abandon window,
 /// and (for non-hosted rows) still past the recipient's cursor, and older

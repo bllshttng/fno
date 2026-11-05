@@ -5,10 +5,7 @@ A	^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$	py=scripts/diag
 A	anthropic_default_fable_model	py=evals/harness-fit/run/launch.py;rs=crates/fno-agents/src/accounts/credentials.rs|crates/fno-agents/src/model_env_scrub.rs|crates/fno-agents/src/route_settings.rs	# CLASSIFY protocol|msg-twin|data
 A	anthropic_default_opus_model	py=evals/harness-fit/run/launch.py;rs=crates/fno-agents/src/accounts/credentials.rs|crates/fno-agents/src/model_env_scrub.rs	# CLASSIFY protocol|msg-twin|data
 A	anthropic_default_sonnet_model	py=evals/harness-fit/run/launch.py;rs=crates/fno-agents/src/accounts/credentials.rs|crates/fno-agents/src/model_env_scrub.rs	# CLASSIFY protocol|msg-twin|data
-A	cache_creation_input_tokens	py=scripts/metrics/prompt_prefix_cache_probe.py;rs=crates/fno-agents/src/context_window.rs|crates/fno-agents/src/eval_attempt/tests_observe.rs|crates/fno-agents/src/hook/save_session.rs|crates/fno-agents/src/model_price.rs|crates/fno-agents/src/session_activity.rs|crates/fno-agents/src/session_cost.rs|crates/fno/src/context_used.rs	# CLASSIFY protocol|msg-twin|data
-A	cache_write_input_tokens	py=scripts/metrics/prompt_prefix_cache_probe.py;rs=crates/fno-agents/src/session_activity.rs	# CLASSIFY protocol|msg-twin|data
 A	cli/src/fno/agent/state.py	py=cli/src/fno/paths.py;rs=crates/fno/src/repo_lint/state_roots.rs	# CLASSIFY protocol|msg-twin|data
-A	completed_window_seconds	py=scripts/analysis/graph-write-gate-audit.py;rs=crates/fno-agents/src/backlog/mod.rs|crates/fno-agents/src/graph_keeper.rs	# CLASSIFY protocol|msg-twin|data
 A	config.paths.briefs_dir, else config.state_dir	py=cli/src/fno/paths.py;rs=crates/fno/src/config_doctor/reporters.rs	# CLASSIFY protocol|msg-twin|data
 A	config.paths.ledger_json, else config.state_dir	py=cli/src/fno/paths.py;rs=crates/fno/src/config_doctor/reporters.rs	# CLASSIFY protocol|msg-twin|data
 A	crates/fno-agents/src/claims_root.rs	py=cli/src/fno/paths.py;rs=crates/fno/src/repo_lint/state_roots.rs	# CLASSIFY protocol|msg-twin|data

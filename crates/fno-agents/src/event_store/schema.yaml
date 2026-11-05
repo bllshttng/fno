@@ -138,7 +138,7 @@ event_types:
 
   - name: graph_write_gate
     retention: durable
-    description: "Five-minute mergeable histogram for graph keeper write-gate contention. The single-row path emits one row per landed mutation with the same required fields as point values plus the `mutation` name; the audit keeps those rows out of the window merge."
+    description: "Five-minute mergeable histogram for graph keeper write-gate contention. The single-row path emits one row per landed mutation with the same required fields as point values plus the `mutation` name."
     sources: [daemon, backlog]
     data:
       required: [keeper_pid, window_started_ms, window_finished_ms, completed_window_seconds, wait_ms_bounds, wait_ms_counts, mutation_count, bytes_written, retry_count]
@@ -153,7 +153,7 @@ event_types:
         bytes_written: { type: integer }
         retry_count: { type: integer }
         mutation: { type: string, description: "The api mutation name; present on the single-row path's per-write rows." }
-    consumers: [scripts/analysis/graph-write-gate-audit.py]
+    consumers: [operator]
 
   - name: graph_render_failed
     retention: durable
@@ -2336,6 +2336,28 @@ event_types:
         reason:
           type: string
           description: "Exit reason (e.g. 'sigterm', 'idle', 'error')."
+
+  - name: daemon_died_unexpectedly
+    description: "A replacement daemon found its predecessor gone with no daemon_exited, so the arms it carried stopped ticking until this start."
+    sources: [daemon]
+    data:
+      required: [old_pid]
+      properties:
+        old_pid:
+          type: integer
+          description: "Pid the supervisor lockfile named before this daemon took it."
+        new_pid:
+          type: integer
+          description: "Pid of the daemon reporting the death."
+        quiet_secs:
+          type: integer
+          description: "Seconds from the predecessor's last daemon-sourced event to this start; an upper bound on the span the arms ticked nothing."
+        last_daemon_event_ts:
+          type: string
+          description: "Timestamp of the last daemon-sourced event the predecessor wrote."
+        exit_code_recovered:
+          type: boolean
+          description: "Always false today: the daemon is detached, so no parent survives to read the exit status."
 
   - name: daemon_idle_pending_exit
     description: "Daemon has no live agents and is counting down to idle exit."

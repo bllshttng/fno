@@ -14,10 +14,11 @@
 use crate::events::EventEmitter;
 use regex::Regex;
 use serde::Serialize;
+use std::collections::BTreeSet;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 pub const ORPHAN_MIN_ZOMBIES: usize = 20;
@@ -265,20 +266,45 @@ pub fn maybe_sweep(last_sweep: &mut Instant, in_flight: &Arc<AtomicBool>, events
     });
 }
 
-/// Non-blocking reap of any exited worker child the daemon spawned, so a
-/// worker that exits while the daemon lives never lingers as a `<defunct>`
-/// zombie. The daemon spawns nothing but workers, so a `waitpid(-1, WNOHANG)`
-/// sweep is safe.
+/// Pids of this process's children nothing will ever wait: the hosts,
+/// keepers and detached pass leaders a spawn released on purpose. The drain
+/// reaps only these, by pid. An arm's owned child (a judge reader, a ps
+/// probe) never lands here, so a 5s tick can never steal its exit status:
+/// the waitpid(-1) sweep this replaced did exactly that, and the owner's
+/// `try_wait` failed with ECHILD ("No child processes (os error 10)").
+fn detached_children() -> &'static Mutex<BTreeSet<u32>> {
+    static SET: OnceLock<Mutex<BTreeSet<u32>>> = OnceLock::new();
+    SET.get_or_init(|| Mutex::new(BTreeSet::new()))
+}
+
+/// Record a child pid released unwarned, for the daemon drain to reap when it
+/// exits. Registering a child that already exited is fine: a zombie stays
+/// waitable by pid until reaped.
+pub fn release_child(pid: u32) {
+    detached_children()
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .insert(pid);
+}
+
+/// The daemon tick's reap: per-pid `waitpid(WNOHANG)` over the released
+/// registry, dropping each entry once its child is reaped or is no longer
+/// ours. A released child still running keeps its entry for the next tick.
 pub fn reap_daemon_children() {
-    loop {
+    let mut set = detached_children()
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    set.retain(|pid| {
         let mut status: libc::c_int = 0;
-        // SAFETY: waitpid with WNOHANG only reaps already-exited children and
-        // returns 0 (none ready) or -1 (no children) without blocking.
-        let pid = unsafe { libc::waitpid(-1, &mut status, libc::WNOHANG) };
-        if pid <= 0 {
-            break;
+        // SAFETY: per-pid waitpid with WNOHANG answers without blocking and
+        // reaps only this one child; it cannot take another child's status.
+        let rc = unsafe { libc::waitpid(*pid as libc::pid_t, &mut status, libc::WNOHANG) };
+        if rc < 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::EINTR) {
+            // Interrupted before an answer: keep watching, decide next tick.
+            return true;
         }
-    }
+        rc == 0
+    });
 }
 
 /// The daemon sweep's one pass: detect, confirm, guard, kill, and return one
@@ -663,6 +689,54 @@ mod tests {
         assert!(rows[0].reason.contains("guard"), "{}", rows[0].reason);
         let dry = reap_rows(&ps, false, 0);
         assert!(dry[0].reason.contains("dry-run"));
+    }
+
+    /// The incident this module's drain fix encodes: a released child reaps,
+    /// and an owned child that exited unwarned keeps its exit status through a
+    /// drain tick. The waitpid(-1) sweep stole it and the owner's try_wait
+    /// failed with ECHILD.
+    #[test]
+    fn the_drain_reaps_only_released_children_and_never_steals_an_owned_status() {
+        let spawn_exit = |code: u8| {
+            std::process::Command::new("/bin/sh")
+                .arg("-c")
+                .arg(format!("exit {code}"))
+                .spawn()
+                .unwrap()
+        };
+        // An owned child that has already exited, unreaped: exactly the shape
+        // the drain used to steal from.
+        let mut owned = spawn_exit(7);
+        while owned.try_wait().unwrap().is_none() {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        // A released child, exited the same way.
+        let released = spawn_exit(0);
+        let released_pid = released.id();
+        drop(released);
+        release_child(released_pid);
+        // Drain until the registry empties (first pass may precede its exit).
+        for _ in 0..100 {
+            reap_daemon_children();
+            if detached_children().lock().unwrap().is_empty() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(
+            detached_children().lock().unwrap().is_empty(),
+            "the released child never reaped"
+        );
+        // The released zombie is gone: a direct waitpid answers ECHILD.
+        let mut status: libc::c_int = 0;
+        let rc = unsafe { libc::waitpid(released_pid as libc::pid_t, &mut status, libc::WNOHANG) };
+        assert_eq!(rc, -1, "the released child must already be reaped");
+        // The owned child's status survived the drain ticks.
+        let status = owned
+            .try_wait()
+            .unwrap()
+            .expect("an owned child's status is never stolen");
+        assert_eq!(status.code(), Some(7));
     }
 
     /// A unique per-test tempdir so parallel tests never share a fixture.

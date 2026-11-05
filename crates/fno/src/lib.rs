@@ -119,6 +119,8 @@ pub mod inbox_user;
 #[cfg(feature = "full")]
 pub mod join_marker;
 #[cfg(feature = "full")]
+pub mod keybindings_file;
+#[cfg(feature = "full")]
 pub mod keys;
 #[cfg(feature = "full")]
 pub mod lane_colors_panel;
@@ -212,6 +214,8 @@ pub mod redact;
 pub mod registry_label;
 #[cfg(feature = "full")]
 pub mod registry_read;
+#[cfg(feature = "full")]
+pub(crate) mod release_install;
 #[cfg(feature = "full")]
 pub mod remote_target;
 #[cfg(feature = "full")]

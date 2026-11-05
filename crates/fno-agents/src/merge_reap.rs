@@ -245,30 +245,35 @@ pub(crate) fn merge_cleanup_request_id(project: &str, pr: i64, branch: &str) -> 
     format!("merge-cleanup-{}", &hex[..20])
 }
 
-/// Graph-derived node ids whose pr_url matches this PR's repo. Repo-scoped
-/// because pr_number is unique only within a repo (cross-project graph): a
-/// foreign repo sharing the number is excluded. A url-less or non-string
-/// pr_url is skipped, never fatal.
-pub(crate) fn scan_pr_nodes(entries: &[Value], pr: i64, slug: Option<&str>) -> Vec<String> {
+/// Graph-derived node ids bound to this PR in this repo. A node binds as its
+/// `pr_number` or as an `additional_prs` entry, the reading the merge gate's
+/// `pr_bound_index` makes. Repo-scoped because a PR number is unique only
+/// within a repo (cross-project graph): a ref whose url names another repo,
+/// after rename aliases, is excluded. A url-less ref binds by number.
+pub(crate) fn scan_pr_nodes(
+    entries: &[Value],
+    pr: i64,
+    slug: Option<&str>,
+    aliases: &std::collections::BTreeMap<String, String>,
+) -> Vec<String> {
     let Some(slug) = slug.filter(|s| !s.is_empty()) else {
         return Vec::new();
     };
-    let needle = format!("/{}/pull/", slug.to_lowercase());
+    let Ok(pr) = u64::try_from(pr) else {
+        return Vec::new();
+    };
     let mut out: Vec<String> = Vec::new();
     for e in entries {
-        let Some(obj) = e.as_object() else {
-            continue;
-        };
-        if obj.get("pr_number").and_then(Value::as_i64) != Some(pr) {
-            continue;
-        }
-        let Some(url) = obj.get("pr_url").and_then(Value::as_str) else {
-            continue;
-        };
-        if !url.to_lowercase().contains(&needle) {
+        let bound = crate::merge_gates::pr_refs_of(e).iter().any(|r| {
+            r.number == pr
+                && crate::backlog::pr_link::repo_slug_from_url(r.url.as_deref()).is_none_or(
+                    |theirs| crate::backlog::pr_link::same_repo_slug(&theirs, slug, aliases),
+                )
+        });
+        if !bound {
             continue;
         }
-        if let Some(nid) = obj.get("id").and_then(Value::as_str) {
+        if let Some(nid) = e.get("id").and_then(Value::as_str) {
             if !nid.is_empty() && !out.iter().any(|x| x == nid) {
                 out.push(nid.to_string());
             }
@@ -285,7 +290,37 @@ pub(crate) fn pr_node_ids(home: &AgentsHome, pr: i64, slug: Option<&str>) -> Vec
     let Ok(rows) = crate::backlog::api::rows(&store) else {
         return Vec::new();
     };
-    scan_pr_nodes(&rows, pr, slug)
+    let ref_slugs = rows
+        .iter()
+        .flat_map(crate::merge_gates::pr_refs_of)
+        .filter_map(|r| crate::backlog::pr_link::repo_slug_from_url(r.url.as_deref()));
+    let aliases = crate::backlog::pr_link::aliases_with_probe(None, slug, ref_slugs);
+    scan_pr_nodes(&rows, pr, slug, &aliases)
+}
+
+/// A request minted before its node ids were readable (a renamed repo, an
+/// unbound PR) carries `node_ids: []` forever, and the doneness read holds an
+/// empty list. Re-ask the graph at reap time, so a later alias or binding fix
+/// drains requests already in the journal. `lookup` takes the PR number and
+/// the repo's origin slug.
+fn with_recovered_nodes<'a>(
+    request: &'a MergeCleanupRequest,
+    root: &str,
+    lookup: impl Fn(i64, Option<&str>) -> Vec<String>,
+) -> std::borrow::Cow<'a, MergeCleanupRequest> {
+    if !request.node_ids.is_empty() {
+        return std::borrow::Cow::Borrowed(request);
+    }
+    let slug = crate::pr_list::origin_slug(std::path::Path::new(root), None).ok();
+    let mut ids = lookup(request.pr, slug.as_deref());
+    if ids.is_empty() {
+        return std::borrow::Cow::Borrowed(request);
+    }
+    ids.sort();
+    std::borrow::Cow::Owned(MergeCleanupRequest {
+        node_ids: ids,
+        ..request.clone()
+    })
 }
 
 /// Row names whose cwd IS the merged worktree or whose name targets one of
@@ -564,6 +599,7 @@ fn run_request(
     seams: &RequestSeams,
     precomputed: Option<&HashMap<String, Vec<state::RegistryEntry>>>,
 ) -> (u64, bool) {
+    let request = &*with_recovered_nodes(request, root, |pr, slug| pr_node_ids(home, pr, slug));
     // 2. Doneness re-read: every named node must read done, with no recorded
     // merge_status that contradicts the merge. An ABSENT merge_status passes
     // (the gc sweep's rule: unrecorded is not a contradiction - both mint
@@ -1123,6 +1159,22 @@ mod tests {
     use serde_json::json;
     use std::io::Write;
 
+    #[test]
+    fn scan_pr_nodes_binds_additional_prs_and_renamed_repo() {
+        let entries = vec![
+            json!({"id": "x-a", "pr_number": 4061, "pr_url": "https://github.com/fnodotdev/fno/pull/4061",
+                   "additional_prs": [4107, {"url": "https://github.com/fnodotdev/fno/pull/4101"}]}),
+            json!({"id": "x-b", "pr_number": 4170, "pr_url": "https://github.com/bllshttng/fno/pull/4170"}),
+            json!({"id": "x-c", "pr_number": 4107, "pr_url": "https://github.com/other/repo/pull/4107"}),
+        ];
+        let aliases = BTreeMap::from([("bllshttng/fno".to_string(), "fnodotdev/fno".to_string())]);
+        let slug = Some("fnodotdev/fno");
+        assert_eq!(scan_pr_nodes(&entries, 4107, slug, &aliases), ["x-a"]);
+        assert_eq!(scan_pr_nodes(&entries, 4101, slug, &aliases), ["x-a"]);
+        assert_eq!(scan_pr_nodes(&entries, 4170, slug, &aliases), ["x-b"]);
+        assert!(scan_pr_nodes(&entries, 4170, slug, &BTreeMap::new()).is_empty());
+    }
+
     fn stamps() -> u128 {
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -1375,6 +1427,24 @@ mod tests {
         crate::event_store::sync(&home.events_jsonl()).unwrap();
         assert!(merge_cleanup_request_repos(&home).contains(&repo_dir.display().to_string()));
         std::fs::remove_dir_all(home.root().parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn empty_node_ids_recover_from_the_graph_at_reap_time() {
+        let mut request = settled_request("/repo/wt");
+        request.node_ids = Vec::new();
+        let seen = std::cell::RefCell::new(None);
+        let got = with_recovered_nodes(&request, "/nonexistent-root", |pr, slug| {
+            *seen.borrow_mut() = Some((pr, slug.map(str::to_string)));
+            vec!["x-b".to_string(), "x-a".to_string()]
+        });
+        assert_eq!(got.node_ids, ["x-a", "x-b"]);
+        assert_eq!(seen.into_inner(), Some((42, None)), "no origin: no slug");
+        let named = settled_request("/repo/wt");
+        let untouched = with_recovered_nodes(&named, "/r", |_, _| {
+            panic!("a request that names its nodes never asks the graph")
+        });
+        assert_eq!(untouched.node_ids, ["x-1"]);
     }
 
     #[test]

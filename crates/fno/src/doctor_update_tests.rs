@@ -298,7 +298,7 @@ fn guidance_release_branch_names_the_upgrade_command() {
     }
     let _ = std::fs::remove_dir_all(&tmp);
     assert!(
-        guidance.contains("uv tool upgrade fno"),
+        guidance.contains("refreshes with `fno update`"),
         "guidance: {guidance}"
     );
     assert!(!guidance.contains("treated as a wire bump"));

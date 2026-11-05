@@ -414,7 +414,8 @@ pub(crate) fn build_update_modal(probe: Option<&UpdateProbe>) -> AuxPopup {
                 rows.pop();
             }
             rows.push(PopupRow::Text(
-                "the upgrade replaces the wheel. restart afterwards to run it.".into(),
+                "the upgrade replaces the installed binaries. restart afterwards to run them."
+                    .into(),
             ));
             rows.push(PopupRow::Entry {
                 glyph: "⬆".into(),

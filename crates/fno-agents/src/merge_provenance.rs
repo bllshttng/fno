@@ -470,6 +470,7 @@ mod tests {
             supplied_dispatch_hold: None,
             supplied_review_hold: None,
             supplied_facts: None,
+            supplied_evals_gate: None,
         };
         let facts = PrFacts {
             number: 7,

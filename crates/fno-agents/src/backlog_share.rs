@@ -113,6 +113,11 @@ const KEEP: Duration = Duration::from_secs(6 * 3600);
 /// One small prune a minute per machine: a big DELETE would hold the
 /// primary's write lock as long as the stall it exists to end.
 const PRUNE_EVERY: Duration = Duration::from_secs(60);
+/// How long a beat that found the primary unreachable holds the next one.
+/// A dead primary answers no faster for being asked every [`INTERVAL`],
+/// and every ask burns a full reply wait. A clean beat lifts the hold, so
+/// recovery costs at most this long of extra staleness.
+const BACKOFF: Duration = Duration::from_secs(60);
 const PRUNE_ROWS: i64 = 100;
 const FLUSH_WAIT: Duration = Duration::from_secs(30);
 
@@ -2326,12 +2331,33 @@ pub fn run(args: &[String]) -> i32 {
 
 /// The resident syncer: one flush and one sync every [`INTERVAL`], and one
 /// change-log prune every [`PRUNE_EVERY`], one in flight, off the daemon's
-/// own loop.
+/// own loop. A beat that found the primary unreachable holds the next one
+/// for [`BACKOFF`].
 #[derive(Default)]
 pub struct Arm {
     last_tick: Mutex<Option<Instant>>,
     last_prune: Mutex<Option<Instant>>,
+    /// The hold from an earlier beat, read before this arm would beat.
+    /// `Arc` because the beat thread records the outcome after the call
+    /// that spawned it has returned.
+    hold_until: Arc<Mutex<Option<Instant>>>,
     in_flight: Arc<AtomicBool>,
+}
+
+/// Does a hold from an earlier beat stand now?
+fn beat_held(arm: &Arm) -> bool {
+    arm.hold_until
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .is_some_and(|until| Instant::now() < until)
+}
+
+/// Record one beat's transport outcome: an unreachable refusal holds the
+/// next beat for [`BACKOFF`]; any other outcome lifts the hold, so the
+/// first beat after the primary returns is never delayed.
+fn record_beat(hold_until: &Mutex<Option<Instant>>, unreachable: bool) {
+    let mut held = hold_until.lock().unwrap_or_else(|e| e.into_inner());
+    *held = unreachable.then(|| Instant::now() + BACKOFF);
 }
 
 pub fn maybe_tick(arm: &Arm) {
@@ -2343,6 +2369,9 @@ pub fn maybe_tick(arm: &Arm) {
             WARNED.call_once(|| eprintln!("backlog-share: {error}"));
             return;
         }
+    }
+    if beat_held(arm) {
+        return;
     }
     {
         let mut last = arm.last_tick.lock().unwrap_or_else(|e| e.into_inner());
@@ -2362,23 +2391,35 @@ pub fn maybe_tick(arm: &Arm) {
         due
     };
     let flag = Arc::clone(&arm.in_flight);
+    let hold_until = Arc::clone(&arm.hold_until);
     std::thread::spawn(move || {
-        let graph = crate::backlog::settings::graph_path();
-        if let Err(error) = flush(&graph) {
-            eprintln!("backlog-share: flush: {error}");
-        }
-        if let Err(error) = sync(&graph) {
-            eprintln!("backlog-share: sync: {error}");
-        }
-        if let Err(error) = crate::plan_carry::sync(&graph) {
-            eprintln!("backlog-share: plans: {error}");
-        }
-        if prune_due {
-            if let Err(error) = report_and_prune(&graph) {
-                eprintln!("backlog-share: prune: {error}");
+        // eprintln! panics when stderr's reader is gone; a panic here must
+        // still release the gate and the hold, or the arm wedges shut.
+        let beat = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let graph = crate::backlog::settings::graph_path();
+            let mut unreachable = false;
+            if let Err(error) = flush(&graph) {
+                unreachable |= crate::store_remote::is_unreachable(&error);
+                eprintln!("backlog-share: flush: {error}");
             }
-            replay_decisions(&graph);
-        }
+            if let Err(error) = sync(&graph) {
+                unreachable |= crate::store_remote::is_unreachable(&error);
+                eprintln!("backlog-share: sync: {error}");
+            }
+            if let Err(error) = crate::plan_carry::sync(&graph) {
+                unreachable |= crate::store_remote::is_unreachable(&error);
+                eprintln!("backlog-share: plans: {error}");
+            }
+            if prune_due {
+                if let Err(error) = report_and_prune(&graph) {
+                    unreachable |= crate::store_remote::is_unreachable(&error);
+                    eprintln!("backlog-share: prune: {error}");
+                }
+                replay_decisions(&graph);
+            }
+            unreachable
+        }));
+        record_beat(&hold_until, beat.unwrap_or(false));
         flag.store(false, Ordering::SeqCst);
     });
 }
@@ -3740,5 +3781,24 @@ mod tests {
             "{probed}"
         );
         route_to_primary(None);
+    }
+
+    /// A primary that answers nothing gains nothing from being asked every
+    /// [`INTERVAL`]: the beat that burned the wait holds the next one, the
+    /// hold expires on its own, and a clean beat lifts it at once.
+    #[test]
+    fn an_unreachable_beat_holds_the_next_one_and_a_clean_beat_lifts_it() {
+        let arm = Arm::default();
+        assert!(!beat_held(&arm), "a fresh arm beats at once");
+
+        record_beat(&arm.hold_until, true);
+        assert!(beat_held(&arm), "an unreachable beat holds the next one");
+
+        // The hold expires on its own: a past deadline reads as no hold.
+        *arm.hold_until.lock().unwrap() = Some(Instant::now() - Duration::from_secs(1));
+        assert!(!beat_held(&arm), "an expired hold beats again");
+
+        record_beat(&arm.hold_until, false);
+        assert!(!beat_held(&arm), "a clean beat lifts the hold");
     }
 }

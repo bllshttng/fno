@@ -160,6 +160,8 @@ const FIELD_POLICY: &[(&str, Policy)] = &[
     ("dispatch_command", Policy::Settable(Kind::Text)),
     ("dispatch_brief", Policy::Settable(Kind::Text)),
     ("model", Policy::Settable(Kind::Text)),
+    ("share", Policy::Settable(Kind::Text)),
+    ("epic_issue", Policy::Settable(Kind::Text)),
     ("deferred_reason", Policy::StatusFact(Kind::Text)),
     ("deferred_kind", Policy::StatusFact(Kind::DeferredKind)),
     ("id", Policy::Derived("ids are immutable")),
@@ -313,6 +315,8 @@ const MODEL_EXTRA_KEYS: &[&str] = &[
     "model",
     "think_session_id",
     "think_output_path",
+    "share",
+    "epic_issue",
 ];
 
 fn policy_for(name: &str) -> Option<Policy> {

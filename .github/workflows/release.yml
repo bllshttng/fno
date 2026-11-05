@@ -406,6 +406,9 @@ jobs:
         run: |
           rm -f dist/*windows*.tar.gz dist/*win*.whl dist/*-none-any.whl
           ls -1 dist >/dev/null 2>&1 || { echo "no releaseable artifacts remain"; exit 1; }
+          # One sha256sum line per tarball, so `fno update` verifies a release
+          # download the way it verifies a bin-cache one.
+          (cd dist && for f in fno-agents-*.tar.gz; do [ -e "$f" ] || continue; sha256sum "$f" > "$f.sha256"; done)
 
       - name: Stamp the plugin version onto the nightly tag
         # The nightly tag carries ONE commit on top of the released sha whose
@@ -535,6 +538,9 @@ jobs:
         run: |
           rm -f dist/*windows*.tar.gz dist/*win*.whl dist/*-none-any.whl
           ls -1 dist >/dev/null 2>&1 || { echo "no releaseable artifacts remain"; exit 1; }
+          # One sha256sum line per tarball, so `fno update` verifies a release
+          # download the way it verifies a bin-cache one.
+          (cd dist && for f in fno-agents-*.tar.gz; do [ -e "$f" ] || continue; sha256sum "$f" > "$f.sha256"; done)
           echo "publishing:"
           ls -1 dist
 

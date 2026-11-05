@@ -298,6 +298,10 @@ pub struct Request {
     /// too old to parse stays a fallback to the spawn, never a wrong fact.
     /// Preview-only.
     pub supplied_facts: Option<Value>,
+    /// The evals/gate row the caller already read from the rollup, tri-state
+    /// like the hold answers: absent key = probe; null = no row at this head;
+    /// object = the `{state, description}` row itself.
+    pub supplied_evals_gate: Option<Option<EvalsGateRead>>,
 }
 
 /// A probe that either cleared, refused, or could not evaluate.
@@ -367,11 +371,51 @@ pub struct ChecksRead {
     pub rerun_recovered: Option<bool>,
     /// The check names the rerun recovered from, for the hold's own reason.
     pub rerun_failures: Option<Vec<String>>,
-    /// Some(why) when the evals gate reads red at this head. Eval red and CI
-    /// red are separate facts: the CI verdict judges CI alone (a red gate can
-    /// no longer turn the verdict red and cancel the head's runs), and the
-    /// merge holds on this field instead.
-    pub evals_gate_red: Option<String>,
+    /// The evals/gate row at this head: `None` when the daemon never posted
+    /// one. Eval red and CI red are separate facts: the CI verdict judges CI
+    /// alone (a red gate can no longer turn the verdict red and cancel the
+    /// head's runs), and the merge holds on this row instead.
+    pub evals_gate_row: Option<EvalsGateRead>,
+}
+
+/// One evals/gate commit status, as the rollup carried it. `state` is
+/// GitHub's own word (SUCCESS, FAILURE, PENDING, ERROR, ... uppercased).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EvalsGateRead {
+    pub state: String,
+    pub description: String,
+}
+
+impl EvalsGateRead {
+    /// The settled-fail states, per the parse that fed the field before it
+    /// carried the whole row.
+    const RED_STATES: [&'static str; 2] = ["FAILURE", "ERROR"];
+
+    fn red(&self) -> Option<&str> {
+        EvalsGateRead::RED_STATES
+            .contains(&self.state.as_str())
+            .then_some(self.description.as_str())
+    }
+
+    fn pending(&self) -> bool {
+        self.state == "PENDING"
+    }
+}
+
+impl ChecksRead {
+    /// Some(why) when the evals gate reads red at this head.
+    pub(crate) fn evals_gate_red(&self) -> Option<&str> {
+        self.evals_gate_row.as_ref().and_then(EvalsGateRead::red)
+    }
+
+    /// True when the gate status exists but is still running. The doc holds
+    /// a merge on it ("pending holds it too"); the field is what proves the
+    /// status exists, so a missing row never reads as pending.
+    pub(crate) fn evals_gate_pending(&self) -> bool {
+        self.evals_gate_row
+            .as_ref()
+            .is_some_and(EvalsGateRead::pending)
+    }
 }
 
 /// The outside world, injectable so the decision is testable without a network.
@@ -408,6 +452,15 @@ pub trait Probes {
     /// The four verdict words `green` | `red` | `pending` | `unknown`, plus
     /// GitHub's own ruleset hold when the same payload names one.
     fn checks_read(&self, cwd: &Path, pr: u64) -> ChecksRead;
+    /// Does this head owe an evals/gate status it does not have? True when
+    /// the diff touches a gated path or a `covers:` prefix of main's bank
+    /// and the worker seat has a baseline (a first install holds nobody on a
+    /// check it cannot run yet). Default false: an impl that cannot answer
+    /// never manufactures the missing-status hold, so pre-existing stubs
+    /// keep their behavior.
+    fn evals_gate_expected(&self, _cwd: &Path, _facts: &PrFacts) -> bool {
+        false
+    }
     /// The journal match reads the head being merged from facts, never cwd
     /// HEAD: a lead merging from the canonical checkout is not checked out
     /// at the PR head, so a cwd match there can never clear. The match also
@@ -942,18 +995,49 @@ fn decide_observed<P: Probes>(
                 })
             }
         }
-        // A red evals gate holds the merge while CI may be green: the gate is
-        // its own fact now, so it owns its hold. Held, never Failed: the
-        // cause and clearing command are the daemon's own words, and a
-        // `gate-retry` clears without a code push.
-        if let Some(description) = &checks.evals_gate_red {
-            return Err(Outcome::Held {
-                reason: format!(
-                    "evals gate red at this head: {description} \
-                     CI is judged separately; its runs were never the gate's."
-                ),
-            });
-        }
+    }
+    // The gate holds stand OUTSIDE `require_checks`: arming runs with that
+    // flag hard-coded false, and GitHub enforces only the ruleset's required
+    // checks (main's ruleset names one, stacked-base-guard), so an armed PR
+    // would merge past a gate the queue never waits on - one merged 87
+    // seconds after its gate went red through exactly this hole. Held, never
+    // Failed: the cause and clearing command are the daemon's words, and a
+    // `gate-retry` clears without a code push.
+    if let Some(description) = checks.evals_gate_red() {
+        return Err(Outcome::Held {
+            reason: format!(
+                "evals gate red at this head: {description} \
+                 CI is judged separately; its runs were never the gate's."
+            ),
+        });
+    }
+    // Pending holds too: docs/evals.md "The merge door" has promised it
+    // since the gate shipped, and a pending gate merged through this hole. Held,
+    // never Failed: the run may still settle green.
+    if checks.evals_gate_pending() {
+        return Err(Outcome::Held {
+            reason: format!(
+                "evals gate pending at this head: the gate goldens are queued or running. \
+                 The merge waits for the status to settle; CI is judged separately. \
+                 A stuck pending clears with: fno-agents evals gate-retry {}",
+                short(&facts.head_sha)
+            ),
+        });
+    }
+    // A gated head with no gate status holds: the daemon either never
+    // reached this head (the tick never ran it) or its status was lost. The
+    // expectation probe is fail-open: an unreadable file read never
+    // manufactures the hold. First install passes because the probe
+    // reads no baseline there.
+    if checks.evals_gate_row.is_none() && probes.evals_gate_expected(cwd, &facts) {
+        return Err(Outcome::Held {
+            reason: format!(
+                "no evals/gate status at this gated head: the diff touches a gated path \
+                 or a covered prefix, and the daemon seat has a baseline, but no status \
+                 was posted. Clear: fno-agents evals gate-retry {}",
+                short(&facts.head_sha)
+            ),
+        });
     }
 
     let strategy = probes.strategy(cwd);
@@ -1142,7 +1226,9 @@ pub fn preview_walk<P: Probes>(probes: &P, request: &Request, facts: &PrFacts) -
     }
 
     // (7) the status payload: supplied facts win, so a preview ask never
-    // spawns `fno do pr status` for a fact its caller computed.
+    // spawns `fno do pr status` for a fact its caller computed. The gate row
+    // rides the ask as `evals_gate` (fact or null): the composer read the
+    // rollup, so present means a row and null means none.
     let checks = checks.get_or_insert_with(|| match &request.supplied_verdict {
         Some(word) => ChecksRead {
             verdict: word.clone(),
@@ -1150,7 +1236,7 @@ pub fn preview_walk<P: Probes>(probes: &P, request: &Request, facts: &PrFacts) -
             optional_unresolved: request.supplied_optional_unresolved,
             rerun_recovered: request.supplied_rerun_recovered,
             rerun_failures: None,
-            evals_gate_red: None,
+            evals_gate_row: request.supplied_evals_gate.clone().unwrap_or(None),
         },
         None => probes.checks_read(cwd, facts.number),
     });
@@ -1237,17 +1323,39 @@ pub fn preview_walk<P: Probes>(probes: &P, request: &Request, facts: &PrFacts) -
     }
 
     // (9b) the evals gate, beside the verdict: its own fact owns its
-    // blocker, the way the effect path holds on it after the verdict match.
-    if request.require_checks {
-        if let Some(description) = &checks.evals_gate_red {
-            blockers.push(Blocker::held(
-                "evals_gate_red",
-                format!(
-                    "evals gate red at this head: {description} \
-                     CI is judged separately; its runs were never the gate's."
-                ),
-            ));
-        }
+    // blocker, so it stands outside `require_checks` like the effect
+    // path's copy - an armed PR (require_checks false) must preview the
+    // same gate blockers its arm refuses on.
+    if let Some(description) = checks.evals_gate_red() {
+        blockers.push(Blocker::held(
+            "evals_gate_red",
+            format!(
+                "evals gate red at this head: {description} \
+                 CI is judged separately; its runs were never the gate's."
+            ),
+        ));
+    }
+    if checks.evals_gate_pending() {
+        blockers.push(Blocker::held(
+            "evals_gate_pending",
+            format!(
+                "evals gate pending at this head: the gate goldens are queued or running. \
+                 The merge waits for the status to settle; CI is judged separately. \
+                 A stuck pending clears with: fno-agents evals gate-retry {}",
+                short(&facts.head_sha)
+            ),
+        ));
+    }
+    if checks.evals_gate_row.is_none() && probes.evals_gate_expected(cwd, facts) {
+        blockers.push(Blocker::held(
+            "evals_gate_missing",
+            format!(
+                "no evals/gate status at this gated head: the diff touches a gated path \
+                 or a covered prefix, and the daemon seat has a baseline, but no status \
+                 was posted. Clear: fno-agents evals gate-retry {}",
+                short(&facts.head_sha)
+            ),
+        ));
     }
 
     // (10) the slot gate, read-only: same precondition (fresh-CI posture,
@@ -1831,6 +1939,19 @@ impl RealProbes {
     }
 }
 
+/// Lifts `RealProbes`' two-tuple `run_gh` onto the shared `GhProbe` shape
+/// `pr_file_paths` takes (the evals gate's `DepsProbe` seam, same lift):
+/// cwd passes through, argv converts, a spawn that could not run at all
+/// reads as a failed call.
+struct RunGhProbe<'a>(&'a RealProbes);
+
+impl crate::pr_status_facts::GhProbe for RunGhProbe<'_> {
+    fn run_gh(&self, cwd: &Path, args: &[String]) -> Result<(bool, String, String), String> {
+        let (ok, stdout) = self.0.run_gh(cwd, args)?;
+        Ok((ok, stdout, String::new()))
+    }
+}
+
 impl Probes for RealProbes {
     fn pr_facts(&self, cwd: &Path, pr: Option<u64>) -> Result<PrFacts, String> {
         let _step = step_timer::step("pr_facts");
@@ -2170,6 +2291,28 @@ refusing to assume no review is running"
         crate::green_carry::carried_checks(cwd, pr, head.as_deref(), checks)
     }
 
+    fn evals_gate_expected(&self, cwd: &Path, facts: &PrFacts) -> bool {
+        let _step = step_timer::step("evals_gate_expected");
+        // The same file read the daemon tick pays for, answered in process:
+        // slug from the checkout, files paginated straight from GitHub. A
+        // read that cannot run answers false (fail-open, like the lineage
+        // probe): the door never manufactures the missing-status hold from a
+        // probe that could not see.
+        let Some(slug) = crate::pr_status::cache::git_slug(cwd) else {
+            return false;
+        };
+        let files = match crate::pr_status::lists::pr_file_paths(
+            &RunGhProbe(self),
+            cwd,
+            &slug,
+            facts.number,
+        ) {
+            Ok(files) => files,
+            Err(_) => return false,
+        };
+        crate::evals_gate::head_owes_status(cwd, &crate::evals::history_path(), &files)
+    }
+
     fn fno_shell(
         &self,
         cwd: &Path,
@@ -2279,7 +2422,7 @@ fn parse_checks_read(stdout: &[u8]) -> ChecksRead {
         optional_unresolved: None,
         rerun_recovered: None,
         rerun_failures: None,
-        evals_gate_red: None,
+        evals_gate_row: None,
     };
     let Ok(v) = serde_json::from_slice::<Value>(stdout) else {
         return unknown;
@@ -2338,13 +2481,15 @@ fn parse_checks_read(stdout: &[u8]) -> ChecksRead {
                 _ => source(),
             }
         });
-    let evals_gate_red = v.get("evals_gate").and_then(|fact| {
+    let evals_gate_row = v.get("evals_gate").and_then(|fact| {
         let state = fact.get("state").and_then(Value::as_str).unwrap_or("");
-        matches!(state, "FAILURE" | "ERROR").then(|| {
-            fact.get("description")
+        (!state.is_empty()).then(|| EvalsGateRead {
+            state: state.to_string(),
+            description: fact
+                .get("description")
                 .and_then(Value::as_str)
                 .unwrap_or("")
-                .to_string()
+                .to_string(),
         })
     });
     ChecksRead {
@@ -2353,8 +2498,14 @@ fn parse_checks_read(stdout: &[u8]) -> ChecksRead {
         optional_unresolved,
         rerun_recovered,
         rerun_failures,
-        evals_gate_red,
+        evals_gate_row,
     }
+}
+
+/// The `evals_gate_missing` / `evals_gate_pending` remedies name the head the
+/// way the daemon's own status descriptions do.
+fn short(sha: &str) -> &str {
+    sha.get(..12).unwrap_or(sha)
 }
 
 /// A merged or closed PR has no would-merge left, for the PR under decision

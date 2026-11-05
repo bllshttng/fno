@@ -1084,10 +1084,8 @@ fn phase_heal(t: &mut Tick, _slice: f64) -> Result<(), DoorError> {
     Ok(())
 }
 
-fn find_on_path(name: &str) -> Option<PathBuf> {
-    std::env::split_paths(&std::env::var_os("PATH")?)
-        .map(|d| d.join(name))
-        .find(|p| p.is_file())
+fn evals_arm_fno_bin() -> String {
+    crate::scrape::fno_bin().to_string_lossy().into_owned()
 }
 
 /// The eval bank's demand leg: guards and the receipt parse here; the due
@@ -1120,8 +1118,9 @@ fn phase_evals(t: &mut Tick, _slice: f64) -> Result<(), DoorError> {
             Some(&json!({"op": "health", "history": history, "stale_days": stale})),
             30.0,
         )?;
-        let fno_bin =
-            find_on_path("fno-py").map_or("fno-py".to_string(), |p| p.display().to_string());
+        // The wheel's `doctor` family is signpost-only; the front door serves
+        // it natively, so the arm must invoke `fno`, never `fno-py`.
+        let fno_bin = evals_arm_fno_bin();
         let argv: Vec<String> = vec![
             "evals-arm".into(),
             "--summary-json".into(),
@@ -1589,6 +1588,26 @@ pub fn run(args: &[String]) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_evals_arm_resolves_the_front_door_not_fno_py() {
+        let _guard = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let saved = std::env::var_os("FNO_BIN");
+        std::env::set_var("FNO_BIN", "/opt/front-door/fno");
+        assert_eq!(evals_arm_fno_bin(), "/opt/front-door/fno");
+        std::env::remove_var("FNO_BIN");
+        let bin = evals_arm_fno_bin();
+        assert!(
+            !bin.ends_with("fno-py"),
+            "the arm must never fall back to fno-py: the wheel's doctor family is signpost-only"
+        );
+        match saved {
+            Some(v) => std::env::set_var("FNO_BIN", v),
+            None => std::env::remove_var("FNO_BIN"),
+        }
+    }
 
     #[test]
     fn the_deadline_stays_under_the_interval_and_the_env_seam_is_unclamped() {

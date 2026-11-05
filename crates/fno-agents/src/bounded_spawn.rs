@@ -44,11 +44,23 @@ pub(crate) fn spawn_bounded(
     args: &[&str],
     cwd: &Path,
 ) -> Result<std::process::Child, std::io::ErrorKind> {
+    spawn_bounded_flagged(bin, args, cwd, true).map(|(child, _)| child)
+}
+
+/// `spawn_bounded` plus whether the child carries an installation token: a
+/// caller that reads the child's result can retry a 404-shaped failure once
+/// without the token, which covers a stale installation scope.
+pub(crate) fn spawn_bounded_flagged(
+    bin: &OsStr,
+    args: &[&str],
+    cwd: &Path,
+    allow_app_token: bool,
+) -> Result<(std::process::Child, bool), std::io::ErrorKind> {
     let mut cmd = crate::pr_status::quota::helper_command(bin);
     cmd.args(args);
     cmd.current_dir(cwd);
-    crate::github_app::inject(&mut cmd, bin);
-    spawn_bounded_command(cmd)
+    let injected = allow_app_token && crate::github_app::inject(&mut cmd, bin);
+    spawn_bounded_command(cmd).map(|child| (child, injected))
 }
 
 /// Spawn a fully built `Command` under the same contract: null stdin, piped
@@ -151,7 +163,7 @@ mod tests {
         // before trusting the count below.
         assert!(
             bounded_read
-                .matches("crate::bounded_spawn::spawn_bounded(")
+                .matches("crate::bounded_spawn::spawn_bounded_flagged(")
                 .count()
                 >= 1,
             "run_bounded must route through the one spawner"

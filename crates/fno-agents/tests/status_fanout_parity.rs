@@ -613,6 +613,92 @@ fn fanout_cases_match_the_captured_goldens() {
     );
 }
 
+/// Post-port behavior cases (no Python oracle ran for them): the mixed sink
+/// set skips only the unresolved sinks while the rest deliver and the scan
+/// cursor advances. The goldens freeze the Rust tick's own decision records.
+#[test]
+fn fanout_mixed_set_cases_match_the_rust_goldens() {
+    let sb = Sandbox::new("mixed");
+    let e = [
+        jline("2026-01-01T00:00:01Z", "task_started", json!({"run": "r1"})),
+        jline(
+            "2026-01-01T00:00:02Z",
+            "task_done",
+            json!({"run": "r1", "node": "ab-12", "outcome": "ok"}),
+        ),
+        jline(
+            "2026-01-01T00:00:02Z",
+            "blocked",
+            json!({"run": "r1", "node": "ab-12", "reason": "ci red"}),
+        ),
+        jline(
+            "2026-01-01T00:00:05Z",
+            "task_done",
+            json!({"run": "r1", "node": "ab-12", "outcome": "fail"}),
+        ),
+    ];
+    let url = "https://example.invalid/hook";
+    let good = || {
+        sink_cfg(
+            "good",
+            &["task_done", "blocked"],
+            "json-webhook",
+            Some(url),
+            None,
+            json!({}),
+        )
+    };
+    let bad = || {
+        sink_cfg(
+            "bad",
+            &["task_done", "blocked"],
+            "json-webhook",
+            None,
+            Some("NOPE_ENV"),
+            json!({}),
+        )
+    };
+
+    run_tick_case(
+        &sb,
+        "mixed set skips only the unresolved sink",
+        &e,
+        &[good(), bad()],
+        CaseOpts {
+            cursors: vec![
+                ("good".into(), "2026-01-01T00:00:02Z".into(), 1),
+                ("bad".into(), "2026-01-01T00:00:02Z".into(), 1),
+            ],
+            ..Default::default()
+        },
+    );
+    run_tick_case(
+        &sb,
+        "stale park on an unresolved sink holds nothing",
+        &e,
+        &[good(), bad()],
+        CaseOpts {
+            cursors: vec![("good".into(), "2026-01-01T00:00:02Z".into(), 1)],
+            parks: Some(json!({"bad": 9999999999.0})),
+            ..Default::default()
+        },
+    );
+    run_tick_case(
+        &sb,
+        "mixed set advances the scan cursor",
+        &e,
+        &[good(), bad()],
+        CaseOpts {
+            cursors: vec![
+                ("good".into(), "2026-01-01T00:00:02Z".into(), 1),
+                ("bad".into(), "2026-01-01T00:00:02Z".into(), 1),
+            ],
+            stream: Some((e.iter().take(3).cloned().collect(), 0, Some(41))),
+            ..Default::default()
+        },
+    );
+}
+
 #[test]
 fn fanout_adapter_and_template_cases_match_the_captured_goldens() {
     let sb = Sandbox::new("adapters");
@@ -752,6 +838,35 @@ fn fanout_adapter_and_template_cases_match_the_captured_goldens() {
         .unwrap();
     assert_fanout_golden(
         "cli doctor event fanout tick dry run",
+        &Golden {
+            exit: out.status.code(),
+            streams: vec![
+                String::from_utf8_lossy(&out.stdout).to_string(),
+                String::from_utf8_lossy(&out.stderr).to_string(),
+            ],
+        },
+    );
+
+    // The mixed-set CLI case, NON-dry: a deliverable sink routed to a type
+    // the journal never emits (so no webhook child fires) beside an
+    // unresolved url_env sink. The tick must name the skipped sink on
+    // stdout in every mode - the line is the only signal a hand-run tick
+    // gives for a url that never resolves (the skip writes no errors row).
+    let cfg = sb.root.join("mixed.toml");
+    std::fs::write(
+        &cfg,
+        "[[status_sinks]]\nname = \"quiet\"\ntype = \"json-webhook\"\nurl = \"https://example.invalid/hook\"\nevents = [\"never_emitted\"]\n\n[[status_sinks]]\nname = \"broken\"\ntype = \"json-webhook\"\nurl_env = \"NOPE_ENV\"\nevents = [\"blocked\"]\n",
+    )
+    .unwrap();
+    let out = std::process::Command::new(bin)
+        .args(["status", "--fanout", "tick"])
+        .current_dir(&sb.root)
+        .env("FNO_CONFIG", &cfg)
+        .envs(fno_agents::test_run::self_owner_env())
+        .output()
+        .unwrap();
+    assert_fanout_golden(
+        "cli status fanout tick names a skipped sink",
         &Golden {
             exit: out.status.code(),
             streams: vec![

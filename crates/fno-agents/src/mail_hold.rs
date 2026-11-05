@@ -474,10 +474,14 @@ pub(crate) fn spawn_release_timer(handle: &str) {
         use std::os::unix::process::CommandExt;
         cmd.process_group(0);
     }
-    if let Err(exc) = cmd.spawn() {
-        // The hold still lifts on the next send attempt or prompt; say why
-        // the clock-alone lift will not fire.
-        eprintln!("mail-hold: release timer did not start: {exc}");
+    match cmd.spawn() {
+        // The timer child runs unwaited; the daemon drain reaps it by pid.
+        Ok(child) => crate::orphan_reap::release_child(child.id()),
+        Err(exc) => {
+            // The hold still lifts on the next send attempt or prompt; say why
+            // the clock-alone lift will not fire.
+            eprintln!("mail-hold: release timer did not start: {exc}");
+        }
     }
 }
 

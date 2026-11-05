@@ -342,7 +342,9 @@ pub(crate) fn apply_expect_head(
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_string();
-    if actual.eq_ignore_ascii_case(expected) {
+    if actual.eq_ignore_ascii_case(expected)
+        || crate::merge_gates::sha_names_head(expected, &actual)
+    {
         return None;
     }
     let pr = payload

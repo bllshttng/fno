@@ -724,15 +724,16 @@ pub(crate) fn visual_approval_blocker<P: Probes>(
             .as_deref()
             .is_some_and(|node| role_chat_clears_pr(probes, cwd, pr, head, node))
         || law_chat_clears_pr(probes, cwd, pr, head)
-        || approval_carries(
-            probes,
-            cwd,
-            &root,
-            pr,
-            head,
-            node_id.as_deref(),
-            &paint_paths,
-        )
+        || (!open_look_names_head(&root, pr, head)
+            && approval_carries(
+                probes,
+                cwd,
+                &root,
+                pr,
+                head,
+                node_id.as_deref(),
+                &paint_paths,
+            ))
     {
         return None;
     }
@@ -849,8 +850,9 @@ const CARRY_WALK: usize = 30;
 /// head, and the approval holds. The newest earlier commit of this PR that
 /// the user approved is the reference, kept on the record for audit. The
 /// hold returns when the user declined a later commit, or when the head
-/// paints a file the approved patch never showed. Every unreadable read
-/// holds.
+/// paints a file the approved patch never showed, or while an open question
+/// page asks about this head (the caller checks that first). Every unreadable
+/// read holds.
 fn approval_carries<P: Probes>(
     probes: &P,
     cwd: &Path,
@@ -910,7 +912,9 @@ fn approval_carries<P: Probes>(
         .skip(1)
         .map(String::as_str)
         .collect();
-    if declined_after(&declining_pages(root, pr), &newer) {
+    let mut declines = declining_pages(root, pr);
+    declines.extend(law_decline_texts(probes, cwd, pr));
+    if declined_after(&declines, &newer) {
         return false;
     }
     match (
@@ -1182,7 +1186,7 @@ fn answered_question_names_pr(root: &Path, pr: u64, head: &str) -> bool {
     !head.is_empty()
         && approving_pages(root, pr)
             .iter()
-            .any(|(_, text)| text.contains(head))
+            .any(|(_, text)| text_names_head(text, head))
 }
 
 /// Every ANSWERED question page that picks the approve option and names the
@@ -1202,6 +1206,25 @@ fn approving_pages(root: &Path, pr: u64) -> Vec<(String, String)> {
             .then_some((front.question_id, text))
         })
         .collect()
+}
+
+/// True when an OPEN question page names the PR at this exact head: the user
+/// has been asked to look at this commit and has not answered. A carried
+/// approval of an earlier commit must not clear it.
+fn open_look_names_head(root: &Path, pr: u64, head: &str) -> bool {
+    let pages = crate::lead_answers::read_question_pages(&crate::escalation::questions_dir(root))
+        .unwrap_or_default();
+    open_page_names_head(pages.iter().map(|(_stem, text)| text.as_str()), pr, head)
+}
+
+fn open_page_names_head<'a>(pages: impl Iterator<Item = &'a str>, pr: u64, head: &str) -> bool {
+    let mut pages = pages;
+    !head.is_empty()
+        && pages.any(|text| {
+            crate::attention_file::parse_page(text).is_some_and(|(front, _)| front.status == "open")
+                && page_names_pr(text, pr)
+                && text_names_head(text, head)
+        })
 }
 
 /// Every ANSWERED question page that names the PR and does not pick the
@@ -1354,15 +1377,23 @@ fn decisions_payload<P: Probes>(probes: &P, cwd: &Path, args: &[&str]) -> Option
     serde_json::from_slice::<Value>(&out).ok()
 }
 
-/// The text names the head: the full sha, or a hex token of at least ten
-/// characters that begins it. A question card abbreviates the head it asks
+/// Does `token` name `head`: the full sha, or a hex prefix of at least seven
+/// characters, in any case. A question card abbreviates the head it asks
 /// about, and the user's answer on the board inherits that spelling.
+pub(crate) fn sha_names_head(token: &str, head: &str) -> bool {
+    token.len() >= 7
+        && token.len() <= head.len()
+        && token.bytes().all(|b| b.is_ascii_hexdigit())
+        && head.as_bytes()[..token.len()].eq_ignore_ascii_case(token.as_bytes())
+}
+
+/// The text names the head: the full sha, or a hex token that prefixes it.
 fn text_names_head(text: &str, head: &str) -> bool {
     !head.is_empty()
         && (text.contains(head)
             || text
                 .split(|c: char| !c.is_ascii_hexdigit())
-                .any(|t| t.len() >= 10 && head.starts_with(t)))
+                .any(|t| sha_names_head(t, head)))
 }
 
 /// A board answer recorded as a decision: the user answered a question the
@@ -1370,6 +1401,20 @@ fn text_names_head(text: &str, head: &str) -> bool {
 /// and head, and the answer text that picks the approve option. The page
 /// stays open when its close is lost; the decision still holds the answer.
 fn board_approval_text(row: &Value, pr: u64) -> Option<String> {
+    let (question, answer) = board_user_answer(row, pr)?;
+    answer_approves(answer).then(|| question.to_string())
+}
+
+/// A board answer naming the PR that does not pick the approve option: the
+/// decline a carried approval must honor when it was answered on another
+/// machine and left no page in this vault.
+fn board_decline_text(row: &Value, pr: u64) -> Option<String> {
+    let (question, answer) = board_user_answer(row, pr)?;
+    (!answer_approves(answer)).then(|| question.to_string())
+}
+
+/// `(question, answer)` of a question-board row the user answered about this PR.
+fn board_user_answer(row: &Value, pr: u64) -> Option<(&str, &str)> {
     let trace = row.get("trace")?;
     let from_board = trace.get("comms").and_then(Value::as_str) == Some("question")
         && trace.get("recipient_kind").and_then(Value::as_str) == Some("user");
@@ -1386,12 +1431,36 @@ fn board_approval_text(row: &Value, pr: u64) -> Option<String> {
             .is_some_and(|q| !q.trim().is_empty()),
         Some(_) => false,
     };
-    (from_board
-        && by_user
-        && row.get("question_id").is_some()
-        && answer_approves(answer)
-        && page_names_pr(question, pr))
-    .then(|| question.to_string())
+    (from_board && by_user && row.get("question_id").is_some() && page_names_pr(question, pr))
+        .then_some((question, answer))
+}
+
+/// Board declines of this PR in the law lane, at any head.
+fn law_decline_texts<P: Probes>(probes: &P, cwd: &Path, pr: u64) -> Vec<String> {
+    let Some(payload) = decisions_payload(
+        probes,
+        cwd,
+        &[
+            "backlog",
+            "decisions",
+            "--lane",
+            "law",
+            "--state",
+            "live",
+            "--limit",
+            "0",
+            "--json",
+        ],
+    ) else {
+        return Vec::new();
+    };
+    payload
+        .get("decisions")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|row| board_decline_text(row, pr))
+        .collect()
 }
 
 /// The text of every live role row on this node that approves this PR, at
@@ -1521,7 +1590,7 @@ fn law_approval_texts<P: Probes>(probes: &P, cwd: &Path, pr: u64) -> Vec<String>
 
 /// True when a live law row that approves this PR (chat-attested, or the
 /// question board's own operator-law row for the user's board answer) names
-/// the head sha, full or as a ten-character prefix. Head-scoped like the
+/// the head sha, full or as a prefix of seven or more hex characters. Head-scoped like the
 /// role row: a push voids it.
 pub(crate) fn law_chat_clears_pr<P: Probes>(probes: &P, cwd: &Path, pr: u64, head: &str) -> bool {
     !head.is_empty()
@@ -1686,6 +1755,17 @@ mod tests {
     }
 
     #[test]
+    fn an_approval_names_a_head_by_any_unique_hex_prefix_of_seven_or_more() {
+        let head = "52caec1527aabbccddeeff00112233445566778";
+        assert!(text_names_head("Approve PR 4444 at 52caec1527", head));
+        assert!(text_names_head("at 52CAEC1 please", head));
+        assert!(text_names_head(&format!("full {head}"), head));
+        assert!(!text_names_head("at 52caec", head), "six is too short");
+        assert!(!text_names_head("at 52caec9", head), "a diverging prefix");
+        assert!(!text_names_head("", ""));
+    }
+
+    #[test]
     fn an_approval_holds_for_edits_to_files_it_showed_and_not_for_a_new_surface() {
         let map = |names: &[&str]| {
             names
@@ -1711,6 +1791,40 @@ mod tests {
         ));
         assert!(!declined_after(&declines, &["c4"]));
         assert!(!declined_after(&[], &["c3"]));
+        // A decline answered on another machine arrives as a board row, not a page.
+        let board = |answer: &str| {
+            json!({
+                "trace": {"comms": "question", "recipient_kind": "user"},
+                "question_id": "q-1",
+                "question": "May PR 9 merge at 0123456789?",
+                "decision": answer,
+            })
+        };
+        let text = board_decline_text(&board("Hold for changes"), 9).unwrap();
+        assert!(declined_after(
+            &[text],
+            &["0123456789abcdef0123456789abcdef01234567"]
+        ));
+        assert!(board_decline_text(&board("Approve"), 9).is_none());
+        assert!(board_decline_text(&board("Hold for changes"), 8).is_none());
+    }
+
+    #[test]
+    fn an_open_look_page_for_the_head_stops_the_carry() {
+        let page = |status: &str, text: &str| {
+            format!("---\nquestion_id: q-1\nstatus: {status}\n---\n{text}\n")
+        };
+        let head = "c6e25abe8bfe407ca8a10288046b559cffc2e8c2";
+        let open = page("open", "visual approval PR 4487 at c6e25abe");
+        let answered = page("answered", "visual approval PR 4487 at c6e25abe");
+        let other_head = page("open", "visual approval PR 4487 at 8e974218");
+        let other_pr = page("open", "visual approval PR 4488 at c6e25abe");
+        let names =
+            |pages: &[&String]| open_page_names_head(pages.iter().map(|p| p.as_str()), 4487, head);
+        assert!(names(&[&open]));
+        assert!(!names(&[&answered]));
+        assert!(!names(&[&other_head, &other_pr]));
+        assert!(!names(&[]));
     }
 
     #[test]
