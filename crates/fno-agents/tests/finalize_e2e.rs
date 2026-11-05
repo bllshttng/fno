@@ -1429,9 +1429,6 @@ const GH_OPTIONAL_USAGE_LIMITED: &str = "#!/bin/sh\n\
        *'pr view'*) echo '{\"number\":358,\"url\":\"https://github.com/o/r/pull/358\"}' ;;\n\
      esac\n";
 
-
-
-
 /// Rewrite the manifest with an explicit merge posture, keeping the node id.
 fn set_posture(env: &Env, session_id: &str, approved: bool) {
     set_posture_source(env, session_id, approved, "config");
