@@ -341,9 +341,10 @@ fn save_state(dir: &Path, state: &State) {
 /// settles posts the verdict twice and files the regression nodes twice. It
 /// lives beside the state it guards, so both drivers resolve it from the one
 /// history path. A holder that died mid-grade loses it: a dead pid at once,
-/// any holder past the two-minute wall. On a held lock the caller's state is
-/// re-read (the holder may have settled while this pass loaded stale state)
-/// and `None` says "nothing here for you".
+/// any holder past the two-minute wall. Either way - acquired or held - the
+/// caller's state is re-read: another grader may have settled the run while
+/// this pass loaded stale state, and a grader that graded its stale clone
+/// would post the verdict twice. `None` says "nothing here for you".
 struct SettleLock {
     path: PathBuf,
     holder: String,
@@ -366,6 +367,7 @@ impl SettleLock {
             {
                 use std::io::Write as _;
                 let _ = writeln!(file, "{holder}");
+                *state = load_state(dir);
                 return Some(Self { path, holder });
             }
             let text = std::fs::read_to_string(&path).unwrap_or_default();
