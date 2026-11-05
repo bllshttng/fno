@@ -158,8 +158,8 @@ fn fd_table_stays_flat_under_churn_and_a_wedged_keeper_close() {
         "pane churn leaked fds: baseline {baseline}, settled {settled}"
     );
     // Leg 3 - a frozen (SIGSTOP) keeper cannot process the Kill frame. The
-    // close must still free the pane's descriptors: the 2s grace escalates
-    // to SIGKILL on the child and the Drop shutdown frees the reader.
+    // close must still free the pane's descriptors: after the 2s grace the
+    // Drop shutdown frees the reader without needing the keeper's exit.
     let pane = run_pane(&scratch);
     let row = pane_rows(&scratch)
         .iter()
@@ -197,8 +197,9 @@ fn fd_table_stays_flat_under_churn_and_a_wedged_keeper_close() {
         String::from_utf8_lossy(&kill.stderr)
     );
 
-    // Release the keeper so its own sockets close and its child's death is
-    // observed; the escalated SIGKILL has already landed on the child.
+    // Release the keeper so it processes the buffered Kill frame on resume,
+    // closes out the seat and its child; the server-side reader is already
+    // free via the Drop shutdown.
     std::process::Command::new("kill")
         .args(["-CONT", &keeper_pid.to_string()])
         .output()

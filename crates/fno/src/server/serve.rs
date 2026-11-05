@@ -534,17 +534,21 @@ pub(super) async fn serve(
                     });
                 }
                 Err(e) => {
+                    // Inside the starvation state every error kind stays
+                    // silent; edges log once and the sleep follows the state.
                     let famine = crate::process_admission::no_descriptor_left(&e);
-                    if famine {
-                        if !starved {
-                            starved = true;
-                            eprintln!("fno mux: accept starved: {e}; retrying every second until a descriptor frees");
-                        }
-                        tokio::time::sleep(Duration::from_secs(1)).await;
-                    } else {
+                    if famine && !starved {
+                        starved = true;
+                        eprintln!("fno mux: accept starved: {e}; retrying every second until a descriptor frees");
+                    } else if !famine && !starved {
                         eprintln!("fno mux: accept failed: {e}");
-                        tokio::time::sleep(Duration::from_millis(100)).await;
                     }
+                    tokio::time::sleep(Duration::from_millis(if famine || starved {
+                        1000
+                    } else {
+                        100
+                    }))
+                    .await;
                 }
             }
         }

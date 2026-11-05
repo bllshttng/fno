@@ -1585,16 +1585,11 @@ impl KeeperPty {
         while !self.exited.load(Ordering::Acquire) {
             if std::time::Instant::now() >= deadline {
                 // A keeper that has not answered the Kill inside the grace
-                // window is wedged, not slow. The pane is closing either way:
-                // SIGKILL the child so it cannot outlive its pane, and leave
-                // the socket shutdown to Drop, which frees the reader.
-                if let Some(pid) = self.child_pid {
-                    // SAFETY: one signal to one pid; an already-dead pid
-                    // fails harmlessly with ESRCH.
-                    unsafe {
-                        libc::kill(pid as libc::pid_t, libc::SIGKILL);
-                    }
-                }
+                // window is wedged, not slow. Leave the child to the
+                // keeper's own buffered Kill frame: our child_pid is an
+                // Identify-time snapshot, and a SIGKILL through a recycled
+                // pid would hit an unrelated process. The Drop below shuts
+                // the socket down, which frees the reader either way.
                 return;
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
