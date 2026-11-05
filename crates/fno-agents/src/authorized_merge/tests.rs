@@ -693,6 +693,117 @@ fn an_ungated_or_baselineless_head_merges_with_no_gate_status() {
     );
 }
 
+// ── the gate holds arm too ────────────────────────────────────────────
+
+/// An armed GitHub auto-merge merged 87 seconds after its gate went red:
+/// the arm effect skips the `require_checks` block, and the ruleset
+/// requires only stacked-base-guard, so nothing held the queue.
+/// Arming carries `require_checks: false` by design, so the gate holds must
+/// stand outside that flag: a red gate refuses the arm, naming the hold.
+#[test]
+fn an_arm_refuses_past_a_red_evals_gate() {
+    let fake = Fake {
+        checks: Some("green".to_string()),
+        evals_gate_row: Some(EvalsGateRead {
+            state: "FAILURE".to_string(),
+            description: "no result. Clear: fno-agents evals gate-retry abc123. Cause: limit"
+                .to_string(),
+        }),
+        ..clean()
+    };
+    let outcome = run(
+        &fake,
+        &Request {
+            require_checks: false,
+            ..request(Effect::Arm)
+        },
+    );
+    assert_eq!(outcome.word(), "held", "{}", outcome.detail());
+    let detail = outcome.detail();
+    assert!(detail.contains("evals gate red"), "{}", detail);
+    assert!(
+        !detail.contains("auto-merge armed"),
+        "the arm never ran: {}",
+        detail
+    );
+
+    // The preview answers alike with require_checks off, so `fno do pr
+    // status` never reads authorized beside a gate the arm refuses.
+    let blockers = preview_blockers(
+        &fake,
+        &Request {
+            require_checks: false,
+            ..preview_request(7)
+        },
+    );
+    let codes: Vec<&str> = blockers.iter().map(|b| b.code.as_str()).collect();
+    assert!(
+        codes.contains(&"evals_gate_red"),
+        "the preview names the gate hold with require_checks off: {:?}",
+        codes
+    );
+}
+
+/// A pending gate refuses the arm the same way: the queue would merge the
+/// moment its one required check passed, while the gate goldens still run.
+#[test]
+fn an_arm_refuses_past_a_pending_evals_gate() {
+    let fake = Fake {
+        checks: Some("green".to_string()),
+        evals_gate_row: Some(EvalsGateRead {
+            state: "PENDING".to_string(),
+            description: "queued for the gate goldens".to_string(),
+        }),
+        ..clean()
+    };
+    let outcome = run(
+        &fake,
+        &Request {
+            require_checks: false,
+            ..request(Effect::Arm)
+        },
+    );
+    assert_eq!(outcome.word(), "held", "{}", outcome.detail());
+    let detail = outcome.detail();
+    assert!(detail.contains("evals gate pending"), "{}", detail);
+}
+
+/// A gated head with no gate status refuses the arm too: missing is the
+/// daemon-never-reached-this-head shape, and the queue would not wait for
+/// a status the ruleset does not require.
+#[test]
+fn an_arm_refuses_past_a_missing_gate_status_at_a_gated_head() {
+    let fake = Fake {
+        checks: Some("green".to_string()),
+        evals_gate_expected: Some(true),
+        ..clean()
+    };
+    let outcome = run(
+        &fake,
+        &Request {
+            require_checks: false,
+            ..request(Effect::Arm)
+        },
+    );
+    assert_eq!(outcome.word(), "held", "{}", outcome.detail());
+    let detail = outcome.detail();
+    assert!(detail.contains("no evals/gate status"), "{}", detail);
+
+    let blockers = preview_blockers(
+        &fake,
+        &Request {
+            require_checks: false,
+            ..preview_request(7)
+        },
+    );
+    let codes: Vec<&str> = blockers.iter().map(|b| b.code.as_str()).collect();
+    assert!(
+        codes.contains(&"evals_gate_missing"),
+        "the preview names the missing-status hold with require_checks off: {:?}",
+        codes
+    );
+}
+
 // ── the head-scoped operator merge grant ──────────────────────────────
 
 #[test]
