@@ -42,7 +42,9 @@ Force is a deliberate user gesture. Shift+enter arms it, and so does the `--forc
 
 The server forwards explicit harness, model or route, effort and permission picks to spawn as separate argv values. No separate `--` fence is required for typed flags. Spawn reads a file or stdin prompt once before admission and worker-name minting, so a message delivered through the composer can name its worker.
 
-Run on lists the remote machines already known to the fleet tree. A remote launch uses the existing `--name @host` spawn relay. Choose the worktree box explicitly: local project facts do not decide a remote policy. Worktree resolution runs on that host. Its receipt carries `name@host`. The local mux opens a remote portal. A remote timeout or lost SSH connection remains `Unknown`. Remote choices require a mux server with protocol v122 or later. An older server is refused before submission.
+Run on lists the remote machines already known to the fleet tree. A remote launch uses the existing `--name @host` spawn relay. Choose the worktree box explicitly: local project facts do not decide a remote policy. Worktree resolution runs on that host. Remote choices require a mux server with protocol v122 or later. The client refuses a remote request to an older server.
+
+Its receipt carries `name@host`. The local mux opens a remote portal. A remote timeout or lost SSH connection remains `Unknown`.
 
 ## Draft and outcome lifetime
 
