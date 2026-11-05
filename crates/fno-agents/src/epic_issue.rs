@@ -799,6 +799,15 @@ mod tests {
         sync_epic(&tracker(&hub), "o/r", &rows, &epic_row, &held, None).unwrap();
         let body = hub.lock().unwrap().bodies[0].clone();
         assert!(body.contains("- [ ] Fix the picker · @visitor"), "{body}");
+        // A held claim renews in place and writes nothing. A child that turns
+        // done frees its claim instead of renewing it forever.
+        let quiet = pass(&hub, &rows, &epic_row, &held, &[], NO_MATCH);
+        assert!(quiet.ops.is_empty() && quiet.renewals.len() == 1);
+        let mut finished = rows.clone();
+        finished[1]["status"] = json!("done");
+        let closed = pass(&hub, &finished, &epic_row, &held, &[], NO_MATCH);
+        assert!(closed.ledger.is_empty() && closed.renewals.is_empty());
+        assert!(matches!(&closed.ops[..], [ClaimOp::Release { .. }]));
         comment(&hub, "visitor", "/release");
         let freed = pass(&hub, &rows, &epic_row, &held, &[], NO_MATCH);
         assert!(freed.ledger.is_empty());

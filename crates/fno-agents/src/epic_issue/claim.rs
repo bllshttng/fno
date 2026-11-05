@@ -157,10 +157,11 @@ pub(super) struct ClaimPass {
     pub(super) ledger: Vec<Entry>,
     /// The highest comment id read, when it moved.
     pub(super) cursor: Option<i64>,
-    /// Releases first, then one grant per live node entry. A grant on a held
-    /// claim renews its 24 hour lease, which is how a 7 day hold outlives the
-    /// lease cap.
+    /// Releases first, then the fresh grants.
     pub(super) ops: Vec<ClaimOp>,
+    /// Grants for claims the store already holds. Each renews its 24 hour
+    /// lease in place, which is how a 7 day hold outlives the lease cap.
+    pub(super) renewals: Vec<ClaimOp>,
 }
 
 enum Step {
@@ -181,6 +182,7 @@ struct State<'a> {
     ledger: Vec<Entry>,
     held: HeldClaims,
     ops: Vec<ClaimOp>,
+    renewals: Vec<ClaimOp>,
     judge_calls: usize,
 }
 
@@ -188,16 +190,44 @@ fn reply(text: String) -> Step {
     Step::Done(Some(text))
 }
 
+fn held_reply(login: &str, name: &str, holder: &str) -> Step {
+    reply(format!(
+        "@{login} `{name}` is held by {holder}. A claim with no pull request for 7 days reads stale, and then anyone can take it."
+    ))
+}
+
 impl<'a> State<'a> {
     /// Drop entries whose claim another door ended (a delivered PR frees a
-    /// node), then run the 7-day clock over the rest.
+    /// node), and entries whose node left the open children (a done child
+    /// would otherwise renew forever), then run the 7-day clock over the rest.
     fn settle(&mut self) {
         let i = self.i;
-        let held = &self.held;
-        self.ledger.retain(|e| match &e.node {
-            Some(n) if !e.stale => held.get(n).is_some_and(|h| h.holder == holder_of(&e.login)),
-            _ => true,
-        });
+        let open: HashSet<&str> = self
+            .kids
+            .iter()
+            .copied()
+            .filter(|k| !is_done(k))
+            .map(|k| text(k, "id"))
+            .collect();
+        let ours = |held: &HeldClaims, e: &Entry, n: &str| {
+            held.get(n).is_some_and(|h| h.holder == holder_of(&e.login))
+        };
+        let (keep, gone): (Vec<Entry>, Vec<Entry>) = std::mem::take(&mut self.ledger)
+            .into_iter()
+            .partition(|e| match &e.node {
+                Some(n) if !e.stale => open.contains(n.as_str()) && ours(&self.held, e, n),
+                _ => true,
+            });
+        self.ledger = keep;
+        for e in gone {
+            if let Some(n) = e.node.filter(|n| ours(&self.held, &e, n)) {
+                self.held.remove(&n);
+                self.ops.push(ClaimOp::Release {
+                    node: n,
+                    holder: holder_of(&e.login),
+                });
+            }
+        }
         let refs = pr_refs(i.pulls, i.number);
         let mut seen: HashMap<String, usize> = HashMap::new();
         for e in self.ledger.iter_mut().filter(|e| !e.stale) {
@@ -286,12 +316,7 @@ impl<'a> State<'a> {
             return reply(format!("@{login} `{name}` is done."));
         }
         let held_by_login = match self.held.get(&node) {
-            Some(h) if h.holder != holder => {
-                return reply(format!(
-                    "@{login} `{name}` is held by {}. A claim with no pull request for 7 days reads stale, and then anyone can take it.",
-                    who(&h.holder)
-                ));
-            }
+            Some(h) if h.holder != holder => return held_reply(login, &name, who(&h.holder)),
             Some(_) => true,
             None => false,
         };
@@ -345,9 +370,7 @@ impl<'a> State<'a> {
             )
         };
         if !mine && !stale {
-            return reply(format!(
-                "@{login} `{name}` is held by {owner}. A claim with no pull request for 7 days reads stale, and then anyone can take it."
-            ));
+            return held_reply(login, &name, &owner);
         }
         if !mine && self.at_ceiling(login) {
             return self.ceiling(login);
@@ -447,15 +470,34 @@ impl<'a> State<'a> {
         }
     }
 
+    /// One grant per live node entry. A claim the store already holds for
+    /// that login renews in place, which writes no audit event and keeps
+    /// `acquired_at`; the rest are fresh grants. A node released in this same
+    /// pass is a fresh grant too, because the release runs first.
     fn renew(&mut self) {
         for e in self.ledger.iter().filter(|e| !e.stale) {
-            if let Some(n) = &e.node {
-                self.ops.push(ClaimOp::Grant {
-                    node: n.clone(),
-                    holder: holder_of(&e.login),
-                    repo: self.i.repo.to_string(),
-                    issue: self.i.number,
-                });
+            let Some(n) = &e.node else { continue };
+            let holder = holder_of(&e.login);
+            let key = format!("node:{n}");
+            let held = self
+                .i
+                .claims
+                .iter()
+                .any(|c| c.key == key && c.holder == holder);
+            let released = self
+                .ops
+                .iter()
+                .any(|op| matches!(op, ClaimOp::Release { node, .. } if node == n));
+            let grant = ClaimOp::Grant {
+                node: n.clone(),
+                holder,
+                repo: self.i.repo.to_string(),
+                issue: self.i.number,
+            };
+            if held && !released {
+                self.renewals.push(grant);
+            } else {
+                self.ops.push(grant);
             }
         }
     }
@@ -496,6 +538,7 @@ pub(super) fn claim_pass(i: &ClaimIn) -> Result<ClaimPass, String> {
             })
             .collect(),
         ops: Vec::new(),
+        renewals: Vec::new(),
         judge_calls: 0,
     };
     st.settle();
@@ -535,6 +578,7 @@ pub(super) fn claim_pass(i: &ClaimIn) -> Result<ClaimPass, String> {
         ledger: st.ledger,
         cursor: (cursor != start).then_some(cursor),
         ops: st.ops,
+        renewals: st.renewals,
     })
 }
 
@@ -621,7 +665,20 @@ pub(super) fn run(
         now: Utc::now(),
         judge: &judge,
     })?;
-    for note in write_claims_as(&pass.ops, Some(cwd), "epic_claim") {
+    let mut writes = pass.ops;
+    for grant in pass.renewals {
+        let ClaimOp::Grant { node, holder, .. } = &grant else {
+            continue;
+        };
+        let key = format!("node:{node}");
+        if !matches!(
+            crate::claims::renew(&key, holder, crate::claims::MAX_TTL_MS, None),
+            Ok(true)
+        ) {
+            writes.push(grant);
+        }
+    }
+    for note in write_claims_as(&writes, Some(cwd), "epic_claim") {
         if note.starts_with("skipped") || note.starts_with("kept") {
             eprintln!("epic-issue: {note}");
         }

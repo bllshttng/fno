@@ -240,7 +240,7 @@ Before the pass adds a line, it compares the title with every line. The exact ma
 
 One login holds at most 3 open claims on an issue, the same limit as claim issues. The fourth `/claim` gets one reply and no line. `/release` on the first line of a comment frees every claim of that login on the issue. `/release <title>` frees one.
 
-A claim has a 7 day clock (`STALE_AFTER_DAYS` in `epic_issue.rs`). A claim turns stale after 7 days. If its login has an open PR with `Refs #<n>` or `Closes #<n>` on a line of its own, the claim stays live. A stale line reads `· stale`, and the pass releases its node claim. A new `/claim` on a stale line moves it to the new login. A PR from the holder adds `#<PR>` to the line and keeps the claim. The claim store caps a node claim at 24 hours, so the pass renews each live `/claim` node claim on every tick. The stale rule covers `/claim` holds only. A claim from a claim issue keeps its own rules.
+A claim has a 7 day clock (`STALE_AFTER_DAYS` in `epic_issue.rs`). A claim turns stale after 7 days. If its login has an open PR with `Refs #<n>` or `Closes #<n>` on a line of its own, the claim stays live. A stale line reads `· stale`, and the pass releases its node claim. A new `/claim` on a stale line moves it to the new login. A PR from the holder adds `#<PR>` to the line and keeps the claim. The claim store caps a node claim at 24 hours, so the pass renews each live `/claim` node claim on every tick. If the heal pass is off for more than 24 hours, the node claims lapse and the lines go free. Comment `/claim` again to take one back. A child that turns done frees its claim at once. The stale rule covers `/claim` holds only. A claim from a claim issue keeps its own rules.
 
 ## Failure: the primary is unreachable
 
