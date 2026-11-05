@@ -3,7 +3,7 @@
 //!
 //! Sources: rule-labelled reactions in the decision corpus (whose export
 //! already kept typed turns only, through `provenance::classify_turn`), typed
-//! `agent_corrected` events, S2 rows in corrections.log, `Revert` commits,
+//! `agent_corrected` events, S2 rows in the frozen trace seed, `Revert` commits,
 //! plans by superseded status and caused plan commits, and classifier rows
 //! that say a later record contradicts a plan premise. Every row is a
 //! candidate, never a label.
@@ -153,11 +153,11 @@ fn read_plan_labels(rows: &Path, out: &mut Vec<Candidate>) {
     }
 }
 
-fn read_reverts(repo: &Path, out: &mut Vec<Candidate>) {
+pub(crate) fn read_reverts(repo: &Path, out: &mut Vec<Candidate>) {
     let mut cmd = std::process::Command::new("git");
     cmd.arg("-C")
         .arg(repo)
-        .args(["log", "--no-merges", "--grep=^Revert", "--format=%h %s"]);
+        .args(["log", "--no-merges", "--grep=^Revert", "--format=%H %s"]);
     let Ok(output) = crate::bounded_cmd::output_with_timeout_result(cmd, 30) else {
         return;
     };
@@ -362,7 +362,7 @@ pub(crate) fn rank(mut rows: Vec<Candidate>) -> Vec<Candidate> {
 
 struct Sources {
     corpus: PathBuf,
-    corrections: Option<PathBuf>,
+    seed: PathBuf,
     events: PathBuf,
     plan_labels: PathBuf,
     repo: PathBuf,
@@ -373,9 +373,7 @@ struct Sources {
 fn mine(sources: &Sources) -> Vec<Candidate> {
     let mut rows = Vec::new();
     read_corpus(&sources.corpus, &mut rows);
-    if let Some(log) = &sources.corrections {
-        read_corrections(log, &mut rows);
-    }
+    read_corrections(&sources.seed, &mut rows);
     read_correction_events(&sources.events, &mut rows);
     read_plan_labels(&sources.plan_labels, &mut rows);
     read_reverts(&sources.repo, &mut rows);
@@ -387,6 +385,9 @@ fn mine(sources: &Sources) -> Vec<Candidate> {
 }
 
 pub fn run(args: &[String]) -> i32 {
+    if args.first().is_some_and(|a| a == "--traces") {
+        return crate::evals_traces::run(&args[1..]);
+    }
     let limit = match crate::evals::flag_lookup(args, "--limit") {
         None => DEFAULT_LIMIT,
         Some(raw) => match raw.parse::<usize>() {
@@ -399,11 +400,10 @@ pub fn run(args: &[String]) -> i32 {
     };
     let source = crate::evals::flag_lookup(args, "--source");
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let home = std::env::var_os("HOME").map(PathBuf::from);
     let state = state_root();
     let rows = mine(&Sources {
         corpus: state.join("evals").join("decision").join("v1"),
-        corrections: crate::finalize::corrections_log_path(home.as_deref()),
+        seed: state.join("evals/traces/seed-s2.log"),
         events: state.join("events.jsonl"),
         plan_labels: state.join("evals").join("plan-labels").join("rows.jsonl"),
         repo: crate::evals::canonical_repo_root(),
@@ -502,7 +502,7 @@ mod tests {
         .map(|r| r.to_string())
         .join("\n");
         std::fs::write(tmp.path().join("train.jsonl"), corpus).unwrap();
-        let log = tmp.path().join("corrections.log");
+        let log = tmp.path().join("seed-s2.log");
         std::fs::write(
             &log,
             "2026-10-13T09:02:42Z | S1 | target-postmortem | p.md | DonePRGreen\n\
@@ -539,7 +539,7 @@ mod tests {
         let before = snapshot(tmp.path());
         let rows = mine(&Sources {
             corpus: tmp.path().to_path_buf(),
-            corrections: Some(log),
+            seed: log,
             events,
             plan_labels: labels,
             repo: tmp.path().to_path_buf(),
