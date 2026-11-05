@@ -1159,12 +1159,16 @@ fn file_visual_question(
     }
 }
 
-/// Does one changed file match the paint-path list? Two pattern shapes: a
-/// `dir/**` subtree and a bare file name (any directory). `ponytail:` no glob
-/// engine; a mid-pattern `**` or `*` wildcard is added when a config needs it.
+/// Does one changed file match the paint-path list? Three pattern shapes: a
+/// `dir/**` subtree, a `/name` anchored at the repo root, and a bare file
+/// name (any directory). `ponytail:` no glob engine; a mid-pattern `**` or
+/// `*` wildcard is added when a config needs it.
 pub(crate) fn path_matches_paint(path: &str, patterns: &[String]) -> bool {
     patterns.iter().any(|p| {
         let p = p.trim();
+        if let Some(rooted) = p.strip_prefix('/') {
+            return path == rooted;
+        }
         if let Some(prefix) = p.strip_suffix("/**") {
             let prefix = prefix.trim_end_matches('/');
             return path.starts_with(prefix)
@@ -1632,6 +1636,12 @@ mod tests {
         assert!(path_matches_paint(
             "docs/images/target-run.gif",
             &["docs/images/**".to_string()]
+        ));
+        let root_readme = ["/README.md".to_string()];
+        assert!(path_matches_paint("README.md", &root_readme));
+        assert!(!path_matches_paint(
+            "docs/test-audit/README.md",
+            &root_readme
         ));
     }
 

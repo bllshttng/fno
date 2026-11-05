@@ -1426,7 +1426,7 @@ const BUILTIN_VISUAL_PAINT_PATHS: &[&str] = &[
     "crates/fno/src/web_page.html",
     "crates/fno/src/web_trace.html",
     "crates/fno/src/wordmark.rs",
-    "README.md",
+    "/README.md",
     "docs/images/**",
 ];
 const BUILTIN_VISUAL_PAINT_ANCHOR: &str = "crates/fno/src/client";
@@ -2922,6 +2922,7 @@ mod tests {
                 "{pattern} is missing from scripts/ci/paint-paths-select.sh"
             );
             let on_disk = pattern.strip_suffix("/**").unwrap_or(pattern);
+            let on_disk = on_disk.strip_prefix('/').unwrap_or(on_disk);
             assert!(
                 repo.join(on_disk).exists(),
                 "{pattern} names nothing in the tree: a rename left a dead paint entry"
