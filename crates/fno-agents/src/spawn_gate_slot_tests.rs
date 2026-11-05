@@ -210,6 +210,7 @@ fn plain_spawn_stays_refused_while_valid_succession_reuses_one_slot() {
         memory: None,
         accounts: Vec::new(),
         workers_live: None,
+        leads_live: None,
         updated_epoch: now - 60,
     };
     crate::capacity::write_state(&home, &learned_one).unwrap();

@@ -33,7 +33,9 @@ fn board_menu_keys_reach_their_surfaces_while_the_board_is_docked() {
     // seen live in: the fold's expanded state must not pin anything the
     // board paints.
     h.type_bytes(&[PREFIX, b'C']);
-    let _ = h.screen();
+    h.wait_screen(15, |s| s.contains("esc close"));
+    h.type_bytes(&[27]); // the org modal holds the keyboard until it closes
+    h.wait_screen(15, |s| !s.contains("esc close"));
 
     // The board docks into the sideline column.
     h.type_bytes(&[PREFIX, b'O']);

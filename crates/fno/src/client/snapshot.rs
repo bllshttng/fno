@@ -803,6 +803,11 @@ fn live_frame(
     // card-graph config latches here the way attach_and_run does.
     view.card_graph = crate::digest_overlay::card_graph(Path::new(&cwd));
     view.frames = seen.frames;
+    view.resource_meter_text = super::meter::snapshot_meter_text(
+        crate::digest_overlay::load_readout_detailed(Path::new(&cwd)),
+    );
+    view.resource_meter_on = view.resource_meter_text.is_some();
+    view.org.load_capacity();
     view.term = match size {
         Some(t) => t,
         None => {
@@ -1305,12 +1310,26 @@ shoot a root whose fleet map has a second machine (scripts/ops/mux-demo-snapshot
             // inline where the live panel would spawn them. A fold with no
             // reading paints unknown lines - nothing to judge.
             view.org = crate::org_overlay::Panel::with_detail(true);
-            view.org.toggle();
-            let lanes = runtime.block_on(crate::org_overlay::fold_now());
+            view.org.expand();
+            view.org.load_capacity();
+            let seeded = std::env::var("FNO_SNAPSHOT_LANES").ok();
+            let lanes = match seeded.and_then(|path| std::fs::read(path).ok()) {
+                Some(raw) => crate::org_overlay::parse(&raw),
+                None => runtime.block_on(crate::org_overlay::fold_now()),
+            };
             let read = lanes.is_some();
             view.org.apply(crate::org_overlay::FoldPart::Lanes(lanes));
-            let gate = runtime.block_on(crate::org_overlay::gate_now());
+            // `FNO_SNAPSHOT_GATE` seeds the spawn-gate answer the way
+            // `FNO_SNAPSHOT_LANES` seeds the fold: the live probe is a
+            // child that can time out on a busy shooting host.
+            let gate = match std::env::var("FNO_SNAPSHOT_GATE") {
+                Ok(raw) => {
+                    serde_json::from_str(&raw).map_err(|e| format!("FNO_SNAPSHOT_GATE: {e}"))
+                }
+                Err(_) => runtime.block_on(crate::org_overlay::gate_now()),
+            };
             view.org.apply(crate::org_overlay::FoldPart::Gate(gate));
+            view.open_org_modal();
             if !read {
                 return Err(
                     "org block rendered without a reading: fno doctor lanes returned none; \

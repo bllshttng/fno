@@ -1036,8 +1036,8 @@ impl View {
                 }
             }
         }
-        // The org block: three glance lines minimized, the full
-        // reading expanded, pinned to the bottom rows of the column. The row
+        // The org block: the three-line glance, pinned to the bottom rows of
+        // the column. The full reading opens in a modal. The row
         // list already stopped above it; the block renders DIM so it reads as
         // chrome beside the live rows, and the painter truncates to the panel
         // width - the same rule every sideline row follows.

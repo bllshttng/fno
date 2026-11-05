@@ -26,17 +26,16 @@ fn the_org_block_shrinks_the_sideline_and_yields_when_too_short() {
         crate::org_overlay::Org::default(),
     )));
 
-    view.org.toggle(); // back to minimized for the glance-shape checks
-    assert_eq!(view.org_block_rows(), 5, "minimized is five lines");
-    let full = view.sideline_visible_rows() + view.org_block_rows();
-
+    // The sideline always holds the three-line glance; the full block
+    // opens in a modal, so expanding never grows the sideline block.
+    // The glance also reserves the bottom chrome row, so its last line
+    // paints above the status strip.
+    let glance = 3 + view.bottom_row_is_chrome() as usize;
+    assert_eq!(view.org_block_rows(), glance, "the glance is three lines");
+    let before = view.sideline_visible_rows();
     view.org.toggle();
-    let expanded = view
-        .org
-        .expanded_lines(&view.layout.agents, view.sideline_paint_w() - 1, 40)
-        .len();
-    assert_eq!(view.org_block_rows(), expanded);
-    assert_eq!(view.sideline_visible_rows(), full - expanded);
+    assert_eq!(view.org_block_rows(), glance);
+    assert_eq!(view.sideline_visible_rows(), before);
 
     // Too short: the block drops, the rows never do. The strip still owns
     // its row, so a 3-row terminal leaves one row less.
@@ -117,7 +116,7 @@ impl View {
 
 // `draw_sideline` paints at `panel_w - 1` (the divider column is not text). An
 // org line fitted to the full panel width lost its last character to that
-// clip: `team 0/3 live · 1 observed` painted as `· 1 observe`. Sweep the
+// clip: `team 0 of 3 slots · 1 observed` painted as `· 1 observe`. Sweep the
 // panel width so some width lands a fitted line exactly on the boundary.
 #[test]
 fn a_fitted_org_line_paints_whole_at_every_panel_width() {
@@ -148,8 +147,8 @@ fn a_fitted_org_line_paints_whole_at_every_panel_width() {
         let (_, lines) = view.org_block_layout(24);
         let want = lines
             .iter()
-            .find(|l| l.starts_with("  team"))
-            .expect("the minimized glance carries a team line");
+            .find(|l| l.starts_with("  working"))
+            .expect("the glance carries its working line");
         let (rows, cols) = (24usize, 100usize);
         let mut cells = vec![crate::proto::Cell::default(); rows * cols];
         view.draw_sideline(&mut cells, rows, cols, panel_w);
@@ -160,17 +159,8 @@ fn a_fitted_org_line_paints_whole_at_every_panel_width() {
                     .map(|c| c.c)
                     .collect::<String>()
             })
-            .find(|row| row.starts_with("  team"))
-            .expect("the team line painted");
-        // The gate age is read once for layout and again for paint, so the
-        // clock can tick between them; compare with the age masked.
-        let unaged = |s: &str| {
-            let s = s.trim_end();
-            match s.rfind("gate ") {
-                Some(i) => s[..i + 5].to_string(),
-                None => s.to_string(),
-            }
-        };
-        assert_eq!(unaged(&painted), unaged(want), "panel width {width}");
+            .find(|row| row.starts_with("  working"))
+            .expect("the working line painted");
+        assert_eq!(painted.trim_end(), want.trim_end(), "panel width {width}");
     }
 }

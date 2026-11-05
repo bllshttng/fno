@@ -106,7 +106,7 @@ async fn stream_macmon(
                         };
                         let mut text = cpu;
                         text.push_str(&memory_segment(state.as_ref(), detailed));
-                        text.push_str(&capacity_segment(state.as_ref()));
+                        text.push_str(&capacity_segment(state.as_ref(), detailed));
                         text
                     }
                     None => "meter: sensor unavailable".into(),
@@ -127,6 +127,28 @@ async fn stream_macmon(
             }
         }
     }
+}
+
+/// The bar's own cpu figure (`45%`), so the sideline glance prints the
+/// number the bar prints and the two can never disagree.
+pub(super) fn cpu_figure(text: &str) -> Option<&str> {
+    let head = text
+        .strip_prefix("cpu ")
+        .or_else(|| text.strip_prefix("CPU "))?;
+    let figure = head.split_whitespace().next()?;
+    figure.strip_suffix('%')?.parse::<f64>().ok()?;
+    Some(figure)
+}
+
+/// A snapshot has no macmon stream: `FNO_SNAPSHOT_METER` seeds the row.
+pub(super) fn snapshot_meter_text(detailed: bool) -> Option<String> {
+    let state = capacity_state()?;
+    let cpu = state.get("cpu")?.as_str()?;
+    Some(format!(
+        "{cpu}{}{}",
+        memory_segment(Some(&state), detailed),
+        capacity_segment(Some(&state), detailed)
+    ))
 }
 
 /// CPU, watts and GPU only: the memory figure reads from the capacity state,
@@ -176,6 +198,12 @@ fn parse_macmon_sample(raw: &[u8], detailed: bool) -> Option<String> {
 /// machine-keyed file the fno-agents tick persists. `None` when missing or
 /// unreadable: the gauge says "cap unknown", never a stale guess.
 pub(crate) fn capacity_state() -> Option<serde_json::value::Value> {
+    if let Some(seed) = std::env::var("FNO_SNAPSHOT_METER")
+        .ok()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+    {
+        return Some(seed);
+    }
     // Under test with no declared home there IS no state to read: the
     // ambient `$HOME/.fno/agents` is the real machine's, and a gauge test
     // must never depend on it.
@@ -230,7 +258,7 @@ fn memory_segment(state: Option<&serde_json::Value>, detailed: bool) -> String {
 /// The capacity segment: workers live, the learned cap under its ceiling,
 /// then each visible account's windows. No state renders "cap unknown" and
 /// no number (AC6).
-fn capacity_segment(state: Option<&serde_json::Value>) -> String {
+fn capacity_segment(state: Option<&serde_json::Value>, detailed: bool) -> String {
     let Some(state) = state else {
         return " · cap unknown".into();
     };
@@ -240,13 +268,25 @@ fn capacity_segment(state: Option<&serde_json::Value>) -> String {
     ) else {
         return " · cap unknown".into();
     };
-    let mut line = match state.get("workers_live").and_then(|v| v.as_u64()) {
-        Some(workers) => format!(" · workers {workers} live, cap {effective} of {ceiling}"),
-        None => format!(" · cap {effective} of {ceiling}"),
-    };
-    if let Some(reason) = state.get("reason").and_then(|v| v.as_str()) {
-        if !reason.is_empty() {
-            line.push_str(&format!(", {reason}"));
+    let count = |key: &str| state.get(key).and_then(|v| v.as_u64());
+    let mut line = String::new();
+    if let Some(n) = count("workers_live") {
+        line.push_str(&format!(" · {n} working"));
+    }
+    if let Some(n) = count("leads_live") {
+        line.push_str(&format!(" · {n} leads"));
+    }
+    if detailed {
+        // The ceiling is named only when the cap sits under it, so an
+        // unconstrained "24 of 24" never reads as full.
+        line.push_str(&format!(" · this machine cap {effective}"));
+        if effective < ceiling {
+            line.push_str(&format!(" (ceiling {ceiling})"));
+        }
+        if let Some(reason) = state.get("reason").and_then(|v| v.as_str()) {
+            if !reason.is_empty() {
+                line.push_str(&format!(", {reason}"));
+            }
         }
     }
     if let Some(accounts) = state.get("accounts").and_then(|v| v.as_array()) {
@@ -378,10 +418,10 @@ mod tests {
 
         // No state at all: the cap reads unknown and no memory number
         // renders, the never-a-zero contract (AC6).
-        assert_eq!(capacity_segment(None), " · cap unknown");
+        assert_eq!(capacity_segment(None, false), " · cap unknown");
         assert_eq!(memory_segment(None, false), "");
         let bare = json!({"ceiling": 23});
-        assert_eq!(capacity_segment(Some(&bare)), " · cap unknown");
+        assert_eq!(capacity_segment(Some(&bare), false), " · cap unknown");
         assert_eq!(memory_segment(Some(&bare), false), "");
     }
 
@@ -393,7 +433,8 @@ mod tests {
             "ceiling": 23,
             "effective": 14,
             "reason": "CPU-bound",
-            "workers_live": 15,
+            "workers_live": 10,
+            "leads_live": 5,
             "accounts": [
                 {"provider": "zai", "show": true, "limit_tokens": 64000, "windows": [
                     {"window": "5h", "used_tokens": 40000},
@@ -404,10 +445,13 @@ mod tests {
                     {"window": "5h", "used_tokens": 9}]},
             ],
         });
-        let line = capacity_segment(Some(&state));
+        let line = capacity_segment(Some(&state), false);
+        assert!(line.contains(" · 10 working · 5 leads"), "{line}");
+        assert!(!line.contains("cap"), "{line}");
+        let full = capacity_segment(Some(&state), true);
         assert!(
-            line.contains("workers 15 live, cap 14 of 23, CPU-bound"),
-            "{line}"
+            full.contains("10 working · 5 leads · this machine cap 14 (ceiling 23), CPU-bound"),
+            "{full}"
         );
         assert!(line.contains("zai 5h 62%, wk 1.1M tok"), "{line}");
         // The formatter's other shapes, pinned on the same rendered line's

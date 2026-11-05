@@ -47,7 +47,7 @@ Each row is one action id. Put the id in `~/.fno/keybindings.json` with a key st
 | `feedfocus` | `E` | `E` | `E` | focus the activity feed (arrows, enter) |
 | `decisions` | `m` | `m` | `m` | decisions table (audit, retract, overrule) |
 | `sideline-menu` | `P` | `P` | `P` | sideline menu (palette) |
-| `org` | `C` | `C` | `C` | the org block (load, census, lanes) |
+| `org` | `C` | `C` | `C` | the org modal (load, census, lanes) |
 | `org-view` | `G` | `G` | `G` | HQ: org view (fleet, machines, leads, seats) |
 | `notifications-bell` | `q` | `q` | `q` | open notifications for questions and announcements |
 | `open-backlog-board` | `O` | `O` | `O` | open the backlog board |

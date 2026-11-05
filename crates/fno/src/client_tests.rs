@@ -9403,8 +9403,8 @@ fn wheel_rows() {
     );
     assert_eq!(
         v.sideline_visible_rows(),
-        without - 1,
-        "chrome bottom row is not a scroll slot"
+        without - 1 - (v.org_block_rows() > 0) as usize,
+        "chrome bottom row is not a scroll slot (the org glance reserves the strip row)"
     );
     v.status_on = false;
     assert!(

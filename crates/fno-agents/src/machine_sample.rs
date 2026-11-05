@@ -381,7 +381,11 @@ pub fn read(
     let live = crate::spawn_gate::live_rows(&home.registry_json(), &mut warnings);
     sample.live_rows = Some(live.len() as u64);
     sample.leads = Some(live.iter().filter(|row| row.role_level.is_some()).count() as u64);
-    sample.workers = Some(live.iter().filter(|row| row.role_level.is_none()).count() as u64);
+    let worker_rows: Vec<&crate::state::RegistryEntry> =
+        live.iter().filter(|row| row.role_level.is_none()).collect();
+    sample.workers = Some(working_count(&worker_rows, &|row| {
+        session_age_s(&live, row)
+    }));
     #[cfg(target_os = "macos")]
     {
         if let Ok(out) = std::process::Command::new("vm_stat").output() {
@@ -835,6 +839,53 @@ pub(crate) fn maybe_capture_process_snapshot(
     Ok(true)
 }
 
+/// A session counts as working when its transcript moved inside this window,
+/// the same ten minutes the mux census reads (`org_overlay::working_max_s`).
+const WORKING_WINDOW_S: i64 = 600;
+
+/// Seconds since a session's transcript last moved, for any harness: the
+/// served truth the mux rows carry as `last_activity_age_s`, so the bar, the
+/// glance and the census read one answer.
+fn session_age_s(
+    rows: &[crate::state::RegistryEntry],
+    row: &crate::state::RegistryEntry,
+) -> Option<i64> {
+    let handle = row
+        .harness_session_id
+        .as_deref()
+        .unwrap_or(row.name.as_str());
+    let now_s = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()?
+        .as_secs_f64();
+    let stores = crate::session_truth::Stores::ambient();
+    let payload = crate::session_truth::resolve_payload(
+        Some(rows),
+        handle,
+        now_s,
+        &stores,
+        crate::session_truth::cursor::global(),
+    );
+    payload.get("last_activity_age_s")?.as_i64()
+}
+
+/// Working rows, each session once: transcript written inside the window.
+/// A session with no readable transcript is not counted.
+pub(crate) fn working_count(
+    rows: &[&crate::state::RegistryEntry],
+    age: &dyn Fn(&crate::state::RegistryEntry) -> Option<i64>,
+) -> u64 {
+    let mut seen = std::collections::HashSet::new();
+    let working = |row: &&&crate::state::RegistryEntry| {
+        let key = row
+            .harness_session_id
+            .as_deref()
+            .unwrap_or(row.name.as_str());
+        seen.insert(key.to_string()) && age(row).is_some_and(|secs| secs < WORKING_WINDOW_S)
+    };
+    rows.iter().filter(working).count() as u64
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -949,5 +1000,29 @@ mod tests {
         let max_live: u32 = digits.parse().unwrap();
         assert!(max_live >= 1, "the band floor is 1, got {max_live}");
         assert!(line.ends_with("band default)"));
+    }
+
+    #[test]
+    fn working_counts_each_session_once_inside_the_window() {
+        let row = |harness: &str, session: &str| crate::state::RegistryEntry {
+            name: session.into(),
+            harness: Some(harness.into()),
+            harness_session_id: Some(session.into()),
+            ..Default::default()
+        };
+        let rows = [
+            row("claude", "fresh"),
+            row("claude", "fresh"),
+            row("claude", "quiet"),
+            row("codex", "c-fresh"),
+            row("opencode", "o-none"),
+        ];
+        let refs: Vec<_> = rows.iter().collect();
+        let age = |row: &crate::state::RegistryEntry| match row.name.as_str() {
+            "fresh" | "c-fresh" => Some(30),
+            "quiet" => Some(WORKING_WINDOW_S),
+            _ => None,
+        };
+        assert_eq!(working_count(&refs, &age), 2);
     }
 }
