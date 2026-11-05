@@ -92,20 +92,21 @@ impl View {
     /// Open the org modal and start the expanded-only folds it reads.
     pub(super) fn open_org_modal(&mut self) {
         self.org.expand();
-        self.org_modal = true;
         self.aux = Some(self.org_modal_popup());
     }
 
-    /// Let the folds rest once the modal is gone; with `refresh`, redraw the
-    /// modal from the fold that just landed.
-    pub(super) fn sync_org_modal(&mut self, refresh: bool) {
-        if !self.org_modal {
-            return;
-        }
-        if !self.org_modal_is_up() {
-            self.org_modal = false;
+    /// The fold wanted now. The expanded-only folds rest once the modal is gone.
+    pub(super) fn org_want(&mut self) -> Option<crate::org_overlay::Want> {
+        if self.org.is_expanded() && !self.org_modal_is_up() {
             self.org.collapse();
-        } else if refresh {
+        }
+        self.org.take_want(&self.layout.agents)
+    }
+
+    /// Merge a landed fold and redraw the modal from it.
+    pub(super) fn apply_org_fold(&mut self, part: crate::org_overlay::FoldPart) {
+        self.org.apply(part);
+        if self.org_modal_is_up() {
             self.aux = Some(self.org_modal_popup());
         }
     }

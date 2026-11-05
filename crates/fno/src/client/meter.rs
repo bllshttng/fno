@@ -260,37 +260,27 @@ fn capacity_segment(state: Option<&serde_json::Value>, detailed: bool) -> String
     ) else {
         return " · cap unknown".into();
     };
-    // The cap is the learned limit; the ceiling is named only when the cap
-    // sits under it, so an unconstrained "24 of 24" never reads as full.
-    let cap = if effective < ceiling {
-        format!("cap {effective} (ceiling {ceiling})")
-    } else {
-        format!("cap {effective}")
-    };
-    let workers = state.get("workers_live").and_then(|v| v.as_u64());
-    let leads = state.get("leads_live").and_then(|v| v.as_u64());
-    let mut line = match workers {
-        Some(n) => format!(" · {n} working"),
-        None => String::new(),
-    };
-    if let Some(n) = leads {
+    let count = |key: &str| state.get(key).and_then(|v| v.as_u64());
+    let mut line = String::new();
+    if let Some(n) = count("workers_live") {
+        line.push_str(&format!(" · {n} working"));
+    }
+    if let Some(n) = count("leads_live") {
         line.push_str(&format!(" · {n} leads"));
     }
-    if !detailed {
-        return line + &account_segments(state);
-    }
-    line.push_str(&format!(" · this machine {cap}"));
-    if let Some(reason) = state.get("reason").and_then(|v| v.as_str()) {
-        if !reason.is_empty() {
-            line.push_str(&format!(", {reason}"));
+    if detailed {
+        // The ceiling is named only when the cap sits under it, so an
+        // unconstrained "24 of 24" never reads as full.
+        line.push_str(&format!(" · this machine cap {effective}"));
+        if effective < ceiling {
+            line.push_str(&format!(" (ceiling {ceiling})"));
+        }
+        if let Some(reason) = state.get("reason").and_then(|v| v.as_str()) {
+            if !reason.is_empty() {
+                line.push_str(&format!(", {reason}"));
+            }
         }
     }
-    line + &account_segments(state)
-}
-
-/// Each visible account's windows or month spend.
-fn account_segments(state: &serde_json::Value) -> String {
-    let mut line = String::new();
     if let Some(accounts) = state.get("accounts").and_then(|v| v.as_array()) {
         for account in accounts {
             if account.get("show").and_then(|v| v.as_bool()) != Some(true) {
