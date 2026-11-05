@@ -251,10 +251,10 @@ Team mode lets a second person work the same backlog with no shared store. Each 
 1. The owner shares an epic. The heal pass opens the issue and keeps its checklist.
 2. The teammate comments `/claim <title>` on the issue. A title that matches an owner child takes that node. The line shows the teammate's login, and the owner's fleet stops getting the node.
 3. The teammate runs `fno backlog add requests --epic <n>` in a checkout of the repo. The command first lists the nodes it will file. Add `--apply` to write them.
-4. The teammate's fleet builds the node from the teammate's own graph.
+4. The teammate builds the node from the teammate's own graph.
 5. The teammate's PR carries `Fixes <id>` and `Refs #<n>`.
 
-The import in step 3 reads the checklist and keeps each line that passes three tests. The line ends with the hidden id comment. It shows the login your `gh` is signed in as, and case does not matter. It is open and not stale. Each kept line becomes a local node with the owner's id, status `ready`, `epic_issue: <n>` and `origin_evidence: github:<repo>#<n>`. The node is private. The import reads the issue and writes only your graph. It writes nothing to GitHub. It needs your login, and a `GH_TOKEN` or `GITHUB_TOKEN` variable hides that login, so unset the variable for this command.
+The import in step 3 reads the checklist and keeps each line that passes three tests. The line ends with the hidden id comment. It shows the login your `gh` is signed in as, and case does not matter. It is open and not stale. Each kept line becomes a local node with the owner's id, `epic_issue: <n>` and `origin_evidence: github:<repo>#<n>`. The node has no plan, so it reads as an idea. Run `/fno:target <id>` on it, which blueprints first. The node is private. The import reads the issue and writes only your graph. It writes nothing to GitHub. It needs your login, and a `GH_TOKEN` or `GITHUB_TOKEN` variable hides that login, so unset the variable for this command.
 
 A second run files nothing. A local node that already holds the id with other evidence stays as it is, and the receipt names both evidence values. A `/claim` that matched no owner child has no node and no id comment, so the import files nothing for it. File your own node for that work.
 

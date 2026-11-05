@@ -635,6 +635,8 @@ Never list the approval label in any issue template, yours or your organization'
 
 The import command is `fno backlog add requests`. It is a dry run by default and prints each filing before anything is written. Pass `--apply` to write. It reads the local graph, the claim store and GitHub. It writes only to the graph and, for takes, the claim store. It never writes to GitHub: no comment, no label, no close.
 
+The same command has a second mode for a teammate. `--epic <n>` reads a shared epic issue and files the nodes you claimed on it, as [Team mode](architecture/multiplayer.md#team-mode) describes. That mode ignores the labels and limits on this page.
+
 Four limits hold on every run:
 
 - `--limit` (100): at most this many issues read per run.

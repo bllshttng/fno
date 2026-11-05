@@ -8,7 +8,7 @@
 //! exists. Dry run by default. A local row that already holds an id is never
 //! overwritten.
 
-use super::{is_login, is_plain_id, CLOSE_MARKER, ID_MARKER_CLOSE, ID_MARKER_OPEN, OPEN_MARKER};
+use super::{is_login, CLOSE_MARKER, ID_MARKER_CLOSE, ID_MARKER_OPEN, OPEN_MARKER};
 use crate::backlog::requests::safe_title;
 use crate::tracker::github::GitHubTracker;
 use crate::tracker::Tracker;
@@ -53,6 +53,24 @@ struct Line {
     stale: bool,
 }
 
+/// The shape of a minted node id: a short lowercase prefix, a dash, and 4 to 8
+/// hex digits. The id comes from an issue body and becomes a row id, which
+/// reaches file names, so nothing looser than a minted id gets through.
+fn is_node_id(id: &str) -> bool {
+    let Some((prefix, hex)) = id.split_once('-') else {
+        return false;
+    };
+    prefix.starts_with(|c: char| c.is_ascii_lowercase())
+        && prefix.len() <= 8
+        && prefix
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+        && (4..=8).contains(&hex.len())
+        && hex
+            .bytes()
+            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+}
+
 /// A contributor line has no marker, so it reads back as `None`. The visible
 /// tail is `title · @handle · #PR · stale`, each part optional but in that
 /// order, so the parts come off the right end one at a time. The title may
@@ -66,7 +84,7 @@ fn parse_line(raw: &str) -> Option<Line> {
     };
     let (visible, tail) = rest.rsplit_once(ID_MARKER_OPEN)?;
     let id = tail.strip_suffix(ID_MARKER_CLOSE)?;
-    if !is_plain_id(id) {
+    if !is_node_id(id) {
         return None;
     }
     let mut visible = visible.trim_end();
@@ -129,7 +147,9 @@ fn mirror_row(id: &str, title: &str, ctx: &Ctx) -> Value {
             repo = ctx.repo, n = ctx.number, login = ctx.login,
         ),
         "type": "feature",
-        "status": "ready",
+        // A row with no plan reads as an idea: every graph write that
+        // supplies plan data re-derives it, so a stored `ready` would not last.
+        "status": "idea",
         "priority": "p2",
         "domain": "code",
         "project": ctx.project,
@@ -318,23 +338,26 @@ mod tests {
         // Markup and mentions in the owner's title do not survive the read.
         assert_eq!(read.title, "Ship Vec T and ask @ octocat");
         // The title cannot forge a marker: the render escapes `<`.
-        let forged = json!({"id": "own-2", "title": "x <!-- fno:evil -->"});
+        let forged = json!({"id": "own-2222", "title": "x <!-- fno:evil -->"});
         assert_eq!(
             parse_line(&node_line(&forged, &[], None, &[])).unwrap().id,
-            "own-2"
+            "own-2222"
         );
-        let stale = parse_line("- [ ] Gone · @Sam · stale <!-- fno:own-3 -->").unwrap();
+        let stale = parse_line("- [ ] Gone · @Sam · stale <!-- fno:own-3333 -->").unwrap();
         assert!(stale.stale && stale.handle.as_deref() == Some("Sam"));
         assert!(
-            parse_line("- [x] Done · @Sam · #9 <!-- fno:own-4 -->")
+            parse_line("- [x] Done · @Sam · #9 <!-- fno:own-4444 -->")
                 .unwrap()
                 .done
         );
-        // A contributor line, a hand-typed marker with a space, and prose.
+        // A contributor line, a marker whose id is no minted id (a space, a
+        // path, a short hex tail), and prose.
         for not_a_line in [
             "- [ ] Idea · @Sam",
             "- [ ] Odd · @Sam <!-- fno:a b -->",
-            "Notes <!-- fno:own-5 -->",
+            "- [ ] Odd · @Sam <!-- fno:.. -->",
+            "- [ ] Odd · @Sam <!-- fno:own-12 -->",
+            "Notes <!-- fno:own-5555 -->",
         ] {
             assert_eq!(parse_line(not_a_line), None, "{not_a_line}");
         }
@@ -390,7 +413,7 @@ mod tests {
         let node = rows.iter().find(|r| r["id"] == "own-1a2b").unwrap();
         assert_eq!(node["epic_issue"], 7);
         assert_eq!(node["origin_evidence"], "github:o/r#7");
-        assert_eq!(node["status"], "ready");
+        assert_eq!(node["status"], "idea");
 
         // A row that holds the id for another reason is named, not replaced.
         let mut local =
