@@ -4009,25 +4009,7 @@ impl View {
         let held = self.selected_agent_name();
         self.agent_sort = self.agent_sort.advance();
         view_store::save_prefs(self.density, self.agent_sort);
-        let arrow = match self.agent_sort.direction {
-            SortDirection::Ascending => "\u{2191}",
-            SortDirection::Descending => "\u{2193}",
-        };
-        self.set_notice(format!(
-            "sort: {} {arrow}",
-            sideline::sort_name(self.agent_sort.column)
-        ));
-        self.reanchor_selector(held);
-    }
-
-    /// Flip lead nesting for the card layout and say which way it went.
-    /// Pure local state, like the sort cycle.
-    fn toggle_group_by_lead(&mut self) {
-        let held = self.selected_agent_name();
-        self.group_by_lead = !self.group_by_lead;
-        view_store::save_group_by_lead(self.group_by_lead);
-        let word = if self.group_by_lead { "on" } else { "off" };
-        self.set_notice(format!("group by lead: {word}"));
+        self.set_notice(agent_sort::sort_notice(self.agent_sort));
         self.reanchor_selector(held);
     }
 
@@ -5173,70 +5155,6 @@ impl View {
                 self.pin_needs(rows, depths)
             }
         }
-    }
-
-    /// Sorts agent runs the way the extended table orders them: each
-    /// contiguous run of agent rows between non-agent rows orders by the
-    /// active column (leads compared against each other, workers ordered
-    /// inside their own lineage level), so the card view and the table read
-    /// in the sorted order and the painted age is the value sorted on.
-    fn sort_agent_runs<'a>(
-        &self,
-        rows: Vec<DisplayRow<'a>>,
-        depths: Vec<usize>,
-    ) -> (Vec<DisplayRow<'a>>, Vec<usize>) {
-        let needs = self.attention_needs();
-        let now = crate::digest_overlay::now_secs();
-        let order = &AgentOrder {
-            manual: &self.manual_order,
-        };
-        let flat =
-            self.sideline_layout == sideline_color::SidelineLayout::Card && !self.group_by_lead;
-        let mut out: Vec<(DisplayRow<'_>, usize)> = Vec::with_capacity(rows.len());
-        let mut group = Vec::new();
-        let mut iter = rows.into_iter().zip(depths).peekable();
-
-        while let Some((row, depth)) = iter.next() {
-            match row {
-                DisplayRow::Agent(agent) => {
-                    let item = vec![(DisplayRow::Agent(agent), depth)];
-                    group.push((item, agent));
-                    if !matches!(iter.peek(), Some((DisplayRow::Agent(_), _))) {
-                        append_sorted_agent_group(
-                            &mut out,
-                            &mut group,
-                            self.agent_sort,
-                            &needs,
-                            now,
-                            order,
-                            flat,
-                        );
-                    }
-                }
-                row => {
-                    append_sorted_agent_group(
-                        &mut out,
-                        &mut group,
-                        self.agent_sort,
-                        &needs,
-                        now,
-                        order,
-                        flat,
-                    );
-                    out.push((row, depth));
-                }
-            }
-        }
-        append_sorted_agent_group(
-            &mut out,
-            &mut group,
-            self.agent_sort,
-            &needs,
-            now,
-            order,
-            flat,
-        );
-        out.into_iter().unzip()
     }
 
     // The sideline tree, with the top-K idle cap applied. A PURE
@@ -9647,5 +9565,3 @@ mod needs_queue;
 
 #[path = "client/header_band.rs"]
 mod header_band;
-
-use agent_sort::{append_sorted_agent_group, AgentOrder};
