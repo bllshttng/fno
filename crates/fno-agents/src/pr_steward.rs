@@ -828,11 +828,11 @@ fn analyse(
     Ok((question, note))
 }
 
-fn untrusted(nonce: &str, name: &str, content: &str) -> String {
+pub(crate) fn untrusted(nonce: &str, name: &str, content: &str) -> String {
     format!("<<<UNTRUSTED {nonce} {name}\n{content}\n>>>END {nonce}")
 }
 
-fn nonce() -> String {
+pub(crate) fn nonce() -> String {
     use std::io::Read;
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

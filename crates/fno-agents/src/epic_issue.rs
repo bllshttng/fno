@@ -6,6 +6,10 @@
 //! each person's own store; the issue is the one surface other people can
 //! read. The heal pass calls [`run_pass`] beside the PR steward, and
 //! `pr create` calls [`ref_line`] so each child PR points back at the issue.
+//! A `/claim` comment on the issue adds a line, and a claim with no PR goes
+//! stale after [`STALE_AFTER_DAYS`]; the `claim` module decides both.
+
+mod claim;
 
 use crate::backlog::projections::{is_publishable, project_key};
 use crate::claims::ClaimRecord;
@@ -20,6 +24,9 @@ pub(crate) const OPEN_MARKER: &str = "<!-- fno-epic-checklist -->";
 pub(crate) const CLOSE_MARKER: &str = "<!-- /fno-epic-checklist -->";
 /// A finished epic keeps syncing this long, so its last checkbox lands.
 const FINISHED_GRACE_DAYS: i64 = 2;
+/// A `/claim` this old with no PR that writes `Refs #<issue>` reads `stale`,
+/// and its node claim is released.
+const STALE_AFTER_DAYS: i64 = 7;
 const RECORD_TIMEOUT: Duration = Duration::from_secs(30);
 
 fn text<'a>(row: &'a Value, key: &str) -> &'a str {
@@ -81,8 +88,22 @@ fn handle_of(claims: &[ClaimRecord], node: &str, owner_login: Option<&str>) -> O
         Some(login) => login,
         None => owner_login?,
     };
-    (!login.is_empty() && login.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'))
-        .then(|| login.to_string())
+    is_login(login).then(|| login.to_string())
+}
+
+/// A GitHub login: letters, digits and dashes, at most 39 characters. It is
+/// the only text of a person's that reaches a line unescaped.
+fn is_login(login: &str) -> bool {
+    (1..=39).contains(&login.len()) && login.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+}
+
+/// Does the body carry `Refs #<n>` or `Closes #<n>` on a line of its own?
+fn names_issue(body: &str, number: i64) -> bool {
+    let (refs, closes) = (format!("refs #{number}"), format!("closes #{number}"));
+    body.lines().any(|l| {
+        let l = l.trim().to_lowercase();
+        l == refs || l == closes
+    })
 }
 
 fn render_line(row: &Value, handle: Option<&str>) -> String {
@@ -95,6 +116,36 @@ fn render_line(row: &Value, handle: Option<&str>) -> String {
     }
     let mark = if is_done(row) { 'x' } else { ' ' };
     format!("- [{mark}] {}", parts.join(" · "))
+}
+
+/// An owner child's line. A `/claim` that went stale released the node claim,
+/// so its handle comes from the ledger and the line ends `· stale`.
+fn node_line(
+    row: &Value,
+    claims: &[ClaimRecord],
+    owner_login: Option<&str>,
+    ledger: &[claim::Entry],
+) -> String {
+    let id = text(row, "id");
+    match ledger
+        .iter()
+        .find(|e| e.stale && e.node.as_deref() == Some(id))
+    {
+        Some(e) => format!("{} · stale", render_line(row, Some(&e.login))),
+        None => render_line(row, handle_of(claims, id, owner_login).as_deref()),
+    }
+}
+
+/// A `/claim` line with no node behind it.
+fn contributor_line(e: &claim::Entry) -> String {
+    let mut parts = vec![clean_title(&e.title), format!("@{}", e.login)];
+    if let Some(pr) = e.pr {
+        parts.push(format!("#{pr}"));
+    }
+    if e.stale {
+        parts.push("stale".to_string());
+    }
+    format!("- [ ] {}", parts.join(" · "))
 }
 
 fn identity_marker(epic_id: &str) -> String {
@@ -175,9 +226,16 @@ pub(crate) fn sync_epic(
     if kids.is_empty() {
         return Ok(None);
     }
+    let ledger = claim::ledger_of(epic);
     let checklist = kids
         .iter()
-        .map(|k| render_line(k, handle_of(claims, text(k, "id"), owner_login).as_deref()))
+        .map(|k| node_line(k, claims, owner_login, &ledger))
+        .chain(
+            ledger
+                .iter()
+                .filter(|e| e.node.is_none())
+                .map(contributor_line),
+        )
         .collect::<Vec<_>>()
         .join("\n");
     let (number, record) = match recorded_issue(epic) {
@@ -225,6 +283,11 @@ fn finished_long_ago(epic: &Value, now: chrono::DateTime<chrono::Utc>) -> bool {
 }
 
 fn record_issue(epic_id: &str, number: i64) -> Result<(), String> {
+    record_fields(epic_id, &[("epic_issue", json!(number))])
+}
+
+/// Write fields onto the epic row under the graph lock.
+fn record_fields(epic_id: &str, fields: &[(&str, Value)]) -> Result<(), String> {
     crate::graph_store::mutate_rows(
         &crate::backlog::settings::graph_path(),
         RECORD_TIMEOUT,
@@ -238,7 +301,9 @@ fn record_issue(epic_id: &str, number: i64) -> Result<(), String> {
             else {
                 return Ok(false);
             };
-            obj.insert("epic_issue".into(), json!(number));
+            for (key, value) in fields {
+                obj.insert((*key).into(), value.clone());
+            }
             Ok(true)
         },
     )
@@ -247,8 +312,10 @@ fn record_issue(epic_id: &str, number: i64) -> Result<(), String> {
 }
 
 /// The heal pass's arm: sync every shared epic of the project at `cwd`. The
-/// returned token joins the tick row's counts, like the steward's.
-pub(crate) fn run_pass(cwd: &Path, dry_run: bool) -> &'static str {
+/// returned token joins the tick row's counts, like the steward's. `pulls` is
+/// the open PR list the heal pass already holds: it says which `/claim` has a
+/// PR that writes `Refs #<issue>`, at no extra gh call.
+pub(crate) fn run_pass(cwd: &Path, pulls: &[Value], dry_run: bool) -> &'static str {
     let Ok(project) =
         crate::law_match::resolve_project(Some(cwd), &crate::law_match::settings_sources())
     else {
@@ -282,13 +349,30 @@ pub(crate) fn run_pass(cwd: &Path, dry_run: bool) -> &'static str {
             return "epic_issue_error";
         }
     };
-    let claims = crate::claims::list(Some("node:"), None, false).unwrap_or_default();
+    let claims_read = crate::claims::list(Some("node:"), None, false);
+    let mut claims = claims_read.clone().unwrap_or_default();
     let login = crate::gh_login::current();
     let gh = GitHubTracker::as_app(&repo);
     let (mut changed, mut failed) = (false, false);
     for epic in epics {
         let id = text(epic, "id");
-        match sync_epic(&gh, &repo, &rows, epic, &claims, login.as_deref()) {
+        let mut epic_row = epic.clone();
+        // Comments can exist only once the issue does, and an unreadable claim
+        // store must not read as "nobody holds anything".
+        if let (Some(number), Ok(held)) = (recorded_issue(epic), &claims_read) {
+            match claim::run(&gh, cwd, &repo, number, &rows, epic, held, pulls) {
+                Ok((next, moved)) => {
+                    changed |= moved;
+                    epic_row = next;
+                    claims = crate::claims::list(Some("node:"), None, false).unwrap_or(claims);
+                }
+                Err(e) => {
+                    eprintln!("epic-issue: {id}: the /claim read failed: {e}");
+                    failed = true;
+                }
+            }
+        }
+        match sync_epic(&gh, &repo, &rows, &epic_row, &claims, login.as_deref()) {
             Ok(Some(done)) => {
                 changed |= done.action != Action::Unchanged;
                 if done.record {
@@ -325,11 +409,7 @@ pub(crate) fn ref_line(rows: &[Value], node: &str, body: &str) -> Option<String>
     let last = !checklist_rows(rows, parent)
         .iter()
         .any(|r| text(r, "id") != node && !is_done(r));
-    let (refs, closes) = (format!("refs #{number}"), format!("closes #{number}"));
-    if body.lines().any(|l| {
-        let l = l.trim().to_lowercase();
-        l == refs || l == closes
-    }) {
+    if names_issue(body, number) {
         return None;
     }
     Some(if last {
@@ -365,6 +445,10 @@ mod tests {
         bodies: Vec<String>,
         titles: Vec<String>,
         creates: usize,
+        /// Comments on issue 1 as `(login, body)`; a comment's id is its
+        /// position plus one.
+        comments: Vec<(String, String)>,
+        replies: Vec<String>,
     }
 
     struct FakeGh(Arc<Mutex<Hub>>);
@@ -389,6 +473,26 @@ mod tests {
                 ("issue", "edit") => {
                     let n: usize = args[2].parse().unwrap();
                     hub.bodies[n - 1] = arg("--body");
+                    (0, String::new(), String::new())
+                }
+                ("issue", "view") if arg("--json") == "comments" => {
+                    let items: Vec<Value> = hub
+                        .comments
+                        .iter()
+                        .enumerate()
+                        .map(|(i, (login, body))| {
+                            json!({
+                                "author": {"login": login}, "body": body, "isMinimized": false,
+                                "url": format!("https://github.com/o/r/issues/1#issuecomment-{}", i + 1),
+                            })
+                        })
+                        .collect();
+                    (0, json!({"comments": items}).to_string(), String::new())
+                }
+                ("issue", "comment") => {
+                    let body = arg("--body");
+                    hub.replies.push(body.clone());
+                    hub.comments.push(("fnodotdev".into(), body));
                     (0, String::new(), String::new())
                 }
                 ("issue", "view") => {
@@ -576,5 +680,247 @@ mod tests {
             !line.contains("@octocat") && !line.contains("<!--"),
             "{line}"
         );
+    }
+
+    use super::claim::{claim_pass, command_of, parse_match, ClaimIn, ClaimPass, Command, Judge};
+    use crate::backlog::requests::ClaimOp;
+    use chrono::{DateTime, Duration, Utc};
+
+    fn comment(hub: &Arc<Mutex<Hub>>, login: &str, body: &str) {
+        hub.lock()
+            .unwrap()
+            .comments
+            .push((login.into(), body.into()));
+    }
+
+    fn pass(
+        hub: &Arc<Mutex<Hub>>,
+        rows: &[Value],
+        epic: &Value,
+        claims: &[ClaimRecord],
+        pulls: &[Value],
+        judge: Judge,
+    ) -> ClaimPass {
+        claim_pass(&ClaimIn {
+            gh: &tracker(hub),
+            repo: "o/r",
+            number: 1,
+            rows,
+            epic,
+            claims,
+            pulls,
+            now: Utc::now(),
+            judge,
+        })
+        .unwrap()
+    }
+
+    /// What the heal pass stores on the epic row after a claim pass.
+    fn store(epic: &mut Value, pass: &ClaimPass) {
+        epic["epic_claims"] = serde_json::to_value(&pass.ledger).unwrap();
+        if let Some(cursor) = pass.cursor {
+            epic["epic_claim_cursor"] = json!(cursor);
+        }
+    }
+
+    /// Open the issue so a later pass can edit its body.
+    fn open_issue(hub: &Arc<Mutex<Hub>>, rows: &[Value]) {
+        let mut seed = rows[0].clone();
+        seed.as_object_mut().unwrap().remove("epic_issue");
+        sync_epic(&tracker(hub), "o/r", rows, &seed, &[], None).unwrap();
+    }
+
+    const NO_MATCH: Judge = &|_, _| Ok(None);
+
+    #[test]
+    fn a_claim_comment_adds_one_line_and_each_comment_is_answered_once() {
+        let hub = Arc::new(Mutex::new(Hub::default()));
+        let rows = vec![
+            epic(json!({"epic_issue": 1})),
+            child("kid-1", "First", json!({})),
+        ];
+        open_issue(&hub, &rows);
+        for body in [
+            "/claim New chooser",
+            "/claim Second idea",
+            "/claim Third idea",
+            "/claim Fourth idea",
+            "just chatting",
+            "Hi\n/claim Not on the first line",
+        ] {
+            comment(&hub, "visitor", body);
+        }
+        let first = pass(&hub, &rows, &rows[0], &[], &[], NO_MATCH);
+        // Three claims fit the cap; the fourth gets one reply and no line.
+        assert_eq!(first.ledger.len(), 3);
+        assert_eq!(hub.lock().unwrap().replies.len(), 1);
+        let mut epic_row = rows[0].clone();
+        store(&mut epic_row, &first);
+        sync_epic(&tracker(&hub), "o/r", &rows, &epic_row, &[], None).unwrap();
+        let body = hub.lock().unwrap().bodies[0].clone();
+        assert!(body.contains("- [ ] New chooser · @visitor"), "{body}");
+        // The bot's own reply is a comment now. A second pass reads it, skips
+        // it, and changes nothing.
+        let again = pass(&hub, &rows, &epic_row, &[], &[], NO_MATCH);
+        assert_eq!(again.ledger, first.ledger);
+        assert_eq!(hub.lock().unwrap().replies.len(), 1);
+    }
+
+    #[test]
+    fn a_claim_on_an_owner_line_takes_that_node_and_release_frees_it() {
+        let hub = Arc::new(Mutex::new(Hub::default()));
+        let rows = vec![
+            epic(json!({"epic_issue": 1, "project": "p"})),
+            child("kid-1", "Fix the picker", json!({"project": "p"})),
+        ];
+        open_issue(&hub, &rows);
+        comment(&hub, "visitor", "/claim fix the PICKER");
+        comment(&hub, "other", "/claim Fix the picker");
+        let first = pass(&hub, &rows, &rows[0], &[], &[], NO_MATCH);
+        let grants: Vec<_> = first
+            .ops
+            .iter()
+            .filter_map(|op| match op {
+                ClaimOp::Grant { node, holder, .. } => Some((node.as_str(), holder.as_str())),
+                ClaimOp::Release { .. } => None,
+            })
+            .collect();
+        assert_eq!(grants, [("kid-1", "github:visitor")]);
+        assert_eq!(first.ledger[0].node.as_deref(), Some("kid-1"));
+        let replies = hub.lock().unwrap().replies.clone();
+        assert!(
+            replies.len() == 1 && replies[0].contains("held by visitor"),
+            "{replies:?}"
+        );
+        // Once the claim is in the store, the line names the holder.
+        let mut epic_row = rows[0].clone();
+        store(&mut epic_row, &first);
+        let held = [claim("kid-1", "github:visitor")];
+        sync_epic(&tracker(&hub), "o/r", &rows, &epic_row, &held, None).unwrap();
+        let body = hub.lock().unwrap().bodies[0].clone();
+        assert!(body.contains("- [ ] Fix the picker · @visitor"), "{body}");
+        comment(&hub, "visitor", "/release");
+        let freed = pass(&hub, &rows, &epic_row, &held, &[], NO_MATCH);
+        assert!(freed.ledger.is_empty());
+        assert!(
+            matches!(&freed.ops[..], [ClaimOp::Release { node, holder }]
+                if node == "kid-1" && holder == "github:visitor"),
+            "a release and no renewing grant"
+        );
+    }
+
+    #[test]
+    fn a_claim_with_no_pr_goes_stale_after_7_days_and_a_new_claim_takes_the_line() {
+        let hub = Arc::new(Mutex::new(Hub::default()));
+        let (old, recent): (DateTime<Utc>, DateTime<Utc>) = (
+            Utc::now() - Duration::days(8),
+            Utc::now() - Duration::days(2),
+        );
+        let ledger = json!([
+            {"login": "olduser", "title": "First", "node": "kid-1", "at": old.to_rfc3339()},
+            {"login": "olduser", "title": "Old idea", "at": old.to_rfc3339()},
+            {"login": "Busy", "title": "Busy idea", "at": old.to_rfc3339()},
+            {"login": "newish", "title": "Recent idea", "at": recent.to_rfc3339()},
+        ]);
+        let rows = vec![
+            epic(json!({"epic_issue": 1, "project": "p", "epic_claims": ledger})),
+            child("kid-1", "First", json!({"project": "p"})),
+        ];
+        open_issue(&hub, &rows);
+        comment(&hub, "newuser", "/claim old idea");
+        let held = [claim("kid-1", "github:olduser")];
+        let pulls = [json!({"number": 40, "user": {"login": "busy"}, "body": "Intro\nRefs #1\n"})];
+        let out = pass(&hub, &rows, &rows[0], &held, &pulls, NO_MATCH);
+        let entry = |title: &str| out.ledger.iter().find(|e| e.title == title).unwrap();
+        // The owner line's claim is released and the entry reads stale.
+        assert!(entry("First").stale);
+        assert!(
+            matches!(&out.ops[..], [ClaimOp::Release { node, holder }]
+                if node == "kid-1" && holder == "github:olduser"),
+            "one release, no grant for the stale entry"
+        );
+        // The old idea moved to the new login with a fresh clock.
+        let moved = entry("Old idea");
+        assert!(moved.login == "newuser" && !moved.stale && moved.at != old.to_rfc3339());
+        // A PR that writes the Refs line clears the clock; a 2-day claim has none to clear.
+        assert!(!entry("Busy idea").stale && entry("Busy idea").pr == Some(40));
+        assert!(!entry("Recent idea").stale);
+        let mut epic_row = rows[0].clone();
+        store(&mut epic_row, &out);
+        sync_epic(&tracker(&hub), "o/r", &rows, &epic_row, &[], None).unwrap();
+        let body = hub.lock().unwrap().bodies[0].clone();
+        for line in [
+            "- [ ] First · @olduser · stale",
+            "- [ ] Old idea · @newuser",
+            "- [ ] Busy idea · @Busy · #40",
+        ] {
+            assert!(body.contains(line), "{line} missing from {body}");
+        }
+    }
+
+    #[test]
+    fn a_title_the_model_matches_to_a_held_line_adds_nothing_and_a_failed_model_adds_the_line() {
+        let hub = Arc::new(Mutex::new(Hub::default()));
+        let rows = vec![
+            epic(json!({"epic_issue": 1, "project": "p"})),
+            child("kid-1", "Fix the chooser", json!({"project": "p"})),
+        ];
+        let held = [claim("kid-1", "github:holder")];
+        comment(&hub, "visitor", "/claim Fix the picker");
+        let same_work: Judge = &|title, lines| {
+            assert_eq!(
+                (title, lines),
+                ("Fix the picker", &["Fix the chooser".to_string()][..])
+            );
+            Ok(Some(0))
+        };
+        let first = pass(&hub, &rows, &rows[0], &held, &[], same_work);
+        assert!(first.ledger.is_empty());
+        let replies = hub.lock().unwrap().replies.clone();
+        assert!(
+            replies.len() == 1
+                && replies[0].contains("`Fix the chooser`")
+                && replies[0].contains("held by holder"),
+            "{replies:?}"
+        );
+        // A model that errors never blocks a claim: the line is added.
+        let mut epic_row = rows[0].clone();
+        store(&mut epic_row, &first);
+        comment(&hub, "visitor2", "/claim Fix the picker");
+        let refused: Judge = &|_, _| Err("spawn refused".into());
+        let second = pass(&hub, &rows, &epic_row, &held, &[], refused);
+        assert_eq!(second.ledger.len(), 1);
+        assert_eq!(hub.lock().unwrap().replies.len(), 1);
+    }
+
+    #[test]
+    fn only_the_first_line_of_a_comment_is_a_command_and_the_model_answer_is_strict() {
+        assert_eq!(
+            command_of("/claim  Fix the chooser "),
+            Some(Command::Claim("Fix the chooser".into()))
+        );
+        assert_eq!(
+            command_of("/release New chooser"),
+            Some(Command::Release(Some("New chooser".into())))
+        );
+        assert_eq!(command_of("/release"), Some(Command::Release(None)));
+        for not_a_command in [
+            "/claim",
+            "/claimed x",
+            "Hi\n/claim x",
+            "> /claim x",
+            "/claim see https://x.example/a",
+            "/claim see www.x.example",
+            "",
+        ] {
+            assert_eq!(command_of(not_a_command), None, "{not_a_command:?}");
+        }
+        let Some(Command::Claim(title)) = command_of("/claim <!-- /fno-epic-checklist -->") else {
+            panic!("a markup title still claims");
+        };
+        assert!(!title.contains('<'), "{title}");
+        assert_eq!(parse_match("same work\nMATCH 2", 2), Ok(Some(1)));
+        assert_eq!(parse_match("none of them\nNONE\n", 2), Ok(None));
+        assert!(parse_match("MATCH 3", 2).is_err() && parse_match("maybe", 2).is_err());
     }
 }
