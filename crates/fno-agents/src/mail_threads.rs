@@ -65,7 +65,7 @@ fn registry_key(row: &Value) -> Option<String> {
 /// from a transcript) - that row's key, else the raw string. Resolving to the
 /// fno_id is what keeps one agent one participant: rows that carry the id and
 /// rows that carry the name join here, never split.
-fn resolve_key(key: &str, registry: &[Value]) -> String {
+pub(crate) fn resolve_key(key: &str, registry: &[Value]) -> String {
     if key.is_empty() {
         return key.to_string();
     }
@@ -724,14 +724,36 @@ pub fn run_mail_threads(args: &[String]) -> i32 {
             // unreachable one, leaves the local projection as it is.
             if let Ok(Some(remote)) = crate::store_remote::configured() {
                 let since = now_secs() as i64 - crate::mail_bus::MAIL_TTL_SECS;
-                match crate::mail_bus::recent_rows(&remote, since, FLEET_ROWS) {
+                let reachable = match crate::mail_bus::recent_rows(&remote, since, FLEET_ROWS) {
                     Ok(rows) => {
                         if let Ok(key) = crate::machine_key::own() {
                             here.extend(own_labels(&rows, &key.public_key()));
                         }
-                        fold_fleet_rows(&mut projection, &rows, &here, &seen, &registry);
+                        fold_fleet_rows(&mut projection, &rows, &here, &seen, &registry, "bus");
+                        true
                     }
-                    Err(e) => eprintln!("mail-threads: shared bus: {e}"),
+                    Err(e) => {
+                        eprintln!("mail-threads: shared bus: {e}");
+                        !crate::store_remote::is_unreachable(&e)
+                    }
+                };
+                // Mail two agents of another machine exchange rides the
+                // carrier; the bus never sees it. A primary the bus read
+                // could not reach costs one timeout, not two.
+                let machine = crate::claims::machine_id();
+                let carried = reachable
+                    .then(|| crate::mail_carrier::read_peer_rows(&remote, &machine, since));
+                match carried.unwrap_or_else(|| Ok(Vec::new())) {
+                    Ok(rows) => {
+                        let pins = crate::machine_key::pins_path(AgentsHome::from_env().root());
+                        let person = crate::identity::person();
+                        let rows =
+                            crate::mail_carrier::trusted(&rows, &machine, &person, &here, &pins);
+                        fold_fleet_rows(&mut projection, &rows, &here, &seen, &registry, "carrier");
+                    }
+                    // No machine has published yet.
+                    Err(e) if e.contains("no such table") => {}
+                    Err(e) => eprintln!("mail-threads: mail carrier: {e}"),
                 }
             }
             canonical_hosts(&mut projection, &here);
@@ -771,12 +793,15 @@ const FLEET_ROWS: i64 = 2000;
 /// id, so it is skipped. So is an id the pull arm delivered (`seen`) or the
 /// store holds (the sender's mirror keeps the bus id). Mail this machine
 /// sent before the mirror kept it still folds, its sender keyed as local.
+/// Each row carries `origin`: `bus`, or `carrier` for another machine's
+/// same-machine mail, which the tab cannot answer from here.
 pub(crate) fn fold_fleet_rows(
     projection: &mut Value,
     rows: &[crate::mail_bus::FleetRow],
     here: &[String],
     seen: &std::collections::HashSet<String>,
     registry: &[Value],
+    origin: &str,
 ) {
     let held = |host: &str| here.contains(&crate::mail::address::normalize_host(host));
     let local_ids: std::collections::HashSet<String> = ["threads", "channels"]
@@ -844,6 +869,7 @@ pub(crate) fn fold_fleet_rows(
             "body": body,
             "state": r.status,
             "system": false,
+            "origin": origin,
         });
         let pair = if from_key <= to_key {
             (from_key, to_key)
@@ -1990,13 +2016,21 @@ mod tests {
             &here,
             &["m1".to_string()].into_iter().collect(),
             &[],
+            "bus",
         );
         assert_eq!(
             projection_with_local["threads"].as_array().unwrap().len(),
             1,
             "a pulled id, a stored id and mail to this machine all stay local"
         );
-        fold_fleet_rows(&mut projection, &rows, &here, &Default::default(), &[]);
+        fold_fleet_rows(
+            &mut projection,
+            &rows,
+            &here,
+            &Default::default(),
+            &[],
+            "bus",
+        );
         let threads = projection["threads"].as_array().unwrap();
         assert_eq!(threads.len(), 2, "the remote pair, and oak's sent mail");
         let pair = threads.iter().find(|t| t["rows"][0]["id"] == "m1").unwrap();

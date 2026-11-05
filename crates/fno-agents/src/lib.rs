@@ -381,6 +381,7 @@ pub mod mail;
 pub mod mail_arm;
 pub mod mail_backfill;
 pub mod mail_bus;
+pub mod mail_carrier;
 pub mod mail_cli;
 pub mod mail_control_drain;
 pub mod mail_envelope;
