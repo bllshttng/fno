@@ -45,3 +45,18 @@ The allowance no longer re-runs the parent. It forks a child with the given scop
 ## Placement
 
 `fno agents workspace worktree ensure` lands the worktree at the conductor location (`~/conductor/workspaces/<repo>/<name>`), so `start` inherits that placement. See [worktree-mechanics.md](worktree-mechanics.md) (Placement) for the full worktree-location contract.
+
+## Recover a failed native cleanup
+
+On macOS, a Trash wrapper named `rm` on `PATH` can reject cleanup of `.claim-err` or `.init.lock` in a restricted terminal. Init can leave a partial manifest after that error. A live claim does not make that failed admission valid.
+
+1. Read the live claim with `fno agents claim status node:<node> --json` and identify your session with `fno whoami`. Confirm that the claim and partial manifest belong to your session before recovery.
+2. If both records belong to your session, archive the partial manifest through the native state command and retry with system tools first on `PATH`. Replace the placeholders below with the manifest path printed by init and the node id.
+
+```bash
+export PATH="/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
+fno do state archive --path "<manifest-path>" --type target
+fno do target init --input "<node>"
+```
+
+Init reclaims a stale init lock through its own recovery path. Preserve the claim and manifest controls throughout recovery. Do not remove locks, claim the node again, or edit the manifest by hand. Continue source work after init prints a successful orienter and the live claim names your session.
