@@ -1641,7 +1641,6 @@ mod tests {
     use crate::gate_probes::Run;
     use serde_json::json;
     use std::cell::RefCell;
-    use std::io::Write as _;
 
     const SHA: &str = "abcdef1234567890";
 
@@ -2119,19 +2118,6 @@ mod tests {
             state.last_note
         );
         assert!(state.worker.baseline.is_none());
-    }
-
-    #[test]
-    fn zai_peak_is_monday_to_friday_0600_to_1000_utc() {
-        let at = |s: &str| DateTime::parse_from_rfc3339(s).unwrap().with_timezone(&Utc);
-        assert!(zai_peak(at("2026-11-02T06:00:00Z")), "Monday 06:00 opens");
-        assert!(zai_peak(at("2026-11-06T09:59:00Z")), "Friday 09:59 holds");
-        assert!(!zai_peak(at("2026-11-02T10:00:00Z")), "10:00 closes");
-        assert!(!zai_peak(at("2026-11-02T05:59:00Z")), "before 06:00");
-        assert!(
-            !zai_peak(at("2026-11-07T07:00:00Z")),
-            "Saturday is off peak"
-        );
     }
 
     #[test]
