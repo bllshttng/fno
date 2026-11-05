@@ -749,6 +749,7 @@ fn close_node(args: &DoneArgs, task_id: &str) -> i32 {
             args.skip_stamp,
             args.force,
             args.reason.as_deref(),
+            args.note.as_deref(),
         );
     }
     if !has_node_id_prefix(task_id) {
