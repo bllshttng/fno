@@ -103,7 +103,8 @@ pub(super) fn command_of(body: &str) -> Option<Command> {
     if let Some(title) = argument("/claim") {
         let lower = title.to_lowercase();
         let link = lower.contains("://") || lower.contains("www.");
-        return (!title.is_empty() && !link).then_some(Command::Claim(title));
+        let named = title.chars().any(char::is_alphanumeric);
+        return (named && !link).then_some(Command::Claim(title));
     }
     argument("/release").map(|t| Command::Release((!t.is_empty()).then_some(t)))
 }
