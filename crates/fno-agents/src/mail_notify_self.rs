@@ -8,11 +8,11 @@
 //! and rendering, dispatched from client.rs before the tokio runtime builds
 //! so a fire answers in microseconds.
 //!
-//! Ports the Python body (`mail.hold.cmd_notify_self`, minus the
-//! sent-unclaimed nag, which no cancelled run ever reached; `mail status`
-//! keeps that signal): a live hold means the turn is busy, so neither render
-//! nor ack; otherwise unread mail renders as one UserPromptSubmit payload,
-//! then acknowledges. The envelope flushes to stdout BEFORE the cursor
+//! Ports the Python body (`mail.hold.cmd_notify_self`, nag included): a
+//! live hold means the turn is busy, so neither render nor ack; otherwise
+//! unread mail and the sent-unclaimed nag line render as one
+//! UserPromptSubmit payload, then acknowledge. The envelope flushes to
+//! stdout BEFORE the cursor
 //! moves, so a crash in between re-renders (at-least-once), never drops.
 
 use serde_json::{json, Value};
@@ -33,6 +33,12 @@ pub fn run(args: &[String]) -> i32 {
 /// One prompt-boundary pass over the bus for one session. Always 0: a
 /// notification failure never blocks the turn it rode in on.
 pub fn notify(bus_dir: &Path, session: &str) -> i32 {
+    notify_to(bus_dir, session, &mut std::io::stdout())
+}
+
+/// `notify` against any sink; the stdout split exists so tests can read the
+/// rendered envelope bytes.
+pub(crate) fn notify_to(bus_dir: &Path, session: &str, out: &mut impl std::io::Write) -> i32 {
     let handle = crate::identity::canonical_handle(session);
     let clock_key = crate::mail_hold::identity_key(session);
 
@@ -59,19 +65,26 @@ pub fn notify(bus_dir: &Path, session: &str) -> i32 {
     crate::mail_hold::tidy_lapsed(&handle);
 
     let msgs = read_bus(bus_dir);
-    let pending = pending(
+    let mut pending = pending(
         bus_dir,
         &msgs,
         session,
         &crate::claude_drive::claude_projects_dir(),
         &[],
     );
+    // The sent-unclaimed nag rides the same payload, as it did in the
+    // Python body. The scan is outbox-shaped and early-returns before any
+    // transcript read when nothing is unclaimed, so the no-mail path of a
+    // session that only reads never pays for it.
+    if let Some(line) = crate::mail_cli::sent::nag_line(bus_dir, &handle) {
+        pending.lines.push(line);
+    }
     if pending.lines.is_empty() {
         acknowledge(bus_dir, &msgs, &pending);
         return 0;
     }
     let payload = envelope("UserPromptSubmit", &context(&pending.lines), None);
-    if write_flushed(&mut std::io::stdout(), &payload).is_err() {
+    if write_flushed(out, &payload).is_err() {
         return 0;
     }
     // Acknowledge only after the bytes are out: a crash before the cursor
@@ -313,6 +326,10 @@ mod tests {
     }
 
     fn append(bus: &Path, from: &str, to: &str, body: &str) {
+        append_ts(bus, from, to, body, "2026-09-28T12:00:00Z");
+    }
+
+    fn append_ts(bus: &Path, from: &str, to: &str, body: &str, ts: &str) {
         let id = format!("msg-{}", fnv(from, to, body));
         let line = json!({
             "id": id,
@@ -321,7 +338,7 @@ mod tests {
             "to": to,
             "kind": "send",
             "body": body,
-            "ts": "2026-09-28T12:00:00Z",
+            "ts": ts,
         });
         use std::io::Write as _;
         let mut f = std::fs::OpenOptions::new()
@@ -414,6 +431,49 @@ mod tests {
                 "\"msg_id\":\"{}\"",
                 msg_id("lead", &handle, "second")
             )));
+        });
+    }
+
+    // The sent-unclaimed nag: the payload names this session's own mail no
+    // recipient picked up, and once the recipient cursor claims it the
+    // no-mail path renders nothing. One test holding both env-pinned
+    // paths, same reason as above.
+    #[test]
+    fn nag_paths() {
+        let session = "ses_0123456789abcdef0123456789abcdef";
+        let handle = crate::identity::canonical_handle(session);
+        let ts = (chrono::Utc::now() - chrono::Duration::hours(1))
+            .format("%Y-%m-%dT%H:%M:%SZ")
+            .to_string();
+        crate::mail_hold::tests::with_hold_env(|_home| {
+            let (_dir, bus) = bus_fixture("nag");
+            append_ts(&bus, &handle, "peer", "ping", &ts);
+            let mut out = Vec::new();
+            assert_eq!(notify_to(&bus, session, &mut out), 0);
+            let out = String::from_utf8(out).unwrap();
+            assert!(out.contains("handed"), "no nag line in {out}");
+            assert!(out.contains("not in transcript"), "no nag line in {out}");
+            assert!(out.contains("ESC to steer"), "no nag line in {out}");
+        });
+        crate::mail_hold::tests::with_hold_env(|_home| {
+            let (_dir, bus) = bus_fixture("nag-claimed");
+            append_ts(&bus, &handle, "peer", "ping", &ts);
+            std::fs::create_dir_all(bus.join("cursors")).unwrap();
+            std::fs::write(
+                bus.join("cursors").join("peer.json"),
+                format!(
+                    "{{\"last_seen_id\":\"{}\"}}\n",
+                    msg_id(&handle, "peer", "ping")
+                ),
+            )
+            .unwrap();
+            let mut out = Vec::new();
+            assert_eq!(notify_to(&bus, session, &mut out), 0);
+            assert!(
+                out.is_empty(),
+                "claimed mail still nagged: {}",
+                String::from_utf8_lossy(&out)
+            );
         });
     }
 }
