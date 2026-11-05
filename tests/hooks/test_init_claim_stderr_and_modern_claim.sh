@@ -43,10 +43,8 @@ pass "init script passes bash -n"
 _ALL_TMPS=()
 trap 'rm -rf "${_ALL_TMPS[@]}"' EXIT
 
-# An isolated temp repo. Crucially it has NO scripts/roadmap-tasks.py, so the
-# legacy `python3 .../scripts/roadmap-tasks.py update` fails exactly like the
-# transient flock contention it stands in for -- letting us assert the modern
-# claim is the authority.
+# An isolated temp repo. The legacy roadmap-tasks claim path is gone, so the
+# modern claim is the only authority the cases below can assert.
 make_repo() {
   local _varname="$1" _dir
   _dir="$(mktemp -d -t init-claim.XXXXXX)" || fail "mktemp failed"

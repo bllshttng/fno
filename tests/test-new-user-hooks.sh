@@ -8,9 +8,6 @@
 #        marker anywhere closes the window and the hook emits {}
 #   AC2  join trigger: a prompt naming /fno: lands the preamble on the same
 #        turn and writes the session's joined marker
-#   AC3  interpreter resolution: python3 wins when present; the uv-managed
-#        python is next; with neither, the resolver emits {} and exits 0
-#        (hooks never block)
 
 set -uo pipefail
 
@@ -72,45 +69,5 @@ OUT4="$(printf '%s\n' "$PAYLOAD_JOIN" | CLAUDE_CODE_SESSION_ID=fresh-2 bash "$RE
 [[ "$OUT4" == *"footnote-enabled"* ]] || fail "AC2: the join prompt did not land the preamble"
 [[ -e "$FNO_AGENTS_HOME/sessions/claude/fresh-2/joined" ]] || fail "AC2: the joined marker was not written"
 pass "AC2: the join prompt lands the preamble and writes the marker"
-
-# --- AC3: interpreter resolution ---------------------------------------------
-RESOLVER="$REPO_ROOT/hooks/lib/run-python.sh"
-
-# Case (a) needs a system python3, which bare ubuntu:24.04 (and so a few CI
-# images) no longer ships; the uv-rung case below covers those machines.
-if command -v python3 >/dev/null 2>&1; then
-    OUT5="$(bash "$RESOLVER" -c 'print("resolved")')"
-    [[ "$OUT5" == "resolved" ]] || fail "AC3: resolver failed with python3 present (got: $OUT5)"
-    pass "AC3: python3 resolves when present"
-else
-    pass "AC3: python3 absent on this machine - the python3 rung is exercised by the uv case and by CI images that ship python3"
-fi
-
-FAKEBIN="$SBX/fakebin"; EMPTYDIR="$SBX/empty"
-mkdir -p "$FAKEBIN" "$EMPTYDIR"
-# env execs the resolver under the NEW PATH, so that PATH must still carry
-# the shells: a stub dir with bash/sh symlinks and nothing else keeps
-# python3/python/uv unfindable while `env PATH=... bash` stays runnable.
-STUBBIN="$SBX/stubbin"
-mkdir -p "$STUBBIN"
-ln -sf "$(command -v bash)" "$STUBBIN/bash"
-ln -sf /bin/sh "$STUBBIN/sh"
-cat > "$SBX/fakepy" <<'PY'
-#!/bin/sh
-echo "uv-managed-python"
-PY
-chmod +x "$SBX/fakepy"
-printf '#!/bin/sh\necho "%s"\n' "$SBX/fakepy" > "$FAKEBIN/uv"
-chmod +x "$FAKEBIN/uv"
-
-OUT6="$(env PATH="$STUBBIN:$FAKEBIN" FNO_HOOK_PY_FALLBACK_PATH="$EMPTYDIR" bash "$RESOLVER" -c 'print("picked-me")')"
-[[ "$OUT6" == "uv-managed-python" ]] || fail "AC3: the uv-managed python was not picked (got: $OUT6)"
-pass "AC3: the uv-managed python resolves when system python3 is absent"
-
-NOBIN="$SBX/nobin"
-mkdir -p "$NOBIN"
-OUT7="$(env PATH="$STUBBIN:$NOBIN" FNO_HOOK_PY_FALLBACK_PATH="$EMPTYDIR" bash "$RESOLVER" -c 'print("nope")' 2>/dev/null)"
-[[ "$OUT7" == "{}" ]] || fail "AC3: no-interpreter fallback did not emit {} (got: $OUT7)"
-pass "AC3: with no interpreter, the resolver emits {} and exits 0"
 
 echo "all new-user hook tests passed"

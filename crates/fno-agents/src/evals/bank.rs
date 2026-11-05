@@ -119,6 +119,29 @@ impl TaskSpec {
 #[derive(Debug)]
 pub struct BankError(pub String);
 
+/// Why loading one bank task refused. The unknown-kind arm marks the one
+/// refusal a newer bank produces in an older binary: the gate's head-leg
+/// read skips that file, every other caller refuses the whole bank.
+#[derive(Debug)]
+pub enum LoadError {
+    UnknownCheckKind(BankError),
+    Refusal(BankError),
+}
+
+impl From<BankError> for LoadError {
+    fn from(e: BankError) -> Self {
+        LoadError::Refusal(e)
+    }
+}
+
+impl From<LoadError> for BankError {
+    fn from(e: LoadError) -> Self {
+        match e {
+            LoadError::UnknownCheckKind(inner) | LoadError::Refusal(inner) => inner,
+        }
+    }
+}
+
 impl std::fmt::Display for BankError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.0)
@@ -139,6 +162,12 @@ pub const TRIVIAL_COMMANDS_REPR: &str = "frozenset({'', 'true', ':'})";
 
 /// Load and validate one bank YAML file; refusals name the id and file.
 pub fn load_task(path: &std::path::Path) -> Result<TaskSpec, BankError> {
+    load_task_typed(path).map_err(Into::into)
+}
+
+/// The same load with the unknown-kind refusal left marked, so the gate's
+/// tolerant head-leg read can skip the file instead of failing the bank.
+fn load_task_typed(path: &std::path::Path) -> Result<TaskSpec, LoadError> {
     let raw: serde_yaml_ng::Value = match std::fs::read(path) {
         Ok(bytes) => serde_yaml_ng::from_slice(&bytes).map_err(|e| {
             BankError(format!(
@@ -148,25 +177,21 @@ pub fn load_task(path: &std::path::Path) -> Result<TaskSpec, BankError> {
             ))
         })?,
         Err(e) => {
-            return Err(BankError(format!(
-                "cannot read bank task {}: {}",
-                path.display(),
-                e
-            )))
+            return Err(
+                BankError(format!("cannot read bank task {}: {}", path.display(), e)).into(),
+            )
         }
     };
     let Some(map) = raw.as_mapping() else {
         return Err(BankError(format!(
             "bank task {}: top level must be a mapping",
             path.display()
-        )));
+        ))
+        .into());
     };
     let id_v = map.get(serde_yaml_ng::Value::String("id".into()));
     let Some(id) = id_v.and_then(|v| v.as_str()) else {
-        return Err(BankError(format!(
-            "bank task {}: missing 'id'",
-            path.display()
-        )));
+        return Err(BankError(format!("bank task {}: missing 'id'", path.display())).into());
     };
     let id = id.to_string();
     let where_ = path.display().to_string();
@@ -186,10 +211,10 @@ pub fn load_task(path: &std::path::Path) -> Result<TaskSpec, BankError> {
     }
     let grade_list = map.get(serde_yaml_ng::Value::String("grade".into()));
     let Some(grade_raw) = grade_list.and_then(|v| v.as_sequence()) else {
-        return Err(BankError(format!("task '{id}' ({where_}): 'grade' must be a non-empty list of mechanical checks (a task with no runnable grade is invalid)")));
+        return Err(BankError(format!("task '{id}' ({where_}): 'grade' must be a non-empty list of mechanical checks (a task with no runnable grade is invalid)")).into());
     };
     if grade_raw.is_empty() {
-        return Err(BankError(format!("task '{id}' ({where_}): 'grade' must be a non-empty list of mechanical checks (a task with no runnable grade is invalid)")));
+        return Err(BankError(format!("task '{id}' ({where_}): 'grade' must be a non-empty list of mechanical checks (a task with no runnable grade is invalid)")).into());
     };
     let mut checks: Vec<GradeCheck> = Vec::new();
     for (i, item) in grade_raw.iter().enumerate() {
@@ -343,23 +368,25 @@ fn parse_check(
     task_id: &str,
     path: &std::path::Path,
     index: usize,
-) -> Result<GradeCheck, BankError> {
+) -> Result<GradeCheck, LoadError> {
     let where_ = path.display().to_string();
     let where_prefix = format!("task '{task_id}' ({where_}) grade[{index}]");
     let Some(map) = raw.as_mapping() else {
         return Err(BankError(format!(
             "{where_prefix}: each grade check must be a mapping"
-        )));
+        ))
+        .into());
     };
     let kind = map.get(serde_yaml_ng::Value::String("kind".into()));
     let kind = kind.and_then(|v| v.as_str()).unwrap_or("");
-    require(
-        matches!(
-            kind,
-            "exit" | "file-exists" | "grep" | "tool-budget" | "tests" | "rubric"
-        ),
-        format!("{where_prefix}: kind must be one of {VALID_CHECK_KINDS_REPR}, got '{kind}'"),
-    )?;
+    if !matches!(
+        kind,
+        "exit" | "file-exists" | "grep" | "tool-budget" | "tests" | "rubric"
+    ) {
+        return Err(LoadError::UnknownCheckKind(BankError(format!(
+            "{where_prefix}: kind must be one of {VALID_CHECK_KINDS_REPR}, got '{kind}'"
+        ))));
+    }
     if kind == "exit" {
         let command = map.get(serde_yaml_ng::Value::String("command".into()));
         let command = command.and_then(|v| v.as_str()).unwrap_or("");
@@ -550,7 +577,7 @@ fn parse_tests(
     map: &serde_yaml_ng::Mapping,
     kind: &str,
     where_prefix: &str,
-) -> Result<GradeCheck, BankError> {
+) -> Result<GradeCheck, LoadError> {
     let text = |key: &str| {
         map.get(serde_yaml_ng::Value::String(key.into()))
             .and_then(|v| v.as_str())
@@ -660,14 +687,25 @@ fn skill_task_paths(bank_dir: &std::path::Path) -> Vec<std::path::PathBuf> {
         .collect()
 }
 
-/// Load every *.yaml under bank_dir and every skill-local `skills/*/evals/*.yaml`,
-/// sorted by id; duplicate ids refuse.
-pub fn discover_bank(bank_dir: &std::path::Path) -> Result<Vec<TaskSpec>, BankError> {
+/// How a bank walk treats a task file this binary cannot fully read.
+enum Tolerance {
+    /// Any refusal fails the walk.
+    Strict,
+    /// A check kind newer than this binary skips the file and its name joins
+    /// the skipped list; every other refusal still fails the walk.
+    SkipUnknownCheckKind,
+}
+
+fn discover_bank_with(
+    bank_dir: &std::path::Path,
+    tolerance: Tolerance,
+) -> Result<(Vec<TaskSpec>, Vec<String>), BankError> {
     require(
         bank_dir.is_dir(),
         format!("bank directory not found: {}", bank_dir.display()),
     )?;
     let mut tasks: std::collections::BTreeMap<String, TaskSpec> = Default::default();
+    let mut skipped: Vec<String> = Vec::new();
     let mut paths: Vec<std::path::PathBuf> = std::fs::read_dir(bank_dir)
         .map_err(|e| {
             BankError(format!(
@@ -689,7 +727,20 @@ pub fn discover_bank(bank_dir: &std::path::Path) -> Result<Vec<TaskSpec>, BankEr
         }) {
             continue;
         }
-        let task = load_task(&yaml_path)?;
+        let task = match load_task_typed(&yaml_path) {
+            Ok(task) => task,
+            Err(LoadError::UnknownCheckKind(_))
+                if matches!(tolerance, Tolerance::SkipUnknownCheckKind) =>
+            {
+                let name = yaml_path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| yaml_path.display().to_string());
+                skipped.push(name);
+                continue;
+            }
+            Err(e) => return Err(e.into()),
+        };
         if tasks.contains_key(&task.id) {
             let first = tasks
                 .get(&task.id)
@@ -704,7 +755,23 @@ pub fn discover_bank(bank_dir: &std::path::Path) -> Result<Vec<TaskSpec>, BankEr
         }
         tasks.insert(task.id.clone(), task);
     }
-    Ok(tasks.into_values().collect())
+    Ok((tasks.into_values().collect(), skipped))
+}
+
+/// Load every *.yaml under bank_dir and every skill-local `skills/*/evals/*.yaml`,
+/// sorted by id; duplicate ids refuse.
+pub fn discover_bank(bank_dir: &std::path::Path) -> Result<Vec<TaskSpec>, BankError> {
+    discover_bank_with(bank_dir, Tolerance::Strict).map(|(tasks, _)| tasks)
+}
+
+/// The gate's head-leg read: a bank carrying a check kind newer than this
+/// binary still grades its readable tasks. The skipped file names come back
+/// so the caller can say what it did not read; malformed YAML, duplicate
+/// ids and every other refusal still error the whole call.
+pub fn discover_bank_tolerant(
+    bank_dir: &std::path::Path,
+) -> Result<(Vec<TaskSpec>, Vec<String>), BankError> {
+    discover_bank_with(bank_dir, Tolerance::SkipUnknownCheckKind)
 }
 
 #[cfg(test)]
@@ -1026,5 +1093,35 @@ mod tests {
         let tasks = discover_bank(dir.path()).unwrap();
         let ids: Vec<&str> = tasks.iter().map(|t| t.id.as_str()).collect();
         assert_eq!(ids, vec!["alpha", "beta"]);
+    }
+
+    #[test]
+    fn a_newer_check_kind_skips_the_file_in_the_tolerant_read_and_refuses_the_strict_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let known = "id: known\ntier: capability\ngrade:\n  - kind: file-exists\n    path: x\n";
+        write_task(dir.path(), "known.yaml", known);
+        write_task(
+            dir.path(),
+            "newer.yaml",
+            "id: newer\ntier: capability\ngrade:\n  - kind: rubric\n",
+        );
+        let (tasks, skipped) = discover_bank_tolerant(dir.path()).unwrap();
+        let ids: Vec<&str> = tasks.iter().map(|t| t.id.as_str()).collect();
+        assert_eq!(ids, vec!["known"]);
+        assert_eq!(skipped, vec!["newer.yaml"]);
+        let err = discover_bank(dir.path()).unwrap_err();
+        assert!(err.0.contains("kind must be one of"), "{0}", err.0);
+        assert!(err.0.contains("newer.yaml"), "{0}", err.0);
+    }
+
+    #[test]
+    fn a_malformed_task_still_errors_the_tolerant_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let known = "id: known\ntier: capability\ngrade:\n  - kind: file-exists\n    path: x\n";
+        write_task(dir.path(), "known.yaml", known);
+        write_task(dir.path(), "broken.yaml", "id: broken\ngrade: [unclosed\n");
+        let err = discover_bank_tolerant(dir.path()).unwrap_err();
+        assert!(err.0.contains("malformed YAML"), "{0}", err.0);
+        assert!(err.0.contains("broken.yaml"), "{0}", err.0);
     }
 }

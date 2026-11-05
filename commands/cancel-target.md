@@ -50,7 +50,7 @@ if [[ -f "$MANIFEST" ]]; then
     # SELF-cancel (F6) is detectable; the loop check re-derives user vs
     # assistant from the transcript at honor time, which is the truth.
     printf 'author: %s\nreason: cancelled via /fno:cancel-target\n' "${CLAUDE_CODE_SESSION_ID:-${CODEX_THREAD_ID:-operator}}" > "$SENTINEL"
-    _EVENT_DATA="$(python3 -c 'import json,sys; print(json.dumps({"lane":"target","path":sys.argv[1],"reason":"operator"}))' "$SENTINEL" 2>/dev/null || true)"
+    _EVENT_DATA="$(jq -cn --arg path "$SENTINEL" '{lane: "target", path: $path, reason: "operator"}' 2>/dev/null || true)"
     if [[ -n "$_EVENT_DATA" ]]; then
       fno doctor event emit -t cancel_signal_set -s target -d "$_EVENT_DATA" >/dev/null 2>&1 || \
         echo "warning: cancel signal set but its event was not emitted ($SENTINEL)" >&2

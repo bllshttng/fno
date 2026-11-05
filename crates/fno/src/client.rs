@@ -771,6 +771,8 @@ pub(crate) struct View {
     /// Pending escape bytes in modal mode (arrow/pgup folding), same split-arrow
     /// safety as [`View::sel_esc`].
     keys_modal_esc: Vec<u8>,
+    /// The agents list's `^B ?` footer grid is open.
+    keys_footer: bool,
     /// (US2) The right-click / `m` row context menu over a sideline agent
     /// row: an anchored popup whose entries route to existing commands. `None`
     /// when closed. The target is pinned by name so a layout reshuffle can only
@@ -1282,6 +1284,7 @@ mod feed_detail;
 pub(crate) mod feed_view;
 mod file_viewer;
 mod image_layer;
+mod key_grid;
 mod keys_modal;
 mod needs_view;
 mod questions;
@@ -1685,7 +1688,7 @@ pub(crate) enum AuxAction {
     /// `--mux`, never `--force`: the modal named what survives, and the tap
     /// is the confirmation.
     RestartAgents,
-    /// Queue the channel's release upgrade (`uv tool upgrade fno`).
+    /// Queue the channel's release upgrade (`fno update`, `brew upgrade fno`).
     UpgradeRelease(release_check::Channel),
     /// Probe `mux workspace prune --dry-run` once and open the centered
     /// sweep-threads choice modal from its counts. Every scope of the prune
@@ -1870,6 +1873,7 @@ impl View {
             keys_modal: None,
             pane_ids_until: None,
             keys_modal_esc: Vec::new(),
+            keys_footer: false,
             row_menu: None,
             row_menu_esc: Vec::new(),
             aux: None,
@@ -2360,17 +2364,8 @@ impl View {
     }
 
     /// Keep the selected modal row inside the scrolled viewport after an arrow
-    /// move, by delegating to the ONE implementation.
-    ///
-    /// This used to hand-roll the scroll arithmetic with `rows.len().min(trows)`,
-    /// the pre-chrome viewport formula. `Popup::viewport_h` now subtracts
-    /// `chrome.rows_overhead()`, so the copy drifted the moment overlays gained
-    /// a frame: on a 24-row terminal it believed it had 24 body rows when it had
-    /// 22, and arrowing far enough parked the highlighted row permanently below
-    /// the fold while Enter still executed it. That is the invisible-Enter-target
-    /// case `follow_sel` exists to prevent, reached through the copy that did not
-    /// get the fix. `clamp_sel_to_view` never drifted because it already routed
-    /// through `viewport_h`.
+    /// move, through `Popup::follow_sel`, the one implementation that knows
+    /// the viewport height net of the overlay chrome.
     fn follow_modal_selection(&mut self) {
         let term = self.term;
         if let Some(m) = self.keys_modal.as_mut() {
@@ -2463,7 +2458,7 @@ impl View {
     fn agent_row_index_for_pane(&self, pid: u64) -> Option<usize> {
         self.display_rows()
             .iter()
-            .position(|r| matches!(r, DisplayRow::Agent(a) if a.pane_id == Some(pid)))
+            .position(|r| matches!(r, DisplayRow::Agent(a) if self.row_hosts_pane(a, pid)))
     }
 
     /// Whether any mode-owning overlay is open. The PANE context
@@ -3306,7 +3301,6 @@ impl View {
             DisplayRow::Blank
             | DisplayRow::CardRule
             | DisplayRow::TableHead
-            | DisplayRow::NeedNote(_)
             | DisplayRow::TableEmpty => None,
         }
     }
@@ -3660,7 +3654,6 @@ impl View {
             DisplayRow::Blank
             | DisplayRow::CardRule
             | DisplayRow::TableHead
-            | DisplayRow::NeedNote(_)
             | DisplayRow::TableEmpty => None,
             // The `+` footer opens the name-input overlay.
             DisplayRow::NewSquad if self.term.0 < MIN_ROWS_FOR_STATUS => Some(ChromeHit::Notice(
@@ -3668,113 +3661,6 @@ impl View {
             )),
             DisplayRow::NewSquad => Some(ChromeHit::OpenCreate),
         }
-    }
-
-    /// The navigator's flat GLOBAL catalog: one [`NavRow`] per squad,
-    /// per tab (ignoring expand state - a collapsed squad's tabs still appear,
-    /// the key difference from [`display_rows`]), per plain pane (v22: those NOT
-    /// already shown as an agent row), per agent across
-    /// the WHOLE session. Shares the agent -> [`ChromeHit`]
-    /// mapping with [`row_action`] (via [`agent_hit`]) so a keyboard
-    /// goto and a mouse click never diverge. Squad/tab rows carry their own
-    /// SelectSquad/SelectTab in `hit`; an agent row carries a `goto_squad`
-    /// prefix (its pane lives in another squad). The `+ new workspace` footer is
-    /// omitted - the navigator is a goto-existing picker (Discretion 4). Fully
-    /// owned (no layout borrow) so goto can mutate the view after building it.
-    fn nav_rows(&self) -> Vec<NavRow> {
-        let mut out = Vec::new();
-        let cross = |sq: u64| (sq != self.layout.active_squad).then_some(sq);
-        for s in &self.layout.squads {
-            // Always SelectSquad (unlike the sideline's active-squad
-            // CycleSection): the navigator is a jump, never a view-state cycle.
-            out.push(
-                NavRow::new(
-                    s.name.clone(),
-                    PaneState::Idle,
-                    None,
-                    None,
-                    ChromeHit::Cmds(vec![Command::SelectSquad(s.id)]),
-                    &[],
-                )
-                .with_menu(row_menu::NavMenu::Squad(s.id)),
-            );
-            for (t, tab) in s.tabs.iter().enumerate() {
-                let tab_text = tab_label_text(&tab.name, t, tab.named);
-                out.push(
-                    NavRow::new(
-                        format!("{} › {}", s.name, tab_text),
-                        PaneState::Idle,
-                        // SelectTab resolves the squad server-side, so one command
-                        // switches squad+tab (row_action's tab arm, gemini review).
-                        None,
-                        None,
-                        ChromeHit::Cmds(vec![Command::SelectTab(tab.id)]),
-                        std::slice::from_ref(&s.name),
-                    )
-                    .with_menu(row_menu::NavMenu::Tab(tab.id)),
-                );
-                // Plain panes of the tab (v22): a pane already shown as an agent
-                // row is skipped (the agent row is the richer view of the same
-                // pane); the rest become goto-able so a bare shell pane in any
-                // tab/squad is reachable, not just the active view (codex review).
-                for p in &tab.panes {
-                    if self.layout.agents.iter().any(|a| a.pane_id == Some(p.id)) {
-                        continue;
-                    }
-                    out.push(NavRow::new(
-                        format!("{} › {} › {}", s.name, tab_text, p.label),
-                        PaneState::Idle,
-                        cross(s.id),
-                        Some(tab.id),
-                        ChromeHit::Cmds(vec![Command::FocusPane(p.id)]),
-                        &[p.id.to_string(), s.name.clone()],
-                    ));
-                }
-            }
-            for a in self.layout.agents.iter().filter(|a| a.squad == Some(s.id)) {
-                // (US3) A pane-hosted agent's context resolves
-                // inside-out: a NAMED tab leads with the agent then the tab name
-                // (`build › reviews`); an unnamed tab keeps today's
-                // `{squad} › {agent} ·N`; a watch-only row (no tab) falls back
-                // to the squad.
-                let label = match self.agent_tab_context(a.squad, a.tab) {
-                    Some(TabContext::Named(name)) => format!("{} › {}", a.name, name),
-                    Some(TabContext::Ordinal(n)) => format!("{} › {} ·{n}", s.name, a.name),
-                    None => format!("{} › {}", s.name, a.name),
-                };
-                out.push(
-                    NavRow::new(
-                        label,
-                        nav_agent_state(a),
-                        // Switch to the agent's squad first when it is not active, so
-                        // the following FocusPane lands there (the server resolves the
-                        // pane's tab on focus; the ordinal is display-only).
-                        cross(s.id),
-                        None,
-                        agent_hit(a, self.layout.active_squad),
-                        &nav_agent_tokens(a, Some(&s.name)),
-                    )
-                    .with_menu(row_menu::NavMenu::Agent(AgentIdent::of(a))),
-                );
-            }
-        }
-        // Orphan agents (no live squad), mirroring display_rows' orphan section.
-        for a in self.layout.agents.iter().filter(
-            |a| !matches!(a.squad, Some(id) if self.layout.squads.iter().any(|s| s.id == id)),
-        ) {
-            out.push(
-                NavRow::new(
-                    a.name.clone(),
-                    nav_agent_state(a),
-                    None,
-                    None,
-                    agent_hit(a, self.layout.active_squad),
-                    &nav_agent_tokens(a, None),
-                )
-                .with_menu(row_menu::NavMenu::Agent(AgentIdent::of(a))),
-            );
-        }
-        out
     }
 
     /// The navigator rows matching the current text + state filter,
@@ -4534,6 +4420,7 @@ impl View {
             self.paint_panes(&mut cells, rows, cols, origin_r, origin_c, now);
         }
         self.draw_bottom_row(&mut cells, rows, cols);
+        key_grid::paint_agents(self, &mut cells, rows, cols);
         // Chrome, not an overlay: after panes, before modals.
         self.draw_feed_panel(&mut cells, rows, cols);
         file_viewer::draw(self, &mut cells, rows, cols);
@@ -5584,9 +5471,6 @@ enum DisplayRow<'a> {
     /// a header with nothing under it reads as a stalled table, so the empty
     /// state is stated rather than implied.
     TableEmpty,
-    /// A line of the pinned Needs input section that is not an agent row: an
-    /// open question. Inert; the question is answered from the bell panel.
-    NeedNote(String),
     /// The top-K idle fold: a squad with more live idle rows than the
     /// cap folds the overflow behind this one row. `hidden` is the foldable
     /// count (the idle rows past the cap, always > 0 when this row is emitted).
@@ -5693,7 +5577,6 @@ fn row_is_inert(drow: &DisplayRow) -> bool {
             | DisplayRow::CardMetrics(..)
             | DisplayRow::CardRule
             | DisplayRow::TableHead
-            | DisplayRow::NeedNote(_)
             | DisplayRow::TableEmpty
     )
 }
@@ -8309,9 +8192,7 @@ async fn dispatch_event(
                 view.cycle_section(key);
             }
         }
-        Event::ShowKeys => {
-            view.open_keys_modal();
-        }
+        Event::ShowKeys => key_grid::toggle(view),
         Event::OpenBacklogBoard => View::open(view),
         Event::ShareFocusedPane => share_flow::chord(view),
         Event::CycleSidelineView => backlog_board::cycle_sideline_view(view),
@@ -9722,6 +9603,8 @@ use agent_group::agent_hit;
 mod hold;
 #[path = "client/machine_tree.rs"]
 mod machine_tree;
+#[path = "client/nav_rows.rs"]
+mod nav_rows;
 #[path = "client/needs_queue.rs"]
 mod needs_queue;
 

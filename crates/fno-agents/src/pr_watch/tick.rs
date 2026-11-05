@@ -34,6 +34,12 @@ const SWEEP_CAP_S: f64 = 150.0;
 /// Past the ceiling, this much slack before the backstop calls the tick hung:
 /// the phases already sum under the ceiling, so reaching it means a hang.
 const BACKSTOP_GRACE_S: f64 = 10.0;
+/// The sweep's repoll floor, in ticks: a rich read no more often than every
+/// Nth interval. The listing leg answers a row's state for free; only real
+/// activity needs the rich read, and the least-recently-read order spreads
+/// the pool across the window. Without the floor a ~50-row OPEN pool repays
+/// its whole cost inside one 150s slice and starves every phase after sweep.
+const MIN_REPOLL_TICKS: i64 = 2;
 
 fn phase_cap(name: &str, merge_cap: f64) -> Option<f64> {
     Some(match name {
@@ -85,7 +91,7 @@ fn outcome_word(result: Option<&TickResult>, failed: bool) -> &'static str {
         None => "error",
         Some(r) if r.disabled => "disabled",
         Some(r) if r.lock_held => "lock_held",
-        Some(r) if r.quota_skip => "quota_skip",
+        Some(r) if r.quota_skip || r.budget_hold_s.is_some() => "quota_skip",
         Some(r) if r.sweep_failures > 0 => "degraded",
         Some(_) => "ok",
     }
@@ -883,6 +889,7 @@ fn phase_sweep(t: &mut Tick, slice: f64) -> Result<(), DoorError> {
             max_retries: t.retries,
             graphql_min_remaining: t.graphql_min,
             dispatch_deadline: Some(Instant::now() + std::time::Duration::from_secs_f64(slice)),
+            min_repoll_s: interval * MIN_REPOLL_TICKS,
         };
         clock::set_phase("sweep:discover");
         let entries = clock::bounded_read(slice, move || discover::graph_entries(&graph))?;
@@ -913,6 +920,8 @@ fn phase_sweep(t: &mut Tick, slice: f64) -> Result<(), DoorError> {
         println!("pr-watch tick: {reason} is false - skipped");
     } else if result.lock_held {
         println!("pr-watch tick: {} - skipped", result.lock_holder);
+    } else if let Some(hold) = result.budget_hold_s {
+        println!("pr-watch tick: fleet gh budget held ({hold:.0}s left) - dispatch pass skipped");
     } else if result.quota_skip {
         let reset = result
             .quota_reset
@@ -942,15 +951,21 @@ fn phase_sweep(t: &mut Tick, slice: f64) -> Result<(), DoorError> {
         Some("disabled")
     } else if result.lock_held {
         Some("lock_held")
+    } else if result.budget_hold_s.is_some() {
+        Some("budget_hold")
     } else if result.quota_skip {
         Some("quota_skip")
     } else {
         None
     };
-    let detail = format!(
-        "open_prs={} acted={} skipped={}",
-        result.open_prs, result.acted, result.skipped
-    );
+    let detail = if result.budget_hold_s.is_some() {
+        "fleet gh budget hold - dispatch pass skipped".to_string()
+    } else {
+        format!(
+            "open_prs={} acted={} skipped={}",
+            result.open_prs, result.acted, result.skipped
+        )
+    };
     t.live.emitter.row(
         "pr_watch_sweep",
         interval,
@@ -1069,10 +1084,8 @@ fn phase_heal(t: &mut Tick, _slice: f64) -> Result<(), DoorError> {
     Ok(())
 }
 
-fn find_on_path(name: &str) -> Option<PathBuf> {
-    std::env::split_paths(&std::env::var_os("PATH")?)
-        .map(|d| d.join(name))
-        .find(|p| p.is_file())
+fn evals_arm_fno_bin() -> String {
+    crate::scrape::fno_bin().to_string_lossy().into_owned()
 }
 
 /// The eval bank's demand leg: guards and the receipt parse here; the due
@@ -1105,8 +1118,9 @@ fn phase_evals(t: &mut Tick, _slice: f64) -> Result<(), DoorError> {
             Some(&json!({"op": "health", "history": history, "stale_days": stale})),
             30.0,
         )?;
-        let fno_bin =
-            find_on_path("fno-py").map_or("fno-py".to_string(), |p| p.display().to_string());
+        // The wheel's `doctor` family is signpost-only; the front door serves
+        // it natively, so the arm must invoke `fno`, never `fno-py`.
+        let fno_bin = evals_arm_fno_bin();
         let argv: Vec<String> = vec![
             "evals-arm".into(),
             "--summary-json".into(),
@@ -1574,6 +1588,26 @@ pub fn run(args: &[String]) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_evals_arm_resolves_the_front_door_not_fno_py() {
+        let _guard = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let saved = std::env::var_os("FNO_BIN");
+        std::env::set_var("FNO_BIN", "/opt/front-door/fno");
+        assert_eq!(evals_arm_fno_bin(), "/opt/front-door/fno");
+        std::env::remove_var("FNO_BIN");
+        let bin = evals_arm_fno_bin();
+        assert!(
+            !bin.ends_with("fno-py"),
+            "the arm must never fall back to fno-py: the wheel's doctor family is signpost-only"
+        );
+        match saved {
+            Some(v) => std::env::set_var("FNO_BIN", v),
+            None => std::env::remove_var("FNO_BIN"),
+        }
+    }
 
     #[test]
     fn the_deadline_stays_under_the_interval_and_the_env_seam_is_unclamped() {

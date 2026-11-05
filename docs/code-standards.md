@@ -186,7 +186,7 @@ UNBLOCKS_AFTER: User adds STRIPE_SECRET_KEY to .env
 | Skill directories | kebab-case | `sigma-review/`, `target/`, `check-pr/` |
 | Agent files | kebab-case | `code-reviewer.md`, `silent-failure-hunter.md` |
 | Shell scripts | kebab-case | `target-stop-hook.sh`, `validate-test-first.sh` |
-| Python scripts | kebab-case (files), snake_case (variables/functions) | `roadmap-tasks.py` |
+| Python scripts | kebab-case (files), snake_case (variables/functions) | `sync-codex-agents.py` |
 | JSON configs | kebab-case | `hooks-gemini.json` |
 | State files | UPPER_CASE | `STATE.md`, `SUMMARY.md`, `CONTEXT.md` |
 | Index files | 00-prefixed | `00-INDEX.md` |

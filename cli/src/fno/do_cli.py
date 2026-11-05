@@ -14,8 +14,6 @@ from typing import Any
 
 import typer
 
-from fno.resume_receipt_cli import cli as resume_app
-
 
 do_app = typer.Typer(
     name="do",
@@ -121,4 +119,3 @@ def _forward_delivery(argv: list[str]) -> None:
 
 do_app.add_typer(delivery_app, name="delivery")
 do_app.add_typer(do_pr_app, name="pr")
-do_app.add_typer(resume_app, name="resume")

@@ -1,0 +1,120 @@
+# Every tracked .py file outside cli/, with its fate.
+# Verdicts: keep | tombstone (a no-op stub for a retired hook path, deleted next release) | delete-by <effort> | port-by <effort> | delete (no live caller; goes with the named extras).
+# Columns: path, verdict, reason.
+crates/fno-agents/tests/accounts_binding_golden_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
+crates/fno-agents/tests/accounts_env_golden_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
+crates/fno-agents/tests/accounts_error_class_golden_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
+crates/fno-agents/tests/accounts_launch_golden_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
+crates/fno-agents/tests/accounts_pick_golden_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
+crates/fno-agents/tests/accounts_reconcile_golden_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
+crates/fno-agents/tests/accounts_records_golden_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
+crates/fno-agents/tests/accounts_required_bot_golden_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
+crates/fno-agents/tests/accounts_state_read_golden_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
+crates/fno-agents/tests/accounts_store_golden_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
+crates/fno-agents/tests/accounts_usage_golden_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
+crates/fno-agents/tests/accounts_usage_probe_golden_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
+crates/fno-agents/tests/accounts_window_golden_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
+crates/fno-agents/tests/capture/mail_reply_capture.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
+crates/fno-agents/tests/capture/mail_send_capture.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
+crates/fno-agents/tests/capture/target_family_capture.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
+crates/fno-agents/tests/event_validate_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
+crates/fno-agents/tests/fixtures/coverage_gate/capture_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
+crates/fno-agents/tests/fixtures/merge_command/capture_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
+crates/fno-agents/tests/fixtures/post_merge/capture_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
+crates/fno-agents/tests/fixtures/post_merge/cases_ritual.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
+crates/fno-agents/tests/fixtures/pr_watch_status/oracle.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
+crates/fno-agents/tests/fixtures/relay_transcript/capture_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
+crates/fno-agents/tests/fixtures/scoreboard/scoreboard_golden_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
+crates/fno-agents/tests/fixtures/scratch/copy_for_diff/paths_slice.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
+crates/fno-agents/tests/fixtures/scratch/events/attest_prov.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
+crates/fno-agents/tests/fixtures/scratch/file_patch/fix1.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
+crates/fno-agents/tests/fixtures/scratch/fno_wrap_json/bind.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
+crates/fno-agents/tests/fixtures/scratch/gate_wait/wait_spawn_9fd0.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
+crates/fno-agents/tests/fixtures/scratch/graph/kids.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
+crates/fno-agents/tests/fixtures/scratch/liveness/liveness.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
+crates/fno-agents/tests/fixtures/skill_diff/capture_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
+crates/fno-agents/tests/fixtures/tracker/capture_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
+crates/fno-agents/tests/fixtures/worktree/capture_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
+crates/fno-agents/tests/paths_hub_golden_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
+crates/fno-agents/tests/review_findings_golden_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
+crates/fno-agents/tests/review_invocation_golden_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
+crates/fno-agents/tests/whoami_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
+crates/fno/tests/config_cli_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
+crates/fno/tests/config_doctor_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
+crates/fno/tests/config_set_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
+crates/fno/tests/fake_fno_agents.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
+evals/fixtures/golden/few-comments/retry.py	keep	harbor task data the eval harness runs, not fno code
+evals/fixtures/golden/few-comments/verify.py	keep	harbor task data the eval harness runs, not fno code
+evals/fixtures/golden/reuse-existing/report.py	keep	harbor task data the eval harness runs, not fno code
+evals/fixtures/golden/reuse-existing/slug.py	keep	harbor task data the eval harness runs, not fno code
+evals/fixtures/golden/reuse-existing/verify.py	keep	harbor task data the eval harness runs, not fno code
+evals/fixtures/judgment-blast-radius/export.py	keep	harbor task data the eval harness runs, not fno code
+evals/fixtures/judgment-investigate/cache.py	keep	harbor task data the eval harness runs, not fno code
+evals/fixtures/judgment-investigate/heal.py	keep	harbor task data the eval harness runs, not fno code
+evals/fixtures/judgment-investigate/reconcile.py	keep	harbor task data the eval harness runs, not fno code
+evals/fixtures/judgment-investigate/status.py	keep	harbor task data the eval harness runs, not fno code
+evals/fixtures/judgment-investigate/test_callers.py	keep	harbor task data the eval harness runs, not fno code
+evals/fixtures/judgment-root-cause/ledger.py	keep	harbor task data the eval harness runs, not fno code
+evals/fixtures/judgment-root-cause/report.py	keep	harbor task data the eval harness runs, not fno code
+evals/fixtures/judgment-root-cause/test_report.py	keep	harbor task data the eval harness runs, not fno code
+evals/fixtures/stage-tasks/fold-order/fold_config.py	keep	harbor task data the eval harness runs, not fno code
+evals/fixtures/stage-tasks/fold-order/verify.py	keep	harbor task data the eval harness runs, not fno code
+evals/fixtures/stage-tasks/mail-sender/mailsend.py	keep	harbor task data the eval harness runs, not fno code
+evals/fixtures/stage-tasks/mail-sender/verify.py	keep	harbor task data the eval harness runs, not fno code
+evals/fixtures/stage-tasks/rebuild-scope/index_store.py	keep	harbor task data the eval harness runs, not fno code
+evals/fixtures/stage-tasks/rebuild-scope/verify.py	keep	harbor task data the eval harness runs, not fno code
+evals/fixtures/stage-tasks/review-argv-split/relay.py	keep	harbor task data the eval harness runs, not fno code
+evals/fixtures/stage-tasks/review-decorative-test/clamp.py	keep	harbor task data the eval harness runs, not fno code
+evals/fixtures/stage-tasks/review-decorative-test/test_clamp.py	keep	harbor task data the eval harness runs, not fno code
+evals/fixtures/stage-tasks/review-swallowed-error/loader.py	keep	harbor task data the eval harness runs, not fno code
+evals/harness-fit/run/drive_run0.py	keep	harbor task data the eval harness runs, not fno code
+evals/harness-fit/run/drive_run1.py	keep	harbor task data the eval harness runs, not fno code
+evals/harness-fit/run/footnote_agent.py	keep	harbor task data the eval harness runs, not fno code
+evals/harness-fit/run/launch.py	keep	harbor task data the eval harness runs, not fno code
+evals/harness-fit/run/loadlog.py	keep	harbor task data the eval harness runs, not fno code
+evals/harness-fit/run/merge_config.py	keep	harbor task data the eval harness runs, not fno code
+evals/harness-fit/run/paths.py	keep	harbor task data the eval harness runs, not fno code
+evals/harness-fit/run/probe_1302.py	keep	harbor task data the eval harness runs, not fno code
+evals/harness-fit/run/report_run0.py	keep	harbor task data the eval harness runs, not fno code
+evals/harness-fit/run/score_run0.py	keep	harbor task data the eval harness runs, not fno code
+evals/harness-fit/run/score_run1.py	keep	harbor task data the eval harness runs, not fno code
+evals/harness-fit/run/setaside_run0.py	keep	harbor task data the eval harness runs, not fno code
+evals/harness-fit/run/status.py	keep	harbor task data the eval harness runs, not fno code
+plugins/hermes/promise-tag-reader/__init__.py	keep	the Hermes host loads Python plugins only
+plugins/hermes/promise-tag-reader/reader.py	keep	the Hermes host loads Python plugins only
+scripts/ci/check-agent-field-population-contract.py	delete-by python-cli-retirement	CI or build tooling that reads cli/ or runs under the dev venv; never on the user path
+scripts/ci/check-decision-graduation.py	delete-by python-cli-retirement	CI or build tooling that reads cli/ or runs under the dev venv; never on the user path
+scripts/ci/check-harness-roster-parity.py	delete-by python-cli-retirement	CI or build tooling that reads cli/ or runs under the dev venv; never on the user path
+scripts/ci/check_env_registry.py	delete-by python-cli-retirement	CI or build tooling that reads cli/ or runs under the dev venv; never on the user path
+scripts/ci/check_flag_registry.py	delete-by python-cli-retirement	CI or build tooling that reads cli/ or runs under the dev venv; never on the user path
+scripts/ci/fixtures/retired-config-leaf-canary.py	delete-by python-cli-retirement	CI or build tooling that reads cli/ or runs under the dev venv; never on the user path
+scripts/ci/graphql-caller-inventory.py	delete-by python-cli-retirement	CI or build tooling that reads cli/ or runs under the dev venv; never on the user path
+scripts/ci/json_stdout_check.py	delete-by python-cli-retirement	CI or build tooling that reads cli/ or runs under the dev venv; never on the user path
+scripts/diagnostics/autonomy-probe-audit.py	delete-by python-cli-retirement	dev or CI tooling (a CI script, schema row or tombstone names it); off the user path
+scripts/diagnostics/codex-lead-continuation-smoke.py	delete	manual smoke only; its test, docs/harnesses/codex.md lines and reachable-paths-baseline rows go with it
+scripts/diagnostics/codex-skill-load-audit.py	delete	no caller; the docs/HARNESSES.md line and its unwrapped-lib-allowlist row go with it
+scripts/diagnostics/command-callers.py	delete-by python-cli-retirement	dev or CI tooling (a CI script, schema row or tombstone names it); off the user path
+scripts/diagnostics/dsplit.py	delete	no caller; the docs/architecture/machine-footprint.md line goes with it
+scripts/diagnostics/graphql-quota-soak.py	delete-by python-cli-retirement	dev or CI tooling (a CI script, schema row or tombstone names it); off the user path
+scripts/diagnostics/guard-corpus-sweep.py	delete-by python-cli-retirement	dev or CI tooling (a CI script, schema row or tombstone names it); off the user path
+scripts/diagnostics/occupancy-readers.py	delete-by python-cli-retirement	dev or CI tooling (a CI script, schema row or tombstone names it); off the user path
+scripts/diagnostics/verify-spawn-contract.py	delete	no caller; the docs/architecture/node-provenance.md line goes with it
+scripts/docs/generate-otel-schema.py	delete-by python-cli-retirement	CI or build tooling that reads cli/ or runs under the dev venv; never on the user path
+scripts/evals/keyless_smoke.py	delete-by python-cli-retirement	CI or build tooling that reads cli/ or runs under the dev venv; never on the user path
+scripts/lib/bundle-frontmatter.py	delete-by python-cli-retirement	CI or build tooling that reads cli/ or runs under the dev venv; never on the user path
+scripts/lib/check-skill-frontmatter.py	delete-by python-cli-retirement	CI or build tooling that reads cli/ or runs under the dev venv; never on the user path
+scripts/lib/parse-bundle-manifest.py	delete-by python-cli-retirement	CI or build tooling that reads cli/ or runs under the dev venv; never on the user path
+scripts/mail-bus-lag.py	delete	no caller; the docs/architecture/multiplayer.md line goes with it
+scripts/metrics/completion-summary.py	delete	no caller; its test and test_smoke_registry.rs row and reachable-paths-baseline row go with it
+scripts/migrate-events-shape.py	delete-by python-cli-retirement	dev or CI tooling (a CI script, schema row or tombstone names it); off the user path
+scripts/probes/reap-receipt-stop-probe.py	delete	no caller; the gc_sweep.rs doc comment naming it goes with it
+scripts/regen-generated-copies.py	delete-by python-cli-retirement	CI or build tooling that reads cli/ or runs under the dev venv; never on the user path
+scripts/release/draft-release-notes.py	keep	release.yml runs it in CI only; never on the user path
+scripts/release/hookagg.py	keep	hook-latency sample aggregation; its window unit test is a smoke-registry row; CI only, never on the user path
+scripts/release/test_hookagg_window.py	keep	unit tests for hookagg.py; the smoke registry runs it; CI only
+scripts/release/update-homebrew-formula.py	keep	release.yml runs it in CI only; never on the user path
+scripts/sync-codex-agents.py	delete-by python-cli-retirement	CI or build tooling that reads cli/ or runs under the dev venv; never on the user path
+tests/metrics/test_completion_summary_path.py	delete	covers completion-summary.py only
+tests/spec/test_impeccable_stages_validator.py	delete-by python-cli-retirement	pytest-only coverage of retired Python surfaces; goes with the Python test tree
+tests/spec/test_product_md_check.py	delete-by python-cli-retirement	pytest-only coverage of retired Python surfaces; goes with the Python test tree
+scripts/save-session.py	tombstone	the old PreCompact and SessionEnd rows name it; hooks/lib/run-python.sh, also a stub, exits 0 before it

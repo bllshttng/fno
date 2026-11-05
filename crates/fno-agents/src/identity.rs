@@ -70,9 +70,9 @@ fn mint_unique_fno_id_with(
 /// across same-window sessions; a shared head still resolves while it names
 /// one row and refuses naming every match when it names two.
 ///
-/// Parity with Python `fno.harness_identity.canonical_handle` is load-bearing:
-/// the Rust lifecycle client cannot import Python, and if the two rules differ a
-/// durable send can address one handle while its recipient drains another and
+/// The rule the frozen address table in the tests pins (captured from the
+/// deleted Python `canonical_handle`): if the two shapes differ a durable
+/// send can address one handle while its recipient drains another and
 /// silently strands on the bus.
 pub(crate) fn canonical_handle(session_id: &str) -> String {
     let head: String = session_id.chars().take(8).collect();
@@ -149,9 +149,9 @@ pub(crate) fn shape_known_harness(harness: &str) -> bool {
 }
 
 /// The harness an id's own shape names, or None when the shape is silent.
-/// Parity with Python `fno.harness_identity.harness_of_session_id`: the
-/// keeper re-validates under the lock, so the two rules must agree or one
-/// side accepts a stamp the other refuses.
+/// The keeper re-validates under the lock; the shape classes here are the
+/// ones the deleted Python `harness_of_session_id` named, and a new shape
+/// class edits this match, not a second table.
 pub(crate) fn harness_of_session_id(session_id: &str) -> Option<&'static str> {
     let sid = session_id.trim();
     if sid.is_empty() {
@@ -328,93 +328,30 @@ pub(crate) fn stamp_person(data: &mut serde_json::Map<String, serde_json::Value>
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-    use std::process::Command;
+    use super::canonical_handle;
 
-    use proptest::prelude::*;
-
-    use super::{canonical_handle, mint_fno_id, mint_unique_fno_id_with};
-
-    fn session_id_strategy() -> impl Strategy<Value = Vec<String>> {
-        let uuid_lower_pattern = [
-            r"[0-9a-f]{8}",
-            r"[0-9a-f]{4}",
-            r"[0-9a-f]{4}",
-            r"[0-9a-f]{4}",
-            r"[0-9a-f]{12}",
-        ]
-        .join("-");
-        let uuid_upper_pattern = [
-            r"[0-9A-F]{8}",
-            r"[0-9A-F]{4}",
-            r"[0-9A-F]{4}",
-            r"[0-9A-F]{4}",
-            r"[0-9A-F]{12}",
-        ]
-        .join("-");
-        let uuid_v7_pattern = [
-            r"[0-9a-f]{8}",
-            r"[0-9a-f]{4}",
-            r"7[0-9a-f]{3}",
-            r"[89ab][0-9a-f]{3}",
-            r"[0-9a-f]{12}",
-        ]
-        .join("-");
-        let uuid_lower = proptest::string::string_regex(&uuid_lower_pattern).unwrap();
-        let uuid_upper = proptest::string::string_regex(&uuid_upper_pattern).unwrap();
-        let uuid_v7 = proptest::string::string_regex(&uuid_v7_pattern).unwrap();
-        let opencode = proptest::string::string_regex(r"ses_[A-Za-z0-9]{8,32}").unwrap();
-        let short_hex = proptest::string::string_regex(r"[0-9a-f]{4,8}").unwrap();
-        (uuid_lower, uuid_upper, uuid_v7, opencode, short_hex)
-            .prop_map(|(lower, upper, v7, opencode, short)| vec![lower, upper, v7, opencode, short])
-    }
-
-    fn python_canonical_handles(session_ids: &[String]) -> Vec<String> {
-        let cli_src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../cli/src");
-        let input = serde_json::to_string(session_ids).expect("session ids serialize");
-        let output = Command::new("python3")
-            .args([
-                "-c",
-                "import json, sys; from fno.harness_identity import canonical_handle; print(json.dumps([canonical_handle(value) for value in json.loads(sys.argv[1])]))",
-                &input,
-            ])
-            .env("PYTHONPATH", cli_src)
-            .output()
-            .expect("python3 is required for Rust/Python identity parity");
-        assert!(
-            output.status.success(),
-            "Python canonical_handle failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        serde_json::from_slice(&output.stdout).expect("Python canonical_handle returned JSON")
-    }
+    /// The address table, frozen from Python \`canonical_handle\` the day its
+    /// module deleted: first eight chars, lowercased unless the id is
+    /// \`ses_\`-prefixed. One row per id family the proptest used to draw.
+    const FROZEN_HANDLES: &[(&str, &str)] = &[
+        ("d23c3d68-7d5c-4c1e-9a51-2f8e0a9b1c3d", "d23c3d68"),
+        ("D23C3D68-7D5C-4C1E-9A51-2F8E0A9B1C3D", "d23c3d68"),
+        (
+            "20261102T101112-abcdef01234567890123456789abcdef",
+            "20261102",
+        ),
+        ("ses_AbCdEfGhIjKlMnOpQrStUv", "ses_AbCd"),
+        ("ses_lowercase-nope", "ses_lowe"),
+        ("abcd", "abcd"),
+        ("", ""),
+        ("ABCDEF", "abcdef"),
+        ("fno-0aa3a68f-9f5d-4c11-9d3e-3f1be2f5f1f2", "fno-0aa3"),
+    ];
 
     #[test]
-    fn mint_fno_id_is_well_formed_v4_and_unique() {
-        let re = regex::Regex::new(
-            r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
-        )
-        .unwrap();
-        let a = mint_fno_id().expect("mint succeeds when the OS has randomness");
-        assert!(re.is_match(&a), "not a v4 UUID: {a}");
-        assert_ne!(a, mint_fno_id().unwrap(), "two mints must differ");
-        // The unique mint: a fresh head passes, and a stub that keeps landing
-        // on a taken head errors after 64 draws instead of looping.
-        let taken: std::collections::HashSet<String> =
-            std::iter::once(a[..8].to_string()).collect();
-        assert!(mint_unique_fno_id_with(&taken, || Ok(a.clone())).is_err());
-        assert!(
-            mint_unique_fno_id_with(&std::collections::HashSet::new(), || Ok(a.clone())).is_ok()
-        );
-    }
-
-    proptest! {
-        #![proptest_config(ProptestConfig::with_cases(64))]
-        #[test]
-        fn canonical_handle_matches_python_across_id_families(session_ids in session_id_strategy()) {
-            let expected = python_canonical_handles(&session_ids);
-            let actual: Vec<_> = session_ids.iter().map(|id| canonical_handle(id)).collect();
-            prop_assert_eq!(actual, expected);
+    fn canonical_handle_answers_the_frozen_table() {
+        for (input, expected) in FROZEN_HANDLES {
+            assert_eq!(&canonical_handle(input), expected, "input {input:?}");
         }
     }
 

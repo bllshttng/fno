@@ -58,7 +58,7 @@ _is_valid_product_md() {
     local size
     size=$(wc -c < "$path" | tr -d ' ')
     [[ "$size" -ge 200 ]] || return 1
-    # [TODO] dominance check (matches orchestrator.py is_product_md_stale).
+    # [TODO] dominance check (matches product_md_stale in crates/fno-agents/src/wave_ready.rs).
     # Each "[TODO]" token is 6 bytes; if tokens occupy more than 25% of the
     # file content (todo_count * 6 > size / 4), treat as a placeholder stub.
     # Without this check the /blueprint gate would silently pass a stub that

@@ -379,7 +379,7 @@ Coverage of the eight reachable merge paths, stated honestly rather than implied
 | `finalize.rs` autonomous `--auto` arm | checked, refuses to arm |
 | a PR update, via `.github/workflows/stacked-base-guard.yml` | checked for same-repo PRs; blocks only once marked a required status check. Fork PRs are skipped: their `GITHUB_TOKEN` cannot post the status |
 | GitHub's `--auto` queue firing later, server-side | covered by the workflow's push-to-`main` sweep, which re-stamps the same status context |
-| an agent-run bare `gh pr merge`, via `hooks/git-protection.py` | checked, denies before the two-factor path so the merge-gate override cannot buy past it |
+| an agent-run bare `gh pr merge`, via the git-protection hook | checked, denies before the two-factor path so the merge-gate override cannot buy past it |
 | the GitHub web / mobile merge button | checked once the ruleset is applied: both contexts are required, so the button refuses an uncovered head |
 | a human's `gh pr merge` in a plain terminal, or an unwired harness | checked once the ruleset is applied: the required `fno/review-coverage` context refuses an uncovered head |
 

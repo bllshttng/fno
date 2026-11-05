@@ -168,11 +168,9 @@ def apply_binary_bundle(binaries: Sequence[Path] | None, build_data: dict) -> di
     return build_data
 
 
-# The events schema no longer needs build-time force-include: it lives at
-# `cli/src/fno/events/schema.yaml`, INSIDE the `src/fno` package, so it ships
-# as ordinary package data in both the wheel and the sdist with no machinery.
-# The Python loader (events/__init__.py:_resolve_manifest_path) reads the
-# sibling `schema.yaml` directly. (x-122a follow-up: colocate schema with loader.)
+# The events schema needs no build-time machinery: it left the wheel with
+# the events package residue port and now lives beside its Rust readers at
+# `crates/fno-agents/src/event_store/schema.yaml`.
 
 
 # -- ab-18563bcc US5: LICENSE + NOTICE bundling --
@@ -260,8 +258,7 @@ def resolve_required_licenses(root: Path) -> dict[str, Path]:
 
 class CustomBuildHook(BuildHookInterface):
     """Place the prebuilt binaries in the wheel's ``.data/scripts/`` dir if
-    present, and force-include the license texts as in-package data. The events
-    schema ships as ordinary package data (``fno/events/schema.yaml``)."""
+    present, and force-include the license texts as in-package data."""
 
     def initialize(self, version: str, build_data: dict) -> None:
         # Binaries are optional (zero -> pure-Python wheel) but all-or-nothing

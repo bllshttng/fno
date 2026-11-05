@@ -245,7 +245,6 @@ def test_bg_process_guard_wired_beside_git_protection_on_both_harnesses() -> Non
     """
     # The chain lives inside the dispatcher now; these are its guards.
     for guard in (
-        "hooks/git-protection.py",
         "hooks/bin-install-guard.sh",
         "hooks/pipe-guard.sh",
         "hooks/test-run-guard.sh",

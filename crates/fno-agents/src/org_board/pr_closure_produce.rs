@@ -282,7 +282,7 @@ fn bind_created_pr(
     (result, matched)
 }
 
-fn leg_branch_ids(payload: &serde_json::Value) -> (i32, String, String) {
+pub(crate) fn leg_branch_ids(payload: &serde_json::Value) -> (i32, String, String) {
     let head_ref = payload
         .get("head_ref")
         .and_then(|v| v.as_str())

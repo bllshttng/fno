@@ -55,6 +55,7 @@ footnote/
 - **Worktrees:** worktree-first for all repo work. `claude --worktree <name>` is intercepted by `hooks/worktree-setup.sh`. After creation run `bash scripts/setup/setup-worktree.sh`. Full contract: [docs/architecture/worktree-mechanics.md](docs/architecture/worktree-mechanics.md) (Placement).
 - **Search:** prefer `rg` / Grep over `grep -r` (descends into nested worktrees). Scope any `grep -r` to a path. Load-bearing sweep: `RIPGREP_CONFIG_PATH= rg -uu`, never a bare `rg -uu` (`-u` ignores files, not globs).
 - **Prose style:** a paragraph is ONE physical line. A newline starts the next block. House style, and the gate: [docs/style-rules.md](docs/style-rules.md).
+- **Flags, not env prefixes:** agents invoke `fno do <command> --flag`, never `ENV_VAR=x fno do <command>`. A knob with only an env var gets its missing flag filed.
 - **File budget:** a file over 5,000 lines is shrink-only. `cli/src/fno` bars new Python (use `crates/`); an edit is a port, deletion or lead-approved blocking-bug fix, no new surface, enforced by `scripts/ci/check-file-budget.sh` at push.
 - **Large files:** a source file over 1,000 lines gets read the exact range, edit, re-read, and a test count proved with `rg -c '#\[test\]'` (or `def test_`) before and after.
 - **Test value:** Run only changed-file tests. Push and let CI gate. New tests pass test-audit and replace tests guarding no distinct contract. The suite is shrink-only at a net cap of 6 (`fno-agents test-delta --max-net 6`). pr create refuses a code PR with no cut and no `Audited owners:` line.
@@ -94,7 +95,7 @@ Day-to-day usage (create/edit/columns/lifecycle/roadmap) is in [docs/backlog-usa
 
 ## Execution & looping
 
-**Waves + executors.** Plans declare waves in `00-INDEX.md`; `skills/execute/orchestrator.py` routes tasks to agents by keyword. Executor resolves via task block -> plan frontmatter -> surface inference: `do`/`tdd` (archer, default) or `impeccable` (frontend-executor). [executor-resolution](skills/execute/references/executor-resolution.md).
+**Waves + executors.** Plans declare waves in their `## Execution Strategy`. `fno-agents wave ready` lists the dispatchable tasks. Executor resolves via task block -> plan frontmatter -> surface inference: `do`/`tdd` (archer, default) or `impeccable` (frontend-executor). [executor-resolution](skills/execute/references/executor-resolution.md).
 
 **Looping.**
 - *In-session:* `hooks/target-stop-hook.sh` shims `fno-agents loop-check`, deciding stop/allow from external truth only: `<promise>` intent, done() reads (PR exists, CI green, every `config.review.required_bots` bot reviewed with no unaddressed blocking finding, and either no open finding or the configured rounds spent), any plan-declared `done_probes`, a backstop fingerprint, and budget. Terminal-allow invokes `fno-agents finalize` (idempotent).
@@ -140,7 +141,7 @@ Preferred (claude): a JSON object in a fenced ```json block (or `<result>{...}</
 {"result": "SUCCESS", "task": "2.1", "commit": "abc123", "summary": "..."}
 ```
 
-`result` ∈ `SUCCESS | DONE_WITH_CONCERNS | FAILED | BLOCKED`; `task` required. Fallback (codex/gemini): the `RESULT:`/`TASK:`/... line grammar, fail-closed. Parser: `parse_task_result` in `skills/execute/orchestrator.py`.
+`result` ∈ `SUCCESS | DONE_WITH_CONCERNS | FAILED | BLOCKED`. `task` is required. Fallback (codex/gemini): the `RESULT:`/`TASK:`/... line grammar, fail-closed. Grammar: [state-formats](skills/execute/references/state-formats.md).
 
 ### Deviation rules
 
@@ -172,7 +173,7 @@ Bug in plan -> fix inline, note in SUMMARY.md. Minor enhancement (<15 min) -> im
 - **Skill:** `skills/<name>/SKILL.md` (+ optional `references/`, `scripts/`). **Agent:** `agents/<name>.md` with frontmatter.
 - **Skills ship together:** the fno skills load each other by name at runtime. `skills/target/references/toolbag.md` lists them. No skill refs `${REPO_ROOT}/scripts/`. Script reuse is build-time through `skill-bundles.yaml` and `fno doctor bundle`. The `bundle check` action gates freshness.
 - **TDD:** failing test -> red -> minimal code -> green -> verify -> atomic commit.
-- **Testing:** `python skills/execute/orchestrator.py --help`; `./scripts/validate-test-first.sh`.
+- **Testing:** `fno-agents wave ready --help`, then `./scripts/validate-test-first.sh`.
 
 ## Deep-dive docs
 

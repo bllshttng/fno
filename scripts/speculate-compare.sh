@@ -11,20 +11,13 @@ if [[ ! -f "$STATE_FILE" ]]; then
 fi
 
 # Read state (pass file path as argv to avoid injection)
-PORT_START=$(python3 -c "
-import json, sys
-with open(sys.argv[1]) as f:
-    print(json.load(f).get('port_start', 3001))
-" "$STATE_FILE" 2>/dev/null || echo "3001")
+PORT_START=$(jq -r 'if has("port_start") then .port_start else 3001 end' "$STATE_FILE" 2>/dev/null || echo "3001")
 
-VARIATIONS=$(python3 -c "
-import json, sys
-with open(sys.argv[1]) as f:
-    state = json.load(f)
-for key, val in sorted(state.get('variations', {}).items()):
-    if val.get('status') == 'complete':
-        print(f\"{key}|{val['worktree']}|{val.get('constraint', 'default')}\")
-" "$STATE_FILE" 2>/dev/null)
+VARIATIONS=$(jq -r '
+    (.variations // {}) | to_entries | sort_by(.key)[]
+    | select(.value.status == "complete")
+    | "\(.key)|\(.value | if has("worktree") then .worktree else error("no worktree") end)|\(.value | if has("constraint") then .constraint else "default" end)"
+' "$STATE_FILE" 2>/dev/null)
 
 if [[ -z "$VARIATIONS" ]]; then
     echo "No completed variations found"

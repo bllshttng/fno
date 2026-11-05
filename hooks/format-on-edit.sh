@@ -129,11 +129,6 @@ if [ -n "$PARSE_FINDINGS" ]; then
     CONTEXT=""
     if command -v jq >/dev/null 2>&1; then
         CONTEXT="$(printf '%s' "$PARSE_FINDINGS" | jq -Rs .)"
-    elif command -v python3 >/dev/null 2>&1; then
-        CONTEXT="$(PARSE_FINDINGS_ENV="$PARSE_FINDINGS" python3 -c '
-import json, os, sys
-sys.stdout.write(json.dumps(os.environ["PARSE_FINDINGS_ENV"]))
-' 2>/dev/null || true)"
     fi
     if [ -n "$CONTEXT" ]; then
         printf '{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":%s}}\n' "$CONTEXT"

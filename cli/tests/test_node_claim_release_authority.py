@@ -120,16 +120,16 @@ ALLOWLIST = {
     # releasing would strand a 2h claim on a node whose allocation failed.
     "crates/fno-agents/src/target_start.rs",
     # crates/fno-agents/src/backlog/requests.rs write_claims: the request
-    # import's release of an outside contributor's take, when the take issue
+    # import's release of an outside contributor's claim, when the claim issue
     # left the open approved list. The holder is `github:<login>`, written by
-    # the same import run that grants the take, and `claims::release` drops
+    # the same import run that grants the claim, and `claims::release` drops
     # the lock only for a matching holder. No session is involved, so a
     # worker's or parent's claim cannot be released here: the inverse of a
     # helper releasing its parent's claim. Not releasing would hold the node
     # for the full TTL after the contributor closed the issue.
     "crates/fno-agents/src/backlog/requests.rs",
     # crates/fno-agents/src/pr_steward.rs deliver_take: the steward releases
-    # the take's claim once the contributor's pull request arrived, so the
+    # the contributor's claim once their pull request arrived, so the
     # fleet can rebuild the node. It passes `--holder github:<login>`, the
     # holder the import wrote, and the release verifies that holder. A claim
     # held by anyone else survives. The steward never releases a session's

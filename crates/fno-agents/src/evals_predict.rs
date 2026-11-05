@@ -15,9 +15,9 @@ use std::path::Path;
 
 use serde_json::{json, Map, Value};
 
+pub(crate) use crate::evals_power::{Rng, SEED};
 use crate::evals_trend::{is_scored, Row};
 
-pub(crate) const SEED: u64 = 20_261_102;
 pub(crate) const SHUFFLES: usize = 5_000;
 const Z95: f64 = 1.959_964;
 const Q_MAX: f64 = 0.10;
@@ -128,20 +128,6 @@ fn pearson(a: &[f64], b: &[f64]) -> Option<f64> {
 /// Spearman's rho; None when either side is constant.
 pub(crate) fn spearman(a: &[f64], b: &[f64]) -> Option<f64> {
     pearson(&ranks(a), &ranks(b))
-}
-
-/// splitmix64: a seeded stream with no crate behind it, so the printed seed
-/// reproduces every p.
-struct Rng(u64);
-
-impl Rng {
-    fn next(&mut self) -> u64 {
-        self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
-        let mut z = self.0;
-        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-        z ^ (z >> 31)
-    }
 }
 
 /// Two-sided permutation p for Spearman's rho over ranks.
@@ -284,6 +270,11 @@ fn noise(rows: &[&Row], tree_time: &BTreeMap<String, i64>, on_main: &BTreeSet<St
         .iter()
         .map(|w| mean(w).map(|m| json!(r2(m))).unwrap_or(Value::Null))
         .collect();
+    let k = weeks.iter().map(Vec::len).min().unwrap_or(0);
+    let mdd_week = match (same, k) {
+        (Some(s), k) if k > 0 => Some(crate::evals_power::mdd(s * std::f64::consts::SQRT_2, k, 1)),
+        _ => None,
+    };
     let separable = match (same, between) {
         (Some(s), Some(b)) => json!(b > s),
         _ => Value::Null,
@@ -292,14 +283,58 @@ fn noise(rows: &[&Row], tree_time: &BTreeMap<String, i64>, on_main: &BTreeSet<St
         "same_tree_sd_points": same.map(r2),
         "same_tree_cohorts": repeated,
         "between_tree_sd_points": between.map(r2),
-        "trees": tree_scores.len(),
+        "trees": json!(tree_scores.len()),
         "week_means": week_means,
         "separable": separable,
+        "mdd_week_points": mdd_week.map(r2),
+        "halves": halves_power(rows, &by_tree, tree_time),
     })
 }
 
-/// Per tree, the outcome's value: a rate per typed turn for corrections, a
-/// rate per day for the rest. None when the tree has no denominator.
+/// Per task, the earlier half against the later half of the main trees
+/// (time order), paired and powered. Null under two main trees.
+fn halves_power(
+    rows: &[&Row],
+    by_tree: &BTreeMap<String, (usize, usize)>,
+    tree_time: &BTreeMap<String, i64>,
+) -> Value {
+    let mut timed_all: Vec<(String, i64)> = by_tree
+        .iter()
+        .filter_map(|(sha, _)| tree_time.get(sha).map(|t| (sha.clone(), *t)))
+        .collect();
+    timed_all.sort_by_key(|(_, t)| *t);
+    if timed_all.len() < 2 {
+        return Value::Null;
+    }
+    let mid = timed_all.len() / 2;
+    let early: BTreeSet<&String> = timed_all[..mid].iter().map(|(s, _)| s).collect();
+    let late: BTreeSet<&String> = timed_all[mid..].iter().map(|(s, _)| s).collect();
+    let mut map_e: BTreeMap<String, (usize, usize)> = BTreeMap::new();
+    let mut map_l: BTreeMap<String, (usize, usize)> = BTreeMap::new();
+    for r in rows {
+        let Some(sha) = r.bank_rev.as_ref() else {
+            continue;
+        };
+        if early.contains(sha) || late.contains(sha) {
+            let map = if early.contains(sha) {
+                &mut map_e
+            } else {
+                &mut map_l
+            };
+            let e = map.entry(r.task_id.clone()).or_default();
+            e.0 += 1;
+            e.1 += r.pass as usize;
+        }
+    }
+    let all_tasks: BTreeSet<String> = map_e.keys().chain(map_l.keys()).cloned().collect();
+    for t in all_tasks {
+        map_l.entry(t.clone()).or_insert((0, 0));
+        map_e.entry(t).or_insert((0, 0));
+    }
+    let p = crate::evals_power::paired(&map_e, &map_l);
+    let mut rng = Rng(SEED);
+    crate::evals_power::power_block(&p, &mut rng, None, None)
+}
 fn outcome_series(
     name: &str,
     times: &Times,
@@ -906,6 +941,34 @@ fn print_text(v: &Value) {
         v["series"], n["same_tree_sd_points"], n["between_tree_sd_points"], n["separable"]
     );
     println!("  week means: {}", n["week_means"]);
+    let week_txt = n["mdd_week_points"]
+        .as_f64()
+        .map(|m| format!("{m:.1} points"))
+        .unwrap_or_else(|| "unmeasured".to_string());
+    let halves = &n["halves"];
+    let halves_line = if halves.is_null() {
+        "halves: unmeasured".to_string()
+    } else if halves["paired"]["tasks_informative"].as_u64().unwrap_or(0) == 0 {
+        "halves: underpowered, 0 informative tasks".to_string()
+    } else {
+        let mean = halves["paired"]["mean_delta_points"]
+            .as_f64()
+            .unwrap_or(0.0);
+        let ci = halves["paired"]["ci95_points"].as_array();
+        let (lo, hi) = match ci {
+            Some(a) => (
+                a.first().and_then(Value::as_f64).unwrap_or(0.0),
+                a.get(1).and_then(Value::as_f64).unwrap_or(0.0),
+            ),
+            None => (0.0, 0.0),
+        };
+        let mdd = halves["mdd_points"].as_f64().unwrap_or(0.0);
+        format!(
+            "halves: paired delta {mean:+.1} points over {} informative tasks, 95% CI [{lo:+.1}, {hi:+.1}], smallest detectable {mdd:.1} points",
+            halves["paired"]["tasks_informative"]
+        )
+    };
+    println!("  smallest detectable week change {week_txt}; {halves_line}");
     for p in v["mean_score"].as_array().into_iter().flatten() {
         println!(
             "  mean score vs {}: n={} rho={} p={} q={} ci95={}",

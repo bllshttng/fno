@@ -11,6 +11,11 @@
 //! short-circuits the sink's batch WITHOUT advancing, so it retries next
 //! tick; drops and unknown dispatcher statuses advance with an errors row.
 //!
+//! An enabled webhook whose url is unresolved (e.g. url_env unset) is skipped
+//! per sink before any dispatch: in a mixed set the rest still deliver and
+//! the scan cursor advances with them; only when every enabled sink is
+//! unresolved does the tick skip the read entirely.
+//!
 //! The tick surface is `fno doctor event fanout tick [--dry-run|-N]`, claimed
 //! lexically by the front door and exec'd here as the hidden `status-fanout`
 //! op (matched with `==` beside `board`: not a routable `fno agents`
@@ -25,7 +30,7 @@
 
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::BufRead;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -81,6 +86,8 @@ pub struct TickResult {
     pub rows_read: usize,
     pub locked_out: bool,
     pub lease_lost: bool,
+    /// Enabled sinks whose url is unresolved this tick: skipped before any
+    /// dispatch, never holding the scan cursor.
     pub undeliverable_sinks: Vec<String>,
     pub parked_sinks: Vec<String>,
 }
@@ -627,31 +634,47 @@ pub fn run_tick(
     if enabled.is_empty() {
         return TickResult::default();
     }
-    if !enabled.iter().any(|s| sink_configured(s)) {
-        // Every enabled sink's url is unresolved (e.g. url_env unset):
-        // dispatch would short-circuit and hold the scan cursor, so every
-        // later tick rereads the whole journal. Skip before any read; the
-        // sink's stored cursor resumes the backlog once the url resolves.
+    // A webhook whose url is unresolved (e.g. url_env unset) is not
+    // configured work, and the skip is PER SINK: in a mixed set the
+    // unresolved sinks sit out while the rest deliver. Dispatching through
+    // them would short-circuit and hold the scan cursor (their parks block
+    // it too), so every later tick reread the whole journal window - the
+    // nonstop-tick load measured on 2026-10-10. A sink skipped this way
+    // resumes near-live once its url resolves; the piled-up window is not
+    // retained past the scan cursor. When EVERY enabled sink is unresolved
+    // nothing runs at all, so nothing advances past any sink.
+    let (deliverable, undeliverable): (Vec<&SinkConfig>, Vec<&SinkConfig>) =
+        enabled.iter().copied().partition(|s| sink_configured(s));
+    let undeliverable_sinks: Vec<String> = undeliverable.iter().map(|s| s.name.clone()).collect();
+    if deliverable.is_empty() {
         return TickResult {
-            undeliverable_sinks: enabled.iter().map(|s| s.name.clone()).collect(),
+            undeliverable_sinks,
             ..Default::default()
         };
     }
     let state = state_dir_for(project_root);
+    let deliverable_names: BTreeSet<&str> = deliverable.iter().map(|s| s.name.as_str()).collect();
     let parks = if dry_run {
         BTreeMap::new()
     } else {
+        // A park on an undeliverable sink reads as absent: the sink cannot
+        // consume the window while its url stays unresolved, so it neither
+        // holds the scan cursor nor re-enters live off that park.
         read_parks(&state)
+            .into_iter()
+            .filter(|(name, _)| deliverable_names.contains(name.as_str()))
+            .collect()
     };
     let now = now_unix();
-    let live: Vec<&SinkConfig> = enabled
+    let live: Vec<&SinkConfig> = deliverable
         .iter()
         .copied()
         .filter(|s| parks.get(&s.name).copied().unwrap_or(0.0) <= now)
         .collect();
     if live.is_empty() {
         return TickResult {
-            parked_sinks: enabled.iter().map(|s| s.name.clone()).collect(),
+            parked_sinks: deliverable.iter().map(|s| s.name.clone()).collect(),
+            undeliverable_sinks,
             ..Default::default()
         };
     }
@@ -659,10 +682,11 @@ pub fn run_tick(
     let Some(lock) = lock.as_mut() else {
         return TickResult {
             locked_out: true,
+            undeliverable_sinks,
             ..Default::default()
         };
     };
-    match dispatch {
+    let mut result = match dispatch {
         Some(d) => run_locked(
             project_root,
             &state,
@@ -685,7 +709,9 @@ pub fn run_tick(
             &mut |sink, event| dispatch_event(sink, event, tuning, project_root, post),
             &mut |active, since, after| stream_since(active, since, after),
         ),
-    }
+    };
+    result.undeliverable_sinks = undeliverable_sinks;
+    result
 }
 
 /// One dispatch call's outcome, scripted in tests and produced by the sink's
@@ -1626,8 +1652,11 @@ pub fn run_tick_command(args: &[String]) -> i32 {
         println!("status-fanout: another tick holds the lock; skipped");
         return 0;
     }
-    // The daemon ticks every few seconds: an idle pass prints nothing.
-    if result.sinks.is_empty() && dry_run {
+    // The daemon ticks every few seconds: an idle pass prints nothing. A
+    // skipped sink is named in every mode: the line is the one signal a
+    // hand-run tick gives for a url that never resolves (the skip writes no
+    // errors row).
+    if dry_run && result.sinks.is_empty() {
         if !result.undeliverable_sinks.is_empty() {
             println!(
                 "status-fanout: no deliverable sink (url unresolved; no-op): {}",
@@ -1636,6 +1665,11 @@ pub fn run_tick_command(args: &[String]) -> i32 {
         } else {
             println!("status-fanout: no enabled sinks (no-op)");
         }
+    } else if !result.undeliverable_sinks.is_empty() {
+        println!(
+            "status-fanout: skipped (url unresolved): {}",
+            result.undeliverable_sinks.join(", ")
+        );
     }
     let command = if dry_run { "would-send" } else { "dispatched" };
     for sr in &result.sinks {

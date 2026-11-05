@@ -18,7 +18,9 @@
 //!
 //! **Head leg.** An open same-repo PR whose head touches a gated path gets a
 //! pending `evals/gate` status, then one run of the `gate` goldens at that
-//! head, one PR at a time. A newer head kills the older run. The head runs on
+//! head, one PR at a time. A head whose gated hits are all bank files grades
+//! only the goldens it changed, so a goldens-only PR fits the 20-minute wall.
+//! A newer head kills the older run. The head runs on
 //! the worker seat and pays one side only: it compares to the worker
 //! baseline. Until a first baseline exists the
 //! leg posts nothing, so a fresh install holds no PR on a check it cannot do.
@@ -29,6 +31,7 @@
 //! cause and the clearing command.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -41,6 +44,13 @@ use crate::gate_probes::RunProbe;
 
 const CONTEXT: &str = "evals/gate";
 const GATED_PATHS: [&str; 5] = ["skills/", "agents/", "hooks/", "commands/", "evals/bank/"];
+/// The gated prefixes minus the bank: these paths have no per-golden
+/// `covers:` granularity, so a diff that hits one selects the whole tier.
+const TIER_PATHS: [&str; 4] = ["skills/", "agents/", "hooks/", "commands/"];
+/// The bank prefix. A diff whose gated hits are all bank files changed the
+/// measurement, not the system under test, so it grades only the goldens it
+/// touched instead of the whole tier.
+const BANK_PATH: &str = "evals/bank/";
 const GATE_TAG: &str = "gate";
 const GOLDEN_TAG: &str = "golden";
 const LEAD_TAG: &str = "lead";
@@ -54,11 +64,12 @@ const MAX_TASK_WALL_S: f64 = 180.0;
 const NEW_HEADS_PER_TICK: usize = 10;
 const DEFAULT_DAILY_USD: f64 = 15.0;
 const DEFAULT_LANE: &str = "zai-flash";
-/// The user's zai-peak ruling: Monday to Friday, 06:00 to 10:00 UTC, zai burns
-/// credits at twice the rate, so the gate keeps its runs off zai then.
-fn zai_peak(now: DateTime<Utc>) -> bool {
-    use chrono::{Datelike, Timelike};
-    now.weekday().num_days_from_monday() < 5 && (6..10).contains(&now.hour())
+/// True when a routing row serves `vendor` by account or route prefix.
+fn row_is_vendor(r: &Value, vendor: &str) -> bool {
+    r["account"].as_str() == Some(vendor)
+        || r["route"]
+            .as_str()
+            .is_some_and(|v| v.starts_with(&format!("{vendor}/")))
 }
 
 /// True when `lane` rides zai, read from the routing inventory. A lane the
@@ -68,19 +79,80 @@ fn lane_is_zai(repo: &Path, lane: &str) -> bool {
         .get("rows")
         .and_then(Value::as_array)
         .and_then(|rows| rows.iter().find(|r| r["name"].as_str() == Some(lane)))
-        .is_some_and(|r| {
-            r["account"].as_str() == Some("zai")
-                || r["route"].as_str().is_some_and(|v| v.starts_with("zai/"))
-        })
+        .is_some_and(|r| row_is_vendor(r, "zai"))
 }
 
-/// True when a gate run on `lane` waits for the peak window to end.
-pub(crate) fn zai_peak_hold(repo: &Path, lane: &str, now: DateTime<Utc>) -> bool {
-    zai_peak(now) && lane_is_zai(repo, lane)
+/// True when every zai record's 5h window reads under `threshold`. Rows sit
+/// in records order (`usage::collect` maps them so). A zai record with no
+/// readable 5h window answers false: a probe that cannot see the window is
+/// exactly the case that moves the run off zai. No zai record is the same
+/// answer - the lane cannot be proven runnable.
+fn zai_window_room(
+    records: &[crate::accounts::records::Record],
+    rows: &[crate::accounts::usage::Row],
+    threshold: f64,
+) -> bool {
+    let mut saw_zai = false;
+    for (record, row) in records.iter().zip(rows.iter()) {
+        let provider = record
+            .route
+            .as_deref()
+            .and_then(crate::spawn_route::parse_target)
+            .map(|(p, _)| p);
+        let key = provider.as_deref().unwrap_or(&record.harness);
+        if key != "zai" {
+            continue;
+        }
+        saw_zai = true;
+        let room = row
+            .entry
+            .get("windows")
+            .and_then(Value::as_array)
+            .and_then(|ws| ws.iter().find(|w| w["label"].as_str() == Some("5h")))
+            .and_then(|w| w["used_pct"].as_f64())
+            .is_some_and(|pct| pct < threshold);
+        if !room {
+            return false;
+        }
+    }
+    saw_zai
 }
 
-/// Runs once when the main lane gives up with no grade, so a capped lane does
-/// not leave the day without graded rows.
+/// The live room read the lane rule rides: the same probe
+/// `fno config accounts usage` runs, refreshed, folded into
+/// `zai_window_room`. None when the probe cannot answer at all.
+pub(crate) fn real_room(repo: &Path, now: DateTime<Utc>) -> Option<bool> {
+    crate::accounts::usage::report(repo, true, now.timestamp() as f64)
+        .ok()
+        .map(|(records, rows, threshold)| zai_window_room(&records, &rows, threshold))
+}
+
+/// The lane this run rides. A zai lane runs while its 5h window has room
+/// under the quota defer threshold, read through the same probe
+/// `fno config accounts usage` runs; a window at the cap, an unreadable
+/// reading, or a failed probe moves the run to the fixed sonnet fallback
+/// lane (the user's ruling: z.ai usage matters, not the clock). The fallback
+/// is fixed, never the first claude inventory row: that row can be opus, and
+/// opus never runs target work.
+pub(crate) fn lane_with_room(
+    repo: &Path,
+    lane: &str,
+    now: DateTime<Utc>,
+    room: &dyn Fn(&Path, DateTime<Utc>) -> Option<bool>,
+) -> String {
+    if !lane_is_zai(repo, lane) {
+        return lane.to_string();
+    }
+    if room(repo, now) == Some(true) {
+        return lane.to_string();
+    }
+    FALLBACK_LANE.to_string()
+}
+
+/// The lane a run moves to when it cannot ride its own: the main lane's
+/// no-grade fallback, and a zai window with no room. A fixed sonnet lane,
+/// never the first claude inventory row, which can be opus, and opus never
+/// runs target work.
 const FALLBACK_LANE: &str = "claude-sonnet-5";
 const FALLBACK_SUFFIX: &str = "-fallback";
 
@@ -134,6 +206,10 @@ struct HeadRun {
     pid: u32,
     started: i64,
     tasks: Vec<String>,
+    /// Bank task files the head-leg read could not parse (a check kind
+    /// newer than this binary), named in the pending post and the verdict.
+    #[serde(default)]
+    skipped: Vec<String>,
     /// The run built the head first, so a slow build can read as the cause.
     #[serde(default)]
     built: bool,
@@ -198,13 +274,22 @@ impl State {
 struct Pr {
     number: u64,
     sha: String,
+    /// GitHub's own word that the PR sits in the auto-merge queue (`auto_merge`
+    /// non-null on the REST pull row). The disarm sweep reads only armed rows.
+    armed: bool,
 }
 
 struct Deps<'a> {
     run: RunProbe<'a>,
+    /// The slot plumbing's own probe: the same argv seam with the 10-minute
+    /// slot bound, so a slow worktree add outlives the 30-second probe kill.
+    slot_run: RunProbe<'a>,
     spawn: &'a dyn Fn(&[String], &Path, &Path) -> Result<u32, String>,
     alive: &'a dyn Fn(u32) -> bool,
     kill: &'a dyn Fn(u32),
+    /// The zai 5h window read behind `lane_with_room`; `real_room` in
+    /// production, an injected answer in tests.
+    room: &'a dyn Fn(&Path, DateTime<Utc>) -> Option<bool>,
     now: DateTime<Utc>,
 }
 
@@ -246,6 +331,12 @@ fn touches_gated_path(files: &[&str]) -> bool {
     files
         .iter()
         .any(|f| GATED_PATHS.iter().any(|p| f.get(..p.len()) == Some(*p)))
+}
+
+fn touches_tier_path(files: &[&str]) -> bool {
+    files
+        .iter()
+        .any(|f| TIER_PATHS.iter().any(|p| f.get(..p.len()) == Some(*p)))
 }
 
 /// FNV-1a over the route config. One hash decides a change, and a new binary
@@ -344,8 +435,12 @@ fn repo_relative_task(source: &std::path::Path) -> String {
     tail(if skill_local { 4 } else { 3 })
 }
 
-/// The `gate` goldens among `tasks`. A golden added to main after the head
-/// branched has no fixture there, and would read as a regression.
+/// The goldens a head grades. A skill, agent, hook or command change selects
+/// the whole `gate` tier; a crate-only diff selects the tasks whose `covers:`
+/// it touches; a bank edit changes the measurement, not the system under
+/// test, so it grades only the goldens the head touched. A golden added to
+/// main after the head branched has no fixture there, and would read as a
+/// regression.
 fn gate_tasks(
     tasks: &[crate::evals::bank::TaskSpec],
     files: &[String],
@@ -354,15 +449,20 @@ fn gate_tasks(
     d: &Deps,
     p: &Paths,
 ) -> Vec<crate::evals::bank::TaskSpec> {
-    // The `gate` set runs for a skill, agent, hook, command or bank change. A
-    // crate-only diff runs only the tasks whose `covers:` it touches.
     let gated = touches_gated_path(&files.iter().map(String::as_str).collect::<Vec<_>>());
+    let tier = touches_tier_path(&files.iter().map(String::as_str).collect::<Vec<_>>());
+    let changed: BTreeSet<String> = files
+        .iter()
+        .filter(|f| f.starts_with(BANK_PATH))
+        .cloned()
+        .collect();
     tasks
         .iter()
         .filter(|t| !t.is_demoted())
         .filter(|t| {
-            (gated && t.tags.iter().any(|tag| tag == GATE_TAG))
+            (gated && tier && t.tags.iter().any(|tag| tag == GATE_TAG))
                 || files.iter().any(|f| is_covered(f, &t.covers))
+                || changed.contains(&repo_relative_task(&t.source_path))
         })
         .filter(|t| !slow.contains(&t.id))
         .filter(|t| {
@@ -425,6 +525,15 @@ fn short(sha: &str) -> &str {
     sha.get(..12).unwrap_or(sha)
 }
 
+/// The clause a status line gains when the head's bank carried files this
+/// binary could not read, so a green verdict names what it did not grade.
+fn skip_suffix(skipped: &[String]) -> String {
+    if skipped.is_empty() {
+        return String::new();
+    }
+    format!("; unread bank task(s) skipped: {}", skipped.join(", "))
+}
+
 fn post_status(p: &Paths, d: &Deps, slug: &str, sha: &str, state: &str, text: &str) -> bool {
     let endpoint = format!("repos/{slug}/statuses/{sha}");
     let cut: String = text.chars().take(DESCRIPTION_MAX).collect();
@@ -464,11 +573,82 @@ fn open_prs(p: &Paths, d: &Deps, slug: &str) -> Option<Vec<Pr>> {
             Some(Pr {
                 number: r.get("number")?.as_u64()?,
                 sha: r.pointer("/head/sha")?.as_str()?.to_string(),
+                armed: r.get("auto_merge").is_some_and(|v| !v.is_null()),
             })
         })
         .collect();
     prs.sort_by_key(|pr| pr.number);
     Some(prs)
+}
+
+/// Disarms every queue-armed PR whose head's gate reads red, pending, or
+/// missing at a gated head. GitHub enforces only the ruleset's required
+/// checks (main requires one, stacked-base-guard), so an armed PR merges
+/// past a gate the queue never waits on: a green-checked PR landed 87
+/// seconds after its gate went red. The tick posts the status, then this
+/// sweep pulls the armed PR out of the queue; the worker's own merge door
+/// re-lands it when the gate settles. One line per disarm, into the tick
+/// note; a failed disarm retries next tick.
+fn disarm_sweep(p: &Paths, d: &Deps, slug: &str, prs: &[Pr]) -> Vec<String> {
+    let mut notes = Vec::new();
+    for pr in prs.iter().filter(|pr| pr.armed) {
+        let Some(word) = gate_word_at(p, d, slug, pr) else {
+            continue;
+        };
+        let argv = [
+            "gh",
+            "pr",
+            "merge",
+            &pr.number.to_string(),
+            "--disable-auto",
+        ];
+        let ok = (d.run)(&argv, p.repo).is_some_and(|r| r.ok);
+        notes.push(format!(
+            "disarmed pr {} at {} ({word}, {})",
+            pr.number,
+            short(&pr.sha),
+            if ok {
+                "queue removed"
+            } else {
+                "gh refused; retries next tick"
+            }
+        ));
+    }
+    notes
+}
+
+/// The gate's word at an armed PR's head, from the live combined status:
+/// FAILURE/ERROR reads red, PENDING reads pending, and an absent context
+/// reads missing only on a head that owes a status (the same fail-open
+/// probe the merge door holds on). None leaves the arm alone.
+fn gate_word_at(p: &Paths, d: &Deps, slug: &str, pr: &Pr) -> Option<&'static str> {
+    let endpoint = format!("repos/{slug}/commits/{}/status", pr.sha);
+    let out = (d.run)(&["gh", "api", &endpoint], p.repo).filter(|r| r.ok)?;
+    let status: Value = serde_json::from_str(&out.stdout).ok()?;
+    // The REST status states are GitHub's own lowercase words; the door
+    // uppercases every state read, and the arms below speak the same
+    // uppercase words.
+    let state = status
+        .get("statuses")?
+        .as_array()?
+        .iter()
+        .find(|s| s.get("context").and_then(Value::as_str) == Some(CONTEXT))
+        .and_then(|s| s.get("state"))
+        .and_then(Value::as_str)
+        .map(str::to_uppercase);
+    match state.as_deref() {
+        Some("FAILURE") | Some("ERROR") => return Some("red"),
+        Some("PENDING") => return Some("pending"),
+        // A settled-green gate keeps its arm; only a genuinely absent
+        // context falls through to the missing check.
+        Some(_) => return None,
+        None => {}
+    }
+    // Absent context: hold only when the head actually owes a status, so an
+    // ungated diff (the SKIP disposition) never pulls its PR out of the queue.
+    let probe = DepsProbe { run: d.run };
+    let files = crate::pr_status::lists::pr_file_paths(&probe, p.repo, slug, pr.number).ok()?;
+    head_owes_status(p.repo, p.history, &files).then_some("missing")
 }
 
 /// Lifts the evals gate's RunProbe seam onto the shared GhProbe shape
@@ -506,6 +686,39 @@ fn main_covers(p: &Paths) -> Vec<String> {
         .collect()
 }
 
+/// The merge door's expectation answer: does this head owe an evals/gate
+/// status? The same map the tick reads decides it - the five gated prefixes,
+/// or a `covers:` prefix of main's bank - and only once the worker seat has
+/// a baseline. A first install holds nobody on a check it cannot run yet.
+/// A machine with no gate state at all reads as first install, so a merge
+/// from a non-daemon machine keeps today's pass. Fail-open by construction:
+/// an unread bank answers an empty map, a missing state answers no baseline.
+pub(crate) fn head_owes_status(repo: &Path, history: &Path, files: &[String]) -> bool {
+    let dir = state_dir(history);
+    let Some(state) = std::fs::read_to_string(dir.join("state.json"))
+        .ok()
+        .and_then(|t| serde_json::from_str::<State>(&t).ok())
+    else {
+        return false;
+    };
+    if state.worker.baseline.is_none() {
+        return false;
+    }
+    let ref_bank = dir.join("ref-main").join("evals").join("bank");
+    let bank = if ref_bank.is_dir() {
+        ref_bank
+    } else {
+        repo.join("evals").join("bank")
+    };
+    let covers = crate::evals::bank::discover_bank(&bank)
+        .unwrap_or_default()
+        .into_iter()
+        .flat_map(|t| t.covers)
+        .collect::<Vec<_>>();
+    touches_gated_path(&files.iter().map(String::as_str).collect::<Vec<_>>())
+        || files.iter().any(|f| is_covered(f, &covers))
+}
+
 /// A head is gated by a skill, agent, hook, command or bank change, or by a
 /// change some task's `covers:` names. None when the file read failed.
 fn head_is_gated(p: &Paths, d: &Deps, slug: &str, pr: &Pr, covers: &[String]) -> Option<bool> {
@@ -516,16 +729,44 @@ fn head_is_gated(p: &Paths, d: &Deps, slug: &str, pr: &Pr, covers: &[String]) ->
 }
 
 fn fetch(p: &Paths, d: &Deps, refspec: &str) -> bool {
-    (d.run)(&["git", "fetch", "--quiet", "origin", refspec], p.repo).is_some_and(|r| r.ok)
+    (d.slot_run)(&["git", "fetch", "--quiet", "origin", refspec], p.repo).is_some_and(|r| r.ok)
+}
+
+const REF_LOG: &str = "ref-checkout.log";
+
+/// Slot plumbing fails silently into `None` at the caller; a line in this log
+/// keeps the next wedge diagnosable from the state dir alone.
+fn log_ref_failure(p: &Paths, d: &Deps, line: &str) {
+    let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(p.state_dir.join(REF_LOG))
+    else {
+        return;
+    };
+    let _ = writeln!(f, "[{}] {}", d.now.to_rfc3339(), line);
+}
+
+/// True when the repo can resolve `sha` as a commit.
+fn commit_present(p: &Paths, d: &Deps, sha: &str) -> bool {
+    let spec = format!("{sha}^{{commit}}");
+    (d.slot_run)(&["git", "cat-file", "-e", &spec], p.repo).is_some_and(|r| r.ok)
 }
 
 /// The checkout of `sha` the gate reads the bank at: a detached worktree
 /// under the state dir, one fixed slot per leg, reused when the slot already
 /// sits at that sha. The repo the daemon runs from can sit behind the ref,
-/// and a tag read from its working tree misses a golden the ref added. None
-/// on any plumbing failure; callers then read the checkout's own bank, which
-/// is the behavior this replaces.
-fn ref_checkout(p: &Paths, d: &Deps, slot: &str, sha: &str) -> Option<PathBuf> {
+/// and a tag read from its working tree misses a golden the ref added. A sha
+/// the repo has never fetched (a head pushed from another machine) is fetched
+/// from `refspec` before the add. None on any plumbing failure; callers then
+/// read the checkout's own bank, which is the behavior this replaces.
+fn ref_checkout(
+    p: &Paths,
+    d: &Deps,
+    slot: &str,
+    sha: &str,
+    refspec: Option<&str>,
+) -> Option<PathBuf> {
     let dir = p.state_dir.join(format!("ref-{slot}"));
     let bank = dir.join("evals").join("bank");
     let dir_str = dir.to_string_lossy().into_owned();
@@ -535,14 +776,40 @@ fn ref_checkout(p: &Paths, d: &Deps, slot: &str, sha: &str) -> Option<PathBuf> {
     {
         return Some(dir);
     }
-    let _ = (d.run)(&["git", "worktree", "remove", "--force", &dir_str], p.repo);
-    (d.run)(&["git", "worktree", "prune"], p.repo);
-    (d.run)(
+    // Double force: git holds an `initializing` lock on the worktree it
+    // builds and drops it when the add lands; an add killed midway leaves
+    // the lock, and a locked slot refuses a single-force remove, so every
+    // later rebuild failed with "no checkout". The gate owns its slots. The
+    // slot calls ride the 10-minute bound: the 30-second probe kill was what
+    // murdered the adds mid-flight and leaked the lock.
+    let _ = (d.slot_run)(
+        &["git", "worktree", "remove", "--force", "--force", &dir_str],
+        p.repo,
+    );
+    (d.slot_run)(&["git", "worktree", "prune"], p.repo);
+    // Both legs fetch the ref they grade before this point; the guard keeps a
+    // sha only GitHub knows from failing the add anyway.
+    if !commit_present(p, d, sha) {
+        if let Some(refspec) = refspec {
+            if !fetch(p, d, refspec) {
+                log_ref_failure(p, d, &format!("fetch {refspec} failed for {sha}"));
+            }
+        }
+    }
+    let added = (d.slot_run)(
         &["git", "worktree", "add", "--detach", &dir_str, sha],
         p.repo,
-    )
-    .filter(|r| r.ok)
-    .map(|_| dir)
+    );
+    match &added {
+        Some(r) if !r.ok => log_ref_failure(
+            p,
+            d,
+            &format!("worktree add {slot} at {}: {}", sha, r.stderr.trim()),
+        ),
+        None => log_ref_failure(p, d, &format!("worktree add {slot} at {sha}: spawn failed")),
+        _ => {}
+    }
+    added.filter(|r| r.ok).map(|_| dir)
 }
 
 fn run_argv(
@@ -607,7 +874,7 @@ fn with_build(p: &Paths, slot: &str, root: &Path, argv: Vec<String>) -> Vec<Stri
 
 /// The checkout a bank dir sits in: `<root>/evals/bank`.
 fn checkout_of(bank: &Path) -> Option<&Path> {
-    bank.parent()?.parent()?.parent()
+    bank.parent()?.parent()
 }
 
 /// TOML writes the budget as a float or an integer; a string read alone missed both.
@@ -655,6 +922,21 @@ fn compare(
     let mut rows = read_rows(&history.to_string_lossy(), None, None);
     if let Some(tasks) = tasks {
         rows.retain(|r| tasks.contains(&r.task_id));
+        // A stale baseline holds no rows for the kept tasks (its own main run
+        // can fail on a wedged slot). fold errors on an empty side, so the
+        // unmeasured view verdict() passes is folded here instead. A task
+        // whose head rows exist but score nothing stays red: a lane that
+        // scores nothing is no result.
+        if !rows.iter().any(|r| r.experiment_id.as_deref() == Some(a)) {
+            return Ok(serde_json::json!({
+                "regressions": [],
+                "now_flaky": [],
+                "errors": tasks
+                    .iter()
+                    .map(|t| serde_json::json!({"task": t, "b": "graded", "a_grades": 0}))
+                    .collect::<Vec<_>>(),
+            }));
+        }
     }
     // An unreadable catalog proves nothing unproved, so a regression stays red.
     let unproved = crate::evals::failure_types::unproved_tasks(bank).unwrap_or_default();
@@ -758,9 +1040,7 @@ fn main_seat(
             Err(cause) => return (main_failed(d, state, seat, &cohort, cause), false),
         }
     };
-    if zai_peak_hold(p.repo, &lane, d.now) {
-        return (format!("main {cohort} waits out the zai peak"), true);
-    }
+    let lane = lane_with_room(p.repo, &lane, d.now, d.room);
     let run_cohort = if fallback {
         format!("{cohort}{FALLBACK_SUFFIX}")
     } else {
@@ -776,7 +1056,8 @@ fn main_seat(
         return ("main rev unread".into(), false);
     };
     // The golden set is read at the sha the run grades, not at the checkout.
-    let arg_bank = ref_checkout(p, d, "main", &sha).map(|root| root.join("evals").join("bank"));
+    let arg_bank =
+        ref_checkout(p, d, "main", &sha, Some("main")).map(|root| root.join("evals").join("bank"));
     let bank_dir = arg_bank
         .clone()
         .unwrap_or_else(|| p.repo.join("evals").join("bank"));
@@ -1102,6 +1383,8 @@ fn settle_head_run(p: &Paths, d: &Deps, state: &mut State, slug: &str, prs: &[Pr
     };
     // A dropped POST keeps the run, so the next tick posts it. Pending
     // forever is how a green PR never merges.
+    let skip_note = skip_suffix(&run.skipped);
+    let text = format!("{text}{skip_note}");
     if post_status(p, d, slug, &run.sha, status, &text) {
         state.heads.insert(run.sha.clone(), DONE.into());
         state.head_run = None;
@@ -1124,14 +1407,30 @@ fn launch_head(
         return format!("head {} fetch failed", short(&pr.sha));
     }
     // The gate-tagged set is read at the head sha: the checkout can sit behind it.
-    let arg_bank = ref_checkout(p, d, "head", &pr.sha).map(|root| root.join("evals").join("bank"));
+    let arg_bank = ref_checkout(p, d, "head", &pr.sha, Some(&refspec))
+        .map(|root| root.join("evals").join("bank"));
     let bank_dir = arg_bank
         .clone()
         .unwrap_or_else(|| p.repo.join("evals").join("bank"));
     let rows = history_rows(p.history);
     let slow = slow_tasks(&rows, baseline);
+    // An unreadable bank at the head is red, never green: a PR that broke
+    // its bank file must not pass for want of tasks. A check kind newer
+    // than this binary is the one exception: the readable tasks still run,
+    // and the unread files are named in the pending post and the verdict.
+    let (tasks, skipped) = match crate::evals::bank::discover_bank_tolerant(&bank_dir) {
+        Ok((tasks, skipped)) => (tasks, skipped),
+        Err(e) => {
+            let text = no_result(&pr.sha, &format!("bank unread at the head: {}", e.0));
+            if post_status(p, d, slug, &pr.sha, "failure", &text) {
+                state.heads.insert(pr.sha.clone(), DONE.into());
+            }
+            return format!("head {} bank unread", short(&pr.sha));
+        }
+    };
     let mut finish = |status: &str, text: &str, disposition: String| {
-        if post_status(p, d, slug, &pr.sha, status, text) {
+        let text = format!("{text}{}", skip_suffix(&skipped));
+        if post_status(p, d, slug, &pr.sha, status, &text) {
             state.heads.insert(pr.sha.clone(), disposition);
         }
     };
@@ -1140,19 +1439,7 @@ fn launch_head(
     else {
         return format!("head {} files unread", short(&pr.sha));
     };
-    // An unreadable bank at the head is red, never green: a PR that broke
-    // its bank file must not pass for want of tasks.
-    let tasks = match crate::evals::bank::discover_bank(&bank_dir) {
-        Ok(tasks) => gate_tasks(&tasks, &files, &pr.sha, &slow, d, p),
-        Err(e) => {
-            finish(
-                "failure",
-                &no_result(&pr.sha, &format!("bank unread at the head: {}", e.0)),
-                DONE.into(),
-            );
-            return format!("head {} bank unread", short(&pr.sha));
-        }
-    };
+    let tasks = gate_tasks(&tasks, &files, &pr.sha, &slow, d, p);
     if tasks.is_empty() {
         finish(
             "success",
@@ -1180,8 +1467,20 @@ fn launch_head(
     }
     let cohort = format!("gate-head-{}", short(&pr.sha));
     let lane = config_lane(p.repo);
-    if zai_peak_hold(p.repo, &lane, d.now) {
-        return format!("head {} waits out the zai peak", short(&pr.sha));
+    let lane = lane_with_room(p.repo, &lane, d.now, d.room);
+    // Posted here, not earlier: only a launch attempt that reaches the
+    // spawn names the skips, so an early return neither repeats the post
+    // on retry nor supersedes it within the same attempt.
+    let skip_note = skip_suffix(&skipped);
+    if !skipped.is_empty() {
+        post_status(
+            p,
+            d,
+            slug,
+            &pr.sha,
+            "pending",
+            &format!("run in flight{skip_note}"),
+        );
     }
     let mut argv = run_argv(
         p,
@@ -1210,6 +1509,7 @@ fn launch_head(
                 pid,
                 started: d.now.timestamp(),
                 tasks,
+                skipped: skipped.clone(),
                 built: builds,
             });
             save_state(&p.state_dir, state);
@@ -1229,14 +1529,22 @@ fn tick_with(p: &Paths, d: &Deps, can_launch: bool) -> String {
     }
     let mut state = load_state(&p.state_dir);
     let main_note = main_leg(p, d, &mut state, can_launch, daily_usd);
-    let head_note = match crate::stacked_base_stamp::origin_slug(p.repo, d.run) {
+    let (head_note, disarm_notes) = match crate::stacked_base_stamp::origin_slug(p.repo, d.run) {
         Some(slug) => match open_prs(p, d, &slug) {
-            Some(prs) => head_leg(p, d, &mut state, &slug, &prs, can_launch, daily_usd),
-            None => "open PR read failed".into(),
+            Some(prs) => {
+                let note = head_leg(p, d, &mut state, &slug, &prs, can_launch, daily_usd);
+                let disarms = disarm_sweep(p, d, &slug, &prs);
+                (note, disarms)
+            }
+            None => ("open PR read failed".into(), Vec::new()),
         },
-        None => "origin slug unread".into(),
+        None => ("origin slug unread".into(), Vec::new()),
     };
-    let note = format!("{main_note}; {head_note}");
+    let mut note = format!("{main_note}; {head_note}");
+    if !disarm_notes.is_empty() {
+        note.push_str("; ");
+        note.push_str(&disarm_notes.join("; "));
+    }
     state.last_note = note.clone();
     save_state(&p.state_dir, &state);
     note
@@ -1256,7 +1564,13 @@ fn spawn_detached(argv: &[String], cwd: &Path, log: &Path) -> Result<u32, String
         .stdout(out)
         .stderr(err);
     crate::evals_arm::setsid_hook(&mut cmd);
-    cmd.spawn().map(|c| c.id()).map_err(|e| e.to_string())
+    cmd.spawn()
+        .map(|c| {
+            let pid = c.id();
+            crate::orphan_reap::release_child(pid);
+            pid
+        })
+        .map_err(|e| e.to_string())
 }
 
 /// One pass of both legs. The daemon's tick calls this first, and it never
@@ -1282,11 +1596,15 @@ pub(crate) fn tick(
             libc::kill(-(pid as i32), libc::SIGKILL);
         }
     };
+    let slot_runner =
+        crate::stacked_base_stamp::runner_with("git", "gh", &crate::gate_probes::run_slot_probe);
     let deps = Deps {
         run: &run,
+        slot_run: &slot_runner,
         spawn: &spawn_detached,
         alive: &crate::evals_arm::pid_alive,
         kill: &kill,
+        room: &real_room,
         now: Utc::now(),
     };
     tick_with(&paths, &deps, can_launch);
@@ -1323,7 +1641,6 @@ mod tests {
     use crate::gate_probes::Run;
     use serde_json::json;
     use std::cell::RefCell;
-    use std::io::Write as _;
 
     const SHA: &str = "abcdef1234567890";
 
@@ -1344,6 +1661,15 @@ mod tests {
         adds: RefCell<Vec<String>>,
         real_git: bool,
         files: String,
+        /// PR 7 sits in GitHub's auto-merge queue (`auto_merge` non-null).
+        armed: bool,
+        /// The state the combined-status read answers for the evals/gate
+        /// context; empty means the context is absent.
+        gate_status: String,
+        /// The zai 5h window answer `real_room` would give; None is a failed
+        /// probe.
+        room: Option<bool>,
+        disarms: RefCell<Vec<String>>,
     }
 
     impl World {
@@ -1373,6 +1699,10 @@ mod tests {
                 adds: RefCell::default(),
                 real_git: false,
                 files: files.into(),
+                armed: false,
+                gate_status: String::new(),
+                room: None,
+                disarms: RefCell::default(),
             }
         }
 
@@ -1398,6 +1728,13 @@ mod tests {
             git(&["init", "-b", "main"]);
             git(&["config", "user.email", "t@t"]);
             git(&["config", "user.name", "t"]);
+            // g1 is in both commits, so the checkout's bank and the head's bank
+            // both carry its covers line.
+            std::fs::write(
+                w.dir.path().join("evals/bank/g1.yaml"),
+                format!("id: g1\ntier: capability\nprompt: p\ngrade:\n  - kind: file-exists\n    path: x\ntags: [{GATE_TAG}]\ncovers: [\"crates/x/\"]\n"),
+            )
+            .unwrap();
             git(&["add", "evals"]);
             git(&["commit", "-m", "x"]);
             let x = String::from_utf8_lossy(&git(&["rev-parse", "HEAD"]).stdout)
@@ -1510,6 +1847,17 @@ mod tests {
                             .collect();
                         ok(&Value::Array(rows).to_string())
                     }
+                    ["gh", "api", e] if e.contains("/status") => {
+                        // GitHub's REST commit-status states are lowercase.
+                        let statuses = if self.gate_status.is_empty() {
+                            Vec::new()
+                        } else {
+                            vec![
+                                json!({"context": CONTEXT, "state": self.gate_status, "description": "fixture"}),
+                            ]
+                        };
+                        ok(&json!({"statuses": statuses}).to_string())
+                    }
                     ["gh", "api", _] => {
                         // The real-git world heads the PR at main, so the
                         // worktree add has a revision it can check out.
@@ -1527,9 +1875,19 @@ mod tests {
                         } else {
                             SHA.to_string()
                         };
+                        let auto_merge = if self.armed {
+                            json!({"merge_method": "squash"})
+                        } else {
+                            Value::Null
+                        };
                         ok(&json!([{"number": 7,
+                            "auto_merge": auto_merge,
                             "head": {"sha": head, "repo": {"full_name": "o/r"}}}])
                         .to_string())
+                    }
+                    ["gh", "pr", "merge", n, "--disable-auto"] => {
+                        self.disarms.borrow_mut().push(n.to_string());
+                        ok("{}")
                     }
                     _ => ok("mainsha\n"),
                 }
@@ -1547,11 +1905,15 @@ mod tests {
                 state_dir: state_dir(&self.history()),
                 graph: None,
             };
+            let room_v = self.room;
+            let room_fn = move |_: &Path, _: DateTime<Utc>| room_v;
             let deps = Deps {
                 run: &run,
+                slot_run: &run,
                 spawn: &spawn,
                 alive: &is_alive,
                 kill: &kill,
+                room: &room_fn,
                 now,
             };
             tick_with(&paths, &deps, true)
@@ -1645,6 +2007,21 @@ mod tests {
     }
 
     #[test]
+    fn a_covered_crate_head_builds_the_checkout_it_read_the_bank_from() {
+        let w = World::new_git("crates/x/a.rs\n");
+        w.with_baseline();
+        w.tick(true, Utc::now());
+        let spawns = w.spawns.borrow();
+        assert_eq!(spawns.len(), 1, "one head launch");
+        let slot = state_dir(&w.history()).join("ref-head");
+        let argv = spawns[0].join(" ");
+        assert!(
+            argv.contains(&format!("gate-build {} ", slot.display())),
+            "{argv}"
+        );
+    }
+
+    #[test]
     fn with_no_baseline_the_main_leg_runs_goldens_and_no_status_posts() {
         let w = World::new("skills/x/SKILL.md\n");
         w.tick(true, Utc::now());
@@ -1654,6 +2031,39 @@ mod tests {
         assert!(argv.contains("--tag golden --repeat 3"), "{argv}");
         assert!(argv.contains("--ref mainsha"), "{argv}");
         assert!(w.posts.borrow().is_empty());
+    }
+
+    /// The merge door's expectation probe: the tick's own precondition,
+    /// answered from the same state and the same covers map. A head the
+    /// daemon cannot judge (no baseline yet, no gate state at all) owes no
+    /// status, so the door never holds it.
+    #[test]
+    fn the_merge_door_expects_a_status_only_for_a_gated_head_with_a_seated_baseline() {
+        let w = World::new("skills/x/SKILL.md\n");
+        let gated = vec!["skills/x/SKILL.md".to_string()];
+        let ungated = vec!["cli/src/fno/whatever.py".to_string()];
+        // First install: no gate state at all reads no baseline -> no debt.
+        assert!(!head_owes_status(w.dir.path(), &w.history(), &gated));
+
+        // A seated baseline + a gated diff owes a status.
+        w.state(|s| s.worker.baseline = Some("base".into()));
+        assert!(head_owes_status(w.dir.path(), &w.history(), &gated));
+
+        // The same baseline + an ungated diff owes none.
+        assert!(!head_owes_status(w.dir.path(), &w.history(), &ungated));
+
+        // A covered prefix from the checkout's own bank owes one too (the
+        // ref slot is absent here, so the checkout bank is the map).
+        std::fs::write(
+            w.dir.path().join("evals/bank/c1.yaml"),
+            "id: c1\ntier: capability\nprompt: p\ngrade:\n  - kind: file-exists\n    path: x\ntags: [gate]\ncovers: [\"crates/fno-agents/src/pr_status/\"]\n",
+        )
+        .unwrap();
+        assert!(head_owes_status(
+            w.dir.path(),
+            &w.history(),
+            &["crates/fno-agents/src/pr_status/compose.rs".to_string()]
+        ));
     }
 
     #[test]
@@ -1708,19 +2118,6 @@ mod tests {
             state.last_note
         );
         assert!(state.worker.baseline.is_none());
-    }
-
-    #[test]
-    fn zai_peak_is_monday_to_friday_0600_to_1000_utc() {
-        let at = |s: &str| DateTime::parse_from_rfc3339(s).unwrap().with_timezone(&Utc);
-        assert!(zai_peak(at("2026-11-02T06:00:00Z")), "Monday 06:00 opens");
-        assert!(zai_peak(at("2026-11-06T09:59:00Z")), "Friday 09:59 holds");
-        assert!(!zai_peak(at("2026-11-02T10:00:00Z")), "10:00 closes");
-        assert!(!zai_peak(at("2026-11-02T05:59:00Z")), "before 06:00");
-        assert!(
-            !zai_peak(at("2026-11-07T07:00:00Z")),
-            "Saturday is off peak"
-        );
     }
 
     #[test]
@@ -1816,6 +2213,36 @@ mod tests {
         other.tick(true, Utc::now());
         assert!(other.posts.borrow().is_empty());
         assert!(other.spawns.borrow().is_empty());
+    }
+
+    #[test]
+    fn a_head_with_a_newer_check_kind_runs_the_rest_and_names_the_skip() {
+        let w = World::new("skills/x/SKILL.md\n");
+        w.with_baseline();
+        std::fs::write(
+            w.dir.path().join("evals/bank/r1.yaml"),
+            "id: r1\ntier: capability\nprompt: p\ngrade:\n  - kind: rubric\n    rubric: grade me\ntags: [gate]\n",
+        )
+        .unwrap();
+        w.tick(true, Utc::now());
+        let argv = w.spawns.borrow()[0].join(" ");
+        assert!(argv.contains("--task g1"), "{argv}");
+        assert!(!argv.contains("g1,r1"), "{argv}");
+        assert!(
+            w.posts
+                .borrow()
+                .iter()
+                .any(|p| p.contains("state=pending") && p.contains("skipped: r1.yaml")),
+            "{0:?}",
+            w.posts.borrow()
+        );
+        let cohort = format!("gate-head-{}", short(SHA));
+        w.rows(&cohort, "g1", [true, true, true]);
+        w.tick(false, Utc::now());
+        let post = w.posts.borrow().last().cloned().unwrap();
+        assert!(post.contains("state=success"), "{post}");
+        assert!(post.contains("0 regressed"), "{post}");
+        assert!(post.contains("skipped: r1.yaml"), "{post}");
     }
 
     #[test]
@@ -1957,5 +2384,423 @@ mod tests {
 
     fn dir_of(w: &World) -> PathBuf {
         state_dir(&w.history())
+    }
+
+    // ── the disarm sweep ─────────────────────────────────────────────────
+
+    /// An armed PR whose gate reads ungreen comes out of the queue: the
+    /// ruleset requires only stacked-base-guard, so the queue would merge
+    /// past the gate (FAILURE and PENDING alike).
+    #[test]
+    fn an_armed_pr_with_an_ungreen_gate_disarms() {
+        for (state, word) in [("failure", "red"), ("pending", "pending")] {
+            let mut w = World::new("docs/x.md");
+            w.with_baseline();
+            w.armed = true;
+            w.gate_status = state.into();
+            let note = w.tick(true, Utc::now());
+            assert_eq!(
+                w.disarms.borrow().as_slice(),
+                &["7".to_string()],
+                "{state}: {note}"
+            );
+            assert!(note.contains("disarmed pr 7"), "{state}: {note}");
+            assert!(note.contains(&format!("({word}")), "{state}: {note}");
+        }
+    }
+
+    /// A settled-green gate keeps its arm, and so does an ungated head
+    /// with no status at all: nothing to protect the queue from, and a
+    /// disarm would strand a mergeable PR for nothing.
+    #[test]
+    fn an_armed_pr_with_a_green_gate_or_an_ungated_head_stays_armed() {
+        let mut w = World::new("docs/x.md");
+        w.with_baseline();
+        w.armed = true;
+        w.gate_status = "success".into();
+        let note = w.tick(true, Utc::now());
+        assert!(w.disarms.borrow().is_empty(), "{note}");
+
+        // Absent context on the same ungated head: the missing gate is not
+        // this PR's fact.
+        let mut w = World::new("docs/x.md");
+        w.with_baseline();
+        w.armed = true;
+        let note = w.tick(true, Utc::now());
+        assert!(w.disarms.borrow().is_empty(), "{note}");
+    }
+
+    /// A gated head with no status pulls its armed PR out of the queue:
+    /// the daemon never reached the head, and the queue would not wait for
+    /// a status the ruleset does not require. An unarmed PR never enters
+    /// the sweep - the disarm only answers an arm the queue could act on.
+    #[test]
+    fn a_missing_gate_status_at_a_gated_head_disarms_and_an_unarmed_pr_is_never_touched() {
+        let mut w = World::new("evals/bank/g3.yaml");
+        w.with_baseline();
+        w.armed = true;
+        let note = w.tick(true, Utc::now());
+        assert_eq!(w.disarms.borrow().as_slice(), &["7".to_string()], "{note}");
+        assert!(note.contains("(missing"), "{note}");
+
+        let mut w = World::new("docs/x.md");
+        w.with_baseline();
+        w.gate_status = "failure".into();
+        let note = w.tick(true, Utc::now());
+        assert!(w.disarms.borrow().is_empty(), "{note}");
+    }
+
+    #[test]
+    fn a_bank_only_head_grades_its_changed_goldens_and_a_skills_head_keeps_the_tier() {
+        // The split the table below rides: the tier prefixes plus the bank
+        // make up the gated set, with the bank the only non-tier entry.
+        for p in TIER_PATHS {
+            assert!(GATED_PATHS.contains(&p), "{p} must stay gated");
+        }
+        assert_eq!(
+            GATED_PATHS
+                .iter()
+                .filter(|p| !TIER_PATHS.contains(p))
+                .count(),
+            1
+        );
+        // (changed files, the task list the launch must carry)
+        for (files, tasks) in [
+            (
+                "evals/bank/g1.yaml\nevals/fixtures/metrics/g1.yaml\n",
+                "--task g1 ",
+            ),
+            ("skills/x/SKILL.md\n", "--task g1,g5 "),
+        ] {
+            let w = World::new(files);
+            std::fs::write(
+                w.dir.path().join("evals/bank/g5.yaml"),
+                "id: g5\ntier: capability\nprompt: p\ngrade:\n  - kind: file-exists\n    path: x\ntags: [gate]\n",
+            )
+            .unwrap();
+            w.with_baseline();
+            w.tick(true, Utc::now());
+            let spawns = w.spawns.borrow();
+            assert_eq!(spawns.len(), 1, "{files}: one head launch");
+            let argv = spawns[0].join(" ");
+            assert!(argv.contains(tasks), "{files}: {argv}");
+            if tasks == "--task g1 " {
+                assert!(!argv.contains("g5"), "{files}: {argv}");
+            }
+        }
+    }
+
+    #[test]
+    fn ref_checkout_fetches_a_sha_the_repo_lacks_and_skips_it_when_present() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = dir.path().join("state");
+        std::fs::create_dir_all(&state).unwrap();
+        let fetches: RefCell<Vec<String>> = RefCell::default();
+        let present = RefCell::new(true);
+        let add_ok = RefCell::new(true);
+        let run = |args: &[&str], _: &Path| -> Option<Run> {
+            match args {
+                ["git", "cat-file", "-e", ..] => Some(Run {
+                    ok: *present.borrow(),
+                    code: None,
+                    stdout: String::new(),
+                    stderr: String::new(),
+                }),
+                ["git", "fetch", "--quiet", "origin", rs] => {
+                    fetches.borrow_mut().push(rs.to_string());
+                    ok("")
+                }
+                ["git", "worktree", "add", ..] => Some(Run {
+                    ok: *add_ok.borrow(),
+                    code: None,
+                    stdout: String::new(),
+                    stderr: "fatal: no".into(),
+                }),
+                _ => ok(""),
+            }
+        };
+        let spawn = |_: &[String], _: &Path, _: &Path| -> Result<u32, String> { Ok(1) };
+        let alive = |_: u32| true;
+        let kill = |_: u32| {};
+        let paths = Paths {
+            history: &dir.path().join("h.jsonl"),
+            fno_bin: "fno",
+            repo: dir.path(),
+            state_dir: state.clone(),
+            graph: None,
+        };
+        let d = Deps {
+            run: &run,
+            slot_run: &run,
+            spawn: &spawn,
+            alive: &alive,
+            kill: &kill,
+            room: &|_: &Path, _: DateTime<Utc>| None,
+            now: Utc::now(),
+        };
+        let slot_sha = "0123456789abcdef0123456789abcdef01234567";
+
+        // The repo already has the sha: no fetch runs.
+        let got = ref_checkout(&paths, &d, "head", slot_sha, Some("pull/7/head"));
+        assert!(got.is_some(), "present sha checks out");
+        assert!(fetches.borrow().is_empty(), "no fetch when present");
+
+        // The repo lacks the sha: the refspec fetch runs, then the add lands.
+        *present.borrow_mut() = false;
+        fetches.borrow_mut().clear();
+        let got = ref_checkout(&paths, &d, "head", slot_sha, Some("pull/7/head"));
+        assert!(got.is_some(), "fetched sha checks out");
+        assert_eq!(fetches.borrow().as_slice(), ["pull/7/head"]);
+
+        // No refspec: no fetch is attempted, and the add still runs.
+        fetches.borrow_mut().clear();
+        let got = ref_checkout(&paths, &d, "head", slot_sha, None);
+        assert!(got.is_some());
+        assert!(fetches.borrow().is_empty());
+
+        // A failed add leaves the cause in the ref-checkout log.
+        *add_ok.borrow_mut() = false;
+        let got = ref_checkout(&paths, &d, "head", slot_sha, Some("pull/7/head"));
+        assert!(got.is_none(), "a failed add reads as no checkout");
+        let log = std::fs::read_to_string(state.join(REF_LOG)).unwrap();
+        assert!(log.contains("worktree add head"), "{log}");
+        assert!(log.contains("fatal: no"), "{log}");
+    }
+
+    #[test]
+    fn a_leaked_add_lock_no_longer_wedges_the_slot_rebuild() {
+        // The wedge this heals: git holds an `initializing` lock on the
+        // worktree it builds and drops it when the add lands; an add killed
+        // midway leaves it, and a locked slot refuses `worktree remove
+        // --force`, so every later rebuild failed with "no checkout".
+        let w = World::new_git("skills/x/SKILL.md\ncrates/x/a.rs\n");
+        w.with_baseline();
+        w.tick(true, Utc::now());
+        let common = String::from_utf8_lossy(
+            &std::process::Command::new("git")
+                .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
+                .current_dir(w.dir.path())
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .trim()
+        .to_string();
+        let admin = Path::new(&common).join("worktrees").join("ref-head");
+        assert!(admin.join("gitdir").exists(), "slot admin entry exists");
+        std::fs::write(admin.join("locked"), "initializing").unwrap();
+
+        // Advance main: the next head sha forces a rebuild of the slot.
+        let git = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .args(args)
+                .current_dir(w.dir.path())
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "git {args:?} failed: {} {}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            );
+        };
+        git(&["checkout", "-q", "main"]);
+        std::fs::write(
+            w.dir.path().join("evals/bank/g6.yaml"),
+            "id: g6\ntier: capability\nprompt: p\ngrade:\n  - kind: file-exists\n    path: x\ntags: [gate]\n",
+        )
+        .unwrap();
+        git(&["add", "evals"]);
+        git(&["commit", "-q", "-m", "z"]);
+
+        w.tick(true, Utc::now());
+        assert_eq!(
+            w.adds.borrow().len(),
+            2,
+            "the rebuild ran: {:?}",
+            w.adds.borrow()
+        );
+        let spawns = w.spawns.borrow();
+        assert_eq!(spawns.len(), 2, "the head launched");
+        let posts = w.posts.borrow();
+        assert!(
+            posts.iter().all(|p| p.starts_with("state=pending")),
+            "no failure posted: {posts:?}"
+        );
+        assert!(!admin.join("locked").exists(), "the leaked lock is gone");
+        assert!(
+            !Path::new(&common)
+                .join("worktrees/ref-head/locked")
+                .exists(),
+            "the leaked lock did not come back"
+        );
+    }
+
+    fn usage_record(route: Option<&str>) -> crate::accounts::records::Record {
+        crate::accounts::records::Record {
+            id: "z1".into(),
+            name: "z".into(),
+            harness: "claude".into(),
+            auth: "managed".into(),
+            priority: 0,
+            route_provider_id: None,
+            model_name: None,
+            credentials_source: None,
+            env: None,
+            route: route.map(str::to_string),
+            reset_timezone: None,
+            window_minutes: None,
+            account_id: String::new(),
+            tags: vec![],
+            description: None,
+            config_dir: None,
+            pricing: None,
+            cost_cap_usd_per_session: None,
+            extra: Default::default(),
+        }
+    }
+
+    fn usage_row(windows: Value) -> crate::accounts::usage::Row {
+        crate::accounts::usage::Row {
+            entry: windows,
+            identity: None,
+        }
+    }
+
+    #[test]
+    fn zai_window_room_reads_every_zai_records_5h_window() {
+        let windows = |pct: Value| {
+            json!({"windows": [
+                {"label": "weekly", "used_pct": 10.0},
+                {"label": "5h", "used_pct": pct},
+            ]})
+        };
+        let zai = usage_record(Some("zai/glm-5.3-flash"));
+        let other = usage_record(Some("claude/sonnet-5"));
+        let threshold = 90.0;
+
+        // Room: the 5h window under the threshold. The weekly window and the
+        // non-zai record are ignored.
+        assert!(zai_window_room(
+            &[other.clone(), zai.clone()],
+            &[
+                usage_row(windows(json!(40.0))),
+                usage_row(windows(json!(40.0)))
+            ],
+            threshold
+        ));
+
+        // At the cap: no room.
+        assert!(!zai_window_room(
+            &[zai.clone()],
+            &[usage_row(windows(json!(90.0)))],
+            threshold
+        ));
+
+        // No 5h window at all: the probe cannot prove the lane runnable.
+        assert!(!zai_window_room(
+            &[zai.clone()],
+            &[usage_row(
+                json!({"windows": [{"label": "weekly", "used_pct": 10.0}]})
+            )],
+            threshold
+        ));
+
+        // An unreadable row is no room.
+        assert!(!zai_window_room(
+            &[zai.clone()],
+            &[usage_row(
+                json!({"state": "unknown", "reason": "probe-failed"})
+            )],
+            threshold
+        ));
+
+        // No zai record in the store: no proven room.
+        assert!(!zai_window_room(
+            &[other],
+            &[usage_row(windows(json!(10.0)))],
+            threshold
+        ));
+    }
+
+    #[test]
+    fn a_capped_zai_lane_falls_back_to_the_fixed_sonnet_lane() {
+        // The probe reads no room in both worlds (no account store), so the
+        // lane moves. The fallback is the fixed sonnet lane: never the first
+        // claude inventory row, which can be opus.
+        for (config, banned) in [
+            (
+                "[[routing.models]]\nname = \"zai-flash\"\naccount = \"zai\"\nroute = \"zai/glm-5.3-flash\"\n\n[[routing.models]]\nname = \"claude-opus\"\naccount = \"claude\"\nroute = \"claude/opus-5\"\n\n[[routing.models]]\nname = \"claude-sonnet\"\naccount = \"claude\"\nroute = \"claude/sonnet-5\"\n\n[agents.profiles.role]\nlanes = []\n",
+                "claude-opus",
+            ),
+            (
+                "[[routing.models]]\nname = \"zai-flash\"\naccount = \"zai\"\nroute = \"zai/glm-5.3-flash\"\n\n[agents.profiles.role]\nlanes = []\n",
+                "",
+            ),
+        ] {
+            let w = World::new("skills/x/SKILL.md\n");
+            World::config(w.dir.path(), config);
+            w.with_baseline();
+            w.tick(true, Utc::now());
+            let spawns = w.spawns.borrow();
+            assert_eq!(spawns.len(), 1, "the head launched on the fallback");
+            let argv = spawns[0].join(" ");
+            assert!(argv.contains("--lane claude-sonnet-5 "), "{argv}");
+            if !banned.is_empty() {
+                assert!(!argv.contains(banned), "{argv}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_head_task_with_no_baseline_rows_grades_green_and_no_scored_rows_stays_red() {
+        // Two shapes, two verdicts. 4494: the baseline cohort held no rows
+        // for the kept tasks (its own main run failed on the wedged slot),
+        // which folds as the unmeasured case verdict() passes. 4497: every
+        // head row rode a substituted lane, so lane evidence excluded all of
+        // them and nothing scored. A lane that scores nothing is no result:
+        // it stays red.
+        let g5 = "id: g5\ntier: capability\nprompt: p\ngrade:\n  - kind: file-exists\n    path: x\ntags: [gate]\n";
+
+        let w = World::new("evals/bank/g5.yaml\n");
+        std::fs::write(w.dir.path().join("evals/bank/g5.yaml"), g5).unwrap();
+        w.with_baseline();
+        w.tick(true, Utc::now());
+        assert_eq!(w.spawns.borrow().len(), 1, "one head launch");
+        w.rows("gate-head-abcdef123456", "g5", [true, true, true]);
+        w.tick(false, Utc::now());
+        let posts = w.posts.borrow();
+        let success = posts.iter().find(|p| p.starts_with("state=success"));
+        assert!(success.is_some(), "no baseline reads green: {posts:?}");
+        assert!(success.unwrap().contains("with no baseline"), "{posts:?}");
+        drop(posts);
+
+        // 4497's shape: the head rows exist but no row scores, while the
+        // baseline holds grades for the same task. Red, no result.
+        let w = World::new("evals/bank/g5.yaml\n");
+        std::fs::write(w.dir.path().join("evals/bank/g5.yaml"), g5).unwrap();
+        w.with_baseline();
+        w.rows("base", "g5", [true, true, true]);
+        w.tick(true, Utc::now());
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(w.history())
+            .unwrap();
+        for _ in 0..3 {
+            let row = json!({"task_id": "g5", "tier": "capability", "pass": true,
+                "status": "graded", "variant": "v1", "lane_status": "substituted",
+                "experiment_id": "gate-head-abcdef123456"});
+            writeln!(f, "{row}").unwrap();
+        }
+        drop(f);
+        w.tick(false, Utc::now());
+        let posts = w.posts.borrow();
+        let failure = posts.iter().find(|p| p.starts_with("state=failure"));
+        assert!(
+            failure.is_some(),
+            "a scoring-less lane stays red: {posts:?}"
+        );
+        assert!(failure.unwrap().contains("no result"), "{posts:?}");
+        assert!(failure.unwrap().contains("g5"), "{posts:?}");
     }
 }

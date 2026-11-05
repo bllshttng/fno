@@ -5,8 +5,11 @@
 //! fno-agents-daemon                    # start (foreground); lazy-exits when idle
 //! fno-agents-daemon --home <dir>       # name the home in argv; must agree with
 //!                                      # FNO_AGENTS_HOME or the daemon refuses
-//! fno-agents-daemon --once             # run recovery + serve until idle/SIGTERM
 //! ```
+//! Any other argv refuses (exit 2) before the runtime builds: the daemon
+//! takes no subcommands, so a caller that mis-resolved the daemon binary (a
+//! merge-gate hop that fell back to current_exe) fails loud instead
+//! of booting a resident daemon wearing the hop's argv.
 //! The client lazy-starts this detached on first need; running it directly is
 //! for debugging and for the Python wrapper's explicit `daemon` sub-mode.
 
@@ -26,6 +29,20 @@ fn main() {
     ) {
         fno_agents::version::print_version(fno_agents::json_output::requested(&args));
         return;
+    }
+
+    // Any argv the daemon does not own is a caller that resolved this binary
+    // by mistake (a merge-gate hop execed `fno-agents-daemon pr-worktree`;
+    // the old silent ignore booted a full resident daemon with that argv).
+    // Refuse before the runtime builds, with the usage beside the cause.
+    let (home_arg, unknown) = parse_daemon_args(&args);
+    if let Some(bad) = unknown {
+        eprintln!("usage: fno-agents-daemon [--home <dir>] | version [--json]");
+        eprintln!(
+            "fno-agents-daemon: unknown argument {bad:?}; the daemon takes no subcommands \
+             (client doors live in fno-agents) - refusing to start"
+        );
+        std::process::exit(2);
     }
 
     // Test harnesses may launch children with SIGTERM blocked. The daemon owns
@@ -70,7 +87,7 @@ fn main() {
     // DISAGREES with the env is a daemon about to serve a home nobody expects,
     // so refuse it loudly rather than silently prefer one. No --home keeps the
     // env-only behavior (a daemon started by hand for debugging).
-    if let Some(home_arg) = parse_home_arg(&args) {
+    if let Some(home_arg) = home_arg {
         let env_home = AgentsHome::from_env();
         if !fno_agents::paths::same_path(std::path::Path::new(&home_arg), env_home.root()) {
             eprintln!(
@@ -197,20 +214,26 @@ fn main() {
     }
 }
 
-/// The value of `--home <path>` (or `--home=<path>`) from the daemon's argv,
-/// or `None` when absent. Other argv is not ours to judge (the `version`
-/// subcommand is matched earlier; anything else is ignored as today).
-fn parse_home_arg(args: &[String]) -> Option<String> {
+/// One walk over the daemon's argv: the `--home` value when present, and the
+/// first argument the daemon does not own. `version` and its spellings are
+/// matched earlier and never reach here. A dangling `--home` stays legal
+/// (env-only start, as before). The flag and its value travel through the
+/// same walk, so the gate's accept set and the home extract cannot drift.
+fn parse_daemon_args(args: &[String]) -> (Option<String>, Option<&str>) {
+    let mut home = None;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         if a == "--home" {
-            return it.next().cloned();
+            home = it.next().cloned();
+            continue;
         }
         if let Some(v) = a.strip_prefix("--home=") {
-            return Some(v.to_string());
+            home = Some(v.to_string());
+            continue;
         }
+        return (home, Some(a));
     }
-    None
+    (home, None)
 }
 
 /// The dir the daemon runs in for life. A worktree gets reaped under a live

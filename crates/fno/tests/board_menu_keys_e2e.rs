@@ -46,6 +46,8 @@ fn board_menu_keys_reach_their_surfaces_while_the_board_is_docked() {
     h.wait_screen(15, |s| s.contains("HQ"));
 
     h.type_bytes(&[PREFIX, b'?']);
+    h.wait_screen(15, |s| s.contains("all keys"));
+    h.type_bytes(b"*");
     eprintln!("STAGE org global-keybinds");
     let screen = h.wait_screen(15, |s| s.contains("keybindings"));
     assert!(
@@ -60,6 +62,8 @@ fn board_menu_keys_reach_their_surfaces_while_the_board_is_docked() {
     h.wait_screen(15, |s| s.contains("node · PR"));
 
     h.type_bytes(&[PREFIX, b'?']);
+    h.wait_screen(15, |s| s.contains("all keys"));
+    h.type_bytes(b"*");
     eprintln!("STAGE agents global-keybinds");
     h.wait_screen(15, |s| s.contains("keybindings"));
     h.type_bytes(&[27]);
@@ -80,6 +84,8 @@ fn board_menu_keys_reach_their_surfaces_while_the_board_is_docked() {
     // leg 2: `^B ?` opens the GLOBAL keybinds menu, not the board's
     // own keys overlay (its `?` command, reachable with the bare key).
     h.type_bytes(&[PREFIX, b'?']);
+    h.wait_screen(15, |s| s.contains("all keys"));
+    h.type_bytes(b"*");
     eprintln!("STAGE leg2 keybinds-after-^B?");
     let screen = h.wait_screen(15, |s| s.contains("keybindings"));
     assert!(

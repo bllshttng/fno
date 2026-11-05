@@ -185,8 +185,8 @@ Then read what already moves on the same files. Run `fno backlog collisions prs 
 3. **Write** the plan.
 
    - **A design doc was supplied** (mutate-in-place, the common path): keep its
-     existing path unchanged - `mutate_doc.py` writes back to the same file
-     (`os.replace` onto the resolved path), so an already-node-bearing name is
+     existing path unchanged - `fno-agents plan-cli mutate` writes back to the same file
+     (an atomic rename onto the resolved path), so an already-node-bearing name is
      preserved as-is and the `-<node-id>` suffix is never dropped or duplicated
      into `…--.md` (US4). Do NOT rename a supplied doc.
    - **Creating fresh** (no design doc): write to the path printed by
@@ -213,7 +213,9 @@ Then read what already moves on the same files. Run `fno backlog collisions prs 
    runtime surface inference (overridable via `FNO_EXECUTOR_OVERRIDE`).
 
    **Enrich the Execution Strategy before it becomes executable.**
-   Run `mutate_doc.py` with `--draft`; it produces the deterministic wave/task skeleton while keeping a design-status document in `design`.
+
+   Run `fno-agents plan-cli mutate "$PLAN_PATH" --draft`. It produces the deterministic wave/task skeleton and keeps a design-status document in `design`.
+
    On the full-context main thread, replace every placeholder and populate each task's `surface`, concrete `verify` command, and `acceptance` list from the design and inspected codebase.
 
    **Then ask the join posture.** The trigger is every plan that carries an `## Execution Strategy`. One question, one key: `join: manual | auto   # default manual`.
@@ -224,12 +226,11 @@ Then read what already moves on the same files. Run `fno backlog collisions prs 
 
    Full body: [references/blueprint-gates.md](references/blueprint-gates.md#join-posture-step-3-every-plan-carrying-an-execution-strategy).
 
-   Then validate the exact saved file before collision checking or intake. `mutate_doc.py` runs through the same interpreter ladder `validate-plan.sh` uses (`FNO_PYTHON`, then the source checkout's `cli/.venv`): a bare `python3` dies with `ModuleNotFoundError: No module named 'pydantic'` right after the validator prints PASS on machines whose system python lacks it (reproduced 2026-09-11). Resolve the interpreter once, then chain:
+   Then validate the exact saved file before collision checking or intake:
 
    ```bash
-   FINALIZE_PY="${FNO_PYTHON:-$( [[ -x "$(dirname "$SKILL_DIR")/../cli/.venv/bin/python" ]] && echo "$(dirname "$SKILL_DIR")/../cli/.venv/bin/python" || echo python3 )}"
    bash "${SKILL_DIR}/scripts/validate-plan.sh" "$PLAN_PATH" \
-     && "$FINALIZE_PY" "${SKILL_DIR}/scripts/mutate_doc.py" "$PLAN_PATH" --finalize
+     && fno-agents plan-cli mutate "$PLAN_PATH" --finalize
    fno doctor observer judge --plan "$PLAN_PATH" --node "${CLAIMS_ID:-}" || true
    ```
 
@@ -314,69 +315,18 @@ Then read what already moves on the same files. Run `fno backlog collisions prs 
    NODE_READBACK="$(mktemp)"
    test -s "${CLOSE_RECEIPT:-}" || { echo "Blueprint close refused: no close receipt." >&2; exit 2; }
    fno backlog get "$NODE_ID" >"$NODE_READBACK"
-   python3 - "$CLOSE_RECEIPT" "$NODE_READBACK" "$PLAN_PATH" <<'PY'
-   import json
-   import re
-   import sys
-
-   receipt = json.load(open(sys.argv[1]))
-   node = json.load(open(sys.argv[2]))
-   plan_path = sys.argv[3]
-   entry = next(
-       (
-           row for row in node.get("sessions", [])
-           if row.get("phase") == "blueprint"
-           and row.get("harness") == receipt.get("harness")
-           and row.get("session_id") == receipt.get("session_id")
-           and row.get("ended_at")
-       ),
-       None,
-   )
-   if entry is None:
-       print("Blueprint close refused: exact blueprint session entry was not read back.", file=sys.stderr)
-       raise SystemExit(2)
-
-   # The close readback is the one place that sees both the doc and the node
-   # after the projection ran: every blocker the plan declares must have
-   # landed on the adopted node's blocked_by. Intake warns and skips (a bulk
-   # intake of historical plans must not fail on a sibling that was never
-   # filed); a close refuses instead, naming the id and the repair command.
-   declared = []
-   with open(plan_path, encoding="utf-8") as f:
-       lines = f.read().splitlines()
-   if lines and lines[0].strip() == "---":
-       in_blockers = False
-       for line in lines[1:]:
-           if line.strip() == "---":
-               break
-           m = re.match(r"^blocked_by:\s*(.*)$", line)
-           if m:
-               tail = m.group(1).strip()
-               if tail.startswith("[") and tail.endswith("]"):
-                   declared += [v.strip().strip("'\"") for v in tail[1:-1].split(",") if v.strip()]
-                   in_blockers = False
-               elif tail:
-                   declared.append(tail.strip("'\""))
-                   in_blockers = False
-               else:
-                   in_blockers = True
-           elif in_blockers and re.match(r"^\s*-\s+\S", line):
-               declared.append(line.split("-", 1)[1].strip().strip("'\""))
-           elif line.strip() and not line.startswith((" ", "\t")):
-               in_blockers = False
-
-   missing = [bid for bid in declared if bid not in (node.get("blocked_by") or [])]
-   if missing:
-       print(
-           "Blueprint close refused: the plan declares blocker(s) the adopted "
-           f"node does not carry: {', '.join(missing)}. Repair with "
-           f"`fno backlog update {node.get('id')} blocked_by+=<id>` (or fix "
-           "the plan's blocked_by), then re-run the close.",
-           file=sys.stderr,
-       )
-       raise SystemExit(2)
-   print("blueprint close readback: matched")
-   PY
+   # The exact blueprint session entry the close wrote: same harness, same full session id, ended.
+   jq -e --slurpfile r "$CLOSE_RECEIPT" '[.sessions[]? | select(.phase == "blueprint" and .harness == $r[0].harness and .session_id == $r[0].session_id and .ended_at)] | length > 0' "$NODE_READBACK" >/dev/null \
+     || { echo "Blueprint close refused: exact blueprint session entry was not read back." >&2; exit 2; }
+   # The close readback is the one place that sees both the doc and the node after the projection ran.
+   # Every blocker the plan declares must have landed on the adopted node's blocked_by.
+   # Intake warns and skips; a close refuses, naming the id and the repair command.
+   MISSING="$(fno do plan parse "$PLAN_PATH" | jq -r --slurpfile n "$NODE_READBACK" '(.frontmatter.blocked_by // []) | (if type == "array" then . else [.] end) | map(tostring) - ($n[0].blocked_by // []) | join(", ")')"
+   if [ -n "$MISSING" ]; then
+     echo "Blueprint close refused: the plan declares blocker(s) the adopted node does not carry: $MISSING. Repair with: fno backlog update $NODE_ID blocked_by+=<id> (or fix the plan's blocked_by), then re-run the close." >&2
+     exit 2
+   fi
+   echo "blueprint close readback: matched"
    ```
 
    Plan binding is artifact-only and never claims that the Blueprint phase completed.
@@ -552,11 +502,11 @@ Modifiers are composable in any order: `/blueprint quick greenfield rewrite <doc
 
 ### Script invocation
 
-The mutation is implemented in `skills/blueprint/scripts/mutate_doc.py`.
+The mutation is implemented in `crates/fno-agents/src/plan_doc/mutate.rs`.
 Arguments mirror the modifiers above:
 
 ```bash
-python3 skills/blueprint/scripts/mutate_doc.py <doc-path> \
+fno-agents plan-cli mutate <doc-path> \
   [--mode greenfield|brownfield|auto] \
   [--rewrite] \
   [--draft | --finalize] \
@@ -568,7 +518,7 @@ python3 skills/blueprint/scripts/mutate_doc.py <doc-path> \
 Exit codes:
 - `0` success
 - `1` doc already at status:ready without --rewrite; or the argument is not a path or names a missing file (remedy: `fno do plan path`)
-- `2` section ownership violation
+- `2` section ownership violation, or a bad argument (the usage line names it)
 - `3` frontmatter status missing / invalid
 
 ### Section ownership

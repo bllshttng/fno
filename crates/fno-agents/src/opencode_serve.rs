@@ -418,6 +418,7 @@ impl crate::harness_daemon::HarnessDaemonAdapter for OpenCodeDaemonAdapter<'_> {
         // detach is real (setsid + no wait); dropping the Rust handle only stops
         // reaping, which is the point.
         std::mem::forget(child);
+        crate::orphan_reap::release_child(pid);
         let pid_start = crate::daemon::process_start_time(pid);
 
         let deadline = std::time::Instant::now() + SERVE_BOOT_BUDGET;
@@ -544,6 +545,7 @@ fn spawn_attach_writer(
         .map(|child| {
             let pid = child.id();
             std::mem::forget(child);
+            crate::orphan_reap::release_child(pid);
             pid
         })
         .map_err(|e| e.to_string())

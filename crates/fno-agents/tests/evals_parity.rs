@@ -1,12 +1,13 @@
 //! The evals port's characterization: the native dispatch's bytes ARE the
-//! deleted Python leg's contract (`fno.evals.cli`), frozen in the goldens
-//! under `tests/golden/evals/`. The capture script
+//! contract the deleted Python forwarding leaf (`fno.evals.cli`) transported,
+//! frozen in the goldens under `tests/golden/evals/`. The capture script
 //! (`tests/fixtures/evals/capture_golden.sh`) re-derives every fixture and
-//! freezes fresh outputs through the forwarding leaf; this test asserts the
-//! leaf + door still answer the frozen bytes.
+//! freezes fresh outputs through the fno-agents binary itself; this test
+//! asserts the binary still answers the frozen bytes.
 //!
 //! parity-stage: characterization
-//! parity-oracle: fno.evals.cli
+//! parity-oracle: the pre-port golden bytes (the leaf inserted no flags, so
+//! the frozen bytes are the dispatch's own)
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -27,8 +28,9 @@ fn read_file(path: &Path) -> String {
     std::fs::read_to_string(path).unwrap_or_default()
 }
 
-/// Re-derive every fixture through the capture script and assert the leaf
-/// answers the frozen bytes: exit codes, stdout, stderr - all 28 cases.
+/// Re-derive every fixture through the capture script and assert the
+/// dispatch answers the frozen bytes: exit codes, stdout, stderr - all 28
+/// cases.
 #[test]
 fn the_leaf_answers_the_frozen_python_goldens() {
     // crates/fno-agents -> crates -> repo root

@@ -290,6 +290,8 @@ pub(crate) struct MessagesBoard {
     pub(super) reply: Option<super::messages_reply::ReplyState>,
     pub(crate) gen: u64,
     pub(crate) inflight: bool,
+    /// The `?` footer grid over the bottom rows.
+    pub(crate) keys_footer: bool,
     /// The store fingerprint at the last kick: a changed fingerprint is the
     /// only reason to re-read (item 1).
     pub(crate) last_fingerprint: Option<(usize, u64, u64)>,
@@ -319,6 +321,7 @@ impl MessagesBoard {
             reply: None,
             gen,
             inflight: false,
+            keys_footer: false,
             last_fingerprint: None,
             last_poll: None,
             esc: Vec::new(),
@@ -1204,6 +1207,11 @@ pub(crate) fn paint(
     // work, only the hint shortens.
     let help = "h/l or \u{2190}/\u{2192} columns \u{b7} j/k move \u{b7} enter open \u{b7} esc back \u{b7} a/b filter \u{b7} s sort \u{b7} d details \u{b7} r retry \u{b7} m id \u{b7} y copy \u{b7} q close";
     let help: String = help.chars().take(width.saturating_sub(1)).collect();
+    if b.keys_footer {
+        let grid = super::key_grid::grid_rows(super::key_grid::KeyView::Messages, width);
+        super::key_grid::paint_bottom(view, cells, rows, cols, width, &grid);
+        return;
+    }
     for (i, ch) in help.chars().enumerate() {
         if let Some(cell) = cells.get_mut((height - 1) * cols + i) {
             *cell = Cell {

@@ -728,6 +728,16 @@
      }
     },
     {
+     "name": "questions",
+     "default": {
+      "judge": {
+       "batch": 10,
+       "enabled": false,
+       "model": "sonnet"
+      }
+     }
+    },
+    {
      "name": "schema_version",
      "default": 1
     }
@@ -1038,7 +1048,8 @@
      "default": {
       "enabled": false,
       "host": "https://us.i.posthog.com",
-      "token_env": "FNO_POSTHOG_PROJECT_TOKEN"
+      "token_env": "FNO_POSTHOG_PROJECT_TOKEN",
+      "token_file": "~/.fno/secrets/posthog-project-token"
      }
     }
    ]
@@ -2396,6 +2407,10 @@
     {
      "name": "token_env",
      "default": "FNO_POSTHOG_PROJECT_TOKEN"
+    },
+    {
+     "name": "token_file",
+     "default": "~/.fno/secrets/posthog-project-token"
     }
    ]
   },
@@ -3043,6 +3058,36 @@
      "default": "~/.fno/secrets/github-app.pem"
     }
    ]
+  },
+  "JudgeBlock": {
+   "extra": "ignore",
+   "fields": [
+    {
+     "name": "batch",
+     "default": 10
+    },
+    {
+     "name": "enabled",
+     "default": false
+    },
+    {
+     "name": "model",
+     "default": "sonnet"
+    }
+   ]
+  },
+  "QuestionsBlock": {
+   "extra": "ignore",
+   "fields": [
+    {
+     "name": "judge",
+     "default": {
+      "batch": 10,
+      "enabled": false,
+      "model": "sonnet"
+     }
+    }
+   ]
   }
  },
  "field_meta": [
@@ -3119,6 +3164,7 @@
   "telemetry.eval_events.enabled",
   "telemetry.eval_events.host",
   "telemetry.eval_events.token_env",
+  "telemetry.eval_events.token_file",
   "attention.enabled",
   "attention.sinks",
   "research.output_dir",
@@ -3393,6 +3439,9 @@
   "accounts.failover",
   "github.app_id",
   "github.app_installation_id",
-  "github.app_key_path"
+  "github.app_key_path",
+  "questions.judge.batch",
+  "questions.judge.enabled",
+  "questions.judge.model"
  ]
 }

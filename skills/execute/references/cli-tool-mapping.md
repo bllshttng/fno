@@ -34,9 +34,6 @@ When this skill references Claude Code tools, use the equivalent on your platfor
 | Action | Claude Code | Gemini CLI | Codex CLI |
 |--------|------------|------------|-----------|
 | Backlog task management | `fno backlog ...` | `fno backlog ...` | `fno backlog ...` |
-| Discovery brief generation | `python3 scripts/discovery-brief.py ...` | `python3 scripts/discovery-brief.py ...` | `python3 scripts/discovery-brief.py ...` |
-| Roadmap validation | `bash scripts/validate-roadmap.sh` | `bash scripts/validate-roadmap.sh` | `bash scripts/validate-roadmap.sh` |
-| Scope coordination | `python3 scripts/scope-coordinator.py ...` (when present) | `python3 scripts/scope-coordinator.py ...` (when present) | `python3 scripts/scope-coordinator.py ...` (when present) |
 
 ## Session Loop (Stop Hook)
 

@@ -89,6 +89,11 @@ fn entry(
             Some("fno backlog reconcile --json"),
             Some(OPERATOR),
         ),
+        "child_reaped" => (
+            "another reaper in this process collected the child's exit before the arm waited it; the next tick retries the run",
+            None,
+            Some(AUTO),
+        ),
         "select_unmeasured" => (
             "the next-node read did not answer inside auto_continue.select_timeout_s; the heal lane retries it",
             None,
@@ -352,8 +357,6 @@ fn classify(row: &mut ArmStatus, facts: &RepairFacts) {
         row.failing = true;
         row.failing_for_s = Some(held_for_s);
         ("dead_holder".to_string(), command)
-    } else if facts.install_off_main && on_tier {
-        ("stale_build".to_string(), None)
     } else if let Some(cause) = row.cause.clone() {
         // `explain` already named the cause and its hint: add only the repair.
         let (hint, command, heal) = entry(&cause, sched.as_deref());
@@ -392,6 +395,13 @@ fn classify(row: &mut ArmStatus, facts: &RepairFacts) {
             "cwd_not_checkout".to_string(),
             Some(cwd_not_checkout_repair(&detail)),
         )
+    } else if detail.contains("No child processes") {
+        // The arm's own measured error outranks the pin guess below: a linked-
+        // worktree pin once turned this real ECHILD into "stale_build" and hid
+        // the daemon's waitpid(-1) drain as the thief.
+        ("child_reaped".to_string(), None)
+    } else if facts.install_off_main && on_tier {
+        ("stale_build".to_string(), None)
     } else {
         ("unclassified".to_string(), None)
     };
@@ -729,6 +739,38 @@ mod tests {
         );
         assert!(!r.line.contains("heal=auto"), "{}", r.line);
         assert!(r.heal.is_none(), "{}", r.line);
+    }
+
+    // The incident this module encodes: the arm's own error detail names
+    // the cause, and the linked-worktree pin never shadows it again.
+    #[test]
+    fn the_arms_own_error_detail_outranks_the_install_pin() {
+        let mut r = row("question_judge", SCHED_LAUNCHD);
+        r.failing = true;
+        r.detail = Some("No child processes (os error 10)".to_string());
+        let facts = RepairFacts {
+            install_off_main: true,
+            dead_holds: Vec::new(),
+            pid_dead: |_| false,
+        };
+        classify(&mut r, &facts);
+        assert_eq!(r.cause.as_deref(), Some("child_reaped"));
+        assert!(r.line.contains("cause=child_reaped"), "{}", r.line);
+    }
+
+    // The fallback keeps its old seat: a silent failing row on an off-main
+    // pin still reads stale_build, which feeds the 6h install heal.
+    #[test]
+    fn a_silent_failing_row_on_an_off_main_pin_still_reads_stale_build() {
+        let mut r = row("lead_wake", SCHED_LAUNCHD);
+        r.failing = true;
+        let facts = RepairFacts {
+            install_off_main: true,
+            dead_holds: Vec::new(),
+            pid_dead: |_| false,
+        };
+        classify(&mut r, &facts);
+        assert_eq!(r.cause.as_deref(), Some("stale_build"));
     }
 
     fn write_claim(root: &Path, key: &str, holder: &str, pid: i32) {

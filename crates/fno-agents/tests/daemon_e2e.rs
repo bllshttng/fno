@@ -2162,6 +2162,67 @@ async fn registry_startup_refuses_a_divergent_nonempty_registry() {
     std::fs::remove_dir_all(home.root()).ok();
 }
 
+/// The argv-gate half of the merge-gate hop repair: a hop that mis-resolved
+/// the daemon binary fires `fno-agents-daemon pr-worktree` with the payload
+/// on stdin. The gate must refuse fast, name the argv, and publish no serving
+/// socket - the old silent ignore booted a full resident daemon that won a
+/// freed singleton and served as the control plane under misleading argv.
+#[tokio::test]
+async fn daemon_refuses_merge_gate_hop_argv_instead_of_serving() {
+    let home = short_home();
+    home.ensure_root().unwrap();
+
+    let mut child = Command::new(DAEMON_BIN)
+        .arg("pr-worktree")
+        .env("FNO_AGENTS_HOME", home.root())
+        .env("HOME", home.root())
+        .envs(fno_agents::test_run::self_owner_env())
+        .env("FNO_AGENTS_WORKER_BIN", WORKER_BIN)
+        .env("FNO_AGENTS_IDLE_EXIT_SECS", "3600")
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("daemon spawns");
+
+    // Bounded wait: the refusal happens before the runtime builds, so the
+    // process dies in well under a second. A daemon that serves instead (the
+    // bug this test replaced) would hang until the idle exit, and the
+    // deadline turns that into a failure here rather than a stuck test.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let status = loop {
+        match child.try_wait().expect("daemon is waitable") {
+            Some(status) => break status,
+            None if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(25)),
+            None => {
+                unsafe {
+                    libc::kill(child.id() as libc::pid_t, libc::SIGKILL);
+                }
+                let _ = child.wait();
+                panic!("daemon served merge-gate hop argv instead of refusing it");
+            }
+        }
+    };
+    assert_eq!(status.code(), Some(2), "the argv gate exits 2: {status}");
+    assert!(
+        !home.supervisor_sock().exists(),
+        "no serving socket may be published under hop argv"
+    );
+    let mut stderr_buf = String::new();
+    if let Some(mut s) = child.stderr.take() {
+        use std::io::Read;
+        let _ = s.read_to_string(&mut stderr_buf);
+    }
+    let stderr = stderr_buf;
+    assert!(
+        stderr.contains("unknown argument"),
+        "stderr names the unknown argv: {stderr}"
+    );
+    assert!(
+        stderr.contains("pr-worktree"),
+        "stderr echoes the offending argv: {stderr}"
+    );
+    std::fs::remove_dir_all(home.root()).ok();
+}
+
 /// AC6-ERR + AC9-CON: with the daemon up and the registry THEN breaking, list
 /// and list --all must exit nonzero with `registry read failed` and must not
 /// print a successful payload that puts `count: 0` beside a positive

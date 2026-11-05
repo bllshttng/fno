@@ -62,9 +62,9 @@ const PREFLIGHT_TIMEOUT: Duration = Duration::from_secs(3600);
 /// refuses to rebase.
 const PROTECTED: [&str; 4] = ["main", "master", "develop", "dev"];
 
-/// The hook's own debounce window (`hooks/git-protection.py`
-/// PUSH_DEBOUNCE_SECONDS). One threshold, two enforcers.
-const PUSH_DEBOUNCE_SECS: u64 = 120;
+/// The push debounce window. One threshold, two enforcers: this command
+/// and the git-protection hook (`hook/git_protection/git_gate.rs`).
+pub(crate) const PUSH_DEBOUNCE_SECS: u64 = 120;
 
 // ── shared push layer (moved here from heal.rs) ─────────────────────────────
 
@@ -890,7 +890,15 @@ pub(crate) fn in_flight(ctx: &PushCtx, branch: &str, head: &str) -> Result<Optio
                 "pass" | "fail" | "skipping" | "cancel"
             )
         })
+        // A push cancels only GitHub Actions runs. A pending row with no
+        // Actions link (a local run that posts a commit status, such as
+        // evals/gate re-queued under load) is never cancelled by a push,
+        // so it never holds one.
+        .filter(|row| run_id(row.get("link").and_then(|v| v.as_str()).unwrap_or("")).is_some())
         .collect();
+    if pending.is_empty() {
+        return Ok(None);
+    }
     let first = pending.first().copied().cloned().unwrap_or(Value::Null);
     let check = first
         .get("name")
@@ -1018,10 +1026,9 @@ fn parse_command_args(argv: &[String]) -> Result<CommandArgs, String> {
         gh_bin: "gh".to_string(),
         fno_bin: "fno".to_string(),
         cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
-        // The hook's own stamp dir (git_protection_impl.py
-        // _push_stamp_path resolves $FNO_HOME/push-stamps through the state
-        // door, falling back to that legacy spelling on a door refusal).
-        // Rooting this at AgentsHome would split the clock: the command writes
+        // The hook's own stamp dir: the git-protection hook reads the same
+        // `default_stamps_dir`. Rooting this at AgentsHome would split the
+        // clock: the command writes
         // stamps the hook never reads, and the registration-window guard
         // never fires.
         stamps_dir: default_stamps_dir(),
@@ -1082,12 +1089,10 @@ fn unknown_flag(other: &str) -> String {
     format!("unknown flag: {other}")
 }
 
-/// The state-root `push-stamps` folder under the hook's own root chain
-/// (git_protection_impl.py: `FNO_HOME = env FNO_HOME or ~/.fno`), answered
-/// by the layout table so a fold retargets this side with the hook's door
-/// call in the same release. The hook reads the stamps this command writes,
-/// so both sides must resolve the dir the same way or the registration
-/// window never fires.
+/// The state-root `push-stamps` folder under `${FNO_HOME:-~/.fno}`,
+/// answered by the layout table. The git-protection hook reads the stamps
+/// this command writes through this same function, so the registration
+/// window has one clock.
 pub(crate) fn default_stamps_dir() -> PathBuf {
     let root = match std::env::var_os("FNO_HOME").filter(|v| !v.is_empty()) {
         Some(h) => PathBuf::from(h),
@@ -1899,6 +1904,10 @@ for a in "$@"; do case "$a" in
       echo "gh: status read failed" >&2
       exit 1
     fi
+    if [ -f "$D/local-pending" ]; then
+      echo '{"statuses":[{"context":"evals/gate","state":"pending","target_url":"","created_at":"2026-11-04T10:00:00Z","updated_at":"2026-11-04T10:00:00Z"}]}'
+      exit 0
+    fi
     echo '{"statuses":[]}'
     exit 0 ;;
   *actions/runs?head_sha=*)
@@ -1958,6 +1967,32 @@ exit 1
             crate::pr_status::wait::cancel_in_flight(gh.to_str().unwrap(), dir.path(), 9, "abc123"),
             None
         );
+    }
+
+    /// A local run that posts a pending commit status has no Actions job a
+    /// push could cancel, so it never reads as in flight. An Actions run on
+    /// the same head still does.
+    #[test]
+    fn a_pending_status_with_no_actions_job_is_not_in_flight() {
+        let dir = tempfile::tempdir().unwrap();
+        let gh = stub_gh(dir.path());
+        let ctx = PushCtx {
+            git_bin: "git".to_string(),
+            gh_bin: gh.to_string_lossy().into_owned(),
+            fno_bin: "fno".to_string(),
+            cwd: dir.path().to_path_buf(),
+            stamps_dir: dir.path().to_path_buf(),
+            force: false,
+            lease: None,
+            remote_branch: None,
+        };
+        std::fs::write(dir.path().join("local-pending"), b"").unwrap();
+        assert!(in_flight(&ctx, "feature/x", "abc123").unwrap().is_none());
+        std::fs::write(dir.path().join("new-run"), b"").unwrap();
+        let flight = in_flight(&ctx, "feature/x", "abc123")
+            .unwrap()
+            .expect("an Actions run is in flight");
+        assert_eq!(flight.job.as_deref(), Some("2"));
     }
 
     /// A work repo off a pushed bare origin: base commit on main carrying

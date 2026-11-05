@@ -22,7 +22,7 @@ pub(crate) fn qos_wrap_for(ctx: &PaneContext, argv: Vec<String>) -> Vec<String> 
     crate::spawn_gate::qos_wrap(&ctx.cwd, argv)
 }
 
-/// `AMBIENT_IDENTITY_ENV` (`cli/src/fno/harness_identity.py:191`): the names
+/// `identity_markers` (`crates/fno-agents/src/ambient_vocab.toml`): the names
 /// a spawned child never inherits. Each harness re-mints its own identity at
 /// startup, so the strip is lossless; an inherited marker is how a codex
 /// worker spawned from a claude parent resolves as the wrong harness for
@@ -235,7 +235,7 @@ pub fn seed_provenance_env(seed: &str) -> Vec<(String, String)> {
     env
 }
 
-/// `harness_identity.canonical_handle` (harness_identity.py:467): the
+/// `canonical_handle` (crates/fno-agents/src/identity.rs): the
 /// mailbox address is the first eight characters of the session id.
 fn canonical_handle(session_id: &str) -> String {
     session_id.chars().take(8).collect()

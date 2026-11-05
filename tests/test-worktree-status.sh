@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Regression check for scripts/lib/worktree-status.py's registry cross-reference.
+# Regression check for the worktree-status registry cross-reference.
 # Plain assert-based bash: build a scratch repo with two worktrees, point the
 # helper at a synthetic registry.json marking one "live" and one "exited", and
 # assert the correct row is labeled in both text and --json output.
@@ -33,7 +33,7 @@ JSON
 
 export WORKTREE_STATUS_REGISTRY="$REGISTRY"
 
-TEXT_OUT=$(python3 "$LIB_DIR/worktree-status.py" --repo "$REPO")
+TEXT_OUT=$(cd "$REPO" && bash "$LIB_DIR/worktree-lifecycle.sh" status)
 echo "$TEXT_OUT" | grep -q "live-branch.*live:test-live" \
     || { echo "FAIL: live worktree not labeled live:test-live in text output" >&2; echo "$TEXT_OUT" >&2; exit 1; }
 # A session mid-turn sits in "busy", not "live" - the common case, not the
@@ -43,18 +43,13 @@ echo "$TEXT_OUT" | grep -q "busy-branch.*live:test-busy" \
 echo "$TEXT_OUT" | grep -q "exited-branch.*exited:test-exited" \
     || { echo "FAIL: exited worktree not labeled exited:test-exited in text output" >&2; echo "$TEXT_OUT" >&2; exit 1; }
 
-JSON_OUT=$(python3 "$LIB_DIR/worktree-status.py" --repo "$REPO" --json)
-python3 - "$JSON_OUT" <<'PY'
-import json, sys
-data = json.loads(sys.argv[1])
-by_branch = {r["branch"]: r for r in data["worktrees"]}
-assert by_branch["live-branch"]["target"] == "live:test-live", by_branch["live-branch"]
-assert by_branch["busy-branch"]["target"] == "live:test-busy", by_branch["busy-branch"]
-assert by_branch["exited-branch"]["target"] == "exited:test-exited", by_branch["exited-branch"]
-s = data["summary"]
-assert s["live"] == 2, s
-assert s["dead"] == 1, s
-assert s["total"] == s["live"] + s["dead"] + s["no_session"], s
-PY
+JSON_OUT=$(cd "$REPO" && bash "$LIB_DIR/worktree-lifecycle.sh" status --json)
+printf '%s' "$JSON_OUT" | jq -e '
+    (.worktrees | map({(.branch): .target}) | add) as $t
+    | $t["live-branch"] == "live:test-live" and $t["busy-branch"] == "live:test-busy"
+      and $t["exited-branch"] == "exited:test-exited"
+      and .summary.live == 2 and .summary.dead == 1
+      and .summary.total == .summary.live + .summary.dead + .summary.no_session' >/dev/null \
+    || { echo "FAIL: --json rows or summary wrong" >&2; echo "$JSON_OUT" >&2; exit 1; }
 
-echo "PASS: worktree-status.py classifies live vs exited correctly"
+echo "PASS: worktree status classifies live vs exited correctly"

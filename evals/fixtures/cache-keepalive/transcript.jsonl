@@ -1,0 +1,5 @@
+{"type":"user","message":{"content":"hi"}}
+{"type":"assistant","message":{"model":"claude-old","usage":{"input_tokens":10,"cache_read_input_tokens":500,"cache_creation_input_tokens":20}}}
+not json at all
+{"type":"assistant","message":{"model":"claude-new","usage":{"input_tokens":7,"cache_read_input_tokens":900,"cache_creation_input_tokens":3}}}
+{"type":"assistant","message":{"model":"claude-cold","usage":{"input_tokens":40,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}

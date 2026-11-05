@@ -2080,6 +2080,7 @@ fn arm_auto_merge(cwd: &Path, approved: bool, source: Option<&str>) -> (bool, Op
             supplied_dispatch_hold: None,
             supplied_review_hold: None,
             supplied_facts: None,
+            supplied_evals_gate: None,
         },
     );
     match outcome {

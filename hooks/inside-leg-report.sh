@@ -17,14 +17,10 @@ case "$STATE" in
   *) STATE="working" ;;
 esac
 INPUT="$(cat 2>/dev/null)" || INPUT=""
-EVENT="$(printf '%s' "$INPUT" | /usr/bin/python3 -c '
-import sys, json
-try:
-    d = json.load(sys.stdin)
-    print((d.get("hook_event_name") or "") if isinstance(d, dict) else "")
-except Exception:
-    print("")
-' 2>/dev/null)"
+# jq replaces the old /usr/bin/python3 field read. A missing jq or a payload
+# that fails to parse prints nothing, and EVENT falls to the default below,
+# the same fail-open the python-less machines already took.
+EVENT="$(printf '%s' "$INPUT" | jq -r 'if type == "object" then (.hook_event_name // "") else "" end' 2>/dev/null)"
 case "$EVENT" in
   Notification|PreToolUse|UserPromptSubmit|Stop|PostModelSwitch) ;;
   *) EVENT="UserPromptSubmit" ;;

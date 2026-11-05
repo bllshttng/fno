@@ -27,7 +27,7 @@ pub const DISPATCH_TTL_MS: u64 = 180_000;
 
 pub const TRUTHY: [&str; 4] = ["1", "true", "yes", "on"];
 
-/// Decision-event kinds (registered in cli/src/fno/events/schema.yaml).
+/// Decision-event kinds (registered in src/event_store/schema.yaml).
 pub const EVENT_DISPATCHED: &str = "advance_dispatched";
 pub const EVENT_SKIPPED: &str = "advance_skipped";
 pub const EVENT_FAILED: &str = "advance_failed";

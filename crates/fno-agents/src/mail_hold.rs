@@ -75,7 +75,7 @@ fn answer_minutes() -> i64 {
 const CONVERSATION_SOURCE: &str = "conversation";
 
 /// The full normalized session id: the collision-free clock key. Mirrors
-/// Python's `session_identity_key` (harness_identity.py), so the two legs
+/// the deleted Python `session_identity_key`, so the two legs
 /// agree on the file both write. UUID-family ids compare case-insensitively;
 /// opencode's `ses_` ids do not. The retired first-eight key stays readable
 /// through hold.py's `addresses()` sweep.
@@ -474,10 +474,14 @@ pub(crate) fn spawn_release_timer(handle: &str) {
         use std::os::unix::process::CommandExt;
         cmd.process_group(0);
     }
-    if let Err(exc) = cmd.spawn() {
-        // The hold still lifts on the next send attempt or prompt; say why
-        // the clock-alone lift will not fire.
-        eprintln!("mail-hold: release timer did not start: {exc}");
+    match cmd.spawn() {
+        // The timer child runs unwaited; the daemon drain reaps it by pid.
+        Ok(child) => crate::orphan_reap::release_child(child.id()),
+        Err(exc) => {
+            // The hold still lifts on the next send attempt or prompt; say why
+            // the clock-alone lift will not fire.
+            eprintln!("mail-hold: release timer did not start: {exc}");
+        }
     }
 }
 

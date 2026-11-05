@@ -2,7 +2,7 @@
 
 # Do-Roadmap: Multi-Session Task Orchestration
 
-> **Historical.** The megawalk skill and walker this document describes are retired (removed 2026-08-03, see [path-census.md](path-census.md)). Nothing below is runnable today. The supported multi-node routes: `/fno:target` per node, `/fno:target bg --all-ready` for a board, `fno backlog advance` for merge-triggered continuation. The active-backlog daemon is the always-on drain ([active-backlog-dispatcher.md](active-backlog-dispatcher.md)). Kept as the design record of the vision-to-backlog, one-task-per-session, discovery-relay pipeline.
+> **Historical.** The megawalk skill and walker this document describes are retired (removed 2026-08-03, see [path-census.md](path-census.md)). Nothing below is runnable today. The supported multi-node routes: `/fno:target` per node, `/fno:target bg --all-ready` for a board, `fno backlog advance` for merge-triggered continuation. The active-backlog daemon is the always-on drain ([active-backlog-dispatcher.md](active-backlog-dispatcher.md)). Kept as the design record of the vision-to-backlog, one-task-per-session, discovery-relay pipeline. Its scripts are deleted too: `roadmap-tasks.py` (use `fno backlog`), `validate-roadmap.sh` and `discovery-brief.py`.
 
 > Architecture doc for the megawalk skill - vision-to-backlog generation, one-task-per-session execution, and cross-task discovery relay.
 

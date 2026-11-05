@@ -35,7 +35,7 @@
 #   1. Reading Claude Code's OWN files: ~/.claude/sessions, ~/.claude/projects
 #      (transcripts), ~/.claude/jobs, .claude/settings.json /
 #      settings.local.json (Claude Code's config, not footnote's state), and
-#      scripts/save-session.py's read of the ~/.claude/.session-context.json
+#      hook/save_session.rs's read of the ~/.claude/.session-context.json
 #      statusline sidecar (its OWN transcript writes were re-homed to
 #      ${FNO_HOME}/saved-sessions - see below - so only the sidecar READ remains).
 #      crates/fno/src/cli_hooks.rs WRITES ~/.claude/settings.json for the same reason
@@ -158,6 +158,10 @@
 #      same census: it stages reap receipts and measures resume evidence off
 #      that transcript tree, and its test stages one under a tmp HOME.
 #      Footnote stores nothing there.
+#      occupancy_classify.rs names Claude Code's own shell-snapshots dir to
+#      spot an orphaned Bash-tool shell by its argv, and reads
+#      ~/.claude/jobs/<job>/state.json to tell a live job from a dead one.
+#      Read-only; footnote stores nothing there.
 #      scratch.rs is the scratch-shape sweep: its whole subject IS
 #      Claude Code's own ~/.claude/jobs/<job>/tmp tree, read-only rglob for
 #      authored py/sh scratch; it writes only the global events journal
@@ -243,16 +247,17 @@
 #      the various watermark files, insights.md) - only corrections.log and
 #      corrections-rejected.log were in scope (see skills/autocorrect/SKILL.md).
 #
-# Carveout cv-8dc3c6dc (RESOLVED): git-protection.py's state
+# Carveout cv-8dc3c6dc (RESOLVED): the git-protection hook's state
 # (git-protection.json + approve_no_verify.flag) and save-session.py's
 # transcripts used to write under the harness state dir. Both were re-homed
 # to ${FNO_HOME:-~/.fno} in the git-protection-hook re-home change:
-#   - hooks/git-protection.py is now OFF this allowlist entirely - it writes
+#   - the hook (now crates/fno-agents/src/hook/git_protection/) is OFF this allowlist entirely - it writes
 #     nothing under the harness dir and holds no reference to it, so CI
 #     enforces the placement rule for it with no exception.
-#   - scripts/save-session.py stays listed above under category (1): its
-#     transcript WRITES moved to ${FNO_HOME}/saved-sessions, and its only remaining
-#     reference is the legitimate READ of Claude Code's own statusline sidecar.
+#   - crates/fno-agents/src/hook/save_session.rs (the save-session port) stays
+#     listed above under category (1): its transcript WRITES go to
+#     ${FNO_HOME}/saved-sessions, and its only remaining reference is the
+#     legitimate READ of Claude Code's own statusline sidecar.
 #
 #      The native doctor family (the 2026-10 port of the deleted
 #      cli/src/fno/doctor.py) reads the harness's own surfaces in three
@@ -388,6 +393,8 @@ crates/fno-agents/src/receipt.rs
 crates/fno-agents/src/register.rs
 crates/fno-agents/src/roster_reap.rs
 crates/fno-agents/src/scratch.rs
+crates/fno-agents/src/occupancy_classify.rs
+crates/fno-agents/src/hook/save_session.rs
 crates/fno-agents/src/session_start_bytes.rs
 crates/fno-agents/src/state.rs
 crates/fno-agents/src/stream_worker.rs
@@ -431,7 +438,6 @@ scripts/lib/config.sh
 scripts/lib/corrections-lock.sh
 scripts/lib/worktree-lifecycle.sh
 scripts/lib/worktree-manager.sh
-scripts/lib/worktree_occupancy.py
 scripts/lint/no-invalid-events.sh
 scripts/metrics/port-order.sh
 scripts/migrate-events-shape.py
@@ -440,7 +446,6 @@ scripts/setup/archive-worktree.sh
 scripts/setup/setup-worktree.sh
 scripts/setup/worktree-create-hook.sh
 scripts/worktree-lifecycle.sh
-scripts/save-session.py
 EOF
 )
 

@@ -23,7 +23,9 @@
 
 use crate::events::EventEmitter;
 use crate::paths::{self, AgentsHome};
-use crate::protocol::{read_request, write_response, ErrorCode, ProtocolError, Request, Response};
+use crate::protocol::{
+    read_request, write_request, write_response, ErrorCode, ProtocolError, Request, Response,
+};
 use crate::state::{self, AgentState};
 use crate::AgentStatus;
 use serde::Serialize;
@@ -36,6 +38,36 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::net::{UnixListener, UnixStream};
+
+/// Bound for the liveness probe (connect + stream.ping). A wedged worker must
+/// not hang the daemon on the probe.
+pub(crate) const STREAM_PROBE_TIMEOUT_S: u64 = 2;
+
+/// A dead-on-arrival resume (bad/expired UUID, auth failure) exits immediately,
+/// yet the worker still binds its socket and answers `stream.ping`; querying
+/// `stream.status.child_alive` (backed by `try_wait`) distinguishes "worker up +
+/// child live" from "worker up + child already exited", so a DOA adopt is
+/// rejected instead of registered `live` (AC1-ERR; codex review P2). Bounded so a
+/// wedged worker never hangs the daemon; a timeout reads as not-alive.
+pub(crate) async fn reports_child_alive(sock: &std::path::Path) -> bool {
+    let probe = async {
+        let mut conn = UnixStream::connect(sock).await.ok()?;
+        write_request(&mut conn, &Request::new(1, "stream.status", json!({})))
+            .await
+            .ok()?;
+        let resp = crate::protocol::read_response(&mut conn).await.ok()?;
+        Some(
+            resp.result()
+                .and_then(|r| r.get("child_alive"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+        )
+    };
+    matches!(
+        tokio::time::timeout(Duration::from_secs(STREAM_PROBE_TIMEOUT_S), probe).await,
+        Ok(Some(true))
+    )
+}
 
 /// The single-writer claim a stream worker holds while its child is live. The
 /// uuid (the `session:<uuid>` claim key) and the holder are USELESS apart - a
@@ -1048,7 +1080,7 @@ pub async fn run(cfg: StreamWorkerConfig) -> Result<(), StreamWorkerError> {
     // `lane: "stream"` distinguishes the stream-json lane, and the extra
     // exit_code/stderr_tail fields are additive. Avoids a new event kind (which
     // would need registering in KNOWN_EVENT_KINDS + events-v3.json +
-    // cli/src/fno/events/schema.yaml + the cross-language documenting test).
+    // src/event_store/schema.yaml + the cross-language documenting test).
     let _ = emitter.emit(
         "agent_exited",
         &json!({

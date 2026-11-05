@@ -195,6 +195,7 @@ mod tests {
         }
         for forwarded in [
             &["whoami", "cost"][..],
+            &["whoami", "ledger", "x"],
             &["whoami", "--help"],
             &["whoami", "status", "--help"],
             &["agents", "top"],

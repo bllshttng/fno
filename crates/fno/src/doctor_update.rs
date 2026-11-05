@@ -35,7 +35,7 @@ const SOURCE_PIN_UNAVAILABLE: &str = "the deployed fno-agents could not answer s
 
 const UPDATE_USAGE: &str = "Usage: fno update [--check] [--dry-run|-N] [--force|-F] [--source PATH] [--rust|--no-rust] [--published [REV]]
 
-A release install runs `uv tool upgrade fno`. A source install rebuilds the Python CLI and the Rust binaries from the checkout. `fno doctor update` is the same command.";
+A release install updates from the newest GitHub release; a wheel install moves to the binary install in ~/.fno/install/bin first. A source install rebuilds the Python CLI and the Rust binaries from the checkout. `fno doctor update` is the same command.";
 
 const UPDATE_CLAIM_KEY: &str = "update:fno";
 const UV_INSTALL_ATTEMPTS: u32 = 3;
@@ -2369,7 +2369,10 @@ pub fn run(rest: &[std::ffi::OsString]) -> i32 {
         }
     };
     if is_release_install(&pin, read_marker(&installed_rev_file()).as_deref()) {
-        return upgrade_release(flags.dry_run);
+        return match crate::release_install::current_channel() {
+            crate::release_install::InstallChannel::Other => upgrade_release(flags.dry_run),
+            channel => crate::release_install::update(&channel, flags.dry_run),
+        };
     }
     if pin.get("decision").and_then(Value::as_str) == Some("refuse") {
         eprintln!(
@@ -3146,7 +3149,7 @@ pub(crate) fn update_readiness(source: Option<&Path>) -> Value {
         _ if installed_rev.is_none() && resolved_source.is_none() => {
             // Release install (no source, no marker): name the one command
             // that upgrades it instead of inventing a wire bump.
-            "no source checkout and no installed-rev marker; a release install refreshes with `uv tool upgrade fno`".to_string()
+            "no source checkout and no installed-rev marker; a release install refreshes with `fno update`".to_string()
         }
         _ => build_guidance(
             update_ready,

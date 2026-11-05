@@ -112,6 +112,10 @@ pub const SPAWN_IDLE_GRACE_SECS: i64 = 3_300;
 /// idle day, and so does a row with no transcript at all.
 pub const SKILL_IDLE_RETIRE_SECS: i64 = 86_400;
 
+/// Law d-b01ffede: a row whose node is done retires after 30 idle minutes,
+/// whatever its origin.
+pub const DONE_NODE_IDLE_RETIRE_SECS: i64 = 1_800;
+
 /// WHICH positive fact holds a [`GcAction::Keep`] row. Removal is the
 /// default, so an unknown fact never keeps a row: there is no variant for
 /// one.
@@ -198,7 +202,17 @@ pub fn gc_decide(row: &GcRow, grace_secs: i64) -> (GcAction, Option<KeepReason>)
 /// tail, a terminal eval) waits only the grace. A spawned planner waits 20
 /// minutes, any other spawned row one hour, and every other row one day: a
 /// planning session the user started by hand is not a dispatched planner.
+/// A row whose every node is done waits at most 30 minutes (law d-b01ffede).
 pub fn idle_window(row: &GcRow, grace_secs: i64) -> i64 {
+    let window = origin_idle_window(row, grace_secs);
+    if matches!(row.work, WorkState::AllDone { .. }) {
+        window.min(DONE_NODE_IDLE_RETIRE_SECS)
+    } else {
+        window
+    }
+}
+
+fn origin_idle_window(row: &GcRow, grace_secs: i64) -> i64 {
     let spawned = row.origin.as_deref() == Some("spawn");
     if row.tail_done || row.eval_finished {
         grace_secs
@@ -401,6 +415,7 @@ pub fn gc_sweep_release(
         &crate::daemon::rm_take_worktree,
         false,
         Some(release),
+        None,
     );
     summary.settled_do_rows = settled
         .into_iter()
@@ -427,7 +442,8 @@ pub fn gc_sweep_dry_run(home: &AgentsHome, grace_secs: i64) -> gc_sweep::GcSumma
     let store = std::cell::RefCell::new(gc_sweep::HarnessStoreIndex::default());
     // The rehearsal reads the same PR states the real arm would read, so its
     // prediction holds when applied. Read-only; cached per PR per pass.
-    let mut summary = gc_sweep::run(
+    let preview = dry_surface_preview();
+    let mut summary = gc_sweep::run_with_release(
         home,
         &emitter,
         grace_secs,
@@ -442,6 +458,9 @@ pub fn gc_sweep_dry_run(home: &AgentsHome, grace_secs: i64) -> gc_sweep::GcSumma
         &crate::claude_roster::read_all_agents,
         &gc_sweep::production_tree_probe,
         &crate::daemon::rm_take_worktree,
+        false,
+        None,
+        Some(&preview),
     );
     summary.settled_do_rows = planned
         .into_iter()
@@ -498,7 +517,8 @@ pub fn gc_sweep_done_only(
 pub fn gc_sweep_done_only_dry_run(home: &AgentsHome, grace_secs: i64) -> gc_sweep::GcSummary {
     let emitter = EventEmitter::new(std::path::PathBuf::new(), "daemon");
     let store = std::cell::RefCell::new(gc_sweep::HarnessStoreIndex::default());
-    gc_sweep::run_done_only(
+    let preview = dry_surface_preview();
+    gc_sweep::run_with_release(
         home,
         &emitter,
         grace_secs,
@@ -513,7 +533,25 @@ pub fn gc_sweep_done_only_dry_run(home: &AgentsHome, grace_secs: i64) -> gc_swee
         &crate::claude_roster::read_all_agents,
         &gc_sweep::production_tree_probe,
         &crate::daemon::rm_take_worktree,
+        true,
+        None,
+        Some(&preview),
     )
+}
+
+/// The dry runs' read-only removal preview: the same roster union and squad
+/// store the live effects read, each read at most once per pass and only
+/// when a row reaches the gate.
+fn dry_surface_preview() -> impl Fn(&crate::state::RegistryEntry) -> bool {
+    let union = std::cell::OnceCell::new();
+    let members = std::cell::OnceCell::new();
+    move |e| {
+        crate::gc_native::surface_provably_clear(
+            e,
+            union.get_or_init(crate::claude_roster::read_all_agents_union),
+            members.get_or_init(crate::gc_inventory::read_mux_members),
+        )
+    }
 }
 
 // --- the orphan process sweep -----------------------------------------------
@@ -1603,8 +1641,12 @@ mod tests {
             e.origin = Some("spawn".into());
             e.harness = Some("codex".into());
             e.harness_session_id = Some("s-h1".into());
-            // The fixture has no transcript the age probe can read, so the
-            // planner holds as probe unread.
+            // The age probe reads no transcript for this fixture, and the
+            // file on disk was just written, so the planner holds as probe
+            // unread.
+            let transcript = dir.path().join("s-h1.jsonl");
+            std::fs::write(&transcript, "{}\n").unwrap();
+            e.transcript_path = Some(transcript.to_string_lossy().into_owned());
             e.created_at = (chrono::Utc::now() - chrono::Duration::seconds(1800))
                 .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
             e.status = crate::AgentStatus::Exited;
@@ -2044,6 +2086,13 @@ mod tests {
             ..planner
         };
         assert_eq!(gc_decide(&hand_planner, GRACE).0, GcAction::Keep);
+        // Law d-b01ffede: a done node caps any origin's window at 30 minutes.
+        let hand_done = GcRow {
+            origin: None,
+            transcript_age_s: Some(DONE_NODE_IDLE_RETIRE_SECS + 1),
+            ..retiring()
+        };
+        assert_eq!(gc_decide(&hand_done, GRACE), (GcAction::Retire, None));
         // A row with no transcript ages on the report clock for a day.
         let failed_start = GcRow {
             fno_skill: None,
