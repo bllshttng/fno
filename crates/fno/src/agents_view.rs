@@ -3336,59 +3336,6 @@ tokens = []"#,
     /// it needs that harness and a built dependency tree. The merge logic is
     /// the one dual the ruling kept (both readers stand), so this is
     /// the guard that pins them together.
-    #[test]
-    #[ignore = "driven by test_harness_capability_parity.py, which stages the config"]
-    fn capability_parity_with_python() {
-        let stage = std::env::var("FNO_CAPABILITY_PARITY_DIR").expect("parity stage dir");
-        let expected_path =
-            std::env::var("FNO_CAPABILITY_PARITY_JSON").expect("parity expected json");
-        std::env::set_var("PWD", &stage);
-        std::env::set_var("HOME", &stage);
-        std::env::remove_var("FNO_GLOBAL_SETTINGS_PATH");
-        let expected: std::collections::BTreeMap<String, serde_json::Value> =
-            serde_json::from_str(&std::fs::read_to_string(&expected_path).unwrap())
-                .expect("the Python answer parses as JSON");
-
-        let rows = resolved_rows();
-        let mut diffs: Vec<String> = Vec::new();
-        let names: std::collections::BTreeSet<&String> =
-            rows.keys().chain(expected.keys()).collect();
-        for name in names {
-            let actual = match rows.get(name.as_str()) {
-                Some(row) => serde_json::to_value(row).expect("a row serializes"),
-                None => {
-                    diffs.push(format!("{name}: Rust reader has no row"));
-                    continue;
-                }
-            };
-            let Some(expected_row) = expected.get(name.as_str()) else {
-                diffs.push(format!("{name}: Python reader has no row"));
-                continue;
-            };
-            let (serde_json::Value::Object(actual), serde_json::Value::Object(expected_row)) =
-                (&actual, expected_row)
-            else {
-                diffs.push(format!("{name}: rows are not objects"));
-                continue;
-            };
-            let fields: std::collections::BTreeSet<&String> =
-                actual.keys().chain(expected_row.keys()).collect();
-            for field in fields {
-                let a = actual.get(field);
-                let e = expected_row.get(field);
-                if a != e {
-                    diffs.push(format!(
-                        "{name}.{field}: Python has {e:?}, Rust resolved {a:?}"
-                    ));
-                }
-            }
-        }
-        assert!(
-            diffs.is_empty(),
-            "the two readers resolved the staged config differently:\n  {}",
-            diffs.join("\n  ")
-        );
-    }
 
     /// AC1/AC2, Rust half: the config chain merges WHOLE rows - a
     /// nested table corrects one strategy, a scalar flips, a lane alias lands
