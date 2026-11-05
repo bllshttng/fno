@@ -689,6 +689,14 @@ fn enter_word(b: &BoardView) -> String {
 /// caller ([`paint`]) flattens the whole sheet to the title rows' dim role
 /// when the pane does not own typing.
 pub(crate) fn hint_lines(b: &BoardView, detail_focus: bool, w: usize) -> Vec<TLine> {
+    if b.keys_footer {
+        let view = if detail_focus {
+            super::key_grid::KeyView::Detail
+        } else {
+            super::key_grid::KeyView::Backlog
+        };
+        return super::key_grid::grid_rows(view, w);
+    }
     let text = if detail_focus {
         format!(
             "j/k scroll \u{b7} tab link \u{b7} enter {} \u{b7} y copy id \u{b7} Y copy cmd \u{b7} PgUp/PgDn scroll \u{b7} esc board \u{b7} b blueprint \u{b7} t target \u{b7} A lead \u{b7} c comment \u{b7} ? keys",

@@ -149,14 +149,23 @@ pub(crate) fn tick(
     if !can_launch {
         return "gated";
     }
-    if crate::evals_gate::zai_peak_hold(leg.repo, &crate::evals_gate::config_lane(leg.repo), now) {
-        return "zai_peak";
+    // The same lane rule the gate legs ride: a zai lane runs while its 5h
+    // window has room; a capped or unreadable window moves the run to the
+    // fixed sonnet fallback lane.
+    let mut argv = argv.to_vec();
+    if let Some(i) = argv.iter().position(|a| a == "--lane") {
+        let lane = argv.get(i + 1).cloned().unwrap_or_default();
+        let routed =
+            crate::evals_gate::lane_with_room(leg.repo, &lane, now, &crate::evals_gate::real_room);
+        if routed != lane {
+            argv[i + 1] = routed;
+        }
     }
     if tried_within_a_day(leg.history, now) {
         return "retry_wait";
     }
     let _ = std::fs::write(attempt_path(leg.history), now.to_rfc3339());
-    let Ok(pid) = spawner(argv) else {
+    let Ok(pid) = spawner(&argv) else {
         return "spawn_failed";
     };
     let opts = claims::AcquireOpts {
