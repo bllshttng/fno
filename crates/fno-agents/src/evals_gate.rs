@@ -1830,6 +1830,7 @@ mod tests {
         /// A finished main run, so the head leg has its baseline.
         fn with_baseline(&self) {
             self.rows("base", "g1", [true, true, true]);
+            self.rows("base", "g3", [true, true, true]);
             self.rows("base", "g4", [true, true, true]);
             let tried = format!(
                 "gate-main-{}-{}",
@@ -1899,9 +1900,6 @@ mod tests {
         )
         .trim()
         .to_string();
-        // The baseline answers the whole selection, so the launch guard lets
-        // the head through and the test stays about the sha the bank is read at.
-        w.rows("base", "g3", [true, true, true]);
         w.with_baseline();
         w.tick(true, Utc::now());
         let spawns = w.spawns.borrow();
@@ -2445,16 +2443,12 @@ mod tests {
 
     #[test]
     fn a_slot_swapped_by_a_concurrent_owner_is_skipped_for_the_tick() {
-        let w = World::new("crates/x.rs\n");
-        std::fs::write(
-            w.dir.path().join("evals/bank/c1.yaml"),
-            "id: c1\ntier: regression\ngrade:\n  - kind: file-exists\n    path: x\ncovers: [\"crates/x/\"]\n",
-        )
-        .unwrap();
+        // The real-git world's g1 carries the covers line, so the launch
+        // reaches the build path and the test stays about the busy-slot skip.
+        let w = World::new_git("crates/x/a.rs\n");
         w.with_baseline();
-        // The baseline answers the covering task too, so the launch reaches
-        // the slot: the test stays about the busy-slot skip, not the guard.
-        w.rows("base", "c1", [true, true, true]);
+        // g3 joins g1 in the head's selection; the baseline answers both.
+        w.rows("base", "g3", [true, true, true]);
         let lock = std::fs::OpenOptions::new()
             .create(true)
             .truncate(false)
