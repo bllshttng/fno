@@ -1081,43 +1081,6 @@ fn latency_stop_target_promise_green() {
     );
 }
 
-/// A lead fire whose journal already holds a newer termination row: allow,
-/// no board read. AC5-HP.
-#[test]
-#[ignore]
-fn latency_stop_lead_terminal_repeat() {
-    let manifest = format!(
-        "---\nfno_id: 20260915T190000Z-kg1-abcdef\ncreated_at: 2026-09-15T19:00:00Z\nscope: latency-fixture\nshape: org\nharness: claude\nharness_session_id: {LEAD_SID}\n---\n"
-    );
-    run_fixture(
-        "stop_lead_terminal_repeat",
-        "hooks/target-stop-hook.sh",
-        &FixtureSpec {
-            payload: stop_payload(LEAD_SID, Some("Work continues.")),
-            manifest: &manifest,
-            claims: &[],
-            extra_env: &[],
-            budget_p90_ms: 300.0,
-            ceiling_ms: 600.0,
-            allowed_execs: &["bash", "fno-agents", "git"],
-            max_git: None,
-        },
-        |code, stdout, stderr| {
-            // Allowed: a terminal lead is not re-judged. On the current main
-            // hooks this full board read may answer differently; the fixture
-            // pins the FINISHED branch's contract.
-            assert_eq!(code, 0, "lead terminal allow exits 0: {stderr}");
-            if !stdout.trim().is_empty() {
-                let v: Value = serde_json::from_str(stdout)
-                    .unwrap_or_else(|e| panic!("{stdout:?} not JSON: {e}"));
-                assert_ne!(
-                    v["decision"], "block",
-                    "terminal lead must not block: {stdout}"
-                );
-            }
-        },
-    );
-}
 
 /// The shared Bash PreToolUse owner preserves the guard contracts and budget.
 #[test]

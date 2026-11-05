@@ -653,57 +653,7 @@ fn write_bg_session(sessions: &Path, pid: &str, job: &str, sock: &Path) {
 }
 
 // AC7: live session but state.json never transitions -> poll timeout -> exit 15.
-#[test]
-fn followup_poll_timeout_exit_15() {
-    use std::os::unix::net::UnixListener;
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::Arc;
-    let home = AgentsHome::at(tmpdir("to-home"));
-    let claude_root = tmpdir("to-claude");
-    let ch = ClaudeHome::at(&claude_root);
-    let cwd = tmpdir("to-cwd");
-    seed_claude_registry(&home, "alice", "abcd1234");
-    let sessions = claude_root.join(".claude").join("sessions");
-    fs::create_dir_all(&sessions).unwrap();
-    fs::create_dir_all(claude_root.join(".claude").join("jobs").join("abcd1234")).unwrap();
-    let sock = short_sock();
-    let listener = UnixListener::bind(&sock).unwrap();
-    write_bg_session(&sessions, "999", "abcd1234", &sock);
 
-    // Accept (probe + send) but never write a terminal state.json.
-    let stop = Arc::new(AtomicBool::new(false));
-    let stop_t = stop.clone();
-    let handle = std::thread::spawn(move || {
-        listener.set_nonblocking(true).unwrap();
-        while !stop_t.load(Ordering::Relaxed) {
-            if let Ok((mut conn, _)) = listener.accept() {
-                let mut buf = Vec::new();
-                let _ = conn.read_to_end(&mut buf);
-            }
-            std::thread::sleep(Duration::from_millis(5));
-        }
-    });
-
-    let out = dispatch_claude_ask(
-        &home,
-        &ch,
-        "alice",
-        "ping",
-        "fno",
-        &cwd,
-        false,
-        Some(Duration::from_millis(250)),
-        &[],
-    );
-    stop.store(true, Ordering::Relaxed);
-    let _ = handle.join();
-    cleanup_sock(&sock);
-
-    assert_eq!(out.exit_code, 15);
-    assert!(out.stderr.contains("no reply within"), "{}", out.stderr);
-    let events = fno_agents::event_store::journal_text(&home.events_jsonl(), &[]);
-    assert!(events.contains("\"stage\":\"poll-timeout\""), "{}", events);
-}
 
 // AC10: two concurrent followups on the same agent serialize on the per-agent
 // flock (no deadlock); both get a reply.

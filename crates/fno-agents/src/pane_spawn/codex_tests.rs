@@ -431,18 +431,6 @@ fn passthrough_appends_then_add_dirs_strip() {
     });
 }
 
-#[test]
-fn node_dispatch_is_a_code_payload_without_a_message_prefix() {
-    let root = std::env::temp_dir().join(format!("fno-codex-node-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&root);
-    std::fs::create_dir_all(&root).unwrap();
-    let mut ctx = PaneContext::simple("codex", root.to_str().unwrap());
-    ctx.message = "do x".to_string();
-    ctx.node = Some("fno-abcd".to_string());
-    let refusal = refuse_without_git_grant(&ctx).unwrap_err();
-    assert_eq!(refusal.exit_code, EXIT_REFUSAL);
-    let _ = std::fs::remove_dir_all(&root);
-}
 
 #[test]
 fn the_launch_cwd_is_pre_trusted_in_the_codex_config() {

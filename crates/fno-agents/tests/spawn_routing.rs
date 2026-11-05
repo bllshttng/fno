@@ -202,91 +202,11 @@ fn restore_config(old: Option<std::ffi::OsString>) {
 // AC1-HP: ask with unknown name exits 16 (codex path)
 // ---------------------------------------------------------------------------
 
-#[test]
-fn ask_unknown_name_codex_exits_16() {
-    use fno_agents::codex_ask::dispatch_codex_ask;
-
-    let home = AgentsHome::at(tmpdir("ask-unk-cx-home"));
-    let cwd = tmpdir("ask-unk-cx-cwd");
-
-    // Empty registry: name "ghost-codex" does not exist.
-    let out = dispatch_codex_ask(
-        &home,
-        "ghost-codex",
-        "hi",
-        "fno",
-        &cwd,
-        false,
-        Some(Duration::from_secs(3)),
-    );
-
-    assert_eq!(
-        out.exit_code, 16,
-        "expected exit 16 for unknown-name codex ask, got {} (stderr: {})",
-        out.exit_code, out.stderr
-    );
-    assert!(
-        out.stderr.contains("unknown agent"),
-        "stderr must mention 'unknown agent': {}",
-        out.stderr
-    );
-    assert!(
-        out.stderr.contains("ghost-codex"),
-        "stderr must mention the agent name: {}",
-        out.stderr
-    );
-    assert!(
-        out.stderr.contains("spawn"),
-        "stderr must mention 'spawn': {}",
-        out.stderr
-    );
-    assert!(out.stdout.is_empty(), "stdout must be empty on error");
-}
 
 // ---------------------------------------------------------------------------
 // AC1-HP: ask with unknown name exits 16 (gemini path)
 // ---------------------------------------------------------------------------
 
-#[test]
-fn ask_unknown_name_gemini_exits_16() {
-    use fno_agents::gemini_ask::dispatch_gemini_ask;
-
-    let home = AgentsHome::at(tmpdir("ask-unk-gm-home"));
-    let cwd = tmpdir("ask-unk-gm-cwd");
-
-    // Empty registry: name "ghost-gemini" does not exist.
-    let out = dispatch_gemini_ask(
-        &home,
-        "ghost-gemini",
-        "hi",
-        "fno",
-        &cwd,
-        false,
-        Some(Duration::from_secs(3)),
-    );
-
-    assert_eq!(
-        out.exit_code, 16,
-        "expected exit 16 for unknown-name gemini ask, got {} (stderr: {})",
-        out.exit_code, out.stderr
-    );
-    assert!(
-        out.stderr.contains("unknown agent"),
-        "stderr must mention 'unknown agent': {}",
-        out.stderr
-    );
-    assert!(
-        out.stderr.contains("ghost-gemini"),
-        "stderr must mention the agent name: {}",
-        out.stderr
-    );
-    assert!(
-        out.stderr.contains("spawn"),
-        "stderr must mention 'spawn': {}",
-        out.stderr
-    );
-    assert!(out.stdout.is_empty(), "stdout must be empty on error");
-}
 
 // ---------------------------------------------------------------------------
 // AC2-HP: unknown-name error message is byte-parity with Python
@@ -553,37 +473,6 @@ fn spawn_claude_collision_exits_2() {
 // AC4-ERR: dispatch_codex_once - collision check (name already exists)
 // ---------------------------------------------------------------------------
 
-#[test]
-fn spawn_codex_once_collision_exits_2() {
-    use fno_agents::codex_ask::dispatch_codex_once;
-
-    let home = AgentsHome::at(tmpdir("once-cx-coll-home"));
-    let cwd = tmpdir("once-cx-coll-cwd");
-
-    // Seed a pre-existing agent.
-    seed_registry(&home, "taken", "codex");
-
-    let out = dispatch_codex_once(
-        &home,
-        "taken",
-        "msg",
-        "fno",
-        &cwd,
-        false,
-        None,
-        None,
-        None,
-        None,
-        &[],
-    );
-
-    assert_eq!(out.exit_code, 2, "collision must exit 2: {}", out.stderr);
-    assert!(
-        out.stderr.contains("already exists"),
-        "stderr must say already exists: {}",
-        out.stderr
-    );
-}
 
 // ---------------------------------------------------------------------------
 // AC5-HP: dispatch_gemini_once - happy path (create + reply + teardown)

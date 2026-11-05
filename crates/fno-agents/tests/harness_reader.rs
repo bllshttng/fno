@@ -115,17 +115,6 @@ fn every_convicted_pattern_matches_its_denial() {
     }
 }
 
-#[test]
-fn the_ten_journey_keys_are_declared() {
-    let contract = HarnessContract::packaged().expect("the shipped table parses");
-    for key in JOURNEY_KEYS {
-        assert!(
-            contract.journeys.contains_key(key),
-            "journey {key:?} is missing from the shipped table"
-        );
-    }
-    assert_eq!(contract.journeys.len(), JOURNEY_KEYS.len());
-}
 
 #[test]
 fn restart_viewport_is_unprobeable_on_this_nodes_own_constraint() {

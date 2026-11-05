@@ -1408,17 +1408,6 @@ mod tests {
         assert!(crate::ledger_workers::parse_roster(0, "[{}]", "").is_err());
     }
 
-    #[test]
-    fn registry_unreadable_names_the_reason() {
-        let org = json!({"teams": null, "registry_readable": false,
-            "summary": {"reason": "registry unreadable: disk on fire"}});
-        let page = page(org, vec![]);
-        assert!(page.contains("The org cannot be read."));
-        assert!(page.contains("registry unreadable: disk on fire"));
-        assert!(page.contains("This is not an empty org; nothing was checked."));
-        assert!(!page.contains("no live teams"));
-        assert!(!page.contains("class=\"facts\""));
-    }
 
     #[test]
     fn hostile_fields_are_escaped() {

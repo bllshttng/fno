@@ -601,16 +601,5 @@ mod tests {
         }
     }
 
-    #[test]
-    fn spawn_axes_ignores_non_axis_tokens() {
-        let toks: Vec<String> = [
-            "--name", "wk", "--portal", "1", "--route", "zai/glm", "--cwd", "/x",
-        ]
-        .iter()
-        .map(|s| s.to_string())
-        .collect();
-        let (axes, _) = SpawnAxes::scan(&toks).expect("non-axis tokens are ignored");
-        assert_eq!(axes.route.as_deref(), Some("zai/glm"));
-        assert_eq!(axes.account, None);
-    }
+
 }

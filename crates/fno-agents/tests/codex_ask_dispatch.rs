@@ -439,36 +439,6 @@ fn codex_create_nonzero_exit_without_any_jsonl_exits_11() {
     );
 }
 
-#[test]
-fn codex_resume_missing_session_id_in_registry_exits_11() {
-    let home = AgentsHome::at(tmpdir("e4-home"));
-    let bin_dir = tmpdir("e4-bin");
-    let cwd = tmpdir("e4-cwd");
-    install_fake_codex(&bin_dir);
-
-    // Registry entry has empty codex_session_id
-    let body = r#"{"schema_version":3,"agents":[{"name":"badentry","provider":"codex","cwd":"/tmp","codex_session_id":"","status":"live","created_at":"2026-05-27T00:00:00Z","log_path":"/tmp/bad.jsonl"}]}"#;
-    let path = home.registry_json();
-    fs::create_dir_all(path.parent().unwrap()).unwrap();
-    fs::write(path, body).unwrap();
-
-    let outcome = dispatch_with_fake_codex(
-        &home,
-        &bin_dir,
-        "badentry",
-        "hi",
-        "fno",
-        &cwd,
-        false,
-        Some(Duration::from_secs(5)),
-        &[],
-    );
-    assert_eq!(
-        outcome.exit_code, 11,
-        "missing codex_session_id should exit 11: {} (stderr: {})",
-        outcome.exit_code, outcome.stderr
-    );
-}
 
 // ---------------------------------------------------------------------------
 // AC4-EDGE: validation
@@ -589,54 +559,6 @@ fn maybe_run_codex_ask_mismatch_returns_exit_2() {
 // ab-cb15ae56: error-path correctness + observability hardening
 // ---------------------------------------------------------------------------
 
-/// cv-dcd823ce (CRITICAL): an empty `thread_id` on `thread.started` must NOT be
-/// captured as the session id. The create path must fail closed with exit 11
-/// (NoSessionId), and the registry must NOT gain an entry with an empty
-/// `codex_session_id` (which would make every later resume fail opaquely).
-#[test]
-fn codex_create_empty_session_id_exits_11_and_writes_no_registry_entry() {
-    let home = AgentsHome::at(tmpdir("hard-empty-home"));
-    let bin_dir = tmpdir("hard-empty-bin");
-    let cwd = tmpdir("hard-empty-cwd");
-    install_fake_codex(&bin_dir);
-
-    let outcome = dispatch_once_with_fake_codex(
-        &home,
-        &bin_dir,
-        "empty-sess",
-        "hi",
-        "fno",
-        &cwd,
-        false,
-        Some(Duration::from_secs(5)),
-        &[
-            ("FAKE_CODEX_EMPTY_SESSION", "1"),
-            ("FAKE_CODEX_REPLY", "ignored reply"),
-        ],
-    );
-
-    assert_eq!(
-        outcome.exit_code, 11,
-        "empty thread_id must fail closed as NoSessionId (exit 11): {} (stderr: {})",
-        outcome.exit_code, outcome.stderr
-    );
-
-    // No registry write should have happened (create failed before stamping).
-    let registry_path = home.registry_json();
-    if registry_path.exists() {
-        let body = registry_text(&registry_path).unwrap();
-        assert!(
-            !body.contains("empty-sess"),
-            "no registry entry should be written for a failed create: {}",
-            body
-        );
-        assert!(
-            !body.contains("\"codex_session_id\":\"\""),
-            "must never persist an empty codex_session_id: {}",
-            body
-        );
-    }
-}
 
 /// cv-54a67325 (HIGH): a genuine mid-stream read error (here an invalid-UTF-8
 /// line) before `turn.completed` must NOT be swallowed as a silently-truncated

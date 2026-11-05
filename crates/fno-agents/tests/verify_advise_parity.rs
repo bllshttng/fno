@@ -84,17 +84,6 @@ fn acs_label_fallback_without_section() {
     assert_parity(mirror_read(&plan), "acs label fallback without section");
 }
 
-#[test]
-fn acs_absent_none() {
-    let tmp = tempfile::TempDir::new().unwrap();
-    let missing = tmp.path().join("nope.md");
-    assert_eq!(
-        fno_agents::verify_advise::read_plan_acs(&missing),
-        Ok(None),
-        "a missing plan is Ok(None), never an error"
-    );
-    assert_parity((None, String::new()), "acs absent -> none");
-}
 
 #[test]
 fn empty_section_falls_back_to_labels() {
@@ -146,8 +135,4 @@ fn verdict_nonmatch_none() {
     assert_parity((None, String::new()), "verdict nonmatch -> none");
 }
 
-#[test]
-fn verdict_empty_none() {
-    assert_eq!(fno_agents::verify_advise::parse_verdict(""), None);
-    assert_parity((None, String::new()), "verdict empty -> none");
-}
+

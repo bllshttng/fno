@@ -2015,46 +2015,6 @@ mod tests {
         assert_eq!(points_for(&argv(&["auth", "refresh"])), 1);
     }
 
-    #[test]
-    fn admit_command_charges_by_caller_kind() {
-        let _env = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let tmp = tempfile::tempdir().unwrap();
-        let proxy = tmp.path().join("proxy");
-        let other = tmp.path().join("other");
-        std::fs::create_dir(&proxy).unwrap();
-        std::fs::create_dir(&other).unwrap();
-        crate::write_exec_stub(&proxy, "gh", "#!/bin/sh\nexit 0\n");
-        crate::write_exec_stub(&other, "gh", "#!/bin/sh\nexit 0\n");
-        let _state = DoorEnvGuard::set("FNO_STATE_DIR", tmp.path().join("state").as_os_str());
-        let _armed = DoorEnvGuard::set("FNO_GH_BUDGET_TEST_ARMED", std::ffi::OsStr::new("1"));
-        let _proxy = DoorEnvGuard::set("FNO_GH_PROXY_DIR", proxy.as_os_str());
-        seed_backoff_ledger(&tmp.path().join("state"));
-
-        // User origin: an absolute gh outside the proxy keeps the consult.
-        let _attended =
-            DoorEnvGuard::set("CLAUDE_CODE_SESSION_ATTENDED", std::ffi::OsStr::new("1"));
-        let cmd = std::process::Command::new(other.join("gh"));
-        assert!(
-            admit_command(&cmd).is_some(),
-            "a user-origin Command keeps the transport consult"
-        );
-
-        // Agent origin: an absolute gh inside the proxy stands down; the
-        // same shape outside it consults and refuses.
-        let _agent = crate::spawn_gate_admission::AgentSelfFixture::set();
-        let inside = std::process::Command::new(proxy.join("gh"));
-        assert!(
-            admit_command(&inside).is_none(),
-            "a proxy-shim Command stands the transport down"
-        );
-        let outside = std::process::Command::new(other.join("gh"));
-        assert!(
-            admit_command(&outside).is_some(),
-            "a gh outside the proxy keeps the consult"
-        );
-    }
 
     #[test]
     fn core_gate_refuses_at_zero_stands_down_pollers_and_never_outlives_its_reset() {

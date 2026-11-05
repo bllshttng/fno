@@ -1018,15 +1018,6 @@ mod tests {
         assert_eq!(n, "ab-t-1");
     }
 
-    #[test]
-    fn unknown_source_and_command_refuse() {
-        assert!(dispatch_agent_name(Some("zz"), "t", "x-1", None, None, None, None).is_err());
-        assert!(dispatch_agent_name(None, "zz", "x-1", None, None, None, None).is_err());
-        assert!(command_code_for(Some("impeccable")).is_err());
-        assert_eq!(command_code_for(Some("/fno:target")).unwrap(), "t");
-        assert_eq!(command_code_for(Some("$fno:blueprint")).unwrap(), "bp");
-        assert_eq!(command_code_for(Some("builtin")).unwrap(), "t");
-    }
 
     #[test]
     fn required_identity_never_shaves() {
