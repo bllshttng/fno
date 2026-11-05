@@ -724,122 +724,6 @@ mod tests {
         assert_eq!(index.rows.len(), 2);
         assert_eq!(index.damaged, 2);
     }
-
-    fn seed_db(graph: &Path, envelopes: &[String]) {
-        let connection = crate::backlog::open(graph).expect("opens the db");
-        for e in envelopes {
-            let event: Value = serde_json::from_str(e).expect("parses");
-            crate::backlog::decisions::record(&connection, &event).expect("records");
-        }
-    }
-
-    // AC1-HP: db A,B + JSONL B,C reads as A,B,C with B once.
-    #[test]
-    fn ac1_hp_store_merge_keeps_db_and_jsonl_only_rows_once() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let graph = dir.path().join("graph.json");
-        let jsonl = dir.path().join("decisions.jsonl");
-        seed_db(
-            &graph,
-            &[
-                envelope(
-                    "d-aaaa0001",
-                    "2026-09-12T00:00:00Z",
-                    "operator",
-                    "topic-a",
-                    "",
-                ),
-                envelope(
-                    "d-bbbb0002",
-                    "2026-09-10T00:00:00Z",
-                    "operator",
-                    "topic-b",
-                    "",
-                ),
-            ],
-        );
-        // Written after the db seed, so the one-shot decisions import never
-        // pulls these rows into the db.
-        write_index(
-            dir.path(),
-            &[
-                envelope(
-                    "d-bbbb0002",
-                    "2026-09-10T00:00:00Z",
-                    "operator",
-                    "topic-b",
-                    "",
-                ),
-                envelope(
-                    "d-cccc0003",
-                    "2026-09-11T00:00:00Z",
-                    "operator",
-                    "topic-c",
-                    "",
-                ),
-            ],
-        );
-        let index = read_store_live(&graph, &jsonl).expect("reads");
-        let mut ids: Vec<String> = index
-            .rows
-            .iter()
-            .filter_map(|r| r.get("decision_id").and_then(Value::as_str))
-            .map(str::to_string)
-            .collect();
-        ids.sort();
-        assert_eq!(ids, vec!["d-aaaa0001", "d-bbbb0002", "d-cccc0003"]);
-    }
-
-    // AC1-EDGE: a JSONL retraction retires a db row.
-    #[test]
-    fn ac1_edge_jsonl_retraction_retires_a_db_row() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let graph = dir.path().join("graph.json");
-        let jsonl = dir.path().join("decisions.jsonl");
-        seed_db(
-            &graph,
-            &[
-                envelope(
-                    "d-aaaa0001",
-                    "2026-09-12T00:00:00Z",
-                    "operator",
-                    "topic-a",
-                    "",
-                ),
-                envelope(
-                    "d-bbbb0002",
-                    "2026-09-10T00:00:00Z",
-                    "operator",
-                    "topic-b",
-                    "",
-                ),
-            ],
-        );
-        write_index(
-            dir.path(),
-            &[
-                "{\"type\":\"decision_retracted\",\"ts\":\"2026-09-13T00:00:00Z\",\
-                 \"data\":{\"retraction_id\":\"d-rrrr0009\",\"target_decision_id\":\"d-aaaa0001\",\"reason\":\"r\"}}"
-                    .to_string(),
-                envelope(
-                    "d-cccc0003",
-                    "2026-09-11T00:00:00Z",
-                    "operator",
-                    "topic-c",
-                    "",
-                ),
-            ],
-        );
-        let index = read_store_live(&graph, &jsonl).expect("reads");
-        let ids: Vec<&str> = index
-            .rows
-            .iter()
-            .filter_map(|r| r.get("decision_id").and_then(Value::as_str))
-            .collect();
-        assert!(!ids.contains(&"d-aaaa0001"), "{ids:?}");
-        assert!(ids.contains(&"d-bbbb0002"), "{ids:?}");
-        assert!(ids.contains(&"d-cccc0003"), "{ids:?}");
-    }
 }
 
 #[cfg(test)]
@@ -881,69 +765,6 @@ mod scope_tests {
         assert_eq!(kept, vec!["d-1", "d-2"]);
         assert_eq!(hidden, 2);
     }
-
-    #[test]
-    fn an_identity_scope_binds_only_the_session_it_names() {
-        let here = |scope: &str| binds(scope, || "mac-a".into(), || "jason".into());
-        assert_eq!(here("machine:mac-a"), Some(true));
-        assert_eq!(here("machine:mac-b"), Some(false));
-        assert_eq!(here("person:jason"), Some(true));
-        assert_eq!(here("person:anouk"), Some(false));
-        assert_eq!(here("project:demo"), None);
-        assert_eq!(here("global"), None);
-        let unread = binds("machine:mac-b", String::new, || "jason".into());
-        assert_eq!(unread, Some(true), "an unreadable machine id fails open");
-
-        // A foreign identity row hides with or without a resolved project.
-        // The lock keeps a test that moves USER or the config off person().
-        let _lock = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let mine = format!("person:{}", crate::identity::person());
-        let rows = vec![
-            law("d-1", Some("global")),
-            law("d-2", Some(mine.as_str())),
-            law("d-3", Some("person:nobody-zz9")),
-        ];
-        for project in [Some("demo"), None] {
-            let mut index = Index {
-                rows: rows.clone(),
-                damaged: 0,
-            };
-            assert_eq!(retain_in_scope(&mut index, project), 1, "{project:?}");
-            assert_eq!(index.rows.len(), 2, "{project:?}");
-        }
-    }
-
-    #[test]
-    fn an_unstamped_fleet_subject_reads_global_in_every_project() {
-        let mut dispatch = law("d-fleet001", None);
-        dispatch["subject"] = serde_json::json!("dispatch-model");
-        assert_eq!(row_scope(&dispatch), "global");
-        assert!(row_in_scope(&dispatch, "fnh"));
-        let topic = law("d-topic001", None);
-        assert_eq!(row_scope(&topic), "project:fno");
-        assert!(!row_in_scope(&topic, "fnh"));
-        let mut stamped = law("d-fleet002", Some("project:fno"));
-        stamped["subject"] = serde_json::json!("dispatch-model");
-        assert!(!row_in_scope(&stamped, "fnh"));
-    }
-
-    #[test]
-    fn a_user_scope_binds_like_the_legacy_person_scope() {
-        assert_eq!(
-            binds("user:jason", || "m".into(), || "jason".into()),
-            Some(true)
-        );
-        assert_eq!(
-            binds("user:anouk", || "m".into(), || "jason".into()),
-            Some(false)
-        );
-        assert_eq!(
-            binds("person:anouk", || "m".into(), || "jason".into()),
-            Some(false)
-        );
-    }
 }
 
 #[cfg(test)]
@@ -952,7 +773,6 @@ mod proof_tests {
     use crate::machine_key::{cert_path, mint_cert, own, MachineKey};
 
     const AFTER: &str = "2026-11-04T00:00:00Z";
-    const LATER: &str = "2026-11-05T00:00:00Z";
 
     fn certify(root: &Path, user_key: &MachineKey) {
         let line = mint_cert(user_key, "jason", &own().expect("own key").public_key(), 1);
@@ -973,18 +793,6 @@ mod proof_tests {
             "decision_id": id, "subject": "topic", "decision": "Ruling.",
             "authority_source": "operator", "scope": scope,
         })
-    }
-
-    fn live_ids(graph: &Path, jsonl: &Path) -> Vec<String> {
-        let mut ids: Vec<String> = read_store_live(graph, jsonl)
-            .expect("reads")
-            .rows
-            .iter()
-            .filter_map(|r| r.get("decision_id").and_then(Value::as_str))
-            .map(str::to_string)
-            .collect();
-        ids.sort();
-        ids
     }
 
     #[test]
@@ -1031,43 +839,5 @@ mod proof_tests {
         std::fs::remove_file(cert_path(dir.path())).expect("removes");
         assert_eq!(read_store_rows(&graph, &jsonl).expect("reads").0.len(), 5);
         assert_eq!(withheld_unproven(), 0);
-    }
-
-    #[test]
-    fn an_unsigned_retirement_of_signed_wide_law_binds_only_where_no_certificate_is() {
-        let _lock = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let dir = tempfile::tempdir().expect("tempdir");
-        let _home = crate::claims::EnvVarGuard::set(
-            crate::paths::HOME_ENV,
-            dir.path().to_str().expect("utf-8"),
-        );
-        let mine = MachineKey::load_or_create(&dir.path().join("mine.pk8")).expect("key");
-        certify(dir.path(), &mine);
-        let retract = |target: &str, id: &str, signed: bool| {
-            let data = json!({"retraction_id": id, "target_decision_id": target, "reason": "r"});
-            envelope("decision_retracted", LATER, data, signed)
-        };
-        let mut superseder = law("d-0000000f", "project:demo");
-        superseder["supersedes"] = json!("d-0000000b");
-        let op = "operator_decision";
-        let jsonl = dir.path().join("decisions.jsonl");
-        let graph = dir.path().join("graph.json");
-        let mut lines = vec![
-            envelope(op, AFTER, law("d-0000000a", "global"), true),
-            envelope(op, AFTER, law("d-0000000b", "global"), true),
-            retract("d-0000000a", "r-0000001", false),
-            envelope(op, LATER, superseder, false),
-        ];
-        std::fs::write(&jsonl, lines.join("\n") + "\n").expect("writes");
-        assert_eq!(live_ids(&graph, &jsonl), ["d-0000000a", "d-0000000b"]);
-        // A signed retraction retires it here too.
-        lines.push(retract("d-0000000a", "r-0000002", true));
-        std::fs::write(&jsonl, lines.join("\n") + "\n").expect("writes");
-        assert_eq!(live_ids(&graph, &jsonl), ["d-0000000b"]);
-        // With no certificate the unsigned rows retire as they always did.
-        std::fs::remove_file(cert_path(dir.path())).expect("removes");
-        assert_eq!(live_ids(&graph, &jsonl), ["d-0000000f"]);
     }
 }

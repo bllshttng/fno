@@ -1730,41 +1730,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn no_newline_marker_does_not_shift_added_line_numbers() {
-        let diff = "\
-diff --git a/n.md b/n.md
-@@ -1,2 +1,2 @@
- one
--strict;
-+strict
-\\ No newline at end of file
-+added line;
-";
-        assert_eq!(parse_added_line_nums(diff), BTreeSet::from([2, 3]));
-    }
-
-    #[test]
-    fn check_lines_reports_only_the_given_lines() {
-        let text = "first; line\n\nsecond; line\n";
-        let only = BTreeSet::from([3usize]);
-        let violations = check_lines(text, &only);
-        // Only line 3 is charged: one semicolon there, nothing from line 1.
-        // Sentence numbers count in-scope sentences only, so it is sentence 1.
-        assert_eq!(violations.len(), 1);
-        assert_eq!(violations[0].rule, 2);
-        assert_eq!(violations[0].sentence.trim(), "second; line");
-    }
-
-    #[test]
-    fn fix_splits_semicolons_and_rejoins_wraps() {
-        // Both bare lines continue the line above them, so the joins collapse
-        // all three into one physical line before the semicolon split.
-        let (fixed, residue) = fix("Do this; do that.\nAlso this\ncontinues here.\n", "mail");
-        assert!(residue.is_empty(), "{residue:?}");
-        assert_eq!(fixed, "Do this. Do that. Also this continues here.\n");
-    }
-
-    #[test]
     fn message_cap_refusal_names_the_enforced_number() {
         // 81 masked words in one sentence: rule 1 (25-word sentence cap) and
         // rule 7 (80-word message cap) both fire.

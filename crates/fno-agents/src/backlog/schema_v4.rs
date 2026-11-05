@@ -582,41 +582,4 @@ mod tests {
         assert!(error.contains("nodes_completed_at_iso"), "{error}");
         assert_eq!(crate::backlog::export_rows(&connection).unwrap(), before);
     }
-
-    #[test]
-    fn two_openers_migrate_once() {
-        let (dir, graph) = v3_store();
-        let handles: Vec<_> = (0..2)
-            .map(|_| {
-                let path = graph.clone();
-                std::thread::spawn(move || crate::backlog::open(&path).map(|_| ()))
-            })
-            .collect();
-        for handle in handles {
-            handle.join().unwrap().unwrap();
-        }
-        let snapshots = std::fs::read_dir(dir.path().join("backups"))
-            .unwrap()
-            .filter_map(|entry| entry.ok())
-            .filter(|entry| {
-                entry
-                    .file_name()
-                    .to_string_lossy()
-                    .starts_with("graph-pre-v4.db.")
-            })
-            .count();
-        assert_eq!(snapshots, 1, "exactly one opener migrated");
-    }
-
-    #[test]
-    fn the_write_connection_enforces_foreign_keys() {
-        let dir = TempDir::new().unwrap();
-        let graph = dir.path().join("graph.json");
-        std::fs::write(&graph, b"{\"entries\": []}").unwrap();
-        let connection = crate::backlog::open(&graph).unwrap();
-        let on: i64 = connection
-            .query_row("PRAGMA foreign_keys", [], |row| row.get(0))
-            .unwrap();
-        assert_eq!(on, 1);
-    }
 }

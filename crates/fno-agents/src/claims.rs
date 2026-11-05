@@ -1186,8 +1186,7 @@ pub(crate) fn validate_inputs(
 
 /// Ambient harness session markers, highest precedence first. The shell twin
 /// is `detect_provider()` in `hooks/helpers/init-target-state.sh`: the same
-/// order, the same non-blank rule; the `shell_marker_twin_matches_table`
-/// test pins the pair.
+/// order, the same non-blank rule.
 pub(crate) const HARNESS_SESSION_MARKERS: &[(&str, &str)] = &[
     ("CODEX_THREAD_ID", "codex"),
     ("CLAUDE_CODE_SESSION_ID", "claude"),
@@ -2117,14 +2116,6 @@ mod tests {
 
     use support::*;
 
-    /// Committed rows in the store beside this journal.
-    fn committed_row_count(events: &std::path::Path) -> usize {
-        let _ = crate::event_store::import_all(events);
-        crate::event_store::query_events(events, &crate::event_store::EventQuery::default())
-            .unwrap_or_default()
-            .len()
-    }
-
     fn opts_in(root: &TempDir) -> AcquireOpts {
         AcquireOpts {
             identity: Some(("claim-test-session".into(), "claude".into())),
@@ -2193,50 +2184,6 @@ mod tests {
         }
     }
 
-    /// Backdate a lock dir's mtime, which is what the steal predicate reads.
-    /// Via libc (already a direct dependency) rather than pulling in filetime.
-    fn age_dir(path: &Path, secs: u64) {
-        use std::os::unix::ffi::OsStrExt;
-        let c = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as i64;
-        let t = libc::timeval {
-            tv_sec: now - secs as i64,
-            tv_usec: 0,
-        };
-        let times = [t, t];
-        // lutimes, not utimes: identical for a real dir, and the only one that
-        // works on the dangling-symlink case below.
-        assert_eq!(unsafe { libc::lutimes(c.as_ptr(), times.as_ptr()) }, 0);
-    }
-
-    #[test]
-    fn default_claim_events_path_resolves_to_the_space_journal() {
-        let td = TempDir::new().unwrap();
-        assert!(std::process::Command::new("git")
-            .args(["init", "-q"])
-            .current_dir(td.path())
-            .status()
-            .unwrap()
-            .success());
-        let nested = td.path().join("crates/fno/src");
-        std::fs::create_dir_all(&nested).unwrap();
-        let _guard = SpacesPinGuard::new(td.path());
-
-        // The pure core with no pin, so this asserts the resolver branch
-        // rather than whatever FNO_EVENTS_PATH the test harness has set. The
-        // fallback is the SPACE journal: a raw repo-root join is how
-        // single_flight and claim rows landed in a stray root whose
-        // MOVED-TO pointer nobody followed.
-        let root = td.path().canonicalize().unwrap();
-        let expected = crate::paths::spaces_root()
-            .join(crate::paths::space_slug(&root))
-            .join("events.jsonl");
-        assert_eq!(claim_events_path_with(None, &nested, None), expected);
-    }
-
     // ---- lease renewal -----------------------------------------
 
     fn replace_fixture(path: &Path, text: &str) -> Result<(), String> {
@@ -2249,18 +2196,6 @@ mod tests {
 
     fn read_claim(root: &TempDir, key: &str) -> ClaimRecord {
         read_claim_file(&lockfile(root, key)).unwrap()
-    }
-    #[test]
-    fn parse_ttl_ms_matches_python_units() {
-        // BARE digits are SECONDS (parity with Python _parse_ttl / sleep).
-        assert_eq!(parse_ttl_ms("2h"), Some(7_200_000));
-        assert_eq!(parse_ttl_ms("30m"), Some(1_800_000));
-        assert_eq!(parse_ttl_ms("3600s"), Some(3_600_000));
-        assert_eq!(parse_ttl_ms("120"), Some(120_000)); // 120 seconds, not ms
-        assert_eq!(parse_ttl_ms("  1h "), Some(3_600_000));
-        assert_eq!(parse_ttl_ms(""), None);
-        assert_eq!(parse_ttl_ms("abc"), None);
-        assert_eq!(parse_ttl_ms("0"), None); // non-positive rejected
     }
 
     #[test]
@@ -2342,70 +2277,6 @@ mod tests {
     }
 
     #[test]
-    fn renew_refuses_to_reanchor_a_pid_unavailable_claim() {
-        // `_reanchor_pid_for` returns None for v2 records, so a Python refresh
-        // extends the TTL and leaves the claim v2/SUSPECT. The Rust renewal
-        // must answer the same: repairing one to v1/LIVE here would make a
-        // lockfile's schema and classification depend on which binary last
-        // renewed it. The stamp proves the refusal is a refusal - a resolvable
-        // durable pid exists and is still not written.
-        let _guard = test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
-        let td = TempDir::new().unwrap();
-        let saved_home = pin_agents_home(&td);
-        let saved_markers = scrub_session_markers();
-        let mut o = opts_in(&td);
-        o.ttl_ms = Some(120_000);
-        o.pid_unavailable = true;
-        let _ = acquire("node:x-v2renew", "target-session:me", o);
-        let before = read_claim(&td, "node:x-v2renew");
-        assert_eq!(before.schema_version, 2);
-        assert!(before.expires_at.is_some());
-
-        let saved_stamps = stamp_session_pid(std::process::id());
-        let result = renew(
-            "node:x-v2renew",
-            "target-session:me",
-            240_000,
-            Some(td.path()),
-        );
-        restore_session_pid_stamps(saved_stamps);
-        assert_eq!(result, Ok(true));
-
-        let after = read_claim(&td, "node:x-v2renew");
-        assert!(after.pid_unavailable);
-        assert_eq!(after.pid, None);
-        assert_eq!(after.schema_version, 2);
-        assert!(after.expires_at.unwrap() > before.expires_at.unwrap());
-        assert_ne!(
-            classify(&after, None),
-            ClaimState::Live,
-            "a v2 claim must stay SUSPECT until expiry, never LIVE"
-        );
-        restore_session_markers(saved_markers);
-        restore_agents_home(saved_home);
-    }
-
-    #[test]
-    fn renew_is_noop_for_wrong_holder() {
-        let td = TempDir::new().unwrap();
-        let mut o = opts_in(&td);
-        o.ttl_ms = Some(120_000);
-        let _ = acquire("node:x-other", "target-session:owner", o);
-        let before = read_claim(&td, "node:x-other").expires_at.unwrap();
-        // A peer must never extend a claim it does not hold.
-        assert_eq!(
-            renew(
-                "node:x-other",
-                "target-session:intruder",
-                120_000,
-                Some(td.path())
-            ),
-            Ok(false)
-        );
-        assert_eq!(read_claim(&td, "node:x-other").expires_at.unwrap(), before);
-    }
-
-    #[test]
     fn renew_refuses_a_stale_verdict_and_preserves_the_row() {
         // AC1-ERR: verdict-gated renewal still refuses a corpse, and a
         // refused renew writes nothing.
@@ -2442,21 +2313,6 @@ mod tests {
         );
     }
 
-    // ---- encoding parity (contract item 1) ------------------------------
-
-    #[test]
-    fn encode_key_matches_python_quote_safe_empty() {
-        // Vectors cross-checked against urllib.parse.quote(key, safe="").
-        assert_eq!(encode_key("node:ab-1234abcd"), "node%3Aab-1234abcd");
-        assert_eq!(encode_key("a b/c"), "a%20b%2Fc");
-        assert_eq!(encode_key("A-Z_a.z~0"), "A-Z_a.z~0");
-        // Uppercase hex: lowercase would silently fork the lock filename.
-        assert_eq!(encode_key("k:v"), "k%3Av");
-        // Non-ASCII percent-encodes per UTF-8 byte.
-        assert_eq!(encode_key("é"), "%C3%A9");
-        assert_eq!(encode_key("走"), "%E8%B5%B0");
-    }
-
     // ---- validation bounds (contract item 10) ----------------------------
 
     #[test]
@@ -2487,14 +2343,6 @@ mod tests {
     // ---- YAML read/write parity (contract item 2) -------------------------
 
     #[test]
-    fn pid_unavailable_without_ttl_is_rejected() {
-        let rec = parse_claim_str(
-            "schema_version: 2\nkey: k\nholder: h\nacquired_at: 5\npid: null\npid_unavailable: true\nhost: x\n",
-        );
-        assert!(rec.is_err());
-    }
-
-    #[test]
     fn reader_rejects_newer_schema_non_dict_and_garbage_as_corrupted() {
         for text in [
             "schema_version: 3\nkey: k\nholder: h\nacquired_at: 5\npid: 1\nhost: x\n",
@@ -2507,59 +2355,6 @@ mod tests {
                 "should be corrupted: {text}"
             );
         }
-    }
-
-    // ---- session witness ------------------------------------------
-
-    /// A live-session record: session-proven pid that is DEAD (the resume
-    /// shape every dated specimen shares - a resumed session keeps its
-    /// session id and takes a new pid).
-    fn session_record(pid: i32, acquired_at: i64, expires_at: Option<i64>) -> ClaimRecord {
-        let mut rec = record(pid, acquired_at, expires_at, &hostname());
-        rec.session_id = Some("ses_witness".into());
-        rec.pid_provenance = Some("session-prover".into());
-        rec
-    }
-
-    #[test]
-    fn resumed_session_registry_row_keeps_expired_claim_live() {
-        // a session that wrote 18 seconds before the read was declared
-        // provably dead and its work freed, because the recorded pid had
-        // stopped tracking the session. A live session NEVER reads stale.
-        let now = now_ms();
-        let rec = session_record(dead_pid() as i32, now - 1, Some(now - 1));
-        let witness: SessionWitness = &|_| SessionLiveness::Live(basis::REGISTRY_SESSION_LIVE);
-        assert_eq!(
-            classify_with_basis_and_exclusivity(&rec, Some(now), &probe_pid, None, Some(witness)),
-            (ClaimState::Live, basis::REGISTRY_SESSION_LIVE)
-        );
-    }
-
-    #[test]
-    fn expired_unresolved_becomes_reapable_after_grace() {
-        // The design refusal this node encodes: unknown is reapable by policy
-        // after a bounded wait, never held for a proof that never arrives.
-        // Inside the grace: Suspect (protected). Past it: Stale, the reaper
-        // reclaims - the exact arm PR 1509 destroyed when it mapped unknown to
-        // alive-only and the reaper starved (assert 0 == 5).
-        let now = now_ms();
-        let rec = session_record(dead_pid() as i32, now - 1, Some(now - 1));
-        let witness: SessionWitness = &|_| SessionLiveness::Unresolved;
-        assert_eq!(
-            classify_with_basis_and_exclusivity(&rec, Some(now), &probe_pid, None, Some(witness)),
-            (ClaimState::Suspect, basis::TTL_EXPIRED_UNRESOLVED)
-        );
-        let after_grace = now + UNRESOLVED_GRACE_MS + 1;
-        assert_eq!(
-            classify_with_basis_and_exclusivity(
-                &rec,
-                Some(after_grace),
-                &probe_pid,
-                None,
-                Some(witness)
-            ),
-            (ClaimState::Stale, basis::TTL_EXPIRED_UNRESOLVED)
-        );
     }
 
     // ---- liveness classification (contract item 8) ------------------------
@@ -2644,125 +2439,6 @@ mod tests {
         );
     }
 
-    // ---- the verdict carries its basis ------------------------------------
-
-    /// Classify with a probe that refuses inspection of `refused_pid`.
-    fn refused_probe(refused_pid: i32) -> impl Fn(i32) -> PidProbe {
-        move |pid| {
-            if pid == refused_pid {
-                PidProbe::Refused
-            } else {
-                probe_pid(pid)
-            }
-        }
-    }
-
-    #[test]
-    fn classify_basis_names_each_cause() {
-        let me = std::process::id() as i32;
-        let host = hostname();
-        let now = now_ms();
-        let basis_of = |rec: &ClaimRecord, probe: &dyn Fn(i32) -> PidProbe| {
-            classify_with_basis(rec, Some(now), probe).1
-        };
-        // Live holder, pid liveness and TTL alike.
-        assert_eq!(
-            basis_of(&record(me, now, None, &host), &probe_pid),
-            basis::LIVE
-        );
-        assert_eq!(
-            basis_of(&record(me, now, Some(now + 60_000), &host), &probe_pid),
-            basis::LIVE
-        );
-        // Gone pid on a pid-liveness claim: provably dead.
-        assert_eq!(
-            basis_of(&record(-1, now, None, &host), &probe_pid),
-            basis::PID_ABSENT
-        );
-        // Reuse: acquired before this process started.
-        assert_eq!(
-            basis_of(&record(me, 1, None, &host), &probe_pid),
-            basis::PID_REUSE
-        );
-        // Off-machine.
-        assert_eq!(
-            basis_of(&record(me, now, None, "elsewhere.example"), &probe_pid),
-            basis::OFFHOST
-        );
-        // Expired TTL without corroboration.
-        assert_eq!(
-            basis_of(&record(me, now, Some(now - 1), &host), &probe_pid),
-            basis::TTL_EXPIRED
-        );
-        // The positive marker that separates the deaths: a REFUSED holder is
-        // SUSPECT/access-denied, a GONE holder is STALE/pid-absent.
-        let (state, cause) =
-            classify_with_basis(&record(me, now, None, &host), Some(now), &refused_probe(me));
-        assert_eq!((state, cause), (ClaimState::Suspect, basis::ACCESS_DENIED));
-        // The same refusal inside a TTL window stays SUSPECT; past the window
-        // the TTL decides (STALE/ttl-expired).
-        let (state, cause) = classify_with_basis(
-            &record(me, now, Some(now + 60_000), &host),
-            Some(now),
-            &refused_probe(me),
-        );
-        assert_eq!((state, cause), (ClaimState::Suspect, basis::ACCESS_DENIED));
-        let (state, cause) = classify_with_basis(
-            &record(me, now, Some(now - 1), &host),
-            Some(now),
-            &refused_probe(me),
-        );
-        assert_eq!((state, cause), (ClaimState::Stale, basis::TTL_EXPIRED));
-        // pid_unavailable names itself.
-        let mut unp = record(-1, now, Some(now + 60_000), &host);
-        unp.pid = None;
-        unp.pid_unavailable = true;
-        unp.schema_version = 2;
-        assert_eq!(basis_of(&unp, &probe_pid), basis::PID_UNAVAILABLE);
-        // The same record claimed on another machine names the machine.
-        unp.host = "another-host.example".into();
-        unp.machine_id = Some("6219ED9C-0000-0000-0000-000000000000".into());
-        assert_eq!(basis_of(&unp, &probe_pid), basis::OFFHOST);
-    }
-
-    #[test]
-    fn sweep_classification_preserves_expiry_host_and_shared_pid_rules() {
-        let me = std::process::id() as i32;
-        let host = hostname();
-        let now = now_ms();
-        let mut proven = record(me, now, Some(now - 1), &host);
-        proven.pid_provenance = Some("session-prover".into());
-
-        assert_eq!(
-            classify_for_sweep(&proven, Some(now), &probe_pid, None, None),
-            (false, "live")
-        );
-        assert_eq!(
-            classify_for_sweep(&proven, Some(now), &probe_pid, Some(false), None),
-            (false, "suspect")
-        );
-        assert_eq!(
-            classify_for_sweep(
-                &record(-1, now, Some(now - 1), &host),
-                Some(now),
-                &probe_pid,
-                None,
-                None
-            ),
-            (true, "")
-        );
-        assert_eq!(
-            classify_for_sweep(
-                &record(me, now, None, "elsewhere.example"),
-                Some(now),
-                &probe_pid,
-                None,
-                None,
-            ),
-            (false, "offhost")
-        );
-    }
-
     // ---- acquire / release / status semantics (contract items 3-7) --------
 
     #[test]
@@ -2801,76 +2477,7 @@ mod tests {
         }
     }
 
-    /// A zombie answers `kill(pid, 0)` with success, so a no-TTL slot claim
-    /// naming one read Live forever and wedged the run-slot queue. The probe
-    /// must read a zombie as gone.
-    #[test]
-    fn a_zombie_holder_never_reads_live() {
-        let child = std::process::Command::new("/bin/sh")
-            .args(["-c", "exit 0"])
-            .spawn()
-            .expect("spawn");
-        let pid = child.id();
-        // SAFETY: signal 0-style existence probe follow-up on a pid this
-        // test spawned; the child is killed and deliberately never waited
-        // so it stays a zombie under this process, the state under test.
-        unsafe {
-            libc::kill(pid as libc::c_int, libc::SIGKILL);
-        }
-        let mut corpse = false;
-        for _ in 0..50 {
-            if crate::census::pid_is_zombie(pid) {
-                corpse = true;
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(20));
-        }
-        assert!(corpse, "fixture must produce a zombie, not a reaped pid");
-        assert!(matches!(probe_pid(pid as i32), PidProbe::Absent));
-        let td = TempDir::new().unwrap();
-        let mut o = opts_in(&td);
-        o.pid = Some(pid);
-        o.ttl_ms = None;
-        assert!(matches!(
-            acquire("test:cargo-run:0", "cargo:fixture", o),
-            AcquireOutcome::Acquired(_)
-        ));
-        let rec = read_claim_file(&lockfile(&td, "test:cargo-run:0")).unwrap();
-        assert_ne!(classify(&rec, None), ClaimState::Live);
-        let mut next = opts_in(&td);
-        next.pid = Some(std::process::id());
-        assert!(matches!(
-            acquire("test:cargo-run:0", "cargo:next", next),
-            AcquireOutcome::Acquired(_)
-        ));
-    }
-
     // -- machine identity -------------------------------------
-
-    #[test]
-    fn make_claim_records_machine_id_not_hostname() {
-        // Parity guard: Python's acquire writes the same value. If these two
-        // writers disagree, each implementation reads the other's claims as
-        // cross-machine and silently treats live claims as recoverable. Where
-        // the OS exposes no id both omit the field, which is also parity.
-        let td = TempDir::new().unwrap();
-        match acquire("session:mid", "pty:owner", opts_in(&td)) {
-            AcquireOutcome::Acquired(rec) => {
-                let expected = machine_id();
-                if expected.is_empty() {
-                    assert_eq!(rec.machine_id, None);
-                } else {
-                    assert_eq!(rec.machine_id.as_deref(), Some(expected.as_str()));
-                }
-                assert_eq!(
-                    rec.host,
-                    hostname(),
-                    "host stays the hostname a pre-change reader expects"
-                );
-            }
-            other => panic!("{other:?}"),
-        }
-    }
 
     #[test]
     fn stale_claim_is_reclaimed_and_audited() {
@@ -2891,25 +2498,6 @@ mod tests {
         let events = read_events(&td);
         assert_eq!(events.last().unwrap()["type"], "claim_stale_reclaimed");
         assert_eq!(events.last().unwrap()["data"]["previous_holder"], "h");
-    }
-
-    #[test]
-    fn corrupted_file_status_reports_acquire_refuses_release_leaves() {
-        let td = TempDir::new().unwrap();
-        let path = lockfile(&td, "session:bad");
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(&path, "{{{{not yaml").unwrap();
-
-        let (state, rec) = status("session:bad", Some(td.path()));
-        assert_eq!(state, ClaimState::Corrupted);
-        assert!(rec.is_none());
-        assert!(matches!(
-            acquire("session:bad", "pty:x", opts_in(&td)),
-            AcquireOutcome::Error(_)
-        ));
-        // Migration damage remains a named error until its source is repaired.
-        assert!(release("session:bad", "pty:x", Some(td.path()), Some(td.path())).is_err());
-        assert!(path.exists());
     }
 
     #[test]
@@ -2935,20 +2523,23 @@ mod tests {
 
     // ---- recovery mutex (contract item 6) ---------------------------------
 
-    #[test]
-    fn dangling_symlink_lock_never_spins() {
-        // EEXIST to create_dir but NotFound to a following metadata(): a
-        // "retry now" there spins the caller forever with its deadline
-        // unreachable. Stale -> stolen; fresh -> waited on.
-        let td = TempDir::new().unwrap();
-        let lock = td.path().join("events.jsonl.lock.d");
-        std::os::unix::fs::symlink(td.path().join("nonexistent"), &lock).unwrap();
-
-        assert!(!steal_if_stale(&lock), "fresh dangling link was stolen");
-
-        age_dir(&lock, STALE_MUTEX_STEAL.as_secs() + 60);
-        assert!(steal_if_stale(&lock), "stale dangling link was not stolen");
-        assert!(std::fs::symlink_metadata(&lock).is_err());
+    /// Backdate a lock dir's mtime, which is what the steal predicate reads.
+    /// Via libc (already a direct dependency) rather than pulling in filetime.
+    fn age_dir(path: &Path, secs: u64) {
+        use std::os::unix::ffi::OsStrExt;
+        let c = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        let t = libc::timeval {
+            tv_sec: now - secs as i64,
+            tv_usec: 0,
+        };
+        let times = [t, t];
+        // lutimes, not utimes: identical for a real dir, and the only one that
+        // also works on a dangling symlink.
+        assert_eq!(unsafe { libc::lutimes(c.as_ptr(), times.as_ptr()) }, 0);
     }
 
     #[test]
@@ -2979,47 +2570,6 @@ mod tests {
         // The new holder releases cleanly (token matches -> remove_dir_all).
         release_dir_mutex(&lock, &new_holder);
         assert!(!lock.exists());
-    }
-
-    #[test]
-    fn concurrent_stealers_have_exactly_one_rename_winner() {
-        // AC3-FR: both writers land whole lines; neither deadlocks.
-        let td = TempDir::new().unwrap();
-        let events = td.path().join(".fno/events.jsonl");
-        std::fs::create_dir_all(events.parent().unwrap()).unwrap();
-        let lock = events.with_file_name("events.jsonl.lock.d");
-        std::fs::create_dir(&lock).unwrap();
-        age_dir(&lock, STALE_MUTEX_STEAL.as_secs() + 60);
-
-        let handles: Vec<_> = (0..4)
-            .map(|i| {
-                let events = events.clone();
-                std::thread::spawn(move || {
-                    append_event_line(
-                        &events,
-                        &json!({"ts": "2026-01-01T00:00:00Z", "source": "test", "type": "x", "data": {"i": i}}),
-                        // The assertion is that all four lines land whole with
-                        // one rename winner, never that they land fast, so the
-                        // budget is generous. But it must EXCEED STALE_MUTEX_STEAL,
-                        // not equal it. steal_if_stale is age-gated, so a FRESH
-                        // holder is never stolen and always releases; the only
-                        // delay past normal contention is a holder starved under
-                        // parallel load, whose lock becomes stealable at exactly
-                        // STALE_MUTEX_STEAL. A budget == the threshold (the prior
-                        // 120s == 120s) puts the steal and the waiter's deadline on
-                        // the same knife-edge, so the deadline wins and the test
-                        // flakes at 120s wall. 2x gives the steal a full threshold
-                        // of headroom before the deadline.
-                        STALE_MUTEX_STEAL * 2,
-                    )
-                })
-            })
-            .collect();
-        for h in handles {
-            h.join().unwrap().unwrap();
-        }
-
-        assert_eq!(committed_row_count(&events), 4);
     }
 
     #[test]

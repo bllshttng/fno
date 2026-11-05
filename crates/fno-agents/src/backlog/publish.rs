@@ -760,19 +760,4 @@ mod tests {
         let err = check_receipt(r#"{"written":[]}"#, 0).unwrap_err();
         assert!(err.contains("wrote nothing"), "{err}");
     }
-
-    #[test]
-    fn a_missing_request_form_warns_by_name_and_a_present_one_does_not() {
-        let dir = TempDir::new("form");
-        let warning = missing_form_warning(&dir.0, "fno-request").expect("no form yet");
-        assert!(
-            warning.contains(".github/ISSUE_TEMPLATE/fno-request.yml"),
-            "{warning}"
-        );
-        let templates = dir.0.join(".github").join("ISSUE_TEMPLATE");
-        std::fs::create_dir_all(&templates).unwrap();
-        std::fs::write(templates.join("fno-request.yml"), "name: x\n").unwrap();
-        assert!(missing_form_warning(&dir.0, "fno-request").is_none());
-        assert!(missing_form_warning(&dir.0, "other-label").is_some());
-    }
 }

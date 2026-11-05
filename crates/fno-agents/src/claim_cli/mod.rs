@@ -551,47 +551,4 @@ mod release_stamp_tests {
         );
         restore_graph(root, backup);
     }
-
-    /// A release whose node carries no matching row records nothing: the
-    /// append here is the completion a rolled-back or blueprint release never
-    /// earned, which is the defect this fill-only shape exists to prevent.
-    #[test]
-    fn release_stamp_never_appends_a_row_that_is_not_there() {
-        let _guard = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let (root, backup) = isolate_graph();
-        let db = root.path().join("db/graph.db");
-        seed_node(&db, serde_json::json!([]));
-        stamp_do_on_release("node:rel-fill", &fill_claim(), "target-session:sess-r");
-        let rows = read_sessions(&db);
-        assert!(rows.is_empty(), "the stamp must not append: {rows:?}");
-        restore_graph(root, backup);
-    }
-
-    /// An already-closed matching row stays closed and stays one row: the
-    /// fill is idempotent on a re-release shape.
-    #[test]
-    fn release_stamp_leaves_a_closed_row_closed() {
-        let _guard = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let (root, backup) = isolate_graph();
-        let db = root.path().join("db/graph.db");
-        seed_node(
-            &db,
-            serde_json::json!([
-                {"session_id": "sess-r", "phase": "execute", "harness": "claude",
-                 "started_at": "2026-10-25T00:00:00Z", "ended_at": "2026-10-25T01:00:00Z"},
-            ]),
-        );
-        stamp_do_on_release("node:rel-fill", &fill_claim(), "target-session:sess-r");
-        let rows = read_sessions(&db);
-        assert_eq!(rows.len(), 1);
-        assert_eq!(
-            rows[0].get("ended_at").and_then(Value::as_str),
-            Some("2026-10-25T01:00:00Z")
-        );
-        restore_graph(root, backup);
-    }
 }

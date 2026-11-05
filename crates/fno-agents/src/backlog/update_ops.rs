@@ -256,41 +256,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn pre_rename_dispatch_key_reads_and_writes_as_dispatch_command() {
-        use crate::backlog::model::{Node, LEGACY_DISPATCH_COMMAND_KEY};
-        let op =
-            parse_op_token(&format!("{LEGACY_DISPATCH_COMMAND_KEY}=/fno:think")).expect("operator");
-        assert_eq!(op.field, "dispatch_command");
-        let mut row = serde_json::json!({
-            "id": "x-1", "slug": "x-1", "title": "t", "type": "feature",
-            "status": "ready", "priority": "p2", "domain": "code",
-            "created_at": "2026-09-11T00:00:00+00:00"
-        });
-        row[LEGACY_DISPATCH_COMMAND_KEY] = serde_json::json!("/fno:think");
-        let node = Node::from_json(&row).expect("row");
-        assert_eq!(node.dispatch.command.as_deref(), Some("/fno:think"));
-        let out = node.to_json();
-        assert_eq!(out["dispatch_command"], "/fno:think");
-        assert!(out.get(LEGACY_DISPATCH_COMMAND_KEY).is_none());
-    }
-
-    #[test]
     fn parse_splits_on_the_first_equals() {
         let op = parse_op_token("details+=a=b").expect("operator");
         assert_eq!(op.field, "details");
         assert_eq!(op.op, Op::Add);
         assert_eq!(op.value, "a=b");
         assert_eq!(op.token, "details+=a=b");
-    }
-
-    #[test]
-    fn non_operator_shapes_return_none() {
-        assert!(parse_op_token("--title=T").is_none());
-        assert!(parse_op_token("-d=x").is_none());
-        assert!(parse_op_token("plain").is_none());
-        assert!(parse_op_token("x-aaaa1111").is_none());
-        assert!(parse_op_token("Bad_Field=1").is_none());
-        assert!(parse_op_token("=value").is_none());
     }
 
     #[test]

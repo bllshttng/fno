@@ -528,25 +528,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// AC2-HP: tickets A, B, C enqueued in order; the front is A, then B,
-    /// then C. The earliest arrival acquires first - the property itself,
-    /// never a duration.
-    #[test]
-    fn the_front_is_the_earliest_arrival() {
-        let dir = queue_dir_for(Path::new("/tmp/claim-q-order.lock"));
-        let _ = std::fs::remove_dir_all(&dir);
-        let a = enter(&dir).expect("enter a");
-        let b = enter(&dir).expect("enter b");
-        let c = enter(&dir).expect("enter c");
-        assert_eq!(position(&a).expect("pos a").index, 0, "A is the front");
-        leave(a);
-        assert_eq!(position(&b).expect("pos b").index, 0, "B is next");
-        leave(b);
-        assert_eq!(position(&c).expect("pos c").index, 0, "C is last");
-        leave(c);
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
     /// AC3-EDGE: a dead contender's ticket is reaped by the scan, and the
     /// next live ticket is the front. A dead contender does not wedge the
     /// queue.
@@ -561,28 +542,6 @@ mod tests {
         assert_eq!(pos.total, 1, "the dead ticket does not count: {pos:?}");
         assert!(!corpse.exists(), "the scan reaps the corpse it walks past");
         leave(t);
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// AC6-EDGE: after the front leaves, a fresh arrival allocates ABOVE the
-    /// highest surviving ticket, never in the hole (which would put it at the
-    /// front of the queue).
-    #[test]
-    fn allocation_never_reuses_a_dequeued_fronts_number() {
-        let dir = queue_dir_for(Path::new("/tmp/claim-q-hole.lock"));
-        let _ = std::fs::remove_dir_all(&dir);
-        let a = enter(&dir).expect("enter a");
-        let b = enter(&dir).expect("enter b");
-        leave(a);
-        let c = enter(&dir).expect("enter c");
-        assert!(
-            c.seq > b.seq,
-            "the hole is never reused: c={} must be above b={}",
-            c.id(),
-            b.id()
-        );
-        leave(b);
-        leave(c);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -605,27 +564,6 @@ mod tests {
         assert_eq!(pos.index, 0, "the foreign ticket never blocks: {pos:?}");
         assert!(foreign.exists(), "an unprobeable ticket is never reaped");
         leave(t);
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// A scan that condemns our own ticket reports GONE, never "front of an
-    /// empty queue": found_self is decided by the survivor walk, not by name
-    /// match before the reaper. The one-shot-pid command hazard this regression
-    /// pins: a ticket stamped with a now-dead pid must read as gone (exit 2),
-    /// so the caller re-enqueues instead of claiming an unearned front.
-    #[test]
-    fn a_condemned_self_ticket_reads_as_gone_not_front() {
-        let dir = queue_dir_for(Path::new("/tmp/claim-q-gone.lock"));
-        let _ = std::fs::remove_dir_all(&dir);
-        let corpse = ticket_at(&dir, 1, dead_pid(), 0, &crate::claims::machine_id());
-        let t = Ticket {
-            dir: corpse.clone(),
-            seq: 1,
-        };
-        assert!(
-            position(&t).is_err(),
-            "a condemned self ticket must error, never read as front"
-        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

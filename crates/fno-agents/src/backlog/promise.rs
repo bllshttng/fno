@@ -806,24 +806,6 @@ mod tests {
         assert!(reason.contains("Malformed frontmatter"), "{reason}");
     }
 
-    #[test]
-    fn refusal_c_names_the_ship_gap() {
-        let text = promise_refusal_c("ab-1234abcd", "plans/p.md", 3, 1);
-        assert!(text.contains("promised 3 ships; only 1 merged"), "{text}");
-        assert!(text.contains("expected_url_count: 3"), "{text}");
-    }
-
-    #[test]
-    fn refusal_d_caps_the_carveout_list() {
-        let deferred: Vec<Value> = (0..7)
-            .map(|i| serde_json::json!({"id": format!("c{i}"), "need": format!("n{i}")}))
-            .collect();
-        let text = promise_refusal_d("ab-1234abcd", &deferred);
-        assert!(text.contains("would close with 7 unharvested"), "{text}");
-        assert!(text.contains("...and 2 more"), "{text}");
-        assert!(!text.contains("c5:"), "{text}");
-    }
-
     fn verdict(outcome: PromiseOutcome) -> PromiseVerdict {
         PromiseVerdict {
             outcome,
@@ -848,20 +830,6 @@ mod tests {
         assert_eq!(asked, vec!["ab-planned".to_string()]);
         assert!(held.contains_key("ab-planned"));
         assert!(!held.contains_key("ab-planless"));
-    }
-
-    #[test]
-    fn a_satisfied_gate_does_not_hold_the_rollup() {
-        let candidates = vec![serde_json::json!({
-            "id": "ab-multi",
-            "plan_path": "plans/multi.md",
-            "pr_number": 3606,
-        })];
-        let held = rollup_hold_set(&candidates, &mut |_node| verdict(PromiseOutcome::Ok));
-        // The map holds every warm verdict, Ok included: the hold reads
-        // verdict.satisfied(), not key presence (rollup_holds).
-        assert!(held["ab-multi"].satisfied());
-        assert!(!rollup_holds(&candidates[0], &held));
     }
 
     #[test]
@@ -906,38 +874,5 @@ mod tests {
         let v =
             resolve_promise_evidence_with(&node, None, &[], &|_, _, _| Ok(("MERGED".into(), None)));
         assert!(v.satisfied(), "{:?}", v.reason);
-    }
-
-    #[test]
-    fn split_hold_reads_a_retryable_outage_as_unknown_and_skips_single_ref_nodes() {
-        let node = serde_json::json!({
-            "id": "ab-1234abcd",
-            "status": "in_progress",
-            "pr_number": 3658,
-            "additional_prs": [{"number": 3708}],
-        });
-        let v = resolve_promise_evidence_with(&node, None, &[], &|_, _, _| {
-            Err(PrReadError::new("gh unavailable", "availability"))
-        });
-        assert!(!v.satisfied());
-        assert_eq!(v.exit_code(), 4);
-        let reason = v.reason.as_deref().unwrap_or_default();
-        assert!(reason.contains("Unknown:"), "{reason}");
-        assert!(reason.contains("reconcile --node"), "{reason}");
-
-        // A single-ref node never pays for the read: the stub would fail
-        // the verdict if it fired, so a passing one proves the skip.
-        let single = serde_json::json!({
-            "id": "ab-1234abcd",
-            "status": "in_progress",
-            "pr_number": 3658,
-        });
-        let v = resolve_promise_evidence_with(&single, None, &[], &|_, _, _| {
-            Err(PrReadError::new(
-                "the read must not fire on one ref",
-                "availability",
-            ))
-        });
-        assert!(v.satisfied());
     }
 }

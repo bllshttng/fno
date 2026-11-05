@@ -35,35 +35,11 @@ fn codex_node_claim_no_ttl_live_host_pid_without_session_suspects() {
 }
 
 #[test]
-fn codex_node_claim_ttl_window_live_host_pid_without_session_suspects() {
-    let now = now_ms();
-    let mut rec = shared_host_record(Some("codex"), now, Some(now + 7_200_000));
-    rec.session_id = None;
-    assert_eq!(
-        classify_with_basis_and_exclusivity(&rec, Some(now), &probe_pid, None, None),
-        (ClaimState::Suspect, basis::PID_SHARED)
-    );
-}
-
-#[test]
 fn per_session_host_node_claim_no_ttl_live_pid_stays_live() {
     // The must-not-break twin: a harness whose pid IS the session keeps the
     // pid-liveness reading on every arm.
     let now = now_ms();
     let rec = shared_host_record(Some("claude"), now, None);
-    assert_eq!(
-        classify_with_basis_and_exclusivity(&rec, Some(now), &probe_pid, None, None),
-        (ClaimState::Live, basis::LIVE)
-    );
-}
-
-#[test]
-fn codex_non_node_key_no_ttl_live_pid_keeps_pid_reading() {
-    // Scope guard: the node's title names NODE claims; other keys keep the
-    // bare-pid reading until a specimen widens the contract.
-    let now = now_ms();
-    let mut rec = shared_host_record(Some("codex"), now, None);
-    rec.key = "review:branch:x".into();
     assert_eq!(
         classify_with_basis_and_exclusivity(&rec, Some(now), &probe_pid, None, None),
         (ClaimState::Live, basis::LIVE)

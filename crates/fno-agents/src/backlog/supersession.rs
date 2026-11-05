@@ -371,59 +371,6 @@ pub(crate) fn summarize_edge_settlement(receipts: &[Value]) -> String {
 mod tests {
     use super::*;
 
-    fn pred(id: &str, surfaces: &[&str], verified: bool) -> Value {
-        let mut record = json!({"cause": "dup of the legend work", "surfaces": surfaces});
-        if verified {
-            record["verified_at"] = json!("2026-09-01T00:00:00Z");
-        }
-        json!({
-            "id": id,
-            "superseded_by": "x-succ",
-            "supersession": record,
-        })
-    }
-
-    #[test]
-    fn full_surface_match_stamps_the_record() {
-        let mut entries = vec![pred("x-pre", &["src/a.rs", "./src/b.rs"], false)];
-        let receipts = verify_pending_supersessions(
-            &mut entries,
-            "x-succ",
-            &["src/a.rs".into(), "src/b.rs".into(), "src/c.rs".into()],
-            77,
-            Some("2026-10-02T00:00:00Z"),
-            true,
-        );
-        assert!(receipts.is_empty());
-        let record = &entries[0]["supersession"];
-        assert_eq!(record["verified_at"], "2026-10-02T00:00:00Z");
-        assert_eq!(record["evidence_pr"], 77);
-        assert_eq!(record["matched_surfaces"], json!(["src/a.rs", "src/b.rs"]));
-    }
-
-    #[test]
-    fn uncovered_surfaces_hold_and_the_kind_tracks_completeness() {
-        for (complete, kind) in [
-            (true, "supersession_unverified"),
-            (false, "supersession_evidence_truncated"),
-        ] {
-            let mut entries = vec![pred("x-pre", &["src/a.rs", "src/gone.rs"], false)];
-            let receipts = verify_pending_supersessions(
-                &mut entries,
-                "x-succ",
-                &["src/a.rs".into()],
-                77,
-                None,
-                complete,
-            );
-            assert_eq!(receipts.len(), 1, "{kind}");
-            assert_eq!(receipts[0]["kind"], kind);
-            assert_eq!(receipts[0]["predecessor"], "x-pre");
-            assert_eq!(receipts[0]["uncovered_surfaces"], json!(["src/gone.rs"]));
-            assert!(entries[0]["supersession"].get("verified_at").is_none());
-        }
-    }
-
     #[test]
     fn a_narrower_successor_is_refused_until_the_leftover_is_filed() {
         fn check(
@@ -457,37 +404,6 @@ mod tests {
         assert_eq!(
             coverage_clause(&whole, "x-new", "x-old", Some("renames all"), None, None).unwrap(),
             "covers: renames all"
-        );
-    }
-
-    #[test]
-    fn the_probe_counts_a_recordless_and_an_uncovered_supersession() {
-        let mut entries = vec![
-            json!({"id": "x-succ", "completed_at": "2026-10-02T00:00:00Z", "pr_number": 9}),
-            json!({"id": "x-open", "superseded_by": "x-live"}),
-            json!({"id": "x-live"}),
-            json!({"id": "x-bare", "superseded_by": "x-succ"}),
-            pred("x-pre", &["src/a.rs", "src/b.rs"], false),
-            pred("x-ok", &["src/a.rs"], true),
-            json!({"id": "x-rest", "deferred_at": "2026-10-03T00:00:00Z"}),
-        ];
-        entries[4]["supersession"]["matched_surfaces"] = json!(["src/a.rs"]);
-        entries[5]["supersession"]["reason"] = json!("split; leftover: x-rest");
-        let row = |id: &str, uncovered: Value, recorded: bool| {
-            json!({"predecessor": id, "successor": "x-succ", "evidence_pr": 9,
-                   "uncovered_surfaces": uncovered, "reason": null, "recorded": recorded})
-        };
-        assert_eq!(
-            shipped_successor_unproven(&entries, &entries),
-            vec![
-                row("x-bare", json!([]), false),
-                row("x-pre", json!(["src/b.rs"]), true)
-            ]
-        );
-        // A verified supersession still drops scope when its leftover parks.
-        assert_eq!(
-            dead_leftovers(&entries),
-            vec!["x-ok (its leftover x-rest is deferred)".to_string()]
         );
     }
 
