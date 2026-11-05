@@ -59,6 +59,7 @@ use row_menu::{build_tab_menu, row_menu_keys, row_menu_mouse};
 // Pickers, the launch moment and the snapshot action live in their own
 // modules: client.rs is shrink-only under the file-budget gate.
 pub(crate) mod attach_handshake;
+mod health;
 mod launch;
 mod panic_log;
 mod placement_pickers;
@@ -674,6 +675,7 @@ pub(crate) struct View {
     session: String,
     layout: LayoutView,
     frames: HashMap<u64, Frame>,
+    health: health::Health,
     /// Manual sideline toggle; narrow terminals override it (auto-hide).
     /// Orthogonal to [`View::density`]: this is visibility, that is how much
     /// each visible row shows. `Slim` is a narrow rail, NOT a hidden panel.
@@ -1825,6 +1827,7 @@ impl View {
         // canonical size, so nothing changes until the first drag.
         let sideline_width = stored_width.unwrap_or_else(|| canonical_width(density));
         View {
+            health: health::Health::new(Instant::now()),
             term,
             session,
             layout,
@@ -6511,6 +6514,7 @@ async fn attach_and_run(
     .await
     .map_err(|e| format!("attach failed: {e}"))?;
 
+    view.health = health::Health::new(Instant::now());
     let stashed_modesync =
         attach_handshake::read_preamble(&mut sock_r, &mut view, &log_hint).await?;
 
@@ -6908,7 +6912,9 @@ async fn attach_and_run(
                 meter_tx.clone(),
             );
         }
+        let health_deadline = view.health.deadline();
         tokio::select! {
+            _ = health::wait(health_deadline) => view.health.record(),
             msg = srv_rx.recv() => match msg.unwrap_or(Err(ProtoError::Closed)) {
                 Ok(ServerMsg::Frame { pane_id, frame }) => {
                     if !frame.geometry_ok() {
@@ -6926,6 +6932,7 @@ async fn attach_and_run(
                         // from this frame, so streaming output neither paints
                         // a stale span nor scans at frame cadence.
                         view.link_hover.on_frame(pane_id, Instant::now());
+                        view.health.frame(Instant::now());
                         view.frames.insert(pane_id, frame);
                         if let Err(e) = compositor.draw(&view.compose()) {
                             break Err(format!("draw: {e}"));
@@ -7952,6 +7959,7 @@ async fn dispatch_event(
             write_msg(sock_w, &ClientMsg::Input(chunk))
                 .await
                 .map_err(|e| format!("input send failed: {e}"))?;
+            view.health.input(Instant::now());
         }
         Event::ShowPaneIds => {
             view.reveal_pane_ids_at(Instant::now());
