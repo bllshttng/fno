@@ -36,7 +36,9 @@ wt_lock_reason() {
 _wt_lock_age_secs() {
     local admin mtime now
     admin="$(_wt_admin_dir "${1:-}")" || return 1
-    mtime="$(stat -f %m "$admin/locked" 2>/dev/null || stat -c %Y "$admin/locked" 2>/dev/null)" || return 1
+    # GNU form first: BSD stat rejects -c, but GNU stat reads -f as filesystem
+    # status and can exit 0 with junk for %m.
+    mtime="$(stat -c %Y "$admin/locked" 2>/dev/null || stat -f %m "$admin/locked" 2>/dev/null)" || return 1
     [[ "$mtime" =~ ^[0-9]+$ ]] || return 1
     now="$(date +%s)"
     printf '%s\n' "$((now - mtime))"
