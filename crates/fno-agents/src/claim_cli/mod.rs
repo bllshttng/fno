@@ -5,8 +5,7 @@
 //! door execs `fno agents claim` straight into this binary, so this
 //! module owns the operator contract: flag spellings, validation messages,
 //! exit codes (0 acquired; 1 held-by-other/contention; 2 validation; 3
-//! transient) and the human/JSON output shapes. The goldens frozen from the
-//! Python leaf (`tests/claim_acquire_parity.rs`) are the contract.
+//! transient) and the human/JSON output shapes.
 
 pub mod acquire;
 pub mod help;

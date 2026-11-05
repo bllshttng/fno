@@ -9,7 +9,6 @@ crates/fno-agents/tests/accounts_pick_golden_driver.py	delete-by python-cli-reti
 crates/fno-agents/tests/accounts_reconcile_golden_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
 crates/fno-agents/tests/accounts_records_golden_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
 crates/fno-agents/tests/accounts_required_bot_golden_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
-crates/fno-agents/tests/accounts_state_read_golden_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
 crates/fno-agents/tests/accounts_store_golden_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
 crates/fno-agents/tests/accounts_usage_golden_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
 crates/fno-agents/tests/accounts_usage_probe_golden_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does

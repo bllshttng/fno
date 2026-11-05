@@ -3,8 +3,7 @@
 //! asks of them (cooldown, usage, headroom, the projected window close, the
 //! round-robin cursor) and the one writer of the file. Ported from
 //! the deleted Python `runtime_state.py`; [run] is the one writer door, and
-//! the parity cases live in `tests/accounts_state_read_parity.rs`
-//! and `tests/accounts_state_write_parity.rs`.
+//! `tests/accounts_state_write_parity.rs` holds the writer.
 //!
 //! The file is where `provider_cap::runtime_state_path` resolves it. Every
 //! parse drops a malformed entry and keeps the rest, as Python does: one
