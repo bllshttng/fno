@@ -773,6 +773,8 @@ extra_env = {}
 shell_integration = "mux-panes"
 # Which projects the mux backlog board shows: repo (default, this checkout's project.id) | all | workspace:<name>, e.g. workspace:main for a workspace holding web, backend and marketing. A scope that cannot resolve falls back to every project, and `fno mux doctor` reports that as a warn naming the remedy. Latched at mux server birth; `fno mux kill-server` re-reads.
 board_scope = "repo"
+# Parent epic for reports filed with prefix+!. Unset files reports without a parent.
+# report_parent = <unset>   # optional; no default
 # The mux prefix key, as C-a / Ctrl-a / ^a or a bare printable character. A digit 1-9 is refused (those select tabs), as is a key an action already holds. Unset keeps the built-in Ctrl-b.
 # prefix = <unset>   # optional; no default
 # Named key set for the mux: tmux (default, the shipped table) | zellij (Zellij's pane-mode letters under the prefix: r splits right, d splits down, detach moves to Q). Rows in mux.keys win over the preset. A prefix mux and Zellij's modal one differ, so the preset maps letters, not modes: docs/mux-keys.md lists what does not map.
@@ -881,9 +883,9 @@ defer_horizon_minutes = 60
 pick_on_launch = false
 
 [github]
-# GitHub App id; with github.app_installation_id it arms App-installation token minting for GitHub API calls.
+# GitHub App id; arms App-installation token minting for GitHub API calls. The installation is resolved per repo owner from the app's installations list; a repo whose owner has no installation keeps the user token.
 app_id = ""
-# GitHub App installation id; required beside github.app_id before the App path mints tokens.
+# Optional GitHub App installation id pin; skips the per-owner installation resolution and serves every repo that installation can see.
 app_installation_id = ""
 # Path to the GitHub App private key PEM (default ~/.fno/secrets/github-app.pem, mode 0600); a leading ~ expands against $HOME.
 app_key_path = "~/.fno/secrets/github-app.pem"
