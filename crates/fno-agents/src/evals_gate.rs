@@ -81,7 +81,7 @@ pub(crate) fn zai_peak_hold(repo: &Path, lane: &str, now: DateTime<Utc>) -> bool
 
 /// Runs once when the main lane gives up with no grade, so a capped lane does
 /// not leave the day without graded rows.
-const FALLBACK_LANE: &str = "claude-sonnet-5";
+const FALLBACK_LANE: &str = "claude-sonnet-5-5";
 const FALLBACK_SUFFIX: &str = "-fallback";
 
 /// Who does the work a cohort grades. Spend is each gate row of the day at its
