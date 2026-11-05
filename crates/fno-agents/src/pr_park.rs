@@ -220,7 +220,8 @@ pub(crate) struct Row {
     pub node: String,
     pub node_status: String,
     pub pr_state: String,
-    /// Hours since `last_polled_at`; `-1` when the stamp is absent/unreadable.
+    /// Hours since the park stamp (`parked_at`, else `last_polled_at`); `-1`
+    /// when neither stamp is readable.
     pub age_hours: i64,
     pub parked_head: String,
     pub bucket: &'static str,
@@ -406,7 +407,14 @@ pub(crate) fn list_rows(ctx: &Ctx) -> Vec<Row> {
         .map(|stored| {
             let pr_state = entry_str(&stored.entry, "last_seen_state");
             let (node, node_status) = node_for(&ctx.entries, &stored.slug, stored.pr);
-            let age_hours = parse_rfc3339_unix(&entry_str(&stored.entry, "last_polled_at"))
+            // Park age, on the same stamp the sweep ages on.
+            let stamp = entry_str(&stored.entry, "parked_at");
+            let stamp = if stamp.is_empty() {
+                entry_str(&stored.entry, "last_polled_at")
+            } else {
+                stamp
+            };
+            let age_hours = parse_rfc3339_unix(&stamp)
                 .map(|t| (now_secs() as i64 - t as i64) / 3600)
                 .unwrap_or(-1);
             let b = bucket(&stored, &ctx.slug, &pr_state);
