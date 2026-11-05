@@ -128,14 +128,14 @@ fn menu_paths() -> Vec<Vec<String>> {
 
 /// The source lines with `//` comments removed: doc comments narrate commands
 /// that no arm dispatches.
-fn strip_comments(text: &str) -> String {
+pub(crate) fn strip_comments(text: &str) -> String {
     text.lines()
         .map(|line| line.split("//").next().unwrap_or(""))
         .collect::<Vec<_>>()
         .join("\n")
 }
 
-fn braced_region<'a>(text: &'a str, marker: &str) -> Result<&'a str, String> {
+pub(crate) fn braced_region<'a>(text: &'a str, marker: &str) -> Result<&'a str, String> {
     let missing = || format!("menu-caps: {AGENTS_SOURCE_REL} has no dispatch marker {marker:?}");
     let start = text.find(marker).ok_or_else(missing)?;
     let opening = start + text[start..].find('{').ok_or_else(missing)?;
@@ -176,7 +176,9 @@ fn arms_at_top_level(lines: &[&str], arm: &Regex) -> BTreeSet<String> {
 }
 
 /// The fno-agents binary's top-level commands, read from its dispatcher.
-fn fno_agents_commands(source: &str) -> Result<BTreeSet<String>, String> {
+/// Shared with the command ratchet, whose surface rows defend each of these
+/// commands by name.
+pub(crate) fn fno_agents_commands(source: &str) -> Result<BTreeSet<String>, String> {
     let text = strip_comments(source);
     let arm = Regex::new(r#"(?:Some\(\s*)?"([a-z][a-z0-9-]*)"\s*(?:\)\s*)?(?:\||=>)"#)
         .expect("static regex");

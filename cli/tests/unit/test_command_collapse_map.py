@@ -71,7 +71,11 @@ def test_live_baseline_matches_the_projected_allocation():
         for row in rows
     }
     assert {leaf for leaf in leaves if leaf.split()[0] in mapped_groups} == projected
-    assert len(leaves) <= 135
+    # The fno-agents rows are the Rust half's live enumeration of the binary's
+    # own command surface, defended row-by-row by the Rust ratchet, not part of
+    # the fno-py leaf inventory the 135 bound caps.
+    agents_rows = {leaf for leaf in leaves if leaf.split()[0] == "fno-agents"}
+    assert len(leaves) - len(agents_rows) <= 135
     assert "fno-agents" in leaves
 
 

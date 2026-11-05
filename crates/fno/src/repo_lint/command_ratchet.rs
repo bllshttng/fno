@@ -1,14 +1,17 @@
 //! `fno doctor lint command-ratchet`: hold the command surface down against
 //! `scripts/ci/command-baseline.txt`. Ported from `cli/src/fno/lint_command_ratchet.py`
 //! (deleted). The Rust half is live: the typed clap tree plus the fno-agents
-//! leaf. Recorded departure, loud by design: the fno-py registry half cannot
-//! outlive the Python runtime it imports, so that half is pinned by the
-//! committed manifests now - every collapse-map row and every
-//! command-collapse-flags row must appear in the baseline, and the count cap
-//! (menu-caps) keeps holding the groups. A Python leaf is added or removed by
-//! editing the map, the flags file and the baseline in the same PR, which is
-//! the merge-conflict-as-review-moment shape the ratchet always had.
+//! binary's own command surface (`agents_surface`), defended row-by-row in both
+//! directions - a command cannot be added or deleted silently. Recorded
+//! departure, loud by design: the fno-py registry half cannot outlive the
+//! Python runtime it imports, so that half is pinned by the committed
+//! manifests now - every collapse-map row and every command-collapse-flags
+//! row must appear in the baseline, and the count cap (menu-caps) keeps
+//! holding the groups. A Python leaf is added or removed by editing the map,
+//! the flags file and the baseline in the same PR, which is the
+//! merge-conflict-as-review-moment shape the ratchet always had.
 
+use super::agents_surface::{self, AgentsSurface};
 use super::Invocation;
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -73,7 +76,7 @@ fn row_path(row: &str) -> String {
 }
 
 /// The manifest contracts over the Python half: each collapse-map row's
-/// projection (the leaf verbatim on a KEEP tier, else the group head) and
+/// projection (the leaf commandatim on a KEEP tier, else the group head) and
 /// every collapse-flags row must appear in the baseline.
 fn manifest_drift(root: &Path, baseline: &[String]) -> Vec<String> {
     let mut drift: Vec<String> = Vec::new();
@@ -165,24 +168,64 @@ fn update_baseline(root: &Path) -> i32 {
         if n == 0 || line.trim().is_empty() {
             continue;
         }
-        if let Some(leaf) = line.split('\t').next() {
-            if !leaf.trim().is_empty() {
-                leaves.insert(leaf.trim().to_string());
-            }
+        let fields: Vec<&str> = line.split('\t').collect();
+        if fields.len() < 2 {
+            continue;
         }
+        let leaf = fields[0].trim();
+        // The agents rows are the native binary's old-spelling contract; the
+        // live surface rows below carry that half, so the map rows are skipped
+        // here exactly as manifest_drift skips them.
+        if leaf.is_empty() || leaf.split_whitespace().next() == Some("agents") {
+            continue;
+        }
+        // The baseline holds the projected surface (the leaf itself on KEEP,
+        // the group head otherwise), the same projection manifest_drift
+        // checks; the raw map rows are the registry, not the surface.
+        let projected = if fields[1].trim() == "KEEP" {
+            leaf.to_string()
+        } else {
+            leaf.split_whitespace().next().unwrap_or(leaf).to_string()
+        };
+        leaves.insert(projected);
     }
     for row in carried {
         leaves.insert(row_path(&row));
     }
+    // The fno-agents half regenerates live from the client source, so a
+    // surface change carries its rows in the same PR.
+    let surface = match AgentsSurface::read(root) {
+        Ok(surface) => surface,
+        Err(message) => {
+            eprintln!("{message}");
+            return 1;
+        }
+    };
+    for row in surface.rows() {
+        leaves.insert(row);
+    }
     let mut rows: Vec<String> = leaves.into_iter().collect();
     rows.sort();
-    let header = "# Known command surface held by the CI ratchet.\n\
-                  # The Rust half (typed clap tree + fno-agents) is enumerated live; the\n\
-                  # fno-py registry rows are pinned by this file plus the collapse map and\n\
-                  # the collapse-flags file, all edited in the PR that changes a leaf.\n\
-                  # A deliberate addition carries a PR-body line:  command-exception: <rationale>\n";
-    let body = format!("{header}{}\n", rows.join("\n"));
+    // The hand-maintained header carries the load-bearing regeneration
+    // instructions; a regen preserves it and replaces only the row block. A
+    // file with no comment block (first generation) gets the template.
     let path = root.join(BASELINE_REL);
+    let existing = std::fs::read_to_string(&path).unwrap_or_default();
+    let comments: Vec<&str> = existing
+        .lines()
+        .take_while(|l| l.starts_with('#'))
+        .collect();
+    let preserved = comments.join("\n");
+    let header: &str = if comments.is_empty() {
+        "# Known command surface held by the CI ratchet.\n\
+         # The Rust half (typed clap tree + fno-agents) is enumerated live; the\n\
+         # fno-py registry rows are pinned by this file plus the collapse map and\n\
+         # the collapse-flags file, all edited in the PR that changes a leaf.\n\
+         # A deliberate addition carries a PR-body line:  command-exception: <rationale>\n"
+    } else {
+        preserved.as_str()
+    };
+    let body = format!("{header}\n{}\n", rows.join("\n"));
     if std::fs::write(&path, &body).is_err() {
         eprintln!("command-ratchet: cannot write {}", path.display());
         return 1;
@@ -245,6 +288,75 @@ pub fn run(inv: &Invocation) -> i32 {
                 .to_string(),
         );
     }
+    // The fno-agents half: the binary's own command surface, the two readings
+    // cross-checked against the committed record of the deliberate hidden
+    // commands, and the baseline rows defended in both directions.
+    let mut agents_ok_note = String::new();
+    match AgentsSurface::read(&inv.root) {
+        Ok(surface) => {
+            let hidden = surface.hidden();
+            let live_rows = surface.rows();
+            let (added_agents, removed_agents) =
+                agents_surface::baseline_drift(&live_rows, &baseline);
+            if !added_agents.is_empty() {
+                failed = true;
+                lines.push(format!(
+                    "command-ratchet: FAIL - the fno-agents surface drifted from {BASELINE_REL}"
+                ));
+                lines.push(format!(
+                    "  Added (dispatched, no baseline row): {}",
+                    added_agents.join(", ")
+                ));
+                lines.push(
+                    "    A command cannot be added silently. Regenerate the baseline in the same PR \
+                     and add a PR-body line:  command-exception: <rationale>"
+                        .to_string(),
+                );
+            }
+            if !removed_agents.is_empty() {
+                failed = true;
+                lines.push(format!(
+                    "  Removed (baseline row, no dispatch): {}",
+                    removed_agents.join(", ")
+                ));
+                lines.push(
+                    "    A command cannot be deleted silently either: the row goes in the same PR \
+                     that removes it. If the removal is right, delete the rows and regenerate."
+                        .to_string(),
+                );
+            }
+            match std::fs::read_to_string(inv.root.join(agents_surface::HIDDEN_REL)) {
+                Ok(text) => match agents_surface::hidden_rows(&text) {
+                    Ok(rows) => {
+                        for failure in surface.drift(&rows) {
+                            failed = true;
+                            lines.push(failure);
+                        }
+                    }
+                    Err(line) => {
+                        failed = true;
+                        lines.push(line);
+                    }
+                },
+                Err(e) => {
+                    failed = true;
+                    lines.push(format!(
+                        "agents-surface: cannot read {}: {e}",
+                        agents_surface::HIDDEN_REL
+                    ));
+                }
+            }
+            agents_ok_note = format!(
+                "; fno-agents surface: {} row(s), {} hidden command(s) recorded",
+                live_rows.len(),
+                hidden.len()
+            );
+        }
+        Err(message) => {
+            failed = true;
+            lines.push(message);
+        }
+    }
     if failed {
         for line in &lines {
             eprintln!("{line}");
@@ -253,10 +365,11 @@ pub fn run(inv: &Invocation) -> i32 {
     }
     let n_hidden = baseline.iter().filter(|r| r.contains(" !")).count();
     println!(
-        "command-ratchet: ok ({} baseline leaves, {n_hidden} hidden-option row(s); \
+        "command-ratchet: ok ({} baseline leaves, {n_hidden} hidden-option row(s){}; \
          the Rust half is live against the typed tree; the fno-py registry half is \
          pinned by the committed manifests now)",
-        baseline.len()
+        baseline.len(),
+        agents_ok_note
     );
     0
 }
