@@ -421,15 +421,24 @@ pub(crate) fn run_pass(cwd: &Path, pulls: &[Value], dry_run: bool) -> &'static s
 }
 
 /// The line a child PR's body carries: `Refs #<n>`, or `Closes #<n>` when no
-/// other published child of the epic is still open. None when the node's
-/// parent has no issue, or the body already names it.
+/// other published child of the epic is still open. A node that carries its
+/// own `epic_issue` is a claim filed from a teammate's checklist: it has no
+/// siblings here, so only the owner can tell it is the last, and it always
+/// refs. None when neither the node nor its parent has an issue, or the body
+/// already names it.
 pub(crate) fn ref_line(rows: &[Value], node: &str, body: &str) -> Option<String> {
-    let parent = text(rows.iter().find(|r| text(r, "id") == node)?, "parent");
-    let epic = rows.iter().find(|r| text(r, "id") == parent)?;
-    let number = recorded_issue(epic)?;
-    let last = !checklist_rows(rows, parent)
-        .iter()
-        .any(|r| text(r, "id") != node && !is_done(r));
+    let row = rows.iter().find(|r| text(r, "id") == node)?;
+    let (number, last) = match recorded_issue(row) {
+        Some(number) => (number, false),
+        None => {
+            let parent = text(row, "parent");
+            let epic = rows.iter().find(|r| text(r, "id") == parent)?;
+            let last = !checklist_rows(rows, parent)
+                .iter()
+                .any(|r| text(r, "id") != node && !is_done(r));
+            (recorded_issue(epic)?, last)
+        }
+    };
     if names_issue(body, number) {
         return None;
     }
@@ -701,6 +710,14 @@ mod tests {
         assert_eq!(ref_line(&rows, "kid-1", "Intro\nrefs #7\n"), None);
         rows[0].as_object_mut().unwrap().remove("epic_issue");
         assert_eq!(ref_line(&rows, "kid-1", "body"), None);
+        // A claim filed from a teammate's checklist has no parent here. It
+        // carries its own issue and only refs: the owner knows the last child.
+        let filed = [json!({"id": "own-1a2b", "title": "Claimed", "epic_issue": 7})];
+        assert_eq!(ref_line(&filed, "own-1a2b", "body"), Some("Refs #7".into()));
+        assert_eq!(
+            ref_line(&filed, "own-1a2b", "Fixes own-1a2b\nrefs #7\n"),
+            None
+        );
     }
 
     #[test]
