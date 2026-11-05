@@ -1431,6 +1431,13 @@ mod tests {
             git(&["init", "-b", "main"]);
             git(&["config", "user.email", "t@t"]);
             git(&["config", "user.name", "t"]);
+            // g1 is in both commits, so the checkout's bank and the head's bank
+            // both carry its covers line.
+            std::fs::write(
+                w.dir.path().join("evals/bank/g1.yaml"),
+                format!("id: g1\ntier: capability\nprompt: p\ngrade:\n  - kind: file-exists\n    path: x\ntags: [{GATE_TAG}]\ncovers: [\"crates/x/\"]\n"),
+            )
+            .unwrap();
             git(&["add", "evals"]);
             git(&["commit", "-m", "x"]);
             let x = String::from_utf8_lossy(&git(&["rev-parse", "HEAD"]).stdout)
@@ -1438,7 +1445,7 @@ mod tests {
                 .to_string();
             std::fs::write(
                 w.dir.path().join("evals/bank/g3.yaml"),
-                "id: g3\ntier: capability\nprompt: p\ngrade:\n  - kind: file-exists\n    path: x\ntags: [gate]\ncovers: [\"crates/x/\"]\n",
+                "id: g3\ntier: capability\nprompt: p\ngrade:\n  - kind: file-exists\n    path: x\ntags: [gate]\n",
             )
             .unwrap();
             git(&["add", "evals"]);
