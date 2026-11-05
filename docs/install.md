@@ -180,7 +180,7 @@ When a person runs the wizard, a preset sets the pace. The preset screen opens w
 
 ## Keeping fno up to date
 
-On a release install, run `fno update`. On a wheel install (`uv tool install fno`), it moves fno to the binary install in `~/.fno/bin`: it downloads the release tarball for your version, checks its `.sha256`, and points the `fno` command there. After the move, `fno update` installs the newest GitHub release. A wheel older than the release that carries the move needs `fno update` twice: the first run upgrades the wheel, and the second run moves it. On fno 0.4.4 and older, `fno update` stops with "Could not locate the fno CLI source", so run `uv tool upgrade fno` yourself first. Plugin updates are separate: in Claude Code, run `/plugin update`.
+On a release install, run `fno update`. On a wheel install (`uv tool install fno`), it moves fno to the binary install in `~/.fno/bin`. It downloads the release tarball for your version, checks its `.sha256`, and points the `fno` command there. After the move, `fno update` installs the newest GitHub release. A wheel older than the release that carries the move needs `fno update` twice: the first run upgrades the wheel, and the second run moves it. On fno 0.4.4 and older, `fno update` stops with "Could not locate the fno CLI source", so run `uv tool upgrade fno` yourself first. Plugin updates are separate: in Claude Code, run `/plugin update`.
 
 From a clone, the full refresh has three steps. `fno doctor update` refreshes the binaries. The long-running mux server and agents daemon keep old code until restarted:
 
