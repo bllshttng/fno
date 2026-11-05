@@ -1,11 +1,7 @@
-//! Descriptor accounting under churn, and the wedged-keeper close: the
-//! fd-exhaustion class. The server once exhausted its descriptor table
-//! under normal fleet churn with a 256-entry soft limit, then logged ten
-//! `accept failed: Too many open files` lines a second until restart.
-//! These tests pin the two contracts that keep the table flat: a close
-//! must release the pane's server-side descriptors even when the keeper
-//! wedges (the Drop shutdown + the Kill escalation), and connection plus
-//! pane churn must leave no residue.
+//! Descriptor accounting under churn, and the wedged-keeper close. These
+//! tests pin the contracts that keep the server's fd table flat: a close
+//! must release the pane's descriptors even when the keeper wedges, and
+//! connection plus pane churn must leave no residue.
 
 mod common;
 
@@ -102,16 +98,14 @@ fn fd_table_stays_flat_under_churn_and_a_wedged_keeper_close() {
     let pid = server.0.id();
     connect_with_retry(&sock);
 
-    // One attached viewer for the whole test: a clientless E2E server
-    // idles out after its grace, and a live viewer also keeps pane output
-    // flowing the way real fleet sessions look.
+    // One attached viewer for the whole test: a clientless E2E server idles
+    // out after its grace, and a viewer keeps output flowing as in real use.
     let viewer = FakeClient::attach(&sock, 30, 100, &scratch.home_cwd());
 
     let baseline = server_fds(pid);
 
-    // Leg 1 - connection churn: abrupt attach deaths and clean detaches
-    // must release every per-connection descriptor (the writer half lives
-    // in a task the core must deregister).
+    // Leg 1 - connection churn: abrupt deaths and clean detaches must
+    // release every per-connection descriptor.
     for _ in 0..12 {
         let mut c = FakeClient::attach(&sock, 30, 100, &scratch.home_cwd());
         c.detach();
@@ -120,11 +114,11 @@ fn fd_table_stays_flat_under_churn_and_a_wedged_keeper_close() {
     let settled = wait_fds_eq(pid, Duration::from_secs(3), |n| n <= baseline + 2);
     assert!(
         settled <= baseline + 2,
-        "connection churn leaked descriptors: baseline {baseline}, settled {settled}"
+        "connection churn leaked fds: baseline {baseline}, settled {settled}"
     );
 
-    // Leg 2 - pane churn: keeper-hosted spawn and deliberate close. Each
-    // close runs the Kill-frame path; both descriptors must come back.
+    // Leg 2 - pane churn: keeper-hosted spawn and deliberate close; both
+    // descriptors must come back.
     for _ in 0..3 {
         let pane = run_pane(&scratch);
         let rows = pane_rows(&scratch);
@@ -161,14 +155,11 @@ fn fd_table_stays_flat_under_churn_and_a_wedged_keeper_close() {
     let settled = wait_fds_eq(pid, Duration::from_secs(3), |n| n <= baseline + 2);
     assert!(
         settled <= baseline + 2,
-        "pane churn leaked descriptors: baseline {baseline}, settled {settled}"
+        "pane churn leaked fds: baseline {baseline}, settled {settled}"
     );
-
-    // Leg 3 - the wedged keeper: a keeper frozen (SIGSTOP) cannot process
-    // the Kill frame. The close must still free both descriptors: the
-    // 2s grace escalates to SIGKILL on the child, and the KeeperPty Drop
-    // shuts the wire socket down so the reader thread exits. Before the
-    // fix the reader parked in read() forever and the count stayed high.
+    // Leg 3 - a frozen (SIGSTOP) keeper cannot process the Kill frame. The
+    // close must still free the pane's descriptors: the 2s grace escalates
+    // to SIGKILL on the child and the Drop shutdown frees the reader.
     let pane = run_pane(&scratch);
     let row = pane_rows(&scratch)
         .iter()
@@ -216,12 +207,12 @@ fn fd_table_stays_flat_under_churn_and_a_wedged_keeper_close() {
     let settled = wait_fds_eq(pid, Duration::from_secs(5), |n| n <= baseline + 2);
     assert!(
         settled <= baseline + 2,
-        "a wedged-keeper close leaked descriptors: baseline {baseline}, settled {settled}"
+        "wedged-keeper close leaked fds: baseline {baseline}, settled {settled}"
     );
     let elapsed = stop_time.elapsed();
     assert!(
         elapsed >= Duration::from_millis(1900),
-        "the Kill grace should have run: close returned after {elapsed:?}"
+        "the Kill grace should have run: {elapsed:?}"
     );
 
     drop(viewer);
