@@ -40,7 +40,17 @@ pub(crate) struct Panel {
     drag_from: Option<u16>,
     /// The Questions tab's marked rows, sent by `c` and dropped on close.
     pub(super) marks: std::collections::BTreeSet<String>,
+    /// The Decisions tab lists only the decisions with no author, after a tap
+    /// on the audit alert; any tab switch clears it.
+    pub(super) audit_only: bool,
+    /// The channel the loop reads, kept so the decisions board can load off
+    /// the input thread and answer on it.
+    pub(super) tx: Option<Tx>,
 }
+
+/// The generation a decisions-board load answers with; the panel's own
+/// generations count up from zero and never reach it.
+pub(super) const BOARD_GEN: u64 = u64::MAX;
 
 #[derive(Clone)]
 enum Row {
@@ -126,6 +136,8 @@ impl Panel {
             restore: Size::Normal,
             drag_from: None,
             marks: std::collections::BTreeSet::new(),
+            audit_only: false,
+            tx: None,
         }
     }
 }
@@ -153,8 +165,13 @@ pub(crate) fn open(view: &mut View) -> u64 {
 /// Open the panel on its Decisions tab.
 pub(super) fn open_decisions(view: &mut View) {
     open(view);
+    show_decisions(view, false);
+}
+
+fn show_decisions(view: &mut View, audit_only: bool) {
     view.bell.tab = Tab::Decisions;
     view.bell.selected = 0;
+    view.bell.audit_only = audit_only;
 }
 
 pub(crate) fn close(view: &mut View) {
@@ -194,18 +211,27 @@ fn decision_rows(view: &View) -> Vec<Row> {
     {
         return vec![Row::Info(format!("decisions unavailable: {e}"))];
     }
+    let key = if view.bell.audit_only {
+        "audit_rows"
+    } else {
+        "rows"
+    };
     let Some(rows) = decision_facts(view)
-        .and_then(|f| f.get("rows"))
+        .and_then(|f| f.get(key))
         .and_then(Value::as_array)
     else {
         return vec![Row::Info("loading decisions...".into())];
     };
-    rows.iter()
-        .filter_map(|r| {
+    let note = view
+        .bell
+        .audit_only
+        .then(|| Row::Info("decisions with no author; press 3 for all".into()));
+    note.into_iter()
+        .chain(rows.iter().filter_map(|r| {
             let text = r.get("text")?.as_str()?.to_string();
             let question = r.get("question_id").and_then(Value::as_str);
             Some(Row::Decision(text, question.map(str::to_string)))
-        })
+        }))
         .collect()
 }
 
@@ -273,6 +299,7 @@ pub(crate) fn paint_button(view: &View, cells: &mut [Cell], cols: usize) {
 }
 
 pub(crate) fn maybe_kick(view: &mut View, tx: &Tx) {
+    view.bell.tx.get_or_insert_with(|| tx.clone());
     if view.panel_w() == 0 {
         return;
     }
@@ -301,6 +328,10 @@ pub(crate) fn maybe_kick(view: &mut View, tx: &Tx) {
 }
 
 pub(crate) fn apply(view: &mut View, generation: u64, result: Result<Value, String>) {
+    if generation == BOARD_GEN {
+        super::decisions_view::adopt(view, result);
+        return;
+    }
     let panel = &mut view.bell;
     panel.inflight = false;
     if panel.generation != generation {
@@ -742,6 +773,7 @@ pub(crate) fn apply_hit(view: &mut View, hit: Hit) {
         Hit::Tab(tab) => {
             view.bell.tab = tab;
             view.bell.selected = 0;
+            view.bell.audit_only = false;
         }
         Hit::Focus => {}
         Hit::Clear if !view.question_acting => {
@@ -749,10 +781,7 @@ pub(crate) fn apply_hit(view: &mut View, hit: Hit) {
             view.question_acting = true;
         }
         Hit::Clear => {}
-        Hit::Audit => {
-            view.bell.tab = Tab::Decisions;
-            view.bell.selected = 0;
-        }
+        Hit::Audit => show_decisions(view, true),
         Hit::Question(id) => view.open_detail_on(&id),
     }
 }
@@ -867,10 +896,12 @@ pub(crate) fn keys(view: &mut View, bytes: &[u8]) {
                 let i = TABS.iter().position(|t| *t == view.bell.tab).unwrap_or(0);
                 view.bell.tab = TABS[(i + 1) % TABS.len()];
                 view.bell.selected = 0;
+                view.bell.audit_only = false;
             }
             b'1'..=b'5' => {
                 view.bell.tab = TABS[(byte - b'1') as usize];
                 view.bell.selected = 0;
+                view.bell.audit_only = false;
             }
             b'j' => {
                 let len = rows(view).len();
@@ -947,10 +978,7 @@ pub(crate) fn keys(view: &mut View, bytes: &[u8]) {
                 let selected = view.bell.selected;
                 match rows(view).get(selected).cloned() {
                     Some(Row::Question(id)) => view.open_detail_on(&id),
-                    Some(Row::Audit(_)) => {
-                        view.bell.tab = Tab::Decisions;
-                        view.bell.selected = 0;
-                    }
+                    Some(Row::Audit(_)) => show_decisions(view, true),
                     Some(Row::Decision(_, Some(q))) => view.open_detail_on(&q),
                     Some(Row::Clear(_)) if !view.question_acting => {
                         view.question_clear_settled = true;

@@ -161,6 +161,8 @@ pub enum ViewKind {
     BellAudit,
     /// The bell panel on its Decisions tab.
     BellDecisions,
+    /// The bell panel after a tap on the audit alert: decisions with no author.
+    BellAuditTab,
 }
 
 /// The seeded demo mail id a Messages view opens on when no --message
@@ -311,6 +313,7 @@ fn parse_view(v: &str) -> Option<ViewKind> {
         "decisions" => Some(ViewKind::Decisions),
         "bell-audit" => Some(ViewKind::BellAudit),
         "bell-decisions" => Some(ViewKind::BellDecisions),
+        "bell-audit-tab" => Some(ViewKind::BellAuditTab),
         "machines" => Some(ViewKind::Machines),
         _ => None,
     }
@@ -906,15 +909,22 @@ shoot a root whose chats store has rows (scripts/ops/mux-demo-snapshot.sh seeds 
         | Some(ViewKind::BellWide)
         | Some(ViewKind::BellFull)
         | Some(ViewKind::BellAudit)
-        | Some(ViewKind::BellDecisions) => {
+        | Some(ViewKind::BellDecisions)
+        | Some(ViewKind::BellAuditTab) => {
             let gen = crate::client::bell::open(&mut view);
             let mut projection = runtime.block_on(crate::messages_model::gather());
-            if let (Some(ViewKind::BellAudit | ViewKind::BellDecisions), Ok(Value::Object(m))) =
-                (kind, &mut projection)
+            if let (
+                Some(ViewKind::BellAudit | ViewKind::BellDecisions | ViewKind::BellAuditTab),
+                Ok(Value::Object(m)),
+            ) = (kind, &mut projection)
             {
                 m.insert(
                     "decision_facts".into(),
-                    serde_json::json!({"audit": 3, "total": 4, "rows": [
+                    serde_json::json!({"audit": 3, "total": 4, "audit_rows": [
+                        {"text": "2026-10-30 expired push: Retry after the rate limit", "question_id": null},
+                        {"text": "2026-10-29 live ci: Keep the tier keeper on", "question_id": null},
+                        {"text": "2026-10-28 live mux: Use the shared pane for retract", "question_id": "q-demo-2"}
+                    ], "rows": [
                         {"text": "2026-11-03 live mux: Ship the Decisions tab whole", "question_id": "q-demo-1"},
                         {"text": "2026-11-02 live ci: Hold CI until the ranked PRs land", "question_id": null},
                         {"text": "2026-10-30 expired push: Retry after the rate limit", "question_id": null},
@@ -959,6 +969,11 @@ shoot a root whose chats store has rows (scripts/ops/mux-demo-snapshot.sh seeds 
                 Some(ViewKind::BellDecisions) => {
                     view.bell.tab = super::bell::Tab::Decisions;
                     view.bell.size = super::bell::Size::Wide;
+                }
+                Some(ViewKind::BellAuditTab) => {
+                    view.bell.tab = super::bell::Tab::Decisions;
+                    view.bell.size = super::bell::Size::Wide;
+                    view.bell.audit_only = true;
                 }
                 _ => {}
             }
@@ -1599,6 +1614,7 @@ mod tests {
             ("decisions", ViewKind::Decisions),
             ("bell-audit", ViewKind::BellAudit),
             ("bell-decisions", ViewKind::BellDecisions),
+            ("bell-audit-tab", ViewKind::BellAuditTab),
             ("machines", ViewKind::Machines),
         ] {
             let args = parse_extra(&["--view", name]).expect(name);

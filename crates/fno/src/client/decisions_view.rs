@@ -5,23 +5,63 @@
 //! in a pane where the law door can read a real tty.
 
 use super::*;
-use crate::decisions_overlay::{load, load_reviewed, mark_reviewed, Filter};
+use crate::decisions_overlay::{load_reviewed, mark_reviewed, peek, read_now, DecisionRow, Filter};
 use crate::decisions_table::{parse_key, render, store_path, Key, Table};
 use crate::view_store::SidelineView;
 
 pub(crate) struct DecisionsBoard {
     table: Table,
+    /// A listing read is in flight and the rows may be empty or old.
+    loading: bool,
 }
 
+/// Open the board at once on the last listing (empty before the first read)
+/// and re-read behind it. The read runs off the input thread and answers on
+/// the alerts panel's channel, which `bell::apply` hands to `adopt`.
 pub(crate) fn open(view: &mut View) {
-    match load() {
-        Ok(rows) => open_rows(view, rows),
+    let rows = peek().map(|r| r.to_vec()).unwrap_or_default();
+    open_rows(view, rows);
+    let Some(tx) = view.bell.tx.clone() else {
+        view.set_notice("decisions: the alerts channel is not ready".into());
+        return;
+    };
+    if let Some(b) = view.decisions_board.as_mut() {
+        b.loading = true;
+    }
+    tokio::spawn(async move {
+        let read = tokio::task::spawn_blocking(read_now)
+            .await
+            .map_err(|e| format!("decisions read failed: {e}"))
+            .and_then(|r| r);
+        let _ = tx.send((
+            bell::BOARD_GEN,
+            read.and_then(|rows| {
+                serde_json::to_value(rows.as_ref()).map_err(|e| format!("decisions: {e}"))
+            }),
+        ));
+    });
+}
+
+/// Take a finished read into the open board, keeping the filters and the
+/// selection.
+pub(crate) fn adopt(view: &mut View, result: Result<serde_json::Value, String>) {
+    let Some(b) = view.decisions_board.as_mut() else {
+        return;
+    };
+    b.loading = false;
+    match result.and_then(|v| {
+        serde_json::from_value::<Vec<DecisionRow>>(v).map_err(|e| format!("decisions: {e}"))
+    }) {
+        Ok(rows) => {
+            b.table.rows = rows;
+            b.table.apply(Key::Other);
+        }
         Err(e) => view.set_notice(format!("decisions: {e}")),
     }
 }
 
 /// Open the tab on `rows`; the snapshot shoots it on a fixed set.
-pub(crate) fn open_rows(view: &mut View, rows: Vec<crate::decisions_overlay::DecisionRow>) {
+pub(crate) fn open_rows(view: &mut View, rows: Vec<DecisionRow>) {
     view.panel_on = true;
     view.messages_board = None;
     view.backlog_board = None;
@@ -33,6 +73,7 @@ pub(crate) fn open_rows(view: &mut View, rows: Vec<crate::decisions_overlay::Dec
             filter: Filter::default(),
             pick: 0,
         },
+        loading: false,
     });
     view.region_owner = super::region_focus::RegionOwner::Board;
     super::backlog_board::set_sideline_view(view, SidelineView::Decisions);
@@ -82,6 +123,11 @@ pub(crate) fn paint_full(view: &View, cells: &mut [Cell], rows: usize, cols: usi
     {
         if let Some(row) = cells.get_mut((i + 1) * cols..(i + 2) * cols) {
             paint_ansi(row, line);
+        }
+    }
+    if b.loading && b.table.rows.is_empty() {
+        if let Some(row) = cells.get_mut(2 * cols..3 * cols) {
+            paint_ansi(row, "loading decisions...");
         }
     }
 }

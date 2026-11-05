@@ -129,15 +129,55 @@ impl Filter {
     }
 }
 
+/// How long the alerts panel trusts the last full listing before it scans again.
+const BELL_MAX_AGE: std::time::Duration = std::time::Duration::from_secs(300);
+
+type Held = std::sync::Arc<Vec<DecisionRow>>;
+static LISTING: std::sync::Mutex<Option<(std::time::Instant, Held)>> = std::sync::Mutex::new(None);
+
+/// The last listing, however old; `None` before the first read.
+pub fn peek() -> Option<Held> {
+    LISTING.lock().ok()?.as_ref().map(|(_, rows)| rows.clone())
+}
+
+/// A listing no older than `max_age`; an older or missing one is re-read, so
+/// a full scan runs once per `max_age` however often a caller asks.
+pub fn cached(max_age: std::time::Duration) -> Result<Held, String> {
+    let held = LISTING.lock().ok().and_then(|g| g.clone());
+    if let Some((at, rows)) = held {
+        if at.elapsed() < max_age {
+            return Ok(rows);
+        }
+    }
+    read_now()
+}
+
+/// Re-read the listing now and keep it for `peek` and `cached`.
+pub fn read_now() -> Result<Held, String> {
+    let rows = Held::new(load()?);
+    if let Ok(mut held) = LISTING.lock() {
+        *held = Some((std::time::Instant::now(), rows.clone()));
+    }
+    Ok(rows)
+}
+
+fn listed(r: &DecisionRow) -> serde_json::Value {
+    let date = r.ts.get(..10).unwrap_or(&r.ts);
+    let text = format!("{date} {} {}: {}", r.lifecycle, r.subject, r.decision);
+    serde_json::json!({"text": text, "question_id": r.question_id})
+}
+
 /// What the alerts panel and the question page need from the decision index:
-/// the audit queue size, and for each answered question the decision text.
+/// the audit queue, the newest rows, and for each answered question the
+/// decision text. It reads the cached listing, so a panel refresh does not
+/// scan the whole index.
 pub fn bell_facts() -> serde_json::Value {
     let reviewed = load_reviewed(&crate::decisions_table::store_path());
-    let rows = match load() {
+    let rows = match cached(BELL_MAX_AGE) {
         Ok(rows) => rows,
         Err(e) => return serde_json::json!({ "error": e }),
     };
-    let f = Filter {
+    let audit = Filter {
         audit_only: true,
         ..Filter::default()
     };
@@ -150,21 +190,16 @@ pub fn bell_facts() -> serde_json::Value {
             Some((q.to_string(), format!("{} ({date})", r.decision).into()))
         })
         .collect();
-    let mut newest: Vec<&DecisionRow> = rows.iter().collect();
-    newest.sort_by(|a, b| b.ts.cmp(&a.ts));
-    let listed: Vec<serde_json::Value> = newest
-        .iter()
-        .take(80)
-        .map(|r| {
-            let date = r.ts.get(..10).unwrap_or(&r.ts);
-            let text = format!("{date} {} {}: {}", r.lifecycle, r.subject, r.decision);
-            serde_json::json!({"text": text, "question_id": r.question_id})
-        })
-        .collect();
+    let needs_author = visible(&rows, &audit, &reviewed);
     serde_json::json!({
-        "audit": visible(&rows, &f, &reviewed).len(),
+        "audit": needs_author.len(),
+        "audit_rows": needs_author.iter().take(80).map(|r| listed(r)).collect::<Vec<_>>(),
         "total": rows.len(),
-        "rows": listed,
+        "rows": visible(&rows, &Filter::default(), &reviewed)
+            .iter()
+            .take(80)
+            .map(|r| listed(r))
+            .collect::<Vec<_>>(),
         "by_question": by_question,
     })
 }
