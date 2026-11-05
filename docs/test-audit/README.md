@@ -44,7 +44,7 @@ The path rule classes each `*.py` and `crates/*.rs` file with a declaration. A f
 
 1. G4: `^crates/fno/`
 2. G1: any `.py` file, except `cli/src/fno/**`
-3. G3: `loopcheck|loop_|finalize|daemon|gc_|gc/|lead|heal|king|crown|reign|watchdog|sweep|reap|recovery|pr_|review|merge|mail|bus|event|relay|inbox|plan|retro|scoreboard|provenance|eval|target|ship|ci_`
+3. G3: `loopcheck|loop_|finalize|daemon|gc_|gc/|lead|heal|watchdog|sweep|reap|recovery|pr_|review|merge|mail|bus|event|relay|inbox|plan|retro|scoreboard|provenance|eval|target|ship|ci_`
 4. G1: `backlog|graph|claim|state|node|org_|question|attention|outstanding|law|board|carveout|session|team|fleet|active|orphans|needs|intake|decision|roadmap`
 5. G2: every other `crates/fno-agents` path
 
