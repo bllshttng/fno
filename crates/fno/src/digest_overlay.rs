@@ -666,11 +666,14 @@ fn keybinding_rows(
                     path.display()
                 )));
             }
-            (loaded.rows, loaded.preset, warnings)
+            let rows = kb::drop_noops(loaded.preset.as_deref(), loaded.rows);
+            (rows, loaded.preset, warnings)
         }
         Ok(None) => {
             let (rows, preset, mut warnings) = legacy(cwd);
-            if rows.is_empty() && preset.is_none() {
+            // A pinned `$FNO_CONFIG` is a one-off file, not the user's own
+            // settings: read it, but never move it into the global file.
+            if (rows.is_empty() && preset.is_none()) || non_empty_env("FNO_CONFIG").is_some() {
                 return (rows, preset, warnings);
             }
             // Read once, moved, retired: the file now holds what config.toml

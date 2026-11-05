@@ -98,6 +98,22 @@ fn resolved_rows(preset: &str) -> Vec<(&'static str, String)> {
         .collect()
 }
 
+/// Drop rows that restate the key the preset (or the built-in table) already
+/// gives. A spelled-out starter would otherwise reach the resolver as dozens of
+/// no-op rebinds and fill `Keymap::rebinds` with the whole table.
+pub fn drop_noops(preset: Option<&str>, rows: Vec<(String, String)>) -> Vec<(String, String)> {
+    let base: Vec<(&'static str, String)> = resolved_rows(preset.unwrap_or("tmux"));
+    rows.into_iter()
+        .filter(|(action, spec)| {
+            let action = action.trim().to_ascii_lowercase();
+            let same = base.iter().find(|(a, _)| *a == action).and_then(|(_, k)| {
+                Some(keys::parse_key(k)? == keys::parse_key(spec)?)
+            });
+            same != Some(true)
+        })
+        .collect()
+}
+
 /// A starter file: the chosen preset spelled out, one row per bound action,
 /// for the user to edit down or change in place.
 pub fn starter(preset: &str) -> String {
@@ -275,7 +291,9 @@ mod tests {
         assert_eq!(get("detach"), Some("Q"));
         assert_eq!(get("split-up"), None, "unbound rows stay out");
         // Fed back through the resolver, a spelled-out starter changes nothing.
-        let (entries, w) = keys::with_preset(l.preset.as_deref(), l.rows);
+        let rows = drop_noops(l.preset.as_deref(), l.rows);
+        assert!(rows.is_empty(), "a spelled-out starter restates only defaults: {rows:?}");
+        let (entries, w) = keys::with_preset(l.preset.as_deref(), rows);
         let (map, warnings) = keys::resolve_keymap(None, &entries);
         assert!(w.is_empty() && warnings.is_empty(), "{w:?} {warnings:?}");
         let (zellij, _) =
