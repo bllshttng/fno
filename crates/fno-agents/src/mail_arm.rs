@@ -3,8 +3,9 @@
 //! With a shared primary set, the daemon pulls the pending `fno_mail_bus`
 //! rows addressed to this host in seq order and hands each payload to the
 //! receiver's own local send, so lane selection, holds, and receipts stay
-//! the local command's. The question bus (`question_bus.rs`) rides the same
-//! beat. Two maintenance legs ride it too: the flush
+//! the local command's. The question bus (`question_bus.rs`) and the mail
+//! carrier (`mail_carrier.rs`) ride the same beat. Two maintenance legs ride
+//! it too: the flush
 //! that drains the sender's local outbox once the primary answers again
 //! (edge 7), and the expire that flips rows past their TTL (edge 2). With
 //! no primary set, the beat returns at once and opens no socket.
@@ -126,6 +127,8 @@ pub fn beat(remote: &Remote) -> Result<PullOutcome, String> {
     }
     // Open questions ride the same beat to the other machines of the store.
     crate::question_bus::tick(remote);
+    // So does the mail two agents of this machine exchange.
+    crate::mail_carrier::tick(remote);
     Ok(outcome)
 }
 
