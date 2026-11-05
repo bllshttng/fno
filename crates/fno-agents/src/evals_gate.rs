@@ -2883,6 +2883,9 @@ mod tests {
         // --force`, so every later rebuild failed with "no checkout".
         let w = World::new_git("skills/x/SKILL.md\ncrates/x/a.rs\n");
         w.with_baseline();
+        // g6 joins the selection after main advances; the baseline seats it
+        // so the relaunch the test follows is not held by the coverage guard.
+        w.rows("base", "g6", [true, true, true]);
         w.tick(true, Utc::now());
         let common = String::from_utf8_lossy(
             &std::process::Command::new("git")
