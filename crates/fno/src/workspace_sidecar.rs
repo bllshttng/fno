@@ -19,6 +19,20 @@ use crate::proto::AgentRow;
 /// spans ten of them. The beat itself runs every 60 seconds.
 const EVERY: Duration = Duration::from_secs(30);
 
+/// The cadence the rewrite throttle and the server's refresh timer share.
+/// `FNO_SIDECAR_EVERY_MS` shortens it for the e2e that proves an unattended
+/// machine keeps publishing (the same seam shape as `FNO_IDLE_EXIT_GRACE_MS`).
+/// A zero or unparseable value reads as the default: zero would panic the
+/// timer and make the throttle write on every render.
+pub(crate) fn every() -> Duration {
+    std::env::var("FNO_SIDECAR_EVERY_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|ms| *ms > 0)
+        .map(Duration::from_millis)
+        .unwrap_or(EVERY)
+}
+
 static LAST_WRITE: Mutex<Option<Instant>> = Mutex::new(None);
 
 /// The file under an agents home `root`.
@@ -89,7 +103,7 @@ fn write(
 /// workspace, which reads as the project fallback, never as a wrong name.
 pub(crate) fn publish(root: &Path, rows: &[AgentRow], name_of: impl Fn(u64) -> Option<String>) {
     let mut last = LAST_WRITE.lock().unwrap_or_else(|e| e.into_inner());
-    if last.is_some_and(|at| at.elapsed() < EVERY) {
+    if last.is_some_and(|at| at.elapsed() < every()) {
         return;
     }
     *last = Some(Instant::now());
