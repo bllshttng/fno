@@ -80,7 +80,7 @@ impl Core {
                 failed
             });
         if failed {
-            eprintln!(
+            crate::mux_log!(error;
                 "fno mux: client {} reliable channel wedged on PaneInputResult; dropping it",
                 request.id
             );
